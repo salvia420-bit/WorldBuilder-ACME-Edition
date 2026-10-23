@@ -434,11 +434,13 @@ fn bake_ci_bounded_region() {
                 }
                 let rec = pair.portal.get_file(id).expect("model record in DAT");
                 let reenc = match (id >> 24) as u8 {
-                    0x01 => hbg1::encode_gfx_part(
+                    // HBG1 v2 (2026-10-22): 0x01 rows are face-marked.
+                    0x01 => hbg1::encode_gfx_part_faces(
                         &holtburger_dat::file_type::GfxObj::unpack(
                             &mut std::io::Cursor::new(&rec),
                         )
                         .unwrap(),
+                        &|did: u32| hbg1::read_surface_type(&pair, did),
                     ),
                     0x02 => hbg1::encode_setup_directory(
                         &pair,
@@ -521,11 +523,15 @@ fn bake_ci_bounded_region() {
 /// variant shippable:
 ///
 /// (a) the relief-free default is **untouched** — every GEOM row still
-///     re-encodes byte-identically through `encode_gfx_part` (the existing
-///     differ baseline is not perturbed by the variant pass existing); and
+///     re-encodes byte-identically through `encode_gfx_part_faces` (the
+///     existing differ baseline is not perturbed by the variant pass
+///     existing); and
 /// (b) every GEOMR row byte-matches a **fresh variant encode** from the base
-///     DATs (`encode_gfx_part_relief`), i.e. the variant is reproducible and
-///     deterministic through the container exactly like the default.
+///     DATs (`encode_gfx_part_relief_faces`), i.e. the variant is
+///     reproducible and deterministic through the container exactly like the
+///     default.
+///
+/// Both encodes are HBG1 v2 (face-marked for `?negFace`) since 2026-10-22.
 ///
 /// The structural additive check (same subset table, appended triangles only)
 /// runs IN-BAKE via `verify_geom`, which this leg turns on.
@@ -567,6 +573,18 @@ fn bake_ci_relief_variants() {
     assert!(report.geom_relief_added_tris > 0);
 
     let portal = DatDatabase::new(PORTAL_DAT).unwrap();
+    // HBG1 v2: the Surface `type` bits the face-marked encode reads (the
+    // bake's `hbg1::read_surface_type`, over this DatDatabase directly).
+    let surface_type = |did: u32| -> Option<u32> {
+        if did == 0 {
+            return None;
+        }
+        portal
+            .get_file(did)
+            .ok()
+            .and_then(|b| holtburger_dat::file_type::Surface::unpack(&b).ok())
+            .map(|s| s.surface_type)
+    };
     let manifest: serde_json::Value =
         serde_json::from_slice(&std::fs::read(out.join("manifest.json")).unwrap()).unwrap();
     let index_rel = manifest["world_index"]["url"].as_str().expect("world_index url");
@@ -600,7 +618,8 @@ fn bake_ci_relief_variants() {
                 .unwrap();
                 assert_eq!(
                     &payload[off..off + size],
-                    &hbg1::encode_gfx_part(&gfx).expect("default re-encode")[..],
+                    &hbg1::encode_gfx_part_faces(&gfx, &surface_type)
+                        .expect("default re-encode")[..],
                     "GEOM 0x{id:08X}: relief-free default drifted"
                 );
                 default_checked.insert(id);
@@ -631,7 +650,8 @@ fn bake_ci_relief_variants() {
             let gfx =
                 holtburger_dat::file_type::GfxObj::unpack(&mut std::io::Cursor::new(&rec))
                     .unwrap();
-            let fresh = hbg1::encode_gfx_part_relief(&gfx, &relief).expect("variant encode");
+            let fresh = hbg1::encode_gfx_part_relief_faces(&gfx, &relief, &surface_type)
+                .expect("variant encode");
             assert_eq!(
                 &vpayload[off..off + size],
                 &fresh[..],

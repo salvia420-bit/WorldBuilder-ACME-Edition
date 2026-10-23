@@ -86,6 +86,12 @@ import { poolWorldActive, addSingletonsToPools } from "./pool_producer.js";
 // batchers (batched_material_variant.js — one program per object kind, no
 // batched/plain program flip on a shared material).
 import { batchedMaterialFor, holdBatchedMaterial, releaseBatchedMaterial } from "./batched_material_variant.js";
+// Improvement hunt B9a (2026-10-22): building buckets opt into ?batchedRuns
+// (default on) like the statics buckets, and ?staticEarlyOut (handoff P2,
+// default OFF) puts them on three's BatchedMesh early-out. Both modules are
+// already in the graph (index.js / statics.js import them): no new preload.
+import { markBatchedRuns } from "./batched_runs.js";
+import { applyStaticEarlyOut } from "./static_batch_x.js";
 
 const METERS_PER_LANDBLOCK = 192.0;
 // HOLTBURG_X/HOLTBURG_Y retired (spawn-driven-boot): the bake-time shadow gate
@@ -221,9 +227,13 @@ class _BuildingBatch extends THREE.BatchedMesh {
 // the tally lives on globalThis: both instances counted into one object and
 // __buildingBatchStats read it whichever instance set the window hook (1070
 // 2026-10-17: the hook read 0s while 20 batches drew). Kept: harmless now.
+// `runsMarked` (B9a: buckets opted into ?batchedRuns) and `earlyOut`
+// (?staticEarlyOut: buckets put on three's early-out) are bumped with `| 0`, so
+// a tally object minted before they existed still counts.
 const _bldBatchStats = (globalThis.__hbBuildingBatchTally ??= {
   feeds: 0, nodesIn: 0, batched: 0, batches: 0, uniqueGeoms: 0,
   loners: 0, ptIneligible: 0, ptAddFail: 0, disposed: 0,
+  runsMarked: 0, earlyOut: 0,
 });
 /** Diag: cumulative building-batch tally. */
 export function buildingBatchStats() {
@@ -394,6 +404,41 @@ export function consolidateBuildingSurfaces(nodes) {
       instances: added,
     };
     bm.name = `building-batch-lb${lbId.toString(16).padStart(8, "0")}-s${surf.toString(16).padStart(8, "0")}-x${added}`;
+    // ?staticEarlyOut (handoff P2 / L0, DEFAULT OFF; a no-op then): an opaque,
+    // unsorted bucket drops the per-instance sphere cull and rides three's
+    // BatchedMesh early-out. The node cull above stays: three computes the
+    // landblock-bounded `boundingSphere` lazily at the first cull, after every
+    // setMatrixAt above, and nothing mutates a building bucket afterwards (the
+    // LRU detaches / disposes it whole). See static_batch_x.js ?staticEarlyOut.
+    // Flag on, the call also hooks the bucket's `added` event (2026-10-23,
+    // p2eo-1), so a bucket parked across a live-seam flip follows it on unpark.
+    if (applyStaticEarlyOut(bm)) _bldBatchStats.earlyOut = (_bldBatchStats.earlyOut | 0) + 1;
+    // Improvement hunt B9a (2026-10-22; findings-round1 `recent-render-diff-4`
+    // priced it at tens of ANGLE ranges — completeness, not the lever): draw the
+    // bucket as per-geometry instanced runs (?batchedRuns, default ON, `=off`
+    // escape). Shared models already sit under one geometry id (`gidOf`), so
+    // the ranges repeat. Why the run layout is safe for THESE materials:
+    //   - colour pass: the bucket draws through `batchedMaterialFor(member)`, a
+    //     real instance of the member's built-in class (`_batchEligible` refuses
+    //     ShaderMaterial and material arrays), and every three r184 ShaderLib
+    //     mesh vertex shader includes batching_pars_vertex + batching_vertex
+    //     (+ color_vertex where it colours) — the three chunks batched_runs.js
+    //     patches. The member's onBeforeCompile chain (floor bias, CSM receiver,
+    //     light clamp, baked light, VFX) splices logdepthbuf / common /
+    //     project_vertex / fragment chunks and reads `batchingMatrix`, never
+    //     gl_DrawID (materials.js, 2026-10-22). env-detail shells never get here
+    //     (`keepOwnMaterial`).
+    //   - shadow passes: three's own depth / distance materials (depth.glsl.js,
+    //     distance.glsl.js include batching_vertex), or a sway depth material
+    //     (a MeshDepthMaterial); `_batchEligible` refuses custom depth materials.
+    //   - order: the bucket is unsorted and every member opaque + depth-writing,
+    //     so regrouping only reorders draws the depth test resolves (exact ties
+    //     between coplanar members of one material are the residual, as for the
+    //     statics chunk buckets).
+    if (typeof markBatchedRuns === "function") {
+      markBatchedRuns(bm);
+      _bldBatchStats.runsMarked = (_bldBatchStats.runsMarked | 0) + 1;
+    }
     _bldBatchStats.batches += 1;
     _bldBatchStats.batched += added;
     out.push(bm);

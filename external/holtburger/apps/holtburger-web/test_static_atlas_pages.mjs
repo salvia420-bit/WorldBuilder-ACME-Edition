@@ -178,7 +178,9 @@ console.log("PART 3 — dedup spans the family");
   check("the repeat surface is refcounted on page 0", e && e.refs === 2, `refs=${e?.refs}`);
   check("...no layer was cut and no page opened",
         st.layerAllocs === allocsBefore && pages().length === nPages && r.passthrough.length === 0);
-  check("...and its geometry joined page 0's batch", pages()[0][1].bm.userData.gidVerts.size === start + 1);
+  // P1a (?atlasGeomDedup, default on): a repeat of the SAME surface on the SAME geometry
+  // shares page 0's gid, so count INSTANCES (start + 1 in both arms).
+  check("...and its geometry joined page 0's batch", pages()[0][1].bm.instanceCount === start + 1);
 }
 
 // ---------------------------------------------------------------------------

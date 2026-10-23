@@ -34,6 +34,39 @@
 //! * env baked light runs the SAME `vertex_bake` port over the UNIQUE vertex
 //!   streams (0.38× the de-indexed arithmetic, D-04.7); inputs differ from
 //!   the runtime only by the normal quantization ⇒ per-channel deltas ≤ ~2.
+//!
+//! ## `?negFace` on model bundles (HBG1 v2 face marker, 2026-10-22)
+//!
+//! Until 2026-10-22 the model exports answered `missing` for EVERY model while
+//! dat-parser-2 `?negFace` (default on since 10-19) was on: v1 payloads bake
+//! the legacy reversed back tri unmarked and never bake NoPos polygons, so no
+//! assembly could reproduce the runtime decode under the flag. That blocked
+//! `?geomBundles` and with it the `?drawPools` chain (handoff
+//! HANDOFF-gpu-resident-statics-2026-10-22 §5 F7(a)).
+//!
+//! A v2 PART payload (`hbg1::HBG1_VERSION_FACES`, module docs in
+//! holtburger-dat `hbg1.rs`) marks the subsets that belong to ONE arm, and
+//! [`FaceArm::drop_mask`] drops the other arm's subsets per part:
+//!
+//! | payload | `?negFace` on (default)                   | `?negFace=off`          |
+//! |---------|-------------------------------------------|-------------------------|
+//! | v1      | `missing` (runtime decode — today's rule) | all subsets (as before) |
+//! | v2      | drop `MODEL_BACKFACE`                     | drop `NOPOS_SLOT0`      |
+//!
+//! plus: v2 + `?negFace` + `?perPolyCull=on` + `flags::NEG_FRONT_COPY` ⇒
+//! `missing` (v2 carries no same-winding front-copy tris). A setup is
+//! `missing` if ANY drawable part payload is (never a partially-filtered
+//! building). After a drop the part's index ranges are re-packed and its
+//! vertex stream COMPACTED to the vertices the kept subsets use, numbered by
+//! first use (the encoder's own rule), so the bundle carries no orphan
+//! back-face / NoPos vertices and its bbox matches that arm's geometry. The
+//! descriptor counts the two `?negFace` misses (`faceUnmarked`,
+//! `faceFrontCopy`) so the JS consumer can say WHY models fell back.
+//!
+//! Fidelity is the differ bar above (per-surface triangle multisets), now for
+//! BOTH arms: `neg_face_v2_model_matches_runtime_on_both_arms` below, and for
+//! a compacted multi-part setup through `transform_part`,
+//! `neg_face_v2_setup_matches_runtime_on_both_arms` (2026-10-23).
 
 #![allow(clippy::too_many_arguments)]
 
@@ -68,28 +101,93 @@ impl BundleWriter {
 }
 
 // ---------------------------------------------------------------------------
+// `?negFace` arm (HBG1 v2 face marker — module docs)
+// ---------------------------------------------------------------------------
+
+/// The dat-parser-2 `?negFace` arm one model assembly serves. Read once per
+/// batch from the same gates the runtime triangulator reads (lib.rs
+/// `neg_face_retail_enabled` / `neg_face_per_poly_cull_enabled`; native tests
+/// drive them with `set_neg_face_for_test`).
+#[derive(Clone, Copy, Debug)]
+struct FaceArm {
+    /// `?negFace` on (the default): no reversed back tri, textured NoPos
+    /// polygons drawn with UV slot 0.
+    retail: bool,
+    /// `?perPolyCull=on` — only matters together with `retail` (front copy).
+    per_poly_cull: bool,
+}
+
+/// Why a model came back `missing` (descriptor census).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Miss {
+    /// No resident GEOM payload for the model or one of its parts.
+    NoPayload,
+    /// `?negFace` on and a v1 (pre-marker) part payload: the dist predates
+    /// HBG1 v2 — rebake GEOM.
+    Unmarked,
+    /// `?negFace` + `?perPolyCull=on` and a v2 part flagged
+    /// `NEG_FRONT_COPY`: v2 carries no same-winding front-copy tris.
+    FrontCopy,
+}
+
+impl FaceArm {
+    fn current() -> Self {
+        FaceArm {
+            retail: crate::neg_face_retail_enabled(),
+            per_poly_cull: crate::neg_face_per_poly_cull_enabled(),
+        }
+    }
+
+    /// The subset-flag bits this arm DROPS from one kind-0 PART payload, or
+    /// the reason the payload cannot serve this arm at all.
+    fn drop_mask(self, mesh: &hbg1::Hbg1Mesh<'_>) -> Result<u8, Miss> {
+        if !mesh.face_marked() {
+            // v1: exact for the legacy arm only (back faces unmarked, NoPos
+            // absent) — the pre-2026-10-22 rule, now per payload.
+            return if self.retail { Err(Miss::Unmarked) } else { Ok(0) };
+        }
+        if !self.retail {
+            return Ok(hbg1::subset_flags::NOPOS_SLOT0);
+        }
+        if self.per_poly_cull && mesh.header.flags & hbg1::flags::NEG_FRONT_COPY != 0 {
+            return Err(Miss::FrontCopy);
+        }
+        Ok(hbg1::subset_flags::MODEL_BACKFACE)
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Model assembly (kind 0 direct + kind 1 fused/per-part)
 // ---------------------------------------------------------------------------
 
 /// Assemble one batch of model ids into (buffer, descriptor). `geom` resolves
 /// a model id to its HBG1 payload bytes (PackSource in the live path; the
-/// encoder directly in tests).
+/// encoder directly in tests). The `?negFace` arm is read once per batch
+/// ([`FaceArm`]).
 pub(crate) fn assemble_models(
     geom: &mut dyn FnMut(u32) -> Option<Vec<u8>>,
     model_ids: &[u32],
 ) -> Result<(Vec<u8>, serde_json::Value), String> {
+    let arm = FaceArm::current();
     let mut w = BundleWriter::new();
     let mut models = Vec::with_capacity(model_ids.len());
     let mut assembled = 0u32;
     let mut missing = 0u32;
+    let mut face_unmarked = 0u32;
+    let mut face_front_copy = 0u32;
     for &id in model_ids {
-        match assemble_one_model(&mut w, geom, id) {
-            Ok(Some(entry)) => {
+        match assemble_one_model(&mut w, geom, id, arm) {
+            Ok(Ok(entry)) => {
                 assembled += 1;
                 models.push(entry);
             }
-            Ok(None) => {
+            Ok(Err(miss)) => {
                 missing += 1;
+                match miss {
+                    Miss::Unmarked => face_unmarked += 1,
+                    Miss::FrontCopy => face_front_copy += 1,
+                    Miss::NoPayload => {}
+                }
                 models.push(serde_json::json!({ "id": id, "missing": true }));
             }
             Err(e) => return Err(format!("assemble 0x{id:08X}: {e}")),
@@ -100,6 +198,12 @@ pub(crate) fn assemble_models(
         "assembled": assembled,
         "missing": missing,
         "bytes": w.buf.len(),
+        // `?negFace` census (2026-10-22): which arm this batch served, and
+        // how many of `missing` were face-marker misses rather than absent
+        // payloads. Additive fields; older consumers ignore them.
+        "negFaceRetail": arm.retail,
+        "faceUnmarked": face_unmarked,
+        "faceFrontCopy": face_front_copy,
     });
     Ok((w.buf, descriptor))
 }
@@ -114,17 +218,26 @@ struct PartOut {
     subsets: Vec<(u32, u8, u32, u32)>, // (surface_ref, flags, first_index, index_count)
 }
 
+/// `Ok(Ok(entry))` = assembled; `Ok(Err(miss))` = `missing` (the JS consumer
+/// takes the counted runtime-decode fallback); `Err` = malformed payload
+/// (fails the batch, as before). Nothing is written to `w` before the last
+/// `Miss` check, so a miss never leaves bytes behind.
 fn assemble_one_model(
     w: &mut BundleWriter,
     geom: &mut dyn FnMut(u32) -> Option<Vec<u8>>,
     id: u32,
-) -> Result<Option<serde_json::Value>, String> {
+    arm: FaceArm,
+) -> Result<Result<serde_json::Value, Miss>, String> {
     match (id >> 24) as u8 {
         0x01 => {
-            let Some(payload) = geom(id) else { return Ok(None) };
+            let Some(payload) = geom(id) else { return Ok(Err(Miss::NoPayload)) };
             let mesh = hbg1::Hbg1Mesh::parse(&payload)?;
-            let parts = vec![collect_part_source(&mesh, 0)];
-            Ok(Some(write_model_entry(
+            let drop_mask = match arm.drop_mask(&mesh) {
+                Ok(m) => m,
+                Err(miss) => return Ok(Err(miss)),
+            };
+            let parts = vec![collect_part_source(&mesh, 0, drop_mask)?];
+            Ok(Ok(write_model_entry(
                 w,
                 id,
                 mesh.did_degrade,
@@ -132,19 +245,31 @@ fn assemble_one_model(
             )))
         }
         0x02 => {
-            let Some(dir_payload) = geom(id) else { return Ok(None) };
+            let Some(dir_payload) = geom(id) else { return Ok(Err(Miss::NoPayload)) };
             let dir = hbg1::parse_setup(&dir_payload)?;
             // Resolve every drawable part's payload FIRST — any missing 0x01
             // part payload downgrades the whole model to the runtime decode
-            // (never a silently partial building).
-            let mut part_payloads: Vec<Option<Vec<u8>>> =
+            // (never a silently partial building). `?negFace`: one part that
+            // cannot serve this arm downgrades the whole setup the same way,
+            // and is caught AS IT ARRIVES (2026-10-23, review hbg1v2-2): on a
+            // v1 dist under the default arm the first part answers
+            // `Unmarked`, so the rest of the building's part payloads are
+            // never copied out of the pack (before HBG1 v2 that arm read
+            // nothing at all). Census only: a later part's `NoPayload` now
+            // reads as the earlier part's face miss — `missing` either way
+            // (and a malformed part fails the batch at its own fetch).
+            let mut part_payloads: Vec<Option<(Vec<u8>, u8)>> =
                 Vec::with_capacity(dir.parts.len());
             for row in &dir.parts {
                 if (row.part_did >> 24) as u8 == 0x01 {
-                    match geom(row.part_did) {
-                        Some(p) => part_payloads.push(Some(p)),
-                        None => return Ok(None),
-                    }
+                    let Some(p) = geom(row.part_did) else {
+                        return Ok(Err(Miss::NoPayload));
+                    };
+                    let drop_mask = match arm.drop_mask(&hbg1::Hbg1Mesh::parse(&p)?) {
+                        Ok(m) => m,
+                        Err(miss) => return Ok(Err(miss)),
+                    };
+                    part_payloads.push(Some((p, drop_mask)));
                 } else {
                     // Non-0x01 part: the runtime walk skips it, slot preserved.
                     part_payloads.push(None);
@@ -155,9 +280,9 @@ fn assemble_one_model(
                 dir.parts.iter().zip(part_payloads.iter()).enumerate()
             {
                 match payload {
-                    Some(p) => {
+                    Some((p, drop_mask)) => {
                         let mesh = hbg1::Hbg1Mesh::parse(p)?;
-                        let mut src = collect_part_source(&mesh, pi);
+                        let mut src = collect_part_source(&mesh, pi, *drop_mask)?;
                         transform_part(&mut src, row);
                         src.hinge = [
                             row.hinge_pos[0],
@@ -173,9 +298,10 @@ fn assemble_one_model(
                     None => parts.push(PartSource::empty(pi)),
                 }
             }
-            Ok(Some(write_model_entry(w, id, dir.did_degrade, parts)))
+            Ok(Ok(write_model_entry(w, id, dir.did_degrade, parts)))
         }
-        _ => Ok(None), // 0x0D goes through assemble_envcells; others: fallback.
+        // 0x0D goes through assemble_envcells; others: fallback.
+        _ => Ok(Err(Miss::NoPayload)),
     }
 }
 
@@ -204,27 +330,90 @@ impl PartSource {
     }
 }
 
-fn collect_part_source(mesh: &hbg1::Hbg1Mesh<'_>, part_index: usize) -> PartSource {
-    let v = mesh.vertex_count;
-    let mut pos = Vec::with_capacity(v * 3);
-    let mut normal = Vec::with_capacity(v * 3);
-    let mut uv = Vec::with_capacity(v * 2);
-    for i in 0..v {
-        let p = mesh.position(i);
-        pos.extend_from_slice(&p);
-        let n = mesh.normal(i);
-        normal.extend_from_slice(&n);
-        let t = mesh.uv(i);
-        uv.extend_from_slice(&t);
+/// One part's streams + subsets, minus every subset whose flags meet
+/// `drop_mask` (the [`FaceArm::drop_mask`] answer; 0 = keep everything).
+///
+/// Nothing dropped (every v1 payload on the legacy arm, and any v2 payload
+/// with nothing of the other arm in it): the payload is copied verbatim —
+/// the pre-2026-10-22 assembly exactly. Something dropped: the kept subsets'
+/// index ranges are re-packed contiguously IN PAYLOAD ORDER and the vertex
+/// stream is compacted to the vertices they reference, numbered by first use
+/// — the encoder's own numbering rule, so the part equals what a bake that
+/// never emitted the dropped faces would hold (modulo the subset partition).
+fn collect_part_source(
+    mesh: &hbg1::Hbg1Mesh<'_>,
+    part_index: usize,
+    drop_mask: u8,
+) -> Result<PartSource, String> {
+    let all_subsets = mesh.subsets().unwrap_or_default();
+    if drop_mask == 0 || !all_subsets.iter().any(|s| s.flags & drop_mask != 0) {
+        let v = mesh.vertex_count;
+        let mut pos = Vec::with_capacity(v * 3);
+        let mut normal = Vec::with_capacity(v * 3);
+        let mut uv = Vec::with_capacity(v * 2);
+        for i in 0..v {
+            let p = mesh.position(i);
+            pos.extend_from_slice(&p);
+            let n = mesh.normal(i);
+            normal.extend_from_slice(&n);
+            let t = mesh.uv(i);
+            uv.extend_from_slice(&t);
+        }
+        let indices: Vec<u32> = (0..mesh.index_count).map(|i| mesh.index(i)).collect();
+        let subsets = all_subsets
+            .into_iter()
+            .map(|s| (s.surface_ref, s.flags, s.first_index, s.index_count))
+            .collect();
+        return Ok(PartSource {
+            part_index,
+            hinge: [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0],
+            pos,
+            normal,
+            uv,
+            indices,
+            subsets,
+        });
     }
-    let indices: Vec<u32> = (0..mesh.index_count).map(|i| mesh.index(i)).collect();
-    let subsets = mesh
-        .subsets()
-        .unwrap_or_default()
-        .into_iter()
-        .map(|s| (s.surface_ref, s.flags, s.first_index, s.index_count))
-        .collect();
-    PartSource {
+
+    // Filtered + compacted.
+    let mut remap: Vec<u32> = vec![u32::MAX; mesh.vertex_count];
+    let mut order: Vec<usize> = Vec::new(); // new vertex number -> source vertex
+    let mut indices: Vec<u32> = Vec::new();
+    let mut subsets: Vec<(u32, u8, u32, u32)> = Vec::new();
+    for s in all_subsets.iter().filter(|s| s.flags & drop_mask == 0) {
+        let (first, count) = (s.first_index as usize, s.index_count as usize);
+        if first + count > mesh.index_count {
+            return Err(format!(
+                "HBG1: subset range {first}+{count} exceeds {} indices",
+                mesh.index_count
+            ));
+        }
+        let new_first = indices.len() as u32;
+        for k in 0..count {
+            let src = mesh.index(first + k) as usize;
+            let Some(slot) = remap.get_mut(src) else {
+                return Err(format!(
+                    "HBG1: index {src} out of range for {} vertices",
+                    mesh.vertex_count
+                ));
+            };
+            if *slot == u32::MAX {
+                *slot = order.len() as u32;
+                order.push(src);
+            }
+            indices.push(*slot);
+        }
+        subsets.push((s.surface_ref, s.flags, new_first, s.index_count));
+    }
+    let mut pos = Vec::with_capacity(order.len() * 3);
+    let mut normal = Vec::with_capacity(order.len() * 3);
+    let mut uv = Vec::with_capacity(order.len() * 2);
+    for &i in &order {
+        pos.extend_from_slice(&mesh.position(i));
+        normal.extend_from_slice(&mesh.normal(i));
+        uv.extend_from_slice(&mesh.uv(i));
+    }
+    Ok(PartSource {
         part_index,
         hinge: [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0],
         pos,
@@ -232,7 +421,7 @@ fn collect_part_source(mesh: &hbg1::Hbg1Mesh<'_>, part_index: usize) -> PartSour
         uv,
         indices,
         subsets,
-    }
+    })
 }
 
 /// Apply the setup part frame: `quat_rotate(rot, pos * scale) + offset` — the
@@ -702,21 +891,17 @@ mod exports {
     /// a resident GEOM payload come back `missing` (JS runtime-decode
     /// fallback, counted).
     ///
-    /// dat-parser-2 `?negFace` (default on since 2026-10-19): model payloads
-    /// bake the reversed back faces with no per-subset marker (only env
-    /// subsets carry `ENV_BACKFACE`), so while it is on every model comes back
-    /// `missing` and takes the counted runtime-decode fallback, which honours
-    /// it. `?geomBundles=on` measurements should add `&negFace=off` until the
-    /// baked model payloads carry a back-face marker.
+    /// dat-parser-2 `?negFace` (default on since 2026-10-19): decided PER
+    /// PAYLOAD since 2026-10-22 (module docs, `FaceArm`). A v2 (face-marked)
+    /// payload assembles on both arms; a v1 payload — a dist baked before the
+    /// marker — comes back `missing` while the flag is on (counted as
+    /// `faceUnmarked` in the descriptor) and takes the runtime-decode
+    /// fallback, which honours the flag. That v1 rule is the old blanket
+    /// rule, so an old dist behaves exactly as before.
     #[wasm_bindgen]
     pub fn assemble_model_geometry(model_ids: &[u32]) -> Result<JsValue, JsValue> {
-        let neg_face_retail = crate::neg_face_retail_enabled();
-        let mut geom = |id: u32| -> Option<Vec<u8>> {
-            if neg_face_retail {
-                return None;
-            }
-            crate::pack_source_glue::pack_geom_payload(id)
-        };
+        let mut geom =
+            |id: u32| -> Option<Vec<u8>> { crate::pack_source_glue::pack_geom_payload(id) };
         let (buffer, descriptor) = super::assemble_models(&mut geom, model_ids)
             .map_err(|e| JsValue::from_str(&e))?;
         Ok(bundle_to_js(buffer, descriptor))
@@ -733,12 +918,9 @@ mod exports {
     /// in cannot accidentally pass a truthy variant flag.
     #[wasm_bindgen]
     pub fn assemble_model_geometry_relief(model_ids: &[u32]) -> Result<JsValue, JsValue> {
-        // `?negFace=retail`: runtime-decode fallback, as `assemble_model_geometry`.
-        let neg_face_retail = crate::neg_face_retail_enabled();
+        // `?negFace`: the same per-payload rule as `assemble_model_geometry`
+        // (a v2 GEOMR row carries the same markers as its v2 GEOM row).
         let mut geom = |id: u32| -> Option<Vec<u8>> {
-            if neg_face_retail {
-                return None;
-            }
             crate::pack_source_glue::pack_geom_payload_relief(id)
         };
         let (buffer, descriptor) = super::assemble_models(&mut geom, model_ids)
@@ -1165,6 +1347,572 @@ mod tests {
         assert_eq!(rt, per_did_retail);
     }
 
+    // ---- `?negFace` on model bundles (HBG1 v2 face marker, 2026-10-22) ----
+
+    /// Surface DIDs private to these tests: `SURFACE_TYPE_BITS` is a
+    /// process-wide cache every test thread shares (lib.rs's own `?negFace`
+    /// tests use 0x08DA_xxxx).
+    const NF_TEX_A: u32 = 0x08DB_0001;
+    const NF_TEX_B: u32 = 0x08DB_0002;
+    const NF_SOLID: u32 = 0x08DB_0003;
+
+    /// A Surface record body (surface.rs): `type | (texture, palette) or
+    /// colour | translucency | luminosity | diffuse`.
+    fn nf_surface_bytes(textured: bool) -> Vec<u8> {
+        let mut b = Vec::new();
+        if textured {
+            b.extend_from_slice(&0x2u32.to_le_bytes()); // Base1Image
+            b.extend_from_slice(&0x0500_0001u32.to_le_bytes());
+            b.extend_from_slice(&0u32.to_le_bytes());
+        } else {
+            b.extend_from_slice(&0x1u32.to_le_bytes()); // Base1Solid
+            b.extend_from_slice(&0xFF80_8080u32.to_le_bytes());
+        }
+        for f in [0.0f32, 0.0, 1.0] {
+            b.extend_from_slice(&f.to_le_bytes());
+        }
+        b
+    }
+
+    /// Every polygon class the two `?negFace` arms treat differently:
+    /// pid 1 (only with `front_copy_candidate`): SidesType-2, pos slot 1 /
+    ///        neg slot 0 — a legacy back face AND a front-copy candidate;
+    /// pid 3: SidesType-2, pos 0 / neg 1 — a legacy back face only;
+    /// pid 4: NoPos on the textured slot 1, over vertex 4 which no other
+    ///        poly uses (drawn under `?negFace` only);
+    /// pid 6: NoPos on the solid slot 2 (never drawn);
+    /// pid 8: a double-sided quad on slot 0 (drawn on both arms).
+    fn nf_gfx(id: u32, front_copy_candidate: bool) -> holtburger_dat::file_type::GfxObj {
+        use holtburger_common::{Vector3, properties::GfxObjFlags};
+        use holtburger_dat::graphics::{CVertexArray, Polygon, SWVertex, Vec2Duv};
+        use holtburger_dat::physics::{BspLeaf, BspNode};
+        let v = |x: f32, y: f32, z: f32, n: [f32; 3], uvs: &[(f32, f32)]| SWVertex {
+            num_uvs: uvs.len() as u16,
+            origin: Vector3 { x, y, z },
+            normal: Vector3 { x: n[0], y: n[1], z: n[2] },
+            uvs: uvs.iter().map(|&(u, vv)| Vec2Duv { u, v: vv }).collect(),
+        };
+        let mut vertices = HashMap::new();
+        vertices.insert(0, v(0.0, 0.0, 0.0, [0.0, 0.0, 1.0], &[(0.0, 0.0), (0.9, 0.9)]));
+        vertices.insert(1, v(1.0, 0.0, 0.0, [0.0, 0.0, 1.0], &[(1.0, 0.0), (0.8, 0.1)]));
+        vertices.insert(2, v(1.0, 1.0, 0.25, [0.3, 0.1, 0.9], &[(1.0, 1.0), (0.2, 0.7)]));
+        vertices.insert(3, v(0.0, 1.0, 0.0, [0.0, 0.0, 0.0], &[(0.0, 1.0)]));
+        // Used by the textured NoPos poly ONLY, so the legacy arm's drop of
+        // that subset is visible as a compacted vertex.
+        vertices.insert(4, v(0.5, 0.5, 0.5, [0.0, 0.0, 1.0], &[(0.3, 0.3), (0.6, 0.6)]));
+        let poly = |stippling: u8,
+                    sides_type: i32,
+                    pos_surface: i16,
+                    neg_surface: i16,
+                    vertex_ids: Vec<i16>,
+                    pos_uv_indices: Vec<u8>,
+                    neg_uv_indices: Vec<u8>| Polygon {
+            num_pts: vertex_ids.len() as u8,
+            stippling,
+            sides_type,
+            pos_surface,
+            neg_surface,
+            vertex_ids,
+            pos_uv_indices,
+            neg_uv_indices,
+        };
+        let mut polygons = HashMap::new();
+        if front_copy_candidate {
+            polygons.insert(1, poly(0, 2, 1, 0, vec![0, 1, 2], vec![0, 0, 0], vec![1, 1, 1]));
+        }
+        polygons.insert(3, poly(1, 2, 0, 1, vec![0, 2, 3], vec![0, 0, 0], vec![1, 1, 0]));
+        polygons.insert(4, poly(0x4, 0, 1, -1, vec![0, 2, 4], vec![], vec![]));
+        polygons.insert(6, poly(0x4, 0, 2, -1, vec![0, 1, 3], vec![], vec![]));
+        polygons.insert(8, poly(0, 1, 0, -1, vec![0, 1, 2, 3], vec![0, 0, 0, 0], vec![]));
+        holtburger_dat::file_type::GfxObj {
+            id,
+            flags: GfxObjFlags::HAS_DRAWING,
+            surfaces: vec![NF_TEX_A, NF_TEX_B, NF_SOLID],
+            vertex_array: CVertexArray { vertex_type: 1, vertices },
+            physics_polygons: HashMap::new(),
+            physics_bsp: None,
+            sort_center: Vector3::zero(),
+            polygons,
+            drawing_bsp: Some(BspNode::Leaf(BspLeaf {
+                index: 0,
+                solid: 0,
+                sphere: None,
+                poly_ids: vec![],
+            })),
+            did_degrade: None,
+        }
+    }
+
+    /// (source carrying the GfxObj + its three Surface records, the GfxObj
+    /// as the runtime will read it back).
+    fn nf_source(
+        gfx: &holtburger_dat::file_type::GfxObj,
+    ) -> (FixtureSource, holtburger_dat::file_type::GfxObj) {
+        let mut bytes = Vec::new();
+        gfx.pack(&mut std::io::Cursor::new(&mut bytes)).unwrap();
+        let re = holtburger_dat::file_type::GfxObj::unpack(&mut std::io::Cursor::new(&bytes))
+            .expect("fixture round-trips");
+        let src = FixtureSource(HashMap::from([
+            (("eor/portal".to_string(), gfx.id), bytes),
+            (("eor/portal".to_string(), NF_TEX_A), nf_surface_bytes(true)),
+            (("eor/portal".to_string(), NF_TEX_B), nf_surface_bytes(true)),
+            (("eor/portal".to_string(), NF_SOLID), nf_surface_bytes(false)),
+        ]));
+        (src, re)
+    }
+
+    /// Restores this thread's `?negFace` gates however the test exits.
+    struct NegFaceReset;
+    impl Drop for NegFaceReset {
+        fn drop(&mut self) {
+            crate::set_neg_face_for_test(false, false);
+        }
+    }
+
+    /// The tentpole differ: ONE v2 payload, assembled under each `?negFace`
+    /// arm, equals the runtime triangulator under that same arm (per-surface
+    /// triangle multisets, positions/uvs bit-exact, normals at the declared
+    /// quantization) — and the assembly compacts away the other arm's
+    /// vertices.
+    #[test]
+    fn neg_face_v2_model_matches_runtime_on_both_arms() {
+        let _reset = NegFaceReset;
+        let gfx = nf_gfx(0x0100_DB01, false);
+        let (src, gfx_re) = nf_source(&gfx);
+        let payload =
+            hbg1::encode_gfx_part_faces(&gfx_re, &|d: u32| hbg1::read_surface_type(&src, d))
+                .expect("v2 encode");
+        let mesh = hbg1::Hbg1Mesh::parse(&payload).unwrap();
+        assert!(mesh.face_marked());
+        let subs = mesh.subsets().unwrap();
+        assert!(subs.iter().any(|s| s.flags & hbg1::subset_flags::MODEL_BACKFACE != 0));
+        assert!(subs.iter().any(|s| s.flags & hbg1::subset_flags::NOPOS_SLOT0 != 0));
+
+        for retail in [false, true] {
+            crate::set_neg_face_for_test(retail, false);
+            // Uncached: the triangulation memo is keyed by model id only and
+            // would hand the second arm the first arm's triangles.
+            let (tris, _complete) =
+                crate::triangulate_model_uncached(&src, gfx.id, &[], &[], None)
+                    .expect("runtime triangulation");
+            let mut geom = |q: u32| (q == gfx.id).then(|| payload.clone());
+            let (buffer, descriptor) = assemble_models(&mut geom, &[gfx.id]).unwrap();
+            assert_eq!(descriptor["negFaceRetail"].as_bool(), Some(retail));
+            let entry = &descriptor["models"][0];
+            assert!(entry.get("missing").is_none(), "retail={retail}: assembled");
+            assert_groups_equal(
+                runtime_groups(&tris),
+                bundle_groups(&buffer, entry),
+                &format!("negFace retail={retail}"),
+            );
+            // The other arm's subsets are gone, not just empty.
+            let flags: Vec<u8> = entry["fused"]["subsets"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|s| s["flags"].as_u64().unwrap() as u8)
+                .collect();
+            let gone = if retail {
+                hbg1::subset_flags::MODEL_BACKFACE
+            } else {
+                hbg1::subset_flags::NOPOS_SLOT0
+            };
+            assert!(flags.iter().all(|f| f & gone == 0), "retail={retail}: {flags:?}");
+            // Compaction: every vertex the entry carries is referenced.
+            let vcount = entry["vtx"]["count"].as_u64().unwrap() as usize;
+            assert!(vcount < mesh.vertex_count, "retail={retail}: compacted {vcount}");
+            let idx_off = entry["idx"]["off"].as_u64().unwrap() as usize;
+            let width = entry["idx"]["width"].as_u64().unwrap() as usize;
+            let icount = entry["idx"]["count"].as_u64().unwrap() as usize;
+            let mut used = vec![false; vcount];
+            for i in 0..icount {
+                let o = idx_off + i * width;
+                let ix = if width == 2 {
+                    u16::from_le_bytes(buffer[o..o + 2].try_into().unwrap()) as usize
+                } else {
+                    u32::from_le_bytes(buffer[o..o + 4].try_into().unwrap()) as usize
+                };
+                assert!(ix < vcount, "index {ix} >= {vcount}");
+                used[ix] = true;
+            }
+            assert!(used.iter().all(|&u| u), "retail={retail}: orphan vertex");
+        }
+    }
+
+    /// An old (v1) dist keeps today's behaviour exactly: `?negFace` on ⇒
+    /// `missing`, counted as `faceUnmarked` (a setup over a v1 part too);
+    /// `?negFace=off` ⇒ assembled.
+    #[test]
+    fn neg_face_v1_payload_is_missing_under_retail_only() {
+        let _reset = NegFaceReset;
+        let gfx = nf_gfx(0x0100_DB02, false);
+        let v1 = hbg1::encode_gfx_part(&gfx).unwrap();
+        let mut geom = |q: u32| (q == gfx.id).then(|| v1.clone());
+        crate::set_neg_face_for_test(true, false);
+        let (_b, d) = assemble_models(&mut geom, &[gfx.id]).unwrap();
+        assert_eq!(d["models"][0]["missing"].as_bool(), Some(true));
+        assert_eq!(d["faceUnmarked"].as_u64(), Some(1));
+        assert_eq!(d["faceFrontCopy"].as_u64(), Some(0));
+        crate::set_neg_face_for_test(false, false);
+        let (_b, d) = assemble_models(&mut geom, &[gfx.id]).unwrap();
+        assert!(d["models"][0].get("missing").is_none());
+        assert_eq!(d["faceUnmarked"].as_u64(), Some(0));
+
+        // Setup over a v1 part: the whole setup falls back under retail.
+        let (setup, setup_bytes, part, part_bytes) = hbg1_fixture_setup();
+        let src = FixtureSource(HashMap::from([
+            (("eor/portal".to_string(), setup.id), setup_bytes),
+            (("eor/portal".to_string(), part.id), part_bytes),
+        ]));
+        let setup_re = holtburger_dat::file_type::SetupModel::unpack(
+            &mut std::io::Cursor::new(&src.0[&("eor/portal".to_string(), setup.id)]),
+        )
+        .unwrap();
+        let dir_payload = hbg1::encode_setup_directory(&src, &setup_re).unwrap();
+        let part_v1 = hbg1::encode_gfx_part(&part).unwrap();
+        let part_v2 = hbg1::encode_gfx_part_faces(&part, &|_d: u32| Some(0x2u32)).unwrap();
+        for (label, part_payload, want_missing) in
+            [("v1", &part_v1, true), ("v2", &part_v2, false)]
+        {
+            crate::set_neg_face_for_test(true, false);
+            let mut geom = |q: u32| -> Option<Vec<u8>> {
+                if q == setup.id {
+                    Some(dir_payload.clone())
+                } else if q == part.id {
+                    Some(part_payload.clone())
+                } else {
+                    None
+                }
+            };
+            let (_b, d) = assemble_models(&mut geom, &[setup.id]).unwrap();
+            assert_eq!(
+                d["models"][0].get("missing").is_some(),
+                want_missing,
+                "setup over a {label} part under retail"
+            );
+            assert_eq!(d["faceUnmarked"].as_u64(), Some(want_missing as u64));
+        }
+    }
+
+    /// `?negFace` + `?perPolyCull=on`: a v2 payload flagged NEG_FRONT_COPY
+    /// falls back (counted `faceFrontCopy`); an unflagged one assembles and
+    /// still equals the runtime (whose front-copy rule finds nothing to do).
+    #[test]
+    fn neg_face_front_copy_candidates_fall_back_only_under_per_poly_cull() {
+        let _reset = NegFaceReset;
+        for (id, candidate) in [(0x0100_DB03u32, true), (0x0100_DB04, false)] {
+            let gfx = nf_gfx(id, candidate);
+            let (src, gfx_re) = nf_source(&gfx);
+            let payload =
+                hbg1::encode_gfx_part_faces(&gfx_re, &|d: u32| hbg1::read_surface_type(&src, d))
+                    .unwrap();
+            let flagged = hbg1::Hbg1Mesh::parse(&payload).unwrap().header.flags
+                & hbg1::flags::NEG_FRONT_COPY
+                != 0;
+            assert_eq!(flagged, candidate, "0x{id:08X}: NEG_FRONT_COPY");
+            let mut geom = |q: u32| (q == id).then(|| payload.clone());
+
+            // `?negFace` alone: always assembled (no front-copy rule there).
+            crate::set_neg_face_for_test(true, false);
+            let (_b, d) = assemble_models(&mut geom, &[id]).unwrap();
+            assert!(d["models"][0].get("missing").is_none(), "0x{id:08X}: retail only");
+
+            crate::set_neg_face_for_test(true, true);
+            let (buffer, d) = assemble_models(&mut geom, &[id]).unwrap();
+            assert_eq!(
+                d["models"][0].get("missing").is_some(),
+                candidate,
+                "0x{id:08X}: retail + perPolyCull"
+            );
+            assert_eq!(d["faceFrontCopy"].as_u64(), Some(candidate as u64));
+            if !candidate {
+                let (tris, _) = crate::triangulate_model_uncached(&src, id, &[], &[], None)
+                    .expect("runtime triangulation");
+                assert_groups_equal(
+                    runtime_groups(&tris),
+                    bundle_groups(&buffer, &d["models"][0]),
+                    "retail + perPolyCull, no candidate",
+                );
+            }
+        }
+    }
+
+    /// The SETUP comparison bar (2026-10-23, review hbg1v2-1). Per surface,
+    /// every runtime triangle must find a bundle triangle with bit-identical
+    /// corner positions + uvs, winding included (the setup transform's exact
+    /// half), whose quantized corner normals sit within `tol` steps (the
+    /// re-normalize half: the bundle transforms a DEQUANTIZED normal, the
+    /// runtime quantizes a transformed authored one — the 2-step bar of
+    /// `differ_setup_matches_runtime_walk`). Matched greedily inside one
+    /// position key, so two triangles that differ only by their normals never
+    /// pair crosswise. `tol = i16::MAX` leaves positions + uvs only.
+    fn assert_groups_close(
+        runtime: &HashMap<u32, Vec<[Corner; 3]>>,
+        bundle: &HashMap<u32, Vec<[Corner; 3]>>,
+        tol: i16,
+        ctx: &str,
+    ) {
+        let mut r_keys: Vec<u32> = runtime.keys().copied().collect();
+        let mut b_keys: Vec<u32> = bundle.keys().copied().collect();
+        r_keys.sort_unstable();
+        b_keys.sort_unstable();
+        assert_eq!(r_keys, b_keys, "{ctx}: surface group sets differ");
+        type PosKey = [([u32; 3], [u32; 2]); 3];
+        let pos_key = |t: &[Corner; 3]| -> PosKey {
+            [(t[0].pos, t[0].uv), (t[1].pos, t[1].uv), (t[2].pos, t[2].uv)]
+        };
+        for k in r_keys {
+            let (r, b) = (&runtime[&k], &bundle[&k]);
+            assert_eq!(r.len(), b.len(), "{ctx}: surface 0x{k:08X} triangle count differs");
+            let mut pool: HashMap<PosKey, Vec<[[i8; 3]; 3]>> = HashMap::new();
+            for t in b {
+                pool.entry(pos_key(t)).or_default().push([t[0].qn, t[1].qn, t[2].qn]);
+            }
+            for t in r {
+                let Some(cands) = pool.get_mut(&pos_key(t)) else {
+                    panic!("{ctx}: surface 0x{k:08X}: no bit-exact bundle twin for {t:?}");
+                };
+                let close = |q: &[[i8; 3]; 3]| {
+                    (0..3).all(|c| {
+                        (0..3).all(|a| (q[c][a] as i16 - t[c].qn[a] as i16).abs() <= tol)
+                    })
+                };
+                let Some(at) = cands.iter().position(close) else {
+                    panic!("{ctx}: surface 0x{k:08X}: normals of {t:?} drift > {tol} steps: {cands:?}");
+                };
+                cands.swap_remove(at);
+            }
+        }
+    }
+
+    /// The two-part setup the `?negFace` setup tests share (2026-10-23,
+    /// review hbg1v2-1/-2). Part 0 = `nf_gfx` under a non-unit scale and a
+    /// rotation about Z: its NoPos-only vertex goes on `?negFace=off` and its
+    /// back-face vertices go on `?negFace`, so it COMPACTS on both arms.
+    /// Part 1 = `hbg1_fixture_gfx` (a distinct-neg SidesType-2 poly, so a
+    /// `MODEL_BACKFACE` subset) under unit scale and an oblique rotation:
+    /// copied verbatim on `?negFace=off`, compacted on `?negFace` — either
+    /// way its `vtxBase`/`idxFirst` sit behind a compacted part 0.
+    /// `flags: 0x02` so `default_scale` survives the pack (`SetupModel::pack`
+    /// writes it only under that bit), and placement key 0 resolves the same
+    /// frames on the native runtime's legacy chain and the bake's retail one.
+    ///
+    /// Returns (source carrying the setup, both parts and the `nf_` Surface
+    /// records; the setup and its parts as the runtime reads them back).
+    fn nf_setup() -> (
+        FixtureSource,
+        holtburger_dat::file_type::SetupModel,
+        Vec<holtburger_dat::file_type::GfxObj>,
+    ) {
+        use holtburger_common::{Quaternion, Sphere, Vector3};
+        use holtburger_dat::file_type::setup_model::{AnimationFrame, PlacementType};
+        use holtburger_dat::file_type::{GfxObj, SetupModel};
+        use holtburger_dat::graphics::Frame;
+        let parts = [nf_gfx(0x0100_DB10, false), hbg1_fixture_gfx()];
+        let (a, b) = (30.0f32.to_radians() / 2.0, 50.0f32.to_radians() / 2.0);
+        let frames = vec![
+            Frame {
+                origin: Vector3 { x: 0.5, y: -1.25, z: 2.0 },
+                orientation: Quaternion { w: a.cos(), x: 0.0, y: 0.0, z: a.sin() },
+            },
+            Frame {
+                origin: Vector3 { x: -2.0, y: 3.5, z: 0.75 },
+                // Unit axis (1, 2, 2) / 3: every quaternion term is live.
+                orientation: Quaternion {
+                    w: b.cos(),
+                    x: b.sin() / 3.0,
+                    y: b.sin() * 2.0 / 3.0,
+                    z: b.sin() * 2.0 / 3.0,
+                },
+            },
+        ];
+        let setup = SetupModel {
+            id: 0x0200_DB10,
+            flags: 0x02,
+            parts: parts.iter().map(|g| g.id).collect(),
+            parent_index: vec![],
+            default_scale: vec![
+                Vector3 { x: 1.5, y: 1.5, z: 2.0 },
+                Vector3 { x: 1.0, y: 1.0, z: 1.0 },
+            ],
+            holding_locations: HashMap::new(),
+            connection_points: HashMap::new(),
+            placement_frames: HashMap::from([(
+                0,
+                PlacementType { anim_frame: AnimationFrame { frames, hooks: vec![] } },
+            )]),
+            cyl_spheres: vec![],
+            spheres: vec![],
+            height: 0.0,
+            radius: 0.0,
+            step_up: 0.0,
+            step_down: 0.0,
+            sorting_sphere: Sphere { center: Vector3::zero(), radius: 0.0 },
+            selection_sphere: Sphere { center: Vector3::zero(), radius: 0.0 },
+            lights: HashMap::new(),
+            default_animation: None,
+            default_script: None,
+            default_motion_table: None,
+            default_sound_table: None,
+            default_script_table: None,
+        };
+        let mut records: HashMap<(String, u32), Vec<u8>> = HashMap::new();
+        let mut setup_bytes = Vec::new();
+        setup.pack(&mut std::io::Cursor::new(&mut setup_bytes)).unwrap();
+        let setup_re = SetupModel::unpack(&mut std::io::Cursor::new(&setup_bytes))
+            .expect("setup round-trips");
+        assert_eq!(setup_re.default_scale.len(), 2, "default_scale survives the pack");
+        records.insert(("eor/portal".to_string(), setup.id), setup_bytes);
+        let mut parts_re = Vec::with_capacity(parts.len());
+        for g in &parts {
+            let mut bytes = Vec::new();
+            g.pack(&mut std::io::Cursor::new(&mut bytes)).unwrap();
+            parts_re.push(
+                GfxObj::unpack(&mut std::io::Cursor::new(&bytes)).expect("part round-trips"),
+            );
+            records.insert(("eor/portal".to_string(), g.id), bytes);
+        }
+        for (did, textured) in [(NF_TEX_A, true), (NF_TEX_B, true), (NF_SOLID, false)] {
+            records.insert(("eor/portal".to_string(), did), nf_surface_bytes(textured));
+        }
+        (FixtureSource(records), setup_re, parts_re)
+    }
+
+    /// The tentpole differ's SETUP leg (2026-10-23, review hbg1v2-1): a
+    /// kind-1 assembly over v2 parts, under each `?negFace` arm, equals the
+    /// runtime setup walk under that arm — so the filtered + compacted
+    /// `collect_part_source` runs through `transform_part` (scale → rotate →
+    /// renormalize on the COMPACTED streams) and the per-part rebase. Each
+    /// part's descriptor range is also differed against the runtime's
+    /// per-part walk: the JS hinge path draws parts by `vtxBase`/`idxFirst`.
+    #[test]
+    fn neg_face_v2_setup_matches_runtime_on_both_arms() {
+        let _reset = NegFaceReset;
+        let (src, setup, parts) = nf_setup();
+        let dir_payload = hbg1::encode_setup_directory(&src, &setup).unwrap();
+        let payloads: HashMap<u32, Vec<u8>> = parts
+            .iter()
+            .map(|g| {
+                let p = hbg1::encode_gfx_part_faces(g, &|d: u32| hbg1::read_surface_type(&src, d))
+                    .expect("v2 encode");
+                (g.id, p)
+            })
+            .collect();
+        let source_vertex_count = |pi: usize| -> usize {
+            hbg1::Hbg1Mesh::parse(&payloads[&parts[pi].id]).unwrap().vertex_count
+        };
+
+        for retail in [false, true] {
+            crate::set_neg_face_for_test(retail, false);
+            let ctx = format!("setup negFace retail={retail}");
+            let (tris, _complete) =
+                crate::triangulate_model_uncached(&src, setup.id, &[], &[], None)
+                    .expect("runtime setup walk");
+            let per_part = crate::triangulate_setup_model_per_part(&src, setup.id, &[], &[])
+                .expect("runtime per-part walk");
+            let mut geom = |q: u32| -> Option<Vec<u8>> {
+                if q == setup.id { Some(dir_payload.clone()) } else { payloads.get(&q).cloned() }
+            };
+            let (buffer, descriptor) = assemble_models(&mut geom, &[setup.id]).unwrap();
+            assert_eq!(descriptor["negFaceRetail"].as_bool(), Some(retail));
+            let entry = &descriptor["models"][0];
+            assert!(entry.get("missing").is_none(), "{ctx}: assembled");
+            assert_groups_close(
+                &runtime_groups(&tris),
+                &bundle_groups(&buffer, entry),
+                2,
+                &ctx,
+            );
+            // The other arm's subsets are gone, not just empty.
+            let gone = if retail {
+                hbg1::subset_flags::MODEL_BACKFACE
+            } else {
+                hbg1::subset_flags::NOPOS_SLOT0
+            };
+            for s in entry["fused"]["subsets"].as_array().unwrap() {
+                assert_eq!((s["flags"].as_u64().unwrap() as u8) & gone, 0, "{ctx}: {s}");
+            }
+
+            // Per part: the ranges tile the model in part order, every index
+            // stays inside its own part's vertex range, every vertex is used,
+            // and the part's subsets alone equal the runtime's part bucket.
+            let vcount = entry["vtx"]["count"].as_u64().unwrap() as usize;
+            let idx_off = entry["idx"]["off"].as_u64().unwrap() as usize;
+            let width = entry["idx"]["width"].as_u64().unwrap() as usize;
+            let index_at = |i: usize| -> usize {
+                let o = idx_off + i * width;
+                if width == 2 {
+                    u16::from_le_bytes(buffer[o..o + 2].try_into().unwrap()) as usize
+                } else {
+                    u32::from_le_bytes(buffer[o..o + 4].try_into().unwrap()) as usize
+                }
+            };
+            let part_entries = entry["parts"].as_array().unwrap();
+            assert_eq!(part_entries.len(), 2, "{ctx}: two parts");
+            assert_eq!(per_part.len(), 2, "{ctx}: two runtime buckets");
+            let (mut vb, mut ib) = (0usize, 0usize);
+            let mut used = vec![false; vcount];
+            for (pi, p) in part_entries.iter().enumerate() {
+                let field = |k: &str| p[k].as_u64().unwrap() as usize;
+                assert_eq!(field("partIndex"), pi, "{ctx}");
+                assert_eq!((field("vtxBase"), field("idxFirst")), (vb, ib), "{ctx}: part {pi}");
+                let (vc, ic) = (field("vtxCount"), field("idxCount"));
+                for i in ib..ib + ic {
+                    let ix = index_at(i);
+                    assert!((vb..vb + vc).contains(&ix), "{ctx}: part {pi} index {ix}");
+                    used[ix] = true;
+                }
+                for s in p["subsets"].as_array().unwrap() {
+                    let first = s["firstIndex"].as_u64().unwrap() as usize;
+                    let count = s["indexCount"].as_u64().unwrap() as usize;
+                    assert!(first >= ib && first + count <= ib + ic, "{ctx}: part {pi}: {s}");
+                }
+                let mut part_entry = entry.clone();
+                part_entry["fused"]["subsets"] = p["subsets"].clone();
+                assert_groups_close(
+                    &runtime_groups(&per_part[pi]),
+                    &bundle_groups(&buffer, &part_entry),
+                    2,
+                    &format!("{ctx} part {pi}"),
+                );
+                // The branch this differ exists for: part 0 compacts on both
+                // arms, part 1 only where its back face goes.
+                let compacted = vc < source_vertex_count(pi);
+                assert_eq!(compacted, pi == 0 || retail, "{ctx}: part {pi} {vc} vertices");
+                vb += vc;
+                ib += ic;
+            }
+            assert_eq!(vb, vcount, "{ctx}: parts tile the vertex region");
+            assert_eq!(ib as u64, entry["idx"]["count"].as_u64().unwrap(), "{ctx}");
+            assert!(used.iter().all(|&u| u), "{ctx}: orphan vertex");
+        }
+    }
+
+    /// `?negFace` on over a v1 dist (every run before the GEOM rebake): a
+    /// setup stops reading at its FIRST unmarked part instead of copying
+    /// every part payload out of the pack first (review hbg1v2-2,
+    /// 2026-10-23). `?negFace=off` still reads and assembles every part.
+    #[test]
+    fn neg_face_v1_setup_stops_at_first_unmarked_part() {
+        let _reset = NegFaceReset;
+        let (src, setup, parts) = nf_setup();
+        let dir_payload = hbg1::encode_setup_directory(&src, &setup).unwrap();
+        let v1: HashMap<u32, Vec<u8>> =
+            parts.iter().map(|g| (g.id, hbg1::encode_gfx_part(g).unwrap())).collect();
+        for (retail, want_reads) in [(true, 2usize), (false, 1 + parts.len())] {
+            crate::set_neg_face_for_test(retail, false);
+            let reads = std::cell::RefCell::new(Vec::new());
+            let mut geom = |q: u32| -> Option<Vec<u8>> {
+                reads.borrow_mut().push(q);
+                if q == setup.id { Some(dir_payload.clone()) } else { v1.get(&q).cloned() }
+            };
+            let (_b, d) = assemble_models(&mut geom, &[setup.id]).unwrap();
+            assert_eq!(d["models"][0].get("missing").is_some(), retail, "retail={retail}");
+            assert_eq!(d["faceUnmarked"].as_u64(), Some(retail as u64), "retail={retail}");
+            assert_eq!(reads.borrow().len(), want_reads, "retail={retail}: {:?}", reads.borrow());
+        }
+    }
+
     /// REAL-DAT differ (H-04.6(d) at corpus scale; #[ignore] — needs
     /// ~/ac_base_dats). Every sampled 0x01 GfxObj must assemble to the
     /// runtime triangulation exactly (positions/uvs bit-exact, normals at
@@ -1328,6 +2076,218 @@ mod tests {
         println!("real-DAT differ: {gfx_checked} GfxObjs exact, {setup_checked} setups position-exact");
         assert!(gfx_checked >= 200, "want ≥200 GfxObjs, got {gfx_checked}");
         assert!(setup_checked >= 100, "want ≥100 setups, got {setup_checked}");
+    }
+
+    /// REAL-DAT `?negFace` differ (2026-10-22; #[ignore] — needs
+    /// ~/ac_base_dats). Encodes EVERY 0x01 GfxObj as HBG1 v2 with surface
+    /// types read from the portal DAT (what the bake does), censuses the
+    /// markers, and for up to 400 models that carry one (plus 100 that carry
+    /// none) asserts the assembled bundle equals the runtime triangulation
+    /// under BOTH `?negFace` arms; then does the same for 0x02 setups over v2
+    /// parts (every setup using a marked GfxObj, up to 200, plus 150 plain —
+    /// 2026-10-23, the setup leg). Run it BY NAME: the relief differs flip
+    /// process-wide relief atomics that would add rails to the runtime side.
+    /// The two census lines are the [M] input for
+    /// docs/HBG1-negface-marker-2026-10-22.md.
+    #[test]
+    #[ignore]
+    fn differ_real_dats_models_neg_face_v2() {
+        use holtburger_dat::DatDatabase;
+        let _reset = NegFaceReset;
+        let home = std::env::var("HOME").unwrap();
+        let portal = DatDatabase::new(&format!("{home}/ac_base_dats/client_portal.dat"))
+            .expect("open portal dat");
+        struct DatSrc(DatDatabase);
+        impl ResourceSource for DatSrc {
+            fn get_file_by_key(&self, key: ResourceKey<'_>) -> holtburger_dat::Result<Vec<u8>> {
+                self.0.get_file(key.file_id)
+            }
+            fn get_metadata_by_key(&self, _key: ResourceKey<'_>) -> Option<FileMetadata> {
+                None
+            }
+            fn has_namespace(&self, ns: &str) -> bool {
+                ns == "eor/portal"
+            }
+        }
+        let mut ids: Vec<u32> =
+            portal.files.keys().copied().filter(|id| (id >> 24) == 0x01).collect();
+        ids.sort_unstable();
+        let mut setup_ids: Vec<u32> =
+            portal.files.keys().copied().filter(|id| (id >> 24) == 0x02).collect();
+        setup_ids.sort_unstable();
+        let src = DatSrc(portal);
+        let (mut encoded, mut with_back, mut with_nopos, mut with_front_copy) =
+            (0usize, 0usize, 0usize, 0usize);
+        let (mut marked_checked, mut plain_checked, mut with_marked) = (0usize, 0usize, 0usize);
+        // Every marked GfxObj id, for the setup leg's sample below.
+        let mut marked_ids: std::collections::HashSet<u32> = std::collections::HashSet::new();
+        for &id in &ids {
+            let bytes = src.0.get_file(id).unwrap();
+            let Ok(gfx) =
+                holtburger_dat::file_type::GfxObj::unpack(&mut std::io::Cursor::new(&bytes))
+            else {
+                continue;
+            };
+            let payload =
+                hbg1::encode_gfx_part_faces(&gfx, &|d: u32| hbg1::read_surface_type(&src, d))
+                    .expect("v2 encode");
+            encoded += 1;
+            let mesh = hbg1::Hbg1Mesh::parse(&payload).unwrap();
+            let subs = mesh.subsets().unwrap();
+            let back = subs.iter().any(|s| s.flags & hbg1::subset_flags::MODEL_BACKFACE != 0);
+            let nopos = subs.iter().any(|s| s.flags & hbg1::subset_flags::NOPOS_SLOT0 != 0);
+            with_back += back as usize;
+            with_nopos += nopos as usize;
+            with_front_copy += (mesh.header.flags & hbg1::flags::NEG_FRONT_COPY != 0) as usize;
+            let marked = back || nopos;
+            with_marked += marked as usize;
+            if marked {
+                marked_ids.insert(id);
+            }
+            if (marked && marked_checked >= 400) || (!marked && plain_checked >= 100) {
+                continue;
+            }
+            for retail in [false, true] {
+                crate::set_neg_face_for_test(retail, false);
+                let tris = crate::triangulate_model_uncached(&src, id, &[], &[], None)
+                    .map(|(t, _complete)| t)
+                    .unwrap_or_default();
+                let mut geom = |q: u32| (q == id).then(|| payload.clone());
+                let (buffer, descriptor) = assemble_models(&mut geom, &[id]).unwrap();
+                let entry = &descriptor["models"][0];
+                assert!(entry.get("missing").is_none(), "gfx 0x{id:08X} retail={retail}");
+                assert_groups_equal(
+                    runtime_groups(&tris),
+                    bundle_groups(&buffer, entry),
+                    &format!("gfx 0x{id:08X} retail={retail}"),
+                );
+            }
+            if marked {
+                marked_checked += 1;
+            } else {
+                plain_checked += 1;
+            }
+        }
+        println!(
+            "real-DAT negFace v2: {encoded} GfxObjs encoded | MODEL_BACKFACE {with_back} | \
+             NOPOS_SLOT0 {with_nopos} | NEG_FRONT_COPY {with_front_copy} | exact on both arms: \
+             {marked_checked} marked + {plain_checked} plain"
+        );
+        // 2026-10-22 first run [M]: the whole base portal.dat has only 32 marked GfxObjs
+        // (MODEL_BACKFACE 2, NOPOS_SLOT0 30), not the >= 50 first guessed — so pin "every
+        // marked GfxObj (up to the 400 cap) was checked exact on both arms" instead.
+        assert!(with_marked > 0, "no marked GfxObj in the corpus");
+        assert_eq!(marked_checked, with_marked.min(400), "every marked GfxObj checked");
+        assert!(plain_checked >= 50, "want >= 50 plain GfxObjs, got {plain_checked}");
+
+        // SETUP leg (2026-10-23, review hbg1v2-1): the 0x02 path runs the same
+        // filtered + compacted parts through `transform_part` and the per-part
+        // rebase. Every setup that uses a marked GfxObj (up to 200) plus the
+        // first 150 plain ones, both arms, against the runtime walk posed by
+        // the directory (native builds resolve the legacy placement chain —
+        // see `differ_real_dats_models`). Positions + uvs bit-exact; normals
+        // at the 2-step setup bar only when every part is unit-scale — a
+        // skewed `default_scale` magnifies one quantization step past any
+        // fixed bar (`neg_face_v2_setup_matches_runtime_on_both_arms` pins a
+        // scaled part's normals instead).
+        let (mut setup_marked, mut setup_plain, mut setup_scaled) = (0usize, 0usize, 0usize);
+        for &id in &setup_ids {
+            let Ok(bytes) = src.0.get_file(id) else { continue };
+            let Ok(setup) = holtburger_dat::file_type::SetupModel::unpack(
+                &mut std::io::Cursor::new(&bytes),
+            ) else {
+                continue;
+            };
+            let marked = setup.parts.iter().any(|p| marked_ids.contains(p));
+            if (marked && setup_marked >= 200) || (!marked && setup_plain >= 150) {
+                continue;
+            }
+            let Ok(dir_payload) = hbg1::encode_setup_directory(&src, &setup) else {
+                continue;
+            };
+            let mut part_payloads: HashMap<u32, Vec<u8>> = HashMap::new();
+            let mut all_parts = true;
+            for &p in &setup.parts {
+                if (p >> 24) as u8 != 0x01 || part_payloads.contains_key(&p) {
+                    continue;
+                }
+                match src.0.get_file(p).ok().and_then(|b| {
+                    holtburger_dat::file_type::GfxObj::unpack(&mut std::io::Cursor::new(&b)).ok()
+                }) {
+                    Some(g) => {
+                        let payload =
+                            hbg1::encode_gfx_part_faces(&g, &|d: u32| hbg1::read_surface_type(&src, d))
+                                .expect("v2 encode");
+                        part_payloads.insert(p, payload);
+                    }
+                    None => all_parts = false,
+                }
+            }
+            if !all_parts {
+                continue;
+            }
+            let dir = hbg1::parse_setup(&dir_payload).unwrap();
+            let pose = holtburger_dat::file_type::setup_model::AnimationFrame {
+                frames: dir
+                    .parts
+                    .iter()
+                    .map(|r| holtburger_dat::graphics::Frame {
+                        origin: holtburger_common::Vector3 {
+                            x: r.frame_pos[0],
+                            y: r.frame_pos[1],
+                            z: r.frame_pos[2],
+                        },
+                        orientation: holtburger_common::Quaternion {
+                            w: r.frame_quat[0],
+                            x: r.frame_quat[1],
+                            y: r.frame_quat[2],
+                            z: r.frame_quat[3],
+                        },
+                    })
+                    .collect(),
+                hooks: vec![],
+            };
+            let unit_scale = dir.parts.iter().all(|r| r.scale == [1.0, 1.0, 1.0]);
+            let tol = if unit_scale { 2 } else { i16::MAX };
+            for retail in [false, true] {
+                crate::set_neg_face_for_test(retail, false);
+                let ctx = format!("setup 0x{id:08X} retail={retail}");
+                let mut tris = Vec::new();
+                crate::triangulate_setup_model_at_frame(
+                    &src,
+                    id,
+                    &[],
+                    &[],
+                    None,
+                    Some(&pose),
+                    &mut tris,
+                )
+                .expect("runtime setup walk");
+                let mut geom = |q: u32| -> Option<Vec<u8>> {
+                    if q == id { Some(dir_payload.clone()) } else { part_payloads.get(&q).cloned() }
+                };
+                let (buffer, descriptor) = assemble_models(&mut geom, &[id]).unwrap();
+                let entry = &descriptor["models"][0];
+                assert!(entry.get("missing").is_none(), "{ctx}: assembled");
+                assert_groups_close(
+                    &runtime_groups(&tris),
+                    &bundle_groups(&buffer, entry),
+                    tol,
+                    &ctx,
+                );
+            }
+            setup_scaled += (!unit_scale) as usize;
+            if marked {
+                setup_marked += 1;
+            } else {
+                setup_plain += 1;
+            }
+        }
+        println!(
+            "real-DAT negFace v2 setups: exact on both arms: {setup_marked} using a marked \
+             GfxObj + {setup_plain} plain ({setup_scaled} scaled: positions + uvs only)"
+        );
+        assert!(setup_plain >= 100, "want >= 100 plain setups, got {setup_plain}");
     }
 
     /// REAL-DAT ENVCELL differ (2026-08-10, filed off the R9 290 eye run's

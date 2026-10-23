@@ -51,9 +51,40 @@
 // producer. The pooled world is therefore a strict SUBSET of the world until
 // the resample lands, and the size of the residue is a published number
 // (`__diag.pools().classPages.refused`).
+//
+// THE CONTENT KEY IS THE GEOMETRY'S BYTES (`?poolRuns`, 2026-10-22, handoff F1)
+// ---------------------------------------------------------------------------
+// D-07.7 makes pool geometry dedup "default and EXACT-keyed" on the bake's
+// content identity. This producer works from finished singleton meshes, and it
+// keyed on `n.geometry.uuid` — an OBJECT identity. Both live geometry sources
+// mint fresh objects per landblock bake (the runtime decode per LB, and
+// `geom_bundles.js#assembleModels`, which builds new attributes per call;
+// `?statGeomCache`, which would share them, is off), so the same model placed in
+// two LBs of one sector became two pool geometries, and its ranges never
+// repeated across LBs. Runs (pool_registry.js header) regroup REPEATED ranges
+// only, so that key left them little to regroup [D]. The key is now a 64-bit
+// hash (two avalanching 32-bit lanes, 2026-10-23 — see `_mix`) over exactly
+// what `normalizeForPool` reads — position / normal / uv / acBakedLight (raw
+// bytes + item size + normalized + array type) and the index — memoised per
+// STREAM (a model's per-surface groups share their vertex streams, so its
+// bytes are hashed once per model, not once per surface) and per geometry
+// object, and every hit on a DIFFERENT object is BYTE-VERIFIED against the
+// key's representative (a shared stream pair is compared once); a mismatch (a
+// hash collision) takes the key's next chained slot and is counted
+// (`producer.contentCollisions`). Equal bytes ⇒ an identical normalized pool
+// geometry, so sharing it is exact by construction — the per-instance matrix
+// carries the placement. It also shrinks pool vertex storage (one copy per
+// content per pool, M6) and `geomByContent` now retains one representative per
+// CONTENT instead of one per object.
+// `?poolRuns=off` keeps the old object-identity key and leaves every pool
+// unmarked. It is NOT HEAD's pooled world: the node-bounds upkeep, the band-swap
+// `_visibilityChanged` raise, the per-tile plan list, the park-aware commit and
+// the vacate wiring are unconditional fixes and stay on in both arms, so the
+// =off arm isolates the F1 terms (marker + content keys) against THIS build
+// and a reading of HEAD is not comparable to either arm.
 
 import {
-  initDrawPools, getPoolRegistry, drawPoolsActive, checkDrawPoolsPrereqs,
+  initDrawPools, getPoolRegistry, drawPoolsActive, checkDrawPoolsPrereqs, poolRunsEnabled,
 } from "./pool_registry.js";
 import { ClassMaterialRegistry, normalizeForPool, REFUSE } from "./pool_material.js";
 import { axisRecordOf, classKeyOf, sectorKeyOfLb } from "./pool_class_key.js";
@@ -64,6 +95,11 @@ import { frameWorkEnabled, getFrameWorkScheduler } from "./frame_work.js";
 import { registerAtlasRefeed, texRefPageInfo, materialRsId } from "./bc7_textures.js";
 import { isBc7AtlasTexture } from "./static_atlas.js";
 import { _atlasRefeedImpl as atlasSideRefeed } from "./static_atlas.js";
+// ?poolRuns (2026-10-22, handoff F1): the registry takes the batchedRuns marker
+// as a dependency (it keeps no renderer-side import); the producer is the one
+// live constructor, so it is the one that hands it over. batched_runs.js is
+// already in the boot graph (index.js installs it), so this adds no module.
+import { markBatchedRuns } from "./batched_runs.js";
 
 // ---------------------------------------------------------------------------
 // the pool world singleton
@@ -98,6 +134,9 @@ export function initPoolWorld({ THREE, group, search } = {}) {
     search,
     group,
     materialFactory: (classKey) => classMats.materialFactory(classKey),
+    // Opaque, draw-order-free pools draw their repeated ranges as instanced
+    // runs (pool_registry.js header); `?poolRuns=off` makes this inert.
+    markRuns: markBatchedRuns,
   });
   if (!registry) return null;
   let controller = null;
@@ -114,7 +153,10 @@ export function initPoolWorld({ THREE, group, search } = {}) {
     registry,
     classMats,
     controller,
-    /** contentKey -> source geometry (the pool's dedup identity). */
+    /** Content-keyed dedup (header): true unless `?poolRuns=off`. */
+    contentKeys: poolRunsEnabled(search),
+    /** contentKey -> source geometry (the pool's dedup identity; with
+     *  `contentKeys`, the content's REPRESENTATIVE). */
     geomByContent: new Map(),
     /** rsId -> [{node, scene3d, opts}] held out until the full tier lands. */
     holdouts: new Map(),
@@ -134,6 +176,17 @@ export function initPoolWorld({ THREE, group, search } = {}) {
       heldOutByReason: {}, reOfferedByReason: {},
       reOffered: 0, reOfferAdmitted: 0, reOfferStale: 0,
       reOfferRefused: {},
+      // Content keys (header): geometry objects keyed, hits on a DIFFERENT
+      // object that byte-verified (cross-LB sharing — expected > 0), distinct
+      // colliding contents (hash collisions — must stay 0; each takes the
+      // key's next chained slot).
+      contentHashed: 0, contentShared: 0, contentCollisions: 0,
+      // ...and the work under them: distinct STREAMS hashed (a model's streams
+      // once, however many surface groups view them) and stream compares run.
+      contentStreamsHashed: 0, contentStreamsVerified: 0,
+      // Nodes of a plan the stream controller REFUSED because the grid had
+      // vacated its tile: handed back as passthrough (2026-10-23).
+      vacatedPassthrough: 0,
     },
   };
   // F-11.17: the producer-agnostic re-home seam. The atlas registers the same
@@ -228,8 +281,15 @@ export function addSingletonsToPools(nodes, scene3d, opts = {}) {
       continue;
     }
     n.updateMatrix();
-    const contentKey = n.geometry.uuid;
-    if (!w.geomByContent.has(contentKey)) w.geomByContent.set(contentKey, n.geometry);
+    // The dedup identity (header): the geometry's CONTENT, byte-verified;
+    // `?poolRuns=off` keeps the old object identity.
+    let contentKey;
+    if (w.contentKeys) {
+      contentKey = _contentKeyFor(n.geometry, w);
+    } else {
+      contentKey = n.geometry.uuid;
+      if (!w.geomByContent.has(contentKey)) w.geomByContent.set(contentKey, n.geometry);
+    }
     placements.push({
       lbx, lby,
       surfaceKey,
@@ -277,7 +337,17 @@ export function addSingletonsToPools(nodes, scene3d, opts = {}) {
 
   if (w.controller) {
     // Stage B: the feed becomes a RESUMABLE W3 (or W1) item under the P4 budget.
-    w.controller.onPlanReady(plan, geometrySource, { urgent: opts.urgent === true });
+    if (!w.controller.onPlanReady(plan, geometrySource, { urgent: opts.urgent === true })) {
+      // REFUSED — the grid emptied this tile while the LB was baking (2026-10-23
+      // review). Every caller drops whatever it does not get back from the
+      // legacy path, so a refused plan returned as "pooled" would vanish; it
+      // comes back as passthrough instead and renders under the legacy LB
+      // lifecycle, exactly as the pools-off arm renders a late bake.
+      for (const p of placements) passthrough.push(p.__node);
+      w.stats.vacatedPassthrough += placements.length;
+      w.stats.passthrough += passthrough.length;
+      return { passthrough, pooled: 0 };
+    }
   } else {
     // Stage A: feed on the caller's cadence (legal without ?frameWork).
     w.registry.feedTile(plan, geometrySource);
@@ -423,6 +493,216 @@ function _holdOut(node, scene3d, opts, mat, reason) {
 }
 
 // ---------------------------------------------------------------------------
+// content identity (the header's "content key is the geometry's bytes")
+// ---------------------------------------------------------------------------
+
+/** The attributes `normalizeForPool` reads, in a fixed order. */
+const _CONTENT_ATTRS = ["position", "normal", "uv", "acBakedLight"];
+/** geometry object -> its content key (each object is keyed once). */
+const _contentKeyOfGeom = new WeakMap();
+/** STREAM (a vertex attribute or an index) -> its {a, b} lane hashes
+ *  (2026-10-23 review). geom_bundles.js `_subsetsToGroups` hands every
+ *  per-surface group of a model the SAME vertex stream objects, so keyed per
+ *  geometry the model's position / normal / uv bytes were hashed once per
+ *  SURFACE, synchronously, outside the W3 budget [M: node probe 2026-10-22,
+ *  80 models × 1,500 verts × 4 surfaces = 84 ms for one LB's statics]. Per
+ *  stream, a model's bytes are hashed once; a group adds only its index.
+ *  Decoded streams are immutable — the per-object memo above assumes the same. */
+const _streamHash = new WeakMap();
+/** candidate stream -> the representative stream it byte-verified equal to,
+ *  so the K groups of a cross-LB copy compare the shared streams ONCE. */
+const _streamSameAs = new WeakMap();
+const _ABSENT = Object.freeze({ a: 0x0a77e000, b: 0x000a77e0 });
+const _f32 = new Float32Array(1);
+const _u32 = new Uint32Array(_f32.buffer);
+
+/** Two independent 32-bit lanes per word — murmur3_32's block step and an
+ *  xxhash32 round, each with its own constants — finished by fmix32. Both
+ *  rotate before they multiply, so a difference in any bit reaches every bit.
+ *  The plain FNV-1a lanes this replaced (2026-10-23 review) never moved a high
+ *  bit down: equal deltas in two words — two sign flips, a mirrored model —
+ *  cancelled in BOTH lanes, and the same high-byte delta in two words
+ *  collided ~1 in 200 [M: review node probe, 10–14 of 2,000 trials; 0 now]. Byte verification kept every pixel
+ *  right, but each collision read as `contentCollisions`. */
+function _mix(h, w) {
+  let k = Math.imul(w, 0xcc9e2d51);
+  k = Math.imul((k << 15) | (k >>> 17), 0x1b873593);
+  const a = h.a ^ k;
+  h.a = (Math.imul((a << 13) | (a >>> 19), 5) + 0xe6546b64) | 0;
+  const b = (h.b + Math.imul(w, 0x85ebca77)) | 0;
+  h.b = Math.imul((b << 13) | (b >>> 19), 0x9e3779b1);
+}
+
+/** `_mix` over a run of words, lanes held in locals — the hot loop (every
+ *  vertex stream goes through here); bit-identical to calling `_mix` per word. */
+function _mixWords(h, words, n) {
+  let a = h.a, b = h.b;
+  for (let i = 0; i < n; i++) {
+    const w = words[i];
+    let k = Math.imul(w, 0xcc9e2d51);
+    k = Math.imul((k << 15) | (k >>> 17), 0x1b873593);
+    a ^= k;
+    a = (Math.imul((a << 13) | (a >>> 19), 5) + 0xe6546b64) | 0;
+    b = (b + Math.imul(w, 0x85ebca77)) | 0;
+    b = Math.imul((b << 13) | (b >>> 19), 0x9e3779b1);
+  }
+  h.a = a;
+  h.b = b;
+}
+
+/** murmur3's finaliser (full avalanche of one lane). */
+function _fmix(x) {
+  x = Math.imul(x ^ (x >>> 16), 0x85ebca6b);
+  x = Math.imul(x ^ (x >>> 13), 0xc2b2ae35);
+  return (x ^ (x >>> 16)) >>> 0;
+}
+
+function _typeTag(arr) {
+  const n = arr && arr.constructor ? arr.constructor.name : "";
+  let t = 0;
+  for (let i = 0; i < n.length; i++) t = (Math.imul(t, 31) + n.charCodeAt(i)) | 0;
+  return t;
+}
+
+/** One stream's LOGICAL content hash: header + raw element bytes, 32-bit
+ *  little-endian words (an interleaved attribute is read component by
+ *  component). Memoised per stream object. */
+function _streamHashOf(attr, stats) {
+  if (!attr) return _ABSENT;
+  const hit = _streamHash.get(attr);
+  if (hit !== undefined) return hit;
+  if (stats) stats.contentStreamsHashed += 1;
+  const h = { a: 0x9747b28c, b: 0x165667b1 };
+  _mix(h, attr.count | 0);
+  _mix(h, attr.itemSize | 0);
+  _mix(h, attr.normalized ? 1 : 0);
+  if (attr.isInterleavedBufferAttribute) {
+    _mix(h, 0x11);
+    for (let i = 0; i < attr.count; i++) {
+      for (let c = 0; c < attr.itemSize; c++) { _f32[0] = attr.getComponent(i, c); _mix(h, _u32[0]); }
+    }
+  } else {
+    const arr = attr.array;
+    _mix(h, _typeTag(arr));
+    const off = arr.byteOffset | 0, len = arr.byteLength | 0;
+    _mix(h, len);
+    const nw = len >>> 2;
+    const bytes = new Uint8Array(arr.buffer, off, len);
+    if ((off & 3) === 0) {
+      _mixWords(h, new Uint32Array(arr.buffer, off, nw), nw);
+    } else {
+      for (let i = 0, j = 0; i < nw; i++, j += 4) {
+        _mix(h, bytes[j] | (bytes[j + 1] << 8) | (bytes[j + 2] << 16) | (bytes[j + 3] << 24));
+      }
+    }
+    if (len & 3) {
+      let t = 0;
+      for (let j = nw << 2, sh = 0; j < len; j++, sh += 8) t |= bytes[j] << sh;
+      _mix(h, t);
+    }
+  }
+  const s = { a: _fmix(h.a), b: _fmix(h.b) };
+  _streamHash.set(attr, s);
+  return s;
+}
+
+function _attrOf(g, name) {
+  return (g.getAttribute ? g.getAttribute(name) : g.attributes && g.attributes[name]) || null;
+}
+
+/** 64-bit content hash of everything `normalizeForPool` reads: the stream
+ *  hashes in a fixed order, then the index. */
+function _hashGeometry(g, stats) {
+  const h = { a: 0x811c9dc5 | 0, b: 0x84222325 | 0 };
+  for (const name of _CONTENT_ATTRS) {
+    const s = _streamHashOf(_attrOf(g, name), stats);
+    _mix(h, s.a); _mix(h, s.b);
+  }
+  const si = _streamHashOf(g.index || null, stats);
+  _mix(h, si.a); _mix(h, si.b);
+  return `c${_fmix(h.a).toString(16).padStart(8, "0")}${_fmix(h.b).toString(16).padStart(8, "0")}`;
+}
+
+/** Exact equality of one stream's logical content; positive answers are
+ *  memoised per (candidate, representative) pair. Aligned views compare as
+ *  32-bit words. */
+function _sameStream(a, b, stats) {
+  if (!a || !b) return a === b;
+  if (a === b || _streamSameAs.get(b) === a || _streamSameAs.get(a) === b) return true;
+  if ((a.count | 0) !== (b.count | 0) || (a.itemSize | 0) !== (b.itemSize | 0) || !!a.normalized !== !!b.normalized) return false;
+  if (stats) stats.contentStreamsVerified += 1;
+  let eq = true;
+  if (a.isInterleavedBufferAttribute || b.isInterleavedBufferAttribute) {
+    for (let i = 0; eq && i < a.count; i++) {
+      for (let c = 0; c < a.itemSize; c++) {
+        if (!Object.is(a.getComponent(i, c), b.getComponent(i, c))) { eq = false; break; }
+      }
+    }
+  } else {
+    const x = a.array, y = b.array;
+    if (!x || !y || x.constructor !== y.constructor || x.byteLength !== y.byteLength) return false;
+    const len = x.byteLength;
+    const xb = new Uint8Array(x.buffer, x.byteOffset, len);
+    const yb = new Uint8Array(y.buffer, y.byteOffset, len);
+    let j = 0;
+    if (((x.byteOffset | y.byteOffset) & 3) === 0) {
+      const nw = len >>> 2;
+      const xw = new Uint32Array(x.buffer, x.byteOffset, nw);
+      const yw = new Uint32Array(y.buffer, y.byteOffset, nw);
+      for (let i = 0; i < nw; i++) if (xw[i] !== yw[i]) { eq = false; break; }
+      j = nw << 2;
+    }
+    for (; eq && j < len; j++) if (xb[j] !== yb[j]) eq = false;
+  }
+  if (eq) _streamSameAs.set(b, a);
+  return eq;
+}
+
+/** Byte-for-byte: will `normalizeForPool` produce the same geometry from both? */
+function _sameContent(a, b, stats) {
+  for (const name of _CONTENT_ATTRS) if (!_sameStream(_attrOf(a, name), _attrOf(b, name), stats)) return false;
+  return _sameStream(a.index || null, b.index || null, stats);
+}
+
+/**
+ * The pool content key of `g`, registering `g` as the key's representative on
+ * first sight. Keyed once per object; a hit on a different object is verified
+ * byte for byte. A verified MISMATCH (a 64-bit collision — expected never) is
+ * counted once per colliding CONTENT and takes the key's next chained slot
+ * (`<hash>~1`, `~2`, … each verified the same way), so colliding content still
+ * shares across LBs — it used to take the object's own uuid, i.e. no sharing
+ * for that content for the session (2026-10-23 review).
+ */
+function _contentKeyFor(g, w) {
+  const cached = _contentKeyOfGeom.get(g);
+  if (cached !== undefined && w.geomByContent.has(cached)) return cached;
+  const base = _hashGeometry(g, w.stats);
+  w.stats.contentHashed += 1;
+  let key = base;
+  for (let n = 1; ; n += 1) {
+    const rep = w.geomByContent.get(key);
+    if (rep === undefined) {
+      w.geomByContent.set(key, g);
+      if (n > 1) w.stats.contentCollisions += 1;
+      break;
+    }
+    if (rep === g) break;
+    if (_sameContent(rep, g, w.stats)) { w.stats.contentShared += 1; break; }
+    key = `${base}~${n}`;
+  }
+  _contentKeyOfGeom.set(g, key);
+  return key;
+}
+
+/** Test hooks — the content key machinery, standalone (`stats`, optional,
+ *  counts `contentStreamsHashed` / `contentStreamsVerified`). */
+const _testStats = (st) => (st && typeof st === "object" ? st : null); // `.map(hash)` passes an index
+export const _poolContentForTest = {
+  hash: (g, stats) => _hashGeometry(g, _testStats(stats)),
+  same: (a, b, stats) => _sameContent(a, b, _testStats(stats)),
+};
+
+// ---------------------------------------------------------------------------
 // residency (the grid's event hooks — T22 Handoff 4)
 // ---------------------------------------------------------------------------
 
@@ -446,6 +726,12 @@ export function poolOnSlotState(ev) {
     } else if (ev.to === "EMPTY") {
       _releaseTile(ev.tile);
     }
+    // Any transition that (re)populates the slot lifts a vacate (2026-10-23):
+    // this is the one hook EVERY re-admit passes through — teleport admits and
+    // `readmitEmptyTiles` fire no onShift/onSeed.
+    if (w.controller && (ev.to === "FETCHING" || ev.to === "STAGED" || ev.to === "LIVE")) {
+      w.controller.onReadmit(ev.tile);
+    }
   } catch (e) {
     try { console.warn("[drawPools] slot-state hook threw", e); } catch (_) { /* fail-soft */ }
   }
@@ -466,6 +752,9 @@ export function poolOnAdmit(tiles, playerTile) {
   if (playerTile != null && playerTile >= 0) w.controller.setPlayerTile(playerTile);
   const canDispatch = typeof w.controller.dispatch.post === "function";
   for (const t of tiles || []) {
+    // Admitted ⇒ no longer vacated, resident or not (`onAdmit` below runs only
+    // for resident tiles or when something can post — never on the live arm).
+    w.controller.onReadmit(t);
     if (w.registry.isTileResident(t)) {
       // PARKED → LIVE is a pointer re-adopt: no bake, no fetch, no decode.
       w.controller.onAdmit(t);
@@ -482,12 +771,21 @@ export function poolOnAdmit(tiles, playerTile) {
 
 function _releaseTile(tile) {
   const w = _world;
+  // The tile left the grid's ownership (EMPTY, or a teleport vacated it), so
+  // its plans still in flight go with it (2026-10-23 review). Without this the
+  // controller's `onVacate` had no live caller: a plan still feeding when its
+  // tile went EMPTY committed after the release, left the tile resident and
+  // drawn with no grid owner, and a later re-bake merged into that ghost
+  // record (props twice). Runs whether or not anything is resident — a STAGED
+  // tile's first plans can all still be in flight. It purges, never enqueues.
+  if (w.controller) w.controller.onVacate(tile);
   // LIVE-ARM FIX (2026-08-10): a teleport drives dozens of NEVER-RESIDENT tiles
   // to EMPTY (the first arm read 89 such transitions against 33 resident
   // tiles), and each one used to enqueue a W4 item that released nothing —
   // 89 scheduler items of pure bookkeeping. Only a tile the registry actually
-  // holds is worth a release, and the counter now means what it says.
-  if (!w.registry.isTileResident(tile)) return;
+  // holds is worth a release, and the counter now means what it says. A park
+  // mark is all such a tile can hold; it goes now (no release will run).
+  if (!w.registry.isTileResident(tile)) { w.registry.clearParked(tile); return; }
   if (w.controller) w.controller.enqueueRelease(tile);
   else w.registry.releaseTile(tile);
   w.stats.releases += 1;

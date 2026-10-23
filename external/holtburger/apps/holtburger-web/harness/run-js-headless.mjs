@@ -558,6 +558,8 @@ const TIER5 = [
   { tier: 5, flag: "surface_single_pass", file: "test_surface_single_pass.mjs" },
   { tier: 5, flag: "synthesis4_leftovers", file: "test_synthesis4_leftovers.mjs" },
   { tier: 5, flag: "terrain_batch", file: "test_terrain_batch.mjs" },
+  // 2026-10-22 B10 / handoff P1d: the terrain batch program without gl_DrawID (?terrainNoDrawId, default off).
+  { tier: 5, flag: "terrainNoDrawId", file: "tests/terrain_batch_no_drawid.test.mjs" },
   { tier: 5, flag: "terrain_detail_tex", file: "test_terrain_detail_tex.mjs" },
   { tier: 5, flag: "terrain_dirt", file: "test_terrain_dirt.mjs" },
   { tier: 5, flag: "terrain_families", file: "test_terrain_families.mjs" },
@@ -678,6 +680,19 @@ const TIER5 = [
   // 2026-10-19 fps review: an unsorted static bucket's repeated ranges drawn as per-geometry
   // instanced runs (ANGLE/D3D11 loops a multidraw range by range on CrGpuMain).
   { tier: 5, flag: "batchedRuns", file: "tests/batched_runs.test.mjs" },
+  // 2026-10-22 P1a/F2: atlas buckets share geometry per (content, layer) so batchedRuns regroups them.
+  { tier: 5, flag: "atlasGeomDedup", file: "tests/atlas_geom_dedup.test.mjs" },
+  // 2026-10-22 B9/L1: sorted buckets as order-keeping consecutive runs; the O(1) compare skip for early-out buckets.
+  { tier: 5, flag: "batchedRunsSorted", file: "tests/batched_runs_sorted.test.mjs" },
+  { tier: 5, flag: "batchedRunsStable", file: "tests/batched_runs_stable.test.mjs" },
+  // 2026-10-22 handoff P2 / L0 + B9a: opaque static + building buckets on three's BatchedMesh early-out (?staticEarlyOut, default off); building buckets marked for batchedRuns.
+  { tier: 5, flag: "staticEarlyOut", file: "tests/static_early_out.test.mjs" },
+  // 2026-10-22 handoff P4 spike (§6 L3, harness only, no flag): vertex pulling vs BatchedMesh runs, the CPU half
+  // (three premises, the GLSL patch, both draws emulated corner by corner). GPU half: harness/glsl_smoke/vertex_pull_smoke.mjs.
+  { tier: 5, flag: "vertexPullSpike", file: "tests/vertex_pull_spike.test.mjs" },
+  // 2026-10-22 GPU-resident statics P0 prep: the page-side structure read
+  // (scripts/perf-worker/structure-p0.eval.js), the laptop twin's URL contract and the P0 1070 queue entry.
+  { tier: 5, flag: "p0StructureProbe", file: "tests/structure_p0_probe.test.mjs" },
   // 2026-10-19 fps review: reversed-Z default-on, and the terrain sorts after its occluders
   // when no doorway punch draws (early-Z skips covered terrain).
   { tier: 5, flag: "terrainLast", file: "tests/terrain_last.test.mjs" },
@@ -723,6 +738,8 @@ const TIER5 = [
   { tier: 5, flag: "harness_frame_phase_census", file: "harness/test_frame_phase_census.mjs" },
   { tier: 5, flag: "harness_frame_work", file: "harness/test_frame_work.mjs" },
   { tier: 5, flag: "harness_geom_bundles", file: "harness/test_geom_bundles.mjs" },
+  // 2026-10-22 F7a / HBG1 v2: the ?negFace face-marker reader seam (descriptor fold, once-only warning).
+  { tier: 5, flag: "geomBundlesNegFace", file: "tests/geom_bundles_negface.test.mjs" },
   { tier: 5, flag: "harness_moving_bench_boot", file: "harness/test_moving_bench_boot.mjs" },
   { tier: 5, flag: "harness_nra_derive", file: "harness/test_nra_derive.mjs" },
   { tier: 5, flag: "harness_pack_fetch_controller", file: "harness/test_pack_fetch_controller.mjs" },
@@ -1303,6 +1320,9 @@ const TIER5 = [
   { tier: 5, flag: "farDiag", file: "tests/far_radius_policy.test.mjs" },
   // §7 stream-statics: a superseded envcell build leaves the LB's pooled cells to the newer one.
   { tier: 5, flag: "drawPools(cancelGen)", file: "tests/envcell_pool_cancel_gen.test.mjs" },
+  // 2026-10-22 handoff F1: opaque pools drawn as batchedRuns runs, content-keyed pool geometry,
+  // and the HEAD pool fixes (node bounds, one feed list per tile, band swaps under the early-out).
+  { tier: 5, flag: "drawPools(poolRuns)", file: "tests/pool_runs.test.mjs" },
   // SKY-1 remainder: ?particlesOverHaze (default on, =off escape) draws the unsplit chain's
   // particles after the layered haze, exactly once, at no new target.
   { tier: 5, flag: "particlesOverHaze", file: "tests/sky1_particles_over_haze.test.mjs" },
@@ -1368,6 +1388,12 @@ const NEEDS_BROWSER = [
   { file: "test_weapon_fx_gpu.cjs", why: `weapon FX — ${BROWSER_WHY}` },
   { file: "harness/glsl_smoke/light_loops_smoke.mjs", why: `lightLoops — ${BROWSER_WHY}` },
   { file: "harness/glsl_smoke/batched_runs_smoke.mjs", why: `batchedRuns — ${BROWSER_WHY}` },
+  { file: "harness/glsl_smoke/atlas_geom_dedup_smoke.mjs", why: `atlasGeomDedup — ${BROWSER_WHY}` },
+  { file: "harness/glsl_smoke/batched_runs_sorted_smoke.mjs", why: `batchedRunsSorted / batchedRunsStable — ${BROWSER_WHY}` },
+  { file: "harness/glsl_smoke/pool_runs_smoke.mjs", why: `poolRuns — ${BROWSER_WHY}` },
+  { file: "harness/glsl_smoke/static_early_out_smoke.mjs", why: `staticEarlyOut / B9a building runs — ${BROWSER_WHY}` },
+  { file: "harness/glsl_smoke/vertex_pull_smoke.mjs", why: `vertexPullSpike (handoff P4, harness only) — ${BROWSER_WHY}` },
+  { file: "harness/glsl_smoke/terrain_no_drawid_smoke.mjs", why: `terrainNoDrawId — ${BROWSER_WHY}` },
   { file: "harness/glsl_smoke/fps_arms_smoke.mjs", why: `canvasDepth / depthBandSort / freezeWorldRoots — ${BROWSER_WHY}` },
   { file: "harness/glsl_smoke/reversed_z_smoke.mjs", why: `reversedZ — ${BROWSER_WHY}` },
   { file: "harness/glsl_smoke/water_flow_smoke.mjs", why: `waterFlow / waterBank — ${BROWSER_WHY}` },

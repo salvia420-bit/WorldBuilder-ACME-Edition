@@ -4239,6 +4239,18 @@ export async function bakeStaticsRing(
 // (billboard) band. Everything else pays one `userData` read and a
 // `continue`. The camera position is transformed into each node's LOCAL
 // AC frame (Z-up) so the orientation math needs no worldRoot round-trip.
+//
+// 2026-10-22 (handoff F6, `?staticEarlyOut`): what this writes per frame is
+// `leaf.quaternion` (+ `leaf.position` for a ?degradePose band) on the
+// plain-Mesh degraded leaf of a THREE.LOD node in staticsGroup — never a
+// BatchedMesh instance: LOD wrappers are kept verbatim by every batcher
+// (static_batch_x `consolidateStaticSingletonsCrossLb`, buildings
+// `_batchEligible`, the atlas), and instanced LODs are skipped below. So it
+// cannot flip any bucket's `_visibilityChanged` and does not defeat three's
+// BatchedMesh early-out (pinned in tests/static_early_out.test.mjs E11). A
+// GPU billboard (vertex-shader yaw per instance) only becomes necessary once
+// degraded bands move INTO buckets; that needs a band-selection mechanism
+// first — see the P2/F6 notes in the GPU-resident statics handoff.
 
 // Reused scratch — no per-frame allocation in the hot path.
 const _bbCamWorld = new THREE.Vector3();

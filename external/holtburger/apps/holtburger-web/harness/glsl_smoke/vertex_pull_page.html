@@ -1,0 +1,245 @@
+<!doctype html><html><body><canvas id="c" width="128" height="128"></canvas>
+<script type="importmap">{ "imports": { "three": "/three/three.module.js" } }</script>
+<script type="module">
+// handoff P4 spike (§6 L3), 2026-10-22 — driven by vertex_pull_smoke.mjs. ONE renderer,
+// ONE scene (same lights for every arm); each arm is one object made visible alone,
+// rendered twice (compile, then steady), read back. Arms:
+//   A        three r184 BatchedMesh + scene3d/batched_runs.js runs, exactly as the app
+//            (installBatchedRunsChunks before any compile, installBatchedRuns on the
+//            renderer, markBatchedRuns on an unsorted, per-object-culled bucket);
+//   A_stock  the same mesh with the live seam __batchedRuns.off (three's own multidraw
+//            through the patched chunk) — the reference A itself is proven against;
+//   B_packed vertex pulling, R32UI stream (4 B/corner), one drawArrays;
+//   B_pair   vertex pulling, RG32UI stream (8 B/corner), one drawArrays;
+//   B_attr   vertex pulling, the packed u32 as an integer vertex attribute;
+//   B_index  vertex pulling, packed per-(instance, vertex) stream + index buffer, one drawElements;
+//   noRange  B_packed's material on a geometry WITHOUT setDrawRange: three must draw nothing
+//            (renderBufferDirect's early return) — proves the drawRange is what makes B legal.
+import * as THREE from "three";
+import { installBatchedRunsChunks, installBatchedRuns, markBatchedRuns, getBatchedRunsStats } from "/app/scene3d/batched_runs.js";
+import * as VP from "/app/harness/glsl_smoke/vertex_pull_lib.mjs";
+
+const W = 128;
+const out = { errors: [], arms: {}, programs: [] };
+const origErr = console.error;
+console.error = (...a) => { out.errors.push(a.map(String).join(" ").slice(0, 400)); origErr(...a); };
+try {
+  out.chunks = installBatchedRunsChunks(THREE);
+  const renderer = new THREE.WebGLRenderer({ canvas: document.getElementById("c"), antialias: false });
+  renderer.debug.checkShaderErrors = true;
+  out.wrapper = installBatchedRuns(renderer);
+  out.multiDraw = renderer.extensions.has("WEBGL_multi_draw");
+  const gl = renderer.getContext();
+  out.limits = {
+    maxVertexTextureImageUnits: gl.getParameter(gl.MAX_VERTEX_TEXTURE_IMAGE_UNITS),
+    maxTextureImageUnits: gl.getParameter(gl.MAX_TEXTURE_IMAGE_UNITS),
+    maxCombinedTextureImageUnits: gl.getParameter(gl.MAX_COMBINED_TEXTURE_IMAGE_UNITS),
+    maxTextureSize: gl.getParameter(gl.MAX_TEXTURE_SIZE),
+    maxVertexAttribs: gl.getParameter(gl.MAX_VERTEX_ATTRIBS),
+  };
+
+  const scene = new THREE.Scene();
+  const cam = new THREE.PerspectiveCamera(50, 1, 0.1, 100);
+  cam.position.set(0, 0, 12.5); // every placement inside the frustum (half-height 5.83 > the grid's 5.2)
+  cam.lookAt(0, 0, 0);
+  scene.add(new THREE.AmbientLight(0xffffff, 0.35));
+  const sun = new THREE.DirectionalLight(0xffffff, 2.2);
+  sun.position.set(3, 5, 6);
+  scene.add(sun);
+  const lamp = new THREE.PointLight(0xffeedd, 30, 0, 2);
+  lamp.position.set(-3, 2, 4);
+  scene.add(lamp);
+
+  // A small LINEAR-filtered checker map: any uv difference between the arms would
+  // move a filtered colour, so the map is the uv path's detector.
+  const px = new Uint8Array(8 * 8 * 4);
+  for (let y = 0; y < 8; y++) for (let x = 0; x < 8; x++) {
+    const o = (y * 8 + x) * 4, on = (x + y) & 1;
+    px[o] = on ? 235 : 70; px[o + 1] = on ? 225 : 90; px[o + 2] = on ? 200 : 120; px[o + 3] = 255;
+  }
+  const map = new THREE.DataTexture(px, 8, 8, THREE.RGBAFormat, THREE.UnsignedByteType);
+  map.colorSpace = THREE.SRGBColorSpace;
+  map.magFilter = THREE.LinearFilter;
+  map.minFilter = THREE.LinearFilter;
+  map.needsUpdate = true;
+  // One material per arm (onBeforeCompile is per material), identical parameters.
+  const makeMat = () => new THREE.MeshStandardMaterial({ map, roughness: 0.55, metalness: 0.2 });
+
+  const { geoms, instances } = VP.buildSpikeScene(THREE);
+
+  // ---- A: the BatchedMesh bucket, as the app builds and marks it ----
+  const bm = new THREE.BatchedMesh(VP.SPIKE_MAX_INSTANCES, 4096, 8192, makeMat());
+  const gid = geoms.map((g) => bm.addGeometry(g));
+  instances.forEach((it, k) => {
+    const id = bm.addInstance(gid[it.geom]);
+    if (id !== k) throw new Error(`instance id ${id} != ${k}`);
+    bm.setMatrixAt(id, it.matrix);
+    bm.setColorAt(id, it.color);
+  });
+  bm.sortObjects = false;
+  bm.perObjectFrustumCulled = true;
+  markBatchedRuns(bm);
+  scene.add(bm);
+
+  // ---- B: arena + streams + BatchedMesh-layout instance textures ----
+  const arena = VP.buildArena(geoms);
+  const instanceGeom = Int32Array.from(instances, (it) => it.geom);
+  const { order, runs } = VP.groupedOrder(instanceGeom);
+  const packed = VP.buildCornerStream(geoms, arena, instanceGeom, order, "packed");
+  const pair = VP.buildCornerStream(geoms, arena, instanceGeom, order, "pair");
+  const indexed = VP.buildIndexedStream(geoms, arena, instanceGeom, order);
+
+  const mSide = VP.batchingMatricesSide(VP.SPIKE_MAX_INSTANCES);
+  const matrices = new Float32Array(mSide * mSide * 4);
+  const cSide = VP.batchingColorsSide(VP.SPIKE_MAX_INSTANCES);
+  const colors = new Float32Array(cSide * cSide * 4).fill(1);
+  instances.forEach((it, k) => { it.matrix.toArray(matrices, k * 16); it.color.toArray(colors, k * 4); });
+  const same = (a, b) => a.length === b.length && a.every((v, i) => Object.is(v, b[i]));
+  out.layout = {
+    matricesSide: mSide, colorsSide: cSide,
+    matricesEqualBatchedMesh: same(matrices, bm._matricesTexture.image.data),
+    colorsEqualBatchedMesh: same(colors, bm._colorsTexture.image.data),
+  };
+  const tex = (data, w, h, format, type) => { const t = new THREE.DataTexture(data, w, h, format, type); t.needsUpdate = true; return t; };
+  const matricesTex = tex(matrices, mSide, mSide, THREE.RGBAFormat, THREE.FloatType);
+  const colorsTex = tex(colors, cSide, cSide, THREE.RGBAFormat, THREE.FloatType);
+  colorsTex.colorSpace = THREE.ColorManagement.workingColorSpace; // as BatchedMesh._initColorsTexture
+  const arenaTex = tex(arena.data, arena.width, arena.height, THREE.RGBAFormat, THREE.FloatType);
+  const packedTex = tex(packed.data, packed.width, packed.height, THREE.RedIntegerFormat, THREE.UnsignedIntType);
+  const pairTex = tex(pair.data, pair.width, pair.height, THREE.RGIntegerFormat, THREE.UnsignedIntType);
+  const indexedTex = tex(indexed.data, indexed.width, indexed.height, THREE.RedIntegerFormat, THREE.UnsignedIntType);
+
+  // The manual bounding sphere: the union of every placement's box.
+  const box = new THREE.Box3(), b = new THREE.Box3();
+  instances.forEach((it) => {
+    const g = geoms[it.geom];
+    if (!g.boundingBox) g.computeBoundingBox();
+    box.union(b.copy(g.boundingBox).applyMatrix4(it.matrix));
+  });
+  const sphere = box.getBoundingSphere(new THREE.Sphere());
+
+  const base = { hbMatrices: matricesTex, hbColors: colorsTex, hbArena: arenaTex };
+  const pullMesh = (stream, vbits, streamTex, geomOpts) => {
+    const uniforms = streamTex ? { ...base, hbPullStream: streamTex } : { ...base };
+    const mat = VP.makePullMaterial(makeMat(), THREE.ShaderChunk, { stream, vbits, colors: true, uniforms });
+    const mesh = new THREE.Mesh(VP.makePullGeometry(THREE, { sphere, ...geomOpts }), mat);
+    scene.add(mesh);
+    return mesh;
+  };
+  const bPacked = pullMesh(VP.STREAM_PACKED, packed.vbits, packedTex, { corners: packed.corners });
+  const bPair = pullMesh(VP.STREAM_PAIR, pair.vbits, pairTex, { corners: pair.corners });
+  const bAttr = pullMesh(VP.STREAM_ATTR, packed.vbits, null, { corners: packed.corners, attr: packed.data.slice(0, packed.corners) });
+  const bIndex = pullMesh(VP.STREAM_PACKED, indexed.vbits, indexedTex, { corners: indexed.corners, index: indexed.index });
+  // noRange: the packed arm's material, a geometry with no attribute, no index, no drawRange.
+  const noRangeGeom = new THREE.BufferGeometry();
+  noRangeGeom.boundingSphere = sphere.clone();
+  const noRange = new THREE.Mesh(noRangeGeom, bPacked.material);
+  scene.add(noRange);
+
+  // ---- the bytes the doc prices ----
+  const bmIndex = bm.geometry.index;
+  let vertsA = 0, idxA = 0, vertexInstances = 0;
+  geoms.forEach((g) => { vertsA += g.attributes.position.count; idxA += g.index.count; });
+  instances.forEach((it) => { vertexInstances += geoms[it.geom].attributes.position.count; });
+  out.bytes = {
+    arena: { vertices: arena.vertices, width: arena.width, height: arena.height, bytesPerVertex: arena.bytesPerVertex, payloadBytes: arena.payloadBytes, textureBytes: arena.textureBytes },
+    packed: { corners: packed.corners, width: packed.width, height: packed.height, vbits: packed.vbits, sbits: packed.sbits, bytesPerCorner: packed.bytesPerCorner, payloadBytes: packed.payloadBytes, textureBytes: packed.textureBytes },
+    pair: { corners: pair.corners, width: pair.width, height: pair.height, bytesPerCorner: pair.bytesPerCorner, payloadBytes: pair.payloadBytes, textureBytes: pair.textureBytes },
+    attr: { corners: packed.corners, bytesPerCorner: 4, bufferBytes: packed.corners * 4 },
+    indexed: { entries: indexed.entries, corners: indexed.corners, bytesPerEntry: indexed.bytesPerEntry, bytesPerIndex: indexed.bytesPerIndex, payloadBytes: indexed.payloadBytes, textureBytes: indexed.textureBytes },
+    // BatchedMesh used / reserved: position 12 + normal 12 + uv 8 = 32 B per vertex, plus the index.
+    batched: {
+      vertices: vertsA, indices: idxA, bytesPerVertex: 32, indexBytesPerElement: bmIndex ? bmIndex.array.BYTES_PER_ELEMENT : 0,
+      usedBytes: vertsA * 32 + idxA * (bmIndex ? bmIndex.array.BYTES_PER_ELEMENT : 0),
+      reservedBytes: bm.geometry.attributes.position.count * 32 + (bmIndex ? bmIndex.array.byteLength : 0),
+      instanceTextureBytes: { matrices: matrices.byteLength, ids: bm._indirectTexture.image.data.byteLength, colors: colors.byteLength },
+    },
+  };
+  // Vertex-shader work: an indexed draw shades each (instance, vertex) at most once
+  // per post-transform-cache window; a non-indexed pull shades every corner.
+  out.work = { instances: instances.length, runs: runs.length, corners: packed.corners, vertexInstances, cornersPerVertexInstance: +(packed.corners / vertexInstances).toFixed(3) };
+
+  // ---- draw each arm alone ----
+  const armObjects = [bm, bPacked, bPair, bAttr, bIndex, noRange];
+  const frame = () => { const a = new Uint8Array(W * W * 4); gl.readPixels(0, 0, W, W, gl.RGBA, gl.UNSIGNED_BYTE, a); return a; };
+  const lit = (a) => { let n = 0; for (let i = 0; i < a.length; i += 4) if (a[i] + a[i + 1] + a[i + 2] > 30) n++; return n; };
+  function drawArm(key, obj, before, after) {
+    for (const o of armObjects) o.visible = o === obj;
+    if (before) before();
+    let calls = -1, triangles = -1, glError = 0;
+    try {
+      renderer.render(scene, cam);
+      renderer.render(scene, cam);
+      calls = renderer.info.render.calls;          // autoReset: this render only
+      triangles = renderer.info.render.triangles;
+      glError = gl.getError();
+    } finally { if (after) after(); }
+    const f = frame();
+    out.arms[key] = { calls, triangles, glError, litPixels: lit(f), frame: Array.from(f) };
+  }
+  drawArm("A", bm);
+  out.stats = getBatchedRunsStats();
+  drawArm("A_stock", bm, () => { window.__batchedRuns.off = true; }, () => { window.__batchedRuns.off = false; });
+  out.statsAfterStock = getBatchedRunsStats();
+  drawArm("B_packed", bPacked);
+  drawArm("B_pair", bPair);
+  drawArm("B_attr", bAttr);
+  drawArm("B_index", bIndex);
+  drawArm("noRange", noRange);
+
+  // ---- programs, link state, samplers per stage ----
+  const SAMPLER_TYPES = new Set([
+    gl.SAMPLER_2D, gl.SAMPLER_3D, gl.SAMPLER_CUBE, gl.SAMPLER_2D_SHADOW, gl.SAMPLER_2D_ARRAY, gl.SAMPLER_2D_ARRAY_SHADOW,
+    gl.SAMPLER_CUBE_SHADOW, gl.INT_SAMPLER_2D, gl.INT_SAMPLER_3D, gl.INT_SAMPLER_CUBE, gl.INT_SAMPLER_2D_ARRAY,
+    gl.UNSIGNED_INT_SAMPLER_2D, gl.UNSIGNED_INT_SAMPLER_3D, gl.UNSIGNED_INT_SAMPLER_CUBE, gl.UNSIGNED_INT_SAMPLER_2D_ARRAY,
+  ]);
+  const strip = (s) => s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
+  const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  function programInfo(material) {
+    const p = renderer.properties.get(material).currentProgram;
+    if (!p) return null;
+    const prog = p.program;
+    let vs = "", fs = "";
+    for (const s of gl.getAttachedShaders(prog) || []) {
+      const src = strip(gl.getShaderSource(s) || "");
+      if (gl.getShaderParameter(s, gl.SHADER_TYPE) === gl.VERTEX_SHADER) vs = src; else fs = src;
+    }
+    const vertex = [], fragment = [];
+    const n = gl.getProgramParameter(prog, gl.ACTIVE_UNIFORMS);
+    for (let i = 0; i < n; i++) {
+      const u = gl.getActiveUniform(prog, i);
+      if (!u || !SAMPLER_TYPES.has(u.type)) continue;
+      const name = u.name.replace(/\[0\]$/, "");
+      const re = new RegExp("\\b" + esc(name) + "\\b");
+      if (re.test(vs)) vertex.push(name);
+      if (re.test(fs)) fragment.push(name);
+    }
+    // WebGL2 may enumerate the built-in inputs (gl_VertexID / gl_InstanceID) as
+    // active attributes (location -1, three skips them); keep them apart.
+    const attribs = [], builtins = [];
+    const na = gl.getProgramParameter(prog, gl.ACTIVE_ATTRIBUTES);
+    for (let i = 0; i < na; i++) {
+      const a = gl.getActiveAttrib(prog, i);
+      if (a) (a.name.startsWith("gl_") ? builtins : attribs).push(a.name);
+    }
+    return {
+      name: p.name, linked: gl.getProgramParameter(prog, gl.LINK_STATUS),
+      vertexSamplers: vertex, fragmentSamplers: fragment, vertexSamplerCount: vertex.length,
+      activeAttributes: attribs, builtinInputs: builtins,
+    };
+  }
+  out.samplers = {
+    A: programInfo(bm.material),
+    B_packed: programInfo(bPacked.material),
+    B_pair: programInfo(bPair.material),
+    B_attr: programInfo(bAttr.material),
+    B_index: programInfo(bIndex.material),
+  };
+  out.programs = renderer.info.programs.map((p) => ({ name: p.name, linked: gl.getProgramParameter(p.program, gl.LINK_STATUS) }));
+  out.glErrorEnd = gl.getError();
+  out.renderer = gl.getParameter(gl.getExtension("WEBGL_debug_renderer_info")?.UNMASKED_RENDERER_WEBGL ?? gl.RENDERER);
+} catch (e) {
+  out.fatal = String(e && e.stack || e).slice(0, 1200);
+}
+window.__smoke = out;
+</script></body></html>

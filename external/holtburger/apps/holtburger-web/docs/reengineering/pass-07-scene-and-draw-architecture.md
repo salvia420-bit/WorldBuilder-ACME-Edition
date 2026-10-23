@@ -311,6 +311,53 @@ early-out exists to avoid); slot-tile-granular POOLS (36 tiles × classes ⇒ hu
 nodes and per-tile draw fragmentation — the sector is the culling unit, the tile is the
 residency unit, and conflating them re-creates today's per-LB shape).
 
+**Note 2026-10-22 — opaque pools are now marked for batched runs (handoff
+`HANDOFF-gpu-resident-statics-2026-10-22.md` §5 F1; `?poolRuns`, default ON inside the
+default-OFF `?drawPools`).** This decision predates the 2026-10-19 discovery that ANGLE's
+D3D11 backend emulates `WEBGL_multi_draw`: every multidraw range becomes a full draw plus
+an uncached `gl_DrawID` uniform and a vertex uniform-buffer re-upload, on Chrome's
+GPU-process main thread (CrGpuMain), invisible to `renderer.info` and to the renderer's
+CPU profile [M: ANGLE source read; Holtburg 1,921 counted calls = 5,838 ranges,
+2026-07-15 — `scene3d/batched_runs.js` header]. Step 2 above deletes the per-instance JS
+rebuild but not the RANGES: with `perObjectFrustumCulled = false` three lists one range
+for every visible active instance of a pool, so an unmarked pool would push the
+per-range term up [D]. What landed (`scene3d/pool_registry.js` / `pool_producer.js`
+headers; `tests/pool_runs.test.mjs`; GPU proof `harness/glsl_smoke/pool_runs_smoke.mjs`):
+1. `poolFor` marks every OPAQUE pool whose class material is draw-order free (depth test
+   + depth write, no blending — the predicate `static_atlas.js` P1a uses) with
+   `markBatchedRuns`, so its repeated ranges draw as one instanced range per distinct
+   pool geometry. Translucent/additive pools stay sorted and unmarked (D-07.3); an
+   opaque-class pool that blends (transparent + alphaTest) or skips depth stays on three's
+   draw, counted `__diag.pools().runs.orderBound`. Every program that draws a pool (the
+   `makeArrayMaterial` colour program, plain or baked-light; three's depth/distance
+   shadow materials) includes the batching chunks `installBatchedRunsChunks` patches
+   before the first compile, and the marker changes no program, so the D-07.9 prewarm
+   population is unchanged.
+2. Three's early-out keeps a settled pool's canonical list byte-identical for every
+   camera (`?bmIndirectPerCamera` passes camera-independent buckets through), so the run
+   layout is derived once per membership EVENT and re-used — park → adopt included. The
+   per-draw O(ranges) list compare remains (handoff L1 — `?batchedRunsStable`).
+3. The producer's dedup key was the geometry OBJECT's uuid, and both geometry sources
+   mint objects per LB bake, so a model repeated across a sector's LBs never shared a
+   pool geometry; D-07.7's "exact-keyed" dedup is now real — a 64-bit content hash over
+   what `normalizeForPool` reads, byte-verified on every hit (collisions counted, chained
+   under the key; 2026-10-23: avalanching lanes, and memoised per vertex STREAM so a
+   model's bytes are hashed once, not once per surface group). `&poolRuns=off` drops the
+   marker and goes back to uuid keys: the F1 isolation arm WITHIN this build. It is not
+   HEAD's pooled world — step 4's fixes and the stage-B ones (a plan list per tile,
+   park-aware commit, vacate of in-flight plans) are unconditional — so HEAD readings
+   compare with neither arm.
+4. Two early-out corollaries found on the way (three r184, node-probed): BatchedMesh
+   caches its node `boundingSphere` on the first cull and never clears it, so a sector
+   pool fed tile by tile was node-culled by its first tile's sphere — the registry now
+   clears it on every SHRINK (release, abandon, cell release, band swap) and grows it
+   in place on every add (2026-10-23: clearing per add re-ran the O(instances)
+   recompute on every frame a stage-B feed stepped); and `setGeometryIdAt` does not
+   raise `_visibilityChanged`, so the band tick (step 3 / D-07.8) now raises it itself.
+GATE-POOLS (SPEC §3 T22) gains the F1 criteria: `issuedSubDraws` ≤ the legacy arm and
+CrGpuMain WebGL ms/frame not worse than the legacy arm. No frame-time claim is made —
+the terms this attacks are those two.
+
 ### D-07.5 — The feed/release contract at slot transitions (pass 6 S2 discharged; H-06.1 adopted): what happens at each transition, what is precomputed where, what the per-frame path touches
 
 **Precomputation ladder:**
@@ -696,6 +743,13 @@ createdPostBoot}, nodes: {scene, worldStatic, entity}, geometry: {allocated, use
 dedupHits}, events: {feeds, parks, adopts, releases, bandSwaps, cellFlips,
 mutationsThisFrame}, draws: {submitted, switchRate, programSwitches}}`. All cumulative
 counters diffable by the stall probe (its ring's `d` mechanism, p99 doc).
+(2026-10-22, D-07.4 note: `runs: {enabled, injected, live, marked, orderBound,
+disabled}` and `bounds: {dirtied}` joined the census; the producer block carries
+`contentHashed / contentShared / contentCollisions`. The ranges themselves are read from
+batchedRuns — `__batchedRuns.frame()` / `__diag.render.issuedSubDraws` — not from here.
+2026-10-23: `bounds.grown`, `tiles.parked`, and producer `contentStreamsHashed /
+contentStreamsVerified / vacatedPassthrough`; `contentCollisions` must read 0,
+`contentShared` > 0 is the expected cross-LB sharing.)
 
 ## Handoffs to later passes
 

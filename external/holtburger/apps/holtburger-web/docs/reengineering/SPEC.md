@@ -316,7 +316,14 @@ blackness); dispose only with tile residency. M4 census ≈ 220–260 MB [D] vs 
   by pass 11). Instance visibility = residency/PVS/LOD events only, never camera.
   Kills the 5.72 ms rebuild term structurally; statBatchMemo family OBSOLETE. Measured
   trade carried: −0.40 ms CPU / +tris bounded below the +81% worst case; ktris +
-  GPU-boundedness re-check at GATE-POOLS.
+  GPU-boundedness re-check at GATE-POOLS. **F1 amendment (2026-10-22):** the early-out
+  removes the JS rebuild, NOT the ranges — three still lists one multidraw range per
+  visible instance and ANGLE D3D11 issues each as a full draw on CrGpuMain — so opaque,
+  draw-order-free pools are marked for `?batchedRuns` (`?poolRuns`, one instanced range
+  per distinct pool geometry), the producer's dedup key is the geometry's CONTENT
+  (byte-verified; it was the per-LB object uuid), and GATE-POOLS carries the F1 criteria.
+  Pool node bounds are cleared on every membership event (three r184 never clears a
+  BatchedMesh's cached `boundingSphere`).
 - **Feed/release:** bake worker emits TilePlan (classKey, contentKey, precomposed world
   matrix, rsId, cellId, band gids per member) + GeometryBundle; STAGED→LIVE = dedup-hit
   or `addGeometry` + `addInstance` + ONE epoch bump per pool (P4 budget); park =
@@ -584,13 +591,41 @@ path; shared LIVE-flip ordering invariant), bake-job dispatch items [F-11.19],
 nullRender marking rule [F-11.10], boot prewarm incl. the CSM depth-variant warm
 RENDER, **`three_batchedmesh_colortexture_fix.js` verified applied to pool-scale
 populations** [F-11.18]. **Deps:** T13 + T15 + T20 + T21 (+T00's census). 
-**Acceptance:** GATE-POOLS — **E6 CLEAN** (Batch C incl. the ClipMap item itself +
+**Acceptance:** GATE-POOLS — precondition (2026-10-22): the packs' TEXREF page dims and the
+served `holtburger/tex-xu7` catalog name the same farm (`docs/drawpools-blockers-2026-10-22.md`
+§2.5 R4 validator exits 0); on an inconsistent dist a pooled arm measures the retire path, not
+pools. Then **E6 CLEAN** (Batch C incl. the ClipMap item itself +
 shadowed-town receiveShadow vantage); class census sane (`classesCreatedPostBoot = 0`,
 pools ≤ ~300); parked `poolMutationsPerFrame = 0`; MOVE-FIX (creates F3/F4 baselines,
-scores the kill); TAIL-ULTRA F5 `linkStatusMs = 0`; ktris + GPU-boundedness re-check.
+scores the kill); TAIL-ULTRA F5 `linkStatusMs = 0`; ktris + GPU-boundedness re-check;
+**and the F1 GPU-process criteria** (handoff `HANDOFF-gpu-resident-statics-2026-10-22.md`
+§5 F1, added 2026-10-22), read in the SAME sessions as E6 / MOVE-FIX / TAIL-ULTRA,
+fresh profile per arm, settled town at ultra AND on the fixed `@teleloc` path:
+(a) **ranges** — `issuedSubDraws` (`__diag.render`, `?renderDiag=on`; equivalently
+`__batchedRuns.frame().issued`) on the pooled arm ≤ the legacy (`drawPools` off) arm.
+`issuedSubDraws` counts BatchedMesh ranges ONLY, and pooling moves envcell / building /
+singleton PLAIN-mesh draws into pool ranges, so record beside it the total GL draws per
+frame = (non-batched calls) + `issuedSubDraws`, the calls read cumulatively
+(`renderer.info.autoReset = false`: Δ`calls` ÷ frames, minus the per-frame
+`__batchedRuns.frame().batchedCalls` — `__diag.render.calls` alone is the last pass
+only); an (a) excess fully matched by fewer plain draws is a population move, not a
+failure, and (b) arbitrates;
+(b) **CrGpuMain** — WebGL ms/frame from `scripts/perf-worker/gputrace.mjs` +
+`gpu_thread_split.py` (categories `gpu.angle,gpu,toplevel` only — never
+`gpu.service`/`decoder`, which inflate ~10×) on the pooled arm not worse than the legacy
+arm beyond the arms' own rep spread. Opaque, draw-order-free pools are marked for
+`?batchedRuns` (`?poolRuns`, default ON inside `?drawPools`; pass 7 D-07.4 note
+2026-10-22); `&poolRuns=off` is THIS build's pooled arm without the marker and with
+object-identity geometry keys, and isolates the F1 term itself — the node-bounds,
+band-swap, multi-plan, park and vacate fixes stay on in both arms, so it is NOT HEAD's
+pooled arm and a HEAD reading is not comparable to either (2026-10-23). Read alongside:
+`__diag.pools().runs` (`live`/`marked`/`orderBound`), `.producer.contentCollisions`
+(must stay 0) beside `.producer.contentShared` (expected > 0 on the default arm — it is
+the cross-LB sharing F1 relies on), `__batchedRuns.stats` `noGain`. Scored as terms
+(ranges, CrGpuMain ms), never as draws × µs (walls).
 **Kill:** K2 (one flag restores the whole legacy producer stack) — E6 dirty, moving
-p50/p99 regression vs off-arm, post-boot class mint, or a boundedness flip (re-measure
-before ANY further work — walls).
+p50/p99 regression vs off-arm, post-boot class mint, a boundedness flip, or either F1
+criterion failing (re-measure before ANY further work — walls).
 
 ### Validation milestones (1070 queue batches, owner-gated; §5 R-05)
 

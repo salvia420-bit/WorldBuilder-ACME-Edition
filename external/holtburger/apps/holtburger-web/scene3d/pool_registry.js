@@ -29,6 +29,71 @@
 // thrash case is covered by construction. Node-level culling is kept
 // (`frustumCulled = true`, sector-bounded geometry).
 //
+// BATCHED RUNS (`?poolRuns`, 2026-10-22, handoff F1) — why opaque pools opt in
+// ---------------------------------------------------------------------------
+// The early-out deletes the JS rebuild; it does NOT shrink the draw. With
+// `perObjectFrustumCulled = false` three's list holds one multidraw range for
+// EVERY visible active instance of the pool, and ANGLE's D3D11 backend turns
+// each range into a full draw plus an uncached gl_DrawID uniform and a vertex
+// uniform-buffer re-upload, on Chrome's GPU-process main thread (CrGpuMain) —
+// batched_runs.js header [M: ANGLE source read 2026-10-19; Holtburg 1,921
+// counted calls = 5,838 ranges, 2026-07-15]. Sector pools hold thousands of
+// placements over far fewer models [M: Nanto 26,212 opaque static instances
+// over 11 sectors, T00 census — ~2.4k per sector D; Holtburg 17,774 instances
+// over 324 geometries, net-review 2026-07-15], so, unmarked, the pooled arm
+// would PUSH that term up, not down [D]. Pools already dedup geometry exactly
+// by (content, layer) (`_ensureGeometry`), so their ranges repeat and
+// batched_runs.js can regroup them into one INSTANCED range per distinct
+// geometry. `poolFor` therefore marks every opaque pool whose class material
+// draws ORDER-FREE (`poolDrawOrderFree`: depth test + depth write, no
+// blending) — regrouping reorders instances inside the one draw, which only
+// the depth test makes invisible (residual: an exact depth TIE between two
+// different coplanar members, where LessEqual lets the later draw win — the
+// caveat every batchedRuns bucket already carries). Measured terms it
+// attacks: `issuedSubDraws` and CrGpuMain WebGL ms/frame (GATE-POOLS F1
+// criteria, SPEC.md). No fps claim.
+//   * Every program that draws a pool sees the patched chunks: the class
+//     material is `makeArrayMaterial`'s MeshStandardMaterial (the same object
+//     kind the already-marked atlas buckets draw with — static_atlas.js), its
+//     shadow pass is three's MeshDepthMaterial / MeshDistanceMaterial (no
+//     customDepthMaterial: a sway member is refused DEFORMED, and the class
+//     material carries no `__vfxSetKey`), and all of those include
+//     `batching_pars_vertex` + `batching_vertex` + `color_vertex`, which
+//     `installBatchedRunsChunks` rewrites globally before the first compile
+//     (index.js). Every consumer of `batchingMatrix` (CSM receiver, VFX hash,
+//     the baked-light patch) reads the variable the patched chunk computes.
+//   * The marker never changes a program (the chunk patch is global), so the
+//     closed-class prewarm warms exactly the programs a marked pool links.
+//   * Compare cost: an opaque pool is camera-independent, so
+//     ?bmIndirectPerCamera passes it through (one canonical texture → one run
+//     state for every camera), and three's early-out leaves the canonical
+//     list byte-identical on settled frames, so batchedRuns' `_sameCanonical`
+//     HITS (no rebuild, no upload) — it is still an O(ranges) JS compare per
+//     draw. Handoff L1 replaces it with an O(1) write epoch for exactly this
+//     early-out population (batched_runs.js `?batchedRunsStable`, opt-in,
+//     2026-10-22); the pools need nothing more for it — every pool list change
+//     goes through three's API or `_visibilityChanged` (bandTick below).
+//   * Translucent and additive pools stay unmarked (sorted, D-07.3); an
+//     opaque-class pool whose material blends (transparent + alphaTest) or
+//     skips depth is left on three's draw and COUNTED (`runs.orderBound`).
+//   * `?poolRuns=off` (DEFAULT ON within the default-OFF `?drawPools`) leaves
+//     every pool unmarked (and the producer back on object-identity keys) —
+//     the arm that isolates F1 within THIS build; the bounds, band-swap,
+//     multi-plan, park and vacate fixes are unconditional, so it is not HEAD's
+//     pooled world. `?batchedRuns=off` (no patched chunks) also makes the
+//     marker inert, for every bucket.
+//
+// TWO EARLY-OUT COROLLARIES (2026-10-22, both read-verified in three r184 and
+// node-probed): (1) BatchedMesh caches its node `boundingSphere` on the FIRST
+// frustum test and no add/delete/setMatrixAt ever clears it, so a sector pool
+// fed tile by tile was culled by its first tile's sphere — `_dirtyBounds`
+// nulls it on every SHRINK (release, abandon, cell release, band swap;
+// static_batch_x's `_memoDirtyBounds` rule) and `_growBounds` unions each ADD
+// into it (2026-10-23 — nulling per add re-ran the O(instances) recompute on
+// every frame a stage-B feed stepped); (2) `setGeometryIdAt` does not set
+// `_visibilityChanged`, so under the early-out a band swap never reached the
+// multidraw list — `bandTick` raises the flag itself.
+//
 // v1 PASS STRUCTURE (D-07.3, SPEC §1.5): pools are OPAQUE-only for the
 // early-out. Additive and translucent pools keep TODAY'S sorted-bucket
 // semantics exactly (`sortObjects = true`, `perObjectFrustumCulled = true`)
@@ -81,6 +146,41 @@ export function drawPoolsEnabled(search) {
   } catch (_) {
     return false;
   }
+}
+
+/**
+ * `?poolRuns` — opaque pools opt into `?batchedRuns` (handoff F1; see the
+ * header). **DEFAULT ON** inside the default-OFF `?drawPools` chain; only
+ * `off`/`0`/`false`/`no` (any case) escape — the batchedRuns FLAG grammar.
+ * Not memoised: the registry reads it once at construction.
+ */
+export function poolRunsEnabled(search) {
+  try {
+    const s = search !== undefined ? search : typeof window !== "undefined" && window.location ? window.location.search : "";
+    const v = (new URLSearchParams(s || "").get("poolRuns") || "").toLowerCase();
+    return !(v === "off" || v === "0" || v === "false" || v === "no");
+  } catch (_) {
+    return true;
+  }
+}
+
+/**
+ * Can a pool drawn with `material` be regrouped into per-geometry runs
+ * without moving a pixel? Regrouping only reorders instances inside the one
+ * draw, which the depth test resolves only when the draw tests AND writes
+ * depth and does not blend. three r184 turns blending off exactly for
+ * `NoBlending`, or `NormalBlending` on a non-transparent material (WebGLState
+ * `setMaterial`). The same predicate as static_atlas.js `_atlasDrawOrderFree`.
+ * Pure; `THREE` supplies the blending constants (inlined fallbacks: three's
+ * NoBlending 0, NormalBlending 1).
+ */
+export function poolDrawOrderFree(material, THREE) {
+  if (!material || Array.isArray(material)) return false;
+  if (material.depthTest === false || material.depthWrite === false) return false;
+  const NO = THREE && typeof THREE.NoBlending === "number" ? THREE.NoBlending : 0;
+  const NORMAL = THREE && typeof THREE.NormalBlending === "number" ? THREE.NormalBlending : 1;
+  const b = material.blending === undefined || material.blending === null ? NORMAL : material.blending;
+  return b === NO || (b === NORMAL && material.transparent !== true);
 }
 
 /** The F-11.3 prerequisite set, in SPEC §3 T22's order. */
@@ -181,8 +281,14 @@ export class PoolRegistry {
    * @param {()=>number} [deps.now]
    * @param {number} [deps.initInstances]
    * @param {number} [deps.initVerts]
+   * @param {(mesh:object)=>void} [deps.markRuns]  batched_runs.js
+   *   `markBatchedRuns`, injected (pool_producer.js) so this module keeps no
+   *   renderer-side import. Absent ⇒ no pool is marked, and every opaque pool
+   *   is counted `runs.disabled`.
+   * @param {string} [deps.search]        query string for `?poolRuns`
+   *   (defaults to window.location.search)
    */
-  constructor({ THREE, materialFactory, group = null, groups = null, layers = null, warn, now, initInstances, initVerts } = {}) {
+  constructor({ THREE, materialFactory, group = null, groups = null, layers = null, warn, now, initInstances, initVerts, markRuns, search } = {}) {
     if (!THREE || typeof THREE.BatchedMesh !== "function") {
       throw new Error("pool_registry: THREE with BatchedMesh required");
     }
@@ -198,6 +304,10 @@ export class PoolRegistry {
     this.warn = typeof warn === "function" ? warn : (m, d) => { try { console.warn(m, d); } catch (_) { /* fail-soft */ } };
     this.initInstances = initInstances || POOL_INIT_INSTANCES;
     this.initVerts = initVerts || POOL_INIT_VERTS;
+    // ?poolRuns (header): resolved ONCE — a pool's marker is decided at its
+    // construction and never flips under it.
+    this.runsEnabled = poolRunsEnabled(search);
+    this.markRuns = this.runsEnabled && typeof markRuns === "function" ? markRuns : null;
 
     /** poolKey ("<sectorKey>|<classKey>") -> pool state */
     this.pools = new Map();
@@ -205,6 +315,13 @@ export class PoolRegistry {
     this.classes = new Map();
     /** tileKey -> Map<poolKey, membership> */
     this.tiles = new Map();
+    /** tileKeys the grid holds PARKED (2026-10-23). A tile is 2×2 LBs and
+     *  every LB plan commits on its own, so a plan still feeding when its tile
+     *  parks commits AFTER the park — and a park that lands before the tile's
+     *  first commit has no record to mark. The tile-level mark is what `commit`
+     *  reads: set by `parkTile` (record or not), cleared by `adoptTile` /
+     *  `releaseTile` / `clearParked`. */
+    this._parkedTiles = new Set();
     /** cellId -> Set<membership> — the ENVCELL PVS index (D-07.8). Built at
      *  commit, pruned at release. Without it a per-cell visibility delta would
      *  have to walk every resident tile's every cell on every tick, which is
@@ -229,6 +346,14 @@ export class PoolRegistry {
       classesCreated: 0, classesCreatedPostBoot: 0,
       optimizeRuns: 0, growthDoublings: 0,
       unresolvedGeometry: 0, unpooledMembers: 0,
+      // ?poolRuns — per pool CREATED (cumulative): marked for batchedRuns, an
+      // opaque pool left on three's draw because its material blends or skips
+      // depth, an opaque pool left unmarked because the flag is off or no
+      // marker was injected.
+      runsMarked: 0, runsOrderBound: 0, runsDisabled: 0,
+      // Node-sphere upkeep: shrink events that null it (the next cull
+      // recomputes) vs adds unioned into the cached sphere in O(1).
+      boundsDirtied: 0, boundsGrown: 0,
       lastError: null,
     };
   }
@@ -382,16 +507,37 @@ export class PoolRegistry {
       bm.perObjectFrustumCulled = true;
       bm.sortObjects = true;
     }
+    // ?poolRuns (header, handoff F1): an opaque pool's repeated ranges draw as
+    // per-geometry instanced runs — only when the class material is draw-order
+    // free; translucent/additive pools sort and are never marked.
+    let runs = false;
+    if (cls.passClass === "opaque") {
+      if (!this.markRuns) {
+        this._stats.runsDisabled += 1;
+      } else if (!poolDrawOrderFree(cls.material, THREE)) {
+        this._stats.runsOrderBound += 1;
+      } else {
+        try {
+          this.markRuns(bm);
+          runs = true;
+          this._stats.runsMarked += 1;
+        } catch (e) {
+          // fail-soft: an unmarked pool is three's own draw, exactly as before.
+          this._stats.lastError = String(e && e.message || e);
+        }
+      }
+    }
     bm.userData = {
       __drawPool: true,
       sectorKey,
       classKey,
       domain,
       passClass: cls.passClass,
+      runs,
     };
     const grp = this._groupFor(domain);
     p = {
-      key, sectorKey, classKey, domain, group: grp, passClass: cls.passClass, mesh: bm,
+      key, sectorKey, classKey, domain, group: grp, passClass: cls.passClass, mesh: bm, runs,
       /** contentKey|layer -> gid (exact bake identities; the statGeomDedup
        *  FNV fingerprint existed to guard partial decodes, a failure class
        *  --verify-closure deletes — D-07.7). */
@@ -414,6 +560,59 @@ export class PoolRegistry {
     this._stats.poolsCreated += 1;
     if (grp && typeof grp.add === "function") grp.add(bm);
     return p;
+  }
+
+  /**
+   * Membership changed ⇒ the pool's NODE bounds are stale. three r184 computes
+   * a BatchedMesh's `boundingSphere` on the first frustum test
+   * (Frustum.intersectsObject: `if (object.boundingSphere === null)
+   * object.computeBoundingSphere()`) and NOTHING in BatchedMesh clears it —
+   * not addInstance, not setMatrixAt, not deleteInstance — so without this a
+   * sector pool keeps the sphere of whatever was resident the first frame it
+   * was culled, and three culls the whole pool whenever the camera sees only
+   * instances fed after that [M: node probe 2026-10-22, a member 600 m east
+   * of the first one culled with it]. Nulling makes the next cull recompute
+   * over every ACTIVE instance (visibility is not an input — park/adopt/cell
+   * flips need no call). static_batch_x's `_memoDirtyBounds` is the same rule.
+   * Only a SHRINK needs it — deletes (release / abandon / cell release) and
+   * band swaps; an add GROWS the cached sphere instead (`_growBounds`).
+   */
+  _dirtyBounds(p) {
+    const bm = p && p.mesh;
+    if (!bm) return;
+    bm.boundingSphere = null;
+    bm.boundingBox = null;
+    this._stats.boundsDirtied += 1;
+  }
+
+  /**
+   * An instance was ADDED (2026-10-23 review): union its world sphere into the
+   * cached node sphere — O(1) — instead of nulling it. A stage-B feed adds a
+   * chunk per W3 step and `tickP4` re-arms every plan every frame, so nulling
+   * per add made every frame with a feed step recompute the pool's sphere over
+   * ALL its instances in the next cull (three r184 `computeBoundingSphere`
+   * walks `_instanceInfo`) [M: node probe, 2.5k instances 0.55 ms, 10k
+   * 1.99 ms per recompute]. The union is the same per-instance term
+   * `computeBoundingSphere` adds (`getBoundingSphereAt` + the instance
+   * matrix), so the result still contains every active instance — it can
+   * only be looser than a fresh compute until the next shrink event nulls it.
+   * No cached sphere ⇒ nothing to grow: the next cull computes it.
+   */
+  _growBounds(p, id, gid) {
+    const bm = p && p.mesh;
+    if (!bm) return;
+    bm.boundingBox = null; // never read by the cull; recomputed on demand
+    if (bm.boundingSphere === null) return;
+    try {
+      const s = this._scratchSphere || (this._scratchSphere = new this.THREE.Sphere());
+      const m4 = this._scratchGrowM4 || (this._scratchGrowM4 = new this.THREE.Matrix4());
+      if (bm.getBoundingSphereAt(gid, s) === null) throw new Error("no geometry sphere");
+      bm.getMatrixAt(id, m4);
+      bm.boundingSphere.union(s.applyMatrix4(m4));
+      this._stats.boundsGrown += 1;
+    } catch (_) {
+      this._dirtyBounds(p); // fail-safe: a fresh compute is always correct
+    }
   }
 
   _reapIfEmpty(p) {
@@ -545,17 +744,24 @@ export class PoolRegistry {
         return fed;
       },
 
-      /** LIVE flip — last, atomic, one visibility batch per touched pool. */
+      /** LIVE flip — last, atomic, one visibility batch per touched pool.
+       *  A plan of a PARKED tile (2026-10-23: the grid parked it while this
+       *  plan was still feeding) commits INTO the parked state — its
+       *  instances stay born-invisible and its record reads parked, so the
+       *  tile's `adoptTile` flips every plan's instances together. */
       commit() {
         if (committed) return 0;
         committed = true;
+        const live = !self._parkedTiles.has(tileKey);
         let flipped = 0;
         for (const mem of touched.values()) {
-          for (const id of mem.instanceIds) {
-            mem.pool.mesh.setVisibleAt(id, true);
-            flipped += 1;
+          if (live) {
+            for (const id of mem.instanceIds) {
+              mem.pool.mesh.setVisibleAt(id, true);
+              flipped += 1;
+            }
           }
-          mem.live = true;
+          mem.live = live;
         }
         if (touched.size > 0) {
           let byTile = self.tiles.get(tileKey);
@@ -580,7 +786,10 @@ export class PoolRegistry {
                 if (!prev.bands) prev.bands = new Map();
                 for (const [id, b] of mem.bands) prev.bands.set(id, b);
               }
-              prev.live = true;
+              // The tile's state, not "true": a merge into a PARKED tile's
+              // record must leave it parked or `adoptTile` skips it and the
+              // earlier plan's instances never come back (2026-10-23).
+              prev.live = live;
             } else {
               byTile.set(pk, mem);
             }
@@ -607,6 +816,7 @@ export class PoolRegistry {
             for (let k = 0; k < n; k++) self._releaseGeometry(mem.pool, gid);
           }
           mem.pool.instances -= mem.instanceIds.length;
+          self._dirtyBounds(mem.pool);
           self._reapIfEmpty(mem.pool);
         }
         touched.clear();
@@ -656,6 +866,9 @@ export class PoolRegistry {
     // The flip is LAST (commit): an instance is born invisible.
     p.mesh.setVisibleAt(id, false);
     if (m.matrix) p.mesh.setMatrixAt(id, this._matrixOf(m.matrix));
+    // The node sphere must cover the new instance (an invisible-but-active
+    // instance counts too — conservative until the LIVE flip).
+    this._growBounds(p, id, gid);
     p.instances += 1;
     this._stats.instanceAdds += 1;
     mem.instanceIds.push(id);
@@ -685,8 +898,11 @@ export class PoolRegistry {
 
   // ── LIVE ⇄ PARKED (S2 rows 3/4 — GPU-free by construction) ───────────────
 
-  /** LIVE → PARKED: `setVisibleAt(false)` batch. No GPU or heap release. */
+  /** LIVE → PARKED: `setVisibleAt(false)` batch. No GPU or heap release.
+   *  The tile is marked parked even with nothing committed yet, so a plan
+   *  still in flight commits invisible (`commit`). */
   parkTile(tileKey) {
+    this._parkedTiles.add(tileKey);
     const byTile = this.tiles.get(tileKey);
     if (!byTile) return 0;
     let n = 0;
@@ -701,6 +917,7 @@ export class PoolRegistry {
 
   /** PARKED → LIVE: pointer re-adopt — zero fetch, zero decode, zero upload. */
   adoptTile(tileKey) {
+    this._parkedTiles.delete(tileKey);
     const byTile = this.tiles.get(tileKey);
     if (!byTile) return 0;
     let n = 0;
@@ -722,6 +939,13 @@ export class PoolRegistry {
     return this.tiles.has(tileKey);
   }
 
+  /** The grid emptied a tile the registry holds nothing of (no release to
+   *  run): drop its park mark, or the tile's NEXT life — a fresh admit, not a
+   *  PARKED → LIVE re-adopt — would commit invisible for good. */
+  clearParked(tileKey) {
+    this._parkedTiles.delete(tileKey);
+  }
+
   // ── PARKED → EMPTY (S2 row 5 — amortized, ≤1 tile/tick under the budget) ─
 
   /**
@@ -731,6 +955,7 @@ export class PoolRegistry {
    * @returns {number} instances deleted.
    */
   releaseTile(tileKey) {
+    this._parkedTiles.delete(tileKey);
     const byTile = this.tiles.get(tileKey);
     if (!byTile) return 0;
     let n = 0;
@@ -748,6 +973,7 @@ export class PoolRegistry {
       for (const [gid, refs] of mem.gidRefs) {
         for (let k = 0; k < refs; k++) this._releaseGeometry(p, gid);
       }
+      this._dirtyBounds(p);
       this._maybeOptimize(p);
       this._reapIfEmpty(p);
     }
@@ -959,7 +1185,7 @@ export class PoolRegistry {
         if (byTile.size === 0) this.tiles.delete(tileKey);
       }
     }
-    for (const p of touchedPools) { this._maybeOptimize(p); this._reapIfEmpty(p); }
+    for (const p of touchedPools) { this._dirtyBounds(p); this._maybeOptimize(p); this._reapIfEmpty(p); }
     if (n > 0) { this._stats.cellsReleased += n; this._mutate(touchedPools.size); }
     return n;
   }
@@ -993,7 +1219,16 @@ export class PoolRegistry {
           const gid = b.gids[want];
           if (gid == null || gid < 0) continue;
           try {
-            mem.pool.mesh.setGeometryIdAt(id, gid);
+            const bm = mem.pool.mesh;
+            bm.setGeometryIdAt(id, gid);
+            // three r184's setGeometryIdAt does NOT raise `_visibilityChanged`
+            // (only add/delete/optimize/setVisibleAt/setGeometryAt do), so an
+            // opaque pool's early-out would keep drawing the OLD band's range
+            // until some unrelated visibility change — the header's corollary
+            // (2). Raise it: this is the swap EVENT's one rebuild. The band's
+            // geometry has its own bounds, so the node sphere is stale too.
+            bm._visibilityChanged = true;
+            this._dirtyBounds(mem.pool);
             b.band = want;
             swaps += 1;
           } catch (e) {
@@ -1023,9 +1258,11 @@ export class PoolRegistry {
   census() {
     const byClass = {};
     const byPass = { opaque: 0, additive: 0, translucent: 0 };
+    let runsLive = 0;
     for (const p of this.pools.values()) {
       byClass[p.classKey] = (byClass[p.classKey] || 0) + 1;
       byPass[p.passClass] = (byPass[p.passClass] || 0) + 1;
+      if (p.runs) runsLive += 1;
     }
     const g = this.geometryBytes();
     const s = this._stats;
@@ -1039,7 +1276,7 @@ export class PoolRegistry {
         dedupHits: s.dedupHits,
         adds: s.geometryAdds,
       },
-      tiles: { resident: this.tiles.size },
+      tiles: { resident: this.tiles.size, parked: this._parkedTiles.size },
       // ENVCELL-POOL-SWAP: the interior half of residency. `tracked` counts the
       // cells that have pooled instances at all; `hidden` counts the instances
       // the PVS delta currently holds invisible (the pooled form of
@@ -1052,6 +1289,19 @@ export class PoolRegistry {
         mutationsTotal: s.mutationsTotal,
       },
       draws: { submitted: this.pools.size, switchRate: null, programSwitches: null },
+      // ?poolRuns (handoff F1). `live` = resident pools drawing as runs now;
+      // the rest are cumulative per pool created. The draw-side numbers (ranges
+      // asked for vs issued) are batchedRuns' own: `__batchedRuns.frame()` /
+      // `__diag.render.issuedSubDraws` — this block only says WHICH pools opted in.
+      runs: {
+        enabled: this.runsEnabled === true,
+        injected: this.markRuns !== null,
+        live: runsLive,
+        marked: s.runsMarked,
+        orderBound: s.runsOrderBound,
+        disabled: s.runsDisabled,
+      },
+      bounds: { dirtied: s.boundsDirtied, grown: s.boundsGrown },
       fix: { applied: this._fixApplied === true },
       errors: { unresolvedGeometry: s.unresolvedGeometry, unpooledMembers: s.unpooledMembers, lastError: s.lastError },
     };
@@ -1067,6 +1317,7 @@ export class PoolRegistry {
     this.pools.clear();
     this.classes.clear();
     this.tiles.clear();
+    this._parkedTiles.clear();
     this._cellIndex.clear();
   }
 }

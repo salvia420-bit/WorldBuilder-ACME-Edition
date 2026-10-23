@@ -260,6 +260,16 @@ pub struct PackBakeReport {
     /// flat walls" number, reported not gated.
     pub geom_relief_added_tris: u64,
     pub geom_relief_max_payload_bytes: usize,
+    /// HBG1 v2 `?negFace` face-marker census (2026-10-22), over DISTINCT 0x01
+    /// GfxObj payloads (the encode-once memo, not rows). `geom_face_marked_parts`
+    /// is every v2 0x01 payload — on a v2 bake it equals the distinct 0x01
+    /// GEOM model count, and 0 means a pre-v2 tool baked this dist. The other
+    /// three count the payloads carrying a `MODEL_BACKFACE` subset, a
+    /// `NOPOS_SLOT0` subset, and the `NEG_FRONT_COPY` payload flag.
+    pub geom_face_marked_parts: usize,
+    pub geom_face_backface_parts: usize,
+    pub geom_face_nopos_parts: usize,
+    pub geom_face_front_copy_parts: usize,
     pub closure_verified: bool,
     pub determinism_verified: bool,
 }
@@ -1838,6 +1848,10 @@ pub fn emit_packs(opts: &PackBakeOptions) -> Result<PackBakeReport> {
     report.geom_relief_models_identical = geom.relief_identical;
     report.geom_relief_added_tris = geom.relief_added_tris;
     report.geom_relief_max_payload_bytes = geom.relief_max_payload;
+    report.geom_face_marked_parts = geom.face_marked_parts;
+    report.geom_face_backface_parts = geom.face_backface_parts;
+    report.geom_face_nopos_parts = geom.face_nopos_parts;
+    report.geom_face_front_copy_parts = geom.face_front_copy_parts;
 
     if opts.verify_closure {
         verify_closure(&pack_table, &pack_bytes, &index)?;
@@ -1950,6 +1964,13 @@ fn verify_texref_pages(pack_bytes: &[Vec<u8>]) -> Result<()> {
 /// the payload must be byte-identical, and encode-once keeps the bake cheap).
 /// Parse/encode failures fail the bake LOUDLY (base-DAT records must encode;
 /// a physics-only GfxObj legitimately encodes to an empty mesh).
+///
+/// 2026-10-22: 0x01 rows (GEOM and GEOMR) are HBG1 **v2** — face-marked for
+/// dat-parser-2 `?negFace` (hbg1.rs module docs;
+/// apps/holtburger-web/docs/HBG1-negface-marker-2026-10-22.md). 0x02 and 0x0D
+/// rows are unchanged, byte-identical to the v1 bake. The encode reads the
+/// Surface records each GfxObj names (memoized), to decide which NoPos
+/// polygons are textured.
 struct GeomBaker {
     memo: HashMap<u32, std::sync::Arc<Vec<u8>>>,
     rows: usize,
@@ -1968,6 +1989,15 @@ struct GeomBaker {
     relief_identical: usize,
     relief_added_tris: u64,
     relief_max_payload: usize,
+    /// HBG1 v2 (2026-10-22): Surface DID → `type` bits (`None` = unreadable),
+    /// read once per bake. The v2 GfxObj encoder needs them to decide which
+    /// NoPos polygons are textured (the `?negFace` NoPos rule).
+    surface_types: HashMap<u32, Option<u32>>,
+    /// v2 census over distinct 0x01 payloads (report `geom_face_*`).
+    face_marked_parts: usize,
+    face_backface_parts: usize,
+    face_nopos_parts: usize,
+    face_front_copy_parts: usize,
 }
 
 impl GeomBaker {
@@ -1986,6 +2016,49 @@ impl GeomBaker {
             relief_identical: 0,
             relief_added_tris: 0,
             relief_max_payload: 0,
+            surface_types: HashMap::new(),
+            face_marked_parts: 0,
+            face_backface_parts: 0,
+            face_nopos_parts: 0,
+            face_front_copy_parts: 0,
+        }
+    }
+
+    /// The `type` bits of every Surface a GfxObj names, through the per-bake
+    /// memo — the input of `hbg1::encode_gfx_part_faces`.
+    fn surface_types_for(
+        &mut self,
+        source: &DatPairSource,
+        surfaces: &[u32],
+    ) -> HashMap<u32, Option<u32>> {
+        surfaces
+            .iter()
+            .map(|&did| {
+                let t = *self
+                    .surface_types
+                    .entry(did)
+                    .or_insert_with(|| hbg1::read_surface_type(source, did));
+                (did, t)
+            })
+            .collect()
+    }
+
+    /// Census one freshly encoded v2 0x01 payload (report `geom_face_*`).
+    fn census_face_marker(&mut self, payload: &[u8]) {
+        let Ok(mesh) = hbg1::Hbg1Mesh::parse(payload) else { return };
+        if !mesh.face_marked() {
+            return;
+        }
+        self.face_marked_parts += 1;
+        let subs = mesh.subsets().unwrap_or_default();
+        if subs.iter().any(|s| s.flags & hbg1::subset_flags::MODEL_BACKFACE != 0) {
+            self.face_backface_parts += 1;
+        }
+        if subs.iter().any(|s| s.flags & hbg1::subset_flags::NOPOS_SLOT0 != 0) {
+            self.face_nopos_parts += 1;
+        }
+        if mesh.header.flags & hbg1::flags::NEG_FRONT_COPY != 0 {
+            self.face_front_copy_parts += 1;
         }
     }
 
@@ -2011,7 +2084,12 @@ impl GeomBaker {
                 .map_err(|e| {
                     ToolError::Validation(format!("GEOM 0x{id:08X}: GfxObj parse: {e}"))
                 })?;
-                hbg1::encode_gfx_part(&gfx)
+                // HBG1 v2 (2026-10-22): the face-marked encode serves both
+                // `?negFace` arms from one payload (hbg1.rs module docs).
+                let types = self.surface_types_for(source, &gfx.surfaces);
+                hbg1::encode_gfx_part_faces(&gfx, &|did: u32| {
+                    types.get(&did).copied().flatten()
+                })
             }
             0x02 => {
                 let setup = holtburger_dat::file_type::SetupModel::unpack(
@@ -2033,6 +2111,9 @@ impl GeomBaker {
             }
         }
         .map_err(|e| ToolError::Validation(format!("GEOM 0x{id:08X}: encode: {e}")))?;
+        if (id >> 24) as u8 == 0x01 {
+            self.census_face_marker(&payload);
+        }
         if payload.len() > hbg1::MESH_PAYLOAD_SOFT {
             self.soft_cap_hits += 1;
         }
@@ -2083,8 +2164,13 @@ impl GeomBaker {
             .map_err(|e| {
                 ToolError::Validation(format!("GEOMR 0x{id:08X}: GfxObj parse: {e}"))
             })?;
-        let variant = hbg1::encode_gfx_part_relief(&gfx, &relief)
-            .map_err(|e| ToolError::Validation(format!("GEOMR 0x{id:08X}: encode: {e}")))?;
+        // HBG1 v2: the variant carries the same face markers as its v2 default
+        // row (the byte compare below and verify_geom (e) rely on that).
+        let types = self.surface_types_for(source, &gfx.surfaces);
+        let variant = hbg1::encode_gfx_part_relief_faces(&gfx, &relief, &|did: u32| {
+            types.get(&did).copied().flatten()
+        })
+        .map_err(|e| ToolError::Validation(format!("GEOMR 0x{id:08X}: encode: {e}")))?;
         let entry = if variant == *base.as_ref() {
             self.relief_identical += 1;
             None
@@ -2172,7 +2258,11 @@ fn tex_dims(source: &DatPairSource, id: u32) -> (u32, u32) {
 ///     covered by a kind-2 directory entry somewhere in the bake;
 /// (e) RELIEF-IN-BAKE: every GEOMR (relief variant) row is a kind-0 payload
 ///     for a 0x01 id with a co-located DEFAULT row, and is structurally
-///     ADDITIVE over it (identical subset table, only appended triangles).
+///     ADDITIVE over it (identical subset table, only appended triangles),
+///     at the same HBG1 version as that row;
+/// (f) HBG1 v2 (2026-10-22): every 0x01 GEOM row is a face-marked v2
+///     payload. A v1 row would silently send its model to the runtime decode
+///     whenever `?negFace` is on (the default), so a mixed bake fails here.
 fn verify_geom(pack_bytes: &[Vec<u8>]) -> Result<()> {
     use holtburger_dat::file_type::EnvCell as EnvCellRec;
     let mut failures: Vec<String> = Vec::new();
@@ -2219,6 +2309,16 @@ fn verify_geom(pack_bytes: &[Vec<u8>]) -> Result<()> {
                                         if let Err(e) = hbg1::Hbg1Mesh::parse(p) {
                                             failures.push(format!(
                                                 "pack {i}: GEOM 0x{id:08X}: {e}"
+                                            ));
+                                        }
+                                        // (f) HBG1 v2 face marker.
+                                        if h.version != hbg1::HBG1_VERSION_FACES {
+                                            failures.push(format!(
+                                                "pack {i}: GEOM 0x{id:08X}: HBG1 v{} part \
+                                                 payload carries no ?negFace face marker \
+                                                 (want v{})",
+                                                h.version,
+                                                hbg1::HBG1_VERSION_FACES
                                             ));
                                         }
                                     }
@@ -2300,6 +2400,13 @@ fn verify_geom(pack_bytes: &[Vec<u8>]) -> Result<()> {
                 let b = &base_payload[boff..boff + bsize];
                 match (hbg1::Hbg1Mesh::parse(v), hbg1::Hbg1Mesh::parse(b)) {
                     (Ok(vm), Ok(bm)) => {
+                        if vm.header.version != bm.header.version {
+                            failures.push(format!(
+                                "pack {i}: GEOMR 0x{id:08X}: HBG1 v{} variant over a v{} \
+                                 default (face-marker drift)",
+                                vm.header.version, bm.header.version
+                            ));
+                        }
                         let (vs, bs) = (vm.subsets(), bm.subsets());
                         match (vs, bs) {
                             (Ok(vs), Ok(bs)) if vs.len() == bs.len() => {

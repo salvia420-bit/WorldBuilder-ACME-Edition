@@ -27,6 +27,21 @@
 // buckets by surface only (every group `doubleSided: true`); under
 // `?perPolyCull=on` buckets split by (surface, sides). Subset stipple bits
 // OR per SURFACE across subsets — the runtime's per-surface accumulation.
+//
+// `?negFace` (HBG1 v2 FACE MARKER, 2026-10-22). dat-parser-2 `?negFace` is
+// default ON since 10-19, and until 10-22 the wasm answered `missing` for
+// EVERY model under it (v1 payloads cannot say which tris are the legacy
+// reversed back faces, and carry no NoPos polygons) — so this path served no
+// model at all on a default URL, and `?drawPools` (which needs it) was
+// blocked (handoff HANDOFF-gpu-resident-statics-2026-10-22 §5 F7(a)). The
+// wasm now decides PER PAYLOAD (src/geom_bundles.rs `FaceArm`): a v2 payload
+// assembles on both arms, a v1 payload (a dist baked before the marker) stays
+// `missing` under `?negFace` exactly as before. This module only COUNTS the
+// difference: the descriptor's `faceUnmarked` / `faceFrontCopy` land in
+// `__diag.geometry.faceMarker`, and the first batch with an unmarked miss
+// warns once (the "rebake GEOM" tell — docs/HBG1-negface-marker-2026-10-22.md).
+// Group shapes are unchanged: the marker bits ride the subset `flags` above
+// bit 2, which `_subsetsToGroups` never reads.
 
 import * as THREE from "three";
 
@@ -95,6 +110,15 @@ const _stats = {
   // (0 on a dist baked without `--geom-relief` — the loud tell that the arm
   // has nothing to serve and every model reads its relief-free default).
   relief: { armed: false, variantRowsResident: 0, modelsAssembled: 0 },
+  // `?negFace` FACE-MARKER surface (2026-10-22, HBG1 v2). `negFaceRetail` =
+  // the arm the wasm assembled the LAST model batch under (null until one
+  // ran, or when the wasm predates the field). `unmarkedModels` = models
+  // returned `missing` because a part payload is v1 while `?negFace` is on
+  // (the dist predates the marker: rebake GEOM). `frontCopyModels` = models
+  // returned `missing` under `?negFace` + `?perPolyCull=on` because their v2
+  // payload is flagged NEG_FRONT_COPY. Both are SUBSETS of the misses the
+  // callers already count in `geomFallback`.
+  faceMarker: { negFaceRetail: null, unmarkedModels: 0, frontCopyModels: 0 },
   // ARMING-CHAIN surface (2026-08-13). `reliefBundles` needs FOUR legs and any
   // one of them silently leaves the T13-D3 rule in force; before this, the only
   // record of WHICH leg failed was a console.error nobody captures headlessly.
@@ -348,6 +372,43 @@ export function _testResetReliefAudit() {
   _reliefAudited = false;
 }
 
+/**
+ * `?negFace` FACE-MARKER census (2026-10-22). Folds one model-batch
+ * descriptor's `negFaceRetail` / `faceUnmarked` / `faceFrontCopy` into
+ * `__diag.geometry.faceMarker`. Fail-soft: a wasm built before the marker
+ * omits the fields, which read as 0 / unchanged. The first batch with an
+ * unmarked miss warns ONCE — that is genuine evidence about the dist (a v1
+ * payload was resident and read), not boot order.
+ */
+let _faceMarkerWarned = false;
+function _faceMarkerCount(descriptor) {
+  try {
+    const fm = _stats.faceMarker;
+    if (typeof descriptor.negFaceRetail === "boolean") {
+      fm.negFaceRetail = descriptor.negFaceRetail;
+    }
+    const unmarked = descriptor.faceUnmarked | 0;
+    fm.unmarkedModels += unmarked;
+    fm.frontCopyModels += descriptor.faceFrontCopy | 0;
+    if (unmarked > 0 && !_faceMarkerWarned) {
+      _faceMarkerWarned = true;
+      // eslint-disable-next-line no-console
+      console.warn(
+        "[geomBundles] ?negFace is on and " +
+          unmarked +
+          " model(s) came back missing because this dist's HBG1 model payloads " +
+          "predate the v2 face marker — they take the runtime decode. Rebake GEOM " +
+          "(docs/HBG1-negface-marker-2026-10-22.md) or measure with &negFace=off."
+      );
+    }
+  } catch (_) {}
+}
+
+/** Test seam: re-arm the once-only face-marker warning. */
+export function _testResetFaceMarkerAudit() {
+  _faceMarkerWarned = false;
+}
+
 export function geomBundlesActive() {
   return _state.armed === true;
 }
@@ -579,6 +640,7 @@ export function assembleModels(modelIds) {
   _stats.bundles.assembled += descriptor.assembled | 0;
   _stats.bundles.bytesOut += descriptor.bytes | 0;
   _stats.bundles.msAssemble += t1 - t0;
+  _faceMarkerCount(descriptor);
   if (_state.relief) {
     _stats.relief.modelsAssembled += descriptor.assembled | 0;
     _reliefAudit(descriptor.assembled);

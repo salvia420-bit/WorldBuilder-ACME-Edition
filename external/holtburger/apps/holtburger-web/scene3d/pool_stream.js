@@ -37,6 +37,21 @@
 // textures have not uploaded stays invisible instead of flashing unuploaded
 // — which is why stage C lands together with the feed path rather than after
 // it (SPEC §3 T22).
+//
+// SEVERAL FEEDS PER TILE (2026-10-22). The live producers emit one TilePlan per
+// (LANDBLOCK, domain) — statics and buildings per LB, envcells per LB — and a
+// tile is 2×2 LBs, so up to eight plans for ONE tile can be in flight at once
+// during a ring build. The feed map used to hold one job per tile: a second
+// plan overwrote the first, whose commit step was then never re-armed (a
+// commit always needs a step after the last feed step), so its instances stayed
+// born-invisible forever, outside every membership record (never released),
+// while the producer had already taken their nodes off the legacy path —
+// missing props and a leak [M: node probe, two plans for one tile → 1 of 2
+// committed, 2 of 3 instances invisible]. Every tile now holds a LIST of jobs;
+// each commits on its own (the registry's commit merges into the tile's
+// membership record — "re-feed of a tile already resident"; a plan that
+// commits after its tile PARKED commits invisible, pool_registry.js `commit`),
+// and a vacate abandons all of them.
 
 import { tileChebyshev } from "./residency_grid.js";
 
@@ -159,7 +174,8 @@ export class PoolStreamController {
     this.feedChunk = feedChunk;
     this.warn = typeof warn === "function" ? warn : (m, d) => { try { console.warn(m, d); } catch (_) { /* fail-soft */ } };
     this.dispatch = new BakeDispatchQueue({ post: postBake, warn: this.warn });
-    /** tileKey -> in-progress feed job */
+    /** tileKey -> in-progress feed jobs (one per TilePlan; see the header's
+     *  "several feeds per tile") */
     this._feeds = new Map();
     /** tiles the window has dropped since their job was posted */
     this._vacated = new Set();
@@ -190,7 +206,10 @@ export class PoolStreamController {
   }
 
   /** Grid vacate. Purges the queued dispatch AND every queued scheduler item
-   *  and upload for the tile (S2.6). */
+   *  and upload for the tile (S2.6). Live caller: pool_producer.js
+   *  `_releaseTile` — the tile went EMPTY or a teleport vacated it (2026-10-23
+   *  review: it had no live caller, so a plan still feeding when its tile went
+   *  EMPTY committed after the release and drew a tile no grid slot owned). */
   onVacate(tileKey) {
     this.stats.vacates += 1;
     this._vacated.add(tileKey);
@@ -198,15 +217,37 @@ export class PoolStreamController {
     let purged = this.scheduler.purgeByTile(tileKey);
     if (this.uploads) purged += this.uploads.purgeByTile(tileKey);
     this.stats.purgedItems += purged;
-    const job = this._feeds.get(tileKey);
-    if (job) {
+    const jobs = this._feeds.get(tileKey);
+    if (jobs) {
       // STAGED but vacated before the flip: nothing entered any pool that
-      // must persist (pass-07 S2's "drop the TilePlan" row).
-      job.abandon();
+      // must persist (pass-07 S2's "drop the TilePlan" row) — for EVERY plan
+      // of the tile still in flight.
+      for (const job of jobs) {
+        job.abandon();
+        this.stats.feedsAbandoned += 1;
+      }
       this._feeds.delete(tileKey);
-      this.stats.feedsAbandoned += 1;
     }
     return purged;
+  }
+
+  /** The grid is populating a vacated tile again (a transition into
+   *  FETCHING / STAGED / LIVE, or a shift/seed admit — pool_producer.js):
+   *  its plans are fed again. Records nothing; the admit hooks own the work.
+   *  Without it a vacate would refuse the tile's plans for the session — a
+   *  re-admit does not always pass through `onAdmit` (teleport admits and
+   *  `readmitEmptyTiles` fire no onShift/onSeed). */
+  onReadmit(tileKey) {
+    this._vacated.delete(tileKey);
+  }
+
+  /** Drop one finished/abandoned job from its tile's list. */
+  _forgetJob(tileKey, job) {
+    const jobs = this._feeds.get(tileKey);
+    if (!jobs) return;
+    const i = jobs.indexOf(job);
+    if (i >= 0) jobs.splice(i, 1);
+    if (jobs.length === 0) this._feeds.delete(tileKey);
   }
 
   onTeleport(vacatedTiles = []) {
@@ -219,6 +260,9 @@ export class PoolStreamController {
   /**
    * A TilePlan arrived. Enqueue a RESUMABLE W3 feed (or W1 when urgent).
    * NOTHING is fed here — the arrival callback's only legal act is enqueueing.
+   * @returns {boolean} false when the tile is vacated and the plan is refused
+   *   — the caller must render its nodes another way (pool_producer.js hands
+   *   them back as passthrough).
    */
   onPlanReady(tilePlan, geometrySource, { urgent = false } = {}) {
     const tileKey = tilePlan.tile;
@@ -227,21 +271,24 @@ export class PoolStreamController {
       this.stats.feedsAbandoned += 1;
       return false;
     }
+    // `onLayer` fires from inside `job.step()`, i.e. after `job` is assigned;
+    // it notes the rsId on THIS plan's job (a tile can have several).
     const job = this.registry.beginFeed(tilePlan, geometrySource, {
-      onLayer: (rsId) => { if (this.uploads) this._noteLayer(rsId, tileKey); },
+      onLayer: (rsId) => { if (this.uploads) this._noteLayer(rsId, job); },
     });
     job._cls = urgent ? "W1" : "W3";
     job._needsMore = false;
-    this._feeds.set(tileKey, job);
+    let jobs = this._feeds.get(tileKey);
+    if (!jobs) { jobs = []; this._feeds.set(tileKey, jobs); }
+    jobs.push(job);
     this.stats.feedsStarted += 1;
     this._enqueueFeedStep(tileKey, job, job._cls);
     return true;
   }
 
-  _noteLayer(rsId, tileKey) {
+  _noteLayer(rsId, job) {
     // The producer registers the actual texture; this is the accounting hook
-    // that lets a tile know which rsIds its flip waits on.
-    const job = this._feeds.get(tileKey);
+    // that lets a feed know which rsIds its flip waits on.
     if (!job) return;
     if (!job._rsIds) job._rsIds = new Set();
     job._rsIds.add(rsId >>> 0);
@@ -266,7 +313,8 @@ export class PoolStreamController {
    */
   _runFeedStep(tileKey, job) {
     job._needsMore = false;
-    if (this._vacated.has(tileKey)) { job.abandon(); this._feeds.delete(tileKey); return; }
+    if (job.committed) return; // already abandoned (a vacate) or committed
+    if (this._vacated.has(tileKey)) { job.abandon(); this._forgetJob(tileKey, job); return; }
     if (!job.done) {
       job.step(this.feedChunk);
       job._needsMore = true;
@@ -284,7 +332,7 @@ export class PoolStreamController {
       }
     }
     job.commit();
-    this._feeds.delete(tileKey);
+    this._forgetJob(tileKey, job);
     this.stats.feedsCommitted += 1;
   }
 
@@ -352,18 +400,26 @@ export class PoolStreamController {
       this.uploads.beginFrame();
       this.requestUploadDrain();
     }
-    // Re-arm one step per pending feed (see `_runFeedStep`'s note).
-    for (const [tileKey, job] of this._feeds) {
-      if (job._needsMore) this._enqueueFeedStep(tileKey, job, job._cls || "W3");
+    // Re-arm one step per pending feed (see `_runFeedStep`'s note) — every
+    // plan of every tile, not one per tile.
+    for (const [tileKey, jobs] of this._feeds) {
+      for (const job of jobs) {
+        if (job._needsMore) this._enqueueFeedStep(tileKey, job, job._cls || "W3");
+      }
     }
     return this.dispatch.dispatch();
   }
 
   stats_() {
+    let feedsInFlight = 0;
+    for (const jobs of this._feeds.values()) feedsInFlight += jobs.length;
     return {
       ...this.stats,
       dispatch: { ...this.dispatch.stats, depth: this.dispatch.depth, inFlight: this.dispatch.inFlight },
-      feedsInFlight: this._feeds.size,
+      // feeds (TilePlans) still stepping or waiting on their flip; `feedTiles`
+      // is how many distinct tiles they belong to.
+      feedsInFlight,
+      feedTiles: this._feeds.size,
     };
   }
 }

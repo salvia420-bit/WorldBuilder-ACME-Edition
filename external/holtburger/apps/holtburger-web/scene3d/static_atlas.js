@@ -119,6 +119,80 @@
 // (singleton parity) instead of 4x4 NN blocks; mip >= 2 of an exact x4
 // bucket is unchanged. `?nraSourceRes=off` restores the old sizing exactly
 // (no suffix on any key, nra at the diffuse dims).
+//
+// P1a / F2 (2026-10-22, `?atlasGeomDedup`, DEFAULT-ON, `=off|0|false|no`
+// escape; docs/HANDOFF-gpu-resident-statics-2026-10-22.md §5 F2, §7 P1a) —
+// SHARED geometry per bucket. The feed used to clone + normalize every
+// member's geometry and `addGeometry` it as its own range, so no two members
+// of a bucket ever shared a range: `?batchedRuns` (batched_runs.js
+// `buildRuns`) groups a multidraw by range START, found no repeat, counted the
+// bucket `noGain`, and every atlased placement stayed one ANGLE D3D11 draw
+// (`multiDrawArraysWEBGL` is a loop of full draws on D3D11 — the per-range
+// CrGpuMain term, [M] batched_runs.js header). The header's own spike says
+// repeats exist: ~5,400 singletons over ~353 textures [M], and a static model
+// is placed many times. So a bucket now keeps a refcounted geometry LEDGER,
+// the `pool_registry.js` `_ensureGeometry` / `_releaseGeometry` pattern:
+//   * key = (normalized content hash, vertex count, layer, texture uuid). The
+//     hash is two independent 32-bit mixes over the BIT PATTERNS of the
+//     normalized position / normal / uv arrays; a key hit is then CONFIRMED by
+//     comparing the member's normalized position / normal / uv / aLayer bytes
+//     against the shared gid's range in the batch's own CPU arrays (what the
+//     GPU draws, read through `_geometryInfo[gid].vertexStart`). Two members
+//     share a gid ONLY when those bytes are identical, so the key needs no
+//     collision argument — a collision is counted and simply does not share.
+//     No existing decode identity is exact enough to skip the compare:
+//     `?statGeomDedup`'s `__statContentKey` is OFF by default and its position
+//     fingerprint samples <= 96 floats (static_batch_x.js), and (modelId,
+//     surfaceDid) does not see partial decodes or canopy-softened normals.
+//   * PER-ADD COST of the key (not measured): one pass of two multiply-xor
+//     mixes over 8 u32 words per normalized vertex (32 B: position 12, normal
+//     12, uv 8), a string build and one Map lookup; on a hit, one compare over
+//     9 words per vertex (those 8 + aLayer). A hit then skips `setGeometryAt`'s
+//     copy of the same 9 words per vertex into the batch and that range's
+//     buffer upload. A miss pays the hash on top of today's add.
+//   * PLACEMENT LIVES IN THE MATRIX, as before: every member is a THREE.Mesh
+//     whose position/quaternion/scale carry the placement (statics.js
+//     `buildSingletonNode`; buildings.js `_feedBuildingGroupsToAtlas`
+//     decomposes its chain into the mesh TRS) and `setMatrixAt(iid, n.matrix)`
+//     uploads it, so the geometry is in model/part space and repeats are
+//     common. Were a member ever pre-baked into world/LB space the key would
+//     still be exact — two such members share only if their bytes are equal.
+//   * A gid is deleted only when its LAST instance goes. Every removal path
+//     (eviction, ST5 re-home, the feed's rollbacks and its blanket catch)
+//     calls `_atlasDropMember`: `deleteInstance(iid)` + decref, and
+//     `deleteGeometry(gid)` (with the dead-vertex accounting the optimize()
+//     trigger reads) only at zero. A bare `deleteGeometry` on a shared gid
+//     would cascade to EVERY member's instance (BatchedMesh.deleteGeometry
+//     deletes all instances of that geometry) — the failure this guards.
+//   * WHICH BUCKETS: only unsorted, depth-writing, unblended ones (opaque and
+//     `?clipMapOpaque` alpha-tested) — the buckets where batchedRuns regroups
+//     the draw AND where regrouping leaves the picture to the depth test. An
+//     unsorted BLENDED bucket (`?clipMapOpaque=off`) is order-dependent, so it
+//     keeps one gid per member.
+//     2026-10-23 (review) — the one ORDER-ONLY difference. Regrouping draws
+//     runs in first-seen-range order, so two members of DIFFERENT gids whose
+//     fragments land at exactly EQUAL depth (coincident or coplanar surfaces —
+//     z-fighting) can swap which one wins: LessEqual (GreaterEqual under
+//     reversed depth) lets the later draw win a tie. Accepted, the premise
+//     batchedRuns already takes for the chunk buckets: the `=off` winner is
+//     itself instance-slot order, not a property of the scene (three r184
+//     `addInstance` reuses the LOWEST freed id, so streaming/eviction history
+//     already decides it). PART 5 of tests/atlas_geom_dedup.test.mjs pins that
+//     the drawn (range bytes, matrix) pairs are the same set; the GPU smoke's
+//     placements never overlap, so it does not measure a tie.
+//     SORTED (translucent) buckets are excluded too, but NOT because they skip
+//     batchedRuns — `?batchedRunsSorted` (DEFAULT ON) draws a marked sorted
+//     bucket through the order-keeping `buildConsecutiveRuns`, and sharing a
+//     gid there would be pixel-exact (three's depth sort reads the instance
+//     matrix and `getBoundingSphereAt`, which is computed from the range's
+//     bytes — identical when shared — and V8's sort is stable on ties). They
+//     stay one gid per member (R == n, batchedRuns `sortedNoGain`) only
+//     because that gain is unmeasured and the smoke has no sorted arm yet: a
+//     follow-up, not a correctness limit.
+// What shrinks: per-range ANGLE work in the static pass (`issuedSubDraws`,
+// CrGpuMain WebGL ms) for buckets with repeats, plus vertex bytes resident /
+// uploaded. `?atlasGeomDedup=off` builds no ledger and every path takes the
+// unchanged one-gid-per-member code.
 import * as THREE from "three";
 import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
 import {
@@ -261,6 +335,29 @@ export function nraSourceResEnabled() {
     }
   } catch (_) { on = true; }
   return (_nraSrcResFlag = on);
+}
+
+// P1a (2026-10-22) — `?atlasGeomDedup`, DEFAULT-ON (handoff P1a: "default on
+// after the pixel smoke"; harness/glsl_smoke/atlas_geom_dedup_smoke.mjs);
+// `=off|0|false|no` is the escape back to one geometry per member — the
+// pre-P1a code paths, untouched. Same idiom as batched_runs.js's FLAG; read
+// once. Absent or misspelled ⇒ ARMED. Decided per BUCKET at creation (a
+// bucket either has the ledger for life or never has it), so a test re-pin
+// between feeds can never leave a bucket half-ledgered. See the header.
+let _geomDedupFlag;
+export function atlasGeomDedupEnabled() {
+  if (_geomDedupFlag !== undefined) return _geomDedupFlag;
+  let on = true;
+  try {
+    if (typeof window !== "undefined" && window.location?.search) {
+      const v = new URLSearchParams(window.location.search).get("atlasGeomDedup");
+      if (v != null) {
+        const s = String(v).toLowerCase();
+        on = !(s === "off" || s === "0" || s === "false" || s === "no");
+      }
+    }
+  } catch (_) { on = true; }
+  return (_geomDedupFlag = on);
 }
 
 // === S3 (2026-07-30) — atlas POM over the seam-height field ("statPom") =====
@@ -1023,6 +1120,14 @@ export function consolidateSingletonsViaTexArray(nodes) {
 // delete is reclaimed LAZILY via `bm.optimize()` off the per-frame hot path
 // (driven from the ~10 Hz PVS tick). Layers are refcounted + recycled.
 //
+// P1a (`?atlasGeomDedup`, default on): in a ledger bucket a gid can be SHARED
+// by members of many LBs, so "deleteGeometry for every gid that LB
+// contributed" becomes "drop every INSTANCE that LB contributed": per row,
+// `deleteInstance(iid)` + decref the gid, and `deleteGeometry(gid)` only when
+// its refcount reaches zero (`_atlasDropMember`). The rows themselves are
+// unchanged — `{ bucketKey, gid, iid, texUuid }` already named the instance.
+// `=off` (no ledger) keeps the per-gid delete above, byte for byte.
+//
 // Re-entry: eviction clears `_atlasBakedLbs[lbKey]`; the per-LB baker's atlas
 // feed seam re-feeds the LB's singletons with fresh gids from the recycled pool.
 // ===========================================================================
@@ -1127,7 +1232,20 @@ const _atlasStats = { feeds: 0, nodesIn: 0, atlased: 0, ptFiltered: 0, ptDeforme
   ptErrorUnwound: 0,
   // ST5 (`?texCompressedOnly` + `atlasRefeed`) re-home tally (pass 5 S8):
   // all zero unless the compressed-only arm is live.
-  refeeds: 0, rehomedNodes: 0, emptyBucketsGCd: 0, ptFullHoldout: 0, refeedRehides: 0 };
+  refeeds: 0, rehomedNodes: 0, emptyBucketsGCd: 0, ptFullHoldout: 0, refeedRehides: 0,
+  // P1a (`?atlasGeomDedup`) geometry ledger. `geomAdds` counts every
+  // addGeometry the feed made, in BOTH arms (=off: one per member), so the A/B
+  // reads one number. The rest are ledger-only: `geomDedupHits` = members that
+  // joined a live gid instead of adding one; `geomFreed` = gids deleted at
+  // their last reference; `geomDedupCollisions` = a key hit whose bytes
+  // differed (never shared — expected 0); `geomDedupIneligible` = members whose
+  // normalized arrays could not be keyed (interleaved, or a type the batch does
+  // not store byte-for-byte — they take a private gid); `geomDedupStale` = a
+  // key that named a dead gid (dropped, re-added — expected 0);
+  // `geomDedupProbeFail` = three's `_geometryInfo` did not look as expected
+  // (dedup degrades to private gids, warned once).
+  geomAdds: 0, geomDedupHits: 0, geomFreed: 0, geomDedupCollisions: 0,
+  geomDedupIneligible: 0, geomDedupStale: 0, geomDedupProbeFail: 0 };
 const _uniqueTexUuids = new Set(); // every distinct surface texture ever atlased
 if (typeof window !== "undefined") {
   window.__atlasStats = () => {
@@ -1140,15 +1258,28 @@ if (typeof window !== "undefined") {
     // memory-1 — the nra arrays' CPU-mirror bytes (the GPU holds the same
     // plus ~1/3 for mips): THE number the `?nraSourceRes` A/B reads.
     let nraBytes = 0;
+    // P1a — live geometries vs live instances, over every bucket (both arms:
+    // =off they are equal by construction). `instances - geometries` is the
+    // number of draw ranges batchedRuns can fold into runs, at most.
+    let liveGeometries = 0;
+    let liveInstances = 0;
+    let dedupBuckets = 0;
     for (const b of _buckets.values()) {
       const ud = b.bm?.userData;
       liveLayers += ud?.layerOf?.size || 0;
       allocLayers += ud?.allocLayers || 0;
       capLayers += ud?.capacity || 0;
       nraBytes += ud?.nraArray?.image?.data?.length || 0;
+      liveGeometries += ud?.gidVerts?.size || 0;
+      liveInstances += b.bm?.instanceCount || 0;
+      if (ud?.gidRefs) dedupBuckets += 1;
     }
     return {
       ..._atlasStats,
+      geomDedup: atlasGeomDedupEnabled(),
+      liveGeometries,
+      liveInstances,
+      dedupBuckets,
       allocLayers,
       capLayers,
       nraMB: +(nraBytes / (1024 * 1024)).toFixed(1),
@@ -1173,6 +1304,9 @@ if (typeof window !== "undefined") {
           layersUsed: ud.layerOf ? ud.layerOf.size : null,
           nra: !!ud.nraArray, bc7: !!ud.bc7,
           nraW: ud.nraArray ? (ud.nraW ?? b.w) : null, nraH: ud.nraArray ? (ud.nraH ?? b.h) : null,
+          // P1a — does this bucket share geometry, and how much did it fold.
+          geomDedup: !!ud.gidRefs, geoms: ud.gidVerts ? ud.gidVerts.size : null,
+          inst: b.bm?.instanceCount ?? null,
           full: (ud.nextLayer != null && ud.capacity != null) ? ud.nextLayer >= ud.capacity : null };
       }),
     };
@@ -1479,6 +1613,9 @@ function _getOrCreateBucket(bucketKey, w, h, stateKey, scene3d, bc7, pageDepth =
   bm.frustumCulled = false;         // the whole batch spans the ring; never cull as one
   bm.castShadow = true;
   bm.receiveShadow = true;
+  // P1a — the geometry ledger, decided ONCE per bucket (see the header). Only
+  // where batchedRuns can regroup the draw and regrouping cannot move a pixel.
+  const ledger = atlasGeomDedupEnabled() && _atlasDrawOrderFree(bm, material);
   // NO userData.landblockId — that is what keeps the LRU per-LB statics scan
   // (landblock_lru step 3) from removing/disposing this ring-spanning batch.
   bm.userData = {
@@ -1499,6 +1636,10 @@ function _getOrCreateBucket(bucketKey, w, h, stateKey, scene3d, bc7, pageDepth =
     usedVerts: 0,        // total live+dead vertices ever appended (the buffer's used extent;
                          //   deleteGeometry does NOT compact, so this only drops on optimize())
     gidVerts: new Map(), // gid -> vertexCount (to account dead space on delete)
+    // P1a ledger (both null under `?atlasGeomDedup=off` or for an
+    // order-dependent bucket — every path then takes the pre-P1a code):
+    gidRefs: ledger ? new Map() : null,       // gid -> { refs, key|null, vcount }
+    geomByContent: ledger ? new Map() : null, // key -> gid (only keyed gids)
   };
   bm.name = `stat-atlas-x-${bucketKey}`;
   b = { bm, w, h, nw, nh, stateKey, bc7: !!bc7, arrays };
@@ -1689,6 +1830,189 @@ function _addInstanceGrow(bm, gid) {
     ud.maxInst = newInst;
     return bm.addInstance(gid);
   }
+}
+
+// ===========================================================================
+// P1a — the per-bucket geometry ledger (`?atlasGeomDedup`). See the header.
+// Every function here is reached only through a bucket whose `ud.gidRefs` is
+// a Map; `=off` buckets never call any of them.
+// ===========================================================================
+
+/**
+ * Can this bucket's draw be regrouped into per-geometry runs without changing
+ * a pixel? batchedRuns regroups only an UNSORTED bucket (`sortObjects ===
+ * false`, batched_runs.js `installBatchedRuns`), and regrouping only reorders
+ * instances inside the one draw, which the depth test resolves only when the
+ * draw tests and writes depth and does not blend. three r184 turns blending
+ * off exactly for `NoBlending`, or `NormalBlending` on a non-transparent
+ * material (WebGLState `setMaterial`). Exactly-equal-depth ties are the one
+ * order-only exception, accepted (the header's WHICH BUCKETS).
+ * A SORTED bucket answers false here because the ledger is not extended to it
+ * yet, not because sharing would move a pixel there (header: it would not).
+ */
+function _atlasDrawOrderFree(bm, material) {
+  if (!bm || bm.sortObjects !== false || !material) return false;
+  if (material.depthTest === false || material.depthWrite === false) return false;
+  const b = material.blending;
+  return b === THREE.NoBlending || (b === THREE.NormalBlending && material.transparent !== true);
+}
+
+// The attributes the KEY hashes. aLayer is not hashed (it is `layer`, already
+// in the key) but IS compared byte-for-byte on a hit, with every other batch
+// attribute (`_atlasGeomSame`).
+const _ATLAS_KEY_ATTRS = ["position", "normal", "uv"];
+
+/** An integer view over a typed array's bytes: u32 words when aligned, else bytes. */
+function _atlasWordsOf(arr) {
+  const off = arr.byteOffset | 0, len = arr.byteLength | 0;
+  if ((off & 3) === 0 && (len & 3) === 0) return new Uint32Array(arr.buffer, off, len >>> 2);
+  return new Uint8Array(arr.buffer, off, len);
+}
+
+/** Byte equality of two typed-array ranges (u32 compare when both align). */
+function _atlasSameBytes(a, b) {
+  if (a.byteLength !== b.byteLength) return false;
+  let x, y;
+  if (((a.byteOffset | b.byteOffset | a.byteLength) & 3) === 0) {
+    x = new Uint32Array(a.buffer, a.byteOffset, a.byteLength >>> 2);
+    y = new Uint32Array(b.buffer, b.byteOffset, b.byteLength >>> 2);
+  } else {
+    x = new Uint8Array(a.buffer, a.byteOffset, a.byteLength);
+    y = new Uint8Array(b.buffer, b.byteOffset, b.byteLength);
+  }
+  for (let i = 0, n = x.length; i < n; i++) if (x[i] !== y[i]) return false;
+  return true;
+}
+
+/**
+ * The content key of a NORMALIZED member geometry, or null when it cannot be
+ * keyed (the member then takes a private, unkeyed gid — today's behaviour for
+ * that one member). Hashes BIT PATTERNS, never float values, so -0/+0 and NaN
+ * payloads key apart exactly as their bytes do. Two independent 32-bit mixes
+ * (an FNV-1a step per word, and a murmur-style add-multiply-xorshift) make a
+ * false hit rare; `_atlasGeomSame` makes it harmless.
+ *
+ * Eligibility mirrors what the batch stores BYTE-FOR-BYTE: three's
+ * `copyAttributeData` does `array.set` only when the source and batch arrays
+ * share a constructor and the source is not interleaved, and converts per
+ * component otherwise; `_validateGeometry` refuses an itemSize/normalized
+ * mismatch outright (the member must then fail exactly as it does today, so it
+ * must not be allowed to dodge `addGeometry` through a hit).
+ */
+function _atlasGeomKey(bm, g, layer, uuid) {
+  try {
+    const pos = g.attributes.position;
+    const vcount = pos.count | 0;
+    if (vcount <= 0) return null;
+    const batch = bm.geometry && bm.geometry.attributes;
+    let h1 = 0x811c9dc5 | 0;
+    let h2 = 0x9747b28c | 0;
+    for (const name of _ATLAS_KEY_ATTRS) {
+      const a = g.attributes[name];
+      if (!a || a.isInterleavedBufferAttribute || !ArrayBuffer.isView(a.array)) return null;
+      if ((a.count | 0) !== vcount || a.array.length !== vcount * a.itemSize) return null;
+      const d = batch && batch[name];
+      if (d && (d.array.constructor !== a.array.constructor ||
+                d.itemSize !== a.itemSize || d.normalized !== a.normalized)) return null;
+      const w = _atlasWordsOf(a.array);
+      for (let i = 0, n = w.length; i < n; i++) {
+        const v = w[i];
+        h1 = Math.imul(h1 ^ v, 0x01000193);
+        h2 = Math.imul((h2 + v) | 0, 0x5bd1e995);
+        h2 ^= h2 >>> 13;
+      }
+      // Separate the attributes so (a|b, c) and (a, b|c) never mix alike.
+      h1 = Math.imul(h1 ^ 0x2f, 0x01000193);
+      h2 = Math.imul(h2 ^ 0x2f, 0x5bd1e995);
+    }
+    return `${(h1 >>> 0).toString(36)}.${(h2 >>> 0).toString(36)}|${vcount}|${layer}|${uuid}`;
+  } catch (_) {
+    return null;
+  }
+}
+
+let _warnedGeomProbe = false;
+/**
+ * Does live gid `gid` draw EXACTLY the bytes this member would have drawn as
+ * its own gid? Compares every batch attribute (position, normal, uv, aLayer —
+ * what `setGeometryAt` would copy) over the gid's current range in the batch's
+ * CPU arrays. Returns "same" | "differ" | "stale" (the gid is not live, or
+ * not this size) | "probe" (three's `_geometryInfo` is not shaped as r184's).
+ *
+ * ⚠ READS A THREE INTERNAL (`_geometryInfo[gid].vertexStart/vertexCount`,
+ * the same internal static_batch_x.js `_gidLive` reads). `optimize()` moves a
+ * range and rewrites `vertexStart` but keeps the id, so the ledger needs no
+ * fix-up after compaction — the range is looked up at compare time. A drifted
+ * shape answers "probe" and dedup degrades to private gids, warned once.
+ */
+function _atlasGeomSame(bm, gid, g) {
+  const info = bm._geometryInfo;
+  if (!Array.isArray(info)) {
+    if (!_warnedGeomProbe) {
+      _warnedGeomProbe = true;
+      // eslint-disable-next-line no-console
+      console.warn(
+        "[static_atlas] BatchedMesh._geometryInfo is not an array — this three build " +
+        "does not expose the range ?atlasGeomDedup confirms against. Geometry dedup is " +
+        "INERT (every member keeps its own geometry, as with =off).");
+    }
+    return "probe";
+  }
+  const gi = info[gid];
+  const vcount = g.attributes.position.count | 0;
+  if (!gi || gi.active === false) return "stale";
+  if (typeof gi.vertexStart !== "number" || gi.vertexCount !== vcount) return "stale";
+  const batch = bm.geometry;
+  if (!batch || batch.index) return "differ"; // atlas batches are non-indexed; never guess
+  const vs = gi.vertexStart;
+  let n = 0;
+  for (const name in batch.attributes) {
+    const d = batch.attributes[name];
+    const s = g.attributes[name];
+    if (!s || s.isInterleavedBufferAttribute || !ArrayBuffer.isView(s.array)) return "differ";
+    if (s.array.constructor !== d.array.constructor || s.itemSize !== d.itemSize ||
+        s.normalized !== d.normalized || (s.count | 0) !== vcount) return "differ";
+    const k = d.itemSize;
+    if (!_atlasSameBytes(s.array.subarray(0, vcount * k), d.array.subarray(vs * k, (vs + vcount) * k))) return "differ";
+    n += 1;
+  }
+  // The member must not carry an attribute the batch lacks either (normalize
+  // strips to the same four, so this only fires on a broken invariant).
+  return n === Object.keys(g.attributes).length ? "same" : "differ";
+}
+
+/**
+ * Delete gid `gid` if nothing references it any more (refs <= 0), with the
+ * same dead-vertex accounting the pre-P1a delete did (`gidVerts` -> `deadVerts`,
+ * read by `tickStatAtlasOptimize`). Returns true when it deleted.
+ */
+function _atlasReleaseGeom(bm, gid) {
+  const ud = bm.userData;
+  const rec = ud.gidRefs.get(gid);
+  if (rec && rec.refs > 0) return false;
+  if (rec) {
+    ud.gidRefs.delete(gid);
+    if (rec.key !== null && ud.geomByContent.get(rec.key) === gid) ud.geomByContent.delete(rec.key);
+  }
+  try { bm.deleteGeometry(gid); } catch (_) {} // no instance of it is left to cascade to
+  const dead = ud.gidVerts.get(gid);
+  if (dead) { ud.deadVerts += dead; ud.gidVerts.delete(gid); }
+  _atlasStats.geomFreed++;
+  return true;
+}
+
+/**
+ * Remove ONE member from a ledger bucket: its instance, then its reference to
+ * the (possibly shared) gid; the gid itself goes only with its last member.
+ * The one removal primitive every ledger path uses (evict, re-home, the
+ * feed's catch). Never `deleteGeometry` a shared gid directly: three's
+ * deleteGeometry deletes EVERY instance of that geometry.
+ */
+function _atlasDropMember(bm, gid, iid) {
+  const rec = bm.userData.gidRefs.get(gid);
+  if (iid != null) { try { bm.deleteInstance(iid); } catch (_) {} }
+  if (rec) rec.refs -= 1;
+  return _atlasReleaseGeom(bm, gid);
 }
 
 /**
@@ -1921,28 +2245,84 @@ export function addSingletonsToCrossLbAtlas(nodes, scene3d) {
       }
       const vcount = g.attributes.position.count;
       let gid;
-      try {
-        gid = _addGeometryGrow(bm, g, vcount);
-      } catch (_) {
-        g.dispose?.();
-        if (--entry.refs <= 0) { ud.freeLayers.push(entry.layer); ud.layerOf.delete(uuid); }
-        _atlasStats.ptGeomFail++; passthrough.push(n); continue;
-      }
       let iid;
-      try {
-        iid = _addInstanceGrow(bm, gid);
-      } catch (_) {
-        try { bm.deleteGeometry(gid); } catch (_2) {}
-        g.dispose?.();
-        if (--entry.refs <= 0) { ud.freeLayers.push(entry.layer); ud.layerOf.delete(uuid); }
-        _atlasStats.ptInstFail++; passthrough.push(n); continue;
+      if (ud.gidRefs) {
+        // P1a ledger bucket (`?atlasGeomDedup`): JOIN a live gid whose bytes
+        // are identical to this member's normalized geometry, else add one. A
+        // new gid is registered (refs 0) BEFORE addInstance so every unwind
+        // below and in the catch goes through the ledger, never a bare
+        // deleteGeometry that would cascade to other members' instances.
+        let key = _atlasGeomKey(bm, g, entry.layer, uuid);
+        if (key === null) _atlasStats.geomDedupIneligible++;
+        gid = -1;
+        if (key !== null) {
+          const hit = ud.geomByContent.get(key);
+          if (hit !== undefined) {
+            let same;
+            try { same = _atlasGeomSame(bm, hit, g); } catch (_) { same = "probe"; }
+            if (same === "same") gid = hit;
+            else if (same === "stale") { ud.geomByContent.delete(key); _atlasStats.geomDedupStale++; }
+            else if (same === "probe") { key = null; _atlasStats.geomDedupProbeFail++; }
+            else { key = null; _atlasStats.geomDedupCollisions++; } // never shared, never re-keyed
+          }
+        }
+        const joined = gid >= 0;
+        if (!joined) {
+          try {
+            gid = _addGeometryGrow(bm, g, vcount);
+          } catch (_) {
+            g.dispose?.();
+            if (--entry.refs <= 0) { ud.freeLayers.push(entry.layer); ud.layerOf.delete(uuid); }
+            _atlasStats.ptGeomFail++; passthrough.push(n); continue;
+          }
+          _atlasStats.geomAdds++;
+          ud.gidRefs.set(gid, { refs: 0, key, vcount });
+          if (key !== null) ud.geomByContent.set(key, gid);
+          ud.gidVerts.set(gid, vcount);
+          ud.usedVerts += vcount; // only NEW vertices grow the used extent
+        }
+        try {
+          iid = _addInstanceGrow(bm, gid);
+        } catch (_) {
+          // No instance exists for this member: a gid it just added (refs 0)
+          // is deleted (its appended range is dead, so the compactor must
+          // see the bucket); a JOINED gid keeps its other members untouched.
+          if (_atlasReleaseGeom(bm, gid)) _dirtyBuckets.add(bucketKey);
+          g.dispose?.();
+          if (--entry.refs <= 0) { ud.freeLayers.push(entry.layer); ud.layerOf.delete(uuid); }
+          _atlasStats.ptInstFail++; passthrough.push(n); continue;
+        }
+        ud.gidRefs.get(gid).refs += 1;
+        if (joined) _atlasStats.geomDedupHits++;
+        heldGeom = { bm, gid, iid, vcount, bucketKey, ledger: true };
+      } else {
+        // `?atlasGeomDedup=off` (or an order-dependent bucket): one gid per
+        // member — the pre-P1a path, unchanged but for the `geomAdds` tally.
+        try {
+          gid = _addGeometryGrow(bm, g, vcount);
+        } catch (_) {
+          g.dispose?.();
+          if (--entry.refs <= 0) { ud.freeLayers.push(entry.layer); ud.layerOf.delete(uuid); }
+          _atlasStats.ptGeomFail++; passthrough.push(n); continue;
+        }
+        _atlasStats.geomAdds++;
+        try {
+          iid = _addInstanceGrow(bm, gid);
+        } catch (_) {
+          try { bm.deleteGeometry(gid); } catch (_2) {}
+          g.dispose?.();
+          if (--entry.refs <= 0) { ud.freeLayers.push(entry.layer); ud.layerOf.delete(uuid); }
+          _atlasStats.ptInstFail++; passthrough.push(n); continue;
+        }
+        heldGeom = { bm, gid, vcount, bucketKey };
       }
-      heldGeom = { bm, gid, vcount, bucketKey };
       n.updateMatrix();
       bm.setMatrixAt(iid, n.matrix); // world transform (node is staticsGroup-relative)
-      ud.gidVerts.set(gid, vcount);
-      ud.usedVerts += vcount; // grow the used-extent denominator for the optimize() trigger
-      g.dispose?.(); // copied into the batch buffer; the clone is no longer needed
+      if (!ud.gidRefs) {
+        ud.gidVerts.set(gid, vcount);
+        ud.usedVerts += vcount; // grow the used-extent denominator for the optimize() trigger
+      }
+      g.dispose?.(); // copied into the batch buffer (or matched there); the clone is no longer needed
       const lbKey = _lbKeyOfId(n.userData?.landblockId);
       let list = _lbMembership.get(lbKey);
       if (!list) { list = []; _lbMembership.set(lbKey, list); }
@@ -1975,7 +2355,13 @@ export function addSingletonsToCrossLbAtlas(nodes, scene3d) {
       _atlasStats.ptError++;
       // Unwind whatever this node committed before the throw, then fall through
       // to passthrough below (fail-soft: the prop still renders, once).
-      if (heldGeom) {
+      if (heldGeom && heldGeom.ledger) {
+        // P1a — drop THIS member's instance and reference; a shared gid stays
+        // for the members already drawing it.
+        _atlasStats.ptErrorUnwound++;
+        try { _atlasDropMember(heldGeom.bm, heldGeom.gid, heldGeom.iid); } catch (_) {}
+        try { _dirtyBuckets.add(heldGeom.bucketKey); } catch (_) {}
+      } else if (heldGeom) {
         _atlasStats.ptErrorUnwound++;
         try { heldGeom.bm.deleteGeometry(heldGeom.gid); } catch (_) {}
         try {
@@ -2034,9 +2420,15 @@ export function evictStaticAtlasForLb(lbKey) {
     if (!b) continue;
     const bm = b.bm;
     const ud = bm.userData;
-    try { bm.deleteGeometry(m.gid); } catch (_) {} // cascades deleteInstance; same-frame drop
-    const dead = ud.gidVerts.get(m.gid);
-    if (dead) { ud.deadVerts += dead; ud.gidVerts.delete(m.gid); }
+    if (ud.gidRefs) {
+      // P1a — this LB's INSTANCE goes now (same-frame drop); the gid only with
+      // its last member, wherever that member's LB is.
+      _atlasDropMember(bm, m.gid, m.iid);
+    } else {
+      try { bm.deleteGeometry(m.gid); } catch (_) {} // cascades deleteInstance; same-frame drop
+      const dead = ud.gidVerts.get(m.gid);
+      if (dead) { ud.deadVerts += dead; ud.gidVerts.delete(m.gid); }
+    }
     const entry = ud.layerOf.get(m.texUuid);
     if (entry && --entry.refs <= 0) {
       ud.freeLayers.push(entry.layer);
@@ -2088,9 +2480,15 @@ export function _atlasRefeedImpl(rsId) {
       if (b) {
         const bm = b.bm;
         const ud = bm.userData;
-        try { bm.deleteGeometry(m.row.gid); } catch (_) { /* fail-soft */ }
-        const dead = ud.gidVerts.get(m.row.gid);
-        if (dead) { ud.deadVerts += dead; ud.gidVerts.delete(m.row.gid); }
+        if (ud.gidRefs) {
+          // P1a — excise this member only; preview-dim repeats that are NOT
+          // re-homing yet keep the shared gid.
+          _atlasDropMember(bm, m.row.gid, m.row.iid);
+        } else {
+          try { bm.deleteGeometry(m.row.gid); } catch (_) { /* fail-soft */ }
+          const dead = ud.gidVerts.get(m.row.gid);
+          if (dead) { ud.deadVerts += dead; ud.gidVerts.delete(m.row.gid); }
+        }
         const entry = ud.layerOf.get(m.row.texUuid);
         if (entry && --entry.refs <= 0) {
           ud.freeLayers.push(entry.layer);
@@ -2244,6 +2642,12 @@ function _drainNraPending() {
  * PVS tick, NOT the per-frame eviction tick. Only compacts a bucket once >30% of
  * its vertex buffer is dead. Compaction preserves geometryIds and carries the
  * aLayer attribute with its vertices, so live gids/instances stay valid.
+ * P1a: the same holds for the geometry ledger — `gidRefs` / `geomByContent`
+ * are keyed by gid, which three r184's optimize() never renumbers (it moves a
+ * live range down and rewrites its `vertexStart`, skipping inactive ones), and
+ * `_atlasGeomSame` reads the range at compare time. A ledger bucket's
+ * `deadVerts` counts only gids freed at their LAST reference, so a bucket whose
+ * evicted members' gids are still shared elsewhere correctly reads as live.
  */
 export function tickStatAtlasOptimize() {
   if (_nraPending.length > 0) _drainNraPending();
@@ -2452,6 +2856,17 @@ function _projDrawn(bm) {
 const _PROJ_SUBMIT_FRAMES = "__projSubmitFrames";
 const _PROJ_SUBMIT_ORIG = "__projSubmitOrig";
 
+// The sampler itself: ONE function object shared by every bucket it arms (it
+// reads its state off `this.userData`), so `disarm` can tell its own hook from
+// anyone else's by identity — the `frame_split.js _releaseObjHooks` rule.
+function _projSubmitSampler(...args) {
+  const u = this.userData;
+  u[_PROJ_SUBMIT_FRAMES] = (u[_PROJ_SUBMIT_FRAMES] | 0) + 1;
+  const orig = u[_PROJ_SUBMIT_ORIG];
+  if (typeof orig === "function") return orig.apply(this, args);
+  return undefined;
+}
+
 /**
  * Arm the SUBMITTED-bucket sampler: count, per bucket, the frames in which three
  * actually submitted it.
@@ -2495,13 +2910,7 @@ export function armStatMergeSubmittedSampler(root) {
     ud[_PROJ_SUBMIT_FRAMES] = 0; // re-arming resets the count
     if (Object.prototype.hasOwnProperty.call(o, "onBeforeRender")) { armed += 1; return; }
     ud[_PROJ_SUBMIT_ORIG] = o.onBeforeRender; // the prototype's multidraw rebuild
-    o.onBeforeRender = function (...args) {
-      const u = this.userData;
-      u[_PROJ_SUBMIT_FRAMES] = (u[_PROJ_SUBMIT_FRAMES] | 0) + 1;
-      const orig = u[_PROJ_SUBMIT_ORIG];
-      if (typeof orig === "function") return orig.apply(this, args);
-      return undefined;
-    };
+    o.onBeforeRender = _projSubmitSampler;
     armed += 1;
   });
   return { armed };
@@ -2511,6 +2920,14 @@ export function armStatMergeSubmittedSampler(root) {
  * Disarm the sampler: drop the own `onBeforeRender` so the prototype's runs
  * again. Counts are LEFT IN PLACE so a projection can still be read after
  * disarming (which is the order a measurement wants: disarm, then quote).
+ *
+ * 2026-10-23 — only OUR hook is removed. This used to delete the own
+ * `onBeforeRender` of EVERY BatchedMesh in the scene, while `arm` skips (never
+ * wraps) a bucket that already owns one: the chunk buckets' ?statBatchMemo /
+ * Sphere override (static_batch_x.js `_installMemo`) and any unrelated
+ * BatchedMesh's hook were stripped, so the documented arm → project → disarm
+ * sequence silently dropped the memo for the rest of the session and the
+ * "disarm, then quote a frame time" step measured the frame WITHOUT it.
  * @param {object} [root] @returns {{disarmed:number}|{error:string}}
  */
 export function disarmStatMergeSubmittedSampler(root) {
@@ -2523,6 +2940,7 @@ export function disarmStatMergeSubmittedSampler(root) {
   scene.traverse((o) => {
     if (!o || !o.isBatchedMesh) return;
     if (!Object.prototype.hasOwnProperty.call(o, "onBeforeRender")) return;
+    if (o.onBeforeRender !== _projSubmitSampler) return; // someone else's hook
     delete o.onBeforeRender;
     if (o.userData) delete o.userData[_PROJ_SUBMIT_ORIG];
     disarmed += 1;
@@ -2804,8 +3222,8 @@ if (typeof window !== "undefined") {
 /**
  * Reset the cross-LB bucket state and (optionally) force the flag memos.
  * `opts.grow` / `opts.nra` accept a boolean to pin `statAtlasGrowEnabled()` /
- * `statNraEnabled()` (and `opts.pages` / `opts.nraSourceRes` the same for
- * their flags); omitted leaves the memo cleared, so the next call
+ * `statNraEnabled()` (and `opts.pages` / `opts.nraSourceRes` / `opts.geomDedup`
+ * the same for their flags); omitted leaves the memo cleared, so the next call
  * re-resolves from the URL (i.e. the armed defaults under node).
  */
 export function _resetStatAtlasForTest(opts = {}) {
@@ -2828,6 +3246,8 @@ export function _resetStatAtlasForTest(opts = {}) {
   _pagesFlag = typeof opts.pages === "boolean" ? opts.pages : undefined;
   _nraFlag = typeof opts.nra === "boolean" ? opts.nra : undefined;
   _nraSrcResFlag = typeof opts.nraSourceRes === "boolean" ? opts.nraSourceRes : undefined; // memory-1
+  _geomDedupFlag = typeof opts.geomDedup === "boolean" ? opts.geomDedup : undefined; // P1a
+  _warnedGeomProbe = false;
 }
 
 /** The live bucket map (bucketKey -> { bm, w, h, stateKey, bc7, arrays }). */

@@ -1,0 +1,211 @@
+<!doctype html><html><body><canvas id="c" width="128" height="128"></canvas>
+<script type="importmap">{ "imports": { "three": "/three/three.module.js" } }</script>
+<script type="module">
+// terrain_no_drawid_page.html — one arm of harness/glsl_smoke/terrain_no_drawid_smoke.mjs.
+// The REAL scene3d/terrain_batch.js absorbs a 4x4 ring of synthetic landblocks
+// whose ShaderMaterial carries every anchor the batch rewrites (so the batched
+// program is derived exactly as in prod), with batched_runs.js's patched chunks
+// installed first (prod default: the =off arm's include then carries hbBatchSlot).
+// `?terrainNoDrawId=on` on this page's URL is the new arm; the module reads
+// location.search. The lifecycle is identical on both arms and is built so that
+// layer slots and instance ids DIVERGE (evict 7 -> optimize() -> re-absorb 7):
+// a row whose aLbIid were wrong would draw another LB's matrix (wrong place) and
+// a wrong slot would draw another LB's colours.
+import * as THREE from "three";
+import { installBatchedRunsChunks, installBatchedRuns, batchedRunsFrameTotals } from "/app/scene3d/batched_runs.js";
+import {
+  tryAbsorbTerrainLbIntoBatch, evictTerrainBatchForLb, parkTerrainBatchForLb, tickTerrainBatchOptimize,
+} from "/app/scene3d/terrain_batch.js";
+const out = { errors: [], warns: [] };
+const origErr = console.error; console.error = (...a) => { out.errors.push(a.map(String).join(" ").slice(0, 400)); origErr(...a); };
+const origWarn = console.warn; console.warn = (...a) => { out.warns.push(a.map(String).join(" ").slice(0, 400)); origWarn(...a); };
+out.chunks = installBatchedRunsChunks(THREE);
+const renderer = new THREE.WebGLRenderer({ canvas: document.getElementById("c") });
+renderer.debug.checkShaderErrors = true;
+out.wrapper = installBatchedRuns(renderer);
+out.multiDraw = renderer.extensions.has("WEBGL_multi_draw");
+
+// --- a terrain-shaped ShaderMaterial carrying the batch's anchors verbatim ---
+const VERT = `
+precision highp float;
+in float terrainCode;
+in float vertexHue;
+uniform float uTime;
+uniform vec2 uLbOriginXy;
+out vec2 vGridUv;
+out vec3 vWorldPos;
+out vec2 vWorldXy;
+void main() {
+  vGridUv = position.xy / 24.0;
+  vec3 displacedPos = position;
+  vec2 worldXy = uLbOriginXy + position.xy;
+  vWorldXy = worldXy;
+  vWorldPos = (modelMatrix * vec4(displacedPos, 1.0)).xyz;
+  vec4 mvPos = modelViewMatrix * vec4(displacedPos, 1.0);
+  gl_Position = projectionMatrix * mvPos;
+}
+`;
+const FRAG = `
+precision highp float;
+precision highp int;
+uniform sampler2D uVertexTypes;
+uniform highp sampler2D uMergeData;
+uniform float uTexMergeEnabled;
+uniform float uRoadEnabled;
+uniform float uRoadSlotsEnabled;
+uniform float uAcGouraudEnabled;
+in vec2 vGridUv;
+in vec3 vWorldPos;
+in vec2 vWorldXy;
+out highp vec4 hbFragColor;
+int vertexTypeAt(int iu, int iv) {
+  return int(texelFetch(uVertexTypes, ivec2(iu, iv), 0).r * 255.0 + 0.5);
+}
+float vertexRoadAt(int iu, int iv) {
+  return texelFetch(uVertexTypes, ivec2(iu, iv), 0).g > 0.125 ? 1.0 : 0.0;
+}
+vec3 hbPalette(int c) {
+  return vec3(float(c & 1), float((c >> 1) & 1), float((c >> 2) & 1)) * 0.6 + 0.2;
+}
+void main() {
+  int iu = clamp(int(floor(vGridUv.x)), 0, 7);
+  int iv = clamp(int(floor(vGridUv.y)), 0, 7);
+  vec3 col = hbPalette(vertexTypeAt(iu, iv));
+  bool acGouraud = uAcGouraudEnabled > 0.5;
+  if (acGouraud) col *= 0.9;
+  if (uTexMergeEnabled > 0.5) {
+    int colBase = iu * 6;
+    int s = 1;
+vec4 baseTexel = texelFetch(uMergeData, ivec2(colBase, iv), 0);
+vec4 t = texelFetch(uMergeData, ivec2(colBase + s, iv), 0);
+    col = mix(col, baseTexel.rgb + t.rgb, 0.5);
+  }
+  if (uRoadEnabled > 0.5 && !(uTexMergeEnabled > 0.5 && uRoadSlotsEnabled > 0.5)) {
+    col = mix(col, vec3(0.45, 0.35, 0.2), vertexRoadAt(iu, iv));
+  }
+  float checker = mod(floor(vWorldXy.x / 64.0) + floor(vWorldXy.y / 64.0), 2.0);
+  col *= 0.7 + 0.3 * checker;
+  col *= 0.75 + 0.25 * clamp(vWorldPos.z / 20.0 + 0.5, 0.0, 1.0);
+  hbFragColor = vec4(col, 1.0);
+}
+`;
+const EXTRAS = { vertexGlsl: VERT, fragmentGlsl: FRAG, texMergeAlphaRound: false };
+const OPTS = { texMergeEnabled: false, texMergeAlphaArray: false };
+
+function vtTexture(lbX, lbY) {
+  const data = new Uint8Array(9 * 9 * 4);
+  for (let iv = 0; iv < 9; iv++) {
+    for (let iu = 0; iu < 9; iu++) {
+      const i = (iv * 9 + iu) * 4;
+      data[i] = (lbX * 3 + lbY * 5 + iu + 2 * iv) & 7;          // terrain code -> colour
+      data[i + 1] = ((lbX + lbY + iu) % 5 === 0) ? 255 : 0;       // road cells
+      data[i + 3] = 255;
+    }
+  }
+  const t = new THREE.DataTexture(data, 9, 9);
+  t.needsUpdate = true;
+  return t;
+}
+function lbMesh(lbX, lbY) {
+  const g = new THREE.BufferGeometry();
+  const pos = new Float32Array(81 * 3);
+  for (let i = 0; i < 81; i++) {
+    const x = (i % 9) * 24, y = Math.floor(i / 9) * 24;
+    pos[i * 3] = x; pos[i * 3 + 1] = y;
+    pos[i * 3 + 2] = 8 * Math.sin((x + lbX * 192) * 0.031) + 6 * Math.cos((y + lbY * 192) * 0.023);
+  }
+  g.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+  g.setAttribute("normal", new THREE.BufferAttribute(new Float32Array(81 * 3).fill(0.577), 3));
+  g.setAttribute("terrainCode", new THREE.BufferAttribute(new Float32Array(81), 1));
+  const idx = [];
+  for (let y = 0; y < 8; y++) for (let x = 0; x < 8; x++) {
+    const a = y * 9 + x, b = a + 1, c = a + 9, d = c + 1;
+    idx.push(a, b, d, a, d, c); // CCW seen from +z (the camera)
+  }
+  g.setIndex(new THREE.BufferAttribute(new Uint32Array(idx), 1));
+  g.computeBoundingSphere();
+  const mat = new THREE.ShaderMaterial({
+    uniforms: {
+      uVertexTypes: { value: null }, uMergeData: { value: null },
+      uTexMergeEnabled: { value: 0 }, uRoadEnabled: { value: 1 }, uRoadSlotsEnabled: { value: 0 },
+      uAcGouraudEnabled: { value: 0 }, uTime: { value: 0 }, uLbOriginXy: { value: new THREE.Vector2(lbX * 192, lbY * 192) },
+    },
+    vertexShader: VERT, fragmentShader: FRAG, glslVersion: THREE.GLSL3, side: THREE.FrontSide,
+  });
+  const m = new THREE.Mesh(g, mat);
+  m.position.set(lbX * 192, lbY * 192, 0);
+  m.userData = { lbX, lbY, vertexTypesTexture: vtTexture(lbX, lbY), mergeDataTexture: null };
+  return m;
+}
+const key = (x, y) => (((x & 0xff) << 24) | ((y & 0xff) << 16)) >>> 0;
+
+const scene = new THREE.Scene();
+const terrainGroup = new THREE.Group();
+scene.add(terrainGroup);
+const scene3d = { terrainGroup, terrainMaterials: [], wireframeMode: false, shadowsEnabled: false, csmEnabled: false };
+const absorbed = [];
+const absorb = (x, y) => { const ok = tryAbsorbTerrainLbIntoBatch(scene3d, lbMesh(x, y), OPTS, EXTRAS); absorbed.push(ok); return ok; };
+// 1. a 4x4 ring, scrambled order
+const order = [5, 12, 0, 9, 3, 14, 7, 1, 10, 15, 4, 8, 2, 13, 6, 11];
+for (const k of order) absorb(100 + (k % 4), 50 + Math.floor(k / 4));
+// 2. evict 7, compact (43.75% dead > 30%: optimize() moves the live ranges)
+const ev = [[100, 50], [102, 50], [101, 51], [103, 51], [100, 52], [102, 53], [101, 53]];
+for (const [x, y] of ev) evictTerrainBatchForLb(key(x, y));
+tickTerrainBatchOptimize();
+// 3. re-absorb them: slots pop LIFO, instance ids reuse ascending -> they diverge
+for (const [x, y] of ev) absorb(x, y);
+// 4. one parked (hidden) row, one LB far off-screen (per-object culled)
+parkTerrainBatchForLb(key(103, 50));
+absorb(110, 60);
+
+const cam = new THREE.OrthographicCamera(-400, 400, 400, -400, 1, 3000);
+cam.position.set(100 * 192 + 384, 50 * 192 + 384, 1000);
+cam.up.set(0, 1, 0);
+cam.lookAt(100 * 192 + 384, 50 * 192 + 384, 0);
+cam.updateMatrixWorld();
+scene.background = new THREE.Color(0x000000);
+
+const t0 = performance.now();
+renderer.render(scene, cam);
+renderer.render(scene, cam);
+out.renderMs = Math.round(performance.now() - t0);
+const gl = renderer.getContext();
+out.glError = gl.getError();
+out.absorbedAll = absorbed.every(Boolean);
+out.absorbCount = absorbed.length;
+out.stats = window.__terrainBatch ? window.__terrainBatch.stats() : null;
+out.verify = window.__terrainBatch ? window.__terrainBatch.verifyIids() : null;
+out.draws = batchedRunsFrameTotals();
+
+// The program: linked, its active uniforms, its vertex source as handed to GL,
+// and (when the browser exposes WEBGL_debug_shaders) ANGLE's translation.
+const dbg = gl.getExtension("WEBGL_debug_shaders");
+out.programs = renderer.info.programs.map((p) => {
+  const prog = p.program;
+  const names = [];
+  const n = gl.getProgramParameter(prog, gl.ACTIVE_UNIFORMS);
+  for (let i = 0; i < n; i++) names.push(gl.getActiveUniform(prog, i).name);
+  const shaders = gl.getAttachedShaders(prog) || [];
+  const vs = shaders.find((s) => gl.getShaderParameter(s, gl.SHADER_TYPE) === gl.VERTEX_SHADER);
+  const src = vs ? gl.getShaderSource(vs) : "";
+  const tr = dbg && vs ? dbg.getTranslatedShaderSource(vs) : null;
+  return {
+    name: p.name, linked: gl.getProgramParameter(prog, gl.LINK_STATUS), uniforms: names,
+    vsNamesDrawId: src.includes("gl_DrawID"), vsHasALbIid: src.includes("in float aLbIid;"),
+    translated: tr == null ? null : { len: tr.length, drawId: /DrawID/i.test(tr) },
+  };
+});
+
+const W = 128, H = 128;
+const all = new Uint8Array(W * H * 4); gl.readPixels(0, 0, W, H, gl.RGBA, gl.UNSIGNED_BYTE, all);
+out.frame = Array.from(all);
+let lit = 0; const colours = new Set();
+for (let i = 0; i < all.length; i += 4) {
+  if (all[i] + all[i + 1] + all[i + 2] > 30) lit++;
+  colours.add((all[i] << 16) | (all[i + 1] << 8) | all[i + 2]);
+}
+out.litPixels = lit;
+out.colours = colours.size;
+out.renderer = gl.getParameter(gl.getExtension("WEBGL_debug_renderer_info")?.UNMASKED_RENDERER_WEBGL ?? gl.RENDERER);
+window.__smoke = out;
+</script></body></html>

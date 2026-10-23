@@ -77,6 +77,8 @@ export function __resetStatBatchXForTest() {
   for (const k of Object.keys(_memoStats)) _memoStats[k] = 0;
   for (const k of Object.keys(_sphereStats)) _sphereStats[k] = 0;
   for (const k of Object.keys(_runsStats)) _runsStats[k] = 0;
+  for (const k of Object.keys(_earlyOutStats)) _earlyOutStats[k] = 0;
+  _earlyOutCtl.off = false;
   _camPose.camera = null;
   _warned.clear();
 }
@@ -787,13 +789,16 @@ function _shouldSortBucket(mat) {
  * directions when a real surface lands after a spawn-race fallback, so a
  * creation-time-only decision can go stale either way. Writes only on a
  * transition, and invalidates the memo when it flips (the cached arrays were
- * built by the other branch).
+ * built by the other branch). `?staticEarlyOut=on`: a flip also moves the
+ * bucket in or out of three's early-out (`applyStaticEarlyOut`) — a bucket that
+ * starts sorting gets its per-instance cull (and memo override) back.
  */
 function _reseatBucketSort(bm) {
   const want = _shouldSortBucket(bm.material);
   if (bm.sortObjects !== want) {
     bm.sortObjects = want;
     _memoInvalidate(bm);
+    applyStaticEarlyOut(bm);
     return true;
   }
   return false;
@@ -1823,6 +1828,12 @@ function _installMemo(bm) {
   // The epoch lives on `__memo` and is bumped by `_memoInvalidate` regardless of
   // which flag is on, so the sphere cache needs this state even with memo off.
   bm.userData.__memo = _memoStateFor();
+  // ?staticEarlyOut=on: a bucket already on three's early-out (set just before
+  // this call, `applyStaticEarlyOut`) gets NO own override — every tier below
+  // would only add bookkeeping in front of three's immediate return (see the
+  // ?staticEarlyOut header). The state above stays: a later sort flip that
+  // takes the bucket off the early-out installs the override then.
+  if (_onEarlyOut(bm)) return;
   // 2026-10-07 — through the ?bmIndirectPerCamera wrapper (one shared function
   // per path, not a closure per bucket): each camera draws from its own indirect
   // texture, so a slot hit no longer re-uploads ids the GPU already holds
@@ -1830,6 +1841,253 @@ function _installMemo(bm) {
   bm.onBeforeRender = memo ? _memoOnBeforeRenderPC : _sphereOnBeforeRenderPC;
   if (memo) _memoStats.installed += 1;
   if (sphere) _sphereStats.installed += 1;
+}
+
+// ---------------------------------------------------------------------------
+// ?staticEarlyOut — THREE'S OWN EARLY-OUT FOR OPAQUE BUCKETS (handoff P2 / L0,
+// 2026-10-22). DEFAULT OFF, exact-match opt-in (`on`/`1`/`true`/`yes`; absent or
+// anything else = off). Applies to the chunk buckets here and to the
+// ?buildingMatBatch buckets (buildings.js calls `applyStaticEarlyOut`).
+//
+// WHAT. three r184 `BatchedMesh.onBeforeRender` (src/objects/BatchedMesh.js
+// :1518) opens with
+//     if ( ! this._visibilityChanged && ! this.perObjectFrustumCulled && ! this.sortObjects ) return;
+// Every bucket here is built with `perObjectFrustumCulled = true`, so that line
+// never fires (THE PER-INSTANCE WALK above). Under the flag an UNSORTED bucket
+// (`sortObjects === false`) whose material is not wireframe gets
+// `perObjectFrustumCulled = false`: its multidraw list becomes "every visible,
+// active instance", rebuilt only when three's `_visibilityChanged` is set, and
+// on every other call — colour pass, each shadow camera — onBeforeRender
+// returns at once. Sorted buckets (true translucent) keep today's settings and
+// today's override, exactly (D-07.3).
+//
+// WHAT IS KEPT. Node-level culling: `frustumCulled` stays true, and three culls
+// the node by `bm.boundingSphere` (Frustum.intersectsObject computes it lazily
+// when null; BatchedMesh.computeBoundingSphere unions the sphere of every ACTIVE
+// instance — visible or parked — under its instance matrix). three never nulls
+// it itself (addInstance / setMatrixAt / deleteInstance / optimize leave it
+// alone [D, BatchedMesh.js read 2026-10-22]); this file nulls it at every
+// membership change (`_memoDirtyBounds`: the feed after its setMatrixAt, both
+// evict paths, optimize), and a building bucket is never mutated after it is
+// built. So the culling unit becomes the 3x3-LB region (576 m) or the
+// landblock (building buckets) instead of the instance.
+//
+// WHY IT IS THE SAME PICTURE [D]. The extra instances drawn are the ones whose
+// bounding sphere lies outside the frustum, so every one of their primitives is
+// clipped and produces no fragment. The list order is instance order in both
+// modes (three's unsorted branch), and batchedRuns regroups an unsorted bucket
+// by geometry either way. Not proven on a GPU yet:
+// harness/glsl_smoke/static_early_out_smoke.mjs is the pixel proof (not run).
+//
+// WHO FLIPS `_visibilityChanged` (each one defeats the early-out for that
+// bucket for ONE call, the rebuild). Every writer in scene3d/ and three r184,
+// read 2026-10-22:
+//   three — addInstance, setGeometryAt (addGeometry), deleteGeometry,
+//     deleteInstance, optimize, setVisibleAt (only on an actual change), and
+//     the constructor (so a new bucket builds once). NOT setMatrixAt,
+//     setColorAt, setInstanceCount, setGeometrySize.
+//   this file — the per-LB feed (addInstance/addGeometry), both evict paths
+//     (deleteInstance/deleteGeometry), the lazy optimize (~10 Hz PVS tick, dirty
+//     buckets past _OPTIMIZE_FRAC only), park/unpark (`_setLbVisible`, called by
+//     landblock_lru.js park / warm re-attach), and `applyStaticEarlyOut` itself
+//     on a mode change (the live list was culled for whichever camera drew last;
+//     the live seam, or a building bucket re-attached after a seam flip).
+//   film/runtime/take_player.js — hideStatic / restoreStatic `setVisibleAt`
+//     (take start / end only).
+//   Event-driven, all of them: on a settled frame nothing writes, and while
+//   walking only the buckets a streaming feed / evict / park touches rebuild.
+//   NOT writers, checked: statics.js `tickStaticsBillboards` (it writes
+//   `leaf.quaternion` / `.position` on the plain-Mesh leaves of THREE.LOD nodes;
+//   LOD wrappers never enter a bucket — `consolidateStaticSingletonsCrossLb`
+//   keeps them verbatim, as do buildings.js `_batchEligible` and the atlas),
+//   LOD band switches (same population), `cullStaticsGroup` (node `visible`
+//   only, which three's flag ignores), `_markDeadBatch` (node `visible`),
+//   skip_empty_multidraw.js, batched_indirect_per_camera.js (passes the
+//   early-out population straight through), batched_runs.js (reads only).
+//
+// THE MEMO FAMILY DOES NOT STEP ASIDE BY ITSELF — which is why it is not
+// installed on these buckets. With the override in place and per-object culling
+// off, `_slackEligible` (pOFC === true) declines the slack / runs / sphere
+// builders, so every camera move lands on the "exact tier" fallback: three's
+// onBeforeRender (which returns at once) PLUS the memo's record step — 48 floats
+// copied and, with ?statBatchMemoSlots (default 4), `_memoSlotSave` copying the
+// whole multidraw list (O(n)) — plus `instancesWalked` counting slots nobody
+// walked. The own property would also keep ?batchedRunsStable (L1) from ever
+// skipping the per-draw compare (`_stableObserve` poisons own overrides).
+//
+// SHRINKS [D]: renderer main thread inside `BatchedMesh.onBeforeRender` — the
+// per-instance walk (August model: 0.348 us/instance + 5.9 us/bucket, frame-cost
+// §5a [M, pre-memo]); what is left of it today is the MOVING rebuild of chunk
+// buckets (the memo's parked hits already skip it) and the full three walk of
+// every drawn building bucket (no memo there), per camera. With
+// `&batchedRunsStable=on` the per-draw O(ranges) compare in batched_runs.js goes
+// too (its epoch proof holds for prototype-routed buckets). COSTS: triangles
+// and vertex work (`ktris`, GPU `statics` ms), and ANGLE ranges for buckets
+// batchedRuns cannot regroup (`__batchedRuns.stats.noGain`: every visible
+// instance becomes a range, not every in-frustum one) — read `issuedSubDraws`.
+// The August "+81% triangles for 0.40 ms" verdict predates ?clipMapOpaque (F4):
+// with it, ClipMap materials are `transparent = false` (materials.js
+// applyClipMapRenderState) and `_shouldSortBucket` returns false for them, so
+// the ClipMap mass sits in UNSORTED buckets — the population this reaches [D,
+// confirm with `walk.slots.drawnSorted` vs `.drawn` in a town].
+//
+// Ships OFF: needs an owner eye check and a 1070 arm (expect more triangles;
+// kill = a GPU-bound regression in towns, or p99 worse than the off arm).
+// Census: `__statBatchXStats().walk.earlyOut`; live in-session A/B seam
+// `window.__staticEarlyOut.off = true|false` (re-applies every live bucket; a
+// detached building bucket catches up when it is re-attached). A diag hook in
+// the slot does not bend either arm (p2eo-1, `applyStaticEarlyOut`), but a
+// flip does take the slot back from it: frame_split objHooks re-adopts on its
+// next call, the submitted sampler stays off that bucket until re-armed.
+// ---------------------------------------------------------------------------
+let _earlyOutFlag;
+/** `?staticEarlyOut=on` — opaque buckets ride three's BatchedMesh early-out.
+ *  DEFAULT OFF; exact-match opt-in on/1/true/yes (never `!== "off"`). */
+export function staticEarlyOutEnabled() {
+  if (_earlyOutFlag !== undefined) return _earlyOutFlag;
+  let on = false;
+  try {
+    if (typeof globalThis !== "undefined" && globalThis.location?.search) {
+      const v = (new URLSearchParams(globalThis.location.search).get("staticEarlyOut") || "").toLowerCase();
+      on = v === "on" || v === "1" || v === "true" || v === "yes";
+    }
+  } catch (_) { on = false; }
+  _earlyOutFlag = on;
+  return on;
+}
+/** Test seam: true/false forces the flag, undefined re-reads the URL. */
+export function __setStaticEarlyOutForTest(v) { _earlyOutFlag = v; _earlyOutCtl.off = false; }
+
+const _earlyOutCtl = { off: false }; // live A/B seam (`window.__staticEarlyOut.off`)
+const _earlyOutStats = {
+  applied: 0,   // buckets put ON the early-out (creation or a later flip)
+  reverted: 0,  // buckets taken back OFF it (sort flip, wireframe, live seam)
+  external: 0,  // of `applied`, buckets this file does not own (buildings.js)
+};
+
+/** Is this bucket on three's early-out right now (the condition three tests,
+ *  minus `_visibilityChanged`)? */
+function _onEarlyOut(bm) {
+  return bm.perObjectFrustumCulled === false && bm.sortObjects === false;
+}
+
+/** May this bucket take the early-out? Unsorted, one non-wireframe material.
+ *  Wireframe is refused because three bakes `material.wireframe` into the list
+ *  (multiDrawMultiplier) and a list built by one material is reused by the
+ *  other passes' materials (the shadow depth material is never wireframe). */
+function _earlyOutWanted(bm) {
+  if (!staticEarlyOutEnabled() || _earlyOutCtl.off) return false;
+  if (bm.sortObjects !== false) return false;
+  const m = bm.material;
+  return !!m && !Array.isArray(m) && m.wireframe !== true;
+}
+
+/**
+ * Put `bm` on or off three's early-out to match the flag, its sort mode and
+ * its material. Flag off: returns false and touches NOTHING (today's buckets,
+ * byte for byte). Called at bucket creation (here and buildings.js), on a sort
+ * flip (`_reseatBucketSort`), by the live seam and, for a bucket this file does
+ * not own, on every re-attach (`_earlyOutOnAdded`). On a transition the list
+ * is forced to rebuild once (`_visibilityChanged`): a list that was culled for
+ * one camera must not be served to every camera. For a chunk bucket the
+ * own-property memo/sphere override follows the mode: absent on the early-out,
+ * present off it. Returns whether the bucket is on the early-out.
+ */
+export function applyStaticEarlyOut(bm) {
+  if (!bm || bm.isBatchedMesh !== true) return false;
+  if (!staticEarlyOutEnabled()) return false;
+  const external = !(bm.userData && bm.userData.__staticBatchCrossLb);
+  // 2026-10-23 review (p2eo-1): a bucket this file does not own (buildings.js)
+  // is reached by the live seam only while it sits in `buildingsGroup`; one
+  // detached at the flip (landblock_lru park, a `deferAttach` prewarm) came
+  // back in the other arm's mode. three's Object3D.add dispatches `added` on
+  // the child, so re-apply there: a no-op compare when the mode matches.
+  // addEventListener dedups by identity (one shared function, no closure).
+  if (external && typeof bm.addEventListener === "function") bm.addEventListener("added", _earlyOutOnAdded);
+  const want = _earlyOutWanted(bm);
+  const pofc = !want;
+  const flipped = bm.perObjectFrustumCulled !== pofc;
+  if (flipped) {
+    bm.perObjectFrustumCulled = pofc;
+    bm._visibilityChanged = true;
+    _memoInvalidate(bm);
+    if (want) {
+      _earlyOutStats.applied += 1;
+      if (external) _earlyOutStats.external += 1;
+    } else {
+      _earlyOutStats.reverted += 1;
+    }
+  }
+  // The override exists only where `_installMemo` ran (chunk buckets with a
+  // memo/sphere/runs flag on). Before that call there is no state yet, and
+  // `_installMemo` itself skips the assignment for an early-out bucket.
+  //
+  // 2026-10-23 review (p2eo-1): the slot follows a MODE CHANGE and is judged by
+  // IDENTITY. It used to test "any own onBeforeRender", but the diag samplers
+  // install OWN wrappers too (frame_split objHooks, static_atlas
+  // armStatMergeSubmittedSampler): seam OFF over one left the bucket culled
+  // WITHOUT the memo (an OFF arm slower than the real default), and the diag's
+  // disarm then deleted its wrapper, leaving no memo for the session. Now a
+  // flip onto the early-out empties the slot whatever wraps it (a wrapper can
+  // only be around our override or the prototype, and both owners restore by
+  // identity, so their stale rows are skipped), and a flip off it installs our
+  // override over anything that is not already ours. No flip, no write: a
+  // wrapper on a bucket whose mode did not change is left alone.
+  const st = bm.userData && bm.userData.__memo;
+  if (flipped && st && _memoOnBeforeRenderPC !== null) {
+    const cur = bm.onBeforeRender;
+    if (want) {
+      // Only after a runtime flip (sorted -> unsorted under ?statBatchNoSort,
+      // or the live seam): a bucket built on the early-out never had one.
+      // `delete` can leave this one node in V8 dictionary mode — accepted for
+      // an event that needs two opt-in flags (or a diag toggle) to happen.
+      if (Object.prototype.hasOwnProperty.call(bm, "onBeforeRender")) delete bm.onBeforeRender;
+    } else if (cur !== _memoOnBeforeRenderPC && cur !== _sphereOnBeforeRenderPC) {
+      bm.onBeforeRender = statBatchMemoMode() !== "off" ? _memoOnBeforeRenderPC : _sphereOnBeforeRenderPC;
+    }
+  }
+  return want;
+}
+
+/** `added` listener on buckets this file does not own (see applyStaticEarlyOut). */
+function _earlyOutOnAdded() { applyStaticEarlyOut(this); }
+
+/** Live A/B: re-apply every chunk bucket plus the building buckets under
+ *  `scene3d.buildingsGroup`. A detached building bucket (parked, or still
+ *  held for a prewarm) catches up when it is re-attached (`_earlyOutOnAdded`). */
+function _reapplyEarlyOutLive(scene3d) {
+  let n = 0;
+  for (const bm of _eachBucket()) { applyStaticEarlyOut(bm); n += 1; }
+  const kids = scene3d && scene3d.buildingsGroup && scene3d.buildingsGroup.children;
+  if (kids) {
+    for (const c of kids) {
+      if (c && c.isBatchedMesh === true && c.userData && c.userData.__buildingBatch === true) {
+        applyStaticEarlyOut(c);
+        n += 1;
+      }
+    }
+  }
+  return n;
+}
+/** Test seam for the live toggle (same path as the window seam). */
+export function __setStaticEarlyOutOffForTest(v, scene3d) {
+  _earlyOutCtl.off = !!v;
+  return _reapplyEarlyOutLive(scene3d);
+}
+
+if (typeof window !== "undefined") {
+  try {
+    window.__staticEarlyOut = {
+      get enabled() { return staticEarlyOutEnabled(); },
+      stats: () => ({ ..._earlyOutStats, off: _earlyOutCtl.off }),
+      get off() { return _earlyOutCtl.off; },
+      // Flag-on sessions only (flag off: nothing to toggle). Re-applies now.
+      set off(v) {
+        _earlyOutCtl.off = !!v;
+        try { _reapplyEarlyOutLive(window.liveScene3d); } catch (_) { /* diag seam only */ }
+      },
+    };
+  } catch (_) { /* diag seam only */ }
 }
 
 const STAT_CONTENT_KEY = "__statContentKey";
@@ -2455,6 +2713,10 @@ function _getOrCreateBucket(mat, scene3d, templateNode, regionKey, poolRef, init
   // ?skipDeadBatch — derive visibility from the material now that castShadow is
   // set. Re-derived on the optimize tick below; see `_markDeadBatch`.
   _markDeadBatch(bm);
+  // ?staticEarlyOut (default OFF; no-op then) — an unsorted bucket drops the
+  // per-instance cull and rides three's early-out. BEFORE `_installMemo`, which
+  // reads the result and installs no override on an early-out bucket.
+  applyStaticEarlyOut(bm);
   // ?statBatchMemo — install the per-bucket multidraw memo (no-op when off).
   _installMemo(bm);
   try { scene3d?.staticsGroup?.add(bm); } catch (_) { /* fail-soft */ }
@@ -3142,6 +3404,14 @@ export function getStatBatchXStats() {
   let sortedSlots = 0;
   let drawnSlots = 0;
   let drawnSortedSlots = 0;
+  // ?staticEarlyOut census (chunk buckets only; building buckets count in
+  // `applied` / `external`). `gids` bounds the instanced runs batchedRuns can
+  // issue for them; `drawnSlots` is what three's early-out list carries.
+  let eoBuckets = 0;
+  let eoSlots = 0;
+  let eoGids = 0;
+  let eoDrawnBuckets = 0;
+  let eoDrawnSlots = 0;
   // ?statBatchValueKey census (named apart from ?statArrayMerge's `mergedBuckets`).
   let valueMergedBuckets = 0;
   let valueMergedMats = 0;
@@ -3150,6 +3420,8 @@ export function getStatBatchXStats() {
     const slots = Array.isArray(bm._instanceInfo) ? bm._instanceInfo.length : 0;
     instanceSlots += slots;
     if (bm.sortObjects) { sortedBuckets += 1; sortedSlots += slots; }
+    const eo = _onEarlyOut(bm);
+    if (eo) { eoBuckets += 1; eoSlots += slots; eoGids += ud.gidVerts.size; }
     const before = ud.mergedMats ? Math.max(1, ud.mergedMats.size) : 1;
     bucketsBefore += before;
     if (ud.mergedMats) mergedBuckets += 1;
@@ -3159,6 +3431,7 @@ export function getStatBatchXStats() {
       drawnSlots += slots;
       if (bm.sortObjects) drawnSortedSlots += slots;
       if (ud.mergedMats) drawnMerged += 1;
+      if (eo) { eoDrawnBuckets += 1; eoDrawnSlots += slots; }
     }
     // Triangles as verts/3: statics geometries are NON-indexed (adapter.js
     // `meshToGeometryGroups` emits flat position/normal/uv), so this is exact
@@ -3192,6 +3465,8 @@ export function getStatBatchXStats() {
       // three's two loops this bucket takes.
       slots,
       sorted: !!bm.sortObjects,
+      // ?staticEarlyOut: on three's early-out (no per-instance walk at all).
+      earlyOut: eo,
     });
     instances += ud.instances;
   }
@@ -3286,6 +3561,21 @@ export function getStatBatchXStats() {
       // Live population, split the way three's two loops split it.
       slots: { all: instanceSlots, sorted: sortedSlots, drawn: drawnSlots, drawnSorted: drawnSortedSlots },
       sortedBuckets,
+      // ?staticEarlyOut (handoff P2 / L0). `drawnSlots` here is walked by
+      // nobody on a settled frame; compare `ktris` and `__batchedRuns.frame()
+      // .issued` against the off arm before quoting any saving.
+      earlyOut: {
+        enabled: staticEarlyOutEnabled(),
+        off: _earlyOutCtl.off,
+        buckets: eoBuckets,
+        slots: eoSlots,
+        gids: eoGids,
+        drawnBuckets: eoDrawnBuckets,
+        drawnSlots: eoDrawnSlots,
+        applied: _earlyOutStats.applied,
+        reverted: _earlyOutStats.reverted,
+        external: _earlyOutStats.external,
+      },
       // ?statBatchSphere. The number to watch is `slotsWalked` vs `slotsBuilt`:
       // walked is per FRAME and is what got 5-7x cheaper, built is per EPOCH and
       // is the price of that. A `slotsBuilt` that keeps pace with `slotsWalked`

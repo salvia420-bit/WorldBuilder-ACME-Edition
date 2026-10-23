@@ -15,7 +15,9 @@
 // THREE.BatchedMesh (one multidraw submission; r184 renderMultiDraw counts 1
 // in renderer.info.render.calls and issues 1 GL call):
 //   - per-LB translation      → BatchedMesh per-instance matrix
-//                               (getBatchingMatrix(getIndirectIndex(gl_DrawID)))
+//                               (getBatchingMatrix(getIndirectIndex(gl_DrawID)),
+//                               or getBatchingMatrix(aLbIid) under
+//                               ?terrainNoDrawId — see NO-gl_DrawID PROGRAM)
 //   - uVertexTypes            → one DataArrayTexture(9, 9, capacity), layer =
 //                               slot, selected by a per-vertex aLbSlot attribute
 //   - uMergeData              → one DataArrayTexture(48, 8, capacity), same slot
@@ -80,6 +82,70 @@
 // DEFAULT-ON (2026-07-03 restore; `?terrainBatch=off` escapes).
 // Wireframe mode (?wireframe=1) is never batched (different material system);
 // quality=high LOD re-bakes flow through the eviction hook + re-absorb.
+//
+// NO-gl_DrawID PROGRAM (`?terrainNoDrawId=on`, DEFAULT OFF, exact-match
+// on/1/true/yes opt-in; 2026-10-22, improvement hunt B10 = findings-round1
+// `gl-driver-2`, handoff P1d).
+//   WHY [D, ANGLE main read 2026-10-22]. Chrome on Windows has no native
+// multi-draw: ANGLE's D3D11 backend loops the ranges (Context11::multiDrawElements,
+// MULTI_DRAW_BLOCK). Before each range it calls
+// `executable->setDrawIDUniform(drawID)` — but ONLY when
+// `executable->hasDrawIDUniform()`, i.e. `drawIDLocation >= 0`, which
+// Program::postResolveLink takes from `getUniformLocation("gl_DrawID")`. That
+// uniform exists only if the translator emulated the builtin: EmulateGLDrawID
+// (tree_ops/EmulateMultiDrawShaderBuiltins.cpp) declares `angle_DrawID` only when
+// a symbol with qualifier EvqDrawID is still in the AST, and Compiler.cpp renames
+// it to "gl_DrawID" for the uniform list afterwards. Each set goes
+// ProgramExecutableD3D::setUniformInternal → mShaderUniformsDirty[Vertex] →
+// StateManager11 DIRTY_BIT_PROGRAM_UNIFORMS → applyUniformsForShader →
+// UpdateSubresource of the WHOLE vertex default uniform block, before every
+// range, plus one reset to 0 after the loop. This program reads gl_DrawID for
+// one thing only: `getIndirectIndex( gl_DrawID )`, the instance id whose
+// batching matrix places the LB.
+//   WHAT. Each LB is exactly one geometry with exactly one instance (every absorb
+// adds a fresh `shadow` geometry; nothing here calls addInstance on an existing
+// gid or setGeometryIdAt), so the instance id is constant over that geometry's
+// vertices. It rides a second per-vertex float, `aLbIid`, written into the
+// BATCH's copy of the attribute right after addInstance (the id does not exist
+// before it; the shadow carries a zero stand-in so the attribute layout is fixed
+// from the first absorb). The vertex stage reads `getBatchingMatrix( aLbIid )`.
+// The `#include <batching_pars_vertex>` goes: only the `batchingTexture`
+// declaration and three's own getBatchingMatrix are spliced in, lifted from
+// THREE.ShaderChunk at state creation (so the texel layout follows three). That
+// keeps batched_runs.js's hbBatchSlot() — it reads gl_DrawID — out of the source.
+// (ANGLE would prune that uncalled function anyway: pruneUnusedFunctions runs
+// before EmulateGLDrawID in TCompiler::checkAndSimplifyAST. A derived source with
+// no gl_DrawID token at all does not depend on that.)
+//   EXACT. Same matrix texels, same index value (float(iid), exact far below
+// 2^24), the same `lbBatchMat * vec4(...)` expressions: pixel-identical by
+// construction [D]. Visibility is untouched: three still builds the multidraw
+// list from the visible, frustum-passing instances; only the shader stops asking
+// which range it is in. optimize() moves aLbIid with the vertices (copyWithin
+// over every attribute), setGeometrySize copies every attribute, and instance
+// ids survive both. GPU proof: harness/glsl_smoke/terrain_no_drawid_smoke.mjs
+// (=on vs off, max channel diff 0, with slots ≠ instance ids after an evict +
+// optimize + re-absorb).
+//   SHRINKS (CrGpuMain, per terrain multidraw): one setDrawIDUniform and one
+// vertex default-uniform-block UpdateSubresource per visible LB range, plus the
+// trailing reset [D]. The program also stops sampling `batchingIdTexture`: one
+// vertex texture unit fewer, and three binds (so uploads) the indirect texture
+// only for a program that declares it (WebGLUniforms.setValue). Renderer main
+// thread: nothing (BatchedMesh.onBeforeRender still writes the list). NOT
+// removed: every range is still its own D3D11 DrawIndexed. Coalescing
+// index-adjacent rows into spans (gl-driver-2's second half) becomes legal once
+// nothing depends on the draw index, but is NOT built here. Neither the
+// per-range cost nor the visible range count is measured [A]: P0 reads CrGpuMain
+// WebGL ms/frame (gpu_thread_split.py) =on vs off on the 1070.
+//   FALLBACK. If the chunk anchors do not match (three drift), or the derived
+// vertex stage, with its #includes expanded against THREE.ShaderChunk, still
+// names gl_DrawID / getIndirectIndex / batchingIdTexture / hbBatchSlot (or has
+// an #include that does not resolve), the batch builds today's program and says
+// why once (`stats().noDrawIdFallback`). An LB whose aLbIid write fails draws
+// per-LB, like any other absorb failure.
+//   DIAG. `window.__terrainBatch.stats()`: noDrawId (live), noDrawIdRequested,
+// noDrawIdFallback, iidWrites, iidWriteFails, optimizes;
+// `window.__terrainBatch.verifyIids()` walks every live row (its aLbIid range
+// == its instance id) and counts rows whose slot ≠ instance id.
 
 import * as THREE from "three";
 import { prewarmSubtree } from "./bake_prewarm.js";
@@ -108,6 +174,25 @@ export function terrainBatchEnabled() {
     on = false;
   }
   return (_flag = on);
+}
+
+let _noDrawIdFlag;
+/** `?terrainNoDrawId` — the batch program without gl_DrawID (see NO-gl_DrawID
+ *  PROGRAM in the header). DEFAULT OFF: exact-match opt-in, `on`/`1`/`true`/`yes`
+ *  (any case); absent or anything else = off. Read once. Means nothing without
+ *  ?terrainBatch (no batch, no program). */
+export function terrainNoDrawIdEnabled() {
+  if (_noDrawIdFlag !== undefined) return _noDrawIdFlag;
+  let on = false;
+  try {
+    if (typeof window !== "undefined" && window.location?.search) {
+      const v = (new URLSearchParams(window.location.search).get("terrainNoDrawId") || "").toLowerCase();
+      on = v === "on" || v === "1" || v === "true" || v === "yes";
+    }
+  } catch (_) {
+    on = false;
+  }
+  return (_noDrawIdFlag = on);
 }
 
 // ---------------------------------------------------------------------------
@@ -152,6 +237,24 @@ const WATER_FOAM_FETCH_BATCHED = "  return texelFetch(uVertexTypes, ivec3(27 + x
 // The batch takes the layer width from the first texture it sees
 // (`state.vtW`); the width is session-constant.
 const MERGE_W = 48, MERGE_H = 8;   // TexMerge layer dims (bytes: 1536)
+// 2026-10-22 — ?terrainNoDrawId: the two pieces of three r184's
+// batching_pars_vertex the no-gl_DrawID program keeps (header). Lifted from
+// THREE.ShaderChunk at state creation, never inlined, so the matrix texel layout
+// is always three's own. Each must occur exactly once in the chunk.
+const BATCHING_TEX_DECL = "uniform highp sampler2D batchingTexture;";
+const BATCHING_MATRIX_FN = "mat4 getBatchingMatrix( const in float i ) {";
+// The matrix line of the batched vertex stage, both forms (step 2 below).
+const LB_MATRIX_DRAWID = "  mat4 lbBatchMat = getBatchingMatrix( getIndirectIndex( gl_DrawID ) );";
+const LB_MATRIX_IID = "  mat4 lbBatchMat = getBatchingMatrix( aLbIid );";
+// 2026-10-23 (review b10-terrain-1) — _resolveNoDrawId's guard reads the derived
+// vertex stage the way three compiles it: WebGLProgram's includePattern
+// (verbatim, r184) expanded against THREE.ShaderChunk. Then none of the draw
+// index or the batching_pars_vertex pieces the =on stage leaves out may appear:
+// batching_vertex / color_vertex reach getIndirectIndex( gl_DrawID ), or
+// hbBatchSlot() once batched_runs.js patched them, and the =on stage declares
+// neither (a compile failure with every absorbed LB already hidden).
+const GLSL_INCLUDE_RE = /^[ \t]*#include +<([\w\d./]+)>/gm;
+const DRAW_INDEX_RE = /gl_DrawID|getIndirectIndex|batchingIdTexture|hbBatchSlot/;
 
 // ---------------------------------------------------------------------------
 // Module state (allocated only when the flag is on AND the first absorb runs;
@@ -191,13 +294,64 @@ function _replaceOnce(src, anchor, replacement, label) {
   return parts[0] + replacement + parts[1];
 }
 
-function _buildBatchedGlsl(vertexGlsl, fragmentGlsl) {
+/**
+ * ?terrainNoDrawId — the part of three's batching_pars_vertex the no-gl_DrawID
+ * program keeps: the `batchingTexture` declaration plus getBatchingMatrix, and
+ * nothing else (no batchingIdTexture, getIndirectIndex, hbBatchSlot or
+ * `_gl_DrawID` fallback). Pure. Returns the GLSL, or null when the chunk does
+ * not look like r184's (three drift) — the caller then keeps today's program.
+ */
+function _batchingMatrixGlsl(pars) {
+  if (typeof pars !== "string") return null;
+  const d = pars.indexOf(BATCHING_TEX_DECL);
+  const f = pars.indexOf(BATCHING_MATRIX_FN);
+  if (d < 0 || f < 0) return null;
+  if (pars.indexOf(BATCHING_TEX_DECL, d + 1) >= 0 || pars.indexOf(BATCHING_MATRIX_FN, f + 1) >= 0) return null;
+  // The function ends at the first tab-indented closing brace line after it
+  // (three's chunk formatting; batched_runs.js finds getIndirectIndex's end the
+  // same way).
+  const end = pars.indexOf("\n\t}\n", f);
+  if (end < 0) return null;
+  const fn = pars.slice(f, end + "\n\t}".length);
+  if (!fn.includes("batchingTexture") || /gl_DrawID|batchingIdTexture|getIndirectIndex|hbBatchSlot/.test(fn)) {
+    return null;
+  }
+  return BATCHING_TEX_DECL + "\n" + fn;
+}
+
+/**
+ * ?terrainNoDrawId — `src` with every `#include <x>` replaced by `chunks[x]`,
+ * recursively (three's resolveIncludes, for the guard only: the material keeps
+ * its unexpanded source). Pure. null when a chunk is missing — three would throw
+ * at compile time, and the guard cannot vouch for what it cannot read.
+ */
+function _expandIncludes(src, chunks, depth = 0) {
+  if (!chunks || depth > 8) return null;
+  let missing = false;
+  const out = src.replace(GLSL_INCLUDE_RE, (_, name) => {
+    const c = chunks[name];
+    const r = typeof c === "string" ? _expandIncludes(c, chunks, depth + 1) : null;
+    if (r == null) missing = true;
+    return r ?? "";
+  });
+  return missing ? null : out;
+}
+
+/**
+ * `noDrawId` (optional): `{ batchingGlsl }` from _batchingMatrixGlsl derives the
+ * ?terrainNoDrawId program (steps 1 and 2 differ, every other step is shared).
+ * Absent/null: today's program, byte-identical to before the option existed.
+ */
+function _buildBatchedGlsl(vertexGlsl, fragmentGlsl, noDrawId = null) {
+  const iid = !!(noDrawId && typeof noDrawId.batchingGlsl === "string");
   // --- vertex stage ---
   let v = vertexGlsl;
   // 1. Declarations: slot attribute + varying + the three.js batching chunk
   //    (getBatchingMatrix / getIndirectIndex; USE_BATCHING is auto-defined for
   //    any material rendered on a BatchedMesh, and the renderer binds
   //    batchingTexture / batchingIdTexture itself).
+  //    ?terrainNoDrawId: the per-vertex instance id and ONLY the matrix half of
+  //    the chunk (batchingTexture + getBatchingMatrix) instead of the include.
   v = _replaceOnce(
     v,
     "in float vertexHue;",
@@ -209,7 +363,17 @@ function _buildBatchedGlsl(vertexGlsl, fragmentGlsl) {
       "// comes from the standard three.js batching matrix below.",
       "in float aLbSlot;",
       "flat out float vLbSlot;",
-      "#include <batching_pars_vertex>",
+      ...(iid
+        ? [
+          // (No draw-ID builtin token in these comments either: the derived
+          // stage must not name it anywhere — _resolveNoDrawId checks.)
+          "// ?terrainNoDrawId — this LB's BatchedMesh instance id, per vertex",
+          "// (terrain_batch.js writes it at absorb): the matrix lookup needs no",
+          "// draw index, so ANGLE's multi-draw loop sets no draw-ID uniform.",
+          "in float aLbIid;",
+          noDrawId.batchingGlsl,
+        ]
+        : ["#include <batching_pars_vertex>"]),
     ].join("\n"),
     "vertex decls",
   );
@@ -219,7 +383,7 @@ function _buildBatchedGlsl(vertexGlsl, fragmentGlsl) {
     v,
     "  vec2 worldXy = uLbOriginXy + position.xy;",
     [
-      "  mat4 lbBatchMat = getBatchingMatrix( getIndirectIndex( gl_DrawID ) );",
+      iid ? LB_MATRIX_IID : LB_MATRIX_DRAWID,
       "  vLbSlot = aLbSlot;",
       "  vec2 worldXy = (lbBatchMat * vec4(position, 1.0)).xy;",
     ].join("\n"),
@@ -525,8 +689,51 @@ function _buildBatchMaterial(srcMaterial, glsl, state, opts, extras) {
 // State creation (first absorb)
 // ---------------------------------------------------------------------------
 
+// ?terrainNoDrawId: which program this session's batch got, and why not the
+// requested one. Its own one-shot warning: `_warnOnce`'s "falling back to per-LB
+// terrain draws" would be false here (the batch still batches, with gl_DrawID).
+function _resolveNoDrawId(extras) {
+  if (!terrainNoDrawIdEnabled()) return { glsl: null, fallback: null };
+  let chunks;
+  try {
+    chunks = THREE && THREE.ShaderChunk ? THREE.ShaderChunk : undefined;
+  } catch (_) {
+    chunks = undefined;
+  }
+  let fallback = null;
+  let glsl = null;
+  const batchingGlsl = _batchingMatrixGlsl(chunks ? chunks.batching_pars_vertex : undefined);
+  if (!batchingGlsl) {
+    fallback = "three's batching_pars_vertex did not match (getBatchingMatrix / batchingTexture anchors)";
+  } else {
+    glsl = _buildBatchedGlsl(extras.vertexGlsl, extras.fragmentGlsl, { batchingGlsl });
+    // null = a shared anchor drifted: today's derivation fails at the same
+    // anchor and disables the batch with its own warning — no extra one here.
+    if (glsl) {
+      // Scanned with its #includes expanded (GLSL_INCLUDE_RE note). Text inside
+      // an #ifdef that is off (color_vertex without batching colours) also
+      // counts: a needless fallback, never a broken program.
+      const expanded = _expandIncludes(glsl.vertexShader, chunks);
+      const hit = expanded == null ? null : DRAW_INDEX_RE.exec(expanded);
+      if (expanded == null) {
+        fallback = "a #include in the derived vertex stage did not resolve against THREE.ShaderChunk";
+      } else if (hit) {
+        fallback = `the derived vertex stage still names ${hit[0]} (#includes expanded)`;
+      }
+      if (fallback) glsl = null;
+    }
+  }
+  if (fallback && !_warned.has("noDrawId")) {
+    _warned.add("noDrawId");
+    // eslint-disable-next-line no-console
+    console.warn(`[terrain_batch] ?terrainNoDrawId: ${fallback} — the batch keeps the gl_DrawID program`);
+  }
+  return { glsl, fallback };
+}
+
 function _createState(scene3d, lbMesh, opts, extras) {
-  const glsl = _buildBatchedGlsl(extras.vertexGlsl, extras.fragmentGlsl);
+  const nd = _resolveNoDrawId(extras);
+  const glsl = nd.glsl || _buildBatchedGlsl(extras.vertexGlsl, extras.fragmentGlsl);
   if (!glsl) return null; // anchors drifted — warned already
 
   // 2026-10-07 — 9 (pre-wave) or 18 (terrain shading bevel); see VT_W note.
@@ -556,6 +763,12 @@ function _createState(scene3d, lbMesh, opts, extras) {
     // the attribute (factor-1 fallback after a failed subdivide) present a
     // zero stand-in, which is exactly "not rounded".
     wantsRoundZ: extras.vertexGlsl.includes("aRoundZ"),
+    // ?terrainNoDrawId (2026-10-22): the program reads the matrix through the
+    // per-vertex `aLbIid`, so every absorb must write it. Session-constant:
+    // decided once with the program, before the first geometry fixes the
+    // attribute layout.
+    noDrawId: !!nd.glsl,
+    noDrawIdFallback: nd.fallback,
     freeSlots: [],
     nextSlot: 0,
     byLb: new Map(),     // lbKey -> { gid, iid, slot }
@@ -595,6 +808,13 @@ function _createState(scene3d, lbMesh, opts, extras) {
     unparkReabsorbs: 0,
     unparkFallbacks: 0,
     slotSteals: 0,
+    // optimize() compactions that ran (both programs; the no-gl_DrawID smoke
+    // and suite use it to prove aLbIid moved with its vertices).
+    optimizes: 0,
+    // ?terrainNoDrawId: aLbIid ranges written (one per absorb) and refused
+    // (that LB fell back to its per-LB draw).
+    iidWrites: 0,
+    iidWriteFails: 0,
   };
 
   state.material = _buildBatchMaterial(lbMesh.material, glsl, state, opts, extras);
@@ -692,7 +912,17 @@ function _createState(scene3d, lbMesh, opts, extras) {
           unparkReabsorbs: state.unparkReabsorbs,
           unparkFallbacks: state.unparkFallbacks,
           slotSteals: state.slotSteals,
+          optimizes: state.optimizes,
+          // ?terrainNoDrawId (2026-10-22). `noDrawId` is the LIVE program;
+          // requested-but-false means `noDrawIdFallback` says why.
+          noDrawId: state.noDrawId,
+          noDrawIdRequested: terrainNoDrawIdEnabled(),
+          noDrawIdFallback: state.noDrawIdFallback,
+          iidWrites: state.iidWrites,
+          iidWriteFails: state.iidWriteFails,
         }),
+        // O(resident vertices) audit, on demand only (census scripts, smoke).
+        verifyIids: () => _verifyIids(state),
       };
     }
   } catch (_) { /* diag only */ }
@@ -700,9 +930,79 @@ function _createState(scene3d, lbMesh, opts, extras) {
   // eslint-disable-next-line no-console
   console.log(
     `[terrain_batch] cross-LB terrain BatchedMesh created (slots=${TB_SLOT_CAPACITY}, ` +
-    `verts=${state.maxVerts}, texMerge=${state.mergeArray ? "on" : "off"})`,
+    `verts=${state.maxVerts}, texMerge=${state.mergeArray ? "on" : "off"}` +
+    `${state.noDrawId ? ", noDrawId=on" : ""})`,
   );
   return state;
+}
+
+// ---------------------------------------------------------------------------
+// ?terrainNoDrawId — the per-vertex instance id (see the header).
+// ---------------------------------------------------------------------------
+
+const _rangeScratch = {};
+
+/**
+ * Write `iid` over geometry `gid`'s reserved vertex range in the BATCH's own
+ * `aLbIid` attribute (the shadow geometry only carried a zero stand-in: the id
+ * is assigned by addInstance, after addGeometry copied the data). The attribute
+ * is looked up fresh every time — setGeometrySize replaces `bm.geometry`. The
+ * update range overlaps the one setGeometryAt just queued, and three r184 merges
+ * overlapping ranges into one bufferSubData (WebGLAttributes.updateBuffer).
+ * Returns false (and counts it) on anything unexpected; the caller then drops
+ * the row and the LB draws per-LB.
+ */
+function _writeLbIid(state, gid, iid) {
+  try {
+    const attr = state.bm.geometry.getAttribute("aLbIid");
+    const r = state.bm.getGeometryRangeAt(gid, _rangeScratch);
+    const start = r.vertexStart;
+    const n = r.reservedVertexCount;
+    if (
+      !attr || attr.itemSize !== 1 || !Number.isInteger(iid) || iid < 0 || iid >= TB_SLOT_CAPACITY
+      || !(start >= 0) || !(n > 0) || start + n > attr.count
+    ) {
+      state.iidWriteFails += 1;
+      return false;
+    }
+    attr.array.fill(iid, start, start + n);
+    attr.addUpdateRange(start, n);
+    attr.needsUpdate = true;
+    state.iidWrites += 1;
+    return true;
+  } catch (_) {
+    state.iidWriteFails += 1;
+    return false;
+  }
+}
+
+/**
+ * Diag audit (`window.__terrainBatch.verifyIids()`): for every live row, the
+ * instance still points at the row's geometry and every vertex of that geometry
+ * carries the row's instance id. `slotNeIid` counts rows whose layer slot and
+ * instance id differ — the case a slot-for-id shortcut would get wrong.
+ */
+function _verifyIids(state) {
+  const out = { enabled: !!state.noDrawId, rows: state.byLb.size, checked: 0, bad: 0, slotNeIid: 0 };
+  if (!state.noDrawId) return out;
+  let attr = null;
+  try { attr = state.bm.geometry.getAttribute("aLbIid"); } catch (_) { attr = null; }
+  for (const e of state.byLb.values()) {
+    out.checked += 1;
+    if (e.slot !== e.iid) out.slotNeIid += 1;
+    let ok = !!attr;
+    try {
+      if (ok && state.bm.getGeometryIdAt(e.iid) !== e.gid) ok = false;
+      const r = ok ? state.bm.getGeometryRangeAt(e.gid, {}) : null;
+      for (let i = r ? r.vertexStart : 0, end = r ? r.vertexStart + r.vertexCount : 0; ok && i < end; i += 1) {
+        if (attr.array[i] !== e.iid) ok = false;
+      }
+    } catch (_) {
+      ok = false;
+    }
+    if (!ok) out.bad += 1;
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -915,6 +1215,13 @@ function _absorbMeshIntoState(state, lbMesh) {
     "aLbSlot",
     new THREE.BufferAttribute(new Float32Array(vcount).fill(slot), 1, false),
   );
+  if (state.noDrawId) {
+    // ?terrainNoDrawId: a zero stand-in (read-only source, shared cache like
+    // aRoundZ's) so the attribute exists for addGeometry's layout check; the
+    // real instance id is written into the batch's copy once addInstance has
+    // assigned it (below).
+    shadow.setAttribute("aLbIid", _zeroFloatAttr(vcount));
+  }
   shadow.setIndex(srcGeom.index);
   // LB-local bounds for the per-instance frustum cull (instance matrix
   // supplies the world placement). The adapter always computes one.
@@ -929,8 +1236,15 @@ function _absorbMeshIntoState(state, lbMesh) {
     _ensureCapacity(state, vcount, srcGeom.index.count);
     gid = state.bm.addGeometry(shadow);
     iid = state.bm.addInstance(gid);
+    // ?terrainNoDrawId: without its instance id this LB's vertices would read
+    // another row's matrix — never draw it like that; drop the row instead.
+    if (state.noDrawId && !_writeLbIid(state, gid, iid)) {
+      throw new Error("aLbIid write failed");
+    }
   } catch (e) {
-    if (gid != null && iid == null) {
+    // deleteGeometry also removes the instance (three r184), so this undoes a
+    // half-made row whether addInstance or the aLbIid write was the failure.
+    if (gid != null) {
       try { state.bm.deleteGeometry(gid); } catch (_) { /* fail-soft */ }
     }
     releaseSlot();
@@ -1112,8 +1426,9 @@ export function unparkTerrainBatchForLb(lbKey, meshes) {
 /**
  * Lazy buffer compaction (mirrors tickStatAtlasOptimize): once >30% of the
  * appended vertex extent is dead (deleteGeometry never reclaims space),
- * optimize() compacts in place — geometry ids stay valid and the aLbSlot
- * attribute travels with its vertices. Driven from loop.js's ~10 Hz PVS tick,
+ * optimize() compacts in place — geometry and instance ids stay valid and the
+ * aLbSlot attribute (and ?terrainNoDrawId's aLbIid) travels with its vertices.
+ * Driven from loop.js's ~10 Hz PVS tick,
  * NOT per-frame.
  */
 export function tickTerrainBatchOptimize() {
@@ -1125,6 +1440,7 @@ export function tickTerrainBatchOptimize() {
       state.bm.optimize();
       state.usedVerts -= state.deadVerts;
       state.deadVerts = 0;
+      state.optimizes += 1;
     } catch (_) { /* retry after the next eviction marks dirty again */ }
   }
 }

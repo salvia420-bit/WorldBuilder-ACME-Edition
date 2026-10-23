@@ -1,0 +1,105 @@
+<!doctype html><html><body><canvas id="c" width="128" height="128"></canvas>
+<script type="importmap">{ "imports": { "three": "/three/three.module.js", "three/addons/": "/three-addons/" } }</script>
+<script type="module">
+// P1a (`?atlasGeomDedup`) pixel proof. The REAL cross-LB statics atlas
+// (scene3d/static_atlas.js: makeArrayMaterial, the DataArrayTexture layers,
+// aLayer, the nra array, the feed) fed the same placements in both arms, drawn
+// through the REAL batched_runs.js (patched chunks + renderBufferDirect wrap).
+// Default arm: repeated placements share a gid, so batchedRuns draws the
+// buckets as per-geometry instanced runs (multiDrawArraysInstancedWEBGL —
+// the atlas batch is non-indexed). `?atlasGeomDedup=off`: one gid per
+// placement, batchedRuns counts the buckets noGain and three draws one range
+// per placement. The two frames must be identical.
+import * as THREE from "three";
+import { installBatchedRunsChunks, installBatchedRuns, getBatchedRunsStats } from "/app/scene3d/batched_runs.js";
+import { addSingletonsToCrossLbAtlas, atlasGeomDedupEnabled } from "/app/scene3d/static_atlas.js";
+const out = { errors: [] };
+const origErr = console.error; console.error = (...a) => { out.errors.push(a.map(String).join(" ").slice(0, 400)); origErr(...a); };
+try {
+  out.chunks = installBatchedRunsChunks(THREE);
+  const renderer = new THREE.WebGLRenderer({ canvas: document.getElementById("c") });
+  renderer.debug.checkShaderErrors = true;
+  out.wrapper = installBatchedRuns(renderer);
+  out.multiDraw = renderer.extensions.has("WEBGL_multi_draw");
+  out.geomDedup = atlasGeomDedupEnabled();
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x101418);
+  const cam = new THREE.PerspectiveCamera(50, 1, 0.1, 100);
+  cam.position.set(0, 0, 16);
+  cam.lookAt(0, 0, 0);
+  scene.add(new THREE.AmbientLight(0xffffff, 0.5));
+  const sun = new THREE.DirectionalLight(0xffffff, 1.4);
+  sun.position.set(3, 5, 8);
+  scene.add(sun);
+  const staticsGroup = new THREE.Group();
+  scene.add(staticsGroup);
+  const scene3d = { staticsGroup };
+
+  // 16x16 RGBA8 surfaces: three opaque checkers and one with alpha holes
+  // (the ?clipMapOpaque alpha-tested bucket: transparent=false, alphaTest>0).
+  function tex(seed, holes) {
+    const d = new Uint8Array(16 * 16 * 4);
+    for (let y = 0; y < 16; y++) for (let x = 0; x < 16; x++) {
+      const o = (y * 16 + x) * 4, on = ((x >> 2) + (y >> 2)) & 1;
+      d[o] = on ? (seed * 97) & 255 : 40;
+      d[o + 1] = on ? (seed * 57 + 80) & 255 : 200 - seed * 30;
+      d[o + 2] = on ? (seed * 31 + 120) & 255 : 60 + seed * 40;
+      d[o + 3] = holes && ((x + y) & 3) === 0 ? 0 : 255;
+    }
+    const t = new THREE.DataTexture(d, 16, 16, THREE.RGBAFormat);
+    t.needsUpdate = true;
+    return t;
+  }
+  const T = [tex(1), tex(2), tex(3)];
+  const TH = tex(4, true);
+  // FRESH geometry objects per placement (the per-LB decode the atlas sees).
+  const box = () => new THREE.BoxGeometry(1, 1, 1);
+  const cyl = () => new THREE.CylinderGeometry(0.45, 0.45, 1.1, 12);
+  const boxBent = () => { const g = new THREE.BoxGeometry(1, 1, 1); g.attributes.position.array[0] += 0.2; return g; };
+  const quad = () => new THREE.PlaneGeometry(1.2, 1.2);
+  // [geometry factory, texture, alpha-tested?] per grid cell; 5 x 4 grid.
+  const cells = [
+    [box, 0], [box, 0], [cyl, 1], [box, 1], [cyl, 1],
+    [box, 0], [cyl, 2], [box, 0], [boxBent, 0], [cyl, 1],
+    [quad, 3, true], [quad, 3, true], [box, 2], [quad, 3, true], [cyl, 2],
+    [box, 1], [box, 0], [cyl, 1], [quad, 3, true], [box, 2],
+  ];
+  const nodes = [];
+  cells.forEach(([geo, ti, holes], i) => {
+    const mat = new THREE.MeshStandardMaterial({ map: holes ? TH : T[ti] });
+    if (holes) mat.alphaTest = 0.5;
+    const m = new THREE.Mesh(geo(), mat);
+    const cx = i % 5, cy = Math.floor(i / 5);
+    m.position.set((cx - 2) * 2.4, (1.5 - cy) * 2.4, 0);
+    m.rotation.set(0.5 + 0.07 * i, 0.6 + 0.11 * i, 0.05 * i);
+    m.userData.landblockId = (((0x80 + cy) << 24) | ((0x40 + (cx & 1)) << 16)) >>> 0; // several LBs
+    nodes.push(m);
+  });
+  const { passthrough } = addSingletonsToCrossLbAtlas(nodes, scene3d);
+  out.passthrough = passthrough.length;
+  for (const n of passthrough) staticsGroup.add(n);
+  const t0 = performance.now();
+  renderer.render(scene, cam);
+  renderer.render(scene, cam); // second frame: the cached run layout
+  out.renderMs = Math.round(performance.now() - t0);
+  const gl = renderer.getContext();
+  out.glError = gl.getError();
+  out.programs = renderer.info.programs.map((p) => ({ name: p.name, linked: gl.getProgramParameter(p.program, gl.LINK_STATUS) }));
+  const all = new Uint8Array(128 * 128 * 4); gl.readPixels(0, 0, 128, 128, gl.RGBA, gl.UNSIGNED_BYTE, all);
+  out.frame = Array.from(all);
+  let lit = 0; for (let i = 0; i < all.length; i += 4) if (Math.abs(all[i] - 0x10) + Math.abs(all[i + 1] - 0x14) + Math.abs(all[i + 2] - 0x18) > 30) lit++;
+  out.litPixels = lit;
+  out.stats = getBatchedRunsStats();
+  const a = window.__atlasStats();
+  out.atlas = { geomDedup: a.geomDedup, geomAdds: a.geomAdds, geomDedupHits: a.geomDedupHits,
+    liveGeometries: a.liveGeometries, liveInstances: a.liveInstances, dedupBuckets: a.dedupBuckets,
+    buckets: a.bucketCount, atlased: a.atlased, collisions: a.geomDedupCollisions };
+  out.renderer = gl.getParameter(gl.getExtension("WEBGL_debug_renderer_info")?.UNMASKED_RENDERER_WEBGL ?? gl.RENDERER);
+} catch (e) {
+  out.errors.push("THROW " + String(e && e.stack || e).slice(0, 600));
+  out.frame = out.frame || [];
+  out.stats = out.stats || { draws: 0, instances: 0, runs: 0, noGain: 0 };
+  out.programs = out.programs || [];
+}
+window.__smoke = out;
+</script></body></html>

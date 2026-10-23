@@ -27,6 +27,7 @@ import {
   patchBatchingChunks, installBatchedRunsChunks, buildRuns, makeRunBuffers, RUN_MARKER,
   installBatchedRuns, uninstallBatchedRuns, markBatchedRuns, isBatchedRunsMarked, prepareRunDraw,
   getBatchedRunsStats, __setBatchedRunsOffForTest, __setBatchedRunsChunksForTest, __pendingForTest,
+  __setBatchedRunsSortedOffForTest,
 } from "../scene3d/batched_runs.js";
 
 let failed = 0, passed = 0;
@@ -198,7 +199,11 @@ function makeBucket(placements) {
     const src = (await import("node:fs")).readFileSync(new URL("../scene3d/batched_runs.js", import.meta.url), "utf8");
     check("wrapper: installs regardless of the flag (the off arm still counts ranges)",
       !/installBatchedRuns\(renderer[^)]*\) \{\s*if \(\(!FLAG/.test(src));
-    check("wrapper: regrouping still requires the patched chunks", /!ctl\.off && _chunksPatched && object\.sortObjects === false/.test(src));
+    check("wrapper: regrouping still requires the patched chunks", /!ctl\.off && _chunksPatched && \(object\._multiDrawCount \| 0\) > 1/.test(src));
+    // 2026-10-22: a sorted mesh is admitted only through the order-keeping builder.
+    check("wrapper: a sorted mesh needs ?batchedRunsSorted, and gets the consecutive builder",
+      /so === false \|\| \(sorted && FLAG_SORTED && !ctl\.sortedOff\)/.test(src)
+        && /sorted\s*\?\s*buildConsecutiveRuns\(/.test(src));
   }
   const bm = makeBucket([["A", 0], ["B", 2], ["A", 4], ["A", -4], ["B", -2]]);
   const canon = bm._indirectTexture;
@@ -261,8 +266,24 @@ function makeBucket(placements) {
   check("step-aside: live seam off -> canonical", ext.calls.at(-1).kind === "elems" && r.seenTex.at(-1) === canon);
   __setBatchedRunsOffForTest(false);
   bm.sortObjects = true;
+  __setBatchedRunsSortedOffForTest(true);
   r.renderBufferDirect(cam, null, bm.geometry, bm.material, bm, null);
-  check("step-aside: a sorted bucket -> canonical", ext.calls.at(-1).kind === "elems");
+  check("step-aside: a sorted bucket with ?batchedRunsSorted off -> canonical", ext.calls.at(-1).kind === "elems");
+  __setBatchedRunsSortedOffForTest(false);
+  // 2026-10-22: with it on (the default), the sorted bucket draws CONSECUTIVE runs
+  // over the same canonical list — the GPU sequence is three's, entry for entry
+  // (tests/batched_runs_sorted.test.mjs has the full suite).
+  r.renderBufferDirect(cam, null, bm.geometry, bm.material, bm, null);
+  {
+    const cs = ext.calls.at(-1);
+    const seq = [];
+    const d = r.seenTex.at(-1).image.data;
+    for (let q = 0; q < cs.n; q++) for (let i = 0; i < cs.inst[q]; i++) seq.push(`${cs.offsets[q]}:${cs.counts[q]}:${d[d[1 + q] + i]}`);
+    const want = [];
+    for (let k = 0; k < bm._multiDrawCount; k++) want.push(`${bm._multiDrawStarts[k]}:${bm._multiDrawCounts[k]}:${canon.image.data[k]}`);
+    check("sorted: an opted-in sorted bucket draws consecutive runs in three's exact order",
+      cs.kind === "inst" && cs.n < bm._multiDrawCount && seq.join() === want.join(), JSON.stringify(cs));
+  }
   bm.sortObjects = false;
   __setBatchedRunsChunksForTest(false);
   r.renderBufferDirect(cam, null, bm.geometry, bm.material, bm, null);

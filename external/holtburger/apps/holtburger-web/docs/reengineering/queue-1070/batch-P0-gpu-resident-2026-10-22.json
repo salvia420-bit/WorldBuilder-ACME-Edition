@@ -1,0 +1,361 @@
+{
+ "schema": "hb-1070-queue-v1",
+ "batch": "P0-GPU-RESIDENT",
+ "created": "2026-10-22",
+ "owner": "owner (OWNER-RUN: queued for the owner's own 1070 session; never self-initiated by an agent)",
+ "preparedBy": "P0 preparation agent, 2026-10-22 (queue prep + tooling only; nothing here has run)",
+ "source": "apps/holtburger-web/docs/HANDOFF-gpu-resident-statics-2026-10-22.md §7 P0 (the decision rules below are copied verbatim from it, BEFORE the run)",
+ "sessionRules": "vistest-preamble-v1",
+ "sessionRulesInline": [
+  "Inherit vistest-preamble-v1 (batch-A file) and the batch-D learnings. Read memory/fleet-runbooks.md before driving the 1070 (binding; not reproduced here).",
+  "MODE T (unattended test): the test Chrome is OFF-SCREEN and MUTED — box/hbprobe-launch.bat starts it with --window-position=-32000,-32000 --mute-audio. Verify off-screen + muted before any login; no sound may ever reach the 1070's user; never OS-mute the box.",
+  "OWNER-RUN: this session runs when the owner asks for it (memory no-agent-eyetests). The launchers refuse to start Chrome while a person is using the box (box/hbgate.ps1 -> gate.log); if someone is on the box, stop.",
+  "Kill the test Chrome only by its D:\\Temp\\hbbench\\<profile> user-data-dir (box/hbbench-kill.ps1 via `hbsess.mjs kill`); never taskkill /IM chrome.exe.",
+  "Tunnel, all three forwards: ssh -o ExitOnForwardFailure=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=4 -fN -L 9333:127.0.0.1:9333 -R 8765:127.0.0.1:8765 -R 8080:127.0.0.1:8080 young@100.127.215.75 (laptop: serve.py :8765 with --check green, holtburger-wsbridge :8080, ACE :9000/9001).",
+  "?nosw=1 on EVERY URL (hbsess.mjs adds it). A FRESH profile per arm and per rep: every `hbsess.mjs boot` writes a new D:\\Temp\\hbbench\\hbb-sess-<ms> profile, so one boot = one arm-rep; never reuse a booted page for a second arm.",
+  "Uncapped frames: before the first boot, `ssh young@100.127.215.75 \"echo 1> D:\\Temp\\hbbench\\uncapped.txt\"` (the launchers then add --disable-frame-rate-limit --disable-gpu-vsync; deploy the current box/*.bat to D:\\Temp\\hbbench\\ first). Every URL also carries ?targetFps=0 (lib/bench-url.mjs); reads.json env.frameCap.fps must be 0.",
+  "Release wasm only: a dev wasm (name / .debug_* custom sections, harness/lib/wasm_profile.mjs) invalidates every timing in the session.",
+  "Single-login accounts: after `hbsess.mjs kill`, wait >= 65 s before the next boot on the same account (ACE reaps an un-goodbyed session at 60 s; harness/lib/boot.mjs INTER_ARM_GAP_MS), or alternate two bot accounts.",
+  "Reject, never average (PR-10): an arm-rep whose reads.json shows settle.quiet=false for a town, a non-empty tunnelHeld for a town (a census held while the portal tunnel ran: tunnel frames, not the world), env.gpu without '1070', or env.frameCap.fps != 0 is re-run, not averaged in."
+ ],
+ "accounts": {
+  "fact": "agentp07..agentp10 are accessLevel 4 (Developer — @teleloc works) with live characters (account ids 421-424): read-only ace_auth / ace_shard query 2026-10-22 [M]. tailnet1 is the owner's own Developer account.",
+  "driverGap": "hbsess.mjs, hbprobe.mjs, hbbench.mjs hardcode account=tailnet1 (URL + the ACE-log account-free wait), and an appended `account=` in --flags loses to the first copy (URLSearchParams.get). So as written this recipe logs in as tailnet1: acceptable ONLY because the session is owner-run (batch-D rule: tailnet1 only for @tele* admin needs, coordinated with the owner). To run it on a bot instead, hbsess.mjs needs an --account option (requested of the orchestrator; not applied by the prep agent, whose file scope excluded existing scripts)."
+ },
+ "urlBase": "http://127.0.0.1:8765/apps/holtburger-web/index.html",
+ "urlNotes": "Every URL is what `hbsess.mjs boot --quality ultra --flags 'renderDiag=on<arm>'` builds (hbsess.mjs boot + lib/bench-url.mjs): autoLogin/account/password/autoSpawn=first, nosw=1, camDebug=on (installs window.__cam, needed for the fixed orbit), adaptiveRes=off, quality=ultra, renderDiag=on (window.__diag.render incl. batchedCalls / subDraws / issuedSubDraws — its per-frame scene traversal is the same in every arm), the arm's flags, targetFps=0 last. NOT agent=1 on the 1070 (agent=1 forces ?netWorker on, a different main-thread transport from what a person runs; the laptop twin adds it because it changes no draw structure). NOT wireframe (swaps every material).",
+ "suggestedOrder": [
+  "P0-LAPTOP-TWIN (laptop, before the session; optional but cheap)",
+  "P0 rep 1: arm1-bare, arm2-batchedRuns-off, arm3-drawPools-chain",
+  "P0 rep 2: arm2, arm3, arm1",
+  "P0 rep 3: arm3, arm1, arm2",
+  "Then P0-FLAGS-2026-10-22 (its own sessions field: session A = the P0 rotation above + arm3b + arm4; session B = arm5, arm6 + tier 2)"
+ ],
+ "items": [
+  {
+   "id": "P0-LAPTOP-TWIN",
+   "kind": "probe",
+   "stage": "GPU-resident statics P0 (laptop, NOT the 1070)",
+   "gate": "pre-session structure read: F4 settled, F2 sized, arm 3 boots on HEAD — before any 1070 time is spent",
+   "title": "SwiftShader structural twin of P0 arms 1 and 3 (counts only, no timings)",
+   "script": "scripts/perf-worker/laptop-structure-probe.mjs (runs scripts/perf-worker/structure-p0.eval.js, the same page-side read the 1070 arms run)",
+   "boxMode": "laptop, one headless Chromium tab, inside capped-build (the script refuses otherwise) and the shared heavy-job lock; one heavy job at a time, >= 2.5 GB available. Never while the orchestrator runs the JS gate or a build.",
+   "recipe": [
+    "capped-build node scripts/perf-worker/laptop-structure-probe.mjs --town both --label bare",
+    "capped-build node scripts/perf-worker/laptop-structure-probe.mjs --town both --label batchedRuns-off --flags 'batchedRuns=off'",
+    "capped-build node scripts/perf-worker/laptop-structure-probe.mjs --town both --label drawPools-chain --flags 'packSource=on&geomBundles=on&texCompressedOnly=on&slotGrid=on&frameWork=on&drawPools=on&negFace=off'",
+    "Optional: add --path for the fixed @teleloc path (a lite census per stop) and --detail for per-bucket rows. Default account agentp10 (a bot; --account to change).",
+    "Optional, cheap structural reps of P0-FLAGS arms (counts only): --label atlasGeomDedup-off --flags 'atlasGeomDedup=off' · --label staticEarlyOut --flags 'staticEarlyOut=on' · --label statGeomDedup --flags 'statGeomDedup=on'."
+   ],
+   "expects": "Per town: census.summary.subDrawsPerFrame / issuedPerFrame (the per-frame multidraw ranges three asks for vs the ranges sent), f4 (unsorted share of the chunk + atlas slots — settles F4), f2 (atlas visible placements per distinct range; the bare URL has ?atlasGeomDedup ON since 2026-10-22, so > 1 with census.atlas.geomDedupHits > 0 means P1a is live, and F2's own ~1.0 needs --flags 'atlasGeomDedup=off'), batched.byKind (sortObjects / perObjectFrustumCulled / frustumCulled / earlyOut-eligible nodes per kind), census.pools on arm 3. Exit 0 ok, 1 failed, 2 refused, 3 a town did not settle or a census was held under the portal tunnel (res.tunnelHeld). The out file is rewritten after each town.",
+   "result": null
+  },
+  {
+   "id": "P0",
+   "kind": "bench",
+   "stage": "GPU-resident statics P0 — Measure",
+   "gate": "decides P1 / L1 (arm 2 rule) and the GATE-POOLS precondition for P3 (arm 3 rule)",
+   "title": "bare / &batchedRuns=off / drawPools chain — Holtburg + Linvak Tukal at ultra, settled AND on a fixed @teleloc path, fresh profile per arm",
+   "boxMode": "1070, MODE T: off-screen (--window-position=-32000,-32000) + muted (--mute-audio), fresh profile per arm-rep (each hbsess boot), CDP :9333 over the tunnel. OWNER-RUN.",
+   "prereqs": [
+    "Release wasm on the laptop (pkg/holtburger_web_bg.wasm with no name/.debug sections); serve.py --check green against the served dist (it carries packs: handoff F8).",
+    "box/*.bat deployed to D:\\Temp\\hbbench\\ and D:\\Temp\\hbbench\\uncapped.txt present (uncapped launch).",
+    "Arm 3 only: `?drawPools` needs a pack dist with page dims for a pooled world; on today's dist 985 page-declared rsIds are served at pre-resample dims (the tex-xu7 catalog was never republished; docs/drawpools-blockers-2026-10-22.md §2.3) and 409 legacy-lane rows have no full tier, so the strict arm retires many members offPage; also read __diag.pools().producer.{texRefPageKeyed,texRefBitClear,texRefDimsWillMove}, classPages.refused and producer.heldOutByReason / heldOutRetired / reOfferAdmitted and `negFace=off` is required or every model is `missing` (F7a). Arm 3 measures the chain AS IT BOOTS ON HEAD; record __diag.pools() refusals with the numbers.",
+    "Optional, recommended: P0-LAPTOP-TWIN first (does arm 3 boot at all? what do the structural counts look like?)."
+   ],
+   "arms": [
+    {
+     "arm": "arm1-bare",
+     "flags": "",
+     "url": "http://127.0.0.1:8765/apps/holtburger-web/index.html?autoLogin=1&account=tailnet1&password=tailnet1&autoSpawn=first&nosw=1&camDebug=on&adaptiveRes=off&quality=ultra&renderDiag=on&targetFps=0",
+     "handoffVerbatim": [
+      "1. **Bare URL.**",
+      "- Reads: `__diag.render` (`renderDiag=on`), `__batchedRuns.stats` + `.frame()`, `__statBatchXStats()` (sorted vs unsorted split → settles F4), `__atlasStats()`.",
+      "- Plus one CPU profile, and one `gputrace.mjs` trace read with `gpu_thread_split.py`."
+     ]
+    },
+    {
+     "arm": "arm2-batchedRuns-off",
+     "flags": "&batchedRuns=off",
+     "url": "http://127.0.0.1:8765/apps/holtburger-web/index.html?autoLogin=1&account=tailnet1&password=tailnet1&autoSpawn=first&nosw=1&camDebug=on&adaptiveRes=off&quality=ultra&renderDiag=on&batchedRuns=off&targetFps=0",
+     "handoffVerbatim": [
+      "2. **`&batchedRuns=off`.** This is the per-range ANGLE term, and is arm 2 of the 10-19 fps review.",
+      "- **Rule:** if CrGpuMain WebGL ms/frame (on vs off) moves by less than the arm's own rep spread, the per-range term is not a lever. Stop P1 and L1, and re-plan."
+     ]
+    },
+    {
+     "arm": "arm3-drawPools-chain",
+     "flags": "&packSource=on&geomBundles=on&texCompressedOnly=on&slotGrid=on&frameWork=on&drawPools=on&negFace=off",
+     "url": "http://127.0.0.1:8765/apps/holtburger-web/index.html?autoLogin=1&account=tailnet1&password=tailnet1&autoSpawn=first&nosw=1&camDebug=on&adaptiveRes=off&quality=ultra&renderDiag=on&packSource=on&geomBundles=on&texCompressedOnly=on&slotGrid=on&frameWork=on&drawPools=on&negFace=off&targetFps=0",
+     "handoffVerbatim": [
+      "3. **The drawPools chain armed:** `&packSource=on&geomBundles=on&texCompressedOnly=on&slotGrid=on&frameWork=on&drawPools=on&negFace=off`.",
+      "- Does it boot on HEAD?",
+      "- Read `__diag.pools()` (pools, classes, `mutationsThisFrame` = 0 parked), `subDraws` / `issuedSubDraws`, CrGpuMain WebGL ms, renderCPU.",
+      "- `negFace=off` changes the look (back faces); this arm is for measurement only.",
+      "- **Rule:** if `issuedSubDraws` or CrGpuMain WebGL ms rises against arm 1, F1 is confirmed and P3 must land L1 before any GATE-POOLS run."
+     ]
+    }
+   ],
+   "reps": "3 per arm (2 minimum): arm 2's rule compares against the arm's own rep spread, so one rep cannot decide it. Rotate the arm order each rep (suggestedOrder).",
+   "towns": {
+    "holtburg": {
+     "settle": "@teleloc 0xA9B40001 96 96 80",
+     "settleSource": "the HOLT bench point of hbprobe / hbsess / flag-bench / hbbench (the 10-06 and 10-19 numbers' pose); hbsess boot lands here",
+     "orbit": "__cam.orbit around the landed pose (z + 1.5): dist 70, az 45, el 22 — hbsess.mjs __hbOrbit",
+     "path": [
+      "@teleloc 0xA9B40019 84 7.1 94",
+      "@teleloc 0xA9B4001E 74.5 138.4 66.5",
+      "@teleloc 0xA9B4003D 175.2 106.4 65.8",
+      "@teleloc 0xA9B40001 96 96 80"
+     ],
+     "pathSources": [
+      "ACE POI 'Holtburg' (= @telepoi Holtburg; ace_world points_of_interest, scripts/net-review/poi-destinations.json): the hilltop Life Stone square",
+      "lower terrace, 1.5 m east of NPC Dwennon (ace_world landblock_instance A9B4001E 73.0 138.4 66.00)",
+      "east road, 1.5 m west of a Royal Guard (ace_world landblock_instance A9B4003D 176.7 106.4 65.28)",
+      "back to the settle point"
+     ]
+    },
+    "linvak": {
+     "settle": "@teleloc 0xA21E001A 83 38 560.4",
+     "settleSource": "ACE POI 'Linvak Tukal' (ace_world points_of_interest via scripts/net-review/poi-destinations.json; also every 'Portal to Linvak Tukal' destination): inside the south gate, LB 0xA21E",
+     "orbit": "__cam.orbit around the landed pose (z + 1.5): dist 110, az 200, el 35 — outside and above the south wall, looking NNE over the fortress (Holtburg's 70 m / 22 deg orbit would sit inside the walls)",
+     "path": [
+      "@teleloc 0xA21E002B 125.7 49.7 565.5",
+      "@teleloc 0xA21E0026 97.9 133 569.5",
+      "@teleloc 0xA21E001C 87.7 86 611.5",
+      "@teleloc 0xA21E001A 83 38 560.4"
+     ],
+     "pathSources": [
+      "1.5 m west of NPC Aurutis (ace_world landblock_instance A21E 127.2 49.7 565.01)",
+      "north court, 1.5 m west of NPC Neelic (ace_world landblock_instance A21E0026 99.4 133.0 569.01)",
+      "top of the central ramp, 1.5 m west of Lord Kresovus (ace_world landblock_instance A21E 89.2 86.0 611.05)",
+      "back to the settle point"
+     ]
+    },
+    "pathRules": "Each stop: @teleloc, wait for the landing (target LB + within 8 m, <= 20 s), then for the portal tunnel to end (every hop plays it, same landblock included: >= 2 s CONTINUE + 1 s fade-out + 1 s world fade-in; <= 15 s, recorded as tele.tunnel), dwell 10 s on the chase camera recording rAF intervals and __batchedRuns.frame() every frame, then a 3-frame lite census (its tunnelActive must be false). No stop is near a portal (ACE activates a portal on collision: Portal.OnCollideObject). A stop that lands wrong (tele.landedOk false) is recorded and the path is NOT edited between arms — the path is fixed by its commands. Stop z = the NPC placement z + 0.5 m; the cell word = floor(x/24)*8 + floor(y/24) + 1 (checked against ace_world's own cell ids)."
+   },
+   "perArmRecipe": [
+    "1. node scripts/perf-worker/hbsess.mjs boot --quality ultra --flags 'renderDiag=on<ARM FLAGS>'   (fresh profile; boot gate on __bootStateHistory; @teleloc Holtburg; settle; camera parked on the __hbOrbit pose). Arm 3: this step IS 'Does it boot on HEAD?' — record the outcome and the boot-state history it prints on failure.",
+    "2. node scripts/perf-worker/gputrace.mjs <OUT>/<arm>-r<rep>-holtburg.trace.json   then   python3 -I scripts/perf-worker/gpu_thread_split.py <OUT>/<arm>-r<rep>-holtburg.trace.json   → CrGpuMain WEBGL ms/frame (+ RASTER, CrRendererMain busy). The first street-level sweep after boot (cold views), categories gpu.angle,gpu,toplevel (never gpu.service / gpu.decoder: ~10x inflation).",
+    "3. node scripts/perf-worker/hbsess.mjs orbit   then   node scripts/perf-worker/hbsess.mjs profile 10 <OUT>/<arm>-r<rep>-holtburg.cpuprofile   (prints {frames, fps})   → renderCPU = ms per frame INSIDE three's WebGLRenderer.render, counted by ANCESTOR (a nested render() counts once): `node scripts/net-review/profile-split-render.mjs <OUT>/<arm>-r<rep>-holtburg.cpuprofile` gives the 'INSIDE render()' share of all samples; renderCPU = that share × the profile's wall ms (`node -e \"const p=JSON.parse(require('fs').readFileSync(process.argv[1],'utf8'));console.log((p.endTime-p.startTime)/1000)\" <OUT>/<arm>-r<rep>-holtburg.cpuprofile`) ÷ frames. Not proftree.py: its root sum drops a nested match only when the DIRECT parent matches, so the total depends on the target string chosen (2026-10-23 review).",
+    "4. node scripts/perf-worker/hbsess.mjs eval scripts/perf-worker/structure-p0.eval.js > <OUT>/<arm>-r<rep>-reads.json   → for Holtburg then Linvak Tukal: @teleloc, wait for the landing and the portal tunnel's end, settle (terrain + static node / instance counts quiet 12 s and 80% of the town's ring baked and resident, cap 150 s), fixed orbit, 30-frame still hold with renderer.info.autoReset off, every §7 read (census below), then the fixed @teleloc path. Leaves the page parked on the Linvak orbit with window.__hbOrbit pointing at it (several minutes; hbsess eval has no timeout).",
+    "5. node scripts/perf-worker/gputrace.mjs <OUT>/<arm>-r<rep>-linvak.trace.json   then   python3 -I scripts/perf-worker/gpu_thread_split.py on it   (Linvak's sweep is warm: the path already ran there).",
+    "6. node scripts/perf-worker/hbsess.mjs orbit   then   node scripts/perf-worker/hbsess.mjs profile 10 <OUT>/<arm>-r<rep>-linvak.cpuprofile",
+    "7. node scripts/perf-worker/hbsess.mjs kill; wait >= 65 s before the next boot on the same account."
+   ],
+   "reads": {
+    "fromReadsJson (structure-p0.eval.js, per town)": [
+     "census.summary.subDrawsPerFrame / issuedPerFrame / batchedCallsPerFrame (median over the held frames of __batchedRuns.frame(); __diag.render's batchedCalls / subDraws / issuedSubDraws in census.hold.diagRenderFrames)",
+     "census.hold.renderInfoPerFrame (renderer.info totals per frame with autoReset off; renderCalls = render() passes per frame)",
+     "census.hold.drawsPerFrameByOwner (GL calls / ranges per frame split by owner: entities, cells, statics, buildings, sky, occlusion proxies ...; laptop 2026-10-23 at Holtburg, of ~1,465 calls: entities 626, cells 494, statics 176). Says whether the next lever after P0 is entity parts / cells rather than statics; record it, no rule reads it",
+     "census.diagRender (window.__diag.render, renderDiag=on)",
+     "census.batchedRuns.stats + .frame, census.hold.batchedRunsPerFrame (draws / instances / runs / noGain per frame)",
+     "census.statBatchX (= __statBatchXStats(): detail[].sorted / slots per chunk bucket, the walk block; census.hold.walkPerFrame = per-frame deltas) → census.summary.f4 (unsorted vs sorted chunk + atlas slots) settles F4",
+     "census.atlas (= __atlasStats(): geomAdds / geomDedupHits / geomDedupCollisions) and census.summary.f2 (atlas visible placements per distinct range, + noRepeatBuckets / drawnBuckets). ?atlasGeomDedup (P1a, the F2 fix) is DEFAULT-ON since 2026-10-22, so in arm 1 f2.repeatFactor > 1 with geomDedupHits > 0 and geomDedupCollisions === 0 means P1a is live; F2's own size is P0-FLAGS arm4 (&atlasGeomDedup=off: repeatFactor ~1.0, geomAdds = members). census.summary.batchedRunsNoGainPerFrame is batchedRuns' noGain over EVERY marked kind (chunk, atlas, building, pool), not an atlas figure",
+     "census.tunnel {before, after} / census.tunnelActive and the town's tunnelHeld (the censuses held while the portal tunnel ran — must be empty); arrive.tunnel / path[].tele.tunnel (how long the tunnel ran past the landing)",
+     "census.batched.byKind (atlas / chunk / lbStatic / building / pool / terrain: sortObjects, perObjectFrustumCulled, frustumCulled, earlyOut-eligible nodes, slots, instances, distinct range starts, last multidraw ranges)",
+     "census.pools (= __diag.pools(); arm 3: pools, classes, mutationsThisFrame — 0 when parked)",
+     "census.camera (the held pose, three.aspect), settle (ringRadius / ringTarget / bakedInRing / parkedInRing), arrive (landing), env (gpu string, frameCap, boot states, viewport incl. canvas size)",
+     "path[]: tele (command, landing, tunnel), dwell.frameMs (rAF intervals at the stop once its tunnel ended, uncapped), dwell.batchedRunsFrame, summary, tunnelActive"
+    ],
+    "fromTraces": "CrGpuMain WEBGL ms/frame per town (gpu_thread_split.py) — the term both rules read.",
+    "fromProfiles": "renderCPU per town (renderer main thread: ms per frame inside WebGLRenderer.render by ancestor — the step-3 profile-split-render recipe).",
+    "consoleErrors": "hbsess does not capture console output: read the box Chrome log D:\\Temp\\hbbench\\logs\\<profile>.log and env.bootStates."
+   },
+   "decisionRules": {
+    "writtenBeforeTheRun": "**P0 — Measure (owner-run 1070 session, MODE T, a fresh profile per arm, `?nosw=1`, town at ultra: Holtburg and Linvak Tukal, settled AND on a fixed `@teleloc` path).** Decision rules are written here, before the run.",
+    "arm2": "- **Rule:** if CrGpuMain WebGL ms/frame (on vs off) moves by less than the arm's own rep spread, the per-range term is not a lever. Stop P1 and L1, and re-plan.",
+    "arm3": "- **Rule:** if `issuedSubDraws` or CrGpuMain WebGL ms rises against arm 1, F1 is confirmed and P3 must land L1 before any GATE-POOLS run.",
+    "scoringNote": "Not part of the verbatim rules: compare per town and per condition (settled hold, path), arm vs arm 1 on the same town; 'rep spread' = max - min of the arm's own reps for that town. No fps prediction is made from any count (charter D-01.5): the rules read CrGpuMain WebGL ms and issuedSubDraws directly."
+   },
+   "checklist": [
+    "Every arm-rep: reads.json env.gpu names the GTX 1070, env.frameCap.fps === 0, both towns settle.quiet === true and tunnelHeld empty (else REJECT and re-run).",
+    "Every arm-rep: path rows recorded for all 4 stops per town; any tele.landedOk === false noted (path unchanged across arms); any tele.tunnel.active === true (the tunnel outlived the 15 s wait) noted.",
+    "Arm 1: census.summary.f4 recorded per town (F4); census.summary.f2 + census.atlas recorded (P1a live: geomDedupHits > 0, geomDedupCollisions === 0; F2's baseline is P0-FLAGS arm4); batchedRuns stats show draws > 0 (runs live).",
+    "Arm 2: census.batchedRuns.enabled === false and issuedPerFrame === subDrawsPerFrame (=off issues every range); CrGpuMain WEBGL ms/frame per rep — apply the arm-2 rule.",
+    "Arm 3: boot outcome on HEAD recorded; census.pools enabled, pools / classes / mutationsThisFrame; subDraws / issuedSubDraws; CrGpuMain WEBGL ms; renderCPU — apply the arm-3 rule. Look differs (negFace=off): measurement only.",
+    "Session end: test Chrome killed by user-data-dir; D:\\Temp\\hbbench\\uncapped.txt left as the owner wants it."
+   ],
+   "out": [
+    "/mnt/wbterminal1/tmp/claude-scratch/perf/p0-gpu-resident-<YYYY-MM-DD>/<arm>-r<rep>-{reads.json, holtburg.trace.json, linvak.trace.json, holtburg.cpuprofile, linvak.cpuprofile}",
+    "RESULTS pointer + the two rule verdicts written back into this item's `result`."
+   ],
+   "result": null
+  },
+  {
+   "id": "P0-FLAGS-2026-10-22",
+   "kind": "bench",
+   "stage": "GPU-resident statics P0 — the flags built on 2026-10-22 (NOT the handoff's §7 arms; those are item P0)",
+   "gate": "prices each 2026-10-22 flag in the same owner session instead of one 1070 session per flag: F1 (poolRuns), F2 baseline (atlasGeomDedup=off), P2/L0 (staticEarlyOut), L1 (batchedRunsStable), and optionally F3/P1b, the batchedRunsSorted default, P1d",
+   "title": "seven flag arms on P0's recipe — tier 1 (full recipe, both towns + path) and tier 2 (optional, Holtburg only, no path)",
+   "provenance": "Added 2026-10-23 by the probe-tooling verify agent, before any run. The arms, reads and rules below are the prep agent's, NOT handoff-verbatim (§7 P0 lists only arms 1-3). Each rule names the handoff phase it serves and is written from the flag's own code and url-flags row: static_batch_x.js (staticEarlyOut, statGeomDedup), batched_runs.js (batchedRunsStable, batchedRunsSorted), static_atlas.js (atlasGeomDedup), terrain_batch.js (terrainNoDrawId), pool_registry.js / pool_producer.js (poolRuns).",
+   "boxMode": "1070, MODE T: off-screen (--window-position=-32000,-32000) + muted (--mute-audio), fresh profile per arm-rep (each hbsess boot), CDP :9333 over the tunnel. OWNER-RUN. Same session rules as P0 (sessionRulesInline).",
+   "urlNotes": "Every url is built exactly like item P0's: `hbsess.mjs boot --quality ultra --flags 'renderDiag=on<flags>'` + lib/bench-url.mjs (targetFps=0 last).",
+   "recipe": {
+    "tier1": "P0's perArmRecipe unchanged, with the arm's flags in step 1 (traces, profiles, the full structure-p0.eval.js read of both towns + path, the 65 s account gap). 'rep spread' = max - min of that arm's own reps for that town, as in P0's scoringNote.",
+    "tier2Lite": [
+     "1. as P0 step 1 with the arm's flags; 2.-3. as P0 steps 2-3 (Holtburg trace + profile).",
+     "4a. printf '%s\\n' 'window.__structureP0Opts = { towns: [\"holtburg\"], path: false }; return window.__structureP0Opts;' > <OUT>/p0-lite.opts.js   then   node scripts/perf-worker/hbsess.mjs eval <OUT>/p0-lite.opts.js   (the options persist on the page; hbsess eval cannot pass them otherwise)",
+     "4b. node scripts/perf-worker/hbsess.mjs eval scripts/perf-worker/structure-p0.eval.js > <OUT>/<arm>-r<rep>-reads.json   (Holtburg only, no path)",
+     "5.-6. skipped (no Linvak). 7. as P0 step 7. The reject rule reads Holtburg only."
+    ]
+   },
+   "liteOptsBody": "window.__structureP0Opts = { towns: [\"holtburg\"], path: false }; return window.__structureP0Opts;",
+   "sessions": {
+    "A": "item P0's 3-rep rotation, then arm3b and arm4 (2 reps each, alternating: 3b, 4, 4, 3b)",
+    "B": "arm5 and arm6 (2 reps each: 5, 6, 6, 5), then tier 2 (arm7, arm8, arm9, 2 reps each) if the owner wants it",
+    "realism": "A core arm-rep (boot, 2 traces, 2 profiles, the eval with 2 towns + paths, 65 s gap) is about 10-15 min [A], so P0's 9 arm-reps are 1.5-2.5 h; tier 1 adds 8 arm-reps — hence two sessions. A tier-2 arm-rep is roughly half."
+   },
+   "arms": [
+    {
+     "arm": "arm3b-chain-poolRuns-off",
+     "tier": 1,
+     "optional": false,
+     "reps": 2,
+     "onlyIf": "arm 3 boots on HEAD (item P0's arm-3 question); otherwise skip — there is nothing to isolate",
+     "flags": "&packSource=on&geomBundles=on&texCompressedOnly=on&slotGrid=on&frameWork=on&drawPools=on&negFace=off&poolRuns=off",
+     "url": "http://127.0.0.1:8765/apps/holtburger-web/index.html?autoLogin=1&account=tailnet1&password=tailnet1&autoSpawn=first&nosw=1&camDebug=on&adaptiveRes=off&quality=ultra&renderDiag=on&packSource=on&geomBundles=on&texCompressedOnly=on&slotGrid=on&frameWork=on&drawPools=on&negFace=off&poolRuns=off&targetFps=0",
+     "compareAgainst": "arm3-drawPools-chain",
+     "servesPhase": "F1 / P3 ('wire L1 into opaque pools'); poolRuns is DEFAULT-ON inside ?drawPools, so arm 3 already has it and this is the isolation arm",
+     "reads": [
+      "census.pools.runs {enabled (false here, true in arm 3), injected, live, marked, orderBound}",
+      "census.pools.producer.contentCollisions (must read 0 in arm 3; =off keys by uuid)",
+      "census.summary.subDrawsPerFrame / issuedPerFrame per town",
+      "CrGpuMain WEBGL ms/frame (gpu_thread_split.py), renderCPU"
+     ],
+     "rule": "Arm 3 is not valid evidence either way if its census.pools.runs.live is 0 or producer.contentCollisions > 0 (stop: correctness). Otherwise, if arm 3's issuedPerFrame is not below arm 3b's by more than the larger of the two arms' rep spreads (per town), poolRuns does not deliver F1's fix and 'wire L1 into opaque pools' stays open; read CrGpuMain WEBGL ms the same way.",
+     "ruleSource": "prep agent 2026-10-23, written before the run; NOT handoff-verbatim"
+    },
+    {
+     "arm": "arm4-atlasGeomDedup-off",
+     "tier": 1,
+     "optional": false,
+     "reps": 2,
+     "flags": "&atlasGeomDedup=off",
+     "url": "http://127.0.0.1:8765/apps/holtburger-web/index.html?autoLogin=1&account=tailnet1&password=tailnet1&autoSpawn=first&nosw=1&camDebug=on&adaptiveRes=off&quality=ultra&renderDiag=on&atlasGeomDedup=off&targetFps=0",
+     "compareAgainst": "arm1-bare",
+     "servesPhase": "F2 / P1a: the bare URL has ?atlasGeomDedup ON since 2026-10-22, so this is the pre-P1a baseline F2 was written about",
+     "reads": [
+      "census.atlas {geomAdds (= members here), geomDedupHits (0 here), geomDedupCollisions}",
+      "census.summary.f2 {repeatFactor (~1.0 here), noRepeatBuckets, drawnBuckets}, census.batched.byKind.atlas",
+      "census.summary.issuedPerFrame, census.hold.batchedRunsPerFrame.noGain, census.memory.geometries",
+      "CrGpuMain WEBGL ms/frame, renderCPU"
+     ],
+     "rule": "F2's size = this arm's atlas census against arm 1's (geomDedupHits, repeatFactor). Arm 1 must read geomDedupCollisions === 0 (else stop: P1a correctness). If arm 1's issuedPerFrame is not lower than this arm's beyond the larger rep spread, and CrGpuMain WEBGL ms does not move beyond it either, P1a is correct but not a lever.",
+     "ruleSource": "prep agent 2026-10-23, written before the run; NOT handoff-verbatim"
+    },
+    {
+     "arm": "arm5-staticEarlyOut",
+     "tier": 1,
+     "optional": false,
+     "reps": 2,
+     "flags": "&staticEarlyOut=on",
+     "url": "http://127.0.0.1:8765/apps/holtburger-web/index.html?autoLogin=1&account=tailnet1&password=tailnet1&autoSpawn=first&nosw=1&camDebug=on&adaptiveRes=off&quality=ultra&renderDiag=on&staticEarlyOut=on&targetFps=0",
+     "compareAgainst": "arm1-bare",
+     "servesPhase": "P2 / L0 (settles F4 in practice: the opaque unsorted chunk + building buckets on three's early-out)",
+     "reads": [
+      "census.statBatchX.walk.earlyOut {buckets, slots, drawnSlots, applied, reverted}, census.staticEarlyOut, census.buildingBatch.earlyOut",
+      "census.summary.earlyOutEligibleNodes (chunk and building rise against arm 1), census.hold.walkPerFrame",
+      "census.hold.renderInfoPerFrame.triangles; census.summary.subDrawsPerFrame / issuedPerFrame (expected UP: every visible instance of an early-out bucket is a range)",
+      "CrGpuMain WEBGL ms/frame, renderCPU, path[].dwell.frameMs.p99 per town"
+     ],
+     "rule": "Handoff P2's kill ('a GPU-bound regression in towns, or moving p99 worse than the off arm'), read as: kill if, in a town, CrGpuMain WEBGL ms/frame rises against arm 1 beyond arm 1's rep spread, or path[] dwell p99 is worse than arm 1's beyond its spread. Candidate if renderCPU drops beyond arm 1's rep spread. Measurement only: MODE T is off-screen, so the owner eye check P2 needs is still owed.",
+     "ruleSource": "prep agent 2026-10-23, written before the run; operationalises handoff §7 P2's kill line, NOT handoff-verbatim"
+    },
+    {
+     "arm": "arm6-staticEarlyOut-stable",
+     "tier": 1,
+     "optional": false,
+     "reps": 2,
+     "flags": "&staticEarlyOut=on&batchedRunsStable=on",
+     "url": "http://127.0.0.1:8765/apps/holtburger-web/index.html?autoLogin=1&account=tailnet1&password=tailnet1&autoSpawn=first&nosw=1&camDebug=on&adaptiveRes=off&quality=ultra&renderDiag=on&staticEarlyOut=on&batchedRunsStable=on&targetFps=0",
+     "compareAgainst": "arm5-staticEarlyOut",
+     "servesPhase": "L1 (the run-layout compare skip; url-flags: inert at today's defaults, so it rides on staticEarlyOut)",
+     "reads": [
+      "census.batchedRuns.stableEnabled === true, stableBroken === false",
+      "census.batchedRuns.stats.stableSkips (> 0), stablePoisons, stableAuditFails (=== 0); census.hold.batchedRunsPerFrame.stableSkips",
+      "renderCPU, CrGpuMain WEBGL ms/frame"
+     ],
+     "rule": "Stop (correctness) if stableAuditFails > 0 or stableBroken. If stableSkips stays 0 the arm measured nothing. Otherwise, if renderCPU against arm 5 moves by less than arm 5's rep spread, the L1 compare skip is not a lever.",
+     "ruleSource": "prep agent 2026-10-23, written before the run; NOT handoff-verbatim"
+    },
+    {
+     "arm": "arm7-statGeomDedup",
+     "tier": 2,
+     "optional": true,
+     "reps": 2,
+     "scope": "lite: Holtburg only, no path (recipe.tier2Lite)",
+     "flags": "&statGeomDedup=on",
+     "url": "http://127.0.0.1:8765/apps/holtburger-web/index.html?autoLogin=1&account=tailnet1&password=tailnet1&autoSpawn=first&nosw=1&camDebug=on&adaptiveRes=off&quality=ultra&renderDiag=on&statGeomDedup=on&targetFps=0",
+     "compareAgainst": "arm1-bare",
+     "servesPhase": "F3 / P1b (the statGeomDedup re-base; owner call)",
+     "reads": [
+      "census.statBatchX.dedup {enabled, degraded (false), probeFailures (0), hits (> 0), adds}",
+      "census.batched.byKind.chunk {distinctStarts, repeatFactor}, census.summary.issuedPerFrame, census.memory.geometries",
+      "CrGpuMain WEBGL ms/frame"
+     ],
+     "rule": "Invalid if dedup.degraded or probeFailures > 0 (the dedup ran inert). Otherwise the chunk repeatFactor and issuedPerFrame against arm 1 size F3, and CrGpuMain WEBGL ms beyond arm 1's rep spread decides lever or not. Flipping the default stays the owner's call (handoff P1b).",
+     "ruleSource": "prep agent 2026-10-23, written before the run; NOT handoff-verbatim"
+    },
+    {
+     "arm": "arm8-batchedRunsSorted-off",
+     "tier": 2,
+     "optional": true,
+     "reps": 2,
+     "scope": "lite: Holtburg only, no path (recipe.tier2Lite)",
+     "flags": "&batchedRunsSorted=off",
+     "url": "http://127.0.0.1:8765/apps/holtburger-web/index.html?autoLogin=1&account=tailnet1&password=tailnet1&autoSpawn=first&nosw=1&camDebug=on&adaptiveRes=off&quality=ultra&renderDiag=on&batchedRunsSorted=off&targetFps=0",
+     "compareAgainst": "arm1-bare",
+     "servesPhase": "the ?batchedRunsSorted default (improvement hunt B9 second half), shipped ON on a pixel smoke with no 1070 number",
+     "reads": [
+      "census.hold.batchedRunsFrame.sortedSubDraws / sortedIssued (equal here: three's own draw)",
+      "arm 1's census.batchedRuns.stats sortedDraws / sortedRuns / sortedNoGain and census.hold.batchedRunsPerFrame (same keys)",
+      "CrGpuMain WEBGL ms/frame"
+     ],
+     "rule": "Here sortedIssued must equal sortedSubDraws (else the escape is broken). If arm 1's sortedIssued is not below its sortedSubDraws, or CrGpuMain WEBGL ms does not move beyond the rep spread, the sorted runs are correct but not a lever.",
+     "ruleSource": "prep agent 2026-10-23, written before the run; NOT handoff-verbatim"
+    },
+    {
+     "arm": "arm9-terrainNoDrawId",
+     "tier": 2,
+     "optional": true,
+     "reps": 2,
+     "scope": "lite: Holtburg only, no path (recipe.tier2Lite)",
+     "flags": "&terrainNoDrawId=on",
+     "url": "http://127.0.0.1:8765/apps/holtburger-web/index.html?autoLogin=1&account=tailnet1&password=tailnet1&autoSpawn=first&nosw=1&camDebug=on&adaptiveRes=off&quality=ultra&renderDiag=on&terrainNoDrawId=on&targetFps=0",
+     "compareAgainst": "arm1-bare",
+     "servesPhase": "P1d (improvement hunt B10): terrain without gl_DrawID; lowest value — terrain is one node",
+     "reads": [
+      "census.terrainBatch.stats {noDrawId (true), noDrawIdRequested, noDrawIdFallback (null), iidWrites, iidWriteFails (0)}",
+      "census.terrainBatch.verifyIids {checked, bad (0), slotNeIid}",
+      "CrGpuMain WEBGL ms/frame"
+     ],
+     "rule": "Invalid unless noDrawId === true, noDrawIdFallback is null, iidWriteFails is 0 and verifyIids.bad is 0. Otherwise, if CrGpuMain WEBGL ms does not drop beyond arm 1's rep spread, P1d is not a lever.",
+     "ruleSource": "prep agent 2026-10-23, written before the run; NOT handoff-verbatim"
+    }
+   ],
+   "checklist": [
+    "Every arm-rep: item P0's reject rule (GTX 1070, frameCap.fps 0, settle.quiet and empty tunnelHeld for every town the arm reads).",
+    "Every arm-rep: env.url carries the arm's flags; the arm's own validity reads (arm3b: arm 3 runs.live > 0 and contentCollisions 0; arm4: arm 1 geomDedupCollisions 0; arm6: stableAuditFails 0, stableBroken false; arm7: dedup not degraded; arm9: noDrawId true, verifyIids.bad 0) before any rule is applied.",
+    "Session end: test Chrome killed by user-data-dir; D:\\Temp\\hbbench\\uncapped.txt left as the owner wants it."
+   ],
+   "out": [
+    "/mnt/wbterminal1/tmp/claude-scratch/perf/p0-gpu-resident-<YYYY-MM-DD>/<arm>-r<rep>-{reads.json, holtburg.trace.json, holtburg.cpuprofile} (+ linvak.* for tier 1)",
+    "RESULTS pointer + each arm's rule verdict written back into this item's `result`."
+   ],
+   "result": null
+  }
+ ],
+ "sessionLog": [
+  {
+   "ts": "2026-10-22",
+   "by": "P0 preparation agent",
+   "event": "Queued. Tooling written, none of it run (laptop rule: parallel agents run no browsers): scripts/perf-worker/structure-p0.eval.js (the page-side read, shared by both machines), scripts/perf-worker/laptop-structure-probe.mjs (laptop twin), apps/holtburger-web/tests/structure_p0_probe.test.mjs (node test of both + this file's commands)."
+  },
+  {
+   "ts": "2026-10-23",
+   "by": "probe-tooling verify agent",
+   "event": "Review fixes, node-tested only: the settle ring gate counts the town's own ring (resident, not parked; the slotGrid arm gates on the grid's R_LB 5); every @teleloc waits for the portal tunnel to end and every census records it (tunnelHeld → reject); laptop twin viewport 1280x633 (the 1070's page), one evaluate per town with the out file rewritten after each, hard timeout derived from the options, crash checked during boot; F2 reads reworded for ?atlasGeomDedup default-ON; renderCPU recipe pinned to profile-split-render.mjs. Added item P0-FLAGS-2026-10-22 (the 2026-10-22 flag arms)."
+  }
+ ]
+}

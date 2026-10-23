@@ -1,0 +1,135 @@
+<!doctype html><html><body><canvas id="c" width="128" height="128"></canvas>
+<script type="importmap">{ "imports": { "three": "/three/three.module.js", "three/addons/": "/three-addons/" } }</script>
+<script type="module">
+// ?poolRuns pixel proof (2026-10-22, handoff F1). The REAL pooled world
+// (scene3d/pool_producer.js → pool_registry.js + pool_material.js: class pages,
+// makeArrayMaterial, aLayer, the content key) fed the same placements in both
+// arms, drawn through the REAL batched_runs.js (patched chunks + the
+// renderBufferDirect wrap). Two "landblocks" of one sector each decode the same
+// models into their OWN geometry objects (what the per-LB bake does).
+//   default arm:      content keys share the cross-LB copies, opaque pools are
+//                     marked, batchedRuns draws them as instanced runs;
+//   ?poolRuns=off:    HEAD's pools — object-identity keys, nothing marked,
+//                     three's one-range-per-instance multidraw.
+// Surfaces: three opaque checkers, one ?clipMapOpaque cut-out (alphaTest, not
+// transparent — marked), one translucent (sorted, never marked) and one
+// transparent cut-out (opaque CLASS that blends — left unmarked, counted
+// orderBound). The two frames must be identical.
+import * as THREE from "three";
+import { installBatchedRunsChunks, installBatchedRuns, getBatchedRunsStats } from "/app/scene3d/batched_runs.js";
+import { applyBatchedMeshColorTextureFix } from "/app/scene3d/three_batchedmesh_colortexture_fix.js";
+import { initPoolWorld, addSingletonsToPools, poolWorldCensus } from "/app/scene3d/pool_producer.js";
+const out = { errors: [] };
+const origErr = console.error; console.error = (...a) => { out.errors.push(a.map(String).join(" ").slice(0, 400)); origErr(...a); };
+try {
+  out.chunks = installBatchedRunsChunks(THREE);
+  applyBatchedMeshColorTextureFix(THREE);
+  const renderer = new THREE.WebGLRenderer({ canvas: document.getElementById("c") });
+  renderer.debug.checkShaderErrors = true;
+  out.wrapper = installBatchedRuns(renderer);
+  out.multiDraw = renderer.extensions.has("WEBGL_multi_draw");
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x101418);
+  const cam = new THREE.PerspectiveCamera(50, 1, 0.1, 100);
+  cam.position.set(0, 0, 17);
+  cam.lookAt(0, 0, 0);
+  scene.add(new THREE.AmbientLight(0xffffff, 0.5));
+  const sun = new THREE.DirectionalLight(0xffffff, 1.4);
+  sun.position.set(3, 5, 8);
+  scene.add(sun);
+  const staticsGroup = new THREE.Group();
+  scene.add(staticsGroup);
+
+  // The F-11.3 chain arms the pooled world; this page's own query (e.g.
+  // `?poolRuns=off`) rides along. No ?frameWork: stage-A inline feeds.
+  const ARMED = "?drawPools=on&slotGrid=on&packSource=on&geomBundles=on&texCompressedOnly=on";
+  const extra = location.search.replace(/^\?/, "");
+  out.world = !!initPoolWorld({ THREE, group: staticsGroup, search: ARMED + (extra ? "&" + extra : "") });
+
+  // 256x256 RGBA8 surfaces — a PAGE dim, so admit() can take a class layer.
+  function tex(seed, { holes = false, alpha = 255 } = {}) {
+    const E = 256, d = new Uint8Array(E * E * 4);
+    for (let y = 0; y < E; y++) for (let x = 0; x < E; x++) {
+      const o = (y * E + x) * 4, on = ((x >> 5) + (y >> 5)) & 1;
+      d[o] = on ? (seed * 97) & 255 : 40;
+      d[o + 1] = on ? (seed * 57 + 80) & 255 : 200 - seed * 30;
+      d[o + 2] = on ? (seed * 31 + 120) & 255 : 60 + seed * 40;
+      d[o + 3] = holes && (((x >> 4) + (y >> 4)) & 3) === 0 ? 0 : alpha;
+    }
+    const t = new THREE.DataTexture(d, E, E, THREE.RGBAFormat);
+    t.needsUpdate = true;
+    return t;
+  }
+  // ONE material object per surface (the MaterialCache shape).
+  const surf = (i, map, set = {}) => {
+    const m = new THREE.MeshStandardMaterial({ map });
+    Object.assign(m, set);
+    m.userData = { surfaceDid: 0x08000100 + i };
+    return m;
+  };
+  const S = [
+    surf(0, tex(1)), surf(1, tex(2)), surf(2, tex(3)),
+    surf(3, tex(4, { holes: true }), { alphaTest: 0.5 }),                      // clipMapOpaque
+    surf(4, tex(5, { alpha: 150 }), { transparent: true }),                    // translucent
+    surf(5, tex(6, { holes: true, alpha: 200 }), { transparent: true, alphaTest: 0.5 }), // blends
+  ];
+  // Fresh geometry OBJECTS per LB (per-LB decode), identical bytes per model.
+  const models = {
+    box: () => new THREE.BoxGeometry(1, 1, 1),
+    cyl: () => new THREE.CylinderGeometry(0.45, 0.45, 1.1, 12),
+    quad: () => new THREE.PlaneGeometry(1.2, 1.2),
+  };
+  // [model, surface] per grid cell; 6 x 4 grid, left half LB A, right half LB B.
+  const cells = [
+    ["box", 0], ["cyl", 1], ["box", 0], ["box", 0], ["cyl", 1], ["box", 2],
+    ["quad", 3], ["box", 2], ["quad", 3], ["quad", 3], ["box", 2], ["quad", 3],
+    ["box", 1], ["quad", 4], ["cyl", 1], ["box", 1], ["quad", 4], ["cyl", 1],
+    ["quad", 5], ["box", 0], ["quad", 5], ["quad", 5], ["box", 0], ["cyl", 2],
+  ];
+  const lbs = [{ key: 0x40400000, geoms: {}, nodes: [] }, { key: 0x41400000, geoms: {}, nodes: [] }];
+  cells.forEach(([model, si], i) => {
+    const cx = i % 6, cy = Math.floor(i / 6);
+    const lb = lbs[cx < 3 ? 0 : 1];
+    // One decoded object per (LB, model): an LB's placements of a model share it.
+    const g = lb.geoms[model] || (lb.geoms[model] = models[model]());
+    const n = new THREE.Mesh(g, S[si]);
+    n.position.set((cx - 2.5) * 2.2, (1.5 - cy) * 2.4, 0);
+    n.rotation.set(0.5 + 0.07 * i, 0.6 + 0.11 * i, 0.05 * i);
+    n.castShadow = true;
+    n.receiveShadow = true;
+    lb.nodes.push(n);
+  });
+  out.passthrough = 0;
+  out.pooled = 0;
+  for (const lb of lbs) {
+    const r = addSingletonsToPools(lb.nodes, {}, { domain: "st", lbKey: lb.key });
+    out.pooled += r.pooled;
+    out.passthrough += r.passthrough.length;
+    for (const n of r.passthrough) staticsGroup.add(n);
+  }
+  const t0 = performance.now();
+  renderer.render(scene, cam);
+  renderer.render(scene, cam); // second frame: the early-out + the cached run layout
+  out.renderMs = Math.round(performance.now() - t0);
+  const gl = renderer.getContext();
+  out.glError = gl.getError();
+  out.programs = renderer.info.programs.map((p) => ({ name: p.name, linked: gl.getProgramParameter(p.program, gl.LINK_STATUS) }));
+  const all = new Uint8Array(128 * 128 * 4); gl.readPixels(0, 0, 128, 128, gl.RGBA, gl.UNSIGNED_BYTE, all);
+  out.frame = Array.from(all);
+  let lit = 0; for (let i = 0; i < all.length; i += 4) if (Math.abs(all[i] - 0x10) + Math.abs(all[i + 1] - 0x14) + Math.abs(all[i + 2] - 0x18) > 30) lit++;
+  out.litPixels = lit;
+  out.stats = getBatchedRunsStats();
+  const c = poolWorldCensus();
+  out.pools = { count: c.pools.count, byPass: c.pools.byPass, runs: c.runs, geometryAdds: c.geometry.adds, dedupHits: c.geometry.dedupHits,
+    contentHashed: c.producer.contentHashed, contentShared: c.producer.contentShared, contentCollisions: c.producer.contentCollisions,
+    refused: c.classPages.refused };
+  out.renderer = gl.getParameter(gl.getExtension("WEBGL_debug_renderer_info")?.UNMASKED_RENDERER_WEBGL ?? gl.RENDERER);
+} catch (e) {
+  out.errors.push("THROW " + String(e && e.stack || e).slice(0, 600));
+  out.frame = out.frame || [];
+  out.stats = out.stats || { draws: 0, instances: 0, runs: 0, noGain: 0 };
+  out.programs = out.programs || [];
+  out.pools = out.pools || { runs: {} };
+}
+window.__smoke = out;
+</script></body></html>

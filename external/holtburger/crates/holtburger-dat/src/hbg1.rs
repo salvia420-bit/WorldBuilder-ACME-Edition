@@ -64,6 +64,55 @@
 //! Determinism (pass 2 D-02.6): pure functions of the parsed records —
 //! subsets in first-seen order, triangles in source-polygon order (stable
 //! partition), vertices numbered by first use in final index order.
+//!
+//! ## v2 — the `?negFace` face marker on kind-0 PART payloads (2026-10-22)
+//!
+//! WHY. dat-parser-2 `?negFace` (default ON since 2026-10-19; lib.rs
+//! `parse_neg_face_retail_flag`) changes what the runtime GfxObj triangulator
+//! (`append_gfx_tris_with_tex_swaps`) emits, and a v1 model payload cannot say
+//! which of its triangles belong to which arm: v1 bakes the legacy reversed
+//! back tri into the SAME subset as any front tri of equal (surface, flags),
+//! and v1 never bakes NoPos polygons at all. So the bundle assembly answered
+//! `missing` for every model while the flag was on (handoff
+//! HANDOFF-gpu-resident-statics-2026-10-22 §5 F7(a)), which blocked the whole
+//! `?geomBundles` → `?drawPools` chain. Docs + rebake runbook:
+//! `apps/holtburger-web/docs/HBG1-negface-marker-2026-10-22.md`.
+//!
+//! WHAT v2 encodes, per SUBSET (the triangles of one subset all come from one
+//! arm, so the reader drops whole subsets — no per-triangle side band):
+//!
+//! * [`subset_flags::MODEL_BACKFACE`] (bit 3, the same bit as `ENV_BACKFACE`):
+//!   the legacy reversed back tri of a SidesType-2 polygon with a distinct
+//!   neg surface (G16 fix-2 / Phase 7 #7). Drawn only under `?negFace=off`.
+//! * [`subset_flags::NOPOS_SLOT0`] (bit 4): a NoPos polygon (stippling 0x4 =
+//!   no POSITIVE UV indices, acclient.c:359869 `CPolygon::UnPack`) on a
+//!   TEXTURED pos surface (`type & 6`), drawn with UV slot 0 as retail's
+//!   `ConstructMesh` draws it. Drawn only under `?negFace` (on). "Textured" is
+//!   read from the Surface record at BAKE time ([`read_surface_type`]); the
+//!   runtime reads the same `type` bits (`prime_surface_types`).
+//! * everything else (unmarked): drawn under both arms.
+//!
+//! And per PAYLOAD, [`flags::NEG_FRONT_COPY`] (bit 4): some SidesType-2 polygon
+//! here meets the GEOMETRIC half of the `?negFace` + `?perPolyCull=on`
+//! same-winding front-copy rule (`neg_surface < pos_surface`, neg in range;
+//! surface opacity deliberately ignored, so the flag is a SUPERSET of the
+//! polys the runtime would copy). A reader serving that arm falls back to the
+//! runtime decode for this payload; v2 carries no front-copy triangles.
+//!
+//! Because the marked tris of each arm sit in their own subsets, dropping the
+//! other arm's subsets leaves exactly that arm's per-surface triangle
+//! multiset (the differ's fidelity bar) AND that arm's first-seen surface
+//! order (a subset's position is set by its own first triangle).
+//!
+//! COMPATIBILITY. The byte layout is unchanged; only the version byte
+//! ([`HBG1_VERSION_FACES`]), two subset-flag bits and one payload-flag bit are
+//! new, and only top-level 0x01 PART payloads (GEOM and GEOMR rows) are
+//! written as v2. SETUP / ENV payloads and ENV-embedded mesh blocks stay v1,
+//! byte-identical. [`parse_header`] accepts v1 and v2. A pre-v2 reader rejects
+//! v2 (`unsupported version`), so an old wasm on a new dist falls back to the
+//! runtime decode instead of drawing NoPos subsets on the legacy arm. A v2
+//! reader on an old (v1) dist keeps today's behaviour: `?negFace` on ⇒ the
+//! model is `missing` ⇒ runtime decode; `?negFace=off` ⇒ assembled as before.
 
 use crate::ResourceSource;
 use crate::file_type::environment::CellStruct;
@@ -76,6 +125,11 @@ use std::io::Cursor;
 
 pub const HBG1_MAGIC: &[u8; 4] = b"HBG1";
 pub const HBG1_VERSION: u8 = 1;
+/// v2 (2026-10-22): a kind-0 PART payload whose subsets carry the `?negFace`
+/// face markers (module docs). Same byte layout as v1. Written only for
+/// top-level 0x01 GfxObj payloads by [`encode_gfx_part_faces`] /
+/// [`encode_gfx_part_relief_faces`].
+pub const HBG1_VERSION_FACES: u8 = 2;
 /// GEOM section row `encoding` value for HBG1 payloads (0x0000 = runtime decode).
 pub const ENCODING_HBG1: u16 = 0x0001;
 
@@ -92,6 +146,10 @@ pub mod flags {
     pub const IDX_U32: u16 = 1 << 2;
     /// `did_degrade` trailer present.
     pub const DID_DEGRADE: u16 = 1 << 3;
+    /// v2 kind-0 PART only: some SidesType-2 polygon may take the `?negFace`
+    /// + `?perPolyCull=on` same-winding front-copy rule (geometric superset —
+    /// module docs). Readers serving that arm fall back for this payload.
+    pub const NEG_FRONT_COPY: u16 = 1 << 4;
 }
 
 pub mod subset_flags {
@@ -105,6 +163,16 @@ pub mod subset_flags {
     /// positive slot sits in `reserved[0..2]`; dropped per cell when the
     /// resolved DID is 0 or equals the paired front DID.
     pub const ENV_BACKFACE: u8 = 1 << 3;
+    /// v2 kind-0 PART only (the SAME bit as [`ENV_BACKFACE`]: "this subset is
+    /// a back face"): the legacy REVERSED back tri of a SidesType-2 polygon
+    /// with a distinct neg surface. The bake already resolved the DID
+    /// comparison, so no pair slot rides along. Drawn only under
+    /// `?negFace=off`; v1 model payloads bake these tris UNMARKED.
+    pub const MODEL_BACKFACE: u8 = ENV_BACKFACE;
+    /// v2 kind-0 PART only: a NoPos polygon (stippling 0x4) on a textured pos
+    /// surface, UV slot 0 — drawn only under `?negFace` (on). v1 never bakes
+    /// NoPos polygons.
+    pub const NOPOS_SLOT0: u8 = 1 << 4;
 }
 
 /// ENV "no positive surface" slot sentinel (`pos_surface < 0`).
@@ -205,7 +273,22 @@ impl MeshBuilder {
 
     /// Serialize to a kind-0 payload. `baked_light`: emit the zero-filled
     /// baked-light stream (ENV blocks). `did_degrade`: trailer when non-zero.
+    /// v1 header — the ENV blocks and the legacy [`encode_gfx_part`] path.
     fn serialize(&self, kind: u8, baked_light: bool, did_degrade: u32) -> Result<Vec<u8>, String> {
+        self.serialize_with(kind, HBG1_VERSION, 0, baked_light, did_degrade)
+    }
+
+    /// [`Self::serialize`] with an explicit header `version` and extra
+    /// payload-flag bits (v2 face-marked PART payloads). The byte layout does
+    /// not depend on either.
+    fn serialize_with(
+        &self,
+        kind: u8,
+        version: u8,
+        extra_flags: u16,
+        baked_light: bool,
+        did_degrade: u32,
+    ) -> Result<Vec<u8>, String> {
         // Final vertex numbering: first use in final index order.
         let mut vert_of: HashMap<CornerKey, u32> = HashMap::new();
         let mut verts: Vec<CornerRec> = Vec::new();
@@ -260,7 +343,7 @@ impl MeshBuilder {
             bbox_max = [0.0; 3];
         }
 
-        let mut payload_flags: u16 = 0;
+        let mut payload_flags: u16 = extra_flags;
         if baked_light {
             payload_flags |= flags::BAKED_LIGHT;
         }
@@ -297,7 +380,7 @@ impl MeshBuilder {
         // PayloadHeader.
         out.extend_from_slice(HBG1_MAGIC);
         out.push(kind);
-        out.push(HBG1_VERSION);
+        out.push(version);
         out.extend_from_slice(&payload_flags.to_le_bytes());
         out.extend_from_slice(&0u32.to_le_bytes()); // reserved
         out.extend_from_slice(&(trailer_off as u32).to_le_bytes());
@@ -423,9 +506,26 @@ fn subset_flag_bits(double_sided: bool, stip: u8) -> u8 {
     f
 }
 
+/// One polygon's emission plan, returned by a [`fan_polygons`] resolver
+/// (`None` skips the polygon entirely).
+///
+/// The NoPos decision lives in the resolver, not the walk (v2, 2026-10-22):
+/// the env and v1 GfxObj resolvers skip NoPos polygons exactly as before; the
+/// v2 GfxObj resolver keeps the textured ones in a `NOPOS_SLOT0` subset.
+#[derive(Clone, Copy)]
+struct PolyPlan {
+    front_ref: u32,
+    /// Extra subset-flag bits on the front tris (v2: `NOPOS_SLOT0`).
+    front_extra: u8,
+    /// Back face: `(surface_ref, pair_slot, extra subset-flag bits)` — env:
+    /// `(neg slot, pos slot, ENV_BACKFACE)`; v1 model `(neg DID, 0, 0)`; v2
+    /// model `(neg DID, 0, MODEL_BACKFACE)`.
+    back: Option<(u32, u16, u8)>,
+}
+
 /// Shared polygon-fan walk over a `(vertex_array, polygons)` pair.
-/// `resolve_surfaces(poly) -> Option<(front_ref, Option<(back_ref, pair_slot)>)>`
-/// returns `None` to skip the polygon entirely; `has_authored_normals` selects
+/// `resolve(poly) -> Option<PolyPlan>` returns `None` to skip the polygon
+/// entirely (NoPos included — see [`PolyPlan`]); `authored_normals` selects
 /// the model path's authored-normal-with-fallback behaviour (env uses face
 /// normals only).
 #[allow(clippy::too_many_arguments)]
@@ -436,7 +536,7 @@ fn fan_polygons<F>(
     authored_normals: bool,
     mut resolve: F,
 ) where
-    F: FnMut(&Polygon) -> Option<(u32, Option<(u32, u16)>)>,
+    F: FnMut(&Polygon) -> Option<PolyPlan>,
 {
     let mut poly_ids: Vec<u16> = polygons.keys().copied().collect();
     poly_ids.sort_unstable();
@@ -445,12 +545,11 @@ fn fan_polygons<F>(
         if poly.vertex_ids.len() < 3 {
             continue;
         }
-        if (poly.stippling & NO_POS) != 0 {
-            continue;
-        }
-        let Some((front_ref, back)) = resolve(poly) else {
+        let Some(plan) = resolve(poly) else {
             continue;
         };
+        let front_ref = plan.front_ref;
+        let back = plan.back;
         let emit_back = back.is_some();
 
         // Resolve the ring: positions + effective uv indices + authored normals.
@@ -547,7 +646,7 @@ fn fan_polygons<F>(
             // Front tri: (ring0, ring[i-1], ring[i]) — source order.
             builder.push_tri(
                 front_ref,
-                front_flags,
+                front_flags | plan.front_extra,
                 0,
                 [
                     corner(0, ring_uv_pos[0], n0, 0),
@@ -555,14 +654,15 @@ fn fan_polygons<F>(
                     corner(i, ring_uv_pos[i], n2, 0),
                 ],
             );
-            // Back tri: (ring0, ring[i], ring[i-1]) with negated normals.
-            if let Some((back_ref, pair_slot)) = back {
+            // Back tri: (ring0, ring[i], ring[i-1]) with negated normals. The
+            // resolver supplies the pair slot + marker bit (env: its slot +
+            // ENV_BACKFACE; v1 model: 0 + none; v2 model: 0 + MODEL_BACKFACE).
+            if let Some((back_ref, pair_slot, extra)) = back {
                 let neg = |v: [f32; 3]| [-v[0], -v[1], -v[2]];
-                let extra = if authored_normals { 0 } else { subset_flags::ENV_BACKFACE };
                 builder.push_tri(
                     back_ref,
                     back_flags(extra),
-                    if authored_normals { 0 } else { pair_slot },
+                    pair_slot,
                     [
                         corner(0, ring_uv_neg[0], neg(n0), 1),
                         corner(i, ring_uv_neg[i], neg(n2), 1),
@@ -725,22 +825,89 @@ fn append_gfx_rails(b: &mut MeshBuilder, gfx: &GfxObj, relief: &ReliefBake) {
 }
 
 /// Encode one 0x01 GfxObj's drawing polygons as a kind-0 PART payload.
-/// Mirrors `append_gfx_tris` (identity transform, no swaps, relief off).
-/// The `did_degrade` trailer carries the record's own chain id.
+/// Mirrors `append_gfx_tris` (identity transform, no swaps, relief off) on
+/// the LEGACY `?negFace=off` arm. The `did_degrade` trailer carries the
+/// record's own chain id.
+///
+/// This is the v1 encoder, byte-identical to every pre-2026-10-22 bake. The
+/// bake now writes [`encode_gfx_part_faces`]; this stays as the v1 differ
+/// baseline and as the "old dist" fixture for the reader's fallback tests.
 pub fn encode_gfx_part(gfx: &GfxObj) -> Result<Vec<u8>, String> {
-    encode_gfx_part_variant(gfx, None)
+    encode_gfx_part_variant(gfx, None, None)
 }
 
 /// Relief VARIANT of [`encode_gfx_part`] (RELIEF-IN-BAKE). `None` reproduces
 /// the relief-free default byte-for-byte — the differ baseline is never
 /// disturbed by this path existing.
 pub fn encode_gfx_part_relief(gfx: &GfxObj, relief: &ReliefBake) -> Result<Vec<u8>, String> {
-    encode_gfx_part_variant(gfx, Some(relief))
+    encode_gfx_part_variant(gfx, Some(relief), None)
+}
+
+/// v2 (2026-10-22) — [`encode_gfx_part`] with the `?negFace` face markers
+/// (module docs): the reversed back tris go to `MODEL_BACKFACE` subsets,
+/// NoPos polygons on a textured pos surface are baked (UV slot 0) into
+/// `NOPOS_SLOT0` subsets, and `flags::NEG_FRONT_COPY` is set when a
+/// front-copy candidate exists. ONE payload serves both `?negFace` arms.
+///
+/// `surface_type(did)` returns a Surface's `type` bits (`None` = unreadable,
+/// which skips a NoPos polygon exactly as the runtime's unknown-type rule
+/// does). The bake passes [`read_surface_type`] over its DAT source. A model
+/// with no back face, no NoPos polygon and no front-copy candidate encodes to
+/// the v1 bytes with only the version byte changed.
+pub fn encode_gfx_part_faces(
+    gfx: &GfxObj,
+    surface_type: &dyn Fn(u32) -> Option<u32>,
+) -> Result<Vec<u8>, String> {
+    encode_gfx_part_variant(gfx, None, Some(surface_type))
+}
+
+/// Relief VARIANT of [`encode_gfx_part_faces`]: the GEOMR row that pairs with
+/// a v2 GEOM row. Rails never attach to NoPos or SidesType-2 polygons
+/// (`gfx_remodel::ModelTopology` excludes both), so they land in the same
+/// unmarked front subsets as on v1 and the variant stays additive.
+pub fn encode_gfx_part_relief_faces(
+    gfx: &GfxObj,
+    relief: &ReliefBake,
+    surface_type: &dyn Fn(u32) -> Option<u32>,
+) -> Result<Vec<u8>, String> {
+    encode_gfx_part_variant(gfx, Some(relief), Some(surface_type))
+}
+
+/// The bake-side twin of lib.rs `prime_surface_types`: a Surface record's
+/// `type` bits by DID from the portal namespace, `None` when the record is
+/// absent or unreadable (DID 0 included).
+pub fn read_surface_type<S: ResourceSource + ?Sized>(source: &S, did: u32) -> Option<u32> {
+    if did == 0 {
+        return None;
+    }
+    let bytes = source
+        .get_file_by_key(ResourceKey::new(EOR_PORTAL_NAMESPACE, did))
+        .ok()?;
+    crate::file_type::Surface::unpack(&bytes).ok().map(|s| s.surface_type)
+}
+
+/// The geometric half of lib.rs's `?negFace` + `?perPolyCull=on` front-copy
+/// rule (`front_copy_neg_did`): a SidesType-2 drawing polygon whose neg
+/// batch index sorts before its pos index, neg in range. The runtime also
+/// needs a non-zero pos DID and BOTH surfaces opaque; leaving those out makes
+/// this a superset, so a flagged payload may fall back needlessly but an
+/// unflagged one never needs the copy. Whatever the NoNeg bit (retail builds
+/// side 1 either way).
+fn has_front_copy_candidate(gfx: &GfxObj) -> bool {
+    gfx.polygons.values().any(|p| {
+        p.vertex_ids.len() >= 3
+            && p.sides_type == CULL_CLOCKWISE
+            && p.neg_surface >= 0
+            && p.neg_surface < p.pos_surface
+            && (p.neg_surface as usize) < gfx.surfaces.len()
+    })
 }
 
 fn encode_gfx_part_variant(
     gfx: &GfxObj,
     relief: Option<&ReliefBake>,
+    // `Some` = v2 face-marked encode (module docs); `None` = v1.
+    faces: Option<&dyn Fn(u32) -> Option<u32>>,
 ) -> Result<Vec<u8>, String> {
     let mut b = MeshBuilder::default();
     if !gfx.vertex_array.vertices.is_empty() && !gfx.polygons.is_empty() {
@@ -757,6 +924,24 @@ fn encode_gfx_part_variant(
                 } else {
                     0
                 };
+                if (poly.stippling & NO_POS) != 0 {
+                    // v1 skips every NoPos poly (the legacy arm). v2 keeps a
+                    // NoPos poly on a TEXTURED pos surface, front only, UV
+                    // slot 0 (`pos_uv_indices` is empty, so the ring walk
+                    // falls to slot 0 by itself) — lib.rs's `?negFace` rule:
+                    // no back tri (retail has no reversed winding) and an
+                    // unknown or untextured type stays skipped.
+                    let surface_type = faces?;
+                    let textured = raw_pos != 0
+                        && surface_type(raw_pos).is_some_and(|t| {
+                            (t & crate::file_type::surface::SURFACE_TYPE_TEXTURE_MASK) != 0
+                        });
+                    return textured.then_some(PolyPlan {
+                        front_ref: raw_pos,
+                        front_extra: subset_flags::NOPOS_SLOT0,
+                        back: None,
+                    });
+                }
                 let has_back = poly.sides_type == CULL_CLOCKWISE
                     && (poly.stippling & NO_NEG) == 0
                     && !poly.neg_uv_indices.is_empty();
@@ -769,7 +954,14 @@ fn encode_gfx_part_variant(
                     0
                 };
                 let emit_back = has_back && raw_neg != 0 && raw_neg != raw_pos;
-                Some((raw_pos, if emit_back { Some((raw_neg, 0)) } else { None }))
+                // v2 marks the reversed back tri so the `?negFace` arm can drop
+                // it; v1 bakes it unmarked (merged with equal fronts).
+                let back_extra = if faces.is_some() { subset_flags::MODEL_BACKFACE } else { 0 };
+                Some(PolyPlan {
+                    front_ref: raw_pos,
+                    front_extra: 0,
+                    back: emit_back.then_some((raw_neg, 0, back_extra)),
+                })
             },
         );
     }
@@ -779,7 +971,14 @@ fn encode_gfx_part_variant(
     if let Some(r) = relief {
         append_gfx_rails(&mut b, gfx, r);
     }
-    b.serialize(KIND_PART, false, gfx.did_degrade.unwrap_or(0))
+    let did_degrade = gfx.did_degrade.unwrap_or(0);
+    match faces {
+        None => b.serialize(KIND_PART, false, did_degrade),
+        Some(_) => {
+            let extra = if has_front_copy_candidate(gfx) { flags::NEG_FRONT_COPY } else { 0 };
+            b.serialize_with(KIND_PART, HBG1_VERSION_FACES, extra, false, did_degrade)
+        }
+    }
 }
 
 /// Encode one Environment cellstruct as a kind-0 block with SLOT subset refs
@@ -794,6 +993,12 @@ pub fn encode_env_cellstruct(cell: &CellStruct) -> Result<Vec<u8>, String> {
             &cell.polygons,
             false,
             |poly| {
+                // EnvCell NoPos polys stay skipped under every `?negFace` arm
+                // (`append_environment_tris`: `DrawMesh` drops the untextured
+                // batches where the NoPos portal faces sit).
+                if (poly.stippling & NO_POS) != 0 {
+                    return None;
+                }
                 let front = if poly.pos_surface >= 0 {
                     poly.pos_surface as u32
                 } else {
@@ -807,10 +1012,15 @@ pub fn encode_env_cellstruct(cell: &CellStruct) -> Result<Vec<u8>, String> {
                     && !poly.neg_uv_indices.is_empty()
                     && poly.neg_surface >= 0;
                 let pair = if poly.pos_surface >= 0 { poly.pos_surface as u16 } else { u16::MAX };
-                Some((
-                    front,
-                    if has_back { Some((poly.neg_surface as u32, pair)) } else { None },
-                ))
+                Some(PolyPlan {
+                    front_ref: front,
+                    front_extra: 0,
+                    back: has_back.then_some((
+                        poly.neg_surface as u32,
+                        pair,
+                        subset_flags::ENV_BACKFACE,
+                    )),
+                })
             },
         );
     }
@@ -1125,7 +1335,10 @@ pub fn parse_header(b: &[u8]) -> Result<Hbg1Header, String> {
         flags: rd_u16(b, 6)?,
         trailer_off: rd_u32(b, 12)?,
     };
-    if h.version != HBG1_VERSION {
+    // v2 (face-marked PART payloads) shares the v1 layout; readers that care
+    // about the markers ask `Hbg1Mesh::face_marked`. A pre-v2 reader rejects
+    // v2 here — on purpose (module docs, COMPATIBILITY).
+    if h.version != HBG1_VERSION && h.version != HBG1_VERSION_FACES {
         return Err(format!("HBG1: unsupported version {}", h.version));
     }
     Ok(h)
@@ -1203,6 +1416,16 @@ impl<'a> Hbg1Mesh<'a> {
             0
         };
         Ok(Hbg1Mesh { did_degrade, ..m })
+    }
+
+    /// v2 (2026-10-22): this payload's subsets carry the `?negFace` face
+    /// markers (`subset_flags::MODEL_BACKFACE` / `NOPOS_SLOT0`) and its
+    /// header the `flags::NEG_FRONT_COPY` bit, so ONE payload serves both
+    /// arms. `false` = v1: back faces baked unmarked, NoPos polygons absent —
+    /// exact for the `?negFace=off` arm only.
+    #[inline]
+    pub fn face_marked(&self) -> bool {
+        self.header.version == HBG1_VERSION_FACES
     }
 
     #[inline]
@@ -1882,5 +2105,166 @@ mod tests {
         let b = ReliefBake::from_scale(1.0);
         assert_eq!(a.variant_key(), b.variant_key());
         assert_ne!(a.variant_key(), ReliefBake::from_scale(0.5).variant_key());
+    }
+
+    // -----------------------------------------------------------------
+    // v2 — the `?negFace` face marker (2026-10-22)
+    // -----------------------------------------------------------------
+
+    const FACES_TEX_A: u32 = 0x0800_0A01;
+    const FACES_TEX_B: u32 = 0x0800_0A02;
+    const FACES_SOLID: u32 = 0x0800_0A03;
+
+    /// Surface `type` bits for the faces fixture: two Base1Image (0x2)
+    /// surfaces and one Base1Solid (0x1).
+    fn faces_surface_type(did: u32) -> Option<u32> {
+        match did {
+            FACES_TEX_A | FACES_TEX_B => Some(0x2),
+            FACES_SOLID => Some(0x1),
+            _ => None,
+        }
+    }
+
+    /// pid 1: SidesType-2 tri, pos slot 1 / neg slot 0 (distinct DIDs → a
+    ///        legacy back face; neg < pos → a front-copy candidate);
+    /// pid 4: NoPos tri on the TEXTURED slot 1 (no pos UV indices);
+    /// pid 6: NoPos tri on the SOLID slot 2 (skipped on every arm);
+    /// pid 8: single-sided quad on slot 1.
+    fn faces_gfx() -> GfxObj {
+        let mut vertices = HashMap::new();
+        vertices.insert(0, v(0.0, 0.0, 0.0, [0.0, 0.0, 1.0], &[(0.0, 0.0), (0.9, 0.9)]));
+        vertices.insert(1, v(1.0, 0.0, 0.0, [0.0, 0.0, 1.0], &[(1.0, 0.0), (0.8, 0.1)]));
+        vertices.insert(2, v(1.0, 1.0, 0.0, [0.0, 0.0, 1.0], &[(1.0, 1.0)]));
+        vertices.insert(3, v(0.0, 1.0, 0.0, [0.0, 0.0, 1.0], &[(0.0, 1.0)]));
+        let poly = |stippling: u8, sides: i32, pos: i16, neg: i16, ids: Vec<i16>, puv: Vec<u8>, nuv: Vec<u8>| {
+            Polygon {
+                num_pts: ids.len() as u8,
+                stippling,
+                sides_type: sides,
+                pos_surface: pos,
+                neg_surface: neg,
+                vertex_ids: ids,
+                pos_uv_indices: puv,
+                neg_uv_indices: nuv,
+            }
+        };
+        let mut polygons = HashMap::new();
+        polygons.insert(1, poly(0, 2, 1, 0, vec![0, 1, 2], vec![0, 0, 0], vec![1, 1, 0]));
+        polygons.insert(4, poly(0x4, 0, 1, -1, vec![0, 2, 3], vec![], vec![]));
+        polygons.insert(6, poly(0x4, 0, 2, -1, vec![0, 1, 3], vec![], vec![]));
+        polygons.insert(8, poly(0, 0, 1, -1, vec![0, 1, 2, 3], vec![0, 0, 0, 0], vec![]));
+        GfxObj {
+            id: 0x0100_0A01,
+            flags: holtburger_common::properties::GfxObjFlags::HAS_DRAWING,
+            surfaces: vec![FACES_TEX_A, FACES_TEX_B, FACES_SOLID],
+            vertex_array: CVertexArray { vertex_type: 1, vertices },
+            physics_polygons: HashMap::new(),
+            physics_bsp: None,
+            sort_center: Vector3::zero(),
+            polygons,
+            drawing_bsp: Some(crate::physics::BspNode::Leaf(crate::physics::BspLeaf {
+                index: 0,
+                solid: 0,
+                sphere: None,
+                poly_ids: vec![],
+            })),
+            did_degrade: None,
+        }
+    }
+
+    #[test]
+    fn faces_v2_marks_backface_nopos_and_front_copy() {
+        let gfx = faces_gfx();
+        let st = |d: u32| faces_surface_type(d);
+        let v2 = encode_gfx_part_faces(&gfx, &st).expect("v2 encode");
+        assert_eq!(v2, encode_gfx_part_faces(&gfx, &st).unwrap(), "deterministic");
+        let m = Hbg1Mesh::parse(&v2).expect("v2 parses");
+        assert!(m.face_marked());
+        assert_eq!(m.header.version, HBG1_VERSION_FACES);
+        assert!(m.header.flags & flags::NEG_FRONT_COPY != 0, "pid 1 has neg < pos");
+        let subs = m.subsets().unwrap();
+        // First-seen order over pids 1, 4, (6 skipped), 8.
+        assert_eq!(subs.len(), 3, "{subs:?}");
+        assert_eq!((subs[0].surface_ref, subs[0].flags), (FACES_TEX_B, 0));
+        assert_eq!(subs[0].index_count, 9, "pid 1 front + pid 8 quad");
+        assert_eq!(
+            (subs[1].surface_ref, subs[1].flags),
+            (FACES_TEX_A, subset_flags::MODEL_BACKFACE),
+            "the reversed back tri sits in its own marked subset"
+        );
+        assert_eq!(subs[1].index_count, 3);
+        assert_eq!(subs[1].pair_slot, 0, "model back faces carry no pair slot");
+        assert_eq!(
+            (subs[2].surface_ref, subs[2].flags),
+            (FACES_TEX_B, subset_flags::STIPPLE_WRAP | subset_flags::NOPOS_SLOT0),
+            "textured NoPos: front only, stipple wrap from stippling > 0"
+        );
+        assert_eq!(subs[2].index_count, 3);
+        // The NoPos tri reads UV slot 0 of each ring vertex (0, 2, 3).
+        let uvs: Vec<[f32; 2]> = (0..3)
+            .map(|k| m.uv(m.index(subs[2].first_index as usize + k) as usize))
+            .collect();
+        assert_eq!(uvs, vec![[0.0, 0.0], [1.0, 1.0], [0.0, 1.0]]);
+
+        // The v1 encode of the same record: back tri unmarked and merged with
+        // nothing (its DID differs), no NoPos subset, no v2 bits.
+        let v1 = encode_gfx_part(&gfx).unwrap();
+        let m1 = Hbg1Mesh::parse(&v1).unwrap();
+        assert!(!m1.face_marked());
+        assert_eq!(m1.header.flags & flags::NEG_FRONT_COPY, 0);
+        let s1 = m1.subsets().unwrap();
+        assert_eq!(s1.len(), 2);
+        assert!(s1.iter().all(|s| s.flags & (subset_flags::MODEL_BACKFACE | subset_flags::NOPOS_SLOT0) == 0));
+        assert_eq!(m1.index_count + 3, m.index_count, "v2 adds exactly the NoPos tri");
+    }
+
+    #[test]
+    fn faces_v2_unknown_surface_type_skips_nopos() {
+        let gfx = faces_gfx();
+        let none = |_d: u32| -> Option<u32> { None };
+        let m_bytes = encode_gfx_part_faces(&gfx, &none).unwrap();
+        let m = Hbg1Mesh::parse(&m_bytes).unwrap();
+        assert!(
+            m.subsets().unwrap().iter().all(|s| s.flags & subset_flags::NOPOS_SLOT0 == 0),
+            "unknown type = skipped, the runtime's rule"
+        );
+    }
+
+    #[test]
+    fn faces_v2_is_v1_plus_version_byte_when_nothing_to_mark() {
+        // The cube: single-sided, no NoPos, no SidesType-2 → nothing to mark.
+        let gfx = big_box_gfx();
+        let v1 = encode_gfx_part(&gfx).unwrap();
+        let mut v2 = encode_gfx_part_faces(&gfx, &|_d: u32| Some(0x2u32)).unwrap();
+        assert_eq!(v2[5], HBG1_VERSION_FACES);
+        v2[5] = HBG1_VERSION;
+        assert_eq!(v1, v2, "v2 differs from v1 only where there is something to mark");
+    }
+
+    #[test]
+    fn parse_header_accepts_v1_and_v2_only() {
+        let mut p = encode_gfx_part(&quad_gfx()).unwrap();
+        assert!(!Hbg1Mesh::parse(&p).unwrap().face_marked());
+        p[5] = HBG1_VERSION_FACES;
+        assert!(Hbg1Mesh::parse(&p).unwrap().face_marked());
+        p[5] = 3;
+        assert!(parse_header(&p).is_err(), "unknown versions stay rejected");
+    }
+
+    #[test]
+    fn relief_faces_variant_is_additive_over_the_faces_default() {
+        let gfx = big_box_gfx();
+        let st = |_d: u32| Some(0x2u32);
+        let default = encode_gfx_part_faces(&gfx, &st).unwrap();
+        let variant = encode_gfx_part_relief_faces(&gfx, &ReliefBake::default(), &st).unwrap();
+        assert_eq!(variant[5], HBG1_VERSION_FACES);
+        assert!(assert_relief_is_additive(&default, &variant) > 0);
+        // A prop-scale model is variant-free on v2 too.
+        let small = faces_gfx();
+        let fst = |d: u32| faces_surface_type(d);
+        assert_eq!(
+            encode_gfx_part_faces(&small, &fst).unwrap(),
+            encode_gfx_part_relief_faces(&small, &ReliefBake::default(), &fst).unwrap()
+        );
     }
 }

@@ -1,0 +1,175 @@
+<!doctype html><html><body><canvas id="c" width="128" height="128"></canvas>
+<script type="importmap">{ "imports": { "three": "/three/three.module.js", "three/addons/": "/three-addons/" } }</script>
+<script type="module">
+// ?staticEarlyOut + B9a pixel proof (2026-10-22, handoff P2 / L0). The REAL
+// statics chunk batcher (scene3d/static_batch_x.js consolidateStaticSingletonsCrossLb)
+// and the REAL building batcher (scene3d/buildings.js consolidateBuildingSurfaces,
+// floor-bias material from materials.js applyFloorDepthBias) fed the same
+// placements in every arm, drawn through the REAL batched_runs.js (patched chunks +
+// renderBufferDirect wrap) and batched_indirect_per_camera.js, under the app's log
+// depth buffer. Some placements sit outside the view on both frames, others leave
+// or enter it between frame 1 and frame 2 (the camera pans), so an arm that stops
+// culling per instance draws a strict superset of ranges.
+//   default arm:              per-instance cull (today), building bucket marked for runs (B9a);
+//   ?staticEarlyOut=on:       opaque + ClipMap chunk buckets and the building bucket
+//                             on three's early-out (list built once, all instances);
+//                             the translucent bucket stays sorted + culled;
+//   ?batchedRuns=off:         stock chunks, no regrouping (B9a's reference);
+//   ?staticEarlyOut=on&batchedRunsStable=on: + the L1 compare skip.
+// All frames must be identical.
+import * as THREE from "three";
+import { installBatchedRunsChunks, installBatchedRuns, getBatchedRunsStats, isBatchedRunsMarked, batchedRunsFrameTotals } from "/app/scene3d/batched_runs.js";
+import { installBatchedIndirectPerCamera } from "/app/scene3d/batched_indirect_per_camera.js";
+import { syncBatchMatVariants } from "/app/scene3d/batched_material_variant.js";
+import { consolidateStaticSingletonsCrossLb, staticEarlyOutEnabled, getStatBatchXStats } from "/app/scene3d/static_batch_x.js";
+import { consolidateBuildingSurfaces } from "/app/scene3d/buildings.js";
+import { applyFloorDepthBias } from "/app/scene3d/materials.js";
+const out = { errors: [] };
+const origErr = console.error; console.error = (...a) => { out.errors.push(a.map(String).join(" ").slice(0, 400)); origErr(...a); };
+try {
+  out.chunks = installBatchedRunsChunks(THREE);
+  installBatchedIndirectPerCamera(THREE);
+  // Count calls that ENTER BatchedMesh.onBeforeRender in three's early-out state
+  // (outermost before installBatchedRuns adds the L1 hook on top of it).
+  out.earlyOutCalls = 0;
+  out.obrCalls = 0;
+  const innerOBR = THREE.BatchedMesh.prototype.onBeforeRender;
+  THREE.BatchedMesh.prototype.onBeforeRender = function (...a) {
+    out.obrCalls += 1;
+    if (!this._visibilityChanged && !this.perObjectFrustumCulled && !this.sortObjects) out.earlyOutCalls += 1;
+    return innerOBR.apply(this, a);
+  };
+  const renderer = new THREE.WebGLRenderer({ canvas: document.getElementById("c"), logarithmicDepthBuffer: true });
+  renderer.debug.checkShaderErrors = true;
+  out.wrapper = installBatchedRuns(renderer);
+  out.multiDraw = renderer.extensions.has("WEBGL_multi_draw");
+  out.earlyOutFlag = staticEarlyOutEnabled();
+  // Which objects actually went out as instanced runs (outer spy on the wrapper).
+  out.regrouped = {};
+  const runsWrapped = renderer.renderBufferDirect;
+  renderer.renderBufferDirect = function (camera, scene, geometry, material, object, group) {
+    const s = getBatchedRunsStats();
+    const before = s.draws + s.sortedDraws;
+    const r = runsWrapped.call(this, camera, scene, geometry, material, object, group);
+    const s2 = getBatchedRunsStats();
+    if (object && object.isBatchedMesh && s2.draws + s2.sortedDraws > before) {
+      out.regrouped[object.name] = (out.regrouped[object.name] || 0) + 1;
+    }
+    return r;
+  };
+
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x101418);
+  scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+  const sun = new THREE.DirectionalLight(0xffffff, 1.6);
+  sun.position.set(2, -3, 8);
+  scene.add(sun);
+  const scene3d = { staticsGroup: new THREE.Group(), buildingsGroup: new THREE.Group() };
+  scene.add(scene3d.staticsGroup, scene3d.buildingsGroup);
+
+  function checker(seed, cut) {
+    const n = 8, px = new Uint8Array(n * n * 4);
+    for (let i = 0; i < n * n; i++) {
+      const on = ((i % n) + Math.floor(i / n)) % 2 === 0;
+      px[i * 4] = on ? 230 : (seed * 37) & 0xff;
+      px[i * 4 + 1] = on ? (seed * 53) & 0xff : 60;
+      px[i * 4 + 2] = on ? 40 : (seed * 91) & 0xff;
+      px[i * 4 + 3] = cut ? (on ? 255 : 0) : 255;
+    }
+    const t = new THREE.DataTexture(px, n, n, THREE.RGBAFormat);
+    t.magFilter = THREE.NearestFilter; t.minFilter = THREE.NearestFilter;
+    t.needsUpdate = true;
+    return t;
+  }
+  // AC frame: X east, Y north, Z up — the camera looks down -Z from above.
+  const LB = 0x01010000 >>> 0;        // landblock (1,1): origin (192, 192)
+  const O = 192;
+  const box = new THREE.BoxGeometry(1.6, 1.6, 1.6).toNonIndexed();
+  const ball = new THREE.SphereGeometry(0.9, 12, 8).toNonIndexed();
+  const slab = new THREE.BoxGeometry(2.4, 2.4, 0.8).toNonIndexed();
+  const matOpaque = new THREE.MeshStandardMaterial({ map: checker(1, false), roughness: 0.9 });
+  const matClip = new THREE.MeshStandardMaterial({ map: checker(2, true), alphaTest: 0.5, roughness: 0.9 }); // ?clipMapOpaque shape
+  const matGlass = new THREE.MeshStandardMaterial({ map: checker(3, false), transparent: true, opacity: 0.5, depthWrite: false });
+  const nodes = [];
+  function put(mat, geom, did, x, y, z) {
+    const m = new THREE.Mesh(geom, mat);
+    m.position.set(O + x, O + y, z);
+    m.rotation.z = 0.37 * (x + y);
+    m.updateMatrix();
+    m.userData = { surfaceDid: did, landblockId: LB };
+    nodes.push(m);
+  }
+  // A grid around the view (x -14..14, y -6..6 at 3 m pitch, z stepped so no
+  // two surfaces are coplanar), plus far placements on both sides.
+  let k = 0;
+  for (let y = -6; y <= 6; y += 3) {
+    for (let x = -14; x <= 14; x += 3.5) {
+      const z = 0.05 * (k % 7);
+      if (k % 3 === 0) put(matOpaque, (k % 2) ? box : ball, 0x0a00, x, y, z);
+      else if (k % 3 === 1) put(matClip, box, 0x0b00, x, y, z);
+      else put(matGlass, ball, 0x0c00, x, y, z + 2.5);
+      k++;
+    }
+  }
+  for (const fx of [-120, 120, 400]) { put(matOpaque, box, 0x0a00, fx, 0, 0); put(matClip, box, 0x0b00, fx, 4, 0); }
+  const fed = consolidateStaticSingletonsCrossLb(nodes, scene3d, LB);
+  if (fed) for (const n of fed.out) scene3d.staticsGroup.add(n);
+  else for (const n of nodes) scene3d.staticsGroup.add(n);
+
+  // Building surfaces: one floor-bias material (the per-DID clone buildings draw
+  // with), two shared models, flattened singletons in landblock coordinates.
+  const matWall = new THREE.MeshStandardMaterial({ map: checker(4, false), roughness: 0.7 });
+  applyFloorDepthBias(matWall);
+  // Group-free copies: BoxGeometry keeps its six face groups through toNonIndexed(), and
+  // buildings.js _batchEligible refuses any geometry with groups (decoded AC parts have none).
+  const bbox = box.clone(); bbox.clearGroups();
+  const bslab = slab.clone(); bslab.clearGroups();
+  const bnodes = [];
+  for (let i = 0; i < 9; i++) {
+    const m = new THREE.Mesh(i % 3 === 0 ? bslab : bbox, matWall);
+    m.position.set(O - 16 + i * 4, O - 9, 0.3 + 0.02 * i);
+    m.updateMatrix();
+    m.userData = { landblockId: (LB | 0xfffe) >>> 0, surfaceDid: 0x08000101 };
+    bnodes.push(m);
+  }
+  for (const fx of [-140, 160]) {
+    const m = new THREE.Mesh(bbox, matWall);
+    m.position.set(O + fx, O - 9, 0.3);
+    m.updateMatrix();
+    m.userData = { landblockId: (LB | 0xfffe) >>> 0, surfaceDid: 0x08000101 };
+    bnodes.push(m);
+  }
+  const { out: bout, batches } = consolidateBuildingSurfaces(bnodes);
+  for (const n of bout) scene3d.buildingsGroup.add(n);
+  const bld = batches[0] || null;
+  out.building = bld ? { name: bld.name, pOFC: bld.perObjectFrustumCulled, sort: bld.sortObjects, marked: isBatchedRunsMarked(bld) } : null;
+
+  const cam = new THREE.PerspectiveCamera(50, 1, 0.5, 400);
+  cam.up.set(0, 0, 1);
+  function pose(x) { cam.position.set(O + x, O - 4, 24); cam.lookAt(O + x, O, 0); cam.updateMatrixWorld(true); }
+  pose(-3);
+  syncBatchMatVariants();
+  renderer.render(scene, cam);        // frame 1: every list is built
+  pose(3);                            // pan: placements leave / enter the view
+  syncBatchMatVariants();
+  renderer.render(scene, cam);        // frame 2: culled arms rebuild, early-out arms do not
+  syncBatchMatVariants();
+  renderer.render(scene, cam);        // frame 3: settled
+  const gl = renderer.getContext();
+  out.glError = gl.getError();
+  out.programs = renderer.info.programs.map((p) => ({ name: p.name, linked: gl.getProgramParameter(p.program, gl.LINK_STATUS) }));
+  const all = new Uint8Array(128 * 128 * 4); gl.readPixels(0, 0, 128, 128, gl.RGBA, gl.UNSIGNED_BYTE, all);
+  out.frame = Array.from(all);
+  let lit = 0; for (let i = 0; i < all.length; i += 4) if (Math.abs(all[i] - 16) + Math.abs(all[i + 1] - 20) + Math.abs(all[i + 2] - 24) > 30) lit++;
+  out.litPixels = lit;
+  out.stats = getBatchedRunsStats();
+  out.frameTotals = batchedRunsFrameTotals();
+  const sx = getStatBatchXStats();
+  out.earlyOut = sx.walk.earlyOut;
+  out.buckets = sx.detail.map((d) => ({ name: d.name, sorted: d.sorted, earlyOut: d.earlyOut, instances: d.instances }));
+  out.renderer = gl.getParameter(gl.getExtension("WEBGL_debug_renderer_info")?.UNMASKED_RENDERER_WEBGL ?? gl.RENDERER);
+} catch (e) {
+  out.errors.push("page threw: " + String(e && e.stack || e).slice(0, 600));
+}
+window.__smoke = out;
+</script></body></html>

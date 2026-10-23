@@ -1,0 +1,93 @@
+<!doctype html><html><body><canvas id="c" width="128" height="128"></canvas>
+<script type="importmap">{ "imports": { "three": "/three/three.module.js" } }</script>
+<script type="module">
+// Page for harness/glsl_smoke/batched_runs_sorted_smoke.mjs (2026-10-22). The URL
+// carries the arm: bare (sorted consecutive runs on), ?batchedRunsSorted=off,
+// ?batchedRuns=off (stock chunks, stock draws), ?batchedRunsStable=on (L1 skip),
+// and the control ?smokeReverse=1 (reversed sort: the frame MUST change, which
+// proves the scene is blend-order-sensitive, so a zero diff elsewhere means something).
+import * as THREE from "three";
+import { installBatchedRunsChunks, installBatchedRuns, markBatchedRuns, getBatchedRunsStats } from "/app/scene3d/batched_runs.js";
+const out = { errors: [] };
+const origErr = console.error; console.error = (...a) => { out.errors.push(a.map(String).join(" ").slice(0, 400)); origErr(...a); };
+const reverse = new URLSearchParams(location.search).get("smokeReverse") === "1";
+out.reverse = reverse;
+out.chunks = installBatchedRunsChunks(THREE);
+const renderer = new THREE.WebGLRenderer({ canvas: document.getElementById("c") });
+renderer.setClearColor(0x183048, 1);
+renderer.debug.checkShaderErrors = true;
+out.wrapper = installBatchedRuns(renderer);
+out.multiDraw = renderer.extensions.has("WEBGL_multi_draw");
+// On-axis camera: three's sort key (sphere centre - camera) . forward is then the
+// instance's z alone, so every instance of one layer TIES and three's stable sort
+// keeps them adjacent — consecutive repeats by construction.
+const scene = new THREE.Scene(), cam = new THREE.PerspectiveCamera(50, 1, 0.1, 100);
+cam.position.set(0, 0, 14);
+cam.lookAt(0, 0, 0);
+
+// A translucent, blended, SORTED bucket of overlapping quads and boxes, drawn two-pass
+// (transparent + DoubleSide => three draws back faces, then front faces).
+function sortedBucket(x0, mark) {
+  const mat = new THREE.MeshBasicMaterial({ transparent: true, opacity: 0.5, depthWrite: false, side: THREE.DoubleSide });
+  const bm = new THREE.BatchedMesh(64, 4096, 8192, mat);
+  const gQuad = bm.addGeometry(new THREE.PlaneGeometry(1.3, 1.3));
+  const gBox = bm.addGeometry(new THREE.BoxGeometry(0.8, 0.8, 0.8));
+  // [geometry, z, instances at that z]: runs inside a layer AND across layers of one geometry.
+  const layers = [[gQuad, -3, 3], [gBox, -2, 2], [gQuad, -1, 1], [gQuad, -0.5, 2], [gBox, 0.5, 3], [gQuad, 1.5, 2], [gBox, 2, 1], [gBox, 2.5, 2]];
+  const m = new THREE.Matrix4(), c = new THREE.Color();
+  let k = 0;
+  layers.forEach(([g, z, count], li) => {
+    for (let j = 0; j < count; j++) {
+      const id = bm.addInstance(g);
+      const x = x0 + (j - (count - 1) / 2) * 0.55 + 0.1 * li - 0.35;
+      const y = ((li % 3) - 1) * 0.45;
+      bm.setMatrixAt(id, m.makeRotationZ(0.25 * k).setPosition(x, y, z));
+      bm.setColorAt(id, c.setHSL((k * 0.137) % 1, 0.85, 0.55));
+      k++;
+    }
+  });
+  bm.sortObjects = true;
+  bm.perObjectFrustumCulled = true;
+  if (reverse) bm.setCustomSort((list) => list.sort((a, b) => a.z - b.z)); // near first: the WRONG blend order
+  if (mark) markBatchedRuns(bm);
+  scene.add(bm);
+  return bm;
+}
+// An opaque, unsorted bucket on three's early-out (perObjectFrustumCulled off): the
+// ?batchedRunsStable arm skips its compare on the second frame.
+function stableBucket() {
+  const bm = new THREE.BatchedMesh(32, 4096, 8192, new THREE.MeshBasicMaterial());
+  const gBox = bm.addGeometry(new THREE.BoxGeometry(0.7, 0.7, 0.7));
+  const gBall = bm.addGeometry(new THREE.SphereGeometry(0.4, 12, 8));
+  const m = new THREE.Matrix4(), c = new THREE.Color();
+  for (let i = 0; i < 8; i++) {
+    const id = bm.addInstance((i >> 1) % 2 === 0 ? gBox : gBall);
+    bm.setMatrixAt(id, m.makeRotationZ(0.4 * i).setPosition(-4.9 + i * 1.4, -4.4, 0));
+    bm.setColorAt(id, c.setHSL((i * 0.21) % 1, 0.7, 0.5));
+  }
+  bm.sortObjects = false;
+  bm.perObjectFrustumCulled = false;
+  markBatchedRuns(bm);
+  scene.add(bm);
+  return bm;
+}
+sortedBucket(-3.2, true);   // opted in: consecutive instanced runs
+sortedBucket(3.0, false);   // not: three's layout through the PATCHED chunk
+stableBucket();
+const t0 = performance.now();
+renderer.render(scene, cam);
+renderer.render(scene, cam); // second frame: cached layouts; the stable arm's skip
+out.renderMs = Math.round(performance.now() - t0);
+const gl = renderer.getContext();
+out.glError = gl.getError();
+out.programs = renderer.info.programs.map((p) => ({ name: p.name, linked: gl.getProgramParameter(p.program, gl.LINK_STATUS) }));
+const W = 128, H = 128;
+const all = new Uint8Array(W * H * 4); gl.readPixels(0, 0, W, H, gl.RGBA, gl.UNSIGNED_BYTE, all);
+out.frame = Array.from(all);
+let drawn = 0;
+for (let i = 0; i < all.length; i += 4) if (all[i] !== all[0] || all[i + 1] !== all[1] || all[i + 2] !== all[2]) drawn++;
+out.drawnPixels = drawn; // pixels that are not the clear colour (corner pixel)
+out.stats = getBatchedRunsStats();
+out.renderer = gl.getParameter(gl.getExtension("WEBGL_debug_renderer_info")?.UNMASKED_RENDERER_WEBGL ?? gl.RENDERER);
+window.__smoke = out;
+</script></body></html>

@@ -765,7 +765,7 @@ export const REGISTRY = Object.freeze([
     name: "__diag.geometry",
     status: "current",
     reads: "object",
-    evidence: "scene3d/geom_bundles.js:69",
+    evidence: "scene3d/geom_bundles.js:198",
     availability: "boot",
     note: "Geometry-bundle surface — LANDED at T13 (ST3, `?geomBundles`; "
       + "installed by geom_bundles.js when initGeomBundles runs, live "
@@ -787,6 +787,9 @@ export const REGISTRY = Object.freeze([
       + "(task-T4-EYES-report.md 3.3). geom_bundles.js owns the object "
       + "IDENTITY; the gfxRelief RESOLUTION gate is `reliefGate()`.",
     fields: {
+      "faceMarker.negFaceRetail": L("bool", null, { note: "?negFace arm of the last model batch (null before one / old wasm)" }),
+      "faceMarker.unmarkedModels": C("count"),
+      "faceMarker.frontCopyModels": C("count"),
       "bundles.assembled": C("count"),
       "bundles.bytesOut": C("bytes", ["staged"]),
       "bundles.msAssemble": C("ms", null, { attribution: false }),
