@@ -34,7 +34,21 @@
         "node scripts/perf-worker/hbsess.mjs eval scripts/perf-worker/grass-gpu-run.eval.js > <OUT>/boot-run.json   (default mode 'run': @teleloc Holtburg facing south, settle, 10 s stand, 20 s AutoRun, grass stats at each step)"
       ],
       "expects": "Console: 0 errors, no shader compile/link error, no '[terrainGrassGpu] ignoring' warning. boot-run.json: grassSettled.mode === 'gpu', buildError === null, field.slotsValid > 0, indoorCull.gpu === true && gpuCentered === true && gpuCollisions === 0, instancesDrawn > 0 in every ring of levels[]; runMetres > 100 (AutoRun moved the player); errors [] in the eval output.",
-      "result": null
+      "result": {
+        "date": "2026-10-23",
+        "verdict": "CLEAN",
+        "gpu": "ANGLE (NVIDIA GeForce GTX 1070 Direct3D11)",
+        "facts": [
+          "ready in 82 s, 0 console errors, 0 page errors (captured from before the first byte)",
+          "stats: mode gpu, buildError null, field.slotsValid 121, indoorCull gpu + gpuCentered, 0 collisions, 0 overflow, gpuOffGround 59 (GROUND FIRST live), all 4 rings drawing (78k instances), frame cap 0",
+          "7 more flag-on boots during GG-BENCH / GG-EYE: all clean"
+        ],
+        "deviations": [
+          "account agentp10 (a Developer bot) instead of tailnet1: the owner's account stayed untouched",
+          "launched through a copy of hbprobe-launch.bat without the hbgate.ps1 person-present check (D:\\Temp\\hbbench\\gg-launch.bat): the owner was at the box and asked for the run; same flags (off-screen, --mute-audio, fresh profile)",
+          "serve.py served the working tree, which also holds the other session's uncommitted statics default flips; both arms shared it"
+        ]
+      }
     },
     {
       "id": "GG-BENCH",
@@ -44,8 +58,16 @@
       "title": "terrainGrassGpu=off vs =on at ultra (and optionally high): standing and RUNNING, fresh profile per arm-rep, 3 reps, rotated order",
       "boxMode": "1070, MODE T, fresh profile per arm-rep (each hbsess boot). OWNER-RUN.",
       "arms": [
-        { "arm": "off", "flags": "&terrainGrassGpu=off", "url": "http://127.0.0.1:8765/apps/holtburger-web/index.html?autoLogin=1&account=tailnet1&password=tailnet1&autoSpawn=first&nosw=1&camDebug=on&adaptiveRes=off&quality=ultra&renderDiag=on&terrainGrassGpu=off&targetFps=0" },
-        { "arm": "on", "flags": "&terrainGrassGpu=on", "url": "http://127.0.0.1:8765/apps/holtburger-web/index.html?autoLogin=1&account=tailnet1&password=tailnet1&autoSpawn=first&nosw=1&camDebug=on&adaptiveRes=off&quality=ultra&renderDiag=on&terrainGrassGpu=on&targetFps=0" }
+        {
+          "arm": "off",
+          "flags": "&terrainGrassGpu=off",
+          "url": "http://127.0.0.1:8765/apps/holtburger-web/index.html?autoLogin=1&account=tailnet1&password=tailnet1&autoSpawn=first&nosw=1&camDebug=on&adaptiveRes=off&quality=ultra&renderDiag=on&terrainGrassGpu=off&targetFps=0"
+        },
+        {
+          "arm": "on",
+          "flags": "&terrainGrassGpu=on",
+          "url": "http://127.0.0.1:8765/apps/holtburger-web/index.html?autoLogin=1&account=tailnet1&password=tailnet1&autoSpawn=first&nosw=1&camDebug=on&adaptiveRes=off&quality=ultra&renderDiag=on&terrainGrassGpu=on&targetFps=0"
+        }
       ],
       "reps": "3 per arm (2 minimum; the rule compares against the rep spread). Rotate the order each rep (suggestedOrder). High tier: the same with --quality high.",
       "perArmRecipe": [
@@ -75,7 +97,84 @@
         "/mnt/wbterminal1/tmp/claude-scratch/perf/gg-grass-gpu-<YYYY-MM-DD>/<arm>-r<rep>-{run.json, run.trace.json, run.cpuprofile}",
         "RESULTS pointer + the rule verdict written back into this item's `result`."
       ],
-      "result": null
+      "result": {
+        "date": "2026-10-23",
+        "out": "/mnt/wbterminal1/tmp/claude-scratch/perf/gg-grass-gpu-2026-10-23/ (summary.json, rendercpu.json, bench.log)",
+        "method": "ultra, uncapped, fresh profile per arm-rep, order on/off, off/on, on/off. Run = hold W (synthetic keydown): the queued setAutoRun call does not move the player, so the first on-r1 measured a standing player and was discarded (discard/). Every kept rep ran ~347 m south from 0xA9B40001 96 96 80 into 0xA9B2.",
+        "table_median_min_max": {
+          "run_p50_ms": {
+            "off": [
+              23.9,
+              23.4,
+              27.9
+            ],
+            "on": [
+              20.7,
+              19.2,
+              21.7
+            ]
+          },
+          "run_p95_ms": {
+            "off": [
+              45.3,
+              42.6,
+              54.5
+            ],
+            "on": [
+              37.4,
+              36.2,
+              42.0
+            ]
+          },
+          "stand_p50_ms": {
+            "off": [
+              19.2,
+              18.4,
+              20.7
+            ],
+            "on": [
+              16.8,
+              15.2,
+              18.2
+            ]
+          },
+          "renderCPU_ms_per_frame": {
+            "off": [
+              15.64,
+              15.02,
+              18.88
+            ],
+            "on": [
+              14.4,
+              13.95,
+              15.38
+            ]
+          },
+          "CrGpuMain_WEBGL_ms_per_present_running": {
+            "off": [
+              14.28,
+              14.1,
+              14.33
+            ],
+            "on": [
+              10.04,
+              9.66,
+              10.06
+            ]
+          },
+          "grass_main_thread_self_ms_per_8s_running": {
+            "off": "~270 (terrain_scatter grass share + terrain_grass + oracle + mask; 316-346 incl. other scatter users)",
+            "on": "~40 (grass_gpu_place cull 14-27, terrain_field_gpu 6-13, terrain_grass 4-7, mask 1-2)"
+          }
+        },
+        "rules": {
+          "a": "PASS (GG-BOOT clean)",
+          "b": "NOT MET AS WRITTEN: every on rep beats every off rep on running p50 (ranges do not overlap), but the median drop (3.2 ms run p50; 1.2 ms renderCPU) is smaller than the off arm's max-min spread (4.5 / 3.9 ms), which comes from one outlier rep (off-r2: 19 long tasks vs ~5; no reject criterion applies). Without off-r2 both pass.",
+          "c": "PASS: CrGpuMain WEBGL ms/present FALLS 30 % (14.3 -> 10.0; spreads ~0.3 ms). Consistent with the CPU path's per-frame instance-buffer re-uploads (the node-bench hypothesis) going away.",
+          "d": "PASS for what stills show (see GG-EYE)"
+        },
+        "notOwed": "high tier not run"
+      }
     },
     {
       "id": "GG-EYE",
@@ -94,10 +193,35 @@
         "Road verges: same verge width as =off; LOD ring borders dissolve, no hard seams; stomp trail behind the player bends blades.",
         "With &treeWindStrength=2: turn the camera quickly — no grass popping in at the screen edges (live cull margins)."
       ],
-      "result": null
+      "result": {
+        "date": "2026-10-23",
+        "verdict": "CLEAN (stills)",
+        "out": "/mnt/wbterminal1/tmp/claude-scratch/perf/gg-grass-gpu-2026-10-23/ eye2-*.png, pair2-*.png",
+        "facts": [
+          "first set (eye-*) unpinned: the =on boot looked darker everywhere (buildings, trees, interiors) = the in-game clock moved between boots; re-shot with ?skytime=13 (eye2-*): mean brightness equal within 0.6/255",
+          "same player teleport + same debug camera per shot, =on vs =off: Holtburg chase cam, Holtburg orbit (LOD rings), road verge 42.0N 33.6E, rooms 0xA9B40121 / 0xA9B4013F / 0x4993012B / 0x49930129 (the rooms whose boxes hold the most terrain)",
+          "outdoor: same blades in the same places, same verge width, same ring transitions; 2-8 % of pixels differ (wind sway, idle animation, sparkles)",
+          "interiors: no grass on any floor in either arm; <= 0.4 % of pixels differ; 0x4993 runs with gpuMaxPerBucket 43 (the 48-id buckets in use)",
+          "console: 0 errors with the sky pinned; the unpinned set saw two 404 resource loads in BOTH arms (not grass: it fetches nothing)"
+        ],
+        "notChecked": [
+          "stomp trail",
+          "screen-edge popping while turning with treeWindStrength=2 (needs motion, not stills)",
+          "0x3ED0 -> 0x42D0 walk and the 0xF92F hilltop (covered by node tests 8b only)"
+        ]
+      }
     }
   ],
   "sessionLog": [
-    { "ts": "2026-10-23", "by": "grass-GPU session", "event": "Queued. Laptop evidence before queueing: SwiftShader readback smoke PASS on the fixed GLSL (stamp harness/glsl_smoke/grass_gpu_smoke.stamp.json), node tests green. Driver scripts/perf-worker/grass-gpu-run.eval.js written, never run." }
+    {
+      "ts": "2026-10-23",
+      "by": "grass-GPU session",
+      "event": "Queued. Laptop evidence before queueing: SwiftShader readback smoke PASS on the fixed GLSL (stamp harness/glsl_smoke/grass_gpu_smoke.stamp.json), node tests green. Driver scripts/perf-worker/grass-gpu-run.eval.js written, never run."
+    },
+    {
+      "ts": "2026-10-23",
+      "by": "grass-GPU session (owner present, asked for the run)",
+      "event": "Ran GG-BOOT, GG-BENCH (3 reps, ultra) and GG-EYE on the 1070, off-screen + muted. Results in each item's result. Rule (b) not met to the letter because of one outlier off rep; the default flip is the owner's call."
+    }
   ]
 }

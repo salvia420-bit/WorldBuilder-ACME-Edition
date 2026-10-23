@@ -1,7 +1,7 @@
 // scripts/perf-worker/grass-gpu-run.eval.js — the RUNNING read for the ?terrainGrassGpu A/B
 // (apps/holtburger-web/docs/2026-10-23-grass-gpu-placement.md; queue item
 // docs/reengineering/queue-1070/batch-GG-grass-gpu-2026-10-23.json). Page-side. Written
-// 2026-10-23, NOT yet run anywhere (the laptop runs no live client sessions; 1070 = owner-run).
+// 2026-10-23; first run on the 1070 the same day (owner session, batch-GG).
 //
 // WHY. The CPU grass path costs most while the player RUNS: every frame scrolls the ring
 // windows and re-scatters the slots that wrap (findings-round2: ~2.75 ms/frame grass fast
@@ -14,13 +14,16 @@
 // window.__grassGpuRunOpts (set it with a one-line `hbsess.mjs eval` first, or edit the
 // defaults). Modes:
 //   "run"   (default) — @teleloc to the start facing SOUTH, wait for the landing and the
-//           portal tunnel, settle, hold still standMs (rAF intervals), then AutoRun for runMs
-//           (rAF intervals, long tasks, pose start/end), AutoRun off, grass stats at each step.
-//   "start" — the same @teleloc + settle, then AutoRun ON and return at once (so
+//           portal tunnel, settle, hold still standMs (rAF intervals), then run (hold W) for runMs
+//           (rAF intervals, long tasks, pose start/end), release W, grass stats at each step.
+//   "start" — the same @teleloc + settle, then W held down and return at once (so
 //           `hbsess.mjs profile 10 <out>.cpuprofile` can record the run);
-//   "stop"  — AutoRun OFF and the current grass stats.
+//   "stop"  — W released and the current grass stats.
 // The path: Holtburg's settle point (hbsess's HOLT pose, 0xA9B40001 96 96 80), heading south
-// (quaternion w=0 x=0 y=0 z=1: a 180 degree yaw from AC's north-facing identity), ~10 m/s.
+// (quaternion w=0 x=0 y=0 z=1: a 180 degree yaw from AC's north-facing identity), ~18 m/s.
+// Boot the page with the chase camera (hbsess boot --no-orbit): the rings follow the player but
+// the tile cull uses the camera, so a parked orbit camera would watch the start point while the
+// player runs out of its view, and the drawn set would not be what a runner sees.
 
 const W = typeof window !== "undefined" ? window : globalThis;
 const DEFAULTS = {
@@ -127,15 +130,19 @@ function grass() {
   };
 }
 
+/**
+ * Run = hold W. 2026-10-23 on the 1070: a direct `__sessionHandle.setAutoRun(true)`
+ * does not move the player (AutoRun only takes effect through the ?retailRunKeys key
+ * path), so the first arm measured a standing player. A synthetic keydown / keyup on
+ * `document` reaches index.html's __gameplayKeyDown, which feeds setMovementInput:
+ * measured ~18 m/s south from the start point, clear for 20 s (~354 m, 0xA9B4 -> 0xA9B2).
+ */
 function setAutoRun(on) {
-  const h = W.__sessionHandle;
-  if (!h || typeof h.setAutoRun !== "function") { note("autorun", "window.__sessionHandle.setAutoRun missing (stale pkg/?)"); return false; }
   try {
-    h.setAutoRun(on);
-    W.__autoRunOn = on;   // the page's own R-key toggle reads this
+    document.dispatchEvent(new KeyboardEvent(on ? "keydown" : "keyup", { key: "w", code: "KeyW", bubbles: true }));
     return true;
   } catch (e) {
-    note("autorun", e);
+    note("run", e);
     return false;
   }
 }

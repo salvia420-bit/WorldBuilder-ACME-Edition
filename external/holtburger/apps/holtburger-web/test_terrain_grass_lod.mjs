@@ -77,7 +77,8 @@ function makeProvider(config) {
   return { p, parent };
 }
 
-const ULTRA = { blades: 119716, density: 1, radiusM: 40, stomp: false, offRoad: false, reach: 5, nearShare: 0.34, seed: 12345 };
+// gpu: false — this suite locks the CPU scatter path (?terrainGrassGpu is default ON since 2026-10-23).
+const ULTRA = { blades: 119716, density: 1, radiusM: 40, stomp: false, offRoad: false, reach: 5, nearShare: 0.34, seed: 12345, gpu: false };
 
 // ---------------------------------------------------------------------------
 console.log("\n-- D1/D2: the ring layout --");

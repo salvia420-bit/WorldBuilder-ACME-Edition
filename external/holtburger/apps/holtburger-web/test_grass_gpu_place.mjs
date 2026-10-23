@@ -325,7 +325,7 @@ function buildProvider(config, oracle, cx, cy, withThree = true) {
   const parent = withThree ? new THREE.Group() : null;
   const p = createTerrainGrassProvider({
     THREE: withThree ? THREE : null, parent,
-    config: { density: 1, stomp: false, offRoad: true, ...config },
+    config: { density: 1, stomp: false, offRoad: true, gpu: false, ...config },   // the CPU reference provider
   });
   p.update(0.016, {
     scene3d: null, tSec: 0, dt: 0.016, hasPlayer: true, camera: null, quality: null,
@@ -1134,29 +1134,35 @@ console.log("\n-- P8. ?terrainGrassGpu --");
     try { return fn(); } finally { delete globalThis.window; }
   };
   try {
+    // DEFAULT ON since 2026-10-23 (owner, after the 1070 session); the escape is
+    // off / 0 / false / no, any case; anything else warns once and keeps the default.
     _resetVfxFlags();
-    check("absent (no window): false", terrainGrassGpuEnabled() === false);
+    check("absent (no window): true (default on)", terrainGrassGpuEnabled() === true);
     _resetVfxFlags();
-    check("absent (other flags only): false", withSearch("?terrainGrass=on&quality=ultra", terrainGrassGpuEnabled) === false);
+    check("absent (other flags only): true", withSearch("?terrainGrass=on&quality=ultra", terrainGrassGpuEnabled) === true);
     _resetVfxFlags();
-    check("?terrainGrassGpu=on: true", withSearch("?terrainGrassGpu=on", terrainGrassGpuEnabled) === true);
-    check("memoized: a later URL change does not move it without a reset", withSearch("?terrainGrassGpu=off", terrainGrassGpuEnabled) === true);
+    check("?terrainGrassGpu=off: false", withSearch("?terrainGrassGpu=off", terrainGrassGpuEnabled) === false);
+    check("memoized: a later URL change does not move it without a reset", withSearch("?terrainGrassGpu=on", terrainGrassGpuEnabled) === false);
     _resetVfxFlags();
-    check("_resetVfxFlags clears it: ?terrainGrassGpu=off -> false", withSearch("?terrainGrassGpu=off", terrainGrassGpuEnabled) === false);
+    check("_resetVfxFlags clears it: ?terrainGrassGpu=on -> true", withSearch("?terrainGrassGpu=on", terrainGrassGpuEnabled) === true);
+    for (const v of ["0", "false", "no", "OFF", "No"]) {
+      _resetVfxFlags();
+      check(`escape =${v}: false`, withSearch(`?terrainGrassGpu=${v}`, terrainGrassGpuEnabled) === false);
+    }
     _resetVfxFlags();
     warns.length = 0;
     const g1 = withSearch("?terrainGrassGpu=yes", terrainGrassGpuEnabled);
     const g2 = withSearch("?terrainGrassGpu=yes", terrainGrassGpuEnabled);
-    check("garbage (=yes): false, and warns exactly once", g1 === false && g2 === false && warns.length === 1
+    check("garbage (=yes): keeps the default (true), and warns exactly once", g1 === true && g2 === true && warns.length === 1
       && /terrainGrassGpu/.test(warns[0]), `${warns.length} ${warns[0] || ""}`);
     _resetVfxFlags();
-    const g3 = withSearch("?terrainGrassGpu=ON", terrainGrassGpuEnabled);
-    check("EXACT match: =ON is garbage (false) and the reset re-arms the warning", g3 === false && warns.length === 2);
+    const g3 = withSearch("?terrainGrassGpu=1", terrainGrassGpuEnabled);
+    check("=1 is unrecognised: true, and the reset re-arms the warning", g3 === true && warns.length === 2);
     _resetVfxFlags();
-    const g4 = withSearch("?terrainGrassGpu=1", terrainGrassGpuEnabled);
-    check("=1 is garbage too (false)", g4 === false && warns.length === 3);
+    const g4 = withSearch("?terrainGrassGpu=ON", terrainGrassGpuEnabled);
+    check("=ON (any case) is accepted silently: true", g4 === true && warns.length === 2);
     _resetVfxFlags();
-    check("empty value (?terrainGrassGpu=) is garbage: false", withSearch("?terrainGrassGpu=", terrainGrassGpuEnabled) === false);
+    check("empty value (?terrainGrassGpu=) is unrecognised: true", withSearch("?terrainGrassGpu=", terrainGrassGpuEnabled) === true);
   } finally {
     console.warn = origWarn;
     delete globalThis.window;

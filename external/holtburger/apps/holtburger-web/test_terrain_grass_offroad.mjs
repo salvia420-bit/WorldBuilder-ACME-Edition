@@ -356,7 +356,7 @@ function grassField(cx, cy, offRoad, blades = 60025) {
   const parent = new THREE.Group();
   const p = createTerrainGrassProvider({
     THREE, parent,
-    config: { blades, density: 1, radiusM: 48, stomp: false, offRoad, reach: 1 },
+    config: { blades, density: 1, radiusM: 48, stomp: false, offRoad, reach: 1, gpu: false },   // the CPU path (GPU is the default since 2026-10-23)
   });
   p.update(0.016, {
     scene3d: null, tSec: 0, dt: 0.016, hasPlayer: true, camera: null, quality: null,

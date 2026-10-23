@@ -1,8 +1,47 @@
 # HANDOFF — GPU grass placement (`?terrainGrassGpu`), 2026-10-23
 
-Status: **built, reviewed, fixed, smoke-PASSED on SwiftShader. Flag ships OFF.**
-The default flip waits on the owner's 1070 session (queue
-`docs/reengineering/queue-1070/batch-GG-grass-gpu-2026-10-23.json`).
+Status: **DEFAULT ON since 2026-10-23** (owner's call after the 1070 session the
+same day; escape `?terrainGrassGpu=off`). Results are in each item's `result` in
+`docs/reengineering/queue-1070/batch-GG-grass-gpu-2026-10-23.json`.
+
+## 1070 session (2026-10-23, owner present, off-screen + muted)
+
+GTX 1070, ultra, uncapped, fresh profile per arm-rep, order on/off, off/on, on/off;
+the player runs ~347 m south from Holtburg (hold W) in every rep.
+
+| | off (CPU) median (min–max) | on (GPU) median (min–max) |
+|---|---|---|
+| frame p50 running | 23.9 ms (23.4–27.9) | 20.7 ms (19.2–21.7) |
+| frame p95 running | 45.3 ms (42.6–54.5) | 37.4 ms (36.2–42.0) |
+| frame p50 standing | 19.2 ms (18.4–20.7) | 16.8 ms (15.2–18.2) |
+| renderCPU | 15.6 ms (15.0–18.9) | 14.4 ms (14.0–15.4) |
+| CrGpuMain WebGL / frame, running | 14.3 ms (14.1–14.3) | 10.0 ms (9.7–10.1) |
+| grass main-thread self time / 8 s running | ~270 ms | ~40 ms |
+
+- Boot: 8 flag-on boots, 0 console errors. The provider reports mode gpu, the
+  mask is centred with 0 collisions, and GROUND FIRST is live.
+- The pre-written rule (b) was not met to the letter. One off rep (r2, 19 long
+  tasks) widened the off arm's max–min spread past the median drop, although
+  every on rep beat every off rep. The owner chose to flip.
+- CrGpuMain falling 30 % is consistent with the CPU path's per-frame
+  instance-buffer re-uploads going away (the node-bench hypothesis below).
+- Eye: same-camera stills, on vs off, with the sky pinned (`?skytime=13`):
+  same blades, verges and LOD transitions; no grass on the floors of the 4
+  rooms holding the most terrain (Holtburg ×2, 0x4993 ×2).
+  - The first, unpinned set looked darker in the on boot. That was the
+    in-game clock moving between boots.
+  - Not checked by eye: the stomp trail, edge popping while turning with
+    `treeWindStrength=2`, and the walk/hilltop cases (node tests only).
+- Raw data and the session's drivers:
+  `/mnt/wbterminal1/tmp/claude-scratch/perf/gg-grass-gpu-2026-10-23/`
+  (summary.json, run.json / cpuprofile / trace per arm-rep, eye2 stills, tools/).
+  - `tools/gg-sess.mjs` is `hbsess.mjs` with the bot account `agentp10` and a
+    launcher copy without the person-present gate. It was used only because the
+    owner was at the box and asked for the run; the launcher copy is deleted
+    from the box.
+- Driver fix: `__sessionHandle.setAutoRun(true)` does not move the player
+  (AutoRun takes effect only through the `?retailRunKeys` key path).
+  `grass-gpu-run.eval.js` holds W instead.
 
 Design contract: `docs/2026-10-23-grass-gpu-placement.md`. Flag row:
 `docs/url-flags.md` → `terrainGrassGpu`.
@@ -27,10 +66,10 @@ DATA, and move PLACEMENT into the vertex shader.
 - `scene3d/terrain_grass.js` — the GPU build. Each ring is one plain Mesh over
   an `InstancedBufferGeometry` with no instanced attributes, and all rings share
   one program. There is a view early-out (fade / dissolve == 0 → never placed),
-  and dead blades skip the look. With the flag OFF the CPU path is byte-identical
+  and dead blades skip the look. With `=off` the CPU path is byte-identical
   (391-comparison old-vs-new farm, 0 diffs).
-- `scene3d/vfx_flags.js::terrainGrassGpuEnabled` — STRICT `=== "on"`, default
-  false.
+- `scene3d/vfx_flags.js::terrainGrassGpuEnabled` — default ON since
+  2026-10-23. The escape is `off` / `0` / `false` / `no` (any case).
 
 ## Evidence (laptop; no live client sessions)
 
@@ -94,9 +133,8 @@ the default.
 
 ## Next
 
-1. The owner's 1070 session: GG-BOOT → GG-BENCH (3 reps, rotated) → GG-EYE.
-   The decision rule is in the queue file and was written before the run.
-2. If it passes: flip the default in `vfx_flags.js::terrainGrassGpuEnabled`
-   (keep `=off` as the escape), and update the url-flags row and this doc.
-3. Driver for the runs: `scripts/perf-worker/grass-gpu-run.eval.js`
-   (stand + AutoRun south from Holtburg; never run yet).
+1. DONE 2026-10-23: the 1070 session and the default flip.
+2. Optional: the motion eye checks above (stomp trail, wind ×2 edge popping),
+   and the high tier (not benched).
+3. The CPU path is now the `=off` escape, but its full-upload issue (below)
+   still matters for anyone on `=off`.

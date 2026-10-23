@@ -343,15 +343,16 @@ console.log("===================================================================
 console.log("\n-- G0. config + mode --");
 {
   _resetVfxFlags();
-  check("resolveGrassConfig carries gpu, default false (no window)", resolveGrassConfig({ blades: 1024 }).gpu === false);
-  check("an explicit gpu override wins", resolveGrassConfig({ blades: 1024, gpu: true }).gpu === true);
-  globalThis.window = { location: { search: "?terrainGrassGpu=on" } };
-  _resetVfxFlags();
-  const viaFlag = resolveGrassConfig({ blades: 1024 }).gpu;
-  const overridden = resolveGrassConfig({ blades: 1024, gpu: false }).gpu;
-  delete globalThis.window;
-  _resetVfxFlags();
-  check("?terrainGrassGpu=on reaches the config; an explicit false still wins", viaFlag === true && overridden === false);
+  check("resolveGrassConfig carries gpu, default TRUE (no window; default on since 2026-10-23)", resolveGrassConfig({ blades: 1024 }).gpu === true);
+  check("an explicit gpu override wins", resolveGrassConfig({ blades: 1024, gpu: false }).gpu === false);
+  const withFlag = (search, fn) => { globalThis.window = { location: { search } }; _resetVfxFlags(); try { return fn(); } finally { delete globalThis.window; _resetVfxFlags(); } };
+  const viaOff = withFlag("?terrainGrassGpu=off", () => [resolveGrassConfig({ blades: 1024 }).gpu, resolveGrassConfig({ blades: 1024, gpu: true }).gpu]);
+  check("?terrainGrassGpu=off reaches the config; an explicit true still wins", viaOff[0] === false && viaOff[1] === true);
+  check("the escape spellings 0 / false / no / OFF all fall back to the CPU path",
+    ["0", "false", "no", "OFF"].every((v) => withFlag(`?terrainGrassGpu=${v}`, () => resolveGrassConfig({ blades: 1024 }).gpu) === false));
+  check("=on and an unrecognised value keep the default (GPU)",
+    withFlag("?terrainGrassGpu=on", () => resolveGrassConfig({ blades: 1024 }).gpu) === true
+    && withFlag("?terrainGrassGpu=maybe", () => resolveGrassConfig({ blades: 1024 }).gpu) === true);
   check("provider mode follows the config (cpu / gpu)",
     makeProvider(ULTRA, { gpu: false }).mode === "cpu" && makeProvider(ULTRA, { gpu: true }).mode === "gpu");
   check("a caller-supplied material keeps the CPU path (it cannot place blades)",
@@ -1200,14 +1201,15 @@ console.log("\n-- G4. per frame, setOffRoad, setLodLook, stats, the window handl
 }
 
 // ---------------------------------------------------------------------------
-console.log("\n-- G5. flag off: the CPU path exactly as before --");
+console.log("\n-- G5. ?terrainGrassGpu=off: the CPU path exactly as before --");
 {
+  globalThis.window = { location: { search: "?terrainGrassGpu=off" } };
   _resetVfxFlags();
   const parent = new THREE.Group();
-  const p = createTerrainGrassProvider({ THREE, parent, config: { ...BASE, ...ULTRA } });   // no gpu key: the flag (off)
+  const p = createTerrainGrassProvider({ THREE, parent, config: { ...BASE, ...ULTRA } });   // no gpu key: the flag (=off)
   p.update(0.016, makeCtx(PX, PY, PZ, TERRAIN));
   const pools = p._pools;
-  check("flag absent: mode cpu, one scatter pool + InstancedMesh per ring, no field, no GPU mesh",
+  check("?terrainGrassGpu=off: mode cpu, one scatter pool + InstancedMesh per ring, no field, no GPU mesh",
     p.mode === "cpu" && p.quality().gpu === false && pools.length === 4 && pools.every((pl) => pl && pl.mesh && pl.mesh.isInstancedMesh)
     && p._pool === pools[0] && p._field === null && p._meshes.every((mm) => mm === null) && p._ringStates.every((s) => s === null));
   check("no GPU uniform in any CPU ring bag (uGp*, uHb*)", p._ringUniforms.every((u) => Object.keys(u).every((k) => !/^uGp|^uHb/.test(k))));
@@ -1235,8 +1237,10 @@ console.log("\n-- G5. flag off: the CPU path exactly as before --");
     if (a.count !== b.count) { same = false; break; }
     for (let i = 0; i < a.count; i += 1) if (a._live[i] !== b._live[i] || a._cellX[i] !== b._cellX[i]) { same = false; break; }
   }
-  check("gpu: false and the flag-absent default build the same CPU field", same);
+  check("gpu: false and ?terrainGrassGpu=off build the same CPU field", same);
   p.dispose(); explicit.dispose();
+  delete globalThis.window;
+  _resetVfxFlags();
 }
 
 // ---------------------------------------------------------------------------

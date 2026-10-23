@@ -133,9 +133,10 @@ function makeProvider(extra = {}, oracle = makeStubOracle()) {
   const p = createTerrainGrassProvider({
     THREE: THREE_SPY,
     parent,
+    // gpu: false — these locks are about the CPU scatter pool (?terrainGrassGpu is default ON since 2026-10-23).
     config: xc
-      ? { reach: 1, ...xc }
-      : { blades: 1024, density: 1, radiusM: 48, stomp: false, seed: 7777, reach: 1 },
+      ? { reach: 1, gpu: false, ...xc }
+      : { blades: 1024, density: 1, radiusM: 48, stomp: false, seed: 7777, reach: 1, gpu: false },
     ...rest,
   });
   return { provider: p, parent, oracle };

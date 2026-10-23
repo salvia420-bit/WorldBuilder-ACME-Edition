@@ -360,11 +360,12 @@ Placement GLSL + JS mirror + tile culling, THREE-free (pure strings and math).
 ## Integration — `scene3d/terrain_grass.js`
 
 - `resolveGrassConfig` carries `gpu` (override > `terrainGrassGpuEnabled()`).
-- `vfx_flags.js`: `terrainGrassGpuEnabled()` — `?terrainGrassGpu=on|off`, strict
-  exact-match like `terrainGrassStomp`, default false, memoised, reset by
-  `_resetVfxFlags`.
+- `vfx_flags.js`: `terrainGrassGpuEnabled()`. DEFAULT ON since 2026-10-23
+  (owner, after the 1070 session; queue batch-GG). The escape is `off` / `0` /
+  `false` / `no` (any case); `on` is accepted, and anything else warns once and
+  keeps ON. Memoised, reset by `_resetVfxFlags`.
 - GPU build (THREE present): one shared `createTerrainFieldGpu`, the interior
-  mask created with `{ THREE, gpu: true }` (`gpu: true` keeps the mirror's
+  mask created with `{ THREE, gpu: true, oracle }` (GROUND FIRST; `gpu: true` keeps the mirror's
   arrays without THREE too: node, `?nullRender=1`; the CPU path still calls
   `createInteriorMask()` with no args = CPU mode); per ring an `InstancedBufferGeometry` copy of the
   blade geometry with NO instanced attributes, a `THREE.Mesh` (not InstancedMesh —

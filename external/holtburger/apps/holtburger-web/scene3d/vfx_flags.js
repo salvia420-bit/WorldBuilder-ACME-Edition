@@ -363,27 +363,29 @@ export function terrainGrassStompEnabled() {
 
 let _terrainGrassGpu;
 let _terrainGrassGpuWarned = false;
-/** `?terrainGrassGpu=on` — 2026-10-23: place the grass blades IN THE VERTEX
+/** `?terrainGrassGpu` — 2026-10-23: place the grass blades IN THE VERTEX
  *  SHADER (`scene3d/grass_gpu_place.js` + `terrain_field_gpu.js`; contract
  *  `docs/2026-10-23-grass-gpu-placement.md`) instead of the CPU scatter pools,
- *  which cost ~2.75 ms/frame on the main thread while running. STRICT
- *  exact-match like `terrainGrassStomp` (anything unrecognised warns once and
- *  does NOT enable), but with NO preset fallback: default false, memoized,
- *  until the readback smoke + a bare-default boot are clean. Off ⇒ the CPU
- *  path, byte-identical. */
+ *  which cost ~2.75 ms/frame on the main thread while running. DEFAULT ON
+ *  since 2026-10-23 (owner, after the 1070 session: running frame p50 23.9 ->
+ *  20.7 ms, CrGpuMain WebGL 14.3 -> 10.0 ms/frame, look parity; queue
+ *  batch-GG-grass-gpu-2026-10-23.json). ESCAPE: `off` / `0` / `false` / `no`
+ *  (any case) = the CPU path, byte-identical to before. `on` (any case) is
+ *  accepted; anything else warns once and keeps the default. No preset
+ *  fallback; memoized. */
 export function terrainGrassGpuEnabled() {
   if (_terrainGrassGpu !== undefined) return _terrainGrassGpu;
   const raw = _strFlag("terrainGrassGpu");
-  if (raw === "on") return (_terrainGrassGpu = true);
-  if (raw === "off") return (_terrainGrassGpu = false);
-  if (raw !== null && !_terrainGrassGpuWarned) {
+  const v = raw === null ? null : String(raw).toLowerCase();
+  if (v === "off" || v === "0" || v === "false" || v === "no") return (_terrainGrassGpu = false);
+  if (v !== null && v !== "on" && !_terrainGrassGpuWarned) {
     _terrainGrassGpuWarned = true;
     // eslint-disable-next-line no-console
     console.warn(
-      `[terrainGrassGpu] ignoring ?terrainGrassGpu=${JSON.stringify(raw)} — the flag is an EXACT-match opt-in; use ?terrainGrassGpu=on (or =off).`,
+      `[terrainGrassGpu] ignoring ?terrainGrassGpu=${JSON.stringify(raw)} — the GPU path is the default; use ?terrainGrassGpu=off to fall back to the CPU path.`,
     );
   }
-  return (_terrainGrassGpu = false);
+  return (_terrainGrassGpu = true);
 }
 
 /** `?terrainGrassBlades` — instances in the blade pool (the DEGRADE LEVER for a
