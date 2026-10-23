@@ -1,0 +1,869 @@
+<!doctype html><html><body>
+<script type="importmap">{ "imports": { "three": "/three/three.module.js", "three/addons/": "/three-addons/" } }</script>
+<script type="module">
+// grass_gpu_page.html — the page of harness/glsl_smoke/grass_gpu_smoke.mjs
+// (`?terrainGrassGpu`, docs/2026-10-23-grass-gpu-placement.md). Everything runs
+// here, in one page, one WebGL context at a time (each disposed and its context
+// released before the next): real three r184, the REAL scene3d modules, and the
+// real landblocks + EnvCells of the runner's regions (Holtburg, the 0x4993
+// housing) served at /data/lbs.json, all in ONE oracle and ONE cell map.
+//
+// Per spot the GPU inputs are built the way the provider builds them: the
+// terrain field updated at the spot, and the interior mask CENTRED on it
+// (setGpuCenter(x, y, z, outer reach) before sync(), review lifecycle-1), so
+// far cells (the other region) never reach the GPU arrays.
+//
+// 1. READBACK. The module GLSL — GRASS_GPU_HASH_GLSL + TERRAIN_FIELD_GLSL +
+//    INTERIOR_MASK_GLSL + buildGrassPlaceGlsl(), concatenated in the injector's
+//    order — in a GLSL3 ShaderMaterial. FRAGMENT stage: hbGrassPlace(id) with id
+//    from gl_FragCoord over a 256 x H RGBA32F 4-target MRT. VERTEX stage (where
+//    production runs it): hbGrassPlace(gl_InstanceID) on instanced 1-px points,
+//    flat varyings into the same MRT. Layout, per pixel id:
+//      0 = (live, origin.xyz)  1 = (normal.xyz, rot)  2 = (scale.xy, mat, rank)
+//      3 = (tint.rgb, 1 = written)
+//    Each ring is read back with ALL 64 tiles (identity uGpTiles) and compared
+//    with the CPU provider's pool for that ring, built in this page from the same
+//    oracle and interior cells, matched by WORLD CELL (pool._cellX/_cellY;
+//    liveness pool._live, origin from instanceMatrix, attributes pool.arrays).
+//    Tolerances (test_grass_gpu_place.mjs parity(), Module C): xy 1e-3 m + 2 f32
+//    ULPs of the stored value — the pool stores origins as f32, and at
+//    Holtburg's ~35 km one ULP is 3.9 mm, so a flat 1e-3 m is below the CPU's
+//    own storage quantum; z 1e-3 + 1 ULP + slope x 3 xy-ULPs; normal and every
+//    scalar 1e-4. GATES (2026-10-23, review tests-2; RING_* / AGG_* below):
+//    per ring, live-set mismatches + field outliers <= max(5, 0.5 % of the
+//    ring's CPU live blades); summed over the rings <= max(8, 0.2 %). The f32
+//    JS mirror (grassGpuPlaceMirror over the field's and the mask's own
+//    arrays) is compared too — diagnosis only, never the verdict.
+//    hbGrassPlace(id) is hbGrassPlaceCell(hbGrassCell(id)) with NO view
+//    early-out: the readback holds every cell; the early-out is the provider
+//    shader's, and the frame compare (3) is what holds it.
+// 2. INTERIOR ARM (town spots). Each ring read back once more with
+//    uHbIndoorOn forced to 0 (its own uniform object; the mask's stays 1). The
+//    blades that are live with the mask off and dead with it on are the
+//    mask's kills on the GPU; the same set from the f32 mirror (the mask's
+//    gpuContainsMirror vs no mask) must match it cell for cell within
+//    max(3, 1 %) (FLIP_* below). The CPU's indoorRejects counter is NOT the
+//    reference: it counts step-4 exclusions before the variant / bare / keep
+//    steps, cumulatively. Flips the other way (dead -> live) and any other
+//    change of a blade live in both arms are errors. `deep` counts GPU kills
+//    whose first covering box sits at bucket slot >= 16 (ids 17..48, texels
+//    5..12 of hbIndoorAt's loop), from a port of the bucket walk that must
+//    find a covering box for every mirror kill (`portMiss` 0).
+// 3. FRAME COMPARE. The real provider (createTerrainGrassProvider) with
+//    gpu:false and gpu:true, a fresh renderer + scene each, the app's worldRoot
+//    (rotation.x = -PI/2), the same camera above the player looking down-forward,
+//    time frozen at 0, a 256x256 RGBA8 target. The GPU arm runs the provider's
+//    own shader: the split placement with the view EARLY-OUT (a blade the
+//    distance blend or the dissolve scales to zero is never placed) and the
+//    dead branch that skips the look — both must render what the CPU arm
+//    renders. Wind amplitude AND bow are zeroed
+//    through the shared uniform objects: both read vVfxHash = vfxHash01(origin.xy),
+//    a hash that is chaotic at the f32 ULP scale, and ~60-70 % of GPU origins sit
+//    1 ULP from the CPU's stored f32 (two f32 roundings vs one), so with them on,
+//    those blades bow differently — statistically the same field, not the same
+//    pixels. An info-only pair with the default bow measures exactly that.
+//
+// GLSL here is built from arrays of double-quoted strings: NO BACKTICKS in any
+// GLSL (house rule). No Math.random, no clocks in anything that is compared.
+import * as THREE from "three";
+
+const out = { errors: [], warns: [], programs: [], readback: [], interior: [], indoor: [], fields: [], frame: {}, done: false };
+const origErr = console.error; console.error = (...a) => { out.errors.push(a.map(String).join(" ").slice(0, 2000)); origErr(...a); };
+const origWarn = console.warn; console.warn = (...a) => { out.warns.push(a.map(String).join(" ").slice(0, 400)); origWarn(...a); };
+const WANT_PNG = new URLSearchParams(location.search).get("png") === "1";
+
+const RB_W = 256;          // readback target width (ids per row)
+const FRAME = 256;         // frame-compare target side
+const BG = 0x6b7f99;       // frame clear colour (sRGB; measured in the target)
+
+// town: run the interior arm there. dense: the mask must hold a bucket of more
+// than 16 ids there (the smoke checks it).
+const SPOTS = [
+  { name: "Holtburg centre (0xA9B4)", x: 0xa9 * 192 + 96, y: 0xb4 * 192 + 96, town: true, dense: false },
+  { name: "road screenshot 42.0N 33.6E", x: (336 + 1019.5) * 24, y: (420 + 1019.5) * 24, town: false, dense: false },
+  // 2026-10-23 (review tests-2): the centre of 0x4993's fullest 12 m bucket,
+  // (1175, 2363), 43 building cells; six more around it hold 19-33. Holtburg's
+  // fullest holds 15, so only here do ids 17..48 run through the real GLSL.
+  { name: "dense housing 0x4993", x: 1175.5 * 12, y: 2363.5 * 12, town: true, dense: true },
+];
+const CONFIGS = [
+  ["20000 blades / 24 m / reach 5 (4 rings)", { blades: 20000, radiusM: 24, reach: 5 }],
+  ["10000 blades / 24 m single field (reach 1)", { blades: 10000, radiusM: 24, reach: 1 }],
+];
+const FRAME_SPOT = SPOTS[1];
+const FRAME_CONFIG = CONFIGS[0];
+
+// Readback gates (2026-10-23, review tests-2), from the first passing
+// SwiftShader run (smoke header RESULTS: aggregate 0.024-0.046 %, worst ring
+// 2 of 3093 in the 4 ring config, 3 of 6730 in the single field) and the f32
+// mirror at the dense spot (estimate of the GPU there: 3 of 3175, 2 in a ring
+// of 872; at most 2 more interior-wall decisions within f32 rounding, ring 0).
+//  - per ring: mismatches + outliers <= max(RING_FLOOR, RING_BUDGET x CPU live).
+//    0.5 % is the contract's budget, now per ring (a 1.5-2 % flip confined to
+//    one ring fails: every ring here holds >= 600 live blades, so 1.5 % >= 9).
+//    The floor keeps a sparse ring from failing on a handful of f32 ties (the
+//    measured worst 3 GPU outliers + 2 decision flips per ring = 5).
+//  - summed over the rings: <= max(AGG_FLOOR, AGG_BUDGET x CPU live). 0.2 % is
+//    over 4x the measured worst 0.046 %; the floor covers the dense spot's
+//    smaller field (3175 live: 3 mirror flips + ~1 GPU outlier + 2 wall ties).
+const RING_BUDGET = 0.005;
+const RING_FLOOR = 5;
+const AGG_BUDGET = 0.002;
+const AGG_FLOOR = 8;
+// Interior arm: |GPU kills xor mirror kills| <= max(FLIP_FLOOR, FLIP_BUDGET x
+// mirror kills). Measured f32 wall ties between the mask's arithmetic and a
+// pure-f32 port: at most 2 per ring (dense ring 0), 1 at Holtburg.
+const FLIP_BUDGET = 0.01;
+const FLIP_FLOOR = 3;
+/** A kill whose first covering id sits at this bucket slot or later needs texels 5..12. */
+const DEEP_SLOT = 16;
+
+const hex8 = (id) => (id >>> 0).toString(16).padStart(8, "0");
+const sci = (v) => Number(v.toExponential(2));
+function ulp32(v) {
+  const a = Math.abs(v);
+  if (!(a > 1e-30)) return 1.4e-45;
+  return 2 ** (Math.floor(Math.log2(a)) - 23);
+}
+
+function programList(renderer, where) {
+  const gl = renderer.getContext();
+  return (renderer.info.programs || []).map((p) => {
+    let vs = "";
+    try {
+      for (const s of gl.getAttachedShaders(p.program) || []) {
+        if (gl.getShaderParameter(s, gl.SHADER_TYPE) === gl.VERTEX_SHADER) vs = gl.getShaderSource(s) || "";
+      }
+    } catch (_) { /* report what is there */ }
+    return {
+      where, name: p.name,
+      linked: gl.getProgramParameter(p.program, gl.LINK_STATUS) === true,
+      gpuPlace: vs.indexOf("==== GRASS GPU PLACEMENT") !== -1,
+    };
+  });
+}
+
+function releaseRenderer(renderer) {
+  try { renderer.setRenderTarget(null); } catch (_) {}
+  try { renderer.dispose(); } catch (_) {}
+  try { renderer.forceContextLoss(); } catch (_) {}
+}
+
+let G, P, F, M, O, L;
+try {
+  // terrain_grass.js FIRST — the app's order: grass_gpu_place.js imports it
+  // back (see IMPORT ORDER in grass_gpu_place.js).
+  G = await import("/app/scene3d/terrain_grass.js");
+  P = await import("/app/scene3d/grass_gpu_place.js");
+  F = await import("/app/scene3d/terrain_field_gpu.js");
+  M = await import("/app/scene3d/grass_interior_mask.js");
+  O = await import("/app/scene3d/terrain_oracle.js");
+  L = await import("/app/scene3d/landblock_lru.js");
+} catch (e) {
+  out.fatal = "import: " + String(e && e.stack || e).slice(0, 1200);
+}
+
+try {
+  if (out.fatal) throw new Error(out.fatal);
+  const data = await (await fetch("/data/lbs.json")).json();
+
+  // --- the real terrain oracle -------------------------------------------
+  const oracle = O.createTerrainOracle();
+  for (const lb of data.lbs) {
+    oracle.noteLandblock(L.lbKeyFromXY(lb.lbX, lb.lbY), {
+      codes: Uint8Array.from(lb.codes), heights: Float32Array.from(lb.heights),
+      roads: Uint8Array.from(lb.roads), lbX: lb.lbX, lbY: lb.lbY,
+    });
+  }
+  const groundAt = (x, y) => {
+    const s = oracle.sample(x, y, {});
+    return s && s.hasHeight && Number.isFinite(s.height) ? s.height : 60;
+  };
+
+  // --- the real interior cells, in the live shape (cells.js): worldRoot ->
+  // cells -> envcell-<id> -> mesh-<id> (AC position + AC quaternion) -> the
+  // structure mesh. Not rendered; only the masks read it.
+  const cellRoot = new THREE.Group();
+  cellRoot.name = "worldRoot";
+  cellRoot.rotation.x = -Math.PI / 2;
+  const cellsGroup = new THREE.Group();
+  cellsGroup.name = "cells";
+  cellRoot.add(cellsGroup);
+  const cellContainers3d = new Map();
+  for (const c of data.cells) {
+    const container = new THREE.Group();
+    container.name = "envcell-" + hex8(c.id);
+    const mg = new THREE.Group();
+    mg.name = "mesh-" + hex8(c.id);
+    mg.position.set(c.lbX * 192 + c.origin[0], c.lbY * 192 + c.origin[1], c.origin[2]);
+    mg.quaternion.set(c.quat[1], c.quat[2], c.quat[3], c.quat[0]); // AC (w x y z) -> three (x y z w)
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute("position", new THREE.BufferAttribute(new Float32Array(c.ext), 3));
+    const mesh = new THREE.Mesh(geometry);
+    mesh.name = "surfaces-fused-opaque";
+    mg.add(mesh);
+    container.add(mg);
+    cellsGroup.add(container);
+    cellContainers3d.set(c.id >>> 0, container);
+  }
+  cellRoot.updateMatrixWorld(true);
+  const scene3d = { cellContainers3d, worldRoot: cellRoot };
+  const ctxFor = (x, y, z) => ({
+    scene3d, tSec: 0, dt: 0.016, hasPlayer: true, camera: null, quality: null,
+    playerPos: { x, y, z }, oracle, trail: null,
+  });
+  // The mask centre's reach: the outermost ring of any config (the provider
+  // passes its own outermost ring's half extent the same way).
+  const OUTER_REACH = Math.max(...CONFIGS.map(([, c]) => Math.max(...G.grassLodLayout(
+    G.resolveGrassConfig({ density: 1, stomp: false, offRoad: true, gpu: false, ...c })).map((ring) => ring.radiusM))));
+
+  // =========================================================================
+  // 1. READBACK
+  // =========================================================================
+  const PLACE_GLSL = [P.GRASS_GPU_HASH_GLSL, F.TERRAIN_FIELD_GLSL, M.INTERIOR_MASK_GLSL, P.buildGrassPlaceGlsl()].join("\n");
+  const RB_OUTS = [
+    "layout(location = 0) out highp vec4 oRb0;",
+    "layout(location = 1) out highp vec4 oRb1;",
+    "layout(location = 2) out highp vec4 oRb2;",
+    "layout(location = 3) out highp vec4 oRb3;",
+  ];
+  const RB_FRAG = {
+    vertexShader: ["void main() {", "  gl_Position = vec4(position.xy, 0.0, 1.0);", "}"].join("\n"),
+    fragmentShader: [
+      ...RB_OUTS,
+      "uniform float uRbWidth;",
+      PLACE_GLSL,
+      "void main() {",
+      "  int w = int(uRbWidth + 0.5);",
+      "  int id = int(gl_FragCoord.y) * w + int(gl_FragCoord.x);",
+      "  HbBlade b = hbGrassPlace(id);",
+      "  oRb0 = vec4(b.live ? 1.0 : 0.0, b.origin);",
+      "  oRb1 = vec4(b.normal, b.rot);",
+      "  oRb2 = vec4(b.scale, b.mat, b.rank);",
+      "  oRb3 = vec4(b.tint, 1.0);",
+      "}",
+    ].join("\n"),
+  };
+  const RB_VERT = {
+    vertexShader: [
+      "uniform float uRbWidth;",
+      "uniform vec2 uRbSize;",
+      "flat out vec4 vRb0;",
+      "flat out vec4 vRb1;",
+      "flat out vec4 vRb2;",
+      "flat out vec4 vRb3;",
+      PLACE_GLSL,
+      "void main() {",
+      "  int id = gl_InstanceID;",
+      "  HbBlade b = hbGrassPlace(id);",
+      "  vRb0 = vec4(b.live ? 1.0 : 0.0, b.origin);",
+      "  vRb1 = vec4(b.normal, b.rot);",
+      "  vRb2 = vec4(b.scale, b.mat, b.rank);",
+      "  vRb3 = vec4(b.tint, 1.0);",
+      "  // one point per id, on the centre of pixel (id mod w, id / w)",
+      "  int w = int(uRbWidth + 0.5);",
+      "  int row = id / w;",
+      "  vec2 px = vec2(float(id - row * w) + 0.5, float(row) + 0.5);",
+      "  gl_Position = vec4(px / uRbSize * 2.0 - 1.0, 0.0, 1.0);",
+      "  gl_PointSize = 1.0;",
+      "}",
+    ].join("\n"),
+    fragmentShader: [
+      ...RB_OUTS,
+      "flat in vec4 vRb0;",
+      "flat in vec4 vRb1;",
+      "flat in vec4 vRb2;",
+      "flat in vec4 vRb3;",
+      "void main() {",
+      "  oRb0 = vRb0;",
+      "  oRb1 = vRb1;",
+      "  oRb2 = vRb2;",
+      "  oRb3 = vRb3;",
+      "}",
+    ].join("\n"),
+  };
+
+  const rr = new THREE.WebGLRenderer({ canvas: document.createElement("canvas"), antialias: false });
+  rr.debug.checkShaderErrors = true;
+  out.floatRT = rr.extensions.has("EXT_color_buffer_float");
+  {
+    const gl = rr.getContext();
+    const dbg = gl.getExtension("WEBGL_debug_renderer_info");
+    out.renderer = gl.getParameter(dbg ? dbg.UNMASKED_RENDERER_WEBGL : gl.RENDERER);
+  }
+  const rbCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+  const triGeom = new THREE.BufferGeometry();
+  triGeom.setAttribute("position", new THREE.BufferAttribute(new Float32Array([-1, -1, 0, 3, -1, 0, -1, 3, 0]), 3));
+  const ptGeom = new THREE.InstancedBufferGeometry();
+  ptGeom.setAttribute("position", new THREE.BufferAttribute(new Float32Array(3), 3));
+  // Kept alive until the end: one program per stage, compiled once (every
+  // ring's material has the same source), and a NEW material id per ring so
+  // three re-uploads its uniforms.
+  const rbMaterials = [];
+
+  /** One ring through one stage: the four Float32Array planes, id-major. */
+  function readbackRing(stage, st, shared) {
+    const n = st.maxInstances;
+    const H = Math.ceil(n / RB_W);
+    const rt = new THREE.WebGLRenderTarget(RB_W, H, {
+      count: 4, type: THREE.FloatType, format: THREE.RGBAFormat,
+      minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter,
+      depthBuffer: false, generateMipmaps: false,
+    });
+    const uniforms = Object.assign({}, shared, P.createGrassGpuRingUniforms(st), {
+      uRbWidth: { value: RB_W },
+      uRbSize: { value: new THREE.Vector2(RB_W, H) },
+    });
+    const src = stage === "fragment" ? RB_FRAG : RB_VERT;
+    const mat = new THREE.ShaderMaterial({
+      name: "grass-gpu-readback-" + stage,
+      glslVersion: THREE.GLSL3,
+      vertexShader: src.vertexShader,
+      fragmentShader: src.fragmentShader,
+      uniforms,
+      depthTest: false,
+      depthWrite: false,
+      blending: THREE.NoBlending,
+    });
+    rbMaterials.push(mat);
+    let obj;
+    if (stage === "fragment") {
+      obj = new THREE.Mesh(triGeom, mat);
+    } else {
+      ptGeom.instanceCount = n;
+      obj = new THREE.Points(ptGeom, mat);
+    }
+    obj.frustumCulled = false;
+    const scene = new THREE.Scene();
+    scene.add(obj);
+    rr.setRenderTarget(rt);
+    rr.setClearColor(0x000000, 0);   // plane 3 alpha 0 = never written
+    rr.render(scene, rbCam);
+    const planes = [];
+    for (let k = 0; k < 4; k += 1) {
+      const buf = new Float32Array(RB_W * H * 4);
+      rr.readRenderTargetPixels(rt, 0, 0, RB_W, H, buf, undefined, k);
+      planes.push(buf);
+    }
+    rr.setRenderTarget(null);
+    rt.dispose();
+    return planes;
+  }
+
+  /** GPU planes vs the CPU pool (the contract) and vs the f32 mirror (diagnosis). */
+  function compareRing(k, pool, st, planes, field, mask) {
+    const [B0, B1, B2, B3] = planes;
+    const g = st.g, wmx = st.winMin[0], wmy = st.winMin[1];
+    const r = {
+      level: k, g, ts: st.ts, instances: st.maxInstances,
+      mapped: 0, unwritten: 0, unmappedLive: 0, originOff: 0,
+      cpuLive: 0, gpuLive: 0, mism: 0, outliers: 0, matched: 0, rate: 0,
+      worst: { xy: 0, z: 0, normal: 0, scalar: 0 },
+      mirror: { mism: 0, outliers: 0, matched: 0, exactOrigin: 0, worst: { xy: 0, z: 0, normal: 0, scalar: 0 } },
+      first: null, firstOutlier: null,
+      mapOk: pool.gridSize === g && pool.cellSizeM === st.cell && pool.seed === st.seed,
+    };
+    const byCell = new Int32Array(g * g).fill(-1);
+    for (let i = 0; i < pool.count; i += 1) {
+      const ox = pool._cellX[i] - wmx, oy = pool._cellY[i] - wmy;
+      if (ox < 0 || oy < 0 || ox >= g || oy >= g || byCell[ox * g + oy] !== -1) { r.mapOk = false; continue; }
+      byCell[ox * g + oy] = i;
+    }
+    const hit = new Uint8Array(g * g);
+    const m = pool.mesh.instanceMatrix.array;
+    const A = pool.arrays;
+    const b = P.makeGrassGpuBlade();
+    const bump = (w, key, v) => { if (!(w[key] >= v)) w[key] = v; };
+    // Field differences of GPU blade (planes at o) vs a reference blade.
+    const fieldDiff = (o, ref) => ({
+      dxy: Math.max(Math.abs(B0[o + 1] - ref.x), Math.abs(B0[o + 2] - ref.y)),
+      dz: Math.abs(B0[o + 3] - ref.z),
+      dn: Math.max(Math.abs(B1[o] - ref.nx), Math.abs(B1[o + 1] - ref.ny), Math.abs(B1[o + 2] - ref.nz)),
+      ds: Math.max(
+        Math.abs(B2[o] - ref.h), Math.abs(B2[o + 1] - ref.w), Math.abs(B1[o + 3] - ref.rot),
+        Math.abs(B3[o] - ref.tr), Math.abs(B3[o + 1] - ref.tg), Math.abs(B3[o + 2] - ref.tb),
+        Math.abs(B2[o + 2] - ref.mat), Math.abs(B2[o + 3] - ref.rank)),
+    });
+    const outOfTol = (d, ref) => {
+      const qxy = Math.max(ulp32(ref.x), ulp32(ref.y));
+      const slope = Math.sqrt(ref.nx * ref.nx + ref.ny * ref.ny) / Math.max(ref.nz, 1e-3);
+      return d.dxy > 1e-3 + 2 * qxy || d.dz > 1e-3 + ulp32(ref.z) + slope * 3 * qxy || d.dn > 1e-4 || d.ds > 1e-4;
+    };
+    for (let id = 0; id < st.maxInstances; id += 1) {
+      const o = id * 4;
+      if (B3[o + 3] !== 1) { r.unwritten += 1; continue; }
+      P.grassGpuPlaceMirror(id, st, field, mask, b);
+      const gLive = B0[o] > 0.5;
+      if (!b.mapped) { if (gLive) r.unmappedLive += 1; continue; }
+      r.mapped += 1;
+      const c = (b.cellX - wmx) * g + (b.cellY - wmy);
+      if (hit[c]) r.mapOk = false;
+      hit[c] = 1;
+      // The jittered point is written for every mapped id, live or dead: an id
+      // the shader mapped to another cell is off by at least a cell.
+      if (Math.abs(B0[o + 1] - b.origin.x) > 0.25 * st.cell || Math.abs(B0[o + 2] - b.origin.y) > 0.25 * st.cell) r.originOff += 1;
+      if (gLive) r.gpuLive += 1;
+      // vs the f32 mirror — diagnosis only.
+      if (gLive !== b.live) {
+        r.mirror.mism += 1;
+      } else if (gLive) {
+        r.mirror.matched += 1;
+        const ref = {
+          x: b.origin.x, y: b.origin.y, z: b.origin.z, nx: b.normal.x, ny: b.normal.y, nz: b.normal.z,
+          h: b.scale.x, w: b.scale.y, rot: b.rot, tr: b.tint.x, tg: b.tint.y, tb: b.tint.z, mat: b.mat, rank: b.rank,
+        };
+        const d = fieldDiff(o, ref);
+        if (d.dxy === 0) r.mirror.exactOrigin += 1;
+        bump(r.mirror.worst, "xy", d.dxy); bump(r.mirror.worst, "z", d.dz);
+        bump(r.mirror.worst, "normal", d.dn); bump(r.mirror.worst, "scalar", d.ds);
+        if (outOfTol(d, ref)) r.mirror.outliers += 1;
+      }
+      // vs the CPU pool — the contract.
+      const i = byCell[c];
+      if (i < 0) { r.mapOk = false; continue; }
+      const cLive = pool._live[i] === 1;
+      if (cLive) r.cpuLive += 1;
+      if (cLive !== gLive) {
+        r.mism += 1;
+        if (!r.first) r.first = { cell: [b.cellX, b.cellY], cpuLive: cLive, gpuLive: gLive, mirrorLive: b.live, x: B0[o + 1], y: B0[o + 2] };
+        continue;
+      }
+      if (!cLive) continue;
+      r.matched += 1;
+      const ref = {
+        x: m[i * 16 + 12], y: m[i * 16 + 13], z: m[i * 16 + 14],
+        nx: A.aNormal[i * 3], ny: A.aNormal[i * 3 + 1], nz: A.aNormal[i * 3 + 2],
+        h: A.aScale[i * 2], w: A.aScale[i * 2 + 1], rot: A.aRot[i],
+        tr: A.aTint[i * 3], tg: A.aTint[i * 3 + 1], tb: A.aTint[i * 3 + 2],
+        mat: A.aFamilyParam[i], rank: A.aRank[i],
+      };
+      const d = fieldDiff(o, ref);
+      bump(r.worst, "xy", d.dxy); bump(r.worst, "z", d.dz); bump(r.worst, "normal", d.dn); bump(r.worst, "scalar", d.ds);
+      if (outOfTol(d, ref)) {
+        r.outliers += 1;
+        if (!r.firstOutlier) r.firstOutlier = { cell: [b.cellX, b.cellY], dxy: sci(d.dxy), dz: sci(d.dz), dn: sci(d.dn), ds: sci(d.ds) };
+      }
+    }
+    if (r.mapped !== g * g) r.mapOk = false;
+    r.rate = (r.mism + r.outliers) / Math.max(1, r.cpuLive);
+    // 2026-10-23 (review tests-2): the per ring gate.
+    r.budget = Math.max(RING_FLOOR, RING_BUDGET * Math.max(1, r.cpuLive));
+    r.ok = r.mism + r.outliers <= r.budget;
+    return r;
+  }
+
+  // The mask's GPU arrays as the shader reads them (layout of grass_interior_mask.js).
+  const BOX_FLOATS = M.INDOOR_GPU_BOX_TEXELS * 4;
+  const BUCKET_TEX_W = M.INDOOR_GPU_BUCKET_SLOTS * M.INDOOR_GPU_BUCKET_TEXELS;
+  const SLOT_MASK = M.INDOOR_GPU_BUCKET_SLOTS - 1;
+  /**
+   * The bucket slot (0..47) of the FIRST box covering (x, y, z) in hbIndoorAt's
+   * walk order, or -1: a port of the walk that also says where it stopped.
+   * Diagnosis for `deep` only; compareInterior requires it to find a box for
+   * every kill of the mask's own mirror (portMiss 0).
+   */
+  function firstCoveringSlot(mask, x, y, z) {
+    const D = mask._bucketData, B = mask._boxData;
+    if (!D || !B || mask.uniforms.uHbIndoorOn.value < 0.5) return -1;
+    const bx = Math.floor(x / M.INDOOR_GPU_BUCKET_M), by = Math.floor(y / M.INDOOR_GPU_BUCKET_M);
+    const h = ((by & SLOT_MASK) * BUCKET_TEX_W + (bx & SLOT_MASK) * M.INDOOR_GPU_BUCKET_TEXELS) * 4;
+    if (D[h + 3] < 0.5 || Math.trunc(D[h]) !== bx || Math.trunc(D[h + 1]) !== by) return -1;
+    const n = Math.min(Math.trunc(D[h + 2]), M.INDOOR_GPU_BUCKET_CAP);
+    for (let k = 0; k < n; k += 1) {
+      const fi = D[h + 4 + k];
+      if (fi < 0) continue;
+      const o = Math.trunc(fi) * BOX_FLOATS;
+      if (x < B[o + 20] || x > B[o + 22] || y < B[o + 21] || y > B[o + 23]) continue;
+      const qx = B[o] * x + B[o + 1] * y + B[o + 2] * z + B[o + 3];
+      const qy = B[o + 4] * x + B[o + 5] * y + B[o + 6] * z + B[o + 7];
+      const qz = B[o + 8] * x + B[o + 9] * y + B[o + 10] * z + B[o + 11];
+      if (qx >= B[o + 12] && qy >= B[o + 13] && qz >= B[o + 14] && qx <= B[o + 16] && qy <= B[o + 17] && qz <= B[o + 18]) return k;
+    }
+    return -1;
+  }
+
+  /**
+   * 2026-10-23 (review tests-2) — the interior arm of one ring: GPU planes with
+   * the mask on (`on`) and forced off (`off`) vs the f32 mirror with the mask
+   * and with none, id by id (an id is one world cell; the readback proved the
+   * mapping). A kill = live with the mask off, dead with it on.
+   */
+  function compareInterior(k, st, on, off, field, mask) {
+    const [A0, A1, A2, A3] = on;
+    const [B0, B1, B2, B3] = off;
+    const r = {
+      level: k, gpuKills: 0, mirKills: 0, both: 0, killMism: 0, reverse: 0, offDiff: 0,
+      unwritten: 0, deep: 0, portMiss: 0, firstMism: null,
+    };
+    const bOn = P.makeGrassGpuBlade(), bOff = P.makeGrassGpuBlade();
+    for (let id = 0; id < st.maxInstances; id += 1) {
+      const o = id * 4;
+      if (A3[o + 3] !== 1 || B3[o + 3] !== 1) { r.unwritten += 1; continue; }
+      const gOn = A0[o] > 0.5, gOff = B0[o] > 0.5;
+      // The mask can only kill; a blade live in both arms is the same blade.
+      if (gOn && !gOff) r.reverse += 1;
+      if (gOn && gOff) {
+        for (let c = 0; c < 4; c += 1) {
+          if (A0[o + c] !== B0[o + c] || A1[o + c] !== B1[o + c] || A2[o + c] !== B2[o + c] || A3[o + c] !== B3[o + c]) { r.offDiff += 1; break; }
+        }
+      }
+      P.grassGpuPlaceMirror(id, st, field, mask, bOn);
+      P.grassGpuPlaceMirror(id, st, field, null, bOff);
+      const gKill = gOff && !gOn;
+      const mKill = bOff.live && !bOn.live;
+      if (gKill) r.gpuKills += 1;
+      if (mKill) {
+        r.mirKills += 1;
+        const s = field.sampleMirror(bOff.origin.x, bOff.origin.y);
+        const slot = s ? firstCoveringSlot(mask, bOff.origin.x, bOff.origin.y, s.height) : -1;
+        if (slot < 0) r.portMiss += 1;
+        else if (gKill && slot >= DEEP_SLOT) r.deep += 1;
+      }
+      if (gKill && mKill) r.both += 1;
+      else if (gKill !== mKill) {
+        r.killMism += 1;
+        if (!r.firstMism) r.firstMism = { id, gpuKill: gKill, mirrorKill: mKill, x: B0[o + 1], y: B0[o + 2] };
+      }
+    }
+    return r;
+  }
+
+  for (const spot of SPOTS) {
+    const { name: spotName, x: px, y: py } = spot;
+    const h = groundAt(px, py);
+    // The GPU-side inputs for this spot, exactly as the integration builds them:
+    // the mask's GPU copy centred on the player (review lifecycle-1).
+    const field = F.createTerrainFieldGpu({ THREE, oracle, windowRadiusLb: 7 });
+    field.update(px, py);
+    const mask = M.createInteriorMask({ THREE, checkFrames: 1 });
+    mask.setGpuCenter(px, py, h, OUTER_REACH);
+    mask.sync(scene3d);
+    const ms = mask.stats();
+    out.fields.push({ spot: spotName, ...field.stats() });
+    const indoor = {
+      spot: spotName, town: spot.town, dense: spot.dense,
+      cells: ms.cells, boxes: ms.boxes, gpuBoxes: ms.gpuBoxes, gpuBuckets: ms.gpuBuckets,
+      gpuOverflow: ms.gpuOverflow, gpuCollisions: ms.gpuCollisions, gpuBoxOverflow: ms.gpuBoxOverflow,
+      gpuMaxPerBucket: ms.gpuMaxPerBucket, gpuCandidates: ms.gpuCandidates, gpuCentered: ms.gpuCentered,
+      gpuReach: ms.gpuReach, gpu: ms.gpu,
+      cpuIndoorRejects: {},
+    };
+    out.indoor.push(indoor);
+    const shared = Object.assign({}, field.uniforms, mask.uniforms);
+    // The interior arm's bag: the mask forced off through its OWN uniform object.
+    const sharedOff = Object.assign({}, shared, { uHbIndoorOn: { value: 0 } });
+    for (const [configName, config] of CONFIGS) {
+      // The reference: the real CPU provider, same oracle, same interiors.
+      const provider = G.createTerrainGrassProvider({
+        THREE, parent: new THREE.Group(),
+        config: { density: 1, stomp: false, offRoad: true, gpu: false, ...config },
+      });
+      provider.update(0.016, ctxFor(px, py, h));
+      const cpuStats = provider.stats();
+      indoor.cpuIndoorRejects[configName] = cpuStats.indoorRejects;
+      const cfg = provider.quality();
+      const layout = provider._layout;
+      const pools = provider._pools || [];
+      for (const stage of ["fragment", "vertex"]) {
+        const t0 = performance.now();
+        let interiorMs = 0;
+        const rings = [];
+        const tot = {
+          cpuLive: 0, gpuLive: 0, mism: 0, outliers: 0, matched: 0, unwritten: 0, unmappedLive: 0, originOff: 0,
+          cells: 0, mapOk: pools.length === layout.length && pools.length > 0, mirrorMism: 0, mirrorOutliers: 0,
+          worst: { xy: 0, z: 0, normal: 0, scalar: 0 }, ringsOk: true,
+        };
+        const irings = [];
+        const itot = { gpuKills: 0, mirKills: 0, both: 0, killMism: 0, reverse: 0, offDiff: 0, unwritten: 0, deep: 0, portMiss: 0 };
+        for (let k = 0; k < layout.length && k < pools.length; k += 1) {
+          const pool = pools[k];
+          if (!pool || !pool.mesh) { tot.mapOk = false; continue; }
+          const st = P.grassGpuRingState(layout[k], cfg);
+          P.grassGpuSetWindow(st, px, py);
+          const planes = readbackRing(stage, st, shared);
+          const rr1 = compareRing(k, pool, st, planes, field, mask);
+          for (const key of ["cpuLive", "gpuLive", "mism", "outliers", "matched", "unwritten", "unmappedLive", "originOff"]) tot[key] += rr1[key];
+          tot.cells += rr1.g * rr1.g;
+          tot.mapOk = tot.mapOk && rr1.mapOk;
+          tot.ringsOk = tot.ringsOk && rr1.ok;
+          tot.mirrorMism += rr1.mirror.mism;
+          tot.mirrorOutliers += rr1.mirror.outliers;
+          for (const key of Object.keys(tot.worst)) if (rr1.worst[key] > tot.worst[key]) tot.worst[key] = rr1.worst[key];
+          rings.push({
+            level: rr1.level, g: rr1.g, ts: rr1.ts, instances: rr1.instances,
+            cpuLive: rr1.cpuLive, gpuLive: rr1.gpuLive, mism: rr1.mism, outliers: rr1.outliers,
+            rate: Number(rr1.rate.toFixed(5)), budget: Number(rr1.budget.toFixed(2)), ok: rr1.ok,
+            worst: { xy: sci(rr1.worst.xy), z: sci(rr1.worst.z), normal: sci(rr1.worst.normal), scalar: sci(rr1.worst.scalar) },
+            mirror: {
+              mism: rr1.mirror.mism, outliers: rr1.mirror.outliers,
+              exactOriginFrac: Number((rr1.mirror.exactOrigin / Math.max(1, rr1.mirror.matched)).toFixed(4)),
+              worst: { xy: sci(rr1.mirror.worst.xy), z: sci(rr1.mirror.worst.z), normal: sci(rr1.mirror.worst.normal), scalar: sci(rr1.mirror.worst.scalar) },
+            },
+            unwritten: rr1.unwritten, originOff: rr1.originOff, mapOk: rr1.mapOk,
+            first: rr1.first, firstOutlier: rr1.firstOutlier,
+          });
+          if (spot.town) {
+            // 2. INTERIOR ARM: the same ring, same stage, mask forced off.
+            const ti = performance.now();
+            const offPlanes = readbackRing(stage, st, sharedOff);
+            const ir = compareInterior(k, st, planes, offPlanes, field, mask);
+            for (const key of Object.keys(itot)) itot[key] += ir[key];
+            irings.push(ir);
+            interiorMs += performance.now() - ti;
+          }
+        }
+        tot.rate = Number(((tot.mism + tot.outliers) / Math.max(1, tot.cpuLive)).toFixed(5));
+        tot.budget = Number(Math.max(AGG_FLOOR, AGG_BUDGET * tot.cpuLive).toFixed(2));
+        tot.worst = { xy: sci(tot.worst.xy), z: sci(tot.worst.z), normal: sci(tot.worst.normal), scalar: sci(tot.worst.scalar) };
+        const ok = tot.mapOk && tot.unwritten === 0 && tot.unmappedLive === 0 && tot.originOff === 0
+          && tot.matched > 0 && tot.cpuLive >= 0.1 * tot.cells
+          && tot.ringsOk && tot.mism + tot.outliers <= tot.budget;
+        out.readback.push({
+          config: configName, spot: spotName, stage, ok, ms: Math.round(performance.now() - t0 - interiorMs), totals: tot, rings,
+        });
+        if (spot.town) {
+          itot.budget = Number(Math.max(FLIP_FLOOR, FLIP_BUDGET * itot.mirKills).toFixed(2));
+          const iok = irings.length === rings.length && irings.length > 0 && itot.unwritten === 0
+            && itot.reverse === 0 && itot.offDiff === 0 && itot.portMiss === 0 && itot.killMism <= itot.budget;
+          out.interior.push({
+            config: configName, spot: spotName, stage, dense: spot.dense, ok: iok, ms: Math.round(interiorMs),
+            totals: itot, rings: irings,
+          });
+        }
+      }
+      provider.dispose();
+    }
+    try { field.dispose(); } catch (_) {}
+    try { mask.dispose(); } catch (_) {}
+  }
+  out.readbackGlError = rr.getContext().getError();
+  out.programs.push(...programList(rr, "readback"));
+  for (const mat of rbMaterials) mat.dispose();
+  triGeom.dispose();
+  ptGeom.dispose();
+  releaseRenderer(rr);
+
+  // =========================================================================
+  // 3. FRAME COMPARE
+  // =========================================================================
+  const { name: frameSpotName, x: FX, y: FY } = FRAME_SPOT;
+  const FH = groundAt(FX, FY);
+  // AC (x east, y north, z up) -> three (x, z, -y): the worldRoot rotation.
+  const ac = (x, y, z) => new THREE.Vector3(x, z, -y);
+  const CAM_AC = [FX, FY - 10, FH + 10];
+  const LOOK_AC = [FX, FY + 8, FH];
+  out.frame.camera = { spot: frameSpotName, config: FRAME_CONFIG[0], acPos: CAM_AC, acTarget: LOOK_AC, fovDeg: 50, size: FRAME };
+
+  /** Wind off, bow on/off, clock 0 — on the shared bag and every ring bag. */
+  function applyLook(provider, bow) {
+    const ringBags = provider._ringUniforms;
+    const bags = [provider._uniforms].concat(Array.isArray(ringBags) ? ringBags : []);
+    for (const u of bags) {
+      if (!u) continue;
+      if (u.uGrassWindAmp) u.uGrassWindAmp.value = 0;
+      if (u.uGrassBow) u.uGrassBow.value = bow ? G.GRASS_DEFAULTS.bowAmount : 0;
+      if (u.uTime) u.uTime.value = 0;
+    }
+  }
+
+  /** Fraction of pixels more than 8 levels from the (measured) clear colour. */
+  function litFrac(px, bg) {
+    let lit = 0;
+    for (let o = 0; o < px.length; o += 4) {
+      if (Math.abs(px[o] - bg[0]) > 8 || Math.abs(px[o + 1] - bg[1]) > 8 || Math.abs(px[o + 2] - bg[2]) > 8) lit += 1;
+    }
+    return lit / (px.length / 4);
+  }
+
+  function renderArm(gpuOn, bow) {
+    const where = (bow ? "look-" : "") + (gpuOn ? "gpu" : "cpu");
+    const res = { where, gpu: gpuOn, bow };
+    const canvas = document.createElement("canvas");
+    canvas.width = FRAME;
+    canvas.height = FRAME;
+    const renderer = new THREE.WebGLRenderer({ canvas, antialias: false });
+    renderer.debug.checkShaderErrors = true;
+    renderer.setPixelRatio(1);
+    let provider = null, rt = null;
+    try {
+      const scene = new THREE.Scene();
+      const worldRoot = new THREE.Group();
+      worldRoot.name = "worldRoot";
+      worldRoot.rotation.x = -Math.PI / 2;
+      scene.add(worldRoot);
+      scene.add(new THREE.AmbientLight(0xffffff, 0.7));
+      const sun = new THREE.DirectionalLight(0xffffff, 1.6);
+      sun.position.set(0.4, 1.0, 0.3);
+      scene.add(sun);
+      provider = G.createTerrainGrassProvider({
+        THREE, parent: worldRoot,
+        config: { density: 1, stomp: false, offRoad: true, gpu: gpuOn, ...FRAME_CONFIG[1] },
+      });
+      applyLook(provider, bow);
+      const ctx = ctxFor(FX, FY, FH);
+      provider.update(0.016, ctx);   // builds (lazily) and places / binds everything
+      applyLook(provider, bow);      // ring bags exist now
+      provider.update(0.016, ctx);
+      const camera = new THREE.PerspectiveCamera(50, 1, 0.1, 2000);
+      camera.position.copy(ac(CAM_AC[0], CAM_AC[1], CAM_AC[2]));
+      camera.lookAt(ac(LOOK_AC[0], LOOK_AC[1], LOOK_AC[2]));
+      camera.updateMatrixWorld(true);
+      rt = new THREE.WebGLRenderTarget(FRAME, FRAME);
+      renderer.setRenderTarget(rt);
+      renderer.setClearColor(BG, 1);
+      // The clear colour lands in the (linear) target through three's colour
+      // management: measure it rather than assume BG's sRGB bytes.
+      renderer.clear();
+      const bg = new Uint8Array(4);
+      renderer.readRenderTargetPixels(rt, 0, 0, 1, 1, bg);
+      res.bg = Array.from(bg);
+      const t0 = performance.now();
+      renderer.render(scene, camera);   // compiles
+      renderer.render(scene, camera);   // the frame that is read
+      res.renderMs = Math.round(performance.now() - t0);
+      const px = new Uint8Array(FRAME * FRAME * 4);
+      renderer.readRenderTargetPixels(rt, 0, 0, FRAME, FRAME, px);
+      renderer.setRenderTarget(null);
+      const gl = renderer.getContext();
+      res.glError = gl.getError();
+      res.frame = px;
+      res.litFrac = litFrac(px, res.bg);
+      res.programs = programList(renderer, where);
+      let meshes = 0, instanced = 0;
+      worldRoot.traverse((o) => { if (o.isMesh) { meshes += 1; if (o.isInstancedMesh) instanced += 1; } });
+      res.meshes = meshes;
+      const st = provider.stats() || {};
+      res.mode = st.mode;
+      res.buildError = st.buildError || null;
+      res.summary = {
+        mode: st.mode === undefined ? null : st.mode,
+        meshes, instancedMeshes: instanced,
+        visibleBlades: st.visibleBlades, blades: st.blades,
+        levels: (st.levels || []).map((l) => ({
+          level: l.level, count: l.count, live: l.live, tilesDrawn: l.tilesDrawn, instancesDrawn: l.instancesDrawn,
+        })),
+        field: st.field || null,
+        indoorCull: st.indoorCull ? {
+          boxes: st.indoorCull.boxes, gpuBoxes: st.indoorCull.gpuBoxes, gpuOverflow: st.indoorCull.gpuOverflow,
+        } : null,
+        indoorRejects: st.indoorRejects,
+        buildError: res.buildError,
+        litFrac: Number(res.litFrac.toFixed(4)),
+        glError: res.glError, renderMs: res.renderMs,
+      };
+    } catch (e) {
+      res.error = String(e && e.stack || e).slice(0, 1200);
+      console.error("[grass_gpu_page] arm " + where + " threw: " + res.error);
+      res.programs = res.programs || programList(renderer, where);
+    } finally {
+      if (provider) { try { provider.dispose(); } catch (_) {} }
+      if (rt) { try { rt.dispose(); } catch (_) {} }
+      releaseRenderer(renderer);
+    }
+    return res;
+  }
+
+  /** px count, max channel diff, differing fractions (strict, 1-px tolerant), 16x16 block means. */
+  function frameDiff(a, b) {
+    const n = FRAME * FRAME;
+    if (!a || !b || a.length !== n * 4 || b.length !== n * 4) return { px: 0, error: "missing frame" };
+    let maxDiff = 0, any = 0, over8 = 0, tolerant = 0;
+    const flag = new Uint8Array(n);
+    for (let p = 0; p < n; p += 1) {
+      const o = p * 4;
+      let d = 0;
+      for (let c = 0; c < 4; c += 1) { const v = Math.abs(a[o + c] - b[o + c]); if (v > d) d = v; }
+      if (d > maxDiff) maxDiff = d;
+      if (d) any += 1;
+      if (d > 8) { over8 += 1; flag[p] = 1; }
+    }
+    // A differing pixel is TOLERATED when each frame holds, within 1 px, a
+    // value within 8 levels of the other's: sub-pixel edge jitter, not content.
+    const near = (src, x, y, ref, ro) => {
+      for (let dy = -1; dy <= 1; dy += 1) {
+        for (let dx = -1; dx <= 1; dx += 1) {
+          const xx = x + dx, yy = y + dy;
+          if (xx < 0 || yy < 0 || xx >= FRAME || yy >= FRAME) continue;
+          const q = (yy * FRAME + xx) * 4;
+          if (Math.abs(src[q] - ref[ro]) <= 8 && Math.abs(src[q + 1] - ref[ro + 1]) <= 8 && Math.abs(src[q + 2] - ref[ro + 2]) <= 8) return true;
+        }
+      }
+      return false;
+    };
+    for (let p = 0; p < n; p += 1) {
+      if (!flag[p]) continue;
+      const x = p % FRAME, y = (p / FRAME) | 0, o = p * 4;
+      if (!(near(b, x, y, a, o) && near(a, x, y, b, o))) tolerant += 1;
+    }
+    let blockMeanMax = 0;
+    for (let by = 0; by < FRAME; by += 16) {
+      for (let bx = 0; bx < FRAME; bx += 16) {
+        const sa = [0, 0, 0], sb = [0, 0, 0];
+        for (let y = by; y < by + 16; y += 1) {
+          for (let x = bx; x < bx + 16; x += 1) {
+            const o = (y * FRAME + x) * 4;
+            for (let c = 0; c < 3; c += 1) { sa[c] += a[o + c]; sb[c] += b[o + c]; }
+          }
+        }
+        for (let c = 0; c < 3; c += 1) blockMeanMax = Math.max(blockMeanMax, Math.abs(sa[c] - sb[c]) / 256);
+      }
+    }
+    return {
+      px: n, maxDiff,
+      fracAny: Number((any / n).toFixed(5)),
+      pxOver8: over8, fracOver8: Number((over8 / n).toFixed(5)),
+      pxOver8Tolerant: tolerant, fracOver8Tolerant: Number((tolerant / n).toFixed(5)),
+      blockMeanMax: Number(blockMeanMax.toFixed(3)),
+    };
+  }
+
+  function toPng(px, diffWith) {
+    const c = document.createElement("canvas");
+    c.width = FRAME;
+    c.height = FRAME;
+    const c2 = c.getContext("2d");
+    const img = c2.createImageData(FRAME, FRAME);
+    for (let y = 0; y < FRAME; y += 1) {
+      for (let x = 0; x < FRAME; x += 1) {
+        const s = ((FRAME - 1 - y) * FRAME + x) * 4, d = (y * FRAME + x) * 4;   // GL rows are bottom-up
+        for (let k = 0; k < 3; k += 1) {
+          img.data[d + k] = diffWith ? Math.min(255, 4 * Math.abs(px[s + k] - diffWith[s + k])) : px[s + k];
+        }
+        img.data[d + 3] = 255;
+      }
+    }
+    c2.putImageData(img, 0, 0);
+    return c.toDataURL("image/png");
+  }
+
+  const cpu = renderArm(false, false);
+  const gpu = renderArm(true, false);
+  out.frame.diff = frameDiff(cpu.frame, gpu.frame);
+  const lookCpu = renderArm(false, true);
+  const lookGpu = renderArm(true, true);
+  out.frame.look = {
+    note: "info only: default bow (vVfxHash) on, wind still 0",
+    diff: frameDiff(lookCpu.frame, lookGpu.frame),
+    cpuLitFrac: Number((lookCpu.litFrac || 0).toFixed(4)), gpuLitFrac: Number((lookGpu.litFrac || 0).toFixed(4)),
+    errors: [lookCpu.error, lookGpu.error].filter(Boolean),
+  };
+  if (WANT_PNG) {
+    out.png = {};
+    if (cpu.frame) out.png.cpu = toPng(cpu.frame);
+    if (gpu.frame) out.png.gpu = toPng(gpu.frame);
+    if (cpu.frame && gpu.frame) out.png.diff = toPng(cpu.frame, gpu.frame);
+    if (lookGpu.frame) out.png.look_gpu = toPng(lookGpu.frame);
+    if (lookCpu.frame && lookGpu.frame) out.png.look_diff = toPng(lookCpu.frame, lookGpu.frame);
+  }
+  for (const a of [cpu, gpu, lookCpu, lookGpu]) {
+    out.programs.push(...(a.programs || []));
+    delete a.frame;
+  }
+  out.frame.cpu = cpu;
+  out.frame.gpu = gpu;
+  out.done = true;
+} catch (e) {
+  out.fatal = out.fatal || String(e && e.stack || e).slice(0, 1200);
+}
+window.__smoke = out;
+</script></body></html>

@@ -569,6 +569,13 @@ const TIER5 = [
   { tier: 5, flag: "terrain_grass_shader", file: "test_terrain_grass_shader.mjs" },
   // 2026-10-12 — grass LOD rings (?terrainGrassReach): same budget, 5x reach.
   { tier: 5, flag: "terrain_grass_lod", file: "test_terrain_grass_lod.mjs" },
+  // 2026-10-23 — grass placement in the vertex shader (?terrainGrassGpu): terrain
+  // field textures, interior-mask GPU mirror, placement GLSL + tile cull, and the
+  // provider integration (real-DAT parity vs the CPU pools).
+  { tier: 5, flag: "terrain_field_gpu", file: "test_terrain_field_gpu.mjs" },
+  { tier: 5, flag: "grass_interior_mask_gpu", file: "test_grass_interior_mask_gpu.mjs" },
+  { tier: 5, flag: "grass_gpu_place", file: "test_grass_gpu_place.mjs" },
+  { tier: 5, flag: "terrain_grass_gpu", file: "test_terrain_grass_gpu.mjs" },
   { tier: 5, flag: "terrain_oracle", file: "test_terrain_oracle.mjs" },
   { tier: 5, flag: "terrain_palette", file: "test_terrain_palette.mjs" },
   { flag: "terrainCellFracClamp", file: "test_terrain_cell_frac_clamp.mjs" },
@@ -1397,6 +1404,7 @@ const NEEDS_BROWSER = [
   { file: "harness/glsl_smoke/fps_arms_smoke.mjs", why: `canvasDepth / depthBandSort / freezeWorldRoots — ${BROWSER_WHY}` },
   { file: "harness/glsl_smoke/reversed_z_smoke.mjs", why: `reversedZ — ${BROWSER_WHY}` },
   { file: "harness/glsl_smoke/water_flow_smoke.mjs", why: `waterFlow / waterBank — ${BROWSER_WHY}` },
+  { file: "harness/glsl_smoke/grass_gpu_smoke.mjs", why: `terrainGrassGpu (GPU readback vs CPU grass; writes grass_gpu_smoke.stamp.json on PASS) — ${BROWSER_WHY}` },
 ];
 const BROWSER_ONLY = new Set(NEEDS_BROWSER.map((q) => q.file));
 

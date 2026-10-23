@@ -1,0 +1,103 @@
+{
+  "schema": "hb-1070-queue-v1",
+  "batch": "GG-GRASS-GPU",
+  "created": "2026-10-23",
+  "owner": "owner (OWNER-RUN: queued for the owner's own 1070 session; never self-initiated by an agent)",
+  "preparedBy": "grass-GPU session, 2026-10-23 (queue prep + tooling only; nothing here has run on the 1070)",
+  "source": "apps/holtburger-web/docs/2026-10-23-grass-gpu-placement.md (design contract) + docs/HANDOFF-grass-gpu-2026-10-23.md (status). The decision rule below was written BEFORE the run.",
+  "sessionRules": "vistest-preamble-v1",
+  "sessionRulesInline": [
+    "Inherit every rule of batch-P0-gpu-resident-2026-10-22.json sessionRulesInline verbatim (MODE T off-screen + muted, OWNER-RUN, kill only by user-data-dir, the three-forward tunnel, ?nosw=1, fresh profile per arm-rep, uncapped frames + targetFps=0, release wasm only, >= 65 s between boots on one account, reject-never-average). Read memory/fleet-runbooks.md before driving the 1070.",
+    "Can share a session with P0: GG-BOOT is one extra boot; GG-BENCH adds 2 arms x 3 reps (x2 if the high tier is run)."
+  ],
+  "accounts": {
+    "fact": "Same driver gap as P0: hbsess.mjs hardcodes account=tailnet1. Acceptable ONLY because the session is owner-run; @teleloc needs a Developer account."
+  },
+  "urlBase": "http://127.0.0.1:8765/apps/holtburger-web/index.html",
+  "urlNotes": "Every URL is what `hbsess.mjs boot --quality ultra --flags 'renderDiag=on&terrainGrassGpu=<on|off>'` builds. `?terrainGrassGpu` is STRICT: only `on` enables, `off` forces off, anything else warns once and stays off. Default today: OFF.",
+  "suggestedOrder": [
+    "GG-BOOT (one boot, flag on) — if it fails, stop: GG-BENCH and GG-EYE are moot",
+    "GG-BENCH rep 1: off, on · rep 2: on, off · rep 3: off, on (ultra); optional same rotation at high",
+    "GG-EYE (flag on, then the same spots flag off for the A/B look)"
+  ],
+  "items": [
+    {
+      "id": "GG-BOOT",
+      "kind": "probe",
+      "stage": "?terrainGrassGpu — first real-GPU boot",
+      "gate": "precondition for GG-BENCH / GG-EYE and for the default flip",
+      "title": "Flag-on boot at ultra: loads, spawns, 0 console errors, the GPU path is the one running",
+      "boxMode": "1070, MODE T: off-screen + muted, fresh profile, CDP :9333 over the tunnel. OWNER-RUN.",
+      "url": "http://127.0.0.1:8765/apps/holtburger-web/index.html?autoLogin=1&account=tailnet1&password=tailnet1&autoSpawn=first&nosw=1&camDebug=on&adaptiveRes=off&quality=ultra&renderDiag=on&terrainGrassGpu=on&targetFps=0",
+      "recipe": [
+        "node scripts/perf-worker/hbsess.mjs boot --quality ultra --flags 'renderDiag=on&terrainGrassGpu=on'",
+        "node scripts/perf-worker/hbsess.mjs eval scripts/perf-worker/grass-gpu-run.eval.js > <OUT>/boot-run.json   (default mode 'run': @teleloc Holtburg facing south, settle, 10 s stand, 20 s AutoRun, grass stats at each step)"
+      ],
+      "expects": "Console: 0 errors, no shader compile/link error, no '[terrainGrassGpu] ignoring' warning. boot-run.json: grassSettled.mode === 'gpu', buildError === null, field.slotsValid > 0, indoorCull.gpu === true && gpuCentered === true && gpuCollisions === 0, instancesDrawn > 0 in every ring of levels[]; runMetres > 100 (AutoRun moved the player); errors [] in the eval output.",
+      "result": null
+    },
+    {
+      "id": "GG-BENCH",
+      "kind": "bench",
+      "stage": "?terrainGrassGpu — Measure",
+      "gate": "decides the default flip (rule below)",
+      "title": "terrainGrassGpu=off vs =on at ultra (and optionally high): standing and RUNNING, fresh profile per arm-rep, 3 reps, rotated order",
+      "boxMode": "1070, MODE T, fresh profile per arm-rep (each hbsess boot). OWNER-RUN.",
+      "arms": [
+        { "arm": "off", "flags": "&terrainGrassGpu=off", "url": "http://127.0.0.1:8765/apps/holtburger-web/index.html?autoLogin=1&account=tailnet1&password=tailnet1&autoSpawn=first&nosw=1&camDebug=on&adaptiveRes=off&quality=ultra&renderDiag=on&terrainGrassGpu=off&targetFps=0" },
+        { "arm": "on", "flags": "&terrainGrassGpu=on", "url": "http://127.0.0.1:8765/apps/holtburger-web/index.html?autoLogin=1&account=tailnet1&password=tailnet1&autoSpawn=first&nosw=1&camDebug=on&adaptiveRes=off&quality=ultra&renderDiag=on&terrainGrassGpu=on&targetFps=0" }
+      ],
+      "reps": "3 per arm (2 minimum; the rule compares against the rep spread). Rotate the order each rep (suggestedOrder). High tier: the same with --quality high.",
+      "perArmRecipe": [
+        "1. node scripts/perf-worker/hbsess.mjs boot --quality ultra --flags 'renderDiag=on<ARM FLAGS>'",
+        "2. node scripts/perf-worker/hbsess.mjs eval scripts/perf-worker/grass-gpu-run.eval.js > <OUT>/<arm>-r<rep>-run.json   (mode 'run': stand + run frame stats, long tasks, grass stats)",
+        "3. Running trace: write a one-line opts file  printf 'window.__grassGpuRunOpts={mode:\"start\"};return 1;' > <OUT>/gg-start-opts.js  and the same with mode \"stop\" > <OUT>/gg-stop-opts.js. Then: hbsess eval <OUT>/gg-start-opts.js; hbsess eval scripts/perf-worker/grass-gpu-run.eval.js (teleport, settle, AutoRun ON, returns); node scripts/perf-worker/gputrace.mjs <OUT>/<arm>-r<rep>-run.trace.json; python3 -I scripts/perf-worker/gpu_thread_split.py <OUT>/<arm>-r<rep>-run.trace.json; hbsess eval <OUT>/gg-stop-opts.js; hbsess eval scripts/perf-worker/grass-gpu-run.eval.js (AutoRun OFF + stats).",
+        "4. Running CPU profile: the same start / stop bracket around  node scripts/perf-worker/hbsess.mjs profile 10 <OUT>/<arm>-r<rep>-run.cpuprofile  → renderCPU and the grass update share (`node scripts/net-review/profile-split-render.mjs`; also search the profile for terrain_grass.js update / scatterInstance self time).",
+        "5. node scripts/perf-worker/hbsess.mjs kill; wait >= 65 s before the next boot."
+      ],
+      "reads": [
+        "run.json: stand.{p50,p95,p99,longTasks} and run.{p50,p95,p99,max,longTasks,longTaskMs} (rAF intervals), runMetres, grassRun.instancesDrawn / tilesDrawn / levels[] (on) vs visibleBlades (off)",
+        "trace: CrGpuMain WEBGL ms/frame while running (the vertex-shader placement cost lands here), CrRendererMain busy",
+        "cpuprofile: renderCPU and the main-thread time in terrain_grass.js (off: the amortised re-scatter + instance uploads; on: the tile cull only)",
+        "off arm only, a hypothesis from the node bench (harness/bench_grass_cpu_vs_gpu.mjs): running east/west the CPU path re-uploads WHOLE instance buffers every frame (~6.7 MB/frame at ultra: an x-scroll touches more than maxUpdateRuns = 4 runs and falls back to a full upload). Look for large bufferSubData in the trace; it is a CPU-path issue independent of this flag."
+      ],
+      "decisionRules": [
+        "Written 2026-10-23, BEFORE the run: flip ?terrainGrassGpu default ON (keeping `?terrainGrassGpu=off` as the escape) iff ALL of: (a) GG-BOOT is clean; (b) running main-thread frame time drops with `on` (run.p50 or renderCPU lower than `off` by more than the off arm's rep spread); (c) CrGpuMain WEBGL ms/frame while running does not rise by more than the rep spread; (d) GG-EYE is CLEAN.",
+        "If (b) holds but (c) fails: keep OFF; the vertex placement cost is too high on the 1070 — the next lever is the per-ring dead-blade share (stats levels[].instancesDrawn vs live) and the tile size.",
+        "If (b) fails: keep OFF; record the numbers. The node bench predicted 4.5–8.5x lower grass main-thread cost while running; a miss means the cost is elsewhere."
+      ],
+      "checklist": [
+        "Every arm-rep: env shows the GTX 1070, frame cap 0, run.json errors [], start.landedOk true, start.tunnelStillActive false (else REJECT and re-run).",
+        "on arm: grassRun.mode === 'gpu'; off arm: grassRun.mode === 'cpu'.",
+        "Session end: test Chrome killed by user-data-dir."
+      ],
+      "out": [
+        "/mnt/wbterminal1/tmp/claude-scratch/perf/gg-grass-gpu-<YYYY-MM-DD>/<arm>-r<rep>-{run.json, run.trace.json, run.cpuprofile}",
+        "RESULTS pointer + the rule verdict written back into this item's `result`."
+      ],
+      "result": null
+    },
+    {
+      "id": "GG-EYE",
+      "kind": "eyetest",
+      "stage": "?terrainGrassGpu — Look",
+      "gate": "rule (d) of GG-BENCH",
+      "title": "Flag-on look parity on a real GPU: interiors, verges, LOD dissolve, stomp trail, screen edges",
+      "boxMode": "1070, MODE T (screenshots via CDP, off-screen). OWNER-RUN.",
+      "url": "http://127.0.0.1:8765/apps/holtburger-web/index.html?autoLogin=1&account=tailnet1&password=tailnet1&autoSpawn=first&nosw=1&camDebug=on&adaptiveRes=off&quality=ultra&terrainGrassGpu=on&targetFps=0",
+      "checklist": [
+        "Same spots with =off and =on, same camera: overall grass density / colour / blade shape indistinguishable (the SwiftShader smoke differs by 0.18 % of pixels).",
+        "Holtburg: no grass inside any house or on any floor (@teleloc 0xA9B40001 96 96 80, look into doorways).",
+        "Dense housing 0x4993: no grass inside cottages (the 48-id buckets; the SwiftShader smoke reads ids 17-48 there).",
+        "Walk / hop 0x3ED0 → 0x42D0 (the review's fold case): after arriving, no grass through floors.",
+        "From the 0xF830 valley look at the 0xF92F hilltop building: no grass through its floor (GROUND FIRST).",
+        "Road verges: same verge width as =off; LOD ring borders dissolve, no hard seams; stomp trail behind the player bends blades.",
+        "With &treeWindStrength=2: turn the camera quickly — no grass popping in at the screen edges (live cull margins)."
+      ],
+      "result": null
+    }
+  ],
+  "sessionLog": [
+    { "ts": "2026-10-23", "by": "grass-GPU session", "event": "Queued. Laptop evidence before queueing: SwiftShader readback smoke PASS on the fixed GLSL (stamp harness/glsl_smoke/grass_gpu_smoke.stamp.json), node tests green. Driver scripts/perf-worker/grass-gpu-run.eval.js written, never run." }
+  ]
+}

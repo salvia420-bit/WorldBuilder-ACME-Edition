@@ -361,6 +361,31 @@ export function terrainGrassStompEnabled() {
   return (_terrainGrassStomp = flags.terrainGrassStomp === true);
 }
 
+let _terrainGrassGpu;
+let _terrainGrassGpuWarned = false;
+/** `?terrainGrassGpu=on` — 2026-10-23: place the grass blades IN THE VERTEX
+ *  SHADER (`scene3d/grass_gpu_place.js` + `terrain_field_gpu.js`; contract
+ *  `docs/2026-10-23-grass-gpu-placement.md`) instead of the CPU scatter pools,
+ *  which cost ~2.75 ms/frame on the main thread while running. STRICT
+ *  exact-match like `terrainGrassStomp` (anything unrecognised warns once and
+ *  does NOT enable), but with NO preset fallback: default false, memoized,
+ *  until the readback smoke + a bare-default boot are clean. Off ⇒ the CPU
+ *  path, byte-identical. */
+export function terrainGrassGpuEnabled() {
+  if (_terrainGrassGpu !== undefined) return _terrainGrassGpu;
+  const raw = _strFlag("terrainGrassGpu");
+  if (raw === "on") return (_terrainGrassGpu = true);
+  if (raw === "off") return (_terrainGrassGpu = false);
+  if (raw !== null && !_terrainGrassGpuWarned) {
+    _terrainGrassGpuWarned = true;
+    // eslint-disable-next-line no-console
+    console.warn(
+      `[terrainGrassGpu] ignoring ?terrainGrassGpu=${JSON.stringify(raw)} — the flag is an EXACT-match opt-in; use ?terrainGrassGpu=on (or =off).`,
+    );
+  }
+  return (_terrainGrassGpu = false);
+}
+
 /** `?terrainGrassBlades` — instances in the blade pool (the DEGRADE LEVER for a
  *  vertex-bound effect; render scale buys grass nothing — plan §3.1). Preset key
  *  `terrainGrassBlades`: low 0 (the tier is disabled, §5.8) / mid 24336 (156²) /
@@ -1632,6 +1657,8 @@ export function _resetVfxFlags() {
   _terrainTrailWarned = _terrainTrailImpliedLogged = _terrainTrailSuppressedWarned = false;
   _terrainGrass = _terrainGrassStomp = undefined;
   _terrainGrassWarned = _terrainGrassStompWarned = false;
+  _terrainGrassGpu = undefined;
+  _terrainGrassGpuWarned = false;
   _terrainSand = _terrainSandStreamers = _terrainSandDevils = _terrainSandSparkle = undefined;
   _terrainSandWarn.hit = false;
   _terrainSandStreamersWarn.hit = false;

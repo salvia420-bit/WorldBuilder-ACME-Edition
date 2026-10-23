@@ -297,6 +297,13 @@ export function createTerrainOracle(opts = {}) {
   /** Bumped by every successful note/backfill — gives missed LBs another look. */
   let noteEpoch = 0;
   /**
+   * 2026-10-23 — cache CONTENT version for `version()`: bumped by a successful
+   * note (incl. backfill), an `invalidate` that deleted, and `clear`. Unlike
+   * `noteEpoch` it moves on deletes too, so a consumer mirroring the cache
+   * (`terrain_field_gpu.js`) can skip its walk while this is unchanged.
+   */
+  let cacheVersion = 0;
+  /**
    * Backfill scan INDEX (lbKey -> mesh), rebuilt at most once per note epoch.
    *
    * Was: a `missedAtEpoch` Map remembering which lbKeys had already been
@@ -376,6 +383,7 @@ export function createTerrainOracle(opts = {}) {
       coverage: null,
     });
     noteEpoch += 1;
+    cacheVersion += 1;
     if (attachedLbKeys) attachedLbKeys.add(lbKey);
     return true;
   }
@@ -388,7 +396,9 @@ export function createTerrainOracle(opts = {}) {
     const lbKey = lbKeyOf(lbKeyOrId >>> 0);
     if (attachedLbKeys) attachedLbKeys.delete(lbKey);
     if (scanIdx) scanIdx.delete(lbKey);
-    return cache.delete(lbKey);
+    const deleted = cache.delete(lbKey);
+    if (deleted) cacheVersion += 1;
+    return deleted;
   }
 
   /** Drop everything (teleport across regions, full rebake, dispose). */
@@ -398,6 +408,7 @@ export function createTerrainOracle(opts = {}) {
     scanIdxEpoch = -1;
     attachedLbKeys = null;
     noteEpoch += 1;
+    cacheVersion += 1;
   }
 
   /**
@@ -684,6 +695,29 @@ export function createTerrainOracle(opts = {}) {
   }
 
   /**
+   * 2026-10-23 (GPU grass placement, `docs/2026-10-23-grass-gpu-placement.md`
+   * Module A) — the cache content version: an integer that moves whenever the
+   * cache changes (a successful `noteLandblock` or backfill adoption, an
+   * `invalidate` that deleted, `clear`). Equal versions = identical cache.
+   * @returns {number}
+   */
+  function version() {
+    return cacheVersion;
+  }
+
+  /**
+   * 2026-10-23 — the raw cache entry `{codes, heights, roads, lbX, lbY, …}` for
+   * one LB, or null. Goes through `entryFor`, i.e. WITH the bounded backfill
+   * adoption: in GPU-grass mode nothing else calls `sample()`, so this is what
+   * adopts LBs baked before the oracle existed. Counts no hit/miss. READ-ONLY
+   * by convention — the arrays ARE the cache; a rebake replaces the entry
+   * object (never mutates it), so entry identity is a valid "changed?" test.
+   */
+  function lookup(lbKeyOrId) {
+    return entryFor(lbKeyOf(lbKeyOrId >>> 0)) || null;
+  }
+
+  /**
    * `parkedHits` counts hits served for landblocks NOT currently attached to
    * `terrainGroup` — i.e. exactly the samples a scene-graph scanner would have
    * dropped. It stays 0 when no `getTerrainMeshes` was supplied. Refreshed on
@@ -709,6 +743,8 @@ export function createTerrainOracle(opts = {}) {
     heightAt,
     familyCoverage,
     hasLandblock,
+    version,
+    lookup,
     stats,
     // Diagnostics — the live `oracleSelfTest()` in `terrain_vfx.js` walks these.
     keys: () => Array.from(cache.keys()),

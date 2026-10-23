@@ -1,0 +1,210 @@
+{
+ "fingerprint": "db36690355100fb75bbacc01c829b80309fb76e497805ad0663b707b5baf93ab",
+ "fingerprintVersion": 1,
+ "parts": {
+  "hash": "0c333ece4301ba2b413b93fe4f8069c5ef07bdfb69afc139e8798b383e3ed0cc",
+  "field": "666235f76a4ba392656b6f3bf7fd8ccc2aaa6638fc71b12e09e7ea59cce5a9c3",
+  "mask": "696d6b71f160b0cad1bd5dfe1c09f5e506d4108983801350f6fd81cfa127730a",
+  "place": "5e37e571567ed396a2f78f583cbe5fcbbea38d0153af199df4d0b543901737b2",
+  "vertex": "5217d3f4d72591a04adf899ed70ec3f0dcdc232e3ce61e401dac83791222f5d8",
+  "fragment": "6d3209e58f9ebd26557097fea7f75fef32bd0164240c6c4b6affba9b96e2f12b"
+ },
+ "passedAt": "2026-10-23T20:12:41.155Z",
+ "renderer": "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)",
+ "summary": {
+  "readback": [
+   {
+    "spot": "Holtburg centre (0xA9B4)",
+    "config": "20000 blades / 24 m / reach 5 (4 rings)",
+    "stage": "fragment",
+    "cpuLive": 8298,
+    "rate": 0.00024,
+    "worstRingRate": 0.00043
+   },
+   {
+    "spot": "Holtburg centre (0xA9B4)",
+    "config": "20000 blades / 24 m / reach 5 (4 rings)",
+    "stage": "vertex",
+    "cpuLive": 8298,
+    "rate": 0.00024,
+    "worstRingRate": 0.00043
+   },
+   {
+    "spot": "Holtburg centre (0xA9B4)",
+    "config": "10000 blades / 24 m single field (reach 1)",
+    "stage": "fragment",
+    "cpuLive": 3729,
+    "rate": 0.00027,
+    "worstRingRate": 0.00027
+   },
+   {
+    "spot": "Holtburg centre (0xA9B4)",
+    "config": "10000 blades / 24 m single field (reach 1)",
+    "stage": "vertex",
+    "cpuLive": 3729,
+    "rate": 0.00027,
+    "worstRingRate": 0.00027
+   },
+   {
+    "spot": "road screenshot 42.0N 33.6E",
+    "config": "20000 blades / 24 m / reach 5 (4 rings)",
+    "stage": "fragment",
+    "cpuLive": 13065,
+    "rate": 0.00046,
+    "worstRingRate": 0.00065
+   },
+   {
+    "spot": "road screenshot 42.0N 33.6E",
+    "config": "20000 blades / 24 m / reach 5 (4 rings)",
+    "stage": "vertex",
+    "cpuLive": 13065,
+    "rate": 0.00046,
+    "worstRingRate": 0.00065
+   },
+   {
+    "spot": "road screenshot 42.0N 33.6E",
+    "config": "10000 blades / 24 m single field (reach 1)",
+    "stage": "fragment",
+    "cpuLive": 6730,
+    "rate": 0.00045,
+    "worstRingRate": 0.00045
+   },
+   {
+    "spot": "road screenshot 42.0N 33.6E",
+    "config": "10000 blades / 24 m single field (reach 1)",
+    "stage": "vertex",
+    "cpuLive": 6730,
+    "rate": 0.00045,
+    "worstRingRate": 0.00045
+   },
+   {
+    "spot": "dense housing 0x4993",
+    "config": "20000 blades / 24 m / reach 5 (4 rings)",
+    "stage": "fragment",
+    "cpuLive": 3175,
+    "rate": 0.00094,
+    "worstRingRate": 0.00229
+   },
+   {
+    "spot": "dense housing 0x4993",
+    "config": "20000 blades / 24 m / reach 5 (4 rings)",
+    "stage": "vertex",
+    "cpuLive": 3175,
+    "rate": 0.00094,
+    "worstRingRate": 0.00229
+   },
+   {
+    "spot": "dense housing 0x4993",
+    "config": "10000 blades / 24 m single field (reach 1)",
+    "stage": "fragment",
+    "cpuLive": 1778,
+    "rate": 0.00112,
+    "worstRingRate": 0.00112
+   },
+   {
+    "spot": "dense housing 0x4993",
+    "config": "10000 blades / 24 m single field (reach 1)",
+    "stage": "vertex",
+    "cpuLive": 1778,
+    "rate": 0.00112,
+    "worstRingRate": 0.00112
+   }
+  ],
+  "interior": [
+   {
+    "spot": "Holtburg centre (0xA9B4)",
+    "config": "20000 blades / 24 m / reach 5 (4 rings)",
+    "stage": "fragment",
+    "gpuKills": 385,
+    "mirKills": 384,
+    "killMism": 1,
+    "deep": 0
+   },
+   {
+    "spot": "Holtburg centre (0xA9B4)",
+    "config": "20000 blades / 24 m / reach 5 (4 rings)",
+    "stage": "vertex",
+    "gpuKills": 385,
+    "mirKills": 384,
+    "killMism": 1,
+    "deep": 0
+   },
+   {
+    "spot": "Holtburg centre (0xA9B4)",
+    "config": "10000 blades / 24 m single field (reach 1)",
+    "stage": "fragment",
+    "gpuKills": 0,
+    "mirKills": 0,
+    "killMism": 0,
+    "deep": 0
+   },
+   {
+    "spot": "Holtburg centre (0xA9B4)",
+    "config": "10000 blades / 24 m single field (reach 1)",
+    "stage": "vertex",
+    "gpuKills": 0,
+    "mirKills": 0,
+    "killMism": 0,
+    "deep": 0
+   },
+   {
+    "spot": "dense housing 0x4993",
+    "config": "20000 blades / 24 m / reach 5 (4 rings)",
+    "stage": "fragment",
+    "gpuKills": 2515,
+    "mirKills": 2517,
+    "killMism": 2,
+    "deep": 181
+   },
+   {
+    "spot": "dense housing 0x4993",
+    "config": "20000 blades / 24 m / reach 5 (4 rings)",
+    "stage": "vertex",
+    "gpuKills": 2515,
+    "mirKills": 2517,
+    "killMism": 2,
+    "deep": 181
+   },
+   {
+    "spot": "dense housing 0x4993",
+    "config": "10000 blades / 24 m single field (reach 1)",
+    "stage": "fragment",
+    "gpuKills": 1829,
+    "mirKills": 1829,
+    "killMism": 0,
+    "deep": 156
+   },
+   {
+    "spot": "dense housing 0x4993",
+    "config": "10000 blades / 24 m single field (reach 1)",
+    "stage": "vertex",
+    "gpuKills": 1829,
+    "mirKills": 1829,
+    "killMism": 0,
+    "deep": 156
+   }
+  ],
+  "indoor": [
+   {
+    "spot": "Holtburg centre (0xA9B4)",
+    "gpuBoxes": 152,
+    "gpuMaxPerBucket": 15
+   },
+   {
+    "spot": "road screenshot 42.0N 33.6E",
+    "gpuBoxes": 152,
+    "gpuMaxPerBucket": 15
+   },
+   {
+    "spot": "dense housing 0x4993",
+    "gpuBoxes": 122,
+    "gpuMaxPerBucket": 43
+   }
+  ],
+  "frame": {
+   "fracOver8": 0.00182,
+   "fracOver8Tolerant": 0.0005,
+   "maxDiff": 78
+  }
+ }
+}

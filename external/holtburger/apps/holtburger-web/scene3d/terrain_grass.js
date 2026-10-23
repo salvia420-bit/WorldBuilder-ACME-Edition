@@ -99,6 +99,8 @@
 //   ?terrainGrassReach=N     2026-10-12; DEFAULT 5, 1 (or off) = the old single
 //                            field (see GRASS LOD below)
 //   ?terrainGrassNearShare=f 0.05..0.95, default 0.34 — budget kept by ring 0
+//   ?terrainGrassGpu=on      2026-10-23; EXACT-match, ships OFF — placement in
+//                            the vertex shader (see GPU PLACEMENT below)
 //
 // OFF-ROAD (2026-10-07, owner, Holtburg: "see the grass on the road. can we make
 // it so its not on the road"). A retail road is 2 bits on the vertex word, not a
@@ -128,12 +130,50 @@
 // reads as grass instead of sub-pixel slivers — `uGrassLodScale`, live-tunable
 // through `window.__terrainGrass.setLod()`. Every ring shares ONE program (one
 // onBeforeCompile source, per-ring uniform bags).
+//
+// GPU PLACEMENT (2026-10-23, `?terrainGrassGpu=on`, ships OFF; contract
+// `docs/2026-10-23-grass-gpu-placement.md`). Placing a blade on the CPU (oracle
+// sample + dither + verge + interior test + six attribute writes + an upload)
+// cost ~2.75 ms a frame while running, and is a pure function of (world cell,
+// seeds, terrain). With the flag on, every ring is a plain `THREE.Mesh` over an
+// `InstancedBufferGeometry` with NO per-instance buffers: the vertex shader
+// recomputes the blade from `gl_InstanceID` (`grass_gpu_place.js
+// hbGrassPlace`) against per-landblock terrain textures (`terrain_field_gpu.js`)
+// and the interior-box textures (`grass_interior_mask.js`), so there is no
+// per-frame placement, no edge-first drain and no "grass fills in late in front
+// of a runner". The six instanced attributes of the CPU path become plain
+// globals assigned at the top of main(); everything after that (wind, stomp,
+// lean, fade, dissolve, tint) is the SAME snippet. Each ring's window is cut
+// into 8 x 8 tiles and `onBeforeRender` draws only the tiles in the camera's
+// frustum, inside the ring's disc and outside its dissolve hole, nearest first
+// (`cullGrassTiles`) — the single InstancedMesh could never cull, and grass is
+// vertex-bound. With the flag off the CPU path below is untouched.
+//   Review fixes (2026-10-23): a blade the snippet would scale to zero by its
+// distance blend or dissolve is never placed (the EARLY-OUT before
+// `_grassGpuMainSnippet`) and a dead blade skips the look; the frustum margins
+// follow the live look (`writeCullMargins`); the interior mask's GPU copy is
+// centred on the player before each sync.
 
 import { registerTerrainVfx, wireframeActive } from "./terrain_vfx.js";
 import { SSAO_GRASS_MARKER } from "./ssao_marker.js";
 // 2026-10-08 — no blades inside building interiors (owner: "grass poking
 // through the building interior cells").
-import { createInteriorMask, grassIndoorCullEnabled } from "./grass_interior_mask.js";
+import { createInteriorMask, grassIndoorCullEnabled, INTERIOR_MASK_GLSL } from "./grass_interior_mask.js";
+// 2026-10-23 — `?terrainGrassGpu`. grass_gpu_place.js imports THIS module back
+// (GRASS_VARIANTS / GRASS_DEFAULTS), so its CONSTANT exports are read only
+// inside functions here, never at module top level (ESM cycle, see its header).
+import { createTerrainFieldGpu, TERRAIN_FIELD_GLSL } from "./terrain_field_gpu.js";
+import {
+  GRASS_GPU_HASH_GLSL,
+  GRASS_GPU_CULL_XY_MARGIN_M,
+  GRASS_GPU_CULL_ABOVE_M,
+  buildGrassPlaceGlsl,
+  grassGpuRingState,
+  grassGpuSetWindow,
+  createGrassGpuRingUniforms,
+  cullGrassTiles,
+  grassGpuBladeReach,
+} from "./grass_gpu_place.js";
 import { FAM_GRASS, familyForCode } from "./terrain_families.js";
 import { createScatterPool, SCATTER_FADE_GLSL, scatterHash01 } from "./terrain_scatter.js";
 import { ensureVfxHashVarying, VFX_HASH_ASSIGN_VERTEX } from "./vfx/per_instance.js";
@@ -147,6 +187,7 @@ import {
   grassOffRoadEnabled,
   terrainGrassReach,
   terrainGrassNearShare,
+  terrainGrassGpuEnabled,
 } from "./vfx_flags.js";
 
 // ---------------------------------------------------------------------------
@@ -346,22 +387,36 @@ const GRASS_FRAGMENT_DECLS = ["varying vec3 vGrassTint;", "uniform float uSsaoGr
 // The AO composite's grass marker (ssao_marker.js) is written at the very end.
 export const GRASS_OUTPUT_SEAM = "#include <dithering_fragment>";
 
-function _grassVertexSnippet() {
+// 2026-10-23 — the distance blend and the GRASS LOD dissolve as GLSL text,
+// written ONCE: the vertex snippet below and the GPU early-out
+// (`_grassGpuMainSnippet`) build their lines from these, so the two cannot
+// disagree on which blades end at zero size. Arguments are GLSL names.
+function _grassFadeFactor(xy) {
+  return "hbScatterFade(" + xy + ")";
+}
+function _grassDissolveGlsl(ind, xy, d, keep, soft) {
   return [
-    "  // ---- " + GRASS_MARKER + " (terrain_grass.js, vertex) ----",
-    "  {",
-    "    // The instance matrix carries ONLY a translation (+ a 0/1 scale for",
-    "    // degenerate instances), written by terrain_scatter.js — so its",
-    "    // translation column is this blade's AC world position, and the object",
-    "    // frame is the world frame (see the wind DIVERGENCE note in the header).",
-    "    #ifdef USE_INSTANCING",
-    "      vec2 hbWorld = instanceMatrix[3].xy;",
-    "    #else",
-    "      vec2 hbWorld = modelMatrix[3].xy;",
-    "    #endif",
-    "    // Authored blade height runs 0..1, so position.z IS the normalised",
-    "    // height along the blade — no uniform, no per-model constant.",
-    "    float hbH = clamp(position.z, 0.0, 1.0);",
+    ind + "float " + d + " = length(" + xy + " - uScatterCenter.xy);",
+    ind + "float " + keep + " = min(",
+    ind + "  clamp((" + d + " - uGrassLodBand.x) / max(uGrassLodBand.y - uGrassLodBand.x, 1e-4), 0.0, 1.0),",
+    ind + "  clamp((uGrassLodBand.w - " + d + ") / max(uGrassLodBand.w - uGrassLodBand.z, 1e-4), 0.0, 1.0));",
+    ind + "float " + soft + " = max(uGrassLodSoft, 1e-4);",
+  ];
+}
+function _grassDissolveFactor(keep, soft, rank) {
+  return "clamp((" + keep + " * (1.0 + " + soft + ") - " + rank + ") / " + soft + ", 0.0, 1.0)";
+}
+
+// `gpu` (2026-10-23, `?terrainGrassGpu`) swaps exactly two things: where the
+// blade's world position comes from (hbGrassPlace's origin, written at the top
+// of main, instead of the instance matrix) and the final write (origin + the
+// blade, or every vertex on the origin for a dead blade, which skips the look
+// in between). The CPU text is the default and is unchanged.
+function _grassVertexSnippet(gpu = false) {
+  // The look: blade scale, bow, yaw, wind, lean, stomp, fade, dissolve. Every
+  // offset is added BEFORE the two scales at its end, so a zero scale puts all
+  // five vertices on the origin.
+  const look = [
     "    // aScale = (heightM, widthM), times the ring's (height, width) gain",
     "    // (GRASS LOD: an outer ring's blades are wider). Width also scales the",
     "    // (zero) y so a future ribbon blade needs no snippet change.",
@@ -413,19 +468,51 @@ function _grassVertexSnippet() {
     "    }",
     "    // DISTANCE BLEND — shrink to nothing over the last fadeFraction of R,",
     "    // matching terrain_scatter.js::fadeFor exactly (LINEAR, same uniforms).",
-    "    hbP *= hbScatterFade(hbWorld);",
+    "    hbP *= " + _grassFadeFactor("hbWorld") + ";",
     "    // GRASS LOD cross-dissolve: the ring's density ramps in over its inner",
     "    // band (x..y) and out over its outer band (z..w); a blade survives while",
     "    // its rank is under that density and shrinks over the last uGrassLodSoft",
     "    // of it, so blades thin out one by one instead of popping. A ring with",
     "    // no bands (the single-field layout) keeps every blade at full size.",
-    "    float hbD = length(hbWorld - uScatterCenter.xy);",
-    "    float hbKeep = min(",
-    "      clamp((hbD - uGrassLodBand.x) / max(uGrassLodBand.y - uGrassLodBand.x, 1e-4), 0.0, 1.0),",
-    "      clamp((uGrassLodBand.w - hbD) / max(uGrassLodBand.w - uGrassLodBand.z, 1e-4), 0.0, 1.0));",
-    "    float hbSoft = max(uGrassLodSoft, 1e-4);",
-    "    hbP *= clamp((hbKeep * (1.0 + hbSoft) - aRank) / hbSoft, 0.0, 1.0);",
-    "    transformed = hbP;",
+    ..._grassDissolveGlsl("    ", "hbWorld", "hbD", "hbKeep", "hbSoft"),
+    "    hbP *= " + _grassDissolveFactor("hbKeep", "hbSoft", "aRank") + ";",
+  ];
+  return [
+    "  // ---- " + GRASS_MARKER + " (terrain_grass.js, vertex) ----",
+    "  {",
+    ...(gpu ? [
+      "    // GPU placement: no instance matrix (a plain Mesh draws the ring), so",
+      "    // the blade origin hbGrassPlace returned at the top of main IS this",
+      "    // blade AC world position, and the object frame is the world frame.",
+      "    vec2 hbWorld = hbGpOrigin.xy;",
+    ] : [
+      "    // The instance matrix carries ONLY a translation (+ a 0/1 scale for",
+      "    // degenerate instances), written by terrain_scatter.js — so its",
+      "    // translation column is this blade's AC world position, and the object",
+      "    // frame is the world frame (see the wind DIVERGENCE note in the header).",
+      "    #ifdef USE_INSTANCING",
+      "      vec2 hbWorld = instanceMatrix[3].xy;",
+      "    #else",
+      "      vec2 hbWorld = modelMatrix[3].xy;",
+      "    #endif",
+    ]),
+    "    // Authored blade height runs 0..1, so position.z IS the normalised",
+    "    // height along the blade — no uniform, no per-model constant.",
+    "    float hbH = clamp(position.z, 0.0, 1.0);",
+    ...(gpu ? [
+      "    // 2026-10-23: a dead blade (not placed, or zero size: see the gpu",
+      "    // placement block) skips the look. Every vertex goes onto its origin,",
+      "    // one point, exactly where the look would have collapsed it.",
+      "    if (hbGpLive > 0.5) {",
+      ...look.map((line) => "  " + line),
+      "      transformed = hbGpOrigin + hbP;",
+      "    } else {",
+      "      transformed = hbGpOrigin;",
+      "    }",
+    ] : [
+      ...look,
+      "    transformed = hbP;",
+    ]),
     "    // Per-blade colour + a free contact shadow: darken toward the base.",
     "    vGrassTint = aTint * mix(uGrassAoBase, 1.0, hbH);",
     "  }",
@@ -482,6 +569,72 @@ function _grassFragmentSnippet() {
   ].join("\n");
 }
 
+// ---------------------------------------------------------------------------
+// 2026-10-23 — the GPU-placement variant (`?terrainGrassGpu`). Same snippets,
+// three differences: the six `attribute` declarations are plain globals, the
+// placement chain (hash + terrain field + interior mask + hbGrassPlace, in the
+// order grass_gpu_place.js requires) goes in before main(), and the very top of
+// main() fills those globals from the placement of `gl_InstanceID` (its two
+// halves, with the early-out between them) — before beginnormal_vertex (the
+// ground-normal snippet) reads aNormal.
+// ---------------------------------------------------------------------------
+
+/** Main-top globals of the GPU variant: the blade origin and its 0/1 liveness. */
+const GRASS_GPU_GLOBALS = ["vec3 hbGpOrigin;", "float hbGpLive;"];
+/** A GRASS_VERTEX_DECLS line as the GPU variant declares it. */
+const _grassGpuDecl = (decl) => (decl.startsWith("attribute ") ? decl.slice("attribute ".length) : decl);
+/** Idempotency marker of the placement chain (a line of buildGrassPlaceGlsl()). */
+const GRASS_GPU_PLACE_FN = "HbBlade hbGrassPlace(int id)";
+
+// 2026-10-23 (review integ-1 / gpu-cost-1) — the EARLY-OUT. About half of the
+// drawn instances (43-52 % on real ultra / high layouts) are blades the vertex
+// snippet scales to zero by distance blend or dissolve alone, after paying for
+// the whole placement. Those two factors need only the cell's jittered point and rank,
+// so they are tested first, with the snippet's own expressions
+// (`_grassFadeFactor` / `_grassDissolveGlsl` / `_grassDissolveFactor`, the same
+// uniforms, the rank from the same `hbGrassRank`), and a zero skips
+// `hbGrassPlaceCell`. Same image: the look adds every offset BEFORE those
+// scales, so a zero-size blade is one point on its origin, and a dead blade is
+// one point on its own origin (the snippet below skips the look for it);
+// neither rasterises anything.
+function _grassGpuMainSnippet() {
+  return [
+    "  // ---- " + GRASS_MARKER + " (terrain_grass.js, gpu placement) ----",
+    "  {",
+    "    // One blade per instance, recomputed from the world cell the instance",
+    "    // maps to (grass_gpu_place.js): the values the CPU pool would have",
+    "    // written into the six instanced attributes, which are globals here.",
+    "    HbCell hbGpC = hbGrassCell(gl_InstanceID);",
+    "    // 2026-10-23: the grass block below scales every blade by its distance",
+    "    // blend and its dissolve. Same expressions here on the same point and",
+    "    // rank: where either is zero the blade collapses anyway, so it is not",
+    "    // placed at all.",
+    "    float hbGpFade = " + _grassFadeFactor("hbGpC.xy") + ";",
+    ..._grassDissolveGlsl("    ", "hbGpC.xy", "hbGpD", "hbGpKeep", "hbGpSoft"),
+    "    float hbGpDissolve = " + _grassDissolveFactor("hbGpKeep", "hbGpSoft", "hbGrassRank(hbGpC)") + ";",
+    "    HbBlade hbGpB;",
+    "    if (hbGpC.mapped && hbGpFade > 0.0 && hbGpDissolve > 0.0) {",
+    "      hbGpB = hbGrassPlaceCell(hbGpC);",
+    "    } else {",
+    "      hbGpB = hbGrassDead(hbGpC);",
+    "    }",
+    "    hbGpLive = hbGpB.live ? 1.0 : 0.0;",
+    "    hbGpOrigin = hbGpB.origin;",
+    "    aScale = hbGpB.scale;",
+    "    aNormal = hbGpB.normal;",
+    "    aRot = hbGpB.rot;",
+    "    aTint = hbGpB.tint;",
+    "    aFamilyParam = hbGpB.mat;",
+    "    aRank = hbGpB.rank;",
+    "  }",
+    "  // ---- " + GRASS_END + " ----",
+  ].join("\n");
+}
+
+/** The per-instance hash, re-derived from the blade origin (the CPU path hashes
+ *  instanceMatrix[3].xy, i.e. the same point). */
+const GRASS_GPU_HASH_ASSIGN = "  vVfxHash = vfxHash01(hbGpOrigin.xy);";
+
 /**
  * Insert one global-scope declaration exactly once. Same shape as
  * `windSwayGpu._ensureVertexDecl`: a second `uniform float uTime;` is a GLSL
@@ -509,6 +662,26 @@ function _ensureDecl(src, decl, seam) {
  * @returns {object} the same shader (for chaining)
  */
 export function injectTerrainGrassShader(shader) {
+  return _injectGrass(shader, false);
+}
+
+/**
+ * 2026-10-23 — the `?terrainGrassGpu` variant of `injectTerrainGrassShader`
+ * for a plain `Mesh` over an `InstancedBufferGeometry` with no instanced
+ * attributes: the blade is PLACED in the vertex shader (`hbGrassPlace`, see
+ * GPU PLACEMENT in the header). Same guards, same idempotency marker, same
+ * snippets; the source is identical for every ring (one program). Needs the
+ * ring bag's uniforms (`createGrassGpuRingUniforms` + the shared field and
+ * interior-mask textures) bound by the caller.
+ *
+ * @param {{vertexShader:string, fragmentShader:string}} shader
+ * @returns {object} the same shader (for chaining)
+ */
+export function injectTerrainGrassGpuShader(shader) {
+  return _injectGrass(shader, true);
+}
+
+function _injectGrass(shader, gpu) {
   if (!shader || typeof shader.vertexShader !== "string" || typeof shader.fragmentShader !== "string") {
     return shader;
   }
@@ -518,11 +691,24 @@ export function injectTerrainGrassShader(shader) {
 
   // 1) Declarations, each exactly once.
   let vs = shader.vertexShader;
-  for (const decl of GRASS_VERTEX_DECLS) vs = _ensureDecl(vs, decl, "void main() {");
+  for (const decl of GRASS_VERTEX_DECLS) vs = _ensureDecl(vs, gpu ? _grassGpuDecl(decl) : decl, "void main() {");
   // The scatter fade helper carries its own four uniforms; copied in rather
   // than re-derived so grass and sand fade identically (terrain_scatter.js).
   if (vs.indexOf("hbScatterFade") === -1) {
     vs = vs.replace("void main() {", SCATTER_FADE_GLSL + "\nvoid main() {");
+  }
+  if (gpu) {
+    // 2026-10-23 — the placement chain, once, in grass_gpu_place.js's order;
+    // then the very top of main() places this instance's blade. Function
+    // replacers: the GLSL is spliced verbatim (no `$` patterns).
+    if (vs.indexOf(GRASS_GPU_PLACE_FN) === -1) {
+      const chain = [
+        GRASS_GPU_HASH_GLSL, TERRAIN_FIELD_GLSL, INTERIOR_MASK_GLSL, buildGrassPlaceGlsl(),
+        ...GRASS_GPU_GLOBALS,
+      ].join("\n");
+      vs = vs.replace("void main() {", () => chain + "\nvoid main() {");
+    }
+    vs = vs.replace("void main() {", () => "void main() {\n" + _grassGpuMainSnippet());
   }
   shader.vertexShader = vs;
 
@@ -542,15 +728,18 @@ export function injectTerrainGrassShader(shader) {
     GRASS_OBJECT_NORMAL_SEAM + "\n" + _grassGroundNormalSnippet(),
   );
   const cur = shader.vertexShader;
+  // GPU: no instance matrix to hash, so the hash is re-assigned from the blade
+  // origin right after the shared assignment (which fell to modelMatrix).
+  const vsnip = gpu ? GRASS_GPU_HASH_ASSIGN + "\n" + _grassVertexSnippet(true) : _grassVertexSnippet();
   if (cur.indexOf(VFX_HASH_ASSIGN_VERTEX) !== -1) {
     shader.vertexShader = cur.replace(
       VFX_HASH_ASSIGN_VERTEX,
-      VFX_HASH_ASSIGN_VERTEX + "\n" + _grassVertexSnippet(),
+      VFX_HASH_ASSIGN_VERTEX + "\n" + vsnip,
     );
   } else {
     shader.vertexShader = cur.replace(
       GRASS_VERTEX_SEAM,
-      GRASS_VERTEX_SEAM + "\n" + _grassVertexSnippet(),
+      GRASS_VERTEX_SEAM + "\n" + vsnip,
     );
   }
   shader.fragmentShader = shader.fragmentShader.replace(
@@ -589,7 +778,7 @@ export function hasTerrainGrassShader(shader) {
  *   every reader.
  * @returns {{count:number, radiusM:number, stomp:boolean, density:number,
  *   blades:number, seed:number, offRoad:boolean, reach:number, nearShare:number,
- *   source:string}|null} null ⇒ disabled at this
+ *   gpu:boolean, source:string}|null} null ⇒ disabled at this
  *   tier (the `low` contract: every effect in this plan is null on `low`).
  */
 export function resolveGrassConfig(overrides = {}) {
@@ -604,6 +793,9 @@ export function resolveGrassConfig(overrides = {}) {
   const nearShare = Number.isFinite(overrides.nearShare)
     ? Math.min(0.95, Math.max(0.05, overrides.nearShare))
     : terrainGrassNearShare();
+  // 2026-10-23 — `?terrainGrassGpu` (default OFF): placement in the vertex
+  // shader instead of the scatter pools; explicit boolean wins (tests).
+  const gpu = typeof overrides.gpu === "boolean" ? overrides.gpu : terrainGrassGpuEnabled();
   const count = Math.round(blades * (Number.isFinite(density) ? density : 1));
   if (!(count >= 1)) return null;
   return {
@@ -615,6 +807,7 @@ export function resolveGrassConfig(overrides = {}) {
     offRoad,
     reach,
     nearShare,
+    gpu,
     seed: Number.isFinite(overrides.seed) ? overrides.seed | 0 : GRASS_DEFAULTS.seed,
     source: Number.isFinite(overrides.blades) ? "explicit" : "flags",
   };
@@ -814,19 +1007,33 @@ export function makeGrassFill(seed) {
  * @param {object} [opts.parent]  Object3D to hang the grass group off; must have
  *   terrainGroup's transform (worldRoot). Resolved from `scene3d` if omitted.
  * @param {object} [opts.scene3d] the live facade (for the parent fallback).
- * @param {object} [opts.config]  explicit `resolveGrassConfig` overrides.
+ * @param {object} [opts.config]  explicit `resolveGrassConfig` overrides
+ *   (`gpu: true` = the 2026-10-23 GPU-placement path, see the header).
  * @param {object} [opts.material] a material to use instead of the built-in one.
+ *   A caller's material cannot place blades, so it always gets the CPU path.
  */
 export function createTerrainGrassProvider(opts = {}) {
   const THREE = opts.THREE || null;
   const cfg = resolveGrassConfig(opts.config || {});
   const seed = cfg ? cfg.seed : GRASS_DEFAULTS.seed;
+  // 2026-10-23 — `?terrainGrassGpu`: no scatter pools; one Mesh per ring whose
+  // vertex shader places the blades (GPU PLACEMENT in the header). Without
+  // THREE the field / mask arrays and the ring states still exist (the mirror
+  // and the node tests read them); only the GPU objects are skipped.
+  const gpuMode = !!(cfg && cfg.gpu === true && !opts.material);
   // 2026-10-12 — GRASS LOD: one scatter pool (+ geometry, material, uniform
   // bag) per ring; ring 0 is what `_pool` / `stats().pool` always meant.
   let lodLook = resolveGrassLodLook(opts.lodLook || {});
   const layout = cfg ? grassLodLayout(cfg, lodLook) : [];
-  /** @type {Array<{ring:object, pool:object, geometry:object, material:object, uniforms:object}>} */
+  /** @type {Array<{ring:object, pool:object, geometry:object, material:object, uniforms:object}>}
+   *  GPU mode: `pool` is null and the record also holds `mesh`, `st` (the
+   *  grassGpuRingState) and the per-render cull bookkeeping. */
   let rings = [];
+  // GPU mode only: the shared terrain field, the live off-road gate (what
+  // setOffRoad last wrote) and the THREE scratch the per-render cull reuses.
+  let field = null;
+  let gpuOffRoad = !!(cfg && cfg.offRoad);
+  let gpuScratch = null;
 
   let group = null;
   let built = false;
@@ -835,7 +1042,14 @@ export function createTerrainGrassProvider(opts = {}) {
   let stamps = 0;
   let trailBound = false;
   // `?grassIndoorCull` (default on): EnvCell boxes the pool's exclude test reads.
-  const indoorMask = grassIndoorCullEnabled(opts.search) ? createInteriorMask() : null;
+  // GPU mode: the same boxes as textures the vertex shader reads (THREE given);
+  // `gpu: true` keeps the mirror's arrays without THREE too (node, nullRender).
+  // GPU mode: the mask writes GROUND FIRST (boxes whose z range misses the
+  // terrain under them sort last under the row / bucket caps), so it reads the
+  // same oracle getter as the field. The CPU path keeps createInteriorMask().
+  const indoorMask = grassIndoorCullEnabled(opts.search)
+    ? createInteriorMask(gpuMode ? { THREE, gpu: true, oracle: () => (lastCtx ? lastCtx.oracle : null) } : undefined)
+    : null;
 
   // Uniform bag — one `{value}` object per uniform, bound BY REFERENCE into the
   // compiling shader (plan §5.6) so the per-frame writes below reach the GPU
@@ -915,6 +1129,251 @@ export function createTerrainGrassProvider(opts = {}) {
     return m;
   }
 
+  // 2026-10-23 — GPU mode: the same material setup with the GPU injector. Its
+  // own onBeforeCompile source (one program for every GPU ring, never shared
+  // with the CPU one).
+  function buildGpuMaterial(bag) {
+    if (!THREE || typeof THREE.MeshLambertMaterial !== "function") return null;
+    const m = new THREE.MeshLambertMaterial({
+      color: 0xffffff,
+      side: THREE.DoubleSide !== undefined ? THREE.DoubleSide : undefined,
+      transparent: false,
+      fog: true,
+    });
+    m.name = "terrain-grass";
+    m.onBeforeCompile = (shader) => {
+      shader.uniforms = shader.uniforms || {};
+      for (const key of Object.keys(bag)) shader.uniforms[key] = bag[key];
+      injectTerrainGrassGpuShader(shader);
+    };
+    return m;
+  }
+
+  /**
+   * 2026-10-23 — the GPU build: one shared terrain field, then per ring the
+   * uniform state (`grassGpuRingState` = what the CPU pool would derive), a bag
+   * (shared objects by reference + the ring-owned ones), an
+   * `InstancedBufferGeometry` copy of the blade with NO instanced attributes and
+   * a plain `Mesh` (no InstancedMesh: no 7.7 MB identity instanceMatrix) whose
+   * `onBeforeRender` culls tiles for whichever camera draws it. Cleans up after
+   * itself on a throw (the caller records the error).
+   */
+  function buildGpu() {
+    field = createTerrainFieldGpu({ THREE, oracle: () => (lastCtx ? lastCtx.oracle : null) });
+    gpuOffRoad = cfg.offRoad === true;
+    // `?grassIndoorCull=off`: the place code still calls hbIndoorAt, which
+    // returns false before touching a texture while uHbIndoorOn is 0.
+    const indoorU = indoorMask ? indoorMask.uniforms
+      : { uHbIndoorBoxes: { value: null }, uHbIndoorBuckets: { value: null }, uHbIndoorOn: { value: 0 } };
+    const canDraw = !!(THREE && typeof THREE.Mesh === "function"
+      && typeof THREE.InstancedBufferGeometry === "function" && typeof THREE.Frustum === "function");
+    if (canDraw) {
+      gpuScratch = { m: new THREE.Matrix4(), inv: new THREE.Matrix4(), frustum: new THREE.Frustum(), cam: new THREE.Vector3() };
+    }
+    // Tile z extents from the field's per-landblock min/max (null = no resident
+    // ground under the tile: every blade there is dead, so it is culled).
+    const zOut = { min: 0, max: 0 };
+    const zRange = (x0, y0, x1, y1) => (field ? field.heightRange(x0, y0, x1, y1, zOut) : null);
+    try {
+      for (const ring of layout) {
+        const st = grassGpuRingState(ring, cfg);
+        const bag = { ...uniforms };
+        bag.uGrassLodBand = { value: { x: 0, y: 0, z: 0, w: 0 } };
+        bag.uGrassLodScale = { value: { x: 1, y: 1 } };
+        bag.uGrassLodSoft = { value: lodLook.soft };
+        // Ring-owned placement uniforms (uGpWindowMin / uGpTiles hold st.winMin /
+        // st.tileIds by reference), and the distance blend the pool used to own:
+        // centre = the player, radius W, fade start W(1 - fadeFraction), disc.
+        Object.assign(bag, createGrassGpuRingUniforms(st));
+        bag.uScatterCenter = { value: THREE && typeof THREE.Vector3 === "function" ? new THREE.Vector3(0, 0, 0) : { x: 0, y: 0, z: 0 } };
+        bag.uScatterRadius = { value: st.radiusM };
+        bag.uScatterFadeStart = { value: st.fadeStartM };
+        bag.uScatterShape = { value: 0 };
+        // Shared textures, by reference (one field, one mask, every ring).
+        bag.uHbField = field.uniforms.uHbField;
+        bag.uHbFieldKey = field.uniforms.uHbFieldKey;
+        bag.uHbIndoorBoxes = indoorU.uHbIndoorBoxes;
+        bag.uHbIndoorBuckets = indoorU.uHbIndoorBuckets;
+        bag.uHbIndoorOn = indoorU.uHbIndoorOn;
+        let geometry = null;
+        let material = null;
+        let mesh = null;
+        if (canDraw) {
+          const blade = makeGrassBladeGeometry(THREE);
+          geometry = new THREE.InstancedBufferGeometry();
+          geometry.copy(blade);
+          blade.dispose();
+          geometry.name = "terrain-grass-blade-gpu";
+          geometry.instanceCount = 0;   // onBeforeRender sets it per draw
+          material = buildGpuMaterial(bag);
+          mesh = new THREE.Mesh(geometry, material);
+          mesh.name = layout.length > 1 ? `terrain-grass-ring${ring.level}` : "terrain-grass";
+          // The window moves with the player (a bounding sphere is stale at
+          // once) and the tiles are culled per draw instead.
+          mesh.frustumCulled = false;
+          mesh.castShadow = false;
+          if (group) group.add(mesh);
+        }
+        const r = {
+          ring, pool: null, geometry, material, uniforms: bag, mesh, st,
+          centered: false, tilesDrawn: 0, instancesDrawn: 0, camPos: [0, 0, 0],
+          // cullGrassTiles input, allocated once (center / holeR / planes /
+          // camPos / the two blade margins written per draw).
+          cull: {
+            winMin: st.winMin, g: st.g, ts: st.ts, T: st.T, cell: st.cell,
+            center: [0, 0], outerR: st.radiusM, holeR: -1, planes: null, zRange, camPos: null,
+            xyMarginM: GRASS_GPU_CULL_XY_MARGIN_M, zAboveM: GRASS_GPU_CULL_ABOVE_M,
+          },
+        };
+        if (mesh) mesh.onBeforeRender = (renderer, scene, camera, geo, mat) => { cullRing(r, camera, geo, mat); };
+        writeRingLook(r);
+        rings.push(r);
+      }
+    } catch (e) {
+      for (const r of rings) {
+        if (r.mesh && r.mesh.parent) { try { r.mesh.parent.remove(r.mesh); } catch (_) {} }
+        if (r.geometry) { try { r.geometry.dispose(); } catch (_) {} }
+        if (r.material) { try { r.material.dispose(); } catch (_) {} }
+      }
+      rings = [];
+      try { field.dispose(); } catch (_) {}
+      field = null;
+      throw e;
+    }
+    // Ring 0's distance-blend uniforms in the shared bag, as on the CPU path
+    // (`window.__terrainGrass.uniforms.uScatterCenter`).
+    for (const key of ["uScatterCenter", "uScatterRadius", "uScatterFadeStart", "uScatterShape"]) {
+      uniforms[key] = rings[0].uniforms[key];
+    }
+  }
+
+  // 2026-10-23 (review integ-2) — the cull's blade margins from the LIVE look:
+  // `grassGpuBladeReach` over this ring's uniforms (uGrassLodScale, which
+  // setLodLook rewrites; uGrassWindAmp, which carries ?treeWindStrength; ...),
+  // floored at the 2 m defaults. Recomputed per draw — a few dozen flops, and
+  // the inputs can change on any frame — into scratch: nothing allocated.
+  const reachLook = {
+    heightMul: 1, widthMul: 1, bow: 0, windAmp: 0, windDirLen: 1, flutter: 0, lean: 0,
+    stomp: false, stompSplay: 0, stompBend: 0,
+  };
+  const reachOut = { lateralM: 0, aboveM: 0 };
+  function writeCullMargins(r, band) {
+    const u = r.uniforms;
+    const lk = reachLook;
+    lk.heightMul = u.uGrassLodScale.value.x;
+    lk.widthMul = u.uGrassLodScale.value.y;
+    lk.bow = u.uGrassBow.value;
+    lk.windAmp = u.uGrassWindAmp.value;
+    const wd = u.uGrassWindDir.value;
+    lk.windDirLen = Math.sqrt(wd.x * wd.x + wd.y * wd.y);
+    lk.flutter = u.uGrassWindFlutter.value;
+    lk.lean = u.uGrassLean.value;
+    lk.stompSplay = u.uGrassStompSplay.value;
+    lk.stompBend = u.uGrassStompBend.value;
+    // The stomp bends a blade only inside the trail square (centre
+    // uTrailCenter, half side uTrailRadius), and a blade inside the ring's
+    // dissolve hole (d <= band[0]) has zero size: when the hole covers the whole
+    // square, no sized blade of this ring is stomped.
+    let stomp = u.uTrailEnabled.value > 0.5;
+    if (stomp && band) {
+      const tc = u.uTrailCenter.value;
+      const c = u.uScatterCenter.value;
+      const far = Math.sqrt((tc.x - c.x) * (tc.x - c.x) + (tc.y - c.y) * (tc.y - c.y))
+        + Math.SQRT2 * Math.abs(u.uTrailRadius.value);
+      if (band[0] >= far) stomp = false;
+    }
+    lk.stomp = stomp;
+    grassGpuBladeReach(lk, reachOut);
+    r.cull.xyMarginM = Math.max(GRASS_GPU_CULL_XY_MARGIN_M, reachOut.lateralM);
+    r.cull.zAboveM = Math.max(GRASS_GPU_CULL_ABOVE_M, reachOut.aboveM);
+  }
+
+  /**
+   * 2026-10-23 — per-draw tile cull of one GPU ring (its mesh's onBeforeRender,
+   * so it runs for EVERY camera / pass that draws it, just before three uploads
+   * the material's uniforms). Object-space frustum = proj x view x
+   * mesh.matrixWorld, built like three r184's renderer builds its own; the
+   * survivors go into uGpTiles nearest first and the draw is sized to them
+   * (instanceCount 0 is safe: three's renderInstances returns on primcount 0).
+   * An override pass (scene.overrideMaterial) cannot place a blade: it draws
+   * nothing. Returns the tiles kept.
+   */
+  function cullRing(r, camera, geometry, material) {
+    const geo = geometry || r.geometry;
+    if (!geo) return 0;
+    let n = 0;
+    if (r.centered && field && (!material || material === r.material)) {
+      const p = r.cull;
+      const band = r.ring.band;   // LIVE: setLodLook replaces it
+      p.holeR = band ? band[0] : -1;
+      writeCullMargins(r, band);
+      p.planes = null;
+      p.camPos = null;
+      const s = gpuScratch;
+      if (s && r.mesh && camera && camera.projectionMatrix && camera.matrixWorldInverse) {
+        s.m.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse).multiply(r.mesh.matrixWorld);
+        s.frustum.setFromProjectionMatrix(s.m, THREE.WebGLCoordinateSystem, camera.reversedDepth === true);
+        p.planes = s.frustum.planes;
+        if (camera.matrixWorld) {
+          s.inv.copy(r.mesh.matrixWorld).invert();
+          s.cam.setFromMatrixPosition(camera.matrixWorld).applyMatrix4(s.inv);
+          r.camPos[0] = s.cam.x;
+          r.camPos[1] = s.cam.y;
+          r.camPos[2] = s.cam.z;
+          p.camPos = r.camPos;
+        }
+      }
+      n = cullGrassTiles(p, r.st.tileIds);
+    }
+    geo.instanceCount = n * r.st.ts * r.st.ts;
+    r.tilesDrawn = n;
+    r.instancesDrawn = geo.instanceCount;
+    return n;
+  }
+
+  /**
+   * 2026-10-23 — the GPU per-frame tick: no placement at all. The field
+   * re-mirrors the oracle only when the player's landblock or the oracle cache
+   * changed, the mask refreshes its own textures when the cell set changes (no
+   * invalidation: nothing is cached per blade), and each ring re-centres its
+   * window + distance blend on the player.
+   */
+  function updateGpu(ctx) {
+    uniforms.uTime.value = ctx.tSec;
+    const p = ctx.playerPos;
+    if (p) tickStomp(ctx, p);
+    const placed = !!p && Number.isFinite(p.x) && Number.isFinite(p.y);
+    if (indoorMask) {
+      // 2026-10-23 (review lifecycle-1) — centre the mask's GPU copy on the
+      // player BEFORE the sync (the mask rewrites its textures at most once a
+      // frame across the two), reaching the outermost ring's half extent. p.z
+      // goes through as is; the mask handles a non-finite one.
+      if (placed && typeof indoorMask.setGpuCenter === "function") {
+        let reachM = 0;
+        for (let k = 0; k < rings.length; k += 1) if (rings[k].st.radiusM > reachM) reachM = rings[k].st.radiusM;
+        indoorMask.setGpuCenter(p.x, p.y, p.z, reachM);
+      }
+      indoorMask.sync(ctx.scene3d || opts.scene3d || null);
+    }
+    if (!placed) return;
+    if (field) field.update(p.x, p.y);
+    for (let k = 0; k < rings.length; k += 1) {
+      const r = rings[k];
+      const u = r.uniforms;
+      grassGpuSetWindow(r.st, p.x, p.y);
+      const c = u.uScatterCenter.value;
+      c.x = p.x;
+      c.y = p.y;
+      if (Number.isFinite(p.z)) c.z = p.z;
+      u.uScatterRadius.value = r.st.radiusM;
+      u.uScatterFadeStart.value = r.st.fadeStartM;
+      u.uScatterShape.value = 0;
+      r.cull.center[0] = p.x;
+      r.cull.center[1] = p.y;
+      r.centered = true;
+    }
+  }
+
   function build(ctx) {
     built = true;
     if (!cfg) return;
@@ -930,6 +1389,7 @@ export function createTerrainGrassProvider(opts = {}) {
         group.receiveShadow = false;
         if (parent && typeof parent.add === "function") parent.add(group);
       }
+      if (gpuMode) { buildGpu(); return; }
       for (const ring of layout) {
         // Shared {value} objects by reference; the ring-owned ones fresh.
         const bag = { ...uniforms };
@@ -1016,6 +1476,80 @@ export function createTerrainGrassProvider(opts = {}) {
     trailBound = true;
   }
 
+  // The stomp half of a tick (shared by the CPU and the 2026-10-23 GPU path).
+  function tickStomp(ctx, p) {
+    if (cfg.stomp) {
+      const trail = ctx.trail;
+      if (trail) {
+        // Stamp the player's ground position. The spine has already ticked the
+        // map this frame, so this stamp lands next frame — one frame of
+        // latency on a 4 s recovery, which is not a visible thing.
+        if (typeof trail.stamp === "function"
+          && trail.stamp(p.x, p.y, GRASS_DEFAULTS.stampRadiusM, GRASS_DEFAULTS.stampStrength)) {
+          stamps += 1;
+        }
+        bindTrail(trail);
+      } else if (uniforms.uTrailEnabled.value !== 0) {
+        uniforms.uTrailEnabled.value = 0;
+      }
+    }
+  }
+
+  /**
+   * 2026-10-23 — `stats()` in GPU mode. There is no per-blade CPU state, so
+   * live / road / indoor counts do not exist (null). `visibleBlades` is the
+   * instances the LAST render drew (summed over rings, for whichever camera
+   * drew each ring last): an UPPER BOUND on the blades on screen — whole kept
+   * tiles are drawn, and blades the shader kills (not grass, road, indoors,
+   * the dissolve hole, partial-tile padding) are collapsed but still counted.
+   */
+  function gpuStats() {
+    let total = 0, tiles = 0, drawn = 0;
+    const levels = rings.map((r) => {
+      total += r.st.count;
+      tiles += r.tilesDrawn;
+      drawn += r.instancesDrawn;
+      return {
+        level: r.ring.level, radiusM: r.st.radiusM, cellSizeM: +r.st.cell.toFixed(4),
+        count: r.st.count, live: null, band: r.ring.band.slice(),
+        heightMul: +r.ring.heightMul.toFixed(3), widthMul: +r.ring.widthMul.toFixed(3),
+        grid: r.st.g, tileSide: r.st.ts, maxInstances: r.st.maxInstances,
+        tilesDrawn: r.tilesDrawn, instancesDrawn: r.instancesDrawn,
+        // The blade margins the last cull used (m; >= the 2 m floors).
+        cullXyMarginM: r.cull.xyMarginM, cullAboveM: r.cull.zAboveM,
+      };
+    });
+    return {
+      id: provider.id,
+      enabled: terrainGrassEnabled(),
+      built,
+      mode: "gpu",
+      config: cfg,
+      visibleBlades: drawn,
+      blades: total,
+      tilesDrawn: tiles,
+      instancesDrawn: drawn,
+      offRoad: rings.length ? gpuOffRoad : !!(cfg && cfg.offRoad),
+      roadRejects: null,
+      indoorRejects: null,
+      indoorCull: indoorMask ? indoorMask.stats() : null,
+      degenerate: null,
+      radiusM: rings.length ? rings[0].st.radiusM : (layout.length ? layout[0].radiusM : 0),
+      reachM: layout.length ? layout[layout.length - 1].radiusM : 0,
+      lodLook: { ...lodLook },
+      levels,
+      stomp: !!(cfg && cfg.stomp),
+      trailBound,
+      stamps,
+      windAmp: uniforms.uGrassWindAmp.value,
+      windDirDeg: treeWindDir(),
+      hasMesh: rings.length > 0 && rings.every((r) => !!r.mesh),
+      buildError: buildError ? String(buildError.message || buildError) : null,
+      pool: null,
+      field: field ? field.stats() : null,
+    };
+  }
+
   const provider = {
     id: "terrain.grass",
     scope: "camera",
@@ -1027,12 +1561,40 @@ export function createTerrainGrassProvider(opts = {}) {
       return cfg;
     },
 
+    /** 2026-10-23 — "gpu" (`?terrainGrassGpu`, vertex-shader placement) or "cpu". */
+    get mode() { return gpuMode ? "gpu" : "cpu"; },
+
+    /**
+     * 2026-10-07 — live A/B of `?grassOffRoad` without a reload. CPU: every
+     * pool's gate (the field converges over the next amortised laps). GPU
+     * (2026-10-23): `uGpOffRoad` on every ring, effective on the next draw.
+     * Returns the new state, or null before the rings exist.
+     */
+    setOffRoad(on) {
+      if (gpuMode) {
+        if (!rings.length) return null;
+        gpuOffRoad = on === true;
+        for (const r of rings) {
+          r.uniforms.uGpOffRoad.value = gpuOffRoad ? 1 : 0;
+          r.st.offRoad = gpuOffRoad;
+        }
+        return gpuOffRoad;
+      }
+      const pools = provider._pools;
+      if (!pools.length) return null;
+      let state = null;
+      for (const pool of pools) state = pool.setOffRoad(on === true);
+      return state;
+    },
+
     update(dt, ctx) {
       lastCtx = ctx;
       if (!cfg) return;
       if (!built) build(ctx);
       if (!rings.length) return;
       if (!ctx || ctx.hasPlayer !== true) return;
+      // 2026-10-23 — `?terrainGrassGpu`: no pools, nothing placed here.
+      if (gpuMode) { updateGpu(ctx); return; }
       // The loaded interior cells changed (a building's interior baked or was
       // evicted). 2026-10-08: re-examine only the blades near the boxes that
       // changed — clipped to the pool window, one merged region — not the whole
@@ -1063,21 +1625,7 @@ export function createTerrainGrassProvider(opts = {}) {
       uniforms.uTime.value = ctx.tSec;
 
       const p = ctx.playerPos;
-      if (cfg.stomp) {
-        const trail = ctx.trail;
-        if (trail) {
-          // Stamp the player's ground position. The spine has already ticked the
-          // map this frame, so this stamp lands next frame — one frame of
-          // latency on a 4 s recovery, which is not a visible thing.
-          if (typeof trail.stamp === "function"
-            && trail.stamp(p.x, p.y, GRASS_DEFAULTS.stampRadiusM, GRASS_DEFAULTS.stampStrength)) {
-            stamps += 1;
-          }
-          bindTrail(trail);
-        } else if (uniforms.uTrailEnabled.value !== 0) {
-          uniforms.uTrailEnabled.value = 0;
-        }
-      }
+      tickStomp(ctx, p);
 
       // Placement, residency, teleport re-scatter and buffer uploads: all the
       // pool's job (plan §3.1 "Placement (CPU, amortised)"), once per ring.
@@ -1086,11 +1634,18 @@ export function createTerrainGrassProvider(opts = {}) {
 
     dispose() {
       for (const r of rings) {
-        try { r.pool.dispose(); } catch (_) { /* fail-soft */ }
+        if (r.pool) { try { r.pool.dispose(); } catch (_) { /* fail-soft */ } }
+        // 2026-10-23 — GPU mode: the ring's own Mesh (no pool to remove it).
+        if (r.mesh && r.mesh.parent) { try { r.mesh.parent.remove(r.mesh); } catch (_) {} }
         if (r.geometry) { try { r.geometry.dispose(); } catch (_) {} }
         if (r.material && r.material !== opts.material) { try { r.material.dispose(); } catch (_) {} }
       }
       rings = [];
+      if (field) { try { field.dispose(); } catch (_) {} field = null; }
+      if (gpuMode && indoorMask && typeof indoorMask.dispose === "function") {
+        try { indoorMask.dispose(); } catch (_) { /* fail-soft */ }
+      }
+      gpuScratch = null;
       if (group && group.parent) { try { group.parent.remove(group); } catch (_) {} }
       group = null;
       built = false;
@@ -1112,6 +1667,7 @@ export function createTerrainGrassProvider(opts = {}) {
 
     /** Diagnostics — `window.__terrainGrass.stats()`. */
     stats() {
+      if (gpuMode) return gpuStats();
       const pool = rings.length ? rings[0].pool : null;
       const ps = pool ? pool.stats() : null;
       let live = 0, total = 0, roadRejects = 0, excludeRejects = 0;
@@ -1132,6 +1688,7 @@ export function createTerrainGrassProvider(opts = {}) {
         id: provider.id,
         enabled: terrainGrassEnabled(),
         built,
+        mode: "cpu",
         config: cfg,
         // THE live-check field (plan §3.1): non-zero means blades actually
         // landed on grass terrain in front of the player.
@@ -1164,13 +1721,22 @@ export function createTerrainGrassProvider(opts = {}) {
 
     // Test seams. Read-only by convention.
     _uniforms: uniforms,
+    // GPU mode: no pools — `_pool` is null and `_pools` empty (every reader
+    // must stay null-safe).
     get _pool() { return rings.length ? rings[0].pool : null; },
-    get _pools() { return rings.map((r) => r.pool); },
+    get _pools() { return rings.filter((r) => r.pool).map((r) => r.pool); },
     get _material() { return rings.length ? rings[0].material : null; },
     get _materials() { return rings.map((r) => r.material); },
     get _ringUniforms() { return rings.map((r) => r.uniforms); },
     get _layout() { return layout; },
     get _group() { return group; },
+    // 2026-10-23 — GPU mode seams: the shared field, the mask, per-ring meshes
+    // and uniform states (null / empty on the CPU path).
+    get _field() { return field; },
+    get _indoorMask() { return indoorMask; },
+    get _meshes() { return rings.map((r) => r.mesh || null); },
+    get _ringStates() { return rings.map((r) => r.st || null); },
+    _cullRing: (k, camera, material) => (rings[k] ? cullRing(rings[k], camera, rings[k].geometry, material) : 0),
   };
   return provider;
 }
@@ -1217,15 +1783,10 @@ export function initTerrainGrass(opts = {}) {
     get pool() { return provider._pool; },
     get uniforms() { return provider._uniforms; },
     /** 2026-10-07 — live A/B of `?grassOffRoad` without a reload; the field
-     *  converges over the next amortised laps. Returns the new state (or null
-     *  before the pool exists). */
-    setOffRoad: (on) => {
-      const pools = provider._pools;
-      if (!pools.length) return null;
-      let state = null;
-      for (const pool of pools) state = pool.setOffRoad(on === true);
-      return state;
-    },
+     *  converges over the next amortised laps (GPU mode, 2026-10-23: the next
+     *  draw). Returns the new state (or null before the pool exists). In GPU
+     *  mode `pool` is null. */
+    setOffRoad: (on) => provider.setOffRoad(on),
     /** 2026-10-12 — GRASS LOD look, live: `{ blend, soft, widthExp, heightGain }`. */
     setLod: (look) => provider.setLodLook(look),
     unregister: () => { reg.unregister(); _handle = null; },
