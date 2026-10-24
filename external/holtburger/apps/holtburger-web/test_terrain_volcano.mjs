@@ -162,8 +162,9 @@ for (const tier of ["low", "mid", "high", "ultra"]) {
   check(`PRESETS.${tier} carries every volcano key`,
     ["terrainVolcano", "terrainHaze", "terrainCrackGlow", "terrainVolcanoEmberCount",
       "terrainHazeStrength", "terrainVolcanoRadius"].every((k) => k in PRESETS[tier]));
-  check(`PRESETS.${tier}.terrainVolcano ships FALSE (§5.9)`,
-    PRESETS[tier].terrainVolcano === false);
+  // PROMOTED 2026-10-24 (the owner's vistest tour): {high, ultra}, low / mid off.
+  check(`PRESETS.${tier}.terrainVolcano follows the {high, ultra} ladder (promoted 2026-10-24)`,
+    PRESETS[tier].terrainVolcano === (tier === "high" || tier === "ultra"));
 }
 check("ASH: no ash key on any tier (deferred, plan §8 risk 9)",
   ["low", "mid", "high", "ultra"].every((t) =>

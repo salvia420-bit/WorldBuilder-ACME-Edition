@@ -1319,14 +1319,16 @@ const DEFAULT_SNOW_SPARKLE_FADE_END = 40.0;
 // The day-time scale on the lit POWDER colour (code 15; ice 2/27 untouched).
 // Exposure 5 into the Neutral curve puts sunlit snow (albedo ~0.85) at HDR ~4,
 // displayed as flat (255,255,241): prints, cast shadows, slope shading,
-// spindrift and sparkle halos all tone-map to the same white. 0.3 brings noon
-// powder to HDR ~1.3 (displayed ~246, still the brightest ground in the frame)
-// where those differences show. Ramped by the flat-ground light level, so
+// spindrift and sparkle halos all tone-map to the same white. 0.3 brought noon
+// powder to HDR ~1.3 -- which read GREY on the 1070 at retail noon (2026-10-24
+// vistest, 0x36EF: night snow looked brighter than day). 0.6 (HDR ~2.4) keeps it
+// white, with prints, shading and spindrift still readable (the same A/B at 0.3 /
+// 0.45 / 0.6 / 1.0). Ramped by the flat-ground light level, so
 // night snow is untouched; a plain multiply, so every ratio is preserved;
 // skipped in the far-ring albedo bake. MIRRORED in scene3d/terrain_snow.js
 // SNOW_EXPOSURE_DAY (the spindrift copies the live value from a terrain
 // material each frame); the snow test locks the two. 1.0 = off.
-const DEFAULT_SNOW_EXPOSURE = 0.3;
+const DEFAULT_SNOW_EXPOSURE = 0.6;
 
 // ----- Wave 2A — SNOW FOOTPRINTS (plan §3.4 item 3) -------------------
 //
@@ -1989,6 +1991,28 @@ uniform float uWinnerSoftness;
 // output if shared.
 float fragHash21(vec2 p) {
   return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+}
+// 2026-10-24 — GLINT LATTICE HASH. The sand / snow / obsidian glints hashed
+// their WORLD cell index with fragHash21, and in Dereth that index is huge: 26
+// sand cells per metre at x = 25 km is 650k, where float32 sin() is no hash and
+// the sparkle came out as straight dotted lines running to the horizon (1070
+// vistest tour, sand at 0x8167). The lattices are now LANDBLOCK-LOCAL
+// (vGridUv * 24 is exact to ~2e-5 m, so fract() inside a cell is clean too)
+// and keyed by integers: pcg3d (Jarzynski & Olano 2020) over
+// (cell x, cell y, landblock key ^ salt << 16). A different salt is an
+// independent draw for the same cell.
+uvec3 hbPcg3d(uvec3 v) {
+  v = v * 1664525u + 1013904223u;
+  v.x += v.y * v.z; v.y += v.z * v.x; v.z += v.x * v.y;
+  v ^= v >> 16u;
+  v.x += v.y * v.z; v.y += v.z * v.x; v.z += v.x * v.y;
+  return v;
+}
+// Three independent values in [0, 1) for one lattice cell (24 bits each).
+vec3 hbCellHash3(vec2 cell, uint lbKey, uint salt) {
+  ivec2 c = ivec2(cell);
+  uvec3 h = hbPcg3d(uvec3(uint(c.x), uint(c.y), lbKey ^ (salt << 16u)));
+  return vec3(h >> 8u) * (1.0 / 16777216.0);
 }
 // 2026-06-22 — Candidate H: fragment-stage copy of TERRAIN_VERTEX_GLSL's
 // fade + valueNoise2D (lines ~800-816). Quintic-interpolated lattice noise is
@@ -2701,6 +2725,10 @@ void main() {
   float fu = clamp(grid.x - float(iu), 0.0, 1.0);
   float fv = clamp(grid.y - float(iv), 0.0, 1.0);
   vec2 cellUv = vec2(fu, fv);
+  // 2026-10-24 — the glint lattices' landblock key (hbCellHash3): which 192 m
+  // block this fragment lies in. Only its uniqueness matters, not its value.
+  ivec2 hbLbXy = ivec2(floor((vec2(vWorldPos.x, -vWorldPos.z) - grid * 24.0) / 192.0 + 0.5));
+  uint hbLbKey = (uint(hbLbXy.x & 255) << 8u) | uint(hbLbXy.y & 255);
 
   // Phase 2.2 — water UV scroll. Apply a per-frame offset to the
   // intra-cell UV so the water texture pattern drifts. The scroll is
@@ -3949,8 +3977,8 @@ ${TERRAIN_MICRO.gradUv
   // veil or a sparkle halo all tone-map to that same white. A camera or an eye
   // ADAPTS to a bright snowfield; this is that adaptation, per surface: the lit
   // POWDER colour (snowW minus the ice subset, so the shipped ice look is
-  // untouched) is scaled by uSnowExposure (0.3 => noon powder at HDR ~1.3,
-  // still the brightest ground in the frame), ramped in by the FLAT-GROUND
+  // untouched) is scaled by uSnowExposure (0.6 => noon powder at HDR ~2.4,
+  // white but not paper; 0.3 read grey), ramped in by the FLAT-GROUND
   // light level (the retail Gouraud term at n = +Z: night is untouched). A
   // plain multiply, so every ratio -- shadow, print, relief -- is preserved.
   // Sparkles ride iblSpec, unscaled, so they now stand ABOVE the snow. The
@@ -4104,20 +4132,21 @@ ${TERRAIN_MICRO.gradUv
     if (snowFade > 0.001) {
       vec3 snowViewW = normalize(vWorldPos - cameraPosition);
       vec3 snowViewAc = vec3(snowViewW.x, -snowViewW.z, snowViewW.y);
-      // POM-corrected AC ground position, quantised to crystal cells.
+      // POM-corrected LANDBLOCK-LOCAL ground position, quantised to crystal
+      // cells and hashed with the cell's integer key (hbCellHash3).
       vec2 snowShift = (cellUv - vec2(fu, fv)) * 24.0;
-      vec2 crystalXy = (vec2(vWorldPos.x, -vWorldPos.z) + snowShift) * uSnowSparkleDensity;
+      vec2 crystalXy = (grid * 24.0 + snowShift) * uSnowSparkleDensity;
       vec2 ccell = floor(crystalXy);
-      float ch1 = fragHash21(ccell);
-      float ch2 = fragHash21(ccell + vec2(19.3, 71.9));
-      float ch3 = fragHash21(ccell + vec2(53.1, 7.7));
+      vec3 ch = hbCellHash3(ccell, hbLbKey, 3u);
+      float ch1 = ch.x;
+      float ch2 = ch.y;
+      float ch3 = ch.z;
       vec3 crystalN = normalize(vec3((ch1 - 0.5) * 2.4, (ch2 - 0.5) * 2.4, 0.45 + ch3 * 1.1));
       vec3 snowHalfAc = normalize(sunDir - snowViewAc);
       float snowLobe = pow(clamp(dot(crystalN, snowHalfAc), 0.0, 1.0), uSnowSparkleSharpness);
       // The glint's centre inside its cell (kept off the edges so the dot is
       // not cut by the neighbour cell), and the offset to it in PIXELS.
-      vec2 snowC = vec2(0.25) + 0.5 * vec2(fragHash21(ccell + vec2(3.7, 41.3)),
-                                           fragHash21(ccell + vec2(87.1, 23.9)));
+      vec2 snowC = vec2(0.25) + 0.5 * hbCellHash3(ccell, hbLbKey, 4u).xy;
       vec2 snowD = fract(crystalXy) - snowC;
       float snowDet = snowJx.x * snowJy.y - snowJy.x * snowJx.y;
       float snowInvDet = 1.0 / (abs(snowDet) > 1e-12 ? snowDet : 1e-12);
@@ -4229,9 +4258,13 @@ ${TERRAIN_MICRO.gradUv
     vec2 obsGp = vec2(vWorldPos.x, -vWorldPos.z) + obsShift;
 
     // (1) SHEEN
-    float obsA = fragValueNoise2D(obsGp * 0.071);
-    float obsB = fragValueNoise2D(obsGp * 0.31 + vec2(17.3, 4.1));
-    float obsC = fragValueNoise2D(obsGp * 0.31 + vec2(2.9, 33.7));
+    // fragValueNoise2D returns [-0.5, 0.5]; + 0.5 puts it on the [0, 1] these
+    // terms were written for (2026-10-24, 1070 vistest: as [-0.5, 0.5] the
+    // glassy smoothstep only fired in rare blobs -- a pink stain on the plain --
+    // and every facet tilted the same way, (obsB - 0.5) being always <= 0).
+    float obsA = fragValueNoise2D(obsGp * 0.071) + 0.5;
+    float obsB = fragValueNoise2D(obsGp * 0.31 + vec2(17.3, 4.1)) + 0.5;
+    float obsC = fragValueNoise2D(obsGp * 0.31 + vec2(2.9, 33.7)) + 0.5;
     float obsGlassy = 0.45 + 0.55 * smoothstep(0.3, 0.72, obsA);
     vec3 obsN = normalize(geomN + vec3((obsB - 0.5) * 0.3, (obsC - 0.5) * 0.3, 0.0));
     vec3 obsNW = normalize(vec3(obsN.x, obsN.z, -obsN.y));
@@ -4261,20 +4294,21 @@ ${TERRAIN_MICRO.gradUv
              * clamp((csmShadow - 0.45) / 0.55, 0.0, 1.0)
              * smoothstep(0.05, 0.25, sunDir.z) * min(length(uAcSunVec) * 1.25, 1.0) * uSunGlint;
     if (obsFade > 0.001) {
-      vec2 facetXy = obsGp * uObsidianGlintDensity;
+      // LANDBLOCK-LOCAL facet lattice, integer-keyed (hbCellHash3, 2026-10-24).
+      vec2 facetXy = (grid * 24.0 + obsShift) * uObsidianGlintDensity;
       vec2 fcell = floor(facetXy);
-      if (fragHash21(fcell + vec2(91.7, 47.3)) < uObsidianGlintFrac) {
-        float fh1 = fragHash21(fcell + vec2(7.3, 61.1));
-        float fh2 = fragHash21(fcell + vec2(29.9, 3.7));
-        float fh3 = fragHash21(fcell + vec2(13.1, 77.9));
+      vec3 fh = hbCellHash3(fcell, hbLbKey, 5u);
+      if (hbCellHash3(fcell, hbLbKey, 6u).x < uObsidianGlintFrac) {
+        float fh1 = fh.x;
+        float fh2 = fh.y;
+        float fh3 = fh.z;
         vec3 facetN = normalize(geomN * (0.6 + 0.8 * fh3)
                                 + vec3((fh1 - 0.5) * 2.0, (fh2 - 0.5) * 2.0, 0.0));
         vec3 obsHalf = normalize(sunDir - obsViewAc);
         float obsLobe = pow(clamp(dot(facetN, obsHalf), 0.0, 1.0), uObsidianGlintSharpness);
         // The glint's centre inside its facet, and the offset to it in PIXELS
         // (the inverse of the facet grid's screen Jacobian).
-        vec2 obsCtr = vec2(0.25) + 0.5 * vec2(fragHash21(fcell + vec2(3.7, 41.3)),
-                                              fragHash21(fcell + vec2(87.1, 23.9)));
+        vec2 obsCtr = vec2(0.25) + 0.5 * hbCellHash3(fcell, hbLbKey, 7u).xy;
         vec2 obsD = fract(facetXy) - obsCtr;
         float obsDet = obsJx.x * obsJy.y - obsJy.x * obsJx.y;
         float obsInvDet = 1.0 / (abs(obsDet) > 1e-12 ? obsDet : 1e-12);
@@ -4399,13 +4433,15 @@ ${TERRAIN_MICRO.gradUv
       // still exist, just fewer of them reach the eye).
       float graze = 1.0 - clamp(dot(geomN, -viewAc), 0.0, 1.0);
       graze = 0.35 + 0.65 * graze * graze;
-      // POM-corrected AC ground position, then quantised to grain cells.
+      // POM-corrected LANDBLOCK-LOCAL ground position, quantised to grain
+      // cells and hashed with the cell's integer key (hbCellHash3).
       vec2 pomShift = (cellUv - vec2(fu, fv)) * 24.0;
-      vec2 grainXy = (vec2(vWorldPos.x, -vWorldPos.z) + pomShift) * uSandSparkleDensity;
+      vec2 grainXy = (grid * 24.0 + pomShift) * uSandSparkleDensity;
       vec2 gcell = floor(grainXy);
-      float gh1 = fragHash21(gcell);
-      float gh2 = fragHash21(gcell + vec2(37.7, 11.3));
-      float gh3 = fragHash21(gcell + vec2(71.3, 53.9));
+      vec3 gh = hbCellHash3(gcell, hbLbKey, 1u);
+      float gh1 = gh.x;
+      float gh2 = gh.y;
+      float gh3 = gh.z;
       // Grain cells under one pixel (long axis of the footprint), at least 1.
       float gpp = max(wFoot * uSandSparkleDensity, 0.001);
       float cellsPerPx = max(gpp, 1.0);
@@ -4416,7 +4452,7 @@ ${TERRAIN_MICRO.gradUv
         vec3 halfAc = normalize(sunDir - viewAc);
         float lobe = pow(clamp(dot(grainN, halfAc), 0.0, 1.0), uSandSparkleSharpness);
         // Round point at a hashed spot in the cell, never thinner than ~1 px.
-        vec2 gpt = vec2(fragHash21(gcell + vec2(5.1, 91.7)), gh1) * 0.5 + 0.25;
+        vec2 gpt = vec2(hbCellHash3(gcell, hbLbKey, 2u).x, gh1) * 0.5 + 0.25;
         float gRad = max(0.22, 0.75 * gpp);
         float gDot = 1.0 - smoothstep(gRad * 0.45, gRad, length(fract(grainXy) - gpt));
         // glint.js's phase term: time + hash, so a facet twinkles rather than

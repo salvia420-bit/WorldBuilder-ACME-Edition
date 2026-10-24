@@ -50,16 +50,26 @@ export const TERRAIN_VFX_PROMOTED = Object.freeze({
     // grass looks so good tho") after the look pass — ground-matched tints,
     // wider blades, tighter radius at the same count, no back-face black.
     grass: true,
-    sand: false,
-    snow: false,
+    // OWNER-APPROVED PROMOTION 2026-10-24: the owner, 2026-10-23, "default them
+    // on after we teleport to a location with it and vistest", then "run the
+    // vistest tour offscreen and muted". Off-screen 1070 tour (quality high,
+    // noon + night): sand passed once its sparkle hash was fixed (it drew
+    // straight dotted lines); snow passed with the day exposure at 0.6 (0.3 read
+    // grey); lava passed as it was; obsidian passed once its sheen noise was put
+    // on [0, 1] (it left a pink stain). Escapes: ?terrainSand=off etc.
+    sand: true,
+    snow: true,
     // USER 1070 SIGN-OFF 2026-08-01 (in-person vistest): ice ships.
     ice: true,
-    volcano: false,
+    volcano: true,
     // 2026-10-23 — the volcano split (terrain_families.js FAM_OBSIDIAN, code 6):
-    // obsidian glass is its own family with its own master. Ships OFF until the
-    // owner's 1070 vistest; flipping this is the whole promotion.
-    obsidian: false,
+    // obsidian glass is its own family with its own master. Promoted 2026-10-24
+    // with sand / snow / volcano (above).
+    obsidian: true,
     swamp: false,
+    // HELD BACK at the 2026-10-24 vistest: the dust haze's upright sheets read as
+    // pale smears from the chase camera (still streaky at 0.12 opacity), and the
+    // footfall puffs never fired in the muted bot walk, so they are unverified.
     dirt: false,
     // DEFAULT ON (2026-10-19, ahead of its 1070 eye test): the owner's "default
     // on what would be on after a successful eyetest". The pebbles + grit light

@@ -21,7 +21,8 @@
 //      shadow, a spindrift veil and a sparkle halo all tone-map to the same
 //      white. A camera (or an eye) adapts to a bright snowfield; this is that
 //      adaptation, done per surface: the lit powder colour is scaled by
-//      `uSnowExposure` (0.3) by DAY only (ramped off the flat-ground light
+//      `uSnowExposure` (0.6; 0.3 until 2026-10-24, which read grey at retail
+//      noon on the 1070) by DAY only (ramped off the flat-ground light
 //      level, 0.25 -> 0.6 = `SNOW_EXPOSURE_RAMP`, so retail noon gets the full
 //      scale and night snow is untouched). Ratios are preserved — it is a
 //      plain multiply — so prints, shadows and slope shading come back, and
@@ -350,7 +351,7 @@ export const SNOW_TUNING = Object.freeze({
  * header). Mirrors `terrain.js` `DEFAULT_SNOW_EXPOSURE`; `test_terrain_snow.mjs`
  * locks the two together. 1 ⇒ off (the shader block is then a strict no-op).
  */
-export const SNOW_EXPOSURE_DAY = 0.3;
+export const SNOW_EXPOSURE_DAY = 0.6;
 /** Flat-ground light level (Rec.709 luminance of the retail Gouraud term) at
  *  which the exposure starts / reaches full strength. MIRRORED, as literals, in
  *  the terrain fragment (`terrain.js` SNOW EXPOSURE block) and in
@@ -524,7 +525,7 @@ export function snowTuneShippedValue(key) {
  * Pure-ish; zero-alloc. Returns the number of uniform writes.
  *
  * @param {Array<object>|null} materials
- * @param {object|null} tune  e.g. `{ exposure: 0.3, printTint: [0.8, 0.9, 1.1] }`
+ * @param {object|null} tune  e.g. `{ exposure: 0.45, printTint: [0.8, 0.9, 1.1] }`
  */
 export function applySnowTerrainTuning(materials, tune) {
   if (!Array.isArray(materials) || !tune) return 0;

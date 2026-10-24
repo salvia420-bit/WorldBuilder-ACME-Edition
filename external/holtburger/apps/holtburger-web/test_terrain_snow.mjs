@@ -236,13 +236,18 @@ check("the phase is deterministic — uTime + hash only, nothing else",
 // ===========================================================================
 console.log("\n-- N3 a WORLD-SPACE hash, not a per-instance one ----------------");
 // ===========================================================================
-check("the crystal cell is quantised from the WORLD position",
-  /vec2 crystalXy = \(vec2\(vWorldPos\.x, -vWorldPos\.z\) \+ snowShift\) \* uSnowSparkleDensity;/.test(FRAG)
+// 2026-10-24: the lattice is LANDBLOCK-LOCAL and integer-keyed (hbCellHash3):
+// fragHash21 on the world cell index (~160k crystal cells at 46 km) drew the
+// glints as straight dotted lines (1070 vistest tour). Still a pure function of
+// world position: the landblock key + the local cell name one ground spot.
+check("the crystal cell is quantised from the LANDBLOCK-LOCAL position",
+  /vec2 crystalXy = \(grid \* 24\.0 \+ snowShift\) \* uSnowSparkleDensity;/.test(FRAG)
   && /vec2 ccell = floor\(crystalXy\);/.test(FRAG));
-check("three decorrelated hash draws per cell, from the FRAGMENT-stage hash",
-  /float ch1 = fragHash21\(ccell\);/.test(FRAG)
-  && /float ch2 = fragHash21\(ccell \+ vec2\(19\.3, 71\.9\)\);/.test(FRAG)
-  && /float ch3 = fragHash21\(ccell \+ vec2\(53\.1, 7\.7\)\);/.test(FRAG));
+check("three decorrelated hash draws per cell, from the INTEGER lattice hash",
+  /vec3 ch = hbCellHash3\(ccell, hbLbKey, 3u\);/.test(FRAG)
+  && /float ch1 = ch\.x;/.test(FRAG) && /float ch2 = ch\.y;/.test(FRAG) && /float ch3 = ch\.z;/.test(FRAG)
+  && /vec2 snowC = vec2\(0\.25\) \+ 0\.5 \* hbCellHash3\(ccell, hbLbKey, 4u\)\.xy;/.test(FRAG)
+  && !/fragHash21\(ccell/.test(FRAG));
 check("no per-instance hash is used or available in the terrain fragment stage",
   !/vVfxHash/.test(FRAG_CODE) && !SPARKLE_CODE.includes("instanceMatrix"));
 check("the facet normal has a WIDE spread about the vertical (snow crystals lie "
@@ -730,9 +735,10 @@ for (const key of TIER_KEYS) {
     PRESET_NAMES.every((p) => Object.prototype.hasOwnProperty.call(PRESETS[p], key)),
     PRESET_NAMES.filter((p) => !(key in PRESETS[p])).join());
 }
-check("snow ships OFF everywhere; ice PROMOTED on {high, ultra} "
-  + "(USER 1070 SIGN-OFF 2026-08-01)",
-  PRESET_NAMES.every((p) => PRESETS[p].terrainSnow === false)
+check("snow PROMOTED on {high, ultra} (2026-10-24 vistest), off on low / mid; "
+  + "ice PROMOTED on {high, ultra} (USER 1070 SIGN-OFF 2026-08-01)",
+  PRESETS.low.terrainSnow === false && PRESETS.mid.terrainSnow === false
+  && PRESETS.high.terrainSnow === true && PRESETS.ultra.terrainSnow === true
   && PRESETS.low.terrainIce === false && PRESETS.mid.terrainIce === false
   && PRESETS.high.terrainIce === true && PRESETS.ultra.terrainIce === true);
 check("plan §3.4 tier table: low is NULL (nothing enabled at all)",
@@ -923,9 +929,9 @@ console.log("\n-- N14 the 2026-10-23 look pass ---------------------------------
       sunTerm <= 0.42 && noonDay > 0.55 && noonDay < 0.66 && smooth(0.25, 0.85, noonDay) < 0.7,
       `sun ${sunTerm.toFixed(3)} day ${noonDay.toFixed(3)} old weight ${smooth(0.25, 0.85, noonDay).toFixed(3)}`);
     const noonScale = snowExposureScale(sunZ, sunCol, noonAmb, 0.45, SNOW_EXPOSURE_DAY);
-    check("retail noon now gets the FULL day scale (was ~0.54 with the 0.85 top)",
+    check("retail noon now gets the FULL day scale (the old 0.85 top gave it only a ~0.66 weight)",
       Math.abs(noonScale - SNOW_EXPOSURE_DAY) < 1e-9
-      && Math.abs((1 + (SNOW_EXPOSURE_DAY - 1) * smooth(0.25, 0.85, noonDay)) - 0.54) < 0.02,
+      && Math.abs(smooth(0.25, 0.85, noonDay) - 0.66) < 0.03,
       `noon scale ${noonScale}`);
     // A dimmer noon (lower sun, thinner ambient) still gets most of it.
     const dimNoon = snowExposureScale(sunZ * 0.92, sunCol, noonAmb, 0.3, SNOW_EXPOSURE_DAY);

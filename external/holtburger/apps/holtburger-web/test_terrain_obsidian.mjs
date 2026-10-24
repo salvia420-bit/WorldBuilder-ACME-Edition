@@ -12,9 +12,9 @@
 //   F1  FAMILY: the code set is DERIVED from terrain_families.js (= [6]) — in
 //       this module AND in terrain.js — and obsidian draws none of the lava
 //       effects (not FAM_VOLCANO; the shader block references no crack glow).
-//   F2  FLAG: `?terrainObsidian` is a STRICT `=== "on"` opt-in that ships OFF;
+//   F2  FLAG: `?terrainObsidian` is a STRICT `=== "on"` opt-in (promoted 2026-10-24: on at high/ultra);
 //       the preset key is `terrainMaster("obsidian", tier)` on all four tiers,
-//       `TERRAIN_VFX_PROMOTED.obsidian === false`, it is out of BOOL_FLAGS,
+//       `TERRAIN_VFX_PROMOTED.obsidian === true` (2026-10-24), it is out of BOOL_FLAGS,
 //       it has a firewall row (`?visual=off` kills it) and it is independent
 //       of `?terrainVolcano`.
 //   F3  LIFECYCLE: `initTerrainObsidian` registers NOTHING with the flag off,
@@ -87,12 +87,17 @@ console.log("\n-- F2 the flag --------------------------------------------------
 // ===========================================================================
 clearUrl(); _resetVfxFlags();
 check("F2: no window ⇒ off", terrainObsidianEnabled() === false);
+// PROMOTED 2026-10-24 (the owner's vistest tour): on at high / ultra, off at
+// low / mid. A non-"on"/"off" value is not an opt-in: it falls back to the tier.
 setUrl("", PRESETS.ultra); _resetVfxFlags();
-check("F2: no URL + the ultra preset ⇒ OFF (ships off; promotion is the owner's)",
+check("F2: no URL + the ultra preset ⇒ ON (promoted 2026-10-24)",
+  terrainObsidianEnabled() === true);
+setUrl("", PRESETS.mid); _resetVfxFlags();
+check("F2: no URL + the mid preset ⇒ OFF (the {high, ultra} ladder)",
   terrainObsidianEnabled() === false);
 for (const bad of ["1", "true", "yes", "ON"]) {
-  setUrl(`?terrainObsidian=${bad}`, PRESETS.high); _resetVfxFlags();
-  check(`F2: ?terrainObsidian=${bad} does NOT enable (strict === "on")`, terrainObsidianEnabled() === false);
+  setUrl(`?terrainObsidian=${bad}`, PRESETS.mid); _resetVfxFlags();
+  check(`F2: ?terrainObsidian=${bad} does NOT enable on a tier without it (strict === "on")`, terrainObsidianEnabled() === false);
 }
 setUrl("?terrainObsidian=on", PRESETS.low); _resetVfxFlags();
 check("F2: ?terrainObsidian=on enables it (any tier — an eye-test override)", terrainObsidianEnabled() === true);
@@ -101,13 +106,13 @@ check("F2: ?terrainObsidian=off beats a promoted preset", terrainObsidianEnabled
 setUrl("?terrainObsidian=on&terrainVolcano=off", PRESETS.high); _resetVfxFlags();
 check("F2: independent of the volcano master (volcano off, obsidian on)",
   terrainObsidianEnabled() === true && terrainVolcanoEnabled() === false);
-check("F2: TERRAIN_VFX_PROMOTED.obsidian === false (owner promotes after the live vistest)",
-  TERRAIN_VFX_PROMOTED.obsidian === false);
+check("F2: TERRAIN_VFX_PROMOTED.obsidian === true (promoted after the 2026-10-24 vistest)",
+  TERRAIN_VFX_PROMOTED.obsidian === true);
 check("F2: every tier carries terrainObsidian = terrainMaster('obsidian', tier)",
   PRESET_NAMES.every((t) => PRESETS[t].terrainObsidian === terrainMaster("obsidian", t)));
-check("F2: … i.e. the high/ultra ladder, all false today",
-  PRESET_NAMES.every((t) => PRESETS[t].terrainObsidian === false)
-  && terrainMaster("obsidian", "high") === false);
+check("F2: … i.e. the high/ultra ladder: on at high / ultra, off at low / mid",
+  PRESET_NAMES.every((t) => PRESETS[t].terrainObsidian === (t === "high" || t === "ultra"))
+  && terrainMaster("obsidian", "high") === true);
 check("F2: the master is OUT of BOOL_FLAGS (parseBool would widen the strict opt-in)",
   (() => {
     const bools = QUALITY_SRC.slice(QUALITY_SRC.indexOf("const BOOL_FLAGS"), QUALITY_SRC.indexOf("const INT_FLAGS"));
@@ -121,12 +126,13 @@ check("F2: ?visual=off kills it through the firewall", vfxEffectEnabled("terrain
 setUrl("?terrainObsidian=on", PRESETS.high); _resetVfxCatalog(); _resetVfxFlags();
 check("F2: … and it is live with ?visual absent", vfxEffectEnabled("terrain.obsidian") === true);
 check("F2: the reset seam forgets the memo",
-  (() => { setUrl("", PRESETS.high); _resetVfxFlags(); return terrainObsidianEnabled() === false; })());
+  (() => { setUrl("", PRESETS.mid); _resetVfxFlags(); return terrainObsidianEnabled() === false; })());
 
 // ===========================================================================
 console.log("\n-- F3 lifecycle --------------------------------------------------");
 // ===========================================================================
-setUrl("", PRESETS.high); _resetVfxFlags();
+// (mid: the promoted master is off there — high / ultra light it since 2026-10-24.)
+setUrl("", PRESETS.mid); _resetVfxFlags();
 vfx._resetTerrainVfx(); obs._resetTerrainObsidian();
 check("F3: flag off ⇒ initTerrainObsidian returns null and registers NOTHING",
   obs.initTerrainObsidian({ scene3d: {} }) === null && vfx.terrainVfxStats().providers.length === 0);
@@ -290,9 +296,12 @@ check("G2: glints are SUNLIGHT — cloud x CSM x sun up AND bright x uSunGlint",
 check("G2: glints fade with distance AND where a facet drops under a pixel",
   /obsFade = 1\.0 - smoothstep\(uObsidianGlintFade\.x, uObsidianGlintFade\.y, vViewDepth\);/.test(CODE)
   && /obsFade \*= 1\.0 - smoothstep\(0\.4, 0\.9, obsFoot\);/.test(CODE));
-check("G2: facets are a deterministic HASH of the world cell (no time, no random)",
-  /vec2 fcell = floor\(facetXy\);/.test(CODE) && /fragHash21\(fcell \+ vec2\(91\.7, 47\.3\)\) < uObsidianGlintFrac/.test(CODE)
-  && !/uTime/.test(CODE));
+// 2026-10-24: landblock-local, integer-keyed lattice (hbCellHash3) — the sin
+// hash on the world cell index drew straight dotted lines (1070 vistest tour).
+check("G2: facets are a deterministic HASH of the ground cell (no time, no random)",
+  /vec2 facetXy = \(grid \* 24\.0 \+ obsShift\) \* uObsidianGlintDensity;/.test(CODE)
+  && /vec2 fcell = floor\(facetXy\);/.test(CODE) && /hbCellHash3\(fcell, hbLbKey, 6u\)\.x < uObsidianGlintFrac/.test(CODE)
+  && !/fragHash21\(fcell/.test(CODE) && !/uTime/.test(CODE));
 check("G2: facet normals are tilted about the MACRO normal (slopes keep their glints)",
   /vec3 facetN = normalize\(geomN \* \(0\.6 \+ 0\.8 \* fh3\)/.test(CODE));
 check("G2: a round PIXEL-space core through the inverse facet-grid Jacobian (the snow recipe)",
@@ -302,6 +311,14 @@ check("G2: the facet Jacobian is taken at main() scope (uniform control flow), b
   BLOCK.indexOf("vec2 obsJx") >= 0 && BLOCK.indexOf("vec2 obsJx") < BLOCK.indexOf("if (uObsidianEnabled > 0.5")
   && /gTerrainGridDx \* \(24\.0 \* uObsidianGlintDensity\)/.test(BLOCK)
   && /dFdx\(obsGrid\)/.test(BLOCK));
+// 2026-10-24 (1070 vistest, 0xC8ED): fragValueNoise2D returns [-0.5, 0.5]. Read
+// raw, the glassy smoothstep(0.3, 0.72) fired only in rare blobs — a pink stain
+// — and (obsB - 0.5) tilted every facet the same way. All three are shifted to [0, 1].
+check("G2: the sheen noises are shifted onto [0, 1] (fragValueNoise2D is centred on 0)",
+  /float obsA = fragValueNoise2D\(obsGp \* 0\.071\) \+ 0\.5;/.test(CODE)
+  && /float obsB = fragValueNoise2D\(obsGp \* 0\.31 \+ vec2\(17\.3, 4\.1\)\) \+ 0\.5;/.test(CODE)
+  && /float obsC = fragValueNoise2D\(obsGp \* 0\.31 \+ vec2\(2\.9, 33\.7\)\) \+ 0\.5;/.test(CODE)
+  && /return \(mix\(mix\(a, b, u\), mix\(c, d, u\), v\) - 0\.5\);/.test(SRC));
 check("G2: the sheen is a capped glass Fresnel (F0 0.045, max 0.6) of a BLURRED sky reflection",
   /float obsFres = min\(0\.045 \+ 0\.955 \* pow\(1\.0 - obsCos, 5\.0\), 0\.6\);/.test(CODE)
   && /textureLod\(uEnvCube, obsRefl, 3\.0\)/.test(CODE) && /if \(uIblEnabled > 0\.5\) \{/.test(CODE));

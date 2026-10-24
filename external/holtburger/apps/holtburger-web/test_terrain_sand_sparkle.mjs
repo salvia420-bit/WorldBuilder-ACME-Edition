@@ -155,9 +155,17 @@ check("S4: … and before the final fragColor write", iSparkle < iFragColor);
 check("S4: sandW is computed next to waterW, from the same corner data",
   iSandW > iWaterScroll - 4000 && iSandW < iSparkle);
 check("S4: the grain field is anchored to the PARALLAX-CORRECTED point "
-  + "(the post-march cellUv offset is added back to the world position)",
+  + "(the post-march cellUv offset is added back to the LANDBLOCK-LOCAL position)",
   /vec2 pomShift = \(cellUv - vec2\(fu, fv\)\) \* 24\.0;/.test(FRAG)
-  && /vec2 grainXy = \(vec2\(vWorldPos\.x, -vWorldPos\.z\) \+ pomShift\) \* uSandSparkleDensity;/.test(FRAG));
+  && /vec2 grainXy = \(grid \* 24\.0 \+ pomShift\) \* uSandSparkleDensity;/.test(FRAG));
+// 2026-10-24 (1070 vistest tour, sand 0x8167): the grain hash was fragHash21 —
+// fract(sin(dot(p, k)) * 43758) — on the WORLD cell index (~650k at x = 25 km),
+// where float32 sin() is no hash: the sparkle drew straight dotted lines to the
+// horizon. The lattice is landblock-local and integer-keyed now.
+check("S4: grain cells are hashed with the INTEGER lattice hash (hbCellHash3, pcg3d), not the sin hash",
+  /vec3 gh = hbCellHash3\(gcell, hbLbKey, 1u\);/.test(FRAG)
+  && /vec2 gpt = vec2\(hbCellHash3\(gcell, hbLbKey, 2u\)\.x, gh1\) \* 0\.5 \+ 0\.25;/.test(FRAG)
+  && !/fragHash21\(gcell/.test(FRAG));
 check("S4: the sparkle HONOURS the cellTouchesWater bypass (the 07-31 water fix)",
   /uSandSparkleEnabled > 0\.5 && sandW > 0\.0 && !cellTouchesWater/.test(FRAG));
 check("S4: the sparkle is multiplied by cloudShadow AND csmShadow (it is sunlight)",
@@ -174,8 +182,8 @@ check("the glint.js maths: a Blinn half-vector lobe + a time+hash twinkle",
   && /float twinkle = 0\.5 \+ 0\.5 \* sin\(phase\);/.test(FRAG));
 check("the twinkle phase is deterministic (uTime + hash only, no Math.random equivalent)",
   /float phase = uTime \* 1\.7 \+ gh1 \* 6\.2831853 \+ gh2 \* 17\.0;/.test(FRAG));
-check("the grain hash is the FRAGMENT-stage hash (fragHash21, not the vertex hash21)",
-  /float gh1 = fragHash21\(gcell\);/.test(FRAG));
+check("the grain hash is a FRAGMENT-stage hash (the integer lattice hash, not the vertex hash21)",
+  /float gh1 = gh\.x;/.test(FRAG) && /uvec3 hbPcg3d\(uvec3 v\)/.test(FRAG) && !/hash21\(gcell/.test(FRAG));
 
 // ===========================================================================
 console.log("\n-- S5 strict no-op when off -------------------------------------");
