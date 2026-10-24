@@ -430,6 +430,7 @@ mod tests {
         let cfg = Config {
             listen: bridge_addr,
             default_world_port_offset: 1,
+            ws_ping_interval: None,
         };
         let bridge_capture = Some(Arc::clone(&capture));
         tokio::spawn(async move {

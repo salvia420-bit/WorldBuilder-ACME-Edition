@@ -57,6 +57,7 @@ async fn start_bridge(admission: Admission) -> Result<SocketAddr> {
     let cfg = Config {
         listen: addr,
         default_world_port_offset: 1,
+        ws_ping_interval: None,
     };
     tokio::spawn(async move {
         let _ = bridge::accept_loop_admitted(cfg, admission, listener, None).await;

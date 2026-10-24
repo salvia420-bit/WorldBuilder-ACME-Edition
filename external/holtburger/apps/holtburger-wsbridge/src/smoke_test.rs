@@ -7,6 +7,7 @@ use crate::bridge;
 use crate::config::Config;
 use crate::frame;
 use crate::handshake::{ClientHello, ServerHello, HANDSHAKE_VERSION};
+use crate::link_health;
 use anyhow::Result;
 use futures_util::{SinkExt, StreamExt};
 use std::net::SocketAddr;
@@ -106,6 +107,7 @@ fn test_cfg(listen: SocketAddr) -> Config {
     Config {
         listen,
         default_world_port_offset: 1,
+        ws_ping_interval: None,
     }
 }
 
@@ -209,5 +211,56 @@ async fn rejects_handshake_with_unresolvable_host() -> Result<()> {
     let parsed: ServerHello = serde_json::from_str(&text)?;
     assert!(!parsed.ok, "expected ok=false for unresolvable host");
     assert!(parsed.error.is_some());
+    Ok(())
+}
+
+#[tokio::test]
+async fn pings_the_client_to_time_the_link() -> Result<()> {
+    let _ = env_logger::builder()
+        .is_test(true)
+        .filter_level(log::LevelFilter::Debug)
+        .try_init();
+
+    let login_port = spawn_tagged_echo(0xAA).await?;
+    let world_port = spawn_tagged_echo(0xBB).await?;
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let bridge_addr = listener.local_addr()?;
+    let cfg = Config {
+        ws_ping_interval: Some(Duration::from_millis(50)),
+        ..test_cfg(bridge_addr)
+    };
+    tokio::spawn(async move {
+        let _ = bridge::accept_loop(cfg, listener).await;
+    });
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let mut ws =
+        open_ws_with_handshake(bridge_addr, "127.0.0.1", login_port, world_port).await?;
+    // net-health: the bridge pings; tungstenite answers each one as we read.
+    for _ in 0..3 {
+        match tokio::time::timeout(Duration::from_secs(2), ws.next()).await {
+            Ok(Some(Ok(Message::Ping(payload)))) => {
+                assert_eq!(payload.len(), link_health::PING_PAYLOAD_LEN);
+            }
+            other => anyhow::bail!("expected the bridge's ping, got {other:?}"),
+        }
+    }
+    // Relaying is unaffected; pings may arrive around the echo.
+    ws.send(Message::Binary(frame::encode_frame(login_port, b"after-pings")?.into()))
+        .await?;
+    loop {
+        match tokio::time::timeout(Duration::from_secs(2), ws.next()).await {
+            Ok(Some(Ok(Message::Ping(_)))) => continue,
+            Ok(Some(Ok(Message::Binary(bytes)))) => {
+                let (src_port, payload) = frame::decode_frame(&bytes)?;
+                assert_eq!(src_port, login_port);
+                assert_eq!(payload[0], 0xAA);
+                assert_eq!(&payload[1..], b"after-pings");
+                break;
+            }
+            other => anyhow::bail!("expected the echo, got {other:?}"),
+        }
+    }
+    ws.close(None).await.ok();
     Ok(())
 }

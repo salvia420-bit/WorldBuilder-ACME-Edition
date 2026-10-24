@@ -61,6 +61,7 @@ async fn standup() -> Result<(SocketAddr, SocketAddr)> {
     let bridge_cfg = config::Config {
         listen: bridge_addr,
         default_world_port_offset: 1,
+        ws_ping_interval: None,
     };
     tokio::spawn(async move {
         let _ = bridge::accept_loop(bridge_cfg, bridge_listener).await;

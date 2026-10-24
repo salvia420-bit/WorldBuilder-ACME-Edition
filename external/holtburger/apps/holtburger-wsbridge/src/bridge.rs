@@ -13,6 +13,10 @@
 //! Admission (connection caps, Origin, the target allowlist) is in
 //! `admission.rs`; the binary runs [`run_admitted`] with the policy its
 //! flags describe.
+//!
+//! Each connection also measures and logs the health of its link to the
+//! browser (WebSocket ping round trips, the kernel's TCP_INFO); see
+//! `link_health.rs`.
 
 use crate::admission::{
     Admission, ConnLimiter, FrameBucket, HANDSHAKE_TIMEOUT, MAX_WS_MESSAGE_BYTES, TargetPolicy,
@@ -22,11 +26,12 @@ use crate::config::Config;
 use crate::disconnect::{self, SessionIdSlot};
 use crate::frame;
 use crate::handshake::{ClientHello, ServerHello, HANDSHAKE_VERSION};
+use crate::link_health::{self, Report, RttStats, TcpProbe, TcpSample, Traffic};
 use anyhow::{anyhow, Context, Result};
 use futures_util::{SinkExt, StreamExt};
 use std::net::{IpAddr, SocketAddr};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::net::{lookup_host, TcpListener, TcpStream, UdpSocket};
 use tokio_tungstenite::tungstenite::handshake::server::{ErrorResponse, Request, Response};
@@ -53,6 +58,11 @@ const WS_SEND_TIMEOUT: Duration = Duration::from_secs(15);
 /// net-3 (R2-net 2026-10-08): SO_RCVBUF for the per-connection ACE-facing
 /// UDP socket; same value as holtburger-session's native `Session::new`.
 const UDP_RECV_BUFFER_SIZE_BYTES: usize = 2 * 1024 * 1024;
+/// net-health (2026-10-23): how often the browser socket's TCP_INFO is read
+/// (one getsockopt; often enough for the srtt peak to see a short episode)
+/// and how often the `link:` line is logged.
+const LINK_SAMPLE_INTERVAL: Duration = Duration::from_secs(1);
+const LINK_LOG_INTERVAL: Duration = Duration::from_secs(60);
 
 /// Shared per-connection liveness clock (millis since the connection's
 /// own epoch; 0 = never happened).
@@ -61,11 +71,17 @@ struct LinkState {
     /// Last datagram accepted from ACE; seeded to "now" on the FIRST
     /// ws→udp send so a never-answered flow also trips the reaper.
     last_udp_in_ms: AtomicU64,
-    /// Last WS frame (any kind) received from the browser.
+    /// Last WS frame received from the browser, any kind except a Pong
+    /// (that answers the bridge's own ping).
     last_ws_in_ms: AtomicU64,
     /// net-transport-2: the ACE session id from the last S2C
     /// ConnectRequest, for the Disconnect sent at teardown.
     session: SessionIdSlot,
+    /// net-health: round trips of the bridge's pings, and what each pump
+    /// relayed.
+    rtt: Mutex<RttStats>,
+    to_ace: Traffic,
+    to_ws: Traffic,
 }
 
 impl LinkState {
@@ -75,12 +91,55 @@ impl LinkState {
             last_udp_in_ms: AtomicU64::new(0),
             last_ws_in_ms: AtomicU64::new(0),
             session: SessionIdSlot::new(),
+            rtt: Mutex::new(RttStats::default()),
+            to_ace: Traffic::default(),
+            to_ws: Traffic::default(),
         };
         s.last_ws_in_ms.store(1, Ordering::Relaxed);
         s
     }
     fn now_ms(&self) -> u64 {
         self.epoch.elapsed().as_millis().max(1) as u64
+    }
+    fn now_us(&self) -> u64 {
+        self.epoch.elapsed().as_micros() as u64
+    }
+    fn with_rtt<T>(&self, f: impl FnOnce(&mut RttStats) -> T) -> T {
+        // A panic while holding this lock leaves only statistics behind.
+        let mut stats = self.rtt.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        f(&mut stats)
+    }
+    fn record_pong(&self, payload: &[u8]) {
+        if let Some(rtt_us) = link_health::rtt_from_pong(payload, self.now_us()) {
+            self.with_rtt(|stats| stats.record(rtt_us));
+        }
+    }
+    /// The `link:` line for the minute since the last one.
+    fn window_report(&self, tcp: Option<&TcpSample>) -> String {
+        let (rtt, pings) = self.with_rtt(RttStats::take_window);
+        self.report(rtt, pings, tcp, None)
+    }
+    /// The `link summary` line for the whole connection.
+    fn session_report(&self, tcp: Option<&TcpSample>, peak_srtt_us: Option<u32>) -> String {
+        let (rtt, pings) = self.with_rtt(RttStats::session);
+        self.report(rtt, pings, tcp, peak_srtt_us)
+    }
+    fn report(
+        &self,
+        rtt: link_health::RttSummary,
+        pings: u64,
+        tcp: Option<&TcpSample>,
+        peak_srtt_us: Option<u32>,
+    ) -> String {
+        Report {
+            rtt,
+            pings,
+            tcp,
+            peak_srtt_us,
+            to_ace: &self.to_ace,
+            to_ws: &self.to_ws,
+        }
+        .to_string()
     }
     fn stamp(&self, cell: &AtomicU64) {
         cell.store(self.now_ms(), Ordering::Relaxed);
@@ -117,6 +176,42 @@ async fn liveness_watchdog(state: Arc<LinkState>, peer: SocketAddr) -> Result<()
                 ));
             }
         }
+    }
+}
+
+/// net-health (2026-10-23): samples the browser socket's TCP_INFO every
+/// second and logs the `link:` line once a minute (see `link_health.rs`).
+/// Never ends on its own.
+async fn link_monitor(
+    state: Arc<LinkState>,
+    probe: Option<Arc<TcpProbe>>,
+    peer: SocketAddr,
+) -> Result<()> {
+    let start = tokio::time::Instant::now();
+    let mut sample_tick = tokio::time::interval_at(start + LINK_SAMPLE_INTERVAL, LINK_SAMPLE_INTERVAL);
+    let mut log_tick = tokio::time::interval_at(start + LINK_LOG_INTERVAL, LINK_LOG_INTERVAL);
+    loop {
+        tokio::select! {
+            _ = sample_tick.tick() => {
+                if let Some(probe) = &probe {
+                    probe.sample();
+                }
+            }
+            _ = log_tick.tick() => {
+                let tcp = probe.as_ref().and_then(|probe| probe.sample());
+                log::info!("[{peer}] link: {}", state.window_report(tcp.as_ref()));
+            }
+        }
+    }
+}
+
+/// Completes on the next ping tick; never, with pings off.
+async fn next_ping(ping: &mut Option<tokio::time::Interval>) {
+    match ping {
+        Some(interval) => {
+            interval.tick().await;
+        }
+        None => std::future::pending().await,
     }
 }
 
@@ -280,6 +375,9 @@ async fn handle_connection(
     if let Err(err) = tcp.set_nodelay(true) {
         log::warn!("[{peer}] set_nodelay failed (continuing with Nagle): {err}");
     }
+    // net-health (2026-10-23): this socket's TCP_INFO, for the link lines.
+    // Taken before the upgrade consumes the stream; None off Linux.
+    let probe = TcpProbe::new(&tcp).map(Arc::new);
     // net-transport-5: the Origin check runs on the upgrade request (403 on
     // a miss), and the upgrade is bounded so a socket that never upgrades
     // cannot hold a connection slot.
@@ -383,8 +481,10 @@ async fn handle_connection(
         peer,
         Arc::clone(&link),
         tap,
+        cfg.ws_ping_interval,
     );
     let watchdog = liveness_watchdog(Arc::clone(&link), peer);
+    let monitor = link_monitor(Arc::clone(&link), probe.clone(), peer);
 
     let res = tokio::select! {
         res = to_udp => {
@@ -399,7 +499,17 @@ async fn handle_connection(
             log::debug!("[{peer}] liveness watchdog exited: {res:?}");
             res
         }
+        res = monitor => res,
     };
+    // net-health: the connection's link summary. Dropping the probe then
+    // closes its duplicate of the socket, which lets the FIN go out.
+    let tcp = probe.as_ref().and_then(|probe| probe.sample());
+    log::info!(
+        "[{peer}] link summary after {}: {}",
+        link_health::fmt_duration(link.epoch.elapsed()),
+        link.session_report(tcp.as_ref(), probe.as_ref().map(|probe| probe.peak_srtt_us())),
+    );
+    drop(probe);
     end_ace_session(&bye_udp, &target, &link, peer, bye_tap.as_ref()).await;
     res
 }
@@ -561,6 +671,13 @@ where
     let mut over_rate: u64 = 0;
     while let Some(msg) = ws_stream.next().await {
         let msg = msg.with_context(|| format!("[{peer}] ws read"))?;
+        // net-health: a Pong answers the bridge's own ping. It times the
+        // link; it is not client activity, so it leaves the WS-idle clock
+        // alone (or a page parked on the login form would never be reaped).
+        if let Message::Pong(payload) = &msg {
+            link.record_pong(payload);
+            continue;
+        }
         link.stamp(&link.last_ws_in_ms);
         match msg {
             Message::Binary(bytes) => {
@@ -606,6 +723,7 @@ where
                         payload.len()
                     ));
                 }
+                link.to_ace.record(sent);
                 log::trace!("[{peer}] ws→udp {} bytes → {dst}", payload.len());
             }
             Message::Close(_) => {
@@ -630,16 +748,36 @@ async fn forward_udp_to_ws<S>(
     peer: SocketAddr,
     link: Arc<LinkState>,
     tap: Option<CaptureTap>,
+    ping_every: Option<Duration>,
 ) -> Result<()>
 where
     S: SinkExt<Message, Error = tokio_tungstenite::tungstenite::Error> + Unpin,
 {
     let mut buf = vec![0u8; frame::MAX_PACKET_BYTES + frame::PORT_PREFIX_LEN];
+    // net-health: this pump owns the sink, so it also sends the pings whose
+    // Pongs time the link (`--ws-ping-ms`; the first one interval in).
+    let mut ping = ping_every.map(|every| {
+        let mut interval = tokio::time::interval_at(tokio::time::Instant::now() + every, every);
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        interval
+    });
     loop {
-        let (len, src) = udp
-            .recv_from(&mut buf)
-            .await
-            .with_context(|| format!("[{peer}] udp recv_from"))?;
+        // Both arms are cancel-safe: a recv_from that loses the race has
+        // received nothing.
+        let (len, src) = tokio::select! {
+            res = udp.recv_from(&mut buf) => {
+                res.with_context(|| format!("[{peer}] udp recv_from"))?
+            }
+            _ = next_ping(&mut ping) => {
+                let payload = link_health::ping_payload(link.now_us());
+                tokio::time::timeout(WS_SEND_TIMEOUT, ws_sink.send(Message::Ping(payload.to_vec())))
+                    .await
+                    .map_err(|_| anyhow!("[{peer}] ws ping stalled for {WS_SEND_TIMEOUT:?} — client reader wedged"))?
+                    .with_context(|| format!("[{peer}] ws ping"))?;
+                link.with_rtt(RttStats::ping_sent);
+                continue;
+            }
+        };
 
         if src.ip() != target.ip {
             log::warn!(
@@ -677,6 +815,7 @@ where
             .await
             .map_err(|_| anyhow!("[{peer}] ws send stalled for {WS_SEND_TIMEOUT:?} — client reader wedged"))?
             .with_context(|| format!("[{peer}] ws send"))?;
+        link.to_ws.record(len);
         log::trace!("[{peer}] udp→ws {len} bytes ← {src}");
     }
 }

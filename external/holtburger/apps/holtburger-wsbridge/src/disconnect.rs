@@ -348,6 +348,7 @@ mod tests {
         let cfg = Config {
             listen: addr,
             default_world_port_offset: 1,
+            ws_ping_interval: None,
         };
         tokio::spawn(async move {
             let _ = bridge::accept_loop(cfg, listener).await;

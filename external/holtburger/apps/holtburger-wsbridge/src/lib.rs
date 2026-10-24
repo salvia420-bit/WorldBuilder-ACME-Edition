@@ -25,6 +25,7 @@ pub mod config;
 pub mod disconnect;
 pub mod frame;
 pub mod handshake;
+pub mod link_health;
 pub mod shim;
 
 #[cfg(test)]

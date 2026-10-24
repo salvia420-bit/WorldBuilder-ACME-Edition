@@ -29,6 +29,11 @@ serde_json = { workspace = true }
 # (same 2 MiB as holtburger-session's native `Session::new`).
 socket2 = { workspace = true }
 
+# net-health (2026-10-23): `getsockopt(TCP_INFO)` on each browser socket for
+# the link lines (`src/link_health.rs`). Linux only; already in Cargo.lock.
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
+
 [dev-dependencies]
 tokio = { workspace = true, features = ["full"] }
 # net-transport-2: `disconnect.rs` restates Hash32 and the packet header

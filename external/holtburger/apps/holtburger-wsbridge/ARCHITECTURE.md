@@ -130,12 +130,29 @@ holtburger-wsbridge \
 | `--max-conns-per-ip N` | `16` | Concurrent connections from one non-loopback peer IP; 0 = no cap. |
 | `--max-frames-per-sec N` | `0` (off) | Per-connection rate of frames relayed to ACE, bursting to 2N; frames over it are dropped. |
 | `--capture FILE.pcap` | off | See below. |
+| `--ws-ping-ms N` | `1000` | Period of the WebSocket pings that time each connection's link (see [Link health](#link-health)); 0 = no pings. |
 
 The startup log prints the policy in force (`admission: targets …; origins …; max conns …`).
 
 ### Opt-in capture (`--capture` / `HB_BRIDGE_CAPTURE`)
 
 `--capture session.pcap` (or `HB_BRIDGE_CAPTURE=session.pcap`; the flag wins) appends every datagram the bridge exchanges with ACE to a classic pcap file (`LINKTYPE_RAW`: synthetic IPv4 + UDP headers with the real ports, AC bytes verbatim). It is the sudo-free alternative to `tcpdump -i lo` for recording a protocol replay corpus: `pcap2jsonl --input session.pcap --summary` (holtburger-tools `oracle_pcap`) decodes it unchanged and reports per-opcode `decoded_ok` / `short_read` / `undecodable` / `unknown` counts. Off by default; without it the relay path is unchanged. The one exception to "bytes are opaque" lives here: a client→server datagram whose packet header carries `LOGIN_REQUEST` has its body (account name + password) zeroed in the file. Everything else is kept, so use a throwaway account for a capture you intend to commit. Implementation: `src/capture.rs`.
+
+### Link health
+
+The bridge's ACE side is UDP to an ACE that normally runs on the same machine; the hop that can go bad is the WebSocket's TCP connection to the browser, and the game feels it as late self-position echoes (the retail leash scales the run once the player is 10 m past the last echoed position outdoors: 0.56 s of staleness at ACE's 18 m/s run cap). So each connection measures that hop (`src/link_health.rs`, net-health 2026-10-23):
+
+- **WebSocket round trip.** Every `--ws-ping-ms` (default 1 s, first one interval after the handshake) the bridge sends a Ping carrying its send time. Browsers answer from their network stack and tungstenite (the shim) answers on its next read, so the round trip includes any head-of-line stall but not the page's main thread. A Pong does not count as client activity for the WS-idle reaper.
+- **`TCP_INFO`** (Linux): minimum RTT, smoothed RTT and its peak, the current RTO, retransmits and how many of them the peer already had (`dsack`: late, not lost), and retransmission timeouts with the milliseconds spent recovering from them. The smoothed RTT is data→ACK, and a Windows browser delays its ACK by up to 200 ms when it has nothing to send, so it overstates the path; the ws rtt and min_rtt do not. The probe holds a duplicate of the socket's descriptor and is dropped right after the final sample.
+- Frames and payload bytes relayed each way.
+
+One `link:` line is logged per connection per minute and one `link summary after …:` line when it ends, e.g.
+
+```
+[100.127.215.75:51951] link: ws rtt p50 1.1 ms p90 1.6 ms p99 2.4 ms max 3.0 ms (60/60 pings) · tcp min_rtt 0.4 ms srtt 4.2 ms (var 3.1 ms) rto 204 ms retrans 0 (dsack 0) timeouts 0 (0 ms) · browser→ACE 412 frames/38 KB · ACE→browser 1210 frames/402 KB
+```
+
+Wired LAN: a ws rtt around a millisecond, no RTO timeouts, and at most a few retransmits (a tail-loss probe that beats the browser's delayed ACK shows up as one retransmit with one dsack, even on loopback). A p90 in the hundreds of milliseconds, retransmits by the dozen, or any RTO timeouts mean the run will pulse.
 
 ## holtburger-wsshim (client-side)
 

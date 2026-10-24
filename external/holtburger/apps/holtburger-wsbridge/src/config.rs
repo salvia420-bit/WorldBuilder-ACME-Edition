@@ -12,6 +12,7 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::time::Duration;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -73,6 +74,12 @@ pub struct Cli {
     /// limit (the default).
     #[arg(long, default_value_t = 0)]
     pub max_frames_per_sec: u32,
+
+    /// Milliseconds between the WebSocket pings that time each connection's
+    /// link (the client's Pong gives the round trip; see link_health.rs).
+    /// 0 = no pings.
+    #[arg(long, default_value_t = 1000)]
+    pub ws_ping_ms: u64,
 }
 
 impl Cli {
@@ -105,6 +112,8 @@ impl Cli {
 pub struct Config {
     pub listen: SocketAddr,
     pub default_world_port_offset: i32,
+    /// net-health: the WebSocket ping period (`--ws-ping-ms`); `None` = off.
+    pub ws_ping_interval: Option<Duration>,
 }
 
 impl Config {
@@ -117,6 +126,7 @@ impl Config {
         Ok(Config {
             listen,
             default_world_port_offset: cli.default_world_port_offset,
+            ws_ping_interval: (cli.ws_ping_ms > 0).then(|| Duration::from_millis(cli.ws_ping_ms)),
         })
     }
 }
@@ -142,6 +152,16 @@ mod tests {
     #[test]
     fn rejects_bad_listen() {
         assert!(parse(&["--listen", "not a sockaddr"]).is_err());
+    }
+
+    #[test]
+    fn ws_ping_defaults_to_a_second_and_zero_turns_it_off() {
+        assert_eq!(parse(&[]).unwrap().ws_ping_interval, Some(Duration::from_secs(1)));
+        assert_eq!(
+            parse(&["--ws-ping-ms", "250"]).unwrap().ws_ping_interval,
+            Some(Duration::from_millis(250))
+        );
+        assert_eq!(parse(&["--ws-ping-ms", "0"]).unwrap().ws_ping_interval, None);
     }
 
     #[test]
