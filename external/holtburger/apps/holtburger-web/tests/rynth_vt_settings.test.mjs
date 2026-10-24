@@ -235,11 +235,15 @@ await check("defaults() reproduce today's literals; every new toggle is off", ()
   // Owner decision 2026-10-19: the rows made live that day take VTank's /
   // RynthAi's defaults — these start ON.
   const vtankOn = ["DoHelp", "UseHealersHeart", "BuffArmorImpen", "ReadUnknownScrolls", "CombineSalvage",
-    "EnableMissileCrafting", "FollowAroundCorners", "EnableFPSLimit", "ShowTerrainPassability"];
+    "EnableMissileCrafting", "FollowAroundCorners", "EnableFPSLimit"];
   for (const k of vtankOn) {
     assert.equal(d[k], true, `${k} starts on (VTank/RynthAi default)`);
     liveToday.add(k);
   }
+  // Owner decision 2026-10-23: the steep-ground tint starts OFF (it read as pink
+  // panels on snow and dunes); one switch away on the Route tab.
+  assert.equal(d.ShowTerrainPassability, false, "ShowTerrainPassability starts off (owner 2026-10-23)");
+  liveToday.add("ShowTerrainPassability");
   assert.equal(d.BuffProfileBanes, "ALFCBPS", "every bane on worn armor (VTank: All)");
   assert.deepStrictEqual([d.HealOthersAt, d.RestamOthersAt, d.InfuseOthersAt, d.HelperHealDistance], [50, 10, 10, 30]);
   assert.deepStrictEqual([d.TargetFPSFocused, d.TargetFPSBackground], [60, 30]);

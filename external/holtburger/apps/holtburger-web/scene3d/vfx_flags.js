@@ -913,9 +913,10 @@ export function terrainSnowSpindriftCount() {
 
 /** `?terrainSnowRadius` — HALF-extent (metres) of the spindrift window; the
  *  field covers 2× this. Preset key `terrainSnowRadius` (low 32 / mid 48 /
- *  high 64 / ultra 80). Fallback 64. Cannot enable the feature on its own. */
+ *  high 48 / ultra 64 since 2026-10-23). Fallback 48 = the `high` tier.
+ *  Cannot enable the feature on its own. */
 export function terrainSnowRadiusM() {
-  return _terrainNum("terrainSnowRadius", "terrainSnowRadius", 64, 8, 512);
+  return _terrainNum("terrainSnowRadius", "terrainSnowRadius", 48, 8, 512);
 }
 
 /** `?terrainSnowSlope` — the slope-bias threshold for spindrift, as
@@ -931,7 +932,12 @@ export function terrainSnowSlopeBias() {
 
 // ---------------------------------------------------------------------------
 // TERRAIN VOLCANO / OBSIDIAN (Wave 2B — plan §3.6). Codes 6 (`ObsidianPlain`),
-// 25 (`Volcano1`) and 26 (`Volcano2`) = FAM_VOLCANO.
+// 25 (`Volcano1`) and 26 (`Volcano2`) were FAM_VOLCANO.
+// 2026-10-23 SPLIT (owner: obsidian plains were "mixed up with lava"): only 25
+// is lava, so FAM_VOLCANO = {25} and the three volcano effects below run over
+// lava alone; 6 is FAM_OBSIDIAN (its own master, `?terrainObsidian`, after this
+// block) and 26 is FAM_ASH (no master: its only treatment is the tier-2 fx-field
+// ash drift, `vfx/fx_fields.js`, behind `?fxFields`).
 //
 // FOUR flags, one family master + three effects, ALL strict exact-match opt-ins
 // that ship OFF (plan §2.4/§5.9), all kept out of `quality.js BOOL_FLAGS` for
@@ -959,8 +965,10 @@ export function terrainSnowSlopeBias() {
 
 let _terrainVolcano;
 const _terrainVolcanoWarn = { hit: false };
-/** `?terrainVolcano=on` — THE family master for VOLCANO/OBSIDIAN (heat haze +
- *  embers + crack glow + the obsidian specular; plan §3.6). STRICT exact-match
+/** `?terrainVolcano=on` — THE family master for VOLCANO = LAVA, code 25 since
+ *  the 2026-10-23 split (embers + crack glow; plan §3.6). The obsidian glass is
+ *  `?terrainObsidian` and the heat shimmer `heatHazeEnabled()` now, neither
+ *  under this master. STRICT exact-match
  *  opt-in; absent ⇒ the quality preset's `terrainVolcano`, **false on all four
  *  tiers** this wave (§5.9 ship-OFF; the promotion target is high/ultra true). */
 export function terrainVolcanoEnabled() {
@@ -971,15 +979,24 @@ export function terrainVolcanoEnabled() {
 
 let _terrainHaze;
 const _terrainHazeWarn = { hit: false };
-/** `?terrainHaze=on` — the heat-shimmer postprocessing `Effect` (a pure `mainUv`
- *  warp inserted into the EXISTING `EffectPass`, never a new pass). SHARED name
- *  with the sand family by design (see the block comment above). Requires a
- *  family master. Absent ⇒ the tier's `terrainHaze` (false low/mid, true
- *  high/ultra). */
+/** `?terrainHaze=on` — the heat-shimmer / mirage postprocessing `Effect` (a pure
+ *  `mainUv` warp inserted into the EXISTING `EffectPass`, never a new pass).
+ *  Absent ⇒ the tier's `terrainHaze` (false low/mid, true high/ultra).
+ *  2026-10-23 (owner, on the 1070: the mirage must be on): its OWN master — read
+ *  it through `heatHazeEnabled()`, which no longer needs `?terrainVolcano`; both
+ *  the volcano disc and the desert ground/mirage arm hang off it. */
 export function terrainHazeEnabled() {
   if (_terrainHaze !== undefined) return _terrainHaze;
   const r = _terrainStrictFlag("terrainHaze", "terrainHaze", false, _terrainHazeWarn);
   return r.memo ? (_terrainHaze = r.value) : r.value;
+}
+
+/** 2026-10-23 — THE heat-shimmer gate: `?visual=off` and `?terrainVfx=off` kill
+ *  it, then `?terrainHaze` (strict on/off, absent ⇒ the tier). Used by
+ *  `vfx/heat_haze_effect.js::createHeatHazeEffect`, the volcano haze provider
+ *  and `terrain_desert_haze.js`. */
+export function heatHazeEnabled() {
+  return visualEnabled() && terrainVfxEnabled() && terrainHazeEnabled();
 }
 
 let _terrainEmbers;
@@ -1007,12 +1024,13 @@ export function terrainEmbersEnabled() {
 
 let _terrainCrackGlow;
 const _terrainCrackGlowWarn = { hit: false };
-/** `?terrainCrackGlow=on` — the dull red glow breathing in the cracks underfoot:
- *  a FRAGMENT term in the terrain shader gated on FAM_VOLCANO read from
- *  `uVertexTypes` (plan trap T3), sited after the POM `cellUv` offset and
- *  bypassed on any water-touching cell (plan §2.7.3). Also carries the
- *  code-6-only OBSIDIAN specular (same block, same gate — one flag, because
- *  they are one fragment edit and one eye-test). Requires the family master.
+/** `?terrainCrackGlow=on` — the lava glow breathing in the cracks underfoot:
+ *  a FRAGMENT term in the terrain shader gated on FAM_VOLCANO (lava, code 25)
+ *  read from `uVertexTypes` (plan trap T3), sited after the POM `cellUv` offset
+ *  and bypassed on any water-touching cell (plan §2.7.3). 2026-10-23: the glow
+ *  is keyed to the texture's OWN hot cracks (emissive from the red-orange
+ *  texels), not procedural veins, and the obsidian specular it used to carry
+ *  moved to `?terrainObsidian`. Requires the family master.
  *  Absent ⇒ the tier's `terrainCrackGlow` (false on low, true mid/high/ultra). */
 export function terrainCrackGlowEnabled() {
   if (_terrainCrackGlow !== undefined) return _terrainCrackGlow;
@@ -1020,10 +1038,11 @@ export function terrainCrackGlowEnabled() {
   return r.memo ? (_terrainCrackGlow = r.value) : r.value;
 }
 
-/** Embers per volcanic landblock at the live tier. URL knob
- *  `?terrainVolcanoEmberCount`. Fallback 1 = the `high` tier. */
+/** Ember vents per LAVA landblock at the live tier. URL knob
+ *  `?terrainVolcanoEmberCount`. Fallback 2 = the `high` tier (2026-10-23: was
+ *  1 when vents also covered every obsidian/ash landblock). */
 export function terrainVolcanoEmberCount() {
-  return Math.round(_terrainNum("terrainVolcanoEmberCount", "terrainVolcanoEmberCount", 1, 0, 8));
+  return Math.round(_terrainNum("terrainVolcanoEmberCount", "terrainVolcanoEmberCount", 2, 0, 8));
 }
 
 /** `?terrainHazeStrength` — UV-warp amplitude of the heat shimmer, in SCREEN
@@ -1039,6 +1058,31 @@ export function terrainHazeStrength() {
  *  follows the player out of the region). Fallback 160 m = the `high` tier. */
 export function terrainVolcanoRadiusM() {
   return _terrainNum("terrainVolcanoRadius", "terrainVolcanoRadius", 160, 8, 1024);
+}
+
+// ---------------------------------------------------------------------------
+// TERRAIN OBSIDIAN (2026-10-23 — the volcano split). Code 6 (`ObsidianPlain`,
+// texture 0x06006D56: dark purple mottled volcanic glass, no lava) = FAM_OBSIDIAN:
+// the Obsidian Plains, the Dark Isles and the 0xC8ED "volcano" spot. ONE flag,
+// the family master, because the whole effect is one fragment block in the
+// terrain shader (sparse sun glints on hashed glass facets + a dark purple
+// grazing-angle sheen) — NO glow, NO embers, NO shimmer. STRICT exact-match
+// opt-in that ships OFF, kept out of `quality.js BOOL_FLAGS` for the `gfxRelief`
+// reason; the preset key `terrainObsidian` is `terrainMaster("obsidian", tier)`
+// (TERRAIN_VFX_PROMOTED.obsidian = false until the owner's 1070 vistest).
+// ---------------------------------------------------------------------------
+
+let _terrainObsidian;
+const _terrainObsidianWarn = { hit: false };
+/** `?terrainObsidian=on` — THE master for the OBSIDIAN glass treatment on code 6
+ *  (glints + purple sheen; `scene3d/terrain_obsidian.js`, the terrain.js
+ *  `OBSIDIAN GLASS` block). STRICT exact-match opt-in; absent ⇒ the quality
+ *  preset's `terrainObsidian`, false on all four tiers until promoted (the
+ *  ladder is high/ultra). Independent of `?terrainVolcano`. */
+export function terrainObsidianEnabled() {
+  if (_terrainObsidian !== undefined) return _terrainObsidian;
+  const r = _terrainStrictFlag("terrainObsidian", "terrainObsidian", false, _terrainObsidianWarn);
+  return r.memo ? (_terrainObsidian = r.value) : r.value;
 }
 
 // ---------------------------------------------------------------------------
@@ -1179,12 +1223,13 @@ export function terrainDirtDustDensity() {
 }
 
 /** `?terrainFootfallPuffs` — capacity of the footfall ring buffer, i.e. the max
- *  number of dust bursts alive at once. URL-ONLY (no preset key): a puff lives
- *  under a second, so the pool is tiny and bounded by the emit rate rather than
- *  by the tier — `terrainFootfall` is the tier's lever. Default 48. Cannot
- *  enable the feature on its own. */
+ *  number of dust sprites alive at once. URL-ONLY (no preset key): a puff lives
+ *  ~1.35 s, so the pool is tiny and bounded by the emit rate rather than by the
+ *  tier — `terrainFootfall` is the tier's lever. Default 96 (2026-10-23: was
+ *  48; each footfall now writes a main puff + a satellite). Cannot enable the
+ *  feature on its own. */
 export function terrainFootfallPuffCount() {
-  return Math.round(_numFlag("terrainFootfallPuffs", 48, 1, 512));
+  return Math.round(_numFlag("terrainFootfallPuffs", 96, 1, 512));
 }
 
 // ---------------------------------------------------------------------------
@@ -1587,9 +1632,17 @@ export const VFX_EFFECT_FLAGS = Object.freeze({
   // `vfx/components/terrainVolcanoEmbers.js`, which is what makes
   // `vfxEffectEnabled(component.id)` resolve for it.
   "terrain.volcano": terrainVolcanoEnabled,
-  "terrain.volcanoHaze": () => terrainVolcanoEnabled() && terrainHazeEnabled(),
+  // 2026-10-23: the heat shimmer is its own master (no ?terrainVolcano), and the
+  // desert arm shares it.
+  "terrain.volcanoHaze": () => terrainVfxEnabled() && terrainHazeEnabled(),
+  "terrain.desertHaze": () => terrainVfxEnabled() && terrainHazeEnabled(),
   "terrain.volcanoEmbers": () => terrainVolcanoEnabled() && terrainEmbersEnabled(),
   "terrain.volcanoCrackGlow": () => terrainVolcanoEnabled() && terrainCrackGlowEnabled(),
+  // Terrain OBSIDIAN (2026-10-23, the volcano split) — same contract: a strict
+  // ship-OFF opt-in that does NOT track visualAllEffects(). One row: the master
+  // IS the effect (one fragment block). Also the camera-scope provider id
+  // `scene3d/terrain_obsidian.js` registers with the terrain-VFX spine.
+  "terrain.obsidian": terrainObsidianEnabled,
   // Terrain DIRT / MUD (Wave 3B, plan §3.7) — same contract again: strict
   // ship-OFF opt-ins that do NOT track visualAllEffects(), so `?visual=all` does
   // not light them and the DEFAULT-ON count stays 14. Each row composes the
@@ -1679,6 +1732,8 @@ export function _resetVfxFlags() {
   _terrainHazeWarn.hit = false;
   _terrainEmbersWarn.hit = false;
   _terrainCrackGlowWarn.hit = false;
+  _terrainObsidian = undefined;
+  _terrainObsidianWarn.hit = false;
   _terrainDirt = _terrainFootfall = _terrainMudPrints = undefined;
   _terrainMudWetness = _terrainDustHaze = undefined;
   _terrainDirtWarn.hit = false;

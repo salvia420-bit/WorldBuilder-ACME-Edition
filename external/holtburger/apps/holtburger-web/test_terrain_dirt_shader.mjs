@@ -40,9 +40,13 @@
 // Run from apps/holtburger-web/:  node test_terrain_dirt_shader.mjs
 
 import { readFileSync } from "node:fs";
-import { dirtCodeBitmask, clayCodeBitmask } from "./scene3d/terrain_dirt.js";
+import { dirtCodeBitmask, clayCodeBitmask, mudStampFor, DIRT_VARIANTS } from "./scene3d/terrain_dirt.js";
 import { FAM_DIRT, familyForCode } from "./scene3d/terrain_families.js";
 import { checkTerrainFinalColour } from "./harness/lib/terrain_final_colour.mjs";
+// 2026-10-24 — the print calibration model (M5b) composes the grass stomp's
+// stamp on the SHARED trail map, read from its own constants and the ladder.
+import { GRASS_DEFAULTS } from "./scene3d/terrain_grass.js";
+import { PRESETS } from "./scene3d/quality.js";
 
 let passed = 0, failed = 0;
 function check(label, cond, extra = "") {
@@ -216,6 +220,75 @@ check("the dent amplitude is well under uPomScale (0.012 vs 0.006)",
   SRC.includes("const DEFAULT_MUD_PRINT_DEPTH = 0.006;") && SRC.includes("uPomScale"));
 check("the RAIN DEPENDENCE rides amplitude, not a second fade",
   MUD_PRINT_CODE.includes("mudPrint *= mix(uMudPrintDryScale, 1.0, clamp(uMudWetness, 0.0, 1.0));"));
+// 2026-10-23 (owner vistest prep: "mud prints should clearly read"). The dry
+// seeds were 0.28 darken x 0.35 dry scale — a ~2 % track. The JS side's dry
+// stamp moved with them (terrain_dirt.js, test_terrain_dirt.mjs D15).
+check("the print darken seed is 0.42 (was 0.28)",
+  SRC.includes("const DEFAULT_MUD_PRINT_DARKEN = 0.42;"));
+// 2026-10-24: back to 0.35. The 0.65 lift was calibrated against the MUD stamp
+// alone; the model below (M5b) is why that was wrong.
+check("the dry-scale seed is 0.35 (0.65 on 2026-10-23 ignored the grass stomp)",
+  SRC.includes("const DEFAULT_MUD_PRINT_DRY_SCALE = 0.35;"));
+check("dry stays BELOW wet (the rain dependence survives the lift)",
+  (() => { const m = /const DEFAULT_MUD_PRINT_DRY_SCALE = ([0-9.]+);/.exec(SRC);
+    return !!m && Number(m[1]) > 0 && Number(m[1]) < 1; })());
+{
+  // M5b — THE PRINT CALIBRATION MODEL (2026-10-24, the dirt verifier's
+  // finding). The mud print does not own its trail: grass stomp (DEFAULT ON at
+  // high/ultra) stamps the SAME shared map under the player every frame at
+  // strength 1.0 / radius 0.75 m, and trail_map.js max()-combines every stamp:
+  //   v = max(v, s * (1 - smoothstep(0, r, d)))
+  // So the value the shader reads is max(grass stamp, mud stamp), then
+  //   mudPrint = trail * mix(uMudPrintDryScale, 1, wetness)
+  //   modulated *= 1 - uMudPrintDarken * mudPrint * dirtW      (dirtW = 1 here)
+  // The steady state at the player is the stamp itself; behind the player both
+  // blobs fade by the same linear rate, so the dry/wet RATIO holds down the track.
+  const num = (name) => Number((new RegExp(`const ${name} = ([0-9.]+);`).exec(SRC) || [])[1]);
+  const darken = num("DEFAULT_MUD_PRINT_DARKEN");
+  const dryScale = num("DEFAULT_MUD_PRINT_DRY_SCALE");
+  const ss = (e0, e1, x) => { const t = Math.min(1, Math.max(0, (x - e0) / (e1 - e0))); return t * t * (3 - 2 * t); };
+  const blob = (s, r, d) => s * (1 - ss(0, Math.max(r, 1e-4), d));
+  const grassBlob = (d) => blob(GRASS_DEFAULTS.stampStrength, GRASS_DEFAULTS.stampRadiusM, d);
+  const trailAt = (d, wet, code, stomp) => {
+    const m = mudStampFor(wet, DIRT_VARIANTS[code].print);
+    const mud = blob(m.strength, m.radiusM, d);
+    return stomp ? Math.max(grassBlob(d), mud) : mud;
+  };
+  const darkening = (d, wet, code, stomp, dry = dryScale) =>
+    darken * trailAt(d, wet, code, stomp) * (dry + (1 - dry) * wet);
+  const CODES = [5, 7, 8, 24, 31];
+  const DISTS = Array.from({ length: 21 }, (_, i) => i * 0.05);   // 0 .. 1 m
+  check("M5b: grass stomp is ON at high/ultra and stamps 1.0 @ 0.75 m (the model's premise)",
+    PRESETS.high.terrainGrassStomp === true && PRESETS.ultra.terrainGrassStomp === true
+    && GRASS_DEFAULTS.stampStrength === 1 && GRASS_DEFAULTS.stampRadiusM === 0.75);
+  check("M5b: with the stomp live, max() = the GRASS blob at every distance, on every dirt "
+    + "code, dry or wet (the mud stamp's per-code calibration never reaches the shader)",
+    CODES.every((c) => [0, 0.5, 1].every((w) => DISTS.every((d) => trailAt(d, w, c, true) === grassBlob(d)))));
+  const dryLive = darkening(0, 0, 7, true), wetLive = darkening(0, 1, 7, true);
+  check("M5b: stomp live, track centre: a DRY track darkens ~14.7 %, a soaked one 42 % "
+    + "(2.86x), the SAME on every dirt code",
+    Math.abs(dryLive - 0.147) < 1e-9 && Math.abs(wetLive - 0.42) < 1e-9
+    && CODES.every((c) => darkening(0, 0, c, true) === dryLive && darkening(0, 1, c, true) === wetLive),
+    `dry=${dryLive.toFixed(4)} wet=${wetLive.toFixed(4)} x${(wetLive / dryLive).toFixed(2)}`);
+  check("M5b: the rain dependence reads (soaked 2.5-3.2x dry) — the 0.65 seed gave 27 % "
+    + "dry and only 1.54x",
+    wetLive / dryLive >= 2.5 && wetLive / dryLive <= 3.2
+    && Math.abs(darkening(0, 0, 7, true, 0.65) - 0.273) < 1e-9
+    && darkening(0, 1, 7, true, 0.65) / darkening(0, 0, 7, true, 0.65) < 1.6);
+  const dryOff = (c) => darkening(0, 0, c, false), wetOff = (c) => darkening(0, 1, c, false);
+  check("M5b: stomp OFF, the per-code stamp shows: dry PackedDirt ~6 % < PatchyDirt ~8 % < "
+    + "MudRichDirt ~11 %, every code still visible (>= 5 %)",
+    Math.abs(dryOff(7) - 0.0617) < 5e-4 && Math.abs(dryOff(8) - 0.0794) < 5e-4
+    && Math.abs(dryOff(5) - 0.1103) < 5e-4 && dryOff(7) < dryOff(8) && dryOff(8) < dryOff(5)
+    && CODES.every((c) => dryOff(c) >= 0.05),
+    CODES.map((c) => `${c}:${dryOff(c).toFixed(4)}`).join(" "));
+  check("M5b: stomp OFF, a soaked track reads >= 2x the dry one on every code",
+    CODES.every((c) => wetOff(c) >= 2 * dryOff(c)),
+    CODES.map((c) => `${c}:${wetOff(c).toFixed(3)}`).join(" "));
+  check("M5b: no case darkens past the 42 % seed (never a black hole)",
+    CODES.every((c) => [0, 0.5, 1].every((w) => DISTS.every((d) =>
+      darkening(d, w, c, true) <= darken + 1e-12 && darkening(d, w, c, false) <= darken + 1e-12))));
+}
 check("the darkening is applied to `modulated` (pre cloud/CSM, no double-darken)",
   FRAG_CODE.includes("modulated *= mix(1.0, 1.0 - uMudPrintDarken, mudPrint * dirtW);"));
 check("the print darkening sits right after the SNOW one",
@@ -228,6 +301,22 @@ check("the sheen adds through iblSpec, never to albedo/cellUv/water",
   && !/\bwaterCellUv\b|\bwaterW\b/.test(WET_SHEEN_CODE));
 check("the sheen is OUTSIDE the uPbrEnabled block (retail Gouraud wins by default)",
   !/uPbrEnabled/.test(WET_SHEEN_CODE) && WET_SHEEN_CODE.includes("uIblEnabled > 0.5"));
+{
+  // 2026-10-24 — THE NIGHT-SPECULAR FIX. uAcSunColor is colour only; retail
+  // brightness is |uAcSunVec| (dirBright) and the night sun parks 0.9 deg up,
+  // so the wet sun lobe shone at full strength all night. It now carries the
+  // sand sparkle's exact gate (test_terrain_sand_sparkle.mjs).
+  check("NIGHT: the wet SUN lobe is scaled by the sand sparkle's sun gate (elevation x |uAcSunVec|)",
+    WET_SHEEN_CODE.includes("float mudSunGate = smoothstep(0.05, 0.25, sunDir.z) * min(length(uAcSunVec) * 1.25, 1.0);")
+    && WET_SHEEN_CODE.includes("vec3 mudSpec = uAcSunColor * (mudLobe * uMudWetSpec * mudSunGate);"));
+  check("NIGHT: no other uAcSunColor term in the sheen escapes the gate",
+    (WET_SHEEN_CODE.match(/uAcSunColor/g) || []).length === 1);
+  const DEG = Math.PI / 180;
+  const ss = (e0, e1, x) => { const t = Math.min(1, Math.max(0, (x - e0) / (e1 - e0))); return t * t * (3 - 2 * t); };
+  const gate = (pitchDeg, dirBright) => ss(0.05, 0.25, Math.sin(pitchDeg * DEG)) * Math.min(dirBright * 1.25, 1);
+  check("NIGHT: retail night (pitch 0.9 deg, dirBright 0.25) => exactly 0; noon (67 deg, 0.8) => 1",
+    gate(0.9, 0.25) === 0 && Math.abs(gate(67.4, 0.8) - 1) < 1e-12);
+}
 
 // ===========================================================================
 console.log("\n-- M6 the shared fragColor statement is BYTE-UNCHANGED ----------");
@@ -255,10 +344,17 @@ check("the wetness has its OWN gate, independent of the print",
   FRAG_CODE.includes("uMudWetEnabled > 0.5"));
 check("both accumulators start at zero",
   FRAG_CODE.includes("float mudPrint = 0.0;") && FRAG_CODE.includes("float mudWetAmt = 0.0;"));
+// 2026-10-24: both gates also require the two MASTER kill switches
+// (`terrainVfxShaderLive()` = visualEnabled() && terrainVfxEnabled()), so
+// `?visual=off` / `?terrainVfx=off` really kill the shader terms the docs say
+// they kill (test_vfx_flags.mjs exercises the composition behaviourally).
 check("uMudPrintEnabled is seeded from the composed flags in resolveTerrainRingOpts",
-  SRC.includes("mudPrintEnabled: terrainDirtEnabled() && terrainMudPrintsEnabled(),"));
+  SRC.includes("mudPrintEnabled: terrainVfxLive && terrainDirtEnabled() && terrainMudPrintsEnabled(),"));
 check("uMudWetEnabled is seeded from the composed flags",
-  SRC.includes("mudWetnessEnabled: terrainDirtEnabled() && terrainMudWetnessEnabled(),"));
+  SRC.includes("mudWetnessEnabled: terrainVfxLive && terrainDirtEnabled() && terrainMudWetnessEnabled(),"));
+check("terrainVfxLive is the master-kill composition, read once per ring",
+  SRC.includes("const terrainVfxLive = terrainVfxShaderLive();")
+  && /export function terrainVfxShaderLive\(\) \{\s*\n\s*return visualEnabled\(\) === true && terrainVfxEnabled\(\) === true;/.test(SRC));
 check("both gates are seeded 0.0 when the flag is absent",
   SRC.includes("uMudPrintEnabled: { value: opts.mudPrintEnabled ? 1.0 : 0.0 }")
   && SRC.includes("uMudWetEnabled: { value: opts.mudWetnessEnabled ? 1.0 : 0.0 }"));

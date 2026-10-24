@@ -1,0 +1,47 @@
+<!doctype html>
+<script type="importmap">{ "imports": { "three": "/three/three.module.js" } }</script>
+<meta charset="utf-8">
+<title>terrain vfx compile smoke</title>
+<canvas id="c" width="64" height="64"></canvas>
+<script type="module">
+// terrain_vfx_compile_page.html — the browser half of terrain_vfx_compile_smoke.mjs
+// (2026-10-23). Compiles every program the runner assembled in node (the terrain
+// program under each define set + each terrain-VFX particle material built by its
+// own factory) through three's normal path, on a log-depth renderer like the app's.
+import * as THREE from "three";
+const out = { results: [], errors: [] };
+try {
+  const progs = await (await fetch("/programs.json")).json();
+  const renderer = new THREE.WebGLRenderer({ canvas: document.getElementById("c"), logarithmicDepthBuffer: true });
+  renderer.debug.checkShaderErrors = true;
+  let current = null;
+  renderer.debug.onShaderError = (gl, program, vs, fs) => {
+    const log = (s) => (gl.getShaderInfoLog(s) || "").trim();
+    if (current) current.shaderError = { program: (gl.getProgramInfoLog(program) || "").trim().slice(0, 800), vertex: log(vs).slice(0, 1500), fragment: log(fs).slice(0, 1500) };
+  };
+  const camera = new THREE.PerspectiveCamera(50, 1, 0.5, 10000);
+  for (const p of progs) {
+    const r = { name: p.name };
+    out.results.push(r);
+    if (p.error) { r.buildError = p.error; continue; }
+    current = r;
+    const mat = new THREE.ShaderMaterial({ vertexShader: p.vertexShader, fragmentShader: p.fragmentShader, defines: p.defines || {}, uniforms: {},
+      ...(p.glslVersion === "GLSL3" ? { glslVersion: THREE.GLSL3 } : {}), transparent: !!p.transparent });
+    const scene = new THREE.Scene();
+    const geo = new THREE.PlaneGeometry(1, 1);
+    const mesh = p.instanced ? new THREE.InstancedMesh(geo, mat, 4) : new THREE.Mesh(geo, mat);
+    mesh.frustumCulled = false;
+    scene.add(mesh);
+    try { renderer.compile(scene, camera); renderer.render(scene, camera); } catch (e) { r.throw = String(e).slice(0, 600); }
+    const progsNow = renderer.info.programs || [];
+    const prog = progsNow[progsNow.length - 1];
+    const gl = renderer.getContext();
+    r.linked = prog ? !!gl.getProgramParameter(prog.program, gl.LINK_STATUS) : false;
+    r.diagnostics = prog && prog.diagnostics ? JSON.stringify(prog.diagnostics).slice(0, 1500) : null;
+    current = null;
+    mat.dispose(); geo.dispose();
+  }
+  out.renderer = (() => { const gl = renderer.getContext(); const e = gl.getExtension("WEBGL_debug_renderer_info"); return e ? gl.getParameter(e.UNMASKED_RENDERER_WEBGL) : "?"; })();
+} catch (e) { out.errors.push(String((e && e.stack) || e).slice(0, 1200)); }
+window.__smoke = out;
+</script>

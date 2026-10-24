@@ -586,6 +586,21 @@ console.log("\n-- 5. the clear path --------------------------------------------
 }
 
 // ---------------------------------------------------------------------------
+console.log("\n-- 5b. boxesNear (the desert mirage's town reading, 2026-10-23) ------");
+{
+  const world = makeWorld();
+  buildTown(world);
+  const m = createInteriorMask({ checkFrames: 1 });
+  syncWorld(m, world);
+  const n = m.stats().boxes;
+  check(`boxesNear: the cottage cluster is a town from its middle (${m.boxesNear(32502, 34601, 160)} of ${n} within 160 m), and an unbounded radius sees all ${n}`,
+    n > 0 && m.boxesNear(32502, 34601, 160) >= 4 && m.boxesNear(32502, 34601, 1e7) === n);
+  check("boxesNear: 400 m away sees none; the radius is a footprint distance, not a centre distance",
+    m.boxesNear(32502 + 400, 34601, 160) === 0 && m.boxesNear(32502 + 160, 34601, 160) > 0);
+  check("boxesNear: an empty mask and non-finite input read 0",
+    createInteriorMask({ checkFrames: 1 }).boxesNear(0, 0, 160) === 0 && m.boxesNear(NaN, 0, 160) === 0);
+}
+
 console.log("\n-- 6. the CPU path is unchanged ------------------------------------");
 {
   const world = makeWorld();

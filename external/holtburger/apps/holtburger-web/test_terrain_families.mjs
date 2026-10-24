@@ -13,8 +13,12 @@
 //    out of FAM_WATER;
 //  - `?strictWaterCodes` reader semantics match `terrain.js` verbatim;
 //  - the deliberate DELTAS vs `terrain.js::TERRAIN_CODE_TO_DETAIL_SLICE`
-//    (6/25/26 STONE->VOLCANO, 4 NONE->SWAMP) are asserted by parsing that
-//    table straight out of `terrain.js`, so an edit to EITHER table trips;
+//    (6 STONE->OBSIDIAN, 25 STONE->VOLCANO, 26 STONE->ASH, 4 NONE->SWAMP) are
+//    asserted by parsing that table straight out of `terrain.js`, so an edit
+//    to EITHER table trips;
+//  - 2026-10-23 THE VOLCANO SPLIT: FAM_VOLCANO is lava (25) alone; 6 is
+//    FAM_OBSIDIAN and 26 is FAM_ASH, APPENDED as 9 and 10 so every existing
+//    FAM_* value (FAM_WATER = 8 above all) keeps its number;
 //  - the LUT is code-indexed, never name-matched (plan §8 risk 12).
 //
 // Pure ESM — `terrain_families.js` imports nothing, so no three stub is needed.
@@ -25,7 +29,7 @@ import { dirname, resolve as resolvePath } from "node:path";
 
 import {
   FAM_NONE, FAM_GRASS, FAM_SAND, FAM_ROCK, FAM_SNOWICE,
-  FAM_SWAMP, FAM_VOLCANO, FAM_DIRT, FAM_WATER, FAM_COUNT,
+  FAM_SWAMP, FAM_VOLCANO, FAM_DIRT, FAM_WATER, FAM_OBSIDIAN, FAM_ASH, FAM_COUNT,
   FAM_NAMES, TERRAIN_CODE_NAMES, TERRAIN_CODE_COUNT,
   LEGACY_WATER_CODES, STRICT_WATER_CODES,
   buildTerrainFamilyLut, readStrictWaterCodesFlag,
@@ -43,14 +47,19 @@ function check(label, cond, extra = "") {
 
 // ---- family constants ----------------------------------------------
 console.log("terrain_families — family constants");
-check("FAM_* are 0..8 dense", [
+check("FAM_* are 0..10 dense", [
   FAM_NONE, FAM_GRASS, FAM_SAND, FAM_ROCK, FAM_SNOWICE,
-  FAM_SWAMP, FAM_VOLCANO, FAM_DIRT, FAM_WATER,
+  FAM_SWAMP, FAM_VOLCANO, FAM_DIRT, FAM_WATER, FAM_OBSIDIAN, FAM_ASH,
 ].every((v, i) => v === i));
-check("FAM_COUNT === 9", FAM_COUNT === 9);
+check("FAM_COUNT === 11 (2026-10-23: obsidian + ash split off volcano)", FAM_COUNT === 11);
+check("the split APPENDED its ids — the pre-split values are unchanged "
+  + "(FAM_VOLCANO 6, FAM_DIRT 7, FAM_WATER 8)",
+  FAM_VOLCANO === 6 && FAM_DIRT === 7 && FAM_WATER === 8 && FAM_OBSIDIAN === 9 && FAM_ASH === 10);
 check("FAM_NAMES covers every family", FAM_NAMES.length === FAM_COUNT);
 check("TERRAIN_CODE_NAMES has 32 entries", TERRAIN_CODE_NAMES.length === 32);
 check("familyName(FAM_VOLCANO) === 'volcano'", familyName(FAM_VOLCANO) === "volcano");
+check("familyName(FAM_OBSIDIAN) === 'obsidian', familyName(FAM_ASH) === 'ash'",
+  familyName(FAM_OBSIDIAN) === "obsidian" && familyName(FAM_ASH) === "ash");
 
 // ---- §1.3 membership, on the LEGACY water set ----------------------
 console.log("terrain_families — §1.3 membership (legacy water set)");
@@ -65,7 +74,9 @@ const EXPECT_LEGACY = {
   [FAM_ROCK]: [0, 13, 14, 30],
   [FAM_SNOWICE]: [2, 15, 27],
   [FAM_SWAMP]: [4],
-  [FAM_VOLCANO]: [6, 25, 26],
+  [FAM_VOLCANO]: [25],      // lava only (2026-10-23 split)
+  [FAM_OBSIDIAN]: [6],      // volcanic glass
+  [FAM_ASH]: [26],          // grey ash / pumice
   [FAM_DIRT]: [5, 7, 8, 24, 31],
   [FAM_WATER]: [16, 17, 18, 19, 20, 22, 23],
   [FAM_NONE]: [],
@@ -87,7 +98,7 @@ for (let c = 0; c < 32; c += 1) {
   if (!(legacy[c] >= 0 && legacy[c] < FAM_COUNT)) allOne = false;
 }
 check("every code maps into [0, FAM_COUNT)", allOne);
-check("the 32 codes partition into the 9 families",
+check("the 32 codes partition into the 11 families",
   Object.values(EXPECT_LEGACY).reduce((n, a) => n + a.length, 0) === 32);
 
 // ---- water derivation ----------------------------------------------
@@ -175,9 +186,9 @@ if (slices && slices.length === 32) {
   // The complete, deliberate delta list. Anything else diverging is a bug.
   const EXPECTED_DELTAS = {
     4: ["NONE", FAM_SWAMP],    // MarshSparseSwamp — no detail slice, but a real family
-    6: ["STONE", FAM_VOLCANO], // ObsidianPlain
-    25: ["STONE", FAM_VOLCANO], // Volcano1
-    26: ["STONE", FAM_VOLCANO], // Volcano2
+    6: ["STONE", FAM_OBSIDIAN], // ObsidianPlain — glass (2026-10-23 split)
+    25: ["STONE", FAM_VOLCANO], // Volcano1 — the only lava texture
+    26: ["STONE", FAM_ASH],     // Volcano2 — grey ash
     // water codes carry DETAIL_SLICE_NONE and are FAM_WATER
     16: ["NONE", FAM_WATER], 17: ["NONE", FAM_WATER], 18: ["NONE", FAM_WATER],
     19: ["NONE", FAM_WATER], 20: ["NONE", FAM_WATER],
@@ -199,8 +210,12 @@ if (slices && slices.length === 32) {
   }
   check("every code either matches its detail slice or is a KNOWN delta",
     unexpected.length === 0, unexpected.join(" | "));
-  check("6/25/26 are STONE in terrain.js but FAM_VOLCANO here",
-    [6, 25, 26].every((c) => slices[c] === "STONE" && legacy[c] === FAM_VOLCANO));
+  check("6/25/26 are STONE in terrain.js but OBSIDIAN / VOLCANO / ASH here",
+    [6, 25, 26].every((c) => slices[c] === "STONE")
+    && legacy[6] === FAM_OBSIDIAN && legacy[25] === FAM_VOLCANO && legacy[26] === FAM_ASH);
+  check("the split moved NOTHING but 6 and 26 out of FAM_VOLCANO (strict set too)",
+    [...Array(32).keys()].every((c) => (legacy[c] === FAM_VOLCANO) === (c === 25))
+    && strict[6] === FAM_OBSIDIAN && strict[25] === FAM_VOLCANO && strict[26] === FAM_ASH);
   check("4 is NONE in terrain.js but FAM_SWAMP here",
     slices[4] === "NONE" && legacy[4] === FAM_SWAMP);
   // The shared-RenderSurface trap: 0 vs 24/31 share `0x06006D6F` yet split.

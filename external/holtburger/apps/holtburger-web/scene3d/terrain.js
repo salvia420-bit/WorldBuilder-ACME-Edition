@@ -128,12 +128,24 @@ import {
 } from "./vfx_flags.js";
 // Wave 2B (plan §3.6) — same rationale, third statement (ESM dedupes).
 import { terrainVolcanoEnabled, terrainCrackGlowEnabled } from "./vfx_flags.js";
+// 2026-10-23 OBSIDIAN (the volcano split) — same rationale again, and its own
+// family table import so the line above and the families import stay as locked.
+import { terrainObsidianEnabled } from "./vfx_flags.js";
+import { FAM_OBSIDIAN } from "./terrain_families.js";
 // Wave 3B (plan §3.7, DIRT/MUD) — same rationale, fourth statement.
 import { terrainDirtEnabled, terrainMudPrintsEnabled, terrainMudWetnessEnabled } from "./vfx_flags.js";
 // Sampler-unit budget (2026-08-05) — the SAME reader the trail map itself is
 // built from (`terrain_vfx.js::initTerrainVfx`), so the shader's
 // HB_TERRAIN_TRAIL_MAP define can never disagree with whether a map exists.
 import { terrainTrailEnabled } from "./vfx_flags.js";
+// 2026-10-24 — THE TWO MASTER KILL SWITCHES for every family SHADER gate
+// (`terrainVfxShaderLive()` below). The family readers above answer their own
+// flag and the quality ladder only, so `?visual=off` / `?terrainVfx=off` used to
+// leave every shader term (ice, sparkles, crack glow, obsidian, mud) live while
+// the docs said they killed it. Same rationale as the statements above: their
+// own lines, so no family's locked import form moves.
+import { visualEnabled } from "./vfx_catalog.js";
+import { terrainVfxEnabled } from "./vfx_flags.js";
 // 2026-10-07 — terrain edge rounding (owner request: "the hills have sharp
 // points ... round just the edges ... inches would give the look"). VISUAL
 // ONLY: a fragment-shader SHADING BEVEL across retail creases (retail normals
@@ -915,59 +927,107 @@ const DEFAULT_TRIPLANAR_SHARPNESS = 6.0;
 
 // ----- Wave 1B — SAND GRAIN SPARKLE (terrain-VFX plan §3.2 item 4) ----
 //
-// Tuned as a WHISPER: this is an additive term over every sand fragment in
-// view, so it must read as glitter caught at a grazing angle, not as a sheen.
-// All four are shader constants rather than URL flags — the two flags that
-// exist (`?terrainSand`, `?terrainSandSparkle`) gate the whole block, and the
-// plan reserves no numeric knob for it. Calibration target is the BC7 arm
-// (:8767 with `texBc7=on&terrainBc7=on`), per plan §8 risk 13.
-const DEFAULT_SAND_SPARKLE_STRENGTH = 0.55;
-// Grain cells per metre. High enough that a cell is well under a pixel at
-// range (which is why the distance fade below exists) and coarse enough near
-// the camera to read as individual glints rather than as noise.
+// 2026-10-23 retune (owner, 1070 high tier, noon: "essentially invisible").
+// The v1 "whisper" peaked at ~0.55 x uAcSunColor (~0.3 radiance, the terrain
+// light scale is 0.55) x graze (~0.4 at a chase camera) x a 50 % twinkle: a
+// +0.06 brightening of a 1-2 px spot on ~0.3-radiance sand, which AGX at
+// exposure 5 compresses to nothing; and its facets spread only ±38° about the
+// vertical, so with the sun BEHIND the camera (the half-vector ~47° off
+// vertical at noon) almost no grain could flash at all. A real glint is a
+// tiny MIRROR — far brighter than the diffuse sand, and rare. Now: sparse
+// mirror facets (uSandSparkleFacetFrac) spread ±48-58° about the macro
+// normal, a sharper lobe (uSandSparkleSharpness), a footprint-aware shape
+// (a round point near the camera, energy shared out when a pixel spans many
+// grain cells) and a strength that puts a lit glint well over the sand.
+// The two flags (`?terrainSand`, `?terrainSandSparkle`) gate the whole block;
+// every value below is a live knob: `window.__terrainSand.sparkle({...})`.
+// Calibration target is still the BC7 arm (plan §8 risk 13).
+const DEFAULT_SAND_SPARKLE_STRENGTH = 3.2;
+// Grain cells per metre. A cell is ~1 px at the chase camera's ground focus
+// (~10 m); nearer, each glint is drawn as a round point inside its cell.
 const DEFAULT_SAND_SPARKLE_DENSITY = 26.0;
-// Distance fade — the same reasoning as the 2026-07-31 water sheen's 30→160 m
-// band: a per-pixel hashed micro-facet with no derivative-aware filtering
-// aliases hard once one pixel spans many grain cells. Sand is a near-field
-// effect; beyond the band the ground reads as the plain tile it did before.
-const DEFAULT_SAND_SPARKLE_FADE_START = 18.0;
-const DEFAULT_SAND_SPARKLE_FADE_END = 70.0;
+// Distance band. The footprint term in the block already shares a glint's
+// energy across the cells one pixel spans, so the hard band can sit further
+// out than v1's 18→70 m; past it the ground is the plain tile it always was.
+const DEFAULT_SAND_SPARKLE_FADE_START = 22.0;
+const DEFAULT_SAND_SPARKLE_FADE_END = 80.0;
+// Blinn lobe exponent (v1 hardcoded 180): ~4° half-width, a point not a sheen.
+const DEFAULT_SAND_SPARKLE_SHARPNESS = 240.0;
+// Fraction of grain cells that carry a mirror-like facet at all (quartz and
+// mica faces among dull grains) — the sparseness that keeps a bright glint
+// from reading as noise.
+const DEFAULT_SAND_SPARKLE_FACET_FRAC = 0.5;
 
-// ----- Wave 2B — VOLCANO CRACK GLOW + OBSIDIAN (plan §3.6 items 3 + 5) ----
+// ----- Wave 2B — VOLCANO CRACK GLOW (plan §3.6 item 3), LAVA ONLY ----------
 //
 // CRACK GLOW is emissive, so unlike the sand sparkle it is NOT multiplied by
 // the shadow terms — lava glows in shadow. It is added to `iblSpec`, which the
 // final colour already adds un-shadowed, so the `fragColor` line is untouched.
 //
-// Vein DENSITY is deliberately LOW (cells per metre): these are metre-scale
-// fissures in the ground, not a micro-facet field, which is also why the
-// distance fade below can be so much wider than the sparkle's without aliasing.
-const DEFAULT_CRACK_GLOW_DENSITY = 0.55;      // ≈ 1.8 m period
-// Vein WIDTH as a threshold on the ridged noise: smaller = thinner, hotter
-// cracks. 0.06 reads as a hairline at the ground scale above.
-const DEFAULT_CRACK_GLOW_WIDTH = 0.06;
-// Emissive gain. Tuned to sit UNDER the bloom threshold (0.85, atmosphere_
-// pipeline.js) at the breath minimum and just over it at the peak, so the
-// cracks bloom on the inhale and not constantly.
-const DEFAULT_CRACK_GLOW_STRENGTH = 1.15;
-// Deep orange-red. Calibration target is the BC7 arm (:8767 with
+// 2026-10-23 REWORK (owner on the 1070: obsidian "mixed up with lava"). The
+// glow used to be a procedural ridged-noise vein field over codes 6/25/26 —
+// veins that followed nothing on screen, on two textures that hold no lava at
+// all. FAM_VOLCANO is now code 25 alone (Volcano1, 0x06006D54: black basalt
+// with orange-red cracks PAINTED in the texture), and the glow is keyed to
+// those painted cracks: the emissive is the texel's OWN colour, masked by how
+// hot it reads. Measured on the 512^2 texture (linear RGB): heat = r -
+// max(0.55 g, b) is > 0.03 on 8.7 % of texels (the cracks, mean colour
+// 0.48/0.04/0.02) and <= 0.005 on the basalt; codes 6 and 26 never pass 0.011.
+// So the glow sits exactly in the cracks, mip-averages to a faint warm field
+// at range, and costs one smoothstep instead of two noise octaves.
+// Heat window (smoothstep edges on the linear chroma above).
+const DEFAULT_CRACK_GLOW_HEAT = Object.freeze([0.03, 0.25]);
+// Emissive gain on the hot texel colour at NIGHT (full breath). Cores
+// (1.0/0.47/0.09, luminance ~0.55) cross the bloom threshold on the inhale,
+// the deep-red rims (luminance ~0.13) never do.
+const DEFAULT_CRACK_GLOW_STRENGTH = 1.6;
+// Fraction of that gain kept in full daylight. The painted cracks are already
+// lit by the sun at noon, so the day glow only has to read as heat breathing
+// in them — not double them into a garish orange net.
+const DEFAULT_CRACK_GLOW_DAY = 0.55;
+// A warm TINT multiplied into the texel colour (it is no longer the glow's
+// colour — the texture is). Slightly red so the emission reads hotter than
+// the sunlit paint. Calibration target is the BC7 arm (:8767 with
 // `texBc7=on&terrainBc7=on`) — plan §8 risk 13.
-const DEFAULT_CRACK_GLOW_COLOR = Object.freeze([1.0, 0.30, 0.06]);
-const DEFAULT_CRACK_GLOW_FADE_START = 120.0;
-const DEFAULT_CRACK_GLOW_FADE_END = 420.0;
+const DEFAULT_CRACK_GLOW_COLOR = Object.freeze([1.0, 0.85, 0.7]);
+// Travelling pulse: the breath is modulated per ~20 m patch with a
+// noise-offset phase (0.13 Hz), so a lava field flickers alive instead of the
+// whole screen pulsing in lockstep. Depth of that modulation, 0..1.
+const DEFAULT_CRACK_GLOW_PULSE = 0.4;
+// The texel mask does not alias (it is mip-filtered texture data, not a
+// per-pixel noise threshold), so the fade is only a far-range courtesy.
+const DEFAULT_CRACK_GLOW_FADE_START = 350.0;
+const DEFAULT_CRACK_GLOW_FADE_END = 1400.0;
 // The breathing oscillator's neutral value. `loop.js::tickTerrainUTime` pushes
 // the live one from the shared `vfx/oscillators.js` registry; this literal is
 // what a frame before the first push (or with the oscillator unregistered)
 // reads, and it is the oscillator's own bias, so it is never a visible step.
 const DEFAULT_CRACK_GLOW_BREATH = 0.72;
 
-// OBSIDIAN — code 6 only. "roughness ↓↓, dark tight specular": a high-exponent
-// Blinn lobe at LOW intensity plus a sharp (low-mip) env reflection. It is a
-// specular-only treatment, added to `iblSpec` alongside the crack glow: the
-// albedo is left alone so the two texture arms both keep their own black.
-const DEFAULT_OBSIDIAN_SHININESS = 220.0;
-const DEFAULT_OBSIDIAN_SPECULAR = 0.55;
-const DEFAULT_OBSIDIAN_ENV = 0.35;
+// ----- 2026-10-23 — OBSIDIAN GLASS (code 6, FAM_OBSIDIAN, ?terrainObsidian) -----
+//
+// Volcanic glass: sparse, sharp SUN GLINTS off conchoidal facets plus a dark
+// PURPLE SHEEN at grazing angles. No glow, no embers, no shimmer. Replaces the
+// v1 code-6 "dark tight specular" (a 220-exponent Blinn lobe on the 24 m
+// MACRO normal: at noon under a chase camera the half vector sits ~20-45 deg
+// off that normal, so it never lit; the owner's noon stills show nothing).
+// The glints follow the snow sparkle's footprint-aware recipe (hashed facet
+// normals tilted up to ~55 deg, so the noon half vector is reachable; a
+// pixel-space round core; faded where a facet drops under a pixel) at glass
+// scale — fewer, bigger, sharper facets. Both terms ride iblSpec; the glints
+// are SUNLIGHT and carry the direct-sun (cloud / CSM / sun-up) factor.
+const DEFAULT_OBSIDIAN_GLINT = 6.0;               // sun-colour gain at the lobe peak
+const DEFAULT_OBSIDIAN_GLINT_DENSITY = 1.6;       // facet cells per metre (~0.6 m)
+const DEFAULT_OBSIDIAN_GLINT_FRAC = 0.35;         // share of cells that are a mirror facet
+const DEFAULT_OBSIDIAN_GLINT_SHARPNESS = 260.0;   // Blinn exponent (~4.4 deg half-width)
+const DEFAULT_OBSIDIAN_GLINT_CORE_PX = 0.9;       // round core sigma, pixels
+const DEFAULT_OBSIDIAN_GLINT_FADE = Object.freeze([40.0, 120.0]);
+// Grazing sheen: Schlick Fresnel (glass, F0 0.045) of a BLURRED sky reflection,
+// tinted purple (sheen obsidian's inclusions) and broken into glassy patches.
+// Far ground keeps 40 % of it so a distant plain reads glassy, never a lake.
+const DEFAULT_OBSIDIAN_SHEEN = 0.3;
+const DEFAULT_OBSIDIAN_SHEEN_COLOR = Object.freeze([0.62, 0.42, 1.0]);
+const DEFAULT_OBSIDIAN_SHEEN_FADE = Object.freeze([250.0, 1200.0]);
 
 // ----- Retail zFightTerrainAdjust (terrain drawn ~1 cm below grade) --
 //
@@ -1159,7 +1219,8 @@ const TERRAIN_SNOW_CODES = Object.freeze(
 );
 
 // Wave 2B — the VOLCANO set for the crack glow, DERIVED from
-// `terrain_families.js` (FAM_VOLCANO = codes 6/25/26 in Dereth) for exactly the
+// `terrain_families.js` (FAM_VOLCANO = code 25, lava, since the 2026-10-23
+// split — it was 6/25/26) for exactly the
 // reason the sand set above is: family membership is a property of the CODE and
 // the family module is the single source of truth (plan §1.3 / §8 risk 12).
 // Volcanic codes are in no water set, so `?strictWaterCodes` cannot move them.
@@ -1227,17 +1288,45 @@ const TERRAIN_CLAY_CODES = Object.freeze(
 // noise"), which is why the lobe exponent is enormous: a facet lights only when
 // the sun/eye half-vector lands almost exactly on it, so moving the camera
 // sweeps the half-vector across the facet field and different crystals pop.
-const DEFAULT_SNOW_SPARKLE_STRENGTH = 1.35;
-// Crystal cells per metre. Finer than sand's 26 — a snow glint is a point, not
-// a grain — which makes the distance fade below more load-bearing, not less.
-const DEFAULT_SNOW_SPARKLE_DENSITY = 42.0;
-// The lobe exponent. See above: this IS the camera-motion dependence.
-const DEFAULT_SNOW_SPARKLE_SHARPNESS = 420.0;
-// Distance fade, same reasoning as the sand sparkle and the water sheen: an
-// unfiltered per-pixel micro-facet aliases hard once one pixel spans many
-// cells. Snow's band is shorter than sand's because its cells are finer.
-const DEFAULT_SNOW_SPARKLE_FADE_START = 12.0;
-const DEFAULT_SNOW_SPARKLE_FADE_END = 55.0;
+//
+// 2026-10-23 (owner stills, high tier, noon): invisible. Three reasons, three
+// fixes. (1) Sunlit snow sat at HDR ~4 in the tone curve's shoulder, so +1.35
+// changed nothing on screen — see SNOW EXPOSURE below. (2) Every crystal CELL
+// lit whole: 2.4 cm squares, sub-pixel past ~10 m, i.e. aliasing noise rather
+// than glints. A cell now holds ONE point glint, round in SCREEN pixels
+// (DEFAULT_SNOW_SPARKLE_CORE_PX, via the inverse screen Jacobian of the crystal
+// grid), so it is a crisp 2-3 px dot at any range. (3) It is bright enough to
+// bloom (the composer's bloom threshold is 1.1 scene-linear) and lights only in
+// DIRECT sun (un-floored cloud/CSM terms, sun above the horizon).
+const DEFAULT_SNOW_SPARKLE_STRENGTH = 4.0;
+// Crystal cells per metre: ONE candidate glint per cell. 3.5/m keeps the cell
+// a few pixels long along the view direction out to ~20 m at the chase camera,
+// which is where the footprint fade (below, in the GLSL) retires the field.
+const DEFAULT_SNOW_SPARKLE_DENSITY = 3.5;
+// The lobe exponent — still the camera-motion dependence. 160 (half-max at
+// ~5 deg) lights ~1 % of cells at any instant: ~25 bright glints and twice as
+// many faint ones over the 3-20 m band, sweeping as the camera moves.
+const DEFAULT_SNOW_SPARKLE_SHARPNESS = 160.0;
+// Gaussian glint radius (sigma) in SCREEN pixels.
+const DEFAULT_SNOW_SPARKLE_CORE_PX = 0.9;
+// Distance fade — now a backstop: the per-pixel footprint fade in the GLSL is
+// what actually retires a glint before it aliases.
+const DEFAULT_SNOW_SPARKLE_FADE_START = 22.0;
+const DEFAULT_SNOW_SPARKLE_FADE_END = 40.0;
+
+// ----- Wave 2A — SNOW EXPOSURE (2026-10-23 look pass) -----------------
+//
+// The day-time scale on the lit POWDER colour (code 15; ice 2/27 untouched).
+// Exposure 5 into the Neutral curve puts sunlit snow (albedo ~0.85) at HDR ~4,
+// displayed as flat (255,255,241): prints, cast shadows, slope shading,
+// spindrift and sparkle halos all tone-map to the same white. 0.3 brings noon
+// powder to HDR ~1.3 (displayed ~246, still the brightest ground in the frame)
+// where those differences show. Ramped by the flat-ground light level, so
+// night snow is untouched; a plain multiply, so every ratio is preserved;
+// skipped in the far-ring albedo bake. MIRRORED in scene3d/terrain_snow.js
+// SNOW_EXPOSURE_DAY (the spindrift copies the live value from a terrain
+// material each frame); the snow test locks the two. 1.0 = off.
+const DEFAULT_SNOW_EXPOSURE = 0.3;
 
 // ----- Wave 2A — SNOW FOOTPRINTS (plan §3.4 item 3) -------------------
 //
@@ -1249,7 +1338,15 @@ const DEFAULT_SNOW_PRINT_DEPTH = 0.004;
 // Fraction of the lit colour removed at a full-strength print. Compressed snow
 // is denser and shadowed, so darkening alone already reads as a print — which
 // is exactly the `mid`/no-POM degrade (plan §2.7.3 point 4).
-const DEFAULT_SNOW_PRINT_DARKEN = 0.32;
+// 2026-10-23: 0.32 grey was invisible on the blown-out snow; 0.45 times a COLD
+// tint (a trench in sunlit snow is filled by blue skylight, not grey).
+const DEFAULT_SNOW_PRINT_DARKEN = 0.45;
+const DEFAULT_SNOW_PRINT_TINT = [0.84, 0.93, 1.1];
+// Sun-side relief from ONE extra trail tap toward the sun: the trench wall that
+// faces the sun brightens, the one facing away darkens (x (1 - 0.5 sun.z), so
+// a low sun models it harder). Gain, and the tap offset in metres.
+const DEFAULT_SNOW_PRINT_RIM = 0.55;
+const DEFAULT_SNOW_PRINT_RIM_M = 0.35;
 
 // ----- Wave 2A — ICE MATERIAL (plan §3.4 item 4) ----------------------
 //
@@ -1275,13 +1372,26 @@ const DEFAULT_ICE_REFRACT_AMOUNT = 0.004;
 // (0.012) so the dent reads as a depression IN the relief rather than fighting
 // it, exactly as §3.4 asks of snow.
 const DEFAULT_MUD_PRINT_DEPTH = 0.006;
-const DEFAULT_MUD_PRINT_DARKEN = 0.28;
+// 2026-10-23 (owner vistest prep: "mud prints should clearly read"): 0.28 ->
+// 0.42 — the darkening of a full-strength (trail = 1.0), soaked print. See the
+// dry scale below for what a dry track actually gets. Live:
+// window.__terrainDirt.tune({printDarken, printDryScale, printDepth}).
+const DEFAULT_MUD_PRINT_DARKEN = 0.42;
 // THE RAIN-DEPENDENT PERSISTENCE (see the `terrain_dirt.js` header, decision
 // (b)): the shared trail fade is GLOBAL and mud cannot have its own, so the
 // rain dependence rides AMPLITUDE. At bone-dry wetness the print is scaled to
-// this fraction of full — faint, and gone from the eye long before the map's
-// fade removes it; at full wetness it is 1.0. The stamp side does the same
-// thing (`terrain_dirt.js::mudStampFor`), so the two compose.
+// this fraction of full; at full wetness it is 1.0. The stamp side does the
+// same thing (`terrain_dirt.js::mudStampFor`), so the two compose.
+// 2026-10-24: 0.65 -> 0.35 (back to the wave-3B seed). The 2026-10-23 lift to
+// 0.65 was calibrated against the MUD stamp alone, but grass stomp (default ON
+// at high/ultra) stamps the SAME shared trail map under the player every frame
+// at strength 1.0 / radius 0.75 m, max()-combined (trail_map.js), which covers
+// the mud blob (<= 1.0 at 0.6-0.75 m) completely. So under the player the map
+// reads 1.0 on EVERY dirt code and the per-code stamp never shows: at 0.65 a
+// dry track darkened 0.42 x 0.65 = 27 % on every code and a soaked one only
+// 1.54x that. At 0.35 (stomp live): dry 14.7 %, soaked 42 % (2.86x). Without
+// the stomp the mud stamp shows: dry PackedDirt ~6 %, PatchyDirt ~8 %,
+// MudRichDirt ~11 %; soaked 29 % / 38 % / 42 % (test_terrain_dirt_shader.mjs).
 const DEFAULT_MUD_PRINT_DRY_SCALE = 0.35;
 //
 // WET MUD reuses the RESPONSE CURVE of `vfx/components/wetness.js` verbatim
@@ -1312,13 +1422,19 @@ const DEFAULT_MUD_WET_ENV = 0.28;
 const DEFAULT_CLAY_WET_TINT = Object.freeze([1.12, 0.92, 0.86]);
 const DEFAULT_CLAY_WET_GLOSS_BONUS = 0.35;
 
-// Wave 2B — OBSIDIAN is CODE 6 ALONE (plan §3.6 item 5), not the whole family:
-// Volcano1/Volcano2 are cracked rock, ObsidianPlain is glass. Codes 0..0x14 are
-// NAMED in the retail `LandDefs::TerrainType` enum, so 6 IS ObsidianPlain
-// engine-wide — a retail-enum constant, not a name match against the Dereth
-// palette (which §8 risk 12 forbids). `terrain_volcano.js` exports the same
-// number as `TERRAIN_CODE_OBSIDIAN_PLAIN`; the node test locks them together.
-const TERRAIN_OBSIDIAN_CODES = Object.freeze(new Set([6]));
+// 2026-10-23 — OBSIDIAN is its own family now (terrain_families.js
+// FAM_OBSIDIAN = code 6, `ObsidianPlain`), so the set is DERIVED like every
+// other family set here rather than hardcoded (it was `new Set([6])` while it
+// was a sub-variant of FAM_VOLCANO). Codes 0..0x14 are NAMED in the retail
+// `LandDefs::TerrainType` enum, so 6 IS ObsidianPlain engine-wide;
+// `terrain_obsidian.js` exports the same set and the node test locks the two.
+const TERRAIN_OBSIDIAN_CODES = Object.freeze(
+  (() => {
+    const s = new Set();
+    for (let c = 0; c < 32; c += 1) if (familyForCode(c) === FAM_OBSIDIAN) s.add(c);
+    return s;
+  })(),
+);
 
 // ----- GLSL — bilinear-blend shader, three.js port ------------------
 //
@@ -1954,6 +2070,8 @@ uniform float uSandSparkleStrength;  // additive specular gain
 uniform float uSandSparkleDensity;   // grain cells per metre
 uniform float uSandSparkleFadeStart; // metres — full strength nearer than this
 uniform float uSandSparkleFadeEnd;   // metres — zero beyond
+uniform float uSandSparkleSharpness; // 2026-10-23: Blinn lobe exponent (was 180 inline)
+uniform float uSandSparkleFacetFrac; // 2026-10-23: share of grain cells that are mirror facets
 
 // === 2026-08-01 (Wave 2A) — SNOW / ICE ==================================
 // Terrain-VFX plan §3.4. THREE independent terms, three gates:
@@ -1972,6 +2090,10 @@ uniform float uSnowSparkleDensity;   // crystal cells per metre
 uniform float uSnowSparkleSharpness; // half-vector lobe exponent
 uniform float uSnowSparkleFadeStart;
 uniform float uSnowSparkleFadeEnd;
+uniform float uSnowSparkleCorePx;    // glint radius (Gaussian sigma), SCREEN px
+// 2026-10-23 -- SNOW EXPOSURE: day-time scale on lit POWDER (code 15). 1.0 =
+// off (the block is then skipped). Set from the snow family master.
+uniform float uSnowExposure;
 
 // Footprints. uSnowPrintEnabled is the FLAG (baked with the material);
 // uSnowTrailEnabled is "a trail map exists and is bound THIS FRAME", pushed by
@@ -1982,6 +2104,9 @@ uniform float uSnowSparkleFadeEnd;
 uniform float uSnowPrintEnabled;     // 0.0 OFF / 1.0 ON
 uniform float uSnowPrintDepth;       // cell-UV dent amplitude (<< uPomScale)
 uniform float uSnowPrintDarken;      // 0..1 fraction of lit colour removed
+uniform vec3 uSnowPrintTint;         // hue of the print shade (cold skylight)
+uniform float uSnowPrintRim;         // sun-side trench relief gain
+uniform float uSnowPrintRimM;        // relief tap offset toward the sun, metres
 // SAMPLER-UNIT BUDGET (2026-08-05, 1070 black-flicker fix): the trail sampler
 // is declared ONLY when the map can exist (HB_TERRAIN_TRAIL_MAP, set from
 // terrainTrailEnabled() at material build). It used to be declared and
@@ -2009,15 +2134,16 @@ uniform float uIceEnvStrength;       // env-cube reflection gain (needs ?ibl)
 uniform float uIceRefractEnabled;    // 0.0 OFF / 1.0 ON (ultra tier)
 uniform float uIceRefractAmount;     // cell-UV offset amplitude (<< uPomScale)
 
-// === 2026-08-01 (Wave 2B) — VOLCANO CRACK GLOW + OBSIDIAN ================
-// Terrain-VFX plan §3.6 items 3 + 5. A dull red glow breathing in the cracks
-// on FAM_VOLCANO ground (codes 6/25/26) plus a tight dark specular on
-// ObsidianPlain (code 6 only), keyed off the TERRAIN CODE read from
-// uVertexTypes — plan trap T3, the same reason the sand sparkle above does.
-// The masks are built on the JS side from terrain_families.js (FAM_VOLCANO)
-// and the retail enum (obsidian = 6), never from a hardcoded range here.
+// === 2026-08-01 (Wave 2B) - VOLCANO CRACK GLOW, and (2026-10-23) OBSIDIAN ====
+// Terrain-VFX plan 3.6 item 3. The LAVA glow breathing in the cracks of
+// FAM_VOLCANO ground, keyed off the TERRAIN CODE read from uVertexTypes (plan
+// trap T3, the same reason the sand sparkle above does). Since the 2026-10-23
+// split FAM_VOLCANO is code 25 alone (the only texture with lava painted in
+// it), and the glow is the texture's OWN hot texels made emissive -- not a
+// procedural vein field. The mask is built on the JS side from
+// terrain_families.js (FAM_VOLCANO), never from a hardcoded range here.
 // Strict no-op when uCrackGlowEnabled is 0 (?terrainVolcano / ?terrainCrackGlow
-// both ship OFF), and on every non-volcanic fragment.
+// both ship OFF), and on every non-lava fragment.
 //
 // uCrackGlowBreath is the SLOW BREATHING OSCILLATOR, driven through the shared
 // vfx/oscillators.js registry (terrain_volcano.js::CRACK_GLOW_OSC_NAME, a
@@ -2026,19 +2152,30 @@ uniform float uIceRefractAmount;     // cell-UV offset amplitude (<< uPomScale)
 // values into fresh objects when it builds the batched material, and
 // ?terrainBatch is default-ON -- a by-reference binding would silently freeze
 // the breath on the batched path.
-uniform float uCrackGlowEnabled;     // 0.0 OFF / 1.0 ON  (gates BOTH terms)
-uniform int uVolcanoCodeMask;        // bit i = terrain code i is FAM_VOLCANO
-uniform int uObsidianCodeMask;       // bit 6 — ObsidianPlain alone
-uniform float uCrackGlowStrength;    // emissive gain
-uniform float uCrackGlowDensity;     // vein cells per metre
-uniform float uCrackGlowWidth;       // ridged-noise threshold (vein thickness)
-uniform vec3 uCrackGlowColor;
+uniform float uCrackGlowEnabled;     // 0.0 OFF / 1.0 ON
+uniform int uVolcanoCodeMask;        // bit i = terrain code i is FAM_VOLCANO (lava)
+uniform float uCrackGlowStrength;    // emissive gain on the hot texel colour (night)
+uniform float uCrackGlowDay;         // fraction of that gain kept in full daylight
+uniform vec2 uCrackGlowHeat;         // smoothstep window on r - max(0.55 g, b), linear
+uniform vec3 uCrackGlowColor;        // warm tint multiplied into the texel colour
+uniform float uCrackGlowPulse;       // 0..1 depth of the travelling per-patch pulse
 uniform float uCrackGlowBreath;      // 0.44..1.0, pushed each frame
-uniform float uCrackGlowFadeStart;   // metres — full strength nearer than this
-uniform float uCrackGlowFadeEnd;     // metres — zero beyond
-uniform float uObsidianShininess;    // Blinn exponent (roughness down-down)
-uniform float uObsidianSpecular;     // sun-lobe gain
-uniform float uObsidianEnv;          // env-cube reflection gain
+uniform float uCrackGlowFadeStart;   // metres - full strength nearer than this
+uniform float uCrackGlowFadeEnd;     // metres - zero beyond
+// OBSIDIAN GLASS (2026-10-23, ?terrainObsidian, FAM_OBSIDIAN = code 6): sparse
+// sun glints off hashed glass facets + a dark purple grazing sheen. Its own
+// gate; its own block (after the cast shadows resolve, next to the ice).
+uniform float uObsidianEnabled;      // 0.0 OFF / 1.0 ON
+uniform int uObsidianCodeMask;       // bit i = terrain code i is FAM_OBSIDIAN
+uniform float uObsidianGlint;        // sun-colour gain at the glint peak
+uniform float uObsidianGlintDensity; // facet cells per metre
+uniform float uObsidianGlintFrac;    // share of cells carrying a mirror facet
+uniform float uObsidianGlintSharpness; // Blinn exponent of a facet
+uniform float uObsidianGlintCorePx;  // round glint core sigma, pixels
+uniform vec2 uObsidianGlintFade;     // metres: full nearer than x, gone past y
+uniform float uObsidianSheen;        // grazing sheen gain (x Fresnel x sky)
+uniform vec3 uObsidianSheenColor;    // the purple tint of the sheen
+uniform vec2 uObsidianSheenFade;     // metres: sheen eases to 40 % over [x, y]
 
 // === 2026-08-01 (Wave 3B) — MUD PRINTS + WET MUD =========================
 // Terrain-VFX plan §3.7 items 2 + 4. A deforming, darkening footprint on
@@ -2400,9 +2537,10 @@ bool isIceCode(int c) {
   return c >= 0 && c < 32 && (uIceCodeMask & (1 << c)) != 0;
 }
 
-// Wave 2B — the single VOLCANO / OBSIDIAN code tests for the fragment stage,
+// Wave 2B - the single VOLCANO / OBSIDIAN code tests for the fragment stage,
 // same shape as isWaterCode / isSandCode above and reading masks built from
-// terrain_families.js FAM_VOLCANO and the retail ObsidianPlain enum value.
+// terrain_families.js FAM_VOLCANO (lava, 25) and FAM_OBSIDIAN (glass, 6) --
+// two families since the 2026-10-23 split.
 // Code 32 is the road layer and is never volcanic.
 bool isVolcanoCode(int c) {
   return c >= 0 && c < 32 && (uVolcanoCodeMask & (1 << c)) != 0;
@@ -2698,6 +2836,11 @@ void main() {
   //     print degrades to DARKENING ONLY -- a coherent lesser effect, not a
   //     broken one. snowPrint stays in scope for that darkening at the end.
   float snowPrint = 0.0;
+  // 2026-10-23 -- SUN-SIDE RELIEF: the print value one tap TOWARD the sun minus
+  // the value here. > 0 = this point's surface faces the sun (the far trench
+  // wall, and the lip beyond it), < 0 = it faces away (the near wall). Read by
+  // the darkening block; 0 outside the map. ONE extra tap, snow cells only.
+  float snowPrintRelief = 0.0;
   if (uSnowPrintEnabled > 0.5 && uSnowTrailEnabled > 0.5
       && cellTouchesSnow && !cellTouchesWater) {
     // world(x,y,z) = ac(x,z,-y), so the AC ground point is (w.x, -w.z).
@@ -2709,6 +2852,18 @@ void main() {
     if (trailUv.x >= 0.0 && trailUv.x <= 1.0 && trailUv.y >= 0.0 && trailUv.y <= 1.0) {
 #ifdef HB_TERRAIN_TRAIL_MAP
       snowPrint = clamp(texture(uSnowTrailMap, trailUv).r, 0.0, 1.0);
+      if (uSnowPrintRim > 0.0) {
+        // uSunDir is AC z-up; its ground projection points at the sun.
+        vec2 rimSun = uSunDir.xy;
+        float rimLen = length(rimSun);
+        if (rimLen > 1e-3) {
+          vec2 rimUv = trailUv + (rimSun / rimLen) * (uSnowPrintRimM / (2.0 * uSnowTrailRadius));
+          if (rimUv.x >= 0.0 && rimUv.x <= 1.0 && rimUv.y >= 0.0 && rimUv.y <= 1.0) {
+            float rimTow = clamp(textureLod(uSnowTrailMap, rimUv, 0.0).r, 0.0, 1.0);
+            snowPrintRelief = clamp(rimTow - snowPrint, -1.0, 1.0);
+          }
+        }
+      }
 #endif
     }
     if (snowPrint > 0.0 && uPomEnabled > 0.5 && vViewDepth < uPomFadeEnd) {
@@ -2843,11 +2998,11 @@ ${TERRAIN_FS_ON ? "" : TERRAIN_BILINEAR_TAPS_GLSL}
     (isIceCode(t00) ? w00 : 0.0) + (isIceCode(t10) ? w10 : 0.0) +
     (isIceCode(t01) ? w01 : 0.0) + (isIceCode(t11) ? w11 : 0.0), 0.0, 1.0);
 
-  // Wave 2B — bilinear VOLCANO and OBSIDIAN fractions, computed with the SAME
-  // four corner weights, for the same reason the water and sand fractions are:
-  // the crack glow and the obsidian specular then feather across a type
+  // Wave 2B - bilinear VOLCANO (lava) and OBSIDIAN fractions, computed with the
+  // SAME four corner weights, for the same reason the water and sand fractions
+  // are: the crack glow and the obsidian glass then feather across a type
   // boundary instead of switching on a per-half-cell nearest-corner step (plan
-  // §8 risk 2). Consumed by the VOLCANO CRACK GLOW block further down main().
+  // 8 risk 2). Consumed by the LAVA CRACK GLOW and OBSIDIAN GLASS blocks below.
   float volcW = clamp(
     (isVolcanoCode(t00) ? w00 : 0.0) + (isVolcanoCode(t10) ? w10 : 0.0) +
     (isVolcanoCode(t01) ? w01 : 0.0) + (isVolcanoCode(t11) ? w11 : 0.0), 0.0, 1.0);
@@ -3617,74 +3772,49 @@ ${TERRAIN_MICRO.gradUv
     iblSpec += waterSpec * waterW;
   }
 
-  // === Wave 2B — VOLCANO CRACK GLOW + OBSIDIAN ===========================
-  // Terrain-VFX plan §3.6 items 3 + 5. One gate, two terms, both keyed off the
-  // TERRAIN CODE from uVertexTypes (trap T3) and both weighted by a bilinear
-  // corner fraction so they feather at a type boundary.
+  // === Wave 2B - LAVA CRACK GLOW (2026-10-23: the texture's own cracks) ===
+  // Terrain-VFX plan 3.6 item 3. Keyed off the TERRAIN CODE from uVertexTypes
+  // (trap T3) and weighted by the bilinear lava fraction volcW, so it feathers
+  // at a type boundary. FAM_VOLCANO is code 25 alone since the 2026-10-23
+  // split: the only ground whose texture holds lava (black basalt, orange-red
+  // cracks painted in). The glow is THOSE cracks made emissive: the heat of
+  // the finished albedo (red standing clear of green and blue, linear RGB)
+  // masks it, and the emissive colour is the texel's own colour times a warm
+  // tint. Basalt, obsidian (6) and ash (26) texels read no heat at all.
   //
-  // WHERE IT SITS AND WHY (plan §2.7.3):
-  //   • AFTER the POM march, and the vein field is anchored to the
-  //     PARALLAX-CORRECTED surface point — vWorldPos is the geometric (pre-POM)
-  //     position, so the POM offset (cellUv - the original vec2(fu, fv)) is
-  //     added back in cell units x 24 m. Without that, the cracks would slide
-  //     against the relief they are supposed to be cut into (plan §8 risk 14).
-  //   • It HONOURS the cellTouchesWater bypass. POM does not run on a
-  //     water-touching cell, so the correction term is zero there anyway — but
-  //     a shoreline volcanic cell must not glow THROUGH the water surface the
-  //     water agent owns, so the whole block stands down.
-  //   • It adds to iblSpec, NOT to the shadow-multiplied product: crack glow is
-  //     EMISSIVE (lava glows in shadow) and the obsidian env reflection is
-  //     ambient. That also means the final fragColor line is untouched.
-  //   • It never writes cellUv, waterCellUv, waterW or any water uniform.
-  // The mid-tier degrade is coherent by construction: POM is high/ultra only,
-  // and with POM off the correction term is exactly zero, leaving the same
-  // veins on an unrelieved surface (plan §2.7.3 point 4).
-  if (uCrackGlowEnabled > 0.5 && !cellTouchesWater && (volcW > 0.0 || obsidianW > 0.0)) {
-    // POM-corrected AC ground position (world(x,y,z) = ac(x,z,-y)).
-    vec2 pomShiftV = (cellUv - vec2(fu, fv)) * 24.0;
-    vec2 groundXy = vec2(vWorldPos.x, -vWorldPos.z) + pomShiftV;
-
-    if (volcW > 0.0) {
-      float crackFade = 1.0 - smoothstep(uCrackGlowFadeStart, uCrackGlowFadeEnd, vViewDepth);
-      if (crackFade > 0.001) {
-        // RIDGED noise: |2n-1| is 0 along the field's mid-level contour, so
-        // thresholding it draws thin connected LINES rather than blobs — the
-        // cheapest thing that reads as a crack network. Two octaves so the
-        // veins branch instead of running as smooth parallel curves.
-        vec2 veinXy = groundXy * uCrackGlowDensity;
-        float n1 = fragValueNoise2D(veinXy);
-        float f1 = abs(n1 * 2.0 - 1.0);
-        float vein = 1.0 - smoothstep(0.0, uCrackGlowWidth, f1);
-        float n2 = fragValueNoise2D(veinXy * 2.31 + vec2(11.7, 5.3));
-        float f2 = abs(n2 * 2.0 - 1.0);
-        vein *= 0.45 + 0.55 * (1.0 - smoothstep(0.0, uCrackGlowWidth * 2.5, f2));
-        if (vein > 0.001) {
-          iblSpec += uCrackGlowColor
-                   * (uCrackGlowStrength * vein * volcW * crackFade * uCrackGlowBreath);
-        }
-      }
-    }
-
-    if (obsidianW > 0.0) {
-      // ObsidianPlain (code 6) only: roughness DOWN-DOWN reads as a tight,
-      // low-intensity Blinn lobe plus a sharp (low-mip) env reflection. It runs
-      // in BOTH shading modes on purpose — the uPbrEnabled block above is dead
-      // in a default session because retail Gouraud is default-ON and wins that
-      // test, which is exactly the trap the 2026-07-31 water sheen fell into.
-      vec3 viewWo = normalize(vWorldPos - cameraPosition);
-      vec3 viewAcO = vec3(viewWo.x, -viewWo.z, viewWo.y);
-      vec3 halfAcO = normalize(sunDir - viewAcO);
-      float obsLobe = pow(clamp(dot(geomN, halfAcO), 0.0, 1.0), uObsidianShininess);
-      vec3 obsSpec = uAcSunColor * (obsLobe * uObsidianSpecular);
-      if (uIblEnabled > 0.5) {
-        vec3 nWorldO = normalize(vec3(geomN.x, geomN.z, -geomN.y));
-        vec3 reflO = reflect(viewWo, nWorldO);
-        // Mip 0.5 = near-mirror: glass, not stone.
-        vec3 envO = textureLod(uEnvCube, reflO, 0.5).rgb;
-        float fresO = 0.04 + 0.96 * pow(1.0 - clamp(dot(-viewWo, nWorldO), 0.0, 1.0), 5.0);
-        obsSpec += envO * fresO * uEnvIntensity * uObsidianEnv;
-      }
-      iblSpec += obsSpec * obsidianW;
+  // WHERE IT SITS AND WHY (plan 2.7.3):
+  //   * AFTER the POM march and the albedo chain: result is the finished,
+  //     parallax-corrected albedo, so the glow is registered to the painted
+  //     cracks by construction (and the pulse phase below reads the
+  //     PARALLAX-CORRECTED ground point, plan 8 risk 14).
+  //   * It HONOURS the cellTouchesWater bypass: a shoreline lava cell must not
+  //     glow THROUGH the water surface the water agent owns.
+  //   * It adds to iblSpec, NOT to the shadow-multiplied product: lava glows in
+  //     shadow. The final fragColor line is untouched.
+  //   * It never writes cellUv, waterCellUv, waterW, result or any water uniform.
+  // The mid-tier degrade is coherent by construction: nothing here needs POM.
+  if (uCrackGlowEnabled > 0.5 && !cellTouchesWater && volcW > 0.0) {
+    float crackFade = 1.0 - smoothstep(uCrackGlowFadeStart, uCrackGlowFadeEnd, vViewDepth);
+    float crackHeat = smoothstep(uCrackGlowHeat.x, uCrackGlowHeat.y,
+                                 result.r - max(0.55 * result.g, result.b));
+    float crackW = crackHeat * volcW * crackFade;
+    if (crackW > 0.001) {
+      // POM-corrected AC ground position (world(x,y,z) = ac(x,z,-y)).
+      vec2 pomShiftV = (cellUv - vec2(fu, fv)) * 24.0;
+      vec2 groundXy = vec2(vWorldPos.x, -vWorldPos.z) + pomShiftV;
+      // Travelling pulse: a ~20 m noise patch sets each crack's phase, so the
+      // field flickers alive rather than pulsing in lockstep. 0.8 rad/s is
+      // 0.13 Hz, inside the 1 Hz bound the shared clock's 3600 s wrap needs.
+      float crackPhase = 6.2831853 * fragValueNoise2D(groundXy * 0.05) + uTime * 0.8;
+      float crackPulse = 1.0 - uCrackGlowPulse * (0.5 + 0.5 * sin(crackPhase));
+      // Daylight: the flat-ground retail light level (the snow exposure's
+      // measure). At noon the sunlit paint already reads orange, so only
+      // uCrackGlowDay of the night gain is added on top of it.
+      vec3 crackRef = min(vec3(1.0), uAcSunColor * max(uAcSunVec.z, 0.0) + uAcAmbColor * uAcAmbLevel);
+      float crackDay = smoothstep(0.25, 0.85, dot(crackRef, vec3(0.2126, 0.7152, 0.0722)));
+      float crackGain = uCrackGlowStrength * mix(1.0, uCrackGlowDay, crackDay);
+      iblSpec += result * uCrackGlowColor
+               * (crackGain * crackW * uCrackGlowBreath * crackPulse);
     }
   }
 
@@ -3812,6 +3942,36 @@ ${TERRAIN_MICRO.gradUv
                                  uAcAmbColor, uAcAmbLevel);
   }
 
+  // === Wave 2A -- SNOW EXPOSURE (2026-10-23 look pass) =====================
+  // Composer exposure 5 into the Neutral curve puts sunlit powder (albedo
+  // ~0.85) at HDR ~4, deep in the shoulder: the owner's noon stills show it as
+  // flat (255,255,241), and a print, a cast shadow, slope shading, a spindrift
+  // veil or a sparkle halo all tone-map to that same white. A camera or an eye
+  // ADAPTS to a bright snowfield; this is that adaptation, per surface: the lit
+  // POWDER colour (snowW minus the ice subset, so the shipped ice look is
+  // untouched) is scaled by uSnowExposure (0.3 => noon powder at HDR ~1.3,
+  // still the brightest ground in the frame), ramped in by the FLAT-GROUND
+  // light level (the retail Gouraud term at n = +Z: night is untouched). A
+  // plain multiply, so every ratio -- shadow, print, relief -- is preserved.
+  // Sparkles ride iblSpec, unscaled, so they now stand ABOVE the snow. The
+  // spindrift (scene3d/terrain_snow.js) computes the same factor from the same
+  // uniforms so ribbons stay exposed like the ground. Skipped in the far-ring
+  // ALBEDO bake (uBakeAlbedo): a time-of-day factor must never be frozen into a
+  // composite. uSnowExposure = 1.0 (snow family off) => strict no-op.
+  // (> 0.0 too: a material built without this uniform reads 0, never black snow.)
+  if (uSnowExposure > 0.0 && uSnowExposure < 0.999 && uBakeAlbedo < 0.5) {
+    float powderW = clamp(snowW - iceW, 0.0, 1.0);
+    if (powderW > 0.0) {
+      vec3 snowRef = min(vec3(1.0), uAcSunColor * max(uAcSunVec.z, 0.0) + uAcAmbColor * uAcAmbLevel);
+      float snowDay = dot(snowRef, vec3(0.2126, 0.7152, 0.0722));
+      float snowExpo = mix(1.0, uSnowExposure, smoothstep(0.25, 0.6, snowDay));
+      modulated *= mix(1.0, snowExpo, powderW);
+      // Exposure is a property of the eye, not of one light: torch/spell light
+      // on the same snow (the tier-1 terrainLights albedo) is scaled alike.
+      hbFxAlbedo *= mix(1.0, snowExpo, powderW);
+    }
+  }
+
   // === Wave 2A — SNOW FOOTPRINT DARKENING (plan §3.4 item 3) =============
   // The other half of the print. Compressed snow is denser and self-shadowed,
   // so a darkening alone already reads as a footprint -- which is precisely why
@@ -3820,8 +3980,17 @@ ${TERRAIN_MICRO.gradUv
   // off snow onto rock fades out instead of ending at a cell edge, and applied
   // to modulated (the lit colour, pre cloud/CSM) so a print inside a cloud
   // shadow does not double-darken.
-  if (uSnowPrintEnabled > 0.5 && snowPrint > 0.0 && snowW > 0.0) {
+  // 2026-10-23: the shade is COLD (uSnowPrintTint -- a trench in sunlit snow is
+  // lit by blue skylight, not grey), and the sun-side relief from the print
+  // block models the walls: the one facing the sun (and the lip past it)
+  // brightens, the one facing away darkens, harder with a low sun.
+  if (uSnowPrintEnabled > 0.5 && snowW > 0.0 && (snowPrint > 0.0 || snowPrintRelief != 0.0)) {
     modulated *= mix(1.0, 1.0 - uSnowPrintDarken, snowPrint * snowW);
+    // (an unbound tint reads 0: fall back to neutral, never a black print)
+    vec3 printTint = dot(uSnowPrintTint, vec3(1.0)) > 0.0 ? uSnowPrintTint : vec3(1.0);
+    modulated *= mix(vec3(1.0), printTint, snowPrint * snowW);
+    float rimLowSun = 1.0 - 0.5 * clamp(sunDir.z, 0.0, 1.0);
+    modulated *= max(0.0, 1.0 + uSnowPrintRim * snowPrintRelief * snowW * rimLowSun);
   }
 
   // === Wave 3B — MUD PRINT DARKENING (plan §3.7 item 2) ==================
@@ -3872,35 +4041,66 @@ ${TERRAIN_MICRO.gradUv
   // === Wave 2A — SNOW CRYSTAL SPARKLE (plan §3.4 item 2) =================
   // vfx/components/glint.js's maths -- a Blinn half-vector lobe times a
   // time+hash twinkle -- with the metalness gate replaced by the SNOW FRACTION
-  // and the PER-INSTANCE hash replaced by a high-frequency WORLD-SPACE one
-  // (plan §3.4: "port that maths with a high-frequency world-space hash instead
-  // of the per-instance one"). There is no instance here: the terrain is one
-  // mesh, so vVfxHash does not exist and could not vary per crystal anyway.
+  // and the PER-INSTANCE hash replaced by a WORLD-SPACE one (plan 3.4: "port
+  // that maths with a high-frequency world-space hash instead of the
+  // per-instance one"). There is no instance here: the terrain is one mesh, so
+  // vVfxHash does not exist and could not vary per crystal anyway.
   //
-  // CAMERA-MOTION-DEPENDENT TWINKLE IS THE WHOLE EFFECT (plan §3.4: "a static
+  // CAMERA-MOTION-DEPENDENT TWINKLE IS THE WHOLE EFFECT (plan 3.4: "a static
   // sparkle texture reads as noise"). Two things produce it, and neither is the
-  // clock: (a) the lobe exponent is enormous (uSnowSparkleSharpness, 420 vs
-  // sand's 180), so a crystal flashes only when the sun/eye half-vector lands
-  // almost exactly on its facet -- walking or turning sweeps the half-vector
-  // across the field and different crystals pop; (b) the facet normals have a
-  // WIDE spread about the vertical, unlike sand's, because snow crystals lie at
-  // every angle and a flash must be able to come from any direction. The uTime
-  // term only keeps a STANDING camera from freezing into a static dot pattern.
+  // clock: (a) a tight lobe (uSnowSparkleSharpness), so a crystal flashes only
+  // when the sun/eye half-vector lands near its facet -- walking or turning
+  // sweeps the half-vector across the field and different crystals pop; (b)
+  // the facet normals have a WIDE spread about the vertical, unlike sand's,
+  // because snow crystals lie at every angle. The uTime term only keeps a
+  // STANDING camera from freezing into a static dot pattern.
+  //
+  // 2026-10-23 -- A GLINT IS A POINT. Each crystal cell (uSnowSparkleDensity per
+  // metre) holds ONE glint at a hashed position, drawn as a Gaussian whose
+  // sigma is uSnowSparkleCorePx SCREEN pixels: the cell offset is mapped to
+  // pixels through the inverse of the crystal grid's screen Jacobian, so the
+  // dot is round and 2-3 px at any range or view angle (it used to light the
+  // whole 2.4 cm cell: sub-pixel squares, i.e. aliasing). The Jacobian is
+  // taken from the RAW world position (smooth across cell and POM seams) in
+  // UNIFORM control flow -- at main() scope, before the per-fragment gate --
+  // so the derivatives are defined. Where one pixel
+  // spans too much of a cell along its worst axis the glint would alias, so it
+  // fades out by FOOTPRINT (the distance fade is now only a backstop). And a
+  // glint is DIRECT sun: the cloud/CSM factors are un-floored (their 0.3/0.45
+  // floors are ambient fill, which a specular flash does not have -- the water
+  // glint's rule) and it needs the sun above the horizon.
   //
   // NO GRAZING GATE, deliberately -- that is sand's signature (dune faces catch
-  // the light at a low angle). Snow glitters from directly above too, and
-  // gating it out would remove the effect exactly where a walking player sees
-  // the ground.
+  // the light at a low angle). Snow glitters from directly above too.
   //
   // WHERE IT SITS AND WHY: after the POM march with its crystal field anchored
-  // to the PARALLAX-CORRECTED point (plan §2.7.3 point 2), honouring the
-  // cellTouchesWater bypass, multiplied by cloudShadow * csmShadow (a sparkle
-  // is sunlight -- it must go out under a cloud), and EMISSIVE-ONLY: it is
-  // ADDED through iblSpec and never touches albedo, cellUv or any water term.
-  // Nothing in this block reads uPomEnabled, so the mid degrade is the same
-  // sparkle on an unrelieved surface.
+  // to the PARALLAX-CORRECTED point (plan 2.7.3 point 2), honouring the
+  // cellTouchesWater bypass, and EMISSIVE-ONLY: it is ADDED through iblSpec
+  // (so the SNOW EXPOSURE scale never dims it) and never touches albedo, cellUv
+  // or any water term. Nothing in this block reads uPomEnabled, so the mid
+  // degrade is the same sparkle on an unrelieved surface.
+  // The crystal grid's screen Jacobian. With ?terrainGradUv (default on) it is
+  // the shared top-of-main grid gradient (vGridUv is metres / 24, the same
+  // reuse the water footprint makes) so the program keeps its single
+  // derivative pair; with ?terrainGradUv=off it takes its own pair here, at
+  // main() scope -- uniform control flow, so the derivatives are defined.
+${TERRAIN_MICRO.gradUv
+    ? "  vec2 snowJx = gTerrainGridDx * (24.0 * uSnowSparkleDensity);\n  vec2 snowJy = gTerrainGridDy * (24.0 * uSnowSparkleDensity);"
+    : "  vec2 snowGrid = vec2(vWorldPos.x, -vWorldPos.z) * uSnowSparkleDensity;\n  vec2 snowJx = dFdx(snowGrid);\n  vec2 snowJy = dFdy(snowGrid);"}
   if (uSnowSparkleEnabled > 0.5 && snowW > 0.0 && !cellTouchesWater) {
     float snowFade = 1.0 - smoothstep(uSnowSparkleFadeStart, uSnowSparkleFadeEnd, vViewDepth);
+    // Footprint fade: cells per pixel along the worst screen axis.
+    float snowFoot = max(length(snowJx), length(snowJy));
+    snowFade *= 1.0 - smoothstep(0.35, 0.7, snowFoot);
+    // Direct sun only, and only with the sun up AND bright. THE NIGHT-SPECULAR
+    // FIX (the sand sparkle's exact term): retail's night sun parks 0.9 deg
+    // above the horizon (sunDir.z ~0.016) and uAcSunColor is colour only, so a
+    // 0..0.12 elevation ramp alone still flashed ~5 % glints all night. Off
+    // below ~3 deg, full by ~14 deg and dirBright 0.8 (|uAcSunVec|).
+    float snowDirect = clamp((cloudShadow - 0.3) / 0.7, 0.0, 1.0)
+                     * clamp((csmShadow - 0.45) / 0.55, 0.0, 1.0)
+                     * smoothstep(0.05, 0.25, sunDir.z) * min(length(uAcSunVec) * 1.25, 1.0);
+    snowFade *= snowDirect;
     if (snowFade > 0.001) {
       vec3 snowViewW = normalize(vWorldPos - cameraPosition);
       vec3 snowViewAc = vec3(snowViewW.x, -snowViewW.z, snowViewW.y);
@@ -3914,14 +4114,24 @@ ${TERRAIN_MICRO.gradUv
       vec3 crystalN = normalize(vec3((ch1 - 0.5) * 2.4, (ch2 - 0.5) * 2.4, 0.45 + ch3 * 1.1));
       vec3 snowHalfAc = normalize(sunDir - snowViewAc);
       float snowLobe = pow(clamp(dot(crystalN, snowHalfAc), 0.0, 1.0), uSnowSparkleSharpness);
+      // The glint's centre inside its cell (kept off the edges so the dot is
+      // not cut by the neighbour cell), and the offset to it in PIXELS.
+      vec2 snowC = vec2(0.25) + 0.5 * vec2(fragHash21(ccell + vec2(3.7, 41.3)),
+                                           fragHash21(ccell + vec2(87.1, 23.9)));
+      vec2 snowD = fract(crystalXy) - snowC;
+      float snowDet = snowJx.x * snowJy.y - snowJy.x * snowJx.y;
+      float snowInvDet = 1.0 / (abs(snowDet) > 1e-12 ? snowDet : 1e-12);
+      vec2 snowPx = vec2(snowJy.y * snowD.x - snowJy.x * snowD.y,
+                         snowJx.x * snowD.y - snowJx.y * snowD.x) * snowInvDet;
+      float snowSig = max(uSnowSparkleCorePx, 0.25);
+      float snowCore = exp(-dot(snowPx, snowPx) / (2.0 * snowSig * snowSig));
       // glint.js's phase term: deterministic in (uTime + hash), no Math.random
       // equivalent. Floored at 0.3 so a flashing crystal is never fully erased
       // by the clock -- the camera owns the twinkle, the clock only animates it.
       float snowPhase = uTime * 1.1 + ch1 * 6.2831853 + ch2 * 23.0;
       float snowTwinkle = 0.3 + 0.7 * (0.5 + 0.5 * sin(snowPhase));
       iblSpec += uAcSunColor * (uSnowSparkleStrength * snowW * snowFade
-                                * snowLobe * snowTwinkle)
-               * cloudShadow * csmShadow;
+                                * snowLobe * snowTwinkle * snowCore);
     }
   }
 
@@ -3959,7 +4169,22 @@ ${TERRAIN_MICRO.gradUv
     // "roughness down" means physically.
     float iceLobe = pow(clamp(dot(iceN, iceHalfAc), 0.0, 1.0),
                         mix(24.0, 220.0, clamp(uIceGloss, 0.0, 1.0)));
-    vec3 iceSpec = uAcSunColor * (iceLobe * uIceSpecStrength);
+    // 2026-10-24 THE NIGHT-SPECULAR FIX (the sand sparkle's gate). uAcSunColor
+    // is the light's COLOUR only; retail brightness rides |uAcSunVec|
+    // (dirBright: 0.5-0.9 by day, 0.2-0.4 at night) and the night sun parks
+    // 0.9 deg above the horizon (sunDir.z ~0.016), so this glint used to shine
+    // at full strength all night. Same elevation ramp as sand/snow (off below
+    // ~3 deg, full by ~14.5 deg); the brightness term saturates at dirBright
+    // ~0.48 (x2.1, where sand's x1.25 saturates at 0.8) because ice SHIPS: the
+    // lowest DAYTIME dirBright in all 20 Region day groups is 0.50 (the 8 Rainy
+    // groups' morning; Sunny/Clear/Cloudy are 0.7-0.9), so every authored
+    // daytime keyframe (pitch >= 20 deg) is exactly 1.0, with a 5 % float
+    // margin, and the signed-off day look is unchanged on every day group
+    // (x1.43 dimmed a Rainy morning to 0.715). Retail night is exactly 0.
+    // Applied to the SUN lobe only: the env term below is sky light, already
+    // dimmed at night through uEnvIntensity (ibl_environment.js night ramp).
+    float iceSunGate = smoothstep(0.05, 0.25, sunDir.z) * min(length(uAcSunVec) * 2.1, 1.0);
+    vec3 iceSpec = uAcSunColor * (iceLobe * uIceSpecStrength * iceSunGate);
     if (uIblEnabled > 0.5) {
       // ac(x,y,z) -> world(x,z,-y), the same space bridge the PBR env term and
       // the water sheen use. Low mip = near-mirror; roughness pushes it up the
@@ -3971,6 +4196,95 @@ ${TERRAIN_MICRO.gradUv
       iceSpec += iceEnv * iceFres * uEnvIntensity * uIceEnvStrength;
     }
     iblSpec += iceSpec * iceW;
+  }
+
+  // === 2026-10-23 - OBSIDIAN GLASS (FAM_OBSIDIAN, ?terrainObsidian) =======
+  // Code 6 (ObsidianPlain: the Obsidian Plains, the Dark Isles, the 0xC8ED
+  // "volcano" spot) split out of the volcano family on the owner's call: it
+  // is volcanic GLASS, not lava. Two terms, both weighted by the bilinear
+  // obsidianW so they feather at a type boundary, both added through iblSpec
+  // (the albedo, cellUv and every water term are untouched), and NO emissive:
+  //   (1) SHEEN - a dark purple grazing-angle sheen: Schlick Fresnel (glass,
+  //       F0 0.045, capped) of a BLURRED sky reflection, tinted by
+  //       uObsidianSheenColor and broken into glassy flows by a ~14 m noise
+  //       patch, about a gently undulating normal. Sky light, so not shadowed.
+  //   (2) GLINTS - sparse, sharp sun glints off hashed glass facets (the snow
+  //       crystal recipe at glass scale: facet normals tilted up to ~55 deg off
+  //       the macro normal so the noon half vector is reachable under a chase
+  //       camera, a round pixel-space core, faded where a facet drops under a
+  //       pixel). SUNLIGHT: out under a cloud, in a cast shadow, at night.
+  // Sited after the cast shadows resolve, beside the ice treatment (same
+  // reason: the PBR block above is dead under the default retail Gouraud), and
+  // it honours the cellTouchesWater bypass. Nothing here reads uPomEnabled.
+  // The facet grid's screen Jacobian, at main() scope (uniform control flow):
+  // the shared top-of-main grid gradient with ?terrainGradUv (default on).
+${TERRAIN_MICRO.gradUv
+    ? "  vec2 obsJx = gTerrainGridDx * (24.0 * uObsidianGlintDensity);\n  vec2 obsJy = gTerrainGridDy * (24.0 * uObsidianGlintDensity);"
+    : "  vec2 obsGrid = vec2(vWorldPos.x, -vWorldPos.z) * uObsidianGlintDensity;\n  vec2 obsJx = dFdx(obsGrid);\n  vec2 obsJy = dFdy(obsGrid);"}
+  if (uObsidianEnabled > 0.5 && obsidianW > 0.0 && !cellTouchesWater) {
+    vec3 obsViewW = normalize(vWorldPos - cameraPosition);
+    vec3 obsViewAc = vec3(obsViewW.x, -obsViewW.z, obsViewW.y);
+    // POM-corrected AC ground position (world(x,y,z) = ac(x,z,-y)).
+    vec2 obsShift = (cellUv - vec2(fu, fv)) * 24.0;
+    vec2 obsGp = vec2(vWorldPos.x, -vWorldPos.z) + obsShift;
+
+    // (1) SHEEN
+    float obsA = fragValueNoise2D(obsGp * 0.071);
+    float obsB = fragValueNoise2D(obsGp * 0.31 + vec2(17.3, 4.1));
+    float obsC = fragValueNoise2D(obsGp * 0.31 + vec2(2.9, 33.7));
+    float obsGlassy = 0.45 + 0.55 * smoothstep(0.3, 0.72, obsA);
+    vec3 obsN = normalize(geomN + vec3((obsB - 0.5) * 0.3, (obsC - 0.5) * 0.3, 0.0));
+    vec3 obsNW = normalize(vec3(obsN.x, obsN.z, -obsN.y));
+    float obsCos = clamp(dot(-obsViewW, obsNW), 0.0, 1.0);
+    float obsFres = min(0.045 + 0.955 * pow(1.0 - obsCos, 5.0), 0.6);
+    vec3 obsSky = uAcAmbColor * uAcAmbLevel;
+    if (uIblEnabled > 0.5) {
+      vec3 obsRefl = reflect(obsViewW, obsNW);
+      obsRefl.y = abs(obsRefl.y); // never mirror the ground half of the cube
+      obsSky = textureLod(uEnvCube, obsRefl, 3.0).rgb;
+    }
+    float obsSheenFade = 1.0 - 0.6 * smoothstep(uObsidianSheenFade.x, uObsidianSheenFade.y, vViewDepth);
+    iblSpec += obsSky * uObsidianSheenColor
+             * (uObsidianSheen * obsFres * obsGlassy * obsSheenFade * obsidianW);
+
+    // (2) GLINTS
+    float obsFade = 1.0 - smoothstep(uObsidianGlintFade.x, uObsidianGlintFade.y, vViewDepth);
+    float obsFoot = max(length(obsJx), length(obsJy));
+    obsFade *= 1.0 - smoothstep(0.4, 0.9, obsFoot);
+    // 2026-10-24 THE NIGHT-SPECULAR FIX: the sand sparkle's exact sun term
+    // (elevation smoothstep 0.05..0.25 x min(1.25 |uAcSunVec|, 1)). The old
+    // smoothstep(0.0, 0.12) elevation ramp was ~4.7 % at the retail night pitch
+    // (0.9 deg) and uSunGlint is 1.0 whenever ?nightRamp=off, so the glints
+    // flashed all night there. uSunGlint stays (1 by day). The SHEEN above is
+    // sky light (env cube or ambient), not sun, so it is not gated here.
+    obsFade *= clamp((cloudShadow - 0.3) / 0.7, 0.0, 1.0)
+             * clamp((csmShadow - 0.45) / 0.55, 0.0, 1.0)
+             * smoothstep(0.05, 0.25, sunDir.z) * min(length(uAcSunVec) * 1.25, 1.0) * uSunGlint;
+    if (obsFade > 0.001) {
+      vec2 facetXy = obsGp * uObsidianGlintDensity;
+      vec2 fcell = floor(facetXy);
+      if (fragHash21(fcell + vec2(91.7, 47.3)) < uObsidianGlintFrac) {
+        float fh1 = fragHash21(fcell + vec2(7.3, 61.1));
+        float fh2 = fragHash21(fcell + vec2(29.9, 3.7));
+        float fh3 = fragHash21(fcell + vec2(13.1, 77.9));
+        vec3 facetN = normalize(geomN * (0.6 + 0.8 * fh3)
+                                + vec3((fh1 - 0.5) * 2.0, (fh2 - 0.5) * 2.0, 0.0));
+        vec3 obsHalf = normalize(sunDir - obsViewAc);
+        float obsLobe = pow(clamp(dot(facetN, obsHalf), 0.0, 1.0), uObsidianGlintSharpness);
+        // The glint's centre inside its facet, and the offset to it in PIXELS
+        // (the inverse of the facet grid's screen Jacobian).
+        vec2 obsCtr = vec2(0.25) + 0.5 * vec2(fragHash21(fcell + vec2(3.7, 41.3)),
+                                              fragHash21(fcell + vec2(87.1, 23.9)));
+        vec2 obsD = fract(facetXy) - obsCtr;
+        float obsDet = obsJx.x * obsJy.y - obsJy.x * obsJx.y;
+        float obsInvDet = 1.0 / (abs(obsDet) > 1e-12 ? obsDet : 1e-12);
+        vec2 obsPx = vec2(obsJy.y * obsD.x - obsJy.x * obsD.y,
+                          obsJx.x * obsD.y - obsJx.y * obsD.x) * obsInvDet;
+        float obsSig = max(uObsidianGlintCorePx, 0.25);
+        float obsCore = exp(-dot(obsPx, obsPx) / (2.0 * obsSig * obsSig));
+        iblSpec += uAcSunColor * (uObsidianGlint * obsidianW * obsFade * obsLobe * obsCore);
+      }
+    }
   }
 
   // === Wave 3B — WET MUD SHEEN (plan §3.7 items 2 + 4) ===================
@@ -4016,7 +4330,13 @@ ${TERRAIN_MICRO.gradUv
     vec3 mudHalfAc = normalize(sunDir - mudViewAc);
     float mudLobe = pow(clamp(dot(mudN, mudHalfAc), 0.0, 1.0),
                         mix(12.0, 160.0, 1.0 - mudRough));
-    vec3 mudSpec = uAcSunColor * (mudLobe * uMudWetSpec);
+    // 2026-10-24 THE NIGHT-SPECULAR FIX: uAcSunColor is colour only, so this
+    // sun lobe shone at full strength under the retail night sun (0.9 deg up,
+    // dirBright 0.25). The sand sparkle's exact gate: exactly 0 at night, 1 at
+    // noon (dirBright 0.8). The env term below is sky light (uEnvIntensity).
+    // The mud PRINT has no specular at all (darkening + dent only).
+    float mudSunGate = smoothstep(0.05, 0.25, sunDir.z) * min(length(uAcSunVec) * 1.25, 1.0);
+    vec3 mudSpec = uAcSunColor * (mudLobe * uMudWetSpec * mudSunGate);
     if (uIblEnabled > 0.5) {
       // ac(x,y,z) -> world(x,z,-y), the same space bridge the PBR env term, the
       // water sheen and the ice treatment use.
@@ -4054,6 +4374,19 @@ ${TERRAIN_MICRO.gradUv
   // The mid-tier degrade is coherent by construction: POM is high/ultra only,
   // and with POM off the correction term is exactly zero, leaving the same
   // sparkle on an unrelieved surface (plan §2.7.3 point 4).
+  //
+  // 2026-10-23 retune ("essentially invisible" at noon on the 1070). A glint
+  // is a tiny MIRROR: far brighter than the diffuse sand and rare. So: sparse
+  // mirror cells (uSandSparkleFacetFrac), facets spread wide enough about the
+  // MACRO normal that the noon half-vector is reachable with the sun behind
+  // the camera, a sharp lobe (uSandSparkleSharpness), and a FOOTPRINT-aware
+  // shape from wFoot (metres per pixel, the derivative pair the water sheen
+  // already takes at main scope): near the camera a cell spans several pixels
+  // and the glint is a round point inside it, not a lit square; far away one
+  // pixel spans many cells, so the chance that the pixel holds a facet rises
+  // with the count and the energy is shared out by it (the mean is kept, the
+  // crawl is not). The grazing term is now a weight, not a gate: a chase
+  // camera sees the sand at 10-25 degrees, where the v1 square killed ~60 %.
   vec3 sandSparkle = vec3(0.0);
   if (uSandSparkleEnabled > 0.5 && sandW > 0.0 && !cellTouchesWater) {
     float sparkFade = 1.0 - smoothstep(uSandSparkleFadeStart, uSandSparkleFadeEnd, vViewDepth);
@@ -4061,29 +4394,46 @@ ${TERRAIN_MICRO.gradUv
       // View direction in AC space (z-up): world(x,y,z) = ac(x,z,-y).
       vec3 viewW = normalize(vWorldPos - cameraPosition);
       vec3 viewAc = vec3(viewW.x, -viewW.z, viewW.y);
-      // GRAZING GATE: 1 when the eye skims the surface, 0 looking straight
-      // down. Real sand only flashes at a low angle; without this the whole
-      // dune glitters from above and reads as noise.
+      // GRAZING WEIGHT: 1 when the eye skims the surface, 0.35 looking straight
+      // down (dune faces catch the light at a low angle; from above the glints
+      // still exist, just fewer of them reach the eye).
       float graze = 1.0 - clamp(dot(geomN, -viewAc), 0.0, 1.0);
-      graze = graze * graze;
-      if (graze > 0.001) {
-        // POM-corrected AC ground position, then quantised to grain cells.
-        vec2 pomShift = (cellUv - vec2(fu, fv)) * 24.0;
-        vec2 grainXy = (vec2(vWorldPos.x, -vWorldPos.z) + pomShift) * uSandSparkleDensity;
-        vec2 gcell = floor(grainXy);
-        float gh1 = fragHash21(gcell);
-        float gh2 = fragHash21(gcell + vec2(37.7, 11.3));
-        // A hashed micro-facet about the vertical. Amplitude is deliberately
-        // wide: a facet that never faces the half-vector never flashes.
-        vec3 grainN = normalize(vec3((gh1 - 0.5) * 1.6, (gh2 - 0.5) * 1.6, 1.0));
+      graze = 0.35 + 0.65 * graze * graze;
+      // POM-corrected AC ground position, then quantised to grain cells.
+      vec2 pomShift = (cellUv - vec2(fu, fv)) * 24.0;
+      vec2 grainXy = (vec2(vWorldPos.x, -vWorldPos.z) + pomShift) * uSandSparkleDensity;
+      vec2 gcell = floor(grainXy);
+      float gh1 = fragHash21(gcell);
+      float gh2 = fragHash21(gcell + vec2(37.7, 11.3));
+      float gh3 = fragHash21(gcell + vec2(71.3, 53.9));
+      // Grain cells under one pixel (long axis of the footprint), at least 1.
+      float gpp = max(wFoot * uSandSparkleDensity, 0.001);
+      float cellsPerPx = max(gpp, 1.0);
+      if (gh3 < min(1.0, uSandSparkleFacetFrac * cellsPerPx)) {
+        // A hashed mirror facet about the MACRO normal, tilted up to ~48 deg
+        // along an axis and ~57 deg on the diagonal.
+        vec3 grainN = normalize(geomN + vec3((gh1 - 0.5) * 2.2, (gh2 - 0.5) * 2.2, 0.0));
         vec3 halfAc = normalize(sunDir - viewAc);
-        float lobe = pow(clamp(dot(grainN, halfAc), 0.0, 1.0), 180.0);
+        float lobe = pow(clamp(dot(grainN, halfAc), 0.0, 1.0), uSandSparkleSharpness);
+        // Round point at a hashed spot in the cell, never thinner than ~1 px.
+        vec2 gpt = vec2(fragHash21(gcell + vec2(5.1, 91.7)), gh1) * 0.5 + 0.25;
+        float gRad = max(0.22, 0.75 * gpp);
+        float gDot = 1.0 - smoothstep(gRad * 0.45, gRad, length(fract(grainXy) - gpt));
         // glint.js's phase term: time + hash, so a facet twinkles rather than
         // holding a constant highlight. Deterministic (uTime + hash only).
+        // Squared toward short flashes, floored so the camera, not the clock,
+        // owns most of the twinkle.
         float phase = uTime * 1.7 + gh1 * 6.2831853 + gh2 * 17.0;
         float twinkle = 0.5 + 0.5 * sin(phase);
-        sandSparkle = uAcSunColor * (uSandSparkleStrength * sandW * graze
-                                     * sparkFade * lobe * twinkle);
+        twinkle = 0.25 + 0.75 * twinkle * twinkle;
+        // THE NIGHT-SPECULAR FIX. uAcSunColor is the light's COLOUR only: the
+        // retail brightness rides uAcSunVec's MAGNITUDE (dirBright, ~0.7-0.8
+        // by day, 0.25 at night), and the night "sun" parks 0.9 deg above the
+        // horizon. A glint is direct sunlight, so it needs the sun up AND
+        // bright: off below ~3 deg, full by ~14 deg and dirBright 0.8.
+        float sunGlint = smoothstep(0.05, 0.25, sunDir.z) * min(length(uAcSunVec) * 1.25, 1.0);
+        sandSparkle = uAcSunColor * (uSandSparkleStrength * sandW * graze * sunGlint
+                                     * sparkFade * lobe * twinkle * gDot / cellsPerPx);
       }
     }
   }
@@ -4235,6 +4585,27 @@ async function fetchRoadCanvasOnly(wasmExports) {
 }
 
 /**
+ * 2026-10-24 — THE MASTER KILL SWITCHES for the terrain-VFX SHADER terms:
+ * `?visual=off` (`vfx_catalog.js::visualEnabled`, the suite master) and
+ * `?terrainVfx=off` (`vfx_flags.js::terrainVfxEnabled`, the programme master).
+ * Every family shader gate in `resolveTerrainRingOpts` (sand/snow sparkle, snow
+ * prints + exposure, ice + its refraction, lava crack glow, obsidian, mud prints
+ * + wetness) is `terrainVfxShaderLive() && <family master> && <effect flag>`.
+ * Before this the gates read the family flags alone, so both kill switches
+ * left every shader term live — including the SHIPPED ice — while the docs said
+ * they killed it. NOTE this covers the SHADER only: `?terrainVfx=off` disables
+ * the spine (`terrain_vfx.js::initTerrainVfx`), but `?visual=off` reaches only
+ * `vfxEffectEnabled` consumers — the spine does not read it and the grass/rock
+ * masters ignore it, so the shipped grass blades and rock pebbles/grit keep
+ * running under `?visual=off` (verified 2026-10-24; a spine-side fix, not here).
+ * `?wireframe=1` is the third kill and never builds this shader.
+ * Exported for the node tests (pure: two memoised URL readers).
+ */
+export function terrainVfxShaderLive() {
+  return visualEnabled() === true && terrainVfxEnabled() === true;
+}
+
+/**
  * Resolve the once-per-ring opts the per-LB baker consumes. Reads
  * quality flags / detail-normal array off `scene3d`, computes the
  * shared bitmasks, and (optionally) builds the atlas + road textures
@@ -4308,6 +4679,7 @@ export async function resolveTerrainRingOpts(
       snowSparkleEnabled: false,
       snowSparkleCodeMask: 0,
       snowPrintEnabled: false,
+      snowExposureEnabled: false,
       iceEnabled: false,
       iceCodeMask: 0,
       iceRefractionEnabled: false,
@@ -4316,6 +4688,7 @@ export async function resolveTerrainRingOpts(
       crackGlowEnabled: false,
       volcanoCodeMask: 0,
       obsidianCodeMask: 0,
+      obsidianEnabled: false,
       atlasTexture: null,
       roadTexture: null,
       roadCanvas: null,
@@ -4963,6 +5336,9 @@ export async function resolveTerrainRingOpts(
     };
   }
 
+  // 2026-10-24 — `?visual=off` and `?terrainVfx=off` kill EVERY family shader
+  // gate below (see `terrainVfxShaderLive`); read once per ring like the flags.
+  const terrainVfxLive = terrainVfxShaderLive();
   const ringOpts = {
     centreLbX,
     centreLbY,
@@ -4991,7 +5367,7 @@ export async function resolveTerrainRingOpts(
     // is a strict no-op. The code mask is DERIVED from terrain_families.js
     // FAM_SAND through `sandCodeBitmask()` — the same "never hardcode a code
     // range" rule `uWaterSurfaceCodeMask` follows.
-    sandSparkleEnabled: terrainSandEnabled() && terrainSandSparkleEnabled(),
+    sandSparkleEnabled: terrainVfxLive && terrainSandEnabled() && terrainSandSparkleEnabled(),
     sandSparkleCodeMask: computeCodeBitmask(TERRAIN_SAND_CODES),
     // Wave 2A — SNOW / ICE (plan §3.4 items 2/3/4). Composed exactly like the
     // sand row: a FAMILY MASTER and a per-effect flag, both STRICT `=== "on"`
@@ -5000,25 +5376,34 @@ export async function resolveTerrainRingOpts(
     // INDEPENDENT masters on purpose (plan §3.4: one is particles+shader, the
     // other a material change, and bisecting them separately matters). Both
     // masks are DERIVED from terrain_families.js, never a hardcoded range.
-    snowSparkleEnabled: terrainSnowEnabled() && terrainSnowSparkleEnabled(),
+    snowSparkleEnabled: terrainVfxLive && terrainSnowEnabled() && terrainSnowSparkleEnabled(),
     snowSparkleCodeMask: computeCodeBitmask(TERRAIN_SNOW_CODES),
     // The print's SECOND gate (a trail map bound this frame) is pushed per
     // frame by scene3d/terrain_snow.js; this is only the flag.
-    snowPrintEnabled: terrainSnowEnabled() && terrainSnowPrintsEnabled(),
-    iceEnabled: terrainIceEnabled(),
+    snowPrintEnabled: terrainVfxLive && terrainSnowEnabled() && terrainSnowPrintsEnabled(),
+    // 2026-10-23 SNOW EXPOSURE rides the family MASTER (it is what lets every
+    // snow effect read at all, so it is not a separate sub-effect flag).
+    snowExposureEnabled: terrainVfxLive && terrainSnowEnabled(),
+    // ICE is SHIPPED (TERRAIN_VFX_PROMOTED.ice, high/ultra), so this is the gate
+    // where the 2026-10-24 kill-switch fix is user-visible: `?visual=off` /
+    // `?terrainVfx=off` now return codes 2/27 to plain retail terrain.
+    iceEnabled: terrainVfxLive && terrainIceEnabled(),
     iceCodeMask: computeCodeBitmask(TERRAIN_ICE_MATERIAL_CODES),
-    iceRefractionEnabled: terrainIceEnabled() && terrainIceRefractionEnabled(),
+    iceRefractionEnabled: terrainVfxLive && terrainIceEnabled() && terrainIceRefractionEnabled(),
 
-    // Wave 2B — VOLCANO CRACK GLOW + OBSIDIAN (plan §3.6 items 3 + 5). Composed
-    // exactly like the sand gate above: the FAMILY MASTER and the per-effect
-    // flag (`scene3d/vfx_flags.js`, both STRICT `=== "on"` opt-ins that ship
-    // OFF), so an absent flag leaves `uCrackGlowEnabled` 0.0 and the fragment
-    // block is a strict no-op. ONE gate covers both terms: they are one edit
-    // and one eye-test. The masks are DERIVED — FAM_VOLCANO from
-    // terrain_families.js, obsidian from the retail ObsidianPlain enum value.
-    crackGlowEnabled: terrainVolcanoEnabled() && terrainCrackGlowEnabled(),
+    // Wave 2B — VOLCANO CRACK GLOW (plan §3.6 item 3). Composed exactly like
+    // the sand gate above: the FAMILY MASTER and the per-effect flag
+    // (`scene3d/vfx_flags.js`, both STRICT `=== "on"` opt-ins that ship OFF),
+    // so an absent flag leaves `uCrackGlowEnabled` 0.0 and the fragment block
+    // is a strict no-op. The mask is DERIVED — FAM_VOLCANO (lava, code 25 since
+    // the 2026-10-23 split) from terrain_families.js.
+    crackGlowEnabled: terrainVfxLive && terrainVolcanoEnabled() && terrainCrackGlowEnabled(),
     volcanoCodeMask: computeCodeBitmask(TERRAIN_VOLCANO_CODES),
+    // 2026-10-23 — OBSIDIAN GLASS: its own family (FAM_OBSIDIAN, code 6) and
+    // its own master (`?terrainObsidian`, strict, ships OFF), independent of
+    // the volcano flags. The mask is DERIVED from terrain_families.js.
     obsidianCodeMask: computeCodeBitmask(TERRAIN_OBSIDIAN_CODES),
+    obsidianEnabled: terrainVfxLive && terrainObsidianEnabled(),
 
     // Wave 3B — MUD PRINTS + WET MUD (plan §3.7 items 2 + 4). Composed exactly
     // like every terrain-VFX gate above: the FAMILY MASTER and the per-effect
@@ -5030,8 +5415,8 @@ export async function resolveTerrainRingOpts(
     // (a trail map bound this frame) is pushed per frame by
     // scene3d/terrain_dirt.js; this is only the flag. Both masks are DERIVED
     // from terrain_families.js, never a hardcoded range.
-    mudPrintEnabled: terrainDirtEnabled() && terrainMudPrintsEnabled(),
-    mudWetnessEnabled: terrainDirtEnabled() && terrainMudWetnessEnabled(),
+    mudPrintEnabled: terrainVfxLive && terrainDirtEnabled() && terrainMudPrintsEnabled(),
+    mudWetnessEnabled: terrainVfxLive && terrainDirtEnabled() && terrainMudWetnessEnabled(),
     dirtCodeMask: computeCodeBitmask(TERRAIN_DIRT_CODES),
     clayCodeMask: computeCodeBitmask(TERRAIN_CLAY_CODES),
     atlasTexture,
@@ -6618,6 +7003,9 @@ export async function bakeTerrainForLandblock(
       uSandSparkleDensity: { value: DEFAULT_SAND_SPARKLE_DENSITY },
       uSandSparkleFadeStart: { value: DEFAULT_SAND_SPARKLE_FADE_START },
       uSandSparkleFadeEnd: { value: DEFAULT_SAND_SPARKLE_FADE_END },
+      // 2026-10-23 — live knobs via window.__terrainSand.sparkle({...}).
+      uSandSparkleSharpness: { value: DEFAULT_SAND_SPARKLE_SHARPNESS },
+      uSandSparkleFacetFrac: { value: DEFAULT_SAND_SPARKLE_FACET_FRAC },
       // Wave 2A — SNOW / ICE (plan §3.4). Ships OFF: every gate below is
       // seeded from a flag that requires an exact `=== "on"`, so the three
       // fragment blocks are strict no-ops on a bare-default boot.
@@ -6630,6 +7018,9 @@ export async function bakeTerrainForLandblock(
       uSnowSparkleSharpness: { value: DEFAULT_SNOW_SPARKLE_SHARPNESS },
       uSnowSparkleFadeStart: { value: DEFAULT_SNOW_SPARKLE_FADE_START },
       uSnowSparkleFadeEnd: { value: DEFAULT_SNOW_SPARKLE_FADE_END },
+      uSnowSparkleCorePx: { value: DEFAULT_SNOW_SPARKLE_CORE_PX },
+      // 2026-10-23 SNOW EXPOSURE — the snow family master; 1.0 = strict no-op.
+      uSnowExposure: { value: opts.snowExposureEnabled ? DEFAULT_SNOW_EXPOSURE : 1.0 },
       // Footprints. uSnowTrailMap / uSnowTrailCenter / uSnowTrailRadius /
       // uSnowTrailEnabled are seeded INERT and refreshed each frame by
       // scene3d/terrain_snow.js over scene3d.terrainMaterials — the same
@@ -6640,6 +7031,13 @@ export async function bakeTerrainForLandblock(
       uSnowPrintEnabled: { value: opts.snowPrintEnabled ? 1.0 : 0.0 },
       uSnowPrintDepth: { value: DEFAULT_SNOW_PRINT_DEPTH },
       uSnowPrintDarken: { value: DEFAULT_SNOW_PRINT_DARKEN },
+      uSnowPrintTint: {
+        value: new THREE.Vector3(
+          DEFAULT_SNOW_PRINT_TINT[0], DEFAULT_SNOW_PRINT_TINT[1], DEFAULT_SNOW_PRINT_TINT[2],
+        ),
+      },
+      uSnowPrintRim: { value: DEFAULT_SNOW_PRINT_RIM },
+      uSnowPrintRimM: { value: DEFAULT_SNOW_PRINT_RIM_M },
       uSnowTrailMap: { value: null },
       uSnowTrailCenter: { value: new THREE.Vector2(0, 0) },
       uSnowTrailRadius: { value: 48.0 },
@@ -6656,21 +7054,22 @@ export async function bakeTerrainForLandblock(
       uIceRefractEnabled: { value: opts.iceRefractionEnabled ? 1.0 : 0.0 },
       uIceRefractAmount: { value: DEFAULT_ICE_REFRACT_AMOUNT },
 
-      // Wave 2B — VOLCANO CRACK GLOW + OBSIDIAN (plan §3.6 items 3 + 5). Ships
-      // OFF: the gate is `?terrainVolcano=on && ?terrainCrackGlow` composed in
-      // resolveTerrainRingOpts, so an absent flag leaves the value 0.0 and the
-      // fragment block is a strict no-op. Masks derived from
-      // terrain_families.js FAM_VOLCANO / the retail ObsidianPlain enum.
+      // Wave 2B — VOLCANO CRACK GLOW (plan §3.6 item 3), lava (code 25) only
+      // since the 2026-10-23 split. Ships OFF: the gate is `?terrainVolcano=on
+      // && ?terrainCrackGlow` composed in resolveTerrainRingOpts, so an absent
+      // flag leaves the value 0.0 and the fragment block is a strict no-op.
+      // Mask derived from terrain_families.js FAM_VOLCANO. The tuning values
+      // are live-overridable through `window.__terrainVolcano.tune({...})`
+      // (terrain_volcano.js pushes them onto scene3d.terrainMaterials).
       uCrackGlowEnabled: { value: opts.crackGlowEnabled ? 1.0 : 0.0 },
       uVolcanoCodeMask: {
         value: Number.isInteger(opts.volcanoCodeMask) ? opts.volcanoCodeMask : 0,
       },
-      uObsidianCodeMask: {
-        value: Number.isInteger(opts.obsidianCodeMask) ? opts.obsidianCodeMask : 0,
-      },
       uCrackGlowStrength: { value: DEFAULT_CRACK_GLOW_STRENGTH },
-      uCrackGlowDensity: { value: DEFAULT_CRACK_GLOW_DENSITY },
-      uCrackGlowWidth: { value: DEFAULT_CRACK_GLOW_WIDTH },
+      uCrackGlowDay: { value: DEFAULT_CRACK_GLOW_DAY },
+      uCrackGlowHeat: {
+        value: new THREE.Vector2(DEFAULT_CRACK_GLOW_HEAT[0], DEFAULT_CRACK_GLOW_HEAT[1]),
+      },
       uCrackGlowColor: {
         value: new THREE.Vector3(
           DEFAULT_CRACK_GLOW_COLOR[0],
@@ -6678,15 +7077,39 @@ export async function bakeTerrainForLandblock(
           DEFAULT_CRACK_GLOW_COLOR[2],
         ),
       },
+      uCrackGlowPulse: { value: DEFAULT_CRACK_GLOW_PULSE },
       // Pushed each frame by loop.js::tickTerrainUTime from the shared
       // oscillator registry — see the GLSL declaration for why it is a PUSH and
       // not a by-reference binding (terrain_batch.js clones uniform values).
       uCrackGlowBreath: { value: DEFAULT_CRACK_GLOW_BREATH },
       uCrackGlowFadeStart: { value: DEFAULT_CRACK_GLOW_FADE_START },
       uCrackGlowFadeEnd: { value: DEFAULT_CRACK_GLOW_FADE_END },
-      uObsidianShininess: { value: DEFAULT_OBSIDIAN_SHININESS },
-      uObsidianSpecular: { value: DEFAULT_OBSIDIAN_SPECULAR },
-      uObsidianEnv: { value: DEFAULT_OBSIDIAN_ENV },
+      // 2026-10-23 — OBSIDIAN GLASS (code 6, FAM_OBSIDIAN). Its own master,
+      // `?terrainObsidian` (strict, ships OFF). Live-overridable through
+      // `window.__terrainObsidian.tune({...})` (terrain_obsidian.js).
+      uObsidianEnabled: { value: opts.obsidianEnabled ? 1.0 : 0.0 },
+      uObsidianCodeMask: {
+        value: Number.isInteger(opts.obsidianCodeMask) ? opts.obsidianCodeMask : 0,
+      },
+      uObsidianGlint: { value: DEFAULT_OBSIDIAN_GLINT },
+      uObsidianGlintDensity: { value: DEFAULT_OBSIDIAN_GLINT_DENSITY },
+      uObsidianGlintFrac: { value: DEFAULT_OBSIDIAN_GLINT_FRAC },
+      uObsidianGlintSharpness: { value: DEFAULT_OBSIDIAN_GLINT_SHARPNESS },
+      uObsidianGlintCorePx: { value: DEFAULT_OBSIDIAN_GLINT_CORE_PX },
+      uObsidianGlintFade: {
+        value: new THREE.Vector2(DEFAULT_OBSIDIAN_GLINT_FADE[0], DEFAULT_OBSIDIAN_GLINT_FADE[1]),
+      },
+      uObsidianSheen: { value: DEFAULT_OBSIDIAN_SHEEN },
+      uObsidianSheenColor: {
+        value: new THREE.Vector3(
+          DEFAULT_OBSIDIAN_SHEEN_COLOR[0],
+          DEFAULT_OBSIDIAN_SHEEN_COLOR[1],
+          DEFAULT_OBSIDIAN_SHEEN_COLOR[2],
+        ),
+      },
+      uObsidianSheenFade: {
+        value: new THREE.Vector2(DEFAULT_OBSIDIAN_SHEEN_FADE[0], DEFAULT_OBSIDIAN_SHEEN_FADE[1]),
+      },
 
       // Wave 3B — MUD PRINTS + WET MUD (plan §3.7 items 2 + 4). Ships OFF: the
       // gates are `?terrainDirt=on && ?terrainMudPrints` / `?terrainMudWetness`

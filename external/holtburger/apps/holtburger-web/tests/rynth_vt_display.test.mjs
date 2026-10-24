@@ -122,7 +122,7 @@ function makePage({ search = "" } = {}) {
 
 console.log("— plugins/rynth-vt/display.js");
 
-await check("no session yet (before login): nothing touched; login → the defaults apply (60 fps, steep tint shown)", async () => {
+await check("no session yet (before login): nothing touched; login → the defaults apply (60 fps, steep tint off)", async () => {
   const p = makePage();
   const timers = fakeTimers();
   const ov = fakeOverlay();
@@ -137,12 +137,13 @@ await check("no session yet (before login): nothing touched; login → the defau
   timers.fire();
   await flush();
   assert.deepEqual(p.caps, [60], "EnableFPSLimit on by default, the focused rate");
-  assert.equal(ov.installs, 1);
-  assert.deepEqual(ov.shows, [true], "ShowTerrainPassability on by default");
+  // 2026-10-23 — ShowTerrainPassability is OFF by default (owner): nothing loads or shows.
+  assert.equal(ov.installs, 0, "the overlay module is not even loaded while the option is off");
+  assert.deepEqual(ov.shows, [], "ShowTerrainPassability off by default");
   const st = h.status();
   assert.equal(st.options, true);
   assert.equal(st.cap.fps, 60);
-  assert.equal(st.steep.want, true);
+  assert.equal(st.steep.want, false);
   h.dispose();
 });
 
@@ -171,6 +172,11 @@ await check("edits apply at once (no poll): rate, limit off/on, the tint; blur �
   const n = p.caps.length;
   s.options.set("MonsterRange", 55);
   assert.equal(p.caps.length, n, "other options are ignored");
+  // ShowTerrainPassability is OFF by default since 2026-10-23: turning it on
+  // loads the overlay and shows it; off and on again apply at once.
+  s.options.set("ShowTerrainPassability", true);
+  await flush();
+  assert.deepEqual(ov.shows, [true], "turning it on loads and shows the tint");
   s.options.set("ShowTerrainPassability", false);
   assert.deepEqual(ov.shows, [true, false], "the tint hides at once");
   s.options.set("ShowTerrainPassability", true);
@@ -188,15 +194,16 @@ await check("a profile switch re-applies at once (Save As keeps the edits; Defau
   const h = D.installVtDisplay(p.win, { timers: fakeTimers(), loadPassability: async () => ov.module, log: () => {} });
   await flush();
   s.options.set("TargetFPSFocused", 144);
-  s.options.set("ShowTerrainPassability", false);
+  s.options.set("ShowTerrainPassability", true); // default OFF since 2026-10-23
+  await flush();
   assert.equal(s.options.saveAs("Fast").ok, true);
   assert.deepEqual(p.caps.at(-1), 144);
   assert.equal(s.options.selectProfile("Default", "default").ok, true);
   assert.deepEqual(p.caps.at(-1), 60, "Default = the schema defaults");
-  assert.deepEqual(ov.shows.at(-1), true);
+  assert.deepEqual(ov.shows.at(-1), false, "Default = the schema defaults: tint off");
   assert.equal(s.options.selectProfile("Fast", "shared").ok, true);
   assert.deepEqual(p.caps.at(-1), 144, "back on the saved profile");
-  assert.deepEqual(ov.shows.at(-1), false);
+  assert.deepEqual(ov.shows.at(-1), true);
   h.dispose();
 });
 
@@ -238,8 +245,10 @@ await check("logout releases the cap and hides the tint; another character / a b
   const ov = fakeOverlay();
   const timers = fakeTimers();
   const s1 = p.login("1342177281");
+  s1.options.set("ShowTerrainPassability", true); // this character turned the tint on (default OFF since 2026-10-23)
   const h = D.installVtDisplay(p.win, { timers, loadPassability: async () => ov.module, log: () => {} });
   await flush();
+  assert.deepEqual(ov.shows.at(-1), true, "shown for the character that turned it on");
   s1.options.set("TargetFPSFocused", 100);
   p.logout();
   timers.fire();
@@ -250,7 +259,7 @@ await check("logout releases the cap and hides the tint; another character / a b
   const s2 = p.login("1342177282");
   timers.fire();
   assert.deepEqual(p.caps.at(-1), 60, "the new character's profile");
-  assert.deepEqual(ov.shows.at(-1), true);
+  assert.deepEqual(ov.shows.at(-1), false, "the new character's profile: tint off by default");
   // a bot layer's options are preferred (vt_bridge.js optionsOf)
   s2.options.set("TargetFPSFocused", 75);
   assert.deepEqual(p.caps.at(-1), 75);
@@ -271,6 +280,7 @@ await check("dispose: cap released, tint disposed, poll stopped, no more option 
   const ov = fakeOverlay();
   const timers = fakeTimers();
   const s = p.login();
+  s.options.set("ShowTerrainPassability", true); // loaded only when on (default OFF since 2026-10-23)
   const h = D.installVtDisplay(p.win, { timers, loadPassability: async () => ov.module, log: () => {} });
   await flush();
   h.dispose();
@@ -290,7 +300,7 @@ await check("dispose: cap released, tint disposed, poll stopped, no more option 
 
 await check("the overlay module failing to load is reported once and not retried; broken options read as defaults", async () => {
   const p = makePage();
-  p.login();
+  p.login().options.set("ShowTerrainPassability", true); // it only loads when on (default OFF since 2026-10-23)
   const timers = fakeTimers();
   let loads = 0;
   const warn = console.warn;
@@ -315,7 +325,7 @@ await check("the overlay module failing to load is reported once and not retried
   const h = D.installVtDisplay(q.win, { timers: fakeTimers(), getOptions: () => broken, loadPassability: async () => ov.module, log: () => {} });
   await flush();
   assert.deepEqual(q.caps, [60], "the schema defaults");
-  assert.deepEqual(ov.shows, [true]);
+  assert.deepEqual(ov.shows, [], "the schema defaults: tint off, nothing loaded");
   h.dispose();
 });
 
@@ -330,15 +340,15 @@ await check("route view: the ShowTerrainPassability row without a bot (page sess
   assert.ok(v.steep, "…but the Steep row is there");
   assert.equal(v.steep.key, "ShowTerrainPassability");
   assert.equal(v.steep.type, "bool");
-  assert.equal(v.steep.value, true, "RynthAi's default: on");
+  assert.equal(v.steep.value, false, "default off since 2026-10-23 (owner; RynthAi's was on)");
   assert.equal(v.steep.isDefault, true);
   assert.equal(v.steep.label, "Show steep ground");
-  const r = await b.opt.set("ShowTerrainPassability", false);
+  const r = await b.opt.set("ShowTerrainPassability", true);
   assert.equal(r.ok, true);
   v = b.snapshot("route").view;
-  assert.equal(v.steep.value, false);
+  assert.equal(v.steep.value, true);
   assert.equal(v.steep.isDefault, false);
-  assert.equal(s.options.getValue("ShowTerrainPassability"), false);
+  assert.equal(s.options.getValue("ShowTerrainPassability"), true);
   assert.equal(createVtBridge({ win: {} }).snapshot("route").view.steep, null, "no settings yet: null (the switch is disabled)");
 });
 

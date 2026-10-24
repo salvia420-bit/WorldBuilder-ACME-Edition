@@ -1,32 +1,49 @@
-// scene3d/terrain_volcano.js — VOLCANO / OBSIDIAN terrain VFX (Wave 2B).
+// scene3d/terrain_volcano.js — VOLCANO (LAVA) terrain VFX (Wave 2B).
 //
-// Design plan: `docs/2026-07-31-terrain-vfx-plan.md` §3.6. Terrain codes 6
-// (`ObsidianPlain`), 25 (`Volcano1`) and 26 (`Volcano2`) = `FAM_VOLCANO` —
+// Design plan: `docs/2026-07-31-terrain-vfx-plan.md` §3.6. `FAM_VOLCANO` is
 // derived from `terrain_families.js`, never hardcoded here (plan §8 risk 12:
 // family membership is a property of the CODE, and another region could name
 // the same code differently).
 //
-// THE LOOK (plan §3.6): dangerous. Heat visibly distorting the air, embers
-// lifting and dying, a dull red glow breathing in the cracks underfoot,
-// obsidian glassy-black with a hard specular edge.
+// 2026-10-23 — THE SPLIT (owner, on the 1070: "we have obsidian plains and dark
+// isles texture mixed up with lava, should make new effect for obsidian").
+// FAM_VOLCANO was codes 6 (`ObsidianPlain`), 25 (`Volcano1`) and 26
+// (`Volcano2`), so everything below also ran on 2430 obsidian-glass landblocks
+// and 297 grey-ash ones. Verified from the DATs, only code 25's texture
+// (0x06006D54, black basalt with orange-red glowing cracks painted in) is lava.
+// FAM_VOLCANO is now {25}; code 6 is FAM_OBSIDIAN (`terrain_obsidian.js`, its
+// own glass effect and master flag) and code 26 is FAM_ASH (plain; its only
+// treatment is the tier-2 fx-field ash drift, `vfx/fx_fields.js`). So the crack
+// glow, the ember vents and the heat-shimmer disc all run over LAVA alone.
 //
-// FOUR EFFECTS, THREE OWNERS:
+// THE LOOK (plan §3.6): dangerous. Heat visibly distorting the air, embers
+// lifting and dying, the lava glow breathing in the cracks underfoot.
+//
+// THREE EFFECTS, THREE OWNERS:
 //   1. HEAT SHIMMER — the Effect lives in `vfx/heat_haze_effect.js` (it needs
 //      THREE + `postprocessing`); THIS file owns the per-frame state it reads
 //      (`HEAT_HAZE_STATE`) and the landblock bookkeeping that decides whether
-//      any volcanic ground is resident at all. The Effect is inserted into the
+//      any lava ground is resident at all. The Effect is inserted into the
 //      EXISTING `EffectPass` in `atmosphere_pipeline.js` — never a new pass.
 //   2. EMBERS — here (lifecycle) + `vfx/components/terrainVolcanoEmbers.js`
 //      (the registered, lint-passing descriptor, which RE-ANCHORS
 //      `brazierEmbers.js`'s own builders rather than forking them).
-//   3. CRACK GLOW + OBSIDIAN SPECULAR — in the TERRAIN FRAGMENT SHADER
-//      (`terrain.js`, search `VOLCANO CRACK GLOW`), gated on FAM_VOLCANO read
-//      from `uVertexTypes` (plan trap T3 — the subdiv path IGNORES the
-//      `terrainCode` geometry attribute), sited after the POM `cellUv` offset
-//      and bypassed on any water-touching cell (plan §2.7.3). NOT in this file;
-//      this file owns the code masks, the breathing oscillator's identity and
-//      the flag surface.
-//   4. ASH FALL — DELIBERATELY NOT IMPLEMENTED. See ASH, below.
+//      2026-10-23: emission is DISTANCE-GATED (`VOLCANO_TUNING.ventEngageM`).
+//      LRU residency is capacity-driven, not distance-driven (the haze learnt
+//      this as `hazeMaxEngageM`): across the owner's teleport tour ventLandblocks
+//      grew 11 → 63 → 80 while the player went 10 km away, and every unparked
+//      far vent kept emitting. A vent landblock now holds emitters only while
+//      the player is within range, and drops them (destroy, not stop) past it.
+//   3. CRACK GLOW — in the TERRAIN FRAGMENT SHADER (`terrain.js`, search
+//      `LAVA CRACK GLOW`), gated on FAM_VOLCANO read from `uVertexTypes` (plan
+//      trap T3 — the subdiv path IGNORES the `terrainCode` geometry attribute),
+//      bypassed on any water-touching cell (plan §2.7.3). 2026-10-23: keyed to
+//      the texture's OWN painted cracks (emissive = the hot texel colour), not
+//      a procedural vein field that followed nothing. NOT in this file; this
+//      file owns the breathing oscillator, the flag surface and the live knobs
+//      (`window.__terrainVolcano.tune({...})`, CRACK_GLOW_KNOBS).
+//   ASH FALL — not a volcano effect any more: the grey ash ground is FAM_ASH,
+//      and `vfx/fx_fields.js` already drifts ash over it (and over lava).
 //
 // ASH (plan §3.6 item 4 / §8 risk 9). The plan says to parameterise
 // `weather/snow.js SnowSystem` rather than write a third falling-particle
@@ -36,10 +53,8 @@
 // effect is held to), it is constructed and disposed by `weather/manager.js`
 // keyed on the active weather profile's `temperature_C` rather than on terrain,
 // and there is no notion of a terrain gate anywhere under `scene3d/weather/`.
-// Making it carry ash means a seeded PRNG, a second construction/ownership path
-// in the manager, and a terrain-family dependency inside the weather stack —
-// for one ultra-only effect, against an explicit owner deferral on refactoring.
-// Wave 2B therefore ships NO ash: no flag, no preset key, no dead config.
+// Wave 2B therefore shipped NO ash flag here; since 2026-10-10 the tier-2 GPU
+// field (`vfx/fx_fields.js` "ash") covers it, keyed on FAM_VOLCANO + FAM_ASH.
 //
 // INJECTED THREE (the `terrain_vfx.js` / `terrain_sand.js` idiom). This module
 // imports no three: `initTerrainVolcano({THREE, scene3d, ...})` takes it, and
@@ -60,6 +75,9 @@
 //   ?terrainVolcano    family master (also `?terrainVfx=off`, `?visual=off`
 //                                     and `?wireframe=1` kill everything)
 //   ?terrainHaze  ?terrainEmbers  ?terrainCrackGlow
+//   2026-10-23: `?terrainHaze` is its OWN master now (vfx_flags.js
+//   heatHazeEnabled; tier high/ultra): the haze provider registers without
+//   `?terrainVolcano`, and `terrain_desert_haze.js` adds the desert arm.
 //   ?terrainVolcanoEmberCount  ?terrainHazeStrength  ?terrainVolcanoRadius
 
 import {
@@ -71,7 +89,7 @@ import { scatterHash01 } from "./terrain_scatter.js";
 import { registerTerrainVfx, unregisterTerrainVfx, lbKeyFromXY } from "./terrain_vfx.js";
 import {
   terrainVolcanoEnabled,
-  terrainHazeEnabled,
+  heatHazeEnabled,
   terrainEmbersEnabled,
   terrainCrackGlowEnabled,
   terrainVolcanoEmberCount,
@@ -82,6 +100,9 @@ import { registerOscillator, unregisterOscillator, sampleWave } from "./vfx/osci
 import { staticOwnerKeyForLb } from "./vfx/particle_attach.js";
 import { ownerRegistry as defaultOwnerRegistry } from "./particles/owner_registry.js";
 import { terrainVolcanoEmbers, VENT_GATE_MIN } from "./vfx/components/terrainVolcanoEmbers.js";
+// The live-knob override pusher is shared with the obsidian family (one
+// implementation of "re-assert a tuning uniform on every terrain material").
+import { createUniformOverrides } from "./terrain_obsidian.js";
 
 export const METERS_PER_LANDBLOCK = 192;
 export const VERTEX_GRID = 9;
@@ -91,23 +112,16 @@ export const VERTEX_SPACING_M = 24;
  *  is additionally the registered component id of the ember descriptor. */
 export const HAZE_PROVIDER_ID = "terrain.volcanoHaze";
 export const EMBER_PROVIDER_ID = "terrain.volcanoEmbers";
-
-/**
- * `LandDefs::TerrainType::ObsidianPlain` (`ac-headers/acclient.h` ≈:4112).
- *
- * The obsidian material is CODE 6 ONLY (plan §3.6 item 5), not the whole
- * family: `Volcano1`/`Volcano2` are cracked rock, `ObsidianPlain` is glass.
- * Codes 0..0x14 are NAMED in the shipped retail executable's enum, so 6 IS
- * ObsidianPlain engine-wide — this is a retail-enum constant, not a name match
- * against the Dereth palette (which plan §8 risk 12 forbids).
- */
-export const TERRAIN_CODE_OBSIDIAN_PLAIN = 6;
+/** The crack glow's camera-scope provider (it only re-asserts live knobs) —
+ *  also its `VFX_EFFECT_FLAGS` row. */
+export const CRACK_PROVIDER_ID = "terrain.volcanoCrackGlow";
 
 // ---------------------------------------------------------------------------
 // Pure helpers — no THREE, no window. The directly-tested surface.
 // ---------------------------------------------------------------------------
 
-/** The terrain codes that are FAM_VOLCANO, DERIVED from the family LUT. */
+/** The terrain codes that are FAM_VOLCANO (lava — {25} in Dereth since the
+ *  2026-10-23 split), DERIVED from the family LUT. */
 export function volcanoTerrainCodes() {
   const out = [];
   for (let c = 0; c < TERRAIN_CODE_COUNT; c += 1) {
@@ -121,11 +135,6 @@ export function volcanoCodeBitmask() {
   let mask = 0;
   for (const c of volcanoTerrainCodes()) mask |= (1 << c);
   return mask >>> 0;
-}
-
-/** The obsidian mask — code 6 alone (see `TERRAIN_CODE_OBSIDIAN_PLAIN`). */
-export function obsidianCodeBitmask() {
-  return (1 << TERRAIN_CODE_OBSIDIAN_PLAIN) >>> 0;
 }
 
 /** Tuning that is NOT worth a URL flag. */
@@ -159,6 +168,20 @@ export const VOLCANO_TUNING = Object.freeze({
   // 0xC8ED0000 still driving haze from Holtburg, 10 km away). 8 LBs covers
   // every legitimate approach sightline; past that the state clears.
   hazeMaxEngageM: 1536,
+  // 2026-10-23 (owner: "mirage when you look in on the town from the outside"):
+  // a landblock drives the shimmer disc only if it is a real lava FIELD — at
+  // least this many of its 81 vertices lava — not a few stray lava vertices.
+  hazeMinLavaVerts: 12,
+  // 2026-10-23 — EMBER VENT RANGE. The same LRU lesson for the vents: a vent
+  // landblock holds its emitters only while the player is within
+  // `ventEngageM` of its nearest vent, and DESTROYS them past
+  // `ventEngageM * ventDropFactor` (the gap is hysteresis, so standing on the
+  // edge does not churn). 480 m is 2.5 landblocks — an ember is a 0.2 m sprite
+  // and a plume a few metres, both sub-pixel well before that. Evaluated at
+  // `ventEvalHz` (the sand devils' cadence), never per frame.
+  ventEngageM: 480,
+  ventDropFactor: 1.15,
+  ventEvalHz: 2,
 });
 
 // ---------------------------------------------------------------------------
@@ -196,6 +219,28 @@ export function crackGlowBreathAt(tSec) {
   return sampleWave(CRACK_GLOW_OSC_SPEC.kind, t, CRACK_GLOW_OSC_SPEC.config);
 }
 
+/**
+ * `window.__terrainVolcano.tune({...})` knobs → the terrain.js crack-glow
+ * uniforms (defaults: `terrain.js` `DEFAULT_CRACK_GLOW_*`; these are clamps).
+ *   strength  emissive gain on the hot texel colour at night (1.6)
+ *   day       fraction of that gain kept in full daylight (0.55)
+ *   heat      [lo, hi] smoothstep window on linear r - max(0.55 g, b) ([0.03, 0.25])
+ *   color     warm tint multiplied into the texel colour ([1, 0.85, 0.7])
+ *   pulse     depth of the travelling per-patch pulse, 0..1 (0.4)
+ *   fadeStart / fadeEnd  distance fade, metres (350 / 1400)
+ *   enabled   0/1 — the shader gate itself, for an instant A/B
+ */
+export const CRACK_GLOW_KNOBS = Object.freeze({
+  enabled: Object.freeze({ uniform: "uCrackGlowEnabled", size: 1, min: 0, max: 1 }),
+  strength: Object.freeze({ uniform: "uCrackGlowStrength", size: 1, min: 0, max: 16 }),
+  day: Object.freeze({ uniform: "uCrackGlowDay", size: 1, min: 0, max: 4 }),
+  heat: Object.freeze({ uniform: "uCrackGlowHeat", size: 2, min: -1, max: 2 }),
+  color: Object.freeze({ uniform: "uCrackGlowColor", size: 3, min: 0, max: 4 }),
+  pulse: Object.freeze({ uniform: "uCrackGlowPulse", size: 1, min: 0, max: 1 }),
+  fadeStart: Object.freeze({ uniform: "uCrackGlowFadeStart", size: 1, min: 0, max: 8000 }),
+  fadeEnd: Object.freeze({ uniform: "uCrackGlowFadeEnd", size: 1, min: 1, max: 8000 }),
+});
+
 // ---------------------------------------------------------------------------
 // The heat-haze state — the ONE object `vfx/heat_haze_effect.js` reads.
 //
@@ -220,7 +265,29 @@ export const HEAT_HAZE_STATE = {
   strength: 0,
   /** Diagnostics. */
   lbKey: 0, residentLbs: 0, insideFactor: 0, frames: 0,
+  // 2026-10-23 — the GROUND arm (`terrain_desert_haze.js` writes these; the
+  // volcano disc above never touches them and clearHeatHazeState leaves them).
+  /** Ground shimmer weight (desert × heat × tier strength, low-passed). */
+  groundStrength: 0,
+  /** Ground depth band, eye-forward metres: starts, full, fades out. */
+  groundNearM: 0, groundFullM: 1, groundFarM: 0,
+  /** Inferior-mirage weight and its depth ramp (sky patches on far ground). */
+  mirage: 0, mirageStartM: 0, mirageFeatherM: 1,
+  /** Diagnostics: the desert share around the player and the env heat. */
+  desertWeight: 0, desertHeat: 0,
+  /** 2026-10-23 — 1 in open country, toward 0 in a town (terrain_desert_haze.js
+   *  counts the interior cells near the player); scales BOTH arms in the Effect. */
+  townFactor: 1,
 };
+
+/** Lava vertices in a landblock's 81 codes (the disc's "real lava field" test). */
+export function lavaVertexCount(codes) {
+  if (!codes) return 0;
+  let n = 0;
+  const len = Math.min(codes.length, VERTEX_GRID * VERTEX_GRID);
+  for (let i = 0; i < len; i += 1) if (familyForCode(codes[i]) === FAM_VOLCANO) n += 1;
+  return n;
+}
 
 /** Reset the haze state to its inert all-zero form. */
 export function clearHeatHazeState() {
@@ -239,6 +306,20 @@ export function clearHeatHazeState() {
   HEAT_HAZE_STATE.lbKey = 0;
   HEAT_HAZE_STATE.residentLbs = 0;
   HEAT_HAZE_STATE.insideFactor = 0;
+  return HEAT_HAZE_STATE;
+}
+
+/** Reset only the GROUND / mirage fields (the desert arm's half). */
+export function clearGroundHazeState() {
+  HEAT_HAZE_STATE.groundStrength = 0;
+  HEAT_HAZE_STATE.groundNearM = 0;
+  HEAT_HAZE_STATE.groundFullM = 1;
+  HEAT_HAZE_STATE.groundFarM = 0;
+  HEAT_HAZE_STATE.mirage = 0;
+  HEAT_HAZE_STATE.mirageStartM = 0;
+  HEAT_HAZE_STATE.mirageFeatherM = 1;
+  HEAT_HAZE_STATE.desertWeight = 0;
+  HEAT_HAZE_STATE.desertHeat = 0;
   return HEAT_HAZE_STATE;
 }
 
@@ -405,7 +486,7 @@ export function ventEmitterHandle(slot, which) {
 }
 
 // ---------------------------------------------------------------------------
-// Module state + the two providers.
+// Module state + the three providers (haze, embers, crack-glow knobs).
 // ---------------------------------------------------------------------------
 
 let _volc = null;       // the init record, or null
@@ -424,10 +505,35 @@ const _stats = {
   gones: 0,
   destroyAllCalls: 0,
   noManager: 0,
+  // 2026-10-23 vent range gate.
+  ventEvals: 0,
+  rangeSpawns: 0,
+  rangeDrops: 0,
+  rangeDeferred: 0,
+  // live crack-glow knobs
+  crackOverridePushes: 0,
+  crackOverrideWrites: 0,
 };
 
-/** Landblock-scoped vent bookkeeping: lbKey → {ownerKey, slots, ids, parked}. */
+/** Landblock-scoped vent bookkeeping:
+ *  lbKey → {ownerKey, slots, ids, parked, active}. `active` = it holds emitters
+ *  (the range gate's state); `parked` = the LRU stashed its terrain mesh. */
 const _ventLbs = new Map();
+
+/** The vent range gate's live parameters (`VOLCANO_TUNING` seeds them;
+ *  `window.__terrainVolcano.ventRange({...})` moves them for the vistest). */
+const _ventRange = {
+  engageM: VOLCANO_TUNING.ventEngageM,
+  dropFactor: VOLCANO_TUNING.ventDropFactor,
+  evalHz: VOLCANO_TUNING.ventEvalHz,
+};
+/** Last known player position (AC metres) + the evaluation clock. */
+const _ventPlayer = { x: 0, y: 0, valid: false, lastEvalT: -Infinity };
+/** Scratch for the hoisted per-record evaluation (no closure per tick). */
+const _ventEval = { engage2: 0, drop2: 0 };
+
+/** Live crack-glow knob overrides (pushed onto every terrain material). */
+const _crackOverrides = createUniformOverrides(CRACK_GLOW_KNOBS);
 
 /**
  * Resident volcanic landblocks, for the haze: lbKey → {x, y, z}, the LB centre
@@ -638,12 +744,14 @@ function _hazeProvider() {
     id: HAZE_PROVIDER_ID,
     families: [FAM_VOLCANO],
     scope: "landblock",
-    enabled() { return terrainVolcanoEnabled() && terrainHazeEnabled(); },
+    // 2026-10-23: its own master (no longer gated on ?terrainVolcano).
+    enabled() { return heatHazeEnabled(); },
     quality(flags) {
       const q = resolveVolcanoQuality(flags);
       return q && q.hazeStrength > 0 && q.hazeRadiusM > 0 ? q : null;
     },
     onLandblockReady(ctx) {
+      if (lavaVertexCount(ctx.codes) < VOLCANO_TUNING.hazeMinLavaVerts) return;
       const c = volcanoCentreOfLandblock(ctx.lbX, ctx.lbY, ctx.codes, ctx.heights);
       if (!c) return;
       // Refine z through the oracle when it is up (exact split-diagonal height
@@ -659,7 +767,7 @@ function _hazeProvider() {
     // screen, so it must not hold the shimmer up.
     onLandblockPark(lbKey) { _hazeLbs.delete(lbKey >>> 0); },
     onLandblockUnpark(lbKey, ctx) {
-      if (!ctx) return;
+      if (!ctx || lavaVertexCount(ctx.codes) < VOLCANO_TUNING.hazeMinLavaVerts) return;
       const c = volcanoCentreOfLandblock(ctx.lbX, ctx.lbY, ctx.codes, ctx.heights);
       if (c) _hazeLbs.set(lbKey >>> 0, c);
     },
@@ -677,6 +785,62 @@ function _hazeProvider() {
       clearHeatHazeState();
     },
   };
+}
+
+/** Squared distance from the last known player position to a vent record's
+ *  nearest vent (AC metres, ground plane). */
+function _ventDist2(rec) {
+  let best = Infinity;
+  for (let i = 0; i < rec.slots.length; i += 1) {
+    const s = rec.slots[i];
+    const dx = s.x - _ventPlayer.x;
+    const dy = s.y - _ventPlayer.y;
+    const d2 = dx * dx + dy * dy;
+    if (d2 < best) best = d2;
+  }
+  return best;
+}
+
+function _activateVents(rec) {
+  // No ParticleManager yet (early boot): stay dormant, so the range gate
+  // retries on its next evaluation instead of marking a vent live that never
+  // got an emitter.
+  if (!_managerFor()) { _stats.noManager += 1; return; }
+  rec.active = true;
+  _stats.rangeSpawns += 1;
+  _spawnVents(rec);
+}
+
+/** Range drop: the player is far from this landblock's vents (teleport, ride,
+ *  walk). DESTROY, not stop — a stopped emitter still holds its particle
+ *  buffers, and this landblock may sit in the LRU for minutes. Not a lifecycle
+ *  event: the vents re-form, hash-stable, if the player comes back. */
+function _dropVents(rec) {
+  rec.active = false;
+  rec.ids.length = 0;
+  _stats.rangeDrops += 1;
+  _stats.destroyAllCalls += 1;
+  try { _volc.ownerRegistry.destroyAllForOwner(rec.ownerKey); } catch (_) {}
+}
+
+// The 2 Hz range evaluation's per-record pass (a hoisted Map.forEach callback,
+// so the walk allocates no iterator and no closure).
+function _evalVentRec(rec) {
+  const d2 = _ventDist2(rec);
+  if (rec.active && d2 > _ventEval.drop2) { _dropVents(rec); return; }
+  if (!rec.active && !rec.parked && d2 <= _ventEval.engage2) _activateVents(rec);
+}
+
+/** Run the range gate now (also the test seam). Needs a known player. */
+export function evaluateVentRange() {
+  if (!_volc || !_ventPlayer.valid) return 0;
+  const engage = Math.max(1, _ventRange.engageM);
+  const drop = engage * Math.max(1, _ventRange.dropFactor);
+  _ventEval.engage2 = engage * engage;
+  _ventEval.drop2 = drop * drop;
+  _stats.ventEvals += 1;
+  _ventLbs.forEach(_evalVentRec);
+  return _ventLbs.size;
 }
 
 function _emberProvider() {
@@ -716,16 +880,26 @@ function _emberProvider() {
         slots,
         ids: [],
         parked: false,
+        active: false,
       };
       _ventLbs.set(ctx.lbKey >>> 0, rec);
       _stats.ventLandblocks += 1;
-      _spawnVents(rec);
+      // The range gate decides from the first frame: a landblock that streams
+      // in beyond range (the far edge of the ring) stays dormant until the
+      // player comes near. With no player known yet (boot), spawn — the first
+      // evaluation drops it if it is far.
+      if (_ventPlayer.valid && _ventDist2(rec) > Math.max(1, _ventRange.engageM) ** 2) {
+        _stats.rangeDeferred += 1;
+        return;
+      }
+      _activateVents(rec);
     },
     onLandblockPark(lbKey) {
       const rec = _ventLbs.get(lbKey >>> 0);
       if (!rec || rec.parked) return;
       rec.parked = true;
       _stats.parks += 1;
+      if (!rec.active) return;
       // PARK STOPS EMISSION — it never destroys (plan §2.2.2 / §5.3), so
       // `emitterCountForOwner` is unchanged and unpark is free.
       for (const slot of rec.slots) {
@@ -740,8 +914,12 @@ function _emberProvider() {
       rec.parked = false;
       _stats.unparks += 1;
       // Placement is hash-stable (§5.5), so the vent comes back exactly where
-      // it was — this is NOT a re-scatter.
-      _spawnVents(rec);
+      // it was — this is NOT a re-scatter. A dormant (out-of-range) record
+      // waits for the range gate instead.
+      if (rec.active) _spawnVents(rec);
+      else if (!_ventPlayer.valid || _ventDist2(rec) <= Math.max(1, _ventRange.engageM) ** 2) {
+        _activateVents(rec);
+      }
     },
     onLandblockGone(lbKey) {
       const rec = _ventLbs.get(lbKey >>> 0);
@@ -751,12 +929,57 @@ function _emberProvider() {
       _stats.destroyAllCalls += 1;
       try { _volc.ownerRegistry.destroyAllForOwner(rec.ownerKey); } catch (_) {}
     },
+    update(dt, frameCtx) {
+      if (!frameCtx || !frameCtx.hasPlayer || !frameCtx.playerPos) return;
+      _ventPlayer.x = frameCtx.playerPos.x;
+      _ventPlayer.y = frameCtx.playerPos.y;
+      _ventPlayer.valid = true;
+      const t = Number.isFinite(frameCtx.tSec) ? frameCtx.tSec : 0;
+      const evalDt = 1 / Math.max(0.1, _ventRange.evalHz);
+      if (t - _ventPlayer.lastEvalT >= evalDt || t < _ventPlayer.lastEvalT) {
+        _ventPlayer.lastEvalT = t;
+        evaluateVentRange();
+      }
+    },
     dispose() {
       for (const [, rec] of _ventLbs) {
         try { _volc?.ownerRegistry.destroyAllForOwner(rec.ownerKey); } catch (_) {}
       }
       _ventLbs.clear();
     },
+  };
+}
+
+function _terrainMaterials(frameCtx) {
+  try {
+    const s = (frameCtx && frameCtx.scene3d) || (_volc && _volc.scene3d);
+    if (s && Array.isArray(s.terrainMaterials)) return s.terrainMaterials;
+    if (typeof window !== "undefined" && Array.isArray(window.liveScene3d?.terrainMaterials)) {
+      return window.liveScene3d.terrainMaterials;
+    }
+  } catch (_) { /* fail-soft */ }
+  return null;
+}
+
+function _pushCrackOverrides(frameCtx) {
+  if (!_crackOverrides.active) return;
+  const mats = _terrainMaterials(frameCtx);
+  if (!mats) return;
+  _stats.crackOverrideWrites += _crackOverrides.push(mats);
+  _stats.crackOverridePushes += 1;
+}
+
+/** The crack glow is a terrain-shader term with no per-landblock state; this
+ *  camera-scope provider exists only to re-assert live knob overrides each
+ *  frame (a single length test when none are set). */
+function _crackProvider() {
+  return {
+    id: CRACK_PROVIDER_ID,
+    families: [FAM_VOLCANO],
+    scope: "camera",
+    enabled() { return terrainVolcanoEnabled() && terrainCrackGlowEnabled(); },
+    update(dt, frameCtx) { _pushCrackOverrides(frameCtx); },
+    dispose() {},
   };
 }
 
@@ -781,13 +1004,16 @@ function _emberProvider() {
  */
 export function initTerrainVolcano(opts = {}) {
   const scene3d = opts.scene3d || null;
-  if (!terrainVolcanoEnabled()) return null;      // ship-OFF master (plan §5.9)
-
-  const hazeOn = terrainHazeEnabled();
-  const embersOn = terrainEmbersEnabled();
-  const crackOn = terrainCrackGlowEnabled();
-  // Crack glow is `terrain.js`'s fragment work; it needs no provider, but it
-  // DOES need the shared breathing oscillator registered.
+  // The family master (ship-OFF, plan §5.9) gates embers + crack glow. The heat
+  // shimmer is its OWN master since 2026-10-23 (owner: the mirage must be on):
+  // it registers at high/ultra whatever ?terrainVolcano says.
+  const master = terrainVolcanoEnabled();
+  const hazeOn = heatHazeEnabled();
+  const embersOn = master && terrainEmbersEnabled();
+  const crackOn = master && terrainCrackGlowEnabled();
+  // Crack glow is `terrain.js`'s fragment work: it needs the shared breathing
+  // oscillator registered, and a camera-scope provider that re-asserts the
+  // live knobs (`tune`) each frame.
   if (!hazeOn && !embersOn && !crackOn) return null;
 
   _volc = {
@@ -822,6 +1048,7 @@ export function initTerrainVolcano(opts = {}) {
   }
   if (hazeOn) _volc.registered.push(registerTerrainVfx(_hazeProvider()));
   if (embersOn) _volc.registered.push(registerTerrainVfx(_emberProvider()));
+  if (crackOn) _volc.registered.push(registerTerrainVfx(_crackProvider()));
   return terrainVolcanoSurface();
 }
 
@@ -830,19 +1057,24 @@ export function initTerrainVolcano(opts = {}) {
 export function terrainVolcanoStats() {
   return {
     enabled: terrainVolcanoEnabled(),
-    haze: terrainVolcanoEnabled() && terrainHazeEnabled(),
+    haze: heatHazeEnabled(),
     embers: terrainVolcanoEnabled() && terrainEmbersEnabled(),
     crackGlow: terrainVolcanoEnabled() && terrainCrackGlowEnabled(),
     inited: !!_volc,
     volcanoCodes: volcanoTerrainCodes(),
     volcanoCodeMask: volcanoCodeBitmask(),
-    obsidianCodeMask: obsidianCodeBitmask(),
+    // LRU residency (bounded by the ring, NOT by distance) ...
     ventLandblocks: _ventLbs.size,
+    // ... versus the landblocks actually holding emitters (distance-bounded by
+    // the range gate — the number that costs anything).
+    ventsActive: (() => { let n = 0; _ventLbs.forEach((r) => { if (r.active) n += 1; }); return n; })(),
+    ventRange: { ..._ventRange },
     ventOwners: [..._ventLbs.values()].map((r) => ({
       ownerKey: r.ownerKey,
       slots: r.slots.length,
       ids: r.ids.length,
       parked: r.parked,
+      active: r.active,
       live: (() => {
         try { return _volc ? _volc.ownerRegistry.emitterCountForOwner(r.ownerKey) : 0; }
         catch (_) { return 0; }
@@ -853,21 +1085,59 @@ export function terrainVolcanoStats() {
     oscillator: _volc && _volc.oscillator
       ? { name: CRACK_GLOW_OSC_NAME, value: _volc.oscillator.value }
       : null,
+    crackOverrides: _crackOverrides.current(),
     counters: { ..._stats },
   };
+}
+
+/**
+ * Live crack-glow tuning for the 1070 vistest: `tune({strength: 2.2, day: 0.8})`
+ * records the override, writes it onto every live terrain material now, and
+ * the crack provider re-asserts it every frame (new landblocks and the batched
+ * material included). `tune(null)` drops every override and writes the
+ * captured defaults back onto every terrain material (a real reset — the
+ * vistest's `tune({day: 1})` night preview must not outlive it). Knobs:
+ * CRACK_GLOW_KNOBS.
+ */
+export function tuneCrackGlow(patch) {
+  const out = _crackOverrides.set(patch);
+  _pushCrackOverrides(null);
+  return out;
+}
+
+/**
+ * Live vent-range tuning: `ventRange({engageM: 700})`. Re-evaluates at once.
+ * Returns the live parameters.
+ */
+export function setVentRange(patch) {
+  if (patch && typeof patch === "object") {
+    if (Number.isFinite(Number(patch.engageM))) _ventRange.engageM = Math.min(4000, Math.max(16, Number(patch.engageM)));
+    if (Number.isFinite(Number(patch.dropFactor))) _ventRange.dropFactor = Math.min(4, Math.max(1, Number(patch.dropFactor)));
+    if (Number.isFinite(Number(patch.evalHz))) _ventRange.evalHz = Math.min(30, Math.max(0.1, Number(patch.evalHz)));
+    evaluateVentRange();
+  }
+  return { ..._ventRange };
 }
 
 function terrainVolcanoSurface() {
   return {
     stats: terrainVolcanoStats,
+    tune: tuneCrackGlow,
+    knobs: Object.keys(CRACK_GLOW_KNOBS),
+    ventRange: setVentRange,
     get haze() { return HEAT_HAZE_STATE; },
     get vents() { return [..._ventLbs.keys()]; },
+    get activeVents() {
+      const out = [];
+      _ventLbs.forEach((r, k) => { if (r.active) out.push(k); });
+      return out;
+    },
     get hazeLbs() { return [..._hazeLbs.keys()]; },
     lbKeyFromXY,
   };
 }
 
-/** Test seam — unregister both providers, the oscillator, and drop all state. */
+/** Test seam — unregister every provider, the oscillator, and drop all state. */
 export function _resetTerrainVolcano() {
   if (_volc) {
     for (const h of _volc.registered) {
@@ -878,8 +1148,15 @@ export function _resetTerrainVolcano() {
   _ventLbs.clear();
   _hazeLbs.clear();
   clearHeatHazeState();
+  clearGroundHazeState();
   HEAT_HAZE_STATE.frames = 0;
   _volc = null;
+  _ventPlayer.valid = false;
+  _ventPlayer.lastEvalT = -Infinity;
+  _ventRange.engageM = VOLCANO_TUNING.ventEngageM;
+  _ventRange.dropFactor = VOLCANO_TUNING.ventDropFactor;
+  _ventRange.evalHz = VOLCANO_TUNING.ventEvalHz;
+  _crackOverrides.reset();
   for (const k of Object.keys(_stats)) _stats[k] = 0;
 }
 

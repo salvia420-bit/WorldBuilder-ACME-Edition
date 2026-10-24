@@ -29,8 +29,17 @@
 //       ship OFF, and the accumulator starts at vec3(0.0).
 //   S6  NO WATER REGRESSION: every 2026-07-31 water invariant the water test
 //       locks is still present in the source next to the new code.
-//   S7  The JS side binds all six uniforms and derives the mask from
+//   S7  The JS side binds all eight uniforms and derives the mask from
 //       `terrain_families.js`, and the mask agrees with `terrain_sand.js`.
+//   S8  (2026-10-23 retune, "essentially invisible" at noon on the 1070) the
+//       glint is a sparse, bright MIRROR: facet fraction + lobe sharpness are
+//       uniforms (live knobs), the facets spread about the MACRO normal wide
+//       enough to reach the noon half-vector with the sun behind the camera,
+//       the shape is footprint-aware off the shared `wFoot` derivative (a round
+//       point near, energy shared out far), and the grazing term is a weight,
+//       not a gate. Numerically: a lit glint now clearly out-shines the sand.
+//       And the NIGHT-SPECULAR fix: the glint needs the sun up and bright
+//       (|uAcSunVec| = dirBright), not just uAcSunColor (colour only).
 //
 // Run from apps/holtburger-web/:  node test_terrain_sand_sparkle.mjs
 
@@ -81,6 +90,8 @@ const UNIFORMS = [
   ["uSandSparkleDensity", "float"],
   ["uSandSparkleFadeStart", "float"],
   ["uSandSparkleFadeEnd", "float"],
+  ["uSandSparkleSharpness", "float"],
+  ["uSandSparkleFacetFrac", "float"],
 ];
 for (const [name, type] of UNIFORMS) {
   check(`${name} declared exactly once in the FRAGMENT stage`,
@@ -155,11 +166,11 @@ check("S4: the sparkle is ADDED to the final colour, never replaces it",
   checkTerrainFinalColour(FRAG).ok /* 2026-10-05: shared-tail + far-bake aware, harness/lib/terrain_final_colour.mjs */);
 check("S4: a distance fade exists (an unfiltered micro-facet aliases at range)",
   /sparkFade = 1\.0 - smoothstep\(uSandSparkleFadeStart, uSandSparkleFadeEnd, vViewDepth\)/.test(FRAG));
-check("S4: a GRAZING gate exists (sand flashes at a low angle, not from above)",
+check("S4: a GRAZING weight exists (dune faces flash at a low angle)",
   /float graze = 1\.0 - clamp\(dot\(geomN, -viewAc\), 0\.0, 1\.0\);/.test(FRAG));
 check("the glint.js maths: a Blinn half-vector lobe + a time+hash twinkle",
   /vec3 halfAc = normalize\(sunDir - viewAc\);/.test(FRAG)
-  && /pow\(clamp\(dot\(grainN, halfAc\), 0\.0, 1\.0\), 180\.0\)/.test(FRAG)
+  && /pow\(clamp\(dot\(grainN, halfAc\), 0\.0, 1\.0\), uSandSparkleSharpness\)/.test(FRAG)
   && /float twinkle = 0\.5 \+ 0\.5 \* sin\(phase\);/.test(FRAG));
 check("the twinkle phase is deterministic (uTime + hash only, no Math.random equivalent)",
   /float phase = uTime \* 1\.7 \+ gh1 \* 6\.2831853 \+ gh2 \* 17\.0;/.test(FRAG));
@@ -172,8 +183,12 @@ console.log("\n-- S5 strict no-op when off -------------------------------------
 check("the accumulator starts at zero", /vec3 sandSparkle = vec3\(0\.0\);/.test(FRAG));
 check("ONE gate uniform guards the whole block",
   countOf(FRAG, "uSandSparkleEnabled > 0.5") === 1);
-check("the gate is composed from the family master AND the effect flag",
-  /sandSparkleEnabled: terrainSandEnabled\(\) && terrainSandSparkleEnabled\(\),/.test(SRC));
+// 2026-10-24: and the two MASTER kill switches (terrainVfxShaderLive() =
+// visualEnabled() && terrainVfxEnabled()), so ?visual=off / ?terrainVfx=off
+// kill the sparkle as the docs say (behaviour: test_vfx_flags.mjs).
+check("the gate is composed from the master kills, the family master AND the effect flag",
+  /sandSparkleEnabled: terrainVfxLive && terrainSandEnabled\(\) && terrainSandSparkleEnabled\(\),/.test(SRC)
+  && SRC.includes("const terrainVfxLive = terrainVfxShaderLive();"));
 check("terrain.js imports the flag readers from vfx_flags.js (no second reader)",
   /import \{ terrainSandEnabled, terrainSandSparkleEnabled \} from "\.\/vfx_flags\.js";/.test(SRC));
 check("the wireframe short-circuit carries the fields off, for shape parity",
@@ -212,9 +227,89 @@ check("the derived mask agrees with terrain_sand.js::sandCodeBitmask()",
   sandCodeBitmask() === ((1 << 10) | (1 << 11) | (1 << 12)));
 check("the sparkle constants are named, not magic numbers at the bind site",
   /DEFAULT_SAND_SPARKLE_STRENGTH/.test(SRC) && /DEFAULT_SAND_SPARKLE_DENSITY/.test(SRC)
-  && /DEFAULT_SAND_SPARKLE_FADE_START/.test(SRC) && /DEFAULT_SAND_SPARKLE_FADE_END/.test(SRC));
+  && /DEFAULT_SAND_SPARKLE_FADE_START/.test(SRC) && /DEFAULT_SAND_SPARKLE_FADE_END/.test(SRC)
+  && /DEFAULT_SAND_SPARKLE_SHARPNESS/.test(SRC) && /DEFAULT_SAND_SPARKLE_FACET_FRAC/.test(SRC));
 check("the mid-tier degrade is coherent: nothing in the block requires POM",
   !SPARKLE_BLOCK.includes("uPomEnabled"));
+
+// ===========================================================================
+console.log("\n-- S8 the 2026-10-23 retune -------------------------------------");
+// ===========================================================================
+const num = (name) => {
+  const m = new RegExp(`const ${name} = ([0-9.]+);`).exec(SRC);
+  return m ? Number(m[1]) : NaN;
+};
+const STRENGTH = num("DEFAULT_SAND_SPARKLE_STRENGTH");
+const SHARP = num("DEFAULT_SAND_SPARKLE_SHARPNESS");
+const FACET = num("DEFAULT_SAND_SPARKLE_FACET_FRAC");
+check("the grazing term is a WEIGHT (floored), not a gate that kills the chase-camera view",
+  /graze = 0\.35 \+ 0\.65 \* graze \* graze;/.test(SPARKLE_BLOCK)
+  && !/if \(graze > 0\.001\)/.test(SPARKLE_BLOCK));
+check("facets spread about the MACRO normal (geomN), wide (±1.1 slope)",
+  /vec3 grainN = normalize\(geomN \+ vec3\(\(gh1 - 0\.5\) \* 2\.2, \(gh2 - 0\.5\) \* 2\.2, 0\.0\)\);/.test(SPARKLE_BLOCK));
+check("sparse MIRROR cells: a per-cell coin against uSandSparkleFacetFrac, scaled by the footprint",
+  /if \(gh3 < min\(1\.0, uSandSparkleFacetFrac \* cellsPerPx\)\)/.test(SPARKLE_BLOCK));
+check("footprint-aware: grains per pixel come from the SHARED wFoot (no new derivative pair)",
+  /float gpp = max\(wFoot \* uSandSparkleDensity, 0\.001\);/.test(SPARKLE_BLOCK)
+  && !/dFdx|dFdy|fwidth/.test(SPARKLE_BLOCK));
+check("… declared at main scope BEFORE the sparkle block (not inside a branch)",
+  FRAG.indexOf("float wFoot =") > 0 && FRAG.indexOf("float wFoot =") < iSparkle
+  || (SRC.indexOf("float wFoot = ") > 0 && SRC.indexOf("float wFoot = ") < SRC.indexOf("=== Wave 1B — SAND GRAIN SPARKLE ===")));
+check("round point near the camera, energy shared out far (… * gDot / cellsPerPx)",
+  /float gDot = 1\.0 - smoothstep\(gRad \* 0\.45, gRad, length\(fract\(grainXy\) - gpt\)\);/.test(SPARKLE_BLOCK)
+  && /\* lobe \* twinkle \* gDot \/ cellsPerPx\)/.test(SPARKLE_BLOCK));
+
+// Numerics, in JS: the block's maths at the owner's noon tour (sun 67.4°
+// elevation) from a chase camera ~16° above the sand, sun BEHIND the camera
+// (the case v1 could not reach at all).
+const DEG = Math.PI / 180;
+const norm = (v) => { const l = Math.hypot(...v); return v.map((c) => c / l); };
+const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+const sun = norm([0, -Math.cos(67.4 * DEG), Math.sin(67.4 * DEG)]);   // sun to the south
+const view = norm([0, Math.cos(16 * DEG), -Math.sin(16 * DEG)]);      // looking north, down 16°
+const half = norm([sun[0] - view[0], sun[1] - view[1], sun[2] - view[2]]);
+// Share of mirror facets whose lobe exceeds 0.5 (uniform facet slopes, v1 vs now).
+function lobeShare(spread, sharp) {
+  let hit = 0, n = 0;
+  for (let i = 0; i < 200; i += 1) {
+    for (let j = 0; j < 200; j += 1) {
+      const fn = norm([((i + 0.5) / 200 - 0.5) * spread, ((j + 0.5) / 200 - 0.5) * spread, 1]);
+      if (Math.pow(Math.max(0, dot(fn, half)), sharp) > 0.5) hit += 1;
+      n += 1;
+    }
+  }
+  return hit / n;
+}
+const v1Share = lobeShare(1.6, 180);
+const nowShare = lobeShare(2.2, SHARP);
+check("★ sun BEHIND the camera at noon: v1's facets almost never reach the half-vector, the\n"
+  + "        retuned spread does (facet share with lobe > 0.5)",
+  v1Share < 0.0005 && nowShare > 0.002, `v1=${v1Share} now=${nowShare}`);
+// Peak added radiance of a lit glint vs the sand it sits on. uAcSunColor is
+// dirColor x the 0.55 terrain light scale (loop.js); lit sand-yellow albedo
+// (linear ~0.39 luma) x acC (~0.55-0.8) is ~0.2-0.3.
+const sunColor = 0.55;
+const graze = 0.35 + 0.65 * Math.pow(1 - Math.sin(16 * DEG), 2);
+const peak = sunColor * STRENGTH * graze;           // lobe 1, twinkle 1, gDot 1, one cell/px
+const v1Peak = sunColor * 0.55 * Math.pow(1 - Math.sin(16 * DEG), 2) * 1.0;
+check("★ a lit glint now out-shines the ~0.3-radiance sand ~4x over (v1's rare best case\n"
+  + "        added ~0.16, which AGX at exposure 5 compresses into the sand)",
+  peak >= 4 * 0.3 && v1Peak < 0.2, `peak=${peak.toFixed(3)} v1=${v1Peak.toFixed(3)}`);
+check("… while staying sparse: at most ~1 % of grain cells can glint at once",
+  FACET * nowShare < 0.01, `${FACET * nowShare}`);
+
+// THE NIGHT-SPECULAR BUG (why sand/snow/volcano/dirt were held back from
+// promotion): uAcSunColor is colour only — the retail brightness is
+// |uAcSunVec| (dirBright) and the night "sun" parks 0.9° above the horizon.
+check("★ night-specular fix: the glint is scaled by the sun's ELEVATION and BRIGHTNESS",
+  /float sunGlint = smoothstep\(0\.05, 0\.25, sunDir\.z\) \* min\(length\(uAcSunVec\) \* 1\.25, 1\.0\);/.test(SPARKLE_BLOCK)
+  && /uSandSparkleStrength \* sandW \* graze \* sunGlint/.test(SPARKLE_BLOCK));
+const ss = (e0, e1, x) => { const t = Math.min(1, Math.max(0, (x - e0) / (e1 - e0))); return t * t * (3 - 2 * t); };
+const sunGlintAt = (pitchDeg, dirBright) => ss(0.05, 0.25, Math.sin(pitchDeg * DEG)) * Math.min(dirBright * 1.25, 1);
+check("… retail night (pitch 0.9°, dirBright 0.25) ⇒ exactly 0; noon (pitch 67°, 0.8) ⇒ 1",
+  sunGlintAt(0.9, 0.25) === 0 && Math.abs(sunGlintAt(67.4, 0.8) - 1) < 1e-12);
+check("… dawn (pitch 10°, dirBright 0.5) is partial, not a pop",
+  sunGlintAt(10, 0.5) > 0.05 && sunGlintAt(10, 0.5) < 0.5);
 
 console.log(`\nterrain sand sparkle: ${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

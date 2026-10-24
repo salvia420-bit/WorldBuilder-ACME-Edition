@@ -1073,6 +1073,16 @@ exposes `mainUv`, decodes log depth (source-scan for `exp2(`), is inserted into 
 by identity, and `uHeatRadius → 0` with no volcanic LB resident. Ember re-anchor produces
 the same emitter spec as the brazier path modulo anchor.
 
+> **2026-10-23 — THE SPLIT (owner, 1070: "we have obsidian plains and dark isles texture
+> mixed up with lava, should make new effect for obsidian").** Verified from the DATs: only
+> code 25's texture (0x06006D54) holds lava. `FAM_VOLCANO` = {25} (crack glow, embers,
+> shimmer disc — all lava-only; the crack glow is now the texture's own painted cracks made
+> emissive, and the vents are range-gated by `VOLCANO_TUNING.ventEngageM`); code 6 is the new
+> `FAM_OBSIDIAN` (`scene3d/terrain_obsidian.js`, `?terrainObsidian`: facet sun glints + a
+> purple grazing sheen, no glow/embers/shimmer — item 5 above, reworked); code 26 is
+> `FAM_ASH` (plain; the tier-2 fx-field ash drift is its treatment). New ids are appended
+> (9, 10); `FAM_COUNT` = 11. Rows: `docs/url-flags.md` `terrainVolcano`…`terrainObsidian`.
+
 ---
 
 ### 3.7 DIRT / MUD — codes 5, 7, 8, 24, 31

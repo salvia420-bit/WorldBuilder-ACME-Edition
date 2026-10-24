@@ -19,7 +19,8 @@ import { FX_TIER2_PRESETS } from "./vfx/fx_tier2.js";
 
 // ── TERRAIN-VFX PROMOTION SWITCHBOARD (2026-08-01) ─────────────────────────
 //
-// The nine terrain-VFX FAMILY MASTERS shipped OFF on every tier (plan §5.9
+// The ten terrain-VFX FAMILY MASTERS (obsidian split off volcano 2026-10-23)
+// shipped OFF on every tier (plan §5.9
 // "ship OFF, promote deliberately") and are promoted one at a time: ice
 // 2026-08-01 and grass 2026-10-07 after the owner's 1070 eye-test, fields
 // 2026-10-10 with particle tier 2, and rock 2026-10-19 AHEAD of its 1070 eye
@@ -54,6 +55,10 @@ export const TERRAIN_VFX_PROMOTED = Object.freeze({
     // USER 1070 SIGN-OFF 2026-08-01 (in-person vistest): ice ships.
     ice: true,
     volcano: false,
+    // 2026-10-23 — the volcano split (terrain_families.js FAM_OBSIDIAN, code 6):
+    // obsidian glass is its own family with its own master. Ships OFF until the
+    // owner's 1070 vistest; flipping this is the whole promotion.
+    obsidian: false,
     swamp: false,
     dirt: false,
     // DEFAULT ON (2026-10-19, ahead of its 1070 eye test): the owner's "default
@@ -251,6 +256,11 @@ export const PRESETS = {
         terrainVolcanoEmberCount: 0,
         terrainHazeStrength: 0,
         terrainVolcanoRadius: 0,
+        // Terrain OBSIDIAN (2026-10-23, the volcano split): code 6 glass glints
+        // + purple sheen, one terrain-shader block. `terrainObsidian` is the
+        // FAMILY MASTER (TERRAIN_VFX_PROMOTED.obsidian, ladder high/ultra);
+        // out of BOOL_FLAGS for the `gfxRelief` reason, like every master.
+        terrainObsidian: terrainMaster("obsidian", "low"),
         // Terrain DIRT/MUD (Wave 3B, plan §3.7). `terrainDirt` is the FAMILY
         // MASTER and ships false on every tier (§5.9); `low` is `null` in the
         // plan's tier table, so every knob here is 0/false and even
@@ -388,6 +398,8 @@ export const PRESETS = {
         terrainVolcanoEmberCount: 0,
         terrainHazeStrength: 0,
         terrainVolcanoRadius: 0,
+        // Terrain OBSIDIAN — see the `low` tier.
+        terrainObsidian: terrainMaster("obsidian", "mid"),
         // Terrain DIRT/MUD — see the `low` tier. mid = footfall puffs ONLY
         // (plan §3.7 "mid {footfall:true}"): no prints (POM is high/ultra, and
         // a darkening-only print is the degrade, not the shipped mid look), no
@@ -484,7 +496,10 @@ export const PRESETS = {
         terrainSnowSpindriftCount: 1200,
         terrainSnowSparkle: true,
         terrainSnowPrints: true,
-        terrainSnowRadius: 64,
+        // 2026-10-23: 64 -> 48. Spindrift past ~40 m does not read, and the
+        // same 1200 ribbons in a 48 m disc are 1.8x denser where the chase
+        // camera looks (the owner's tour: ~3 ribbons inside 15 m).
+        terrainSnowRadius: 48,
         terrainIce: terrainMaster("ice", "high"),
         terrainIceRefraction: false,
         // Terrain VOLCANO — see the `low` tier. plan §3.6 "high {crackGlow:true,
@@ -493,9 +508,15 @@ export const PRESETS = {
         terrainVolcano: terrainMaster("volcano", "high"),
         terrainHaze: true,
         terrainCrackGlow: true,
-        terrainVolcanoEmberCount: 1,
+        // 2026-10-23: 1 -> 2. Vents now stand on LAVA only (code 25, 54
+        // landblocks, was every obsidian/ash LB too) and are range-gated
+        // (terrain_volcano.js VOLCANO_TUNING.ventEngageM), so two per lava
+        // landblock still costs far less than the old one-per-volcanic-LB.
+        terrainVolcanoEmberCount: 2,
         terrainHazeStrength: 1,
         terrainVolcanoRadius: 160,
+        // Terrain OBSIDIAN — see the `low` tier.
+        terrainObsidian: terrainMaster("obsidian", "high"),
         // Terrain DIRT/MUD — see the `low` tier. plan §3.7 "high
         // {footfall:true, prints:true, dustHaze:800}". POM is live at this tier,
         // so the print gets its dent as well as its darkening.
@@ -585,7 +606,7 @@ export const PRESETS = {
         terrainSnowSpindriftCount: 2500,
         terrainSnowSparkle: true,
         terrainSnowPrints: true,
-        terrainSnowRadius: 80,
+        terrainSnowRadius: 64,   // 2026-10-23: 80 -> 64, same reasoning as high
         terrainIce: terrainMaster("ice", "ultra"),
         terrainIceRefraction: true,
         // Terrain VOLCANO — see the `low` tier. plan §3.6 "ultra
@@ -594,9 +615,11 @@ export const PRESETS = {
         terrainVolcano: terrainMaster("volcano", "ultra"),
         terrainHaze: true,
         terrainCrackGlow: true,
-        terrainVolcanoEmberCount: 3,
+        terrainVolcanoEmberCount: 4,   // 2026-10-23: 3 -> 4 (see high)
         terrainHazeStrength: 1.25,
         terrainVolcanoRadius: 220,
+        // Terrain OBSIDIAN — see the `low` tier.
+        terrainObsidian: terrainMaster("obsidian", "ultra"),
         // Terrain DIRT/MUD — see the `low` tier. plan §3.7 "ultra
         // {footfall:true, prints:true, dustHaze:2000, wetness:true}". The
         // wet-mud darkening + sheen is the ultra-only addition, exactly as the

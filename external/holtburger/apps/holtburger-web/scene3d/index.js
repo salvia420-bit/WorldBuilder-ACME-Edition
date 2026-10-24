@@ -332,6 +332,11 @@ import { initTerrainSnow } from "./terrain_snow.js";
 // `initTerrainVolcano` returns null (registering nothing) unless
 // `?terrainVolcano=on`.
 import { initTerrainVolcano } from "./terrain_volcano.js";
+// 2026-10-23 — OBSIDIAN (split out of the volcano family: code 6 is volcanic
+// glass, not lava). Its effect is a terrain-shader block; this registers the
+// live-knob provider and `window.__terrainObsidian` under `?terrainObsidian=on`.
+import { initTerrainObsidian } from "./terrain_obsidian.js";
+import { initDesertHaze } from "./terrain_desert_haze.js";
 // Terrain DIRT/MUD family (Wave 3B, plan §3.7) — footfall dust puffs + mud
 // prints + the dry dust haze. The mud dent/darkening and the wet-mud sheen are
 // terrain fragment-shader terms and need no import here; the puff trigger is the
@@ -5024,6 +5029,28 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
   } catch (e) {
     // eslint-disable-next-line no-console
     console.warn("[terrainVolcano] initTerrainVolcano threw (volcano VFX disabled):", e);
+  }
+  // ── Terrain OBSIDIAN family (2026-10-23, the volcano split) ──────────────
+  // Code 6 glass: glints + purple sheen in the terrain fragment shader (gated
+  // by `uObsidianEnabled` from the same reader). Null — nothing registered —
+  // unless `?terrainObsidian=on` (ships OFF on every tier).
+  try {
+    const obsidianSurface = initTerrainObsidian({ scene3d: liveScene3d });
+    if (obsidianSurface && typeof window !== "undefined") window.__terrainObsidian = obsidianSurface;
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.warn("[terrainObsidian] initTerrainObsidian threw (obsidian VFX disabled):", e);
+  }
+  // 2026-10-23 — the DESERT arm of the heat shimmer + mirage
+  // (`terrain_desert_haze.js`): the ground over hot sand shimmers with distance
+  // and the far dunes show the sky (inferior mirage). Its own master with the
+  // volcano disc: `heatHazeEnabled()` (tier high/ultra, `?terrainHaze=off`).
+  try {
+    const desertHaze = initDesertHaze({ scene3d: liveScene3d, readEnv: readParticleEnv });
+    if (desertHaze && typeof window !== "undefined") window.__terrainDesertHaze = desertHaze;
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.warn("[desertHaze] initDesertHaze threw (desert mirage disabled):", e);
   }
   // ── Terrain DIRT/MUD family (Wave 3B, plan §3.7) ──────────────────────
   // Registers up to four camera-scoped providers (the shared per-frame state

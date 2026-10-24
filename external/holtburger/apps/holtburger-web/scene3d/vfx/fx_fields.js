@@ -14,8 +14,14 @@
 //   pollen     sunlit specks drifting on the wind over grassland by day
 //   leaves     tumbling leaves falling through forest floor / moss
 //   snow       a light flurry over snow and ice
-//   ash        grey ash drifting down over volcanic ground
-//   embers     glowing embers rising off volcanic ground (+ glow buffer)
+//   ash        grey ash drifting down over volcanic ground (lava + ash codes)
+//   embers     glowing embers rising off LAVA ground (+ glow buffer)
+//
+// 2026-10-23 volcano split (terrain_families.js): "volcanic" was codes 6, 25
+// and 26 as one family. Now lava (25, FAM_VOLCANO) drives ash + embers, grey
+// ash / pumice (26, FAM_ASH) drives the ash drift alone (no lava there, so no
+// embers), and obsidian glass (6, FAM_OBSIDIAN) drives neither — the owner's
+// "obsidian plains mixed up with lava".
 //
 // WHERE. Coverage comes from the terrain oracle (terrain_vfx.js): a 9 x 9
 // sample grid round the camera counts the terrain codes under it (families,
@@ -37,7 +43,7 @@
 
 import * as THREE from "three";
 import { registerTerrainVfx, wireframeActive } from "../terrain_vfx.js";
-import { FAM_GRASS, FAM_SWAMP, FAM_SNOWICE, FAM_VOLCANO, FAM_WATER, TERRAIN_CODE_TO_FAMILY } from "../terrain_families.js";
+import { FAM_GRASS, FAM_SWAMP, FAM_SNOWICE, FAM_VOLCANO, FAM_ASH, FAM_WATER, TERRAIN_CODE_TO_FAMILY } from "../terrain_families.js";
 import { fxTier2Enabled } from "./fx_tier2.js";
 import { TERRAIN_FX_LIGHT_UNIFORMS } from "./fx_lights.js";
 import { nightFactorFromAuthoredPitch } from "../night_ramp.js";
@@ -71,7 +77,7 @@ export const FX_FIELDS = Object.freeze([
 
 /**
  * Pure: per-field density (0..1) for one environment.
- * @param {{grass:number, swamp:number, water:number, forest:number, snow:number, volcano:number}} cov
+ * @param {{grass:number, swamp:number, water:number, forest:number, snow:number, volcano:number, ash?:number}} cov
  *   coverage fractions (0..1) of the sample grid
  * @param {number} night 0 day .. 1 night
  * @param {boolean} indoor
@@ -87,14 +93,14 @@ export function fxFieldDensities(cov, night, indoor) {
   out.pollen = dayOn * Math.min(1, c("grass") * 0.9);
   out.leaves = Math.min(1, c("forest") * 1.2 + c("grass") * 0.12);
   out.snow = Math.min(1, c("snow") * 1.1);
-  out.ash = Math.min(1, c("volcano") * 1.2);
+  out.ash = Math.min(1, (c("volcano") + c("ash")) * 1.2);
   out.embers = Math.min(1, c("volcano") * 1.2);
   return out;
 }
 
 /** Pure: coverage fractions from a list of terrain codes (−1 = unknown, skipped). */
 export function fxFieldCoverage(codes) {
-  const cov = { grass: 0, swamp: 0, water: 0, forest: 0, snow: 0, volcano: 0 };
+  const cov = { grass: 0, swamp: 0, water: 0, forest: 0, snow: 0, volcano: 0, ash: 0 };
   let n = 0;
   for (const code of codes) {
     if (!(code >= 0)) continue;
@@ -105,6 +111,7 @@ export function fxFieldCoverage(codes) {
     else if (f === FAM_WATER) cov.water++;
     else if (f === FAM_SNOWICE) cov.snow++;
     else if (f === FAM_VOLCANO) cov.volcano++;
+    else if (f === FAM_ASH) cov.ash++;
     if (FX_FOREST_CODES.includes(code & 0x1f)) cov.forest++;
   }
   if (n > 0) for (const k of Object.keys(cov)) cov[k] /= n;
@@ -441,7 +448,7 @@ function _resample(ctx, cx, cy, cz, tSec) {
   return fxFieldCoverage(codes);
 }
 
-let _coverage = { grass: 0, swamp: 0, water: 0, forest: 0, snow: 0, volcano: 0 };
+let _coverage = { grass: 0, swamp: 0, water: 0, forest: 0, snow: 0, volcano: 0, ash: 0 };
 
 /** The camera-scope provider (terrain_vfx.js). */
 export function createFxFieldsProvider() {

@@ -85,6 +85,29 @@
 //   ?terrainRockPebbles     ?terrainRockGrit
 //   ?terrainRockPebbleCount ?terrainRockGritCount ?terrainRockRadius
 //   ?terrainRockDensity     0..2 multiplier on BOTH counts (URL-only)
+//
+// 2026-10-24 — TWO LIVE GRIT BUGS (the same pair the sand, snow and dirt
+// passes found in their families on 2026-10-23; rock ships DEFAULT ON at
+// high / ultra, so these were on screen). The look is otherwise unchanged.
+//   (1) FROZEN SCATTER-TIME FADE. The per-streak opacity multiplied the pool's
+//       `ctx.fade`, which is computed once, at placement, from the window
+//       centre of THAT moment. A walking player's leading-edge streaks are
+//       placed at the rim (fade ~0) and kept that value as the player walked
+//       onto them, so the near field emptied as you walked. Only the shader's
+//       LIVE `hbScatterFade` remains (the pebbles never had the bug: they
+//       shrink by the live fade and bake none).
+//   (2) RACING DRIFT. The advection was `uTime * uSpeed * aGrit.y * |wind|`.
+//       Its time derivative carries `uTime * d|wind|/dt`, so as the calm wind
+//       breathes (+-6 % over 13 s) the grit sped up with session age: an hour
+//       in, streaks raced at hundreds of m/s and the field read as flicker.
+//       The pulse field had the same flaw through the wind DIRECTION
+//       (`dir * uTime`, with the 45 s +-12 deg wander). Both are now
+//       INTEGRATED on the CPU from the frame `dt` (`uTravel`, `uPulseOffset`)
+//       — identical to the old closed form for a constant wind (`gritAdvect`
+//       stays that closed form; `gritAdvectTravel` is the live GLSL twin).
+//       `uTravel` wraps SEAMLESSLY (per-streak speeds are quantised to
+//       1/GRIT_SPEED_QUANTUM, see `gritSpeedMul`), so float32 precision never
+//       decays however long the session runs.
 
 import {
   FAM_ROCK,
@@ -290,6 +313,22 @@ export const ROCK_TUNING = Object.freeze({
 });
 
 /**
+ * Per-streak speed multipliers are QUANTISED to multiples of
+ * `1 / GRIT_SPEED_QUANTUM` (the 0.8..1.5 spread is unchanged; the step is
+ * under 1 % of the speed, invisible). That is what lets the CPU travel
+ * accumulator wrap with no seam: at a wrap of `gritTravelWrap(span, speed)`,
+ * every streak's travelled distance changes by an INTEGER number of recycle
+ * spans, so `mod(travelled, span)` is unchanged for every streak.
+ */
+export const GRIT_SPEED_QUANTUM = 64;
+/** Spans a k = 1 streak crosses per travel wrap (a quantum multiple keeps the
+ *  wrap near ~1000 s of unit wind at the shipped tuning). */
+export const GRIT_TRAVEL_WRAP_LAPS = 4;
+/** The longest frame the travel integrator accepts (a resumed background tab
+ *  must not jump the field); the `weather_inputs.js` MAX_DT. */
+export const GRIT_MAX_DT = 0.25;
+
+/**
  * Resolve the live ROCK quality tier. `null` ⇒ the whole family is disabled at
  * this tier (plan §5.8: "`low` is null/disabled for every effect here without
  * exception"). Pure in `flags`.
@@ -341,15 +380,20 @@ export function windAcFromGlobals(globals, out) {
 
 /**
  * Grit advection — the offset (metres, AC frame) of one streak from its
- * scattered anchor at time `tSec`.
+ * scattered anchor at time `tSec`, for a CONSTANT wind.
  *
  * THE CONTRACT (plan §3.2 tests, inherited by §3.3 item 2): a PURE function of
- * (wind, clock, hash). No player state, no frame history, no `Math.random`. The
- * GLSL in `ROCK_GRIT_VERTEX_GLSL` computes exactly this expression, and it is
- * the same expression as `terrain_sand.js::streamerAdvect` and
+ * (wind, clock, hash). No player state, no frame history, no `Math.random`. It
+ * is the same expression as `terrain_sand.js::streamerAdvect` and
  * `terrain_snow.js::spindriftAdvect` — only the parameters differ, which is
  * what "a parameter block, not a new module" means once the module boundary is
  * a family rather than an effect.
+ *
+ * ⚠ 2026-10-24: the GLSL no longer evaluates this closed form. It runs
+ * `gritAdvectTravel` with `tSec * |wind|` replaced by `uTravel`, the
+ * per-frame INTEGRAL of the live gust magnitude — identical for a constant
+ * wind (this function is that identity), but for a breathing wind the
+ * product's derivative grows with session time (the racing bug, header).
  *
  * @param {number} windX AC east component
  * @param {number} windY AC north component
@@ -366,6 +410,68 @@ export function gritAdvect(windX, windY, tSec, phase01, spanM, speed, out) {
   const dx = windX / wl;
   const dy = windY / wl;
   const travelled = tSec * speed * wl + phase01 * span;
+  let s = travelled % span;
+  if (s < 0) s += span;
+  s -= span * 0.5;
+  o.s = s;
+  o.x = dx * s;
+  o.y = dy * s;
+  return o;
+}
+
+/**
+ * The per-streak speed multiplier: the 0.8..1.5 spread drawn by a [0,1) hash,
+ * QUANTISED to multiples of `1 / GRIT_SPEED_QUANTUM` so the travel wrap is
+ * seamless (see `GRIT_SPEED_QUANTUM`). PURE; exact in float32.
+ *
+ * @param {number} r01 the pool's `ctx.rand` draw
+ * @returns {number} k / GRIT_SPEED_QUANTUM, in [51/64, 96/64]
+ */
+export function gritSpeedMul(r01) {
+  const r = Number.isFinite(r01) ? Math.min(1, Math.max(0, r01)) : 0.5;
+  return Math.round((0.8 + r * 0.7) * GRIT_SPEED_QUANTUM) / GRIT_SPEED_QUANTUM;
+}
+
+/**
+ * The travel wrap period, in `uTravel` units (seconds x gust): the integral
+ * after which every quantised streak has crossed a WHOLE number of recycle
+ * spans, `span * QUANTUM * LAPS / speed`. Infinity for a non-positive speed
+ * (nothing moves, nothing to wrap).
+ *
+ * @param {number} spanM recycle distance (`uSpanM`)
+ * @param {number} speed metres/second per unit wind (`uSpeed`)
+ */
+export function gritTravelWrap(spanM, speed) {
+  const span = Number.isFinite(spanM) && spanM > 0 ? spanM : ROCK_TUNING.advectSpanM;
+  const v = Number.isFinite(speed) ? Math.abs(speed) : 0;
+  if (!(v > 0)) return Infinity;
+  return (span * GRIT_SPEED_QUANTUM * GRIT_TRAVEL_WRAP_LAPS) / v;
+}
+
+/**
+ * Grit advection from an INTEGRATED travel — the JS twin of the advection at
+ * the top of `ROCK_GRIT_VERTEX_GLSL`, symbol for symbol:
+ * `travelled = uTravel * uSpeed * aGrit.y + aGrit.x * uSpanM`. `travel` is the
+ * CPU integral of |wind| dt (`uTravel`), so a changing wind magnitude changes
+ * the SPEED smoothly instead of re-scaling the whole session's history. For a
+ * constant wind, `gritAdvectTravel(w, t * |w|, ...) === gritAdvect(w, t, ...)`.
+ *
+ * @param {number} windX AC east component (the live `uWindAc`)
+ * @param {number} windY AC north component
+ * @param {number} travel integral of |wind| dt, wrapped (`uTravel`)
+ * @param {number} phase01 per-instance hash, [0,1)
+ * @param {number} spanM recycle distance
+ * @param {number} speed metres/second per unit wind x the streak's multiplier
+ * @param {{x:number,y:number,s:number}} [out]
+ */
+export function gritAdvectTravel(windX, windY, travel, phase01, spanM, speed, out) {
+  const o = out || { x: 0, y: 0, s: 0 };
+  const span = Number.isFinite(spanM) && spanM > 0 ? spanM : ROCK_TUNING.advectSpanM;
+  const wl = Math.max(Math.hypot(windX, windY), 1e-4);
+  const dx = windX / wl;
+  const dy = windY / wl;
+  const tr = Number.isFinite(travel) ? travel : 0;
+  const travelled = tr * speed + phase01 * span;
   let s = travelled % span;
   if (s < 0) s += span;
   s -= span * 0.5;
@@ -646,7 +752,7 @@ varying float vEmissive;
 
 void main() {
   // Opaque and lit. The emissive term is ADDED after the light term, so it
-  // survives the night — which is the entire point of the olthoi variant.
+  // survives the night - which is the entire point of the olthoi variant.
   vec3 c = vTint * vLight + uEmissiveColour * max(vEmissive, 0.0);
   gl_FragColor = vec4(c, 1.0);
 }
@@ -671,14 +777,14 @@ precision highp float;
 // Per-instance (written by terrain_scatter.js; see the schema below).
 attribute vec3 aOffset;    // AC world position of the anchor (x, y, z=ground+lift)
 attribute vec2 aScale;     // (length, width) in metres
-attribute vec4 aGrit;      // (phase01, speedMul, spare, opacity)
+attribute vec4 aGrit;      // (phase01, speedMul k/64, spare, opacity)
 
-uniform float uTime;       // the SHARED clock, bound by reference (plan 5.6)
 uniform vec2  uWindAc;     // AC ground wind (+X east, +Y north), live
+uniform float uTravel;     // integral of |wind| dt (seconds x gust), CPU, wrapped
 uniform float uSpanM;      // advection recycle distance
 uniform float uSpeed;      // metres/sec per unit wind magnitude
 uniform float uPulseFreq;  // cycles per metre
-uniform float uPulseScroll;
+uniform vec2  uPulseOffset; // integral of dir x pulse scroll dt (noise units), CPU
 uniform float uPulseThreshold;
 
 varying vec2 vQuadUv;
@@ -702,11 +808,15 @@ float rockNoise2D(vec2 p) {
 }
 
 void main() {
-  // --- advection: the JS twin is terrain_rock.js::gritAdvect ---------------
+  // --- advection: the JS twin is terrain_rock.js::gritAdvectTravel ---------
   float wl = max(length(uWindAc), 1e-4);
   vec2 dir = uWindAc / wl;
   vec2 side = vec2(-dir.y, dir.x);
-  float travelled = uTime * uSpeed * aGrit.y * wl + aGrit.x * uSpanM;
+  // 2026-10-24: uTravel is the INTEGRAL of the gust magnitude, accumulated per
+  // frame on the CPU, never the absolute clock times the live wind: that
+  // product's derivative carries uTime x d|wind|/dt, so the grit raced faster
+  // the older the session. Identical for a constant wind (gritAdvect).
+  float travelled = uTravel * uSpeed * aGrit.y + aGrit.x * uSpanM;
   float s = mod(travelled, uSpanM) - uSpanM * 0.5;
   vec2 adv = dir * s;
 
@@ -717,7 +827,10 @@ void main() {
   vec4 placed = instanceMatrix * vec4(local, 1.0);
 
   // --- the pulse field: trains of grit form and dissolve -------------------
-  vec2 pulseXy = placed.xy * uPulseFreq + dir * (uTime * uPulseScroll);
+  // The scroll is INTEGRATED on the CPU (dt x scroll x the live direction):
+  // the old dir x uTime swept the pattern sideways at uTime x the 45 s wind
+  // wander, ever faster as the session aged.
+  vec2 pulseXy = placed.xy * uPulseFreq + uPulseOffset;
   float n = rockNoise2D(pulseXy);
   float pulse = smoothstep(uPulseThreshold, 1.0, n);
 
@@ -1121,12 +1234,20 @@ export function createGritField(opts = {}) {
     : null;
   const _ownsClock = _sharedTime === null;
   const uniforms = {
+    // Still adopted BY IDENTITY (plan §5.6) for diagnostics and the shared-
+    // clock contract, but since 2026-10-24 the grit GLSL reads no clock: its
+    // motion comes from the CPU-integrated `uTravel` / `uPulseOffset`.
     uTime: _sharedTime || { value: 0 },
     uWindAc: { value: null },
+    uTravel: { value: 0 },
     uSpanM: { value: tuning.advectSpanM },
     uSpeed: { value: tuning.advectSpeed },
     uPulseFreq: { value: tuning.pulseFreq },
+    // CPU-side rate (noise units / s): `update` integrates it into
+    // `uPulseOffset` along the live wind direction. Not declared in the GLSL.
     uPulseScroll: { value: tuning.pulseScrollHz },
+    // A plain {x, y} headless; a THREE.Vector2 once THREE is injected.
+    uPulseOffset: { value: { x: 0, y: 0 } },
     uPulseThreshold: { value: tuning.pulseThreshold },
     uColour: { value: null },
     uOpacity: { value: tuning.opacity },
@@ -1143,6 +1264,7 @@ export function createGritField(opts = {}) {
     try {
       geometry = _gritGeometry(THREE);
       uniforms.uWindAc.value = new THREE.Vector2(1, 0);
+      uniforms.uPulseOffset.value = new THREE.Vector2(0, 0);
       uniforms.uColour.value = new THREE.Color(
         tuning.colour[0], tuning.colour[1], tuning.colour[2],
       );
@@ -1190,12 +1312,17 @@ export function createGritField(opts = {}) {
       ctx.z += lift;
       const lenJ = 1 + (ctx.rand(4) - 0.5) * 2 * tuning.streakLengthJitter;
       ctx.set("aScale", tuning.streakLengthM * lenJ, tuning.streakWidthM);
+      // ⚠ 2026-10-24: the opacity no longer multiplies the pool's scatter-time
+      // fade. That value is FROZEN at placement: a leading-edge streak is
+      // placed at the rim (fade ~0) and kept it while the player walked onto
+      // it, emptying the near field. The shader's live `hbScatterFade` is the
+      // only distance blend (the at-rest product also faded the rim twice).
       ctx.set(
         "aGrit",
         ctx.rand(5),                      // advection phase
-        0.8 + ctx.rand(6) * 0.7,          // per-streak speed multiplier
+        gritSpeedMul(ctx.rand(6)),        // 0.8..1.5, quantised (seamless wrap)
         ctx.rand(7),                      // spare channel (unused by v1)
-        (0.5 + ctx.rand(8) * 0.5) * ctx.fade * v.grit,
+        (0.5 + ctx.rand(8) * 0.5) * v.grit,
       );
     },
     oracle: opts.oracle,
@@ -1214,7 +1341,15 @@ export function createGritField(opts = {}) {
     mesh.renderOrder = 3;
   }
 
-  const state = { frames: 0, lastRescattered: 0, built: !!mesh };
+  const state = {
+    frames: 0, lastRescattered: 0, built: !!mesh,
+    // Integral of |wind| dt (`uTravel`), wrapped seamlessly; a double here.
+    travel: 0, travelWraps: 0,
+    // Integral of dir x pulseScroll dt (`uPulseOffset`), noise units. Not
+    // wrapped (value noise is not periodic): at 0.09 units/s it reaches ~7800
+    // in a day, where float32 still resolves ~1 cm.
+    pulseX: 0, pulseY: 0,
+  };
 
   return {
     pool,
@@ -1223,21 +1358,47 @@ export function createGritField(opts = {}) {
     get mesh() { return mesh; },
     get material() { return material; },
     get geometry() { return geometry; },
+    /**
+     * Per-frame. The motion is INTEGRATED from the live shared wind: travel
+     * advances by `dt x |wind|` and the pulse offset by `dt x scroll x dir`,
+     * so a gust or the direction wander changes the SPEED smoothly, whatever
+     * the clock reads. `dt` is clamped to GRIT_MAX_DT (a resumed tab must not
+     * jump). Zero-alloc.
+     */
     update(dt, tSec, px, py, pz) {
       state.frames += 1;
       windAcFromGlobals(globals, wind);
       if (_ownsClock) uniforms.uTime.value = Number.isFinite(tSec) ? tSec : 0;
       const wv = uniforms.uWindAc.value;
       if (wv) { wv.x = wind.x; wv.y = wind.y; }
+      const d = Number.isFinite(dt) ? Math.min(GRIT_MAX_DT, Math.max(0, dt)) : 0;
+      const gust = Math.hypot(wind.x, wind.y);
+      state.travel += d * gust;
+      const wrap = gritTravelWrap(uniforms.uSpanM.value, uniforms.uSpeed.value);
+      if (state.travel >= wrap) {
+        state.travel -= wrap * Math.floor(state.travel / wrap);
+        state.travelWraps += 1;
+      }
+      uniforms.uTravel.value = state.travel;
+      // dir = uWindAc / max(|uWindAc|, 1e-4), exactly as the GLSL forms it.
+      const k = d * uniforms.uPulseScroll.value / Math.max(gust, 1e-4);
+      state.pulseX += k * wind.x;
+      state.pulseY += k * wind.y;
+      const po = uniforms.uPulseOffset.value;
+      if (po) { po.x = state.pulseX; po.y = state.pulseY; }
       state.lastRescattered = pool.update(dt, px, py, pz);
       return state.lastRescattered;
     },
-    /** The CPU twin of the shader advection, for diagnostics and tests. */
-    advectionOf(phase01, tSec, speedMul) {
-      windAcFromGlobals(globals, wind);
-      return gritAdvect(
+    /**
+     * The CPU twin of the shader advection AS DRAWN THIS FRAME (the live
+     * integrated `uTravel` and the wind of the last `update`), for diagnostics
+     * and tests. `speedMul` is the streak's `aGrit.y`.
+     */
+    advectionOf(phase01, speedMul) {
+      if (state.frames === 0) windAcFromGlobals(globals, wind);
+      return gritAdvectTravel(
         wind.x, wind.y,
-        Number.isFinite(tSec) ? tSec : 0,
+        state.travel,
         phase01,
         uniforms.uSpanM.value,
         uniforms.uSpeed.value * (Number.isFinite(speedMul) ? speedMul : 1),
@@ -1256,6 +1417,10 @@ export function createGritField(opts = {}) {
         frames: state.frames,
         lastRescattered: state.lastRescattered,
         wind: { x: wind.x, y: wind.y },
+        travel: state.travel,
+        travelWraps: state.travelWraps,
+        travelWrap: gritTravelWrap(uniforms.uSpanM.value, uniforms.uSpeed.value),
+        pulseOffset: { x: state.pulseX, y: state.pulseY },
         pool: pool.stats(),
       };
     },

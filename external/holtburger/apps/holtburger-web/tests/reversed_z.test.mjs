@@ -423,7 +423,10 @@ const pin = (name, hash, len, text, opts = {}) => {
   const lh = await import(v("scene3d/layered_haze.js"));
   pin("layered haze", "c1b709ba", 1048, lh.LAYER_HAZE_FRAG);
   const hh = await import(v("scene3d/vfx/heat_haze_effect.js"));
-  pin("heat haze effect", "adcbf918", 2469, new hh.HeatHazeEffect({}).getFragmentShader());
+  // Re-pinned 2026-10-23 (desert mirage): the ground shimmer + inferior-mirage
+  // terms and their 7 uniforms, then the mirage's receding-ground test (one more
+  // hbHeatDistanceM read); the reversed-Z branch of hbHeatDistanceM is unchanged.
+  pin("heat haze effect", "199f66b6", 4784, new hh.HeatHazeEffect({}).getFragmentShader());
   const fd = await import(v("scene3d/vfx/fx_distort_effect.js"));
   pin("fx distort effect", "2df31453", 2926, new fd.FxDistortEffect({}).getFragmentShader());
   const ss = await import(v("scene3d/ssao.js"));

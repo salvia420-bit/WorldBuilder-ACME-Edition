@@ -118,15 +118,33 @@ export function triangleHeightInCell(z00, z10, z01, z11, fx, fy, swNeCut) {
  * triangle as `triangleHeightInCell`. Port of
  * `terrain_subdiv.rs::triangle_grad_in_cell`. Constant within a triangle
  * (planar), so this is the exact face normal, not a bilinear smear.
+ *
+ * 2026-10-24 — optional `out`: pass a reusable 2-slot plain Array (or a
+ * Float64Array; NOT a Float32Array, which would round the doubles) and the
+ * gradient is written into `out[0]`, `out[1]` and `out` is returned, so a hot
+ * caller (`sample()`, hence the per-frame sand-devil walk) allocates nothing.
+ * Without `out` a new `[dx, dy]` is returned, exactly as before. The same
+ * four subtractions either way, so both forms are bit-identical.
+ * @param {number[]|Float64Array} [out]
  * @returns {[number, number]}
  */
-export function triangleGradInCell(z00, z10, z01, z11, fx, fy, swNeCut) {
+export function triangleGradInCell(z00, z10, z01, z11, fx, fy, swNeCut, out) {
+  let gx;
+  let gy;
   if (swNeCut) {
-    if (fx >= fy) return [z10 - z00, z11 - z10]; // lower-right: SW, SE, NE
-    return [z11 - z01, z01 - z00];               // upper-left:  SW, NE, NW
+    if (fx >= fy) { gx = z10 - z00; gy = z11 - z10; } // lower-right: SW, SE, NE
+    else { gx = z11 - z01; gy = z01 - z00; }          // upper-left:  SW, NE, NW
+  } else if (fx + fy <= 1.0) {
+    gx = z10 - z00; gy = z01 - z00;                   // lower-left: SW, SE, NW
+  } else {
+    gx = z11 - z01; gy = z11 - z10;                   // upper-right: NE, NW, SE
   }
-  if (fx + fy <= 1.0) return [z10 - z00, z01 - z00]; // lower-left: SW, SE, NW
-  return [z11 - z01, z11 - z10];                     // upper-right: NE, NW, SE
+  if (out) {
+    out[0] = gx;
+    out[1] = gy;
+    return out;
+  }
+  return [gx, gy];
 }
 
 // ----- roads (2026-10-07) ---------------------------------------------
@@ -470,6 +488,10 @@ export function createTerrainOracle(opts = {}) {
     if (attachedLbKeys && !attachedLbKeys.has(lbKey)) parkedHits += 1;
   }
 
+  // Gradient scratch for `sample()` (2026-10-24) — a plain Array keeps the
+  // doubles exact, so the normal is bit-identical to the allocating form.
+  const _gradScratch = [0, 0];
+
   /**
    * Full sample at world (x, y). AC frame: +X east, +Y north, +Z up — the
    * frame you are already in inside `terrainGroup` (`worldRoot` carries the
@@ -592,7 +614,9 @@ export function createTerrainOracle(opts = {}) {
     r.hasHeight = true;
     r.height = triangleHeightInCell(z00, z10, z01, z11, fx, fy, swNeCut);
 
-    const g = triangleGradInCell(z00, z10, z01, z11, fx, fy, swNeCut);
+    // Into the per-oracle scratch (2026-10-24): `sample()` is synchronous and
+    // reads both slots straight away, so one 2-slot array serves every call.
+    const g = triangleGradInCell(z00, z10, z01, z11, fx, fy, swNeCut, _gradScratch);
     const dzdx = g[0] / VERTEX_SPACING_M;
     const dzdy = g[1] / VERTEX_SPACING_M;
     let nx = -dzdx;

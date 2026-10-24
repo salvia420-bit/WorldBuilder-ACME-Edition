@@ -46,6 +46,16 @@
 //   O1  The crack-glow BREATHING OSCILLATOR rides the shared registry, is
 //       ≤ 1 Hz (so the tick's 3600 s clock wrap is phase-continuous), and its
 //       range is bounded.
+//   S1  2026-10-23 THE SPLIT: FAM_VOLCANO is lava (code 25) alone — obsidian
+//       (6) and ash (26) draw no vents, no shimmer disc, no crack glow.
+//   R1  2026-10-23 THE VENT RANGE GATE: LRU residency is capacity-driven, so a
+//       vent landblock holds emitters only within `ventEngageM` of the player
+//       and DESTROYS them past `ventEngageM * ventDropFactor` (the owner's tour
+//       grew ventLandblocks 11 → 63 → 80 while teleporting 10 km away).
+//   K1  2026-10-23 live crack-glow knobs: `tune()` writes the terrain uniforms
+//       now and the crack provider re-asserts them every frame (new landblocks
+//       and the batched material included); `tune(null)` writes the
+//       captured defaults back once, then stops.
 //
 // Run from apps/holtburger-web/:  node test_terrain_volcano.mjs
 // (`three` + `postprocessing` resolve as bare imports via node_modules — the
@@ -54,7 +64,7 @@
 import { readFileSync } from "node:fs";
 import * as THREE from "three";
 import { BlendFunction, EffectAttribute, EffectPass, VignetteEffect } from "postprocessing";
-import { FAM_VOLCANO, FAM_GRASS, familyForCode } from "./scene3d/terrain_families.js";
+import { FAM_VOLCANO, FAM_GRASS, FAM_OBSIDIAN, FAM_ASH, familyForCode } from "./scene3d/terrain_families.js";
 import { lintManifest, lintSource } from "./scene3d/vfx/lint_caps.js";
 
 let passed = 0, failed = 0;
@@ -113,21 +123,22 @@ const VOLC_CODE = stripComments(VOLC_SRC);
 // ===========================================================================
 console.log("\n-- F2 family + quality ladder ----------------------------------");
 // ===========================================================================
-check("volcano codes are DERIVED from terrain_families (6, 25, 26)",
-  JSON.stringify(volc.volcanoTerrainCodes()) === JSON.stringify([6, 25, 26]),
+check("S1: volcano codes are DERIVED from terrain_families — LAVA (25) alone since the 2026-10-23 split",
+  JSON.stringify(volc.volcanoTerrainCodes()) === JSON.stringify([25]),
   JSON.stringify(volc.volcanoTerrainCodes()));
 check("every derived volcano code really is FAM_VOLCANO",
   volc.volcanoTerrainCodes().every((c) => familyForCode(c) === FAM_VOLCANO));
-check("volcanoCodeBitmask() sets exactly bits 6, 25, 26",
-  volc.volcanoCodeBitmask() === ((1 << 6) | (1 << 25) | (1 << 26)) >>> 0,
+check("S1: volcanoCodeBitmask() sets exactly bit 25",
+  volc.volcanoCodeBitmask() === ((1 << 25) >>> 0),
   volc.volcanoCodeBitmask().toString(2));
 check("no volcano code is grass (the family sets are disjoint)",
   volc.volcanoTerrainCodes().every((c) => familyForCode(c) !== FAM_GRASS));
-check("obsidian is CODE 6 ALONE (plan §3.6 item 5), not the whole family",
-  volc.obsidianCodeBitmask() === (1 << 6) && volc.TERRAIN_CODE_OBSIDIAN_PLAIN === 6);
-check("the obsidian mask is a strict subset of the volcano mask",
-  (volc.obsidianCodeBitmask() & volc.volcanoCodeBitmask()) === volc.obsidianCodeBitmask()
-  && volc.obsidianCodeBitmask() !== volc.volcanoCodeBitmask());
+check("S1: ObsidianPlain (6) is FAM_OBSIDIAN and Volcano2 (26) is FAM_ASH — neither is lava",
+  familyForCode(6) === FAM_OBSIDIAN && familyForCode(26) === FAM_ASH
+  && (volc.volcanoCodeBitmask() & ((1 << 6) | (1 << 26))) === 0);
+check("S1: the obsidian exports LEFT this module (terrain_obsidian.js owns them)",
+  !("obsidianCodeBitmask" in volc) && !("TERRAIN_CODE_OBSIDIAN_PLAIN" in volc)
+  && !("obsidianCodeMask" in volc.terrainVolcanoStats()));
 
 check("quality low ⇒ null (plan §3.6 'low: null', §5.8)",
   volc.resolveVolcanoQuality(PRESETS.low) === null);
@@ -136,12 +147,14 @@ check("quality mid ⇒ crack glow ONLY (no haze, no embers)",
   qMid && qMid.crackGlow === true && qMid.emberCount === 0
   && (qMid.hazeStrength === 0 || qMid.hazeRadiusM === 0), JSON.stringify(qMid));
 const qHigh = volc.resolveVolcanoQuality(PRESETS.high);
-check("quality high ⇒ {crackGlow, haze, embers:1}",
-  qHigh && qHigh.crackGlow === true && qHigh.emberCount === 1
+// 2026-10-23: 2 vents per LAVA landblock at high (was 1 per volcanic LB, i.e.
+// over 2700 obsidian/ash LBs too); the range gate bounds what is live.
+check("quality high ⇒ {crackGlow, haze, embers:2}",
+  qHigh && qHigh.crackGlow === true && qHigh.emberCount === 2
   && qHigh.hazeStrength > 0 && qHigh.hazeRadiusM > 0, JSON.stringify(qHigh));
 const qUltra = volc.resolveVolcanoQuality(PRESETS.ultra);
-check("quality ultra ⇒ {crackGlow, haze, embers:3}",
-  qUltra && qUltra.crackGlow === true && qUltra.emberCount === 3
+check("quality ultra ⇒ {crackGlow, haze, embers:4}",
+  qUltra && qUltra.crackGlow === true && qUltra.emberCount === 4
   && qUltra.hazeStrength > 0 && qUltra.hazeRadiusM > 0, JSON.stringify(qUltra));
 check("a missing flag bag ⇒ null (never a silent default-on)",
   volc.resolveVolcanoQuality(null) === null && volc.resolveVolcanoQuality({}) === null);
@@ -166,11 +179,32 @@ check("no window: every volcano flag reads false",
 setUrl(""); _resetVfxFlags();
 check("no flags + a high-tier preset: the MASTER is still off (ship-OFF, §5.9)",
   terrainVolcanoEnabled() === false);
-check("no flags: initTerrainVolcano registers NOTHING",
-  volc.initTerrainVolcano({ scene3d: {} }) === null
+// 2026-10-23: the heat shimmer / mirage is its OWN master (owner, on the
+// 1070) — at a high-tier preset with no URL flags it registers; embers and
+// crack glow still need ?terrainVolcano.
+{
+  const surf = volc.initTerrainVolcano({ scene3d: {} });
+  const ids = vfx.terrainVfxStats().providers.map((p) => p.id || p);
+  check("no flags + high tier: initTerrainVolcano registers ONLY the haze provider (its own master since 2026-10-23)",
+    !!surf && ids.length === 1 && String(ids[0]).includes("volcanoHaze"), JSON.stringify(ids));
+  volc._resetTerrainVolcano();
+  vfx._resetTerrainVfx();
+}
+check("no flags + high tier: createHeatHazeEffect() constructs the Effect (shipped at high/ultra)",
+  !!haze.createHeatHazeEffect());
+setUrl("?terrainHaze=off"); _resetVfxFlags();
+check("?terrainHaze=off: createHeatHazeEffect() returns null and nothing registers",
+  haze.createHeatHazeEffect() === null && volc.initTerrainVolcano({ scene3d: {} }) === null
   && vfx.terrainVfxStats().providers.length === 0);
-check("no flags: createHeatHazeEffect() returns null (the fxPass slot is dropped)",
-  haze.createHeatHazeEffect() === null);
+{
+  const { _resetVfxCatalog } = await import("./scene3d/vfx_catalog.js");
+  setUrl("?visual=off"); _resetVfxCatalog(); _resetVfxFlags();
+  check("?visual=off: createHeatHazeEffect() returns null (the firewall)", haze.createHeatHazeEffect() === null);
+  setUrl(""); _resetVfxCatalog(); _resetVfxFlags();
+}
+setUrl("?terrainVfx=off"); _resetVfxFlags();
+check("?terrainVfx=off: createHeatHazeEffect() returns null (the terrain-VFX kill)", haze.createHeatHazeEffect() === null);
+setUrl(""); _resetVfxFlags();
 check("no flags: HEAT_HAZE_STATE is inert (radiusM 0, enabled 0)",
   volc.HEAT_HAZE_STATE.radiusM === 0 && volc.HEAT_HAZE_STATE.enabled === 0);
 check("no flags: window.__heatHaze is NOT installed",
@@ -183,8 +217,9 @@ const VOLCANO_ROWS = ["terrain.volcano", "terrain.volcanoHaze",
 check("all four volcano rows are registered in VFX_EFFECT_FLAGS",
   VOLCANO_ROWS.every((id) => typeof VFX_EFFECT_FLAGS[id] === "function"),
   Object.keys(VFX_EFFECT_FLAGS).join());
-check("no flags: every volcano row resolves FALSE through vfxEffectEnabled",
-  VOLCANO_ROWS.every((id) => vfxEffectEnabled(id) === false));
+check("no flags + high tier: the family rows resolve FALSE, the haze row TRUE (its own master since 2026-10-23)",
+  VOLCANO_ROWS.filter((id) => id !== "terrain.volcanoHaze").every((id) => vfxEffectEnabled(id) === false)
+  && vfxEffectEnabled("terrain.volcanoHaze") === true && vfxEffectEnabled("terrain.desertHaze") === true);
 check("the DEFAULT-ON effect count is unchanged at 16 (volcano ids are ship-OFF; 14 + the 2026-10-10 per-weapon rows)",
   Object.keys(VFX_EFFECT_FLAGS).filter((id) => !id.startsWith("terrain.")).length === 16);
 check("the ember DESCRIPTOR id is also its VFX_EFFECT_FLAGS row "
@@ -208,11 +243,29 @@ setUrl("?terrainVolcano=on&terrainVolcano=on", { ...HIGH_FLAGS, terrainVolcanoEm
 _resetVfxFlags();
 check("a zero ember count at the tier leaves ?terrainEmbers off",
   terrainEmbersEnabled() === false);
-setUrl("?terrainVolcano=off&terrainHaze=on"); _resetVfxFlags();
-check("?terrainVolcano=off kills the family even with a sub-flag on",
-  vfxEffectEnabled("terrain.volcanoHaze") === false);
+setUrl("?terrainVolcano=off&terrainHaze=on&terrainEmbers=on&terrainCrackGlow=on"); _resetVfxFlags();
+check("?terrainVolcano=off kills the family's embers + crack glow even with their sub-flags on",
+  vfxEffectEnabled("terrain.volcanoEmbers") === false && vfxEffectEnabled("terrain.volcanoCrackGlow") === false);
+check("... but not the heat shimmer, its own master since 2026-10-23",
+  vfxEffectEnabled("terrain.volcanoHaze") === true);
+setUrl("?terrainHaze=off"); _resetVfxFlags();
+check("?terrainHaze=off kills both shimmer rows (volcano disc + desert arm)",
+  vfxEffectEnabled("terrain.volcanoHaze") === false && vfxEffectEnabled("terrain.desertHaze") === false);
 
 // ===========================================================================
+console.log("\n-- H0 the shimmer disc needs a real lava field (2026-10-23) ---------");
+{
+  const lava = Array.from({ length: 81 }, (_, i) => (i < 30 ? 25 : 1));
+  const stray = Array.from({ length: 81 }, (_, i) => (i < 5 ? 25 : 1));
+  check("lavaVertexCount counts lava (code 25) only; obsidian 6 and ash 26 are not lava",
+    volc.lavaVertexCount(lava) === 30 && volc.lavaVertexCount(stray) === 5
+    && volc.lavaVertexCount(Array(81).fill(6)) === 0 && volc.lavaVertexCount(Array(81).fill(26)) === 0 && volc.lavaVertexCount(null) === 0);
+  check("the disc threshold is a field, not a few vertices (12 of 81)", volc.VOLCANO_TUNING.hazeMinLavaVerts === 12);
+  const src = readFileSync("./scene3d/terrain_volcano.js", "utf8");
+  check("ready AND unpark both apply the threshold before a landblock can drive the disc",
+    (src.match(/lavaVertexCount\(ctx\.codes\) < VOLCANO_TUNING\.hazeMinLavaVerts/g) || []).length === 2);
+}
+
 console.log("\n-- H1/H2 the Effect: DEPTH, mainUv, log-depth decode -------------");
 // ===========================================================================
 setUrl("?terrainVolcano=on&terrainHaze=on"); _resetVfxFlags();
@@ -580,7 +633,7 @@ console.log("\n-- E2 vent placement is hash-stable and volcanic-only -----------
   const heights = new Float32Array(81);
   for (let i = 0; i < 81; i += 1) {
     const vx = (i / 9) | 0;
-    codes[i] = vx < 4 ? 26 : 1;             // 26 = Volcano2, 1 = Grassland
+    codes[i] = vx < 4 ? 25 : 1;             // 25 = Volcano1 (lava), 1 = Grassland
     heights[i] = 5 + i * 0.01;
   }
   const opts = { lbKey: vfx.lbKeyFromXY(0x40, 0x50), lbX: 0x40, lbY: 0x50, codes, heights, count: 3 };
@@ -606,7 +659,7 @@ console.log("\n-- E2 vent placement is hash-stable and volcanic-only -----------
   check("E2: asking for more vents than volcanic vertices simply gets fewer",
     (() => {
       const one = new Uint8Array(81).fill(1);
-      one[40] = 6;
+      one[40] = 25;
       return volc.ventSlotsForLandblock({ ...opts, codes: one, count: 8 }).length === 1;
     })());
   check("E2: the LB centre helper averages only the VOLCANIC vertices",
@@ -672,7 +725,7 @@ function makeSpyRegistry() {
   check("E3: ?terrainHaze=off ⇒ the haze provider is NOT registered",
     !vfx.terrainVfxStats().providers.some((p) => p.id === "terrain.volcanoHaze"));
 
-  const gg = volcanoGrids(6);
+  const gg = volcanoGrids(25);
   vfx.terrainVfxNoteLandblockMesh(scene3d, {
     userData: { lbX: 0xcd, lbY: 0x34, terrainCodes: gg.codes, heights: gg.heights },
   });
@@ -776,6 +829,221 @@ check("O1: crack glow OFF ⇒ the oscillator is never registered",
     vfx._resetTerrainVfx();
     return r === null && none;
   })());
+
+// ===========================================================================
+console.log("\n-- S1/R1 lava only + the vent range gate (2026-10-23) ------------");
+// ===========================================================================
+{
+  const spy = makeSpyRegistry();
+  const fakeManager = { added: 0, async addEmitter() { this.added += 1; return 1; } };
+  const player = { x: 0x10 * 192 + 96, y: 0x10 * 192 + 96, z: 10 };
+  const scene3d = {
+    terrainGroup: { children: [], parent: null },
+    frameTime: { tsSec: 0 },
+    // The 2026-10-23 high tier: 2 vents per lava landblock.
+    quality: { flags: { ...HIGH_FLAGS, terrainVolcanoEmberCount: PRESETS.high.terrainVolcanoEmberCount } },
+    camera: fakeCam,
+    cameraSwitcher: { _safePlayerPos: () => ({ x: player.x, y: player.y, z: player.z }) },
+  };
+  setUrl("?terrainVolcano=on&terrainHaze=on&terrainEmbers=on"); _resetVfxFlags();
+  vfx._resetTerrainVfx();
+  volc._resetTerrainVolcano();
+  vfx.initTerrainVfx({ scene3d });
+  volc.initTerrainVolcano({
+    scene3d, ownerRegistry: spy, getParticleManager: () => fakeManager, readEnv: () => VENT_ENV,
+  });
+  const note = (lbX, lbY, code) => vfx.terrainVfxNoteLandblockMesh(scene3d, {
+    userData: { lbX, lbY, terrainCodes: new Uint8Array(81).fill(code), heights: new Float32Array(81).fill(9) },
+  });
+  const flush = async () => { for (let i = 0; i < 6; i += 1) await Promise.resolve(); };
+
+  // S1 — obsidian and ash landblocks next to the player: nothing volcanic.
+  note(0x10, 0x10, 6);
+  note(0x11, 0x10, 26);
+  await flush();
+  vfx.terrainVfxTick(0.016, scene3d);
+  check("S1: an ObsidianPlain (6) landblock spawns NO vent",
+    spy.emitterCountForOwner(volc.volcanoOwnerKeyForLb(vfx.lbKeyFromXY(0x10, 0x10))) === 0);
+  check("S1: a Volcano2 / ash (26) landblock spawns NO vent",
+    spy.emitterCountForOwner(volc.volcanoOwnerKeyForLb(vfx.lbKeyFromXY(0x11, 0x10))) === 0);
+  check("S1: … and neither raises the heat-shimmer disc (lava only)",
+    volc.HEAT_HAZE_STATE.radiusM === 0 && volc.HEAT_HAZE_STATE.enabled === 0
+    && volc.terrainVolcanoStats().hazeLandblocks === 0);
+
+  // R1 — a lava landblock under the player: vents (2 per LB at high, ember+smoke each).
+  note(0x10, 0x11, 25);
+  await flush();
+  vfx.terrainVfxTick(0.016, scene3d);
+  const nearKey = vfx.lbKeyFromXY(0x10, 0x11);
+  const nearOwner = volc.volcanoOwnerKeyForLb(nearKey);
+  check("R1: a lava landblock in range spawns its vents (2 vents x ember+smoke)",
+    spy.emitterCountForOwner(nearOwner) === 4, `count=${spy.emitterCountForOwner(nearOwner)}`);
+  check("R1: … and it drives the shimmer disc",
+    volc.HEAT_HAZE_STATE.enabled === 1 && volc.HEAT_HAZE_STATE.radiusM > 0);
+
+  // A lava landblock that streams in FAR from the player stays dormant.
+  note(0x30, 0x30, 25);
+  await flush();
+  const farKey = vfx.lbKeyFromXY(0x30, 0x30);
+  const farOwner = volc.volcanoOwnerKeyForLb(farKey);
+  check("R1: a lava landblock resident but out of range holds NO emitter (deferred)",
+    spy.emitterCountForOwner(farOwner) === 0
+    && volc.terrainVolcanoStats().counters.rangeDeferred === 1);
+  check("R1: stats separate LRU residency from the live (distance-bounded) set",
+    volc.terrainVolcanoStats().ventLandblocks === 2 && volc.terrainVolcanoStats().ventsActive === 1);
+
+  // The player teleports next to the far landblock: the near one DROPS, the far one SPAWNS.
+  player.x = 0x30 * 192 + 96; player.y = 0x30 * 192 + 96;
+  const drops0 = spy.calls.destroyAll.length;
+  scene3d.frameTime.tsSec = 1.0;
+  vfx.terrainVfxTick(0.016, scene3d);
+  await flush();
+  check("R1: past ventEngageM x ventDropFactor the near landblock's emitters are DESTROYED (not stopped)",
+    spy.emitterCountForOwner(nearOwner) === 0 && spy.calls.destroyAll.length === drops0 + 1
+    && spy.calls.destroyAll[spy.calls.destroyAll.length - 1] === nearOwner);
+  check("R1: … and the landblock it teleported to spawns its vents",
+    spy.emitterCountForOwner(farOwner) === 4);
+  check("R1: the dropped landblock is still RESIDENT (the LRU owns residency), just inactive",
+    volc.terrainVolcanoStats().ventLandblocks === 2
+    && volc.terrainVolcanoStats().ventOwners.some((o) => o.ownerKey === nearOwner && !o.active));
+  check("R1: ventsActive is distance-bounded (1 of 2 resident)",
+    volc.terrainVolcanoStats().ventsActive === 1
+    && volc.terrainVolcanoStats().counters.rangeDrops === 1);
+
+  // Within the evaluation period nothing re-evaluates (2 Hz, never per frame).
+  const evals = volc.terrainVolcanoStats().counters.ventEvals;
+  scene3d.frameTime.tsSec = 1.1;
+  vfx.terrainVfxTick(0.016, scene3d);
+  check("R1: the gate runs at ventEvalHz, not every frame",
+    volc.terrainVolcanoStats().counters.ventEvals === evals);
+
+  // Back home: hysteresis — inside the drop radius but outside engage keeps state.
+  // Stand due north of the northernmost vent at 1.07 x engage: every other vent
+  // is further south, so the NEAREST vent sits between engage and drop (1.15).
+  const engage = volc.VOLCANO_TUNING.ventEngageM;
+  const nearSlots = volc.ventSlotsForLandblock({
+    lbKey: nearKey, lbX: 0x10, lbY: 0x11, codes: new Uint8Array(81).fill(25),
+    heights: new Float32Array(81).fill(9), count: PRESETS.high.terrainVolcanoEmberCount,
+  });
+  const north = nearSlots.reduce((a, b) => (b.y > a.y ? b : a));
+  player.x = north.x; player.y = north.y + engage * 1.07;
+  scene3d.frameTime.tsSec = 2.0;
+  vfx.terrainVfxTick(0.016, scene3d);
+  await flush();
+  check("R1: hysteresis — between engage and drop a dormant landblock stays dormant",
+    spy.emitterCountForOwner(nearOwner) === 0);
+  player.x = 0x10 * 192 + 96; player.y = 0x11 * 192 + 96;
+  scene3d.frameTime.tsSec = 3.0;
+  vfx.terrainVfxTick(0.016, scene3d);
+  await flush();
+  check("R1: walking back into range re-forms the SAME vents (hash-stable)",
+    spy.emitterCountForOwner(nearOwner) === 4);
+
+  // A parked landblock never re-spawns from the gate.
+  vfx.terrainVfxLandblockPark(farKey);
+  player.x = 0x30 * 192 + 96; player.y = 0x30 * 192 + 96;
+  scene3d.frameTime.tsSec = 4.0;
+  vfx.terrainVfxTick(0.016, scene3d);
+  await flush();
+  check("R1: a PARKED landblock is not activated by the range gate",
+    volc.terrainVolcanoStats().ventOwners.some((o) => o.ownerKey === farOwner && o.parked));
+  check("R1: the live range knob exists and re-evaluates",
+    (() => {
+      const r = volc.setVentRange({ engageM: 900 });
+      const back = volc.setVentRange({ engageM: engage });
+      return r.engageM === 900 && back.engageM === engage;
+    })());
+  check("R1: no Math.random / per-frame closure in the gate (hoisted forEach callback)",
+    /_ventLbs\.forEach\(_evalVentRec\)/.test(VOLC_SRC));
+  volc._resetTerrainVolcano();
+  vfx._resetTerrainVfx();
+}
+
+// ===========================================================================
+console.log("\n-- R2 no ParticleManager yet: dormant, then retried ---------------");
+// ===========================================================================
+{
+  const spy = makeSpyRegistry();
+  let manager = null;
+  const scene3d = {
+    terrainGroup: { children: [], parent: null },
+    frameTime: { tsSec: 0 },
+    quality: { flags: { ...HIGH_FLAGS } },
+    cameraSwitcher: { _safePlayerPos: () => ({ x: 0x20 * 192 + 96, y: 0x20 * 192 + 96, z: 5 }) },
+  };
+  setUrl("?terrainVolcano=on&terrainHaze=off&terrainEmbers=on"); _resetVfxFlags();
+  vfx._resetTerrainVfx();
+  volc._resetTerrainVolcano();
+  vfx.initTerrainVfx({ scene3d });
+  volc.initTerrainVolcano({ scene3d, ownerRegistry: spy, getParticleManager: () => manager, readEnv: () => VENT_ENV });
+  vfx.terrainVfxNoteLandblockMesh(scene3d, {
+    userData: { lbX: 0x20, lbY: 0x20, terrainCodes: new Uint8Array(81).fill(25), heights: new Float32Array(81) },
+  });
+  const owner = volc.volcanoOwnerKeyForLb(vfx.lbKeyFromXY(0x20, 0x20));
+  check("R2: with no ParticleManager the vent stays DORMANT (not falsely live)",
+    volc.terrainVolcanoStats().ventsActive === 0 && spy.calls.add === 0);
+  manager = { async addEmitter() { return 1; } };
+  scene3d.frameTime.tsSec = 1;
+  vfx.terrainVfxTick(0.016, scene3d);
+  for (let i = 0; i < 6; i += 1) await Promise.resolve();
+  check("R2: … and the range gate spawns it once the manager exists",
+    volc.terrainVolcanoStats().ventsActive === 1 && spy.emitterCountForOwner(owner) === 2);
+  volc._resetTerrainVolcano();
+  vfx._resetTerrainVfx();
+}
+
+// ===========================================================================
+console.log("\n-- K1 live crack-glow knobs -------------------------------------");
+// ===========================================================================
+{
+  setUrl("?terrainVolcano=on&terrainCrackGlow=on&terrainHaze=off&terrainEmbers=off"); _resetVfxFlags();
+  vfx._resetTerrainVfx();
+  volc._resetTerrainVolcano();
+  const mkMat = () => ({ uniforms: {
+    uCrackGlowStrength: { value: 1.6 }, uCrackGlowDay: { value: 0.55 },
+    uCrackGlowHeat: { value: { x: 0.03, y: 0.25 } },
+    uCrackGlowColor: { value: { x: 1, y: 0.85, z: 0.7 } },
+    uCrackGlowPulse: { value: 0.4 }, uCrackGlowEnabled: { value: 1 },
+  } });
+  const mats = [mkMat()];
+  const scene3d = { terrainGroup: { children: [] }, frameTime: { tsSec: 0 }, terrainMaterials: mats };
+  vfx.initTerrainVfx({ scene3d });
+  const surf = volc.initTerrainVolcano({ scene3d });
+  check("K1: crack glow on ⇒ the knob provider is registered (camera scope)",
+    vfx.terrainVfxStats().providers.some((p) => p.id === volc.CRACK_PROVIDER_ID && p.scope === "camera"));
+  check("K1: CRACK_PROVIDER_ID is the crack glow's VFX_EFFECT_FLAGS row",
+    typeof VFX_EFFECT_FLAGS[volc.CRACK_PROVIDER_ID] === "function");
+  const got = surf.tune({ strength: 2.5, heat: [0.05, 0.3], color: [1, 0.5, 0.2], bogus: 9 });
+  check("K1: tune() writes the uniforms NOW",
+    mats[0].uniforms.uCrackGlowStrength.value === 2.5
+    && mats[0].uniforms.uCrackGlowHeat.value.x === 0.05 && mats[0].uniforms.uCrackGlowHeat.value.y === 0.3
+    && mats[0].uniforms.uCrackGlowColor.value.z === 0.2);
+  check("K1: unknown knobs are ignored, known ones reported",
+    got.strength === 2.5 && !("bogus" in got));
+  mats.push(mkMat());
+  vfx.terrainVfxTick(0.016, scene3d);
+  check("K1: a material that appears later (a new landblock, the batched rebuild) gets it on the next frame",
+    mats[1].uniforms.uCrackGlowStrength.value === 2.5);
+  check("K1: values are clamped", surf.tune({ strength: 999 }).strength === 16);
+  surf.tune({ day: 1 });           // the checklist's night-in-daylight preview
+  surf.tune(null);
+  // 2026-10-24 verify pass: tune(null) is the vistest's RESET — it writes the
+  // captured defaults back (it used to leave every resident material and the
+  // batched one on the last override for the rest of the session).
+  check("K1: tune(null) RESTORES the defaults on every material it overrode (day, strength, heat, color)",
+    mats.every((m) => m.uniforms.uCrackGlowDay.value === 0.55 && m.uniforms.uCrackGlowStrength.value === 1.6
+      && m.uniforms.uCrackGlowHeat.value.x === 0.03 && m.uniforms.uCrackGlowHeat.value.y === 0.25
+      && m.uniforms.uCrackGlowColor.value.y === 0.85 && m.uniforms.uCrackGlowColor.value.z === 0.7),
+    JSON.stringify(mats.map((m) => [m.uniforms.uCrackGlowDay.value, m.uniforms.uCrackGlowStrength.value])));
+  mats.push(mkMat());
+  mats[2].uniforms.uCrackGlowStrength.value = 3;   // only a push could clobber it
+  vfx.terrainVfxTick(0.016, scene3d);
+  check("K1: … then the push stops (one write-back, nothing re-asserted)",
+    mats[2].uniforms.uCrackGlowStrength.value === 3);
+  check("K1: the surface lists its knobs", Array.isArray(surf.knobs) && surf.knobs.includes("day"));
+  volc._resetTerrainVolcano();
+  vfx._resetTerrainVfx();
+}
 
 // ===========================================================================
 console.log("\n-- wiring ------------------------------------------------------");

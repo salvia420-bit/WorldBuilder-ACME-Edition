@@ -625,10 +625,21 @@ async function run() {
   check("9. snow over snow, ash + embers over volcanic ground, leaves over forest floor",
     D({ snow: 1 }, 0, false).snow === 1 && D({ volcano: 1 }, 0, false).ash === 1 && D({ volcano: 1 }, 0, false).embers === 1 &&
     D({ forest: 1 }, 0, false).leaves === 1 && D({}, 0, false).snow === 0);
-  const cov = fields.fxFieldCoverage([1, 1, 21, 15, 6, -1]);
+  // 2026-10-23 volcano split: lava is code 25 (FAM_VOLCANO), so it is the
+  // volcanic sample here (code 6 is obsidian glass now).
+  const cov = fields.fxFieldCoverage([1, 1, 21, 15, 25, -1]);
   check("9. coverage from terrain codes (forest codes counted as both grass and forest; unknown skipped)",
     Math.abs(cov.grass - 0.6) < 1e-9 && Math.abs(cov.forest - 0.2) < 1e-9 && Math.abs(cov.snow - 0.2) < 1e-9 &&
     Math.abs(cov.volcano - 0.2) < 1e-9 && fam9.TERRAIN_CODE_TO_FAMILY[21] === fam9.FAM_GRASS);
+  {
+    const obsCov = fields.fxFieldCoverage([6, 6, 6, 6]);
+    const ashCov = fields.fxFieldCoverage([26, 26, 26, 26]);
+    const dObs = D(obsCov, 0, false), dAsh = D(ashCov, 0, false);
+    check("9. split: obsidian glass (6) drives NO ash and NO embers (it is not lava)",
+      obsCov.volcano === 0 && obsCov.ash === 0 && dObs.ash === 0 && dObs.embers === 0);
+    check("9. split: grey ash ground (26) drives the ash drift but NO embers",
+      ashCov.ash === 1 && dAsh.ash === 1 && dAsh.embers === 0);
+  }
   fields._resetFxFieldsForTest();
   const prov = fields.createFxFieldsProvider();
   const worldRoot = new THREE.Group();

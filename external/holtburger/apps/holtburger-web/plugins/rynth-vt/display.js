@@ -29,7 +29,8 @@ import { createFrameCapDriver } from "../../scene3d/frame_cap.js";
 /** The option keys this controller follows. */
 export const DISPLAY_KEYS = Object.freeze(["EnableFPSLimit", "TargetFPSFocused", "TargetFPSBackground", "ShowTerrainPassability"]);
 // The schema defaults (rynth/vt/settings/schema.js), for a row that reads undefined.
-const DEFAULTS = Object.freeze({ EnableFPSLimit: true, TargetFPSFocused: 60, TargetFPSBackground: 30, ShowTerrainPassability: true });
+// ShowTerrainPassability: default OFF since 2026-10-23 (owner), matching rynth/vt/settings/schema.js.
+const DEFAULTS = Object.freeze({ EnableFPSLimit: true, TargetFPSFocused: 60, TargetFPSBackground: 30, ShowTerrainPassability: false });
 const KEY_SET = new Set(DISPLAY_KEYS);
 const POLL_MS = 1000;
 const PASSABILITY_URL = new URL("../../scene3d/passability_overlay.js", import.meta.url).href;

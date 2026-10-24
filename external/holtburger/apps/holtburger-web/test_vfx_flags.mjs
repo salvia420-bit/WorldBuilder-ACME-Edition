@@ -16,6 +16,9 @@ import {
   terrainSnowSpindriftCount, terrainSnowRadiusM, terrainSnowSlopeBias,
 } from "./scene3d/vfx_flags.js";
 import { visualEnabled, _resetVfxCatalog } from "./scene3d/vfx_catalog.js";
+// 2026-10-24 — the master kills must reach the terrain SHADER gates too.
+import { readFileSync } from "node:fs";
+import { PRESETS } from "./scene3d/quality.js";
 
 let passed = 0, failed = 0;
 function check(label, cond, extra = "") {
@@ -198,6 +201,43 @@ setUrl("?visual=off&terrainSnow=on&terrainIce=on");
 check("?visual=off kills snow AND ice (the firewall composition rule)",
   vfxEffectEnabled("terrain.snow") === false && vfxEffectEnabled("terrain.ice") === false
   && vfxEffectEnabled("terrain.snowSparkle") === false);
+// ---- 2026-10-24: ?visual=off / ?terrainVfx=off kill the terrain SHADER terms ----
+// The family readers answer their own flag and the quality ladder only, and the
+// shader gates in terrain.js::resolveTerrainRingOpts used to read them alone,
+// so both kills left every shader term live (incl. the SHIPPED ice at
+// high/ultra) while the docs said they killed it. Every gate is now
+// `terrainVfxShaderLive() && <family master> && <effect flag>`.
+{
+  const terrain = await import("./scene3d/terrain.js");
+  const TSRC = readFileSync("./scene3d/terrain.js", "utf8");
+  const setTier = (search, flags) => { setUrl(search); globalThis.window.liveScene3d = { quality: { flags: { ...flags } } }; };
+  const iceGate = () => terrain.terrainVfxShaderLive() && terrainIceEnabled();
+  clearUrl();
+  check("shader kill: no window ⇒ terrainVfxShaderLive() true (both masters default ON)",
+    terrain.terrainVfxShaderLive() === true);
+  setTier("", PRESETS.high);
+  check("shader kill: bare high tier ⇒ the SHIPPED ice gate is live", iceGate() === true);
+  for (const kill of ["visual=off", "visual=0", "visual=no", "terrainVfx=off", "terrainVfx=false"]) {
+    setTier(`?${kill}`, PRESETS.high);
+    check(`shader kill: ?${kill} at high ⇒ the ice SHADER gate is OFF (the reader alone still says on — the old leak)`,
+      iceGate() === false && terrainIceEnabled() === true && terrain.terrainVfxShaderLive() === false);
+  }
+  setUrl("?visual=off&terrainSnow=on&terrainSnowSparkle=on&terrainIce=on");
+  check("shader kill: ?visual=off beats explicit family opt-ins too",
+    terrain.terrainVfxShaderLive() === false && terrainSnowSparkleEnabled() === true);
+  setUrl("?visual=all");
+  check("shader kill: ?visual=all keeps the shader gates live", terrain.terrainVfxShaderLive() === true);
+  const GATES = ["sandSparkleEnabled", "snowSparkleEnabled", "snowPrintEnabled", "snowExposureEnabled",
+    "iceEnabled", "iceRefractionEnabled", "crackGlowEnabled", "obsidianEnabled", "mudPrintEnabled", "mudWetnessEnabled"];
+  check("shader kill: EVERY family shader gate in resolveTerrainRingOpts is composed behind terrainVfxLive",
+    GATES.every((g) => new RegExp(`\\n\\s+${g}: terrainVfxLive && terrain[A-Za-z]+Enabled\\(\\)`).test(TSRC)),
+    GATES.filter((g) => !new RegExp(`\\n\\s+${g}: terrainVfxLive && `).test(TSRC)).join());
+  check("shader kill: … and none still reads a family flag directly",
+    !GATES.some((g) => new RegExp(`\\n\\s+${g}: terrain[A-Za-z]+Enabled\\(\\)`).test(TSRC)));
+  check("shader kill: terrainVfxLive is read ONCE per ring from the exported helper",
+    (TSRC.match(/const terrainVfxLive = terrainVfxShaderLive\(\);/g) || []).length === 1);
+  clearUrl();
+}
 setUrl("?terrainSnowSpindriftCount=900&terrainSnowRadius=100&terrainSnowSlope=0.4");
 check("?terrainSnowSpindriftCount numeric override", terrainSnowSpindriftCount() === 900);
 check("?terrainSnowRadius numeric override", terrainSnowRadiusM() === 100);
@@ -207,7 +247,8 @@ check("?terrainSnowSlope out of range (0..1) → default 0.12", terrainSnowSlope
 clearUrl();
 check("no flags: spindrift count falls back to the 1200 high-tier default",
   terrainSnowSpindriftCount() === 1200);
-check("no flags: snow radius falls back to 64 m", terrainSnowRadiusM() === 64);
+check("no flags: snow radius falls back to the 48 m high-tier default (2026-10-23)",
+  terrainSnowRadiusM() === 48);
 
 // ---- memoization reset hygiene ----
 setUrl("?glint=off");

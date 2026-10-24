@@ -44,6 +44,8 @@ import {
   FAM_SWAMP,
   FAM_VOLCANO,
   FAM_DIRT,
+  FAM_OBSIDIAN,
+  FAM_ASH,
   familyForCode,
 } from "./terrain_families.js";
 import { lowBandwidth } from "./bandwidth_tier.js";
@@ -62,6 +64,12 @@ const FAMILY_TO_SLICE = new Map([
   [FAM_SWAMP, 4],
   [FAM_VOLCANO, 5],
   [FAM_DIRT, 6],
+  // 2026-10-23 volcano split (terrain_families.js): obsidian (6) and ash (26)
+  // left FAM_VOLCANO but keep the "volcano" slice — the bake in generate.py
+  // still synthesises it from all three codes, and a distant volcanic field
+  // must render byte-identical to before the split.
+  [FAM_OBSIDIAN, 5],
+  [FAM_ASH, 5],
 ]);
 
 /** No macro slice — the shader treats >= uMacroSliceCount as "skip". */

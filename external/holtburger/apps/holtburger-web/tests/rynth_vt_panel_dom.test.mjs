@@ -750,27 +750,27 @@ await check("Route: Steep sits right after Show path and is the profile's ShowTe
   assert.equal(r.childNodes.indexOf(steep.parentNode), r.childNodes.indexOf(showPath.parentNode) + 1, "right next to Show path");
   assert.equal(steep.disabled, true, "no ShowTerrainPassability row in this profile: disabled");
   // the option's row (schema.js) arrives with the settings
-  ROWS.push({ key: "ShowTerrainPassability", vt: ["ShowTerrainPassability"], type: "bool", dflt: true, page: "advanced", group: "Navigation", label: "Show steep ground", consumer: "overlay", help: "Tint ground too steep to walk up red around you." });
-  W.options.values.set("ShowTerrainPassability", true);
+  ROWS.push({ key: "ShowTerrainPassability", vt: ["ShowTerrainPassability"], type: "bool", dflt: false, page: "advanced", group: "Navigation", label: "Show steep ground", consumer: "overlay", help: "Tint ground too steep to walk up red around you." });
+  W.options.values.set("ShowTerrainPassability", false);
   try {
     panel.refreshVtPanel({ force: true });
     assert.equal(steep.disabled, false);
-    assert.equal(steep.checked, true, "on by default (RynthAi)");
+    assert.equal(steep.checked, false, "off by default (owner 2026-10-23; RynthAi's was on)");
     assert.match(steep.parentNode.title, /^Show steep ground — Tint ground too steep/, "the row's tooltip");
     assert.equal(steep.parentNode.classList.contains("is-changed"), false);
-    change(steep, false);
-    await flush();
-    assert.deepStrictEqual(W.options.calls.at(-1), ["set", "ShowTerrainPassability", false, "ui"], "written to the active profile");
-    assert.equal(steep.checked, false);
-    assert.ok(steep.parentNode.classList.contains("is-changed"), "off ≠ the default: marked");
-    assert.ok(!Object.keys(JSON.parse(localStorage.getItem("rynth.vt.ui.v1"))).some((k) => /steep|passab/i.test(k)), "not a per-viewer pref");
-    // an edit made elsewhere (/rs opt, a meta, a profile switch) shows on the next refresh
-    W.options.values.set("ShowTerrainPassability", true);
-    panel.refreshVtPanel();
-    assert.equal(steep.checked, true);
     change(steep, true);
     await flush();
-    assert.deepStrictEqual(W.options.calls.at(-1), ["set", "ShowTerrainPassability", true, "ui"]);
+    assert.deepStrictEqual(W.options.calls.at(-1), ["set", "ShowTerrainPassability", true, "ui"], "written to the active profile");
+    assert.equal(steep.checked, true);
+    assert.ok(steep.parentNode.classList.contains("is-changed"), "on ≠ the default: marked");
+    assert.ok(!Object.keys(JSON.parse(localStorage.getItem("rynth.vt.ui.v1"))).some((k) => /steep|passab/i.test(k)), "not a per-viewer pref");
+    // an edit made elsewhere (/rs opt, a meta, a profile switch) shows on the next refresh
+    W.options.values.set("ShowTerrainPassability", false);
+    panel.refreshVtPanel();
+    assert.equal(steep.checked, false);
+    change(steep, false);
+    await flush();
+    assert.deepStrictEqual(W.options.calls.at(-1), ["set", "ShowTerrainPassability", false, "ui"]);
   } finally {
     ROWS.pop();
     W.options.values.delete("ShowTerrainPassability");

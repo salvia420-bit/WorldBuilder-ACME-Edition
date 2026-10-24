@@ -1028,13 +1028,21 @@ function resolveBuildingsOpts(scene3d) {
   // bake to install it wins; subsequent installs are no-ops.
   scene3d.materialCache = materialCache;
 
+  // 2026-10-23 — ONE dedup map, owned by scene3d. It used to be minted here as a
+  // PRIVATE `new Map()` whenever scene3d.buildingMap3d was not already a Map —
+  // and on the live path it never is (init3D publishes `?? null`). The LRU's
+  // evict / park / unpark prune `scene3d.buildingMap3d`, so they pruned nothing:
+  // after a landblock's first true eviction its re-bake hit the dedup for every
+  // placement, built nothing and still marked the LB baked — the shells (walls +
+  // roofs) were gone for good while the interiors re-baked (owner's 3.5 h
+  // endurance session, 2026-10-23: 47 landblocks, Arwic among them).
+  // Regression since 5436d4df (2026-06-30). Publishing the maps on scene3d is the fix.
+  if (!(scene3d.buildingMap3d instanceof Map)) scene3d.buildingMap3d = new Map();
+  if (!(scene3d.buildingBakeCache instanceof Map)) scene3d.buildingBakeCache = new Map();
+
   return {
-    bakeCache: scene3d.buildingBakeCache instanceof Map
-      ? scene3d.buildingBakeCache
-      : new Map(),
-    buildingMap3d: scene3d.buildingMap3d instanceof Map
-      ? scene3d.buildingMap3d
-      : new Map(),
+    bakeCache: scene3d.buildingBakeCache,
+    buildingMap3d: scene3d.buildingMap3d,
     materialCache,
     // Phase 3.3 — flip castShadow + receiveShadow on when EITHER the
     // Phase 0.1 single-shadow path OR the CSM path is active. The

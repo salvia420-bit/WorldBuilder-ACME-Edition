@@ -75,7 +75,10 @@ export function __setAnimSceneryGpuForTest(v) { _flag = v; }
 export const POSE_TEXELS_PER_ROW = 8;
 const FLOATS_PER_ROW = POSE_TEXELS_PER_ROW * 4;
 
-/** @type {Array<{row:number, animId:(number|string), partIdx:number}>} */
+/** `post`: a matrix the per-frame writer right-multiplies onto P (animated_scenery.js
+ *  `?animSceneryUnbake`: the inverse of the frame the wasm baked into the part's
+ *  vertices), or null.
+ *  @type {Array<{row:number, animId:(number|string), partIdx:number, post:(THREE.Matrix4|null)}>} */
 const _rows = [];
 const _rowByKey = new Map();
 let _capacity = 0;
@@ -138,16 +141,21 @@ export function writePoseRow(row, partMat, orbitQuat) {
  * `initMat` (the part's hinge rest pose — what the CPU path seeded a slot
  * with until its first tick). Row 0 is reserved as identity: a vertex whose
  * `hbAiPose` attribute is missing reads the default generic value 0.
+ *
+ * `variant` (optional) splits the row when the same (DID, part) is drawn by
+ * setups that need different `post` matrices (animated_scenery.js passes the
+ * setup id when the part's geometry carries a baked frame to undo); absent ⇒
+ * the pre-2026-10-23 key, so rows without a `post` stay shared as before.
  */
-export function poseRowFor(animId, partIdx, initMat) {
-  const key = `${animId}:${partIdx}`;
+export function poseRowFor(animId, partIdx, initMat, variant, post) {
+  const key = variant == null ? `${animId}:${partIdx}` : `${animId}:${partIdx}:${variant}`;
   let row = _rowByKey.get(key);
   if (row !== undefined) return row;
   if (!_tex) { _grow(1); writePoseRow(0, null, null); }
   row = _rows.length + 1;
   _grow(row + 1);
   _rowByKey.set(key, row);
-  _rows.push({ row, animId, partIdx });
+  _rows.push({ row, animId, partIdx, post: post || null });
   writePoseRow(row, initMat || null, null);
   return row;
 }

@@ -29,6 +29,10 @@
 //       ship OFF on every tier; the wireframe path carries the fields off.
 //   I7  NO REGRESSION of the wave-1 sand sparkle or the 07-31 water work that
 //       shares this shader.
+//   I8  (2026-10-24) NO SUN GLINT AT NIGHT: the sun lobe is gated on the sun's
+//       elevation x |uAcSunVec| (exactly 0 at the retail night), saturating so
+//       every authored daytime keyframe of ALL 20 Region day groups (Rainy
+//       included) is exactly 1.0 (day look unchanged).
 //
 // Run from apps/holtburger-web/:  node test_terrain_ice.mjs
 
@@ -205,6 +209,88 @@ check("the block runs in BOTH shading modes — it sits OUTSIDE the "
   && iIce > FRAG.indexOf("=== 2026-07-31 (water-fix) — WATER SURFACE SHEEN ==="));
 
 // ===========================================================================
+console.log("\n-- I8 no sun glint at night; the day look unchanged -------------");
+// ===========================================================================
+// 2026-10-24 — THE NIGHT-SPECULAR FIX. uAcSunColor is the light's COLOUR only;
+// retail brightness is |uAcSunVec| (dirBright) and the night sun parks 0.9 deg
+// above the horizon, so the shipped ice glint shone at full strength all night.
+// It now carries the sand sparkle's gate SHAPE (elevation smoothstep 0.05..0.25
+// x a brightness term), with the brightness saturating at dirBright ~0.48
+// (x2.1) instead of sand's 0.80 (x1.25): ice SHIPS, and the signed-off day
+// look must not move at ANY authored daytime keyframe of ANY day group — the
+// Rainy groups' morning sits at dirBright 0.50 (x1.43 dimmed it to 0.715).
+check("I8: the SUN lobe is scaled by the elevation x |uAcSunVec| gate",
+  /float iceSunGate = smoothstep\(0\.05, 0\.25, sunDir\.z\) \* min\(length\(uAcSunVec\) \* 2\.1, 1\.0\);/.test(ICE_CODE)
+  && /vec3 iceSpec = uAcSunColor \* \(iceLobe \* uIceSpecStrength \* iceSunGate\);/.test(ICE_CODE));
+// ICE_BLOCK runs on to the sand sparkle (obsidian and the wet mud sheen sit
+// between); this one stops at the next block.
+const ICE_ONLY_CODE = stripComments(FRAG.slice(iIce, FRAG.indexOf("=== 2026-10-23 - OBSIDIAN GLASS", iIce)));
+check("I8: no other uAcSunColor term in the ice block escapes the gate",
+  ICE_ONLY_CODE.length > 0 && (ICE_ONLY_CODE.match(/uAcSunColor/g) || []).length === 1);
+check("I8: the ENV term is sky light and stays as it was (dimmed at night by uEnvIntensity)",
+  /iceSpec \+= iceEnv \* iceFres \* uEnvIntensity \* uIceEnvStrength;/.test(ICE_CODE));
+{
+  const DEG = Math.PI / 180;
+  const ss = (e0, e1, x) => { const t = Math.min(1, Math.max(0, (x - e0) / (e1 - e0))); return t * t * (3 - 2 * t); };
+  const gate = (pitchDeg, dirBright, k = 2.1) => ss(0.05, 0.25, Math.sin(pitchDeg * DEG)) * Math.min(dirBright * k, 1);
+  // Dereth's authored sun keyframes [begin, dirBright, dirPitch]: the 9 DISTINCT
+  // tables of the 20 Region day groups (WorldBuilder.Terminal region-export-json
+  // of ~/ac_base_dats/client_portal.dat, sha256 dc6e500b…, 2026-10-24). Table 0
+  // is the one test_retail_sun.mjs pins. Day = pitch >= 20 deg (begin 0.27..0.84).
+  const TABLES = [
+    // groups 0,1 Sunny
+    [[0, 0.25, 0.9], [0.02, 0.25, 0.9], [0.16, 0.4, 0.9], [0.21, 0.5, 10], [0.27, 0.7, 20], [0.61, 0.8, 90], [0.611, 0.8, 90], [0.84, 0.75, 20], [0.9, 0.5, 10], [0.96, 0.35, 0.9], [0.999, 0.25, 0.9]],
+    // group 2 Sunny
+    [[0, 0.25, 0.9], [0.02, 0.35, 0.9], [0.16, 0.35, 0.9], [0.21, 0.5, 10], [0.27, 0.7, 20], [0.61, 0.8, 90], [0.611, 0.8, 90], [0.84, 0.75, 20], [0.9, 0.5, 10], [0.96, 0.35, 0.9], [0.999, 0.25, 0.9]],
+    // groups 3,7,9,15,16,17 Rainy
+    [[0, 0.25, 0.9], [0.02, 0.2, 0.9], [0.16, 0.25, 0.9], [0.21, 0.35, 10], [0.27, 0.6, 20], [0.3, 0.5, 20], [0.59, 0.5, 90], [0.61, 0.7, 90], [0.611, 0.7, 90], [0.84, 0.7, 20], [0.9, 0.5, 10], [0.96, 0.35, 0.9], [0.999, 0.25, 0.9]],
+    // groups 4,5 Sunny
+    [[0, 0.25, 0.9], [0.02, 0.25, 0.9], [0.16, 0.2, 0.9], [0.21, 0.5, 10], [0.27, 0.7, 20], [0.61, 0.8, 90], [0.611, 0.8, 90], [0.84, 0.8, 20], [0.9, 0.5, 10], [0.96, 0.25, 0.9], [0.999, 0.25, 0.9]],
+    // group 6 Sunny
+    [[0, 0.25, 0.9], [0.02, 0.2, 0.9], [0.16, 0.25, 0.9], [0.21, 0.5, 10], [0.27, 0.8, 20], [0.61, 0.9, 90], [0.611, 0.9, 90], [0.84, 0.8, 20], [0.9, 0.5, 10], [0.96, 0.2, 0.9], [0.999, 0.5, 0.9]],
+    // group 8 Clear
+    [[0, 0.25, 0.9], [0.02, 0.25, 0.9], [0.16, 0.25, 0.9], [0.21, 0.5, 10], [0.27, 0.7, 20], [0.61, 0.8, 90], [0.611, 0.8, 90], [0.84, 0.7, 20], [0.9, 0.5, 10], [0.96, 0.35, 0.9], [0.999, 0.25, 0.9]],
+    // groups 10,11 Clear
+    [[0, 0.25, 0.9], [0.02, 0.25, 0.9], [0.16, 0.25, 0.9], [0.21, 0.5, 10], [0.27, 0.8, 20], [0.61, 0.9, 90], [0.611, 0.9, 90], [0.84, 0.75, 20], [0.9, 0.5, 10], [0.96, 0.35, 0.9], [0.999, 0.25, 0.9]],
+    // groups 12,13,14 Cloudy
+    [[0, 0.25, 0.9], [0.02, 0.2, 0.9], [0.16, 0.25, 0.9], [0.21, 0.35, 10], [0.27, 0.7, 20], [0.61, 0.7, 90], [0.611, 0.7, 90], [0.84, 0.7, 20], [0.9, 0.5, 10], [0.96, 0.35, 0.9], [0.999, 0.25, 0.9]],
+    // groups 18,19 Rainy
+    [[0, 0.25, 0.9], [0.02, 0.2, 0.9], [0.16, 0.25, 0.9], [0.21, 0.35, 10], [0.27, 0.5, 20], [0.61, 0.7, 90], [0.611, 0.7, 90], [0.84, 0.7, 20], [0.9, 0.5, 10], [0.96, 0.35, 0.9], [0.999, 0.25, 0.9]],
+  ];
+  const at = (KEYS, t) => {
+    let i = 0;
+    while (i + 1 < KEYS.length && KEYS[i + 1][0] <= t) i += 1;
+    const a = KEYS[i], b = KEYS[Math.min(i + 1, KEYS.length - 1)];
+    const r = b[0] > a[0] ? (t - a[0]) / (b[0] - a[0]) : 0;
+    return { db: a[1] + (b[1] - a[1]) * r, pitch: a[2] + (b[2] - a[2]) * r };
+  };
+  const dayMin = (k) => {
+    let m = 1;
+    for (const KEYS of TABLES) {
+      for (let t = 0.27; t <= 0.84 + 1e-9; t += 0.001) { const s = at(KEYS, t); m = Math.min(m, gate(s.pitch, s.db, k)); }
+    }
+    return m;
+  };
+  let nightAllZero = true;
+  for (const KEYS of TABLES) {
+    for (const t of [0, 0.01, 0.1, 0.15, 0.97, 0.99]) { const s = at(KEYS, t); if (gate(s.pitch, s.db) !== 0) nightAllZero = false; }
+  }
+  const minDayDb = Math.min(...TABLES.flatMap((K) => K.filter((k) => k[2] >= 20).map((k) => k[1])));
+  check("I8: the lowest DAYTIME dirBright of all 20 day groups is 0.50 (the Rainy morning) and x2.1 "
+    + "clears it with a 5 % float margin", minDayDb === 0.5 && minDayDb * 2.1 >= 1.05 - 1e-12, String(minDayDb));
+  check("I8: the gate is EXACTLY 1.0 across the whole authored day of EVERY day group (begin 0.27..0.84, "
+    + "pitch >= 20, dirBright 0.50-0.90) — the shipped day look is unchanged, Rainy days included", dayMin() === 1,
+    dayMin().toFixed(4));
+  check("I8: … and EXACTLY 0 under the retail night sun of every day group (pitch 0.9 deg, dirBright 0.2-0.5)",
+    nightAllZero);
+  check("I8: dawn/dusk (pitch 10 deg, dirBright 0.35-0.5) is a partial ramp, not a pop",
+    gate(10, 0.35) > 0.2 && gate(10, 0.5) < 0.8, gate(10, 0.35).toFixed(3) + ".." + gate(10, 0.5).toFixed(3));
+  check("I8: why x2.1 and not x1.43 / sand's x1.25: they dim a Rainy morning (dirBright 0.50) to 0.715 / 0.625",
+    Math.abs(dayMin(1.43) - 0.715) < 1e-9 && Math.abs(dayMin(1.25) - 0.625) < 1e-9,
+    dayMin(1.43).toFixed(4) + " / " + dayMin(1.25).toFixed(4));
+}
+
+// ===========================================================================
 console.log("\n-- I4 NOT MeshTransmissionMaterial -----------------------------");
 // ===========================================================================
 // Both files NAME the rejected package in prose (that is the point of §I4's
@@ -249,7 +335,7 @@ check("it skips grazing rays, exactly as the POM march does",
 check("it is SEPARATELY gated from the rest of the ice treatment, so the ultra "
   + "tier can turn on the only part with a texture cost",
   /uIceRefractEnabled > 0\.5/.test(FRAG)
-  && /iceRefractionEnabled: terrainIceEnabled\(\) && terrainIceRefractionEnabled\(\)/.test(SRC));
+  && /iceRefractionEnabled: terrainVfxLive && terrainIceEnabled\(\) && terrainIceRefractionEnabled\(\)/.test(SRC));
 check("the refraction never touches a water term",
   !/waterCellUv|waterW/.test(REFRACT_CODE));
 
@@ -260,7 +346,15 @@ check("TWO gate uniforms, one per bisectable half",
   countOf(FRAG, "uIceEnabled > 0.5") === 2   // the material block + the refraction
   && countOf(FRAG, "uIceRefractEnabled > 0.5") === 1);
 check("both are seeded from STRICT `=== \"on\"` flags that ship OFF",
-  /iceEnabled: terrainIceEnabled\(\),/.test(SRC));
+  /iceEnabled: terrainVfxLive && terrainIceEnabled\(\),/.test(SRC));
+// 2026-10-24 — ice SHIPS, so this is where the kill-switch fix is user-visible:
+// the gate also requires `terrainVfxShaderLive()` (visualEnabled() &&
+// terrainVfxEnabled()), so `?visual=off` / `?terrainVfx=off` return codes 2/27
+// to plain retail terrain (behaviour: test_vfx_flags.mjs).
+check("…and BOTH also require the master kill switches (?visual=off / ?terrainVfx=off kill the ice)",
+  SRC.includes("const terrainVfxLive = terrainVfxShaderLive();")
+  && /iceEnabled: terrainVfxLive && /.test(SRC)
+  && /iceRefractionEnabled: terrainVfxLive && /.test(SRC));
 check("?terrainIce is a SEPARATE master from ?terrainSnow (plan §3.4: one is "
   + "particles+shader, the other a material change — bisecting matters)",
   !/iceEnabled: terrainSnowEnabled\(\)/.test(SRC));

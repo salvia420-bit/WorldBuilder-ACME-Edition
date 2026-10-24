@@ -246,7 +246,9 @@ const ROWS = [
     "overlay", { help: "Width of the waypoint rings the route draws in the world (Route tab › Show path): 1 = a hairline … 16." }),
   int("NavLineThickness", ["NavLineThickness"], undefined, 6, 1, 16, "advanced", "Navigation", "Route line thickness",
     "overlay", { help: "Width of the lines between waypoints the route draws in the world (Route tab › Show path): 1 = a hairline … 16." }),
-  bool("ShowTerrainPassability", ["ShowTerrainPassability"], true, "advanced", "Navigation", "Show steep ground", "overlay",
+  // 2026-10-23 — default OFF (owner: the red-over-white steep tint reads as pink panels
+  // on snow and dunes; it stays one switch away, Route tab > Steep).
+  bool("ShowTerrainPassability", ["ShowTerrainPassability"], false, "advanced", "Navigation", "Show steep ground", "overlay",
     { help: "Tint ground too steep to walk up (the game's walkable-slope limit) red around you, whether or not a route is shown (Route tab › Steep)." }),
 ];
 

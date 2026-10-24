@@ -254,8 +254,9 @@ console.log("\n-- L7: family gating --");
   check("a grass LB does NOT reach the volcano provider", volcano.ready === 0);
   check("families:[] means every LB", anyLb.ready === 1);
 
-  // One ObsidianPlain vertex is enough — sparse effects care about presence.
-  terrainVfxNoteLandblockMesh(scene3d, makeLbMesh(2, 2, 1, [[40, 6]]));
+  // One Volcano1 (lava) vertex is enough — sparse effects care about presence.
+  // (2026-10-23: code 6 ObsidianPlain left FAM_VOLCANO for FAM_OBSIDIAN.)
+  terrainVfxNoteLandblockMesh(scene3d, makeLbMesh(2, 2, 1, [[40, 25]]));
   check("a single volcano vertex opens the volcano provider", volcano.ready === 1);
   check("water-only landblocks are still offered (families filter, the plan's §3.8 rule is the provider's)",
     coverageMatches(familyCoverageOf(new Uint8Array(81).fill(17)), [FAM_WATER]) === true);

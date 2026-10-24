@@ -407,6 +407,8 @@ const TIER5 = [
   // 2026-10-17 cpuframe: instanced DAT-anim scenery posed in the vertex shader.
   { tier: 5, flag: "animSceneryGpu", file: "tests/anim_scenery_gpu.test.mjs" },
   { tier: 5, flag: "animSceneryBucketVis", file: "tests/anim_scenery_bucket_vis.test.mjs" },
+  // 2026-10-23: the baked part frame is undone under the clip (windmill sails, 0x8093).
+  { tier: 5, flag: "animSceneryUnbake", file: "tests/anim_scenery_unbake.test.mjs" },
   { tier: 5, flag: "creatureGaitRetail", file: "tests/creature_gait_retail.test.mjs" },
   // 2026-10-08 — playhead parity: retail hook timing on the real EntityManager
   // (?hookFrameExit; also pins the end-of-tick hook queue the retired
@@ -596,6 +598,10 @@ const TIER5 = [
   { tier: 5, flag: "terrain_vfx_lifecycle", file: "test_terrain_vfx_lifecycle.mjs" },
   { tier: 5, flag: "terrain_vfx_promotion", file: "test_terrain_vfx_promotion.mjs" },
   { tier: 5, flag: "terrain_volcano", file: "test_terrain_volcano.mjs" },
+  // 2026-10-23 — OBSIDIAN glass, split out of the volcano family (terrain_obsidian.js).
+  { tier: 5, flag: "terrain_obsidian", file: "test_terrain_obsidian.mjs" },
+  // 2026-10-23 — the desert arm of the heat shimmer + mirage (terrain_desert_haze.js).
+  { tier: 5, flag: "terrain_desert_haze", file: "test_terrain_desert_haze.mjs" },
   { tier: 5, flag: "terrain_water", file: "test_terrain_water.mjs" },
   // 2026-10-19 — water flows downstream (?waterFlow) + banked swell (?waterBank):
   // real-DAT Marae Lassel dam decks, crack-free shores, the shipped flow table,
@@ -1202,6 +1208,8 @@ const TIER5 = [
   // material) through their own material — routing, geometry/transform identity and
   // GL-level shader/uniform/state identity in both depth modes, LRU lifecycle.
   { tier: 5, flag: "buildingMatBatch", file: "tests/building_mat_batch.test.mjs" },
+  // 2026-10-23 — building shells come back after evict (the private dedup map bug).
+  { tier: 5, flag: "buildingsRebakeAfterEvict", file: "tests/buildings_rebake_after_evict.test.mjs" },
   // 2026-10-18 owner-bug lanes. usetarget: target-mode clicks in the inventory views
   // (?useTargetGrid), the main pack as a shortcut to yourself (?selfShortcut), shortcut
   // presses in target mode (?shortcutTargetMode), the 3D self pick for a self-usable item
@@ -1405,6 +1413,8 @@ const NEEDS_BROWSER = [
   { file: "harness/glsl_smoke/reversed_z_smoke.mjs", why: `reversedZ — ${BROWSER_WHY}` },
   { file: "harness/glsl_smoke/water_flow_smoke.mjs", why: `waterFlow / waterBank — ${BROWSER_WHY}` },
   { file: "harness/glsl_smoke/grass_gpu_smoke.mjs", why: `terrainGrassGpu (GPU readback vs CPU grass; writes grass_gpu_smoke.stamp.json on PASS) — ${BROWSER_WHY}` },
+  { file: "harness/glsl_smoke/heat_haze_smoke.mjs", why: `terrainHaze heat shimmer + desert mirage GLSL (off / disc / ground / mirage arms) — ${BROWSER_WHY}` },
+  { file: "harness/glsl_smoke/terrain_vfx_compile_smoke.mjs", why: `terrain program (every define set) + every terrain-VFX particle material compile and link — ${BROWSER_WHY}` },
 ];
 const BROWSER_ONLY = new Set(NEEDS_BROWSER.map((q) => q.file));
 

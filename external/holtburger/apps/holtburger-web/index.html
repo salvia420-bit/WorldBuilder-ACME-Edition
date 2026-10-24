@@ -1215,6 +1215,7 @@
     <link rel="modulepreload" href="./scene3d/fx_clock.js">
     <link rel="modulepreload" href="./scene3d/geom_bundles.js">
     <link rel="modulepreload" href="./scene3d/gfx_relief.js">
+    <link rel="modulepreload" href="./scene3d/grass_gpu_place.js">
     <link rel="modulepreload" href="./scene3d/grass_interior_mask.js">
     <link rel="modulepreload" href="./scene3d/ground_fog.js">
     <link rel="modulepreload" href="./scene3d/held_location.js">
@@ -1325,13 +1326,16 @@
     <link rel="modulepreload" href="./scene3d/terrain.js?v=phase-d-batch">
     <link rel="modulepreload" href="./scene3d/terrain_batch.js">
     <link rel="modulepreload" href="./scene3d/terrain_bc7.js">
+    <link rel="modulepreload" href="./scene3d/terrain_desert_haze.js">
     <link rel="modulepreload" href="./scene3d/terrain_dirt.js">
     <link rel="modulepreload" href="./scene3d/terrain_families.js">
     <link rel="modulepreload" href="./scene3d/terrain_far_simplify.js">
+    <link rel="modulepreload" href="./scene3d/terrain_field_gpu.js">
     <link rel="modulepreload" href="./scene3d/terrain_grass.js">
     <link rel="modulepreload" href="./scene3d/terrain_hole_audit.js">
     <link rel="modulepreload" href="./scene3d/terrain_macro.js">
     <link rel="modulepreload" href="./scene3d/terrain_micro.js">
+    <link rel="modulepreload" href="./scene3d/terrain_obsidian.js">
     <link rel="modulepreload" href="./scene3d/terrain_oracle.js">
     <link rel="modulepreload" href="./scene3d/terrain_ring.js">
     <link rel="modulepreload" href="./scene3d/terrain_rock.js">
@@ -1392,6 +1396,7 @@
     <link rel="modulepreload" href="./scene3d/vfx/fx_tier1.js">
     <link rel="modulepreload" href="./scene3d/vfx/fx_tier2.js">
     <link rel="modulepreload" href="./scene3d/vfx/heat_haze_effect.js">
+    <link rel="modulepreload" href="./scene3d/vfx/heat_haze_glsl.js">
     <link rel="modulepreload" href="./scene3d/vfx/item_fx.js">
     <link rel="modulepreload" href="./scene3d/vfx/lifestone_fx.js">
     <link rel="modulepreload" href="./scene3d/vfx/oscillators.js">
@@ -1637,6 +1642,12 @@
         // otherwise falls back to a Box3-over-rig heuristic. MUST also be
         // listed in the init3D opts block below. Import here AND opts there.
         fetchSetupSelectionSphere,
+        // 2026-10-23 — ?staticPartAnchor (scene3d/statics.js, default-on since
+        // 2026-10-16) and the anim-scenery idle-frame unbake read
+        // wasmExports.fetchSetupPartPose. It was never imported nor threaded,
+        // so both silently fell back (live probe on the 1070: anchors 0, the
+        // init3D bag had no fetchSetupPartPose). Import here AND opts there.
+        fetchSetupPartPose,
         populateBuildingAabbsForLandblock,
         populateStaticsAabbsForLandblock,
         populateSkyDescFromRegion,
@@ -4131,6 +4142,8 @@
             // selection_brackets.js::computeSelectionSphere can prefer the DAT
             // sphere over its Box3 heuristic. See the import block above.
             fetchSetupSelectionSphere,
+            // 2026-10-23 — see the import block (?staticPartAnchor + anim-scenery).
+            fetchSetupPartPose,
             populateBuildingAabbsForLandblock,
             populateStaticsAabbsForLandblock,
             fetchEnvCellsInLandblock,

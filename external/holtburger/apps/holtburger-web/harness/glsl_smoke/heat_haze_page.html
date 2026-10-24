@@ -1,0 +1,127 @@
+<!doctype html>
+<script type="importmap">{ "imports": { "three": "/three/three.module.js", "postprocessing": "/pp/index.js" } }</script>
+<meta charset="utf-8">
+<title>heat haze smoke</title>
+<canvas id="c" width="320" height="180"></canvas>
+<script type="module">
+// heat_haze_page.html — the browser half of heat_haze_smoke.mjs (2026-10-23).
+// Compiles the SHIPPED heat-shimmer / mirage GLSL (scene3d/vfx/heat_haze_glsl.js)
+// inside a pmndrs EffectPass over a log-depth scene like the app's, renders a
+// flat striped plain to the horizon under a cleared sky with posts at 300 m and
+// 800 m, and reads back one frame per arm: off, disc (volcano), ground, mirage.
+import * as THREE from "three";
+import { EffectComposer, RenderPass, EffectPass, Effect, EffectAttribute, BlendFunction } from "postprocessing";
+import { HEAT_HAZE_FRAG } from "/app/scene3d/vfx/heat_haze_glsl.js";
+
+const out = { programs: [], arms: {}, errors: [] };
+try {
+  const W = 320, H = 180, FAR = 10000;
+  const canvas = document.getElementById("c");
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, logarithmicDepthBuffer: true, preserveDrawingBuffer: true });
+  renderer.setSize(W, H, false);
+  renderer.debug.checkShaderErrors = true;
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0.45, 0.65, 0.95);
+  const camera = new THREE.PerspectiveCamera(50, W / H, 0.5, FAR);
+  camera.position.set(0, 2, 0);
+  camera.lookAt(0, 1.2, -100);   // a little down: the horizon sits above mid-frame
+
+  // A striped plain (stripes across the view, so a UV warp moves pixels).
+  const tc = document.createElement("canvas"); tc.width = 64; tc.height = 64;
+  const g2 = tc.getContext("2d");
+  for (let y = 0; y < 64; y += 8) { g2.fillStyle = (y / 8) % 2 ? "#c89a52" : "#e8c27a"; g2.fillRect(0, y, 64, 8); }
+  for (let x = 0; x < 64; x += 16) { g2.fillStyle = "#a87a3a"; g2.fillRect(x, 0, 2, 64); }
+  const tex = new THREE.CanvasTexture(tc);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping; tex.repeat.set(600, 600);
+  tex.magFilter = THREE.NearestFilter;
+  const ground = new THREE.Mesh(new THREE.PlaneGeometry(12000, 12000), new THREE.MeshBasicMaterial({ map: tex }));
+  ground.rotation.x = -Math.PI / 2;
+  scene.add(ground);
+  for (const [z, h] of [[-300, 18], [-800, 40]]) {
+    const post = new THREE.Mesh(new THREE.BoxGeometry(14, h, 14), new THREE.MeshBasicMaterial({ color: 0x553322 }));
+    post.position.set(-30, h / 2, z);
+    scene.add(post);
+  }
+
+  const U = (v) => new THREE.Uniform(v);
+  const uniforms = new Map([
+    ["uTime", U(1.234)], ["uHeatScreen", U(new THREE.Vector2(0.5, 0.5))], ["uHeatScreenRadius", U(0)],
+    ["uHeatRadius", U(0)], ["uHeatNear", U(0)], ["uHeatFar", U(0)], ["uHeatFeather", U(1)], ["uStrength", U(0)],
+    ["uFreq", U(42)], ["uSpeed", U(2.2)], ["uLogDepthFC", U(2.0 / Math.log2(FAR + 1.0))],
+    ["uGround", U(0)], ["uGroundNear", U(0)], ["uGroundFull", U(1)], ["uGroundFar", U(0)],
+    ["uMirage", U(0)], ["uMirageStart", U(0)], ["uMirageFeather", U(1)],
+  ]);
+  const effect = new Effect("HeatHazeEffect", HEAT_HAZE_FRAG, { blendFunction: BlendFunction.NORMAL, attributes: EffectAttribute.DEPTH, uniforms });
+  const composer = new EffectComposer(renderer, { frameBufferType: THREE.HalfFloatType });
+  composer.addPass(new RenderPass(scene, camera));
+  composer.addPass(new EffectPass(camera, effect));
+  const set = (o) => { for (const [k, v] of Object.entries(o)) uniforms.get(k).value = v; };
+  const OFF = { uStrength: 0, uHeatRadius: 0, uHeatScreenRadius: 0, uGround: 0, uMirage: 0 };
+  const gl = renderer.getContext();
+  const grab = () => {
+    composer.render(0.016);
+    const px = new Uint8Array(W * H * 4);
+    gl.readPixels(0, 0, W, H, gl.RGBA, gl.UNSIGNED_BYTE, px);
+    return px;
+  };
+  // Row of the horizon / of the sky: the first row (from the top) whose pixels
+  // are not all the clear colour, with the effect OFF.
+  const arms = {
+    off: OFF,
+    disc: { ...OFF, uStrength: 0.009, uHeatRadius: 160, uHeatScreen: new THREE.Vector2(0.5, 0.45), uHeatScreenRadius: 0.35, uHeatNear: 0, uHeatFar: 2400, uHeatFeather: 64 },
+    ground: { ...OFF, uGround: 0.0072 * 2, uGroundNear: 25, uGroundFull: 450, uGroundFar: 2600 },
+    mirage: { ...OFF, uMirage: 0.007 * 2, uMirageStart: 160, uMirageFeather: 420 },
+  };
+  const frames = {};
+  for (const [name, a] of Object.entries(arms)) { set(OFF); set(a); frames[name] = grab(); }
+  const off = frames.off;
+  // The sky reference: the top-left pixel of the OFF frame (colour management
+  // converts the clear colour on output, so it is read, not assumed).
+  const s0 = ((H - 1) * W) * 4;
+  const SKY = [off[s0], off[s0 + 1], off[s0 + 2]];
+  out.sky = SKY;
+  const isSky = (px, i) => Math.abs(px[i] - SKY[0]) <= 3 && Math.abs(px[i + 1] - SKY[1]) <= 3 && Math.abs(px[i + 2] - SKY[2]) <= 3;
+  // readPixels rows run bottom-up: row 0 = the bottom of the frame (nearest ground).
+  let horizonRow = -1;
+  for (let r = H - 1; r >= 0 && horizonRow < 0; r -= 1) {
+    let sky = 0;
+    for (let x = 0; x < W; x += 1) if (isSky(off, (r * W + x) * 4)) sky += 1;
+    if (sky < W * 0.5) horizonRow = r;       // first mostly-ground row from the top
+  }
+  out.horizonRow = horizonRow;
+  for (const name of Object.keys(arms)) {
+    if (name === "off") continue;
+    const f = frames[name];
+    const bands = { sky: [0, 0], nearHorizon: [0, 0], mid: [0, 0], bottom: [0, 0] };
+    for (let r = 0; r < H; r += 1) {
+      const band = r > horizonRow ? "sky" : r >= horizonRow - 6 ? "nearHorizon" : r >= H * 0.25 ? "mid" : "bottom";
+      for (let x = 0; x < W; x += 1) {
+        const i = (r * W + x) * 4;
+        const skyPx = isSky(off, i);
+        if (band === "sky" && !skyPx) continue;          // only true sky pixels in the sky band
+        bands[band][1] += 1;
+        if (Math.abs(f[i] - off[i]) + Math.abs(f[i + 1] - off[i + 1]) + Math.abs(f[i + 2] - off[i + 2]) > 6) bands[band][0] += 1;
+      }
+    }
+    out.arms[name] = Object.fromEntries(Object.entries(bands).map(([k, [d, n]]) => [k, { changed: d, of: n, frac: n ? +(d / n).toFixed(4) : 0 }]));
+  }
+  if (new URLSearchParams(location.search).get("png")) {
+    out.png = {};
+    for (const [name, f] of Object.entries(frames)) {
+      const c2 = document.createElement("canvas"); c2.width = W; c2.height = H;
+      const ctx = c2.getContext("2d"); const img = ctx.createImageData(W, H);
+      for (let r = 0; r < H; r += 1) img.data.set(f.subarray((H - 1 - r) * W * 4, (H - r) * W * 4), r * W * 4);
+      ctx.putImageData(img, 0, 0); out.png[name] = c2.toDataURL("image/png");
+    }
+  }
+  for (const p of renderer.info.programs || []) {
+    const ok = gl.getProgramParameter(p.program, gl.LINK_STATUS);
+    out.programs.push({ name: p.name, linked: !!ok, diagnostics: p.diagnostics ? JSON.stringify(p.diagnostics).slice(0, 400) : null });
+  }
+  out.glError = gl.getError();
+  out.renderer = (() => { const e = gl.getExtension("WEBGL_debug_renderer_info"); return e ? gl.getParameter(e.UNMASKED_RENDERER_WEBGL) : "?"; })();
+} catch (e) {
+  out.errors.push(String((e && e.stack) || e).slice(0, 1200));
+}
+window.__smoke = out;
+</script>

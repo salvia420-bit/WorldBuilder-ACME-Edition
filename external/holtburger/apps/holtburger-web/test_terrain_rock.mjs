@@ -36,7 +36,8 @@
 //   R7  GRIT ADVECTION is a pure function of (wind, clock, hash), bounded by
 //       the recycle span, reversing with the wind — the same expression as
 //       sand's `streamerAdvect` and snow's `spindriftAdvect` — and the GLSL
-//       computes what the JS twin does.
+//       computes what the JS twin does (`gritAdvectTravel`, over the
+//       CPU-integrated `uTravel`, which IS `gritAdvect` for a constant wind).
 //   R8  LIGHTING WITHOUT A LIGHT: the AC sun/ambient conversion matches
 //       `loop.js::tickTerrainSunDir` (heading from +Y clockwise, dirBright as
 //       the sun-colour magnitude, LSCAPE_LIGHT_MINIMUM flooring AMBIENT only),
@@ -62,6 +63,17 @@
 //   R13 HEADLESS: both fields run with no THREE at all (the `?nullRender=1`
 //       path), and with THREE the meshes are `castShadow === false` with their
 //       instance buffers allocated exactly once.
+//   R14 THE 2026-10-24 LIVE FIXES (both fail on the pre-fix module):
+//       (1) NO FROZEN RIM FADE — a window the player WALKED into place carries
+//       exactly the per-instance values a fresh scatter there carries (the old
+//       grit opacity kept the ~0 `ctx.fade` a leading-edge streak was placed
+//       with, so the near field emptied as you walked). (2) NO RACING DRIFT —
+//       a 3600 s session under the real breathing + wandering wind
+//       (`weather_inputs.js::writeWindVector`), evaluating the grit GLSL's OWN
+//       `travelled` line on the field's live uniforms: every streak's per-
+//       frame step stays <= dt x speed x max multiplier x max |wind|, the
+//       pulse offset steps <= dt x scroll, and `uTravel` stays bounded by its
+//       seamless wrap.
 //
 // Run from apps/holtburger-web/:  node test_terrain_rock.mjs
 
@@ -106,9 +118,20 @@ import {
 import {
   FAM_ROCK, FAM_GRASS, TERRAIN_CODE_COUNT, familyForCode,
 } from "./scene3d/terrain_families.js";
+// The 2026-10-24 exports, read off the NAMESPACE so this suite still links
+// against a pre-fix module and the R14 regressions fail on their merits there.
+import * as ROCK_MODULE from "./scene3d/terrain_rock.js";
 import { instanceCountFor } from "./scene3d/terrain_scatter.js";
+import { writeWindVector } from "./scene3d/vfx/weather_inputs.js";
 import { PRESETS, PRESET_NAMES } from "./scene3d/quality.js";
 import { _resetTerrainVfx } from "./scene3d/terrain_vfx.js";
+
+const {
+  gritAdvectTravel, gritSpeedMul, gritTravelWrap,
+  GRIT_SPEED_QUANTUM, GRIT_TRAVEL_WRAP_LAPS, GRIT_MAX_DT,
+} = ROCK_MODULE;
+const HAS_TRAVEL_API = typeof gritAdvectTravel === "function"
+  && typeof gritSpeedMul === "function" && typeof gritTravelWrap === "function";
 
 let passed = 0, failed = 0;
 function check(label, cond, extra = "") {
@@ -535,10 +558,69 @@ console.log("\n-- R7 grit advection is pure, bounded and reversible ------------
     maxS > span * 0.45 && minS < -span * 0.45, `${minS}..${maxS}`);
   check("a zero wind does not divide by zero",
     Number.isFinite(gritAdvect(0, 0, 5, 0.2, span, speed).x));
-  // The GLSL twin: the same expression, symbol for symbol.
-  check("the grit GLSL computes the same advection expression",
-    ROCK_GRIT_VERTEX_GLSL.includes("float travelled = uTime * uSpeed * aGrit.y * wl + aGrit.x * uSpanM;")
+  // The GLSL twin: the same expression, symbol for symbol — over the
+  // CPU-integrated uTravel since 2026-10-24 (gritAdvectTravel), never the
+  // absolute clock times the live wind (the racing product, R14).
+  check("the grit GLSL computes gritAdvectTravel's expression over uTravel",
+    ROCK_GRIT_VERTEX_GLSL.includes("float travelled = uTravel * uSpeed * aGrit.y + aGrit.x * uSpanM;")
     && ROCK_GRIT_VERTEX_GLSL.includes("float s = mod(travelled, uSpanM) - uSpanM * 0.5;"));
+  check("...and the uTime x |wind| product form is gone from it",
+    !ROCK_GRIT_VERTEX_GLSL.includes("uTime * uSpeed"));
+  check("the travel API is exported (gritAdvectTravel / gritSpeedMul / gritTravelWrap)",
+    HAS_TRAVEL_API && GRIT_SPEED_QUANTUM === 64 && Number.isInteger(GRIT_TRAVEL_WRAP_LAPS)
+    && GRIT_TRAVEL_WRAP_LAPS >= 1 && GRIT_MAX_DT > 0 && GRIT_MAX_DT <= 0.25);
+  if (HAS_TRAVEL_API) {
+    // For a CONSTANT wind the integral IS t x |wind|: the closed form holds.
+    let worst = 0;
+    for (const [wx, wy] of [[1, 0], [0.7, -0.7], [-1.3, 0.4], [0.05, 0.02]]) {
+      const wl = Math.hypot(wx, wy);
+      for (const t of [0, 0.37, 12.5, 333.3, 3599]) {
+        for (const ph of [0, 0.31, 0.99]) {
+          const a = gritAdvect(wx, wy, t, ph, span, speed * 1.25);
+          const b = gritAdvectTravel(wx, wy, t * wl, ph, span, speed * 1.25);
+          worst = Math.max(worst, Math.abs(a.s - b.s), Math.abs(a.x - b.x), Math.abs(a.y - b.y));
+        }
+      }
+    }
+    check("constant wind: gritAdvectTravel(w, t x |w|) === gritAdvect(w, t)", worst < 1e-9, String(worst));
+    const tr = gritAdvectTravel(1, 0, 123.4, 0.3, span, speed);
+    check("gritAdvectTravel is bounded by half the span and runs along the wind",
+      Math.abs(tr.s) <= span * 0.5 + 1e-9 && approx(tr.y, 0, 1e-12)
+      && approx(gritAdvectTravel(0, 1, 123.4, 0.3, span, speed).x, 0, 1e-12));
+    // The quantised speed spread: the same 0.8..1.5 range, k / 64 exactly.
+    let quantOk = true;
+    let lo = Infinity, hi = -Infinity;
+    for (let i = 0; i <= 1000; i += 1) {
+      const m = gritSpeedMul(i / 1000);
+      lo = Math.min(lo, m); hi = Math.max(hi, m);
+      if (!Number.isInteger(m * GRIT_SPEED_QUANTUM) || Math.fround(m) !== m) quantOk = false;
+    }
+    check("gritSpeedMul is k/64 (exact in float32) over the shipped 0.8..1.5 spread",
+      quantOk && lo >= 0.79 && lo <= 0.8 && hi === 1.5, `${lo}..${hi}`);
+    check("gritSpeedMul stays within 1/128 of the old continuous draw",
+      (() => {
+        for (let i = 0; i <= 1000; i += 1) {
+          if (Math.abs(gritSpeedMul(i / 1000) - (0.8 + (i / 1000) * 0.7)) > 1 / 128 + 1e-12) return false;
+        }
+        return true;
+      })());
+    // The wrap is SEAMLESS for every quantised multiplier.
+    const wrap = gritTravelWrap(span, speed);
+    let seam = 0;
+    for (let k = 51; k <= 96; k += 1) {
+      for (const x of [0, 0.123, 17.5, wrap * 0.5, wrap - 1e-3]) {
+        const a = gritAdvectTravel(1, 0, x, 0.42, span, speed * (k / 64));
+        const b = gritAdvectTravel(1, 0, x + wrap, 0.42, span, speed * (k / 64));
+        let d = Math.abs(a.s - b.s);
+        d = Math.min(d, span - d);
+        seam = Math.max(seam, d);
+      }
+    }
+    check("the travel wrap is SEAMLESS for every k/64 multiplier (<= 1e-6 m)",
+      seam < 1e-6 && Number.isFinite(wrap) && wrap > 100, `seam=${seam} wrap=${wrap}`);
+    check("a non-positive speed never wraps (nothing moves)",
+      gritTravelWrap(span, 0) === Infinity);
+  }
   check("the rock parameters really are the plan's 'shorter, greyer' block",
     ROCK_TUNING.advectSpanM < 26 && ROCK_TUNING.streakLengthM < 2.6
     && ROCK_TUNING.opacity < 0.16
@@ -647,11 +729,30 @@ for (const [n, t] of PEBBLE_UNIFORMS) {
 check("uEmissiveColour is declared in the FRAGMENT stage only",
   uniformCount(ROCK_PEBBLE_FRAGMENT_GLSL, "vec3", "uEmissiveColour") === 1
   && !ROCK_PEBBLE_VERTEX_GLSL.includes("uEmissiveColour"));
-for (const [n, t] of [["uTime", "float"], ["uWindAc", "vec2"], ["uSpanM", "float"],
-  ["uSpeed", "float"], ["uPulseFreq", "float"], ["uPulseScroll", "float"],
+for (const [n, t] of [["uWindAc", "vec2"], ["uTravel", "float"], ["uSpanM", "float"],
+  ["uSpeed", "float"], ["uPulseFreq", "float"], ["uPulseOffset", "vec2"],
   ["uPulseThreshold", "float"], ["uScatterRadius", "float"]]) {
   check(`grit vertex declares ${n} exactly once`,
     uniformCount(ROCK_GRIT_VERTEX_GLSL, t, n) === 1);
+}
+{
+  // Comment-stripped: the GLSL explains the old bug in prose.
+  const gritCode = ROCK_GRIT_VERTEX_GLSL.split("\n").map((l) => l.replace(/\/\/.*$/, "")).join("\n");
+  check("the grit vertex reads NO absolute clock (2026-10-24: its motion is the "
+    + "CPU-integrated uTravel / uPulseOffset; any uTime product races as the session ages)",
+    !/\buTime\b/.test(gritCode) && !/\buPulseScroll\b/.test(gritCode)
+    && /pulseXy = placed\.xy \* uPulseFreq \+ uPulseOffset;/.test(gritCode));
+}
+{
+  // Every uniform the grit GLSL declares is in the field's bag (a missing one
+  // uploads nothing and silently reads 0 on the GPU).
+  const g = createGritField({ oracle: fakeOracle(() => 0), count: 4, radiusM: 16 });
+  const declared = [...(ROCK_GRIT_VERTEX_GLSL + ROCK_GRIT_FRAGMENT_GLSL)
+    .matchAll(/uniform\s+\w+\s+(\w+)\s*;/g)].map((m) => m[1]);
+  check("every uniform the grit GLSL declares is in the field's uniform bag",
+    declared.length > 0 && declared.every((u) => u in g.uniforms),
+    declared.filter((u) => !(u in g.uniforms)).join());
+  g.dispose();
 }
 check("neither vertex shader redeclares three's built-in position/normal/uv",
   !/attribute\s+vec3\s+position;/.test(ROCK_PEBBLE_VERTEX_GLSL)
@@ -1021,13 +1122,193 @@ console.log("\n-- R13 the live family, headless and with THREE -----------------
   check("THREE: the grit mesh is additive, depth-write off, castShadow false",
     g.material.blending === THREE.AdditiveBlending && g.material.depthWrite === false
     && g.mesh.castShadow === false);
-  check("THREE: the grit advection twin agrees with its own uniforms",
+  check("THREE: the grit advection twin agrees with its own LIVE uniforms",
     (() => {
-      const a = g.advectionOf(0.25, 5, 1);
-      const b = gritAdvect(1, 0, 5, 0.25, g.uniforms.uSpanM.value, g.uniforms.uSpeed.value);
-      return approx(a.x, b.x, 1e-9) && approx(a.y, b.y, 1e-9);
+      if (!HAS_TRAVEL_API) return false;
+      for (let i = 0; i < 30; i += 1) g.update(1 / 60, 7 + i / 60, 400, 400, 10);
+      const a = g.advectionOf(0.25, 1.25);
+      const w = g.uniforms.uWindAc.value;
+      const b = gritAdvectTravel(w.x, w.y, g.uniforms.uTravel.value, 0.25,
+        g.uniforms.uSpanM.value, g.uniforms.uSpeed.value * 1.25);
+      return g.uniforms.uTravel.value > 0 && approx(a.x, b.x, 1e-9) && approx(a.y, b.y, 1e-9);
     })());
+  check("THREE: the pulse offset is a Vector2 the field writes (not a re-pointed placeholder)",
+    !!g.material.uniforms.uPulseOffset && g.material.uniforms.uPulseOffset.value.isVector2 === true
+    && g.material.uniforms.uPulseOffset === g.uniforms.uPulseOffset
+    && g.uniforms.uPulseOffset.value.x !== 0);
   g.dispose();
+}
+
+// ===========================================================================
+console.log("\n-- R14 2026-10-24: no frozen rim fade, no racing drift ----------");
+// ===========================================================================
+check("no field bakes the pool's FROZEN scatter-time fade (ctx.fade) into an instance",
+  !/ctx\s*\.\s*fade\b/.test(ROCK_CODE));
+{
+  // (1) THE WALKED WINDOW. Placement and every per-instance draw are pure in
+  // (world cell, seed), so a window the player WALKED into place must carry
+  // exactly what a window freshly scattered at the destination carries. Before
+  // the fix, every grit streak that entered at the leading edge kept the rim
+  // fade (~0) it was placed with: walk 40 m and the near field was empty.
+  const R = 32;
+  /** live instances within maxD of (px, py): "x,y" (mm) -> attribute tuple */
+  const nearRecords = (field, px, py, maxD, attr, size) => {
+    const out = new Map();
+    const off = field.pool.arrays.aOffset;
+    const a = field.pool.arrays[attr];
+    for (let i = 0; i < field.pool.count; i += 1) {
+      if (!field.pool.isLive(i)) continue;
+      if (Math.hypot(off[i * 3] - px, off[i * 3 + 1] - py) > maxD) continue;
+      const key = `${Math.round(off[i * 3] * 1000)},${Math.round(off[i * 3 + 1] * 1000)}`;
+      out.set(key, Array.from(a.subarray(i * size, i * size + size)));
+    }
+    return out;
+  };
+  const sameRecords = (A, B) => {
+    if (A.size !== B.size || A.size === 0) return false;
+    for (const [k, v] of B) {
+      const u = A.get(k);
+      if (!u || u.some((x, j) => Math.abs(x - v[j]) > 1e-6)) return false;
+    }
+    return true;
+  };
+  for (const [label, make, attr, size] of [
+    ["grit", (o) => createGritField(o), "aGrit", 4],
+    ["pebble", (o) => createPebbleField(o), "aScale", 3],
+  ]) {
+    const opts = { oracle: fakeOracle(() => 0), count: 900, radiusM: R, seed: 21 };
+    const walked = make(opts);
+    walked.update(0.016, 0, 1000, 1000, 10, null);
+    // 1 m a frame for 40 m east: the leading edge is placed AT THE RIM.
+    for (let i = 1; i <= 40; i += 1) walked.update(0.016, i * 0.016, 1000 + i, 1000, 10, null);
+    // ...then stand still long enough for the round-robin to settle.
+    for (let i = 0; i < 120; i += 1) walked.update(0.016, 1, 1040, 1000, 10, null);
+    const fresh = make(opts);
+    fresh.update(0.016, 0, 1040, 1000, 10, null);
+    // Inside the live fade start (0.75 R for grit, 0.78 R for pebbles), where
+    // the shader's own distance blend is exactly 1.
+    const W = nearRecords(walked, 1040, 1000, 0.6 * R, attr, size);
+    const F = nearRecords(fresh, 1040, 1000, 0.6 * R, attr, size);
+    check(`★ ${label}: a WALKED window carries exactly the per-instance values of a `
+      + "fresh scatter at the destination (no frozen rim fade)",
+      sameRecords(W, F), `walked=${W.size} fresh=${F.size}`);
+    if (label === "grit") {
+      let minOp = Infinity;
+      for (const v of W.values()) minOp = Math.min(minOp, v[3]);
+      check("★ grit: after walking 40 m, every streak around the player keeps its FULL "
+        + "per-instance opacity (>= 0.5 x the code's grit weight)",
+        W.size > 0 && minOp >= 0.5 * ROCK_VARIANTS[0].grit - 1e-6, `near=${W.size} min=${minOp}`);
+    }
+    walked.dispose();
+    fresh.dispose();
+  }
+}
+{
+  // (2) NO RACING. A 3600 s session at 60 fps under the REAL wind model —
+  // calm: |wind| breathes +-6 % over 13 s and the direction wanders +-12 deg
+  // over 45 s — evaluating the grit GLSL's OWN advection line on the uniforms
+  // the field publishes each frame (the shared clock is driven the way
+  // loop.js drives it). Every streak's per-frame step along the wind must stay
+  // within dt x speed x max multiplier x max |wind|; the old
+  // uTime x |wind| product moved t x d|wind|/dt and aliased across the span.
+  const globals = { uTime: { value: 0 }, uWindDir: { value: { x: 0, y: 0 } } };
+  const field = createGritField({
+    oracle: fakeOracle(() => 0), globals, count: 16, radiusM: 16, seed: 9,
+  });
+  const m = /float travelled = ([^;]+);/.exec(ROCK_GRIT_VERTEX_GLSL);
+  check("the grit GLSL carries exactly one advection line to evaluate",
+    !!m && countOf(ROCK_GRIT_VERTEX_GLSL, "float travelled =") === 1);
+  // eslint-disable-next-line no-new-func
+  const glslTravelled = new Function("uTime", "uTravel", "uSpeed", "uSpanM", "aGrit", "wl",
+    `return (${m ? m[1] : "NaN"});`);
+  // The OLD product form, through the same machinery: the suite's own proof
+  // that this session discriminates (it must race where the fix does not).
+  const oldTravelled = (uTime, uSpeed, uSpanM, aGrit, wl) => uTime * uSpeed * aGrit.y * wl + aGrit.x * uSpanM;
+  const U = field.uniforms;
+  const uTravelNow = () => (U.uTravel ? U.uTravel.value : NaN);
+  const DT = 1 / 60;
+  const FRAMES = 3600 * 60;
+  writeWindVector(0, 0, globals.uWindDir.value);
+  field.update(DT, 0, 500, 500, 10);
+  const ag = field.pool.arrays.aGrit;
+  const live = [];
+  for (let i = 0; i < field.pool.count; i += 1) {
+    if (field.pool.isLive(i)) {
+      live.push({ x: ag[i * 4], y: ag[i * 4 + 1], z: ag[i * 4 + 2], w: ag[i * 4 + 3] });
+    }
+  }
+  check("the racing session has live streaks to watch", live.length > 0, String(live.length));
+  const span = U.uSpanM.value;
+  const speed = U.uSpeed.value;
+  const sOf = (travelled) => travelled - span * Math.floor(travelled / span) - span * 0.5;
+  const circ = (d) => Math.abs(d - span * Math.round(d / span));   // the recycle is a wrap, not a step
+  const w = { x: 0, y: 0 };
+  const wlNow = () => { windAcFromGlobals(globals, w); return Math.max(Math.hypot(w.x, w.y), 1e-4); };
+  let wl = wlNow();
+  const prevNew = live.map((a) => sOf(glslTravelled(globals.uTime.value, uTravelNow(), speed, span, a, wl)));
+  const prevOld = live.map((a) => sOf(oldTravelled(globals.uTime.value, speed, span, a, wl)));
+  let maxStep = 0, maxStepOld = 0, maxGust = wl, maxPulseStep = 0, travelLo = Infinity, travelHi = -Infinity;
+  let maxMul = 0;
+  for (const a of live) maxMul = Math.max(maxMul, a.y);
+  const po = U.uPulseOffset ? U.uPulseOffset.value : null;
+  let px0 = po ? po.x : NaN, py0 = po ? po.y : NaN;
+  for (let f = 1; f <= FRAMES; f += 1) {
+    const t = f * DT;
+    globals.uTime.value = t;                               // loop.js drives the shared clock
+    writeWindVector(t, 0, globals.uWindDir.value);         // the real calm wind
+    field.update(DT, t, 500, 500, 10);
+    wl = wlNow();
+    if (wl > maxGust) maxGust = wl;
+    const tr = uTravelNow();
+    if (tr < travelLo) travelLo = tr;
+    if (tr > travelHi) travelHi = tr;
+    for (let j = 0; j < live.length; j += 1) {
+      const sN = sOf(glslTravelled(t, tr, speed, span, live[j], wl));
+      const dN = circ(sN - prevNew[j]);
+      if (!(dN <= maxStep)) maxStep = Number.isNaN(dN) ? Infinity : dN;
+      prevNew[j] = sN;
+      const sO = sOf(oldTravelled(t, speed, span, live[j], wl));
+      const dO = circ(sO - prevOld[j]);
+      if (dO > maxStepOld) maxStepOld = dO;
+      prevOld[j] = sO;
+    }
+    if (po) {
+      const ps = Math.hypot(po.x - px0, po.y - py0);
+      if (ps > maxPulseStep) maxPulseStep = ps;
+      px0 = po.x; py0 = po.y;
+    } else {
+      maxPulseStep = Infinity;
+    }
+  }
+  const bound = DT * speed * Math.max(maxMul, 1.5) * maxGust;
+  check("self-check: the OLD uTime x |wind| form races in this very session "
+    + "(so the next check has teeth)", maxStepOld > 10 * bound,
+    `old max step ${maxStepOld.toFixed(3)} m/frame vs bound ${bound.toFixed(4)}`);
+  check("★ no racing: over a 3600 s breathing-wind session every streak's per-frame step "
+    + "stays <= dt x speed x max multiplier x max |wind| (the GLSL line, evaluated)",
+    maxStep <= bound + 1e-9, `max step ${maxStep} m/frame vs bound ${bound}`);
+  check("★ the pulse field never races either: per-frame offset step <= dt x scroll",
+    maxPulseStep <= DT * U.uPulseScroll.value + 1e-12, `max ${maxPulseStep}`);
+  const wrap = HAS_TRAVEL_API ? gritTravelWrap(span, speed) : NaN;
+  const st = field.stats();
+  check("★ travel stays BOUNDED all session: uTravel in [0, wrap), and it wrapped "
+    + "(seamlessly: the step bound above held across every wrap frame)",
+    travelLo >= 0 && travelHi < wrap && st.travelWraps >= 3 && st.travelWrap === wrap,
+    `range ${travelLo}..${travelHi} wrap=${wrap} wraps=${st.travelWraps}`);
+  check("every live streak's speed multiplier is an exact k/64 (what makes the wrap seamless)",
+    live.every((a) => Number.isInteger(a.y * 64) && a.y >= 0.79 && a.y <= 1.5));
+  // A resumed background tab: a 30 s frame advances at most GRIT_MAX_DT of travel.
+  const before = uTravelNow();
+  const pBefore = po ? { x: po.x, y: po.y } : null;
+  field.update(30, 3630, 500, 500, 10);
+  const adv = (uTravelNow() - before + wrap) % wrap;
+  check("a long (backgrounded-tab) frame is clamped to GRIT_MAX_DT of travel and pulse",
+    adv <= GRIT_MAX_DT * maxGust + 1e-9 && !!pBefore
+    && Math.hypot(po.x - pBefore.x, po.y - pBefore.y) <= GRIT_MAX_DT * U.uPulseScroll.value + 1e-12,
+    `adv=${adv}`);
+  check("the field still never writes the adopted shared clock",
+    globals.uTime.value === FRAMES * DT && field.uniforms.uTime === globals.uTime);
+  field.dispose();
 }
 
 // ===========================================================================

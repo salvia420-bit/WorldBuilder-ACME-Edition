@@ -677,6 +677,25 @@ export function createInteriorMask(opts = {}) {
     return true;
   }
 
+  /**
+   * 2026-10-23 — how many interior boxes (EnvCells) have a footprint within
+   * `r` metres of (x, y): a cheap "am I in a town" reading (the desert mirage
+   * and the volcano shimmer stand down in towns). Linear over the loaded boxes,
+   * so callers sample it a few times a second, not per pixel or per blade.
+   */
+  function boxesNear(x, y, r) {
+    if (entries.length === 0 || !Number.isFinite(x) || !Number.isFinite(y)) return 0;
+    const r2 = r * r;
+    let n = 0;
+    for (let i = 0; i < entries.length; i += 1) {
+      const e = entries[i];
+      const dx = x < e.x0 ? e.x0 - x : x > e.x1 ? x - e.x1 : 0;
+      const dy = y < e.y0 ? e.y0 - y : y > e.y1 ? y - e.y1 : 0;
+      if (dx * dx + dy * dy <= r2) n += 1;
+    }
+    return n;
+  }
+
   function contains(x, y, z) {
     if (entries.length === 0) return false;
     const list = buckets.get(bucketKey(Math.floor(x / BUCKET_M), Math.floor(y / BUCKET_M)));
@@ -734,6 +753,7 @@ export function createInteriorMask(opts = {}) {
   return {
     sync,
     contains,
+    boxesNear,
     /**
      * After a sync() that returned true: the world AABBs [x0, y0, x1, y1] of
      * the boxes that rebuild added or removed.

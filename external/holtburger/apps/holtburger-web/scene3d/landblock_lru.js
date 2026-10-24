@@ -2428,6 +2428,35 @@ export class LandblockLRU {
         try { c.dispose(); } catch (_) { /* fail-soft */ }
       }
     }
+    // 2026-10-23 — the stashed building batches too (disposeParked does; this
+    // path dropped them undisposed). If the live entry then has no building of
+    // its own, forget the LB's baked mark and keys so the loader re-bakes it
+    // instead of short-circuiting to "baked, nothing attached".
+    const s = this.scene3d;
+    for (const c of p.buildings || []) {
+      if (c?.isBatchedMesh && typeof c.dispose === "function") {
+        try { c.dispose(); } catch (_) { /* fail-soft */ }
+      }
+    }
+    if (s && (p.buildings || []).length > 0) {
+      let live = 0;
+      for (const c of s.buildingsGroup ? s.buildingsGroup.children : []) {
+        const lb = c.userData?.landblockId;
+        if (lb != null && lbKeyOf(lb >>> 0) === lbKey) { live += 1; break; }
+      }
+      if (live === 0) {
+        if (s.buildingsBakedLbs instanceof Set) s.buildingsBakedLbs.delete(lbKey);
+        // Its placements' keys, by the same prefix rule evict uses (a group
+        // follows its placement's own landblock id).
+        if (s.buildingMap3d instanceof Map) {
+          for (const k of s.buildingMap3d.keys()) {
+            if (typeof k !== "string" || k.length < 8) continue;
+            const lb = parseInt(k.slice(0, 8), 16);
+            if (Number.isFinite(lb) && lbKeyOf(lb >>> 0) === lbKey) s.buildingMap3d.delete(k);
+          }
+        }
+      }
+    }
     const live = this.entries.get(lbKey)?.disposables;
     const d = p.disposables;
     if (d && d !== live) {

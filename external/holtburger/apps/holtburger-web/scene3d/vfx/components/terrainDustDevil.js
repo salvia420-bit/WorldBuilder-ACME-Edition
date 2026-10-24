@@ -75,18 +75,25 @@ export function devilHash01(n) {
  * worst of the three options. See the marshGasGate note in
  * `particle_env_gates.js` for the full rationale.
  *
- * Devils are a DRY-WEATHER, DAYTIME phenomenon: rain kills them, wind feeds
- * them, and the ground stops convecting after sunset.
+ * Devils are a DRY, SUNNY, CALM-AIR phenomenon (2026-10-23 rework — the old
+ * gate had wind FEEDING them, so a calm clear noon, the classic dust-devil
+ * day, ran at 0.45 and the owner's noon tour saw none):
  *  • storm (`isStorm`)            ⇒ 0 — wet sand does not lift.
  *  • wetness (0..1)               ⇒ scales the whole gate down (the smoothed,
  *                                   pop-free rain signal, so it fades rather
  *                                   than snapping when the storm clears).
- *  • wind (`stormness`, 0..1)     ⇒ 0.45 → 1.0; a dead calm still throws the
- *                                   occasional devil (they are convective, not
- *                                   purely wind-driven).
- *  • night (`nightFactor`, 0..1)  ⇒ down to 0.25 at full night. A client that
- *                                   never resolves the sky reads nightFactor 0
- *                                   (calm midday), so this can never black-hole.
+ *  • stormness (0..1)             ⇒ 1.0 → 0.4. A devil is a convective plume
+ *                                   over sun-heated sand: an overcast, gusty
+ *                                   sky cuts the heating AND shears the column
+ *                                   apart, so storminess SUPPRESSES devils.
+ *                                   Calm, clear air is the 1.0 baseline.
+ *  • night (`nightFactor`, 0..1)  ⇒ down to 0 at full night (was a 0.25
+ *                                   floor): the sand stops convecting once the
+ *                                   sun is gone, and an additive sprite column
+ *                                   in a dark desert reads as a glow, not dust.
+ *                                   A client that never resolves the sky reads
+ *                                   nightFactor 0 (calm midday), so this can
+ *                                   never black-hole by day.
  * @param {object|null} env `readParticleEnv` snapshot.
  * @returns {number} 0..1
  */
@@ -97,7 +104,7 @@ export function dustDevilGate(env) {
   const storm = clamp01(env.stormness);
   const wet = clamp01(env.wetness);
   const night = clamp01(env.nightFactor);
-  const g = (0.45 + 0.55 * storm) * (1 - wet) * (1 - 0.75 * night);
+  const g = (1 - 0.6 * storm) * (1 - wet) * (1 - night);
   return Math.min(1, Math.max(0, g));
 }
 
@@ -107,6 +114,24 @@ export function dustDevilGate(env) {
  * `birthrate` is the inter-spawn PERIOD IN SECONDS, not a rate
  * (`particle_emitter_info.js:266`) — the foliageAmbient convention: divide the
  * authored period by the gate so a stronger gate spawns faster.
+ *
+ * THE SHAPE (2026-10-23 — the owner's noon tour on the 1070 saw no devil at
+ * all). The v1 column was 40 sprites of 0.18-0.56 m rising ~5 m: at the
+ * 100-250 m a devil is normally seen from, that is a few sub-pixel specks. A
+ * real devil is a column tens of metres tall that widens upward. Now:
+ *   • HEIGHT  — updraft 3.2 m/s x [0.55, 1.25] over a ~7.5 s life ⇒ most of
+ *               the column reaches 15-30 m (it reads at 400 m: ~60 px tall).
+ *   • FUNNEL  — every puff GROWS as it climbs (startScale → finalScale on the
+ *               0.294 m softGlowDot quad: ~0.65 m at the foot → ~2.5 m aloft),
+ *               so the column widens upward with no new trajectory type.
+ *   • FOOT    — puffs are born on a horizontal RING (offsetDir = +Z makes
+ *               `getRandomOffset` drop its vertical component, retail
+ *               ParticleEmitterInfo::GetRandomOffset), not in a ball, so the
+ *               base reads as a swirling skirt rather than a point source.
+ *   • DENSITY — ~one puff per 0.085 s, capped at 96 live: enough overlap that
+ *               the helix of individual puffs blurs into a column.
+ *   • GROWTH  — `initialParticles` 0: a devil the host has just started
+ *               FORMS from the ground up instead of popping in whole.
  */
 function buildDevilEmitter(p, anchor, hwGfxObjId, seed, g) {
   const h = devilHash01(seed);
@@ -122,6 +147,8 @@ function buildDevilEmitter(p, anchor, hwGfxObjId, seed, g) {
   // Anti-clockwise or clockwise, hashed — a field of devils should not all
   // turn the same way.
   const spinSign = h3 < 0.5 ? -1 : 1;
+  const ringIn = Number.isFinite(p.footRingInner) ? p.footRingInner : 0;
+  const ringOut = Number.isFinite(p.footRingOuter) ? p.footRingOuter : 0.35;
 
   const emitterInfo = {
     id: p.synthId >>> 0,
@@ -135,12 +162,15 @@ function buildDevilEmitter(p, anchor, hwGfxObjId, seed, g) {
     totalSeconds: 0,
     lifespan: p.lifespan,
     lifespanRand: p.lifespanRand,
-    // Spawn volume: a small filled sphere at the column's foot.
-    offsetDirX: 0, offsetDirY: 0, offsetDirZ: 0,
-    minOffset: 0,
-    maxOffset: radius * 0.35,
+    // Spawn volume: a horizontal ANNULUS at the column's foot. offsetDir = +Z
+    // makes getRandomOffset project its random vector onto the ground plane.
+    offsetDirX: 0, offsetDirY: 0, offsetDirZ: 1,
+    minOffset: radius * ringIn,
+    maxOffset: radius * ringOut,
     // a = the UPDRAFT (metres/sec, AC z-up). The horizontal components stay 0:
-    // all lateral motion is the rotation below, so the column does not walk.
+    // all lateral motion is the rotation below; the HOST walks the column by
+    // moving the emitter's parent (non-parent-local puffs stay where born, so
+    // the column trails and leans behind a moving devil for free).
     aX: 0, aY: 0, aZ: p.riseMetersPerSec,
     minA: p.minRise, maxA: p.maxRise,
     // b = angular rate per axis. x == y ⇒ circle; z = 0 ⇒ no vertical wobble.
@@ -148,7 +178,7 @@ function buildDevilEmitter(p, anchor, hwGfxObjId, seed, g) {
     minB: 0.8, maxB: 1.35,
     // c = oscillation AMPLITUDE — the column radius (x == y ⇒ round).
     cX: radius, cY: radius, cZ: 0,
-    minC: 0.35, maxC: 1.0,
+    minC: p.minC, maxC: p.maxC,
     scaleRand: p.scaleRand, startScale: p.startScale, finalScale: p.finalScale,
     transRand: p.transRand, startTrans: p.startTrans, finalTrans: p.finalTrans,
     isParentLocal: false,           // spawn at the anchor, then drift in world
@@ -192,18 +222,22 @@ export const terrainDustDevil = {
     // the column drew as dark discs. softGlowDot is tinted warm sand and dimmed
     // at night by its `?particleFx` profile.
     hwGfxObjId: PARTICLE_SPRITES.softGlowDot,
-    basePeriodSec: 0.28,           // dense-ish: a devil is a visible column
-    maxParticles: 40,
-    initialParticles: 12,
-    lifespan: 5.0, lifespanRand: 1.5,
-    columnRadiusM: 1.6,            // used when the host supplies no anchor radius
-    spinRadPerSec: 2.4,            // ~0.38 rev/s at the reference radius
-    riseMetersPerSec: 1.5,
-    minRise: 0.5, maxRise: 1.4,
-    footLiftM: 0.2,                // start just above the sand, not inside it
-    scaleRand: 0.25, startScale: 0.6, finalScale: 1.9,   // puffs grow as they rise
-    transRand: 0.15, startTrans: 0.45, finalTrans: 1.0,  // thin out at the top
-    drawRadiusM: 260,
+    // 2026-10-23 — sized to READ at the chase camera (see buildDevilEmitter).
+    basePeriodSec: 0.085,          // ~12 puffs/s: a continuous column
+    maxParticles: 96,              // ≥ lifespan / period, so the column is full
+    initialParticles: 0,           // the column FORMS from the sand up
+    lifespan: 7.5, lifespanRand: 2.0,
+    columnRadiusM: 2.4,            // used when the host supplies no anchor radius
+    spinRadPerSec: 2.0,            // ~0.32 rev/s; ~5 m/s at the rim
+    riseMetersPerSec: 3.2,
+    minRise: 0.55, maxRise: 1.25,  // 15-30 m tall
+    minC: 0.5, maxC: 1.15,         // per-puff orbit radius spread (a thick wall)
+    footRingInner: 0.25, footRingOuter: 0.85,
+    footLiftM: 0.3,                // start just above the sand, not inside it
+    // softGlowDot is a 0.294 m quad; retail clamps scale to 0.1..10.
+    scaleRand: 0.8, startScale: 2.2, finalScale: 8.5,    // ~0.65 m → ~2.5 m
+    transRand: 0.1, startTrans: 0.35, finalTrans: 1.0,   // dense foot, thin crown
+    drawRadiusM: 480,              // a 25 m column is still ~50 px tall here
   },
 
   /**

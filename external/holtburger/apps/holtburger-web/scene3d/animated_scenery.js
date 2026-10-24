@@ -22,7 +22,10 @@
 //
 // Per-part meshes + rest hinge frames come from `fetchBuildingPlacement`; the
 // keyframes from `fetchAnimation`. AC Z-up object space (see statics.js anchors),
-// so part AFrames apply with no handedness conversion.
+// so part AFrames apply with no handedness conversion. The part meshes arrive
+// with their static frame BAKED in, and an AFrame is absolute in setup space,
+// so each part draws as A(t) * inverse(bakeFrame) — see `?animSceneryUnbake`
+// (2026-10-23: the doubled frame tore the windmill's sails off the hub).
 //
 // **`?animScenery` default-ON (`?animScenery=off` escape).** Outdoor placements anchor to
 // `scene3d.staticsGroup`; interior (EnvCell) placements pass `worldFrame:true`
@@ -248,6 +251,205 @@ export function animSceneryBucketVisEnabled() {
 }
 /** Test seam: true/false forces, undefined re-reads the URL. */
 export function __setAnimSceneryBucketVisForTest(v) { _bucketVisFlag = v; }
+
+// ?animSceneryUnbake (2026-10-23, DEFAULT ON — BUG FIX, changes what is drawn;
+// `off`/`0`/`false`/`no` escape) — undo the rest frame the wasm BAKED into each
+// part's vertices before the clip's part frame is applied.
+//
+// THE BUG (owner on the 1070, 2026-10-23, landblock 0x8093 at 16.0N 0.8E: the
+// windmill's four sail boards float detached at odd angles round the tower).
+// fetchBuildingPlacement (lib.rs triangulate_setup_model_per_part) and the HBG1
+// bundle (geom_bundles.js bundleToPartGroups) both hand back part geometry with
+// the part's static frame already baked in (idle-anim frame, else the placement
+// chain) — right for buildings and doors. A DAT Animation part frame is ABSOLUTE
+// in setup space and REPLACES that frame: retail CPartArray::UpdateParts
+// (acclient.c:326601) sets part = Frame::combine(objectFrame, animFrame[i]) over
+// part-LOCAL GfxObj vertices. Every path here composed the clip frame ON TOP of
+// the baked one (object * A(t) * B * v), i.e. the part frame applied twice.
+// Windmill sails 0x020003E5 (anim 0x0300061B: 60 frames, 1.5 deg about the hub
+// axis per frame): the sails' Default frames are R_y(-90/0/+90/180) about 5.35 m
+// out; doubled, all four boards share ONE orientation (parallel) and their
+// centres land 0 / 7.6 / 7.6 / 10.7 m from the hub — the owner's still. Every
+// DID with an off-origin part was hit: the same arithmetic on a seagull's
+// Default frames (0x020005AC, both parts at (0,-12,15), 94 / 157 deg) puts its
+// two parts ~25 m apart.
+// THE FIX: per part, U = inverse(bake frame) right-multiplies the clip pose:
+// object * A(t) * U * (B * v) = object * A(t) * v. B, best source first:
+//   1. wasm `fetchSetupPartPose` — the exact frame walk_setup_parts baked
+//      (idle anim frame -> static placement chain). NOT on index.html's
+//      wasmExports bag today (2026-10-23), so live skips it;
+//   2. frame 0 of the placement's default animation (`fetchAnimation(animId)`)
+//      — THE LIVE SOURCE. walk_setup_parts' idle frame
+//      (lib.rs try_resolve_idle_anim_frame_with_override) is the MotionTable
+//      idle anim's frame 0, else — path 2 — `setup.default_animation`'s frame
+//      0, and every anim-scenery placement HAS a default animation (that is
+//      what `defaultAnimationId` is), so with no MotionTable its animated parts
+//      are baked in exactly this frame, never in a placement. (Verifier
+//      2026-10-24: undoing the Default placement instead left the butterflies
+//      0x02000493 — anim 0x030006CB frame 0 sits 8.6 m / 180 deg from Default
+//      — drawn with their two wings up to ~17 m apart; seagull wings 26 deg
+//      off.) Wrong only for a setup with a MotionTable idle cycle;
+//   3. wasm `fetchSetupPlacementFrames(setup, 0x65)` — the retail static chain
+//      0x65 Resting -> 0 -> first (skipped under `placementId=off`);
+//   4. the hinge frame (placement 0 -> 1 -> first).
+// Parts past the clip's part count never move, so their U only has to be
+// consistent (every path seeds them B * U = identity). Identity bake frames get
+// U = null and are untouched (byte-identical rows/slots). Before the first tick
+// a part shows B * U = identity on the baked mesh = its static rest pose.
+// `=off` restores the doubled composition (A/B only).
+let _unbakeFlag;
+export function animSceneryUnbakeEnabled() {
+  if (_unbakeFlag !== undefined) return _unbakeFlag;
+  let on = true;
+  try {
+    if (typeof window !== "undefined" && window.location) {
+      const v = new URLSearchParams(window.location.search).get("animSceneryUnbake")?.toLowerCase();
+      if (v != null) on = !(v === "off" || v === "0" || v === "false" || v === "no");
+    }
+  } catch (_) { on = true; }
+  _unbakeFlag = on;
+  return on;
+}
+/** Test seam: true/false forces, undefined re-reads the URL. */
+export function __setAnimSceneryUnbakeForTest(v) { _unbakeFlag = v; }
+
+const _unbakeStats = { setups: 0, parts: 0, fromPose: 0, fromHinge: 0, poseSource: { partPose: 0, anim0: 0, placement65: 0, none: 0 } };
+const _unbakeRestScratch = new THREE.Matrix4();
+const _unbakeScaleScratch = new THREE.Vector3();
+
+/** The wasm bake's static placement chain is the retail one (0x65 -> 0 -> first)
+ *  unless `placementId=off` (lib.rs parse_placement_id_flag: only that exact
+ *  spelling disables it). Read per call: build-time only. */
+function _placementChainRetail() {
+  try {
+    if (typeof window !== "undefined" && window.location) {
+      return new URLSearchParams(window.location.search).get("placementId") !== "off";
+    }
+  } catch (_) { /* default */ }
+  return true;
+}
+
+/** setupId -> Promise<Float32Array|null> (7 floats per part: ox oy oz qw qx qy qz).
+ *  Keyed by setup alone: `animId` is always the setup's own default_animation
+ *  (every lib.rs defaultAnimationId producer reads `setup.default_animation`). */
+const _bakePoseCache = new Map();
+function _fetchBakePose(setupId, wasmExports, animId) {
+  if (!animSceneryUnbakeEnabled()) return Promise.resolve(null);
+  const hasPose = typeof wasmExports?.fetchSetupPartPose === "function";
+  const aid = (animId >>> 0) || 0;
+  const hasAnim = aid !== 0 && typeof wasmExports?.fetchAnimation === "function";
+  const hasPlacement = typeof wasmExports?.fetchSetupPlacementFrames === "function" && _placementChainRetail();
+  if (!hasPose && !hasAnim && !hasPlacement) return Promise.resolve(null);
+  let p = _bakePoseCache.get(setupId);
+  if (p) return p;
+  p = (async () => {
+    if (hasPose) {
+      try {
+        const a = await wasmExports.fetchSetupPartPose(setupId);
+        if (a && a.length > 0 && a.length % 7 === 0) {
+          _unbakeStats.poseSource.partPose += 1;
+          return Float32Array.from(a);
+        }
+      } catch (_) { /* next source */ }
+    }
+    if (hasAnim) {
+      // Frame 0 of the default animation = walk_setup_parts' idle frame for a
+      // setup without a MotionTable (lib.rs try_resolve_idle_anim_frame_with_override
+      // path 2). Frame-major layout, 7 floats per part (fetchAnimation).
+      try {
+        const a = await wasmExports.fetchAnimation(aid);
+        const np = a?.numParts | 0;
+        const fr = a?.frames; // read BEFORE free()
+        try { a?.free?.(); } catch (_) {}
+        if (np > 0 && fr && fr.length >= np * 7) {
+          const out = new Float32Array(np * 7);
+          for (let k = 0; k < np * 7; k++) out[k] = fr[k];
+          _unbakeStats.poseSource.anim0 += 1;
+          return out;
+        }
+      } catch (_) { /* next source */ }
+    }
+    if (hasPlacement) {
+      try {
+        const r = await wasmExports.fetchSetupPlacementFrames(setupId, 0x65);
+        const frames = (typeof r?.takeFrames === "function" ? r.takeFrames() : null) || [];
+        try { r?.free?.(); } catch (_) {}
+        if (frames.length > 0) {
+          const out = new Float32Array(frames.length * 7);
+          for (let i = 0; i < frames.length; i++) {
+            const f = frames[i];
+            out.set([f.ox, f.oy, f.oz, f.qw, f.qx, f.qy, f.qz], i * 7);
+            try { f.free?.(); } catch (_) {}
+          }
+          _unbakeStats.poseSource.placement65 += 1;
+          return out;
+        }
+      } catch (_) { /* hinge fallback */ }
+    }
+    _unbakeStats.poseSource.none += 1;
+    return null;
+  })();
+  _bakePoseCache.set(setupId, p);
+  return p;
+}
+/** Test seam: the bake-frame source chain (cached per setup until dispose). */
+export function __fetchBakePoseForTest(setupId, wasmExports, animId) {
+  return _fetchBakePose(setupId >>> 0, wasmExports, animId);
+}
+
+/**
+ * The matrix taking part `i`'s BAKED vertices back to part-local space — the
+ * inverse of the frame baked into them — or null when that frame is identity
+ * (nothing to undo) or `?animSceneryUnbake=off`. `bakePose`: 7 floats per
+ * part from `_fetchBakePose` (fetchSetupPartPose, else the default animation's
+ * frame 0, else the 0x65 placement chain) — preferred; `hinge`: the part's
+ * `{x,y,z,qw,qx,qy,qz}` hinge frame (fallback, also for parts past a shorter
+ * `bakePose`). Pure apart from diag counters; exported for tests.
+ */
+export function partUnbakeMatrix(bakePose, hinge, i) {
+  if (!animSceneryUnbakeEnabled()) return null;
+  let x, y, z, qw, qx, qy, qz;
+  if (bakePose && (i + 1) * 7 <= bakePose.length) {
+    const b = i * 7;
+    x = bakePose[b]; y = bakePose[b + 1]; z = bakePose[b + 2];
+    qw = bakePose[b + 3]; qx = bakePose[b + 4]; qy = bakePose[b + 5]; qz = bakePose[b + 6];
+    _unbakeStats.fromPose += 1;
+  } else if (hinge) {
+    x = hinge.x; y = hinge.y; z = hinge.z;
+    qw = hinge.qw; qx = hinge.qx; qy = hinge.qy; qz = hinge.qz;
+    _unbakeStats.fromHinge += 1;
+  } else {
+    return null;
+  }
+  x = +x || 0; y = +y || 0; z = +z || 0;
+  qw = Number.isFinite(+qw) ? +qw : 1; qx = +qx || 0; qy = +qy || 0; qz = +qz || 0;
+  if (Math.abs(x) + Math.abs(y) + Math.abs(z) < 1e-6 && Math.abs(qx) + Math.abs(qy) + Math.abs(qz) < 1e-7) {
+    return null;
+  }
+  const q = new THREE.Quaternion(qx, qy, qz, qw);
+  if (q.lengthSq() < 1e-12) return null;
+  q.normalize();
+  _unbakeStats.parts += 1;
+  return new THREE.Matrix4().compose(new THREE.Vector3(x, y, z), q, new THREE.Vector3(1, 1, 1)).invert();
+}
+
+/** setupId -> per-part booleans (U non-null) — animatedScenerySetupDiag. */
+const _unbakeBySetup = new Map();
+
+/** Unbake matrices for every part of one setup (null entries = identity). */
+function _unbakeMatsFor(bakePose, hinge, partCount, setupId) {
+  const out = new Array(partCount).fill(null);
+  if (!animSceneryUnbakeEnabled()) return out;
+  let any = false;
+  for (let i = 0; i < partCount; i++) {
+    out[i] = partUnbakeMatrix(bakePose, hinge ? hinge[i] : null, i);
+    if (out[i]) any = true;
+  }
+  const sid = setupId >>> 0;
+  if (any && !_unbakeBySetup.has(sid)) _unbakeStats.setups += 1;
+  _unbakeBySetup.set(sid, out.map((m) => m !== null));
+  return out;
+}
 
 // One shared driver per animation DID: { mixer, template, parts:[Group],
 // numParts, refCount }. The template is NOT added to the scene — it's a pure
@@ -517,6 +719,8 @@ async function buildOne(p, wasmExports, materialCache, spFetch) {
   const hinge = (typeof bundle.takePartHingeFrames === "function")
     ? bundle.takePartHingeFrames() : [];
   bundle.free?.();
+  // ?animSceneryUnbake: never rejects (null on a stale pkg / failure → hinge fallback).
+  const unbake = _unbakeMatsFor(await _fetchBakePose(setupId, wasmExports, animId), hinge, partCount, setupId);
 
   // INVARIANT: create the shared DID driver only once every fallible fetch has
   // succeeded. It enters `_didGroups` with refCount 0 and its mixer is advanced
@@ -542,7 +746,12 @@ async function buildOne(p, wasmExports, materialCache, spFetch) {
     const partGroup = new THREE.Group();
     partGroup.name = `part${i}`;
     const h = hinge[i];
-    if (h) {
+    const u = unbake[i];
+    if (u) {
+      // Rest pose until the first tick = the bake frame (inverse of U), so the
+      // baked mesh shows exactly as the frozen static would.
+      _unbakeRestScratch.copy(u).invert().decompose(partGroup.position, partGroup.quaternion, _unbakeScaleScratch);
+    } else if (h) {
       partGroup.position.set(h.x, h.y, h.z);
       partGroup.quaternion.set(h.qx, h.qy, h.qz, h.qw);
     }
@@ -556,7 +765,13 @@ async function buildOne(p, wasmExports, materialCache, spFetch) {
           const sid = grp.surfaceDid || surfaceDids?.[g] || 0;
           // eslint-disable-next-line no-await-in-loop
           const mat = await materialCache.get(sid, spFetch);
-          if (grp.geometry && mat) partGroup.add(new THREE.Mesh(grp.geometry, mat));
+          if (grp.geometry && mat) {
+            const mesh = new THREE.Mesh(grp.geometry, mat);
+            // ?animSceneryUnbake: the mesh sits at U under the clip-driven part
+            // group, so the group's A(t) lands on part-local vertices.
+            if (u) u.decompose(mesh.position, mesh.quaternion, mesh.scale);
+            partGroup.add(mesh);
+          }
         }
       } catch (e) {
         console.warn(`[anim-scenery] part ${i} mesh build failed:`, e);
@@ -699,7 +914,7 @@ function _markDirty(bucket, index) {
 let _poseFrame = 0;             // stamps per-DID template pose recompute + bucket dirtying
 
 /** Decode a setup's part geometry ONCE (legacy decodes per placement). */
-function _getSharedSetupGeom(setupId, wasmExports) {
+function _getSharedSetupGeom(setupId, wasmExports, animId) {
   let p = _geomCache.get(setupId);
   if (p) return p;
   p = (async () => {
@@ -732,7 +947,10 @@ function _getSharedSetupGeom(setupId, wasmExports) {
             }
             parts.push(groups);
           }
-          return { partCount: pr.parts.length, parts, hingeMats };
+          // ?animSceneryUnbake: the bundle bakes the same part frame in.
+          const unbakeMats = _unbakeMatsFor(await _fetchBakePose(setupId >>> 0, wasmExports, animId),
+            pr.parts.map((part) => part.hinge), pr.parts.length, setupId);
+          return { partCount: pr.parts.length, parts, hingeMats, unbakeMats };
         }
       }
       if (res) countGeomFallback(1);
@@ -774,7 +992,8 @@ function _getSharedSetupGeom(setupId, wasmExports) {
       }
       parts.push(groups);
     }
-    return { partCount, parts, hingeMats };
+    const unbakeMats = _unbakeMatsFor(await _fetchBakePose(setupId >>> 0, wasmExports, animId), hinge, partCount, setupId);
+    return { partCount, parts, hingeMats, unbakeMats };
   })();
   _geomCache.set(setupId, p);
   return p;
@@ -796,7 +1015,7 @@ function _geometryWithPoseRow(geometry, row) {
   return geo;
 }
 
-function _getOrCreateBucket(scene3d, setupId, partIdx, gIdx, geometry, surfaceDid, materialCache, spFetch, animId, hingeMat) {
+function _getOrCreateBucket(scene3d, setupId, partIdx, gIdx, geometry, surfaceDid, materialCache, spFetch, animId, hingeMat, unbake) {
   // GPU buckets are per animation DID too: the pose row rides the geometry.
   const gpu = animSceneryGpuEnabled();
   const key = gpu ? `${setupId}:${animId}:${partIdx}:${gIdx}` : `${setupId}:${partIdx}:${gIdx}`;
@@ -811,7 +1030,12 @@ function _getOrCreateBucket(scene3d, setupId, partIdx, gIdx, geometry, surfaceDi
     if (gpu) {
       const v = animInstMaterialFor(mat);
       if (v) {
-        gpuRow = poseRowFor(animId, partIdx, hingeMat);
+        // ?animSceneryUnbake: the row carries P(t) * U for THIS setup's baked
+        // part (its own row — another setup on the DID may bake differently),
+        // seeded with the rest pose B * U = identity until the first tick.
+        gpuRow = unbake
+          ? poseRowFor(animId, partIdx, null, `s${setupId >>> 0}`, unbake)
+          : poseRowFor(animId, partIdx, hingeMat);
         geo = _geometryWithPoseRow(geometry, gpuRow);
         drawMat = v;
       }
@@ -869,7 +1093,7 @@ async function buildOneInstanced(p, scene3d, wasmExports, materialCache, spFetch
   if (setupId === 0 || animId === 0) return null;
   // Shared geometry FIRST — see the invariant in buildOne: a `_didGroups` entry
   // created before a `return null` is an unreclaimable per-frame mixer.
-  const shared = await _getSharedSetupGeom(setupId, wasmExports);
+  const shared = await _getSharedSetupGeom(setupId, wasmExports, animId);
   if (!shared) return null;
   const didGroup = await getOrCreateDidGroup(animId, wasmExports);
   if (!didGroup) return null;
@@ -885,15 +1109,20 @@ async function buildOneInstanced(p, scene3d, wasmExports, materialCache, spFetch
     baseQuat: node.quaternion.clone() };
   for (let i = 0; i < shared.partCount; i++) {
     const groups = shared.parts[i];
+    // ?animSceneryUnbake: U for this part (null = identity bake frame / flag off).
+    const unbake = shared.unbakeMats ? shared.unbakeMats[i] || null : null;
     for (let g = 0; g < groups.length; g++) {
       // eslint-disable-next-line no-await-in-loop
       const bucket = await _getOrCreateBucket(scene3d, setupId, i, g, groups[g].geometry, groups[g].surfaceDid,
-        materialCache, spFetch, animId, shared.hingeMats[i]);
+        materialCache, spFetch, animId, shared.hingeMats[i], unbake);
       if (!bucket) continue;
       const index = _registerSlot(bucket, inst);
       if (bucket.gpu) {
         // ?animSceneryGpu: the slot holds the STATIC placement; the pose row
         // (seeded with this hinge rest pose) supplies the part transform.
+        bucket.mesh.setMatrixAt(index, inst.nodeMat);
+      } else if (unbake) {
+        // Rest pose until first tick: B * U = identity on the baked mesh.
         bucket.mesh.setMatrixAt(index, inst.nodeMat);
       } else {
         _instScratch.multiplyMatrices(inst.nodeMat, shared.hingeMats[i]); // rest pose until first tick
@@ -904,7 +1133,7 @@ async function buildOneInstanced(p, scene3d, wasmExports, materialCache, spFetch
       // whole-buffer upload if a render lands before the next flush.
       _markDirty(bucket, index);
       bucket.mesh.instanceMatrix.needsUpdate = true;
-      inst.slots.push({ bucket, index, partIdx: i });
+      inst.slots.push({ bucket, index, partIdx: i, unbake });
     }
   }
   // CPU-posed slots left (0 ⇒ the rAF loop has nothing to write per frame).
@@ -938,10 +1167,13 @@ function _updateGpuPoseRows() {
     if (!g) continue;
     const pm = _partMatsFor(g)[r.partIdx];
     if (!pm) continue;
-    writePoseRow(r.row, pm, g.omega ? g.orbitQ : null);
+    // ?animSceneryUnbake: a row with `post` draws P(t) * U (see poseRowFor).
+    const m = r.post ? _rowScratch.multiplyMatrices(pm, r.post) : pm;
+    writePoseRow(r.row, m, g.omega ? g.orbitQ : null);
   }
   flushPoseTable();
 }
+const _rowScratch = new THREE.Matrix4();
 
 /**
  * The matrix instance `index` of an animated-scenery bucket is DRAWN with: the
@@ -976,6 +1208,7 @@ function _writeInstancedPose(inst, g, restore) {
     const pm = g._partMats[s.partIdx];
     if (!pm) continue;
     _instScratch.multiplyMatrices(nodeMat, pm);
+    if (s.unbake) _instScratch.multiply(s.unbake); // ?animSceneryUnbake: N * A(t) * U
     s.bucket.mesh.setMatrixAt(s.index, _instScratch);
     _markDirty(s.bucket, s.index);
   }
@@ -1535,7 +1768,33 @@ export function animatedSceneryDiag() {
     lastDt: _lastDt,
     maxMixerTime: maxTime,
     rafArmed: _rafId !== 0,
+    // ?animSceneryUnbake: setups/parts whose baked frame is undone, and where
+    // U came from (fetchSetupPartPose vs the hinge fallback).
+    unbake: { enabled: animSceneryUnbakeEnabled(), ..._unbakeStats, cachedPoses: _bakePoseCache.size },
   };
+}
+
+/**
+ * Diag (vistest): how one setup is animated — live instances, and per part
+ * whether its baked frame is undone (`?animSceneryUnbake`). The windmill sails
+ * 0x020003E5 read `{ instances: 2, unbakeParts: [true,true,true,true,true] }`
+ * at landblock 0x8093 (the bake is anim 0x0300061B frame 0, where even the hub,
+ * part 1, sits at the origin but already turned 1.5 deg; via fetchSetupPartPose
+ * the same frame). Only an identity bake frame reads false.
+ */
+export function animatedScenerySetupDiag(setupId) {
+  const sid = setupId >>> 0;
+  let instances = 0;
+  const name = `anim-scenery-0x${sid.toString(16)}`;
+  for (const inst of _instances) if (inst.node?.name === name) instances += 1;
+  const u = _unbakeBySetup.get(sid);
+  return { setupId: `0x${sid.toString(16)}`, instances, unbakeParts: u ? u.slice() : null };
+}
+if (typeof window !== "undefined") {
+  try {
+    window.__animSceneryDiag = animatedSceneryDiag;
+    window.__animScenerySetup = animatedScenerySetupDiag;
+  } catch (_) { /* frozen window: diag only */ }
 }
 
 /** Tear down all animated scenery (full scene dispose). */
@@ -1571,6 +1830,8 @@ export function disposeAnimatedScenery(_scene3d) {
   _geomList.length = 0;
   _geomCache.clear();
   _windRigCache.clear();
+  _bakePoseCache.clear();
+  _unbakeBySetup.clear();
   disposeAnimSceneryGpu();
 }
 

@@ -1,4 +1,16 @@
-// scene3d/vfx/heat_haze_effect.js — VOLCANO heat shimmer (Wave 2B).
+// scene3d/vfx/heat_haze_effect.js — heat shimmer + mirage (Wave 2B volcano disc;
+// 2026-10-23 desert GROUND shimmer + inferior MIRAGE, see below).
+//
+// 2026-10-23 (owner on the 1070, Tufa desert: "get our mirage effect sorted,
+// its not active or not as much as it should be ... improve it also"):
+//   - its OWN master (`vfx_flags.js::heatHazeEnabled`, tier high/ultra), no
+//     longer constructed only under `?terrainVolcano`;
+//   - a GROUND term (`terrain_desert_haze.js`): over hot sand the shimmer grows
+//     with eye distance, so the far dunes and the horizon wobble;
+//   - a MIRAGE term: past a few hundred metres the ground samples the sky just
+//     above it, in drifting patches along the horizon — the inferior mirage,
+//     "water on the road". Still a pure UV warp: no second texture read;
+//   - the base amplitude 0.006 -> 0.009 (the disc read as too faint).
 //
 // Design plan: `docs/2026-07-31-terrain-vfx-plan.md` §3.6 item 1 — "the one
 // place a postprocessing addition is clearly right". `postprocessing@6.39.1` is
@@ -58,82 +70,28 @@ import * as THREE from "three";
 import { BlendFunction, Effect, EffectAttribute } from "postprocessing";
 import { VFX_GLOBALS } from "../materials.js";
 import { HEAT_HAZE_STATE } from "../terrain_volcano.js";
-import { terrainVolcanoEnabled, terrainHazeEnabled } from "../vfx_flags.js";
+import { heatHazeEnabled } from "../vfx_flags.js";
+import { HEAT_HAZE_FRAG } from "./heat_haze_glsl.js";
 
 // Base warp amplitude in uv units, BEFORE `?terrainHazeStrength`. Deliberately a
 // whisper: at 0.006 a pixel moves ~0.6 % of the frame at full mask, which reads
 // as air moving rather than as a broken frame. The calibration target is the BC7
 // arm (:8767 `texBc7=on&terrainBc7=on`), plan §8 risk 13.
-const HEAT_BASE_AMPLITUDE = 0.006;
+// 2026-10-23: 0.006 -> 0.009, the owner found the volcano disc too faint.
+const HEAT_BASE_AMPLITUDE = 0.009;
 // Spatial frequency of the shimmer in uv units — how many ripples fit the frame.
 const HEAT_BASE_FREQ = 42.0;
 // Temporal rate, radians/second. 2.2 rad/s ≈ 0.35 Hz, inside the ≤ 1 Hz band the
 // shared clock's 3600 s wrap is phase-continuous for.
 const HEAT_BASE_SPEED = 2.2;
+// 2026-10-23 desert arm. The GROUND shimmer's amplitude relative to the base
+// (it covers the whole far field, so it runs a little under the disc), and the
+// MIRAGE lift in uv units at full weight: 0.007 of the frame height is ~7 px at
+// 1080p, a band of sky the height of a distant dune crest. Live: __heatHaze.
+const HEAT_GROUND_GAIN = 0.8;
+const MIRAGE_BASE_LIFT = 0.007;
 
-// No backticks anywhere in this GLSL, including comments (a stray backtick
-// closes the JS template literal — it has bitten terrain.js).
-const HEAT_HAZE_FRAG = /* glsl */ `
-uniform float uTime;          // VFX_GLOBALS.uTime, bound BY IDENTITY (plan 5.6)
-uniform vec2  uHeatScreen;    // projected heat centre, uv
-uniform float uHeatScreenRadius; // mask radius, uv (v units; x corrected by aspect)
-uniform float uHeatRadius;    // heat radius in METRES; 0 => no volcanic LB resident
-uniform float uHeatNear;      // depth band, metres
-uniform float uHeatFar;
-uniform float uHeatFeather;
-uniform float uStrength;      // amplitude multiplier (?terrainHazeStrength x tier)
-uniform float uFreq;
-uniform float uSpeed;
-uniform float uLogDepthFC;    // 2.0 / log2(cameraFar + 1.0)
-
-// Eye-forward distance in metres for this pixel, or -1.0 for sky / cleared far.
-// Reads the RAW depth texel on purpose -- see the trap-T4 note in the header.
-float hbHeatDistanceM(const in vec2 uv) {
-  float d = texture2D(depthBuffer, uv).r;
-#ifdef USE_REVERSED_DEPTH_BUFFER
-  // ?reversedZ=on: raw reversed depth (1 near, 0 far / cleared); pmndrs keeps
-  // cameraNear / cameraFar on every effect material.
-  if (d <= 0.0) return -1.0;
-  return (cameraNear * cameraFar) / (d * (cameraFar - cameraNear) + cameraNear);
-#else
-  if (d >= 0.9999) return -1.0;
-  return exp2(2.0 * d / uLogDepthFC) - 1.0;
-#endif
-}
-
-void mainUv(inout vec2 uv) {
-  // STRICT NO-OP. uHeatRadius is zeroed by the host whenever no volcanic
-  // landblock is resident, and uStrength is 0 at every tier that does not want
-  // the effect -- so the whole body costs one compare on those frames.
-  if (uHeatRadius <= 0.0 || uStrength <= 0.0 || uHeatScreenRadius <= 0.0) return;
-
-  float dist = hbHeatDistanceM(uv);
-  if (dist < 0.0) return;                  // sky: never warp
-
-  // Screen mask: a disc around the projected heat centre, circular in SCREEN
-  // space (x scaled by the built-in aspect uniform, not by texel size).
-  vec2 d2 = vec2((uv.x - uHeatScreen.x) * aspect, uv.y - uHeatScreen.y);
-  float m = 1.0 - smoothstep(uHeatScreenRadius * 0.35, uHeatScreenRadius, length(d2));
-  if (m <= 0.0) return;
-
-  // Depth gate: only geometry inside the heat volume's depth band shimmers, so
-  // a tree between the eye and the lava field stays crisp.
-  m *= smoothstep(uHeatNear, uHeatNear + uHeatFeather, dist);
-  m *= 1.0 - smoothstep(max(uHeatFar - uHeatFeather, uHeatNear + uHeatFeather), uHeatFar, dist);
-  if (m <= 0.0) return;
-
-  // Rising columnar shimmer: two incommensurate vertical sines (so the pattern
-  // never reads as one clean wave) plus a weaker horizontal one. Deterministic
-  // in (uv, uTime) alone.
-  float w  = sin(uv.y * uFreq + uTime * uSpeed) * 0.6
-           + sin(uv.y * uFreq * 1.87 - uTime * uSpeed * 0.73) * 0.4;
-  float w2 = sin(uv.x * uFreq * 0.61 + uTime * uSpeed * 0.41);
-
-  float a = uStrength * m;
-  uv.x += w * a;
-  uv.y += w2 * a * 0.35;
-}
-`;
+// The fragment GLSL lives in ./heat_haze_glsl.js (no imports; the smoke compiles it).
 
 /**
  * The heat-shimmer Effect. Reads `HEAT_HAZE_STATE` (written once per frame by
@@ -165,12 +123,23 @@ export class HeatHazeEffect extends Effect {
         ["uFreq", new THREE.Uniform(Number.isFinite(opts.freq) ? opts.freq : HEAT_BASE_FREQ)],
         ["uSpeed", new THREE.Uniform(Number.isFinite(opts.speed) ? opts.speed : HEAT_BASE_SPEED)],
         ["uLogDepthFC", new THREE.Uniform(2.0 / Math.log2(far + 1.0))],
+        ["uGround", new THREE.Uniform(0)],
+        ["uGroundNear", new THREE.Uniform(0)],
+        ["uGroundFull", new THREE.Uniform(1)],
+        ["uGroundFar", new THREE.Uniform(0)],
+        ["uMirage", new THREE.Uniform(0)],
+        ["uMirageStart", new THREE.Uniform(0)],
+        ["uMirageFeather", new THREE.Uniform(1)],
       ]),
     });
     /** The live state object, held BY REFERENCE (never snapshotted). */
     this.state = opts.state || HEAT_HAZE_STATE;
     /** Base warp amplitude; `state.strength` multiplies it. */
     this.amplitude = Number.isFinite(opts.amplitude) ? opts.amplitude : HEAT_BASE_AMPLITUDE;
+    /** Ground shimmer gain over the base amplitude (desert arm). */
+    this.groundGain = Number.isFinite(opts.groundGain) ? opts.groundGain : HEAT_GROUND_GAIN;
+    /** Mirage lift in uv units at full weight (desert arm). */
+    this.mirageLift = Number.isFinite(opts.mirageLift) ? opts.mirageLift : MIRAGE_BASE_LIFT;
   }
 
   /** `camera.far` changed (the composer never rebuilds the Effect). */
@@ -183,6 +152,26 @@ export class HeatHazeEffect extends Effect {
   update(_renderer, _inputBuffer, _deltaTime) {
     const s = this.state;
     const u = this.uniforms;
+    // 2026-10-23 — towns stand both arms down (terrain_desert_haze.js).
+    const town = s && Number.isFinite(s.townFactor) ? Math.max(0, Math.min(1, s.townFactor)) : 1;
+    // Desert arm (ground shimmer + mirage): independent of the volcano disc.
+    const g = s && Number.isFinite(s.groundStrength) ? s.groundStrength * town : 0;
+    if (g > 0) {
+      u.get("uGround").value = this.amplitude * this.groundGain * g;
+      u.get("uGroundNear").value = s.groundNearM;
+      u.get("uGroundFull").value = s.groundFullM;
+      u.get("uGroundFar").value = s.groundFarM;
+    } else {
+      u.get("uGround").value = 0;
+    }
+    const mi = s && Number.isFinite(s.mirage) ? s.mirage * town : 0;
+    if (mi > 0) {
+      u.get("uMirage").value = this.mirageLift * mi;
+      u.get("uMirageStart").value = s.mirageStartM;
+      u.get("uMirageFeather").value = s.mirageFeatherM;
+    } else {
+      u.get("uMirage").value = 0;
+    }
     if (!s || !s.enabled) {
       u.get("uHeatRadius").value = 0;
       u.get("uHeatScreenRadius").value = 0;
@@ -197,7 +186,7 @@ export class HeatHazeEffect extends Effect {
     u.get("uHeatNear").value = s.nearM;
     u.get("uHeatFar").value = s.farM;
     u.get("uHeatFeather").value = s.featherM;
-    u.get("uStrength").value = this.amplitude * s.strength;
+    u.get("uStrength").value = this.amplitude * s.strength * town;
   }
 
   // Live-tuning accessors — the `HorizonDissolveEffect` pattern, exposed on
@@ -208,6 +197,10 @@ export class HeatHazeEffect extends Effect {
   set freq(v) { if (Number.isFinite(+v)) this.uniforms.get("uFreq").value = +v; }
   get speed() { return this.uniforms.get("uSpeed").value; }
   set speed(v) { if (Number.isFinite(+v)) this.uniforms.get("uSpeed").value = +v; }
+  get ground() { return this.groundGain; }
+  set ground(v) { if (Number.isFinite(+v)) this.groundGain = +v; }
+  get mirage() { return this.mirageLift; }
+  set mirage(v) { if (Number.isFinite(+v)) this.mirageLift = +v; }
 }
 
 /**
@@ -225,7 +218,7 @@ export class HeatHazeEffect extends Effect {
 export function createHeatHazeEffect(opts = {}) {
   const on = typeof opts.enabled === "boolean"
     ? opts.enabled
-    : (terrainVolcanoEnabled() && terrainHazeEnabled());
+    : heatHazeEnabled();
   if (!on) return null;
   return new HeatHazeEffect(opts);
 }
@@ -241,6 +234,11 @@ export function installHeatHazeHandle(effect) {
     set freq(v) { effect.freq = v; },
     get speed() { return effect.speed; },
     set speed(v) { effect.speed = v; },
+    // 2026-10-23 desert arm: ground shimmer gain and mirage lift (uv units).
+    get ground() { return effect.ground; },
+    set ground(v) { effect.ground = v; },
+    get mirage() { return effect.mirage; },
+    set mirage(v) { effect.mirage = v; },
     get state() { return { ...effect.state }; },
     effect,
   };
@@ -248,4 +246,4 @@ export function installHeatHazeHandle(effect) {
   return handle;
 }
 
-export { HEAT_BASE_AMPLITUDE, HEAT_BASE_FREQ, HEAT_BASE_SPEED };
+export { HEAT_BASE_AMPLITUDE, HEAT_BASE_FREQ, HEAT_BASE_SPEED, HEAT_GROUND_GAIN, MIRAGE_BASE_LIFT };

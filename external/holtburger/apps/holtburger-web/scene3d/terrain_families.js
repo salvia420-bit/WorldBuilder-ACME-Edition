@@ -26,14 +26,30 @@ export const FAM_SAND = 2;     // 10, 11, 12
 export const FAM_ROCK = 3;     // 0, 13, 14, 30
 export const FAM_SNOWICE = 4;  // 2, 15, 27
 export const FAM_SWAMP = 5;    // 4 (+ 23 when 23 is NOT in the water set)
-export const FAM_VOLCANO = 6;  // 6, 25, 26
+export const FAM_VOLCANO = 6;  // 25 — LAVA only (2026-10-23 split, below)
 export const FAM_DIRT = 7;     // 5, 7, 8, 24, 31
 export const FAM_WATER = 8;    // OWNED BY THE WATER AGENT — never place on it
-export const FAM_COUNT = 9;
+export const FAM_OBSIDIAN = 9; // 6 — volcanic glass (2026-10-23 split)
+export const FAM_ASH = 10;     // 26 — grey ash / pumice (2026-10-23 split)
+export const FAM_COUNT = 11;
+
+// 2026-10-23 — THE VOLCANO SPLIT (owner, on the 1070: "we have obsidian plains
+// and dark isles texture mixed up with lava, should make new effect for
+// obsidian"). FAM_VOLCANO used to be {6, 25, 26}, so every lava effect (crack
+// glow, ember vents, the heat-shimmer disc, the fx-field embers) also ran on
+// the 2430 ObsidianPlain landblocks and the 297 Volcano2 ones. Verified from
+// the DATs: only code 25's texture (0x06006D54, black basalt with orange-red
+// glowing cracks) is lava. Code 6 (0x06006D56) is dark purple mottled glass
+// with no lava at all, and code 26 (0x06006D6A) is plain grey ash. So each is
+// now its own family. The new ids are APPENDED (9, 10) rather than inserted,
+// so every existing FAM_* value — FAM_WATER = 8 above all, the water agent's —
+// keeps its number, and the LUT stays dense for `Uint16Array(FAM_COUNT)`.
+// A consumer that wants "any volcanic ground" must name all three.
 
 /** Diagnostic names, indexed by FAM_*. Never branch on these. */
 export const FAM_NAMES = Object.freeze([
   "none", "grass", "sand", "rock", "snowice", "swamp", "volcano", "dirt", "water",
+  "obsidian", "ash",
 ]);
 
 /**
@@ -73,7 +89,7 @@ const BASE_FAMILY = Object.freeze([
   /*  3 LushGrass            */ FAM_GRASS,
   /*  4 MarshSparseSwamp     */ FAM_SWAMP,
   /*  5 MudRichDirt          */ FAM_DIRT,
-  /*  6 ObsidianPlain        */ FAM_VOLCANO,
+  /*  6 ObsidianPlain        */ FAM_OBSIDIAN,
   /*  7 PackedDirt           */ FAM_DIRT,
   /*  8 PatchyDirt           */ FAM_DIRT,
   /*  9 PatchyGrassland      */ FAM_GRASS,
@@ -93,7 +109,7 @@ const BASE_FAMILY = Object.freeze([
   /* 23 SeaSlime             */ FAM_SWAMP,
   /* 24 Argila               */ FAM_DIRT,
   /* 25 Volcano1             */ FAM_VOLCANO,
-  /* 26 Volcano2             */ FAM_VOLCANO,
+  /* 26 Volcano2             */ FAM_ASH,
   /* 27 BlueIce              */ FAM_SNOWICE,
   /* 28 Moss                 */ FAM_GRASS,
   /* 29 DarkMoss             */ FAM_GRASS,

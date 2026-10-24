@@ -62,7 +62,8 @@ const DIRT_SRC = readFileSync("./scene3d/terrain_dirt.js", "utf8");
 const TRAIL_SRC = readFileSync("./scene3d/trail_map.js", "utf8");
 const FLAGS_DOC = readFileSync("./docs/url-flags.md", "utf8");
 
-/** The nine family masters, and the `TERRAIN_VFX_PROMOTED` key of each. */
+/** The ten family masters, and the `TERRAIN_VFX_PROMOTED` key of each
+ *  (2026-10-23: + obsidian, split out of volcano). */
 const MASTERS = Object.freeze({
   terrainTrail: "trail",
   terrainGrass: "grass",
@@ -70,6 +71,7 @@ const MASTERS = Object.freeze({
   terrainSnow: "snow",
   terrainIce: "ice",
   terrainVolcano: "volcano",
+  terrainObsidian: "obsidian",
   terrainSwamp: "swamp",
   terrainDirt: "dirt",
   terrainRock: "rock",
@@ -367,7 +369,7 @@ console.log("\n-- P3 bare default is byte-identical ---------------------------"
 // ===========================================================================
 for (const tier of PRESET_NAMES) {
   check(`${tier}: masters match the switchboard (ice, grass and rock promoted `
-    + `on the {high, ultra} ladder, the other six false)`,
+    + `on the {high, ultra} ladder, the other seven false)`,
     Object.keys(MASTERS).every((k) =>
       PRESETS[tier][k] === terrainMaster(MASTERS[k], tier)));
 }
@@ -433,15 +435,16 @@ const FLIPPED_AHEAD = new Set(["rock"]);
 const PROMOTED_SET = new Set([...SIGNED_OFF, ...FLIPPED_AHEAD]);
 check("every master is gated by TERRAIN_VFX_PROMOTED — ice + grass promoted "
   + "(USER 1070 SIGN-OFFS 2026-08-01 / 2026-10-07), rock promoted 2026-10-19 "
-  + "ahead of its eye test, the other six still false",
-  Object.keys(MASTERS).length === 9
+  + "ahead of its eye test, the other seven still false",
+  Object.keys(MASTERS).length === 10
   && TERRAIN_VFX_PROMOTED.ice === true && TERRAIN_VFX_PROMOTED.grass === true
   && TERRAIN_VFX_PROMOTED.rock === true
   && Object.values(MASTERS).every((f) =>
     TERRAIN_VFX_PROMOTED[f] === PROMOTED_SET.has(f)));
 check("the families held back stay false: swamp (failed its eye test), "
-  + "sand/snow/volcano/dirt (night-specular bug), trail (implied by writers)",
-  ["swamp", "sand", "snow", "volcano", "dirt", "trail"]
+  + "sand/snow/volcano/dirt (night-specular bug), obsidian (new 2026-10-23, "
+  + "awaiting its vistest), trail (implied by writers)",
+  ["swamp", "sand", "snow", "volcano", "obsidian", "dirt", "trail"]
     .every((f) => TERRAIN_VFX_PROMOTED[f] === false));
 check("the gate and the ladder are both frozen",
   Object.isFrozen(TERRAIN_VFX_PROMOTED) && Object.isFrozen(TERRAIN_VFX_TIERS));
@@ -478,9 +481,9 @@ check("...and ?terrainRock=on still forces it on at mid, below the ladder",
     return terrainRockEnabled() === true;
   })());
 // 2026-10-10: + the tier-2 `fxFields` key (vfx/fx_fields.js), which rides the
-// same ladder through its own `fields` gate — 4 tiers × (9 masters + 1).
-check("each master line in quality.js is a terrainMaster() call, 4 tiers × 9 (+ the tier-2 fxFields key)",
-  (QUALITY_SRC.match(/terrainMaster\("/g) || []).length === 40
+// same ladder through its own `fields` gate — 4 tiers × (10 masters + 1).
+check("each master line in quality.js is a terrainMaster() call, 4 tiers × 10 (+ the tier-2 fxFields key)",
+  (QUALITY_SRC.match(/terrainMaster\("/g) || []).length === 44
   && (QUALITY_SRC.match(/fxFields: terrainMaster\("fields", "/g) || []).length === 4);
 
 // The ice-refraction reachability that started this.

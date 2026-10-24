@@ -1,5 +1,11 @@
-// terrain.volcanoEmbers — VOLCANO/OBSIDIAN ember vents (Wave 2B; design plan
+// terrain.volcanoEmbers — VOLCANO (lava) ember vents (Wave 2B; design plan
 // `docs/2026-07-31-terrain-vfx-plan.md` §3.6 item 2).
+//
+// 2026-10-23: lava only. The host places vents on FAM_VOLCANO vertices, and
+// since the volcano split (`terrain_families.js`) that is code 25 alone — the
+// obsidian glass (6) and grey ash (26) landblocks get none. The host also
+// range-gates emission (`terrain_volcano.js` VOLCANO_TUNING.ventEngageM); this
+// descriptor is unchanged by either.
 //
 // "RE-ANCHOR, DON'T REWRITE" — that is the plan's whole instruction for this
 // effect, and this file takes it literally: it does not author a single

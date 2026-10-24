@@ -48,10 +48,29 @@ const SEAGULL_OMEGA = new Float32Array([0, 1.314281683484353e-9, -0.038397241383
 // the 30 Hz MIN_QUANTUM ceiling read "orbit too fast"); retail's per-tick angle.
 const RETAIL_RAD_PER_S = AS.ANIM_SCENERY_OMEGA_HZ_DEFAULT * 0.03839724138379097;
 
+// Like the real wasm (walk_setup_parts: no MotionTable -> the default
+// animation's FRAME 0 is the idle frame), the mock bakes part i's frame 0 into
+// its vertices; ?animSceneryUnbake (default on) undoes exactly that frame.
+// `wing()` therefore probes the BAKED part origin = frame 0's offset.
+const BAKED_ORIGIN = new THREE.Vector3(SEAGULL_FRAMES[0], SEAGULL_FRAMES[1], SEAGULL_FRAMES[2]);
+function bakeFrame0(part, pts) {
+  const b = part * 7;
+  const m = new THREE.Matrix4().compose(
+    new THREE.Vector3(SEAGULL_FRAMES[b], SEAGULL_FRAMES[b + 1], SEAGULL_FRAMES[b + 2]),
+    new THREE.Quaternion(SEAGULL_FRAMES[b + 4], SEAGULL_FRAMES[b + 5], SEAGULL_FRAMES[b + 6], SEAGULL_FRAMES[b + 3]).normalize(),
+    new THREE.Vector3(1, 1, 1));
+  const out = [];
+  for (let i = 0; i < pts.length; i += 3) {
+    const v = new THREE.Vector3(pts[i], pts[i + 1], pts[i + 2]).applyMatrix4(m);
+    out.push(v.x, v.y, v.z);
+  }
+  return new Float32Array(out);
+}
+
 function wasm({ omega }) {
-  const tri = () => ({
+  const tri = (part) => ({
     triCount: 1,
-    positions: new Float32Array([0, 0, 0, 0.4, 0, 0, 0, 0.2, 0]),
+    positions: bakeFrame0(part, [0, 0, 0, 0.4, 0, 0, 0, 0.2, 0]),
     uvs: new Float32Array(6),
     normals: new Float32Array([0, 0, 1, 0, 0, 1, 0, 0, 1]),
     surfaceIndices: new Uint8Array([0]),
@@ -64,7 +83,7 @@ function wasm({ omega }) {
       return a;
     },
     async fetchBuildingPlacement() {
-      return { partCount: 2, takePartMeshes: () => [tri(), tri()], takePartHingeFrames: () => [], free() {} };
+      return { partCount: 2, takePartMeshes: () => [tri(0), tri(1)], takePartHingeFrames: () => [], free() {} };
     },
     fetch_surfaces_pixels: async () => [],
   };
@@ -98,6 +117,8 @@ function wing(bucket) {
   if (typeof AS.animSceneryEffectiveMatrixAt === "function") AS.animSceneryEffectiveMatrixAt(bucket, 0, _m);
   else bucket.getMatrixAt(0, _m);
   _m.decompose(_p, _q, _s);
+  // Where the part's own origin is drawn: the baked origin through the matrix.
+  if (AS.animSceneryUnbakeEnabled?.()) _p.copy(BAKED_ORIGIN).applyMatrix4(_m);
   return { angle: Math.atan2(_p.y - ANCHOR.y, _p.x - ANCHOR.x), r: Math.hypot(_p.x - ANCHOR.x, _p.y - ANCHOR.y), z: _p.z };
 }
 function sweep(bucket, seconds, hz) {

@@ -1776,15 +1776,16 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
       })
     : null;
 
-  // Terrain-VFX wave 2B — VOLCANO heat shimmer (plan §3.6 item 1). A custom
-  // pmndrs Effect implementing `mainUv` only (a pure UV warp, the cheapest
-  // effect class), declared with EffectAttribute.DEPTH so it can gate the warp
-  // by distance. `createHeatHazeEffect` returns NULL unless
-  // `?terrainVolcano=on&?terrainHaze=on` (both ship OFF, plan §5.9), so
-  // `filter(Boolean)` below drops the slot and the effect list — hence the
-  // compiled compound shader AND `composer.passes.length` — is byte-identical
-  // to the pre-feature pipeline. `opts.terrainHaze` (boolean) forces the gate
-  // either way so headless tests need no URL.
+  // Terrain-VFX wave 2B — heat shimmer (plan §3.6 item 1) + 2026-10-23 desert
+  // ground shimmer and mirage. A custom pmndrs Effect implementing `mainUv` only
+  // (a pure UV warp, the cheapest effect class), declared with
+  // EffectAttribute.DEPTH so it can gate the warp by distance.
+  // `createHeatHazeEffect` returns NULL unless `vfx_flags.js::heatHazeEnabled()`
+  // (its own master since 2026-10-23: tier high/ultra, `?terrainHaze=off`), so
+  // at low/mid `filter(Boolean)` below drops the slot and the effect list — hence
+  // the compiled compound shader AND `composer.passes.length` — is unchanged.
+  // `opts.terrainHaze` (boolean) forces the gate either way so headless tests
+  // need no URL.
   const heatHaze = createHeatHazeEffect({
     cameraFar: camera.far,
     ...(typeof opts?.terrainHaze === "boolean" ? { enabled: opts.terrainHaze } : {}),
