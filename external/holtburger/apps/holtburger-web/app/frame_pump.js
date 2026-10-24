@@ -14,6 +14,7 @@
 
 import { getInputController as __getInputController, resolveRunModifier as __resolveRunModifier } from "../scene3d/input.js";
 import { getLocalAutoMotion } from "./local_auto_motion.js";
+import { localRigSpeed, localRunRate } from "../scene3d/motion/retail_rig_speed.js";
 
 export function pumpEntityUpdatesAndInput(D) {
   const { playerRunRate, __inputFunnelOn, entityMap, __UNIFIED_DISPATCH, SPRITE_HEADING_OFFSET,
@@ -475,7 +476,10 @@ export function pumpEntityUpdatesAndInput(D) {
           if (forward > 0) forwardCmd = run ? 0x44000007 : 0x45000005;
           else if (forward < 0) forwardCmd = 0x45000006;
           else forwardCmd = 0x41000003; // stopped → Ready (idle base pose)
-          em.setMotion(localGuid >>> 0, forwardCmd >>> 0, stance);
+          // 2026-10-24 (?retailRigSpeed): the retail interpreted speed, as the
+          // camera dispatcher sends it (the last writer of a frame keeps the speed).
+          em.setMotion(localGuid >>> 0, forwardCmd >>> 0, stance,
+            localRigSpeed(forwardCmd >>> 0, 1.0, !!run, localRunRate(em.wasmExports)));
           // castMove anim-break (2026-07-03): a forward-axis
           // PRESS edge mid-cast evicts the gesture from the
           // single forward slot (retail :332890/:332759) — cut

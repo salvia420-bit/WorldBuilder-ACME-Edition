@@ -821,8 +821,10 @@ const quietConsole = () => {
   const dtEnd = INDEX_SRC.indexOf("lastFrameTs = ts;", dtStart) + "lastFrameTs = ts;".length;
   if (!(dtStart > 0 && dtEnd > dtStart)) throw new Error("anchor drifted: tick() dt block");
   const DT_BLOCK = INDEX_SRC.slice(dtStart, dtEnd);
-  const makeStepper = ({ renderOnDemand, _frameIntervalMs = 0 }) => {
-    const s = { renderOnDemand, _frameIntervalMs, lastFrameTs: null, dtRecoveryFramesRemaining: 0 };
+  // DT_NO_FREEZE (?dtNoFreeze, default ON 2026-10-24) replaces the freeze band
+  // with the plain 0.1 s clamp; `false` is the `=off` arm (the old band).
+  const makeStepper = ({ renderOnDemand, _frameIntervalMs = 0, DT_NO_FREEZE = false }) => {
+    const s = { renderOnDemand, _frameIntervalMs, lastFrameTs: null, dtRecoveryFramesRemaining: 0, DT_NO_FREEZE };
     return runLifted(`${CONSTS}\nreturn (ts) => { ${DT_BLOCK}\n return dt; };`, s);
   };
   await check("H7j tick dt: strictly increasing base + k·1000/fps gives dt = 1/fps (fps ≥ 10)", () => {
@@ -847,6 +849,12 @@ const quietConsole = () => {
     const rod = makeStepper({ renderOnDemand: true });
     rod(1000);
     near(rod(3000), 0.1, 1e-12, "renderOnDemand: clamp, no freeze");
+  });
+  await check("H7k2 ?dtNoFreeze (default): a > 0.5 s gap is just the 0.1 s clamp — the playheads keep pace with the wasm body", () => {
+    const step = makeStepper({ renderOnDemand: false, DT_NO_FREEZE: true });
+    step(1000);
+    near(step(1000 + 2000), 0.1, 1e-12, "a held-loop gap clamps to 0.1…");
+    for (let i = 1; i <= 10; i += 1) near(step(3000 + i * 33.25), 0.03325, 1e-12, `…and the next frames run at 1/fps (${i})`);
   });
 
   const INSTALL = liftBlock(INDEX_SRC, 'if (new URLSearchParams(window.location.search).get("filmMode") === "on") {');

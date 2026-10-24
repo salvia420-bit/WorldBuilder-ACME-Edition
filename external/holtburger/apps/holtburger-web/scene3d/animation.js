@@ -80,9 +80,17 @@ export function buildSequenceDescriptor(animData) {
     // segmentStarts/Counts/Framerates/AnimIds) — lets the MotionSequence node-split
     // the bake. Absent on legacy/plain animData → the interpreter builds one node.
     const { segmentStarts, segmentCounts, segmentFramerates, segmentAnimIds } = animData;
+    // 2026-10-24: the root frame the bake folded into each keyframe
+    // (EntityAnimationData.rootFrames, 7 f32 per frame) — lets poseRigAt play a
+    // clip in place by undoing exactly that frame. Absent on older wasm bundles.
+    let rootFrames = null;
+    try {
+        const rf = animData.rootFrames;
+        if (rf && typeof rf.length === "number" && rf.length === numFrames * 7) rootFrames = rf;
+    } catch (_) { /* older bundle: poseRigAt keeps its mean-drift fallback */ }
     return {
         partCount, numFrames, framerate, partFrames, frameTimes, duration, posFrames,
-        segmentStarts, segmentCounts, segmentFramerates, segmentAnimIds,
+        segmentStarts, segmentCounts, segmentFramerates, segmentAnimIds, rootFrames,
     };
 }
 
@@ -1025,8 +1033,16 @@ export class AnimationCache {
     async getLink(setupId, mtableId, toCmd, stance, fromCmd, fetchLink, opts = {}) {
         const urgent = opts.urgent === true;
         const fromMotion = fromCmd >>> 0;
+        // ANIM-4 (2026-10-24): the signed retail lookup + reversed bake
+        // (`opts.fromSpeed` / `opts.toSpeed` / `opts.reverse`); the forward
+        // defaults keep the pre-existing key.
+        const fs = Number.isFinite(+opts.fromSpeed) && +opts.fromSpeed !== 0 ? +opts.fromSpeed : 1.0;
+        const ts = Number.isFinite(+opts.toSpeed) && +opts.toSpeed !== 0 ? +opts.toSpeed : 1.0;
+        const reverse = opts.reverse === true;
+        const signed = fs < 0 || ts < 0 || reverse;
         const key =
-            `${AnimationCache.makeKey(setupId, mtableId, toCmd, stance)}:linkonly:${fromMotion.toString(16)}`;
+            `${AnimationCache.makeKey(setupId, mtableId, toCmd, stance)}:linkonly:${fromMotion.toString(16)}` +
+            (signed ? `:s${fs < 0 ? "-" : "+"}${ts < 0 ? "-" : "+"}${reverse ? "r" : "f"}` : "");
         const hit = this.entries.get(key);
         if (hit) {
             // Strict LRU move-to-tail, as in `get`.
@@ -1037,14 +1053,16 @@ export class AnimationCache {
         const promise = (async () => {
             let animData;
             try {
-                animData = await fetchLink(
-                    setupId >>> 0,
-                    mtableId >>> 0,
-                    stance >>> 0,
-                    fromMotion,
-                    toCmd >>> 0,
-                    urgent,
-                );
+                animData = signed
+                    ? await fetchLink(setupId >>> 0, mtableId >>> 0, stance >>> 0, fromMotion, toCmd >>> 0, urgent, fs, ts, reverse)
+                    : await fetchLink(
+                        setupId >>> 0,
+                        mtableId >>> 0,
+                        stance >>> 0,
+                        fromMotion,
+                        toCmd >>> 0,
+                        urgent,
+                    );
             } catch (e) {
                 try { window.__diag?.assets?.onAnimationError?.({ setupId, mtableId, motionCmd: toCmd, stance, error: e, source: "getLink" }); } catch (_) {}
                 throw e;

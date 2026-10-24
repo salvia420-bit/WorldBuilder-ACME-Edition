@@ -66,10 +66,12 @@ check("decode: inactive is null; axes and run unpack", () => {
 });
 
 check("commands: turns at the hold-run speed, forward picks the gait", () => {
-  assert.deepEqual(localAutoMotionCommand({ forward: 0, turn: 1, run: true }), { cmd: TURN_RIGHT, speed: 1.5, turn: true });
-  assert.deepEqual(localAutoMotionCommand({ forward: 0, turn: -1, run: false }), { cmd: TURN_LEFT, speed: 1.0, turn: true });
-  assert.deepEqual(localAutoMotionCommand({ forward: 1, turn: 0, run: true }), { cmd: RUN, speed: 1.0, turn: false });
-  assert.deepEqual(localAutoMotionCommand({ forward: 1, turn: 0, run: false }), { cmd: WALK, speed: 1.0, turn: false });
+  // `run` rides along so the rig can play the retail interpreted speed
+  // (2026-10-24, scene3d/motion/retail_rig_speed.js: Run at the run rate).
+  assert.deepEqual(localAutoMotionCommand({ forward: 0, turn: 1, run: true }), { cmd: TURN_RIGHT, speed: 1.5, turn: true, run: true });
+  assert.deepEqual(localAutoMotionCommand({ forward: 0, turn: -1, run: false }), { cmd: TURN_LEFT, speed: 1.0, turn: true, run: false });
+  assert.deepEqual(localAutoMotionCommand({ forward: 1, turn: 0, run: true }), { cmd: RUN, speed: 1.0, turn: false, run: true });
+  assert.deepEqual(localAutoMotionCommand({ forward: 1, turn: 0, run: false }), { cmd: WALK, speed: 1.0, turn: false, run: false });
   assert.equal(localAutoMotionCommand({ forward: 0, turn: 0, run: true }), null);
 });
 

@@ -2589,6 +2589,23 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
   const DT_RECOVERY_RAW_THRESHOLD_S = 0.5; // ~5+ frames of lost time
   const DT_RECOVERY_FRAMES = 10;
   let dtRecoveryFramesRemaining = 0;
+  // ?dtNoFreeze (2026-10-24, DEFAULT ON; `=off` restores the band above) —
+  // the A3 premise "simulation stays frozen" stopped being true when movement
+  // moved into wasm: the Rust spine measures its own dt (tick_spine.rs) and
+  // keeps moving the local body and every remote through the band, so the
+  // 10 dt=0 frames only froze the PLAYHEADS — runners glided ~3 m at 18 m/s
+  // with frozen legs after every >0.5 s hitch (live research 2026-10-24,
+  // ANIM-5 / CAMERA-3 / LOCALSIM-4). Retail has no band: one quantum moves the
+  // body and the part array together (CPhysicsObj::update_object,
+  // acclient.c:323081). With this on, a long gap is just the 0.1 s clamp.
+  const DT_NO_FREEZE = (() => {
+    try {
+      const v = new URLSearchParams(globalThis.location?.search ?? "").get("dtNoFreeze")?.toLowerCase();
+      return !(v === "off" || v === "0" || v === "false");
+    } catch (_) {
+      return true;
+    }
+  })();
   // `liveScene3d` is referenced inside tick before it's constructed
   // below, so we forward-declare and patch the reference after
   // construction. The session handle attached to `liveScene3d` is the
@@ -2867,6 +2884,8 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
     let dt;
     if (lastFrameTs === null) {
       dt = 0.016;
+    } else if (DT_NO_FREEZE) {
+      dt = Math.min(rawDt, 0.1);
     } else if (rawDt > _dtRecoveryThresholdS) {
       // First frame after a long gap — arm recovery and freeze sim.
       // Threshold scales with cadence (#14) so paced loops don't

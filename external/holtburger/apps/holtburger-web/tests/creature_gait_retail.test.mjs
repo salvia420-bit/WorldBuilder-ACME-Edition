@@ -88,8 +88,10 @@ test("a walking Black Rabbit (server mover) plays its walk at framerate x speed"
 // MoveTo refactor phase D (2026-10-10): COL-10 reverted — a walking player
 // body moves at the table walk (2.602 m/s × forward_speed), so the walk cycle
 // plays at framerate × speed on player rigs too (backstep reversed at 0.65).
-// The RUN cycle keeps the velScale path.
-test("a player rig walks at framerate x speed; its run keeps the velScale path", async () => {
+// ?retailGaitTempo (2026-10-24, default on): the RUN cycle does too. The old
+// velScale path pinned every player run at x1.0 (stateGroundSpeed only clamps
+// by the run rate), under a 4 x R body — x4.5 too slow at ACE's cap.
+test("a player rig walks and runs at framerate x speed (retail add_motion)", async () => {
   const em = new EntityManager({ entitiesGroup: new THREE.Group(), materialCache: null }, wasmExports);
   try {
     const inst = await spawn(em, 0x50000002, HUMAN_MT);
@@ -99,9 +101,31 @@ test("a player rig walks at framerate x speed; its run keeps the velScale path",
     await em.setMotion(inst.guid, 0x45000006, 0x3d, 1.0);
     const back = em._unifiedLocoGaitScale(inst, BASE[HUMAN_MT][WALK]);
     assert.ok(Math.abs(back + 0.65) < 1e-6, `backstep plays the walk reversed at 0.65: x${back.toFixed(3)}`);
-    await em.setMotion(inst.guid, RUN, 0x3d, 1.0);
+    // A run-backpedal arrives at speed R (setMotion applies adjust_motion's -0.65).
+    await em.setMotion(inst.guid, 0x45000006, 0x3d, 4.5);
+    const runBack = em._unifiedLocoGaitScale(inst, BASE[HUMAN_MT][WALK]);
+    assert.ok(Math.abs(runBack + 2.925) < 1e-5, `run-backpedal reversed at 0.65 x 4.5: x${runBack.toFixed(3)}`);
+    // The interpreted run speed is the run rate: the cycle plays at it.
+    await em.setMotion(inst.guid, RUN, 0x3d, 4.5);
     const run = em._unifiedLocoGaitScale(inst, BASE[HUMAN_MT][RUN]);
-    assert.ok(Math.abs(run - 1.0) < 1e-6, `player run gait x${run.toFixed(3)} (velScale 4.0/4.0)`);
+    assert.ok(Math.abs(run - 4.5) < 1e-6, `player run gait x${run.toFixed(3)} (retail x4.500)`);
+  } finally {
+    em.dispose();
+  }
+});
+
+// A REMOTE player's UpdateMotion carries forward_speed = its run rate (ACE
+// MovementData: ForwardSpeed = GetRunRate()). It used to reach the velScale
+// clamp with the neutral rate 1.0 (inst._runRate is only set by a MoveTo) and
+// play at x1.0; retail latches my_run_rate = forward_speed (acclient.c:344162)
+// and plays the cycle at it.
+test("a remote player's run plays at its wire forward_speed", async () => {
+  const em = new EntityManager({ entitiesGroup: new THREE.Group(), materialCache: null }, wasmExports);
+  try {
+    const inst = await spawn(em, 0x50000009, HUMAN_MT);
+    await em.setMotion(inst.guid, RUN, 0x3d, 2.65);
+    const run = em._unifiedLocoGaitScale(inst, BASE[HUMAN_MT][RUN]);
+    assert.ok(Math.abs(run - 2.65) < 1e-6, `remote player run gait x${run.toFixed(3)} (retail x2.650)`);
   } finally {
     em.dispose();
   }

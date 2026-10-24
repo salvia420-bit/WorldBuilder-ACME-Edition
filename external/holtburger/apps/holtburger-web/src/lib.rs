@@ -759,6 +759,31 @@ fn parse_water_quadrant_retail_flag(search: &str) -> bool {
     })
 }
 
+/// LOCALSIM-2 (2026-10-24): parse `?stanceKinematics=off` (or `&…`). DEFAULT-ON
+/// off-escape shape (`off`/`0`/`false`): the local player's walk / backpedal
+/// speed comes from its CURRENT stance's cycles (holtburger-world
+/// `motion_resolution::set_stance_kinematics`). Needs a wasm rebuild.
+#[cfg(any(target_arch = "wasm32", test))]
+fn parse_stance_kinematics_flag(search: &str) -> bool {
+    let trimmed = search.strip_prefix('?').unwrap_or(search);
+    !trimmed.split('&').any(|kv| {
+        matches!(kv, "stanceKinematics=off" | "stanceKinematics=0" | "stanceKinematics=false")
+    })
+}
+
+/// COL-STATIC-PHYS (2026-10-24): parse `?staticPhysicsOnly=off` (or `&…`).
+/// DEFAULT-ON off-escape shape (`off`/`0`/`false`): an outdoor static with no
+/// retail collision shape gets no entry in the statics AABB index, so neither
+/// the camera boom nor the player clamp collides with it (see
+/// `populate_statics_aabbs_for_landblock_impl`). Read once per wasm instance.
+#[cfg(any(target_arch = "wasm32", test))]
+fn parse_static_physics_only_flag(search: &str) -> bool {
+    let trimmed = search.strip_prefix('?').unwrap_or(search);
+    !trimmed.split('&').any(|kv| {
+        matches!(kv, "staticPhysicsOnly=off" | "staticPhysicsOnly=0" | "staticPhysicsOnly=false")
+    })
+}
+
 /// COL-DIAG (2026-08-04): parse `?fu3Diag=on`. DEFAULT-OFF, strict `=on`
 /// opt-in — a pure console diagnostic for the FU-3 entity clamp (one `[fu3] …`
 /// line per ~second: collider count, how many took the precise BSP arm,
@@ -10027,8 +10052,31 @@ fn resolve_link_motion_data(
     from_command: u32,
     to_command: u32,
 ) -> Option<&holtburger_dat::file_type::motion_table::MotionData> {
+    resolve_link_motion_data_signed(mtable, resolved_stance, from_command, 1.0, to_command, 1.0)
+}
+
+/// ANIM-4 (2026-10-24, running animation): the SIGNED retail lookup —
+/// `CMotionTable::get_link` (acclient.c:337585) takes the reversed pair
+/// `links[(style, to)][from]` when either speed is negative, which is how a
+/// backpedal starts (Walk→Ready played backwards) and stops (Ready→Walk
+/// played backwards). Speeds 1.0/1.0 = the forward lookup above.
+#[cfg(any(target_arch = "wasm32", test))]
+fn resolve_link_motion_data_signed(
+    mtable: &holtburger_dat::file_type::MotionTable,
+    resolved_stance: u32,
+    from_command: u32,
+    from_speed: f32,
+    to_command: u32,
+    to_speed: f32,
+) -> Option<&holtburger_dat::file_type::motion_table::MotionData> {
     if get_link_flag() {
-        mtable.get_link(resolved_stance, from_command, 1.0, to_command, 1.0)
+        mtable.get_link(resolved_stance, from_command, from_speed, to_command, to_speed)
+    } else if from_speed < 0.0 || to_speed < 0.0 {
+        // The single hop (`?getLink=off`, and every native build) keeps
+        // retail's SIGNED first hop: a negative speed reads the reversed pair
+        // `links[(style, to)][from]` (acclient.c:337596-337605). Unsigned
+        // callers pass 1.0/1.0 and never reach this arm.
+        mtable.motion_data_for_link(resolved_stance, to_command, from_command)
     } else {
         mtable.motion_data_for_link(resolved_stance, from_command, to_command)
     }
@@ -10109,6 +10157,13 @@ fn advance_root_motion(
     }
 }
 
+/// 2026-10-24: append one `[tx,ty,tz, qw,qx,qy,qz]` root-frame row (AC
+/// w-first) to the bake's `root_frames` channel.
+#[cfg(any(target_arch = "wasm32", test))]
+fn push_root_frame(roots: &mut Vec<f32>, t: [f32; 3], r: holtburger_common::Quaternion) {
+    roots.extend_from_slice(&[t[0], t[1], t[2], r.w, r.x, r.y, r.z]);
+}
+
 /// DIM5-2: fold the cumulative rigid root-motion frame `(r, t)` into every
 /// part of one keyframe — `world = r·partLocal + t`, `quat = r·partQuat` —
 /// matching retail's whole-object Frame applied to per-part model-space
@@ -10139,6 +10194,15 @@ pub(crate) struct ConcatenatedMotionBake {
     pub frames: Vec<holtburger_dat::file_type::setup_model::AnimationFrame>,
     pub frame_times: Vec<f32>,
     pub pos_frames: Vec<f32>,
+    /// 2026-10-24 (running animation): the cumulative rigid root frame
+    /// `[tx,ty,tz, qw,qx,qy,qz]` (AC w-first) that `fold_root_motion_into_parts`
+    /// folded into each baked keyframe, 7 f32 per frame. JS poses a rig whose
+    /// anchor is driven externally (the local integrator, the remote spine) by
+    /// undoing exactly this — `R⁻¹·(part − T)` — instead of subtracting the
+    /// mean of all parts, which also removed the authored body bob and left the
+    /// planted foot ~10 cm off the ground. Identity rows where nothing was
+    /// folded (the legacy `pos` path, cycles without POS_FRAMES).
+    pub root_frames: Vec<f32>,
     pub duration: f32,
     /// A5-P3: net rigid root displacement of the whole clip — the final
     /// (pos_accum, ori_accum) pair at end-of-bake. Model-space, relative to
@@ -10173,6 +10237,19 @@ fn build_concatenated_motion_frames<S: holtburger_dat::ResourceSource + ?Sized>(
     source: &S,
     motion_data: &holtburger_dat::file_type::motion_table::MotionData,
 ) -> Option<ConcatenatedMotionBake> {
+    build_concatenated_motion_frames_dir(source, motion_data, false)
+}
+
+/// ANIM-4 (2026-10-24): `reverse_all` = the MotionData is played at a NEGATIVE
+/// speed_mod (retail `add_motion(link, speed < 0)` multiplies every AnimData's
+/// framerate by it, so each node runs high→low in list order). Baked here by
+/// flipping each segment's direction; the playhead then advances forward.
+#[cfg(any(target_arch = "wasm32", test))]
+fn build_concatenated_motion_frames_dir<S: holtburger_dat::ResourceSource + ?Sized>(
+    source: &S,
+    motion_data: &holtburger_dat::file_type::motion_table::MotionData,
+    reverse_all: bool,
+) -> Option<ConcatenatedMotionBake> {
     use holtburger_dat::file_type::Animation;
     use holtburger_dat::ResourceKey;
 
@@ -10187,6 +10264,8 @@ fn build_concatenated_motion_frames<S: holtburger_dat::ResourceSource + ?Sized>(
     // (lunge attacks, stepping emotes, door/lever swings, knockbacks). Held
     // in lockstep with `frames` (same slice + same reverse).
     let mut pos: Vec<f32> = Vec::new();
+    // 2026-10-24: the per-frame folded root frame (see ConcatenatedMotionBake::root_frames).
+    let mut roots: Vec<f32> = Vec::new();
     let mut t = 0.0f32;
     // 2026-06-05 [DIM5/W1.5]: running root-motion accumulator. ACE composes
     // PosFrames CUMULATIVELY — the net displacement at frame N is the running
@@ -10285,11 +10364,13 @@ fn build_concatenated_motion_frames<S: holtburger_dat::ResourceSource + ?Sized>(
                 pos.push(0.0);
                 pos.push(0.0);
                 pos.push(0.0);
+                push_root_frame(&mut roots, pos_accum, ori_accum);
             } else {
                 frames.push(held);
                 pos.push(pos_accum[0]);
                 pos.push(pos_accum[1]);
                 pos.push(pos_accum[2]);
+                push_root_frame(&mut roots, [0.0; 3], holtburger_common::Quaternion::identity());
             }
             times.push(t);
             t += dt;
@@ -10305,10 +10386,11 @@ fn build_concatenated_motion_frames<S: holtburger_dat::ResourceSource + ?Sized>(
         let has_pos = anim.pos_frames.len() == total;
         // Iterate by index so part_frames + pos_frames stay aligned across
         // the same forward/reverse slice.
-        let reverse = anim_data.framerate < 0.0;
+        let reverse = (anim_data.framerate < 0.0) != reverse_all;
         let push_frame = |idx: usize,
                           frames: &mut Vec<holtburger_dat::file_type::setup_model::AnimationFrame>,
                           pos: &mut Vec<f32>,
+                          roots: &mut Vec<f32>,
                           accum: &mut [f32; 3],
                           ori: &mut holtburger_common::Quaternion| {
             frames.push(anim.part_frames[idx].clone());
@@ -10340,6 +10422,7 @@ fn build_concatenated_motion_frames<S: holtburger_dat::ResourceSource + ?Sized>(
                 pos.push(0.0);
                 pos.push(0.0);
                 pos.push(0.0);
+                push_root_frame(roots, *accum, *ori);
             } else {
                 // 2026-06-05 [DIM5/W1.5]: accumulate this frame's origin delta into
                 // the running root-motion sum, then emit the CUMULATIVE value (per
@@ -10363,13 +10446,14 @@ fn build_concatenated_motion_frames<S: holtburger_dat::ResourceSource + ?Sized>(
                 pos.push(accum[0]);
                 pos.push(accum[1]);
                 pos.push(accum[2]);
+                push_root_frame(roots, [0.0; 3], holtburger_common::Quaternion::identity());
             }
         };
         let seg_start = frames.len() as u32; // Step-1: segment boundary
         if reverse {
             // Reverse playback: HighFrame → LowFrame (AnimSequenceNode).
             for idx in (low..high).rev() {
-                push_frame(idx, &mut frames, &mut pos, &mut pos_accum, &mut ori_accum);
+                push_frame(idx, &mut frames, &mut pos, &mut roots, &mut pos_accum, &mut ori_accum);
                 // Hook direction flip (2026-06-03). In retail this segment runs
                 // Backward, so `Sequence.execute_hooks` fires Both(0)+Backward(-1)
                 // and skips Forward(1). We bake it as FORWARD-ordered frames and
@@ -10404,7 +10488,7 @@ fn build_concatenated_motion_frames<S: holtburger_dat::ResourceSource + ?Sized>(
             }
         } else {
             for idx in low..high {
-                push_frame(idx, &mut frames, &mut pos, &mut pos_accum, &mut ori_accum);
+                push_frame(idx, &mut frames, &mut pos, &mut roots, &mut pos_accum, &mut ori_accum);
                 times.push(t);
                 t += dt;
             }
@@ -10417,11 +10501,8 @@ fn build_concatenated_motion_frames<S: holtburger_dat::ResourceSource + ?Sized>(
             segment_counts.push(seg_count);
             // Use the effective rate (0-framerate Dead cycles fall back to 30.0
             // above) so JS-side per-segment timing never divides by zero.
-            segment_framerates.push(if anim_data.framerate.abs() > 0.0 {
-                anim_data.framerate
-            } else {
-                fr
-            });
+            let seg_fr = if anim_data.framerate.abs() > 0.0 { anim_data.framerate } else { fr };
+            segment_framerates.push(if reverse_all { -seg_fr } else { seg_fr });
             segment_anim_ids.push(anim_data.anim_id);
         }
     }
@@ -10436,6 +10517,7 @@ fn build_concatenated_motion_frames<S: holtburger_dat::ResourceSource + ?Sized>(
         frames,
         frame_times: times,
         pos_frames: pos,
+        root_frames: roots,
         duration: t,
         // A5-P3: the end-of-bake accumulators ARE the clip's net rigid root
         // displacement — previously discarded here.
@@ -22993,6 +23075,16 @@ pub(crate) fn drain_pending_landblock_collision_parts_into(
     })
 }
 
+/// COL-STATIC-PHYS (2026-10-24): `?staticPhysicsOnly` for this wasm instance,
+/// read once (see `parse_static_physics_only_flag`).
+#[cfg(target_arch = "wasm32")]
+fn static_physics_only() -> bool {
+    thread_local! {
+        static ON: std::cell::OnceCell<bool> = const { std::cell::OnceCell::new() };
+    }
+    ON.with(|c| *c.get_or_init(|| parse_static_physics_only_flag(&flag_search())))
+}
+
 /// Track B4 outdoor-static collision (Tier 1, 2026-06-08): the
 /// non-building parallel of `populate_building_aabbs_for_landblock_impl`.
 /// Walks `LandblockInfo.objects` (the `Stab` list — non-building
@@ -23237,6 +23329,25 @@ async fn populate_statics_aabbs_for_landblock_impl(
             _ => continue,
         };
 
+        // COL-STATIC-PHYS (2026-10-24, `?staticPhysicsOnly`, default ON): a
+        // static with no retail collision shape — rung 4 of
+        // `CPhysicsObj::FindObjCollisions` (acclient.c:316229-316281: no
+        // physics BSP, no cylspheres, no spheres) — collides with nothing in
+        // retail, neither a mover nor the camera's viewer transit. Its
+        // visual-vertex AABB went into this index anyway, so the follow
+        // camera collapsed into the player's head under Holtburg's hanging
+        // banners (0x01000AEF: HasDrawing | HasDIDDegrade, no physics
+        // polygons; live on the 1070, 2026-10-24) and a BSP-less prop was an
+        // invisible wall for the Tier-1 player clamp. A static that staged a
+        // physics BSP above keeps its entries whatever its Setup flags say.
+        if !has_bsp
+            && static_physics_only()
+            && source.get_file_by_key(ResourceKey::new("eor/portal", model_id)).is_ok()
+            && scenery_model_rung(source.as_ref(), model_id) == SceneryRung::None
+        {
+            continue;
+        }
+
         for part_local in part_aabbs.iter() {
             if part_local.is_empty() {
                 continue;
@@ -23384,6 +23495,13 @@ fn scenery_model_rung(
 
     if let Some(hit) = RUNG_CACHE.with(|c| c.borrow().get(&obj_id).cloned()) {
         return hit;
+    }
+    // An unfetchable record (not prefetched yet, a transient fetch error) is
+    // no collider for THIS call but is not cached: the statics populate shares
+    // this cache, and a cached miss would drop that static's collision for the
+    // rest of the session (review, 2026-10-24).
+    if source.get_file_by_key(ResourceKey::new("eor/portal", obj_id)).is_err() {
+        return SceneryRung::None;
     }
 
     let resolved = (|| -> SceneryRung {
@@ -29412,6 +29530,9 @@ pub struct EntityAnimationData {
     /// model space relative to clip start. Empty when no cycle resolved;
     /// identity (`[0,0,0,1,0,0,0]`) for clips without POS_FRAMES.
     root_motion_net: Vec<f32>,
+    /// 2026-10-24: per-frame folded root frame `[tx,ty,tz, qw,qx,qy,qz]`,
+    /// 7 f32 per keyframe — what the bake folded into `part_frames`.
+    root_frames: Vec<f32>,
     /// T4: total clip duration in seconds (== last frame time + its segment dt).
     duration: f32,
     /// **Task E (2026-05-12).** Sorted-by-`time_in_clip_s` list of
@@ -29539,6 +29660,18 @@ impl EntityAnimationData {
         self.pos_frames.clone()
     }
 
+    /// 2026-10-24 (running animation) — the cumulative rigid root frame the
+    /// bake folded into each keyframe's parts, `[tx,ty,tz, qw,qx,qy,qz]` (AC
+    /// w-first), length `numFrames * 7`. A rig whose anchor is moved
+    /// externally (local integrator, remote spine) poses
+    /// `R⁻¹·(part − T)` / `R⁻¹·q` to play the clip in place exactly
+    /// (scene3d/motion/motion_sequence.js `poseRigAt`). Empty when no clip
+    /// resolved.
+    #[wasm_bindgen(getter, js_name = rootFrames)]
+    pub fn root_frames(&self) -> Vec<f32> {
+        self.root_frames.clone()
+    }
+
     /// A5-P3 (2026-06-12) root-motion metadata: net rigid root displacement
     /// of the whole baked clip, `[tx,ty,tz, qw,qx,qy,qz]` (AC w-first quat
     /// order, same convention as `partFrames`), model space relative to clip
@@ -29649,6 +29782,7 @@ impl EntityAnimationData {
             part_frames: Vec::new(),
             frame_times: Vec::new(),
             pos_frames: Vec::new(),
+            root_frames: Vec::new(),
             // A5-P3: no cycle resolved → no root-motion metadata (empty =
             // "no clip / unknown"; JS `hasRootMotion(null)` is false).
             root_motion_net: Vec::new(),
@@ -29720,6 +29854,9 @@ pub(crate) struct EntityAnimationKeyframesInner {
     /// object (lunges, stepping emotes, door/lever swings). JS adds this to
     /// each part's position keyframe so the whole rig translates.
     pub pos_frames: Vec<f32>,
+    /// 2026-10-24: per-frame folded root frame, 7 f32 per frame (see
+    /// `ConcatenatedMotionBake::root_frames`). Empty when no clip resolved.
+    pub root_frames: Vec<f32>,
     /// T4: total clip duration (seconds) == last frame time + its segment dt.
     pub duration: f32,
     /// A5-P3 (2026-06-12) root-motion metadata: net rigid root displacement
@@ -29833,6 +29970,7 @@ pub(crate) fn build_entity_animation_data_inner_v2<S: holtburger_dat::ResourceSo
             part_frames: Vec::new(),
             frame_times: Vec::new(),
             pos_frames: Vec::new(),
+            root_frames: Vec::new(),
             duration: 0.0,
             root_motion_net: Vec::new(),
             rest_origins,
@@ -29910,6 +30048,7 @@ pub(crate) fn build_entity_animation_data_inner_v2<S: holtburger_dat::ResourceSo
                     part_frames: Vec::new(),
                     frame_times: Vec::new(),
                     pos_frames: Vec::new(),
+                    root_frames: Vec::new(),
                     duration: 0.0,
                     root_motion_net: Vec::new(),
                     rest_origins,
@@ -29965,6 +30104,7 @@ fn inner_from_motion_bake(
         frames,
         frame_times,
         pos_frames,
+        root_frames,
         duration,
         net_translation,
         net_orientation,
@@ -30039,6 +30179,7 @@ fn inner_from_motion_bake(
         part_frames,
         frame_times,
         pos_frames,
+        root_frames,
         duration,
         root_motion_net,
         rest_origins,
@@ -30082,6 +30223,27 @@ pub(crate) fn build_link_only_inner<S: holtburger_dat::ResourceSource + ?Sized>(
     from_motion_command: u32,
     motion_command: u32,
 ) -> Result<Option<EntityAnimationKeyframesInner>, String> {
+    build_link_only_inner_signed(
+        source, setup_id, mt_override, stance, from_motion_command, 1.0, motion_command, 1.0, false,
+    )
+}
+
+/// ANIM-4 (2026-10-24): `build_link_only_inner` with retail's signed lookup
+/// (`resolve_link_motion_data_signed`) and a reversed bake (`reverse`, the
+/// link played at a negative speed_mod).
+#[cfg(any(target_arch = "wasm32", test))]
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn build_link_only_inner_signed<S: holtburger_dat::ResourceSource + ?Sized>(
+    source: &S,
+    setup_id: u32,
+    mt_override: Option<u32>,
+    stance: u32,
+    from_motion_command: u32,
+    from_speed: f32,
+    motion_command: u32,
+    to_speed: f32,
+    reverse: bool,
+) -> Result<Option<EntityAnimationKeyframesInner>, String> {
     use holtburger_dat::file_type::{MotionTable, SetupModel};
     use holtburger_dat::ResourceKey;
 
@@ -30115,9 +30277,14 @@ pub(crate) fn build_link_only_inner<S: holtburger_dat::ResourceSource + ?Sized>(
     } else {
         stance
     };
-    let Some(motion_data) =
-        resolve_link_motion_data(&mtable, resolved_stance, from_motion_command, motion_command)
-    else {
+    let Some(motion_data) = resolve_link_motion_data_signed(
+        &mtable,
+        resolved_stance,
+        from_motion_command,
+        from_speed,
+        motion_command,
+        to_speed,
+    ) else {
         return Ok(None);
     };
     // Count record misses: a link whose Animation records are not resident
@@ -30127,7 +30294,7 @@ pub(crate) fn build_link_only_inner<S: holtburger_dat::ResourceSource + ?Sized>(
         inner: source,
         misses: std::sync::atomic::AtomicU32::new(0),
     };
-    let bake = build_concatenated_motion_frames(&counting, motion_data);
+    let bake = build_concatenated_motion_frames_dir(&counting, motion_data, reverse);
     let misses = counting.misses.load(std::sync::atomic::Ordering::Relaxed);
     if misses > 0 {
         return Err(format!(
@@ -30556,6 +30723,7 @@ fn inner_to_wasm_animation_data(inner: EntityAnimationKeyframesInner) -> EntityA
         part_frames: inner.part_frames,
         frame_times: inner.frame_times,
         pos_frames: inner.pos_frames,
+        root_frames: inner.root_frames,
         root_motion_net: inner.root_motion_net,
         duration: inner.duration,
         rest_origins: inner.rest_origins,
@@ -30600,10 +30768,20 @@ pub async fn fetch_motion_link_keyframes(
     // `fetch_entity_animation_keyframes`'s `urgent`): swing / cast links ride
     // the urgent prefetch lane. Absent = normal lane.
     urgent: Option<bool>,
+    // ANIM-4 (2026-10-24): the signed retail lookup (`from_speed` /
+    // `to_speed`, default 1.0 = the forward pair) and a reversed bake
+    // (`reverse`, the link played at a negative speed_mod). Absent = the
+    // pre-2026-10-24 forward link, byte-identical.
+    from_speed: Option<f32>,
+    to_speed: Option<f32>,
+    reverse: Option<bool>,
 ) -> Result<Option<EntityAnimationData>, JsValue> {
     use holtburger_dat::{ResourceKey, ResourceSource};
 
     let urgent = urgent.unwrap_or(false);
+    let from_speed = from_speed.filter(|v| v.is_finite() && *v != 0.0).unwrap_or(1.0);
+    let to_speed = to_speed.filter(|v| v.is_finite() && *v != 0.0).unwrap_or(1.0);
+    let reverse = reverse.unwrap_or(false);
     if from_motion_command == 0 || (setup_id >> 24) as u8 != 0x02 {
         return Ok(None);
     }
@@ -30625,17 +30803,23 @@ pub async fn fetch_motion_link_keyframes(
     .with_u32(mtable_id)
     .with_u32(stance)
     .with_u32(from_motion_command)
-    .with_u32(motion_command);
+    .with_u32(motion_command)
+    .with_u32(from_speed.to_bits())
+    .with_u32(to_speed.to_bits())
+    .with_u32(u32::from(reverse));
     // The walk is the build itself: it touches exactly the records the build
     // reads (no triangulation, no cycle).
     let walk = as_walk_fn(move |s: &dyn ResourceSource| {
-        let _ = build_link_only_inner(
+        let _ = build_link_only_inner_signed(
             s,
             setup_id,
             mt_override,
             stance,
             from_motion_command,
+            from_speed,
             motion_command,
+            to_speed,
+            reverse,
         );
     });
     if urgent {
@@ -30643,35 +30827,44 @@ pub async fn fetch_motion_link_keyframes(
     } else {
         prefetch::ensure_walk_prefetched_keyed(cache_key, &source, &initial, walk).await?;
     }
-    let mut result = build_link_only_inner(
+    let mut result = build_link_only_inner_signed(
         &*source,
         setup_id,
         mt_override,
         stance,
         from_motion_command,
+        from_speed,
         motion_command,
+        to_speed,
+        reverse,
     );
     if result.is_err() {
         // One fresh, un-deduped walk and rebuild (the geom-audit retry shape
         // of `build_entity_animation_counted`).
         let _ = prefetch::ensure_walk_prefetched(&source, &initial, |s| {
-            let _ = build_link_only_inner(
+            let _ = build_link_only_inner_signed(
                 s,
                 setup_id,
                 mt_override,
                 stance,
                 from_motion_command,
+                from_speed,
                 motion_command,
+                to_speed,
+                reverse,
             );
         })
         .await;
-        result = build_link_only_inner(
+        result = build_link_only_inner_signed(
             &*source,
             setup_id,
             mt_override,
             stance,
             from_motion_command,
+            from_speed,
             motion_command,
+            to_speed,
+            reverse,
         );
     }
     match result {
@@ -38764,6 +38957,28 @@ mod wire_state_packs_routing_tests {
         assert!(!parse_house_barriers_flag("?houseBarriers=0"));
         assert!(!parse_house_barriers_flag("?houseBarriers=false"));
         assert!(!parse_house_barriers_flag("?nosw=1&houseBarriers=off"));
+    }
+
+    /// LOCALSIM-2: `?stanceKinematics=off` DEFAULT-ON off-escape shape.
+    #[test]
+    fn stance_kinematics_flag_defaults_on_off_escape() {
+        use super::parse_stance_kinematics_flag;
+        assert!(parse_stance_kinematics_flag(""));
+        assert!(parse_stance_kinematics_flag("?stanceKinematics=on"));
+        assert!(!parse_stance_kinematics_flag("?stanceKinematics=off"));
+        assert!(!parse_stance_kinematics_flag("?nosw=1&stanceKinematics=0"));
+        assert!(!parse_stance_kinematics_flag("?stanceKinematics=false"));
+    }
+
+    /// COL-STATIC-PHYS: `?staticPhysicsOnly=off` DEFAULT-ON off-escape shape.
+    #[test]
+    fn static_physics_only_flag_defaults_on_off_escape() {
+        use super::parse_static_physics_only_flag;
+        assert!(parse_static_physics_only_flag(""));
+        assert!(parse_static_physics_only_flag("?staticPhysicsOnly=on"));
+        assert!(!parse_static_physics_only_flag("?staticPhysicsOnly=off"));
+        assert!(!parse_static_physics_only_flag("?nosw=1&staticPhysicsOnly=0"));
+        assert!(!parse_static_physics_only_flag("?staticPhysicsOnly=false"));
     }
 
     /// TERRAIN-HOP: `?waterQuadrantRetail=off` DEFAULT-ON off-escape shape.
@@ -51866,6 +52081,12 @@ async fn recv_loop(
     holtburger_world::spatial::faithful_bridge::set_retail_water_quadrant(
         parse_water_quadrant_retail_flag(&flag_search()),
     );
+    // LOCALSIM-2 (2026-10-24): `?stanceKinematics=off` (default ON) — the local
+    // walk / backpedal speed follows the current stance (see
+    // `parse_stance_kinematics_flag`).
+    holtburger_world::state::motion_resolution::set_stance_kinematics(
+        parse_stance_kinematics_flag(&flag_search()),
+    );
     // motion-remote-2: `?remoteRestHeading=off` (default ON) — an at-rest
     // remote body adopts the wire heading (see `parse_remote_rest_heading_flag`).
     holtburger_world::spatial::set_remote_rest_heading(parse_remote_rest_heading_flag(
@@ -57436,6 +57657,53 @@ mod tests_animation_keyframes_batch {
         assert_eq!(link.segment_anim_ids, full.segment_anim_ids);
         assert_eq!(link.hooks.len(), 3, "one SoundTable hook per link frame");
         assert_eq!(hook_rows(&link.hooks), hook_rows(&full.hooks));
+    }
+
+    /// ANIM-4 (2026-10-24): retail `get_link` with a negative speed takes the
+    /// REVERSED pair, `links[(style, motion)][substate]` — so asking for
+    /// to→from at -1.0 resolves the from→to link, and `reverse` bakes it
+    /// high→low (frame i of the reversed bake = frame n-1-i of the forward one),
+    /// with the segment framerate negated. Speeds 1.0/1.0 + no reverse is the
+    /// unchanged forward builder.
+    #[test]
+    fn signed_link_bake_resolves_the_reversed_pair_and_plays_it_backwards() {
+        let fx = c3_fixture();
+        let fwd = build_link_only_inner(&fx.source, fx.setup_id, None, fx.stance, fx.from_cmd, fx.to_cmd)
+            .expect("not transient")
+            .expect("forward link");
+        let same = build_link_only_inner_signed(
+            &fx.source, fx.setup_id, None, fx.stance, fx.from_cmd, 1.0, fx.to_cmd, 1.0, false,
+        )
+        .expect("not transient")
+        .expect("forward link (signed builder)");
+        assert_eq!(f32_bits(&same.part_frames), f32_bits(&fwd.part_frames));
+        let rev = build_link_only_inner_signed(
+            &fx.source, fx.setup_id, None, fx.stance, fx.to_cmd, -1.0, fx.from_cmd, 1.0, true,
+        )
+        .expect("not transient")
+        .expect("the reversed lookup finds the from->to link");
+        assert_eq!(rev.num_frames, fwd.num_frames);
+        let n = fwd.num_frames as usize;
+        let stride = fwd.part_count as usize * 7;
+        for i in 0..n {
+            assert_eq!(
+                f32_bits(&rev.part_frames[i * stride..(i + 1) * stride]),
+                f32_bits(&fwd.part_frames[(n - 1 - i) * stride..(n - i) * stride]),
+                "reversed frame {i}"
+            );
+        }
+        assert_eq!(rev.segment_framerates.len(), fwd.segment_framerates.len());
+        for (r, f) in rev.segment_framerates.iter().zip(&fwd.segment_framerates) {
+            assert_eq!(r.to_bits(), (-f).to_bits(), "segment framerate negated");
+        }
+        // The forward pair at a negative speed reads links[to][from], which
+        // this table does not have: an authoritative None, not an error, and
+        // never the forward link.
+        let miss = build_link_only_inner_signed(
+            &fx.source, fx.setup_id, None, fx.stance, fx.from_cmd, -1.0, fx.to_cmd, 1.0, true,
+        )
+        .expect("not transient");
+        assert!(miss.is_none(), "a negative speed must not resolve the forward pair");
     }
 
     /// A link the table does not have: `Ok(None)` (authoritative, cacheable),

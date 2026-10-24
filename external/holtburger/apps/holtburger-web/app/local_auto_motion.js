@@ -23,6 +23,8 @@
 //
 // `?localAutoMotion=off` disables it.
 
+import { localRigSpeed, localRunRate } from "../scene3d/motion/retail_rig_speed.js";
+
 export const LOCAL_AUTO_MOTION_ACTIVE = 0x80000000;
 
 const READY = 0x41000003;
@@ -49,9 +51,9 @@ export function decodeLocalAutoMotion(packed) {
 /** The rig motion for a decoded drive, or null for none. */
 export function localAutoMotionCommand(m) {
   if (!m) return null;
-  if (m.forward > 0) return { cmd: m.run ? RUN_FORWARD : WALK_FORWARD, speed: 1.0, turn: false };
+  if (m.forward > 0) return { cmd: m.run ? RUN_FORWARD : WALK_FORWARD, speed: 1.0, turn: false, run: m.run };
   if (m.turn !== 0) {
-    return { cmd: m.turn > 0 ? TURN_RIGHT : TURN_LEFT, speed: m.run ? 1.5 : 1.0, turn: true };
+    return { cmd: m.turn > 0 ? TURN_RIGHT : TURN_LEFT, speed: m.run ? 1.5 : 1.0, turn: true, run: m.run };
   }
   return null;
 }
@@ -60,7 +62,7 @@ export function localAutoMotionCommand(m) {
  * @param {object} rig
  * @param {() => number} rig.baseLow     low 16 bits of the rig's current base command
  * @param {() => number} rig.issueSeq    bumps on every base command the rig is given
- * @param {(cmd:number, speed:number) => void} rig.play
+ * @param {(cmd:number, speed:number, run?:boolean) => void} rig.play
  */
 export function createLocalAutoMotion(rig) {
   let last = 0;
@@ -73,7 +75,7 @@ export function createLocalAutoMotion(rig) {
       const want = localAutoMotionCommand(decodeLocalAutoMotion(p));
       if (want) {
         if (want.turn && ownedSeq === null && !TURNABLE_BASE_LOWS.has(rig.baseLow() & 0xffff)) return;
-        rig.play(want.cmd, want.speed);
+        rig.play(want.cmd, want.speed, want.run);
         ownedSeq = rig.issueSeq();
         return;
       }
@@ -103,11 +105,13 @@ export function getLocalAutoMotion() {
   _shared = createLocalAutoMotion({
     baseLow: () => (local()?.inst?.lastMotionCommand ?? 0) & 0xffff,
     issueSeq: () => local()?.inst?._motionIssueSeq | 0,
-    play: (cmd, speed) => {
+    play: (cmd, speed, run = false) => {
       const l = local();
       if (!l || typeof l.em.setMotion !== "function") return;
       const stance = (typeof l.em.getStance === "function" ? l.em.getStance(l.guid) >>> 0 : 0) || NONCOMBAT_STANCE;
-      l.em.setMotion(l.guid, cmd >>> 0, stance, speed);
+      // 2026-10-24 — the drive's retail interpreted speed (Run at the run rate,
+      // the speed the body moves at); `?retailRigSpeed=off` keeps the raw speed.
+      l.em.setMotion(l.guid, cmd >>> 0, stance, localRigSpeed(cmd >>> 0, speed, run, localRunRate(l.em.wasmExports)));
     },
   });
   return _shared;

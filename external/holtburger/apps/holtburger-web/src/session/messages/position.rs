@@ -1004,7 +1004,7 @@ pub(super) async fn handle(ctx: &mut LoopCtx, message: GameMessage) -> LoopFlow 
             // only USES the sign (reverse clip playback) under the
             // default-off `?signedMotionSpeed` flag, so the default
             // wire→JS behavior is unchanged.
-            let motion_speed_f32: f32 = match &data.data {
+            let mut motion_speed_f32: f32 = match &data.data {
                 MovementTypeData::Invalid(inv) => inv
                     .state
                     .forward_speed
@@ -1012,6 +1012,35 @@ pub(super) async fn handle(ctx: &mut LoopCtx, message: GameMessage) -> LoopFlow 
                     .unwrap_or(1.0),
                 _ => 1.0,
             };
+            // REMOTE-2 (2026-10-24, running animation): a sidestep or turn
+            // with no forward locomotion IS the playing substate — retail
+            // `apply_interpreted_movement` (acclient.c:344178-344198) hands
+            // `DoInterpretedMotion(sidestep / turn, speed)` to
+            // `CMotionTable::GetObjectSequence`, whose substate branch
+            // (:337763-337840, `is_allowed` :337771) makes SideStepRight /
+            // TurnRight pressed from Ready the CYCLE at its SIGNED speed. This
+            // envelope only ever carried the forward slot, so a remote player
+            // strafing slid sideways in its idle pose and a left turn in place
+            // played the right-turn footwork at x1.0. JS folds Left → Right
+            // with a negated speed (setMotion) and `?remoteSubstate=off`
+            // maps these back to Ready (scene3d/loop.js `_armMotion`).
+            let mut motion_command_u16 = motion_command_u16;
+            if let MovementTypeData::Invalid(inv) = &data.data {
+                // 0x0003 = Ready (the interpreted low 16 of 0x41000003).
+                let fwd_idle = motion_command_u16 == 0 || motion_command_u16 == 0x0003;
+                if fwd_idle {
+                    let signed = |s: Option<f32>| {
+                        s.filter(|v| v.is_finite() && *v != 0.0).unwrap_or(1.0)
+                    };
+                    if let Some(side) = inv.state.sidestep_command {
+                        motion_command_u16 = side.raw();
+                        motion_speed_f32 = signed(inv.state.sidestep_speed);
+                    } else if let Some(turn) = inv.state.turn_command {
+                        motion_command_u16 = turn.raw();
+                        motion_speed_f32 = signed(inv.state.turn_speed);
+                    }
+                }
+            }
             // F3-4 (bughunt 2026-06-09) — sticky target. ACE
             // STOPS broadcasting a monster's position while it
             // is sticky-attacking (`Monster_Tick` calls

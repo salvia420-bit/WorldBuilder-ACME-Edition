@@ -169,6 +169,9 @@ await t("S2 camera-2 stiffness: immediate pull-in, damped re-extension, never pa
 await t("S3 camera-4 retail viewer sphere + pivot; =off restores 0.5 / 0.2 / 1.6", () => {
   const h = makeHandle();
   const cs = makeSwitcher(h);
+  // These pin the sweep geometry frame by frame; the eased re-extension
+  // (?camBoomEase, 2026-10-24) has its own test (tests/cam_boom_ease.test.mjs).
+  cs._camBoomEaseOn = false;
   h.wallY = 197;
   cs.positionCamera(DT);
   const on = h.calls.building.at(-1);
@@ -200,6 +203,7 @@ await t("S3 camera-4 retail viewer sphere + pivot; =off restores 0.5 / 0.2 / 1.6
 await t("S4 camera-3 step 4b: scenery sweep clips + frees, escape + stale pkg skip it", () => {
   const h = makeHandle();
   const cs = makeSwitcher(h);
+  cs._camBoomEaseOn = false; // see S3: the snap-out is what this pins
   h.sceneryY = 196;
   cs.positionCamera(DT);
   const c = h.calls.scenery.at(-1);

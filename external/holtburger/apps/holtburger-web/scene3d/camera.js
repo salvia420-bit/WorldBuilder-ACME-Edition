@@ -183,6 +183,10 @@ import { VIEWER_SPHERE_RADIUS_M, VIEWER_PIVOT_Z_M } from "./viewer_cell.js";
 // import-free module, headless-tested by tests/rust_pose.test.cjs.
 import { parseRustPoseFlag } from "./rust_pose.js";
 import { readLocalPlayerPose } from "./frame_pose.js";
+// 2026-10-24 — the local rig's retail interpreted speed (adjust_motion +
+// apply_run_to_command): the run cycle plays at the run rate, as the body
+// moves. `?retailRigSpeed=off` restores the raw key speeds.
+import { localRigSpeed, localRunRate, retailRigSpeedOn } from "./motion/retail_rig_speed.js";
 
 /**
  * Mode-cycle order on `C` press: follow → topDown → orbit → follow.
@@ -687,10 +691,27 @@ export class CameraSwitcher {
       this._autoFollowTurnsOn = !camFlagOff(params?.get("autoFollowTurns"));
       // charopt-2: CharacterOption 0x07 target tracking.
       this._combatTargetViewOn = !camFlagOff(params?.get("combatTargetView"));
+      // camBoomEase (2026-10-24): under the hard lock, ease the boom back OUT
+      // after an occluder instead of snapping (see _easeBoomOut).
+      this._camBoomEaseOn = !camFlagOff(params?.get("camBoomEase"));
+      // camTerrainSweep (2026-10-24): sweep the boom against the terrain, not
+      // only floor the eye (see _terrainBoomT).
+      this._camTerrainSweepOn = !camFlagOff(params?.get("camTerrainSweep"));
+      // camTerrainEase (2026-10-24): a pull-in that only the terrain sweep
+      // forced glides in, floored above the ground (see _easeBoomOut).
+      this._camTerrainEaseOn = !camFlagOff(params?.get("camTerrainEase"));
     }
     // camera-2 state: last published (swept) eye in AC coords — the FROM end
     // of the retail stiffness lerp. null = unseeded (next frame snaps).
     this._prevEyeAc = null;
+    // camBoomEase state: last published boom length (eye ↔ pivot), null = unseeded.
+    this._prevBoomLen = null;
+    if (this._camBoomEaseOn === undefined) this._camBoomEaseOn = true;
+    if (this._camTerrainSweepOn === undefined) this._camTerrainSweepOn = true;
+    if (this._camTerrainEaseOn === undefined) this._camTerrainEaseOn = true;
+    // camTerrainEase state: the last clip chain's eye was set by the terrain
+    // sweep alone (no wall / static / scenery / cell step shortened it more).
+    this._clipTerrainBound = false;
     // camera-5 state: last frame's heading in the followYaw convention.
     this._lastFollowHeading = null;
     // charopt-2 state: cached CharacterOption 0x07 read ({t, on}).
@@ -1768,7 +1789,7 @@ export class CameraSwitcher {
    */
   _clipCameraAgainstWorld(
     playerPos, idealX, idealY, idealZ,
-    ctx = this._camClipContext(), terrainFloor = true,
+    ctx = this._camClipContext(), terrainFloor = true, terrainSweep = true,
   ) {
     let finalX = idealX, finalY = idealY, finalZ = idealZ;
     if (!ctx) {
@@ -1799,6 +1820,12 @@ export class CameraSwitcher {
     const freeHit = (hit) => {
       try { hit.free?.(); } catch (_) { /* already released */ }
     };
+    // ---- 1b. Terrain along the boom (camTerrainSweep, outdoor only) ----
+    // Applied after `clipFinalTo` is defined below; see _terrainBoomT.
+    let terrainT = null;
+    if (terrainSweep && this._camTerrainSweepOn && !indoor) {
+      terrainT = this._terrainBoomT(handle, startX, startY, startZ, finalX, finalY, finalZ, CAM_RADIUS);
+    }
     const clipFinalTo = (hit) => {
       // hit.t in [0, 1]; clamp to a tiny minimum so we don't snap the
       // camera to the player's head.
@@ -1811,6 +1838,9 @@ export class CameraSwitcher {
       finalY = startY + dy * t;
       finalZ = startZ + dz * t;
     };
+
+    if (terrainT != null) clipFinalTo({ t: terrainT });
+    const terrainX = finalX, terrainY = finalY, terrainZ = finalZ;
 
     if (landblockId !== 0 && !indoor) {
       // ---- 2. Outdoor building AABB sweep (default OFF — see
@@ -1967,6 +1997,8 @@ export class CameraSwitcher {
       } catch (_) {}
     }
 
+    this._clipTerrainBound = terrainT != null &&
+      finalX === terrainX && finalY === terrainY && finalZ === terrainZ;
     return { x: finalX, y: finalY, z: finalZ };
   }
 
@@ -1996,6 +2028,50 @@ export class CameraSwitcher {
     // A/B on a real GPU (window.__setIndoorCam to toggle without a reload).
     const indoor = this._indoorCamOn && (landblockId & 0xffff) >= 0x0100;
     return { handle, landblockId, indoor };
+  }
+
+  /**
+   * Step 1b of the clip chain (camTerrainSweep, 2026-10-24, DEFAULT ON;
+   * `?camTerrainSweep=off`). Step 1 only floors the EYE above the terrain
+   * under it, so a crest between the eye and the runner — running over a
+   * hilltop, down into a dip — hid the character behind the ground for as
+   * long as the slope lasted (live 1070 on-screen, 2026-10-24). Retail sweeps
+   * the viewer sphere along the whole boom (SmartBox::update_viewer,
+   * acclient.c:144991, pivot → sought through the cell's terrain polys). Here
+   * the boom is sampled every 0.4 m from 0.3 m past the pivot; the first
+   * sample whose terrain sits above the boom less the sphere radius is
+   * refined by bisection, and its parameter `t` (along pivot → eye) is
+   * returned for `clipFinalTo`. `null` = clear, indoors, or no height source.
+   */
+  _terrainBoomT(handle, sx, sy, sz, ex, ey, ez, radius) {
+    if (typeof handle?.terrainHeightAt !== "function") return null;
+    const dx = ex - sx, dy = ey - sy, dz = ez - sz;
+    const len = Math.sqrt(dx * dx + dy * dy + dz * dz);
+    if (!(len > 0.5)) return null;
+    const blocked = (t) => {
+      try {
+        const h = handle.terrainHeightAt(sx + dx * t, sy + dy * t);
+        return typeof h === "number" && Number.isFinite(h) && h + radius > sz + dz * t;
+      } catch (_) {
+        return false;
+      }
+    };
+    const step = 0.4 / len;
+    let free = Math.min(1, 0.3 / len);
+    if (blocked(free)) return null; // pivot itself in the ground: leave it to step 1
+    for (let t = free + step; t <= 1 + 1e-9; t += step) {
+      const tt = Math.min(1, t);
+      if (blocked(tt)) {
+        let lo = free, hi = tt;
+        for (let i = 0; i < 5; i += 1) {
+          const mid = (lo + hi) / 2;
+          if (blocked(mid)) hi = mid; else lo = mid;
+        }
+        return lo;
+      }
+      free = tt;
+    }
+    return null;
   }
 
   /**
@@ -2082,6 +2158,11 @@ export class CameraSwitcher {
     const t = this._stiffTmp;
     const frac =
       this._camStiffness != null ? stiffnessFrac(this._camStiffness, dt) : 1.0;
+    // camBoomEase re-seed: an unseeded viewer or a teleport-sized jump of the
+    // ideal eye (retailViewerStep reports `snapped` on EVERY frame under the
+    // hard lock, so it cannot tell a re-seed from an ordinary locked frame).
+    const pe = this._prevEyeAc;
+    const reseed = !pe || !(Math.hypot(idealX - pe.x, idealY - pe.y, idealZ - pe.z) <= STIFFNESS_TELEPORT_SNAP_M);
     const step = retailViewerStep(
       this._prevEyeAc,
       { x: idealX, y: idealY, z: idealZ },
@@ -2089,7 +2170,7 @@ export class CameraSwitcher {
       (s) => this._clipCameraAgainstWorld(p, s.x, s.y, s.z, ctx, false),
       { x: lookX, y: lookY, z: lookZ },
     );
-    const eye = step.eye;
+    const eye = this._easeBoomOut(step.eye, p, dt, frac < 1 || reseed, ctx);
     this._prevEyeAc = { x: eye.x, y: eye.y, z: eye.z };
     t.pos.set(...acToThree(eye.x, eye.y, eye.z));
     this.persp.position.copy(t.pos);
@@ -2103,6 +2184,74 @@ export class CameraSwitcher {
     t.m.lookAt(t.pos, t.look, this.persp.up);
     t.q.setFromRotationMatrix(t.m);
     this.persp.quaternion.slerp(t.q, frac);
+  }
+
+  /**
+   * camBoomEase (2026-10-24, DEFAULT ON; `?camBoomEase=off`) — under the hard
+   * lock (no `?camStiffness`) a trunk, pole or wall corner crossing the boom
+   * pulled the eye in for a frame and the next frame snapped it straight back
+   * out to the full 6 m (live 1070: 5.7 m → 0.23 m → 5.7 m while running past
+   * Holtburg walls; with the near fade the runner blinked). Retail never snaps
+   * out: the viewer lerps from its previous swept position at the camera
+   * stiffness, 0.45 → frac 0.15 per 30 Hz tick, a ~0.19 s time constant
+   * (CameraManager::UpdateCamera acclient.c:147800-147842, defaults :147898).
+   * Here the pull-in stays immediate (the sweep must keep the eye out of the
+   * wall) and only a LONGER boom than last frame eases out, at that same rate,
+   * along this frame's swept direction — so the eye is never placed past what
+   * the sweep allowed. `skip` = the stiffness lerp is already active, or the
+   * viewer re-seeds (unseeded, or the ideal eye jumped a teleport's distance).
+   *
+   * camTerrainEase (2026-10-24, DEFAULT ON; `?camTerrainEase=off`) — the one
+   * pull-in that glides: when the terrain sweep alone set this frame's eye
+   * (`_clipTerrainBound`), the boom shortens by half the gap per 1/30 s
+   * (~0.15 s to settle) instead of jumping. Running over a crest on the 6 m
+   * boom that jump was 2.9-3.4 m in one frame (live 1070, Holtburg hill). The
+   * glide passes through the span of the boom that is under the hill, so each
+   * eased eye is floored above the terrain at its own spot (`_terrainFloorZ`):
+   * the eye rides up over the crest and never goes underground; the crest may
+   * hide the runner for those few frames, as before the sweep. A wall, static,
+   * scenery or cell clip keeps the instant pull-in (the eye must not enter it),
+   * and each eased eye is re-swept against those (pivot → eased eye), since
+   * this frame's chain only covered pivot → the terrain-clipped eye.
+   */
+  _easeBoomOut(eye, p, dt, skip, ctx = null) {
+    const pz = p.z + VIEWER_PIVOT_Z_M;
+    const dx = eye.x - p.x, dy = eye.y - p.y, dz = eye.z - pz;
+    const len = Math.sqrt(dx * dx + dy * dy + dz * dz);
+    const prev = this._prevBoomLen;
+    let out = eye;
+    if (this._camBoomEaseOn && !skip && prev != null && len > prev + 1e-3 && len > 1e-4 && dt > 0) {
+      // 1 - (1 - 0.15)^(30·dt): retail's per-tick 0.15 at any frame rate.
+      const k = 1 - Math.pow(0.85, 30 * Math.min(dt, 0.25));
+      const eased = prev + (len - prev) * k;
+      const s = eased / len;
+      out = { x: p.x + dx * s, y: p.y + dy * s, z: pz + dz * s };
+      this._prevBoomLen = eased;
+    } else if (this._camTerrainEaseOn && this._clipTerrainBound && !skip && prev != null &&
+      len < prev - 1e-3 && len > 1e-4 && dt > 0) {
+      const k = 1 - Math.pow(0.5, 30 * Math.min(dt, 0.25));
+      const eased = prev + (len - prev) * k;
+      const s = eased / len;
+      const x = p.x + dx * s, y = p.y + dy * s;
+      out = { x, y, z: this._terrainFloorZ(ctx, x, y, pz + dz * s) };
+      this._prevBoomLen = eased;
+      // The wall / static / scenery / cell sweeps covered pivot → this
+      // frame's terrain-clipped eye only. Re-check pivot → the eased eye (no
+      // terrain sweep: that span is what is being eased through), so the glide
+      // never parks the eye behind something they would have stopped at.
+      if (ctx) {
+        const bound = this._clipTerrainBound;
+        const chk = this._clipCameraAgainstWorld(p, out.x, out.y, out.z, ctx, false, false);
+        this._clipTerrainBound = bound;
+        if (chk.x !== out.x || chk.y !== out.y || chk.z !== out.z) {
+          out = chk;
+          this._prevBoomLen = Math.hypot(chk.x - p.x, chk.y - p.y, chk.z - pz);
+        }
+      }
+    } else {
+      this._prevBoomLen = len;
+    }
+    return out;
   }
 
   /**
@@ -2902,7 +3051,26 @@ export class CameraSwitcher {
     }
     this._orbitRigStopped = false;
     const sig = `${m.forward},${m.strafe},${m.turn},${m.run}`;
-    if (sig === this.lastInputSig) return;
+    // 2026-10-24 (?retailRigSpeed): the rig's speed carries the run rate, so a
+    // run-rate change while a key is held (a buff, burden, exhaustion) has to
+    // reach the rig too — retail re-applies the raw state and change_cycle_speed
+    // rescales the cycle in phase (acclient.c:337269). Same keys = same
+    // command, so setMotion keeps the cycle and only takes the new speed.
+    // Only a command whose speed scales with R (run, running backpedal,
+    // running strafe) carries it: an idle or turn-only dispatch is Ready /
+    // a turn, and re-sending Ready on an R change while standing would end a
+    // held emote, a cast gesture or the death hold (review, 2026-10-24).
+    const rScaled = !!m.run && (m.forward !== 0 || m.strafe !== 0);
+    const rigSig = retailRigSpeedOn() && rScaled
+      ? `${sig},${Math.round(localRunRate(this.scene3d?.entityManager?.wasmExports) * 100)}`
+      : sig;
+    if (sig === this.lastInputSig) {
+      if (rigSig !== this.lastRigMotionSig && this.lastRigMotionSig != null) {
+        this.lastRigMotionSig = rigSig;
+        this._dispatchLocalRigMotion(m);
+      }
+      return;
+    }
     if (CMD_INTERP_ON) {
       // ?cmdInterp=on: the raw key edges already reached wasm via
       // handleKeyAction (index.html forwarder); this camera-relative
@@ -2955,8 +3123,8 @@ export class CameraSwitcher {
     // would let the rig re-dispatch every frame in the pre-EnteredWorld window
     // where setMovementInput throws. setMotion is idempotent on (cmd, stance), so
     // this is behaviorally identical once in-world.
-    if (sig !== this.lastRigMotionSig) {
-      this.lastRigMotionSig = sig;
+    if (rigSig !== this.lastRigMotionSig) {
+      this.lastRigMotionSig = rigSig;
       this._dispatchLocalRigMotion(m);
     }
   }
@@ -3041,6 +3209,11 @@ export class CameraSwitcher {
       else if (m.turn > 0) { fwdCmd = 0x6500000d; fwdSpeed = m.run ? 1.5 : 1.0; } // TurnRight
       else if (m.turn < 0) { fwdCmd = 0x6500000e; fwdSpeed = m.run ? 1.5 : 1.0; } // TurnLeft (setMotion reverses)
       else { fwdCmd = 0x41000003; }                                     // Ready (stop → idle)
+      // 2026-10-24 — retail interpreted speed (adjust_motion + apply_run_to_command,
+      // acclient.c:343746/:343439): Run at the run rate, a run-backpedal x R (setMotion
+      // applies the -0.65), a strafe at min(1.248 R, 3.0). The raw 1.0 played the run
+      // cycle at a 4 m/s jog under an 18 m/s body.
+      fwdSpeed = localRigSpeed(fwdCmd, fwdSpeed, m.run, localRunRate(em.wasmExports));
       const sideCmd = m.strafe !== 0 ? 0x6500000f : 0;                  // SideStepRight (layer collapses L→R)
       const sideSpeed = m.strafe < 0 ? -1.0 : 1.0;
       let stanceC = 0x8000003d;                                         // NonCombat fallback
@@ -3078,7 +3251,7 @@ export class CameraSwitcher {
     // getStance failure is benign — fall through to the NonCombat default.
     try { if (typeof em.getStance === "function") { const s = (em.getStance(g) >>> 0); if (s) stance = s; } } catch (_) {}
     try {
-      em.setMotion(g, cmd, stance);
+      em.setMotion(g, cmd, stance, localRigSpeed(cmd, 1.0, m.run, localRunRate(em.wasmExports)));
     } catch (e) {
       // Issue 8 (2026-06-03): surface a real setMotion failure ONCE (the jump
       // path logs its dispatch errors; this path previously swallowed them).

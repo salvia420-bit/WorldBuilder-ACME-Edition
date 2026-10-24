@@ -366,7 +366,9 @@ console.log("PART 5 — request arithmetic (static; browser count is a separate 
   // scene3d/terrain_field_gpu.js (terrain_grass.js), scene3d/terrain_desert_haze.js,
   // scene3d/terrain_obsidian.js (index.js), scene3d/vfx/heat_haze_glsl.js
   // (heat_haze_effect.js) (generator --check: up to date, 446 modules) → 425.
-  const NON_APP_PRELOADS = 425;
+  // 2026-10-24 (running animation): + scene3d/motion/retail_rig_speed.js (camera.js)
+  // (generator --check: up to date, 447 modules) → 426.
+  const NON_APP_PRELOADS = 426;
   check(mp.length === NON_APP_PRELOADS + appMods, `unbundled modulepreload block == ${NON_APP_PRELOADS} + ${appMods} app/ link elements (got ${mp.length})`);
   const workersInMp = mp.filter((h) => /(?:bake|net|texture|keepalive)_worker\.js/.test(h)).length;
   // html + 266 modules + wasm + SW + workers not in the preload list (bake + shard fetch;

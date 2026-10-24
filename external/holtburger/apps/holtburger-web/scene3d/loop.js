@@ -598,6 +598,22 @@ const CAST_AXES_ON = (() => {
   }
 })();
 
+// ?remoteSubstate (2026-10-24, DEFAULT ON; `=off` escape) — REMOTE-2: the
+// wasm KIND_MOTION now carries a remote's pure sidestep / turn as the playing
+// substate with its SIGNED wire speed (src/session/messages/position.rs;
+// retail GetObjectSequence substate branch, acclient.c:337763). `=off` maps
+// those back to Ready at 1.0 (the old idle-pose slide).
+const REMOTE_SUBSTATE_ON = (() => {
+  try {
+    if (typeof window === "undefined" || !window.location) return true;
+    const v = new URLSearchParams(window.location.search).get("remoteSubstate")?.toLowerCase();
+    return !(v === "off" || v === "0" || v === "false");
+  } catch (_) {
+    return true;
+  }
+})();
+const SUBSTATE_SIDE_TURN_LOWS = new Set([0x000d, 0x000e, 0x000f, 0x0010]);
+
 function drainMotionAxes(scene3d, sessionHandle) {
   if (!CAST_AXES_ON) return;
   // Same module-export resolution as drainMotionActions — see resolveMotionPollFn.
@@ -638,7 +654,14 @@ function drainMotionAxes(scene3d, sessionHandle) {
     // just the legwork. When forward IS active (run / cast gesture), the turn is
     // ignored here — the forward cycle owns the legs, heading-ease the rotation.
     if (turnCmd !== 0 && forwardIdle && typeof em.setMotion === "function") {
-      em.setMotion(guid, turnCmd, stance, 1.0);
+      // REMOTE-2: when this guid's KIND_MOTION already carried the turn as the
+      // substate (signed wire speed), re-issuing it here at 1.0 would drop the
+      // speed and the left/right sign. Older wasm (Ready on KIND_MOTION) keeps
+      // the legacy turn cycle.
+      const lastLow = (em.entityMap?.get?.(guid)?._kindMotionLow ?? 0) & 0xffff;
+      if (!(REMOTE_SUBSTATE_ON && (lastLow === 0x000d || lastLow === 0x000e))) {
+        em.setMotion(guid, turnCmd, stance, 1.0);
+      }
     }
   }
 }
@@ -4245,6 +4268,18 @@ function _armMotion(scene3d, em, upd) {
     !isAuto &&
     !isLocalGaitLocomotionCmd(motionCmd);
   if (forceLocal || !isLocalPlayerGuid(motionGuid)) {
+    let armCmd = motionCmd;
+    let armSpeed = +(upd.motionSpeed ?? 1.0);
+    if (!isLocalPlayerGuid(motionGuid)) {
+      // REMOTE-2: a pure sidestep / turn arrives as the substate (see
+      // REMOTE_SUBSTATE_ON); `=off` restores Ready at 1.0.
+      if (!REMOTE_SUBSTATE_ON && SUBSTATE_SIDE_TURN_LOWS.has(motionCmd & 0xffff)) {
+        armCmd = 0x0003;
+        armSpeed = 1.0;
+      }
+      const tgt = em.entityMap?.get?.(motionGuid >>> 0);
+      if (tgt) tgt._kindMotionLow = armCmd & 0xffff;
+    }
     // NETSYNC-2 (2026-10-07): mark whether this motion is a MoveTo envelope
     // BEFORE setMotion reads it — `vx` carries the MoveTo run rate and is 0
     // for an interpreted (type 0) state (src/session/messages/position.rs,
@@ -4255,9 +4290,9 @@ function _armMotion(scene3d, em, upd) {
     // A1 (2026-05-29): forward UpdateMotion.forward_speed (default 1.0).
     em.setMotion(
       motionGuid,
-      motionCmd,
+      armCmd,
       st,
-      +(upd.motionSpeed ?? 1.0)
+      armSpeed
     );
     // R3 moveto-4 (2026-10-08 follow-ups, `?remoteMoveToPhase`): a re-sent
     // MoveTo's walk/run hint must not replace the node motion the Rust

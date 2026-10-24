@@ -410,6 +410,26 @@ const TIER5 = [
   // 2026-10-23: the baked part frame is undone under the clip (windmill sails, 0x8093).
   { tier: 5, flag: "animSceneryUnbake", file: "tests/anim_scenery_unbake.test.mjs" },
   { tier: 5, flag: "creatureGaitRetail", file: "tests/creature_gait_retail.test.mjs" },
+  // 2026-10-24 — `?creatureGait=off` still turns the retail tempo off for player runs too.
+  { tier: 5, flag: "creatureGait=off", file: "tests/creature_gait_off.test.mjs" },
+  // 2026-10-24 — running animation: the local rig's retail interpreted speed
+  // (?retailRigSpeed; ?retailGaitTempo is pinned by creature_gait_retail above).
+  { tier: 5, flag: "retailRigSpeed", file: "tests/retail_rig_speed.test.mjs" },
+  { tier: 5, flag: "retailRigSpeed(redispatch)", file: "tests/rig_speed_redispatch.test.mjs" },
+  // 2026-10-24 — exact in-place posing from the bake's root frames
+  // (?inPlaceExact) + the locomotion-link classifier (?inPlaceLinks).
+  { tier: 5, flag: "inPlaceExact", file: "tests/in_place_exact.test.mjs" },
+  // 2026-10-24 — the hard-locked follow camera eases the boom back out after
+  // an occluder instead of snapping (?camBoomEase).
+  { tier: 5, flag: "camBoomEase", file: "tests/cam_boom_ease.test.mjs" },
+  // 2026-10-24 — backpedal start/stop links resolved the retail signed way (?signedLinks).
+  { tier: 5, flag: "signedLinks", file: "tests/signed_loco_links.test.mjs" },
+  // 2026-10-24 — the follow camera's boom swept against the terrain (?camTerrainSweep),
+  // the local locomotion set baked at rig commit (?locoPrewarm), and a remote's
+  // pure strafe / turn played as its substate (?remoteSubstate).
+  { tier: 5, flag: "camTerrainSweep", file: "tests/cam_terrain_sweep.test.mjs" },
+  { tier: 5, flag: "locoPrewarm", file: "tests/loco_prewarm.test.mjs" },
+  { tier: 5, flag: "remoteSubstate", file: "tests/remote_substate.test.mjs" },
   // 2026-10-08 — playhead parity: retail hook timing on the real EntityManager
   // (?hookFrameExit; also pins the end-of-tick hook queue the retired
   // test_hook_fire_queue.mjs replica covered), cycle restart behind a one-shot

@@ -12,6 +12,30 @@ use thiserror::Error;
 const MOTION_EPSILON: f32 = 1e-4;
 const MOTION_EPSILON_SQUARED: f32 = MOTION_EPSILON * MOTION_EPSILON;
 
+thread_local! {
+    static STANCE_KINEMATICS: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
+}
+
+/// LOCALSIM-2 (2026-10-24, running animation): `?stanceKinematics` — the local
+/// player's movement profile is resolved for its CURRENT style (the last
+/// server-confirmed stance), not the table's default style. Retail moves the
+/// body by the playing cycle's own root motion (`CPhysicsObj::
+/// UpdatePositionInternal` acclient.c:319989, `CSequence::update_internal`
+/// :340719), and every combat stance authors a slower walk than NonCombat's
+/// 2.6017 m/s (player table: HandCombat 1.304, Sword 1.364, Bow 1.154,
+/// Magic 1.215 …) — so in a combat stance the body walked and backpedalled
+/// about twice as fast as its legs. Default ON; `=off` restores the
+/// default-style profile.
+pub fn stance_kinematics_enabled() -> bool {
+    STANCE_KINEMATICS.with(|c| c.get())
+}
+
+/// Set the switch for this thread (wasm is single-threaded; each `cargo test`
+/// runs on its own thread).
+pub fn set_stance_kinematics(on: bool) {
+    STANCE_KINEMATICS.with(|c| c.set(on));
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlayerMotionTableSource {
     DirectProperty {
@@ -79,7 +103,41 @@ impl WorldState {
 
         let motion_table_id = motion_table_id_for_source(source);
 
-        self.motion_table_profile_from_source(source, None)
+        // LOCALSIM-2: the current style's cycles (see `stance_kinematics_enabled`),
+        // field by field falling back to the default style, so a style with no
+        // authored walk/run/turn cycle never loses a speed (a missing walk would
+        // otherwise fall through to the RUN velocity downstream).
+        let stance = if stance_kinematics_enabled() {
+            self.player.last_server_motion_style.map(|s| s as u32)
+        } else {
+            None
+        };
+        let default = self.motion_table_profile_from_source(source, None);
+        let resolved = match stance {
+            Some(style) => match (self.motion_table_profile_from_source(source, Some(style)), default) {
+                (Some(mut r), Some(d)) => {
+                    let p = &mut r.movement_profile;
+                    let d = &d.movement_profile;
+                    if p.walk_forward.and_then(|k| k.velocity).is_none() {
+                        p.walk_forward = d.walk_forward;
+                    }
+                    if p.run_forward.and_then(|k| k.velocity).is_none() {
+                        p.run_forward = d.run_forward;
+                    }
+                    if p.turn_left.is_none() {
+                        p.turn_left = d.turn_left;
+                    }
+                    if p.turn_right.is_none() {
+                        p.turn_right = d.turn_right;
+                    }
+                    Some(r)
+                }
+                (None, d) => d,
+                (Some(r), None) => Some(r),
+            },
+            None => default,
+        };
+        resolved
             .ok_or(PlayerMotionTableLookupError::MotionTableMissingKinematics { motion_table_id })
     }
 

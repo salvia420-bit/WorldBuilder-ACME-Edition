@@ -1601,6 +1601,109 @@ const CREATURE_GAIT_RETAIL_ON = (() => {
   }
 })();
 
+// ?retailGaitTempo (2026-10-24, DEFAULT ON; `=off` escape) — EVERY rig plays
+// its locomotion cycle at framerate x speed_mod, retail `add_motion`
+// (acclient.c:337431-337474: the same speed_mod scales the cycle framerate and
+// the root motion that moves the body). `?creatureGait` already did this for
+// non-player rigs; player rigs (local and remote) stayed on the velScale ratio
+// stateGroundSpeed / authored speed, whose numerator only CLAMPS by the run
+// rate (lib.rs state_ground_speed_inner), so every player run played at 1.0
+// under a 4 x R body — at ACE's cap R = 4.5 the feet slid at 82 % of body speed
+// (live, 1070, 2026-10-24). With this on, a player's tempo is its interpreted
+// speed: the wire forward_speed for remotes, the dispatchers' retail speed for
+// the local rig (scene3d/motion/retail_rig_speed.js).
+const RETAIL_GAIT_TEMPO_ON = (() => {
+  try {
+    if (typeof window === "undefined" || !window.location) return true;
+    const v = new URLSearchParams(window.location.search).get("retailGaitTempo")?.toLowerCase();
+    return !(v === "off" || v === "0" || v === "false");
+  } catch (_) {
+    return true;
+  }
+})();
+
+// ?moveToPhaseParked (2026-10-24, DEFAULT ON; `=off` escape) — REMOTE-3: a
+// remote MoveTo node edge for a rig still spawning is parked and replayed at
+// commit, and a MoveTo hint that matches the live node no longer leaves the
+// envelope's x1.0 speed on the rig (see applyRemoteMoveToPhase /
+// reapplyRemoteMoveToPhase).
+const MOVETO_PHASE_PARKED_ON = (() => {
+  try {
+    if (typeof window === "undefined" || !window.location) return true;
+    const v = new URLSearchParams(window.location.search).get("moveToPhaseParked")?.toLowerCase();
+    return !(v === "off" || v === "0" || v === "false");
+  } catch (_) {
+    return true;
+  }
+})();
+
+// ?inPlaceLinks (2026-10-24, DEFAULT ON; `=off` escape) — a LOCOMOTION link
+// (start / stop / walk<->run / turn / sidestep / jump take-off and landing:
+// both ends a locomotion substate) is posed in place like the cycle around it.
+// The bake folds the link's root motion into its parts, but the body under it
+// is moved by the integrator / server / spine, so drawn raw the model surged
+// up to 0.85 m ahead on a run start, 0.79 m on a stop and 2.2-2.5 m on a
+// walk<->run toggle, then popped back when the cycle took over (ANIM-2 /
+// OPENAC-2, 2026-10-24). Retail moves the OBJECT by the link's root motion and
+// draws the raw parts (CSequence::update_internal acclient.c:340719 ->
+// UpdatePositionInternal :319989). Actions (swings, emotes, deaths, doors)
+// keep their folded motion.
+const IN_PLACE_LINKS_ON = (() => {
+  try {
+    if (typeof window === "undefined" || !window.location) return true;
+    const v = new URLSearchParams(window.location.search).get("inPlaceLinks")?.toLowerCase();
+    return !(v === "off" || v === "0" || v === "false");
+  } catch (_) {
+    return true;
+  }
+})();
+// ?signedLinks (2026-10-24, DEFAULT ON; `=off` escape) — ANIM-4: a locomotion
+// transition into or out of a NEGATIVE-speed motion (backpedal = WalkForward at
+// -0.65 x R, a left strafe / turn) resolves its links the retail way:
+// `CMotionTable::get_link` takes the reversed pair when either speed is
+// negative (acclient.c:337585) and GetObjectSequence's substate branch
+// (:337788-337810) plays it at the signed speed, or two-hops through Ready
+// when the signs differ. A backpedal now starts with Walk→Ready played
+// backwards and stops with Ready→Walk played backwards; it used to play the
+// FORWARD start/stop step (a step forward, then a pop). Needs the pkg's
+// `fetchMotionLinkKeyframes` signed args (2026-10-24); without them no link.
+const SIGNED_LINKS_ON = (() => {
+  try {
+    if (typeof window === "undefined" || !window.location) return true;
+    const v = new URLSearchParams(window.location.search).get("signedLinks")?.toLowerCase();
+    return !(v === "off" || v === "0" || v === "false");
+  } catch (_) {
+    return true;
+  }
+})();
+
+// ?locoPrewarm (2026-10-24, DEFAULT ON; `=off` escape) — bake the local
+// player's locomotion cycles and start/stop/gait links (signed backpedal pair
+// included) for its stance as soon as its rig commits and on every stance
+// change. The first W after login otherwise waited on the async run-cycle
+// bake while the body already ran: live on the 1070 (on-screen, 2026-10-24)
+// the rig stood in the idle pose for ~35 frames at 18 m/s. Retail loads the
+// sequence synchronously and never shows that slide.
+const LOCO_PREWARM_ON = (() => {
+  try {
+    if (typeof window === "undefined" || !window.location) return true;
+    const v = new URLSearchParams(window.location.search).get("locoPrewarm")?.toLowerCase();
+    return !(v === "off" || v === "0" || v === "false");
+  } catch (_) {
+    return true;
+  }
+})();
+
+// Low-16 substates a locomotion link joins: Ready, WalkForward, WalkBackwards,
+// RunForward, TurnRight/Left, SideStepRight/Left, Falling.
+const LOCO_LINK_LOWS = new Set([0x0003, 0x0005, 0x0006, 0x0007, 0x000d, 0x000e, 0x000f, 0x0010, 0x0015]);
+/** A link whose both ends are locomotion substates (or "no motion yet"). */
+export function isLocomotionLink(fromCmd, toCmd) {
+  const f = (fromCmd >>> 0) & 0xffff;
+  const t = (toCmd >>> 0) & 0xffff;
+  return (f === 0 || LOCO_LINK_LOWS.has(f)) && LOCO_LINK_LOWS.has(t);
+}
+
 // A5-P2 (unification survey 2026-06-11) — `?tweenClock` (DEFAULT ON since
 // 2026-10-19, ahead of its 1070 eye test; `=off|0|false|no|wall` keeps the
 // legacy wall clock; `=dt`, the old opt-in token, still reads on).
@@ -5783,6 +5886,10 @@ export class EntityManager {
     if (this._spawnMotionStash?.has(guid)) {
       try { this._replaySpawnMotions(guid); } catch (_) { /* replay is best-effort */ }
     }
+    // ?locoPrewarm: the local player's run/walk/strafe/turn clips + links.
+    if (this._isLocalPlayerGuid(guid >>> 0)) {
+      try { this._prewarmLocalLocomotion(inst); } catch (_) { /* warm is best-effort */ }
+    }
     // (2026-07-06) A corpse CreateObject (ODF Corpse bit) arrives right after a
     // creature's Dead motion + delete. Correlate it to the collapsing creature
     // so the corpse stays hidden until the death animation finishes and reveals
@@ -7016,7 +7123,20 @@ export class EntityManager {
     const g = guid >>> 0;
     if (this._isLocalPlayerGuid(g)) return;
     const inst = this.entityMap.get(g);
-    if (!inst) return;
+    if (!inst) {
+      // REMOTE-3a (2026-10-24, `?moveToPhaseParked`): an edge for a rig that
+      // is not built yet — a creature created mid-chase (portal, login, a
+      // mob running into view) has its mover begun inside the create and its
+      // node edges published before the async rig commits — used to be
+      // dropped, so the rig ran its whole approach in the idle pose. Park
+      // the latest edge (retail queues netblobs for not-yet-created objects,
+      // CObjectMaint::QueueBlobForObject acclient.c:310848) and replay it at
+      // spawn commit (`_drainPreCreate`).
+      if (MOVETO_PHASE_PARKED_ON && this._preCreateBufferOn) {
+        this._preCreate.enqueue(g, "moveToPhase", { motion: motion >>> 0, speed: +speed }, { dedupeKind: true });
+      }
+      return;
+    }
     const plan = planRemoteMoveToPhase(
       { phase: inst._moveToPhase ?? 0, seq: inst._moveToPhaseSeq ?? 0 },
       motion,
@@ -7058,7 +7178,19 @@ export class EntityManager {
     inst._moveToPhaseSeq = inst._kindMotionSeq | 0;
     if (typeof inst._deathAt === "number") return;
     const cmd = remoteMoveToHintReapply(inst._moveToPhase, hintCmd);
-    if (cmd) this._playRemoteMoveToPhase(inst, g, cmd);
+    if (cmd) {
+      this._playRemoteMoveToPhase(inst, g, cmd);
+    } else if (MOVETO_PHASE_PARKED_ON) {
+      // REMOTE-3b (2026-10-24): the hint matched the live node, so nothing is
+      // re-played — but the hint's own setMotion just stamped the envelope's
+      // speed (1.0) over the node's (a charge runs at 1.5 x its run rate),
+      // and nothing restored it until the next node edge: the chase ran its
+      // legs at x1.0 under a full-speed body. The node owns the tempo
+      // (retail MoveToManager::_DoMotion acclient.c:344753 -> add_motion).
+      const sp = inst._moveToPhaseSpeed ?? 1.0;
+      inst._motionSpeed = sp;
+      if (inst._forwardCommand) inst._forwardSpeed = sp;
+    }
   }
 
   /** R3 moveto-4 — play a node motion (stance 0 = keep the rig's stance)
@@ -7979,6 +8111,9 @@ export class EntityManager {
         // spawnz (`?remoteSettle`): where the wasm body stood when its last
         // row arrived before the rig existed (e.g. landed from a settle fall).
         this.applyManagedPose(g, ev.data.x, ev.data.y, ev.data.z);
+      } else if (ev.kind === "moveToPhase") {
+        // REMOTE-3a: the node motion published before this rig existed.
+        this.applyRemoteMoveToPhase(g, ev.data.motion, ev.data.speed);
       } else if (!this._preCreateUnknownKindWarned) {
         this._preCreateUnknownKindWarned = true;
         // eslint-disable-next-line no-console
@@ -11317,8 +11452,11 @@ export class EntityManager {
     // constant by the table's 2.6017 and played the walk at 1.199×.
     // `?creatureGait=off` restores it.
     const walkCycle = ((inst?._forwardCommand >>> 0) === 0x45000005);
-    const serverMover = CREATURE_GAIT_RETAIL_ON
-      && (walkCycle || (((inst?.guid >>> 0) & 0xF0000000) >>> 0) !== 0x50000000);
+    // ?retailGaitTempo: every rig, players included, plays at its speed_mod.
+    // `?creatureGait=off` stays the escape for all of it (the old velScale
+    // tempo for everyone, url-flags.md).
+    const serverMover = CREATURE_GAIT_RETAIL_ON && (RETAIL_GAIT_TEMPO_ON
+      || walkCycle || (((inst?.guid >>> 0) & 0xF0000000) >>> 0) !== 0x50000000);
     if (base > 0 && !serverMover) {
       let actual = this._resolveStateGroundSpeed(inst);
       const fromGetter = Number.isFinite(actual) && actual > 0;
@@ -12062,6 +12200,8 @@ export class EntityManager {
     // missile-anim: the OLD substate's speed, for hop 1 of a two-hop substate
     // change (retail add_motion(link, substate_mod), acclient.c:337803).
     const prevSubstateSpeed = this._unifiedOneShotSpeed(inst);
+    // ANIM-4: the outgoing cycle's SIGNED speed (sign = reverse playback).
+    const prevSignedSpeed = prevSubstateSpeed * (inst._motionSpeedSign ?? 1);
     {
       const c0 = classifyMotionCommand(motionCommand >>> 0);
       // A Reload is a substate (`?missileSubstate`): its speed (ACE GetAnimSpeed)
@@ -12649,9 +12789,14 @@ export class EntityManager {
       // missed and the wasm fell back to the Ready CYCLE, i.e. no recoil.
       const linkTo = (isSubstateCastGesture(fromMotion) && cmd === CMD_LOW_READY)
         ? CMD_READY_FULL : cmd;
+      const toSignedSpeed = (inst._motionSpeed ?? 1.0) * (inst._motionSpeedSign ?? 1);
       if (this._missileSubstateOn && !styleLinksP &&
           (isMissileSubstateCommand(cmd) || isMissileSubstateCommand(fromMotion))) {
         hopsP = this._fetchSubstateLinks(inst, setupId, mtableId, fromMotion, linkTo, stance, prevSubstateSpeed);
+      } else if (SIGNED_LINKS_ON && (prevSignedSpeed < 0 || toSignedSpeed < 0) &&
+                 isLocomotionLink(fromMotion, linkTo)) {
+        hopsP = this._fetchSignedLocoLinks(inst, setupId, mtableId, fromMotion, prevSignedSpeed,
+          linkTo, toSignedSpeed, stance);
       } else {
         linkP = this._fetchLinkEntry(inst, setupId, mtableId, fromMotion, linkTo, stance);
       }
@@ -12818,6 +12963,83 @@ export class EntityManager {
   // = the command's own speed); empty when nothing is authored. Retail appends
   // all of it as ONE pending_animations node keyed by the command, so the caller
   // queues every hop under `to`, the second as a `continuation`.
+  // ?locoPrewarm: fire-and-forget bakes of the local rig's locomotion cycles and
+  // the links setMotion will ask for, keyed exactly as `_setMotionImpl` keys
+  // them (cycle: AnimationCache.get with the outfit substitutions; links:
+  // getLink, incl. the signed backpedal pair `_fetchSignedLocoLinks` resolves).
+  // Once per (setup, table, stance).
+  _prewarmLocalLocomotion(inst, stanceIn = undefined) {
+    if (!LOCO_PREWARM_ON || !inst?.meta || !this.animationCache) return;
+    const fetchKeyframes = this.wasmExports?.fetchEntityAnimationKeyframes;
+    if (typeof fetchKeyframes !== "function") return;
+    const setupId = (inst.meta.modelId ?? inst.meta.setupId ?? 0) >>> 0;
+    const mtableId = (inst.meta.mtableId ?? 0) >>> 0;
+    if (!setupId) return;
+    const st0 = (stanceIn ?? inst.currentStance ?? inst.lastStance ?? 0x8000003d) >>> 0;
+    const stance = (((st0 & 0xffff) || 0x3d) | 0x80000000) >>> 0;
+    const key = `${setupId}:${mtableId}:${stance}`;
+    if (inst._locoPrewarmKey === key) return;
+    inst._locoPrewarmKey = key;
+    const opts = {
+      modelChanges: inst.meta.modelChanges ?? new Uint32Array(0),
+      textureChanges: inst.meta.textureChanges ?? new Uint32Array(0),
+      paletteId: (inst.meta.paletteId ?? 0) >>> 0,
+      paletteSubsFlat: inst.meta.subPalettes ?? new Uint32Array(0),
+    };
+    const READY = CMD_READY_FULL, WALK = 0x45000005, RUN = 0x44000007;
+    for (const cmd of [RUN, WALK, 0x6500000f, 0x6500000d, 0x40000015]) {
+      Promise.resolve()
+        .then(() => this.animationCache.get(setupId, mtableId, cmd, stance, fetchKeyframes, opts))
+        .catch(() => {});
+    }
+    const links = [
+      [READY, RUN], [RUN, READY], [READY, WALK], [WALK, READY], [WALK, RUN], [RUN, WALK],
+    ];
+    for (const [a, b] of links) {
+      this._fetchLinkEntry(inst, setupId, mtableId, a, b, stance).catch(() => {});
+    }
+    if (SIGNED_LINKS_ON) {
+      // Backpedal start (Ready→Walk at a negative speed) and stop (Walk at a
+      // negative speed → Ready), as `_fetchSignedLocoLinks` asks for them.
+      this._fetchLinkEntry(inst, setupId, mtableId, READY, WALK, stance,
+        { fromSpeed: 1.0, toSpeed: -1.0, reverse: true }).catch(() => {});
+      this._fetchLinkEntry(inst, setupId, mtableId, WALK, READY, stance,
+        { fromSpeed: -1.0, toSpeed: 1.0, reverse: true }).catch(() => {});
+    }
+  }
+
+  // ANIM-4 (?signedLinks): the retail substate-branch link plan for a
+  // locomotion change involving a negative speed (GetObjectSequence,
+  // acclient.c:337779-337810): the direct signed link when both speeds share a
+  // sign; otherwise link(from → Ready) at the OLD speed then link(Ready → to) at
+  // the new one; with hop 2 missing, hop 1 alone at `s = (fs >= 0 || ts <= 0) ?
+  // ts : -ts`. Each `get_link` takes the reversed pair when a speed is negative
+  // (:337585); a link played at a negative speed is baked reversed and played
+  // forward at |speed|. Resolves to `[{ entry, fromCmd, speed, continuation }]`.
+  async _fetchSignedLocoLinks(inst, setupId, mtableId, fromCmd, fs, toCmd, ts, stance) {
+    const from = fromCmd >>> 0;
+    const to = toCmd >>> 0;
+    const get = (a, sa, b, sb, rev) =>
+      this._fetchLinkEntry(inst, setupId, mtableId, a, b, stance, { fromSpeed: sa, toSpeed: sb, reverse: rev });
+    if ((fs >= 0) === (ts >= 0)) {
+      const direct = await get(from, fs, to, ts, ts < 0);
+      if (direct) return [{ entry: direct, fromCmd: from, speed: Math.abs(ts), continuation: false }];
+    }
+    const fromReady = (from & 0xffff) === CMD_LOW_READY;
+    const hop2 = (to & 0xffff) === CMD_LOW_READY ? null : await get(CMD_READY_FULL, 1.0, to, ts, ts < 0);
+    if (hop2) {
+      const hop1 = fromReady ? null : await get(from, fs, CMD_READY_FULL, 1.0, fs < 0);
+      const out = [];
+      if (hop1) out.push({ entry: hop1, fromCmd: from, speed: Math.abs(fs), continuation: false });
+      out.push({ entry: hop2, fromCmd: CMD_READY_FULL, speed: Math.abs(ts), continuation: !!hop1 });
+      return out;
+    }
+    if (fromReady) return [];
+    const sp = (fs >= 0 || ts <= 0) ? ts : -ts;
+    const hop1 = await get(from, fs, CMD_READY_FULL, 1.0, sp < 0);
+    return hop1 ? [{ entry: hop1, fromCmd: from, speed: Math.abs(sp), continuation: false }] : [];
+  }
+
   async _fetchSubstateLinks(inst, setupId, mtableId, fromCmd, toCmd, stance, prevSpeed) {
     const from = fromCmd >>> 0;
     const to = toCmd >>> 0;
@@ -12888,6 +13110,10 @@ export class EntityManager {
     // detect whether the stance actually changed before we stamp it.
     const prevStance = (inst.currentStance ?? inst.lastStance ?? 0) >>> 0;
     const changed = (prevStance & 0xFFFF) !== (stance & 0xFFFF);
+    // ?locoPrewarm: the new stance's locomotion clips, ahead of the next key.
+    if (changed) {
+      try { this._prewarmLocalLocomotion(inst, stance); } catch (_) { /* best-effort */ }
+    }
     // Determine whether the rig is in an active walk/run locomotion clip
     // owned by the predictor. If so, only stamp the stance — the predictor
     // re-issues Run/Walk with the new stance on its next input tick
@@ -14566,7 +14792,7 @@ export class EntityManager {
   // animation cache. Returns the cache entry, or null when no link exists, the
   // bake failed, or the entity was removed meanwhile. No side effects on the
   // playhead.
-  async _fetchLinkEntry(inst, setupId, mtableId, fromCmd, toCmd, stance) {
+  async _fetchLinkEntry(inst, setupId, mtableId, fromCmd, toCmd, stance, signed = null) {
     // cmotiontable-3 (2026-10-08, `?linkOnlyBake=off` escape): a link needs
     // only its keyframes and hooks. `fetchMotionLinkKeyframes` bakes exactly
     // that (no rig meshes, no cycle bake on a miss; a miss is cached as null).
@@ -14575,6 +14801,8 @@ export class EntityManager {
     const linkOnly = typeof fetchLink === "function";
     const fetchKeyframes = this.wasmExports?.fetchEntityAnimationKeyframes;
     if (!linkOnly && typeof fetchKeyframes !== "function") return null;
+    // ANIM-4: a signed / reversed link exists only on the link-only export.
+    if (signed && !linkOnly) return null;
     // Bug 15 (2026-10-07): a swing / cast link is player-visible combat
     // feedback, so its bake rides the urgent fetch lane (BUG-3
     // `?appearanceUrgent`) instead of queueing behind world streaming; after
@@ -14585,7 +14813,7 @@ export class EntityManager {
     let entry;
     try {
       entry = linkOnly
-        ? await this.animationCache.getLink(setupId, mtableId, toCmd, stance, fromCmd, fetchLink, { urgent })
+        ? await this.animationCache.getLink(setupId, mtableId, toCmd, stance, fromCmd, fetchLink, { urgent, ...(signed || {}) })
         : await this.animationCache.get(
           setupId,
           mtableId,
@@ -14662,6 +14890,8 @@ export class EntityManager {
     // Keep `desc` for the per-frame poser (it owns the keyframe buffer).
     const rec = { seq, desc: d, clearOnDone: true, hooks: this._hookTimeline(entry), lastHookTime: -1,
       speed: sp };
+    // ?inPlaceLinks: a locomotion transition plays in place over the moving body.
+    if (IN_PLACE_LINKS_ON && isLocomotionLink(fromCmd, toCmd)) rec.inPlace = true;
     // `numAnims` is the link's AnimData segment count — retail's `num_anims`
     // is exactly that (CMotionTable fills it in as it appends nodes).
     this._enqueueUnifiedOneShot(inst, toCmd >>> 0, (d.segmentCounts?.length || 1), rec, continuation);

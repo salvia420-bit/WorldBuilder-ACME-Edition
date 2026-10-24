@@ -300,6 +300,68 @@ fn resolve_player_motion_table_profile_reads_run_speed_from_required_motion_kine
     );
 }
 
+/// LOCALSIM-2 (2026-10-24): the local profile follows the CURRENT stance —
+/// a combat stance's own (slower) walk — and a stance with no authored walk
+/// cycle falls back to the default style's, never to the run velocity.
+#[test]
+fn resolve_player_motion_table_profile_uses_the_current_stance_walk() {
+    let motion_table_id = 0x0900_0001;
+    let mut asset = test_motion_kinematics_asset(motion_table_id);
+    let sword = MotionStance::SwordCombat as u32;
+    asset
+        .motion_tables
+        .get_mut(&motion_table_id)
+        .expect("table")
+        .insert_cycle_kinematics(
+            sword,
+            MotionTable::WALK_FORWARD_COMMAND,
+            MotionCommandKinematics { velocity: Some(Vector3::new(0.5, 0.0, 0.0)), omega: None },
+        );
+
+    let mut state = WorldState::synthetic();
+    let player_guid = Guid(0x5000_0004);
+    state.set_motion_kinematics(asset);
+    state.player.guid = player_guid;
+    let mut player = Entity::new(player_guid, "Player".to_string(), WorldPosition::default());
+    player.properties.set_did_prop(
+        holtburger_common::properties::PropertyDataId::MotionTable,
+        Guid(motion_table_id),
+    );
+    state.entities.insert(player);
+
+    let walk = |state: &WorldState| {
+        state
+            .resolve_player_motion_table_profile()
+            .expect("profile")
+            .movement_profile
+            .walk_forward
+            .and_then(|e| e.velocity)
+    };
+    let run = |state: &WorldState| {
+        state
+            .resolve_player_motion_table_profile()
+            .expect("profile")
+            .movement_profile
+            .run_forward
+            .and_then(|e| e.velocity)
+    };
+
+    // Peace: the default style's walk.
+    assert_eq!(walk(&state), Some(Vector3::new(1.0, 0.0, 0.0)));
+    // Sword stance: its own walk; the run (not authored for the style) falls back.
+    state.player.last_server_motion_style = Some(MotionStance::SwordCombat);
+    assert_eq!(walk(&state), Some(Vector3::new(0.5, 0.0, 0.0)));
+    assert_eq!(run(&state), Some(Vector3::new(2.5, 0.0, 0.0)));
+    // A style with no walk cycle at all falls back to the default walk.
+    state.player.last_server_motion_style = Some(MotionStance::BowCombat);
+    assert_eq!(walk(&state), Some(Vector3::new(1.0, 0.0, 0.0)));
+    // `?stanceKinematics=off`: the default style regardless of stance.
+    crate::state::motion_resolution::set_stance_kinematics(false);
+    state.player.last_server_motion_style = Some(MotionStance::SwordCombat);
+    assert_eq!(walk(&state), Some(Vector3::new(1.0, 0.0, 0.0)));
+    crate::state::motion_resolution::set_stance_kinematics(true);
+}
+
 #[test]
 fn resolve_player_motion_table_profile_reports_missing_setup_default_motion_table() {
     let setup_model_id = 0x0200_0011;

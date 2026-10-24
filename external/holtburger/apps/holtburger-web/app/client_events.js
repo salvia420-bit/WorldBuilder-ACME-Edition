@@ -35,6 +35,7 @@ import { characterErrorInfo, retailCharErrorsEnabled, chargenErrorInfo, CHARGEN_
 import { retailStatusCmdsEnabled } from "./slash_commands.js";
 import { routePopupString } from "./popup_string.js";
 import { jumpRefusalLine } from "./jump_refusal_text.js";
+import { localRigSpeed, localRunRate } from "../scene3d/motion/retail_rig_speed.js";
 import { maybeQueryHouseAtLogin } from "./house_query_login.js";
 import { showPortalStormNotice } from "./portal_storm_notice.js";
 import { acString, loadStringTable } from "../ui/ac_strings.js";
@@ -1823,6 +1824,10 @@ export function dispatchClientEvent(evt, D) {
               forwardCmd = turn > 0 ? 0x6500000d : 0x6500000e;
               fwdSpeed = run ? 1.5 : 1.0;
             }
+            // 2026-10-24 — retail interpreted speed (adjust_motion +
+            // apply_run_to_command): Run at the run rate, the body's speed_mod.
+            // `?retailRigSpeed=off` keeps the raw 1.0.
+            fwdSpeed = localRigSpeed(forwardCmd >>> 0, fwdSpeed, run, localRunRate(em.wasmExports));
             em.setMotion(localGuid >>> 0, forwardCmd >>> 0, stance, fwdSpeed);
           }
           // Row 13 (setSidestepLayer replacement): always

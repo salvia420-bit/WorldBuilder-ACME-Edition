@@ -33,6 +33,7 @@ import {
   planRemoteMoveToPhase,
   remoteMoveToHintReapply,
 } from "../scene3d/remote_moveto_phase.js";
+import { createPreCreateBuffer } from "../scene3d/pre_create_buffer.js";
 
 const src = (rel) => readFileSync(new URL(`../${rel}`, import.meta.url), "utf8");
 
@@ -100,7 +101,7 @@ test("hint reapply: a re-sent MoveTo hint never replaces the node motion", () =>
 
 // ── EntityManager wiring, spliced from entities.js against a stub ───────────
 const ENT = src("scene3d/entities.js");
-function makeManager({ on = true } = {}) {
+function makeManager({ on = true, parked = true } = {}) {
   const start = ENT.indexOf("  noteRemoteMoveToHint(guid, isMoveTo) {");
   const end = ENT.indexOf("  setPose(guid, x, y, z, qw, qx, qy, qz) {", start);
   assert.ok(start > 0 && end > start, "noteRemoteMoveToHint … setPose block not found in entities.js");
@@ -110,19 +111,31 @@ function makeManager({ on = true } = {}) {
   }
   const Cls = new Function(
     "REMOTE_MOVETO_PHASE_ON",
+    "MOVETO_PHASE_PARKED_ON",
     "planRemoteMoveToPhase",
     "remoteMoveToHintReapply",
+    "createPreCreateBuffer",
     `return class StubEntityManager {
-      constructor() { this.entityMap = new Map(); this.played = []; this.localGuid = 0x50000001; }
+      constructor() {
+        this.entityMap = new Map(); this.played = []; this.localGuid = 0x50000001;
+        this._preCreateBufferOn = true; this._preCreate = createPreCreateBuffer();
+      }
       _isLocalPlayerGuid(g) { return (g >>> 0) === this.localGuid; }
       setMotion(g, cmd, stance, speed) {
         const inst = this.entityMap.get(g >>> 0);
         this.played.push({ g: g >>> 0, cmd: cmd >>> 0, stance, speed, gateArmable: inst ? inst._motionFromMoveTo === true : false });
-        if (inst) inst.lastMotionCommand = cmd >>> 0;
+        if (inst) {
+          inst.lastMotionCommand = cmd >>> 0;
+          // entities.js stashes the speed + forward command the same way.
+          inst._motionSpeed = Math.abs(+speed || 1);
+          const low = cmd & 0xffff;
+          inst._forwardCommand = low === 0x0005 || low === 0x0007 ? cmd >>> 0 : 0;
+          inst._forwardSpeed = inst._forwardCommand ? inst._motionSpeed : 0;
+        }
       }
       ${body}
     };`,
-  )(on, planRemoteMoveToPhase, remoteMoveToHintReapply);
+  )(on, parked, planRemoteMoveToPhase, remoteMoveToHintReapply, createPreCreateBuffer);
   return new Cls();
 }
 const MOB = 0x80001234;
@@ -223,6 +236,46 @@ test("local player, dead rigs, unknown rigs and ?remoteMoveToPhase=off are ignor
   assert.equal(off.played.length, 0);
   off.noteRemoteMoveToHint(MOB, true);
   assert.equal(inst._motionFromMoveTo, true, "flag off keeps the COL-20 gate");
+});
+
+// REMOTE-3a (2026-10-24, ?moveToPhaseParked): a creature created mid-chase has
+// its node edges published before its async rig commits — they used to be
+// dropped and the rig ran the whole approach in its idle pose.
+test("an edge for a rig still spawning is parked and replays at commit", () => {
+  const em = makeManager();
+  em.applyRemoteMoveToPhase(MOB, MOTION_TURN_RIGHT, 2.25);
+  em.applyRemoteMoveToPhase(MOB, MOTION_RUN_FORWARD, 2.7);
+  assert.equal(em.played.length, 0, "nothing plays before the rig exists");
+  const parked = em._preCreate.takeFor(MOB);
+  assert.equal(parked.length, 1, "only the LATEST edge is kept");
+  assert.deepEqual(parked[0], { kind: "moveToPhase", data: { motion: MOTION_RUN_FORWARD >>> 0, speed: 2.7 } });
+  // _drainPreCreate's replay at spawn commit:
+  em.entityMap.set(MOB, {});
+  em.applyRemoteMoveToPhase(MOB, parked[0].data.motion, parked[0].data.speed);
+  assert.equal(last(em), MOTION_RUN_FORWARD);
+  assert.equal(em.played.at(-1).speed, 2.7);
+  const off = makeManager({ parked: false });
+  off.applyRemoteMoveToPhase(MOB, MOTION_RUN_FORWARD, 2.7);
+  assert.equal(off._preCreate.size(), 0, "?moveToPhaseParked=off drops it as before");
+});
+
+// REMOTE-3b: the MoveTo envelope's hint setMotion stamps speed 1.0; when it
+// matches the live node nothing re-plays, so the node speed must be restored.
+test("a hint that matches the live node keeps the node's speed", () => {
+  const em = makeManager();
+  const inst = {};
+  em.entityMap.set(MOB, inst);
+  em.applyRemoteMoveToPhase(MOB, MOTION_RUN_FORWARD, 2.7);
+  assert.equal(inst._motionSpeed, 2.7);
+  kindMotion(em, 0x0007, { moveTo: true }); // hint run at 1.0, same as the node
+  assert.equal(inst._motionSpeed, 2.7, "node speed restored after the hint");
+  assert.equal(inst._forwardSpeed, 2.7);
+  const off = makeManager({ parked: false });
+  const i2 = {};
+  off.entityMap.set(MOB, i2);
+  off.applyRemoteMoveToPhase(MOB, MOTION_RUN_FORWARD, 2.7);
+  kindMotion(off, 0x0007, { moveTo: true });
+  assert.equal(i2._motionSpeed, 1, "=off keeps the old x1.0");
 });
 
 test("plumbing: wasm kind 67 → client_events.js → applyRemoteMoveToPhase; loop.js re-asserts after the hint", async () => {

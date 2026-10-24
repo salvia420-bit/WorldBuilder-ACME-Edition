@@ -34,6 +34,62 @@ try {
     new URLSearchParams(globalThis.location.search).get("renderRootMotion") === "on";
 } catch (_) { /* non-browser (test) context — in-place default */ }
 
+// ?inPlaceExact (2026-10-24, DEFAULT ON; `=off` restores the mean-drift
+// subtraction below). The bake folds the clip's cumulative root motion (R, T)
+// into every part (lib.rs fold_root_motion_into_parts) and now also ships that
+// frame per keyframe (`desc.rootFrames`, [tx,ty,tz, qw,qx,qy,qz]). In place =
+// undo exactly it: part = R⁻¹·(p − T), quat = R⁻¹·q — retail draws the raw part
+// frames relative to the object (CPartArray::UpdateParts, acclient.c:326601)
+// and moves the OBJECT by the root motion. The mean-of-all-parts subtraction
+// also removed the authored body motion: on the human run (0x03000002) the
+// planted foot sat 9-14 cm off the ground (authored 1-4 cm) and the 11 cm
+// pelvis bob shrank to 3.6 cm, phase-inverted (live 1070 + DAT, 2026-10-24).
+let IN_PLACE_EXACT = true;
+try {
+  const v = new URLSearchParams(globalThis.location.search).get("inPlaceExact")?.toLowerCase();
+  IN_PLACE_EXACT = !(v === "off" || v === "0" || v === "false");
+} catch (_) { /* non-browser (test) context — exact default */ }
+/** Test seam. */
+export function _setInPlaceExactForTest(on) {
+  IN_PLACE_EXACT = !!on;
+}
+
+// The exact in-place pose for frame `f` from the folded root row. Returns
+// false when the descriptor carries no root frames (older wasm) so the caller
+// falls back to the mean-drift subtraction.
+function poseInPlaceExact(f, desc, partGroups, n) {
+  const rf = desc.rootFrames;
+  const { partFrames, partCount, numFrames } = desc;
+  if (!rf || rf.length !== numFrames * 7) return false;
+  const r = f * 7;
+  const tx = rf[r], ty = rf[r + 1], tz = rf[r + 2];
+  // R⁻¹ = conj(R) for a unit quaternion (w-first).
+  const iw = rf[r + 3], ix = -rf[r + 4], iy = -rf[r + 5], iz = -rf[r + 6];
+  const ident = Math.abs(ix) < 1e-7 && Math.abs(iy) < 1e-7 && Math.abs(iz) < 1e-7;
+  for (let p = 0; p < n; p += 1) {
+    const g = partGroups[p];
+    if (!g) continue;
+    const base = (f * partCount + p) * FLOATS_PER_PART_PER_FRAME;
+    let px = partFrames[base + 0] - tx, py = partFrames[base + 1] - ty, pz = partFrames[base + 2] - tz;
+    let qw = partFrames[base + 3], qx = partFrames[base + 4], qy = partFrames[base + 5], qz = partFrames[base + 6];
+    if (!ident) {
+      // v' = v + 2w(u×v) + 2u×(u×v), u = (ix, iy, iz), w = iw.
+      const cx = iy * pz - iz * py, cy = iz * px - ix * pz, cz = ix * py - iy * px;
+      const ccx = iy * cz - iz * cy, ccy = iz * cx - ix * cz, ccz = ix * cy - iy * cx;
+      px += 2 * (iw * cx + ccx); py += 2 * (iw * cy + ccy); pz += 2 * (iw * cz + ccz);
+      // q' = R⁻¹ ⊗ q (Hamilton, w-first).
+      const w2 = iw * qw - ix * qx - iy * qy - iz * qz;
+      const x2 = iw * qx + ix * qw + iy * qz - iz * qy;
+      const y2 = iw * qy - ix * qz + iy * qw + iz * qx;
+      const z2 = iw * qz + ix * qy - iy * qx + iz * qw;
+      qw = w2; qx = x2; qy = y2; qz = z2;
+    }
+    if (g.position && typeof g.position.set === "function") g.position.set(px, py, pz);
+    if (g.quaternion && typeof g.quaternion.set === "function") g.quaternion.set(qx, qy, qz, qw);
+  }
+  return true;
+}
+
 // Per-frame COMMON translation of all parts relative to frame 0, cached on the
 // descriptor. Locomotion cycles bake the forward stride into the skeleton
 // (every part moves ~uniformly forward per frame), while the body position is
@@ -77,6 +133,10 @@ export function poseRigAt(globalFrame, desc, partGroups, inPlace = false) {
   let f = globalFrame | 0;
   if (f < 0) f = 0;
   if (numFrames && f >= numFrames) f = numFrames - 1; // defensive clamp
+  if (inPlace && !RENDER_ROOT_MOTION && IN_PLACE_EXACT &&
+      poseInPlaceExact(f, desc, partGroups, Math.min(partCount, partGroups.length))) {
+    return;
+  }
   let rx, ry, rz;
   if (inPlace && !RENDER_ROOT_MOTION) {
     const d = inPlaceDisplacement(desc);
