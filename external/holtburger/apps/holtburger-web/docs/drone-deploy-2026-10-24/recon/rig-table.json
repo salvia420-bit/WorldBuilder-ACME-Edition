@@ -1,0 +1,1293 @@
+{
+ "source": "CharGen 0x0E000002 + each Setup + MotionTable (client_portal.dat, 2026-10-24)",
+ "rigs": [
+  {
+   "heritage": "Aluvian",
+   "sex": "Male",
+   "setup": "0x02000001",
+   "motionTable": "0x09000001",
+   "parts": 34,
+   "rightHandPart": 15,
+   "leftHandPart": 12,
+   "headPart": 16,
+   "profile": "humanoid",
+   "nonCombatReadyLinks": {
+    "Pickup": [
+     "0x03000247"
+    ],
+    "StoreInBackpack": [
+     "0x030003B7"
+    ],
+    "ReadState": [
+     "0x030003B9"
+    ],
+    "Cry": [
+     "0x030004F8"
+    ]
+   }
+  },
+  {
+   "heritage": "Aluvian",
+   "sex": "Female",
+   "setup": "0x0200004E",
+   "motionTable": "0x09000001",
+   "parts": 34,
+   "rightHandPart": 15,
+   "leftHandPart": 12,
+   "headPart": 16,
+   "profile": "humanoid",
+   "nonCombatReadyLinks": {
+    "Pickup": [
+     "0x03000247"
+    ],
+    "StoreInBackpack": [
+     "0x030003B7"
+    ],
+    "ReadState": [
+     "0x030003B9"
+    ],
+    "Cry": [
+     "0x030004F8"
+    ]
+   }
+  },
+  {
+   "heritage": "Gharu'ndim",
+   "sex": "Male",
+   "setup": "0x02000001",
+   "motionTable": "0x09000001",
+   "parts": 34,
+   "rightHandPart": 15,
+   "leftHandPart": 12,
+   "headPart": 16,
+   "profile": "humanoid",
+   "nonCombatReadyLinks": {
+    "Pickup": [
+     "0x03000247"
+    ],
+    "StoreInBackpack": [
+     "0x030003B7"
+    ],
+    "ReadState": [
+     "0x030003B9"
+    ],
+    "Cry": [
+     "0x030004F8"
+    ]
+   }
+  },
+  {
+   "heritage": "Gharu'ndim",
+   "sex": "Female",
+   "setup": "0x0200004E",
+   "motionTable": "0x09000001",
+   "parts": 34,
+   "rightHandPart": 15,
+   "leftHandPart": 12,
+   "headPart": 16,
+   "profile": "humanoid",
+   "nonCombatReadyLinks": {
+    "Pickup": [
+     "0x03000247"
+    ],
+    "StoreInBackpack": [
+     "0x030003B7"
+    ],
+    "ReadState": [
+     "0x030003B9"
+    ],
+    "Cry": [
+     "0x030004F8"
+    ]
+   }
+  },
+  {
+   "heritage": "Sho",
+   "sex": "Male",
+   "setup": "0x02000001",
+   "motionTable": "0x09000001",
+   "parts": 34,
+   "rightHandPart": 15,
+   "leftHandPart": 12,
+   "headPart": 16,
+   "profile": "humanoid",
+   "nonCombatReadyLinks": {
+    "Pickup": [
+     "0x03000247"
+    ],
+    "StoreInBackpack": [
+     "0x030003B7"
+    ],
+    "ReadState": [
+     "0x030003B9"
+    ],
+    "Cry": [
+     "0x030004F8"
+    ]
+   }
+  },
+  {
+   "heritage": "Sho",
+   "sex": "Female",
+   "setup": "0x0200004E",
+   "motionTable": "0x09000001",
+   "parts": 34,
+   "rightHandPart": 15,
+   "leftHandPart": 12,
+   "headPart": 16,
+   "profile": "humanoid",
+   "nonCombatReadyLinks": {
+    "Pickup": [
+     "0x03000247"
+    ],
+    "StoreInBackpack": [
+     "0x030003B7"
+    ],
+    "ReadState": [
+     "0x030003B9"
+    ],
+    "Cry": [
+     "0x030004F8"
+    ]
+   }
+  },
+  {
+   "heritage": "Viamontian",
+   "sex": "Male",
+   "setup": "0x02000001",
+   "motionTable": "0x09000001",
+   "parts": 34,
+   "rightHandPart": 15,
+   "leftHandPart": 12,
+   "headPart": 16,
+   "profile": "humanoid",
+   "nonCombatReadyLinks": {
+    "Pickup": [
+     "0x03000247"
+    ],
+    "StoreInBackpack": [
+     "0x030003B7"
+    ],
+    "ReadState": [
+     "0x030003B9"
+    ],
+    "Cry": [
+     "0x030004F8"
+    ]
+   }
+  },
+  {
+   "heritage": "Viamontian",
+   "sex": "Female",
+   "setup": "0x0200004E",
+   "motionTable": "0x09000001",
+   "parts": 34,
+   "rightHandPart": 15,
+   "leftHandPart": 12,
+   "headPart": 16,
+   "profile": "humanoid",
+   "nonCombatReadyLinks": {
+    "Pickup": [
+     "0x03000247"
+    ],
+    "StoreInBackpack": [
+     "0x030003B7"
+    ],
+    "ReadState": [
+     "0x030003B9"
+    ],
+    "Cry": [
+     "0x030004F8"
+    ]
+   }
+  },
+  {
+   "heritage": "Umbraen",
+   "sex": "Male",
+   "setup": "0x0200196F",
+   "motionTable": "0x090001FF",
+   "parts": 34,
+   "rightHandPart": 15,
+   "leftHandPart": 12,
+   "headPart": 16,
+   "profile": "humanoid",
+   "nonCombatReadyLinks": {
+    "Pickup": [
+     "0x03000247"
+    ],
+    "StoreInBackpack": [
+     "0x030003B7"
+    ],
+    "ReadState": [
+     "0x030003B9"
+    ],
+    "Cry": [
+     "0x030004F8"
+    ]
+   }
+  },
+  {
+   "heritage": "Umbraen",
+   "sex": "Female",
+   "setup": "0x02001970",
+   "motionTable": "0x090001FF",
+   "parts": 34,
+   "rightHandPart": 15,
+   "leftHandPart": 12,
+   "headPart": 16,
+   "profile": "humanoid",
+   "nonCombatReadyLinks": {
+    "Pickup": [
+     "0x03000247"
+    ],
+    "StoreInBackpack": [
+     "0x030003B7"
+    ],
+    "ReadState": [
+     "0x030003B9"
+    ],
+    "Cry": [
+     "0x030004F8"
+    ]
+   }
+  },
+  {
+   "heritage": "Gear",
+   "sex": "Male",
+   "setup": "0x02001907",
+   "motionTable": "0x0900020E",
+   "parts": 34,
+   "rightHandPart": 15,
+   "leftHandPart": 12,
+   "headPart": 16,
+   "profile": "humanoid",
+   "nonCombatReadyLinks": {
+    "Pickup": [
+     "0x03000247"
+    ],
+    "StoreInBackpack": [
+     "0x030003B7"
+    ],
+    "ReadState": [
+     "0x030003B9"
+    ],
+    "Cry": [
+     "0x030004F8"
+    ]
+   }
+  },
+  {
+   "heritage": "Gear",
+   "sex": "Female",
+   "setup": "0x020019ED",
+   "motionTable": "0x0900020C",
+   "parts": 34,
+   "rightHandPart": 15,
+   "leftHandPart": 12,
+   "headPart": 16,
+   "profile": "humanoid",
+   "nonCombatReadyLinks": {
+    "Pickup": [
+     "0x03000247"
+    ],
+    "StoreInBackpack": [
+     "0x030003B7"
+    ],
+    "ReadState": [
+     "0x030003B9"
+    ],
+    "Cry": [
+     "0x030004F8"
+    ]
+   }
+  },
+  {
+   "heritage": "Tumerok",
+   "sex": "Male",
+   "setup": "0x02001A1A",
+   "motionTable": "0x09000214",
+   "parts": 34,
+   "rightHandPart": 15,
+   "leftHandPart": 12,
+   "headPart": 16,
+   "profile": "humanoid",
+   "nonCombatReadyLinks": {
+    "Pickup": [
+     "0x03000247"
+    ],
+    "StoreInBackpack": [
+     "0x030003B7"
+    ],
+    "ReadState": [
+     "0x030003B9"
+    ],
+    "Cry": [
+     "0x030004F8"
+    ]
+   }
+  },
+  {
+   "heritage": "Tumerok",
+   "sex": "Female",
+   "setup": "0x02001A14",
+   "motionTable": "0x09000213",
+   "parts": 34,
+   "rightHandPart": 15,
+   "leftHandPart": 12,
+   "headPart": 16,
+   "profile": "humanoid",
+   "nonCombatReadyLinks": {
+    "Pickup": [
+     "0x03000247"
+    ],
+    "StoreInBackpack": [
+     "0x030003B7"
+    ],
+    "ReadState": [
+     "0x030003B9"
+    ],
+    "Cry": [
+     "0x030004F8"
+    ]
+   }
+  },
+  {
+   "heritage": "Lugian",
+   "sex": "Male",
+   "setup": "0x02001A18",
+   "motionTable": "0x09000216",
+   "parts": 34,
+   "rightHandPart": 15,
+   "leftHandPart": 12,
+   "headPart": 16,
+   "profile": "humanoid",
+   "nonCombatReadyLinks": {
+    "Pickup": [
+     "0x03000247"
+    ],
+    "StoreInBackpack": [
+     "0x030003B7"
+    ],
+    "ReadState": [
+     "0x030003B9"
+    ],
+    "Cry": [
+     "0x030004F8"
+    ]
+   }
+  },
+  {
+   "heritage": "Lugian",
+   "sex": "Female",
+   "setup": "0x02001A12",
+   "motionTable": "0x0900020E",
+   "parts": 34,
+   "rightHandPart": 15,
+   "leftHandPart": 12,
+   "headPart": 16,
+   "profile": "humanoid",
+   "nonCombatReadyLinks": {
+    "Pickup": [
+     "0x03000247"
+    ],
+    "StoreInBackpack": [
+     "0x030003B7"
+    ],
+    "ReadState": [
+     "0x030003B9"
+    ],
+    "Cry": [
+     "0x030004F8"
+    ]
+   }
+  },
+  {
+   "heritage": "Empyrean",
+   "sex": "Male",
+   "setup": "0x02001A16",
+   "motionTable": "0x0900020B",
+   "parts": 34,
+   "rightHandPart": 15,
+   "leftHandPart": 12,
+   "headPart": 16,
+   "profile": "humanoid",
+   "nonCombatReadyLinks": {
+    "Pickup": [
+     "0x03000C34",
+     "0x03000247"
+    ],
+    "StoreInBackpack": [
+     "0x03000C34",
+     "0x030003B7"
+    ],
+    "ReadState": [
+     "0x03000C34",
+     "0x030003B9"
+    ],
+    "Cry": [
+     "0x03000C34",
+     "0x030004F8",
+     "0x03000C34"
+    ]
+   }
+  },
+  {
+   "heritage": "Empyrean",
+   "sex": "Female",
+   "setup": "0x02001A10",
+   "motionTable": "0x0900020A",
+   "parts": 34,
+   "rightHandPart": 15,
+   "leftHandPart": 12,
+   "headPart": 16,
+   "profile": "humanoid",
+   "nonCombatReadyLinks": {
+    "Pickup": [
+     "0x03000C34",
+     "0x03000247"
+    ],
+    "StoreInBackpack": [
+     "0x03000C34",
+     "0x030003B7"
+    ],
+    "ReadState": [
+     "0x03000C34",
+     "0x030003B9"
+    ],
+    "Cry": [
+     "0x03000C34",
+     "0x030004F8",
+     "0x03000C34"
+    ]
+   }
+  },
+  {
+   "heritage": "Penumbraen",
+   "sex": "Male",
+   "setup": "0x0200196E",
+   "motionTable": "0x09000001",
+   "parts": 34,
+   "rightHandPart": 15,
+   "leftHandPart": 12,
+   "headPart": 16,
+   "profile": "humanoid",
+   "nonCombatReadyLinks": {
+    "Pickup": [
+     "0x03000247"
+    ],
+    "StoreInBackpack": [
+     "0x030003B7"
+    ],
+    "ReadState": [
+     "0x030003B9"
+    ],
+    "Cry": [
+     "0x030004F8"
+    ]
+   }
+  },
+  {
+   "heritage": "Penumbraen",
+   "sex": "Female",
+   "setup": "0x0200196D",
+   "motionTable": "0x09000001",
+   "parts": 34,
+   "rightHandPart": 15,
+   "leftHandPart": 12,
+   "headPart": 16,
+   "profile": "humanoid",
+   "nonCombatReadyLinks": {
+    "Pickup": [
+     "0x03000247"
+    ],
+    "StoreInBackpack": [
+     "0x030003B7"
+    ],
+    "ReadState": [
+     "0x030003B9"
+    ],
+    "Cry": [
+     "0x030004F8"
+    ]
+   }
+  },
+  {
+   "heritage": "Undead",
+   "sex": "Male",
+   "setup": "0x02001A0E",
+   "motionTable": "0x09000001",
+   "parts": 34,
+   "rightHandPart": 15,
+   "leftHandPart": 12,
+   "headPart": 16,
+   "profile": "humanoid",
+   "nonCombatReadyLinks": {
+    "Pickup": [
+     "0x03000247"
+    ],
+    "StoreInBackpack": [
+     "0x030003B7"
+    ],
+    "ReadState": [
+     "0x030003B9"
+    ],
+    "Cry": [
+     "0x030004F8"
+    ]
+   }
+  },
+  {
+   "heritage": "Undead",
+   "sex": "Female",
+   "setup": "0x02001A0C",
+   "motionTable": "0x09000001",
+   "parts": 34,
+   "rightHandPart": 15,
+   "leftHandPart": 12,
+   "headPart": 16,
+   "profile": "humanoid",
+   "nonCombatReadyLinks": {
+    "Pickup": [
+     "0x03000247"
+    ],
+    "StoreInBackpack": [
+     "0x030003B7"
+    ],
+    "ReadState": [
+     "0x030003B9"
+    ],
+    "Cry": [
+     "0x030004F8"
+    ]
+   }
+  },
+  {
+   "heritage": "Olthoi",
+   "sex": "Male",
+   "setup": "0x02001A21",
+   "motionTable": "0x09000206",
+   "parts": 25,
+   "rightHandPart": null,
+   "leftHandPart": null,
+   "headPart": null,
+   "profile": "no-hands",
+   "nonCombatReadyLinks": {
+    "Pickup": [
+     "0x03000047"
+    ],
+    "StoreInBackpack": [
+     "0x03000047"
+    ],
+    "ReadState": [
+     "0x03000047"
+    ],
+    "Cry": [
+     "0x03000047"
+    ]
+   }
+  },
+  {
+   "heritage": "Olthoi",
+   "sex": "Female",
+   "setup": "0x02001A21",
+   "motionTable": "0x09000206",
+   "parts": 25,
+   "rightHandPart": null,
+   "leftHandPart": null,
+   "headPart": null,
+   "profile": "no-hands",
+   "nonCombatReadyLinks": {
+    "Pickup": [
+     "0x03000047"
+    ],
+    "StoreInBackpack": [
+     "0x03000047"
+    ],
+    "ReadState": [
+     "0x03000047"
+    ],
+    "Cry": [
+     "0x03000047"
+    ]
+   }
+  },
+  {
+   "heritage": "OlthoiAcid",
+   "sex": "Male",
+   "setup": "0x02001A20",
+   "motionTable": "0x09000205",
+   "parts": 31,
+   "rightHandPart": null,
+   "leftHandPart": null,
+   "headPart": null,
+   "profile": "no-hands",
+   "nonCombatReadyLinks": {
+    "Pickup": [
+     "0x0300098F"
+    ],
+    "StoreInBackpack": [
+     "0x0300098F"
+    ],
+    "ReadState": [
+     "0x0300098F"
+    ],
+    "Cry": [
+     "0x0300098F"
+    ]
+   }
+  },
+  {
+   "heritage": "OlthoiAcid",
+   "sex": "Female",
+   "setup": "0x02001A20",
+   "motionTable": "0x09000205",
+   "parts": 31,
+   "rightHandPart": null,
+   "leftHandPart": null,
+   "headPart": null,
+   "profile": "no-hands",
+   "nonCombatReadyLinks": {
+    "Pickup": [
+     "0x0300098F"
+    ],
+    "StoreInBackpack": [
+     "0x0300098F"
+    ],
+    "ReadState": [
+     "0x0300098F"
+    ],
+    "Cry": [
+     "0x0300098F"
+    ]
+   }
+  }
+ ],
+ "humanSetup0x02000001": {
+  "holdingLocations": {
+   "None": {
+    "partId": 9,
+    "frame": {
+     "origin": [
+      0,
+      0.1,
+      0.1825
+     ],
+     "orientation": [
+      1,
+      0,
+      0,
+      0
+     ]
+    }
+   },
+   "LeftWeapon": {
+    "partId": 12,
+    "frame": {
+     "origin": [
+      -0.045,
+      0,
+      -0.076
+     ],
+     "orientation": [
+      0.707107,
+      0.707107,
+      0,
+      0
+     ]
+    }
+   },
+   "Belt": {
+    "partId": 0,
+    "frame": {
+     "origin": [
+      0.202,
+      -0.0695,
+      0.233
+     ],
+     "orientation": [
+      0.217222,
+      -0.975794,
+      -0.0247,
+      0.00549847
+     ]
+    }
+   },
+   "LeftUnarmed": {
+    "partId": 12,
+    "frame": {
+     "origin": [
+      -0.025,
+      0,
+      -0.076
+     ],
+     "orientation": [
+      5.33851e-08,
+      5.33851e-08,
+      -0.707107,
+      -0.707107
+     ]
+    }
+   },
+   "Quiver": {
+    "partId": 9,
+    "frame": {
+     "origin": [
+      -0.175,
+      0.0853431,
+      0.375
+     ],
+     "orientation": [
+      0.971891,
+      0.0756547,
+      -0.222936,
+      0.00218323
+     ]
+    }
+   },
+   "RightHand": {
+    "partId": 15,
+    "frame": {
+     "origin": [
+      0.025,
+      0,
+      -0.076
+     ],
+     "orientation": [
+      0.707107,
+      0.707107,
+      0,
+      0
+     ]
+    }
+   },
+   "Hearldry": {
+    "partId": 9,
+    "frame": {
+     "origin": [
+      0,
+      0,
+      0
+     ],
+     "orientation": [
+      1,
+      0,
+      0,
+      0
+     ]
+    }
+   },
+   "LeftHand": {
+    "partId": 12,
+    "frame": {
+     "origin": [
+      -0.026,
+      0.00400001,
+      -0.075
+     ],
+     "orientation": [
+      1,
+      0,
+      0,
+      0
+     ]
+    }
+   },
+   "Shield": {
+    "partId": 11,
+    "frame": {
+     "origin": [
+      0.0605,
+      -0.0325,
+      -0.079
+     ],
+     "orientation": [
+      0.403672,
+      0.64903,
+      -0.537349,
+      0.356462
+     ]
+    }
+   }
+  },
+  "parentIndex": [
+   4294967295,
+   4294967295,
+   1,
+   2,
+   3,
+   4294967295,
+   5,
+   6,
+   7,
+   0,
+   9,
+   10,
+   11,
+   12,
+   13,
+   14,
+   15,
+   0,
+   17,
+   18,
+   19,
+   16,
+   16,
+   9,
+   9,
+   2,
+   6,
+   10,
+   13,
+   9,
+   29,
+   30,
+   31,
+   32
+  ],
+  "placementDefault": [
+   {
+    "origin": [
+     0,
+     0,
+     0.9625
+    ],
+    "orientation": [
+     -4.37114e-08,
+     0,
+     0,
+     -1
+    ]
+   },
+   {
+    "origin": [
+     -0.1063,
+     9.29304e-09,
+     0.9625
+    ],
+    "orientation": [
+     0.0654329,
+     0.017565,
+     -0.00114666,
+     -0.997702
+    ]
+   },
+   {
+    "origin": [
+     -0.0911538,
+     4.56868e-06,
+     0.532467
+    ],
+    "orientation": [
+     0.059418,
+     0.00912502,
+     -0.0877596,
+     -0.994326
+    ]
+   },
+   {
+    "origin": [
+     -0.0782462,
+     -0.0783378,
+     0.0877996
+    ],
+    "orientation": [
+     0.0592801,
+     3.0734e-05,
+     -0.00207611,
+     -0.998239
+    ]
+   },
+   {
+    "origin": [
+     -0.0911605,
+     0.0299032,
+     0.0173468
+    ],
+    "orientation": [
+     0.0592801,
+     3.0734e-05,
+     -0.00207611,
+     -0.998239
+    ]
+   },
+   {
+    "origin": [
+     0.1063,
+     -9.29304e-09,
+     0.9625
+    ],
+    "orientation": [
+     -0.065433,
+     -0.017565,
+     -0.00114666,
+     -0.997702
+    ]
+   },
+   {
+    "origin": [
+     0.0911538,
+     4.55285e-06,
+     0.532467
+    ],
+    "orientation": [
+     -0.0655241,
+     -0.00965436,
+     -0.0879167,
+     -0.993924
+    ]
+   },
+   {
+    "origin": [
+     0.0772808,
+     -0.0783653,
+     0.0878335
+    ],
+    "orientation": [
+     -0.0668019,
+     0.000213558,
+     -0.00231988,
+     -0.997764
+    ]
+   },
+   {
+    "origin": [
+     0.0918593,
+     0.029632,
+     0.0173314
+    ],
+    "orientation": [
+     -0.0668019,
+     0.000213558,
+     -0.00231988,
+     -0.997764
+    ]
+   },
+   {
+    "origin": [
+     0,
+     0,
+     1.19
+    ],
+    "orientation": [
+     -4.36333e-08,
+     2.6114e-09,
+     0.0597419,
+     -0.998214
+    ]
+   },
+   {
+    "origin": [
+     -0.225508,
+     -0.0178823,
+     1.49242
+    ],
+    "orientation": [
+     -0.219049,
+     -0.0865673,
+     -0.0619883,
+     -0.969887
+    ]
+   },
+   {
+    "origin": [
+     -0.296959,
+     0.0430298,
+     1.05698
+    ],
+    "orientation": [
+     -0.224969,
+     -0.0384372,
+     0.227661,
+     -0.946616
+    ]
+   },
+   {
+    "origin": [
+     -0.291916,
+     0.119243,
+     0.905107
+    ],
+    "orientation": [
+     -0.228811,
+     -0.0223238,
+     0.2238,
+     -0.947133
+    ]
+   },
+   {
+    "origin": [
+     0.225508,
+     -0.0178823,
+     1.49242
+    ],
+    "orientation": [
+     0.219977,
+     0.0903638,
+     -0.0797955,
+     -0.968028
+    ]
+   },
+   {
+    "origin": [
+     0.303198,
+     0.0248835,
+     1.05418
+    ],
+    "orientation": [
+     0.23852,
+     0.0410184,
+     0.196126,
+     -0.950242
+    ]
+   },
+   {
+    "origin": [
+     0.300545,
+     0.0915749,
+     0.897832
+    ],
+    "orientation": [
+     0.241823,
+     0.024843,
+     0.192039,
+     -0.950803
+    ]
+   },
+   {
+    "origin": [
+     1.1752e-09,
+     0.0134427,
+     1.58747
+    ],
+    "orientation": [
+     -4.37114e-08,
+     2.30156e-13,
+     5.25789e-06,
+     -1
+    ]
+   },
+   {
+    "origin": [
+     0,
+     0,
+     0.9625
+    ],
+    "orientation": [
+     -4.37114e-08,
+     0,
+     0,
+     -1
+    ]
+   },
+   {
+    "origin": [
+     -1.5299e-08,
+     -0.175,
+     0.8875
+    ],
+    "orientation": [
+     -4.03841e-08,
+     -1.67276e-08,
+     -0.382683,
+     -0.92388
+    ]
+   },
+   {
+    "origin": [
+     -3.0506e-08,
+     -0.348948,
+     0.722037
+    ],
+    "orientation": [
+     -4.03841e-08,
+     -1.67276e-08,
+     -0.382683,
+     -0.92388
+    ]
+   },
+   {
+    "origin": [
+     -4.62694e-08,
+     -0.52926,
+     0.541725
+    ],
+    "orientation": [
+     -4.03841e-08,
+     -1.67276e-08,
+     -0.382683,
+     -0.92388
+    ]
+   },
+   {
+    "origin": [
+     1.1752e-09,
+     0.0134427,
+     1.58747
+    ],
+    "orientation": [
+     -4.37114e-08,
+     6.45232e-16,
+     2.72594e-08,
+     -1
+    ]
+   },
+   {
+    "origin": [
+     1.1752e-09,
+     0.0134427,
+     1.58747
+    ],
+    "orientation": [
+     -4.37114e-08,
+     6.45232e-16,
+     2.72594e-08,
+     -1
+    ]
+   },
+   {
+    "origin": [
+     -0.2385,
+     -0.0129389,
+     1.44024
+    ],
+    "orientation": [
+     -4.37102e-08,
+     3.24233e-10,
+     0.00741758,
+     -0.999972
+    ]
+   },
+   {
+    "origin": [
+     0.2385,
+     -0.012939,
+     1.44024
+    ],
+    "orientation": [
+     -4.37102e-08,
+     3.24233e-10,
+     0.00741758,
+     -0.999972
+    ]
+   },
+   {
+    "origin": [
+     -0.0840452,
+     0.00619899,
+     0.526109
+    ],
+    "orientation": [
+     -0.0597539,
+     -0.00657671,
+     0.0451744,
+     0.997169
+    ]
+   },
+   {
+    "origin": [
+     0.0841217,
+     0.00628305,
+     0.526106
+    ],
+    "orientation": [
+     0.0658768,
+     0.00684455,
+     0.0453486,
+     0.996773
+    ]
+   },
+   {
+    "origin": [
+     -0.300994,
+     -0.0293438,
+     1.17623
+    ],
+    "orientation": [
+     -0.217962,
+     -0.0676424,
+     0.102198,
+     -0.968232
+    ]
+   },
+   {
+    "origin": [
+     0.305694,
+     -0.0399426,
+     1.17773
+    ],
+    "orientation": [
+     0.231185,
+     0.0716295,
+     0.0703716,
+     -0.967714
+    ]
+   },
+   {
+    "origin": [
+     0,
+     0,
+     1.19
+    ],
+    "orientation": [
+     -4.36333e-08,
+     2.6114e-09,
+     0.0597419,
+     -0.998214
+    ]
+   },
+   {
+    "origin": [
+     -1.16346e-08,
+     -0.133085,
+     1.50135
+    ],
+    "orientation": [
+     -4.37057e-08,
+     7.05659e-10,
+     0.0161436,
+     -0.99987
+    ]
+   },
+   {
+    "origin": [
+     -1.85046e-08,
+     -0.211668,
+     0.991547
+    ],
+    "orientation": [
+     -4.37057e-08,
+     7.05659e-10,
+     0.0161436,
+     -0.99987
+    ]
+   },
+   {
+    "origin": [
+     -1.9651e-08,
+     -0.224781,
+     0.778012
+    ],
+    "orientation": [
+     -4.37057e-08,
+     7.05659e-10,
+     0.0161436,
+     -0.99987
+    ]
+   },
+   {
+    "origin": [
+     -1.99264e-08,
+     -0.227932,
+     0.5658
+    ],
+    "orientation": [
+     -4.37057e-08,
+     7.05659e-10,
+     0.0161436,
+     -0.99987
+    ]
+   }
+  ]
+ }
+}
