@@ -7,6 +7,19 @@
 # A browser-only refusal is re-checked twice, 3 s apart: our own Chrome that is still exiting briefly
 # shows no command line and reads as theirs (same false positive watch1070.sh debounces).
 # Every decision is appended to D:\Temp\hbbench\gate.log.
+#
+# OWNER-ASKED OVERRIDE (2026-10-24). When the owner, at the desk, asks for a run (still off-screen
+# and muted - never on-screen), the laptop writes D:\Temp\hbbench\gate-owner-ok.txt holding an
+# expiry time (ISO 8601, first line). Until then the gate admits launches and logs each one as
+# OVERRIDE; an expired, empty or unparsable file is ignored and the checks below decide.
+$ownerOk = 'D:\Temp\hbbench\gate-owner-ok.txt'
+if (Test-Path $ownerOk) {
+  $until = [datetime]::MinValue
+  if ([datetime]::TryParse("$(Get-Content $ownerOk -TotalCount 1)", [ref]$until) -and $until -gt (Get-Date)) {
+    Add-Content -Path 'D:\Temp\hbbench\gate.log' -Value "$(Get-Date -Format o) OVERRIDE owner asked, until $($until.ToString('o'))"
+    exit 0
+  }
+}
 $why = @(); $line = ''
 for ($try = 0; $try -lt 3; $try++) {
   $line = "$((& 'D:\Temp\hbbench\hbwho.ps1') | Select-Object -Last 1)"

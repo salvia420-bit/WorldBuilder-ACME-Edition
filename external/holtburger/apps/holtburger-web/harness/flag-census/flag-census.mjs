@@ -90,7 +90,7 @@ function ensureTunnel() {
 
 function relaunchChrome() {
   log('  [infra] relaunching Chrome on the box (off-screen, muted)');
-  sh(`ssh -o BatchMode=yes -o ConnectTimeout=15 ${BOX} "schtasks /create /tn hbcensus /tr C:\\\\Temp\\\\launch-wls.bat /sc once /st 00:00 /it /f & schtasks /run /tn hbcensus"`, 90000);
+  sh(`ssh -o BatchMode=yes -o ConnectTimeout=15 ${BOX} "schtasks /create /tn hbcensus /tr \\"wscript.exe //B //Nologo D:\\\\Temp\\\\hbbench\\\\hidden-run.vbs C:\\\\Temp\\\\launch-wls.bat\\" /sc once /st 00:00 /it /f & schtasks /run /tn hbcensus"`, 90000);
 }
 
 async function ensureInfra() {

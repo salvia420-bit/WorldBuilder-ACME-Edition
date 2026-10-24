@@ -5,7 +5,9 @@
 //   1. Chrome must already be running on the box in the INTERACTIVE session
 //      (MODE2i). SSH-launched Chrome gives NO GL CONTEXT — the 3D renders
 //      black and the run is worthless. Launch with:
-//        ssh box "schtasks /create /tn VT /tr C:\\Temp\\launch-wls.bat /sc once /st 00:00 /it /f & schtasks /run /tn VT"
+//        ssh box "schtasks /create /tn VT /tr \"wscript.exe //B //Nologo D:\\Temp\\hbbench\\hidden-run.vbs C:\\Temp\\launch-wls.bat\" /sc once /st 00:00 /it /f & schtasks /run /tn VT"
+//      (through hidden-run.vbs: a bare .bat action flashes a cmd window on the owner's screen;
+//      scripts/perf-worker/README.md, 2026-10-24)
 //      launch-wls.bat MUST carry, non-negotiably:
 //        --mute-audio                      (no sound may reach the 1070's user)
 //        --window-position=-32000,-32000   (off-screen; a person is at that desk)

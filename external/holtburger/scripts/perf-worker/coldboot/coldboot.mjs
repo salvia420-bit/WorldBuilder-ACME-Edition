@@ -50,7 +50,7 @@ log("account free:", await waitAccountFree());
 const prof = `hbb-cold-${LABEL}-${Date.now()}`;
 ssh(`echo ${prof}> D:\\Temp\\hbbench\\profile.txt`);
 ssh(`echo 1280,720> D:\\Temp\\hbbench\\winsize.txt`);
-ssh('schtasks /create /tn hbprobe /tr "D:\\Temp\\hbbench\\hbprobe-launch.bat" /sc once /st 00:00 /it /f >nul 2>nul & schtasks /run /tn hbprobe >nul');
+ssh('schtasks /create /tn hbprobe /tr "wscript.exe //B //Nologo D:\\Temp\\hbbench\\hidden-run.vbs D:\\Temp\\hbbench\\hbprobe-launch.bat" /sc once /st 00:00 /it /f >nul 2>nul & schtasks /run /tn hbprobe >nul');
 for (let i = 0; i < 40; i++) { try { if ((await fetch(`${CDP}/json/version`)).ok) break; } catch (_) {} await sleep(1000); }
 const browser = await chromium.connectOverCDP(CDP);
 const ctx = browser.contexts()[0];

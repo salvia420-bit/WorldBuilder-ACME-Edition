@@ -1,5 +1,5 @@
 // hbsess.mjs — persistent probe session on the 1070 (exploration, not timing).
-//   node hbsess.mjs boot [--quality mid] [--flags 'a=b'] [--window 1280,720] [--no-orbit]
+//   node hbsess.mjs boot [--quality mid] [--flags 'a=b'] [--window 1280,720] [--no-orbit] [--uncapped]
 //   node hbsess.mjs eval <file.js>      file = body of an async fn; `return` value printed as JSON
 //   node hbsess.mjs orbit               park the camera on the Holtburg orbit pose (stored in window.__hbOrbit)
 //   node hbsess.mjs profile <sec> [out] CDP CPU profile while orbiting
@@ -10,6 +10,10 @@ import { execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 // 2026-10-20: the boot URL pins ?targetFps=0 — the page's 60/30 VTank frame cap
 // engages under connectOverCDP's focus emulation (lib/bench-url.mjs says why).
+// 2026-10-24: ... unless asked. By default the session now runs at ?targetFps=30,
+// the off-screen (background) rate — owner: "its supposed to be 30 fps offscreen
+// limit"; this box is the owner's own desktop and an uncapped off-screen tab
+// competes with whatever they are doing. `--uncapped` pins 0 for a timing look.
 import { uncappedBenchUrl } from "./lib/bench-url.mjs";
 
 import { statSync, openSync, readSync, closeSync } from "node:fs";
@@ -57,10 +61,11 @@ if (cmd === "boot") {
   console.log("account free:", await waitAccountFree());
   ssh(`echo hbb-sess-${Date.now()}> D:\\Temp\\hbbench\\profile.txt`);
   ssh(`echo ${opt("--window", "1280,720")}> D:\\Temp\\hbbench\\winsize.txt`);
-  ssh('schtasks /create /tn hbprobe /tr "D:\\Temp\\hbbench\\hbprobe-launch.bat" /sc once /st 00:00 /it /f >nul 2>nul & schtasks /run /tn hbprobe >nul');
+  ssh('schtasks /create /tn hbprobe /tr "wscript.exe //B //Nologo D:\\Temp\\hbbench\\hidden-run.vbs D:\\Temp\\hbbench\\hbprobe-launch.bat" /sc once /st 00:00 /it /f >nul 2>nul & schtasks /run /tn hbprobe >nul');
   for (let i = 0; i < 40; i++) { try { if ((await fetch(`${CDP}/json/version`)).ok) break; } catch (_) {} await sleep(1000); }
   const { pg } = await page();
-  const url = uncappedBenchUrl(`${APP}?autoLogin=1&account=tailnet1&password=tailnet1&autoSpawn=first&nosw=1&camDebug=on&adaptiveRes=off&quality=${q}${flags ? "&" + flags : ""}`);
+  const cap = argv.includes("--uncapped") ? "" : "&targetFps=30";
+  const url = uncappedBenchUrl(`${APP}?autoLogin=1&account=tailnet1&password=tailnet1&autoSpawn=first&nosw=1&camDebug=on&adaptiveRes=off&quality=${q}${flags ? "&" + flags : ""}${cap}`);
   await pg.goto(url, { waitUntil: "domcontentloaded", timeout: 60000 });
   console.log("gpu", await pg.evaluate(() => { const gl = document.createElement("canvas").getContext("webgl2"); const e = gl.getExtension("WEBGL_debug_renderer_info"); return gl.getParameter(e.UNMASKED_RENDERER_WEBGL); }));
   console.log("wake", await pg.evaluate(async () => { try { window.__benchWake = await navigator.wakeLock.request("screen"); return "held"; } catch (e) { return String(e); } }));

@@ -63,7 +63,7 @@ async function ensureChrome() {
   if (await cdpUp()) return;
   ssh(`echo hbb-pw1070-${Date.now()}> D:\\Temp\\hbbench\\profile.txt`);
   ssh("echo 1280,720> D:\\Temp\\hbbench\\winsize.txt");
-  ssh('schtasks /create /tn hbprobe /tr "D:\\Temp\\hbbench\\hbprobe-launch.bat" /sc once /st 00:00 /it /f >nul 2>nul & schtasks /run /tn hbprobe >nul');
+  ssh('schtasks /create /tn hbprobe /tr "wscript.exe //B //Nologo D:\\Temp\\hbbench\\hidden-run.vbs D:\\Temp\\hbbench\\hbprobe-launch.bat" /sc once /st 00:00 /it /f >nul 2>nul & schtasks /run /tn hbprobe >nul');
   for (let i = 0; i < 40; i++) { if (await cdpUp()) return; await sleep(1000); }
   throw new Error("pw1070: test Chrome did not come up on :9333 (box gate refused? see D:\\Temp\\hbbench\\gate.log)");
 }

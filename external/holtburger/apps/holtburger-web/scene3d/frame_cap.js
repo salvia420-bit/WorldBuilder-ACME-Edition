@@ -25,6 +25,13 @@
 // focused = !document.hidden && document.hasFocus(), kept current by
 // visibilitychange / window focus / blur. A hidden tab gets no rAF at all, so
 // it simply counts as background.
+// 2026-10-24 — OFF-SCREEN = BACKGROUND (owner: "its supposed to be 30 fps
+// offscreen limit"). A window parked far outside every monitor (the 1070 test
+// Chrome's --window-position=-32000,-32000; Windows also parks a MINIMIZED
+// window at -32000) runs at the background rate whatever focus it reports:
+// nobody can see it, and CDP focus emulation would otherwise read it focused
+// (60) — or, never focused, uncapped. ?targetFps still wins (an uncapped
+// timing bench pins 0 on purpose); refresh() re-reads the position at 1 Hz.
 //
 // No imports, no timers: the setter appears only with the scene, so the
 // caller's own poll calls refresh() (plugins/rynth-vt/display.js, 1 Hz). Never
@@ -70,6 +77,15 @@ export function documentFocused(doc) {
   return safe(() => !!doc.hasFocus(), true);
 }
 
+/** Off-screen: the window's top-left sits beyond -10000 px on either axis — no
+ *  monitor reaches that far, so nobody can see it (an off-screen launch, or a
+ *  minimized Windows window). No screenX / screenY (node, workers) = on-screen. */
+export function windowOffscreen(win) {
+  const x = Number(safe(() => win.screenX, 0));
+  const y = Number(safe(() => win.screenY, 0));
+  return (Number.isFinite(x) && x <= -10000) || (Number.isFinite(y) && y <= -10000);
+}
+
 /** A policy → the cap for this focus state (fps; 0 = uncapped). A rate that is
  *  not a positive number leaves the loop uncapped. */
 export function frameCapFor(policy, focused) {
@@ -99,6 +115,7 @@ export function createFrameCapDriver({ win = globalThis, doc = null, onPinned = 
   let policy = null;
   let focused = documentFocused(d);
   let everFocused = focused; // a window never focused runs uncapped (a CDP-attached bench reads focused: see the header)
+  let offscreen = windowOffscreen(w); // off-screen = the background rate, focused or not (header, 2026-10-24)
   let applied = { fps: 0, setter: null }; // what this driver last handed to the setter
   let pinnedSaid = false;
   let disposed = false;
@@ -114,7 +131,7 @@ export function createFrameCapDriver({ win = globalThis, doc = null, onPinned = 
     }
     const setter = safe(() => w.__setFrameCap, null);
     if (typeof setter !== "function") return; // no 3D loop yet: refresh() retries
-    const fps = everFocused ? frameCapFor(policy, focused) : 0;
+    const fps = offscreen ? frameCapFor(policy, false) : everFocused ? frameCapFor(policy, focused) : 0;
     // Never capped by us: no policy means nothing to release.
     if (!policy && !(applied.fps > 0)) return;
     if (fps === applied.fps && setter === applied.setter) return;
@@ -124,6 +141,7 @@ export function createFrameCapDriver({ win = globalThis, doc = null, onPinned = 
 
   // Activity tracking (audio_manager.js _installActivityTracking).
   const recompute = () => {
+    offscreen = windowOffscreen(w);
     focused = documentFocused(d);
     if (focused) everFocused = true;
     apply();
@@ -160,6 +178,7 @@ export function createFrameCapDriver({ win = globalThis, doc = null, onPinned = 
         policy: policy ? { ...policy } : null,
         focused,
         everFocused,
+        offscreen,
         fps: applied.fps,
         applied: !!applied.setter,
         urlFps,

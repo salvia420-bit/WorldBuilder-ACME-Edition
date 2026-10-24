@@ -153,6 +153,48 @@ await check("driver: focused rate, background on blur / hidden, back on focus �
   d.dispose();
 });
 
+// 2026-10-24 — owner: "its supposed to be 30 fps offscreen limit". The 1070 test
+// Chrome sits at --window-position=-32000,-32000 and CDP focus emulation reads
+// it FOCUSED, so it ran at the focused rate (or uncapped, never focused).
+await check("windowOffscreen: beyond -10000 on either axis (off-screen launch / minimized) — else on-screen", () => {
+  assert.equal(FC.windowOffscreen({ screenX: -32000, screenY: -32000 }), true);
+  assert.equal(FC.windowOffscreen({ screenX: 0, screenY: -32000 }), true);
+  assert.equal(FC.windowOffscreen({ screenX: -1920, screenY: 0 }), false, "a monitor left of the primary is on-screen");
+  assert.equal(FC.windowOffscreen({ screenX: 100, screenY: 50 }), false);
+  assert.equal(FC.windowOffscreen({}), false, "no screenX/screenY (node) = on-screen");
+  assert.equal(FC.windowOffscreen(null), false);
+});
+
+await check("driver: an OFF-SCREEN window runs at the background rate though it reads focused (CDP), and even if never focused", () => {
+  const p = page();
+  p.win.screenX = -32000; p.win.screenY = -32000;
+  const d = FC.createFrameCapDriver({ win: p.win, doc: p.doc });
+  d.setPolicy(POLICY);
+  assert.deepEqual(p.calls, [30], "focused + off-screen = 30, not 60");
+  assert.equal(d.status().offscreen, true);
+  p.win.fire("focus");
+  assert.deepEqual(p.calls, [30], "a focus event does not lift it");
+  p.win.screenX = 200; p.win.screenY = 100; // moved onto a monitor
+  d.refresh();
+  assert.deepEqual(p.calls, [30, 60], "back on-screen: the focus rule again");
+  p.win.screenX = -32000; p.win.screenY = -32000; // minimized
+  d.refresh();
+  assert.deepEqual(p.calls.at(-1), 30);
+  d.dispose();
+  const q = page({ focused: false });
+  q.win.screenX = -32000; q.win.screenY = -32000;
+  const d2 = FC.createFrameCapDriver({ win: q.win, doc: q.doc });
+  d2.setPolicy(POLICY);
+  assert.deepEqual(q.calls, [30], "never focused but off-screen: still the background rate, not uncapped");
+  d2.dispose();
+  const r = page({ search: "?targetFps=0" });
+  r.win.screenX = -32000;
+  const d3 = FC.createFrameCapDriver({ win: r.win, doc: r.doc });
+  d3.setPolicy(POLICY);
+  assert.deepEqual(r.calls, [], "?targetFps=0 (a timing bench) still wins");
+  d3.dispose();
+});
+
 await check("driver: the setter appears with the scene (refresh applies it) or is replaced (re-applied); dispose releases + unhooks", () => {
   const p = page({ setter: false });
   const d = FC.createFrameCapDriver({ win: p.win, doc: p.doc });

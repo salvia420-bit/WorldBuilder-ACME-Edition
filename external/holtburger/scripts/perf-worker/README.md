@@ -144,9 +144,16 @@ Same box discipline as `flag-bench.mjs` (schtasks /it launch, off-screen, `--mut
 `D:\Temp\hbbench\` profile path). Copy `box/hbprobe-launch.bat` to `D:\Temp\hbbench\` once; tunnel:
 `ssh -fN -L 9333:127.0.0.1:9333 -R 8765:127.0.0.1:8765 -R 8080:127.0.0.1:8080 young@100.127.215.75`.
 
+**No console on the owner's screen (2026-10-24).** A task whose action is a `.bat` opens a cmd
+window in the interactive session, so every launch flashed one on the 1070's desktop. Every tool
+here now makes the action `wscript.exe //B //Nologo D:\Temp\hbbench\hidden-run.vbs <launcher.bat>`:
+wscript never opens a console and `box/hidden-run.vbs` runs the batch hidden (the batch's exit code
+is the task's result). Copy `box/hidden-run.vbs` to `D:\Temp\hbbench\` once. Any new launcher goes
+through it too — never `/tr <something>.bat`.
+
 | tool | what |
 |---|---|
-| `hbsess.mjs boot [--quality mid] [--flags ..]` | boot ONE persistent session at Holtburg (orbit pose stored as `window.__hbOrbit`) |
+| `hbsess.mjs boot [--quality mid] [--flags ..] [--uncapped]` | boot ONE persistent session at Holtburg (orbit pose stored as `window.__hbOrbit`); runs at `?targetFps=30`, the off-screen rate, since 2026-10-24 — `--uncapped` pins 0 for a timing look |
 | `hbsess.mjs eval file.js` | run a page-side async snippet (census, A/B windows, diag reads) — no reboot |
 | `hbsess.mjs snap out.jpg` | real 3D frame (toDataURL inside the screen-target render; page.screenshot is black) |
 | `hbsess.mjs profile SEC out [street]` | CDP CPU profile while orbiting (or a street-level 360 sweep) |
@@ -168,7 +175,7 @@ Frame times on this panel quantize to 8.33 ms (120 Hz): read means/lows, not p50
 | `glcensus.js` + `glcensus.py` | UNTRACED per-frame GL census: call counts/bytes, main-thread ms inside GL calls, a fence for GPU-side lag, upload bytes attributed to the owning scene object, first draws per object, LoAF |
 | `gputrace.mjs` + `angleattr.py` | first-turn trace with `gpu.angle` (ANGLE's own compile/link work); avoid gpu.service/gpu.decoder (≈10× GPU-process inflation) |
 | `drawcensus.js` | per-category draw census over a few seconds of orbit |
-| `box/hbprobe-launch.bat` | now logs Chrome to `D:\Temp\hbbench\logs\<profile>.log` (mid-boot deaths) |
+| `box/hbprobe-launch.bat` | logged Chrome to `D:\Temp\hbbench\logs\<profile>.log` (mid-boot deaths) until 2026-10-24 — `--enable-logging` opened a console window on the owner's desktop, so it is gone |
 
 Box rule (owner, 2026-10-06): if someone is using the 1070, stop — see HANDOFF-1070-perf-2026-10-06.md §1b.
 

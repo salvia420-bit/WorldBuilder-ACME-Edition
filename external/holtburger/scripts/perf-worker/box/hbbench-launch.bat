@@ -10,3 +10,6 @@ rem measures the slowest stage instead of snapping to the 8.33 ms grid of the 12
 set UNCAP=
 if exist D:\Temp\hbbench\uncapped.txt set UNCAP=--disable-frame-rate-limit --disable-gpu-vsync
 start "" "C:\Program Files\Google\Chrome\Application\chrome.exe" --remote-debugging-port=9333 --use-angle=d3d11 --ignore-gpu-blocklist --mute-audio --user-data-dir=D:\Temp\hbbench\%PROF% --window-position=-32000,-32000 --window-size=1280,720 --no-first-run --no-default-browser-check --disable-features=CalculateNativeWinOcclusion --disable-renderer-backgrounding --disable-background-timer-throttling --disable-backgrounding-occluded-windows %UNCAP% about:blank
+rem 2026-10-24: keep the off-screen window off the owner's taskbar (Windows lit its button orange:
+rem a background window asking for the foreground). noflash.ps1 removes its button; /b = this hidden console.
+start "" /b powershell -NoProfile -ExecutionPolicy Bypass -File D:\Temp\hbbench\noflash.ps1

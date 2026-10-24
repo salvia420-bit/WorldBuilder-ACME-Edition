@@ -58,7 +58,7 @@ async function runOne(arm, rep) {
   // frame that takes 9 ms reads 111 fps instead of snapping to 60 on the box's 120 Hz grid.
   res.uncapped = UNCAPPED;
   ssh(UNCAPPED ? "echo 1> D:\\Temp\\hbbench\\uncapped.txt" : "if exist D:\\Temp\\hbbench\\uncapped.txt del D:\\Temp\\hbbench\\uncapped.txt");
-  ssh('schtasks /create /tn hbprobe /tr "D:\\Temp\\hbbench\\hbprobe-launch.bat" /sc once /st 00:00 /it /f >nul 2>nul & schtasks /run /tn hbprobe >nul');
+  ssh('schtasks /create /tn hbprobe /tr "wscript.exe //B //Nologo D:\\Temp\\hbbench\\hidden-run.vbs D:\\Temp\\hbbench\\hbprobe-launch.bat" /sc once /st 00:00 /it /f >nul 2>nul & schtasks /run /tn hbprobe >nul');
   for (let i = 0; i < 40; i++) { try { if ((await fetch(`${CDP}/json/version`)).ok) break; } catch (_) {} await sleep(1000); }
   const browser = await chromium.connectOverCDP(CDP);
   const errors = [];

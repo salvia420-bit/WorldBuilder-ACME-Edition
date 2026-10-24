@@ -45,7 +45,7 @@ async function launch(profile) {
   killBench();
   ssh(`echo ${profile}> D:\\Temp\\hbbench\\profile.txt`);
   ssh(`echo ${WIN}> D:\\Temp\\hbbench\\winsize.txt`);
-  ssh('schtasks /create /tn hbprobe /tr "D:\\Temp\\hbbench\\hbprobe-launch.bat" /sc once /st 00:00 /it /f >nul & schtasks /run /tn hbprobe >nul');
+  ssh('schtasks /create /tn hbprobe /tr "wscript.exe //B //Nologo D:\\Temp\\hbbench\\hidden-run.vbs D:\\Temp\\hbbench\\hbprobe-launch.bat" /sc once /st 00:00 /it /f >nul & schtasks /run /tn hbprobe >nul');
   for (let i = 0; i < 40; i++) {
     try { const r = await fetch(`${CDP}/json/version`); if (r.ok) return; } catch (_) {}
     await sleep(1000);

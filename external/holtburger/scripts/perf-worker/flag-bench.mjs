@@ -60,7 +60,7 @@ function killBench() {
 async function launch(profile) {
   killBench();
   ssh(`echo ${profile}> D:\\Temp\\hbbench\\profile.txt`);
-  ssh('schtasks /create /tn hbbench /tr "D:\\Temp\\hbbench\\hbbench-launch.bat" /sc once /st 00:00 /it /f >nul & schtasks /run /tn hbbench >nul');
+  ssh('schtasks /create /tn hbbench /tr "wscript.exe //B //Nologo D:\\Temp\\hbbench\\hidden-run.vbs D:\\Temp\\hbbench\\hbbench-launch.bat" /sc once /st 00:00 /it /f >nul & schtasks /run /tn hbbench >nul');
   for (let i = 0; i < 40; i++) {
     try { const r = await fetch(`${CDP}/json/version`); if (r.ok) return; } catch (_) {}
     await sleep(1000);
