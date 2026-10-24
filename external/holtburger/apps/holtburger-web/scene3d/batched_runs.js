@@ -191,14 +191,15 @@ export function batchedRunsSortedEnabled() {
   return FLAG && FLAG_SORTED;
 }
 
-// `?batchedRunsStable` — DEFAULT OFF, exact-match opt-in (on/1/true/yes; absent
-// or anything else = off): the L1 epoch skip of the per-draw compare. See L1.
+// `?batchedRunsStable` — DEFAULT ON since 2026-10-23 (owner, ahead of its 1070
+// arm), `=off` escape (same idiom as FLAG): the L1 epoch skip of the per-draw
+// compare. See L1.
 const FLAG_STABLE = (() => {
   try {
     const v = (new URLSearchParams(globalThis.location?.search || "").get("batchedRunsStable") || "").toLowerCase();
-    return v === "on" || v === "1" || v === "true" || v === "yes";
+    return !(v === "off" || v === "0" || v === "false" || v === "no");
   } catch (_) {
-    return false;
+    return true;
   }
 })();
 
@@ -826,7 +827,7 @@ export function installBatchedRuns(renderer) {
     }
   };
   Object.defineProperty(renderer, "__hbBatchedRuns", { value: orig, configurable: true });
-  // L1 (?batchedRunsStable, default OFF): the prototype hook. Only with the run
+  // L1 (?batchedRunsStable, default ON since 2026-10-23): the prototype hook. Only with the run
   // half live (`?batchedRuns=off` regroups nothing, so there is no compare to skip).
   if (FLAG && FLAG_STABLE) {
     try { installBatchedRunsStable(THREE); } catch (_) { stats.errors += 1; }

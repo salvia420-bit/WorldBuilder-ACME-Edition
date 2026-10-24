@@ -42,12 +42,17 @@ const { batchedMaterialFor, memberMaterialOf, syncBatchMatVariants, holdBatchedM
 const factory = new Function(
   "THREE", "batchedMaterialFor", "holdBatchedMaterial", "releaseBatchedMaterial",
   stripped +
-    "\n; return { statBatchChunkEnabled, __setStatBatchChunkForTest, __resetStatBatchXForTest, " +
+    "\n; return { statBatchChunkEnabled, __setStatBatchChunkForTest, __resetStatBatchXForTest, __setStaticEarlyOutForTest, " +
     "statGeomDedupEnabled, __setStatGeomDedupForTest, stampStaticContentKeys, " +
     "consolidateStaticSingletonsCrossLb, evictStaticBatchXForLb, parkStaticBatchXForLb, unparkStaticBatchXForLb, batchXInstancesForLb, " +
     "tickStatBatchXOptimize, getStatBatchXStats };"
 );
 const M = factory(THREE, batchedMaterialFor, holdBatchedMaterial, releaseBatchedMaterial);
+// 2026-10-23 — ?staticEarlyOut is DEFAULT-ON now (no location.search in node ⇒ on), which
+// puts opaque buckets on three's early-out and skips the memo / runs / walk / sphere tiers
+// this suite exists to cover. Pin it OFF so those tiers keep their coverage (the early-out
+// arm's streaming coverage is the separate stress repro).
+M.__setStaticEarlyOutForTest(false);
 
 // ---- mock singleton nodes (mirrors test_static_batch.mjs) ----
 // Statics singleton geometries are NON-indexed {position, uv, normal} (adapter.js

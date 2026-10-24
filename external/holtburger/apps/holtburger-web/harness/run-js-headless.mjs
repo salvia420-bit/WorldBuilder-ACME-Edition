@@ -558,7 +558,7 @@ const TIER5 = [
   { tier: 5, flag: "surface_single_pass", file: "test_surface_single_pass.mjs" },
   { tier: 5, flag: "synthesis4_leftovers", file: "test_synthesis4_leftovers.mjs" },
   { tier: 5, flag: "terrain_batch", file: "test_terrain_batch.mjs" },
-  // 2026-10-22 B10 / handoff P1d: the terrain batch program without gl_DrawID (?terrainNoDrawId, default off).
+  // 2026-10-22 B10 / handoff P1d: the terrain batch program without gl_DrawID (?terrainNoDrawId, default on since 2026-10-23).
   { tier: 5, flag: "terrainNoDrawId", file: "tests/terrain_batch_no_drawid.test.mjs" },
   { tier: 5, flag: "terrain_detail_tex", file: "test_terrain_detail_tex.mjs" },
   { tier: 5, flag: "terrain_dirt", file: "test_terrain_dirt.mjs" },
@@ -692,7 +692,7 @@ const TIER5 = [
   // 2026-10-22 B9/L1: sorted buckets as order-keeping consecutive runs; the O(1) compare skip for early-out buckets.
   { tier: 5, flag: "batchedRunsSorted", file: "tests/batched_runs_sorted.test.mjs" },
   { tier: 5, flag: "batchedRunsStable", file: "tests/batched_runs_stable.test.mjs" },
-  // 2026-10-22 handoff P2 / L0 + B9a: opaque static + building buckets on three's BatchedMesh early-out (?staticEarlyOut, default off); building buckets marked for batchedRuns.
+  // 2026-10-22 handoff P2 / L0 + B9a: opaque static + building buckets on three's BatchedMesh early-out (?staticEarlyOut, default on since 2026-10-23); building buckets marked for batchedRuns.
   { tier: 5, flag: "staticEarlyOut", file: "tests/static_early_out.test.mjs" },
   // 2026-10-22 handoff P4 spike (§6 L3, harness only, no flag): vertex pulling vs BatchedMesh runs, the CPU half
   // (three premises, the GLSL patch, both draws emulated corner by corner). GPU half: harness/glsl_smoke/vertex_pull_smoke.mjs.

@@ -18,6 +18,34 @@ parallel agents (node tests only) with an orchestrator running every build, GPU 
 one at a time, inside `capped-build`. Every change then went through an adversarial review; all 26 findings were
 reproduced with a failing test or code trace and fixed (none refuted). Nothing below has run on the 1070.
 
+### 0.1 Deployed and default on (2026-10-23, later the same day)
+
+Owner, 2026-10-23: "are the 10-13 and last night into today's work deployed and default on, if not do so".
+
+| What | Before | Now | Proof |
+|---|---|---|---|
+| Release wasm + JS (`wasmrev-20261023a`) | live | live, unchanged | No `.rs` under `apps/holtburger-web/src` or `crates/` is newer than `pkg/holtburger_web_bg.wasm` (04:12). `serve.py --check` still warns "pkg wasm predates the last Rust-touching commit": a commit-date false positive (the commit landed at 06:39, after the build). |
+| v2 packs (`world-packs-v5`) | baked, NOT deployed | deployed into the archive, staged and active on the SSD | `deploy-packs-v5.sh` (made from v4): 17,682 packs CAS-verified, only `world_index` changed in the manifest, `serve.py --check` OK. `dist_ssd.py stage --activate`: 17,689 files copied (≤ 0.37 GB; SSD free 6.68 → 6.38 GB, floor 6.0), `check` exit 0. `hbg1_face_census.py dist --require-v2`: exit 0, verdict v2. Headless boot on the pack path (`packSource=on&geomBundles=on`): `negFaceRetail: true`, `unmarkedModels: 0`, bundles assembled, 0 console errors, no `rebake GEOM` warning; with `&negFace=off`: `negFaceRetail: false`, 0 errors. |
+| `?staticEarlyOut` | off | **on** (`=off` escape) | node 85/0; `static_early_out_smoke` PASS, including a new bare-URL arm (early-out + L1 live, pixel-identical to the culled arm). Bare-default headless boot: 12 buckets on the early-out, 0 console errors. |
+| `?batchedRunsStable` | off (inert) | **on**, live through `staticEarlyOut` | node 42/0; smoke arm PASS. Bare-default boot: 84 skips, 0 audit fails, not broken. |
+| `?terrainNoDrawId` | off | **on** | node 119/0; `terrain_no_drawid_smoke` PASS incl. `defaultIsOn`. The headless app boot never creates the terrain batch on this SwiftShader config, so the smoke is the proof. |
+| JS gate | 871 / 0 | 879 / 0 on 2026-10-24 (gate run on the combined tree with the terrain-VFX session's work and the statics-suite pins) | Full gate after the flips (`capped-build node harness/run-js-headless.mjs`). |
+
+- **Escapes:** `?staticEarlyOut=off`, `?batchedRunsStable=off`, `?terrainNoDrawId=off` (`off`/`0`/`false`/`no`, any case).
+- **The 1070 confirms or reverts them.** P0-FLAGS arms 5, 6 and 9 were inverted into `=off` arms (`arm5-staticEarlyOut-off`,
+  `arm6-batchedRunsStable-off`, `arm9-terrainNoDrawId-off`, each against arm 1), with the rules restated against the new
+  default and the kill lines unchanged. Arm 1 (bare) now carries all five laptop-only default-on flips (arms 4, 5, 6, 8, 9
+  are their `=off` arms).
+- **Not flipped, on purpose:** `?drawPools` (GATE-POOLS: the R1 page-farm publish and the R4 validator, owner decision 3);
+  `?packSource` / `?geomBundles` (the pack pipeline's own migration gates; the v2 packs matter only on that path, so a default
+  session does not read them); `?statGeomDedup` (predates this work, 2026-08-01; waits on a 1070 perf/memory re-base).
+- **Roll back the packs:** restore `manifest.json.bak-20261023-pre-v5` (and the `bake-source-packs.sha256` / `pack-report.json`
+  backups beside it) in `/mnt/wbterminal2/holtburger-dist-hires-bc7m-xu7t2`, then `scripts/dist_ssd.py stage --activate`. The
+  additive rsync left the v4 packs in place, so the old `world_index` still resolves.
+- **Same day, not this handoff's subject:** the wsbridge had been running a 2026-10-08 build, so the 10-13 net-transport work
+  (teardown Disconnect, admission) was not live. It was rebuilt from HEAD with new link-health telemetry and redeployed, and
+  ACE's DATs moved to the SSD: `docs/network-adapter-2026-10-23.md`.
+
 **What landed** (all GPU smokes are laptop SwiftShader, pixel identity = max channel diff 0 against the flag-off arm):
 
 | Item | Flag (default) | Proof | Notes |
@@ -25,9 +53,9 @@ reproduced with a failing test or code trace and fixed (none refuted). Nothing b
 | P1a atlas geometry dedup (F2) | `?atlasGeomDedup` (**on**) | node 114/0; `atlas_geom_dedup_smoke` PASS | Refcounted (content, layer) ledger, byte-verified keys. Small in practice: see the laptop census below. |
 | P1c / B9a building buckets as runs | rides `?batchedRuns` (**on**) | `static_early_out_smoke` PASS (incl. the building arm) | |
 | B9b sorted buckets as order-keeping runs | `?batchedRunsSorted` (**on**) | node 58/0; `batched_runs_sorted_smoke` PASS incl. a reversed-order control that must differ | No-gain sorted draws now stop after one read-only scan of the range arrays (`hasConsecutiveRepeat`), before any copy, run build or layout write (review fix). |
-| L1 O(1) unchanged-list proof | `?batchedRunsStable` (off) | node 42/0; smoke arm PASS | Built as a per-mesh write epoch plus a full-compare audit every 64th skip. Inert at today's defaults; live only on marked buckets that ride three's early-out: `?staticEarlyOut=on` (P2) or the `?drawPools` chain (opaque pools). The queue arms it only with staticEarlyOut (P0-FLAGS arm6); no pooled + stable arm exists. |
-| P2 / L0 early-out for opaque chunk + building buckets | `?staticEarlyOut` (off) | node 85/0; `static_early_out_smoke` PASS | Needs the 1070 A/B (triangles vs walk). Atlas half NOT built: towns hold only 50-67 atlas placements (census below). |
-| P1d / B10 terrain program without gl_DrawID | `?terrainNoDrawId` (off) | node 117/0; `terrain_no_drawid_smoke` PASS | ANGLE mechanism verified in ANGLE source (Context11 multi-draw sets the draw-ID uniform only when the program uses it). |
+| L1 O(1) unchanged-list proof | `?batchedRunsStable` (off; **on** since 2026-10-23, §0.1) | node 42/0; smoke arm PASS | Built as a per-mesh write epoch plus a full-compare audit every 64th skip. Inert at today's defaults; live only on marked buckets that ride three's early-out: `?staticEarlyOut=on` (P2) or the `?drawPools` chain (opaque pools). The queue arms it only with staticEarlyOut (P0-FLAGS arm6); no pooled + stable arm exists. |
+| P2 / L0 early-out for opaque chunk + building buckets | `?staticEarlyOut` (off; **on** since 2026-10-23, §0.1) | node 85/0; `static_early_out_smoke` PASS | Needs the 1070 A/B (triangles vs walk). Atlas half NOT built: towns hold only 50-67 atlas placements (census below). |
+| P1d / B10 terrain program without gl_DrawID | `?terrainNoDrawId` (off; **on** since 2026-10-23, §0.1) | node 117/0; `terrain_no_drawid_smoke` PASS | ANGLE mechanism verified in ANGLE source (Context11 multi-draw sets the draw-ID uniform only when the program uses it). |
 | P3 pools drawn as runs (F1) | `?poolRuns` (on inside the off `?drawPools`) | node 138/0 + `test_draw_pools` 448/0; `pool_runs_smoke` PASS | F1's premise "pools dedup by content" was FALSE (per-LB uuid keys): now byte-verified content keys. Five HEAD pool defects fixed (stale node bounds, overwritten multi-plan feeds, band swaps under the early-out, park-blind merge, unwired vacate). GATE-POOLS carries the F1 criteria and a TEXREF/catalog precondition. |
 | F7a HBG1 v2 back-face marker | none (format v2; v1 stays `missing` under `?negFace`) | `cargo test` hbg1 14/0, geom_bundles 10/0 (8 + 2 setup differs added in review), bake CI region + relief legs PASS, real-DAT corpus differ: **15,318 GfxObjs encoded, only 32 need a mark; all 32, plus 100 unmarked GfxObjs and 30 + 150 setups, exact on both negFace arms** | Full-world rebake: see "Rebake" below. `docs/HBG1-negface-marker-2026-10-22.md`. |
 | F7b page-dim corpus | — | research | The handoff premise was stale: the encode RAN (buildbox 08-10) and BAKE-4 consumed it. The real blocker is that the page farm was never PUBLISHED into the served `holtburger/tex-xu7` catalog (985 rsIds served at old dims). Publishing changes the default look of 1,730 textures and adds 1.1 GB on a near-full SSD: **owner decision**. `docs/drawpools-blockers-2026-10-22.md` §2. |
@@ -40,7 +68,8 @@ reproduced with a failing test or code trace and fixed (none refuted). Nothing b
   `pool_runs`, `static_early_out`, `terrain_no_drawid`, `vertex_pull`) are NEEDS_BROWSER: the gate lists them but does
   not run them. Re-run them by hand (`capped-build`, one at a time) after touching their modules.
 - `atlasGeomDedup` and `batchedRunsSorted` went default-on on laptop pixel smokes only. P0-FLAGS arms 4 and 8 confirm
-  or revert them on the 1070.
+  or revert them on the 1070. [2026-10-23: `staticEarlyOut`, `batchedRunsStable` and `terrainNoDrawId` followed by owner
+  instruction; arms 5, 6 and 9 are now their `=off` arms (§0.1).]
 
 **Laptop structural census (HEAD `87fabdb4`, SwiftShader, `quality=ultra&pvsRingRadius=2`, counts only) [M]:**
 
@@ -70,7 +99,7 @@ reproduced with a failing test or code trace and fixed (none refuted). Nothing b
   renderer ~1.7 GB) and earlyoom kills it unless the box is otherwise quiet; the post-@teleloc portal tunnel never
   releases on SwiftShader (the probe now streams under the tunnel and ends it before the census).
 
-**Rebake (F7a, laptop, NOT deployed):** `/mnt/wbterminal2/reeng/orch-bake/world-packs-v5` (driver
+**Rebake (F7a, laptop; DEPLOYED 2026-10-23, §0.1):** `/mnt/wbterminal2/reeng/orch-bake/world-packs-v5` (driver
 `run-world-bake-5.sh`, log `driver5.log`), 2026-10-23 01:23-04:03, 160 min, rc=0 [M]. Same inputs/flags as BAKE-4.
 - `closure_verified` and `determinism_verified` true; 17,682 packs / 16,384 tiles / 1,153 interiors, `geom_rows`
   16,107, `geom_relief_rows` 2,179, `texref_missing_pvw` 0, `texref_off_page_full_tier` 0 (all equal to v4).
@@ -83,7 +112,8 @@ reproduced with a failing test or code trace and fixed (none refuted). Nothing b
 - Browser A/B on a read-only overlay (new release wasm, Holtburg, default `?negFace`, `geomBundles=on`): today's v1
   dist 124 unmarked models / 88 bundles / 229 runtime decodes; v5 **0 / 212 / 105**; 0 console errors. Details in
   `docs/HBG1-negface-marker-2026-10-22.md` §9.
-- Deploy, `dist_ssd.py stage --activate` and the owner's eye check are the owner's call (§0 list). `deploy-packs-v5.sh`
+- [2026-10-23: deployed by owner instruction (§0.1). The owner's eye check of the v2 look is still owed.] Deploy,
+  `dist_ssd.py stage --activate` and the owner's eye check are the owner's call (§0 list). `deploy-packs-v5.sh`
   does not exist yet: create it from `deploy-packs-v4.sh` per `docs/HBG1-negface-marker-2026-10-22.md` §5.4 (step 0
   first: the release wasm must be deployed before the v2 dist is activated).
 
@@ -93,7 +123,7 @@ reproduced with a failing test or code trace and fixed (none refuted). Nothing b
   `wasmrev-20261023a` (index.html, net_worker.js, net_worker_client.js, bake_worker.js). `pkg/` is gitignored, so any
   other checkout must rebuild the release wasm after pulling this.
 - The live `:8765` serve.py serves this tree (new JS + new wasm). `dist` still → `~/hb-serve/dist/current` (v1 packs);
-  nothing was staged or activated.
+  nothing was staged or activated. [2026-10-23: the v2 packs are staged and active (§0.1).]
 - `/mnt/wbterminal2/reeng/orch-bake/dist-v5-overlay`: a read-only overlay (current dist + v5 packs) for the owner's
   eye check. `/mnt/wbterminal1/tmp/hb-live-copy` (448 MB): the tree copy the A/B served from; safe to delete.
   Probe and log output: `/mnt/wbterminal1/tmp/gpu-resident/`.
@@ -103,14 +133,17 @@ reproduced with a failing test or code trace and fixed (none refuted). Nothing b
 **Owner decisions / 1070 work left:**
 1. The P0 1070 session (queue file above): bare / `batchedRuns=off` (THE deciding per-range number) / drawPools chain,
    plus the 2026-10-22 flag arms. Every further per-range change waits on arm 2's rule.
-2. Whether to deploy + activate the v2 packs (SSD headroom ~80 MB above the `dist_ssd` floor). After deploying, drop
+2. **Done 2026-10-23 (§0.1):** deployed, activated, and `&negFace=off` dropped from P0 arm 3 and arm3b, the laptop-twin
+   recipe and batch-C/D E6. Originally: whether to deploy + activate the v2 packs (SSD headroom ~80 MB above the `dist_ssd` floor). After deploying, drop
    `&negFace=off` everywhere it was added on 2026-10-22: P0 arm 3 and arm3b, the P0 laptop-twin recipe, batch-C E6 and
    batch-D E6 (and its prereq note).
 3. Whether to publish the page farm (R1; changes the default look of 1,730 textures and adds 1.1 GB). R1 also gates
    GATE-POOLS and batch-D E6: the R4 validator must exit 0, and today it reports 985 mismatches. v5 was baked against the
    page farm (same inputs as BAKE-4), so declining R1 means one more full rebake (`docs/drawpools-blockers-2026-10-22.md`
    §2.5, the R3 "declined" branch).
-4. Default flips owed to 1070 numbers: `staticEarlyOut`, `terrainNoDrawId`, `batchedRunsStable`, `statGeomDedup` (F3);
+4. [2026-10-23: `staticEarlyOut`, `terrainNoDrawId` and `batchedRunsStable` flipped on by owner instruction ahead of their
+   numbers; the 1070 now confirms or reverts them with the `=off` arms (§0.1). `statGeomDedup` stays off.] Default flips
+   owed to 1070 numbers: `staticEarlyOut`, `terrainNoDrawId`, `batchedRunsStable`, `statGeomDedup` (F3);
    and confirm or revert the two laptop-only default-on flips (`atlasGeomDedup`: P0-FLAGS arm4; `batchedRunsSorted`:
    arm8).
 5. Next lever by the laptop census: entity parts (P5) and cells, not statics (see the per-owner tally above).
@@ -325,11 +358,11 @@ Tukal, settled AND on a fixed `@teleloc` path).** Decision rules are written her
    - **Rule:** if CrGpuMain WebGL ms/frame (on vs off) moves by less than the arm's own rep spread, the per-range term
      is not a lever. Stop P1 and L1, and re-plan.
 3. **The drawPools chain armed:**
-   `&packSource=on&geomBundles=on&texCompressedOnly=on&slotGrid=on&frameWork=on&drawPools=on&negFace=off`.
+   `&packSource=on&geomBundles=on&texCompressedOnly=on&slotGrid=on&frameWork=on&drawPools=on`.
    - Does it boot on HEAD?
    - Read `__diag.pools()` (pools, classes, `mutationsThisFrame` = 0 parked), `subDraws` / `issuedSubDraws`, CrGpuMain
      WebGL ms, renderCPU.
-   - `negFace=off` changes the look (back faces); this arm is for measurement only.
+   - [2026-10-23] `negFace=off` dropped: the served v2 packs (world-packs-v5) serve every model with the default `negFace`, so this arm no longer changes the look.
    - **Rule:** if `issuedSubDraws` or CrGpuMain WebGL ms rises against arm 1, F1 is confirmed and P3 must land L1
      before any GATE-POOLS run.
    - [2026-10-23: arm 3 now runs with `?poolRuns` (L1 for pools), so a rise means poolRuns did not fix F1; compare

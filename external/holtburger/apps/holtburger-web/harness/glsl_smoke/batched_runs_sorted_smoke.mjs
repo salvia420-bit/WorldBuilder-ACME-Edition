@@ -53,9 +53,11 @@ async function run(browser, search) {
   } finally { await page.close(); }
 }
 
+// 2026-10-23: ?batchedRunsStable is default on now; `on` and `sortedOff` name
+// its escape so they stay the pre-flip arms, and `stable` stays explicit.
 const ARMS = {
-  on: "",
-  sortedOff: "?batchedRunsSorted=off",
+  on: "?batchedRunsStable=off",
+  sortedOff: "?batchedRunsSorted=off&batchedRunsStable=off",
   stock: "?batchedRuns=off",
   stable: "?batchedRunsStable=on",
   reverse: "?batchedRuns=off&smokeReverse=1",

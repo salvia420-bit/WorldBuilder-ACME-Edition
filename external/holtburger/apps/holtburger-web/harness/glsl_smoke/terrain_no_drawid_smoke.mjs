@@ -70,7 +70,8 @@ const summary = (r) => {
 
 const on = await run("?terrainNoDrawId=on");
 console.log("terrainNoDrawId on: ", JSON.stringify(summary(on)));
-const off = await run("");
+const off = await run("?terrainNoDrawId=off"); // default on since 2026-10-23
+const def = await run("");
 console.log("terrainNoDrawId off:", JSON.stringify(summary(off)));
 let maxDiff = 0, differing = 0;
 for (let i = 0; i < on.frame.length; i++) { const d = Math.abs(on.frame[i] - off.frame[i]); if (d) differing++; if (d > maxDiff) maxDiff = d; }
@@ -87,6 +88,7 @@ const checks = {
   multiDraw: on.multiDraw === true && off.multiDraw === true,
   everyAbsorbOk: on.absorbedAll === true && off.absorbedAll === true && on.absorbCount === 24,
   onProgramLive: !!on.stats && on.stats.noDrawId === true && on.stats.noDrawIdRequested === true && on.stats.noDrawIdFallback === null,
+  defaultIsOn: !!def.stats && def.stats.noDrawId === true && def.stats.noDrawIdRequested === true && clean(def),
   offProgramToday: !!off.stats && off.stats.noDrawId === false && off.stats.noDrawIdRequested === false,
   sameLifecycle: !!on.stats && !!off.stats && on.stats.optimizes >= 1 && off.stats.optimizes === on.stats.optimizes
     && on.stats.instances === off.stats.instances && on.stats.parkedRows === 1 && off.stats.parkedRows === 1

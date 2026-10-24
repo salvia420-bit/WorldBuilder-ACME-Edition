@@ -352,6 +352,9 @@ console.log("\n-- 10. the real ?statBatchMemo (4 slots) under 4 cameras --");
 {
   const M = await import("./scene3d/static_batch_x.js");
   M.__resetStatBatchXForTest();
+  // 2026-10-23 — ?staticEarlyOut is DEFAULT-ON now; this section exercises the memo
+  // slots, which only opaque buckets OFF the early-out install. Pin it off.
+  M.__setStaticEarlyOutForTest(false);
   M.__setStatBatchMemoForTest("exact");
   M.__setStatBatchMemoSlotsForTest(4);
   const scene3d = { staticsGroup: new THREE.Group() };

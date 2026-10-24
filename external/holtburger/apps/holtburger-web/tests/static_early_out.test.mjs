@@ -1,7 +1,7 @@
 // tests/static_early_out.test.mjs
 //
-// `?staticEarlyOut` (handoff P2 / L0, 2026-10-22, DEFAULT OFF, exact-match
-// on/1/true/yes opt-in) — opaque, unsorted statics chunk buckets
+// `?staticEarlyOut` (handoff P2 / L0, 2026-10-22; DEFAULT ON since 2026-10-23,
+// escapes off/0/false/no) — opaque, unsorted statics chunk buckets
 // (scene3d/static_batch_x.js) and ?buildingMatBatch buckets (scene3d/buildings.js)
 // drop the per-instance sphere cull so three r184's BatchedMesh early-out
 //     if ( ! this._visibilityChanged && ! this.perObjectFrustumCulled && ! this.sortObjects ) return;
@@ -10,7 +10,7 @@
 //
 // Everything runs on the SHIPPED modules (real three r184 BatchedMesh, the real
 // static_batch_x.js / buildings.js / batched_runs.js), no re-derivation:
-//   E1  flag grammar: absent / off / junk = off; on / 1 / true / yes = on.
+//   E1  flag grammar: absent / junk / on / 1 / true / yes = on; off / 0 / false / no = off.
 //   E2  flag OFF = today's settings exactly, bucket for bucket (sort, per-object
 //       cull, node cull, the own memo override), and applyStaticEarlyOut
 //       touches nothing.
@@ -169,20 +169,23 @@ console.log("\n-- E1 flag grammar ----------------------------------------------
     const v = SBX.staticEarlyOutEnabled();
     return v;
   };
-  check("absent => off", read("") === false);
-  check("=off => off", read("?staticEarlyOut=off") === false);
-  check("junk (=enabled / =2) => off (exact-match opt-in, never !== 'off')",
-    read("?staticEarlyOut=enabled") === false && read("?staticEarlyOut=2") === false);
+  check("absent => on (default on since 2026-10-23)", read("") === true);
+  check("=off / =0 / =false / =NO => off",
+    read("?staticEarlyOut=off") === false && read("?staticEarlyOut=0") === false
+    && read("?staticEarlyOut=false") === false && read("?staticEarlyOut=NO") === false);
+  check("junk (=enabled / =2) => on (only off/0/false/no escape)",
+    read("?staticEarlyOut=enabled") === true && read("?staticEarlyOut=2") === true);
   check("=on / =1 / =true / =yes => on",
     read("?staticEarlyOut=on") && read("?staticEarlyOut=1") && read("?staticEarlyOut=true") && read("?staticEarlyOut=YES"));
-  // 2026-10-23 review (p2eo-2): read ON once, then change the URL — a read that
-  // re-parsed location.search every call would flip to false here. (The old
-  // check read "" twice and asserted false, which no implementation can fail.)
-  const first = read("?staticEarlyOut=on");
+  // 2026-10-23 review (p2eo-2): read the non-default once, then change the URL —
+  // a read that re-parsed location.search every call would flip here. (The old
+  // check read "" twice and asserted the default, which no implementation can
+  // fail.) Since the default went on (2026-10-23) the non-default is OFF.
+  const first = read("?staticEarlyOut=off");
   globalThis.location.search = "";
-  check("memoised after the first read (a later URL change is not re-read)", first === true && SBX.staticEarlyOutEnabled() === true);
+  check("memoised after the first read (a later URL change is not re-read)", first === false && SBX.staticEarlyOutEnabled() === false);
   SBX.__setStaticEarlyOutForTest(undefined);
-  check("the test seam's undefined re-reads the URL", SBX.staticEarlyOutEnabled() === false);
+  check("the test seam's undefined re-reads the URL", SBX.staticEarlyOutEnabled() === true);
 }
 
 // ---------------------------------------------------------------------------

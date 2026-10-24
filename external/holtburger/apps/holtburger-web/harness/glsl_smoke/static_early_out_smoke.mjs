@@ -4,8 +4,10 @@
 // real WebGL2 stack: local headless Chromium (ANGLE / SwiftShader), three r184 from
 // node_modules, the REAL chunk batcher, building batcher, floor-bias material,
 // batched_runs.js and batched_indirect_per_camera.js (static_early_out_page.html).
-// Four arms, one page each, same placements, three frames with a camera pan:
-//   bare                                   today's per-instance cull; B9a runs on buildings
+// Five arms, one page each, same placements, three frames with a camera pan
+// (2026-10-23: both flags are default on now, so every arm names its pair and
+// `bare` is the pre-flip default; `default` is a bare URL, = eo + stable):
+//   bare     ?staticEarlyOut=off&batchedRunsStable=off   per-instance cull; B9a runs on buildings
 //   ?staticEarlyOut=on                     opaque buckets on three's early-out
 //   ?batchedRuns=off                       stock chunks, nothing regrouped (B9a reference)
 //   ?staticEarlyOut=on&batchedRunsStable=on  + the L1 per-draw compare skip
@@ -55,11 +57,13 @@ const summary = (r) => ({
   runDraws: r.stats && r.stats.draws, stableSkips: r.stats && r.stats.stableSkips, frameTotals: r.frameTotals,
   programs: r.programs && r.programs.length, errors: r.errors, pageErrors: r.pageErrors, missing: r.missing, renderer: r.renderer,
 });
+const OFF = "staticEarlyOut=off&batchedRunsStable=off";
 const arms = {
-  bare: await run(""),
-  eo: await run("?staticEarlyOut=on"),
-  runsOff: await run("?batchedRuns=off"),
+  bare: await run(`?${OFF}`),
+  eo: await run("?staticEarlyOut=on&batchedRunsStable=off"),
+  runsOff: await run(`?batchedRuns=off&${OFF}`),
   eoStable: await run("?staticEarlyOut=on&batchedRunsStable=on"),
+  default: await run(""),
 };
 for (const [k, r] of Object.entries(arms)) console.log(`${k}:`, JSON.stringify(summary(r)));
 
@@ -72,6 +76,7 @@ function diff(a, b) {
 const dEo = diff(arms.bare, arms.eo);
 const dRuns = diff(arms.bare, arms.runsOff);
 const dStable = diff(arms.bare, arms.eoStable);
+const dDefault = diff(arms.bare, arms.default);
 console.log(`frame diff bare vs eo: ${JSON.stringify(dEo)}; bare vs runsOff: ${JSON.stringify(dRuns)}; bare vs eoStable: ${JSON.stringify(dStable)}`);
 
 const linked = (r) => Array.isArray(r.programs) && r.programs.length >= 1 && r.programs.every((p) => p.linked);
@@ -87,7 +92,7 @@ if (arms.runsOff.chunks !== false || (arms.runsOff.stats && arms.runsOff.stats.d
 // The early-out arms: flag read, opaque + clip chunk buckets and the building
 // bucket on the early-out, the translucent bucket still sorted, and three's
 // early-out actually entered on frames 2-3.
-for (const k of ["eo", "eoStable"]) {
+for (const k of ["eo", "eoStable", "default"]) {
   const r = arms[k];
   if (r.earlyOutFlag !== true) fails.push(`${k}: flag not read`);
   if (!(r.earlyOut && r.earlyOut.buckets >= 2)) fails.push(`${k}: < 2 chunk buckets on the early-out`);
@@ -103,6 +108,8 @@ if (!(arms.eoStable.stats && arms.eoStable.stats.stableSkips > 0)) fails.push("e
 if (dEo.maxDiff !== 0) fails.push(`pixels: bare vs ?staticEarlyOut=on differ (max ${dEo.maxDiff}, ${dEo.differing} channels)`);
 if (dRuns.maxDiff !== 0) fails.push(`pixels: bare vs ?batchedRuns=off differ (max ${dRuns.maxDiff}, ${dRuns.differing} channels) — B9a`);
 if (dStable.maxDiff !== 0) fails.push(`pixels: bare vs eo+stable differ (max ${dStable.maxDiff})`);
+if (!(arms.default.stats && arms.default.stats.stableSkips > 0)) fails.push("default: a bare URL did not reach the L1 skip (are both flags default on?)");
+if (dDefault.maxDiff !== 0) fails.push(`pixels: bare vs the default URL differ (max ${dDefault.maxDiff})`);
 for (const f of fails) console.log("  FAIL", f);
 console.log(fails.length === 0 ? "PASS" : "FAIL");
 process.exit(fails.length === 0 ? 0 : 1);

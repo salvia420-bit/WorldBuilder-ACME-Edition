@@ -1,6 +1,6 @@
 // tests/terrain_batch_no_drawid.test.mjs
 //
-// `?terrainNoDrawId` (2026-10-22, DEFAULT OFF, exact-match on/1/true/yes) —
+// `?terrainNoDrawId` (2026-10-22; DEFAULT ON since 2026-10-23, escapes off/0/false/no) —
 // scene3d/terrain_batch.js's batch program without gl_DrawID (improvement hunt
 // B10 = findings-round1 `gl-driver-2`, handoff P1d). The LB's BatchedMesh
 // instance id rides a per-vertex `aLbIid`, the vertex stage reads
@@ -9,7 +9,7 @@
 // multi-draw loop finds no gl_DrawID uniform and skips the per-range
 // setDrawIDUniform + vertex uniform-block re-upload (terrain_batch.js header).
 //
-//   N1  flag parsing (exact-match opt-in; absent / off / junk = off).
+//   N1  flag parsing (default on; off / 0 / false / no = off; absent / junk = on).
 //   N2  _batchingMatrixGlsl: lifts exactly three's batchingTexture declaration
 //       + getBatchingMatrix (stock AND batched_runs-patched chunk give the same
 //       text), refuses drift.
@@ -172,15 +172,16 @@ console.log("=================================================");
 // ---------------------------------------------------------------------------
 console.log("\n-- N1. flag parsing --");
 for (const [search, want] of [
-  ["", false], ["?terrainNoDrawId=on", true], ["?terrainNoDrawId=1", true], ["?terrainNoDrawId=true", true],
+  ["", true], ["?terrainNoDrawId=on", true], ["?terrainNoDrawId=1", true], ["?terrainNoDrawId=true", true],
   ["?terrainNoDrawId=yes", true], ["?terrainNoDrawId=ON", true], ["?terrainNoDrawId=off", false],
-  ["?terrainNoDrawId=0", false], ["?terrainNoDrawId=onn", false], ["?terrainNoDrawId=", false],
-  ["?terrainNoDrawId", false], ["?terrainBatch=off&terrainNoDrawId=on", true],
+  ["?terrainNoDrawId=0", false], ["?terrainNoDrawId=false", false], ["?terrainNoDrawId=NO", false],
+  ["?terrainNoDrawId=onn", true], ["?terrainNoDrawId=", true],
+  ["?terrainNoDrawId", true], ["?terrainBatch=off&terrainNoDrawId=on", true],
 ]) {
   check(`terrainNoDrawIdEnabled() for ${JSON.stringify(search)} === ${want}`, loadBatch(search).M.terrainNoDrawIdEnabled() === want);
 }
-check("the reader is the exact-match opt-in idiom",
-  BATCH_SRC.includes('on = v === "on" || v === "1" || v === "true" || v === "yes";'));
+check("the reader is the default-on escape idiom (off/0/false/no)",
+  BATCH_SRC.includes('on = !(v === "off" || v === "0" || v === "false" || v === "no");'));
 
 // ---------------------------------------------------------------------------
 console.log("\n-- N2. the matrix half of batching_pars_vertex --");
@@ -423,9 +424,9 @@ console.log("\n-- N5. fail-soft: the aLbIid write cannot happen --");
 }
 
 // ---------------------------------------------------------------------------
-console.log("\n-- N6. flag off: today's batch, untouched --");
+console.log("\n-- N6. flag off (=off): the gl_DrawID batch, untouched --");
 {
-  const { M, win } = loadBatch("");
+  const { M, win } = loadBatch("?terrainNoDrawId=off");
   const scene = freshScene();
   const ok = [lbMesh(5, 5, true), lbMesh(6, 5), lbMesh(7, 5)].map((m) => M.tryAbsorbTerrainLbIntoBatch(scene, m, OPTS, EXTRAS));
   const st = M.__state();

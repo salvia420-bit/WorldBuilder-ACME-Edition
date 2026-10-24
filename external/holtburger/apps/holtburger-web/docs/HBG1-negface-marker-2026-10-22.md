@@ -410,3 +410,13 @@ non-unit scale. The new `nf_setup` fixture sets 0x02 and asserts that the scales
   `&negFace=off` on v5: `negFaceRetail: false`, 0 unmarked, 212 assembled. 0 console errors and 0 page errors in all
   three runs. Pixel identity of `geomBundles` on vs off was not judged (laptop wireframe-class check only); that
   stays with the owner's eye check after a deploy.
+- **Deployed 2026-10-23** (owner instruction; `HANDOFF-gpu-resident-statics-2026-10-22.md` §0.1). §5.4 ran in order:
+  - steps 1-3: driver5 rc=0, the pack report as above, and the census against v4 exit 0 (`only_geom: True`);
+  - step 4: `deploy-packs-v5.sh`, made from v4 (dry run, then real);
+  - step 5: `dist_ssd.py stage --activate`, then `check` exit 0;
+  - step 6: the census on the served copy, exit 0;
+  - step 7: headless boots on the served v2 dist (live tree, `quality` mid, spawn point not Holtburg): default `?negFace`
+    gave `negFaceRetail: true`, `unmarkedModels: 0`, bundles assembled and 0 errors; `&negFace=off` gave
+    `negFaceRetail: false` and 0 errors;
+  - step 8: `&negFace=off` dropped from the queue arms.
+  - The owner's eye check of the v2 look is still owed.

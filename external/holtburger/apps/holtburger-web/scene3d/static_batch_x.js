@@ -1931,8 +1931,10 @@ function _installMemo(bm) {
 // the ClipMap mass sits in UNSORTED buckets — the population this reaches [D,
 // confirm with `walk.slots.drawnSorted` vs `.drawn` in a town].
 //
-// Ships OFF: needs an owner eye check and a 1070 arm (expect more triangles;
-// kill = a GPU-bound regression in towns, or p99 worse than the off arm).
+// Ships ON since 2026-10-23 (owner: on ahead of its 1070 arm; `=off` escape).
+// Still owed: the owner eye check and P0-FLAGS arm5, now the =off arm (expect
+// more triangles; revert on a GPU-bound regression in towns, or p99 worse than
+// the off arm).
 // Census: `__statBatchXStats().walk.earlyOut`; live in-session A/B seam
 // `window.__staticEarlyOut.off = true|false` (re-applies every live bucket; a
 // detached building bucket catches up when it is re-attached). A diag hook in
@@ -1941,17 +1943,17 @@ function _installMemo(bm) {
 // next call, the submitted sampler stays off that bucket until re-armed.
 // ---------------------------------------------------------------------------
 let _earlyOutFlag;
-/** `?staticEarlyOut=on` — opaque buckets ride three's BatchedMesh early-out.
- *  DEFAULT OFF; exact-match opt-in on/1/true/yes (never `!== "off"`). */
+/** `?staticEarlyOut` — opaque buckets ride three's BatchedMesh early-out.
+ *  DEFAULT ON since 2026-10-23; escapes off/0/false/no (any case). */
 export function staticEarlyOutEnabled() {
   if (_earlyOutFlag !== undefined) return _earlyOutFlag;
-  let on = false;
+  let on = true;
   try {
     if (typeof globalThis !== "undefined" && globalThis.location?.search) {
       const v = (new URLSearchParams(globalThis.location.search).get("staticEarlyOut") || "").toLowerCase();
-      on = v === "on" || v === "1" || v === "true" || v === "yes";
+      on = !(v === "off" || v === "0" || v === "false" || v === "no");
     }
-  } catch (_) { on = false; }
+  } catch (_) { on = true; }
   _earlyOutFlag = on;
   return on;
 }
@@ -2713,7 +2715,7 @@ function _getOrCreateBucket(mat, scene3d, templateNode, regionKey, poolRef, init
   // ?skipDeadBatch — derive visibility from the material now that castShadow is
   // set. Re-derived on the optimize tick below; see `_markDeadBatch`.
   _markDeadBatch(bm);
-  // ?staticEarlyOut (default OFF; no-op then) — an unsorted bucket drops the
+  // ?staticEarlyOut (default ON since 2026-10-23; =off makes this a no-op) — an unsorted bucket drops the
   // per-instance cull and rides three's early-out. BEFORE `_installMemo`, which
   // reads the result and installs no override on an early-out bucket.
   applyStaticEarlyOut(bm);

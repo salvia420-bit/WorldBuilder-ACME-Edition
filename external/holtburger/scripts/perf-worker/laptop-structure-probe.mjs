@@ -11,7 +11,7 @@
 //
 //   capped-build node scripts/perf-worker/laptop-structure-probe.mjs --town both --label bare
 //   capped-build node scripts/perf-worker/laptop-structure-probe.mjs --town holtburg --label pools \
-//     --flags 'packSource=on&geomBundles=on&texCompressedOnly=on&slotGrid=on&frameWork=on&drawPools=on&negFace=off'
+//     --flags 'packSource=on&geomBundles=on&texCompressedOnly=on&slotGrid=on&frameWork=on&drawPools=on'
 //
 // WHY A LAPTOP TWIN. The laptop renders with SwiftShader, so its timings mean nothing
 // (walls row 101). But the counts P0 needs first are STRUCTURAL — how many multidraw ranges

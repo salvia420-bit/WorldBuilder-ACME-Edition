@@ -70,8 +70,8 @@
 //     list byte-identical on settled frames, so batchedRuns' `_sameCanonical`
 //     HITS (no rebuild, no upload) — it is still an O(ranges) JS compare per
 //     draw. Handoff L1 replaces it with an O(1) write epoch for exactly this
-//     early-out population (batched_runs.js `?batchedRunsStable`, opt-in,
-//     2026-10-22); the pools need nothing more for it — every pool list change
+//     early-out population (batched_runs.js `?batchedRunsStable`, built
+//     2026-10-22, default on since 2026-10-23); the pools need nothing more for it — every pool list change
 //     goes through three's API or `_visibilityChanged` (bandTick below).
 //   * Translucent and additive pools stay unmarked (sorted, D-07.3); an
 //     opaque-class pool whose material blends (transparent + alphaTest) or

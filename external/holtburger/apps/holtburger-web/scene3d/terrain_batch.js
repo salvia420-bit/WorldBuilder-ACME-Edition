@@ -83,8 +83,8 @@
 // Wireframe mode (?wireframe=1) is never batched (different material system);
 // quality=high LOD re-bakes flow through the eviction hook + re-absorb.
 //
-// NO-gl_DrawID PROGRAM (`?terrainNoDrawId=on`, DEFAULT OFF, exact-match
-// on/1/true/yes opt-in; 2026-10-22, improvement hunt B10 = findings-round1
+// NO-gl_DrawID PROGRAM (`?terrainNoDrawId`, DEFAULT ON since 2026-10-23, escapes
+// off/0/false/no; built 2026-10-22, improvement hunt B10 = findings-round1
 // `gl-driver-2`, handoff P1d).
 //   WHY [D, ANGLE main read 2026-10-22]. Chrome on Windows has no native
 // multi-draw: ANGLE's D3D11 backend loops the ranges (Context11::multiDrawElements,
@@ -178,19 +178,20 @@ export function terrainBatchEnabled() {
 
 let _noDrawIdFlag;
 /** `?terrainNoDrawId` — the batch program without gl_DrawID (see NO-gl_DrawID
- *  PROGRAM in the header). DEFAULT OFF: exact-match opt-in, `on`/`1`/`true`/`yes`
- *  (any case); absent or anything else = off. Read once. Means nothing without
+ *  PROGRAM in the header). DEFAULT ON since 2026-10-23 (owner, ahead of its 1070
+ *  arm): escapes `off`/`0`/`false`/`no` (any case); absent or anything else = on.
+ *  Read once. Means nothing without
  *  ?terrainBatch (no batch, no program). */
 export function terrainNoDrawIdEnabled() {
   if (_noDrawIdFlag !== undefined) return _noDrawIdFlag;
-  let on = false;
+  let on = true;
   try {
     if (typeof window !== "undefined" && window.location?.search) {
       const v = (new URLSearchParams(window.location.search).get("terrainNoDrawId") || "").toLowerCase();
-      on = v === "on" || v === "1" || v === "true" || v === "yes";
+      on = !(v === "off" || v === "0" || v === "false" || v === "no");
     }
   } catch (_) {
-    on = false;
+    on = true;
   }
   return (_noDrawIdFlag = on);
 }

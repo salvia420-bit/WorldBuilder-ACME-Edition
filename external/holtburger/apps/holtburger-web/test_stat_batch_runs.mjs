@@ -59,13 +59,18 @@ const stripped = src
 const factory = new Function(
   "THREE",
   stripped +
-    "\n; return { __resetStatBatchXForTest, consolidateStaticSingletonsCrossLb, " +
+    "\n; return { __resetStatBatchXForTest, __setStaticEarlyOutForTest, consolidateStaticSingletonsCrossLb, " +
     "evictStaticBatchXForLb, tickStatBatchXOptimize, getStatBatchXStats, " +
     "statBatchNoSortEnabled, __setStatBatchNoSortForTest, " +
     "statBatchMemoMode, __setStatBatchMemoForTest, __setStatGeomDedupForTest, " +
     "statBatchSphereMode, __setStatBatchSphereForTest, statBatchRunsMode, __setStatBatchRunsForTest };"
 );
 const M = factory(THREE);
+// 2026-10-23 — ?staticEarlyOut is DEFAULT-ON now (no location.search in node ⇒ on), which
+// puts opaque buckets on three's early-out and skips the memo / runs / walk / sphere tiers
+// this suite exists to cover. Pin it OFF so those tiers keep their coverage (the early-out
+// arm's streaming coverage is the separate stress repro).
+M.__setStaticEarlyOutForTest(false);
 
 // ---------------------------------------------------------------------------
 // fixtures
@@ -174,6 +179,7 @@ function additiveMat() {
 
 const reset = (mode, slacks, noSort, sphere) => {
   M.__resetStatBatchXForTest();
+  M.__setStaticEarlyOutForTest(false); // see the pin after the factory (sections swap location)
   M.__setStatGeomDedupForTest(false);
   M.__setStatBatchNoSortForTest(!!noSort);
   M.__setStatBatchMemoForTest(mode, slacks);

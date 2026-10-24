@@ -17,7 +17,7 @@
 //     the epoch does not;
 //   * the cooperation API for own overrides, and the self-audit catching an owner
 //     that under-reports (skip disabled for the session, list re-derived);
-//   * flag default (OFF, exact-match opt-in), seams, direct prepareRunDraw.
+//   * flag default (ON since 2026-10-23, off/0/false/no escape), seams, direct prepareRunDraw.
 //
 // Run:
 //   cd apps/holtburger-web/
@@ -46,10 +46,10 @@ function check(name, ok, detail) {
 // --- flag + premises ------------------------------------------------------------------------
 const THREE_OBR = THREE.BatchedMesh.prototype.onBeforeRender;
 {
-  check("flag: ?batchedRunsStable is OFF by default (node: no URL)", batchedRunsStableEnabled() === false);
+  check("flag: ?batchedRunsStable is ON by default (node: no URL)", batchedRunsStableEnabled() === true);
   const src = readFileSync(new URL("../scene3d/batched_runs.js", import.meta.url), "utf8");
-  check("flag: exact-match opt-in on/1/true/yes",
-    /get\("batchedRunsStable"\)[\s\S]{0,120}return v === "on" \|\| v === "1" \|\| v === "true" \|\| v === "yes";/.test(src));
+  check("flag: default on, escapes off/0/false/no",
+    /get\("batchedRunsStable"\)[\s\S]{0,120}return !\(v === "off" \|\| v === "0" \|\| v === "false" \|\| v === "no"\);/.test(src));
   check("install: the hook is installed by installBatchedRuns only with both flags", /if \(FLAG && FLAG_STABLE\) \{\s*try \{ installBatchedRunsStable\(THREE\)/.test(src));
   const require = createRequire(import.meta.url);
   const core = readFileSync(require.resolve("three").replace(/[^/\\]+$/, "") + "three.core.js", "utf8");

@@ -404,7 +404,7 @@ export function consolidateBuildingSurfaces(nodes) {
       instances: added,
     };
     bm.name = `building-batch-lb${lbId.toString(16).padStart(8, "0")}-s${surf.toString(16).padStart(8, "0")}-x${added}`;
-    // ?staticEarlyOut (handoff P2 / L0, DEFAULT OFF; a no-op then): an opaque,
+    // ?staticEarlyOut (handoff P2 / L0, DEFAULT ON since 2026-10-23; a no-op with =off): an opaque,
     // unsorted bucket drops the per-instance sphere cull and rides three's
     // BatchedMesh early-out. The node cull above stays: three computes the
     // landblock-bounded `boundingSphere` lazily at the first cull, after every

@@ -65,7 +65,7 @@ console.log("\n— laptop-structure-probe.mjs: URL, flags, args");
   const final = uncappedBenchUrl(u);
   check("targetFps=0 appended once, last", final.endsWith("&targetFps=0") && final.split("targetFps").length === 2, final.slice(-40));
   check("never wireframe / nullRender / renderOnDemand in the default URL", !/wireframe|nullRender|renderOnDemand/.test(u));
-  const chain = "packSource=on&geomBundles=on&texCompressedOnly=on&slotGrid=on&frameWork=on&drawPools=on&negFace=off";
+  const chain = "packSource=on&geomBundles=on&texCompressedOnly=on&slotGrid=on&frameWork=on&drawPools=on";
   check("arm flags appended byte for byte (leading & tolerated)", probe.buildProbeUrl({ flags: "&" + chain }).endsWith("&quality=ultra&" + chain));
   for (const k of probe.REFUSED_FLAGS) check(`refuses --flags ${k}=1`, throws(() => probe.buildProbeUrl({ flags: `${k}=1` })));
   check("refuses a base key with another value (quality=low)", throws(() => probe.buildProbeUrl({ flags: "quality=low" })));
@@ -527,7 +527,7 @@ console.log("\n— queue-1070/batch-P0-gpu-resident-2026-10-22.json");
   check("queue schema", Q.schema === "hb-1070-queue-v1");
   const p0 = Q.items.find((i) => i.id === "P0");
   check("three arms with the handoff's exact flags", p0 && JSON.stringify(p0.arms.map((a) => a.flags)) === JSON.stringify(["", "&batchedRuns=off",
-    "&packSource=on&geomBundles=on&texCompressedOnly=on&slotGrid=on&frameWork=on&drawPools=on&negFace=off"]));
+    "&packSource=on&geomBundles=on&texCompressedOnly=on&slotGrid=on&frameWork=on&drawPools=on"]));
   const hbsess = readFileSync(path.join(PERF, "hbsess.mjs"), "utf8");
   check("hbsess.mjs still builds its boot URL the way the queue's URLs assume",
     hbsess.includes("?autoLogin=1&account=tailnet1&password=tailnet1&autoSpawn=first&nosw=1&camDebug=on&adaptiveRes=off&quality=${q}${flags ? \"&\" + flags : \"\"}"));
@@ -560,11 +560,11 @@ console.log("\n— queue-1070/batch-P0-gpu-resident-2026-10-22.json");
   const wantFlags = {
     "arm3b-chain-poolRuns-off": p0.arms[2].flags + "&poolRuns=off",
     "arm4-atlasGeomDedup-off": "&atlasGeomDedup=off",
-    "arm5-staticEarlyOut": "&staticEarlyOut=on",
-    "arm6-staticEarlyOut-stable": "&staticEarlyOut=on&batchedRunsStable=on",
+    "arm5-staticEarlyOut-off": "&staticEarlyOut=off",
+    "arm6-batchedRunsStable-off": "&batchedRunsStable=off",
     "arm7-statGeomDedup": "&statGeomDedup=on",
     "arm8-batchedRunsSorted-off": "&batchedRunsSorted=off",
-    "arm9-terrainNoDrawId": "&terrainNoDrawId=on",
+    "arm9-terrainNoDrawId-off": "&terrainNoDrawId=off",
   };
   check("P0-FLAGS: the seven 2026-10-22 flag arms, in order", pf && JSON.stringify(Object.fromEntries(pf.arms.map((a) => [a.arm, a.flags]))) === JSON.stringify(wantFlags));
   // Each flag is read under that exact name by the module the arm is about.

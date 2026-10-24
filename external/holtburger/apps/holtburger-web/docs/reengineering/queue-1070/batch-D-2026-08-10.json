@@ -80,10 +80,10 @@
         "BAKE-4 dist (page dims make the strict arm ADMIT; on v3 it refuses everything — ENVCELL report D5)",
         "T22P leg 6-8 landed (bit-gated strict arm + offPage hold-out)",
         "2026-10-22: served tex-xu7 catalog consistent with TEXREF (docs/drawpools-blockers-2026-10-22.md §2.5 R4 validator exits 0) — the offPage-drain non-demonstration on the T4 is explained [D] by the unpublished page farm (§2.3)",
-        "2026-10-22: &negFace=off on the URL until the HBG1 v2 GEOM rebake deploys (negFace default ON since 2026-10-19 makes every bundle model missing; handoff F7a)"
+        "2026-10-22: &negFace=off was on the URL until the HBG1 v2 GEOM rebake deployed; dropped 2026-10-23 when world-packs-v5 went live (negFace default ON since 2026-10-19; handoff F7a)"
       ],
       "urls": {
-        "on": "http://<origin>/apps/holtburger-web/index.html?nosw=1&skytime=12&camDebug=on&autoLogin=1&account=<bot>&password=<bot>&autoSpawn=first&packSource=on&geomBundles=on&texCompressedOnly=on&texWorkers=on&slotGrid=on&frameWork=on&drawPools=on&negFace=off",
+        "on": "http://<origin>/apps/holtburger-web/index.html?nosw=1&skytime=12&camDebug=on&autoLogin=1&account=<bot>&password=<bot>&autoSpawn=first&packSource=on&geomBundles=on&texCompressedOnly=on&texWorkers=on&slotGrid=on&frameWork=on&drawPools=on",
         "off": "same minus drawPools (the K2 kill arm)"
       },
       "counterAssertionsBeforeJudging": [

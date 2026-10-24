@@ -86,7 +86,7 @@
       "prerequisite": "T22 landed (batch prerequisite 2) — `?drawPools` requires `?slotGrid` + `?packSource` + `?geomBundles` + `?texCompressedOnly` (F-11.3), `?frameWork` ON for stages B/C (frameWorkEnabled landed + read-verified at HEAD, scene3d/frame_work.js). ON-arm URL below carries the full SPEC-named chain; only packSource/slotGrid/frameWork exist at HEAD 2026-08-09 — re-verify the rest at go-time.",
       "structuralChange": "first pooled world + class-keyed materials + receiveShadow coarsening (pass 7 H-07.2/Q7): BatchedMesh pools, class-key material tier, sector cull, buildings generalize receiveShadow",
       "urls": {
-        "on": "http://127.0.0.1:8765/apps/holtburger-web/index.html?nosw=1&autoLogin=1&account=tailnet1&password=tailnet1&autoSpawn=first&camDebug=on&packSource=on&geomBundles=on&texCompressedOnly=on&slotGrid=on&frameWork=on&drawPools=on&negFace=off",
+        "on": "http://127.0.0.1:8765/apps/holtburger-web/index.html?nosw=1&autoLogin=1&account=tailnet1&password=tailnet1&autoSpawn=first&camDebug=on&packSource=on&geomBundles=on&texCompressedOnly=on&slotGrid=on&frameWork=on&drawPools=on",
         "off": "http://127.0.0.1:8765/apps/holtburger-web/index.html?nosw=1&autoLogin=1&account=tailnet1&password=tailnet1&autoSpawn=first&camDebug=on"
       },
       "vantages": [

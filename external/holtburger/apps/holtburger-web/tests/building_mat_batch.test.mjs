@@ -60,6 +60,10 @@ const src = (p) => readFileSync(path.join(APP, p), "utf8");
 
 const THREE = await import("three");
 const B = await import(v("scene3d/buildings.js"));
+// 2026-10-23 — ?staticEarlyOut is DEFAULT-ON now and buildings.js applies the same
+// early-out; the "opaque" case below locks the per-instance + node frustum-cull
+// arm, so pin the flag off (same module instance buildings.js imports).
+(await import(v("scene3d/static_batch_x.js"))).__setStaticEarlyOutForTest(false);
 const { MaterialCache } = await import(v("scene3d/materials.js"));
 const ATLAS = await import(v("scene3d/static_atlas.js"));
 const BC7 = await import(v("scene3d/bc7_textures.js"));
