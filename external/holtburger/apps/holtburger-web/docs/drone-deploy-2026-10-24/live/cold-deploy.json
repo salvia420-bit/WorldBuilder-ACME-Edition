@@ -1,0 +1,140 @@
+{
+ "prewarm": {
+  "sceneReady": true,
+  "hud": true
+ },
+ "loaf": [
+  {
+   "start": 18444.5,
+   "dur": 260.59999999403954,
+   "block": 0,
+   "render": 16.69999998807907,
+   "scripts": [
+    {
+     "dur": 14,
+     "inv": "FrameRequestCallback",
+     "fn": "softCapTick",
+     "url": "scene3d/index.js?v=diag-followons-2026-05-23",
+     "pos": 142975
+    }
+   ]
+  },
+  {
+   "start": 19031.70000000298,
+   "dur": 69.8999999910593,
+   "block": 10.1,
+   "render": 17.299999997019768,
+   "scripts": [
+    {
+     "dur": 42,
+     "inv": "import.then",
+     "fn": "",
+     "url": "drone/index.js",
+     "pos": 21387
+    },
+    {
+     "dur": 16,
+     "inv": "FrameRequestCallback",
+     "fn": "softCapTick",
+     "url": "scene3d/index.js?v=diag-followons-2026-05-23",
+     "pos": 142975
+    }
+   ]
+  },
+  {
+   "start": 19312.40000000596,
+   "dur": 53.29999999701977,
+   "block": 1.6,
+   "render": 33.6000000089407,
+   "scripts": [
+    {
+     "dur": 18,
+     "inv": "Worker.onmessage",
+     "fn": "",
+     "url": "scene3d/bake_worker_client.js",
+     "pos": 50633
+    },
+    {
+     "dur": 32,
+     "inv": "FrameRequestCallback",
+     "fn": "softCapTick",
+     "url": "scene3d/index.js?v=diag-followons-2026-05-23",
+     "pos": 142975
+    }
+   ]
+  },
+  {
+   "start": 25679.59999999404,
+   "dur": 134.1000000089407,
+   "block": 83.8,
+   "render": 133.40000000596046,
+   "scripts": [
+    {
+     "dur": 127,
+     "inv": "FrameRequestCallback",
+     "fn": "softCapTick",
+     "url": "scene3d/index.js?v=diag-followons-2026-05-23",
+     "pos": 142975
+    }
+   ]
+  },
+  {
+   "start": 25868.5,
+   "dur": 151,
+   "block": 0,
+   "render": 36.20000000298023,
+   "scripts": [
+    {
+     "dur": 32,
+     "inv": "FrameRequestCallback",
+     "fn": "softCapTick",
+     "url": "scene3d/index.js?v=diag-followons-2026-05-23",
+     "pos": 142975
+    }
+   ]
+  },
+  {
+   "start": 29878.90000000596,
+   "dur": 63.69999998807907,
+   "block": 0,
+   "render": 12.699999988079071,
+   "scripts": [
+    {
+     "dur": 12,
+     "inv": "FrameRequestCallback",
+     "fn": "softCapTick",
+     "url": "scene3d/index.js?v=diag-followons-2026-05-23",
+     "pos": 142975
+    }
+   ]
+  }
+ ],
+ "topFns": [
+  "13.2% (idle) @ (native):0",
+  "11.1% (program) @ (native):0",
+  "2.8% WebGLRenderer.renderBufferDirect @ build/three.module.js:17116",
+  "2.0% projectObject @ build/three.module.js:17763",
+  "1.9% enqueueScrolled @ scene3d/terrain_scatter.js:950",
+  "1.7% setProgram @ build/three.module.js:18266",
+  "1.4% upload @ build/three.module.js:6195",
+  "1.3% bindVertexArray @ (native):0",
+  "1.2% step @ plugins/vitals-orbs.js:866",
+  "1.1% updateMatrix @ build/three.core.js:12821",
+  "1.0% multiplyMatrices @ build/three.core.js:10385",
+  "1.0% bindTexture @ (native):0",
+  "1.0% updateMatrixWorld @ build/three.core.js:12853",
+  "0.9% multiDrawArraysInstancedWEBGL @ (native):0",
+  "0.8% _tickLatched @ particles/particle_manager.js:2656",
+  "0.8% refreshUniformsCommon @ build/three.module.js:15077",
+  "0.7% getBindingState @ build/three.module.js:1663",
+  "0.7% _tickPerFrameBody @ scene3d/loop.js:2996",
+  "0.7% setValue @ build/three.module.js:6179",
+  "0.7% getAnimations @ (native):0",
+  "0.7% tick @ scene3d/entities.js:17547",
+  "0.7% setFromRotationMatrix @ build/three.core.js:11320",
+  "0.7% WebGLRenderer.render @ build/three.module.js:17541",
+  "0.5% compressedTexSubImage2D @ (native):0",
+  "0.5% renderObjects @ build/three.module.js:18029"
+ ],
+ "t0": 18446.59999999404
+}

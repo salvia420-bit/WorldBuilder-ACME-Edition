@@ -11331,6 +11331,74 @@ export class EntityManager {
     inst._unifiedQueue = null;
   }
 
+  // ---- Drone Deploy (2026-10-24, `?drone=on`, DEFAULT OFF) -----------------
+  // Local-only gesture clips for scene3d/drone/gestures.js. The clip is built in
+  // JS from retail Animation (0x03) frames (wasm `fetchAnimation`, the poser's
+  // own 7-float, w-first, object-space layout) and goes onto THE playhead the
+  // way `_tryUnifiedCycleOneShot`'s tail installs a one-shot: build the Rust
+  // MotionSequence, free the previous one-shot, drop the J5 pending tail,
+  // install the record. No bake, no MotionTable lookup, nothing on the wire.
+  // The record carries no `inPlace`, so `poseRigAt` writes the raw part frames
+  // (`desc.posFrames` must be null: an empty array poses NaN). A clearOnDone
+  // clip (the default) is never cut by an incoming setMotion and hands back to
+  // `_unifiedLoco` when it ends; `holdFinal` latches the last frame until the
+  // next setMotion (any command, even a deduped re-issue) cuts it. `localClip`
+  // marks the record so `stopLocalClip` never frees a server gesture or a death
+  // hold. Additive: only scene3d/drone/ calls these.
+  /**
+   * Play a JS-built gesture clip on `guid`'s rig. Local-only (nothing is sent).
+   * @param {number} guid
+   * @param {object} desc gestures.js `buildClip` output: partFrames (Float32Array,
+   *   numFrames*partCount*7), partCount, numFrames, framerate, duration,
+   *   frameTimes (Float32Array), segmentStarts / segmentCounts (Uint32Array),
+   *   posFrames: null
+   * @param {{holdFinal?: boolean, speed?: number}} [opts] defaults false / 1
+   * @returns {boolean} true when the clip owns the playhead
+   */
+  playLocalClip(guid, desc, opts = undefined) {
+    const inst = this.entityMap.get(guid >>> 0);
+    if (!inst || inst._disposed || !desc) return false;
+    // CQ-06: a death hold is sticky; no gesture may replace it.
+    if (inst._unifiedSeq?.deathHold === true) return false;
+    const MS = _motionSequenceClass();
+    if (!MS) return false;
+    const n = desc.numFrames >>> 0;
+    const pc = desc.partCount >>> 0;
+    if (!n || !pc || pc !== (inst.parts?.length ?? 0)) return false;
+    if (!desc.partFrames || desc.partFrames.length !== n * pc * 7) return false;
+    const seq = MS.fromDescriptor(
+      n, _finiteOr0(desc.framerate), _finiteOr0(desc.duration),
+      desc.frameTimes || EMPTY_F32, desc.segmentStarts || EMPTY_U32, desc.segmentCounts || EMPTY_U32,
+      false, // one-shot: latches `done` and clamps the final frame
+    );
+    if (!seq) return false;
+    if (inst._unifiedSeq) { try { inst._unifiedSeq.seq.free(); } catch (_) {} }
+    this._clearUnifiedQueue(inst);
+    const sp = +(opts?.speed ?? 1);
+    inst._unifiedSeq = {
+      seq, desc, clearOnDone: opts?.holdFinal !== true, hooks: [], lastHookTime: -1,
+      speed: Number.isFinite(sp) && sp > 0 ? sp : 1, localClip: true,
+    };
+    return true;
+  }
+
+  /**
+   * Stop the clip `playLocalClip` put on `guid`'s playhead (abort / skip): free
+   * it and drop the pending tail; the tick then poses the `_unifiedLoco` cycle.
+   * Any other one-shot (a server gesture, a door or a death hold) is left alone.
+   * @param {number} guid
+   * @returns {boolean} true when a local clip was stopped
+   */
+  stopLocalClip(guid) {
+    const inst = this.entityMap.get(guid >>> 0);
+    const ua = inst?._unifiedSeq;
+    if (!ua || ua.localClip !== true) return false;
+    try { ua.seq.free(); } catch (_) { /* already freed */ }
+    inst._unifiedSeq = null;
+    this._clearUnifiedQueue(inst);
+    return true;
+  }
+
   // Door open/close always routes through the Rust authority (playDoorMotion).
   // Kept because index.html's kind=15 handler asks before calling it (its
   // false branch — the legacy instant root-rotation snap — is now unreachable).

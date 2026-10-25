@@ -1,0 +1,52 @@
+{
+ "label": "fpv-flying",
+ "ft": {
+  "frames": 521,
+  "fps": 96,
+  "p50Ms": 8.4,
+  "p95Ms": 16.7,
+  "maxMs": 316.7,
+  "over50": 1
+ },
+ "topFiles": [
+  "33.9% (native)",
+  "23.0% build/three.module.js",
+  "7.3% build/three.core.js",
+  "3.5% pkg/holtburger_web_bg.wasm",
+  "3.1% particles/particle_manager.js",
+  "2.0% scene3d/terrain_scatter.js",
+  "1.9% scene3d/statics.js",
+  "1.6% scene3d/entities.js",
+  "1.6% scene3d/skip_hidden_matrix.js",
+  "1.4% scene3d/loop.js",
+  "1.4% plugins/vitals-orbs.js",
+  "1.2% scene3d/batched_runs.js",
+  "1.0% scene3d/async_link_guard.js",
+  "1.0% vfx/weapon_fx.js"
+ ],
+ "topFns": [
+  "13.3% (program) @ (native):0",
+  "10.5% (idle) @ (native):0",
+  "2.7% WebGLRenderer.renderBufferDirect @ build/three.module.js:17116",
+  "2.2% projectObject @ build/three.module.js:17763",
+  "2.0% update @ scene3d/terrain_scatter.js:1052",
+  "1.9% setProgram @ build/three.module.js:18266",
+  "1.5% upload @ build/three.module.js:6195",
+  "1.5% proto.updateMatrixWorld @ scene3d/skip_hidden_matrix.js:54",
+  "1.3% updateMatrix @ build/three.core.js:12821",
+  "1.2% bindVertexArray @ (native):0",
+  "1.1% onBeforeRender @ build/three.core.js:27214",
+  "1.1% step @ plugins/vitals-orbs.js:866",
+  "1.0% renderer.renderBufferDirect @ scene3d/async_link_guard.js:514",
+  "1.0% bindTexture @ (native):0",
+  "1.0% refreshUniformsCommon @ build/three.module.js:15077",
+  "0.9% multiplyMatrices @ build/three.core.js:10385",
+  "0.9% renderObjects @ build/three.module.js:18029",
+  "0.9% multiDrawArraysInstancedWEBGL @ (native):0",
+  "0.9% _tickLatched @ particles/particle_manager.js:2656",
+  "0.9% _cullStaticsWalk @ scene3d/statics.js:4728",
+  "0.8% update @ build/three.module.js:4698",
+  "0.8% _syncMaterials @ vfx/weapon_fx.js:414"
+ ],
+ "rawNodes": 2221
+}

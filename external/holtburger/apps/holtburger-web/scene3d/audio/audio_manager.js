@@ -476,6 +476,36 @@ export class AudioManager {
   }
 
   /**
+   * Drone Deploy (2026-10-24) — the effect-category bus, for a caller that
+   * synthesises its own continuous sound (scene3d/drone/audio.js, the motor
+   * hum) instead of playing a Wave through `play()`.
+   *
+   * `{ctx, node, sliderGain}` once the AudioContext exists (the first
+   * pointerdown / keydown reaches `notifyUserGesture`), else null. This never
+   * creates the context — `resume()` from a user gesture does — so a caller
+   * that got null asks again later. `node` is `_effectMaster`: whatever
+   * connects to it takes the master slider and the focus mute
+   * (`_applyFocusMute` on `_master`) exactly as a `category: "effect"` voice
+   * does, and in the default HRTF mix the effect slider too. Under
+   * `?audioRetailPan=on` the slider is folded into each voice's dB instead and
+   * this bus stays at unity (`_busGain`), so `sliderGain()` is the factor the
+   * caller multiplies in itself (1 in the HRTF mix); it follows the Options
+   * slider, so read it whenever levels are set. The caller owns every node it
+   * builds and disconnects them; nothing here tracks them, and they take no
+   * slot in the retail voice pool (`voicePool`).
+   *
+   * @returns {{ctx: AudioContext, node: GainNode, sliderGain: () => number}|null}
+   */
+  getEffectBus() {
+    if (!this._ctx || !this._effectMaster) return null;
+    return {
+      ctx: this._ctx,
+      node: this._effectMaster,
+      sliderGain: () => (this._hrtf ? 1.0 : this._effectGainValue),
+    };
+  }
+
+  /**
    * Wave 3 / A4 — per-rAF position update for follow-mode sounds.
    * Walks `_followingHandles` and rewrites each panner's position from
    * the caller-supplied `lookupPosition(guid) → {x,y,z}|null` callback.

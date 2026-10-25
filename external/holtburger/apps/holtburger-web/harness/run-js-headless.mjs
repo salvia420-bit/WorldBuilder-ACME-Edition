@@ -1221,6 +1221,18 @@ const TIER5 = [
   { tier: 5, flag: "filmMode(runtime_overlay)", file: "tests/film_runtime_overlay.test.mjs" },
   { tier: 5, flag: "filmMode(runtime_world)", file: "tests/film_runtime_world.test.mjs" },
   { tier: 5, flag: "filmMode(terrain_corridor)", file: "tests/film_terrain_corridor.test.mjs" },
+  // Drone Deploy (2026-10-24; DEFAULT ON since 2026-10-25, ?drone=off disables it): scene3d/drone/** + plugins/drone-hud.js suites (SPEC scene3d/drone/SPEC.md).
+  { tier: 5, flag: "drone(flight)", file: "tests/drone_flight.test.mjs" },
+  { tier: 5, flag: "drone(tether)", file: "tests/drone_tether.test.mjs" },
+  { tier: 5, flag: "drone(gestures)", file: "tests/drone_gestures.test.mjs" },
+  { tier: 5, flag: "drone(props)", file: "tests/drone_props.test.mjs" },
+  { tier: 5, flag: "drone(entities_seam)", file: "tests/drone_entities_seam.test.mjs" },
+  { tier: 5, flag: "drone(controls)", file: "tests/drone_controls.test.mjs" },
+  { tier: 5, flag: "drone(osd)", file: "tests/drone_osd.test.mjs" },
+  { tier: 5, flag: "drone(audio)", file: "tests/drone_audio.test.mjs" },
+  { tier: 5, flag: "drone(sequence)", file: "tests/drone_sequence.test.mjs" },
+  { tier: 5, flag: "drone(api)", file: "tests/drone_api.test.mjs" },
+  { tier: 5, flag: "drone(hud)", file: "tests/drone_hud.test.mjs" },
   // 2026-10-17 fps wave 2 (card "binds"): texture-unit pins + light upload memo,
   // proven exact on three r184's real renderer over tests/helpers/fake_webgl2.mjs.
   { tier: 5, flag: "texUnitPin+lightUploadOnce", file: "tests/uniform_bind_patch.test.mjs" },

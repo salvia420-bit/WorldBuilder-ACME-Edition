@@ -1,0 +1,564 @@
+{
+ "run": {
+  "heading": 270,
+  "speed": 20,
+  "metres": 768,
+  "stepMs": 250
+ },
+ "end": [
+  31764,
+  34567,
+  74.2
+ ],
+ "endCell": "0xa5b40019",
+ "rendered": [
+  31764,
+  34567,
+  74.2
+ ],
+ "steps": 154,
+ "runSec": 41.8,
+ "achievedMps": 18.4,
+ "zMiss": 2,
+ "maxSnapErr": 0,
+ "preKnown": 53,
+ "newObjects": 47,
+ "firstSeenDist": {
+  "min": 78.6,
+  "median": 99.8,
+  "max": 112.4
+ },
+ "firstSeenAhead": 46,
+ "settledCensus": {
+  "near": 12,
+  "ahead": 4,
+  "total": 51
+ },
+ "portal": false,
+ "timeline": [
+  {
+   "t": 1.1,
+   "at": "0xa9b40011",
+   "m": 20,
+   "near": 53,
+   "ahead": 4,
+   "total": 53,
+   "new": 0
+  },
+  {
+   "t": 2.4,
+   "at": "0xa9b40009",
+   "m": 40,
+   "near": 47,
+   "ahead": 4,
+   "total": 52,
+   "new": 0
+  },
+  {
+   "t": 3.6,
+   "at": "0xa9b40009",
+   "m": 60,
+   "near": 44,
+   "ahead": 3,
+   "total": 54,
+   "new": 1
+  },
+  {
+   "t": 4.7,
+   "at": "0xa9b40001",
+   "m": 80,
+   "near": 30,
+   "ahead": 0,
+   "total": 53,
+   "new": 1
+  },
+  {
+   "t": 5.9,
+   "at": "0xa8b40039",
+   "m": 100,
+   "near": 15,
+   "ahead": 1,
+   "total": 55,
+   "new": 2
+  },
+  {
+   "t": 7,
+   "at": "0xa8b40031",
+   "m": 120,
+   "near": 5,
+   "ahead": 1,
+   "total": 55,
+   "new": 2
+  },
+  {
+   "t": 8.1,
+   "at": "0xa8b40029",
+   "m": 140,
+   "near": 6,
+   "ahead": 2,
+   "total": 56,
+   "new": 3
+  },
+  {
+   "t": 9.3,
+   "at": "0xa8b40021",
+   "m": 160,
+   "near": 5,
+   "ahead": 1,
+   "total": 56,
+   "new": 3
+  },
+  {
+   "t": 10.3,
+   "at": "0xa8b40021",
+   "m": 180,
+   "near": 2,
+   "ahead": 0,
+   "total": 56,
+   "new": 3
+  },
+  {
+   "t": 11.4,
+   "at": "0xa8b40019",
+   "m": 200,
+   "near": 3,
+   "ahead": 0,
+   "total": 57,
+   "new": 4
+  },
+  {
+   "t": 12.5,
+   "at": "0xa8b40011",
+   "m": 220,
+   "near": 3,
+   "ahead": 1,
+   "total": 58,
+   "new": 5
+  },
+  {
+   "t": 13.6,
+   "at": "0xa8b40009",
+   "m": 240,
+   "near": 4,
+   "ahead": 3,
+   "total": 60,
+   "new": 7
+  },
+  {
+   "t": 14.7,
+   "at": "0xa8b40001",
+   "m": 260,
+   "near": 6,
+   "ahead": 5,
+   "total": 62,
+   "new": 9
+  },
+  {
+   "t": 15.8,
+   "at": "0xa7b40039",
+   "m": 280,
+   "near": 6,
+   "ahead": 5,
+   "total": 63,
+   "new": 10
+  },
+  {
+   "t": 17,
+   "at": "0xa7b40039",
+   "m": 300,
+   "near": 7,
+   "ahead": 6,
+   "total": 64,
+   "new": 11
+  },
+  {
+   "t": 18,
+   "at": "0xa7b40031",
+   "m": 320,
+   "near": 9,
+   "ahead": 8,
+   "total": 67,
+   "new": 14
+  },
+  {
+   "t": 19.1,
+   "at": "0xa7b40029",
+   "m": 340,
+   "near": 9,
+   "ahead": 3,
+   "total": 67,
+   "new": 14
+  },
+  {
+   "t": 20.3,
+   "at": "0xa7b40021",
+   "m": 360,
+   "near": 9,
+   "ahead": 2,
+   "total": 67,
+   "new": 14
+  },
+  {
+   "t": 21.3,
+   "at": "0xa7b40019",
+   "m": 380,
+   "near": 10,
+   "ahead": 3,
+   "total": 68,
+   "new": 15
+  },
+  {
+   "t": 22.5,
+   "at": "0xa7b40011",
+   "m": 400,
+   "near": 11,
+   "ahead": 2,
+   "total": 69,
+   "new": 16
+  },
+  {
+   "t": 23.5,
+   "at": "0xa7b40011",
+   "m": 420,
+   "near": 12,
+   "ahead": 7,
+   "total": 74,
+   "new": 21
+  },
+  {
+   "t": 24.5,
+   "at": "0xa7b40009",
+   "m": 440,
+   "near": 11,
+   "ahead": 7,
+   "total": 74,
+   "new": 21
+  },
+  {
+   "t": 25.6,
+   "at": "0xa7b40001",
+   "m": 460,
+   "near": 9,
+   "ahead": 2,
+   "total": 74,
+   "new": 21
+  },
+  {
+   "t": 26.7,
+   "at": "0xa6b40039",
+   "m": 480,
+   "near": 8,
+   "ahead": 0,
+   "total": 74,
+   "new": 21
+  },
+  {
+   "t": 27.7,
+   "at": "0xa6b40031",
+   "m": 500,
+   "near": 9,
+   "ahead": 1,
+   "total": 75,
+   "new": 22
+  },
+  {
+   "t": 28.8,
+   "at": "0xa6b40029",
+   "m": 520,
+   "near": 9,
+   "ahead": 2,
+   "total": 76,
+   "new": 23
+  },
+  {
+   "t": 29.8,
+   "at": "0xa6b40029",
+   "m": 540,
+   "near": 3,
+   "ahead": 2,
+   "total": 76,
+   "new": 23
+  },
+  {
+   "t": 30.9,
+   "at": "0xa6b40021",
+   "m": 560,
+   "near": 4,
+   "ahead": 3,
+   "total": 77,
+   "new": 24
+  },
+  {
+   "t": 31.9,
+   "at": "0xa6b40019",
+   "m": 580,
+   "near": 4,
+   "ahead": 4,
+   "total": 78,
+   "new": 25
+  },
+  {
+   "t": 32.9,
+   "at": "0xa6b40011",
+   "m": 600,
+   "near": 12,
+   "ahead": 11,
+   "total": 86,
+   "new": 33
+  },
+  {
+   "t": 34,
+   "at": "0xa6b40009",
+   "m": 620,
+   "near": 15,
+   "ahead": 13,
+   "total": 89,
+   "new": 36
+  },
+  {
+   "t": 35,
+   "at": "0xa6b40001",
+   "m": 640,
+   "near": 18,
+   "ahead": 15,
+   "total": 92,
+   "new": 39
+  },
+  {
+   "t": 36,
+   "at": "0xa6b40001",
+   "m": 660,
+   "near": 19,
+   "ahead": 15,
+   "total": 93,
+   "new": 40
+  },
+  {
+   "t": 37.1,
+   "at": "0xa5b40039",
+   "m": 680,
+   "near": 20,
+   "ahead": 6,
+   "total": 94,
+   "new": 41
+  },
+  {
+   "t": 38.2,
+   "at": "0xa5b40031",
+   "m": 700,
+   "near": 21,
+   "ahead": 4,
+   "total": 96,
+   "new": 43
+  },
+  {
+   "t": 39.2,
+   "at": "0xa5b40029",
+   "m": 720,
+   "near": 22,
+   "ahead": 4,
+   "total": 97,
+   "new": 44
+  },
+  {
+   "t": 40.3,
+   "at": "0xa5b40021",
+   "m": 740,
+   "near": 20,
+   "ahead": 4,
+   "total": 98,
+   "new": 45
+  },
+  {
+   "t": 41.3,
+   "at": "0xa5b40019",
+   "m": 760,
+   "near": 17,
+   "ahead": 5,
+   "total": 100,
+   "new": 47
+  }
+ ],
+ "sample": [
+  {
+   "t": 2.7,
+   "d": 110.9,
+   "along": 29.1,
+   "name": "Royal Guard"
+  },
+  {
+   "t": 5.6,
+   "d": 100.9,
+   "along": 84.4,
+   "name": "Mite Snippet"
+  },
+  {
+   "t": 7.9,
+   "d": 105.2,
+   "along": 21.5,
+   "name": "Mite Snippet"
+  },
+  {
+   "t": 11.1,
+   "d": 105.2,
+   "along": -12.8,
+   "name": "Black Rabbit"
+  },
+  {
+   "t": 11.7,
+   "d": 107.4,
+   "along": 107.2,
+   "name": "Black Rabbit"
+  },
+  {
+   "t": 13,
+   "d": 112,
+   "along": 35.9,
+   "name": "Black Rabbit"
+  },
+  {
+   "t": 13.6,
+   "d": 97,
+   "along": 96.9,
+   "name": "Chess Board"
+  },
+  {
+   "t": 14.4,
+   "d": 107,
+   "along": 73.8,
+   "name": "Door"
+  },
+  {
+   "t": 14.4,
+   "d": 112.4,
+   "along": 80.9,
+   "name": "Healer"
+  },
+  {
+   "t": 15.8,
+   "d": 97.4,
+   "along": 52.9,
+   "name": "Door"
+  },
+  {
+   "t": 16.1,
+   "d": 94.2,
+   "along": 51.4,
+   "name": "Peddler"
+  },
+  {
+   "t": 17.2,
+   "d": 99.5,
+   "along": 90.8,
+   "name": "Black Rabbit"
+  },
+  {
+   "t": 17.2,
+   "d": 106.4,
+   "along": 79.2,
+   "name": "Black Rabbit"
+  },
+  {
+   "t": 17.2,
+   "d": 78.6,
+   "along": 45.4,
+   "name": "Cave of Alabree"
+  },
+  {
+   "t": 21,
+   "d": 96.9,
+   "along": 92.5,
+   "name": "Chicken"
+  },
+  {
+   "t": 22.5,
+   "d": 98.6,
+   "along": 55.9,
+   "name": "Fish"
+  },
+  {
+   "t": 22.7,
+   "d": 96.6,
+   "along": 48.6,
+   "name": "Drudge Sneaker"
+  },
+  {
+   "t": 22.7,
+   "d": 95.9,
+   "along": 50.8,
+   "name": "Drudge Robber"
+  },
+  {
+   "t": 22.7,
+   "d": 98.1,
+   "along": 51,
+   "name": "Drudge Prowler"
+  },
+  {
+   "t": 22.7,
+   "d": 108.9,
+   "along": 62.5,
+   "name": "Drudge Slinker"
+  },
+  {
+   "t": 22.7,
+   "d": 96.7,
+   "along": 51.7,
+   "name": "Drudge Slinker"
+  },
+  {
+   "t": 27.7,
+   "d": 103.2,
+   "along": 87,
+   "name": "Young Mosswart"
+  },
+  {
+   "t": 28.8,
+   "d": 94.2,
+   "along": 92.8,
+   "name": "Chicken"
+  },
+  {
+   "t": 30.3,
+   "d": 90.7,
+   "along": 85.5,
+   "name": "Young Banderling"
+  },
+  {
+   "t": 31.1,
+   "d": 104.9,
+   "along": 94.5,
+   "name": "Chicken"
+  },
+  {
+   "t": 32.4,
+   "d": 112.2,
+   "along": 87.6,
+   "name": "Door"
+  },
+  {
+   "t": 32.4,
+   "d": 103.7,
+   "along": 85.4,
+   "name": "Door"
+  },
+  {
+   "t": 32.4,
+   "d": 93.9,
+   "along": 78.9,
+   "name": "Door"
+  },
+  {
+   "t": 32.4,
+   "d": 108.7,
+   "along": 93.7,
+   "name": "Mite Snippet"
+  },
+  {
+   "t": 32.4,
+   "d": 107.1,
+   "along": 82.3,
+   "name": "West Holtburg Outpost"
+  }
+ ]
+}

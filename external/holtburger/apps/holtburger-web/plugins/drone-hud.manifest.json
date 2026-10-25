@@ -1,0 +1,15 @@
+{
+  "$schema": "./schemas/plugin-manifest.json",
+  "id": "drone-hud",
+  "name": "Drone",
+  "author": "holtburger",
+  "version": "0.1.0",
+  "description": "Drone Deploy launcher: a toolbar button under the RynthSuite ⚒ (plugins/hotbar.js .hb-hotbar-addons) that deploys, flies and recalls a local-only camera drone (scene3d/drone/, loaded on first use). Click deploys / skips / recalls, Shift+click recalls at once, right-click opens the settings, Shift+F11 = the button; on by default, ?drone=off (exact match) hides it.",
+  "icon": "✈",
+  "iconHidden": true,
+  "entry": "./drone-hud.js",
+  "environments": ["browser"],
+  "slots": ["hud", "overlay"],
+  "hotkeys": [{ "id": "toggle", "default": "Shift+F11", "label": "Deploy / recall drone" }],
+  "clientApi": "^1.0"
+}

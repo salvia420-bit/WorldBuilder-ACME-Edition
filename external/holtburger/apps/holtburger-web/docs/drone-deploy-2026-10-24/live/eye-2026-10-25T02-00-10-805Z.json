@@ -1,0 +1,137 @@
+{
+ "at": "2026-10-25T02:00:10.805Z",
+ "steps": {
+  "E1-launcher": {
+   "drone": [
+    1173,
+    862,
+    41,
+    41
+   ],
+   "rynth": [
+    1173,
+    817,
+    41,
+    41
+   ],
+   "belowRynth": true,
+   "inAddons": true,
+   "tip": {
+    "text": "Drone",
+    "key": "Shift+F11",
+    "sub": "Deploy the camera drone (right-click: settings)"
+   }
+  },
+  "E1-shiftF11": {
+   "state": "deploying",
+   "fullscreen": false,
+   "size": [
+    1920,
+    963
+   ],
+   "sizeBefore": [
+    1920,
+    963
+   ],
+   "deployedByHotkey": true,
+   "fullscreenToggled": false
+  },
+  "E7-standing": {
+   "frames": 349,
+   "fps": 67,
+   "meanMs": 14.92,
+   "p95Ms": 25.1,
+   "maxMs": 458.3,
+   "over50": 3
+  },
+  "deploy": {
+   "ok": true,
+   "state": "deploying",
+   "quick": false
+  },
+  "E7-first-deploy": {
+   "frames": 276,
+   "fps": 29.6,
+   "meanMs": 33.78,
+   "p95Ms": 58.4,
+   "maxMs": 516.5,
+   "over50": 24
+  },
+  "E3-cut-continuity": {
+   "maxStepM": 0.32,
+   "maxTurnDeg": 3.48
+  },
+  "E7-flying": {
+   "frames": 87,
+   "fps": 17.1,
+   "meanMs": 58.33,
+   "p95Ms": 91.7,
+   "maxMs": 1749.9,
+   "over50": 15
+  },
+  "E4-flying-continuity": {
+   "maxStepM": 0.454,
+   "maxTurnDeg": 2.98
+  },
+  "E8-hum": {
+   "ok": true,
+   "ctxState": "running",
+   "rms": 0.07226,
+   "sliderGain": 1
+  },
+  "E6-damage": {
+   "framesUntilReleased": 8,
+   "state": "aborting",
+   "fault": null,
+   "lastAbort": {
+    "reason": "damage",
+    "from": "flying",
+    "at": 64.241
+   }
+  },
+  "E9-cycle1-sends": {
+   "frames": 46,
+   "actions": {
+    "0x01E9": 21
+   }
+  },
+  "E9-cycle2-sends": {
+   "ms": 30245,
+   "frames": 73,
+   "actions": {
+    "0x01E9": 27
+   }
+  },
+  "E5-clean": {
+   "droneGroup": false,
+   "propsOnRig": 1,
+   "osd": false,
+   "fault": null
+  },
+  "E5-walk": {
+   "movedM": 19.96,
+   "sends": {
+    "frames": 13,
+    "actions": {
+     "0xF61C": 2,
+     "0x01E9": 1,
+     "0xF753": 7
+    }
+   }
+  }
+ },
+ "verdict": {
+  "E1": "PASS",
+  "E3": "PASS",
+  "E5": "CHECK",
+  "E6": "CHECK",
+  "E7": "CHECK",
+  "E8": "PASS (graph audible on the bus; output muted)",
+  "E9": "PASS",
+  "pingsPerMin": {
+   "cycle2": 53.6
+  }
+ },
+ "errors": [],
+ "warns": []
+}

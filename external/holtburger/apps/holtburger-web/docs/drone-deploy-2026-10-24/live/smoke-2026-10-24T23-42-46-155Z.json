@@ -1,0 +1,266 @@
+{
+ "at": "2026-10-24T23:42:46.155Z",
+ "quick": true,
+ "steps": [
+  {
+   "name": "preflight",
+   "bootState": "ready",
+   "ready": true,
+   "hud": true,
+   "launcher": true,
+   "drone": false,
+   "fault": null
+  },
+  {
+   "name": "load",
+   "ok": true,
+   "version": "drone-1",
+   "status": {
+    "ok": true,
+    "version": "drone-1",
+    "state": "idle",
+    "beat": null,
+    "mode": "cine",
+    "since": 73.879,
+    "quick": false,
+    "rig": null,
+    "craft": null,
+    "input": {
+     "source": null,
+     "pointerLocked": false,
+     "locked": false,
+     "gamepad": false
+    },
+    "camera": {
+     "owned": false,
+     "fovDeg": 75
+    },
+    "flags": {
+     "debug": true,
+     "audio": true,
+     "signals": "bus"
+    },
+    "lastAbort": null
+   }
+  },
+  {
+   "name": "idle-baseline",
+   "ms": 15000,
+   "sends": {
+    "frames": 25,
+    "actions": {
+     "0x01E9": 13
+    }
+   }
+  },
+  {
+   "name": "deploy",
+   "ok": true,
+   "state": "deploying",
+   "quick": true
+  },
+  {
+   "name": "flying",
+   "afterMs": 4681,
+   "ok": true,
+   "state": "flying",
+   "beat": null,
+   "status": {
+    "ok": true,
+    "version": "drone-1",
+    "state": "flying",
+    "beat": null,
+    "mode": "cine",
+    "since": 93.587,
+    "quick": true,
+    "rig": {
+     "kind": "humanoid",
+     "setupId": "0x02000001",
+     "parts": 34
+    },
+    "craft": {
+     "pos": [
+      4655.416,
+      9438.041,
+      77.76
+     ],
+     "vel": [
+      0,
+      0,
+      0
+     ],
+     "hprDeg": {
+      "h": 22.55,
+      "p": 0,
+      "r": 0
+     },
+     "aglM": 1.76,
+     "speed": 0,
+     "distHomeM": 3.801,
+     "signal": 1,
+     "battery": 0.997
+    },
+    "input": {
+     "source": null,
+     "pointerLocked": false,
+     "locked": true,
+     "gamepad": false
+    },
+    "camera": {
+     "owned": true,
+     "fovDeg": 75
+    },
+    "flags": {
+     "debug": true,
+     "audio": true,
+     "signals": "bus"
+    },
+    "lastAbort": null
+   }
+  },
+  {
+   "name": "sticks",
+   "ok": true,
+   "untilSec": 8.8
+  },
+  {
+   "name": "after-sticks",
+   "status": {
+    "ok": true,
+    "version": "drone-1",
+    "state": "flying",
+    "beat": null,
+    "mode": "cine",
+    "since": 93.587,
+    "quick": true,
+    "rig": {
+     "kind": "humanoid",
+     "setupId": "0x02000001",
+     "parts": 34
+    },
+    "craft": {
+     "pos": [
+      4661.16,
+      9451.877,
+      77.76
+     ],
+     "vel": [
+      1.85,
+      4.45,
+      0
+     ],
+     "hprDeg": {
+      "h": 22.55,
+      "p": 13.27,
+      "r": 0
+     },
+     "aglM": 1.76,
+     "speed": 4.82,
+     "distHomeM": 11.704,
+     "signal": 1,
+     "battery": 0.989
+    },
+    "input": {
+     "source": null,
+     "pointerLocked": false,
+     "locked": true,
+     "gamepad": false
+    },
+    "camera": {
+     "owned": true,
+     "fovDeg": 75
+    },
+    "flags": {
+     "debug": true,
+     "audio": true,
+     "signals": "bus"
+    },
+    "lastAbort": null
+   }
+  },
+  {
+   "name": "recall",
+   "ok": true,
+   "state": "returning"
+  },
+  {
+   "name": "idle",
+   "afterMs": 35515,
+   "ok": true,
+   "state": "idle",
+   "beat": null
+  },
+  {
+   "name": "cycle-sends",
+   "ms": 35515,
+   "sends": {
+    "frames": 61,
+    "actions": {
+     "0x01E9": 32
+    }
+   }
+  },
+  {
+   "name": "post",
+   "states": [
+    "deploying",
+    "flying",
+    "returning",
+    "landing",
+    "stowing",
+    "idle"
+   ],
+   "fault": null,
+   "owned": false,
+   "film": false,
+   "filmViewer": false,
+   "osd": false,
+   "droneGroup": false,
+   "status": {
+    "ok": true,
+    "version": "drone-1",
+    "state": "idle",
+    "beat": null,
+    "mode": "cine",
+    "since": 124.387,
+    "quick": false,
+    "rig": {
+     "kind": "humanoid",
+     "setupId": "0x02000001",
+     "parts": 34
+    },
+    "craft": null,
+    "input": {
+     "source": null,
+     "pointerLocked": false,
+     "locked": false,
+     "gamepad": false
+    },
+    "camera": {
+     "owned": false,
+     "fovDeg": 75
+    },
+    "flags": {
+     "debug": true,
+     "audio": true,
+     "signals": "bus"
+    },
+    "lastAbort": null
+   }
+  }
+ ],
+ "verdict": {
+  "stateSequence": "PASS",
+  "consoleErrors": "PASS",
+  "outbound": "PASS",
+  "pingRate": {
+   "idlePerMin": 52,
+   "cyclePerMin": 54.1
+  },
+  "gateReopened": "PASS",
+  "cameraReleased": "PASS",
+  "cleanScene": "PASS"
+ },
+ "errors": [],
+ "warns": []
+}

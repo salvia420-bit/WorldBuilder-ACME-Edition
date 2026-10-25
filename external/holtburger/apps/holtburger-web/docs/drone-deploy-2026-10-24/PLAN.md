@@ -1,6 +1,6 @@
 # Drone Deploy — implementation plan (2026-10-24)
 
-**Status:** plan only. Nothing is implemented yet; this is meant to be built by a workflow (§9).
+**Status:** implemented and 1070-eye-tested 2026-10-24/25 (phases 0–4); default-on since 2026-10-25 with the `?drone=off` escape. The contract is scene3d/drone/SPEC.md, usage in scene3d/drone/README.md, the eye test in live/EYETEST.md.
 Real DAT data pulled for it sits next to this file in `recon/` (Appendix A says how it was produced).
 The risky assumptions were checked live on the 1070 the same day, on-screen and muted, with the owner's
 OK. Findings are in §13; screenshots and the probe scripts are in `recon/probe/`.

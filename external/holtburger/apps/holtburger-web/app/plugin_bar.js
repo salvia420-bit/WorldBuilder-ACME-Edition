@@ -573,6 +573,10 @@ export async function initPluginBar(D) {
     "house-panel": () => window.__toggleHousePanel?.(),
     // RynthSuite HUD (Shift+F12) — a standalone floaty, not a main-panel view.
     "rynth-hud": () => window.__toggleRynthHud?.(),
+    // Drone Deploy (Shift+F11) — the toolbar launcher's action by drone state
+    // (plugins/drone-hud.js installs window.__toggleDroneHud). Not a
+    // main-panel view: the generic rule would call toggleView("drone-hud").
+    "drone-hud": () => window.__toggleDroneHud?.(),
     // BAND-B S3 (2026-06-17): F11 (train-skills manifest hotkey) opens the
     // SHARED character pane at the Skills tab instead of the retired
     // standalone view. showView (NOT toggleView) — toggleView would CLOSE

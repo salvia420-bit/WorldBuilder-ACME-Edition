@@ -1,0 +1,52 @@
+{
+ "label": "pilot-view",
+ "ft": {
+  "frames": 584,
+  "fps": 108,
+  "p50Ms": 8.3,
+  "p95Ms": 8.5,
+  "maxMs": 308.4,
+  "over50": 1
+ },
+ "topFiles": [
+  "35.8% (native)",
+  "25.2% build/three.module.js",
+  "6.6% build/three.core.js",
+  "3.9% pkg/holtburger_web_bg.wasm",
+  "3.4% particles/particle_manager.js",
+  "2.1% scene3d/terrain_scatter.js",
+  "1.7% scene3d/entities.js",
+  "1.5% scene3d/skip_hidden_matrix.js",
+  "1.2% plugins/vitals-orbs.js",
+  "1.2% scene3d/async_link_guard.js",
+  "1.1% vfx/weapon_fx.js",
+  "1.0% scene3d/batched_runs.js",
+  "1.0% scene3d/loop.js",
+  "0.8% scene3d/batched_material_variant.js"
+ ],
+ "topFns": [
+  "16.7% (idle) @ (native):0",
+  "9.2% (program) @ (native):0",
+  "2.7% WebGLRenderer.renderBufferDirect @ build/three.module.js:17116",
+  "2.5% setProgram @ build/three.module.js:18266",
+  "2.1% update @ scene3d/terrain_scatter.js:1052",
+  "2.1% projectObject @ build/three.module.js:17763",
+  "1.9% upload @ build/three.module.js:6195",
+  "1.4% proto.updateMatrixWorld @ scene3d/skip_hidden_matrix.js:54",
+  "1.2% bindVertexArray @ (native):0",
+  "1.2% renderer.renderBufferDirect @ scene3d/async_link_guard.js:514",
+  "1.2% multiDrawArraysInstancedWEBGL @ (native):0",
+  "1.1% updateMatrix @ build/three.core.js:12821",
+  "1.1% multiplyMatrices @ build/three.core.js:10385",
+  "1.1% bindTexture @ (native):0",
+  "1.0% renderObjects @ build/three.module.js:18029",
+  "1.0% step @ plugins/vitals-orbs.js:866",
+  "0.9% _tickLatched @ particles/particle_manager.js:2656",
+  "0.8% setFromRotationMatrix @ build/three.core.js:11320",
+  "0.8% update @ build/three.module.js:4698",
+  "0.8% programSortStable @ scene3d/draw_sort_program.js:83",
+  "0.7% setValue @ build/three.module.js:6179",
+  "0.7% refreshUniformsCommon @ build/three.module.js:15077"
+ ],
+ "rawNodes": 2224
+}

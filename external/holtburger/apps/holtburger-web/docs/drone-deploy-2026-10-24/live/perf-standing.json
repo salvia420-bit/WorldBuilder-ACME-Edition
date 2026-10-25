@@ -1,0 +1,52 @@
+{
+ "label": "standing",
+ "ft": {
+  "frames": 531,
+  "fps": 90.4,
+  "p50Ms": 8.4,
+  "p95Ms": 16.7,
+  "maxMs": 749.9,
+  "over50": 1
+ },
+ "topFiles": [
+  "30.0% (native)",
+  "26.5% build/three.module.js",
+  "8.1% build/three.core.js",
+  "4.1% particles/particle_manager.js",
+  "4.1% pkg/holtburger_web_bg.wasm",
+  "2.0% scene3d/terrain_scatter.js",
+  "1.9% scene3d/entities.js",
+  "1.6% scene3d/skip_hidden_matrix.js",
+  "1.5% plugins/vitals-orbs.js",
+  "1.4% scene3d/loop.js",
+  "1.1% scene3d/batched_runs.js",
+  "1.0% scene3d/async_link_guard.js",
+  "0.9% vfx/weapon_fx.js",
+  "0.8% scene3d/draw_sort_program.js"
+ ],
+ "topFns": [
+  "10.0% (program) @ (native):0",
+  "9.1% (idle) @ (native):0",
+  "2.6% setProgram @ build/three.module.js:18266",
+  "2.6% WebGLRenderer.renderBufferDirect @ build/three.module.js:17116",
+  "2.5% projectObject @ build/three.module.js:17763",
+  "2.0% update @ scene3d/terrain_scatter.js:1052",
+  "1.7% updateMatrix @ build/three.core.js:12821",
+  "1.6% proto.updateMatrixWorld @ scene3d/skip_hidden_matrix.js:54",
+  "1.5% upload @ build/three.module.js:6195",
+  "1.4% _tickLatched @ particles/particle_manager.js:2656",
+  "1.4% bindVertexArray @ (native):0",
+  "1.2% multiplyMatrices @ build/three.core.js:10385",
+  "1.1% step @ plugins/vitals-orbs.js:866",
+  "1.1% refreshUniformsCommon @ build/three.module.js:15077",
+  "1.0% renderObjects @ build/three.module.js:18029",
+  "1.0% setFromRotationMatrix @ build/three.core.js:11320",
+  "1.0% renderer.renderBufferDirect @ scene3d/async_link_guard.js:514",
+  "1.0% update @ build/three.module.js:4698",
+  "0.9% multiDrawArraysInstancedWEBGL @ (native):0",
+  "0.9% copyArray @ build/three.module.js:5150",
+  "0.8% bindTexture @ (native):0",
+  "0.8% setValue @ build/three.module.js:6179"
+ ],
+ "rawNodes": 2287
+}
