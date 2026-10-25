@@ -2196,7 +2196,7 @@ check("P9 the tablet's home arrow: none at home (< 1 m, the OSD's rule), the bea
   // Without the drone in the world (a stale last distance): no arrow either.
   p.at.drone = "none";
   const n2 = p.screenLog.length;
-  await frames(E, 20);
+  await frames(E, 40); // ≥ 2 of the 4 Hz screens whatever their phase (20 frames could hold just one)
   p.at.drone = "world";
   const gone = p.screenLog.slice(n2);
   assert.ok(gone.length >= 2 && gone.every((s) => s.live === false && s.distM > 5 && Number.isNaN(s.homeBearingRad)),
@@ -2909,6 +2909,91 @@ check("P10 F2 'on the terrain' = the terrain under the feet within 0.25 m: 0.2 m
     assert.equal(d.how, "place");
     const want = onTerrain ? slopeZ(d.pos[0], d.pos[1]) : GROUND + liftM;
     near(d.pos[2], want + 0.06, 1e-9, `${liftM} m off the terrain: ${onTerrain ? "the terrain at the drop spot" : "the feet"}`);
+    IDX._resetDroneForTest();
+  }
+});
+
+check("P11 the way home (owner 2026-10-25): 3 s in the goggles with a countdown, then the cut and the drone put over home; instant close by comes straight down; pilot view flies a near drone home, puts a far one over home", async () => {
+  const home = [LBX + 100, LBY + 100.72, GROUND + 0.06];
+  const last = (calls, name) => calls.filter((c) => c[0] === name).pop();
+  const flyNorth = async (E, sec) => {
+    E.R.ctl.sticks.pitch = 1; // the fake craft: 10 m/s north
+    await frames(E, Math.round(sec * 60));
+    E.R.ctl.sticks.pitch = 0;
+    await frames(E, 2);
+  };
+  // (a) a recall from the goggles: the return starts as before, the view stays 3 s, then cuts.
+  {
+    const E = await flying();
+    const craft = E.R.crafts[0], tether = E.R.tethers[0];
+    const dropYaw = E.R.props[0].calls.find((c) => c[0] === "toWorld")[3];
+    await flyNorth(E, 3);
+    assert.deepEqual(E.api.recall(), { ok: true, state: "returning" });
+    assert.equal(last(craft.calls, "autopilot")[1], "rth", "the return starts the old way");
+    assert.equal(last(tether.calls, "planReturn")[3].cruiseAglM, 15);
+    await frames(E, 12);
+    assert.equal(E.api.status().camera.owned, true, "still in the goggles");
+    const sec = E.R.osds[0].lastView.banners.returningSec;
+    assert.ok(sec > 2 && sec < 3, `the OSD counts down the grace (${sec})`);
+    const nReset = craft.calls.filter((c) => c[0] === "reset").length;
+    await frames(E, 180);
+    assert.equal(E.api.status().camera.owned, false, "cut to the pilot after the grace");
+    assert.equal(E.R.osds[0].lastView.banners.returningSec, null, "no countdown once it cannot be cancelled");
+    const resets = craft.calls.filter((c) => c[0] === "reset");
+    assert.equal(resets.length, nReset + 1, "put over home once");
+    const r = resets[resets.length - 1];
+    assert.deepEqual(r[1], [home[0], home[1], home[2] + 5], "5 m over the drop spot");
+    assert.equal(r[2], dropYaw, "facing the way it was set down");
+    assert.equal(r[3], false, "in the air");
+    const pr = last(tether.calls, "planReturn");
+    assert.deepEqual(pr[1], [home[0], home[1], home[2] + 5]);
+    assert.equal(pr[3].cruiseAglM, 5);
+    const ap = last(craft.calls, "autopilot");
+    assert.equal(ap[1], "rth");
+    assert.equal(ap[2].yaw, dropYaw);
+    await untilState(E, "idle", 3000);
+    IDX._resetDroneForTest();
+  }
+  // (b) instant recall right after the lift-off (3.8 m from home): no jump, straight down.
+  {
+    const E = await flying();
+    const craft = E.R.crafts[0], tether = E.R.tethers[0];
+    const nReset = craft.calls.filter((c) => c[0] === "reset").length;
+    assert.deepEqual(E.api.recall({ instant: true }), { ok: true, state: "returning" });
+    assert.equal(E.api.status().camera.owned, false, "the view cuts at once");
+    assert.equal(craft.calls.filter((c) => c[0] === "reset").length, nReset, "no jump");
+    assert.equal(last(tether.calls, "planReturn")[3].cruiseAglM, 0, "no climb");
+    assert.equal(last(craft.calls, "autopilot")[1], "rth");
+    await untilState(E, "idle", 3000);
+    IDX._resetDroneForTest();
+  }
+  // (c) pilot view, the drone ~10 m out: it flies home at the approach height (no jump in view).
+  {
+    const E = await flying();
+    const craft = E.R.crafts[0], tether = E.R.tethers[0];
+    await flyNorth(E, 1);
+    assert.deepEqual(E.api.pilotView(), { ok: true, state: "pilotView" });
+    await frames(E, 5);
+    const nReset = craft.calls.filter((c) => c[0] === "reset").length;
+    E.api.recall();
+    assert.equal(craft.calls.filter((c) => c[0] === "reset").length, nReset, "flies home in view");
+    assert.equal(last(tether.calls, "planReturn")[3].cruiseAglM, 5);
+    await untilState(E, "idle", 3000);
+    IDX._resetDroneForTest();
+  }
+  // (d) pilot view, the drone ~40 m out: too far to see, so it is put over home.
+  {
+    const E = await flying();
+    const craft = E.R.crafts[0];
+    await flyNorth(E, 4);
+    E.api.pilotView();
+    await frames(E, 5);
+    const nReset = craft.calls.filter((c) => c[0] === "reset").length;
+    E.api.recall();
+    const resets = craft.calls.filter((c) => c[0] === "reset");
+    assert.equal(resets.length, nReset + 1, "put over home");
+    assert.deepEqual(resets[resets.length - 1][1], [home[0], home[1], home[2] + 5]);
+    await untilState(E, "idle", 3000);
     IDX._resetDroneForTest();
   }
 });

@@ -109,6 +109,21 @@ export function formatTimer(sec) {
   return h > 0 ? `${h}:${mm}:${ss}` : `${mm}:${ss}`;
 }
 
+/** The RETURNING banner with the seconds left to cancel a recall, 1–9 s (built once, read at 10 Hz). */
+const RETURNING_COUNTDOWN = Object.freeze(Array.from({ length: 10 }, (_, n) => `RETURNING ${n} · FLY TO CANCEL`));
+
+/**
+ * The RETURNING banner: with the seconds left to cancel a recall from the goggles (rounded up,
+ * at least 1) `2.4 → "RETURNING 3 · FLY TO CANCEL"`; null / non-finite / negative → "RETURNING".
+ * @param {number|null} sec
+ * @returns {string}
+ */
+export function formatReturning(sec) {
+  if (!fin(sec) || sec < 0) return "RETURNING";
+  const n = Math.max(1, Math.ceil(sec - 1e-9));
+  return n < RETURNING_COUNTDOWN.length ? RETURNING_COUNTDOWN[n] : `RETURNING ${n} · FLY TO CANCEL`;
+}
+
 /**
  * Compass heading, three digits wrapped to [0, 360): `0.785 → "045°"`.
  * Null / non-finite → `"--"`.
@@ -373,9 +388,9 @@ export function createOsd(deps = {}) {
   const cur = {
     mode: null, battery: null, timerSec: null, signal: null, distHomeM: null, aglM: null, speedMps: null,
     headingRad: null, homeBearingRad: null, reticle: null,
-    rangeLimit: false, lowBattery: false, returning: false, crash: false, acroHint: false,
+    rangeLimit: false, lowBattery: false, returning: false, returningSec: null, crash: false, acroHint: false,
   };
-  const shown = { mode: "", batt: "", warn: "", timer: "", bars: -1, dist: "", agl: "", speed: "", heading: "", homeKey: NaN, homeGlyph: "", homeVisible: null, reticle: "" };
+  const shown = { mode: "", batt: "", warn: "", timer: "", bars: -1, dist: "", agl: "", speed: "", heading: "", homeKey: NaN, homeGlyph: "", homeVisible: null, reticle: "", returning: "" };
   let staticSignal = 1;
   let staticKey = -1;
   let tapeKey = NaN;
@@ -591,6 +606,7 @@ export function createOsd(deps = {}) {
       setHidden(E.crosshair, ret !== "crosshair");
       setHidden(E.horizon, ret !== "horizon");
     }
+    setText(bannerEls.returning, "returning", formatReturning(cur.returningSec));
     applyBanners();
   }
 
@@ -653,6 +669,7 @@ export function createOsd(deps = {}) {
     cur.rangeLimit = !!(b && b.rangeLimit === true);
     cur.lowBattery = !!(b && b.lowBattery === true);
     cur.returning = !!(b && b.returning === true);
+    cur.returningSec = b && fin(b.returningSec) ? b.returningSec : null;
     cur.crash = !!(b && b.crash === true);
     cur.acroHint = !!(b && b.acroHint === true);
     if (!built) return true; // kept for the build

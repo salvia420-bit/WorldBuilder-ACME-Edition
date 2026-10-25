@@ -112,6 +112,15 @@ const PILOT_LOOK_Z = 1.2;
 const AWAY_MIN_M = 0.1;
 /** RTH cruise height above ground (m). */
 const RTH_CRUISE_AGL_M = 15;
+/**
+ * The way back to the drop spot (owner, 2026-10-25): the drone comes down over home from `aglM`
+ * (the height the view cut back at before, the sequence's landingReleaseM) instead of flying the
+ * whole way back. Already that close it comes straight there; seen from the follow camera
+ * (pilot view, no cut) within `flyM` of that point it flies home at that height; otherwise it is
+ * put over home at that height and comes down (the view has just cut away, or it is too far off
+ * to be seen).
+ */
+const APPROACH = Object.freeze({ aglM: 5, flyM: 25 });
 /** A drop spot whose terrain is farther than this from the pilot's feet keeps the feet level (m, DV-22). */
 const DROP_GROUND_TOL_M = 0.5;
 /**
@@ -925,7 +934,7 @@ async function buildDrone(deps, rec) {
       bodyCtx: { fovDeg: 1, aspect: 16 / 9, cut: false },
       camPose: { pos: null, q: null, h: 0, p: 0, r: 0, fov: settings.fovDeg },
       osdView: { mode: settings.mode, battery: null, timerSec: 0, signal: 1, distHomeM: 0, aglM: 0, speedMps: 0, headingRad: 0,
-        homeBearingRad: 0, banners: { rangeLimit: false, lowBattery: false, returning: false, crash: false, acroHint: false },
+        homeBearingRad: 0, banners: { rangeLimit: false, lowBattery: false, returning: false, returningSec: null, crash: false, acroHint: false },
         reticle: "crosshair" },
       osdFrame: { headingRad: 0, rollRad: 0, pitchRad: 0 },
       audioIn: { throttle: 0, speed: 0, level: 0, fpv: false, pos: null },
@@ -1296,7 +1305,7 @@ async function buildDrone(deps, rec) {
         cameraRelease(c, a.framePilot === true);
         return;
       case "autopilot":
-        autopilot(c, a.plan, a.speed);
+        autopilot(c, a.plan, a.speed, a.cut === true);
         return;
       case "rotors": {
         const target = a.level > 0 ? 1 : 0;
@@ -1484,8 +1493,8 @@ async function buildDrone(deps, rec) {
     c.cut = true;
   }
 
-  /** `autopilot` executor: build the plan (SPEC §7.4). */
-  function autopilot(c, plan, speed) {
+  /** `autopilot` executor: build the plan (SPEC §7.4). `cut`: the view has just left the goggles (approach). */
+  function autopilot(c, plan, speed, cut) {
     switch (plan) {
       case "liftoff": {
         if (!c.homeSet) placeDrone(c);
@@ -1524,6 +1533,28 @@ async function buildDrone(deps, rec) {
           groundZHome: c.link.groundZ(h[0], h[1]),
         });
         // The drop yaw: the drone lands facing the way it was set down (no yaw snap at the pickup).
+        c.craft.autopilot({ kind: "rth", path, yaw: c.home.yaw });
+        return;
+      }
+      case "approach": {
+        const p = c.lastPos;
+        const h = c.home.pos;
+        const top = [h[0], h[1], h[2] + APPROACH.aglM];
+        const near = Math.hypot(p[0] - h[0], p[1] - h[1], p[2] - h[2]) <= APPROACH.aglM;
+        const inView = !cut && Math.hypot(p[0] - top[0], p[1] - top[1], p[2] - top[2]) <= APPROACH.flyM;
+        if (!near && !inView) {
+          // Over home at rest, facing the way it was set down; the next safety clamp starts fresh there.
+          c.craft.reset({ pos: [top[0], top[1], top[2]], h: c.home.yaw, p: 0 });
+          p[0] = top[0];
+          p[1] = top[1];
+          p[2] = top[2];
+          c.cut = true;
+        }
+        const path = c.tether.planReturn([p[0], p[1], p[2]], [h[0], h[1], h[2]], {
+          cruiseAglM: near ? 0 : APPROACH.aglM,
+          groundZFrom: c.link.groundZ(p[0], p[1]),
+          groundZHome: c.link.groundZ(h[0], h[1]),
+        });
         c.craft.autopilot({ kind: "rth", path, yaw: c.home.yaw });
         return;
       }
@@ -1948,6 +1979,9 @@ async function buildDrone(deps, rec) {
         v.banners.rangeLimit = c.lastRange;
         v.banners.lowBattery = ti.battery.warn === true;
         v.banners.returning = state === "returning";
+        // The recall's grace in the goggles: the seconds left to cancel it (none once it cannot be).
+        const cutIn = state === "returning" && typeof c.seq.returnCutInSec === "function" ? c.seq.returnCutInSec() : NaN;
+        v.banners.returningSec = fin(cutIn) ? cutIn : null;
         v.banners.crash = state === "crashed";
         v.banners.acroHint = acroHint(c);
         v.reticle = settings.mode === "cine" ? "crosshair" : "horizon";

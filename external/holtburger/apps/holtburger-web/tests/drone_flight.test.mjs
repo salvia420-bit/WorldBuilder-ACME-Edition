@@ -163,8 +163,9 @@ await check("F1 CRAFT_MODES and the SPEC §3.3 CRAFT_TUNING numbers (deep-frozen
     { rc: 1.0, super: 0.7, expo: 0, hoverG: 1, maxThrustG: 2.5, uptiltDeg: 25, drag: 0.025 });
   assert.deepEqual(pick(T.common, ["gravity", "subDt", "maxSubsteps", "restHeightM", "idleSpin"]),
     { gravity: 9.80665, subDt: 1 / 240, maxSubsteps: 4800, restHeightM: 0.06, idleSpin: 0.35 });
+  // The descent was 2 m/s with the last 1.5 m at 0.6 m/s until 2026-10-25 (owner: land a bit faster).
   assert.deepEqual(pick(T.rth, ["climbMps", "cruiseMps", "descendMps", "finalMps", "finalM"]),
-    { climbMps: 3, cruiseMps: 8, descendMps: 2, finalMps: 0.6, finalM: 1.5 });
+    { climbMps: 3, cruiseMps: 8, descendMps: 3, finalMps: 1.0, finalM: 1.0 });
   // the tracked-plan profile limits stay inside the cinema craft (amax 4, jmax 8; DV-31)
   assert.ok(T.rth.amax < FM.DRONE_PRESETS.cinema.amax && T.rth.jmax < FM.DRONE_PRESETS.cinema.jmax);
 });
@@ -814,7 +815,9 @@ await check("F8 rth lands on the path end (≤ 0.05 m), distTouchdownM non-incre
     assert.ok(dist3(s.pos, home) <= 0.05, `${name}: ${dist3(s.pos, home)} m from home`);
     assert.ok(ev.mono, `${name}: distTouchdownM increased`);
     assert.ok(maxOff <= 0.5, `${name}: ${maxOff.toFixed(3)} m off the polyline`);
-    assert.ok(maxH <= 8 * 1.02 && maxUp <= 3 * 1.02 && maxDown <= 2 * 1.02, `${name}: speeds h ${maxH.toFixed(2)} up ${maxUp.toFixed(2)} down ${maxDown.toFixed(2)}`);
+    const R = CRAFT_TUNING.rth;
+    assert.ok(maxH <= R.cruiseMps * 1.02 && maxUp <= R.climbMps * 1.02 && maxDown <= R.descendMps * 1.02,
+      `${name}: speeds h ${maxH.toFixed(2)} up ${maxUp.toFixed(2)} down ${maxDown.toFixed(2)}`);
     assert.equal(s.landed, true);
     assert.equal(s.autopilotDone, true);
     assert.equal(s.distTouchdownM, 0);
@@ -823,14 +826,17 @@ await check("F8 rth lands on the path end (≤ 0.05 m), distTouchdownM non-incre
   }
 });
 
-await check("F8 rth touches down at finalMps: the last 1.5 m never faster than 0.6 m/s", () => {
+await check("F8 rth touches down at finalMps: the last finalM never faster than finalMps", () => {
+  const R = CRAFT_TUNING.rth;
   const home = [0, 0, 10.06];
   const c = mk("cine", [80, 0, 30], 0);
   const path = returnPath([80, 0, 30], home, 10);
   c.autopilot({ kind: "rth", path });
   let maxFinal = 0;
-  flyPlan(c, 1 / 60, 120, 10, (f) => { if (f.pos[2] - home[2] < 1.5 - 0.05 && dist3(f.pos, home) < 1.6) maxFinal = Math.max(maxFinal, f.speed); });
-  assert.ok(maxFinal > 0.3 && maxFinal <= 0.6 * 1.05, `final ${maxFinal}`);
+  flyPlan(c, 1 / 60, 120, 10, (f) => {
+    if (f.pos[2] - home[2] < R.finalM - 0.05 && dist3(f.pos, home) < R.finalM + 0.1) maxFinal = Math.max(maxFinal, f.speed);
+  });
+  assert.ok(maxFinal > 0.3 && maxFinal <= R.finalMps * 1.05, `final ${maxFinal}`);
 });
 
 await check("F8 rth from 12 m/s cruise: brakes inside the cinema limits, lands on home, distTouchdownM non-increasing", () => {
@@ -849,7 +855,7 @@ await check("F8 rth from 12 m/s cruise: brakes inside the cinema limits, lands o
   assert.ok(ev.landedAt !== null && dist3(c.state().pos, home) <= 0.05, "landed on home");
   assert.ok(ev.mono, "distTouchdownM non-increasing");
   assert.ok(maxDv <= 4 + 0.1, `acceleration ${maxDv.toFixed(2)} m/s² within the cinema 4`);
-  assert.ok(touchdown !== null && touchdown <= 0.6, `touches down at ≤ finalMps (${touchdown})`);
+  assert.ok(touchdown !== null && touchdown <= CRAFT_TUNING.rth.finalMps, `touches down at ≤ finalMps (${touchdown})`);
   assert.ok(ev.maxSpeed <= s0.speed + 0.01, "never faster than it was");
 });
 
@@ -1145,7 +1151,8 @@ await check("F8 a rth carrying the drop yaw lands facing it (body and camera ± 
           maxRate = Math.max(maxRate, Math.abs(a.body.h - r.rows[k - 1].body.h) * 60, Math.abs(a.cam.h - r.rows[k - 1].cam.h) * 60);
         }
       }
-      assert.ok(maxRate <= 40 * DEG, `${tag}: turns at ≤ 40 °/s on the descent (${(maxRate / DEG).toFixed(1)})`);
+      // ≤ 40 °/s until the 3 m/s descent (2026-10-25) shortened the turn: 43.9 °/s for the near-180° turns.
+      assert.ok(maxRate <= 50 * DEG, `${tag}: turns at ≤ 50 °/s on the descent (${(maxRate / DEG).toFixed(1)})`);
     }
   }
 });

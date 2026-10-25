@@ -44,8 +44,10 @@ export const HARD_ABORT_REASONS = Object.freeze(["session", "contextLost", "port
 
 /**
  * Beat durations at speed 1 (SPEC §4.4): retail frame counts / 30 fps. The clip beats
- * (pack, place, goggles) and the lift-off divide by the cycle speed; tabletUp,
- * tabletDown, spawn and powerDown never do.
+ * (pack, place, goggles) and the lift-off divide by the cycle speed; tabletDown, spawn
+ * and powerDown never do. `tabletUp` is no beat since 2026-10-25: it is the ReadState link,
+ * which plays during the first 22/30 s of the lift-off, so the drone takes off as soon as
+ * the goggles are on (the own at cutBlackSec ÷ speed still comes after the tablet is up).
  */
 export const BEAT_SEC = Object.freeze({
   pack: 43 / 30,
@@ -67,12 +69,15 @@ export const BEAT_EVENT_SEC = Object.freeze({ pack: 18 / 30, place: 18 / 30, gog
  * on the lift-off path midpoint, DV-31); cutStartSec / cutEndSec = cutBlackSec ∓ 0.175 (the
  * 0.35 s boot wipe); settleTimeoutSec = fadeDelaySec + fadeDurationSec + 2 (T29). All at
  * speed 1; the lift-off sub-events divide by the beat speed like the beat itself.
+ * recallGraceSec: a recall from the goggles stays in them this long (a fresh stick input
+ * cancels it, T16), then the view cuts to the pilot and the drone comes down over home (T30).
  */
 export const SEQUENCE_DEFAULTS = Object.freeze({
   quickSpeed: 1.5,
   slackSec: 0.05,
   prepTimeoutSec: 1.0,
   crashStaticSec: 1.0,
+  recallGraceSec: 3,
   landingReleaseM: 5,
   homeToleranceM: 1.5,
   pilotMovedAbortM: 2,
@@ -106,7 +111,6 @@ const BEATS = Object.freeze({
   pack: Object.freeze({ index: 1, clip: "pack", dur: BEAT_SEC.pack, eventSec: BEAT_EVENT_SEC.pack, scaled: true }),
   place: Object.freeze({ index: 2, clip: "place", dur: BEAT_SEC.place, eventSec: BEAT_EVENT_SEC.place, scaled: true }),
   goggles: Object.freeze({ index: 3, clip: "goggles", dur: BEAT_SEC.goggles, eventSec: BEAT_EVENT_SEC.goggles, scaled: true }),
-  tabletUp: Object.freeze({ index: 4, clip: null, dur: BEAT_SEC.tabletUp, eventSec: null, scaled: false }),
   spawn: Object.freeze({ index: 4, clip: null, dur: BEAT_SEC.spawn, eventSec: null, scaled: false }),
   liftoff: Object.freeze({ index: 5, clip: null, dur: BEAT_SEC.liftoff, eventSec: null, scaled: true }),
   tabletDown: Object.freeze({ index: 1, clip: null, dur: BEAT_SEC.tabletDown, eventSec: null, scaled: false }),
@@ -138,6 +142,8 @@ const A = {
   cameraOwn: () => ({ type: "cameraOwn" }),
   cameraRelease: (framePilot) => ({ type: "cameraRelease", framePilot }),
   autopilot: (plan, speed) => ({ type: "autopilot", plan, speed }),
+  // The drone comes down over home; `cut` = the view has just cut away from the goggles.
+  approach: (cut) => ({ type: "autopilot", plan: "approach", speed: 1, cut }),
   rotors: (level, rampSec) => ({ type: "rotors", level, rampSec }),
   osd: (mode, durationSec) => (durationSec === undefined ? { type: "osd", mode } : { type: "osd", mode, durationSec }),
   audio: (level, rampSec) => ({ type: "audio", level, rampSec }),
@@ -163,8 +169,10 @@ function rigKind(v) {
  *   NO_ACTIONS when nothing happens.
  * - `state()` → a fresh JSON-safe copy of the §4.1 model.
  * - `reset()` → back to idle without actions (dispose only; `lastAbort` cleared too).
+ * - `returnCutInSec()` → seconds left of the recall grace in the goggles, NaN outside it.
  * @param {Partial<typeof SEQUENCE_DEFAULTS>} [opts]
- * @returns {{tick:(input:object)=>ReadonlyArray<object>, state:()=>object, reset:()=>void}}
+ * @returns {{tick:(input:object)=>ReadonlyArray<object>, state:()=>object, reset:()=>void,
+ *   returnCutInSec:()=>number}}
  */
 export function createSequence(opts = {}) {
   const o = opts && typeof opts === "object" ? opts : {};
@@ -194,7 +202,7 @@ export function createSequence(opts = {}) {
     wieldedHidden: false,
     held: false,
     clipActive: false,
-    rth: /** @type {{reason:string, fpv:boolean, cancellable:boolean, armed:boolean}|null} */ (null),
+    rth: /** @type {{reason:string, fpv:boolean, cancellable:boolean, armed:boolean, elapsedSec:number}|null} */ (null),
     forcedLanding: false,
     batteryRthUsed: false,
     stowKind: /** @type {'full'|'noDrone'|null} */ (null),
@@ -287,15 +295,9 @@ export function createSequence(opts = {}) {
         break;
       case "goggles":
         out.push(A.clip("goggles", s));
-        break;
-      case "tabletUp":
-        out.push(A.attach("tablet", "leftHand"));
-        S.tablet = true;
-        out.push(A.motion("ReadState"));
-        S.held = true;
-        out.push(A.broadcastPose());
-        out.push(A.rotors(1, BEAT_SEC.tabletUp));
-        out.push(A.audio(1, BEAT_SEC.tabletUp));
+        // The rotors spin up while the goggles go on, so the drone lifts off when they are on.
+        out.push(A.rotors(1, durOf(def)));
+        out.push(A.audio(1, durOf(def)));
         break;
       case "spawn":
         out.push(A.place());
@@ -304,6 +306,16 @@ export function createSequence(opts = {}) {
         out.push(A.audio(1, BEAT_SEC.spawn));
         break;
       case "liftoff":
+        // The tablet comes up during the lift-off (the skip list has done it already).
+        if (S.rig === "humanoid" && !S.tablet) {
+          out.push(A.attach("tablet", "leftHand"));
+          S.tablet = true;
+        }
+        if (S.rig === "humanoid" && !S.held) {
+          out.push(A.motion("ReadState"));
+          S.held = true;
+          out.push(A.broadcastPose());
+        }
         S.cutFired.boot = false;
         S.cutFired.own = false;
         S.cutFired.fpv = false;
@@ -382,7 +394,7 @@ export function createSequence(opts = {}) {
     if (humanoid && !S.held) {
       out.push(A.motion("ReadState"));
       S.held = true;
-      // The skipped tabletUp beat would have sent the opt-in /read here (deviation: SPEC T9 omits it).
+      // With the ReadState comes the opt-in /read, as at the lift-off entry (deviation: SPEC T9 omits it).
       out.push(A.broadcastPose());
     }
     out.push(A.rotors(1, SKIP_RAMP_SEC));
@@ -419,9 +431,6 @@ export function createSequence(opts = {}) {
         enterBeat("goggles", out);
         return;
       case "goggles":
-        enterBeat("tabletUp", out);
-        return;
-      case "tabletUp":
       case "spawn":
         enterBeat("liftoff", out);
         return;
@@ -551,26 +560,31 @@ export function createSequence(opts = {}) {
     return out;
   }
 
-  /** T12 / T13 / T14: a user recall. */
+  /**
+   * T12 / T13 / T14: a user recall. From the goggles (T12) the drone starts home and the view
+   * stays for recallGraceSec, so a recall pressed by mistake can be cancelled (T16); then T30.
+   * Instant (T13) and from pilot view (T14) skip that: the drone comes down over home now.
+   */
   function recall(instant, now) {
     const from = S.state;
     const out = [A.state("returning", from)];
     if (from === "flying" && !instant) {
-      S.rth = { reason: "user", fpv: true, cancellable: true, armed: false };
+      S.rth = { reason: "user", fpv: true, cancellable: true, armed: false, elapsedSec: 0 };
+      out.push(A.autopilot("rth", 1));
     } else {
       if (from === "flying") out.push(A.cameraRelease(false)); // T13
       out.push(A.controlsPhase("stow"), A.osd("off"));
       S.fpv = false;
-      S.rth = { reason: "user", fpv: false, cancellable: false, armed: false };
+      S.rth = { reason: "user", fpv: false, cancellable: false, armed: false, elapsedSec: 0 };
+      out.push(A.approach(from === "flying"));
     }
-    out.push(A.autopilot("rth", 1));
     setState("returning", now);
     return out;
   }
 
-  /** T15 returning (fpv) + recallInstant: cut to third person now. */
-  function t15() {
-    const out = [A.cameraRelease(false), A.controlsPhase("stow"), A.osd("off")];
+  /** T15 returning (fpv) + recallInstant, and T30 at the end of the grace: cut to third person now. */
+  function cutToApproach() {
+    const out = [A.cameraRelease(false), A.controlsPhase("stow"), A.osd("off"), A.approach(true)];
     S.fpv = false;
     if (S.rth) {
       S.rth.fpv = false;
@@ -602,12 +616,12 @@ export function createSequence(opts = {}) {
     return out;
   }
 
-  /** T18 battery RTH (flying / pilotView). */
+  /** T18 battery RTH (flying: the T12 grace in the goggles; pilotView: down over home now). */
   function t18(now) {
     const from = S.state;
-    const out = [A.state("returning", from), A.autopilot("rth", 1)];
+    const out = [A.state("returning", from), from === "flying" ? A.autopilot("rth", 1) : A.approach(false)];
     if (from === "pilotView") out.push(A.controlsPhase("stow"), A.osd("off"));
-    S.rth = { reason: "battery", fpv: from === "flying", cancellable: from === "flying", armed: false };
+    S.rth = { reason: "battery", fpv: from === "flying", cancellable: from === "flying", armed: false, elapsedSec: 0 };
     S.batteryRthUsed = true;
     setState("returning", now);
     return out;
@@ -831,7 +845,7 @@ export function createSequence(opts = {}) {
         return null;
       case "recallInstant":
         if (S.state === "flying" || S.state === "pilotView") return recall(true, now);
-        if (S.state === "returning" && S.fpv) return t15();
+        if (S.state === "returning" && S.fpv) return cutToApproach(); // T15
         return null;
       case "pilotView":
         if (S.state === "flying") return t10(now);
@@ -890,8 +904,8 @@ export function createSequence(opts = {}) {
     return beatRules(i, now);
   }
 
-  /** returning: arm the cancel, T16, T17. */
-  function returningRules(i, now) {
+  /** returning: arm the cancel, T16, T17, T30 (the grace in the goggles ran out). */
+  function returningRules(i, dt, now) {
     const r = S.rth;
     const inp = i.input || {};
     if (r) {
@@ -900,6 +914,10 @@ export function createSequence(opts = {}) {
     }
     const d = i.craft ? i.craft.distTouchdownM : null;
     if (typeof d === "number" && Number.isFinite(d) && d <= C.landingReleaseM) return t17(now);
+    if (r && S.fpv) {
+      r.elapsedSec += dt;
+      if (r.elapsedSec + EPS >= C.recallGraceSec) return cutToApproach();
+    }
     return null;
   }
 
@@ -966,7 +984,7 @@ export function createSequence(opts = {}) {
         out = deployRules(i, dt, now);
         break;
       case "returning":
-        out = returningRules(i, now);
+        out = returningRules(i, dt, now);
         break;
       case "landing":
         out = landingRules(i, now);
@@ -1013,7 +1031,7 @@ export function createSequence(opts = {}) {
       wieldedHidden: S.wieldedHidden,
       held: S.held,
       clipActive: S.clipActive,
-      rth: S.rth ? { reason: S.rth.reason, fpv: S.rth.fpv, cancellable: S.rth.cancellable, armed: S.rth.armed } : null,
+      rth: S.rth ? { reason: S.rth.reason, fpv: S.rth.fpv, cancellable: S.rth.cancellable, armed: S.rth.armed, elapsedSec: S.rth.elapsedSec } : null,
       forcedLanding: S.forcedLanding,
       batteryRthUsed: S.batteryRthUsed,
       stowKind: S.stowKind,
@@ -1031,5 +1049,17 @@ export function createSequence(opts = {}) {
     S.lastAbort = null;
   }
 
-  return { tick, state, reset };
+  /**
+   * Seconds until a recall in the goggles cuts to the pilot (T30), while it can still be
+   * cancelled; NaN otherwise. Allocation-free (the OSD countdown reads it at 10 Hz).
+   * @returns {number}
+   */
+  function returnCutInSec() {
+    const r = S.rth;
+    if (S.state !== "returning" || r === null || !S.fpv || !r.cancellable) return NaN;
+    const left = C.recallGraceSec - r.elapsedSec;
+    return left > 0 ? left : 0;
+  }
+
+  return { tick, state, reset, returnCutInSec };
 }

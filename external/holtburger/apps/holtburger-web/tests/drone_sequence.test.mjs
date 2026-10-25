@@ -18,7 +18,8 @@
 //   Q5  the SPEC §4.4 totals table (deploy at both speeds, humanoid and no-hands; stow);
 //   Q6  skip (T9) from the prep, every beat and the lift-off before / after the own;
 //   Q7  pilot view both ways (T10/T11), recall / recallInstant (T12–T15), the RTH cancel by a
-//       FRESH stick input only (T16 `armed`; look / gimbal never cancel), T17, T20, T21;
+//       FRESH stick input only (T16 `armed`; look / gimbal never cancel), T17, T20, T21, the
+//       recall grace in the goggles and its cut to the approach (T30, returnCutInSec);
 //   Q8  the full and quick stow (T24/T25), the no-hands stow, the noDrone stow + settle (T26/T27);
 //   Q9  battery RTH once (T18), the forced landing (T19, also from pilotView), crashes (T22/T23)
 //       from every crash state, T28, T29;
@@ -76,6 +77,7 @@ const A = {
   own: () => ({ type: "cameraOwn" }),
   release: (framePilot) => ({ type: "cameraRelease", framePilot }),
   auto: (plan, speed = 1) => ({ type: "autopilot", plan, speed }),
+  approach: (cut) => ({ type: "autopilot", plan: "approach", speed: 1, cut }),
   rotors: (level, rampSec) => ({ type: "rotors", level, rampSec }),
   osd: (mode, durationSec) => (durationSec === undefined ? { type: "osd", mode } : { type: "osd", mode, durationSec }),
   audio: (level, rampSec) => ({ type: "audio", level, rampSec }),
@@ -222,10 +224,14 @@ check("Q1 tables: frozen, exact names, BEAT_SEC / BEAT_EVENT_SEC, SEQUENCE_DEFAU
   assert.equal(NO_ACTIONS.length, 0);
   assert.deepEqual({ ...BEAT_SEC }, { pack: 43 / 30, place: 50 / 30, goggles: 42 / 30, tabletUp: 22 / 30, tabletDown: 22 / 30, spawn: 22 / 30, powerDown: 0.6, liftoff: 2.2, crashStatic: 1.0 });
   assert.deepEqual({ ...BEAT_EVENT_SEC }, { pack: 18 / 30, place: 18 / 30, goggles: 14 / 30 });
-  assert.deepEqual({ ...SEQUENCE_DEFAULTS }, { quickSpeed: 1.5, slackSec: 0.05, prepTimeoutSec: 1.0, crashStaticSec: 1.0, landingReleaseM: 5,
-    homeToleranceM: 1.5, pilotMovedAbortM: 2, fadeDelaySec: 5, fadeDurationSec: 1, cutStartSec: 0.925, cutBlackSec: 1.1, cutEndSec: 1.275, settleTimeoutSec: 8 });
+  assert.deepEqual({ ...SEQUENCE_DEFAULTS }, { quickSpeed: 1.5, slackSec: 0.05, prepTimeoutSec: 1.0, crashStaticSec: 1.0, recallGraceSec: 3,
+    landingReleaseM: 5, homeToleranceM: 1.5, pilotMovedAbortM: 2, fadeDelaySec: 5, fadeDurationSec: 1, cutStartSec: 0.925, cutBlackSec: 1.1,
+    cutEndSec: 1.275, settleTimeoutSec: 8 });
   const D = SEQUENCE_DEFAULTS;
   near(D.cutBlackSec, BEAT_SEC.liftoff / 2, 1e-12, "own on the lift-off path midpoint");
+  // The tablet comes up during the lift-off (the ReadState link, motions at speed 1): it is up
+  // by the own, also in a quick deploy, so the first goggles frame still shows it.
+  assert.ok(D.cutBlackSec / D.quickSpeed >= BEAT_SEC.tabletUp - 1e-9, "tablet up before the own at quick speed");
   near(D.cutStartSec, D.cutBlackSec - 0.175, 1e-12);
   near(D.cutEndSec, D.cutBlackSec + 0.175, 1e-12);
   near(D.settleTimeoutSec, D.fadeDelaySec + D.fadeDurationSec + 2, 1e-12);
@@ -336,10 +342,9 @@ check("Q3 humanoid deploy (clip-ended beats): every entry / event / end action i
     [A.attach("drone", "rightHand")],
     [A.clip("place", 1)],
     [A.detach("drone", "world")],
-    [A.clip("goggles", 1)],
+    [A.clip("goggles", 1), A.rotors(1, 42 / 30), A.audio(1, 42 / 30)],
     [A.attach("goggles", "head")],
-    [A.attach("tablet", "leftHand"), A.readState(), A.broadcast(), A.rotors(1, 22 / 30), A.audio(1, 22 / 30)],
-    [A.auto("liftoff", 1)],
+    [A.attach("tablet", "leftHand"), A.readState(), A.broadcast(), A.auto("liftoff", 1)],
     [A.osd("boot", 0.35)],
     [A.own(), A.phase("fly")],
     [A.osd("fpv")],
@@ -379,11 +384,15 @@ check("Q3 beat clock: clip events on beatEvent, ends on beatDone; timer fallback
         const next = k + 1 < beats.length ? tEnter(beats[k + 1]) : d.timeOf(is("attach", { prop: "tablet" }), t0);
         near(next - t0, BEAT_SEC[name] / s + slack, tol, `${name} end`);
       }
-      // tabletUp is a timer beat at speed 1 even in a quick deploy (22/30 + slack).
+      // No tabletUp beat (2026-10-25): the lift-off starts when the goggles end and brings the tablet up.
       const tUp = d.timeOf(is("attach", { prop: "tablet" }));
       const tLift = d.timeOf(is("autopilot", { plan: "liftoff" }));
-      near(tLift - tUp, BEAT_SEC.tabletUp + 0.05, tol, "tabletUp");
-      assert.deepEqual(d.stream.find((e) => e.a.some(is("autopilot", { plan: "liftoff" }))).a, [A.auto("liftoff", s)]);
+      assert.equal(tLift, tUp, "the tablet comes up at the lift-off entry");
+      assert.deepEqual(d.stream.find((e) => e.a.some(is("autopilot", { plan: "liftoff" }))).a,
+        [A.attach("tablet", "leftHand"), A.readState(), A.broadcast(), A.auto("liftoff", s)]);
+      // The rotors spin up over the goggles beat, so they are at speed for the lift-off.
+      assert.deepEqual(d.stream.find((e) => e.a.some(is("clip", { name: "goggles" }))).a,
+        [A.clip("goggles", s), A.rotors(1, 42 / 30 / s), A.audio(1, 42 / 30 / s)]);
     }
   }
 });
@@ -397,10 +406,9 @@ check("Q3 quick deploy: no pack; the drone appears in the hand at the place entr
     [A.state("deploying", "idle"), A.inputLock(), A.phase("deploy"), A.hide(true)],
     [A.attach("drone", "rightHand"), A.clip("place", 1.5)],
     [A.detach("drone", "world")],
-    [A.clip("goggles", 1.5)],
+    [A.clip("goggles", 1.5), A.rotors(1, 42 / 30 / 1.5), A.audio(1, 42 / 30 / 1.5)],
     [A.attach("goggles", "head")],
-    [A.attach("tablet", "leftHand"), A.readState(), A.broadcast(), A.rotors(1, 22 / 30), A.audio(1, 22 / 30)],
-    [A.auto("liftoff", 1.5)],
+    [A.attach("tablet", "leftHand"), A.readState(), A.broadcast(), A.auto("liftoff", 1.5)],
     [A.osd("boot", 0.35 / 1.5)],
     [A.own(), A.phase("fly")],
     [A.osd("fpv")],
@@ -468,9 +476,10 @@ check("Q4 T8 by autopilotDone and by anyInput — never before the own; a pendin
 
 check("Q5 SPEC §4.4 totals from the end of the prep (clip beats end on beatDone; each timer beat adds 0.05 s)", () => {
   const dt = 1 / 600;
+  // Humanoid: pack + place + goggles, then the lift-off (no tabletUp beat since 2026-10-25).
   const rows = [
-    { rig: "humanoid", quick: false, gestures: 5.233, boot: 6.158, own: 6.333, control: 7.433 },
-    { rig: "humanoid", quick: true, gestures: 2.778, boot: 3.394, own: 3.511, control: 4.244 },
+    { rig: "humanoid", quick: false, gestures: 4.5, boot: 5.425, own: 5.6, control: 6.7 },
+    { rig: "humanoid", quick: true, gestures: 2.044, boot: 2.661, own: 2.778, control: 3.511 },
     { rig: "no-hands", quick: false, gestures: 0.733, boot: 1.658, own: 1.833, control: 2.933 },
     { rig: "no-hands", quick: true, gestures: 0.733, boot: 1.350, own: 1.467, control: 2.200 },
   ];
@@ -479,7 +488,7 @@ check("Q5 SPEC §4.4 totals from the end of the prep (clip beats end on beatDone
     d.req("deploy", { quick: r.quick });
     d.until((s) => s.state === "flying");
     const tPrep = d.stream[1].t; // the prep end (first beat entry)
-    const slack = 0.05; // tabletUp / spawn are timer beats
+    const slack = r.rig === "no-hands" ? 0.05 : 0; // spawn is a timer beat; the humanoid beats are clips
     const tol = 6 * dt + 0.0006;
     near(d.timeOf(is("autopilot", { plan: "liftoff" })) - tPrep - slack, r.gestures, tol, `${r.rig} quick=${r.quick} gestures`);
     near(d.timeOf(is("osd", { mode: "boot" })) - tPrep - slack, r.boot, tol, "boot wipe");
@@ -530,7 +539,8 @@ check("Q6 skip from every beat: stopClip only while a clip runs, place only off 
     { name: "place before its event (drone in the hand)", reach: (s) => s.beat === "place" && s.drone === "hand", expect: [A.stopClip(), ...props, A.place(), A.readState(), A.broadcast(), ...SKIP_TAIL] },
     { name: "place after its event (drone on the ground)", reach: (s) => s.beat === "place" && s.drone === "ground", expect: [A.stopClip(), ...props, A.readState(), A.broadcast(), ...SKIP_TAIL] },
     { name: "goggles", reach: (s) => s.beat === "goggles", expect: [A.stopClip(), ...props, A.readState(), A.broadcast(), ...SKIP_TAIL] },
-    { name: "tabletUp (held)", reach: (s) => s.beat === "tabletUp", expect: [...props, ...SKIP_TAIL] },
+    { name: "goggles after its event (rotors spinning up)", reach: (s) => s.beat === "goggles" && s.goggles,
+      expect: [A.stopClip(), ...props, A.readState(), A.broadcast(), ...SKIP_TAIL] },
   ];
   for (const c of cases) {
     const d = new Driver();
@@ -598,24 +608,87 @@ check("Q7 pilot view both ways (T10 / T11)", () => {
 check("Q7 recall (T12), recallInstant from flying (T13), from pilotView (T14), in returning (T15)", () => {
   const a = toFlying();
   assert.deepEqual(a.req("recall"), [A.state("returning", "flying"), A.auto("rth")]);
-  assert.deepEqual(a.st().rth, { reason: "user", fpv: true, cancellable: true, armed: false });
+  assert.deepEqual(a.st().rth, { reason: "user", fpv: true, cancellable: true, armed: false, elapsedSec: 0 });
   // An ignored request tick still runs the state's own rules (guards run every tick): no stick → armed.
   assert.equal(a.req("recall"), NO_ACTIONS, "recall in returning is ignored");
   assert.equal(a.st().rth.armed, true);
-  assert.deepEqual(a.req("recallInstant"), [A.release(false), A.phase("stow"), A.osd("off")], "T15");
+  assert.deepEqual(a.req("recallInstant"), [A.release(false), A.phase("stow"), A.osd("off"), A.approach(true)], "T15");
   assert.equal(a.st().state, "returning");
-  assert.deepEqual(a.st().rth, { reason: "user", fpv: false, cancellable: false, armed: true });
+  assert.deepEqual(a.st().rth, { reason: "user", fpv: false, cancellable: false, armed: true, elapsedSec: 0 });
   assert.equal(a.req("recallInstant"), NO_ACTIONS, "third person already: ignored");
   const b = toFlying();
-  assert.deepEqual(b.req("recallInstant"), [A.state("returning", "flying"), A.release(false), A.phase("stow"), A.osd("off"), A.auto("rth")]);
-  assert.deepEqual(b.st().rth, { reason: "user", fpv: false, cancellable: false, armed: false });
+  assert.deepEqual(b.req("recallInstant"), [A.state("returning", "flying"), A.release(false), A.phase("stow"), A.osd("off"), A.approach(true)]);
+  assert.deepEqual(b.st().rth, { reason: "user", fpv: false, cancellable: false, armed: false, elapsedSec: 0 });
   for (const r of ["recall", "recallInstant"]) {
     const c = toFlying();
     c.req("pilotView");
-    assert.deepEqual(c.req(r), [A.state("returning", "pilotView"), A.phase("stow"), A.osd("off"), A.auto("rth")], `T14 ${r}`);
+    assert.deepEqual(c.req(r), [A.state("returning", "pilotView"), A.phase("stow"), A.osd("off"), A.approach(false)], `T14 ${r}`);
     assert.equal(c.st().fpv, false);
     assert.equal(c.st().rth.cancellable, false);
   }
+});
+
+check("Q7 T30: a recall from the goggles stays in them recallGraceSec (cancellable), then cuts to the approach; returnCutInSec counts down", () => {
+  const D = SEQUENCE_DEFAULTS;
+  const dt = 1 / 60;
+  const a = toFlying({ dt });
+  assert.ok(Number.isNaN(a.seq.returnCutInSec()), "flying: no countdown");
+  a.req("recall");
+  near(a.seq.returnCutInSec(), D.recallGraceSec, 1e-12, "the full grace at the recall (a request tick counts nothing)");
+  const t0 = a.t;
+  let cut = null;
+  while (a.t - t0 < D.recallGraceSec + 0.5) {
+    const left = a.seq.returnCutInSec();
+    const acts = a.frame();
+    if (acts.length) {
+      cut = acts;
+      break;
+    }
+    assert.ok(left > 0, "counting down while nothing happens");
+  }
+  assert.deepEqual(cut, [A.release(false), A.phase("stow"), A.osd("off"), A.approach(true)], "the cut and the approach");
+  near(a.t - t0, D.recallGraceSec, dt + 1e-9, "after recallGraceSec in the goggles");
+  const s = a.st();
+  assert.equal(s.state, "returning");
+  assert.equal(s.fpv, false);
+  assert.equal(s.rth.cancellable, false);
+  assert.ok(Number.isNaN(a.seq.returnCutInSec()), "no countdown once it cannot be cancelled");
+  a.sticks = { sticksActive: true, anyInput: true };
+  assert.equal(a.frame(), NO_ACTIONS, "sticks no longer cancel");
+  a.sticks = {};
+  a.craft = { distTouchdownM: 5 };
+  assert.deepEqual(a.frame(), [A.state("landing", "returning")], "T17 without a second release");
+  // Close to home within the grace: T17 releases the goggles first, no cut later.
+  const b = toFlying({ dt });
+  b.req("recall");
+  b.frame();
+  b.craft = { distTouchdownM: 4 };
+  assert.deepEqual(b.frame(), [A.state("landing", "returning"), A.release(false), A.phase("stow"), A.osd("off")]);
+  // A cancel inside the grace, then a second recall: the grace starts over.
+  const c = toFlying({ dt });
+  c.req("recall");
+  for (let k = 0; k < 60; k += 1) c.frame();
+  c.sticks = { sticksActive: true, anyInput: true };
+  assert.deepEqual(c.frame(), [A.state("flying", "returning"), A.auto(null)], "T16");
+  c.sticks = {};
+  c.req("recall");
+  near(c.seq.returnCutInSec(), D.recallGraceSec, 1e-12, "a fresh grace");
+  // The battery RTH in the goggles takes the same grace (and the same cut).
+  const e = toFlying({ dt });
+  e.battery = { rth: true };
+  e.frame();
+  e.battery = {};
+  near(e.seq.returnCutInSec(), D.recallGraceSec, 1e-12, "battery RTH: the grace");
+  const tb = e.t;
+  const be = e.until((st) => !st.fpv, D.recallGraceSec + 1);
+  assert.deepEqual(be, [A.release(false), A.phase("stow"), A.osd("off"), A.approach(true)]);
+  near(e.t - tb, D.recallGraceSec, dt + 1e-9);
+  // recallGraceSec from the options.
+  const f = toFlying({ dt, opts: { recallGraceSec: 1 } });
+  f.req("recall");
+  const tf = f.t;
+  f.until((st) => !st.fpv, 2);
+  near(f.t - tf, 1, dt + 1e-9, "a 1 s grace");
 });
 
 check("Q7 T16: only a FRESH stick input cancels a cancellable RTH (held through the recall → no; look / gimbal → never)", () => {
@@ -807,7 +880,7 @@ check("Q9 battery RTH once (T18) from flying and pilotView; empty → forced lan
   const a = toFlying();
   a.battery = { rth: true, warn: true };
   assert.deepEqual(a.frame(), [A.state("returning", "flying"), A.auto("rth")]);
-  assert.deepEqual(a.st().rth, { reason: "battery", fpv: true, cancellable: true, armed: false });
+  assert.deepEqual(a.st().rth, { reason: "battery", fpv: true, cancellable: true, armed: false, elapsedSec: 0 });
   assert.equal(a.st().batteryRthUsed, true);
   a.battery = { warn: true };
   a.frame();
@@ -823,8 +896,8 @@ check("Q9 battery RTH once (T18) from flying and pilotView; empty → forced lan
   const b = toFlying();
   b.req("pilotView");
   b.battery = { rth: true };
-  assert.deepEqual(b.frame(), [A.state("returning", "pilotView"), A.auto("rth"), A.phase("stow"), A.osd("off")]);
-  assert.deepEqual(b.st().rth, { reason: "battery", fpv: false, cancellable: false, armed: false });
+  assert.deepEqual(b.frame(), [A.state("returning", "pilotView"), A.approach(false), A.phase("stow"), A.osd("off")]);
+  assert.deepEqual(b.st().rth, { reason: "battery", fpv: false, cancellable: false, armed: false, elapsedSec: 0 });
   b.battery = { empty: true };
   assert.deepEqual(b.frame(), [A.state("landing", "returning"), A.auto("landHere")], "T19 from returning");
   const c = toFlying();
@@ -899,7 +972,7 @@ check("Q9 crash (T22) from flying / pilotView / returning / landing / the lift-o
   assert.equal(g.frame(), NO_ACTIONS, "crashMps 0 = crashes off");
   const t = new Driver();
   t.req("deploy");
-  t.until((s) => s.beat === "tabletUp");
+  t.until((s) => s.beat === "goggles" && s.goggles); // rotors spinning up, the drone still on the ground
   t.craft = { impactSpeed: 99 };
   assert.ok(!t.frame().some(is("state", { state: "crashed" })), "no crash while the drone sits on the ground in the deploy");
 });
@@ -1008,12 +1081,6 @@ const SCENARIOS = {
     d.until((s) => s.goggles);
     return d;
   },
-  "deploying/tabletUp": () => {
-    const d = new Driver();
-    d.req("deploy");
-    d.until((s) => s.beat === "tabletUp");
-    return d;
-  },
   "deploying/spawn (no-hands)": () => {
     const d = new Driver({ rig: "no-hands" });
     d.req("deploy");
@@ -1048,6 +1115,12 @@ const SCENARIOS = {
   "returning (third)": () => {
     const d = toFlying();
     d.req("recallInstant");
+    return d;
+  },
+  "returning (after the grace cut, T30)": () => {
+    const d = toFlying();
+    d.req("recall");
+    d.until((s) => !s.fpv, 5);
     return d;
   },
   "landing (fpv, forced)": () => {
@@ -1104,7 +1177,7 @@ const SCENARIOS = {
   "aborting (ground → fading)": () => {
     const d = new Driver();
     d.req("deploy");
-    d.until((s) => s.beat === "tabletUp");
+    d.until((s) => s.beat === "goggles" && s.goggles); // on the ground, rotors spinning up
     d.signals = { damage: true };
     d.frame();
     d.signals = {};

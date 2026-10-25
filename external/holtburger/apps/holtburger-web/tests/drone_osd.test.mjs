@@ -58,7 +58,7 @@ const VIEW = () => ({
   speedMps: 12.34,
   headingRad: 0.785,
   homeBearingRad: 0.785 + 30 * RAD,
-  banners: { rangeLimit: false, lowBattery: false, returning: false, crash: false, acroHint: false },
+  banners: { rangeLimit: false, lowBattery: false, returning: false, returningSec: null, crash: false, acroHint: false },
   reticle: "horizon",
 });
 
@@ -406,6 +406,33 @@ check("banners by mode: fpv follows the flags; 'pilot' = PILOT VIEW (+ low batte
   assert.equal(st.style.opacity, "0.85");
   osd.show("fpv");
   assert.deepEqual(vis(), ["rangeLimit", "returning", "acroHint"], "the pilot banner does not outlive the pilot view");
+  osd.dispose();
+});
+
+check("RETURNING counts down the recall grace (returningSec, 2026-10-25): formatReturning and the banner text", () => {
+  assert.equal(O.formatReturning(null), "RETURNING");
+  for (const bad of [undefined, NaN, Infinity, -0.1, "2"]) assert.equal(O.formatReturning(bad), "RETURNING", String(bad));
+  assert.equal(O.formatReturning(3), "RETURNING 3 · FLY TO CANCEL");
+  assert.equal(O.formatReturning(2.4), "RETURNING 3 · FLY TO CANCEL", "rounded up");
+  assert.equal(O.formatReturning(0.01), "RETURNING 1 · FLY TO CANCEL");
+  assert.equal(O.formatReturning(0), "RETURNING 1 · FLY TO CANCEL", "never 0 while it still shows");
+  assert.equal(O.formatReturning(12), "RETURNING 12 · FLY TO CANCEL");
+  assert.equal(O.formatReturning(2), O.formatReturning(2), "the same string object each time (no per-update building)");
+  const { win, document } = freshDom();
+  const osd = O.createOsd({ document, window: win });
+  osd.show("fpv");
+  const banner = document.getElementById(O.OSD_ID).querySelectorAll(".dosd-b").find((b) => b.getAttribute("data-banner") === "returning");
+  const view = VIEW();
+  view.banners = { rangeLimit: false, lowBattery: false, returning: true, returningSec: 2.2, crash: false, acroHint: false };
+  osd.update(view);
+  assert.equal(banner.hidden, false);
+  assert.equal(banner.textContent, "RETURNING 3 · FLY TO CANCEL");
+  view.banners.returningSec = 0.4;
+  osd.update(view);
+  assert.equal(banner.textContent, "RETURNING 1 · FLY TO CANCEL");
+  view.banners.returningSec = null;
+  osd.update(view);
+  assert.equal(banner.textContent, "RETURNING", "no countdown once it cannot be cancelled");
   osd.dispose();
 });
 

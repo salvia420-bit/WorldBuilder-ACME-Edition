@@ -1,6 +1,7 @@
 # Drone Deploy — implementation plan (2026-10-24)
 
 **Status:** implemented and 1070-eye-tested 2026-10-24/25 (phases 0–4); default-on since 2026-10-25 with the `?drone=off` escape. The contract is scene3d/drone/SPEC.md, usage in scene3d/drone/README.md, the eye test in live/EYETEST.md.
+**Amended 2026-10-25 by the owner** (SPEC §14.6): the drone lifts off as soon as the goggles are on (the tablet comes up during the lift-off), a recall keeps a 3 s cancel window in the goggles and then cuts to the drone coming down at home instead of flying the whole way back, and the landing is a bit faster. §2.1 and §2.3 below keep the original v1 timings.
 Real DAT data pulled for it sits next to this file in `recon/` (Appendix A says how it was produced).
 The risky assumptions were checked live on the 1070 the same day, on-screen and muted, with the owner's
 OK. Findings are in §13; screenshots and the probe scripts are in `recon/probe/`.

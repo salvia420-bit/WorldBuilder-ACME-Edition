@@ -81,7 +81,8 @@ export const CRAFT_MODES = Object.freeze(["cine", "angle", "acro"]);
  *  - `rth`: plan speeds — climb `climbMps`, cruise `cruiseMps`, descend
  *    `descendMps`, the last `finalM` at `finalMps` — and the profile limits
  *    `amax` / `jmax` (0.9 × the cinema craft's 4 / 8, so the tracked target is
- *    feasible with margin).
+ *    feasible with margin). The descent was 2 m/s with the last 1.5 m at 0.6 until
+ *    2026-10-25 (owner: land a bit faster): 5 m down onto home now takes 4.1 s, not 5.6.
  *  - `crash`: tumble rate `tumbleRadPerMps` · impact speed in
  *    [`tumbleMinRad`, `tumbleMaxRad`] rad/s, `drag`, and on the ground the
  *    sliding friction `frictionPerSec`, spin decay `spinDecayPerSec` and the
@@ -95,7 +96,7 @@ export const CRAFT_TUNING = Object.freeze({
     holdBelow: 0.05, vzGain: 4, azMax: 4, altGain: 1 }),
   acro: Object.freeze({ rc: 1.0, super: 0.7, expo: 0, hoverG: 1, maxThrustG: 2.5, uptiltDeg: 25, drag: 0.025 }),
   common: Object.freeze({ gravity: 9.80665, subDt: 1 / 240, maxSubsteps: 4800, restHeightM: 0.06, idleSpin: 0.35 }),
-  rth: Object.freeze({ climbMps: 3, cruiseMps: 8, descendMps: 2, finalMps: 0.6, finalM: 1.5, amax: 3.6, jmax: 7.2 }),
+  rth: Object.freeze({ climbMps: 3, cruiseMps: 8, descendMps: 3, finalMps: 1.0, finalM: 1.0, amax: 3.6, jmax: 7.2 }),
   crash: Object.freeze({ tumbleRadPerMps: 1.2, tumbleMinRad: 3, tumbleMaxRad: 12, drag: 0.025, frictionPerSec: 6,
     spinDecayPerSec: 8, settlePerSec: 6 }),
 });

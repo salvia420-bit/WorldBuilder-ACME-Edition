@@ -7,20 +7,21 @@ it, the SPEC wins. Changing a contract goes through the orchestrator, never thro
 ## Purpose
 
 A toolbar button directly under RynthSuite's ⚒ plays a short local scene on your character: reach into the pack
-for the drone, kneel and set it down, pull FPV goggles on, raise a tablet. The drone spins up and lifts off, the
-view cuts into the goggles, and you fly it with keyboard and pointer-locked mouse or a gamepad, with an FPV OSD,
-until you recall it. It flies home, lands, and the character stows everything in reverse.
+for the drone, kneel and set it down, pull FPV goggles on. The drone spins up while the goggles go on and lifts off
+as the tablet comes up, the view cuts into the goggles, and you fly it with keyboard and pointer-locked mouse or a
+gamepad, with an FPV OSD, until you recall it. After a 3 s window to take the recall back, the view cuts to your
+character, the drone comes down onto the spot where it was set down, and the character stows everything in reverse.
 
 - **Local-only.** A full deploy → fly → stow cycle sends nothing to the game server. The `broadcastPose` setting
-  (default off) sends the real `/read` emote at tablet-up, or at a skip past it (0x01E1 SoulEmote + one 0xF61C
+  (default off) sends the real `/read` emote when the tablet comes up (the lift-off), or at a skip past it (0x01E1 SoulEmote + one 0xF61C
   MoveToState, SPEC DV-33).
 - **Reuses film mode's stack** (flight model, camera owner, safety reflex, world prewarm, lens overlay), imported
   directly — no `?filmMode=on`. No edits to `scene3d/film/*`, ever.
 - **No wasm change.** The gestures are JS clips built from retail Animation frames and played through the Rust
   `MotionSequence` playhead (`EntityManager.playLocalClip`); the held tablet pose is the retail `ReadState`.
-- **Outdoors only** in v1, **with open sky above the launch spot**: the drone comes home by climbing to 15 m above the
-  ground and descending straight onto the spot where it was set down, so it cannot return under a roof, an arch or an
-  overhang (a deploy there is refused, below). Humanoid rigs get the gestures, a no-hands rig (Olthoi) launches the
+- **Outdoors only** in v1, **with open sky above the launch spot**: the drone comes home by descending straight onto
+  the spot where it was set down (and the first seconds of a recall climb toward 15 m above the ground), so it cannot
+  return under a roof, an arch or an overhang (a deploy there is refused, below). Humanoid rigs get the gestures, a no-hands rig (Olthoi) launches the
   drone beside it.
 
 ## Flags
@@ -73,7 +74,7 @@ under ⚒ whatever the mount order); a fixed float at `right: 12px; bottom: 84px
 |---|---|---|---|
 | idle | deploy (refused with the reason in the tooltip and a red flash) | deploy | grey; red while a refusal holds (not in world, indoors, combat, portal space, dead, a film take) |
 | deploying | skip to the lift-off | skip | amber |
-| flying / pilot view | fly home, land and stow | recall now (the view cuts back at once) | green |
+| flying / pilot view | recall: 3 s in the goggles to take it back, then it comes down at home and is stowed | recall now (the view cuts back at once) | green |
 | returning | recall now | recall now | amber |
 | landing / stowing / aborting / crashed | ignored | ignored | amber |
 
@@ -133,13 +134,15 @@ the terrain at the drop spot is within 0.5 m of them (the client's ground height
   and the final keyup never reach the game, so the character does not run in place on a key it never saw pressed.
   Press the key again to use it. The drain removes itself on that release, on a fresh press or when the window loses
   focus, also after the cycle has ended.
-- **Return home and recall** (DV-19): R, gamepad A, hold-B, the button and Shift+F11 all request the recall — the
-  drone climbs to at least 15 m AGL, flies home, descends and lands, and the view cuts back 5 m before touchdown. From
-  the goggles a FRESH stick input cancels the return (look and gimbal do not; a stick still held when the return
-  started never cancels it). From pilot view, after an instant recall (Shift) or in a forced landing (empty battery)
-  it cannot be cancelled. A return held back by an obstacle keeps the goggles view until the drone is really within
-  5 m of touchdown; if it is still stuck 3 s after its planned arrival it lands where it is and fades out there
-  instead of being picked up.
+- **Return home and recall** (DV-19, owner amendment 2026-10-25 — SPEC §14.6): R, gamepad A, hold-B, the button and
+  Shift+F11 all request the recall. The drone turns for home and the goggles stay on for 3 s while the OSD counts
+  down `RETURNING 3 · FLY TO CANCEL`: a FRESH stick input in that window takes control back (look and gimbal do not;
+  a stick still held when the return started never cancels it). Then the view cuts to your character and the drone
+  comes down 5 m onto the spot where it was set down — the long flight home is skipped — lands, and is stowed. The
+  low-battery return takes the same 3 s. Shift (instant recall), a second press while it returns and a recall from
+  pilot view skip the 3 s; in pilot view a drone within about 25 m flies home in view instead, and one already
+  within 5 m of home lands straight there. A forced landing (empty battery) lands where it is. A descent held back
+  by an obstacle lands where it is 3 s after its planned arrival and fades out there instead of being picked up.
 - Pointer lock starts on the first canvas click while flying. Esc releases it (the browser) and the drone holds as its
   mode does at zero sticks; keys and the gamepad keep flying. In pilot view the right-button drag orbits the follow
   camera round the pilot; a short right-click is swallowed (no Examine / Use context menu opens).
