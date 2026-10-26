@@ -714,7 +714,7 @@ function coversAll(bm) {
 
 // --- C: the producer's content key ---------------------------------------------------------------
 {
-  const ARMED = "?drawPools=on&slotGrid=on&packSource=on&geomBundles=on&texCompressedOnly=on";
+  const ARMED = "?drawPools=on&slotGrid=on&packSource=on&geomBundles=on&texCompressedOnly=on&frameWork=off";
   /** A model as one LB's decode mints it: a FRESH object, the model's bytes. */
   function modelGeom(seed, { interleaved = false, normalizedUv = false, baked = false, verts = 6 } = {}) {
     const g = new THREE.BufferGeometry();
@@ -870,7 +870,7 @@ function coversAll(bm) {
 
 // --- P8: the producer hands the registry the real marker ---------------------------------------
 {
-  const ARMED = "?drawPools=on&slotGrid=on&packSource=on&geomBundles=on&texCompressedOnly=on";
+  const ARMED = "?drawPools=on&slotGrid=on&packSource=on&geomBundles=on&texCompressedOnly=on&frameWork=off";
   const quiet = console.warn;
   console.warn = () => {};
   try {

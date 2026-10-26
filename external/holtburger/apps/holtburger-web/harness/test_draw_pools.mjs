@@ -70,6 +70,7 @@
 //
 // Run:  node harness/test_draw_pools.mjs        (exit 0/1)
 
+import { PIPELINE_DEFAULT_ON } from "../scene3d/pipeline_flags.js";
 import * as THREE from "three";
 import { applyBatchedMeshColorTextureFix } from "../scene3d/three_batchedmesh_colortexture_fix.js";
 import {
@@ -79,7 +80,7 @@ import {
 } from "../scene3d/pool_class_key.js";
 import {
   PoolRegistry, drawPoolsEnabled, checkDrawPoolsPrereqs, initDrawPools,
-  drawPoolsActive, _resetDrawPoolsForTest, POOL_OPTIMIZE_FRAC, getPoolRegistry,
+  drawPoolsActive, _resetDrawPoolsForTest, POOL_OPTIMIZE_FRAC, getPoolRegistry, tileKeyOfLbKey,
 } from "../scene3d/pool_registry.js";
 import {
   buildTilePlan, validateTilePlan, encodeTilePlan, decodeTilePlan,
@@ -212,7 +213,9 @@ function plan(tile, members) {
 
 /** The full F-11.3 chain (?frameWork left off ⇒ stage-A inline feeds, which
  *  keeps the battery's cadence deterministic; stage B/C are PART 15's). */
-const ARMED_PRE = "?drawPools=on&slotGrid=on&packSource=on&geomBundles=on&texCompressedOnly=on";
+// `frameWork=off` keeps the pre-2026-10-25 arm exactly: before the chain went default-on an
+// absent ?frameWork meant stage-A pools that feed INLINE, which these synchronous checks assume.
+const ARMED_PRE = "?drawPools=on&slotGrid=on&packSource=on&geomBundles=on&texCompressedOnly=on&frameWork=off";
 
 /** An RGBA8 texture AT a page dimension (256/512/1024/2048) — the only shape
  *  the class page can allocate a layer for until the bake/transcode resample
@@ -233,11 +236,18 @@ function poolNode(edge) {
 // ── PART 1 — flag grammar ─────────────────────────────────────────────────
 
 console.log("PART 1: flag grammar");
+// The chain's shared default (pipeline_flags.js PIPELINE_DEFAULT_ON; ON since 2026-10-25);
+// test_pipeline_flags.mjs owns both polarities. An explicit prerequisite
+// escape cuts the pools under either default.
+const D = PIPELINE_DEFAULT_ON;
 for (const v of ["on", "1", "true", "yes", "ON", "True"]) {
   check(drawPoolsEnabled(`?drawPools=${v}`) === true, `drawPools=${v} should read ON`);
 }
-for (const s of ["", "?drawPools", "?drawPools=", "?drawPools=off", "?drawPools=0",
-  "?drawPools=false", "?drawPools=no", "?drawPools=garbage", "?other=on"]) {
+for (const s of ["", "?drawPools", "?drawPools=", "?drawPools=garbage", "?other=on"]) {
+  check(drawPoolsEnabled(s) === D, `"${s}" should follow the shared default`);
+}
+for (const s of ["?drawPools=off", "?drawPools=0", "?drawPools=false", "?drawPools=no", "?drawPools=OFF",
+  "?drawPools=on&packSource=off", "?drawPools=on&slotGrid=off", "?drawPools=on&geomBundles=0", "?drawPools=on&texCompressedOnly=no"]) {
   check(drawPoolsEnabled(s) === false, `"${s}" should read OFF`);
 }
 
@@ -245,42 +255,51 @@ for (const s of ["", "?drawPools", "?drawPools=", "?drawPools=off", "?drawPools=
 
 console.log("PART 2: F-11.3 prerequisite chain");
 {
-  const none = checkDrawPoolsPrereqs("?drawPools=on");
-  check(none.armed === false, "drawPools alone must NOT arm");
+  const none = checkDrawPoolsPrereqs("?drawPools=on&slotGrid=off&packSource=off&geomBundles=off&texCompressedOnly=off");
+  check(none.armed === false, "drawPools with every prerequisite cut must NOT arm");
   check(none.reasons.length === 4, `all four prereqs named, got ${none.reasons.length}`);
   for (const f of ["slotGrid", "packSource", "geomBundles", "texCompressedOnly"]) {
-    check(none.reasons.some((r) => r.includes(`?${f}=on`)), `missing ${f} must be named`);
+    check(none.reasons.some((r) => r.includes(`?${f} `)), `missing ${f} must be named`);
   }
-  const partial = checkDrawPoolsPrereqs("?drawPools=on&slotGrid=on&packSource=on");
-  check(partial.armed === false, "two of four must NOT arm");
+  const partial = checkDrawPoolsPrereqs("?drawPools=on&slotGrid=on&packSource=on&geomBundles=off&texCompressedOnly=off");
+  check(partial.armed === false, "two of four cut must NOT arm");
   check(partial.reasons.length === 2, `only the unmet ones named, got ${partial.reasons.length}`);
+  const cascade = checkDrawPoolsPrereqs("?packSource=off");
+  check(cascade.armed === false && cascade.reasons.filter((r) => r.startsWith("?drawPools requires")).length === 4,
+    "a packSource cut names every dependent prerequisite");
 
-  const full = "?drawPools=on&slotGrid=on&packSource=on&geomBundles=on&texCompressedOnly=on";
+  const full = D ? "" : "?drawPools=on&slotGrid=on&packSource=on&geomBundles=on&texCompressedOnly=on";
   const ok = checkDrawPoolsPrereqs(full);
-  check(ok.armed === true, "full chain arms");
+  check(ok.armed === true, "the full chain arms");
   check(ok.reasons.length === 0, "armed chain names no reasons");
-  check(ok.frameWork === false, "?frameWork reported separately (stage B/C edge)");
-  check(checkDrawPoolsPrereqs(`${full}&frameWork=on`).frameWork === true, "?frameWork detected");
+  check(ok.frameWork === D, "?frameWork follows the shared default, reported separately (stage B/C edge)");
+  check(checkDrawPoolsPrereqs("?frameWork=off").frameWork === false, "?frameWork=off detected");
 
   // The chain is a CHAIN: prereqs without the flag itself never arm.
-  const noFlag = checkDrawPoolsPrereqs("?slotGrid=on&packSource=on&geomBundles=on&texCompressedOnly=on");
-  check(noFlag.armed === false, "prereqs without ?drawPools must NOT arm");
+  const noFlag = checkDrawPoolsPrereqs("?drawPools=off");
+  check(noFlag.armed === false, "?drawPools=off must NOT arm");
+  check(noFlag.reasons.includes("?drawPools is off"), "the escape is named");
 
   // Arming the singleton: disarmed ⇒ NO registry at all (the kill path).
   _resetDrawPoolsForTest();
   const errs = [];
   const realErr = console.error;
   console.error = (...a) => errs.push(a.join(" "));
-  const nothing = initDrawPools({ THREE, materialFactory: () => new THREE.MeshBasicMaterial(), search: "?drawPools=on&slotGrid=on" });
-  console.error = realErr;
+  const nothing = initDrawPools({ THREE, materialFactory: () => new THREE.MeshBasicMaterial(), search: "?drawPools=on&slotGrid=off" });
   check(nothing === null, "disarmed initDrawPools returns null");
   check(drawPoolsActive() === false, "disarmed ⇒ drawPoolsActive() false");
-  check(errs.length === 1 && errs[0].includes("DISARMED"), "a disarmed arm is LOUD");
+  check(errs.length === 1 && errs[0].includes("DISARMED") && errs[0].includes("?slotGrid"),
+    "a CONTRADICTORY url (explicit on, prerequisite cut) is LOUD");
+  _resetDrawPoolsForTest();
+  errs.length = 0;
+  const quiet = initDrawPools({ THREE, materialFactory: () => new THREE.MeshBasicMaterial(), search: "?packSource=off" });
+  console.error = realErr;
+  check(quiet === null && errs.length === 0, "an escape cascade disarms QUIETLY (the default-on kill path)");
   _resetDrawPoolsForTest();
   const warns = [];
   const realWarn = console.warn;
   console.warn = (...a) => warns.push(a.join(" "));
-  const armed = initDrawPools({ THREE, materialFactory: () => new THREE.MeshBasicMaterial(), search: full });
+  const armed = initDrawPools({ THREE, materialFactory: () => new THREE.MeshBasicMaterial(), search: D ? "?frameWork=off" : ARMED_PRE });
   console.warn = realWarn;
   check(armed instanceof PoolRegistry, "full chain yields a registry");
   check(drawPoolsActive() === true, "armed ⇒ drawPoolsActive() true");
@@ -1275,7 +1294,8 @@ const ARMED = ARMED_PRE;
   _resetDrawPoolsForTest();
   _resetPoolWorldForTest();
   // DISARMED: the producer is a NO-OP passthrough — the kill path.
-  const off = initPoolWorld({ THREE, search: "?drawPools=on&slotGrid=on" });
+  // Default ON since 2026-10-25: "incomplete" now means a CUT prerequisite.
+  const off = initPoolWorld({ THREE, search: "?drawPools=on&slotGrid=off" });
   check(off === null, "an incomplete flag chain arms NO pooled world (F-11.3)");
   const nodesOff = [poolNode(256), poolNode(256)];
   const rOff = addSingletonsToPools(nodesOff, {}, { domain: "st", lbKey: 0xaabb0000 });
@@ -1636,6 +1656,78 @@ console.log("PART 21: offPage refusals are FILED and re-offered on verdict settl
 }
 
 // ── done ──────────────────────────────────────────────────────────────────
+
+// ── PART 22 — per-landblock hides (?objRadius, 2026-10-25) ─────────────────
+
+console.log("PART 22: per-landblock hides (the ?objRadius hide reaches pooled members)");
+{
+  const { reg } = makeRegistry();
+  const gs = geomSource();
+  const LB_A = 0x40400000 >>> 0;
+  const LB_B = 0x41400000 >>> 0; // the same 2×2 tile as A
+  const TILE = tileKeyOfLbKey(LB_A);
+  check(TILE === tileKeyOfLbKey(LB_B) && TILE === tileOfLb(0x40, 0x40) && tileKeyOfLbKey(0x41410000) === tileOfLb(0x41, 0x41),
+    "tileKeyOfLbKey matches residency_grid.js tileOfLb");
+  const vis = (mem, id) => mem.pool.mesh.getVisibleAt(id);
+  reg.feedTile({ tile: TILE, lbs: [LB_A], members: [member({ lbKey: LB_A }), member({ lbKey: LB_A })], counts: {} }, gs);
+  reg.feedTile({ tile: TILE, lbs: [LB_B], members: [member({ lbKey: LB_B })], counts: {} }, gs);
+  const mem = [...reg.tiles.get(TILE).values()][0];
+  const idsA = mem.lbRanges.get(LB_A);
+  const idsB = mem.lbRanges.get(LB_B);
+  check(idsA.length === 2 && idsB.length === 1, "per-landblock ranges recorded and merged across plans");
+  check([...idsA, ...idsB].every((id) => vis(mem, id)), "all visible after commit");
+  check(reg.hideLb(LB_A) === 2, "hideLb flips the landblock's two instances");
+  check(idsA.every((id) => !vis(mem, id)) && idsB.every((id) => vis(mem, id)), "only that landblock is hidden");
+  check(reg.hideLb(LB_A) === 0, "hideLb is idempotent");
+  reg.parkTile(TILE);
+  reg.adoptTile(TILE);
+  check(idsA.every((id) => !vis(mem, id)) && idsB.every((id) => vis(mem, id)), "a park + re-adopt leaves the hidden landblock hidden");
+  reg.feedTile({ tile: TILE, lbs: [LB_A], members: [member({ lbKey: LB_A })], counts: {} }, gs);
+  const idsA2 = mem.lbRanges.get(LB_A);
+  check(idsA2.length === 3 && !vis(mem, idsA2[2]), "a plan landing for a hidden landblock commits invisible");
+  reg.parkTile(TILE);
+  check(reg.showLb(LB_A) === 0 && idsA2.every((id) => !vis(mem, id)), "showLb into a PARKED tile flips nothing (tile parking stays its own)");
+  reg.adoptTile(TILE);
+  check(idsA2.every((id) => vis(mem, id)) && idsB.every((id) => vis(mem, id)), "the re-adopt after the show restores everything");
+  check(reg.isLbHidden(LB_A) === false, "the hide is lifted");
+  check(reg._stats.lbHides === 1 && reg._stats.lbShows === 1, "hides and shows counted");
+}
+{
+  // The cell PVS and a landblock hide compose: neither one alone can show the instance.
+  const { reg } = makeRegistry();
+  const gs = geomSource();
+  const LB = 0x50500000 >>> 0;
+  const TILE = tileKeyOfLbKey(LB);
+  const CELL = 0x50500101;
+  reg.feedTile({ tile: TILE, lbs: [LB], members: [member({ lbKey: LB, cellId: CELL })], counts: {} }, gs);
+  const mem = [...reg.tiles.get(TILE).values()][0];
+  const id = mem.instanceIds[0];
+  reg.cellSetChanged(TILE, new Set()); // the cell leaves the PVS
+  reg.hideLb(LB);
+  reg.cellSetChanged(TILE, new Set([CELL])); // the cell comes back while its landblock is hidden
+  check(mem.pool.mesh.getVisibleAt(id) === false, "a cell PVS re-entry does not override the landblock hide");
+  reg.setCellsVisible([CELL], false);
+  reg.setCellsVisible([CELL], true);
+  check(mem.pool.mesh.getVisibleAt(id) === false, "…nor does setCellsVisible");
+  reg.showLb(LB);
+  check(mem.pool.mesh.getVisibleAt(id) === true, "showLb restores it once the cell is visible");
+  reg.cellSetChanged(TILE, new Set());
+  reg.showLb(LB);
+  check(mem.pool.mesh.getVisibleAt(id) === false, "…and a hidden cell stays hidden through a show");
+}
+{
+  // Plans built by the real tile_plan carry the landblock key.
+  const { plan: p } = buildTilePlan({
+    tile: tileOfLb(0x60, 0x61),
+    lbs: [0x60610000],
+    placements: [{ lbx: 0x60, lby: 0x61, surfaceKey: "s", modelId: 1, matrix: new THREE.Matrix4().toArray(), rsId: 0x06001234 }],
+    resolveAxes: () => rec({}),
+  });
+  check(p.members.length === 1 && p.members[0].lbKey === 0x60610000, "buildTilePlan stamps member.lbKey from lbx/lby");
+  check(validateTilePlan(p).ok === true, "…and the plan still validates");
+  const back = decodeTilePlan(encodeTilePlan(p).payload);
+  check(back.members[0].lbKey === 0x60610000, "…and survives the worker codec");
+}
 
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) { console.error("DRAW-POOLS ❌"); process.exit(1); }

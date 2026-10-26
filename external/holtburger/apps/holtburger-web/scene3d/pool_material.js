@@ -54,6 +54,7 @@ import {
   buildNraArray,
   packNraLayer,
   statNraEnabled,
+  nraSourceResEnabled,
   isBc7AtlasTexture,
   bc7AtlasShouldDefer,
   _stateKeyOf,
@@ -78,7 +79,7 @@ import { pageDimsOf, needsResample } from "./pool_class_key.js";
 // material that does not carry the patch renders that dungeon on ambient
 // alone. Dungeon lighting is not negotiable: the class material takes the
 // patch, or the member does not pool.
-import { applyBakedVertexLightPatch, VERTEX_BAKE } from "./materials.js";
+import { applyBakedVertexLightPatch, VERTEX_BAKE, heightTexForMaterial } from "./materials.js";
 
 /** Why a member was refused. Every value is COUNTED and routes the member to
  *  the legacy producer path — there is no silent drop. */
@@ -93,6 +94,75 @@ export const REFUSE = Object.freeze({
   NO_PIXELS: "noPixels",
 });
 
+/**
+ * POOL-PAGE-UPLOAD (2026-10-25): queue ONE layer of a class page for the GPU. three sends a texture
+ * only when its version moves, and with `layerUpdates` non-empty it sends just those layers
+ * (texSubImage3D / compressedTexSubImage3D). The writes below marked the layer but never moved the
+ * version, so after a page's first upload every later admit and every refeed rewrite stayed on the
+ * CPU (measured on the 1070: diffuse layers written-but-unsent for a whole session). The atlas's
+ * `touchedDiff`/`touchedNra` flush (static_atlas.js) is the same rule, batched per feed; several
+ * marks before a draw cost one upload here too.
+ */
+function _queueLayerUpload(arr, layer) {
+  if (!arr) return;
+  if (typeof arr.addLayerUpdate === "function") arr.addLayerUpdate(layer);
+  arr.needsUpdate = true;
+}
+
+/**
+ * POOL-NRA-SOURCE-RES (2026-10-26) — the nra page is sized at its SOURCES' resolution, the rule the
+ * atlas has had since memory-1 (static_atlas.js header, `?nraSourceRes`, owner-approved). The page
+ * used to be the class's diffuse dims, and under the chain the diffuse is the x4 BC7 full tier while
+ * every plane `packNraLayer` reads is smaller: the worker normal is half that tier, the seam height
+ * and the texchan roughness/AO are DAT size. `_liftChannel` filled each layer with 2x2 / 4x4
+ * nearest-neighbour copies of every real texel — 4x the bytes to pack on the main thread, to send
+ * (`texSubImage3D`, up to 16 MiB per 2048² layer) and to re-mip (three's `generateMipmap` runs over
+ * the WHOLE array on every upload), and blocky relief up close where the singleton filters the real
+ * texels. No shader change: every nra sample is `textureGrad` in normalized UV, so the array's own
+ * size picks its own mip (the same reason the atlas could shrink its layers).
+ *
+ * A class page has ONE material, so it cannot split by nra size the way the atlas buckets do
+ * (`|n<w>x<h>`). Instead the page holds the per-axis MAX of its members' asks and grows when a
+ * larger member arrives (`_fitNra`), repacking every live layer from its retained material. It never
+ * shrinks and never stores a plane below its own size; a member with smaller planes is lifted up,
+ * as every member was before. Capacity and growth keep the page-dims arithmetic, so no class holds
+ * more bytes than it did. `?nraSourceRes=off` asks for the page itself: the old sizing exactly.
+ */
+function _texDims(tex) {
+  const img = tex && tex.image;
+  const w = img ? img.width | 0 : 0;
+  const h = img ? img.height | 0 : 0;
+  return w > 0 && h > 0 ? [w, h] : null;
+}
+// The packer's own fallback for a normal / height plane the material does not carry: the wasm decode
+// memo, asked the way `_texChannel` (static_atlas.js) asks it.
+function _memoDims(plane, did) {
+  if (!did) return null;
+  const p = planeFor({ map: null, normalMap: null, roughnessMap: null, aoMap: null }, plane, did);
+  return p && p.width > 0 && p.height > 0 ? [p.width | 0, p.height | 0] : null;
+}
+/** The nra size a member's planes ask for, clamped to the page; null when it carries none (a flat
+ *  layer is exact at any size). Exported for the regression suite. */
+export function _nraAskFor(mat, w, h) {
+  if (!nraSourceResEnabled()) return { w, h };
+  if (!mat) return null;
+  const did = mat.userData?.surfaceDid >>> 0;
+  let nw = 0;
+  let nh = 0;
+  for (const d of [
+    _texDims(mat.normalMap) || _memoDims(PLANE.NORMAL, did),
+    _texDims(heightTexForMaterial(mat)) || _memoDims(PLANE.HEIGHT, did),
+    _texDims(mat.roughnessMap),
+    _texDims(mat.aoMap),
+  ]) {
+    if (!d) continue;
+    if (d[0] > nw) nw = d[0];
+    if (d[1] > nh) nh = d[1];
+  }
+  if (!nw || !nh) return null;
+  return { w: Math.min(w, nw), h: Math.min(h, nh) };
+}
+
 export class ClassMaterialRegistry {
   /**
    * @param {object} deps
@@ -105,7 +175,7 @@ export class ClassMaterialRegistry {
     this.stats = {
       classes: 0,
       layerAllocs: 0, layerHits: 0, layerRecycles: 0, layerGrows: 0, layerGrowFails: 0,
-      bc7Layers: 0, rgbaLayers: 0, nraLayers: 0,
+      bc7Layers: 0, rgbaLayers: 0, nraLayers: 0, nraRepacks: 0, nraResizes: 0, nraResizeFails: 0,
       refeedDimMismatch: 0, refeedFormatMismatch: 0,
       refused: { noTexture: 0, needsResample: 0, offPage: 0, bc7Pending: 0, deformed: 0, layerFull: 0, layerWriteFail: 0, noPixels: 0 },
       allocatedBytes: 0,
@@ -203,7 +273,9 @@ export class ClassMaterialRegistry {
     // a deduped surface only, exactly like the diffuse pixels).
     if (c.arrays.nra) {
       try {
-        packNraLayer(c.arrays.nra, layer, material, c.w, c.h, null);
+        this._fitNra(c, material);
+        packNraLayer(c.arrays.nra, layer, material, c.nw, c.nh, null);
+        _queueLayerUpload(c.arrays.nra, layer);
         this.stats.nraLayers += 1;
       } catch (_) { /* fail-soft: the flat texel shades like albedo-only v1 */ }
     }
@@ -284,6 +356,16 @@ export class ClassMaterialRegistry {
           continue;
         }
         if (!this._writeLayer(c, e.layer, tex, mat)) continue;
+        // The upgrade can bring the member's normal map with it (the ST5 worker NRA attaches in the
+        // same breath, before the refeed fires); the nra layer packed at admit had none.
+        if (c.arrays.nra) {
+          try {
+            this._fitNra(c, mat);
+            packNraLayer(c.arrays.nra, e.layer, mat, c.nw, c.nh, null);
+            _queueLayerUpload(c.arrays.nra, e.layer);
+            this.stats.nraRepacks += 1;
+          } catch (_) { /* fail-soft: the layer keeps its admit-time texels */ }
+        }
         c.layerOf.delete(uuid);
         c.layerOf.set(tex.uuid, e);
         n += 1;
@@ -297,10 +379,13 @@ export class ClassMaterialRegistry {
     let allocated = 0;
     let used = 0;
     for (const [k, c] of this.classes) {
-      const per = _perLayerBytesFor(c.w, c.h, c.bc7);
+      const per = _perLayerBytesFor(c.w, c.h, c.bc7, c.nw, c.nh);
       allocated += per * c.allocLayers;
       used += per * (c.nextLayer - c.freeLayers.length);
-      byClass[k] = { w: c.w, h: c.h, bc7: c.bc7, layers: c.layerOf.size, alloc: c.allocLayers, capacity: c.capacity };
+      byClass[k] = {
+        w: c.w, h: c.h, nw: c.arrays.nra ? c.nw : 0, nh: c.arrays.nra ? c.nh : 0,
+        bc7: c.bc7, layers: c.layerOf.size, alloc: c.allocLayers, capacity: c.capacity,
+      };
     }
     return {
       classes: this.classes.size,
@@ -309,6 +394,7 @@ export class ClassMaterialRegistry {
         allocs: this.stats.layerAllocs, hits: this.stats.layerHits,
         recycles: this.stats.layerRecycles, grows: this.stats.layerGrows,
         growFails: this.stats.layerGrowFails, nra: this.stats.nraLayers,
+        nraResizes: this.stats.nraResizes, nraResizeFails: this.stats.nraResizeFails,
         refeedDimMismatch: this.stats.refeedDimMismatch,
         refeedFormatMismatch: this.stats.refeedFormatMismatch,
       },
@@ -339,6 +425,11 @@ export class ClassMaterialRegistry {
     const capacity = _layerCapacityFor(w, h, bc7);
     const alloc = _atlasStartLayersFor(w, h, bc7, capacity);
     const stateKey = _stateKeyOf(material);
+    // POOL-NRA-SOURCE-RES: the first member's ask; a flat first member starts the page at 1x1 and
+    // the first real plane grows it.
+    const ask = statNraEnabled() ? _nraAskFor(material, w, h) : null;
+    const nw = ask ? ask.w : 1;
+    const nh = ask ? ask.h : 1;
     let diff = null;
     let nra = null;
     try {
@@ -346,7 +437,7 @@ export class ClassMaterialRegistry {
         ? makeBc7ArrayTexture(w, h, alloc,
             texCompressedOnlyActive() ? { mipChain: true, anisotropy: getAdapterMaxAnisotropy() } : {})
         : buildDiffuseArray([], w, h, alloc);
-      nra = statNraEnabled() ? buildNraArray(w, h, alloc) : null;
+      nra = statNraEnabled() ? buildNraArray(nw, nh, alloc) : null;
     } catch (e) {
       try { diff && diff.dispose && diff.dispose(); } catch (_) { /* fail-soft */ }
       this.warn(`[drawPools] class page allocation refused for ${classKey}`, e);
@@ -395,7 +486,7 @@ export class ClassMaterialRegistry {
     // D-07.6: shadow flags become POOL-uniform, and the class key already
     // carries them, so the material's own shadow-side settings are class-wide.
     c = {
-      classKey, w, h, bc7, stateKey, arrays, material: material2,
+      classKey, w, h, nw, nh, bc7, stateKey, arrays, material: material2,
       layerOf: new Map(), freeLayers: [], nextLayer: 0,
       allocLayers: alloc, capacity,
     };
@@ -414,7 +505,10 @@ export class ClassMaterialRegistry {
         height: h,
         levels: chain ? tex.mipmaps : [{ data: tex.mipmaps?.[0]?.data, width: w, height: h }],
       });
-      if (ok) this.stats.bc7Layers += 1;
+      if (ok) {
+        this.stats.bc7Layers += 1;
+        _queueLayerUpload(c.arrays.diff, layer);
+      }
       return ok === true;
     }
     const stride = w * h * 4;
@@ -430,7 +524,7 @@ export class ClassMaterialRegistry {
       // tenant's pixels (the layer-write invariant).
       c.arrays.diff.image.data.fill(0, layer * stride, (layer + 1) * stride);
     }
-    if (typeof c.arrays.diff.addLayerUpdate === "function") c.arrays.diff.addLayerUpdate(layer);
+    _queueLayerUpload(c.arrays.diff, layer);
     this.stats.rgbaLayers += 1;
     return true;
   }
@@ -461,8 +555,8 @@ export class ClassMaterialRegistry {
         newDiff.image.data.set(c.arrays.diff.image.data.subarray(0, c.allocLayers * rgbaStride), 0);
       }
       if (c.arrays.nra) {
-        newNra = buildNraArray(w, h, target);
-        newNra.image.data.set(c.arrays.nra.image.data.subarray(0, c.allocLayers * rgbaStride), 0);
+        newNra = buildNraArray(c.nw, c.nh, target);
+        newNra.image.data.set(c.arrays.nra.image.data.subarray(0, c.allocLayers * c.nw * c.nh * 4), 0);
       }
     } catch (_) {
       try { newDiff && newDiff.dispose && newDiff.dispose(); } catch (__) { /* fail-soft */ }
@@ -491,6 +585,41 @@ export class ClassMaterialRegistry {
     try { oldDiff && oldDiff.dispose && oldDiff.dispose(); } catch (_) { /* fail-soft */ }
     try { oldNra && oldNra.dispose && oldNra.dispose(); } catch (_) { /* fail-soft */ }
     this.stats.layerGrows += 1;
+    return true;
+  }
+
+  /** POOL-NRA-SOURCE-RES: grow the class's nra page to cover `mat`'s ask (see `_nraAskFor`).
+   *  Returns true when the page was re-allocated. */
+  _fitNra(c, mat) {
+    const ask = _nraAskFor(mat, c.w, c.h);
+    if (!ask || (ask.w <= c.nw && ask.h <= c.nh)) return false;
+    return this._resizeNra(c, Math.max(c.nw, ask.w), Math.max(c.nh, ask.h));
+  }
+
+  /** Re-allocate the nra page at (nw, nh) and repack every live layer from its retained material
+   *  (the same source `refeedRsId` reads). A refused allocation leaves the page EXACTLY as it was;
+   *  the caller then packs at the old size, lifted as before. */
+  _resizeNra(c, nw, nh) {
+    let next = null;
+    try {
+      next = buildNraArray(nw, nh, c.allocLayers);
+    } catch (_) {
+      this.stats.nraResizeFails += 1;
+      return false;
+    }
+    for (const e of c.layerOf.values()) {
+      try { packNraLayer(next, e.layer, e.mat, nw, nh, null); } catch (_) { /* fail-soft: the flat texel */ }
+      if (typeof next.addLayerUpdate === "function") next.addLayerUpdate(e.layer);
+    }
+    const old = c.arrays.nra;
+    c.arrays.nra = next;
+    c.nw = nw;
+    c.nh = nh;
+    next.needsUpdate = true;
+    const u = c.material && c.material.userData && c.material.userData._statArrayUniforms;
+    if (u && u.uNraArray) u.uNraArray.value = next;
+    try { old && old.dispose && old.dispose(); } catch (_) { /* fail-soft */ }
+    this.stats.nraResizes += 1;
     return true;
   }
 }

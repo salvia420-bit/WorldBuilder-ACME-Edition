@@ -22,6 +22,9 @@ function fakeScene() {
     _unparkStaticBatchXForLb: (k) => calls.push(["batchShow", k]),
     _parkStaticAtlasForLb: (k) => calls.push(["atlasHide", k]),
     _unparkStaticAtlasForLb: (k) => calls.push(["atlasShow", k]),
+    // 2026-10-25: draw pools' sticky per-landblock hide (pool_registry.js hideLb/showLb).
+    _poolHideLb: (k) => calls.push(["poolHide", k]),
+    _poolShowLb: (k) => calls.push(["poolShow", k]),
   };
   return { s, calls, parked };
 }
@@ -89,6 +92,8 @@ console.log("=========================");
     calls.filter((c) => c[0] === "batchHide").map((c) => c[1]).sort().join() === [keys[4], keys[5]].sort().join() &&
     calls.filter((c) => c[0] === "atlasHide").length === 2);
   check("4d. stats: 2 hidden LBs", M.getObjectRadiusStats(s).hiddenLbs === 2);
+  check("4c2. pooled members of exactly those LBs get the sticky pool hide (2026-10-25)",
+    calls.filter((c) => c[0] === "poolHide").map((c) => c[1]).sort().join() === [keys[4], keys[5]].sort().join());
   // Same centre again: signature unchanged -> no work.
   calls.length = 0;
   M.tickObjectRadius(s, new Set([keys[0]]));
@@ -103,6 +108,7 @@ console.log("=========================");
   check("4h. a node hidden by someone else is not un-hidden", foreign.visible === false);
   check("4i. show re-shows bucket + atlas instances", calls.some((c) => c[0] === "batchShow" && c[1] === keys[4]) &&
     calls.some((c) => c[0] === "atlasShow" && c[1] === keys[4]));
+  check("4i2. …and lifts the pool hide", calls.some((c) => c[0] === "poolShow" && c[1] === keys[4]));
   // The far side now: keys[0] at d=3 band (still visible), then d=4 hides.
   M.tickObjectRadius(s, new Set([keys[4]]));
   check("4j. walking away hides the trailing LB past N+1", hid(keys[0]) && vis(keys[1]));
@@ -112,6 +118,8 @@ console.log("=========================");
   M.tickObjectRadius(s, new Set([keys[1]]));
   check("4k. show of a parked LB leaves bucket/atlas instances to unpark",
     !calls.some((c) => c[0] === "batchShow" || c[0] === "atlasShow"));
+  check("4k2. …but the pool hide lifts regardless (the registry keeps tile parking separate)",
+    calls.some((c) => c[0] === "poolShow" && c[1] === keys[0]));
 }
 
 // ---- 5. late bakes, unpark, eviction ----

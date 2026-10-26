@@ -26,6 +26,7 @@
 //
 // Run:  cd apps/holtburger-web/ && node harness/test_geom_bundles.mjs
 
+import { PIPELINE_DEFAULT_ON } from "../scene3d/pipeline_flags.js";
 import * as THREE from "three";
 
 let passed = 0;
@@ -57,9 +58,15 @@ for (const [v, want] of [
   ["?geomBundles=yes", true],
   ["?geomBundles=off", false],
   ["?geomBundles=0", false],
-  ["?geomBundles=garbage", false],
-  ["", false],
-  ["?geomBundles", false],
+  ["?geomBundles=false", false],
+  ["?geomBundles=NO", false],
+  // The chain's shared default (pipeline_flags.js PIPELINE_DEFAULT_ON; held
+  // OFF 2026-10-25); an explicit packSource escape takes the stage down.
+  ["?geomBundles=garbage", PIPELINE_DEFAULT_ON],
+  ["", PIPELINE_DEFAULT_ON],
+  ["?geomBundles", PIPELINE_DEFAULT_ON],
+  ["?packSource=off", false],
+  ["?geomBundles=on&packSource=0", false],
 ]) {
   ok(
     gb.geomBundlesEnabled(v) === want,
@@ -83,8 +90,8 @@ const fakeWasm = {
   assemble_envcell_geometry: () => {},
 };
 ok(
-  armWith({ search: "?geomBundles=on", wasm: fakeWasm }) === false,
-  "arming: requires ?packSource"
+  armWith({ search: "?geomBundles=on&packSource=off", wasm: fakeWasm }) === false,
+  "arming: requires ?packSource (a packSource cut disarms)"
 );
 ok(
   armWith({
@@ -103,12 +110,12 @@ ok(
 );
 ok(
   armWith({
-    search: "?geomBundles=on&packSource=on",
+    search: "?geomBundles=on&packSource=on&reliefBundles=off",
     hbFetch: { enabled: true },
     relief: { enabled: true },
     wasm: fakeWasm,
   }) === false,
-  "arming: explicit relief wins and disarms bundles"
+  "arming: explicit relief wins and disarms bundles (relief variant escaped)"
 );
 ok(
   armWith({
@@ -130,9 +137,9 @@ ok(gb.geomBundlesActive() === true, "geomBundlesActive reflects armed");
 gb._testDisarm();
 ok(gb.geomBundlesActive() === false, "testDisarm clears armed");
 ok(
-  armWith({ search: "?packSource=on", hbFetch: { enabled: true }, wasm: fakeWasm }) ===
+  armWith({ search: "?packSource=on&geomBundles=off", hbFetch: { enabled: true }, wasm: fakeWasm }) ===
     false,
-  "flag absent → never arms"
+  "?geomBundles=off → never arms"
 );
 
 // ---------------------------------------------------------------------------
@@ -500,9 +507,12 @@ for (const [v, want] of [
   ["?reliefBundles=yes", true],
   ["?reliefBundles=off", false],
   ["?reliefBundles=0", false],
-  ["?reliefBundles=garbage", false],
-  ["", false],
-  ["?reliefBundles", false],
+  // The chain's shared default; cut by a geomBundles / packSource escape.
+  ["?reliefBundles=garbage", PIPELINE_DEFAULT_ON],
+  ["", PIPELINE_DEFAULT_ON],
+  ["?reliefBundles", PIPELINE_DEFAULT_ON],
+  ["?geomBundles=off", false],
+  ["?packSource=off", false],
 ]) {
   ok(
     gb.reliefBundlesEnabled(v) === want,
@@ -531,15 +541,15 @@ for (const [v, want] of [
     geom_relief_rows_resident: () => residentRows,
   };
 
-  // Relief ON but the flag absent → the T13 D3 rule still stands (DISARM).
+  // Relief ON but the variant escaped → the T13 D3 rule still stands (DISARM).
   ok(
     armWith({
-      search: "?geomBundles=on&packSource=on",
+      search: "?geomBundles=on&packSource=on&reliefBundles=off",
       hbFetch: { enabled: true },
       relief: { enabled: true, subdivLevel: 0 },
       wasm: reliefWasm,
     }) === false,
-    "relief arm: DEFAULT-OFF — relief ON without ?reliefBundles still disarms"
+    "relief arm: relief ON with ?reliefBundles=off still disarms"
   );
   // Flag on, but the wasm has no variant export (stale pkg/) → DISARM.
   ok(
@@ -686,7 +696,7 @@ for (const [v, want] of [
     "chain: names the FIRST unmet leg (gfxSubdivLevel0), rest still true"
   );
   armWith({
-    search: "?geomBundles=on&reliefBundles=on",
+    search: "?geomBundles=on&reliefBundles=on&packSource=off",
     hbFetch: { enabled: true },
     relief: { enabled: true, subdivLevel: 0 },
     wasm: reliefWasm,

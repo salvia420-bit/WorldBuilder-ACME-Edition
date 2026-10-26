@@ -56,6 +56,7 @@
 // `?interiorHold`'s predicate + ceiling, reused as-is by `?packRingHold` (an
 // existing, side-effect-free module already in the boot graph).
 import { interiorBuildPending, INTERIOR_HOLD_MAX_MS } from "./bandwidth_tier.js";
+import { pipelineStageEnabled } from "./pipeline_flags.js";
 
 // ---------------------------------------------------------------------------
 // flag readers (house grammar: EXACT-MATCH opt-in, default OFF; audited by
@@ -63,20 +64,14 @@ import { interiorBuildPending, INTERIOR_HOLD_MAX_MS } from "./bandwidth_tier.js"
 // ---------------------------------------------------------------------------
 
 /**
- * `?packSource` — DEV opt-in, **DEFAULT OFF** (flag lifecycle SPEC §0.1;
- * the orchestrator flips it after GATE-WIRE-BOOT). Only `on`/`1`/`true`/
- * `yes` read ON. Absent, empty, `off`, `0`, garbage => OFF. Not memoised.
+ * `?packSource` — the pipeline chain's master stage (pipeline_flags.js; SPEC
+ * §0.1 lifecycle). Follows the chain's shared default `PIPELINE_DEFAULT_ON`:
+ * ON since 2026-10-25, so today only `off`/`0`/`false`/`no` read OFF. Off, it
+ * takes every dependent stage down with it.
+ * No page (node, workers) => OFF. Not memoised.
  */
 export function packSourceEnabled(search) {
-  try {
-    const s = search !== undefined ? search : typeof window !== "undefined" && window.location ? window.location.search : "";
-    const v = new URLSearchParams(s).get("packSource");
-    if (v == null) return false;
-    const t = String(v).toLowerCase();
-    return t === "on" || t === "1" || t === "true" || t === "yes";
-  } catch (_) {
-    return false;
-  }
+  return pipelineStageEnabled("packSource", search);
 }
 
 /** `?fetchCap=N` — global in-flight cap escape (pass 3 S2; default 12 [A]). */

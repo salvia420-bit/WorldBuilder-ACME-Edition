@@ -22,7 +22,7 @@
 //   cd apps/holtburger-web/
 //   node test_bc7_record_budget.mjs
 
-import { Bc7RecordSource, bc7RecordBudgetBytes, bc7RecordCacheBytes } from "./scene3d/bc7_textures.js";
+import { Bc7RecordSource, bc7RecordBudgetBytes, bc7RecordCacheBytes, texCompressedOnlyEnabled } from "./scene3d/bc7_textures.js";
 
 let failed = 0, passed = 0;
 function check(name, ok, detail) {
@@ -48,9 +48,14 @@ function fakeParsed(bytes, levels = 3) {
 
 console.log("PART 1 — flag grammar");
 {
-  check("absent ⇒ armed default 256 MB", bc7RecordBudgetBytes("") === 256 * MB);
-  check("garbage ⇒ the default, never 0", bc7RecordBudgetBytes("?bc7RecordsMB=banana") === 256 * MB);
-  check("below 1 ⇒ the default", bc7RecordBudgetBytes("?bc7RecordsMB=0.5") === 256 * MB);
+  // The armed default is 128 MB under `?texCompressedOnly` and 256 MB on the legacy path; an absent
+  // flag follows the pipeline's shared default (pipeline_flags.js `PIPELINE_DEFAULT_ON`).
+  const DEF = (texCompressedOnlyEnabled("") ? 128 : 256) * MB;
+  check(`absent ⇒ armed default ${DEF / MB} MB`, bc7RecordBudgetBytes("") === DEF);
+  check("garbage ⇒ the default, never 0", bc7RecordBudgetBytes("?bc7RecordsMB=banana") === DEF);
+  check("below 1 ⇒ the default", bc7RecordBudgetBytes("?bc7RecordsMB=0.5") === DEF);
+  check("legacy path (?texCompressedOnly=off) ⇒ 256 MB", bc7RecordBudgetBytes("?texCompressedOnly=off") === 256 * MB);
+  check("compressed-only (?texCompressedOnly=on) ⇒ 128 MB", bc7RecordBudgetBytes("?texCompressedOnly=on") === 128 * MB);
   check("explicit N", bc7RecordBudgetBytes("?bc7RecordsMB=64") === 64 * MB);
   for (const off of ["off", "0", "false", "no"]) {
     check(`?bc7RecordsMB=${off} disarms`, bc7RecordBudgetBytes(`?bc7RecordsMB=${off}`) === Infinity);

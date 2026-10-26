@@ -142,7 +142,7 @@ const deferred = () => {
 const tick = (ms = 20) => new Promise((r) => setTimeout(r, ms));
 
 /** The F-11.3 flag chain a pooled world requires (test_draw_pools' ARMED). */
-const ARMED = "?drawPools=on&slotGrid=on&packSource=on&geomBundles=on&texCompressedOnly=on";
+const ARMED = "?drawPools=on&slotGrid=on&packSource=on&geomBundles=on&texCompressedOnly=on&frameWork=off";
 
 // ===========================================================================
 console.log("PART 1 — the stamp primitive + the ONE reader");
@@ -614,14 +614,14 @@ console.log("PART 8 — OFF arm: no pooled world, no behaviour change");
   _resetDrawPoolsForTest();
   _resetPoolWorldForTest();
   _resetStatAtlasForTest();
-  setSearch(""); // no flag chain at all
+  setSearch("?packSource=off"); // no flag chain at all (the chain is DEFAULT ON since 2026-10-25; this is its master escape)
   _setBc7SupportForTest(true);
   const d = deferred();
   initBc7Source({ fetchImpl: () => d.promise, preFetchImpl: async () => null });
   registerAtlasRefeed(_atlasRefeedImpl); // the atlas is the registered producer
 
   check("no pooled world arms without the chain",
-    initPoolWorld({ THREE, search: "" }) === null && getPoolWorld() === null);
+    initPoolWorld({ THREE, search: "?packSource=off" }) === null && getPoolWorld() === null);
 
   const mat = new THREE.MeshStandardMaterial({ map: pageTex(256) });
   mat.userData = { surfaceDid: 0x08000091 };

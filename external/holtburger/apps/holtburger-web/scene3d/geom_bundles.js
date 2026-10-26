@@ -44,36 +44,23 @@
 // bit 2, which `_subsetsToGroups` never reads.
 
 import * as THREE from "three";
+import { pipelineStageEnabled, pipelineOwnFlagOn } from "./pipeline_flags.js";
 
 // ---------------------------------------------------------------------------
 // Flag + arming
 // ---------------------------------------------------------------------------
 
-function _exactOn(search, name) {
-  try {
-    const s =
-      search !== undefined
-        ? search
-        : typeof window !== "undefined" && window.location
-          ? window.location.search
-          : "";
-    const v = new URLSearchParams(s).get(name);
-    if (v == null) return false;
-    const t = String(v).toLowerCase();
-    return t === "on" || t === "1" || t === "true" || t === "yes";
-  } catch (_) {
-    return false;
-  }
-}
-
+/** `?geomBundles` — the pipeline chain's shared default (pipeline_flags.js
+ *  `PIPELINE_DEFAULT_ON`: ON since 2026-10-25, `=off` escapes).
+ *  A packSource that is off cuts it (the chain cascade). */
 export function geomBundlesEnabled(search) {
-  return _exactOn(search, "geomBundles");
+  return pipelineStageEnabled("geomBundles", search);
 }
 
 /**
- * RELIEF-IN-BAKE — `?reliefBundles=on`. DEFAULT-OFF, EXACT-MATCH opt-in
- * (I7 / pass 9 D-09.3): absent or anything but an affirmative reads OFF,
- * so the OFF arm is today's code path byte-for-byte.
+ * RELIEF-IN-BAKE — `?reliefBundles`, a stage on the pipeline chain's shared
+ * default (pipeline_flags.js: ON since 2026-10-25, `=off` escapes); a
+ * geomBundles that is off cuts it.
  *
  * Consuming the baked relief variant is what lets `?geomBundles` stop
  * force-disabling `?gfxRelief` (T13 D3). It requires BOTH flags plus relief
@@ -81,7 +68,11 @@ export function geomBundlesEnabled(search) {
  * shading/config off would be an incoherent pairing.
  */
 export function reliefBundlesEnabled(search) {
-  return _exactOn(search, "reliefBundles");
+  // Rides the chain's shared default (pipeline_flags.js) and is cut with
+  // geomBundles: every preset ships gfxRelief at subdivLevel 0, which is
+  // exactly what the bake carries, so a default-on chain without the variant
+  // would turn relief OFF everywhere.
+  return pipelineStageEnabled("reliefBundles", search);
 }
 
 /** True when the assemble path is serving baked relief variants. */
@@ -221,18 +212,22 @@ export function initGeomBundles({ wasmExports, controller } = {}) {
     return !!ok;
   };
   if (!geomBundlesEnabled()) {
-    leg("geomBundlesFlag", false);
+    // Name the real cut (the pipeline_flags.js cascade): the stage's own
+    // flag, or a packSource that is off and took it down with the chain.
+    const packOn = pipelineStageEnabled("packSource");
+    leg("geomBundlesFlag", pipelineOwnFlagOn("geomBundles"));
+    leg("packSourceFlag", packOn);
     return false;
   }
   leg("geomBundlesFlag", true);
   const reasons = _state.reasons;
   try {
     const ps = new URLSearchParams(window.location.search);
-    const on = (v) => v === "on" || v === "1" || v === "true" || v === "yes";
-    leg("packSourceFlag", on(ps.get("packSource")));
+    const packOn = pipelineStageEnabled("packSource");
+    leg("packSourceFlag", packOn);
     leg("placementId", ps.get("placementId") !== "off");
-    if (!on(ps.get("packSource"))) {
-      reasons.push("?geomBundles=on requires ?packSource=on (SPEC §3 T13)");
+    if (!packOn) {
+      reasons.push("?geomBundles requires ?packSource (SPEC §3 T13)");
     }
     if (ps.get("placementId") === "off") {
       reasons.push(
@@ -276,7 +271,7 @@ export function initGeomBundles({ wasmExports, controller } = {}) {
     );
     if (!reliefBundlesEnabled()) {
       reliefReasons.push(
-        "?reliefBundles=on not authored (DEFAULT-OFF until the eye pair passes)"
+        "?reliefBundles is off (pipeline_flags.js)"
       );
     }
     if (

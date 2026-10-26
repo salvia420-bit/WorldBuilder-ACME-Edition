@@ -126,26 +126,21 @@
 import {
   classKeyOf, passClassOf, poolNodeName, isPooledDomain,
 } from "./pool_class_key.js";
+import { pipelineStageEnabled, pipelineOwnFlagOn, pipelinePrereqConflicts } from "./pipeline_flags.js";
 
 // ---------------------------------------------------------------------------
 // flag + prerequisite chain (F-11.3)
 // ---------------------------------------------------------------------------
 
 /**
- * `?drawPools` — DEV opt-in, **DEFAULT OFF** (SPEC §0.1 lifecycle). Only
- * `on`/`1`/`true`/`yes` read ON; absent, empty, `off`, `0`, garbage ⇒ OFF.
+ * `?drawPools` — the pipeline chain's shared default (pipeline_flags.js
+ * `PIPELINE_DEFAULT_ON`: ON since 2026-10-25, `=off` escapes). Any prerequisite
+ * cut (F-11.3: slotGrid / packSource / geomBundles / texCompressedOnly) takes
+ * it down with it. No page ⇒ OFF.
  * Not memoised (the singleton below memoises once, as the house pattern does).
  */
 export function drawPoolsEnabled(search) {
-  try {
-    const s = search !== undefined ? search : typeof window !== "undefined" && window.location ? window.location.search : "";
-    const v = new URLSearchParams(s).get("drawPools");
-    if (v == null) return false;
-    const t = String(v).toLowerCase();
-    return t === "on" || t === "1" || t === "true" || t === "yes";
-  } catch (_) {
-    return false;
-  }
+  return pipelineStageEnabled("drawPools", search);
 }
 
 /**
@@ -204,23 +199,28 @@ export const DRAW_POOLS_PREREQS = Object.freeze([
  *   per-flag reader (tests); defaults to the exact-match house grammar.
  */
 export function checkDrawPoolsPrereqs(search, readerFor) {
-  const s = search !== undefined ? search : typeof window !== "undefined" && window.location ? window.location.search : "";
+  const s = search !== undefined ? search : typeof window !== "undefined" && window.location ? window.location.search : null;
+  // Each prerequisite is judged as the page would run it (its own escape AND
+  // the cascade above it), not by its raw spelling (2026-10-25 default flip).
   const read = readerFor || ((name) => {
     try {
-      const v = new URLSearchParams(s).get(name);
-      if (v == null) return false;
-      const t = String(v).toLowerCase();
-      return t === "on" || t === "1" || t === "true" || t === "yes";
+      return pipelineStageEnabled(name, s === null ? undefined : s);
     } catch (_) {
       return false;
     }
   });
   const reasons = [];
-  if (!drawPoolsEnabled(s)) reasons.push("?drawPools is not on");
-  for (const flag of DRAW_POOLS_PREREQS) {
-    if (!read(flag, s)) reasons.push(`?drawPools requires ?${flag}=on (SPEC F-11.3)`);
+  let own = false;
+  try {
+    own = s !== null && pipelineOwnFlagOn("drawPools", s);
+  } catch (_) {
+    own = false;
   }
-  return { armed: reasons.length === 0, reasons, frameWork: read("frameWork", s) };
+  if (!own) reasons.push("?drawPools is off");
+  for (const flag of DRAW_POOLS_PREREQS) {
+    if (!read(flag, s === null ? undefined : s)) reasons.push(`?drawPools requires ?${flag} (SPEC F-11.3)`);
+  }
+  return { armed: reasons.length === 0, reasons, frameWork: read("frameWork", s === null ? undefined : s) };
 }
 
 // ---------------------------------------------------------------------------
@@ -242,6 +242,15 @@ export const POOL_INDEX_BYTES = 2;
 // membership record (pass-07 S1 — the ONLY retained per-tile scene bookkeeping)
 // ---------------------------------------------------------------------------
 
+/** The grid tile (2×2 landblocks) a landblock key belongs to — the same key
+ *  residency_grid.js `tileOfLb` gives the producer's plans (pinned equal in
+ *  harness/test_draw_pools.mjs). */
+export function tileKeyOfLbKey(lbKey) {
+  const x = (lbKey >>> 24) & 0xff;
+  const y = (lbKey >>> 16) & 0xff;
+  return (((x >> 1) & 0xff) << 8) | ((y >> 1) & 0xff);
+}
+
 function makeMembership(pool) {
   return {
     pool,
@@ -253,6 +262,8 @@ function makeMembership(pool) {
     layerRefs: new Set(),  // rsIds this tile needs resident in the class array
     cellRanges: null,      // Map<cellId, number[]> for envcell PVS ranges
     bands: null,           // Map<instanceId, {gids:[near,far], band:0|1}>
+    lbRanges: null,        // Map<lbKey, number[]> — per-landblock ids (?objRadius hides)
+    lbOfId: null,          // Map<instanceId, lbKey>
     live: false,
   };
 }
@@ -336,6 +347,9 @@ export class PoolRegistry {
     this._fixApplied = null; // tri-state: null = not yet probed
     this._fixWarned = false;
 
+    // 2026-10-25: landblocks whose instances an ?objRadius hide holds
+    // invisible, whatever the tile's LIVE/PARKED state or the cell PVS says.
+    this._hiddenLbs = new Set();
     this._stats = {
       feeds: 0, parks: 0, adopts: 0, releases: 0,
       bandSwaps: 0, cellFlips: 0,
@@ -343,6 +357,7 @@ export class PoolRegistry {
       dedupHits: 0, geometryAdds: 0, instanceAdds: 0, instanceDeletes: 0,
       poolsCreated: 0, poolsReaped: 0,
       cellsHidden: 0, cellsReleased: 0,
+      lbHides: 0, lbShows: 0, lbHiddenInstances: 0,
       classesCreated: 0, classesCreatedPostBoot: 0,
       optimizeRuns: 0, growthDoublings: 0,
       unresolvedGeometry: 0, unpooledMembers: 0,
@@ -757,6 +772,7 @@ export class PoolRegistry {
         for (const mem of touched.values()) {
           if (live) {
             for (const id of mem.instanceIds) {
+              if (self._lbHides(mem, id)) continue; // an ?objRadius hide outranks the flip
               mem.pool.mesh.setVisibleAt(id, true);
               flipped += 1;
             }
@@ -785,6 +801,14 @@ export class PoolRegistry {
               if (mem.bands) {
                 if (!prev.bands) prev.bands = new Map();
                 for (const [id, b] of mem.bands) prev.bands.set(id, b);
+              }
+              if (mem.lbRanges) {
+                if (!prev.lbRanges) { prev.lbRanges = new Map(); prev.lbOfId = new Map(); }
+                for (const [lb, ids] of mem.lbRanges) {
+                  const cur = prev.lbRanges.get(lb);
+                  prev.lbRanges.set(lb, cur ? cur.concat(ids) : ids.slice());
+                }
+                for (const [id, lb] of mem.lbOfId) prev.lbOfId.set(id, lb);
               }
               // The tile's state, not "true": a merge into a PARKED tile's
               // record must leave it parked or `adoptTile` skips it and the
@@ -873,6 +897,13 @@ export class PoolRegistry {
     this._stats.instanceAdds += 1;
     mem.instanceIds.push(id);
     mem.gidByInstance.set(id, gid);
+    if (m.lbKey != null) {
+      const lb = m.lbKey >>> 0;
+      if (!mem.lbRanges) { mem.lbRanges = new Map(); mem.lbOfId = new Map(); }
+      const arr = mem.lbRanges.get(lb);
+      if (arr) arr.push(id); else mem.lbRanges.set(lb, [id]);
+      mem.lbOfId.set(id, lb);
+    }
     if (m.rsId) {
       mem.layerRefs.add(m.rsId >>> 0);
       if (hooks && typeof hooks.onLayer === "function") hooks.onLayer(m.rsId >>> 0, m);
@@ -924,8 +955,10 @@ export class PoolRegistry {
     for (const mem of byTile.values()) {
       if (mem.live) continue;
       for (const id of mem.instanceIds) {
-        // A cell outside the current PVS set stays hidden across a re-adopt.
+        // A cell outside the current PVS set stays hidden across a re-adopt,
+        // and so does a landblock under an ?objRadius hide.
         if (mem.hiddenCells && mem.hiddenCells.has(id)) continue;
+        if (this._lbHides(mem, id)) continue;
         mem.pool.mesh.setVisibleAt(id, true);
         n += 1;
       }
@@ -1009,6 +1042,71 @@ export class PoolRegistry {
     return done;
   }
 
+  // ── per-landblock hides (?objRadius, 2026-10-25) ─────────────────────────
+
+  /** Is this instance held invisible by a hidden landblock? */
+  _lbHides(mem, id) {
+    if (this._hiddenLbs.size === 0 || !mem.lbOfId) return false;
+    const lb = mem.lbOfId.get(id);
+    return lb !== undefined && this._hiddenLbs.has(lb);
+  }
+
+  _forEachLbInstance(lbKey, fn) {
+    const lb = lbKey >>> 0;
+    const tileKey = tileKeyOfLbKey(lb);
+    const byTile = this.tiles.get(tileKey);
+    if (!byTile) return;
+    for (const mem of byTile.values()) {
+      const ids = mem.lbRanges && mem.lbRanges.get(lb);
+      if (ids) for (const id of ids) fn(mem, id);
+    }
+  }
+
+  /**
+   * Hide one landblock's pooled instances (the ?objRadius hide — object_radius.js
+   * `_hide`). Sticky: a later commit, re-adopt or cell-PVS show leaves them hidden
+   * until `showLb`. Membership is kept; nothing is released.
+   * @returns {number} instances flipped invisible
+   */
+  hideLb(lbKey) {
+    const lb = lbKey >>> 0;
+    if (this._hiddenLbs.has(lb)) return 0;
+    this._hiddenLbs.add(lb);
+    let n = 0;
+    this._forEachLbInstance(lb, (mem, id) => { mem.pool.mesh.setVisibleAt(id, false); n += 1; });
+    this._stats.lbHides += 1;
+    this._stats.lbHiddenInstances += n;
+    if (n > 0) this._mutate(1);
+    return n;
+  }
+
+  /**
+   * Undo `hideLb`: instances come back only where the tile is LIVE and the cell
+   * PVS does not hide them.
+   * @returns {number} instances flipped visible
+   */
+  showLb(lbKey) {
+    const lb = lbKey >>> 0;
+    if (!this._hiddenLbs.delete(lb)) return 0;
+    let n = 0;
+    let held = 0;
+    this._forEachLbInstance(lb, (mem, id) => {
+      held += 1;
+      if (!mem.live) return;
+      if (mem.hiddenCells && mem.hiddenCells.has(id)) return;
+      mem.pool.mesh.setVisibleAt(id, true);
+      n += 1;
+    });
+    this._stats.lbShows += 1;
+    this._stats.lbHiddenInstances = Math.max(0, this._stats.lbHiddenInstances - held);
+    if (n > 0) this._mutate(1);
+    return n;
+  }
+
+  isLbHidden(lbKey) {
+    return this._hiddenLbs.has(lbKey >>> 0);
+  }
+
   // ── per-cell PVS ranges (D-07.8) ─────────────────────────────────────────
 
   /**
@@ -1032,7 +1130,7 @@ export class PoolRegistry {
           if (want && hidden) {
             mem.hiddenCells.delete(id);
             this._stats.cellsHidden -= 1;
-            if (mem.live) mem.pool.mesh.setVisibleAt(id, true);
+            if (mem.live && !this._lbHides(mem, id)) mem.pool.mesh.setVisibleAt(id, true);
             flips += 1;
           } else if (!want && !hidden) {
             mem.hiddenCells.add(id);
@@ -1102,7 +1200,7 @@ export class PoolRegistry {
             this._stats.cellsHidden -= 1;
             // A PARKED tile's instances are all invisible; un-hiding records
             // the intent and `adoptTile` performs the flip.
-            if (mem.live) mem.pool.mesh.setVisibleAt(id, true);
+            if (mem.live && !this._lbHides(mem, id)) mem.pool.mesh.setVisibleAt(id, true);
             flips += 1;
           } else if (!visible && !hidden) {
             mem.hiddenCells.add(id);
@@ -1350,11 +1448,16 @@ export function initDrawPools(deps = {}) {
   const chk = checkDrawPoolsPrereqs(deps.search);
   if (!chk.armed) {
     _armed = false;
-    if (drawPoolsEnabled(deps.search)) {
+    // Loud only for a CONTRADICTORY url (`?drawPools=on` with a prerequisite
+    // cut). Under a default-on chain an escape like `?packSource=off` takes the
+    // pools down quietly, by design (pipeline_flags.js).
+    let conflicts = [];
+    try { conflicts = pipelinePrereqConflicts("drawPools", deps.search); } catch (_) { conflicts = []; }
+    if (conflicts.length > 0) {
       try {
         console.error(
           "[drawPools] flag ON but DISARMED (legacy producer stack stays in charge):\n  - "
-          + chk.reasons.filter((r) => r !== "?drawPools is not on").join("\n  - "),
+          + chk.reasons.filter((r) => r !== "?drawPools is off").join("\n  - "),
         );
       } catch (_) { /* fail-soft */ }
     }

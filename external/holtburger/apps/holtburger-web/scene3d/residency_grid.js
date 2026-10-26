@@ -1,5 +1,6 @@
 // scene3d/residency_grid.js — ST7 (`?slotGrid`, SPEC §1.4 / pass 6): the
-// tile-granular slot grid as RESIDENCY AUTHORITY, DEFAULT OFF.
+// tile-granular slot grid as RESIDENCY AUTHORITY (a stage on the pipeline
+// chain's shared default — ON since 2026-10-25, `?slotGrid=off` escapes).
 //
 // Pass-6 shape (D-06.1..D-06.10), landed at T20 with the draw pools still OFF
 // — so the grid drives TODAY'S producers through the SPEC §1.4 adapter table
@@ -36,7 +37,9 @@
 //     (`parkDeferredCount/Bytes`), floors NEVER zeroed. The 4-rung ladder
 //     (R1 demote → R2 park-release+budget-halve → R3 Rust-budget-halve →
 //     R4 emergency floor-lower 30 s → 5 s, NEVER 0) triggers at
-//     0.9×M1 / context loss / 0.94×M3, sampled 1 Hz, ≥5 s per rung, release
+//     0.9×M1 (raised to 0.65 × the reported jsHeapSizeLimit when larger —
+//     ladderHeapTriggerBytes, 2026-10-25) / context loss / 0.94×M3,
+//     sampled 1 Hz, ≥5 s per rung, release
 //     in reverse at 0.85 low-water. `r4Engagements > 0` on a default run is
 //     a FAIL by definition.
 //   * NEVER sheds at any rung: the player's current tile + 3×3 LB, pinned
@@ -53,27 +56,22 @@
 // Requires `?packSource` (D-12.4): the wiring disarms loudly without it.
 
 import { EdgeParkScheduler } from "./fixed_grid.js";
+import { pipelineStageEnabled } from "./pipeline_flags.js";
 
 // ---------------------------------------------------------------------------
-// flag reader (house grammar: EXACT-MATCH opt-in, DEFAULT OFF; audited by
-// scripts/audit-flag-defaults.mjs — keep comparisons same-line on .get())
+// flag reader (pipeline_flags.js: the chain's shared default + cascade;
+// audited by scripts/audit-flag-defaults.mjs)
 // ---------------------------------------------------------------------------
 
 /**
- * `?slotGrid` — DEV opt-in, **DEFAULT OFF** (SPEC §0.1 lifecycle; the
- * orchestrator flips after GATE-GRID). Only `on`/`1`/`true`/`yes` read ON.
- * Absent, empty, `off`, `0`, garbage => OFF. Not memoised.
+ * `?slotGrid` — the pipeline chain's shared default (pipeline_flags.js
+ * `PIPELINE_DEFAULT_ON`: ON since 2026-10-25, `=off` escapes).
+ * Needs packSource (SPEC D-12.4) and stands down for a page whose ring is not
+ * the grid's R=5 (`?agentic=low`, `?pvsRingRadius` ≠ 5). No page => OFF.
+ * Not memoised.
  */
 export function slotGridEnabled(search) {
-  try {
-    const s = search !== undefined ? search : typeof window !== "undefined" && window.location ? window.location.search : "";
-    const v = new URLSearchParams(s).get("slotGrid");
-    if (v == null) return false;
-    const t = String(v).toLowerCase();
-    return t === "on" || t === "1" || t === "true" || t === "yes";
-  } catch (_) {
-    return false;
-  }
+  return pipelineStageEnabled("slotGrid", search);
 }
 
 // ---------------------------------------------------------------------------
@@ -102,6 +100,25 @@ export const TELEPORT_FIRST_BURST_MS = 250;
 /** Ladder thresholds (S4.3 [A]): 0.9 × M1 (1.6 GB) and 0.94 × M3 (512 MiB). */
 export const LADDER_HEAP_TRIGGER_BYTES = Math.round(0.9 * 1.6 * 1024 * 1024 * 1024);
 export const LADDER_WASM_TRIGGER_BYTES = Math.round(0.94 * 512 * 1024 * 1024);
+/**
+ * Heap trigger re-class (2026-10-25, the first 1070 soak of the full chain [M]):
+ * at quality=ultra in Holtburg the chain arm sat at 1.59–1.61 GB usedJSHeapSize
+ * (the bare default 0.98 GB) against a reported jsHeapSizeLimit of 4.40 GB, so the
+ * fixed 0.9 × M1 trigger held the ladder at R4 for the whole session: textures
+ * demoted to previews (R1), lane-T full tiers and W2 uploads suspended (R4), and
+ * 788 pool members stuck `bc7Pending` — the degradation itself, with the real
+ * OOM line ~2.8 GB away. Where the browser reports its V8 ceiling, the trigger
+ * is the larger of the fixed trigger and this fraction of that ceiling, so a
+ * low-limit device keeps the old trigger and a 4 GB tab engages near ~2.9 GB.
+ */
+export const LADDER_HEAP_LIMIT_FRAC = 0.65;
+
+/** The heap trigger for a page whose `performance.memory` is `mem` (null/absent ⇒ the fixed trigger). */
+export function ladderHeapTriggerBytes(mem) {
+  const lim = mem ? Number(mem.jsHeapSizeLimit) : NaN;
+  if (!Number.isFinite(lim) || lim <= 0) return LADDER_HEAP_TRIGGER_BYTES;
+  return Math.max(LADDER_HEAP_TRIGGER_BYTES, Math.round(LADDER_HEAP_LIMIT_FRAC * lim));
+}
 export const LADDER_RELEASE_FRAC = 0.85;
 export const LADDER_RUNG_DWELL_MS = 5_000;
 export const LADDER_SAMPLE_MS = 1_000;
@@ -467,7 +484,8 @@ export class PressureLadder {
    *   either way), R2 = park release + budget halve, R3 = Rust budget halve,
    *   R4 = floor lowering + lookahead/laneT suspend + frame_work EMERGENCY.
    * @param {(ev:{rung:number, engaged:boolean})=>void} [deps.onLadder]
-   * @param {number} [deps.heapTrigger]  bytes (default 0.9×M1)
+   * @param {number} [deps.heapTrigger]  bytes (default ladderHeapTriggerBytes(performance.memory):
+   *   0.9×M1, raised to 0.65 × jsHeapSizeLimit where the browser reports a larger ceiling)
    * @param {number} [deps.wasmTrigger]  bytes (default 0.94×M3)
    */
   constructor({ now, sample, onRung, onLadder, heapTrigger, wasmTrigger } = {}) {
@@ -475,7 +493,7 @@ export class PressureLadder {
     this.sample = typeof sample === "function" ? sample : () => ({ heapBytes: 0, wasmBytes: 0, contextLoss: false });
     this.onRung = typeof onRung === "function" ? onRung : () => {};
     this.onLadder = typeof onLadder === "function" ? onLadder : null;
-    this.heapTrigger = heapTrigger ?? LADDER_HEAP_TRIGGER_BYTES;
+    this.heapTrigger = heapTrigger ?? ladderHeapTriggerBytes(globalThis.performance && globalThis.performance.memory);
     this.wasmTrigger = wasmTrigger ?? LADDER_WASM_TRIGGER_BYTES;
     this.rung = 0; // 0 = disengaged; 1..4 = R1..R4 engaged
     this._lastSampleMs = -Infinity;
@@ -618,7 +636,7 @@ export class GridResidencyAdapter {
     this._teleportFirstBurst = false;
 
     this._stats = {
-      feedsFired: 0, feedLbs: 0, feedRefires: 0, packFetches: 0, packPins: 0, packUnpins: 0,
+      feedsFired: 0, feedLbs: 0, feedRefires: 0, crossingRefires: 0, packFetches: 0, packPins: 0, packUnpins: 0,
       parksIssued: 0, parkLbsIssued: 0, releases: 0, releaseLbs: 0,
       reAdopts: 0, quarantineHolds: 0,
       parkDeferredCount: 0, parkDeferredBytes: 0,
@@ -771,6 +789,39 @@ export class GridResidencyAdapter {
     }
     for (const tile of empty) this._admit(tile);
     return empty.length;
+  }
+
+  /**
+   * Re-fire feeds for the window's LIVE and STAGED tiles (2026-10-25). The feeds gate objects by
+   * the player's distance (index.js: statics/buildings only where `objectBakeAllowed` — the
+   * `?objRadius` near radius cells.js applies on the legacy ring), so a landblock CROSSING can
+   * bring a resident tile's landblocks into object range without any grid event: the caller fires
+   * this once per crossing. Idempotent per LB through the same guard/baked-Sets as the staged
+   * refire below; nearest tiles first.
+   *
+   * @returns {number} tiles re-fired.
+   */
+  refireWindowFeeds() {
+    const g = this.grid;
+    const tiles = [];
+    for (const tile of g.windowTiles) {
+      const st = g.stateOf(tile);
+      if (st === SLOT_STATE.LIVE || st === SLOT_STATE.STAGED) tiles.push(tile);
+    }
+    if (tiles.length === 0) return 0;
+    const pt = g.playerTile;
+    if (pt != null && pt >= 0) {
+      const px = (pt >> 8) & 0xff;
+      const py = pt & 0xff;
+      const cheb = (t) =>
+        Math.max(Math.abs(((t >> 8) & 0xff) - px), Math.abs((t & 0xff) - py));
+      tiles.sort((a, b) => cheb(a) - cheb(b));
+    }
+    for (const tile of tiles) {
+      this._stats.crossingRefires += 1;
+      this._fireFeedLbs(tile);
+    }
+    return tiles.length;
   }
 
   /**

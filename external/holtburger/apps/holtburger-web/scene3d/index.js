@@ -65,7 +65,7 @@ import {
 // evictStaticAtlasForLb above, for the cross-LB per-material ?staticBatch
 // buckets (plain specifier everywhere → one module instance → shared state).
 import { evictStaticBatchXForLb, parkStaticBatchXForLb, unparkStaticBatchXForLb } from "./static_batch_x.js";
-import { afterObjectBake, afterUnpark as objRadiusAfterUnpark, getObjectRadiusStats, objectRadiusHides } from "./object_radius.js";
+import { afterObjectBake, afterUnpark as objRadiusAfterUnpark, getObjectRadiusStats, objectRadiusHides, objectBakeAllowed } from "./object_radius.js";
 import { getStaticGeomCache } from "./static_geom_cache.js";
 // Frame-split probe (2026-08-06) — imported for its side effect only: it
 // installs `window.__frameSplitArm/Report/Census/Ballast` and nothing else.
@@ -363,6 +363,7 @@ import { initTerrainSwamp } from "./terrain_swamp.js";
 import { initTerrainRock } from "./terrain_rock.js";
 import { VFX_GLOBALS } from "./materials.js";
 import { readParticleEnv } from "./vfx/particle_env.js";
+import { pipelineStageEnabled, pipelinePrereqConflicts, pipelineFlagIsOn } from "./pipeline_flags.js";
 
 // streamFix (2026-07-02, town-portal streaming): default-ON master gate for the
 // already-baked FAST-PATH in the three per-LB loaders below (`?streamFix=off`
@@ -7191,16 +7192,22 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
     // terrain FETCH role is kept (proven, idempotent; subsumed at ST10).
     const __slotGridArmed = (() => {
       try {
-        const ps = new URLSearchParams(window.location?.search || "");
-        const on = (v) => v === "on" || v === "1" || v === "true" || v === "yes";
-        if (!on(ps.get("slotGrid"))) return false;
-        if (!on(ps.get("packSource"))) {
+        // pipeline_flags.js decides (shared default + cascade + ring veto);
+        // only a contradictory `?slotGrid=on` without packSource is reported.
+        if (pipelinePrereqConflicts("slotGrid").length > 0) {
           console.error(
-            "[slotGrid] ?slotGrid=on requires ?packSource=on (SPEC D-12.4) — grid DISARMED, legacy residency in charge"
+            "[slotGrid] ?slotGrid=on requires ?packSource (SPEC D-12.4) — grid DISARMED, legacy residency in charge"
           );
           return false;
         }
-        return true;
+        const armed = pipelineStageEnabled("slotGrid");
+        if (!armed && pipelineFlagIsOn(new URLSearchParams(window.location?.search || "").get("slotGrid"))) {
+          // The only remaining cut is the ring veto (pipeline_flags.js PIPELINE_VETO).
+          console.warn(
+            "[slotGrid] ?slotGrid=on ignored: the grid's fixed R=5 ring does not match this page's ?pvsRingRadius / ?agentic — legacy residency in charge"
+          );
+        }
+        return armed;
       } catch (_) {
         return false;
       }
@@ -7263,6 +7270,10 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
     // reads false and the legacy stack is untouched.
     try {
       initPoolWorld({ THREE, group: liveScene3d.staticsGroup });
+      // 2026-10-25: object_radius.js hides/shows a landblock's objects; pooled
+      // members follow through the registry's sticky per-landblock hide.
+      liveScene3d._poolHideLb = (lb) => { const r = getPoolRegistry(); return r ? r.hideLb(lb) : 0; };
+      liveScene3d._poolShowLb = (lb) => { const r = getPoolRegistry(); return r ? r.showLb(lb) : 0; };
       // ENVCELL-POOL-SWAP: interiors pool into the CELLS group on
       // RENDER_LAYER_INDOOR, never the layer-0 statics group — atmosphere_
       // pipeline renders layer 0, CLEARS DEPTH, then renders layer 1, and an
@@ -7379,13 +7390,27 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
                 },
               }
             : null; // legacy-lane fetch arm (no world_index): grid still owns residency
+          // The player's landblock as the grid last saw it (sgCtl.tick sets it
+          // before every update), for the object gate below.
+          let gridPlayerLbKey = null;
           const feeds = {
             fireLb: (lbX, lbY) => {
               // The tickPvsLoadExpansion fireOne population, event-driven
               // (idempotent per domain via baked-Sets + the stream guard).
+              // 2026-10-25: objects obey ?objRadius exactly as cells.js fireOne
+              // does — terrain fills the whole window, statics/buildings only
+              // within the near radius of the player's landblock. The grid was
+              // built before ?objRadius existed and baked objects for all 144
+              // window LBs against the legacy ring's 81 (the 1070 breakdown's
+              // grid term); sgCtl.tick re-fires the window on each crossing so
+              // landblocks coming into range get their objects.
+              const lbKey = (((lbX & 0xff) << 24) | ((lbY & 0xff) << 16)) >>> 0;
+              const objOk = gridPlayerLbKey == null || objectBakeAllowed([gridPlayerLbKey], lbKey);
               try { liveScene3d.loadTerrainForLandblock(lbX, lbY); } catch (_) {}
-              try { liveScene3d.loadStaticsForLandblock(lbX, lbY); } catch (_) {}
-              try { liveScene3d.loadBuildingsForLandblock(lbX, lbY); } catch (_) {}
+              if (objOk) {
+                try { liveScene3d.loadStaticsForLandblock(lbX, lbY); } catch (_) {}
+                try { liveScene3d.loadBuildingsForLandblock(lbX, lbY); } catch (_) {}
+              }
             },
           };
           const lruDeps = {
@@ -7537,8 +7562,14 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
                 if (currentLbKey != null) {
                   const lbx = (currentLbKey >>> 24) & 0xff;
                   const lby = (currentLbKey >>> 16) & 0xff;
+                  const lbOnly = ((lbx << 24) | (lby << 16)) >>> 0;
+                  const crossed = gridPlayerLbKey !== null && gridPlayerLbKey !== lbOnly;
+                  gridPlayerLbKey = lbOnly;
                   const res = grid.update(lbx, lby);
                   adapter.onUpdate(res);
+                  // A crossing moves the ?objRadius window even when no tile
+                  // shifts (the feeds gate objects by distance).
+                  if (crossed) adapter.refireWindowFeeds();
                   if (res.moved && packsArmed) {
                     // Keep the controller's ring/lookahead in lockstep with
                     // grid crossings (idempotent; the index.html 2 s pose

@@ -48,6 +48,8 @@
 //
 // Run:  cd apps/holtburger-web && node harness/test_tex_compressed_only.mjs
 
+import { PIPELINE_DEFAULT_ON } from "../scene3d/pipeline_flags.js";
+import { isFlatNormalPlaceholder, flatNormalPlaceholder } from "../scene3d/materials.js";
 import * as THREE from "three";
 import {
   texCompressedOnlyEnabled,
@@ -208,8 +210,11 @@ console.log("PART 1 — flag grammar + active gate");
     ["?texCompressedOnly=on", true], ["?texCompressedOnly=1", true],
     ["?texCompressedOnly=true", true], ["?texCompressedOnly=yes", true],
     ["?texCompressedOnly=off", false], ["?texCompressedOnly=0", false],
-    ["?texCompressedOnly=", false], ["?texCompressedOnly=garbage", false],
-    ["", false],
+    // The chain's shared default (pipeline_flags.js PIPELINE_DEFAULT_ON; held
+    // OFF 2026-10-25); an explicit packSource escape takes the stage down.
+    ["?texCompressedOnly=", PIPELINE_DEFAULT_ON], ["?texCompressedOnly=garbage", PIPELINE_DEFAULT_ON],
+    ["", PIPELINE_DEFAULT_ON], ["?texCompressedOnly=false", false], ["?packSource=off", false],
+    ["?texCompressedOnly=on&packSource=off", false],
   ]) {
     check(`texCompressedOnlyEnabled("${q}") === ${want}`, texCompressedOnlyEnabled(q) === want);
   }
@@ -234,9 +239,9 @@ console.log("PART 1 — flag grammar + active gate");
   check("ACTIVE: all legs armed", texCompressedOnlyActive() === true);
   _setBc7SupportForTest(false);
   check("inactive again: BPTC absent", texCompressedOnlyActive() === false);
-  setSearch("");
+  setSearch("?texCompressedOnly=off");
   _setBc7SupportForTest(true);
-  check("inactive: flag absent (DEFAULT OFF)", texCompressedOnlyActive() === false);
+  check("inactive: ?texCompressedOnly=off (the escape)", texCompressedOnlyActive() === false);
   _resetBc7ForTest();
   _resetTexCompressedOnlyForTest();
 }
@@ -245,7 +250,10 @@ console.log("PART 1 — flag grammar + active gate");
 console.log("PART 2 — record budget (D-05.7: 256 legacy / 128 compressed-only)");
 // ===========================================================================
 {
-  check("legacy default 256 MB", bc7RecordBudgetBytes("") === 256 * 1024 * 1024);
+  check("legacy (the ?texCompressedOnly=off escape) 256 MB",
+    bc7RecordBudgetBytes("?texCompressedOnly=off") === 256 * 1024 * 1024);
+  check("bare url follows the chain's shared default (128 MB on / 256 MB off)",
+    bc7RecordBudgetBytes("") === (PIPELINE_DEFAULT_ON ? 128 : 256) * 1024 * 1024);
   check("compressed-only default 128 MB",
     bc7RecordBudgetBytes("?texCompressedOnly=on") === 128 * 1024 * 1024);
   check("explicit N wins both arms",
@@ -309,7 +317,7 @@ console.log("PART 3 — arrays: chain allocation + per-level writes");
 console.log("PART 4 — growth step (D-05.6.4)");
 // ===========================================================================
 {
-  setSearch("");
+  setSearch("?texCompressedOnly=off"); // the OFF arm (default ON since 2026-10-25)
   check("OFF arm doubles (4→8, cap 64)", _atlasGrowTargetFor(4, 5, 64) === 8);
   check("OFF arm needed wins (4→9)", _atlasGrowTargetFor(4, 9, 64) === 9);
   setSearch("?texCompressedOnly=on");
@@ -325,7 +333,7 @@ console.log("PART 4 — growth step (D-05.6.4)");
     if (t > Math.ceil(a * 1.5) && t !== a + 1) m6ok = false;
   }
   check("ON arm M6-bounded across 1..128", m6ok);
-  setSearch("");
+  setSearch("?texCompressedOnly=off"); // the OFF arm (default ON since 2026-10-25)
 }
 
 // ===========================================================================
@@ -414,8 +422,8 @@ console.log("PART 6 — atlas preview-commit + atlasRefeed re-home + GC");
   check("escape-arm refeed commits the held node", atlasRefeed(RS) === 1 && stats2.atlased === 1);
   check("committed singleton left the scene", node2.parent === null);
 
-  // OFF-arm sanity: flag absent ⇒ defer/commit shape unchanged, no tracking.
-  arm("");
+  // OFF-arm sanity: the escape ⇒ defer/commit shape unchanged, no tracking.
+  arm("?texCompressedOnly=off");
   _resetStatAtlasForTest();
   const node3 = makeNode(makeBc7Texture(parseHbc7(makeHbc7(16, 16, 0x50))));
   addSingletonsToCrossLbAtlas([node3], scene3d);
@@ -522,6 +530,10 @@ console.log("PART 7 — materials vertical: PVW build, lane-T upgrade, demote");
   check("pvwBuilds counted + rsId stamped",
     bc7Stats().pvwBuilds === 1 && mat.userData.__pvwRsId === RS);
   check("cache-resident (get returns same object)", (await mc.get(DID, legacyFetch)) === mat);
+  // 2026-10-25: a preview that expects a full tier is born with the shared flat normal, so its
+  // program already has USE_NORMALMAP and the NRA attach below swaps a texture, not a program.
+  check("born with the shared flat-normal placeholder", isFlatNormalPlaceholder(mat.normalMap));
+  const versionAtBirth = mat.version;
 
   // Let the async upgrade settle (worker mock answers in microtasks; the
   // controller + JSON hops need a few macrotask turns).
@@ -533,6 +545,24 @@ console.log("PART 7 — materials vertical: PVW build, lane-T upgrade, demote");
   check("fullSwaps counted, pending cleared",
     bc7Stats().fullSwaps === 1 && mat.userData.__texFullPending === undefined);
   check("worker NRA attached as normalMap", !!mat.normalMap && bc7Stats().nraAttached === 1);
+  check("…replacing the placeholder", !isFlatNormalPlaceholder(mat.normalMap));
+  // The attach in isolation: over the placeholder it must not flag the material (the albedo swap's
+  // own needsUpdate keeps the program key, so three reuses the program; only USE_NORMALMAP changing
+  // would compile, and the placeholder pinned it from birth).
+  {
+    const realNormal = mat.normalMap;
+    mat.normalMap = flatNormalPlaceholder();
+    const v0 = mat.version;
+    const plane = new Uint8Array(2 * 2 * 4).fill(128);
+    check("re-attach over the placeholder succeeds", mc._attachWorkerNra(DID, mat, { width: 2, height: 2, plane }) === true);
+    check("…without flagging the material (no USE_NORMALMAP change)", mat.version === v0, `version ${v0} -> ${mat.version}`);
+    check("…and the material now carries a real normal map", !!mat.normalMap && !isFlatNormalPlaceholder(mat.normalMap));
+    const v1 = mat.version;
+    mat.normalMap = null;
+    mc._attachWorkerNra(DID, mat, { width: 2, height: 2, plane });
+    check("a material born WITHOUT a normal map still flags its recompile", mat.version === v1 + 1);
+    void realNormal; void versionAtBirth;
+  }
   check("atlasRefeed fired with the rsId", refeedRs === RS);
   check("record adopted into the budgeted cache", (bc7Source()?.recordCacheStats().records ?? 0) === 1);
 
@@ -598,7 +628,7 @@ console.log("PART 7 — materials vertical: PVW build, lane-T upgrade, demote");
   _resetBc7ForTest();
   _resetTexCompressedOnlyForTest();
   _resetTexWorkerForTest();
-  setSearch("");
+  setSearch("?texCompressedOnly=off"); // the OFF arm (default ON since 2026-10-25)
   _setBc7SupportForTest(true);
   const mc6 = new MaterialCache();
   let legacy6 = 0;
@@ -811,7 +841,7 @@ console.log("PART 8 — T15R: rehydrate-v3 full-tier mirror seam + demote rung")
   _resetTexWorkerForTest();
   _resetFullTierMirrorsForTest();
   __resetTextureRehydrateForTests();
-  setSearch("");
+  setSearch("?texCompressedOnly=off"); // the OFF arm (default ON since 2026-10-25)
   _setBc7SupportForTest(true);
   const legacySrc = new Bc7RecordSource({ fetchImpl: async () => null, budgetBytes: 4096 });
   legacySrc.adoptParsed(0x0600aaaa, parseHbc7(makeHbc7(32, 32, 0x50)));

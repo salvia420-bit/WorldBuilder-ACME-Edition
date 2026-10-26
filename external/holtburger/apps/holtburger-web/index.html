@@ -1262,6 +1262,7 @@
     <link rel="modulepreload" href="./scene3d/particles_over_clouds.js">
     <link rel="modulepreload" href="./scene3d/pick_math.js">
     <link rel="modulepreload" href="./scene3d/picking.js">
+    <link rel="modulepreload" href="./scene3d/pipeline_flags.js">
     <link rel="modulepreload" href="./scene3d/play_effect_burst_fx.js">
     <link rel="modulepreload" href="./scene3d/play_effect_vfx.js">
     <link rel="modulepreload" href="./scene3d/pool_class_key.js">
@@ -1712,6 +1713,9 @@
       // init_resource_source below). The module has no wasm import, so a stale
       // pkg cannot break this link.
       import { installShardFetchWorker } from "./scene3d/shard_fetch_client.js";
+      // 2026-10-25: the re-engineered pipeline's stage flags (one reader, one
+      // shared default, the kill cascade). Import-free leaf module.
+      import { pipelineStageEnabled } from "./scene3d/pipeline_flags.js";
       // keepaliveFix (2026-07-07): dedicated-worker heartbeat that keeps a
       // keepalive packet flowing even when the tab is hidden/occluded (main-
       // thread timers get throttled/paused → ACE 60s "Network Timeout").
@@ -2116,15 +2120,14 @@
           // geom_bundles.js arming gate reads __hbGfxRelief.enabled).
           try {
             const __gbPs = new URLSearchParams(window.location.search);
-            const __gbV = String(__gbPs.get("geomBundles") || "").toLowerCase();
-            const __gbOn = __gbV === "on" || __gbV === "1" || __gbV === "true" || __gbV === "yes";
+            // pipeline_flags.js: the chain's shared default + cascade.
+            const __gbOn = pipelineStageEnabled("geomBundles");
             // RELIEF-IN-BAKE: `?reliefBundles=on` (DEFAULT-OFF) means the dist
             // carries baked relief VARIANT geometry, so relief and bundles are
             // no longer exclusive — leave the resolved relief config alone and
             // let geom_bundles.js check its own legs (variant export present,
             // subdivLevel 0). Without that flag the T13 D3 rule stands.
-            const __rbV = String(__gbPs.get("reliefBundles") || "").toLowerCase();
-            const __rbOn = __rbV === "on" || __rbV === "1" || __rbV === "true" || __rbV === "yes";
+            const __rbOn = pipelineStageEnabled("reliefBundles");
             if (__gbOn && gfxReliefCfg.enabled && !__rbOn && __gbPs.get("gfxRelief") !== "on") {
               console.log(
                 "[geomBundles] forcing gfxRelief OFF (bundles carry relief-free geometry; author ?reliefBundles=on for baked relief, or ?gfxRelief=on to keep runtime relief — that disarms bundles)"
@@ -2531,13 +2534,13 @@
         // PackFetchController BEFORE the concurrency split so an ARMED pack
         // lane can apply the D-03.10 legacy-share rule (legacy fetch total
         // drops to 8 UNDER the controller's cap — the pass-3 Q6 cheapest
-        // implementation). DEFAULT OFF: the exact-match check below mirrors
-        // packSourceEnabled() and the module is not even imported on the
-        // OFF arm (byte-identical legacy boot, the kill path).
+        // implementation). pipeline_flags.js decides (the same reader
+        // packSourceEnabled() uses; the chain's shared default is ON since
+        // 2026-10-25, `?packSource=off` escapes). The module is not even
+        // imported on the OFF arm (byte-identical legacy boot, the kill path).
         let __packCtl = null;
         try {
-          const __psv = new URLSearchParams(window.location.search).get("packSource");
-          const __psOn = __psv === "on" || __psv === "1" || __psv === "true" || __psv === "yes";
+          const __psOn = pipelineStageEnabled("packSource");
           if (__psOn) {
             const pf = await import("./scene3d/pack_fetch_controller.js");
             __packCtl = pf.getPackFetchController();
@@ -2723,9 +2726,7 @@
           // `?reliefBundles=on` + retail placement chain). Fail-soft: any
           // error leaves the runtime-decode path byte-identical.
           try {
-            const gbPs = new URLSearchParams(window.location.search);
-            const gbV = String(gbPs.get("geomBundles") || "").toLowerCase();
-            if (gbV === "on" || gbV === "1" || gbV === "true" || gbV === "yes") {
+            if (pipelineStageEnabled("geomBundles")) {
               const gb = await import("./scene3d/geom_bundles.js");
               gb.initGeomBundles({
                 wasmExports: __hbWasmNs,

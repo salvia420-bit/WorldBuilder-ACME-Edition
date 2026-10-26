@@ -74,6 +74,7 @@ import * as THREE from "three";
 // values, so the cycle is safe.
 import { texXu7Enabled, transcodeXu7, xu7Stats, ensureXu7Transcoder, texWorkerStats, xu7TranscoderUp } from "./xu7_textures.js";
 import { holdForInterior } from "./bandwidth_tier.js";
+import { pipelineStageEnabled } from "./pipeline_flags.js";
 import { getAdapterMaxAnisotropy } from "./adapter.js";
 import {
   textureRehydrateStats,
@@ -201,26 +202,21 @@ export function bc7SupportNote() {
 // ?texCompressedOnly — ST5 (SPEC §3 T15; pass 5 D-05.5): materials are BORN
 // compressed from the resident PVW preview (scalars-only surface decode, no
 // RGBA8 double-build); the full tier upgrades async via lane T + the texture
-// worker. DEV opt-in, DEFAULT OFF (I7); REQUIRES `?packSource` (the PVW
-// payloads live in packs — without the controller the path cannot arm and
-// every consumer stays byte-identical legacy).
+// worker. On the pipeline chain's shared default (ON since 2026-10-25,
+// `=off` escapes); REQUIRES `?packSource` (the PVW payloads live in packs —
+// without the controller the path cannot arm and every consumer stays
+// byte-identical legacy).
 // --------------------------------------------------------------------------
 
 /**
- * `?texCompressedOnly` — EXACT-MATCH DEV opt-in, **DEFAULT OFF** (the
- * orchestrator flips it after GATE-TEX). Only `on`/`1`/`true`/`yes` read
- * ON. Not memoized (the ESM suites re-stub `window` per case).
+ * `?texCompressedOnly` — the pipeline chain's shared default
+ * (pipeline_flags.js `PIPELINE_DEFAULT_ON`: ON since 2026-10-25, `=off`
+ * escapes). A packSource that is off cuts it. No page ⇒ OFF. `texCompressedOnlyActive()` still needs the armed controller +
+ * BPTC, so a GPU without BPTC keeps the legacy path byte for byte. Not
+ * memoized (the ESM suites re-stub `window` per case).
  */
 export function texCompressedOnlyEnabled(search) {
-  try {
-    const s = search !== undefined ? search : typeof window !== "undefined" && window.location ? window.location.search : "";
-    const v = new URLSearchParams(s).get("texCompressedOnly");
-    if (v == null) return false;
-    const t = String(v).toLowerCase();
-    return t === "on" || t === "1" || t === "true" || t === "yes";
-  } catch (_) {
-    return false;
-  }
+  return pipelineStageEnabled("texCompressedOnly", search);
 }
 
 // Armed by index.html AFTER init_resource_source + controller boot (the
@@ -1026,6 +1022,7 @@ const _stats = {
   rsIdStamped: 0,        // materials stamped with their RenderSurface id
   rsVerdictsResolved: 0, // BC7 verdicts settled (landed | absent | failed)
   rsRefeedsFired: 0,     // ... of which reached a registered producer handler
+  stalePendingIgnored: 0, // `bc7PendingOn` reads that found a copied flag on a settled rsId
   // ── T15R (rehydrate v3, D-05.7 row 2) full-tier mirror seam ────────────
   mirrorsArmed: 0,           // full-tier textures with a source-keyed way back
   mirrorsFreed: 0,           // CPU mirrors dropped at record eviction
@@ -2017,6 +2014,9 @@ export function _resetBc7ForTest() {
   // process regardless of what the test set up.
   _preFlag = undefined;
   _hdSwapBumpFlag = undefined;
+  _pendingByRsFlag = undefined;
+  _bc7OpenByRs.clear();
+  _bc7SettledRs.clear();
   _supported = null;
   _detectNote = "not probed";
   _hdLog.length = 0;
@@ -2176,9 +2176,13 @@ export function upgradeMaterialToBc7(mat, rsId, onSwap, opts) {
   // so no material can ever be in `__bc7Pending` without carrying the key a
   // producer needs to re-offer it (the 363-hold-out class).
   stampRsId(mat, rsId);
+  const rs = rsId >>> 0;
+  let counted = false; // this call opened a wait on `rs` (see `bc7PendingOn`)
   if (!already) {
     mat.userData = mat.userData || {};
     mat.userData.__bc7Pending = true;
+    _bc7PendingOpen(rs);
+    counted = true;
   }
   let fullDone = false;
   let preTex = null;
@@ -2234,11 +2238,23 @@ export function upgradeMaterialToBc7(mat, rsId, onSwap, opts) {
   }
   return src
     .getAsync(rsId, qctx)
-    .then((parsed) => (gate && parsed && parsed !== TEX_DROPPED ? _gateFull(gate, src, rsId, parsed, mat, qctx) : parsed))
+    .then((parsed) => {
+      if (!(gate && parsed && parsed !== TEX_DROPPED)) return parsed;
+      const out = _gateFull(gate, src, rsId, parsed, mat, qctx);
+      // `_gateFull` raises the marker for the twin's flight on the already-cached leg too.
+      if (!counted && mat.userData && mat.userData.__bc7Pending) {
+        _bc7PendingOpen(rs);
+        counted = true;
+      }
+      return out;
+    })
     .then((parsed) => {
       fullDone = true;
       const ud = (mat.userData = mat.userData || {});
       delete ud.__bc7Pending;
+      // Before `_rsVerdictResolved` below: the re-offers it fires must see this wait closed.
+      _bc7PendingClose(rs, counted);
+      counted = false;
       if (parsed === TEX_DROPPED) {
         // ?texUpgradeQueue: nobody holds this surface any more — not a
         // verdict, so no gate settle and no refeed. A re-install asks again.
@@ -2300,6 +2316,8 @@ export function upgradeMaterialToBc7(mat, rsId, onSwap, opts) {
     .catch(() => {
       const ud = (mat.userData = mat.userData || {});
       delete ud.__bc7Pending;
+      _bc7PendingClose(rs, counted);
+      counted = false;
       _verdictNote(rsId, "failed");
       _rsVerdictResolved(rsId);
       return false;
@@ -2353,9 +2371,58 @@ function _gateFull(gate, src, rsId, parsed, mat, qctx) {
   });
 }
 
+// STALE-CLONE (2026-10-25, `?bc7PendingByRs`, DEFAULT ON). `__bc7Pending` is copied onto every
+// variant clone minted while its base waits — the floor-bias / front-side / static-bias /
+// cell-baked clones take `{...base.userData}` (buildings.js R1) — and the settle above clears
+// the BASE's copy only, so such a clone reads "pending" for the rest of the session. Measured on
+// the 1070 (Holtburg, full chain, 2026-10-25): 110 drawn materials flagged, 104 with their full
+// record cached and 6 with an absent verdict, none in flight, and 177 nodes held out of the draw
+// pools on them for good. So the wait is tracked here, per rsId: opened where
+// `upgradeMaterialToBc7` raises the marker, closed where it settles. A flag whose rsId has
+// settled with nothing open is a stale copy and does not defer; a flag with no history here (a
+// hand-set fixture, an rsId never asked) still reads pending, as before. `=off` restores the
+// copied-flag read.
+const _bc7OpenByRs = new Map(); // rsId -> upgrades that raised the marker and have not settled
+const _bc7SettledRs = new Set(); // rsIds whose upgrade has settled at least once
+
+function _bc7PendingOpen(rs) {
+  _bc7OpenByRs.set(rs, (_bc7OpenByRs.get(rs) | 0) + 1);
+}
+
+function _bc7PendingClose(rs, counted) {
+  if (counted) {
+    const n = (_bc7OpenByRs.get(rs) | 0) - 1;
+    if (n > 0) _bc7OpenByRs.set(rs, n);
+    else _bc7OpenByRs.delete(rs);
+  }
+  _bc7SettledRs.add(rs);
+}
+
+let _pendingByRsFlag;
+/** `?bc7PendingByRs` — DEFAULT ON; `off`/`0`/`false`/`no` = trust the copied flag (pre-2026-10-25). */
+export function bc7PendingByRsEnabled(search) {
+  if (search === undefined && _pendingByRsFlag !== undefined) return _pendingByRsFlag;
+  let on = true;
+  try {
+    const s = search !== undefined ? search : typeof window !== "undefined" && window.location ? window.location.search : "";
+    on = !flagIsOff(new URLSearchParams(s).get("bc7PendingByRs"));
+  } catch (_) {
+    /* malformed location: stay ON */
+  }
+  if (search === undefined) _pendingByRsFlag = on;
+  return on;
+}
+
 /** Whether a material is waiting on a BC7 verdict (atlas deferral gate). */
 export function bc7PendingOn(mat) {
-  return !!(mat && mat.userData && mat.userData.__bc7Pending);
+  if (!(mat && mat.userData && mat.userData.__bc7Pending)) return false;
+  if (!bc7PendingByRsEnabled()) return true;
+  const rs = materialRsId(mat);
+  if (rs && _bc7SettledRs.has(rs) && !_bc7OpenByRs.has(rs)) {
+    _stats.stalePendingIgnored += 1;
+    return false;
+  }
+  return true;
 }
 
 // ==========================================================================

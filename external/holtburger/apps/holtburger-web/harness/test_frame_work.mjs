@@ -32,6 +32,7 @@
 //
 // Run:  node harness/test_frame_work.mjs        (exit 0/1)
 
+import { PIPELINE_DEFAULT_ON } from "../scene3d/pipeline_flags.js";
 import {
   FrameWorkScheduler,
   WORK_CLASSES,
@@ -77,8 +78,12 @@ for (const v of ["on", "1", "true", "yes"]) {
   check(framePhaseEnabled(`?framePhase=${v}`) === true, `framePhase=${v} reads ON`);
   check(workCrossingEnabled(`?workCrossing=${v}`) === true, `workCrossing=${v} reads ON`);
 }
-for (const s of ["", "?frameWork=off", "?frameWork=0", "?frameWork=garbage", "?frameWork="]) {
+// The chain's shared default (pipeline_flags.js PIPELINE_DEFAULT_ON; ON since 2026-10-25).
+for (const s of ["?frameWork=off", "?frameWork=0", "?frameWork=false", "?frameWork=NO"]) {
   check(frameWorkEnabled(s) === false, `frameWork OFF for ${JSON.stringify(s)}`);
+}
+for (const s of ["", "?frameWork=garbage", "?frameWork=", "?packSource=off"]) {
+  check(frameWorkEnabled(s) === PIPELINE_DEFAULT_ON, `frameWork follows the shared default for ${JSON.stringify(s)} (no prerequisite stage)`);
 }
 check(framePhaseEnabled("") === false, "framePhase DEFAULT OFF");
 check(workCrossingEnabled("") === false, "workCrossing DEFAULT OFF (the Q4 lever is pulled, not ambient)");
@@ -182,6 +187,30 @@ console.log("PART 6 — mode transitions");
   inWorld = false; // predicate flapping must NOT re-enter BOOT
   s.run({});
   check(s.mode === "NORMAL", "BOOT never re-enters (milestone is one-way)");
+}
+{
+  // 2026-10-25: the DEFAULT in-world predicate. `__bootState` moves on from "in-world" to "ready",
+  // so a scheduler whose first frame ran after "ready" must still leave BOOT (it stayed in BOOT,
+  // the 50 ms budget, for a whole 1070 session).
+  const hadWindow = Object.prototype.hasOwnProperty.call(globalThis, "window");
+  const saved = globalThis.window;
+  const cases = [
+    [{ __bootState: "form-shown" }, "BOOT", "before in-world: BOOT"],
+    [{ __bootState: "in-world" }, "NORMAL", "in-world: NORMAL"],
+    [{ __bootState: "ready" }, "NORMAL", "already past in-world (ready): NORMAL"],
+    [{ __bootState: "error", __bootStateHistory: [{ state: "connecting" }, { state: "in-world" }, { state: "error" }] },
+      "NORMAL", "a late error after in-world: the history says it was reached"],
+    [{ __bootState: "error", __bootStateHistory: [{ state: "connecting" }, { state: "error" }] },
+      "BOOT", "an error before in-world: still BOOT"],
+  ];
+  for (const [win, want, msg] of cases) {
+    globalThis.window = win;
+    const c = mockClock();
+    const s = new FrameWorkScheduler({ now: c.now });
+    s.run({});
+    check(s.mode === want, `default predicate — ${msg} (got ${s.mode})`);
+  }
+  if (hadWindow) globalThis.window = saved; else delete globalThis.window;
 }
 {
   // TELEPORT one-shot via LB discontinuity.

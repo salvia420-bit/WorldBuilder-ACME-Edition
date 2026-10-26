@@ -178,6 +178,11 @@ export function buildTilePlan(input) {
       receiveShadow: recv,
     };
     if (p.cellId != null) member.cellId = p.cellId;
+    // 2026-10-25: the owning landblock, so a pool can hide one landblock's
+    // instances (the ?objRadius hide) without parking the whole tile.
+    if (Number.isInteger(p.lbx) && Number.isInteger(p.lby)) {
+      member.lbKey = (((p.lbx & 0xff) << 24) | ((p.lby & 0xff) << 16)) >>> 0;
+    }
     if (p.degradeContentKey != null) {
       // D-07.8: both band geometries are pool-resident members of the SAME
       // class (same surface ⇒ same class by construction), so the band pair

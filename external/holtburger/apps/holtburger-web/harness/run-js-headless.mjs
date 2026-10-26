@@ -779,9 +779,14 @@ const TIER5 = [
   { tier: 5, flag: "harness_pack_fetch_region", file: "harness/test_pack_fetch_region.mjs",
     requires: "/mnt/wbterminal2/reeng/T10/ci-run1/manifest.json" },
   { tier: 5, flag: "harness_page_resample_texref", file: "harness/test_page_resample_texref.mjs" },
+  // 2026-10-25: the pipeline chain went DEFAULT-ON — one reader + the kill cascade.
+  { tier: 5, flag: "harness_pipeline_flags", file: "harness/test_pipeline_flags.mjs" },
   { tier: 5, flag: "harness_report_v2", file: "harness/test_report_v2.mjs" },
   { tier: 5, flag: "harness_residency_grid", file: "harness/test_residency_grid.mjs" },
   { tier: 5, flag: "harness_rsid_marker", file: "harness/test_rsid_marker.mjs" },
+  { tier: 5, flag: "harness_bc7_pending_by_rs", file: "harness/test_bc7_pending_by_rs.mjs" },
+  { tier: 5, flag: "harness_pool_page_uploads", file: "harness/test_pool_page_uploads.mjs" },
+  { tier: 5, flag: "harness_pool_nra_source_res", file: "harness/test_pool_nra_source_res.mjs" },
   { tier: 5, flag: "harness_service_worker_v3", file: "harness/test_service_worker_v3.mjs" },
   { tier: 5, flag: "harness_slotgrid_lru_assert", file: "harness/test_slotgrid_lru_assert.mjs" },
   // Reads the deployed slice packs: absent dist → NO-FIXTURE (CI has no bake).

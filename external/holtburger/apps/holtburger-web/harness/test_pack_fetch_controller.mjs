@@ -11,6 +11,7 @@
 // harness/test_pack_fetch_region.mjs (fails loud on a missing corpus mount,
 // the test_texture_worker_real.mjs precedent).
 
+import { PIPELINE_DEFAULT_ON } from "../scene3d/pipeline_flags.js";
 import { createHash, webcrypto } from "node:crypto";
 import {
   packSourceEnabled, fetchCapConfigured, packVerifyEnabled,
@@ -28,15 +29,20 @@ const ok = (cond, label) => {
 
 // ── PART 1: flag grammar (audit-flag-defaults contract) ────────────────────
 {
-  ok(packSourceEnabled("") === false, "packSource absent => OFF");
+  // The chain's shared default (pipeline_flags.js PIPELINE_DEFAULT_ON; ON since 2026-10-25).
+  // harness/test_pipeline_flags.mjs owns both polarities and the cascade.
+  const D = PIPELINE_DEFAULT_ON;
+  ok(packSourceEnabled("") === D, "packSource absent => the shared default");
   ok(packSourceEnabled("?packSource=on") === true, "packSource=on => ON");
   ok(packSourceEnabled("?packSource=1") === true, "packSource=1 => ON");
   ok(packSourceEnabled("?packSource=true") === true, "packSource=true => ON");
   ok(packSourceEnabled("?packSource=yes") === true, "packSource=yes => ON");
   ok(packSourceEnabled("?packSource=off") === false, "packSource=off => OFF");
   ok(packSourceEnabled("?packSource=0") === false, "packSource=0 => OFF");
-  ok(packSourceEnabled("?packSource=garbage") === false, "garbage => OFF");
-  ok(packSourceEnabled("?packSource=") === false, "empty => OFF");
+  ok(packSourceEnabled("?packSource=false") === false, "packSource=false => OFF");
+  ok(packSourceEnabled("?packSource=NO") === false, "packSource=NO => OFF");
+  ok(packSourceEnabled("?packSource=garbage") === D, "garbage => the shared default");
+  ok(packSourceEnabled("?packSource=") === D, "empty => the shared default");
   ok(fetchCapConfigured("") === 12, "fetchCap default 12 [A]");
   ok(fetchCapConfigured("?fetchCap=6") === 6, "fetchCap=6 respected");
   ok(fetchCapConfigured("?fetchCap=0") === 12, "fetchCap=0 => default");

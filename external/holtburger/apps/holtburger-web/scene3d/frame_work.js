@@ -95,6 +95,10 @@
 //
 // Tests: harness/test_frame_work.mjs (node, mocked clock — no rAF).
 
+// The one import: pipeline_flags.js is itself import-free, so the no-cycles
+// rule below still holds.
+import { pipelineStageEnabled } from "./pipeline_flags.js";
+
 // ---------------------------------------------------------------------------
 // flags
 // ---------------------------------------------------------------------------
@@ -112,8 +116,9 @@ function _search(search) {
 }
 
 /** All documented off-spellings (mirrors bc7_textures.js `flagIsOff` without
- *  importing it — this module must stay import-free so every scene3d family
- *  can depend on it without cycles). */
+ *  importing it — this module must stay free of cyclic imports so every
+ *  scene3d family can depend on it; its only import is the leaf
+ *  pipeline_flags.js). */
 function _isOff(v) {
   if (v == null) return false;
   const t = String(v).toLowerCase();
@@ -121,21 +126,14 @@ function _isOff(v) {
 }
 
 /**
- * `?frameWork` — ST8 stage flag, DEV opt-in, **DEFAULT OFF** (flag lifecycle
- * SPEC §0.1; the default flip is a GATE-PHASE + BENCH-CROSS-SETTLE migration
- * event, never done here). EXACT-MATCH opt-in like `?texWorkers`: only
- * `on`/`1`/`true`/`yes` read ON; absent/`off`/`0`/garbage ⇒ OFF. Not
- * memoized (ESM suites re-stub `globalThis.window` per case).
+ * `?frameWork` — ST8 stage flag on the pipeline chain's shared default
+ * (pipeline_flags.js `PIPELINE_DEFAULT_ON`: ON since 2026-10-25 — only
+ * `off`/`0`/`false`/`no` turn it off). No prerequisite stage. No page (a node
+ * suite's default import, a worker) ⇒ OFF.
+ * Not memoized (ESM suites re-stub `globalThis.window` per case).
  */
 export function frameWorkEnabled(search) {
-  try {
-    const v = new URLSearchParams(_search(search)).get("frameWork");
-    if (v == null) return false;
-    const t = String(v).toLowerCase();
-    return t === "on" || t === "1" || t === "true" || t === "yes";
-  } catch (_) {
-    return false;
-  }
+  return pipelineStageEnabled("frameWork", search);
 }
 
 /**
@@ -276,10 +274,19 @@ export class FrameWorkScheduler {
       allocBudget: opts.allocBudget ?? 2,
       destinationReserve: opts.destinationReserve ?? 0.75,
     };
+    // 2026-10-25: `__bootState` is ONE shared scalar that moves on from
+    // "in-world" to "ready" (and, on SwiftShader, to a late "error") — a
+    // scheduler whose first frame ran after "ready" never saw "in-world" and
+    // stayed in BOOT (the 50 ms budget) for the whole session (1070 chain run).
+    // The history keeps every state the boot passed through.
     this._isInWorld = opts.isInWorld
       || (() => {
         try {
-          return typeof window !== "undefined" && window.__bootState === "in-world";
+          if (typeof window === "undefined") return false;
+          const s = window.__bootState;
+          if (s === "in-world" || s === "ready") return true;
+          const h = window.__bootStateHistory;
+          return Array.isArray(h) && h.some((e) => (e && (e.state || e)) === "in-world");
         } catch (_) {
           return false;
         }

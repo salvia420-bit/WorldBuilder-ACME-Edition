@@ -3409,6 +3409,33 @@ const _RESEAT_FIELDS = [
 /** The surface-derived material fields (read-only view; vfx/weapon_fx.js mirrors
  *  base-material changes onto its per-weapon clones with the same list). */
 export const MATERIAL_SURFACE_FIELDS = Object.freeze(_RESEAT_FIELDS.slice());
+
+// === 2026-10-25 — the preview-born normal-map placeholder ====================
+// `?texCompressedOnly` builds a surface from its pack preview with NO normal map;
+// the worker-derived NRA normal arrives with the full tier and `_attachWorkerNra`
+// set `needsUpdate` — a USE_NORMALMAP program per material family, compiled on
+// first view (ANGLE D3D11 = FXC D3DCompile, 1-2 s per pixel shader on the 1070,
+// and a blocking MainLinkLoadEvent::wait when a draw beat the link). A preview
+// that EXPECTS a full tier is born with this shared 1×1 tangent-space "up"
+// normal instead, so its program is final from frame 1 and the real normal
+// later swaps a texture. Visually inert: (128,128,255) decodes to a 0.4 % tilt,
+// the same quantization every 8-bit normal map has. Never disposed (shared, and
+// never entered in `normalTextures`); the atlas/pool NRA packers lift it as a
+// flat layer exactly as they treat an absent map.
+let _flatNormalTex = null;
+export function flatNormalPlaceholder() {
+  if (_flatNormalTex) return _flatNormalTex;
+  const t = new THREE.DataTexture(new Uint8Array([128, 128, 255, 255]), 1, 1, THREE.RGBAFormat);
+  t.name = "hb-flat-normal-placeholder";
+  t.userData = { __flatNormalPlaceholder: true };
+  t.needsUpdate = true;
+  _flatNormalTex = t;
+  return t;
+}
+/** True for the shared placeholder (never a real, disposable normal map). */
+export function isFlatNormalPlaceholder(tex) {
+  return !!(tex && tex.userData && tex.userData.__flatNormalPlaceholder === true);
+}
 // userData flags that name a patch living in the material's OWN onBeforeCompile
 // chain. three's `Material.copy()` copies userData but NOT onBeforeCompile, so a
 // `.clone()` keeps these flags while losing the patches they name — and
@@ -6785,6 +6812,11 @@ export class MaterialCache {
       hasPalette: undefined,
     };
     const mat = this._materialFromFlags(surfaceTypeFlags, map, category, null, overrides, null, surfaceFloats);
+    // Born with the full tier's program variant (flatNormalPlaceholder above):
+    // the NRA normal will attach to this surface once its full tier lands.
+    if (this.normalMapsEnabled && (tierBits & 0x2) !== 0 && !mat.normalMap) {
+      mat.normalMap = flatNormalPlaceholder();
+    }
     this._attachRoughnessMap(mat, d, rs); // texchan sidecars untouched in v1 (D-05.5)
     mat.name = `scene3d-surface-${d.toString(16).padStart(8, "0")}`;
     mat.userData = {
@@ -6989,10 +7021,13 @@ export class MaterialCache {
         try { ntex.dispose(); } catch (_) { /* fail-soft */ }
         return false;
       }
+      // Replacing the born-with placeholder is a texture swap: the program
+      // already has USE_NORMALMAP. Only a material born WITHOUT one recompiles.
+      const hadPlaceholder = isFlatNormalPlaceholder(mat.normalMap);
       mat.normalMap = ntex;
       const ns = mat.userData && mat.userData.surfaceNormalScaleOverride;
       if (Number.isFinite(ns) && mat.normalScale) mat.normalScale.set(ns, ns);
-      mat.needsUpdate = true; // USE_NORMALMAP recompile — once per DID
+      if (!hadPlaceholder) mat.needsUpdate = true; // USE_NORMALMAP recompile — once per DID
       for (const m of [
         this.frontSideMaterials,
         this.floorBiasMaterials,
@@ -7000,9 +7035,10 @@ export class MaterialCache {
         this.cellBakedMaterials,
       ]) {
         const clone = m && m.get(d);
-        if (clone && !clone.normalMap) {
+        if (clone && (!clone.normalMap || isFlatNormalPlaceholder(clone.normalMap))) {
+          const clonePlaceholder = isFlatNormalPlaceholder(clone.normalMap);
           clone.normalMap = ntex;
-          clone.needsUpdate = true;
+          if (!clonePlaceholder) clone.needsUpdate = true;
         }
       }
       this.normalTextures.set(d, ntex);

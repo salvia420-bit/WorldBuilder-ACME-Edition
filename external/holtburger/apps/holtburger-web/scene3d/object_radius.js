@@ -128,6 +128,9 @@ function _hide(scene3d, st, lbKey) {
   });
   try { scene3d._parkStaticBatchXForLb?.(lbKey); } catch (_) { /* fail-soft */ }
   try { scene3d._parkStaticAtlasForLb?.(lbKey); } catch (_) { /* fail-soft */ }
+  // 2026-10-25: draw pools hold members of many landblocks per tile; the
+  // registry keeps a sticky per-landblock hide (pool_registry.js hideLb).
+  try { scene3d._poolHideLb?.(lbKey); } catch (_) { /* fail-soft */ }
   if (!st.hidden.has(lbKey)) { st.hidden.add(lbKey); _stats.hides += 1; }
   _stats.nodesHidden += n;
 }
@@ -137,6 +140,9 @@ function _show(scene3d, st, lbKey) {
   _forEachTopNode(scene3d, lbKey, (c) => {
     if (c.userData.__objRadiusHidden) { c.visible = true; delete c.userData.__objRadiusHidden; n += 1; }
   });
+  // Pools: the registry's sticky hide lifts here; it re-shows only instances
+  // of LIVE tiles outside the cell PVS's hidden set (tile parking stays its own).
+  try { scene3d._poolShowLb?.(lbKey); } catch (_) { /* fail-soft */ }
   // A parked landblock's bucket/atlas instances stay hidden: park owns them,
   // and its unpark shows them (then `afterUnpark` consults us again).
   if (!_isParked(scene3d, lbKey)) {

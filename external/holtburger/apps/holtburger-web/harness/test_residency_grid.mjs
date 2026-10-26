@@ -66,7 +66,10 @@ import {
   LADDER_HEAP_TRIGGER_BYTES,
   LADDER_WASM_TRIGGER_BYTES,
   LADDER_RUNG_DWELL_MS,
+  LADDER_HEAP_LIMIT_FRAC,
+  ladderHeapTriggerBytes,
 } from "../scene3d/residency_grid.js";
+import { PIPELINE_DEFAULT_ON } from "../scene3d/pipeline_flags.js";
 
 let passed = 0;
 let failed = 0;
@@ -93,15 +96,20 @@ const lbKeyFromXY = (x, y) => (((x & 0xff) << 24) | ((y & 0xff) << 16)) >>> 0;
 // PART 1 — flag grammar
 // ---------------------------------------------------------------------------
 console.log("PART 1: flag grammar");
-check(slotGridEnabled("") === false, "absent => OFF");
-check(slotGridEnabled("?slotGrid=on") === true, "on => ON");
-check(slotGridEnabled("?slotGrid=1") === true, "1 => ON");
-check(slotGridEnabled("?slotGrid=true") === true, "true => ON");
-check(slotGridEnabled("?slotGrid=yes") === true, "yes => ON");
+// The chain's shared default (pipeline_flags.js PIPELINE_DEFAULT_ON; ON since 2026-10-25);
+// test_pipeline_flags.mjs owns both polarities and the cascade. Explicit on needs packSource.
+const D = PIPELINE_DEFAULT_ON;
+check(slotGridEnabled("") === D, "absent => the shared default");
+check(slotGridEnabled("?slotGrid=on&packSource=on") === true, "on => ON");
+check(slotGridEnabled("?slotGrid=1&packSource=on") === true, "1 => ON");
+check(slotGridEnabled("?slotGrid=true&packSource=on") === true, "true => ON");
+check(slotGridEnabled("?slotGrid=yes&packSource=on") === true, "yes => ON");
 check(slotGridEnabled("?slotGrid=off") === false, "off => OFF");
 check(slotGridEnabled("?slotGrid=0") === false, "0 => OFF");
-check(slotGridEnabled("?slotGrid=") === false, "empty => OFF");
-check(slotGridEnabled("?slotGrid=garbage") === false, "garbage => OFF");
+check(slotGridEnabled("?slotGrid=") === D, "empty => the shared default");
+check(slotGridEnabled("?slotGrid=garbage") === D, "garbage => the shared default");
+check(slotGridEnabled("?packSource=off") === false, "packSource=off cuts the grid (SPEC D-12.4)");
+check(slotGridEnabled("?slotGrid=on&packSource=0") === false, "explicit on cannot outlive its prerequisite");
 
 // ---------------------------------------------------------------------------
 // PART 2 — geometry / cover proof
@@ -442,6 +450,31 @@ await (async () => {
   check(f.grid.counts().live === 36, "post-drain refire promotes all 36");
   check(f.adapter.refireStagedFeeds() === 0, "fully-LIVE grid: refire is a no-op");
   check(f.adapter.auditPins() === 0, "no pin leaks through the refire path");
+  // 2026-10-25: the CROSSING refire (the feeds gate objects by ?objRadius, so a landblock
+  // crossing re-fires every resident window tile, LIVE and STAGED alike, nearest first).
+  const pre2 = f.feedCalls.length;
+  const n2 = f.adapter.refireWindowFeeds();
+  check(n2 === 36, `crossing refire covers every LIVE window tile (got ${n2})`);
+  check(f.feedCalls.length === pre2 + 144, "…4 LB feeds per tile");
+  check(f.adapter.getStats().crossingRefires === 36, "crossingRefires counted");
+  const order2 = [];
+  for (let i = pre2; i < f.feedCalls.length; i += 4) {
+    const lb = f.feedCalls[i];
+    order2.push(tileOfLb((lb >>> 24) & 0xff, (lb >>> 16) & 0xff));
+  }
+  let mono2 = true;
+  for (let i = 1; i < order2.length; i++) {
+    if (tileChebyshev(order2[i], pt) < tileChebyshev(order2[i - 1], pt)) mono2 = false;
+  }
+  check(mono2, "crossing refire is nearest-tile-first");
+  check(f.grid.counts().live === 36 && f.adapter.auditPins() === 0, "crossing refire flips no state and leaks no pins");
+})();
+await (async () => {
+  // The crossing refire skips tiles the grid does not hold resident (FETCHING / EMPTY).
+  const f = makeFixture({});
+  f.adapter.onUpdate(f.grid.update(100, 100)); // seed: every tile FETCHING, nothing staged yet
+  const pre = f.feedCalls.length;
+  check(f.adapter.refireWindowFeeds() === 0 && f.feedCalls.length === pre, "no LIVE/STAGED tile: crossing refire is a no-op");
 })();
 await (async () => {
   // T20 live-arm fix (2026-08-09): in-window EMPTY RE-ADMIT. A transient
@@ -673,6 +706,24 @@ console.log("PART 9: ladder");
   const l3 = new PressureLadder({ now: c.now, sample: () => ({ heapBytes: 0, wasmBytes: LADDER_WASM_TRIGGER_BYTES, contextLoss: false }) });
   c.advance(1000); l3.tick();
   check(l3.rung === 1, "wasm-linear trigger engages");
+
+  // 2026-10-25 heap trigger re-class: the browser's reported V8 ceiling raises the trigger, never lowers it.
+  check(ladderHeapTriggerBytes(null) === LADDER_HEAP_TRIGGER_BYTES, "no performance.memory => fixed trigger");
+  check(ladderHeapTriggerBytes({}) === LADDER_HEAP_TRIGGER_BYTES, "no jsHeapSizeLimit => fixed trigger");
+  check(ladderHeapTriggerBytes({ jsHeapSizeLimit: 0 }) === LADDER_HEAP_TRIGGER_BYTES, "zero limit => fixed trigger");
+  const lim1070 = 4395630592; // the 1070's Chrome 156 tab, measured 2026-10-25
+  check(ladderHeapTriggerBytes({ jsHeapSizeLimit: lim1070 }) === Math.round(LADDER_HEAP_LIMIT_FRAC * lim1070),
+    "4.4 GB ceiling => 0.65 × ceiling");
+  check(ladderHeapTriggerBytes({ jsHeapSizeLimit: 2 * 1024 ** 3 }) === LADDER_HEAP_TRIGGER_BYTES,
+    "2 GiB ceiling => the fixed trigger still wins (never lowered)");
+  const l4 = new PressureLadder({ now: c.now, heapTrigger: ladderHeapTriggerBytes({ jsHeapSizeLimit: lim1070 }),
+    sample: () => ({ heapBytes: 1606704539, wasmBytes: 337575936, contextLoss: false }) });
+  c.advance(1000); l4.tick();
+  check(l4.rung === 0, "the measured chain-arm heap (1.61 GB) under a 4.4 GB ceiling stays disengaged");
+  const l5 = new PressureLadder({ now: c.now, heapTrigger: LADDER_HEAP_TRIGGER_BYTES,
+    sample: () => ({ heapBytes: 1606704539, wasmBytes: 337575936, contextLoss: false }) });
+  c.advance(1000); l5.tick();
+  check(l5.rung === 1, "the same heap against the fixed trigger engaged (the pre-fix behaviour)");
 }
 
 // ---------------------------------------------------------------------------
