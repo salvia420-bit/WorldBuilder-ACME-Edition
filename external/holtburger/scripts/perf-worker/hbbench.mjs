@@ -2,7 +2,7 @@
 //   node hbbench.mjs --arms arms.json --reps 2 --port 8766 --out DIR [--uncapped]
 // --uncapped: Chrome runs without the vblank cap (box launcher reads D:\Temp\hbbench\uncapped.txt;
 // deploy box/*.bat to D:\Temp\hbbench\ first) — fps then tracks the slowest stage continuously.
-// arms.json: [{name, quality, flags}]. Per run: boot -> Holtburg -> settle -> FIRST TURN (12 s
+// arms.json: [{name, quality, flags, chrome?: {angle?, disableFeatures?, extraFlags?}}]. Per run: boot -> Holtburg -> settle -> FIRST TURN (12 s
 // third-person 360 sweep) -> orbit warm-up -> STILL 20 s + MOVING 20 s (orbit) -> cold teleport tour
 // (poi:Shoushi 35 s, back 35 s).
 import { createRequire } from "node:module";
@@ -58,6 +58,15 @@ async function runOne(arm, rep) {
   // frame that takes 9 ms reads 111 fps instead of snapping to 60 on the box's 120 Hz grid.
   res.uncapped = UNCAPPED;
   ssh(UNCAPPED ? "echo 1> D:\\Temp\\hbbench\\uncapped.txt" : "if exist D:\\Temp\\hbbench\\uncapped.txt del D:\\Temp\\hbbench\\uncapped.txt");
+  // 2026-10-25: experimental Chrome arms. An arm may carry
+  // {"chrome": {"angle": "vulkan", "disableFeatures": ",SkiaGraphite", "extraFlags": "--enable-webgl-draft-extensions"}};
+  // box/hbprobe-launch.bat reads the files, and every run writes or deletes all three so nothing leaks.
+  const ch = arm.chrome || {};
+  for (const [file, val] of [["angle.txt", ch.angle || ""], ["disablefeatures.txt", ch.disableFeatures || ""],
+                             ["extraflags.txt", ch.extraFlags || ""]]) {
+    if (/[&|<>^"]/.test(val)) throw new Error(`${file}: cmd metacharacters are not allowed (${val})`);
+    ssh(val ? `echo ${val}> D:\\Temp\\hbbench\\${file}` : `if exist D:\\Temp\\hbbench\\${file} del /q D:\\Temp\\hbbench\\${file}`);
+  }
   ssh('schtasks /create /tn hbprobe /tr "wscript.exe //B //Nologo D:\\Temp\\hbbench\\hidden-run.vbs D:\\Temp\\hbbench\\hbprobe-launch.bat" /sc once /st 00:00 /it /f >nul 2>nul & schtasks /run /tn hbprobe >nul');
   for (let i = 0; i < 40; i++) { try { if ((await fetch(`${CDP}/json/version`)).ok) break; } catch (_) {} await sleep(1000); }
   const browser = await chromium.connectOverCDP(CDP);

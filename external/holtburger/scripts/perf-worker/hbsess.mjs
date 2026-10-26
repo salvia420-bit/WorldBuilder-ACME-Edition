@@ -1,5 +1,8 @@
 // hbsess.mjs — persistent probe session on the 1070 (exploration, not timing).
 //   node hbsess.mjs boot [--quality mid] [--flags 'a=b'] [--window 1280,720] [--no-orbit] [--uncapped]
+//        experimental Chrome arms (2026-10-25; box/hbprobe-launch.bat reads the files, absent = today's launch):
+//        [--angle vulkan|gl|d3d11on12] [--disable-features ,SkiaGraphite] [--extra-flags --enable-webgl-draft-extensions]
+//        boot also installs window.__hbConsoleErrors (console.error + uncaught errors + rejections since navigation).
 //   node hbsess.mjs eval <file.js>      file = body of an async fn; `return` value printed as JSON
 //   node hbsess.mjs orbit               park the camera on the Holtburg orbit pose (stored in window.__hbOrbit)
 //   node hbsess.mjs profile <sec> [out] CDP CPU profile while orbiting
@@ -61,11 +64,27 @@ if (cmd === "boot") {
   console.log("account free:", await waitAccountFree());
   ssh(`echo hbb-sess-${Date.now()}> D:\\Temp\\hbbench\\profile.txt`);
   ssh(`echo ${opt("--window", "1280,720")}> D:\\Temp\\hbbench\\winsize.txt`);
+  // Every boot writes or deletes these, so an experimental arm never leaks into the next boot.
+  for (const [file, val] of [["angle.txt", opt("--angle", "")], ["disablefeatures.txt", opt("--disable-features", "")],
+                             ["extraflags.txt", opt("--extra-flags", "")]]) {
+    if (/[&|<>^"]/.test(val)) throw new Error(`${file}: cmd metacharacters are not allowed (${val})`);
+    ssh(val ? `echo ${val}> D:\\Temp\\hbbench\\${file}` : `if exist D:\\Temp\\hbbench\\${file} del /q D:\\Temp\\hbbench\\${file}`);
+  }
   ssh('schtasks /create /tn hbprobe /tr "wscript.exe //B //Nologo D:\\Temp\\hbbench\\hidden-run.vbs D:\\Temp\\hbbench\\hbprobe-launch.bat" /sc once /st 00:00 /it /f >nul 2>nul & schtasks /run /tn hbprobe >nul');
   for (let i = 0; i < 40; i++) { try { if ((await fetch(`${CDP}/json/version`)).ok) break; } catch (_) {} await sleep(1000); }
   const { pg } = await page();
   const cap = argv.includes("--uncapped") ? "" : "&targetFps=30";
   const url = uncappedBenchUrl(`${APP}?autoLogin=1&account=tailnet1&password=tailnet1&autoSpawn=first&nosw=1&camDebug=on&adaptiveRes=off&quality=${q}${flags ? "&" + flags : ""}${cap}`);
+  // 2026-10-25: page-side error log for the "0 console errors" bar (main thread only; workers not included).
+  await pg.context().addInitScript(() => {
+    if (window.__hbConsoleErrors) return;
+    const errs = (window.__hbConsoleErrors = []);
+    const push = (type, text) => { if (errs.length < 500) errs.push({ t: Math.round(performance.now()), type, text: String(text).slice(0, 600) }); };
+    const orig = console.error.bind(console);
+    console.error = (...a) => { try { push("error", a.map((x) => (x && x.stack) || String(x)).join(" ")); } catch (_) {} return orig(...a); };
+    window.addEventListener("error", (e) => push("pageerror", (e.error && e.error.stack) || e.message));
+    window.addEventListener("unhandledrejection", (e) => push("rejection", (e.reason && (e.reason.stack || e.reason.message)) || e.reason));
+  });
   await pg.goto(url, { waitUntil: "domcontentloaded", timeout: 60000 });
   console.log("gpu", await pg.evaluate(() => { const gl = document.createElement("canvas").getContext("webgl2"); const e = gl.getExtension("WEBGL_debug_renderer_info"); return gl.getParameter(e.UNMASKED_RENDERER_WEBGL); }));
   console.log("wake", await pg.evaluate(async () => { try { window.__benchWake = await navigator.wakeLock.request("screen"); return "held"; } catch (e) { return String(e); } }));
