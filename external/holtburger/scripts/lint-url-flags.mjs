@@ -124,10 +124,20 @@ for (const m of docs.matchAll(/^\| `([A-Za-z_][A-Za-z0-9_]*)`(?:=[^`]*)? \|([^|]
 // ── reader sweep ────────────────────────────────────────────────────────────
 const readers = new Map(); // name → [{file, line, stmt, presenceGuard}]
 const GET_RE = /\.get\(\s*["']([A-Za-z_][A-Za-z0-9_]*)["']\s*\)/g;
+// Rust scene core lanes (docs/2026-10-26-rust-scene-core.md) read their flags
+// through scene3d/rust/scene_core.js `rustFlag("name", defaultOn)`, which
+// handles on/1/true/yes and off/0/false/no itself — a reader, never a
+// presence guard or an off-spelling finding.
+const RUST_FLAG_RE = /\brustFlag\(\s*["']([A-Za-z_][A-Za-z0-9_]*)["']/g;
 for (const f of files) {
   const src = fs.readFileSync(f, "utf8");
   const lines = src.split("\n");
   for (let i = 0; i < lines.length; i += 1) {
+    for (const m of lines[i].matchAll(RUST_FLAG_RE)) {
+      const list = readers.get(m[1]) || [];
+      list.push({ file: path.relative(ROOT, f), line: i + 1, stmt: lines[i], presenceGuard: false, preCtx: "", postCtx: "", rustFlag: true });
+      readers.set(m[1], list);
+    }
     // Only URLSearchParams-context reads: a ±10-line window must mention
     // URLSearchParams or location.search (readers often stash the params
     // object in a variable a few lines above the .get()).

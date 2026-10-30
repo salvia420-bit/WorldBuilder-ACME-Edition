@@ -76,7 +76,10 @@ try {
     let orphanAnchors = 0;
     let unattributable = 0;
     const orphanLbs = new Set();
-    for (const c of s.staticsGroup.children) {
+    const anchorRoots = s.staticsGroup.userData?.__anchorRoots; // ?anchorOffGraph (lane C)
+    const candidates = [...s.staticsGroup.children];
+    if (anchorRoots instanceof Map) for (const r of anchorRoots.values()) candidates.push(...r.children);
+    for (const c of candidates) {
       const ud = c && c.userData;
       if (!ud || !ud.isStaticScriptAnchor) continue;
       anchorsTotal += 1;

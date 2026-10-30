@@ -1599,6 +1599,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "holtburger-scene"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+]
+
+[[package]]
 name = "holtburger-scenery-bake"
 version = "0.1.0"
 dependencies = [
@@ -1712,6 +1719,7 @@ dependencies = [
  "holtburger-manifest",
  "holtburger-protocol",
  "holtburger-resource-http",
+ "holtburger-scene",
  "holtburger-session",
  "holtburger-transport-ws",
  "holtburger-world",

@@ -158,6 +158,19 @@ import { tickOscillators, setMasterClock, getOscillator } from "./vfx/oscillator
 // registers the channel only under `?terrainVolcano=on&terrainCrackGlow=on`; an
 // unregistered channel leaves the uniform at its shader default.
 import { CRACK_GLOW_OSC_NAME } from "./terrain_volcano.js";
+// Lane F hot spots (2026-10-26) — `?hotTerrainTime` reader (tickTerrainUTime).
+import { rustFlag } from "./rust/scene_core.js";
+// Lane F2 (2026-10-26) — `?hotTerrainShared` (DEFAULT OFF): one shared `{value}`
+// per frame-constant terrain uniform (tickTerrainUTime, tickTerrainSunDir).
+import {
+  sharedPushTerrainTime,
+  sharedReleaseTerrainTime,
+  sharedPushTerrainSun,
+  sharedTerrainSunJoiners,
+  sharedTerrainSunGouraudDone,
+  sharedReleaseTerrainSun,
+  sharedObserveTerrainSun,
+} from "./terrain_shared_uniforms.js";
 // Phase 1 (VFX slice 12) — derives VFX_GLOBALS.uWetness/uFrost/uWindDir from the
 // client weather snapshot. Imports materials.js (VFX_GLOBALS) so it is NOT a
 // leaf like oscillators.js — but loop.js already pulls in materials.js, so no
@@ -1168,6 +1181,7 @@ function applyLocalPlayerPoseFromIntegrator(scene3d, sessionHandle) {
  */
 function tickTerrainUTime(scene3d) {
   if (!scene3d?.terrainMaterials || scene3d.terrainMaterials.length === 0) {
+    if (_hotTerrainSharedOn()) sharedReleaseTerrainTime();
     return;
   }
   const tSec =
@@ -1186,6 +1200,10 @@ function tickTerrainUTime(scene3d) {
   // at 0.07 Hz that is ~4e-4 rad of phase, i.e. nothing.
   const breathOsc = getOscillator(CRACK_GLOW_OSC_NAME);
   const breath = breathOsc ? breathOsc.value : undefined;
+  // ?hotTerrainShared: one write per uniform; false = run a per-material loop
+  // below (every material is back on its own `{value}` then).
+  if (_hotTerrainSharedOn() && sharedPushTerrainTime(scene3d.terrainMaterials, tSec, breath)) return;
+  if (_hotTerrainTimeOn()) { _terrainUTimeFast(scene3d.terrainMaterials, tSec, breath); return; }
   for (const mat of scene3d.terrainMaterials) {
     if (mat?.uniforms?.uTime) {
       mat.uniforms.uTime.value = tSec;
@@ -1194,6 +1212,78 @@ function tickTerrainUTime(scene3d) {
       mat.uniforms.uCrackGlowBreath.value = breath;
     }
   }
+}
+
+// 2026-10-26 (lane F hot spots) — `?hotTerrainTime` (DEFAULT ON since 2026-10-26;
+// `=off` escape): the same writes, each uniform looked up ONCE per
+// material (the loop above walks `mat.uniforms` — a ~150-entry object, a
+// dictionary-mode one for batch materials — four times per material for two
+// writes) and the breath test hoisted out of the loop (`breath` is constant per
+// frame). Same materials, same values, same write order (uTime, then the
+// breath). 1070 2026-10-23 run: 0.053 ms/frame self.
+let _hotTerrainTime;
+function _hotTerrainTimeOn() {
+  if (_hotTerrainTime === undefined) _hotTerrainTime = rustFlag("hotTerrainTime", true);
+  return _hotTerrainTime;
+}
+function _terrainUTimeFast(mats, tSec, breath) {
+  if (breath === undefined) {
+    for (let i = 0; i < mats.length; i++) {
+      const ut = mats[i]?.uniforms?.uTime;
+      if (ut) ut.value = tSec;
+    }
+    return;
+  }
+  for (let i = 0; i < mats.length; i++) {
+    const u = mats[i]?.uniforms;
+    const ut = u?.uTime;
+    if (ut) ut.value = tSec;
+    const ub = u?.uCrackGlowBreath;
+    if (ub) ub.value = breath;
+  }
+}
+/** Test seam (tests/hot_terrain_push.test.mjs): the shipped / flagged tick. */
+export const __tickTerrainUTimeForTest = tickTerrainUTime;
+export function __setHotTerrainTimeForTest(on) {
+  _hotTerrainTime = on === undefined ? undefined : !!on;
+}
+
+// 2026-10-26 (lane F2) — `?hotTerrainShared` (DEFAULT OFF). tickTerrainUTime and
+// tickTerrainSunDir write their frame-constant uniforms (uTime, uCrackGlowBreath,
+// uSunDir) into ONE shared `{value}` per uniform that the registry's materials
+// point at (bound lazily at a push, unbound to a frozen copy when they leave),
+// and skip the Gouraud epoch walk when it would write nothing. Same value in
+// every material at every moment as the per-material loops; design + audit:
+// scene3d/terrain_shared_uniforms.js, docs/2026-10-26-rust-hotspots-2.md §G1.
+let _hotTerrainShared;
+function _hotTerrainSharedOn() {
+  if (_hotTerrainShared === undefined) _hotTerrainShared = rustFlag("hotTerrainShared", false);
+  return _hotTerrainShared;
+}
+/** Test seam (tests/hot_terrain_shared.test.mjs). */
+export function __setHotTerrainSharedForTest(on) {
+  _hotTerrainShared = on === undefined ? undefined : !!on;
+}
+// The shipped tickTerrainSunDir loop minus its uSunDir line (that one is the
+// shared slot's): the same epoch guard, writes and order per material. Run over
+// the whole registry, or over the entries that joined since the last run (every
+// survivor already carries `g.epoch`, so the guard skips it either way).
+function _terrainGouraudOnly(mats, g) {
+  let always = false;
+  for (const mat of mats) {
+    const u = mat?.uniforms;
+    if (!u || !u.uAcSunVec) continue;
+    if (!mat.userData) always = true;
+    if (mat.userData && mat.userData.__acLightEpoch === g.epoch) continue;
+    if (mat.userData) mat.userData.__acLightEpoch = g.epoch;
+    u.uAcSunVec.value.set(g.sun[0], g.sun[1], g.sun[2]);
+    u.uAcSunColor.value.setRGB(g.sunColor[0], g.sunColor[1], g.sunColor[2]);
+    u.uAcAmbColor.value.setRGB(g.ambColor[0], g.ambColor[1], g.ambColor[2]);
+    u.uAcAmbLevel.value = g.ambLevel;
+    if (u.uSunGlint) u.uSunGlint.value = g.sunGlint;
+    if (u.uPaintLight) u.uPaintLight.value.w = g.paintNight;
+  }
+  sharedTerrainSunGouraudDone(always);
 }
 
 /**
@@ -1418,13 +1508,20 @@ function _environSource() {
  */
 export function tickTerrainSunDir(scene3d, lightTick = retailLightTick, env = environOverride) {
   if (!scene3d?.terrainMaterials || scene3d.terrainMaterials.length === 0) {
+    if (_hotTerrainSharedOn()) sharedReleaseTerrainSun();
     return;
   }
   const state = scene3d.skyLightingController?._lastState ?? null;
-  if (!state) return;
+  if (!state) {
+    if (_hotTerrainSharedOn()) sharedObserveTerrainSun(scene3d.terrainMaterials);
+    return;
+  }
   const heading = state.dirHeading;
   const pitch = state.dirPitch;
-  if (!Number.isFinite(heading) || !Number.isFinite(pitch)) return;
+  if (!Number.isFinite(heading) || !Number.isFinite(pitch)) {
+    if (_hotTerrainSharedOn()) sharedObserveTerrainSun(scene3d.terrainMaterials);
+    return;
+  }
   const DEG = Math.PI / 180;
   const cp = Math.cos(pitch * DEG);
   const sx = cp * Math.sin(heading * DEG);
@@ -1515,6 +1612,16 @@ export function tickTerrainSunDir(scene3d, lightTick = retailLightTick, env = en
     g.ambLevel = envAmb ? envAmb.level : dayAmbLevel;
   }
 
+  // ?hotTerrainShared: uSunDir is one shared write; the Gouraud walk runs only
+  // when the registry or the epoch moved — over the joiners alone when only the
+  // registry moved one step (0 = run the shipped loop below).
+  if (_hotTerrainSharedOn()) {
+    const mats = scene3d.terrainMaterials;
+    const r = sharedPushTerrainSun(mats, sx, sy, sz, g.epoch);
+    if (r === 1) return;
+    if (r === 2) { _terrainGouraudOnly(mats, g); return; }
+    if (r === 3) { _terrainGouraudOnly(sharedTerrainSunJoiners(), g); return; }
+  }
   for (const mat of scene3d.terrainMaterials) {
     const v = mat?.uniforms?.uSunDir?.value;
     if (v && typeof v.set === "function") {

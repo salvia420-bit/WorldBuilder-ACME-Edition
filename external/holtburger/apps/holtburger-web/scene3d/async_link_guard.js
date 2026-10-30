@@ -511,7 +511,7 @@ export function installAsyncLinkGuard(renderer, getMainScene) {
     try { canvas.addEventListener("webglcontextrestored", onContextRestored, false); } catch (_) {}
   }
   const ctl = { off: false }; // live A/B seam: window.__asyncLink.off = true
-  renderer.renderBufferDirect = function (camera, scene, geometry, material, object, group) {
+  const wrapper = function (camera, scene, geometry, material, object, group) {
     if (ctl.off) return orig.call(this, camera, scene, geometry, material, object, group);
     if (material && (material.__hbLinkOk !== material.version || material.__hbLinkOkOwner !== material || material.__hbLinkOkCombo !== (objectCombo(object, material) | comboEpoch)) && scene !== null && object) {
       if (mainScene === null) mainScene = getMainScene() || null;
@@ -573,11 +573,18 @@ export function installAsyncLinkGuard(renderer, getMainScene) {
     }
     return orig.call(this, camera, scene, geometry, material, object, group);
   };
+  // draw_exec.js walks the wrapper chain by these two tags (see batched_runs.js).
+  wrapper.__hbRbdTag = "asyncLink";
+  wrapper.__hbRbdInner = orig;
+  renderer.renderBufferDirect = wrapper;
 
   const api = {
     stats,
     get off() { return ctl.off; },
     set off(v) { ctl.off = !!v; },
+    /** The context-restore epoch folded into the stamp (draw_exec.js evaluates
+     *  the steady-state pass-through condition above without calling through). */
+    get comboEpoch() { return comboEpoch; },
     get pending() { return queue.size; },
     /** Does the guard (while on) defer this material's unlinked main-scene draws? */
     guards: (m) => !ctl.off && asyncLinkEligible(m),

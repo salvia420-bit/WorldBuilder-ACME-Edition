@@ -108,6 +108,11 @@ import { fetchLandblockObjectsShared } from "./lb_objects_shared.js";
 import { canSupplyPlanes } from "./surface_planes.js";
 import { modelMeshFetcher, surfacePixelsFetcher } from "./bake_worker_client.js";
 import { CULL_DIST_SQ } from "./culling.js";
+// ?rustCull (lane C, default OFF): the statics walk's sphere tests in Rust (scene3d/rust/cull.js).
+import { rustCullEnabled, rustCullStaticsWalk, markStaticsCullDirty, rustCullBillboardList } from "./rust/cull.js";
+// Lane W `?rustWorld` (DEFAULT OFF): loads and, when the flag is on, arms the shadow bridge at boot, before any
+// producer event; the producers reach it as `globalThis.__hbRustWorld` (scene3d/rust/world.js).
+import "./rust/world.js";
 // ?staticsCullGate: film takes rely on the per-frame pass (leaf, no imports).
 import { filmModeEnabled } from "./film/flags.js";
 // A11-S3: `?particleClock` flag parse — when "loop"/"sim" the static
@@ -126,7 +131,7 @@ import { statAtlasEnabled, addSingletonsToCrossLbAtlas, hasAtlasLb, isBc7AtlasTe
 // ?statBatchCrossLb (default-OFF, 1070 eye-test pending) — cross-LB variant of the
 // per-LB ?staticBatch consolidation: same >=2-per-material groups, persistent
 // per-material BatchedMeshes spanning the ring instead of one per (LB, surface).
-import { statBatchChunkEnabled, consolidateStaticSingletonsCrossLb, stampStaticContentKeys, setDeadBatchPredicate, setStatArrayMergeProvider } from "./static_batch_x.js";
+import { statBatchChunkEnabled, consolidateStaticSingletonsCrossLb, stampStaticContentKeys, setDeadBatchPredicate, setStatArrayMergeProvider, freezeStaticNodeMatrices, tickStaticMatrixFreeze } from "./static_batch_x.js";
 import { getStaticGeomCache } from "./static_geom_cache.js";
 import { STAT_ARRAY_MERGE_PROVIDER } from "./static_array_pool.js";
 // 2026-10-07 — terrain rounding step 3: ground-standing placements are baked
@@ -2608,6 +2613,16 @@ STAT_ARRAY_MERGE_PROVIDER.setVfxHook({
   });
 })();
 
+// Attach one built static draw node (singleton Mesh, LOD wrapper, walk-in
+// InstancedMesh, per-LB batch, pool / atlas passthrough) to staticsGroup.
+// ?staticMatrixFreeze (stage-2 S1a, default OFF): freeze its matrices right
+// after (static_batch_x.js `freezeStaticNodeMatrices`; a billboard leaf keeps
+// composing). Flag off: exactly `staticsGroup.add(node)`.
+function _attachStaticNode(scene3d, node) {
+  scene3d.staticsGroup.add(node);
+  if (node && node.parent && typeof freezeStaticNodeMatrices === "function") freezeStaticNodeMatrices(node);
+}
+
 // A per-LB batch holds its member's batched variant (batched_material_variant.js
 // HOLDERS) until it is disposed. Every teardown — the LRU evict scan, park
 // discard / disposeParked, the empty batch and prewarm-bail paths below — ends
@@ -3406,7 +3421,7 @@ export async function bakeStaticsForLandblock(
       console.warn("[scene3d.statics/statAtlas per-LB] failed, adding singletons unbatched:", String(e?.message ?? e));
     }
   }
-  for (const node of nodesToAdd) scene3d.staticsGroup.add(node);
+  for (const node of nodesToAdd) _attachStaticNode(scene3d, node);
 
   // V1 (2026-05-29) — run each scenery placement's `default_script`
   // ambient particle chain (fountains/braziers/torches). Fail-soft +
@@ -3999,7 +4014,7 @@ export async function bakeStaticsRing(
           staticsMatCastsShadow,
           staticsReceiveShadow,
         });
-        scene3d.staticsGroup.add(node);
+        _attachStaticNode(scene3d, node);
         instancedNodes.push(node);
         instancedGroupCount += 1;
         if (isLod) lodCount += 1;
@@ -4021,7 +4036,7 @@ export async function bakeStaticsRing(
           staticsReceiveShadow,
         });
         if (statAtlasEnabled()) ringSingletons.push(node); // batched after the loop (perf, default-on; ?statAtlas=off escapes)
-        else scene3d.staticsGroup.add(node);
+        else _attachStaticNode(scene3d, node);
         singletonCount += 1;
         if (isLod) lodCount += 1;
       }
@@ -4077,17 +4092,17 @@ export async function bakeStaticsRing(
           : null;
         if (res) {
           batchedGroups += res.bucketsTouched;
-          for (const n of res.out) scene3d.staticsGroup.add(n);
+          for (const n of res.out) _attachStaticNode(scene3d, n);
         } else {
           // flag off, or nothing consumed for this LB — add its singletons as-is
-          for (const n of group) scene3d.staticsGroup.add(n);
+          for (const n of group) _attachStaticNode(scene3d, n);
         }
       }
       mark(`stage3: wire ring ${ringSingletons.length} singletons -> ${batchedGroups} cross-LB wire batches (${byLb.size} LBs)`);
     } catch (e) {
       // eslint-disable-next-line no-console
       console.warn("[scene3d.statics/wireRingBatch] failed, adding singletons unbatched:", String(e?.message ?? e));
-      for (const n of ringSingletons) { if (!n.parent) scene3d.staticsGroup.add(n); }
+      for (const n of ringSingletons) { if (!n.parent) _attachStaticNode(scene3d, n); }
     }
   } else if (statAtlasEnabled() && ringSingletons.length > 0) {
     // ?statAtlas (default-ON; ?statAtlas=off escapes): collapse the ring's unique-material
@@ -4097,12 +4112,12 @@ export async function bakeStaticsRing(
     // by addSingletonsToCrossLbAtlas). Fail-soft: on error add the singletons unbatched.
     try {
       const { passthrough } = addSingletonsToCrossLbAtlas(ringSingletons, scene3d);
-      for (const n of passthrough) scene3d.staticsGroup.add(n);
+      for (const n of passthrough) _attachStaticNode(scene3d, n);
       mark(`stage3: statAtlas ${ringSingletons.length} singletons -> cross-LB buckets + ${passthrough.length} passthrough`);
     } catch (e) {
       // eslint-disable-next-line no-console
       console.warn("[scene3d.statics/statAtlas] failed, adding singletons unbatched:", String(e?.message ?? e));
-      for (const n of ringSingletons) scene3d.staticsGroup.add(n);
+      for (const n of ringSingletons) _attachStaticNode(scene3d, n);
     }
   }
   // (statAtlas off, non-wire: ringSingletons is never populated — line ~2738
@@ -4348,8 +4363,14 @@ export function tickStaticsBillboards(scene3d) {
   // Camera world position (three.js world coords).
   camera.getWorldPosition(_bbCamWorld);
 
+  // ?rustCull (lane C, default OFF): the cull registry tracks the
+  // billboard-tagged LODs as they join / leave staticsGroup, so the tick visits
+  // those (~5% of the children) instead of every child. Each leaf's facing
+  // depends only on its own LOD and the camera, so the order is immaterial;
+  // null (no healthy registry) = every child, as before.
+  const list = _rustCullWanted() && typeof rustCullBillboardList === "function" ? rustCullBillboardList(group) : null;
   let oriented = 0;
-  for (const child of children) {
+  for (const child of (list || children)) {
     if (!child || !child.isLOD) continue;
     const mode = child.userData?.billboardMode ?? 0;
     if (mode < 2) continue;
@@ -4657,16 +4678,38 @@ function _staticOwnsLight(node) {
  * sphere → leave nodes visible. Returns `{ tested, culled }` for diag.
  */
 export function cullStaticsGroup(scene3d, culler) {
+  // ?staticMatrixFreeze (stage-2 S1a, default OFF; an empty queue returns at
+  // once): freeze the static nodes three's last walk computed. Here because
+  // this pass runs once per frame, before the render, whatever the gates do.
+  if (typeof tickStaticMatrixFreeze === "function") tickStaticMatrixFreeze();
   const group = scene3d?.staticsGroup;
   if (!group || !culler || !culler.valid) return { tested: 0, culled: 0 };
   const children = group.children;
   if (!children || children.length === 0) return { tested: 0, culled: 0 };
   // ?staticsCullGate — skip the walk while nothing it reads has changed.
   if (_cullGateSkip(scene3d, group, culler)) return _cullGate.last;
-  const result = _cullStaticsWalk(group, children, culler);
+  // ?rustCull (default OFF) — the same walk over the Rust registry; null =
+  // not available this frame (no pkg, POJO culler, film mode) → the JS walk.
+  const result = (_rustCullWanted() && rustCullStaticsWalk(group, culler, _RUST_CULL_HOOKS))
+    || _cullStaticsWalk(group, children, culler);
   _cullGate.last = result;
   return result;
 }
+
+// ?rustCull: film takes stay on the JS walk (their hide markers are applied
+// mid-take and the gate is off there too). Memoized with the flag.
+let _rustCullWantedMemo;
+function _rustCullWanted() {
+  if (_rustCullWantedMemo !== undefined) return _rustCullWantedMemo;
+  let on = false;
+  try {
+    on = typeof rustCullEnabled === "function" && rustCullEnabled() === true;
+    if (on && filmModeEnabled()) on = false;
+  } catch (_) { on = false; }
+  return (_rustCullWantedMemo = on);
+}
+/** Test seam: true/false forces the Rust path decision, undefined re-reads it. */
+export function __setRustCullWantedForTest(v) { _rustCullWantedMemo = v; }
 
 // ?staticsCullGate (2026-10-17, DEFAULT ON; `=off` escape) — the per-frame
 // statics cull walk is skipped while its inputs are unchanged.
@@ -4838,6 +4881,81 @@ function _cullStaticsWalk(group, children, culler) {
   }
   return { tested, culled };
 }
+
+// ── ?rustCull (lane C) — the walk's per-node policy, for the registry ────────
+//
+// scene3d/rust/cull.js keeps staticsGroup's children in a registry and asks
+// THIS function what the walk above would do with a node, once per change
+// (first walk after it joined, a marker writer's markStaticsCullDirty, a
+// child-count change for the light guardrail) instead of on every walk. It is
+// the walk's branch order, step for step, returning a kind (the CK_* values of
+// scene3d/rust/cull.js, pinned by __cullKindsForTest) and, for a node that
+// reaches the frustum test, its cull sphere in `out`. KEEP IT IN STEP WITH
+// `_cullStaticsWalk`: a marker added there must be added here (and to
+// `_cullDecideForVerify` below), or the registry diverges — window.__rustCull
+// .verify() and tests/rust_cull_parity.test.mjs catch it.
+const _CK_SKIP = 1, _CK_SHOW = 2, _CK_HIDE = 3, _CK_HIDE_COUNTED = 4, _CK_TEST = 5, _CK_LIGHT = 6, _CK_RETRY = 7;
+function _cullClassifyNode(node, out) {
+  if (!node) return _CK_SKIP;
+  const ud = node.userData;
+  if (ud && (ud.__particle === true || ud.isParticleInstanced === true)) return _CK_SKIP;
+  if (ud && ud.__anchorFrozen === true) return _CK_SKIP;
+  if (ud && ud.isAnimatedSceneryInstanced === true && animSceneryBucketVisEnabled()) return _CK_SKIP;
+  if (node.isBatchedMesh) return (ud && ud.__deadBatch === true) ? _CK_HIDE : _CK_SHOW;
+  if (ud && ud.__filmHidden === true) return _CK_HIDE_COUNTED;
+  const sphere = _resolveStaticCullSphere(node);
+  // No derivable bounds: restored to visible. A mesh may resolve later (its
+  // bounds computation threw, or it has no geometry yet) — the walk retries
+  // it every pass, so the registry does too; anything else never resolves.
+  if (!sphere) return node.isMesh === true ? _CK_RETRY : _CK_SHOW;
+  out.x = sphere.center.x;
+  out.y = sphere.center.y;
+  out.z = sphere.center.z;
+  out.r = sphere.radius;
+  if (_staticOwnsLight(node)) return _CK_LIGHT;
+  return _CK_TEST;
+}
+
+// What `_cullStaticsWalk` writes to `node.visible` this walk (true / false),
+// or null when it leaves the node alone — an INDEPENDENT copy of its branches
+// (not built on `_cullClassifyNode`), for window.__rustCull.verify().
+function _cullDecideForVerify(node, culler) {
+  if (!node) return null;
+  const ud = node.userData;
+  if (ud && (ud.__particle === true || ud.isParticleInstanced === true)) return null;
+  if (ud && ud.__anchorFrozen === true) return null;
+  if (ud && ud.isAnimatedSceneryInstanced === true && animSceneryBucketVisEnabled()) return null;
+  if (node.isBatchedMesh) {
+    if (ud && ud.__deadBatch === true) return false;
+    return true;
+  }
+  if (ud && ud.__filmHidden === true) return false;
+  const sphere = _resolveStaticCullSphere(node);
+  if (!sphere) return true;
+  if (_staticOwnsLight(node)) return true;
+  let want = culler.isSphereInFrustum(sphere);
+  if (want && CULL_DIST_SQ !== Infinity) {
+    const c = sphere.center;
+    const distSq = culler.getDistanceSq(c.x, c.y, c.z);
+    const padded = Math.sqrt(CULL_DIST_SQ) + sphere.radius;
+    if (distSq > padded * padded) want = false;
+  }
+  return want;
+}
+
+// What statics.js lends the registry (function declarations: hoisted).
+const _RUST_CULL_HOOKS = {
+  classify: _cullClassifyNode,
+  ownsLight: _staticOwnsLight,
+  resolveSphere: _resolveStaticCullSphere,
+  decide: _cullDecideForVerify,
+};
+/** Test seam: the kind codes `_cullClassifyNode` returns (must equal cull.js CK_*), and the hooks. */
+export const __cullKindsForTest = Object.freeze({
+  SKIP: _CK_SKIP, SHOW: _CK_SHOW, HIDE: _CK_HIDE, HIDE_COUNTED: _CK_HIDE_COUNTED,
+  TEST: _CK_TEST, LIGHT: _CK_LIGHT, RETRY: _CK_RETRY,
+});
+export const __rustCullHooksForTest = _RUST_CULL_HOOKS;
 
 // Self-managed rAF — same pattern as `nameplate_sprite.js`'s LOD loop.
 // Ticks every frame once `window.liveScene3d` is live. Browser-only
@@ -5141,6 +5259,11 @@ const STATIC_ANCHOR_FREEZE_ON = (() => {
 })();
 
 function _freezeStaticScriptAnchor(anchor) {
+  // ?anchorOffGraph: an off-graph root holds a COPY of staticsGroup.matrixWorld.
+  // Refresh it with the same walk-up the on-graph freeze runs (scene →
+  // worldRoot → staticsGroup), so the multiply below sees the identical operand.
+  const root = anchor.parent;
+  if (root && root.userData && root.userData.isStaticAnchorRoot === true) _syncStaticAnchorRoot(root);
   anchor.updateWorldMatrix(true, true);
   anchor.traverse((o) => {
     o.matrixAutoUpdate = false;
@@ -5148,6 +5271,94 @@ function _freezeStaticScriptAnchor(anchor) {
   });
   anchor.visible = false;
   anchor.userData.__anchorFrozen = true;
+  // ?rustCull: an anchor frozen while it is a staticsGroup child (flag off)
+  // changes the walk's verdict for it (the walk leaves frozen anchors alone).
+  if (typeof markStaticsCullDirty === "function") markStaticsCullDirty(anchor);
+}
+
+// ── ?anchorOffGraph (2026-10-26, stage-2 S1b; DEFAULT ON since 2026-10-26,
+// `=off`/0/false/no escape; read once). Needs ?staticAnchorFreeze.
+//
+// The outdoor default_script anchors (attachStaticDefaultScripts) are parented
+// to a per-landblock OFF-GRAPH root instead of staticsGroup: a THREE.Group that
+// is never added to the scene, whose `matrixWorld` is a COPY of
+// staticsGroup.matrixWorld (refreshed by the same walk-up the freeze runs, so
+// even the signs of zero match). At Linvak Tukal the 1070's 9×9 object ring
+// held 14,268 of them as staticsGroup children (most of the laptop ring-2
+// census's 6,345 statics nodes are anchors too), every one visited each frame
+// by three's matrix walk and projectObject and by the cull and billboard walks,
+// for nothing: frozen and hidden, they draw nothing. What keeps it
+// pixel-identical (proof: tests/anchor_off_graph.test.mjs):
+//   - `anchor.matrixWorld` multiplies the same two operands (root copy ×
+//     anchor.matrix) at the same moment (the freeze), and its part frames
+//     follow it, so every emitter's world centre, RP6 cull sphere and spawn
+//     frame is bit-identical; a ROOT-anchored emitter reads the anchor's local
+//     position/quaternion, which do not change;
+//   - `anchor.parent` stays non-null while the landblock is live (RP6 fails
+//     open on a null parent; the CallPES / start_time timers, the attach's
+//     hand-off test, the unpark rebuild and the portal set piece read it as
+//     "still attached"), and becomes null exactly where it did before: park
+//     and evict detach the anchors from the root (landblock_lru.js), the R-10
+//     late re-check removes one;
+//   - every anchor of a landblock lives in ONE root, from its creation, so the
+//     anchor order the radius tick and the unpark rebuild see (emitter creation
+//     order) is the order staticsGroup.children gave them.
+// The root map IS the per-landblock anchor registry: the radius tick and
+// park/unpark/evict read `staticsGroup.userData.__anchorRoots` instead of
+// scanning staticsGroup (14k children per park at Linvak). Interior anchors
+// (attachStaticDefaultScriptsWorld) are never frozen and stay where they were.
+let _anchorOffGraphFlag;
+export function anchorOffGraphEnabled() {
+  if (_anchorOffGraphFlag !== undefined) return _anchorOffGraphFlag;
+  // DEFAULT ON since 2026-10-26 (`=off|0|false|no` is the escape).
+  let on = true;
+  try {
+    const v = (new URLSearchParams(globalThis.location?.search || "").get("anchorOffGraph") || "").trim().toLowerCase();
+    if (v === "off" || v === "0" || v === "false" || v === "no") on = false;
+  } catch (_) { on = true; }
+  return (_anchorOffGraphFlag = on && STATIC_ANCHOR_FREEZE_ON);
+}
+/** Test seam: true/false forces the flag, undefined re-reads the URL. */
+export function __setAnchorOffGraphForTest(v) { _anchorOffGraphFlag = v; }
+
+/** Copy staticsGroup's world matrix (walked up exactly as a freeze walks it) into an anchor root. */
+function _syncStaticAnchorRoot(root) {
+  const group = root.userData.staticsGroup;
+  if (!group || !group.matrixWorld) return;
+  group.updateWorldMatrix(true, false);
+  root.matrix.copy(group.matrix);
+  root.matrixWorld.copy(group.matrixWorld);
+}
+
+/** The landblock's off-graph anchor root (created on first use). */
+function _staticAnchorRootFor(group, lbKey) {
+  const ud = group.userData || (group.userData = {});
+  let roots = ud.__anchorRoots;
+  if (!(roots instanceof Map)) {
+    roots = ud.__anchorRoots = new Map();
+    // For landblock_lru.js (a zero-import leaf): an unpark whose root went away.
+    ud.__anchorRootFor = (k) => _staticAnchorRootFor(group, lbKeyOf(k >>> 0));
+  }
+  const key = lbKeyOf(lbKey >>> 0);
+  let root = roots.get(key);
+  if (!root) {
+    root = new THREE.Group();
+    root.name = `static-anchor-root-0x${key.toString(16).padStart(8, "0")}`;
+    root.matrixAutoUpdate = false;
+    root.matrixWorldAutoUpdate = false;
+    root.userData = { isStaticAnchorRoot: true, lbKey: key, staticsGroup: group };
+    roots.set(key, root);
+    _syncStaticAnchorRoot(root);
+  }
+  return root;
+}
+
+/** Diag: the off-graph anchor registry (landblocks, attached anchors). */
+export function staticAnchorRootStats(scene3d) {
+  const roots = scene3d?.staticsGroup?.userData?.__anchorRoots;
+  let anchors = 0;
+  if (roots instanceof Map) for (const r of roots.values()) anchors += r.children.length;
+  return { enabled: anchorOffGraphEnabled(), landblocks: roots instanceof Map ? roots.size : 0, anchors };
 }
 
 // `?staticScriptRadius=N` (2026-10-17, DEFAULT 2; `=off`/0/false/no ⇒ every
@@ -5291,7 +5502,15 @@ export function tickStaticScriptRadius(scene3d, seen) {
     if (!baked.has(k)) { st.deferred.delete(k); st.split.delete(k); } // evicted
   }
   let byLb = null;
+  // ?anchorOffGraph: the per-landblock root IS the registry (its children are
+  // the landblock's attached outdoor anchors, in staticsGroup order) — no scan.
+  const offGraph = anchorOffGraphEnabled();
+  const roots = offGraph ? scene3d.staticsGroup?.userData?.__anchorRoots : null;
   const anchorsOf = (k) => {
+    if (offGraph) {
+      const r = roots instanceof Map ? roots.get(k) : null;
+      return r ? r.children.slice() : [];
+    }
     if (!byLb) {
       byLb = new Map();
       for (const c of scene3d.staticsGroup?.children ?? []) {
@@ -6114,7 +6333,10 @@ export async function attachStaticDefaultScripts(scene3d, placements, wasmExport
       landblockId: p.landblockId,
       particleOwnerKey: ownerKey,
     };
-    scene3d.staticsGroup.add(anchor);
+    // ?anchorOffGraph: the landblock's off-graph root (the anchor never joins
+    // the scene graph); otherwise staticsGroup, as before.
+    if (anchorOffGraphEnabled()) _staticAnchorRootFor(scene3d.staticsGroup, pLbKey).add(anchor);
+    else scene3d.staticsGroup.add(anchor);
     anchorCount += 1;
     const epoch0 = anchor.userData.__scriptEpoch | 0;
     // ?staticPartAnchor — part-anchored hooks ride their part, not the origin.
@@ -6164,7 +6386,12 @@ export async function attachStaticDefaultScripts(scene3d, placements, wasmExport
     if (!_lbLive(p.landblockId)) {
       _deadLbs.add(pLbKey);
       try { ownerRegistry.destroyAllForOwner(ownerKey); } catch (_) {}
-      try { scene3d.staticsGroup.remove(anchor); } catch (_) {}
+      try {
+        // ?anchorOffGraph: out of its root (a parked anchor is already detached).
+        const par = anchor.parent;
+        if (par && par.userData && par.userData.isStaticAnchorRoot === true) par.remove(anchor);
+        else scene3d.staticsGroup.remove(anchor);
+      } catch (_) {}
       anchorCount -= 1;
       continue;
     }

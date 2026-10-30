@@ -71,6 +71,8 @@
 import { GRASS_VARIANTS, GRASS_DEFAULTS, GRASS_BLADE_POSITIONS } from "./terrain_grass.js";
 import { FAM_GRASS, familyForCode, TERRAIN_CODE_COUNT } from "./terrain_families.js";
 import { SCATTER_DEFAULTS, gridSizeFor, cellSizeFor } from "./terrain_scatter.js";
+// Lane F2 (2026-10-26) — `?hotGrassCull` reader (cullGrassTiles).
+import { rustFlag } from "./rust/scene_core.js";
 
 // ---------------------------------------------------------------------------
 // Layout constants.
@@ -900,6 +902,7 @@ export function grassGpuBladeReach(look, out) {
  * @returns {number} survivors written
  */
 export function cullGrassTiles(p, out) {
+  if (hotGrassCullEnabled()) return _cullGrassTilesHot(p, out);
   const len = Math.min(out.length, GRASS_GPU_MAX_TILES);
   for (let k = 0; k < out.length; k += 1) out[k] = -1;
   const T = p.T > 0 ? p.T | 0 : GRASS_GPU_TILES_PER_ROW;
@@ -981,6 +984,193 @@ export function cullGrassTiles(p, out) {
       tie = mx * mx + my * my;
     }
     // Insertion sort (n <= 64).
+    let j = n;
+    while (j > 0 && (_cullKey[j - 1] > key || (_cullKey[j - 1] === key && _cullTie[j - 1] > tie))) {
+      _cullKey[j] = _cullKey[j - 1];
+      _cullTie[j] = _cullTie[j - 1];
+      _cullId[j] = _cullId[j - 1];
+      j -= 1;
+    }
+    _cullKey[j] = key;
+    _cullTie[j] = tie;
+    _cullId[j] = t;
+    n += 1;
+  }
+  for (let k = 0; k < n; k += 1) out[k] = _cullId[k];
+  return n;
+}
+
+// 2026-10-26 (lane F2) — `?hotGrassCull` (DEFAULT OFF). The same cull, with two
+// exact trims:
+//  - `p.zMemo` (createGrassZMemo, one per ring) + `p.zGen` (the field's
+//    `generation()` stamp): each tile's `zRange` answer is kept until the stamp,
+//    the zRange function or the ring window (winMin / cell / ts / g / T) moves.
+//    Exact for a PURE zRange keyed by that stamp — terrain_field_gpu
+//    heightRange(): everything it reads changes only in a walk / dispose(),
+//    which bump the stamp (unique across fields). Without a memo (or with a
+//    non-number / NaN stamp) every tile calls zRange as the shipped cull does.
+//    1070 2026-10-23: heightRange 0.017 ms/frame, all of it re-answering the
+//    same tiles frame after frame (the window re-centres on LB changes only).
+//  - the planes' coefficients are read once per call, not once per tile
+//    (lane F measured -10% for this alone); the same tests in the same order.
+// Same survivors, same order, same `out` (tests/hot_grass_cull.test.mjs).
+let _hotGrassCull;
+export function hotGrassCullEnabled() {
+  if (_hotGrassCull === undefined) _hotGrassCull = rustFlag("hotGrassCull", false);
+  return _hotGrassCull;
+}
+/** Test seam (`undefined` re-reads the URL flag). */
+export function __setHotGrassCullForTest(on) {
+  _hotGrassCull = on === undefined ? undefined : !!on;
+}
+/** A per-ring zRange memo for `cullGrassTiles` (`p.zMemo`). Fixed shape. */
+export function createGrassZMemo() {
+  return {
+    gen: NaN, fn: null, wx: NaN, wy: NaN, cell: NaN, ts: -1, g: -1, T: -1,
+    state: new Uint8Array(GRASS_GPU_MAX_TILES), // 0 unknown, 1 zRange said null, 2 lo/hi held
+    lo: new Float64Array(GRASS_GPU_MAX_TILES),
+    hi: new Float64Array(GRASS_GPU_MAX_TILES),
+    fills: 0, hits: 0, resets: 0,
+  };
+}
+const _PL_MAX = 16;
+const _plN = new Float64Array(_PL_MAX * 4);
+const _plOn = new Uint8Array(_PL_MAX);
+function _cullGrassTilesHot(p, out) {
+  const len = Math.min(out.length, GRASS_GPU_MAX_TILES);
+  for (let k = 0; k < out.length; k += 1) out[k] = -1;
+  const T = p.T > 0 ? p.T | 0 : GRASS_GPU_TILES_PER_ROW;
+  const ts = p.ts | 0;
+  const g = p.g | 0;
+  const cell = p.cell;
+  if (!(ts > 0) || !(g > 0) || !(cell > 0)) return 0;
+  const wmx = _pt(p.winMin, 0), wmy = _pt(p.winMin, 1);
+  const cx = _pt(p.center, 0), cy = _pt(p.center, 1);
+  const outerR = p.outerR;
+  const holeR = p.holeR;
+  const discOn = Number.isFinite(outerR) && Number.isFinite(cx) && Number.isFinite(cy);
+  const holeOn = Number.isFinite(holeR) && holeR > 0 && Number.isFinite(cx) && Number.isFinite(cy);
+  const zRange = typeof p.zRange === "function" ? p.zRange : null;
+  const planes = Array.isArray(p.planes) ? p.planes : null;
+  const xym = Number.isFinite(p.xyMarginM) ? Math.max(0, p.xyMarginM) : GRASS_GPU_CULL_XY_MARGIN_M;
+  const zab = Number.isFinite(p.zAboveM) ? Math.max(0, p.zAboveM) : GRASS_GPU_CULL_ABOVE_M;
+  const cam = p.camPos || null;
+  const ex = cam ? _pt(cam, 0) : cx;
+  const ey = cam ? _pt(cam, 1) : cy;
+  const ez = cam ? _pt(cam, 2) : NaN;
+  const hasEye = Number.isFinite(ex) && Number.isFinite(ey);
+  const tiles = Math.min(T * T, GRASS_GPU_MAX_TILES);
+  // The memo, re-armed when anything a tile rect or a zRange answer depends on moved.
+  const zg = p.zGen;
+  const memo = zRange !== null && p.zMemo && typeof zg === "number" && zg === zg ? p.zMemo : null;
+  if (memo !== null && (memo.gen !== zg || memo.fn !== zRange || memo.wx !== wmx || memo.wy !== wmy ||
+      memo.cell !== cell || memo.ts !== ts || memo.g !== g || memo.T !== T)) {
+    memo.state.fill(0);
+    memo.gen = zg; memo.fn = zRange; memo.wx = wmx; memo.wy = wmy;
+    memo.cell = cell; memo.ts = ts; memo.g = g; memo.T = T;
+    memo.resets += 1;
+  }
+  // The planes, read once (more than _PL_MAX planes: read per tile as shipped).
+  const np = planes ? planes.length : 0;
+  const hoist = planes !== null && np <= _PL_MAX;
+  if (hoist) {
+    for (let k = 0; k < np; k += 1) {
+      const pl = planes[k];
+      if (!pl) { _plOn[k] = 0; continue; }
+      _plOn[k] = 1;
+      const o = k * 4;
+      if (pl.normal) { _plN[o] = pl.normal.x; _plN[o + 1] = pl.normal.y; _plN[o + 2] = pl.normal.z; _plN[o + 3] = pl.constant; }
+      else { _plN[o] = pl[0]; _plN[o + 1] = pl[1]; _plN[o + 2] = pl[2]; _plN[o + 3] = pl[3]; }
+    }
+  }
+  let n = 0;
+  for (let t = 0; t < tiles; t += 1) {
+    const ox0 = (t % T) * ts;
+    const oy0 = Math.trunc(t / T) * ts;
+    if (ox0 >= g || oy0 >= g) continue;          // a tile past the grid: no cells
+    const ox1 = Math.min(ox0 + ts, g);
+    const oy1 = Math.min(oy0 + ts, g);
+    const x0 = (wmx + ox0) * cell, x1 = (wmx + ox1) * cell;
+    const y0 = (wmy + oy0) * cell, y1 = (wmy + oy1) * cell;
+    if (discOn) {
+      const dx = Math.max(x0 - cx, 0, cx - x1);
+      const dy = Math.max(y0 - cy, 0, cy - y1);
+      if (dx * dx + dy * dy > outerR * outerR) continue;
+    }
+    if (holeOn) {
+      const fx = Math.max(Math.abs(x0 - cx), Math.abs(x1 - cx));
+      const fy = Math.max(Math.abs(y0 - cy), Math.abs(y1 - cy));
+      if (fx * fx + fy * fy < holeR * holeR) continue;
+    }
+    let zLo = -Z_UNBOUNDED, zHi = Z_UNBOUNDED;
+    if (zRange) {
+      if (memo !== null) {
+        const st = memo.state[t];
+        if (st === 1) { memo.hits += 1; continue; }
+        if (st === 0) {
+          const zr = zRange(x0, y0, x1, y1);
+          memo.fills += 1;
+          if (!zr) { memo.state[t] = 1; continue; }
+          // One read of each field, the shipped arithmetic on it; a number is
+          // held exactly by the Float64Array (anything else is not cached).
+          const zmn = zr.min, zmx = zr.max;
+          zLo = zmn - GRASS_GPU_CULL_BELOW_M;
+          zHi = zmx + zab;
+          if (typeof zmn === "number" && typeof zmx === "number") {
+            memo.lo[t] = zmn;
+            memo.hi[t] = zmx;
+            memo.state[t] = 2;
+          }
+        } else {
+          memo.hits += 1;
+          zLo = memo.lo[t] - GRASS_GPU_CULL_BELOW_M;
+          zHi = memo.hi[t] + zab;
+        }
+      } else {
+        const zr = zRange(x0, y0, x1, y1);
+        if (!zr) continue;                           // no resident terrain: all dead
+        zLo = zr.min - GRASS_GPU_CULL_BELOW_M;
+        zHi = zr.max + zab;
+      }
+    }
+    if (planes) {
+      const bx0 = x0 - xym, bx1 = x1 + xym, by0 = y0 - xym, by1 = y1 + xym;
+      let outside = false;
+      if (hoist) {
+        for (let k = 0; k < np && !outside; k += 1) {
+          if (_plOn[k] === 0) continue;
+          const o = k * 4;
+          const nx = _plN[o], ny = _plN[o + 1], nz = _plN[o + 2], d = _plN[o + 3];
+          const px = nx > 0 ? bx1 : bx0;
+          const py = ny > 0 ? by1 : by0;
+          const pz = nz > 0 ? zHi : zLo;
+          if (nx * px + ny * py + nz * pz + d < 0) outside = true;
+        }
+      } else {
+        for (let k = 0; k < planes.length && !outside; k += 1) {
+          const pl = planes[k];
+          if (!pl) continue;
+          let nx, ny, nz, d;
+          if (pl.normal) { nx = pl.normal.x; ny = pl.normal.y; nz = pl.normal.z; d = pl.constant; }
+          else { nx = pl[0]; ny = pl[1]; nz = pl[2]; d = pl[3]; }
+          const px = nx > 0 ? bx1 : bx0;
+          const py = ny > 0 ? by1 : by0;
+          const pz = nz > 0 ? zHi : zLo;
+          if (nx * px + ny * py + nz * pz + d < 0) outside = true;
+        }
+      }
+      if (outside) continue;
+    }
+    if (n >= len) break;
+    let key = 0, tie = 0;
+    if (hasEye) {
+      const dx = Math.max(x0 - ex, 0, ex - x1);
+      const dy = Math.max(y0 - ey, 0, ey - y1);
+      const dz = Number.isFinite(ez) && zRange ? Math.max(zLo - ez, 0, ez - zHi) : 0;
+      key = dx * dx + dy * dy + dz * dz;
+      const mx = 0.5 * (x0 + x1) - ex, my = 0.5 * (y0 + y1) - ey;
+      tie = mx * mx + my * my;
+    }
     let j = n;
     while (j > 0 && (_cullKey[j - 1] > key || (_cullKey[j - 1] === key && _cullTie[j - 1] > tie))) {
       _cullKey[j] = _cullKey[j - 1];

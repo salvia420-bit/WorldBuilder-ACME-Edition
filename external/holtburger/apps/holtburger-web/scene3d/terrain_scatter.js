@@ -73,6 +73,17 @@
 // is what makes `test_terrain_scatter.mjs` a pure-node test and `?nullRender=1`
 // free.
 //
+// RUST PLANNER (2026-10-26, lane E; docs/2026-10-26-rust-anim-terrain.md). A
+// consumer may hand its pool `opts.scanPlanner` (scene3d/rust/terrain_fx.js
+// `rustScatterPlanner()`, which the CONSUMER calls — it owns the
+// `?rustTerrainFx` read, plan §2.4; this file still reads no flag). The pool's
+// per-frame edge drain + round-robin — which instances to re-scatter, in which
+// order (the per-instance TEST loop over cellX / cellY / resolvedFlags /
+// outFlags, ~2,048 instances a frame for the ultra pebble pool) — is then
+// decided by a Rust kernel in exactly this file's order; `scatterInstance`
+// below still places every instance it names, so every buffer is written by
+// the same code in the same order.
+//
 // INVARIANTS (plan §5). This is a HOST module, not a registered VFX component,
 // so it is not swept by `vfx/lint_caps.js` — it obeys the firewall anyway. It
 // reads only terrain (static/derived) + a player position + the frame clock,
@@ -306,6 +317,13 @@ function _num(v, fallback, lo, hi) {
  * @param {boolean} [opts.autoTeleport=true] treat a > `teleportJumpM` jump in
  *   one update as a teleport and re-scatter everything.
  * @param {string} [opts.name="terrain-scatter"]
+ * @param {{attach:Function}|null} [opts.scanPlanner] 2026-10-26 (lane E) —
+ *   a re-scatter planner factory: scene3d/rust/terrain_fx.js
+ *   `rustScatterPlanner()` (the Rust planner under `?rustTerrainFx`, null with
+ *   the flag off — the consumer makes that call). It decides the per-frame
+ *   edge drain + round-robin re-scatter set in exactly this file's order;
+ *   `scatterInstance` below still places every instance it names. Absent /
+ *   null / a factory that refuses this pool ⇒ this file's loops, byte-identical.
  */
 export function createScatterPool(opts = {}) {
   const THREE = opts.THREE || null;
@@ -1035,7 +1053,29 @@ export function createScatterPool(opts = {}) {
     state.lastRescattered = count;
     state.lastScanned = count;
     state.cursor = 0;
+    if (planner !== null && !planner.sync(cellX, cellY, resolvedFlags, outFlags, gxMin, gyMin, 0)) plannerFailed();
     return count;
+  }
+
+  // 2026-10-26 — opts.scanPlanner (see the opts doc). It mirrors the four
+  // arrays the TEST reads (cellX, cellY, resolvedFlags, outFlags) from the
+  // sync calls below and from the per-batch outcomes `plan` reports.
+  let planner = null;
+  const plannerFactory = opts.scanPlanner || null;
+  if (plannerFactory && typeof plannerFactory.attach === "function") {
+    try {
+      planner = plannerFactory.attach({
+        count, gridSize, cellSizeM, radiusM, jitter, seed, disc: shape !== "square",
+        scanBudget, sliceSize, edgeBudget,
+      }) || null;
+    } catch (e) {
+      planner = null;
+      state_lastError = e;
+    }
+  }
+  function plannerFailed() {
+    try { planner.dispose(); } catch (_) { /* fail-soft */ }
+    planner = null;
   }
 
   /**
@@ -1072,6 +1112,26 @@ export function createScatterPool(opts = {}) {
     let written = 0;
     runCount = 0;
     runOverflow = false;
+    // opts.scanPlanner: the edge drain + round-robin below, decided in Rust in
+    // their exact order; scatterInstance places every instance it names.
+    if (planner !== null) {
+      const r = planner.plan(gxMin, gyMin, state.centerX, state.centerY, scatterInstance, resolvedFlags, outFlags);
+      if (r !== null) {
+        state.lastGxMin = gxMin;
+        state.lastGyMin = gyMin;
+        state.edgeRescatters += r.edgeWritten;
+        state.cursor = r.cursor;
+        state.scans += r.scanned;
+        state.lastScanned = r.scanned;
+        state.lastRescattered = r.written;
+        if (r.written > 0) flushRanges();
+        return r.written;
+      }
+      // Failed mid-session: the loops below take over from its cursor (its
+      // queued edge lines are lost; the round-robin finds those instances).
+      state.cursor = (planner.cursor() >>> 0) % count;
+      plannerFailed();
+    }
     // Edge-first: the lines this scroll re-assigned, before the round-robin.
     if (state.lastGxMin !== null) {
       enqueueScrolled(0, state.lastGxMin, gxMin);
@@ -1114,6 +1174,7 @@ export function createScatterPool(opts = {}) {
    */
   function invalidate() {
     resolvedFlags.fill(0);
+    if (planner !== null) planner.invalidate();
   }
 
   /**
@@ -1133,6 +1194,7 @@ export function createScatterPool(opts = {}) {
       const cx = cellX[i], cy = cellY[i];
       if (cx >= c0x && cx <= c1x && cy >= c0y && cy <= c1y) { resolvedFlags[i] = 0; n += 1; }
     }
+    if (planner !== null && n > 0) planner.syncResolved(resolvedFlags);
     return n;
   }
 
@@ -1156,6 +1218,7 @@ export function createScatterPool(opts = {}) {
   }
 
   function dispose() {
+    if (planner !== null) plannerFailed();
     if (mesh) {
       try { if (mesh.parent) mesh.parent.remove(mesh); } catch (_) {}
       // `InstancedMesh.dispose()` releases the instance matrix/colour buffers
@@ -1205,13 +1268,15 @@ export function createScatterPool(opts = {}) {
       excludeRejects: state.excludeRejects,
       edgeRescatters: state.edgeRescatters,
       edgeBudget,
-      edgePending: edgeLines.length - edgeHead,
+      // opts.scanPlanner: the edge queue lives in the planner.
+      edgePending: planner !== null ? planner.stats().queuedLines : edgeLines.length - edgeHead,
       outOfRange: state.outOfRange,
       noHeight: state.noHeight,
       fillRejects: state.fillRejects,
       fillErrors: state.fillErrors,
       allocations,
       lastError: state_lastError ? String(state_lastError && state_lastError.message || state_lastError) : null,
+      ...(planner !== null ? { scanPlanner: planner.stats() } : {}),
     };
   }
 

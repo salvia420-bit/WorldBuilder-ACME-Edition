@@ -33,6 +33,11 @@ const {
 
 const lb = (x, y) => (((x & 0xff) << 24) | ((y & 0xff) << 16)) >>> 0;
 
+// These scenes hang anchors straight under staticsGroup (the layout before
+// ?anchorOffGraph, DEFAULT ON since 2026-10-26), so they pin that flag off;
+// tests/anchor_off_graph.test.mjs A5 runs the same radius tick in both arms.
+S.__setAnchorOffGraphForTest(false);
+
 test("F1: the radius setting parses", () => {
   const saved = globalThis.location;
   const cases = [["", 2], ["?staticScriptRadius=3", 3], ["?staticScriptRadius=1", 1], ["?staticScriptRadius=12", 12],

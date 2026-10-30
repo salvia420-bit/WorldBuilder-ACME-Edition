@@ -1181,9 +1181,14 @@ import { linkMissIsDefect } from "./motion_link_diag.js";
 // AnimationMixer is gone, and so is the `?unifiedMotion` per-class gate — there
 // is no other path. The wasm class is read off `window.__hbWasm` (set during
 // boot); a stale pkg/ without it logs ONE loud console.error and leaves rigs at
-// the rest pose. `poseRigAt` is the JS-only per-part pose write (the one step
-// that can't live in Rust).
+// the rest pose. `poseRigAt` is the per-part pose write; under `?rustRig=on`
+// (2026-10-26, default on, `=off` escape) it hands each rig to the Rust kernel
+// (scene3d/rust/rig.js, docs/2026-10-26-rust-rig.md): one wasm call per posed
+// entity, at the same point in this loop, and no Euler re-derivation.
 import { poseRigAt } from "./motion/motion_sequence.js";
+// `?rustEntityCull` (lane B, 2026-10-26) reads its flag through the scene-core
+// reader (default off, `=on` opts in).
+import { rustFlag } from "./rust/scene_core.js";
 // J5 (PARITY-D, 2026-08-13) — retail's `MotionTableManager::pending_animations`
 // (acclient.h:31103). One playhead (`inst._unifiedSeq`), an ORDERED queue
 // behind it. See scene3d/motion_queue.js for the decomp transcription.
@@ -1472,7 +1477,13 @@ import {
   applyRestPoseFrame,
   buildPartSurfaceMeshes,
   createPartFramesProxy,
+  rigMeshAliasEnabled,
+  installRigMeshAlias,
 } from "./setup_rig.js";
+// ?rustEntityWorld (lane R4, 2026-10-26; default off): the rig's share of the
+// scene walk — the root's own updateMatrixWorld + the main-scene projection
+// stand-in (scene3d/entity_world.js, docs/2026-10-26-rust-entity-walk.md).
+import { entityWorldEnabled, installEntityWorldRoot, ensureEntityWorld } from "./entity_world.js";
 // Phase 2 (2026-08-02) — limb registry + visual limping, behind the STRICT
 // opt-in `?limbDamage=on`. `limbDamageEnabled()` is the single flag reader;
 // with it off `applyLimbLimp` returns on its first line and nothing else in
@@ -3081,6 +3092,23 @@ const ENTITY_SMOOTH_NEAR_DIST_SQ = ENTITY_SMOOTH_NEAR_DIST * ENTITY_SMOOTH_NEAR_
 // `_shouldTickEntity`. Callers must NOT retain a reference — the next
 // `tick(dt)` reuses it.
 const _tickGateScratch = new THREE.Vector3();
+// ?rustEntityCull (2026-10-26, lane B; DEFAULT ON since 2026-10-26, `=off` escape;
+// docs/2026-10-26-rust-rig.md §"Entity gate"). The tick gate's camera-distance
+// test reads each root's world position through `getWorldPosition`, which
+// re-walks scene → worldRoot → entitiesGroup (three composes + two multiplies)
+// for EVERY entity, every frame — values that cannot change inside one tick.
+// Under the flag the gate resolves the local-player guid and the camera once
+// per tick, refreshes that static chain once (on first use, as the first
+// getWorldPosition did), and then updates only the root itself
+// (`root.updateWorldMatrix(false, false)`: its own visual-ground updateMatrix
+// and multiply run exactly as before, at the same point in the loop). Same
+// booleans, same matrices; a root parented anywhere else (a held item under a
+// wielder's part) keeps the original call. `em._gateHoistOn` overrides (tests).
+const RUST_ENTITY_CULL_ON = (() => {
+  try { return rustFlag("rustEntityCull", true); } catch (_) { return false; }
+})();
+// The fast path stands in for three's own getWorldPosition only.
+const _object3dGetWorldPosition = THREE.Object3D.prototype.getWorldPosition;
 // RP2 — second scratch Vector3 for the smoothing-stride near/far distance
 // classification in `tick(dt)`. Distinct from `_tickGateScratch` because the
 // gate's scratch is consumed inside `_shouldTickEntity` before tick reuses
@@ -5526,6 +5554,7 @@ export class EntityManager {
       }
       return this._fallbackMaterial();
     };
+    const _rigMeshAliasOn = rigMeshAliasEnabled(); // ?rigMeshAlias (read once per spawn)
     for (let p = 0; p < partCount; p += 1) {
       const partGroup = new THREE.Group();
       partGroup.name = `part_${p}`;
@@ -5597,6 +5626,17 @@ export class EntityManager {
       }
       parts.push(partGroup);
       root.add(partGroup);
+      // ?rigMeshAlias (2026-10-26, default off, owner decision): the part walks
+      // its own surface meshes, which share its matrixWorld
+      // (scene3d/setup_rig.js `installRigMeshAlias`).
+      if (_rigMeshAliasOn) installRigMeshAlias(THREE, partGroup);
+    }
+    // ?rustEntityWorld (default off): the root walks its parts and surface
+    // meshes itself (same values as three's walk), and the main renderer's
+    // projection stand-in is installed once (lazy, if index.js has not).
+    if (entityWorldEnabled()) {
+      installEntityWorldRoot(root);
+      ensureEntityWorld(this.scene3d);
     }
     // ?weaponFx: the weapon's own materials now sit on its meshes. Hang the state
     // on the instance (so any dispose — including the Step-E abort below — frees
@@ -16861,6 +16901,77 @@ export class EntityManager {
   }
 
   /**
+   * ?rustEntityCull — once per tick, before the entity loop: the inputs
+   * `_shouldTickEntity` re-resolved per entity (the local-player guid, the
+   * camera) and a "static chain not yet refreshed this tick" mark. Same
+   * defensive resolution as the per-entity code (a throwing / absent getter →
+   * no local player).
+   * @private
+   */
+  _gateBegin() {
+    let localPlayerGuid = null;
+    try {
+      // eslint-disable-next-line no-undef
+      if (typeof window !== "undefined" && typeof window.getLocalPlayerGuid === "function") {
+        // eslint-disable-next-line no-undef
+        const lpg = window.getLocalPlayerGuid();
+        if (lpg !== null && lpg !== undefined) localPlayerGuid = lpg >>> 0;
+      }
+    } catch (_) { /* → no local player, as the per-entity read */ }
+    const g = this._gate || (this._gate = { localGuid: null, camera: null, group: null, chainFresh: false });
+    g.localGuid = localPlayerGuid;
+    g.camera = this.scene3d?.cameraSwitcher?.activeCamera ?? this.scene3d?.camera ?? null;
+    g.group = this.scene3d?.entitiesGroup ?? null;
+    g.chainFresh = false;
+  }
+
+  /**
+   * ?rustEntityCull — `_shouldTickEntity` with the per-tick inputs of
+   * `_gateBegin` and the static-chain walk done once. Same branches in the
+   * same order, same result. For a root directly under entitiesGroup,
+   * `root.getWorldPosition(v)` is `updateWorldMatrix(true, false)` (parent
+   * chain, then the root) + `v.setFromMatrixPosition(matrixWorld)`; the chain
+   * (scene → worldRoot → entitiesGroup: plain groups, never moved during a
+   * tick) is refreshed by the first such root and reused, the root's own part
+   * (`updateMatrix` — the visual-ground one — and the multiply) runs per root
+   * as before.
+   * @private
+   */
+  _shouldTickEntityHoisted(inst) {
+    const g = this._gate;
+    if (g.localGuid !== null && (inst.guid >>> 0) === g.localGuid) return true;
+    if (inst._jumpPoseTween) return true;
+    const camera = g.camera;
+    if (!camera || !camera.position || !inst.root) return true;
+    const root = inst.root;
+    if (
+      g.group !== null && root.parent === g.group &&
+      root.getWorldPosition === _object3dGetWorldPosition && typeof root.updateWorldMatrix === "function"
+    ) {
+      if (!g.chainFresh) {
+        g.group.updateWorldMatrix(true, false);
+        g.chainFresh = true;
+      }
+      root.updateWorldMatrix(false, false);
+      const e = root.matrixWorld.elements;
+      _tickGateScratch.x = e[12];
+      _tickGateScratch.y = e[13];
+      _tickGateScratch.z = e[14];
+    } else if (typeof root.getWorldPosition === "function") {
+      root.getWorldPosition(_tickGateScratch);
+    } else if (root.position) {
+      _tickGateScratch.set(root.position.x, root.position.y, root.position.z);
+    } else {
+      return true;
+    }
+    const dx = _tickGateScratch.x - camera.position.x;
+    const dy = _tickGateScratch.y - camera.position.y;
+    const dz = _tickGateScratch.z - camera.position.z;
+    const distSq = dx * dx + dy * dy + dz * dz;
+    return distSq <= MAX_TICK_DIST_SQ;
+  }
+
+  /**
    * render-perf-2 (2026-10-13) — zero `inst._lodOriginalSetup` when its setup
    * has no GfxObjDegradeInfo chain, so the T9 tick's "no degrade chain" skip
    * fires. `_lodOriginalSetup` was the spawn setupId for EVERY entity, so the
@@ -17636,6 +17747,9 @@ export class EntityManager {
     // A3-selection (2026-10-08): despawn-clear notice, combat-mode-entry
     // auto-target and the 1 s range-exit drop (reuses the pose above).
     try { this._tickSelectionRules(_sepPlayerPose); } catch (_) { /* never break the tick */ }
+    // ?rustEntityCull — the gate's per-tick inputs, resolved once (see the flag).
+    const _gateHoist = (this._gateHoistOn ?? RUST_ENTITY_CULL_ON) === true;
+    if (_gateHoist) this._gateBegin();
     for (const inst of this.entityMap.values()) {
       // Perf B1 (2026-05-18) — distance + local-player + active-tween
       // gate. When false, skip mixer.update, hook execution, and the
@@ -17644,7 +17758,7 @@ export class EntityManager {
       // (not by tick), so skipping the tick body leaves them
       // readable for downstream consumers. Animation snap on
       // re-entry is the documented MVP trade.
-      if (!this._shouldTickEntity(inst)) continue;
+      if (!(_gateHoist ? this._shouldTickEntityHoisted(inst) : this._shouldTickEntity(inst))) continue;
       // RP2 (2026-06-08) — far-band SMOOTHING-STRIDE decision. `runSmoothing`
       // gates ONLY the position-ease + heading-ease passes below (pure visual
       // smoothing of a re-anchored server target — lag-tolerant, self-

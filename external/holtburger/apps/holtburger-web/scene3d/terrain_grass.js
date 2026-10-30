@@ -173,9 +173,14 @@ import {
   createGrassGpuRingUniforms,
   cullGrassTiles,
   grassGpuBladeReach,
+  hotGrassCullEnabled,
+  createGrassZMemo,
 } from "./grass_gpu_place.js";
 import { FAM_GRASS, familyForCode } from "./terrain_families.js";
 import { createScatterPool, SCATTER_FADE_GLSL, scatterHash01 } from "./terrain_scatter.js";
+// ?rustTerrainFx (2026-10-26, default OFF): the CPU-path rings' re-scatter plan
+// from Rust (scene3d/rust/terrain_fx.js); null when off = terrain_scatter.js's own scan.
+import { rustScatterPlanner } from "./rust/terrain_fx.js";
 import { ensureVfxHashVarying, VFX_HASH_ASSIGN_VERTEX } from "./vfx/per_instance.js";
 import { treeWindStrength, treeWindDir } from "./tree_wind.js";
 import {
@@ -1223,6 +1228,9 @@ export function createTerrainGrassProvider(opts = {}) {
             winMin: st.winMin, g: st.g, ts: st.ts, T: st.T, cell: st.cell,
             center: [0, 0], outerR: st.radiusM, holeR: -1, planes: null, zRange, camPos: null,
             xyMarginM: GRASS_GPU_CULL_XY_MARGIN_M, zAboveM: GRASS_GPU_CULL_ABOVE_M,
+            // ?hotGrassCull (lane F2, default OFF): this ring's zRange memo, keyed by
+            // the field's generation() stamp (grass_gpu_place.js createGrassZMemo).
+            zMemo: null, zGen: NaN,
           },
         };
         if (mesh) mesh.onBeforeRender = (renderer, scene, camera, geo, mat) => { cullRing(r, camera, geo, mat); };
@@ -1323,6 +1331,10 @@ export function createTerrainGrassProvider(opts = {}) {
           p.camPos = r.camPos;
         }
       }
+      if (hotGrassCullEnabled()) {
+        if (p.zMemo === null) p.zMemo = createGrassZMemo();
+        p.zGen = field && typeof field.generation === "function" ? field.generation() : NaN;
+      }
       n = cullGrassTiles(p, r.st.tileIds);
     }
     geo.instanceCount = n * r.st.ts * r.st.ts;
@@ -1401,6 +1413,7 @@ export function createTerrainGrassProvider(opts = {}) {
         const geometry = makeGrassBladeGeometry(THREE);
         const material = buildMaterial(bag);
         const pool = createScatterPool({
+          scanPlanner: rustScatterPlanner(),
           THREE,
           geometry,
           material,

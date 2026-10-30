@@ -53,6 +53,88 @@ import {
   CLOUD_SHADOW_STRENGTH_DEFAULT,
   DISPLAY_EXPOSURE_DEFAULT,
 } from './cloud_night.js';
+import { rustFlag } from './rust/scene_core.js';
+// Lane F2 (2026-10-26) — `?hotTerrainShared` (DEFAULT OFF): the terrain cloud
+// shadow uniforms as one shared `{value}` each (scene3d/terrain_shared_uniforms.js).
+import {
+  sharedPushCloudOff,
+  sharedPushCloudOn,
+  sharedObserveCloud,
+  sharedUnbindCloudStrength,
+  sharedReleaseCloud,
+} from './terrain_shared_uniforms.js';
+
+// 2026-10-26 (lane F2) — `?hotTerrainShared` (DEFAULT OFF): `_pushCloudShadowsToTerrain`
+// writes uCloudShadowEnabled / Map / Matrix0 / Strength ONCE, into shared `{value}`
+// objects the registry's terrain materials point at (bound lazily at a push,
+// unbound to a frozen copy when they leave the registry). Every material holds
+// the value the per-material loops would leave, at every moment; a registry
+// entry the shipped loop would throw on sends the whole push back to it.
+// docs/2026-10-26-rust-hotspots-2.md §G1.
+let _hotTerrainShared;
+function hotTerrainSharedOn() {
+  if (_hotTerrainShared === undefined) _hotTerrainShared = rustFlag('hotTerrainShared', false);
+  return _hotTerrainShared;
+}
+/** Test seam: force `?hotTerrainShared` for this module (`undefined` re-reads the URL). */
+export function __setHotTerrainSharedForTest(on) {
+  _hotTerrainShared = on === undefined ? undefined : !!on;
+}
+
+// 2026-10-26 (lane F hot spots) — `?hotCloudPush` (DEFAULT ON since 2026-10-26;
+// `=off` escape): the two per-material loops of
+// `_pushCloudShadowsToTerrain` with every uniform looked up ONCE per material
+// (the shipped loops re-read `u.uCloudShadowEnabled` three times and walk the
+// ~150-entry uniforms objects again for each write) and the cloud shadow
+// matrix's 16 source elements read once per frame instead of once per material
+// (Matrix4.copy re-reads them). Same uniforms, same values, same write
+// conditions, same order; a destination that is not a plain Matrix4 still
+// gets `.copy()`. 1070 2026-10-23 run: 0.066 ms/frame self for the push.
+let _hotCloudPush;
+function hotCloudPushEnabled() {
+  if (_hotCloudPush === undefined) _hotCloudPush = rustFlag('hotCloudPush', true);
+  return _hotCloudPush;
+}
+/** Test seam: force `?hotCloudPush` (`undefined` re-reads the URL flag). */
+export function __setHotCloudPushForTest(on) {
+  _hotCloudPush = on === undefined ? undefined : !!on;
+}
+const _M4_COPY = THREE.Matrix4.prototype.copy;
+function _cloudShadowsOffFast(terrainMats) {
+  for (let i = 0; i < terrainMats.length; i++) {
+    const ue = terrainMats[i]?.uniforms?.uCloudShadowEnabled;
+    if (ue && ue.value !== 0.0) ue.value = 0.0;
+  }
+}
+function _cloudShadowsPushFast(terrainMats, shadowTex, src, strength) {
+  const fin = Number.isFinite(strength);
+  const e = src.elements;
+  // No elements: let the shipped loop meet that (and throw where it throws).
+  if (e == null) return false;
+  const e0 = e[0], e1 = e[1], e2 = e[2], e3 = e[3], e4 = e[4], e5 = e[5], e6 = e[6], e7 = e[7];
+  const e8 = e[8], e9 = e[9], e10 = e[10], e11 = e[11], e12 = e[12], e13 = e[13], e14 = e[14], e15 = e[15];
+  for (let i = 0; i < terrainMats.length; i++) {
+    const u = terrainMats[i]?.uniforms;
+    const ue = u?.uCloudShadowEnabled;
+    if (!ue) continue;
+    if (ue.value !== 1.0) ue.value = 1.0;
+    const um = u.uCloudShadowMap;
+    if (um.value !== shadowTex) um.value = shadowTex;
+    const mv = u.uCloudShadowMatrix0.value;
+    if (mv.copy === _M4_COPY) {
+      const te = mv.elements;
+      te[0] = e0; te[1] = e1; te[2] = e2; te[3] = e3; te[4] = e4; te[5] = e5; te[6] = e6; te[7] = e7;
+      te[8] = e8; te[9] = e9; te[10] = e10; te[11] = e11; te[12] = e12; te[13] = e13; te[14] = e14; te[15] = e15;
+    } else {
+      mv.copy(src);
+    }
+    if (fin) {
+      const us = u.uCloudShadowStrength;
+      if (us && us.value !== strength) us.value = strength;
+    }
+  }
+  return true;
+}
 
 // Storm-reactive cloud look (default ON; `?cloudWeather=off` freezes the
 // fair-weather baseline and ignores storms). 2026-08-01: the WMO
@@ -727,7 +809,11 @@ export class CloudVolume {
   _pushCloudShadowsToTerrain() {
     const ls = typeof window !== 'undefined' ? window.liveScene3d : null;
     const terrainMats = ls?.terrainMaterials;
-    if (!Array.isArray(terrainMats) || terrainMats.length === 0) return;
+    const shared = hotTerrainSharedOn();
+    if (!Array.isArray(terrainMats) || terrainMats.length === 0) {
+      if (shared) sharedReleaseCloud();
+      return;
+    }
     // Clouds-L URL knob — `?cloudShadow=off` (or runtime
     // `window.__setCloudShadowEnabled(false)`) flips uCloudShadowEnabled
     // to 0 once and skips the per-frame texture/matrix copy. Cheaper
@@ -741,7 +827,10 @@ export class CloudVolume {
     const cn = this._cloudNight;
     const sunSet = !!(cn && cn.enabled && !(cn.directFactor > 0));
     const disabled = ls?.__cloudShadowDisabled === true || sunSet;
+    const fast = hotCloudPushEnabled();
     if (disabled) {
+      if (shared && sharedPushCloudOff(terrainMats)) return;
+      if (fast) { _cloudShadowsOffFast(terrainMats); return; }
       for (const m of terrainMats) {
         const u = m?.uniforms;
         if (u?.uCloudShadowEnabled && u.uCloudShadowEnabled.value !== 0.0) {
@@ -753,7 +842,10 @@ export class CloudVolume {
     const cp = this.effect?.cloudsPass;
     const shadowTex = cp?.shadowBuffer;
     const mats = this.material?.uniforms?.shadowMatrices?.value;
-    if (!shadowTex || !mats || !mats[0]) return;
+    if (!shadowTex || !mats || !mats[0]) {
+      if (shared) sharedObserveCloud(terrainMats);
+      return;
+    }
     // Optional per-frame strength override (drives `?cloudShadowStrength=N`
     // + runtime `__setCloudShadowStrength`). Applied here so newly-baked
     // LBs pick up the value as their materials register, without the
@@ -768,6 +860,8 @@ export class CloudVolume {
     const strength = dayScaled
       ? (Number.isFinite(strengthOverride) ? strengthOverride : CLOUD_SHADOW_STRENGTH_DEFAULT) * cn.directFactor
       : strengthOverride;
+    if (shared && sharedPushCloudOn(terrainMats, shadowTex, mats[0], strength)) return;
+    if (fast && _cloudShadowsPushFast(terrainMats, shadowTex, mats[0], strength)) return;
     for (const m of terrainMats) {
       const u = m?.uniforms;
       if (!u?.uCloudShadowEnabled) continue;
@@ -881,6 +975,11 @@ export class CloudVolume {
     this.effect = null;
     this.material = null;
     this._lastState = null;
+    // ?hotTerrainShared: no further pushes — every terrain material back on its
+    // own cloud uniforms (frozen at the values it shows now), nothing retained.
+    if (hotTerrainSharedOn()) {
+      try { sharedReleaseCloud(); } catch (_) { /* tear-down */ }
+    }
     // Drop the shadow-cadence wrappers (back to the vendor methods).
     if (this._shadowCadence) {
       this._shadowCadence.uninstall();
@@ -926,6 +1025,9 @@ if (typeof window !== 'undefined') {
     const v = +s;
     if (!Number.isFinite(v)) return null;
     if (window.liveScene3d) window.liveScene3d.__cloudShadowStrength = v;
+    // ?hotTerrainShared: this writer is not the push — put every material back
+    // on its own uCloudShadowStrength first (the next push re-binds).
+    if (hotTerrainSharedOn()) sharedUnbindCloudStrength();
     const mats = window.liveScene3d?.terrainMaterials || [];
     for (const m of mats) {
       if (m?.uniforms?.uCloudShadowStrength) {

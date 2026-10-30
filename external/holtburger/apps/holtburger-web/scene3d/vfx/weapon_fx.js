@@ -64,6 +64,8 @@ import {
 import { WFX_KIND } from "./weapon_fx_glsl.js";
 import { weaponFlex } from "./components/weaponFlex.js";
 import { weaponAura } from "./components/weaponAura.js";
+// Lane F2 (2026-10-26) — `?hotWeaponFxSync` reader (_syncDelta).
+import { rustFlag } from "../rust/scene_core.js";
 
 // ---------------------------------------------------------------------------
 // Tuning (URL-pinnable, live via window.__weaponFx)
@@ -377,15 +379,68 @@ function _copyAll(dst, src) {
   dst.needsUpdate = true;
 }
 
+// 2026-10-26 (lane F2) — `?hotWeaponFxSync` (DEFAULT OFF). The surface-field
+// mirror below reads `b[k]` / `s[k]` with a VARIABLE key over base materials of
+// several classes: megamorphic keyed loads (1070 2026-10-23 run: `_syncDelta`
+// 0.016 ms/frame self, most of it on that line). The flag runs the same loop as
+// ONE generated straight-line function over the frozen MATERIAL_SURFACE_FIELDS —
+// per key, in the same order, the same statements with named access
+// (`x = b.map; if (x !== s.map) { m.map = x; s.map = x; prog = true; }`), the
+// `_PROGRAM_FIELDS.has(k)` test resolved at generation (a module constant). Same
+// reads, writes (accessors such as Material#alphaTest run the same way) and
+// result. Compiled once, on first use; a CSP that forbids `new Function` makes
+// it null and the loop below runs (exact, slower). Lane F's hotMatVariant trick.
+let _hotWfxSync;
+function _hotWfxSyncOn() {
+  if (_hotWfxSync === undefined) _hotWfxSync = rustFlag("hotWeaponFxSync", false);
+  return _hotWfxSync;
+}
+/** Test seam (tests/hot_weapon_fx_sync.test.mjs). */
+export function __setHotWeaponFxSyncForTest(on) {
+  _hotWfxSync = on === undefined ? undefined : !!on;
+}
+const _IDENT = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
+let _syncFieldsFn; // undefined = not built yet; null = unavailable
+function _syncFields() {
+  if (_syncFieldsFn !== undefined) return _syncFieldsFn;
+  try {
+    // Strict, like this module: a write a strict loop would throw on throws here too.
+    let body = "\"use strict\";\nvar prog = false, x;\n";
+    for (const k of MATERIAL_SURFACE_FIELDS) {
+      const p = _IDENT.test(k) ? "." + k : "[" + JSON.stringify(k) + "]";
+      body += "x = b" + p + "; if (x !== s" + p + ") { m" + p + " = x; s" + p + " = x;" +
+        (_PROGRAM_FIELDS.has(k) ? " prog = true;" : "") + " }\n";
+    }
+    // eslint-disable-next-line no-new-func
+    _syncFieldsFn = new Function("b", "m", "s", body + "return prog;");
+  } catch (_) {
+    _syncFieldsFn = null;
+  }
+  return _syncFieldsFn;
+}
+/** Test seam: the generated body (null when unavailable). */
+export function __weaponFxSyncSourceForTest() {
+  const f = _syncFields();
+  return f ? String(f) : null;
+}
+/** Test seams (tests/hot_weapon_fx_sync.test.mjs): the per-frame mirror and its snapshot. */
+export function __syncDeltaForTest(rec) { _syncDelta(rec); }
+export function __snapForTest(base) { return _snap(base); }
+
 function _syncDelta(rec) {
   const b = rec.base, m = rec.mat, s = rec.snap;
   let prog = false;
-  for (const k of MATERIAL_SURFACE_FIELDS) {
-    const v = b[k];
-    if (v !== s[k]) {
-      m[k] = v;
-      s[k] = v;
-      if (_PROGRAM_FIELDS.has(k)) prog = true;
+  const gen = _hotWfxSyncOn() ? _syncFields() : null;
+  if (gen !== null) {
+    prog = gen(b, m, s);
+  } else {
+    for (const k of MATERIAL_SURFACE_FIELDS) {
+      const v = b[k];
+      if (v !== s[k]) {
+        m[k] = v;
+        s[k] = v;
+        if (_PROGRAM_FIELDS.has(k)) prog = true;
+      }
     }
   }
   const c = b.color;

@@ -51,6 +51,10 @@
 // to the GLSL ES source character set).
 
 import * as THREE from "three";
+// ?rustAnimScenery (2026-10-26, default OFF): the rows can be written by the
+// Rust kernel (scene3d/rust/anim_scenery.js); it mirrors every row allocated
+// here, in order, and the per-frame writer copies what it computed.
+import { rustAnimSceneryEnabled, rustAnimRegisterRow, rustAnimClearRows } from "./rust/anim_scenery.js";
 
 let _flag;
 /** `?animSceneryGpu` — DEFAULT ON; `off`/`0`/`false`/`no` keeps the CPU pose. */
@@ -157,11 +161,25 @@ export function poseRowFor(animId, partIdx, initMat, variant, post) {
   _rowByKey.set(key, row);
   _rows.push({ row, animId, partIdx, post: post || null });
   writePoseRow(row, initMat || null, null);
+  if (rustAnimSceneryEnabled()) rustAnimRegisterRow(row, animId, partIdx, initMat || null, post || null);
   return row;
 }
 
 /** Every allocated row (read by the per-frame update). */
 export function poseRows() { return _rows; }
+
+/**
+ * ?rustAnimScenery: copy one row the Rust kernel computed (32 f32 at
+ * `src[srcOff]`, the values writePoseRow would have stored) into the table.
+ * Same guard and the same dirty mark as writePoseRow.
+ */
+export function copyPoseRowFrom(row, src, srcOff) {
+  if (!_data || row < 0 || row >= _capacity) return;
+  const d = _data;
+  const b = row * FLOATS_PER_ROW;
+  for (let i = 0; i < FLOATS_PER_ROW; i++) d[b + i] = src[srcOff + i];
+  _dirty = true;
+}
 
 /** Once per frame, after the rows are written: schedule the texture upload. */
 export function flushPoseTable() {
@@ -394,6 +412,7 @@ export function disposeAnimSceneryGpu() {
   for (const v of [..._live.keys()]) _drop(v);
   _rows.length = 0;
   _rowByKey.clear();
+  rustAnimClearRows();
   if (_tex) { try { _tex.dispose(); } catch (_) {} }
   _tex = null;
   _data = null;

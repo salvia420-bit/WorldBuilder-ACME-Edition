@@ -69,6 +69,19 @@ function _initialParticlesRetail() {
 /** Test-only: forget the cached `?initialParticlesRetail` read. */
 export function _resetInitialParticlesRetailForTests() { _initialRetailFlag = undefined; }
 
+/**
+ * `?rustParticles`: the burst count `initEnd()` loops over (the same
+ * expression), for the Rust kernel's initEnd.
+ */
+export function initEndBurst(info) {
+  return _initialParticlesRetail()
+    ? (info.initialParticles | 0)
+    : (info.initialParticles > 0 ? info.initialParticles : info.totalParticles);
+}
+
+/** `?rustParticles`: a Rust-owned emitter's slot "factory" (nothing is built). */
+export const RUST_SHELL_SLOT_FACTORY = async () => null;
+
 // ?frozenPartFast (2026-10-20, improvement hunt entities-fx-1/-2; DEFAULT ON;
 // `=off`/`0`/`false`/`no` escape) — the particle-side reader of the switch
 // setup_rig.js documents (`frozenPartFastEnabled`; the proxy half lives there).
@@ -184,6 +197,13 @@ export class ParticleEmitter {
     // `undefined` outside updateParticles (every read resolves fresh), `null`
     // inside it until the first read resolves, then that tick's frame.
     this._tickAnchor = undefined;
+
+    // ?rustParticles (scene3d/rust/particles.js): a "shell" whose slots and
+    // simulation live in the Rust kernel. setInfo keeps the cap + the same
+    // awaits but builds no slot meshes or Particles; the manager registers
+    // the shell with the kernel instead of calling initEnd().
+    this._rustShell = opts.rustShell === true;
+    this._rustHandle = -1;
   }
 
   /**
@@ -294,6 +314,27 @@ export class ParticleEmitter {
     }
 
     const n = effectiveMax;
+    if (this._rustShell) {
+      // `new Array(n)` below throws for a length that is not a uint32; so does
+      // the shell, so an invalid cap fails addEmitter the same way.
+      if ((n >>> 0) !== n) throw new RangeError("Invalid array length");
+      // ?rustParticles shell: the tail below without the slot build. The
+      // initial working set is only COUNTED (`_createdSlots`, handed to the
+      // kernel), through the same awaits `_createSlots` takes (one per slot
+      // plus this one), so concurrent addEmitter calls interleave — and
+      // register — in the same order as on the JS path.
+      this.parts = [];
+      this.partStorage = [];
+      this.particles = [];
+      this._createdSlots = 0;
+      this._growing = false;
+      this._shellSlotCap = n;
+      const shellAlloc = _eagerParticleSlots()
+        ? n
+        : Math.min(n, Math.max((this.info.initialParticles | 0) + SLOT_PREALLOC_HEADROOM, SLOT_PREALLOC_MIN));
+      await this._createShellSlots(shellAlloc);
+      return true;
+    }
     this.parts = new Array(n).fill(null);
     this.partStorage = new Array(n).fill(null);
     this.particles = new Array(n).fill(null);
@@ -307,6 +348,15 @@ export class ParticleEmitter {
       : Math.min(n, Math.max((this.info.initialParticles | 0) + SLOT_PREALLOC_HEADROOM, SLOT_PREALLOC_MIN));
     await this._createSlots(initialAlloc);
     return true;
+  }
+
+  /** `_createSlots` for a shell: same awaits, count only. */
+  async _createShellSlots(target) {
+    const cap = Math.min(target | 0, this._shellSlotCap | 0);
+    for (let i = this._createdSlots; i < cap; i++) {
+      await this._meshFactory(i);
+      if (i + 1 > this._createdSlots) this._createdSlots = i + 1;
+    }
   }
 
   /**

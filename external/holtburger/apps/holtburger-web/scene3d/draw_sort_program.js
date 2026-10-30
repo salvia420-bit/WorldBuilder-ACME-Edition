@@ -33,8 +33,21 @@
 // program: the item's coarse depth band (depth_band_sort.js), nearer first.
 
 import { depthBandsLive } from "./depth_band_sort.js";
+import { rustFlag } from "./rust/scene_core.js";
 
 let _flag;
+let _itemFlag; // undefined => read `?hotDrawSort` once (see makeProgramSort)
+
+/** `?hotDrawSort` (lane F hot spots, 2026-10-26) — DEFAULT ON since 2026-10-26;
+ *  `=off` is the escape. See `_makeItemMemoSort`. */
+export function hotDrawSortEnabled() {
+  if (_itemFlag === undefined) _itemFlag = rustFlag("hotDrawSort", true);
+  return _itemFlag;
+}
+/** Test seam: force `?hotDrawSort` (`undefined` re-reads the URL flag). */
+export function __setHotDrawSortForTest(on) {
+  _itemFlag = on === undefined ? undefined : !!on;
+}
 /** The program-grouped opaque sort. DEFAULT-ON (2026-10-05); only an explicit
  *  off-form (`?drawSortProgram=off`/`0`/`false`/`no`) disarms it. Measured:
  *  the 1070 live probe 252 -> 153 program switches per frame (-39%), the
@@ -59,6 +72,12 @@ export function drawSortProgramEnabled() {
  *  shells/statics/cells/entities still holds and programs group inside each
  *  phase. */
 export function makeProgramSort(renderer, phaseOf = null) {
+  if (hotDrawSortEnabled()) return _makeItemMemoSort(renderer, phaseOf);
+  return _makeReferenceSort(renderer, phaseOf);
+}
+
+/** The comparator as it shipped (flag off); the `?hotDrawSort` reference. */
+export function _makeReferenceSort(renderer, phaseOf = null) {
   // `renderer.properties` / `renderer.info` are read at each use, not held: a
   // WebGL context restore replaces both (three initGLContext), and the held
   // ones froze the frame stamp (every memo a hit) on a dead program map.
@@ -92,6 +111,108 @@ export function makeProgramSort(renderer, phaseOf = null) {
       const pa = programKey(a.material), pb = programKey(b.material);
       if (pa !== pb) return pa - pb;
       return a.material.id - b.material.id;
+    }
+    if (a.materialVariant !== b.materialVariant) return a.materialVariant - b.materialVariant;
+    if (a.z !== b.z) return a.z - b.z;
+    return a.id - b.id;
+  };
+}
+
+// ── `?hotDrawSort` — the same comparator over a per-ITEM memo ───────────────
+// THE COST (1070, 2026-10-23 run: 0.18 ms/frame self, ~16k calls per main-pass
+// sort of ~1,550 items). Every comparison re-derived each side's keys from the
+// objects behind the render item: `phaseOf(item.object)` twice (two calls and a
+// megamorphic `__hbPunchPhase` load on Mesh / BatchedMesh / InstancedMesh /
+// SkinnedMesh …), `item.material.id` (megamorphic: every material class) and,
+// at the program level, `programKey` (three megamorphic memo loads on the
+// material plus the renderer.info chain) — per side, per comparison.
+//
+// THE MEMO. Those values cannot change during one sort, so each render item
+// carries them, computed the first time the item is compared in a sort and
+// read back as plain fields of three's render-item objects (one hidden class):
+//   __dspPh  phaseOf(item.object)          (eager, as the reference calls it
+//                                           for every item it compares)
+//   __dspId  item.material.id              (eager; ids are immutable)
+//   __dspK   programKey(item.material)     (LAZY: computed only when a
+//                                           comparison reaches the program
+//                                           level, so exactly the materials the
+//                                           reference asks `renderer.properties`
+//                                           about get asked, in the same frame)
+// The memo holds NO references, only numbers and the stamp: three's
+// WebGLRenderList.finish() nulls object / geometry / material / group on the
+// pooled items a shorter frame leaves unused, so evicted meshes and materials
+// can be collected (2026-10-26 review: an earlier cut also kept the item's
+// object and material in the memo and pinned every evicted mesh until its
+// slot was reused). A memo is valid for one sort: stamped with one object per
+// (comparator, `renderer.info.render.frame` value), and three r184 increments
+// the frame once per render(), right AFTER the sort and before the shadow pass,
+// so two sorts never share a stamp. If a render() throws between its
+// `renderListStack.push` and the end (no try/finally in r184), the stack keeps
+// that list for good and every later render of the scene sorts a deeper list,
+// whose items carry stamps of earlier frame values — the aborted sort's stamps
+// are never read again. Every other key (groupOrder, renderOrder, __hbBand,
+// materialVariant, z, id) is read live, and the program key is asked of the
+// item's live material. The decision ladder, each key's arithmetic and so the
+// SIGN of every comparison are the reference's, so V8's TimSort makes the same
+// comparisons and produces the same order element by element, ties included.
+//
+// The one case this does not cover, documented rather than hidden: a render()
+// NESTED inside another render's object callbacks (onBeforeRender …) that throws
+// in or after its sort and whose exception the callback swallows. The outer
+// render then pops the nested entry and leaves its own, so the next render of
+// that scene can sort the nested list again under the same frame value, and
+// items three re-pointed in between would read the aborted sort's memo. Nothing
+// in the tree renders from inside a render callback, and three's own
+// render-state stack is left mismatched in that case anyway.
+function _makeItemMemoSort(renderer, phaseOf = null) {
+  const tok = {};
+  function programKey(material) {
+    const frame = renderer.info.render.frame;
+    if (material.__dspTok === tok && material.__dspFrame === frame) return material.__dspKey;
+    const p = renderer.properties.get(material).currentProgram;
+    const key = p ? p.id : Number.MAX_SAFE_INTEGER;
+    material.__dspTok = tok;
+    material.__dspFrame = frame;
+    material.__dspKey = key;
+    return key;
+  }
+  const phased = phaseOf !== null;
+  // The stamp: one object per (this comparator, frame value), so a single
+  // identity compare checks both (another comparator's items never match).
+  let cur = { frame: NaN };
+  // Values first (a throwing phaseOf leaves the item unstamped, as it leaves
+  // the reference's comparison unfinished), then the fields in one fixed order
+  // so every stamped item shares one hidden class. Numbers only (see above).
+  function stamp(it, s) {
+    const ph = phased ? phaseOf(it.object) : 0;
+    const id = it.material.id;
+    it.__dspS = s;
+    it.__dspPh = ph;
+    it.__dspId = id;
+    it.__dspK = undefined;
+  }
+  return function programSortStable(a, b) {
+    const frame = renderer.info.render.frame;
+    let s = cur;
+    if (s.frame !== frame) s = cur = { frame };
+    if (a.__dspS !== s) stamp(a, s);
+    if (b.__dspS !== s) stamp(b, s);
+    if (phased) {
+      const pa = a.__dspPh, pb = b.__dspPh;
+      if (pa !== pb) return pa - pb;
+    }
+    if (a.groupOrder !== b.groupOrder) return a.groupOrder - b.groupOrder;
+    if (a.renderOrder !== b.renderOrder) return a.renderOrder - b.renderOrder;
+    if (depthBandsLive && a.__hbBand !== b.__hbBand) return a.__hbBand - b.__hbBand;
+    const ia = a.__dspId, ib = b.__dspId;
+    if (ia !== ib) {
+      // The reference evaluates programKey(a) before programKey(b).
+      let pa = a.__dspK;
+      if (pa === undefined) pa = a.__dspK = programKey(a.material);
+      let pb = b.__dspK;
+      if (pb === undefined) pb = b.__dspK = programKey(b.material);
+      if (pa !== pb) return pa - pb;
+      return ia - ib;
     }
     if (a.materialVariant !== b.materialVariant) return a.materialVariant - b.materialVariant;
     if (a.z !== b.z) return a.z - b.z;

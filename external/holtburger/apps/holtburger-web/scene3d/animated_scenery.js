@@ -59,7 +59,18 @@ import { softenCanopyGroups } from "./canopy_soften.js";
 import {
   animSceneryGpuEnabled, animInstMaterialFor, poseRowFor, poseRows, writePoseRow,
   flushPoseTable, syncAnimInstMaterials, animSceneryGpuDiag, disposeAnimSceneryGpu, posedMatrixFromRow,
+  copyPoseRowFrom,
 } from "./anim_scenery_gpu.js";
+// ?rustAnimScenery (2026-10-26, DEFAULT ON since 2026-10-26; `=off` escape) — the per-DID
+// template pose (mixer step, SetOmega orbit, GPU pose rows) in ONE wasm call
+// per frame. Bridge + rationale: scene3d/rust/anim_scenery.js,
+// docs/2026-10-26-rust-anim-terrain.md.
+import {
+  rustAnimSceneryEnabled, rustAnimRegisterGroup, rustAnimUnregisterGroup, rustAnimAdvance,
+  rustAnimWriteBack, rustAnimRowWritten, rustAnimRows, rustAnimRowsOk, rustAnimMixerTime,
+  rustAnimFallback, rustAnimReset, rustAnimSceneryStats, ANIM_ROW_FLOATS,
+} from "./rust/anim_scenery.js";
+import { rustFlag } from "./rust/scene_core.js";
 
 const METERS_PER_LANDBLOCK = 192.0;
 const DEFAULT_ANIM_FPS = 30.0;
@@ -622,6 +633,165 @@ function _isParkedLbMemo(node) {
   return v;
 }
 
+// ?rustAnimSceneryGate (2026-10-26, DEFAULT ON since 2026-10-26; `=off` escape) — the rAF
+// loop's per-instance gate without the per-instance pointer chase: lane D's
+// share of the work that cannot move to Rust (it reads the three.js graph).
+// 1070 profiles (2026-10-23): the loop body is ~0.11-0.14 ms of the ~0.21-0.25
+// ms/frame loop, ~3,400 instances, most in parked landblocks. Per instance it
+// walked `inst → node → parent…` (`_isOrphaned`) and `inst → node → userData
+// → landblockId` (a HeapNumber) into a Map keyed by that number
+// (`_isParkedLbMemo`): four dependent loads on objects scattered across the
+// heap. A node-profiled laptop run of 3,440 instances (3,360 parked) puts
+// ~80 % of the loop on exactly those loads. Same answers, from the instance:
+//   - parent: the instance mirrors `node.parent` (`_gp`), kept current by the
+//     node's own 'added' / 'removed' events. Every parent change in this
+//     codebase dispatches them: three r184 add / remove / attach /
+//     removeFromParent / clear, and scene3d/bulk_child_remove.js (the LRU's
+//     park / evict path, which dispatches the same events in the same order;
+//     its only silent write restores a parent it never really removed). An
+//     anchor with no parent is its own root, and anchors are THREE.Group,
+//     never a Scene, so it is orphaned.
+//   - root / visibility of the parent chain: walked once per distinct parent
+//     per frame (every instanced anchor shares staticsGroup); nothing inside
+//     the synchronous loop changes the graph or a `visible` flag.
+//   - parked: the landblock id is read once at registration (`_glb`; an
+//     anchor's userData.landblockId is written once, at build, and never
+//     re-assigned — grep-verified 2026-10-26) and resolves to a per-landblock
+//     record stamped with the loop's frame, so the LRU is still asked once
+//     per landblock per frame.
+//   - the parked majority is not even touched: an instance the loop left
+//     DETACHED (parent null, the LRU's park), parked and collapsed is marked
+//     stable in a flat array parallel to `_instances`. Until an anchor gets an
+//     'added' event (the only way out of "detached") or its landblock stops
+//     being parked, the loop's whole work for it is "parked → already
+//     collapsed → next", so a stable entry whose landblock record still reads
+//     parked this frame is skipped from two typed-array reads. Any 'added'
+//     since the last frame turns the skip off for one full pass.
+// Default ON since 2026-10-26 (exact); `?rustAnimSceneryGate=off` is the escape.
+let _gateFlag = null;
+export function animSceneryGateEnabled() {
+  if (_gateFlag === null) _gateFlag = rustFlag("rustAnimSceneryGate", true);
+  return _gateFlag;
+}
+/** Test seam: true/false forces, undefined re-reads the URL. */
+export function __setAnimSceneryGateForTest(v) { _gateFlag = v === undefined ? null : !!v; }
+
+const _gateStats = { tracked: 0, chainWalks: 0, lbQueries: 0, untracked: 0, stableSkips: 0, fullPasses: 0 };
+const _lbRecs = new Map(); // landblockId -> { lb, idx, stamp, parked }
+const _lbRecList = [];     // idx -> record
+function _lbRecOf(lb) {
+  let rec = _lbRecs.get(lb);
+  if (rec === undefined) {
+    rec = { lb, idx: _lbRecList.length, stamp: -1, parked: false };
+    _lbRecs.set(lb, rec);
+    _lbRecList.push(rec);
+  }
+  return rec;
+}
+/** `_isParkedLb(node)` from the landblock id `_isParkedLb` would read. */
+function _isParkedLbId(lb) {
+  try {
+    if (lb == null) return false;
+    if (typeof window === "undefined") return false;
+    const lru = window.liveScene3d?.landblockLru || window.__landblockLru || null;
+    return lru?.isParked?.(lb >>> 0) === true;
+  } catch (_) {
+    return false;
+  }
+}
+// Flat state parallel to `_instances` (same index; push appends, the loop's
+// splice shifts it, dispose clears it). In sync iff `_gxLen === _instances.length`
+// (an instance registered with the gate off breaks the sync: no skipping).
+const GX_STABLE = 1;
+let _gxState = new Uint8Array(1024);
+let _gxLb = new Int32Array(1024);
+let _gxLen = 0;
+let _gateAddedSince = false; // an anchor got 'added' since the last loop
+function _gxAppend(rec) {
+  if (_gxLen >= _gxState.length) {
+    const ns = new Uint8Array(_gxState.length * 2); ns.set(_gxState); _gxState = ns;
+    const nl = new Int32Array(_gxLb.length * 2); nl.set(_gxLb); _gxLb = nl;
+  }
+  _gxState[_gxLen] = 0;
+  _gxLb[_gxLen] = rec ? rec.idx : -1;
+  _gxLen += 1;
+}
+/** Registration (attachAnimatedScenery / attachWindTrees, after the node is
+ *  parented): mirror the parent and the landblock on the instance. */
+function _gateTrack(inst) {
+  const node = inst.node;
+  if (!node || typeof node.addEventListener !== "function") return;
+  // In sync only if every earlier instance was tracked (it is pushed last).
+  const inSync = _gxLen === _instances.length - 1;
+  inst._gp = node.parent;
+  const lb = node.userData ? node.userData.landblockId : undefined;
+  inst._glb = lb;
+  inst._lbRec = lb == null ? null : _lbRecOf(lb);
+  node.addEventListener("added", () => { inst._gp = node.parent; _gateAddedSince = true; });
+  node.addEventListener("removed", () => { inst._gp = node.parent; });
+  if (inSync) _gxAppend(inst._lbRec);
+  _gateStats.tracked += 1;
+}
+// Single-entry parent cache (every instanced anchor sits under staticsGroup)
+// with a per-frame WeakMap behind it (cell containers, re-parented anchors).
+let _gateP = null;
+let _gatePStamp = -1;
+let _gatePRoot = false;
+let _gatePVis = true;
+const _gateChains = new WeakMap(); // parent -> { stamp, root, vis } (never retains a parent)
+function _gateChain(P) {
+  if (P === _gateP && _gatePStamp === _poseFrame) return;
+  let e = _gateChains.get(P);
+  if (e === undefined || e.stamp !== _poseFrame) {
+    let root = P;
+    while (root.parent) root = root.parent;
+    let vis = true;
+    for (let o = P; o; o = o.parent) if (o.visible === false) { vis = false; break; }
+    if (e === undefined) {
+      e = { stamp: _poseFrame, root: root.isScene === true, vis };
+      _gateChains.set(P, e);
+    } else {
+      e.stamp = _poseFrame;
+      e.root = root.isScene === true;
+      e.vis = vis;
+    }
+    _gateStats.chainWalks += 1;
+  }
+  _gateP = P;
+  _gatePStamp = _poseFrame;
+  _gatePRoot = e.root;
+  _gatePVis = e.vis;
+}
+/** `_isOrphaned(inst.node)`, from the mirrored parent. */
+function _gateOrphaned(inst) {
+  const P = inst._gp;
+  if (P === undefined) { _gateStats.untracked += 1; return _isOrphaned(inst.node); }
+  if (!P) return true; // detached: the anchor Group is its own root
+  _gateChain(P);
+  return !_gatePRoot;
+}
+/** `_anchorVisible(inst.node)`, the chain above the anchor memoised. */
+function _gateAnchorVisible(inst) {
+  const node = inst.node;
+  if (node.visible === false) return false;
+  const P = inst._gp === undefined ? node.parent : inst._gp;
+  if (!P) return true;
+  _gateChain(P);
+  return _gatePVis;
+}
+/** `_isParkedLbMemo(inst.node)`, from the instance's landblock record. */
+function _gateParked(inst) {
+  const rec = inst._lbRec;
+  if (rec === undefined) return _isParkedLbMemo(inst.node);
+  if (rec === null) return false;
+  if (rec.stamp !== _poseFrame) {
+    rec.parked = _isParkedLb(inst.node);
+    rec.stamp = _poseFrame;
+    _gateStats.lbQueries += 1;
+  }
+  return rec.parked;
+}
+
 /**
  * Get-or-create the shared driver for an animation DID: fetch the keyframes
  * once, build the clip + a non-rendered template Group of part subgroups, and a
@@ -670,8 +840,63 @@ async function getOrCreateDidGroup(animId, wasmExports) {
     // points of their circles — as in retail, where they all tick together).
     omega, orbitAngle: 0, orbitQ: new THREE.Quaternion(),
   };
+  // ?rustAnimScenery: the kernel advances this group instead of its mixer
+  // (the same clip inputs; `_rust` stays unset when it cannot take it).
+  if (rustAnimSceneryEnabled()) {
+    _rustAdopt(group, action, animId, frames, numParts, numFrames, animSceneryFps(), false);
+    // A concurrent call for this DID (two bakes awaiting one setup's shared
+    // geometry, or the unawaited cells.js attach) passed the `existing` check
+    // while fetchAnimation was in flight and already put ITS group in the map.
+    // The set below drops that group (with the flag off it is just garbage),
+    // so the kernel must drop it too, or it would keep stepping it and later
+    // rows could bind to it. Order: the new group is registered first (the
+    // kernel rebinds every row of this DID to it), then the old one goes.
+    const prev = _didGroups.get(animId);
+    if (prev && prev !== group && prev._rust) {
+      rustAnimUnregisterGroup(prev);
+      _rustGroupCount -= 1;
+    }
+  }
   _didGroups.set(animId, group);
   return group;
+}
+
+// ?rustAnimScenery bookkeeping: how many live groups the kernel advances.
+let _rustGroupCount = 0;
+function _rustAdopt(group, action, key, frames, numParts, numFrames, fps, closedLoop) {
+  group._action = action;
+  if (rustAnimRegisterGroup(group, typeof key === "number" ? key : 0, frames, numParts, numFrames, fps, closedLoop)) {
+    _rustGroupCount += 1;
+  }
+}
+
+/**
+ * Advance every shared driver ONCE and write the GPU pose rows. Flag off (or
+ * no kernel): each group's mixer + orbit, then `_updateGpuPoseRows` — the
+ * code as it was. ?rustAnimScenery: one kernel call, then the template parts
+ * / orbit written back and the kernel's rows copied; a group the kernel does
+ * not hold still runs its mixer. A kernel failure hands every group back to
+ * its mixer (clocks synced) and the JS path continues.
+ */
+function _advanceDidGroups(dt) {
+  if (_rustGroupCount > 0) {
+    if (rustAnimAdvance(dt, animSceneryOmegaHz())) {
+      for (const g of _didGroups.values()) {
+        if (g._rust) { rustAnimWriteBack(g); continue; }
+        try { g.mixer.update(dt); } catch (_) {}
+        _advanceOrbit(g, dt);
+      }
+      _updateGpuPoseRows(true);
+      return;
+    }
+    rustAnimFallback(_didGroups.values());
+    _rustGroupCount = 0;
+  }
+  for (const g of _didGroups.values()) {
+    try { g.mixer.update(dt); } catch (_) {}
+    _advanceOrbit(g, dt);
+  }
+  _updateGpuPoseRows();
 }
 
 /** Advance a DID group's SetOmega orbit (no-op without one). */
@@ -851,6 +1076,7 @@ export async function attachAnimatedScenery(scene3d, placements, wasmExports, op
         _instances.push({ node: r.node, parts: r.parts, animId: r.animId, key,
           baseQuat: r.node.quaternion.clone() });
       }
+      if (animSceneryGateEnabled()) _gateTrack(_instances[_instances.length - 1]);
       _ensureRaf();
       built += 1;
     } else {
@@ -1158,13 +1384,22 @@ function _partMatsFor(g) {
  * ?animSceneryGpu — once per frame, after the mixers + orbits advanced: write
  * each (DID, part) row of the pose table the GPU-posed buckets read.
  */
-function _updateGpuPoseRows() {
+function _updateGpuPoseRows(rustRows) {
   const rows = poseRows();
   if (rows.length === 0) return;
+  // ?rustAnimScenery: rows of kernel-held groups were computed by
+  // rustAnimAdvance this frame (row index i = table row i + 1, in lockstep);
+  // the kernel wrote a row exactly when this loop would (group present, part
+  // in range), so copying it is the same write.
+  const kRows = rustRows === true && rustAnimRowsOk() ? rustAnimRows() : null;
   for (let i = 0; i < rows.length; i++) {
     const r = rows[i];
     const g = _didGroups.get(r.animId);
     if (!g) continue;
+    if (kRows !== null && g._rust) {
+      if (rustAnimRowWritten(i)) copyPoseRowFrom(r.row, kRows, i * ANIM_ROW_FLOATS);
+      continue;
+    }
     const pm = _partMatsFor(g)[r.partIdx];
     if (!pm) continue;
     // ?animSceneryUnbake: a row with `post` draws P(t) * U (see poseRowFor).
@@ -1354,6 +1589,8 @@ function getOrCreateWindGroup(groupKey, numParts, rig, windParams, bakedClip) {
   action.setLoop(THREE.LoopRepeat, Infinity);
   action.play();
   const group = { mixer, template, parts, numParts, refCount: 0 };
+  // ?rustAnimScenery: same clip inputs (the synthetic wind clip is closed-loop).
+  if (rustAnimSceneryEnabled()) _rustAdopt(group, action, 0, frames, numParts, numFrames, fps, true);
   _didGroups.set(groupKey, group);
   return group;
 }
@@ -1565,6 +1802,7 @@ export async function attachWindTrees(scene3d, placements, wasmExports, opts) {
     parent.add(r.node);
     g.refCount += 1;
     _instances.push({ node: r.node, parts: r.parts, animId: groupKey, key });
+    if (animSceneryGateEnabled()) _gateTrack(_instances[_instances.length - 1]);
     _ensureRaf();
     built += 1;
   }
@@ -1620,6 +1858,7 @@ function _disposeDidGroup(animId) {
   const g = _didGroups.get(animId);
   if (!g) return;
   try { g.mixer.stopAllAction(); } catch (_) {}
+  if (g._rust) { rustAnimUnregisterGroup(g); _rustGroupCount -= 1; }
   _didGroups.delete(animId);
 }
 function _ensureRaf() {
@@ -1636,14 +1875,21 @@ function _ensureRaf() {
     _poseFrame += 1;
     _parkedMemo.clear();
     // Advance each SHARED DID mixer ONCE (a handful, not one-per-placement),
-    // and its retail SetOmega orbit (?animSceneryOmega).
-    for (const g of _didGroups.values()) {
-      try { g.mixer.update(dt); } catch (_) {}
-      _advanceOrbit(g, dt);
+    // and its retail SetOmega orbit (?animSceneryOmega); ?animSceneryGpu: one
+    // pose-table row per (DID, part) instead of a matrix per instance slot.
+    // (?rustAnimScenery: all of it in one kernel call.)
+    _advanceDidGroups(dt);
+    // ?rustAnimSceneryGate: the per-instance gate reads memoised parent-chain
+    // and landblock answers (same answers, see `_gateOrphaned`).
+    const gate = animSceneryGateEnabled();
+    let gx = false;    // the flat state is in sync with _instances
+    let skip = false;  // ...and no anchor was re-attached since the last loop
+    if (gate) {
+      gx = _gxLen === _instances.length;
+      skip = gx && !_gateAddedSince;
+      _gateAddedSince = false;
+      if (!skip) _gateStats.fullPasses += 1;
     }
-    // ?animSceneryGpu: one pose-table row per (DID, part) instead of a matrix
-    // per instance slot.
-    _updateGpuPoseRows();
     // Distance tick-cull: only COPY the animated pose onto instances within the
     // camera radius (now 800 m — distant sway is wanted); beyond it they freeze.
     const radSq = tickRadiusSq();
@@ -1661,26 +1907,44 @@ function _ensureRaf() {
     const acThreeScratch = new THREE.Vector3();
     // Iterate backwards so we can splice evicted instances in place.
     for (let i = _instances.length - 1; i >= 0; i--) {
+      if (skip && _gxState[i] === GX_STABLE) {
+        // ?rustAnimSceneryGate: detached + parked + collapsed last frame and
+        // no 'added' since — the loop below would do nothing for it.
+        const rec = _lbRecList[_gxLb[i]];
+        if (rec.stamp !== _poseFrame) {
+          rec.parked = _isParkedLbId(rec.lb);
+          rec.stamp = _poseFrame;
+          _gateStats.lbQueries += 1;
+        }
+        if (rec.parked) { _gateStats.stableSkips += 1; continue; }
+      }
       const inst = _instances[i];
-      if (_isOrphaned(inst.node)) {
+      if (gx) _gxState[i] = 0;
+      if (gate ? _gateOrphaned(inst) : _isOrphaned(inst.node)) {
         // Detached ≠ evicted under warm-park: the pool still intends to
         // re-attach this node. Skip it (it is invisible and un-posed while
         // parked) and reclaim on the tick after the pool true-disposes it.
         // See `_isParkedLb`.
-        if (_isParkedLbMemo(inst.node)) {
+        if (gate ? _gateParked(inst) : _isParkedLbMemo(inst.node)) {
           if (inst.instanced) _collapseInstanced(inst);
+          if (gx && inst._gp === null && inst._lbRec) _gxState[i] = GX_STABLE;
           continue;
         }
         if (inst.instanced) _reclaimInstancedSlots(inst); // shared geometry — reclaim slots, dispose nothing
         try { inst.node.traverse((o) => { if (o.isMesh) o.geometry?.dispose?.(); }); } catch (_) {}
         _builtKeys.delete(inst.key);
         _instances.splice(i, 1);
+        if (gx) {
+          _gxState.copyWithin(i, i + 1, _gxLen);
+          _gxLb.copyWithin(i, i + 1, _gxLen);
+          _gxLen -= 1;
+        }
         const g = _didGroups.get(inst.animId);
         if (g && --g.refCount <= 0) _disposeDidGroup(inst.animId);
         continue;
       }
       if (inst.instanced) {
-        if (!_anchorVisible(inst.node)) { _collapseInstanced(inst); continue; }
+        if (!(gate ? _gateAnchorVisible(inst) : _anchorVisible(inst.node))) { _collapseInstanced(inst); continue; }
         if (inst.collapsed) {
           // Showing again: restore the pose now, even past the distance cull
           // below (which would otherwise leave it collapsed indefinitely).
@@ -1723,11 +1987,7 @@ function _ensureRaf() {
 export function tickAnimatedScenery(dt) {
   const d = Number.isFinite(dt) ? dt : 0;
   _poseFrame += 1;
-  for (const g of _didGroups.values()) {
-    try { g.mixer.update(d); } catch (_) {}
-    _advanceOrbit(g, d);
-  }
-  _updateGpuPoseRows();
+  _advanceDidGroups(d);
   for (const inst of _instances) {
     const g = _didGroups.get(inst.animId);
     if (!g) continue;
@@ -1744,10 +2004,21 @@ export function tickAnimatedScenery(dt) {
   syncAnimInstMaterials();
 }
 
+/** Test seam (tools/rust_parity/gen_anim_scenery.mjs): the live shared
+ *  drivers, keyed by animation DID (wind groups by their string key).
+ *  Read-only by convention. */
+export function __animSceneryGroupsForTest() {
+  return _didGroups;
+}
+
 /** Diagnostic snapshot for the local visual A/B. */
 export function animatedSceneryDiag() {
   let maxTime = 0;
-  for (const g of _didGroups.values()) if (g.mixer.time > maxTime) maxTime = g.mixer.time;
+  for (const g of _didGroups.values()) {
+    // ?rustAnimScenery: a kernel-held group's mixer is not advanced.
+    const t = g._rust ? rustAnimMixerTime(g) : g.mixer.time;
+    if (t > maxTime) maxTime = t;
+  }
   let instanced = 0;
   for (const inst of _instances) if (inst.instanced) instanced += 1;
   let orbitingDids = 0;
@@ -1771,6 +2042,8 @@ export function animatedSceneryDiag() {
     // ?animSceneryUnbake: setups/parts whose baked frame is undone, and where
     // U came from (fetchSetupPartPose vs the hinge fallback).
     unbake: { enabled: animSceneryUnbakeEnabled(), ..._unbakeStats, cachedPoses: _bakePoseCache.size },
+    ...(rustAnimSceneryEnabled() ? { rustAnimScenery: { ...rustAnimSceneryStats(), groupsHeld: _rustGroupCount } } : {}),
+    ...(animSceneryGateEnabled() ? { gate: { ..._gateStats } } : {}),
   };
 }
 
@@ -1812,10 +2085,17 @@ export function disposeAnimatedScenery(_scene3d) {
   }
   for (const g of _didGroups.values()) {
     try { g.mixer.stopAllAction(); } catch (_) {}
+    if (g._rust) rustAnimUnregisterGroup(g);
   }
   _instances.length = 0;
   _didGroups.clear();
   _builtKeys.clear();
+  rustAnimReset();
+  _rustGroupCount = 0;
+  _lbRecs.clear();
+  _lbRecList.length = 0;
+  _gxLen = 0;
+  _gateAddedSince = false;
   // Instanced buckets + shared geometry (module-owned, never per-instance).
   for (const b of _bucketList) {
     try { b.mesh.parent?.remove(b.mesh); b.mesh.dispose(); } catch (_) {}

@@ -10,6 +10,7 @@ members = [
     "crates/holtburger-protocol",
     "crates/holtburger-manifest",
     "crates/holtburger-resource-http",
+    "crates/holtburger-scene",
     "crates/holtburger-scenery-bake",
     "crates/holtburger-suite-bake",
     "crates/holtburger-scripting",
@@ -41,6 +42,7 @@ holtburger-event-bake = { path = "crates/holtburger-event-bake" }
 holtburger-protocol = { path = "crates/holtburger-protocol" }
 holtburger-manifest = { path = "crates/holtburger-manifest" }
 holtburger-resource-http = { path = "crates/holtburger-resource-http" }
+holtburger-scene = { path = "crates/holtburger-scene", default-features = false }
 holtburger-scenery-bake = { path = "crates/holtburger-scenery-bake" }
 holtburger-scripting = { path = "crates/holtburger-scripting" }
 holtburger-transport-ws = { path = "crates/holtburger-transport-ws" }

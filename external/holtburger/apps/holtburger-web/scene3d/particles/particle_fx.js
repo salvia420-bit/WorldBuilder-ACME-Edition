@@ -1195,6 +1195,8 @@ function _tier2Variant() {
 export function _setParticleFxTier2VariantForTest(v = null) {
   _tier2 = v ? Object.freeze({ motion: !!v.motion, shapes: !!v.shapes, clamp: !!v.clamp }) : null;
 }
+/** `?rustParticles`: has the tier-2 variant been latched yet (no side effect)? */
+export function particleFxTier2Latched() { return _tier2 !== null; }
 /** The latched tier-2 variant (latches it when no FX material exists yet). */
 export function particleFxTier2Variant() { return _tier2Variant(); }
 /**
@@ -1328,6 +1330,12 @@ function _nextSeed() {
   _rng ^= _rng << 13; _rng ^= _rng >>> 17; _rng ^= _rng << 5;
   return ((_rng >>> 0) % 999) / 1000; // [0, 0.998]
 }
+
+/** `?rustParticles`: the seed stream's state (`_rng >>> 0`), read before a
+ *  Rust manager tick and written back after it, so the instances the kernel
+ *  packs draw from the same sequence, in the same order, as the JS path. */
+export function particleFxSeedState() { return _rng >>> 0; }
+export function setParticleFxSeedState(v) { _rng = (v >>> 0) | 0; }
 
 /**
  * Per-slot seed with respawn detection: a slot whose particle's lifetime went

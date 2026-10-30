@@ -70,7 +70,7 @@ export function installSkipHiddenMatrix(THREE, { force = false } = {}) {
   };
   Object.defineProperty(proto, "__hbSkipHidden", { value: orig, configurable: true });
   Object.defineProperty(sceneProto, "__hbSkipHiddenScene", { value: sceneOwn, configurable: true });
-  _walkHooks = { proto, isSceneWalk: () => sceneWalk > 0, skipOn: () => ctl.on };
+  _walkHooks = { proto, method: proto.updateMatrixWorld, isSceneWalk: () => sceneWalk > 0, skipOn: () => ctl.on };
   if (typeof window !== "undefined") {
     try {
       window.__skipHiddenMatrix = {
@@ -103,6 +103,31 @@ export function installSkipHiddenMatrix(THREE, { force = false } = {}) {
 // ---------------------------------------------------------------------------
 let _walkHooks = null;
 const _census = { walks: 0, visited: 0, hidden: 0, composed: 0, multiplied: 0, forcedOnly: 0, frozen: 0 };
+
+/**
+ * What the patched method does for a node visited RIGHT NOW, for code that
+ * walks a subtree itself and must reproduce it exactly (scene3d/entity_world.js,
+ * `?rustEntityWorld`, walks entity rig subtrees):
+ *   0 — three's full update: the patch is not installed, the walk is not
+ *       rooted at a THREE.Scene, or the live seam is off;
+ *   1 — inside a scene walk with skipping on: a node with `visible === false`
+ *       and a parent is marked stale (`matrixWorldNeedsUpdate = true`) and its
+ *       subtree is not walked;
+ *   2 — the walk census is counting: leave every node to the patched method so
+ *       that it is counted.
+ * Read-only; costs two closure calls.
+ */
+export function skipHiddenWalkMode() {
+  const h = _walkHooks;
+  if (h === null) return 0;
+  if (h.counting) return 2;
+  return h.isSceneWalk() && h.skipOn() ? 1 : 0;
+}
+
+/** The installed `Object3D.prototype.updateMatrixWorld` (null when not installed). */
+export function skipHiddenMethod() {
+  return _walkHooks === null ? null : _walkHooks.method;
+}
 
 /** Start counting scene-walk visits. Returns false when the patch is not installed. */
 export function startWalkCensus() {

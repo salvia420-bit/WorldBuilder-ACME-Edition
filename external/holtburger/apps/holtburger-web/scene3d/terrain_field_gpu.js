@@ -431,6 +431,11 @@ function sampleFieldArrays(field, key, x, y, out) {
  *   (without it every call re-walks the window).
  * @param {number} [opts.windowRadiusLb=7] clamped to 0..7.
  */
+// 2026-10-26 (lane F2, `?hotGrassCull`) — one sequence for every field, so a
+// generation stamp never repeats across fields (a rebuilt field cannot pass for
+// the one a memo was filled from).
+let _fieldGenSeq = 0;
+
 export function createTerrainFieldGpu(opts = {}) {
   const THREE = opts.THREE || null;
   const oracleOpt = opts.oracle || null;
@@ -484,6 +489,7 @@ export function createTerrainFieldGpu(opts = {}) {
   let invalidations = 0;
   let uploads = 0;
   let walks = 0;
+  let gen = ++_fieldGenSeq;
 
   function resolveOracle() {
     if (!oracleOpt) return null;
@@ -551,6 +557,9 @@ export function createTerrainFieldGpu(opts = {}) {
     if (o === lastOracle && cx === centerX && cy === centerY && ver === lastVersion) return 0;
 
     walks += 1;
+    // Everything heightRange() reads (slot arrays, centre, disposed) changes
+    // only in a walk or in dispose(): a new stamp for each.
+    gen = ++_fieldGenSeq;
     walkId += 1;
     const canLookup = !!(o && typeof o.lookup === "function");
     let changed = 0;
@@ -685,6 +694,7 @@ export function createTerrainFieldGpu(opts = {}) {
   function dispose() {
     if (disposed) return;
     disposed = true;
+    gen = ++_fieldGenSeq;
     for (const t of [fieldTex, keyTex]) {
       if (t) { try { t.dispose(); } catch (_) {} }
     }
@@ -699,6 +709,9 @@ export function createTerrainFieldGpu(opts = {}) {
     uniforms,
     update,
     heightRange,
+    /** A stamp that changes whenever heightRange() could answer differently
+     *  (unique across fields). `?hotGrassCull` keys its tile memo on it. */
+    generation: () => gen,
     sampleMirror,
     stats,
     dispose,

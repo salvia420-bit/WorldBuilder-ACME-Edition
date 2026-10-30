@@ -103,6 +103,19 @@ const PARTICLE_INIT_FRAME_ACE_LEGACY = (() => {
   }
 })();
 
+/**
+ * `?rustParticles` (scene3d/rust/particles.js): the four module-load escapes
+ * above, so the Rust kernel runs the same variants. Read-only.
+ */
+export function particleLegacyFlags() {
+  return {
+    swarmAce: SWARM_ACE_LEGACY,
+    initAce: PARTICLE_INIT_ACE_LEGACY,
+    rotEuler: PARTICLE_ROT_EULER_LEGACY,
+    initFrameAce: PARTICLE_INIT_FRAME_ACE_LEGACY,
+  };
+}
+
 const _scratchAxis = new THREE.Vector3();
 
 /**

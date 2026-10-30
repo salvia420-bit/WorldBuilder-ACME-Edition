@@ -17,7 +17,7 @@
 
 import * as THREE from "three";
 
-import { ParticleEmitter, particleFrozenPartFastEnabled } from "./particle_emitter.js";
+import { ParticleEmitter, particleFrozenPartFastEnabled, RUST_SHELL_SLOT_FACTORY } from "./particle_emitter.js";
 import { ParticleEmitterInfo } from "./particle_emitter_info.js";
 // Same mockable physics clock the emitters age on (seconds) — used by the
 // culled count-bounded stop bound below so tests can drive it deterministically.
@@ -46,6 +46,7 @@ import {
   particleFxAge,
   particleFxEnabled,
   particleFxFrame,
+  particleFxLive,
   particleFxPacked,
   particleFxRowFor,
   particleFxSeed,
@@ -62,6 +63,10 @@ import { ParticleFxKids } from "./particle_fx_kids.js";
 import { fxTier1Enabled } from "../vfx/fx_tier1.js";
 import { bindEmitterFxLight, releaseFxLight } from "../vfx/fx_lights.js";
 import { addFxDistortSource, releaseFxDistortSource } from "../vfx/fx_distort.js";
+// 2026-10-26 `?rustParticles` (DEFAULT OFF, `=on` opts in) — instanced emitters
+// simulated and packed by the Rust kernel (crates/holtburger-scene particles;
+// docs/2026-10-26-rust-particles.md). The bridge owns the wasm instance.
+import { createRustParticles, rustMotionOn, rustParticlesPending } from "../rust/particles.js";
 
 // 2026-06-20 white-box guard. When a particle's gfxobj resolves to NO
 // surface, `materialFactory` returns null. The pre-fix meshFactory then did
@@ -522,6 +527,13 @@ function _instGeometryFor(geometry) {
     geometry.addEventListener("dispose", onSourceDispose);
   }
   return g;
+}
+
+/** ?rustParticles: will `_instGeometryFor(geometry)` return a geometry? (no side effect) */
+function _instGeometryPredict(geometry) {
+  if (!geometry) return false;
+  if (_instGeomCache.has(geometry.uuid)) return true;
+  return (geometry.attributes?.position?.count ?? 0) > 0;
 }
 
 const _instColor = new THREE.Color();
@@ -1787,6 +1799,7 @@ function _forEachParticleMaterial(fn) {
   };
   for (const mgr of _allManagers) {
     for (const [, e] of mgr.particleTable) {
+      if (e._rustShell) continue; // ?rustParticles: no slot materials
       for (const m of (e.partStorage || [])) if (m) visit(m.material, false);
     }
     for (const b of mgr._instBuckets.values()) visit(b.im?.material, true);
@@ -1944,6 +1957,106 @@ export class ParticleManager {
     /** @type {ParticleFxKids|null} */
     this._kids = null;
     this._kidsOn = false;
+    // ?rustParticles (default OFF): the Rust kernel for this manager's
+    // instanced emitters, created on the first one (null = the JS path).
+    // `_jsTable` then holds the emitters the JS loop still walks (per-mesh),
+    // in table order; `_rustSeq` orders removals across both.
+    this._rust = null;
+    this._rustTried = false;
+    this._jsTable = null;
+    this._rustSeq = 0;
+    // Test seam (tools/rust_parity/gen_particles.mjs): called with the tick
+    // context right before the emitter loop. null = never.
+    this._rustTickTap = null;
+    this._rustSort = (im, n, cam) => this._rust.sortBucket(im, n, cam);
+  }
+
+  /** ?rustParticles: this manager's kernel bridge, created on first use (or null). */
+  _rustBridge() {
+    if (!this._rustTried) {
+      this._rustTried = true;
+      // `typeof`: test_particles.mjs concatenates the particle modules and
+      // strips their imports, so the bridge may not exist (= the JS path).
+      if (this._instancing && particleInstancingEnabled() && typeof createRustParticles === "function") {
+        this._rust = createRustParticles(this, this._rustDeps());
+        if (this._rust !== null) this._jsTable = new Map(this.particleTable);
+        // Asked before boot published the wasm: try again next time (the
+        // emitters added meanwhile stay on the JS loop via _jsTable).
+        else if (typeof rustParticlesPending === "function" && rustParticlesPending()) this._rustTried = false;
+      }
+    }
+    return this._rust;
+  }
+
+  /** The particle_manager internals the bridge drives (see scene3d/rust/particles.js). */
+  _rustDeps() {
+    return {
+      rp6ShouldCull: _rp6ShouldCull,
+      rp6CullSphere,
+      emitterCellHidden: _emitterCellHidden,
+      alphaMatSig: _alphaMatSig,
+      sameWorld: _sameWorld,
+      sharedAlphaBuckets,
+      sharedFrameId: () => _sharedFrameId(),
+      growBucket: _growBucket,
+      ParticleFxKids,
+      billboardLocalNormal: _billboardLocalNormal,
+      rp6Stats: PARTICLE_RP6_STATS,
+      rp6FlagSig: () => `${rp6TrueSphereEnabled() ? 1 : 0}${rp6TravelReachEnabled() ? 1 : 0}`,
+      buildSlotMesh: (shell) => this._buildRustSlotMesh(shell),
+    };
+  }
+
+  /**
+   * ?rustParticles: a carrier-shaped slot mesh for a Rust-owned emitter — the
+   * meshFactory's instanced-slot build, synchronously (film / diag readers of
+   * `parts`, and the runtime toggle OFF that hands the emitter back to JS).
+   */
+  _buildRustSlotMesh(shell) {
+    const mesh = new THREE.Mesh(shell._rustGeometry, _slotCarrierMaterial());
+    mesh.frustumCulled = false;
+    mesh.visible = false;
+    mesh.userData.__particle = true;
+    const layer = shell.renderLayer | 0;
+    if (layer > 0) mesh.layers.set(layer);
+    if (shell._baseIsAdditive !== true && particleAlphaRetailEnabled()) mesh.renderOrder = PARTICLE_ALPHA_RETAIL_ORDER;
+    return mesh;
+  }
+
+  /**
+   * ?rustParticles: the first kernel-registered shell after table key `id`
+   * (in table order), or null — where a newcomer that took an orphan's table
+   * position goes in the kernel's tick order.
+   */
+  _rustShellAfter(id) {
+    let seen = false;
+    for (const [k, e] of this.particleTable) {
+      if (seen) {
+        if (e._rustShell === true && e._rustHandle >= 0) return e;
+      } else if (k === id) {
+        seen = true;
+      }
+    }
+    return null;
+  }
+
+  /** ?rustParticles: `_jsTable` = the non-Rust emitters, in table order. */
+  _rebuildJsTable() {
+    if (this._jsTable === null) return;
+    this._jsTable.clear();
+    for (const [id, e] of this.particleTable) if (!e._rustShell) this._jsTable.set(id, e);
+  }
+
+  /** ?rustParticles: JS + kernel removals in table order (by insertion sequence). */
+  _mergeRustRemovals(jsIds, shells) {
+    const out = [];
+    let i = 0, j = 0;
+    const seqOf = (id) => (this.particleTable.get(id)?._rustSeqNo | 0);
+    while (i < jsIds.length || j < shells.length) {
+      if (j >= shells.length || (i < jsIds.length && seqOf(jsIds[i]) <= (shells[j]._rustSeqNo | 0))) out.push(jsIds[i++]);
+      else out.push(shells[j++].id);
+    }
+    return out;
   }
 
   /**
@@ -2416,6 +2529,13 @@ export class ParticleManager {
       !!baseMaterial &&
       !!this._scene;
 
+    // ?rustParticles (default OFF): an instanced emitter becomes a "shell" the
+    // Rust kernel simulates and packs (no slot meshes / Particles; see
+    // scene3d/rust/particles.js). Only when its bucket attach below cannot
+    // fail (`_instGeometryFor`'s null cases), since a shell has no per-mesh
+    // fallback.
+    const rustShell = useInst && this._rustBridge() !== null && _instGeometryPredict(geometry);
+
     const emitter = new ParticleEmitter({
       parent,
       scene: this._scene,
@@ -2423,6 +2543,7 @@ export class ParticleManager {
       // transform/opacity carriers that _appendInstances reads back).
       onMeshActive: useInst ? _NOOP : undefined,
       onMeshFree: useInst ? _NOOP : undefined,
+      rustShell,
       meshFactory: async (_slotIdx) => {
         // Slot carriers (2026-10-13): an instanced slot never renders, so it
         // takes the ONE shared carrier instead of a clone (see the note at
@@ -2494,6 +2615,12 @@ export class ParticleManager {
         return mesh;
       },
     });
+    if (rustShell) {
+      // The shell's setInfo awaits a no-op factory; the real one is kept for
+      // the runtime toggle OFF (RustParticles.convertToJs → lazy grows).
+      emitter._rustMeshFactory = emitter._meshFactory;
+      emitter._meshFactory = RUST_SHELL_SLOT_FACTORY;
+    }
     // Carried on the emitter for the instanced path (bucket keying) + diag.
     emitter.renderLayer = layer;
     // ?rp6TrueSphere: one sprite's bounding radius (the shared GfxObj quad).
@@ -2532,7 +2659,8 @@ export class ParticleManager {
     if (!emitter.setParenting(partIndex, offsetFrame)) {
       return 0;
     }
-    emitter.initEnd();
+    // ?rustParticles: a shell's initEnd burst runs in the kernel at registration.
+    if (!rustShell) emitter.initEnd();
 
     // Attach this emitter to its gfxobj bucket (created lazily on first tick).
     // Fail-soft: on ANY miss we must ALSO restore the per-mesh path, because
@@ -2547,6 +2675,12 @@ export class ParticleManager {
         emitter._instBaseMat = baseMaterial;
         emitter._instAlpha = !baseIsAdditive;
       } catch (e) {
+        if (emitter._rustShell) {
+          // Unreachable (`_instGeometryPredict`): a shell has no slots to fall back on.
+          // eslint-disable-next-line no-console
+          console.warn("[particles/instancing] bucket attach failed for a Rust emitter; skipped:", String(e?.message ?? e));
+          return 0;
+        }
         emitter._instKey = null;
         emitter._onMeshActive = null;
         emitter._onMeshFree = null;
@@ -2560,7 +2694,40 @@ export class ParticleManager {
 
     const id = (emitterId !== 0) ? emitterId : this.nextEmitterId++;
     emitter.id = id;
+    // ?rustParticles: an in-place overwrite — two same-id creates that both
+    // passed the replace check above before awaiting (`?particleOwner=off`
+    // callers pass explicit ids) — orphans the previous entry: the JS loop
+    // never walks it again. Read it first, to mirror that in the kernel.
+    const prevEntry = this._rust !== null ? this.particleTable.get(id) : undefined;
     this.particleTable.set(id, emitter);
+    if (this._rust !== null) {
+      const orphan = prevEntry !== undefined && prevEntry !== emitter ? prevEntry : null;
+      // removal order across the JS loop and the kernel (the newcomer keeps the
+      // orphan's table position)
+      emitter._rustSeqNo = orphan !== null ? orphan._rustSeqNo : ++this._rustSeq;
+      if (emitter._rustShell) {
+        emitter._rustGeometry = geometry;
+        try {
+          // the newcomer takes the orphan's place in the kernel's tick order
+          this._rust.register(emitter, currentTime(), orphan !== null ? this._rustShellAfter(id) : null);
+        } catch (e) {
+          if (orphan !== null) this.particleTable.set(id, orphan);
+          else this.particleTable.delete(id);
+          // eslint-disable-next-line no-console
+          console.warn("[rust/particles] register failed; emitter skipped:", String(e?.message ?? e));
+          return 0;
+        }
+      } else {
+        this._jsTable.set(id, emitter);
+      }
+      if (orphan !== null) {
+        // the orphan leaves the kernel (no more draws, and its finish can no
+        // longer remove the newcomer's entry by id) / the JS loop
+        if (orphan._rustShell === true) this._rust.remove(orphan);
+        if (emitter._rustShell) this._jsTable.delete(id);
+        else if (orphan._rustShell === true) this._rebuildJsTable();
+      }
+    }
     // Tier 1 (2026-10-10): the emitter's light + distortion source. Never on the
     // sky chain (owner rule: the sky's gaseous sheets stay as authored).
     if (!skyGlow) this._bindTier1(emitter);
@@ -2713,7 +2880,46 @@ export class ParticleManager {
       } catch (_) { this._instSortCam = null; this._instSortCamWorld = null; }
     }
 
-    for (const [id, emitter] of this.particleTable) {
+    // ?rustParticles (default OFF): ONE kernel call ticks every Rust-owned
+    // (instanced) emitter — everything the loop below does for them, plus
+    // their `_appendInstances` — before the loop, which then walks only the
+    // JS emitters (`_jsTable`). Nothing in the loop reads what the kernel
+    // writes (buckets / kids / FX seeds belong to instanced emitters only).
+    const rust = this._rust;
+    let rustOut = null;
+    if (rust !== null || this._rustTickTap !== null) {
+      const ctx = {
+        now: currentTime(),
+        frame: this._rp6Frame,
+        interval,
+        recheck,
+        stagger,
+        halfPhase,
+        camera,
+        frustum: _rp6Frustum,
+        maxDistance: _RP6.maxDistance,
+        culledStopSeconds: _RP6.culledStopSeconds,
+        degradeOn: particleDegradeRetailOn(),
+        degradeCapOn: rp6DegradeCapEnabled(),
+        cullFreeze: particleCullFreezeEnabled(),
+        leanCulled,
+        cellGate,
+        cellLookup,
+        bbCamera,
+        scene: this._scene,
+        sortCam: this._instSortCam,
+        fxEnabled: particleFxEnabled(),
+        fxLive: particleFxLive(),
+        kidsOn: this._kidsOn,
+        motionOn: rustMotionOn(),
+        sharedOn: particleSharedAlphaEnabled(),
+        fxSeed: 0,
+      };
+      if (this._rustTickTap !== null) this._rustTickTap(ctx);
+      if (rust !== null) rustOut = rust.tick(ctx);
+    }
+
+    for (const [id, emitter] of (rust !== null ? this._jsTable : this.particleTable)) {
       // ?rp6Stagger: this emitter's own re-check phase (ids are the manager's
       // integer counter or the caller's emitter id; anything else → phase 0).
       const due = stagger
@@ -2908,8 +3114,11 @@ export class ParticleManager {
       }
     }
     this._finalizeInstBuckets();
-    this.cellHiddenLastTick = cellHidden;
-    for (const id of removeIds) {
+    this.cellHiddenLastTick = rustOut !== null ? cellHidden + rustOut.cellHidden : cellHidden;
+    const removals = rustOut !== null && rustOut.finished.length > 0
+      ? this._mergeRustRemovals(removeIds, rustOut.finished)
+      : removeIds;
+    for (const id of removals) {
       const e = this.particleTable.get(id);
       // Free remaining meshes from the scene (the slot loop in
       // updateParticles already removed the active ones; PartStorage may
@@ -2934,6 +3143,7 @@ export class ParticleManager {
       }
       this._releaseTier1(e);
       this.particleTable.delete(id);
+      if (this._jsTable !== null) this._jsTable.delete(id);
       // PLIFECYCLE-3: tell the owner registry this emitter finished (see the
       // ctor note on `onEmitterRemoved`). Never let a listener break the tick.
       if (typeof this.onEmitterRemoved === "function") {
@@ -3147,6 +3357,12 @@ export class ParticleManager {
     try {
       const wasOn = emitter._instKey !== null && emitter._instKey !== undefined;
       if (on === wasOn) return wasOn;
+      // ?rustParticles: toggling a kernel-owned emitter OFF first hands it back
+      // to JS with its exact state (then the OFF branch below runs on it).
+      if (!on && emitter._rustShell) {
+        if (!this._rust || !this._rust.convertToJs(emitter)) return wasOn;
+        this._jsTableDirty = true; // setInstancing rebuilds `_jsTable` once
+      }
       if (on) {
         const probe = (emitter.partStorage || []).find(Boolean);
         if (!probe || !probe.geometry || !probe.material) return false;
@@ -3202,6 +3418,7 @@ export class ParticleManager {
       const after = this._applyInstancing(e, want);
       if (before !== after) flipped++;
     }
+    if (this._jsTableDirty === true) { this._jsTableDirty = false; this._rebuildJsTable(); }
     if (!want) {
       // Drop the buckets so nothing stale draws; they rebuild on the next tick
       // if we flip back.
@@ -3222,9 +3439,12 @@ export class ParticleManager {
     // Slot carriers (2026-10-13): built slots holding the shared carrier vs a
     // per-slot material of their own (per-mesh emitters, `?particleSlotCarrier=off`).
     let slotCarriers = 0, slotMaterials = 0;
+    // ?rustParticles: kernel-owned emitters and their created slots (no meshes).
+    let rustEmitters = 0, rustSlots = 0;
     for (const [, e] of this.particleTable) {
       if (e._instKey !== null && e._instKey !== undefined) instEmitters++;
       liveParticles += e.numParticles | 0;
+      if (e._rustShell) { rustEmitters++; rustSlots += e._createdSlots | 0; continue; }
       for (const m of (e.parts || [])) if (m && m.parent) meshesInScene++;
       for (const m of (e.partStorage || [])) {
         if (!m) continue;
@@ -3234,7 +3454,7 @@ export class ParticleManager {
     let buckets = 0, instances = 0;
     for (const b of this._instBuckets.values()) { buckets++; instances += b.im.count | 0; }
     return { emitters: this.particleTable.size, instEmitters, liveParticles, meshesInScene, buckets, instances,
-      slotCarriers, slotMaterials,
+      slotCarriers, slotMaterials, ...(this._rust !== null ? { rustEmitters, rustSlots } : {}),
       sharedAlphaBuckets: sharedAlphaBuckets.buckets.size, sharedAlpha: { ...sharedAlphaBuckets.stats } };
   }
 
@@ -3244,13 +3464,16 @@ export class ParticleManager {
     if (this._kids) this._kids.finish();
     // ?particleSharedAlpha: every manager republishes the shared buckets (protocol note above).
     if (sharedAlphaBuckets.buckets.size > 0) {
-      sharedAlphaBuckets.finalize(_sharedFrameId(), this._instSortCamWorld, _sortBucketBackToFront);
+      // ?rustParticles: the same V8-ordered sort, run by the kernel.
+      sharedAlphaBuckets.finalize(_sharedFrameId(), this._instSortCamWorld,
+        this._rust !== null ? this._rustSort : _sortBucketBackToFront);
     }
     if (this._instBuckets.size === 0) return;
     // Map deletion during for..of is safe (visited entries only).
     for (const [key, b] of this._instBuckets) {
       const im = b.im;
       if (b.n === 0) {
+        if (b._rustN !== undefined) b._rustN = undefined;
         // Idle: park it dark first (a stale `count` would keep drawing last
         // tick's instances), then reap once the idle window elapses so the
         // grown instance buffers are actually released. ?particleUploadRange:
@@ -3269,7 +3492,11 @@ export class ParticleManager {
         continue;
       }
       b.idle = 0;
-      if (b.alpha && this._instSortCam) _sortBucketBackToFront(im, b.n, this._instSortCam);
+      // ?rustParticles: an own bucket filled only by the kernel this tick was
+      // sorted there already (same sort, same camera).
+      let rustSorted = false;
+      if (b._rustN !== undefined) { rustSorted = b._rustN === b.n; b._rustN = undefined; }
+      if (b.alpha && this._instSortCam && !rustSorted) _sortBucketBackToFront(im, b.n, this._instSortCam);
       // ?particleUploadRange: count = n and upload only [0, n), not the capacity.
       _publishBucket(im, b.n);
     }
@@ -3289,6 +3516,10 @@ export class ParticleManager {
     if (emitterId === 0) return false;
     const e = this.particleTable.get(emitterId);
     if (!e) return false;
+    // ?rustParticles: drop a kernel-owned emitter (its fields freeze to plain
+    // values; it has no slot meshes or materials of its own).
+    if (e._rustShell && this._rust !== null) this._rust.remove(e);
+    if (this._jsTable !== null) this._jsTable.delete(emitterId);
     if (e.parts) {
       for (let i = 0; i < e.parts.length; i++) {
         const m = e.parts[i];

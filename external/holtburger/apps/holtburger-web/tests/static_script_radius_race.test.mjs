@@ -49,6 +49,11 @@ const S = await import("../scene3d/statics.js");
 const { staticOwnerKeyForLb } = await import("../scene3d/vfx/particle_attach.js");
 S.__setStaticScriptRadiusForTest(2);
 S.__setStaticPartAnchorForTest(true);
+// The worlds below park / unpark by moving anchors in and out of staticsGroup
+// (the layout before ?anchorOffGraph, DEFAULT ON since 2026-10-26), so they pin
+// that flag off. tests/anchor_off_graph.test.mjs A3 / A5 / A6 run park → unpark
+// → rebuild, the radius tick and a park during the part-frame await in both arms.
+S.__setAnchorOffGraphForTest(false);
 
 const realSetTimeout = globalThis.setTimeout;
 const settle = async () => { for (let i = 0; i < 25; i++) await new Promise((r) => realSetTimeout(r, 0)); };

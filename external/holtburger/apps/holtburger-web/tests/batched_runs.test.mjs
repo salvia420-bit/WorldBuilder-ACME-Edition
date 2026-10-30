@@ -329,6 +329,36 @@ function makeBucket(placements) {
   check("frame: last completed frame counts both BatchedMesh draws", fr.batchedCalls === 2, JSON.stringify(fr));
   check("frame: 4 + 2 ranges asked for, 2 + 2 issued", fr.subDraws === 6 && fr.issued === 4, JSON.stringify(fr));
 
+  // Frame key (2026-10-26): the document timeline is read once per render()
+  // call (renderer.info.render.frame), per renderer — never per BatchedMesh draw.
+  {
+    let reads = 0, T = 1000;
+    const prevDoc = globalThis.document;
+    globalThis.document = { timeline: { get currentTime() { reads += 1; return T; } } };
+    try {
+      r.info.render.frame = 20;
+      r.renderBufferDirect(cam, null, bm.geometry, bm.material, bm, null);
+      r.renderBufferDirect(cam, null, noRep.geometry, noRep.material, noRep, null);
+      r.renderBufferDirect(cam, null, bm.geometry, bm.material, bm, null);
+      check("frame key: one timeline read for three draws in one render()", reads === 1, `reads=${reads}`);
+      r.info.render.frame = 21; // a second pass of the same display frame
+      r.renderBufferDirect(cam, null, bm.geometry, bm.material, bm, null);
+      check("frame key: the next render() re-reads once", reads === 2, `reads=${reads}`);
+      T = 2000; r.info.render.frame = 22; // the next display frame
+      r.renderBufferDirect(cam, null, bm.geometry, bm.material, bm, null);
+      const fr2 = getBatchedRunsStats().frame;
+      check("frame key: two passes of one display frame count as one frame", fr2.batchedCalls === 4, JSON.stringify(fr2));
+      const r3 = makeRenderer(ext);
+      installBatchedRuns(r3);
+      r3.info.render.frame = 22;
+      r3.renderBufferDirect(cam, null, bm.geometry, bm.material, bm, null);
+      check("frame key: a second renderer keeps its own memo", reads === 4, `reads=${reads}`);
+      uninstallBatchedRuns(r3);
+    } finally {
+      if (prevDoc === undefined) delete globalThis.document; else globalThis.document = prevDoc;
+    }
+  }
+
   // Lifetime: the run texture is disposed with its canonical texture.
   let disposed = false;
   swapped.addEventListener("dispose", () => { disposed = true; });

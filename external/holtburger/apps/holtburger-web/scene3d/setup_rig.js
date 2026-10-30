@@ -33,6 +33,10 @@
 // decisions); A11 consumes `root.partFrames` (this module preserves that
 // contract verbatim).
 
+// `?rigMeshAlias` (lane B, 2026-10-26) reads its flag through the scene-core
+// reader (default off, `=on` opts in). scene_core.js is a leaf module.
+import { rustFlag } from "./rust/scene_core.js";
+
 /**
  * Read the `?rigModule=off` escape hatch. Default ON (pure refactor with a
  * byte-identical-transform acceptance bar) — only the literal `off` (any
@@ -273,4 +277,293 @@ export function createPartFramesProxy(THREE, parts) {
       return Number.isInteger(idx) && idx >= 0 && idx < parts.length;
     },
   });
+}
+
+// ---------------------------------------------------------------------------
+// ?rigMeshAlias (2026-10-26, lane B; DEFAULT OFF, `=on` opts in — an owner
+// decision, see docs/2026-10-26-rust-rig.md §10).
+//
+// WHAT. A rig part's surface meshes sit at the part's origin: identity local
+// transform, so three's scene walk computes each mesh's world matrix as
+// `part.matrixWorld × I` — a compose of the identity into `mesh.matrix` and a
+// 4×4 multiply written into the mesh's own `matrixWorld` array, per mesh, per
+// frame. Entity rigs are most of the scene graph and those per-mesh writes are
+// most of their walk (lane doc "Measurements"). Under the flag each part walks
+// its own children (an own `updateMatrixWorld`, below): an identity mesh SHARES
+// the part's `matrixWorld` object (`mesh.matrixWorld === part.matrixWorld`,
+// mesh matrixAutoUpdate / matrixWorldAutoUpdate off, so neither three's walk
+// nor updateWorldMatrix writes it through the mesh) and costs a few checks
+// instead of a compose + multiply + 16 stores.
+//
+// EXACT AT EVERY WALK. `P × I` equals `P` bit for bit when `P` holds no −0
+// and no ±Inf/NaN (×1 and +0 summands are exact; a −0 entry can come out +0,
+// an Inf times 0 is NaN). So each walk checks the part's fresh world matrix
+// ("clean") and, if it is not clean, gives that part's meshes their own
+// matrices again for the frame (three's path). The mesh's local `matrix` is
+// composed once, from the exact identity, when it is aliased — what three
+// recomposes every frame.
+//
+// WHICH MESHES. A plain `THREE.Mesh` (not skinned / instanced / batched) with
+// no children, visible when first aliased, matrixAutoUpdate and
+// matrixWorldAutoUpdate on, no pivot, no own or class override of
+// updateMatrix / updateMatrixWorld / updateWorldMatrix, and an EXACT identity
+// local transform: position (+0, +0, +0), quaternion (+0, +0, +0, 1), scale
+// (1, 1, 1). Re-validated every walk (position, scale, pivot, flags, the
+// shared object, no children) plus a hook on the mesh's quaternion and Euler
+// change callbacks (any rotation write — dismember's dislocation, applyMatrix4
+// — drops the alias); the part's `childremoved` event drops it the moment the
+// mesh is detached or reparented (remove / attach / add elsewhere / clear /
+// bulk_child_remove all fire it), before anything can walk it elsewhere. Any
+// doubt → that mesh walks three's way, from its own matrices, this frame.
+//
+// WHAT DIFFERS (all of it): a mesh's `matrixWorld` IS its part's between walks
+// too, so a reader that refreshes the mesh (updateWorldMatrix / Box3 /
+// getWorldPosition) sees `P` where three computes `P × I` — equal unless a
+// refresh outside the walk left a −0 in `P` (never seen: worldRoot's −π/2
+// rotation leaves no exact zeros in a rig world matrix); a HIDDEN aliased mesh
+// tracks its part where three leaves its matrix at the last visible walk (only
+// readers that refresh it, or discard hidden hits, look at it); and a reader
+// that does not refresh sees the part's matrix as of its last refresh rather
+// than the mesh's as of the last walk (no such reader inside the frame —
+// picking runs between frames). `Object3D.copy` / `clone` of an aliased mesh
+// would copy the auto-update flags off (nothing clones rig meshes). Census
+// tools (`__skipHiddenMatrix.census`) do not see the part subtrees this walks.
+// ---------------------------------------------------------------------------
+
+let _rmaFlag = null;
+/** `?rigMeshAlias` (read once; `__setRigMeshAliasForTest` overrides). */
+export function rigMeshAliasEnabled() {
+  if (_rmaFlag === null) {
+    try { _rmaFlag = rustFlag("rigMeshAlias", false); } catch (_) { _rmaFlag = false; }
+  }
+  return _rmaFlag;
+}
+/** Test seam: force `?rigMeshAlias` (`undefined` re-reads the flag). */
+export function __setRigMeshAliasForTest(on) { _rmaFlag = on === undefined ? null : !!on; }
+
+const _rmaStats = {
+  parts: 0, // parts walking their own children
+  aliased: 0, // alias events (a mesh starting to share its part's matrixWorld)
+  unaliased: 0, // alias drops (validation failed, detached, flag off)
+  unclean: 0, // walks where a part's world matrix held a −0 / non-finite entry
+  shared: 0, // mesh visits served by the alias (no compose / multiply)
+  delegated: 0, // child visits handed to three
+};
+/** Diag snapshot (`window.__rigMeshAlias.stats()`). */
+export function rigMeshAliasStats() {
+  return { enabled: rigMeshAliasEnabled(), ..._rmaStats };
+}
+
+// No −0, no ±Inf, no NaN: then `P × I` (three's multiplyMatrices) is `P`.
+function _rmaWorldClean(e) {
+  for (let i = 0; i < 16; i += 1) {
+    const v = e[i];
+    if (v === 0) {
+      if (1 / v < 0) return false; // −0
+    } else if (!(v - v === 0)) {
+      return false; // ±Inf / NaN
+    }
+  }
+  return true;
+}
+
+function _rmaCandidate(O3D, m) {
+  if (m.isMesh !== true || m.isSkinnedMesh === true || m.isInstancedMesh === true || m.isBatchedMesh === true) return false;
+  if (m.visible === false || m.children.length !== 0 || m.pivot !== null) return false;
+  if (m.matrixAutoUpdate !== true || m.matrixWorldAutoUpdate !== true) return false;
+  if (m.updateMatrixWorld !== O3D.updateMatrixWorld || m.updateMatrix !== O3D.updateMatrix ||
+      m.updateWorldMatrix !== O3D.updateWorldMatrix) return false;
+  const p = m.position;
+  const q = m.quaternion;
+  const s = m.scale;
+  if (!q || q.isQuaternion !== true || !m.rotation || m.rotation.isEuler !== true) return false;
+  return Object.is(p.x, 0) && Object.is(p.y, 0) && Object.is(p.z, 0) &&
+    Object.is(q._x, 0) && Object.is(q._y, 0) && Object.is(q._z, 0) && q._w === 1 &&
+    s.x === 1 && s.y === 1 && s.z === 1;
+}
+
+// Start sharing `part`'s matrixWorld. First time per mesh: the alias fields
+// (fixed order, one hidden-class transition) and the rotation-write hooks.
+function _rmaAlias(m, part) {
+  if (m.__rmaSeen !== true) m.__rmaSeen = true;
+  if (m.__rmaOwn === undefined) {
+    m.__rmaPart = null;
+    m.__rmaOwn = m.matrixWorld;
+    m.__rmaDirty = false;
+    const q = m.quaternion;
+    const r = m.rotation;
+    const qPrev = q._onChangeCallback;
+    const rPrev = r._onChangeCallback;
+    q._onChange(function rmaQuaternionChanged() {
+      m.__rmaDirty = true;
+      qPrev.call(q);
+    });
+    r._onChange(function rmaRotationChanged() {
+      m.__rmaDirty = true;
+      rPrev.call(r);
+    });
+  }
+  // What three's walk does to this mesh this frame: compose (from the exact
+  // identity) into `matrix`, then multiply — the product IS the part's (clean)
+  // world matrix — and clear the flag.
+  m.updateMatrix();
+  m.__rmaDirty = false;
+  m.__rmaPart = part;
+  m.matrixWorld = part.matrixWorld;
+  m.matrixAutoUpdate = false;
+  m.matrixWorldAutoUpdate = false;
+  m.matrixWorldNeedsUpdate = false;
+  _rmaStats.aliased += 1;
+}
+
+// Back to the mesh's own matrixWorld (holding the shared values) and three's
+// flags. A flag someone else changed while aliased is left as they set it.
+function _rmaUnalias(m) {
+  const own = m.__rmaOwn;
+  if (m.matrixWorld !== own) {
+    own.copy(m.matrixWorld);
+    m.matrixWorld = own;
+  }
+  if (m.matrixAutoUpdate === false) m.matrixAutoUpdate = true;
+  if (m.matrixWorldAutoUpdate === false) m.matrixWorldAutoUpdate = true;
+  m.__rmaPart = null;
+  _rmaStats.unaliased += 1;
+}
+
+function _rmaChildRemoved(event) {
+  const c = event.child;
+  if (c && c.__rmaPart === this) _rmaUnalias(c);
+}
+
+let _rmaWalk = null;
+let _rmaWalkProto = null;
+// The part's own updateMatrixWorld: three r184 Object3D.updateMatrixWorld for
+// the part itself (a hidden part goes to three's — skip_hidden_matrix-patched
+// — method, which alone knows whether this is a scene walk), then its
+// children: aliased meshes re-validated and served by the alias, new identity
+// meshes aliased, everything else handed to its own updateMatrixWorld exactly
+// as three's loop does.
+function _rmaWalkFor(O3D) {
+  if (_rmaWalk !== null && _rmaWalkProto === O3D) return _rmaWalk;
+  _rmaWalkProto = O3D;
+  _rmaWalk = function rigMeshAliasPartUpdateMatrixWorld(force) {
+    if (this.visible === false) {
+      // three's (patched) method: in a scene walk it marks the part stale and
+      // stops; otherwise (a direct call) it updates the part and walks the
+      // children, where an aliased mesh writes nothing. If that update left a
+      // −0 / non-finite entry, those meshes get three's own product now.
+      O3D.updateMatrixWorld.call(this, force);
+      if (this.matrixWorldNeedsUpdate === false && !_rmaWorldClean(this.matrixWorld.elements)) {
+        _rmaStats.unclean += 1;
+        const ch = this.children;
+        for (let i = 0, l = ch.length; i < l; i += 1) {
+          const c = ch[i];
+          if (c.__rmaPart === this) {
+            _rmaUnalias(c);
+            c.updateMatrixWorld(true);
+          }
+        }
+      }
+      return;
+    }
+    if (this.matrixAutoUpdate) this.updateMatrix();
+    if (this.matrixWorldNeedsUpdate || force) {
+      if (this.matrixWorldAutoUpdate === true) {
+        if (this.parent === null) this.matrixWorld.copy(this.matrix);
+        else this.matrixWorld.multiplyMatrices(this.parent.matrixWorld, this.matrix);
+      }
+      this.matrixWorldNeedsUpdate = false;
+      force = true;
+    }
+    const mw = this.matrixWorld;
+    // Clean = the alias is on and P × I === P bit for bit: no −0, no ±Inf /
+    // NaN (inlined: a call per part here measured as most of the saving).
+    let clean = (_rmaFlag ?? rigMeshAliasEnabled()) === true;
+    if (clean) {
+      const e = mw.elements;
+      for (let k = 0; k < 16; k += 1) {
+        const v = e[k];
+        if (v === 0 ? 1 / v < 0 : !(v - v === 0)) {
+          clean = false;
+          _rmaStats.unclean += 1;
+          break;
+        }
+      }
+    }
+    // A mesh is offered the alias on the first walk that meets it; one that
+    // did not qualify (or lost it) is re-tested on one walk in eight
+    // (staggered by index) — it walks three's way meanwhile, which is exact,
+    // and the test is the expensive part for meshes that never qualify.
+    const tick = (this.__rmaTick = (this.__rmaTick + 1) | 0);
+    let shared = 0;
+    let delegated = 0;
+    const children = this.children;
+    for (let i = 0, l = children.length; i < l; i += 1) {
+      const c = children[i];
+      if (c.__rmaPart === this) {
+        const p = c.position;
+        const sc = c.scale;
+        // Per-walk re-validation (inlined). `p.x === 0` also accepts −0: with
+        // a clean P the WORLD matrix of a −0-positioned mesh is still P bit
+        // for bit; only its unread local matrix would hold +0 where three
+        // composes −0 (lane doc §10).
+        if (clean && c.__rmaDirty === false && c.matrixWorld === mw &&
+            c.matrixAutoUpdate === false && c.matrixWorldAutoUpdate === false &&
+            p.x === 0 && p.y === 0 && p.z === 0 && sc.x === 1 && sc.y === 1 && sc.z === 1 &&
+            c.pivot === null && c.children.length === 0) {
+          // Visible: three would compose the identity and multiply — the
+          // shared matrix already is that product. Hidden: three's method
+          // decides (skip + mark in a scene walk), and with the flags off it
+          // writes nothing.
+          if (c.visible === false) c.updateMatrixWorld(force);
+          else c.matrixWorldNeedsUpdate = false;
+          shared += 1;
+          continue;
+        }
+        _rmaUnalias(c);
+      } else if (clean && c.isMesh === true && (c.__rmaSeen !== true || ((tick + i) & 7) === 0)) {
+        if (_rmaCandidate(O3D, c)) {
+          _rmaAlias(c, this);
+          shared += 1;
+          continue;
+        }
+        c.__rmaSeen = true;
+      }
+      delegated += 1;
+      c.updateMatrixWorld(force);
+    }
+    _rmaStats.shared += shared;
+    _rmaStats.delegated += delegated;
+  };
+  return _rmaWalk;
+}
+
+/**
+ * ?rigMeshAlias: give a rig part Group the alias walk (EntityInstance
+ * constructor). Only a part that walks like a plain Object3D qualifies.
+ * Returns true when installed (false when the flag is off).
+ * @param {object} THREE  three.js namespace (injected).
+ * @param {object} part  a part Group (`inst.parts[i]`).
+ */
+export function installRigMeshAlias(THREE, part) {
+  if (!rigMeshAliasEnabled() || !part || part.isObject3D !== true) return false;
+  const O3D = THREE && THREE.Object3D && THREE.Object3D.prototype;
+  if (!O3D) return false;
+  const walk = _rmaWalkFor(O3D);
+  if (part.updateMatrixWorld === walk) return true;
+  if (Object.prototype.hasOwnProperty.call(part, "updateMatrixWorld") || part.updateMatrixWorld !== O3D.updateMatrixWorld) return false;
+  if (typeof part.addEventListener !== "function") return false;
+  part.__rmaTick = 0;
+  part.updateMatrixWorld = walk;
+  part.addEventListener("childremoved", _rmaChildRemoved);
+  _rmaStats.parts += 1;
+  if (_rmaStats.parts === 1 && typeof window !== "undefined" && window && !window.__rigMeshAlias) {
+    try { window.__rigMeshAlias = { stats: rigMeshAliasStats }; } catch (_) { /* diag only */ }
+  }
+  return true;
+}
+
+/** True when `mesh` currently shares its part's matrixWorld (diag / tests). */
+export function rigMeshAliased(mesh) {
+  return !!mesh && !!mesh.__rmaPart && mesh.matrixWorld === mesh.__rmaPart.matrixWorld;
 }

@@ -31,6 +31,8 @@ import * as THREE from "three";
 import { batchedMaterialFor, holdBatchedMaterial, releaseBatchedMaterial } from "./batched_material_variant.js";
 import { wrapOnBeforeRenderPerCamera } from "./batched_indirect_per_camera.js";
 import { markBatchedRuns } from "./batched_runs.js";
+// ?rustCull (lane C): a re-derived `__deadBatch` must reach the Rust statics walk's registry.
+import { markStaticsCullDirty } from "./rust/cull.js";
 
 let _flag;
 /** `?statBatchChunk=off` escapes region-chunked per-material consolidation of
@@ -363,6 +365,9 @@ function _markDeadBatch(bm) {
     bm.userData.__deadBatch = dead;
     bm.visible = !dead;
     if (dead) _stats.deadMarked += 1; else _stats.deadUnmarked += 1;
+    // ?rustCull: the walk reads this marker on every pass; its registry reads
+    // it once per change (a no-op unless the bucket is a tracked child).
+    if (typeof markStaticsCullDirty === "function") markStaticsCullDirty(bm);
   }
   return dead;
 }
@@ -1967,6 +1972,199 @@ const _earlyOutStats = {
   external: 0,  // of `applied`, buckets this file does not own (buildings.js)
 };
 
+// ── ?staticMatrixFreeze (2026-10-26, stage-2 S1a; DEFAULT ON since
+// 2026-10-26, `=off`/0/false/no escape; read once) ──────────────────────────
+// docs/2026-10-26-rust-residency-design.md §4 S1a; lane notes
+// docs/2026-10-26-rust-cull.md. Lives here because statics.js, static_atlas.js
+// and buildings.js all import this file and it imports none of them.
+//
+// Static draw nodes never move, yet each one composes its matrix
+// (`updateMatrix`) and multiplies it by its parent's every frame in three's
+// scene walk. Armed, a node attached to its group is QUEUED for freezing, and
+// frozen (`matrixAutoUpdate` and `matrixWorldAutoUpdate` false) by
+// `tickStaticMatrixFreeze` (statics.js `cullStaticsGroup`, once per frame) as
+// soon as three's own walk has computed it: `matrixWorld` bit-equal to
+// `parent.matrixWorld × matrix`, the product the walk would form again next
+// frame. So freezing never changes a value anything reads. (Computing the
+// matrices at attach instead — the cells.js pattern, FREEZE_STATIC_MATRIX /
+// `_freezeCellSubtree` — is NOT pixel-identical here: until the first render
+// after a bake, flag-off readers see a new node's identity matrixWorld, and
+// the billboard tick faces a fresh billboard LOD's leaf from it for a frame;
+// tests/static_matrix_freeze.test.mjs pins this.) A THREE.LOD's levels are
+// queued with it, EXCEPT a billboard leaf (statics.js `tickStaticsBillboards`
+// rewrites its quaternion / position every frame; it keeps composing and still
+// multiplies against the frozen wrapper); each object freezes on its own first
+// visible walk (a band never shown stays live). Applied to:
+// static singletons, LOD wrappers, walk-in InstancedMeshes and per-LB batches
+// (statics.js attach), chunk buckets (below), atlas buckets (static_atlas.js),
+// building batches and flattened building loners (buildings.js). NOT to:
+// pools (already frozen, pool_registry.js), animated scenery and wind trees
+// (they animate), script anchors (their own freeze), whole building placement
+// groups (the legacy path keeps its hinge wrappers live), particles. Nothing
+// moves these nodes after attach (audit in the lane notes): park / unpark only
+// detach and re-add them, LOD swaps only toggle level visibility, the pool /
+// atlas re-offer recomposes `.matrix` from the same TRS. Children that arrive
+// later (lights, wireframe fill companions) keep auto-updating and are forced
+// through by the frozen parent exactly as before. A queued object that is no
+// longer under a THREE.Scene when the tick checks it (parked / evicted before
+// its first walk, or an LOD level whose wrapper was detached: its parent is
+// still the wrapper) leaves the queue and stays live.
+let _staticMatrixFreezeFlag;
+export function staticMatrixFreezeEnabled() {
+  if (_staticMatrixFreezeFlag !== undefined) return _staticMatrixFreezeFlag;
+  // DEFAULT ON since 2026-10-26 (`=off|0|false|no` is the escape).
+  let on = true;
+  try {
+    const v = (new URLSearchParams(globalThis.location?.search || "").get("staticMatrixFreeze") || "").trim().toLowerCase();
+    if (v === "off" || v === "0" || v === "false" || v === "no") on = false;
+  } catch (_) { on = true; }
+  return (_staticMatrixFreezeFlag = on);
+}
+/** Test seam: true/false forces the flag, undefined re-reads the URL. */
+export function __setStaticMatrixFreezeForTest(v) { _staticMatrixFreezeFlag = v; }
+
+const _matrixFreezeStats = { queued: 0, frozen: 0, billboardLeavesKept: 0, droppedDetached: 0, droppedForeign: 0, ticks: 0 };
+// Objects waiting for their first walk (insertion order; a not-yet-walked one
+// is moved to the back so the per-tick budget rotates through the set).
+const _pendingFreeze = new Set();
+const MATRIX_FREEZE_CHECKS_PER_TICK = 512;
+const _freezeProbe = new THREE.Matrix4();
+/** Diag: what ?staticMatrixFreeze has queued / frozen so far. */
+export function staticMatrixFreezeStats() {
+  return { enabled: staticMatrixFreezeEnabled(), pending: _pendingFreeze.size, ..._matrixFreezeStats };
+}
+
+/** The level `tickStaticsBillboards` orients (statics.js `tagBillboardLod`), or null. */
+function _billboardLeafOf(node) {
+  if (!node.isLOD) return null;
+  const ud = node.userData;
+  if (!ud || (ud.billboardMode ?? 0) < 2) return null;
+  const lvl = Array.isArray(node.levels) ? node.levels[ud.billboardLevel ?? 1] : null;
+  return lvl && lvl.object ? lvl.object : null;
+}
+
+/**
+ * ?staticMatrixFreeze — queue a static node that has just been attached (and,
+ * for a THREE.LOD, its non-billboard levels) for freezing (see above). No-op
+ * (false) with the flag off, for a non-Object3D, or for a node already queued.
+ */
+export function freezeStaticNodeMatrices(node) {
+  if (!node || node.isObject3D !== true || !staticMatrixFreezeEnabled()) return false;
+  const ud = node.userData || (node.userData = {});
+  if (ud.__matrixFrozen === true) return false;
+  ud.__matrixFrozen = true;
+  _queueFreeze(node);
+  if (node.isLOD && Array.isArray(node.levels)) {
+    const leaf = _billboardLeafOf(node);
+    for (const lvl of node.levels) {
+      const o = lvl && lvl.object;
+      if (!o) continue;
+      if (o === leaf) { _matrixFreezeStats.billboardLeavesKept += 1; continue; }
+      _queueFreeze(o);
+    }
+  }
+  return true;
+}
+
+function _queueFreeze(o) {
+  // A pivot (three r184 Object3D.pivot) folds into `matrix`; statics carry none.
+  if (o.pivot != null) return;
+  // Three's walk clears this flag when it computes the object's world matrix
+  // (skip_hidden_matrix.js re-sets it on an object it skips as hidden): the
+  // signal that the walk has been through the object since it was queued.
+  // Setting it changes nothing the walk does: a newly attached child is
+  // recomputed on its first walk regardless (its group composes every frame
+  // and forces it; under ?freezeWorldRoots the add patch sets this very flag,
+  // and the child's own updateMatrix() would set it too).
+  o.matrixWorldNeedsUpdate = true;
+  _pendingFreeze.add(o);
+  _matrixFreezeStats.queued += 1;
+}
+
+function _sameElements(a, b) {
+  for (let i = 0; i < 16; i++) if (!Object.is(a[i], b[i])) return false;
+  return true;
+}
+
+/** Does `o`'s parent chain end at a THREE.Scene (the graph a walk visits)? A
+ *  chain longer than 64 (none in the app: level → wrapper → group → worldRoot
+ *  → scene) counts as detached. */
+function _underScene(o) {
+  let r = o;
+  for (let i = 0; i < 64 && r.parent; i++) r = r.parent;
+  return r.parent === null && r.isScene === true;
+}
+
+/**
+ * Is `o` exactly what three's walk leaves it as, so that freezing it now
+ * changes no value: walked since queued, `matrix` = compose(position,
+ * quaternion, scale) (nothing moved it since), `matrixWorld` = parent ×
+ * matrix — all bit for bit.
+ */
+function _walkedUnder(o, parent) {
+  if (o.matrixWorldNeedsUpdate !== false) return false;
+  _freezeProbe.compose(o.position, o.quaternion, o.scale);
+  if (!_sameElements(_freezeProbe.elements, o.matrix.elements)) return false;
+  _freezeProbe.multiplyMatrices(parent.matrixWorld, o.matrix);
+  return _sameElements(_freezeProbe.elements, o.matrixWorld.elements);
+}
+
+/**
+ * ?staticMatrixFreeze — freeze the queued objects three's walk has computed
+ * since they were attached. Once per frame, before the render (statics.js
+ * `cullStaticsGroup`); checks at most MATRIX_FREEZE_CHECKS_PER_TICK objects.
+ * Returns the number frozen.
+ */
+export function tickStaticMatrixFreeze() {
+  if (_pendingFreeze.size === 0) return 0;
+  _matrixFreezeStats.ticks += 1;
+  let checks = 0;
+  let frozen = 0;
+  const notYet = [];
+  for (const o of _pendingFreeze) {
+    if (checks >= MATRIX_FREEZE_CHECKS_PER_TICK) break;
+    checks += 1;
+    const p = o.parent;
+    if (!p || !_underScene(p)) {
+      // No walk reaches it any more: parked / evicted (or a level removed)
+      // before its first walk, or an LOD level whose wrapper was. It leaves
+      // the queue and stays live (the flag-off state), and a queued wrapper
+      // takes its levels with it (one wrapper, one mode). The chain matters
+      // for a level: its parent is the wrapper, which park / evict detach
+      // (and evict disposes) without touching it, so a band hidden before its
+      // check (two walks a frame under the indoor split re-mark it via
+      // skip_hidden_matrix.js; or a missed budget) used to be re-checked
+      // forever after its frozen wrapper was evicted, pinning the subtree.
+      _pendingFreeze.delete(o);
+      _matrixFreezeStats.droppedDetached += 1;
+      if (o.isLOD && Array.isArray(o.levels)) {
+        for (const lvl of o.levels) if (lvl && lvl.object && _pendingFreeze.delete(lvl.object)) _matrixFreezeStats.droppedDetached += 1;
+      }
+      continue;
+    }
+    if (o.matrixAutoUpdate !== true || o.matrixWorldAutoUpdate !== true) {
+      // Someone else manages its matrices now; leave it alone.
+      _pendingFreeze.delete(o);
+      _matrixFreezeStats.droppedForeign += 1;
+      continue;
+    }
+    if (!_walkedUnder(o, p)) { notYet.push(o); continue; }
+    o.matrixAutoUpdate = false;
+    o.matrixWorldAutoUpdate = false;
+    _pendingFreeze.delete(o);
+    frozen += 1;
+  }
+  // Rotate: the ones still waiting go to the back of the queue.
+  for (const o of notYet) { _pendingFreeze.delete(o); _pendingFreeze.add(o); }
+  _matrixFreezeStats.frozen += frozen;
+  return frozen;
+}
+/** Test seam: forget the queue. */
+export function __resetStaticMatrixFreezeForTest() {
+  _pendingFreeze.clear();
+  for (const k of Object.keys(_matrixFreezeStats)) _matrixFreezeStats[k] = 0;
+}
+
 /** Is this bucket on three's early-out right now (the condition three tests,
  *  minus `_visibilityChanged`)? */
 function _onEarlyOut(bm) {
@@ -2639,6 +2837,7 @@ function _getOrCreateBucket(mat, scene3d, templateNode, regionKey, poolRef, init
   // region map and `ud.material` stay keyed by the MEMBER `mat`.
   const bm = new THREE.BatchedMesh(_INIT_INST, initVerts, initVerts * 2,
     typeof batchedMaterialFor === "function" ? batchedMaterialFor(mat) : mat);
+  globalThis.__hbRustWorld?.track(bm, "chunk"); // ?rustWorld shadow (scene3d/rust/world.js); off ⇒ nothing evaluated
   // Held until `_reapBucketIfEmpty`: the last release takes the variant out of
   // the per-frame sync set (and stops it pinning `mat`).
   if (typeof holdBatchedMaterial === "function") holdBatchedMaterial(bm);
@@ -2722,6 +2921,8 @@ function _getOrCreateBucket(mat, scene3d, templateNode, regionKey, poolRef, init
   // ?statBatchMemo — install the per-bucket multidraw memo (no-op when off).
   _installMemo(bm);
   try { scene3d?.staticsGroup?.add(bm); } catch (_) { /* fail-soft */ }
+  // ?staticMatrixFreeze (default OFF): the bucket sits at identity for its life.
+  if (bm.parent) freezeStaticNodeMatrices(bm);
   return b;
 }
 
@@ -3116,6 +3317,7 @@ export function consolidateStaticSingletonsCrossLb(nodes, scene3d, lbId) {
           // that the dedup eviction path would then never reclaim.
           if (rec) rec.iids.push(iid);
           bm.setMatrixAt(iid, m.matrix); // node is staticsGroup-relative, so is the bucket
+          if (rec) globalThis.__hbRustWorld?.attrLb(bm, iid, lbKey); // ?rustWorld: the membership the park seam walks
           ud.instances += 1;
           groupAdded += 1;
         } catch (_) {
@@ -3266,6 +3468,7 @@ export function batchXInstancesForLb(lbKey) {
 }
 
 function _setLbVisible(lbKey, visible) {
+  globalThis.__hbRustWorld?.lbVis("chunk", _lbKeyOfId(lbKey), visible); // ?rustWorld: the kernel derives the same writes
   const list = _lbMembership.get(_lbKeyOfId(lbKey));
   if (!list) return 0;
   let n = 0;

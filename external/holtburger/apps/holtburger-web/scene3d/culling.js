@@ -137,6 +137,12 @@ export class FrustumCuller {
     // Scratch for pulling the camera world position into AC space.
     this._invWorldRoot = new THREE.Matrix4();
     this._camWorld = new THREE.Vector3();
+    // What the frustum was built with (setFromProjectionMatrix's last two
+    // arguments; three's default for an absent coordinateSystem is WebGL), so
+    // a consumer rebuilding it from `_mvp` (the Rust statics cull,
+    // scene3d/rust/cull.js) passes the identical inputs.
+    this.coordinateSystem = THREE.WebGLCoordinateSystem;
+    this.reversedDepth = false;
     this.valid = false;
   }
 
@@ -169,6 +175,8 @@ export class FrustumCuller {
     // extraction must know (near/far rows swap). camera.reversedDepth is false
     // on the log buffer — identical call.
     this.frustum.setFromProjectionMatrix(this._mvp, camera.coordinateSystem, camera.reversedDepth === true);
+    this.coordinateSystem = camera.coordinateSystem === undefined ? THREE.WebGLCoordinateSystem : camera.coordinateSystem;
+    this.reversedDepth = camera.reversedDepth === true;
 
     // Camera origin → AC space: invert worldRoot's transform and apply it
     // to the camera's WORLD position. (worldRoot is a child of the scene

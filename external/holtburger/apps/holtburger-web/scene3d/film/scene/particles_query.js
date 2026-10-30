@@ -350,9 +350,33 @@ export function createParticlesQuery(opts = {}) {
     const parts = [];
     let opSum = 0;
     let opN = 0;
-    const list = Array.isArray(em.parts) ? em.parts : [];
     const geomR = em._instGeom && em._instGeom.boundingSphere && Number.isFinite(em._instGeom.boundingSphere.radius)
       ? em._instGeom.boundingSphere.radius : null;
+    // ?rustParticles: a kernel-simulated emitter's sample comes from its bridge
+    // (scene3d/rust/particles.js filmSample) — the same slots this loop would
+    // take, for every emitter in one kernel pass per tick. Reading `em.parts`
+    // on it would build a proxy mesh per slot, for every emitter, every frame.
+    const rustRows = em._rustShell === true && em._rustHandle >= 0 && em._rustBridge &&
+      typeof em._rustBridge.filmSample === "function" ? em._rustBridge.filmSample(em, maxParts) : null;
+    if (rustRows) {
+      const rg = em._rustGeometry;
+      const gR = rg && rg.boundingSphere && Number.isFinite(rg.boundingSphere.radius) ? rg.boundingSphere.radius : geomR ?? 0.5;
+      for (let i = 0; i < rustRows.length && parts.length < maxParts; i++) {
+        const r = rustRows[i]; // [x, y, z, scale, op] — live, visible, op above the floor
+        const op = clamp01(Number.isFinite(r[4]) ? r[4] : 1);
+        const p = sceneLocalToAc(mgr._scene, r);
+        if (!p) continue;
+        const sc = Number.isFinite(r[3]) ? Math.abs(r[3]) : 1;
+        const size = Math.max(0, gR * sc);
+        parts.push([p[0], p[1], p[2], size, op]);
+        opSum += op;
+        opN += 1;
+        const ext = Math.hypot(p[0] - center[0], p[1] - center[1], p[2] - center[2]) + size;
+        if (ext > radius) radius = ext;
+      }
+    }
+    const rawParts = rustRows ? null : em.parts; // read once (an accessor on some emitters)
+    const list = Array.isArray(rawParts) ? rawParts : [];
     for (let i = 0; i < list.length && parts.length < maxParts; i++) {
       const mesh = list[i];
       if (!mesh || typeof mesh !== "object" || mesh.visible === false) continue;

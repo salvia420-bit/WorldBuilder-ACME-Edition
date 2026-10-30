@@ -2397,6 +2397,13 @@ mod wire_integrity;
 #[cfg(any(target_arch = "wasm32", test))]
 mod vertex_bake;
 
+// Rust scene core (docs/2026-10-26-rust-scene-core.md): the wasm-bindgen
+// wrappers over the `holtburger-scene` kernels (particles, rig poses, culling,
+// instanced scenery, terrain VFX). One file per lane under src/scene_wasm/;
+// the kernels themselves are natively tested in crates/holtburger-scene.
+#[cfg(target_arch = "wasm32")]
+mod scene_wasm;
+
 #[cfg(target_arch = "wasm32")]
 pub use global_source::{
     cached_shard_count, has_resource_source, init_resource_source,

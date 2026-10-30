@@ -341,11 +341,21 @@ export { std140Layout };
  * @param {number} [opts.maxCombined=32]       MAX_COMBINED_TEXTURE_IMAGE_UNITS
  * @param {boolean} [opts.multiDraw=true]      expose WEBGL_multi_draw
  * @param {number} [opts.width=800] @param {number} [opts.height=600]
+ * @param {(name: string, args: IArguments) => void} [opts.onCall]
+ *   (2026-10-26, draw_exec suite) called at the BOTTOM of every context and
+ *   extension function — the call as it reaches the "driver", below every
+ *   wrapper anyone installs on the context later (they capture the hooked
+ *   function). Absent: the context is exactly as before.
+ * @param {boolean} [opts.clipControl=false]   expose EXT_clip_control (reversed-Z) and
+ *   answer getParameter(DEPTH_FUNC) with the last depthFunc (shader_logdepth.js's probe)
  */
 export function createFakeWebGL2(opts = {}) {
   const maxTextures = opts.maxTextures ?? 16;
   const maxCombined = opts.maxCombined ?? 32;
   const width = opts.width ?? 800, height = opts.height ?? 600;
+  const onCall = typeof opts.onCall === "function" ? opts.onCall : null;
+  // The bottom-level call hook (opts.onCall): wraps a function once, statically.
+  const logged = (name, fn) => (onCall === null ? fn : function () { onCall(name, arguments); return fn.apply(this, arguments); });
 
   let nextEnum = 0x100000;
   const enumByName = new Map(Object.entries(K));
@@ -394,12 +404,19 @@ export function createFakeWebGL2(opts = {}) {
     OES_texture_float_linear: {},
     EXT_float_blend: {},
     WEBGL_multi_draw: opts.multiDraw === false ? null : {
-      multiDrawArraysWEBGL() { bump("multiDrawArraysWEBGL"); record("multiDrawArraysWEBGL"); },
-      multiDrawElementsWEBGL() { bump("multiDrawElementsWEBGL"); record("multiDrawElementsWEBGL"); },
-      multiDrawArraysInstancedWEBGL() { bump("multiDrawArraysInstancedWEBGL"); record("multiDrawArraysInstancedWEBGL"); },
-      multiDrawElementsInstancedWEBGL() { bump("multiDrawElementsInstancedWEBGL"); record("multiDrawElementsInstancedWEBGL"); },
+      multiDrawArraysWEBGL: logged("multiDrawArraysWEBGL", function multiDrawArraysWEBGL() { bump("multiDrawArraysWEBGL"); record("multiDrawArraysWEBGL"); }),
+      multiDrawElementsWEBGL: logged("multiDrawElementsWEBGL", function multiDrawElementsWEBGL() { bump("multiDrawElementsWEBGL"); record("multiDrawElementsWEBGL"); }),
+      multiDrawArraysInstancedWEBGL: logged("multiDrawArraysInstancedWEBGL", function multiDrawArraysInstancedWEBGL() { bump("multiDrawArraysInstancedWEBGL"); record("multiDrawArraysInstancedWEBGL"); }),
+      multiDrawElementsInstancedWEBGL: logged("multiDrawElementsInstancedWEBGL", function multiDrawElementsInstancedWEBGL() { bump("multiDrawElementsInstancedWEBGL"); record("multiDrawElementsInstancedWEBGL"); }),
     },
   };
+  if (opts.clipControl === true) {
+    extensions.EXT_clip_control = {
+      LOWER_LEFT_EXT: 0x8ca1, UPPER_LEFT_EXT: 0x8ca2, NEGATIVE_ONE_TO_ONE_EXT: 0x935e, ZERO_TO_ONE_EXT: 0x935f,
+      clipControlEXT: logged("clipControlEXT", function () { bump("clipControlEXT"); }),
+    };
+  }
+  let depthFunc = 0; // opts.clipControl: getParameter(DEPTH_FUNC) answers the last depthFunc
 
   function resolveUniform(info, value) {
     const target = SAMPLER_TARGET.get(info.type);
@@ -535,6 +552,7 @@ export function createFakeWebGL2(opts = {}) {
       bump("getParameter");
       const n = nameByEnum.get(p);
       if (n === "VIEWPORT" || n === "SCISSOR_BOX") return new Int32Array([0, 0, width, height]);
+      if (n === "DEPTH_FUNC" && opts.clipControl === true) return depthFunc;
       if (n in params) return params[n];
       if (n === "MAX_TEXTURE_MAX_ANISOTROPY_EXT") return 16;
       return 0;
@@ -653,6 +671,8 @@ export function createFakeWebGL2(opts = {}) {
     uniform1fv: setUniform("uniform1fv"), uniform2fv: setUniform("uniform2fv"), uniform3fv: setUniform("uniform3fv"), uniform4fv: setUniform("uniform4fv"),
     uniformMatrix2fv: setUniform("uniformMatrix2fv"), uniformMatrix3fv: setUniform("uniformMatrix3fv"), uniformMatrix4fv: setUniform("uniformMatrix4fv"),
 
+    depthFunc(f) { bump("depthFunc"); depthFunc = f; },
+
     drawArrays() { bump("drawArrays"); record("drawArrays"); },
     drawElements() { bump("drawElements"); record("drawElements"); },
     drawArraysInstanced() { bump("drawArraysInstanced"); record("drawArraysInstanced"); },
@@ -684,6 +704,24 @@ export function createFakeWebGL2(opts = {}) {
 
   const noop = (name) => function () { bump(name); return undefined; };
   const creators = /^create(Buffer|Framebuffer|Renderbuffer|VertexArray|Sampler|Query|TransformFeedback)$/;
+  if (onCall !== null) {
+    for (const k of Object.keys(impl)) if (typeof impl[k] === "function") impl[k] = logged(k, impl[k]);
+  }
+  // (2026-10-26, draw_exec bench) `__fake.plain()`: the same context as a PLAIN object — every
+  // name lives as an own property (materialised on first access through a Proxy prototype), so
+  // per-call JS timings are not dominated by the Proxy's get trap. Same state, same counters.
+  impl.__fake.plain = () => {
+    const miss = new Proxy(Object.create(null), {
+      get(_t, prop, receiver) {
+        const v = proxy[prop];
+        if (v !== undefined && typeof prop === "string") Object.defineProperty(receiver, prop, { value: v, writable: true, configurable: true, enumerable: true });
+        return v;
+      },
+    });
+    const p = Object.create(miss);
+    for (const k of Object.keys(impl)) p[k] = impl[k];
+    return p;
+  };
   const proxy = new Proxy(impl, {
     get(target, prop) {
       if (prop in target) return target[prop];
@@ -694,6 +732,7 @@ export function createFakeWebGL2(opts = {}) {
       else if (prop === "fenceSync") fn = function () { bump(prop); return mk("sync"); };
       else if (prop === "clientWaitSync") fn = function () { bump(prop); return enumOf("ALREADY_SIGNALED"); };
       else fn = noop(prop);
+      fn = logged(prop, fn);
       target[prop] = fn; // cache so identity is stable
       return fn;
     },

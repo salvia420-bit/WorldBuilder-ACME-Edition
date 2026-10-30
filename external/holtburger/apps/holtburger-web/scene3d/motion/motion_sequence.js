@@ -15,8 +15,26 @@
 // `?unifiedMotion` gate is gone, 2026-10-05: this playhead is the only
 // animation driver — the three.js AnimationMixer was retired.) Rust hands JS one GLOBAL FRAME INDEX per entity
 // per frame; this poser indexes the JS-cached keyframe buffer at that frame.
+//
+// ?rustRig (2026-10-26, DEFAULT OFF, `=on` opts in): the per-part pose is
+// computed in Rust (crates/holtburger-scene src/rig.rs, one wasm call per
+// rig) and written without three's quaternion onChange (the Euler
+// re-derivation) — scene3d/rust/rig.js, docs/2026-10-26-rust-rig.md. Same
+// doubles as the JS body below (pinned bit for bit); anything the kernel
+// cannot take falls through to that body.
+
+import { rustRigEnabled, rustPoseRig } from "../rust/rig.js";
 
 export const FLOATS_PER_PART_PER_FRAME = 7; // (x,y,z, qw,qx,qy,qz) — quat W-FIRST
+
+let RUST_RIG = false;
+try {
+  RUST_RIG = rustRigEnabled();
+} catch (_) { /* non-browser (test) context — JS poser */ }
+/** Test seam: route poseRigAt through the Rust bridge (true) or the JS body. */
+export function _setRustRigForTest(on) {
+  RUST_RIG = !!on;
+}
 
 // The dumb poser — port of CPartArray::UpdateParts (acclient.c:326601-326624).
 // Writes each part's ABSOLUTE model-space pose (pos + per-frame root motion;
@@ -133,6 +151,12 @@ export function poseRigAt(globalFrame, desc, partGroups, inPlace = false) {
   let f = globalFrame | 0;
   if (f < 0) f = 0;
   if (numFrames && f >= numFrames) f = numFrames - 1; // defensive clamp
+  // ?rustRig: the same branch choice, made here, handed to the kernel (2 =
+  // exact in place, falling back to mean drift without root frames, as below).
+  if (RUST_RIG && rustPoseRig(desc, f, inPlace && !RENDER_ROOT_MOTION ? (IN_PLACE_EXACT ? 2 : 1) : 0,
+      partGroups, Math.min(partCount, partGroups.length))) {
+    return;
+  }
   if (inPlace && !RENDER_ROOT_MOTION && IN_PLACE_EXACT &&
       poseInPlaceExact(f, desc, partGroups, Math.min(partCount, partGroups.length))) {
     return;

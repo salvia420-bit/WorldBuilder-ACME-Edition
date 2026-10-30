@@ -370,7 +370,15 @@ console.log("PART 5 — request arithmetic (static; browser count is a separate 
   // (generator --check: up to date, 447 modules) → 426.
   // 2026-10-25 (pipeline chain default-on): + scene3d/pipeline_flags.js (index.html and
   // the stage modules) (generator --check: up to date, 448 modules) → 427.
-  const NON_APP_PRELOADS = 427;
+  // 2026-10-26 (Rust scene core, docs/2026-10-26-rust-scene-core.md): + scene3d/rust/scene_core.js,
+  // rust/rig.js, rust/cull.js, rust/anim_scenery.js, rust/terrain_fx.js (motion_sequence.js,
+  // entities.js, setup_rig.js, statics.js, animated_scenery.js, the terrain families) and
+  // scene3d/draw_exec.js (index.js) (generator --check: up to date, 454 modules) → 433.
+  // rust/particles.js is not preloaded: particle_manager.js itself loads dynamically.
+  // 2026-10-26 (scene core round 2): + scene3d/rust/world.js (statics.js, lane W),
+  // scene3d/entity_world.js (lane R4) and scene3d/terrain_shared_uniforms.js (lane F2)
+  // (generator --check: up to date, 457 modules) → 436.
+  const NON_APP_PRELOADS = 436;
   check(mp.length === NON_APP_PRELOADS + appMods, `unbundled modulepreload block == ${NON_APP_PRELOADS} + ${appMods} app/ link elements (got ${mp.length})`);
   const workersInMp = mp.filter((h) => /(?:bake|net|texture|keepalive)_worker\.js/.test(h)).length;
   // html + 266 modules + wasm + SW + workers not in the preload list (bake + shard fetch;

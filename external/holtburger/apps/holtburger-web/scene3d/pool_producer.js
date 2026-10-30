@@ -333,6 +333,16 @@ export function addSingletonsToPools(nodes, scene3d, opts = {}) {
       if (!g) w.stats.normFails += 1;
       return g;
     },
+    // ?poolSizeToContent (pool_registry.js `_planSizeHints`): an upper bound on
+    // what `get` builds, read off the source without building it —
+    // normalizeForPool keeps at most the source's vertices and its index count
+    // (or one index per vertex for an unindexed source).
+    sizeOf: (contentKey) => {
+      const src = w.geomByContent.get(contentKey);
+      const pos = src && src.attributes && src.attributes.position;
+      if (!pos) return null;
+      return { verts: pos.count, indices: src.index ? src.index.count : pos.count };
+    },
   };
 
   if (w.controller) {

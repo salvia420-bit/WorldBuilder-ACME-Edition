@@ -22,6 +22,8 @@
 // material (the batchers already key and reap by the member object).
 // `?batchMatVariant=off` restores sharing the member object.
 
+import { rustFlag } from "./rust/scene_core.js";
+
 const _variantOf = new WeakMap(); // member material -> variant
 const _memberOf = new WeakMap();  // variant -> member material
 
@@ -105,8 +107,57 @@ const HOT_DEFAULT = ["version", "opacity", "visible", "transparent", "depthWrite
 const FULL_SWEEP_DIV = 32;
 let _sweepPhase = 0;
 
+// 2026-10-26 (lane F hot spots, `?hotMatVariant`, default ON, `=off` escape) — GENERATED
+// MIRRORS. `_mirror` reads `mat[k]` / `v[k]` with a VARIABLE key: on ~400
+// variants of a dozen hidden classes those are megamorphic KEYED loads, each a
+// descriptor-array search on objects of ~70 properties (1070, 2026-10-23 run:
+// 0.24 ms/frame self, the largest JS item no other lane covers). The same
+// comparisons and writes, in the same key order, compiled once per distinct key
+// list into straight-line NAMED access (`m.opacity`), use V8's named load
+// caches instead. Values, the order of reads/writes, the `changed` list (and so
+// each entry's hot list) and the sweep schedule are exactly `_mirror`'s: the
+// flag only changes how a property is looked up. Lists past GEN_CACHE_MAX
+// distinct ones fall back to `_mirror`. The page already compiles code from
+// strings (the BASIS transcoder via `new Function`), so this needs no new CSP.
+const GEN_CACHE_MAX = 512;
+const _genCache = new Map(); // JSON.stringify(keys) -> mirror fn | null
+let _genFlag; // undefined => read `?hotMatVariant` once
+let _genBuilt = 0;
+let _genFallback = 0;
+const _IDENT = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
+function _genOn() {
+  if (_genFlag === undefined) _genFlag = rustFlag("hotMatVariant", true);
+  return _genFlag;
+}
+/** The compiled `_mirror(v, m, keys, c)` for this key list (null: use `_mirror`). */
+function _genMirror(keys) {
+  const id = JSON.stringify(keys);
+  let fn = _genCache.get(id);
+  if (fn !== undefined) return fn;
+  if (_genCache.size >= GEN_CACHE_MAX) { _genFallback += 1; return null; }
+  fn = null;
+  try {
+    // Strict, like `_mirror` (this module): a write it cannot make must throw here too.
+    let body = "\"use strict\";\nvar x;\n";
+    for (let i = 0; i < keys.length; i++) {
+      const k = keys[i];
+      if (typeof k !== "string") { body = null; break; }
+      const p = _IDENT.test(k) ? "." + k : "[" + JSON.stringify(k) + "]";
+      // `_mirror`'s statement for key k: read the member first, then compare
+      // with the variant, write and record only on a difference.
+      body += "x = m" + p + "; if (v" + p + " !== x) { v" + p + " = x; if (c) c.push(" + JSON.stringify(k) + "); }\n";
+    }
+    // eslint-disable-next-line no-new-func
+    if (body !== null) fn = new Function("v", "m", "c", body);
+  } catch (_) { fn = null; }
+  _genCache.set(id, fn);
+  if (fn) _genBuilt += 1;
+  return fn;
+}
+
 /** Once per frame, before render: bring every live variant up to its member. */
 export function syncBatchMatVariants() {
+  if (_genOn()) { _syncGenerated(); return; }
   _sweepPhase = (_sweepPhase + 1) % FULL_SWEEP_DIV;
   let i = 0;
   for (const [v, e] of _live) {
@@ -124,6 +175,47 @@ export function syncBatchMatVariants() {
   }
 }
 
+// `?hotMatVariant`: syncBatchMatVariants with the generated mirrors — the same
+// loop, branch for branch (incl. `i++` counting only entries whose version did
+// not move), each `_mirror(v, mat, list, changed)` call replaced by the list's
+// compiled function. `e.hotFn` / `e.fullFn` cache the function for the entry's
+// current `hot` / `keys` list and are dropped whenever that list changes.
+function _syncGenerated() {
+  _sweepPhase = (_sweepPhase + 1) % FULL_SWEEP_DIV;
+  let i = 0;
+  for (const [v, e] of _live) {
+    const mat = e.mat;
+    if (mat.version !== e.ver || (i++ % FULL_SWEEP_DIV) === _sweepPhase) {
+      if (mat.version !== e.ver) { e.keys = _mirrorKeys(mat); e.ver = mat.version; e.fullFn = undefined; }
+      const changed = [];
+      let f = e.fullFn;
+      if (f === undefined) f = e.fullFn = _genMirror(e.keys);
+      if (f !== null) f(v, mat, changed); else _mirror(v, mat, e.keys, changed);
+      for (const k of changed) if (!e.hot.includes(k)) { e.hot.push(k); e.hotFn = undefined; }
+    } else {
+      let f = e.hotFn;
+      if (f === undefined) f = e.hotFn = _genMirror(e.hot);
+      if (f !== null) f(v, mat, null); else _mirror(v, mat, e.hot, null);
+    }
+  }
+}
+
+/** Diag/test: the generated-mirror cache (`?hotMatVariant`). */
+export function batchMatVariantGenStats() {
+  return { on: _genOn(), lists: _genCache.size, built: _genBuilt, fallback: _genFallback };
+}
+
+/** Test seam: force `?hotMatVariant` (`undefined` re-reads the URL flag). */
+export function __setHotMatVariantForTest(on) {
+  _genFlag = on === undefined ? undefined : !!on;
+}
+
+/** Test seam: an entry's internal lists (copies), or null. */
+export function __batchMatVariantEntryForTest(v) {
+  const e = _live.get(v);
+  return e ? { keys: e.keys.slice(), hot: e.hot.slice(), ver: e.ver } : null;
+}
+
 /** The material a BatchedMesh built from member material `mat` should use. */
 export function batchedMaterialFor(mat) {
   if (!mat || Array.isArray(mat) || !mat.isMaterial || !batchMatVariantEnabled()) return mat;
@@ -137,7 +229,7 @@ export function batchedMaterialFor(mat) {
   _variantOf.set(mat, v);
   _memberOf.set(v, mat);
   const e = { mat, keys, hot: HOT_DEFAULT.filter((k) => keys.includes(k)), ver: mat.version,
-    onVariantDispose: null, onMemberDispose: null };
+    onVariantDispose: null, onMemberDispose: null, hotFn: undefined, fullFn: undefined };
   _live.set(v, e);
   // Disposal stays what it meant before the variant existed, in both
   // directions: disposing the bucket's material disposes the member, and a

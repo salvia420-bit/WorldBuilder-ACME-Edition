@@ -621,6 +621,7 @@ export class LandblockLRU {
   constructor({ scene3d, maxResident, getCurrentLbId, onEvictLandblock = null, ringFloor = 1, debug = false } = {}) {
     if (!scene3d) throw new Error("LandblockLRU: scene3d required");
     this.scene3d = scene3d;
+    globalThis.__hbRustWorld?.ownerLru(this); // ?rustWorld: audit this LRU (and its scene) from birth
     // Server-authoritative player LB (see noteServerLb) — null until the
     // first position update stamps it.
     this._serverLbKey = null;
@@ -941,6 +942,7 @@ export class LandblockLRU {
       if (s && typeof s._parkStaticBatchXForLb === "function") {
         try { s._parkStaticBatchXForLb(key); } catch (_) {}
       }
+      globalThis.__hbRustWorld?.lruTrack(this, key, true); // ?rustWorld shadow (scene3d/rust/world.js)
       return;
     }
     let entry = this.entries.get(key);
@@ -959,6 +961,7 @@ export class LandblockLRU {
       if (!Array.isArray(entry.disposables.instancedNodes)) entry.disposables.instancedNodes = [];
     }
     this._appendDisposables(entry.disposables, options);
+    globalThis.__hbRustWorld?.lruTrack(this, key, false); // ?rustWorld
   }
 
   // Shared disposable-append for track()'s normal path and its
@@ -1767,6 +1770,40 @@ export class LandblockLRU {
     }
   }
 
+  // ?anchorOffGraph (statics.js, stage-2 S1b) — the per-LB registry of static
+  // script anchors is `staticsGroup.userData.__anchorRoots` (lbKey → an
+  // off-graph Group whose children are the LB's attached anchors, in the order
+  // staticsGroup used to hold them). The map exists only with the flag on, so
+  // both helpers are no-ops otherwise.
+  //
+  // Detach every anchor of `lbKey` from its root (one order-preserving pass,
+  // `parent = null` on each — the liveness signal the CallPES / start_time
+  // timers, the attach hand-off and the unpark rebuild read) and return them;
+  // `drop` (evict) also forgets the root. null when the LB has none.
+  _detachAnchorRoot(lbKey, drop) {
+    const roots = this.scene3d?.staticsGroup?.userData?.__anchorRoots;
+    if (!(roots instanceof Map)) return null;
+    const root = roots.get(lbKey);
+    if (!root) return null;
+    const anchors = root.children.length > 0 ? [...root.children] : null;
+    if (anchors) this._detachChildren(root, anchors, true);
+    if (drop) roots.delete(lbKey);
+    return anchors;
+  }
+
+  // Unpark: the stashed anchors go back into the LB's root (re-created through
+  // statics.js's factory if an evict dropped it meanwhile), appended in order.
+  _reattachAnchorRoot(lbKey, anchors) {
+    const ud = this.scene3d?.staticsGroup?.userData;
+    if (!ud) return;
+    let root = ud.__anchorRoots instanceof Map ? ud.__anchorRoots.get(lbKey) : null;
+    if (!root && typeof ud.__anchorRootFor === "function") {
+      try { root = ud.__anchorRootFor(lbKey); } catch (_) { root = null; }
+    }
+    if (!root) return;
+    for (const a of anchors) { try { root.add(a); } catch (_) {} }
+  }
+
   // Remove the LB's containers from the scene + dispose the per-LB
   // resources we own. Cross-LB shares (MaterialCache surfaces, statics
   // InstancedMesh, terrain atlas / road texture) are NEVER touched.
@@ -1869,6 +1906,11 @@ export class LandblockLRU {
       // node's own subtree, never staticsGroup, so the old interleaved
       // remove-then-dispose order bought nothing.
       this._detachChildren(s.staticsGroup, kill);
+      // ③b ?anchorOffGraph (statics.js, stage-2 S1b): the LB's static script
+      // anchors live in an off-graph root, not staticsGroup. Detach them the
+      // same way (their `parent` goes null, which ends their CallPES loops) and
+      // drop the root. Absent map ⇒ flag off ⇒ no-op.
+      this._detachAnchorRoot(lbKey, true);
       for (const c of kill) {
         // A per-LB BatchedMesh owns a GPU vertex buffer + per-instance
         // DataTextures that the geometry-disposables list does NOT cover (its
@@ -2150,6 +2192,7 @@ export class LandblockLRU {
     }
 
     this.entries.delete(lbKey);
+    globalThis.__hbRustWorld?.lruEvict(this, lbKey); // ?rustWorld
     this._evictedTotal += 1;
     this._lastEvictedLbKey = lbKey;
 
@@ -2307,6 +2350,11 @@ export class LandblockLRU {
       }
     }
     this._detachChildren(s.staticsGroup, p.statics, true);
+    // ③b ?anchorOffGraph — the LB's off-graph script anchors (registry =
+    // the root's children, in staticsGroup order): detached like ③, stashed
+    // for unpark, root kept. Flag off ⇒ none.
+    const parkedAnchors = this._detachAnchorRoot(lbKey, false);
+    if (parkedAnchors) p.anchors = parkedAnchors;
 
     // ④ EnvCells.
     if (s.cellContainers3d instanceof Map && s.cellsGroup) {
@@ -2331,6 +2379,7 @@ export class LandblockLRU {
     // lights) but do NOT dispose. A light parented inside a stashed subtree
     // rides along; one parented elsewhere is detached and remembered.
     const stashRoots = new Set([...p.terrain, ...p.buildings, ...p.statics]);
+    if (p.anchors) for (const a of p.anchors) stashRoots.add(a);
     for (const [, container] of p.cells) stashRoots.add(container);
     const insideStash = (obj) => {
       for (let o = obj; o; o = o.parent) if (stashRoots.has(o)) return true;
@@ -2394,6 +2443,7 @@ export class LandblockLRU {
     p.bytes = this._estimateParkedBytes(p);
     this.entries.delete(lbKey);
     this.parkPool.set(lbKey, p);
+    globalThis.__hbRustWorld?.lruPark(this, lbKey); // ?rustWorld
     this.parkedBytes += p.bytes;
     this._parkedTotal += 1;
     if (this.debug) {
@@ -2469,6 +2519,7 @@ export class LandblockLRU {
       }
     }
     this.parkPool.delete(lbKey);
+    globalThis.__hbRustWorld?.lruDropPool(this, lbKey); // ?rustWorld
     this.parkedBytes = Math.max(0, this.parkedBytes - p.bytes);
     if (this._sealedPinned.has(lbKey)) this._unpinSealed(lbKey);
     this._stalePoolCopiesDropped += 1;
@@ -2499,6 +2550,9 @@ export class LandblockLRU {
       if (k && s.buildingMap3d instanceof Map) s.buildingMap3d.set(k, c);
     }
     for (const c of p.statics) { try { s.staticsGroup?.add(c); } catch (_) {} }
+    // ③b ?anchorOffGraph — back into the LB's off-graph root (appended, as
+    // the ③ re-add appends to staticsGroup).
+    if (p.anchors && p.anchors.length > 0) this._reattachAnchorRoot(lbKey, p.anchors);
     if (s.cellContainers3d instanceof Map && s.cellsGroup) {
       for (const [cellId, container] of p.cells) {
         try { s.cellsGroup.add(container); } catch (_) {}
@@ -2548,6 +2602,7 @@ export class LandblockLRU {
         } catch (_) {}
       };
       for (const c of p.statics) collect(c);
+      if (p.anchors) for (const a of p.anchors) collect(a);
       for (const [, container] of p.cells) collect(container);
       if (anchors.length > 0) {
         try { s._rebuildStaticParticlesForAnchors(anchors); } catch (_) {}
@@ -2564,6 +2619,7 @@ export class LandblockLRU {
     this._unparkedTotal += 1;
     const now = (typeof performance !== "undefined") ? performance.now() : Date.now();
     this.entries.set(lbKey, { lastTouchMs: now, disposables: p.disposables });
+    globalThis.__hbRustWorld?.lruUnpark(this, lbKey); // ?rustWorld
     if (this.debug) {
       // eslint-disable-next-line no-console
       console.log(

@@ -861,10 +861,27 @@ export function makeOrbAnimSync(roots) {
   if (!orbAnimSyncEnabled()) return null;
   if (!roots || !roots.some((r) => r && typeof r.getAnimations === "function")) return null;
   let live = [];
+  // Reused per step: [animation, start, playState] triples (no per-tick garbage
+  // beyond the `next` list release() needs).
+  const todo = [];
   return {
     /** Sample every infinite loop under `roots` at timeline time `now`. */
+    // 2026-10-26 (lane F hot spots) — READS FIRST, THEN WRITES. A CSSAnimation's
+    // `playState` getter FLUSHES STYLE (Blink CSSAnimation::playState →
+    // FlushStyles → Document::UpdateStyleAndLayoutTree), and so does each
+    // root's getAnimations(); every `currentTime =` write dirties the target's
+    // animation style. Read-write-read per animation therefore forced one style
+    // recalc per loop per cadence tick, plus one per pane (1070 2026-10-23 run:
+    // `step` 0.19 ms/frame self + 0.11 ms in getAnimations). Now every pane's
+    // list, every adoption read and every playState read happen before the
+    // first write: one flush per tick (the first getAnimations), the rest read
+    // clean style. Each animation still gets exactly the same calls in the same
+    // order (pause() only if it was not paused, then currentTime = now − start),
+    // the same adoption, the same exceptions skipping it, and the live list
+    // keeps getAnimations' order — the writes touch only that animation, so no
+    // read can see a different value for being taken earlier.
     step(now) {
-      const next = [];
+      todo.length = 0;
       for (const root of roots) {
         if (!root || typeof root.getAnimations !== "function") continue;
         let anims;
@@ -881,13 +898,21 @@ export function makeOrbAnimSync(roots) {
             start = now - Number(ct);
             _animStart.set(a, start);
           }
-          try {
-            if (a.playState !== "paused") a.pause();
-            a.currentTime = now - start;
-            next.push(a);
-          } catch (_) {}
+          let ps;
+          try { ps = a.playState; } catch (_) { continue; }
+          todo.push(a, start, ps);
         }
       }
+      const next = [];
+      for (let i = 0; i < todo.length; i += 3) {
+        const a = todo[i];
+        try {
+          if (todo[i + 2] !== "paused") a.pause();
+          a.currentTime = now - todo[i + 1];
+          next.push(a);
+        } catch (_) {}
+      }
+      todo.length = 0;
       live = next;
     },
     /** Hand the loops back to Blink's clock at their current phase. */

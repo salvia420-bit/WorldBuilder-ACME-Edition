@@ -115,6 +115,9 @@ import {
   familyForCode,
 } from "./terrain_families.js";
 import { createScatterPool, SCATTER_FADE_GLSL } from "./terrain_scatter.js";
+// ?rustTerrainFx (2026-10-26, lane E, default OFF): the pool's per-frame
+// re-scatter plan from Rust (null with the flag off ⇒ the pool's own loops).
+import { rustScatterPlanner } from "./rust/terrain_fx.js";
 import {
   RETAIL_LIGHT_TICK_SEC,
   createRetailLightTick,
@@ -1048,6 +1051,7 @@ export function createPebbleField(opts = {}) {
   const dims = { x: 0, y: 0, z: 0 };
 
   const pool = createScatterPool({
+    scanPlanner: rustScatterPlanner(),
     THREE,
     name: "terrain-rock-pebbles",
     count,
@@ -1288,6 +1292,7 @@ export function createGritField(opts = {}) {
   }
 
   const pool = createScatterPool({
+    scanPlanner: rustScatterPlanner(),
     THREE,
     name: "terrain-rock-grit",
     count,

@@ -1392,6 +1392,56 @@ const TIER5 = [
   { tier: 5, flag: "rejectionFeedbackReconnect", file: "tests/rejection_feedback_reconnect.test.mjs" },
   // §7 entities: remove() drops the motions stashed for a spawn that never committed.
   { tier: 5, flag: "spawnMotionStash", file: "tests/spawn_motion_stash_remove.test.mjs" },
+  // 2026-10-26 — Rust scene core (docs/2026-10-26-rust-scene-core.md). Each
+  // suite drives the REAL compiled wasm through scene3d/rust/*.js, so it needs
+  // a pkg/ built from this tree (a stale pkg prints SKIP, which fails here).
+  { tier: 5, flag: "rustSceneCore(wasm)", file: "tests/rust_scene_core_smoke.test.mjs",
+    requires: "pkg/holtburger_web_bg.wasm" },
+  // Lane A: ?rustParticles kernel through the real bridge vs the JS runtime.
+  { tier: 5, flag: "rustParticles(wasm)", file: "tests/rust_particles_parity.test.mjs",
+    requires: "pkg/holtburger_web_bg.wasm" },
+  // Lane B: ?rustRig poser + ?rustEntityCull gate vs the JS paths.
+  { tier: 5, flag: "rustRig+rustEntityCull(parity)", file: "tests/rust_rig_parity.test.mjs",
+    requires: "pkg/holtburger_web_bg.wasm" },
+  // Lane B follow-up: ?rigMeshAlias (identity rig meshes share their part's
+  // matrixWorld) bit-identical to three's walk at every walk (no wasm needed).
+  { tier: 5, flag: "rigMeshAlias", file: "tests/rig_mesh_alias.test.mjs" },
+  // Lane C: stage-2 S1b ?anchorOffGraph — anchors off the scene graph, emitters bit-equal.
+  { tier: 5, flag: "anchorOffGraph", file: "tests/anchor_off_graph.test.mjs" },
+  // Lane C: stage-2 S1a ?staticMatrixFreeze — frozen statics bit-equal to three's walk.
+  { tier: 5, flag: "staticMatrixFreeze", file: "tests/static_matrix_freeze.test.mjs" },
+  // Lane C: stage-2 S1c ?poolSizeToContent — pools sized to their first feed, content identical.
+  { tier: 5, flag: "poolSizeToContent", file: "tests/pool_size_to_content.test.mjs" },
+  // Lane C: ?rustCull registry + kernel vs the JS statics walk (mirror kernel always; the real wasm when built).
+  { tier: 5, flag: "rustCull(parity)", file: "tests/rust_cull_parity.test.mjs",
+    requires: "pkg/holtburger_web_bg.wasm" },
+  // Lane D: ?rustAnimScenery (template pose from Rust) + ?rustAnimSceneryGate (JS gate) vs the JS loop.
+  { tier: 5, flag: "rustAnimScenery+rustAnimSceneryGate(parity)", file: "tests/rust_anim_scenery_parity.test.mjs",
+    requires: "pkg/holtburger_web_bg.wasm" },
+  // Lane E: ?rustTerrainFx scatter-pool re-scatter planner vs terrain_scatter.js's own scan.
+  { tier: 5, flag: "rustTerrainFx(parity)", file: "tests/rust_terrain_fx_parity.test.mjs",
+    requires: "pkg/holtburger_web_bg.wasm" },
+  // Lane W: ?rustWorld shadow tables + audit (S2), JS reference model + the compiled SceneWorld.
+  { tier: 5, flag: "rustWorld(shadow)", file: "tests/rust_world_shadow.test.mjs" },
+  // Lane R4: ?rustEntityWorld (entity_world.js) — rig-aware walk + projection stand-in identical to
+  // stock three (GL stream, renderer.info, sorted lists), the index.js install wiring, retention.
+  // Unregistered until 2026-10-29 (the gate listed it UNREGISTERED). JS only; no pkg needed.
+  { tier: 5, flag: "rustEntityWorld", file: "tests/rust_entity_world.test.mjs" },
+  // 2026-10-26 lane F hot spots (docs/2026-10-26-rust-hotspots.md): flag off vs on, frame by frame.
+  { tier: 5, flag: "hotMatVariant", file: "tests/hot_mat_variant.test.mjs" },
+  { tier: 5, flag: "hotDrawSort", file: "tests/hot_draw_sort.test.mjs" },
+  { tier: 5, flag: "orbAnimSync(step)", file: "tests/hot_orb_anim_step.test.mjs" },
+  { tier: 5, flag: "radar(rects)", file: "tests/hot_radar_rects.test.mjs" },
+  { tier: 5, flag: "hotCloudPush+hotTerrainTime", file: "tests/hot_terrain_push.test.mjs" },
+  { tier: 5, flag: "hotNightRamp", file: "tests/hot_night_ramp.test.mjs" },
+  // 2026-10-26 lane F2 (docs/2026-10-26-rust-hotspots-2.md): flag off vs on, every material / record / ring.
+  // 1,000+ frames over 1,423 materials: ~123 s on the quiet laptop, past the 120 s default (2026-10-29 gate).
+  { tier: 5, flag: "hotTerrainShared", file: "tests/hot_terrain_shared.test.mjs", timeoutMs: 300000 },
+  { tier: 5, flag: "hotWeaponFxSync", file: "tests/hot_weapon_fx_sync.test.mjs" },
+  { tier: 5, flag: "hotGrassCull", file: "tests/hot_grass_cull.test.mjs" },
+  // Lane X (stage 3): ?drawExec / ?drawExecRuns / ?drawExecRigs — the full GL call stream
+  // identical to stock three + our wrappers, frame by frame (fake WebGL2, 14 scenarios).
+  { tier: 5, flag: "drawExec+drawExecRuns+drawExecRigs", file: "tests/draw_exec.test.mjs" },
 ];
 
 // Registered but KNOWN-FAILING because the APP is wrong (a real bug, named
@@ -1452,6 +1502,9 @@ const NEEDS_BROWSER = [
   { file: "harness/glsl_smoke/grass_gpu_smoke.mjs", why: `terrainGrassGpu (GPU readback vs CPU grass; writes grass_gpu_smoke.stamp.json on PASS) — ${BROWSER_WHY}` },
   { file: "harness/glsl_smoke/heat_haze_smoke.mjs", why: `terrainHaze heat shimmer + desert mirage GLSL (off / disc / ground / mirage arms) — ${BROWSER_WHY}` },
   { file: "harness/glsl_smoke/terrain_vfx_compile_smoke.mjs", why: `terrain program (every define set) + every terrain-VFX particle material compile and link — ${BROWSER_WHY}` },
+  // 2026-10-26 — Rust scene core lanes (docs/2026-10-26-rust-scene-core.md).
+  { file: "harness/glsl_smoke/rig_mesh_alias_smoke.mjs", why: `rigMeshAlias (lit rigs flag off vs on, max channel diff 0) — ${BROWSER_WHY}` },
+  { file: "harness/glsl_smoke/draw_exec_smoke.mjs", why: `drawExec / drawExecRuns / drawExecRigs (static + rig scene, every arm vs stock, max channel diff 0) — ${BROWSER_WHY}` },
 ];
 const BROWSER_ONLY = new Set(NEEDS_BROWSER.map((q) => q.file));
 
@@ -1651,10 +1704,13 @@ function runOne(entry, opts) {
   if (need && !existsSync(path.resolve(APP_ROOT, need))) {
     return { ...entry, status: STATUS.NOFIXTURE, code: null, detail: `fixture absent: ${need}`, output: "" };
   }
+  // 2026-10-29: an entry may carry its own `timeoutMs` (a long exact suite); the larger of it and the
+  // run's --timeout applies, so a raised --timeout still raises every test.
+  const timeoutMs = Math.max(Number(entry.timeoutMs) || 0, opts.timeoutMs);
   const run = spawnSync(process.execPath, [...CHILD_HEAP_ARGS, entry.file], {
     cwd: APP_ROOT,
     encoding: "utf8",
-    timeout: opts.timeoutMs,
+    timeout: timeoutMs,
     maxBuffer: 64 * 1024 * 1024,
   });
   // spawnSync sets .error (e.g. ETIMEDOUT) and/or .signal on a kill.
@@ -1664,7 +1720,7 @@ function runOne(entry, opts) {
   const output = [run.stdout || "", run.stderr || ""].join("");
   let detail = "";
   if (!ok) {
-    if (timedOut) detail = `timeout ${opts.timeoutMs}ms`;
+    if (timedOut) detail = `timeout ${timeoutMs}ms`;
     else if (run.error) detail = run.error.message;
     else if (killed) detail = `signal ${run.signal}`;
     else detail = `exit ${run.status}`;

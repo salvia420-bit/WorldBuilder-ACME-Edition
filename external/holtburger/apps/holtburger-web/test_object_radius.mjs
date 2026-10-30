@@ -155,8 +155,114 @@ console.log("=========================");
   // Eviction: the LB leaves the baked sets -> forgotten.
   M.tickObjectRadius(s, new Set([near]));
   s.staticsBakedLbs.delete(far);
+  calls.length = 0;
+  const forgets0 = M.getObjectRadiusStats(s).forgets;
   M.tickObjectRadius(s, new Set([lb(11, 10)]));
   check("5e. an evicted LB is dropped from the hidden set", !s._objRadius.hidden.has(far));
+  // 2026-10-29 (lane W review r2): the forget lifts the pool registry's sticky
+  // hide too — before, a hidden-then-evicted landblock stayed in the registry's
+  // `_hiddenLbs` and its re-baked pooled statics committed invisible for good.
+  check("5f. …and the forget lifts the pool registry's sticky hide (exactly once, for that LB)",
+    calls.filter((c) => c[0] === "poolShow").map((c) => c[1]).join() === String(far) &&
+    M.getObjectRadiusStats(s).forgets === forgets0 + 1, JSON.stringify(calls));
+  check("5g. …and touches nothing else (no node / bucket / atlas call for an evicted LB)",
+    calls.every((c) => c[0] === "poolShow"), JSON.stringify(calls));
+}
+
+// ---- 6. the real PoolRegistry: hide -> release -> forget -> return (2026-10-29) ----
+// The pooled-statics path end to end, wired as index.js wires liveScene3d
+// (`_poolHideLb` / `_poolShowLb` -> registry.hideLb / showLb). Pre-fix the
+// forget left the registry's hide behind and 6d / 6g read [false, false].
+{
+  globalThis.window ??= {};
+  globalThis.window.location ??= { search: "" };
+  const THREE = await import("three");
+  const { applyBatchedMeshColorTextureFix } = await import("./scene3d/three_batchedmesh_colortexture_fix.js");
+  applyBatchedMeshColorTextureFix(THREE);
+  const { PoolRegistry, tileKeyOfLbKey } = await import("./scene3d/pool_registry.js");
+  M.__setObjRadiusForTest(4); // the shipped default
+  const reg = new PoolRegistry({
+    THREE, group: new THREE.Group(), warn: () => {}, search: "",
+    materialFactory: (k) => { const m = new THREE.MeshStandardMaterial(); m.name = `pool-${k}`; return m; },
+  });
+  const g = new THREE.BufferGeometry();
+  g.setAttribute("position", new THREE.BufferAttribute(new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]), 3));
+  g.setAttribute("normal", new THREE.BufferAttribute(new Float32Array(9).fill(0.5), 3));
+  g.setAttribute("uv", new THREE.BufferAttribute(new Float32Array(6).fill(0.25), 2));
+  g.setIndex([0, 1, 2]);
+  const geomSource = { get: () => g };
+  const s3 = {
+    staticsGroup: new THREE.Group(), buildingsGroup: new THREE.Group(),
+    staticsBakedLbs: new Set(), buildingsBakedLbs: new Set(),
+    _poolHideLb: (k) => reg.hideLb(k), // index.js liveScene3d._poolHideLb
+    _poolShowLb: (k) => reg.showLb(k), // index.js liveScene3d._poolShowLb
+  };
+  const member = (key) => ({
+    domain: "st", classKey: "st|opaque|g", passClass: "opaque", sectorKey: "s0", contentKey: "g0", layer: 0, lbKey: key,
+    matrix: new THREE.Matrix4().makeTranslation(((key >>> 24) & 0xff) * 192 + 10, ((key >>> 16) & 0xff) * 192 + 10, 0).toArray(),
+  });
+  // Visible flags of `key`'s pooled instances (the registry's per-landblock ranges).
+  const visOf = (key) => {
+    const out = [];
+    const byTile = reg.tiles.get(tileKeyOfLbKey(key));
+    if (byTile) for (const mem of byTile.values()) for (const id of (mem.lbRanges && mem.lbRanges.get(key)) || []) out.push(mem.pool.mesh._instanceInfo[id].visible);
+    return out;
+  };
+  const bake = (key) => {
+    reg.feedTile({ tile: tileKeyOfLbKey(key), lbs: [key], members: [member(key), member(key)], counts: {} }, geomSource);
+    s3.staticsBakedLbs.add(key);
+    M.afterObjectBake(s3, key);
+  };
+  const K = lb(0x40, 0x40);
+  M.tickObjectRadius(s3, new Set([K]));
+  bake(K);
+  check("6a. baked on the player's landblock: pooled statics visible", visOf(K).join() === "true,true", visOf(K).join());
+  M.tickObjectRadius(s3, new Set([lb(0x46, 0x40)]));
+  check("6b. 6 landblocks away: hidden, in the registry's sticky set too", visOf(K).join() === "false,false" && reg.isLbHidden(K));
+  // The grid parks the vacated tile, then its pressure pass releases it: the
+  // baked marks go first (lru.disposeLb), the registry record with the EMPTY event.
+  reg.parkTile(tileKeyOfLbKey(K));
+  s3.staticsBakedLbs.delete(K);
+  M.tickObjectRadius(s3, new Set([lb(0x47, 0x40)]));
+  check("6c. forget on a PARKED tile drops the registry's mark and flips nothing (park still owns it)",
+    !reg.isLbHidden(K) && !s3._objRadius.hidden.has(K) && visOf(K).join() === "false,false", `${reg.isLbHidden(K)} ${visOf(K).join()}`);
+  reg.releaseTile(tileKeyOfLbKey(K));
+  // The player comes back: the tile re-feeds inside the radius.
+  M.tickObjectRadius(s3, new Set([K]));
+  bake(K);
+  M.tickObjectRadius(s3, new Set([lb(0x40, 0x41)]));
+  M.tickObjectRadius(s3, new Set([K]));
+  check("6d. back on the landblock, re-baked: its pooled statics are VISIBLE again", visOf(K).join() === "true,true", visOf(K).join());
+  // Same cycle with the registry record released BEFORE the forget (the usual
+  // order: release, then the next crossing forgets).
+  const K2 = lb(0x60, 0x40);
+  M.tickObjectRadius(s3, new Set([K2]));
+  bake(K2);
+  M.tickObjectRadius(s3, new Set([lb(0x66, 0x40)]));
+  reg.parkTile(tileKeyOfLbKey(K2));
+  s3.staticsBakedLbs.delete(K2);
+  reg.releaseTile(tileKeyOfLbKey(K2));
+  check("6e. released while hidden: the registry still holds the hide until the forget", reg.isLbHidden(K2));
+  M.tickObjectRadius(s3, new Set([lb(0x67, 0x40)]));
+  // (K is legitimately hidden again meanwhile: baked and far from K2.)
+  check("6f. the forget lifts it; the registry's hides equal objRadius's again",
+    !reg.isLbHidden(K2) && [...reg._hiddenLbs].sort().join() === [...s3._objRadius.hidden].sort().join(),
+    `${[...reg._hiddenLbs].join()} vs ${[...s3._objRadius.hidden].join()}`);
+  M.tickObjectRadius(s3, new Set([K2]));
+  bake(K2);
+  check("6g. back on it: re-baked visible", visOf(K2).join() === "true,true", visOf(K2).join());
+  // Fail-soft: a throwing show hook (or none: the chain off) never blocks the forget.
+  const s4 = { staticsGroup: { children: [] }, buildingsGroup: { children: [] }, staticsBakedLbs: new Set([K]), buildingsBakedLbs: new Set(),
+    _poolShowLb: () => { throw new Error("boom"); } };
+  M.tickObjectRadius(s4, new Set([lb(0x46, 0x40)]));
+  s4.staticsBakedLbs.delete(K);
+  M.tickObjectRadius(s4, new Set([lb(0x47, 0x40)]));
+  const s5 = { staticsGroup: { children: [] }, buildingsGroup: { children: [] }, staticsBakedLbs: new Set([K]), buildingsBakedLbs: new Set() };
+  M.tickObjectRadius(s5, new Set([lb(0x46, 0x40)]));
+  s5.staticsBakedLbs.delete(K);
+  M.tickObjectRadius(s5, new Set([lb(0x47, 0x40)]));
+  check("6h. a throwing (or absent: chain off) _poolShowLb never blocks the forget",
+    s4._objRadius.hidden.size === 0 && s5._objRadius.hidden.size === 0);
 }
 
 M.__setObjRadiusForTest(undefined);

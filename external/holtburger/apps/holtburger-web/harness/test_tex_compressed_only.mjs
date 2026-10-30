@@ -403,8 +403,16 @@ console.log("PART 6 — atlas preview-commit + atlasRefeed re-home + GC");
   check("full-dim bucket exists + fed", !!fullKey && stats.atlased === 2);
   const pb = buckets.get(previewKey);
   check("preview bucket emptied", pb.bm.userData.layerOf.size === 0 && pb.bm.userData.gidVerts.size === 0);
+  // The GC must free the bucket's GPU side whole: its geometry exactly once, and the
+  // BatchedMesh's own matrices / indirect DataTextures (2026-10-29: they leaked per bucket).
+  const gcDisposed = { geometry: 0, matrices: 0, indirect: 0 };
+  pb.bm.geometry.addEventListener("dispose", () => { gcDisposed.geometry += 1; });
+  pb.bm._matricesTexture?.addEventListener("dispose", () => { gcDisposed.matrices += 1; });
+  pb.bm._indirectTexture?.addEventListener("dispose", () => { gcDisposed.indirect += 1; });
   tickStatAtlasOptimize();
   check("empty preview bucket GC'd", !buckets.has(previewKey) && stats.emptyBucketsGCd >= 1);
+  check("GC'd bucket: geometry disposed once, matrices + indirect textures disposed",
+    gcDisposed.geometry === 1 && gcDisposed.matrices === 1 && gcDisposed.indirect === 1, JSON.stringify(gcDisposed));
   check("refeed of unknown rsId is a 0 no-op", atlasRefeed(0x06009999) === 0);
 
   // ESCAPE arm: hold-out + refeed commits + scene removal.

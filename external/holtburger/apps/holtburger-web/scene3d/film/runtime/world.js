@@ -495,7 +495,11 @@ export function createWorld(deps = {}) {
   function signature(live) {
     if (!live) return "none";
     const t = live.terrainBakedLbs instanceof Set ? live.terrainBakedLbs.size : -1;
-    const s = live.staticsGroup && Array.isArray(live.staticsGroup.children) ? live.staticsGroup.children.length : -1;
+    const sg = live.staticsGroup;
+    let s = sg && Array.isArray(sg.children) ? sg.children.length : -1;
+    // ?anchorOffGraph: outdoor script anchors live in per-landblock off-graph roots, not in staticsGroup
+    const roots = sg && sg.userData ? sg.userData.__anchorRoots : null;
+    if (s >= 0 && roots instanceof Map) for (const r of roots.values()) if (r && Array.isArray(r.children)) s += r.children.length;
     const c = live.cellContainers3d && typeof live.cellContainers3d.size === "number" ? live.cellContainers3d.size : -1;
     return `${t}|${s}|${c}`;
   }

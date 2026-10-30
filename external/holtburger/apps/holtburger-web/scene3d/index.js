@@ -191,6 +191,8 @@ import { installBatchedIndirectPerCamera } from "./batched_indirect_per_camera.j
 import { installShadowCasterList } from "./shadow_caster_list.js";
 import { installSkipEmptyMultiDraw } from "./skip_empty_multidraw.js";
 import { installBatchedRunsChunks, installBatchedRuns, batchedRunsFrameTotals } from "./batched_runs.js";
+import { installDrawExec } from "./draw_exec.js";
+import { installEntityWorld } from "./entity_world.js";
 import { parseCloudResScale, applyCloudResScale } from "./cloud_res_scale.js";
 import { installDepthBandSort } from "./depth_band_sort.js";
 import { freezeWorldRoots, installFreezeWorldRootsSeam } from "./freeze_world_roots.js";
@@ -1734,6 +1736,7 @@ export async function preInit3D(canvas) {
   // draw + a vertex-uniform-buffer upload each); 2026-07-15 Holtburg measured
   // 5,838 ranges/frame behind 1,921 counted calls. `__batchedRuns.frame()`.
   try { installBatchedRuns(renderer); } catch (_) { /* never break boot */ }
+  try { installDrawExec(renderer, () => scene); } catch (_) { /* ?drawExec (stage 3 S3.1, default off): outermost static-draw executor, draw_exec.js */ }
   // Wave 3 / L2 fix (2026-05-28) — particle_manager.js was the original
   // home of this URL parse, but it's `await import()`'d from
   // play_effect_vfx.js:1063 and entities.js:4434 (dynamic import), so
@@ -1838,6 +1841,7 @@ export async function preInit3D(canvas) {
     freezeWorldRoots(THREE, [scene, worldRoot, terrainGroup, buildingsGroup, staticsGroup, cellsGroup, entitiesGroup]);
     installFreezeWorldRootsSeam(renderer, scene);
   } catch (_) { /* never break boot */ }
+  try { installEntityWorld(renderer, () => scene, () => entitiesGroup); } catch (_) { /* ?rustEntityWorld (default off): projection stand-in, entity_world.js — required here (scene3dForBuilders has no renderer / scene) */ }
   // ?punchRetail (2026-10-05) draw-order phase tags, read by the opaque sort in
   // atmosphere_pipeline.js (nearest tag up the parent chain wins). ONLY the
   // terrain surface draws before the doorway punch (phase 0) — it is the one

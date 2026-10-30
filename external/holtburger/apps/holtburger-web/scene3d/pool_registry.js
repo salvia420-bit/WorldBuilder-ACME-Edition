@@ -233,10 +233,63 @@ export const POOL_INIT_VERTS = 16_384;
 /** Dead-extent fraction that makes `optimize()` worth its compaction. */
 export const POOL_OPTIMIZE_FRAC = 0.30;
 /** Bytes per vertex of the pass-4 indexed layout (pos f32×3, normal snorm8×3
- *  +pad, uv f32×2) — the M6 `allocatedBytes` denominator. */
+ *  +pad, uv f32×2) — the M6 `allocatedBytes` denominator of the flag-off
+ *  census (pinned by harness/test_draw_pools.mjs). That layout never shipped:
+ *  what a pool stores (pool_material.js `normalizeForPool`) is position f32×3
+ *  (12) + normal f32×3 (12) + uv f32×2 (8) + aLayer f32×1 (4) =
+ *  POOL_VERTEX_BYTES_ACTUAL (36 B), plus acBakedLight u8×3 (3) =
+ *  POOL_BAKED_VERTEX_BYTES (39 B) when the source carries a bake, so this
+ *  census reads 2/3 of the truth (residency design §1.6). Under
+ *  ?poolSizeToContent the census reads each pool's real buffers instead
+ *  (`_poolGeometryBytes`). */
 export const POOL_VERTEX_BYTES = 24;
-/** Bytes per u16 index. */
+/** What a pool vertex really costs (no baked light / with it). */
+export const POOL_VERTEX_BYTES_ACTUAL = 36;
+export const POOL_BAKED_VERTEX_BYTES = 39;
+/** Bytes per u16 index (a pool's index buffer is u16 below 65,536 vertices). */
 export const POOL_INDEX_BYTES = 2;
+/** ?poolSizeToContent: the first allocation's floor (static_batch_x `_MIN_INIT_VERTS`). */
+export const POOL_MIN_INIT_VERTS = 1_024;
+
+/**
+ * `?poolSizeToContent` (2026-10-26, stage-2 S1c; DEFAULT ON since 2026-10-26,
+ * `=off`/0/false/no escape; read once per
+ * registry). docs/2026-10-26-rust-residency-design.md §4 S1c.
+ *
+ * A pool's first allocation was always POOL_INIT_VERTS (16,384 vertices,
+ * 32,768 indices: ~655 KB of vertex + index arrays, on the heap and on the
+ * GPU) whatever it was created for — the 1070 chain boot: 76 pools, 34.9 MB
+ * allocated for 0.29 MB used. Armed, a pool created by a feed is sized from
+ * that feed's own members for it, with the chunk buckets' rule
+ * (static_batch_x.js `_initialBucketVerts`): twice the need, a power of two,
+ * clamped to [1,024, 16,384]; later feeds grow it by doubling exactly as
+ * before. Pixel-identical: capacity is not an input to any draw — geometry
+ * ranges are appended in the same order at the same offsets, and
+ * `setGeometrySize` copies the arrays it grows. The need comes from the
+ * feed's geometry source `sizeOf(contentKey, layer, member)` → `{verts,
+ * indices}` (an upper bound read off the source geometry, so the first
+ * allocation never undershoots what `get` produces); a source without it
+ * keeps today's allocation. The census then reports each pool's real buffer
+ * bytes.
+ */
+export function poolSizeToContentEnabled(search) {
+  try {
+    const s = search !== undefined ? search : typeof window !== "undefined" && window.location ? window.location.search : "";
+    const v = (new URLSearchParams(s || "").get("poolSizeToContent") || "").trim().toLowerCase();
+    // DEFAULT ON since 2026-10-26 (`=off|0|false|no` is the escape).
+    return !(v === "off" || v === "0" || v === "false" || v === "no");
+  } catch (_) {
+    return true;
+  }
+}
+
+/** The chunk rule (static_batch_x.js `_initialBucketVerts`) for a pool's first allocation. */
+export function poolInitialVerts(verts, indices, ceiling = POOL_INIT_VERTS) {
+  const need = Math.max(verts | 0, Math.ceil((indices | 0) / 2)) * 2;
+  let size = POOL_MIN_INIT_VERTS;
+  while (size < need && size < ceiling) size *= 2;
+  return Math.min(size, Math.max(POOL_MIN_INIT_VERTS, ceiling));
+}
 
 // ---------------------------------------------------------------------------
 // membership record (pass-07 S1 — the ONLY retained per-tile scene bookkeeping)
@@ -319,6 +372,8 @@ export class PoolRegistry {
     // construction and never flips under it.
     this.runsEnabled = poolRunsEnabled(search);
     this.markRuns = this.runsEnabled && typeof markRuns === "function" ? markRuns : null;
+    // ?poolSizeToContent (S1c, default ON): resolved ONCE, like ?poolRuns.
+    this.sizeToContent = poolSizeToContentEnabled(search);
 
     /** poolKey ("<sectorKey>|<classKey>") -> pool state */
     this.pools = new Map();
@@ -350,6 +405,7 @@ export class PoolRegistry {
     // 2026-10-25: landblocks whose instances an ?objRadius hide holds
     // invisible, whatever the tile's LIVE/PARKED state or the cell PVS says.
     this._hiddenLbs = new Set();
+    globalThis.__hbRustWorld?.ownerPoolReg(this); // ?rustWorld: audit this registry from birth
     this._stats = {
       feeds: 0, parks: 0, adopts: 0, releases: 0,
       bandSwaps: 0, cellFlips: 0,
@@ -360,6 +416,8 @@ export class PoolRegistry {
       lbHides: 0, lbShows: 0, lbHiddenInstances: 0,
       classesCreated: 0, classesCreatedPostBoot: 0,
       optimizeRuns: 0, growthDoublings: 0,
+      // ?poolSizeToContent: pools whose first allocation was sized to content.
+      sizedToContent: 0,
       unresolvedGeometry: 0, unpooledMembers: 0,
       // ?poolRuns — per pool CREATED (cumulative): marked for batchedRuns, an
       // opaque pool left on three's draw because its material blends or skips
@@ -485,16 +543,23 @@ export class PoolRegistry {
    * Get-or-create the pool for (sector, class). Create-on-first-member;
    * persists across residency churn; reaped when empty.
    */
-  poolFor(sectorKey, classKey, member) {
+  poolFor(sectorKey, classKey, member, sizeHint = null) {
     const key = PoolRegistry.poolKeyOf(sectorKey, classKey);
     let p = this.pools.get(key);
     if (p) return p;
     this._verifyColorTextureFix();
     const cls = this._classOf(classKey, member);
     const THREE = this.THREE;
+    // ?poolSizeToContent: a pool created by a feed that knows its need starts
+    // at the chunk rule's size (never above the default); otherwise as before.
+    const initVerts = sizeHint && this.sizeToContent
+      ? poolInitialVerts(sizeHint.verts, sizeHint.indices, this.initVerts)
+      : this.initVerts;
+    if (initVerts !== this.initVerts) this._stats.sizedToContent += 1;
     const bm = new THREE.BatchedMesh(
-      this.initInstances, this.initVerts, this.initVerts * 2, cls.material,
+      this.initInstances, initVerts, initVerts * 2, cls.material,
     );
+    globalThis.__hbRustWorld?.track(bm, "pool", null, this); // ?rustWorld shadow (scene3d/rust/world.js)
     bm.name = poolNodeName(sectorKey, classKey);
     // Node-level culling KEPT (sector-bounded geometry, D-07.4 step 1).
     bm.frustumCulled = true;
@@ -562,8 +627,8 @@ export class PoolRegistry {
       instances: 0,
       deadInstances: 0,
       maxInstances: this.initInstances,
-      maxVerts: this.initVerts,
-      maxIndices: this.initVerts * 2,
+      maxVerts: initVerts,
+      maxIndices: initVerts * 2,
       usedVerts: 0,
       usedIndices: 0,
       /** vertices freed by deleteGeometry since the last optimize() — the
@@ -733,6 +798,9 @@ export class PoolRegistry {
     let i = 0;
     let committed = false;
     const touched = new Map(); // poolKey -> membership
+    // ?poolSizeToContent: what this plan will add to each pool (unique content
+    // per pool, both LOD bands), for a pool this feed creates.
+    const sizeHints = this.sizeToContent ? this._planSizeHints(members, geometrySource) : null;
 
     const job = {
       tileKey,
@@ -750,7 +818,7 @@ export class PoolRegistry {
           if (fed > 0 && typeof deadline === "function" && deadline()) break;
           const m = members[i++];
           try {
-            self._feedMember(tileKey, m, geometrySource, touched, hooks);
+            self._feedMember(tileKey, m, geometrySource, touched, hooks, sizeHints);
           } catch (e) {
             self._stats.lastError = String(e && e.message || e);
           }
@@ -767,6 +835,7 @@ export class PoolRegistry {
       commit() {
         if (committed) return 0;
         committed = true;
+        globalThis.__hbRustWorld?.poolCommit(self, tileKey, touched); // ?rustWorld: the kernel derives the flips
         const live = !self._parkedTiles.has(tileKey);
         let flipped = 0;
         for (const mem of touched.values()) {
@@ -857,12 +926,45 @@ export class PoolRegistry {
     return job;
   }
 
-  _feedMember(tileKey, m, geometrySource, touched, hooks) {
+  /** ?poolSizeToContent: poolKey → {verts, indices} this plan adds, or null
+   *  when the geometry source cannot size content without building it. */
+  _planSizeHints(members, geometrySource) {
+    if (!geometrySource || typeof geometrySource.sizeOf !== "function") return null;
+    const hints = new Map();
+    const seen = new Set();
+    const add = (pk, contentKey, layer, m) => {
+      const ck = `${pk}#${contentKey}|${layer}`;
+      if (seen.has(ck)) return;
+      seen.add(ck);
+      let sz = null;
+      try { sz = geometrySource.sizeOf(contentKey, layer, m); } catch (_) { sz = null; }
+      if (!sz) return;
+      let h = hints.get(pk);
+      if (!h) { h = { verts: 0, indices: 0 }; hints.set(pk, h); }
+      h.verts += sz.verts | 0;
+      h.indices += sz.indices | 0;
+    };
+    for (const m of members) {
+      if (!m || !isPooledDomain(m.domain || "st")) continue;
+      const pk = PoolRegistry.poolKeyOf(m.sectorKey, m.classKey);
+      const layer = m.layer == null ? 0 : m.layer | 0;
+      if (Array.isArray(m.bandGids) && m.bandGids.length === 2) {
+        add(pk, m.bandGids[0], layer, m);
+        add(pk, m.bandGids[1], layer, m);
+      } else {
+        add(pk, m.contentKey, layer, m);
+      }
+    }
+    return hints;
+  }
+
+  _feedMember(tileKey, m, geometrySource, touched, hooks, sizeHints = null) {
     if (!isPooledDomain(m.domain || "st")) {
       this._stats.unpooledMembers += 1;
       return;
     }
-    const p = this.poolFor(m.sectorKey, m.classKey, m);
+    const p = this.poolFor(m.sectorKey, m.classKey, m,
+      sizeHints ? sizeHints.get(PoolRegistry.poolKeyOf(m.sectorKey, m.classKey)) || null : null);
     let mem = touched.get(p.key);
     if (!mem) { mem = makeMembership(p); touched.set(p.key, mem); }
 
@@ -889,6 +991,7 @@ export class PoolRegistry {
     const id = p.mesh.addInstance(gid);
     // The flip is LAST (commit): an instance is born invisible.
     p.mesh.setVisibleAt(id, false);
+    globalThis.__hbRustWorld?.poolAttr(p.mesh, id, tileKey, m.lbKey, m.cellId); // ?rustWorld membership
     if (m.matrix) p.mesh.setMatrixAt(id, this._matrixOf(m.matrix));
     // The node sphere must cover the new instance (an invisible-but-active
     // instance counts too — conservative until the LIVE flip).
@@ -933,6 +1036,7 @@ export class PoolRegistry {
    *  The tile is marked parked even with nothing committed yet, so a plan
    *  still in flight commits invisible (`commit`). */
   parkTile(tileKey) {
+    globalThis.__hbRustWorld?.poolPark(this, tileKey); // ?rustWorld: the kernel derives the same flips
     this._parkedTiles.add(tileKey);
     const byTile = this.tiles.get(tileKey);
     if (!byTile) return 0;
@@ -948,6 +1052,7 @@ export class PoolRegistry {
 
   /** PARKED → LIVE: pointer re-adopt — zero fetch, zero decode, zero upload. */
   adoptTile(tileKey) {
+    globalThis.__hbRustWorld?.poolAdopt(this, tileKey); // ?rustWorld
     this._parkedTiles.delete(tileKey);
     const byTile = this.tiles.get(tileKey);
     if (!byTile) return 0;
@@ -976,6 +1081,7 @@ export class PoolRegistry {
    *  run): drop its park mark, or the tile's NEXT life — a fresh admit, not a
    *  PARKED → LIVE re-adopt — would commit invisible for good. */
   clearParked(tileKey) {
+    globalThis.__hbRustWorld?.poolClearParked(this, tileKey); // ?rustWorld
     this._parkedTiles.delete(tileKey);
   }
 
@@ -988,6 +1094,7 @@ export class PoolRegistry {
    * @returns {number} instances deleted.
    */
   releaseTile(tileKey) {
+    globalThis.__hbRustWorld?.poolRelease(this, tileKey); // ?rustWorld (the deletes arrive as structure events)
     this._parkedTiles.delete(tileKey);
     const byTile = this.tiles.get(tileKey);
     if (!byTile) return 0;
@@ -1069,6 +1176,7 @@ export class PoolRegistry {
    * @returns {number} instances flipped invisible
    */
   hideLb(lbKey) {
+    globalThis.__hbRustWorld?.poolHideLb(this, lbKey >>> 0); // ?rustWorld
     const lb = lbKey >>> 0;
     if (this._hiddenLbs.has(lb)) return 0;
     this._hiddenLbs.add(lb);
@@ -1086,6 +1194,7 @@ export class PoolRegistry {
    * @returns {number} instances flipped visible
    */
   showLb(lbKey) {
+    globalThis.__hbRustWorld?.poolShowLb(this, lbKey >>> 0); // ?rustWorld
     const lb = lbKey >>> 0;
     if (!this._hiddenLbs.delete(lb)) return 0;
     let n = 0;
@@ -1117,6 +1226,7 @@ export class PoolRegistry {
    * @param {Set<number>} renderSet  cellIds that should be visible
    */
   cellSetChanged(tileKey, renderSet) {
+    globalThis.__hbRustWorld?.poolCellSet(this, tileKey, renderSet); // ?rustWorld
     const byTile = this.tiles.get(tileKey);
     if (!byTile) return 0;
     let flips = 0;
@@ -1185,6 +1295,7 @@ export class PoolRegistry {
    * @returns {number} instance flips performed
    */
   setCellsVisible(cellIds, visible) {
+    globalThis.__hbRustWorld?.poolCellsVisible(this, cellIds, visible); // ?rustWorld (the cell PVS delta)
     let flips = 0;
     for (const cellId of cellIds) {
       const mems = this._cellIndex.get(cellId >>> 0);
@@ -1233,6 +1344,7 @@ export class PoolRegistry {
    * @returns {number} instances deleted
    */
   releaseCells(cellIds) {
+    globalThis.__hbRustWorld?.poolReleaseCells(this, cellIds); // ?rustWorld (the deletes arrive as structure events)
     let n = 0;
     const touchedPools = new Set();
     const touchedMems = new Set();
@@ -1347,10 +1459,41 @@ export class PoolRegistry {
     let allocated = 0;
     let used = 0;
     for (const p of this.pools.values()) {
+      if (this.sizeToContent) {
+        const b = this._poolGeometryBytes(p);
+        allocated += b.allocated;
+        used += b.used;
+        continue;
+      }
       allocated += p.maxVerts * POOL_VERTEX_BYTES + p.maxIndices * POOL_INDEX_BYTES;
       used += p.usedVerts * POOL_VERTEX_BYTES + p.usedIndices * POOL_INDEX_BYTES;
     }
     return { allocated, used };
+  }
+
+  /** ?poolSizeToContent: a pool's real buffers — three r184 BatchedMesh keeps
+   *  one array per attribute (`maxVertexCount × itemSize`, the first
+   *  geometry's array type) plus the index array, created at its first
+   *  addGeometry. Used = the used extent through the same per-vertex /
+   *  per-index widths. */
+  _poolGeometryBytes(p) {
+    const g = p.mesh && p.mesh.geometry;
+    const attrs = g && g.attributes ? g.attributes : null;
+    let allocated = 0;
+    let perVertex = 0;
+    if (attrs) {
+      for (const name of Object.keys(attrs)) {
+        const a = attrs[name];
+        const arr = a && a.array;
+        if (!arr) continue;
+        allocated += arr.byteLength;
+        perVertex += (a.itemSize | 0) * (arr.BYTES_PER_ELEMENT | 0);
+      }
+    }
+    const idx = g && g.index && g.index.array;
+    const perIndex = idx ? idx.BYTES_PER_ELEMENT : POOL_INDEX_BYTES;
+    if (idx) allocated += idx.byteLength;
+    return { allocated, used: p.usedVerts * perVertex + p.usedIndices * perIndex };
   }
 
   census() {
@@ -1373,6 +1516,9 @@ export class PoolRegistry {
         usedBytes: g.used,
         dedupHits: s.dedupHits,
         adds: s.geometryAdds,
+        // ?poolSizeToContent (S1c): armed, and pools sized to their first feed.
+        sizeToContent: this.sizeToContent === true,
+        sizedToContent: s.sizedToContent,
       },
       tiles: { resident: this.tiles.size, parked: this._parkedTiles.size },
       // ENVCELL-POOL-SWAP: the interior half of residency. `tracked` counts the
@@ -1407,6 +1553,7 @@ export class PoolRegistry {
 
   /** Teardown (context loss / arm switch). */
   dispose() {
+    globalThis.__hbRustWorld?.poolRegReset(this); // ?rustWorld
     for (const p of [...this.pools.values()]) {
       const grp = p.group || this.group;
       if (grp && typeof grp.remove === "function") grp.remove(p.mesh);

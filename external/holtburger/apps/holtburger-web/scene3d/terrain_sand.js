@@ -121,6 +121,9 @@ import {
   familyForCode,
 } from "./terrain_families.js";
 import { createScatterPool, SCATTER_FADE_GLSL, scatterHash01 } from "./terrain_scatter.js";
+// ?rustTerrainFx (2026-10-26, lane E, default OFF): the pool's per-frame
+// re-scatter plan from Rust (null with the flag off ⇒ the pool's own loops).
+import { rustScatterPlanner } from "./rust/terrain_fx.js";
 import { registerTerrainVfx, unregisterTerrainVfx, lbKeyFromXY } from "./terrain_vfx.js";
 import {
   terrainSandEnabled,
@@ -1016,6 +1019,7 @@ export function createSandStreamerField(opts = {}) {
   }
 
   const pool = createScatterPool({
+    scanPlanner: rustScatterPlanner(),
     THREE,
     name: "terrain-sand-streamers",
     count,

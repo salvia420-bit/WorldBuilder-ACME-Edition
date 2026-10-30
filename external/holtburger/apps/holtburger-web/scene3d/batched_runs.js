@@ -519,12 +519,20 @@ function _patchExtension(ext) {
 }
 
 /** The patched WEBGL_multi_draw for this renderer's CURRENT context, or null. A
- *  restored context brings a new extension object, so this is re-checked per draw. */
+ *  restored context brings a new extension object (and a new `renderer.extensions`),
+ *  so the answer is cached per `renderer.extensions` object (2026-10-26: was looked up
+ *  and re-checked on every draw; a given WebGLExtensions answers the same forever). */
+let _extExts = null, _extAnswer = null;
 function _extensionFor(renderer) {
   const exts = renderer && renderer.extensions;
-  if (!exts || typeof exts.has !== "function" || !exts.has("WEBGL_multi_draw")) return null;
-  const ext = exts.get("WEBGL_multi_draw");
-  return _patchExtension(ext) ? ext : null;
+  if (exts && exts === _extExts) return _extAnswer;
+  let answer = null;
+  if (exts && typeof exts.has === "function" && exts.has("WEBGL_multi_draw")) {
+    const ext = exts.get("WEBGL_multi_draw");
+    answer = _patchExtension(ext) ? ext : null;
+  }
+  if (exts) { _extExts = exts; _extAnswer = answer; }
+  return answer;
 }
 
 function _newState(canon) {
@@ -538,6 +546,11 @@ function _newState(canon) {
     // L1 stamp: the mesh, its epoch and the list arrays this state was last
     // verified against (obj null = no stamp).
     obj: null, epoch: 0, sArr: null, cArr: null, iArr: null,
+    // draw_exec.js (2026-10-26): the canonical element count three's renderMultiDraw sums into
+    // renderer.info, kept while the canonical copy above is unchanged (`sumOk` drops at every
+    // copy). `dead`: the state left `_runState` (its canonical texture was disposed) — a cache
+    // holding it must look the texture up again.
+    sum: 0, sumOk: false, dead: false,
   };
   // The run texture dies with the canonical one (three's own `_indirectTexture`,
   // or a ?bmIndirectPerCamera camera texture — both dispose through this event).
@@ -545,6 +558,7 @@ function _newState(canon) {
     canon.addEventListener("dispose", () => {
       if (st.tex) { try { st.tex.dispose(); } catch (_) { /* fail-soft */ } }
       st.tex = null;
+      st.dead = true;
       _runState.delete(canon);
     });
   } catch (_) { /* a texture without events still works; it just is not freed early */ }
@@ -575,6 +589,7 @@ function _syncCanonical(st, starts, counts, ids, n) {
     if (a[k] !== starts[k] || b[k] !== counts[k] || c[k] !== ids[k]) break;
   }
   if (k === n && m === n) return true;
+  st.sumOk = false; // the canonical copy changes below
   if (a.length < n) { a = st.starts = _growKeep(a, n, Int32Array); }
   if (b.length < n) { b = st.counts = _growKeep(b, n, Int32Array); }
   if (c.length < n) { c = st.ids = _growKeep(c, n, Uint32Array); }
@@ -620,7 +635,16 @@ function _stableHit(st, rec, object, starts, counts, ids, n, mode) {
     && !ctl.stableOff && !_stableBroken;
 }
 
-function _prepare(object, sorted, rec) {
+/** The run state of a canonical texture, through a draw_exec.js cache `c` when it holds this
+ *  texture's live state (no WeakMap lookup), else from `_runState` (refreshing `c`). */
+function _stateOf(canon, c) {
+  if (c !== null && c.canon === canon && c.st !== null && c.st.dead === false) return c.st;
+  const st = _runState.get(canon);
+  if (c !== null) { c.canon = canon; c.st = st === undefined ? null : st; }
+  return st;
+}
+
+function _prepare(object, sorted, rec, c = null) {
   const n = object._multiDrawCount | 0;
   const canon = object._indirectTexture;
   const ids = canon && canon.image && canon.image.data;
@@ -637,13 +661,16 @@ function _prepare(object, sorted, rec) {
   // gains compares against it and stays exact. Only the L1 stamp goes (the kept
   // copy is no longer the live list).
   if (sorted && !hasConsecutiveRepeat(starts, counts, ids, n)) {
-    const st0 = _runState.get(canon);
+    const st0 = _stateOf(canon, c);
     if (st0 !== undefined) st0.obj = null;
     stats.sortedNoGain += 1;
     return null;
   }
-  let st = _runState.get(canon);
-  if (!st) { st = _newState(canon); _runState.set(canon, st); }
+  let st = _stateOf(canon, c);
+  if (!st) {
+    st = _newState(canon); _runState.set(canon, st);
+    if (c !== null) { c.canon = canon; c.st = st; }
+  }
   const mode = sorted ? MODE_CONSECUTIVE : MODE_GROUPED;
   let unchanged = false;
   if (rec !== null && _stableHit(st, rec, object, starts, counts, ids, n, mode)) {
@@ -673,7 +700,7 @@ function _prepare(object, sorted, rec) {
       ? buildConsecutiveRuns(starts, counts, ids, n, st.buf)
       : buildRuns(starts, counts, ids, n, st.buf);
     if (r < 0) {
-      st.gain = false; st.n = -1; st.mode = MODE_NONE; st.obj = null;
+      st.gain = false; st.n = -1; st.mode = MODE_NONE; st.obj = null; st.sumOk = false;
       stats.fallbacks += 1;
       return null;
     }
@@ -716,12 +743,36 @@ function _prepare(object, sorted, rec) {
 // render() call (the composer makes several a frame), so it would split one
 // frame's draws across passes; the document timeline's time is fixed for the
 // whole frame (the same key ?particleSharedAlpha uses). Node: no document.
+//
+// The timeline is read once per render() call, not per BatchedMesh draw
+// (2026-10-26, stage-3 research option E: `document.timeline.currentTime` is a
+// DOM getter, ~0.09 ms/frame at Holtburg on the 1070). Every BatchedMesh draw
+// runs inside a render() — three bumps `render.frame` before its shadow and
+// scene passes — so the memo returns the value a fresh read would. The memo
+// lives on each renderer: two renderers count frames independently.
+const _frameKeyMemo = new WeakMap(); // renderer → { rf, key }
+// One-entry cache in front of the memo (2026-10-26): the main renderer draws almost every
+// BatchedMesh, so its (renderer, render.frame) answer is kept without the WeakMap lookup.
+let _fkR = null, _fkRf = -1, _fkKey = 0;
 function _frameKey(renderer) {
+  const rf = renderer && renderer.info && renderer.info.render ? renderer.info.render.frame : 0;
+  if (renderer === _fkR && rf === _fkRf && renderer !== null) return _fkKey;
+  const key = _frameKeySlow(renderer, rf);
+  if (renderer) { _fkR = renderer; _fkRf = rf; _fkKey = key; }
+  return key;
+}
+function _frameKeySlow(renderer, rf) {
+  let m = renderer ? _frameKeyMemo.get(renderer) : undefined;
+  if (m !== undefined && m.rf === rf) return m.key;
+  let key = rf;
   try {
     const t = globalThis.document?.timeline?.currentTime;
-    if (typeof t === "number") return t;
+    if (typeof t === "number") key = t;
   } catch (_) { /* fall through */ }
-  return renderer && renderer.info && renderer.info.render ? renderer.info.render.frame : 0;
+  if (renderer) {
+    if (m === undefined) { m = { rf, key }; _frameKeyMemo.set(renderer, m); } else { m.rf = rf; m.key = key; }
+  }
+  return key;
 }
 
 function _countFrame(renderer, object, issued) {
@@ -754,11 +805,16 @@ const _hasOwn = Object.prototype.hasOwnProperty;
  * a marked mesh while the hook is live — before any step-aside, so the proof
  * covers the draws that did not regroup too. Returns the mesh's record.
  */
-function _stableObserve(object) {
-  let rec = _stable.get(object);
-  if (rec === undefined) {
-    rec = { epoch: 0, armed: false, ownHook: false };
-    _stable.set(object, rec);
+function _stableObserve(object, c = null) {
+  // (a mesh's record is created once and never replaced: a draw_exec.js cache may hold it)
+  let rec = c !== null ? c.stable : null;
+  if (rec === null) {
+    rec = _stable.get(object);
+    if (rec === undefined) {
+      rec = { epoch: 0, armed: false, ownHook: false };
+      _stable.set(object, rec);
+    }
+    if (c !== null) c.stable = rec;
   }
   if (!rec.armed || (!rec.ownHook && _hasOwn.call(object, "onBeforeRender"))) {
     rec.epoch = (rec.epoch + 1) | 0;
@@ -766,6 +822,93 @@ function _stableObserve(object) {
   }
   rec.armed = false;
   return rec;
+}
+
+/**
+ * Everything the renderBufferDirect wrapper does for a BatchedMesh draw BEFORE it
+ * hands the draw on: the L1 observe, the run layout and the frame count, in that
+ * order. Returns the run state (the draw must bind `st.tex` as the id texture and
+ * issue `st.buf`'s instanced runs) or null (three's canonical draw). The wrapper
+ * below is built on it, and so is scene3d/draw_exec.js (`?drawExec`, stage 3
+ * S3.1), which draws proven-stable static draws itself and must leave exactly the
+ * state, stats and frame counts this wrapper would: call it ONCE per draw, never
+ * together with the wrapper for the same draw.
+ */
+export function batchedRunsBeforeDraw(renderer, object, c = null) {
+  let rec = null;
+  // `c` (draw_exec.js, newBatchedRunsCache): a mark is permanent (there is no unmark), so a
+  // cache that saw it once skips the WeakSet; the L1 record and the run state come from it too.
+  let marked;
+  if (c !== null && c.marked) marked = true;
+  else { marked = _eligible.has(object); if (c !== null && marked) c.marked = true; }
+  // L1 bookkeeping first, for every draw of a marked mesh.
+  if (_stableOn && marked) {
+    try { rec = _stableObserve(object, c); } catch (_) { stats.errors += 1; rec = null; }
+  }
+  let st = null;
+  // Unsorted: regroup by range. Sorted: consecutive runs, order kept
+  // (?batchedRunsSorted). Any other `sortObjects` value: three's draw.
+  const so = object.sortObjects;
+  const sorted = so === true;
+  if (!ctl.off && _chunksPatched && (object._multiDrawCount | 0) > 1
+    && (so === false || (sorted && FLAG_SORTED && !ctl.sortedOff)) && marked) {
+    try {
+      if (_extensionFor(renderer)) st = _prepare(object, sorted, rec, c);
+      else stats.fallbacks += 1;
+    } catch (_) {
+      stats.errors += 1;
+      st = null;
+    }
+  }
+  if (st === null) {
+    _countFrame(renderer, object, object._multiDrawCount | 0);
+    return null;
+  }
+  const buf = st.buf;
+  if (sorted) {
+    stats.sortedDraws += 1;
+    stats.sortedInstances += object._multiDrawCount | 0;
+    stats.sortedRuns += buf.r;
+  } else {
+    stats.draws += 1;
+    stats.instances += object._multiDrawCount | 0;
+    stats.runs += buf.r;
+  }
+  _countFrame(renderer, object, buf.r);
+  return st;
+}
+
+/**
+ * A per-mesh cache for `batchedRunsBeforeDraw(renderer, object, cache)` (draw_exec.js keeps one
+ * per BatchedMesh record): the mark, the L1 record and the run state of the last canonical
+ * texture, so a draw of an unchanged mesh pays no WeakSet / WeakMap lookup. Same effects as the
+ * uncached call — the cache only remembers answers that cannot change (a mark is permanent, an
+ * L1 record is never replaced) or that it re-validates (the run state: same canonical texture,
+ * not disposed). One cache per mesh.
+ */
+export function newBatchedRunsCache() {
+  return { marked: false, stable: null, canon: null, st: null };
+}
+
+/**
+ * Call `fn` (the rest of the renderBufferDirect chain, or three's own) with the
+ * run state `st` in force, exactly as the wrapper does: the run texture swapped
+ * in as `_indirectTexture` and — `pending` true — the run arrays queued for the
+ * patched multi_draw extension; both undone afterwards. `st === null` is a plain
+ * call. draw_exec.js passes `pending = false` for its state-only three call (no
+ * draw is issued, so nothing may stay queued).
+ */
+export function batchedRunsCall(fn, thisArg, st, pending, camera, scene, geometry, material, object, group) {
+  if (st === null) return fn.call(thisArg, camera, scene, geometry, material, object, group);
+  const canon = object._indirectTexture;
+  object._indirectTexture = st.tex;
+  if (pending) _pending = st.buf;
+  try {
+    return fn.call(thisArg, camera, scene, geometry, material, object, group);
+  } finally {
+    _pending = null;
+    object._indirectTexture = canon;
+  }
 }
 
 /** Wrap `renderer.renderBufferDirect`. Returns true when installed (or already).
@@ -776,56 +919,19 @@ export function installBatchedRuns(renderer) {
   if (!renderer || typeof renderer.renderBufferDirect !== "function") return false;
   if (renderer.__hbBatchedRuns) return true;
   const orig = renderer.renderBufferDirect;
-  renderer.renderBufferDirect = function (camera, scene, geometry, material, object, group) {
+  const wrapper = function (camera, scene, geometry, material, object, group) {
     if (!object || object.isBatchedMesh !== true) {
       return orig.call(this, camera, scene, geometry, material, object, group);
     }
-    let rec = null;
-    // L1 bookkeeping first, for every draw of a marked mesh (flag off: one
-    // boolean read, no lookup).
-    if (_stableOn && _eligible.has(object)) {
-      try { rec = _stableObserve(object); } catch (_) { stats.errors += 1; rec = null; }
-    }
-    let st = null;
-    // Unsorted: regroup by range. Sorted: consecutive runs, order kept
-    // (?batchedRunsSorted). Any other `sortObjects` value: three's draw.
-    const so = object.sortObjects;
-    const sorted = so === true;
-    if (!ctl.off && _chunksPatched && (object._multiDrawCount | 0) > 1
-      && (so === false || (sorted && FLAG_SORTED && !ctl.sortedOff)) && _eligible.has(object)) {
-      try {
-        if (_extensionFor(this)) st = _prepare(object, sorted, rec);
-        else stats.fallbacks += 1;
-      } catch (_) {
-        stats.errors += 1;
-        st = null;
-      }
-    }
-    if (st === null) {
-      _countFrame(this, object, object._multiDrawCount | 0);
-      return orig.call(this, camera, scene, geometry, material, object, group);
-    }
-    const canon = object._indirectTexture;
-    const buf = st.buf;
-    if (sorted) {
-      stats.sortedDraws += 1;
-      stats.sortedInstances += object._multiDrawCount | 0;
-      stats.sortedRuns += buf.r;
-    } else {
-      stats.draws += 1;
-      stats.instances += object._multiDrawCount | 0;
-      stats.runs += buf.r;
-    }
-    _countFrame(this, object, buf.r);
-    object._indirectTexture = st.tex;
-    _pending = buf;
-    try {
-      return orig.call(this, camera, scene, geometry, material, object, group);
-    } finally {
-      _pending = null;
-      object._indirectTexture = canon;
-    }
+    const st = batchedRunsBeforeDraw(this, object);
+    if (st === null) return orig.call(this, camera, scene, geometry, material, object, group);
+    return batchedRunsCall(orig, this, st, true, camera, scene, geometry, material, object, group);
   };
+  // draw_exec.js walks the wrapper chain by these two tags to reach three's own
+  // renderBufferDirect (and to know which wrappers it stands in for).
+  wrapper.__hbRbdTag = "batchedRuns";
+  wrapper.__hbRbdInner = orig;
+  renderer.renderBufferDirect = wrapper;
   Object.defineProperty(renderer, "__hbBatchedRuns", { value: orig, configurable: true });
   // L1 (?batchedRunsStable, default ON since 2026-10-23): the prototype hook. Only with the run
   // half live (`?batchedRuns=off` regroups nothing, so there is no compare to skip).
@@ -977,6 +1083,13 @@ export function batchedRunsFrameTotals() {
 }
 
 /** Test seams. */
+/** The per-frame totals start over (two renderers in one node process share them). */
+export function __resetBatchedRunsFrameForTest() {
+  frame.frame = -1;
+  frame.batchedCalls = 0; frame.subDraws = 0; frame.issued = 0; frame.sortedSubDraws = 0; frame.sortedIssued = 0;
+  const l = frame.last;
+  l.batchedCalls = 0; l.subDraws = 0; l.issued = 0; l.sortedSubDraws = 0; l.sortedIssued = 0;
+}
 export function __setBatchedRunsOffForTest(v) { ctl.off = !!v; }
 export function __setBatchedRunsSortedOffForTest(v) { ctl.sortedOff = !!v; }
 export function __setBatchedRunsStableOffForTest(v) { ctl.stableOff = !!v; }

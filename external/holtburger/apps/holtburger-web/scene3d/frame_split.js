@@ -1765,7 +1765,20 @@ export function frameSplitCensus(root) {
       visible: S.ballastVisible,
       drawNodes: S.drawBallastCount,
     },
+    // Stage-2 S0 (lane W): the same scales per world-group root, plus anchors, LODs and batch
+    // objects / instances per kind (scene3d/rust/world.js `worldGroupCensus`; null when not loaded).
+    groups: _worldGroups(),
   };
+}
+
+function _worldGroups() {
+  const fn = globalThis.__hbWorldGroupCensus;
+  if (typeof fn !== "function") return null;
+  try {
+    return fn(typeof window !== "undefined" ? window.liveScene3d : null);
+  } catch (e) {
+    return { error: String(e?.message ?? e) };
+  }
 }
 
 // ---------------------------------------------------------------------------

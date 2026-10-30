@@ -385,6 +385,26 @@ export class ParticleFxKidsLayer {
     r[i * 2] = row; r[i * 2 + 1] = seed;
   }
 
+  /**
+   * `?rustParticles`: append `count` records from the kernel's flat output
+   * (10 floats each: x, y, z, age, vx, vy, vz, opacity, row, seed — already
+   * the f32 values `push` would store), starting at record `first`. Grows the
+   * way `push` does (doubling to fit), once.
+   */
+  pushRecords(data, first, count) {
+    if (!(count > 0)) return;
+    if (this.n + count > this.cap) this._grow(this.n + count);
+    const g = this.mesh.geometry;
+    const p = g.attributes.aKidPos.array, v = g.attributes.aKidVel.array, r = g.attributes.aKidRow.array;
+    let o = first * 10;
+    for (let k = 0; k < count; k++, o += 10) {
+      const i = this.n++;
+      p[i * 4] = data[o]; p[i * 4 + 1] = data[o + 1]; p[i * 4 + 2] = data[o + 2]; p[i * 4 + 3] = data[o + 3];
+      v[i * 4] = data[o + 4]; v[i * 4 + 1] = data[o + 5]; v[i * 4 + 2] = data[o + 6]; v[i * 4 + 3] = data[o + 7];
+      r[i * 2] = data[o + 8]; r[i * 2 + 1] = data[o + 9];
+    }
+  }
+
   /** Publish this tick's records. Returns true when the layer has been idle long enough to drop. */
   finish() {
     const g = this.mesh.geometry;

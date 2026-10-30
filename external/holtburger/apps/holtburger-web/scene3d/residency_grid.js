@@ -250,6 +250,7 @@ export class SlotGrid {
       shiftMismatches: 0, slotDesyncs: 0,
     };
     this._lastShiftCheck = null;
+    globalThis.__hbRustWorld?.ownerGrid(this); // ?rustWorld: audit this grid's records from birth
   }
 
   get windowTiles() { return this._window; }
@@ -291,6 +292,7 @@ export class SlotGrid {
     }
     const k = `${from}>${to}`;
     this._stats.transitions[k] = (this._stats.transitions[k] || 0) + 1;
+    globalThis.__hbRustWorld?.tileState(this, tile, from, to, this.records.get(tile)); // ?rustWorld shadow
     if (this._onSlotState) {
       try { this._onSlotState({ tile, from, to }); } catch (_) { /* events are best-effort */ }
     }

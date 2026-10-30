@@ -1,0 +1,144 @@
+{
+ "schema": "hb-1070-queue-v1",
+ "batch": "RC-RUST-SCENE-CORE",
+ "created": "2026-10-26",
+ "owner": "owner (OWNER-RUN: queued for the owner's own 1070 session; never self-initiated by an agent)",
+ "preparedBy": "Rust scene-core orchestrator, 2026-10-26 (queue prep + tooling only; nothing here has run on the 1070)",
+ "source": "apps/holtburger-web/docs/2026-10-26-rust-scene-core.md (plan, lanes, reviews, build state) + docs/HANDOFF-rust-scene-core-2026-10-26.md. Decision rules below were written BEFORE the run.",
+ "sessionRules": "vistest-preamble-v1",
+ "sessionRulesInline": [
+  "Inherit every rule of batch-P0-gpu-resident-2026-10-22.json sessionRulesInline verbatim (MODE T off-screen + muted, OWNER-RUN, kill only by user-data-dir, the three-forward tunnel, ?nosw=1, fresh profile per arm-rep, uncapped frames + targetFps=0, release wasm only, >= 65 s between boots on one account, reject-never-average). Read memory/fleet-runbooks.md before driving the 1070.",
+  "The pkg/ on the laptop must be the 2026-10-26 release build (pkg/holtburger_web_bg.wasm 7,697,244 B, stamp wasmrev-20261026b in index.html); a dev wasm invalidates every timing."
+ ],
+ "whatChanged": "17 URL flags went DEFAULT-ON on 2026-10-26 (exact parity suites + laptop SwiftShader boots, 0 errors): rustParticles, rustRig, rustEntityCull, anchorOffGraph, staticMatrixFreeze, poolSizeToContent, rustCull, rustAnimScenery, rustAnimSceneryGate, rustTerrainFx, drawExec, drawExecRigs, hotMatVariant, hotDrawSort, hotCloudPush, hotTerrainTime, hotNightRamp. Each has an `=off` escape. Still OFF: rigMeshAlias (owner decision: exact AT every walk, not between walks), drawExecRuns (no gain). Estimated 1070 effect [D, node]: stage 1 ~2-3 ms/frame of main-thread JS (plan section 2); nothing here was timed on a real GPU.",
+ "urlBase": "http://127.0.0.1:8765/apps/holtburger-web/index.html",
+ "allOffFlags": "rustParticles=off&rustRig=off&rustEntityCull=off&anchorOffGraph=off&staticMatrixFreeze=off&poolSizeToContent=off&rustCull=off&rustAnimScenery=off&rustAnimSceneryGate=off&rustTerrainFx=off&drawExec=off&drawExecRigs=off&hotMatVariant=off&hotDrawSort=off&hotCloudPush=off&hotTerrainTime=off&hotNightRamp=off",
+ "suggestedOrder": [
+  "RC-BOOT (bare URL) - if it fails, stop and record; the defaults go back OFF per the rule",
+  "RC-BENCH (hbbench, 4 arms x 3 reps, rotated by hbbench's interleave)",
+  "RC-PROFILE (defaults vs all-off, Holtburg orbit, 2 reps)",
+  "RC-TRACE (defaults: one devtools.timeline trace for the (program) bucket)",
+  "RC-CENSUS (defaults: R3's S3.0 draw-list census + the tagged profile)",
+  "RC-EYE (defaults vs all-off look parity)"
+ ],
+ "items": [
+  {
+   "id": "RC-BOOT",
+   "kind": "probe",
+   "stage": "Rust scene core - first real-GPU boot of the new defaults",
+   "gate": "precondition for everything else in this batch and for keeping the 2026-10-26 defaults",
+   "title": "Bare URL at ultra: loads, spawns, 0 console errors, every Rust lane engaged, the executor exact against the real driver",
+   "boxMode": "1070, MODE T: off-screen + muted, fresh profile, CDP :9333 over the tunnel. OWNER-RUN.",
+   "url": "http://127.0.0.1:8765/apps/holtburger-web/index.html?autoLogin=1&account=tailnet1&password=tailnet1&autoSpawn=first&nosw=1&camDebug=on&adaptiveRes=off&quality=ultra&renderDiag=on&targetFps=0",
+   "recipe": [
+    "node scripts/perf-worker/hbsess.mjs boot --quality ultra --flags 'renderDiag=on' --uncapped",
+    "node scripts/perf-worker/hbsess.mjs eval scripts/perf-worker/rust-scene-core-diag.eval.js > <OUT>/boot-diag.json   (runs __drawExec.verify(120); ~3 s at 40 fps)",
+    "Teleport to Holtburg first if the character is elsewhere (@teleloc 0xA9B40001 96 96 80), settle 30 s, then eval again > <OUT>/holtburg-diag.json"
+   ],
+   "expects": "consoleErrors.count 0; sceneCoreAbi 1; drawExecVerify.fails === 0 with checks > 0 and drawExec.vaoFixLate === 0 and errors 0; rustRig.available && jsFallbacks === 0; rustCull.available && rustCullVerify.disagree === 0 && planeMismatches === 0; rustTerrainFx.failures === 0; particles.rustEmitters === particles.instEmitters (and slotCarriers 0); at Holtburg rustAnimScenery.groups > 0 && failures === 0 && broken === false.",
+   "decisionRules": [
+    "Written 2026-10-26 BEFORE the run: any console error that names a scene-core file (scene3d/rust/*, draw_exec.js, animated_scenery.js, statics.js anchors, static_batch_x.js freeze, pool_registry.js sizing) -> set that lane's flag back to default OFF (one-line reader change) and file the error; the other lanes stay ON.",
+    "drawExecVerify.fails > 0 -> drawExec default OFF immediately (the executor's exactness against the real driver is its only premise).",
+    "A lane reporting available:false or failures > 0 with no console error -> record it (stale pkg? ABI?) and re-check the pkg before anything else."
+   ],
+   "result": {
+    "date": "2026-10-29",
+    "verdict": "PASS (every expectation met on the real driver)",
+    "out": "/mnt/wbterminal1/tmp/claude-scratch/perf/rc-rust-scene-core-2026-10-29/boot/ and boot2/",
+    "env": "1070, MODE T (off-screen, muted), ultra, ?targetFps=30 (correctness boot, owner at the desk), pkg 2026-10-29 release 7,870,645 B (adds SceneWorld), wasmrev-20261029a; GPU 'ANGLE (NVIDIA GeForce GTX 1070 Direct3D11)'",
+    "facts": [
+     "boot 1 (Holtburg, settled): drawExec verify(120) 28,888 checks, 0 fails; texDemoted 0, vaoFixLate 0, executor errors 0; 6.69 M draws (3.58 M fast, 2.15 M state-only); console errors 0; sceneCoreAbi 1",
+     "rustRig 76 descriptors, 137,735 rigs posed, 0 JS fallbacks; rustCull verify 1,424/1,424 agree, 0 plane mismatches; rustAnimScenery 4 groups / 19 rows, 0 failures, rows in lockstep; rustTerrainFx 4 pools attached, 0 failures; particles 141/141 instanced emitters on the kernel, slot carriers 0",
+     "boot 2 (fresh, after the census fix): __drawExec.census(60) 1,079 draws/frame at the Holtburg orbit (fast 574.5, state-only 375.2, full 20.8, empty 9.0, pass 99.8); cells|cellstatic 288.5, occlusion-proxies 86.5, cells|surfaces-fused-opaque 69.6, entity parts ~370, other scenes 36.5; verify(120) 86,202 checks, 0 fails, texDemoted 0",
+     "FOUND + FIXED: X2's census() name regex backtracked catastrophically on long hex-ish object names (a 29-char name 0.65 s; the live page fell to ~1 frame/s while the census was installed). Replaced by a linear censusName() (draw_exec.js), equal to the old regex on 20,000 random names; tests/draw_exec.test.mjs 403/0",
+     "rustWorld=on boot (step 4 of the handoff): Holtburg 43,473 events / 107 audits, then @telepoi Shoushi + minutes standing: 149,456 events / 794 audits, full audit with matrices 20 ms, 0 mismatches, 0 integrity, 0 andDivergence, 0 hook / kernel errors, filmHeld 0, 979 objects tracked",
+     "tooling: playwright-core 1.59.1 connectOverCDP hangs on the box's Chrome 156 once it lists browser_ui targets (omnibox popup WebUI); hbsess.mjs / gputrace.mjs fall back to raw CDP (lib/cdp_raw.mjs), cdp-eval.mjs added. __rustWorld.audit() returns its arena: the diag reads now return only {mismatches, report} (serialising the arena over CDP stalled the page)"
+    ]
+   }
+  },
+  {
+   "id": "RC-BENCH",
+   "kind": "bench",
+   "stage": "Rust scene core - the fps A/B the defaults are owed",
+   "gate": "keeps or reverts the 2026-10-26 defaults; decides rigMeshAlias",
+   "title": "defaults vs all-off vs drawExec=off vs rigMeshAlias=on at ultra - hbbench first turn / still / moving / tour, fresh profile per arm-rep",
+   "boxMode": "1070, MODE T, uncapped, fresh profile per arm-rep (hbbench does both). OWNER-RUN.",
+   "arms": "scripts/perf-worker/arms-rc-rust-scene-core.json (rc-defaults-ultra '', rc-alloff-ultra = allOffFlags, rc-noexec-ultra 'drawExec=off', rc-alias-ultra 'rigMeshAlias=on')",
+   "reps": "3 (hbbench interleaves the arms per rep)",
+   "recipe": [
+    "Snapshot server as for P0 (hb-mksnap.sh -> serve.py on :8766 with --check green), then:",
+    "node scripts/perf-worker/hbbench.mjs --arms scripts/perf-worker/arms-rc-rust-scene-core.json --reps 3 --port 8766 --uncapped --out /mnt/wbterminal1/tmp/claude-scratch/perf/rc-rust-scene-core-<YYYY-MM-DD>/bench"
+   ],
+   "reads": "summary.json per arm-rep: firstTurn / still / moving / tour fps, p99, low1, jank, draws; errs must be 0.",
+   "decisionRules": [
+    "Written 2026-10-26 BEFORE the run. Spread = max - min of an arm's own reps, per measure.",
+    "Keep the defaults iff rc-defaults >= rc-alloff - spread(rc-alloff) on still, moving AND tour fps. Expected [D]: +2-3 ms/frame of main thread, i.e. ~45 -> ~50 fps where the main thread is the limit.",
+    "If rc-defaults < rc-alloff - spread on any measure: stop, keep the batch's numbers, and bisect by lane with one-off arms (rustParticles=off, rustRig=off, rustCull=off, rustAnimScenery=off, drawExec=off, hot*=off) before changing any default.",
+    "drawExec: if rc-noexec > rc-defaults + spread(rc-defaults) on still or moving fps, flip drawExec (and drawExecRigs) back to default OFF.",
+    "rigMeshAlias (owner decision, not a rule): report rc-alias vs rc-defaults; the node estimate is 0.05-0.10 ms/frame."
+   ],
+   "result": null
+  },
+  {
+   "id": "RC-PROFILE",
+   "kind": "profile",
+   "stage": "Rust scene core - where the frame goes now",
+   "gate": "none (measurement); feeds the next stage's plan",
+   "title": "CPU profile per system: defaults vs all-off at the Holtburg orbit, 2 reps each, fresh profile per boot",
+   "recipe": [
+    "node scripts/perf-worker/hbsess.mjs boot --quality ultra --flags 'renderDiag=on<ARM>' --uncapped   (ARM '' or '&' + allOffFlags)",
+    "node scripts/perf-worker/hbsess.mjs orbit; node scripts/perf-worker/hbsess.mjs profile 10 <OUT>/<arm>-r<rep>.cpuprofile   (prints {frames, fps})",
+    "python3 -I apps/holtburger-web/tools/rust_parity/profile_systems.py <OUT>/<arm>-r<rep>.cpuprofile <frames>   -> per-system ms/frame (plan section 1's buckets)",
+    "node scripts/net-review/profile-split-render.mjs <OUT>/<arm>-r<rep>.cpuprofile   -> renderCPU",
+    "node scripts/perf-worker/hbsess.mjs kill; wait >= 65 s"
+   ],
+   "reads": "Per bucket, defaults minus all-off: particles, entities tick + rig pose, terrain VFX / animated scenery, culling, misc per-frame JS, three draw loop (renderScene), scene walk. Compare with the plan's stage-1 estimate (2-3 ms/frame).",
+   "result": null
+  },
+  {
+   "id": "RC-TRACE",
+   "kind": "trace",
+   "stage": "the (program) bucket (plan section 8)",
+   "gate": "none (measurement)",
+   "title": "One devtools.timeline trace of the defaults while orbiting: split the ~3.9 ms/frame of native main-thread work",
+   "recipe": [
+    "After an RC-PROFILE boot (defaults), orbiting: node scripts/perf-worker/gputrace.mjs <OUT>/defaults-timeline.trace.json devtools.timeline,disabled-by-default-devtools.timeline,disabled-by-default-devtools.timeline.frame,blink,v8.execute,toplevel   (the second argument is the category list)",
+    "python3 -I scripts/perf-worker/timeline_split.py <OUT>/defaults-timeline.trace.json --frames <N>"
+   ],
+   "reads": "style / layout / paint / composite / GPU-sync waits / task scheduling per frame on CrRendererMain; whether the (program) time is HUD DOM work or binding / command-buffer overhead around the WebGL calls.",
+   "result": null
+  },
+  {
+   "id": "RC-CENSUS",
+   "kind": "probe",
+   "stage": "R3 S3.0 - draw-list census on the new defaults",
+   "gate": "none (measurement); decides the next draw-count work",
+   "title": "drawlist-census.eval.js at the Holtburg orbit and street, defaults (the executor on) and drawExec=off",
+   "recipe": [
+    "node scripts/perf-worker/hbsess.mjs boot --quality ultra --flags 'renderDiag=on' --uncapped; orbit; node scripts/perf-worker/hbsess.mjs eval scripts/perf-worker/drawlist-census.eval.js > <OUT>/census-defaults-orbit.json",
+    "The same with --flags 'renderDiag=on&drawExec=off' > <OUT>/census-noexec-orbit.json",
+    "Tagged profile (R3 section 7.4 item 2): prepend window.__dlcPhase=\"install\"; to a copy, eval it, node scripts/perf-worker/hbsess.mjs profile 8 <OUT>/census-tagged.cpuprofile, eval with __dlcPhase=\"finish\"; python3 -I scripts/perf-worker/drawlist_kind_split.py <OUT>/census-tagged.cpuprofile <fps>"
+   ],
+   "reads": "draws / material switches / continuations / GL calls per kind per frame. The laptop census of 2026-10-26 (SwiftShader, ~0.1 fps, so the occlusion culler had not converged) counted 1,392 world-pass draws at Holtburg: cellstatic 442, entity_part 388, bucket_unsorted 169, cell_surface 145, occlusion 64, static_mesh 58, pool_opaque 23 - the 1070 numbers decide whether interiors (cellStaticMerge / pooling) or entity parts are the next draw-count lever.",
+   "result": null
+  },
+  {
+   "id": "RC-EYE",
+   "kind": "eyetest",
+   "stage": "Rust scene core - look parity",
+   "gate": "keeps the defaults (with RC-BOOT and RC-BENCH)",
+   "title": "Defaults vs all-off, same spots, same camera: nothing may differ except particle randomness",
+   "recipe": [
+    "The GG-EYE spot list (batch-GG-grass-gpu-2026-10-23.json) with --flags '' and then '&' + allOffFlags, same poses."
+   ],
+   "checklist": [
+    "Holtburg orbit + street: statics, buildings, interiors through doorways, animated scenery (flags, banners, windmills) moving at the same phase rate, terrain VFX (rocks / sand / snow / dirt scatter, grass) identical.",
+    "Particles: same emitters lit, same density and colours; individual particle positions differ by design (?rustParticles draws from its own RNG streams).",
+    "NPCs and the player: poses, hands, held items, dismember/ragdoll if one happens, highlight / fade.",
+    "Night (wait or @time): the night ramp and cloud shadows on the terrain match.",
+    "Linvak Tukal (@teleloc 0xA21E001A 83 38 560.4): the ~14k scripted anchors' emitters (?anchorOffGraph) all present."
+   ],
+   "result": null
+  }
+ ]
+}

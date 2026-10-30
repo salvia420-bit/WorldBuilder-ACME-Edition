@@ -91,7 +91,7 @@ import { batchedMaterialFor, holdBatchedMaterial, releaseBatchedMaterial } from 
 // default OFF) puts them on three's BatchedMesh early-out. Both modules are
 // already in the graph (index.js / statics.js import them): no new preload.
 import { markBatchedRuns } from "./batched_runs.js";
-import { applyStaticEarlyOut } from "./static_batch_x.js";
+import { applyStaticEarlyOut, freezeStaticNodeMatrices } from "./static_batch_x.js";
 
 const METERS_PER_LANDBLOCK = 192.0;
 // HOLTBURG_X/HOLTBURG_Y retired (spawn-driven-boot): the bake-time shadow gate
@@ -355,6 +355,7 @@ export function consolidateBuildingSurfaces(nodes) {
       continue;
     }
     holdBatchedMaterial(bm);
+    globalThis.__hbRustWorld?.track(bm, "building", tmpl.userData.landblockId); // ?rustWorld shadow
     // Anchor at the landblock origin (AC metres, the frame buildingsGroup and
     // the flattened nodes share): instance translations stay < ~200 m, so the
     // float32 batching matrices carry the same precision the singleton path
@@ -462,6 +463,16 @@ function _carriesEnvDetail(n) {
   return !!(m && !Array.isArray(m) && m.userData && m.userData.__envDetailKind);
 }
 
+// Attach one flattened building node (a world-TRS loner or a building batch)
+// to buildingsGroup. ?staticMatrixFreeze (stage-2 S1a, default OFF): freeze
+// its matrices right after (static_batch_x.js `freezeStaticNodeMatrices`) —
+// neither ever moves; the legacy whole-placement groups (hinge wrappers) are
+// attached elsewhere and stay live.
+function _attachFlatBuildingNode(scene3d, n) {
+  scene3d.buildingsGroup.add(n);
+  if (n && n.parent && typeof freezeStaticNodeMatrices === "function") freezeStaticNodeMatrices(n);
+}
+
 // `opts.deferAttach` (?buildingMatBatch per-LB path): return the top-level
 // nodes instead of adding them, so the caller can prewarm the BATCHED programs
 // before attach. Without it every node is attached here, as before.
@@ -469,7 +480,7 @@ function _feedBuildingGroupsToAtlas(groups, scene3d, opts = null) {
   const attachList = opts && opts.deferAttach ? [] : null;
   const attach = (n) => {
     if (attachList) attachList.push(n);
-    else scene3d.buildingsGroup.add(n);
+    else _attachFlatBuildingNode(scene3d, n);
   };
   let singletons = [];
   for (const g of groups) {
@@ -1382,7 +1393,7 @@ export async function bakeBuildingsForLandblock(
       for (const n of top) _tmp.add(n);
       await prewarmSubtree(scene3d, _tmp);
       for (const n of [..._tmp.children]) _tmp.remove(n);
-      for (const n of top) scene3d.buildingsGroup.add(n);
+      for (const n of top) _attachFlatBuildingNode(scene3d, n);
     } else if (_pendingGroups.length > 0) {
       const _tmp = new THREE.Group();
       for (const g of _pendingGroups) _tmp.add(g);

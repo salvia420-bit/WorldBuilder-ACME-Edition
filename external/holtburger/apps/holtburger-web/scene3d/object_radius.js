@@ -68,7 +68,7 @@ export function objRadiusSetting() {
 /** Test seam: a number arms it, null disarms, undefined re-reads the URL. */
 export function __setObjRadiusForTest(v) { _setting = v; }
 
-const _stats = { hides: 0, shows: 0, nodesHidden: 0, nodesShown: 0, lateHides: 0, unparkRehides: 0 };
+const _stats = { hides: 0, shows: 0, nodesHidden: 0, nodesShown: 0, lateHides: 0, unparkRehides: 0, forgets: 0 };
 
 function _lbKey(id) { return ((id >>> 0) & 0xffff0000) >>> 0; }
 function _cheb(a, b) {
@@ -133,6 +133,7 @@ function _hide(scene3d, st, lbKey) {
   try { scene3d._poolHideLb?.(lbKey); } catch (_) { /* fail-soft */ }
   if (!st.hidden.has(lbKey)) { st.hidden.add(lbKey); _stats.hides += 1; }
   _stats.nodesHidden += n;
+  globalThis.__hbRustWorld?.objrHide(scene3d, lbKey); // ?rustWorld shadow (scene3d/rust/world.js)
 }
 
 function _show(scene3d, st, lbKey) {
@@ -152,6 +153,25 @@ function _show(scene3d, st, lbKey) {
   st.hidden.delete(lbKey);
   _stats.shows += 1;
   _stats.nodesShown += n;
+  globalThis.__hbRustWorld?.objrShow(scene3d, lbKey); // ?rustWorld
+}
+
+// An evicted landblock left both baked sets: drop it from the hidden set (its
+// nodes are gone) AND lift the pool registry's own sticky copy of the hide.
+// 2026-10-29 (lane W review r2): the forget used to drop only `st.hidden`, and
+// `showLb` is the registry's only way out of `_hiddenLbs`, so a landblock
+// hidden for distance, released and re-baked inside the radius committed its
+// pooled members hidden for good (`_show` never ran: `st.hidden` no longer had
+// it). Safe on the grid path: a landblock leaves the baked sets only through a
+// grid release of a PARKED tile, so `showLb` finds the tile parked (live=false)
+// or gone and flips nothing; it only drops the stale mark (and posts
+// POOL_SHOW_LB, which keeps the ?rustWorld mirror in step). No registry (chain
+// off): `_poolShowLb` returns 0. `st.hidden` is cleared FIRST (as before).
+function _forget(scene3d, st, lbKey) {
+  st.hidden.delete(lbKey);
+  try { scene3d._poolShowLb?.(lbKey); } catch (_) { /* fail-soft */ }
+  _stats.forgets += 1;
+  globalThis.__hbRustWorld?.objrForget(scene3d, lbKey); // ?rustWorld
 }
 
 /**
@@ -171,8 +191,9 @@ export function tickObjectRadius(scene3d, seen) {
   const keys = new Set();
   if (scene3d.staticsBakedLbs instanceof Set) for (const k of scene3d.staticsBakedLbs) keys.add(k >>> 0);
   if (scene3d.buildingsBakedLbs instanceof Set) for (const k of scene3d.buildingsBakedLbs) keys.add(k >>> 0);
-  // Evicted landblocks leave both baked sets; forget them (their nodes are gone).
-  for (const k of st.hidden) if (!keys.has(k)) st.hidden.delete(k);
+  // Evicted landblocks leave both baked sets; forget them (their nodes are gone,
+  // and the pool registry's copy of the hide lifts with them: `_forget`).
+  for (const k of st.hidden) if (!keys.has(k)) _forget(scene3d, st, k);
   for (const k of keys) {
     const d = _dist(st, k);
     if (d > n + 1) {

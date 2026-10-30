@@ -1,0 +1,13 @@
+[
+  {"name": "rcb-defaults-ultra", "quality": "ultra", "flags": ""},
+  {"name": "rcb-alloff-ultra", "quality": "ultra", "flags": "rustParticles=off&rustRig=off&rustEntityCull=off&anchorOffGraph=off&staticMatrixFreeze=off&poolSizeToContent=off&rustCull=off&rustAnimScenery=off&rustAnimSceneryGate=off&rustTerrainFx=off&drawExec=off&drawExecRigs=off&hotMatVariant=off&hotDrawSort=off&hotCloudPush=off&hotTerrainTime=off&hotNightRamp=off"},
+  {"name": "rcb-noparticles-ultra", "quality": "ultra", "flags": "rustParticles=off"},
+  {"name": "rcb-norig-ultra", "quality": "ultra", "flags": "rustRig=off&rustEntityCull=off"},
+  {"name": "rcb-nocull-ultra", "quality": "ultra", "flags": "rustCull=off"},
+  {"name": "rcb-noanimscenery-ultra", "quality": "ultra", "flags": "rustAnimScenery=off&rustAnimSceneryGate=off"},
+  {"name": "rcb-noterrainfx-ultra", "quality": "ultra", "flags": "rustTerrainFx=off"},
+  {"name": "rcb-noanchor-ultra", "quality": "ultra", "flags": "anchorOffGraph=off"},
+  {"name": "rcb-nofreeze-ultra", "quality": "ultra", "flags": "staticMatrixFreeze=off"},
+  {"name": "rcb-nopoolsize-ultra", "quality": "ultra", "flags": "poolSizeToContent=off"},
+  {"name": "rcb-nohot-ultra", "quality": "ultra", "flags": "hotMatVariant=off&hotDrawSort=off&hotCloudPush=off&hotTerrainTime=off&hotNightRamp=off"}
+]

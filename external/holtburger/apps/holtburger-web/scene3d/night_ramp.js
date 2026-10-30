@@ -50,6 +50,8 @@
 // image's read. An exposure-level or post-tone-map darkening would have
 // crushed them uniformly, which is why this is not done that way.
 
+import { rustFlag } from "./rust/scene_core.js";
+
 const DEG_TO_RAD = Math.PI / 180;
 
 /** Retail's authored night floor for `dirPitch`, in degrees. */
@@ -105,13 +107,26 @@ function _params(search) {
   return _liveParams;
 }
 
+// The two readers' bodies over an already-parsed params object (shared by the
+// per-call readers below and `?hotNightRamp`'s single-read path).
+function _rampOnFrom(P) {
+  const v = P.get("nightRamp");
+  if (v == null) return true;
+  const t = String(v).toLowerCase();
+  return !(t === "off" || t === "0" || t === "false" || t === "no");
+}
+function _numFrom(P, name, dflt, lo, hi) {
+  const raw = P.get(name);
+  if (raw == null || raw === "") return dflt;
+  const v = Number(raw);
+  if (!Number.isFinite(v)) return dflt;
+  return Math.min(hi, Math.max(lo, v));
+}
+
 /** `?nightRamp` — DEFAULT ON; only the literal escapes turn it off. */
 export function nightRampEnabled(search) {
   try {
-    const v = _params(search).get("nightRamp");
-    if (v == null) return true;
-    const t = String(v).toLowerCase();
-    return !(t === "off" || t === "0" || t === "false" || t === "no");
+    return _rampOnFrom(_params(search));
   } catch (_) {
     return true;
   }
@@ -120,11 +135,7 @@ export function nightRampEnabled(search) {
 /** `?<name>=<float>` clamped override, else `dflt`. */
 export function nightNumFlag(name, dflt, lo, hi, search) {
   try {
-    const raw = _params(search).get(name);
-    if (raw == null || raw === "") return dflt;
-    const v = Number(raw);
-    if (!Number.isFinite(v)) return dflt;
-    return Math.min(hi, Math.max(lo, v));
+    return _numFrom(_params(search), name, dflt, lo, hi);
   } catch (_) {
     return dflt;
   }
@@ -157,11 +168,58 @@ export function nightGroundScale(search) {
  */
 export function artSunPitchDeg(dirPitchDeg, enabled) {
   const p = Number.isFinite(dirPitchDeg) ? dirPitchDeg : 0;
+  if (_hotNightRampOn()) return _artSunPitchOneRead(p, enabled);
   const on = enabled == null ? nightRampEnabled() : !!enabled;
   if (!on) return p;
   const knee = nightKneeDeg();
   if (p >= knee) return p;
   const floor = nightFloorDeg();
+  const span = Math.max(knee - RETAIL_PITCH_FLOOR_DEG, 1e-3);
+  const t = Math.min(1, Math.max(0, (p - RETAIL_PITCH_FLOOR_DEG) / span));
+  return floor + t * (knee - floor);
+}
+
+// 2026-10-26 (lane F hot spots) — `?hotNightRamp` (DEFAULT ON since 2026-10-26;
+// `=off` escape). artSunPitchDeg asked three readers in turn
+// (nightRampEnabled, nightKneeDeg, nightFloorDeg), and each one re-read
+// `window.location.search` — a native Location getter that builds a fresh
+// string — before the params cache could answer: 2 reads by day, 3 at night,
+// ~4 calls a frame plus every nightFactorFromAuthoredPitch (1070 2026-10-23
+// run: `_search` 0.034 + `_params` 0.020 ms/frame self). Nothing that runs
+// between those reads can change the URL (only these readers' own builtins
+// run), so one read per call answers all three exactly: the same params
+// object, the same lookups in the same order, the same clamps, the same
+// fail-soft defaults, and no read at all where the shipped code made none
+// (an explicit `enabled === false` returns before any lookup).
+let _hotNR;
+function _hotNightRampOn() {
+  if (_hotNR === undefined) _hotNR = rustFlag("hotNightRamp", true);
+  return _hotNR;
+}
+/** Test seam: force `?hotNightRamp` (`undefined` re-reads the URL flag). */
+export function __setHotNightRampForTest(on) {
+  _hotNR = on === undefined ? undefined : !!on;
+}
+// `_params()` or null when it throws (the readers' catch arms then answer).
+function _paramsOrNull() {
+  try { return _params(); } catch (_) { return null; }
+}
+function _artSunPitchOneRead(p, enabled) {
+  let P; // undefined until the first lookup needs it
+  let on;
+  if (enabled == null) {
+    P = _paramsOrNull();
+    try { on = P === null ? true : _rampOnFrom(P); } catch (_) { on = true; }
+  } else {
+    on = !!enabled;
+  }
+  if (!on) return p;
+  if (P === undefined) P = _paramsOrNull();
+  let knee;
+  try { knee = P === null ? NIGHT_RAMP_KNEE_DEG : _numFrom(P, "nightRampKnee", NIGHT_RAMP_KNEE_DEG, 1, 90); } catch (_) { knee = NIGHT_RAMP_KNEE_DEG; }
+  if (p >= knee) return p;
+  let floor;
+  try { floor = P === null ? NIGHT_RAMP_FLOOR_DEG : _numFrom(P, "nightRampFloor", NIGHT_RAMP_FLOOR_DEG, -60, 20); } catch (_) { floor = NIGHT_RAMP_FLOOR_DEG; }
   const span = Math.max(knee - RETAIL_PITCH_FLOOR_DEG, 1e-3);
   const t = Math.min(1, Math.max(0, (p - RETAIL_PITCH_FLOOR_DEG) / span));
   return floor + t * (knee - floor);

@@ -219,6 +219,8 @@ import { PLANE, planeFor, canSupplyPlanes } from "./surface_planes.js";
 // Perf T4 — report new GPU arrays to the `?frameWork` slot (no-op when OFF).
 import { frameWorkCharge } from "./frame_work.js";
 import { markBatchedRuns } from "./batched_runs.js";
+// ?staticMatrixFreeze (stage-2 S1a, default OFF): atlas buckets sit at identity for their life.
+import { freezeStaticNodeMatrices } from "./static_batch_x.js";
 
 let _flag;
 /** `?statAtlas=off` escapes the cross-LB texture-array batching of unique-material
@@ -1599,6 +1601,7 @@ function _getOrCreateBucket(bucketKey, w, h, stateKey, scene3d, bc7, pageDepth =
   const arrays = { diff: diffArray, nra: nraArray };
   const material = makeArrayMaterial(diffArray, stateKey, nraArray, arrays);
   const bm = new THREE.BatchedMesh(_ATLAS_INIT_INST, _ATLAS_INIT_VERTS, _ATLAS_INIT_VERTS * 2, material);
+  globalThis.__hbRustWorld?.track(bm, "atlas"); // ?rustWorld shadow (scene3d/rust/world.js); off ⇒ nothing evaluated
   // ?batchedRuns: stock batching chunks (the array layer rides in the vertex
   // data), so an unsorted atlas bucket can draw repeated models as instanced runs.
   if (typeof markBatchedRuns === "function") markBatchedRuns(bm);
@@ -1649,6 +1652,7 @@ function _getOrCreateBucket(bucketKey, w, h, stateKey, scene3d, bc7, pageDepth =
   }
   _buckets.set(bucketKey, b);
   try { scene3d?.staticsGroup?.add(bm); } catch (_) { /* fail-soft */ }
+  if (bm.parent && typeof freezeStaticNodeMatrices === "function") freezeStaticNodeMatrices(bm);
   return b;
 }
 
@@ -2328,6 +2332,7 @@ export function addSingletonsToCrossLbAtlas(nodes, scene3d) {
       if (!list) { list = []; _lbMembership.set(lbKey, list); }
       const row = { bucketKey, gid, iid, texUuid: uuid }; // iid: Phase 9a park hide/show seam
       list.push(row);
+      globalThis.__hbRustWorld?.attrLb(bm, iid, lbKey); // ?rustWorld: the membership the park seam walks
       fedLbs.add(lbKey);
       // ST5 DEFAULT arm (preview-commit, D-05.6.3): a node committed while
       // its full tier is in flight is tracked by rsId for the re-home. The
@@ -2568,6 +2573,7 @@ export function atlasInstancesForLb(lbKey) {
  * visible while parked, never the reverse.
  */
 export function parkStaticAtlasForLb(lbKey) {
+  globalThis.__hbRustWorld?.lbVis("atlas", lbKey >>> 0, false); // ?rustWorld: the kernel derives the same writes
   const list = _lbMembership.get(lbKey >>> 0);
   if (!list) return 0;
   let hidden = 0;
@@ -2582,6 +2588,7 @@ export function parkStaticAtlasForLb(lbKey) {
 
 /** Phase 9a: show a parked LB's atlas instances again (see parkStaticAtlasForLb). */
 export function unparkStaticAtlasForLb(lbKey) {
+  globalThis.__hbRustWorld?.lbVis("atlas", lbKey >>> 0, true); // ?rustWorld: the kernel derives the same writes
   const list = _lbMembership.get(lbKey >>> 0);
   if (!list) return 0;
   let shown = 0;
@@ -2679,7 +2686,9 @@ export function tickStatAtlasOptimize() {
       try { ud.diffArray?.dispose?.(); } catch (_) { /* fail-soft */ }
       try { ud.nraArray?.dispose?.(); } catch (_) { /* fail-soft */ }
       try { b.bm.material?.dispose?.(); } catch (_) { /* fail-soft */ }
-      try { b.bm.geometry?.dispose?.(); } catch (_) { /* fail-soft */ }
+      // BatchedMesh#dispose: the geometry (once) AND its matrices / indirect / colors
+      // DataTextures — a geometry-only dispose left those on the GPU per GC'd bucket.
+      try { b.bm.dispose?.(); } catch (_) { /* fail-soft */ }
       _buckets.delete(key);
       _atlasStats.emptyBucketsGCd += 1;
       // Orphaned async nra re-pack rows for this bucket die with it.

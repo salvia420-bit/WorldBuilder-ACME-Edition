@@ -45,13 +45,17 @@ export function installSkipEmptyMultiDraw(renderer, { force = false } = {}) {
   if ((!FLAG && !force) || !renderer || typeof renderer.renderBufferDirect !== "function") return false;
   if (renderer.__hbSkipEmptyMultiDraw) return true;
   const orig = renderer.renderBufferDirect;
-  renderer.renderBufferDirect = function (camera, scene, geometry, material, object, group) {
+  const wrapper = function (camera, scene, geometry, material, object, group) {
     if (object && object.isBatchedMesh === true && object._multiDrawCount === 0 && !ctl.off) {
       stats.skipped += 1;
       return;
     }
     return orig.call(this, camera, scene, geometry, material, object, group);
   };
+  // draw_exec.js walks the wrapper chain by these two tags (see batched_runs.js).
+  wrapper.__hbRbdTag = "skipEmpty";
+  wrapper.__hbRbdInner = orig;
+  renderer.renderBufferDirect = wrapper;
   Object.defineProperty(renderer, "__hbSkipEmptyMultiDraw", { value: orig, configurable: true });
   if (typeof window !== "undefined") {
     try {
@@ -77,6 +81,27 @@ export function uninstallSkipEmptyMultiDraw(renderer) {
 
 export function getSkipEmptyMultiDrawStats() {
   return { ...stats };
+}
+
+/**
+ * The wrapper's decision for one draw, for scene3d/draw_exec.js (`?drawExec`),
+ * which stands in for the whole wrapper chain on the draws it executes: true
+ * (and counted, as the wrapper counts it) when the installed wrapper would
+ * return without drawing. Only meaningful where the wrapper is in the chain.
+ */
+export function skipEmptyMultiDrawTake(object) {
+  if (object && object.isBatchedMesh === true && object._multiDrawCount === 0 && !ctl.off) {
+    stats.skipped += 1;
+    return true;
+  }
+  return false;
+}
+
+/** The wrapper's decision only (nothing counted): draw_exec.js asks it before doing the
+ *  wrappers' work for an empty draw, so a draw the wrapper would NOT skip (its live `off`
+ *  seam) is handed to the chain untouched. */
+export function skipEmptyMultiDrawWouldSkip(object) {
+  return object !== null && object !== undefined && object.isBatchedMesh === true && object._multiDrawCount === 0 && !ctl.off;
 }
 
 /** Test seam. */

@@ -18,6 +18,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 // limit"; this box is the owner's own desktop and an uncapped off-screen tab
 // competes with whatever they are doing. `--uncapped` pins 0 for a timing look.
 import { uncappedBenchUrl } from "./lib/bench-url.mjs";
+import { rawSession } from "./lib/cdp_raw.mjs";
 
 import { statSync, openSync, readSync, closeSync } from "node:fs";
 const ACE_LOG = "/home/wbterminal/ace-server/Source/ACE.Server/bin/Release/net10.0/ACE_Log.txt";
@@ -49,11 +50,21 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const ssh = (c) => execFileSync("ssh", ["-o", "BatchMode=yes", BOX, c], { encoding: "utf8", timeout: 60000 });
 const killBench = () => { try { ssh("powershell -NoProfile -ExecutionPolicy Bypass -File D:\\Temp\\hbbench\\hbbench-kill.ps1"); } catch (_) {} };
 
+// 2026-10-29: on the box's Chrome 156, connectOverCDP hangs once the browser lists `browser_ui`
+// targets (omnibox popup WebUI) — it attaches to every target. Give it 15 s, then talk to the game
+// page alone over raw CDP (lib/cdp_raw.mjs: same pg.evaluate / ctx.newCDPSession surface). `boot`
+// keeps Playwright: it connects right after launch, before those targets exist, and needs addInitScript.
 async function page() {
-  const browser = await chromium.connectOverCDP(CDP);
-  const ctx = browser.contexts()[0];
-  const pg = ctx.pages().find((p) => p.url().includes("holtburger-web")) || ctx.pages()[0];
-  return { browser, ctx, pg };
+  const pw = chromium.connectOverCDP(CDP).then((browser) => {
+    const ctx = browser.contexts()[0];
+    const pg = ctx.pages().find((p) => p.url().includes("holtburger-web")) || ctx.pages()[0];
+    return { browser, ctx, pg };
+  });
+  const r = await Promise.race([pw, sleep(15000).then(() => null)]);
+  if (r) return r;
+  pw.catch(() => {});
+  console.error("[hbsess] connectOverCDP did not attach in 15 s: raw CDP to the page target (lib/cdp_raw.mjs)");
+  return rawSession(CDP);
 }
 
 if (cmd === "kill") { killBench(); process.exit(0); }

@@ -1,0 +1,166 @@
+<!doctype html><html><body><canvas id="c" width="160" height="120"></canvas>
+<script type="importmap">{ "imports": { "three": "/three/three.module.js" } }</script>
+<script type="module">
+// harness/glsl_smoke/draw_exec_page.html — driven by draw_exec_smoke.mjs. `?drawExec=on|off`
+// (the module reads location.search through rustFlag). The renderer is set up the way
+// scene3d/index.js sets it up — reversed-Z when EXT_clip_control is there, the light-UBO
+// chunks + uniform_bind_patch, the program sort with a punch phase, the colorTexture fix,
+// async_link_guard, bmIndirectPerCamera, skip_empty_multidraw, batched_runs (+ L1), then the
+// executor outermost — and draws a static world (pools with runs, culled buckets, sorted
+// translucent buckets, an unmarked atlas bucket, building batches, statics on shared
+// materials incl. mirrored ones and a multi-material one, LOD, a ShaderMaterial terrain,
+// layer-1 cell statics) interleaved with dynamic entities and meshes that share geometry and
+// material with the statics, into a 4x MSAA target, camera moving. Every frame from the
+// 5th on is read back: the two arms must be pixel-identical.
+import * as THREE from "three";
+import * as Z from "/app/scene3d/shader_logdepth.js";
+import { applyBatchedMeshColorTextureFix } from "/app/scene3d/three_batchedmesh_colortexture_fix.js";
+import { installBatchedRunsChunks, installBatchedRuns, markBatchedRuns, getBatchedRunsStats } from "/app/scene3d/batched_runs.js";
+import { installSkipEmptyMultiDraw } from "/app/scene3d/skip_empty_multidraw.js";
+import { installAsyncLinkGuard } from "/app/scene3d/async_link_guard.js";
+import { installBatchedIndirectPerCamera } from "/app/scene3d/batched_indirect_per_camera.js";
+import { installUniformBindPatch, installLightUboChunks } from "/app/scene3d/uniform_bind_patch.js";
+import { installDrawSortProgram, setDrawSortPhase } from "/app/scene3d/draw_sort_program.js";
+import { installDrawExec, drawExecEnabled } from "/app/scene3d/draw_exec.js";
+
+const out = { errors: [], frames: [] };
+const origErr = console.error;
+console.error = (...a) => { out.errors.push(a.map(String).join(" ").slice(0, 400)); origErr(...a); };
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+try {
+  installBatchedRunsChunks(THREE);
+  installLightUboChunks(THREE);
+  const canvas = document.getElementById("c");
+  const clip = Z.probeClipControl(canvas, Z.threeContextAttributes());
+  const dm = Z.resolveDepthMode({ requested: true, clipControl: clip });
+  const renderer = new THREE.WebGLRenderer({ canvas, ...Z.depthRendererParams(dm.mode) });
+  renderer.debug.checkShaderErrors = true;
+  out.depthMode = dm.mode;
+  if (dm.reversed) out.reversedZ = Z.installReversedZ(THREE, renderer).installed;
+  const gl = renderer.getContext();
+  renderer.capabilities.maxTextures = gl.getParameter(gl.MAX_COMBINED_TEXTURE_IMAGE_UNITS);
+  installUniformBindPatch(renderer);
+  installDrawSortProgram(renderer);
+  const phaseOf = (obj) => { for (let o = obj; o; o = o.parent) { const t = o.userData?.__punchPhase; if (t !== undefined) return t; } return 0; };
+  setDrawSortPhase(renderer, phaseOf, null);
+  applyBatchedMeshColorTextureFix(THREE);
+  const scene = new THREE.Scene();
+  installAsyncLinkGuard(renderer, () => scene);
+  installBatchedIndirectPerCamera(THREE);
+  installSkipEmptyMultiDraw(renderer);
+  installBatchedRuns(renderer);
+  out.flag = drawExecEnabled();
+  const dx = installDrawExec(renderer, () => scene);
+  out.installed = !!(dx && dx.installed);
+
+  // ---- the world (deterministic) ----
+  let s = 13 >>> 0; const r = () => { s = (s * 1664525 + 1013904223) >>> 0; return s / 4294967296; };
+  const tex = (hue) => {
+    const n = 8, d = new Uint8Array(n * n * 4), c = new THREE.Color().setHSL(hue, 0.6, 0.5);
+    for (let i = 0; i < n * n; i++) { const k = ((i % n) + ((i / n) | 0)) & 1 ? 1 : 0.6; d[i * 4] = c.r * 255 * k; d[i * 4 + 1] = c.g * 255 * k; d[i * 4 + 2] = c.b * 255 * k; d[i * 4 + 3] = 255; }
+    const t = new THREE.DataTexture(d, n, n); t.needsUpdate = true; t.colorSpace = THREE.SRGBColorSpace; return t;
+  };
+  scene.fog = new THREE.Fog(0x8899aa, 30, 160);
+  scene.add(new THREE.AmbientLight(0x404040, 0.6));
+  const sun = new THREE.DirectionalLight(0xffffff, 1.2); sun.position.set(10, 20, 5); scene.add(sun);
+  scene.add(new THREE.HemisphereLight(0x8888ff, 0x442200, 0.3));
+  for (let i = 0; i < 4; i++) { const p = new THREE.PointLight(0xffaa66, 3, 30, 2); p.position.set(r() * 40 - 20, 3, r() * 40 - 20); scene.add(p); }
+  const worldRoot = new THREE.Group(); worldRoot.name = "worldRoot"; worldRoot.rotation.x = -Math.PI / 2; scene.add(worldRoot);
+  const grp = (n) => { const g = new THREE.Group(); g.name = n; worldRoot.add(g); return g; };
+  const terrain = grp("terrain"), buildings = grp("buildings"), statics = grp("statics"), cells = grp("cells"), entities = grp("entities");
+  worldRoot.userData.__punchPhase = 2; terrain.userData.__punchPhase = 0;
+  const geoms = [new THREE.BoxGeometry(1, 1, 1), new THREE.SphereGeometry(0.5, 8, 6), new THREE.CylinderGeometry(0.3, 0.3, 1, 8), new THREE.ConeGeometry(0.4, 1, 6)];
+  const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler(), v = new THREE.Vector3(), one = new THREE.Vector3(1, 1, 1);
+  const place = (sp = 12) => m4.compose(v.set(r() * sp * 2 - sp, r() * sp * 2 - sp, r() * 2), q.setFromEuler(e.set(0, 0, r() * 6)), one);
+  const std = (h, x = {}) => new THREE.MeshStandardMaterial({ map: tex(h), roughness: 0.6, ...x });
+  const bucket = (mat, n, gs, culled, sorted, mark, name, parent, colors) => {
+    const bm = new THREE.BatchedMesh(64, 4096, 8192, mat);
+    const ids = gs.map((g) => bm.addGeometry(g));
+    for (let k = 0; k < n; k++) { const id = bm.addInstance(ids[k % ids.length]); bm.setMatrixAt(id, place()); if (colors) bm.setColorAt(id, new THREE.Color().setHSL((k * 0.13) % 1, 0.7, 0.6)); }
+    bm.perObjectFrustumCulled = culled; bm.sortObjects = sorted; bm.frustumCulled = false; bm.matrixAutoUpdate = false; bm.name = name;
+    if (mark) markBatchedRuns(bm);
+    parent.add(bm);
+    return bm;
+  };
+  const cls = [0.0, 0.15, 0.3, 0.45].map((h) => std(h, { side: THREE.DoubleSide }));
+  for (let p = 0; p < 8; p++) bucket(cls[p % 4], 8, [geoms[p % 4], geoms[(p + 1) % 4]], false, false, true, `pool-${p}`, statics, p === 3);
+  const bm = [0.6, 0.7].map((h) => std(h));
+  for (let b = 0; b < 4; b++) bucket(bm[b % 2], 6, [geoms[b % 4], geoms[(b + 2) % 4]], true, false, true, `static-batch-c-${b}`, statics);
+  const tr = std(0.8, { transparent: true, opacity: 0.55 });
+  for (let b = 0; b < 2; b++) bucket(tr, 6, [geoms[1], geoms[1], geoms[2]], true, true, true, `static-batch-t-${b}`, statics);
+  bucket(std(0.9), 6, [geoms[0], geoms[3]], true, false, false, "stat-atlas-0", statics);
+  for (let b = 0; b < 2; b++) bucket(std(0.05 + b * 0.1), 4, [geoms[0]], false, false, false, `building-batch-${b}`, buildings);
+  const sm = [0.2, 0.35, 0.5, 0.65].map((h) => new THREE.MeshStandardMaterial({ map: tex(h), roughness: 0.8 }));
+  for (let i = 0; i < 20; i++) {
+    const m = new THREE.Mesh(geoms[i % 4], sm[i % 4]);
+    m.position.set(r() * 24 - 12, r() * 24 - 12, r() * 2); m.rotation.z = r() * 6;
+    if (i % 6 === 2) m.scale.set(-1, 1, 1);
+    m.updateMatrix(); m.matrixAutoUpdate = false; statics.add(m);
+  }
+  { const m = new THREE.Mesh(new THREE.BoxGeometry(1.5, 1.5, 1.5), [sm[0], sm[1], sm[2], sm[0], sm[1], sm[2]]); m.position.set(2, 2, 1); m.updateMatrix(); m.matrixAutoUpdate = false; statics.add(m); }
+  for (let i = 0; i < 2; i++) { const lod = new THREE.LOD(); lod.addLevel(new THREE.Mesh(geoms[1], sm[3]), 0); lod.addLevel(new THREE.Mesh(geoms[0], sm[2]), 18 + i * 3); lod.position.set(i * 5 - 3, -5, 0.5); statics.add(lod); }
+  {
+    const u = { uA: { value: tex(0.33) }, uB: { value: tex(0.1) }, uTime: { value: 0 } };
+    const mat = new THREE.ShaderMaterial({
+      uniforms: u,
+      vertexShader: "varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }",
+      fragmentShader: "uniform sampler2D uA; uniform sampler2D uB; uniform float uTime; varying vec2 vUv; void main(){ gl_FragColor = vec4(texture2D(uA, vUv * 4.0).rgb * 0.7 + texture2D(uB, vUv).rgb * 0.3 + uTime * 0.0, 1.0); }",
+    });
+    const t = new THREE.Mesh(new THREE.PlaneGeometry(60, 60), mat); t.position.z = -0.6; terrain.add(t);
+  }
+  const cm = std(0.55);
+  for (let i = 0; i < 6; i++) { const m = new THREE.Mesh(geoms[(i + 1) % 4], cm); m.position.set(r() * 10 - 5, r() * 10 - 5, 0.5); m.updateMatrix(); m.matrixAutoUpdate = false; m.layers.set(1); cells.add(m); }
+  cells.layers.set(1); entities.layers.set(1);
+  const ents = [];
+  for (let i = 0; i < 6; i++) { const m = new THREE.Mesh(geoms[i % 4], std(0.12 * i)); m.position.set(r() * 16 - 8, r() * 16 - 8, 1); m.layers.set(1); entities.add(m); ents.push(m); }
+  for (let i = 0; i < 6; i++) { const m = new THREE.Mesh(geoms[i % 2 === 0 ? 0 : 2], sm[i % 2 === 0 ? 0 : 1]); m.position.set(r() * 20 - 10, r() * 20 - 10, 1.5); worldRoot.add(m); }
+  { const tp = new THREE.Mesh(geoms[0], std(0.95, { transparent: true, opacity: 0.4, side: THREE.DoubleSide })); tp.position.set(3, -3, 1); statics.add(tp); }
+
+  const cam = new THREE.PerspectiveCamera(60, 160 / 120, 0.1, 400);
+  cam.layers.enableAll(); // world (0) + cells / entities (1) in one pass
+  const rt = new THREE.WebGLRenderTarget(160, 120, { samples: 4 });
+  const W = 160, H = 120;
+  const px = new Uint8Array(W * H * 4);
+  const guard = renderer.__hbAsyncLink;
+  // async_link compiles off-frame on timers (SwiftShader links slowly, and the two arms are two
+  // browsers): before every frame, wait for its queue and in-flight compiles to finish.
+  const settle = async () => {
+    await sleep(20);
+    for (let i = 0; i < 600 && guard && (guard.pending > 0 || guard.stats.inFlight > 0); i++) await sleep(20);
+  };
+  const pose = (p) => {
+    cam.position.set(Math.sin(p * 0.35) * 14, 10 + Math.cos(p * 0.21) * 3, 22 + Math.sin(p * 0.17) * 6);
+    cam.lookAt(0, 0, 0);
+    for (let i = 0; i < ents.length; i++) ents[i].rotation.y = p * 0.1 + i;
+  };
+  const frame = () => { renderer.setRenderTarget(rt); renderer.render(scene, cam); renderer.setRenderTarget(null); };
+  // Warm up on pose 0 until a whole frame adds no async-link deferral (every program linked).
+  let warm = 0;
+  for (; warm < 60; warm++) {
+    const d0 = guard ? guard.stats.deferred : 0;
+    pose(0); frame(); await settle();
+    if (warm >= 2 && (!guard || guard.stats.deferred === d0)) break;
+  }
+  out.warmFrames = warm + 1;
+  const FRAMES = 8;
+  for (let p = 0; p < FRAMES; p++) {
+    pose(p + 1);
+    frame();
+    renderer.readRenderTargetPixels(rt, 0, 0, W, H, px);
+    let h = 0x811c9dc5, lit = 0;
+    for (let i = 0; i < px.length; i++) { h ^= px[i]; h = Math.imul(h, 0x01000193) >>> 0; }
+    for (let i = 0; i < px.length; i += 4) if (px[i] + px[i + 1] + px[i + 2] > 30) lit++;
+    out.frames.push({ f: p + 1, hash: h.toString(16), lit, data: p === FRAMES - 1 ? Array.from(px) : null });
+    await settle();
+  }
+  out.deferredInReadback = guard ? guard.stats.deferred : null;
+  out.glError = gl.getError();
+  out.programs = renderer.info.programs.map((p) => ({ name: p.name, linked: gl.getProgramParameter(p.program, gl.LINK_STATUS) }));
+  out.runs = getBatchedRunsStats();
+  out.dx = dx && dx.installed ? JSON.parse(JSON.stringify(dx.stats)) : null;
+  out.renderer = gl.getParameter(gl.getExtension("WEBGL_debug_renderer_info")?.UNMASKED_RENDERER_WEBGL ?? gl.RENDERER);
+} catch (err) {
+  out.errors.push(`exception: ${err && err.stack ? err.stack.slice(0, 600) : err}`);
+}
+window.__smoke = out;
+</script></body></html>

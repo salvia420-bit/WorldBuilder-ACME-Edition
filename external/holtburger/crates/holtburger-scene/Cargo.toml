@@ -1,0 +1,30 @@
+[package]
+name = "holtburger-scene"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Per-frame scene kernels for holtburger-web (particles, rig poses, culling, instanced scenery), moved off the JS main thread. Pure Rust, no I/O, natively tested; apps/holtburger-web wraps it for wasm."
+
+# One feature per lane, all on by default. The orchestrator builds a finished
+# lane on its own while the others are still being written
+# (`cargo test -p holtburger-scene --no-default-features --features lane-rig`).
+[features]
+default = ["lane-anim-scenery", "lane-cull", "lane-particles", "lane-rig", "lane-terrain-fx", "lane-world"]
+lane-anim-scenery = []
+lane-cull = []
+lane-particles = []
+lane-rig = []
+lane-terrain-fx = []
+lane-world = []
+
+# No dependencies on purpose: `cargo test -p holtburger-scene` builds in
+# seconds and stays light on the 8 GB laptop. The wasm-bindgen surface lives in
+# apps/holtburger-web/src/scene_wasm/, not here.
+[dependencies]
+
+[dev-dependencies]
+# Parity fixtures written by the JS reference implementations
+# (apps/holtburger-web/tools/rust_parity/*.mjs) are JSON.
+serde_json.workspace = true

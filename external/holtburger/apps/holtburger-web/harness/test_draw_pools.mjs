@@ -539,13 +539,22 @@ console.log("PART 7: PARKED → EMPTY (release, deref, optimize, reap)");
   check(group.children.length === 0, "reaped pool leaves the scene group");
 
   // M6 pair: allocated (capacity) vs used EXTENT — never position.count.
-  const { reg: r2 } = makeRegistry();
+  // ?poolSizeToContent (default ON since 2026-10-26) counts each pool's real
+  // per-attribute widths; `=off` keeps the legacy POOL_VERTEX_BYTES census.
+  const { reg: r2 } = makeRegistry({ search: "?poolSizeToContent=off" });
   const gs2 = geomSource(30);
   r2.feedTile(plan(40, [member({ contentKey: "x|0" })]), gs2);
   const gb = r2.geometryBytes();
   check(gb.allocated > 0 && gb.used > 0 && gb.allocated >= gb.used,
     `allocated ${gb.allocated} >= used ${gb.used}`);
   check(gb.used === 30 * 24 + 30 * 2, `used extent is the fed geometry, got ${gb.used}`);
+  const { reg: r2on } = makeRegistry();
+  r2on.feedTile(plan(41, [member({ contentKey: "x|0" })]), geomSource(30));
+  const gbOn = r2on.geometryBytes();
+  const attrs = [...r2on.pools.values()][0].mesh.geometry.attributes;
+  const perVertex = Object.values(attrs).reduce((s, a) => s + a.itemSize * a.array.BYTES_PER_ELEMENT, 0);
+  check(gbOn.allocated >= gbOn.used && gbOn.used === 30 * perVertex + 30 * 2,
+    `default census: used extent at the pool's real vertex width (${perVertex} B), got ${gbOn.used}`);
 
   // Lazy optimize() at >30% dead extent.
   const { reg: r3 } = makeRegistry();

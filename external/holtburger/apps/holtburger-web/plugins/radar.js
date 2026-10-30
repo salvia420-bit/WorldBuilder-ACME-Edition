@@ -298,6 +298,68 @@ export function blipPixels(shape) {
   return SHAPE_PIXELS[shape] || [];
 }
 
+// 2026-10-26 (lane F hot spots, direct HUD fix) — MERGED BLIP RECTS. A repaint
+// filled every blip pixel with its own k×k fillRect (1070 2026-10-23 run: the
+// canvas calls were 0.03 ms/frame while running, a repaint per 25 ms update).
+// The same pixel set, cut once into maximal row runs that are then stacked
+// over consecutive rows with the same extent, fills the same device pixels,
+// each exactly once, in fewer calls (CROSS 5 → 3, CENTRE 9 → 3, HOLLOW 8 → 4,
+// the selection bracket 20 → 4). Exact because every coordinate is an integer
+// (trunc0 positions, integer offsets, integer backing scale k) with no canvas
+// transform: a covered pixel is fully covered, so one big rect and its unit
+// cells composite identically, and no op paints a pixel twice — sets with a
+// repeated pixel (a second source-over of the same colour), odd lengths or
+// non-integer offsets keep the per-pixel loop. Ops still draw in order.
+/** Merged [dx, dy, w, h]* rects for a pixel-offset set, or null (draw per pixel). */
+export function blipRects(offsets) {
+  if (!offsets || (offsets.length & 1) !== 0 || offsets.length === 0) return null;
+  const rows = new Map(); // dy -> dx[]
+  const seen = new Set();
+  for (let j = 0; j < offsets.length; j += 2) {
+    const dx = offsets[j], dy = offsets[j + 1];
+    if (!Number.isInteger(dx) || !Number.isInteger(dy)) return null;
+    const key = `${dx},${dy}`;
+    if (seen.has(key)) return null;
+    seen.add(key);
+    let r = rows.get(dy);
+    if (!r) { r = []; rows.set(dy, r); }
+    r.push(dx);
+  }
+  const ys = [...rows.keys()].sort((a, b) => a - b);
+  const out = [];
+  let open = new Map(); // "x0,w" -> index into out of a rect ending at the previous row
+  let prevY = NaN;
+  for (const y of ys) {
+    const xs = rows.get(y).sort((a, b) => a - b);
+    const next = new Map();
+    for (let i = 0; i < xs.length;) {
+      let e = i;
+      while (e + 1 < xs.length && xs[e + 1] === xs[e] + 1) e += 1;
+      const x0 = xs[i], w = xs[e] - xs[i] + 1;
+      const k = `${x0},${w}`;
+      const at = y === prevY + 1 ? open.get(k) : undefined;
+      if (at !== undefined) { out[at + 3] += 1; next.set(k, at); }
+      else { next.set(k, out.length); out.push(x0, y, w, 1); }
+      i = e + 1;
+    }
+    open = next;
+    prevY = y;
+  }
+  return Object.freeze(out);
+}
+// Per offsets array; only frozen arrays (the shape constants) are cached, so a
+// set that could still change is re-cut every time.
+const _blipRectCache = new WeakMap();
+function _blipRectsFor(offsets) {
+  if (!Object.isFrozen(offsets)) return blipRects(offsets);
+  let r = _blipRectCache.get(offsets);
+  if (r === undefined) { r = blipRects(offsets); _blipRectCache.set(offsets, r); }
+  return r;
+}
+let _mergeBlipRects = true;
+/** Test seam: draw blips per pixel (false) or as merged rects (true, default). */
+export function __setRadarMergeRectsForTest(on) { _mergeBlipRects = on !== false; }
+
 /** DrawObjects/DrawBlip: intensity 1.0 within ±5 m of height, else 0.65. */
 export function blipIntensity(dz) {
   return Math.abs(Number(dz) || 0) < 5 ? 1.0 : 0.65;
@@ -915,9 +977,19 @@ export function mount(_ctx) {
       paintKey = key;
       _paintStats.paints += 1;
       ctx.clearRect(0, 0, W, W);
+      const intK = Number.isInteger(k);
       for (let i = 0; i < nOps; i++) {
         const { offsets, x, y, color } = ops[i];
         ctx.fillStyle = color;
+        // Merged rects (blipRects) only on the integer grid; else per pixel.
+        const rects = _mergeBlipRects && intK && Number.isInteger(x) && Number.isInteger(y)
+          ? _blipRectsFor(offsets) : null;
+        if (rects !== null) {
+          for (let j = 0; j < rects.length; j += 4) {
+            ctx.fillRect((x + rects[j]) * k, (y + rects[j + 1]) * k, rects[j + 2] * k, rects[j + 3] * k);
+          }
+          continue;
+        }
         for (let j = 0; j < offsets.length; j += 2) {
           ctx.fillRect((x + offsets[j]) * k, (y + offsets[j + 1]) * k, k, k);
         }

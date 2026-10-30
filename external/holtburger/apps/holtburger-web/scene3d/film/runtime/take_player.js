@@ -2592,7 +2592,11 @@ export function createTakePlayer(deps = {}) {
     const live = liveOf();
     if (!live) return null;
     const t = live.terrainBakedLbs && typeof live.terrainBakedLbs.size === "number" ? live.terrainBakedLbs.size : -1;
-    const s = live.staticsGroup && Array.isArray(live.staticsGroup.children) ? live.staticsGroup.children.length : -1;
+    const sg = live.staticsGroup;
+    let s = sg && Array.isArray(sg.children) ? sg.children.length : -1;
+    // ?anchorOffGraph: outdoor script anchors live in per-landblock off-graph roots, not in staticsGroup
+    const roots = sg && sg.userData ? sg.userData.__anchorRoots : null;
+    if (s >= 0 && roots instanceof Map) for (const r of roots.values()) if (r && Array.isArray(r.children)) s += r.children.length;
     const c = live.cellContainers3d && typeof live.cellContainers3d.size === "number" ? live.cellContainers3d.size : -1;
     return t < 0 && s < 0 && c < 0 ? null : `${t}|${s}|${c}`;
   }

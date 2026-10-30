@@ -3579,6 +3579,7 @@ export function tickCellVisibility3D(scene3d, sessionHandle) {
     }
     // Roll the snapshot forward. Replace contents in place so the Set
     // object is stable across frames (avoids per-frame allocation).
+    globalThis.__hbRustWorld?.cellPvs(scene3d, visibleSet, lastVisible); // ?rustWorld: the PVS delta
     lastVisible.clear();
     for (const cellId of visibleSet) lastVisible.add(cellId);
   }
