@@ -378,7 +378,11 @@ console.log("PART 5 — request arithmetic (static; browser count is a separate 
   // 2026-10-26 (scene core round 2): + scene3d/rust/world.js (statics.js, lane W),
   // scene3d/entity_world.js (lane R4) and scene3d/terrain_shared_uniforms.js (lane F2)
   // (generator --check: up to date, 457 modules) → 436.
-  const NON_APP_PRELOADS = 436;
+  // 2026-10-30 (round 3, docs/2026-10-29-round3-gpu-driven.md): + scene3d/gpu_batch/{anim_scenery_batch,
+  // array_pages,class_materials,kit,layer_state,page_allocator,raycast,row_texture,upload_budget}.js
+  // (animated_scenery.js, lane K) + scene3d/skip_empty_passes.js (atmosphere_pipeline.js) and
+  // scene3d/upload_warm_draw.js (index.js) (lane R) (generator --check: up to date, 468 modules) → 447.
+  const NON_APP_PRELOADS = 447;
   check(mp.length === NON_APP_PRELOADS + appMods, `unbundled modulepreload block == ${NON_APP_PRELOADS} + ${appMods} app/ link elements (got ${mp.length})`);
   const workersInMp = mp.filter((h) => /(?:bake|net|texture|keepalive)_worker\.js/.test(h)).length;
   // html + 266 modules + wasm + SW + workers not in the preload list (bake + shard fetch;

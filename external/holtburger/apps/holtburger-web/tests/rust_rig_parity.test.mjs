@@ -19,10 +19,14 @@
 //      (under `node --expose-gc` only);
 //   E  an EntityManager A/B (flag off vs on, same inputs): idle, walk
 //      (exact in place), backstep, a raw one-shot with root motion, the
-//      jump-pose tween and a frozen corpse pose overwriting the pose;
+//      jump-pose tween and a frozen corpse pose overwriting the pose; run
+//      again with `?rigPoseSkip` on in the flag-on arm (E+skip);
+//   S  every gen_rig case posed twice on one rig with `?rigPoseSkip` on (the
+//      second call a skip) against the flag-off poser (the skip itself:
+//      tests/rig_pose_skip.test.mjs);
 //   G  the ?rustEntityCull hoisted tick gate vs the per-entity gate: which
 //      entities tick, and every root / ancestor matrix after every tick.
-// Part 2 (after the orchestrator's wasm build) — F, C, T and E against the
+// Part 2 (after the orchestrator's wasm build) — F, C, S, T, E and E+skip against the
 //   COMPILED `SceneRigs` from `${HB_PKG || "pkg"}/`. Prints `SKIP — …` and
 //   exits 0 (when Part 1 passed) if the class is absent.
 //
@@ -299,6 +303,35 @@ async function runSuite(label, ns, memory, growNow) {
     check("C: every pose went through the kernel (no JS fallback, raw writes)",
       s1.rigsPosed - s0.rigsPosed === calls.length && s1.jsFallbacks === s0.jsFallbacks && s1.partsRaw - s0.partsRaw > 1000 && s1.partsSetter === s0.partsSetter,
       `posed ${s1.rigsPosed - s0.rigsPosed}, fallbacks ${s1.jsFallbacks - s0.jsFallbacks}, raw parts ${s1.partsRaw - s0.partsRaw}`);
+  }
+
+  // S — ?rigPoseSkip: every gen_rig case posed twice on the same rig (the second call skips)
+  // against the flag-off JS body posed twice.
+  {
+    let bad = null, n = 0;
+    const k0 = ms.rigPoseSkipStats();
+    for (const call of calls) {
+      const { desc } = descs[call.desc];
+      ms._setInPlaceExactForTest(call.exact);
+      const A = makeRig(call);
+      const B = makeRig(call);
+      ms._setRustRigForTest(false);
+      ms.poseRigAt(call.globalFrame, desc, A.parts, call.inPlace);
+      ms.poseRigAt(call.globalFrame, desc, A.parts, call.inPlace);
+      ms._setRustRigForTest(true);
+      ms._setRigPoseSkipForTest(true);
+      ms.poseRigAt(call.globalFrame, desc, B.parts, call.inPlace);
+      ms.poseRigAt(call.globalFrame, desc, B.parts, call.inPlace);
+      ms._setRigPoseSkipForTest(false);
+      ms._setRustRigForTest(false);
+      bad = compareRigs(`${descs[call.desc].name} g=${call.globalFrame} ip=${call.inPlace} ex=${call.exact} (posed + skipped)`, A, B);
+      if (bad) break;
+      n += 1;
+    }
+    const k1 = ms.rigPoseSkipStats();
+    check(`S: ${calls.length} gen_rig poses with ?rigPoseSkip on, each posed then skipped — pose, matrix, matrixWorld identical`,
+      bad === null && n === calls.length && k1.posed - k0.posed === calls.length && k1.skipped - k0.skipped === calls.length,
+      bad ?? `posed ${k1.posed - k0.posed}, skipped ${k1.skipped - k0.skipped}`);
   }
 
   const call0 = calls.find((c) => descs[c.desc].name === "human-17p-run" && c.inPlace && c.exact && c.holes.length === 0 && c.nParts === 17)
@@ -600,8 +633,9 @@ function spawnMeta(guid, x, y, z) {
   };
 }
 
-async function runEntityAB(label) {
-  console.log(`=== E: EntityManager A/B (${label}) ===`);
+async function runEntityAB(label, { skip = false } = {}) {
+  const E = skip ? "E+skip" : "E";
+  console.log(`=== ${E}: EntityManager A/B (${label})${skip ? " — the flag-on arm also ?rigPoseSkip" : ""} ===`);
   ms._setInPlaceExactForTest(true);
   const { EntityManager } = await import("../scene3d/entities.js");
   const { installFakeMotionSequence } = await import("../harness/lib/fake_motion_sequence.mjs");
@@ -622,7 +656,7 @@ async function runEntityAB(label) {
   const B = await mk();
   ms._setRustRigForTest(false);
   if (!A.inst || !B.inst || A.inst.parts.length !== 17) {
-    check("E: spawned 17-part rigs", false, `parts ${A.inst?.parts?.length}`);
+    check(`${E}: spawned 17-part rigs`, false, `parts ${A.inst?.parts?.length}`);
     return;
   }
   // Each manager seeds its tween clock from performance.now(): the jump-pose
@@ -651,14 +685,19 @@ async function runEntityAB(label) {
   const step = (tag, n, dt = 0.016) => {
     for (let i = 0; i < n && !bad; i += 1) {
       ms._setRustRigForTest(false); A.em.tick(dt);
-      ms._setRustRigForTest(true); B.em.tick(dt);
-      ms._setRustRigForTest(false);
+      ms._setRustRigForTest(true); ms._setRigPoseSkipForTest(skip); B.em.tick(dt);
+      ms._setRigPoseSkipForTest(false); ms._setRustRigForTest(false);
       bad = compareEntities(`${tag} tick ${i}`);
       steps += 1;
     }
   };
-  const both = async (fn) => { ms._setRustRigForTest(false); await fn(A); ms._setRustRigForTest(true); await fn(B); ms._setRustRigForTest(false); };
+  const both = async (fn) => {
+    ms._setRustRigForTest(false); await fn(A);
+    ms._setRustRigForTest(true); ms._setRigPoseSkipForTest(skip); await fn(B);
+    ms._setRigPoseSkipForTest(false); ms._setRustRigForTest(false);
+  };
   const s0 = rig.rustRigStats();
+  const k0 = ms.rigPoseSkipStats();
   step("idle (exact, identity root)", 12);
   await both((X) => X.em.setMotion(X.inst.guid, WALK, 0x3d));
   step("walk (exact, stride root)", 25);
@@ -677,9 +716,17 @@ async function runEntityAB(label) {
   await both((X) => { X.inst._ragdollFrozenPose = null; });
   step("after the corpse pose", 6);
   const s1 = rig.rustRigStats();
-  check(`E: ${steps} ticks — every part + mesh world matrix identical`, bad === null, bad ?? "");
-  check("E: the flag-on manager posed through the kernel", s1.rigsPosed - s0.rigsPosed >= steps - 2,
-    `posed ${s1.rigsPosed - s0.rigsPosed} over ${steps} ticks`);
+  const k1 = ms.rigPoseSkipStats();
+  const skipped = k1.skipped - k0.skipped;
+  check(`${E}: ${steps} ticks — every part + mesh world matrix identical`, bad === null, bad ?? "");
+  if (!skip) {
+    check("E: the flag-on manager posed through the kernel", s1.rigsPosed - s0.rigsPosed >= steps - 2,
+      `posed ${s1.rigsPosed - s0.rigsPosed} over ${steps} ticks`);
+  } else {
+    check("E+skip: the flag-on manager posed through the kernel or skipped, and skipped some",
+      s1.rigsPosed - s0.rigsPosed + skipped >= steps - 2 && skipped > 0 && s1.jsFallbacks === s0.jsFallbacks,
+      `posed ${s1.rigsPosed - s0.rigsPosed}, skipped ${skipped} over ${steps} ticks`);
+  }
   A.em.dispose(); B.em.dispose();
 }
 
@@ -778,6 +825,7 @@ const fx = checkFixture();
   core.__setSceneWasmForTest(model.ns, model.memory);
   rig.__resetRustRigForTest();
   await runEntityAB("ModelSceneRigs");
+  await runEntityAB("ModelSceneRigs", { skip: true });
   await runGateAB();
 }
 
@@ -798,6 +846,7 @@ if (wasm) {
   core.__setSceneWasmForTest(wasm.ns, wasm.memory);
   rig.__resetRustRigForTest();
   await runEntityAB(`compiled SceneRigs (${pkgDir}/)`);
+  await runEntityAB(`compiled SceneRigs (${pkgDir}/)`, { skip: true });
 }
 
 console.log("===========================================================");

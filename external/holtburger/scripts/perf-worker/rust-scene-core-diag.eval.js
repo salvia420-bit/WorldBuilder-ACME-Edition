@@ -47,7 +47,7 @@ return {
   terrainSharedVerify: call(window.__terrainShared?.verify),
   weaponFx: call(window.__weaponFx?.stats),
   rustRig: call(window.__rustRig?.stats),
-  rigMeshAlias: call(window.__rigMeshAlias?.stats),
+  rigPoseSkip: call(window.__rigPoseSkip?.stats),  // ?rigMeshAlias was deleted 2026-10-30 (R3-2)
   rustCull: call(window.__rustCull?.stats),
   rustCullVerify: call(window.__rustCull?.verify),
   rustAnimScenery: call(window.__rustAnimScenery?.stats),

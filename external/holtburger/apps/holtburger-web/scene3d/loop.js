@@ -1932,14 +1932,26 @@ function _memoReadability(renderer) {
 // `readPixels` into it, unbind, `fenceSync`, `flush`. Harvest (the fog tick of
 // a LATER frame): one non-blocking `getSyncParameter(SYNC_STATUS)` per frame;
 // only once it reports SIGNALED is the buffer read, synchronously, inside the
-// frame — the copy is complete, so Chrome can serve `getBufferSubData` from its
-// readback shadow instead of a GPU-process round-trip. While pending, the probe
+// frame — the copy is complete, so the read never waits on the GPU's own
+// readPixels copy. While pending, the probe
 // returns null and the caller keeps `_fogProbeLast` (the colour lags a frame or
 // two at most, as the card allows). Never harvested while `?asyncLink` has a
 // compile in flight (the 2026-10-06 rule above); a fence that has not signalled
 // after FOG_FENCE_TIMEOUT_MS counts as a failure (three in a row = the sticky
 // authored-hex fallback, as before). `window.__farFogProbeStats` reports the
-// read cost (`maxReadMs` should stay ~0 on the 1070 — the thing to check).
+// read cost.
+// CORRECTION (2026-10-30, round 3 R3-2 `farFogAsync` audit): the read is still
+// a GPU-process round-trip. Chrome does not serve WebGL's `getBufferSubData`
+// from its readback shadow: Blink calls GLES2Implementation::
+// GetBufferSubDataCHROMIUM, which ends in WaitForCmd() = helper_->Finish(), so
+// the call waits until the GPU process has drained every command issued before
+// it, fence or not (chromium/src gpu/command_buffer/client/
+// gles2_implementation.cc). The 10-29 RC profiles on the 1070 (defaults and
+// all-off, 3 x 11 s each) still show `getBufferSubData` under
+// `_harvestFogFence`: 5.7-13.8 ms sampled per 11 s profile at one read a
+// second (~0.5-1.3 ms per read on average; single reads up to ~4 ms). No
+// main-thread WebGL2 call reads bytes back without that Finish; the remaining
+// levers are `farFogSkyHz` and not reading back at all.
 // CONTEXT RESTORE: the WebGL2RenderingContext object survives a loss/restore
 // (so `f.gl !== gl` cannot see it) but the buffer and any pending sync die —
 // bindBuffer(dead) binds nothing, readPixels(..., 0) then fails, the sentinel

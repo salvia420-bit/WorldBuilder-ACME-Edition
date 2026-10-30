@@ -1,7 +1,6 @@
 // scene3d/draw_exec.js — `?drawExec` (stage 3 S3.1, 2026-10-26; DEFAULT ON since 2026-10-26,
-// `rustFlag("drawExec", true)`: `=off|0|false|no` is the escape) and `?drawExecRuns`
-// (S3.2, default off, needs `?drawExec`). A thin executor for proven-stable STATIC-world
-// draws, installed as the OUTERMOST renderBufferDirect wrapper. Design:
+// `rustFlag("drawExec", true)`: `=off|0|false|no` is the escape). A thin executor for
+// proven-stable STATIC-world draws, installed as the OUTERMOST renderBufferDirect wrapper. Design:
 // docs/2026-10-26-rust-draw-list-design.md (R3) §5; lane notes: docs/2026-10-26-rust-draw-exec.md.
 // Exactness proof: tests/draw_exec.test.mjs (the full GL call stream, flag-off vs flag-on,
 // frame by frame) + harness/glsl_smoke/draw_exec_smoke.mjs (pixels, SwiftShader).
@@ -91,12 +90,10 @@
 // group): nothing in the path depends on a draw being static — matrices go through three's
 // setters every draw, and churn cool-downs absorb fades.
 //
-// RUNS (S3.2, `?drawExecRuns`). After three's sort, each run of >= 2 consecutive opaque
-// items the executor owns becomes ONE sentinel render item; the executor performs every
-// item's renderObjects + renderObject steps itself, in order (layers, override material,
-// hooks unless three's empty prototype functions, matrices, the two-pass branch, the
-// draw). Never while a wrapper sits over the executor (diag wrappers must see every draw),
-// for another scene's list, or with transmissive items.
+// RUNS (S3.2, `?drawExecRuns`, sentinel render items standing for runs of consecutive owned
+// opaque items) were DELETED in round 3 R3-2 (2026-10-30): exact, but no measured gain
+// (docs/2026-10-26-rust-draw-exec.md §4, §10). A stale `?drawExecRuns` URL or `runs` option
+// is inert: three's renderObjects reaches this wrapper once per item, as without the executor.
 //
 // ELIGIBILITY (conservative; everything else is a pass-through, counted by reason in
 // `__drawExec.stats.refused`): the main scene; a Mesh or BatchedMesh under the static
@@ -140,11 +137,6 @@ import { objectCombo } from "./async_link_guard.js";
 /** `?drawExec` — DEFAULT ON since 2026-10-26 (rustFlag grammar: off/0/false/no is the escape). */
 export function drawExecEnabled() {
   return rustFlag("drawExec", true);
-}
-
-/** `?drawExecRuns` (S3.2) — DEFAULT OFF, needs `?drawExec`: sentinel runs (see RUNS below). */
-export function drawExecRunsEnabled() {
-  return rustFlag("drawExecRuns", false);
 }
 
 /** `?drawExecRigs` (S3.6) — DEFAULT ON since 2026-10-26, needs `?drawExec`: worldRoot's `entities` group is an
@@ -201,8 +193,6 @@ const GL_TEXTURE_2D = 0x0de1, GL_TEXTURE0 = 0x84c0;
 // `group.start` / `group.count` loads stay on the shape they already see.
 const DEGEN = { start: 0, count: -1, materialIndex: 0 };
 const MAX_RECS_PER_OBJECT = 8;
-// The sentinel render item's geometry (S3.2): never reaches three (the executor intercepts it).
-const RUN_GEOMETRY = new THREE.BufferGeometry();
 
 function bytesOfIndexType(t) {
   return t === GL_UNSIGNED_INT ? 4 : t === GL_UNSIGNED_SHORT ? 2 : t === GL_UNSIGNED_BYTE ? 1 : 0;
@@ -337,7 +327,6 @@ export function installDrawExec(renderer, getMainScene, opts = {}) {
     installed: true,
     draws: 0, fast: 0, stateOnly: 0, full: 0, passOther: 0, empty: 0,
     recorded: 0, progChanged: 0, captured: 0, smSkips: 0,
-    runs: 0, runItems: 0, hookSkips: 0,
     vaoBinds: 0, vaoSuppressed: 0, vaoFixes: 0, vaoFixLate: 0, texDemoted: 0,
     restores: 0, resets: 0, errors: 0,
     verifyChecks: 0, verifyFails: 0,
@@ -610,7 +599,7 @@ export function installDrawExec(renderer, getMainScene, opts = {}) {
   renderer.render = function hbDxRender() {
     serial++;
     asyncOn = asyncApi !== null && !asyncApi.off;
-    if (renderer.renderLists !== runLists) hookRenderLists(renderer.renderLists);
+    if (renderer.renderLists !== hookedLists) hookRenderLists(renderer.renderLists);
     try { return render0.apply(this, arguments); } finally { serial++; }
   };
   const srt0 = renderer.setRenderTarget;
@@ -1138,131 +1127,27 @@ export function installDrawExec(renderer, getMainScene, opts = {}) {
     if (ctl.verify > 0) verifyDraw(rec, material);
   };
 
-  // ---- S3.2 sentinel runs (`?drawExecRuns`) ---------------------------------------------------
-  // RUNS. After three's sort (and every other sort wrapper: this one is outermost), each
-  // maximal run of >= 2 consecutive OPAQUE items whose objects the executor owns is replaced by
-  // ONE sentinel render item. three's renderObjects then makes one renderObject call for the
-  // run; the executor, reached through it, performs for every item — in list order — exactly
-  // what renderObjects + renderObject would: the camera-layer test, the scene override
-  // material, object.onBeforeRender, the model-view and normal matrices,
-  // material.onBeforeRender, the two-pass branch, the draw, object.onAfterRender — calling a
-  // hook only when it is not three's own empty prototype function. Never collapsed: lists of
-  // another scene, with transmissive items (the transmission pass), or while a wrapper sits
-  // over the executor (it must see every draw).
-  let runsOn = (opts.runs === true || (opts.runs !== false && drawExecRunsEnabled()));
+  // ---- the renderer clipping capture ----------------------------------------------------------
   // The renderer clipping in force for three's current render() (refreshed where three captures it,
   // hbDxRenderListsGet; three's setProgram uses that capture, not the live fields, until the next
   // render() — so does the executor). Initially: the renderer's configuration at install.
+  // (Until round 3 R3-2 this hook also carried S3.2's `list.sort` hook for `?drawExecRuns`: deleted.)
   let rcOn = renderer.localClippingEnabled === true || renderer.clippingPlanes.length > 0;
-  let runLists = null;
-  const runPools = new WeakMap(); // render list -> sentinel pool
-  const RUN_MATERIAL = new THREE.MeshBasicMaterial();
-  RUN_MATERIAL.allowOverride = false;
-  const newSentinel = () => {
-    const obj = new THREE.Object3D();
-    obj.matrixAutoUpdate = false;
-    obj.layers.mask = 0xffffffff;
-    const run = { items: [], n: 0 };
-    obj.__hbRun = run;
-    const item = { id: 0, object: obj, geometry: RUN_GEOMETRY, material: RUN_MATERIAL, materialVariant: 0, groupOrder: 0, renderOrder: 0, z: 0, group: null };
-    return { obj, run, item };
-  };
-  const owned = (it) => {
-    const h = it.object.__hbDx;
-    return h !== undefined && h.isDxRefusal === false;
-  };
-  const collapse = (list, scene) => {
-    if (!runsOn || ctl.off) return;
-    if (mainScene === null) mainScene = (getMainScene && getMainScene()) || null;
-    if (scene !== mainScene || renderer.renderBufferDirect !== wrapper || list.transmissive.length > 0) return;
-    const op = list.opaque;
-    const L = op.length;
-    if (L < 2) return;
-    let pool = runPools.get(list);
-    if (pool === undefined) { pool = []; runPools.set(list, pool); }
-    let used = 0, w = 0, i = 0;
-    while (i < L) {
-      const it = op[i];
-      if (owned(it)) {
-        let j = i + 1;
-        while (j < L && owned(op[j])) j++;
-        if (j - i >= 2) {
-          let snt = pool[used];
-          if (snt === undefined) { snt = newSentinel(); pool[used] = snt; }
-          used++;
-          const items = snt.run.items;
-          let n = 0;
-          for (let k = i; k < j; k++) items[n++] = op[k];
-          items.length = n;
-          snt.run.n = n;
-          const si = snt.item;
-          si.id = it.id; si.groupOrder = it.groupOrder; si.renderOrder = it.renderOrder; si.z = it.z;
-          op[w++] = si;
-          stats.runs += 1; stats.runItems += n;
-          i = j;
-          continue;
-        }
-      }
-      op[w++] = it;
-      i++;
-    }
-    op.length = w;
-  };
+  let hookedLists = null;
   const hookRenderLists = (lists) => {
-    runLists = lists;
-    if (!lists || typeof lists.get !== "function" || lists.__hbDrawExecRuns === true) return;
+    hookedLists = lists;
+    if (!lists || typeof lists.get !== "function" || lists.__hbDrawExecLists === true) return;
     const get0 = lists.get;
-    const done = new WeakSet();
     lists.get = function hbDxRenderListsGet(scene, depth) {
       // three's render() calls this (its only call site, r184) right after it captured the
       // renderer's clipping state (_localClippingEnabled / clipping.init): read it here, once.
       rcOn = renderer.localClippingEnabled === true || renderer.clippingPlanes.length > 0;
       const list = get0.call(this, scene, depth);
-      if (runsOn && list && !done.has(list) && typeof list.sort === "function") {
-        done.add(list);
-        const sort0 = list.sort;
-        list.sort = function hbDxSortRuns(opaqueSort, transparentSort) {
-          const r = sort0.call(this, opaqueSort, transparentSort);
-          collapse(this, scene);
-          return r;
-        };
-      }
       return list;
     };
-    Object.defineProperty(lists, "__hbDrawExecRuns", { value: true, configurable: true });
+    Object.defineProperty(lists, "__hbDrawExecLists", { value: true, configurable: true });
   };
-  hookRenderLists(renderer.renderLists); // always: the clipping capture; the sort hook under runs only
-  /** One sentinel's items: renderObjects' per-item work + renderObject, in list order. */
-  const runExec = (self, camera, scene, run) => {
-    const items = run.items, n = run.n;
-    const om = scene !== null && scene.isScene === true ? scene.overrideMaterial : null;
-    const camLayers = camera.layers;
-    const mwi = camera.matrixWorldInverse;
-    for (let k = 0; k < n; k++) {
-      const it = items[k];
-      const o = it.object, g = it.geometry, gr = it.group;
-      let m = it.material;
-      if (m.allowOverride === true && om !== null) m = om;
-      if (!o.layers.test(camLayers)) continue;
-      if (o.onBeforeRender !== O3D_BEFORE) o.onBeforeRender(self, scene, camera, g, m, gr);
-      else stats.hookSkips += 1;
-      o.modelViewMatrix.multiplyMatrices(mwi, o.matrixWorld);
-      o.normalMatrix.getNormalMatrix(o.modelViewMatrix);
-      if (m.onBeforeRender !== MAT_BEFORE) m.onBeforeRender(self, scene, camera, g, o, gr);
-      if (m.transparent === true && m.side === THREE.DoubleSide && m.forceSinglePass === false) {
-        m.side = THREE.BackSide;
-        m.needsUpdate = true;
-        wrapper.call(self, camera, scene, g, m, o, gr);
-        m.side = THREE.FrontSide;
-        m.needsUpdate = true;
-        wrapper.call(self, camera, scene, g, m, o, gr);
-        m.side = THREE.DoubleSide;
-      } else {
-        wrapper.call(self, camera, scene, g, m, o, gr);
-      }
-      if (o.onAfterRender !== O3D_AFTER) o.onAfterRender(self, scene, camera, g, m, gr);
-    }
-  };
+  hookRenderLists(renderer.renderLists);
 
   // ---- the wrapper -----------------------------------------------------------------------------
   const wrapper = function drawExec(camera, scene, geometry, material, object, group) {
@@ -1275,7 +1160,6 @@ export function installDrawExec(renderer, getMainScene, opts = {}) {
         head.n += 1;
         return passThrough(this, camera, scene, geometry, material, object, group);
       }
-      if (geometry === RUN_GEOMETRY && object.__hbRun !== undefined) return runExec(this, camera, scene, object.__hbRun);
     }
     stats.draws += 1;
     if (ctl.off || object === null || object === undefined || scene === null || material === null || material === undefined) {
@@ -1392,9 +1276,6 @@ export function installDrawExec(renderer, getMainScene, opts = {}) {
     stats,
     get off() { return ctl.off; },
     set off(v) { ctl.off = !!v; },
-    /** S3.2 sentinel runs (live A/B; the next sort applies it). */
-    get runs() { return runsOn; },
-    set runs(v) { runsOn = !!v; if (renderer.renderLists !== runLists) hookRenderLists(renderer.renderLists); },
     /** Live per-draw self-check (renderer.properties, program, uniforms, VAO, GL's own
      *  CURRENT_PROGRAM / VERTEX_ARRAY_BINDING) for the next `frames` rAF frames. */
     verify(frames = 60) {
@@ -1417,8 +1298,8 @@ export function installDrawExec(renderer, getMainScene, opts = {}) {
      * `shadow` for scene === null, else its name), the object's top group under worldRoot or
      * the scene, its name without trailing ids, its type (BM BatchedMesh, IM InstancedMesh, SM
      * SkinnedMesh, M Mesh, P / L / S) — and by outcome (fast, stateOnly, full, empty, pass) with
-     * the refusal / invalidation reasons. While it runs it wraps the chain from the outside (so
-     * sentinel runs do not form); nothing is added per draw otherwise. Resolves
+     * the refusal / invalidation reasons. While it runs it wraps the chain from the outside;
+     * nothing is added per draw otherwise. Resolves
      * `{ frames, draws, kinds: [{ key, draws, perFrame, fast, stateOnly, full, empty, pass, recorded, reasons }] }`.
      */
     census(frames = 60) {

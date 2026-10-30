@@ -197,3 +197,35 @@ reads 60 fps, and a 2 ms saving that does not cross a grid line reads as +0 fps.
   multidraw as one call), `await __skipHiddenMatrix.census(120)`, `__adaptiveRenderScale.gpuState()`
   (fence: is the GPU behind), `__radar.paintStats()`, `__diag.vitalsOrbs.animSynced()`.
   See `apps/holtburger-web/docs/2026-10-19-fps-review.md`.
+
+## Harness v2 (round 3 R3-0, 2026-10-30)
+
+Every 1070 timing from round 3 on runs on harness v2 (plan:
+`apps/holtburger-web/docs/2026-10-29-round3-gpu-driven.md` §3 R3-0, §4 protocol, §5 decision rules).
+The protocol and everything recorded per arm-rep (skytime=13 + DayGroup 0, renderScale=1,
+adaptiveRes=off, targetFps=0, gpuGovernor=off once documented, the 1920x1080 INNER window, box
+samples with the top CPU processes, the release-wasm / adapter / pin asserts, heading-binned
+`renderer.info` next to `__batchedRuns.frameInto()` multidraw ranges, renderJs, walks per pass, the
+server-state pin, `arm.gate`) is documented in the header of `hbbench.mjs`. `lib/hb_boot.mjs`
+`bootArm` boots one arm the same way for the other tools (`applySessionPins` pins an attached session
+instead). `hbanatomy.mjs` is the per-arm frame anatomy (trace, whole-pass GPU timers, GL census, owner
+census, program keys, LoAF; `--arm … --eval` runs `structure-ceiling.eval.js` / `layer-mip-probe.eval.js`
+on a §4-protocol boot), `hbsweep.mjs` the in-session ABAB sweeps of live toggles (`--boot` for M1), and
+`hbreport.py` applies the §5 rules (V validity incl. every run-JSON assert, R1 noise, R3 keep, R5
+routing, R6, R8; `bench` / `profile` / `trace-split` / `anatomy` / `program-diff` / `ceiling` / `m1c`;
+pass `--queue` so gated arms such as M1b-OCC's O-rigs are held to their gate). `bench` reports ONE
+queue item at a time: each dir's item comes from its own `run.json`, and dirs of different items are
+refused (exit 2), since arm names such as A / A-AA repeat across items. With `--anatomy DIR`, R3 (i)
+reads EVERY hbanatomy rep of the arm and the ref arm, applies rule V per rep, takes the median over the
+valid ones and counts the move only when it is real under R1, with the noise taken from those reps.
+r3_keep does not apply the plan's hitch-change reading of R3 (i)/(ii), added on 2026-10-30; read
+those arms from the first-turn max and h100 rows. The session plan is
+`apps/holtburger-web/docs/reengineering/queue-1070/batch-R3-M1-2026-10-30.json` (its M1-PRE step
+checks the B0 snapshot with `hbbench.mjs --arms <queue> --check-snapshot <snapshot dir>`).
+**RC-BENCH v2 reps 2-3** on the rep-1 snapshot (`hb-snap/rc-20261029` on :8766) run with
+`hbbench.mjs --compat v1`: the pre-v2 URL, window and page-side step sequence call for call, so they
+pool with rep 1 (keep boxwatch running: hbreport merges its samples into those reps). Every launching
+path (hbbench, hbanatomy, hbsweep `--boot`, `apps/holtburger-web/tools/webgpu_probe/run.mjs`) kills
+the bench Chrome by user-data-dir in a `finally` that a failed boot or write cannot skip. Ctrl-C kills
+it before the process exits. Suites (no browser, ssh stubbed): `node tests/hb_v2.test.mjs`,
+`python3 -I tests/test_hbreport.py` (node entry `tests/hbreport.test.mjs`).

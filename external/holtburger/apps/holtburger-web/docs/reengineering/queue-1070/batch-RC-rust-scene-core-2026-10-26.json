@@ -77,7 +77,7 @@
     "drawExec: if rc-noexec > rc-defaults + spread(rc-defaults) on still or moving fps, flip drawExec (and drawExecRigs) back to default OFF.",
     "rigMeshAlias (owner decision, not a rule): report rc-alias vs rc-defaults; the node estimate is 0.05-0.10 ms/frame."
    ],
-   "result": null
+   "result": "2026-10-30: NOT DECIDED. Reps 1-3 (rep 1 in $RC/bench2, reps 2-3 in $RC/bench3, all 8 v2 arms, frozen rep-1 snapshot) are all INVALID under rule V (hbreport bench, $RC/bench3/report-pooled.txt): idle 0 s in every box sample, Seagate Toolkit at ~1 core (back since the 11:40 reboot), the owner's Chrome at 1-2 cores in 4 reps, gpu3d_other 6-18% in 4 reps. Same-arm swing up to 18 fps > any arm delta. Defaults unchanged (10-29 decisions stand). Owed: a run with Toolkit closed and the box idle."
   },
   {
    "id": "RC-PROFILE",

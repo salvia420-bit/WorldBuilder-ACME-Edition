@@ -190,7 +190,7 @@ measurable.)
   - `rustParticles`, `rustRig`, `rustEntityCull`, `anchorOffGraph`, `staticMatrixFreeze`, `poolSizeToContent`,
     `rustCull`, `rustAnimScenery`, `rustAnimSceneryGate`, `rustTerrainFx`, `drawExec`, `drawExecRigs`,
     `hotMatVariant`, `hotDrawSort`, `hotCloudPush`, `hotTerrainTime`, `hotNightRamp`.
-  - Still OFF: `rigMeshAlias` (owner decision) and `drawExecRuns` (no gain).
+  - Still OFF: `rigMeshAlias` (owner decision) and `drawExecRuns` (no gain). Both were DELETED on 2026-10-30 (round 3 R3-2): `rigMeshAlias` after it measured as a 1070 loss (RC-BENCH v2 rep 1), `drawExecRuns` for no gain (docs/2026-10-29-round3-gpu-driven.md).
   - The 1070 A/B and eye check are queued with decision rules written beforehand:
     `docs/reengineering/queue-1070/batch-RC-rust-scene-core-2026-10-26.json`. Handoff:
     `docs/HANDOFF-rust-scene-core-2026-10-26.md`.

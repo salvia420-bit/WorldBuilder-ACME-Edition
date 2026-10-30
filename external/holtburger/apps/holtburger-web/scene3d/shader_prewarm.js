@@ -717,3 +717,128 @@ export function warmSceneMaterials(renderer, scene, camera, target, opts = {}) {
   }
   return out;
 }
+
+// ============================================================================
+// R3-3 GPU batch kit (2026-10-30): the class-program registry.
+// ============================================================================
+// scene3d/gpu_batch/class_materials.js builds one MeshStandardMaterial per
+// draw CLASS (blend x light x side) with its own program key
+// (`|hbBatch1|...`). A class program first seen mid-walk is an FXC compile
+// (0.5-1.7 s per pixel shader on the 1070, round-3 plan §6), so every class a
+// consumer will draw is REGISTERED here and compiled against the composer
+// variant (the warm target) before its first draw:
+//   - `registerBatchClassPrewarm(key, makeProxies)`: a consumer, ONLY when
+//     its flag is on, registers a factory of one-instance proxies (one per
+//     program variant it draws; `classPrewarmProxy`). Nothing registers with
+//     every batch flag off, so with the flags off this section is inert: the
+//     map stays empty and nothing below runs.
+//   - `prewarmBatchClasses(renderer, camera, targetScene, opts)`: compile
+//     every registered class not yet warmed on this renderer's CURRENT GL
+//     context, in ONE compile() call with the warm target bound, against a
+//     stand-in target scene that carries the live scene's lights / fog /
+//     environment (so the light-count and fog bits of the key match the real
+//     draw). The proxies stay PARKED for the session (three refcounts
+//     programs: disposing the proxy would release the program it just linked
+//     — bake_prewarm.js rule). Returns the compiled material Set (poll with
+//     `programPending`).
+//   - "Warmed" is per GL context, not per renderer object: three's
+//     onContextRestore assigns a NEW WebGLProperties (and program cache) to
+//     `renderer.properties` (async_link_guard.js "CONTEXT RESTORE"), so the
+//     warmed set is keyed by that object and a restored context warms every
+//     registered class again.
+// Wiring: NO index.js call is needed. The consumer (anim_scenery_batch.js)
+// calls prewarmBatchClasses itself at its first instance registration — the
+// first landblock bake, behind the loading screen — with window.liveScene3d's
+// renderer / camera / scene, and again at the first warming check of a class
+// not yet warm on the current context (a class minted later, or any class
+// after a context restore); it keeps the class's draws hidden until its
+// program has linked. An optional index.js call next to the boot compile pass
+// would only move the same compile earlier.
+const _batchClassPrewarm = new Map(); // key -> () => Object3D[]
+const _batchClassWarmed = new WeakMap(); // renderer.properties (GL-context generation) -> Set(key)
+const _batchClassParked = []; // proxies kept alive (program refcount)
+const _batchStandIns = new WeakMap(); // targetScene -> stand-in
+
+/** Register a class's prewarm proxies factory (idempotent per key). */
+export function registerBatchClassPrewarm(key, makeProxies) {
+  if (typeof key !== "string" || typeof makeProxies !== "function") return false;
+  if (_batchClassPrewarm.has(key)) return false;
+  _batchClassPrewarm.set(key, makeProxies);
+  return true;
+}
+
+/** Keys registered so far (diag / tests). */
+export function batchClassPrewarmKeys() {
+  return [..._batchClassPrewarm.keys()];
+}
+
+// The renderer's GL-context generation (see above).
+function _batchWarmCtx(renderer) {
+  return (renderer && renderer.properties) || renderer;
+}
+
+/** Keys already compiled on `renderer`'s current GL context. */
+export function batchClassWarmedKeys(renderer) {
+  const s = renderer ? _batchClassWarmed.get(_batchWarmCtx(renderer)) : null;
+  return s ? [...s] : [];
+}
+
+function _batchStandIn(targetScene, lights) {
+  let s = _batchStandIns.get(targetScene);
+  if (!s) {
+    s = {
+      isScene: true,
+      __lights: [],
+      get fog() { return targetScene.fog; },
+      get environment() { return targetScene.environment; },
+      get environmentRotation() { return targetScene.environmentRotation; },
+      traverseVisible(cb) { for (const l of this.__lights) cb(l); },
+      traverse(cb) { for (const l of this.__lights) cb(l); },
+    };
+    _batchStandIns.set(targetScene, s);
+  }
+  s.__lights = lights;
+  return s;
+}
+
+/**
+ * Compile every registered batch class not yet warmed on `renderer`'s
+ * current GL context.
+ * `opts.target` (default: the warm target), `opts.lights` (skips the light
+ * walk of `targetScene`). Returns `{ keys, compiled, materials }`.
+ */
+export function prewarmBatchClasses(renderer, camera, targetScene, opts = {}) {
+  const out = { keys: [], compiled: 0, materials: null };
+  if (!renderer || !camera || _batchClassPrewarm.size === 0) return out;
+  const ctx = _batchWarmCtx(renderer);
+  let warmed = _batchClassWarmed.get(ctx);
+  if (!warmed) { warmed = new Set(); _batchClassWarmed.set(ctx, warmed); }
+  const group = new THREE.Group();
+  group.name = "gpu-batch-class-prewarm";
+  for (const [key, make] of _batchClassPrewarm) {
+    if (warmed.has(key)) continue;
+    let proxies = null;
+    try { proxies = make(); } catch (_) { proxies = null; }
+    if (!Array.isArray(proxies) || proxies.length === 0) continue;
+    for (const p of proxies) group.add(p);
+    out.keys.push(key);
+  }
+  if (out.keys.length === 0) return out;
+  let lights = Array.isArray(opts.lights) ? opts.lights : null;
+  if (!lights) {
+    lights = [];
+    if (targetScene && typeof targetScene.traverseVisible === "function") {
+      targetScene.traverseVisible((o) => { if (o.isLight) lights.push(o); });
+    }
+  }
+  const standIn = targetScene ? _batchStandIn(targetScene, lights) : null;
+  const target = opts.target !== undefined ? opts.target : _getWarmTarget();
+  const mats = compileWithTarget(renderer, group, camera, standIn, target);
+  if (standIn) standIn.__lights = [];
+  _batchClassParked.push(group);
+  if (!mats) return out;
+  for (const k of out.keys) warmed.add(k);
+  out.materials = mats;
+  out.compiled = mats.size;
+  return out;
+}

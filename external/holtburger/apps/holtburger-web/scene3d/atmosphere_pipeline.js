@@ -83,6 +83,9 @@ import { SSAO_GRASS_MARKER } from "./ssao_marker.js";
 import { INDOOR_LANDSCAPE_GATE_STATS } from "./indoor_landscape_gate.js";
 // 2026-10-17 — `?msaaWorldOnly`: MSAA on the world pass only, single-sample post chain.
 import { MsaaWorldComposer, msaaWorldOnlyEnabled, msaaWorldSnapshot } from "./msaa_world.js";
+// 2026-10-30 (round 3 R3-2) — `?skipEmptyPasses` (DEFAULT OFF): the world pass's
+// mask-0 render on an `?indoorLandscapeGate` skip frame draws an empty scene.
+import { skipEmptyPassesEnabled, installSkipEmptyRenderPass } from "./skip_empty_passes.js";
 
 // Phase 5 PView render-order fix (2026-05-25) — layer-mask constants.
 // Mirrors `scene3d/index.js` (RENDER_LAYER_WORLD/RENDER_LAYER_INDOOR).
@@ -1438,6 +1441,13 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
     worldRenderPass.clearDepth = true;
   }
   composer.addPass(worldRenderPass);
+  // ?skipEmptyPasses (round 3 R3-2, 2026-10-30, DEFAULT OFF): on a landscape-
+  // skip frame the mask below is CAM_LAYER_MASK_NONE, so the world pass's
+  // render draws nothing but still walks the whole graph and flips the light
+  // state; armed, that render draws a private empty scene (same camera, same
+  // target: the clear, resolve and state resets stay) instead
+  // (skip_empty_passes.js). Off ⇒ never installed, the prototype render runs.
+  if (skipEmptyPassesEnabled()) installSkipEmptyRenderPass(worldRenderPass);
 
   // Portal-stencil pass (2026-07-05, ?portalStencil, default OFF). Runs on the
   // world pass's shared color+depth+stencil buffer, before the dead depth-clear

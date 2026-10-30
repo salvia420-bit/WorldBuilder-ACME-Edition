@@ -95,6 +95,8 @@ The worst tour frame in any v2 arm was 504 ms (`rigMeshAlias=on`); no arm had a 
 
 **What the box was doing during v2:** boxwatch idle 0-22 s in every sample, `gpu3d_other` up to 16%, `browsers=1` [M]. So v2 does not pass rule V's idle gate (§5). It is the best data on file, not a valid arm set.
 
+**Reps 2-3 run (2026-10-30, `$RC/bench3/`, `--reps 2 --compat v1`, same frozen snapshot, all 8 arms, 0 console errors, 0 assert problems): every rep INVALID under rule V [M].** `hbreport.py bench $RC/bench2 $RC/bench3` (`$RC/bench3/report-pooled.txt` / `.json`): 22 of 22 arm-reps INVALID, 1 INCOMPLETE (rep 1's `rc-terrainshared-ultra`), 0 valid. Reasons: idle 0 s in every box sample (the owner at the box all run; 1 of 76 boxwatch samples reached 60 s); **Seagate Toolkit back at ~1 core** (it restarted with the box's 11:40 reboot; 11,994 CPU-s by 15:30); the owner's Chrome at 1.0-1.97 cores in 4 reps; `gpu3d_other` 6-18% in 4 reps. The same arm swung up to 18 fps between reps (`rc-noexec-ultra` still 39.6 → 21.9), larger than any arm-vs-arm delta, so the as-run medians rank nothing. The noisy-box fallback (§5 V) cannot rescue these: it waives only the idle gate, and the Toolkit and other-Chrome cores still invalidate. The placeholder below stays open until a run on a box with Toolkit closed and nobody at it (or ≥ 5 reps plus an A/A arm with only the idle gate failing).
+
 > **RC-BENCH v2 final (3 reps) — PLACEHOLDER. The orchestrator patches this table in when reps 2-3 finish. Nothing below depends on rep-1 deltas beyond what is stated as n=1.**
 >
 > | Arm | still fps median (min-max) | still p99 ms | moving fps median (min-max) | tour fps median (min-max) | tour h100 | draws | delta vs defaults | real under R1? |
@@ -234,14 +236,14 @@ Other measured references:
 - Hiding all interiors outdoors: 26.1 → 29.5 fps (`res/cells_F.json`).
 - `statArrayMerge`: −23 draws = 0.0 ms (08-06).
 - FXC: 0.5-1.7 s per pixel shader (`scene3d/async_link_guard.js:4-12`).
-- `farFogSkyHz` readback: ~2.5 ms stall each time (url-flags.md:2047).
+- `farFogSkyHz` readback: ~2.5 ms stall each time (url-flags.md:2047). That is the 10-17 figure from before `?farFogFence` (default ON since 10-17). The 10-29 profiles still show 5.7-13.8 ms of `getBufferSubData` per 11 s at one read a second (~0.5-1.3 ms per read, single reads up to ~4 ms) [M]: Chrome serves it with a command-buffer Finish, fence or not (lane R, 2026-10-30; R3-2).
 
 ### 1.6 Still owed
 
 - Any A/B on an idle 1070 (rule V) with ≥3 reps and an A/A pair. RC-BENCH v2 reps 2-3 are pending (on the frozen rep-1 snapshot, §1.1); no A/A arm is in it.
 - The three v2 arms with no rep-1 reading: `hotTerrainShared=on` (browser closed), `hotWeaponFxSync=on` and `hotGrassCull=on` (run aborted on ssh ETIMEDOUT) (§1.1).
-- Any run with the sky pinned (`hbbench.mjs` sets no `skytime`).
-- Any run at the owner's resolution (`hbbench.mjs:56` hard-codes 1280x720; the owner plays at ~1920x1080).
+- Any run with the sky pinned (`hbbench.mjs` set no `skytime`; harness v2, built 2026-10-30, pins `skytime=13` and a fixed DayGroup; still owed as a 1070 run).
+- Any run at the owner's resolution (`hbbench.mjs:56` hard-coded 1280x720; the owner plays at ~1920x1080; harness v2 sets a 1920x1080 INNER window per arm, `--compat v1` keeps 1280x720 for RC-BENCH v2 reps 2-3; still owed as a 1070 run).
 - CrGpuMain and GPU ms per arm on today's defaults.
 - The ANGLE per-range CrGpuMain price (P0 arm 2, `batchedRuns=off`).
 - The never-measured built arms: `cellStaticMerge`, `statArrayMerge` re-arm, `partDegrade`, `cloudResScale`, `freezeWorldRoots` (its town number, url-flags row).
@@ -397,6 +399,7 @@ GPU fill (~15-18 ms [D], unmeasured on today's settings) is the likely next ceil
 - `hbreport.py` unit runs against the stored `$RC/bench`, `bench2` and `profile` JSON. It must reproduce today's numbers, mark bench 1 CONTAMINATED (from a manual box-event list, since its JSON has no CPU samples) and mark v2 INVALID under rule V's idle gate. Agents run these as targeted tests.
 - `node --check` on every `.mjs`.
 - `?occlusionCull=rigs`, if built: a targeted node test that cell candidates get no proxy and rig candidates still do.
+- Harness v2 gaps closed (lane H3, 10-30): the kill discipline covers tools/webgpu_probe/run.mjs, and Ctrl-C kills before exit; hbreport R3 (i) reads every hbanatomy rep (rule V per rep, median, R1 noise from the reps); a bench report covers one queue item (mixed items refused); the B0 reader patterns are pinned negatively against the 95240def tree (tests/hb_v2.test.mjs).
 - Orchestrator: the capped-build full JS gate after the flip (`jsgate-20261029.log`, still running at 23:57 on 10-29) passes, and a bare-URL boot with 0 errors.
 
 **Effort:** S-M (2.5-4 days of script work, parallel lanes, no browsers on the laptop).
@@ -458,6 +461,7 @@ Starting proposal: ultra ≥ 60 fps standing and moving at 1080p, high ≥ 90, b
   - Retail poses whole keyframes: `CSequence::get_curr_animframe` takes `_floor(this->frame_number)` (acclient.c:339745-339758). We pose `f = globalFrame | 0` (`scene3d/motion/motion_sequence.js:151`). Neither WebAC nor we skip work when the floored frame is unchanged.
   - Keep a per-entity dirty key of (motion descriptor, floored frame, in-place mode). When it is unchanged, skip the `rustRig` pose call and the part-local writes. The root transform still updates.
   - In R3-4 an unchanged key also means no pose-row write.
+  **Built state (2026-10-30, lanes S + S2):** the key's route field is the route the last pose actually took. With `?rustRig` on, every would-be skip makes the one bridge call flag-off makes: a part-less `rustPoseRig` probe, ~0.15 µs in node on the kernel route and ~0.02-0.03 µs for a declined descriptor. So the bridge's registrations and LRU never drift from flag-off's. A decline after a kernel pose poses through the JS body (Euler re-derived), as flag-off does. The tick's ragdoll announcement is gated on the flag (flag off: call-for-call HEAD).
 - **Correct the object-ring fidelity text** (L4). `scene3d/object_radius.js:13-15` says retail draws objects "across the whole `mid_width = 11` grid"; the `objRadius` row at `docs/url-flags.md:862` repeats it and adds that `?objRadius=off` restores "retail's full-ring objects". The decomp says otherwise:
   - `LScape::get_block_orient` gives size 1 only at Chebyshev distance ≤ 1 (acclient.c:306681 ff.);
   - `CLandBlock::init_buildings` (:352134) and `CLandBlock::init_static_objs` (:352811) are gated on `side_cell_count == 8`, and `get_land_scenes` sits inside that gate (:352887-352888);
@@ -468,16 +472,19 @@ Starting proposal: ultra ≥ 60 fps standing and moving at 1080p, high ≥ 90, b
 - **`?skipEmptyPasses` (new): skip empty passes** (L6, step 3): if R3-0's walk count finds composer passes or direct-path renders whose layers are empty on a given frame, skip their `renderer.render` call. Each full render re-runs `updateMatrixWorld`, `projectObject` and the sort (2.39 ms on the old stack: 0.78 matrix walk, 1.29 projectObject, 0.32 sort; `docs/2026-10-26-rust-residency-design.md:276`). Today, mean of profile pairs 2-3: projectObject 1.77, matrices 0.87, sort 0.55 ms/frame summed over all walks [M] (caveated pair 1: 1.79 / 0.95 / 0.55).
 - **HUD diet**, if M1's `hud=none` arm moves CrGpuMain by ≥ 1 ms: stop the continuous CSS animation on the vitals orbs and redraw the radar at ≤ 10 Hz (improvement-hunt B15). Also audit the 2D canvases: only 3 of our 29 `getContext('2d')` sites set `willReadFrequently: true`, which WebAC defaults on (`WebAC: ui/CanvasBacking.ts:26-34`). Its effect on the 1070 is unmeasured [D]; try it inside the same HUD arm, not as a blanket change.
 - `?farFogAsync`: read the far-fog sky colour through a PBO + `fenceSync` instead of the 1 Hz synchronous readback.
+  **Built state (2026-10-30, lane R):** this is the shipped `?farFogFence` (default ON since 2026-10-17), so no new flag was built; `tests/far_fog_fence_parity.test.mjs` now pins its PBO/fence state machine against the sync path. The remaining cost is Chrome's: `getBufferSubData` runs `GetBufferSubDataCHROMIUM` + `WaitForCmd()` (a command-buffer Finish) whether or not the fence has signalled, ~0.5-1.3 ms per read at 1 Hz [M 10-29]. No WebGL2 main-thread API avoids it; the levers left are `farFogSkyHz` or no readback.
 - **Hitch cuts** (L12):
   - **`?uploadWarmDraw` (new): play-time upload draw.** WebAC draws each newly arrived subtree once into a 1x1 scissor with an unlit override material (`WebAC: scene/RendererWarmup.ts:49-57`). With a fixed light count and warm-up, its turning max frame went from 208 ms to 18.5-18.7 ms (`WebAC docs/performance-budgets.md:205-210`). Our ledger item render-perf-5 shipped only the zero-visual part. This fixes hitches, not fps.
+    **Built state (2026-10-30, lanes R + R2 + R3):** built default off; arrival walk + bounded watch (1024 + 256 charged node visits per frame; a paused walk re-checks its whole stack on resume, the watch walk even on a starved frame; at most 32 stacked levels, budgets ≥ 33); a `childremoved` listener releases a removed root's queue slot, walk and watch slot in O(1); three's render list of the private Scene is cleared after each warm render; two unlit variant programs, warm draws wait for both links and recompile after a context restore; returns null under ?nullRender.
   - **No whole-job waits on workers.** Audit how bake-worker results are adopted for any frame-thread wait on a whole job. OpenAC's per-read content gate cut frame-thread waits from 36.9 ms to 0.3 ms (commit 97bc65e4). Any fix the audit produces is treated like the upload draw: its own flag, default off, and an S1 hitch arm (first-turn max, h100) before it flips.
+    **Built state (2026-10-30, lanes W2 + W3):** the audit's fix is `?bakeFallbackWaves` (default off; url-flags §13): with the bake worker not serving a request, the main-thread decode runs in 16-id waves, one macrotask each, instead of one whole-batch long task. Lane W3 (2026-10-30): the yield between waves is a MessageChannel post, not setTimeout(0), so a resident batch's chained yields pay no nested-timer clamp (~60 ms on 320 ids; setTimeout(0) only without MessageChannel); an off reconfigure removes the diag; tests 20.
 
 **Why + evidence:**
 - cellstatic is 288.5 draws/frame with 67.7 switches [M census].
 - Chunk buckets switch 71.2 times per frame, once per distinct surface [M].
 - Rig pose is 0.20 ms/frame at Holtburg in each of the three profile pairs [M]; the node rig bench (100 rigs x 17 parts, pose plus scene walk) costs 1,392 µs per frame on the laptop (`docs/2026-10-26-rust-rig.md:38`) [M]. The pose share of that is the ceiling for the skip.
 - HUD raster is 3.1-3.4 ms of CrGpuMain per present [M 10-23].
-- The far-fog readback blocks ~2.5 ms every second [M].
+- The far-fog readback blocked ~2.5 ms every second [M 10-17, before `?farFogFence`]; ~0.5-1.3 ms per read today [M 10-29].
 - 100 ms-1.5 s frames occur in both profile arms [M]; first-turn max is 686-1,645 ms in every v2 arm [M].
 
 **Expected 1070 gain** [D]:
@@ -486,7 +493,7 @@ Starting proposal: ultra ≥ 60 fps standing and moving at 1080p, high ≥ 90, b
 - rigPoseSkip: ≤ 0.2 ms main at Holtburg; more in crowds. The skip rate depends on each animation's DAT framerate relative to the display rate.
 - Empty-pass skip: up to ~1-2 ms per avoided full walk, scaled from the 2.39 ms figure (L6); zero if no pass is empty.
 - HUD diet: up to −2…−3 ms CrGpuMain.
-- farFogAsync: removes a ~2.5 ms stall per second.
+- farFogAsync: already shipped as `?farFogFence`; the residual ~0.5-1.3 ms per second is a Chrome Finish (see above), not removable by this flag.
 - Upload draw and worker audit: hitch metrics (first-turn max, h100), not fps.
 
 **Look risk:**
@@ -502,7 +509,7 @@ Starting proposal: ultra ≥ 60 fps standing and moving at 1080p, high ≥ 90, b
 - Targeted node tests (`cell_static_merge`, the statics array-merge harness with 115 checks, `part_degrade`, `test_object_radius.mjs`).
 - `rigPoseSkip`: the rig parity tests pass with the skip on, and a mutation that drops any one key field makes them fail.
 - Empty-pass skip: a node test that a skipped pass had zero renderable items in its layers. S1 arm: `skipEmptyPasses` on/off x3 (main busy, still / moving / tour fps).
-- `uploadWarmDraw`: a node test that the warm draw is scissored to 1x1 and uses the unlit override material; an rc-eye no-change pair (Holtburg, on vs off); S1 arm on/off x3 scored on first-turn max and h100.
+- `uploadWarmDraw`: a node test that the warm draw is scissored to 1x1, uses an unlit material per vertexNormals variant and never draws a variant before it has linked (async-link fake GL), that the watch warms late content and roots or parts shown later at a bounded per-frame cost (every root and node read charged), that a walk resumed in a later frame never draws a subtree removed (and disposed) or hidden since its pause, and that an evicted root (watched, parked hidden, queued or mid-walk) is released at its removal and collected (WeakRefs, forced GC) within 2 frames while arrivals spend the draw budget every frame; an rc-eye no-change pair (Holtburg, on vs off); S1 arm on/off x3 scored on first-turn max and h100.
 - Worker-wait fixes, if any: the same shape (a targeted node test of the new adoption path, then an S1 hitch arm x3).
 - rc-eye pairs: Holtburg doorways, room a9b40121, one dungeon room, lanterns at hour 22.
 - `window.__cellStaticMerge` totals.
@@ -544,6 +551,8 @@ Starting proposal: ultra ≥ 60 fps standing and moving at 1080p, high ≥ 90, b
    The static pools rebuilt on LB crossings are not kit consumers and stay outside the cap this round (R3-10 builds nothing in the static world); S1 and S2 record their upload bytes per crossing so round 4 can decide.
 
    OpenAC caps GPU upload at 8 MiB per frame (`OpenAC: AcDream.App/Streaming/StreamingWorkBudgetOptions.cs:17-25`) and composite uploads at most 16 uploads and 8 MiB per frame (`DefaultMaximumUploadsPerFrame = 16`, `DefaultMaximumUploadBytesPerFrame = 8 MiB`; `OpenAC: CompositeTextureArrayCache.cs:238, :240`). Start at 8 MiB (textures and geometry together) and 16 layer admits per frame [D]; S1 measures.
+
+   K3 (2026-10-30): the cap holds per UPLOAD frame. Layer admits upload inside the tick. Kit geometry and row-texture growth upload at three's next render, which in the app is the next rAF frame (the render loop runs before the consumers' ticks; portal / targetFps pacing can flip or skip it). So a deferred spend (spendDeferred) is booked in its charging frame and carried into every later frame until the frame that begins after three's upload callbacks landed its ticket. A ticket is dropped if the resource is torn down first, and expires after 600 frames as a liveness valve. R3-4 and R3-5 charge geometry the same way (kit.js header, "THE UPLOAD-BUDGET CONTRACT"). Kit resources made on a lost GL-context generation are dropped without GL deletes (array_pages.js trackContextGenerations / disposeOnLiveContext; the pages re-check the generation themselves).
 5. **Precision.** Per-entity and per-landblock origins. Camera-relative offsets are computed in f64 on the CPU each frame (f32 ulp at x ≈ 32.4 km is ≈ 3.9 mm).
 6. **Class materials** (K2).
    - `{opaque, alpha-test, translucent, additive} x {lit, baked-light} x {FrontSide, DoubleSide}`, as `MeshStandardMaterial` carrying the base `onBeforeCompile` chain plus the map → array redirect, with `customProgramCacheKey` + `'|hbBatch1'`.
@@ -710,7 +719,7 @@ R3-5b: low (same geometry). R3-5c: low; the risk is pop-in.
 
 **Why + evidence:**
 - 86.5 proxy draws/frame plus ~51 queries/frame [M].
-- Verdicts arrive 1-2 frames late, with flip damping up to 24 frames (`occlusion_cull.js:61-69`).
+- Verdicts arrive 1-2 frames late, with flip damping up to 24 frames (`occlusion_cull.js:93-101` after the 2026-10-30 `=rigs` reader; was :61-69).
 - The proxies exist only to save per-object CPU submission (`occlusion_cull.js:1-44`).
 - Neither reference client uses occlusion queries (L8).
 - With reversed-Z, early-Z is back, so hidden batch geometry costs only rejected fragments. Retiring the rig proxies before R3-4 would let hidden NPC part draws back in.
@@ -903,7 +912,7 @@ Run without the gate override whenever possible, so `hbgate.ps1`'s idle rule app
 | **M1c** (WebAC A/B, §4.1) | in an M1 window after M1a, not blocking | H-default, H-retailscope, W at the same parked pose; 3 reps each, interleaved; W's profile, window, sky and panel pins and exceptions per §4.1 | The same-stack stand-in for the missing upstream A/B: a stock-three.js µs-per-draw on the 1070 and which half of our frame to attack |
 | **M1d** (OpenAC, optional, §4.2) | only after decision (i) | O-retail, O-atmo at the same pose | Native ceiling: real GPU work vs ANGLE overhead; a native retail-shaped CPU walk |
 | **M1e** (upstream A/B) | when available, not blocking | the upstream holtburger renderer at the same pose and resolution against the laptop ACE: fps, draws/frame, CrGpuMain, GPU ms | Prices our additions against a simple modern renderer, as the owner asked. The 100-500 fps claim cannot be broken down without it. |
-| **S1** | ~end of week 3 | `animSceneryBatch` on/off x3; `entityBatch` on/off x3 + census delta + fallback rate; `rigPoseSkip` on/off x3; `skipEmptyPasses` on/off x3; `uploadWarmDraw` on/off x3 scored on first-turn max and h100; each R3-2 worker-wait fix on/off x3 (same hitch metrics); row-upload, layer-admit and kit-geometry upload timings against the upload caps; async-link count, program-key diff and first-turn hitch | Kit costs on the real driver; entity stage A verdict (rule R6 stop check) |
+| **S1** | ~end of week 3 | `animSceneryBatch` on/off x3; `entityBatch` on/off x3 + census delta + fallback rate; `rigPoseSkip` on/off x3; `skipEmptyPasses` on/off x3; `uploadWarmDraw` on/off x3 scored on first-turn max and h100; each R3-2 worker-wait fix on/off x3 (same hitch metrics); row-upload, layer-admit and kit-geometry upload timings against the upload caps; async-link count, program-key diff and first-turn hitch | Kit costs on the real driver; entity stage A verdict (rule R6 stop check). Prepared as docs/reengineering/queue-1070/batch-R3-S1-2026-10-30.json (lanes Q, Q2, 2026-10-30): hbbench + hbanatomy --eval items; page driver scripts/perf-worker/s1.eval.js, scorer s1_eval_report.py (sha256-pinned in the queue), suite scripts/perf-worker/tests/s1_queue.test.mjs; westward hop route with one landing rule from the retail ground height (4 hops + return); the hitch flags read R3 per its hitch sentence; entityBatch PENDING until R3-4. |
 | **S2** | ~week 6 | `interiorBatch` on/off x3 (town + dungeon); `occlusionCull` arms over the batched build x3 with GPU ms; `gpuParticles` on/off x3 + Linvak (R3-7a, then R3-7b); eye-test batch | Interior, proxy and particle verdicts |
 | **M2** | after S2 | M1a repeated; probe repeated; M1c repeated; upstream arm if available; `projectOnce` on/off x3 and the `gpuGovernor` arm (ultra, Linvak Tukal spot, on vs off x3, `adaptiveRes=off`) if they landed before M2 | Ledger v2, re-route (R3-8) |
 | **M3** | end of round | all four tiers at 1080p and 720p; lock tier presets; WebGPU gate check; `projectOnce` on/off x3 and the `gpuGovernor` Linvak arm x3 if not run in M2 | Ledger v3, before/after vs B0, WebAC and upstream |
@@ -990,7 +999,7 @@ The M1a + M1b arm count is ~6-9 h of 1070 time [D] (the draft's ~4-7 h plus ~9 n
 | **V (validity)** | An arm-rep is INVALID, re-queued and never averaged, if any of these hold: `idle` < 60 s in any boxwatch sample; `gpu3d_other` > 5%; any non-test process using ≥ 1 CPU core-equivalent in any sample [D threshold; the bench-1 Seagate Toolkit case]; entity count differs from arm A by > 10% (R3-0 server-state pin) [D threshold]; console errors > 0; dev wasm; wrong adapter. If two scheduled windows yield no valid reps for an arm, accept 5 reps with a reported A/A noise in place of the idle gate, and mark the result "noisy box". |
 | **R1 (noise)** | noise = max(\|A − A′\|, half of A's rep spread). A delta is real only if it exceeds max(2 x noise, 3% fps or 0.5 ms). |
 | **R2 (scoring)** | Score on the binding thread's ms (main busy per frame, CrGpuMain WEBGL per present, GPU ms), plus still / moving / tour fps, p50 / p95, h100 / h250 / max / jank. Never on draw counts alone; draw counts are heading-binned and reported with multidraw ranges. |
-| **R3 (keep)** | A perf change goes or stays default-on only if all five hold: (i) its binding-thread ms moved by ≥ 50% of the prediction; (ii) at least one of still / moving / tour fps improved by a real delta, and no segment regressed by one; (iii) hitch metrics not worse by a real delta; (iv) 0 console errors; (v) the look gate (R4) passed. Otherwise it goes off and keeps its code only if a later step needs it. INCONCLUSIVE gets 3 more reps once, then goes off. |
+| **R3 (keep)** | A perf change goes or stays default-on only if all five hold: (i) its binding-thread ms moved by ≥ 50% of the prediction; (ii) at least one of still / moving / tour fps improved by a real delta, and no segment regressed by one; (iii) hitch metrics not worse by a real delta; (iv) 0 console errors; (v) the look gate (R4) passed. Otherwise it goes off and keeps its code only if a later step needs it. INCONCLUSIVE gets 3 more reps once, then goes off. For a hitch change (R3-2's upload draw and worker-wait fixes, scored on hitch metrics per R3-2), (i) and (ii) read on its predicted hitch metrics instead: first-turn max and h100 better by a real delta, and no still / moving / tour fps segment worse by one. |
 | **R4 (look)** | WHAT kernels: bit-exact, or ≤ 1 f32 ulp, in node or cargo; array layers byte-equal on the 1070 readback. HOW changes: rc-eye stills at 1080p with `skytime=13`, compared by `rc_eye_diff.py`, with particles and sway masked. Default threshold: ≤ 1% of pixels over 8/255 and ≤ 0.1% over 32/255; each step may set a tighter one. Every heatmap gets a structural review. Then the batched owner eye test; the owner can veto. |
 | **R5 (routing)** | The binding thread is the largest of main busy per frame, CrGpuMain per present, and GPU ms, at the tier's resolution. If GPU ms ≥ 0.9 x frame time, GPU levers go first. If CrGpuMain ≥ main, GL-command levers go first (batching, HUD raster). Otherwise main-thread levers. Never claim fps for a lever on a thread that is not binding; book its ms as headroom. |
 | **R6 (stop)** | A structural lane that delivers < 50% of its predicted ms at stage A stops before stage B and gets a written post-mortem. |

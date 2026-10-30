@@ -22,7 +22,7 @@ import { buildProbeUrl, inBuildsCgroup, VIEWPORT } from "./laptop-structure-prob
 
 const PLAYWRIGHT_CORE = process.env.PLAYWRIGHT_CORE || "/home/wbterminal/.npm/_npx/e41f203b7505f1fb/node_modules/playwright-core";
 export const ALL_RUST_FLAGS = [
-  "rustParticles=on", "rustRig=on", "rustEntityCull=on", "rigMeshAlias=on",
+  "rustParticles=on", "rustRig=on", "rustEntityCull=on", "rigPoseSkip=on",
   "anchorOffGraph=on", "staticMatrixFreeze=on", "poolSizeToContent=on", "rustCull=on",
   "rustAnimScenery=on", "rustAnimSceneryGate=on", "rustTerrainFx=on",
   "drawExec=on", "drawExecRigs=on",
@@ -198,7 +198,7 @@ async function main() {
         meshes,
         sceneCoreAbi: (() => { try { return window.__hbSceneWasm?.sceneCoreAbi?.() ?? null; } catch (_) { return null; } })(),
         rustRig: call(window.__rustRig?.stats),
-        rigMeshAlias: call(window.__rigMeshAlias?.stats),
+        rigPoseSkip: call(window.__rigPoseSkip?.stats),
         rustCull: call(window.__rustCull?.stats),
         rustCullVerify: call(window.__rustCull?.verify),
         rustAnimScenery: call(window.__rustAnimScenery?.stats),

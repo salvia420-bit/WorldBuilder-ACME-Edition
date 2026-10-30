@@ -966,6 +966,9 @@ const TIER5 = [
   { tier: 5, flag: "asyncLinkKeySig", file: "tests/async_link_key_sig.test.mjs" },
   { tier: 5, flag: "alphaMaskSlice", file: "tests/alpha_mask_slice.test.mjs" },
   { tier: 5, flag: "bakeSurfaceCoalesce", file: "tests/bake_surface_coalesce.test.mjs" },
+  // 2026-10-30 round 3 R3-2 lane W2: ?bakeFallbackWaves (DEFAULT OFF) — the main-thread fallback decode in
+  // 16-id waves with a macrotask between them; results + audit identical to the unsplit call.
+  { tier: 5, flag: "bakeFallbackWaves", file: "tests/bake_fallback_waves.test.mjs" },
   { tier: 5, flag: "interiorBuildShare", file: "tests/interior_build_share.test.mjs" },
   { tier: 5, flag: "shardFetchWorker", file: "tests/shard_fetch_worker.test.mjs" },
   { tier: 5, flag: "interiorWallsFirst", file: "tests/interior_walls_first.test.mjs" },
@@ -1401,11 +1404,12 @@ const TIER5 = [
   { tier: 5, flag: "rustParticles(wasm)", file: "tests/rust_particles_parity.test.mjs",
     requires: "pkg/holtburger_web_bg.wasm" },
   // Lane B: ?rustRig poser + ?rustEntityCull gate vs the JS paths.
-  { tier: 5, flag: "rustRig+rustEntityCull(parity)", file: "tests/rust_rig_parity.test.mjs",
+  { tier: 5, flag: "rustRig+rustEntityCull+rigPoseSkip(parity)", file: "tests/rust_rig_parity.test.mjs",
     requires: "pkg/holtburger_web_bg.wasm" },
-  // Lane B follow-up: ?rigMeshAlias (identity rig meshes share their part's
-  // matrixWorld) bit-identical to three's walk at every walk (no wasm needed).
-  { tier: 5, flag: "rigMeshAlias", file: "tests/rig_mesh_alias.test.mjs" },
+  // Round 3 R3-2: ?rigPoseSkip vs the flag-off poser — JS / echo / compiled routes, EntityManager ticks,
+  // key-field knockouts. No `requires`: the compiled route is optional and prints SKIP without pkg/.
+  // (?rigMeshAlias and its suite were deleted 2026-10-30.)
+  { tier: 5, flag: "rigPoseSkip", file: "tests/rig_pose_skip.test.mjs" },
   // Lane C: stage-2 S1b ?anchorOffGraph — anchors off the scene graph, emitters bit-equal.
   { tier: 5, flag: "anchorOffGraph", file: "tests/anchor_off_graph.test.mjs" },
   // Lane C: stage-2 S1a ?staticMatrixFreeze — frozen statics bit-equal to three's walk.
@@ -1439,9 +1443,34 @@ const TIER5 = [
   { tier: 5, flag: "hotTerrainShared", file: "tests/hot_terrain_shared.test.mjs", timeoutMs: 300000 },
   { tier: 5, flag: "hotWeaponFxSync", file: "tests/hot_weapon_fx_sync.test.mjs" },
   { tier: 5, flag: "hotGrassCull", file: "tests/hot_grass_cull.test.mjs" },
-  // Lane X (stage 3): ?drawExec / ?drawExecRuns / ?drawExecRigs — the full GL call stream
-  // identical to stock three + our wrappers, frame by frame (fake WebGL2, 14 scenarios).
-  { tier: 5, flag: "drawExec+drawExecRuns+drawExecRigs", file: "tests/draw_exec.test.mjs" },
+  // Lane X (stage 3): ?drawExec / ?drawExecRigs — the full GL call stream
+  // identical to stock three + our wrappers, frame by frame (fake WebGL2, 22 scenarios; ?drawExecRuns deleted R3-2).
+  { tier: 5, flag: "drawExec+drawExecRigs", file: "tests/draw_exec.test.mjs" },
+  // 2026-10-30 — round 3 (docs/2026-10-29-round3-gpu-driven.md), all DEFAULT OFF.
+  // R3-2 lane R: ?skipEmptyPasses (the world pass's mask-0 render on an indoor skip frame draws an
+  // empty scene; GL stream identical), ?uploadWarmDraw (streamed geometry uploads on arrival), and the
+  // shipped ?farFogFence (= the plan's farFogAsync) PBO/fence state machine vs the sync path.
+  { tier: 5, flag: "skipEmptyPasses", file: "tests/skip_empty_passes.test.mjs" },
+  { tier: 5, flag: "uploadWarmDraw", file: "tests/upload_warm_draw.test.mjs" },
+  { tier: 5, flag: "farFogFence(parity)", file: "tests/far_fog_fence_parity.test.mjs" },
+  // R3-0 lane T: ?occlusionCull=rigs — rig proxies only; cell candidates get no proxy; default unchanged.
+  { tier: 5, flag: "occlusionCull=rigs", file: "tests/occlusion_cull_rigs.test.mjs" },
+  // R3-0 lane H: harness v2 (hbbench / hbanatomy / hbsweep pure parts) and hbreport's §5 rules on the
+  // stored RC runs. Node + python only; no browser, no ssh (the suite stubs ssh and checks it was never run).
+  { tier: 5, flag: "harnessV2", file: "../../scripts/perf-worker/tests/hb_v2.test.mjs" },
+  { tier: 5, flag: "hbreport", file: "../../scripts/perf-worker/tests/hbreport.test.mjs" },
+  // 2026-10-30 lane Q2: the S1 1070 queue (batch-R3-S1) + its page driver s1.eval.js and scorer
+  // s1_eval_report.py. Spawns python3 -I and `node -e` (laptop guard vs a loopback fake); no browser, no ssh.
+  { tier: 5, flag: "s1Queue", file: "../../scripts/perf-worker/tests/s1_queue.test.mjs" },
+  // R3-3 lane K: the GPU batch kit (scene3d/gpu_batch/) + its first consumer ?animSceneryBatch.
+  { tier: 5, flag: "gpuBatchPages", file: "tests/gpu_batch_pages.test.mjs" },
+  { tier: 5, flag: "gpuBatchUploadBudget", file: "tests/gpu_batch_upload_budget.test.mjs" },
+  { tier: 5, flag: "gpuBatchRows", file: "tests/gpu_batch_rows.test.mjs" },
+  { tier: 5, flag: "gpuBatchStateTable", file: "tests/gpu_batch_state_table.test.mjs",
+    requires: () => process.env.HB_PORTAL_DAT || "/home/wbterminal/ac_base_dats/client_portal.dat" },
+  { tier: 5, flag: "gpuBatchClassMaterials", file: "tests/gpu_batch_class_materials.test.mjs" },
+  { tier: 5, flag: "animSceneryBatch", file: "tests/gpu_batch_anim_scenery.test.mjs" },
+  { tier: 5, flag: "gpuBatchSmokeLib", file: "tests/gpu_batch_smoke_lib.test.mjs" },
 ];
 
 // Registered but KNOWN-FAILING because the APP is wrong (a real bug, named
@@ -1503,8 +1532,9 @@ const NEEDS_BROWSER = [
   { file: "harness/glsl_smoke/heat_haze_smoke.mjs", why: `terrainHaze heat shimmer + desert mirage GLSL (off / disc / ground / mirage arms) — ${BROWSER_WHY}` },
   { file: "harness/glsl_smoke/terrain_vfx_compile_smoke.mjs", why: `terrain program (every define set) + every terrain-VFX particle material compile and link — ${BROWSER_WHY}` },
   // 2026-10-26 — Rust scene core lanes (docs/2026-10-26-rust-scene-core.md).
-  { file: "harness/glsl_smoke/rig_mesh_alias_smoke.mjs", why: `rigMeshAlias (lit rigs flag off vs on, max channel diff 0) — ${BROWSER_WHY}` },
-  { file: "harness/glsl_smoke/draw_exec_smoke.mjs", why: `drawExec / drawExecRuns / drawExecRigs (static + rig scene, every arm vs stock, max channel diff 0) — ${BROWSER_WHY}` },
+  { file: "harness/glsl_smoke/draw_exec_smoke.mjs", why: `drawExec / drawExecRigs (static + rig scene, every arm vs stock, a stale ?drawExecRuns=on inert, max channel diff 0) — ${BROWSER_WHY}` },
+  // 2026-10-30 — round 3 R3-3: GPU batch kit layers byte-equal, ?animSceneryBatch texel arm max diff 0, f32 arm <= 1.
+  { file: "harness/glsl_smoke/gpu_batch_smoke.mjs", why: `gpu batch kit + animSceneryBatch (legacy vs kit) — ${BROWSER_WHY}` },
 ];
 const BROWSER_ONLY = new Set(NEEDS_BROWSER.map((q) => q.file));
 

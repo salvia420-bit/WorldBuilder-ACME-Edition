@@ -1,6 +1,6 @@
 // scene3d/occlusion_cull.js — GPU occlusion queries for outdoor-visible
 // building interiors and entity rigs (`?occlusionCull`, DEFAULT ON, `=off`
-// escape). Perf 2026-10-06.
+// escape, `=rigs` rig proxies only — see below). Perf 2026-10-06.
 //
 // WHY. The frame on the 1070 is main-thread bound by draw submission (~10 µs
 // per three.js draw, ~2,000 draws at Holtburg mid). From an outdoor camera the
@@ -41,18 +41,50 @@
 // (after every opaque, whatever the opaque sort), on layer 0, never shadow
 // casters, never raycast targets. One shared geometry, one shared material ⇒
 // one program, no material switches between them.
+//
+// `?occlusionCull=rigs` (round-3 plan R3-0 / R3-6, 2026-10-30; opt-in, the
+// default is unchanged): proxies for ENTITY RIGS only. A cell candidate — the
+// numeric cell-id key cells.js passes; rigs use "e<guid>" string keys from
+// entities.js — gets no proxy and no query and always reads visible, so the
+// interiors fall back to the frustum, ?stablist and ?interiorApertureCull
+// (retail's portal sidedness) alone. It exists so R3-6's "cell half" arm can
+// price the cell proxies on the 1070 (default vs =rigs vs =off). Rigs are culled
+// exactly as in the default mode.
 
-const FLAG = (() => {
+/**
+ * The `?occlusionCull` value as a mode: `off`/`0`/`false`/`no` ⇒ "off";
+ * `rigs` ⇒ "rigs" (entity-rig proxies only); absent or anything else ⇒ "on"
+ * (cells and rigs, the default). Case-insensitive, like the reader it replaced.
+ */
+export function occlusionCullModeFromSearch(search) {
+  const v = (new URLSearchParams(search || "").get("occlusionCull") || "").toLowerCase();
+  if (v === "off" || v === "0" || v === "false" || v === "no") return "off";
+  if (v === "rigs") return "rigs";
+  return "on";
+}
+
+const MODE = (() => {
   try {
-    const v = (new URLSearchParams(globalThis.location?.search || "").get("occlusionCull") || "").toLowerCase();
-    return !(v === "off" || v === "0" || v === "false" || v === "no");
+    return occlusionCullModeFromSearch(globalThis.location?.search);
   } catch (_) {
-    return true;
+    return "on";
   }
 })();
+const FLAG = MODE !== "off";
 
 export function occlusionCullEnabled() {
   return FLAG;
+}
+
+/** "on" (default: cells + rigs), "rigs" (rigs only) or "off". */
+export function occlusionCullMode() {
+  return MODE;
+}
+
+/** Whether a want() key is an interior-cell candidate (cells.js: numeric cell
+ *  id) rather than an entity rig (entities.js: "e<guid>" string). */
+export function isCellCandidateKey(key) {
+  return typeof key === "number";
 }
 
 export const CELL_SHRINK_M = 0.3;
@@ -97,12 +129,17 @@ export class OcclusionCuller {
    * @param {object} THREE three namespace
    * @param {THREE.WebGLRenderer} renderer
    * @param {THREE.Scene} scene  the MAIN scene (the world RenderPass's scene)
+   * @param {{mode?: string}} [opts]  `mode: "rigs"` = entity-rig proxies only;
+   *   omitted ⇒ the URL's mode (`?occlusionCull`).
    */
-  constructor(THREE, renderer, scene) {
+  constructor(THREE, renderer, scene, opts) {
     this.THREE = THREE;
     this.renderer = renderer;
     this.scene = scene;
     this.gl = renderer.getContext();
+    // ?occlusionCull=rigs: cell candidates get no proxy (want()). Fixed for the
+    // culler's life, so no cell proxy can exist in this mode.
+    this.rigsOnly = (opts?.mode ?? MODE) === "rigs";
     this.armed = false;
     this.forceOff = false; // live A/B seam: window.__occlusionCull.off = true
     this._armEpoch = 0;
@@ -131,6 +168,9 @@ export class OcclusionCuller {
     // The query must bracket a REAL draw: never let ?asyncLink skip it.
     this.material.userData.__noAsyncLink = true;
     this.stats = { proxies: 0, issued: 0, resolved: 0, hidden: 0, pendingMax: 0, guarded: 0, restores: 0 };
+    // Cumulative count of cell candidates passed through without a proxy. Only
+    // in =rigs mode, so the default stats keep their shape.
+    if (this.rigsOnly) this.stats.cellsSkipped = 0;
     scene.add(this.group);
     this._onRestored = () => this.contextRestored();
     this._canvas = renderer.domElement || null;
@@ -247,6 +287,11 @@ export class OcclusionCuller {
    */
   want(key, minX, minY, minZ, maxX, maxY, maxZ) {
     if (!this.armed) return true;
+    // ?occlusionCull=rigs: an interior cell is never a proxy — no box, no query.
+    if (this.rigsOnly && isCellCandidateKey(key)) {
+      this.stats.cellsSkipped += 1;
+      return true;
+    }
     const p = this._proxy(key);
     p.lastWanted = this.frame;
     const c = this._camPos;
@@ -301,6 +346,8 @@ export function getOcclusionCuller(scene3d, THREE) {
     try {
       window.__occlusionCull = {
         get enabled() { return !!_culler; },
+        // "on" (cells + rigs) or "rigs" (?occlusionCull=rigs); the bench reads it.
+        get mode() { return _culler ? (_culler.rigsOnly ? "rigs" : "on") : null; },
         get armed() { return !!_culler?.armed; },
         get off() { return !!_culler?.forceOff; },
         set off(v) { if (_culler) _culler.forceOff = !!v; },

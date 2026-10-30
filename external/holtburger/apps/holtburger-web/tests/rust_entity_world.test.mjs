@@ -52,7 +52,6 @@ const { installDepthBandSort } = await import("../scene3d/depth_band_sort.js");
 const { installShadowCasterList } = await import("../scene3d/shadow_caster_list.js");
 const DX = await import("../scene3d/draw_exec.js");
 const SH = await import("../scene3d/skip_hidden_matrix.js");
-const RIG = await import("../scene3d/setup_rig.js");
 // EW_MODULE: a mutated copy of the module (the suite must FAIL on it — lane notes §5).
 const EW = await import(process.env.EW_MODULE || "../scene3d/entity_world.js");
 
@@ -299,10 +298,12 @@ function buildWorld(o = {}) {
     R3.parts[7].children[0].frustumCulled = false;
   }
   }
-  // rigMeshAlias parts in one rig (the owner-off opt-in; the alias walk is delegated to)
-  if (o.alias) {
-    RIG.__setRigMeshAliasForTest(true);
-    for (const p of rigs[4].parts) RIG.installRigMeshAlias(THREE, p);
+  // parts with an own updateMatrixWorld in one rig (three's body, called through an own
+  // property): the entity walk hands such a part to it. This stood for ?rigMeshAlias's part
+  // walk until that flag was deleted (round 3 R3-2, 2026-10-30).
+  if (o.ownPartWalk) {
+    const umw = THREE.Object3D.prototype.updateMatrixWorld;
+    for (const p of rigs[4].parts) p.updateMatrixWorld = function ownPartUpdateMatrixWorld(force) { umw.call(this, force); };
   }
   if (o.ew) {
     EW.__setEntityWorldForTest(true);
@@ -357,8 +358,8 @@ function firstNodeDiff(A, B) {
 if (!BENCH) console.log("\nPART W — the entity walk vs three's walk, every node after every walk");
 if (!BENCH) {
   EW.__resetEntityWorldForTest();
-  const A = buildWorld({ alias: true });
-  const B = buildWorld({ alias: true, ew: true });
+  const A = buildWorld({ ownPartWalk: true });
+  const B = buildWorld({ ownPartWalk: true, ew: true });
   const st0 = EW.entityWorldStats();
   check("W: every rig root + the held item got the entity walk", st0.roots === A.rigs.length + 1, `${st0.roots} roots`);
   let bad = null, walks = 0;
@@ -432,7 +433,6 @@ if (!BENCH) {
   const st = EW.entityWorldStats();
   check(`W: ${walks} walks — every node's matrix / matrixWorld / matrixWorldNeedsUpdate identical (Object.is)`, bad === null, bad ?? "");
   check("W: the entity walk ran, served identity meshes by copy and met unclean part worlds", st.walks > 0 && st.identity > 0 && st.unclean > 0, `walks ${st.walks} identity ${st.identity} unclean ${st.unclean}`);
-  RIG.__setRigMeshAliasForTest(undefined);
 }
 
 // =============================================================================================

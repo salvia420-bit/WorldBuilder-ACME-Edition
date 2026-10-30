@@ -22,6 +22,12 @@
 // `?bakeSurfaceCoalesce` (2026-10-09): queued `fetchSurfacesPixels` requests of
 // one lane and urgency ride in ONE worker message and the reply is split back
 // per caller (see the block above `laneForBakeMessage`; `=off` reverts).
+//
+// `?bakeFallbackWaves` (2026-10-30, DEFAULT OFF): when the worker is not
+// serving a request, the main-thread decode runs in waves of 16 ids with a
+// macrotask between them, and the inactive fetchers return a wave wrapper
+// instead of the raw export (see the block above
+// `DEFAULT_BAKE_FALLBACK_WAVE_CAP`). Off, everything above holds unchanged.
 
 import {
   applySurfaceAudit,
@@ -838,6 +844,165 @@ function concatEntitySurfaceBatches(parts) {
   return merged;
 }
 
+// `?bakeFallbackWaves` (2026-10-30, round 3 R3-2, lane W2) — the MAIN-THREAD
+// decode of a bake request runs in waves, one macrotask each. DEFAULT OFF.
+//
+// WHY (the R3-2 "no whole-job waits on workers" audit, lane R item (1)). While
+// the bake worker is not serving a request — `?bakeWorker=0`, no `Worker` in
+// the environment, the F1 crash backoff (1 s doubling to 30 s), a worker
+// `error` reply, or a tex-swap alias in an entity batch — the WHOLE id list
+// goes to the main-thread wasm in ONE call. `fetch_model_meshes` (src/lib.rs)
+// awaits its prefetch walk and then triangulates + packs every id in ONE
+// synchronous continuation; `fetch_surfaces_pixels` chunks its normal lane by
+// 16, but those awaits only yield when a record actually has to be fetched, so
+// a resident batch decodes in one go as well. Either way the frame thread
+// carries one long task proportional to the batch (OpenAC's whole-job wait).
+//
+// WHAT. Armed, the main-thread entry points — the `!this.active` branch of the
+// four `fetch*` methods, the catch-path fallback of each `…Once` body, the
+// entity batch's whole-batch alias divert, and the four inactive fetcher
+// shortcuts (`modelMeshFetcher` & co.) — cut the id list with
+// `splitBatchWaves(n, cap)` (the group-encoded entity batch with
+// `splitEntityBatchGroupWaves`, on group boundaries) and run the waves
+// SEQUENTIALLY with a macrotask yield between them (a MessageChannel post, not
+// a timer: see `fallbackWaveYield`; setTimeout(0) only where MessageChannel is
+// missing). Each wave's walk-then-decode is then its own task, and a frame or
+// any task queued before the yield runs between two waves. Results concatenate in
+// input order. The call-level surface audit merges as `fetchSurfacesPixels`
+// merges `?bakeBatchMax` waves (misses sum, `provenAbsent` unions), and the
+// union is re-sorted so it equals the unsplit call's sorted, deduped
+// `proven_absent_dids` list. A request that fits one wave is the single call
+// with the caller's ORIGINAL argument object, exactly as today. A wave that
+// rejects frees the handles earlier waves produced and rejects the call (the
+// unsplit call is all-or-nothing too). An entity batch whose parallel arrays
+// do not line up is not split: the single call rejects it as today.
+//
+// COST. Sequential waves serialise the per-wave prefetch walks: a cold batch
+// takes up to ceil(n/cap) walk round trips instead of one, plus one macrotask
+// per extra wave. That is the trade its S1 hitch arm prices (`bakeWorker=0`,
+// this flag on vs off: first-turn max, h100, and settle time). It flips only
+// after that arm wins.
+//
+// Grammar: absent / `off`/`0`/`false`/`no` / anything unrecognised → OFF (0);
+// `on`/`1`/`true`/`yes` → on with 16 ids per wave (the wasm's
+// `SURFACE_BATCH_SPLIT_CHUNK`); an integer N ≥ 2 → on with N per wave.
+// Resolved once by `configure()`; a bare `new BakeWorkerClient()` stays off.
+// OFF is byte-identical: every site makes the same wasm call as before and the
+// fetcher shortcuts hand back the EXACT export reference. Diag (armed only):
+// `window.__bakeFallbackWaves.stats()`.
+export const DEFAULT_BAKE_FALLBACK_WAVE_CAP = 16;
+
+/** Parse one `?bakeFallbackWaves=` token into a per-wave id cap (0 = off). */
+export function parseBakeFallbackWaves(raw) {
+  if (raw === null || raw === undefined) return 0;
+  const s = String(raw).trim().toLowerCase();
+  if (s === "on" || s === "1" || s === "true" || s === "yes") {
+    return DEFAULT_BAKE_FALLBACK_WAVE_CAP;
+  }
+  if (/^\d+$/.test(s) && Number(s) >= 2) return Number(s);
+  // `off`/`0`/`false`/`no`, empty and garbage: the default, OFF.
+  return 0;
+}
+
+/** Resolve `?bakeFallbackWaves=` from a query string. Pure; touches no globals. */
+export function resolveBakeFallbackWaves(search = "") {
+  try {
+    return parseBakeFallbackWaves(new URLSearchParams(search || "").get("bakeFallbackWaves"));
+  } catch (_) {
+    return 0;
+  }
+}
+
+/**
+ * The macrotask between two fallback waves: one MessageChannel post. Each
+ * message is its own task (any task queued before the post runs first, and
+ * the browser may render a frame in between), and unlike a timer it is never
+ * clamped. A setTimeout(0) is: with resident records each wave's yield is
+ * scheduled from inside the previous yield's task, so the timers nest, and
+ * Chrome clamps a nested timer to >= 4 ms from the 5th level on (~60 ms on a
+ * 320-id request, 19 yields). setTimeout(0) only where MessageChannel is
+ * missing or cannot be made. Not `scheduler.yield()`: its continuation is
+ * queued AHEAD of other tasks of the same priority, so a task queued before
+ * the yield would no longer run between two waves. Not
+ * `scheduler.postTask()` either: at the default priority it is the same
+ * same-priority task a message is, behind a second, browser-only code path.
+ * Same channel pattern as shard_fetch_worker.js `makeTurnYielder`, but ONE
+ * channel is kept: the waves are sequential, so a close-when-drained channel
+ * would be made again for every yield.
+ *
+ * Built on the first ARMED yield; flag off nothing here is ever created.
+ * Resolves FIFO (one message per waiter, so concurrent requests interleave
+ * fairly). In Node the receiving port is ref()'d only while a waiter is
+ * pending, so a process whose only work is armed waves exits by itself; the
+ * browser's MessagePort has no ref/unref and needs none.
+ */
+let fallbackWaveYielder = null;
+
+function makeFallbackWaveYielder() {
+  const MC = globalThis.MessageChannel;
+  if (typeof MC === "function") {
+    try {
+      const ch = new MC();
+      const waiters = [];
+      ch.port1.onmessage = () => {
+        const resolve = waiters.shift();
+        if (waiters.length === 0) ch.port1.unref?.();
+        if (resolve) resolve();
+      };
+      ch.port1.unref?.();
+      return {
+        kind: "MessageChannel",
+        next: () =>
+          new Promise((resolve) => {
+            if (waiters.length === 0) ch.port1.ref?.();
+            waiters.push(resolve);
+            ch.port2.postMessage(0);
+          }),
+      };
+    } catch (_) {
+      /* fall through to the timer */
+    }
+  }
+  return { kind: "setTimeout", next: () => new Promise((resolve) => setTimeout(resolve, 0)) };
+}
+
+function fallbackWaveYield() {
+  if (!fallbackWaveYielder) fallbackWaveYielder = makeFallbackWaveYielder();
+  return fallbackWaveYielder.next();
+}
+
+/**
+ * Merge a `provenAbsent` union into the order the wasm emits it
+ * (`proven_absent_dids`: numeric ascending, deduped; `"0x%08X"` strings).
+ * Unparseable entries keep their first-seen order after the numeric ones.
+ */
+function sortProvenAbsentUnion(list) {
+  const byValue = new Map();
+  const odd = [];
+  for (const s of list) {
+    const str = String(s);
+    const v = parseInt(str, 16);
+    if (Number.isFinite(v)) {
+      if (!byValue.has(v >>> 0)) byValue.set(v >>> 0, str);
+    } else if (!odd.includes(str)) {
+      odd.push(str);
+    }
+  }
+  const keys = [...byValue.keys()].sort((a, b) => a - b);
+  return [...keys.map((k) => byValue.get(k)), ...odd];
+}
+
+/** Best-effort `.free()` of wasm handles a failed wave run already holds. */
+function freeWaveHandles(list) {
+  for (const h of list) {
+    try {
+      if (h && typeof h.free === "function") h.free();
+    } catch (_) {
+      /* best-effort */
+    }
+  }
+}
+
 // `?bakeSurfaceCoalesce` (2026-10-09, cold-load structural pass) — merge QUEUED
 // `fetchSurfacesPixels` requests into one worker message.
 //
@@ -1038,10 +1203,17 @@ export class BakeWorkerClient {
     // Merged messages in flight: posted id (= the head request's id) →
     // `{ members: [{id, dids}], dids }` (`dids` = the deduped list posted).
     this._coalesced = new Map();
+    // `?bakeFallbackWaves` — ids per main-thread wave (0 = off, today's single
+    // call). Like `batchMax`, resolved by `configure()`. `_fbw` = stats,
+    // created on the first armed call; `_fbwDiag` = the
+    // `window.__bakeFallbackWaves` object this client installed (armed only).
+    this.fallbackWaves = 0;
+    this._fbw = null;
+    this._fbwDiag = null;
   }
 
   /**
-   * @param {{enabled?:boolean, manifestUrl?:string, sceneryBaseUrl?:string, aliasSplit?:boolean, batchMax?:number, surfaceCoalesce?:boolean|number}} [opts]
+   * @param {{enabled?:boolean, manifestUrl?:string, sceneryBaseUrl?:string, aliasSplit?:boolean, batchMax?:number, surfaceCoalesce?:boolean|number, fallbackWaves?:boolean|number}} [opts]
    */
   configure(opts = {}) {
     this.enabled = typeof opts.enabled === "boolean" ? opts.enabled : urlFlagEnabled();
@@ -1057,6 +1229,18 @@ export class BakeWorkerClient {
       typeof opts.batchMax === "number"
         ? parseBakeBatchMax(opts.batchMax)
         : resolveBakeBatchMax(globalThis.location?.search || "");
+    // `?bakeFallbackWaves` (default OFF): `true` → the default cap, a number →
+    // parsed like the URL token, absent → the URL.
+    this.fallbackWaves =
+      typeof opts.fallbackWaves === "boolean"
+        ? (opts.fallbackWaves ? DEFAULT_BAKE_FALLBACK_WAVE_CAP : 0)
+        : typeof opts.fallbackWaves === "number"
+          ? parseBakeFallbackWaves(opts.fallbackWaves)
+          : resolveBakeFallbackWaves(globalThis.location?.search || "");
+    // An off reconfigure after an armed one takes this client's diag back down,
+    // so the page reads exactly as if the flag had never been armed.
+    if (this.fallbackWaves > 0) this._installFallbackWavesDiag();
+    else if (this._fbwDiag) this._removeFallbackWavesDiag();
     if (opts.manifestUrl != null) this.manifestUrl = opts.manifestUrl;
     if (opts.sceneryBaseUrl != null) this.sceneryBaseUrl = opts.sceneryBaseUrl;
     return this;
@@ -1655,6 +1839,274 @@ export class BakeWorkerClient {
     return out;
   }
 
+  // ── `?bakeFallbackWaves` main-thread wave runners (see the block above
+  // `DEFAULT_BAKE_FALLBACK_WAVE_CAP`). Reached ONLY when `fallbackWaves > 0`;
+  // every flag-off site keeps its direct wasm call.
+
+  /** Stats bucket for one armed main-thread request (created on first use). */
+  _noteFallbackWaves(type, n, waveCount) {
+    const s =
+      this._fbw ||
+      (this._fbw = { calls: 0, split: 0, waves: 0, yields: 0, maxIds: 0, byType: {} });
+    const b =
+      s.byType[type] ||
+      (s.byType[type] = { calls: 0, split: 0, waves: 0, yields: 0, maxIds: 0 });
+    const w = waveCount > 1 ? waveCount : 1;
+    s.calls += 1;
+    b.calls += 1;
+    s.waves += w;
+    b.waves += w;
+    if (waveCount > 1) {
+      s.split += 1;
+      b.split += 1;
+    }
+    if (n > s.maxIds) s.maxIds = n;
+    if (n > b.maxIds) b.maxIds = n;
+    return b;
+  }
+
+  /** `?bakeFallbackWaves` diag snapshot; null when the flag is off. */
+  fallbackWaveStats() {
+    if (!(this.fallbackWaves > 0)) return null;
+    const s = this._fbw;
+    const byType = {};
+    if (s) for (const [k, b] of Object.entries(s.byType)) byType[k] = { ...b };
+    return {
+      cap: this.fallbackWaves,
+      calls: s?.calls ?? 0,
+      split: s?.split ?? 0,
+      waves: s?.waves ?? 0,
+      yields: s?.yields ?? 0,
+      maxIds: s?.maxIds ?? 0,
+      // How the yields run: "MessageChannel" (expected in every browser),
+      // "setTimeout" (no MessageChannel), or null before the page's first yield.
+      yieldVia: fallbackWaveYielder ? fallbackWaveYielder.kind : null,
+      byType,
+    };
+  }
+
+  /**
+   * Armed only: `window.__bakeFallbackWaves.stats()` (never installed when off;
+   * taken down again by an off `configure()`, see `_removeFallbackWavesDiag`).
+   */
+  _installFallbackWavesDiag() {
+    try {
+      if (typeof window === "undefined") return;
+      // (This assignment's text is pinned by the S1 queue's requiredReaders.)
+      window.__bakeFallbackWaves = { stats: () => this.fallbackWaveStats() };
+      this._fbwDiag = window.__bakeFallbackWaves;
+    } catch (_) {
+      /* diag must never affect the bake */
+    }
+  }
+
+  /**
+   * An off `configure()` after an armed one: delete `window.__bakeFallbackWaves`
+   * if it is still the object THIS client installed (another armed client's
+   * diag is left alone), so it does not linger with `stats()` returning null.
+   */
+  _removeFallbackWavesDiag() {
+    const diag = this._fbwDiag;
+    this._fbwDiag = null;
+    try {
+      if (typeof window !== "undefined" && window.__bakeFallbackWaves === diag) {
+        delete window.__bakeFallbackWaves;
+      }
+    } catch (_) {
+      /* diag must never affect the bake */
+    }
+  }
+
+  /**
+   * One flat main-thread request (`fetch_model_meshes`, `fetch_surfaces_pixels`,
+   * `fetchEntitySurfacesPixels`). `call(ids)` makes the wasm call for one id
+   * list. A request that fits one wave is `call(ids)` with the caller's
+   * ORIGINAL object, synchronously, as today; a longer one runs in waves.
+   */
+  _mainFlatWaves(type, ids, call, mergeAudit) {
+    const arr = Array.from(ids || [], (d) => d >>> 0);
+    const waves = splitBatchWaves(arr.length, this.fallbackWaves);
+    const b = this._noteFallbackWaves(type, arr.length, waves.length);
+    if (waves.length <= 1) return call(ids);
+    return this._runFlatWaves(arr, waves, call, mergeAudit, b);
+  }
+
+  async _runFlatWaves(arr, waves, call, mergeAudit, b) {
+    const out = [];
+    let misses;
+    let absent = null;
+    try {
+      for (let w = 0; w < waves.length; w += 1) {
+        if (w > 0) {
+          // A fresh macrotask: this wave's walk-then-decode cannot share a
+          // task with the previous wave's decode.
+          // eslint-disable-next-line no-await-in-loop
+          await fallbackWaveYield();
+          this._fbw.yields += 1;
+          b.yields += 1;
+        }
+        const [lo, hi] = waves[w];
+        // eslint-disable-next-line no-await-in-loop
+        const part = await call(Uint32Array.from(arr.slice(lo, hi)));
+        if (mergeAudit) {
+          const a = extractSurfaceAudit(part);
+          if (a) {
+            if (typeof a.decodeMisses === "number") misses = (misses ?? 0) + a.decodeMisses;
+            if (Array.isArray(a.provenAbsent)) {
+              absent = absent ? [...absent, ...a.provenAbsent] : [...a.provenAbsent];
+            }
+          }
+        }
+        for (const x of part) out.push(x);
+      }
+    } catch (e) {
+      freeWaveHandles(out);
+      throw e;
+    }
+    if (mergeAudit && (misses !== undefined || absent)) {
+      applySurfaceAudit(out, {
+        ...(misses !== undefined ? { decodeMisses: misses } : {}),
+        ...(absent ? { provenAbsent: sortProvenAbsentUnion(absent) } : {}),
+      });
+    }
+    return out;
+  }
+
+  _mainModelMeshes(wasmExports, ids, urgent) {
+    return this._mainFlatWaves(
+      "fetchModelMeshes",
+      ids,
+      (part) => wasmExports.fetch_model_meshes(part, urgent),
+      false,
+    );
+  }
+
+  _mainSurfacesPixels(wasmExports, dids, urgent) {
+    return this._mainFlatWaves(
+      "fetchSurfacesPixels",
+      dids,
+      (part) => wasmExports.fetch_surfaces_pixels(part, urgent),
+      true,
+    );
+  }
+
+  _mainEntitySurfacesPixels(wasmExports, dids, paletteId, subPalettes, urgent) {
+    return this._mainFlatWaves(
+      "fetchEntitySurfacesPixels",
+      dids,
+      (part) => wasmExports.fetchEntitySurfacesPixels(part, paletteId, subPalettes, urgent),
+      true,
+    );
+  }
+
+  /**
+   * The group-encoded F.41 batch on the main thread. Waves are cut on GROUP
+   * boundaries (`splitEntityBatchGroupWaves`; a group longer than the cap ships
+   * alone) and re-exposed as ONE handle-shaped object
+   * (`concatEntitySurfaceBatches`), exactly as the `?bakeBatchMax` leg does.
+   * Parallel arrays that do not line up (the wasm's own length validators)
+   * are not split: the single call rejects them as today.
+   */
+  _mainEntitySurfacesBatch(wasmExports, flatDids, lens, basePals, flatSubs, tripleCounts, urgent) {
+    const single = () =>
+      wasmExports.fetchEntitySurfacesPixelsBatch(
+        flatDids,
+        lens,
+        basePals,
+        flatSubs,
+        tripleCounts,
+        urgent,
+      );
+    const isList = (a) => a != null && typeof a.length === "number";
+    const shaped =
+      isList(flatDids) &&
+      isList(lens) &&
+      isList(basePals) &&
+      isList(flatSubs) &&
+      isList(tripleCounts) &&
+      basePals.length === lens.length &&
+      tripleCounts.length === lens.length;
+    let gWaves = [];
+    let didOff = null;
+    let subOff = null;
+    if (shaped) {
+      didOff = groupOffsets(lens, 1);
+      subOff = groupOffsets(tripleCounts, 3);
+      if (didOff[lens.length] === flatDids.length && subOff[lens.length] === flatSubs.length) {
+        gWaves = splitEntityBatchGroupWaves(lens, this.fallbackWaves);
+      }
+    }
+    const nDids = isList(flatDids) ? flatDids.length : 0;
+    const b = this._noteFallbackWaves("fetchEntitySurfacesPixelsBatch", nDids, gWaves.length);
+    if (gWaves.length <= 1) return single();
+    return this._runEntityBatchWaves(
+      wasmExports,
+      gWaves,
+      didOff,
+      subOff,
+      flatDids,
+      lens,
+      basePals,
+      flatSubs,
+      tripleCounts,
+      urgent,
+      b,
+    );
+  }
+
+  async _runEntityBatchWaves(
+    wasmExports,
+    gWaves,
+    didOff,
+    subOff,
+    flatDids,
+    lens,
+    basePals,
+    flatSubs,
+    tripleCounts,
+    urgent,
+    b,
+  ) {
+    const dArr = Array.from(flatDids, (d) => d >>> 0);
+    const lArr = Array.from(lens, (v) => v >>> 0);
+    const pArr = Array.from(basePals, (v) => v >>> 0);
+    const sArr = Array.from(flatSubs, (v) => v >>> 0);
+    const tArr = Array.from(tripleCounts, (v) => v >>> 0);
+    const parts = [];
+    try {
+      for (let w = 0; w < gWaves.length; w += 1) {
+        if (w > 0) {
+          // eslint-disable-next-line no-await-in-loop
+          await fallbackWaveYield();
+          this._fbw.yields += 1;
+          b.yields += 1;
+        }
+        const [gLo, gHi] = gWaves[w];
+        parts.push(
+          // eslint-disable-next-line no-await-in-loop
+          await wasmExports.fetchEntitySurfacesPixelsBatch(
+            Uint32Array.from(dArr.slice(didOff[gLo], didOff[gHi])),
+            Uint32Array.from(lArr.slice(gLo, gHi)),
+            Uint32Array.from(pArr.slice(gLo, gHi)),
+            Uint32Array.from(sArr.slice(subOff[gLo], subOff[gHi])),
+            Uint32Array.from(tArr.slice(gLo, gHi)),
+            urgent,
+          ),
+        );
+      }
+    } catch (e) {
+      freeWaveHandles(parts);
+      throw e;
+    }
+    const merged = concatEntitySurfaceBatches(parts);
+    // The wasm handle's `provenAbsent` is numeric-ascending and deduped; the
+    // shared concat unions in wave order, so re-sort to match the whole call.
+    if (Array.isArray(merged.provenAbsent)) {
+      merged.provenAbsent = sortProvenAbsentUnion(merged.provenAbsent);
+    }
+    return merged;
+  }
+
   /**
    * Model meshes off-thread. Returns objects with the SAME field surface a
    * wasm `ModelMesh` exposes (drop-in for `meshToGeometryGroups`). Falls
@@ -1666,7 +2118,12 @@ export class BakeWorkerClient {
    * wasm instance does the decode. `undefined` = pre-fix normal lane.
    */
   async fetchModelMeshes(wasmExports, ids, urgent) {
-    if (!this.active) return wasmExports.fetch_model_meshes(ids, urgent);
+    if (!this.active) {
+      // `?bakeFallbackWaves` (default OFF): waves on the main thread.
+      return this.fallbackWaves > 0
+        ? this._mainModelMeshes(wasmExports, ids, urgent)
+        : wasmExports.fetch_model_meshes(ids, urgent);
+    }
     // A16: split an oversized submission into sequential waves. `splitBatchWaves`
     // returns a single whole-batch range whenever the cap is unset or unreached,
     // and that range takes the `ids` object through UNTOUCHED.
@@ -1699,13 +2156,20 @@ export class BakeWorkerClient {
     } catch (e) {
       this._noteMainThreadFallback("fetchModelMeshes", e);
       console.warn("[bake_worker_client] model-mesh worker failed; main-thread fallback:", e);
-      return wasmExports.fetch_model_meshes(ids, urgent);
+      return this.fallbackWaves > 0
+        ? this._mainModelMeshes(wasmExports, ids, urgent)
+        : wasmExports.fetch_model_meshes(ids, urgent);
     }
   }
 
   /** Surface pixels off-thread. Drop-in for the surface consumers. */
   async fetchSurfacesPixels(wasmExports, dids, urgent) {
-    if (!this.active) return wasmExports.fetch_surfaces_pixels(dids, urgent);
+    if (!this.active) {
+      // `?bakeFallbackWaves` (default OFF): waves on the main thread.
+      return this.fallbackWaves > 0
+        ? this._mainSurfacesPixels(wasmExports, dids, urgent)
+        : wasmExports.fetch_surfaces_pixels(dids, urgent);
+    }
     // A16: sequential waves when `?bakeBatchMax=N` is armed and exceeded. The
     // per-wave results concatenate in input order (every consumer binds by
     // index into the DID list it passed), and the CALL-LEVEL decode audit is
@@ -1780,7 +2244,9 @@ export class BakeWorkerClient {
     } catch (e) {
       this._noteMainThreadFallback("fetchSurfacesPixels", e);
       console.warn("[bake_worker_client] surface worker failed; main-thread fallback:", e);
-      return wasmExports.fetch_surfaces_pixels(dids, urgent);
+      return this.fallbackWaves > 0
+        ? this._mainSurfacesPixels(wasmExports, dids, urgent)
+        : wasmExports.fetch_surfaces_pixels(dids, urgent);
     }
   }
 
@@ -1796,7 +2262,10 @@ export class BakeWorkerClient {
    */
   async fetchEntitySurfacesPixels(wasmExports, dids, paletteId, subPalettes, urgent) {
     if (!this.active) {
-      return wasmExports.fetchEntitySurfacesPixels(dids, paletteId, subPalettes, urgent);
+      // `?bakeFallbackWaves` (default OFF): waves on the main thread.
+      return this.fallbackWaves > 0
+        ? this._mainEntitySurfacesPixels(wasmExports, dids, paletteId, subPalettes, urgent)
+        : wasmExports.fetchEntitySurfacesPixels(dids, paletteId, subPalettes, urgent);
     }
     // A16 entity leg (2026-07-26). The original A16 scoped itself to
     // `fetchSurfacesPixels` / `fetchModelMeshes` and called the entity paths
@@ -1814,9 +2283,12 @@ export class BakeWorkerClient {
     //
     // Unarmed (`batchMax === 0`, the default) this is the pre-A16 body reached
     // with the caller's ORIGINAL argument object — bit-for-bit today. The
-    // `!this.active` main-thread branch above is untouched and is never capped:
-    // `entitySurfacePixelsFetcher` contractually hands back the EXACT
-    // `wasmExports.fetchEntitySurfacesPixels` reference there.
+    // `!this.active` main-thread branch above is never capped by `batchMax`.
+    // With `?bakeFallbackWaves` off (the default) it is the single wasm call
+    // and `entitySurfacePixelsFetcher` hands back the EXACT
+    // `wasmExports.fetchEntitySurfacesPixels` reference there; armed, both run
+    // the main-thread decode in fallback waves instead (see the block above
+    // `DEFAULT_BAKE_FALLBACK_WAVE_CAP`).
     const arr = this.batchMax > 0 ? Array.from(dids, (d) => d >>> 0) : null;
     const waves = arr ? splitBatchWaves(arr.length, this.batchMax) : null;
     if (waves && waves.length > 1) {
@@ -1901,7 +2373,9 @@ export class BakeWorkerClient {
         "[bake_worker_client] entity-surface worker failed; main-thread fallback:",
         e,
       );
-      return wasmExports.fetchEntitySurfacesPixels(dids, paletteId, subPalettes, urgent);
+      return this.fallbackWaves > 0
+        ? this._mainEntitySurfacesPixels(wasmExports, dids, paletteId, subPalettes, urgent)
+        : wasmExports.fetchEntitySurfacesPixels(dids, paletteId, subPalettes, urgent);
     }
   }
 
@@ -1921,6 +2395,18 @@ export class BakeWorkerClient {
     urgent,
   ) {
     if (!this.active) {
+      // `?bakeFallbackWaves` (default OFF): group waves on the main thread.
+      if (this.fallbackWaves > 0) {
+        return this._mainEntitySurfacesBatch(
+          wasmExports,
+          flatDids,
+          lens,
+          basePals,
+          flatSubs,
+          tripleCounts,
+          urgent,
+        );
+      }
       return wasmExports.fetchEntitySurfacesPixelsBatch(
         flatDids,
         lens,
@@ -1943,9 +2429,11 @@ export class BakeWorkerClient {
     // The per-wave results are re-exposed as ONE handle-shaped object
     // (`concatEntitySurfaceBatches`) in input group order, so
     // `materials.js::preloadBatch` is unchanged. Unarmed ⇒ single call with the
-    // caller's ORIGINAL five argument objects, bit-for-bit today; the
-    // `!this.active` branch above stays the raw wasm export per
-    // `entitySurfacesBatchFetcher`'s contract.
+    // caller's ORIGINAL five argument objects, bit-for-bit today. With
+    // `?bakeFallbackWaves` off (the default) the `!this.active` branch above
+    // stays the single raw wasm call and `entitySurfacesBatchFetcher` hands
+    // back the raw export; armed, both cut the main-thread call into group
+    // waves instead (`_mainEntitySurfacesBatch`).
     //
     // The alias check lives in `…Once`, so under waves it is evaluated PER WAVE:
     // a wave carrying an alias DID routes that wave (not the whole submission)
@@ -2013,6 +2501,17 @@ export class BakeWorkerClient {
         console.info(
           `[bake_worker_client] alias split (entity-surface-batch): ${nAlias} alias DID(s) in batch → whole batch on main wasm`,
         );
+        if (this.fallbackWaves > 0) {
+          return this._mainEntitySurfacesBatch(
+            wasmExports,
+            flatDids,
+            lens,
+            basePals,
+            flatSubs,
+            tripleCounts,
+            urgent,
+          );
+        }
         return wasmExports.fetchEntitySurfacesPixelsBatch(
           flatDids,
           lens,
@@ -2037,6 +2536,17 @@ export class BakeWorkerClient {
         "[bake_worker_client] entity-surface-batch worker failed; main-thread fallback:",
         e,
       );
+      if (this.fallbackWaves > 0) {
+        return this._mainEntitySurfacesBatch(
+          wasmExports,
+          flatDids,
+          lens,
+          basePals,
+          flatSubs,
+          tripleCounts,
+          urgent,
+        );
+      }
       return wasmExports.fetchEntitySurfacesPixelsBatch(
         flatDids,
         lens,
@@ -2203,29 +2713,47 @@ export function configureBakeWorker(opts) {
  * `wasmExports.fetch_model_meshes`. When the worker is INACTIVE this is the
  * EXACT same function reference (byte-identical to pre-M2); when active it
  * routes through the worker (with main-thread fallback on error).
+ *
+ * `?bakeFallbackWaves` (default OFF): armed, the INACTIVE branch of all four
+ * fetchers hands back a wrapper that runs the main-thread decode in waves
+ * (see the block above `DEFAULT_BAKE_FALLBACK_WAVE_CAP`) instead of the raw
+ * export; a missing export (stale pkg) is still returned as-is so callers'
+ * `typeof … === "function"` guards gate exactly as before.
  */
 export function modelMeshFetcher(wasmExports) {
   const client = getBakeWorkerClient();
   // streamFix (2026-07-02): both branches accept an optional trailing
   // `urgent` — the raw wasm export takes it natively (`Option<bool>`), the
   // worker route forwards it in the message body.
-  if (!client.active) return wasmExports.fetch_model_meshes;
+  if (!client.active) {
+    if (client.fallbackWaves > 0 && typeof wasmExports.fetch_model_meshes === "function") {
+      return (ids, urgent) => client._mainModelMeshes(wasmExports, ids, urgent);
+    }
+    return wasmExports.fetch_model_meshes;
+  }
   return (ids, urgent) => client.fetchModelMeshes(wasmExports, ids, urgent);
 }
 
 /** Same contract for the surface-pixels decoder. */
 export function surfacePixelsFetcher(wasmExports) {
   const client = getBakeWorkerClient();
-  if (!client.active) return wasmExports.fetch_surfaces_pixels;
+  if (!client.active) {
+    if (client.fallbackWaves > 0 && typeof wasmExports.fetch_surfaces_pixels === "function") {
+      return (dids, urgent) => client._mainSurfacesPixels(wasmExports, dids, urgent);
+    }
+    return wasmExports.fetch_surfaces_pixels;
+  }
   return (dids, urgent) => client.fetchSurfacesPixels(wasmExports, dids, urgent);
 }
 
 /**
  * Same contract for the single-call entity (recolored) surface decoder. Returns
  * the EXACT `wasmExports.fetchEntitySurfacesPixels` reference when the
- * worker is inactive (byte-identical to pre-offload), OR when the wasm
- * bundle predates the export (so callers' `typeof … === "function"` guards
- * still gate correctly). When active, routes through the worker.
+ * worker is inactive and `?bakeFallbackWaves` is off (byte-identical to
+ * pre-offload; armed, a wave wrapper as for `modelMeshFetcher`), OR, whatever
+ * the flag, when the wasm bundle predates the export (so callers'
+ * `typeof … === "function"` guards still gate correctly). When active, routes
+ * through the worker.
  */
 export function entitySurfacePixelsFetcher(wasmExports) {
   if (typeof wasmExports.fetchEntitySurfacesPixels !== "function") {
@@ -2235,7 +2763,13 @@ export function entitySurfacePixelsFetcher(wasmExports) {
   // decode-priority (2026-07-10): both branches accept an optional trailing
   // `urgent`, same as modelMeshFetcher — the raw wasm export takes it
   // natively (`Option<bool>`), the worker route forwards it in the body.
-  if (!client.active) return wasmExports.fetchEntitySurfacesPixels;
+  if (!client.active) {
+    if (client.fallbackWaves > 0) {
+      return (dids, paletteId, subPalettes, urgent) =>
+        client._mainEntitySurfacesPixels(wasmExports, dids, paletteId, subPalettes, urgent);
+    }
+    return wasmExports.fetchEntitySurfacesPixels;
+  }
   return (dids, paletteId, subPalettes, urgent) =>
     client.fetchEntitySurfacesPixels(wasmExports, dids, paletteId, subPalettes, urgent);
 }
@@ -2246,7 +2780,21 @@ export function entitySurfacesBatchFetcher(wasmExports) {
     return wasmExports.fetchEntitySurfacesPixelsBatch;
   }
   const client = getBakeWorkerClient();
-  if (!client.active) return wasmExports.fetchEntitySurfacesPixelsBatch;
+  if (!client.active) {
+    if (client.fallbackWaves > 0) {
+      return (flatDids, lens, basePals, flatSubs, tripleCounts, urgent) =>
+        client._mainEntitySurfacesBatch(
+          wasmExports,
+          flatDids,
+          lens,
+          basePals,
+          flatSubs,
+          tripleCounts,
+          urgent,
+        );
+    }
+    return wasmExports.fetchEntitySurfacesPixelsBatch;
+  }
   return (flatDids, lens, basePals, flatSubs, tripleCounts, urgent) =>
     client.fetchEntitySurfacesPixelsBatch(
       wasmExports,

@@ -35,6 +35,16 @@ const SHOTS = [
   { name: "linvak-tukal-close", tele: "@teleloc 0xA21E001A 83 38 560.4", player: [10, 120, 15, 1.5] },
   { name: "holtburg-night-orbit", tele: HOLT, orbit: [32544, 34656, 81.5, 70, 45, 22], hour: 22 },
   { name: "holtburg-night-chase", tele: HOLT, hour: 22 },
+  // S1-EYE (round 3 lane Q2, 2026-10-30; queue batch-R3-S1-2026-10-30.json): appended, the shots above are
+  // unchanged. Each one sets its sky hour (the night shots above leave the override at 22). Teleports are the
+  // queue's grounded hopRoutes.west4 stops; the critter subjects are from the base-DAT bake (LB-local x, y), the
+  // orbit targets 1.5 m (critters) / 6 m (seagulls) above the retail ground (28.0 / 32.0 m).
+  { name: "west4-w1-hop", tele: "@teleloc 0xA8B40025 96 96 53.6", hour: 13 },
+  { name: "critter-insect-cloud-a7b4", tele: "@teleloc 0xA7B4001D 90 96 31.8", hour: 13, orbit: [LB(0xa7b4)[0] + 139.3, LB(0xa7b4)[1] + 124.7, 29.5, 8, 200, 12] },
+  { name: "critter-butterflies-a7b5", tele: "@teleloc 0xA7B4001D 90 96 31.8", hour: 13, orbit: [LB(0xa7b5)[0] + 78.9, LB(0xa7b5)[1] + 65.2, 29.5, 10, 236, 12] },
+  { name: "critter-seagulls-a6b3", tele: "@teleloc 0xA6B40025 96 96 38.5", hour: 13, orbit: [LB(0xa6b3)[0] + 179.8, LB(0xa6b3)[1] + 108.1, 38.0, 25, 180, 12] },
+  { name: "townnetwork-room", tele: "@telepoi TownNetwork", hour: 13 },
+  { ...room("holtburg-room-a9b40121-night", 0xa9b4, 0xa9b40121, 32552.5, 34695.7, 66), hour: 22 },
 ];
 
 const res = [];

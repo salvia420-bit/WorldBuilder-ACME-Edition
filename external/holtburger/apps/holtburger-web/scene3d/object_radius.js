@@ -10,10 +10,31 @@
 // keeps 81/121 = 67% of it, radius 3 keeps 49/121 = 40%, and so do the
 // per-instance walk terms and the bake churn per landblock crossing.
 //
-// FIDELITY. Retail draws objects across the whole `mid_width = 11` grid; the
-// default of 4 (OpenAC's High near tier) trims only the outer ring of the
-// 11x11 grid. `?objRadius=off` restores full-ring objects, and then every
-// function here is a no-op and the ring behaves exactly as before.
+// FIDELITY (corrected 2026-10-30, round-3 plan R3-2 / lessons L4; checked in
+// acclient.c by symbol). Retail builds statics, buildings and scenery ONLY on
+// the 3x3 full-detail ring around the viewer's landblock (9 landblocks),
+// whatever the landscape radius (LScape::SetMidRadius; the graphics presets
+// use mid_radius 3..15, the LScape constructor 5 = an 11x11 grid):
+//   * LScape::get_block_orient gives a block size 1 (8x8 cells, full detail)
+//     only at Chebyshev distance <= 1 from the grid centre; 2 at distance 2,
+//     4 at 3..4 and 8 beyond, which are terrain-only.
+//   * LScape::grab_visible_cells calls CLandBlock::init_buildings and
+//     CLandBlock::init_static_objs on every block of the grid, and each does
+//     nothing unless `side_cell_count == 8` (8 / size, so size 1). The
+//     procedural scenery (CLandBlock::get_land_scenes, under
+//     `use_scene_files`) is built inside init_static_objs's gate.
+//   * LScape::update_block calls CLandBlock::notify_change_size when a block
+//     with side_cell_count 8 gets a size other than 1, and that releases its
+//     land cells' objects and destroys its static objects and buildings
+//     (release_objs, destroy_static_objects, destroy_buildings).
+// So `?objRadius=1` bakes the retail ring (its hide hysteresis keeps a
+// landblock that drifts to d=2 visible until d=3, which retail does not). The
+// default of 4 (81 landblocks) is a BEYOND-RETAIL horizon copied from OpenAC's
+// High near tier (OpenAC goes past retail on purpose, ObjectRingLimit = 4).
+// `?objRadius=off` puts objects on the whole residency ring (11x11 by default,
+// ?pvsRingRadius), which is not retail either; then every function here is a
+// no-op and the ring behaves exactly as before this module. The default stays
+// 4 until the owner rules on the M1 objRadius arms (round-3 plan decision (g)).
 //
 // WHAT IT DOES (Chebyshev landblock distance d to the player's landblock[s]):
 //   * BAKE GATE — cells.js fires the statics and buildings hooks only for
@@ -40,14 +61,14 @@
 //     followed by `afterUnpark`, which re-hides them if the landblock is
 //     still outside the radius.
 
-const OBJ_RADIUS_MIN = 1;   // the player's neighbours always keep their objects
+const OBJ_RADIUS_MIN = 1;   // the player's neighbours always keep their objects (= retail's 3x3)
 const OBJ_RADIUS_MAX = 12;  // matches ?pvsRingRadius's ceiling
-const OBJ_RADIUS_DEFAULT = 4;
+const OBJ_RADIUS_DEFAULT = 4; // beyond retail (see FIDELITY); unchanged until decision (g)
 
 let _setting; // undefined = unread, null = off, else N
 /**
- * `?objRadius=N` (integer 1..12) ⇒ N; `off`/`0`/`false`/`no` ⇒ null (full-ring
- * objects); absent or anything else ⇒ 4 (the default).
+ * `?objRadius=N` (integer 1..12) ⇒ N; `off`/`0`/`false`/`no` ⇒ null (objects on
+ * the whole residency ring); absent or anything else ⇒ 4 (the default).
  */
 export function objRadiusSetting() {
   if (_setting !== undefined) return _setting;

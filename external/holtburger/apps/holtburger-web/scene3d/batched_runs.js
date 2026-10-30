@@ -950,6 +950,9 @@ export function installBatchedRuns(renderer) {
         /** Last completed frame: BatchedMesh calls, ranges asked for, ranges issued
          *  (+ the same two over sorted meshes: sortedSubDraws, sortedIssued). */
         frame: () => ({ ...frame.last }),
+        /** The same five fields written into `out` (returned): no allocation, for a
+         *  per-frame sampler (scripts/perf-worker/lib/hb_page.mjs prefers it). */
+        frameInto: (out) => { const l = frame.last; out.batchedCalls = l.batchedCalls; out.subDraws = l.subDraws; out.issued = l.issued; out.sortedSubDraws = l.sortedSubDraws; out.sortedIssued = l.sortedIssued; return out; },
         get off() { return ctl.off; },
         set off(v) { ctl.off = !!v; },
         /** Live A/B for ?batchedRunsSorted: sorted buckets back on three's draw. */

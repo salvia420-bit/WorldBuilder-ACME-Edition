@@ -1,0 +1,17 @@
+<!doctype html>
+<!-- tools/webgpu_probe — standalone WebGPU capability probe (round 3 R3-1 / R3-12 input, 2026-10-30).
+     Not part of the client: no game code, no login, no DATs. Query: ?draws=1000&sec=5&rounds=2.
+     Driver: tools/webgpu_probe/run.mjs (1070, off-screen, muted, fresh profile). -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>holtburger WebGPU probe</title>
+<style>body{margin:0;background:#111;color:#ccc;font:12px monospace} canvas{display:block;width:640px;height:360px} #log{white-space:pre;padding:6px}</style>
+</head>
+<body>
+<canvas id="gpu"></canvas>
+<canvas id="gl"></canvas>
+<div id="log"></div>
+<script type="module" src="./probe.js"></script>
+</body>
+</html>

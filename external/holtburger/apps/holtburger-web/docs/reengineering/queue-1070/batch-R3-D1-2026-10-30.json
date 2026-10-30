@@ -1,0 +1,675 @@
+{
+ "schema": "hb-1070-queue-v1",
+ "batch": "R3-D1",
+ "created": "2026-10-30",
+ "owner": "owner (OWNER-RUN: queued for the owner's own 1070 sessions, two or three windows when the 1070's user is away; never self-initiated by an agent)",
+ "preparedBy": "orchestrator (Claude), 2026-10-30",
+ "source": "Owner, 2026-10-30, after the bench-3 reps came back INVALID: \"so kill toolkit and lets measure the other run and go with the winning settings for all this work we are doing. we have to progress here\"",
+ "sessionRules": "vistest-preamble-v1",
+ "sessionRulesInline": [
+  "Inherit every rule of batch-P0-gpu-resident-2026-10-22.json sessionRulesInline verbatim (MODE T off-screen + muted, OWNER-RUN, kill only by user-data-dir, ?nosw=1, fresh profile per arm-rep, uncapped frames + targetFps=0, release wasm only, >= 65 s between boots on one account, reject-never-average). Read memory/fleet-runbooks.md before driving the 1070.",
+  "Tunnel: -L 9333:127.0.0.1:9333 -R 8765:127.0.0.1:8765 -R 8080:127.0.0.1:8080 -R 8766:127.0.0.1:8766 (the B0 snapshot server on :8766). M1c adds -R 3000:127.0.0.1:3000 -R 9090:127.0.0.1:9090 for its window only and drops them afterwards.",
+  "Build under test = B0: a NEW frozen snapshot (scripts/perf-worker/hb-mksnap.sh <name>, then replace its pkg symlink by a real copy of a RELEASE pkg/) of the MERGED round-3 phase-A tree (the round-2 fixes included). It must carry the readers of occlusionCull=rigs, rigPoseSkip, skipEmptyPasses, uploadWarmDraw, animSceneryBatch and bakeFallbackWaves (`b0Snapshot` below), checked in M1-PRE by `hbbench.mjs --check-snapshot` against the snapshot's OWN code files, never only url-flags.md: hb-mksnap.sh symlinks docs/ into the live tree, so the url-flags.md a snapshot shows always reads current. Served with `python3 scripts/serve.py --bind 127.0.0.1 --port 8766 --check` from the snapshot. On B0 `rustParticles` is default OFF (16 scene-core flags on): an empty-flag arm is the 16-on config, and any arm that depends on another flag value names it.",
+  "Harness v2 protocol (plan section 4), all applied by hbbench.mjs / hbanatomy.mjs unless an arm overrides it: skytime=13 and DayGroup 0 ('Sunny', applied through setGameDayOverride(39, 10)); adaptiveRes=off, targetFps=0, renderScale=1, and gpuGovernor=off once R3-11's flag has a url-flags.md row (hbbench detects it); 1920x1080 INNER window unless the arm says 1280,720; interleaved, rotated order; the 65 s login cool-down; box samples (hbwho.ps1 + top processes by CPU) before, between and after segments. `--compat v1` is ONLY for RC-BENCH v2 reps 2-3 on the rep-1 snapshot (batch-RC-rust-scene-core-2026-10-26.json), never for these items: it keeps the pre-v2 step sequence exactly, so its box samples run only before launch and after the tour (hbreport also reads the bench dir's boxwatch.log for the samples in between).",
+  "Every M1a session item (SWEEP, CEILING, LAYERMIP) BOOTS its own session through lib/hb_boot.mjs bootArm (fresh profile, the B0 snapshot on :8766, skytime=13, DayGroup 0, renderScale=1, adaptiveRes=off, targetFps=0, 1920x1080 INNER, the run-JSON asserts), never through hbsess.mjs (its boot serves :8765 = the live tree, sets the OUTER window and pins no DayGroup). The attach modes (`hbsweep.mjs` / `hbanatomy.mjs --attach`) are for the laptop tab check and ad-hoc looks; they apply DayGroup 0 and record every pin problem (`session.problems`).",
+  "Run without the gate override (gate-owner-ok.txt) whenever possible so hbgate.ps1's idle rule applies; rule V below decides validity from the run JSON either way.",
+  "One real-world tab at a time; the WebAC tab (M1c) never runs alongside one of ours. No sound may reach the 1070's user.",
+  "Before the first arm of a session: `python3 -I scripts/perf-worker/tests/test_hbreport.py` and `node scripts/perf-worker/tests/hb_v2.test.mjs` green on the laptop (the report reproduces the 10-29 numbers)."
+ ],
+ "accounts": "Bench account tailnet1 (hbbench default). M1c needs a SECOND Developer-level account for WebAC (or run the two clients one after the other); credentials only in the URL / environment at run time, never in this file.",
+ "urlBase": "http://127.0.0.1:8766/apps/holtburger-web/index.html",
+ "b0Snapshot": {
+  "what": "S1 snapshot = a frozen snapshot (scripts/perf-worker/hb-mksnap.sh <name>) of the MERGED, GATED round-3 tree: phase A (lanes P, R, T, K-rework) and round 3 a2 (lanes S, R2, K2, W2, H2) merged and the full JS gate green, with its pkg/ replaced by a real copy of a RELEASE pkg. B0 serves if it was cut after the a2 merge (then every reader below is in it); otherwise cut a new snapshot. A snapshot that predates a flag, or predates an a2 fix of it, serves a client that ignores the flag or runs its pre-fix code, and the arm is silently an A/A or measures the wrong code.",
+  "check": "node scripts/perf-worker/hbbench.mjs --arms apps/holtburger-web/docs/reengineering/queue-1070/batch-R3-D1-2026-10-30.json --check-snapshot /mnt/wbterminal2/hb-snap/<D1 snapshot>",
+  "rule": "Each requirement's file must exist in the snapshot, be the snapshot's own copy (no symlink anywhere on its path) and match every pattern (JS RegExp source). The check refuses the live tree itself and never reads url-flags.md. Patterns pin the a2 versions where an a2 lane changed the reader's module (route probe, nullRender install, generation keying, compaction, the legacy re-show fix), so a phase-A-only snapshot fails.",
+  "requiredReaders": [
+   {
+    "flag": "rigPoseSkip",
+    "file": "apps/holtburger-web/scene3d/motion/motion_sequence.js",
+    "patterns": [
+     "rustFlag\\(\"rigPoseSkip\", false\\)",
+     "probed: 0,",
+     "routeChanged: 0,",
+     "window\\.__rigPoseSkip = \\{ stats: rigPoseSkipStats, verify: rigPoseSkipVerify \\}"
+    ],
+    "why": "S1-BENCH RPS-on, S1-DIAG G-RPS-verify; lane S route probe (probed / routeChanged)"
+   },
+   {
+    "flag": "rigPoseSkip (ragdoll announcement gated, lane S)",
+    "file": "apps/holtburger-web/scene3d/entities.js",
+    "patterns": [
+     "if \\(rigPoseSkipEnabled\\(\\)\\) invalidateRigPose\\(inst\\.parts\\);"
+    ],
+    "why": "flag off = call-for-call HEAD on the default arms"
+   },
+   {
+    "flag": "skipEmptyPasses",
+    "file": "apps/holtburger-web/scene3d/skip_empty_passes.js",
+    "patterns": [
+     "rustFlag\\(\"skipEmptyPasses\", false\\)",
+     "window\\.__skipEmptyPasses = \\{"
+    ],
+    "why": "S1-BENCH SEP-out, S1-INDOOR"
+   },
+   {
+    "flag": "skipEmptyPasses (pipeline wiring)",
+    "file": "apps/holtburger-web/scene3d/atmosphere_pipeline.js",
+    "patterns": [
+     "if \\(skipEmptyPassesEnabled\\(\\)\\) installSkipEmptyRenderPass\\(worldRenderPass\\);"
+    ],
+    "why": "the reader alone installs nothing"
+   },
+   {
+    "flag": "uploadWarmDraw",
+    "file": "apps/holtburger-web/scene3d/upload_warm_draw.js",
+    "patterns": [
+     "rustFlag\\(\"uploadWarmDraw\", false\\)",
+     "prunedFrames: 0, depthCapped: 0,",
+     "if \\(opts && opts\\.nullRender\\) return null;"
+    ],
+    "why": "S1-BENCH UWD-on, S1-ROUTE R-UWD, S1-DIAG G-UWD-up; lane R2 rework (stack re-check, depth cap, nullRender)"
+   },
+   {
+    "flag": "uploadWarmDraw (index.js install)",
+    "file": "apps/holtburger-web/scene3d/index.js",
+    "patterns": [
+     "\\[worldRoot, terrainGroup, buildingsGroup, staticsGroup, cellsGroup, entitiesGroup\\], \\{ nullRender \\}\\)"
+    ],
+    "why": "the install with lane R2's nullRender option"
+   },
+   {
+    "flag": "animSceneryBatch",
+    "file": "apps/holtburger-web/scene3d/animated_scenery.js",
+    "patterns": [
+     "rustFlag\\(\"animSceneryBatch\", false\\)",
+     "attr\\.__hbAsUnsent === true"
+    ],
+    "why": "S1-BENCH ASB-on, S1-DIAG, S1-CTX; the K2 legacy re-show fix (default path) that S1-EYE's before / after pair checks"
+   },
+   {
+    "flag": "animSceneryBatch (K2 consumer)",
+    "file": "apps/holtburger-web/scene3d/gpu_batch/anim_scenery_batch.js",
+    "patterns": [
+     "contextResets: 0,",
+     "BATCH_OVERLAP_GIVEUP_FRAMES = 600",
+     "el\\.addEventListener\\(\"webglcontextrestored\", onEvent, false\\)",
+     "let _remap = null;"
+    ],
+    "why": "K2: GL-context generation teardown (S1-CTX), compacted indexed merge; K rework: never-drawn give-up"
+   },
+   {
+    "flag": "animSceneryBatch (kit generation)",
+    "file": "apps/holtburger-web/scene3d/gpu_batch/kit.js",
+    "patterns": [
+     "export function kitContextGeneration\\("
+    ],
+    "why": "K2: kit pages keyed by GL-context generation"
+   },
+   {
+    "flag": "bakeFallbackWaves",
+    "file": "apps/holtburger-web/scene3d/bake_worker_client.js",
+    "patterns": [
+     "\\.get\\(\"bakeFallbackWaves\"\\)",
+     "window\\.__bakeFallbackWaves = \\{ stats: \\(\\) => this\\.fallbackWaveStats\\(\\) \\}",
+     "window\\.__bakeWorkerSeq = \\(\\) =>"
+    ],
+    "why": "S1-BW0, S1-ROUTE R-BFW, S1-DIAG G-BFW-wkr (lane W2); __bakeWorkerSeq is the bakeWorker=0 arms' gate"
+   },
+   {
+    "flag": "indoorLandscapeGate diag (premise of S1-INDOOR)",
+    "file": "apps/holtburger-web/scene3d/indoor_landscape_gate.js",
+    "patterns": [
+     "skippedFrames: 0,",
+     "window\\.__indoorLandscapeGateDiag = \\(\\) =>"
+    ],
+    "why": "s1.eval.js ranks headings by skippedFrames in both arms"
+   },
+   {
+    "flag": "batchedRuns frameInto (lane H2)",
+    "file": "apps/holtburger-web/scene3d/batched_runs.js",
+    "patterns": [
+     "frameInto: \\(out\\) =>"
+    ],
+    "why": "the harness v2 probe's non-allocating sampler (scripts/perf-worker/lib/hb_page.mjs uses it when present); confirms the a2 merge"
+   },
+   {
+    "flag": "release pkg (real copy)",
+    "file": "apps/holtburger-web/pkg/holtburger_web_bg.wasm",
+    "patterns": [],
+    "why": "hb-mksnap.sh symlinks pkg/ into the live tree; the snapshot must freeze its own release wasm (release-ness: S1-PRE wasm_profile.mjs and hbbench's served-wasm abort)"
+   },
+   {
+    "flag": "occlusionCull=rigs",
+    "file": "apps/holtburger-web/scene3d/occlusion_cull.js",
+    "patterns": [
+     "if \\(v === \"rigs\"\\) return \"rigs\";",
+     "get mode\\(\\) \\{",
+     "cellsSkipped \\+= 1"
+    ],
+    "why": "M1b-OCC O-rigs: the mode reader, plus the window.__occlusionCull.mode getter and the cellsSkipped counter its arm gate reads"
+   },
+   {
+    "flag": "hotTerrainShared",
+    "file": "apps/holtburger-web/scene3d/loop.js",
+    "patterns": [
+     "rustFlag\\(\"hotTerrainShared\", false\\)"
+    ],
+    "why": "D1 F2-terrainShared"
+   },
+   {
+    "flag": "hotWeaponFxSync",
+    "file": "apps/holtburger-web/scene3d/vfx/weapon_fx.js",
+    "patterns": [
+     "rustFlag\\(\"hotWeaponFxSync\", false\\)"
+    ],
+    "why": "D1 F2-weaponFx"
+   },
+   {
+    "flag": "hotGrassCull",
+    "file": "apps/holtburger-web/scene3d/grass_gpu_place.js",
+    "patterns": [
+     "rustFlag\\(\"hotGrassCull\", false\\)"
+    ],
+    "why": "D1 F2-grassCull"
+   },
+   {
+    "flag": "rustEntityWorld",
+    "file": "apps/holtburger-web/scene3d/entity_world.js",
+    "patterns": [
+     "rustFlag\\(\"rustEntityWorld\", false\\)"
+    ],
+    "why": "D1 S-rustEntityWorld (its arm gate, projections === 1, catches a pre-fix install)"
+   }
+  ]
+ },
+ "boxEvents": [
+  {
+   "id": "seagate-toolkit-2026-10-29",
+   "kind": "cpu-hog",
+   "from": "2026-10-29T00:00:00-02:30",
+   "until": "2026-10-29T23:00:00-02:30",
+   "what": "Seagate Toolkit held one CPU core at 100% on the 1070 box until the owner had it stopped at ~23:00 on 10-29 (plan section 1.1; bench 1 withdrawn, profile pair 1 caveated). Start unknown: bench 1 began 22:06; the window opens at midnight to be safe.",
+   "source": "orchestrator session log 2026-10-29; boxwatch.log could not see it (no CPU sampling)"
+  }
+ ],
+ "decisionRules": [
+  {
+   "rule": "V",
+   "name": "validity",
+   "text": "An arm-rep is INVALID, re-queued and never averaged, if any of these hold: `idle` < 60 s in any boxwatch sample; `gpu3d_other` > 5%; any non-test process using >= 1 CPU core-equivalent in any sample [D threshold; the bench-1 Seagate Toolkit case]; entity count differs from arm A by > 10% (R3-0 server-state pin) [D threshold]; console errors > 0; dev wasm; wrong adapter. If two scheduled windows yield no valid reps for an arm, accept 5 reps with a reported A/A noise in place of the idle gate, and mark the result \"noisy box\".",
+   "implementation": "hbreport.py rule_v / assess (`--noisy-box` for the fallback); the >= 1 core test reads >= 0.95 core-equivalents over the ~2 s sample window; a rep overlapping a boxEvents cpu-hog entry is CONTAMINATED; a rep with no box sample at all is INVALID (unverified)."
+  },
+  {
+   "rule": "R1",
+   "name": "noise",
+   "text": "noise = max(|A - A'|, half of A's rep spread). A delta is real only if it exceeds max(2 x noise, 3% fps or 0.5 ms).",
+   "implementation": "hbreport.py noise_of / compare (frame-count metrics use a floor of 1)."
+  },
+  {
+   "rule": "R2",
+   "name": "scoring",
+   "text": "Score on the binding thread's ms (main busy per frame, CrGpuMain WEBGL per present, GPU ms), plus still / moving / tour fps, p50 / p95, h100 / h250 / max / jank. Never on draw counts alone; draw counts are heading-binned and reported with multidraw ranges."
+  },
+  {
+   "rule": "R3",
+   "name": "keep",
+   "text": "A perf change goes or stays default-on only if all five hold: (i) its binding-thread ms moved by >= 50% of the prediction; (ii) at least one of still / moving / tour fps improved by a real delta, and no segment regressed by one; (iii) hitch metrics not worse by a real delta; (iv) 0 console errors; (v) the look gate (R4) passed. Otherwise it goes off and keeps its code only if a later step needs it. INCONCLUSIVE gets 3 more reps once, then goes off. For a hitch change (R3-2's upload draw and worker-wait fixes, scored on hitch metrics per R3-2), (i) and (ii) read on its predicted hitch metrics instead: first-turn max and h100 better by a real delta, and no still / moving / tour fps segment worse by one.",
+   "implementation": "hbreport.py r3_keep (predictions from each arm's `predict`, resolved in the bench dir's own queue item; look gate from `--look ARM=pass|fail`; binding-thread ms = the median over each arm's VALID hbanatomy reps under `--anatomy` (rule V per rep), the move judged real by R1 with its noise from those reps). The hitch-change reading of (i) and (ii) (the sentence added 2026-10-30) is NOT applied by r3_keep: no M1 arm is a hitch change; score one by hand from the first-turn max and h100 rows."
+  },
+  {
+   "rule": "R4",
+   "name": "look",
+   "text": "WHAT kernels: bit-exact, or <= 1 f32 ulp, in node or cargo; array layers byte-equal on the 1070 readback. HOW changes: rc-eye stills at 1080p with `skytime=13`, compared by `rc_eye_diff.py`, with particles and sway masked. Default threshold: <= 1% of pixels over 8/255 and <= 0.1% over 32/255; each step may set a tighter one. Every heatmap gets a structural review. Then the batched owner eye test; the owner can veto."
+  },
+  {
+   "rule": "R5",
+   "name": "routing",
+   "text": "The binding thread is the largest of main busy per frame, CrGpuMain per present, and GPU ms, at the tier's resolution. If GPU ms >= 0.9 x frame time, GPU levers go first. If CrGpuMain >= main, GL-command levers go first (batching, HUD raster). Otherwise main-thread levers. Never claim fps for a lever on a thread that is not binding; book its ms as headroom.",
+   "implementation": "hbreport.py r5_route / `anatomy` subcommand (ledger v0)."
+  },
+  {
+   "rule": "R6",
+   "name": "stop",
+   "text": "A structural lane that delivers < 50% of its predicted ms at stage A stops before stage B and gets a written post-mortem.",
+   "implementation": "hbreport.py r6_stop."
+  },
+  {
+   "rule": "R7",
+   "name": "tier presets",
+   "text": "A tier preset change ships only if it moves the over-budget thread under its ceiling, or is look-neutral and cheaper. Ultra looks change only with explicit owner OK. This includes `objRadius` and any governor knob."
+  },
+  {
+   "rule": "R8",
+   "name": "probe gate",
+   "text": "If the M1 structure-ceiling probe's V1/V2 do not cut main-thread world-render ms and CrGpuMain WEBGL ms by >= 40% against V0 on the 1070, R3-4 and R3-5 are re-scoped before any L-sized build: smaller stage A, or GPU-side levers first under R5.",
+   "implementation": "hbreport.py ceiling (the probe JSON + `trace-split --marks hbSC:` of its trace)."
+  },
+  {
+   "rule": "R9",
+   "name": "WebGPU",
+   "text": "Go only on the R3-12 criteria plus the owner's charter amendment."
+  },
+  {
+   "rule": "R10",
+   "name": "reference clients",
+   "text": "WebAC, OpenAC and upstream numbers are bounds that say which half of the frame to attack. They are never targets, never a pass/fail gate for a step, and never mixed into B0 comparisons. A reference reading on a different machine or content is quoted with that machine and content."
+  },
+  {
+   "rule": "D1",
+   "name": "go with the winners (owner directive 2026-10-30)",
+   "text": "Written 2026-10-30 BEFORE the run. Owner, 2026-10-30, after the bench-3 reps came back INVALID: \"so kill toolkit and lets measure the other run and go with the winning settings for all this work we are doing. we have to progress here\". A flag flips to DEFAULT ON (its `=off` escape kept) when ALL hold: (1) rule V: valid reps (or the noisy-box fallback: >= 5 reps + A/A, idle gate the only failure); its arm gate true in every rep; (2) no fps segment (still / moving / tour) and no hitch row (firstTurn max, h100, h250, jank; tour h100 / max) worse than A by a real R1 delta; (3) 0 console errors; (4) it is CHEAPER: one fps segment or (uploadWarmDraw) the firstTurn max / h100 better by a real R1 delta, OR its main-thread busy ms per frame lower by a real R1 delta over the D1-ANATOMY reps (the instrument that resolves 0.1 ms; fps cannot); (5) its pass items: R4 look per S1-EYE / M1 (animSceneryBatch, occlusionCull=rigs, cellStaticMerge, statArrayMerge), S1-CTX + S1-DIAG for animSceneryBatch, S1-INDOOR for skipEmptyPasses (SEP-out is only its outdoor no-regression control), S1-ROUTE for uploadWarmDraw and bakeFallbackWaves (with S1-BW0). D-stack: when it passes (1)-(4) as a whole, every stacked flag flips except one whose own arm regressed by a real delta (then the stack is re-read without it). A flag that fails stays OFF; rustEntityWorld's code is deleted unless it (or the stack) wins (M1b-STRUCTURE rule). Never flipped by D1: partDegrade and objRadius (owner WHAT decisions (c), (g)), batchedRuns=off (a price), rustWorld (watch-only), rustParticles (R3-7 replaces it). Deviation from the plan's R3, by the owner's directive: R3 (ii)'s 'one fps segment improved by a real delta' is satisfied by (4)'s main-thread reading for flags predicted under the fps floor."
+  }
+ ],
+ "suggestedOrder": [
+  "D1-PRE",
+  "D1-BENCH (3 reps; 5 when the owner is at the box)",
+  "D1-ANATOMY",
+  "S1-INDOOR, S1-ROUTE, S1-BW0, S1-CTX, S1-DIAG, S1-EYE (batch-R3-S1, as written)",
+  "D1-REPORT"
+ ],
+ "items": [
+  {
+   "id": "D1-PRE",
+   "title": "M1-PRE + S1-PRE as written, on the D1 snapshot",
+   "gate": "every check green, or the session stops",
+   "recipe": [
+    "Every step of batch-R3-M1 M1-PRE and batch-R3-S1 S1-PRE, with this file's --check-snapshot in place of theirs. S1-PRE recipe [5] (the laptop tab check of s1.eval.js) gates only the items that run s1.eval.js (S1-INDOOR / ROUTE / CTX / DIAG / EYE): it runs before the first of those, not before D1-BENCH, which scores with hbbench alone.",
+    "Box: hbwho.ps1 shows no Seagate Toolkit (the owner had it stopped 2026-10-30 15:3x; it restarts with Windows)."
+   ]
+  },
+  {
+   "id": "D1-BENCH",
+   "kind": "bench",
+   "title": "every built default-OFF perf flag of rounds 2-3 alone, plus the exact stack, vs defaults + A/A at Holtburg ultra, interleaved",
+   "boxMode": "1070, MODE T, uncapped, fresh profile per arm-rep (hbbench does both). OWNER-RUN.",
+   "arms": [
+    {
+     "name": "A",
+     "flags": "",
+     "note": "the D1 snapshot's defaults: the reference arm",
+     "from": "R3-S1 S1-BENCH"
+    },
+    {
+     "name": "A-AA",
+     "flags": "",
+     "note": "A again: the A/A arm (R1 noise)",
+     "from": "R3-S1 S1-BENCH"
+    },
+    {
+     "name": "RPS-on",
+     "flags": "rigPoseSkip=on",
+     "gate": "!!window.__rigPoseSkip && window.__rigPoseSkip.stats().enabled === true && window.__rigPoseSkip.stats().skipped > 0",
+     "gateInfo": "window.__rigPoseSkip ? window.__rigPoseSkip.stats() : null",
+     "predict": {
+      "thread": "main",
+      "ms": -0.06,
+      "tag": "[D]",
+      "source": "lane S 2026-10-30: ~0.03-0.1 ms/frame at Holtburg against the <= 0.2 ms ceiling (plan R3-2: rig pose 0.20 ms/frame [M, 10-29 profile pairs]); node bench with the route probe -15% of pose cost at a 2:1 skip rate, -42...-49% at 4:1, -67...-71% when the frame never changes [M laptop node]"
+     },
+     "scored": "main busy per frame (S1-ANATOMY RPS-on minus A; pose share); still / moving / tour fps; p50 / p95; firstTurn max / h100; tour h100 / h250 / max / jank",
+     "diagReads": [
+      {
+       "read": "gateInfo = __rigPoseSkip.stats() after the settle (every rep); `s1_eval_report.py bench-checks` prints its skip rate since boot",
+       "pass": "enabled true; skipped > 0; routeChanged === 0; on the kernel route (?rustRig default on) probed within 10% of skipped [D threshold] (lane S: 'On the kernel route expect probed ~= skipped and routeChanged 0')",
+       "fields": {
+        "apps/holtburger-web/scene3d/motion/motion_sequence.js": [
+         "enabled",
+         "posed",
+         "skipped",
+         "probed",
+         "routeChanged"
+        ],
+        "scripts/perf-worker/s1_eval_report.py": [
+         "skip_rate",
+         "bench_checks"
+        ]
+       }
+      },
+      {
+       "read": "END of the run (lane P asked for the skip rate): hbbench reads gateInfo only after the settle, so the end-of-run stats() come from the eval runs of this flag, which read stats() at their start and end (result.start / result.end.rigPoseSkip) and report the difference (result.rigPoseSkipRate: posed, skipped, probed, routeChanged, rate): S1-DIAG G-RPS-rate (40 s still at the bench orbit pose, once per S1 window, next to that window's RPS-on reps) and G-RPS-verify (the west route)",
+       "pass": "rigPoseSkipRate.rate reported for the owner (the share of poses skipped at Holtburg; lane S's node bench assumed 2:1 at 60 Hz with 30 fps anims); routeChanged delta 0",
+       "fields": {
+        "apps/holtburger-web/scene3d/motion/motion_sequence.js": [
+         "posed",
+         "skipped",
+         "probed",
+         "routeChanged",
+         "verified",
+         "violations"
+        ],
+        "scripts/perf-worker/s1.eval.js": [
+         "rigPoseSkipRate",
+         "skipRate"
+        ]
+       }
+      },
+      {
+       "read": "S1-DIAG G-RPS-verify: __rigPoseSkip.verify(true) over the west route, stats() at the end",
+       "pass": "verified > 0 and violations === 0 (the live check of the writer audit, lane P)",
+       "fields": {
+        "apps/holtburger-web/scene3d/motion/motion_sequence.js": [
+         "verified",
+         "violations",
+         "verify"
+        ]
+       }
+      }
+     ],
+     "prediction": "[D] ~0.03-0.1 ms/frame main at Holtburg, ceiling 0.2 ms (lane S, with the route probe at ~0.15 us per skipped kernel-route rig); fps within noise; hitch rows unchanged.",
+     "look": {
+      "class": "EXACT",
+      "why": "every position / quaternion / Euler / matrix / matrixWorld Object.is-equal to flag-off after every call and tick (tests/rig_pose_skip.test.mjs, tests/rust_rig_parity.test.mjs S + E+skip + F/G)",
+      "rcEye": [
+       "No rc-eye needed (lane P). Optional: one Holtburg orbit no-change pair, on vs off, skytime=13."
+      ]
+     },
+     "decisionRule": "R3 (i)-(v) as written; (i) = S1-ANATOMY main busy vs -0.06 ms; (v) = pass when G-RPS-verify violations === 0. Written 2026-10-30 BEFORE the run: the prediction is below R1's 0.5 ms floor and ~0.3% of a ~22 ms frame (R1's fps floor is 3%), so (i) and (ii) both hold only if the 1070 delivers several times the node figure; INCONCLUSIVE gets 3 more reps once, then the flag stays off. R3's 'keeps its code only if a later step needs it': R3-4 needs the key ('An entity whose rigPoseSkip key is unchanged writes neither', plan R3-4), so the code stays either way.",
+     "from": "R3-S1 S1-BENCH"
+    },
+    {
+     "name": "ASB-on",
+     "flags": "animSceneryBatch=on",
+     "gate": "typeof window.__animSceneryDiag === 'function' && !!window.__animSceneryDiag().batch",
+     "gateInfo": "typeof window.__animSceneryDiag === 'function' ? (window.__animSceneryDiag().batch || null) : null",
+     "predict": {
+      "thread": "main",
+      "ms": -0.075,
+      "tag": "[D]",
+      "source": "plan R3-3 Expected 1070 gain: anim-inst 19 -> ~4-6 draws, -0.05...-0.1 ms [D]"
+     },
+     "scored": "main busy per frame (S1-ANATOMY); still / moving / tour fps; firstTurn max / h100 (class-program compile stalls); async-link count and the program-key diff (S1-ANATOMY); kit readings (S1-DIAG G-ASB)",
+     "diagReads": [
+      {
+       "read": "gateInfo = __animSceneryDiag().batch after the settle (every rep)",
+       "pass": "byStatus.active > 0; byStatus.overlap === 0 (drained); draws > 0; legacyReasons['never-drawn'] absent or 0; contextResets 0; kit.budget recorded (bytesPerFrame 8 MiB, admitsPerFrame 16, bytes, admits, refused, maxFrameBytes, byKind {layer, rowGrow, geometry}); kit.pages bytes + generation recorded",
+       "fields": {
+        "apps/holtburger-web/scene3d/gpu_batch/anim_scenery_batch.js": [
+         "byStatus",
+         "active",
+         "overlap",
+         "draws",
+         "legacyReasons",
+         "contextResets",
+         "kit"
+        ],
+        "apps/holtburger-web/scene3d/gpu_batch/kit.js": [
+         "budget",
+         "bytesPerFrame",
+         "admitsPerFrame",
+         "pages"
+        ],
+        "apps/holtburger-web/scene3d/gpu_batch/upload_budget.js": [
+         "bytes",
+         "admits",
+         "refused",
+         "maxFrameBytes",
+         "byKind",
+         "layer",
+         "rowGrow",
+         "geometry"
+        ],
+        "apps/holtburger-web/scene3d/gpu_batch/array_pages.js": [
+         "generation"
+        ]
+       }
+      },
+      {
+       "read": "S1-DIAG G-ASB (west route, pollBatch + countUploads) and G-ASB-pomoff (diag)",
+       "pass": "never-drawn 0 after the route (non-zero = a class program's live key differs from the prewarmed one and linked at first draw, lane K); per hop batchOverlap.maxOverlapRunMs <= ~1000 ms (lane K: 'overlap must drain to 0 within about a second of the first landblock'); kit.budget.byKind.geometry = batch geometry bytes actually uploaded, charged on the show frame, compacted to about the referenced vertices (lane K2); unitReasons['array:shader-chain'] with pom=off vs on shows whether POM blocks ARRAY at ultra (lane K)",
+       "fields": {
+        "apps/holtburger-web/scene3d/gpu_batch/anim_scenery_batch.js": [
+         "legacyReasons",
+         "unitReasons",
+         "byStatus",
+         "overlap",
+         "kit"
+        ],
+        "apps/holtburger-web/scene3d/gpu_batch/upload_budget.js": [
+         "byKind",
+         "geometry"
+        ]
+       }
+      },
+      {
+       "read": "S1-ANATOMY `hbreport.py program-diff A/anatomy.json ASB-on/anatomy.json`",
+       "pass": "adds at most 8 keys, each carrying `|hbBatch1|` (lane K: `hb|d0|c0|p0|l1|a0|b0|f0|s0|k0|v|hbBatch1|{opaque,alphaTest}.lit.{double,front}|aiPose|n{0,1}`; SAME draws add none); any other added or removed key is a finding to explain (light count / fog / env bits)",
+       "fields": {
+        "scripts/perf-worker/hbreport.py": [
+         "program_diff"
+        ],
+        "apps/holtburger-web/scene3d/gpu_batch/class_materials.js": [
+         "hbBatch1"
+        ]
+       }
+      }
+     ],
+     "prediction": "[D] anim-inst 19 -> ~4-6 draws (insect cloud 0x020004B0 13 -> 2-3), -0.05...-0.1 ms main (plan R3-3); first-turn hitch not worse (class programs prewarmed via shader_prewarm); the session's real product is the kit's row-upload / layer-admit / geometry readings on the real driver before R3-4 depends on them (plan R3-3).",
+     "look": {
+      "class": "eye-test",
+      "rcEye": [
+       "Eye-test class (plan R3-3 Look risk: 'Texels are byte-identical and the pose math is the same. Draw order among a setup's parts changes; coplanar ties are rare in critters'); R4 default threshold (<= 1% of pixels over 8/255 and <= 0.1% over 32/255, particles and sway masked), a structural review of every heatmap, then the owner.",
+       "Holtburg orbit at skytime=13, flag on/off: insect cloud 0x020004B0 close-up; butterflies 0x02000493 / 0x02000494; seagulls 0x020005AC over water; birds 0x020005A9 (lane K).",
+       "Close-ups in rc-eye.mjs: critter-insect-cloud-a7b4 (0x020004B0 at 0xA7B4 139.3 124.7), critter-butterflies-a7b5 (0x02000493 at 0xA7B5 78.9 65.2 in front, 0x02000494 at 109.2 85.7 behind it), critter-seagulls-a6b3 (0x020005AC at 0xA6B3 179.8 108.1); the player stands at hopRoutes.west4 w2 / w3.",
+       "Windmill 0x020003E5 at LB 0x8093 (16.0N 0.8E): 5 parts / 5 surfaces, incl. ClipMap + solid (lane K).",
+       "0x02000BBF at night: its luminous surface stays a SAME / legacy draw (lane K).",
+       "Walk away until the critter landblocks park, then come back: no ghosts, no blink at re-show (lane K).",
+       "A BC7 upgrade landing: the texture-swap teardown / rebuild must not blink (lane K).",
+       "The first appearance of each batch right after boot: no part vanishes for a frame; legacy stays until the class draw (lanes K, K2).",
+       "The context-loss arm (S1-CTX): no frame with wrong or black critter texels after the restore; no blink while the restored context links (lanes K, K2).",
+       "Subjects in the base-DAT bake [M] (~/hb-serve/dist/current/scenery, LB-local x y z): insect cloud 0x020004B0 at 0xA7B4 (139.3, 124.7, 28.0) and 0xA8B5 (19.3, 19.3, 28.0); butterflies 0x02000493 at 0xA7B5 (78.9, 65.2, 28.0), 0x02000494 at 0xA7B5 (109.2, 85.7, 28.0); seagulls 0x020005AC at 0xA6B3 (179.8, 108.1, 32.0). 0x020005A9, 0x020003E5 and 0x02000BBF are not in the generated-scenery layer of these landblocks: framed by the shooter from lane K's descriptions."
+      ]
+     },
+     "decisionRule": "R3 (i)-(v) as written; (i) = S1-ANATOMY main busy vs -0.075 ms; (v) = the S1-EYE ASB list under R4. Written 2026-10-30 BEFORE the run: like rigPoseSkip, the predicted ms is below R1's floors, so a default flip from this arm alone is unlikely; R6 does not apply (R3-3 proves the kit, it is not a stage-A structural lane). Any never-drawn > 0, an undrained overlap or a blink in S1-CTX is a defect to fix before any re-run, whatever the timing says.",
+     "from": "R3-S1 S1-BENCH"
+    },
+    {
+     "name": "UWD-on",
+     "flags": "uploadWarmDraw=on",
+     "gate": "!!window.__uploadWarmDraw && window.__uploadWarmDraw.enabled === true",
+     "gateInfo": "window.__uploadWarmDraw ? window.__uploadWarmDraw.stats() : null",
+     "scored": "HITCH: firstTurn max and h100 (primary, plan R3-2), h250, jank; tour h100 / h250 / max / jank; fps segments only as a no-regression check; plus S1-ROUTE R-UWD hop windows",
+     "diagReads": [
+      {
+       "read": "gateInfo = __uploadWarmDraw.stats() after the settle (every rep)",
+       "pass": "enabled; draws > 0 and ready true (the two unlit variant programs linked and the warm ran during boot / settle)",
+       "fields": {
+        "apps/holtburger-web/scene3d/upload_warm_draw.js": [
+         "enabled",
+         "draws",
+         "ready"
+        ]
+       }
+      },
+      {
+       "read": "S1-DIAG G-UWD-up vs G-A-up (one rep each, countUploads): GL upload bytes per hop window, read separately: result.hops[i].uploads.arrive (the @teleloc command to the landing + tunnel end), .turn (the 12 s turn), .content (after the turn until content is quiet); result.route.uploads sums them over the 5 hops (buffer bytes = bufferData + bufferSubData; turnShareOfBufferBytes = turn / (arrive + turn + content)); `s1_eval_report.py --item S1-DIAG --ref G-A-up` prints the table. Plus the end diag",
+       "pass": "prediction check (lane R: 'buffer uploads move to arrival frames'): G-UWD-up's turnShareOfBufferBytes below G-A-up's, i.e. buffer bytes leave the turn windows for the arrive (and content) windows. Content that streams in DURING a turn is warmed in that same turn window, so only content that arrived before the turn can move: a share that does not drop is a finding to explain next to the hitch verdict, not a defect by itself. Defects: depthCapped !== 0 (lane R2: 'If it is nonzero, raise UPLOAD_WARM_MAX_WALK_DEPTH'); droppedOverflow > 0 [D]. Recorded: prunedFrames (small and non-zero under streaming churn, lane R2), lateDraws, droppedHidden, deferredHidden, recompiles, watched, released (verifier R / R2)",
+       "fields": {
+        "apps/holtburger-web/scene3d/upload_warm_draw.js": [
+         "depthCapped",
+         "prunedFrames",
+         "droppedOverflow",
+         "lateDraws",
+         "droppedHidden",
+         "deferredHidden",
+         "recompiles",
+         "watched",
+         "released"
+        ],
+        "scripts/perf-worker/s1.eval.js": [
+         "uploads",
+         "arrive",
+         "turn",
+         "content",
+         "turnShareOfBufferBytes"
+        ],
+        "scripts/perf-worker/s1_eval_report.py": [
+         "upload_windows"
+        ]
+       }
+      }
+     ],
+     "prediction": "[D] lane R / R2: buffer uploads move to arrival frames; firstTurn max and h100 down; fps flat. Verifier R: expect gains below WebAC's 208 -> 18.5 ms turning max (content added later under a warmed root, BatchedMesh growth and instance attributes are not pre-uploaded).",
+     "look": {
+      "class": "none by construction",
+      "rcEye": [
+       "Look class: none by construction (private 1x1 HalfFloat target, scissor 0,0,1,1); expected pixel-identical; tighter than the R4 default as for skipEmptyPasses.",
+       "1. Holtburg orbit (rc-eye.mjs holtburg-orbit).",
+       "2. Holtburg street level after a teleport + the first 360-degree turn (rc-eye.mjs holtburg-street, holtburg-street-2).",
+       "3. After a westward @teleloc hop (LB crossing): rc-eye.mjs west4-w1-hop (hopRoutes.west4 stop w1, chase cam; the turn itself is S1-ROUTE's).",
+       "4. Room a9b40121, lanterns at hour 22: rc-eye.mjs holtburg-room-a9b40121-night.",
+       "Plus the plan's Holtburg on/off no-change pair (R3-2 Proof)."
+      ]
+     },
+     "decisionRule": "Hitch change: plan section 5 R3 as amended 2026-10-30: 'For a hitch change (R3-2's upload draw and worker-wait fixes, scored on hitch metrics per R3-2), (i) and (ii) read on its predicted hitch metrics instead: first-turn max and h100 better by a real delta, and no still / moving / tour fps segment worse by one.' That sentence settles the point lane Q left OPEN for the owner; no ruling is needed before the run. Read, written 2026-10-30 BEFORE the run: (i)+(ii) = S1-BENCH UWD-on vs A: firstTurn.max AND firstTurn.h100 both better by a real R1 delta, and no still / moving / tour fps segment worse by a real delta; (iii) the other hitch rows (tour h100 / h250 / max / jankMs, still / moving p99; S1-ROUTE's hopTurns max / h100 / h250 and loaf.max) not worse by a real delta; (iv) 0 console errors; (v) the look gate (R4). hbreport r3_keep still reads (i) / (ii) on binding-thread ms and fps, so for this arm its printed R3 verdict is NOT the verdict: read these rows of its compare table (S1-REPORT). INCONCLUSIVE gets 3 more reps once, then the flag stays off.",
+     "from": "R3-S1 S1-BENCH"
+    },
+    {
+     "name": "SEP-out",
+     "flags": "skipEmptyPasses=on",
+     "gate": "!!window.__skipEmptyPasses && window.__skipEmptyPasses.stats().installed > 0",
+     "gateInfo": "({ sep: window.__skipEmptyPasses ? window.__skipEmptyPasses.stats() : null, gate: typeof window.__indoorLandscapeGateDiag === 'function' ? window.__indoorLandscapeGateDiag() : null })",
+     "scored": "control: still / moving / tour fps, p50 / p95, main busy not worse",
+     "diagReads": [
+      {
+       "read": "gateInfo after the settle at Holtburg (every rep)",
+       "pass": "sep.installed > 0; sep.skipped === 0 outdoors; refusedHooks === 0",
+       "fields": {
+        "apps/holtburger-web/scene3d/skip_empty_passes.js": [
+         "installed",
+         "skipped",
+         "refusedHooks"
+        ]
+       }
+      }
+     ],
+     "prediction": "[D] lane R: 0 outdoors (skipped stays 0); no segment changes.",
+     "look": {
+      "class": "exact (identical GL stream)",
+      "rcEye": [
+       "Outdoor control shot: rc-eye.mjs holtburg-orbit (see S1-EYE skipEmptyPasses list item 5)."
+      ]
+     },
+     "decisionRule": "Control only: no flip from this arm. Pass = skipped === 0 and no segment worse by a real R1 delta; the skipEmptyPasses verdict is S1-INDOOR's, with this arm as its outdoor no-regression check (R3 (ii) 'no segment regressed by one').",
+     "from": "R3-S1 S1-BENCH"
+    },
+    {
+     "name": "O-rigs",
+     "flags": "occlusionCull=rigs",
+     "gate": "window.__occlusionCull && window.__occlusionCull.mode === 'rigs' && !!window.__occlusionCull.stats && window.__occlusionCull.stats.cellsSkipped > 0",
+     "gateInfo": "window.__occlusionCull ? { mode: window.__occlusionCull.mode ?? null, stats: window.__occlusionCull.stats ?? null } : null",
+     "from": "R3-M1 M1b-OCC"
+    },
+    {
+     "name": "S-cellStaticMerge",
+     "flags": "cellStaticMerge=on",
+     "predict": {
+      "thread": "main",
+      "ms": -0.3,
+      "source": "plan R3-2: -0.2...-0.4 ms main"
+     },
+     "from": "R3-M1 M1b-STRUCTURE"
+    },
+    {
+     "name": "S-statArrayMerge",
+     "flags": "statArrayMerge=on",
+     "predict": {
+      "thread": "main",
+      "ms": -0.375,
+      "source": "plan R3-2: ~-0.35...-0.4 ms if the 08-06 wall is gone"
+     },
+     "from": "R3-M1 M1b-STRUCTURE"
+    },
+    {
+     "name": "S-freezeWorldRoots",
+     "flags": "freezeWorldRoots=on",
+     "from": "R3-M1 M1b-STRUCTURE"
+    },
+    {
+     "name": "S-rustEntityWorld",
+     "flags": "rustEntityWorld=on",
+     "gate": "window.__entityWorld && window.__entityWorld.stats().projections === 1",
+     "gateInfo": "window.__entityWorld ? window.__entityWorld.stats() : null",
+     "note": "the projection half installed (fix_r2.json lane R4); every earlier arm measured the walk half only",
+     "from": "R3-M1 M1b-STRUCTURE"
+    },
+    {
+     "name": "F2-terrainShared",
+     "flags": "hotTerrainShared=on",
+     "predict": {
+      "thread": "main",
+      "ms": -0.095,
+      "tag": "[D]",
+      "source": "docs/2026-10-26-rust-hotspots-2.md G1: -0.09...-0.10 ms/frame"
+     }
+    },
+    {
+     "name": "F2-weaponFx",
+     "flags": "hotWeaponFxSync=on",
+     "predict": {
+      "thread": "main",
+      "ms": -0.016,
+      "tag": "[D]",
+      "source": "docs/2026-10-26-rust-hotspots-2.md G2: -0.012...-0.02 ms/frame"
+     }
+    },
+    {
+     "name": "F2-grassCull",
+     "flags": "hotGrassCull=on",
+     "predict": {
+      "thread": "main",
+      "ms": -0.03,
+      "tag": "[D]",
+      "source": "docs/2026-10-26-rust-hotspots-2.md G3: ~-0.03 ms/frame"
+     }
+    },
+    {
+     "name": "D-stack",
+     "flags": "rigPoseSkip=on&uploadWarmDraw=on&skipEmptyPasses=on&freezeWorldRoots=on&rustEntityWorld=on&hotTerrainShared=on&hotWeaponFxSync=on&hotGrassCull=on",
+     "gate": "(!!window.__rigPoseSkip && window.__rigPoseSkip.stats().enabled === true && window.__rigPoseSkip.stats().skipped > 0) && (!!window.__uploadWarmDraw && window.__uploadWarmDraw.enabled === true) && (!!window.__skipEmptyPasses && window.__skipEmptyPasses.stats().installed > 0) && (window.__entityWorld && window.__entityWorld.stats().projections === 1)",
+     "gateInfo": "({ \"RPS-on\": (window.__rigPoseSkip ? window.__rigPoseSkip.stats() : null), \"UWD-on\": (window.__uploadWarmDraw ? window.__uploadWarmDraw.stats() : null), \"SEP-out\": (({ sep: window.__skipEmptyPasses ? window.__skipEmptyPasses.stats() : null, gate: typeof window.__indoorLandscapeGateDiag === 'function' ? window.__indoorLandscapeGateDiag() : null })), \"S-rustEntityWorld\": (window.__entityWorld ? window.__entityWorld.stats() : null) })",
+     "predict": {
+      "thread": "main",
+      "ms": -0.201,
+      "tag": "[D]",
+      "source": "sum of the stacked arms' own predictions (arms without one count 0)"
+     },
+     "note": "every exact flag on together: each alone predicts 0.02-0.1 ms/frame, under one arm's R1 floor (3% of ~40 fps ~ 0.75 ms); the stack sums them"
+    }
+   ],
+   "reps": 3,
+   "gate": "D1 rule",
+   "decisionRules": [
+    "V",
+    "R1",
+    "R2",
+    "R3",
+    "D1"
+   ],
+   "recipe": [
+    "node scripts/perf-worker/hbbench.mjs --arms apps/holtburger-web/docs/reengineering/queue-1070/batch-R3-D1-2026-10-30.json --item D1-BENCH --reps 3 --port 8766 --uncapped --ref A --out /mnt/wbterminal1/tmp/claude-scratch/perf/r3-d1/bench",
+    "python3 -I scripts/perf-worker/hbreport.py bench /mnt/wbterminal1/tmp/claude-scratch/perf/r3-d1/bench --box-events apps/holtburger-web/docs/reengineering/queue-1070/batch-R3-D1-2026-10-30.json --queue apps/holtburger-web/docs/reengineering/queue-1070/batch-R3-D1-2026-10-30.json --ref A --aa A-AA [--noisy-box] [--anatomy /mnt/wbterminal1/tmp/claude-scratch/perf/r3-d1/anatomy] --json /mnt/wbterminal1/tmp/claude-scratch/perf/r3-d1/bench.report.json"
+   ],
+   "result": null
+  },
+  {
+   "id": "D1-ANATOMY",
+   "kind": "anatomy",
+   "title": "hbanatomy (main busy per frame) on A, A-AA and every D1 arm, fresh profile each, 3 reps over the session",
+   "recipe": [
+    "node scripts/perf-worker/hbanatomy.mjs --arms apps/holtburger-web/docs/reengineering/queue-1070/batch-R3-D1-2026-10-30.json --item D1-BENCH --arm <ARM> --rep <N> --port 8766 --uncapped --out /mnt/wbterminal1/tmp/claude-scratch/perf/r3-d1/anatomy   (>= 65 s between boots)"
+   ],
+   "decisionRules": [
+    "V",
+    "R1",
+    "R5",
+    "D1 (4)"
+   ],
+   "result": null
+  },
+  {
+   "id": "D1-REPORT",
+   "title": "hbreport over D1-BENCH + D1-ANATOMY + the S1 pass items; flip the winners (D1 rule), url-flags rows, plan section 1 tables",
+   "result": null
+  }
+ ]
+}

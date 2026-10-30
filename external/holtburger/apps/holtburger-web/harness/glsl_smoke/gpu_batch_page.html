@@ -1,0 +1,75 @@
+<!doctype html><html><body><canvas id="c" width="192" height="192"></canvas>
+<script type="importmap">{ "imports": { "three": "/three/three.module.js" } }</script>
+<script type="module">
+// gpu_batch_smoke.mjs page (R3-3 GPU batch kit). `?arm=layers|texel|f32`;
+// the texel arm is loaded twice (flag off, then `&animSceneryBatch=on`).
+// animated_scenery.js's own rAF loop must not run on wall time: the arm steps
+// frames itself (tickAnimatedScenery), so the two loads pose identically.
+window.requestAnimationFrame = () => 1;
+window.cancelAnimationFrame = () => {};
+const out = { errors: [] };
+const origErr = console.error;
+console.error = (...a) => { out.errors.push(a.map(String).join(" ").slice(0, 400)); origErr(...a); };
+try {
+  const THREE = await import("three");
+  const LIB = await import("/app/harness/glsl_smoke/gpu_batch_lib.mjs");
+  const mods = {
+    arrayPages: await import("/app/scene3d/gpu_batch/array_pages.js"),
+    rowTexture: await import("/app/scene3d/gpu_batch/row_texture.js"),
+    adapter: await import("/app/scene3d/adapter.js"),
+    animatedScenery: await import("/app/scene3d/animated_scenery.js"),
+    animSceneryGpu: await import("/app/scene3d/anim_scenery_gpu.js"),
+    materials: await import("/app/scene3d/materials.js"),
+    geomBundles: await import("/app/scene3d/geom_bundles.js"), // the texel arm's bundle-shaped setup
+  };
+  const arm = new URLSearchParams(location.search).get("arm") || "layers";
+  out.arm = arm;
+  const renderer = new THREE.WebGLRenderer({ canvas: document.getElementById("c"), antialias: false });
+  renderer.setPixelRatio(1);
+  renderer.setSize(LIB.CANVAS, LIB.CANVAS, false);
+  renderer.debug.checkShaderErrors = true;
+  const gl = renderer.getContext();
+  const dbg = gl.getExtension("WEBGL_debug_renderer_info");
+  out.renderer = gl.getParameter(dbg ? dbg.UNMASKED_RENDERER_WEBGL : gl.RENDERER);
+  out.bptc = !!gl.getExtension("EXT_texture_compression_bptc");
+  out.maxAnisotropy = renderer.capabilities.getMaxAnisotropy();
+  out.parallelCompile = !!gl.getExtension("KHR_parallel_shader_compile");
+  const pause = () => new Promise((res) => setTimeout(res, 25));
+  if (arm === "layers") {
+    out.layers = LIB.runLayersArm(THREE, renderer, mods);
+  } else if (arm === "texel") {
+    const r = await LIB.runTexelArm(THREE, renderer, mods, { ticks: 24, pause, settleMs: 30000, now: () => performance.now() });
+    renderer.render(r.scene, r.camera); // canvas-variant programs compile here (both loads)
+    await new Promise((res) => setTimeout(res, 100));
+    renderer.render(r.scene, r.camera);
+    out.calls = renderer.info.render.calls;
+    const frame = LIB.readFrame(renderer);
+    out.frame = Array.from(frame);
+    out.lit = LIB.litPixels(frame);
+    out.built = r.built;
+    out.batch = r.diag.batch ? JSON.parse(JSON.stringify(r.diag.batch)) : null;
+    out.bundle = r.bundle;
+    // The kit budget after the final renders (K3): geometry tickets landed by
+    // three's upload callbacks, the S1 upload timings (SwiftShader numbers).
+    const ab = mods.animatedScenery.animatedSceneryDiag().batch;
+    out.kitBudget = ab && ab.kit && ab.kit.budget ? JSON.parse(JSON.stringify(ab.kit.budget)) : null;
+  } else if (arm === "f32") {
+    out.f32 = [];
+    for (const baseX of [150, 32400]) {
+      const r = LIB.runF32Arm(THREE, renderer, mods, { baseX, baseY: 120 });
+      renderer.render(r.sceneA, r.camera);
+      const a = LIB.readFrame(renderer);
+      renderer.render(r.sceneB, r.camera);
+      const b = LIB.readFrame(renderer);
+      out.f32.push({ baseX, ...LIB.frameDiff(a, b), litA: LIB.litPixels(a), litB: LIB.litPixels(b) });
+    }
+  }
+  out.glError = gl.getError();
+  out.programs = renderer.info.programs.map((p) => ({
+    name: p.name, key: String(p.cacheKey || "").slice(0, 120), linked: gl.getProgramParameter(p.program, gl.LINK_STATUS),
+  }));
+} catch (e) {
+  out.errors.push("THROW " + String((e && e.stack) || e).slice(0, 1200));
+}
+window.__smoke = out;
+</script></body></html>

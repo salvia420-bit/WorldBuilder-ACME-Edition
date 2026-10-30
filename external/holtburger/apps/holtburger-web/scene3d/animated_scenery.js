@@ -71,6 +71,13 @@ import {
   rustAnimFallback, rustAnimReset, rustAnimSceneryStats, ANIM_ROW_FLOATS,
 } from "./rust/anim_scenery.js";
 import { rustFlag } from "./rust/scene_core.js";
+// ?animSceneryBatch (R3-3 K3, 2026-10-30, DEFAULT OFF; `=on` opt-in) — the GPU
+// batch kit's first consumer: one setup's buckets re-drawn over merged
+// geometry. scene3d/gpu_batch/anim_scenery_batch.js; nothing in it runs (or
+// allocates) until an instance registers with the flag on.
+import {
+  noteAnimSceneryBatchInstance, syncAnimSceneryBatches, disposeAnimSceneryBatches, animSceneryBatchDiag,
+} from "./gpu_batch/anim_scenery_batch.js";
 
 const METERS_PER_LANDBLOCK = 192.0;
 const DEFAULT_ANIM_FPS = 30.0;
@@ -675,6 +682,19 @@ export function animSceneryGateEnabled() {
 }
 /** Test seam: true/false forces, undefined re-reads the URL. */
 export function __setAnimSceneryGateForTest(v) { _gateFlag = v === undefined ? null : !!v; }
+
+// ?animSceneryBatch (R3-3 K3, 2026-10-30, DEFAULT OFF; `=on` opt-in). Read once
+// through rustFlag. `_batchArmed` turns true only when an instance registered
+// with the flag on, so with the flag off the rAF loop checks one boolean and
+// nothing else changes. See scene3d/gpu_batch/anim_scenery_batch.js.
+let _batchFlag = null;
+export function animSceneryBatchEnabled() {
+  if (_batchFlag === null) _batchFlag = rustFlag("animSceneryBatch", false);
+  return _batchFlag;
+}
+/** Test seam: true/false forces, undefined re-reads the URL. */
+export function __setAnimSceneryBatchForTest(v) { _batchFlag = v === undefined ? null : !!v; }
+let _batchArmed = false;
 
 const _gateStats = { tracked: 0, chainWalks: 0, lbQueries: 0, untracked: 0, stableSkips: 0, fullPasses: 0 };
 const _lbRecs = new Map(); // landblockId -> { lb, idx, stamp, parked }
@@ -1364,6 +1384,11 @@ async function buildOneInstanced(p, scene3d, wasmExports, materialCache, spFetch
   }
   // CPU-posed slots left (0 ⇒ the rAF loop has nothing to write per frame).
   inst.cpuSlots = inst.slots.reduce((n, s) => n + (s.bucket.gpu ? 0 : 1), 0);
+  // ?animSceneryBatch (default OFF): the setup's buckets go to the batch kit.
+  if (animSceneryBatchEnabled()) {
+    _batchArmed = true;
+    noteAnimSceneryBatchInstance(scene3d, setupId, animId, inst, { bucketVis: animSceneryBucketVisEnabled() });
+  }
   return inst;
 }
 
@@ -1513,6 +1538,27 @@ function _applyBucketVisibility() {
   }
 }
 
+// RE-SHOW FIX (2026-10-30, DEFAULT-PATH BUG FIX, no flag: it changes only
+// which bytes reach the GPU, never what the CPU arrays hold). three uploads
+// an attribute only when a mesh using it is DRAWN, and uploads exactly the
+// update ranges registered since its last upload. The flush below used to
+// replace the ranges every frame (clearUpdateRanges + one addUpdateRange), so
+// a bucket that was NOT drawn in between lost the earlier spans: hidden by
+// ?animSceneryBucketVis (all members collapsed, e.g. a parked landblock), by
+// the batch, by the statics cull, under a hidden parent, or simply no render
+// between two ticks. When it drew again only the newest span went up and a
+// slot written in a missed frame kept its old GPU matrix — the last instance
+// to collapse before the bucket hid drew again at its old place, a ghost
+// critter, as soon as another instance of the bucket came back.
+// Now each instance attribute records whether its last flushed range has
+// been uploaded (three calls `attribute.onUploadCallback()` after every
+// upload, created or updated): while it has not, the next flush keeps it —
+// one range covering the pending ranges and this span, or the whole buffer
+// if someone asked for a whole upload since (ranges cleared). When the
+// bucket was drawn since the last flush (every frame on screen) the flush is
+// exactly today's: same ranges, same GL calls.
+function _onInstanceMatrixUploaded() { this.__hbAsUnsent = false; }
+
 function _flushDirtyBuckets() {
   for (const b of _dirtyBuckets) {
     const attr = b.mesh.instanceMatrix;
@@ -1521,8 +1567,22 @@ function _flushDirtyBuckets() {
     // only the registered ranges and clears them after the upload; with no
     // span recorded it falls back to the whole buffer as before.
     if (span && typeof attr.addUpdateRange === "function") {
+      let start = span.min * 16;
+      let end = (span.max + 1) * 16;
+      if (attr.__hbAsUnsent === true) {
+        // Not drawn since the last flush: keep what it has not uploaded.
+        const r = attr.updateRanges;
+        if (!r || r.length === 0) { attr.needsUpdate = true; continue; } // a whole upload is pending: keep it whole
+        for (let i = 0; i < r.length; i++) {
+          if (r[i].start < start) start = r[i].start;
+          if (r[i].start + r[i].count > end) end = r[i].start + r[i].count;
+        }
+      } else if (attr.onUploadCallback !== _onInstanceMatrixUploaded) {
+        attr.onUploadCallback = _onInstanceMatrixUploaded;
+      }
       attr.clearUpdateRanges?.();
-      attr.addUpdateRange(span.min * 16, (span.max - span.min + 1) * 16);
+      attr.addUpdateRange(start, end - start);
+      attr.__hbAsUnsent = true;
     }
     attr.needsUpdate = true;
   }
@@ -1865,7 +1925,7 @@ function _ensureRaf() {
   if (typeof window === "undefined" || typeof window.requestAnimationFrame !== "function") return;
   if (_rafId || _rafDisposed) return;
   _rafLastMs = _nowMs();
-  const loop = () => {
+  const loop = (rafTs) => {
     if (_rafDisposed) { _rafId = 0; return; }
     const now = _nowMs();
     const dt = Math.min(0.1, Math.max(0, (now - _rafLastMs) / 1000)); // clamp 0..0.1s
@@ -1976,6 +2036,9 @@ function _ensureRaf() {
     }
     _flushDirtyBuckets();
     _applyBucketVisibility();
+    // ?animSceneryBatch: after the buckets' own visibility (the batch hides
+    // the buckets it draws for); `rafTs` keys the kit's per-frame budget.
+    if (_batchArmed) syncAnimSceneryBatches(rafTs);
     syncAnimInstMaterials();
     _rafId = window.requestAnimationFrame(loop);
   };
@@ -2001,6 +2064,7 @@ export function tickAnimatedScenery(dt) {
   }
   _flushDirtyBuckets();
   _applyBucketVisibility();
+  if (_batchArmed) syncAnimSceneryBatches();
   syncAnimInstMaterials();
 }
 
@@ -2044,6 +2108,7 @@ export function animatedSceneryDiag() {
     unbake: { enabled: animSceneryUnbakeEnabled(), ..._unbakeStats, cachedPoses: _bakePoseCache.size },
     ...(rustAnimSceneryEnabled() ? { rustAnimScenery: { ...rustAnimSceneryStats(), groupsHeld: _rustGroupCount } } : {}),
     ...(animSceneryGateEnabled() ? { gate: { ..._gateStats } } : {}),
+    ...(_batchArmed ? { batch: animSceneryBatchDiag() } : {}),
   };
 }
 
@@ -2096,6 +2161,9 @@ export function disposeAnimatedScenery(_scene3d) {
   _lbRecList.length = 0;
   _gxLen = 0;
   _gateAddedSince = false;
+  // ?animSceneryBatch: the batch draws go before the buckets they share
+  // instance attributes with.
+  if (_batchArmed) { disposeAnimSceneryBatches(); _batchArmed = false; }
   // Instanced buckets + shared geometry (module-owned, never per-instance).
   for (const b of _bucketList) {
     try { b.mesh.parent?.remove(b.mesh); b.mesh.dispose(); } catch (_) {}

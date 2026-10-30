@@ -171,6 +171,9 @@ import { CameraSwitcher, createOrthoCamera } from "./camera.js";
 import { retailFovEnabled, clampGameFovDeg, applyRetailFov, RETAIL_GAME_FOV_DEFAULT_DEG } from "./camera_math.js";
 import { setupSceneLighting, attachSetupModelLights } from "./lighting.js";
 import { withWarmTarget, installLinkProbe, SHADER_PREWARM_ON } from "./shader_prewarm.js";
+// 2026-10-30 (round 3 R3-2) — `?uploadWarmDraw` (DEFAULT OFF): arrival-time
+// geometry upload draw into a private 1x1 scissored target.
+import { installUploadWarmDraw } from "./upload_warm_draw.js";
 import { installDrawSortProgram } from "./draw_sort_program.js";
 import { installAsyncLinkGuard } from "./async_link_guard.js";
 import { retainNewPrograms } from "./program_retention.js";
@@ -1736,7 +1739,7 @@ export async function preInit3D(canvas) {
   // draw + a vertex-uniform-buffer upload each); 2026-07-15 Holtburg measured
   // 5,838 ranges/frame behind 1,921 counted calls. `__batchedRuns.frame()`.
   try { installBatchedRuns(renderer); } catch (_) { /* never break boot */ }
-  try { installDrawExec(renderer, () => scene); } catch (_) { /* ?drawExec (stage 3 S3.1, default off): outermost static-draw executor, draw_exec.js */ }
+  try { installDrawExec(renderer, () => scene); } catch (_) { /* ?drawExec (stage 3 S3.1; DEFAULT ON since 2026-10-26, `=off` escape): outermost static-draw executor, draw_exec.js */ }
   // Wave 3 / L2 fix (2026-05-28) — particle_manager.js was the original
   // home of this URL parse, but it's `await import()`'d from
   // play_effect_vfx.js:1063 and entities.js:4434 (dynamic import), so
@@ -2076,6 +2079,16 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
     adaptiveGpuProbe,
   } = pre;
   const { sun, ambient, lightsGroup } = lighting;
+  // ?uploadWarmDraw (round 3 R3-2, 2026-10-30, DEFAULT OFF; `=on` opt-in):
+  // a `childadded` listener on the world groups queues each streamed subtree
+  // once; the per-frame tick below draws its new geometries once into a
+  // private 1x1 scissored target with an unlit material, so their buffer
+  // uploads land on arrival instead of the first turn that reveals them, and
+  // re-walks walked roots round robin (bounded per frame) for late content and
+  // parts shown later (upload_warm_draw.js). Flag off, or ?nullRender ⇒ null:
+  // no listener, no allocation.
+  const _uploadWarm = installUploadWarmDraw(renderer, scene,
+    [worldRoot, terrainGroup, buildingsGroup, staticsGroup, cellsGroup, entitiesGroup], { nullRender });
 
   // Phase F.C — runtime event log probe. Opt-in via `?eventLog=on` so
   // production users don't pay the cost; the F.D validator flips the
@@ -3136,6 +3149,13 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
     // shape-identical clones of their member materials — bring them up to the
     // member (fades, re-seated maps, needsUpdate) before anything draws.
     try { syncBatchMatVariants(); } catch (_) { /* never break the frame */ }
+    // ?uploadWarmDraw (DEFAULT OFF ⇒ `_uploadWarm` is null): this frame's
+    // arrivals (and late content the watch finds) upload before the render,
+    // outside the vfxGauge window. Never under ?nullRender (no GPU work there;
+    // the install already returns null there, this guard is the second line).
+    if (_uploadWarm !== null && !nullRender) {
+      try { _uploadWarm.tick(); } catch (_) { /* never break the frame */ }
+    }
     vfxGaugeBeginFrame(renderer);
     // Portal space (retail gmSmartBoxUI, acclient.c:262445-262449): while the
     // tunnel owns the screen the WORLD IS NOT DRAWN (SmartBox::Hide) — the

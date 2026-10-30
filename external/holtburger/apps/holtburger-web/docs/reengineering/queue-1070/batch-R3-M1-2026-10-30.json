@@ -1,0 +1,463 @@
+{
+ "schema": "hb-1070-queue-v1",
+ "batch": "R3-M1",
+ "created": "2026-10-30",
+ "owner": "owner (OWNER-RUN: queued for the owner's own 1070 sessions, two or three windows when the 1070's user is away; never self-initiated by an agent)",
+ "preparedBy": "Round 3 lane H (R3-0 harness v2 + R3-1 preparation), 2026-10-30; lane H2 (2026-10-30): the M1b-OCC O-rigs gate (mode 'rigs' AND cellsSkipped > 0) and the b0Snapshot precondition (the MERGED round-3 phase-A tree, checked from each flag's reader in the snapshot's own files); lane H3 (2026-10-30): bakeFallbackWaves pinned to its merged reader in scene3d/bake_worker_client.js, section 5 R3 re-copied with the hitch-change sentence the plan gained that day. Queue prep and tooling only: nothing here has run on the 1070.",
+ "source": "apps/holtburger-web/docs/2026-10-29-round3-gpu-driven.md section 3 R3-0 / R3-1, section 4 (arms, protocol, M1c), section 5 (decision rules, copied below BEFORE any run); docs/2026-10-29-webac-openac-renderer-lessons.md section 5.1 (WebAC runnability). Tools: scripts/perf-worker/hbbench.mjs (harness v2), hbanatomy.mjs, hbsweep.mjs, hbreport.py, structure-ceiling.eval.js, layer-mip-probe.eval.js, apps/holtburger-web/tools/webgpu_probe/.",
+ "sessionRules": "vistest-preamble-v1",
+ "sessionRulesInline": [
+  "Inherit every rule of batch-P0-gpu-resident-2026-10-22.json sessionRulesInline verbatim (MODE T off-screen + muted, OWNER-RUN, kill only by user-data-dir, ?nosw=1, fresh profile per arm-rep, uncapped frames + targetFps=0, release wasm only, >= 65 s between boots on one account, reject-never-average). Read memory/fleet-runbooks.md before driving the 1070.",
+  "Tunnel: -L 9333:127.0.0.1:9333 -R 8765:127.0.0.1:8765 -R 8080:127.0.0.1:8080 -R 8766:127.0.0.1:8766 (the B0 snapshot server on :8766). M1c adds -R 3000:127.0.0.1:3000 -R 9090:127.0.0.1:9090 for its window only and drops them afterwards.",
+  "Build under test = B0: a NEW frozen snapshot (scripts/perf-worker/hb-mksnap.sh <name>, then replace its pkg symlink by a real copy of a RELEASE pkg/) of the MERGED round-3 phase-A tree (the round-2 fixes included). It must carry the readers of occlusionCull=rigs, rigPoseSkip, skipEmptyPasses, uploadWarmDraw, animSceneryBatch and bakeFallbackWaves (`b0Snapshot` below), checked in M1-PRE by `hbbench.mjs --check-snapshot` against the snapshot's OWN code files, never only url-flags.md: hb-mksnap.sh symlinks docs/ into the live tree, so the url-flags.md a snapshot shows always reads current. Served with `python3 scripts/serve.py --bind 127.0.0.1 --port 8766 --check` from the snapshot. On B0 `rustParticles` is default OFF (16 scene-core flags on): an empty-flag arm is the 16-on config, and any arm that depends on another flag value names it.",
+  "Harness v2 protocol (plan section 4), all applied by hbbench.mjs / hbanatomy.mjs unless an arm overrides it: skytime=13 and DayGroup 0 ('Sunny', applied through setGameDayOverride(39, 10)); adaptiveRes=off, targetFps=0, renderScale=1, and gpuGovernor=off once R3-11's flag has a url-flags.md row (hbbench detects it); 1920x1080 INNER window unless the arm says 1280,720; interleaved, rotated order; the 65 s login cool-down; box samples (hbwho.ps1 + top processes by CPU) before, between and after segments. `--compat v1` is ONLY for RC-BENCH v2 reps 2-3 on the rep-1 snapshot (batch-RC-rust-scene-core-2026-10-26.json), never for these items: it keeps the pre-v2 step sequence exactly, so its box samples run only before launch and after the tour (hbreport also reads the bench dir's boxwatch.log for the samples in between).",
+  "Every M1a session item (SWEEP, CEILING, LAYERMIP) BOOTS its own session through lib/hb_boot.mjs bootArm (fresh profile, the B0 snapshot on :8766, skytime=13, DayGroup 0, renderScale=1, adaptiveRes=off, targetFps=0, 1920x1080 INNER, the run-JSON asserts), never through hbsess.mjs (its boot serves :8765 = the live tree, sets the OUTER window and pins no DayGroup). The attach modes (`hbsweep.mjs` / `hbanatomy.mjs --attach`) are for the laptop tab check and ad-hoc looks; they apply DayGroup 0 and record every pin problem (`session.problems`).",
+  "Run without the gate override (gate-owner-ok.txt) whenever possible so hbgate.ps1's idle rule applies; rule V below decides validity from the run JSON either way.",
+  "One real-world tab at a time; the WebAC tab (M1c) never runs alongside one of ours. No sound may reach the 1070's user.",
+  "Before the first arm of a session: `python3 -I scripts/perf-worker/tests/test_hbreport.py` and `node scripts/perf-worker/tests/hb_v2.test.mjs` green on the laptop (the report reproduces the 10-29 numbers)."
+ ],
+ "accounts": "Bench account tailnet1 (hbbench default). M1c needs a SECOND Developer-level account for WebAC (or run the two clients one after the other); credentials only in the URL / environment at run time, never in this file.",
+ "urlBase": "http://127.0.0.1:8766/apps/holtburger-web/index.html",
+ "b0Snapshot": {
+  "what": "B0 = a NEW frozen snapshot (scripts/perf-worker/hb-mksnap.sh <name>) of the MERGED round-3 phase-A tree, taken after the phase-A lanes are merged and the full JS gate is green, with its pkg/ replaced by a real copy of a RELEASE pkg. Every M1 arm that names one of the flags below measures nothing unless the snapshot's own code has that flag's reader: a snapshot that predates a flag serves a client that ignores it, and the arm is silently an A/A.",
+  "check": "node scripts/perf-worker/hbbench.mjs --arms apps/holtburger-web/docs/reengineering/queue-1070/batch-R3-M1-2026-10-30.json --check-snapshot /mnt/wbterminal2/hb-snap/<B0 name>   (from external/holtburger; exit 0 = every requirement found; local files only, nothing touches the box)",
+  "rule": "Each requirement's file (or, with `dir`, at least one .js/.mjs file under it) must exist in the snapshot, be the snapshot's own copy (no symlink anywhere on its path; hb-mksnap.sh copies scene3d/ but symlinks docs/, src/ and, until replaced, pkg/ into the live tree) and match every pattern (JS RegExp source). The check refuses the live tree itself. It never reads url-flags.md.",
+  "requiredReaders": [
+   {
+    "flag": "occlusionCull=rigs",
+    "file": "apps/holtburger-web/scene3d/occlusion_cull.js",
+    "patterns": [
+     "if \\(v === \"rigs\"\\) return \"rigs\";",
+     "get mode\\(\\) \\{",
+     "cellsSkipped \\+= 1"
+    ],
+    "why": "M1b-OCC O-rigs: the mode reader, plus the window.__occlusionCull.mode getter and the cellsSkipped counter its arm gate reads"
+   },
+   {
+    "flag": "rigPoseSkip",
+    "file": "apps/holtburger-web/scene3d/motion/motion_sequence.js",
+    "patterns": [
+     "rustFlag\\(\"rigPoseSkip\", false\\)"
+    ],
+    "why": "S1 / R3-2 arm"
+   },
+   {
+    "flag": "skipEmptyPasses",
+    "file": "apps/holtburger-web/scene3d/skip_empty_passes.js",
+    "patterns": [
+     "rustFlag\\(\"skipEmptyPasses\", false\\)"
+    ],
+    "why": "S1 / R3-2 arm"
+   },
+   {
+    "flag": "uploadWarmDraw",
+    "file": "apps/holtburger-web/scene3d/upload_warm_draw.js",
+    "patterns": [
+     "rustFlag\\(\"uploadWarmDraw\", false\\)"
+    ],
+    "why": "S1 / R3-2 arm"
+   },
+   {
+    "flag": "animSceneryBatch",
+    "file": "apps/holtburger-web/scene3d/animated_scenery.js",
+    "patterns": [
+     "rustFlag\\(\"animSceneryBatch\", false\\)"
+    ],
+    "why": "S1 / R3-3 arm"
+   },
+   {
+    "flag": "bakeFallbackWaves",
+    "file": "apps/holtburger-web/scene3d/bake_worker_client.js",
+    "patterns": [
+     "export function resolveBakeFallbackWaves\\(",
+     "new URLSearchParams\\(search \\|\\| \"\"\\)\\.get\\(\"bakeFallbackWaves\"\\)",
+     "resolveBakeFallbackWaves\\(globalThis\\.location\\?\\.search"
+    ],
+    "why": "R3-2 worker-wait fix (S1 hitch arm; lane W2). Pinned 2026-10-30 (lane H3) to the merged reader: resolveBakeFallbackWaves reads `.get(\"bakeFallbackWaves\")` from the query string, and the client's configure() calls it with location.search (an unwired copy of the function is not enough)."
+   },
+   {
+    "flag": "release pkg (real copy)",
+    "file": "apps/holtburger-web/pkg/holtburger_web_bg.wasm",
+    "patterns": [],
+    "why": "hb-mksnap.sh symlinks pkg/ into the live tree; B0 must freeze its own release wasm (release-ness: wasm_profile.mjs in the next M1-PRE step and hbbench's served-wasm abort)"
+   }
+  ]
+ },
+ "boxEvents": [
+  {
+   "id": "seagate-toolkit-2026-10-29",
+   "kind": "cpu-hog",
+   "from": "2026-10-29T00:00:00-02:30",
+   "until": "2026-10-29T23:00:00-02:30",
+   "what": "Seagate Toolkit held one CPU core at 100% on the 1070 box until the owner had it stopped at ~23:00 on 10-29 (plan section 1.1; bench 1 withdrawn, profile pair 1 caveated). Start unknown: bench 1 began 22:06; the window opens at midnight to be safe.",
+   "source": "orchestrator session log 2026-10-29; boxwatch.log could not see it (no CPU sampling)"
+  }
+ ],
+ "decisionRules": [
+  {"rule": "V", "name": "validity", "text": "An arm-rep is INVALID, re-queued and never averaged, if any of these hold: `idle` < 60 s in any boxwatch sample; `gpu3d_other` > 5%; any non-test process using >= 1 CPU core-equivalent in any sample [D threshold; the bench-1 Seagate Toolkit case]; entity count differs from arm A by > 10% (R3-0 server-state pin) [D threshold]; console errors > 0; dev wasm; wrong adapter. If two scheduled windows yield no valid reps for an arm, accept 5 reps with a reported A/A noise in place of the idle gate, and mark the result \"noisy box\".", "implementation": "hbreport.py rule_v / assess (`--noisy-box` for the fallback); the >= 1 core test reads >= 0.95 core-equivalents over the ~2 s sample window; a rep overlapping a boxEvents cpu-hog entry is CONTAMINATED; a rep with no box sample at all is INVALID (unverified)."},
+  {"rule": "R1", "name": "noise", "text": "noise = max(|A - A'|, half of A's rep spread). A delta is real only if it exceeds max(2 x noise, 3% fps or 0.5 ms).", "implementation": "hbreport.py noise_of / compare (frame-count metrics use a floor of 1)."},
+  {"rule": "R2", "name": "scoring", "text": "Score on the binding thread's ms (main busy per frame, CrGpuMain WEBGL per present, GPU ms), plus still / moving / tour fps, p50 / p95, h100 / h250 / max / jank. Never on draw counts alone; draw counts are heading-binned and reported with multidraw ranges."},
+  {"rule": "R3", "name": "keep", "text": "A perf change goes or stays default-on only if all five hold: (i) its binding-thread ms moved by >= 50% of the prediction; (ii) at least one of still / moving / tour fps improved by a real delta, and no segment regressed by one; (iii) hitch metrics not worse by a real delta; (iv) 0 console errors; (v) the look gate (R4) passed. Otherwise it goes off and keeps its code only if a later step needs it. INCONCLUSIVE gets 3 more reps once, then goes off. For a hitch change (R3-2's upload draw and worker-wait fixes, scored on hitch metrics per R3-2), (i) and (ii) read on its predicted hitch metrics instead: first-turn max and h100 better by a real delta, and no still / moving / tour fps segment worse by one.", "implementation": "hbreport.py r3_keep (predictions from each arm's `predict`, resolved in the bench dir's own queue item; look gate from `--look ARM=pass|fail`; binding-thread ms = the median over each arm's VALID hbanatomy reps under `--anatomy` (rule V per rep), the move judged real by R1 with its noise from those reps). The hitch-change reading of (i) and (ii) (the sentence added 2026-10-30) is NOT applied by r3_keep: no M1 arm is a hitch change; score one by hand from the first-turn max and h100 rows."},
+  {"rule": "R4", "name": "look", "text": "WHAT kernels: bit-exact, or <= 1 f32 ulp, in node or cargo; array layers byte-equal on the 1070 readback. HOW changes: rc-eye stills at 1080p with `skytime=13`, compared by `rc_eye_diff.py`, with particles and sway masked. Default threshold: <= 1% of pixels over 8/255 and <= 0.1% over 32/255; each step may set a tighter one. Every heatmap gets a structural review. Then the batched owner eye test; the owner can veto."},
+  {"rule": "R5", "name": "routing", "text": "The binding thread is the largest of main busy per frame, CrGpuMain per present, and GPU ms, at the tier's resolution. If GPU ms >= 0.9 x frame time, GPU levers go first. If CrGpuMain >= main, GL-command levers go first (batching, HUD raster). Otherwise main-thread levers. Never claim fps for a lever on a thread that is not binding; book its ms as headroom.", "implementation": "hbreport.py r5_route / `anatomy` subcommand (ledger v0)."},
+  {"rule": "R6", "name": "stop", "text": "A structural lane that delivers < 50% of its predicted ms at stage A stops before stage B and gets a written post-mortem.", "implementation": "hbreport.py r6_stop."},
+  {"rule": "R7", "name": "tier presets", "text": "A tier preset change ships only if it moves the over-budget thread under its ceiling, or is look-neutral and cheaper. Ultra looks change only with explicit owner OK. This includes `objRadius` and any governor knob."},
+  {"rule": "R8", "name": "probe gate", "text": "If the M1 structure-ceiling probe's V1/V2 do not cut main-thread world-render ms and CrGpuMain WEBGL ms by >= 40% against V0 on the 1070, R3-4 and R3-5 are re-scoped before any L-sized build: smaller stage A, or GPU-side levers first under R5.", "implementation": "hbreport.py ceiling (the probe JSON + `trace-split --marks hbSC:` of its trace)."},
+  {"rule": "R9", "name": "WebGPU", "text": "Go only on the R3-12 criteria plus the owner's charter amendment."},
+  {"rule": "R10", "name": "reference clients", "text": "WebAC, OpenAC and upstream numbers are bounds that say which half of the frame to attack. They are never targets, never a pass/fail gate for a step, and never mixed into B0 comparisons. A reference reading on a different machine or content is quoted with that machine and content."}
+ ],
+ "suggestedOrder": [
+  "M1-PRE (laptop + box checks; stops the session if anything is red)",
+  "M1a-BENCH (window 1: A, A' A/A, floors L0 / H0 / Q-low / Q-mid / Q-high, A at 720p; 3 reps)",
+  "M1a-ANATOMY on A, H0, Q-high at 1080p and A at 720p",
+  "M1a-SWEEP (orbit + street), M1a-CEILING (V0-V3 x3), M1a-LAYERMIP, M1a-WEBGPU",
+  "M1b-FEATURES, M1b-OCC (3 reps), M1b-STRUCTURE, M1b-OBJRADIUS, M1b-LINVAK, M1b-HOUR22 (window 2)",
+  "M1c-WEBAC (an M1 window after M1a; not blocking)",
+  "M1-REPORT (ledger v0, verdicts, owner decisions (d) and (g))",
+  "M1d-OPENAC only after owner decision (i)"
+ ],
+ "items": [
+  {
+   "id": "M1-PRE",
+   "kind": "preflight",
+   "stage": "R3-1 session M1 - before any arm",
+   "gate": "every check green, or the session stops",
+   "title": "Laptop and box preconditions for harness v2",
+   "recipe": [
+    "free -m (>= 2.5 GB available) and nothing heavy running on the laptop (~/CLAUDE.md).",
+    "B0 tagged (plan section 3 R3-0 item 1) and its snapshot served on :8766 with --check green; `node apps/holtburger-web/harness/lib/wasm_profile.mjs <snapshot>/apps/holtburger-web/pkg/holtburger_web_bg.wasm` prints release (hbbench also refuses a dev wasm before the first arm).",
+    "The snapshot is the MERGED round-3 phase-A tree: `node scripts/perf-worker/hbbench.mjs --arms apps/holtburger-web/docs/reengineering/queue-1070/batch-R3-M1-2026-10-30.json --check-snapshot /mnt/wbterminal2/hb-snap/<B0 name>` (from external/holtburger) exits 0, i.e. every `b0Snapshot.requiredReaders` reader (occlusionCull=rigs, rigPoseSkip, skipEmptyPasses, uploadWarmDraw, animSceneryBatch, bakeFallbackWaves, the release pkg copy) is in the snapshot's own files. Exit 1 = not B0 (an older tree, a symlinked file, the live tree itself): stop and re-snapshot from the merged tree. url-flags.md is NOT evidence: it is a symlink into the live tree.",
+    "Box: D:\\Temp\\hbbench\\hbwho.ps1, hbgate.ps1, hbprobe-launch.bat, hidden-run.vbs, noflash.ps1, hbbench-kill.ps1 deployed from scripts/perf-worker/box/ (the v2 box sampler runs hbwho.ps1 inline through powershell -EncodedCommand; nothing new to deploy).",
+    "One manual sample: `node -e \"import('./scripts/perf-worker/lib/hb_box.mjs').then(async m => console.log(JSON.stringify(await m.boxSample('preflight'), null, 1)))\"` from external/holtburger: idle >= 60, gpu3d_other <= 5, no non-test process near 1 core.",
+    "python3 -I scripts/perf-worker/tests/test_hbreport.py and node scripts/perf-worker/tests/hb_v2.test.mjs: both green."
+   ],
+   "result": null
+  },
+  {
+   "id": "M1a-BENCH",
+   "kind": "bench",
+   "stage": "R3-1 M1a - floors and which thread binds per tier",
+   "gate": "none (measurement); feeds the budget ledger v0 and the owner's per-tier targets (decision (d))",
+   "title": "B0 ultra A + A/A, the floor ladder (nullRender, hud=none, low / mid / high) and A at 720p; 3 reps each, interleaved",
+   "boxMode": "1070, MODE T, uncapped, fresh profile per arm-rep (hbbench does both). OWNER-RUN.",
+   "reps": 3,
+   "ref": "A",
+   "aa": "A-AA",
+   "armDefaults": {"quality": "ultra", "window": "1920,1080"},
+   "arms": [
+    {"name": "A", "flags": "", "note": "B0 ultra (the reference arm)"},
+    {"name": "A-AA", "flags": "", "note": "A again: the A/A arm (R1 noise)"},
+    {"name": "L0-nullRender", "flags": "nullRender=1", "readyWhen": "live-scene", "note": "floor: no GPU rendering; sim, drain, HUD only"},
+    {"name": "H0-hudNone", "flags": "hud=none", "note": "HUD raster price (CrGpuMain RASTER share)"},
+    {"name": "Q-low", "quality": "low"},
+    {"name": "Q-mid", "quality": "mid"},
+    {"name": "Q-high", "quality": "high"},
+    {"name": "A-720", "flags": "", "window": "1280,720", "note": "continuity with every earlier hbbench number"}
+   ],
+   "recipe": [
+    "node scripts/perf-worker/hbbench.mjs --arms apps/holtburger-web/docs/reengineering/queue-1070/batch-R3-M1-2026-10-30.json --item M1a-BENCH --reps 3 --port 8766 --uncapped --ref A --out /mnt/wbterminal1/tmp/claude-scratch/perf/r3-m1/m1a-bench",
+    "python3 -I scripts/perf-worker/hbreport.py bench /mnt/wbterminal1/tmp/claude-scratch/perf/r3-m1/m1a-bench --box-events apps/holtburger-web/docs/reengineering/queue-1070/batch-R3-M1-2026-10-30.json --ref A --aa A-AA --json <OUT>/m1a-bench.report.json"
+   ],
+   "reads": "Per arm: still / moving / tour fps median (min-max), p50 / p95 / p99, h100 / h250 / max / jank, first-turn max; heading-binned info.calls next to real draws (calls - batched calls + issued ranges) and terrain ranges; renderJs p50 and walks / empty walks per frame; rule V status of every rep.",
+   "decisionRules": ["V", "R1", "R2", "R5", "Written 2026-10-30 BEFORE the run: no flag changes from this item; it sets floors. L0's fps is the sim-only ceiling; H0 - A on CrGpuMain RASTER prices the HUD (R3-2 HUD diet runs if it is >= 1 ms, R3-11 item 1 if >= ~2 ms after the diet)."],
+   "result": null
+  },
+  {
+   "id": "M1a-ANATOMY",
+   "kind": "anatomy",
+   "stage": "R3-1 M1a - thread anatomy with whole-pass GPU timers",
+   "gate": "none (measurement); budget ledger v0 + the dated 1070 us-per-draw calibration",
+   "title": "hbanatomy on A, H0-hudNone and Q-high at 1080p and A at 720p (fresh profile each; 1 rep each per window, 3 over the M1 windows)",
+   "armsFrom": "M1a-BENCH",
+   "recipe": [
+    "node scripts/perf-worker/hbanatomy.mjs --arms apps/holtburger-web/docs/reengineering/queue-1070/batch-R3-M1-2026-10-30.json --item M1a-BENCH --arm A --rep 1 --port 8766 --uncapped --out /mnt/wbterminal1/tmp/claude-scratch/perf/r3-m1/anatomy",
+    "the same with --arm H0-hudNone, --arm Q-high, --arm A-720 (>= 65 s between boots)",
+    "node scripts/perf-worker/hbanatomy.mjs ... --arm A --phases gauge --gauge-scripts /mnt/wbterminal1/tmp/fps-agent/anatomy.js,/mnt/wbterminal1/tmp/fps-agent/gpucensus2.js   (a separate ?vfxGauge=on&renderDiag=on boot)",
+    "python3 -I scripts/perf-worker/hbreport.py anatomy /mnt/wbterminal1/tmp/claude-scratch/perf/r3-m1/anatomy/*/anatomy.json --json <OUT>/ledger-v0.json",
+    "python3 -I scripts/perf-worker/hbreport.py program-diff <A>/anatomy.json <Q-high>/anatomy.json"
+   ],
+   "reads": "trace: CrRendererMain busy and CrGpuMain WEBGL / RASTER / PRESENT per present per 5 s window (+ GC ms, heap delta); whole-pass GPU ms per composer pass and per direct render (never nested); the 60-frame GL census (real D3D draws = plain draws + multi-draw ranges); the owner census with < 300 / 300-600 / >= 600 m buckets; program keys; LoAF window; calibration = renderJs ms / info.calls and CrGpuMain WEBGL ms / real draws (replaces the four disagreeing per-draw prices of plan section 1.3).",
+   "decisionRules": ["V", "R2", "R5", "R10"],
+   "result": null
+  },
+  {
+   "id": "M1a-SWEEP",
+   "kind": "sweep",
+   "stage": "R3-1 M1a - in-session live-toggle prices",
+   "gate": "none (measurement); ledger v0 rows for resolution, clouds, haze, shafts, SSAO",
+   "title": "hbsweep ABAB, 8 s windows x3, at the orbit and a street pose: renderScale 1 / 0.5 / 0.25, cloud resolution and quality, layered haze, light shafts, SSAO",
+   "armDefaults": {"quality": "ultra", "window": "1920,1080"},
+   "arms": [
+    {"name": "SW", "flags": "", "note": "B0 ultra booted under the section 4 protocol by hbsweep --boot (one fresh boot per pose)"}
+   ],
+   "recipe": [
+    "node scripts/perf-worker/hbsweep.mjs --boot --arms apps/holtburger-web/docs/reengineering/queue-1070/batch-R3-M1-2026-10-30.json --item M1a-SWEEP --arm SW --port 8766 --uncapped --pose orbit --out /mnt/wbterminal1/tmp/claude-scratch/perf/r3-m1/sweep-orbit.json",
+    "node scripts/perf-worker/hbsweep.mjs --boot --arms apps/holtburger-web/docs/reengineering/queue-1070/batch-R3-M1-2026-10-30.json --item M1a-SWEEP --arm SW --port 8766 --uncapped --pose street --out /mnt/wbterminal1/tmp/claude-scratch/perf/r3-m1/sweep-street.json   (>= 65 s after the first one closed; waitAccountFree enforces the logout)"
+   ],
+   "reads": "Per knob value: fps, p50 / p95, renderJs, info.calls; `relinked` / `relinkedInSettle` mark a toggle that compiled programs or async links inside a window or its settle (its first window after the warm-up is the one to distrust). boot.asserts / boot.assertProblems carry the section 4 pins (DayGroup read back, skytime, INNER window, wasm, adapter); every orbit window records the orbit it ran (a missing window.__hbOrbit is an error, never a still window).",
+   "decisionRules": ["R2", "R5", "Written 2026-10-30 BEFORE the run: resolution is never a governor knob (R3-11); these rows only price the knobs for ledger v0 and decision (h)."],
+   "result": null
+  },
+  {
+   "id": "M1a-CEILING",
+   "kind": "probe",
+   "stage": "R3-1 M1a - structure-ceiling probe (rule R8)",
+   "gate": "R8: V1/V2 must cut main-thread world-render ms and CrGpuMain WEBGL ms by >= 40% against V0, or R3-4 / R3-5 are re-scoped before any L-sized build",
+   "title": "structure-ceiling.eval.js: V0 world without composer, V1 plain meshes merged per material, V2 merged per blend class with one flat material, V3 V0 + full composer; 10 s each, ABAB; x3",
+   "armDefaults": {"quality": "ultra", "window": "1920,1080"},
+   "arms": [
+    {"name": "SC", "flags": "renderOnDemand=1&netDrainHz=30", "note": "the probe drives its own frames (__renderOnce); everything else is the section 4 protocol"}
+   ],
+   "recipe": [
+    "node scripts/perf-worker/hbanatomy.mjs --arms apps/holtburger-web/docs/reengineering/queue-1070/batch-R3-M1-2026-10-30.json --item M1a-CEILING --arm SC --rep 1 --port 8766 --uncapped --eval scripts/perf-worker/structure-ceiling.eval.js --trace /mnt/wbterminal1/tmp/claude-scratch/perf/r3-m1/ceiling-1.trace.json --out /mnt/wbterminal1/tmp/claude-scratch/perf/r3-m1/ceiling-1.json   (boots SC on a fresh profile, parks on the orbit pose, runs the probe, closes)",
+    "python3 -I scripts/perf-worker/hbreport.py trace-split /mnt/wbterminal1/tmp/claude-scratch/perf/r3-m1/ceiling-1.trace.json --marks hbSC: --json /mnt/wbterminal1/tmp/claude-scratch/perf/r3-m1/ceiling-1.split.json",
+    "python3 -I scripts/perf-worker/hbreport.py ceiling /mnt/wbterminal1/tmp/claude-scratch/perf/r3-m1/ceiling-1.json --trace-split /mnt/wbterminal1/tmp/claude-scratch/perf/r3-m1/ceiling-1.split.json",
+    "repeat with --rep 2 and --rep 3 (each a fresh boot; the probe restores the scene, it never ships)"
+   ],
+   "reads": "Per variant: main render ms per frame (renderer.render JS), GPU ms (TIME_ELAPSED per frame), CrGpuMain WEBGL per present (trace windows hbSC:Vk:rN); the merged-mesh counts (V1 groups, V2 classes) against V0's plain-mesh population.",
+   "decisionRules": ["R8", "R10"],
+   "result": null
+  },
+  {
+   "id": "M1a-LAYERMIP",
+   "kind": "probe",
+   "stage": "R3-1 M1a - layer-mip readback probe (R3-3 precondition, rule R4 'array layers byte-equal on the 1070 readback')",
+   "gate": "every sampled surface texture: every level of the array layer byte-equal to today's 2D texture on the real driver; else R3-3's admit path changes before K1 ships",
+   "title": "layer-mip-probe.eval.js: scratch 2D upload + gl.generateMipmap + per-level GPU copy into (layer, level) vs three's own texture, level by level",
+   "armDefaults": {"quality": "ultra", "window": "1920,1080"},
+   "arms": [
+    {"name": "LM", "flags": "", "note": "B0 ultra at Holtburg, settled"}
+   ],
+   "recipe": [
+    "node scripts/perf-worker/hbanatomy.mjs --arms apps/holtburger-web/docs/reengineering/queue-1070/batch-R3-M1-2026-10-30.json --item M1a-LAYERMIP --arm LM --port 8766 --uncapped --eval scripts/perf-worker/layer-mip-probe.eval.js --out /mnt/wbterminal1/tmp/claude-scratch/perf/r3-m1/layermip.json"
+   ],
+   "reads": "result.summary.allEqual per copy method (copyTexSubImage3D, blitFramebuffer); per texture and level the first differing byte; the read-back encoding and the sensitivity control per internal format (SRGB8_ALPHA8 and RGBA8: dark RGB bytes and one 1-LSB change in each of R, G, B and A must read back exactly; a failed control voids the byte-equality verdict).",
+   "decisionRules": ["R4"],
+   "result": null
+  },
+  {
+   "id": "M1a-WEBGPU",
+   "kind": "probe",
+   "stage": "R3-1 M1a - WebGPU capability probe (R3-12 input; never a port decision by itself, rule R9)",
+   "gate": "none (data)",
+   "title": "tools/webgpu_probe: adapter features + limits, 1,000 drawIndexed vs a render bundle vs 1,000 WebGL2 drawElements (main ms, GPU ms, CrGpuMain from the trace), Dawn trace categories, createRenderPipelineAsync time for a terrain-sized shader",
+   "recipe": [
+    "node apps/holtburger-web/tools/webgpu_probe/run.mjs --port 8766 --out /mnt/wbterminal1/tmp/claude-scratch/perf/r3-m1/webgpu   (fresh profile, off-screen, muted; no game page, no login)"
+   ],
+   "reads": "features (texture-compression-bc, timestamp-query, chromium-experimental-multi-draw-indirect), limits (maxTextureArrayLayers, maxStorageBufferBindingSize, maxStorageBuffersPerShaderStage ...), per-mode encode/submit ms and GPU ms, trace-split per mode window, the Dawn categories list, pipeline-async ms.",
+   "decisionRules": ["R9", "R10"],
+   "result": null
+  },
+  {
+   "id": "M1b-FEATURES",
+   "kind": "bench",
+   "stage": "R3-1 M1b - GPU-feature prices (ledger v0)",
+   "gate": "none (prices); cloudResScale is one of the six owed built arms (R3 applies)",
+   "title": "ultra, 2 reps + A/A: clouds=off, cloudResScale=0.5, msaa=0, ssao=off, bloom+fxGlow off, layerHaze=off, lightShafts=off, terrainGrass=off, pom=off",
+   "reps": 2,
+   "ref": "A",
+   "aa": "A-AA",
+   "armDefaults": {"quality": "ultra", "window": "1920,1080"},
+   "arms": [
+    {"name": "A", "flags": ""},
+    {"name": "A-AA", "flags": ""},
+    {"name": "F-clouds-off", "flags": "clouds=off"},
+    {"name": "F-cloudRes05", "flags": "cloudResScale=0.5", "predict": {"thread": "GPU", "ms": -1.5, "source": "plan R3-11: clouds -1...-2 ms GPU [D]"}},
+    {"name": "F-msaa0", "flags": "msaa=0"},
+    {"name": "F-ssao-off", "flags": "ssao=off"},
+    {"name": "F-bloom-glow-off", "flags": "bloom=off&fxGlow=off"},
+    {"name": "F-haze-off", "flags": "layerHaze=off"},
+    {"name": "F-shafts-off", "flags": "lightShafts=off"},
+    {"name": "F-grass-off", "flags": "terrainGrass=off"},
+    {"name": "F-pom-off", "flags": "pom=off"}
+   ],
+   "recipe": [
+    "node scripts/perf-worker/hbbench.mjs --arms apps/holtburger-web/docs/reengineering/queue-1070/batch-R3-M1-2026-10-30.json --item M1b-FEATURES --reps 2 --port 8766 --uncapped --ref A --out /mnt/wbterminal1/tmp/claude-scratch/perf/r3-m1/m1b-features",
+    "python3 -I scripts/perf-worker/hbreport.py bench <that dir> --box-events apps/holtburger-web/docs/reengineering/queue-1070/batch-R3-M1-2026-10-30.json --queue apps/holtburger-web/docs/reengineering/queue-1070/batch-R3-M1-2026-10-30.json --ref A --aa A-AA"
+   ],
+   "decisionRules": ["V", "R1", "R2", "R3 (cloudResScale only; look = eye-test class, R7: ultra looks change only with the owner's OK)", "R7", "Written 2026-10-30 BEFORE the run: every other arm is a price, not a flip candidate."],
+   "result": null
+  },
+  {
+   "id": "M1b-OCC",
+   "kind": "bench",
+   "stage": "R3-1 M1b / R3-6 - the cell half of the occlusion proxies",
+   "gate": "R3-6: if `=rigs` is at least as fast as the default on every thread and hitch metric, it becomes the default",
+   "title": "occlusionCull default vs =rigs (proxies for rigs only) vs =off, 3 reps + A/A",
+   "precondition": "B0 = the snapshot of the MERGED round-3 phase-A tree: M1-PRE `--check-snapshot` found the =rigs reader (mode parse, window.__occlusionCull.mode, stats.cellsSkipped) in the snapshot's own scene3d/occlusion_cull.js, not merely a url-flags row. Per rep, O-rigs is VALID only if its arm gate held after the settle: window.__occlusionCull.mode === 'rigs' AND stats.cellsSkipped > 0 (interior-cell candidates really went proxy-less). On a snapshot that predates the value the old reader (`!(off|0|false|no)`) reads `rigs` as ON and the arm is silently an A/A; there `mode` is undefined and cellsSkipped absent, so the gate fails: hbbench (and hbanatomy's boot) stops the rep and hbreport rule V marks it INVALID, never averaged and never a loss. The report step MUST pass --queue: with it rule V also marks INVALID an O-rigs rep that did not evaluate exactly this gate true (a rep run from an older copy of this file). gateInfo records the mode and stats either way.",
+   "reps": 3,
+   "ref": "A",
+   "aa": "A-AA",
+   "armDefaults": {"quality": "ultra", "window": "1920,1080"},
+   "arms": [
+    {"name": "A", "flags": ""},
+    {"name": "A-AA", "flags": ""},
+    {"name": "O-rigs", "flags": "occlusionCull=rigs", "gate": "window.__occlusionCull && window.__occlusionCull.mode === 'rigs' && !!window.__occlusionCull.stats && window.__occlusionCull.stats.cellsSkipped > 0", "gateInfo": "window.__occlusionCull ? { mode: window.__occlusionCull.mode ?? null, stats: window.__occlusionCull.stats ?? null } : null"},
+    {"name": "O-off", "flags": "occlusionCull=off"}
+   ],
+   "recipe": [
+    "node scripts/perf-worker/hbbench.mjs --arms apps/holtburger-web/docs/reengineering/queue-1070/batch-R3-M1-2026-10-30.json --item M1b-OCC --reps 3 --port 8766 --uncapped --ref A --out /mnt/wbterminal1/tmp/claude-scratch/perf/r3-m1/m1b-occ",
+    "hbanatomy on A and O-rigs (GPU ms, plan R3-6: GPU may rise by +0...0.5 ms; it is priced, not assumed); its boot evaluates the same O-rigs gate and stops the anatomy run when it is false",
+    "python3 -I scripts/perf-worker/hbreport.py bench <that dir> --box-events <this file> --queue <this file> --ref A --aa A-AA --anatomy <anatomy dir>   (--queue is required: it holds every O-rigs rep to the gate above)"
+   ],
+   "decisionRules": ["V", "R1", "R2", "R3", "Written 2026-10-30 BEFORE the run (plan R3-6): O-rigs becomes the default only if it is at least as fast as A on main, CrGpuMain and GPU ms and on every hitch metric (no real delta worse); O-off is the rig-half preview only, no flip from it (the rig half waits for R3-4 + R3-5)."],
+   "result": null
+  },
+  {
+   "id": "M1b-STRUCTURE",
+   "kind": "bench",
+   "stage": "R3-1 M1b - the owed built arms and the ANGLE range price",
+   "gate": "R3-2 flips each built arm on only if it wins under R3; partDegrade is owner decision (c); rustEntityWorld is deleted unless it wins",
+   "title": "cellStaticMerge, statArrayMerge, batchedRuns=off (range price), partDegrade, freezeWorldRoots, rustEntityWorld (projection gate); 2 reps + A/A",
+   "reps": 2,
+   "ref": "A",
+   "aa": "A-AA",
+   "armDefaults": {"quality": "ultra", "window": "1920,1080"},
+   "arms": [
+    {"name": "A", "flags": ""},
+    {"name": "A-AA", "flags": ""},
+    {"name": "S-cellStaticMerge", "flags": "cellStaticMerge=on", "predict": {"thread": "main", "ms": -0.3, "source": "plan R3-2: -0.2...-0.4 ms main"}},
+    {"name": "S-statArrayMerge", "flags": "statArrayMerge=on", "predict": {"thread": "main", "ms": -0.375, "source": "plan R3-2: ~-0.35...-0.4 ms if the 08-06 wall is gone"}},
+    {"name": "S-batchedRuns-off", "flags": "batchedRuns=off", "note": "P0 arm 2: the per-range CrGpuMain price of ANGLE's multi-draw emulation (R3-10 (a)); a price, never a flip"},
+    {"name": "S-partDegrade", "flags": "partDegrade=on", "note": "retail-correct WHAT change: owner decision (c), not R3"},
+    {"name": "S-freezeWorldRoots", "flags": "freezeWorldRoots=on"},
+    {"name": "S-rustEntityWorld", "flags": "rustEntityWorld=on", "gate": "window.__entityWorld && window.__entityWorld.stats().projections === 1", "gateInfo": "window.__entityWorld ? window.__entityWorld.stats() : null", "note": "the projection half installed (fix_r2.json lane R4); every earlier arm measured the walk half only"}
+   ],
+   "recipe": [
+    "node scripts/perf-worker/hbbench.mjs --arms apps/holtburger-web/docs/reengineering/queue-1070/batch-R3-M1-2026-10-30.json --item M1b-STRUCTURE --reps 2 --port 8766 --uncapped --ref A --out /mnt/wbterminal1/tmp/claude-scratch/perf/r3-m1/m1b-structure",
+    "hbanatomy on A, S-cellStaticMerge, S-statArrayMerge, S-batchedRuns-off (CrGpuMain WEBGL is the batchedRuns=off price)",
+    "python3 -I scripts/perf-worker/hbreport.py bench <that dir> --box-events <this file> --queue <this file> --ref A --aa A-AA --anatomy <anatomy dir> --look S-cellStaticMerge=<rc-eye verdict> ..."
+   ],
+   "decisionRules": ["V", "R1", "R2", "R3", "R4", "R6", "Written 2026-10-30 BEFORE the run: cellStaticMerge / statArrayMerge / freezeWorldRoots flip on only under R3 (their look gate: cellStaticMerge's own interiors-through-doorways / dungeon room / lantern check, scene3d/cell_static_merge.js:22-23). rustEntityWorld: its code goes unless it wins under R3; a rep whose gate fails (projections !== 1) is INVALID, not a loss. partDegrade: report the delta, the owner decides (c). batchedRuns=off: the CrGpuMain delta is the range price for R3-10; no flip."],
+   "result": null
+  },
+  {
+   "id": "M1b-OBJRADIUS",
+   "kind": "bench",
+   "stage": "R3-1 M1b - pricing the object ring (L4; owner decision (g))",
+   "gate": "none (prices); objRadius stays 4 until decision (g); R7 applies",
+   "title": "objRadius=1 / 2 vs the default 4, parked at Holtburg and at the Holtburg hilltop, interleaved, 2 reps",
+   "reps": 2,
+   "ref": "R4-holt",
+   "armDefaults": {"quality": "ultra", "window": "1920,1080"},
+   "arms": [
+    {"name": "R4-holt", "flags": "", "note": "default objRadius 4 (81 object landblocks)"},
+    {"name": "R2-holt", "flags": "objRadius=2"},
+    {"name": "R1-holt", "flags": "objRadius=1", "note": "retail's 3x3 full-detail ring (9 landblocks)"},
+    {"name": "R4-hill", "flags": "", "spot": "0xA9B40019 84 7.1 94", "note": "ACE POI 'Holtburg': the hilltop Life Stone square (scripts/perf-worker/structure-p0.eval.js town table)"},
+    {"name": "R2-hill", "flags": "objRadius=2", "spot": "0xA9B40019 84 7.1 94"},
+    {"name": "R1-hill", "flags": "objRadius=1", "spot": "0xA9B40019 84 7.1 94"}
+   ],
+   "recipe": [
+    "node scripts/perf-worker/hbbench.mjs --arms apps/holtburger-web/docs/reengineering/queue-1070/batch-R3-M1-2026-10-30.json --item M1b-OBJRADIUS --reps 2 --port 8766 --uncapped --ref R4-holt --out /mnt/wbterminal1/tmp/claude-scratch/perf/r3-m1/m1b-objradius",
+    "python3 -I scripts/perf-worker/hbreport.py bench <that dir> --box-events <this file> --ref R4-holt   (compare the -hill arms against R4-hill by hand or with --ref R4-hill)"
+   ],
+   "reads": "fps per segment, draws and ranges (heading-binned), the static pool instance counts in the server-state census; the tour (which returns to the Holtburg bench point) prices streaming churn per ring.",
+   "decisionRules": ["V", "R1", "R2", "R7", "Written 2026-10-30 BEFORE the run: no default change from this item. objRadius=1 is high look risk (buildings and trees beyond the neighbouring landblocks leave the horizon): owner decision (g)."],
+   "result": null
+  },
+  {
+   "id": "M1b-LINVAK",
+   "kind": "bench",
+   "stage": "R3-1 M1b - the crowd spot",
+   "gate": "partDegrade: owner decision (c)",
+   "title": "Linvak Tukal ultra (defaults, A/A, partDegrade=on), 2 reps",
+   "reps": 2,
+   "ref": "LV",
+   "aa": "LV-AA",
+   "armDefaults": {"quality": "ultra", "window": "1920,1080", "spot": "0xA21E001A 83 38 560.4"},
+   "arms": [
+    {"name": "LV", "flags": ""},
+    {"name": "LV-AA", "flags": ""},
+    {"name": "LV-partDegrade", "flags": "partDegrade=on", "note": "retail stops drawing a human's body parts beyond ~134 m (scene3d/part_degrade.js:22-24); the saving depends on the crowd (L10)"}
+   ],
+   "recipe": [
+    "node scripts/perf-worker/hbbench.mjs --arms apps/holtburger-web/docs/reengineering/queue-1070/batch-R3-M1-2026-10-30.json --item M1b-LINVAK --reps 2 --port 8766 --uncapped --ref LV --out /mnt/wbterminal1/tmp/claude-scratch/perf/r3-m1/m1b-linvak"
+   ],
+   "decisionRules": ["V", "R1", "R2", "Written 2026-10-30 BEFORE the run: partDegrade is a WHAT change toward retail; report the delta at Holtburg (M1b-STRUCTURE) and here, the owner decides (c)."],
+   "result": null
+  },
+  {
+   "id": "M1b-HOUR22",
+   "kind": "bench",
+   "stage": "R3-1 M1b - the night sky price",
+   "gate": "none (price)",
+   "title": "Holtburg at hour 22 vs hour 13, 2 reps",
+   "reps": 2,
+   "ref": "A",
+   "armDefaults": {"quality": "ultra", "window": "1920,1080"},
+   "arms": [
+    {"name": "A", "flags": ""},
+    {"name": "H22", "flags": "", "skytime": 22}
+   ],
+   "recipe": [
+    "node scripts/perf-worker/hbbench.mjs --arms apps/holtburger-web/docs/reengineering/queue-1070/batch-R3-M1-2026-10-30.json --item M1b-HOUR22 --reps 2 --port 8766 --uncapped --ref A --out /mnt/wbterminal1/tmp/claude-scratch/perf/r3-m1/m1b-hour22"
+   ],
+   "decisionRules": ["V", "R1", "R2"],
+   "result": null
+  },
+  {
+   "id": "M1c-WEBAC",
+   "kind": "reference-ab",
+   "stage": "R3-1 M1c - WebAC on the 1070, the same-stack stand-in for the upstream renderer (plan section 4.1; lessons doc section 5.1)",
+   "gate": "none; rule R10 (bounds only, never a target, never mixed into B0 comparisons)",
+   "title": "H-default and H-retailscope (ours) vs W (WebAC, draw distance 8, degmul=1) at 0xA9B40001 (96, 96, 80) yaw 0, parked, 3 reps each, interleaved",
+   "reps": 3,
+   "ref": "H-default",
+   "armDefaults": {"quality": "ultra", "window": "1920,1080", "stillCam": {"dist": 8, "az": 180, "el": 12, "dz": 1.5}},
+   "arms": [
+    {"name": "H-default", "flags": "", "note": "ours, B0 ultra"},
+    {"name": "H-retailscope", "flags": "objRadius=1&clouds=off&ssao=off&bloom=off&fxGlow=off&layerHaze=off&lightShafts=off&terrainGrass=off&pom=off", "note": "closest flag match to WebAC's job; no msaa=0 (WebAC renders with MSAA too)"}
+   ],
+   "protocolExceptions": [
+    "Profile: W reuses the persistent C:\\Temp\\cdpwb-wls profile (its ~1.27 GB OPFS DAT cache); record it in the run JSON. W runs warm against our fresh-profile H arms, so first-turn max and h100 are not compared across W and H.",
+    "Window: W and both H arms at the same 1920x1080 window, set before navigating; record innerWidth x innerHeight and devicePixelRatio in every arm (hbbench records them for H).",
+    "Sky: WebAC has no sky-time override, so W follows ACE's clock. Record ACE's in-game hour at each W rep and run the H arms at the matching skytime (`hbbench.mjs --skytime <hour>`); if the hour cannot be matched, note the mismatch next to the reading.",
+    "Panel: all arms on the same 120 Hz panel, vsync state recorded.",
+    "Camera: our still segment uses the chase camera behind the player looking north (stillCam az 180 = camera south of the player, heading 0); WebAC parks with acDebug.setPlayerYaw(0)."
+   ],
+   "recipe": [
+    "LAPTOP (free -m >= 2.5 GB, nothing heavy running): cd /mnt/wbterminal1/ac-refs/webac && npm install   (--ignore-scripts if better-sqlite3 fails to build)",
+    "mkdir dat && ln -s /home/wbterminal/ac_base_dats/client_portal.dat /home/wbterminal/ac_base_dats/client_cell_1.dat /home/wbterminal/ac_base_dats/client_local_English.dat dat/",
+    "Bridge (WebAC's own; ours cannot carry bare AC datagrams): setsid nohup npx tsx services/ws-tcp-bridge/src/bridge.ts 9090 127.0.0.1 9000 > /mnt/wbterminal2/webac-bridge.log 2>&1 &",
+    "Dev server: setsid nohup npx vite --host 127.0.0.1 --port 3000 --strictPort > /mnt/wbterminal2/webac-vite.log 2>&1 &",
+    "Tunnel: add -R 3000:127.0.0.1:3000 -R 9090:127.0.0.1:9090 to the box ssh (keep -L 9333, -R 8765, -R 8080, -R 8766)",
+    "BOX: the off-screen MODE T test Chrome with --mute-audio --user-data-dir C:\\Temp\\cdpwb-wls on CDP :9333, window 1920x1080; one tab via playwright-core connectOverCDP; BEFORE navigating, addInitScript the DAT-iteration shim (portal 2074 / cell 982 / language 994) from the lessons doc section 5.1 step 6",
+    "Navigate to http://127.0.0.1:3000/?ace&bridge=ws://127.0.0.1:9090&account=<ACCT>&password=<PW>&degmul=1 (first load streams ~1.27 GB into OPFS; never ?nocache); confirm UNMASKED_RENDERER says GTX 1070 / D3D11",
+    "Park: gate on acDebug.collisionState().x > 0 and window.__ac.sceneManager; acDebug.admin('@teleloc 0xA9B40001 96 96 80'); acDebug.setPlayerYaw(0); wait until the scene mesh count is stable to ~1% across 4 polls; record ACE's in-game hour",
+    "Measure W from the laptop: AC_URL='<same url>' npx tsx tools/measure-perf.ts --attach http://127.0.0.1:9333 --no-reset --secs 20; copy verification/perf/perf-<utc>.json to /mnt/wbterminal1/tmp/claude-scratch/perf/rc-rust-scene-core-2026-10-29/m1c/W-r<n>.json; record draw distance (8) and degmul (1)",
+    "Close the WebAC tab (never kill the box Chrome except by its user-data-dir), then the H arms for this rep: node scripts/perf-worker/hbbench.mjs --arms apps/holtburger-web/docs/reengineering/queue-1070/batch-R3-M1-2026-10-30.json --item M1c-WEBAC --reps 1 --port 8766 --uncapped --skytime <ACE hour> --out /mnt/wbterminal1/tmp/claude-scratch/perf/rc-rust-scene-core-2026-10-29/m1c/H-r<n>",
+    "Repeat W / H for reps 2 and 3 (rotate which goes first)",
+    "python3 -I scripts/perf-worker/hbreport.py m1c --h <m1c>/H-r1 --h <m1c>/H-r2 --h <m1c>/H-r3 --w <m1c>/W-r1.json --w <m1c>/W-r2.json --w <m1c>/W-r3.json",
+    "Clean up: close the tab, stop vite and the bridge, drop the -R 3000 / -R 9090 forwards"
+   ],
+   "reads": "heading-binned draws (plus multidraw ranges for ours), renderJs p50 (ours through the v2 wrapper), main-thread busy, GPU ms (timer query for ours, from an hbanatomy run of each H arm), fps; W's renderJs p50 / draws = a stock-three.js us-per-draw on the 1070.",
+   "decisionRules": ["R10", "Written 2026-10-30 BEFORE the run (plan section 4.1): W ~= H-retailscope fps -> the gap is three.js submission + ANGLE, fewer real draws first (R3-4, R3-5, R3-7); W clearly faster -> our passes, shading and bookkeeping first (R3-2 empty-pass skip, R3-11 items 4-5). R3-8 applies this. Not a target: WebAC renders Gouraud lighting with no post-processing."],
+   "blockers": ["second Developer-level account (or the clients one after the other)", "box memory (~1.3 GB tab) and ~1.27 GB OPFS writes: never alongside one of our real-world tabs", "never minimize the window (hidden tabs throttle rAF)"],
+   "result": null
+  },
+  {
+   "id": "M1d-OPENAC",
+   "kind": "reference-ab",
+   "stage": "R3-1 M1d - OpenAC native A/B (optional, heavy)",
+   "gate": "only after owner decision (i); rule R10",
+   "title": "O-retail and O-atmo at the M1c pose (plan section 4.2; lessons doc section 5.2)",
+   "recipe": ["Follow plan section 4.2 steps 1-8 verbatim (SDK 10.0.3xx on /mnt/wbterminal1, capped-build publish one heavy job at a time, r10 DATs via rsync -aL, bake, ACDREAM_NO_AUDIO=1 mandatory, schtasks /it + hidden-run.vbs, firewall allow rule pre-added, stop by PID / image path)."],
+   "decisionRules": ["R10"],
+   "result": null
+  },
+  {
+   "id": "M1-REPORT",
+   "kind": "report",
+   "stage": "R3-1 output - budget ledger v0",
+   "gate": "the owner signs per-tier targets from it (decision (d); starting proposal: ultra >= 60 fps standing and moving at 1080p, high >= 90, both with 0 frames over 100 ms)",
+   "title": "hbreport over every M1 run: rule V statuses, R1 deltas, R3 verdicts for the built arms, R5 binding thread per tier and resolution, R8 from the ceiling probe, the M1c bounds",
+   "recipe": [
+    "python3 -I scripts/perf-worker/hbreport.py bench <each bench dir> --box-events <this file> --queue <this file> --ref <item ref> --aa <item aa> [--anatomy <dir>] [--look ARM=pass|fail ...] --json <OUT>/<item>.report.json",
+    "python3 -I scripts/perf-worker/hbreport.py anatomy <anatomy dir>/*/anatomy.json --json <OUT>/ledger-v0.json",
+    "Patch this file's `result` fields and the plan's section 1 tables; owner decisions (d), (g), (h)."
+   ],
+   "result": null
+  }
+ ]
+}

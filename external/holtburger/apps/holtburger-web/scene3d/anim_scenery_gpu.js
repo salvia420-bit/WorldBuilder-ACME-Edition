@@ -402,6 +402,19 @@ export function syncAnimInstMaterials() {
   }
 }
 
+// ?animSceneryBatch (R3-3 K3, 2026-10-30, DEFAULT OFF) — read-only accessors
+// for scene3d/gpu_batch/anim_scenery_batch.js: the batch draws read the SAME
+// pose table (one shared uniform holder) and need the member material behind
+// a variant to judge whether two surfaces can share one class draw. Neither
+// is called with the flag off.
+/** The pose-table uniform holder every GPU-posed variant binds. */
+export function animPoseTexUniform() { return _texUniform; }
+/** The member material a variant mirrors, or null. */
+export function animSceneryMemberOf(variant) {
+  const e = variant ? _live.get(variant) : null;
+  return e ? e.member : null;
+}
+
 /** Diag counts. */
 export function animSceneryGpuDiag() {
   return { variants: _live.size, rows: _rows.length, capacity: _capacity };

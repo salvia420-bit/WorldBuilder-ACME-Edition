@@ -1185,7 +1185,9 @@ import { linkMissIsDefect } from "./motion_link_diag.js";
 // (2026-10-26, default on, `=off` escape) it hands each rig to the Rust kernel
 // (scene3d/rust/rig.js, docs/2026-10-26-rust-rig.md): one wasm call per posed
 // entity, at the same point in this loop, and no Euler re-derivation.
-import { poseRigAt } from "./motion/motion_sequence.js";
+// `?rigPoseSkip` (R3-2, default off) skips the call's stores when the rig
+// already holds them; `invalidateRigPose` is its position-only-writer notice.
+import { poseRigAt, invalidateRigPose, rigPoseSkipEnabled } from "./motion/motion_sequence.js";
 // `?rustEntityCull` (lane B, 2026-10-26) reads its flag through the scene-core
 // reader (default off, `=on` opts in).
 import { rustFlag } from "./rust/scene_core.js";
@@ -1477,8 +1479,6 @@ import {
   applyRestPoseFrame,
   buildPartSurfaceMeshes,
   createPartFramesProxy,
-  rigMeshAliasEnabled,
-  installRigMeshAlias,
 } from "./setup_rig.js";
 // ?rustEntityWorld (lane R4, 2026-10-26; default off): the rig's share of the
 // scene walk — the root's own updateMatrixWorld + the main-scene projection
@@ -5554,7 +5554,6 @@ export class EntityManager {
       }
       return this._fallbackMaterial();
     };
-    const _rigMeshAliasOn = rigMeshAliasEnabled(); // ?rigMeshAlias (read once per spawn)
     for (let p = 0; p < partCount; p += 1) {
       const partGroup = new THREE.Group();
       partGroup.name = `part_${p}`;
@@ -5626,10 +5625,6 @@ export class EntityManager {
       }
       parts.push(partGroup);
       root.add(partGroup);
-      // ?rigMeshAlias (2026-10-26, default off, owner decision): the part walks
-      // its own surface meshes, which share its matrixWorld
-      // (scene3d/setup_rig.js `installRigMeshAlias`).
-      if (_rigMeshAliasOn) installRigMeshAlias(THREE, partGroup);
     }
     // ?rustEntityWorld (default off): the root walks its parts and surface
     // meshes itself (same values as three's walk), and the main renderer's
@@ -18260,6 +18255,11 @@ export class EntityManager {
           inst._ragdoll = null;
           inst._ragdollFrozenPose = null;
         }
+        // ?rigPoseSkip (default off): applyRagdoll moves its unswung parts by
+        // position alone, which the skip's quaternion / Euler hooks cannot see,
+        // so the next poseRigAt must pose this rig. Gated: with the flag off
+        // it reads one boolean and never calls invalidateRigPose.
+        if (rigPoseSkipEnabled()) invalidateRigPose(inst.parts);
       }
       // Swing-pose / cast-pose tween ticks RETIRED 2026-06-18 (WS-B teardown)
       // along with setSwingPose/setCastPose + _tickSwingTween/_tickCastTween.

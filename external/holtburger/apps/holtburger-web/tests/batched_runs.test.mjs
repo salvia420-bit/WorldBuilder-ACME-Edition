@@ -359,6 +359,48 @@ function makeBucket(placements) {
     }
   }
 
+  // 2026-10-30 (round 3 R3-0, lane H2): window.__batchedRuns.frameInto(out) — the
+  // non-allocating twin of frame() the harness-v2 probe samples every frame with
+  // (scripts/perf-worker/lib/hb_page.mjs). Same five fields as frame(), written into
+  // the caller's object, which is returned (nothing allocated per call).
+  {
+    const hadWindow = Object.prototype.hasOwnProperty.call(globalThis, "window");
+    const prevWindow = globalThis.window;
+    globalThis.window = {};
+    const r4 = makeRenderer(ext);
+    let api = null;
+    try { installBatchedRuns(r4); api = globalThis.window.__batchedRuns || null; }
+    finally { if (hadWindow) globalThis.window = prevWindow; else delete globalThis.window; }
+    check("frameInto: the window seam offers frameInto next to frame()", !!api && typeof api.frame === "function" && typeof api.frameInto === "function");
+    if (api && typeof api.frameInto === "function") {
+      r4.info.render.frame = 40;
+      r4.renderBufferDirect(cam, null, bm.geometry, bm.material, bm, null);
+      r4.renderBufferDirect(cam, null, noRep.geometry, noRep.material, noRep, null);
+      bm.sortObjects = true; // a sorted draw too, so sortedSubDraws / sortedIssued are not 0
+      r4.renderBufferDirect(cam, null, bm.geometry, bm.material, bm, null);
+      bm.sortObjects = false;
+      r4.info.render.frame = 41; // rolls frame 40 into `last`
+      r4.renderBufferDirect(cam, null, one.geometry, one.material, one, null);
+      const want = api.frame();
+      const FIELDS = ["batchedCalls", "subDraws", "issued", "sortedSubDraws", "sortedIssued"];
+      check("frameInto: frame() has the five fields (sorted ones non-zero here)",
+        JSON.stringify(Object.keys(want).sort()) === JSON.stringify([...FIELDS].sort()) && want.batchedCalls === 3 && want.sortedSubDraws > 0, JSON.stringify(want));
+      const out = { stale: "kept" };
+      const ret = api.frameInto(out);
+      check("frameInto: returns the object it was given (no new object)", ret === out);
+      check("frameInto: fills the same five fields with frame()'s values",
+        FIELDS.every((k) => out[k] === want[k]), JSON.stringify(out));
+      check("frameInto: touches nothing else on the caller's object", out.stale === "kept" && Object.keys(out).length === FIELDS.length + 1);
+      const again = api.frameInto(out);
+      check("frameInto: a second call reuses the same object", again === out && FIELDS.every((k) => out[k] === want[k]));
+      const src = readFileSync(new URL("../scene3d/batched_runs.js", import.meta.url), "utf8");
+      const body = (/frameInto: \(out\) => \{([^\n]*)\},\n/.exec(src) || [])[1] || "";
+      check("frameInto: its body builds no object or array (no literal, spread or copy)",
+        body.length > 0 && !/\{|\[|\.\.\.|Object\.|new /.test(body), body);
+    }
+    uninstallBatchedRuns(r4);
+  }
+
   // Lifetime: the run texture is disposed with its canonical texture.
   let disposed = false;
   swapped.addEventListener("dispose", () => { disposed = true; });

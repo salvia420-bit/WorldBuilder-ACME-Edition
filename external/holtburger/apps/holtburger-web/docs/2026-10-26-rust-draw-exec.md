@@ -1,4 +1,4 @@
-# Lane X — the stage-3 draw executor `?drawExec` (S3.1), sentinel runs `?drawExecRuns` (S3.2) and entity parts `?drawExecRigs` (S3.6) (2026-10-26)
+# Lane X — the stage-3 draw executor `?drawExec` (S3.1), sentinel runs `?drawExecRuns` (S3.2, deleted 2026-10-30: §10) and entity parts `?drawExecRigs` (S3.6) (2026-10-26)
 
 Part of the Rust scene core effort: [2026-10-26-rust-scene-core.md](2026-10-26-rust-scene-core.md) (plan, contract,
 lane table). Design: [2026-10-26-rust-draw-list-design.md](2026-10-26-rust-draw-list-design.md) (R3; §5 the design,
@@ -7,17 +7,18 @@ laptop (i5-6300U, shared with other lanes) over the fake WebGL2, **[D]** derived
 
 Nothing here ran in a browser, under cargo or on the 1070 (laptop rule). The SwiftShader pixel smoke is written for the
 orchestrator (§6). §9 is lane X2's follow-up (the two hook-driven divergences fixed exactly, coverage, the fast path).
+§10 is round 3 R3-2 (2026-10-30): the `?drawExecRuns` code, its seams and its suite / smoke arms deleted.
 
 ## 1. What shipped
 
 | Flag | Default | What it does | Exact? |
 |---|---|---|---|
 | `?drawExec` | **ON** since 2026-10-26 (orchestrator; `=off` escape) | `scene3d/draw_exec.js`, the OUTERMOST `renderBufferDirect` wrapper. The first draw of an eligible static (object, material, group) goes through the untouched chain and is RECORDED (three's program and uniform objects, the VAO three bound, the index type, the geometry as the program's attributes by identity + index version + drawRange, the material fields three re-reads per draw, async_link's stamp combo). Later draws validate the record with property reads and take: CONTINUATION (same program, material, camera, render call as the draw before: the executor issues exactly what three's setProgram would — the batching texture binds through three's own `textures.setTexture2D`, receiveShadow, the matrix setters, `state.setMaterial` unless provably a no-op — then the VAO and the draw), SWITCH (three's own renderBufferDirect with a degenerate group runs setProgram + setMaterial and returns before its VAO setup; the executor then binds and draws, or lets three draw and re-records if the program moved), or FULL (the chain). It stands in for batched_runs (its own `batchedRunsBeforeDraw`), skip_empty_multidraw (its own `skipEmptyMultiDrawTake`) and async_link_guard (its stamp test) on the draws it executes. | Yes: the full GL call stream (every call, with arguments, as it reaches the driver) is identical to the flag-off arm's, frame by frame, in 16 scenarios (§3), with identical `renderer.info`, `__batchedRuns.frame()` totals and batched_runs / skip_empty / bmIndirectPerCamera stats. |
-| `?drawExecRuns=on` (needs `?drawExec`) | off | S3.2: an outermost `list.sort` hook collapses each run of ≥ 2 consecutive opaque items the executor owns into ONE sentinel render item; the executor does every item's renderObjects + renderObject steps itself, in order (layer test, override material, hooks unless they are three's own empty prototype functions, matrices, the two-pass branch, the draw). Never while a wrapper sits over the executor, for another scene's list, or with transmissive items. **No measurable gain in node** (§4): keep off unless the 1070 says otherwise. | Yes, same proof (a third arm in every scenario). |
-| `?drawExecRigs` (needs `?drawExec`) | **ON** since 2026-10-26 (orchestrator; `=off` escape) | S3.6 (R3 §8): worldRoot's `entities` group is an owned root too, so rigid entity parts are executed (SkinnedMesh / InstancedMesh stay refused by type). Nothing in the executor depends on a draw being static: matrices go through three's setters on every draw, and churn cool-downs absorb fades. Not in the brief's S3.1 scope — added because entity parts are the largest pass-through population (~450 draws at Holtburg, R3 §6 option I) and the pass-through costs ~0.2 µs each (§4). | Yes, same proof (a fourth arm, with runs, in every scenario). |
+| ~~`?drawExecRuns=on`~~ | **deleted 2026-10-30** (round 3 R3-2, §10); was off | S3.2 (history): an outermost `list.sort` hook collapses each run of ≥ 2 consecutive opaque items the executor owns into ONE sentinel render item; the executor does every item's renderObjects + renderObject steps itself, in order (layer test, override material, hooks unless they are three's own empty prototype functions, matrices, the two-pass branch, the draw). Never while a wrapper sits over the executor, for another scene's list, or with transmissive items. **No measurable gain in node** (§4); never default-on, deleted in R3-2. | Was: yes, same proof (a third arm in every scenario). |
+| `?drawExecRigs` (needs `?drawExec`) | **ON** since 2026-10-26 (orchestrator; `=off` escape) | S3.6 (R3 §8): worldRoot's `entities` group is an owned root too, so rigid entity parts are executed (SkinnedMesh / InstancedMesh stay refused by type). Nothing in the executor depends on a draw being static: matrices go through three's setters on every draw, and churn cool-downs absorb fades. Not in the brief's S3.1 scope — added because entity parts are the largest pass-through population (~450 draws at Holtburg, R3 §6 option I) and the pass-through costs ~0.2 µs each (§4). | Yes, same proof (the rigs arm of every scenario: the shipped default; until R3-2 it ran with runs on). |
 
-Live seams: `window.__drawExec` — `.off` (A/B, live), `.runs` (S3.2 live), `.stats` (draws, fast, stateOnly, full,
-passThrough, empty, recorded, progChanged, smSkips, runs / runItems / hookSkips, vaoBinds / vaoSuppressed / vaoFixes /
+Live seams: `window.__drawExec` — `.off` (A/B, live), `.stats` (draws, fast, stateOnly, full,
+passThrough, empty, recorded, progChanged, smSkips, vaoBinds / vaoSuppressed / vaoFixes /
 vaoFixLate (a hand-over bind the setup hook missed, §3.1: must stay 0), restores, resets, errors, `invalid` by reason, `refused` by reason, `chain`), `.verify(frames)` (for N rAF frames every
 executed draw also checks renderer.properties / program / uniforms / the VAO model and GL's own `CURRENT_PROGRAM` and
 `VERTEX_ARRAY_BINDING`; resolves `{checks, fails}` — sync GL queries, diag only).
@@ -47,7 +48,7 @@ Refused, with the reason it is refused:
 
 ## 2. Files
 
-- `scene3d/draw_exec.js` (new): the executor, S3.2, S3.6, the VAO / state coherence hooks, `window.__drawExec`.
+- `scene3d/draw_exec.js` (new): the executor, S3.2 (deleted 2026-10-30, §10), S3.6, the VAO / state coherence hooks, `window.__drawExec`.
 - `scene3d/batched_runs.js`: the wrapper's body is now the exported `batchedRunsBeforeDraw(renderer, object)` (L1
   observe + run layout + frame count, returns the run state) and `batchedRunsCall(fn, this, st, pending, ...)` (the
   `_indirectTexture` swap + `_pending` around a call); the wrapper is built on both, so behaviour is shared. Wrapper
@@ -74,7 +75,8 @@ index.js order: reversed-Z (fake `EXT_clip_control`; `installReversedZ`), `insta
 `installDepthBandSort` (one scenario at 1 band/octave), the BatchedMesh colorTexture fix, `installAsyncLinkGuard`,
 `installBatchedIndirectPerCamera`, `installSkipEmptyMultiDraw`, `installBatchedRunsChunks` + `installBatchedRuns` (+ L1,
 sorted runs) — then the executor. Four arms per scenario: stock, `?drawExec`, `?drawExec` + `?drawExecRuns`,
-`?drawExec` + `?drawExecRuns` + `?drawExecRigs`.
+`?drawExec` + `?drawExecRuns` + `?drawExecRigs`. (Since R3-2, §10: three — stock, `?drawExec`, and the shipped default
+`?drawExec` + `?drawExecRigs`.)
 
 The world: pools on the early-out with runs (some with colours), culled unsorted buckets with runs, sorted translucent
 buckets with consecutive runs, unmarked atlas buckets, building batches + meshes, plain statics on shared materials
@@ -216,6 +218,8 @@ Reading:
 - Pass-through draws pay +0.18–0.27 µs (the bare outermost-wrapper frame is 0.06–0.15 of it, ablation): keeping three's
   private trackers coherent on every three draw costs a few context writes per call.
 - S3.2 sentinel runs: no gain beyond noise anywhere (as R3's prototype found: v3t ≈ v1t). Implemented, exact, off.
+  Deleted on 2026-10-30 (round 3 R3-2, §10); the bench arms that measured it (`runs`, and `rigs` = runs + rigs) went
+  with it.
 - S3.6 (`?drawExecRigs`) is the lever: entity parts stop paying the pass-through and become continuations / switches
   (−0.9 µs/draw on parts sharing materials).
 - Under `?bmColorTextureFix=off` three re-resolves the program on every BatchedMesh draw (getParameters + the cache-key
@@ -253,13 +257,14 @@ Reading:
 capped-build node harness/glsl_smoke/draw_exec_smoke.mjs
 ```
 
-Five browser launches, one after another (`?drawExec=off`, `=on&drawExecRigs=off&drawExecRuns=off`,
-`=on&drawExecRuns=on&drawExecRigs=off`, `=on&drawExecRuns=on&drawExecRigs=on`, and the shipped default — no flags:
-`?drawExec` and `?drawExecRigs` on, runs off; lane X2: every other arm names every flag, so no arm rides a default), 160×120 into a 4x MSAA target, reversed-Z when SwiftShader has
+Four browser launches since R3-2 (§10; five before), one after another (`?drawExec=off`, `=on&drawExecRigs=off`,
+`=on&drawExecRigs=on&drawExecRuns=on` — a STALE runs flag, which must be inert — and the shipped default — no flags:
+`?drawExec` and `?drawExecRigs` on; lane X2: every other arm names both flags, so no arm rides a default), 160×120 into a 4x MSAA target, reversed-Z when SwiftShader has
 `EXT_clip_control` (reported as `depthMode`). Warm-up until a frame adds no async-link deferral, then 8 read-back frames
 with a moving camera. PASS = every frame hash equal to the off arm's, max channel diff 0 on the last frame,
 `gl.getError() === 0`, no console / page errors, every program linked, the executor executed (fast > 0 and stateOnly >
-0) with every hand-over bind issued at three's setup (`vaoFixLate` 0, §3.1), the runs arm formed runs, and the rigs arm executed the entity parts (fewer pass-throughs). The page's logic was
+0) with every hand-over bind issued at three's setup (`vaoFixLate` 0, §3.1), no arm carries S3.2's counters (`runs` /
+`runItems` / `hookSkips`; until R3-2: the runs arm formed runs), and the rigs arms executed the entity parts (fewer pass-throughs). The page's logic was
 dry-run in node over the fake context (all four arms: no errors, warm-up ends after 4 frames, runs form, rigs cut the
 pass-throughs 160 → 88); pixels are the smoke's job.
 
@@ -281,7 +286,7 @@ pass-throughs 160 → 88); pixels are the smoke's job.
    closures the install cannot read (`THREE_SETUP_PREMISES`: setup's bind decision directly followed by needsUpdate →
    `program.getAttributes()`, `acquireProgram` pushing onto that list, `getAttributes` an own property, setProgram's
    `getUniforms` making the first use), so only the suite checks them. A three bump re-runs the suite.
-4. **Hook assumptions** (setMaterial skip, S3.2 hook skipping): only three's own empty prototype functions and the
+4. **Hook assumptions** (the setMaterial skip; S3.2's hook skipping went with S3.2): only three's own empty prototype functions and the
    BatchedMesh prototype chain AS INSTALLED (L1 → per-camera → three) are treated as not touching WebGLState. A later
    prototype patch is simply not trusted (no skip). The suite has statics with state-changing own hooks.
    The two hook-driven divergences the integration review found (`review3/r5_shadow_unit_hook.mjs`: a hook binding a
@@ -293,8 +298,8 @@ pass-throughs 160 → 88); pixels are the smoke's job.
    `?drawExecRigs`, against R3's 1.1 ms) and is all main-thread JS; CrGpuMain sees the same commands. Every draw that is
    not executed pays ~0.2 µs for the coherence bookkeeping, so the executor's value grows with the executed share.
    The smoke has an arm per flag (its world has six rotating entity parts for `?drawExecRigs`).
-6. **Diag wrappers over the executor** (frame_split, the census probe): they see every draw (runs refuse to form under
-   them); with `?drawExec` they time the executor, not three. The census probe's `rbd_<kind>` tags still attribute.
+6. **Diag wrappers over the executor** (frame_split, the census probe): they see every draw; with `?drawExec` they time
+   the executor, not three. The census probe's `rbd_<kind>` tags still attribute.
 7. **Stock findings the suite surfaced (not caused by the executor):** (a) async_link's off-frame compile prepares each
    object's own material, never a `scene.overrideMaterial`, so override draws of a kind async_link has not linked stay
    deferred — relevant to `?portalStencil`; (b) one class material shared by a coloured and an uncoloured BatchedMesh
@@ -306,7 +311,7 @@ pass-throughs 160 → 88); pixels are the smoke's job.
 
 ```
 cd apps/holtburger-web
-node tests/draw_exec.test.mjs                 # identity suite (lane X2: 401 checks, 22 scenarios, ~60 s)
+node tests/draw_exec.test.mjs                 # identity suite (R3-2: 318 checks, 22 scenarios x 3 arms, ~25 s)
 node tests/draw_exec.test.mjs --bench-calls   # median µs per call by executor path (rotated chunks; the robust one, §9.4)
 node tests/draw_exec.test.mjs --town          # a town-shaped frame: executed share, census by kind, per-call medians (§9.3)
 node tests/draw_exec.test.mjs --bench-scenes  # frame time per draw on controlled scenes (shared laptop: see §9.4 before quoting)
@@ -333,7 +338,8 @@ scenarios, new events, `--bench-calls`, `--town`, `--bench-scenes` rotation, `DX
 
 ### 9.1 Default-on follow-up
 
-- Suite PART 1 asserts the defaults (`drawExec` and `drawExecRigs` on, `drawExecRuns` off), the four URL escapes
+- Suite PART 1 asserts the defaults (`drawExec` and `drawExecRigs` on, `drawExecRuns` off — since R3-2: deleted and
+  inert, §10), the four URL escapes
   (`off`/`0`/`false`/`no`, read through `globalThis.location` with rustFlag's memo cleared), the seam, install refused
   under `=off` and installed under the bare default. Every arm passes `force` / `runs` / `rigs` explicitly (the `--bench`
   arms did not: with rigs default on they would have executed entities).
@@ -549,6 +555,7 @@ test_async_link_guard (36), webgl_restore_render_patches (31): all pass. Smoke: 
 ### 9.6 For the orchestrator
 
 1. `capped-build node harness/glsl_smoke/draw_exec_smoke.mjs` — five arms now (§6); the fifth is the shipped default.
+   (Four since R3-2, §10.)
 2. One Holtburg laptop boot: `await __drawExec.census(60)` names what the town's `full` / `churn` / `notStatic` /
    `instanced` / `scene` draws are (by kind), and `await __drawExec.verify(120)` must stay `fails: 0`;
    `__drawExec.stats.texDemoted` should be 0 in the product (no hook re-binds units) — a non-zero count names a hook
@@ -558,3 +565,107 @@ test_async_link_guard (36), webgl_restore_render_patches (31): all pass. Smoke: 
 ### 9.7 Requested edit: `docs/url-flags.md`, the `drawExec` row (the `drawExecRuns` / `drawExecRigs` rows stand)
 
 | `drawExec` | `off`/`0`/`false`/`no` is the escape; absent or `on`/`1`/`true`/`yes` ⇒ ON | **ON** — DEFAULT-ON 2026-10-26 (lane X, stage 3 S3.1; built default-OFF the same day). Validated on the laptop: exact parity suites through the release wasm, bare-URL and all-flags Holtburg boots with 0 console / page errors and every kernel engaged (SwiftShader), full JS gate; the 1070 A/B is owed (`docs/reengineering/queue-1070/batch-RC-rust-scene-core-2026-10-26.json`) | `scene3d/draw_exec.js` `drawExecEnabled` = `rustFlag("drawExec", true)`; live A/B `window.__drawExec.off = true`; `.stats` (incl. `texDemoted`, `invalid.vaoContent`), `.verify(frames)`, `.census(frames)` (every draw by kind and outcome, with refusal / invalidation reasons) | **Static-world draws executed without three's per-draw re-derivation.** The outermost renderBufferDirect wrapper records an eligible static draw's program, uniform objects, VAO and geometry the first time, validates the record per draw, and then issues exactly what three's setProgram + setup + draw would: a continuation (same program/material/camera as the draw before) binds the batching textures, uploads receiveShadow + matrices through three's setters, setMaterial (skipped when provably a no-op), VAO, draw; a switch lets three's own renderBufferDirect do setProgram + setMaterial with a degenerate group and draws itself. Stands in for batched_runs / skip_empty_multidraw / async_link on those draws (same stats and `__batchedRuns.frame()`). Keeps three's private VAO tracker coherent (suppressed redundant binds; the hand-over bind issued at three's own setup point through a per-program `getAttributes` hook; `.stats.vaoFixLate` must stay 0). Lane X2 (2026-10-26): exact under hooks that re-bind texture units between continuations of a lit material (a texture epoch demotes the continuation to the state-only call, whose setProgram re-binds the shadow maps — `stats.texDemoted`; nothing hooked with shadows off) and under a foreign mesh re-setting a shared VAO (a per-VAO content generation bumped by vertexAttrib(I)Pointer / disableVertexAttribArray; record refusal `noPosition`); also owns the occlusion proxies (`occlusion-proxies`: back-to-back continuations), takes empty multi-draws on the wrappers' own path up front (`stats.empty`, no longer `full` every frame), binds the batching textures through cached three properties objects and caches batched_runs' per-mesh lookups (BatchedMesh continuations 1.93 → 1.34 µs/call in node). Eligible: main scene, Mesh / BatchedMesh under worldRoot's terrain/buildings/statics/cells (+ entities, `?drawExecRigs`) and the main scene's `occlusion-proxies` group, built-in or ShaderMaterial (no wireframe, morph, UBO groups, clipping, transmission, two-pass). EXACT: the full GL call stream identical to flag-off, frame by frame, 22 scenarios (tests/draw_exec.test.mjs, 401 checks; 61/63 mutants caught); pixel smoke harness/glsl_smoke/draw_exec_smoke.mjs (5 arms incl. the shipped default). Node (per call, paired): continuations −0.9 (plain) … −2.1 µs (BatchedMesh) vs stock, switches ≈ 0, other draws +0.1…+0.2 µs; a town-shaped frame (628 draws): 86.6 % executed + 3.4 % on the empty path, −0.75 ms/frame inside renderBufferDirect vs stock; 1070 A/B owed. docs/2026-10-26-rust-draw-exec.md §9 | scene3d/draw_exec.js; index.js (install after installBatchedRuns); batched_runs.js `batchedRunsBeforeDraw(renderer, object, cache)` / `newBatchedRunsCache`; skip_empty_multidraw.js `skipEmptyMultiDrawWouldSkip` |
+
+## 10. Round 3 R3-2 (2026-10-30): `?drawExecRuns` deleted
+
+Plan: `docs/2026-10-29-round3-gpu-driven.md` §2 ("S3.2 `drawExecRuns` — Drop, delete code. Shipped off for no gain.")
+and R3-2 ("Delete the `rigMeshAlias` and `drawExecRuns` code"). The evidence is §4: no gain beyond noise in any node
+bench; it never went default-on. Node only (laptop rule); the smoke is the orchestrator's.
+
+**What went** (`scene3d/draw_exec.js`, 1,535 → 1,416 lines):
+- the reader `drawExecRunsEnabled` (`rustFlag("drawExecRuns", false)`) and the `opts.runs` install option;
+- the module-level `RUN_GEOMETRY` (a BufferGeometry built at import);
+- per install: `RUN_MATERIAL` (a MeshBasicMaterial), the sentinel pool (`runPools`, `newSentinel`), `owned`,
+  `collapse`, `runExec`, and the `list.sort` hook (`hbDxSortRuns`) with its `done` WeakSet;
+- the wrapper's sentinel dispatch (`geometry === RUN_GEOMETRY`);
+- the seam `window.__drawExec.runs`, and the counters `stats.runs`, `runItems` and `hookSkips`.
+
+**What stays, unchanged:** everything else. That includes the renderLists `get` hook: it always captured the renderer
+clipping for the default path (`rcOn`, §9.4 cut 5). Only its install marker is renamed (`__hbDrawExecRuns` →
+`__hbDrawExecLists`, non-enumerable). census(), verify(), the records, the coherence hooks and `?drawExecRigs` are
+unchanged. `batched_runs.js` and `skip_empty_multidraw.js` are untouched: none of their seams served only the runs path.
+`batchedRunsBeforeDraw`, `batchedRunsCall`, `newBatchedRunsCache`, `skipEmptyMultiDrawTake` and
+`skipEmptyMultiDrawWouldSkip` are the executor's default path.
+
+**The default path is identical.** With runs off, none of the deleted code issued a GL call. The per-draw path loses
+one compare. Install loses one `rustFlag` read, one MeshBasicMaterial and one WeakSet; the import loses one
+BufferGeometry. One side effect can be seen outside the GL stream: three's material id counter no longer advances
+once at install. Materials created after the executor's install now get ids one lower than before. three's
+`painterSortStable` and our program sort compare material ids by difference, so the draw order does not change, and the
+GL stream carries no ids (each suite arm already builds its world at different absolute ids). This is an EXACT-class
+change, not an eye-test class: no rc-eye shots are needed. The proof is the stream suite below plus the smoke's pixel
+identity.
+
+**Suite** (`tests/draw_exec.test.mjs`): 22 scenarios, now three arms each:
+- stock;
+- `?drawExec` with rigs off;
+- `?drawExec` + `?drawExecRigs`.
+
+Before there were four (stock, `?drawExec`, + runs, + runs + rigs). The shipped default (rigs on, runs off) was not a
+scenario arm before, only `--town`'s; now it is one.
+
+- Checks: **403 → 318**. Removed: 86 `[runs]`-arm checks (stream, stats and errors in all 22 scenarios, and "sentinel
+  runs formed" in 20 of them), plus 2 PART 1 flag checks (default OFF, URL opt-in). The `[rigs+runs]` checks became the
+  `[rigs]` checks. Added: 3 PART 1 checks.
+- **The three new checks** pin the deletion:
+  - (a) the module exports no `drawExecRunsEnabled`;
+  - (b) an executor installed under a STALE `?drawExecRuns=on` URL **and** a stale `runs: true` option, after 4
+    frames of the suite world, leaves no sentinel item in the sorted opaque list and keeps three's own `list.sort`.
+    Precondition: the list holds consecutive owned pairs, so a live runs path cannot pass;
+  - (c) there is no `api.runs` and no `stats.runs` / `runItems` / `hookSkips`.
+
+  **They FAIL on the pre-change executor**: the new suite with `DX_MODULE` = the pre-change copy gives 315 passed /
+  3 failed, exactly those three ("7 opaque items, 2 consecutive owned pairs, 2 sentinels, list.sort hbDxSortRuns"). On
+  the new code: "99 opaque items, 96 consecutive owned pairs, 0 sentinels, list.sort sortDepthBanded". The other 315
+  pass on both, so the remaining arms behave the same before and after.
+- Mutants: lane X2's generator, parameterised by source file, reruns the same 63 mutants on the pre-change file.
+  - **Before: 61 / 63 caught**. Survivors: M24, the runs-transmissive guard, and M30, the idle late-fix fallback, as
+    in §9.5.
+  - **After: 54 / 55 caught**. The eight S3.2 mutants M19–M26 were retired with their code (their anchors are gone).
+    All 55 remaining anchors match the new file. M30 survives, for the same reason as before.
+  - Before the deletion, the per-mutant failure split showed that every remaining mutant was also caught outside the
+    runs arms. B2 is caught by its own crash, as before. So the deletion lost no teeth.
+  - Generator, runner and logs: `/mnt/wbterminal1/tmp/claude-scratch/rustcore-2026-10-29/round3-a/D/mut/`
+    (`make.mjs` with `MUT_SRC` / `MUT_OUT` / `MUT_SKIP`; `run.sh`, with a free-memory gate of 2,000 MB; `pre/`,
+    `post/`, `pre_results_*.txt`, `post_results_*.txt`).
+- Bench modes run without errors:
+  - `--bench-scenes` / `--bench-calls`: arms stock, exec, dflt (+ base);
+  - `--bench`: arms stock and exec;
+  - `--town`: its census is unchanged — 628 draws/frame, 347.6 fast + 196.0 state-only, 21.4 empty, 63.0 pass:
+    86.6 % executed, as in §9.3.
+
+**Regression** (targeted, one at a time): `tests/batched_runs.test.mjs` 69 / 0 before and after (file unchanged),
+`tests/rust_entity_world.test.mjs` 98 / 0 after.
+
+**Smoke** (`harness/glsl_smoke/draw_exec_smoke.mjs`): four arms, down from five.
+- `?drawExec=off`;
+- `?drawExec=on&drawExecRigs=off`;
+- `?drawExec=on&drawExecRigs=on&drawExecRuns=on` — the stale runs flag must be inert;
+- the shipped default (no flags).
+
+Every executor arm must match the off arm's pixels (max channel diff 0) and execute. No arm may carry `runs` /
+`runItems` / `hookSkips`, and the rigs arms must cut the pass-throughs. `draw_exec_page.html` needs no change: it
+never referenced the runs path. Not run here (browser; orchestrator only).
+
+**Requested edits (files this lane does not own):**
+1. `docs/url-flags.md` §12, the `drawExecRuns` row, replaced by:
+
+   | ~~`drawExecRuns`~~ | — (no reader) | **REMOVED 2026-10-30** (round 3 R3-2; was OFF since 2026-10-26, lane X, stage 3 S3.2) | none: `drawExecRunsEnabled` deleted from `scene3d/draw_exec.js`; a stale `?drawExecRuns=on` (or `installDrawExec(…, { runs: true })`) is inert | **REMOVED 2026-10-30 — no reader.** Sentinel runs collapsed consecutive opaque items the executor owned into one render item, whose steps the executor replayed. They were exact, but measured no gain in node and never went default-on; round 3 drops them (docs/2026-10-29-round3-gpu-driven.md §2, R3-2). Deleted: the `list.sort` hook, the sentinel pool, `runExec`, `window.__drawExec.runs`, `stats.runs` / `runItems` / `hookSkips`, and the suite and smoke runs arms. `?drawExec` / `?drawExecRigs` are unchanged: the GL call stream of both arms is identical to stock in all 22 suite scenarios. Pinned by tests/draw_exec.test.mjs PART 1 ("drawExecRuns deleted: …"). docs/2026-10-26-rust-draw-exec.md §10 | scene3d/draw_exec.js |
+
+2. `docs/url-flags.md` §12, the `drawExec` row, two substrings:
+   - "22 scenarios (tests/draw_exec.test.mjs, 401 checks; 61/63 mutants caught); pixel smoke
+     harness/glsl_smoke/draw_exec_smoke.mjs (5 arms incl. the shipped default)" →
+     "22 scenarios × 3 arms incl. the shipped default (tests/draw_exec.test.mjs, 318 checks; 54/55 mutants caught —
+     `?drawExecRuns` and its arms deleted 2026-10-30, round 3 R3-2); pixel smoke harness/glsl_smoke/draw_exec_smoke.mjs
+     (4 arms incl. the shipped default)";
+   - "docs/2026-10-26-rust-draw-exec.md §9 |" → "docs/2026-10-26-rust-draw-exec.md §9, §10 |".
+3. `docs/url-flags.md` §12, the `drawExecRigs` row: "EXACT (fourth arm of the same suite)." → "EXACT (the rigs arm of
+   every scenario of the same suite — the shipped default — and of the pixel smoke)."
+4. `docs/url-flags.md` §12 intro: "and `drawExecRuns` (no gain), which stay OFF." → "and `drawExecRuns` (no gain),
+   which stayed OFF; `drawExecRuns` was deleted on 2026-10-30 (round 3 R3-2)." This needs merging with whatever the
+   `rigMeshAlias` deletion does to the same sentence.
+5. `harness/run-js-headless.mjs`, the gate entry:
+   - comment: `// Lane X (stage 3): ?drawExec / ?drawExecRigs — the full GL call stream` and
+     `// identical to stock three + our wrappers, frame by frame (fake WebGL2, 22 scenarios; ?drawExecRuns deleted R3-2).`
+   - entry: `{ tier: 5, flag: "drawExec+drawExecRigs", file: "tests/draw_exec.test.mjs" },`
+   - the browser-smoke list: ``{ file: "harness/glsl_smoke/draw_exec_smoke.mjs", why: `drawExec / drawExecRigs (static + rig scene, every arm vs stock, a stale ?drawExecRuns=on inert, max channel diff 0) — ${BROWSER_WHY}` },``

@@ -29,7 +29,9 @@
 //     bind where stock's setup binds;
 //   * the comparison: EVERY GL call (with arguments; GL objects by creation id, typed
 //     arrays by content, multi-draw arrays by their live window) as it reaches the fake
-//     driver, flag-off arm vs flag-on arm, frame by frame. Every difference fails. Also
+//     driver, flag-off arm vs each flag-on arm (`?drawExec` with rigs off, and the shipped
+//     default `?drawExec` + `?drawExecRigs`; S3.2's `?drawExecRuns` arms went with its code in
+//     round 3 R3-2), frame by frame. Every difference fails. Also
 //     renderer.info per render() call, `__batchedRuns.frame()` totals, batched_runs /
 //     skip_empty / per-camera stats, sampler-unit conflicts, UBO backing — and the
 //     executor must actually have executed (fast / state-only shares).
@@ -696,7 +698,7 @@ function step(W, f, arm) {
 }
 
 /** One arm: a fresh fake context + renderer, every production patch in index.js order. */
-function makeArm(exec, sc, { log = true, runs = false, rigs = false } = {}) {
+function makeArm(exec, sc, { log = true, rigs = false } = {}) {
   const calls = [];
   let logging = false;
   const gl = createFakeWebGL2({
@@ -717,7 +719,7 @@ function makeArm(exec, sc, { log = true, runs = false, rigs = false } = {}) {
   installAsyncLinkGuard(renderer, () => W.scene);
   if (!sc.noSkipEmpty) SKIP.installSkipEmptyMultiDraw(renderer, { force: true }); // (?skipEmptyMultiDraw=off: not installed)
   RUNS.installBatchedRuns(renderer);
-  const dx = exec ? DX.installDrawExec(renderer, () => W.scene, { force: true, runs, rigs }) : null;
+  const dx = exec ? DX.installDrawExec(renderer, () => W.scene, { force: true, rigs }) : null;
   const rt = sc.msaa ? new THREE.WebGLRenderTarget(800, 600, { samples: 4, type: THREE.HalfFloatType }) : null;
   const outer = { calls: 0 };
   if (sc.outerWrapper) {
@@ -793,14 +795,14 @@ const pick = (o, keys) => { const r = {}; for (const k of keys) r[k] = o[k]; ret
 const RUN_KEYS = ["draws", "instances", "runs", "rebuilds", "uploads", "noGain", "fallbacks", "errors", "sortedDraws", "sortedInstances", "sortedRuns", "sortedNoGain", "sortedRebuilds", "sortedUploads", "stableSkips", "stablePoisons", "stableAudits", "stableAuditFails"];
 
 /** Run one arm through the scenario; returns per-frame streams + counters + stat deltas. */
-async function runArm(exec, sc, runs = false, rigs = false) {
+async function runArm(exec, sc, rigs = false) {
   // batched_runs keeps its frame totals and its L1 audit tick module-wide: both arms start clean.
   RUNS.__resetBatchedRunsFrameForTest();
   RUNS.__resetStableForTest();
   const runs0 = pick(RUNS.getBatchedRunsStats(), RUN_KEYS);
   const skip0 = SKIP.getSkipEmptyMultiDrawStats().skipped;
   const pc0 = PERCAM.getBatchedIndirectPerCameraStats();
-  const arm = makeArm(exec, sc, { runs, rigs });
+  const arm = makeArm(exec, sc, { rigs });
   const frames = [];
   const quiet = (fn) => { const l = console.log; console.log = () => {}; try { fn(); } finally { console.log = l; } };
   for (let f = 0; f < sc.frames; f++) {
@@ -855,26 +857,45 @@ async function scenario(name, sc, expect = {}) {
   console.log(`\nSCENARIO ${name}`);
   const A = await runArm(false, sc);
   const B = await runArm(true, sc);
-  // S3.2: the same scenario with sentinel runs (?drawExecRuns) on top of the executor.
-  const C = await runArm(true, sc, true);
   {
-    const d3 = firstStreamDiff(A, C);
-    check(`${name}: [runs] GL stream identical to stock (sentinel runs on)`, d3 === null, d3 ? d3.text : `${C.frames.reduce((s, f) => s + f.calls.length, 0)} GL calls compared`);
-    check(`${name}: [runs] batched_runs / skip_empty / per-camera stats identical`, JSON.stringify(A.dRuns) === JSON.stringify(C.dRuns) && A.dSkip === C.dSkip && JSON.stringify(A.dPc) === JSON.stringify(C.dPc));
-    const c = C.dxStats;
-    console.log(`    runs arm: runs ${c.runs} items ${c.runItems} hookSkips ${c.hookSkips} fast ${c.fast} stateOnly ${c.stateOnly} smSkips ${c.smSkips}`);
-    if (expect.runs !== false) check(`${name}: [runs] sentinel runs formed`, c.runs > 0 && c.runItems >= 2 * c.runs, `${c.runs} runs, ${c.runItems} items`);
-    check(`${name}: [runs] no executor errors, every VAO hand-over bind at three's setup`, c.errors === 0 && c.vaoFixLate === 0, `errors ${c.errors} late fixes ${c.vaoFixLate}`);
-  }
-  {
-    // S3.6: entity rigid parts executed too (?drawExecRigs), with sentinel runs.
-    const R = await runArm(true, sc, true, true);
+    // S3.6: entity rigid parts executed too (?drawExecRigs) — the shipped default (?drawExec + ?drawExecRigs).
+    // (Until round 3 R3-2, 2026-10-30, this arm also ran S3.2's sentinel runs, and a third arm ran the
+    // runs without rigs; ?drawExecRuns is deleted.)
+    const R = await runArm(true, sc, true);
     const d4 = firstStreamDiff(A, R);
-    check(`${name}: [rigs+runs] GL stream identical to stock (entities executed)`, d4 === null, d4 ? d4.text : `${R.frames.reduce((s, f) => s + f.calls.length, 0)} GL calls compared`);
-    check(`${name}: [rigs+runs] batched_runs / skip_empty / per-camera stats identical`, JSON.stringify(A.dRuns) === JSON.stringify(R.dRuns) && A.dSkip === R.dSkip && JSON.stringify(A.dPc) === JSON.stringify(R.dPc));
+    check(`${name}: [rigs] GL stream identical to stock (entities executed: the shipped default)`, d4 === null, d4 ? d4.text : `${R.frames.reduce((s, f) => s + f.calls.length, 0)} GL calls compared`);
+    check(`${name}: [rigs] batched_runs / skip_empty / per-camera stats identical`, JSON.stringify(A.dRuns) === JSON.stringify(R.dRuns) && A.dSkip === R.dSkip && JSON.stringify(A.dPc) === JSON.stringify(R.dPc));
     const c = R.dxStats;
-    console.log(`    rigs arm: fast ${c.fast} stateOnly ${c.stateOnly} pass ${c.passThrough} runs ${c.runs} refused ${JSON.stringify(c.refused)}`);
-    check(`${name}: [rigs+runs] no executor errors, every VAO hand-over bind at three's setup`, c.errors === 0 && c.vaoFixLate === 0, `errors ${c.errors} late fixes ${c.vaoFixLate}`);
+    console.log(`    rigs arm: fast ${c.fast} stateOnly ${c.stateOnly} pass ${c.passThrough} refused ${JSON.stringify(c.refused)}`);
+    check(`${name}: [rigs] no executor errors, every VAO hand-over bind at three's setup`, c.errors === 0 && c.vaoFixLate === 0, `errors ${c.errors} late fixes ${c.vaoFixLate}`);
+    // (round 3 lane S) The stream checks above hold for an arm that silently ignores ?drawExecRigs
+    // too (it then equals B): pin that the shipped default takes entity parts. In every scenario
+    // that draws entity parts, each drawn one carries the executor's record in R and the
+    // structural `notStatic` refusal in B; where the scenario executes them (all but the
+    // transmissive one, see `entitiesExecuted`), R executes entity draws (its records' hits) and
+    // hands fewer draws to three than B.
+    const kindOf = (m) => m.__hbDx === undefined ? "undrawn" : m.__hbDx.isDxRefusal === true ? `refused:${m.__hbDx.refused}` : "record";
+    const tally = (W) => { const t = {}; for (const m of W.ents || []) { const k = kindOf(m); t[k] = (t[k] || 0) + 1; } return t; };
+    const tR = tally(R.arm.W), tB = tally(B.arm.W);
+    if ((B.arm.W.ents || []).length - (tB.undrawn || 0) === 0) {
+      console.log(`    (no entity part drawn in this scenario: the [rigs] entity checks do not apply)`);
+    } else {
+      check(`${name}: [rigs] entity parts are the executor's (a record each; ?drawExec alone refuses them as notStatic)`,
+        (tR.record || 0) > 0 && Object.keys(tR).every((k) => k === "record" || k === "undrawn")
+          && (tB["refused:notStatic"] || 0) > 0 && Object.keys(tB).every((k) => k === "refused:notStatic" || k === "undrawn"),
+        `rigs ${JSON.stringify(tR)} vs exec-only ${JSON.stringify(tB)}`);
+      if (expect.entitiesExecuted !== false) {
+        const entHits = (W) => W.ents.reduce((s, m) => {
+          for (let r = m.__hbDx; r && r.isDxRefusal !== true; r = r.next) s += r.hits || 0;
+          return s;
+        }, 0);
+        const entsRun = (W) => W.ents.filter((m) => { for (let r = m.__hbDx; r && r.isDxRefusal !== true; r = r.next) if (r.hits > 0) return true; return false; }).length;
+        const rHits = entHits(R.arm.W), bHits = entHits(B.arm.W);
+        check(`${name}: [rigs] entity parts executed (not handed to three) — fewer pass-throughs than ?drawExec alone`,
+          rHits > 0 && bHits === 0 && c.passThrough < B.dxStats.passThrough,
+          `${entsRun(R.arm.W)}/${R.arm.W.ents.length} entity parts executed (${rHits} draws; B ${bHits}); pass-through rigs ${c.passThrough} vs exec-only ${B.dxStats.passThrough}`);
+      }
+    }
   }
   const d = firstStreamDiff(A, B);
   const total = A.frames.reduce((s, f) => s + f.calls.length, 0);
@@ -921,15 +942,15 @@ async function scenario(name, sc, expect = {}) {
 //   mixed      150 statics + 150 entities on the same 30 materials, interleaved by the sort
 //   entities   300 entity parts on 30 materials, matrices moving every frame
 //   proxies    240 statics + 60 occlusion proxies (one box, one material, query hooks, transparent)
-// Arms: stock, ?drawExec (rigs off), + ?drawExecRuns, + ?drawExecRigs (with runs), the shipped default
-// (?drawExec + ?drawExecRigs) and — DX_BASE=<executor copy> — the same default on another executor
+// Arms: stock, ?drawExec (rigs off), the shipped default (?drawExec + ?drawExecRigs; `?drawExecRuns`
+// and its arms were deleted in round 3 R3-2) and — DX_BASE=<executor copy> — the same default on another executor
 // module (a before / after A/B in one process). Arms render in short chunks with the arm
 // ORDER ROTATED; see the loop below. BENCH_ROUNDS, BENCH_CHUNK, BENCH_MODES, BENCH_ARMS override.
 if (BENCH_SCENES) {
   console.log("BENCH-SCENES — frame time per draw vs stock (plain-object fake GL, hot GL bookkeeping nulled)");
   const DXB = process.env.DX_BASE ? await import(process.env.DX_BASE) : null;
   const dt = (n = 4) => { const t = new THREE.DataTexture(new Uint8Array(n * n * 4), n, n); t.needsUpdate = true; return t; };
-  const sceneArm = (mode, exec, runs, rigs = false, mod = DX) => {
+  const sceneArm = (mode, exec, rigs = false, mod = DX) => {
     const gl = createFakeWebGL2({ maxTextures: 16, maxCombined: 32 }).__fake.plain();
     const canvas = restorableCanvas(gl);
     const renderer = new THREE.WebGLRenderer({ canvas, context: gl });
@@ -981,7 +1002,7 @@ if (BENCH_SCENES) {
     installAsyncLinkGuard(renderer, () => scene);
     SKIP.installSkipEmptyMultiDraw(renderer, { force: true });
     RUNS.installBatchedRuns(renderer);
-    const dx = exec ? mod.installDrawExec(renderer, () => scene, { force: true, runs, rigs }) : null;
+    const dx = exec ? mod.installDrawExec(renderer, () => scene, { force: true, rigs }) : null;
     const cam = new THREE.PerspectiveCamera(60, 4 / 3, 0.1, 100);
     return { gl, renderer, scene, cam, dx, ents };
   };
@@ -991,12 +1012,11 @@ if (BENCH_SCENES) {
   // while another process holds the core). Reported: medians over rounds (and the best wall p50).
   const ROUNDS = +(process.env.BENCH_ROUNDS || 21), CHUNK = +(process.env.BENCH_CHUNK || 40);
   const MODES = (process.env.BENCH_MODES || "pools,static,switch,ineligible,mixed,entities,proxies").split(",");
-  const ARMS = (process.env.BENCH_ARMS || "stock,exec,runs,rigs,dflt" + (DXB ? ",base" : "")).split(",");
+  const ARMS = (process.env.BENCH_ARMS || "stock,exec,dflt" + (DXB ? ",base" : "")).split(",");
   const med = (xs) => { const s = xs.slice().sort((x, y) => x - y); return s.length % 2 ? s[s.length >> 1] : (s[s.length / 2 - 1] + s[s.length / 2]) / 2; };
   const make = {
-    stock: (mode) => sceneArm(mode, false), exec: (mode) => sceneArm(mode, true, false), runs: (mode) => sceneArm(mode, true, true),
-    rigs: (mode) => sceneArm(mode, true, true, true), dflt: (mode) => sceneArm(mode, true, false, true),
-    base: (mode) => sceneArm(mode, true, false, true, DXB),
+    stock: (mode) => sceneArm(mode, false), exec: (mode) => sceneArm(mode, true, false), dflt: (mode) => sceneArm(mode, true, true),
+    base: (mode) => sceneArm(mode, true, true, DXB),
   };
   // --bench-calls: the executor's own per-draw cost, robust on a shared laptop. An outer timer on
   // EVERY renderBufferDirect call (the same ~0.1 µs in every arm), each call filed by the path the
@@ -1202,7 +1222,7 @@ if (TOWN) {
     installAsyncLinkGuard(renderer, () => scene);
     SKIP.installSkipEmptyMultiDraw(renderer, { force: true });
     RUNS.installBatchedRuns(renderer);
-    const dx = mod ? mod.installDrawExec(renderer, () => scene, { force: true, runs: false, rigs: true }) : null; // the shipped defaults
+    const dx = mod ? mod.installDrawExec(renderer, () => scene, { force: true, rigs: true }) : null; // the shipped defaults
     const cam = new THREE.PerspectiveCamera(60, 4 / 3, 0.1, 500);
     cam.layers.enableAll();
     const frame = (f) => {
@@ -1281,8 +1301,10 @@ if (TOWN) {
 if (!BENCH) {
   console.log("PART 1 — flag, premises, install");
   {
-    // Defaults (2026-10-26, orchestrator): ?drawExec and ?drawExecRigs DEFAULT ON, ?drawExecRuns
-    // default off. Every arm below passes force / runs / rigs explicitly, so no arm rides a default.
+    // Defaults (2026-10-26, orchestrator): ?drawExec and ?drawExecRigs DEFAULT ON. ?drawExecRuns (S3.2
+    // sentinel runs, default off) was DELETED in round 3 R3-2 (2026-10-30): exact, no measured gain.
+    // Every arm below passes force / rigs explicitly, so no arm rides a default. (drawExecRuns stays in
+    // FLAGS: clearing its memo lets the stale-URL check below run against an executor that still reads it.)
     const FLAGS = ["drawExec", "drawExecRigs", "drawExecRuns"];
     const clearFlags = () => { for (const n of FLAGS) __setRustFlagForTest(n, undefined); };
     /** rustFlag reads globalThis.location.search (memoised; the seam clears the memo). */
@@ -1298,11 +1320,10 @@ if (!BENCH) {
     clearFlags();
     check("drawExec default ON (node: no URL)", DX.drawExecEnabled() === true);
     check("drawExecRigs default ON (node: no URL)", DX.drawExecRigsEnabled() === true);
-    check("drawExecRuns default OFF (node: no URL)", DX.drawExecRunsEnabled() === false);
+    check("drawExecRuns deleted (R3-2): the module exports no drawExecRunsEnabled", DX.drawExecRunsEnabled === undefined);
     for (const off of ["off", "0", "false", "no"]) {
       withSearch(`?drawExec=${off}&drawExecRigs=${off}`, () => check(`URL escape ?drawExec=${off} / ?drawExecRigs=${off} disarms`, DX.drawExecEnabled() === false && DX.drawExecRigsEnabled() === false));
     }
-    withSearch("?drawExecRuns=on", () => check("URL opt-in ?drawExecRuns=on arms", DX.drawExecRunsEnabled() === true && DX.drawExecEnabled() === true));
     __setRustFlagForTest("drawExec", false);
     check("rustFlag seam: drawExec off", DX.drawExecEnabled() === false);
     __setRustFlagForTest("drawExec", undefined);
@@ -1344,6 +1365,31 @@ if (!BENCH) {
     const api2 = DX.installDrawExec(arm2.renderer, () => arm2.W.scene, { force: true });
     console.warn = warn;
     check("install: an unknown wrapper in the chain -> refused, nothing wrapped", api2 && api2.installed === false && arm2.renderer.renderBufferDirect.name === "foreign", api2 && api2.reason);
+    {
+      // R3-2 (2026-10-30): ?drawExecRuns deleted. A stale URL (?drawExecRuns=on: old bookmarks, queue
+      // files) and a stale `runs: true` install option are inert: no sentinel render item in the sorted
+      // list (three's renderObjects reaches the executor once per item), three's own list.sort, no runs
+      // seam or counters. The world has runs of consecutive owned opaque items (the precondition: S3.2
+      // collapsed exactly those), so a live runs path cannot pass.
+      const ai = makeArm(false, { frames: 0 }, { log: false });
+      let apiI = null;
+      withSearch("?drawExecRuns=on", () => { apiI = DX.installDrawExec(ai.renderer, () => ai.W.scene, { force: true, runs: true, rigs: true }); });
+      for (let f = 0; f < 4; f++) { step(ai.W, f, ai); renderFrame(ai, {}); await settle(ai); }
+      const list = ai.renderer.renderLists.get(ai.W.scene, 0);
+      const op = list.opaque;
+      const own = (it) => it.object.__hbDx !== undefined && it.object.__hbDx.isDxRefusal === false;
+      let pairs = 0, sentinels = 0;
+      for (let i = 0; i < op.length; i++) {
+        if (op[i].object.__hbRun !== undefined) sentinels++;
+        if (i > 0 && own(op[i - 1]) && own(op[i])) pairs++;
+      }
+      check("drawExecRuns deleted: a stale ?drawExecRuns=on URL + `runs: true` option form no sentinel items (one item per draw, three's own list.sort)",
+        apiI !== null && apiI.installed === true && sentinels === 0 && pairs > 0 && list.sort.name !== "hbDxSortRuns",
+        `${op.length} opaque items, ${pairs} consecutive owned pairs, ${sentinels} sentinels, list.sort ${list.sort.name}`);
+      check("drawExecRuns deleted: no runs seam, no runs counters (api.runs, stats.runs / runItems / hookSkips)",
+        apiI !== null && !("runs" in apiI) && !("runs" in apiI.stats) && !("runItems" in apiI.stats) && !("hookSkips" in apiI.stats));
+      if (apiI && apiI.uninstall) apiI.uninstall();
+    }
     {
       // The census seam (diag): every draw counted once, by kind and outcome; the chain restored.
       const ac = makeArm(true, { frames: 0 }, { log: false });
@@ -1429,9 +1475,10 @@ if (!BENCH) {
   // kinds it has not linked stay deferred in both arms — a stock quirk, see the lane notes.)
   await scenario("scene.overrideMaterial on one of two render() per frame", { frames: 7, override: true }, { minExec: 0.25 });
   // (low coverage by design: the transmission target's output colour space gives every opaque
-  // material a second program, so its records churn — exact, and no faster than three)
-  await scenario("a transmissive item (three's transmission pass re-renders the opaque list)", { frames: 7, transmissive: true }, { runs: false, minExec: 0.1 });
-  await scenario("a diag wrapper over the executor (must see every draw: no sentinel runs)", { frames: 6, outerWrapper: true }, { runs: false });
+  // material a second program, so its records churn — exact, and no faster than three; the
+  // entity parts' records churn the same way, so none executes)
+  await scenario("a transmissive item (three's transmission pass re-renders the opaque list)", { frames: 7, transmissive: true }, { minExec: 0.1, entitiesExecuted: false });
+  await scenario("a diag wrapper over the executor (must see every draw)", { frames: 6, outerWrapper: true });
   await scenario("shared geometry + material with ineligible meshes (VAO hand-overs), an emptied pool", {
     frames: 12, decor: true, events: { hideAll: 5, showAll: 8 },
   }, { fixes: true });
@@ -1471,7 +1518,7 @@ if (!BENCH) {
   console.log("BENCH — node micro-bench (plain-object fake GL, hot GL bookkeeping nulled)");
   const FR = 150;
   const sc = { frames: 0, bench: true };
-  const mkPlainArm = (exec, runs = false, rigs = false) => {
+  const mkPlainArm = (exec, rigs = false) => {
     const proxyGl = createFakeWebGL2({ maxTextures: 16, maxCombined: 32, clipControl: true });
     const gl = proxyGl.__fake.plain();
     const canvas = restorableCanvas(gl);
@@ -1487,8 +1534,8 @@ if (!BENCH) {
     installAsyncLinkGuard(renderer, () => W.scene);
     SKIP.installSkipEmptyMultiDraw(renderer, { force: true });
     RUNS.installBatchedRuns(renderer);
-    // (runs / rigs explicit: ?drawExecRigs is DEFAULT ON, so an arm that omitted it would execute entities)
-    const dx = exec ? DX.installDrawExec(renderer, () => W.scene, { force: true, runs, rigs }) : null;
+    // (rigs explicit: ?drawExecRigs is DEFAULT ON, so an arm that omitted it would execute entities)
+    const dx = exec ? DX.installDrawExec(renderer, () => W.scene, { force: true, rigs }) : null;
     return { gl, canvas, renderer, W, dx, rt: null };
   };
   const nullGl = (gl) => {
@@ -1498,13 +1545,12 @@ if (!BENCH) {
       "useProgram", "bufferSubData"]) gl[n] = nop;
     gl.__fake.setCheckUnits(false);
   };
-  const arms = { stock: mkPlainArm(false), exec: mkPlainArm(true), runs: mkPlainArm(true, true) };
+  const arms = { stock: mkPlainArm(false), exec: mkPlainArm(true) };
   for (const a of Object.values(arms)) { for (let f = 0; f < 6; f++) { step(a.W, f, a); renderFrame(a, sc); await sleep(25); } nullGl(a.gl); }
   // eligibility the way the executor decided it (same world, same order in both arms)
   {
     const ex = [], st = [];
     arms.exec.W.scene.traverse((o) => { if (o.isMesh) ex.push(o); });
-    void arms.runs;
     arms.stock.W.scene.traverse((o) => { if (o.isMesh) st.push(o); });
     for (let i = 0; i < ex.length; i++) { const r = ex[i].__hbDx; st[i].__dxBenchStatic = r !== undefined && r.isDxRefusal !== true; }
   }
@@ -1514,8 +1560,8 @@ if (!BENCH) {
     ts.sort((x, y) => x - y);
     return ts[ts.length >> 1];
   };
-  const res = { stock: [], exec: [], runs: [] };
-  for (let rep = 0; rep < 7; rep++) for (const k of ["stock", "exec", "runs"]) res[k].push(timeArm(arms[k], FR, 100 + rep * FR));
+  const res = { stock: [], exec: [] };
+  for (let rep = 0; rep < 7; rep++) for (const k of ["stock", "exec"]) res[k].push(timeArm(arms[k], FR, 100 + rep * FR));
   const perKind = (a, exec, f0 = 2000) => {
     const R = a.renderer, inner = R.renderBufferDirect, props = R.properties;
     const acc = Object.create(null);
@@ -1540,7 +1586,7 @@ if (!BENCH) {
     R.renderBufferDirect = inner;
     return { acc, dpf: draws / FR };
   };
-  for (const k of ["stock", "exec", "runs"]) console.log(`  ${k.padEnd(5)} render() p50 ms ${res[k].map((x) => x.toFixed(3)).join(" / ")}  best ${Math.min(...res[k]).toFixed(3)}`);
+  for (const k of ["stock", "exec"]) console.log(`  ${k.padEnd(5)} render() p50 ms ${res[k].map((x) => x.toFixed(3)).join(" / ")}  best ${Math.min(...res[k]).toFixed(3)}`);
   // per kind: 3 interleaved reps per arm, the best µs/draw of each kind
   const bestK = { stock: Object.create(null), exec: Object.create(null) };
   let dpf = 0;
@@ -1558,7 +1604,7 @@ if (!BENCH) {
     for (const [k, b] of Object.entries(bestK[name]).sort()) console.log(`  ${name.padEnd(5)} ${k.padEnd(14)} ${b.perFrame.toFixed(1).padStart(6)} draws/frame  ${b.us.toFixed(2).padStart(6)} µs/draw (best of 3)  ${(b.us * b.perFrame / 1000).toFixed(3)} ms/frame`);
   }
   const best = (k) => Math.min(...res[k]);
-  console.log(`  ${dpf.toFixed(0)} renderBufferDirect calls/frame; render() best-of-7 p50: stock ${best("stock").toFixed(3)} ms, exec ${best("exec").toFixed(3)} ms (${(100 * (best("exec") / best("stock") - 1)).toFixed(1)}%), exec+runs ${best("runs").toFixed(3)} ms (${(100 * (best("runs") / best("stock") - 1)).toFixed(1)}%; runs ${arms.runs.dx.stats.runs}, items ${arms.runs.dx.stats.runItems})`);
+  console.log(`  ${dpf.toFixed(0)} renderBufferDirect calls/frame; render() best-of-7 p50: stock ${best("stock").toFixed(3)} ms, exec ${best("exec").toFixed(3)} ms (${(100 * (best("exec") / best("stock") - 1)).toFixed(1)}%)`);
   const s = arms.exec.dx.stats;
   console.log(`  exec arm totals: fast ${s.fast} stateOnly ${s.stateOnly} full ${s.full} pass ${s.passThrough} progChanged ${s.progChanged} recorded ${s.recorded} refused ${JSON.stringify(s.refused)} invalid ${JSON.stringify(s.invalid)}`);
   process.exit(0);
