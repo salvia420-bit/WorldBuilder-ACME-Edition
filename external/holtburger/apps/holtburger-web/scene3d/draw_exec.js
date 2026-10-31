@@ -627,6 +627,15 @@ export function installDrawExec(renderer, getMainScene, opts = {}) {
     // three's tracker exact (the documented residual; 0 expected)
     switchOn: swOn, sameProgramSwitches: 0, switchRefused: Object.create(null), switchPlans: 0,
     switchSyncs: 0, switchSyncsOwn: 0, switchSyncsTracked: 0, switchSyncAborts: 0, switchSyncFailed: 0,
+    // Every state-only draw (a record's draw three's setProgram serves) by why it did not take the
+    // same-program switch, flag on or off (2026-10-31, after 1070 run r3i: ~45 switches/frame executed
+    // against ~375 state-only draws): `program` — the record's program is not the bound one (three
+    // binds another: a program change); `sameMaterial` — the continuation was refused (texture epoch,
+    // light-probe grid, batching textures not captured); `renderCall` — the first switch after a
+    // render() / setRenderTarget / compile boundary before three's next setProgram; `camera` — three's
+    // camera is another one; `refused` — the switch's proof refused it (`switchRefused` says why);
+    // `off` — every gate held but ?drawExecSwitch is off.
+    switchGate: Object.create(null),
     invalid: Object.create(null),
     refusedRec: Object.create(null), // per (object, material) refusals, by reason
     /** Every draw handed to the chain unexecuted: structural refusals (counted on their
@@ -1754,6 +1763,8 @@ export function installDrawExec(renderer, getMainScene, opts = {}) {
       // SAME-PROGRAM SWITCH executed: three's setProgram + setMaterial done, the draw follows
     } else {
       stats.stateOnly += 1;
+      bump(stats.switchGate, lastMat === material ? "sameMaterial" : lastSerial !== serial ? "renderCall" : lastCam !== camera ? "camera"
+        : lastGlProg !== rec.glProgram ? "program" : swOn ? "refused" : "off");
       threeDirect(self, st, false, camera, scene, geometry, material, object, DEGEN);
       if (rec.mp.currentProgram !== rec.program || lastGlProg !== rec.glProgram) {
         // three moved the program (lights / env / fog / tone mapping / colour space …): it
@@ -1951,7 +1962,9 @@ export function installDrawExec(renderer, getMainScene, opts = {}) {
      * SkinnedMesh, M Mesh, P / L / S) — and by outcome (fast, sps — ?drawExecSwitch —, stateOnly, full, empty, pass) with
      * the refusal / invalidation reasons. While it runs it wraps the chain from the outside;
      * nothing is added per draw otherwise. Resolves
-     * `{ frames, draws, kinds: [{ key, draws, perFrame, fast, sps, stateOnly, full, empty, pass, recorded, reasons }] }`.
+     * `{ frames, draws, kinds: [{ key, draws, perFrame, fast, sps, stateOnly, full, empty, pass, recorded, swSame, swProg, reasons }],
+     * switches: { perFrame: { same, prog, first }, same: { <path>: perFrame }, prog: { <path>: perFrame } } }` — `switches`:
+     * the main scene's material switches, same-program (`same`) or not (`prog`), by path (see the census code).
      */
     census(frames = 60) {
       this.censusStart();
@@ -1995,32 +2008,58 @@ export function installDrawExec(renderer, getMainScene, opts = {}) {
         for (const k in stats.invalid) if ((stats.invalid[k] || 0) !== (inv0[k] || 0)) return `invalid:${k}`;
         return null;
       };
+      // Material SWITCHES (a main-scene draw whose material is not the previous main-scene draw's, in
+      // the same render call), split by whether the GL program changed across the draw (`same`: it
+      // did not — a same-program switch, what ?drawExecSwitch takes; `prog`: three bound another),
+      // each by the path it took: `sps`, `stateOnly:<switchGate>` (+ `:<switchRefused>`),
+      // `full:<reason>`, `pass:<refusal>`, `empty`. `first`: a render call's first main-scene draw.
+      const sw = { same: Object.create(null), prog: Object.create(null), first: 0, sameN: 0, progN: 0 };
+      let cPrevMat = null, cPrevSerial = -1;
       const inner = renderer.renderBufferDirect;
       const census = function hbDxCensus(camera, scene, geometry, material, object, group) {
         const f0 = stats.fast, s0 = stats.stateOnly, u0 = stats.full, e0 = stats.empty, r0 = stats.recorded, w0 = stats.sameProgramSwitches;
         const inv0 = Object.assign({}, stats.invalid);
+        const g0 = Object.assign({}, stats.switchGate), q0 = Object.assign({}, stats.switchRefused);
+        const p0 = lastGlProg, ser0 = serial;
         try {
           return inner.call(this, camera, scene, geometry, material, object, group);
         } finally {
           draws += 1;
           const key = tagOf(object, scene);
           let k = kinds.get(key);
-          if (k === undefined) { k = { key, draws: 0, perFrame: 0, fast: 0, sps: 0, stateOnly: 0, full: 0, empty: 0, pass: 0, recorded: 0, reasons: {} }; kinds.set(key, k); }
+          if (k === undefined) { k = { key, draws: 0, perFrame: 0, fast: 0, sps: 0, stateOnly: 0, full: 0, empty: 0, pass: 0, recorded: 0, swSame: 0, swProg: 0, reasons: {} }; kinds.set(key, k); }
           k.draws += 1;
           const out = stats.fast !== f0 ? "fast" : stats.sameProgramSwitches !== w0 ? "sps" : stats.stateOnly !== s0 ? "stateOnly" : stats.full !== u0 ? "full" : stats.empty !== e0 ? "empty" : "pass";
           k[out] += 1;
           if (stats.recorded !== r0) k.recorded += 1;
+          let why = null;
           if (out !== "fast" && out !== "sps" && out !== "stateOnly" && out !== "empty") {
             // full: an invalidation, a first record, or no record taken (deferred by async_link,
             // not a single draw, three's forced re-setup); pass: the refusal.
-            const why = scene !== mainScene ? (scene === null ? "noScene" : "scene")
+            why = scene !== mainScene ? (scene === null ? "noScene" : "scene")
               : (reasonOf(object, material, group, inv0) || (out === "full" ? (stats.recorded !== r0 ? "firstRecord" : "noRecordTaken") : "other"));
             k.reasons[why] = (k.reasons[why] || 0) + 1;
+          }
+          if (scene === mainScene && mainScene !== null) {
+            if (cPrevSerial !== ser0) sw.first += 1;
+            else if (material !== cPrevMat) {
+              let path = out;
+              if (out === "stateOnly") {
+                const diff = (a, b) => { for (const x in a) if ((a[x] || 0) !== (b[x] || 0)) return x; return "?"; };
+                path = `stateOnly:${diff(stats.switchGate, g0)}`;
+                if (path === "stateOnly:refused") path += `:${diff(stats.switchRefused, q0)}`;
+              } else if (why !== null) path = `${out}:${why}`;
+              const same = lastGlProg === p0;
+              const t = same ? sw.same : sw.prog;
+              t[path] = (t[path] || 0) + 1;
+              if (same) { sw.sameN += 1; k.swSame += 1; } else { sw.progN += 1; k.swProg += 1; }
+            }
+            cPrevMat = material; cPrevSerial = serial;
           }
         }
       };
       renderer.renderBufferDirect = census;
-      censusState = { kinds, inner, census, get draws() { return draws; } };
+      censusState = { kinds, inner, census, sw, get draws() { return draws; } };
     },
     /** Stop counting; returns the table (`frames`: the frame count it covered, for perFrame). */
     censusStop(frames = 1) {
@@ -2029,8 +2068,14 @@ export function installDrawExec(renderer, getMainScene, opts = {}) {
       censusState = null;
       if (renderer.renderBufferDirect === c.census) renderer.renderBufferDirect = c.inner;
       const list = [...c.kinds.values()].sort((x, y) => y.draws - x.draws);
-      for (const k of list) k.perFrame = +(k.draws / Math.max(1, frames)).toFixed(2);
-      return { frames, draws: c.draws, kinds: list };
+      const F = Math.max(1, frames);
+      for (const k of list) k.perFrame = +(k.draws / F).toFixed(2);
+      const per = (t) => { const o = {}; for (const x of Object.keys(t).sort((a, b) => t[b] - t[a])) o[x] = +(t[x] / F).toFixed(2); return o; };
+      const switches = {
+        perFrame: { same: +(c.sw.sameN / F).toFixed(2), prog: +(c.sw.progN / F).toFixed(2), first: +(c.sw.first / F).toFixed(2) },
+        same: per(c.sw.same), prog: per(c.sw.prog),
+      };
+      return { frames, draws: c.draws, kinds: list, switches };
     },
     /** Test seam: three's WebGLTextures as captured (null until the first batching sampler upload). */
     __textures() { return textures; },

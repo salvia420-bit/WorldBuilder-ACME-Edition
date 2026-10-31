@@ -527,8 +527,11 @@ async function runArm(exec, sc) {
   const arm = makeArm(exec, sc);
   const frames = [];
   const quiet = (fn) => { const l = console.log; console.log = () => {}; try { fn(); } finally { console.log = l; } };
+  let census = null, censusSps = 0;
   for (let f = 0; f < sc.frames; f++) {
     if (sc.lateInstall && f === sc.lateInstall) arm.install();
+    // the last 3 frames under __drawExec.census (its wrapper sits outside the chain: GL-silent)
+    if (arm.dx && f === sc.frames - 3) { arm.dx.censusStart(); censusSps = arm.dx.stats.sameProgramSwitches; }
     step(arm.W, f, arm);
     if (f === sc.events?.restore) quiet(() => arm.canvas.loseAndRestore());
     arm.startLog();
@@ -538,6 +541,7 @@ async function runArm(exec, sc) {
     await settle(arm);
     frames.push({ calls: arm.stopLog(), counters });
   }
+  if (arm.dx) { censusSps = arm.dx.stats.sameProgramSwitches - censusSps; census = arm.dx.censusStop(3); }
   const runs1 = pick(RUNS.getBatchedRunsStats(), RUN_KEYS);
   const dRuns = {}; for (const k of RUN_KEYS) dRuns[k] = runs1[k] - runs0[k];
   const pc1 = PERCAM.getBatchedIndirectPerCameraStats();
@@ -546,6 +550,7 @@ async function runArm(exec, sc) {
     arm, frames, dRuns, dSkip: SKIP.getSkipEmptyMultiDrawStats().skipped - skip0, dPc,
     unitConflicts: arm.gl.__fake.unitConflicts, uboErrors: arm.gl.__fake.uboErrors,
     dxStats: arm.dx ? JSON.parse(JSON.stringify(arm.dx.stats)) : null,
+    census, censusSps,
   };
 }
 
@@ -599,6 +604,26 @@ async function scenario(name, sc, expect = {}) {
   check(`${name}: no executor error, no unproven tracker sync, no late VAO fix, no unit conflict / UBO error (switch on)`,
     s.switchOn === true && s.errors === 0 && s.switchSyncFailed === 0 && s.vaoFixLate === 0 && A.unitConflicts === 0 && B.unitConflicts === 0 && A.uboErrors === 0 && B.uboErrors === 0,
     `on ${s.switchOn} errors ${s.errors} syncFailed ${s.switchSyncFailed} late ${s.vaoFixLate} conflicts ${A.unitConflicts}/${B.unitConflicts} ubo ${A.uboErrors}/${B.uboErrors}`);
+  {
+    // the switch-path counters (2026-10-31, after 1070 run r3i): every state-only draw carries its gate
+    // reason; the census's switch table adds up, and its executed switches are the executor's own count
+    const g = s.switchGate || {};
+    const gSum = Object.values(g).reduce((a, b) => a + b, 0);
+    const c = B.census && B.census.switches;
+    const sum = (t) => Object.values(t || {}).reduce((a, b) => a + b, 0);
+    const GATE = new Set(["program", "sameMaterial", "renderCall", "camera", "refused", "off"]);
+    // (program changes: the census's `prog` switches are draws at which GL's program moved — bounded by
+    // the gl.useProgram calls in the logged stream of those 3 frames, and present in every world here
+    // but the one-program ones)
+    const useProgram = B.frames.slice(-3).reduce((n, f) => n + f.calls.filter((x) => x.startsWith("useProgram(")).length, 0);
+    const ok = sps > 0 && gSum === s.stateOnly && Object.keys(g).every((k) => GATE.has(k)) && !!c
+      && Math.abs(sum(c.same) - c.perFrame.same) < 0.02 * Math.max(1, c.perFrame.same) + 0.05
+      && Math.abs(sum(c.prog) - c.perFrame.prog) < 0.02 * Math.max(1, c.perFrame.prog) + 0.05
+      && Math.abs((c.same.sps || 0) * 3 - B.censusSps) < 0.05
+      && (sc.mono ? true : c.perFrame.prog > 0) && c.perFrame.prog * 3 <= useProgram + 0.05; // (a one-program world has none)
+    check(`${name}: switch-path counters — switchGate classifies every state-only draw, census(3).switches adds up, counts the executed switches and the program changes`, ok,
+      `switchGate ${JSON.stringify(g)} (Σ ${gSum} vs stateOnly ${s.stateOnly}); census per frame ${c ? JSON.stringify(c.perFrame) : "none"}, sps ${c ? c.same.sps : "-"} vs ${B.censusSps}/3, gl.useProgram ${useProgram}/3`);
+  }
   if (expect.refused) for (const why of expect.refused) check(`${name}: switches refused as "${why}" (left to the state-only path)`, ((s.switchRefused || {})[why] || 0) > 0, `${why}: ${(s.switchRefused || {})[why] || 0}`);
   if (expect.syncsOwn) check(`${name}: three's tracker synced before hand-overs of the switched material`, (s.switchSyncsOwn | 0) > 0, `own ${s.switchSyncsOwn}`);
   if (expect.aborts) check(`${name}: the sync's getProgram fence aborted (a compile / another cached program: the hand-over binds another program)`, (s.switchSyncAborts | 0) > 0, `aborts ${s.switchSyncAborts}`);
