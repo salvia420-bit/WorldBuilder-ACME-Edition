@@ -48,12 +48,38 @@ window.__orbParity = {
     for (let i = 0; i < 4; i++) await raf();
     await sleep(60);
     const rects = {};
+    const box = (el) => { if (!el) return null; const r = el.getBoundingClientRect(); return { x: r.x, y: r.y, w: r.width, h: r.height }; };
+    const geom = {};
     for (const k of KINDS) {
       const r = document.querySelector(`#hb-vitals-orb-${k} .hbo-core`).getBoundingClientRect();
       const p = document.getElementById(`hb-vitals-orb-${k}`).getBoundingClientRect();
       rects[k] = { core: { x: r.x, y: r.y, w: r.width, h: r.height }, pane: { x: p.x, y: p.y, w: p.width, h: p.height } };
+      // registration dump: what the vessel element covers vs the core box
+      const v = document.querySelector(`#hb-vitals-orb-${k} .hbo-core > svg.orb, #hb-vitals-orb-${k} .hbo-core > canvas.orb-cv`);
+      geom[k] = { dpr: devicePixelRatio, core: rects[k].core, vessel: box(v), backing: v && v.localName === "canvas" ? [v.width, v.height] : null };
     }
+    // computed-style dump of the crack web and its ancestors (SVG mode), and
+    // the CSS the canvas bake applies (canvas mode) — 2026-10-31 look review
+    const PROPS = ["stroke", "stroke-width", "stroke-opacity", "stroke-linecap", "stroke-linejoin", "paint-order", "vector-effect",
+      "fill", "fill-opacity", "opacity", "filter", "transform", "mix-blend-mode", "isolation", "display", "visibility",
+      "animation-name", "clip-path", "mask", "color-interpolation-filters", "shape-rendering"];
+    let fxStyles = null, bakeCss = null;
+    const hp = document.getElementById("hb-vitals-orb-hp");
+    if (mode === "svg" && hp.querySelector(".fx-main")) {
+      fxStyles = {};
+      const cs = (el) => { const st = getComputedStyle(el); const o = {}; for (const p of PROPS) o[p] = st.getPropertyValue(p); return o; };
+      for (const cls of ["fx-dark", "fx-refract", "fx-main", "fx-shard", "fx-glint", "fx-bloom"]) {
+        const el = hp.querySelector(`.${cls}`);
+        if (el) fxStyles[cls] = { ...cs(el), attrs: [...el.attributes].map((a) => a.name === "d" ? "d" : `${a.name}=${a.value}`) };
+      }
+      for (const [name, sel] of [["g.fx", "g.fx"], ["g.hbo-fx", ".hbo-fx"], ["svg.orb", "svg.orb"], [".hbo-core", ".hbo-core"]]) {
+        const el = hp.querySelector(sel);
+        if (el) fxStyles["ancestor " + name] = cs(el);
+      }
+    }
+    if (mode === "canvas") bakeCss = O.__orbCanvasInternals?.fractureBakeCss?.() ?? null;
     return {
+      fxStyles, bakeCss, geom,
       mode: d.renderMode(),
       hasCanvas: !!document.querySelector(".hbo-core canvas.orb-cv"),
       hasSvg: !!document.querySelector(".hbo-core svg.orb"),
@@ -95,7 +121,43 @@ window.__orbParity = {
     }
     let acc = 0, p99 = 0;
     for (let v = 0; v < 256; v++) { acc += hist[v]; if (acc >= 0.99 * n) { p99 = v; break; } }
-    const out = { w, h, mean: +(sum / n).toFixed(3), p99, max, pctOver8: +(100 * over8 / n).toFixed(2), pctOver24: +(100 * over24 / n).toFixed(2) };
+    const LA = new Float32Array(n), LB = new Float32Array(n);
+    for (let i = 0; i < n; i++) {
+      LA[i] = 0.299 * A[4 * i] + 0.587 * A[4 * i + 1] + 0.114 * A[4 * i + 2];
+      LB[i] = 0.299 * B[4 * i] + 0.587 * B[4 * i + 1] + 0.114 * B[4 * i + 2];
+    }
+    // Edge energy: mean |dL/dx| + |dL/dy|. Thin / pale / blurred strokes (the
+    // 2026-10-31 crack-web review) lower the canvas side's value.
+    const edge = (L) => {
+      let e = 0;
+      for (let y = 0; y < h - 1; y++) for (let x = 0; x < w - 1; x++) {
+        const i = y * w + x;
+        e += Math.abs(L[i + 1] - L[i]) + Math.abs(L[i + w] - L[i]);
+      }
+      return +(e / ((w - 1) * (h - 1))).toFixed(3);
+    };
+    // Registration: the sub-pixel shift of the canvas image that best matches
+    // the SVG one (bilinear, +-1.5 px in 0.125 px steps, 4 px margin). The
+    // 2026-10-31 review found a 0.3-0.7 device px drift; it must be ~0 now.
+    const errAt = (dx, dy) => {
+      let e = 0, c = 0;
+      for (let y = 4; y < h - 4; y++) for (let x = 4; x < w - 4; x++) {
+        const sx = x - dx, sy = y - dy, x0 = Math.floor(sx), y0 = Math.floor(sy), fx = sx - x0, fy = sy - y0;
+        const i = y0 * w + x0;
+        const v = LB[i] * (1 - fx) * (1 - fy) + LB[i + 1] * fx * (1 - fy) + LB[i + w] * (1 - fx) * fy + LB[i + w + 1] * fx * fy;
+        e += Math.abs(LA[y * w + x] - v); c++;
+      }
+      return e / c;
+    };
+    let best = { dx: 0, dy: 0, err: errAt(0, 0) };
+    const err0 = best.err;
+    for (let dy = -1.5; dy <= 1.5001; dy += 0.125) for (let dx = -1.5; dx <= 1.5001; dx += 0.125) {
+      const e = errAt(dx, dy);
+      if (e < best.err - 1e-9) best = { dx, dy, err: e };
+    }
+    const out = { w, h, mean: +(sum / n).toFixed(3), p99, max, pctOver8: +(100 * over8 / n).toFixed(2), pctOver24: +(100 * over24 / n).toFixed(2),
+      edgeSvg: edge(LA), edgeCanvas: edge(LB),
+      shiftDx: best.dx, shiftDy: best.dy, errUnshifted: +err0.toFixed(3), errBestShift: +best.err.toFixed(3) };
     if (wantPng) {
       const c = new OffscreenCanvas(w * 3 + 8, h);
       const g = c.getContext("2d");

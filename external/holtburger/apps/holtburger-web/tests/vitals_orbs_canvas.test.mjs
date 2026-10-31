@@ -365,8 +365,12 @@ function assert(c, m) { if (!c) throw new Error(m); }
 function assertEq(a, e, m) { if (JSON.stringify(a) !== JSON.stringify(e)) throw new Error(`${m}: expected ${JSON.stringify(e)}, got ${JSON.stringify(a)}`); }
 const sha = (x) => createHash("sha256").update(typeof x === "string" ? x : JSON.stringify(x)).digest("hex");
 
-/** Mount the plugin under `search` on a fresh document; returns handles. */
+/** Mount the plugin under `search` on a fresh document; returns handles. A
+ *  mount a failed check left behind is torn down first, so one failure never
+ *  cascades into the next check (shared layer sets are refcounted). */
+let ACTIVE = null;
 function mountWith(search, { client = true, reduced = false, dpr = 1 } = {}) {
+  if (ACTIVE) { try { ACTIVE(); } catch (_) {} ACTIVE = null; }
   resetDom();
   rafQ = []; timers = []; IMAGES.length = 0; mqLs.length = 0;
   docLs.clear(); winLs.clear(); LS.clear();
@@ -379,7 +383,10 @@ function mountWith(search, { client = true, reduced = false, dpr = 1 } = {}) {
     events: { on: (t, fn) => listeners.set(t, fn), off: (t) => listeners.delete(t) },
     player: { stats: { vitals: [] } },
   } : null;
-  const unmount = O.mount(c ? { client: c } : {});
+  const raw = O.mount(c ? { client: c } : {});
+  let done = false;
+  const unmount = () => { if (done) return; done = true; ACTIVE = null; raw(); };
+  ACTIVE = unmount;
   const emit = (t, detail) => listeners.get(t)?.({ detail });
   const snapshot = (vitals) => { c.player.stats.vitals = vitals; listeners.get("playerStatsUpdated")?.(); };
   const pane = (k) => document.getElementById(`hb-vitals-orb-${k}`);
@@ -509,29 +516,20 @@ function srcName(src) {
   return "other";
 }
 
-/** The vessel geometry the renderer must pick for a pane at (left, top): the
- *  core's device rect on whole pixels + its sub-pixel origin. */
-function geom(left, top, { scale = 0.72, zoom = 1, dpr = 1 } = {}) {
-  const k = scale * zoom * dpr;
-  const cx = left * zoom * dpr + 52 * k, cy = top * zoom * dpr + 38 * k, cw = 92 * k;
-  const x0 = Math.floor(cx + 1e-6), y0 = Math.floor(cy + 1e-6);
-  return { W: Math.ceil(cx + cw - 1e-6) - x0, H: Math.ceil(cy + cw - 1e-6) - y0, s: cw / 120, ox: cx - x0, oy: cy - y0 };
+/** The geometry the renderer must pick: the canvas box is the core box, so
+ *  only the SIZE matters (never the position): backing = the core's device
+ *  width x the supersample (2, or 1.5 at DPR >= 1.5); s = canvas px per user
+ *  unit, dev = device px per user unit. */
+const SS = (dpr) => (dpr >= 1.5 ? 1.5 : 2);
+function geom(_left, _top, { scale = 0.72, zoom = 1, dpr = 1 } = {}) {
+  const dev = 92 * scale * zoom * dpr / 120;
+  const W = Math.round(120 * dev * SS(dpr));
+  return { W, H: W, s: W / 120, dev, ss: SS(dpr) };
 }
 const HP = [260, 6];  // the hp pane's default position
-/** Layers a fresh mount bakes: per distinct vessel geometry (the three panes
- *  share one at integer device offsets) wall + specular, + one subglow per
- *  vessel, + the mana shimmer. */
-function expectedBakes(o = {}) {
-  const keys = new Map();
-  for (const [kind, left] of [["hp", 260], ["stam", 401], ["mana", 542]]) {
-    const g = geom(left, 6, o);
-    const k = `${g.W}x${g.H}@${g.s.toFixed(5)}+${g.ox.toFixed(3)},${g.oy.toFixed(3)}`;
-    keys.set(k, [...(keys.get(k) || []), kind]);
-  }
-  let n = 0;
-  for (const kinds of keys.values()) n += 2 + kinds.length + (kinds.includes("mana") ? 1 : 0);
-  return n;
-}
+/** Layers a fresh mount bakes: wall + specular (shared by the three vessels:
+ *  one size), + one subglow per vessel, + the mana shimmer. */
+function expectedBakes() { return 2 + 3 + 1; }
 
 // ── [3] flag on: the DOM ────────────────────────────────────────────────────
 console.log("── [3] flag on: the canvas core ──");
@@ -558,7 +556,7 @@ check("[3] same panes / heraldry / plaques / stylesheet; one canvas per core, no
   }
   m.unmount();
 });
-check("[3] per tick: zero DOM writes; the backing store covers the core's device rect on whole pixels", () => {
+check("[3] per tick: zero DOM writes; the canvas box IS the core box; backing = device px x supersample", () => {
   const m = mountWith("?orbRender=canvas");
   m.snapshot(V(150, 300, 100, 200, 50, 100));
   pump(4);
@@ -568,13 +566,17 @@ check("[3] per tick: zero DOM writes; the backing store covers the core's device
   assertEq(domWrites, [], "no DOM write in 60 vsyncs");
   assert(draws(cvOf(m, "hp")).length > 0, "hp drew");
   const g = geom(...HP);
-  assertEq([cvOf(m, "hp").width, cvOf(m, "hp").height], [g.W, g.H], "core 66.24 device px at x 297.44 → 67x67");
-  const st = cvOf(m, "hp").style;
-  assertEq([st.position, st.left, st.top, st.width, st.height],
-    ["absolute", `${+(-g.ox / 0.72).toFixed(4)}px`, `${+(-g.oy / 0.72).toFixed(4)}px`, `${+(g.W / 0.72).toFixed(4)}px`, `${+(g.H / 0.72).toFixed(4)}px`],
-    "canvas box = whole device pixels around the core");
-  const bodyT = draws(cvOf(m, "hp")).pop().find((e) => e[0] === "setTransform" && e[1] !== 1);
-  assertEq(bodyT.slice(1).map((v) => +v.toFixed(6)), [g.s, 0, 0, g.s, g.ox, g.oy].map((v) => +v.toFixed(6)), "drawn at the exact sub-pixel origin");
+  assertEq([cvOf(m, "hp").width, cvOf(m, "hp").height], [g.W, g.H], "core 66.24 device px x 2 → 132x132");
+  assertEq(g.W, 132, "the DPR-1 backing");
+  // REGISTRATION (2026-10-31 look review): no CSS offset / size on the canvas
+  // (Blink pixel-snaps a canvas box in the pane's pre-scale space; a nudged
+  // canvas drifted 0.3-0.7 device px). The box is the markup's, = the core's.
+  const cv = cvOf(m, "hp");
+  assertEq(["position", "left", "top", "width", "height", "transform"].map((k) => cv.style[k]), ["", "", "", "", "", ""], "no CSS offset or size written");
+  assert(/^display:block;width:92px;height:92px$/.test(cv.getAttribute("style")), "the core box (92x92 CSS px, like the <svg>)");
+  assertEq(LOG.filter((e) => (e[0] === "style" || e[0] === "style.set") && e[1] === cv._id), [], "never restyled");
+  const bodyT = draws(cv).pop().find((e) => e[0] === "setTransform" && e[1] !== 1);
+  assertEq(bodyT.slice(1).map((v) => +v.toFixed(6)), [g.s, 0, 0, g.s, 0, 0].map((v) => +v.toFixed(6)), "user 0..120 → canvas 0..W");
   m.unmount();
   const m2 = mountWith("?orbRender=canvas&orbScale=1.5", { dpr: 2 });
   m2.snapshot(V(150, 300, 100, 200, 50, 100));
@@ -666,7 +668,7 @@ check("[4] vitae: buffedMax < base caps the fill and draws the vitae layer", () 
   assert(!lastDraw(m, "stam").some((x) => x.k === "drawImage" && srcName(x.src) === "vitae"), "stamina has none");
   const vlog = vit[0].src._log;
   const g = geom(...HP);
-  assert(vlog.some((e) => e[0] === "setTransform" && Math.abs(e[6] - (g.oy + ((120 - 120 * 265 / 312) - 18) * g.s)) < 0.02), "translated to the live ceiling");
+  assert(vlog.some((e) => e[0] === "setTransform" && Math.abs(e[6] - ((120 - 120 * 265 / 312) - 18) * g.s) < 0.02), "translated to the live ceiling");
   m.unmount();
 });
 check("[4] mana alone draws the shimmer sprite; every vessel draws subglow + specular + wall", () => {
@@ -703,7 +705,7 @@ check("[5] baked once per size; resize / DPR / HUD zoom re-bake only on a size c
   for (const k of ["hp", "stam", "mana"]) m.pane(k).currentCSSZoom = 1.25;
   fire(docLs, "hb-hud-scale-changed"); pump(10);
   assertEq([totalBakes(m), cvOf(m, "hp").width], [b1 + expectedBakes({ zoom: 1.25, dpr: 2 }), geom(...HP, { zoom: 1.25, dpr: 2 }).W],
-    "HUD zoom 1.25: re-baked (stamina's core lands on its own sub-pixel origin)");
+    "HUD zoom 1.25: re-baked");
   globalThis.devicePixelRatio = 1;
   for (const k of ["hp", "stam", "mana"]) m.pane(k).currentCSSZoom = 1;
   const dprQ = mqLs.find((x) => /resolution/.test(x.q));
@@ -712,23 +714,187 @@ check("[5] baked once per size; resize / DPR / HUD zoom re-bake only on a size c
   assertEq(cvOf(m, "hp").width, geom(...HP).W, "the DPR query's change re-measures");
   m.unmount();
 });
-check("[5] a drag end re-measures; every full-size layer is baked at its own vessel's sub-pixel origin", () => {
+check("[5] position never matters: a pane dropped at a fractional spot re-bakes nothing; layers blit 1:1", () => {
   const m = mountWith("?orbRender=canvas");
   m.snapshot(V(150, 300, 100, 200, 50, 100));
   pump(10);
-  m.pane("stam").style.left = "401.3px";  // dropped at a fractional spot: same size, another origin
+  const b0 = totalBakes(m);
+  const w0 = cvOf(m, "stam").width;
+  m.pane("stam").style.left = "401.3px";
+  m.pane("hp").style.top = "6.77px";
   fire(docLs, "pointerup");
+  fire(winLs, "resize");
   pump(10);
-  const gh = geom(...HP), gs = geom(401.3, 6);
-  assertEq([gs.W, gs.H], [gh.W, gh.H], "same backing size");
-  assert(Math.abs(gs.ox - gh.ox) > 0.2, "different sub-pixel origin");
-  for (const [k, g] of [["hp", gh], ["stam", gs]]) {
+  assertEq([totalBakes(m), cvOf(m, "stam").width], [b0, w0], "no re-bake, same backing");
+  for (const k of ["hp", "stam", "mana"]) {
     const wall = lastDraw(m, k).find((x) => x.k === "drawImage" && srcName(x.src) === "wall");
     const t = wall.src._log.find((e) => e[0] === "setTransform");
-    assert(Math.abs(t[5] - g.ox) < 1e-6 && Math.abs(t[6] - g.oy) < 1e-6, `${k} wall baked at its origin (${t[5]}, ${t[6]})`);
+    assertEq([t[5], t[6]], [0, 0], `${k} wall baked at the canvas origin`);
     assertEq(wall.args, [0, 0], `${k} wall blitted 1:1`);
   }
   m.unmount();
+});
+// 2026-10-31 look review (orchestrator, owner-delegated): the crack web read
+// thinner / paler than the SVG one. Two causes, both pinned: (1) a 240 px bake
+// resampled 1.8x / 3.6x down; the SVG vessel draws the web as live vectors, so
+// the bake is rasterized by the SVG engine on the canvas's own pixel grid with
+// the page's strokes and rules, blitted 1:1; (2) registration: see [3] (the
+// canvas box is the core box) and the cascade check below.
+check("[5] low HP: the crack web is rasterized on the canvas's own pixel grid with the page's strokes + rules, blitted 1:1 (DPR 1 and 2)", () => {
+  const sm = mountWith("");
+  sm.snapshot(V(30, 300, 100, 200, 50, 100));
+  pump(10);
+  const fxHtml = LOG.find((e) => e[0] === "html" && e[2].includes('class="fx"'))?.[2];
+  const defsHtml = LOG.find((e) => e[0] === "html" && e[2].includes('id="hbRefract"'))?.[2];
+  sm.unmount();
+  assert(fxHtml && defsHtml, "the page's fracture markup + shared defs");
+  const css = O.orbStyleText();
+  const tok = {};
+  for (const m of css.matchAll(/--(hb-orb-[\w-]+):\s*([^;]+);/g)) tok[m[1]] = m[2].trim();
+  const pageRule = (cls) => new RegExp(`\\.orb \\.${cls} \\{([^}]*)\\}`).exec(css)[1]
+    .replace(/var\(--([\w-]+)\)/g, (_, n) => tok[n]).replace(/\s+/g, " ").trim();
+  const norm = (x) => x.replace(/\s+/g, " ").trim();
+  const pageFilter = norm(/<filter id="hbRefract"[\s\S]*?<\/filter>/.exec(defsHtml)[0]);
+  const widths = (html, cls) => [...html.matchAll(new RegExp(`class="${cls}" d="[^"]*" stroke-width="([\\d.]+)"`, "g"))].map((m) => +m[1]);
+  const shards = (html) => [...html.matchAll(/class="fx-shard" d="([^"]+)"/g)].map((m) => m[1]);
+  for (const dpr of [1, 2]) {
+    O.__orbCanvasInternals.resetBitmaps();
+    const m = mountWith("?orbRender=canvas", { dpr });
+    try {
+    m.snapshot(V(30, 300, 100, 200, 50, 100));
+    pump(10);
+    const g = geom(...HP, { dpr });
+    const fx = IMAGES.filter((i) => decodeURIComponent(String(i.src)).includes("fx-refract"));
+    assertEq(fx.length, 1, `DPR ${dpr}: one crack-web bake (hp only is low)`);
+    const svg = decodeURIComponent(String(fx[0].src).slice("data:image/svg+xml,".length));
+    const hdr = /^<svg [^>]*viewBox="([^"]+)" width="([^"]+)" height="([^"]+)"/.exec(svg);
+    assert(hdr, "svg header");
+    const [vx, vy, vw, vh] = hdr[1].split(" ").map(Number);
+    assertEq([+hdr[2], +hdr[3]], [g.W, g.H], `DPR ${dpr}: rasterized at the canvas size`);
+    const sx = g.W / vw, sy = g.H / vh;  // the bake's device px per user unit
+    assert(Math.abs(sx - g.s) < 1e-5 && Math.abs(sy - g.s) < 1e-5, `DPR ${dpr}: bake scale ${sx} = the vessel's ${g.s}`);
+    assertEq([vx, vy], [0, 0], `DPR ${dpr}: bake origin = the canvas origin`);
+    assert(sx / g.dev >= 1.5 - 1e-9, `DPR ${dpr}: rasterized supersampled (${(sx / g.dev).toFixed(3)} canvas px per device px)`);
+    for (const cls of ["fx-dark", "fx-refract", "fx-main"]) {
+      const pw = widths(fxHtml, cls), bw = widths(svg, cls);
+      assertEq(bw.length, 32, `${cls}: 32 strokes`);
+      // the compositor maps the W-px canvas onto the core's 120·dev device px
+      const toDev = (120 * g.dev) / g.W;
+      assertEq(bw.map((x) => +(x * sx * toDev).toFixed(4)), pw.map((x) => +(x * g.dev).toFixed(4)), `DPR ${dpr} ${cls}: device stroke widths = the page's`);
+      assertEq(norm(new RegExp(`\\.${cls}\\{([^}]*)\\}`).exec(svg)[1]), pageRule(cls), `${cls}: the page's rule`);
+    }
+    assertEq(shards(svg), shards(fxHtml), "the 7 shards");
+    assertEq(norm(new RegExp(`\\.fx-shard\\{([^}]*)\\}`).exec(svg)[1]), pageRule("fx-shard"), "fx-shard: the page's rule");
+    assert(/opacity: 0\.85; transform: translate\(0\.9px, 1\.1px\)/.test(svg) && /opacity: 0\.34; filter: url\(#hbRefract\)/.test(svg)
+      && /\.fx-main\{fill: none; stroke: rgba\(255, 232, 208, 0\.62\)/.test(svg), "dark offset, refract filter, main colour");
+    assertEq(norm(/<filter id="hbRefract"[\s\S]*?<\/filter>/.exec(svg)[0]), pageFilter, "#hbRefract = the page's");
+    assert(!/fx-glint|fx-bloom/.test(svg), "glints + bloom stay live");
+    for (const i of IMAGES.filter((x) => String(x.src).startsWith("data:image/svg+xml"))) i.onload();
+    pump(3);
+    const d = lastDraw(m, "hp");
+    const fxDraw = d.filter((x) => x.k === "drawImage" && x.src?._log?.some((e) => e[0] === "drawImage" && e[1] === fx[0]));
+    assertEq(fxDraw.length, 1, `DPR ${dpr}: the crack layer is drawn`);
+    assertEq(fxDraw[0].args, [0, 0], "blitted 1:1 (no destination size)");
+    assertEq([fxDraw[0].src.width, fxDraw[0].src.height], [g.W, g.H], "the layer IS the bake, at W x H");
+    assertEq(fxDraw[0].src._log.find((e) => e[0] === "drawImage").slice(2), [0, 0, g.W, g.H], "the SVG image drawn at its own size");
+    assertEq([fxDraw[0].a, fxDraw[0].op], [1, "source-over"], "opaque, normal blend (as the page's .hbo-fx)");
+    } finally { m.unmount(); O.__orbCanvasInternals.resetBitmaps(); }
+  }
+});
+// The page cascade on the crack web, pinned (the "computed style" side of the
+// 2026-10-31 review): the real stylesheet is parsed into rules and matched
+// against the real SVG-mode DOM, so a rule, presentation attribute or
+// inherited paint property that reaches the cracks in the page but not in the
+// bake fails here.
+function cssRules(css) {
+  let t = css.replace(/\/\*[\s\S]*?\*\//g, "");
+  t = t.replace(/@(?:keyframes|media)[^{]*\{(?:[^{}]*\{[^{}]*\})*[^{}]*\}/g, "");
+  const out = [];
+  for (const m of t.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    const sels = m[1].split(",").map((x) => x.trim()).filter(Boolean);
+    const decls = m[2].split(";").map((d) => d.trim()).filter(Boolean)
+      .map((d) => { const i = d.indexOf(":"); return [d.slice(0, i).trim(), d.slice(i + 1).trim()]; });
+    out.push({ sels, decls });
+  }
+  return out;
+}
+function partMatch(el, comp) {
+  const m = /^(\*|[a-zA-Z][\w-]*)?((?:[.#][\w-]+|\[[\w-]+\]|:nth-of-type\(\d+\))*)$/.exec(comp);
+  if (!m) throw new Error(`unsupported selector part "${comp}" — extend the matcher`);
+  if (m[1] && m[1] !== "*" && el.localName !== m[1]) return false;
+  for (const p of m[2].match(/[.#][\w-]+|\[[\w-]+\]|:nth-of-type\(\d+\)/g) || []) {
+    if (p[0] === "." && !el.classList.contains(p.slice(1))) return false;
+    if (p[0] === "#" && el.id !== p.slice(1)) return false;
+    if (p[0] === "[" && !(p === "[hidden]" ? el.hidden : el.hasAttribute(p.slice(1, -1)))) return false;
+    if (p.startsWith(":nth-of-type")) {
+      const sib = el.parentNode.children.filter((c) => c.localName === el.localName);
+      if (sib.indexOf(el) + 1 !== Number(/\d+/.exec(p)[0])) return false;
+    }
+  }
+  return true;
+}
+function selMatch(el, sel) {
+  const parts = sel.split(/\s+/);
+  if (!partMatch(el, parts[parts.length - 1])) return false;
+  let e = el.parentNode;
+  for (let i = parts.length - 2; i >= 0; i--) {
+    while (e && e.localName && !partMatch(e, parts[i])) e = e.parentNode;
+    if (!e || !e.localName) return false;
+    e = e.parentNode;
+  }
+  return true;
+}
+const INHERITED_PAINT = new Set(["fill", "fill-opacity", "fill-rule", "stroke", "stroke-width", "stroke-opacity", "stroke-linecap",
+  "stroke-linejoin", "stroke-miterlimit", "stroke-dasharray", "stroke-dashoffset", "paint-order", "visibility", "color",
+  "color-interpolation", "color-interpolation-filters", "shape-rendering", "marker", "vector-effect"]);
+const GROUP_PAINT = new Set(["opacity", "filter", "mix-blend-mode", "transform", "clip-path", "mask", "isolation", "backdrop-filter", "animation"]);
+const PAINT_ATTRS = ["style", "fill", "stroke", "stroke-width", "stroke-opacity", "fill-opacity", "opacity", "filter", "transform",
+  "clip-path", "mask", "paint-order", "vector-effect", "stroke-linecap", "stroke-linejoin", "color"];
+check("[5] the page cascade gives every crack element exactly the bake's styles; nothing else reaches them", () => {
+  const sm = mountWith("");
+  try {
+    sm.snapshot(V(30, 300, 100, 200, 50, 100));
+    pump(10);
+    const css = O.orbStyleText();
+    const rules = cssRules(css);
+    assert(rules.length > 40, `stylesheet parsed (${rules.length} rules)`);
+    const tok = {};
+    for (const m of css.matchAll(/--(hb-orb-[\w-]+):\s*([^;]+);/g)) tok[m[1]] = m[2].trim();
+    const resolve = (v) => v.replace(/var\(--([\w-]+)\)/g, (_, n) => tok[n] ?? `var(--${n})`);
+    const bake = {};
+    for (const m of O.__orbCanvasInternals.fractureBakeCss().matchAll(/\.([\w-]+)\{([^}]*)\}/g)) {
+      bake[m[1]] = m[2].split(";").map((d) => d.trim()).filter(Boolean).join("; ");
+    }
+    assertEq(Object.keys(bake), ["fx-dark", "fx-refract", "fx-main", "fx-shard"], "the bake's four passes");
+    const matched = (el) => rules.filter((r) => r.sels.some((sl) => selMatch(el, sl))).flatMap((r) => r.decls);
+    const pane = sm.pane("hp");
+    const fx = pane.querySelectorAll("path").filter((e) => /^fx-(dark|refract|main|shard)$/.test(e.className));
+    assertEq(fx.length, 32 * 3 + 7, "the 103 static crack elements");
+    for (const el of fx) {
+      const got = matched(el).map(([k, v]) => `${k}: ${resolve(v)}`).join("; ");
+      assertEq(got, bake[el.className], `${el.className}: the page cascade = the bake's rule`);
+      const attrs = [...el._attrs.keys()].sort();
+      assertEq(attrs, el.className === "fx-shard" ? ["class", "d"] : ["class", "d", "stroke-width"], `${el.className}: markup attributes`);
+    }
+    // ancestors: up to the pane
+    const chain = [];
+    for (let e = fx[0].parentNode; e && e.localName; e = e.parentNode) { chain.push(e); if (e === pane) break; }
+    assertEq(chain.map((e) => e.localName + "." + e.className.split(" ")[0]), ["g.fx", "g.hbo-fx", "svg.orb", "div.hbo-core", "div.hbo-pane"], "the crack web's ancestors");
+    for (const e of chain) {
+      const decls = matched(e).filter(([k]) => !k.startsWith("--"));
+      const inherited = decls.filter(([k]) => INHERITED_PAINT.has(k));
+      assertEq(inherited, [], `${e.localName}.${e.className}: no inherited paint property (the bake would not inherit it)`);
+      const inSvg = e.namespaceURI === SVG_NS;
+      if (inSvg) {
+        assertEq(decls.filter(([k]) => GROUP_PAINT.has(k)), [], `${e.localName}.${e.className}: no group effect inside the vessel`);
+        assertEq(PAINT_ATTRS.filter((a) => e.hasAttribute(a)), [], `${e.localName}.${e.className}: no paint presentation attribute`);
+      }
+    }
+    // what the core / pane DO carry applies to the canvas too (same core box)
+    const core = chain[3];
+    const coreGroup = matched(core).filter(([k]) => GROUP_PAINT.has(k) || k === "contain").map(([k]) => k);
+    assertEq(coreGroup.sort(), ["animation", "contain"], ".hbo-core: contain + the low-HP heartbeat, shared by both renderers");
+  } finally { sm.unmount(); }
 });
 check("[5] the low band bakes one subglow variant, once", () => {
   const m = mountWith("?orbRender=canvas");
@@ -797,7 +963,7 @@ check("[6] same inputs skip with ZERO context calls; > CV_SKIP_PX of motion or a
   const calls = () => canvas._log.length;
   let c = calls();
   assertEq([v.frame(o, 1.5, o.phase + o.seed, 1033), calls() - c], [false, 0], "identical inputs: skipped, no call");
-  const unit = 0.125 / v.s;  // CV_SKIP_PX in user units
+  const unit = 0.125 / v.deviceScale;  // CV_SKIP_PX (device px) in user units
   o.level = 0.5 + 0.9 * unit / 120;  // whole surface moves 0.9 x CV_SKIP_PX
   c = calls();
   assertEq([v.frame(o, 1.5, o.phase + o.seed, 1066), calls() - c], [false, 0], "sub-threshold motion: skipped");
@@ -819,8 +985,8 @@ check("[6] same inputs skip with ZERO context calls; > CV_SKIP_PX of motion or a
 check("[6] waves only: every tick the drawn surface is within CV_SKIP_PX of the exact one, and most ticks skip", () => {
   const { I, v, o, canvas } = bareVessel("hp");
   assert(v.frame(o, 1.6, o.phase + o.seed, 1000), "first frame draws");
-  const s = v.s, tolU = 0.125 / s;
-  assert(Math.abs(s - 0.552) < 1e-9, `device px per unit (${s})`);
+  const s = v.deviceScale, tolU = 0.125 / s;
+  assert(Math.abs(s - 0.552) < 1e-9 && Math.abs(v.s - 1.1) < 1e-9, `device px per unit (${s}), canvas px per unit (${v.s})`);
   const exact = new Float64Array(21);
   let drawn = 0, ticks = 0, worst = 0;
   let shown = bodies(ops(draws(canvas).pop()))[1].pts.slice(0, 21).map((p) => p[1]);

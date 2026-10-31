@@ -124,7 +124,7 @@
 // +1.75 tour fps). The liquid core of each vessel is drawn into ONE <canvas>
 // with Canvas2D instead of the SVG subtree above; figures, plaques, readouts
 // and the pointer gate stay DOM. Same driver, same cadence, same state, same
-// wave(): everything STATIC is pre-rendered once at device-pixel scale (glass
+// wave(): everything STATIC is pre-rendered once at canvas-pixel scale (glass
 // + caustics from the very bitmaps the SVG path bakes, wall darkening, blurred
 // subglow / specular / shimmer sprites, the vitae scum layer, the fracture
 // web), so a tick is two wave fills, one wave clip, a handful of drawImage
@@ -1235,17 +1235,21 @@ function createDriver(orbs, reducedMotion, hz, syncRoots = null) {
 //   specular streak (screen) + wall-climb crescents, all on the waterline
 //   → 3 meniscus strokes → vitae layer; unclipped: glass → glare (screen)
 //   → fracture web + glints + bloom (low HP).
-// That is the SVG vessel's paint order, layer for layer. PRE-BAKED once per
-// backing size (W = 92 x orbScale x HUD zoom x devicePixelRatio, re-baked on
-// resize / hb-hud-scale-changed / a DPR change): the glass plate and the
+// That is the SVG vessel's paint order, layer for layer. The canvas box IS
+// the core box (registration identical to the <svg>), its backing store is
+// supersampled (W = 92 x orbScale x HUD zoom x DPR x cvSupersample()). PRE-
+// BAKED once per backing size (re-baked on resize / hb-hud-scale-changed / a
+// DPR change, only if the size changed): the glass plate and the
 // caustics (drawn from the SAME 240 px bitmaps the SVG path bakes from
 // GLASS_SVG / CAUSTIC_SVG — the browser's own feTurbulence, evaluated once,
 // never per tick, never scrolled: the signed-off caustics are static and
 // crawl only through the live clip), the wall darkening, the blurred subglow
 // (per humour, + the low-HP colour band), specular streak and shimmer
 // sprites (blurred once with ctx.filter, positioned per tick), the fracture
-// web (the four static passes incl. the #hbRefract displacement, via one SVG
-// image), and the vitae dim / hatch / scum / grime layer (per ceiling).
+// web (the four static passes incl. the #hbRefract displacement, rasterized
+// by the SVG engine directly on the canvas's own pixel grid — the SVG vessel
+// draws it as live vectors), and the vitae dim / hatch / scum / grime layer
+// (per ceiling).
 // PER TICK: the two wave paths from waveY() (the SVG path's own math), one
 // clip, <= 8 drawImage, 3-6 strokes, 0-3 small fills. The ambient CSS loops
 // (hbo-sspec / -bub / -shimmer / -glint / -bloom) are sampled from the same
@@ -1272,6 +1276,15 @@ function createDriver(orbs, reducedMotion, hz, syncRoots = null) {
 //     sampled the same way.
 const CV_SKIP_PX = 0.125;
 const CV_SKIP_A = 1 / 255;
+// Backing-store supersampling (canvas px per device px). The canvas is drawn
+// into the core's device rect, which sits at a fractional position, so the
+// compositor resamples it once (bilinear). At 1x that adds a ~1 px tent on
+// top of the content's own antialiasing (sigma ~0.5 px: thin strokes read
+// thinner and paler than the SVG's); at 2x (1.5x on DPR >= 1.5 screens,
+// whose device px are already small) the total is about the SVG's own
+// antialiasing footprint (sigma ~0.25-0.33 vs ~0.29). Cost: 4x (2.25x) the
+// raster area of a 1x canvas.
+function cvSupersample(dpr) { return dpr >= 1.5 ? 1.5 : 2; }
 const CV_TAU = Math.PI * 2;
 const DEG = Math.PI / 180;
 
@@ -1426,6 +1439,9 @@ export const __orbCanvasInternals = {
   waveYs: (...a) => waveYs(...a),
   createVessel: (...a) => createCanvasVessel(...a),
   resetBitmaps() { _bitmaps.clear(); _fractureUrl.clear(); },
+  supersample: (dpr) => cvSupersample(dpr),
+  /** The CSS the crack-web bake applies (the page's `.orb .fx-*` rules). */
+  fractureBakeCss: () => fractureBakeCss(),
   /** One loop's sampled values at loop time `ms` (bub = bubble 0). */
   sampleAt(name, ms, extra = {}) {
     const out = new Float64Array(NP);
@@ -1507,11 +1523,11 @@ function makeCanvas(w, h) {
 // place feTurbulence / feDisplacementMap ever run in canvas mode). A load
 // bumps _bakeGen, which is part of every vessel's skip key, so the next
 // tick draws the new layer.
-const _bitmaps = new Map();  // `${px}@${url}` → { cv, failed }
+const _bitmaps = new Map();  // `${w}x${h}@${url}` → { cv, failed }
 let _bakeGen = 0;
 const _cvStats = { bakes: 0 };
-function svgBitmap(url, px) {
-  const key = px + "@" + url;
+function svgBitmap(url, w, h = w) {
+  const key = w + "x" + h + "@" + url;
   let b = _bitmaps.get(key);
   if (b) return b;
   b = { cv: null, failed: false };
@@ -1520,8 +1536,8 @@ function svgBitmap(url, px) {
   const img = new Image();
   img.onload = () => {
     try {
-      const c = makeCanvas(px, px);
-      c.getContext("2d").drawImage(img, 0, 0, px, px);
+      const c = makeCanvas(w, h);
+      c.getContext("2d").drawImage(img, 0, 0, w, h);
       b.cv = c;
     } catch (_) { b.failed = true; }
     _bakeGen++;
@@ -1532,23 +1548,43 @@ function svgBitmap(url, px) {
 }
 
 // The four static fracture passes (dark / #hbRefract-displaced / main /
-// shards) as one self-contained SVG with the page rules inlined; glints and
-// bloom animate, so they are drawn live.
-const _fractureUrl = new Map();
-function fractureBakeUrl(px) {
-  let u = _fractureUrl.get(px);
+// shards) as one self-contained SVG; glints and bloom animate, so they are
+// drawn live. The crack web is the one baked layer the SVG vessel draws as
+// LIVE VECTORS (glass and caustics are 240 px bitmaps there too), so it is
+// rasterized ON THE CANVAS'S OWN PIXEL GRID: intrinsic size = the canvas
+// (W x H, supersampled), viewBox = the 0..120 user space. The browser's SVG
+// engine draws every stroke, the #hbRefract displacement included, at the
+// canvas's scale and the result is blitted 1:1. (2026-10-31 look review: a
+// 240 px bake scaled down 1.8x / 3.6x blurred the cracks; the web is a
+// gameplay warning and must read as boldly as the SVG one.) The styles are
+// the page's own `.orb .fx-*` rules with var() resolved, so the two cannot
+// drift (tests pin the page cascade on the crack elements too).
+const FX_BAKE_CLASSES = ["fx-dark", "fx-refract", "fx-main", "fx-shard"];
+function fractureBakeCss() {
+  const css = styleText(), t = orbTokens();
+  return FX_BAKE_CLASSES.map((cls) => {
+    const body = new RegExp(`\\.orb \\.${cls} \\{([^}]*)\\}`).exec(css)[1];
+    return `.${cls}{${body.replace(/var\(--([\w-]+)\)/g, (_, n) => t[n]).replace(/\s+/g, " ").trim()}}`;
+  }).join("");
+}
+const _fractureUrl = new Map();  // geometry key → data URL (bounded)
+function fractureBakeUrl(G) {
+  const key = `${G.W}x${G.H}`;
+  let u = _fractureUrl.get(key);
   if (u) return u;
-  const t = orbTokens();
   const filter = /<filter id="hbRefract"[\s\S]*?<\/filter>/.exec(SHARED_DEFS)[0];
-  const css = `.fx-dark{fill:none;stroke:${t["hb-orb-crack-dark"]};stroke-linecap:round;opacity:0.85;transform:translate(0.9px,1.1px)}`
-    + `.fx-refract{fill:none;stroke:${t["hb-orb-crack-refract"]};stroke-linecap:round;opacity:0.34;filter:url(#hbRefract)}`
-    + `.fx-main{fill:none;stroke:${t["hb-orb-crack"]};stroke-linecap:round}`
-    + `.fx-shard{fill:${t["hb-orb-crack"]};opacity:0.16;stroke:none}`;
   const body = FRACTURE_SVG.replace(/<path class="fx-glint"[^>]*\/>/g, "").replace(/<circle class="fx-bloom"[^>]*\/>/g, "");
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" width="${px}" height="${px}">`
-    + `<defs>${filter.replace(/\s+/g, " ")}</defs><style>${css}</style>${body}</svg>`;
+  const vb = [0, 0, G.W / G.s, G.H / G.s].map((v) => +v.toFixed(6)).join(" ");
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${vb}" width="${G.W}" height="${G.H}">`
+    + `<defs>${filter.replace(/\s+/g, " ")}</defs><style>${fractureBakeCss()}</style>${body}</svg>`;
   u = "data:image/svg+xml," + encodeURIComponent(svg);
-  _fractureUrl.set(px, u);
+  // A few geometries at most (three panes, a drag, a DPR change): keep 8.
+  if (_fractureUrl.size >= 8) {
+    const [oldKey, oldUrl] = _fractureUrl.entries().next().value;
+    _fractureUrl.delete(oldKey);
+    for (const k of [..._bitmaps.keys()]) if (k.endsWith("@" + oldUrl)) _bitmaps.delete(k);
+  }
+  _fractureUrl.set(key, u);
   return u;
 }
 let _glintCmds = null;
@@ -1576,16 +1612,15 @@ function bakeSprite(s, x0, y0, x1, y1, blur, paint) {
   return { cv, x: px0 / s, y: py0 / s, w: w / s, h: h / s };
 }
 
-// Full-size layers are baked at the vessel's own canvas size AND sub-pixel
-// origin (G = { W, H, s, ox, oy }: user 0..120 → canvas px is s·u + o), so
-// they are blitted 1:1 with no resample; sprites are baked on their own grid
-// at scale s and positioned per tick.
+// Full-size layers are baked at the vessel's own canvas size (G = { W, H, s }:
+// user 0..120 → canvas px is s·u), so they are blitted 1:1 with no resample;
+// sprites are baked on their own grid at scale s and positioned per tick.
 const BAKES = {
   /** lqwall: the radial multiply that darkens the liquid toward the glass. */
   wall(G) {
     const c = makeCanvas(G.W, G.H);
     const g = c.getContext("2d");
-    g.setTransform(G.s, 0, 0, G.s, G.ox, G.oy);
+    g.setTransform(G.s, 0, 0, G.s, 0, 0);
     const gr = g.createRadialGradient(60, 60, 0, 60, 60, 55.5);
     gr.addColorStop(0.32, "#ffffff");
     gr.addColorStop(0.78, "#a08c78");
@@ -1629,7 +1664,7 @@ const BAKES = {
     const dy = Number(((VB - c * VB) - cy0).toFixed(2));  // the SVG path's own translate
     const markup = vitaeGroup("hp");
     const top = cy0 - 260;
-    g.setTransform(G.s, 0, 0, G.s, G.ox, G.oy + dy * G.s);
+    g.setTransform(G.s, 0, 0, G.s, 0, dy * G.s);
     g.fillStyle = t["hb-orb-vitae-dim"];
     g.fillRect(-4, top, 128, 260);
     // hatch: pattern 7x7 userSpaceOnUse rotate(38), a 2.4-wide line at x=0
@@ -1640,7 +1675,7 @@ const BAKES = {
     g.globalAlpha = 0.5 * 0.30;
     g.fillStyle = "#000000";
     // visible group-space box → pattern space (rotate −38°), padded a tile
-    const ys = [Math.max(top, -G.oy / G.s - dy), Math.min(cy0, (G.H - G.oy) / G.s - dy)];
+    const ys = [Math.max(top, -dy), Math.min(cy0, G.H / G.s - dy)];
     const ca = Math.cos(-38 * DEG), sa = Math.sin(-38 * DEG);
     let u0 = Infinity, u1 = -Infinity, v0 = Infinity, v1 = -Infinity;
     for (const x of [-4, 124]) for (const y of ys) {
@@ -1670,9 +1705,8 @@ const BAKES = {
   },
 };
 
-// Layer sets per vessel geometry (size + scale + sub-pixel origin), shared by
-// every vessel with the same geometry (the three panes, at integer positions)
-// and dropped when no vessel uses it any more.
+// Layer sets per backing size, shared by every vessel at that size (the three
+// panes) and dropped when no vessel uses it any more.
 const _layerSets = new Map();  // key → { refs, map: Map(name → layer | null) }
 function acquireLayerSet(key) {
   let set = _layerSets.get(key);
@@ -1703,8 +1737,9 @@ function createCanvasVessel(kind, canvas, pane, opts = {}) {
   const tol = new Float64Array(NP);
   const front = new Float64Array(WAVE_N);
   const back = new Float64Array(WAVE_N);
-  // G: canvas size W x H, device px per user unit s, sub-pixel origin ox/oy.
-  let ctx = null, W = 0, H = 0, s = 1, ox = 0, oy = 0, G = null;
+  // G: canvas size W x H and canvas px per user unit s; dev: DEVICE px per
+  // user unit (s / the supersampling factor).
+  let ctx = null, W = 0, H = 0, s = 1, dev = 1, G = null;
   let set = null, setKey = "", last = null, force = true;
   let sizeDirty = true, t0 = null, glareStart = -Infinity;
   let frozenT = null, frozenGlare = null;
@@ -1712,55 +1747,49 @@ function createCanvasVessel(kind, canvas, pane, opts = {}) {
   let grad = null, gradKey = "", vitae = null, vitaeKey = NaN, bloomGrad = null;
   const stats = { draws: 0, skips: 0, bakes: 0, resizes: 0 };
 
-  // The core's exact DEVICE rect: the pane's rect (it carries the orbScale
-  // transform and sits inside the HUD zoom) and the core's untransformed
-  // offset in it, so the low-HP heartbeat's scale on .hbo-core never skews
-  // the reading. The backing store covers that rect on WHOLE device pixels
-  // and the drawing keeps its sub-pixel origin, so the vessel is rasterized
-  // in place like the SVG one rather than resampled by a fractional offset.
-  // Read only on a size invalidation (resize / HUD zoom / DPR / drag end).
+  // REGISTRATION: the canvas box IS the core box (the markup's 92x92 CSS
+  // px, no offset), exactly as the <svg> it replaces, so wherever Blink puts
+  // the core both renderers land on the same device rect. (2026-10-31 look
+  // review, measured: a whole-device-pixel canvas nudged by fractional CSS
+  // left/top drifted 0.3-0.7 device px, because Blink pixel-snaps a canvas's
+  // box in the pane's LOCAL, pre-scale space; every crack read thinner and
+  // paler. Do not re-add sub-pixel CSS offsets.)
+  // SHARPNESS: that rect sits at a fractional device position, so the bitmap
+  // is always resampled once; the backing store is SUPERSAMPLED (see
+  // cvSupersample) so that resample costs about what the SVG's own
+  // antialiasing does. Size = the core's device width (the pane's rect width
+  // carries orbScale, the HUD zoom and the DPR) x the factor. Read only on a
+  // size invalidation (resize / HUD zoom / DPR change).
   function measure() {
     const dpr = Number(globalThis.devicePixelRatio) > 0 ? Number(globalThis.devicePixelRatio) : 1;
     const pr = pane.getBoundingClientRect();
     if (!(pr.width > 0)) return null;
-    const k = (pr.width / PANE_W) * dpr;  // device px per pane CSS px
-    const cx = pr.left * dpr + (core?.offsetLeft || 0) * k;
-    const cy = pr.top * dpr + (core?.offsetTop || 0) * k;
-    const cw = ORB_PX * k;
-    const x0 = Math.floor(cx + 1e-6), y0 = Math.floor(cy + 1e-6);
-    return {
-      k, s: cw / VB, ox: cx - x0, oy: cy - y0,
-      W: Math.max(8, Math.ceil(cx + cw - 1e-6) - x0), H: Math.max(8, Math.ceil(cy + cw - 1e-6) - y0),
-    };
+    const dev = ORB_PX * (pr.width / PANE_W) * dpr / VB;  // device px per user unit
+    const w = Math.max(8, Math.round(VB * dev * cvSupersample(dpr)));
+    return { dev, s: w / VB, W: w, H: w };
   }
 
   function resize() {
     const m = measure();
     if (!m) return false;  // not laid out yet: stay dirty, draw nothing
     sizeDirty = false;
-    const key = `${m.W}x${m.H}@${m.s.toFixed(5)}+${m.ox.toFixed(3)},${m.oy.toFixed(3)}`;
+    const key = `${m.W}x${m.H}`;
     if (key === setKey && ctx) return true;
     if (set) releaseLayerSet(setKey);
     setKey = key;
     set = acquireLayerSet(key);
-    W = m.W; H = m.H; s = m.s; ox = m.ox; oy = m.oy;
-    G = { W, H, s, ox, oy };
+    W = m.W; H = m.H; s = m.s; dev = m.dev;
+    G = { W, H, s };
     if (canvas.width !== W) canvas.width = W;
     if (canvas.height !== H) canvas.height = H;
-    const st = canvas.style;
-    st.position = "absolute";
-    st.left = `${+(-ox / m.k).toFixed(4)}px`;
-    st.top = `${+(-oy / m.k).toFixed(4)}px`;
-    st.width = `${+(W / m.k).toFixed(4)}px`;
-    st.height = `${+(H / m.k).toFixed(4)}px`;
     ctx = canvas.getContext("2d");
     grad = null; gradKey = ""; vitae = null; vitaeKey = NaN; bloomGrad = null;
     force = true;
     stats.resizes++;
-    // Skip tolerances in the quantity's own units: CV_SKIP_PX device px of
+    // Skip tolerances in the quantity's own units: CV_SKIP_PX DEVICE px of
     // on-screen motion (scale factors: over the sprite's farthest point
     // from the user-space origin they scale about), CV_SKIP_A of alpha.
-    const px = CV_SKIP_PX / s;
+    const px = CV_SKIP_PX / dev;
     tol.fill(0);
     tol[P_SY] = px;
     tol[P_SSPEC] = px; tol[P_SSPEC + 1] = px / 81; tol[P_SSPEC + 2] = CV_SKIP_A;
@@ -1787,8 +1816,8 @@ function createCanvasVessel(kind, canvas, pane, opts = {}) {
     }
     return v || null;
   }
-  /** An SVG bitmap resampled ONCE into a full-size layer, at the vessel's
-   *  own scale and sub-pixel origin (what the SVG <image> does per raster). */
+  /** An SVG bitmap resampled ONCE into a full-size layer at the canvas's
+   *  scale (the SVG <image> resamples the same 240 px bitmap per raster). */
   function fromBitmap(url, px) {
     const b = svgBitmap(url, px);
     if (b.failed) return null;
@@ -1797,16 +1826,22 @@ function createCanvasVessel(kind, canvas, pane, opts = {}) {
     const g = c.getContext("2d");
     g.imageSmoothingEnabled = true;
     g.imageSmoothingQuality = "high";
-    g.setTransform(s, 0, 0, s, ox, oy);
+    g.setTransform(s, 0, 0, s, 0, 0);
     g.drawImage(b.cv, 0, 0, VB, VB);
     return c;
   }
-  const fracturePx = () => Math.max(BAKE_PX, Math.ceil(VB * s));
+  /** The fracture web: rasterized by the SVG engine on this canvas's own
+   *  pixel grid (see fractureBakeUrl), so the bitmap IS the layer. */
+  function fractureLayer() {
+    const b = svgBitmap(fractureBakeUrl(G), W, H);
+    if (b.failed) return null;
+    return b.cv || undefined;
+  }
   /** A full-size layer, 1:1 (it was baked on this canvas's own pixel grid). */
   function blit(g, layer) {
     g.setTransform(1, 0, 0, 1, 0, 0);
     g.drawImage(layer, 0, 0);
-    g.setTransform(s, 0, 0, s, ox, oy);
+    g.setTransform(s, 0, 0, s, 0, 0);
   }
   function gradients(low) {
     const key = low ? "low" : "base";
@@ -1826,11 +1861,11 @@ function createCanvasVessel(kind, canvas, pane, opts = {}) {
   /** Fill the current (already traced) path with a unit gradient stretched
    *  over y = top..128: the SVG objectBoundingBox gradient of a wave body. */
   function fillSpan(g, gr, top, alpha) {
-    g.setTransform(s, 0, 0, s * (VB + 8 - top), ox, oy + s * top);
+    g.setTransform(s, 0, 0, s * (VB + 8 - top), 0, s * top);
     g.fillStyle = gr;
     g.globalAlpha = alpha;
     g.fill();
-    g.setTransform(s, 0, 0, s, ox, oy);
+    g.setTransform(s, 0, 0, s, 0, 0);
     g.globalAlpha = 1;
   }
 
@@ -1842,7 +1877,7 @@ function createCanvasVessel(kind, canvas, pane, opts = {}) {
     g.globalAlpha = 1;
     g.globalCompositeOperation = "source-over";
     g.clearRect(0, 0, W, H);
-    g.setTransform(s, 0, 0, s, ox, oy);
+    g.setTransform(s, 0, 0, s, 0, 0);
     const gr = gradients(low);
     g.save();
     g.beginPath(); g.arc(60, 60, 55.5, 0, CV_TAU); g.clip();
@@ -1929,7 +1964,7 @@ function createCanvasVessel(kind, canvas, pane, opts = {}) {
     }
     // low-HP fracture
     if (low) {
-      const fx = layerOf("fracture", () => fromBitmap(fractureBakeUrl(fracturePx()), fracturePx()));
+      const fx = layerOf("fracture", fractureLayer);
       if (fx) { g.globalAlpha = 1; blit(g, fx); }
       g.globalAlpha = cur[P_GLINT];
       g.strokeStyle = t["hb-orb-crack-glint"];
@@ -2003,16 +2038,18 @@ function createCanvasVessel(kind, canvas, pane, opts = {}) {
     },
     /** Every SVG bitmap this vessel will draw has loaded (or failed). */
     layersSettled(low) {
-      const urls = [[GLASS_URL, BAKE_PX]];
-      if (caustics) urls.push([CAUSTIC_URL, BAKE_PX]);
-      if (low && W) urls.push([fractureBakeUrl(fracturePx()), fracturePx()]);
-      return urls.every(([u, px]) => { const b = svgBitmap(u, px); return b.failed || !!b.cv; });
+      const urls = [[GLASS_URL, BAKE_PX, BAKE_PX]];
+      if (caustics) urls.push([CAUSTIC_URL, BAKE_PX, BAKE_PX]);
+      if (low && G) urls.push([fractureBakeUrl(G), W, H]);
+      return urls.every(([u, w, h]) => { const b = svgBitmap(u, w, h); return b.failed || !!b.cv; });
     },
     destroy() { if (set) releaseLayerSet(setKey); set = null; setKey = ""; },
     get W() { return W; },
-    /** Device px per user unit (0..120 across the core). */
+    /** Canvas (backing) px per user unit (0..120 across the core). */
     get s() { return s; },
-    get stats() { return { ...stats, W, H, s: +s.toFixed(5), ox: +ox.toFixed(3), oy: +oy.toFixed(3), totalBakes: _cvStats.bakes }; },
+    /** DEVICE px per user unit (what the skip tolerance is measured in). */
+    get deviceScale() { return dev; },
+    get stats() { return { ...stats, W, H, s: +s.toFixed(5), dev: +dev.toFixed(5), totalBakes: _cvStats.bakes }; },
   };
 }
 
@@ -2089,7 +2126,8 @@ function ensureSharedDefs() {
  *  92 px the <svg> occupies, so the box, the hit gate and the heartbeat on
  *  .hbo-core are unchanged. */
 function orbCanvasMarkup(kind) {
-  const w = Math.max(8, Math.round(ORB_PX * orbScale()));
+  const dpr = Number(globalThis.devicePixelRatio) > 0 ? Number(globalThis.devicePixelRatio) : 1;
+  const w = Math.max(8, Math.round(ORB_PX * orbScale() * dpr * cvSupersample(dpr)));
   return `<canvas class="orb-cv ${kind}" data-kind="${kind}" width="${w}" height="${w}"`
     + ` style="display:block;width:${ORB_PX}px;height:${ORB_PX}px" aria-hidden="true"></canvas>`;
 }
@@ -2542,9 +2580,10 @@ export function mount(ctx) {
   driver.start();
 
   // ?orbRender=canvas: the backing store follows device pixels, so a window
-  // resize, a HUD-scale change, a DPR change (browser zoom, another monitor)
-  // or the end of a drag re-measures each vessel on its next frame — and
-  // re-bakes its static layers only if its geometry actually changed.
+  // resize, a HUD-scale change or a DPR change (browser zoom, another
+  // monitor) re-measures each vessel on its next frame — and re-bakes its
+  // static layers only if its size actually changed. (Position never
+  // matters: the canvas box is the core box.)
   let stopSizeWatch = null;
   if (canvasMode) {
     let mq = null;
@@ -2563,11 +2602,9 @@ export function mount(ctx) {
     watchDpr();
     window.addEventListener("resize", invalidate);
     document.addEventListener("hb-hud-scale-changed", invalidate);
-    document.addEventListener("pointerup", invalidate, true);
     stopSizeWatch = () => {
       window.removeEventListener("resize", invalidate);
       document.removeEventListener("hb-hud-scale-changed", invalidate);
-      document.removeEventListener("pointerup", invalidate, true);
       try { mq?.removeEventListener?.("change", onDpr); } catch (_) {}
       for (const o of orbs) o.cv.destroy();
     };

@@ -19,9 +19,18 @@
 // damage glare at two flicker steps, the mana shimmer at three loop times;
 // wave phases 0 / 1.3 / 2.9.
 //
+// 2026-10-31 look review (the canvas crack web read thinner / paler) adds:
+//   registered     every vessel-only pair aligns best at a shift <= 0.25
+//                  device px (the review measured a 0.3-0.7 px drift: Blink
+//                  pixel-snaps a canvas box in the pane's pre-scale space);
+//   crackEdgeHeld  per backdrop + DPR, the canvas/SVG luma-edge-energy ratio
+//                  of low/hp is within 0.05 of fill50/hp's (the shared
+//                  resampling cancels; a blurred or pale web drags it down);
+//   and a dump: computed styles of the crack web + ancestors (SVG mode), the
+//   CSS the canvas bake applies, and vessel-vs-core rects + backing sizes.
 // PASS (exit 0) = the page ran with no console / page errors, every case
 // mounted the requested renderer (svg: <svg>, canvas: <canvas>), every vessel
-// drew, and every vessel-only diff is within the PROVISIONAL bound below
+// drew, registered, crackEdgeHeld, and every vessel-only diff is within the PROVISIONAL bound below
 // (mean |Δ| <= 3/255 per channel and 99th percentile <= 32/255). The bound is
 // a first guess (not yet calibrated on a run): read the per-case numbers and
 // the strips, then tighten it. Expected residuals: sprite resampling at
@@ -64,6 +73,7 @@ const results = [];
 const errors = [];
 const pageErrors = [], consoleErrors = [], missing = [];
 const shots = {};
+const dumps = {};
 try {
   for (const dpr of [1, 2]) {
     const context = await browser.newContext({ deviceScaleFactor: dpr, viewport: { width: 900, height: 260 } });
@@ -99,6 +109,10 @@ try {
             errors.push(`${c.name}/${bgName}/dpr${dpr}: asked ${mode}, got ${JSON.stringify({ mode: info.mode, canvas: info.hasCanvas, svg: info.hasSvg })}`);
           }
           got[mode] = {};
+          if (c.name === "low" && bgName === "dark") {
+            dumps[`dpr${dpr}`] = dumps[`dpr${dpr}`] || {};
+            dumps[`dpr${dpr}`][mode] = { fxStyles: info.fxStyles, bakeCss: info.bakeCss, geom: info.geom };
+          }
           await page.evaluate(() => window.__orbParity.vesselOnly(true));
           for (const [k, r] of Object.entries(info.rects)) {
             const clip = { x: Math.floor(r.core.x) - 2, y: Math.floor(r.core.y) - 2, width: Math.ceil(r.core.w) + 5, height: Math.ceil(r.core.h) + 5 };
@@ -136,16 +150,27 @@ if (PNG_DIR) {
 
 const worst = results.reduce((w, r) => (r.mean > (w?.mean ?? -1) ? r : w), null);
 const outOfBound = results.filter((r) => r.mean > BOUND.mean || r.p99 > BOUND.p99);
+const edgeRatio = (r) => (r && r.edgeSvg > 0 ? r.edgeCanvas / r.edgeSvg : NaN);
+const crack = [];
+for (const bg of Object.keys(BACKDROPS)) for (const dpr of [1, 2]) {
+  const pick = (c) => results.find((r) => r.case === c && r.kind === "hp" && r.bg === bg && r.dpr === dpr);
+  const low = edgeRatio(pick("low")), ref = edgeRatio(pick("fill50"));
+  crack.push({ bg, dpr, lowHp: +low.toFixed(3), fill50Hp: +ref.toFixed(3), held: low >= ref - 0.05 });
+}
+const misregistered = results.filter((r) => Math.hypot(r.shiftDx, r.shiftDy) > 0.25);
 const checks = {
   pageRan: errors.length === 0 && results.length === CASES.length * 2 * 2 * 3,
   noConsoleErrors: pageErrors.length === 0 && consoleErrors.length === 0 && missing.length === 0,
+  registered: results.length > 0 && misregistered.length === 0,
+  crackEdgeHeld: crack.length === 4 && crack.every((c) => c.held),
   withinProvisionalBound: outOfBound.length === 0,
 };
-console.log("case        kind  bg    dpr  mean  p99  max  >8/255%  >24/255%");
+console.log("case        kind  bg    dpr  mean  p99  max  >8/255%  >24/255%  edge c/s  shift dx,dy  err0->best");
 for (const r of results) {
-  console.log(`${r.case.padEnd(11)} ${r.kind.padEnd(5)} ${r.bg.padEnd(5)} ${String(r.dpr).padEnd(4)} ${String(r.mean).padEnd(5)} ${String(r.p99).padEnd(4)} ${String(r.max).padEnd(4)} ${String(r.pctOver8).padEnd(8)} ${r.pctOver24}`);
+  console.log(`${r.case.padEnd(11)} ${r.kind.padEnd(5)} ${r.bg.padEnd(5)} ${String(r.dpr).padEnd(4)} ${String(r.mean).padEnd(5)} ${String(r.p99).padEnd(4)} ${String(r.max).padEnd(4)} ${String(r.pctOver8).padEnd(8)} ${String(r.pctOver24).padEnd(9)} ${edgeRatio(r).toFixed(3).padEnd(9)} ${(r.shiftDx + "," + r.shiftDy).padEnd(12)} ${r.errUnshifted}->${r.errBestShift}`);
 }
-console.log(JSON.stringify({ worst, outOfBound: outOfBound.map((r) => `${r.case}/${r.kind}/${r.bg}/dpr${r.dpr}`), errors, pageErrors, consoleErrors, missing, pngDir: PNG_DIR }, null, 1));
+console.log("dumps (low case, dark backdrop):", JSON.stringify(dumps, null, 1));
+console.log(JSON.stringify({ crack, misregistered: misregistered.map((r) => `${r.case}/${r.kind}/${r.bg}/dpr${r.dpr} (${r.shiftDx},${r.shiftDy})`), worst, outOfBound: outOfBound.map((r) => `${r.case}/${r.kind}/${r.bg}/dpr${r.dpr}`), errors, pageErrors, consoleErrors, missing, pngDir: PNG_DIR }, null, 1));
 console.log("checks:", JSON.stringify(checks));
 const pass = Object.values(checks).every(Boolean);
 console.log(pass ? "PASS" : "FAIL");

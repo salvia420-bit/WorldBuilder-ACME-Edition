@@ -233,3 +233,10 @@ S2 arms EB-512 / STACK-512), `4a967837` (review fixes; gate 967/967). Snapshot *
   (orbHz=15, orbCaustics=off) + lane `orbs-canvas` building `?orbRender=canvas`. Look sign-off delegated: *"u can eyeball it and
   pass it yourself"* — the orchestrator passes / fails the orb look from the SVG-vs-canvas parity page.
 - Gate override extended to 23:30 -02:30 for the S2-DXSW / overnight chain (busy reps usable per the owner).
+
+### Snapshot trap (2026-10-31, cost: two harness files clobbered in the live tree)
+`hb-mksnap.sh` COPIES `scene3d/` (per file), `app/ ui/ plugins/` and the top-level `*.html *.js *.json *.mjs`, but SYMLINKS
+everything else in apps/holtburger-web (`harness/`, `tests/`, `docs/`, `pkg/` until replaced, `tools/`, …). Writing a file
+under a snapshot's symlinked dir writes the LIVE tree. To make a snapshot equal to HEAD while lanes have uncommitted edits,
+reset only files whose snapshot path has NO symlink anywhere on it (check every ancestor, e.g. `realpath` starts with the
+snapshot dir), or cut the snapshot from a `git worktree` of HEAD instead.
