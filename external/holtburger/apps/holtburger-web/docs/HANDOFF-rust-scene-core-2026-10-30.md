@@ -160,3 +160,11 @@ Real laptop boots (SwiftShader, `--quality low --render-scale 0.25`, logs `$S/r3
 Open from these boots (none blocks the 1070 bench): a texture swap re-plans the whole chunk (teardown + rebuild); on the 1070
 this is a boot-time cost to watch in the IB arm (`textureReplans`, `teardowns`). `pools.cells` read 0 in the room boot (38 outdoors).
 
+
+**Ready for the 1070 (2026-10-31):** committed `9315dfd7` (gate 966/966, pushed). Snapshot **`/mnt/wbterminal2/hb-snap/r3b-20261031`**
+(from 9315dfd7, real release pkg copy; passes `--check-snapshot` for the M1, S1, D1, G1 and S2 queues). Decision-bench queue
+**`docs/reengineering/queue-1070/batch-R3-S2-2026-10-31.json`**: S2-PRE; S2-BENCH at Holtburg (A, A-AA, EB-on, IB-on, GP-on, HD-on,
+HP-off, HO-off, HC-off, HN, H0 ceiling, STACK; 3 reps, ~3.3 h); S2-ANATOMY; S2-LINVAK (6 arms); S2-DUNGEON (TownNetwork, 5 arms);
+S2-EYE; S2-REPORT. Rule D1 (still / moving / tour fps decide; looks for the record). Each arm has a gate, so an arm whose flag did
+nothing on the box is INVALID, not an A/A. When the box is back: tunnel, hbwho (Toolkit), serve the snapshot on :8766 (stop the
+r3d1 server first), then the M1 re-runs (`run_chain4_rest.sh` order; they can use the new snapshot, all readers pass), then S2.
