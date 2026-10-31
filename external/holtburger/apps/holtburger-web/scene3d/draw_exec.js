@@ -202,10 +202,11 @@ export function drawExecRigsEnabled() {
   return rustFlag("drawExecRigs", true);
 }
 
-/** `?drawExecSwitch` (round 3, 2026-10-31) — DEFAULT OFF, needs `?drawExec`: the same-program material
- *  switch executed (see SAME-PROGRAM SWITCH above). */
+/** `?drawExecSwitch` (round 3, 2026-10-31) — DEFAULT ON since 2026-10-31 (S2-DXSW on the 1070, rule D1b: +1.25 / +1.20 /
+ *  +1.43 fps still / moving / tour, renderJs -0.42 ms; GL stream identical to stock), needs `?drawExec`: the same-program
+ *  material switch executed (see SAME-PROGRAM SWITCH above). `off|0|false|no` is the escape. */
 export function drawExecSwitchEnabled() {
-  return rustFlag("drawExecSwitch", false);
+  return rustFlag("drawExecSwitch", true);
 }
 
 // three r184 shapes the same-program switch replicates (setProgram's refresh path, WebGLMaterials,

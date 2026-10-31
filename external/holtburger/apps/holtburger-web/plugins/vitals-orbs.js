@@ -119,9 +119,16 @@
 // appear to crawl because they are clipped to the live wave path.
 // `?orbCaustics=off` / `?orbHz=15` / `?orbScale=` remain the levers.
 //
-// === ?orbRender=canvas (2026-10-31, DEFAULT OFF) ===
+// === ?orbRender — Canvas2D vessel cores, DEFAULT ON since 2026-10-31 ===
 // Owner ask "make the orbs cheaper" (1070 S2-QUIET: ?hudOrbs=off +2.3 still /
-// +1.75 tour fps). The liquid core of each vessel is drawn into ONE <canvas>
+// +1.75 tour fps). 1070 S2-ORB (3 quiet interleaved reps, paired vs mean(A,
+// A-AA), noise +-0.4-0.6): canvas +4.18 still / +3.65 moving / +3.75 tour fps,
+// renderJs -0.78 ms — the same as hiding the orbs (+3.55 / +3.42 / +4.75);
+// SVG at ?orbHz=15 only +1.7 / +1.4 / +1.8. Flipped to the default under the
+// owner's rule (fps winners ship; the look, delegated, passed at DPR 1 and 2).
+// ESCAPE: `?orbRender=svg` (or off / 0 / false / no) = the signed-off SVG
+// vessel, byte for byte as before the flag existed. The liquid core of each
+// vessel is drawn into ONE <canvas>
 // with Canvas2D instead of the SVG subtree above; figures, plaques, readouts
 // and the pointer gate stay DOM. Same driver, same cadence, same state, same
 // wave(): everything STATIC is pre-rendered once at canvas-pixel scale (glass
@@ -130,8 +137,8 @@
 // web), so a tick is two wave fills, one wave clip, a handful of drawImage
 // calls and the meniscus strokes; no Blink style / layout / paint and no
 // filter evaluation per tick, and a tick whose drawn values moved less than
-// CV_SKIP_PX device px is not drawn at all. Flag off = the SVG path, byte for
-// byte. See the "?orbRender=canvas" block below and docs/url-flags.md.
+// CV_SKIP_PX device px is not drawn at all. See the "?orbRender=canvas" block
+// below and docs/url-flags.md.
 
 import { attachWindowPosition, WINDOW_ID } from "../ui/ac_window_position.js";
 import { hudDietOn } from "../ui/hud_diet.js";
@@ -242,14 +249,16 @@ function orbScale() {
   return Number.isFinite(v) && v > 0.2 && v <= 2 ? v : DEFAULT_SCALE;
 }
 
-/** `?orbRender=canvas` (DEFAULT OFF, opt-in: "canvas", trimmed, any case)
- *  draws each vessel core with Canvas2D; anything else, or absent, is the
- *  signed-off SVG vessel. Read once (memoized). */
+/** `?orbRender` — the vessel renderer. DEFAULT "canvas" (Canvas2D cores;
+ *  1070 S2-ORB flip 2026-10-31). ESCAPE to the signed-off SVG vessel: `svg`,
+ *  `off`, `0`, `false` or `no` (trimmed, any case). Anything else — absent,
+ *  empty, `canvas`, `on`, junk — is canvas. Read once (memoized). */
+const ORB_RENDER_SVG_FORMS = new Set(["svg", "off", "0", "false", "no"]);
 let _renderFlag;
 export function orbRenderMode() {
   if (_renderFlag !== undefined) return _renderFlag;
   const v = String(urlParam("orbRender") ?? "").trim().toLowerCase();
-  _renderFlag = v === "canvas" ? "canvas" : "svg";
+  _renderFlag = ORB_RENDER_SVG_FORMS.has(v) ? "svg" : "canvas";
   return _renderFlag;
 }
 /** Test seam: "canvas"/"svg" forces the mode, undefined re-reads the URL. */
@@ -2526,9 +2535,9 @@ export function mount(ctx) {
   // R3-2 HUD diet levers (ui/hud_diet.js; default off), read once per mount.
   const dietSync = hudDietOn("orbSync");
   ensureStyles({ orbLayer: hudDietOn("orbLayer") });
-  // ?orbRender=canvas (default off): the vessel cores are Canvas2D. The page
-  // then needs no shared SVG <defs> (the fracture bake carries its own
-  // #hbRefract) and no <image> bake swap; the stylesheet is the same text.
+  // ?orbRender (default canvas; `=svg` escape): Canvas2D vessel cores need no
+  // shared SVG <defs> (the fracture bake carries its own #hbRefract) and no
+  // <image> bake swap; the stylesheet is the same text in both modes.
   const canvasMode = orbRenderMode() === "canvas";
   if (!canvasMode) ensureSharedDefs();
   preloadSpriteMasks();

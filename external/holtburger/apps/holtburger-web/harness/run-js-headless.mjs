@@ -739,8 +739,9 @@ const TIER5 = [
   // 2026-10-31 round 3 R3-2 HUD diet: ?hudDiet (DEFAULT OFF; orbSync / orbLayer / radar / overlays / fontWrf)
   // + the HUD bisect flags ?hudPanels=off / ?hudOrbs=off / ?hudCanvases=off; flags-off call pattern pinned.
   { tier: 5, flag: "hudDiet", file: "tests/hud_diet.test.mjs" },
-  // 2026-10-31 owner ask "make the orbs cheaper": ?orbRender=canvas (DEFAULT OFF) — the vessel core in
-  // Canvas2D; flag-off DOM log pinned to the pre-change plugin (sha256), state mapping, bakes, skips, hidden.
+  // 2026-10-31 owner ask "make the orbs cheaper": ?orbRender (DEFAULT canvas since the 1070 S2-ORB flip;
+  // ?orbRender=svg escape) — the vessel core in Canvas2D; the escape's DOM log pinned to the pre-flag plugin
+  // (sha256), state mapping, bakes, skips, hidden, registration, crack-web cascade.
   { tier: 5, flag: "orbRender", file: "tests/vitals_orbs_canvas.test.mjs" },
   // 2026-10-19 fps review: the scene-walk census (__skipHiddenMatrix.census) — what a static
   // container freeze could save (`forcedOnly`) before anyone builds one.

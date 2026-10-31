@@ -650,19 +650,19 @@ async function scenario(name, sc, expect = {}) {
   for (const p of P || []) if (!msrc.includes(norm(p))) miss.push(p.slice(0, 80));
   for (const p of PC || []) if (!csrc.includes(norm(p))) miss.push(p.slice(0, 80));
   check("every switch premise is in three r184's source, whitespace-normalised", Array.isArray(P) && miss.length === 0, miss.length ? `missing: ${miss.join(" | ")}` : `${(P || []).length + (PC || []).length} premises`);
-  check("drawExecSwitchEnabled(): DEFAULT OFF", typeof DX.drawExecSwitchEnabled === "function" && DX.drawExecSwitchEnabled() === false);
-  __setRustFlagForTest("drawExecSwitch", true);
-  check("drawExecSwitchEnabled(): ?drawExecSwitch=on", typeof DX.drawExecSwitchEnabled === "function" && DX.drawExecSwitchEnabled() === true);
+  check("drawExecSwitchEnabled(): DEFAULT ON (2026-10-31, S2-DXSW)", typeof DX.drawExecSwitchEnabled === "function" && DX.drawExecSwitchEnabled() === true);
+  __setRustFlagForTest("drawExecSwitch", false);
+  check("drawExecSwitchEnabled(): ?drawExecSwitch=off is the escape", typeof DX.drawExecSwitchEnabled === "function" && DX.drawExecSwitchEnabled() === false);
   {
     const arm = makeArm(false, { frames: 0 });
     const api = DX.installDrawExec(arm.renderer, () => arm.W.scene, { force: true });
-    check("install under ?drawExecSwitch=on (no option): the switch is on", !!api && api.stats && api.stats.switchOn === true);
+    check("install under ?drawExecSwitch=off (no option): the switch is off (stats.switchOn false, no switch counters move)", !!api && api.stats && api.stats.switchOn === false && api.stats.sameProgramSwitches === 0);
   }
   __setRustFlagForTest("drawExecSwitch", undefined);
   {
     const arm = makeArm(false, { frames: 0 });
     const api = DX.installDrawExec(arm.renderer, () => arm.W.scene, { force: true });
-    check("install by default: the switch is off (stats.switchOn false, no switch counters move)", !!api && api.stats && api.stats.switchOn === false && api.stats.sameProgramSwitches === 0);
+    check("install by default: the switch is on", !!api && api.stats && api.stats.switchOn === true);
   }
 }
 

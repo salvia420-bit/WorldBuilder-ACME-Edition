@@ -6,7 +6,7 @@
 // `?drawExec=on&drawExecRigs=on&drawExecRuns=on` (S3.6 entity parts executed too, plus a STALE
 // `drawExecRuns=on`: S3.2 sentinel runs were deleted in round 3 R3-2, 2026-10-30, and an old URL
 // must be inert — no runs counters), the SHIPPED DEFAULT (no URL flags: ?drawExec and
-// ?drawExecRigs are DEFAULT ON since 2026-10-26; ?drawExecSwitch DEFAULT OFF) and
+// ?drawExecRigs are DEFAULT ON since 2026-10-26; ?drawExecSwitch DEFAULT ON since 2026-10-31) and
 // `?drawExec=on&drawExecRigs=on&drawExecSwitch=on` (round 3, 2026-10-31: same-program material
 // switches executed — it must execute some, with no unproven tracker sync, and the default arm must
 // have the switch off). Every non-default arm names its flags, so no
@@ -87,7 +87,7 @@ const okOn = compare(on, off, "on   vs off");
 const okRigs = compare(rigs, off, "rigs vs off");
 const okDflt = compare(dflt, off, "dflt vs off");
 const okSw = compare(sw, off, "sw   vs off");
-// ?drawExecSwitch: the arm executed same-program switches, none of its tracker syncs unproven; off by default
+// ?drawExecSwitch: the arm executed same-program switches, none of its tracker syncs unproven; DEFAULT ON since 2026-10-31 (the default arm too)
 const switched = (r) => !!r.dx && r.dx.switchOn === true && r.dx.sameProgramSwitches > 0 && r.dx.switchSyncFailed === 0;
 // the entity parts are executed under ?drawExecRigs (shares: the arms may warm up for different frame counts)
 const passShare = (r) => r.dx.passThrough / Math.max(1, r.dx.draws);
@@ -96,7 +96,7 @@ const noRuns = (r) => !!r.dx && !("runs" in r.dx) && !("runItems" in r.dx) && !(
 const ok = off.flag === false && off.installed === false && on.flag === true && on.installed === true && rigs.installed === true
   && dflt.flag === true && dflt.installed === true
   && okOn && okRigs && okDflt && okSw && on.frames.at(-1).lit > 1000
-  && executed(on) && executed(rigs) && executed(dflt) && executed(sw) && switched(sw) && dflt.dx.switchOn === false && sw.installed === true
+  && executed(on) && executed(rigs) && executed(dflt) && executed(sw) && switched(sw) && dflt.dx.switchOn === true && switched(dflt) && sw.installed === true
   && passShare(rigs) < passShare(on) && passShare(dflt) < passShare(on)
   && noRuns(on) && noRuns(rigs) && noRuns(dflt)
   && clean(off) && clean(on) && clean(rigs) && clean(dflt) && clean(sw);

@@ -1,6 +1,7 @@
-// tests/vitals_orbs_canvas.test.mjs — ?orbRender=canvas (2026-10-31, DEFAULT
-// OFF): the vitals-orb vessel core drawn with Canvas2D (plugins/vitals-orbs.js,
-// owner ask "make the orbs cheaper").
+// tests/vitals_orbs_canvas.test.mjs — ?orbRender (2026-10-31): the vitals-orb
+// vessel core drawn with Canvas2D (plugins/vitals-orbs.js, owner ask "make the
+// orbs cheaper"). DEFAULT ON since the 1070 S2-ORB flip (2026-10-31); the
+// signed-off SVG vessel is the escape, `?orbRender=svg` (or off/0/false/no).
 //
 // The plugin's real mount() runs here over a small fake DOM: a markup parser
 // for the innerHTML the plugin writes, simple selectors (tag / .class / #id /
@@ -8,17 +9,18 @@
 // recording 2D context.
 //
 // CONTRACT
-//   [1] orbRenderMode(): absent / "svg" / junk → "svg"; "canvas" (trimmed, any
-//       case) → "canvas"; memoized; the test seam re-reads the URL.
-//   [2] flag OFF: a scripted session (mount, snapshot, 30 Hz ticks, a 25% hit
-//       with its glare and timer, low HP + the fracture web, a vitae snapshot,
-//       a pointer probe, hide / show, tab hidden / visible, unmount) writes the
-//       SAME DOM log (every element, innerHTML string, attribute, class,
-//       style, text, hidden flag and SVGTransform write, in order) for
-//       ?orbRender absent / =svg / =bogus, and its sha256 is the one the
-//       pre-change plugin wrote (GOLDEN). Pins today's path; it passes on the
-//       pre-change file by construction. Every other check fails there.
-//   [3] flag ON: same panes, heraldry, plaques and stylesheet; each core holds
+//   [1] orbRenderMode(): svg / off / 0 / false / no (trimmed, any case) →
+//       "svg" (the escape); anything else — absent, empty, canvas, on, junk —
+//       → "canvas" (the default); memoized; the test seam re-reads the URL.
+//   [2] the ESCAPE: a scripted session (mount, snapshot, 30 Hz ticks, a 25%
+//       hit with its glare and timer, low HP + the fracture web, a vitae
+//       snapshot, a pointer probe, hide / show, tab hidden / visible, unmount)
+//       writes the SAME DOM log (every element, innerHTML string, attribute,
+//       class, style, text, hidden flag and SVGTransform write, in order) for
+//       every escape form, and its sha256 is the one the pre-change plugin
+//       wrote with no flag at all (GOLDEN): `?orbRender=svg` IS the signed-off
+//       vessel, byte for byte. The DEFAULT (absent, empty, junk) mounts canvas.
+//   [3] canvas: same panes, heraldry, plaques and stylesheet; each core holds
 //       one canvas.orb-cv (CSS 92 px) and no <svg>; no shared <defs>; per tick
 //       no DOM write at all; the backing store is 92 x orbScale x zoom x DPR.
 //   [4] state mapping from vitals updates: fill → the drawn surface height;
@@ -420,48 +422,67 @@ function svgSession(search) {
   return LOG.slice();
 }
 
-// sha256 of svgSession("") with the PRE-CHANGE plugin (HEAD 0d5b9493). If you
-// change the SVG vessel's markup, writes or timing ON PURPOSE, re-pin it from a
-// run of this file (`HB_PRINT_ORB_GOLDEN=1`); the flag-off path is the owner's
-// signed-off look, so that should be a deliberate act.
+// sha256 of svgSession("") with the PRE-CHANGE plugin (HEAD 0d5b9493, before
+// ?orbRender existed: the SVG vessel was the only one) = svgSession of the
+// escape (`?orbRender=svg`) now. If you change the SVG vessel's markup, writes
+// or timing ON PURPOSE, re-pin it from a run of this file
+// (`HB_PRINT_ORB_GOLDEN=1`); the escape is the owner's signed-off look, so
+// that should be a deliberate act.
 const GOLDEN = "0361e6c2c57374289631622b3ae71e3aab48dc758ca74410a046222552793d74";
 
 // ── [1] the reader ──────────────────────────────────────────────────────────
 console.log("── [1] orbRenderMode ──");
-check("[1] absent / svg / junk → svg; canvas (trimmed, any case) → canvas; memoized", () => {
+check("[1] svg / off / 0 / false / no (trimmed, any case) → svg; absent / empty / canvas / on / junk → canvas; memoized", () => {
   assert(typeof O.orbRenderMode === "function" && typeof O.__setOrbRenderForTest === "function", "orbRenderMode + seam exported");
   const read = (s) => { globalThis.location = { search: s }; O.__setOrbRenderForTest(undefined); return O.orbRenderMode(); };
-  for (const s of ["", "?vitalsOrbs=on", "?orbRender=svg", "?orbRender=", "?orbRender=1", "?orbRender=on", "?orbRender=canvas2d", "?orbRender=webgl"]) {
-    assertEq(read(s), "svg", s || "(absent)");
+  for (const s of ["?orbRender=svg", "?orbRender=SVG", "?orbRender=%20Svg%20", "?orbRender=off", "?orbRender=OFF",
+    "?orbRender=0", "?orbRender=false", "?orbRender=False", "?orbRender=no", "?orbRender=%20No%20", "?hudDiet=on&orbRender=svg"]) {
+    assertEq(read(s), "svg", s);
   }
-  for (const s of ["?orbRender=canvas", "?orbRender=CANVAS", "?orbRender=%20Canvas%20", "?hudDiet=on&orbRender=canvas"]) {
-    assertEq(read(s), "canvas", s);
+  for (const s of ["", "?vitalsOrbs=on", "?orbRender=", "?orbRender=canvas", "?orbRender=CANVAS", "?orbRender=on",
+    "?orbRender=1", "?orbRender=true", "?orbRender=yes", "?orbRender=svg2", "?orbRender=webgl", "?orbRender=nope", "?orbRender=0ff"]) {
+    assertEq(read(s), "canvas", s || "(absent)");
   }
-  globalThis.location = { search: "?orbRender=canvas" }; O.__setOrbRenderForTest(undefined); O.orbRenderMode();
+  globalThis.location = { search: "?orbRender=svg" }; O.__setOrbRenderForTest(undefined); O.orbRenderMode();
   globalThis.location = { search: "" };
-  assertEq(O.orbRenderMode(), "canvas", "memoized (URL read once)");
-  O.__setOrbRenderForTest("svg");
-  assertEq(O.orbRenderMode(), "svg", "seam forces");
+  assertEq(O.orbRenderMode(), "svg", "memoized (URL read once)");
+  O.__setOrbRenderForTest("canvas");
+  assertEq(O.orbRenderMode(), "canvas", "seam forces");
   O.__setOrbRenderForTest(undefined);
-  assertEq(O.orbRenderMode(), "svg", "seam undefined re-reads");
+  assertEq(O.orbRenderMode(), "canvas", "seam undefined re-reads: the default");
 });
 
-// ── [2] flag off: the DOM log is today's ────────────────────────────────────
-console.log("── [2] flag off = today's DOM, op for op ──");
-const offLog = svgSession("");
+// ── [2] the escape: the DOM log is the signed-off vessel's ─────────────────
+console.log("── [2] ?orbRender=svg = the pre-flag DOM, op for op; the default is canvas ──");
+const offLog = svgSession("?orbRender=svg");
 if (process.env.HB_PRINT_ORB_GOLDEN) console.log(`  GOLDEN ${sha(offLog)} (${offLog.length} ops)`);
-check("[2] ?orbRender absent / =svg / =bogus write the identical DOM log", () => {
+check("[2] every escape form (svg / off / 0 / false / no, any case, trimmed) writes the identical DOM log", () => {
   assert(offLog.length > 2000, `a real session (${offLog.length} ops)`);
   assert(offLog.some((e) => e[0] === "attr" && e[2] === "d"), "wave d writes logged");
   assert(offLog.some((e) => e[0] === "xf.translate"), "SVGTransform writes logged");
   assert(offLog.some((e) => e[0] === "html" && e[2].includes('class="fx"')), "the fracture web was built");
   assert(offLog.some((e) => e[0] === "class-" && e[2] === "glaring"), "the glare timer fired");
   const a = sha(offLog);
-  assertEq(sha(svgSession("?orbRender=svg")), a, "=svg");
-  assertEq(sha(svgSession("?orbRender=bogus&vitalsOrbs=on")), a, "=bogus");
+  for (const q of ["?orbRender=SVG", "?orbRender=off", "?orbRender=0", "?orbRender=FALSE", "?orbRender=%20no%20", "?vitalsOrbs=on&orbRender=svg"]) {
+    assertEq(sha(svgSession(q)), a, q);
+  }
 });
 check("[2] the flag-off log is the pre-change plugin's (golden sha256)", () => {
-  assertEq(sha(offLog), GOLDEN, "sha256(flag-off DOM log)");
+  assertEq(sha(offLog), GOLDEN, "sha256(?orbRender=svg DOM log) = the pre-flag plugin's");
+});
+check("[2] the DEFAULT (absent, empty, junk) mounts the canvas vessel, not the SVG one", () => {
+  for (const q of ["", "?orbRender=", "?orbRender=bogus", "?orbRender=on", "?vitalsOrbs=on"]) {
+    const m = mountWith(q);
+    try {
+      m.snapshot(V(150, 300, 100, 200, 50, 100));
+      pump(4);
+      const cv = (k) => m.pane(k).querySelector("canvas.orb-cv");
+      assertEq(m.diag.renderMode?.(), "canvas", `${q || "(absent)"}: renderMode`);
+      assert(cv("hp") && !m.pane("hp").querySelector("svg"), `${q || "(absent)"}: a canvas core, no <svg>`);
+      assert(!document.getElementById("hb-vitals-orbs-defs"), `${q || "(absent)"}: no shared defs`);
+      assert((cv("mana")._log || []).some((e) => e[0] === "clearRect"), `${q || "(absent)"}: drawn`);
+    } finally { m.unmount(); }
+  }
 });
 
 // ── canvas helpers ──────────────────────────────────────────────────────────
@@ -534,7 +555,7 @@ function expectedBakes() { return 2 + 3 + 1; }
 // ── [3] flag on: the DOM ────────────────────────────────────────────────────
 console.log("── [3] flag on: the canvas core ──");
 check("[3] same panes / heraldry / plaques / stylesheet; one canvas per core, no <svg>, no shared defs", () => {
-  const svgM = mountWith("");
+  const svgM = mountWith("?orbRender=svg");
   const svgPanes = ["hp", "stam", "mana"].map((k) => svgM.pane(k));
   const svgStyle = document.getElementById("hb-vitals-orbs-style").textContent;
   const svgFigs = svgPanes.map((p) => p.querySelectorAll(".fig").map((f) => f.className));
@@ -741,7 +762,7 @@ check("[5] position never matters: a pane dropped at a fractional spot re-bakes 
 // the page's strokes and rules, blitted 1:1; (2) registration: see [3] (the
 // canvas box is the core box) and the cascade check below.
 check("[5] low HP: the crack web is rasterized on the canvas's own pixel grid with the page's strokes + rules, blitted 1:1 (DPR 1 and 2)", () => {
-  const sm = mountWith("");
+  const sm = mountWith("?orbRender=svg");
   sm.snapshot(V(30, 300, 100, 200, 50, 100));
   pump(10);
   const fxHtml = LOG.find((e) => e[0] === "html" && e[2].includes('class="fx"'))?.[2];
@@ -851,7 +872,7 @@ const GROUP_PAINT = new Set(["opacity", "filter", "mix-blend-mode", "transform",
 const PAINT_ATTRS = ["style", "fill", "stroke", "stroke-width", "stroke-opacity", "fill-opacity", "opacity", "filter", "transform",
   "clip-path", "mask", "paint-order", "vector-effect", "stroke-linecap", "stroke-linejoin", "color"];
 check("[5] the page cascade gives every crack element exactly the bake's styles; nothing else reaches them", () => {
-  const sm = mountWith("");
+  const sm = mountWith("?orbRender=svg");
   try {
     sm.snapshot(V(30, 300, 100, 200, 50, 100));
     pump(10);
@@ -1091,7 +1112,7 @@ function probeGrid(search) {
   return { out, isCanvas };
 }
 check("[8] canvas mode answers every probe exactly as the SVG mode", () => {
-  const a = probeGrid("");
+  const a = probeGrid("?orbRender=svg");
   const b = probeGrid("?orbRender=canvas");
   assert(b.isCanvas, "the second mount really is a canvas core");
   assertEq(b.out.length, a.out.length, "grid size");
@@ -1187,7 +1208,7 @@ if (process.argv.includes("--bench")) {
     m.unmount();
     return ticks;
   };
-  run("", "svg   ");
+  run("?orbRender=svg", "svg   ");
   run("?orbRender=canvas", "canvas");
   // slosh-heavy: a hit every 0.5 s on every vital
   const m = mountWith("?orbRender=canvas");
