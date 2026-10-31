@@ -168,3 +168,33 @@ HP-off, HO-off, HC-off, HN, H0 ceiling, STACK; 3 reps, ~3.3 h); S2-ANATOMY; S2-L
 S2-EYE; S2-REPORT. Rule D1 (still / moving / tour fps decide; looks for the record). Each arm has a gate, so an arm whose flag did
 nothing on the box is INVALID, not an A/A. When the box is back: tunnel, hbwho (Toolkit), serve the snapshot on :8766 (stop the
 r3d1 server first), then the M1 re-runs (`run_chain4_rest.sh` order; they can use the new snapshot, all readers pass), then S2.
+
+## 1070 session 2026-10-31 (owner present; noisy box accepted)
+
+Owner: *"it will be slightly noisy but will show directional improvement so we go with that"* → gate override until
+18:00 -02:30 (D:\Temp\hbbench\gate-owner-ok.txt); Roblox + Seagate Toolkit (app, service, service process) killed on the
+owner's word. Commits today: `f83477d7` (entity batch AO / roughness / emissive-alias parts; 1070 live-tree boot at ultra:
+39 rigs active, 113 map leaves batched, verify all 0, the default 128 MiB kit cap FULL: 44 leaves legacy for pageFull →
+S2 arms EB-512 / STACK-512), `4a967837` (review fixes; gate 967/967). Snapshot **r3c-20261031** (f83477d7) on :8766.
+- **S2-BENCH rep 1 only** (14 arms; A / A-AA differ by up to 6 fps under the owner's use: fps per flag is not decidable
+  here; draws and renderJs are). Out `/mnt/wbterminal1/tmp/claude-scratch/perf/r3-s2/bench`. Reps 2-3 are replaced by a
+  quiet-window bench of the decisive arms (S2-QUIET).
+- **Noisy-window chain** `/mnt/wbterminal1/tmp/claude-scratch/perf/r3-s2/run_noisy.sh` (log `noisy.log`): LAYERMIP, WEBGPU,
+  real-GPU batch checks on r3c (`chk/`: gpuParticles self-check, interior batch in room a9b40121 and TownNetwork, a context
+  loss / restore with all three batches on), rc-eye stills A / EB / IB / GP / HD (`eye/`), S2-ANATOMY rep 1, M1a-ANATOMY x4,
+  M1a-SWEEP x2. During its hbsess part :8765 serves r3c, then the live tree again.
+- **M1d-OPENAC: owner HOLD** ("hold off on that one"; ownerDecision in the M1 queue).
+- **Outstanding-items audit** (workflow, 2026-10-31; `/tmp/.../scratchpad/outstanding.json` is session scratch, the gist):
+  superseded / done: RC-BOOT, RC-PROFILE, RC-TRACE, RC-CENSUS, RC-BENCH, S1-BENCH, S1-ANATOMY, S1-ENTITYBATCH,
+  S2-INTERIORBATCH-REF; obsolete: S1-CTX (gated animSceneryBatch only; the S2 batches get their own ctx check in `chk/`);
+  moot under the owner's fps rule (bakeFallbackWaves is fps-flat): S1-ROUTE, S1-BW0, S1-DIAG, RC-EYE; still to run:
+  the M1 fps items (quiet window), **S1-PRE + S1-INDOOR** (the only measurement that can decide skipEmptyPasses; S1-PRE's
+  laptop tab logs a second account in at the bench spot, so it runs only when no 1070 item runs), S1-EYE, S1-FARFOG-OPT.
+- **Pools bug found (default-on env-cell pools; not fixed, owner-facing).** A cell's shell surfaces are offered once, at
+  build, usually still with the <=128 px preview texture, so the pools refuse them (`offPage` / `needsResample`); when the
+  full texture lands, `poolAtlasRefeed` drops every parked env-cell surface as "stale" because env-cell nodes never have a
+  parent (`scene3d/pool_producer.js:852`, comment assumes an evicted LB). 5 of 6 laptop boots today pooled 0 of 279 shells.
+  Reproduction (real cells.js + pools via tests/interior_batch_rig.mjs):
+  `/mnt/wbterminal1/tmp/claude-scratch/rustcore-2026-10-29/r3-batching/pools-indoor/repro_preview_race.{mjs,out}`.
+  Fix sketch there (re-offer after atlasRefeed, re-fuse the cell, re-plan the interior batch). Deferred until S2 decides
+  `?interiorBatch`: it already takes the shells the pools refuse, so if it flips ON the fix matters much less.
