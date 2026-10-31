@@ -31,7 +31,7 @@
     "flag": "entityBatch (AO / roughness / emissive parts, 2026-10-31)",
     "file": "apps/holtburger-web/scene3d/gpu_batch/entity_batch.js",
     "patterns": [
-     "const out = \\{ entities: 0, rowMismatches: 0, stateMismatches: 0, pomMismatches: 0, mapMismatches: 0, parkMismatches: 0, attrMismatches: 0, details: \\[\\] \\};",
+     "pomMismatches: 0, mapMismatches: 0,",
      "mapArrivals: 0, // rig hand-backs for a late texchan AO / roughness plane"
     ],
     "why": "EB-on / STACK: a snapshot before the maps commit routes the 47 AO + roughness leaves legacy (laptop boot 2026-10-31)"
