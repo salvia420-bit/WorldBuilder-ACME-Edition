@@ -703,7 +703,7 @@
    "recipe": [
     "node scripts/perf-worker/hbbench.mjs --arms apps/holtburger-web/docs/reengineering/queue-1070/batch-R3-S2-2026-10-31.json --item S2-ORB --reps 3 --port 8766 --uncapped --ref A --out /mnt/wbterminal1/tmp/claude-scratch/perf/r3-s2/orb2"
    ],
-   "result": "(first attempt 2026-10-31 17:33-17:45 on r3f, knob arms only, stopped for the owner's play session; partial reps in r3-s2/orb/, superseded by orb2 on r3g)"
+   "result": "2026-10-31 17:57-19:53, snapshot r3g-20261031 (45e439f0: ?orbRender=canvas v1, 1x backing), 3 interleaved reps x 8 arms, quiet box (min idle 93 / 4,457 / 6,483 s per rep, no non-test process >= 0.5 core). D1b (paired vs mean(A, A-AA); fps still / moving / tour): floor A-AA vs A -0.17+-0.44 / +0.57+-0.63 / +0.70+-0.38; OC +4.18+-0.27 / +3.65+-0.74 / +3.75+-0.63 (renderJs -0.78) IMPROVEMENT; OC-15 +4.08+-0.97 / +3.88+-1.02 / +4.28+-0.36 IMPROVEMENT (15 Hz adds nothing on canvas); HO-off (ceiling) +3.55+-0.32 / +3.42+-0.25 / +4.75+-0.49; O-15nc +2.22 / +2.35 / +2.58; O-15 +1.72 / +1.35 / +1.78; O-nc within noise. VERDICT: the canvas renderer recovers the whole orb cost (~4 fps, as hiding them) and wins every segment. Flip candidate: ?orbRender=canvas DEFAULT ON (escape =svg) once S2-ORB2 confirms the look-fixed build (01ede174, 2x supersampled). Scorer: r3-s2/orb2.d1b.txt."
   },
   {
    "id": "S2-ORB2",
