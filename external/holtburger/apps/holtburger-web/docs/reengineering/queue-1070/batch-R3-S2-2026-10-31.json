@@ -8,14 +8,14 @@
  "sessionRules": "vistest-preamble-v1",
  "sessionRulesInline": [
   "Inherit every rule of batch-R3-D1-2026-10-30.json sessionRulesInline verbatim (it inherits batch-P0's: MODE T off-screen + muted, OWNER-RUN, kill only by user-data-dir, ?nosw=1, fresh profile per arm-rep, uncapped frames + targetFps=0, release wasm only, >= 65 s between boots on one account, reject-never-average). Read memory/fleet-runbooks.md before driving the 1070.",
-  "Build under test: snapshot /mnt/wbterminal2/hb-snap/r3h-20261031 (cut 2026-10-31 from 1dd3b2cd; S2-BENCH rep 1 and the noisy-window items ran on r3c = f83477d7, real release pkg copy; SNAPSHOT_COMMIT.txt), served with `python3 scripts/serve.py --bind 127.0.0.1 --port 8766` from the snapshot (`--check` validates and EXITS: run it once, then serve without it). Check: `node scripts/perf-worker/hbbench.mjs --arms apps/holtburger-web/docs/reengineering/queue-1070/batch-R3-S2-2026-10-31.json --check-snapshot /mnt/wbterminal2/hb-snap/r3h-20261031`.",
+  "Build under test: snapshot /mnt/wbterminal2/hb-snap/r3i-20261031 (cut 2026-10-31 from 1dd3b2cd; S2-BENCH rep 1 and the noisy-window items ran on r3c = f83477d7, real release pkg copy; SNAPSHOT_COMMIT.txt), served with `python3 scripts/serve.py --bind 127.0.0.1 --port 8766` from the snapshot (`--check` validates and EXITS: run it once, then serve without it). Check: `node scripts/perf-worker/hbbench.mjs --arms apps/holtburger-web/docs/reengineering/queue-1070/batch-R3-S2-2026-10-31.json --check-snapshot /mnt/wbterminal2/hb-snap/r3i-20261031`.",
   "Laptop memory: SwiftShader boots of the batch arms hold ~3.4 GB (GPU process ~2 GB + renderer ~1.4 GB); never run a laptop batch boot while the 1070 bench's laptop side (serve.py, ACE, tunnel) is near the earlyoom line. The 1070 runs the arms; the laptop only serves."
  ],
  "accounts": "Bench account tailnet1 (hbbench default). M1c needs a SECOND Developer-level account for WebAC (or run the two clients one after the other); credentials only in the URL / environment at run time, never in this file.",
  "urlBase": "http://127.0.0.1:8766/apps/holtburger-web/index.html",
  "b0Snapshot": {
-  "what": "S2 snapshot = r3h-20261031 (82afb0a5 exactly: + drawExecSwitch envMap support). Earlier: S2-BENCH rep 1 r3c, S2-QUIET r3d, S2-DXSW (stopped) r3f, S2-ORB r3g.",
-  "check": "node scripts/perf-worker/hbbench.mjs --arms apps/holtburger-web/docs/reengineering/queue-1070/batch-R3-S2-2026-10-31.json --check-snapshot /mnt/wbterminal2/hb-snap/r3h-20261031",
+  "what": "S2 snapshot = r3i-20261031 (01ede174 exactly: + orbRender look-parity fix). Earlier: S2-BENCH rep 1 r3c, S2-QUIET r3d, S2-DXSW (stopped) r3f, S2-ORB r3g.",
+  "check": "node scripts/perf-worker/hbbench.mjs --arms apps/holtburger-web/docs/reengineering/queue-1070/batch-R3-S2-2026-10-31.json --check-snapshot /mnt/wbterminal2/hb-snap/r3i-20261031",
   "rule": "Each requirement's file must exist in the snapshot, be the snapshot's own copy (no symlink anywhere on its path) and match every pattern (JS RegExp source). The check refuses the live tree itself and never reads url-flags.md. Patterns pin the a2 versions where an a2 lane changed the reader's module (route probe, nullRender install, generation keying, compaction, the legacy re-show fix), so a phase-A-only snapshot fails.",
   "requiredReaders": [
    {
@@ -140,6 +140,14 @@
      "envMapConvert"
     ],
     "why": "S2-DXSW re-run: before 82afb0a5 every lit switch was refused for envMap on the 1070 (A/A)"
+   },
+   {
+    "flag": "orbRender look parity (01ede174)",
+    "file": "apps/holtburger-web/plugins/vitals-orbs.js",
+    "patterns": [
+     "export function orbRenderMode\\(\\)"
+    ],
+    "why": "S2-ORB2 re-price"
    },
    {
     "flag": "release pkg (real copy)",
@@ -696,6 +704,51 @@
     "node scripts/perf-worker/hbbench.mjs --arms apps/holtburger-web/docs/reengineering/queue-1070/batch-R3-S2-2026-10-31.json --item S2-ORB --reps 3 --port 8766 --uncapped --ref A --out /mnt/wbterminal1/tmp/claude-scratch/perf/r3-s2/orb2"
    ],
    "result": "(first attempt 2026-10-31 17:33-17:45 on r3f, knob arms only, stopped for the owner's play session; partial reps in r3-s2/orb/, superseded by orb2 on r3g)"
+  },
+  {
+   "id": "S2-ORB2",
+   "kind": "bench",
+   "title": "re-price ?orbRender=canvas after the look-parity fix (01ede174: 2x supersampled backing, 4x raster area) vs defaults + A/A + the orbs-hidden ceiling, Holtburg ultra, 3 reps, snapshot r3i",
+   "arms": [
+    {
+     "name": "A",
+     "flags": "",
+     "note": "defaults",
+     "scored": "still / moving / tour fps (D1b); main busy + CrGpuMain RASTER per present (anatomy)"
+    },
+    {
+     "name": "A-AA",
+     "flags": "",
+     "note": "A again",
+     "scored": "still / moving / tour fps (D1b); main busy + CrGpuMain RASTER per present (anatomy)"
+    },
+    {
+     "name": "OC",
+     "flags": "orbRender=canvas",
+     "note": "?orbRender=canvas (45e439f0): the liquid drawn into one canvas per vessel, static layers baked, no DOM / filter work per tick",
+     "gate": "document.querySelectorAll(\".hbo-core canvas\").length >= 3 && !!(window.__diag && window.__diag.vitalsOrbs) && window.__diag.vitalsOrbs.running() === true",
+     "gateInfo": "({ canvases: document.querySelectorAll(\".hbo-core canvas\").length, tickMs: window.__diag && window.__diag.vitalsOrbs ? window.__diag.vitalsOrbs.tickMs() : null, frames: window.__diag && window.__diag.vitalsOrbs ? window.__diag.vitalsOrbs.frames() : null })",
+     "scored": "still / moving / tour fps (D1b); main busy + CrGpuMain RASTER per present (anatomy)"
+    },
+    {
+     "name": "HO-off",
+     "flags": "hudOrbs=off",
+     "note": "the ceiling: orbs hidden (never shipped)",
+     "scored": "still / moving / tour fps (D1b); main busy + CrGpuMain RASTER per present (anatomy)"
+    }
+   ],
+   "reps": 3,
+   "gate": "D1b",
+   "decisionRules": [
+    "V",
+    "D1b",
+    "D1",
+    "R4"
+   ],
+   "recipe": [
+    "node scripts/perf-worker/hbbench.mjs --arms apps/holtburger-web/docs/reengineering/queue-1070/batch-R3-S2-2026-10-31.json --item S2-ORB2 --reps 3 --port 8766 --uncapped --ref A --out /mnt/wbterminal1/tmp/claude-scratch/perf/r3-s2/orb3"
+   ],
+   "result": null
   },
   {
    "id": "S2-ANATOMY",
