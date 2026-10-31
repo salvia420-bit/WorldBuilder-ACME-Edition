@@ -37,7 +37,21 @@
 //      ENTITY_BATCH_HIDDEN_HOLD_FRAMES frees its batch;
 //   8. (guard) translucent / luminous leaves never get a layer;
 //   9. `stats().footprint` against the cap.
-// Checks 1-7 and 9 fail on the pre-change tree.
+//  10. the 1070 restore flow (2026-10-31: after a loss + restore the real boot
+//      read verify().rowMismatches 8 with no details): rigs active and rigs
+//      hidden (pending) at the loss, the frame pump PAUSED through the loss
+//      and the restore (no tick), another kit consumer resetting the pages at
+//      both canvas events (interior_batch.js does, unconditionally), then
+//      rigs shown and hidden while the rest animate: verify() clean after
+//      every rendered frame, no part row held twice / held and free / leaked;
+//  11. verify() part-row details are diagnosable from one read: entity guid,
+//      part, row index, got / want, and the cause class (`moved` + lateAge
+//      for a pose written after the frame's first batch draw or a tick with
+//      no draw, `skipped` for a row overwritten behind the late pass,
+//      `alias` / `freeHeld` / `zero` / `nan`), with rowMoved / rowAliases /
+//      rowLeaks / lateAge counters.
+// Checks 1-7, 9, 10 and 11 fail on the pre-change tree (10 and 11 on the
+// pre-change verify(): no row-holder walk, details without row / cause).
 //
 // Run from apps/holtburger-web/:  node tests/entity_batch_realboot.test.mjs
 
@@ -471,6 +485,120 @@ await check("9. stats().footprint against the stated cap", async () => {
   assert.equal(f.liveBytes, f.ownBytes, "every live layer is this consumer's");
   assert.ok(f.reservedBytes >= f.liveBytes + f.idleBytes);
   assert.equal(f.freeLayerBytes, f.reservedBytes - f.liveBytes - f.idleBytes);
+});
+
+await check("10. the 1070 restore flow: verify() clean every frame after the restore, no part row aliased / free-held / leaked", async () => {
+  const w = await R.world(true);
+  // Another kit consumer (interior_batch.js _installContextWatch) resets the
+  // pages at every canvas event, AFTER this consumer (the 1070 read: resets 2).
+  const other = () => { KIT.kitPages(w.renderer).reset(); };
+  const NV = 6, NH = 4;
+  const gs = [];
+  for (let i = 0; i < NV + NH; i += 1) {
+    const g = 0x55000a01 + i;
+    gs.push(g);
+    await w.spawn(g, 10 + (i % 5) * 0.4, 10 + Math.floor(i / 5) * 0.4, 0, PAL(20 + (i % 4)));
+  }
+  for (let i = NV; i < NV + NH; i += 1) w.em.setVisibility(gs[i], false);
+  w.frame(1);
+  w.listeners.webglcontextlost.push(other);
+  w.listeners.webglcontextrestored.push(other);
+  w.frame(40);
+  const e = eb(w);
+  let v = e.verify();
+  assert.equal(e.stats().byStatus.active, NV, JSON.stringify(e.stats().byStatus));
+  assert.deepEqual([v.rowMismatches, v.rowAliases, v.rowLeaks], [0, 0, 0], JSON.stringify(v.details));
+  // The loss and the restore with the pump paused (webgl_context_recovery.js onPause / onResume).
+  w.loseContext();
+  w.restoreContext();
+  const c = e.stats().context;
+  assert.deepEqual([c.lost, c.restored, c.resets, c.lossOpen], [1, 1, 2, false], JSON.stringify(c));
+  assert.equal(KIT.kitPages(w.renderer).generation, 4, "two resets per event: this consumer's, then the other's");
+  let checked = 0;
+  for (let f = 0; f < 240; f += 1) {
+    if (f === 30) w.em.setVisibility(gs[NV], true); // a rig hidden at the loss is seen
+    if (f === 60) w.em.setVisibility(gs[0], false); // an active one is culled ...
+    if (f === 120) w.em.setVisibility(gs[0], true); // ... and seen again
+    w.frame(1);
+    v = e.verify();
+    checked += v.entities;
+    assert.deepEqual([v.rowMismatches, v.attrMismatches, v.parkMismatches, v.rowAliases, v.rowLeaks], [0, 0, 0, 0, 0],
+      `frame ${f}: ${JSON.stringify(v.details)}`);
+  }
+  assert.equal(e.stats().byStatus.active, NV + 1, JSON.stringify(e.stats().byStatus));
+  assert.ok(checked > 200 * NV, `active entities verified: ${checked}`);
+  assert.equal(v.lateAge, 0, "the rows were composed for the current sync");
+});
+
+await check("11. verify() part-row details: entity, part, row, got / want and the cause class", async () => {
+  const w = await R.world(true);
+  const a = await w.spawn(0x55000b01, 10, 10, 0, PAL(30));
+  const b = await w.spawn(0x55000b02, 10.4, 10, 0, PAL(31));
+  w.settle();
+  w.frame(3);
+  const e = eb(w);
+  const ra = a._hbBatch, rb = b._hbBatch;
+  assert.equal(ra.status, "active");
+  assert.equal(rb.status, "active");
+  let v = e.verify();
+  assert.deepEqual([v.rowMismatches, v.rowMoved, v.rowAliases, v.rowLeaks, v.lateAge], [0, 0, 0, 0, 0], JSON.stringify(v.details));
+  const gA = (0x55000b01).toString(16), gB = (0x55000b02).toString(16);
+  const rowRe = (g, p, r, cls) => new RegExp(`^row ${g}:${p} r${r} \\[\\d+\\] got \\S+ want \\S+ ${cls}`);
+  // (a) ticks without a draw (the walk keys frames at its own rate): the rigs
+  // moved, the rows hold the last draw.
+  let n = 0;
+  do { w.frame(1, 1 / 60, false); n += 1; v = e.verify(); } while (v.rowMismatches === 0 && n < 8);
+  assert.ok(v.rowMismatches > 0 && v.rowMoved === v.rowMismatches, JSON.stringify(v));
+  assert.equal(v.lateAge, n);
+  const p0 = ra.plan.partRow.findIndex((r) => r > 0);
+  const r0 = ra.plan.partRow[p0];
+  assert.ok(v.details.some((d) => new RegExp(`^row ${gA}:\\d+ r\\d+ \\[\\d+\\] got \\S+ want \\S+ moved =last lateAge ${n}$`).test(d)), JSON.stringify(v.details));
+  w.frame(1);
+  v = e.verify();
+  assert.deepEqual([v.rowMismatches, v.lateAge], [0, 0], JSON.stringify(v.details));
+  // (b) a pose written after the frame's first batch draw (lateAge 0).
+  a.parts[p0].position.x += 0.01;
+  v = e.verify();
+  assert.equal(v.rowMismatches, 1);
+  assert.ok(rowRe(gA, p0, r0, "moved =last lateAge 0$").test(v.details[0]), v.details[0]);
+  w.frame(1);
+  // (c) a row overwritten behind the late pass (the pose did not move): `skipped`.
+  e._partRows.data[r0 * 16 + 12] += 1;
+  v = e.verify();
+  assert.deepEqual([v.rowMismatches, v.rowMoved], [1, 0]);
+  assert.ok(rowRe(gA, p0, r0, "skipped lateAge 0$").test(v.details[0]), v.details[0]);
+  // ... and zeroed: `zero skipped`.
+  e._partRows.data.fill(0, r0 * 16, r0 * 16 + 16);
+  v = e.verify();
+  assert.ok(rowRe(gA, p0, r0, "zero skipped lateAge 0$").test(v.details[0]), v.details[0]);
+  w.frame(1);
+  // (d) an aliased row (b's part row pointed at a's): the holder walk names both, b's own row leaks.
+  const pb = rb.plan.partRow.findIndex((r) => r > 0);
+  const own = rb.plan.partRow[pb];
+  rb.plan.partRow[pb] = r0;
+  v = e.verify();
+  assert.equal(v.rowAliases, 1);
+  assert.equal(v.rowLeaks, 1);
+  assert.ok(v.details.includes(`alias r${r0} ${gA}:${p0},${gB}:${pb}`), JSON.stringify(v.details));
+  e._partRows.data[r0 * 16 + 12] += 1;
+  v = e.verify();
+  assert.ok(v.details.some((d) => rowRe(gA, p0, r0, `alias:${gB}:${pb} skipped lateAge 0$`).test(d)), JSON.stringify(v.details));
+  rb.plan.partRow[pb] = own;
+  // (e) a held row on the free list.
+  e._partRows._free.push(r0);
+  v = e.verify();
+  assert.equal(v.rowAliases, 1);
+  assert.ok(v.details.includes(`freeHeld r${r0} ${gA}:${p0}`), JSON.stringify(v.details));
+  e._partRows._free.pop();
+  w.frame(2);
+  // (f) a non-finite pose (written after the draw: the walk rewrites the quaternion each tick).
+  a.parts[p0].quaternion.x = NaN;
+  v = e.verify();
+  assert.ok(v.details.some((d) => rowRe(gA, p0, r0, "nan moved").test(d)), JSON.stringify(v.details));
+  a.parts[p0].quaternion.x = 0;
+  w.frame(2);
+  v = e.verify();
+  assert.deepEqual([v.rowMismatches, v.rowAliases, v.rowLeaks], [0, 0, 0], JSON.stringify(v.details));
 });
 
 done();

@@ -808,6 +808,9 @@ export function entryMatches(entry, geos) {
 
 function _count(map, reason, n = 1) { map[reason] = (map[reason] || 0) + n; }
 
+/** A record's entity guid as hex (verify details). */
+function _guidHex(b) { return b && b.inst && b.inst.guid !== undefined ? (b.inst.guid >>> 0).toString(16) : "?"; }
+
 /** entities.js `_spawnMaterialRampTween`'s supersede rule for the opacity family (7 / 20) on `dids`. */
 function _dropOpacityTweens(inst, dids) {
   const tw = inst._materialHookTweens;
@@ -2909,6 +2912,75 @@ export class EntityBatch {
   }
 
   /**
+   * verify(): who holds each part row (every record with a plan, any status),
+   * as `<guid hex>:<part>` lists; counts `rowAliases` (a row held twice, or
+   * held and on the free list) and `rowLeaks` (allocated, neither held nor
+   * free) into `out`, with a detail line per alias.
+   */
+  _partRowHolders(out) {
+    const holders = new Map();
+    const rows = this._partRows;
+    if (!rows) return holders;
+    for (const b of this._records) {
+      const plan = b.plan;
+      if (!plan || !plan.partRow) continue;
+      for (let p = 0; p < plan.partRow.length; p += 1) {
+        const r = plan.partRow[p];
+        if (r <= 0) continue;
+        const who = `${_guidHex(b)}:${p}`;
+        const list = holders.get(r);
+        if (list) list.push(who); else holders.set(r, [who]);
+      }
+    }
+    const free = new Set(rows._free);
+    for (const [r, list] of holders) {
+      if (list.length > 1) { out.rowAliases += 1; out.details.push(`alias r${r} ${list.join(",")}`); }
+      if (free.has(r)) { out.rowAliases += 1; out.details.push(`freeHeld r${r} ${list.join(",")}`); }
+    }
+    out.rowLeaks = Math.max(0, rows.rowsUsed - 1 - holders.size - free.size);
+    return holders;
+  }
+
+  /** verify(): why `row` (part `p` of `b`, composed now into `m`) does not hold f32(m) — see verify(). */
+  _rowMismatchWhy(b, p, row, part, m, holders) {
+    const why = [];
+    let moved = false;
+    const e = m.elements;
+    for (let k = 0; k < 16; k += 1) if (!Number.isFinite(e[k])) { why.push("nan"); break; }
+    const list = holders.get(row) || [];
+    const me = `${_guidHex(b)}:${p}`;
+    const others = list.filter((x) => x !== me);
+    if (others.length > 0) why.push(`alias:${others.join(",")}`);
+    const rows = this._partRows;
+    if (rows._free.includes(row)) why.push("freeHeld");
+    const d = rows.data;
+    const o16 = row * 16;
+    let zero = true;
+    for (let k = 0; k < 16; k += 1) if (d[o16 + k] !== 0) { zero = false; break; }
+    if (zero) why.push("zero");
+    const lp = b.lastPose;
+    const o = p * 10;
+    if (part.matrixAutoUpdate === false || (part.pivot !== null && part.pivot !== undefined)) why.push("manual");
+    else if (!lp || lp[o] !== lp[o]) why.push("unposed");
+    else {
+      const ps = part.position, q = part.quaternion, s = part.scale;
+      const same = lp[o] === ps.x && lp[o + 1] === ps.y && lp[o + 2] === ps.z
+        && lp[o + 3] === q.x && lp[o + 4] === q.y && lp[o + 5] === q.z && lp[o + 6] === q.w
+        && lp[o + 7] === s.x && lp[o + 8] === s.y && lp[o + 9] === s.z;
+      moved = !same;
+      why.push(same ? "skipped" : "moved");
+      const last = new THREE.Matrix4().compose(
+        new THREE.Vector3(lp[o], lp[o + 1], lp[o + 2]),
+        new THREE.Quaternion(lp[o + 3], lp[o + 4], lp[o + 5], lp[o + 6]),
+        new THREE.Vector3(lp[o + 7], lp[o + 8], lp[o + 9]));
+      let eq = true;
+      for (let k = 0; k < 16; k += 1) if (d[o16 + k] !== Math.fround(last.elements[k])) { eq = false; break; }
+      if (eq) why.push("=last");
+    }
+    return { text: why.join(" "), moved };
+  }
+
+  /**
    * Every active entity's part rows equal f32(compose(part)), its state rows
    * equal packLayerState(member) at the row's layer, its extension rows
    * equal packExtState(member) (`pomMismatches`: the POM half, texels 0-1;
@@ -2916,14 +2988,39 @@ export class EntityBatch {
    * are not the member's own now and a run whose class samples another set),
    * its leaves are parked and its `hbBatchSlot` / `hbEntPart` hold the plan's
    * rows. Counts.
+   *
+   * PART ROWS, diagnosable from one real-boot read (2026-10-31, the 1070
+   * context-restore read: rowMismatches 8, no details captured). Each row
+   * mismatch is detailed as
+   *   `row <guid hex>:<part> r<row> [<k>] got <f32> want <f32> <why> lateAge <n>`
+   * where <why> lists, in order: `nan` (the part's composed matrix is not
+   * finite: NaN never equals itself, so it counts on every read), `alias:<guid
+   * hex>:<part>,...` (another (entity, part) holds the same row), `freeHeld`
+   * (the row is on the free list while held), `zero` (the row is all zero),
+   * then the pose against the one the late pass last wrote: `moved` (the pose
+   * changed after that write: a pose writer after the frame's first batch
+   * draw, or no batch draw since; the row is not wrong for the frame drawn),
+   * `skipped` (the same pose: the late pass believed the row current, so
+   * something else wrote it), `manual` (matrixAutoUpdate false / a pivot: no
+   * pose kept, rewritten every frame) or `unposed` (no pose kept: zeroed by a
+   * late hide), and `=last` when the row holds exactly that last write.
+   * `lateAge` = syncs since the last late pass (0: the rows were composed for
+   * the current sync). Counters: `rowMoved` (row mismatches that are `moved`),
+   * `rowAliases` (rows held by two (entity, part) pairs, or held AND free:
+   * every plan of every status is walked), `rowLeaks` (rows neither held nor
+   * free), `lateAge`.
    */
   verify() {
-    const out = { entities: 0, rowMismatches: 0, stateMismatches: 0, pomMismatches: 0, mapMismatches: 0, parkMismatches: 0, attrMismatches: 0, details: [] };
+    const out = {
+      entities: 0, rowMismatches: 0, rowMoved: 0, rowAliases: 0, rowLeaks: 0, lateAge: this._syncSerial - this._lateSerial,
+      stateMismatches: 0, pomMismatches: 0, mapMismatches: 0, parkMismatches: 0, attrMismatches: 0, details: [],
+    };
     const m = new THREE.Matrix4();
     const f = Math.fround;
     const table = kitStateTable();
     const pack = new Float32Array(LAYER_STATE_FLOATS);
     const st = layerStateFromMaterial(null);
+    const holders = this._partRowHolders(out);
     for (const b of this._records) {
       if (b.status !== "active") continue;
       out.entities += 1;
@@ -2937,7 +3034,13 @@ export class EntityBatch {
         composePartMatrix(part, m);
         const d = this._partRows.data;
         for (let k = 0; k < 16; k += 1) {
-          if (d[row * 16 + k] !== f(m.elements[k])) { out.rowMismatches += 1; out.details.push(`row ${b.inst.guid}:${p}[${k}]`); break; }
+          if (d[row * 16 + k] !== f(m.elements[k])) {
+            out.rowMismatches += 1;
+            const why = this._rowMismatchWhy(b, p, row, part, m, holders);
+            if (why.moved) out.rowMoved += 1;
+            out.details.push(`row ${_guidHex(b)}:${p} r${row} [${k}] got ${d[row * 16 + k]} want ${f(m.elements[k])} ${why.text} lateAge ${out.lateAge}`);
+            break;
+          }
         }
       }
       for (const [mat, row] of plan.memberRefs) {
