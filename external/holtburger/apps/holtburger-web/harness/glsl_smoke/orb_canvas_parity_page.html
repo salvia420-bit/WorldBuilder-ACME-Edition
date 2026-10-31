@@ -1,0 +1,113 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>vitals-orb parity: SVG vs ?orbRender=canvas</title>
+<style>
+  html, body { margin: 0; width: 100%; height: 100%; }
+  body { background: var(--bg, #1b1d22); }
+  /* heraldry off for the vessel-only diff (the runner toggles the class) */
+  html.vessel-only .hbo-pane .fig,
+  html.vessel-only .hbo-pane .hbo-glow,
+  html.vessel-only .hbo-pane .orb-read { visibility: hidden; }
+</style>
+<script type="module">
+// orb_canvas_parity_page.html — the browser half of orb_canvas_parity_smoke.mjs
+// (2026-10-31). Mounts the REAL plugins/vitals-orbs.js twice per case — the
+// signed-off SVG vessel, then ?orbRender=canvas — at the same vitals, wave
+// phase, slosh, ambient-loop time and glare time (__diag.vitalsOrbs.freeze),
+// and hands the runner the core rects to screenshot; diff() compares two
+// screenshots in-page (no PNG decoder needed in Node).
+import * as O from "/app/plugins/vitals-orbs.js";
+
+let unmount = null;
+const KINDS = ["hp", "stam", "mana"];
+const TYPE = { hp: 1, stam: 3, mana: 5 };
+const raf = () => new Promise((r) => requestAnimationFrame(() => r()));
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+window.__orbParity = {
+  /** Mount `mode` ("svg" | "canvas"), apply case `c`, freeze, return rects. */
+  async show(mode, c) {
+    if (unmount) { unmount(); unmount = null; }
+    document.getElementById("hb-vitals-orbs-style")?.remove();
+    O.__setOrbRenderForTest(mode);
+    const client = {
+      events: { on() {}, off() {} },
+      player: { stats: { vitals: [] } },
+    };
+    unmount = O.mount({ client });
+    const d = window.__diag.vitalsOrbs;
+    for (const k of KINDS) {
+      const v = c.vitals[k];
+      d.poke(k, v[0], v[1], v[2] ?? v[1]);
+    }
+    // let the level land, the low band / fracture build, and a few frames run
+    for (let i = 0; i < 6; i++) await raf();
+    await d.bakeReady();
+    await sleep(mode === "svg" ? 400 : 50);   // <image href=png> decode (SVG)
+    d.freeze({ phase: c.phase, impulse: c.impulse || 0, animT: c.animT, glareT: c.glareT ?? null });
+    for (let i = 0; i < 4; i++) await raf();
+    await sleep(60);
+    const rects = {};
+    for (const k of KINDS) {
+      const r = document.querySelector(`#hb-vitals-orb-${k} .hbo-core`).getBoundingClientRect();
+      const p = document.getElementById(`hb-vitals-orb-${k}`).getBoundingClientRect();
+      rects[k] = { core: { x: r.x, y: r.y, w: r.width, h: r.height }, pane: { x: p.x, y: p.y, w: p.width, h: p.height } };
+    }
+    return {
+      mode: d.renderMode(),
+      hasCanvas: !!document.querySelector(".hbo-core canvas.orb-cv"),
+      hasSvg: !!document.querySelector(".hbo-core svg.orb"),
+      stats: d.canvasStats(),
+      state: d.state(),
+      rects,
+    };
+  },
+  setBackground(css) { document.body.style.setProperty("--bg", css); },
+  vesselOnly(on) { document.documentElement.classList.toggle("vessel-only", !!on); },
+  done() { if (unmount) { unmount(); unmount = null; } },
+
+  /** Pixel diff of two PNG data URLs; optional side-by-side PNG. */
+  async diff(aUrl, bUrl, wantPng) {
+    const load = async (u) => createImageBitmap(await (await fetch(u)).blob());
+    const [a, b] = await Promise.all([load(aUrl), load(bUrl)]);
+    const w = Math.min(a.width, b.width), h = Math.min(a.height, b.height);
+    const px = (bm) => {
+      const c = new OffscreenCanvas(w, h);
+      const g = c.getContext("2d", { willReadFrequently: true });
+      g.drawImage(bm, 0, 0);
+      return g.getImageData(0, 0, w, h).data;
+    };
+    const A = px(a), B = px(b);
+    const n = w * h;
+    const hist = new Uint32Array(256);
+    let sum = 0, max = 0, over8 = 0, over24 = 0;
+    const dd = new Uint8ClampedArray(n * 4);
+    for (let i = 0; i < n; i++) {
+      const dr = Math.abs(A[4 * i] - B[4 * i]), dg = Math.abs(A[4 * i + 1] - B[4 * i + 1]), db = Math.abs(A[4 * i + 2] - B[4 * i + 2]);
+      const m = Math.max(dr, dg, db);
+      sum += (dr + dg + db) / 3;
+      hist[m]++;
+      if (m > max) max = m;
+      if (m > 8) over8++;
+      if (m > 24) over24++;
+      const v = Math.min(255, m * 4);
+      dd[4 * i] = v; dd[4 * i + 1] = v; dd[4 * i + 2] = v; dd[4 * i + 3] = 255;
+    }
+    let acc = 0, p99 = 0;
+    for (let v = 0; v < 256; v++) { acc += hist[v]; if (acc >= 0.99 * n) { p99 = v; break; } }
+    const out = { w, h, mean: +(sum / n).toFixed(3), p99, max, pctOver8: +(100 * over8 / n).toFixed(2), pctOver24: +(100 * over24 / n).toFixed(2) };
+    if (wantPng) {
+      const c = new OffscreenCanvas(w * 3 + 8, h);
+      const g = c.getContext("2d");
+      g.fillStyle = "#ff00ff"; g.fillRect(0, 0, c.width, h);
+      g.drawImage(a, 0, 0);
+      g.drawImage(b, w + 4, 0);
+      g.putImageData(new ImageData(dd, w, h), 2 * w + 8, 0);
+      const blob = await c.convertToBlob({ type: "image/png" });
+      out.png = await new Promise((r) => { const fr = new FileReader(); fr.onload = () => r(fr.result); fr.readAsDataURL(blob); });
+    }
+    return out;
+  },
+};
+window.__orbParityReady = true;
+</script>

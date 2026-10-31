@@ -118,6 +118,20 @@
 // on this laptop. The noise here is STATIC and cacheable; the caustics
 // appear to crawl because they are clipped to the live wave path.
 // `?orbCaustics=off` / `?orbHz=15` / `?orbScale=` remain the levers.
+//
+// === ?orbRender=canvas (2026-10-31, DEFAULT OFF) ===
+// Owner ask "make the orbs cheaper" (1070 S2-QUIET: ?hudOrbs=off +2.3 still /
+// +1.75 tour fps). The liquid core of each vessel is drawn into ONE <canvas>
+// with Canvas2D instead of the SVG subtree above; figures, plaques, readouts
+// and the pointer gate stay DOM. Same driver, same cadence, same state, same
+// wave(): everything STATIC is pre-rendered once at device-pixel scale (glass
+// + caustics from the very bitmaps the SVG path bakes, wall darkening, blurred
+// subglow / specular / shimmer sprites, the vitae scum layer, the fracture
+// web), so a tick is two wave fills, one wave clip, a handful of drawImage
+// calls and the meniscus strokes; no Blink style / layout / paint and no
+// filter evaluation per tick, and a tick whose drawn values moved less than
+// CV_SKIP_PX device px is not drawn at all. Flag off = the SVG path, byte for
+// byte. See the "?orbRender=canvas" block below and docs/url-flags.md.
 
 import { attachWindowPosition, WINDOW_ID } from "../ui/ac_window_position.js";
 import { hudDietOn } from "../ui/hud_diet.js";
@@ -227,6 +241,19 @@ function orbScale() {
   const v = parseFloat(urlParam("orbScale") ?? "");
   return Number.isFinite(v) && v > 0.2 && v <= 2 ? v : DEFAULT_SCALE;
 }
+
+/** `?orbRender=canvas` (DEFAULT OFF, opt-in: "canvas", trimmed, any case)
+ *  draws each vessel core with Canvas2D; anything else, or absent, is the
+ *  signed-off SVG vessel. Read once (memoized). */
+let _renderFlag;
+export function orbRenderMode() {
+  if (_renderFlag !== undefined) return _renderFlag;
+  const v = String(urlParam("orbRender") ?? "").trim().toLowerCase();
+  _renderFlag = v === "canvas" ? "canvas" : "svg";
+  return _renderFlag;
+}
+/** Test seam: "canvas"/"svg" forces the mode, undefined re-reads the URL. */
+export function __setOrbRenderForTest(v) { _renderFlag = v; }
 
 // ── static markup ────────────────────────────────────────────────────
 //
@@ -378,12 +405,15 @@ const GLASS_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120"
 </svg>`;
 const GLASS_URL = "data:image/svg+xml," + encodeURIComponent(GLASS_SVG.replace(/\n/g, ""));
 
+// Three bubbles, not the card's five: each is a running CSS animation on a
+// non-compositable SVG node, i.e. a style recalc every vsync.
+// [cx, r, duration s, delay s] at cy=112 — shared with the canvas renderer.
+const BUBBLES = [[38, 2.1, 8.5, 0], [62, 1.5, 6.4, -2.4], [80, 2.6, 10.2, -5.1]];
+
 // One vessel. `--orb-a` / `--orb-b` are set per kind on the <svg> so the
 // low-HP variant is a two-token CSS override rather than a rebuild.
 function orbSvg(kind) {
-  // Three bubbles, not the card's five: each is a running CSS animation
-  // on a non-compositable SVG node, i.e. a style recalc every vsync.
-  const bubbles = [[38, 2.1, 8.5, 0], [62, 1.5, 6.4, -2.4], [80, 2.6, 10.2, -5.1]]
+  const bubbles = BUBBLES
     .map(([bx, br, bd, dly]) =>
       `<circle class="bub" cx="${bx}" cy="112" r="${br}" style="--bd:${bd}s;animation-delay:${dly}s"/>`)
     .join("");
@@ -1012,27 +1042,42 @@ export function makeOrbAnimSync(roots, opts) {
 // getAnimations, a style flush), so nothing here can force a layout.
 // Stopped entirely under prefers-reduced-motion and while the tab is
 // hidden.
+//
+// STEP 6 (21 samples across 120 units) instead of the card's 4: at HUD
+// scale the extra samples are invisible and every one of them is
+// geometry the SVG layout has to re-measure on all five paths.
+const WAVE_STEP = 6, WAVE_TAU = 6.283185307;
+const WAVE_N = VB / WAVE_STEP + 1;  // 21 samples, x = 0, 6, …, 120
+
+// Two summed sines (2.7:1) instead of one: a single sine reads as a
+// drawn squiggle, a beat of two reads as water. ONE definition of the
+// surface for both renderers (the SVG `d` string and the canvas samples).
+function waveY(y0, u, phase, amp, freq) {
+  return y0 + Math.sin(u * freq * WAVE_TAU + phase) * amp
+            + Math.sin(u * freq * 2.7 * WAVE_TAU - phase * 1.63) * amp * 0.3;
+}
+
 function createDriver(orbs, reducedMotion, hz, syncRoots = null) {
-  // STEP 6 (21 samples across 120 units) instead of the card's 4: at HUD
-  // scale the extra samples are invisible and every one of them is
-  // geometry the SVG layout has to re-measure on all five paths.
-  const W = VB, H = VB, STEP = 6, TAU = 6.283185307;
+  const W = VB, H = VB, STEP = WAVE_STEP;
   const minStep = hz > 0 ? 1 / hz - 0.002 : 0;  // −2 ms so 30 Hz isn't 20 Hz
   let raf = 0;
   let last = 0;
   let acc = 0;
   let clock = 0;
   let stopped = false;
+  let held = false;  // __diag freeze (parity harness): start() stays a no-op
+  // ?orbRender=canvas: the orbs carry a Canvas2D vessel (`o.cv`) instead of
+  // SVG refs. Without it every branch below is the SVG path, unchanged.
+  const hasCanvas = orbs.some((o) => o.cv);
+  const allHidden = () => orbs.every((o) => o.group.hidden);
+  let tickNow = 0;  // canvas: the timeline time of the tick being drawn
 
-  // Two summed sines (2.7:1) instead of one: a single sine reads as a
-  // drawn squiggle, a beat of two reads as water.
   function wave(level, phase, amp, freq, dy) {
     const y0 = H - level * H + dy;
     let d = "";
     for (let x = 0; x <= W; x += STEP) {
       const u = x / W;
-      const y = y0 + Math.sin(u * freq * TAU + phase) * amp
-                   + Math.sin(u * freq * 2.7 * TAU - phase * 1.63) * amp * 0.3;
+      const y = waveY(y0, u, phase, amp, freq);
       d += (x === 0 ? "M" : "L") + x + " " + y.toFixed(2);
     }
     return d + "L" + W + " " + (H + 8) + "L0 " + (H + 8) + "Z";
@@ -1057,6 +1102,9 @@ function createDriver(orbs, reducedMotion, hz, syncRoots = null) {
       const spd = o.baseSpd + o.impulse * 2.2;
       o.phase += dt * 1.05 * spd;
       const ph = o.phase + o.seed;
+      // ?orbRender=canvas: same state, same surface, drawn (or skipped) by
+      // the orb's own Canvas2D vessel; no DOM write at all.
+      if (o.cv) { o.cv.frame(o, amp, ph, tickNow); continue; }
 
       o.back.setAttribute("d",
         wave(o.level, -o.phase * 0.59 + o.seed * 1.9, amp * 1.2, 1.5, 5.5));
@@ -1094,10 +1142,22 @@ function createDriver(orbs, reducedMotion, hz, syncRoots = null) {
   function frame(t) {
     raf = 0;
     if (stopped) return;
+    // ?orbRender=canvas: with every pane hidden there is nothing to draw, so
+    // the loop stops outright; mount() restarts it when a pane is shown.
+    if (hasCanvas && allHidden()) { last = 0; return; }
     const dt = last ? Math.min(0.1, (t - last) / 1000) : 0;
     last = t;
     acc += dt;
     raf = requestAnimationFrame(frame);
+    // ?orbRender=canvas: the one-shot damage glare stays on the display
+    // clock, as the SVG path's finite CSS animation does — off-cadence, a
+    // vessel is redrawn only when its glare flicker steps.
+    if (hasCanvas) {
+      tickNow = timelineNow(t);
+      if (acc < minStep) {
+        for (const o of orbs) if (o.cv && o.cv.glareActive(tickNow)) o.cv.redraw(o, tickNow);
+      }
+    }
     // Skip the write entirely on off-cadence vsync ticks: no attribute
     // is touched, so Blink schedules no style/layout/paint for us.
     if (acc < minStep) return;
@@ -1114,9 +1174,22 @@ function createDriver(orbs, reducedMotion, hz, syncRoots = null) {
 
   return {
     /** Paint one still frame — the reduced-motion and first-paint path. */
-    still() { tick(0, 0); },
+    still() {
+      if (hasCanvas) tickNow = timelineNow(performance.now());
+      tick(0, 0);
+    },
     start() {
-      if (stopped || reducedMotion || raf || document.hidden) return;
+      if (stopped || held || raf || document.hidden) return;
+      if (reducedMotion) {
+        // ?orbRender=canvas only: under reduced motion every vitals change
+        // repaints ONE still frame at the new level (no slosh). The SVG path
+        // keeps its mount-time still frame, unchanged.
+        if (hasCanvas) {
+          for (const o of orbs) o.impulse = 0;
+          this.still();
+        }
+        return;
+      }
       last = 0;
       acc = minStep;  // paint the first cadence step immediately
       raf = requestAnimationFrame(frame);
@@ -1134,10 +1207,812 @@ function createDriver(orbs, reducedMotion, hz, syncRoots = null) {
     },
     /** ?hudDiet=orbSync: the loop set may have changed; re-collect next tick. */
     invalidateAnims() { if (sync) sync.invalidate(); },
+    /** __diag freeze: stop the loop and keep start() from restarting it. */
+    hold() { held = true; this.pause(); },
     get running() { return raf !== 0; },
     get animSynced() { return sync ? sync.count : 0; },
     get tickMs() { return tickMs; },
     get frames() { return frames; },
+  };
+}
+
+// ── ?orbRender=canvas — the vessel core in Canvas2D ──────────────────
+//
+// WHY. Every SVG wave tick rewrites six `d` attributes (back, front, the
+// caustics/wall clip path, three meniscus strokes) and one transform inside
+// a subtree of clip paths, CSS blurs (subglow, specular, mana shimmer), blend
+// modes (screen x3-4, multiply) and the clipped caustics image. The core is a
+// paint-contained box, so the whole 92x92 vessel is re-painted by Blink and
+// re-rastered by the GPU process (every blur and blend layer re-run) 30 times
+// a second, x3 vessels, plus the CSS ambient loops on the same subtree.
+//
+// WHAT. One <canvas> per vessel core (the panes stay independent: each badge
+// is still dragged / persisted on its own). Per tick, in the core's own
+// 0..120 user space at device scale:
+//   circle clip → back body (wave, absorption gradient over its bbox, 0.85)
+//   → front body → clip to the front wave → caustics (screen) + wall
+//   darkening (multiply) → mana shimmer → 3 bubbles → subglow (screen) +
+//   specular streak (screen) + wall-climb crescents, all on the waterline
+//   → 3 meniscus strokes → vitae layer; unclipped: glass → glare (screen)
+//   → fracture web + glints + bloom (low HP).
+// That is the SVG vessel's paint order, layer for layer. PRE-BAKED once per
+// backing size (W = 92 x orbScale x HUD zoom x devicePixelRatio, re-baked on
+// resize / hb-hud-scale-changed / a DPR change): the glass plate and the
+// caustics (drawn from the SAME 240 px bitmaps the SVG path bakes from
+// GLASS_SVG / CAUSTIC_SVG — the browser's own feTurbulence, evaluated once,
+// never per tick, never scrolled: the signed-off caustics are static and
+// crawl only through the live clip), the wall darkening, the blurred subglow
+// (per humour, + the low-HP colour band), specular streak and shimmer
+// sprites (blurred once with ctx.filter, positioned per tick), the fracture
+// web (the four static passes incl. the #hbRefract displacement, via one SVG
+// image), and the vitae dim / hatch / scum / grime layer (per ceiling).
+// PER TICK: the two wave paths from waveY() (the SVG path's own math), one
+// clip, <= 8 drawImage, 3-6 strokes, 0-3 small fills. The ambient CSS loops
+// (hbo-sspec / -bub / -shimmer / -glint / -bloom) are sampled from the same
+// keyframes in JS at the orb cadence (what ?orbAnimSync does to the SVG);
+// the one-shot glare follows its keyframes on the display clock; the low-HP
+// heartbeat stays the CSS animation on .hbo-core, in both modes.
+// SKIP: a tick is drawn only if some drawn value moved more than CV_SKIP_PX
+// device px (wave vertices, waterline, sprites) or CV_SKIP_A in alpha, or a
+// discrete input changed (size, a bitmap landing, low band, ceiling, glare
+// step); otherwise the canvas keeps the last frame. Hidden panes draw
+// nothing, and the loop stops while all three are hidden.
+//
+// FIDELITY NOTES (kept on purpose, so the look is the signed-off one):
+//   * #hbOrbBloom lives in the body-level shared <defs>, OUTSIDE the panes
+//     that define --hb-orb-crack-glint, so its stop-color resolves to the
+//     initial value (black): the SVG "bloom" is a black radial blob screened
+//     over the vessel, i.e. a faint dark smudge where the glass is clear.
+//     Drawn here as exactly that.
+//   * `.fx-glint:nth-of-type(2..4)` counts every <path> sibling, so none of
+//     the three delay rules matches and all four glints flicker in unison.
+//     Same here.
+//   * CSS transforms on SVG children scale about the user-space ORIGIN
+//     (transform-origin 0 0), so a bubble's scale(0.7 → 1.05) also moves it;
+//     sampled the same way.
+const CV_SKIP_PX = 0.125;
+const CV_SKIP_A = 1 / 255;
+const CV_TAU = Math.PI * 2;
+const DEG = Math.PI / 180;
+
+// The --hb-orb-* tokens, read from the stylesheet text itself so the canvas
+// colours can never drift from the CSS ones.
+let _tokens = null;
+function orbTokens() {
+  if (_tokens) return _tokens;
+  _tokens = Object.create(null);
+  for (const m of styleText().matchAll(/--(hb-orb-[\w-]+):\s*([^;]+);/g)) _tokens[m[1]] = m[2].trim();
+  return _tokens;
+}
+
+/** `#rrggbb` / `rgb[a](…)` → `rgba(…)` with its alpha multiplied by `a`. */
+function rgba(color, a = 1) {
+  const c = String(color).trim();
+  let r, g, b, al = 1, m;
+  if ((m = /^#([0-9a-f]{6})$/i.exec(c))) {
+    const n = parseInt(m[1], 16);
+    r = n >> 16; g = (n >> 8) & 255; b = n & 255;
+  } else if ((m = /^rgba?\(([^)]+)\)$/i.exec(c))) {
+    const p = m[1].split(",").map((x) => Number(x));
+    [r, g, b] = p;
+    if (p.length > 3) al = p[3];
+  } else {
+    return c;
+  }
+  return `rgba(${r},${g},${b},${+(al * a).toFixed(4)})`;
+}
+
+/** The two tokens behind --orb-a / --orb-b (`.orb.<kind>[.low]`). */
+function orbColorTokens(kind, low) {
+  if (kind === "hp") return low ? ["hb-orb-hp-low", "hb-orb-hp-low-deep"] : ["hb-orb-hp", "hb-orb-hp-deep"];
+  return [`hb-orb-${kind}`, `hb-orb-${kind}-deep`];
+}
+
+// ── the ambient keyframes, sampled ──────────────────────────────────
+// Mirrors of the @keyframes in styleText() (tests pin them against it).
+function cubicBezier(x1, y1, x2, y2) {
+  const cx = 3 * x1, bx = 3 * (x2 - x1) - cx, ax = 1 - cx - bx;
+  const cy = 3 * y1, by = 3 * (y2 - y1) - cy, ay = 1 - cy - by;
+  const X = (t) => ((ax * t + bx) * t + cx) * t;
+  const Y = (t) => ((ay * t + by) * t + cy) * t;
+  const dX = (t) => (3 * ax * t + 2 * bx) * t + cx;
+  return (p) => {
+    if (p <= 0) return 0;
+    if (p >= 1) return 1;
+    let t = p;
+    for (let i = 0; i < 8; i++) {
+      const e = X(t) - p;
+      if (Math.abs(e) < 1e-7) return Y(t);
+      const d = dX(t);
+      if (Math.abs(d) < 1e-6) break;
+      t -= e / d;
+    }
+    let lo = 0, hi = 1;
+    t = p;
+    for (let i = 0; i < 40; i++) {
+      const v = X(t);
+      if (Math.abs(v - p) < 1e-7) break;
+      if (v < p) lo = t; else hi = t;
+      t = (lo + hi) / 2;
+    }
+    return Y(t);
+  };
+}
+const EASE_IN_OUT = cubicBezier(0.42, 0, 0.58, 1);
+
+/** Iteration progress of an infinite loop at timeline time `tMs`. */
+function loopFrac(tMs, durS, delayS) {
+  const d = durS * 1000;
+  let a = (tMs - delayS * 1000) % d;
+  if (a < 0) a += d;
+  return a / d;
+}
+/** 0%,100% = A / 50% = B under ease-in-out: the weight of B. */
+function pingPong(f) {
+  return f < 0.5 ? EASE_IN_OUT(f / 0.5) : 1 - EASE_IN_OUT((f - 0.5) / 0.5);
+}
+// hbo-glare, steps(1, end): [end of interval, opacity held until it].
+const GLARE_STEPS = [[0.02, 0], [0.05, 0.62], [0.08, 0.08], [0.12, 0.44], [0.16, 0], [0.20, 0.22]];
+function glareAlpha(ms) {
+  if (!(ms >= 0) || ms >= GLARE_MS) return 0;
+  const f = ms / GLARE_MS;
+  for (const [end, v] of GLARE_STEPS) if (f < end) return v;
+  return 0;
+}
+/** hbo-glint: 0%, 72%, 100% 0.06 / 84% 0.95, ease-in-out. */
+function glintAlpha(f) {
+  if (f < 0.72) return 0.06;
+  if (f < 0.84) return 0.06 + 0.89 * EASE_IN_OUT((f - 0.72) / 0.12);
+  return 0.95 - 0.89 * EASE_IN_OUT((f - 0.84) / 0.16);
+}
+/** hbo-bub opacity: 0 → 0.55 (12%) → 0.4 (85%) → 0, linear. */
+function bubbleAlpha(f) {
+  if (f < 0.12) return 0.55 * (f / 0.12);
+  if (f < 0.85) return 0.55 - 0.15 * ((f - 0.12) / 0.73);
+  return 0.4 * (1 - (f - 0.85) / 0.15);
+}
+
+// Per-tick parameter vector (the skip test compares it to the last DRAWN one).
+const P_W = 0, P_GEN = 1, P_LOW = 2, P_CEIL = 3, P_GLARE = 4, P_SY = 5;
+const P_SSPEC = 6;   // tx, scaleX, opacity
+const P_SHIM = 9;    // tx, ty, scale, opacity
+const P_GLINT = 13, P_BLOOM = 14;
+const P_BUB = 15;    // 3 x (cx, cy, r, opacity)
+const P_FRONT = 27, P_BACK = P_FRONT + WAVE_N, NP = P_BACK + WAVE_N;
+
+/** Sample every ambient loop at loop time `t` (ms) into `out`. */
+function sampleLoops(out, t, o, kind, reduced) {
+  const rise = Number.isFinite(parseFloat(o.lastRise)) ? parseFloat(o.lastRise) : -60;
+  for (let b = 0; b < BUBBLES.length; b++) {
+    const [bx, br, bd, dly] = BUBBLES[b];
+    const j = P_BUB + 4 * b;
+    if (reduced) { out[j] = bx; out[j + 1] = 112; out[j + 2] = br; out[j + 3] = 1; continue; }
+    const f = loopFrac(t, bd, dly);
+    // translateY(rise·f) scale(0.7 → 1.05), about the user-space origin
+    const sc = 0.7 + 0.35 * f;
+    out[j] = sc * bx; out[j + 1] = rise * f + sc * 112; out[j + 2] = sc * br;
+    out[j + 3] = bubbleAlpha(f);
+  }
+  if (reduced) {
+    out[P_SSPEC] = 0; out[P_SSPEC + 1] = 1; out[P_SSPEC + 2] = 0.4;
+  } else {
+    const w = pingPong(loopFrac(t, 9, 0));
+    out[P_SSPEC] = -9 + 20 * w; out[P_SSPEC + 1] = 0.86 + 0.28 * w; out[P_SSPEC + 2] = 0.26 + 0.24 * w;
+  }
+  if (kind !== "mana") {
+    out[P_SHIM] = out[P_SHIM + 1] = out[P_SHIM + 2] = out[P_SHIM + 3] = 0;
+  } else if (reduced) {
+    out[P_SHIM] = 0; out[P_SHIM + 1] = 0; out[P_SHIM + 2] = 1; out[P_SHIM + 3] = 0.3;
+  } else {
+    const w = pingPong(loopFrac(t, 7.5, 0));
+    out[P_SHIM] = -8 + 18 * w; out[P_SHIM + 1] = 4 - 10 * w;
+    out[P_SHIM + 2] = 1 + 0.25 * w; out[P_SHIM + 3] = 0.16 + 0.24 * w;
+  }
+  if (!o.low) {
+    out[P_GLINT] = 0; out[P_BLOOM] = 0;
+  } else if (reduced) {
+    out[P_GLINT] = 0; out[P_BLOOM] = 1;
+  } else {
+    out[P_GLINT] = glintAlpha(loopFrac(t, 3.6, 0));
+    out[P_BLOOM] = 0.35 + 0.35 * pingPong(loopFrac(t, 3.6, 0));
+  }
+}
+
+/** Test seam (tests/vitals_orbs_canvas.test.mjs): the keyframe samplers, the
+ *  surface sampler, a bare vessel, and a reset of the SVG-bitmap cache. */
+export const __orbCanvasInternals = {
+  ease: EASE_IN_OUT,
+  skipPx: CV_SKIP_PX,
+  waveYs: (...a) => waveYs(...a),
+  createVessel: (...a) => createCanvasVessel(...a),
+  resetBitmaps() { _bitmaps.clear(); _fractureUrl.clear(); },
+  /** One loop's sampled values at loop time `ms` (bub = bubble 0). */
+  sampleAt(name, ms, extra = {}) {
+    const out = new Float64Array(NP);
+    sampleLoops(out, ms, { lastRise: `${extra.rise ?? -60}px`, low: true }, "mana", false);
+    switch (name) {
+      case "sspec": return Array.from(out.subarray(P_SSPEC, P_SSPEC + 3));
+      case "shimmer": return Array.from(out.subarray(P_SHIM, P_SHIM + 4));
+      case "bub": return Array.from(out.subarray(P_BUB, P_BUB + 4));
+      case "glint": return [out[P_GLINT]];
+      case "bloom": return [out[P_BLOOM]];
+      case "glare": return [glareAlpha(ms)];
+      default: return null;
+    }
+  },
+};
+
+/** The 21 surface samples of one wave body into `out`; returns its top. */
+function waveYs(out, level, phase, amp, freq, dy) {
+  const y0 = VB - level * VB + dy;
+  let top = Infinity;
+  for (let i = 0, x = 0; x <= VB; x += WAVE_STEP, i++) {
+    const y = waveY(y0, x / VB, phase, amp, freq);
+    out[i] = y;
+    if (y < top) top = y;
+  }
+  return top;
+}
+
+/** The SVG wave body (`…L120 128L0 128Z`), optionally shifted by dy. */
+function traceBody(g, ys, dy) {
+  g.beginPath();
+  g.moveTo(0, ys[0] + dy);
+  for (let i = 1; i < WAVE_N; i++) g.lineTo(i * WAVE_STEP, ys[i] + dy);
+  g.lineTo(VB, VB + 8 + dy);
+  g.lineTo(0, VB + 8 + dy);
+  g.closePath();
+}
+
+// A tiny absolute/relative M L Q q Z reader for the markup's own path
+// strings (vitae scum, fracture glints), used at bake time only.
+function parsePath(d) {
+  const toks = [];
+  const re = /([MLQZmlqz])|(-?(?:\d+\.?\d*|\.\d+)(?:e[-+]?\d+)?)/g;
+  let m;
+  while ((m = re.exec(d))) toks.push(m[1] || Number(m[2]));
+  const out = [];
+  let i = 0, cx = 0, cy = 0;
+  while (i < toks.length) {
+    const c = toks[i++];
+    if (c === "M" || c === "L") { cx = toks[i++]; cy = toks[i++]; out.push([c, cx, cy]); }
+    else if (c === "Q") { const a = toks.slice(i, i + 4); i += 4; out.push(["Q", ...a]); cx = a[2]; cy = a[3]; }
+    else if (c === "q") {
+      const a = [cx + toks[i], cy + toks[i + 1], cx + toks[i + 2], cy + toks[i + 3]];
+      i += 4; out.push(["Q", ...a]); cx = a[2]; cy = a[3];
+    } else if (c === "Z" || c === "z") out.push(["Z"]);
+    else break;
+  }
+  return out;
+}
+function tracePath(g, cmds, begin = true) {
+  if (begin) g.beginPath();
+  for (const c of cmds) {
+    if (c[0] === "M") g.moveTo(c[1], c[2]);
+    else if (c[0] === "L") g.lineTo(c[1], c[2]);
+    else if (c[0] === "Q") g.quadraticCurveTo(c[1], c[2], c[3], c[4]);
+    else g.closePath();
+  }
+}
+
+// ── bakes ────────────────────────────────────────────────────────────
+function makeCanvas(w, h) {
+  if (typeof OffscreenCanvas === "function") return new OffscreenCanvas(w, h);
+  const c = document.createElement("canvas");
+  c.width = w; c.height = h;
+  return c;
+}
+
+// SVG documents rasterized ONCE by the browser's own SVG engine (the only
+// place feTurbulence / feDisplacementMap ever run in canvas mode). A load
+// bumps _bakeGen, which is part of every vessel's skip key, so the next
+// tick draws the new layer.
+const _bitmaps = new Map();  // `${px}@${url}` → { cv, failed }
+let _bakeGen = 0;
+const _cvStats = { bakes: 0 };
+function svgBitmap(url, px) {
+  const key = px + "@" + url;
+  let b = _bitmaps.get(key);
+  if (b) return b;
+  b = { cv: null, failed: false };
+  _bitmaps.set(key, b);
+  if (typeof Image !== "function") { b.failed = true; return b; }
+  const img = new Image();
+  img.onload = () => {
+    try {
+      const c = makeCanvas(px, px);
+      c.getContext("2d").drawImage(img, 0, 0, px, px);
+      b.cv = c;
+    } catch (_) { b.failed = true; }
+    _bakeGen++;
+  };
+  img.onerror = () => { b.failed = true; _bakeGen++; };
+  img.src = url;
+  return b;
+}
+
+// The four static fracture passes (dark / #hbRefract-displaced / main /
+// shards) as one self-contained SVG with the page rules inlined; glints and
+// bloom animate, so they are drawn live.
+const _fractureUrl = new Map();
+function fractureBakeUrl(px) {
+  let u = _fractureUrl.get(px);
+  if (u) return u;
+  const t = orbTokens();
+  const filter = /<filter id="hbRefract"[\s\S]*?<\/filter>/.exec(SHARED_DEFS)[0];
+  const css = `.fx-dark{fill:none;stroke:${t["hb-orb-crack-dark"]};stroke-linecap:round;opacity:0.85;transform:translate(0.9px,1.1px)}`
+    + `.fx-refract{fill:none;stroke:${t["hb-orb-crack-refract"]};stroke-linecap:round;opacity:0.34;filter:url(#hbRefract)}`
+    + `.fx-main{fill:none;stroke:${t["hb-orb-crack"]};stroke-linecap:round}`
+    + `.fx-shard{fill:${t["hb-orb-crack"]};opacity:0.16;stroke:none}`;
+  const body = FRACTURE_SVG.replace(/<path class="fx-glint"[^>]*\/>/g, "").replace(/<circle class="fx-bloom"[^>]*\/>/g, "");
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" width="${px}" height="${px}">`
+    + `<defs>${filter.replace(/\s+/g, " ")}</defs><style>${css}</style>${body}</svg>`;
+  u = "data:image/svg+xml," + encodeURIComponent(svg);
+  _fractureUrl.set(px, u);
+  return u;
+}
+let _glintCmds = null;
+function glintCmds() {
+  if (!_glintCmds) {
+    _glintCmds = [];
+    for (const m of FRACTURE_SVG.matchAll(/<path class="fx-glint" d="([^"]+)"\/>/g)) _glintCmds.push(...parsePath(m[1]));
+  }
+  return _glintCmds;
+}
+
+/** A blurred sprite covering user rect (x0,y0)-(x1,y1), at device scale. */
+function bakeSprite(s, x0, y0, x1, y1, blur, paint) {
+  const pad = blur * 3;
+  const px0 = Math.floor((x0 - pad) * s), py0 = Math.floor((y0 - pad) * s);
+  const px1 = Math.ceil((x1 + pad) * s), py1 = Math.ceil((y1 + pad) * s);
+  const w = Math.max(1, px1 - px0), h = Math.max(1, py1 - py0);
+  const cv = makeCanvas(w, h);
+  const g = cv.getContext("2d");
+  // ctx.filter lengths are canvas px, independent of the transform; the CSS
+  // blur(Npx) on an SVG child is N user units, i.e. N·s device px.
+  if (blur > 0 && "filter" in g) g.filter = `blur(${+(blur * s).toFixed(4)}px)`;
+  g.setTransform(s, 0, 0, s, -px0, -py0);
+  paint(g);
+  return { cv, x: px0 / s, y: py0 / s, w: w / s, h: h / s };
+}
+
+// Full-size layers are baked at the vessel's own canvas size AND sub-pixel
+// origin (G = { W, H, s, ox, oy }: user 0..120 → canvas px is s·u + o), so
+// they are blitted 1:1 with no resample; sprites are baked on their own grid
+// at scale s and positioned per tick.
+const BAKES = {
+  /** lqwall: the radial multiply that darkens the liquid toward the glass. */
+  wall(G) {
+    const c = makeCanvas(G.W, G.H);
+    const g = c.getContext("2d");
+    g.setTransform(G.s, 0, 0, G.s, G.ox, G.oy);
+    const gr = g.createRadialGradient(60, 60, 0, 60, 60, 55.5);
+    gr.addColorStop(0.32, "#ffffff");
+    gr.addColorStop(0.78, "#a08c78");
+    gr.addColorStop(1, "#3a2c22");
+    g.fillStyle = gr;
+    g.beginPath(); g.arc(60, 60, 55.5, 0, CV_TAU); g.fill();
+    return c;
+  },
+  /** .subglow: ellipse 60,11 46x11, bbox radial orb-a 0.85 → 0, blur(6px). */
+  subglow(G, kind, low) {
+    const a = orbTokens()[orbColorTokens(kind, low)[0]];
+    return bakeSprite(G.s, 14, 0, 106, 22, 6, (g) => {
+      g.translate(60, 11); g.scale(46, 11);
+      const gr = g.createRadialGradient(0, 0, 0, 0, 0, 1);
+      gr.addColorStop(0, rgba(a, 0.85));
+      gr.addColorStop(1, rgba(a, 0));
+      g.fillStyle = gr;
+      g.beginPath(); g.arc(0, 0, 1, 0, CV_TAU); g.fill();
+    });
+  },
+  /** .sspec: ellipse 52,1.5 21x2.2, --hb-orb-men-spec, blur(2.6px). */
+  sspec(G) {
+    return bakeSprite(G.s, 31, -0.7, 73, 3.7, 2.6, (g) => {
+      g.fillStyle = orbTokens()["hb-orb-men-spec"];
+      g.beginPath(); g.ellipse(52, 1.5, 21, 2.2, 0, 0, CV_TAU); g.fill();
+    });
+  },
+  /** .shimmer (mana): ellipse 58,74 30x20, --hb-orb-mana-shimmer, blur(6px). */
+  shimmer(G) {
+    return bakeSprite(G.s, 28, 54, 88, 94, 6, (g) => {
+      g.fillStyle = orbTokens()["hb-orb-mana-shimmer"];
+      g.beginPath(); g.ellipse(58, 74, 30, 20, 0, 0, CV_TAU); g.fill();
+    });
+  },
+  /** The vitae group (dim, 38° hatch, scum band, grime, dots) at ceiling c. */
+  vitae(G, c) {
+    const t = orbTokens();
+    const cv = makeCanvas(G.W, G.H);
+    const g = cv.getContext("2d");
+    const cy0 = VITAE_CY0;
+    const dy = Number(((VB - c * VB) - cy0).toFixed(2));  // the SVG path's own translate
+    const markup = vitaeGroup("hp");
+    const top = cy0 - 260;
+    g.setTransform(G.s, 0, 0, G.s, G.ox, G.oy + dy * G.s);
+    g.fillStyle = t["hb-orb-vitae-dim"];
+    g.fillRect(-4, top, 128, 260);
+    // hatch: pattern 7x7 userSpaceOnUse rotate(38), a 2.4-wide line at x=0
+    // clipped by its tile (so 1.2 wide), opacity 0.5 x the rect's 0.30.
+    g.save();
+    g.beginPath(); g.rect(-4, top, 128, 260); g.clip();
+    g.rotate(38 * DEG);
+    g.globalAlpha = 0.5 * 0.30;
+    g.fillStyle = "#000000";
+    // visible group-space box → pattern space (rotate −38°), padded a tile
+    const ys = [Math.max(top, -G.oy / G.s - dy), Math.min(cy0, (G.H - G.oy) / G.s - dy)];
+    const ca = Math.cos(-38 * DEG), sa = Math.sin(-38 * DEG);
+    let u0 = Infinity, u1 = -Infinity, v0 = Infinity, v1 = -Infinity;
+    for (const x of [-4, 124]) for (const y of ys) {
+      const u = x * ca - y * sa, v = x * sa + y * ca;
+      u0 = Math.min(u0, u); u1 = Math.max(u1, u); v0 = Math.min(v0, v); v1 = Math.max(v1, v);
+    }
+    for (let k = Math.floor(u0 / 7) - 1; k <= Math.ceil(u1 / 7) + 1; k++) g.fillRect(7 * k, v0 - 7, 1.2, v1 - v0 + 14);
+    g.restore();
+    const scum = /class="vitae-scum-band" d="([^"]+)"/.exec(markup)[1];
+    const grime = /class="vitae-grime" d="([^"]+)"/.exec(markup)[1];
+    g.globalAlpha = 0.55;
+    g.fillStyle = t["hb-orb-vitae-scum"];
+    tracePath(g, parsePath(scum)); g.fill();
+    g.globalAlpha = 1;
+    g.strokeStyle = t["hb-orb-vitae-scum"];
+    g.lineWidth = 1.8;
+    tracePath(g, parsePath(grime)); g.stroke();
+    g.globalAlpha = 0.85;
+    g.fillStyle = t["hb-orb-vitae-scum"];
+    g.beginPath();
+    for (const m of markup.matchAll(/<circle cx="([^"]+)" cy="([^"]+)" r="([^"]+)"\/>/g)) {
+      g.moveTo(+m[1] + +m[3], +m[2]);
+      g.arc(+m[1], +m[2], +m[3], 0, CV_TAU);
+    }
+    g.fill();
+    return cv;
+  },
+};
+
+// Layer sets per vessel geometry (size + scale + sub-pixel origin), shared by
+// every vessel with the same geometry (the three panes, at integer positions)
+// and dropped when no vessel uses it any more.
+const _layerSets = new Map();  // key → { refs, map: Map(name → layer | null) }
+function acquireLayerSet(key) {
+  let set = _layerSets.get(key);
+  if (!set) { set = { refs: 0, map: new Map() }; _layerSets.set(key, set); }
+  set.refs++;
+  return set;
+}
+function releaseLayerSet(key) {
+  const set = _layerSets.get(key);
+  if (set && --set.refs <= 0) _layerSets.delete(key);
+}
+
+function clockNow() {
+  const ct = typeof document !== "undefined" ? document.timeline?.currentTime : null;
+  return Number.isFinite(ct) ? ct : performance.now();
+}
+
+/**
+ * One vessel core drawn into `canvas` (inside `pane`). The driver calls
+ * frame() on its cadence ticks with the orb record and the tick's amplitude
+ * and front phase; everything else is read off the orb record.
+ */
+function createCanvasVessel(kind, canvas, pane, opts = {}) {
+  const reduced = !!opts.reduced;
+  const caustics = opts.caustics !== false;
+  const core = opts.core || canvas.parentNode || null;
+  const cur = new Float64Array(NP);
+  const tol = new Float64Array(NP);
+  const front = new Float64Array(WAVE_N);
+  const back = new Float64Array(WAVE_N);
+  // G: canvas size W x H, device px per user unit s, sub-pixel origin ox/oy.
+  let ctx = null, W = 0, H = 0, s = 1, ox = 0, oy = 0, G = null;
+  let set = null, setKey = "", last = null, force = true;
+  let sizeDirty = true, t0 = null, glareStart = -Infinity;
+  let frozenT = null, frozenGlare = null;
+  let lastAmp = 0, lastPh = 0;
+  let grad = null, gradKey = "", vitae = null, vitaeKey = NaN, bloomGrad = null;
+  const stats = { draws: 0, skips: 0, bakes: 0, resizes: 0 };
+
+  // The core's exact DEVICE rect: the pane's rect (it carries the orbScale
+  // transform and sits inside the HUD zoom) and the core's untransformed
+  // offset in it, so the low-HP heartbeat's scale on .hbo-core never skews
+  // the reading. The backing store covers that rect on WHOLE device pixels
+  // and the drawing keeps its sub-pixel origin, so the vessel is rasterized
+  // in place like the SVG one rather than resampled by a fractional offset.
+  // Read only on a size invalidation (resize / HUD zoom / DPR / drag end).
+  function measure() {
+    const dpr = Number(globalThis.devicePixelRatio) > 0 ? Number(globalThis.devicePixelRatio) : 1;
+    const pr = pane.getBoundingClientRect();
+    if (!(pr.width > 0)) return null;
+    const k = (pr.width / PANE_W) * dpr;  // device px per pane CSS px
+    const cx = pr.left * dpr + (core?.offsetLeft || 0) * k;
+    const cy = pr.top * dpr + (core?.offsetTop || 0) * k;
+    const cw = ORB_PX * k;
+    const x0 = Math.floor(cx + 1e-6), y0 = Math.floor(cy + 1e-6);
+    return {
+      k, s: cw / VB, ox: cx - x0, oy: cy - y0,
+      W: Math.max(8, Math.ceil(cx + cw - 1e-6) - x0), H: Math.max(8, Math.ceil(cy + cw - 1e-6) - y0),
+    };
+  }
+
+  function resize() {
+    const m = measure();
+    if (!m) return false;  // not laid out yet: stay dirty, draw nothing
+    sizeDirty = false;
+    const key = `${m.W}x${m.H}@${m.s.toFixed(5)}+${m.ox.toFixed(3)},${m.oy.toFixed(3)}`;
+    if (key === setKey && ctx) return true;
+    if (set) releaseLayerSet(setKey);
+    setKey = key;
+    set = acquireLayerSet(key);
+    W = m.W; H = m.H; s = m.s; ox = m.ox; oy = m.oy;
+    G = { W, H, s, ox, oy };
+    if (canvas.width !== W) canvas.width = W;
+    if (canvas.height !== H) canvas.height = H;
+    const st = canvas.style;
+    st.position = "absolute";
+    st.left = `${+(-ox / m.k).toFixed(4)}px`;
+    st.top = `${+(-oy / m.k).toFixed(4)}px`;
+    st.width = `${+(W / m.k).toFixed(4)}px`;
+    st.height = `${+(H / m.k).toFixed(4)}px`;
+    ctx = canvas.getContext("2d");
+    grad = null; gradKey = ""; vitae = null; vitaeKey = NaN; bloomGrad = null;
+    force = true;
+    stats.resizes++;
+    // Skip tolerances in the quantity's own units: CV_SKIP_PX device px of
+    // on-screen motion (scale factors: over the sprite's farthest point
+    // from the user-space origin they scale about), CV_SKIP_A of alpha.
+    const px = CV_SKIP_PX / s;
+    tol.fill(0);
+    tol[P_SY] = px;
+    tol[P_SSPEC] = px; tol[P_SSPEC + 1] = px / 81; tol[P_SSPEC + 2] = CV_SKIP_A;
+    tol[P_SHIM] = px; tol[P_SHIM + 1] = px; tol[P_SHIM + 2] = px / 112; tol[P_SHIM + 3] = CV_SKIP_A;
+    tol[P_GLINT] = CV_SKIP_A; tol[P_BLOOM] = CV_SKIP_A;
+    for (let b = 0; b < BUBBLES.length; b++) {
+      const j = P_BUB + 4 * b;
+      tol[j] = px; tol[j + 1] = px; tol[j + 2] = px; tol[j + 3] = 2 * CV_SKIP_A;  // fill alpha 0.5
+    }
+    for (let i = 0; i < WAVE_N; i++) { tol[P_FRONT + i] = px; tol[P_BACK + i] = px; }
+    return true;
+  }
+
+  // Shared, size-keyed layer; `bake` returns a layer, null (failed: cached)
+  // or undefined (an SVG bitmap still loading: retried on a later draw).
+  function layerOf(name, bake) {
+    let v = set.map.get(name);
+    if (v === undefined) {
+      v = bake();
+      if (v !== undefined) {
+        set.map.set(name, v);
+        if (v) { stats.bakes++; _cvStats.bakes++; }
+      }
+    }
+    return v || null;
+  }
+  /** An SVG bitmap resampled ONCE into a full-size layer, at the vessel's
+   *  own scale and sub-pixel origin (what the SVG <image> does per raster). */
+  function fromBitmap(url, px) {
+    const b = svgBitmap(url, px);
+    if (b.failed) return null;
+    if (!b.cv) return undefined;
+    const c = makeCanvas(W, H);
+    const g = c.getContext("2d");
+    g.imageSmoothingEnabled = true;
+    g.imageSmoothingQuality = "high";
+    g.setTransform(s, 0, 0, s, ox, oy);
+    g.drawImage(b.cv, 0, 0, VB, VB);
+    return c;
+  }
+  const fracturePx = () => Math.max(BAKE_PX, Math.ceil(VB * s));
+  /** A full-size layer, 1:1 (it was baked on this canvas's own pixel grid). */
+  function blit(g, layer) {
+    g.setTransform(1, 0, 0, 1, 0, 0);
+    g.drawImage(layer, 0, 0);
+    g.setTransform(s, 0, 0, s, ox, oy);
+  }
+  function gradients(low) {
+    const key = low ? "low" : "base";
+    if (grad && gradKey === key) return grad;
+    const t = orbTokens();
+    const [aT, bT] = orbColorTokens(kind, low);
+    const a = t[aT], b = t[bT];
+    // Unit gradients; fillSpan() maps them onto the body's bbox.
+    const f = ctx.createLinearGradient(0, 0, 0, 1);
+    f.addColorStop(0, rgba(a, 1)); f.addColorStop(0.34, rgba(a, 0.92)); f.addColorStop(1, rgba(b, 1));
+    const k = ctx.createLinearGradient(0, 0, 0, 1);
+    k.addColorStop(0, rgba(b, 1)); k.addColorStop(1, rgba(t["hb-orb-void"], 1));
+    grad = { front: f, back: k };
+    gradKey = key;
+    return grad;
+  }
+  /** Fill the current (already traced) path with a unit gradient stretched
+   *  over y = top..128: the SVG objectBoundingBox gradient of a wave body. */
+  function fillSpan(g, gr, top, alpha) {
+    g.setTransform(s, 0, 0, s * (VB + 8 - top), ox, oy + s * top);
+    g.fillStyle = gr;
+    g.globalAlpha = alpha;
+    g.fill();
+    g.setTransform(s, 0, 0, s, ox, oy);
+    g.globalAlpha = 1;
+  }
+
+  function draw(o, frontTop, backTop) {
+    const g = ctx;
+    const t = orbTokens();
+    const low = cur[P_LOW] === 1;
+    g.setTransform(1, 0, 0, 1, 0, 0);
+    g.globalAlpha = 1;
+    g.globalCompositeOperation = "source-over";
+    g.clearRect(0, 0, W, H);
+    g.setTransform(s, 0, 0, s, ox, oy);
+    const gr = gradients(low);
+    g.save();
+    g.beginPath(); g.arc(60, 60, 55.5, 0, CV_TAU); g.clip();
+    // 1-2 the parallax back body and the front body
+    traceBody(g, back, 0); fillSpan(g, gr.back, backTop, 0.85);
+    traceBody(g, front, 0); fillSpan(g, gr.front, frontTop, 1);
+    // 3-4 caustics (screen) and wall darkening (multiply), clipped to the
+    // LIVE front wave (still the current path)
+    const cau = caustics ? layerOf("caustic", () => fromBitmap(CAUSTIC_URL, BAKE_PX)) : null;
+    const wall = layerOf("wall", () => BAKES.wall(G));
+    g.save();
+    g.clip();
+    if (cau) { g.globalCompositeOperation = "screen"; blit(g, cau); }
+    g.globalCompositeOperation = "multiply";
+    blit(g, wall);
+    g.restore();
+    // mana shimmer (normal blend, blur baked; transform about the origin)
+    if (kind === "mana") {
+      const sp = layerOf("shimmer", () => BAKES.shimmer(G));
+      const sc = cur[P_SHIM + 2];
+      g.globalAlpha = cur[P_SHIM + 3];
+      g.drawImage(sp.cv, cur[P_SHIM] + sc * sp.x, cur[P_SHIM + 1] + sc * sp.y, sc * sp.w, sc * sp.h);
+    }
+    // bubbles
+    g.fillStyle = t["hb-orb-bubble"];
+    for (let b = 0; b < BUBBLES.length; b++) {
+      const j = P_BUB + 4 * b;
+      if (!(cur[j + 3] > 0)) continue;
+      g.globalAlpha = cur[j + 3];
+      g.beginPath(); g.arc(cur[j], cur[j + 1], cur[j + 2], 0, CV_TAU); g.fill();
+    }
+    // the waterline group (.wsurf, translate(0, sy))
+    const sy = cur[P_SY];
+    const sg = layerOf(`subglow-${kind}-${low ? 1 : 0}`, () => BAKES.subglow(G, kind, low));
+    const ss = layerOf("sspec", () => BAKES.sspec(G));
+    g.globalCompositeOperation = "screen";
+    g.globalAlpha = 0.5;
+    g.drawImage(sg.cv, sg.x, sg.y + sy, sg.w, sg.h);
+    const sx = cur[P_SSPEC + 1];
+    g.globalAlpha = cur[P_SSPEC + 2];
+    g.drawImage(ss.cv, cur[P_SSPEC] + sx * ss.x, ss.y + sy, sx * ss.w, ss.h);
+    g.globalCompositeOperation = "source-over";
+    g.globalAlpha = 0.55;
+    g.strokeStyle = t["hb-orb-surface"];
+    g.lineWidth = 1.2;
+    g.lineJoin = "miter";
+    g.lineCap = "butt";
+    g.beginPath();
+    g.moveTo(4, sy - 1); g.quadraticCurveTo(8.5, sy + 2.4, 13.5, sy + 2.9);
+    g.moveTo(116, sy - 1); g.quadraticCurveTo(111.5, sy + 2.4, 106.5, sy + 2.9);
+    g.stroke();
+    // meniscus: under-shadow / surface / hairline specular, of the front path
+    g.lineJoin = "round";
+    g.globalAlpha = 0.75; g.strokeStyle = t["hb-orb-men-shadow"]; g.lineWidth = 3.2;
+    traceBody(g, front, 1.6); g.stroke();
+    g.globalAlpha = 1; g.strokeStyle = t["hb-orb-surface"]; g.lineWidth = 1.1;
+    traceBody(g, front, 0); g.stroke();
+    g.globalAlpha = 0.7; g.strokeStyle = t["hb-orb-men-spec"]; g.lineWidth = 0.55;
+    traceBody(g, front, -0.7); g.stroke();
+    // vitae ceiling
+    if (o.ceiling < 1) {
+      if (!vitae || vitaeKey !== o.ceiling) {
+        vitae = BAKES.vitae(G, o.ceiling);
+        vitaeKey = o.ceiling;
+        stats.bakes++; _cvStats.bakes++;
+      }
+      g.globalAlpha = 1;
+      blit(g, vitae);
+    }
+    g.restore();  // the liquid's circle clip
+    // the glass plate
+    const glass = layerOf("glass", () => fromBitmap(GLASS_URL, BAKE_PX));
+    if (glass) blit(g, glass);
+    // damage glare
+    const ga = cur[P_GLARE];
+    if (ga > 0) {
+      g.save();
+      g.globalCompositeOperation = "screen";
+      g.globalAlpha = ga;
+      g.fillStyle = t["hb-orb-glare"];
+      g.translate(46, 40); g.rotate(-28 * DEG);
+      g.beginPath(); g.ellipse(0, 0, 30, 17, 0, 0, CV_TAU); g.fill();
+      g.restore();
+    }
+    // low-HP fracture
+    if (low) {
+      const fx = layerOf("fracture", () => fromBitmap(fractureBakeUrl(fracturePx()), fracturePx()));
+      if (fx) { g.globalAlpha = 1; blit(g, fx); }
+      g.globalAlpha = cur[P_GLINT];
+      g.strokeStyle = t["hb-orb-crack-glint"];
+      g.lineWidth = 0.9;
+      g.lineCap = "round";
+      tracePath(g, glintCmds()); g.stroke();
+      if (!bloomGrad) {
+        // #hbOrbBloom's stops resolve to BLACK in the page (see FIDELITY).
+        bloomGrad = g.createRadialGradient(78, 36, 0, 78, 36, 9);
+        bloomGrad.addColorStop(0, "rgba(0,0,0,0.75)");
+        bloomGrad.addColorStop(1, "rgba(0,0,0,0)");
+      }
+      g.globalCompositeOperation = "screen";
+      g.globalAlpha = cur[P_BLOOM];
+      g.fillStyle = bloomGrad;
+      g.beginPath(); g.arc(78, 36, 9, 0, CV_TAU); g.fill();
+      g.globalCompositeOperation = "source-over";
+    }
+    g.globalAlpha = 1;
+  }
+
+  /** One cadence tick (or an off-cadence glare step). True if it drew. */
+  function frame(o, amp, ph, now) {
+    lastAmp = amp; lastPh = ph;
+    if (o.group.hidden) return false;  // paused while the pane is hidden
+    if ((sizeDirty || !ctx) && !resize()) return false;
+    if (t0 === null) t0 = now;
+    const t = frozenT !== null ? frozenT : now - t0;
+    const gT = frozenGlare !== null ? frozenGlare : now - glareStart;
+    cur[P_W] = W;
+    cur[P_GEN] = _bakeGen;
+    cur[P_LOW] = o.low ? 1 : 0;
+    cur[P_CEIL] = o.ceiling;
+    cur[P_GLARE] = reduced ? 0 : glareAlpha(gT);
+    const frontTop = waveYs(front, o.level, ph, amp, 2.4, 0);
+    const backTop = waveYs(back, o.level, -o.phase * 0.59 + o.seed * 1.9, amp * 1.2, 1.5, 5.5);
+    cur.set(front, P_FRONT);
+    cur.set(back, P_BACK);
+    cur[P_SY] = (VB - o.level * VB) + Math.sin(ph) * amp * 0.5;
+    sampleLoops(cur, t, o, kind, reduced);
+    let changed = force || last === null;
+    if (!changed) {
+      for (let i = 0; i < NP; i++) {
+        if (Math.abs(cur[i] - last[i]) > tol[i]) { changed = true; break; }
+      }
+    }
+    if (!changed) { stats.skips++; return false; }
+    force = false;
+    draw(o, frontTop, backTop);
+    if (!last) last = new Float64Array(NP);
+    last.set(cur);
+    stats.draws++;
+    return true;
+  }
+
+  return {
+    frame,
+    /** Re-sample at `now` with the last tick's wave (glare steps). */
+    redraw(o, now) { return frame(o, lastAmp, lastPh, now); },
+    armGlare(now) { glareStart = now; },
+    glareActive(now) {
+      return !reduced && frozenGlare === null && now - glareStart >= 0 && now - glareStart < GLARE_MS;
+    },
+    /** resize / HUD zoom / DPR changed: re-measure (and maybe re-bake). */
+    invalidateSize() { sizeDirty = true; },
+    /** Parity harness: loops at `animT` ms, glare at `glareT` ms (or none). */
+    freeze(animT, glareT) {
+      frozenT = Number(animT) || 0;
+      frozenGlare = glareT == null ? Infinity : Number(glareT);
+      force = true;
+    },
+    /** Every SVG bitmap this vessel will draw has loaded (or failed). */
+    layersSettled(low) {
+      const urls = [[GLASS_URL, BAKE_PX]];
+      if (caustics) urls.push([CAUSTIC_URL, BAKE_PX]);
+      if (low && W) urls.push([fractureBakeUrl(fracturePx()), fracturePx()]);
+      return urls.every(([u, px]) => { const b = svgBitmap(u, px); return b.failed || !!b.cv; });
+    },
+    destroy() { if (set) releaseLayerSet(setKey); set = null; setKey = ""; },
+    get W() { return W; },
+    /** Device px per user unit (0..120 across the core). */
+    get s() { return s; },
+    get stats() { return { ...stats, W, H, s: +s.toFixed(5), ox: +ox.toFixed(3), oy: +oy.toFixed(3), totalBakes: _cvStats.bakes }; },
   };
 }
 
@@ -1209,8 +2084,18 @@ function ensureSharedDefs() {
   return defs;
 }
 
+/** ?orbRender=canvas: the vessel core is one <canvas> (backing store sized
+ *  per device pixel by the renderer on its first frame), CSS-sized to the
+ *  92 px the <svg> occupies, so the box, the hit gate and the heartbeat on
+ *  .hbo-core are unchanged. */
+function orbCanvasMarkup(kind) {
+  const w = Math.max(8, Math.round(ORB_PX * orbScale()));
+  return `<canvas class="orb-cv ${kind}" data-kind="${kind}" width="${w}" height="${w}"`
+    + ` style="display:block;width:${ORB_PX}px;height:${ORB_PX}px" aria-hidden="true"></canvas>`;
+}
+
 /** One vital = one independently placed, independently persisted pane. */
-function buildPane(kind) {
+function buildPane(kind, canvasMode = false) {
   const pane = document.createElement("div");
   pane.id = PANE_ID[kind];
   pane.className = "hbo-pane";
@@ -1223,7 +2108,7 @@ function buildPane(kind) {
   const scale = orbScale();
   if (scale !== DEFAULT_SCALE) pane.style.setProperty("--hbo-scale", String(scale));
   pane.innerHTML = HERALDRY[kind]
-    + `<div class="hbo-core">${orbSvg(kind)}</div>`
+    + `<div class="hbo-core">${canvasMode ? orbCanvasMarkup(kind) : orbSvg(kind)}</div>`
     + `<div class="orb-read" style="--hbo-read:var(--hb-orb-read-${kind})">`
     + `<div class="plate"><span class="v"></span></div></div>`;
   return pane;
@@ -1408,12 +2293,48 @@ function installHitGate(paneList) {
   };
 }
 
+/** The wire + animation state every orb record carries, in both modes. */
+function orbAnimState(kind, i) {
+  return {
+    // wire state
+    base: 0,
+    current: null,
+    buffedMax: 0,
+    ceiling: 1,
+    // animation state
+    level: 0,
+    levelTarget: 0,
+    impulse: 0,
+    phase: 0,
+    seed: i * 1.37,
+    baseAmp: kind === "hp" ? 1.6 : 1.5,
+    baseSpd: 1.0,
+    lastNums: null,
+    lastRise: null,
+    low: false,
+    glareTimer: 0,
+  };
+}
+
 /** Per-orb mutable state + the DOM refs the driver writes to.
- *  `panes` is the kind → pane element map built by mount(). */
-function collectOrbs(panes) {
+ *  `panes` is the kind → pane element map built by mount().
+ *  `canvasOpts` (?orbRender=canvas) swaps the SVG refs for a Canvas2D vessel. */
+function collectOrbs(panes, canvasOpts = null) {
   const orbs = [];
   KINDS.forEach((kind, i) => {
     const group = panes[kind];
+    if (canvasOpts) {
+      const core = group.querySelector(".hbo-core");
+      orbs.push({
+        kind, type: TYPE_BY_KIND[kind], group, core,
+        svg: null, liquid: null, back: null, body: null, clip: null, men: [],
+        surf: null, surfXform: null, vitae: null, fx: null,
+        num: group.querySelector(".orb-read .v"),
+        cv: createCanvasVessel(kind, core.querySelector("canvas.orb-cv"), group, { ...canvasOpts, core }),
+        ...orbAnimState(kind, i),
+      });
+      return;
+    }
     const svg = group.querySelector("svg.orb");
     svg.classList.add(kind);
     const liquid = svg.querySelector(".liquid");
@@ -1449,23 +2370,7 @@ function collectOrbs(panes) {
       vitae: liquid.querySelector(".hbo-vitae"),
       fx: svg.querySelector(".hbo-fx"),
       num: group.querySelector(".orb-read .v"),
-      // wire state
-      base: 0,
-      current: null,
-      buffedMax: 0,
-      ceiling: 1,
-      // animation state
-      level: 0,
-      levelTarget: 0,
-      impulse: 0,
-      phase: 0,
-      seed: i * 1.37,
-      baseAmp: kind === "hp" ? 1.6 : 1.5,
-      baseSpd: 1.0,
-      lastNums: null,
-      lastRise: null,
-      low: false,
-      glareTimer: 0,
+      ...orbAnimState(kind, i),
     });
   });
   return orbs;
@@ -1508,7 +2413,8 @@ function applyVital(orb, current, buffedMax, base, oldValue, driver) {
   const rise = -Math.max(8, orb.levelTarget * VB - 18);
   const riseStr = `${rise.toFixed(0)}px`;
   if (orb.lastRise !== riseStr) {
-    orb.liquid.style.setProperty("--rise", riseStr);
+    // (canvas: no .liquid; the vessel samples hbo-bub with orb.lastRise)
+    if (orb.liquid) orb.liquid.style.setProperty("--rise", riseStr);
     orb.lastRise = riseStr;
   }
 
@@ -1531,6 +2437,9 @@ function applyVital(orb, current, buffedMax, base, oldValue, driver) {
 }
 
 function armGlare(orb) {
+  // ?orbRender=canvas: the flicker is sampled from hbo-glare's keyframes on
+  // the timeline clock — no class, no forced style recalc, no timer.
+  if (orb.cv) { orb.cv.armGlare(clockNow()); return; }
   orb.svg.classList.remove("glaring");
   // Force a style recalc so the one-shot keyframe restarts. This is the
   // single place the plugin touches layout, and only on a damage event.
@@ -1549,7 +2458,8 @@ function applyLowState(orb, frac, driver) {
   orb.low = low;
   // ?hudDiet=orbSync: `.beat` and the fracture glints / bloom start or stop.
   driver?.invalidateAnims?.();
-  orb.svg.classList.toggle("low", low);
+  // (canvas: no <svg>; the vessel reads orb.low for its colour band + web)
+  if (orb.svg) orb.svg.classList.toggle("low", low);
   orb.core.classList.toggle("beat", low);
   // The fracture web is ~120 path nodes; build it the first time it is
   // actually needed rather than shipping it in every session's DOM.
@@ -1578,7 +2488,11 @@ export function mount(ctx) {
   // R3-2 HUD diet levers (ui/hud_diet.js; default off), read once per mount.
   const dietSync = hudDietOn("orbSync");
   ensureStyles({ orbLayer: hudDietOn("orbLayer") });
-  ensureSharedDefs();
+  // ?orbRender=canvas (default off): the vessel cores are Canvas2D. The page
+  // then needs no shared SVG <defs> (the fracture bake carries its own
+  // #hbRefract) and no <image> bake swap; the stylesheet is the same text.
+  const canvasMode = orbRenderMode() === "canvas";
+  if (!canvasMode) ensureSharedDefs();
   preloadSpriteMasks();
 
   const panes = {};
@@ -1586,7 +2500,7 @@ export function mount(ctx) {
   for (const kind of KINDS) {
     const old = document.getElementById(PANE_ID[kind]);
     if (old) old.remove();
-    const pane = buildPane(kind);
+    const pane = buildPane(kind, canvasMode);
     document.body.appendChild(pane);
     // The pane IS its own drag handle — see hitGate() below, which only
     // lets a pointer reach it when it is over visible art, so "drag it
@@ -1610,20 +2524,54 @@ export function mount(ctx) {
       p.hidden = h;
     }
     if (changed) driver.invalidateAnims();
+    // ?orbRender=canvas: the loop stops while every pane is hidden.
+    if (canvasMode && !h) driver.start();
   };
-
-  const orbs = collectOrbs(panes);
-  const byType = new Map(orbs.map((o) => [o.type, o]));
-  const stopHitGate = installHitGate(paneList);
-  bakeRasters(paneList);
 
   const reduceQuery = window.matchMedia?.("(prefers-reduced-motion: reduce)") ?? null;
   const reduced = !!reduceQuery?.matches;
+  const orbs = collectOrbs(panes, canvasMode ? { reduced, caustics: causticsEnabled() } : null);
+  const byType = new Map(orbs.map((o) => [o.type, o]));
+  const stopHitGate = installHitGate(paneList);
+  if (!canvasMode) bakeRasters(paneList);
+
   const driver = createDriver(orbs, reduced, orbHz(), paneList);
   // Paint the still frame immediately so the vessels are never empty
   // rectangles for a frame, then hand over to the loop.
   driver.still();
   driver.start();
+
+  // ?orbRender=canvas: the backing store follows device pixels, so a window
+  // resize, a HUD-scale change, a DPR change (browser zoom, another monitor)
+  // or the end of a drag re-measures each vessel on its next frame — and
+  // re-bakes its static layers only if its geometry actually changed.
+  let stopSizeWatch = null;
+  if (canvasMode) {
+    let mq = null;
+    const invalidate = () => {
+      for (const o of orbs) o.cv.invalidateSize();
+      driver.start();
+    };
+    const onDpr = () => { invalidate(); watchDpr(); };
+    const watchDpr = () => {
+      try {
+        mq?.removeEventListener?.("change", onDpr);
+        mq = window.matchMedia?.(`(resolution: ${Number(window.devicePixelRatio) || 1}dppx)`) ?? null;
+        mq?.addEventListener?.("change", onDpr);
+      } catch (_) { mq = null; }
+    };
+    watchDpr();
+    window.addEventListener("resize", invalidate);
+    document.addEventListener("hb-hud-scale-changed", invalidate);
+    document.addEventListener("pointerup", invalidate, true);
+    stopSizeWatch = () => {
+      window.removeEventListener("resize", invalidate);
+      document.removeEventListener("hb-hud-scale-changed", invalidate);
+      document.removeEventListener("pointerup", invalidate, true);
+      try { mq?.removeEventListener?.("change", onDpr); } catch (_) {}
+      for (const o of orbs) o.cv.destroy();
+    };
+  }
 
   const onVisibility = () => {
     if (document.hidden) driver.pause();
@@ -1747,6 +2695,57 @@ export function mount(ctx) {
         setHidden(false);
         return true;
       },
+      // ?orbRender: which vessel renderer this mount drew with.
+      renderMode: () => (canvasMode ? "canvas" : "svg"),
+      // ?orbRender=canvas: per vessel draws / skipped ticks / bakes / size.
+      canvasStats: () => (canvasMode ? orbs.map((o) => ({ kind: o.kind, ...o.cv.stats })) : null),
+      // Parity harness (harness/glsl_smoke/orb_canvas_parity_*): stop the
+      // loop for good, put every orb at its target level, wave phase `phase`,
+      // slosh `impulse`, the ambient loops at `animT` ms and (if given) the
+      // damage glare `glareT` ms in, and paint that one frame — the SVG
+      // vessel by pausing its CSS animations at those times, the canvas one
+      // by sampling the same keyframes there. Unmount to resume.
+      freeze: ({ phase = 0, impulse = 0, animT = 0, glareT = null } = {}) => {
+        driver.hold();
+        for (const o of orbs) {
+          o.level = o.levelTarget; o.phase = phase; o.impulse = impulse;
+          if (canvasMode) o.cv.freeze(animT, glareT);
+          else if (glareT != null) {
+            armGlare(o);
+            if (o.glareTimer) { clearTimeout(o.glareTimer); o.glareTimer = 0; }
+          }
+        }
+        driver.still();
+        // Every CSS animation still on the page side (SVG: the ambient loops
+        // + glare; both modes: the low-HP heartbeat on .hbo-core) is pinned
+        // at the same times, so the two renderers are compared at one phase.
+        for (const p of paneList) {
+          let anims = [];
+          try { anims = p.getAnimations?.({ subtree: true }) ?? []; } catch (_) {}
+          for (const a of anims) {
+            try {
+              const finite = a.effect?.getTiming?.().iterations !== Infinity;
+              a.pause();
+              a.currentTime = finite ? (glareT ?? 0) : animT;
+            } catch (_) {}
+          }
+        }
+        return true;
+      },
+      // Resolves once the static rasters this renderer draws have landed.
+      bakeReady: () => {
+        if (!canvasMode) {
+          return Promise.all([bakeRaster(GLASS_URL), bakeRaster(CAUSTIC_URL)]).then(() => true);
+        }
+        return new Promise((resolve) => {
+          const t0 = Date.now();
+          const poll = () => {
+            if (orbs.every((o) => o.cv.layersSettled(o.low)) || Date.now() - t0 > 10000) resolve(true);
+            else setTimeout(poll, 20);
+          };
+          poll();
+        });
+      },
     };
   } catch (_) {}
 
@@ -1756,6 +2755,7 @@ export function mount(ctx) {
     document.removeEventListener("visibilitychange", onVisibility);
     for (const o of orbs) if (o.glareTimer) clearTimeout(o.glareTimer);
     driver.stop();
+    if (stopSizeWatch) stopSizeWatch();
     stopHitGate();
     try { delete window.__diag?.vitalsOrbs; } catch (_) {}
     for (const p of paneList) p.remove();

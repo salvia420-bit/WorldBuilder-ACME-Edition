@@ -739,6 +739,9 @@ const TIER5 = [
   // 2026-10-31 round 3 R3-2 HUD diet: ?hudDiet (DEFAULT OFF; orbSync / orbLayer / radar / overlays / fontWrf)
   // + the HUD bisect flags ?hudPanels=off / ?hudOrbs=off / ?hudCanvases=off; flags-off call pattern pinned.
   { tier: 5, flag: "hudDiet", file: "tests/hud_diet.test.mjs" },
+  // 2026-10-31 owner ask "make the orbs cheaper": ?orbRender=canvas (DEFAULT OFF) — the vessel core in
+  // Canvas2D; flag-off DOM log pinned to the pre-change plugin (sha256), state mapping, bakes, skips, hidden.
+  { tier: 5, flag: "orbRender", file: "tests/vitals_orbs_canvas.test.mjs" },
   // 2026-10-19 fps review: the scene-walk census (__skipHiddenMatrix.census) — what a static
   // container freeze could save (`forcedOnly`) before anyone builds one.
   { tier: 5, flag: "matrix_walk_census", file: "tests/matrix_walk_census.test.mjs" },
@@ -1589,6 +1592,9 @@ const NEEDS_BROWSER = [
   { file: "harness/glsl_smoke/interior_batch_smoke.mjs", why: `interiorBatch (legacy vs batch: town / punch / dungeon-split / sealed / shadow frames, layers byte-equal, bits = containers, fewer calls) — ${BROWSER_WHY}` },
   // 2026-10-31 — round 3 R3-7a: ?gpuParticles shader-evaluated motion vs the CPU path (S1-S7: links, readback within 1e-4, colours, large clocks, collapse, fxMotion velocity, production-material centroids).
   { file: "harness/glsl_smoke/gpu_particles_smoke.mjs", why: `gpuParticles (kernel + production readback vs CPU) — ${BROWSER_WHY}` },
+  // 2026-10-31 — ?orbRender=canvas look parity: the real plugin mounted SVG then canvas at frozen
+  // identical state (11 cases x 3 vessels x 2 backdrops x DPR 1/2), screenshot pixel diffs, --png strips.
+  { file: "harness/glsl_smoke/orb_canvas_parity_smoke.mjs", why: `orbRender (SVG vs canvas vessel pixel diff) — ${BROWSER_WHY}` },
 ];
 const BROWSER_ONLY = new Set(NEEDS_BROWSER.map((q) => q.file));
 
