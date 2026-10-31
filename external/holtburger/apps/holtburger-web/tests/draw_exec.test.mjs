@@ -698,7 +698,7 @@ function step(W, f, arm) {
 }
 
 /** One arm: a fresh fake context + renderer, every production patch in index.js order. */
-function makeArm(exec, sc, { log = true, rigs = false } = {}) {
+function makeArm(exec, sc, { log = true, rigs = false, sw = false } = {}) {
   const calls = [];
   let logging = false;
   const gl = createFakeWebGL2({
@@ -719,7 +719,7 @@ function makeArm(exec, sc, { log = true, rigs = false } = {}) {
   installAsyncLinkGuard(renderer, () => W.scene);
   if (!sc.noSkipEmpty) SKIP.installSkipEmptyMultiDraw(renderer, { force: true }); // (?skipEmptyMultiDraw=off: not installed)
   RUNS.installBatchedRuns(renderer);
-  const dx = exec ? DX.installDrawExec(renderer, () => W.scene, { force: true, rigs }) : null;
+  const dx = exec ? DX.installDrawExec(renderer, () => W.scene, { force: true, rigs, switch: sw }) : null;
   const rt = sc.msaa ? new THREE.WebGLRenderTarget(800, 600, { samples: 4, type: THREE.HalfFloatType }) : null;
   const outer = { calls: 0 };
   if (sc.outerWrapper) {
@@ -795,14 +795,14 @@ const pick = (o, keys) => { const r = {}; for (const k of keys) r[k] = o[k]; ret
 const RUN_KEYS = ["draws", "instances", "runs", "rebuilds", "uploads", "noGain", "fallbacks", "errors", "sortedDraws", "sortedInstances", "sortedRuns", "sortedNoGain", "sortedRebuilds", "sortedUploads", "stableSkips", "stablePoisons", "stableAudits", "stableAuditFails"];
 
 /** Run one arm through the scenario; returns per-frame streams + counters + stat deltas. */
-async function runArm(exec, sc, rigs = false) {
+async function runArm(exec, sc, rigs = false, sw = false) {
   // batched_runs keeps its frame totals and its L1 audit tick module-wide: both arms start clean.
   RUNS.__resetBatchedRunsFrameForTest();
   RUNS.__resetStableForTest();
   const runs0 = pick(RUNS.getBatchedRunsStats(), RUN_KEYS);
   const skip0 = SKIP.getSkipEmptyMultiDrawStats().skipped;
   const pc0 = PERCAM.getBatchedIndirectPerCameraStats();
-  const arm = makeArm(exec, sc, { rigs });
+  const arm = makeArm(exec, sc, { rigs, sw });
   const frames = [];
   const quiet = (fn) => { const l = console.log; console.log = () => {}; try { fn(); } finally { console.log = l; } };
   for (let f = 0; f < sc.frames; f++) {
@@ -852,6 +852,7 @@ function firstStreamDiff(A, B) {
   return null;
 }
 
+const SW_TOTAL = { sps: 0, syncs: 0, scenarios: 0 };
 async function scenario(name, sc, expect = {}) {
   if (process.env.DX_ONLY && !name.includes(process.env.DX_ONLY)) return;
   console.log(`\nSCENARIO ${name}`);
@@ -896,6 +897,19 @@ async function scenario(name, sc, expect = {}) {
           `${entsRun(R.arm.W)}/${R.arm.W.ents.length} entity parts executed (${rHits} draws; B ${bHits}); pass-through rigs ${c.passThrough} vs exec-only ${B.dxStats.passThrough}`);
       }
     }
+  }
+  {
+    // ?drawExecSwitch (round 3, 2026-10-31): the shipped default + same-program switches executed.
+    const S = await runArm(true, sc, true, true);
+    const d5 = firstStreamDiff(A, S);
+    const c = S.dxStats;
+    // (each [switch] check requires the arm to carry the switch: an executor without it fails them all)
+    check(`${name}: [switch] GL stream identical to stock (?drawExec + ?drawExecRigs + ?drawExecSwitch)`, d5 === null && c.switchOn === true, d5 ? d5.text : `${S.frames.reduce((s, f) => s + f.calls.length, 0)} GL calls compared, ${c.sameProgramSwitches} same-program switches, ${c.switchSyncs} tracker syncs`);
+    check(`${name}: [switch] batched_runs / skip_empty / per-camera stats identical`, c.switchOn === true && JSON.stringify(A.dRuns) === JSON.stringify(S.dRuns) && A.dSkip === S.dSkip && JSON.stringify(A.dPc) === JSON.stringify(S.dPc));
+    check(`${name}: [switch] no executor errors, no unproven tracker sync, every VAO hand-over bind at three's setup`, c.errors === 0 && c.vaoFixLate === 0 && c.switchSyncFailed === 0 && c.switchOn === true,
+      `errors ${c.errors} late fixes ${c.vaoFixLate} syncFailed ${c.switchSyncFailed} on ${c.switchOn}`);
+    console.log(`    switch arm: sps ${c.sameProgramSwitches} stateOnly ${c.stateOnly} fast ${c.fast} syncs ${c.switchSyncs} aborts ${c.switchSyncAborts} plans ${c.switchPlans} refused ${JSON.stringify(c.switchRefused)}`);
+    SW_TOTAL.sps += c.sameProgramSwitches; SW_TOTAL.syncs += c.switchSyncs; SW_TOTAL.scenarios += 1;
   }
   const d = firstStreamDiff(A, B);
   const total = A.frames.reduce((s, f) => s + f.calls.length, 0);
@@ -1501,6 +1515,10 @@ if (!BENCH) {
   await scenario("occlusion proxies (one box + one material, query hooks, end of the transparent list) + empty buckets (one never recorded) + skip_empty's off seam", {
     frames: 10, proxies: true, events: { hideAll: 3, showAll: 7, skipEmptyOff: 4, skipEmptyOn: 5 },
   }, { proxies: true, empty: true });
+  // ?drawExecSwitch arm (round 3, 2026-10-31): the world above has scene.environment set, so its lit
+  // built-in materials stay on the state-only path (refused "envMap"); the far-terrain ShaderMaterial
+  // clones and the unlit materials switch on one program. tests/draw_exec_switch.test.mjs is its own suite.
+  if (!process.env.DX_ONLY) check(`[switch] same-program switches executed across the ${SW_TOTAL.scenarios} scenarios`, SW_TOTAL.sps > 0, `${SW_TOTAL.sps} switches, ${SW_TOTAL.syncs} tracker syncs`);
 
   console.log(`\n${passed} passed / ${failed} failed`);
   process.exit(failed === 0 ? 0 : 1);

@@ -122,6 +122,51 @@
 // three's forced VAO re-setup has run), `__drawExec.off = true` (everything goes through
 // the chain; the VAO coherence hooks stay until three's belief matches GL again).
 //
+// SAME-PROGRAM SWITCH (`?drawExecSwitch`, round 3, 2026-10-31; DEFAULT OFF, needs `?drawExec`).
+// A SWITCH whose material resolves to the program three has bound (same program, same camera, same
+// render() call, another material) is ~5 us of three's JS in node (5.5-6.7 ms/frame at Holtburg
+// ultra on the 1070, ~434 switches/frame, ~10% of them program changes): the needsProgramChange
+// compares, the environment / colour-space derivation, the by-name uniform lookups (three's uniforms
+// objects are dictionary-mode: every lookup hashes), the fog colour-space conversion, the walk over
+// the whole upload list. The executor does what three r184's setProgram + state.setMaterial do for
+// exactly that case, in three's order:
+//   textures.resetTextureUnits(); the batching samplers (through their own setters, which allocate
+//   the units in three's order; batched_runs' run texture in force); receiveShadow; dfgLUT;
+//   toneMappingExposure; a ShaderMaterial's light uniforms marked clean; the fog uniforms (getRGB
+//   memoised on every input it reads); the material refresh (WebGLMaterials' Basic / Lambert / Toon /
+//   Phong / Standard paths write for write, ShaderMaterial: uniformsNeedUpdate = false); the upload
+//   list walked as WebGLUniforms.upload walks it — each container looked up by name ONCE per draw
+//   (a replaced container is seen), the refresh writing into those same containers — minus the ten
+//   light entries a same-camera, same-program refresh marks clean, through the program's own uniform
+//   objects, so their value caches (and uniform_bind_patch's pinned / UBO setters) decide every GL
+//   call as they do under three; the three matrix setters; state.setMaterial. Not written (no reader
+//   before three's next refresh rewrites them, which only a program change reaches): the values of
+//   uniforms the program does not use, and a built-in material's light needsUpdate flags.
+// Each needsProgramChange compare is proven false per draw from public state (material / object /
+// renderer / scene fields, three's materialProperties) plus two witnesses three itself leaves: the
+// lights state version (a lit material's lightsStateVersion after any setProgram of this render
+// call) and the light-probe-grid count (a program compiled without USE_LIGHT_PROBES_GRID, made
+// current by three in this render call, proves it 0 — shader sources observed at gl.shaderSource).
+// Everything not proven goes the existing SWITCH path, counted in `stats.switchRefused[reason]`
+// (`plan:*` once per material + program: type, shadow samplers, an unknown or probe-grid program).
+//   THREE'S MATERIAL TRACKER. three's private `_currentMaterialId` decides `refreshMaterial` at its
+// next setProgram; after a same-program switch it still names three's last material (`thrMat`)
+// while the GL state is the executor's (`curMat`, stock's tracker). It only matters for a hand-over
+// to three on three's camera whose material is one of the two (anything else refreshes in both
+// arms, and so does a program change); before such a hand-over the executor SYNCS three's tracker:
+// three's own setProgram for curMat (state-only, DEGEN group; on the hand-over's own object when it
+// draws curMat, else on the executor's last draw under curMat) with the program's named setter, the
+// upload list and state.setMaterial stubbed — no GL call, the tracker set — and three's getProgram
+// fenced (mp.programs.get: a compile or another program aborts it before any further write: the
+// hand-over then binds another program and refreshes in both arms); setProgram's version stamp and
+// getProgram's writes before its lookup are restored either way, so async_link and the hand-over's
+// own setProgram see stock's materialProperties. The window closes at three's next setProgram,
+// render() end, setRenderTarget, resetState, restore. What stays unproven — counted in
+// `stats.switchSyncFailed`, 0 in every test scenario: a sync for three's tracked material that
+// aborts (a render hook moved the switched material's program key mid-frame), and a sync whose
+// getProgram early-out cannot be proven (no lights witness yet, or the material's lights version
+// stale). In those cases three's tracker stays as it was.
+//
 // What this file does NOT do: S3.4, the Rust static list on R2's StaticDrawFrame
 // (residency §2.8). It does not preclude it: the run state the executor draws is
 // batched_runs' own (`batchedRunsBeforeDraw`), so a Rust-built list / run layout that
@@ -143,6 +188,206 @@ export function drawExecEnabled() {
  *  owned root too (rigid entity parts; SkinnedMesh / InstancedMesh stay refused by type). */
 export function drawExecRigsEnabled() {
   return rustFlag("drawExecRigs", true);
+}
+
+/** `?drawExecSwitch` (round 3, 2026-10-31) — DEFAULT OFF, needs `?drawExec`: the same-program material
+ *  switch executed (see SAME-PROGRAM SWITCH above). */
+export function drawExecSwitchEnabled() {
+  return rustFlag("drawExecSwitch", false);
+}
+
+// three r184 shapes the same-program switch replicates (setProgram's refresh path, WebGLMaterials,
+// getUnlitUniformColorSpace, getProgram's early-out). They live in closures the install cannot read:
+// tests/draw_exec_switch.test.mjs checks them against three.module.js / three.core.js, whitespace-
+// normalised; the install refuses the switch on any other three REVISION.
+export const THREE_SWITCH_PREMISES = Object.freeze([
+  // setProgram: the refresh block as the executor replays it (refreshProgram false, camera unchanged)
+  "if ( refreshMaterial || materialProperties.receiveShadow !== object.receiveShadow ) { materialProperties.receiveShadow = object.receiveShadow; p_uniforms.setValue( _gl, 'receiveShadow', object.receiveShadow ); } if ( ( material.isMeshStandardMaterial || material.isMeshLambertMaterial || material.isMeshPhongMaterial ) && material.envMap === null && scene.environment !== null ) { m_uniforms.envMapIntensity.value = scene.environmentIntensity; } // Set DFG LUT for physically-based materials if ( m_uniforms.dfgLUT !== undefined ) { m_uniforms.dfgLUT.value = getDFGLUT(); } if ( refreshMaterial ) { p_uniforms.setValue( _gl, 'toneMappingExposure', _this.toneMappingExposure ); if ( materialProperties.needsLights ) {",
+  "markUniformsLightsNeedsUpdate( m_uniforms, refreshLights ); } // refresh uniforms common to several materials if ( fog && material.fog === true ) { materials.refreshFogUniforms( m_uniforms, fog ); } materials.refreshMaterialUniforms( m_uniforms, material, _pixelRatio, _height, currentRenderState.state.transmissionRenderTarget[ camera.id ] ); // light probe volume if ( materialProperties.needsLights && materialProperties.lightProbeGrid ) {",
+  "WebGLUniforms.upload( _gl, getUniformList( materialProperties ), m_uniforms, textures ); } if ( material.isShaderMaterial && material.uniformsNeedUpdate === true ) {",
+  "p_uniforms.setValue( _gl, 'modelViewMatrix', object.modelViewMatrix ); p_uniforms.setValue( _gl, 'normalMatrix', object.normalMatrix ); p_uniforms.setValue( _gl, 'modelMatrix', object.matrixWorld );",
+  // setProgram: what runs before the refresh block for a same-program, same-camera material switch
+  "textures.resetTextureUnits(); const fog = scene.fog;",
+  "if ( materialProperties.needsLights ) { const objectVolume = findLightProbeGrid( currentRenderState.state.lightProbeGridArray, object ); if ( materialProperties.lightProbeGrid !== objectVolume ) { materialProperties.lightProbeGrid = objectVolume; refreshMaterial = true; } } if ( refreshProgram || _currentCamera !== camera ) {",
+  "if ( object.isBatchedMesh ) { p_uniforms.setOptional( _gl, object, 'batchingTexture' ); p_uniforms.setValue( _gl, 'batchingTexture', object._matricesTexture, textures ); p_uniforms.setOptional( _gl, object, 'batchingIdTexture' ); p_uniforms.setValue( _gl, 'batchingIdTexture', object._indirectTexture, textures ); p_uniforms.setOptional( _gl, object, 'batchingColorTexture' ); if ( object._colorsTexture !== null ) { p_uniforms.setValue( _gl, 'batchingColorTexture', object._colorsTexture, textures ); } }",
+  // the needsProgramChange chain, in order (each compare the executor proves false)
+  "if ( material.version === materialProperties.__version ) { if ( materialProperties.needsLights && ( materialProperties.lightsStateVersion !== lights.state.version ) ) { needsProgramChange = true; } else if ( materialProperties.outputColorSpace !== colorSpace ) { needsProgramChange = true; } else if ( object.isBatchedMesh && materialProperties.batching === false ) { needsProgramChange = true; } else if ( ! object.isBatchedMesh && materialProperties.batching === true ) { needsProgramChange = true; } else if ( object.isBatchedMesh && materialProperties.batchingColor === true && object.colorTexture === null ) { needsProgramChange = true; } else if ( object.isBatchedMesh && materialProperties.batchingColor === false && object.colorTexture !== null ) { needsProgramChange = true; } else if ( object.isInstancedMesh && materialProperties.instancing === false ) { needsProgramChange = true; } else if ( ! object.isInstancedMesh && materialProperties.instancing === true ) { needsProgramChange = true; } else if ( object.isSkinnedMesh && materialProperties.skinning === false ) { needsProgramChange = true; } else if ( ! object.isSkinnedMesh && materialProperties.skinning === true ) { needsProgramChange = true; }",
+  "} else if ( materialProperties.envMap !== envMap ) { needsProgramChange = true; } else if ( material.fog === true && materialProperties.fog !== fog ) { needsProgramChange = true; } else if ( materialProperties.numClippingPlanes !== undefined && ( materialProperties.numClippingPlanes !== clipping.numPlanes || materialProperties.numIntersection !== clipping.numIntersection ) ) { needsProgramChange = true; } else if ( materialProperties.vertexAlphas !== vertexAlphas ) { needsProgramChange = true; } else if ( materialProperties.vertexTangents !== vertexTangents ) { needsProgramChange = true; } else if ( materialProperties.morphTargets !== morphTargets ) { needsProgramChange = true; } else if ( materialProperties.morphNormals !== morphNormals ) { needsProgramChange = true; } else if ( materialProperties.morphColors !== morphColors ) { needsProgramChange = true; } else if ( materialProperties.toneMapping !== toneMapping ) { needsProgramChange = true; } else if ( materialProperties.morphTargetsCount !== morphTargetsCount ) { needsProgramChange = true; } else if ( !! materialProperties.lightProbeGrid !== ( currentRenderState.state.lightProbeGridArray.length > 0 ) ) { needsProgramChange = true; } } else { needsProgramChange = true; materialProperties.__version = material.version; }",
+  "const colorSpace = ( _currentRenderTarget === null ) ? _this.outputColorSpace : ( _currentRenderTarget.isXRRenderTarget === true ? _currentRenderTarget.texture.colorSpace : ColorManagement.workingColorSpace );",
+  "const environment = ( material.isMeshStandardMaterial || material.isMeshLambertMaterial || material.isMeshPhongMaterial ) ? scene.environment : null;",
+  "let toneMapping = NoToneMapping; if ( material.toneMapped ) { if ( _currentRenderTarget === null || _currentRenderTarget.isXRRenderTarget === true ) { toneMapping = _this.toneMapping; } }",
+  // getProgram: the writes before the program lookup (the sync fence restores them), the early-out
+  "materialProperties.environment = ( material.isMeshStandardMaterial || material.isMeshLambertMaterial || material.isMeshPhongMaterial ) ? scene.environment : null; materialProperties.fog = scene.fog; const usePMREM = material.isMeshStandardMaterial || ( material.isMeshLambertMaterial && ! material.envMap ) || ( material.isMeshPhongMaterial && ! material.envMap ); materialProperties.envMap = environments.get( material.envMap || materialProperties.environment, usePMREM ); materialProperties.envMapRotation = ( materialProperties.environment !== null && material.envMap === null ) ? scene.environmentRotation : material.envMapRotation; if ( programs === undefined ) {",
+  "let program = programs.get( programCacheKey ); if ( program !== undefined ) { // early out if program and light state is identical if ( materialProperties.currentProgram === program && materialProperties.lightsStateVersion === lightsStateVersion ) { updateCommonMaterialProperties( material, parameters ); return program; } } else {",
+  "materialProperties.lightProbeGrid = currentRenderState.state.lightProbeGridArray.length > 0; materialProperties.currentProgram = program; materialProperties.uniformsList = null;",
+  "parameters.numLightProbeGrids > 0 ? '#define USE_LIGHT_PROBES_GRID' : '',",
+  // the light uniforms markUniformsLightsNeedsUpdate toggles (the executor skips exactly these entries)
+  "uniforms.ambientLightColor.needsUpdate = value; uniforms.lightProbe.needsUpdate = value; uniforms.directionalLights.needsUpdate = value; uniforms.directionalLightShadows.needsUpdate = value; uniforms.pointLights.needsUpdate = value; uniforms.pointLightShadows.needsUpdate = value; uniforms.spotLights.needsUpdate = value; uniforms.spotLightShadows.needsUpdate = value; uniforms.rectAreaLights.needsUpdate = value; uniforms.hemisphereLights.needsUpdate = value;",
+  "static upload( gl, seq, values, textures ) { for ( let i = 0, n = seq.length; i !== n; ++ i ) { const u = seq[ i ], v = values[ u.id ]; if ( v.needsUpdate !== false ) { // note: always updating when .needsUpdate is undefined u.setValue( gl, v.value, textures ); } } }",
+  // WebGLMaterials (the copies below)
+  "function refreshTransformUniform( map, uniform ) { if ( map.matrixAutoUpdate === true ) { map.updateMatrix(); } uniform.value.copy( map.matrix ); } function refreshFogUniforms( uniforms, fog ) { fog.color.getRGB( uniforms.fogColor.value, getUnlitUniformColorSpace( renderer ) ); if ( fog.isFog ) { uniforms.fogNear.value = fog.near; uniforms.fogFar.value = fog.far; } else if ( fog.isFogExp2 ) { uniforms.fogDensity.value = fog.density; } }",
+  "if ( material.isNodeMaterial ) { material.uniformsNeedUpdate = false; } else if ( material.isMeshBasicMaterial ) { refreshUniformsCommon( uniforms, material ); } else if ( material.isMeshLambertMaterial ) { refreshUniformsCommon( uniforms, material ); if ( material.envMap ) { uniforms.envMapIntensity.value = material.envMapIntensity; } } else if ( material.isMeshToonMaterial ) { refreshUniformsCommon( uniforms, material ); refreshUniformsToon( uniforms, material ); } else if ( material.isMeshPhongMaterial ) { refreshUniformsCommon( uniforms, material ); refreshUniformsPhong( uniforms, material ); if ( material.envMap ) { uniforms.envMapIntensity.value = material.envMapIntensity; } } else if ( material.isMeshStandardMaterial ) { refreshUniformsCommon( uniforms, material ); refreshUniformsStandard( uniforms, material ); if ( material.isMeshPhysicalMaterial ) {",
+  "} else if ( material.isShaderMaterial ) { material.uniformsNeedUpdate = false; // #15581 } }",
+  "function refreshUniformsCommon( uniforms, material ) { uniforms.opacity.value = material.opacity; if ( material.color ) { uniforms.diffuse.value.copy( material.color ); } if ( material.emissive ) { uniforms.emissive.value.copy( material.emissive ).multiplyScalar( material.emissiveIntensity ); } if ( material.map ) { uniforms.map.value = material.map; refreshTransformUniform( material.map, uniforms.mapTransform ); } if ( material.alphaMap ) { uniforms.alphaMap.value = material.alphaMap; refreshTransformUniform( material.alphaMap, uniforms.alphaMapTransform ); } if ( material.bumpMap ) { uniforms.bumpMap.value = material.bumpMap; refreshTransformUniform( material.bumpMap, uniforms.bumpMapTransform ); uniforms.bumpScale.value = material.bumpScale; if ( material.side === BackSide ) { uniforms.bumpScale.value *= -1; } } if ( material.normalMap ) { uniforms.normalMap.value = material.normalMap; refreshTransformUniform( material.normalMap, uniforms.normalMapTransform ); uniforms.normalScale.value.copy( material.normalScale ); if ( material.side === BackSide ) { uniforms.normalScale.value.negate(); } }",
+  "if ( material.displacementMap ) { uniforms.displacementMap.value = material.displacementMap; refreshTransformUniform( material.displacementMap, uniforms.displacementMapTransform ); uniforms.displacementScale.value = material.displacementScale; uniforms.displacementBias.value = material.displacementBias; } if ( material.emissiveMap ) { uniforms.emissiveMap.value = material.emissiveMap; refreshTransformUniform( material.emissiveMap, uniforms.emissiveMapTransform ); } if ( material.specularMap ) { uniforms.specularMap.value = material.specularMap; refreshTransformUniform( material.specularMap, uniforms.specularMapTransform ); } if ( material.alphaTest > 0 ) { uniforms.alphaTest.value = material.alphaTest; } const materialProperties = properties.get( material ); const envMap = materialProperties.envMap; const envMapRotation = materialProperties.envMapRotation; if ( envMap ) {",
+  "if ( material.lightMap ) { uniforms.lightMap.value = material.lightMap; uniforms.lightMapIntensity.value = material.lightMapIntensity; refreshTransformUniform( material.lightMap, uniforms.lightMapTransform ); } if ( material.aoMap ) { uniforms.aoMap.value = material.aoMap; uniforms.aoMapIntensity.value = material.aoMapIntensity; refreshTransformUniform( material.aoMap, uniforms.aoMapTransform ); } }",
+  "function refreshUniformsPhong( uniforms, material ) { uniforms.specular.value.copy( material.specular ); uniforms.shininess.value = Math.max( material.shininess, 1e-4 ); // to prevent pow( 0.0, 0.0 ) } function refreshUniformsToon( uniforms, material ) { if ( material.gradientMap ) { uniforms.gradientMap.value = material.gradientMap; } }",
+  "function refreshUniformsStandard( uniforms, material ) { uniforms.metalness.value = material.metalness; if ( material.metalnessMap ) { uniforms.metalnessMap.value = material.metalnessMap; refreshTransformUniform( material.metalnessMap, uniforms.metalnessMapTransform ); } uniforms.roughness.value = material.roughness; if ( material.roughnessMap ) { uniforms.roughnessMap.value = material.roughnessMap; refreshTransformUniform( material.roughnessMap, uniforms.roughnessMapTransform ); } if ( material.envMap ) { //uniforms.envMap.value = material.envMap; // part of uniforms common uniforms.envMapIntensity.value = material.envMapIntensity; } }",
+]);
+// three.core.js (the getRGB target colour space the fog refresh uses)
+export const THREE_SWITCH_CORE_PREMISES = Object.freeze([
+  "function getUnlitUniformColorSpace( renderer ) { const currentRenderTarget = renderer.getRenderTarget(); if ( currentRenderTarget === null ) { // https://github.com/mrdoob/three.js/pull/23937#issuecomment-1111067398 return renderer.outputColorSpace; } // https://github.com/mrdoob/three.js/issues/27868 if ( currentRenderTarget.isXRRenderTarget === true ) { return currentRenderTarget.texture.colorSpace; } return ColorManagement.workingColorSpace; }",
+  "getRGB( target, colorSpace = ColorManagement.workingColorSpace ) { ColorManagement.workingToColorSpace( _color.copy( this ), colorSpace ); target.r = _color.r; target.g = _color.g; target.b = _color.b; return target; }",
+]);
+
+// three's light uniforms markUniformsLightsNeedsUpdate toggles (by name, on the material's uniforms).
+const LIGHT_IDS = Object.freeze(["ambientLightColor", "lightProbe", "directionalLights", "directionalLightShadows",
+  "pointLights", "pointLightShadows", "spotLights", "spotLightShadows", "rectAreaLights", "hemisphereLights"]);
+const LIGHT_ID_SET = new Set(LIGHT_IDS);
+const SAMPLER_TYPES = new Set([0x8b5e, 0x8b5f, 0x8b60, 0x8b62, 0x8d66, 0x8dc1, 0x8dc4, 0x8dc5, 0x8dca, 0x8dcb, 0x8dcc, 0x8dcf, 0x8dd2, 0x8dd3, 0x8dd4, 0x8dd7]);
+// the refresh paths the executor replays (WebGLMaterials.refreshMaterialUniforms' dispatch order)
+const K_BASIC = 1, K_LAMBERT = 2, K_TOON = 3, K_PHONG = 4, K_STANDARD = 5, K_SHADER = 6;
+const SYNC_ABORT = { hbDxSyncAbort: true };
+const EMPTY_LIST = Object.freeze([]);
+function hbDxSyncNoopSetValue() { /* the sync's p_uniforms.setValue: no GL */ }
+function hbDxSyncNoopSetMaterial() { /* the sync's state.setMaterial: no GL */ }
+
+// ---- WebGLMaterials (three r184) for the same-program switch -------------------------------------
+// The refresh three runs on a material switch, write for write, with each uniform addressed through
+// the container the upload walk looks up by name for this draw (C[ix.name]) instead of a second
+// by-name lookup (three's uniforms objects are in dictionary mode: every lookup hashes). A write to a
+// uniform the program does not use (not in its upload list) is dropped: three reads such a value only
+// in an upload, which only a refresh that rewrites it first can reach (a program change). Texture
+// matrices are still updated for every present map (Texture.updateMatrix is a public side effect).
+// THREE_SWITCH_PREMISES pins the originals. refreshUniformsCommon's envMap block is left out: the
+// switch proves materialProperties.envMap === null first, so three skips it too.
+const REFRESHED = Object.freeze(["opacity", "diffuse", "emissive", "map", "mapTransform", "alphaMap", "alphaMapTransform",
+  "bumpMap", "bumpMapTransform", "bumpScale", "normalMap", "normalMapTransform", "normalScale", "displacementMap",
+  "displacementMapTransform", "displacementScale", "displacementBias", "emissiveMap", "emissiveMapTransform", "specularMap",
+  "specularMapTransform", "alphaTest", "lightMap", "lightMapIntensity", "lightMapTransform", "aoMap", "aoMapIntensity",
+  "aoMapTransform", "metalness", "metalnessMap", "metalnessMapTransform", "roughness", "roughnessMap", "roughnessMapTransform",
+  "envMapIntensity", "specular", "shininess", "gradientMap", "fogColor", "fogNear", "fogFar", "fogDensity", "dfgLUT"]);
+/** Per plan: each refreshed uniform's index in the upload list, -1 when the program does not use it. */
+function refreshIndex(ids) {
+  const ix = Object.create(null);
+  for (const n of REFRESHED) ix[n] = ids.indexOf(n);
+  // a fixed-shape object for the hot path (named loads)
+  return Object.seal({ ...ix });
+}
+function refreshTransformIx(map, C, i) {
+  if (map.matrixAutoUpdate === true) {
+    map.updateMatrix();
+  }
+  if (i >= 0) C[i].value.copy(map.matrix);
+}
+function refreshCommonIx(C, ix, material) {
+  if (ix.opacity >= 0) C[ix.opacity].value = material.opacity;
+  if (material.color) {
+    if (ix.diffuse >= 0) C[ix.diffuse].value.copy(material.color);
+  }
+  if (material.emissive) {
+    if (ix.emissive >= 0) C[ix.emissive].value.copy(material.emissive).multiplyScalar(material.emissiveIntensity);
+  }
+  if (material.map) {
+    if (ix.map >= 0) C[ix.map].value = material.map;
+    refreshTransformIx(material.map, C, ix.mapTransform);
+  }
+  if (material.alphaMap) {
+    if (ix.alphaMap >= 0) C[ix.alphaMap].value = material.alphaMap;
+    refreshTransformIx(material.alphaMap, C, ix.alphaMapTransform);
+  }
+  if (material.bumpMap) {
+    if (ix.bumpMap >= 0) C[ix.bumpMap].value = material.bumpMap;
+    refreshTransformIx(material.bumpMap, C, ix.bumpMapTransform);
+    if (ix.bumpScale >= 0) {
+      const u = C[ix.bumpScale];
+      u.value = material.bumpScale;
+      if (material.side === THREE.BackSide) {
+        u.value *= -1;
+      }
+    }
+  }
+  if (material.normalMap) {
+    if (ix.normalMap >= 0) C[ix.normalMap].value = material.normalMap;
+    refreshTransformIx(material.normalMap, C, ix.normalMapTransform);
+    if (ix.normalScale >= 0) {
+      const u = C[ix.normalScale];
+      u.value.copy(material.normalScale);
+      if (material.side === THREE.BackSide) {
+        u.value.negate();
+      }
+    }
+  }
+  if (material.displacementMap) {
+    if (ix.displacementMap >= 0) C[ix.displacementMap].value = material.displacementMap;
+    refreshTransformIx(material.displacementMap, C, ix.displacementMapTransform);
+    if (ix.displacementScale >= 0) C[ix.displacementScale].value = material.displacementScale;
+    if (ix.displacementBias >= 0) C[ix.displacementBias].value = material.displacementBias;
+  }
+  if (material.emissiveMap) {
+    if (ix.emissiveMap >= 0) C[ix.emissiveMap].value = material.emissiveMap;
+    refreshTransformIx(material.emissiveMap, C, ix.emissiveMapTransform);
+  }
+  if (material.specularMap) {
+    if (ix.specularMap >= 0) C[ix.specularMap].value = material.specularMap;
+    refreshTransformIx(material.specularMap, C, ix.specularMapTransform);
+  }
+  if (material.alphaTest > 0) {
+    if (ix.alphaTest >= 0) C[ix.alphaTest].value = material.alphaTest;
+  }
+  // (materialProperties.envMap: null, proven — three's `if ( envMap ) { … }` is skipped)
+  if (material.lightMap) {
+    if (ix.lightMap >= 0) C[ix.lightMap].value = material.lightMap;
+    if (ix.lightMapIntensity >= 0) C[ix.lightMapIntensity].value = material.lightMapIntensity;
+    refreshTransformIx(material.lightMap, C, ix.lightMapTransform);
+  }
+  if (material.aoMap) {
+    if (ix.aoMap >= 0) C[ix.aoMap].value = material.aoMap;
+    if (ix.aoMapIntensity >= 0) C[ix.aoMapIntensity].value = material.aoMapIntensity;
+    refreshTransformIx(material.aoMap, C, ix.aoMapTransform);
+  }
+}
+/** WebGLMaterials.refreshMaterialUniforms for the kinds the switch takes (three's dispatch order). */
+function refreshMaterialIx(kind, C, ix, material) {
+  switch (kind) {
+    case K_BASIC:
+      refreshCommonIx(C, ix, material);
+      break;
+    case K_LAMBERT:
+      refreshCommonIx(C, ix, material);
+      if (material.envMap) { if (ix.envMapIntensity >= 0) C[ix.envMapIntensity].value = material.envMapIntensity; }
+      break;
+    case K_TOON:
+      refreshCommonIx(C, ix, material);
+      if (material.gradientMap) { if (ix.gradientMap >= 0) C[ix.gradientMap].value = material.gradientMap; }
+      break;
+    case K_PHONG:
+      refreshCommonIx(C, ix, material);
+      if (ix.specular >= 0) C[ix.specular].value.copy(material.specular);
+      if (ix.shininess >= 0) C[ix.shininess].value = Math.max(material.shininess, 1e-4); // to prevent pow( 0.0, 0.0 )
+      if (material.envMap) { if (ix.envMapIntensity >= 0) C[ix.envMapIntensity].value = material.envMapIntensity; }
+      break;
+    case K_STANDARD:
+      refreshCommonIx(C, ix, material);
+      // refreshUniformsStandard
+      if (ix.metalness >= 0) C[ix.metalness].value = material.metalness;
+      if (material.metalnessMap) {
+        if (ix.metalnessMap >= 0) C[ix.metalnessMap].value = material.metalnessMap;
+        refreshTransformIx(material.metalnessMap, C, ix.metalnessMapTransform);
+      }
+      if (ix.roughness >= 0) C[ix.roughness].value = material.roughness;
+      if (material.roughnessMap) {
+        if (ix.roughnessMap >= 0) C[ix.roughnessMap].value = material.roughnessMap;
+        refreshTransformIx(material.roughnessMap, C, ix.roughnessMapTransform);
+      }
+      if (material.envMap) { if (ix.envMapIntensity >= 0) C[ix.envMapIntensity].value = material.envMapIntensity; }
+      break;
+    case K_SHADER:
+      material.uniformsNeedUpdate = false; // #15581
+      break;
+    default:
+      break;
+  }
 }
 
 // three r184 renderBufferDirect / renderMultiDraw shapes the executor relies on,
@@ -248,6 +493,8 @@ function newRecord() {
     vao: null, vTok: null, vGen: 0, type: 0, bpe: 1, shadowMaps: false,
     combo: 0, comboE: 0, shader: false, epoch: 0, hits: 0,
     churn: 0, cool: 0,
+    // ?drawExecSwitch: the switch plan (buildPlan), or its refusal for this upload list
+    sw: null, swNo: null, swNoList: null, swHits: 0,
   };
 }
 // A record whose material version moves draw after draw (three's transparent DoubleSide
@@ -312,6 +559,9 @@ export function installDrawExec(renderer, getMainScene, opts = {}) {
   let multiDraw = false;
   let textures = null; // three's WebGLTextures (captured from a batching sampler setter)
   let texSet0 = null;  // its own setTexture2D at capture (the cached batching binds stand in for it only)
+  // ?drawExecSwitch (SAME-PROGRAM SWITCH above): only on the three revision its copies were checked against.
+  const swWanted = opts.switch === true || (opts.switch !== false && drawExecSwitchEnabled());
+  const swOn = swWanted && THREE.REVISION === "184";
 
   // ---- per-session state ------------------------------------------------------------------
   // Structural refusals are memoized on the object: one sentinel per reason (per executor),
@@ -330,6 +580,13 @@ export function installDrawExec(renderer, getMainScene, opts = {}) {
     vaoBinds: 0, vaoSuppressed: 0, vaoFixes: 0, vaoFixLate: 0, texDemoted: 0,
     restores: 0, resets: 0, errors: 0,
     verifyChecks: 0, verifyFails: 0,
+    // ?drawExecSwitch: executed same-program switches, the switches left to the state-only path (by
+    // reason), the plans built, three-tracker syncs before a hand-over (Own: the hand-over draws the
+    // switched material; Tracked: it draws three's tracked one), syncs the getProgram fence aborted
+    // (exact for Own: the hand-over then binds another program), and syncs that could not make
+    // three's tracker exact (the documented residual; 0 expected)
+    switchOn: swOn, sameProgramSwitches: 0, switchRefused: Object.create(null), switchPlans: 0,
+    switchSyncs: 0, switchSyncsOwn: 0, switchSyncsTracked: 0, switchSyncAborts: 0, switchSyncFailed: 0,
     invalid: Object.create(null),
     refusedRec: Object.create(null), // per (object, material) refusals, by reason
     /** Every draw handed to the chain unexecuted: structural refusals (counted on their
@@ -364,6 +621,18 @@ export function installDrawExec(renderer, getMainScene, opts = {}) {
   // installed: L1 / per-camera / three's rebuild, all JS) ran in between: WebGLState holds
   // exactly what it would set.
   let smMat = null, smObj = null, smSerial = -1, smDraw = -1, smFF = -1;
+  // ?drawExecSwitch — three's material tracker (SAME-PROGRAM SWITCH above): `thrMat` is the material
+  // of three's last setProgram (its `_currentMaterialId`), `curMat` the one whose refresh GL holds
+  // (stock's tracker); null after three resets it (render() end, setRenderTarget) or the executor
+  // stops tracking (resetState, restore). They differ only after a same-program switch, until three's
+  // next setProgram. `swObj` / `swScene`: the last draw the executor issued under curMat (the sync's
+  // object when the hand-over is three's tracked material). Witnesses for the switch's proof: `lsvW`,
+  // the lights state version a lit material carries after a setProgram in render call `lsvSerial`;
+  // `dfgLut`, three's DFG LUT (the module-level texture setProgram writes into dfgLUT uniforms).
+  let thrMat = null, curMat = null, swObj = null, swScene = null;
+  let lsvW = -1, lsvSerial = -1, dfgLut = null;
+  let rcEver = false; // renderer clipping ever on in this session (three's clipping plane counts then unknown)
+  let syncing = false, syncProg = null; // inside a tracker sync: three must keep this program
   const O3D_BEFORE = THREE.Object3D.prototype.onBeforeRender;
   const O3D_AFTER = THREE.Object3D.prototype.onAfterRender;
   const MAT_BEFORE = THREE.Material.prototype.onBeforeRender;
@@ -514,6 +783,22 @@ export function installDrawExec(renderer, getMainScene, opts = {}) {
   hook("drawElementsInstanced", (orig) => function (m, c, t, o, n) { if (armed) lateFix(); if (observing) { drawCalls++; lastDrawKind = 4; lastDrawType = t; } return orig.call(this, m, c, t, o, n); });
   hook("drawRangeElements", (orig) => function (m, s, e, c, t, o) { if (armed) lateFix(); if (observing) { drawCalls++; lastDrawKind = 5; lastDrawType = t; } return orig.call(this, m, s, e, c, t, o); });
   const hDE = gl.drawElements, hDA = gl.drawArrays; // the executor's own hooks (drawOnly calls past them)
+  // ?drawExecSwitch: which GL programs three built, and which with a light probe grid (the define
+  // three's prefix carries when currentRenderState's lightProbeGridArray was non-empty at getProgram).
+  // Pure observers on program creation; programs linked before the install stay unknown (refused).
+  const knownProgs = new WeakSet(), probeProgs = new WeakSet(), probeShaders = new WeakSet();
+  if (swOn) {
+    // (transparent wrappers: the wrapped function's own markers are copied — uniform_bind_patch tells
+    // its own shaderSource wrapper by `__hbLightUbo` and would inject its define twice otherwise)
+    hook("shaderSource", (orig) => Object.assign(function hbDxShaderSource(s, source) {
+      if (typeof source === "string" && source.includes("#define USE_LIGHT_PROBES_GRID")) probeShaders.add(s);
+      return orig.call(this, s, source);
+    }, orig));
+    hook("attachShader", (orig) => Object.assign(function hbDxAttachShader(p, s) {
+      if (p !== null && typeof p === "object") { knownProgs.add(p); if (probeShaders.has(s)) probeProgs.add(p); }
+      return orig.call(this, p, s);
+    }, orig));
+  }
 
   // WEBGL_multi_draw's instanced entry points as the executor hooked them (drawOnly calls past its
   // own hook while it is the installed one; batched_runs patches only the non-instanced pair).
@@ -584,6 +869,8 @@ export function installDrawExec(renderer, getMainScene, opts = {}) {
     if (!s || s.__hbDrawExec === true) return;
     const up = s.useProgram;
     s.useProgram = function hbDxUseProgram(program) {
+      // (a tracker sync whose setProgram would move the program: aborted before any GL call)
+      if (syncing && program !== syncProg) throw SYNC_ABORT;
       spCount++;
       spLastProg = program;
       return up.call(this, program);
@@ -596,14 +883,21 @@ export function installDrawExec(renderer, getMainScene, opts = {}) {
 
   // ---- renderer hooks: the serial ----------------------------------------------------------
   const render0 = renderer.render;
+  // three resets its material tracker at the end of every render() that ran (info.render.frame moved:
+  // the early returns come before the bump) and of every setRenderTarget: so does the executor.
+  const trackerReset = () => { thrMat = null; curMat = null; swObj = null; swScene = null; };
   renderer.render = function hbDxRender() {
     serial++;
     asyncOn = asyncApi !== null && !asyncApi.off;
     if (renderer.renderLists !== hookedLists) hookRenderLists(renderer.renderLists);
-    try { return render0.apply(this, arguments); } finally { serial++; }
+    const f0 = info.render.frame;
+    try { return render0.apply(this, arguments); } finally { serial++; if (info.render.frame !== f0) trackerReset(); }
   };
   const srt0 = renderer.setRenderTarget;
-  renderer.setRenderTarget = function hbDxSetRenderTarget() { serial++; return srt0.apply(this, arguments); };
+  renderer.setRenderTarget = function hbDxSetRenderTarget() {
+    serial++;
+    try { return srt0.apply(this, arguments); } finally { trackerReset(); }
+  };
   const compile0 = renderer.compile;
   if (typeof compile0 === "function") renderer.compile = function hbDxCompile() { serial++; return compile0.apply(this, arguments); };
   const compileAsync0 = renderer.compileAsync;
@@ -612,6 +906,9 @@ export function installDrawExec(renderer, getMainScene, opts = {}) {
   if (typeof reset0 === "function") {
     renderer.resetState = function hbDxResetState() {
       serial++; recEpoch++; forcePending = true; stats.resets += 1;
+      // (three keeps its material tracker but forgets the bound program: its next setProgram binds
+      // one and refreshes whatever the tracker says — no hand-over after this is tracker-sensitive)
+      trackerReset(); if (swOn) lastGlProg = null;
       return reset0.apply(this, arguments);
     };
   }
@@ -621,6 +918,7 @@ export function installDrawExec(renderer, getMainScene, opts = {}) {
     T = null; G = null; armed = false; swapCur = null;
     textures = null;
     lastGlProg = null; lastMat = null; lastCam = null;
+    trackerReset(); lsvSerial = -1;
     info = renderer.info;
     state = renderer.state;
     hookState(state);
@@ -834,6 +1132,7 @@ export function installDrawExec(renderer, getMainScene, opts = {}) {
     rec.shader = material.isShaderMaterial === true;
     rec.epoch = recEpoch;
     rec.hits = 0;
+    rec.sw = null; rec.swNo = null; rec.swNoList = null;
     if (!batched) {
       // Self-check: the draw three issued is the one the executor would compute.
       const d = plainDrawArgs(rec, geometry, group);
@@ -925,23 +1224,120 @@ export function installDrawExec(renderer, getMainScene, opts = {}) {
     return true;
   };
 
+  // ---- three's material tracker (?drawExecSwitch) -------------------------------------------
+  // After three's own setProgram: its tracker and GL hold the hand-over's material; a lit material's
+  // lightsStateVersion is then the render state's (both branches of setProgram leave it so).
+  const afterThreeSw = (material, scene) => {
+    thrMat = material === undefined ? null : material;
+    curMat = thrMat;
+    if (lsvSerial !== serial && thrMat !== null && scene === mainScene && mainScene !== null) {
+      const mp = renderer.properties.get(thrMat);
+      if (mp.needsLights === true) { lsvW = mp.lightsStateVersion; lsvSerial = serial; }
+    }
+  };
+  /**
+   * Make three's material tracker stock's (curMat) before a hand-over whose setProgram could keep the
+   * program with X ∈ {curMat, thrMat} on three's camera (anything else refreshes in both arms). three's
+   * own setProgram for curMat, state-only (DEGEN), on the hand-over's object when X is curMat (three
+   * then derives exactly what the hand-over will) or on the executor's last draw under curMat, with:
+   * the program's named setter and the upload list stubbed (no uniform GL call), state.setMaterial
+   * stubbed, getProgram fenced (mp.programs.get: a compile or another program — the hand-over then
+   * binds another program and refreshes in both arms — or an early-out it cannot prove, abort before
+   * any further write; the writes before the lookup are restored), and the materialProperties fields
+   * its refresh moves (receiveShadow, uniformsNeedUpdate) restored. GL-silent; the tracker is curMat.
+   */
+  const syncTracker = (camera, scene, geometry, X, object) => {
+    const F = curMat;
+    const caseB = X === F;
+    const sObj = caseB ? object : swObj;
+    const sScene = caseB ? scene : swScene;
+    if (F === null || sObj === null || sObj === undefined) { stats.switchSyncFailed += 1; return; }
+    const sGeo = sObj.geometry;
+    const mpF = renderer.properties.get(F);
+    const prog = mpF.currentProgram;
+    if (!prog || prog.program !== lastGlProg || mpF.programs === undefined) {
+      // (curMat moved off the bound program: three binds another one for it — case b refreshes in both arms)
+      if (!caseB) stats.switchSyncFailed += 1;
+      return;
+    }
+    const env = (F.isMeshStandardMaterial || F.isMeshLambertMaterial || F.isMeshPhongMaterial) && sScene !== null && sScene !== undefined && sScene.isScene === true ? sScene.environment : null;
+    if (F.envMap || env) { stats.switchSyncFailed += 1; return; } // (environments.get could do PMREM work)
+    const pu = prog.getUniforms();
+    const ownSet = Object.prototype.hasOwnProperty.call(pu, "setValue") ? pu.setValue : undefined;
+    const list0 = mpF.uniformsList, rs0 = mpF.receiveShadow, ver0 = mpF.__version, unu0 = F.uniformsNeedUpdate;
+    const env0 = mpF.environment, fog0 = mpF.fog, envMap0 = mpF.envMap, envRot0 = mpF.envMapRotation;
+    const progs = mpF.programs;
+    const get0 = progs.get;
+    const sm0 = state.setMaterial;
+    const lsvOk = lsvSerial === serial;
+    let unproven = false;
+    progs.get = function hbDxSyncProgramsGet(key) {
+      const p = get0.call(this, key);
+      if (p === undefined || p !== mpF.currentProgram) throw SYNC_ABORT; // compile / another program
+      if (!lsvOk || mpF.lightsStateVersion !== lsvW) { unproven = true; throw SYNC_ABORT; } // early-out unproven
+      return p; // getProgram's early-out: same program, no write but updateCommonMaterialProperties'
+    };
+    pu.setValue = hbDxSyncNoopSetValue;
+    mpF.uniformsList = EMPTY_LIST;
+    state.setMaterial = hbDxSyncNoopSetMaterial;
+    syncing = true; syncProg = lastGlProg;
+    let aborted = false;
+    try {
+      three.call(renderer, camera, sScene, sGeo, F, sObj, DEGEN);
+    } catch (e) {
+      if (e !== SYNC_ABORT) throw e;
+      aborted = true;
+    } finally {
+      syncing = false; syncProg = null;
+      if (ownSet === undefined) delete pu.setValue; else pu.setValue = ownSet;
+      if (mpF.uniformsList === EMPTY_LIST) mpF.uniformsList = list0;
+      mpF.receiveShadow = rs0;
+      if (F.uniformsNeedUpdate !== unu0) F.uniformsNeedUpdate = unu0;
+      state.setMaterial = sm0;
+      delete progs.get;
+      // getProgram's writes before its lookup and setProgram's version stamp go back in every case:
+      // the hand-over's own setProgram (and async_link's decision before it, which reads __version)
+      // must find the materialProperties stock has — the sync only moves three's tracker. (An
+      // early-out's updateCommonMaterialProperties rewrites key-determined fields with equal values.)
+      mpF.__version = ver0; mpF.environment = env0; mpF.fog = fog0; mpF.envMap = envMap0; mpF.envMapRotation = envRot0;
+    }
+    if (!aborted) {
+      thrMat = F; stats.switchSyncs += 1;
+      if (caseB) stats.switchSyncsOwn += 1; else stats.switchSyncsTracked += 1;
+      return;
+    }
+    stats.switchSyncAborts += 1;
+    if (unproven || !caseB) stats.switchSyncFailed += 1;
+  };
+  const preHand = (camera, scene, geometry, material, object) => {
+    if (camera === lastCam && material !== null && material !== undefined && (material === curMat || material === thrMat)) syncTracker(camera, scene, geometry, material, object);
+  };
+
   // ---- hand-overs to three -----------------------------------------------------------------
-  const afterThree = (sp0, material, camera, object) => {
-    if (spCount !== sp0) { lastGlProg = spLastProg; lastMat = material; lastCam = camera; lastSerial = serial; smMat = material; smObj = object; smSerial = serial; smDraw = stats.draws; smFF = -1; texSnap = texEpoch; }
+  const afterThree = (sp0, material, camera, object, scene) => {
+    if (spCount !== sp0) {
+      lastGlProg = spLastProg; lastMat = material; lastCam = camera; lastSerial = serial; smMat = material; smObj = object; smSerial = serial; smDraw = stats.draws; smFF = -1; texSnap = texEpoch;
+      if (swOn) afterThreeSw(material, scene);
+    }
   };
   const passThrough = (self, camera, scene, geometry, material, object, group) => {
+    if (thrMat !== curMat) preHand(camera, scene, geometry, material, object);
     const sp0 = spCount;
     if (T !== G) armHandover();
     try {
       return top.call(self, camera, scene, geometry, material, object, group);
     } finally {
       if (swapCur !== null || armed) endHandover();
-      if (spCount !== sp0) { lastGlProg = spLastProg; lastMat = material; lastCam = camera; lastSerial = serial; smMat = material; smObj = object; smSerial = serial; smDraw = stats.draws; smFF = -1; texSnap = texEpoch; }
+      if (spCount !== sp0) {
+        lastGlProg = spLastProg; lastMat = material; lastCam = camera; lastSerial = serial; smMat = material; smObj = object; smSerial = serial; smDraw = stats.draws; smFF = -1; texSnap = texEpoch;
+        if (swOn) afterThreeSw(material, scene);
+      }
     }
   };
   /** Full chain + (re)record. */
   const fullAndRecord = (self, rec, camera, scene, geometry, material, object, group) => {
     stats.full += 1;
+    if (thrMat !== curMat) preHand(camera, scene, geometry, material, object);
     const d0 = drawCalls;
     const sp0 = spCount;
     if (T !== G) armHandover();
@@ -951,7 +1347,7 @@ export function installDrawExec(renderer, getMainScene, opts = {}) {
     } finally {
       observing = false;
       if (swapCur !== null || armed) endHandover();
-      afterThree(sp0, material, camera, object);
+      afterThree(sp0, material, camera, object, scene);
     }
     if (drawCalls !== d0 + 1 || spCount === sp0) return; // deferred / skipped / not a single draw
     if (forcePending) { forcePending = false; return; } // three's forced re-setup ran; record next time
@@ -960,6 +1356,7 @@ export function installDrawExec(renderer, getMainScene, opts = {}) {
   };
   /** three's own renderBufferDirect, the batched_runs state in force (the executor already did its part). */
   const threeDirect = (self, st, pending, camera, scene, geometry, material, object, group) => {
+    if (thrMat !== curMat) preHand(camera, scene, geometry, material, object);
     const sp0 = spCount;
     // The degenerate state-only call returns before three's setup: nothing to arm.
     if (T !== G && group !== DEGEN) armHandover();
@@ -967,7 +1364,7 @@ export function installDrawExec(renderer, getMainScene, opts = {}) {
       return batchedRunsCall(three, self, st, pending, camera, scene, geometry, material, object, group);
     } finally {
       if (swapCur !== null || armed) endHandover();
-      afterThree(sp0, material, camera, object);
+      afterThree(sp0, material, camera, object, scene);
     }
   };
 
@@ -1027,6 +1424,190 @@ export function installDrawExec(renderer, getMainScene, opts = {}) {
       if (vao && vao !== G) ok = false;
     } catch (_) { /* a context without the queries: the JS checks stand */ }
     if (!ok) stats.verifyFails += 1;
+  };
+
+  // ---- the same-program switch (?drawExecSwitch; SAME-PROGRAM SWITCH above) ---------------------
+  const swRefuse = (why) => { const o = stats.switchRefused; o[why] = (o[why] || 0) + 1; return false; };
+  const planCache = new WeakMap(); // three's uniformsList (per material + program) -> plan | refusal
+  /** A record's switch plan: three's upload list as a same-program switch walks it, or a refusal. */
+  const buildPlan = (rec, material, mp) => {
+    let kind = 0;
+    if (material.isNodeMaterial === true) return "plan:materialType";
+    if (material.isRawShaderMaterial === true) return "plan:raw";
+    if (material.isMeshBasicMaterial) kind = K_BASIC;
+    else if (material.isMeshLambertMaterial) kind = K_LAMBERT;
+    else if (material.isMeshToonMaterial) kind = K_TOON;
+    else if (material.isMeshPhongMaterial) kind = K_PHONG;
+    else if (material.isMeshStandardMaterial) { if (material.isMeshPhysicalMaterial) return "plan:physical"; kind = K_STANDARD; }
+    else if (material.isMeshMatcapMaterial || material.isMeshDepthMaterial || material.isMeshDistanceMaterial || material.isMeshNormalMaterial
+      || material.isLineBasicMaterial || material.isPointsMaterial || material.isSpriteMaterial || material.isShadowMaterial) return "plan:materialType";
+    else if (material.isShaderMaterial) kind = K_SHADER;
+    else return "plan:materialType";
+    // (lit programs with shadow samplers re-bind them per draw from the lights state: left to three)
+    if (rec.shadowMaps) return "plan:shadowMaps";
+    if (!knownProgs.has(rec.glProgram)) return "plan:programUnknown";
+    if (probeProgs.has(rec.glProgram)) return "plan:lightProbeGrid";
+    const list = mp.uniformsList;
+    if (!Array.isArray(list)) return "plan:uniformsList";
+    const lit = mp.needsLights === true;
+    const ups = [], ids = [];
+    let sampler = null;
+    for (let i = 0; i < list.length; i++) {
+      const u = list[i];
+      if (lit && LIGHT_ID_SET.has(u.id)) continue; // marked clean right before the walk: upload skips them
+      ups.push(u); ids.push(u.id);
+      if (sampler === null && SAMPLER_TYPES.has(u.type)) sampler = u;
+    }
+    if (textures === null && sampler !== null) armTexturesCapture(sampler);
+    // three's DFG LUT (setProgram just wrote it into every dfgLUT uniform it refreshed)
+    const d = mp.uniforms.dfgLUT;
+    if (dfgLut === null && d !== undefined && d !== null && d.value && d.value.isDataTexture === true && d.value.name === "DFG_LUT") dfgLut = d.value;
+    stats.switchPlans += 1;
+    // C: this draw's containers, looked up by name once (the walk's own lookups), shared by the refresh
+    return { list, m: mp.uniforms, pu: rec.pu, kind, ups, ids, C: new Array(ids.length).fill(null), ix: refreshIndex(ids), uTME: rec.pu.map.toneMappingExposure };
+  };
+  /** three r184's needsProgramChange for this draw, each compare: null when all are false. */
+  const keepProof = (rec, mp, material, object, scene) => {
+    if (material.version !== mp.__version) return "version";
+    if (mp.needsLights && mp.lightsStateVersion !== lsvW) return "lightsState";
+    const rt = renderer.getRenderTarget();
+    const xr = rt !== null && rt.isXRRenderTarget === true;
+    const cs = rt === null ? renderer.outputColorSpace : (xr ? rt.texture.colorSpace : THREE.ColorManagement.workingColorSpace);
+    if (mp.outputColorSpace !== cs) return "colorSpace";
+    if (object.isBatchedMesh) {
+      if (mp.batching === false) return "batching";
+      if (mp.batchingColor === true && object.colorTexture === null) return "batchingColor";
+      if (mp.batchingColor === false && object.colorTexture !== null) return "batchingColor";
+    } else if (mp.batching === true) return "batching";
+    if (object.isInstancedMesh || mp.instancing === true) return "instancing";
+    if (object.isSkinnedMesh || mp.skinning === true) return "skinning";
+    const env = (material.isMeshStandardMaterial || material.isMeshLambertMaterial || material.isMeshPhongMaterial) ? scene.environment : null;
+    const envTex = material.envMap || env;
+    // (environments.get: null for no texture; anything else is PMREM / cube state the executor does not model)
+    if (envTex !== null && envTex !== undefined) return "envMap";
+    if (mp.envMap !== null) return "envMap";
+    if (material.fog === true && mp.fog !== scene.fog) return "fog";
+    // (three's clipping plane counts are 0 for a session that never clipped; unknown after)
+    if (mp.numClippingPlanes !== undefined && (rcEver || mp.numClippingPlanes !== 0 || mp.numIntersection !== 0)) return "clipping";
+    // (rec.vA / rec.vT: setProgram's vertexAlphas / vertexTangents, re-derived by recInvalid this draw)
+    if (mp.vertexAlphas !== rec.vA || mp.vertexTangents !== rec.vT) return "vertexAttributes";
+    if (mp.morphTargets !== false || mp.morphNormals !== false || mp.morphColors !== false || mp.morphTargetsCount !== 0) return "morph";
+    const tm = material.toneMapped ? ((rt === null || xr) ? renderer.toneMapping : THREE.NoToneMapping) : THREE.NoToneMapping;
+    if (mp.toneMapping !== tm) return "toneMapping";
+    // (lightProbeGridArray is empty in this render call: the bound program has no probe grid and three
+    // bound it in this call — buildPlan's probeProgs + the caller's lastSerial)
+    if (mp.lightProbeGrid) return "lightProbeGrid";
+    return null;
+  };
+  // refreshFogUniforms, its getRGB memoised on every input it reads (fog colour, target colour space,
+  // ColorManagement's switch and working space): the same three numbers, without the conversion.
+  let fcR = NaN, fcG = NaN, fcB = NaN, fcCS = null, fcEn = null, fcW = null, foR = 0, foG = 0, foB = 0;
+  const fogScratch = new THREE.Color();
+  const refreshFogIx = (C, ix, fog) => {
+    if (ix.fogColor >= 0) {
+      const rt = renderer.getRenderTarget();
+      const CM = THREE.ColorManagement;
+      const cs = rt === null ? renderer.outputColorSpace : (rt.isXRRenderTarget === true ? rt.texture.colorSpace : CM.workingColorSpace);
+      const c = fog.color;
+      if (c.r !== fcR || c.g !== fcG || c.b !== fcB || cs !== fcCS || CM.enabled !== fcEn || CM.workingColorSpace !== fcW) {
+        c.getRGB(fogScratch, cs);
+        fcR = c.r; fcG = c.g; fcB = c.b; fcCS = cs; fcEn = CM.enabled; fcW = CM.workingColorSpace;
+        foR = fogScratch.r; foG = fogScratch.g; foB = fogScratch.b;
+      }
+      const t = C[ix.fogColor].value;
+      t.r = foR; t.g = foG; t.b = foB;
+    }
+    if (fog.isFog) {
+      if (ix.fogNear >= 0) C[ix.fogNear].value = fog.near;
+      if (ix.fogFar >= 0) C[ix.fogFar].value = fog.far;
+    } else if (fog.isFogExp2) {
+      if (ix.fogDensity >= 0) C[ix.fogDensity].value = fog.density;
+    }
+  };
+  /**
+   * The draw's setProgram + state.setMaterial when its material differs from the bound one but its
+   * program is the bound one (same render call, same camera): returns false (refusal counted, nothing
+   * done) or true with exactly three's calls issued, in three's order.
+   */
+  const sameProgramSwitch = (rec, scene, material, object, st) => {
+    const mp = rec.mp;
+    if (mp.currentProgram !== rec.program) return swRefuse("program");
+    let plan = rec.sw;
+    if (plan === null || plan.list !== mp.uniformsList || plan.m !== mp.uniforms) {
+      const list = mp.uniformsList;
+      if (rec.swNo !== null && rec.swNoList === list) return swRefuse(rec.swNo);
+      // one plan per (material, program): three's upload list is that pair's own array
+      let r = list !== null && typeof list === "object" ? planCache.get(list) : undefined;
+      if (r === undefined || (typeof r !== "string" && (r.m !== mp.uniforms || r.pu !== rec.pu))) {
+        r = buildPlan(rec, material, mp);
+        if (list !== null && typeof list === "object") planCache.set(list, r);
+      }
+      if (typeof r === "string") { rec.sw = null; rec.swNo = r; rec.swNoList = list; return swRefuse(r); }
+      plan = r; rec.sw = r; rec.swNo = null;
+    }
+    if (textures === null) return swRefuse("noTextures");
+    if (mp.needsLights && lsvSerial !== serial) return swRefuse("noLightsWitness");
+    const why = keepProof(rec, mp, material, object, scene);
+    if (why !== null) return swRefuse(why);
+    if (object.isBatchedMesh && (object.batchingTexture !== undefined || object.batchingIdTexture !== undefined || object.batchingColorTexture !== undefined)) return swRefuse("setOptional");
+    const m = plan.m, ix = plan.ix;
+    if (ix.dfgLUT >= 0 && dfgLut === null) return swRefuse("noDfg");
+    // ---- three r184 setProgram, this case, call for call (no GL call and no write above) ----------
+    stats.sameProgramSwitches += 1;
+    rec.swHits += 1;
+    textures.resetTextureUnits();
+    if (mp.needsLights && mp.lightProbeGrid !== null) mp.lightProbeGrid = null; // findLightProbeGrid([], object)
+    // (camera uniforms: same program, same camera — none; shadow samplers: refused; skinning / morph: none)
+    if (rec.batched) {
+      rec.b0.setValue(gl, object._matricesTexture, textures);
+      rec.b1.setValue(gl, st !== null ? st.tex : object._indirectTexture, textures); // (batched_runs' run texture in force)
+      if (object._colorsTexture !== null && rec.b2 !== undefined) rec.b2.setValue(gl, object._colorsTexture, textures);
+    }
+    mp.receiveShadow = object.receiveShadow;
+    if (rec.uRS !== undefined) rec.uRS.setValue(gl, object.receiveShadow);
+    // (envMapIntensity from scene.environment: the proof has the environment null)
+    // the upload list's containers, by name, once (three's walk looks each up; the refresh writes them)
+    const ups = plan.ups, ids = plan.ids, C = plan.C;
+    for (let i = 0; i < ids.length; i++) C[i] = m[ids[i]];
+    if (ix.dfgLUT >= 0) C[ix.dfgLUT].value = dfgLut;
+    // refreshMaterial
+    if (plan.uTME !== undefined) plan.uTME.setValue(gl, renderer.toneMappingExposure);
+    if (mp.needsLights && plan.kind === K_SHADER) {
+      // markUniformsLightsNeedsUpdate( m_uniforms, false ): camera and program unchanged. (A built-in
+      // material's light flags are read only by uploads three marks them right before; a ShaderMaterial's
+      // also by its uniformsNeedUpdate upload: written for those.)
+      m.ambientLightColor.needsUpdate = false;
+      m.lightProbe.needsUpdate = false;
+      m.directionalLights.needsUpdate = false;
+      m.directionalLightShadows.needsUpdate = false;
+      m.pointLights.needsUpdate = false;
+      m.pointLightShadows.needsUpdate = false;
+      m.spotLights.needsUpdate = false;
+      m.spotLightShadows.needsUpdate = false;
+      m.rectAreaLights.needsUpdate = false;
+      m.hemisphereLights.needsUpdate = false;
+    }
+    const fog = scene.fog;
+    if (fog && material.fog === true) refreshFogIx(C, ix, fog);
+    refreshMaterialIx(plan.kind, C, ix, material);
+    // WebGLUniforms.upload( gl, uniformsList, m_uniforms, textures ) — the light entries are clean
+    for (let i = 0; i < ups.length; i++) {
+      const v = C[i];
+      if (v.needsUpdate !== false) ups[i].setValue(gl, v.value, textures);
+      C[i] = null; // (no container kept past the draw)
+    }
+    // (ShaderMaterial: uniformsNeedUpdate is false after the refresh; no sprite; no UBO — refused)
+    if (rec.uMV !== undefined) rec.uMV.setValue(gl, object.modelViewMatrix);
+    if (rec.uNM !== undefined) rec.uNM.setValue(gl, object.normalMatrix);
+    if (rec.uMM !== undefined) rec.uMM.setValue(gl, object.matrixWorld);
+    // renderBufferDirect: state.setMaterial( material, frontFaceCW )
+    const ff = object.matrixWorld.determinant() < 0;
+    state.setMaterial(material, ff);
+    smMat = material; smObj = object; smSerial = serial; smDraw = stats.draws; smFF = ff ? 1 : 0;
+    // GL now holds this material's refresh (stock's tracker); three's tracker is still thrMat
+    lastMat = material; curMat = material; swObj = object; swScene = scene;
+    texSnap = texEpoch; // this draw's own binds
+    return true;
   };
 
   /** A draw with a valid record. */
@@ -1103,6 +1684,10 @@ export function installDrawExec(renderer, getMainScene, opts = {}) {
         state.setMaterial(material, ff);
         smMat = material; smObj = object; smSerial = serial; smDraw = stats.draws; smFF = ff ? 1 : 0;
       }
+      if (swOn) { swObj = object; swScene = scene; } // (curMat === lastMat === material here)
+    } else if (swOn && lastMat !== material && lastSerial === serial && lastCam === camera && lastGlProg === rec.glProgram
+      && sameProgramSwitch(rec, scene, material, object, st)) {
+      // SAME-PROGRAM SWITCH executed: three's setProgram + setMaterial done, the draw follows
     } else {
       stats.stateOnly += 1;
       threeDirect(self, st, false, camera, scene, geometry, material, object, DEGEN);
@@ -1133,6 +1718,7 @@ export function installDrawExec(renderer, getMainScene, opts = {}) {
   // render() — so does the executor). Initially: the renderer's configuration at install.
   // (Until round 3 R3-2 this hook also carried S3.2's `list.sort` hook for `?drawExecRuns`: deleted.)
   let rcOn = renderer.localClippingEnabled === true || renderer.clippingPlanes.length > 0;
+  if (rcOn) rcEver = true;
   let hookedLists = null;
   const hookRenderLists = (lists) => {
     hookedLists = lists;
@@ -1142,6 +1728,7 @@ export function installDrawExec(renderer, getMainScene, opts = {}) {
       // three's render() calls this (its only call site, r184) right after it captured the
       // renderer's clipping state (_localClippingEnabled / clipping.init): read it here, once.
       rcOn = renderer.localClippingEnabled === true || renderer.clippingPlanes.length > 0;
+      if (rcOn) rcEver = true;
       const list = get0.call(this, scene, depth);
       return list;
     };
@@ -1297,10 +1884,10 @@ export function installDrawExec(renderer, getMainScene, opts = {}) {
      * renderBufferDirect call is counted by kind — `scene|root|name|type`: the scene (`main`,
      * `shadow` for scene === null, else its name), the object's top group under worldRoot or
      * the scene, its name without trailing ids, its type (BM BatchedMesh, IM InstancedMesh, SM
-     * SkinnedMesh, M Mesh, P / L / S) — and by outcome (fast, stateOnly, full, empty, pass) with
+     * SkinnedMesh, M Mesh, P / L / S) — and by outcome (fast, sps — ?drawExecSwitch —, stateOnly, full, empty, pass) with
      * the refusal / invalidation reasons. While it runs it wraps the chain from the outside;
      * nothing is added per draw otherwise. Resolves
-     * `{ frames, draws, kinds: [{ key, draws, perFrame, fast, stateOnly, full, empty, pass, recorded, reasons }] }`.
+     * `{ frames, draws, kinds: [{ key, draws, perFrame, fast, sps, stateOnly, full, empty, pass, recorded, reasons }] }`.
      */
     census(frames = 60) {
       this.censusStart();
@@ -1346,7 +1933,7 @@ export function installDrawExec(renderer, getMainScene, opts = {}) {
       };
       const inner = renderer.renderBufferDirect;
       const census = function hbDxCensus(camera, scene, geometry, material, object, group) {
-        const f0 = stats.fast, s0 = stats.stateOnly, u0 = stats.full, e0 = stats.empty, r0 = stats.recorded;
+        const f0 = stats.fast, s0 = stats.stateOnly, u0 = stats.full, e0 = stats.empty, r0 = stats.recorded, w0 = stats.sameProgramSwitches;
         const inv0 = Object.assign({}, stats.invalid);
         try {
           return inner.call(this, camera, scene, geometry, material, object, group);
@@ -1354,12 +1941,12 @@ export function installDrawExec(renderer, getMainScene, opts = {}) {
           draws += 1;
           const key = tagOf(object, scene);
           let k = kinds.get(key);
-          if (k === undefined) { k = { key, draws: 0, perFrame: 0, fast: 0, stateOnly: 0, full: 0, empty: 0, pass: 0, recorded: 0, reasons: {} }; kinds.set(key, k); }
+          if (k === undefined) { k = { key, draws: 0, perFrame: 0, fast: 0, sps: 0, stateOnly: 0, full: 0, empty: 0, pass: 0, recorded: 0, reasons: {} }; kinds.set(key, k); }
           k.draws += 1;
-          const out = stats.fast !== f0 ? "fast" : stats.stateOnly !== s0 ? "stateOnly" : stats.full !== u0 ? "full" : stats.empty !== e0 ? "empty" : "pass";
+          const out = stats.fast !== f0 ? "fast" : stats.sameProgramSwitches !== w0 ? "sps" : stats.stateOnly !== s0 ? "stateOnly" : stats.full !== u0 ? "full" : stats.empty !== e0 ? "empty" : "pass";
           k[out] += 1;
           if (stats.recorded !== r0) k.recorded += 1;
-          if (out !== "fast" && out !== "stateOnly" && out !== "empty") {
+          if (out !== "fast" && out !== "sps" && out !== "stateOnly" && out !== "empty") {
             // full: an invalidation, a first record, or no record taken (deferred by async_link,
             // not a single draw, three's forced re-setup); pass: the refusal.
             const why = scene !== mainScene ? (scene === null ? "noScene" : "scene")

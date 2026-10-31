@@ -1452,6 +1452,10 @@ const TIER5 = [
   // Lane X (stage 3): ?drawExec / ?drawExecRigs — the full GL call stream
   // identical to stock three + our wrappers, frame by frame (fake WebGL2, 22 scenarios; ?drawExecRuns deleted R3-2).
   { tier: 5, flag: "drawExec+drawExecRigs", file: "tests/draw_exec.test.mjs" },
+  // 2026-10-31 round 3: ?drawExecSwitch (DEFAULT OFF) — same-program material switches executed: the GL
+  // call stream identical to stock on switch-heavy worlds (10 scenarios incl. three's material-tracker
+  // hand-overs); the [switch] arm of tests/draw_exec.test.mjs covers the 22 scenarios above.
+  { tier: 5, flag: "drawExecSwitch", file: "tests/draw_exec_switch.test.mjs" },
   // 2026-10-30 — round 3 (docs/2026-10-29-round3-gpu-driven.md), all DEFAULT OFF.
   // R3-2 lane R: ?skipEmptyPasses (the world pass's mask-0 render on an indoor skip frame draws an
   // empty scene; GL stream identical) and the
@@ -1576,7 +1580,7 @@ const NEEDS_BROWSER = [
   { file: "harness/glsl_smoke/heat_haze_smoke.mjs", why: `terrainHaze heat shimmer + desert mirage GLSL (off / disc / ground / mirage arms) — ${BROWSER_WHY}` },
   { file: "harness/glsl_smoke/terrain_vfx_compile_smoke.mjs", why: `terrain program (every define set) + every terrain-VFX particle material compile and link — ${BROWSER_WHY}` },
   // 2026-10-26 — Rust scene core lanes (docs/2026-10-26-rust-scene-core.md).
-  { file: "harness/glsl_smoke/draw_exec_smoke.mjs", why: `drawExec / drawExecRigs (static + rig scene, every arm vs stock, a stale ?drawExecRuns=on inert, max channel diff 0) — ${BROWSER_WHY}` },
+  { file: "harness/glsl_smoke/draw_exec_smoke.mjs", why: `drawExec / drawExecRigs / drawExecSwitch (static + rig scene, every arm vs stock, a stale ?drawExecRuns=on inert, max channel diff 0; the switch arm must execute same-program switches) — ${BROWSER_WHY}` },
   // 2026-10-30 — round 3 R3-3: GPU batch kit layers byte-equal, ?animSceneryBatch texel arm max diff 0, f32 arm <= 1.
   { file: "harness/glsl_smoke/gpu_batch_smoke.mjs", why: `gpu batch kit + animSceneryBatch (legacy vs kit) — ${BROWSER_WHY}` },
   // 2026-10-30 — round 3 R3-4: ?entityBatch legacy vs batch (layers byte-equal, 5 arms <= 2/255 on <= 0.1%, overlap invisible).

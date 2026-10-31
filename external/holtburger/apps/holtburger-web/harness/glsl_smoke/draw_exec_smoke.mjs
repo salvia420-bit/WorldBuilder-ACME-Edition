@@ -5,8 +5,11 @@
 // Arms `?drawExec=off` (the executor is not installed), `?drawExec=on&drawExecRigs=off`,
 // `?drawExec=on&drawExecRigs=on&drawExecRuns=on` (S3.6 entity parts executed too, plus a STALE
 // `drawExecRuns=on`: S3.2 sentinel runs were deleted in round 3 R3-2, 2026-10-30, and an old URL
-// must be inert — no runs counters) and the SHIPPED DEFAULT (no URL flags: ?drawExec and
-// ?drawExecRigs are DEFAULT ON since 2026-10-26). Every non-default arm names both flags, so no
+// must be inert — no runs counters), the SHIPPED DEFAULT (no URL flags: ?drawExec and
+// ?drawExecRigs are DEFAULT ON since 2026-10-26; ?drawExecSwitch DEFAULT OFF) and
+// `?drawExec=on&drawExecRigs=on&drawExecSwitch=on` (round 3, 2026-10-31: same-program material
+// switches executed — it must execute some, with no unproven tracker sync, and the default arm must
+// have the switch off). Every non-default arm names its flags, so no
 // arm rides a default by accident. After a warm-up that ends when a frame
 // adds no async-link deferral, 8 read-back frames (camera moving) must be pixel-identical to
 // the off arm (max channel diff 0), with gl.getError() === 0, no console / page errors, every
@@ -50,7 +53,8 @@ async function run(search) {
 const summary = (r) => ({
   flag: r.flag, installed: r.installed, depthMode: r.depthMode, reversedZ: r.reversedZ ?? null, glError: r.glError, warmFrames: r.warmFrames,
   frames: r.frames.map((f) => `${f.f}:${f.hash}:${f.lit}`).join(" "),
-  dx: r.dx ? { draws: r.dx.draws, fast: r.dx.fast, stateOnly: r.dx.stateOnly, full: r.dx.full, passThrough: r.dx.passThrough, recorded: r.dx.recorded, vaoFixes: r.dx.vaoFixes, vaoFixLate: r.dx.vaoFixLate, vaoSuppressed: r.dx.vaoSuppressed, smSkips: r.dx.smSkips, errors: r.dx.errors, refused: r.dx.refused, invalid: r.dx.invalid } : null,
+  dx: r.dx ? { draws: r.dx.draws, fast: r.dx.fast, stateOnly: r.dx.stateOnly, full: r.dx.full, passThrough: r.dx.passThrough, recorded: r.dx.recorded, vaoFixes: r.dx.vaoFixes, vaoFixLate: r.dx.vaoFixLate, vaoSuppressed: r.dx.vaoSuppressed, smSkips: r.dx.smSkips, errors: r.dx.errors, refused: r.dx.refused, invalid: r.dx.invalid,
+    switchOn: r.dx.switchOn, sameProgramSwitches: r.dx.sameProgramSwitches, switchSyncs: r.dx.switchSyncs, switchSyncFailed: r.dx.switchSyncFailed, switchRefused: r.dx.switchRefused } : null,
   deferredInReadback: r.deferredInReadback,
   runs: r.runs ? { draws: r.runs.draws, runs: r.runs.runs, sortedDraws: r.runs.sortedDraws } : null,
   programs: r.programs ? r.programs.length : 0, errors: r.errors, pageErrors: r.pageErrors, renderer: r.renderer,
@@ -63,6 +67,8 @@ const rigs = await run("?drawExec=on&drawExecRigs=on&drawExecRuns=on");
 console.log("+ rigs (stale runs): ", JSON.stringify(summary(rigs)));
 const dflt = await run("");
 console.log("default (no flags):  ", JSON.stringify(summary(dflt)));
+const sw = await run("?drawExec=on&drawExecRigs=on&drawExecSwitch=on");
+console.log("+ switch:            ", JSON.stringify(summary(sw)));
 
 const compare = (x, y, label) => {
   let maxDiff = 0, differing = 0, framesDiffer = 0;
@@ -80,16 +86,19 @@ const executed = (r) => r.dx && r.dx.fast > 0 && r.dx.stateOnly > 0 && r.dx.erro
 const okOn = compare(on, off, "on   vs off");
 const okRigs = compare(rigs, off, "rigs vs off");
 const okDflt = compare(dflt, off, "dflt vs off");
+const okSw = compare(sw, off, "sw   vs off");
+// ?drawExecSwitch: the arm executed same-program switches, none of its tracker syncs unproven; off by default
+const switched = (r) => !!r.dx && r.dx.switchOn === true && r.dx.sameProgramSwitches > 0 && r.dx.switchSyncFailed === 0;
 // the entity parts are executed under ?drawExecRigs (shares: the arms may warm up for different frame counts)
 const passShare = (r) => r.dx.passThrough / Math.max(1, r.dx.draws);
 // ?drawExecRuns deleted (R3-2): no executor arm carries S3.2's counters, the stale-URL arm included
 const noRuns = (r) => !!r.dx && !("runs" in r.dx) && !("runItems" in r.dx) && !("hookSkips" in r.dx);
 const ok = off.flag === false && off.installed === false && on.flag === true && on.installed === true && rigs.installed === true
   && dflt.flag === true && dflt.installed === true
-  && okOn && okRigs && okDflt && on.frames.at(-1).lit > 1000
-  && executed(on) && executed(rigs) && executed(dflt)
+  && okOn && okRigs && okDflt && okSw && on.frames.at(-1).lit > 1000
+  && executed(on) && executed(rigs) && executed(dflt) && executed(sw) && switched(sw) && dflt.dx.switchOn === false && sw.installed === true
   && passShare(rigs) < passShare(on) && passShare(dflt) < passShare(on)
   && noRuns(on) && noRuns(rigs) && noRuns(dflt)
-  && clean(off) && clean(on) && clean(rigs) && clean(dflt);
+  && clean(off) && clean(on) && clean(rigs) && clean(dflt) && clean(sw);
 console.log(ok ? "PASS" : "FAIL");
 process.exit(ok ? 0 : 1);
