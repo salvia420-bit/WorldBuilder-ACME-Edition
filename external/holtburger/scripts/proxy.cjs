@@ -115,7 +115,15 @@ function proxyHttp(clientReq, clientRes) {
       proxyRes.pipe(clientRes);
     }
   );
+  // A browser that goes away mid-response (reload, closed tab, tunnel drop)
+  // must release its upstream socket: otherwise the paused pipe pins it in
+  // upstreamAgent forever, and after maxSockets such aborts every request
+  // queues and the tunnel hangs (2026-10-25: 27 pinned sockets → total outage).
+  clientRes.on("close", () => {
+    if (!clientRes.writableFinished) proxyReq.destroy();
+  });
   proxyReq.on("error", (err) => {
+    if (clientRes.destroyed) return;
     console.error(`[http] backend error: ${err.message}`);
     if (!clientRes.headersSent) clientRes.writeHead(502);
     clientRes.end(`bad gateway: ${err.message}`);
