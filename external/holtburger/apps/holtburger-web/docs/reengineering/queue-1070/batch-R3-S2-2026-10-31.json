@@ -610,6 +610,62 @@
    "result": null
   },
   {
+   "id": "S2-ORB",
+   "kind": "bench",
+   "title": "vitals-orb cost levers with no code change (orbHz, orbCaustics) vs defaults + A/A, with the orbs-hidden ceiling, Holtburg ultra, 3 reps",
+   "why": "Owner 2026-10-31: \"make the orbs cheaper\". S2-QUIET: HO-off (hudOrbs=off) +2.3 still / +1.75 tour fps over the A / A-AA mean (above the noise), HD-on (hudDiet, incl. orbSync / orbLayer) within noise. The orbs repaint an SVG stack (two wave bodies under clip paths, blurs, blend modes, caustics = two feTurbulence + feDisplacementMap) at orbHz (default 30). These arms price the existing knobs before the canvas renderer lane lands.",
+   "arms": [
+    {
+     "name": "A",
+     "flags": "",
+     "note": "defaults",
+     "scored": "still / moving / tour fps (D1b); main busy + CrGpuMain RASTER per present (anatomy)"
+    },
+    {
+     "name": "A-AA",
+     "flags": "",
+     "note": "A again",
+     "scored": "still / moving / tour fps (D1b); main busy + CrGpuMain RASTER per present (anatomy)"
+    },
+    {
+     "name": "O-15",
+     "flags": "orbHz=15",
+     "note": "the shared wave rAF at 15 Hz (default 30)",
+     "scored": "still / moving / tour fps (D1b); main busy + CrGpuMain RASTER per present (anatomy)"
+    },
+    {
+     "name": "O-nc",
+     "flags": "orbCaustics=off",
+     "note": "no caustics group (look change: no caustic shimmer)",
+     "scored": "still / moving / tour fps (D1b); main busy + CrGpuMain RASTER per present (anatomy)"
+    },
+    {
+     "name": "O-15nc",
+     "flags": "orbHz=15&orbCaustics=off",
+     "note": "both",
+     "scored": "still / moving / tour fps (D1b); main busy + CrGpuMain RASTER per present (anatomy)"
+    },
+    {
+     "name": "HO-off",
+     "flags": "hudOrbs=off",
+     "note": "the ceiling: orbs hidden (never shipped)",
+     "scored": "still / moving / tour fps (D1b); main busy + CrGpuMain RASTER per present (anatomy)"
+    }
+   ],
+   "reps": 3,
+   "gate": "D1b",
+   "decisionRules": [
+    "V",
+    "D1b",
+    "D1",
+    "R4"
+   ],
+   "recipe": [
+    "node scripts/perf-worker/hbbench.mjs --arms apps/holtburger-web/docs/reengineering/queue-1070/batch-R3-S2-2026-10-31.json --item S2-ORB --reps 3 --port 8766 --uncapped --ref A --out /mnt/wbterminal1/tmp/claude-scratch/perf/r3-s2/orb"
+   ],
+   "result": null
+  },
+  {
    "id": "S2-ANATOMY",
    "kind": "anatomy",
    "title": "hbanatomy (main busy per frame, CrGpuMain WEBGL, GPU ms) on A, A-AA, EB-on, IB-on, GP-on, HD-on, fresh profile each, 3 reps over the session",
