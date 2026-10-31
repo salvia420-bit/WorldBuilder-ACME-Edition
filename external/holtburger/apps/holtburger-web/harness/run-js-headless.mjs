@@ -1510,6 +1510,8 @@ const TIER5 = [
   { tier: 5, flag: "interiorBatchPom", file: "tests/interior_batch_pom.test.mjs" },
   { tier: 5, flag: "interiorBatchMaps", file: "tests/interior_batch_maps.test.mjs" },
   { tier: 5, flag: "interiorBatchPagefull", file: "tests/interior_batch_pagefull.test.mjs" },
+  // 2026-10-31 real boot (Holtburg room: textureReplans 8, builds 1, activations 0): texture swaps settle before the re-plan.
+  { tier: 5, flag: "interiorBatchTexswap", file: "tests/interior_batch_texswap.test.mjs" },
   // 2026-10-31: demand-sized kit pages replayed on the real-boot key mix (client_portal.dat texture dims).
   { tier: 5, flag: "gpuBatchPagesRealboot", file: "tests/gpu_batch_pages_realboot.test.mjs",
     requires: () => process.env.HB_PORTAL_DAT || "/home/wbterminal/ac_base_dats/client_portal.dat" },

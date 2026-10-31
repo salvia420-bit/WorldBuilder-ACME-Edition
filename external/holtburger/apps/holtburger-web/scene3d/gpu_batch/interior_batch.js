@@ -61,7 +61,8 @@
 // -> active (once three has drawn every class material of the chunk; then
 // the sentinel goes on and one shadow raster is requested). Drift (a texture
 // swap, a material change, a context loss, an evict) hands the chunk back to
-// legacy within the frame. LRU park / unpark / evict:
+// legacy within the frame (a texture swap re-plans once the swaps settled:
+// "TEXTURE SWAPS" below). LRU park / unpark / evict:
 // `scene3d.interiorBatchHooks` (the landblock_lru.js patch) plus a per-sync
 // reconcile fallback.
 //
@@ -188,6 +189,41 @@
 // = { waits, admittedAfterWait, legacyMembers, neverFit, retries, idleWaits
 // (counters), waitingNow, excludedNow (chunks waiting / members left out now) }.
 //
+// TEXTURE SWAPS (2026-10-31; laptop real boot inside Holtburg room
+// 0xA9B40121, `?interiorBatch=on`: textureReplans 8, teardowns 9, builds 1,
+// activations 0 after 300 s, unitReasons {replan:map 8}: texture streaming
+// swapped member maps one after another, and every swap re-planned the chunk
+// at once only for the next swap to tear the rebuild down again). Two paths:
+//   - IN PLACE (`_trySamePageSwap`, map and normal map): the new texture's
+//     layer lands in the SAME page as the old one (same page key, and the
+//     release-first admit took a layer of that very page): the member's slot
+//     row is rewritten (the new layer), the old content released, nothing
+//     else moves (`stats().slotRewrites`). It cannot be wider than one page:
+//     a batch and its class material are bound to page ids (the batch key and
+//     the class key carry them; the class samplers are those pages' GL
+//     arrays), and the member's vertices sit in that batch's merged geometry,
+//     so a layer in another page — even of the same page key — moves the
+//     member to another batch: a re-plan. A same-page swap whose admit the
+//     frame's upload budget DEFERS hands the chunk back too (the batch would
+//     draw the stale layer this frame while its legacy meshes are suppressed).
+//   - SETTLED RE-PLAN (every other swap: another page or page key, an AO /
+//     roughness / POM height swap or re-upload, an emissive alias change, a
+//     deferred in-place one): the chunk tears down in the sync (legacy draws
+//     the new texture in that frame's render, as before), then WAITS in
+//     pending until no member of its last plan changed a texture (map,
+//     normal, AO, roughness, emissive map, POM height: identity or version)
+//     for IB_TEXTURE_SETTLE_SYNCS syncs, polled every sync from a snapshot
+//     taken at the teardown; each change seen restarts the window, and the
+//     wait never exceeds IB_TEXTURE_SETTLE_MAX_SYNCS from the swap that
+//     opened it, so a stream that never stops still re-plans (and the next
+//     swap opens a new wait). A burst of N swaps = 1 teardown + 1 rebuild.
+//     The texture cap counts the swaps that tore a chunk down (= rebuilds);
+//     the coalesced ones count in `stats().textureSwapsCoalesced`, waits that
+//     ended at the max with swaps still coming in `textureSettlesMaxed`.
+//     A texchan ARRIVAL settles the same way with its own window
+//     (IB_MAP_SETTLE_SYNCS) and counters (`mapArrivals`).
+// Diag: `stats().settlingNow` (chunks waiting on a settle now).
+//
 // FLAG OFF: cells.js runs one constant-false branch per hook site and calls
 // nothing here; this module creates no state at import (constant tables only:
 // name arrays, one frozen enum, one regex; no Map, Set, WeakMap, typed array
@@ -246,18 +282,32 @@ export const IB_CELLS_PER_ROW = 1536;
 export const IB_MAX_ROW = 2047;
 /**
  * Re-plans of one chunk for a texture swap (a BC7 preview upgraded to its
- * full tier, a sidecar normal map arriving, a POM height re-upload, a texchan
- * AO / roughness plane arriving late, an emissive alias change): each happens once per surface,
- * so they get a wider cap than other drift (BATCH_REPLAN_LIMIT).
+ * full tier, a sidecar normal map arriving, a POM height re-upload, an AO /
+ * roughness plane swapped, an emissive alias change): each happens once per
+ * surface, so they get a wider cap than other drift (BATCH_REPLAN_LIMIT).
+ * Counted per REBUILD (header "TEXTURE SWAPS"): a swap that tears a
+ * (re)built chunk down counts once; the swaps the settle window coalesces
+ * after it do not (`stats().textureSwapsCoalesced`).
  */
 export const IB_TEXTURE_REPLAN_LIMIT = 64;
 /**
+ * TEXTURE SWAPS (header): after a swap tore its chunk down, the re-plan
+ * waits until no member of the chunk changed a texture for this many syncs
+ * (the quiet window; a further swap restarts it), and never longer than
+ * IB_TEXTURE_SETTLE_MAX_SYNCS after the swap that opened the wait, so a
+ * stream that never stops still re-plans (about once per max window).
+ */
+export const IB_TEXTURE_SETTLE_SYNCS = 60;
+export const IB_TEXTURE_SETTLE_MAX_SYNCS = 600;
+/**
  * A texchan AO / roughness plane ARRIVING on a live member (texchan's async
  * arm lands one fetch at a time) hands its chunk back to legacy at once and
- * re-plans after this many syncs, so a burst of arrivals is one re-plan, not
- * one per surface. Arrivals happen once per member material (bounded by the
- * chunk's members, not an oscillation): they count toward
- * IB_MAP_ARRIVAL_LIMIT, not the texture cap.
+ * re-plans after this many quiet syncs (the TEXTURE SWAPS settle with this
+ * window: a further arrival or swap restarts it, IB_TEXTURE_SETTLE_MAX_SYNCS
+ * bounds it), so a burst of arrivals is one re-plan, not one per surface.
+ * Arrivals happen once per member material (bounded by the chunk's members,
+ * not an oscillation): they count toward IB_MAP_ARRIVAL_LIMIT, not the
+ * texture cap.
  */
 export const IB_MAP_SETTLE_SYNCS = 30;
 export const IB_MAP_ARRIVAL_LIMIT = 256;
@@ -1151,6 +1201,10 @@ function _newStats() {
     lbsNoted: 0, chunksPlanned: 0, builds: 0, activations: 0, teardowns: 0, replans: 0, textureReplans: 0, contextResets: 0,
     giveUps: 0, bitMismatch: 0, bitUploads: 0, bitUploadBytes: 0, mergeMs: 0, maxMergeMs: 0, mergeSlices: 0, plans: 0,
     planMs: 0, maxPlanMs: 0, planSlices: 0, maxSyncMs: 0, classWarms: 0, mapArrivals: 0,
+    // TEXTURE SWAPS (header): member texture changes a settle absorbed (no
+    // teardown, no count toward the cap), settles that ended at the max wait
+    // with changes still coming.
+    textureSwapsCoalesced: 0, textureSettlesMaxed: 0,
     depthWarms: 0, rasterRequests: 0, slotRewrites: 0, legacyReasons: {}, unitReasons: {}, disarmed: {},
     // Members refused for an extra map, by their whole extra-map set (census).
     extraMaps: {},
@@ -1545,6 +1599,9 @@ function _newChunk(rec, index, cellPlans) {
     // PAGE-FULL WAITS (header): the open wait (sync it began), and the
     // members left legacy for the cap (member -> true = can never fit).
     capWaitSince: -1, pageFull: null, pageFullAt: 0,
+    // TEXTURE SWAPS (header): the open settle after a swap / arrival teardown
+    // ({ since, last, quiet, watch }), null otherwise.
+    settle: null,
   };
   for (let i = 0; i < n; i += 1) {
     const c = cellPlans[i].cell.container;
@@ -2590,6 +2647,7 @@ function _teardownChunk(S, chunk, env) {
   chunk.mergeAt = 0;
   chunk.replan = null;
   chunk.capWaitSince = -1;
+  chunk.settle = null; // TEXTURE SWAPS: a swap / arrival re-plan opens a fresh one right after; other teardowns set their own retry
   for (const e of chunk.slotsHeld) _releaseSlot(S, e, chunk);
   chunk.slotsHeld.clear();
   for (const m of chunk.suppressed) restoreLegacy(m);
@@ -2620,22 +2678,98 @@ function _replanChunk(S, chunk, reason) {
     chunk.mapArrivals += 1;
     S.stats.mapArrivals += 1;
     if (chunk.mapArrivals > IB_MAP_ARRIVAL_LIMIT) { _unstampChunk(chunk); _setChunkLegacy(S, chunk, "unstable"); return; }
-    chunk.status = S_CHUNK.PENDING;
-    chunk.retryFrame = S.frameNo + IB_MAP_SETTLE_SYNCS;
+    _settleOpen(S, chunk, IB_MAP_SETTLE_SYNCS);
     return;
   }
   if (reason === "map" || reason === "normal-map" || reason === "pom-map" || reason === "ao-map" || reason === "roughness-map"
-    || reason === "emissive-map") { // a texture swap (its own cap)
+    || reason === "emissive-map") { // a texture swap (its own cap; header "TEXTURE SWAPS")
     chunk.textureReplans += 1;
     S.stats.textureReplans += 1;
     if (chunk.textureReplans > IB_TEXTURE_REPLAN_LIMIT) { _unstampChunk(chunk); _setChunkLegacy(S, chunk, "unstable"); return; }
-  } else {
-    chunk.replans += 1;
-    S.stats.replans += 1;
-    if (chunk.replans > BATCH_REPLAN_LIMIT) { _unstampChunk(chunk); _setChunkLegacy(S, chunk, "unstable"); return; }
+    _settleOpen(S, chunk, IB_TEXTURE_SETTLE_SYNCS);
+    return;
   }
+  chunk.replans += 1;
+  S.stats.replans += 1;
+  if (chunk.replans > BATCH_REPLAN_LIMIT) { _unstampChunk(chunk); _setChunkLegacy(S, chunk, "unstable"); return; }
   chunk.status = S_CHUNK.PENDING;
   chunk.retryFrame = S.frameNo + 1;
+}
+
+// --- TEXTURE SWAPS (header): the settle ----------------------------------------
+
+/** Watch record stride: member, then (texture, version) for map, normal, AO, roughness, POM height, then the emissive map. */
+const _WATCH_STRIDE = 12;
+
+/** The height texture a member's POM chain binds right now (the live uniform handle), or null. */
+function _pomTexNow(m) {
+  const u = m.userData ? m.userData.pomShaderUniforms : null;
+  return u && u.uPomMap && u.uPomMap.value ? u.uPomMap.value : null;
+}
+
+/** Write member `m`'s texture state at `w[o..o + _WATCH_STRIDE)`; true when it differs from what was there. */
+function _watchWrite(w, o, m) {
+  const changed = _watchTex(w, o + 1, m.map || null) | _watchTex(w, o + 3, m.normalMap || null)
+    | _watchTex(w, o + 5, m.aoMap || null) | _watchTex(w, o + 7, m.roughnessMap || null) | _watchTex(w, o + 9, _pomTexNow(m));
+  const em = m.emissiveMap || null;
+  if (w[o + 11] !== em) { w[o + 11] = em; return true; }
+  return changed !== 0;
+}
+
+/** One (texture, version) pair of a watch record: 1 when it changed (rewritten), 0 otherwise. */
+function _watchTex(w, i, tex) {
+  const v = tex ? tex.version : -1;
+  if (w[i] === tex && w[i + 1] === v) return 0;
+  w[i] = tex;
+  w[i + 1] = v;
+  return 1;
+}
+
+/**
+ * A swap (or an arrival) just tore `chunk` down: it waits in pending for
+ * `quiet` syncs without a texture change on any member of its last plan
+ * (snapshot now), at most IB_TEXTURE_SETTLE_MAX_SYNCS.
+ */
+function _settleOpen(S, chunk, quiet) {
+  const watch = [];
+  const seen = new Set();
+  for (const cp of chunk.cellPlans) {
+    for (const mp of cp.meshes) {
+      for (const e of mp.entries) {
+        const m = e.member;
+        if (seen.has(m)) continue;
+        seen.add(m);
+        const o = watch.length;
+        for (let i = 0; i < _WATCH_STRIDE; i += 1) watch.push(null);
+        watch[o] = m;
+        _watchWrite(watch, o, m);
+      }
+    }
+  }
+  chunk.settle = { since: S.frameNo, last: S.frameNo, quiet, watch };
+  chunk.status = S_CHUNK.PENDING;
+  chunk.retryFrame = S.frameNo + quiet;
+}
+
+/**
+ * Per sync while `chunk` settles: a member texture that changed since the
+ * snapshot restarts the quiet window (capped at the max wait). True once the
+ * wait is over (the settle is closed; the chunk re-plans this sync).
+ */
+function _settleOver(S, chunk) {
+  const st = chunk.settle;
+  const w = st.watch;
+  let n = 0;
+  for (let o = 0; o < w.length; o += _WATCH_STRIDE) if (_watchWrite(w, o, w[o])) n += 1;
+  if (n > 0) {
+    S.stats.textureSwapsCoalesced += n;
+    st.last = S.frameNo;
+    chunk.retryFrame = Math.min(S.frameNo + st.quiet, st.since + IB_TEXTURE_SETTLE_MAX_SYNCS);
+  }
+  if (S.frameNo < chunk.retryFrame) return false;
+  if (S.frameNo - st.last < st.quiet) S.stats.textureSettlesMaxed += 1; // the max ended it, changes still coming
+  chunk.settle = null;
+  return true;
 }
 
 function _teardownLb(rec, why) {
@@ -2746,8 +2880,9 @@ function _slotDrift(e) {
 /**
  * A map / normal-map swap whose new texture lands in the SAME page: the new
  * layer is admitted, the slot row rewritten, the old layer released — no
- * geometry re-upload. Returns "rewritten", "deferred" (budget: keep the old
- * layer this frame) or null (a different page: the chunks re-plan).
+ * geometry re-upload. Returns "rewritten", "deferred" (budget: the old layer
+ * is taken back; the caller hands the chunks back to legacy) or null (a
+ * different page: the chunks re-plan). Header "TEXTURE SWAPS".
  */
 function _trySamePageSwap(S, e, which, pages, budget) {
   const m = e.member;
@@ -2782,8 +2917,12 @@ function _syncSlots(S, pages, budget) {
     if (e.dead || e.chunks.size === 0 || !_slotResident(e)) continue;
     let drift = _slotDrift(e);
     if (drift === "map" || drift === "normal-map") {
-      const sw = _trySamePageSwap(S, e, drift, pages, budget);
-      if (sw === "rewritten" || sw === "deferred") drift = sw === "deferred" ? null : _slotDrift(e);
+      // In place when the new layer lands in the same page; otherwise — a
+      // different page, or "deferred" (no upload room this frame: the batch
+      // would draw the stale layer while its legacy meshes are suppressed) —
+      // the chunks hand back to legacy and re-plan once settled (header
+      // "TEXTURE SWAPS").
+      if (_trySamePageSwap(S, e, drift, pages, budget) === "rewritten") drift = _slotDrift(e);
     }
     if (drift) {
       for (const ch of [...e.chunks]) _replanChunk(S, ch, drift);
@@ -3151,6 +3290,7 @@ function _advanceChunks(S, pages, budget, env) {
       continue;
     }
     if (ch.status === S_CHUNK.PENDING) {
+      if (ch.settle !== null && !_settleOver(S, ch)) continue; // TEXTURE SWAPS (header)
       if (S.frameNo < ch.retryFrame) continue;
       if (!_planChunkEntries(S, ch)) continue;
       if (ch.noKeys) {
@@ -3259,6 +3399,7 @@ export function interiorBatchDiag() {
   let geometryCpu = 0;
   let waitingNow = 0;
   let excludedNow = 0;
+  let settlingNow = 0;
   let legacyMeshes = 0;
   let suppressedMeshes = 0;
   for (const rec of S.lbs.values()) {
@@ -3268,6 +3409,7 @@ export function interiorBatchDiag() {
       for (const b of ch.batches) if (b.mesh) { objects += 1; if (b.mesh.visible) drawn += 1; geometryCpu += b.cpuBytes || 0; }
       if (ch.capWaitSince >= 0) waitingNow += 1;
       if (ch.pageFull) excludedNow += ch.pageFull.size;
+      if (ch.settle) settlingNow += 1;
       // Overlap is per legacy mesh: a chunk short of ACTIVE can already draw most meshes batched.
       if (ch.meshInfo) { legacyMeshes += ch.meshInfo.length; for (const mi of ch.meshInfo) if (mi.suppressed) suppressedMeshes += 1; }
     }
@@ -3278,7 +3420,7 @@ export function interiorBatchDiag() {
   stats.pageFull.excludedNow = excludedNow;
   return {
     mode: S.mode, off: S.off, disarmed: S.disarmed, lbs, chunks, objects, drawnObjects: drawn,
-    meshes: { built: legacyMeshes, suppressed: suppressedMeshes },
+    meshes: { built: legacyMeshes, suppressed: suppressedMeshes }, settlingNow,
     slots: S.slots.size, pomSlots: _pomSlotCount(S), mapSlots: _mapSlotCounts(S), classMaterials: S.classMats.size, depthMaterials: S.depthMats.size,
     bytes: { geometryCpu, bits: S.bits ? S.bits.bytesFor(S.bits.capacity) : 0 },
     ...stats,

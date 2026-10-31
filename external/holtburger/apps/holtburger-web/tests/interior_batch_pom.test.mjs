@@ -41,8 +41,9 @@
 //       bind the height page and no uPomMap; the POM text three compiled for
 //       the class (march, self-shadow, the POM block) equals the legacy
 //       program's modulo P2-P4; the flag-only props batch as p0.
-//   P6  drift + release: a height re-upload re-plans (texture cap) onto a
-//       fresh copy; dispose frees every POM extension row and height layer.
+//   P6  drift + release: a height re-upload re-plans (texture cap, once the
+//       swap settled: interior_batch.js "TEXTURE SWAPS") onto a fresh copy;
+//       dispose frees every POM extension row and height layer.
 //   P7  the extra-map census (`stats().extraMaps`): a member refused for an
 //       extra map (a light map next to its texchan planes, materials.js
 //       _applyRough: aoMap + roughnessMap, which batch since 2026-10-31) is
@@ -435,7 +436,8 @@ await t("P6 drift + release: a height re-upload re-plans onto a fresh copy; disp
   h.needsUpdate = true; // a re-upload of the height plane (new bytes / version)
   const st = { player: R.CELL(0), indoor: true, frustum: R.CELL_IDS, walk: R.CELL_IDS, bfs: [] };
   const sh = R.makeSession(st);
-  for (let f = 0; f < 8; f += 1) { R.tick(cellsOn, w, sh); R.renderPass(w, R.MASK_BOTH); }
+  // The re-plan waits the swap settle (interior_batch.js "TEXTURE SWAPS").
+  for (let f = 0; f < IB.IB_TEXTURE_SETTLE_SYNCS + 8; f += 1) { R.tick(cellsOn, w, sh); R.renderPass(w, R.MASK_BOTH); }
   const d = IB.interiorBatchDiag();
   assert.ok((d.unitReasons["replan:pom-map"] || 0) >= 1, JSON.stringify(d.unitReasons));
   assert.ok(d.textureReplans > tr0, "counted as a texture swap (its own cap)");

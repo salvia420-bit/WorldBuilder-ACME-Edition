@@ -29,8 +29,9 @@
 //       its chunk legacy.
 //   L5  drift: a same-page map swap rewrites the slot row only (no geometry,
 //       no teardown); a page-key change tears the chunk down in the same sync
-//       (legacy draws in that frame's render) and re-plans; a drift that keeps
-//       coming back ends legacy ("unstable").
+//       (legacy draws in that frame's render) and re-plans once the swap
+//       settled (IB_TEXTURE_SETTLE_SYNCS); a drift that keeps coming back
+//       ends legacy ("unstable").
 //   L6  evict / park / unpark through the REAL LandblockLRU, with the
 //       landblock_lru.js hook (the orchestrator patch, called here as the
 //       patch calls it) and without it (the per-sync reconcile): pages,
@@ -298,7 +299,11 @@ await t("L5 drift: same-page swap = slot rewrite only; page change = teardown in
   assert.equal(chunk().status === "active" || chunk().status === "overlap", false, "torn down in the sync");
   const recs = R.renderPass(w, R.MASK_BOTH);
   assert.ok(recs.some((r) => /^surfaces-fused-opaque-a9b40100/.test(r.object.name)), "legacy draws in the same frame");
-  frame(w); frame(w);
+  // The re-plan waits the swap settle (interior_batch.js "TEXTURE SWAPS";
+  // tests/interior_batch_texswap.test.mjs), legacy drawing meanwhile.
+  for (let i = 0; i < IB.IB_TEXTURE_SETTLE_SYNCS - 2; i += 1) frame(w, false);
+  assert.equal(chunk().status, "pending", "settling");
+  for (let i = 0; i < 4 && chunk().status !== "active"; i += 1) frame(w);
   assert.equal(chunk().status, "active", "re-planned and back");
   // A drift that never settles: depthWrite flips (a signature change) every frame.
   let flips = 0;

@@ -55,7 +55,7 @@
 //       materials.js _reseatSurfaceState drops `__acBakedDirectOut`); an emissive
 //       intensity change (lumNight) rewrites the extension row with no
 //       re-plan; an AO re-upload re-plans under the texture cap onto a fresh
-//       copy.
+//       copy (once the swap settled: interior_batch.js "TEXTURE SWAPS").
 //   X6  dispose frees every extension row and AO / roughness layer.
 //   X7  a real POM chain with texchan planes: ONE extension row carries the
 //       POM half and the extra-map half; the class text is the member's
@@ -468,7 +468,8 @@ await t("X5 drift: a late texchan record re-plans into the new set after the set
   const pages = KIT.kitPages(w.renderer);
   const tr0 = IB.interiorBatchDiag().textureReplans;
   ao.needsUpdate = true;
-  for (let f = 0; f < 8; f += 1) { R.tick(cellsOn, w, sh); R.renderPass(w, R.MASK_BOTH); }
+  // The re-plan waits the swap settle (interior_batch.js "TEXTURE SWAPS").
+  for (let f = 0; f < IB.IB_TEXTURE_SETTLE_SYNCS + 8; f += 1) { R.tick(cellsOn, w, sh); R.renderPass(w, R.MASK_BOTH); }
   let d = IB.interiorBatchDiag();
   assert.ok((d.unitReasons["replan:ao-map"] || 0) >= 1, JSON.stringify(d.unitReasons));
   assert.ok(d.textureReplans > tr0, "counted as a texture swap");
