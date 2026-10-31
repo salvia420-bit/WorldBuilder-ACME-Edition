@@ -222,3 +222,14 @@ S2 arms EB-512 / STACK-512), `4a967837` (review fixes; gate 967/967). Snapshot *
   entity / interior batches (−1.2…−1.5 ms each [D]); (4) entity batch as a plain Mesh draw_exec accepts (−0.2 ms); (5) fewer
   bloom mip walks (−0.1 ms, look change); detaching parked leaves (−0.1…−0.2 ms, high risk) and cheaper class materials (~0)
   are not worth it.
+
+### Owner directions, 2026-10-31 afternoon (verbatim)
+- Busy-box reps: *"if we can make use of them by thinking about them then they arent invalid for our purposes"* → used with
+  per-rep box context; S2 queue rule **D1b**.
+- Threshold: *"i mean to demand 4 fps to call it an improvement is wild. anything above noise is technically an improvement
+  no?"* → **D1b**: noise = SE of the paired (arm − mean(A, A-AA)) per-rep differences; an improvement beats it in one segment
+  and loses in none; renderJs / main busy break ties. Scorer: `/mnt/wbterminal1/tmp/claude-scratch/perf/r3-s2/tools/d1b.py`.
+- Orbs: *"make the orbs cheaper"* (S2-QUIET: hudOrbs=off +2.3 still / +1.75 tour over the A / A-AA mean) → S2-ORB knob bench
+  (orbHz=15, orbCaustics=off) + lane `orbs-canvas` building `?orbRender=canvas`. Look sign-off delegated: *"u can eyeball it and
+  pass it yourself"* — the orchestrator passes / fails the orb look from the SVG-vs-canvas parity page.
+- Gate override extended to 23:30 -02:30 for the S2-DXSW / overnight chain (busy reps usable per the owner).
