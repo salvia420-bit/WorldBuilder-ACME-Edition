@@ -187,11 +187,14 @@
  ],
  "suggestedOrder": [
   "S2-PRE",
-  "S2-BENCH (Holtburg, 14 arms x 3 reps, ~3.9 h [D] at ~5.5 min per arm-rep)",
-  "S2-ANATOMY (A, A-AA, EB-on, IB-on, GP-on, HD-on; 3 reps over the session)",
-  "S2-LINVAK (6 arms x 3 reps)",
-  "S2-DUNGEON (5 arms x 3 reps)",
-  "S2-EYE (rc-eye stills of each ship candidate, for the record)",
+  "S2-BENCH rep 1 (done 2026-10-31, noisy)",
+  "noisy-window items (r3-s2/run_noisy.sh)",
+  "S2-QUIET (8 arms x 3 reps, ~2.2 h, quiet box)",
+  "M1 fps items",
+  "S2-LINVAK",
+  "S2-DUNGEON",
+  "S2-ANATOMY reps 2-3",
+  "S2-EYE",
   "S2-REPORT"
  ],
  "items": [
@@ -396,6 +399,140 @@
     "python3 -I scripts/perf-worker/hbreport.py bench /mnt/wbterminal1/tmp/claude-scratch/perf/r3-s2/bench --box-events apps/holtburger-web/docs/reengineering/queue-1070/batch-R3-S2-2026-10-31.json --queue apps/holtburger-web/docs/reengineering/queue-1070/batch-R3-S2-2026-10-31.json --ref A --aa A-AA [--noisy-box] [--anatomy /mnt/wbterminal1/tmp/claude-scratch/perf/r3-s2/anatomy] --json /mnt/wbterminal1/tmp/claude-scratch/perf/r3-s2/bench.report.json"
    ],
    "note": "H0 is never flipped (it hides the UI); it bounds the HUD arms. STACK is reported for additivity; the flips are per flag under the D1 rule, and a flag that wins alone but loses inside STACK is reported to the owner before it flips.",
+   "result": "2026-10-31 11:59-13:10, snapshot r3c-20261031, REP 1 ONLY (14 arms; reps 2-3 replaced by S2-QUIET). Every arm-rep INVALID under rule V (owner at the box: idle 0 s in every sample; owner accepted a noisy run). A / A-AA still / moving / tour 43.6/45.5/53.4 vs 49.6/39.6/46.7 fps: the A/A swing (~6 fps) exceeds every single-flag prediction, so no fps verdict. Deterministic reads (still segment, info.calls / renderJs p50): A 1147 / 13.9 ms, A-AA 1090 / 13.4, EB-on 1005 / 12.6, EB-512 997 / 14.1, IB-on 816 / 13.1, GP-on 1111 / 13.0, HD-on 1123 / 14.6, HO-off 1126 / 12.1, H0 1148 / 14.6, STACK 679 / 12.4, STACK-512 720 / 13.7. us per call rises with batching (A 14.3, STACK 20.1): renderJs is not proportional to draws. Signal above the noise: STACK tour 38.4 fps with h100 39 (A 8 / A-AA 18), STACK-512 tour 44.0 h100 35, IB-on tour 44.9: batch building while streaming (part of it the chunk-rebuild churn fixed in 1dd3b2cd, not in r3c). 512 MiB cap: no gain over 128 at Holtburg (EB-512 997 vs EB-on 1005 calls). Report: /mnt/wbterminal1/tmp/claude-scratch/perf/r3-s2/bench.report.{txt,json}."
+  },
+  {
+   "id": "S2-QUIET",
+   "kind": "bench",
+   "title": "the decisive S2 arms in a quiet box window (rule V idle gate), Holtburg ultra, 3 reps interleaved, snapshot r3d",
+   "why": "S2-BENCH rep 1 ran with the owner at the box (all INVALID); its deterministic reads chose these arms: the three batches, the HUD diet and the orbs bisect (the HUD's prime suspect), and the stack. EB-512 / STACK-512 dropped (the 512 MiB cap did not change Holtburg's draws). H0 is priced by M1a.",
+   "boxMode": "1070, MODE T, uncapped, fresh profile per arm-rep. The chain waits for box idle >= 900 s before it starts.",
+   "arms": [
+    {
+     "name": "A",
+     "flags": "",
+     "note": "the S2 snapshot's defaults (freezeWorldRoots ON since D1): the reference arm",
+     "scored": "still / moving / tour fps (the D1 rule); main busy per frame, CrGpuMain WEBGL per present, GPU ms (S2-ANATOMY); p50 / p95 for the record"
+    },
+    {
+     "name": "A-AA",
+     "flags": "",
+     "note": "A again: the A/A arm (R1 noise)",
+     "scored": "still / moving / tour fps (the D1 rule); main busy per frame, CrGpuMain WEBGL per present, GPU ms (S2-ANATOMY); p50 / p95 for the record"
+    },
+    {
+     "name": "EB-on",
+     "flags": "entityBatch=on",
+     "note": "R3-4 ?entityBatch: entity part-surfaces as one kit InstancedMesh per rig, one draw per (side, class, chain, page) run",
+     "gate": "!!window.__entityBatch && ((window.__entityBatch.stats().byStatus || {}).active || 0) > 0",
+     "gateInfo": "window.__entityBatch ? window.__entityBatch.stats() : null",
+     "prediction": "[D] (R3-4 report) Holtburg entity part-surface draws 285 -> ~105 (90-120); main -0.8...-2.3 ms (likely -1.4); CrGpuMain -1.0...-1.1 ms; GPU ~0; R6 stop trips if main moves < ~0.7 ms",
+     "scored": "still / moving / tour fps (the D1 rule); main busy per frame, CrGpuMain WEBGL per present, GPU ms (S2-ANATOMY); p50 / p95 for the record",
+     "diagReads": [
+      {
+       "read": "gateInfo after the settle (every rep), then window.__entityBatch.verify() once per rep",
+       "pass": "byStatus.active > 0; fallbacks.unstable absent or small; reparked 0; context.resets 0; verify() rowMismatches / stateMismatches / pomMismatches / parkMismatches / attrMismatches all 0 (laptop boot 2026-10-31: 14 rigs active, all 0)"
+      }
+     ],
+     "look": {
+      "class": "HOW",
+      "why": "draw order inside a rig; part x root composed in f32 on the GPU",
+      "rcEye": [
+       "chase cam, NPC crowd, an equip / dye change, luminous gear at night (owner rule: looks for the record, fps decides)"
+      ]
+     }
+    },
+    {
+     "name": "IB-on",
+     "flags": "interiorBatch=on",
+     "note": "R3-5 ?interiorBatch: cell-static props (+ shells the draw pools refuse) merged per (cell chunk, blend class), AO / roughness / emissive members included",
+     "gate": "!!window.__interiorBatch && !!window.__interiorBatch.stats() && window.__interiorBatch.stats().mode === \"on\" && window.__interiorBatch.stats().objects > 0",
+     "gateInfo": "window.__interiorBatch ? window.__interiorBatch.stats() : null",
+     "prediction": "[D] (R3-5 report) Holtburg interior draws 379 (314 cell statics + 65 cell surfaces) -> ~60-130; main -1.5...-3 ms; CrGpuMain -0.8...-1.5 ms; GPU +0...+0.2 ms; fps ~+3...+6 if main stays binding. Dungeon: ~450 draws -> 20-80",
+     "scored": "still / moving / tour fps (the D1 rule); main busy per frame, CrGpuMain WEBGL per present, GPU ms (S2-ANATOMY); p50 / p95 for the record",
+     "diagReads": [
+      {
+       "read": "gateInfo after the settle (every rep)",
+       "pass": "meshes.suppressed > 0 (legacy meshes drawn batched; laptop room boot 2026-10-31: 170 of 291); bitMismatch 0; giveUps 0; contextResets 0; pageFull.neverFit 0. Report textureReplans / teardowns (boot-time texture swaps re-plan a whole chunk; laptop: 8)"
+      }
+     ],
+     "look": {
+      "class": "HOW",
+      "why": "merged geometry per blend class; members' light-clamp chain and POM as the legacy clones (flag-only p1 clones batch as p0)",
+      "rcEye": [
+       "Holtburg room a9b40121, a TownNetwork hall, a shop interior seen through its door from outside"
+      ]
+     }
+    },
+    {
+     "name": "GP-on",
+     "flags": "gpuParticles=on",
+     "note": "R3-7a ?gpuParticles: particle simulation in the vertex shader (records + rows textures), no per-frame instance re-uploads",
+     "gate": "!!window.__gpuParticlesDiag && window.__gpuParticlesDiag().on === true && window.__gpuParticlesDiag().emitters > 0 && window.__gpuParticlesDiag().selfCheck !== false",
+     "gateInfo": "window.__gpuParticlesDiag ? window.__gpuParticlesDiag() : null",
+     "prediction": "[D] (plan R3-7a) -0.8...-1.0 ms main vs the JS path; more at Linvak Tukal (14,268 anchors) and in combat FX; CrGpuMain falls with the instance-buffer re-uploads",
+     "scored": "still / moving / tour fps (the D1 rule); main busy per frame, CrGpuMain WEBGL per present, GPU ms (S2-ANATOMY); p50 / p95 for the record",
+     "diagReads": [
+      {
+       "read": "gateInfo after the settle (every rep)",
+       "pass": "on true; selfCheck true; patchFailures 0; emitters > 0"
+      }
+     ],
+     "look": {
+      "class": "WHAT-near",
+      "why": "kernel parity <= 1.0e-6 vs the CPU path (gpu_particles_smoke, SwiftShader)",
+      "rcEye": [
+       "Holtburg lifestone + chimney smoke; particles are masked in rc_eye_diff, so this is the owner's look"
+      ]
+     }
+    },
+    {
+     "name": "HD-on",
+     "flags": "hudDiet=on",
+     "note": "HUD diet: every lever (orbSync, orbLayer, radar, overlays, fontWrf)",
+     "gate": "!!window.__hudBisect && Array.isArray(window.__hudBisect.diet) && window.__hudBisect.diet.length > 0",
+     "gateInfo": "window.__hudBisect || null",
+     "prediction": "[D] ceiling = H0 (hud=none: +3.9 / +2.8 / +4.1 fps still / moving / tour, M1a-BENCH reps 1-2); the diet's share of it is unknown, the bisect arms locate it",
+     "scored": "still / moving / tour fps (the D1 rule); main busy per frame, CrGpuMain WEBGL per present, GPU ms (S2-ANATOMY); p50 / p95 for the record",
+     "look": {
+      "class": "HOW",
+      "why": "HUD raster / compositing changes only",
+      "rcEye": [
+       "HUD at 1080p: orbs, radar, chat, selection brackets"
+      ]
+     }
+    },
+    {
+     "name": "HO-off",
+     "flags": "hudOrbs=off",
+     "note": "HUD bisect: only the vitals orbs hidden",
+     "gate": "!!window.__hudBisect && window.__hudBisect.orbs === true",
+     "gateInfo": "window.__hudBisect || null",
+     "prediction": "[D] bisect arm: locates which part of H0's +2.8...+4.1 fps the HUD costs (vitals orbs the prime suspect)",
+     "scored": "still / moving / tour fps (the D1 rule); main busy per frame, CrGpuMain WEBGL per present, GPU ms (S2-ANATOMY); p50 / p95 for the record"
+    },
+    {
+     "name": "STACK",
+     "flags": "entityBatch=on&interiorBatch=on&gpuParticles=on&hudDiet=on",
+     "note": "the four ship candidates together: additivity check (a winner that only wins alone is reported, not stacked blindly)",
+     "gate": "(!!window.__entityBatch && ((window.__entityBatch.stats().byStatus || {}).active || 0) > 0) && (!!window.__interiorBatch && !!window.__interiorBatch.stats() && window.__interiorBatch.stats().mode === \"on\" && window.__interiorBatch.stats().objects > 0) && (!!window.__gpuParticlesDiag && window.__gpuParticlesDiag().on === true && window.__gpuParticlesDiag().emitters > 0 && window.__gpuParticlesDiag().selfCheck !== false) && (!!window.__hudBisect && Array.isArray(window.__hudBisect.diet) && window.__hudBisect.diet.length > 0)",
+     "gateInfo": "({eb: window.__entityBatch ? window.__entityBatch.stats().byStatus : null, ib: window.__interiorBatch ? window.__interiorBatch.stats().meshes : null, gp: window.__gpuParticlesDiag ? window.__gpuParticlesDiag().emitters : null, hud: window.__hudBisect || null})",
+     "scored": "still / moving / tour fps (the D1 rule); main busy per frame, CrGpuMain WEBGL per present, GPU ms (S2-ANATOMY); p50 / p95 for the record"
+    }
+   ],
+   "reps": 3,
+   "gate": "D1 rule",
+   "decisionRules": [
+    "V",
+    "R1",
+    "R2",
+    "R3",
+    "D1"
+   ],
+   "recipe": [
+    "node scripts/perf-worker/hbbench.mjs --arms apps/holtburger-web/docs/reengineering/queue-1070/batch-R3-S2-2026-10-31.json --item S2-QUIET --reps 3 --port 8766 --uncapped --ref A --out /mnt/wbterminal1/tmp/claude-scratch/perf/r3-s2/quiet",
+    "python3 -I scripts/perf-worker/hbreport.py bench /mnt/wbterminal1/tmp/claude-scratch/perf/r3-s2/quiet --box-events apps/holtburger-web/docs/reengineering/queue-1070/batch-R3-S2-2026-10-31.json --queue apps/holtburger-web/docs/reengineering/queue-1070/batch-R3-S2-2026-10-31.json --ref A --aa A-AA --json /mnt/wbterminal1/tmp/claude-scratch/perf/r3-s2/quiet.report.json"
+   ],
    "result": null
   },
   {
