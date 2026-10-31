@@ -894,7 +894,7 @@ export class EntityBatch {
       fallbacks: {}, leafRoutes: {}, hooks: {}, demoteReasons: {}, replanReasons: {},
       extraMaps: {}, // leaves refused for an extra map, by their whole extra-map set (census)
       mapLeaves: {}, // batched leaves carrying AO / roughness / emissive maps, by the same set names (per plan)
-      mapArrivals: 0, // texchan planes that arrived on a batched member (header "AO / ROUGHNESS / EMISSIVE PARTS")
+      mapArrivals: 0, // rig hand-backs for a late texchan AO / roughness plane (one per rig per sync: a burst = 1, a plane on a material shared by N rigs = N; header "AO / ROUGHNESS / EMISSIVE PARTS")
       entries: { hits: 0, misses: 0, collisions: 0 },
       // value / identity: admits that returned a layer (fresh or not); fresh*:
       // the ones that uploaded (fromLegacy = copied from the resident legacy
@@ -1510,6 +1510,15 @@ export class EntityBatch {
       if (row && (row.map !== m.map || row.mapVersion !== m.map.version || row.pagesGen !== plan.pagesGen
         || (row.pom && row.pom.texture.version !== row.pomVersion) || _rowMapsStale(row, m))) row = null; // stale (drift is handled per tick)
       if (!row) {
+        // A texchan plane that landed on a member after _plan and before its
+        // admit (a deferral or a culled pause in between; no row yet, so no
+        // sync saw it) leaves plan.runKeys stale: treat it as the arrival it is.
+        if (entityRunKeyOf(m) !== plan.runKeys[i]) {
+          const ms = memberMapSet(m);
+          if (ms.any) this._mapArrival(b, ms.ao ? "drift:ao-map-arrived" : "drift:roughness-map-arrived");
+          else this._softReplan(b, "drift:runKey");
+          return false;
+        }
         const did = plan.batch[i].did;
         const r = this._admitMap(b, m, did, pages, budget);
         if (r && r.deferred) { this._stats.layers.deferred += 1; return false; }

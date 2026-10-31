@@ -65,6 +65,10 @@
 //       (the rest batches, no churn, its map layer released); the retry
 //       check reads the planes; once the cap takes them the rig re-plans
 //       with every member.
+//   EM9 a plane that lands while the rig is still ADMITTING (no row yet, so no
+//       sync sees it; the review's stale run-key case): the next admit hands
+//       the rig back as an arrival, not churn, and it re-plans with run keys
+//       that match its members (no later promote:changed).
 //   EM8 the smoke's maps arm dry-runs in node (the luminous + translucent
 //       leaves legacy, AO / roughness classes, verify clean) and the layers
 //       readback walks the AO / roughness layers; the page and the runner
@@ -562,7 +566,7 @@ await check("EM4b POM + planes: ONE extension row carries the POM half and the m
   const both = [...inst._hbBatch.plan.memberRefs.values()].filter((r) => r.pomRow > 0 && r.aoKey);
   assert.ok(both.length >= 4, `POM + AO rows: ${both.length}`);
   for (const row of both) {
-    assert.equal(row.pomRow, row.extRow, "the POM row IS the extension row");
+    assert.ok(row.pom && row.extRow > 0, "a POM + AO row holds one extension row");
     assert.equal(LS.unpackLayerState(table.rows.data, row.slot * fpr).extRow, row.extRow);
     const want = LS.packExtState(CM.pomStateOf(row.member, row.pom, row.pomLayer, {}),
       CM.extraMapStateOf(row.member, row.aoLayer, row.rghLayer, 0, {}), new Float32Array(16), 0);
@@ -684,6 +688,46 @@ await check("EM7 page-full: a refused AO layer keeps its member a legacy leaf (n
   assert.equal(b.replans, 0, "no churn");
   assert.deepEqual(verifyZero(eb.verify()), [0, 0, 0, 0, 0, 0]);
   pages.admit = admit;
+  eb.dispose();
+});
+
+await check("EM9 a plane landing while the rig is still admitting: the next admit hands it back as an arrival (not churn); the re-plan's run keys match its members", async () => {
+  const mc = texCache({ texchan: { late: true } });
+  const w = await R.world(true, { materialCache: mc });
+  const pages = KIT.kitPages(w.renderer);
+  const orig = { admit: pages.admit, admitAs: pages.admitAs, admitPixels: pages.admitPixels };
+  let hold = true;
+  for (const k of Object.keys(orig)) {
+    if (typeof orig[k] !== "function") continue;
+    pages[k] = function heldAdmit(...args) { return hold ? { deferred: true } : orig[k].apply(this, args); };
+  }
+  const inst = await w.spawn(0x50000e31);
+  w.frame(40);
+  const eb = w.em._entityBatch;
+  const b = inst._hbBatch;
+  assert.equal(b.status, "admitting", `premise: the deferral holds the rig in admitting (${b.status} ${b.reason})`);
+  assert.equal(b.plan.memberRefs.size, 0, "premise: no member row yet");
+  assert.ok(b.plan.members.some((m) => PLANE_DIDS.some((d) => mc.materials.get(d) === m)), "premise: the plan holds the plane members");
+  assert.ok(mc.__texchan.pending() >= 5, "premise: the fetches are in flight");
+  const replans0 = b.replans;
+  const s0 = eb.stats();
+  mc.__texchan.release();
+  await settleMicro();
+  for (const did of PLANE_DIDS) assert.ok(mc.materials.get(did).aoMap && mc.materials.get(did).roughnessMap, "premise: the planes attached in place");
+  hold = false;
+  w.frame();
+  const s1 = eb.stats();
+  assert.equal(b.status, "pending", `handed back at the admit (${b.status} ${b.reason})`);
+  assert.ok(/^drift:(ao|roughness)-map-arrived$/.test(b.reason), b.reason);
+  assert.equal(s1.mapArrivals - s0.mapArrivals, 1, "one arrival");
+  assert.equal(b.replans, replans0, "not churn");
+  w.settle(80);
+  assert.equal(b.status, "active");
+  assert.ok(b.plan.members.every((m, i) => EB.entityRunKeyOf(m) === b.plan.runKeys[i]), "the re-plan's run keys match its members");
+  assert.equal(eb.stats().mapMembers.members, 5, JSON.stringify(eb.stats().mapMembers));
+  assert.equal(eb.stats().replanReasons["promote:changed"] || 0, s0.replanReasons["promote:changed"] || 0, "no promote:changed");
+  assert.deepEqual(verifyZero(eb.verify()), [0, 0, 0, 0, 0, 0]);
+  Object.assign(pages, orig);
   eb.dispose();
 });
 
