@@ -30,6 +30,11 @@
 //       the per-sync POM row rewrite) in a child process (`--pom`); the sites
 //       counted widen to the kit code that path runs (class_materials.js
 //       pomStateOf, layer_state.js writePom).
+//   A4  (2026-10-31, AO / roughness / emissive members) the same on the
+//       rig's texchan + luminous material cache (AO / roughness layers, the
+//       per-sync extension-row rewrite: aoMapIntensity, the emissive uniform)
+//       in a child process (`--maps`); the sites widen to class_materials.js
+//       extraMapStateOf and layer_state.js writeExt / packExtState.
 //
 // Run: node tests/interior_batch_steady.test.mjs   (needs `three` resolvable)
 
@@ -78,12 +83,12 @@ function leaves(profile) {
   return out;
 }
 
-async function steadyCase(pools, pom = false) {
+async function steadyCase(pools, pom = false, maps = false) {
   KIT.resetKit();
   IB.disposeInteriorBatches();
   IB.__setInteriorBatchEnvForTest({ mode: "on", now: R.FROZEN_CLOCK });
   await R.resetPools();
-  const w = await R.makeWorld({ M, adapter }, { pools, pom });
+  const w = await R.makeWorld({ M, adapter }, maps ? { texchan: true, luminous: R.LUMINOUS } : { pools, pom });
   if (pools) await R.armPools(w);
   await R.build(cellsOn, w, pools ? { table: R.POOL_CELLS } : (pom ? { baked: false } : {}));
   const sh = R.makeSession({ player: (R.LB | 0x31) >>> 0, indoor: false, frustum: R.CELL_IDS.slice(), walk: [], bfs: [] });
@@ -92,7 +97,9 @@ async function steadyCase(pools, pom = false) {
   assert.equal([...S.lbs.values()][0].chunks[0].status, "active", "premise: active");
   assert.ok(S.slots.size >= 5, `premise: live slots (${S.slots.size})`);
   if (pom) assert.ok([...S.slots.values()].filter((e) => e.pom && e.pomRow > 0).length >= 4, "premise: POM slots with extension rows");
-  const SITES = pom ? /gpu_batch\/(interior_batch|class_materials|layer_state)\.js/ : /gpu_batch\/interior_batch\.js/;
+  if (maps) assert.ok([...S.slots.values()].filter((e) => e.maps.any && e.extRow > 0 && e.aoRef).length >= 5
+    && [...S.slots.values()].some((e) => e.maps.emissive && e.extRow > 0), "premise: AO / roughness / emissive slots with extension rows");
+  const SITES = pom || maps ? /gpu_batch\/(interior_batch|class_materials|layer_state)\.js/ : /gpu_batch\/interior_batch\.js/;
   const containers = [...w.scene3d.cellContainers3d.values()];
   const ft = w.scene3d.frameTime;
   const steady = (n) => {
@@ -127,7 +134,7 @@ async function steadyCase(pools, pom = false) {
   for (const l of all) if (SITES.test(l.url)) bytes.set(l.fn, (bytes.get(l.fn) || 0) + l.bytes);
   const recurring = [...count.entries()].filter(([, n]) => n >= 50).map(([fn]) => fn);
   const report = recurring.map((fn) => `${fn}: ${count.get(fn)} samples, ~${((bytes.get(fn) || 0) / 4000).toFixed(1)} B/sync`);
-  console.log(`      per-sync allocation sites in ${pom ? "interior_batch.js + the kit's POM path" : "interior_batch.js"}: ${report.join("; ") || "none"}`);
+  console.log(`      per-sync allocation sites in ${pom ? "interior_batch.js + the kit's POM path" : (maps ? "interior_batch.js + the kit's extra-map path" : "interior_batch.js")}: ${report.join("; ") || "none"}`);
   assert.deepEqual(recurring.filter((fn) => fn !== "syncInteriorBatches"), [], `per-sync allocations: ${report.join("; ")}`);
   assert.ok((bytes.get("syncInteriorBatches") || 0) / 4000 <= 48, `syncInteriorBatches: ${report.join("; ")}`);
   assert.equal(S.stats.bitMismatch, 0);
@@ -150,10 +157,13 @@ if (process.argv.includes("--pools")) {
   await t("A2 the same with the env-cell draw pools armed", () => steadyCase(true));
 } else if (process.argv.includes("--pom")) {
   await t("A3 the same with POM members (height layers + POM extension rows)", () => steadyCase(false, true));
+} else if (process.argv.includes("--maps")) {
+  await t("A4 the same with AO / roughness / emissive members (extra-map layers + extension rows)", () => steadyCase(false, false, true));
 } else {
   await t("A1 steady state: no per-sync allocation in interior_batch.js over 4000 syncs + notes but the boxed frame timestamp (<= 48 B a sync)", () => steadyCase(false));
   await t("A2 the same with the env-cell draw pools armed (child process)", child("--pools"));
   await t("A3 the same with POM members (child process)", child("--pom"));
+  await t("A4 the same with AO / roughness / emissive members (child process)", child("--maps"));
 }
 
 IB.__setInteriorBatchEnvForTest(null);

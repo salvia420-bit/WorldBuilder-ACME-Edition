@@ -24,6 +24,19 @@
 // budget only once the allocator granted it (a cap refusal books nothing).
 // BC7 layers copy their baked levels with compressedTexSubImage3D (a
 // compressed format cannot be a framebuffer attachment).
+// WHY AN ADMIT WAS REFUSED (R3-5 real boot, 2026-10-31). admit() / admitAs()
+// / admitPixels() return null for three different reasons, and a consumer
+// must not treat them alike: `lastRefusal` says which one the last null was —
+// "unsupported" (the kit can never hold this texture: describeTexture or the
+// context's internal format), "cap" (the allocator refused a page: the byte
+// cap, after its reclaim / fit; room can appear later), "failed" (the GL copy
+// or upload failed; the layer was abandoned). It is null after any other
+// result. `wouldAdmit(tex, opts)` answers "would the admit get a layer now"
+// with no side effect (no budget, no counter); `neverFits(tex, opts)` is true
+// when no amount of freed room could hold it (unsupported, or one layer is
+// larger than the whole cap). interior_batch.js waits on "cap" instead of
+// re-planning (its header "PAGE-FULL WAITS").
+//
 // R8 layers (2026-10-31: the POM seam-height planes, adapter.js
 // surfacePixelsToHeightTexture: RedFormat / UnsignedByteType / NoColorSpace,
 // generateMipmaps) take the RGBA8 path: three uploads the 2D R8 texture
@@ -284,7 +297,32 @@ export class ArrayPages {
       onPageCreate: (page) => this._createPageGl(page),
       onPageDestroy: (page) => this._destroyPageGl(page),
     });
-    this.stats = { admits: 0, admitBytes: 0, copiedLevels: 0, bc7Levels: 0, deferred: 0, unsupported: 0, failed: 0, scratch: 0 };
+    this.stats = { admits: 0, admitBytes: 0, copiedLevels: 0, bc7Levels: 0, deferred: 0, unsupported: 0, failed: 0, scratch: 0, capRefused: 0 };
+    /** Why the last admit returned null: "unsupported" | "cap" | "failed" (null otherwise). See the header. */
+    this.lastRefusal = null;
+  }
+
+  /**
+   * Would admit(tex, budget, opts) get a layer now (the budget aside)? No
+   * side effect: no budget, no allocator counter, no GL. `contentKey` as in
+   * admitAs (null = the texture's identity key).
+   */
+  wouldAdmit(tex, opts = null, contentKey = null) {
+    if (this.contextLost()) return false;
+    const desc = describeTexture(tex, opts);
+    if (!desc || !this.internalFormatOf(desc)) return false;
+    const ck = contentKey === null || contentKey === undefined ? contentKeyOf(tex) : contentKey;
+    return this.alloc.wouldAcquire(desc, ck);
+  }
+
+  /**
+   * Can `tex` never get a layer, whatever is released (unsupported here, or
+   * one layer larger than the whole cap)?
+   */
+  neverFits(tex, opts = null) {
+    const desc = describeTexture(tex, opts);
+    if (!desc || !this.internalFormatOf(desc)) return true;
+    return layerBytesOf(desc) > this.alloc.maxBytes;
   }
 
   get gl() { return this.renderer.getContext(); }
@@ -421,11 +459,12 @@ export class ArrayPages {
    * admit(). `opts`: describeTexture's (R8_PLANES admits an R8 plane).
    */
   admitAs(tex, contentKey, budget, opts = null) {
+    this.lastRefusal = null;
     // Lost (or restored onto a new generation): wait, nothing is uploaded
     // into a dead page; the consumer resets and re-plans.
     if (this.contextLost()) return { deferred: true, lost: true };
     const desc = describeTexture(tex, opts);
-    if (!desc || !this.internalFormatOf(desc)) { this.stats.unsupported += 1; return null; }
+    if (!desc || !this.internalFormatOf(desc)) { this.stats.unsupported += 1; this.lastRefusal = "unsupported"; return null; }
     const ck = contentKey === null || contentKey === undefined ? contentKeyOf(tex) : contentKey;
     if (!this.alloc.needsUpload(ck)) {
       const e = this.alloc.acquire(desc, ck);
@@ -435,10 +474,10 @@ export class ArrayPages {
     if (!this._budgetOpen(budget, bytes)) return { deferred: true };
     const t0 = uploadNowMs();
     const e = this.alloc.acquire(desc, ck);
-    if (!e) return null;
+    if (!e) { this.stats.capRefused += 1; this.lastRefusal = "cap"; return null; }
     if (budget) budget.trySpend(bytes, UPLOAD_KIND.LAYER); // room checked above, nothing booked since
     const ok = desc.format === "bc7" ? this._uploadBc7(tex, e.page, e.layer) : this._copyRgba8(tex, e.page, e.layer);
-    if (!ok) { this.alloc.abandon(ck); this.stats.failed += 1; return null; }
+    if (!ok) { this.alloc.abandon(ck); this.stats.failed += 1; this.lastRefusal = "failed"; return null; }
     this.stats.admits += 1;
     this.stats.admitBytes += bytes;
     // S1: CPU ms of the admit's GL work (page creation, three's upload of a
@@ -455,6 +494,7 @@ export class ArrayPages {
    * level, disposed. `contentKey` is the caller's (value-keyed) identity.
    */
   admitPixels(rgba, width, height, opts, contentKey, budget) {
+    this.lastRefusal = null;
     if (this.contextLost()) return { deferred: true, lost: true };
     const scratch = new THREE.DataTexture(rgba, width, height, THREE.RGBAFormat, THREE.UnsignedByteType);
     scratch.colorSpace = opts?.colorSpace ?? THREE.SRGBColorSpace;
@@ -467,7 +507,7 @@ export class ArrayPages {
     scratch.wrapT = opts?.wrapT ?? THREE.RepeatWrapping;
     scratch.needsUpdate = true;
     const desc = describeTexture(scratch);
-    if (!desc) { this.stats.unsupported += 1; return null; }
+    if (!desc) { this.stats.unsupported += 1; this.lastRefusal = "unsupported"; return null; }
     if (!this.alloc.needsUpload(contentKey)) {
       const e = this.alloc.acquire(desc, contentKey);
       return { page: e.page, layer: e.layer, contentKey };
@@ -476,12 +516,12 @@ export class ArrayPages {
     if (!this._budgetOpen(budget, bytes)) return { deferred: true };
     const t0 = uploadNowMs();
     const e = this.alloc.acquire(desc, contentKey);
-    if (!e) return null;
+    if (!e) { this.stats.capRefused += 1; this.lastRefusal = "cap"; return null; }
     if (budget) budget.trySpend(bytes, UPLOAD_KIND.LAYER); // room checked above, nothing booked since
     const ok = this._copyRgba8(scratch, e.page, e.layer);
     try { scratch.dispose(); } catch (_) { /* fail-soft */ }
     this.stats.scratch += 1;
-    if (!ok) { this.alloc.abandon(contentKey); this.stats.failed += 1; return null; }
+    if (!ok) { this.alloc.abandon(contentKey); this.stats.failed += 1; this.lastRefusal = "failed"; return null; }
     this.stats.admits += 1;
     this.stats.admitBytes += bytes;
     if (budget && typeof budget.addMs === "function") budget.addMs(UPLOAD_KIND.LAYER, uploadNowMs() - t0);

@@ -27,8 +27,9 @@
 //   texel 1  (roughness, metalness, normalScale.x, normalScale.y)
 //   texel 2  (alphaRef, map layer, luminosity, flags)
 //   texel 3  (normal-map layer, extension row, 0, 0)
-// `extension row` (2026-10-31, POM members) is the index of a SECOND row of
-// the same table that carries a member's per-slot parallax state (0 = none:
+// `extension row` (2026-10-31, POM members; the same day, AO / roughness /
+// emissive members) is the index of a SECOND row of the same table that
+// carries a member's per-slot parallax state and extra-map state (0 = none:
 // row 0 is the reserved zero row, so every member without one reads zeros).
 // POM EXTENSION ROW (`packPomState`; materials.js `_installPomShaderPatch`'s
 // uniforms, the values its compile binds):
@@ -37,6 +38,16 @@
 //   texels 2-3 zero
 // The two int uniforms are stored as the integer three's uniform1i would
 // send (ToInt32 of the JS number), exact in f32; the floats as their f32.
+// EXTRA-MAP FIELDS of the same extension row (2026-10-31, AO / roughness /
+// emissive members; `packExtState`: one row carries a member's POM state AND
+// its extra maps, either half zero when the member has none):
+//   texel 2  (aoMap layer, roughnessMap layer, aoMapIntensity, 0)
+//   texel 3  (emissive.r, emissive.g, emissive.b, emissiveMap layer)
+// The emissive triple is the `emissive` uniform three uploads
+// (WebGLMaterials: emissive.copy(material.emissive).multiplyScalar(
+// material.emissiveIntensity), i.e. each channel r * intensity in f64, sent
+// as f32); aoMapIntensity the `aoMapIntensity` uniform (0 without an aoMap).
+// A member's roughness stays in texel 1 .x of its slot row.
 // `flags` is a small integer in a float (exact below 2^24): LS_FLAG bits plus
 // the blend code in bits 8-11. `alphaRef` is the alpha-test reference the
 // material would carry: the ClipMap per-format ref (paletted 100/255, DDS
@@ -278,6 +289,38 @@ export function unpackPomState(arr, off) {
   };
 }
 
+/**
+ * Pack a whole extension row (header "EXTRA-MAP FIELDS"): `pom` as
+ * packPomState takes it (null = texels 0-1 zero), `maps` = { aoLayer,
+ * roughLayer, aoIntensity, emissiveR, emissiveG, emissiveB, emissiveLayer }
+ * (class_materials.js extraMapStateOf; null = texels 2-3 zero). With `maps`
+ * null this writes exactly what packPomState writes. Field to field, no
+ * helper returning a double: it runs per sync per extension row.
+ */
+export function packExtState(pom, maps, out, off) {
+  if (pom) {
+    out[off + 0] = pom.layer; out[off + 1] = pom.depth; out[off + 2] = _glint(pom.steps); out[off + 3] = _glint(pom.shadowSteps);
+    out[off + 4] = pom.lodNear; out[off + 5] = pom.lodFar; out[off + 6] = pom.shadowDarkness; out[off + 7] = pom.graze;
+  } else {
+    for (let i = 0; i < 8; i += 1) out[off + i] = 0;
+  }
+  if (maps) {
+    out[off + 8] = maps.aoLayer; out[off + 9] = maps.roughLayer; out[off + 10] = maps.aoIntensity; out[off + 11] = 0;
+    out[off + 12] = maps.emissiveR; out[off + 13] = maps.emissiveG; out[off + 14] = maps.emissiveB; out[off + 15] = maps.emissiveLayer;
+  } else {
+    for (let i = 8; i < LAYER_STATE_FLOATS; i += 1) out[off + i] = 0;
+  }
+  return out;
+}
+
+/** The extra-map half of an extension row (values as stored, i.e. f32). */
+export function unpackMapState(arr, off) {
+  return {
+    aoLayer: arr[off + 8], roughLayer: arr[off + 9], aoIntensity: arr[off + 10],
+    emissive: [arr[off + 12], arr[off + 13], arr[off + 14]], emissiveLayer: arr[off + 15],
+  };
+}
+
 /** Inverse of packLayerState (values as stored, i.e. f32). */
 export function unpackLayerState(arr, off) {
   const f = arr[off + 11] | 0;
@@ -368,6 +411,22 @@ export class LayerStateTable {
   /** Rewrite a POM extension row (no allocation); true when changed. */
   writePom(row, p) {
     return this._store(row, packPomState(p, this._scratch, 0));
+  }
+
+  /**
+   * Allocate an extension row with POM state and / or extra-map state
+   * (`packExtState`; either may be null); -1 when the budget refused growth.
+   */
+  addExt(pom, maps, budget) {
+    const row = this.rows.alloc(budget);
+    if (row < 0) return -1;
+    this.writeExt(row, pom, maps);
+    return row;
+  }
+
+  /** Rewrite an extension row (no allocation); true when changed. */
+  writeExt(row, pom, maps) {
+    return this._store(row, packExtState(pom, maps, this._scratch, 0));
   }
 
   _store(row, sc) {

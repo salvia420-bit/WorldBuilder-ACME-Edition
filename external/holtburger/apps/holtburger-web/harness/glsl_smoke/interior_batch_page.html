@@ -8,7 +8,8 @@
 // interior_batch_smoke.mjs page (R3-5 `?interiorBatch`). `?arm=town|punch|dungeon|sealed|shadow|shadowmap|layers`,
 // loaded with and without `&interiorBatch=on` (cells.js reads the flag at module load); `&pools=1` arms the
 // env-cell draw pools first, as scene3d/index.js does (interior_batch_lib.mjs POOL_ARMS); `&pom=1` builds the
-// world on the POM material cache (interior_batch_lib.mjs POM_ARMS; `?arm=pom` is the close indoor frame).
+// world on the POM material cache (interior_batch_lib.mjs POM_ARMS; `?arm=pom` is the close indoor frame);
+// `&maps=1` on the texchan + luminous material cache (AO / roughness / emissive members; interior_batch_lib.mjs MAP_ARMS).
 // The app's own rAF loops must not run on wall time: the arm steps frames itself.
 window.requestAnimationFrame = () => 1;
 window.cancelAnimationFrame = () => {};
@@ -30,9 +31,11 @@ try {
   const arm = new URLSearchParams(location.search).get("arm") || "town";
   const pools = new URLSearchParams(location.search).get("pools") === "1";
   const pom = new URLSearchParams(location.search).get("pom") === "1";
+  const maps = new URLSearchParams(location.search).get("maps") === "1";
   out.arm = arm;
   out.poolsArmed = pools;
   out.pom = pom;
+  out.maps = maps;
   const renderer = new THREE.WebGLRenderer({ canvas: document.getElementById("c"), antialias: false, logarithmicDepthBuffer: true });
   renderer.setPixelRatio(1);
   renderer.setSize(LIB.CANVAS, LIB.CANVAS, false);
@@ -43,7 +46,7 @@ try {
   const dbg = gl.getExtension("WEBGL_debug_renderer_info");
   out.renderer = gl.getParameter(dbg ? dbg.UNMASKED_RENDERER_WEBGL : gl.RENDERER);
   const pause = () => new Promise((res) => setTimeout(res, 30));
-  const r = await LIB.runArm(THREE, renderer, mods, arm, { ticks: 16, maxTicks: 400, pause, pools, pom });
+  const r = await LIB.runArm(THREE, renderer, mods, arm, { ticks: 16, maxTicks: 400, pause, pools, maps, pom });
   out.calls = r.calls;
   out.lit = r.lit;
   out.ticks = r.ticks;

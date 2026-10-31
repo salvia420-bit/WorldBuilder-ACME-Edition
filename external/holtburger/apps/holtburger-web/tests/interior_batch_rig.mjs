@@ -298,6 +298,59 @@ function normalPixels(w, h, seed = 0) {
   return a;
 }
 
+// --- texchan planes (2026-10-31, AO / roughness / emissive members) -----------
+// The surfaces that get a texchan record (`opts.texchan`): every opaque and
+// ClipMap fixture surface but 0x08000105 (so a chunk mixes a map-less class
+// with the AO + roughness classes, as the realboot does). Never a translucent one.
+export const TEXCHAN_DIDS = [0x08000101, 0x08000102, 0x08000103, 0x08000106, 0x08000111, 0x08000112];
+/**
+ * Luminous surfaces for `opts.luminous` (did -> the Surface luminosity
+ * float): the luminous ladder gives them white emissive x min(2, L) and the
+ * diffuse map as emissiveMap. 0x08000111 (the props' surface) dims under
+ * lumNight (< 0.99), 0x08000102 (a cell surface) is a light source.
+ */
+export const LUMINOUS = { 0x08000111: 0.6, 0x08000102: 1.25 };
+
+/** The texchan record of a surface (suite_assets.js "texchan" shape: R8 roughness + R8 AO planes). */
+export function texchanRecord(w, h, seed = 0) {
+  const roughness = new Uint8Array(w * h);
+  const ao = new Uint8Array(w * h);
+  for (let i = 0; i < w * h; i += 1) {
+    roughness[i] = (i * 37 + seed * 11) & 255;
+    ao[i] = 128 + ((i * 13 + seed * 7) & 127); // 128..255: cavity AO darkens, 255 = unoccluded
+  }
+  return { roughness, ao, width: w, height: h };
+}
+
+/**
+ * Give `mc` a texchan source the way the production cache has one (the
+ * manifest maps a surface DID to its stem, `_texchanSource.getByKey` answers a
+ * decoded record synchronously, `getByKeyAsync` when the fetch lands), so
+ * materials.js's OWN `_attachRoughnessMap` -> `_resolveRough` -> `_applyRough`
+ * attaches the planes (and, for a late record, `_reseatVariantsForDid` carries
+ * them to the clones). `late`: getByKey answers null (cold) and the async arm
+ * waits for `release()`.
+ */
+export function installTexchan(mc, records, late = false) {
+  const byStem = new Map();
+  const manifest = new Map();
+  for (const [did, rec] of records) { const stem = `tc-${(did >>> 0).toString(16)}`; byStem.set(stem, rec); manifest.set(did >>> 0, stem); }
+  const pending = [];
+  mc.materialBakeEnabled = true;
+  mc._texchanInit = true;
+  mc._texchanManifest = manifest;
+  mc._texchanSource = {
+    getByKey: (stem) => (late ? null : byStem.get(stem) || null),
+    getByKeyAsync: (stem) => new Promise((res) => pending.push(() => res(byStem.get(stem) || null))),
+  };
+  return {
+    records, late,
+    pending: () => pending.length,
+    /** Land every waiting async fetch (their `.then` runs on the next microtasks). */
+    release() { for (const f of pending.splice(0)) f(); },
+  };
+}
+
 /**
  * A real MaterialCache with every fixture surface installed (preload is a no-op).
  * `opts.pom` (2026-10-31, POM members): the cache built the way the ultra
@@ -305,19 +358,36 @@ function normalPixels(w, h, seed = 0) {
  * plane and the Stone category — so materials.js's own `_materialFromFlags`
  * installs its POM patch on every surface it applies to (opaque and ClipMap;
  * never translucent), and the clone families copy the flag.
+ * `opts.texchan` (2026-10-31, AO / roughness members): `true` or `{ late,
+ * dids }` — the TEXCHAN_DIDS surfaces get a texchan record through
+ * `installTexchan`, attached by materials.js's own `_attachRoughnessMap`
+ * right after `_materialFromFlags` (the install order of `_installFromPixels`);
+ * the handle is `mc.__texchan`. `opts.luminous` (did -> luminosity, e.g.
+ * LUMINOUS): those surfaces are built with that luminosity float (the
+ * luminous ladder's emissive + emissiveMap).
  */
 export async function materialCache(M, adapter, surf = SURF, opts = {}) {
   const mc = new M.MaterialCache(opts.pom ? { pomEnabled: true } : undefined);
+  const tc = opts.texchan ? (opts.texchan === true ? {} : opts.texchan) : null;
+  let tch = null;
+  if (tc) {
+    const recs = new Map();
+    for (const did of tc.dids || TEXCHAN_DIDS) { const s = surf[did]; if (s) recs.set(did >>> 0, texchanRecord(s.w, s.h, did & 31)); }
+    tch = installTexchan(mc, recs, tc.late === true);
+  }
+  const lum = opts.luminous || null;
   for (const [didS, s] of Object.entries(surf)) {
     const did = +didS;
     const tex = adapter.surfacePixelsToTexture(pixels(s.w, s.h, did & 255), s.w, s.h);
     const ntex = s.nrm || opts.pom ? adapter.surfacePixelsToNormalTexture(opts.pom ? normalPixels(s.w, s.h, did & 255) : new Uint8Array(s.w * s.h * 3).fill(128), s.w, s.h) : null;
     const htex = opts.pom ? adapter.surfacePixelsToHeightTexture(heightPixels(s.w, s.h, did & 7), s.w, s.h) : null;
     const m = mc._materialFromFlags(s.flags, tex, opts.pom ? M.SURFACE_CATEGORY.Stone : undefined, ntex, undefined, htex,
-      { translucency: s.translucency ?? 0, luminosity: 0, diffuse: 1, hasPalette: true });
+      { translucency: s.translucency ?? 0, luminosity: lum && lum[did] ? lum[did] : 0, diffuse: 1, hasPalette: true });
+    if (tch) mc._attachRoughnessMap(m, did >>> 0);
     mc.materials.set(did >>> 0, m);
   }
   mc.preload = async () => {};
+  if (tch) mc.__texchan = tch;
   return mc;
 }
 
@@ -328,7 +398,8 @@ export async function materialCache(M, adapter, surf = SURF, opts = {}) {
  * the five world groups, cellsGroup on layer 1), a real WebGLRenderer on the
  * fake WebGL2 with a sun shadow map, a camera that sees the whole fixture.
  * `opts.record` records canvas listeners and shader sources; `opts.pom` builds
- * the POM material cache (`materialCache` above).
+ * the POM material cache, `opts.texchan` / `opts.luminous` the texchan planes
+ * and the luminous surfaces (`materialCache` above).
  */
 export async function makeWorld(deps, opts = {}) {
   const { M, adapter } = deps;
@@ -384,7 +455,7 @@ export async function makeWorld(deps, opts = {}) {
   camera.lookAt(cx, 0, -cy);
   camera.layers.enableAll();
   camera.updateMatrixWorld(true);
-  const mc = await materialCache(M, adapter, opts.pools ? { ...SURF, ...SURF_POOLED } : SURF, { pom: opts.pom === true });
+  const mc = await materialCache(M, adapter, opts.pools ? { ...SURF, ...SURF_POOLED } : SURF, { pom: opts.pom === true, texchan: opts.texchan || null, luminous: opts.luminous || null });
   const scene3d = {
     scene, worldRoot, camera, renderer,
     terrainGroup: groups.terrain, buildingsGroup: groups.buildings, staticsGroup: groups.statics,

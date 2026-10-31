@@ -13,6 +13,10 @@ Evidence tags: **[M]** measured, **[D]** derived. `$S = /mnt/wbterminal1/tmp/cla
 
 ## RESUME HERE (updated 2026-10-30 ~21:00; owner /goal: "finish remaining work")
 
+> **10-31 update: read "Laptop 10-31 (batch reworks verified in real boots)" at the end first.** Items 1-3 below are done
+> (round-3 checkpoint `0d1cb56b` pushed, then the interior-batch rework commit on top). What is left needs the 1070 (offline
+> since 10-31 ~00:34): the M1 re-runs and the decision bench on a new snapshot.
+
 **State at the update.** D1 done and applied (below). Running:
 - 1070 chain 2 (`$D1/run_chain2.sh`, log `$D1/chain2.log`): G1-BENCH grass price (`batch-R3-G1`: A, A-AA,
   terrainGrassDensity=0.2, terrainGrass=off; 3 reps; out `/mnt/wbterminal1/tmp/claude-scratch/perf/r3-g1/bench`), then
@@ -133,3 +137,26 @@ entities, 50 pageFull refusals, 3 context resets, 0 rigs batched at the end. Con
 **Next 1070 session:** finish M1 (list above), then a decision bench on a NEW snapshot of the merged tree: A, A-AA, EB
 (entityBatch), IB (interiorBatch), GP (gpuParticles), HUD bisect arms + hudDiet; Holtburg + Linvak crowd + one dungeon; owner rule:
 overall fps wins ship (look stills for the record).
+
+## Laptop 10-31 (batch reworks verified in real boots)
+
+Since `0d1cb56b` (uncommitted until the commit that adds this section): `?interiorBatch` takes AO / roughness / emissive members
+(packExtState texels 2-3, class map sets `|xm…`), the kit pages are demand-sized (the old allocator reserved the whole 128 MiB cap
+with 99% empty slots because the fake GL's MAX_ARRAY_TEXTURE_LAYERS was 0), page-full waits, the interior diag `meshes:
+{ built, suppressed }`, and `laptop-rust-boot-smoke.mjs --teleloc "<cell> <x> <y> <z>"`.
+
+Real laptop boots (SwiftShader, `--quality low --render-scale 0.25`, logs `$S/r3-batching/bootlogs/`) [M]:
+- **both batches, Holtburg outdoors** (`r3-ib-pages2`, 360 s): 0 console / page errors. entityBatch: 14 rigs active, 127 draws,
+  `verify()` 0 / 0 / 0 / 0 / 0, 0 demotes, 0 context resets, 0 page-full waits, 0 refused layers (kit 104 MB live of the 128 MiB
+  cap, ~67 MB of it entity layers). interiorBatch: 1 LB planned, chunks overlap 1 + building 1, 0 activations: outdoors, the chunk
+  cells are not shown, so the chunk waits (by design, header "overlap per legacy mesh").
+- **interiorBatch, inside `@teleloc 0xA9B40121 104.5 135.7 67.0`** (`r3-ib-room`, 300 s): **170 of 291 legacy meshes drawn batched**
+  (the rest wait for their batches to come on screen), 125 slots (all with AO + roughness, 4 emissive), bitMismatch 0, giveUps 0,
+  pageFull 0, 0 errors. 8 texture replans at boot (`replan:map`: texture swaps while streaming; limit 64).
+- An earlier boot (both batches) was killed by the system earlyoom (not the cgroup), with 0.7 GB available: SwiftShader's GPU
+  process holds ~2 GB and the renderer ~1.3-1.4 GB in these boots, and the idle tsserver (Claude's LSP) held 1.1 GB. With the
+  tsserver stopped the boots finish with ~1.3 GB to spare. Watch `free -m` before a batch boot.
+
+Open from these boots (none blocks the 1070 bench): a texture swap re-plans the whole chunk (teardown + rebuild); on the 1070
+this is a boot-time cost to watch in the IB arm (`textureReplans`, `teardowns`). `pools.cells` read 0 in the room boot (38 outdoors).
+

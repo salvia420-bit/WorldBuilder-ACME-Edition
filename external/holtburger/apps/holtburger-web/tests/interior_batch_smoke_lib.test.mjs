@@ -27,6 +27,12 @@
 //       quarter of the canvas, within the POM band); the layers arm walks the
 //       R8 height layers; the page passes `pom` through and the runner loads
 //       and gates the arms.
+//   D6  (2026-10-31, AO / roughness / emissive members) the +maps arms
+//       (LIB.MAP_ARMS, `&maps=1`: the rig's texchan + luminous material
+//       cache): D1's gates, the on load batched the AO / roughness / emissive
+//       members (map slots of both realboot sets, no extra-map refusal, no
+//       texture re-plan); the layers arm walks the AO / roughness layers; the
+//       page passes `maps` through and the runner loads and gates the arms.
 //   D4  (realboot 2026-10-31) the +pools arms (LIB.POOL_ARMS, `&pools=1`:
 //       the env-cell draw pools armed as index.js arms them): both loads arm
 //       the pools and read the same pool state, the on load is not disarmed,
@@ -72,7 +78,7 @@ function renderer() {
   return r;
 }
 
-async function load(arm, on, pools = false, pom = false) {
+async function load(arm, on, pools = false, pom = false, maps = false) {
   KIT.resetKit();
   IB.disposeInteriorBatches();
   IB.__setInteriorBatchEnvForTest(on ? { mode: "on" } : null);
@@ -80,7 +86,7 @@ async function load(arm, on, pools = false, pom = false) {
   const mods = { M, adapter, cells: on ? cellsOn : cellsOff, IB, KIT, PP };
   const l = console.warn;
   console.warn = () => {};
-  try { return await LIB.runArm(THREE, renderer(), mods, arm, { ticks: 6, pools, pom }); } finally { console.warn = l; }
+  try { return await LIB.runArm(THREE, renderer(), mods, arm, { ticks: 6, pools, pom, maps }); } finally { console.warn = l; }
 }
 
 await t("D1 every arm, flag off and on: shape, batching, bits, fewer calls, same visible set; punch fed, shadow map read", async () => {
@@ -231,6 +237,36 @@ await t("D5 the +pom arms: the POM cache world batches its POM members; the clos
   const runner = readFileSync(path.join(APP, "harness/glsl_smoke/interior_batch_smoke.mjs"), "utf8");
   assert.ok(runner.includes("for (const arm of LIB.POM_ARMS)") && runner.includes("&pom=1&interiorBatch=on") && runner.includes("arm=layers&pom=1&interiorBatch=on"), "the runner loads the +pom arms");
   for (const g of ["the POM members batched", "the R8 height layers too"]) assert.ok(runner.includes(g), `gate: ${g}`);
+  IB.disposeInteriorBatches();
+  IB.__setInteriorBatchEnvForTest(null);
+});
+
+await t("D6 the +maps arms: the texchan + luminous world batches its AO / roughness / emissive members; the AO / roughness readback; page + runner", async () => {
+  assert.deepEqual(LIB.MAP_ARMS, ["town", "dungeon", "shadowmap"]);
+  for (const arm of LIB.MAP_ARMS) {
+    const off = await load(arm, false, false, false, true);
+    const on = await load(arm, true, false, false, true);
+    assert.equal(off.batch, null, `${arm}: the off load never armed`);
+    const cov = on.coverage;
+    assert.ok(on.batch && cov && cov.chunks === 1 && cov.visibleMeshes > 0 && cov.suppressed === cov.visibleMeshes,
+      `${arm}: every batched mesh of a visible cell handed over: ${JSON.stringify({ batch: on.batch, cov })}`);
+    assert.ok(on.bits.cells > 0 && on.bits.bad === 0 && on.batch.bitMismatch === 0, `${arm}: bits ${JSON.stringify(on.bits)}`);
+    assert.ok(on.calls < off.calls, `${arm}: ${on.calls} < ${off.calls} calls`);
+    assert.deepEqual(on.visible, off.visible);
+    assert.equal(on.settled, true, `${arm}: settled after ${on.ticks} ticks`);
+    const ms = on.batch.mapSlots;
+    assert.ok(ms && ms.ao >= 5 && ms.roughness >= 5 && ms.emissive >= 2 && ms.sets["|xmar"] >= 1 && ms.sets["|xmare"] >= 1
+      && JSON.stringify(on.batch.extraMaps) === "{}" && on.batch.textureReplans === 0,
+      `${arm}: AO / roughness / emissive members batched ${JSON.stringify({ ms, extra: on.batch.extraMaps, unit: on.batch.unitReasons })}`);
+    if (arm === "shadowmap") assert.equal(LIB.depthDiff(on.shadowDepth, off.shadowDepth).sameSize, true);
+  }
+  const L = await load("layers", true, false, false, true);
+  assert.ok(L.layers && L.layers.mapLayers >= 10 && L.layers.layers > L.layers.mapLayers && L.layers.mismatched === 0, JSON.stringify(L.layers));
+  const page = readFileSync(path.join(APP, "harness/glsl_smoke/interior_batch_page.html"), "utf8");
+  assert.ok(page.includes('get("maps") === "1"') && /runArm\([^)]*maps/.test(page), "the page passes maps through");
+  const runner = readFileSync(path.join(APP, "harness/glsl_smoke/interior_batch_smoke.mjs"), "utf8");
+  assert.ok(runner.includes("for (const arm of LIB.MAP_ARMS)") && runner.includes("&maps=1&interiorBatch=on") && runner.includes("arm=layers&maps=1&interiorBatch=on"), "the runner loads the +maps arms");
+  for (const g of ["the AO / roughness / emissive members batched", "the AO and roughness layers too"]) assert.ok(runner.includes(g), `gate: ${g}`);
   IB.disposeInteriorBatches();
   IB.__setInteriorBatchEnvForTest(null);
 });

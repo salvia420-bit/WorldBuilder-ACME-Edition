@@ -1506,6 +1506,11 @@ const TIER5 = [
   // 2026-10-31 real-boot rework: ?interiorBatch alongside the default-on env-cell draw pools.
   { tier: 5, flag: "interiorBatchPools", file: "tests/interior_batch_pools.test.mjs" },
   { tier: 5, flag: "interiorBatchPom", file: "tests/interior_batch_pom.test.mjs" },
+  { tier: 5, flag: "interiorBatchMaps", file: "tests/interior_batch_maps.test.mjs" },
+  { tier: 5, flag: "interiorBatchPagefull", file: "tests/interior_batch_pagefull.test.mjs" },
+  // 2026-10-31: demand-sized kit pages replayed on the real-boot key mix (client_portal.dat texture dims).
+  { tier: 5, flag: "gpuBatchPagesRealboot", file: "tests/gpu_batch_pages_realboot.test.mjs",
+    requires: () => process.env.HB_PORTAL_DAT || "/home/wbterminal/ac_base_dats/client_portal.dat" },
 ];
 
 // Registered but KNOWN-FAILING because the APP is wrong (a real bug, named

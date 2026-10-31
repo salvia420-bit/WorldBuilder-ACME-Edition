@@ -43,10 +43,10 @@
 //       program's modulo P2-P4; the flag-only props batch as p0.
 //   P6  drift + release: a height re-upload re-plans (texture cap) onto a
 //       fresh copy; dispose frees every POM extension row and height layer.
-//   P7  the extra-map census (`stats().extraMaps`): a member refused for its
-//       texchan planes (materials.js _applyRough: aoMap + roughnessMap) is
-//       counted by its WHOLE extra-map set, not only the first one the
-//       reason names (the measurement the AO / roughness follow-up needs).
+//   P7  the extra-map census (`stats().extraMaps`): a member refused for an
+//       extra map (a light map next to its texchan planes, materials.js
+//       _applyRough: aoMap + roughnessMap, which batch since 2026-10-31) is
+//       counted by its WHOLE extra-map set, not only the one the reason names.
 //
 // Each check fails on the pre-change tree (no POM rows / R8 pages / POM
 // class; `p1` refused as "shader-chain").
@@ -444,7 +444,9 @@ await t("P6 drift + release: a height re-upload re-plans onto a fresh copy; disp
   assert.ok(e1 && e1.pomRef, "re-admitted");
   assert.equal(e1.pomRef.contentKey, AP.contentKeyOf(h), "the new upload's content");
   assert.notEqual(e1.pomRef.contentKey, oldKey);
-  assert.equal(pages.alloc.refCount(oldKey), 0, "the stale copy released");
+  // Released: idle (0), or (-1) its idle layer already reused by the fresh copy
+  // (the kit's demand-sized pages are full: page_allocator.js "DEMAND-SIZED PAGES").
+  assert.ok(pages.alloc.refCount(oldKey) <= 0, "the stale copy released");
   const keys = [...S.slots.values()].filter((e) => e.pom).map((e) => e.pomRef.contentKey);
   IB.disposeInteriorBatches();
   for (const k of keys) assert.equal(pages.alloc.refCount(k), 0, `height layer ${k} released`);
@@ -454,21 +456,24 @@ await t("P6 drift + release: a height re-upload re-plans onto a fresh copy; disp
   KIT.resetKit();
 });
 
-await t("P7 the extra-map census: a member refused for texchan planes is counted by its whole extra-map set", async () => {
+await t("P7 the extra-map census: a member refused for an extra map is counted by its whole extra-map set", async () => {
   KIT.resetKit();
   IB.disposeInteriorBatches();
   IB.__setInteriorBatchEnvForTest({ mode: "on", now: R.FROZEN_CLOCK });
   const w = await R.makeWorld({ M, adapter }, { pom: true });
-  // The texchan shape (materials.js _applyRough): both planes on one surface.
+  // The texchan shape (materials.js _applyRough: both planes on one surface,
+  // batched since 2026-10-31, tests/interior_batch_maps.test.mjs) next to a
+  // light map no class reproduces: refused for the light map, counted by the whole set.
   const m = w.mc.materials.get(0x08000102);
   m.roughnessMap = adapter.surfacePixelsToRoughnessTexture(new Uint8Array(32 * 32).fill(40), 32, 32);
   m.aoMap = adapter.surfacePixelsToAoTexture(new Uint8Array(32 * 32).fill(200), 32, 32);
+  m.lightMap = adapter.surfacePixelsToTexture(new Uint8Array(32 * 32 * 4).fill(90), 32, 32);
   await R.build(cellsOn, w, { baked: false });
   const sh = R.makeSession({ player: R.CELL(0), indoor: true, frustum: R.CELL_IDS, walk: R.CELL_IDS, bfs: [] });
   for (let f = 0; f < 3; f += 1) { R.tick(cellsOn, w, sh); R.renderPass(w, R.MASK_BOTH); }
   const d = IB.interiorBatchDiag();
-  assert.ok((d.unitReasons["cells:map:aoMap"] || 0) >= 1, JSON.stringify(d.unitReasons));
-  assert.ok((d.extraMaps["aoMap+roughnessMap"] || 0) >= 1, JSON.stringify(d.extraMaps));
+  assert.ok((d.unitReasons["cells:map:lightMap"] || 0) >= 1, JSON.stringify(d.unitReasons));
+  assert.ok((d.extraMaps["lightMap+aoMap+roughnessMap"] || 0) >= 1, JSON.stringify(d.extraMaps));
   assert.equal(d.chunks.active, 1, "the rest of the landblock still batches");
   IB.disposeInteriorBatches();
   IB.__setInteriorBatchEnvForTest(null);

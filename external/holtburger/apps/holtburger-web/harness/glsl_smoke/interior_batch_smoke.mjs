@@ -47,6 +47,15 @@
 //             flag-only p1 clones): every gate above, plus the on load batched
 //             the POM members (POM slots with height layers, every POM program
 //             linked) — legacy vs batch at the same 2/255 on 0.1% bar;
+//   +maps    (2026-10-31) `layers&maps=1` (every R8 AO and RGBA8 roughness
+//             layer, every level, byte-equal to the member's own 2D plane,
+//             next to the map / normal layers), then the town, dungeon and
+//             shadowmap arms on the texchan + luminous material cache
+//             (`&maps=1`, interior_batch_lib.mjs MAP_ARMS: materials.js's own
+//             texchan attach, the luminous ladder's emissive alias): every
+//             gate above, plus the on load batched the AO / roughness /
+//             emissive members (map slots of both realboot sets, no member
+//             refused for an extra map, no texture re-plan);
 //   every program links; no GL, page or console error; no missing module;
 //   the on load settled (the per-sync CPU budget spreads the set-up over
 //   frames: the arm ticks until every chunk is active, at most 400 frames).
@@ -213,6 +222,24 @@ for (const arm of LIB.POM_ARMS) {
   check(`${name}: the POM members batched (real POM chains on height layers, no texture re-plan)`,
     on.batch && on.batch.pomSlots >= 4 && on.batch.slots > on.batch.pomSlots && on.batch.textureReplans === 0,
     JSON.stringify(on.batch && { pomSlots: on.batch.pomSlots, slots: on.batch.slots, unitReasons: on.batch.unitReasons, textureReplans: on.batch.textureReplans }));
+}
+
+// --- +maps: AO / roughness / emissive members (texchan planes + the luminous emissive alias) ---
+const LM = await run("arm=layers&maps=1&interiorBatch=on");
+console.log(`layers+maps: ${JSON.stringify({ layers: LM.layers, batch: LM.batch && { chunks: LM.batch.chunks, slots: LM.batch.slots, mapSlots: LM.batch.mapSlots } })}`);
+check("layers+maps: every admitted layer (the AO and roughness layers too), every level, byte-equal to its 2D texture",
+  LM.layers && LM.layers.mapLayers >= 10 && LM.layers.mismatched === 0, JSON.stringify(LM.layers));
+check("layers+maps: clean, every program linked", clean(LM) && linked(LM), JSON.stringify({ errors: LM.errors, pageErrors: LM.pageErrors, glError: LM.glError, missing: LM.missing }));
+for (const arm of LIB.MAP_ARMS) {
+  const name = `${arm}+maps`;
+  const off = await run(`arm=${arm}&maps=1`);
+  const on = await run(`arm=${arm}&maps=1&interiorBatch=on`);
+  gateArm(arm, off, on, name);
+  const ms = on.batch && on.batch.mapSlots;
+  check(`${name}: the AO / roughness / emissive members batched (both realboot sets, no extra-map refusal, no texture re-plan)`,
+    on.batch && ms && ms.ao >= 5 && ms.roughness >= 5 && ms.emissive >= 2 && ms.sets["|xmar"] >= 1 && ms.sets["|xmare"] >= 1
+    && JSON.stringify(on.batch.extraMaps) === "{}" && on.batch.textureReplans === 0,
+    JSON.stringify(on.batch && { mapSlots: ms, extraMaps: on.batch.extraMaps, unitReasons: on.batch.unitReasons, textureReplans: on.batch.textureReplans }));
 }
 
 console.log(fails.length === 0 ? "PASS" : `FAIL (${fails.length}): ${fails.join("; ")}`);

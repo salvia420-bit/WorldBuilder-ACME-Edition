@@ -50,6 +50,14 @@
 // their static-bias clones (flag-only p1: batched as p0). `pom` is the close
 // indoor arm (camera ~4 m off cell 0: the march at full strength, the LOD
 // fade band around it); `layers&pom=1` reads every R8 height layer back.
+// MAPS (`&maps=1`, 2026-10-31; MAP_ARMS): the rig's texchan + luminous
+// material cache (rig.mjs materialCache `texchan` / `luminous`: the texchan
+// AO + roughness planes attached by materials.js's own _attachRoughnessMap
+// from texchan-shaped records, the luminous ladder's emissive alias on two
+// surfaces), i.e. the realboot's AO + roughness (+ emissive) members: cells
+// and props batch through the class map sets (AO from R8 page layers,
+// roughness from RGBA8 linear layers, emissive from the map layer);
+// `layers&maps=1` reads every AO / roughness layer back.
 // Each arm reports the frame (RGBA bytes), lit pixels, draw calls of the
 // frame, the batch diag, whether the decoded bits equal the container set,
 // and the sync count the batch needed to settle (the per-sync CPU budget
@@ -118,7 +126,9 @@ export async function smokeWorld(THREE, renderer, mods, opts = {}) {
     groups.buildings.add(roof);
     worldRoot.updateMatrixWorld(true);
   }
-  const mc = await R.materialCache(mods.M, mods.adapter, opts.pools ? { ...R.SURF, ...R.SURF_POOLED } : R.SURF, { pom: opts.pom === true });
+  const mc = await R.materialCache(mods.M, mods.adapter, opts.pools ? { ...R.SURF, ...R.SURF_POOLED } : R.SURF, {
+    pom: opts.pom === true, texchan: opts.maps === true, luminous: opts.maps === true ? R.LUMINOUS : null,
+  });
   const scene3d = {
     scene, worldRoot, camera, renderer,
     terrainGroup: groups.terrain, buildingsGroup: groups.buildings, staticsGroup: groups.statics,
@@ -446,18 +456,20 @@ export function liveCoverage(w) {
 
 /**
  * Flag on: every level of every admitted map / normal layer (and, POM
- * members, every R8 height layer: both sides read back as (r, 0, 0, 255)) vs
- * the 2D texture three built for it.
+ * members, every R8 height layer: both sides read back as (r, 0, 0, 255);
+ * AO / roughness members, every R8 AO and RGBA8 roughness layer) vs the 2D
+ * texture three built for it.
  */
 export function layerReadback(w) {
   const S = w.mods.IB.__interiorBatchStateForTest();
   const pages = w.mods.KIT.kitPages(w.renderer);
-  let layers = 0, levels = 0, mismatched = 0, first = null, pomLayers = 0;
+  let layers = 0, levels = 0, mismatched = 0, first = null, pomLayers = 0, mapLayers = 0;
   for (const e of S.slots.values()) {
-    for (const [ref, tex] of [[e.mapRef, e.map], [e.nrmRef, e.normalMap], [e.pomRef, e.pomTex]]) {
+    for (const [ref, tex, kind] of [[e.mapRef, e.map, "map"], [e.nrmRef, e.normalMap, "map"], [e.pomRef, e.pomTex, "pom"], [e.aoRef, e.aoTex, "extra"], [e.rghRef, e.rghTex, "extra"]]) {
       if (!ref || !tex || (ref.page.desc.format !== "rgba8" && ref.page.desc.format !== "r8")) continue;
       layers += 1;
-      if (ref.page.desc.format === "r8") pomLayers += 1;
+      if (kind === "pom") pomLayers += 1;
+      if (kind === "extra") mapLayers += 1;
       for (let l = 0; l < ref.page.desc.levels; l += 1) {
         const a = pages.readLayer(ref.page, ref.layer, l);
         const b = pages.readTexture2D(tex, l);
@@ -468,7 +480,7 @@ export function layerReadback(w) {
       }
     }
   }
-  return { layers, levels, mismatched, first, pomLayers };
+  return { layers, levels, mismatched, first, pomLayers, mapLayers };
 }
 
 const OUT = (R.LB | 0x31) >>> 0;
@@ -491,6 +503,12 @@ export const POM_ARM_TABLE = {
   pom: { frame: "unsplit", close: true, state: { player: R.CELL(0), indoor: true, frustum: R.CELL_IDS.slice(), walk: R.CELL_IDS.slice(), bfs: [] } },
 };
 export const POM_ARMS = ["pom", "shadowmap"];
+/**
+ * AO / roughness / emissive arms (`&maps=1`; header "MAPS"): the unsplit and
+ * the split frame and the shadow raster on the texchan + luminous material
+ * cache (+ `layers&maps=1`, the AO / roughness readback).
+ */
+export const MAP_ARMS = ["town", "dungeon", "shadowmap"];
 
 /**
  * Is the batch settled (flag on): every landblock planned, no chunk still
@@ -520,7 +538,7 @@ export function settled(w) {
 export async function runArm(THREE, renderer, mods, armName, opts = {}) {
   const arm = ARMS[armName === "layers" ? "town" : armName] || POM_ARM_TABLE[armName];
   if (arm.basicShadows) renderer.shadowMap.type = THREE.BasicShadowMap;
-  const w = await smokeWorld(THREE, renderer, mods, { roof: !!arm.roof, pools: opts.pools === true, pom: opts.pom === true, close: !!arm.close });
+  const w = await smokeWorld(THREE, renderer, mods, { roof: !!arm.roof, pools: opts.pools === true, pom: opts.pom === true, maps: opts.maps === true, close: !!arm.close });
   const ticks = opts.ticks ?? 12;
   const maxTicks = opts.maxTicks ?? 400;
   const pause = opts.pause || (async () => {});
@@ -541,7 +559,7 @@ export async function runArm(THREE, renderer, mods, armName, opts = {}) {
       lbs: diag.lbs, chunks: diag.chunks, objects: diag.objects, drawnObjects: diag.drawnObjects, unitReasons: diag.unitReasons,
       legacyReasons: diag.legacyReasons, bitMismatch: diag.bitMismatch, maxSyncMs: diag.maxSyncMs, maxPlanMs: diag.maxPlanMs, maxMergeMs: diag.maxMergeMs,
       disarmed: diag.disarmed, pools: diag.pools, slots: diag.slots, pomSlots: diag.pomSlots, textureReplans: diag.textureReplans,
-      extraMaps: diag.extraMaps,
+      extraMaps: diag.extraMaps, mapSlots: diag.mapSlots, mapArrivals: diag.mapArrivals,
     } : null,
     pools: poolsReport(w),
     bits: bitsAgree(w),

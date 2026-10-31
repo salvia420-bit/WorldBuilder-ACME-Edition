@@ -133,6 +133,61 @@
 //     POM member needs its normal map (the POM text calls getTangentFrame);
 //     its height texture's re-upload (version) re-plans like a map swap.
 //
+// AO / ROUGHNESS / EMISSIVE MEMBERS (2026-10-31; realboot census, Holtburg
+// ultra, `?interiorBatch=on`: extraMaps {aoMap+roughnessMap 364,
+// aoMap+roughnessMap+emissiveMap 14, emissiveMap 14}, i.e. every refused
+// unit but 8 transparent props: the batch batched nothing). The texchan
+// planes materials.js `_applyRough` attaches (aoMap: R8 cavity AO at
+// `aoMapIntensity`; roughnessMap: RGBA8 linear, the value in .g) and the
+// luminous ladder's emissiveMap (the member's map itself, white emissive x
+// luminosity) are accepted. A member batches with a class of its MAP SET
+// (class_materials.js "EXTRA-MAP MEMBERS": one class and program per set,
+// three's own aomap / roughnessmap / emissivemap chunks with the layer
+// samples substituted, A1-E2): the AO plane is a kit R8 page layer, the
+// roughness plane an RGBA8 page layer (both three's own uploads copied level
+// by level, array_pages.js), the emissive layer the map's own layer; the
+// slot's extension row carries the layers, aoMapIntensity and the emissive
+// uniform (layer_state.js "EXTRA-MAP FIELDS"), rewritten every sync from the
+// member (a lumNight dim moves it like any slot value). Batches split by AO
+// and roughness page as by map page; an emissiveMap that is NOT the map stays
+// legacy (`map:emissiveMap`), as do a luminous member without one and every
+// other extra map. A plane that arrives late (texchan's async arm: the base
+// gets it, `_reseatVariantsForDid` the clones) hands its chunks back to
+// legacy within the frame and re-plans them into the new set once the burst
+// settled (`replan:ao-map-arrived` / `replan:roughness-map-arrived`,
+// IB_MAP_SETTLE_SYNCS later; once per member, so `stats().mapArrivals`
+// counts them apart from the texture cap); a plane that leaves, is swapped
+// or re-uploaded, or an emissive alias change, re-plans under the texture
+// cap (`replan:ao-map`, `replan:roughness-map`, `replan:emissive-map`).
+// Diag: `stats().mapSlots` = { ao, roughness, emissive, sets }.
+//
+// PAGE-FULL WAITS (2026-10-31; laptop real boot, Holtburg, quality low,
+// `?interiorBatch=on`: unitReasons {replan:admit-failed 18}, legacyReasons
+// {chunk:unstable 2}, objects 0 — the kit pages at their byte cap refused a
+// layer, the chunk tore down and re-planned, and after BATCH_REPLAN_LIMIT
+// re-plans both chunks went legacy for life). A refused layer admit is told
+// apart by the kit's reason (array_pages.js `lastRefusal`):
+//   - "cap" (the kit pages' byte cap, after their reclaim / fit): the chunk
+//     does NOT tear down and nothing is counted toward the re-plan limit. It
+//     keeps what it admitted and WAITS in admitting, polling the refused
+//     layers with `wouldAdmit` (no budget, no allocator counter) every sync
+//     and admitting them as soon as room appears (a release, an evict, a
+//     reclaimable page). The rest of the chunk's members go on admitting
+//     meanwhile. After IB_PAGEFULL_WAIT_SYNCS the members still refused stay
+//     LEGACY INDIVIDUALLY: every legacy mesh holding one of them stays out of
+//     the plan (a mesh is the unit the sentinel hands over), the slots only
+//     they used are released, and the chunk goes on with the rest. Those
+//     members are re-tried every IB_PAGEFULL_RETRY_SYNCS once every one of
+//     them would fit (a soft re-plan, not counted either); a chunk left with
+//     no mesh WAITS (pending, holding nothing) instead of going legacy.
+//   - "unsupported" or a layer larger than the whole cap (`neverFits`): the
+//     member can never be admitted; it stays legacy individually at once (no
+//     wait, never re-tried), the rest of the chunk batches.
+//   - "failed" (a GL copy / upload failure): a re-plan, as before.
+// A context reset clears every page-full exclusion. Diag: `stats().pageFull`
+// = { waits, admittedAfterWait, legacyMembers, neverFit, retries, idleWaits
+// (counters), waitingNow, excludedNow (chunks waiting / members left out now) }.
+//
 // FLAG OFF: cells.js runs one constant-false branch per hook site and calls
 // nothing here; this module creates no state at import (constant tables only:
 // name arrays, one frozen enum, one regex; no Map, Set, WeakMap, typed array
@@ -154,7 +209,7 @@ import { RowTexture, landblockOrigin } from "./row_texture.js";
 import { UPLOAD_KIND, uploadNowMs } from "./upload_budget.js";
 import {
   makeClassMaterial, classKeyOf, classPatchMissing, classPrewarmProxy, dummyMap, SLOT_ATTR, STATE_SAMPLER,
-  CLASS_ALPHA_TEST_PLACEHOLDER, pomStateOf, POM_NONE, chainFingerprintOf,
+  CLASS_ALPHA_TEST_PLACEHOLDER, pomStateOf, POM_NONE, chainFingerprintOf, memberMapSet, MAP_SET_NONE, extraMapStateOf,
 } from "./class_materials.js";
 import { noRaycast } from "./raycast.js";
 import {
@@ -191,10 +246,29 @@ export const IB_CELLS_PER_ROW = 1536;
 export const IB_MAX_ROW = 2047;
 /**
  * Re-plans of one chunk for a texture swap (a BC7 preview upgraded to its
- * full tier, a sidecar normal map arriving, a POM height re-upload): each happens once per surface,
+ * full tier, a sidecar normal map arriving, a POM height re-upload, a texchan
+ * AO / roughness plane arriving late, an emissive alias change): each happens once per surface,
  * so they get a wider cap than other drift (BATCH_REPLAN_LIMIT).
  */
 export const IB_TEXTURE_REPLAN_LIMIT = 64;
+/**
+ * A texchan AO / roughness plane ARRIVING on a live member (texchan's async
+ * arm lands one fetch at a time) hands its chunk back to legacy at once and
+ * re-plans after this many syncs, so a burst of arrivals is one re-plan, not
+ * one per surface. Arrivals happen once per member material (bounded by the
+ * chunk's members, not an oscillation): they count toward
+ * IB_MAP_ARRIVAL_LIMIT, not the texture cap.
+ */
+export const IB_MAP_SETTLE_SYNCS = 30;
+export const IB_MAP_ARRIVAL_LIMIT = 256;
+/**
+ * PAGE-FULL WAITS (header): syncs a chunk waits in admitting for layers the
+ * kit pages' byte cap refused before those members stay legacy individually,
+ * and the period after which such members are re-tried (once every one of
+ * them would fit). Neither counts toward BATCH_REPLAN_LIMIT.
+ */
+export const IB_PAGEFULL_WAIT_SYNCS = 120;
+export const IB_PAGEFULL_RETRY_SYNCS = 600;
 /** Syncs between two bit backstops (bits rebuilt from container.visible). */
 export const IB_BACKSTOP_SYNCS = 60;
 /** Default chunk cap (merged bytes) and per-frame merge budget. */
@@ -211,7 +285,12 @@ export const IB_MERGE_MS_DEFAULT = 2;
 // member's own chain (proven per member by `chainFingerprint`).
 export const INTERIOR_CHAIN_KEY = /^hb\|d0\|c0\|p[01]\|l[01]\|a0\|b0\|f0\|s[01]\|k(0|1d?)\|v$/;
 
+// Every extra map three can bind (the census names a refused member's whole
+// set by this list); the ones a class cannot reproduce (header "AO /
+// ROUGHNESS / EMISSIVE MEMBERS": aoMap, roughnessMap and an emissiveMap that
+// is the member's map batch through a class map set).
 const _NO_EXTRA_MAPS = ["lightMap", "aoMap", "bumpMap", "displacementMap", "roughnessMap", "metalnessMap", "alphaMap", "emissiveMap", "envMap", "specularMap", "gradientMap", "matcap"];
+const _UNBATCHED_MAPS = ["lightMap", "bumpMap", "displacementMap", "metalnessMap", "alphaMap", "envMap", "specularMap", "gradientMap", "matcap"];
 /** The attributes a candidate may carry, in merge order (anything else: ineligible). */
 const _ATTR_ORDER = ["position", "normal", "uv", "acBakedLight"];
 
@@ -511,10 +590,13 @@ export function interiorArrayReason(member) {
   if (member.defines) {
     for (const k of Object.keys(member.defines)) if (k !== "STANDARD" || member.defines[k] !== "") return "defines";
   }
-  for (const k of _NO_EXTRA_MAPS) if (member[k]) return "map:" + k;
+  for (const k of _UNBATCHED_MAPS) if (member[k]) return "map:" + k;
   if (!member.map) return "no-map";
+  // An emissive class samples the emissive layer from the MAP page (E2): the
+  // luminous ladder's emissiveMap is the map itself; any other one stays legacy.
+  if (member.emissiveMap && member.emissiveMap !== member.map) return "map:emissiveMap";
   const em = member.emissive;
-  if (em && (em.r !== 0 || em.g !== 0 || em.b !== 0)) return "luminous";
+  if (!member.emissiveMap && em && (em.r !== 0 || em.g !== 0 || em.b !== 0)) return "luminous";
   if (member.vertexColors || member.flatShading || member.wireframe || member.alphaHash || member.alphaToCoverage || member.premultipliedAlpha) return "feature";
   if (member.clippingPlanes && member.clippingPlanes.length > 0) return "clipping";
   if (member.polygonOffset || member.stencilWrite) return "raster-state";
@@ -523,6 +605,9 @@ export function interiorArrayReason(member) {
   if (member.normalMap && member.normalMapType !== THREE.TangentSpaceNormalMap) return "normal-map-type";
   if (!interiorTextureInfo(member.map).desc) return "map-format";
   if (member.normalMap && !interiorTextureInfo(member.normalMap).desc) return "normal-map-format";
+  // The texchan planes: AO as an R8 (or RGBA8) page layer, roughness as an RGBA8 one.
+  if (member.aoMap && !interiorTextureInfo(member.aoMap, true).desc) return "ao-map-format";
+  if (member.roughnessMap && !interiorTextureInfo(member.roughnessMap).desc) return "roughness-map-format";
   return null;
 }
 
@@ -1065,10 +1150,14 @@ function _newStats() {
   return {
     lbsNoted: 0, chunksPlanned: 0, builds: 0, activations: 0, teardowns: 0, replans: 0, textureReplans: 0, contextResets: 0,
     giveUps: 0, bitMismatch: 0, bitUploads: 0, bitUploadBytes: 0, mergeMs: 0, maxMergeMs: 0, mergeSlices: 0, plans: 0,
-    planMs: 0, maxPlanMs: 0, planSlices: 0, maxSyncMs: 0, classWarms: 0,
+    planMs: 0, maxPlanMs: 0, planSlices: 0, maxSyncMs: 0, classWarms: 0, mapArrivals: 0,
     depthWarms: 0, rasterRequests: 0, slotRewrites: 0, legacyReasons: {}, unitReasons: {}, disarmed: {},
     // Members refused for an extra map, by their whole extra-map set (census).
     extraMaps: {},
+    // PAGE-FULL WAITS (header): waits started, waits that ended with every
+    // layer admitted, members left legacy after the wait / that can never
+    // fit, soft re-plans that re-tried them, chunk waits holding nothing.
+    pageFull: { waits: 0, admittedAfterWait: 0, legacyMembers: 0, neverFit: 0, retries: 0, idleWaits: 0 },
     // With the env-cell draw pools armed (header): planned cells whose shell
     // the pools share, the surface groups pooled / left on the legacy
     // producer in them, cells whose surfaces stayed legacy because the split
@@ -1118,6 +1207,8 @@ function _st() {
     watch: null,
     depthWarm: null,
     recording: null,
+    // PAGE-FULL WAITS (header): chunks holding cap-excluded members (re-tried).
+    pageFullChunks: new Set(),
     stats: _newStats(),
   };
   return _S;
@@ -1190,7 +1281,10 @@ export function noteInteriorBatchBuilt(scene3d, lbKey, buildGen, newCells) {
     S.lbs.delete(key);
   }
   const cells = [];
-  for (const c of newCells || []) if (c && c.container) cells.push({ container: c.container, cellId: c.cellId >>> 0 });
+  // `tag` = [container, cellId]: a tagged array slot (the `rep` rule below),
+  // so the backstop hands the id (a uint32 above 2^31: a heap number) to the
+  // pool registry without boxing it on every call.
+  for (const c of newCells || []) if (c && c.container) cells.push({ container: c.container, cellId: c.cellId >>> 0, tag: [c.container, c.cellId >>> 0] });
   cells.sort((a, b) => a.cellId - b.cellId);
   const rec = {
     lbKey: key, buildGen, cells, status: "pending", reason: null, chunks: [], plan: null, group: null,
@@ -1264,10 +1358,16 @@ function _meshPlan(cand, container, kind, reasons) {
     const mapK = interiorTextureInfo(m.map).pageKey;
     const nrmK = m.normalMap ? interiorTextureInfo(m.normalMap).pageKey : "-";
     const pomK = pom && pom.pom ? "|h:" + interiorTextureInfo(pom.texture, true).pageKey : "";
-    const pre = `${kind}|${classKeyOf(cls)}|${interiorChainKey(m, pom)}|fp${fp}|${interiorMemberSignature(m)}|${layout}|rs${mesh.receiveShadow ? 1 : 0}`;
+    // Extra maps (header "AO / ROUGHNESS / EMISSIVE MEMBERS"): one class per
+    // map set; AO / roughness split by page like the map (emissive rides the map page).
+    const ms = memberMapSet(m);
+    const xK = ms.any
+      ? (ms.ao ? "|a:" + interiorTextureInfo(m.aoMap, true).pageKey : "") + (ms.rough ? "|r:" + interiorTextureInfo(m.roughnessMap).pageKey : "")
+      : "";
+    const pre = `${kind}|${classKeyOf(cls)}|${interiorChainKey(m, pom)}|fp${fp}|${interiorMemberSignature(m)}|${layout}|rs${mesh.receiveShadow ? 1 : 0}${ms.key}`;
     entries.push({
       mesh, member: m, cls, fp, kind, geometry: mesh.geometry, start: rg.start, count: rg.count, matrix, baseCast,
-      receiveShadow: mesh.receiveShadow === true, preKey: pre, pageKey: pre + "|m:" + mapK + "|n:" + nrmK + pomK,
+      receiveShadow: mesh.receiveShadow === true, preKey: pre, pageKey: pre + "|m:" + mapK + "|n:" + nrmK + pomK + xK,
       slot: -1, code: 0, cellIdx: -1,
     });
   }
@@ -1440,8 +1540,11 @@ function _newChunk(rec, index, cellPlans) {
   const chunk = {
     rec, index, cellPlans, status: S_CHUNK.PENDING, reason: null,
     drawState: new Uint8Array(n), cellObjs: new Array(n), row: -1, batches: [], slotsHeld: new Set(),
-    ticket: null, ticketBudget: null, bytes: 0, overlapFrames: 0, replans: 0, textureReplans: 0, retryFrame: 0,
+    ticket: null, ticketBudget: null, bytes: 0, overlapFrames: 0, replans: 0, textureReplans: 0, mapArrivals: 0, retryFrame: 0,
     noKeys: null, suppressed: [], meshInfo: [], casts: false, mask: rec.mask, planned: true, admitted: false, mergeAt: 0, replan: null,
+    // PAGE-FULL WAITS (header): the open wait (sync it began), and the
+    // members left legacy for the cap (member -> true = can never fit).
+    capWaitSince: -1, pageFull: null, pageFullAt: 0,
   };
   for (let i = 0; i < n; i += 1) {
     const c = cellPlans[i].cell.container;
@@ -1519,6 +1622,7 @@ function _slotEntry(S, member) {
     const cls = interiorMemberClass(member);
     const fpr = chainFingerprintId(member);
     const pom = fpr.pom && fpr.pom.pom === true ? fpr.pom : null;
+    const maps = memberMapSet(member);
     e = {
       member, slot: -1, mapRef: null, nrmRef: null, map: null, mapVersion: -1, normalMap: null, nrmVersion: -1,
       version: member.version, clsKey: classKeyOf(cls), clsBlend: cls.blend, clsLight: cls.light, clsSide: cls.side,
@@ -1526,60 +1630,119 @@ function _slotEntry(S, member) {
       fp: fpr.id, sig: interiorMemberSignature(member), chunks: new Set(), dead: false,
       obc: member.onBeforeCompile, transparent: member.transparent === true, side: member.side, visible: member.visible !== false,
       // POM (header "POM MEMBERS"): the dry run's verdict, the height layer
-      // and the POM extension row (layer_state.js packPomState).
-      pom, pomTex: pom ? pom.texture : null, pomVersion: pom ? pom.texture.version : -1, pomRef: null, pomRow: 0, pomState: pom ? {} : null,
+      // and the POM state of the extension row (layer_state.js packExtState).
+      pom, pomTex: pom ? pom.texture : null, pomVersion: pom ? pom.texture.version : -1, pomRef: null, pomState: pom ? {} : null,
+      // Extra maps (header "AO / ROUGHNESS / EMISSIVE MEMBERS"): the map set
+      // the slot was admitted for, the AO / roughness planes and their
+      // layers, the extra-map state of the extension row.
+      maps, aoTex: maps.ao ? member.aoMap : null, aoVersion: maps.ao ? member.aoMap.version : -1, aoRef: null,
+      rghTex: maps.rough ? member.roughnessMap : null, rghVersion: maps.rough ? member.roughnessMap.version : -1, rghRef: null,
+      mapState: maps.any ? {} : null,
+      // The extension row (0 = none): POM state and / or extra-map state.
+      extRow: 0,
+      /** The extension row under its POM-era name (diag / suites). */
+      get pomRow() { return this.extRow; },
     };
     S.slots.set(member, e);
   }
   return e;
 }
 
-/** A slot entry is resident: map (+ normal, + POM height and extension row) admitted and its state row written. */
-function _slotResident(e) {
-  return !!e.mapRef && e.slot >= 0 && (!e.member.normalMap || !!e.nrmRef) && (!e.pom || (!!e.pomRef && e.pomRow > 0));
+/** Does the slot need an extension row (POM state or an extra map)? */
+function _needsExt(e) {
+  return !!e.pom || e.maps.any;
 }
 
-/** The slot's POM extension row index (0 = none). */
+/** A slot entry is resident: map (+ normal, + POM height, + AO / roughness, + extension row) admitted and its state row written. */
+function _slotResident(e) {
+  return !!e.mapRef && e.slot >= 0 && (!e.member.normalMap || !!e.nrmRef) && (!e.pom || !!e.pomRef)
+    && (!e.aoTex || !!e.aoRef) && (!e.rghTex || !!e.rghRef) && (!_needsExt(e) || e.extRow > 0);
+}
+
+/** The slot's extension row index (0 = none). */
 function _extRow(e) {
-  return e.pomRow > 0 ? e.pomRow : 0;
+  return e.extRow > 0 ? e.extRow : 0;
+}
+
+/** The extra-map state of a slot (class_materials.js extraMapStateOf into the slot's own object), or null. */
+function _mapStateOf(e) {
+  if (!e.mapState) return null;
+  // E2: the emissive layer is the map's own (an emissive member's emissiveMap is its map).
+  return extraMapStateOf(e.member, e.aoRef ? e.aoRef.layer : 0, e.rghRef ? e.rghRef.layer : 0,
+    e.maps.emissive && e.mapRef ? e.mapRef.layer : 0, e.mapState);
+}
+
+/**
+ * One layer admit of `_slotAdmit`. Returns the admit result, or null with
+ * `out` saying why (header "PAGE-FULL WAITS"): `deferred` (the frame's
+ * budget), `refused` (+ `never`: the kit pages refused the layer — the byte
+ * cap, or a texture they can never hold), `failed` (the GL copy failed: a
+ * re-plan). `probe` (a chunk already waiting on the cap): ask `wouldAdmit`
+ * first, so polling books nothing and moves no allocator counter.
+ */
+function _admitLayer(pages, tex, budget, opts, out, probe) {
+  if (probe && pages.wouldAdmit && !pages.wouldAdmit(tex, opts)) {
+    out.refused = true;
+    out.never = !!(pages.neverFits && pages.neverFits(tex, opts));
+    return null;
+  }
+  const r = pages.admit(tex, budget, opts);
+  if (r && r.deferred) { out.deferred = true; return null; }
+  if (r) return r;
+  const why = pages.lastRefusal;
+  if (why === "cap" || why === "unsupported") {
+    out.refused = true;
+    out.never = why === "unsupported" || !!(pages.neverFits && pages.neverFits(tex, opts));
+  } else out.failed = "admit-failed";
+  return null;
 }
 
 /**
  * Admit an entry's layers and state row (each step once; a deferral keeps
  * what was admitted and retries next frame). Returns true when resident;
- * `out.deferred` / `out.failed` say why not.
+ * `out.deferred` / `out.refused` (+ `out.never`) / `out.failed` say why not
+ * (`_admitLayer`). `probe`: the chunk is waiting on the cap.
  */
-function _slotAdmit(S, e, pages, budget, out) {
+function _slotAdmit(S, e, pages, budget, out, probe = false) {
   const member = e.member;
   if (!e.mapRef) {
-    const r = pages.admit(member.map, budget);
-    if (r && r.deferred) { out.deferred = true; return false; }
-    if (!r) { out.failed = "admit-failed"; return false; }
+    const r = _admitLayer(pages, member.map, budget, null, out, probe);
+    if (!r) return false;
     e.mapRef = { ...r, pages };
     e.map = member.map;
     e.mapVersion = member.map.version;
   }
   if (member.normalMap && !e.nrmRef) {
-    const r = pages.admit(member.normalMap, budget);
-    if (r && r.deferred) { out.deferred = true; return false; }
-    if (!r) { out.failed = "admit-failed"; return false; }
+    const r = _admitLayer(pages, member.normalMap, budget, null, out, probe);
+    if (!r) return false;
     e.nrmRef = { ...r, pages };
   }
   e.normalMap = member.normalMap || null;
   e.nrmVersion = member.normalMap ? member.normalMap.version : -1;
-  if (e.pom) {
-    if (!e.pomRef) {
-      const r = pages.admit(e.pomTex, budget, R8_PLANES);
-      if (r && r.deferred) { out.deferred = true; return false; }
-      if (!r) { out.failed = "admit-failed"; return false; }
-      e.pomRef = { ...r, pages };
-      e.pomVersion = e.pomTex.version;
-    }
-    if (e.pomRow <= 0) {
-      const row = kitStateTable().addPom(pomStateOf(member, e.pom, e.pomRef.layer, e.pomState), budget);
-      if (row < 0) { out.deferred = true; return false; }
-      e.pomRow = row;
-    }
+  if (e.pom && !e.pomRef) {
+    const r = _admitLayer(pages, e.pomTex, budget, R8_PLANES, out, probe);
+    if (!r) return false;
+    e.pomRef = { ...r, pages };
+    e.pomVersion = e.pomTex.version;
+  }
+  if (e.aoTex && !e.aoRef) {
+    // The cavity-AO plane (adapter.js surfacePixelsToAoTexture: R8): three's
+    // own upload, copied level by level into an R8 page (array_pages.js).
+    const r = _admitLayer(pages, e.aoTex, budget, R8_PLANES, out, probe);
+    if (!r) return false;
+    e.aoRef = { ...r, pages };
+    e.aoVersion = e.aoTex.version;
+  }
+  if (e.rghTex && !e.rghRef) {
+    const r = _admitLayer(pages, e.rghTex, budget, null, out, probe);
+    if (!r) return false;
+    e.rghRef = { ...r, pages };
+    e.rghVersion = e.rghTex.version;
+  }
+  if (_needsExt(e) && e.extRow <= 0) {
+    const row = kitStateTable().addExt(e.pom ? pomStateOf(member, e.pom, e.pomRef.layer, e.pomState) : null, _mapStateOf(e), budget);
+    if (row < 0) { out.deferred = true; return false; }
+    e.extRow = row;
   }
   if (e.slot < 0) {
     const s = kitStateTable().addFromMaterial(member, e.mapRef.layer, budget, e.nrmRef ? e.nrmRef.layer : 0, _extRow(e));
@@ -1596,7 +1759,9 @@ function _releaseSlot(S, e, chunk) {
   if (e.mapRef) { try { e.mapRef.pages.release(e.mapRef.contentKey); } catch (_) { /* fail-soft */ } e.mapRef = null; }
   if (e.nrmRef) { try { e.nrmRef.pages.release(e.nrmRef.contentKey); } catch (_) { /* fail-soft */ } e.nrmRef = null; }
   if (e.pomRef) { try { e.pomRef.pages.release(e.pomRef.contentKey); } catch (_) { /* fail-soft */ } e.pomRef = null; }
-  if (e.pomRow > 0) { try { kitStateTable().remove(e.pomRow); } catch (_) { /* fail-soft */ } e.pomRow = 0; }
+  if (e.aoRef) { try { e.aoRef.pages.release(e.aoRef.contentKey); } catch (_) { /* fail-soft */ } e.aoRef = null; }
+  if (e.rghRef) { try { e.rghRef.pages.release(e.rghRef.contentKey); } catch (_) { /* fail-soft */ } e.rghRef = null; }
+  if (e.extRow > 0) { try { kitStateTable().remove(e.extRow); } catch (_) { /* fail-soft */ } e.extRow = 0; }
   if (e.slot >= 0) { try { kitStateTable().remove(e.slot); } catch (_) { /* fail-soft */ } e.slot = -1; }
   e.dead = true;
   if (S.slots.get(e.member) === e) S.slots.delete(e.member);
@@ -1606,7 +1771,7 @@ function _hookKey(fp, rs) {
   return `ibCell1|fp${fp}|rs${rs ? 1 : 0}`;
 }
 
-function _classOpts(member, cls, mapUniform, normalUniform, hookKey, pomUniform = null) {
+function _classOpts(member, cls, mapUniform, normalUniform, hookKey, pomUniform = null, maps = null) {
   return {
     cls,
     chain: memberChainHook(member),
@@ -1614,6 +1779,10 @@ function _classOpts(member, cls, mapUniform, normalUniform, hookKey, pomUniform 
     mapUniform,
     normalUniform,
     pomUniform,
+    // The map set (header "AO / ROUGHNESS / EMISSIVE MEMBERS"): AO / roughness pages, emissive from the map page.
+    aoUniform: maps && maps.aoUniform ? maps.aoUniform : null,
+    roughnessUniform: maps && maps.roughnessUniform ? maps.roughnessUniform : null,
+    emissive: !!(maps && maps.emissive),
     stateUniform: kitStateTable().rows.uniform,
     vertexHook: (shader) => {
       shader.uniforms[IB_BITS_SAMPLER] = _S ? _S.bitsU : { value: null };
@@ -1642,17 +1811,23 @@ function _classEntryFor(S, b) {
   const mapPage = b.mapPage;
   const nrmPage = b.nrmPage;
   const pomPage = b.pomPage || null;
+  const ms = b.maps || MAP_SET_NONE;
+  const aoPage = b.aoPage || null;
+  const rghPage = b.rghPage || null;
   // (A POM batch's height page rides the normal-page field, so every key
-  // keeps its page ids in the same two trailing places.)
-  const key = `${classKeyOf(e0.cls)}|${interiorChainKey(m, pomPage ? { pom: true } : POM_NONE)}|fp${e0.fp}|${interiorMemberSignature(m)}|${mapPage.id}|${nrmPage ? nrmPage.id : "-"}${pomPage ? "+h" + pomPage.id : ""}|rs${e0.receiveShadow ? 1 : 0}`;
+  // keeps its page ids in the same two trailing places; the map set and its
+  // AO / roughness pages follow the receive-shadow bit.)
+  const key = `${classKeyOf(e0.cls)}|${interiorChainKey(m, pomPage ? { pom: true } : POM_NONE)}|fp${e0.fp}|${interiorMemberSignature(m)}|${mapPage.id}|${nrmPage ? nrmPage.id : "-"}${pomPage ? "+h" + pomPage.id : ""}|rs${e0.receiveShadow ? 1 : 0}`
+    + (ms.any ? `${ms.key}|${aoPage ? aoPage.id : "-"}|${rghPage ? rghPage.id : "-"}` : "");
   let ce = S.classMats.get(key);
   if (!ce) {
     const hookKey = _hookKey(e0.fp, e0.receiveShadow);
     const opts = _classOpts(m, e0.cls, { value: mapPage.gl.texture }, nrmPage ? { value: nrmPage.gl.texture } : null, hookKey,
-      pomPage ? { value: pomPage.gl.texture } : null);
+      pomPage ? { value: pomPage.gl.texture } : null,
+      ms.any ? { aoUniform: aoPage ? { value: aoPage.gl.texture } : null, roughnessUniform: rghPage ? { value: rghPage.gl.texture } : null, emissive: ms.emissive } : null);
     // Every stock line the class patch replaces (and the collapse anchor)
     // must survive the member chain.
-    if (classPatchMissing({ chain: opts.chain, withNormal: !!nrmPage, withPom: !!pomPage }) !== 0) return null;
+    if (classPatchMissing({ chain: opts.chain, withNormal: !!nrmPage, withPom: !!pomPage, maps: ms }) !== 0) return null;
     if (!_hookAnchorSurvives(opts.chain)) return null;
     const material = makeClassMaterial(opts);
     _copyRasterState(material, m);
@@ -1936,10 +2111,134 @@ function _chunkShown(chunk) {
 // Admit / warm / build / overlap / activate / teardown.
 // ===========================================================================
 
-/** Admit every member's layers + slot; then split batches by page. True = resident. */
+// --- PAGE-FULL WAITS (header) ------------------------------------------------
+
+/**
+ * `list` (members whose layer the kit pages refused) stay legacy
+ * individually: recorded on the chunk (`never`: they can never fit) and
+ * applied to its plan in place.
+ */
+function _excludePageFull(S, chunk, list, never) {
+  const pf = chunk.pageFull || (chunk.pageFull = new Map());
+  for (const m of list) {
+    if (pf.has(m)) continue;
+    pf.set(m, never === true);
+    if (never) S.stats.pageFull.neverFit += 1; else S.stats.pageFull.legacyMembers += 1;
+  }
+  chunk.pageFullAt = S.frameNo;
+  S.pageFullChunks.add(chunk);
+  _applyPageFull(S, chunk);
+}
+
+/**
+ * Drop from the chunk's plan every legacy mesh holding a page-full member
+ * (the mesh is what the sentinel hands over, so it stays legacy as a whole)
+ * and release the slots no remaining entry uses (only this chunk's hold).
+ */
+function _applyPageFull(S, chunk) {
+  const pf = chunk.pageFull;
+  if (!pf || pf.size === 0) return;
+  const keep = new Set();
+  for (const cp of chunk.cellPlans) {
+    cp.meshes = cp.meshes.filter((mp) => !mp.entries.some((e) => pf.has(e.member)));
+    for (const mp of cp.meshes) for (const e of mp.entries) keep.add(e.member);
+  }
+  for (const e of [...chunk.slotsHeld]) {
+    if (keep.has(e.member)) continue;
+    chunk.slotsHeld.delete(e);
+    _releaseSlot(S, e, chunk);
+  }
+}
+
+/** Members left legacy for the cap that could be admitted after all (not the never-fit ones). */
+function _pageFullRetriable(chunk) {
+  if (!chunk.pageFull) return false;
+  for (const never of chunk.pageFull.values()) if (!never) return true;
+  return false;
+}
+
+/** Would every layer of `m` the batch needs get a page now (no side effect)? */
+function _memberWouldFit(pages, m) {
+  if (!pages || typeof pages.wouldAdmit !== "function") return false;
+  if (m.map && !pages.wouldAdmit(m.map)) return false;
+  if (m.normalMap && !pages.wouldAdmit(m.normalMap)) return false;
+  const fpr = chainFingerprintId(m);
+  if (fpr.pom && fpr.pom.pom === true && fpr.pom.texture && !pages.wouldAdmit(fpr.pom.texture, R8_PLANES)) return false;
+  const ms = memberMapSet(m);
+  if (ms.ao && m.aoMap && !pages.wouldAdmit(m.aoMap, R8_PLANES)) return false;
+  if (ms.rough && m.roughnessMap && !pages.wouldAdmit(m.roughnessMap)) return false;
+  return true;
+}
+
+/**
+ * The retriable page-full members of `chunk`, if EVERY one of them would fit
+ * now; null otherwise. (A member resident through another chunk fits too.)
+ */
+function _pageFullRetryList(chunk, pages) {
+  if (!_pageFullRetriable(chunk)) return null;
+  const out = [];
+  for (const [m, never] of chunk.pageFull) {
+    if (never) continue;
+    if (!_memberWouldFit(pages, m)) return null;
+    out.push(m);
+  }
+  return out;
+}
+
+/** Forget `list` (re-tried): the next plan of the chunk takes them again. */
+function _pageFullForget(S, chunk, list) {
+  for (const m of list) chunk.pageFull.delete(m);
+  if (chunk.pageFull.size === 0) { chunk.pageFull = null; S.pageFullChunks.delete(chunk); }
+  S.stats.pageFull.retries += 1;
+}
+
+/**
+ * Every mesh of the chunk is out for the cap: the chunk holds nothing and
+ * waits (pending, re-tried every IB_PAGEFULL_RETRY_SYNCS) instead of going
+ * legacy; with only never-fit members it has nothing to batch.
+ */
+function _pageFullIdle(S, chunk) {
+  chunk.admitted = false;
+  chunk.capWaitSince = -1;
+  if (!_pageFullRetriable(chunk)) { _unstampChunk(chunk); _setChunkLegacy(S, chunk, "nothing-eligible"); return; }
+  chunk.status = S_CHUNK.PENDING;
+  chunk.retryFrame = S.frameNo + IB_PAGEFULL_RETRY_SYNCS;
+  S.stats.pageFull.idleWaits += 1;
+}
+
+/**
+ * Per sync, only while some chunk holds retriable page-full members: an
+ * ACTIVE chunk whose excluded members would all fit now re-plans with them
+ * (soft: not counted toward BATCH_REPLAN_LIMIT), every
+ * IB_PAGEFULL_RETRY_SYNCS since they were left out.
+ */
+function _pageFullPoll(S, pages) {
+  if (S.pageFullChunks.size === 0 || !pages || S.frameNo % IB_BACKSTOP_SYNCS !== 0) return;
+  for (const ch of S.pageFullChunks) {
+    if (ch.status === S_CHUNK.LEGACY || !_pageFullRetriable(ch)) { S.pageFullChunks.delete(ch); continue; }
+    if (ch.status !== S_CHUNK.ACTIVE || ch.rec.parked) continue;
+    if (S.frameNo - ch.pageFullAt < IB_PAGEFULL_RETRY_SYNCS) continue;
+    ch.pageFullAt = S.frameNo;
+    const list = _pageFullRetryList(ch, pages);
+    if (!list) continue;
+    _teardownChunk(S, ch, _env());
+    _pageFullForget(S, ch, list);
+    ch.status = S_CHUNK.PENDING;
+    ch.retryFrame = S.frameNo + 1;
+  }
+}
+
+/**
+ * Admit every member's layers + slot; then split batches by page. True =
+ * resident. A layer the kit pages' cap refuses makes the chunk WAIT (header
+ * "PAGE-FULL WAITS"): false, nothing torn down, nothing counted.
+ */
 function _admitChunk(S, chunk, pages, budget) {
   const members = new Set();
   for (const cp of chunk.cellPlans) for (const mp of cp.meshes) for (const e of mp.entries) members.add(e.member);
+  const probe = chunk.capWaitSince >= 0;
+  let waiting = null;
+  let never = null;
   for (const m of members) {
     // Held BEFORE anything is admitted: a teardown mid-admission releases
     // exactly what this chunk took.
@@ -1947,11 +2246,31 @@ function _admitChunk(S, chunk, pages, budget) {
     if (!chunk.slotsHeld.has(e)) { chunk.slotsHeld.add(e); e.chunks.add(chunk); }
     if (_slotResident(e)) continue;
     const out = {};
-    if (!_slotAdmit(S, e, pages, budget, out)) {
+    if (!_slotAdmit(S, e, pages, budget, out, probe)) {
       if (out.deferred) return false;
+      if (out.refused) {
+        // The cap (or a texture the kit can never hold): the other members go on.
+        if (out.never) (never || (never = [])).push(m);
+        else (waiting || (waiting = [])).push(m);
+        continue;
+      }
       _replanChunk(S, chunk, out.failed || "admit-failed");
       return false;
     }
+  }
+  if (never) _excludePageFull(S, chunk, never, true);
+  if (waiting) {
+    if (chunk.capWaitSince < 0) { chunk.capWaitSince = S.frameNo; S.stats.pageFull.waits += 1; }
+    if (S.frameNo - chunk.capWaitSince < IB_PAGEFULL_WAIT_SYNCS) return false; // wait: room may appear
+    // The bounded wait is over: these members stay legacy individually.
+    chunk.capWaitSince = -1;
+    _excludePageFull(S, chunk, waiting, false);
+  } else if (chunk.capWaitSince >= 0) {
+    chunk.capWaitSince = -1;
+    S.stats.pageFull.admittedAfterWait += 1;
+  }
+  if (never || waiting) {
+    if (!chunk.cellPlans.some((cp) => cp.meshes.length > 0)) { _pageFullIdle(S, chunk); return false; }
   }
   // Final batches: (page key) groups split by the actual page ids.
   const byKey = new Map();
@@ -1962,10 +2281,16 @@ function _admitChunk(S, chunk, pages, budget) {
         const mapPage = se.mapRef.page;
         const nrmPage = se.nrmRef ? se.nrmRef.page : null;
         const pomPage = se.pomRef ? se.pomRef.page : null;
-        const k = e.pageKey + "|p" + mapPage.id + "|" + (nrmPage ? nrmPage.id : "-") + (pomPage ? "|h" + pomPage.id : "");
+        const aoPage = se.aoRef ? se.aoRef.page : null;
+        const rghPage = se.rghRef ? se.rghRef.page : null;
+        // The slot's own map set (what it was admitted for) splits the
+        // batches, with the AO / roughness pages it landed in.
+        const k = e.pageKey + "|p" + mapPage.id + "|" + (nrmPage ? nrmPage.id : "-") + (pomPage ? "|h" + pomPage.id : "")
+          + (se.maps.any ? se.maps.key + "|" + (aoPage ? aoPage.id : "-") + "|" + (rghPage ? rghPage.id : "-") : "");
         let b = byKey.get(k);
         if (!b) {
-          b = { key: k, preKey: e.preKey, kind: e.kind, cls: e.cls, entries: [], mapPage, nrmPage, pomPage, classEntry: null, depthEntry: null,
+          b = { key: k, preKey: e.preKey, kind: e.kind, cls: e.cls, entries: [], mapPage, nrmPage, pomPage, maps: se.maps, aoPage, rghPage,
+            classEntry: null, depthEntry: null,
             mesh: null, geometry: null, visibleCells: 0, hasBaseCasters: false, cells: new Set(), receiveShadow: e.receiveShadow };
           byKey.set(k, b);
         }
@@ -2264,6 +2589,7 @@ function _teardownChunk(S, chunk, env) {
   chunk.admitted = false;
   chunk.mergeAt = 0;
   chunk.replan = null;
+  chunk.capWaitSince = -1;
   for (const e of chunk.slotsHeld) _releaseSlot(S, e, chunk);
   chunk.slotsHeld.clear();
   for (const m of chunk.suppressed) restoreLegacy(m);
@@ -2288,7 +2614,18 @@ function _unstampChunk(chunk) {
 function _replanChunk(S, chunk, reason) {
   _teardownChunk(S, chunk, _env());
   _count(S.stats.unitReasons, "replan:" + reason);
-  if (reason === "map" || reason === "normal-map" || reason === "pom-map") { // a texture swap (its own cap)
+  if (reason === "ao-map-arrived" || reason === "roughness-map-arrived") {
+    // A texchan plane landed (header "AO / ROUGHNESS / EMISSIVE MEMBERS"):
+    // legacy draws it from this frame; the chunk re-plans once the burst settled.
+    chunk.mapArrivals += 1;
+    S.stats.mapArrivals += 1;
+    if (chunk.mapArrivals > IB_MAP_ARRIVAL_LIMIT) { _unstampChunk(chunk); _setChunkLegacy(S, chunk, "unstable"); return; }
+    chunk.status = S_CHUNK.PENDING;
+    chunk.retryFrame = S.frameNo + IB_MAP_SETTLE_SYNCS;
+    return;
+  }
+  if (reason === "map" || reason === "normal-map" || reason === "pom-map" || reason === "ao-map" || reason === "roughness-map"
+    || reason === "emissive-map") { // a texture swap (its own cap)
     chunk.textureReplans += 1;
     S.stats.textureReplans += 1;
     if (chunk.textureReplans > IB_TEXTURE_REPLAN_LIMIT) { _unstampChunk(chunk); _setChunkLegacy(S, chunk, "unstable"); return; }
@@ -2369,6 +2706,13 @@ function _slotDrift(e) {
   if ((m.alphaTest > 0 ? "alphaTest" : "opaque") !== e.clsBlend
     || (m.userData && m.userData.__acBakedLight ? "baked" : "lit") !== e.clsLight
     || (m.side === THREE.FrontSide ? "front" : "double") !== e.clsSide) return "alpha-class";
+  // A texchan plane that ARRIVED (header "AO / ROUGHNESS / EMISSIVE
+  // MEMBERS") is told before the version compare: the re-seat that carries it
+  // to a cache clone also rewrites the clone's userData (materials.js
+  // _reseatSurfaceState keeps `__acBakedLight` but not `__acBakedDirectOut`,
+  // so a baked clone re-keys k1d -> k1), and the re-plan re-reads both.
+  if (e.aoTex === null && m.aoMap) return "ao-map-arrived";
+  if (e.rghTex === null && m.roughnessMap) return "roughness-map-arrived";
   if (m.version !== e.version) {
     const r = interiorArrayReason(m);
     if (r) return "member:" + r;
@@ -2377,9 +2721,16 @@ function _slotDrift(e) {
     if (interiorMemberSignature(m) !== e.sig) return "signature";
     e.version = m.version;
   }
-  for (const k of _NO_EXTRA_MAPS) if (m[k]) return "map:" + k;
+  for (const k of _UNBATCHED_MAPS) if (m[k]) return "map:" + k;
+  // Extra maps (header "AO / ROUGHNESS / EMISSIVE MEMBERS"): a plane that
+  // left, was swapped or re-uploaded, or an emissive alias that changed, is
+  // a texture swap: the chunks re-plan under the texture cap with the new set
+  // (an arrival was told above).
+  if ((m.aoMap || null) !== e.aoTex || (e.aoTex && e.aoTex.version !== e.aoVersion)) return "ao-map";
+  if ((m.roughnessMap || null) !== e.rghTex || (e.rghTex && e.rghTex.version !== e.rghVersion)) return "roughness-map";
+  if (!!m.emissiveMap !== e.maps.emissive || (m.emissiveMap && m.emissiveMap !== m.map)) return "emissive-map";
   const em = m.emissive;
-  if (em && (em.r !== 0 || em.g !== 0 || em.b !== 0)) return "luminous";
+  if (!m.emissiveMap && em && (em.r !== 0 || em.g !== 0 || em.b !== 0)) return "luminous";
   if (m.map !== e.map || (m.map && m.map.version !== e.mapVersion)) return "map";
   if ((m.normalMap || null) !== e.normalMap || (e.normalMap && e.normalMap.version !== e.nrmVersion)) return "normal-map";
   if (e.pom) {
@@ -2405,11 +2756,19 @@ function _trySamePageSwap(S, e, which, pages, budget) {
   if (!tex || !ref || !pages) return null;
   const ti = interiorTextureInfo(tex);
   if (!ti.desc || ti.pageKey !== ref.page.key) return null;
-  const r = pages.admit(tex, budget);
-  if (r && r.deferred) return "deferred";
-  if (!r) return null;
-  if (r.page !== ref.page) { try { pages.release(r.contentKey); } catch (_) { /* fail-soft */ } return null; }
+  // RELEASE FIRST (2026-10-31): the kit's demand-sized pages are full more
+  // often than not (page_allocator.js "DEMAND-SIZED PAGES"), so the old
+  // layer goes idle BEFORE the admit: the new content takes it (or another
+  // idle layer of the key) in place instead of needing a new page. On any
+  // outcome but a same-page layer the old content is taken back (it is still
+  // resident: only an admit that took its very layer evicts it, and that one
+  // lands in the same page).
+  const retake = () => { try { if (ref.pages.alloc.lookup(ref.contentKey)) ref.pages.alloc.acquire(ref.page.desc, ref.contentKey); } catch (_) { /* fail-soft */ } };
   try { ref.pages.release(ref.contentKey); } catch (_) { /* fail-soft */ }
+  const r = pages.admit(tex, budget);
+  if (r && r.deferred) { retake(); return "deferred"; }
+  if (!r) { retake(); return null; }
+  if (r.page !== ref.page) { try { pages.release(r.contentKey); } catch (_) { /* fail-soft */ } retake(); return null; }
   if (which === "map") { e.mapRef = { ...r, pages }; e.map = tex; e.mapVersion = tex.version; } else { e.nrmRef = { ...r, pages }; e.normalMap = tex; e.nrmVersion = tex.version; }
   kitStateTable().writeFromMaterial(e.slot, m, e.mapRef.layer, e.nrmRef ? e.nrmRef.layer : 0, _extRow(e));
   S.stats.slotRewrites += 1;
@@ -2431,7 +2790,9 @@ function _syncSlots(S, pages, budget) {
       continue;
     }
     if (e.slot >= 0 && e.mapRef) table.writeFromMaterial(e.slot, e.member, e.mapRef.layer, e.nrmRef ? e.nrmRef.layer : 0, _extRow(e));
-    if (e.pomRow > 0 && e.pomRef) table.writePom(e.pomRow, pomStateOf(e.member, e.pom, e.pomRef.layer, e.pomState));
+    // The extension row: POM scalars from the live handle, the extra-map
+    // values (aoMapIntensity, emissive * emissiveIntensity) and layers.
+    if (e.extRow > 0) table.writeExt(e.extRow, e.pom && e.pomRef ? pomStateOf(e.member, e.pom, e.pomRef.layer, e.pomState) : null, _mapStateOf(e));
   }
 }
 
@@ -2536,7 +2897,7 @@ function _backstopChunk(S, chunk, poolCheck) {
     // re-decided the re-attached containers).
     if (reg && c.userData && c.userData.__ibPool && c.userData.__ibPool.pooled > 0 && typeof reg.readCellState === "function") {
       const r = S.poolRead || (S.poolRead = { instances: 0, hidden: 0 });
-      if (reg.readCellState(cp.cell.cellId, r)) {
+      if (reg.readCellState(cp.cell.tag[1], r)) {
         S.stats.pools.visChecks += 1;
         if (r.hidden !== (v ? 0 : r.instances)) S.stats.pools.visDiverged += 1;
       }
@@ -2561,10 +2922,12 @@ function _contextChanged(S, pages) {
     for (const ch of rec.chunks) {
       if (ch.status === S_CHUNK.LEGACY) continue;
       _teardownChunk(S, ch, env);
+      ch.pageFull = null; // a reset clears every page-full exclusion (fresh pages)
       ch.status = S_CHUNK.PENDING;
       ch.retryFrame = S.frameNo + 1;
     }
   }
+  S.pageFullChunks.clear();
   if (pages) { try { pages.reset(); } catch (_) { /* fail-soft */ } }
   if (S.bits) { try { S.bits.dispose(); } catch (_) { /* fail-soft */ } S.bits = null; S.bitsU.value = null; }
   S.depthWarm = null;
@@ -2695,6 +3058,7 @@ export function syncInteriorBatches(scene3d, isIndoor, castOn) {
   _workBegin(S);
   _planPending(S);
   _advanceChunks(S, pages, budget, env);
+  _pageFullPoll(S, pages);
   if (S.frameNo % IB_BACKSTOP_SYNCS === 0) for (const rec of S.lbs.values()) if (!rec.parked) _backstopLb(S, rec, true);
   if (S.recording) _recordFrame(S, isIndoor, want);
   if (S.bits) {
@@ -2792,7 +3156,19 @@ function _advanceChunks(S, pages, budget, env) {
       if (ch.noKeys) {
         for (const cp of ch.cellPlans) cp.meshes = cp.meshes.filter((mp) => !mp.entries.some((e) => ch.noKeys.has(e.preKey)));
       }
-      if (!ch.cellPlans.some((cp) => cp.meshes.length > 0)) { _unstampChunk(ch); _setChunkLegacy(S, ch, "nothing-eligible"); continue; }
+      if (ch.pageFull) {
+        // PAGE-FULL WAITS (header): members the cap left out are re-tried
+        // once every one of them would fit; until then their meshes stay legacy.
+        const list = pages ? _pageFullRetryList(ch, pages) : null;
+        if (list) _pageFullForget(S, ch, list);
+        if (ch.pageFull) _applyPageFull(S, ch);
+      }
+      if (!ch.cellPlans.some((cp) => cp.meshes.length > 0)) {
+        if (_pageFullRetriable(ch)) { _pageFullIdle(S, ch); continue; } // waits, holding nothing
+        _unstampChunk(ch);
+        _setChunkLegacy(S, ch, "nothing-eligible");
+        continue;
+      }
       ch.status = S_CHUNK.ADMITTING;
     }
     if (ch.status === S_CHUNK.ADMITTING) {
@@ -2855,8 +3231,21 @@ function _lbSummary(rec) {
 
 function _pomSlotCount(S) {
   let n = 0;
-  for (const e of S.slots.values()) if (e.pom && e.pomRow > 0) n += 1;
+  for (const e of S.slots.values()) if (e.pom && e.extRow > 0) n += 1;
   return n;
+}
+
+/** Resident slots per extra map (header "AO / ROUGHNESS / EMISSIVE MEMBERS"). */
+function _mapSlotCounts(S) {
+  const out = { ao: 0, roughness: 0, emissive: 0, sets: {} };
+  for (const e of S.slots.values()) {
+    if (!e.maps.any || e.extRow <= 0) continue;
+    if (e.aoRef) out.ao += 1;
+    if (e.rghRef) out.roughness += 1;
+    if (e.maps.emissive) out.emissive += 1;
+    out.sets[e.maps.key] = (out.sets[e.maps.key] || 0) + 1;
+  }
+  return out;
 }
 
 /** Diag (window.__interiorBatch.stats()). */
@@ -2868,18 +3257,31 @@ export function interiorBatchDiag() {
   let objects = 0;
   let drawn = 0;
   let geometryCpu = 0;
+  let waitingNow = 0;
+  let excludedNow = 0;
+  let legacyMeshes = 0;
+  let suppressedMeshes = 0;
   for (const rec of S.lbs.values()) {
     lbs[rec.status] = (lbs[rec.status] || 0) + 1;
     for (const ch of rec.chunks) {
       chunks[ch.status] = (chunks[ch.status] || 0) + 1;
       for (const b of ch.batches) if (b.mesh) { objects += 1; if (b.mesh.visible) drawn += 1; geometryCpu += b.cpuBytes || 0; }
+      if (ch.capWaitSince >= 0) waitingNow += 1;
+      if (ch.pageFull) excludedNow += ch.pageFull.size;
+      // Overlap is per legacy mesh: a chunk short of ACTIVE can already draw most meshes batched.
+      if (ch.meshInfo) { legacyMeshes += ch.meshInfo.length; for (const mi of ch.meshInfo) if (mi.suppressed) suppressedMeshes += 1; }
     }
   }
+  const stats = JSON.parse(JSON.stringify(S.stats));
+  // PAGE-FULL WAITS (header): chunks waiting on the cap now, members left legacy for it now.
+  stats.pageFull.waitingNow = waitingNow;
+  stats.pageFull.excludedNow = excludedNow;
   return {
     mode: S.mode, off: S.off, disarmed: S.disarmed, lbs, chunks, objects, drawnObjects: drawn,
-    slots: S.slots.size, pomSlots: _pomSlotCount(S), classMaterials: S.classMats.size, depthMaterials: S.depthMats.size,
+    meshes: { built: legacyMeshes, suppressed: suppressedMeshes },
+    slots: S.slots.size, pomSlots: _pomSlotCount(S), mapSlots: _mapSlotCounts(S), classMaterials: S.classMats.size, depthMaterials: S.depthMats.size,
     bytes: { geometryCpu, bits: S.bits ? S.bits.bytesFor(S.bits.capacity) : 0 },
-    ...JSON.parse(JSON.stringify(S.stats)),
+    ...stats,
     kit: kitSummary(),
   };
 }

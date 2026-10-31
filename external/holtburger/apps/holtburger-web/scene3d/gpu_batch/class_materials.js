@@ -64,6 +64,40 @@
 // this shape is refused (`pomInfoFromShader` -> { reason }), never
 // half-patched. One program per (class, POM on / off): the key gains `|pom1`.
 //
+// EXTRA-MAP MEMBERS (2026-10-31; realboot census, Holtburg ultra,
+// `?interiorBatch=on`: 364 members carry aoMap + roughnessMap, 14 add an
+// emissiveMap, 14 an emissiveMap alone). The texchan planes materials.js
+// `_applyRough` attaches (an R8 cavity-AO `aoMap`, an RGBA8 linear
+// `roughnessMap` with the value in .g) and the luminous ladder's `emissiveMap`
+// (materials.js applyFloatLumDiffuse: the diffuse map itself, white emissive
+// times the luminosity) are per surface. A class with a MAP SET (`mapSetOf`:
+// one class per set, the program key gains `|xm` + a / r / e) switches
+// three's own USE_AOMAP / USE_ROUGHNESSMAP / USE_EMISSIVEMAP paths on with the
+// 1x1 dummy (channel 0, identity transform: what every member plane carries;
+// never sampled), so the vertex stage computes vAoMapUv / vRoughnessMapUv /
+// vEmissiveMapUv with three's own text, and the fragment stage runs THREE'S
+// OWN CHUNKS, expanded in place of their includes (the includes are still
+// unresolved at onBeforeCompile), with these substitutions only
+// (`MAP_CHUNK_SUBSTITUTIONS`, each anchor exactly once or the class refuses):
+//   A1  aomap_fragment: `texture2D( aoMap, vAoMapUv )` -> the AO page
+//       `hbBatchAoArr` at ( vAoMapUv, the slot layer vHbP2.x );
+//   A2  aomap_fragment: `aoMapIntensity` -> vHbP2.z (the slot's value);
+//   R1  roughnessmap_fragment: `float roughnessFactor = roughness;` ->
+//       `= vHbS1.x;` (what the map-less class already does);
+//   R2  roughnessmap_fragment: `texture2D( roughnessMap, vRoughnessMapUv )`
+//       -> the roughness page `hbBatchRghArr` at ( vRoughnessMapUv, vHbP2.y );
+//   E1  `vec3 totalEmissiveRadiance = emissive;` (the template) ->
+//       `= vHbP3.xyz;` (the member's emissive uniform, per slot);
+//   E2  emissivemap_fragment: `texture2D( emissiveMap, vEmissiveMapUv )` ->
+//       the MAP page `hbBatchMapArr` at ( vEmissiveMapUv, vHbP3.w ): an
+//       emissive member's emissiveMap IS its map (the consumers require the
+//       alias), so its emissive layer is an sRGB layer of the map's page.
+// The slot's extension row (layer_state.js "EXTRA-MAP FIELDS") carries the
+// layers and values: texel 2 (AO layer, roughness layer, aoMapIntensity),
+// texel 3 (emissive rgb, emissive layer), fetched once per vertex into the
+// flat varyings vHbP2 (AO or roughness) / vHbP3 (emissive), only the ones the
+// set needs. A set-less class is the text it always was.
+//
 // GLSL text below: no backticks, quotes or apostrophes.
 
 import * as THREE from "three";
@@ -121,12 +155,76 @@ export function dummyNormalMap() {
   return _dummyNormal;
 }
 
+// ===========================================================================
+// Extra-map sets (header "EXTRA-MAP MEMBERS").
+// ===========================================================================
+
+/** The class sampler of the AO page (R8 layers) and of the roughness page (RGBA8 linear layers). */
+export const AO_PAGE_SAMPLER = "hbBatchAoArr";
+export const ROUGH_PAGE_SAMPLER = "hbBatchRghArr";
+
+// The eight sets, frozen constants (index = ao | rough << 1 | emissive << 2).
+const _MAP_SETS = Object.freeze([0, 1, 2, 3, 4, 5, 6, 7].map((i) => Object.freeze({
+  ao: (i & 1) !== 0, rough: (i & 2) !== 0, emissive: (i & 4) !== 0, any: i !== 0,
+  key: i === 0 ? "" : "|xm" + ((i & 1) ? "a" : "") + ((i & 2) ? "r" : "") + ((i & 4) ? "e" : ""),
+})));
+/** No extra map: the class text it always was. */
+export const MAP_SET_NONE = _MAP_SETS[0];
+
+/** The (shared, frozen) map set { ao, rough, emissive, any, key }; `key` joins the program key ("" for none). */
+export function mapSetOf(ao, rough, emissive) {
+  return _MAP_SETS[(ao ? 1 : 0) | (rough ? 2 : 0) | (emissive ? 4 : 0)];
+}
+
+/** A member's map set (the maps it carries; a consumer's eligibility decides whether it may batch). */
+export function memberMapSet(member) {
+  return member ? mapSetOf(!!member.aoMap, !!member.roughnessMap, !!member.emissiveMap) : MAP_SET_NONE;
+}
+
+/** A1 / A2, R1 / R2, E2: [chunk text, class text] pairs inside three's own chunk, by chunk name. */
+export const MAP_CHUNK_SUBSTITUTIONS = Object.freeze({
+  aomap_fragment: Object.freeze([
+    Object.freeze(["texture2D( aoMap, vAoMapUv )", "texture( " + AO_PAGE_SAMPLER + ", vec3( vAoMapUv, vHbP2.x ) )"]),
+    Object.freeze(["aoMapIntensity", "vHbP2.z"]),
+  ]),
+  roughnessmap_fragment: Object.freeze([
+    Object.freeze(["float roughnessFactor = roughness;", "float roughnessFactor = vHbS1.x;"]),
+    Object.freeze(["texture2D( roughnessMap, vRoughnessMapUv )", "texture( " + ROUGH_PAGE_SAMPLER + ", vec3( vRoughnessMapUv, vHbP2.y ) )"]),
+  ]),
+  emissivemap_fragment: Object.freeze([
+    Object.freeze(["texture2D( emissiveMap, vEmissiveMapUv )", "texture( hbBatchMapArr, vec3( vEmissiveMapUv, vHbP3.w ) )"]),
+  ]),
+});
+/** E1: the template line the emissive class redirects. */
+export const EMISSIVE_RADIANCE_LINE = "vec3 totalEmissiveRadiance = emissive;";
+export const EMISSIVE_RADIANCE_BATCH = "vec3 totalEmissiveRadiance = vHbP3.xyz;";
+
+/**
+ * Three's own chunk `name` (THREE.ShaderChunk, what resolveIncludes would put
+ * in place of its include) with its MAP_CHUNK_SUBSTITUTIONS applied; null
+ * when an anchor is not there exactly once (the class then refuses).
+ */
+export function batchMapChunk(name) {
+  let s = THREE.ShaderChunk[name];
+  const subs = MAP_CHUNK_SUBSTITUTIONS[name];
+  if (typeof s !== "string" || !subs) return null;
+  for (const [from, to] of subs) {
+    if (_occurrences(s, from) !== 1) return null;
+    s = s.replace(from, to);
+  }
+  return s;
+}
+
 /**
  * The vertex header: one state-row fetch per vertex into flat varyings
  * (`withPom`: also the slot's POM extension row, texel 3 .y, into vHbP0 /
- * vHbP1; the text without it is unchanged).
+ * vHbP1; `maps`, a map set: texel 2 of that row into vHbP2 for AO /
+ * roughness, texel 3 into vHbP3 for emissive; the text without them is
+ * unchanged).
  */
-export function layerStateVertexChunk(withPom = false) {
+export function layerStateVertexChunk(withPom = false, maps = null) {
+  const ms = maps || MAP_SET_NONE;
+  const ext2 = ms.ao || ms.rough;
   return [
     "// ---- " + LAYERS_MARKER + " (scene3d/gpu_batch/class_materials.js) ----",
     "uniform highp sampler2D " + STATE_SAMPLER + ";",
@@ -136,17 +234,21 @@ export function layerStateVertexChunk(withPom = false) {
     "flat varying vec4 vHbS2;",
     "flat varying vec4 vHbS3;",
     ...(withPom ? ["flat varying vec4 vHbP0;", "flat varying vec4 vHbP1;"] : []),
+    ...(ext2 ? ["flat varying vec4 vHbP2;"] : []),
+    ...(ms.emissive ? ["flat varying vec4 vHbP3;"] : []),
     "void hbBatchSlotSetup() {",
     "  int hbS = int(" + SLOT_ATTR + " + 0.5);",
     "  vHbS0 = texelFetch(" + STATE_SAMPLER + ", ivec2(0, hbS), 0);",
     "  vHbS1 = texelFetch(" + STATE_SAMPLER + ", ivec2(1, hbS), 0);",
     "  vHbS2 = texelFetch(" + STATE_SAMPLER + ", ivec2(2, hbS), 0);",
     "  vHbS3 = texelFetch(" + STATE_SAMPLER + ", ivec2(3, hbS), 0);",
+    ...(withPom || ms.any ? ["  int hbP = int(vHbS3.y + 0.5);"] : []),
     ...(withPom ? [
-      "  int hbP = int(vHbS3.y + 0.5);",
       "  vHbP0 = texelFetch(" + STATE_SAMPLER + ", ivec2(0, hbP), 0);",
       "  vHbP1 = texelFetch(" + STATE_SAMPLER + ", ivec2(1, hbP), 0);",
     ] : []),
+    ...(ext2 ? ["  vHbP2 = texelFetch(" + STATE_SAMPLER + ", ivec2(2, hbP), 0);"] : []),
+    ...(ms.emissive ? ["  vHbP3 = texelFetch(" + STATE_SAMPLER + ", ivec2(3, hbP), 0);"] : []),
     "}",
     "// ---- end " + LAYERS_MARKER + " ----",
     "",
@@ -164,17 +266,33 @@ const FRAG_HEADER = [
 ].join("\n");
 const FRAG_HEADER_NORMAL = "uniform highp sampler2DArray hbBatchNrmArr;\n";
 
+/** The extra-map part of the fragment header (a map set's page samplers and flat varyings; "" for none). */
+export function mapFragmentHeader(maps) {
+  const ms = maps || MAP_SET_NONE;
+  if (!ms.any) return "";
+  const out = [];
+  if (ms.ao) out.push("uniform highp sampler2DArray " + AO_PAGE_SAMPLER + ";");
+  if (ms.rough) out.push("uniform highp sampler2DArray " + ROUGH_PAGE_SAMPLER + ";");
+  if (ms.ao || ms.rough) out.push("flat varying vec4 vHbP2;");
+  if (ms.emissive) out.push("flat varying vec4 vHbP3;");
+  return out.join("\n") + "\n";
+}
+
 /** The fragment header the class patch prepends (what the proof suites strip to compare a class with its member). */
-export function classFragmentHeader(withNormal) {
-  return FRAG_HEADER + (withNormal ? FRAG_HEADER_NORMAL : "");
+export function classFragmentHeader(withNormal, maps = null) {
+  return FRAG_HEADER + (withNormal ? FRAG_HEADER_NORMAL : "") + mapFragmentHeader(maps);
 }
 
 /**
  * [stock text, replacement] pairs, applied to the fragment template
  * (`withPom`: without the map_fragment pair, which the POM chain replaced;
- * P4 of applyPomFragmentPatch redirects its sample instead).
+ * P4 of applyPomFragmentPatch redirects its sample instead; `maps`, a map
+ * set: three's own roughness / emissive / AO chunks with A1-E2 in place of
+ * their includes, header "EXTRA-MAP MEMBERS"). A replacement is null when
+ * its chunk lost an anchor (applyClassPatch counts it missing).
  */
-export function fragmentReplacements(withNormal, withPom = false) {
+export function fragmentReplacements(withNormal, withPom = false, maps = null) {
+  const ms = maps || MAP_SET_NONE;
   const r = [
     // diffuse + opacity uniforms -> slot texel 0 (same f32 values)
     ["vec4 diffuseColor = vec4( diffuse, opacity );", "vec4 diffuseColor = vHbS0;"],
@@ -189,7 +307,7 @@ export function fragmentReplacements(withNormal, withPom = false) {
       "\tif ( diffuseColor.a < vHbS2.x ) discard;",
       "#endif",
     ].join("\n")],
-    ["#include <roughnessmap_fragment>", "float roughnessFactor = vHbS1.x;"],
+    ["#include <roughnessmap_fragment>", ms.rough ? batchMapChunk("roughnessmap_fragment") : "float roughnessFactor = vHbS1.x;"],
     ["#include <metalnessmap_fragment>", "float metalnessFactor = vHbS1.y;"],
   ];
   if (withNormal) {
@@ -201,6 +319,11 @@ export function fragmentReplacements(withNormal, withPom = false) {
       "#endif",
     ].join("\n")]);
   }
+  if (ms.emissive) {
+    r.push([EMISSIVE_RADIANCE_LINE, EMISSIVE_RADIANCE_BATCH]);
+    r.push(["#include <emissivemap_fragment>", batchMapChunk("emissivemap_fragment")]);
+  }
+  if (ms.ao) r.push(["#include <aomap_fragment>", batchMapChunk("aomap_fragment")]);
   return r;
 }
 
@@ -210,9 +333,11 @@ export function fragmentReplacements(withNormal, withPom = false) {
  * `withPom`: the member chain is materials.js's POM patch (header note): its
  * substitutions run first, and a POM class needs the normal page (the POM
  * text calls getTangentFrame, declared only with a tangent-space normal map).
+ * `maps`: the class's map set (header "EXTRA-MAP MEMBERS"; null = none).
  */
-export function applyClassPatch(shader, withNormal, withPom = false) {
-  injectVertexHeader(shader, layerStateVertexChunk(withPom), LAYERS_MARKER, "hbBatchSlotSetup", null);
+export function applyClassPatch(shader, withNormal, withPom = false, maps = null) {
+  const ms = maps || MAP_SET_NONE;
+  injectVertexHeader(shader, layerStateVertexChunk(withPom, ms), LAYERS_MARKER, "hbBatchSlotSetup", null);
   let fs = shader.fragmentShader;
   let missing = 0;
   if (fs.indexOf(LAYERS_MARKER) === -1) {
@@ -222,11 +347,11 @@ export function applyClassPatch(shader, withNormal, withPom = false) {
       missing += applyPomFragmentPatch(p);
       fs = p.fragmentShader;
     }
-    for (const [from, to] of fragmentReplacements(withNormal, withPom)) {
-      if (fs.indexOf(from) === -1) { missing += 1; continue; }
-      fs = fs.replace(from, to);
+    for (const [from, to] of fragmentReplacements(withNormal, withPom, ms)) {
+      if (to === null || fs.indexOf(from) === -1) { missing += 1; continue; }
+      fs = fs.replace(from, () => to);
     }
-    fs = FRAG_HEADER + (withNormal ? FRAG_HEADER_NORMAL : "") + fs;
+    fs = FRAG_HEADER + (withNormal ? FRAG_HEADER_NORMAL : "") + mapFragmentHeader(ms) + fs;
     shader.fragmentShader = fs;
   }
   return missing;
@@ -239,7 +364,7 @@ export function applyClassPatch(shader, withNormal, withPom = false) {
  * line the patch needs would otherwise compile a program that silently
  * samples the 1x1 dummy.
  */
-export function classPatchMissing({ chain = null, withNormal = false, withPom = false } = {}) {
+export function classPatchMissing({ chain = null, withNormal = false, withPom = false, maps = null } = {}) {
   const shader = {
     vertexShader: THREE.ShaderLib.physical.vertexShader,
     fragmentShader: THREE.ShaderLib.physical.fragmentShader,
@@ -251,7 +376,7 @@ export function classPatchMissing({ chain = null, withNormal = false, withPom = 
   } catch (_) {
     return Infinity;
   }
-  return applyClassPatch(shader, withNormal, withPom);
+  return applyClassPatch(shader, withNormal, withPom, maps);
 }
 
 // ===========================================================================
@@ -471,6 +596,35 @@ export function pomStateOf(member, info, layer, out = {}) {
 }
 
 /**
+ * The extra-map half of a member's extension row (layer_state.js
+ * packExtState; header "EXTRA-MAP MEMBERS"): the layers the consumer
+ * admitted (0 for a map the member does not have), and the values three
+ * uploads for the member's own draw: `aoMapIntensity` (only with an aoMap:
+ * 0 otherwise) and `emissive` = material.emissive * emissiveIntensity, each
+ * channel in f64 as Color.multiplyScalar computes it. Runs per sync per slot
+ * with an extension row: field to field into `out`, no helper returning a
+ * double (the pomStateOf rule).
+ */
+export function extraMapStateOf(member, aoLayer, roughLayer, emissiveLayer, out = {}) {
+  out.aoLayer = aoLayer;
+  out.roughLayer = roughLayer;
+  out.aoIntensity = member.aoMap ? member.aoMapIntensity : 0;
+  const em = member.emissive;
+  if (em) {
+    const s = member.emissiveIntensity;
+    out.emissiveR = em.r * s;
+    out.emissiveG = em.g * s;
+    out.emissiveB = em.b * s;
+  } else {
+    out.emissiveR = 0;
+    out.emissiveG = 0;
+    out.emissiveB = 0;
+  }
+  out.emissiveLayer = emissiveLayer;
+  return out;
+}
+
+/**
  * Build a class material.
  *
  * @param {object} o
@@ -484,6 +638,9 @@ export function pomStateOf(member, info, layer, out = {}) {
  * @param {string} [o.chainKey]
  * @param {{value:any}|null} [o.pomUniform] holder of the height page; given = a POM class
  *   (the chain is materials.js's POM patch: header "POM MEMBERS")
+ * @param {{value:any}|null} [o.aoUniform] holder of the AO page; given = the set samples an aoMap
+ * @param {{value:any}|null} [o.roughnessUniform] holder of the roughness page; given = a roughnessMap
+ * @param {boolean} [o.emissive] the set samples an emissiveMap (from the map page; header "EXTRA-MAP MEMBERS")
  * @param {object} [o.base]  material props copied from a representative member
  *   (fog, envMapIntensity, dithering, toneMapped, depthTest, singlePass)
  */
@@ -497,6 +654,9 @@ export function makeClassMaterial(o) {
   }
   const withNormal = !!o.normalUniform;
   const pomU = o.pomUniform || null;
+  const aoU = o.aoUniform || null;
+  const rghU = o.roughnessUniform || null;
+  const ms = mapSetOf(!!aoU, !!rghU, o.emissive === true);
   const base = o.base || {};
   const m = new THREE.MeshStandardMaterial({
     map: dummyMap(),
@@ -505,6 +665,11 @@ export function makeClassMaterial(o) {
     metalness: 0,
   });
   if (withNormal) m.normalMap = dummyNormalMap();
+  // The map set's USE_* switches (the 1x1 dummy: channel 0, identity
+  // transform; never sampled, A1-E2 redirect every read).
+  if (ms.ao) m.aoMap = dummyMap();
+  if (ms.rough) m.roughnessMap = dummyMap();
+  if (ms.emissive) m.emissiveMap = dummyMap();
   if (cls.blend === "alphaTest") m.alphaTest = CLASS_ALPHA_TEST_PLACEHOLDER;
   if (cls.blend === "translucent") {
     m.transparent = true;
@@ -538,16 +703,19 @@ export function makeClassMaterial(o) {
     }
     shader.uniforms.hbBatchMapArr = mapU;
     if (nrmU) shader.uniforms.hbBatchNrmArr = nrmU;
+    if (aoU) shader.uniforms[AO_PAGE_SAMPLER] = aoU;
+    if (rghU) shader.uniforms[ROUGH_PAGE_SAMPLER] = rghU;
     shader.uniforms[STATE_SAMPLER] = stateU;
     if (hook) hook(shader);
-    applyClassPatch(shader, withNormal, !!pomU);
+    applyClassPatch(shader, withNormal, !!pomU, ms);
   };
   const key = (o.chainKey || "") + CLASS_KEY_SUFFIX + "|" + classKeyOf(cls) + "|" + (o.vertexHookKey || "") + (withNormal ? "|n1" : "|n0")
-    + (pomU ? "|pom1" : "");
+    + (pomU ? "|pom1" : "") + ms.key;
   m.customProgramCacheKey = function hbBatchClassProgramKey() { return key; };
   m.name = `gpu-batch-class-${classKeyOf(cls)}`;
   m.userData = { hbBatchClass: classKeyOf(cls), hbBatchProgramKey: key };
   if (pomU) m.userData.hbBatchPom = true;
+  if (ms.any) m.userData.hbBatchMaps = ms.key;
   return m;
 }
 

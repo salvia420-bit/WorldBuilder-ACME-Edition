@@ -14,8 +14,11 @@
 //       the clamp chain: Material.copy drops onBeforeCompile); a
 //       texture-valued chain uniform refuses the member — except the POM
 //       patch's height map (2026-10-31: slot data, fingerprinted by name).
-//   E3  member reasons: roughness / ao / emissive / alpha maps, a luminous
-//       emissive, an R8 map, a non-identity uv transform, transparent,
+//   E3  member reasons: alpha / light maps, an emissiveMap other than the
+//       map, a luminous emissive without one, an AO / roughness plane a page
+//       cannot hold (2026-10-31: page-describable AO / roughness planes and the
+//       luminous ladder's emissive alias are accepted, tests/
+//       interior_batch_maps.test.mjs), an R8 map, a non-identity uv transform, transparent,
 //       invisible, blending, polygon offset; mesh reasons: instanced,
 //       frustumCulled off, an own boundingSphere, a layer other than the
 //       container's, an attribute outside {position, normal, uv,
@@ -25,11 +28,13 @@
 //       baked chain); the batch keys differ per class and per kind.
 //   E5  REAL client_portal.dat surfaces through the MaterialCache ladders
 //       (`_materialFromFlags`, then the getCachedCellBaked / getCachedStaticBias
-//       clones cells.js draws with): every transparent / additive / luminous
-//       one is refused for its own reason; every accepted member's kit slot
+//       clones cells.js draws with): every transparent / additive one is
+//       refused for its own reason, every luminous one is accepted as an
+//       emissive-alias member (2026-10-31); every accepted member's kit slot
 //       row equals layerStateFromMaterial (field for field at f32); for every
-//       accepted chain the class patch, the collapse anchor and the depth
-//       patch find all their stock lines (classPatchMissing === 0).
+//       accepted chain the class patch (every extra-map set too), the
+//       collapse anchor and the depth patch find all their stock lines
+//       (classPatchMissing === 0).
 //
 // Fixture: ~/ac_base_dats/client_portal.dat (HB_PORTAL_DAT overrides); E5
 // FAILS loudly when it is missing.
@@ -50,7 +55,7 @@ const adapter = await import("../scene3d/adapter.js");
 const KIT = await import("../scene3d/gpu_batch/kit.js");
 const LS = await import("../scene3d/gpu_batch/layer_state.js");
 const IB = await import("../scene3d/gpu_batch/interior_batch.js");
-const { classPatchMissing } = await import("../scene3d/gpu_batch/class_materials.js");
+const { classPatchMissing, mapSetOf } = await import("../scene3d/gpu_batch/class_materials.js");
 const { memberChainHook } = await import("../scene3d/gpu_batch/anim_scenery_batch.js");
 
 const PORTAL_DAT = process.env.HB_PORTAL_DAT || "/home/wbterminal/ac_base_dats/client_portal.dat";
@@ -138,10 +143,18 @@ await t("E3 member and mesh reasons", () => {
   const ok = () => new THREE.MeshStandardMaterial({ map: tex(), side: THREE.DoubleSide });
   const mk = (f) => { const m = ok(); f(m); return IB.interiorArrayReason(m); };
   assert.equal(IB.interiorArrayReason(ok()), null, "control");
-  assert.equal(mk((m) => { m.roughnessMap = tex(); }), "map:roughnessMap");
-  assert.equal(mk((m) => { m.aoMap = tex(); }), "map:aoMap");
+  // 2026-10-31 (AO / roughness / emissive members, tests/interior_batch_maps.test.mjs):
+  // a page-describable roughness / AO plane and an emissiveMap that IS the map batch
+  // through a class map set; every other extra map, a foreign emissiveMap and a
+  // luminous member without one still refuse.
+  assert.equal(mk((m) => { m.roughnessMap = tex(); }), null, "roughness plane: a class map set");
+  assert.equal(mk((m) => { m.aoMap = tex(); }), null, "AO plane: a class map set");
+  assert.equal(mk((m) => { m.emissiveMap = m.map; m.emissive.setRGB(1, 1, 1); }), null, "the luminous ladder's emissive alias");
+  assert.equal(mk((m) => { m.aoMap = tex(); m.aoMap.repeat.set(2, 2); m.aoMap.updateMatrix(); }), "ao-map-format", "AO uv transform");
+  assert.equal(mk((m) => { m.roughnessMap = adapter.surfacePixelsToHeightTexture(new Uint8Array(64), 8, 8); }), "roughness-map-format", "R8 roughness");
   assert.equal(mk((m) => { m.alphaMap = tex(); }), "map:alphaMap");
-  assert.equal(mk((m) => { m.emissiveMap = tex(); }), "map:emissiveMap");
+  assert.equal(mk((m) => { m.lightMap = tex(); m.aoMap = tex(); }), "map:lightMap");
+  assert.equal(mk((m) => { m.emissiveMap = tex(); }), "map:emissiveMap", "an emissiveMap that is not the map");
   assert.equal(mk((m) => { m.emissive.setRGB(1, 1, 1); }), "luminous");
   assert.equal(mk((m) => { m.map = adapter.surfacePixelsToHeightTexture(new Uint8Array(64), 8, 8); }), "map-format", "R8");
   assert.equal(mk((m) => { m.map.repeat.set(2, 2); m.map.updateMatrix(); }), "map-format", "uv transform");
@@ -239,7 +252,8 @@ await t("E5 real surfaces through the MaterialCache ladders: reasons, slot rows 
         : (s.luminosity > 0 ? "luminous" : null);
       if (want === "transparent" && r !== "transparent") bad.push(`0x${s.id.toString(16)} flags 0x${s.flags.toString(16)}: ${r} (want transparent)`);
       if (want === null && r !== null) bad.push(`0x${s.id.toString(16)} flags 0x${s.flags.toString(16)}: refused ${r}`);
-      if (want === "luminous" && r !== "luminous" && r !== "map:emissiveMap") bad.push(`0x${s.id.toString(16)}: ${r} (want luminous)`);
+      // 2026-10-31: the luminous ladder aliases the map as emissiveMap -> an emissive class.
+      if (want === "luminous" && !(r === null && m.emissiveMap && m.emissiveMap === m.map)) bad.push(`0x${s.id.toString(16)}: ${r} (want an emissive-alias member)`);
       reasons[r || "accepted"] = (reasons[r || "accepted"] || 0) + 1;
       if (r) continue;
       accepted += 1;
@@ -264,6 +278,11 @@ await t("E5 real surfaces through the MaterialCache ladders: reasons, slot rows 
   assert.ok(chains.size >= 3, "base (clamp), baked clone, static-bias clone");
   for (const [id, m] of chains) {
     for (const withNormal of [false, true]) assert.equal(classPatchMissing({ chain: memberChainHook(m), withNormal }), 0, `class patch complete for chain ${id} (normal ${withNormal})`);
+    // Every map set (AO, roughness, emissive: header "EXTRA-MAP MEMBERS") on every accepted chain.
+    for (let i = 1; i < 8; i += 1) {
+      const maps = mapSetOf((i & 1) !== 0, (i & 2) !== 0, (i & 4) !== 0);
+      assert.equal(classPatchMissing({ chain: memberChainHook(m), withNormal: true, maps }), 0, `class patch complete for chain ${id}, set ${maps.key}`);
+    }
     const shader = { vertexShader: THREE.ShaderLib.physical.vertexShader, fragmentShader: THREE.ShaderLib.physical.fragmentShader, uniforms: {}, defines: {} };
     const hook = memberChainHook(m);
     if (hook) hook.call(new THREE.MeshStandardMaterial(), shader, null);

@@ -125,6 +125,16 @@ async function main() {
       log(`@telepoi ${poi}: ${res.telepoi}`);
       await new Promise((r) => setTimeout(r, 20000));
     }
+    // --teleloc "<cell> <x> <y> <z>": a precise spot after the --telepoi, e.g. a room
+    // (?interiorBatch activates only once the camera has drawn every batch of a chunk).
+    const loc = arg("--teleloc", "");
+    if (loc) {
+      res.teleloc = await page.evaluate((p) => {
+        try { window.__sessionHandle?.sendChat?.(`@teleloc ${p}`); return "sent"; } catch (e) { return String(e?.message ?? e); }
+      }, loc);
+      log(`@teleloc ${loc}: ${res.teleloc}`);
+      await new Promise((r) => setTimeout(r, 20000));
+    }
     log(`settling ${settleSec} s`);
     await new Promise((r) => setTimeout(r, settleSec * 1000));
     // --profile-sec N: a V8 CPU profile of the settled, still scene (an A/B arm: same

@@ -50,11 +50,55 @@
 // Only past both is the acquire refused. `wouldAcquire(desc, key)` answers
 // the same question with no side effect; `reclaim(bytes)` frees idle-only
 // pages on demand (a consumer's idle-footprint trim).
+//
+// DEMAND-SIZED PAGES (opt-in `demand`, R3-5 real boot 2026-10-31; the kit
+// pages turn it on, kit.js). The byte-target first page above reserves about
+// `pageBytes` (4 MiB) for EVERY key, however few layers the key will ever
+// hold, and ArrayPages raises maxLayers to the GL limit (2048 on Chrome /
+// SwiftShader), so a small-texture key's first page is hundreds of layers.
+// The laptop boot (Holtburg, quality low, `?interiorBatch=on`) mixes BC7,
+// RGBA8 and R8 keys over many sizes: 40 pages, 17944 layer slots for 229
+// resident layers, 134.0 of 134.2 MB reserved, every new key refused. With
+// `demand` a page's capacity follows the key's demand instead:
+//   - a key's first page is SMALL: `minLayers` (4), or the layers
+//     `firstPageBytes` (256 KiB) holds when that is more (or the desc's
+//     `initialLayers`). The byte floor keeps a small-texture key's first few
+//     dozen layers in ONE page: consumers split their draws by page (an
+//     entity rig's runs, an interior chunk's batches), so a 4-layer start
+//     would cost draws (tests/entity_batch_lifecycle: 28 -> 32 for four
+//     rigs) for a few KB saved;
+//   - a key needs a new page only when every layer of its pages is live (no
+//     free, no idle layer of the key), so the next page holds as many layers
+//     as the key has resident: the key's capacity doubles (geometric growth),
+//     and its free slots never exceed its resident ones (or the first page's);
+//   - no page is larger than `pageBytes` (the PER-PAGE BYTE CEILING, 4 MiB;
+//     a layer larger than that gets one-layer pages) or `maxLayers`;
+//   - at the cap, `reclaimIdle` / `fitToCap` as above (a fitted page is
+//     small; growth after it starts again from the key's resident count);
+//     with `fitToCap`, also a page that WOULD fit takes at most half of the
+//     bytes left (FAIR SHARE: never binding far from the cap, it keeps a
+//     minLayers first page of a big-texture key from starving the keys after
+//     it near the cap);
+//   - a page left with no resident layer at all (`abandon` of its last
+//     layer) is destroyed at once: an empty page is pure reserved bytes.
+// So a key's reserved bytes are at most its resident bytes plus the larger
+// of its resident bytes and its first page (pageBytes at most), summed over
+// keys: reserved <= 2 x resident + sum of first pages
+// (tests/gpu_batch_pages_realboot.test.mjs replays the boot's key mix — 429
+// layers over 55 keys — under the 128 MiB cap: 27.3 MB reserved for 13.5 MB
+// resident, every key admitted; the byte-target pages reserve the whole cap
+// and refuse 26).
+//
+// HONEST BYTES. `bytes` (what the cap counts) is the sum of what each page
+// asks texStorage3D for: an R8 level is 1 byte a texel (it was counted at
+// RGBA8's 4 before 2026-10-31), a BC7 level 16 bytes a 4x4 block.
 
 export const PAGE_BYTES_DEFAULT = 4 * 1024 * 1024;
 export const PAGE_LAYERS_MIN = 4;
 export const PAGE_LAYERS_MAX_DEFAULT = 64;
 export const PAGE_GROWTH = 1.5;
+/** DEMAND-SIZED PAGES: a key's first page holds at least the layers this many bytes hold (and minLayers). */
+export const PAGE_FIRST_BYTES_DEFAULT = 256 * 1024;
 export const ALLOCATOR_BYTES_MAX_DEFAULT = 128 * 1024 * 1024;
 
 /**
@@ -72,9 +116,10 @@ export function levelSize(width, height, level) {
   return [Math.max(1, (width | 0) >> level), Math.max(1, (height | 0) >> level)];
 }
 
-/** Bytes one level of one layer occupies. */
+/** Bytes one level of one layer occupies (what texStorage3D reserves for it). */
 export function levelBytes(format, width, height) {
   if (format === "bc7") return Math.ceil(width / 4) * Math.ceil(height / 4) * 16;
+  if (format === "r8") return width * height; // R8: one byte a texel
   return width * height * 4; // rgba8
 }
 
@@ -102,7 +147,7 @@ let _nextPageId = 1;
 export class PageAllocator {
   /**
    * @param {object} [opts]
-   * @param {number} [opts.pageBytes]   target bytes of a key's first page
+   * @param {number} [opts.pageBytes]   target bytes of a key's first page (demand: the per-page ceiling)
    * @param {number} [opts.minLayers]
    * @param {number} [opts.maxLayers]   per page (GL MAX_ARRAY_TEXTURE_LAYERS >= 256)
    * @param {number} [opts.maxBytes]    whole allocator
@@ -112,12 +157,16 @@ export class PageAllocator {
    * @param {boolean} [opts.reclaimIdle]  at the cap, destroy idle-only pages first (see AT THE CAP)
    * @param {boolean} [opts.fitToCap]     at the cap, shrink the new page to what is left
    * @param {number} [opts.fitMinLayers]  the smallest page `fitToCap` makes (default 1)
+   * @param {boolean} [opts.demand]       pages sized by demand, `pageBytes` = per-page ceiling (see DEMAND-SIZED PAGES)
+   * @param {number} [opts.firstPageBytes] demand: the byte floor of a key's first page (default 256 KiB)
    */
   constructor(opts = {}) {
     this.pageBytes = opts.pageBytes ?? PAGE_BYTES_DEFAULT;
     this.minLayers = Math.max(1, opts.minLayers ?? PAGE_LAYERS_MIN);
     this.maxLayers = Math.max(this.minLayers, opts.maxLayers ?? PAGE_LAYERS_MAX_DEFAULT);
     this.maxBytes = opts.maxBytes ?? ALLOCATOR_BYTES_MAX_DEFAULT;
+    this.demand = opts.demand === true;
+    this.firstPageBytes = Math.max(0, opts.firstPageBytes ?? PAGE_FIRST_BYTES_DEFAULT);
     this.reclaimIdle = opts.reclaimIdle === true;
     this.fitToCap = opts.fitToCap === true;
     this.fitMinLayers = Math.max(1, opts.fitMinLayers ?? 1);
@@ -136,6 +185,17 @@ export class PageAllocator {
     };
     // AT THE CAP counters (only the opt-in paths move them).
     if (this.reclaimIdle || this.fitToCap) Object.assign(this.stats, { reclaimedPages: 0, reclaimedBytes: 0, fitted: 0 });
+    // DEMAND-SIZED PAGES counters: pages destroyed the moment they emptied,
+    // the largest reserved total seen (the cap holds it; the steady state is
+    // `bytes`), and growth pages (a key's second and later pages).
+    if (this.demand) Object.assign(this.stats, { emptyReclaims: 0, maxReservedBytes: 0, growthPages: 0 });
+  }
+
+  /** Layers per page `desc`'s key may never exceed: maxLayers, and (demand) the per-page byte ceiling. */
+  pageLayersMax(desc) {
+    if (!this.demand) return this.maxLayers;
+    const lb = Math.max(1, layerBytesOf(desc));
+    return Math.max(1, Math.min(this.maxLayers, Math.floor(this.pageBytes / lb)));
   }
 
   /** Live (refcount > 0) layers of `page`. */
@@ -221,8 +281,20 @@ export class PageAllocator {
     return this.fitToCap && Math.floor(room / lb) >= this.fitMinLayers;
   }
 
-  /** Layers of the next page for `key` (see PAGE SIZE in the header). */
+  /** Layers of the next page for `key` (see PAGE SIZE / DEMAND-SIZED PAGES in the header). */
   capacityFor(desc, list) {
+    if (this.demand) {
+      // A new page is asked for only when every layer of the key's pages is
+      // live: their capacity IS the key's resident count, and the new page
+      // matches it (the key doubles); a first page holds max(minLayers, what
+      // firstPageBytes holds); never past the per-page ceiling.
+      let resident = 0;
+      if (list) for (const p of list) resident += p.capacity;
+      const hint = desc.initialLayers | 0;
+      const first = hint > 0 ? hint : Math.floor(this.firstPageBytes / Math.max(1, layerBytesOf(desc)));
+      const want = resident > 0 ? resident : first;
+      return Math.min(this.pageLayersMax(desc), Math.max(this.minLayers, want));
+    }
     const prev = list && list.length ? list[list.length - 1].capacity : 0;
     if (prev > 0) return Math.min(this.maxLayers, Math.ceil(prev * PAGE_GROWTH));
     const lb = layerBytesOf(desc);
@@ -247,6 +319,12 @@ export class PageAllocator {
         capacity = Math.min(capacity, Math.max(this.fitMinLayers, Math.min(this.minLayers, Math.floor(fit / 2))));
         this.stats.fitted += 1;
       }
+    } else if (this.demand && this.fitToCap) {
+      // FAIR SHARE (demand): the same rule for a page that would fit: it never
+      // takes more than half of what is left (far from the cap this never
+      // binds; near it, a minLayers first page of a big-texture key would).
+      const half = Math.max(this.fitMinLayers, Math.floor((this.maxBytes - this.bytes) / layerBytes / 2));
+      if (capacity > half) { capacity = half; this.stats.fitted += 1; }
     }
     if (this.bytes + capacity * layerBytes > this.maxBytes) { this.stats.refused += 1; return null; }
     const page = {
@@ -262,10 +340,12 @@ export class PageAllocator {
     };
     for (let l = capacity - 1; l >= 0; l -= 1) page.free.push(l); // pop() hands out layer 0 first
     if (this.onPageCreate && this.onPageCreate(page) === false) { this.stats.refused += 1; return null; }
+    if (this.demand && list.length > 0) this.stats.growthPages += 1;
     list.push(page);
     this.pages.push(page);
     this.bytes += capacity * layerBytes;
     this.stats.pagesCreated += 1;
+    if (this.demand && this.bytes > this.stats.maxReservedBytes) this.stats.maxReservedBytes = this.bytes;
     return page;
   }
 
@@ -355,15 +435,21 @@ export class PageAllocator {
   /**
    * Forget content whose upload failed after `acquire` returned fresh (the
    * layer holds garbage): the layer goes straight back to the free list.
-   * Only legal while the caller holds the only reference.
+   * Only legal while the caller holds the only reference. With `demand`, a
+   * page left with no resident layer is destroyed at once (DEMAND-SIZED PAGES).
    */
   abandon(contentKey) {
     const ent = this._byContent.get(contentKey);
     if (!ent || ent.page.refs[ent.layer] !== 1) return false;
-    ent.page.refs[ent.layer] = 0;
-    ent.page.content[ent.layer] = null;
-    ent.page.free.push(ent.layer);
+    const p = ent.page;
+    p.refs[ent.layer] = 0;
+    p.content[ent.layer] = null;
+    p.free.push(ent.layer);
     this._byContent.delete(contentKey);
+    if (this.demand && p.free.length === p.capacity) {
+      this._destroyPage(p);
+      this.stats.emptyReclaims += 1;
+    }
     return true;
   }
 
@@ -422,8 +508,12 @@ export class PageAllocator {
       }
     }
     // `bytes` = reserved (whole pages, what the cap counts); live / idle =
-    // resident content; the rest of `bytes` is free layers.
-    return { pages: this.pages.length, layers, live, idle, free, bytes: this.bytes, maxBytes: this.maxBytes, liveBytes, idleBytes, ...this.stats };
+    // resident content; the rest of `bytes` is free layers (`freeBytes`, the
+    // headroom); `keys` = distinct page keys.
+    return {
+      pages: this.pages.length, keys: this._byKey.size, layers, live, idle, free, bytes: this.bytes, maxBytes: this.maxBytes,
+      liveBytes, idleBytes, freeBytes: this.bytes - liveBytes - idleBytes, ...this.stats,
+    };
   }
 
   /**
@@ -445,6 +535,10 @@ export class PageAllocator {
       }
       const list = this._byKey.get(p.key);
       if (!list || !list.includes(p)) bad.push(`page ${p.id}: missing from its key list`);
+      if (this.demand) {
+        if (p.free.length === p.capacity) bad.push(`page ${p.id}: empty page kept (demand)`);
+        if (p.capacity > this.pageLayersMax(p.desc)) bad.push(`page ${p.id}: ${p.capacity} layers over the per-page ceiling ${this.pageLayersMax(p.desc)}`);
+      }
       for (let l = 0; l < p.capacity; l += 1) {
         const c = p.content[l];
         const r = p.refs[l];

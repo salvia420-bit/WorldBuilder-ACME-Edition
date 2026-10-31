@@ -66,6 +66,15 @@
 // AT THE CAP (R3-4 real boot, 2026-10-31): the kit pages reclaim idle-only
 // pages and then fit a smaller page before they refuse an admit
 // (page_allocator.js "AT THE CAP"); a refusal books no budget bytes.
+//
+// DEMAND-SIZED PAGES (R3-5 real boot, 2026-10-31; page_allocator.js
+// "DEMAND-SIZED PAGES"): the kit pages size every page by its key's demand
+// (a small first page — 4 layers or 256 KiB, whichever holds more — then
+// the key doubling, 4 MiB at most a page), so the
+// reserved bytes stay close to the resident layers instead of ~4 MiB per
+// (format, size, levels, sampler) key — the laptop boot reserved 134.0 of
+// 134.2 MB for 13 MB of layers and refused every new key. An empty page is
+// destroyed at once; idle-only pages go at the cap (reclaimIdle).
 
 import { UploadBudget, UPLOAD_BYTES_PER_FRAME_DEFAULT, UPLOAD_ADMITS_PER_FRAME_DEFAULT } from "./upload_budget.js";
 import {
@@ -125,7 +134,7 @@ export function kitPages(renderer) {
   if (_pages && _pagesRenderer === renderer) return _pages;
   if (_pages) { try { _pages.dispose(); } catch (_) { /* fail-soft */ } }
   _pages = new ArrayPages(renderer, {
-    maxBytes: kitVramCapBytes(), reclaimIdle: true, fitToCap: true,
+    maxBytes: kitVramCapBytes(), reclaimIdle: true, fitToCap: true, demand: true,
   });
   _pagesRenderer = renderer;
   return _pages;
