@@ -11,6 +11,8 @@ default-OFF perf flag (`batch-R3-D1`), and the winners flip to default ON under 
 Evidence tags: **[M]** measured, **[D]** derived. `$S = /mnt/wbterminal1/tmp/claude-scratch/rustcore-2026-10-29`,
 `$RC = /mnt/wbterminal1/tmp/claude-scratch/perf/rc-rust-scene-core-2026-10-29`, `$D1 = /mnt/wbterminal1/tmp/claude-scratch/perf/r3-d1`.
 
+> **CLOSED 2026-10-31: read `docs/HANDOFF-round3-final-2026-10-31.md`** (what shipped, what is parked, bugs found, remaining items; merged to master).
+
 ## RESUME HERE (updated 2026-10-30 ~21:00; owner /goal: "finish remaining work")
 
 > **10-31 update: read "Laptop 10-31 (batch reworks verified in real boots)" at the end first.** Items 1-3 below are done

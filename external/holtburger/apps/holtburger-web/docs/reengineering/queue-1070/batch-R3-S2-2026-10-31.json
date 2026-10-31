@@ -631,7 +631,7 @@
    "recipe": [
     "node scripts/perf-worker/hbbench.mjs --arms apps/holtburger-web/docs/reengineering/queue-1070/batch-R3-S2-2026-10-31.json --item S2-DXSW --reps 3 --port 8766 --uncapped --ref A --out /mnt/wbterminal1/tmp/claude-scratch/perf/r3-s2/dxsw2"
    ],
-   "result": "2026-10-31 17:09-17:32 on r3f, STOPPED: the switch path never engaged in the real client: __drawExec.stats {switchOn: true, sameProgramSwitches: 0, switchRefused: {envMap: 418271, plan:uniformsList: 38, program: 6, noTextures: 1}} (the game's lit materials carry an environment map; the path refused every envMap draw). DXS-on / STACK-DXS arm-reps INVALID by gate (= A/A). Re-run after the envMap support lands (lane dx-switch)."
+   "result": "RE-RUN 2026-10-31 19:53-20:51 on r3i (82afb0a5, envMap support), 3 quiet reps (idle > 7,000 s). Gate: DXS-on engaged (sameProgramSwitches 450,501 per arm-rep, ~40-50 per frame; switchRefused only noTextures 1 / plan:uniformsList 45 / program 7; switchSyncFailed 0). D1b vs mean(A, A-AA): DXS-on still +1.25+-0.55 / moving +1.20+-0.93 / tour +1.43+-1.00 fps, renderJs -0.42+-0.16 ms -> IMPROVEMENT -> FLIPPED DEFAULT ON 2026-10-31 (escape =off). STACK-DXS -2.25 / -1.30 / -5.63 (loss, as S2-QUIET's STACK). First attempt 17:09-17:32 on r3f stopped: every lit switch refused for envMap (418,271)."
   },
   {
    "id": "S2-ORB",
@@ -703,7 +703,7 @@
    "recipe": [
     "node scripts/perf-worker/hbbench.mjs --arms apps/holtburger-web/docs/reengineering/queue-1070/batch-R3-S2-2026-10-31.json --item S2-ORB --reps 3 --port 8766 --uncapped --ref A --out /mnt/wbterminal1/tmp/claude-scratch/perf/r3-s2/orb2"
    ],
-   "result": "2026-10-31 17:57-19:53, snapshot r3g-20261031 (45e439f0: ?orbRender=canvas v1, 1x backing), 3 interleaved reps x 8 arms, quiet box (min idle 93 / 4,457 / 6,483 s per rep, no non-test process >= 0.5 core). D1b (paired vs mean(A, A-AA); fps still / moving / tour): floor A-AA vs A -0.17+-0.44 / +0.57+-0.63 / +0.70+-0.38; OC +4.18+-0.27 / +3.65+-0.74 / +3.75+-0.63 (renderJs -0.78) IMPROVEMENT; OC-15 +4.08+-0.97 / +3.88+-1.02 / +4.28+-0.36 IMPROVEMENT (15 Hz adds nothing on canvas); HO-off (ceiling) +3.55+-0.32 / +3.42+-0.25 / +4.75+-0.49; O-15nc +2.22 / +2.35 / +2.58; O-15 +1.72 / +1.35 / +1.78; O-nc within noise. VERDICT: the canvas renderer recovers the whole orb cost (~4 fps, as hiding them) and wins every segment. Flip candidate: ?orbRender=canvas DEFAULT ON (escape =svg) once S2-ORB2 confirms the look-fixed build (01ede174, 2x supersampled). Scorer: r3-s2/orb2.d1b.txt."
+   "result": "2026-10-31 17:57-19:53, snapshot r3g-20261031 (45e439f0: ?orbRender=canvas v1, 1x backing), 3 interleaved reps x 8 arms, quiet box (min idle 93 / 4,457 / 6,483 s per rep, no non-test process >= 0.5 core). D1b (paired vs mean(A, A-AA); fps still / moving / tour): floor A-AA vs A -0.17+-0.44 / +0.57+-0.63 / +0.70+-0.38; OC +4.18+-0.27 / +3.65+-0.74 / +3.75+-0.63 (renderJs -0.78) IMPROVEMENT; OC-15 +4.08+-0.97 / +3.88+-1.02 / +4.28+-0.36 IMPROVEMENT (15 Hz adds nothing on canvas); HO-off (ceiling) +3.55+-0.32 / +3.42+-0.25 / +4.75+-0.49; O-15nc +2.22 / +2.35 / +2.58; O-15 +1.72 / +1.35 / +1.78; O-nc within noise. VERDICT: the canvas renderer recovers the whole orb cost (~4 fps, as hiding them) and wins every segment. Flip candidate: ?orbRender=canvas DEFAULT ON (escape =svg) once S2-ORB2 confirms the look-fixed build (01ede174, 2x supersampled). Scorer: r3-s2/orb2.d1b.txt. FLIPPED DEFAULT ON 2026-10-31 (escape ?orbRender=svg)."
   },
   {
    "id": "S2-ORB2",
@@ -748,7 +748,7 @@
    "recipe": [
     "node scripts/perf-worker/hbbench.mjs --arms apps/holtburger-web/docs/reengineering/queue-1070/batch-R3-S2-2026-10-31.json --item S2-ORB2 --reps 3 --port 8766 --uncapped --ref A --out /mnt/wbterminal1/tmp/claude-scratch/perf/r3-s2/orb3"
    ],
-   "result": null
+   "result": "NOT RUN: the 1070 went offline 2026-10-31 ~20:50 (first arm-rep failed at ssh). Owner: keep the winners; orbRender=canvas FLIPPED DEFAULT ON on the S2-ORB evidence (see the final handoff's assumption)."
   },
   {
    "id": "S2-ANATOMY",
@@ -1001,5 +1001,6 @@
    "title": "hbreport over S2-BENCH + S2-ANATOMY + LINVAK + DUNGEON; flip the winners (D1 rule) to DEFAULT ON with their =off escapes; url-flags rows; plan section 1 table; gate + commit",
    "result": null
   }
- ]
+ ],
+ "closed": "2026-10-31: effort closed by the owner (the 1070 is not coming back); remaining items in docs/HANDOFF-round3-final-2026-10-31.md section 4."
 }
