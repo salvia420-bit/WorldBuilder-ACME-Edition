@@ -647,6 +647,14 @@
      "gate": "(!!window.__entityBatch && ((window.__entityBatch.stats().byStatus || {}).active || 0) > 0) && (!!window.__interiorBatch && !!window.__interiorBatch.stats() && window.__interiorBatch.stats().mode === \"on\" && window.__interiorBatch.stats().objects > 0) && (!!window.__gpuParticlesDiag && window.__gpuParticlesDiag().on === true && window.__gpuParticlesDiag().emitters > 0 && window.__gpuParticlesDiag().selfCheck !== false) && (!!window.__hudBisect && Array.isArray(window.__hudBisect.diet) && window.__hudBisect.diet.length > 0)",
      "gateInfo": "({eb: window.__entityBatch ? window.__entityBatch.stats().byStatus : null, ib: window.__interiorBatch ? window.__interiorBatch.stats().meshes : null, gp: window.__gpuParticlesDiag ? window.__gpuParticlesDiag().emitters : null, hud: window.__hudBisect || null})",
      "scored": "still / moving / tour fps (the D1 rule); main busy per frame, CrGpuMain WEBGL per present, GPU ms (S2-ANATOMY); p50 / p95 for the record"
+    },
+    {
+     "name": "LV-STACK-512",
+     "flags": "entityBatch=on&interiorBatch=on&gpuParticles=on&hudDiet=on&gpuBatchVramMB=512",
+     "note": "STACK with the kit VRAM cap at 512 MiB. 1070 real-GPU check 2026-10-31 (r3c, TownNetwork, all three batches on): the shared 128 MiB cap was exhausted (134 MB reserved / 94 MB live, 4651 refused admits): 82 interior members and 3965 entity leaves stayed legacy for pageFull. Holtburg showed no cap effect (EB-512 = EB-on); this prices it where it binds.",
+     "gate": "(!!window.__entityBatch && ((window.__entityBatch.stats().byStatus || {}).active || 0) > 0) && (!!window.__interiorBatch && !!window.__interiorBatch.stats() && window.__interiorBatch.stats().mode === \"on\" && window.__interiorBatch.stats().objects > 0) && (!!window.__gpuParticlesDiag && window.__gpuParticlesDiag().on === true && window.__gpuParticlesDiag().emitters > 0 && window.__gpuParticlesDiag().selfCheck !== false) && (!!window.__hudBisect && Array.isArray(window.__hudBisect.diet) && window.__hudBisect.diet.length > 0)",
+     "gateInfo": "({eb: window.__entityBatch ? window.__entityBatch.stats().byStatus : null, ib: window.__interiorBatch ? window.__interiorBatch.stats().meshes : null, gp: window.__gpuParticlesDiag ? window.__gpuParticlesDiag().emitters : null, hud: window.__hudBisect || null})",
+     "scored": "still / moving / tour fps (the D1 rule); main busy per frame, CrGpuMain WEBGL per present, GPU ms (S2-ANATOMY); p50 / p95 for the record"
     }
    ],
    "reps": 3,
@@ -736,6 +744,14 @@
      "name": "DG-STACK",
      "flags": "entityBatch=on&interiorBatch=on&gpuParticles=on&hudDiet=on",
      "note": "the four ship candidates together: additivity check (a winner that only wins alone is reported, not stacked blindly)",
+     "gate": "(!!window.__entityBatch && ((window.__entityBatch.stats().byStatus || {}).active || 0) > 0) && (!!window.__interiorBatch && !!window.__interiorBatch.stats() && window.__interiorBatch.stats().mode === \"on\" && window.__interiorBatch.stats().objects > 0) && (!!window.__gpuParticlesDiag && window.__gpuParticlesDiag().on === true && window.__gpuParticlesDiag().emitters > 0 && window.__gpuParticlesDiag().selfCheck !== false) && (!!window.__hudBisect && Array.isArray(window.__hudBisect.diet) && window.__hudBisect.diet.length > 0)",
+     "gateInfo": "({eb: window.__entityBatch ? window.__entityBatch.stats().byStatus : null, ib: window.__interiorBatch ? window.__interiorBatch.stats().meshes : null, gp: window.__gpuParticlesDiag ? window.__gpuParticlesDiag().emitters : null, hud: window.__hudBisect || null})",
+     "scored": "still / moving / tour fps (the D1 rule); main busy per frame, CrGpuMain WEBGL per present, GPU ms (S2-ANATOMY); p50 / p95 for the record"
+    },
+    {
+     "name": "DG-STACK-512",
+     "flags": "entityBatch=on&interiorBatch=on&gpuParticles=on&hudDiet=on&gpuBatchVramMB=512",
+     "note": "STACK with the kit VRAM cap at 512 MiB. 1070 real-GPU check 2026-10-31 (r3c, TownNetwork, all three batches on): the shared 128 MiB cap was exhausted (134 MB reserved / 94 MB live, 4651 refused admits): 82 interior members and 3965 entity leaves stayed legacy for pageFull. Holtburg showed no cap effect (EB-512 = EB-on); this prices it where it binds.",
      "gate": "(!!window.__entityBatch && ((window.__entityBatch.stats().byStatus || {}).active || 0) > 0) && (!!window.__interiorBatch && !!window.__interiorBatch.stats() && window.__interiorBatch.stats().mode === \"on\" && window.__interiorBatch.stats().objects > 0) && (!!window.__gpuParticlesDiag && window.__gpuParticlesDiag().on === true && window.__gpuParticlesDiag().emitters > 0 && window.__gpuParticlesDiag().selfCheck !== false) && (!!window.__hudBisect && Array.isArray(window.__hudBisect.diet) && window.__hudBisect.diet.length > 0)",
      "gateInfo": "({eb: window.__entityBatch ? window.__entityBatch.stats().byStatus : null, ib: window.__interiorBatch ? window.__interiorBatch.stats().meshes : null, gp: window.__gpuParticlesDiag ? window.__gpuParticlesDiag().emitters : null, hud: window.__hudBisect || null})",
      "scored": "still / moving / tour fps (the D1 rule); main busy per frame, CrGpuMain WEBGL per present, GPU ms (S2-ANATOMY); p50 / p95 for the record"
