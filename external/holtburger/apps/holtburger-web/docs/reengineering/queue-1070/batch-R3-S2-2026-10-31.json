@@ -8,14 +8,14 @@
  "sessionRules": "vistest-preamble-v1",
  "sessionRulesInline": [
   "Inherit every rule of batch-R3-D1-2026-10-30.json sessionRulesInline verbatim (it inherits batch-P0's: MODE T off-screen + muted, OWNER-RUN, kill only by user-data-dir, ?nosw=1, fresh profile per arm-rep, uncapped frames + targetFps=0, release wasm only, >= 65 s between boots on one account, reject-never-average). Read memory/fleet-runbooks.md before driving the 1070.",
-  "Build under test: snapshot /mnt/wbterminal2/hb-snap/r3c-20261031 (cut 2026-10-31 from the entity-maps commit, real release pkg copy; SNAPSHOT_COMMIT.txt), served with `python3 scripts/serve.py --bind 127.0.0.1 --port 8766` from the snapshot (`--check` validates and EXITS: run it once, then serve without it). Check: `node scripts/perf-worker/hbbench.mjs --arms apps/holtburger-web/docs/reengineering/queue-1070/batch-R3-S2-2026-10-31.json --check-snapshot /mnt/wbterminal2/hb-snap/r3c-20261031`.",
+  "Build under test: snapshot /mnt/wbterminal2/hb-snap/r3d-20261031 (cut 2026-10-31 from 1dd3b2cd; S2-BENCH rep 1 and the noisy-window items ran on r3c = f83477d7, real release pkg copy; SNAPSHOT_COMMIT.txt), served with `python3 scripts/serve.py --bind 127.0.0.1 --port 8766` from the snapshot (`--check` validates and EXITS: run it once, then serve without it). Check: `node scripts/perf-worker/hbbench.mjs --arms apps/holtburger-web/docs/reengineering/queue-1070/batch-R3-S2-2026-10-31.json --check-snapshot /mnt/wbterminal2/hb-snap/r3d-20261031`.",
   "Laptop memory: SwiftShader boots of the batch arms hold ~3.4 GB (GPU process ~2 GB + renderer ~1.4 GB); never run a laptop batch boot while the 1070 bench's laptop side (serve.py, ACE, tunnel) is near the earlyoom line. The 1070 runs the arms; the laptop only serves."
  ],
  "accounts": "Bench account tailnet1 (hbbench default). M1c needs a SECOND Developer-level account for WebAC (or run the two clients one after the other); credentials only in the URL / environment at run time, never in this file.",
  "urlBase": "http://127.0.0.1:8766/apps/holtburger-web/index.html",
  "b0Snapshot": {
-  "what": "S2 snapshot = r3c-20261031: the merged, gated tree with the entity-maps commit (on top of 1d30b7d4) with a real release pkg copy.",
-  "check": "node scripts/perf-worker/hbbench.mjs --arms apps/holtburger-web/docs/reengineering/queue-1070/batch-R3-S2-2026-10-31.json --check-snapshot /mnt/wbterminal2/hb-snap/r3c-20261031",
+  "what": "S2 snapshot = r3d-20261031 (1dd3b2cd: entity maps + review fixes + interior texture-swap settle) with a real release pkg copy. S2-BENCH rep 1 and the 2026-10-31 noisy-window items ran on r3c-20261031 (f83477d7).",
+  "check": "node scripts/perf-worker/hbbench.mjs --arms apps/holtburger-web/docs/reengineering/queue-1070/batch-R3-S2-2026-10-31.json --check-snapshot /mnt/wbterminal2/hb-snap/r3d-20261031",
   "rule": "Each requirement's file must exist in the snapshot, be the snapshot's own copy (no symlink anywhere on its path) and match every pattern (JS RegExp source). The check refuses the live tree itself and never reads url-flags.md. Patterns pin the a2 versions where an a2 lane changed the reader's module (route probe, nullRender install, generation keying, compaction, the legacy re-show fix), so a phase-A-only snapshot fails.",
   "requiredReaders": [
    {
@@ -32,7 +32,7 @@
     "file": "apps/holtburger-web/scene3d/gpu_batch/entity_batch.js",
     "patterns": [
      "const out = \\{ entities: 0, rowMismatches: 0, stateMismatches: 0, pomMismatches: 0, mapMismatches: 0, parkMismatches: 0, attrMismatches: 0, details: \\[\\] \\};",
-     "mapArrivals: 0, // texchan planes that arrived on a batched member"
+     "mapArrivals: 0, // rig hand-backs for a late texchan AO / roughness plane"
     ],
     "why": "EB-on / STACK: a snapshot before the maps commit routes the 47 AO + roughness leaves legacy (laptop boot 2026-10-31)"
    },
@@ -45,6 +45,23 @@
      "meshes: \\{ built: legacyMeshes, suppressed: suppressedMeshes \\}"
     ],
     "why": "IB-on, STACK: a snapshot before 9315dfd7 disarms under the pools or refuses the AO members (the 2026-10-31 real boots)"
+   },
+   {
+    "flag": "interiorBatch (texture swaps settle, 1dd3b2cd)",
+    "file": "apps/holtburger-web/scene3d/gpu_batch/interior_batch.js",
+    "patterns": [
+     "export const IB_TEXTURE_SETTLE_SYNCS = 60;",
+     "export const IB_TEXTURE_SETTLE_MAX_SYNCS = 600;"
+    ],
+    "why": "IB-on / STACK in the quiet window: before 1dd3b2cd each streamed texture swap rebuilt the whole chunk (room boot: 8 rebuilds, 0 activations in 300 s)"
+   },
+   {
+    "flag": "entityBatch (stale run key fix, 4a967837)",
+    "file": "apps/holtburger-web/scene3d/gpu_batch/entity_batch.js",
+    "patterns": [
+     "else this\\._softReplan\\(b, \"drift:runKey\"\\);"
+    ],
+    "why": "EB-on / STACK: the review fix"
    },
    {
     "flag": "interiorBatch (LRU hooks)",
