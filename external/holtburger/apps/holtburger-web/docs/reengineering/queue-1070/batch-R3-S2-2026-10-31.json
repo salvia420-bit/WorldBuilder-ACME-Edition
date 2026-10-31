@@ -8,14 +8,14 @@
  "sessionRules": "vistest-preamble-v1",
  "sessionRulesInline": [
   "Inherit every rule of batch-R3-D1-2026-10-30.json sessionRulesInline verbatim (it inherits batch-P0's: MODE T off-screen + muted, OWNER-RUN, kill only by user-data-dir, ?nosw=1, fresh profile per arm-rep, uncapped frames + targetFps=0, release wasm only, >= 65 s between boots on one account, reject-never-average). Read memory/fleet-runbooks.md before driving the 1070.",
-  "Build under test: snapshot /mnt/wbterminal2/hb-snap/r3f-20261031 (cut 2026-10-31 from 1dd3b2cd; S2-BENCH rep 1 and the noisy-window items ran on r3c = f83477d7, real release pkg copy; SNAPSHOT_COMMIT.txt), served with `python3 scripts/serve.py --bind 127.0.0.1 --port 8766` from the snapshot (`--check` validates and EXITS: run it once, then serve without it). Check: `node scripts/perf-worker/hbbench.mjs --arms apps/holtburger-web/docs/reengineering/queue-1070/batch-R3-S2-2026-10-31.json --check-snapshot /mnt/wbterminal2/hb-snap/r3f-20261031`.",
+  "Build under test: snapshot /mnt/wbterminal2/hb-snap/r3g-20261031 (cut 2026-10-31 from 1dd3b2cd; S2-BENCH rep 1 and the noisy-window items ran on r3c = f83477d7, real release pkg copy; SNAPSHOT_COMMIT.txt), served with `python3 scripts/serve.py --bind 127.0.0.1 --port 8766` from the snapshot (`--check` validates and EXITS: run it once, then serve without it). Check: `node scripts/perf-worker/hbbench.mjs --arms apps/holtburger-web/docs/reengineering/queue-1070/batch-R3-S2-2026-10-31.json --check-snapshot /mnt/wbterminal2/hb-snap/r3g-20261031`.",
   "Laptop memory: SwiftShader boots of the batch arms hold ~3.4 GB (GPU process ~2 GB + renderer ~1.4 GB); never run a laptop batch boot while the 1070 bench's laptop side (serve.py, ACE, tunnel) is near the earlyoom line. The 1070 runs the arms; the laptop only serves."
  ],
  "accounts": "Bench account tailnet1 (hbbench default). M1c needs a SECOND Developer-level account for WebAC (or run the two clients one after the other); credentials only in the URL / environment at run time, never in this file.",
  "urlBase": "http://127.0.0.1:8766/apps/holtburger-web/index.html",
  "b0Snapshot": {
-  "what": "S2 snapshot = r3f-20261031 (entity maps + review fixes + texture-swap settle + ctx-diag verify + drawExecSwitch) with a real release pkg copy. S2-BENCH rep 1 and the noisy-window items ran on r3c (f83477d7); S2-QUIET on r3d (1dd3b2cd).",
-  "check": "node scripts/perf-worker/hbbench.mjs --arms apps/holtburger-web/docs/reengineering/queue-1070/batch-R3-S2-2026-10-31.json --check-snapshot /mnt/wbterminal2/hb-snap/r3f-20261031",
+  "what": "S2 snapshot = r3g-20261031 (45e439f0 exactly: entity maps, review fixes, texture-swap settle, ctx-diag verify, drawExecSwitch (no envMap support yet), orbRender=canvas v1) with a real release pkg copy. Earlier items: S2-BENCH rep 1 on r3c, S2-QUIET on r3d, S2-DXSW (stopped) on r3f.",
+  "check": "node scripts/perf-worker/hbbench.mjs --arms apps/holtburger-web/docs/reengineering/queue-1070/batch-R3-S2-2026-10-31.json --check-snapshot /mnt/wbterminal2/hb-snap/r3g-20261031",
   "rule": "Each requirement's file must exist in the snapshot, be the snapshot's own copy (no symlink anywhere on its path) and match every pattern (JS RegExp source). The check refuses the live tree itself and never reads url-flags.md. Patterns pin the a2 versions where an a2 lane changed the reader's module (route probe, nullRender install, generation keying, compaction, the legacy re-show fix), so a phase-A-only snapshot fails.",
   "requiredReaders": [
    {
@@ -124,6 +124,14 @@
      "_rowMismatchWhy"
     ],
     "why": "the chain's CTXDIAG step reads the classified row mismatches"
+   },
+   {
+    "flag": "orbRender (S2-ORB OC arms)",
+    "file": "apps/holtburger-web/plugins/vitals-orbs.js",
+    "patterns": [
+     "export function orbRenderMode\\(\\)"
+    ],
+    "why": "OC / OC-15: a snapshot before 45e439f0 ignores ?orbRender (an A/A)"
    },
    {
     "flag": "release pkg (real copy)",
@@ -607,12 +615,12 @@
    "recipe": [
     "node scripts/perf-worker/hbbench.mjs --arms apps/holtburger-web/docs/reengineering/queue-1070/batch-R3-S2-2026-10-31.json --item S2-DXSW --reps 3 --port 8766 --uncapped --ref A --out /mnt/wbterminal1/tmp/claude-scratch/perf/r3-s2/dxsw"
    ],
-   "result": null
+   "result": "2026-10-31 17:09-17:32 on r3f, STOPPED: the switch path never engaged in the real client: __drawExec.stats {switchOn: true, sameProgramSwitches: 0, switchRefused: {envMap: 418271, plan:uniformsList: 38, program: 6, noTextures: 1}} (the game's lit materials carry an environment map; the path refused every envMap draw). DXS-on / STACK-DXS arm-reps INVALID by gate (= A/A). Re-run after the envMap support lands (lane dx-switch)."
   },
   {
    "id": "S2-ORB",
    "kind": "bench",
-   "title": "vitals-orb cost levers with no code change (orbHz, orbCaustics) vs defaults + A/A, with the orbs-hidden ceiling, Holtburg ultra, 3 reps",
+   "title": "vitals-orb cost: the canvas renderer (?orbRender=canvas) and the existing knobs (orbHz, orbCaustics) vs defaults + A/A, with the orbs-hidden ceiling, Holtburg ultra, 3 reps, snapshot r3g",
    "why": "Owner 2026-10-31: \"make the orbs cheaper\". S2-QUIET: HO-off (hudOrbs=off) +2.3 still / +1.75 tour fps over the A / A-AA mean (above the noise), HD-on (hudDiet, incl. orbSync / orbLayer) within noise. The orbs repaint an SVG stack (two wave bodies under clip paths, blurs, blend modes, caustics = two feTurbulence + feDisplacementMap) at orbHz (default 30). These arms price the existing knobs before the canvas renderer lane lands.",
    "arms": [
     {
@@ -646,6 +654,22 @@
      "scored": "still / moving / tour fps (D1b); main busy + CrGpuMain RASTER per present (anatomy)"
     },
     {
+     "name": "OC",
+     "flags": "orbRender=canvas",
+     "note": "?orbRender=canvas (45e439f0): the liquid drawn into one canvas per vessel, static layers baked, no DOM / filter work per tick",
+     "gate": "document.querySelectorAll(\".hbo-core canvas\").length >= 3 && !!(window.__diag && window.__diag.vitalsOrbs) && window.__diag.vitalsOrbs.running() === true",
+     "gateInfo": "({ canvases: document.querySelectorAll(\".hbo-core canvas\").length, tickMs: window.__diag && window.__diag.vitalsOrbs ? window.__diag.vitalsOrbs.tickMs() : null, frames: window.__diag && window.__diag.vitalsOrbs ? window.__diag.vitalsOrbs.frames() : null })",
+     "scored": "still / moving / tour fps (D1b); main busy + CrGpuMain RASTER per present (anatomy)"
+    },
+    {
+     "name": "OC-15",
+     "flags": "orbRender=canvas&orbHz=15",
+     "note": "canvas renderer at 15 Hz",
+     "gate": "document.querySelectorAll(\".hbo-core canvas\").length >= 3 && !!(window.__diag && window.__diag.vitalsOrbs) && window.__diag.vitalsOrbs.running() === true",
+     "gateInfo": "({ canvases: document.querySelectorAll(\".hbo-core canvas\").length, tickMs: window.__diag && window.__diag.vitalsOrbs ? window.__diag.vitalsOrbs.tickMs() : null, frames: window.__diag && window.__diag.vitalsOrbs ? window.__diag.vitalsOrbs.frames() : null })",
+     "scored": "still / moving / tour fps (D1b); main busy + CrGpuMain RASTER per present (anatomy)"
+    },
+    {
      "name": "HO-off",
      "flags": "hudOrbs=off",
      "note": "the ceiling: orbs hidden (never shipped)",
@@ -661,9 +685,9 @@
     "R4"
    ],
    "recipe": [
-    "node scripts/perf-worker/hbbench.mjs --arms apps/holtburger-web/docs/reengineering/queue-1070/batch-R3-S2-2026-10-31.json --item S2-ORB --reps 3 --port 8766 --uncapped --ref A --out /mnt/wbterminal1/tmp/claude-scratch/perf/r3-s2/orb"
+    "node scripts/perf-worker/hbbench.mjs --arms apps/holtburger-web/docs/reengineering/queue-1070/batch-R3-S2-2026-10-31.json --item S2-ORB --reps 3 --port 8766 --uncapped --ref A --out /mnt/wbterminal1/tmp/claude-scratch/perf/r3-s2/orb2"
    ],
-   "result": null
+   "result": "(first attempt 2026-10-31 17:33-17:45 on r3f, knob arms only, stopped for the owner's play session; partial reps in r3-s2/orb/, superseded by orb2 on r3g)"
   },
   {
    "id": "S2-ANATOMY",
