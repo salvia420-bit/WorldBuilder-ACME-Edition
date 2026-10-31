@@ -8,14 +8,14 @@
  "sessionRules": "vistest-preamble-v1",
  "sessionRulesInline": [
   "Inherit every rule of batch-R3-D1-2026-10-30.json sessionRulesInline verbatim (it inherits batch-P0's: MODE T off-screen + muted, OWNER-RUN, kill only by user-data-dir, ?nosw=1, fresh profile per arm-rep, uncapped frames + targetFps=0, release wasm only, >= 65 s between boots on one account, reject-never-average). Read memory/fleet-runbooks.md before driving the 1070.",
-  "Build under test: snapshot /mnt/wbterminal2/hb-snap/r3d-20261031 (cut 2026-10-31 from 1dd3b2cd; S2-BENCH rep 1 and the noisy-window items ran on r3c = f83477d7, real release pkg copy; SNAPSHOT_COMMIT.txt), served with `python3 scripts/serve.py --bind 127.0.0.1 --port 8766` from the snapshot (`--check` validates and EXITS: run it once, then serve without it). Check: `node scripts/perf-worker/hbbench.mjs --arms apps/holtburger-web/docs/reengineering/queue-1070/batch-R3-S2-2026-10-31.json --check-snapshot /mnt/wbterminal2/hb-snap/r3d-20261031`.",
+  "Build under test: snapshot /mnt/wbterminal2/hb-snap/r3f-20261031 (cut 2026-10-31 from 1dd3b2cd; S2-BENCH rep 1 and the noisy-window items ran on r3c = f83477d7, real release pkg copy; SNAPSHOT_COMMIT.txt), served with `python3 scripts/serve.py --bind 127.0.0.1 --port 8766` from the snapshot (`--check` validates and EXITS: run it once, then serve without it). Check: `node scripts/perf-worker/hbbench.mjs --arms apps/holtburger-web/docs/reengineering/queue-1070/batch-R3-S2-2026-10-31.json --check-snapshot /mnt/wbterminal2/hb-snap/r3f-20261031`.",
   "Laptop memory: SwiftShader boots of the batch arms hold ~3.4 GB (GPU process ~2 GB + renderer ~1.4 GB); never run a laptop batch boot while the 1070 bench's laptop side (serve.py, ACE, tunnel) is near the earlyoom line. The 1070 runs the arms; the laptop only serves."
  ],
  "accounts": "Bench account tailnet1 (hbbench default). M1c needs a SECOND Developer-level account for WebAC (or run the two clients one after the other); credentials only in the URL / environment at run time, never in this file.",
  "urlBase": "http://127.0.0.1:8766/apps/holtburger-web/index.html",
  "b0Snapshot": {
-  "what": "S2 snapshot = r3d-20261031 (1dd3b2cd: entity maps + review fixes + interior texture-swap settle) with a real release pkg copy. S2-BENCH rep 1 and the 2026-10-31 noisy-window items ran on r3c-20261031 (f83477d7).",
-  "check": "node scripts/perf-worker/hbbench.mjs --arms apps/holtburger-web/docs/reengineering/queue-1070/batch-R3-S2-2026-10-31.json --check-snapshot /mnt/wbterminal2/hb-snap/r3d-20261031",
+  "what": "S2 snapshot = r3f-20261031 (entity maps + review fixes + texture-swap settle + ctx-diag verify + drawExecSwitch) with a real release pkg copy. S2-BENCH rep 1 and the noisy-window items ran on r3c (f83477d7); S2-QUIET on r3d (1dd3b2cd).",
+  "check": "node scripts/perf-worker/hbbench.mjs --arms apps/holtburger-web/docs/reengineering/queue-1070/batch-R3-S2-2026-10-31.json --check-snapshot /mnt/wbterminal2/hb-snap/r3f-20261031",
   "rule": "Each requirement's file must exist in the snapshot, be the snapshot's own copy (no symlink anywhere on its path) and match every pattern (JS RegExp source). The check refuses the live tree itself and never reads url-flags.md. Patterns pin the a2 versions where an a2 lane changed the reader's module (route probe, nullRender install, generation keying, compaction, the legacy re-show fix), so a phase-A-only snapshot fails.",
   "requiredReaders": [
    {
@@ -109,6 +109,23 @@
     "why": "arm A = the post-D1 defaults"
    },
    {
+    "flag": "drawExecSwitch (S2-DXSW)",
+    "file": "apps/holtburger-web/scene3d/draw_exec.js",
+    "patterns": [
+     "return rustFlag\\(\"drawExecSwitch\", false\\);",
+     "sameProgramSwitches: 0,"
+    ],
+    "why": "S2-DXSW arms: a snapshot before the drawExecSwitch commit ignores the flag (an A/A)"
+   },
+   {
+    "flag": "entityBatch verify() row causes (ctx diagnosis)",
+    "file": "apps/holtburger-web/scene3d/gpu_batch/entity_batch.js",
+    "patterns": [
+     "_rowMismatchWhy"
+    ],
+    "why": "the chain's CTXDIAG step reads the classified row mismatches"
+   },
+   {
     "flag": "release pkg (real copy)",
     "file": "apps/holtburger-web/pkg/holtburger_web_bg.wasm",
     "patterns": [],
@@ -183,6 +200,12 @@
    "rule": "D1",
    "name": "go with the winners (owner directive 2026-10-30)",
    "text": "Written 2026-10-30 BEFORE the run. Owner, 2026-10-30, after the bench-3 reps came back INVALID: \"so kill toolkit and lets measure the other run and go with the winning settings for all this work we are doing. we have to progress here\". A flag flips to DEFAULT ON (its `=off` escape kept) when ALL hold: (1) rule V: valid reps (or the noisy-box fallback: >= 5 reps + A/A, idle gate the only failure); its arm gate true in every rep; (2) no fps segment (still / moving / tour) and no hitch row (firstTurn max, h100, h250, jank; tour h100 / max) worse than A by a real R1 delta; (3) 0 console errors; (4) it is CHEAPER: one fps segment or (uploadWarmDraw) the firstTurn max / h100 better by a real R1 delta, OR its main-thread busy ms per frame lower by a real R1 delta over the D1-ANATOMY reps (the instrument that resolves 0.1 ms; fps cannot); (5) its pass items: R4 look per S1-EYE / M1 (animSceneryBatch, occlusionCull=rigs, cellStaticMerge, statArrayMerge), S1-CTX + S1-DIAG for animSceneryBatch, S1-INDOOR for skipEmptyPasses (SEP-out is only its outdoor no-regression control), S1-ROUTE for uploadWarmDraw and bakeFallbackWaves (with S1-BW0). D-stack: when it passes (1)-(4) as a whole, every stacked flag flips except one whose own arm regressed by a real delta (then the stack is re-read without it). A flag that fails stays OFF; rustEntityWorld's code is deleted unless it (or the stack) wins (M1b-STRUCTURE rule). Never flipped by D1: partDegrade and objRadius (owner WHAT decisions (c), (g)), batchedRuns=off (a price), rustWorld (watch-only), rustParticles (R3-7 replaces it). Deviation from the plan's R3, by the owner's directive: R3 (ii)'s 'one fps segment improved by a real delta' is satisfied by (4)'s main-thread reading for flags predicted under the fps floor."
+  },
+  {
+   "rule": "D1b",
+   "name": "above the noise (owner direction 2026-10-31)",
+   "text": "Owner, 2026-10-31: \"i mean to demand 4 fps to call it an improvement is wild. anything above noise is technically an improvement no?\" and \"if we can make use of them by thinking about them then they arent invalid for our purposes\". Replaces R1's threshold for the S2 flips: (1) noise = the standard error of the paired (arm - A) per-rep differences over the interleaved reps (each arm-rep paired with the A arm-rep of the same rep), not max(|A - A'|, half spread) x 2; the A/A arm's paired SE is reported next to it as the floor; (2) a flag is an improvement if its mean paired fps gain exceeds that SE in at least one of still / moving / tour and no segment loses by more than its SE; (3) tiebreak when fps is borderline: main busy per frame (S2-ANATOMY) or renderJs p50 (v2 probe) falls in the same direction. Busy-box reps are used, with each rep's box context (idle, top non-test processes) reported; a verdict says whether it rests on quiet or busy reps. R3 (iv) 0 console errors and the look record (R4, for the record) still apply.",
+   "implementation": "scored by the orchestrator from hbbench summary.json (paired per rep); hbreport's R1 table stays for reference"
   }
  ],
  "suggestedOrder": [
@@ -389,7 +412,7 @@
    "gate": "D1 rule",
    "decisionRules": [
     "V",
-    "R1",
+    "D1b",
     "R2",
     "R3",
     "D1"
@@ -524,7 +547,7 @@
    "gate": "D1 rule",
    "decisionRules": [
     "V",
-    "R1",
+    "D1b",
     "R2",
     "R3",
     "D1"
@@ -532,6 +555,57 @@
    "recipe": [
     "node scripts/perf-worker/hbbench.mjs --arms apps/holtburger-web/docs/reengineering/queue-1070/batch-R3-S2-2026-10-31.json --item S2-QUIET --reps 3 --port 8766 --uncapped --ref A --out /mnt/wbterminal1/tmp/claude-scratch/perf/r3-s2/quiet",
     "python3 -I scripts/perf-worker/hbreport.py bench /mnt/wbterminal1/tmp/claude-scratch/perf/r3-s2/quiet --box-events apps/holtburger-web/docs/reengineering/queue-1070/batch-R3-S2-2026-10-31.json --queue apps/holtburger-web/docs/reengineering/queue-1070/batch-R3-S2-2026-10-31.json --ref A --aa A-AA --json /mnt/wbterminal1/tmp/claude-scratch/perf/r3-s2/quiet.report.json"
+   ],
+   "result": null
+  },
+  {
+   "id": "S2-DXSW",
+   "kind": "bench",
+   "title": "?drawExecSwitch (the render-JS analysis's lever 1) vs defaults + A/A at Holtburg ultra, plus the stack with it; 3 reps, snapshot r3f",
+   "why": "2026-10-31 render-JS analysis: three's per-material SWITCH path is ~5 ms / frame of renderJs at Holtburg (~434 switches, 66 useProgram); this path replicates three's same-program switch without its re-derivation, GL stream identical.",
+   "boxMode": "1070, MODE T, uncapped, fresh profile per arm-rep. Owner 2026-10-31: busy reps are used, not discarded ('if we can make use of them by thinking about them then they arent invalid for our purposes'): report with --noisy-box and per-rep box context.",
+   "arms": [
+    {
+     "name": "A",
+     "flags": "",
+     "note": "defaults (r3f)",
+     "scored": "still / moving / tour fps (D1 rule); renderJs p50 and us per call from the v2 probe; main busy per frame (anatomy)"
+    },
+    {
+     "name": "A-AA",
+     "flags": "",
+     "note": "A again: the A/A arm",
+     "scored": "still / moving / tour fps (D1 rule); renderJs p50 and us per call from the v2 probe; main busy per frame (anatomy)"
+    },
+    {
+     "name": "DXS-on",
+     "flags": "drawExecSwitch=on",
+     "note": "?drawExecSwitch: draw_exec's same-program material-switch path (GL call stream identical to stock: tests/draw_exec_switch.test.mjs 59/59, draw_exec.test.mjs [switch] arm 418/418)",
+     "scored": "still / moving / tour fps (D1 rule); renderJs p50 and us per call from the v2 probe; main busy per frame (anatomy)",
+     "gate": "!!window.__drawExec && !!window.__drawExec.stats && window.__drawExec.stats.switchOn === true && window.__drawExec.stats.sameProgramSwitches > 0",
+     "gateInfo": "window.__drawExec && window.__drawExec.stats ? { switchOn: window.__drawExec.stats.switchOn, sameProgramSwitches: window.__drawExec.stats.sameProgramSwitches, switchRefused: window.__drawExec.stats.switchRefused, switchSyncFailed: window.__drawExec.stats.switchSyncFailed, switchPlans: window.__drawExec.stats.switchPlans } : null",
+     "prediction": "[D] node: -30...-38% JS per same-program switch (1.58 us); Holtburg-shaped frame -0.63 ms in node; x~2.2 on the 1070 -> ~-1.4 ms renderJs per frame (~400 of ~440 switches executed); fps +3...+4 if main stays binding"
+    },
+    {
+     "name": "STACK-DXS",
+     "flags": "entityBatch=on&interiorBatch=on&gpuParticles=on&hudDiet=on&drawExecSwitch=on",
+     "note": "the four S2 candidates + drawExecSwitch (additivity)",
+     "scored": "still / moving / tour fps (D1 rule); renderJs p50 and us per call from the v2 probe; main busy per frame (anatomy)",
+     "gate": "(!!window.__entityBatch && ((window.__entityBatch.stats().byStatus || {}).active || 0) > 0) && (!!window.__interiorBatch && !!window.__interiorBatch.stats() && window.__interiorBatch.stats().mode === \"on\" && window.__interiorBatch.stats().objects > 0) && (!!window.__gpuParticlesDiag && window.__gpuParticlesDiag().on === true && window.__gpuParticlesDiag().emitters > 0 && window.__gpuParticlesDiag().selfCheck !== false) && (!!window.__hudBisect && Array.isArray(window.__hudBisect.diet) && window.__hudBisect.diet.length > 0) && (!!window.__drawExec && !!window.__drawExec.stats && window.__drawExec.stats.switchOn === true && window.__drawExec.stats.sameProgramSwitches > 0)",
+     "gateInfo": "window.__drawExec && window.__drawExec.stats ? { switchOn: window.__drawExec.stats.switchOn, sameProgramSwitches: window.__drawExec.stats.sameProgramSwitches, switchRefused: window.__drawExec.stats.switchRefused, switchSyncFailed: window.__drawExec.stats.switchSyncFailed, switchPlans: window.__drawExec.stats.switchPlans } : null"
+    }
+   ],
+   "reps": 3,
+   "gate": "D1 rule",
+   "decisionRules": [
+    "V",
+    "D1b",
+    "R2",
+    "R3",
+    "D1"
+   ],
+   "recipe": [
+    "node scripts/perf-worker/hbbench.mjs --arms apps/holtburger-web/docs/reengineering/queue-1070/batch-R3-S2-2026-10-31.json --item S2-DXSW --reps 3 --port 8766 --uncapped --ref A --out /mnt/wbterminal1/tmp/claude-scratch/perf/r3-s2/dxsw"
    ],
    "result": null
   },
@@ -661,7 +735,7 @@
    "gate": "D1 rule",
    "decisionRules": [
     "V",
-    "R1",
+    "D1b",
     "R2",
     "R3",
     "D1"
@@ -761,7 +835,7 @@
    "gate": "D1 rule",
    "decisionRules": [
     "V",
-    "R1",
+    "D1b",
     "R2",
     "R3",
     "D1"
