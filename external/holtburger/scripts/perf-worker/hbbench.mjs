@@ -39,9 +39,12 @@
 //   * server-state pin: entity count + entity part-mesh census after settle and after the tour;
 //     an arm-rep whose entity count differs from the reference arm's by > 10% is flagged (rule V);
 //   * arm.gate: a page expression that must be true after settle or the arm-rep is skipped as
-//     INVALID (rustEntityWorld: `window.__entityWorld && window.__entityWorld.stats().projections === 1`;
-//     M1b-OCC O-rigs: `__occlusionCull.mode === 'rigs'` and `stats.cellsSkipped > 0`, so a snapshot that
-//     predates `=rigs` cannot pass as an A/A); hbreport --queue also refuses a rep that skipped the gate;
+//     INVALID (M1b-OCC O-rigs: `__occlusionCull.mode === 'rigs'` and `stats.cellsSkipped > 0`, so a
+//     snapshot that predates `=rigs` cannot pass as an A/A); hbreport --queue also refuses a rep that
+//     skipped the gate;
+//   * a queue item's `removedArms` (arms of a deleted flag, each with a `removed` note; e.g. the
+//     ?rustEntityWorld / ?uploadWarmDraw arms, deleted 2026-10-30 after D1) never run: loadArms reads
+//     `arms` only. hbreport still reads their gate / predict, for the runs already stored;
 //   * arm.spot (teleloc / poi:), arm.stillCam (player camera for the M1c parked pose), arm.skytime,
 //     arm.dayGroup ("none" = no override), arm.readyWhen ("live-scene" for ?nullRender=1).
 // Analyse: python3 -I scripts/perf-worker/hbreport.py bench <OUT> [--box-events <queue.json>].

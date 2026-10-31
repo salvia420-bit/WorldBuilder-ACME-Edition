@@ -41,6 +41,11 @@ const Q = JSON.parse(readFileSync(QUEUE, "utf8"));
 const QTEXT = readFileSync(QUEUE, "utf8");
 const item = (id) => Q.items.find((i) => i.id === id);
 const allArms = () => Q.items.flatMap((it) => (Array.isArray(it.arms) ? it.arms.map((a) => ({ ...(it.armDefaults || {}), ...a, _item: it.id })) : []));
+// 2026-10-30 (lane DEL): ?uploadWarmDraw / ?rustEntityWorld deleted after the 1070 D1 bench. Their arms moved to
+// item.removedArms (hbbench runs `arms` only); s1.eval.js still reads window.__uploadWarmDraw behind a guard
+// (null without the flag), so the promoted script and its sha256 pin stay as reviewed.
+const DELETED_NOTE = "2026-10-30, flag deleted after D1";
+const DELETED_GLOBALS = ["__uploadWarmDraw", "__entityWorld"];
 const strings = (o, out = []) => { if (typeof o === "string") out.push(o); else if (Array.isArray(o)) o.forEach((v) => strings(v, out)); else if (o && typeof o === "object") Object.values(o).forEach((v) => strings(v, out)); return out; };
 const walk = (dir, out = []) => { for (const n of readdirSync(dir)) { const p = join(dir, n); const s = statSync(p); if (s.isDirectory()) walk(p, out); else if (/\.(m?js)$/.test(n)) out.push(p); } return out; };
 const APP_SRC = [...walk(join(APP, "scene3d")), join(APP, "index.html")].map((p) => readFileSync(p, "utf8")).join("\n");
@@ -98,18 +103,23 @@ await check("queue: no OPEN / owner-decision note on the hitch flags; each hitch
   const r3 = PLAN_RULES.find((r) => r[0] === "R3")[1];
   const hitch = r3.slice(r3.indexOf("For a hitch change"));
   assert.ok(hitch.length > 60, "the plan's R3 has its hitch sentence");
-  for (const [it, name] of [["S1-BENCH", "UWD-on"], ["S1-ROUTE", "R-UWD"], ["S1-BW0", "BFW-on"], ["S1-ROUTE", "R-BFW"]]) {
+  for (const [it, name] of [["S1-BW0", "BFW-on"], ["S1-ROUTE", "R-BFW"]]) {
     const a = item(it).arms.find((x) => x.name === name);
     assert.ok(a.decisionRule.includes(hitch), `${name} quotes the hitch sentence verbatim`);
     assert.match(a.decisionRule, /firstTurn\.max AND firstTurn\.h100/);
     assert.match(a.decisionRule, /printed R3 verdict is NOT the verdict/);
+  }
+  // the uploadWarmDraw hitch arms (UWD-on, R-UWD) left the runnable arms 2026-10-30: the flag was deleted after D1
+  for (const [it, name] of [["S1-BENCH", "UWD-on"], ["S1-ROUTE", "R-UWD"]]) {
+    assert.ok(!item(it).arms.some((x) => x.name === name), `${it}/${name} is not a runnable arm`);
+    assert.equal(item(it).removedArms.find((x) => x.name === name).removed, DELETED_NOTE, `${it}/${name} removed note`);
   }
 });
 
 await check("queue: every arm flag has a reader in the tree (a call whose first argument is the flag name, in scene3d/ or index.html)", () => {
   const flags = new Set();
   for (const a of allArms()) for (const kv of String(a.flags || "").split("&").filter(Boolean)) flags.add(kv.split("=")[0]);
-  assert.ok(flags.size >= 9, [...flags].join(","));
+  assert.ok(flags.size >= 8, [...flags].join(",")); // 9 until uploadWarmDraw's arms left (2026-10-30)
   for (const f of flags) assert.ok(new RegExp(`[\\w$]\\(\\s*["']${f}["']\\s*[,)]`).test(APP_SRC), `no reader for ?${f}`);
 });
 
@@ -118,7 +128,34 @@ await check("queue + s1.eval.js: every window.__ global a gate / gateInfo or the
   for (const a of allArms()) for (const k of ["gate", "gateInfo"]) for (const m of String(a[k] || "").matchAll(/window\.(__\w+)/g)) names.add(m[1]);
   for (const m of EVAL_SRC.matchAll(/\bW\.(__\w+)/g)) if (m[1] !== "__hbEvalOpts") names.add(m[1]);
   assert.ok(names.size >= 12, [...names].join(","));
-  for (const n of names) assert.ok(new RegExp(`(window|globalThis)\\.${n}\\s*=`).test(APP_SRC), `${n} is never assigned in scene3d/ or index.html`);
+  for (const n of names) {
+    if (DELETED_GLOBALS.includes(n)) continue; // the next check: gone from the app, read only behind a guard
+    assert.ok(new RegExp(`(window|globalThis)\\.${n}\\s*=`).test(APP_SRC), `${n} is never assigned in scene3d/ or index.html`);
+  }
+});
+
+await check("D1 deletions (2026-10-30): no runnable arm sets ?uploadWarmDraw / ?rustEntityWorld (the UWD arms sit in removedArms with the note); no reader, module or diag global is left in the app; s1.eval.js reads the deleted global only behind a guard, so it and its sha256 pin are unchanged", () => {
+  const RE = /(^|&)(uploadWarmDraw|rustEntityWorld)=/;
+  for (const a of allArms()) assert.ok(!RE.test(a.flags || ""), `${a._item}/${a.name} runs a deleted flag`);
+  const removed = Q.items.flatMap((it) => (it.removedArms || []).map((a) => `${it.id}/${a.name}`));
+  assert.deepEqual(removed, ["S1-BENCH/UWD-on", "S1-ROUTE/R-UWD", "S1-DIAG/G-UWD-up"]);
+  for (const it of Q.items) for (const a of it.removedArms || []) {
+    assert.equal(a.removed, DELETED_NOTE, `${it.id}/${a.name}`);
+    assert.ok(RE.test(a.flags || ""), `${it.id}/${a.name}: only arms of a deleted flag are removed`);
+    assert.ok(!loadArms(Q, it.id).some((x) => x.name === a.name), `${it.id}/${a.name} still loads`);
+  }
+  for (const r of Q.b0Snapshot.requiredReaders) assert.ok(!/^(uploadWarmDraw|rustEntityWorld)\b/.test(r.flag), `requiredReaders still names ${r.flag}`);
+  assert.deepEqual(Q.b0Snapshot.removedReaders.map((r) => [r.flag, r.removed]), [["uploadWarmDraw", DELETED_NOTE], ["uploadWarmDraw (index.js install)", DELETED_NOTE]]);
+  for (const f of ["scene3d/upload_warm_draw.js", "scene3d/entity_world.js"]) assert.ok(!existsSync(join(APP, f)), `${f} still exists`);
+  for (const f of ["uploadWarmDraw", "rustEntityWorld"]) assert.ok(!new RegExp(`[\\w$]\\(\\s*["']${f}["']\\s*[,)]`).test(APP_SRC), `a reader for ?${f} is left`);
+  for (const n of DELETED_GLOBALS) {
+    assert.ok(!new RegExp(`(window|globalThis)\\.${n}\\s*=`).test(APP_SRC), `${n} is still assigned in the app`);
+    for (const m of EVAL_SRC.matchAll(new RegExp(`\\bW\\.${n}\\b[^\\n]*`, "g"))) assert.match(m[0], new RegExp(`^W\\.${n} \\? `), `s1.eval.js reads ${n} unguarded: ${m[0]}`);
+  }
+  assert.ok(/uploadWarmDraw: W\.__uploadWarmDraw \? call\(\(\) => W\.__uploadWarmDraw\.stats\(\)\) : null,/.test(EVAL_SRC), "the guarded read (null on a client without the flag)");
+  const route = item("S1-ROUTE").recipe;
+  assert.ok(!/\bR-UWD\b/.test(route[0].split("(2026-10-30")[0]), "the S1-ROUTE run order names no removed arm");
+  assert.match(route[2], /^REMOVED 2026-10-30 /, "the R-UWD report step is marked removed");
 });
 
 await check("queue: every diag read declares its fields, and every field exists in its module (rg-equivalent word match)", () => {
@@ -127,7 +164,7 @@ await check("queue: every diag read declares its fields, and every field exists 
     for (const d of it.diagReads || []) reads.push([it.id, d]);
     for (const a of it.arms || []) { for (const d of a.diagReads || []) reads.push([`${it.id}/${a.name}`, d]); if (a.reads) reads.push([`${it.id}/${a.name}`, a]); }
   }
-  assert.ok(reads.length >= 20, `diag reads ${reads.length}`);
+  assert.ok(reads.length >= 19, `diag reads ${reads.length}`); // 20 until uploadWarmDraw's arms left (2026-10-30)
   for (const [where, d] of reads) {
     assert.ok(d.fields && typeof d.fields === "object", `${where}: no fields`);
     for (const [mod, names] of Object.entries(d.fields)) {

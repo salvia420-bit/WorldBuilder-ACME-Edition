@@ -106,8 +106,9 @@ const _census = { walks: 0, visited: 0, hidden: 0, composed: 0, multiplied: 0, f
 
 /**
  * What the patched method does for a node visited RIGHT NOW, for code that
- * walks a subtree itself and must reproduce it exactly (scene3d/entity_world.js,
- * `?rustEntityWorld`, walks entity rig subtrees):
+ * walks a subtree itself and must reproduce it exactly. No module calls it
+ * today: its one caller, scene3d/entity_world.js (`?rustEntityWorld`, entity
+ * rig walks), was deleted 2026-10-30 after the 1070 D1 bench.
  *   0 — three's full update: the patch is not installed, the walk is not
  *       rooted at a THREE.Scene, or the live seam is off;
  *   1 — inside a scene walk with skipping on: a node with `visible === false`

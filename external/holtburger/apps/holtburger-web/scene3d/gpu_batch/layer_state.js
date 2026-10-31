@@ -26,7 +26,17 @@
 //   texel 0  (diffuse.r, diffuse.g, diffuse.b, opacity)       three: `diffuse`, `opacity`
 //   texel 1  (roughness, metalness, normalScale.x, normalScale.y)
 //   texel 2  (alphaRef, map layer, luminosity, flags)
-//   texel 3  (normal-map layer, 0, 0, 0)
+//   texel 3  (normal-map layer, extension row, 0, 0)
+// `extension row` (2026-10-31, POM members) is the index of a SECOND row of
+// the same table that carries a member's per-slot parallax state (0 = none:
+// row 0 is the reserved zero row, so every member without one reads zeros).
+// POM EXTENSION ROW (`packPomState`; materials.js `_installPomShaderPatch`'s
+// uniforms, the values its compile binds):
+//   texel 0  (height-map layer, uPomDepth, uPomSteps, uPomShadowSteps)
+//   texel 1  (uPomLodNear, uPomLodFar, uPomShadowDarkness, uPomGraze)
+//   texels 2-3 zero
+// The two int uniforms are stored as the integer three's uniform1i would
+// send (ToInt32 of the JS number), exact in f32; the floats as their f32.
 // `flags` is a small integer in a float (exact below 2^24): LS_FLAG bits plus
 // the blend code in bits 8-11. `alphaRef` is the alpha-test reference the
 // material would carry: the ClipMap per-format ref (paletted 100/255, DDS
@@ -229,14 +239,43 @@ export function flagsWordOf(s) {
 /**
  * Pack a state + its texture layers into LAYER_STATE_FLOATS floats at
  * `out[off]` (`out` is a Float32Array: every value is stored as the f32 three
- * would upload for the matching uniform). `normalLayer` defaults to 0.
+ * would upload for the matching uniform). `normalLayer` and `extRow` (the
+ * index of the slot's POM extension row, `packPomState`) default to 0.
  */
-export function packLayerState(s, layer, out, off, normalLayer = 0) {
+export function packLayerState(s, layer, out, off, normalLayer = 0, extRow = 0) {
   out[off + 0] = s.diffuse[0]; out[off + 1] = s.diffuse[1]; out[off + 2] = s.diffuse[2]; out[off + 3] = s.opacity;
   out[off + 4] = s.roughness; out[off + 5] = s.metalness; out[off + 6] = s.normalScale[0]; out[off + 7] = s.normalScale[1];
   out[off + 8] = s.alphaRef; out[off + 9] = layer; out[off + 10] = s.luminosity; out[off + 11] = flagsWordOf(s);
-  out[off + 12] = normalLayer; out[off + 13] = 0; out[off + 14] = 0; out[off + 15] = 0;
+  out[off + 12] = normalLayer; out[off + 13] = extRow; out[off + 14] = 0; out[off + 15] = 0;
   return out;
+}
+
+/** The POM extension row's fields (see the ROW LAYOUT note): materials.js uniform -> field. */
+export const POM_STATE_FIELDS = Object.freeze({
+  uPomDepth: "depth", uPomSteps: "steps", uPomShadowSteps: "shadowSteps",
+  uPomLodNear: "lodNear", uPomLodFar: "lodFar", uPomShadowDarkness: "shadowDarkness", uPomGraze: "graze",
+});
+
+/** ToInt32, the conversion WebGL's uniform1i applies to a JS number (GLint). */
+function _glint(v) { return Number(v) | 0; }
+
+/**
+ * Pack a POM extension row (`p` = { layer, depth, steps, shadowSteps,
+ * lodNear, lodFar, shadowDarkness, graze }) into LAYER_STATE_FLOATS floats.
+ */
+export function packPomState(p, out, off) {
+  out[off + 0] = p.layer; out[off + 1] = p.depth; out[off + 2] = _glint(p.steps); out[off + 3] = _glint(p.shadowSteps);
+  out[off + 4] = p.lodNear; out[off + 5] = p.lodFar; out[off + 6] = p.shadowDarkness; out[off + 7] = p.graze;
+  for (let i = 8; i < LAYER_STATE_FLOATS; i += 1) out[off + i] = 0;
+  return out;
+}
+
+/** Inverse of packPomState (values as stored, i.e. f32). */
+export function unpackPomState(arr, off) {
+  return {
+    layer: arr[off], depth: arr[off + 1], steps: arr[off + 2], shadowSteps: arr[off + 3],
+    lodNear: arr[off + 4], lodFar: arr[off + 5], shadowDarkness: arr[off + 6], graze: arr[off + 7],
+  };
 }
 
 /** Inverse of packLayerState (values as stored, i.e. f32). */
@@ -245,7 +284,7 @@ export function unpackLayerState(arr, off) {
   return {
     diffuse: [arr[off], arr[off + 1], arr[off + 2]], opacity: arr[off + 3],
     roughness: arr[off + 4], metalness: arr[off + 5], normalScale: [arr[off + 6], arr[off + 7]],
-    alphaRef: arr[off + 8], layer: arr[off + 9], luminosity: arr[off + 10], normalLayer: arr[off + 12],
+    alphaRef: arr[off + 8], layer: arr[off + 9], luminosity: arr[off + 10], normalLayer: arr[off + 12], extRow: arr[off + 13],
     transparent: (f & LS_FLAG.TRANSPARENT) !== 0, depthWrite: (f & LS_FLAG.DEPTH_WRITE) !== 0,
     fogOff: (f & LS_FLAG.FOG_OFF) !== 0, twoSided: (f & LS_FLAG.TWO_SIDED) !== 0,
     singlePass: (f & LS_FLAG.SINGLE_PASS) !== 0, emissiveMap: (f & LS_FLAG.EMISSIVE_MAP) !== 0,
@@ -292,30 +331,46 @@ export class LayerStateTable {
   }
 
   /** Allocate a slot row for (state, layers); -1 when the budget refused growth. */
-  add(state, layer, budget, normalLayer = 0) {
+  add(state, layer, budget, normalLayer = 0, extRow = 0) {
     const row = this.rows.alloc(budget);
     if (row < 0) return -1;
-    this.write(row, state, layer, normalLayer);
+    this.write(row, state, layer, normalLayer, extRow);
     return row;
   }
 
   /** Allocate a slot row written from a built material; -1 when the budget refused growth. */
-  addFromMaterial(mat, layer, budget, normalLayer = 0) {
+  addFromMaterial(mat, layer, budget, normalLayer = 0, extRow = 0) {
     const row = this.rows.alloc(budget);
     if (row < 0) return -1;
-    this.writeFromMaterial(row, mat, layer, normalLayer);
+    this.writeFromMaterial(row, mat, layer, normalLayer, extRow);
     return row;
   }
 
   /** Rewrite a slot straight from a built material (no allocation); true when changed. */
-  writeFromMaterial(row, mat, layer, normalLayer = 0) {
+  writeFromMaterial(row, mat, layer, normalLayer = 0, extRow = 0) {
     if (!this._s) this._s = _state();
-    return this.write(row, fillStateFromMaterial(this._s, mat), layer, normalLayer);
+    return this.write(row, fillStateFromMaterial(this._s, mat), layer, normalLayer, extRow);
   }
 
   /** Rewrite a slot; returns true when any stored float changed. */
-  write(row, state, layer, normalLayer = 0) {
-    const sc = packLayerState(state, layer, this._scratch, 0, normalLayer);
+  write(row, state, layer, normalLayer = 0, extRow = 0) {
+    return this._store(row, packLayerState(state, layer, this._scratch, 0, normalLayer, extRow));
+  }
+
+  /** Allocate a POM extension row (`packPomState`); -1 when the budget refused growth. */
+  addPom(p, budget) {
+    const row = this.rows.alloc(budget);
+    if (row < 0) return -1;
+    this.writePom(row, p);
+    return row;
+  }
+
+  /** Rewrite a POM extension row (no allocation); true when changed. */
+  writePom(row, p) {
+    return this._store(row, packPomState(p, this._scratch, 0));
+  }
+
+  _store(row, sc) {
     const d = this.rows.data;
     const b = row * this.rows.floatsPerRow;
     let changed = false;

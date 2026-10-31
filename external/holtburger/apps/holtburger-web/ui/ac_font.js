@@ -22,6 +22,8 @@
  * `loadAcFont(id)` and accessed by passing `fontId:` to render.
  */
 
+import { hudDietOn } from "./hud_diet.js";
+
 const UI_FONT_ID = 0x40000000;
 
 /**
@@ -711,13 +713,24 @@ function _atlasToCanvas(pixels, width, height) {
   const canvas = document.createElement("canvas");
   canvas.width = width;
   canvas.height = height;
-  const ctx = canvas.getContext("2d");
+  // ?hudDiet=fontWrf (R3-2 HUD diet, ui/hud_diet.js; default off). This atlas
+  // is never displayed: it is the drawImage SOURCE of every renderAcText
+  // pass. A default 2D canvas may be GPU-backed, and drawing a GPU canvas into
+  // a CPU-backed (small) text canvas is a GPU->CPU readback per draw.
+  // willReadFrequently keeps the atlas CPU-backed. Same pixels: putImageData
+  // stores them exactly, and every read is a nearest-neighbour integer copy
+  // (imageSmoothingEnabled = false in renderAcText).
+  const ctx = hudDietOn("fontWrf")
+    ? canvas.getContext("2d", { willReadFrequently: true })
+    : canvas.getContext("2d");
   if (!ctx) return canvas;
   const img = ctx.createImageData(width, height);
   img.data.set(remapped);
   ctx.putImageData(img, 0, 0);
   return canvas;
 }
+/** Test seam (tests/hud_diet.test.mjs): the atlas builder above. */
+export const __atlasToCanvasForTest = _atlasToCanvas;
 
 function _measure(runtime, text) {
   let penX = 0;

@@ -1,0 +1,62 @@
+<!doctype html><html><body><canvas id="c" width="192" height="192"></canvas>
+<script type="importmap">{ "imports": { "three": "/three/three.module.js", "three/addons/": "/three-addons/" } }</script>
+<script type="module">
+// entity_batch_smoke.mjs page (R3-4 stage A `?entityBatch`). `?arm=` one of
+// humans | clamp | mixed | front | flash | overlap | pom | layers, `&entityBatch=on`
+// for the batched load; `&pom=1` gives any arm the POM material cache (the
+// layers arm then reads the R8 height layers back too). The REAL EntityManager (scene3d/entities.js) spawns
+// the rigs of harness/glsl_smoke/entity_batch_lib.mjs; frames are stepped by
+// the arm itself (no wall-clock rAF), so the off and on loads pose
+// identically.
+window.requestAnimationFrame = () => 1;
+window.cancelAnimationFrame = () => {};
+const out = { errors: [] };
+const origErr = console.error;
+console.error = (...a) => { out.errors.push(a.map(String).join(" ").slice(0, 400)); origErr(...a); };
+try {
+  const THREE = await import("three");
+  const LIB = await import("/app/harness/glsl_smoke/entity_batch_lib.mjs");
+  const mods = {
+    entities: await import("/app/scene3d/entities.js"),
+    entityBatch: await import("/app/scene3d/gpu_batch/entity_batch.js"),
+    kit: await import("/app/scene3d/gpu_batch/kit.js"),
+    materials: await import("/app/scene3d/materials.js"),
+    adapter: await import("/app/scene3d/adapter.js"),
+    selectionLighting: await import("/app/scene3d/selection_lighting.js"),
+  };
+  const q = new URLSearchParams(location.search);
+  const arm = q.get("arm") || "humans";
+  const batch = (q.get("entityBatch") || "") === "on";
+  out.arm = arm;
+  out.batch = batch;
+  const renderer = new THREE.WebGLRenderer({ canvas: document.getElementById("c"), antialias: false });
+  renderer.setPixelRatio(1);
+  renderer.setSize(192, 192, false);
+  renderer.debug.checkShaderErrors = true;
+  const gl = renderer.getContext();
+  const dbg = gl.getExtension("WEBGL_debug_renderer_info");
+  out.renderer = gl.getParameter(dbg ? dbg.UNMASKED_RENDERER_WEBGL : gl.RENDERER);
+  const readFrame = () => { const px = new Uint8Array(192 * 192 * 4); gl.readPixels(0, 0, 192, 192, gl.RGBA, gl.UNSIGNED_BYTE, px); return Array.from(px); };
+  const pause = () => new Promise((res) => setTimeout(res, 20));
+  const pom = q.get("pom") === "1";
+  out.pom = pom;
+  const r = await LIB.runEntityArm(THREE, renderer, mods, { arm: arm === "layers" ? "humans" : arm, batch: arm === "layers" ? true : batch, pause, readFrame, pom });
+  out.status = r.status;
+  out.stats = r.stats ? { byStatus: r.stats.byStatus, draws: r.stats.draws, leafRoutes: r.stats.leafRoutes, fallbacks: r.stats.fallbacks, demoteReasons: r.stats.demoteReasons, layers: r.stats.layers, entries: r.stats.entries, programKeys: r.stats.programKeys } : null;
+  out.verify = r.verify;
+  if (arm === "layers") {
+    out.layers = LIB.readbackLayers(r.em._entityBatch, mods.kit.kitPages(renderer));
+  } else if (arm === "overlap") {
+    out.overlap = r.overlap;
+  } else {
+    renderer.render(r.scene, r.camera);
+    out.calls = renderer.info.render.calls;
+    out.frame = readFrame();
+  }
+  out.glError = gl.getError();
+  out.programs = renderer.info.programs.map((p) => ({ key: String(p.cacheKey || "").slice(0, 120), linked: gl.getProgramParameter(p.program, gl.LINK_STATUS) }));
+} catch (e) {
+  out.errors.push("THROW " + String((e && e.stack) || e).slice(0, 1200));
+}
+window.__smoke = out;
+</script></body></html>

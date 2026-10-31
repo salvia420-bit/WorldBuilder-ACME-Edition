@@ -59,11 +59,19 @@
 // Tunables (read once, at first use, S1 knobs; defaults = the plan's start):
 //   ?gpuBatchUploadMB=<1..256>  per-frame upload bytes (default 8)
 //   ?gpuBatchAdmits=<1..256>    per-frame layer admits (default 16)
+//   ?gpuBatchVramMB=<8..2048>   THE STATED VRAM CAP of the kit's array pages
+//                               (reserved page bytes, every consumer; default
+//                               128 = page_allocator ALLOCATOR_BYTES_MAX_DEFAULT)
+//
+// AT THE CAP (R3-4 real boot, 2026-10-31): the kit pages reclaim idle-only
+// pages and then fit a smaller page before they refuse an admit
+// (page_allocator.js "AT THE CAP"); a refusal books no budget bytes.
 
 import { UploadBudget, UPLOAD_BYTES_PER_FRAME_DEFAULT, UPLOAD_ADMITS_PER_FRAME_DEFAULT } from "./upload_budget.js";
 import {
   ArrayPages, glContextGeneration, liveContextGeneration, trackContextGenerations, disposeOnLiveContext,
 } from "./array_pages.js";
+import { ALLOCATOR_BYTES_MAX_DEFAULT } from "./page_allocator.js";
 import { RowTexture } from "./row_texture.js";
 import { LayerStateTable, LAYER_STATE_TEXELS } from "./layer_state.js";
 
@@ -94,6 +102,11 @@ export function kitBudget() {
   return _budget;
 }
 
+/** The stated VRAM cap of the kit pages, bytes (`?gpuBatchVramMB`, default 128 MiB). */
+export function kitVramCapBytes() {
+  return Math.round(_numParam("gpuBatchVramMB", ALLOCATOR_BYTES_MAX_DEFAULT / (1024 * 1024), 8, 2048) * 1024 * 1024);
+}
+
 /** Refill the budget for frame `id` (idempotent per id). */
 export function kitBeginFrame(id) {
   kitBudget().beginFrame(id);
@@ -111,7 +124,9 @@ export function kitPages(renderer) {
   if (!renderer) return null;
   if (_pages && _pagesRenderer === renderer) return _pages;
   if (_pages) { try { _pages.dispose(); } catch (_) { /* fail-soft */ } }
-  _pages = new ArrayPages(renderer);
+  _pages = new ArrayPages(renderer, {
+    maxBytes: kitVramCapBytes(), reclaimIdle: true, fitToCap: true,
+  });
   _pagesRenderer = renderer;
   return _pages;
 }

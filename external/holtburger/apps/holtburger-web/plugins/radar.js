@@ -68,6 +68,7 @@ import { attachWindowPosition, WINDOW_ID } from "../ui/ac_window_position.js";
 import { hudKeyActivates, releaseMouseFocus } from "../ui/hud_focus.js";
 import { globalLockUIEnabled, toggleGlobalLock } from "../ui/ui_lock.js";
 import { getHudScale, hudRect, hudViewport, HUD_SCALE_EVENT } from "../ui/hud_scale.js";
+import { hudCanvasesOff, hudDietOn } from "../ui/hud_diet.js";
 import { readLocalPlayerPose } from "../scene3d/frame_pose.js";
 import { blipColorForEntity, readFellowshipRoster, resolveRadarLook } from "../scene3d/selection_brackets.js";
 // The radar range / radar-visibility rules are shared with the selection
@@ -111,6 +112,9 @@ const TOKEN_ANGLE = Object.freeze({ n: Math.PI, e: Math.PI / 2, s: 0, w: 1.5 * M
 
 // Retail repaints the radar from gmRadarUI::UseTime every 0.025 s.
 const UPDATE_INTERVAL_MS = 25;
+// ?hudDiet=radar (R3-2 HUD diet, ui/hud_diet.js): the full update runs at most
+// every RADAR_DIET_MIN_MS (10 Hz) while nothing that turns the radar changed.
+export const RADAR_DIET_MIN_MS = 100;
 const MAX_BLIPS = 200;
 // DrawObjects: an object is "under the mouse" within 6 px (dist² ≤ 0x24).
 const PICK_RADIUS_SQ = 36;
@@ -689,8 +693,9 @@ const _snapRaw = {
 };
 let _snapFormat = null;
 // update() runs vs canvas repaints it actually did (see `paintKey` in mount);
-// `window.__radar.paintStats()` reads them in a live session.
-const _paintStats = { updates: 0, paints: 0 };
+// `window.__radar.paintStats()` reads them in a live session. `deferred` counts
+// the 25 ms ticks ?hudDiet=radar skipped (0 with the diet off).
+const _paintStats = { updates: 0, paints: 0, deferred: 0 };
 
 function setRadarHostileOnly(enabled) {
   _radarHostileOnly = !!enabled;
@@ -758,6 +763,12 @@ export function mount(_ctx) {
   canvas.height = RADAR_GEOMETRY.size;
   overlay.appendChild(canvas);
   const ctx = canvas.getContext("2d");
+  // R3-2 HUD bisect + diet (ui/hud_diet.js), read once per mount.
+  // ?hudCanvases=off: the blip canvas is neither displayed nor drawn (update()
+  // still runs, as it does under ?hud=none).
+  const canvasesOff = hudCanvasesOff();
+  if (canvasesOff) canvas.style.display = "none";
+  const dietRadar = hudDietOn("radar");
 
   const coords = document.createElement("div");
   coords.className = "hb-radar-coords";
@@ -892,6 +903,9 @@ export function mount(_ctx) {
   let lastHeading = NaN;
   let lastUpdate = -Infinity;
   let rafId = 0;
+  // ?hudDiet=radar: what the last FULL update drew from (set at the end of
+  // update(), only with the diet on).
+  const diet = { at: -Infinity, sel: 0, blank: false, k: 0 };
   const colorCache = new Map();
   const dimColor = (hex) => {
     let c = colorCache.get(hex);
@@ -967,6 +981,7 @@ export function mount(_ctx) {
   }
 
   function flushPixels(k, W) {
+    if (canvasesOff) { _paintStats.updates += 1; nOps = 0; return; }
     let key = `${W}`;
     for (let i = 0; i < nOps; i++) {
       const op = ops[i];
@@ -1035,12 +1050,12 @@ export function mount(_ctx) {
     // and DrawChildren's centre plus stays. `window.__radarBlank` is written
     // by app/client_events.js (ENVIRON_CHANGE), which may arrive before mount.
     const blank = RADAR_BLANK_ON && window.__radarBlank === true;
+    let selected = 0;
     if (player) {
       source = (em?.entityMap?.size ?? 0) > 1 ? "scene" : "wasm";
       const cands = gatherCandidates(sh, em, localGuid, player, range, now);
       for (const c of cands) c.d2 = c.dx * c.dx + c.dy * c.dy;
       cands.sort((a, b) => a.d2 - b.d2);
-      let selected = 0;
       try { selected = (em?.getSelectedTarget?.() ?? 0) >>> 0; } catch (_) {}
       const fellowship = _slow.fellowship;
       for (const c of cands) {
@@ -1072,6 +1087,12 @@ export function mount(_ctx) {
     // Player marker last, over everything (DrawChildren).
     drawPixels(k, CENTRE_PIXELS, RADAR_GEOMETRY.cx, RADAR_GEOMETRY.cy, BRIGHT_GREEN);
     flushPixels(k, W);
+    if (dietRadar) {
+      diet.at = now;
+      diet.sel = selected;
+      diet.blank = blank;
+      diet.k = k;
+    }
 
     blips = drawn;
     if (mouse || hoverGuid) refreshHover();
@@ -1106,10 +1127,42 @@ export function mount(_ctx) {
     locked: !!winPos?.isLocked?.(),
   });
 
+  // ?hudDiet=radar — a 25 ms tick runs the full update only when something
+  // that turns the radar moved (see `diet` above), the mouse is over the disk,
+  // or RADAR_DIET_MIN_MS passed; otherwise blips that merely translated (player
+  // walking, NPCs moving: 1 retail px = 1.5 m) step at most 100 ms late.
+  // Turning, selection, the BlackFog2 blank and the HUD zoom keep the retail
+  // 40 Hz, so a rotating radar reads as it does today.
+  function radarDietDue(now) {
+    if (now - diet.at >= RADAR_DIET_MIN_MS) return true;
+    if (mouse || hoverGuid) return true;
+    const sh = window.__sessionHandle;
+    const em = window.liveScene3d?.entityManager || null;
+    let localGuid = 0;
+    try { localGuid = (window.getLocalPlayerGuid?.() ?? 0) >>> 0; } catch (_) {}
+    const player = readPlayer(sh, em, localGuid);
+    const heading = player ? player.heading : 0;
+    if (!(Math.abs(heading - lastHeading) < 1e-5)) return true;
+    let sel = 0;
+    if (player) { try { sel = (em?.getSelectedTarget?.() ?? 0) >>> 0; } catch (_) {} }
+    if (sel !== diet.sel) return true;
+    if ((RADAR_BLANK_ON && window.__radarBlank === true) !== diet.blank) return true;
+    return backingScale() !== diet.k;
+  }
+
   function tick(now) {
     rafId = requestAnimationFrame(tick);
     if (overlay.hidden || (typeof document !== "undefined" && document.hidden)) return;
     if (now - lastUpdate < UPDATE_INTERVAL_MS) return;
+    if (dietRadar && lastUpdate !== -Infinity) {
+      let due = true;
+      try { due = radarDietDue(now); } catch (_) { due = true; }
+      if (!due) {
+        lastUpdate = now;
+        _paintStats.deferred += 1;
+        return;
+      }
+    }
     lastUpdate = now;
     try { update(now); } catch (e) {
       // Never let a bad frame kill the radar loop; surface it once.

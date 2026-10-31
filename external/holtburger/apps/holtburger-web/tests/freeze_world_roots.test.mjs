@@ -28,15 +28,20 @@ function check(label, cond, extra = "") {
 // The app runs the walk with ?skipHiddenMatrix (default on) installed.
 installSkipHiddenMatrix(THREE);
 
-console.log("-- F1 flag reader (strict opt-in) ------------------------------------");
+console.log("-- F1 flag reader (DEFAULT ON since 2026-10-30; off/0/false/no opt out) ---");
 {
   const R = F.freezeWorldRootsRequested;
-  check("absent / empty -> off", R("") === false && R("?foo=1") === false && R("?freezeWorldRoots=") === false);
-  check("on / 1 / true / yes (any case) -> on", ["on", "ON", "1", "true", "yes"].every((v) => R(`?freezeWorldRoots=${v}`) === true));
-  check("off / 0 / false / no / garbage -> off", ["off", "0", "false", "no", "maybe"].every((v) => R(`?freezeWorldRoots=${v}`) === false));
-  check("module flag is off with no location (node)", F.freezeWorldRootsEnabled() === false);
+  check("absent / empty -> on (the default)", R("") === true && R("?foo=1") === true && R("?freezeWorldRoots=") === true);
+  check("on / 1 / true / yes / garbage (any case) -> on", ["on", "ON", "1", "true", "yes", "maybe"].every((v) => R(`?freezeWorldRoots=${v}`) === true));
+  check("off / 0 / false / no (any case) -> off", ["off", "OFF", "0", "false", "no"].every((v) => R(`?freezeWorldRoots=${v}`) === false));
+  check("module flag is ON with no location (node)", F.freezeWorldRootsEnabled() === true);
+  // The flag-off path: a second module instance that read ?freezeWorldRoots=off at load.
+  globalThis.location = { search: "?freezeWorldRoots=off" };
+  const Foff = await import("../scene3d/freeze_world_roots.js?flagoff");
+  delete globalThis.location;
+  check("?freezeWorldRoots=off: module flag off", Foff.freezeWorldRootsEnabled() === false);
   const g = new THREE.Group();
-  check("flag off: freezeWorldRoots freezes nothing", F.freezeWorldRoots(THREE, [g]) === 0 && g.matrixAutoUpdate === true && !THREE.Object3D.prototype.__hbFreezeAdd);
+  check("flag off: freezeWorldRoots freezes nothing", Foff.freezeWorldRoots(THREE, [g]) === 0 && g.matrixAutoUpdate === true && !THREE.Object3D.prototype.__hbFreezeAdd);
 }
 
 // ---------------------------------------------------------------------------
@@ -248,7 +253,7 @@ console.log("-- F7 the verify seam ---------------------------------------------
   check("verify waits for a render of the main scene", renderer.render !== origRender);
   renderer.render(scene);
   const r = await p;
-  check("…then reports and unwraps render()", r && r.mismatches === 0 && r.checked === 1 && r.frozen === false && renderer.render === origRender, JSON.stringify(r));
+  check("…then reports and unwraps render()", r && r.mismatches === 0 && r.checked === 1 && r.frozen === true /* default ON since 2026-10-30 */ && renderer.render === origRender, JSON.stringify(r));
   delete globalThis.window;
 }
 

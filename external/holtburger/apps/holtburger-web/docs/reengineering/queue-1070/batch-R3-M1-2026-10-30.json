@@ -9,7 +9,7 @@
  "sessionRulesInline": [
   "Inherit every rule of batch-P0-gpu-resident-2026-10-22.json sessionRulesInline verbatim (MODE T off-screen + muted, OWNER-RUN, kill only by user-data-dir, ?nosw=1, fresh profile per arm-rep, uncapped frames + targetFps=0, release wasm only, >= 65 s between boots on one account, reject-never-average). Read memory/fleet-runbooks.md before driving the 1070.",
   "Tunnel: -L 9333:127.0.0.1:9333 -R 8765:127.0.0.1:8765 -R 8080:127.0.0.1:8080 -R 8766:127.0.0.1:8766 (the B0 snapshot server on :8766). M1c adds -R 3000:127.0.0.1:3000 -R 9090:127.0.0.1:9090 for its window only and drops them afterwards.",
-  "Build under test = B0: a NEW frozen snapshot (scripts/perf-worker/hb-mksnap.sh <name>, then replace its pkg symlink by a real copy of a RELEASE pkg/) of the MERGED round-3 phase-A tree (the round-2 fixes included). It must carry the readers of occlusionCull=rigs, rigPoseSkip, skipEmptyPasses, uploadWarmDraw, animSceneryBatch and bakeFallbackWaves (`b0Snapshot` below), checked in M1-PRE by `hbbench.mjs --check-snapshot` against the snapshot's OWN code files, never only url-flags.md: hb-mksnap.sh symlinks docs/ into the live tree, so the url-flags.md a snapshot shows always reads current. Served with `python3 scripts/serve.py --bind 127.0.0.1 --port 8766 --check` from the snapshot. On B0 `rustParticles` is default OFF (16 scene-core flags on): an empty-flag arm is the 16-on config, and any arm that depends on another flag value names it.",
+  "Build under test = B0: a NEW frozen snapshot (scripts/perf-worker/hb-mksnap.sh <name>, then replace its pkg symlink by a real copy of a RELEASE pkg/) of the MERGED round-3 phase-A tree (the round-2 fixes included). It must carry the readers of occlusionCull=rigs, rigPoseSkip, skipEmptyPasses, animSceneryBatch and bakeFallbackWaves (`b0Snapshot` below; uploadWarmDraw's reader is no longer required: the flag was deleted 2026-10-30 after D1), checked in M1-PRE by `hbbench.mjs --check-snapshot` against the snapshot's OWN code files, never only url-flags.md: hb-mksnap.sh symlinks docs/ into the live tree, so the url-flags.md a snapshot shows always reads current. Served with `python3 scripts/serve.py --bind 127.0.0.1 --port 8766 --check` from the snapshot. On B0 `rustParticles` is default OFF (16 scene-core flags on): an empty-flag arm is the 16-on config, and any arm that depends on another flag value names it.",
   "Harness v2 protocol (plan section 4), all applied by hbbench.mjs / hbanatomy.mjs unless an arm overrides it: skytime=13 and DayGroup 0 ('Sunny', applied through setGameDayOverride(39, 10)); adaptiveRes=off, targetFps=0, renderScale=1, and gpuGovernor=off once R3-11's flag has a url-flags.md row (hbbench detects it); 1920x1080 INNER window unless the arm says 1280,720; interleaved, rotated order; the 65 s login cool-down; box samples (hbwho.ps1 + top processes by CPU) before, between and after segments. `--compat v1` is ONLY for RC-BENCH v2 reps 2-3 on the rep-1 snapshot (batch-RC-rust-scene-core-2026-10-26.json), never for these items: it keeps the pre-v2 step sequence exactly, so its box samples run only before launch and after the tour (hbreport also reads the bench dir's boxwatch.log for the samples in between).",
   "Every M1a session item (SWEEP, CEILING, LAYERMIP) BOOTS its own session through lib/hb_boot.mjs bootArm (fresh profile, the B0 snapshot on :8766, skytime=13, DayGroup 0, renderScale=1, adaptiveRes=off, targetFps=0, 1920x1080 INNER, the run-JSON asserts), never through hbsess.mjs (its boot serves :8765 = the live tree, sets the OUTER window and pins no DayGroup). The attach modes (`hbsweep.mjs` / `hbanatomy.mjs --attach`) are for the laptop tab check and ad-hoc looks; they apply DayGroup 0 and record every pin problem (`session.problems`).",
   "Run without the gate override (gate-owner-ok.txt) whenever possible so hbgate.ps1's idle rule applies; rule V below decides validity from the run JSON either way.",
@@ -50,14 +50,6 @@
     "why": "S1 / R3-2 arm"
    },
    {
-    "flag": "uploadWarmDraw",
-    "file": "apps/holtburger-web/scene3d/upload_warm_draw.js",
-    "patterns": [
-     "rustFlag\\(\"uploadWarmDraw\", false\\)"
-    ],
-    "why": "S1 / R3-2 arm"
-   },
-   {
     "flag": "animSceneryBatch",
     "file": "apps/holtburger-web/scene3d/animated_scenery.js",
     "patterns": [
@@ -80,6 +72,17 @@
     "file": "apps/holtburger-web/pkg/holtburger_web_bg.wasm",
     "patterns": [],
     "why": "hb-mksnap.sh symlinks pkg/ into the live tree; B0 must freeze its own release wasm (release-ness: wasm_profile.mjs in the next M1-PRE step and hbbench's served-wasm abort)"
+   }
+  ],
+  "removedReaders": [
+   {
+    "flag": "uploadWarmDraw",
+    "file": "apps/holtburger-web/scene3d/upload_warm_draw.js",
+    "patterns": [
+     "rustFlag\\(\"uploadWarmDraw\", false\\)"
+    ],
+    "why": "S1 / R3-2 arm",
+    "removed": "2026-10-30, flag deleted after D1"
    }
   ]
  },
@@ -126,7 +129,7 @@
    "recipe": [
     "free -m (>= 2.5 GB available) and nothing heavy running on the laptop (~/CLAUDE.md).",
     "B0 tagged (plan section 3 R3-0 item 1) and its snapshot served on :8766 with --check green; `node apps/holtburger-web/harness/lib/wasm_profile.mjs <snapshot>/apps/holtburger-web/pkg/holtburger_web_bg.wasm` prints release (hbbench also refuses a dev wasm before the first arm).",
-    "The snapshot is the MERGED round-3 phase-A tree: `node scripts/perf-worker/hbbench.mjs --arms apps/holtburger-web/docs/reengineering/queue-1070/batch-R3-M1-2026-10-30.json --check-snapshot /mnt/wbterminal2/hb-snap/<B0 name>` (from external/holtburger) exits 0, i.e. every `b0Snapshot.requiredReaders` reader (occlusionCull=rigs, rigPoseSkip, skipEmptyPasses, uploadWarmDraw, animSceneryBatch, bakeFallbackWaves, the release pkg copy) is in the snapshot's own files. Exit 1 = not B0 (an older tree, a symlinked file, the live tree itself): stop and re-snapshot from the merged tree. url-flags.md is NOT evidence: it is a symlink into the live tree.",
+    "The snapshot is the MERGED round-3 phase-A tree: `node scripts/perf-worker/hbbench.mjs --arms apps/holtburger-web/docs/reengineering/queue-1070/batch-R3-M1-2026-10-30.json --check-snapshot /mnt/wbterminal2/hb-snap/<B0 name>` (from external/holtburger) exits 0, i.e. every `b0Snapshot.requiredReaders` reader (occlusionCull=rigs, rigPoseSkip, skipEmptyPasses, animSceneryBatch, bakeFallbackWaves, the release pkg copy) is in the snapshot's own files. Exit 1 = not B0 (an older tree, a symlinked file, the live tree itself): stop and re-snapshot from the merged tree. url-flags.md is NOT evidence: it is a symlink into the live tree.",
     "Box: D:\\Temp\\hbbench\\hbwho.ps1, hbgate.ps1, hbprobe-launch.bat, hidden-run.vbs, noflash.ps1, hbbench-kill.ps1 deployed from scripts/perf-worker/box/ (the v2 box sampler runs hbwho.ps1 inline through powershell -EncodedCommand; nothing new to deploy).",
     "One manual sample: `node -e \"import('./scripts/perf-worker/lib/hb_box.mjs').then(async m => console.log(JSON.stringify(await m.boxSample('preflight'), null, 1)))\"` from external/holtburger: idle >= 60, gpu3d_other <= 5, no non-test process near 1 core.",
     "python3 -I scripts/perf-worker/tests/test_hbreport.py and node scripts/perf-worker/tests/hb_v2.test.mjs: both green."
@@ -216,7 +219,7 @@
    ],
    "reads": "Per variant: main render ms per frame (renderer.render JS), GPU ms (TIME_ELAPSED per frame), CrGpuMain WEBGL per present (trace windows hbSC:Vk:rN); the merged-mesh counts (V1 groups, V2 classes) against V0's plain-mesh population.",
    "decisionRules": ["R8", "R10"],
-   "result": null
+   "result": "2026-10-30, snapshot r3d1-20261030. First 3 reps (--uncapped, 21:50-22:11): INCONCLUSIVE, the trace held only the first 10 s window (uncapped, Chrome GPU-process VizCompositorThread DelayBasedTimeSource::PostNextTickTask spins ~70k tasks/s and fills the trace buffer). Re-run WITHOUT --uncapped (22:28-22:48), 3 reps, every window traced: r1: V0 render 7.90 ms / WEBGL 7.41; V1 11.30 / 8.71; V2 3.53 / 2.52; V2 cuts 55% / 66%; PROCEED (>= 40 % cut on both threads) | r2: V0 render 25.51 ms / WEBGL 40.45; V1 11.16 / 8.89; V2 3.47 / 2.71; V2 cuts 86% / 93%; PROCEED (>= 40 % cut on both threads) | r3: V0 render 14.00 ms / WEBGL 18.11; V1 12.27 / 9.56; V2 4.08 / 3.29; V2 cuts 71% / 82%; PROCEED (>= 40 % cut on both threads). R8: PROCEED for R3-4 / R3-5 (merge per blend class with one material: main-thread world render -55% and CrGpuMain WEBGL -66%; merging per material alone is WORSE). Files /mnt/wbterminal1/tmp/claude-scratch/perf/r3-m1/ceilcap-*.r8.json"
   },
   {
    "id": "M1a-LAYERMIP",
@@ -320,8 +323,10 @@
     {"name": "S-statArrayMerge", "flags": "statArrayMerge=on", "predict": {"thread": "main", "ms": -0.375, "source": "plan R3-2: ~-0.35...-0.4 ms if the 08-06 wall is gone"}},
     {"name": "S-batchedRuns-off", "flags": "batchedRuns=off", "note": "P0 arm 2: the per-range CrGpuMain price of ANGLE's multi-draw emulation (R3-10 (a)); a price, never a flip"},
     {"name": "S-partDegrade", "flags": "partDegrade=on", "note": "retail-correct WHAT change: owner decision (c), not R3"},
-    {"name": "S-freezeWorldRoots", "flags": "freezeWorldRoots=on"},
-    {"name": "S-rustEntityWorld", "flags": "rustEntityWorld=on", "gate": "window.__entityWorld && window.__entityWorld.stats().projections === 1", "gateInfo": "window.__entityWorld ? window.__entityWorld.stats() : null", "note": "the projection half installed (fix_r2.json lane R4); every earlier arm measured the walk half only"}
+    {"name": "S-freezeWorldRoots", "flags": "freezeWorldRoots=on"}
+   ],
+   "removedArms": [
+    {"name": "S-rustEntityWorld", "removed": "2026-10-30, flag deleted after D1", "flags": "rustEntityWorld=on", "gate": "window.__entityWorld && window.__entityWorld.stats().projections === 1", "gateInfo": "window.__entityWorld ? window.__entityWorld.stats() : null", "note": "the projection half installed (fix_r2.json lane R4); every earlier arm measured the walk half only"}
    ],
    "recipe": [
     "node scripts/perf-worker/hbbench.mjs --arms apps/holtburger-web/docs/reengineering/queue-1070/batch-R3-M1-2026-10-30.json --item M1b-STRUCTURE --reps 2 --port 8766 --uncapped --ref A --out /mnt/wbterminal1/tmp/claude-scratch/perf/r3-m1/m1b-structure",
@@ -434,7 +439,7 @@
    "reads": "heading-binned draws (plus multidraw ranges for ours), renderJs p50 (ours through the v2 wrapper), main-thread busy, GPU ms (timer query for ours, from an hbanatomy run of each H arm), fps; W's renderJs p50 / draws = a stock-three.js us-per-draw on the 1070.",
    "decisionRules": ["R10", "Written 2026-10-30 BEFORE the run (plan section 4.1): W ~= H-retailscope fps -> the gap is three.js submission + ANGLE, fewer real draws first (R3-4, R3-5, R3-7); W clearly faster -> our passes, shading and bookkeeping first (R3-2 empty-pass skip, R3-11 items 4-5). R3-8 applies this. Not a target: WebAC renders Gouraud lighting with no post-processing."],
    "blockers": ["second Developer-level account (or the clients one after the other)", "box memory (~1.3 GB tab) and ~1.27 GB OPFS writes: never alongside one of our real-world tabs", "never minimize the window (hidden tabs throttle rAF)"],
-   "result": null
+   "result": "2026-10-30 22:12-22:27, rep 1 only, snapshot r3d1-20261030, scripts/perf-worker/m1c-webac.mjs (raw CDP, profile C:\\Temp\\hbm1c-webac). Parked 0xA9B40001 (96, 96, 80) yaw 0; ACE hour 3.63 (night), W day group #16 Rainy, H pinned DayGroup 0 at skytime 3.63 (weather differs). W (WebAC, draw distance 8, degmul 1) 58.2 fps, 906 draws, renderJs p50 11.4 ms (12.6 us/draw); H-default 56.3 fps, 651 draws, 10.4 ms (16.0 us/draw); H-retailscope 79.6 fps, 481 draws, 7.0 ms (14.6 us/draw). Rule R10 reading: W ~= H-default and clearly SLOWER than H-retailscope, so W is not faster than us; both clients are bound by three.js submission at ~12-16 us of main-thread JS per draw: fewer real draws first (R3-4, R3-5, R3-7). Owner: \"well we dont need to be checking webac repeatedly that told the story and taught us directionally\" -> reps 2-3 not run; vite / bridge stopped, the -R 3000 / 9090 forwards dropped, the box profile C:\\Temp\\hbm1c-webac (1,371 MB OPFS) removed. Report: /mnt/wbterminal1/tmp/claude-scratch/perf/rc-rust-scene-core-2026-10-29/m1c/m1c-r1.report.txt"
   },
   {
    "id": "M1d-OPENAC",

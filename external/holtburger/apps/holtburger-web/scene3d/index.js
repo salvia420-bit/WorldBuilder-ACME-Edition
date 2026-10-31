@@ -171,9 +171,6 @@ import { CameraSwitcher, createOrthoCamera } from "./camera.js";
 import { retailFovEnabled, clampGameFovDeg, applyRetailFov, RETAIL_GAME_FOV_DEFAULT_DEG } from "./camera_math.js";
 import { setupSceneLighting, attachSetupModelLights } from "./lighting.js";
 import { withWarmTarget, installLinkProbe, SHADER_PREWARM_ON } from "./shader_prewarm.js";
-// 2026-10-30 (round 3 R3-2) — `?uploadWarmDraw` (DEFAULT OFF): arrival-time
-// geometry upload draw into a private 1x1 scissored target.
-import { installUploadWarmDraw } from "./upload_warm_draw.js";
 import { installDrawSortProgram } from "./draw_sort_program.js";
 import { installAsyncLinkGuard } from "./async_link_guard.js";
 import { retainNewPrograms } from "./program_retention.js";
@@ -195,7 +192,6 @@ import { installShadowCasterList } from "./shadow_caster_list.js";
 import { installSkipEmptyMultiDraw } from "./skip_empty_multidraw.js";
 import { installBatchedRunsChunks, installBatchedRuns, batchedRunsFrameTotals } from "./batched_runs.js";
 import { installDrawExec } from "./draw_exec.js";
-import { installEntityWorld } from "./entity_world.js";
 import { parseCloudResScale, applyCloudResScale } from "./cloud_res_scale.js";
 import { installDepthBandSort } from "./depth_band_sort.js";
 import { freezeWorldRoots, installFreezeWorldRootsSeam } from "./freeze_world_roots.js";
@@ -230,6 +226,7 @@ import {
   setAtlasTilePx,
 } from "./adapter.js";
 import { createNameplateOverlay } from "./hud.js";
+import { hudDietOn, makeCanvasCssSize } from "../ui/hud_diet.js";
 // Retail target indicator (2026-08-02) — VividTargetIndicator corner
 // brackets, replacing the vibe-coded selection torus. See
 // scene3d/selection_brackets.js for the acclient.c chain.
@@ -1836,7 +1833,7 @@ export async function preInit3D(canvas) {
   const cellsGroup = new THREE.Group(); cellsGroup.name = "cells";
   const entitiesGroup = new THREE.Group(); entitiesGroup.name = "entities";
   worldRoot.add(terrainGroup, buildingsGroup, staticsGroup, cellsGroup, entitiesGroup);
-  // ?freezeWorldRoots (fps review 2026-10-19, DEFAULT OFF): these seven never
+  // ?freezeWorldRoots (fps review 2026-10-19, DEFAULT ON since 2026-10-30): these seven never
   // move, so armed they compose once and stop forcing their subtrees through
   // every frame's matrix walk (freeze_world_roots.js). The verify seam is
   // installed either way: `await __freezeWorldRoots.verify()`.
@@ -1844,7 +1841,6 @@ export async function preInit3D(canvas) {
     freezeWorldRoots(THREE, [scene, worldRoot, terrainGroup, buildingsGroup, staticsGroup, cellsGroup, entitiesGroup]);
     installFreezeWorldRootsSeam(renderer, scene);
   } catch (_) { /* never break boot */ }
-  try { installEntityWorld(renderer, () => scene, () => entitiesGroup); } catch (_) { /* ?rustEntityWorld (default off): projection stand-in, entity_world.js — required here (scene3dForBuilders has no renderer / scene) */ }
   // ?punchRetail (2026-10-05) draw-order phase tags, read by the opaque sort in
   // atmosphere_pipeline.js (nearest tag up the parent chain wins). ONLY the
   // terrain surface draws before the doorway punch (phase 0) — it is the one
@@ -2079,16 +2075,6 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
     adaptiveGpuProbe,
   } = pre;
   const { sun, ambient, lightsGroup } = lighting;
-  // ?uploadWarmDraw (round 3 R3-2, 2026-10-30, DEFAULT OFF; `=on` opt-in):
-  // a `childadded` listener on the world groups queues each streamed subtree
-  // once; the per-frame tick below draws its new geometries once into a
-  // private 1x1 scissored target with an unlit material, so their buffer
-  // uploads land on arrival instead of the first turn that reveals them, and
-  // re-walks walked roots round robin (bounded per frame) for late content and
-  // parts shown later (upload_warm_draw.js). Flag off, or ?nullRender ⇒ null:
-  // no listener, no allocation.
-  const _uploadWarm = installUploadWarmDraw(renderer, scene,
-    [worldRoot, terrainGroup, buildingsGroup, staticsGroup, cellsGroup, entitiesGroup], { nullRender });
 
   // Phase F.C — runtime event log probe. Opt-in via `?eventLog=on` so
   // production users don't pay the cost; the F.D validator flips the
@@ -3149,13 +3135,6 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
     // shape-identical clones of their member materials — bring them up to the
     // member (fades, re-seated maps, needsUpdate) before anything draws.
     try { syncBatchMatVariants(); } catch (_) { /* never break the frame */ }
-    // ?uploadWarmDraw (DEFAULT OFF ⇒ `_uploadWarm` is null): this frame's
-    // arrivals (and late content the watch finds) upload before the render,
-    // outside the vfxGauge window. Never under ?nullRender (no GPU work there;
-    // the install already returns null there, this guard is the second line).
-    if (_uploadWarm !== null && !nullRender) {
-      try { _uploadWarm.tick(); } catch (_) { /* never break the frame */ }
-    }
     vfxGaugeBeginFrame(renderer);
     // Portal space (retail gmSmartBoxUI, acclient.c:262445-262449): while the
     // tunnel owns the screen the WORLD IS NOT DRAWN (SmartBox::Hide) — the
@@ -3681,6 +3660,8 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
       const overlay = createNameplateOverlay(canvas);
       if (overlay) {
         nameplateLayer = overlay.layer;
+        // ?hudDiet=overlays (R3-2): no per-frame clientWidth read in its tick.
+        if (hudDietOn("overlays")) nameplateLayer._size = makeCanvasCssSize(canvas);
         // eslint-disable-next-line no-console
         console.log("[scene3d] nameplate overlay attached:", overlay.domRoot.id);
       }

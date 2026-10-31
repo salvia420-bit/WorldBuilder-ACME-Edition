@@ -67,6 +67,27 @@ import { addFxDistortSource, releaseFxDistortSource } from "../vfx/fx_distort.js
 // simulated and packed by the Rust kernel (crates/holtburger-scene particles;
 // docs/2026-10-26-rust-particles.md). The bridge owns the wasm instance.
 import { createRustParticles, rustMotionOn, rustParticlesPending } from "../rust/particles.js";
+// 2026-10-30 `?gpuParticles` (round 3 R3-7a, DEFAULT OFF, `=on` opts in) —
+// particle motion evaluated in the bucket vertex shader (gpu_particles.js).
+// Every hook below sits behind ONE memoised `_gpOn()` per tick, typeof-guarded
+// (test_particles.mjs concatenates the particle modules and strips imports).
+import {
+  GpParticleEmitter,
+  applyGpParticleMaterial,
+  gpBeginTick,
+  gpConvertToMesh,
+  gpEligible,
+  gpEndTick,
+  gpPrepareAppend,
+  gpSlotTrans,
+  gpTwinPos,
+  gpuParticlesEnabled,
+} from "./gpu_particles.js";
+
+/** `?gpuParticles` (DEFAULT OFF): read once per tick / addEmitter call. */
+function _gpOn() {
+  return typeof gpuParticlesEnabled === "function" && gpuParticlesEnabled();
+}
 
 // 2026-06-20 white-box guard. When a particle's gfxobj resolves to NO
 // surface, `materialFactory` returns null. The pre-fix meshFactory then did
@@ -346,6 +367,9 @@ export function _rp6Thaw(emitter, now) {
       particles[i].lastUpdateTime += dt;
     }
   }
+  // ?gpuParticles (DEFAULT OFF): the shader ages from the spawn record, so the
+  // effective birth of every live record moves with the shift (gpu emitters only).
+  if (emitter._gp === true) emitter._gpRetime();
   return dt;
 }
 
@@ -539,6 +563,12 @@ function _instGeometryPredict(geometry) {
 const _instColor = new THREE.Color();
 // Tier 2 `?fxMotion`: per-particle velocity scratch (particleFxSlotVelocity).
 const _fxVelOut = [0, 0, 0];
+// ?gpuParticles (DEFAULT OFF): the f64 twin position + the kid push's matrix-shaped
+// scratch, made at the first gpu append (no flag-off allocation).
+let _gpTw = null;
+let _gpKidE = null;
+/** ?gpuParticles test seam: does the append scratch exist (F1: not with the flag off)? */
+export function __gpAppendScratchForTest() { return _gpTw !== null || _gpKidE !== null; }
 
 // Shared seam noops — identity-comparable, so a runtime toggle can tell "we
 // installed these" from "the caller supplied their own onMeshActive".
@@ -729,14 +759,15 @@ export class SharedAlphaBuckets {
     return b;
   }
   /** Publish every shared bucket for this frame (see the protocol note above). */
-  finalize(frameId, camWorld, sortFn) {
+  finalize(frameId, camWorld, sortFn, gpOn) {
     this.stats.finalizes++;
     for (const [key, b] of this.buckets) {
       const im = b.im;
       if (b.frame !== frameId || b.n === 0) {
         if (b.idleFrame !== frameId) { b.idleFrame = frameId; b.idle++; }
         // ?particleUploadRange: park = count 0 only (no upload of nothing).
-        _parkBucket(im);
+        // ?gpuParticles: a gpu bucket's instance matrix is never re-uploaded.
+        if (gpOn === true && b.gp === true) { if (im.count !== 0) im.count = 0; } else _parkBucket(im);
         if (b.idle >= _INST_BUCKET_IDLE_TICKS) {
           try { im.parent?.remove(im); } catch (_) {}
           try { im.material?.dispose?.(); } catch (_) {}
@@ -744,6 +775,17 @@ export class SharedAlphaBuckets {
           this.buckets.delete(key);
           this.stats.reaped++;
         }
+        continue;
+      }
+      if (gpOn === true && b.gp === true) {
+        // ?gpuParticles: the same sort on the f64 twin positions (rounded to f32
+        // as the instance matrix was), then only the record indices go up.
+        if (camWorld) {
+          _sharedCamLocal.copy(camWorld);
+          try { b.scene.worldToLocal(_sharedCamLocal); } catch (_) {}
+          _sortGpBucketBackToFront(im, b.n, _sharedCamLocal, b.gpPos);
+        }
+        _publishGpBucket(im, b.n);
         continue;
       }
       if (camWorld && typeof sortFn === "function") {
@@ -852,6 +894,48 @@ export function _sortBucketBackToFront(im, n, cam) {
     m.set(_sortMat.subarray(j * 16, j * 16 + 16), i * 16);
     if (col) col.set(_sortCol.subarray(j * 3, j * 3 + 3), i * 3);
   }
+}
+
+// ?gpuParticles (DEFAULT OFF): scratch for the gpu bucket sort, made on first use.
+let _gpSortIdx = null, _gpSortKey = null, _gpSortCol = null, _gpSortPos = null;
+/**
+ * `_sortBucketBackToFront` for a gpu bucket: the keys come from `pos` (the f64
+ * twin positions, rounded to f32 exactly as the instance matrix translation
+ * was), so the permutation is today's; the record indices (instanceColor) and
+ * `pos` itself are permuted (a shared bucket is re-sorted by every finalize).
+ */
+function _sortGpBucketBackToFront(im, n, cam, pos) {
+  if (n < 2 || !pos) return;
+  if (_gpSortIdx === null || _gpSortIdx.length < n) {
+    const c = 1 << Math.ceil(Math.log2(Math.max(n, 256)));
+    _gpSortIdx = new Uint32Array(c); _gpSortKey = new Float32Array(c);
+    _gpSortCol = new Float32Array(c * 3); _gpSortPos = new Float32Array(c * 3);
+  }
+  const col = im.instanceColor.array;
+  for (let i = 0; i < n; i++) {
+    const dx = pos[i * 3] - cam.x, dy = pos[i * 3 + 1] - cam.y, dz = pos[i * 3 + 2] - cam.z;
+    _gpSortKey[i] = dx * dx + dy * dy + dz * dz;
+    _gpSortIdx[i] = i;
+  }
+  const idx = _gpSortIdx.subarray(0, n);
+  const key = _gpSortKey;
+  idx.sort((a, b) => key[b] - key[a]); // far first
+  _gpSortCol.set(col.subarray(0, n * 3));
+  _gpSortPos.set(pos.subarray(0, n * 3));
+  for (let i = 0; i < n; i++) {
+    const j = idx[i];
+    if (j === i) continue;
+    col.set(_gpSortCol.subarray(j * 3, j * 3 + 3), i * 3);
+    pos.set(_gpSortPos.subarray(j * 3, j * 3 + 3), i * 3);
+  }
+}
+
+/** ?gpuParticles: publish a gpu bucket — count + the record-index upload only (the matrix is a dummy). */
+function _publishGpBucket(im, n) {
+  im.count = n;
+  const c = im.instanceColor;
+  if (particleUploadRangeEnabled()) { c.clearUpdateRanges(); c.addUpdateRange(0, n * c.itemSize); }
+  c.needsUpdate = true;
 }
 
 // Buckets are keyed by gfxobj (⇒ shared geometry + texture), NOT by emitter.
@@ -2534,9 +2618,15 @@ export class ParticleManager {
     // scene3d/rust/particles.js). Only when its bucket attach below cannot
     // fail (`_instGeometryFor`'s null cases), since a shell has no per-mesh
     // fallback.
-    const rustShell = useInst && this._rustBridge() !== null && _instGeometryPredict(geometry);
+    // ?gpuParticles (DEFAULT OFF): an eligible instanced emitter is simulated by
+    // its bucket's vertex shader (gpu_particles.js). The flag supersedes
+    // ?rustParticles: with it on, the Rust bridge is never asked. Off: the same
+    // `rustShell` evaluation (and side effects) as before.
+    const gpOn = _gpOn();
+    const gp = gpOn && useInst && gpEligible(info, skyGlow, this, baseMaterial);
+    const rustShell = !gpOn && useInst && this._rustBridge() !== null && _instGeometryPredict(geometry);
 
-    const emitter = new ParticleEmitter({
+    const emitter = new (gp ? GpParticleEmitter : ParticleEmitter)({
       parent,
       scene: this._scene,
       // Instanced: keep slot meshes OUT of the scene graph (they stay pure
@@ -2621,6 +2711,8 @@ export class ParticleManager {
       emitter._rustMeshFactory = emitter._meshFactory;
       emitter._meshFactory = RUST_SHELL_SLOT_FACTORY;
     }
+    // ?gpuParticles: its manager (row slot + epoch) — before initEnd's burst writes records.
+    if (gp) emitter._gpMgr = this;
     // Carried on the emitter for the instanced path (bucket keying) + diag.
     emitter.renderLayer = layer;
     // ?rp6TrueSphere: one sprite's bounding radius (the shared GfxObj quad).
@@ -2684,6 +2776,8 @@ export class ParticleManager {
         emitter._instKey = null;
         emitter._onMeshActive = null;
         emitter._onMeshFree = null;
+        // ?gpuParticles: no bucket, no shader — back to today's per-slot update.
+        if (emitter._gp === true) gpConvertToMesh(emitter);
         // Slot carriers: the per-mesh path DRAWS the slot meshes, so they need
         // their real per-slot clones now (carrying each slot's opacity).
         this._materializeSlotMaterials(emitter);
@@ -2699,6 +2793,11 @@ export class ParticleManager {
     // callers pass explicit ids) — orphans the previous entry: the JS loop
     // never walks it again. Read it first, to mirror that in the kernel.
     const prevEntry = this._rust !== null ? this.particleTable.get(id) : undefined;
+    if (gpOn) {
+      // ?gpuParticles: the overwritten entry is never walked again — free its records + row.
+      const prevGp = this.particleTable.get(id);
+      if (prevGp !== undefined && prevGp !== emitter && prevGp._gp === true) prevGp._gpRelease();
+    }
     this.particleTable.set(id, emitter);
     if (this._rust !== null) {
       const orphan = prevEntry !== undefined && prevEntry !== emitter ? prevEntry : null;
@@ -2822,6 +2921,8 @@ export class ParticleManager {
 
   _tickLatched() {
     const removeIds = [];
+    // ?gpuParticles (DEFAULT OFF): read once per tick; false short-circuits every hook below.
+    const gpOn = _gpOn();
     // `?particleFx`: shared time + scene-light uniforms (idempotent per frame).
     if (this._instancing) particleFxFrame();
 
@@ -2851,6 +2952,9 @@ export class ParticleManager {
     // quads toward the viewer after their per-particle walk. null when disabled
     // (?particleBillboard=off) or no camera is resolvable → leave orientations.
     const bbCamera = BILLBOARD_DISABLED ? null : _rp6ResolveCamera();
+    // ?gpuParticles: this manager's row (clock, dt, the billboard camera) — the
+    // camera the CPU billboard pass would have used this tick.
+    if (gpOn) gpBeginTick(this, currentTime(), bbCamera);
 
     // `?particleCellGate` (default ON) — resolved once per tick; false (`=off`,
     // or a manager without a lookup) leaves the loop below exactly as before the gate.
@@ -3094,6 +3198,10 @@ export class ParticleManager {
         cellHidden += 1;
         PARTICLE_RP6_STATS.cellHiddenEmitterTicks += 1;
         PARTICLE_RP6_STATS.cellHiddenParticleTicks += emitter.numParticles | 0;
+      } else if (gpOn && emitter._gp === true) {
+        // ?gpuParticles: the shader faces and places the particles; the CPU
+        // appends record indices (same membership and order as below).
+        this._gpAppend(emitter);
       } else {
         if (bbCamera && emitter.info) {
           if (emitter.info.billboard) {
@@ -3113,7 +3221,9 @@ export class ParticleManager {
         }
       }
     }
-    this._finalizeInstBuckets();
+    this._finalizeInstBuckets(gpOn);
+    // ?gpuParticles: this tick's record / row writes → one range per touched texture row.
+    if (gpOn) gpEndTick(this);
     this.cellHiddenLastTick = rustOut !== null ? cellHidden + rustOut.cellHidden : cellHidden;
     const removals = rustOut !== null && rustOut.finished.length > 0
       ? this._mergeRustRemovals(removeIds, rustOut.finished)
@@ -3142,6 +3252,8 @@ export class ParticleManager {
         }
       }
       this._releaseTier1(e);
+      // ?gpuParticles: zero + free its spawn records and its row.
+      if (e && e._gp !== undefined) e._gpRelease();
       this.particleTable.delete(id);
       if (this._jsTable !== null) this._jsTable.delete(id);
       // PLIFECYCLE-3: tell the owner registry this emitter finished (see the
@@ -3251,6 +3363,85 @@ export class ParticleManager {
   }
 
   /**
+   * `?gpuParticles` (DEFAULT OFF; gpu_particles.js): `_appendInstances` for a
+   * gpu emitter. The same bucket (key + `|gp`, so a gpu emitter never shares
+   * with a legacy one), the same growth, and the same membership and order —
+   * live slots in slot order, skipping `trans >= 1` (today's `m.visible`
+   * test, which setTranslucency set from the very same f64 expression). Per
+   * particle it writes only the record index into `instanceColor.r`; an alpha
+   * bucket also gets the f64 twin position (its back-to-front sort key) and a
+   * kid row the twin for `pushParticle`. The shader does the rest.
+   */
+  _gpAppend(emitter) {
+    const parts = emitter.parts;
+    if (!parts || !parts.length) return;
+    const gfx = emitter._instKey >>> 0;
+    const layer = emitter.renderLayer | 0;
+    const alpha = emitter._instAlpha === true;
+    const key = `${gfx}|${layer}${alpha ? "|a" : ""}|gp`;
+    let bucket = null;
+    if (alpha && particleSharedAlphaEnabled()) {
+      bucket = sharedAlphaBuckets.acquire(key, this._scene, _alphaMatSig(emitter._instBaseMat),
+        () => { const im = this._makeBucketIm(emitter, gfx, layer, alpha); im.name += "-s"; return im; }, _sharedFrameId());
+      if (bucket && bucket.gp !== true) bucket.gp = true;
+    }
+    if (!bucket) bucket = this._instBuckets.get(key);
+    if (!bucket) {
+      const im = this._makeBucketIm(emitter, gfx, layer, alpha);
+      this._scene.add(im);
+      bucket = { im, n: 0, alpha, gp: true };
+      this._instBuckets.set(key, bucket);
+    }
+    const need = bucket.n + emitter.numParticles;
+    if (need > bucket.im.instanceMatrix.count) _growBucket(bucket, need, bucket.scene || this._scene);
+    const im = bucket.im;
+    const cap = im.instanceMatrix.count;
+    let pos = null;
+    if (alpha) {
+      pos = bucket.gpPos;
+      if (!pos || pos.length < cap * 3) {
+        const np = new Float32Array(cap * 3);
+        if (pos) np.set(pos.subarray(0, Math.min(pos.length, np.length)));
+        bucket.gpPos = pos = np;
+      }
+    }
+    // the emitter row (billboard mode, a parent-local anchor + velocity)
+    const plFrame = gpPrepareAppend(emitter, _billboardLocalNormal);
+    const fx = im.userData?.particleFx === true;
+    const row = emitter._fxRow | 0;
+    const kids = fx && this._kidsOn && row > 0 && particleFxTier1(row).kids > 0
+      ? (this._kids || (this._kids = new ParticleFxKids(this._scene)))
+      : null;
+    const nowSec = kids ? currentTime() : 0;
+    const col = im.instanceColor.array;
+    const recs = emitter._gpRec;
+    const seeds = emitter._gpSeed;
+    const particles = emitter.particles;
+    const type = emitter.info.particleType;
+    if (_gpTw === null) { _gpTw = [0, 0, 0]; _gpKidE = new Array(16).fill(0); }
+    const tw = _gpTw;
+    let n = bucket.n;
+    for (let i = 0; i < parts.length && n < cap; i++) {
+      if (parts[i] === null) continue;
+      const p = particles[i];
+      const trans = gpSlotTrans(p);
+      if (trans >= 1.0) continue;
+      col[n * 3] = recs !== null ? recs[i] : 0;
+      if (pos !== null || kids !== null) {
+        gpTwinPos(p, type, plFrame !== null ? plFrame : p.startFrame.position, tw);
+        if (pos !== null) { const o = n * 3; pos[o] = tw[0]; pos[o + 1] = tw[1]; pos[o + 2] = tw[2]; }
+        if (kids !== null) {
+          const e = _gpKidE;
+          e[12] = tw[0]; e[13] = tw[1]; e[14] = tw[2];
+          kids.pushParticle(emitter, i, e, particleFxAge(p), Math.max(0.0, Math.min(1.0, 1.0 - trans)), row, seeds !== null ? seeds[i] : 0, nowSec);
+        }
+      }
+      n += 1;
+    }
+    bucket.n = n;
+  }
+
+  /**
    * `?particlesOverClouds` source: push this manager's live draw objects —
    * its non-empty instanced buckets and the active slot meshes of per-mesh
    * emitters — minus the sky chain. Shared alpha buckets are pushed once by
@@ -3311,6 +3502,10 @@ export class ParticleManager {
       applyParticleFxMaterial(mat, { additive: !alpha });
     // 2026-10-07 `?skyGlow` — after the blend config above (it keeps it).
     const sky = emitter.skyGlow === true && applySkyGlowMaterial(mat);
+    // 2026-10-30 `?gpuParticles` (DEFAULT OFF) — a gpu emitter's bucket evaluates
+    // the motion in its vertex shader (gpu_particles.js). After the FX patch,
+    // BEFORE the additive fog: the fog's live switch restores the hook it saved.
+    const gpMat = emitter._gp === true && applyGpParticleMaterial(mat, { fx: fxMat === true });
     // 2026-10-07 `?additiveFogBlack` — the additive bucket (the path that draws
     // nearly every additive particle by default) gets the same retail no-fog as
     // the per-slot clones; one program for all of them. Sky glows are skipped.
@@ -3328,6 +3523,8 @@ export class ParticleManager {
     // whole sky chain behind the clouds.
     im.userData = { isParticleInstanced: true, gfxObjId: gfx, renderLayer: layer, alpha, skyGlow: !!sky,
       skyChain: emitter.skyGlow === true, particleFx: fxMat === true };
+    // ?gpuParticles: the glow provider wraps this bucket's glow twin material too.
+    if (gpMat === true) im.userData.gp = true;
     // Same emission-time layer the singleton slot meshes get (meshFactory).
     if (layer > 0) im.layers.set(layer);
     // ?particleAlphaRetail (default on): with no depth write the alpha buckets
@@ -3389,6 +3586,8 @@ export class ParticleManager {
         return true;
       }
       // OFF: restore the per-mesh path. Only clear seams WE installed.
+      // ?gpuParticles: the emitter goes back to today's per-slot update first.
+      if (emitter._gp === true) gpConvertToMesh(emitter);
       emitter._instKey = null; emitter._instGeom = null; emitter._instBaseMat = null;
       if (emitter._onMeshActive === _NOOP) emitter._onMeshActive = null;
       if (emitter._onMeshFree === _NOOP) emitter._onMeshFree = null;
@@ -3459,14 +3658,14 @@ export class ParticleManager {
   }
 
   /** Publish this tick's instance counts + buffer uploads. */
-  _finalizeInstBuckets() {
+  _finalizeInstBuckets(gpOn) {
     // Tier 1 `?fxKids`: publish this tick's children (and reap idle layers).
     if (this._kids) this._kids.finish();
     // ?particleSharedAlpha: every manager republishes the shared buckets (protocol note above).
     if (sharedAlphaBuckets.buckets.size > 0) {
       // ?rustParticles: the same V8-ordered sort, run by the kernel.
       sharedAlphaBuckets.finalize(_sharedFrameId(), this._instSortCamWorld,
-        this._rust !== null ? this._rustSort : _sortBucketBackToFront);
+        this._rust !== null ? this._rustSort : _sortBucketBackToFront, gpOn);
     }
     if (this._instBuckets.size === 0) return;
     // Map deletion during for..of is safe (visited entries only).
@@ -3477,8 +3676,9 @@ export class ParticleManager {
         // Idle: park it dark first (a stale `count` would keep drawing last
         // tick's instances), then reap once the idle window elapses so the
         // grown instance buffers are actually released. ?particleUploadRange:
-        // the park sets count 0 only (no upload of nothing).
-        _parkBucket(im);
+        // the park sets count 0 only (no upload of nothing). ?gpuParticles: a
+        // gpu bucket's (dummy) instance matrix is never re-uploaded.
+        if (gpOn === true && b.gp === true) { if (im.count !== 0) im.count = 0; } else _parkBucket(im);
         b.idle = (b.idle | 0) + 1;
         if (b.idle >= _INST_BUCKET_IDLE_TICKS) {
           try { im.parent?.remove(im); } catch (_) {}
@@ -3492,6 +3692,13 @@ export class ParticleManager {
         continue;
       }
       b.idle = 0;
+      if (gpOn === true && b.gp === true) {
+        // ?gpuParticles: today's sort on the twin positions, then only the record
+        // indices go up (the instance matrix is a dummy the shader replaces).
+        if (b.alpha && this._instSortCam) _sortGpBucketBackToFront(im, b.n, this._instSortCam, b.gpPos);
+        _publishGpBucket(im, b.n);
+        continue;
+      }
       // ?rustParticles: an own bucket filled only by the kernel this tick was
       // sorted there already (same sort, same camera).
       let rustSorted = false;
@@ -3554,6 +3761,8 @@ export class ParticleManager {
       }
     }
     this._releaseTier1(e);
+    // ?gpuParticles: zero + free its spawn records and its row.
+    if (e._gp !== undefined) e._gpRelease();
     return this.particleTable.delete(emitterId);
   }
 }
@@ -3596,7 +3805,12 @@ registerFxGlowProvider({
   },
   materialFor(im) {
     const ud = im.userData || (im.userData = {});
-    if (ud.__fxGlowMat === undefined) ud.__fxGlowMat = makeParticleFxGlowMaterial(im.material) || null;
+    if (ud.__fxGlowMat === undefined) {
+      ud.__fxGlowMat = makeParticleFxGlowMaterial(im.material) || null;
+      // ?gpuParticles (DEFAULT OFF): the twin shares the bucket's record indices,
+      // so its program needs the same vertex patch (first use only).
+      if (ud.gp === true && ud.__fxGlowMat) applyGpParticleMaterial(ud.__fxGlowMat, { fx: true });
+    }
     return ud.__fxGlowMat;
   },
   setFrame: setParticleFxGlowFrame,

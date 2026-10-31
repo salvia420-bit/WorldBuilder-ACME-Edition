@@ -106,7 +106,7 @@ function kindOf(o, scene) {
   else if (own === "buildings") k = "building_mesh";
   else if (own === "statics") k = (o.parent && o.parent.isLOD) ? "static_lod_child" : "static_mesh";
   else if (own === "terrain") k = "terrain_other";
-  else if (own === "entities") k = n.startsWith("part_") ? "entity_part" : "entity_other";
+  else if (own === "entities") k = n.startsWith("part_") ? "entity_part" : (n.startsWith("entity-batch") ? "entity_batch" : "entity_other");
   else if (own === "world") k = "world_other";
   else k = "scene_other";
   kindMemo.set(o, k);

@@ -32,6 +32,8 @@
 // mounts a new HUD root gets scaled for free by following the
 // `#hb-*` id convention.
 
+import { installHudBisect } from "./hud_diet.js";
+
 const LS_KEY = "hb.hudScale.v1";
 const BASE_HEIGHT = 720;
 const MIN_AUTO = 1;
@@ -193,4 +195,8 @@ export function installHudScale() {
     get: getHudScale, getMultiplier: getHudScaleMultiplier,
     setMultiplier: setHudScaleMultiplier, viewport: hudViewport,
   };
+  // R3-2 HUD bisect (?hudPanels=off / ?hudOrbs=off, ui/hud_diet.js): the
+  // html class + <style>, before any plugin mounts. Without those flags it
+  // only publishes window.__hudBisect and leaves the document untouched.
+  installHudBisect(document);
 }

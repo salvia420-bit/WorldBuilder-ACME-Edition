@@ -1361,6 +1361,13 @@ export function particleFxSeed(emitter, slot, lifetime) {
   return seeds[slot];
 }
 
+/**
+ * `?gpuParticles` (R3-7a, scene3d/particles/gpu_particles.js; DEFAULT OFF): one
+ * seed from the same stream, drawn at SPAWN (the gpu path never sees the
+ * lifetime decrease `particleFxSeed` keys a respawn on). Unused with the flag off.
+ */
+export function particleFxDrawSeed() { return _nextSeed(); }
+
 /** The teleport floor of `particleFxSlotVelocity` (m/s). */
 export const FX_TELEPORT_SPEED = 60;
 

@@ -116,6 +116,12 @@ export class NameplateLayer {
     this.lastTickProjectedCount = 0;
     this.lastTickVisibleCount = 0;
     this.lastTickHiddenBehindCount = 0;
+    // ?hudDiet=overlays (R3-2, ui/hud_diet.js; default off): scene3d/index.js
+    // sets this to a `makeCanvasCssSize(canvas)` cache, so `tick` reads the
+    // canvas CSS size without a per-frame `clientWidth` layout read. Attached
+    // from outside because this module must stay import-free apart from three
+    // (test_f10_hud_nameplate.mjs evaluates it standalone).
+    this._size = null;
   }
 
   /**
@@ -251,8 +257,16 @@ export class NameplateLayer {
     // setSize(w, h, false), so pixel coordinates for the OVERLAY DIV
     // (which lives in CSS pixel space) must come from clientWidth /
     // clientHeight, NOT from `canvas.width / canvas.height`.
-    const w = this.canvas.clientWidth || this.canvas.width || 1;
-    const h = this.canvas.clientHeight || this.canvas.height || 1;
+    let w;
+    let h;
+    if (this._size) {
+      const sz = this._size.read();
+      w = sz.w;
+      h = sz.h;
+    } else {
+      w = this.canvas.clientWidth || this.canvas.width || 1;
+      h = this.canvas.clientHeight || this.canvas.height || 1;
+    }
     const halfW = w / 2;
     const halfH = h / 2;
     let projected = 0;
@@ -361,6 +375,7 @@ export class NameplateLayer {
     this.lastTickProjectedCount = 0;
     this.lastTickVisibleCount = 0;
     this.lastTickHiddenBehindCount = 0;
+    if (this._size) { this._size.dispose(); this._size = null; }
   }
 }
 

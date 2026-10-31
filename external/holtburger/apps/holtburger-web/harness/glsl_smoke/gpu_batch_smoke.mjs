@@ -54,13 +54,16 @@ async function run(search) {
       let file, type = "text/javascript";
       if (u.pathname === "/page.html") { file = join(HERE, "gpu_batch_page.html"); type = "text/html"; }
       else if (u.pathname.startsWith("/three/")) file = join(APP, "node_modules/three/build", u.pathname.slice(7));
+      else if (u.pathname.startsWith("/three-addons/")) file = join(APP, "node_modules/three/examples/jsm", u.pathname.slice(14)); // materials.js -> static_atlas.js imports three/addons (2026-10-31)
       else if (u.pathname.startsWith("/app/")) file = join(APP, u.pathname.slice(5));
       if (file && file.endsWith(".json")) type = "application/json";
       if (!file) { if (u.pathname !== "/favicon.ico") missing.push(u.pathname); return route.fulfill({ status: 404, body: "" }); }
       try { return route.fulfill({ status: 200, contentType: type, body: readFileSync(file) }); } catch (e) { missing.push(u.pathname); return route.fulfill({ status: 404, body: String(e) }); }
     });
     await page.goto(`http://smoke.test/page.html${search}`);
-    await page.waitForFunction(() => window.__smoke, null, { timeout: 180000 });
+    // Interval polling (2026-10-31): the default rAF polling never fires once this page stops producing frames
+    // after its work, so the wait timed out although window.__smoke was set within ~2 s.
+    await page.waitForFunction(() => window.__smoke, null, { timeout: 180000, polling: 250 });
     const r = await page.evaluate(() => window.__smoke);
     r.pageErrors = pageErrors;
     r.missing = missing;

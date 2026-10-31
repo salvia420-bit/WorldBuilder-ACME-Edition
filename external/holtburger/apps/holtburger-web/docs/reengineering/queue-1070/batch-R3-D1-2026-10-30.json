@@ -9,7 +9,7 @@
  "sessionRulesInline": [
   "Inherit every rule of batch-P0-gpu-resident-2026-10-22.json sessionRulesInline verbatim (MODE T off-screen + muted, OWNER-RUN, kill only by user-data-dir, ?nosw=1, fresh profile per arm-rep, uncapped frames + targetFps=0, release wasm only, >= 65 s between boots on one account, reject-never-average). Read memory/fleet-runbooks.md before driving the 1070.",
   "Tunnel: -L 9333:127.0.0.1:9333 -R 8765:127.0.0.1:8765 -R 8080:127.0.0.1:8080 -R 8766:127.0.0.1:8766 (the B0 snapshot server on :8766). M1c adds -R 3000:127.0.0.1:3000 -R 9090:127.0.0.1:9090 for its window only and drops them afterwards.",
-  "Build under test = B0: a NEW frozen snapshot (scripts/perf-worker/hb-mksnap.sh <name>, then replace its pkg symlink by a real copy of a RELEASE pkg/) of the MERGED round-3 phase-A tree (the round-2 fixes included). It must carry the readers of occlusionCull=rigs, rigPoseSkip, skipEmptyPasses, uploadWarmDraw, animSceneryBatch and bakeFallbackWaves (`b0Snapshot` below), checked in M1-PRE by `hbbench.mjs --check-snapshot` against the snapshot's OWN code files, never only url-flags.md: hb-mksnap.sh symlinks docs/ into the live tree, so the url-flags.md a snapshot shows always reads current. Served with `python3 scripts/serve.py --bind 127.0.0.1 --port 8766 --check` from the snapshot. On B0 `rustParticles` is default OFF (16 scene-core flags on): an empty-flag arm is the 16-on config, and any arm that depends on another flag value names it.",
+  "Build under test = B0: a NEW frozen snapshot (scripts/perf-worker/hb-mksnap.sh <name>, then replace its pkg symlink by a real copy of a RELEASE pkg/) of the MERGED round-3 phase-A tree (the round-2 fixes included). It must carry the readers of occlusionCull=rigs, rigPoseSkip, skipEmptyPasses, animSceneryBatch and bakeFallbackWaves (`b0Snapshot` below; uploadWarmDraw's reader is no longer required: the flag was deleted 2026-10-30 after D1), checked in M1-PRE by `hbbench.mjs --check-snapshot` against the snapshot's OWN code files, never only url-flags.md: hb-mksnap.sh symlinks docs/ into the live tree, so the url-flags.md a snapshot shows always reads current. Served with `python3 scripts/serve.py --bind 127.0.0.1 --port 8766 --check` from the snapshot. On B0 `rustParticles` is default OFF (16 scene-core flags on): an empty-flag arm is the 16-on config, and any arm that depends on another flag value names it.",
   "Harness v2 protocol (plan section 4), all applied by hbbench.mjs / hbanatomy.mjs unless an arm overrides it: skytime=13 and DayGroup 0 ('Sunny', applied through setGameDayOverride(39, 10)); adaptiveRes=off, targetFps=0, renderScale=1, and gpuGovernor=off once R3-11's flag has a url-flags.md row (hbbench detects it); 1920x1080 INNER window unless the arm says 1280,720; interleaved, rotated order; the 65 s login cool-down; box samples (hbwho.ps1 + top processes by CPU) before, between and after segments. `--compat v1` is ONLY for RC-BENCH v2 reps 2-3 on the rep-1 snapshot (batch-RC-rust-scene-core-2026-10-26.json), never for these items: it keeps the pre-v2 step sequence exactly, so its box samples run only before launch and after the tour (hbreport also reads the bench dir's boxwatch.log for the samples in between).",
   "Every M1a session item (SWEEP, CEILING, LAYERMIP) BOOTS its own session through lib/hb_boot.mjs bootArm (fresh profile, the B0 snapshot on :8766, skytime=13, DayGroup 0, renderScale=1, adaptiveRes=off, targetFps=0, 1920x1080 INNER, the run-JSON asserts), never through hbsess.mjs (its boot serves :8765 = the live tree, sets the OUTER window and pins no DayGroup). The attach modes (`hbsweep.mjs` / `hbanatomy.mjs --attach`) are for the laptop tab check and ad-hoc looks; they apply DayGroup 0 and record every pin problem (`session.problems`).",
   "Run without the gate override (gate-owner-ok.txt) whenever possible so hbgate.ps1's idle rule applies; rule V below decides validity from the run JSON either way.",
@@ -58,24 +58,6 @@
      "if \\(skipEmptyPassesEnabled\\(\\)\\) installSkipEmptyRenderPass\\(worldRenderPass\\);"
     ],
     "why": "the reader alone installs nothing"
-   },
-   {
-    "flag": "uploadWarmDraw",
-    "file": "apps/holtburger-web/scene3d/upload_warm_draw.js",
-    "patterns": [
-     "rustFlag\\(\"uploadWarmDraw\", false\\)",
-     "prunedFrames: 0, depthCapped: 0,",
-     "if \\(opts && opts\\.nullRender\\) return null;"
-    ],
-    "why": "S1-BENCH UWD-on, S1-ROUTE R-UWD, S1-DIAG G-UWD-up; lane R2 rework (stack re-check, depth cap, nullRender)"
-   },
-   {
-    "flag": "uploadWarmDraw (index.js install)",
-    "file": "apps/holtburger-web/scene3d/index.js",
-    "patterns": [
-     "\\[worldRoot, terrainGroup, buildingsGroup, staticsGroup, cellsGroup, entitiesGroup\\], \\{ nullRender \\}\\)"
-    ],
-    "why": "the install with lane R2's nullRender option"
    },
    {
     "flag": "animSceneryBatch",
@@ -171,6 +153,28 @@
      "rustFlag\\(\"hotGrassCull\", false\\)"
     ],
     "why": "D1 F2-grassCull"
+   }
+  ],
+  "removedReaders": [
+   {
+    "flag": "uploadWarmDraw",
+    "file": "apps/holtburger-web/scene3d/upload_warm_draw.js",
+    "patterns": [
+     "rustFlag\\(\"uploadWarmDraw\", false\\)",
+     "prunedFrames: 0, depthCapped: 0,",
+     "if \\(opts && opts\\.nullRender\\) return null;"
+    ],
+    "why": "S1-BENCH UWD-on, S1-ROUTE R-UWD, S1-DIAG G-UWD-up; lane R2 rework (stack re-check, depth cap, nullRender)",
+    "removed": "2026-10-30, flag deleted after D1"
+   },
+   {
+    "flag": "uploadWarmDraw (index.js install)",
+    "file": "apps/holtburger-web/scene3d/index.js",
+    "patterns": [
+     "\\[worldRoot, terrainGroup, buildingsGroup, staticsGroup, cellsGroup, entitiesGroup\\], \\{ nullRender \\}\\)"
+    ],
+    "why": "the install with lane R2's nullRender option",
+    "removed": "2026-10-30, flag deleted after D1"
    },
    {
     "flag": "rustEntityWorld",
@@ -178,7 +182,8 @@
     "patterns": [
      "rustFlag\\(\"rustEntityWorld\", false\\)"
     ],
-    "why": "D1 S-rustEntityWorld (its arm gate, projections === 1, catches a pre-fix install)"
+    "why": "D1 S-rustEntityWorld (its arm gate, projections === 1, catches a pre-fix install)",
+    "removed": "2026-10-30, flag deleted after D1"
    }
   ]
  },
@@ -463,67 +468,6 @@
      "from": "R3-S1 S1-BENCH"
     },
     {
-     "name": "UWD-on",
-     "flags": "uploadWarmDraw=on",
-     "gate": "!!window.__uploadWarmDraw && window.__uploadWarmDraw.enabled === true",
-     "gateInfo": "window.__uploadWarmDraw ? window.__uploadWarmDraw.stats() : null",
-     "scored": "HITCH: firstTurn max and h100 (primary, plan R3-2), h250, jank; tour h100 / h250 / max / jank; fps segments only as a no-regression check; plus S1-ROUTE R-UWD hop windows",
-     "diagReads": [
-      {
-       "read": "gateInfo = __uploadWarmDraw.stats() after the settle (every rep)",
-       "pass": "enabled; draws > 0 and ready true (the two unlit variant programs linked and the warm ran during boot / settle)",
-       "fields": {
-        "apps/holtburger-web/scene3d/upload_warm_draw.js": [
-         "enabled",
-         "draws",
-         "ready"
-        ]
-       }
-      },
-      {
-       "read": "S1-DIAG G-UWD-up vs G-A-up (one rep each, countUploads): GL upload bytes per hop window, read separately: result.hops[i].uploads.arrive (the @teleloc command to the landing + tunnel end), .turn (the 12 s turn), .content (after the turn until content is quiet); result.route.uploads sums them over the 5 hops (buffer bytes = bufferData + bufferSubData; turnShareOfBufferBytes = turn / (arrive + turn + content)); `s1_eval_report.py --item S1-DIAG --ref G-A-up` prints the table. Plus the end diag",
-       "pass": "prediction check (lane R: 'buffer uploads move to arrival frames'): G-UWD-up's turnShareOfBufferBytes below G-A-up's, i.e. buffer bytes leave the turn windows for the arrive (and content) windows. Content that streams in DURING a turn is warmed in that same turn window, so only content that arrived before the turn can move: a share that does not drop is a finding to explain next to the hitch verdict, not a defect by itself. Defects: depthCapped !== 0 (lane R2: 'If it is nonzero, raise UPLOAD_WARM_MAX_WALK_DEPTH'); droppedOverflow > 0 [D]. Recorded: prunedFrames (small and non-zero under streaming churn, lane R2), lateDraws, droppedHidden, deferredHidden, recompiles, watched, released (verifier R / R2)",
-       "fields": {
-        "apps/holtburger-web/scene3d/upload_warm_draw.js": [
-         "depthCapped",
-         "prunedFrames",
-         "droppedOverflow",
-         "lateDraws",
-         "droppedHidden",
-         "deferredHidden",
-         "recompiles",
-         "watched",
-         "released"
-        ],
-        "scripts/perf-worker/s1.eval.js": [
-         "uploads",
-         "arrive",
-         "turn",
-         "content",
-         "turnShareOfBufferBytes"
-        ],
-        "scripts/perf-worker/s1_eval_report.py": [
-         "upload_windows"
-        ]
-       }
-      }
-     ],
-     "prediction": "[D] lane R / R2: buffer uploads move to arrival frames; firstTurn max and h100 down; fps flat. Verifier R: expect gains below WebAC's 208 -> 18.5 ms turning max (content added later under a warmed root, BatchedMesh growth and instance attributes are not pre-uploaded).",
-     "look": {
-      "class": "none by construction",
-      "rcEye": [
-       "Look class: none by construction (private 1x1 HalfFloat target, scissor 0,0,1,1); expected pixel-identical; tighter than the R4 default as for skipEmptyPasses.",
-       "1. Holtburg orbit (rc-eye.mjs holtburg-orbit).",
-       "2. Holtburg street level after a teleport + the first 360-degree turn (rc-eye.mjs holtburg-street, holtburg-street-2).",
-       "3. After a westward @teleloc hop (LB crossing): rc-eye.mjs west4-w1-hop (hopRoutes.west4 stop w1, chase cam; the turn itself is S1-ROUTE's).",
-       "4. Room a9b40121, lanterns at hour 22: rc-eye.mjs holtburg-room-a9b40121-night.",
-       "Plus the plan's Holtburg on/off no-change pair (R3-2 Proof)."
-      ]
-     },
-     "decisionRule": "Hitch change: plan section 5 R3 as amended 2026-10-30: 'For a hitch change (R3-2's upload draw and worker-wait fixes, scored on hitch metrics per R3-2), (i) and (ii) read on its predicted hitch metrics instead: first-turn max and h100 better by a real delta, and no still / moving / tour fps segment worse by one.' That sentence settles the point lane Q left OPEN for the owner; no ruling is needed before the run. Read, written 2026-10-30 BEFORE the run: (i)+(ii) = S1-BENCH UWD-on vs A: firstTurn.max AND firstTurn.h100 both better by a real R1 delta, and no still / moving / tour fps segment worse by a real delta; (iii) the other hitch rows (tour h100 / h250 / max / jankMs, still / moving p99; S1-ROUTE's hopTurns max / h100 / h250 and loaf.max) not worse by a real delta; (iv) 0 console errors; (v) the look gate (R4). hbreport r3_keep still reads (i) / (ii) on binding-thread ms and fps, so for this arm its printed R3 verdict is NOT the verdict: read these rows of its compare table (S1-REPORT). INCONCLUSIVE gets 3 more reps once, then the flag stays off.",
-     "from": "R3-S1 S1-BENCH"
-    },
-    {
      "name": "SEP-out",
      "flags": "skipEmptyPasses=on",
      "gate": "!!window.__skipEmptyPasses && window.__skipEmptyPasses.stats().installed > 0",
@@ -585,14 +529,6 @@
      "from": "R3-M1 M1b-STRUCTURE"
     },
     {
-     "name": "S-rustEntityWorld",
-     "flags": "rustEntityWorld=on",
-     "gate": "window.__entityWorld && window.__entityWorld.stats().projections === 1",
-     "gateInfo": "window.__entityWorld ? window.__entityWorld.stats() : null",
-     "note": "the projection half installed (fix_r2.json lane R4); every earlier arm measured the walk half only",
-     "from": "R3-M1 M1b-STRUCTURE"
-    },
-    {
      "name": "F2-terrainShared",
      "flags": "hotTerrainShared=on",
      "predict": {
@@ -621,9 +557,83 @@
       "tag": "[D]",
       "source": "docs/2026-10-26-rust-hotspots-2.md G3: ~-0.03 ms/frame"
      }
+    }
+   ],
+   "removedArms": [
+    {
+     "name": "UWD-on",
+     "removed": "2026-10-30, flag deleted after D1",
+     "flags": "uploadWarmDraw=on",
+     "gate": "!!window.__uploadWarmDraw && window.__uploadWarmDraw.enabled === true",
+     "gateInfo": "window.__uploadWarmDraw ? window.__uploadWarmDraw.stats() : null",
+     "scored": "HITCH: firstTurn max and h100 (primary, plan R3-2), h250, jank; tour h100 / h250 / max / jank; fps segments only as a no-regression check; plus S1-ROUTE R-UWD hop windows",
+     "diagReads": [
+      {
+       "read": "gateInfo = __uploadWarmDraw.stats() after the settle (every rep)",
+       "pass": "enabled; draws > 0 and ready true (the two unlit variant programs linked and the warm ran during boot / settle)",
+       "fields": {
+        "apps/holtburger-web/scene3d/upload_warm_draw.js": [
+         "enabled",
+         "draws",
+         "ready"
+        ]
+       }
+      },
+      {
+       "read": "S1-DIAG G-UWD-up vs G-A-up (one rep each, countUploads): GL upload bytes per hop window, read separately: result.hops[i].uploads.arrive (the @teleloc command to the landing + tunnel end), .turn (the 12 s turn), .content (after the turn until content is quiet); result.route.uploads sums them over the 5 hops (buffer bytes = bufferData + bufferSubData; turnShareOfBufferBytes = turn / (arrive + turn + content)); `s1_eval_report.py --item S1-DIAG --ref G-A-up` prints the table. Plus the end diag",
+       "pass": "prediction check (lane R: 'buffer uploads move to arrival frames'): G-UWD-up's turnShareOfBufferBytes below G-A-up's, i.e. buffer bytes leave the turn windows for the arrive (and content) windows. Content that streams in DURING a turn is warmed in that same turn window, so only content that arrived before the turn can move: a share that does not drop is a finding to explain next to the hitch verdict, not a defect by itself. Defects: depthCapped !== 0 (lane R2: 'If it is nonzero, raise UPLOAD_WARM_MAX_WALK_DEPTH'); droppedOverflow > 0 [D]. Recorded: prunedFrames (small and non-zero under streaming churn, lane R2), lateDraws, droppedHidden, deferredHidden, recompiles, watched, released (verifier R / R2)",
+       "fields": {
+        "apps/holtburger-web/scene3d/upload_warm_draw.js": [
+         "depthCapped",
+         "prunedFrames",
+         "droppedOverflow",
+         "lateDraws",
+         "droppedHidden",
+         "deferredHidden",
+         "recompiles",
+         "watched",
+         "released"
+        ],
+        "scripts/perf-worker/s1.eval.js": [
+         "uploads",
+         "arrive",
+         "turn",
+         "content",
+         "turnShareOfBufferBytes"
+        ],
+        "scripts/perf-worker/s1_eval_report.py": [
+         "upload_windows"
+        ]
+       }
+      }
+     ],
+     "prediction": "[D] lane R / R2: buffer uploads move to arrival frames; firstTurn max and h100 down; fps flat. Verifier R: expect gains below WebAC's 208 -> 18.5 ms turning max (content added later under a warmed root, BatchedMesh growth and instance attributes are not pre-uploaded).",
+     "look": {
+      "class": "none by construction",
+      "rcEye": [
+       "Look class: none by construction (private 1x1 HalfFloat target, scissor 0,0,1,1); expected pixel-identical; tighter than the R4 default as for skipEmptyPasses.",
+       "1. Holtburg orbit (rc-eye.mjs holtburg-orbit).",
+       "2. Holtburg street level after a teleport + the first 360-degree turn (rc-eye.mjs holtburg-street, holtburg-street-2).",
+       "3. After a westward @teleloc hop (LB crossing): rc-eye.mjs west4-w1-hop (hopRoutes.west4 stop w1, chase cam; the turn itself is S1-ROUTE's).",
+       "4. Room a9b40121, lanterns at hour 22: rc-eye.mjs holtburg-room-a9b40121-night.",
+       "Plus the plan's Holtburg on/off no-change pair (R3-2 Proof)."
+      ]
+     },
+     "decisionRule": "Hitch change: plan section 5 R3 as amended 2026-10-30: 'For a hitch change (R3-2's upload draw and worker-wait fixes, scored on hitch metrics per R3-2), (i) and (ii) read on its predicted hitch metrics instead: first-turn max and h100 better by a real delta, and no still / moving / tour fps segment worse by one.' That sentence settles the point lane Q left OPEN for the owner; no ruling is needed before the run. Read, written 2026-10-30 BEFORE the run: (i)+(ii) = S1-BENCH UWD-on vs A: firstTurn.max AND firstTurn.h100 both better by a real R1 delta, and no still / moving / tour fps segment worse by a real delta; (iii) the other hitch rows (tour h100 / h250 / max / jankMs, still / moving p99; S1-ROUTE's hopTurns max / h100 / h250 and loaf.max) not worse by a real delta; (iv) 0 console errors; (v) the look gate (R4). hbreport r3_keep still reads (i) / (ii) on binding-thread ms and fps, so for this arm its printed R3 verdict is NOT the verdict: read these rows of its compare table (S1-REPORT). INCONCLUSIVE gets 3 more reps once, then the flag stays off.",
+     "from": "R3-S1 S1-BENCH"
+    },
+    {
+     "name": "S-rustEntityWorld",
+     "removed": "2026-10-30, flag deleted after D1",
+     "flags": "rustEntityWorld=on",
+     "gate": "window.__entityWorld && window.__entityWorld.stats().projections === 1",
+     "gateInfo": "window.__entityWorld ? window.__entityWorld.stats() : null",
+     "note": "the projection half installed (fix_r2.json lane R4); every earlier arm measured the walk half only",
+     "from": "R3-M1 M1b-STRUCTURE"
     },
     {
      "name": "D-stack",
+     "removed": "2026-10-30, flag deleted after D1",
      "flags": "rigPoseSkip=on&uploadWarmDraw=on&skipEmptyPasses=on&freezeWorldRoots=on&rustEntityWorld=on&hotTerrainShared=on&hotWeaponFxSync=on&hotGrassCull=on",
      "gate": "(!!window.__rigPoseSkip && window.__rigPoseSkip.stats().enabled === true && window.__rigPoseSkip.stats().skipped > 0) && (!!window.__uploadWarmDraw && window.__uploadWarmDraw.enabled === true) && (!!window.__skipEmptyPasses && window.__skipEmptyPasses.stats().installed > 0) && (window.__entityWorld && window.__entityWorld.stats().projections === 1)",
      "gateInfo": "({ \"RPS-on\": (window.__rigPoseSkip ? window.__rigPoseSkip.stats() : null), \"UWD-on\": (window.__uploadWarmDraw ? window.__uploadWarmDraw.stats() : null), \"SEP-out\": (({ sep: window.__skipEmptyPasses ? window.__skipEmptyPasses.stats() : null, gate: typeof window.__indoorLandscapeGateDiag === 'function' ? window.__indoorLandscapeGateDiag() : null })), \"S-rustEntityWorld\": (window.__entityWorld ? window.__entityWorld.stats() : null) })",
@@ -649,7 +659,7 @@
     "node scripts/perf-worker/hbbench.mjs --arms apps/holtburger-web/docs/reengineering/queue-1070/batch-R3-D1-2026-10-30.json --item D1-BENCH --reps 3 --port 8766 --uncapped --ref A --out /mnt/wbterminal1/tmp/claude-scratch/perf/r3-d1/bench",
     "python3 -I scripts/perf-worker/hbreport.py bench /mnt/wbterminal1/tmp/claude-scratch/perf/r3-d1/bench --box-events apps/holtburger-web/docs/reengineering/queue-1070/batch-R3-D1-2026-10-30.json --queue apps/holtburger-web/docs/reengineering/queue-1070/batch-R3-D1-2026-10-30.json --ref A --aa A-AA [--noisy-box] [--anatomy /mnt/wbterminal1/tmp/claude-scratch/perf/r3-d1/anatomy] --json /mnt/wbterminal1/tmp/claude-scratch/perf/r3-d1/bench.report.json"
    ],
-   "result": null
+   "result": "2026-10-30 16:20-20:01, snapshot r3d1-20261030, 45/45 arm-reps VALID (boxwatch: 0 idle<60 s, 0 gpu3d_other>5% in every sample; Toolkit off). A (defaults) still / moving / tour 51.7 / 49.7 / 53.6 fps; A-AA 51.7 / 50.1 / 52.9. R1 thresholds 2.5 / 1.49 / 1.61 fps. Owner, after the run: 'first turn isnt that big a deal. thats something the ai came up with. im looking for overall fps improvement' -> the D1 rule is read on still / moving / tour fps only (hitch rows not counted). FLIP: freezeWorldRoots (moving +1.6 real, still +0.2, tour -0.1) -> DEFAULT ON. REAL fps LOSS -> stay off: uploadWarmDraw (tour -1.7), rustEntityWorld (tour -1.8; code deleted per the M1b-STRUCTURE rule). No real fps change -> stay off: rigPoseSkip, animSceneryBatch, skipEmptyPasses (outdoor), occlusionCull=rigs (+114 draws, +0.6-0.8 ms render JS), cellStaticMerge (-141 draws, -0.25...-0.33 ms render JS, fps +0.5 / +0.6 / -0.4), statArrayMerge, hotTerrainShared, hotWeaponFxSync, hotGrassCull, D-stack (moving +1.3, below the 1.49 threshold). Report: /mnt/wbterminal1/tmp/claude-scratch/perf/r3-d1/bench.report.{txt,json}; render JS table d1-renderjs.txt."
   },
   {
    "id": "D1-ANATOMY",

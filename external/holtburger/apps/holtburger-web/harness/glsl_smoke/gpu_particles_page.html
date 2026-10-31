@@ -1,0 +1,339 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>gpuParticles smoke (R3-7a)</title>
+<script type="importmap">{ "imports": { "three": "/three/three.module.js" } }</script>
+</head>
+<body>
+<script type="module">
+// ?gpuParticles (R3-7a) readback smoke. Two arms:
+//   kernel     raw WebGL2: a POINTS draw per program variant (HB_GP_FXCOLOR x
+//              HB_FX_MOTION), one point per instance at pixel (i mod W, i div W);
+//              the vertex shader is the PRODUCTION header + call (data.header /
+//              data.call) and a main that hands hbGpIm's columns and hbGpIc to
+//              flat varyings; two passes into 4 RGBA32F attachments
+//              (EXT_color_buffer_float), read back with readPixels(RGBA, FLOAT).
+//   production the REAL bucket materials through three r184 (stock additive,
+//              the hbParticleInstAlpha alpha bucket, every FX tier variant
+//              additive + alpha, the glow twin), checkShaderErrors on; coverage
+//              centroids of single instances under a top-down orthographic camera
+//              (RGBA8); one draw per bucket. The camera, the materials, the
+//              carrier and the picks come from tests/helpers/gpu_particles_smoke_scene.mjs,
+//              the module tests/gpu_particles.test.mjs (S7n) draws through three
+//              in node (2026-10-31: the frustum is view-space, symmetric about
+//              the camera; it used to be the world bounds, 8 to 40 px off).
+// The verdicts are computed in node (tests/helpers/gpu_particles_smoke_data.mjs).
+const out = { errors: [], programs: 0, kernel: [], renderer: "", prod: { compiled: [], centroids: [], fxCover: [], calls: [], ortho: null } };
+const W = 256;
+const SENTINEL = -12345;
+
+function fromB64(s) {
+  const bin = atob(s);
+  const u8 = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+  return new Float32Array(u8.buffer);
+}
+function toB64(f32) {
+  const u8 = new Uint8Array(f32.buffer, f32.byteOffset, f32.byteLength);
+  let s = "";
+  const CH = 0x8000;
+  for (let i = 0; i < u8.length; i += CH) s += String.fromCharCode.apply(null, u8.subarray(i, i + CH));
+  return btoa(s);
+}
+const numbered = (src) => src.split("\n").map((l, i) => (i + 1) + ": " + l).join("\n");
+
+async function kernelArm(data) {
+  const cv = document.createElement("canvas");
+  cv.width = 1; cv.height = 1;
+  const gl = cv.getContext("webgl2", { antialias: false, depth: false, stencil: false });
+  if (!gl) throw new Error("no webgl2");
+  if (!gl.getExtension("EXT_color_buffer_float")) throw new Error("no EXT_color_buffer_float");
+  const dbg = gl.getExtension("WEBGL_debug_renderer_info");
+  out.renderer = String(dbg ? gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER));
+  const shader = (type, src) => {
+    const s = gl.createShader(type);
+    gl.shaderSource(s, src);
+    gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error("kernel compile: " + gl.getShaderInfoLog(s) + "\n" + numbered(src).slice(0, 4000));
+    return s;
+  };
+  const FS = [
+    "#version 300 es",
+    "precision highp float;",
+    "uniform int uPass;",
+    "flat in vec4 vM0;", "flat in vec4 vM1;", "flat in vec4 vM2;", "flat in vec4 vM3;", "flat in vec4 vC;",
+    "layout( location = 0 ) out vec4 o0;", "layout( location = 1 ) out vec4 o1;",
+    "layout( location = 2 ) out vec4 o2;", "layout( location = 3 ) out vec4 o3;",
+    "void main() {",
+    "\tif ( uPass == 0 ) { o0 = vM0; o1 = vM1; o2 = vM2; o3 = vM3; }",
+    "\telse { o0 = vC; o1 = vec4( 0.0 ); o2 = vec4( 0.0 ); o3 = vec4( 0.0 ); }",
+    "}",
+  ].join("\n");
+  const programs = new Map();
+  const program = (fx, motion) => {
+    const key = (fx ? 1 : 0) + (motion ? 2 : 0);
+    if (programs.has(key)) return programs.get(key);
+    // the production patch prepends HB_GP_FXCOLOR for FX materials, then the header
+    const VS = [
+      "#version 300 es",
+      "precision highp float;",
+      "precision highp int;",
+      "#define USE_INSTANCING",
+      "#define USE_INSTANCING_COLOR",
+      motion ? "#define HB_FX_MOTION" : "",
+      "in vec3 instanceColor;",
+      "uniform vec2 uRes;",
+      "flat out vec4 vM0;", "flat out vec4 vM1;", "flat out vec4 vM2;", "flat out vec4 vM3;", "flat out vec4 vC;",
+      fx ? "#define HB_GP_FXCOLOR" : "",
+      data.header,
+      "void main() {" + data.call,
+      "\tint i = gl_VertexID;",
+      "\tint w = int( uRes.x );",
+      "\tfloat x = float( i - ( i / w ) * w ) + 0.5;",
+      "\tfloat y = float( i / w ) + 0.5;",
+      "\tgl_Position = vec4( x / uRes.x * 2.0 - 1.0, y / uRes.y * 2.0 - 1.0, 0.0, 1.0 );",
+      "\tgl_PointSize = 1.0;",
+      "\tvM0 = hbGpIm[ 0 ]; vM1 = hbGpIm[ 1 ]; vM2 = hbGpIm[ 2 ]; vM3 = hbGpIm[ 3 ];",
+      "\tvC = vec4( hbGpIc, 1.0 );",
+      "}",
+    ].join("\n");
+    const p = gl.createProgram();
+    gl.attachShader(p, shader(gl.VERTEX_SHADER, VS));
+    gl.attachShader(p, shader(gl.FRAGMENT_SHADER, FS));
+    gl.linkProgram(p);
+    if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error("kernel link: " + gl.getProgramInfoLog(p));
+    const info = { p, aIdx: gl.getAttribLocation(p, "instanceColor"), uRes: gl.getUniformLocation(p, "uRes"), uPass: gl.getUniformLocation(p, "uPass"),
+      uRec: gl.getUniformLocation(p, "uGpRec"), uRow: gl.getUniformLocation(p, "uGpRow") };
+    programs.set(key, info);
+    out.programs++;
+    return info;
+  };
+  for (const fx of [false, true]) for (const motion of [false, true]) program(fx, motion);
+  const table = (f32, rows) => {
+    const t = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, t);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, data.width, rows, 0, gl.RGBA, gl.FLOAT, f32);
+    return t;
+  };
+  const vbo = gl.createBuffer();
+  for (let ci = 0; ci < data.cases.length; ci++) {
+    const cs = data.cases[ci];
+    const recT = table(fromB64(cs.rec), cs.recRows);
+    const rowT = table(fromB64(cs.row), cs.rowRows);
+    const N = cs.entries.length;
+    const outs = [0, 1, 2, 3, 4].map(() => new Float32Array(N * 4).fill(SENTINEL));
+    const groups = new Map();
+    cs.entries.forEach((en, e) => {
+      const k = (en.fx ? 1 : 0) + (en.motion ? 2 : 0);
+      if (!groups.has(k)) groups.set(k, []);
+      groups.get(k).push(e);
+    });
+    for (const [k, list] of groups) {
+      const pr = program(!!(k & 1), !!(k & 2));
+      const n = list.length;
+      const H = Math.max(1, Math.ceil(n / W));
+      const fbo = gl.createFramebuffer();
+      gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+      const targets = [];
+      for (let a = 0; a < 4; a++) {
+        const t = gl.createTexture();
+        gl.bindTexture(gl.TEXTURE_2D, t);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+        gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RGBA32F, W, H);
+        gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0 + a, gl.TEXTURE_2D, t, 0);
+        targets.push(t);
+      }
+      gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1, gl.COLOR_ATTACHMENT2, gl.COLOR_ATTACHMENT3]);
+      if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) throw new Error("kernel framebuffer incomplete");
+      const idx = new Float32Array(n * 3);
+      list.forEach((e, q) => { idx[q * 3] = cs.entries[e].rec; });
+      gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
+      gl.bufferData(gl.ARRAY_BUFFER, idx, gl.STATIC_DRAW);
+      gl.useProgram(pr.p);
+      gl.enableVertexAttribArray(pr.aIdx);
+      gl.vertexAttribPointer(pr.aIdx, 3, gl.FLOAT, false, 0, 0);
+      gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, recT);
+      gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, rowT);
+      gl.uniform1i(pr.uRec, 0);
+      gl.uniform1i(pr.uRow, 1);
+      gl.uniform2f(pr.uRes, W, H);
+      gl.viewport(0, 0, W, H);
+      gl.disable(gl.BLEND);
+      gl.disable(gl.DEPTH_TEST);
+      const buf = new Float32Array(W * H * 4);
+      for (let pass = 0; pass < 2; pass++) {
+        for (let a = 0; a < 4; a++) gl.clearBufferfv(gl.COLOR, a, [SENTINEL, SENTINEL, SENTINEL, SENTINEL]);
+        gl.uniform1i(pr.uPass, pass);
+        gl.drawArrays(gl.POINTS, 0, n);
+        const reads = pass === 0 ? [0, 1, 2, 3] : [0];
+        for (const a of reads) {
+          gl.readBuffer(gl.COLOR_ATTACHMENT0 + a);
+          gl.readPixels(0, 0, W, H, gl.RGBA, gl.FLOAT, buf);
+          const dst = outs[pass === 0 ? a : 4];
+          list.forEach((e, q) => { for (let c = 0; c < 4; c++) dst[e * 4 + c] = buf[q * 4 + c]; });
+        }
+      }
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      for (const t of targets) gl.deleteTexture(t);
+      gl.deleteFramebuffer(fbo);
+    }
+    gl.deleteTexture(recT);
+    gl.deleteTexture(rowT);
+    const err = gl.getError();
+    if (err !== gl.NO_ERROR) out.errors.push("kernel GL error 0x" + err.toString(16) + " in case " + cs.name);
+    out.kernel.push({ caseIndex: ci, out: outs.map(toB64) });
+  }
+}
+
+async function productionArm(data) {
+  const THREE = await import("three");
+  const PF = await import("/app/scene3d/particles/particle_fx.js");
+  const GPM = await import("/app/scene3d/particles/gpu_particles.js");
+  const PM = await import("/app/scene3d/particles/particle_manager.js");
+  const AF = await import("/app/scene3d/particles/additive_fog.js");
+  // the glow twins come from the provider particle_manager.js registers (its
+  // materialFor wraps the twin of a gpu bucket: the production line, not a copy)
+  const POC = await import("/app/scene3d/particles_over_clouds.js");
+  const SC = await import("/app/tests/helpers/gpu_particles_smoke_scene.mjs");
+  if (SC.SMOKE_W !== W) throw new Error("smoke scene size " + SC.SMOKE_W + " != " + W);
+  const glowProvider = POC.fxGlowProvider();
+  if (!glowProvider) throw new Error("no fxGlow provider registered (particle_manager.js not loaded?)");
+  const canvas = document.createElement("canvas");
+  canvas.width = W; canvas.height = W;
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, alpha: true });
+  renderer.debug.checkShaderErrors = true;
+  let shaderErr = null;
+  renderer.debug.onShaderError = (gl, program, vs, fs) => {
+    shaderErr = String(gl.getProgramInfoLog(program) || "") + " | " + String(gl.getShaderInfoLog(vs) || "") + " | " + String(gl.getShaderInfoLog(fs) || "");
+  };
+  renderer.setPixelRatio(1);
+  renderer.setSize(W, W, false);
+  const rt = new THREE.WebGLRenderTarget(W, W, { depthBuffer: true });
+  const px = new Uint8Array(W * W * 4);
+  const dataTex = (f32, rows) => {
+    const t = new THREE.DataTexture(f32, data.width, rows, THREE.RGBAFormat, THREE.FloatType);
+    t.minFilter = THREE.NearestFilter; t.magFilter = THREE.NearestFilter; t.generateMipmaps = false; t.needsUpdate = true;
+    return t;
+  };
+  const white = SC.smokeWhite(THREE);
+  const geom = SC.smokeBox(THREE);
+  // the bucket configurations of particle_manager.js _makeBucketIm (shared with the node S7n check)
+  const MATS = SC.smokeMaterials({ THREE, GPM, PM, PF, AF }, white);
+  const stockAdd = MATS.stockAdd, stockAlpha = MATS.stockAlpha, fxAdd = MATS.fxAdd, fxAlpha = MATS.fxAlpha;
+  const glowOf = (bucketMat) => {
+    // a gpu bucket as _makeBucketIm stamps it (userData.gp), its glow twin made on first use
+    const g = glowProvider.materialFor({ userData: { gp: true }, material: bucketMat });
+    if (!g || !g.userData || g.userData.__gpParticles !== true) throw new Error("the provider's glow twin of a gpu bucket is not a gpu material");
+    return g;
+  };
+  const meshOf = (mat, recs) => SC.smokeMeshOf(THREE, geom, mat, recs);
+  const coverage = () => {
+    renderer.readRenderTargetPixels(rt, 0, 0, W, W, px);
+    let n = 0, sx = 0, sy = 0;
+    for (let y = 0; y < W; y++) for (let x = 0; x < W; x++) {
+      const o = (y * W + x) * 4;
+      if (px[o] > 0 || px[o + 1] > 0 || px[o + 2] > 0) { n++; sx += x + 0.5; sy += y + 0.5; }
+    }
+    return { n, x: n ? sx / n : NaN, y: n ? sy / n : NaN };
+  };
+  const draw = (scene, cam) => {
+    renderer.setRenderTarget(rt);
+    renderer.setClearColor(0x000000, 0);
+    renderer.clear(true, true, true);
+    renderer.render(scene, cam);
+    renderer.setRenderTarget(null);
+  };
+  // case data for the production draws: a corpus case and a billboard case
+  const pick = (name) => data.cases.findIndex((c) => c.name === name && !c.special);
+  const ciCorpus = Math.max(0, pick("corpus"));
+  const bind = (cs) => {
+    GPM.GP_UNIFORMS.uGpRec.value = dataTex(fromB64(cs.rec), cs.recRows);
+    GPM.GP_UNIFORMS.uGpRow.value = dataTex(fromB64(cs.row), cs.rowRows);
+  };
+  // the frustum is VIEW space (offsets from the camera): symmetric about it
+  const orthoFor = (cs) => {
+    const o = SC.smokeOrthoBounds(cs.entries, W);
+    return { cam: SC.smokeOrthoCamera(THREE, o), o };
+  };
+  // S1: compile every production program family (tier variants latched per material)
+  const csC = data.cases[ciCorpus];
+  bind(csC);
+  const { cam: camC } = orthoFor(csC);
+  const recs = csC.entries.slice(0, 16).map((e) => e.rec);
+  const compileOne = (name, mat) => {
+    shaderErr = null;
+    const scene = new THREE.Scene();
+    const im = meshOf(mat, recs);
+    scene.add(im);
+    let ok = true, log = "";
+    try {
+      renderer.compile(scene, camC);
+      draw(scene, camC);
+      const e = renderer.getContext().getError();
+      if (e !== 0) { ok = false; log = "GL error 0x" + e.toString(16); }
+    } catch (err) { ok = false; log = String(err && err.message || err); }
+    if (shaderErr) { ok = false; log = shaderErr; }
+    out.prod.compiled.push({ name, ok, log: String(log).slice(0, 1500), key: mat.customProgramCacheKey() });
+    return ok ? coverage().n : -1;
+  };
+  compileOne("stock additive", stockAdd());
+  compileOne("stock alpha (hbParticleInstAlpha)", stockAlpha());
+  for (const smoke of [false, true]) {
+    for (let bits = 0; bits < 8; bits++) {
+      PF._setParticleFxVariantForTest(smoke, null);
+      PF._setParticleFxTier2VariantForTest({ motion: !!(bits & 1), shapes: !!(bits & 2), clamp: !!(bits & 4) });
+      const tag = "s" + (smoke ? 1 : 0) + " m" + (bits & 1) + " a" + ((bits >> 1) & 1) + " p" + ((bits >> 2) & 1);
+      const add = fxAdd();
+      const covA = compileOne("fx additive " + tag, add);
+      const covL = compileOne("fx alpha " + tag, fxAlpha());
+      compileOne("fx glow " + tag, glowOf(add));
+      if (!smoke && bits === 0) { out.prod.fxCover.push({ name: "fx additive " + tag, cov: covA }); out.prod.fxCover.push({ name: "fx alpha " + tag, cov: covL }); }
+    }
+  }
+  PF._setParticleFxVariantForTest(null, null);
+  PF._setParticleFxTier2VariantForTest(null);
+  // S7: single-instance coverage centroids (stock additive: no FX shaping), and one draw per bucket
+  const cents = SC.SMOKE_S7_CASES.map(pick).filter((i) => i >= 0);
+  const matC = stockAdd();
+  for (const ci of cents) {
+    const cs = data.cases[ci];
+    bind(cs);
+    const { cam, o } = orthoFor(cs);
+    out.prod.ortho = o; // every case uses its own bounds: stored per centroid below
+    const scene = new THREE.Scene();
+    const im = meshOf(matC, [0]);
+    scene.add(im);
+    for (const en of SC.smokeS7Picks(cs)) {
+      im.instanceColor.array[0] = en.rec;
+      im.instanceColor.needsUpdate = true;
+      im.count = 1;
+      draw(scene, cam);
+      const cv = coverage();
+      out.prod.centroids.push({ caseIndex: ci, b: en.b, j: en.j, x: cv.x, y: cv.y, cov: cv.n, ortho: o });
+    }
+    // one draw per gpu bucket (the flag-off bucket set is the same)
+    const all = new THREE.Scene();
+    for (const b of cs.buckets) all.add(meshOf(b.alpha ? stockAlpha() : stockAdd(), b.idx));
+    draw(all, cam);
+    out.prod.calls.push({ caseIndex: ci, on: renderer.info.render.calls, off: cs.drawsOff });
+  }
+}
+
+try {
+  const data = await (await fetch("/data.json")).json();
+  try { await kernelArm(data); } catch (e) { out.errors.push("kernel: " + String(e && e.message || e).slice(0, 4000)); }
+  try { await productionArm(data); } catch (e) { out.errors.push("production: " + String(e && e.stack || e).slice(0, 2000)); }
+} catch (e) {
+  out.errors.push(String(e && e.stack || e).slice(0, 2000));
+}
+window.__smoke = out;
+</script>
+</body>
+</html>

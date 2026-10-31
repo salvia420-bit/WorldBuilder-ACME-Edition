@@ -1138,7 +1138,8 @@ export function setupClickPicking({
         if (!part || part.visible === false) continue;
         for (const m of part.children) {
           if (!m.isMesh || m.visible === false || !m.geometry) continue;
-          if (!raycaster.layers.test(m.layers)) continue;
+          // R3-4 ?entityBatch (2026-10-31): a batched rig parks its leaves on layer 31; test the leaf's HOME mask (inert with the flag off).
+          if ((raycaster.layers.mask & (m.userData && m.userData.hbHomeMask !== undefined ? m.userData.hbHomeMask : m.layers.mask)) === 0) continue;
           const geo = m.geometry;
           if (!geo.boundingSphere) geo.computeBoundingSphere();
           if (!(geo.boundingSphere?.radius > 0)) continue;

@@ -146,6 +146,40 @@ class StoredRuns(unittest.TestCase):
             shutil.rmtree(tmp, ignore_errors=True)
 
 
+D1_BENCH = "/mnt/wbterminal1/tmp/claude-scratch/perf/r3-d1/bench"
+D1_QUEUE = os.path.join(os.path.dirname(QUEUE), "batch-R3-D1-2026-10-30.json")
+
+
+@unittest.skipUnless(os.path.isdir(D1_BENCH), "stored D1 run not on this machine")
+class StoredD1(unittest.TestCase):
+    def test_stored_d1_run_reports_through_the_queue_after_the_deletions(self):
+        # 2026-10-30 (lane DEL): the D1-BENCH reps of the arms whose flags were deleted (UWD-on, S-rustEntityWorld,
+        # D-stack; now removedArms) are still held to their queue gates, and the run reads as recorded in the
+        # queue's D1-BENCH result: 45/45 VALID; uploadWarmDraw tour -1.7 and rustEntityWorld tour -1.8, real, worse.
+        import contextlib
+        import io
+        tmp = tempfile.mkdtemp(prefix="hbreport-d1-")
+        try:
+            out = os.path.join(tmp, "r.json")
+            with contextlib.redirect_stdout(io.StringIO()):
+                rc = H.main(["bench", D1_BENCH, "--box-events", D1_QUEUE, "--queue", D1_QUEUE, "--ref", "A", "--aa", "A-AA", "--json", out])
+            self.assertEqual(rc, 0)
+            with open(out) as f:
+                j = json.load(f)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+        self.assertEqual(j["item"], "D1-BENCH")
+        self.assertEqual(len(j["reps"]), 45)
+        self.assertEqual({r["status"] for r in j["reps"]}, {"VALID"})
+        gates = H.queue_gates(H.load_json(D1_QUEUE), "D1-BENCH")
+        for arm in ("UWD-on", "S-rustEntityWorld", "D-stack"):
+            self.assertIn(arm, gates)
+            self.assertEqual(sum(1 for r in j["reps"] if r["arm"] == arm), 3, arm)
+        for arm, d in (("UWD-on", -1.7), ("S-rustEntityWorld", -1.8)):
+            v = j["compare"][arm]["tour.fps"]["valid"]
+            self.assertEqual((v["delta"], v["real"], v["verdict"]), (d, True, "worse"), arm)
+
+
 # ------------------------------------------------------------------------------------------------
 # synthetic v2 runs
 # ------------------------------------------------------------------------------------------------
@@ -305,6 +339,7 @@ class Synthetic(unittest.TestCase):
         self.assertIn("cellsSkipped > 0", gate)
         self.assertEqual(H.queue_gates(q)["O-rigs"], gate)  # unique arm name: no item needed
         self.assertNotIn("A", H.queue_gates(q))
+        # S-rustEntityWorld sits in M1b-STRUCTURE's removedArms since 2026-10-30 (flag deleted after D1): its gate stays
         self.assertEqual(H.queue_gates(q, "M1b-STRUCTURE"), {"S-rustEntityWorld": "window.__entityWorld && window.__entityWorld.stats().projections === 1"})
         self.assertEqual(H.run_item({"argv": ["--arms", "x.json", "--item", "M1b-OCC"]}), "M1b-OCC")
         t = self.t0
@@ -331,6 +366,39 @@ class Synthetic(unittest.TestCase):
         self.write([good])
         _, reps = self.bench(ref="A", queue=q)
         self.assertEqual({(x["arm"], x["rep"]): x["status"] for x in reps}[("O-rigs", 1)], "INVALID")
+
+    def test_removed_arms_keep_gate_and_predict_for_stored_runs(self):
+        # 2026-10-30 (lane DEL): ?rustEntityWorld / ?uploadWarmDraw were deleted after D1; every arm that set
+        # either moved from item.arms to item.removedArms with a `removed` note. hbbench's loadArms runs `arms`
+        # only (tests/hb_v2.test.mjs pins that side); hbreport (item_arms) still resolves the removed arms'
+        # gate and predict, so a run stored before the deletion keeps its gates and its R3 basis.
+        with open(os.path.join(os.path.dirname(QUEUE), "batch-R3-D1-2026-10-30.json")) as f:
+            q = json.load(f)
+        it = next(x for x in q["items"] if x["id"] == "D1-BENCH")
+        removed = [a["name"] for a in it["removedArms"]]
+        self.assertEqual(removed, ["UWD-on", "S-rustEntityWorld", "D-stack"])
+        self.assertTrue(all(a["removed"] == "2026-10-30, flag deleted after D1" for a in it["removedArms"]))
+        self.assertFalse(any(a["name"] in removed for a in it["arms"]))
+        self.assertEqual([a["name"] for a in H.item_arms(it)], [a["name"] for a in it["arms"]] + removed)
+        gates = H.queue_gates(q, "D1-BENCH")
+        for a in it["removedArms"]:
+            self.assertEqual(gates[a["name"]], a["gate"], a["name"])
+        self.assertEqual(H.queue_predicts(q, "D1-BENCH")["D-stack"]["ms"], -0.201)
+        # synthetic: a removed arm's stored rep is held to its gate exactly as before
+        qs = {"schema": "hb-1070-queue-v1", "items": [{"id": "Z", "arms": [{"name": "A", "flags": ""}], "removedArms": [
+            {"name": "Z-del", "removed": "2026-10-30, flag deleted after D1", "flags": "gone=on", "gate": "window.__gone === true",
+             "predict": {"thread": "main", "ms": -1.0}}]}]}
+        self.assertEqual(H.queue_gates(qs, "Z"), {"Z-del": "window.__gone === true"})
+        self.assertEqual(H.queue_predicts(qs, "Z"), {"Z-del": {"thread": "main", "ms": -1.0}})
+        t = self.t0
+        held = v2run("Z-del", 1, t + 300)
+        held["gate"] = {"expr": "window.__gone === true", "value": True, "ok": True}
+        skipped = v2run("Z-del", 2, t + 600)  # no gate record: may be a silent A/A
+        self.write([v2run("A", 1, t), held, skipped], meta={"schema": "hbbench-meta-v2", "item": "Z", "argv": ["--item", "Z"], "arms": [{"name": "A"}, {"name": "Z-del"}]})
+        _, reps = self.bench(ref="A", queue=qs)
+        st = {(x["arm"], x["rep"]): x["status"] for x in reps}
+        self.assertEqual(st[("Z-del", 1)], "VALID")
+        self.assertEqual(st[("Z-del", 2)], "INVALID")
 
     def anat(self, root, arm, rep, main, start, idle=600, gauge=False, **kw):
         """An hbanatomy run (<root>/<arm>-r<rep>/anatomy.json) whose still windows read `main` ms main busy."""

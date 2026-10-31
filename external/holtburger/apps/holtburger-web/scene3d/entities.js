@@ -1191,6 +1191,12 @@ import { poseRigAt, invalidateRigPose, rigPoseSkipEnabled } from "./motion/motio
 // `?rustEntityCull` (lane B, 2026-10-26) reads its flag through the scene-core
 // reader (default off, `=on` opts in).
 import { rustFlag } from "./rust/scene_core.js";
+// ?entityBatch (R3-4 stage A, 2026-10-30, DEFAULT OFF; `=on` opt-in): entity
+// part-surfaces drawn as batched kit draws (scene3d/gpu_batch/entity_batch.js).
+// With the flag off no EntityBatch exists: every hook below is one
+// `this._entityBatch` / `inst._hbBatch` test on a property that stays null /
+// undefined, and nothing of the kit runs or allocates.
+import { EntityBatch, entityBatchEnabled } from "./gpu_batch/entity_batch.js";
 // J5 (PARITY-D, 2026-08-13) — retail's `MotionTableManager::pending_animations`
 // (acclient.h:31103). One playhead (`inst._unifiedSeq`), an ORDERED queue
 // behind it. See scene3d/motion_queue.js for the decomp transcription.
@@ -1480,10 +1486,6 @@ import {
   buildPartSurfaceMeshes,
   createPartFramesProxy,
 } from "./setup_rig.js";
-// ?rustEntityWorld (lane R4, 2026-10-26; default off): the rig's share of the
-// scene walk — the root's own updateMatrixWorld + the main-scene projection
-// stand-in (scene3d/entity_world.js, docs/2026-10-26-rust-entity-walk.md).
-import { entityWorldEnabled, installEntityWorldRoot, ensureEntityWorld } from "./entity_world.js";
 // Phase 2 (2026-08-02) — limb registry + visual limping, behind the STRICT
 // opt-in `?limbDamage=on`. `limbDamageEnabled()` is the single flag reader;
 // with it off `applyLimbLimp` returns on its first line and nothing else in
@@ -2413,7 +2415,7 @@ import { registerLuminousMaterial, adoptLuminousClone, releaseLuminousMaterial }
 import { surfaceLumWinsEnabled, syncLuminousHookTexel } from "./luminous_hook.js";
 // ?fadeAlphaParity (2026-10-13): a faded part drops its ClipMap alpha test, and
 // a fade's end restores the surface's authored blend / depth flags.
-import { snapshotAuthoredAlpha, syncFadeAlpha } from "./fade_alpha_state.js";
+import { snapshotAuthoredAlpha, syncFadeAlpha, fadeAlphaParityEnabled } from "./fade_alpha_state.js";
 // ?selectionFlash=on (2026-10-13, default OFF): a clicked object flashes
 // fullbright / dim twice (retail SmartBox find → CPhysicsObj::SetLighting).
 import {
@@ -3183,6 +3185,9 @@ function _stampEntityIndoorLayer(scene3d, obj) {
   try {
     obj.traverse((o) => {
       if (o.__filmCleanMask !== undefined) o.__filmCleanMask = 1 << 1;
+      // ?entityBatch (R3-4): a parked leaf (only ever set with the flag on)
+      // keeps its park layer; the stamp lands in the mask it returns to.
+      else if (o.userData && o.userData.hbParked === true) o.userData.hbHomeMask = 1 << 1;
       else o.layers.set(1);
     });
   } catch (_) {}
@@ -4078,6 +4083,9 @@ class EntityInstance {
     // re-decode can't touch a torn-down rig. R-8 (2026-07-09): ditto for the
     // recolored twin (_scheduleRecoloredSurfaceRefresh).
     this._disposed = true;
+    // ?entityBatch (R3-4): leaves unparked, the batch mesh and its refs freed
+    // (its shared geometry / class materials are never `__disposable`).
+    if (this._hbBatch) this._hbBatch.owner.release(this);
     // ?weaponFx: leave the per-frame tick and free this weapon's own materials.
     if (this._wfx) {
       try { weaponFxForget(this._wfx); } catch (_) {}
@@ -4229,6 +4237,14 @@ export class EntityManager {
   constructor(scene3d, wasmExports) {
     this.scene3d = scene3d;
     this.wasmExports = wasmExports;
+    // ?entityBatch (R3-4, DEFAULT OFF): null with the flag off — every batch
+    // hook in this file tests this property (or `inst._hbBatch`) and stops.
+    // (`typeof`: the spliced-source suites — harness/lib/scene3d_stubs.mjs —
+    // evaluate this file with its imports stripped; there the batch is off.)
+    // `etherealGhost`: the Ethereal hook has a visual only under
+    // `?etherealGhost=on` (else `_ethereal` is state only and must not hold a
+    // rig legacy).
+    this._entityBatch = (typeof entityBatchEnabled === "function" && entityBatchEnabled()) ? new EntityBatch(this, { etherealGhost: ETHEREAL_GHOST }) : null;
     // A5-P2 (`?tweenClock`, default on) — accumulated-dt tween clock (ms).
     // Advanced at the top of `tick(dt)` by the same dt the mixers consume;
     // read via `_tweenNowMs()` by the pose-tween tickers + their stamp sites.
@@ -5626,13 +5642,6 @@ export class EntityManager {
       parts.push(partGroup);
       root.add(partGroup);
     }
-    // ?rustEntityWorld (default off): the root walks its parts and surface
-    // meshes itself (same values as three's walk), and the main renderer's
-    // projection stand-in is installed once (lazy, if index.js has not).
-    if (entityWorldEnabled()) {
-      installEntityWorldRoot(root);
-      ensureEntityWorld(this.scene3d);
-    }
     // ?weaponFx: the weapon's own materials now sit on its meshes. Hang the state
     // on the instance (so any dispose — including the Step-E abort below — frees
     // them); it joins the per-frame tick only once the spawn commits.
@@ -6520,6 +6529,9 @@ export class EntityManager {
     // remove + spawn, a relog) re-takes the remembered camera fade; camera.js
     // will not push the unchanged value again. No-op for every other rig.
     this._syncCamFade(inst);
+    // ?entityBatch (R3-4): the committed rig is a batch candidate (planned at
+    // the next tick sync; the legacy leaves draw until the batch is built).
+    if (this._entityBatch) this._entityBatch.noteSpawn(inst, { setupId, modelChanges, textureChanges });
     if (SPAWN_TRACE) {
       const rigMs = performance.now() - _spawnTraceRigStart;
       const totalMs = performance.now() - _spawnTraceT0;
@@ -7839,6 +7851,7 @@ export class EntityManager {
     try {
       c.root.traverse((o) => {
         if (o.__filmCleanMask !== undefined) o.__filmCleanMask = 1 << 1;
+        else if (o.userData && o.userData.hbParked === true) o.userData.hbHomeMask = 1 << 1; // ?entityBatch: see _stampEntityIndoorLayer
         else o.layers.set(1);
       });
     } catch (_) {}
@@ -13899,6 +13912,10 @@ export class EntityManager {
 
     // Indoor-layer invariant — the rebuilt part meshes default to layer 0.
     _stampEntityIndoorLayer(this.scene3d, inst.root);
+    // ?entityBatch (R3-4): the old leaves are gone — tear the batch down now
+    // (legacy on screen, nothing has rendered since the swap) and plan the
+    // re-dressed rig again at the next tick.
+    if (inst._hbBatch) this._entityBatch.noteRebuilt(inst, "hotSwap");
 
     // Commit new owned-asset registry; dispose old ones now that
     // nothing references them.
@@ -15424,6 +15441,9 @@ export class EntityManager {
    * be cloning the fallback singleton — caller should no-op).
    */
   _getOrCloneEntityMaterial(inst, surfaceDid, opts = {}) {
+    // ?entityBatch (R3-4): a batched surface demotes the rig to its legacy
+    // leaves FIRST, so the re-point below writes unparked leaves.
+    if (inst._hbBatch) this._entityBatch.noteClone(inst, surfaceDid, opts.batchReason);
     const did = surfaceDid >>> 0;
     if (!inst._entityMaterials) inst._entityMaterials = new Map();
     // ?weaponFx: a weapon already OWNS a per-entity material for this surface
@@ -15573,6 +15593,7 @@ export class EntityManager {
         if (selectionLightable(child.material)) dids.push(did);
       }
     }
+    if (inst._hbBatch && dids.length > 0) this._entityBatch.demote(inst, "selectionFlash");
     for (const did of dids) {
       const mat = this._getOrCloneEntityMaterial(inst, did);
       if (mat && applySelectionLighting(mat, mode)) lit.add(mat);
@@ -17678,6 +17699,10 @@ export class EntityManager {
       // (dt forced to 0 for 10 frames after any >0.5 s stall; a first cast's
       // DAT load is one) froze every emitter mid-flight: the projectile moved
       // (wall-clock above) but its trail emitted nothing for those frames.
+      // ?entityBatch (R3-4): the batch follows the rig in a dt-recovery frame
+      // too (before the particle call: test_particle_clock.mjs pins that call
+      // as the branch's last statement before `return`).
+      if (this._entityBatch) this._entityBatch.sync();
       if (particleClockMode() === "off") this.tickParticlesAndScripts();
       return;
     }
@@ -18464,6 +18489,10 @@ export class EntityManager {
     // calls `tickParticlesAndScripts()` instead, at the retail point in
     // frame (after pose application; acclient.c:322883-322892).
     if (particleClockMode() === "off") this.tickParticlesAndScripts();
+    // ?entityBatch (R3-4): plan / build / mirror every batched rig after this
+    // tick's mutations (its part rows are composed later, at the frame's first
+    // batch draw, after every pose writer).
+    if (this._entityBatch) this._entityBatch.sync();
   }
 
   /** A11-S3: retail manager phase — ParticleManager::UpdateParticles then
@@ -19479,12 +19508,24 @@ export class EntityManager {
    *
    * `partIndex < 0` means whole-object.
    */
-  _spawnMaterialRampTween(inst, hookType, partIndex, hook) {
+  _spawnMaterialRampTween(inst, hookType, partIndex, hook, onlyDids) {
     if (!inst.root) return;
+    // ?entityBatch (R3-4): on a batched rig a TransparentPart / Transparent
+    // show or hide of its batched surfaces is a batch state write (no clone);
+    // a fade or a Luminous / Diffuse ramp demotes the rig first. `onlyDids`
+    // (never passed with the flag off) = the surfaces left to today's body.
+    if (inst._hbBatch && onlyDids === undefined) {
+      const rest = this._entityBatch.routeRamp(inst, hookType, partIndex, hook, fadeAlphaParityEnabled());
+      if (rest !== null) {
+        if (rest.length > 0) this._spawnMaterialRampTween(inst, hookType, partIndex, hook, rest);
+        return;
+      }
+    }
     const rampStart = +hook.rampStart;
     const rampEnd = +hook.rampEnd;
     const durationMs = Math.max(0, (+hook.rampTime) * 1000);
-    const surfaceDids = this._collectEntitySurfaceDids(inst, partIndex);
+    let surfaceDids = this._collectEntitySurfaceDids(inst, partIndex);
+    if (onlyDids) surfaceDids = surfaceDids.filter((d) => onlyDids.includes(d));
     if (!surfaceDids || surfaceDids.length === 0) return;
     if (!inst._materialHookTweens) inst._materialHookTweens = [];
     // Drop any prior tween for the same (hookType, surfaceDid) — the
@@ -19700,6 +19741,7 @@ export class EntityManager {
    */
   _applyEtherealToEntity(inst, ethereal) {
     inst._ethereal = !!ethereal;
+    if (inst._hbBatch) this._entityBatch.demote(inst, "fade:ethereal");
     const dids = this._collectEntitySurfaceDids(inst, -1);
     for (const did of dids) {
       const mat = this._getOrCloneEntityMaterial(inst, did);
@@ -19780,6 +19822,7 @@ export class EntityManager {
     const t = translucency < 0 ? 0 : (translucency > 1 ? 1 : translucency);
     const factor = 1 - t; // clamp01(1 - physicsTranslucency)
     inst._objectTranslucency = t;
+    if (inst._hbBatch) this._entityBatch.demote(inst, "fade:objectTranslucency");
     const dids = this._collectEntitySurfaceDids(inst, -1);
     for (const did of dids) {
       const mat = this._getOrCloneEntityMaterial(inst, did);
@@ -19974,6 +20017,7 @@ export class EntityManager {
   _applyCamFadeToInst(inst, o) {
     if (inst._camFadeOpacity === o) return;
     inst._camFadeOpacity = o;
+    if (inst._hbBatch) this._entityBatch.demote(inst, "fade:camera");
     const dids = this._collectEntitySurfaceDids(inst, -1);
     for (const did of dids) {
       const mat = this._getOrCloneEntityMaterial(inst, did);
@@ -20021,6 +20065,7 @@ export class EntityManager {
   _setTextureVelocity(inst, partIndex, us, vs) {
     const dids = this._collectEntitySurfaceDids(inst, partIndex);
     const stop = (us === 0 && vs === 0);
+    if (inst._hbBatch && dids.length > 0) this._entityBatch.demote(inst, "texVel");
     for (const did of dids) {
       const mat = this._getOrCloneEntityMaterial(inst, did, { cloneTexture: !stop });
       if (!mat) continue;
@@ -20354,6 +20399,8 @@ export class EntityManager {
     // ~2089) which other entities on the same setupId still render, so it
     // MUST survive. We also drop those refs from `inst.geometries` so the
     // entity's own dispose() doesn't double-free (idempotent, but tidy).
+    // ?entityBatch (R3-4): a ReplaceObject part keeps the rig legacy for life.
+    if (inst._hbBatch) this._entityBatch.teardown(inst, "replaceObject", { permanent: true });
     const oldChildren = partGroup.children.slice();
     for (const child of oldChildren) {
       // EQUIP-3 (2026-08-02): a ReplaceObject hook swaps THIS part's gfx —
@@ -20585,6 +20632,7 @@ export class EntityManager {
     // Batch 9 #2 (2026-06-07): drop all spawn-generation tokens.
     this._spawnGen.clear();
     this.animationCache.dispose();
+    if (this._entityBatch) { try { this._entityBatch.dispose(); } catch (_) {} }
     if (this._sharedFallback) {
       try {
         this._sharedFallback.dispose();

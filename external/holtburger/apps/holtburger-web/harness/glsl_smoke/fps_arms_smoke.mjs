@@ -46,7 +46,9 @@ const diff = (a, b) => {
   for (let i = 0; i < a.length; i++) { const d = Math.abs(a[i] - b[i]); if (d) n++; if (d > max) max = d; }
   return { max, n };
 };
-const def = await run("");
+// freezeWorldRoots is DEFAULT ON since 2026-10-30: the reference run turns it off explicitly so the
+// A/B still compares unfrozen vs frozen containers (canvasDepth / depthBandSort keep their defaults).
+const def = await run("?freezeWorldRoots=off");
 const arms = await run("?canvasDepth=off&depthBandSort=on&freezeWorldRoots=on");
 const clean = (r) => r.errors.length === 0 && r.pageErrors.length === 0;
 let ok = clean(def) && clean(arms);

@@ -32,6 +32,24 @@
 // array instead (one more draw for the consumer, no copy, no hitch).
 // `maxBytes` caps the whole allocator; past it `acquire` returns null and the
 // consumer keeps its legacy path for that content.
+//
+// AT THE CAP (opt-in, R3-4 real boot 2026-10-31; both default OFF, so an
+// allocator built without them behaves exactly as above). The cap counts
+// RESERVED bytes (whole pages), and a key's next page is x1.5 its last, so a
+// big-texture key (512x512: 1.4 MB a layer) can be refused a 29 MB growth
+// page while the cap still has room for several of its layers, and idle
+// layers of OTHER keys (departed content nobody re-acquired) pin whole pages
+// for good (nothing trims during a session):
+//   - `reclaimIdle`: before refusing a new page, destroy pages that hold no
+//     LIVE layer (their idle content is evicted, oldest idle first) until the
+//     page fits (`stats.reclaimedPages` / `reclaimedBytes`);
+//   - `fitToCap`: if it still does not fit, the new page shrinks to at most
+//     `minLayers` and at most half the layers the cap has left (at least
+//     `fitMinLayers`, default 1; `stats.fitted`): near the cap pages are
+//     sized for near-term demand and one key never takes the remainder.
+// Only past both is the acquire refused. `wouldAcquire(desc, key)` answers
+// the same question with no side effect; `reclaim(bytes)` frees idle-only
+// pages on demand (a consumer's idle-footprint trim).
 
 export const PAGE_BYTES_DEFAULT = 4 * 1024 * 1024;
 export const PAGE_LAYERS_MIN = 4;
@@ -91,12 +109,18 @@ export class PageAllocator {
    * @param {(page:object)=>boolean|void} [opts.onPageCreate] GL allocation; `false` = refused
    * @param {(page:object)=>void} [opts.onPageDestroy]
    * @param {(contentKey:string, page:object, layer:number)=>void} [opts.onEvict]
+   * @param {boolean} [opts.reclaimIdle]  at the cap, destroy idle-only pages first (see AT THE CAP)
+   * @param {boolean} [opts.fitToCap]     at the cap, shrink the new page to what is left
+   * @param {number} [opts.fitMinLayers]  the smallest page `fitToCap` makes (default 1)
    */
   constructor(opts = {}) {
     this.pageBytes = opts.pageBytes ?? PAGE_BYTES_DEFAULT;
     this.minLayers = Math.max(1, opts.minLayers ?? PAGE_LAYERS_MIN);
     this.maxLayers = Math.max(this.minLayers, opts.maxLayers ?? PAGE_LAYERS_MAX_DEFAULT);
     this.maxBytes = opts.maxBytes ?? ALLOCATOR_BYTES_MAX_DEFAULT;
+    this.reclaimIdle = opts.reclaimIdle === true;
+    this.fitToCap = opts.fitToCap === true;
+    this.fitMinLayers = Math.max(1, opts.fitMinLayers ?? 1);
     this.onPageCreate = typeof opts.onPageCreate === "function" ? opts.onPageCreate : null;
     this.onPageDestroy = typeof opts.onPageDestroy === "function" ? opts.onPageDestroy : null;
     this.onEvict = typeof opts.onEvict === "function" ? opts.onEvict : null;
@@ -110,6 +134,91 @@ export class PageAllocator {
       acquires: 0, liveHits: 0, idleHits: 0, fresh: 0, evictions: 0,
       pagesCreated: 0, pagesDestroyed: 0, releases: 0, refused: 0,
     };
+    // AT THE CAP counters (only the opt-in paths move them).
+    if (this.reclaimIdle || this.fitToCap) Object.assign(this.stats, { reclaimedPages: 0, reclaimedBytes: 0, fitted: 0 });
+  }
+
+  /** Live (refcount > 0) layers of `page`. */
+  _liveLayers(page) {
+    let n = 0;
+    for (let l = 0; l < page.capacity; l += 1) if (page.refs[l] > 0) n += 1;
+    return n;
+  }
+
+  /** Bytes the idle-only pages (no live layer) hold: what `reclaim` could free. */
+  reclaimableBytes() {
+    let n = 0;
+    for (const p of this.pages) if (this._liveLayers(p) === 0) n += p.capacity * p.layerBytes;
+    return n;
+  }
+
+  /** Destroy one page (bookkeeping + onPageDestroy); its idle content is evicted. */
+  _destroyPage(p) {
+    for (let l = 0; l < p.capacity; l += 1) {
+      const ck = p.content[l];
+      if (ck === null) continue;
+      this._idle.delete(ck);
+      this._byContent.delete(ck);
+      p.content[l] = null;
+      this.stats.evictions += 1;
+      if (this.onEvict) this.onEvict(ck, p, l);
+    }
+    const i = this.pages.indexOf(p);
+    if (i >= 0) this.pages.splice(i, 1);
+    const list = this._byKey.get(p.key);
+    if (list) {
+      const k = list.indexOf(p);
+      if (k >= 0) list.splice(k, 1);
+      if (list.length === 0) this._byKey.delete(p.key);
+    }
+    this.bytes -= p.capacity * p.layerBytes;
+    if (this.onPageDestroy) this.onPageDestroy(p);
+    this.stats.pagesDestroyed += 1;
+  }
+
+  /**
+   * Free at least `bytes` (Infinity = all) by destroying pages that hold no
+   * live layer, oldest idle content first (then never-used empty pages).
+   * `keep` (a page) is never destroyed. Returns the bytes freed.
+   */
+  reclaim(bytes, keep = null) {
+    let freed = 0;
+    if (!(bytes > 0)) return 0;
+    const order = [];
+    const seen = new Set();
+    for (const ent of this._idle.values()) {
+      if (seen.has(ent.page)) continue;
+      seen.add(ent.page);
+      order.push(ent.page);
+    }
+    for (const p of this.pages) if (!seen.has(p)) order.push(p);
+    for (const p of order) {
+      if (freed >= bytes) break;
+      if (p === keep || this._liveLayers(p) > 0) continue;
+      const b = p.capacity * p.layerBytes;
+      this._destroyPage(p);
+      freed += b;
+      if (this.stats.reclaimedPages !== undefined) { this.stats.reclaimedPages += 1; this.stats.reclaimedBytes += b; }
+    }
+    return freed;
+  }
+
+  /**
+   * Would `acquire(desc, contentKey)` succeed now (no side effects)? True for
+   * resident content, a free or idle layer of the key, or a new page that
+   * fits the cap (after the opt-in reclaim / fit).
+   */
+  wouldAcquire(desc, contentKey) {
+    if (contentKey !== undefined && this._byContent.has(contentKey)) return true;
+    const key = pageKeyOf(desc);
+    const list = this._byKey.get(key);
+    if (list) for (const p of list) if (p.free.length > 0) return true;
+    for (const ent of this._idle.values()) if (ent.page.key === key) return true;
+    const lb = layerBytesOf(desc);
+    const room = this.maxBytes - this.bytes + (this.reclaimIdle ? this.reclaimableBytes() : 0);
+    const cap = this.capacityFor(desc, list);
+    if (cap * lb <= room) return true;
+    return this.fitToCap && Math.floor(room / lb) >= this.fitMinLayers;
   }
 
   /** Layers of the next page for `key` (see PAGE SIZE in the header). */
@@ -123,8 +232,22 @@ export class PageAllocator {
   }
 
   _newPage(desc, key, list) {
-    const capacity = this.capacityFor(desc, list);
+    let capacity = this.capacityFor(desc, list);
     const layerBytes = layerBytesOf(desc);
+    // AT THE CAP (opt-in): reclaim idle-only pages, then fit what is left.
+    if (this.reclaimIdle && this.bytes + capacity * layerBytes > this.maxBytes) {
+      this.reclaim(this.bytes + capacity * layerBytes - this.maxBytes);
+    }
+    if (this.fitToCap && this.bytes + capacity * layerBytes > this.maxBytes) {
+      const fit = Math.floor((this.maxBytes - this.bytes) / layerBytes);
+      if (fit >= this.fitMinLayers) {
+        // At most half of what is left and at most a minimum page (never
+        // below fitMinLayers): near the cap pages are sized for near-term
+        // demand, so one key cannot take the remainder from the keys after it.
+        capacity = Math.min(capacity, Math.max(this.fitMinLayers, Math.min(this.minLayers, Math.floor(fit / 2))));
+        this.stats.fitted += 1;
+      }
+    }
     if (this.bytes + capacity * layerBytes > this.maxBytes) { this.stats.refused += 1; return null; }
     const page = {
       id: _nextPageId++,
@@ -289,16 +412,18 @@ export class PageAllocator {
 
   /** Counts for diag. */
   summary() {
-    let live = 0, idle = 0, free = 0, layers = 0;
+    let live = 0, idle = 0, free = 0, layers = 0, liveBytes = 0, idleBytes = 0;
     for (const p of this.pages) {
       layers += p.capacity;
       free += p.free.length;
       for (let l = 0; l < p.capacity; l += 1) {
         if (p.content[l] === null) continue;
-        if (p.refs[l] > 0) live += 1; else idle += 1;
+        if (p.refs[l] > 0) { live += 1; liveBytes += p.layerBytes; } else { idle += 1; idleBytes += p.layerBytes; }
       }
     }
-    return { pages: this.pages.length, layers, live, idle, free, bytes: this.bytes, ...this.stats };
+    // `bytes` = reserved (whole pages, what the cap counts); live / idle =
+    // resident content; the rest of `bytes` is free layers.
+    return { pages: this.pages.length, layers, live, idle, free, bytes: this.bytes, maxBytes: this.maxBytes, liveBytes, idleBytes, ...this.stats };
   }
 
   /**

@@ -1,0 +1,149 @@
+{
+ "schema": "hb-1070-queue-v1",
+ "batch": "R3-G1",
+ "created": "2026-10-30",
+ "owner": "owner (OWNER-RUN: queued for the owner's own 1070 sessions, two or three windows when the 1070's user is away; never self-initiated by an agent)",
+ "preparedBy": "orchestrator (Claude), 2026-10-30",
+ "source": "Owner, 2026-10-30 20:2x: \"we can cut down on the amount of grass, make it more patchy but cover the same amount of area, and make it flat not round like worms,see how that helps fps. say 20% amount of what we have now\"",
+ "sessionRules": "vistest-preamble-v1",
+ "sessionRulesInline": [
+  "Inherit every rule of batch-P0-gpu-resident-2026-10-22.json sessionRulesInline verbatim (MODE T off-screen + muted, OWNER-RUN, kill only by user-data-dir, ?nosw=1, fresh profile per arm-rep, uncapped frames + targetFps=0, release wasm only, >= 65 s between boots on one account, reject-never-average). Read memory/fleet-runbooks.md before driving the 1070.",
+  "Tunnel: -L 9333:127.0.0.1:9333 -R 8765:127.0.0.1:8765 -R 8080:127.0.0.1:8080 -R 8766:127.0.0.1:8766 (the B0 snapshot server on :8766). M1c adds -R 3000:127.0.0.1:3000 -R 9090:127.0.0.1:9090 for its window only and drops them afterwards.",
+  "Build under test = B0: a NEW frozen snapshot (scripts/perf-worker/hb-mksnap.sh <name>, then replace its pkg symlink by a real copy of a RELEASE pkg/) of the MERGED round-3 phase-A tree (the round-2 fixes included). It must carry the readers of occlusionCull=rigs, rigPoseSkip, skipEmptyPasses, animSceneryBatch and bakeFallbackWaves (`b0Snapshot` below; uploadWarmDraw's reader is no longer required: the flag was deleted 2026-10-30 after D1), checked in M1-PRE by `hbbench.mjs --check-snapshot` against the snapshot's OWN code files, never only url-flags.md: hb-mksnap.sh symlinks docs/ into the live tree, so the url-flags.md a snapshot shows always reads current. Served with `python3 scripts/serve.py --bind 127.0.0.1 --port 8766 --check` from the snapshot. On B0 `rustParticles` is default OFF (16 scene-core flags on): an empty-flag arm is the 16-on config, and any arm that depends on another flag value names it.",
+  "Harness v2 protocol (plan section 4), all applied by hbbench.mjs / hbanatomy.mjs unless an arm overrides it: skytime=13 and DayGroup 0 ('Sunny', applied through setGameDayOverride(39, 10)); adaptiveRes=off, targetFps=0, renderScale=1, and gpuGovernor=off once R3-11's flag has a url-flags.md row (hbbench detects it); 1920x1080 INNER window unless the arm says 1280,720; interleaved, rotated order; the 65 s login cool-down; box samples (hbwho.ps1 + top processes by CPU) before, between and after segments. `--compat v1` is ONLY for RC-BENCH v2 reps 2-3 on the rep-1 snapshot (batch-RC-rust-scene-core-2026-10-26.json), never for these items: it keeps the pre-v2 step sequence exactly, so its box samples run only before launch and after the tour (hbreport also reads the bench dir's boxwatch.log for the samples in between).",
+  "Every M1a session item (SWEEP, CEILING, LAYERMIP) BOOTS its own session through lib/hb_boot.mjs bootArm (fresh profile, the B0 snapshot on :8766, skytime=13, DayGroup 0, renderScale=1, adaptiveRes=off, targetFps=0, 1920x1080 INNER, the run-JSON asserts), never through hbsess.mjs (its boot serves :8765 = the live tree, sets the OUTER window and pins no DayGroup). The attach modes (`hbsweep.mjs` / `hbanatomy.mjs --attach`) are for the laptop tab check and ad-hoc looks; they apply DayGroup 0 and record every pin problem (`session.problems`).",
+  "Run without the gate override (gate-owner-ok.txt) whenever possible so hbgate.ps1's idle rule applies; rule V below decides validity from the run JSON either way.",
+  "One real-world tab at a time; the WebAC tab (M1c) never runs alongside one of ours. No sound may reach the 1070's user.",
+  "Before the first arm of a session: `python3 -I scripts/perf-worker/tests/test_hbreport.py` and `node scripts/perf-worker/tests/hb_v2.test.mjs` green on the laptop (the report reproduces the 10-29 numbers)."
+ ],
+ "accounts": "Bench account tailnet1 (hbbench default). M1c needs a SECOND Developer-level account for WebAC (or run the two clients one after the other); credentials only in the URL / environment at run time, never in this file.",
+ "urlBase": "http://127.0.0.1:8766/apps/holtburger-web/index.html",
+ "b0Snapshot": {
+  "what": "the D1 snapshot r3d1-20261030 (terrainGrass / terrainGrassDensity readers are 2026-10-07 code, present in every snapshot)",
+  "requiredReaders": [
+   {
+    "flag": "release pkg (real copy)",
+    "file": "apps/holtburger-web/pkg/holtburger_web_bg.wasm",
+    "patterns": [],
+    "why": "hb-mksnap.sh symlinks pkg/ into the live tree; B0 must freeze its own release wasm (release-ness: wasm_profile.mjs in the next M1-PRE step and hbbench's served-wasm abort)"
+   }
+  ]
+ },
+ "boxEvents": [
+  {
+   "id": "seagate-toolkit-2026-10-29",
+   "kind": "cpu-hog",
+   "from": "2026-10-29T00:00:00-02:30",
+   "until": "2026-10-29T23:00:00-02:30",
+   "what": "Seagate Toolkit held one CPU core at 100% on the 1070 box until the owner had it stopped at ~23:00 on 10-29 (plan section 1.1; bench 1 withdrawn, profile pair 1 caveated). Start unknown: bench 1 began 22:06; the window opens at midnight to be safe.",
+   "source": "orchestrator session log 2026-10-29; boxwatch.log could not see it (no CPU sampling)"
+  }
+ ],
+ "decisionRules": [
+  {
+   "rule": "V",
+   "name": "validity",
+   "text": "An arm-rep is INVALID, re-queued and never averaged, if any of these hold: `idle` < 60 s in any boxwatch sample; `gpu3d_other` > 5%; any non-test process using >= 1 CPU core-equivalent in any sample [D threshold; the bench-1 Seagate Toolkit case]; entity count differs from arm A by > 10% (R3-0 server-state pin) [D threshold]; console errors > 0; dev wasm; wrong adapter. If two scheduled windows yield no valid reps for an arm, accept 5 reps with a reported A/A noise in place of the idle gate, and mark the result \"noisy box\".",
+   "implementation": "hbreport.py rule_v / assess (`--noisy-box` for the fallback); the >= 1 core test reads >= 0.95 core-equivalents over the ~2 s sample window; a rep overlapping a boxEvents cpu-hog entry is CONTAMINATED; a rep with no box sample at all is INVALID (unverified)."
+  },
+  {
+   "rule": "R1",
+   "name": "noise",
+   "text": "noise = max(|A - A'|, half of A's rep spread). A delta is real only if it exceeds max(2 x noise, 3% fps or 0.5 ms).",
+   "implementation": "hbreport.py noise_of / compare (frame-count metrics use a floor of 1)."
+  },
+  {
+   "rule": "R2",
+   "name": "scoring",
+   "text": "Score on the binding thread's ms (main busy per frame, CrGpuMain WEBGL per present, GPU ms), plus still / moving / tour fps, p50 / p95, h100 / h250 / max / jank. Never on draw counts alone; draw counts are heading-binned and reported with multidraw ranges."
+  },
+  {
+   "rule": "R3",
+   "name": "keep",
+   "text": "A perf change goes or stays default-on only if all five hold: (i) its binding-thread ms moved by >= 50% of the prediction; (ii) at least one of still / moving / tour fps improved by a real delta, and no segment regressed by one; (iii) hitch metrics not worse by a real delta; (iv) 0 console errors; (v) the look gate (R4) passed. Otherwise it goes off and keeps its code only if a later step needs it. INCONCLUSIVE gets 3 more reps once, then goes off. For a hitch change (R3-2's upload draw and worker-wait fixes, scored on hitch metrics per R3-2), (i) and (ii) read on its predicted hitch metrics instead: first-turn max and h100 better by a real delta, and no still / moving / tour fps segment worse by one.",
+   "implementation": "hbreport.py r3_keep (predictions from each arm's `predict`, resolved in the bench dir's own queue item; look gate from `--look ARM=pass|fail`; binding-thread ms = the median over each arm's VALID hbanatomy reps under `--anatomy` (rule V per rep), the move judged real by R1 with its noise from those reps). The hitch-change reading of (i) and (ii) (the sentence added 2026-10-30) is NOT applied by r3_keep: no M1 arm is a hitch change; score one by hand from the first-turn max and h100 rows."
+  },
+  {
+   "rule": "R4",
+   "name": "look",
+   "text": "WHAT kernels: bit-exact, or <= 1 f32 ulp, in node or cargo; array layers byte-equal on the 1070 readback. HOW changes: rc-eye stills at 1080p with `skytime=13`, compared by `rc_eye_diff.py`, with particles and sway masked. Default threshold: <= 1% of pixels over 8/255 and <= 0.1% over 32/255; each step may set a tighter one. Every heatmap gets a structural review. Then the batched owner eye test; the owner can veto."
+  },
+  {
+   "rule": "R5",
+   "name": "routing",
+   "text": "The binding thread is the largest of main busy per frame, CrGpuMain per present, and GPU ms, at the tier's resolution. If GPU ms >= 0.9 x frame time, GPU levers go first. If CrGpuMain >= main, GL-command levers go first (batching, HUD raster). Otherwise main-thread levers. Never claim fps for a lever on a thread that is not binding; book its ms as headroom.",
+   "implementation": "hbreport.py r5_route / `anatomy` subcommand (ledger v0)."
+  },
+  {
+   "rule": "R6",
+   "name": "stop",
+   "text": "A structural lane that delivers < 50% of its predicted ms at stage A stops before stage B and gets a written post-mortem.",
+   "implementation": "hbreport.py r6_stop."
+  },
+  {
+   "rule": "R7",
+   "name": "tier presets",
+   "text": "A tier preset change ships only if it moves the over-budget thread under its ceiling, or is look-neutral and cheaper. Ultra looks change only with explicit owner OK. This includes `objRadius` and any governor knob."
+  },
+  {
+   "rule": "R8",
+   "name": "probe gate",
+   "text": "If the M1 structure-ceiling probe's V1/V2 do not cut main-thread world-render ms and CrGpuMain WEBGL ms by >= 40% against V0 on the 1070, R3-4 and R3-5 are re-scoped before any L-sized build: smaller stage A, or GPU-side levers first under R5.",
+   "implementation": "hbreport.py ceiling (the probe JSON + `trace-split --marks hbSC:` of its trace)."
+  },
+  {
+   "rule": "R9",
+   "name": "WebGPU",
+   "text": "Go only on the R3-12 criteria plus the owner's charter amendment."
+  },
+  {
+   "rule": "R10",
+   "name": "reference clients",
+   "text": "WebAC, OpenAC and upstream numbers are bounds that say which half of the frame to attack. They are never targets, never a pass/fail gate for a step, and never mixed into B0 comparisons. A reference reading on a different machine or content is quoted with that machine and content."
+  }
+ ],
+ "items": [
+  {
+   "id": "G1-BENCH",
+   "kind": "bench",
+   "title": "grass price at Holtburg ultra: defaults vs 20% of the blades (existing ?terrainGrassDensity=0.2, uniform thinning) vs no grass, + A/A, 3 reps interleaved",
+   "boxMode": "1070, MODE T, uncapped, fresh profile per arm-rep (hbbench does both). OWNER-RUN.",
+   "arms": [
+    {
+     "name": "A",
+     "flags": "",
+     "note": "defaults (ultra: 119,716 blades)"
+    },
+    {
+     "name": "A-AA",
+     "flags": "",
+     "note": "A again: the A/A arm (R1 noise)"
+    },
+    {
+     "name": "G-dens02",
+     "flags": "terrainGrassDensity=0.2",
+     "note": "20% of the tier blade count, same field and reach (uniform thinning; the patchy + flat look is the separate ?grassPatches build)"
+    },
+    {
+     "name": "G-off",
+     "flags": "terrainGrass=off",
+     "note": "no grass: the upper bound of any grass saving"
+    }
+   ],
+   "reps": 3,
+   "gate": "none (prices). The owner decides the grass amount and look (a look change).",
+   "decisionRules": [
+    "V",
+    "R1",
+    "R2",
+    "Written 2026-10-30 BEFORE the run: report still / moving / tour fps deltas of G-dens02 and G-off against A with R1 noise from A-AA; no default changes from this item."
+   ],
+   "recipe": [
+    "node scripts/perf-worker/hbbench.mjs --arms apps/holtburger-web/docs/reengineering/queue-1070/batch-R3-G1-2026-10-30.json --item G1-BENCH --reps 3 --port 8766 --uncapped --ref A --out /mnt/wbterminal1/tmp/claude-scratch/perf/r3-g1/bench",
+    "python3 -I scripts/perf-worker/hbreport.py bench /mnt/wbterminal1/tmp/claude-scratch/perf/r3-g1/bench --box-events <this file> --ref A --aa A-AA --json /mnt/wbterminal1/tmp/claude-scratch/perf/r3-g1/bench.report.json"
+   ],
+   "result": "2026-10-30 20:47-21:46, snapshot r3d1-20261030, 12/12 arm-reps VALID. A 51.9 / 50.1 / 53.2 fps (still / moving / tour); A-AA 51.5 / 49.4 / 52.5. G-dens02 (20% of the blades) +0.0 / -0.4 / +0.3, within noise; G-off (no grass) +0.2 / +0.3 / -1.7, the tour dip at the edge of the R1 threshold. Grass costs no measurable fps at Holtburg ultra (GPU-placed, tile-culled; the binding thread is main). Owner: 'ok well we keep the grass the way it was before then.' -> grass unchanged; the ?grassPatches / ?grassBladeShape build (lane G, verified) was removed from the tree unmeasured, saved at /mnt/wbterminal1/tmp/claude-scratch/rustcore-2026-10-29/grass-g1/lane-g-grassPatches-bladeShape.patch (+ grass_patches.test.mjs.saved); G2 is not run."
+  }
+ ],
+ "ownerDecision": "Owner, 2026-10-30, on the ?grassPatches / ?grassBladeShape=flat build: \"i can imagine itll look fine if it wins on fps keep it\". So the follow-up G2 bench (A, A-AA, G-patch = grassPatches=on, G-flat = grassBladeShape=flat, G-patch-flat = both; 3 reps, on a snapshot that holds the build) decides by fps alone: an arm that improves still / moving / tour fps by a real R1 delta with no fps segment worse by one becomes DEFAULT ON (=off escape kept); no eye-test gate (rc-eye stills are taken for the record only). If both G-patch and G-patch-flat win, the one with the larger fps gain ships. SUPERSEDED the same evening by the G1 result: \"ok well we keep the grass the way it was before then.\""
+}

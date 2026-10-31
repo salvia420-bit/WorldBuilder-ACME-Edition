@@ -1,5 +1,7 @@
-// scene3d/freeze_world_roots.js — `?freezeWorldRoots` (fps review 2026-10-19,
-// DEFAULT OFF; only `on`/`1`/`true`/`yes` arm it).
+// scene3d/freeze_world_roots.js — `?freezeWorldRoots` (fps review 2026-10-19;
+// DEFAULT ON since 2026-10-30, `off`/`0`/`false`/`no` opt out). 1070 decision bench
+// D1 (batch-R3-D1, 3 reps + A/A, clean box): moving +1.6 fps, real under R1, still /
+// tour unchanged; the owner's criterion is overall fps.
 //
 // three r184's scene walk (Object3D.updateMatrixWorld) recomputes a node's world
 // matrix when the node composes itself (matrixAutoUpdate), when it is flagged
@@ -28,13 +30,13 @@
 // right after the next main-scene render, every visible node whose world matrix
 // three maintains must equal parent.matrixWorld × matrix.
 
-/** `?freezeWorldRoots` reader (pure). Strict opt-in. */
+/** `?freezeWorldRoots` reader (pure). Default ON; only `off`/`0`/`false`/`no` turn it off. */
 export function freezeWorldRootsRequested(search) {
   try {
     const v = (new URLSearchParams(search || "").get("freezeWorldRoots") || "").toLowerCase();
-    return v === "on" || v === "1" || v === "true" || v === "yes";
+    return !(v === "off" || v === "0" || v === "false" || v === "no");
   } catch (_) {
-    return false;
+    return true;
   }
 }
 

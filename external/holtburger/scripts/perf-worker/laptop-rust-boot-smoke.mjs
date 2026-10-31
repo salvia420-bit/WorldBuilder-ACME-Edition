@@ -199,6 +199,24 @@ async function main() {
         sceneCoreAbi: (() => { try { return window.__hbSceneWasm?.sceneCoreAbi?.() ?? null; } catch (_) { return null; } })(),
         rustRig: call(window.__rustRig?.stats),
         rigPoseSkip: call(window.__rigPoseSkip?.stats),
+        // 2026-10-31 round 3: the batches and GPU particles (all default off; null unless their flag is on).
+        entityBatch: call(window.__entityBatch?.stats),
+        entityBatchVerify: call(window.__entityBatch?.verify),
+        interiorBatch: call(window.__interiorBatch?.stats),
+        gpuParticles: (() => { try { return window.__gpuParticlesDiag?.() ?? null; } catch (e) { return { error: String(e?.message ?? e) }; } })(),
+        // 2026-10-31: program keys of the interior (cell) and entity-part materials, for the batch eligibility rework.
+        programKeys: (() => { try {
+          const root = window.liveScene3d?.scene || window.__scene3d?.scene || null; if (!root) return null;
+          const cells = {}, parts = {}, chains = {};
+          root.traverse((o) => { if (!o.isMesh || !o.material) return; const ms = Array.isArray(o.material) ? o.material : [o.material];
+            const n = String(o.name || ''); const isCell = /^cellstatic|surfaces-fused/.test(n); const isPart = /^part_\d+_surface/.test(n); if (!isCell && !isPart) return;
+            for (const m of ms) { let k = null; try { k = typeof m.customProgramCacheKey === 'function' ? m.customProgramCacheKey() : null; } catch (_) { k = 'throw'; }
+              const key = (m.type || '?') + ' ' + String(k).slice(0, 120); const b = isCell ? cells : parts; b[key] = (b[key] || 0) + 1;
+              if (isCell && m.onBeforeCompile) { const s = String(m.onBeforeCompile).replace(/\s+/g, ' ').slice(0, 160); chains[s] = (chains[s] || 0) + 1; } } });
+          const top = (o, n) => Object.entries(o).sort((a, b) => b[1] - a[1]).slice(0, n);
+          return { cells: top(cells, 20), parts: top(parts, 12), cellChains: top(chains, 8) };
+        } catch (e) { return { error: String(e?.message ?? e) }; } })(),
+        contextRecovery: (() => { try { const f = window.__webglContextRecoveryHistory; const h = typeof f === "function" ? f() : f; return Array.isArray(h) ? h.slice(-20) : (h ?? null); } catch (_) { return null; } })(),
         rustCull: call(window.__rustCull?.stats),
         rustCullVerify: call(window.__rustCull?.verify),
         rustAnimScenery: call(window.__rustAnimScenery?.stats),

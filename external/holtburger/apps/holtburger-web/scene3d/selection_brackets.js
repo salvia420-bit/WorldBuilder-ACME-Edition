@@ -84,6 +84,7 @@
 
 import * as THREE from "three";
 import { CHARACTER_OPTION, isCharacterOptionEnabled } from "../ui/ac_character_options.js";
+import { hudDietOn, makeCanvasCssSize } from "../ui/hud_diet.js";
 
 /** Retail's fixed 8 px viewport margin (OnDraw :289789-:289816). */
 const EDGE_MARGIN_PX = 8;
@@ -754,6 +755,19 @@ export class SelectionBracketLayer {
     this.lastStatus = 0;       // retail ObjectSelectStatus: 0/1/2/3
     this.lastRect = null;      // {left, top, right, bottom} CSS px
     this.tickCount = 0;
+
+    // ?hudDiet=overlays (R3-2 HUD diet, ui/hud_diet.js; default off). `tick`
+    // runs every frame: with the diet on it reads the canvas CSS size from a
+    // cache refreshed on resize (no per-frame `clientWidth` layout read) and
+    // skips style writes whose value is already in place. The JS mirrors below
+    // track exactly the display / transform this class last wrote (it is the
+    // only writer of these five elements' display and transform); all five
+    // start display:none.
+    this._diet = hudDietOn("overlays");
+    this._size = this._diet ? makeCanvasCssSize(sceneCanvas) : null;
+    this._cornersHidden = true;
+    this._arrowHidden = true;
+    this._xf = this._diet ? new Map() : null;  // corner el -> last transform string
   }
 
   /**
@@ -878,13 +892,21 @@ export class SelectionBracketLayer {
   }
 
   _hideAll() {
+    if (!this._diet || !this._cornersHidden) this._hideCorners();
+    if (!this._diet || !this._arrowHidden) {
+      this._arrow.style.display = "none";
+      this._arrowHidden = true;
+    }
+    this.lastStatus = 0;
+    this.lastRect = null;
+  }
+
+  _hideCorners() {
     this._tl.style.display = "none";
     this._tr.style.display = "none";
     this._bl.style.display = "none";
     this._br.style.display = "none";
-    this._arrow.style.display = "none";
-    this.lastStatus = 0;
-    this.lastRect = null;
+    this._cornersHidden = true;
   }
 
   /**
@@ -937,8 +959,16 @@ export class SelectionBracketLayer {
       this._hideAll();
       return;
     }
-    const w = this.canvas.clientWidth || this.canvas.width || 1;
-    const h = this.canvas.clientHeight || this.canvas.height || 1;
+    let w;
+    let h;
+    if (this._size) {
+      const sz = this._size.read();
+      w = sz.w;
+      h = sz.h;
+    } else {
+      w = this.canvas.clientWidth || this.canvas.width || 1;
+      h = this.canvas.clientHeight || this.canvas.height || 1;
+    }
 
     // The sphere centre rides the rig. `_sphere.center` was captured at
     // selection time in world space; re-anchor it to the rig's CURRENT world
@@ -1031,12 +1061,24 @@ export class SelectionBracketLayer {
     this._place(this._tr, boxR - cw, boxT);
     this._place(this._bl, boxL, boxB - ch);
     this._place(this._br, boxR - cw, boxB - ch);
-    this._arrow.style.display = "none";
+    this._cornersHidden = false;
+    if (!this._diet || !this._arrowHidden) {
+      this._arrow.style.display = "none";
+      this._arrowHidden = true;
+    }
     this.lastStatus = 1;
     this.lastRect = { left: boxL, top: boxT, right: boxR, bottom: boxB };
   }
 
   _place(el, x, y) {
+    if (this._xf) {
+      // hudDiet=overlays: the same corner position writes nothing (a still
+      // camera on a still target re-projects to the same integer box).
+      const t = `translate3d(${x}px, ${y}px, 0)`;
+      if (this._xf.get(el) !== t) { el.style.transform = t; this._xf.set(el, t); }
+      if (this._cornersHidden) el.style.display = "block";
+      return;
+    }
     el.style.transform = `translate3d(${x}px, ${y}px, 0)`;
     if (el.style.display !== "block") el.style.display = "block";
   }
@@ -1049,10 +1091,7 @@ export class SelectionBracketLayer {
    * and is correct for the behind-camera case once mirrored.
    */
   _showOffScreen(ndc, w, h) {
-    this._tl.style.display = "none";
-    this._tr.style.display = "none";
-    this._bl.style.display = "none";
-    this._br.style.display = "none";
+    if (!this._diet || !this._cornersHidden) this._hideCorners();
     let nx = ndc.x;
     let ny = ndc.y;
     // Behind the camera: the perspective divide mirrors the point.
@@ -1075,6 +1114,7 @@ export class SelectionBracketLayer {
     this._arrow.style.transform =
       `translate3d(${px | 0}px, ${py | 0}px, 0) translate(-50%, -50%) rotate(${deg.toFixed(1)}deg)`;
     if (this._arrow.style.display !== "block") this._arrow.style.display = "block";
+    this._arrowHidden = false;
     this.lastStatus = 2;
     this.lastRect = null;
   }
@@ -1083,6 +1123,7 @@ export class SelectionBracketLayer {
     for (const el of [this._tl, this._tr, this._bl, this._br, this._arrow]) {
       try { if (el.parentNode) el.parentNode.removeChild(el); } catch (_) {}
     }
+    if (this._size) { this._size.dispose(); this._size = null; }
     // 2026-08-03: drop the target refs too. `_follow` is a live entity rig root
     // and `_sphere.offset` a THREE.Vector3; a disposed layer that is still
     // reachable (e.g. via a stale `window.__diag.selectionBrackets` closure, which

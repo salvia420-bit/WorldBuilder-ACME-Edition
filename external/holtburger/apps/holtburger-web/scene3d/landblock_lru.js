@@ -1953,6 +1953,8 @@ export class LandblockLRU {
         for (const id of killIds) s.cellContainers3d.delete(id);
       }
     }
+    // R3-5 ?interiorBatch: this landblock's interior batch leaves with its cells (no ghost frame).
+    try { s.interiorBatchHooks?.detached?.(lbKey, "evict"); } catch (_) { /* fail-soft */ }
 
     // NOTE: world ENTITIES (EntityManager objects — players/creatures/items)
     // are deliberately NOT culled here. The LRU owns render resources; the
@@ -2370,6 +2372,7 @@ export class LandblockLRU {
         s.cellContainers3d.delete(cellId);
       }
     }
+    try { s.interiorBatchHooks?.detached?.(lbKey, "park"); } catch (_) { /* fail-soft */ }
     // Cancel any in-flight envcell build exactly like evict does — a build
     // resolving after park would attach cells the pool also holds.
     if (s.envCellBuildInFlight instanceof Set) s.envCellBuildInFlight.delete(lbKey);
@@ -2559,6 +2562,7 @@ export class LandblockLRU {
         s.cellContainers3d.set(cellId, container);
       }
     }
+    try { s.interiorBatchHooks?.attached?.(lbKey); } catch (_) { /* fail-soft */ }
     for (const [light, parent] of p.detachedLights) {
       try { parent.add(light); } catch (_) {}
     }

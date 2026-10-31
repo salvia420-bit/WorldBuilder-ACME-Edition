@@ -120,6 +120,7 @@
 // `?orbCaustics=off` / `?orbHz=15` / `?orbScale=` remain the levers.
 
 import { attachWindowPosition, WINDOW_ID } from "../ui/ac_window_position.js";
+import { hudDietOn } from "../ui/hud_diet.js";
 
 // One overlay PER VITAL. The ids are load-bearing: index.html's
 // agent-mode chrome strip exempts all three by id.
@@ -458,6 +459,34 @@ const HERALDRY = {
 // --hb-badge-* tokens never leak onto :root and collide with the rest
 // of the HUD. The base --hb-* palette tokens are inherited from
 // index.html's :root block, exactly as the concept card assumed.
+//
+// `opts.orbLayer` (?hudDiet=orbLayer, R3-2) appends ONE rule; without it the
+// text is the pre-diet stylesheet, byte for byte.
+export function orbStyleText(opts) {
+  return styleText() + (opts && opts.orbLayer ? ORB_LAYER_RULE : "");
+}
+
+// ?hudDiet=orbLayer. The vessel core already has its own PAINT chunk
+// (`contain: paint`, the invalidation wall above), but it shares a compositor
+// LAYER with the glow, the figure sprites and, on stamina, the bow that lies
+// across its base (z-index 5, above the core). Raster replays every display
+// item under an invalidated rect, so each 30 Hz wave tick also re-ran the
+// figures' saturate/contrast + double drop-shadow filter chain and the glow
+// gradient wherever they overlap the 92x92 box (inventory 2026-10-31 §2.1).
+// `will-change: opacity` makes the core a composited effect: its chunks go to
+// a layer of their own, the tick dirties only that layer, and the overlapping
+// figures stay rastered once. Pixels: the core is already an isolated group
+// (blend modes inside it never reach past it), so drawing it as a separate
+// source-over layer is the same composite. NOT `will-change: transform`: cc
+// treats that hint as "will animate" (raster scale pinned, no raster
+// translation), so a fractional pane offset could be resampled instead of
+// rastered in place. Opacity stays 1 and nothing animates it; the cost is one
+// ~99x99 px layer per orb. The only lever with a look risk (compositing): it
+// gets the owner glance in the HUD arm.
+const ORB_LAYER_RULE = `
+${P} .hbo-core { will-change: opacity; }
+`;
+
 function styleText() {
   return `
 ${P} {
@@ -831,11 +860,11 @@ ${P} .orb-read .v {
 `;
 }
 
-function ensureStyles() {
+function ensureStyles(opts) {
   if (document.getElementById(STYLE_ID)) return;
   const style = document.createElement("style");
   style.id = STYLE_ID;
-  style.textContent = styleText();
+  style.textContent = orbStyleText(opts);
   document.head.appendChild(style);
 }
 
@@ -857,13 +886,48 @@ function ensureStyles() {
 // the next one. Returns null when off or when `getAnimations` is missing.
 const _animStart = new WeakMap();  // Animation -> its timeline start (ms)
 
-export function makeOrbAnimSync(roots) {
+// ?hudDiet=orbSync (R3-2 HUD diet, ui/hud_diet.js; default off; `opts.cached`
+// forces it either way): a full step (the one below, unchanged) runs only when
+// the loop set may have changed; every other cadence
+// tick is a LIGHT step over the list the last full step left. The light step
+// reads each live loop's currentTime (an Animation getter: no style flush,
+// unlike getAnimations() and a CSSAnimation's playState) and, if every one is
+// still live, writes `currentTime = now - start` to each, in the same order.
+// That is exactly the write a full step makes for a loop it already adopted and
+// paused (playState "paused" -> no pause() call), so the sampled phase is
+// identical; what goes is one forced style flush, the subtree walks and the
+// playState reads per tick. A full step runs instead when: invalidate() was
+// called (driver.invalidateAnims(): mount's setHidden on a change, and
+// applyLowState — the only events that start or cancel loops; a no-op for the
+// uncached sync, so the default call pattern is unchanged), a live loop reads idle (null currentTime: CSS
+// cancelled it), a light write threw, or ORB_SYNC_RECOLLECT_TICKS - 1 light
+// steps have run (a ~1 s safety net for anything else, e.g. a reduced-motion
+// change; a loop found late meanwhile runs on Blink's own clock, same frames).
+export const ORB_SYNC_RECOLLECT_TICKS = 30;
+
+export function makeOrbAnimSync(roots, opts) {
   if (!orbAnimSyncEnabled()) return null;
   if (!roots || !roots.some((r) => r && typeof r.getAnimations === "function")) return null;
   let live = [];
   // Reused per step: [animation, start, playState] triples (no per-tick garbage
   // beyond the `next` list release() needs).
   const todo = [];
+  // `opts.cached` forces the mode (tests); otherwise ?hudDiet=orbSync decides.
+  const cached = opts && opts.cached !== undefined ? !!opts.cached : hudDietOn("orbSync");
+  let starts = [];   // cached: adoption start per `live` entry
+  let dirty = true;  // cached: the next step must be a full one
+  let light = 0;     // cached: light steps since the last full one
+  function lightStep(now) {
+    for (let i = 0; i < live.length; i++) {
+      let ct;
+      try { ct = live[i].currentTime; } catch (_) { return false; }
+      if (ct == null) return false;
+    }
+    for (let i = 0; i < live.length; i++) {
+      try { live[i].currentTime = now - starts[i]; } catch (_) { dirty = true; }
+    }
+    return true;
+  }
   return {
     /** Sample every infinite loop under `roots` at timeline time `now`. */
     // 2026-10-26 (lane F hot spots) — READS FIRST, THEN WRITES. A CSSAnimation's
@@ -881,6 +945,10 @@ export function makeOrbAnimSync(roots) {
     // keeps getAnimations' order — the writes touch only that animation, so no
     // read can see a different value for being taken earlier.
     step(now) {
+      if (cached && !dirty && light < ORB_SYNC_RECOLLECT_TICKS - 1 && lightStep(now)) {
+        light += 1;
+        return;
+      }
       todo.length = 0;
       for (const root of roots) {
         if (!root || typeof root.getAnimations !== "function") continue;
@@ -904,17 +972,22 @@ export function makeOrbAnimSync(roots) {
         }
       }
       const next = [];
+      const nextStarts = cached ? [] : null;
       for (let i = 0; i < todo.length; i += 3) {
         const a = todo[i];
         try {
           if (todo[i + 2] !== "paused") a.pause();
           a.currentTime = now - todo[i + 1];
           next.push(a);
+          if (nextStarts) nextStarts.push(todo[i + 1]);
         } catch (_) {}
       }
       todo.length = 0;
       live = next;
+      if (cached) { starts = nextStarts; dirty = false; light = 0; }
     },
+    /** Cached mode: make the next step a full one (no-op otherwise). */
+    invalidate() { dirty = true; },
     /** Hand the loops back to Blink's clock at their current phase. */
     release(now) {
       for (const a of live) {
@@ -925,6 +998,8 @@ export function makeOrbAnimSync(roots) {
         } catch (_) {}
       }
       live = [];
+      starts = [];
+      dirty = true;
     },
     get count() { return live.length; },
   };
@@ -1009,6 +1084,7 @@ function createDriver(orbs, reducedMotion, hz, syncRoots = null) {
   let frames = 0;
   // ?orbAnimSync: the CSS loops follow this cadence too (makeOrbAnimSync).
   // Never built under reduced motion — the stylesheet turns them off there.
+  // ?hudDiet=orbSync is read inside makeOrbAnimSync (cached sampling).
   const sync = reducedMotion ? null : makeOrbAnimSync(syncRoots);
   const timelineNow = (t) => {
     const ct = typeof document !== "undefined" ? document.timeline?.currentTime : null;
@@ -1056,6 +1132,8 @@ function createDriver(orbs, reducedMotion, hz, syncRoots = null) {
       this.pause();
       if (sync) sync.release(timelineNow(performance.now()));
     },
+    /** ?hudDiet=orbSync: the loop set may have changed; re-collect next tick. */
+    invalidateAnims() { if (sync) sync.invalidate(); },
     get running() { return raf !== 0; },
     get animSynced() { return sync ? sync.count : 0; },
     get tickMs() { return tickMs; },
@@ -1448,7 +1526,7 @@ function applyVital(orb, current, buffedMax, base, oldValue, driver) {
     if (current < oldValue && mag > 0.01) armGlare(orb);
   }
 
-  if (orb.kind === "hp") applyLowState(orb, frac);
+  if (orb.kind === "hp") applyLowState(orb, frac, driver);
   driver?.start();
 }
 
@@ -1465,10 +1543,12 @@ function armGlare(orb) {
   }, GLARE_MS);
 }
 
-function applyLowState(orb, frac) {
+function applyLowState(orb, frac, driver) {
   const low = frac > 0 && frac < LOW_HP_FRAC;
   if (low === orb.low) return;
   orb.low = low;
+  // ?hudDiet=orbSync: `.beat` and the fracture glints / bloom start or stop.
+  driver?.invalidateAnims?.();
   orb.svg.classList.toggle("low", low);
   orb.core.classList.toggle("beat", low);
   // The fracture web is ~120 path nodes; build it the first time it is
@@ -1495,7 +1575,9 @@ export function mount(ctx) {
   // read and nothing else — no DOM, no styles, no rAF.
   if (!isVitalsOrbsActive()) return () => {};
 
-  ensureStyles();
+  // R3-2 HUD diet levers (ui/hud_diet.js; default off), read once per mount.
+  const dietSync = hudDietOn("orbSync");
+  ensureStyles({ orbLayer: hudDietOn("orbLayer") });
   ensureSharedDefs();
   preloadSpriteMasks();
 
@@ -1519,7 +1601,16 @@ export function mount(ctx) {
     panes[kind] = pane;
     paneList.push(pane);
   }
-  const setHidden = (h) => { for (const p of paneList) p.hidden = h; };
+  // ?hudDiet=orbSync: a pane that is shown or hidden starts or cancels its
+  // loops, so a CHANGE re-collects them (the getter only runs with the diet on).
+  const setHidden = (h) => {
+    let changed = false;
+    for (const p of paneList) {
+      if (dietSync && p.hidden !== h) changed = true;
+      p.hidden = h;
+    }
+    if (changed) driver.invalidateAnims();
+  };
 
   const orbs = collectOrbs(panes);
   const byType = new Map(orbs.map((o) => [o.type, o]));

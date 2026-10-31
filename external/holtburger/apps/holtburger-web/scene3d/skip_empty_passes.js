@@ -38,7 +38,7 @@
 // (mask 0 ⇒ zero renderable items, by three's own test), plus refusals for
 // anything the empty stand-in would not reproduce: a scene background (a
 // Color force-clears, a Texture adds a mesh), a custom scene
-// onBeforeRender/onAfterRender (entity_world, frame_split), a pass selection
+// onBeforeRender/onAfterRender (e.g. frame_split's), a pass selection
 // or override material, XR presenting, an ArrayCamera. A non-zero mask is
 // never skipped: proving it empty would need the walk this exists to avoid.
 //

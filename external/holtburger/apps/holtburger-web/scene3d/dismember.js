@@ -424,6 +424,7 @@ export function slicePart(inst, partIndex, planePointW, planeNormalW, opts = {})
 }
 
 async function _slicePartNow(inst, partIndex, planePointW, planeNormalW, opts = {}) {
+  inst?.demoteBatch?.("dismember"); // R3-4 ?entityBatch: a dismembered rig stays legacy (inert with the flag off)
   const part = inst?.parts?.[partIndex];
   if (!part) return null;
   const meshes = _partMeshes(part);
@@ -709,6 +710,7 @@ export function fracturePart(inst, partIndex, opts = {}) {
 }
 
 async function _fracturePartNow(inst, partIndex, opts = {}) {
+  inst?.demoteBatch?.("dismember");
   const part = inst?.parts?.[partIndex];
   if (!part) return null;
   const meshes = _partMeshes(part);
@@ -782,6 +784,7 @@ async function _fracturePartNow(inst, partIndex, opts = {}) {
  * opts: { impactPointW, impactRadius, fragmentCount, maxEject, ejectFrac, seed }
  */
 export async function chipPart(inst, partIndex, opts = {}) {
+  inst?.demoteBatch?.("dismember");
   const part = inst?.parts?.[partIndex];
   if (!part) return null;
   const meshes = _partMeshes(part);
@@ -982,6 +985,7 @@ function _applyDislocations(inst) {
  * opts: { severity 0..1, chainParts:[i], axis:[x,y,z], rand }
  */
 export function dislocatePart(inst, partIndex, opts = {}) {
+  inst?.demoteBatch?.("dislocate");
   const part = inst?.parts?.[partIndex];
   if (!part) return null;
   const sev = Math.max(0, Math.min(1, opts.severity ?? 0.6));
@@ -1112,6 +1116,7 @@ export function restoreParts(inst) {
  * or rig mismatch — corpse keeps full geometry, the safe fallback).
  */
 export function transferDismemberment(fromInst, toInst) {
+  toInst?.demoteBatch?.("corpseCarry");
   if (!fromInst || !toInst?.parts?.length) return 0;
   const nFrom = fromInst.parts?.length ?? 0;
   const stash = fromInst._dismemberStash;
@@ -1247,6 +1252,7 @@ function _archiveCorpseDismemberment(inst) {
  * Returns true when anything was restored.
  */
 export function restoreCorpseDismemberment(inst) {
+  inst?.demoteBatch?.("corpseCarry");
   const g = Number(inst?.guid) >>> 0;
   const entry = g ? _corpseDism.get(g) : null;
   if (!entry) return false;

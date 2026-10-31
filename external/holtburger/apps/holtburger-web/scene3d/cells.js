@@ -75,6 +75,13 @@ import { getOcclusionCuller, CELL_SHRINK_M } from "./occlusion_cull.js";
 // ?interiorShadowCull (perf 2026-10-17): interiors cast no sun shadows while the
 // camera is outdoors.
 import { interiorCastWanted, syncCellShadowCast, requestShadowRaster } from "./interior_shadow_cull.js";
+// R3-5 `?interiorBatch` (2026-10-30, DEFAULT OFF; `=on` opt-in, `=plan` census
+// only): per-landblock merged interior draws with per-cell visibility bits
+// (scene3d/gpu_batch/interior_batch.js). Off: seven constant-false branches
+// below, nothing called. NB single line (the statics.js:80 line-strip rule).
+import { interiorBatchMode, noteInteriorBatchBuilt, ibNoteVisible, syncInteriorBatches, ibNotePooled } from "./gpu_batch/interior_batch.js";
+const IB_MODE = interiorBatchMode();
+const IB_ON = IB_MODE !== "off";
 // ?interiorApertureCull (perf 2026-10-17): outdoors, an interior room is drawn
 // only when a door/window it can be seen through is in view.
 import {
@@ -2293,6 +2300,8 @@ export async function buildEnvCellsForLandblock(scene3d, landblockId, wasmExport
       const pooledFlags = envCellPools
         ? _offerCellSurfaces(scene3d, snap, meshGroup, resolvedGroups, cellsShadow, lbKey)
         : null;
+      // R3-5 `?interiorBatch`: the offer's verdict, for the batch's pooled / legacy split.
+      if (IB_ON && pooledFlags) ibNotePooled(cellContainer, resolvedGroups, pooledFlags);
       for (let gi = 0; gi < resolvedGroups.length; gi += 1) {
         if (pooledFlags && pooledFlags[gi]) continue;
         const { group: g, material: mat } = resolvedGroups[gi];
@@ -2380,6 +2389,7 @@ export async function buildEnvCellsForLandblock(scene3d, landblockId, wasmExport
       const pooledUnfused = envCellPools
         ? _offerCellSurfaces(scene3d, snap, meshGroup, resolvedUnfused, cellsShadow, lbKey)
         : null;
+      if (IB_ON && pooledUnfused) ibNotePooled(cellContainer, resolvedUnfused, pooledUnfused);
       for (let gi = 0; gi < resolvedUnfused.length; gi += 1) {
         if (pooledUnfused && pooledUnfused[gi]) continue;
         const { group: g, material: mat } = resolvedUnfused[gi];
@@ -2762,6 +2772,10 @@ export async function buildEnvCellsForLandblock(scene3d, landblockId, wasmExport
   }
   // geom-audit: build reached attach — NOW the LB counts as loaded.
   scene3d.envCellLoadedLbs.add(lbKey);
+  // R3-5 `?interiorBatch`: the built landblock is offered for batching
+  // (single-stage attach and walls-first stage 2 both end here; cancelled or
+  // evicted builds never do).
+  if (IB_ON) noteInteriorBatchBuilt(scene3d, lbKey, buildGen, newCells);
 
   // 2026-06-23: light up interior props' default_script particle chains
   // (braziers/torches/fountains) — the indoor twin of the outdoor
@@ -3551,6 +3565,7 @@ export function tickCellVisibility3D(scene3d, sessionHandle) {
       if (container.visible !== want) {
         container.visible = want;
       }
+      if (IB_ON) ibNoteVisible(container, want);
       if (want && syncCellShadowCast(container, castOn)) castChanged = true;
     }
   } else {
@@ -3566,6 +3581,7 @@ export function tickCellVisibility3D(scene3d, sessionHandle) {
       if (container.visible !== true) {
         container.visible = true;
       }
+      if (IB_ON) ibNoteVisible(container, true);
       if (syncCellShadowCast(container, castOn)) castChanged = true;
     }
     // Newly-hidden cells: iterate prior frame's set and flip out anything
@@ -3576,6 +3592,7 @@ export function tickCellVisibility3D(scene3d, sessionHandle) {
       if (container && container.visible !== false) {
         container.visible = false;
       }
+      if (IB_ON && container) ibNoteVisible(container, false);
     }
     // Roll the snapshot forward. Replace contents in place so the Set
     // object is stable across frames (avoids per-frame allocation).
@@ -3586,6 +3603,8 @@ export function tickCellVisibility3D(scene3d, sessionHandle) {
   // RENDER-5: pass scene3d so the managed lights' own shadow.autoUpdate
   // gate (lighting.js mover scope) re-rasters too.
   if (castChanged) requestShadowRaster(scene3d.renderer, scene3d);
+  // R3-5 `?interiorBatch`: cast rows, drift, plan / build / activate, one bits upload.
+  if (IB_ON) syncInteriorBatches(scene3d, isIndoor, castOn);
 
   // Wave-3 diag hook: post-flip notify so diag.pvs can detect transitions
   // against the just-applied visibility state. Reuses `cellId` resolved

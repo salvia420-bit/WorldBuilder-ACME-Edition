@@ -3,7 +3,6 @@
   {"name": "rc-alloff-ultra", "quality": "ultra", "flags": "rustParticles=off&rustRig=off&rustEntityCull=off&anchorOffGraph=off&staticMatrixFreeze=off&poolSizeToContent=off&rustCull=off&rustAnimScenery=off&rustAnimSceneryGate=off&rustTerrainFx=off&drawExec=off&drawExecRigs=off&hotMatVariant=off&hotDrawSort=off&hotCloudPush=off&hotTerrainTime=off&hotNightRamp=off"},
   {"name": "rc-noexec-ultra", "quality": "ultra", "flags": "drawExec=off"},
   {"name": "rc-alias-ultra", "quality": "ultra", "flags": "rigMeshAlias=on"},
-  {"name": "rc-entityworld-ultra", "quality": "ultra", "flags": "rustEntityWorld=on"},
   {"name": "rc-terrainshared-ultra", "quality": "ultra", "flags": "hotTerrainShared=on"},
   {"name": "rc-weaponfx-ultra", "quality": "ultra", "flags": "hotWeaponFxSync=on"},
   {"name": "rc-grasscull-ultra", "quality": "ultra", "flags": "hotGrassCull=on"}

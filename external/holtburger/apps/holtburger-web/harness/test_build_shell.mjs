@@ -382,7 +382,12 @@ console.log("PART 5 — request arithmetic (static; browser count is a separate 
   // array_pages,class_materials,kit,layer_state,page_allocator,raycast,row_texture,upload_budget}.js
   // (animated_scenery.js, lane K) + scene3d/skip_empty_passes.js (atmosphere_pipeline.js) and
   // scene3d/upload_warm_draw.js (index.js) (lane R) (generator --check: up to date, 468 modules) → 447.
-  const NON_APP_PRELOADS = 447;
+  // 2026-10-30 (lane DEL, after the 1070 D1 bench): − scene3d/entity_world.js (entities.js / index.js) and
+  // scene3d/upload_warm_draw.js (index.js), both deleted (generator --check: up to date, 466 modules) → 445.
+  // 2026-10-31 (round 3 R3-4 + R3-5): + scene3d/gpu_batch/entity_batch.js (entities.js) and
+  // scene3d/gpu_batch/interior_batch.js (cells.js) (generator --check: up to date, 468 modules) → 447.
+  // 2026-10-31 (round 3 R3-2 HUD diet): + ui/hud_diet.js (ui/hud_scale.js, ui/ac_font.js, plugins/radar.js, plugins/vitals-orbs.js, scene3d/selection_brackets.js, scene3d/index.js) (generator --check: up to date, 469 modules) → 448.
+  const NON_APP_PRELOADS = 448;
   check(mp.length === NON_APP_PRELOADS + appMods, `unbundled modulepreload block == ${NON_APP_PRELOADS} + ${appMods} app/ link elements (got ${mp.length})`);
   const workersInMp = mp.filter((h) => /(?:bake|net|texture|keepalive)_worker\.js/.test(h)).length;
   // html + 266 modules + wasm + SW + workers not in the preload list (bake + shard fetch;

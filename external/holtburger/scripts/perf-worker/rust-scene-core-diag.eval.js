@@ -8,9 +8,9 @@
 // (scripts/perf-worker/laptop-rust-boot-smoke.mjs). Changes nothing on the page.
 // 2026-10-29: also `__drawExec.census(N)` first when window.__rcCensusFrames is set (every draw by kind and
 // outcome), the executor's bar in one place (`drawExecBar`: verify fails 0 with checks > 0, stats.texDemoted 0),
-// and the round-2 lanes' diags for their arms: ?rustEntityWorld (`__entityWorld.stats()`), ?rustWorld
-// (`__rustWorld.stats()` + `audit()`), ?hotTerrainShared (`__terrainShared.stats()` + `verify()`),
-// ?hotWeaponFxSync (`__weaponFx.stats()`).
+// and the round-2 lanes' diags for their arms: ?rustWorld (`__rustWorld.stats()` + `audit()`),
+// ?hotTerrainShared (`__terrainShared.stats()` + `verify()`), ?hotWeaponFxSync (`__weaponFx.stats()`).
+// (?rustEntityWorld and its `__entityWorld.stats()` read were deleted 2026-10-30 after the D1 bench.)
 
 const call = (f) => { try { return typeof f === "function" ? f() : null; } catch (e) { return { error: String(e?.message ?? e) }; } };
 const frames = window.__rcVerifyFrames || 120;
@@ -37,10 +37,7 @@ return {
       pass: verify.fails === 0 && verify.checks > 0 && st.texDemoted === 0 };
   })(),
   drawExecCensus: census,
-  // ?rustEntityWorld: `projections` must be 1 (0 with the flag on = only the walk half runs; builds
-  // before 2026-10-29 never installed the projection), renders > 0, cold ≈ visible part meshes.
-  entityWorld: call(window.__entityWorld?.stats),
-  rustWorld: call(window.__rustWorld?.stats),
+  rustWorld: call(window.__rustWorld?.stats),  // ?rustEntityWorld (`entityWorld`) was deleted 2026-10-30 (D1)
   // audit() also returns its input arena (every instance matrix): never hand that back over CDP.
   rustWorldAudit: (() => { try { const a = window.__rustWorld?.audit?.(); return a ? { mismatches: a.mismatches, report: a.report } : null; } catch (e) { return { error: String(e?.message ?? e) }; } })(),
   terrainShared: call(window.__terrainShared?.stats),

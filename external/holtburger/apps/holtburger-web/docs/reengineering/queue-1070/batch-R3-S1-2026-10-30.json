@@ -66,24 +66,6 @@
     "why": "the reader alone installs nothing"
    },
    {
-    "flag": "uploadWarmDraw",
-    "file": "apps/holtburger-web/scene3d/upload_warm_draw.js",
-    "patterns": [
-     "rustFlag\\(\"uploadWarmDraw\", false\\)",
-     "prunedFrames: 0, depthCapped: 0,",
-     "if \\(opts && opts\\.nullRender\\) return null;"
-    ],
-    "why": "S1-BENCH UWD-on, S1-ROUTE R-UWD, S1-DIAG G-UWD-up; lane R2 rework (stack re-check, depth cap, nullRender)"
-   },
-   {
-    "flag": "uploadWarmDraw (index.js install)",
-    "file": "apps/holtburger-web/scene3d/index.js",
-    "patterns": [
-     "\\[worldRoot, terrainGroup, buildingsGroup, staticsGroup, cellsGroup, entitiesGroup\\], \\{ nullRender \\}\\)"
-    ],
-    "why": "the install with lane R2's nullRender option"
-   },
-   {
     "flag": "animSceneryBatch",
     "file": "apps/holtburger-web/scene3d/animated_scenery.js",
     "patterns": [
@@ -143,6 +125,28 @@
     "file": "apps/holtburger-web/pkg/holtburger_web_bg.wasm",
     "patterns": [],
     "why": "hb-mksnap.sh symlinks pkg/ into the live tree; the snapshot must freeze its own release wasm (release-ness: S1-PRE wasm_profile.mjs and hbbench's served-wasm abort)"
+   }
+  ],
+  "removedReaders": [
+   {
+    "flag": "uploadWarmDraw",
+    "file": "apps/holtburger-web/scene3d/upload_warm_draw.js",
+    "patterns": [
+     "rustFlag\\(\"uploadWarmDraw\", false\\)",
+     "prunedFrames: 0, depthCapped: 0,",
+     "if \\(opts && opts\\.nullRender\\) return null;"
+    ],
+    "why": "S1-BENCH UWD-on, S1-ROUTE R-UWD, S1-DIAG G-UWD-up; lane R2 rework (stack re-check, depth cap, nullRender)",
+    "removed": "2026-10-30, flag deleted after D1"
+   },
+   {
+    "flag": "uploadWarmDraw (index.js install)",
+    "file": "apps/holtburger-web/scene3d/index.js",
+    "patterns": [
+     "\\[worldRoot, terrainGroup, buildingsGroup, staticsGroup, cellsGroup, entitiesGroup\\], \\{ nullRender \\}\\)"
+    ],
+    "why": "the install with lane R2's nullRender option",
+    "removed": "2026-10-30, flag deleted after D1"
    }
   ]
  },
@@ -880,7 +884,38 @@
      "decisionRule": "R3 (i)-(v) as written; (i) = S1-ANATOMY main busy vs -0.075 ms; (v) = the S1-EYE ASB list under R4. Written 2026-10-30 BEFORE the run: like rigPoseSkip, the predicted ms is below R1's floors, so a default flip from this arm alone is unlikely; R6 does not apply (R3-3 proves the kit, it is not a stage-A structural lane). Any never-drawn > 0, an undrained overlap or a blink in S1-CTX is a defect to fix before any re-run, whatever the timing says."
     },
     {
+     "name": "SEP-out",
+     "flags": "skipEmptyPasses=on",
+     "gate": "!!window.__skipEmptyPasses && window.__skipEmptyPasses.stats().installed > 0",
+     "gateInfo": "({ sep: window.__skipEmptyPasses ? window.__skipEmptyPasses.stats() : null, gate: typeof window.__indoorLandscapeGateDiag === 'function' ? window.__indoorLandscapeGateDiag() : null })",
+     "scored": "control: still / moving / tour fps, p50 / p95, main busy not worse",
+     "diagReads": [
+      {
+       "read": "gateInfo after the settle at Holtburg (every rep)",
+       "pass": "sep.installed > 0; sep.skipped === 0 outdoors; refusedHooks === 0",
+       "fields": {
+        "apps/holtburger-web/scene3d/skip_empty_passes.js": [
+         "installed",
+         "skipped",
+         "refusedHooks"
+        ]
+       }
+      }
+     ],
+     "prediction": "[D] lane R: 0 outdoors (skipped stays 0); no segment changes.",
+     "look": {
+      "class": "exact (identical GL stream)",
+      "rcEye": [
+       "Outdoor control shot: rc-eye.mjs holtburg-orbit (see S1-EYE skipEmptyPasses list item 5)."
+      ]
+     },
+     "decisionRule": "Control only: no flip from this arm. Pass = skipped === 0 and no segment worse by a real R1 delta; the skipEmptyPasses verdict is S1-INDOOR's, with this arm as its outdoor no-regression check (R3 (ii) 'no segment regressed by one')."
+    }
+   ],
+   "removedArms": [
+    {
      "name": "UWD-on",
+     "removed": "2026-10-30, flag deleted after D1",
      "flags": "uploadWarmDraw=on",
      "gate": "!!window.__uploadWarmDraw && window.__uploadWarmDraw.enabled === true",
      "gateInfo": "window.__uploadWarmDraw ? window.__uploadWarmDraw.stats() : null",
@@ -938,34 +973,6 @@
       ]
      },
      "decisionRule": "Hitch change: plan section 5 R3 as amended 2026-10-30: 'For a hitch change (R3-2's upload draw and worker-wait fixes, scored on hitch metrics per R3-2), (i) and (ii) read on its predicted hitch metrics instead: first-turn max and h100 better by a real delta, and no still / moving / tour fps segment worse by one.' That sentence settles the point lane Q left OPEN for the owner; no ruling is needed before the run. Read, written 2026-10-30 BEFORE the run: (i)+(ii) = S1-BENCH UWD-on vs A: firstTurn.max AND firstTurn.h100 both better by a real R1 delta, and no still / moving / tour fps segment worse by a real delta; (iii) the other hitch rows (tour h100 / h250 / max / jankMs, still / moving p99; S1-ROUTE's hopTurns max / h100 / h250 and loaf.max) not worse by a real delta; (iv) 0 console errors; (v) the look gate (R4). hbreport r3_keep still reads (i) / (ii) on binding-thread ms and fps, so for this arm its printed R3 verdict is NOT the verdict: read these rows of its compare table (S1-REPORT). INCONCLUSIVE gets 3 more reps once, then the flag stays off."
-    },
-    {
-     "name": "SEP-out",
-     "flags": "skipEmptyPasses=on",
-     "gate": "!!window.__skipEmptyPasses && window.__skipEmptyPasses.stats().installed > 0",
-     "gateInfo": "({ sep: window.__skipEmptyPasses ? window.__skipEmptyPasses.stats() : null, gate: typeof window.__indoorLandscapeGateDiag === 'function' ? window.__indoorLandscapeGateDiag() : null })",
-     "scored": "control: still / moving / tour fps, p50 / p95, main busy not worse",
-     "diagReads": [
-      {
-       "read": "gateInfo after the settle at Holtburg (every rep)",
-       "pass": "sep.installed > 0; sep.skipped === 0 outdoors; refusedHooks === 0",
-       "fields": {
-        "apps/holtburger-web/scene3d/skip_empty_passes.js": [
-         "installed",
-         "skipped",
-         "refusedHooks"
-        ]
-       }
-      }
-     ],
-     "prediction": "[D] lane R: 0 outdoors (skipped stays 0); no segment changes.",
-     "look": {
-      "class": "exact (identical GL stream)",
-      "rcEye": [
-       "Outdoor control shot: rc-eye.mjs holtburg-orbit (see S1-EYE skipEmptyPasses list item 5)."
-      ]
-     },
-     "decisionRule": "Control only: no flip from this arm. Pass = skipped === 0 and no segment worse by a real R1 delta; the skipEmptyPasses verdict is S1-INDOOR's, with this arm as its outdoor no-regression check (R3 (ii) 'no segment regressed by one')."
     }
    ],
    "recipe": [
@@ -1194,36 +1201,6 @@
      "note": "R-A again: the A/A"
     },
     {
-     "name": "R-UWD",
-     "flags": "uploadWarmDraw=on",
-     "gate": "!!window.__uploadWarmDraw && window.__uploadWarmDraw.enabled === true",
-     "gateInfo": "window.__uploadWarmDraw ? window.__uploadWarmDraw.stats() : null",
-     "diagReads": [
-      {
-       "read": "result.end.uploadWarmDraw",
-       "pass": "draws > 0, ready true, depthCapped === 0; prunedFrames, lateDraws, droppedHidden recorded",
-       "fields": {
-        "apps/holtburger-web/scene3d/upload_warm_draw.js": [
-         "draws",
-         "ready",
-         "depthCapped",
-         "prunedFrames",
-         "lateDraws",
-         "droppedHidden"
-        ]
-       }
-      }
-     ],
-     "prediction": "[D] lanes R / R2: hop-turn max and h100 down (buffers uploaded at arrival); fps flat; content time unchanged.",
-     "look": {
-      "class": "none by construction",
-      "rcEye": [
-       "S1-EYE uploadWarmDraw list item 3 (a westward hop + turn)."
-      ]
-     },
-     "decisionRule": "Hitch change: plan section 5 R3 as amended 2026-10-30: 'For a hitch change (R3-2's upload draw and worker-wait fixes, scored on hitch metrics per R3-2), (i) and (ii) read on its predicted hitch metrics instead: first-turn max and h100 better by a real delta, and no still / moving / tour fps segment worse by one.' That sentence settles the point lane Q left OPEN for the owner; no ruling is needed before the run. Read, written 2026-10-30 BEFORE the run: (i)+(ii) = S1-BENCH UWD-on vs A (the first-turn and fps rows are hbbench's; this route adds rows under (iii)): firstTurn.max AND firstTurn.h100 both better by a real R1 delta, and no still / moving / tour fps segment worse by a real delta; (iii) the other hitch rows (tour h100 / h250 / max / jankMs, still / moving p99; S1-ROUTE's hopTurns max / h100 / h250 and loaf.max) not worse by a real delta; (iv) 0 console errors; (v) the look gate (R4). hbreport r3_keep still reads (i) / (ii) on binding-thread ms and fps, so for this arm its printed R3 verdict is NOT the verdict: read these rows of its compare table (S1-REPORT). INCONCLUSIVE gets 3 more reps once, then the flag stays off."
-    },
-    {
      "name": "R-BW0",
      "flags": "bakeWorker=0",
      "gate": "typeof window.__bakeWorkerSeq === 'function' && window.__bakeWorkerSeq() <= 1",
@@ -1277,6 +1254,39 @@
      "decisionRule": "Hitch change: plan section 5 R3 as amended 2026-10-30: 'For a hitch change (R3-2's upload draw and worker-wait fixes, scored on hitch metrics per R3-2), (i) and (ii) read on its predicted hitch metrics instead: first-turn max and h100 better by a real delta, and no still / moving / tour fps segment worse by one.' That sentence settles the point lane Q left OPEN for the owner; no ruling is needed before the run. Read, written 2026-10-30 BEFORE the run: (i)+(ii) = S1-BW0 BFW-on vs BW0 (the first-turn and fps rows are hbbench's; this route adds rows under (iii)): firstTurn.max AND firstTurn.h100 both better by a real R1 delta, and no still / moving / tour fps segment worse by a real delta; (iii) the other hitch rows (tour h100 / h250 / max / jankMs, still / moving p99; S1-ROUTE's hopTurns max / h100 / h250 and loaf.max) not worse by a real delta; (iv) 0 console errors; (v) the look gate (R4). hbreport r3_keep still reads (i) / (ii) on binding-thread ms and fps, so for this arm its printed R3 verdict is NOT the verdict: read these rows of its compare table (S1-REPORT). INCONCLUSIVE gets 3 more reps once, then the flag stays off. Latency: R3 as amended has no latency condition, so the time-to-content rise (lane W2: about (waves - 1) x (walk round trip + one task) per request; verifier W2: + ~4 ms per nested setTimeout(0) wave past 5 levels with resident records) is reported next to the verdict for the owner (S1-ROUTE content p50 / max, S1-BW0 settle ms); lane W2's proposal that it 'counts against R3 (iii) only if the hitch gain does not cover it' is not plan text."
     }
    ],
+   "removedArms": [
+    {
+     "name": "R-UWD",
+     "removed": "2026-10-30, flag deleted after D1",
+     "flags": "uploadWarmDraw=on",
+     "gate": "!!window.__uploadWarmDraw && window.__uploadWarmDraw.enabled === true",
+     "gateInfo": "window.__uploadWarmDraw ? window.__uploadWarmDraw.stats() : null",
+     "diagReads": [
+      {
+       "read": "result.end.uploadWarmDraw",
+       "pass": "draws > 0, ready true, depthCapped === 0; prunedFrames, lateDraws, droppedHidden recorded",
+       "fields": {
+        "apps/holtburger-web/scene3d/upload_warm_draw.js": [
+         "draws",
+         "ready",
+         "depthCapped",
+         "prunedFrames",
+         "lateDraws",
+         "droppedHidden"
+        ]
+       }
+      }
+     ],
+     "prediction": "[D] lanes R / R2: hop-turn max and h100 down (buffers uploaded at arrival); fps flat; content time unchanged.",
+     "look": {
+      "class": "none by construction",
+      "rcEye": [
+       "S1-EYE uploadWarmDraw list item 3 (a westward hop + turn)."
+      ]
+     },
+     "decisionRule": "Hitch change: plan section 5 R3 as amended 2026-10-30: 'For a hitch change (R3-2's upload draw and worker-wait fixes, scored on hitch metrics per R3-2), (i) and (ii) read on its predicted hitch metrics instead: first-turn max and h100 better by a real delta, and no still / moving / tour fps segment worse by one.' That sentence settles the point lane Q left OPEN for the owner; no ruling is needed before the run. Read, written 2026-10-30 BEFORE the run: (i)+(ii) = S1-BENCH UWD-on vs A (the first-turn and fps rows are hbbench's; this route adds rows under (iii)): firstTurn.max AND firstTurn.h100 both better by a real R1 delta, and no still / moving / tour fps segment worse by a real delta; (iii) the other hitch rows (tour h100 / h250 / max / jankMs, still / moving p99; S1-ROUTE's hopTurns max / h100 / h250 and loaf.max) not worse by a real delta; (iv) 0 console errors; (v) the look gate (R4). hbreport r3_keep still reads (i) / (ii) on binding-thread ms and fps, so for this arm its printed R3 verdict is NOT the verdict: read these rows of its compare table (S1-REPORT). INCONCLUSIVE gets 3 more reps once, then the flag stays off."
+    }
+   ],
    "scored": "hops (arrive + turn windows of every hop), hopTurns (the turn windows only): max, h100, h250, jank, p95, fps; loaf.max (longest long-animation-frame over the hops); content p50 / max (ms from the hop command to the last content change); turn0 likewise",
    "diagReads": [
     {
@@ -1298,9 +1308,9 @@
     }
    ],
    "recipe": [
-    "Order (interleaved, rotated as hbbench rotates arms): rep 1: R-A R-AA R-UWD R-BW0 R-BW0-AA R-BFW; rep 2: R-AA R-UWD R-BW0 R-BW0-AA R-BFW R-A; rep 3: R-UWD R-BW0 R-BW0-AA R-BFW R-A R-AA.",
+    "Order (interleaved, rotated as hbbench rotates arms): rep 1: R-A R-AA R-BW0 R-BW0-AA R-BFW; rep 2: R-AA R-BW0 R-BW0-AA R-BFW R-A; rep 3: R-BW0 R-BW0-AA R-BFW R-A R-AA. (2026-10-30: R-UWD moved to removedArms, ?uploadWarmDraw deleted after D1.)",
     "Per arm-rep, in that order, >= 65 s between boots: REP=<n> ARM=<arm>; node scripts/perf-worker/hbanatomy.mjs --arms apps/holtburger-web/docs/reengineering/queue-1070/batch-R3-S1-2026-10-30.json --item S1-ROUTE --arm $ARM --rep $REP --port 8766 --uncapped --eval scripts/perf-worker/s1.eval.js --opts \"$(cat /mnt/wbterminal1/tmp/claude-scratch/perf/r3-s1/opts/route-west4.json)\" --out /mnt/wbterminal1/tmp/claude-scratch/perf/r3-s1/route/$ARM-r$REP.json; sleep 65",
-    "python3 -I scripts/perf-worker/s1_eval_report.py --queue apps/holtburger-web/docs/reengineering/queue-1070/batch-R3-S1-2026-10-30.json --item S1-ROUTE --ref R-A --aa R-AA --json /mnt/wbterminal1/tmp/claude-scratch/perf/r3-s1/s1-route-uwd.report.json /mnt/wbterminal1/tmp/claude-scratch/perf/r3-s1/route/R-A-r?.json /mnt/wbterminal1/tmp/claude-scratch/perf/r3-s1/route/R-AA-r?.json /mnt/wbterminal1/tmp/claude-scratch/perf/r3-s1/route/R-UWD-r?.json",
+    "REMOVED 2026-10-30 (?uploadWarmDraw deleted after D1: R-UWD no longer runs, so this step has nothing to report): python3 -I scripts/perf-worker/s1_eval_report.py --queue apps/holtburger-web/docs/reengineering/queue-1070/batch-R3-S1-2026-10-30.json --item S1-ROUTE --ref R-A --aa R-AA --json /mnt/wbterminal1/tmp/claude-scratch/perf/r3-s1/s1-route-uwd.report.json /mnt/wbterminal1/tmp/claude-scratch/perf/r3-s1/route/R-A-r?.json /mnt/wbterminal1/tmp/claude-scratch/perf/r3-s1/route/R-AA-r?.json /mnt/wbterminal1/tmp/claude-scratch/perf/r3-s1/route/R-UWD-r?.json",
     "python3 -I scripts/perf-worker/s1_eval_report.py --queue apps/holtburger-web/docs/reengineering/queue-1070/batch-R3-S1-2026-10-30.json --item S1-ROUTE --ref R-BW0 --aa R-BW0-AA --json /mnt/wbterminal1/tmp/claude-scratch/perf/r3-s1/s1-route-bfw.report.json /mnt/wbterminal1/tmp/claude-scratch/perf/r3-s1/route/R-BW0-r?.json /mnt/wbterminal1/tmp/claude-scratch/perf/r3-s1/route/R-BW0-AA-r?.json /mnt/wbterminal1/tmp/claude-scratch/perf/r3-s1/route/R-BFW-r?.json"
    ],
    "decisionRules": [
@@ -1483,27 +1493,6 @@
      }
     },
     {
-     "name": "G-UWD-up",
-     "flags": "uploadWarmDraw=on",
-     "gate": "!!window.__uploadWarmDraw && window.__uploadWarmDraw.enabled === true",
-     "gateInfo": "window.__uploadWarmDraw ? window.__uploadWarmDraw.stats() : null",
-     "opts": "route-west4-uploads.json",
-     "reads": "GL upload bytes per window (arrive / turn / content, per hop and summed), against G-A-up; end diag.uploadWarmDraw; pass conditions: S1-BENCH UWD-on diagReads (turnShareOfBufferBytes vs G-A-up)",
-     "fields": {
-      "apps/holtburger-web/scene3d/upload_warm_draw.js": [
-       "depthCapped",
-       "prunedFrames",
-       "droppedOverflow"
-      ],
-      "scripts/perf-worker/s1.eval.js": [
-       "turnShareOfBufferBytes"
-      ],
-      "scripts/perf-worker/s1_eval_report.py": [
-       "upload_windows"
-      ]
-     }
-    },
-    {
      "name": "G-RPS-verify",
      "flags": "rigPoseSkip=on",
      "gate": "!!window.__rigPoseSkip && window.__rigPoseSkip.stats().enabled === true && window.__rigPoseSkip.stats().skipped > 0",
@@ -1561,6 +1550,30 @@
       "scripts/perf-worker/s1_eval_report.py": [
        "fallback_waves_check",
        "bench_checks"
+      ]
+     }
+    }
+   ],
+   "removedArms": [
+    {
+     "name": "G-UWD-up",
+     "removed": "2026-10-30, flag deleted after D1",
+     "flags": "uploadWarmDraw=on",
+     "gate": "!!window.__uploadWarmDraw && window.__uploadWarmDraw.enabled === true",
+     "gateInfo": "window.__uploadWarmDraw ? window.__uploadWarmDraw.stats() : null",
+     "opts": "route-west4-uploads.json",
+     "reads": "GL upload bytes per window (arrive / turn / content, per hop and summed), against G-A-up; end diag.uploadWarmDraw; pass conditions: S1-BENCH UWD-on diagReads (turnShareOfBufferBytes vs G-A-up)",
+     "fields": {
+      "apps/holtburger-web/scene3d/upload_warm_draw.js": [
+       "depthCapped",
+       "prunedFrames",
+       "droppedOverflow"
+      ],
+      "scripts/perf-worker/s1.eval.js": [
+       "turnShareOfBufferBytes"
+      ],
+      "scripts/perf-worker/s1_eval_report.py": [
+       "upload_windows"
       ]
      }
     }

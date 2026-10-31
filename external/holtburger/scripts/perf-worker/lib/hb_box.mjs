@@ -81,27 +81,128 @@ export async function prepareLaunch({ profile, windowOuter = "1280,720", uncappe
   }
 }
 
-/** Start the test Chrome through the hidden scheduled task, wait for CDP. Returns true when CDP answered. */
-export async function launchChrome(cdp = CDP) {
-  await sshRetry('schtasks /create /tn hbprobe /tr "wscript.exe //B //Nologo D:\\Temp\\hbbench\\hidden-run.vbs D:\\Temp\\hbbench\\hbprobe-launch.bat" /sc once /st 00:00 /it /f >nul 2>nul & schtasks /run /tn hbprobe >nul');
-  for (let i = 0; i < 40; i++) {
-    try { if ((await fetch(`${cdp}/json/version`)).ok) return true; } catch (_) { /* not up yet */ }
-    await sleep(1000);
+/** The scheduled task + launcher every existing caller uses (hbprobe-launch.bat: fresh D:\Temp\hbbench\ profile). */
+export const LAUNCH_DEFAULTS = Object.freeze({ task: "hbprobe", launcher: "D:\\Temp\\hbbench\\hbprobe-launch.bat" });
+
+/**
+ * The box command that (re)creates and runs the hidden launch task (2026-10-30, M1c lane: `task` /
+ * `launcher` are optional, so another launcher .bat, e.g. m1c-webac.mjs's persistent-profile one, rides
+ * the same hidden-run.vbs path). With no options it is byte-identical to the command launchChrome
+ * always sent (tests/m1c_webac.test.mjs pins that).
+ */
+export function launchTaskCommand({ task = LAUNCH_DEFAULTS.task, launcher = LAUNCH_DEFAULTS.launcher } = {}) {
+  if (!/^hb[A-Za-z0-9_-]{1,40}$/.test(String(task))) throw new Error(`launch task name must be hb<word> (got ${task})`);
+  if (META.test(String(launcher)) || /\s/.test(String(launcher)) || !/^[A-Za-z]:\\[^\s]+\.bat$/i.test(String(launcher))) throw new Error(`launcher must be an absolute .bat path without spaces or cmd metacharacters (got ${launcher})`);
+  return `schtasks /create /tn ${task} /tr "wscript.exe //B //Nologo D:\\Temp\\hbbench\\hidden-run.vbs ${launcher}" /sc once /st 00:00 /it /f >nul 2>nul & schtasks /run /tn ${task} >nul`;
+}
+
+/**
+ * Start the test Chrome through the hidden scheduled task, wait for CDP. Returns true when CDP answered.
+ * Every option is optional (existing callers pass only `cdp`): `task` / `launcher` (launchTaskCommand),
+ * and for the suite `run` (async box command, default sshRetry), `fetch`, `sleep`, `tries` (default 40).
+ */
+export async function launchChrome(cdp = CDP, o = {}) {
+  const run = o.run || sshRetry, fetchFn = o.fetch || fetch, sleepFn = o.sleep || sleep, tries = o.tries ?? 40;
+  await run(launchTaskCommand({ task: o.task, launcher: o.launcher }));
+  for (let i = 0; i < tries; i++) {
+    try { if ((await fetchFn(`${cdp}/json/version`)).ok) return true; } catch (_) { /* not up yet */ }
+    await sleepFn(1000);
   }
   return false;
+}
+
+// ------------------------------------------------------------------------------------------------
+// Kill by an exact --user-data-dir (2026-10-30, M1c lane; killBench above is unchanged)
+// ------------------------------------------------------------------------------------------------
+
+const reEscape = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/**
+ * Regex source (the same text in .NET and JS, matched case-insensitively) for a Chrome command line
+ * whose --user-data-dir is EXACTLY `profile` (quoted or not): `C:\Temp\cdpwb-wls` matches, while
+ * `C:\Temp\cdpwb-wls2`, `C:\Temp\cdpwb-wls-old` and every D:\Temp\hbbench\ bench profile do not.
+ */
+export function chromeProfilePattern(profile) {
+  const p = String(profile || "");
+  if (!/^[A-Za-z]:\\[^\s"'&|<>^%]+$/.test(p)) throw new Error(`profile must be an absolute Windows path without spaces, quotes or cmd metacharacters (got ${p})`);
+  return `--user-data-dir="?${reEscape(p)}"?(?=\\s|$)`;
+}
+
+/**
+ * Which Chrome processes a profile kill takes (the JS twin of profileKillScript's selection, so the
+ * suite can pin it on process lists). `procs` = [{pid, ppid, name, cmd}]. A ROOT is a chrome.exe
+ * browser process (no --type=) on exactly that profile that ALSO carries every `requireFlags` switch
+ * (so the owner's on-screen, unmuted MODE P Chrome on the same profile is never a root); the kill set
+ * is those roots, their children on the profile, and orphaned children on the profile (parent no
+ * longer a chrome.exe). Nothing is ever matched by image name alone.
+ */
+export function selectProfileKill(procs, profile, { requireFlags = [] } = {}) {
+  const re = new RegExp(chromeProfilePattern(profile), "i");
+  const chrome = (procs || []).filter((p) => String(p.name || "").toLowerCase() === "chrome.exe");
+  const ids = new Set(chrome.map((p) => p.pid));
+  const all = chrome.filter((p) => re.test(String(p.cmd || "")));
+  const roots = new Set(all.filter((p) => !/--type=/i.test(p.cmd) && requireFlags.every((f) => new RegExp(reEscape(f), "i").test(p.cmd))).map((p) => p.pid));
+  const kill = all.filter((p) => roots.has(p.pid) || roots.has(p.ppid) || (/--type=/i.test(p.cmd) && !ids.has(p.ppid)));
+  return { matched: all.map((p) => p.pid), roots: [...roots], kill: kill.map((p) => p.pid) };
+}
+
+/**
+ * PowerShell for the box: the selectProfileKill rule over Win32_Process, Stop-Process on the kill set
+ * (none with `dryRun`), and one `HBKILL matched=N roots=N killed=N muted=N offscreen=N` line.
+ */
+export function profileKillScript(profile, { requireFlags = [], dryRun = false } = {}) {
+  const re = chromeProfilePattern(profile);
+  for (const f of requireFlags) if (/['"\s]/.test(f)) throw new Error(`requireFlags: no quotes or spaces (${f})`);
+  const flagTest = requireFlags.map((f) => ` -and $_.CommandLine -match '${reEscape(f)}'`).join("");
+  return [
+    "$ErrorActionPreference = 'SilentlyContinue'",
+    `$re = '${re}'`,
+    "$chrome = @(Get-CimInstance Win32_Process -Filter \"Name='chrome.exe'\")",
+    "$ids = @($chrome | ForEach-Object { [int]$_.ProcessId })",
+    "$all = @($chrome | Where-Object { $_.CommandLine -match $re })",
+    `$roots = @($all | Where-Object { $_.CommandLine -notmatch '--type='${flagTest} } | ForEach-Object { [int]$_.ProcessId })`,
+    "$kill = @($all | Where-Object { $roots -contains [int]$_.ProcessId -or $roots -contains [int]$_.ParentProcessId -or ($_.CommandLine -match '--type=' -and $ids -notcontains [int]$_.ParentProcessId) })",
+    "$br = @($all | Where-Object { $_.CommandLine -notmatch '--type=' })",
+    "$muted = @($br | Where-Object { $_.CommandLine -match '--mute-audio' }).Count",
+    "$off = @($br | Where-Object { $_.CommandLine -match '--window-position=-32000,-32000' }).Count",
+    dryRun ? "$n = 0" : "$n = 0; foreach ($p in $kill) { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue; $n++ }",
+    "\"HBKILL matched=$($all.Count) roots=$($roots.Count) killed=$n browsers=$($br.Count) muted=$muted offscreen=$off\"",
+  ].join("\n");
+}
+
+/** `HBKILL k=v ...` -> numbers ({error} when the line is missing). */
+export function parseKillLine(stdout) {
+  const line = String(stdout || "").split(/\r?\n/).map((l) => l.trim()).find((l) => l.startsWith("HBKILL "));
+  if (!line) return { error: `no HBKILL line in ${JSON.stringify(String(stdout || "").slice(0, 200))}` };
+  const out = {};
+  for (const tok of line.slice(7).split(/\s+/)) { const [k, v] = tok.split("="); if (k && v !== undefined) out[k] = Number(v); }
+  return out;
+}
+
+/**
+ * Kill the Chrome of exactly one --user-data-dir on the box (profileKillScript), synchronously so a
+ * signal handler can use it. Never throws: returns parseKillLine's result or {error}. `run` = a sync
+ * box command (default ssh).
+ */
+export function killChromeByProfile(profile, { requireFlags = [], dryRun = false, run = ssh } = {}) {
+  try {
+    const b64 = encodePowerShell(profileKillScript(profile, { requireFlags, dryRun }));
+    return parseKillLine(run(`powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand ${b64}`));
+  } catch (e) { return { error: String((e && e.message) || e).slice(0, 300) }; }
 }
 
 /**
  * One box sample: hbwho.ps1's line + the top processes by CPU over ~2 s (core-equivalents, ours
  * marked). Never throws: a failed sample is recorded as {error}, and hbreport treats a segment
- * without samples as unverified, not as valid.
+ * without samples as unverified, not as valid. Optional (M1c lane, 2026-10-30): `script` replaces
+ * boxSampleScript's text (m1c-webac.mjs marks its persistent-profile Chrome as ours), `run` the ssh.
  */
-export async function boxSample(label, { windowMs = 2000 } = {}) {
+export async function boxSample(label, { windowMs = 2000, script = null, run = null } = {}) {
   const at = new Date().toISOString();
   const t0 = Date.now();
   try {
-    const b64 = encodePowerShell(boxSampleScript({ windowMs }));
-    const out = await sshRetry(`powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand ${b64}`, { timeout: 45000, tries: 2, delays: [3000] });
+    const b64 = encodePowerShell(script || boxSampleScript({ windowMs }));
+    const out = await (run || sshRetry)(`powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand ${b64}`, { timeout: 45000, tries: 2, delays: [3000] });
     const s = parseBoxSample(out);
     return { label, at, ms: Date.now() - t0, who: s.who, top: s.top, wallMs: s.wallMs, cores: s.cores, ...(s.raw ? { raw: s.raw } : {}) };
   } catch (e) {

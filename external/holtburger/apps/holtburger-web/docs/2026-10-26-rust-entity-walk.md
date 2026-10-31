@@ -1,5 +1,7 @@
 # Lane R4 — what the entity rigs cost per frame, and how to cut it exactly (2026-10-26)
 
+> **DELETED 2026-10-30.** `?rustEntityWorld` lost tour fps on the 1070 decision bench D1 (batch-R3-D1: still / moving / tour -0.1 / +0.7 / -1.8 fps vs defaults, the tour loss real under R1) and improved no fps segment, so its code (scene3d/entity_world.js, the index.js / entities.js wiring, tests/rust_entity_world.test.mjs) was removed per the plan's M1b-STRUCTURE rule. This document stays as the record of the lane.
+
 Part of the Rust scene core effort: [2026-10-26-rust-scene-core.md](2026-10-26-rust-scene-core.md) (plan, §3 contract).
 Builds on lane B ([2026-10-26-rust-rig.md](2026-10-26-rust-rig.md)), lane X
 ([2026-10-26-rust-draw-exec.md](2026-10-26-rust-draw-exec.md)), R3

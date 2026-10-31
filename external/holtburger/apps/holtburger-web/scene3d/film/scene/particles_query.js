@@ -356,10 +356,14 @@ export function createParticlesQuery(opts = {}) {
     // (scene3d/rust/particles.js filmSample) — the same slots this loop would
     // take, for every emitter in one kernel pass per tick. Reading `em.parts`
     // on it would build a proxy mesh per slot, for every emitter, every frame.
-    const rustRows = em._rustShell === true && em._rustHandle >= 0 && em._rustBridge &&
-      typeof em._rustBridge.filmSample === "function" ? em._rustBridge.filmSample(em, maxParts) : null;
+    // ?gpuParticles (R3-7a, DEFAULT OFF): a shader-simulated emitter's carrier
+    // meshes are not moved per frame; its f64 twin gives the samples the
+    // carriers hold on the flag-off path (same row shape as the kernel's).
+    const gpRows = em._gp === true && typeof em._gpFilmSample === "function" ? em._gpFilmSample(maxParts) : null;
+    const rustRows = gpRows || (em._rustShell === true && em._rustHandle >= 0 && em._rustBridge &&
+      typeof em._rustBridge.filmSample === "function" ? em._rustBridge.filmSample(em, maxParts) : null);
     if (rustRows) {
-      const rg = em._rustGeometry;
+      const rg = gpRows ? (em.partStorage || []).find(Boolean)?.geometry : em._rustGeometry;
       const gR = rg && rg.boundingSphere && Number.isFinite(rg.boundingSphere.radius) ? rg.boundingSphere.radius : geomR ?? 0.5;
       for (let i = 0; i < rustRows.length && parts.length < maxParts; i++) {
         const r = rustRows[i]; // [x, y, z, scale, op] — live, visible, op above the floor

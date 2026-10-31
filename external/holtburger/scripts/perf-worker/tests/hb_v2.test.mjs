@@ -9,7 +9,8 @@
 // per-frame counts, walks, empty passes, nesting and restore; whole-pass GPU timers never nested; the
 // owner census distance buckets; the GL census; the pin read-back; the marked windows; the kill
 // discipline of every launching tool (tools/webgpu_probe/run.mjs included; Ctrl-C kills BEFORE exit);
-// the B0 snapshot check, with the queue's real reader patterns failing on the HEAD-95240def tree (git).
+// the B0 snapshot check, with the queue's real reader patterns failing on the HEAD-95240def tree (git);
+// the D1 deletions (?rustEntityWorld / ?uploadWarmDraw gone from the app, no R3 queue arm runs them).
 import assert from "node:assert/strict";
 import { readFileSync, existsSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -278,8 +279,12 @@ await check("the M1 queue file: schema, decision rules copied in, and every arms
   assert.ok(armsItems >= 2, `arms items ${armsItems}`);
   const all = q.items.flatMap((it) => (Array.isArray(it.arms) ? it.arms : []));
   const has = (re) => all.some((a) => re.test(a.flags || ""));
-  for (const re of [/objRadius=1\b/, /objRadius=2\b/, /occlusionCull=rigs/, /cellStaticMerge=on/, /statArrayMerge=on/, /partDegrade=on/, /cloudResScale=0\.5/, /freezeWorldRoots=on/, /rustEntityWorld=on/, /batchedRuns=off/, /nullRender=1/, /hud=none/]) assert.ok(has(re), String(re));
-  const ew = all.find((a) => /rustEntityWorld=on/.test(a.flags || ""));
+  for (const re of [/objRadius=1\b/, /objRadius=2\b/, /occlusionCull=rigs/, /cellStaticMerge=on/, /statArrayMerge=on/, /partDegrade=on/, /cloudResScale=0\.5/, /freezeWorldRoots=on/, /batchedRuns=off/, /nullRender=1/, /hud=none/]) assert.ok(has(re), String(re));
+  // 2026-10-30 (lane DEL): ?rustEntityWorld was deleted after D1; its M1b-STRUCTURE arm moved to
+  // removedArms (gate kept for the stored runs) and no runnable arm sets it.
+  assert.ok(!has(/(^|&)rustEntityWorld=/), "no runnable M1 arm sets the deleted ?rustEntityWorld");
+  const ew = q.items.find((it) => it.id === "M1b-STRUCTURE").removedArms.find((a) => a.name === "S-rustEntityWorld");
+  assert.equal(ew.removed, "2026-10-30, flag deleted after D1");
   assert.match(ew.gate, /__entityWorld\.stats\(\)\.projections === 1/);
 });
 
@@ -785,7 +790,10 @@ await check("webgpu probe runProbe: the box Chrome is closed and killed after a 
 const BOOT = (await tryImport("lib/hb_boot.mjs")).m || {};
 const QJ = existsSync(QUEUE) ? JSON.parse(readFileSync(QUEUE, "utf8")) : null;
 const qArm = (item, name) => V2.loadArms(QJ, item).find((a) => a.name === name);
-const GTX = "ANGLE (NVIDIA, NVIDIA GeForce GTX 1070 (0x00001BE1) Direct3D11 vs_5_0 ps_5_0, D3D11)";
+// The gated queue arm the gate-plumbing checks below drive (M1b-OCC O-rigs; until 2026-10-30 they drove
+// M1b-STRUCTURE S-rustEntityWorld, whose flag was deleted after D1).
+const GATED_GATE = QJ ? qArm("M1b-OCC", "O-rigs").gate : null;
+const GTX ="ANGLE (NVIDIA, NVIDIA GeForce GTX 1070 (0x00001BE1) Direct3D11 vs_5_0 ps_5_0, D3D11)";
 const HOLT = "0xA9B40001 96 96 80";
 
 await check("planArm carries the queue arm's spot / stillCam / readyWhen / gate / gateInfo (and the defaults when absent)", () => {
@@ -795,10 +803,12 @@ await check("planArm carries the queue arm's spot / stillCam / readyWhen / gate 
   const h = BENCH.planArm(qArm("M1c-WEBAC", "H-default"), { port: PORT });
   assert.deepEqual(h.stillCam, { dist: 8, az: 180, el: 12, dz: 1.5 });
   assert.equal(BENCH.planArm(qArm("M1a-BENCH", "L0-nullRender"), { port: PORT }).readyWhen, "live-scene");
-  const ew = BENCH.planArm(qArm("M1b-STRUCTURE", "S-rustEntityWorld"), { port: PORT });
-  assert.equal(ew.gate, "window.__entityWorld && window.__entityWorld.stats().projections === 1");
-  assert.equal(ew.gateInfo, "window.__entityWorld ? window.__entityWorld.stats() : null");
-  assert.match(BENCH.planArm(qArm("M1b-OCC", "O-rigs"), { port: PORT }).gateInfo, /__occlusionCull/);
+  // the gated arm (S-rustEntityWorld until its flag was deleted 2026-10-30; now in removedArms, never loaded)
+  assert.equal(qArm("M1b-STRUCTURE", "S-rustEntityWorld"), undefined, "a removedArms arm is not an arm hbbench runs");
+  const og = BENCH.planArm(qArm("M1b-OCC", "O-rigs"), { port: PORT });
+  assert.equal(og.gate, GATED_GATE);
+  assert.match(og.gate, /__occlusionCull\.mode === 'rigs'/);
+  assert.match(og.gateInfo, /__occlusionCull/);
   const a = BENCH.planArm({ name: "A", quality: "ultra" }, { port: PORT });
   assert.deepEqual([a.spot, a.stillCam, a.readyWhen, a.gate, a.gateInfo], [HOLT, null, "boot-ready", null, null]);
   assert.deepEqual(a.boxSampleAt, ["pre-launch", "pre-firstTurn", "pre-still", "still-moving", "post-moving", "post-tour"]);
@@ -928,11 +938,11 @@ await check("runOne v2 uses the queue arm's spot, readyWhen, stillCam and gate (
   assert.ok(sc > F.log.indexOf("frames:25000:orbit@18") && sc < F.log.indexOf("frames:20000:still"), F.log.join(","));
   assert.ok(!F.log.includes("park"));
   F = driverFake({ gate: true });
-  const ok = await BENCH.runOne(qArm("M1b-STRUCTURE", "S-rustEntityWorld"), 1, benchCtx({}), F.deps);
-  assert.ok(F.log.includes("gate:window.__entityWorld && window.__entityWorld.stats().projections === 1"));
-  assert.deepEqual(ok.gate.info, { projections: 1 }); assert.equal(ok.gate.ok, true); assert.equal(ok.error, undefined);
+  const ok = await BENCH.runOne(qArm("M1b-OCC", "O-rigs"), 1, benchCtx({}), F.deps);
+  assert.ok(F.log.includes(`gate:${GATED_GATE}`), F.log.join(","));
+  assert.deepEqual(ok.gate.info, { projections: 1 }); assert.equal(ok.gate.ok, true); assert.equal(ok.error, undefined); // the fake's canned gateInfo
   F = driverFake({ gate: false });
-  const bad = await BENCH.runOne(qArm("M1b-STRUCTURE", "S-rustEntityWorld"), 1, benchCtx({}), F.deps);
+  const bad = await BENCH.runOne(qArm("M1b-OCC", "O-rigs"), 1, benchCtx({}), F.deps);
   assert.match(bad.error, /^gate failed: /);
   assert.ok(!F.log.some((x) => x.startsWith("frames:") || x === "firstTurn"), F.log.join(","));
   assert.ok(F.log.includes("close") && F.log[F.log.length - 1] === "kill");
@@ -942,7 +952,7 @@ await check("bootArm (hbanatomy / hbsweep --boot): spot, readyWhen, gate, DayGro
   assert.equal(typeof BOOT.bootArm, "function");
   const F = driverFake({ inner: [1920, 1080] });
   const res = { box: [], errors: [] };
-  const b = await BOOT.bootArm(qArm("M1b-STRUCTURE", "S-rustEntityWorld"), { port: PORT, rep: 1 }, null, res, F.deps);
+  const b = await BOOT.bootArm(qArm("M1b-OCC", "O-rigs"), { port: PORT, rep: 1 }, null, res, F.deps);
   assert.ok(F.log.includes(`settle:${HOLT}`) && F.log.includes("boot:boot-ready") && F.log.includes("pins:dg0") && F.log.some((x) => x.startsWith("gate:")));
   assert.deepEqual(res.asserts.urlPins, b.plan.pins);
   assert.deepEqual(res.asserts.urlPinProblems, V2.urlPinProblems(b.plan.pins, { compat: null, governorFlag: false }));
@@ -959,7 +969,7 @@ await check("bootArm (hbanatomy / hbsweep --boot): spot, readyWhen, gate, DayGro
   assert.deepEqual(r3.asserts.urlPinProblems, ["skytime not pinned"]);
   assert.ok(r3.assertProblems.includes("url: skytime not pinned"), r3.assertProblems.join("; "));
   const H = driverFake({ gate: false });
-  await assert.rejects(BOOT.bootArm(qArm("M1b-STRUCTURE", "S-rustEntityWorld"), { port: PORT }, null, { box: [], errors: [] }, H.deps), /gate failed/);
+  await assert.rejects(BOOT.bootArm(qArm("M1b-OCC", "O-rigs"), { port: PORT }, null, { box: [], errors: [] }, H.deps), /gate failed/);
   const M = driverFake();
   await BOOT.bootArm(qArm("M1b-OBJRADIUS", "R1-hill"), { port: PORT }, null, { box: [], errors: [] }, M.deps);
   assert.ok(M.log.includes("settle:0xA9B40019 84 7.1 94"));
@@ -1244,7 +1254,7 @@ await check("bootArm: a throw after the connect closes that connection before it
   await assert.rejects(BOOT.bootArm({ name: "A", quality: "ultra" }, { port: PORT }, null, { box: [], errors: [] }, F.deps), /not on 1070/);
   assert.equal(F.log[F.log.length - 1], "close", F.log.join(","));
   const G = driverFake({ gate: false });
-  await assert.rejects(BOOT.bootArm(qArm("M1b-STRUCTURE", "S-rustEntityWorld"), { port: PORT }, null, { box: [], errors: [] }, G.deps), /gate failed/);
+  await assert.rejects(BOOT.bootArm(qArm("M1b-OCC", "O-rigs"), { port: PORT }, null, { box: [], errors: [] }, G.deps), /gate failed/);
   assert.equal(G.log[G.log.length - 1], "close", G.log.join(","));
   const H = driverFake(); // CDP never answered: no connection was made, nothing to close
   H.deps.launchChrome = async () => { H.log.push("launch"); return false; };
@@ -1349,10 +1359,12 @@ await check("B0 snapshot check: the queue's requiredReaders are read from the sn
   const spec = QJ.b0Snapshot;
   assert.ok(spec && Array.isArray(spec.requiredReaders), "queue b0Snapshot.requiredReaders");
   const flags = spec.requiredReaders.map((r) => r.flag);
-  for (const f of ["occlusionCull=rigs", "rigPoseSkip", "skipEmptyPasses", "uploadWarmDraw", "animSceneryBatch", "bakeFallbackWaves"]) assert.ok(flags.includes(f), f);
+  // (uploadWarmDraw was a sixth until 2026-10-30: the flag was deleted after D1; its entry sits in removedReaders)
+  for (const f of ["occlusionCull=rigs", "rigPoseSkip", "skipEmptyPasses", "animSceneryBatch", "bakeFallbackWaves"]) assert.ok(flags.includes(f), f);
+  assert.ok(!flags.includes("uploadWarmDraw") && spec.removedReaders.some((r) => r.flag === "uploadWarmDraw" && /deleted after D1/.test(r.removed)), "uploadWarmDraw is a removed reader");
   assert.match(QJ.sessionRulesInline.join(" "), /MERGED round-3 phase-A tree/);
   assert.ok(QJ.items.find((x) => x.id === "M1-PRE").recipe.some((x) => /--check-snapshot/.test(x) && /MERGED round-3 phase-A tree/.test(x)));
-  // the live working tree: all six readers are found (bakeFallbackWaves merged 2026-10-30, lane W2; the
+  // the live working tree: all five readers are found (bakeFallbackWaves merged 2026-10-30, lane W2; the
   // queue pins it to its file since lane H3), so only a missing or symlinked pkg wasm may be a problem here
   const bfw = spec.requiredReaders.find((r) => r.flag === "bakeFallbackWaves");
   assert.equal(bfw.file, "apps/holtburger-web/scene3d/bake_worker_client.js"); assert.equal(bfw.dir, undefined);
@@ -1360,7 +1372,7 @@ await check("B0 snapshot check: the queue's requiredReaders are read from the sn
   const LIVE = join(PW, "../..");
   const live = BENCH.checkSnapshot(LIVE, QJ, BENCH.SNAPSHOT_IO, { liveRoot: null });
   const foundLive = live.found.map((f) => f.flag);
-  for (const f of ["occlusionCull=rigs", "rigPoseSkip", "skipEmptyPasses", "uploadWarmDraw", "animSceneryBatch", "bakeFallbackWaves"]) assert.ok(foundLive.includes(f), `${f}: ${live.problems.join("; ")}`);
+  for (const f of ["occlusionCull=rigs", "rigPoseSkip", "skipEmptyPasses", "animSceneryBatch", "bakeFallbackWaves"]) assert.ok(foundLive.includes(f), `${f}: ${live.problems.join("; ")}`);
   assert.deepEqual(live.found.find((f) => f.flag === "bakeFallbackWaves"), { flag: "bakeFallbackWaves", file: "apps/holtburger-web/scene3d/bake_worker_client.js" });
   assert.ok(live.problems.every((p) => /^release pkg/.test(p)), live.problems.join("; "));
   assert.ok(BENCH.checkSnapshot(LIVE, QJ, BENCH.SNAPSHOT_IO, { liveRoot: LIVE }).problems.some((p) => /is the live tree/.test(p)), "the live tree is refused as B0");
@@ -1517,6 +1529,57 @@ await check("the M1 queue's decision rules are the plan's section 5 text verbati
   assert.equal(Object.keys(rows).length, 11, Object.keys(rows).join(","));
   if (QJ.items.some((it) => it.result !== null && it.result !== undefined)) { console.log("       (results recorded: the rules were frozen at run time; text check skipped)"); return; }
   for (const r of QJ.decisionRules) assert.equal(norm(r.text), rows[r.rule], `rule ${r.rule}`);
+});
+
+// 2026-10-30 (lane DEL): ?rustEntityWorld (scene3d/entity_world.js) and ?uploadWarmDraw
+// (scene3d/upload_warm_draw.js) were deleted after the 1070 D1 bench (tour -1.8 / -1.7 fps, real under R1;
+// neither improved any fps segment). Both were DEFAULT OFF and every call site was a no-op with the flag
+// off, so the removal is the flag-off path. Pinned here: the modules, their suites, every import / call /
+// flag reader / diag-global assignment are gone from the app; the code around each removed site is the
+// flag-off code, adjacent; and no R3 queue runs an arm that sets either flag (those sit in removedArms with
+// the note), while every R3 queue still passes --check-snapshot on the merged tree.
+const DEL_APP = join(PW, "../../apps/holtburger-web");
+const DEL_QDIR = join(DEL_APP, "docs/reengineering/queue-1070");
+const DEL_FLAGS_RE = /(^|&)(rustEntityWorld|uploadWarmDraw)=/;
+await check("D1 deletions: ?rustEntityWorld / ?uploadWarmDraw gone from the app (modules, suites, imports, calls, readers, globals), the flag-off code kept in place; no R3 queue runs either flag and every one passes --check-snapshot on the merged tree", async () => {
+  const fs = await import("node:fs");
+  for (const f of ["scene3d/entity_world.js", "scene3d/upload_warm_draw.js", "tests/rust_entity_world.test.mjs", "tests/upload_warm_draw.test.mjs"]) assert.ok(!existsSync(join(DEL_APP, f)), `${f} still exists`);
+  const walk = (d, out = []) => { for (const n of fs.readdirSync(d, { withFileTypes: true })) { const p = join(d, n.name); if (n.isDirectory()) walk(p, out); else if (/\.m?js$/.test(n.name)) out.push(p); } return out; };
+  const files = [...walk(join(DEL_APP, "scene3d")), join(DEL_APP, "index.html")];
+  assert.ok(files.length > 100, `app files ${files.length}`);
+  for (const p of files) {
+    const src = readFileSync(p, "utf8"), rel = p.slice(DEL_APP.length + 1);
+    assert.ok(!/(from\s*|import\(\s*)["'][^"']*\b(entity_world|upload_warm_draw)\.js["']/.test(src), `${rel} imports a deleted module`);
+    assert.ok(!/[\w$]\(\s*["'](rustEntityWorld|uploadWarmDraw)["']\s*[,)]/.test(src), `${rel} still reads a deleted flag`);
+    assert.ok(!/(window|globalThis)\.(__entityWorld|__uploadWarmDraw)\s*=/.test(src), `${rel} assigns a deleted diag global`);
+    assert.ok(!/\b(installEntityWorld|installEntityWorldRoot|ensureEntityWorld|entityWorldEnabled|installUploadWarmDraw|uploadWarmDrawEnabled|_uploadWarm)\b/.test(src), `${rel} still calls into a deleted module`);
+  }
+  // the flag-off code at each removed site, unchanged and adjacent (what ran with both flags off)
+  const ix = readFileSync(join(DEL_APP, "scene3d/index.js"), "utf8");
+  assert.match(ix, /installFreezeWorldRootsSeam\(renderer, scene\);\n {2}\} catch \(_\) \{ \/\* never break boot \*\/ \}\n {2}\/\/ \?punchRetail/, "index.js: the world-roots freeze is followed by the punch phase tags (the installEntityWorld line is gone)");
+  assert.match(ix, /const \{ sun, ambient, lightsGroup \} = lighting;\n\n {2}\/\/ Phase F\.C/, "index.js init3D: no upload-warm install between the lighting and the event log probe");
+  assert.match(ix, /try \{ syncBatchMatVariants\(\); \} catch \(_\) \{ \/\* never break the frame \*\/ \}\n {4}vfxGaugeBeginFrame\(renderer\);/, "index.js frame: syncBatchMatVariants straight to vfxGaugeBeginFrame (no upload-warm tick)");
+  const en = readFileSync(join(DEL_APP, "scene3d/entities.js"), "utf8");
+  assert.match(en, /parts\.push\(partGroup\);\n {6}root\.add\(partGroup\);\n {4}\}\n {4}\/\/ \?weaponFx: the weapon's own materials/, "entities.js rig build: the part loop goes straight to the weaponFx hang (no entity-world root install)");
+  for (const b of ["M1", "S1", "D1", "G1"]) {
+    const q = JSON.parse(readFileSync(join(DEL_QDIR, `batch-R3-${b}-2026-10-30.json`), "utf8"));
+    for (const it of q.items) {
+      const runs = Array.isArray(it.arms) ? V2.loadArms(q, it.id) : [];
+      for (const a of runs) assert.ok(!DEL_FLAGS_RE.test(a.flags || ""), `${b} ${it.id}/${a.name} runs a deleted flag`);
+      for (const a of it.removedArms || []) {
+        assert.equal(a.removed, "2026-10-30, flag deleted after D1", `${b} ${it.id}/${a.name}: removed note`);
+        assert.ok(DEL_FLAGS_RE.test(a.flags || ""), `${b} ${it.id}/${a.name}: only arms of a deleted flag are removed`);
+        assert.ok(!runs.some((x) => x.name === a.name), `${b} ${it.id}/${a.name} still loads`);
+      }
+    }
+    const spec = q.b0Snapshot || {};
+    for (const r of spec.requiredReaders || []) assert.ok(!/^(rustEntityWorld|uploadWarmDraw)\b/.test(r.flag) && !/(entity_world|upload_warm_draw)\.js$/.test(r.file || ""), `${b}: requiredReaders still names ${r.flag}`);
+    const live = BENCH.checkSnapshot(join(PW, "../.."), q, BENCH.SNAPSHOT_IO, { liveRoot: null });
+    assert.ok(live.problems.every((p) => /^release pkg/.test(p)), `${b}: --check-snapshot on the merged tree: ${live.problems.join("; ")}`);
+  }
+  const d1 = JSON.parse(readFileSync(join(DEL_QDIR, "batch-R3-D1-2026-10-30.json"), "utf8")).items.find((x) => x.id === "D1-BENCH");
+  assert.deepEqual(d1.removedArms.map((a) => a.name), ["UWD-on", "S-rustEntityWorld", "D-stack"]);
+  assert.match(d1.result, /REAL fps LOSS -> stay off: uploadWarmDraw \(tour -1\.7\), rustEntityWorld \(tour -1\.8; code deleted per the M1b-STRUCTURE rule\)/, "the recorded D1 result, verbatim");
 });
 
 await check("every lane module parses and imports without side effects (the import of lib/hb_session.mjs stands in for its `node --check`, which the oom-guard hook refuses)", () => {

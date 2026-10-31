@@ -17,8 +17,23 @@
 //      framebufferTexture2D(READ_FRAMEBUFFER, level) + copyTexSubImage3D.
 // Never r184's `layerUpdates` + generateMipmap (that re-mips EVERY layer of
 // the array on each admit), and never Rust-built mips (not the driver's).
+// `admitAs(tex, key)` (R3-4 real boot, 2026-10-31) is admit() under a
+// caller-chosen content key: the copy source is `tex`'s own resident levels
+// (no scratch upload); `isResident(tex)` says whether three already holds it
+// on the live generation. A layer's bytes are booked against the frame's
+// budget only once the allocator granted it (a cap refusal books nothing).
 // BC7 layers copy their baked levels with compressedTexSubImage3D (a
 // compressed format cannot be a framebuffer attachment).
+// R8 layers (2026-10-31: the POM seam-height planes, adapter.js
+// surfacePixelsToHeightTexture: RedFormat / UnsignedByteType / NoColorSpace,
+// generateMipmaps) take the RGBA8 path: three uploads the 2D R8 texture
+// itself (texStorage2D(R8) + texSubImage2D + generateMipmap), and each level
+// is copied into an R8 page (R8 is colour-renderable in WebGL2, and
+// copyTexSubImage3D from an R8 read buffer into R8 storage is a legal,
+// component-preserving copy). R8 is OPT-IN (`describeTexture(tex, R8_PLANES)`,
+// `admit(tex, budget, R8_PLANES)`): without it an R8 texture is refused
+// exactly as before (an R8 MAP stays "map-format" for every consumer), so
+// every admit that existed keeps its descriptor (and page key).
 //
 // SAME SAMPLER STATE. The page's GL texture carries the source's wrap S/T,
 // min/mag filter and (effective) anisotropy, set with the same rules as
@@ -78,13 +93,17 @@ function _filterToGl(gl, f) {
   }
 }
 
+/** describeTexture / admit option: also accept plain linear R8 planes (the POM height maps). */
+export const R8_PLANES = Object.freeze({ r8: true });
+
 /**
  * The page descriptor for a texture, or null when the kit cannot hold it
- * byte-exactly (anything but a plain RGBA8 DataTexture or a single BC7
- * CompressedTexture with every level's blocks still in memory; any unpack
- * flag or uv transform that would change what is sampled).
+ * byte-exactly (anything but a plain RGBA8 DataTexture, a single BC7
+ * CompressedTexture with every level's blocks still in memory or, with
+ * `opts.r8`, a plain linear R8 DataTexture; any unpack flag or uv transform
+ * that would change what is sampled).
  */
-export function describeTexture(tex) {
+export function describeTexture(tex, opts = null) {
   if (!tex || !tex.isTexture || tex.isRenderTargetTexture || tex.isExternalTexture) return null;
   if (tex.isDataArrayTexture || tex.isCompressedArrayTexture || tex.isData3DTexture || tex.isCubeTexture) return null;
   if (tex.internalFormat !== null && tex.internalFormat !== undefined) return null;
@@ -113,6 +132,15 @@ export function describeTexture(tex) {
     return { format: "bc7", levels: mips.length, ...base };
   }
   if (!tex.isDataTexture) return null;
+  if (opts && opts.r8 === true && tex.format === THREE.RedFormat && tex.type === THREE.UnsignedByteType) {
+    // R8: linear only (three allocates R8 for NoColorSpace / LinearSRGB; an
+    // sR8 plane would need an extension three does not use for RedFormat).
+    if (tex.colorSpace !== THREE.NoColorSpace && tex.colorSpace !== THREE.LinearSRGBColorSpace) return null;
+    const levelsR = tex.generateMipmaps
+      ? fullMipLevels(w, h)
+      : (Array.isArray(tex.mipmaps) && tex.mipmaps.length > 0 ? tex.mipmaps.length : 1);
+    return { format: "r8", levels: levelsR, ...base };
+  }
   if (tex.format !== THREE.RGBAFormat || tex.type !== THREE.UnsignedByteType) return null;
   // Unpack flags (flipY, premultiplyAlpha, unpackAlignment) shape the bytes
   // THREE uploads into the 2D texture; the admit copies those GPU bytes, so
@@ -275,6 +303,7 @@ export class ArrayPages {
         : (ext.COMPRESSED_RGBA_BPTC_UNORM_EXT ?? 0x8e8c);
     }
     const gl = this.gl;
+    if (desc.format === "r8") return gl.R8 ?? 0x8229;
     return _isSrgb(desc.colorSpace) ? (gl.SRGB8_ALPHA8 ?? 0x8c43) : (gl.RGBA8 ?? 0x8058);
   }
 
@@ -354,22 +383,60 @@ export class ArrayPages {
    * when the texture cannot live in a page (the consumer keeps its legacy
    * path for it).
    */
-  admit(tex, budget) {
+  admit(tex, budget, opts = null) {
+    return this.admitAs(tex, null, budget, opts);
+  }
+
+  /**
+   * The budget gate of a fresh layer (R3-4 real boot, 2026-10-31): a frame
+   * without room defers (counted as the budget's refusal, as before); a
+   * frame with room books the bytes only once the allocator has granted the
+   * layer, so an allocator refusal (the byte cap) books nothing.
+   */
+  _budgetOpen(budget, bytes) {
+    if (!budget || budget.canSpend(bytes, UPLOAD_KIND.LAYER)) return true;
+    budget.trySpend(bytes, UPLOAD_KIND.LAYER); // refused: books the refusal, nothing else
+    this.stats.deferred += 1;
+    return false;
+  }
+
+  /**
+   * Is `tex` uploaded on the LIVE generation at its current version (three's
+   * own 2D texture, from the legacy draw)? A copy from it then needs no
+   * upload of its bytes.
+   */
+  isResident(tex) {
+    if (!tex || this.contextLost()) return false;
+    let props = null;
+    try { props = this.renderer.properties.get(tex); } catch (_) { props = null; }
+    return !!(props && props.__webglTexture && props.__version === tex.version);
+  }
+
+  /**
+   * `admit(tex)` under the caller's content key (`contentKey` null = the
+   * texture's identity key): the layer is a GPU copy of `tex`'s OWN levels
+   * (three's 2D texture, uploaded by three if it is not resident). R3-4 uses
+   * it for a value-keyed composite whose legacy texture is already resident:
+   * the very texels the legacy draw samples, no scratch upload. Returns as
+   * admit(). `opts`: describeTexture's (R8_PLANES admits an R8 plane).
+   */
+  admitAs(tex, contentKey, budget, opts = null) {
     // Lost (or restored onto a new generation): wait, nothing is uploaded
     // into a dead page; the consumer resets and re-plans.
     if (this.contextLost()) return { deferred: true, lost: true };
-    const desc = describeTexture(tex);
+    const desc = describeTexture(tex, opts);
     if (!desc || !this.internalFormatOf(desc)) { this.stats.unsupported += 1; return null; }
-    const ck = contentKeyOf(tex);
+    const ck = contentKey === null || contentKey === undefined ? contentKeyOf(tex) : contentKey;
     if (!this.alloc.needsUpload(ck)) {
       const e = this.alloc.acquire(desc, ck);
       return { page: e.page, layer: e.layer, contentKey: ck };
     }
     const bytes = layerBytesOf(desc);
-    if (budget && !budget.trySpend(bytes, UPLOAD_KIND.LAYER)) { this.stats.deferred += 1; return { deferred: true }; }
+    if (!this._budgetOpen(budget, bytes)) return { deferred: true };
     const t0 = uploadNowMs();
     const e = this.alloc.acquire(desc, ck);
     if (!e) return null;
+    if (budget) budget.trySpend(bytes, UPLOAD_KIND.LAYER); // room checked above, nothing booked since
     const ok = desc.format === "bc7" ? this._uploadBc7(tex, e.page, e.layer) : this._copyRgba8(tex, e.page, e.layer);
     if (!ok) { this.alloc.abandon(ck); this.stats.failed += 1; return null; }
     this.stats.admits += 1;
@@ -406,10 +473,11 @@ export class ArrayPages {
       return { page: e.page, layer: e.layer, contentKey };
     }
     const bytes = layerBytesOf(desc);
-    if (budget && !budget.trySpend(bytes, UPLOAD_KIND.LAYER)) { this.stats.deferred += 1; return { deferred: true }; }
+    if (!this._budgetOpen(budget, bytes)) return { deferred: true };
     const t0 = uploadNowMs();
     const e = this.alloc.acquire(desc, contentKey);
     if (!e) return null;
+    if (budget) budget.trySpend(bytes, UPLOAD_KIND.LAYER); // room checked above, nothing booked since
     const ok = this._copyRgba8(scratch, e.page, e.layer);
     try { scratch.dispose(); } catch (_) { /* fail-soft */ }
     this.stats.scratch += 1;
@@ -435,6 +503,7 @@ export class ArrayPages {
     return props.__webglTexture || null;
   }
 
+  /** Per-level GPU copy of three's own 2D upload of `tex` into (layer, level): RGBA8 and R8 pages. */
   _copyRgba8(tex, page, layer) {
     const gl = this.gl;
     const src = this._webglTextureOf(tex);
@@ -472,7 +541,11 @@ export class ArrayPages {
     return true;
   }
 
-  /** Read one RGBA8 layer level back (smoke / 1070 probe). */
+  /**
+   * Read one layer level back (smoke / 1070 probe) as RGBA8 bytes (an R8
+   * layer reads back as (r, 0, 0, 255): readPixels RGBA / UNSIGNED_BYTE, the
+   * same conversion `readTexture2D` applies to the legacy R8 texture).
+   */
   readLayer(page, layer, level = 0) {
     const gl = this.gl;
     const [w, h] = levelSize(page.desc.width, page.desc.height, level);
@@ -487,7 +560,7 @@ export class ArrayPages {
     return out;
   }
 
-  /** Read one level of a resident RGBA8 2D texture back (the legacy side of the comparison). */
+  /** Read one level of a resident RGBA8 (or R8) 2D texture back (the legacy side of the comparison). */
   readTexture2D(tex, level = 0) {
     const gl = this.gl;
     const src = this._webglTextureOf(tex);

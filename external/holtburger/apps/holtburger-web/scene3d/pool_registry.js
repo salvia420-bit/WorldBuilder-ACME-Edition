@@ -1332,6 +1332,31 @@ export class PoolRegistry {
   }
 
   /**
+   * READ-ONLY, for R3-5 `?interiorBatch` (default OFF; its only caller, so
+   * with that flag off nothing calls this): one cell's pooled instances and
+   * how many of them the cell PVS holds hidden (`hiddenCells`: the intent,
+   * whatever the tile's LIVE/PARKED state or an ?objRadius hide), written
+   * into `out` as `{ instances, hidden }`. Returns false (and leaves `out`
+   * alone) when the cell has no pooled instance. No allocation, no mutation.
+   */
+  readCellState(cellId, out) {
+    const id = cellId >>> 0;
+    const mems = this._cellIndex.get(id);
+    if (!mems) return false;
+    let instances = 0;
+    let hidden = 0;
+    for (const mem of mems) {
+      const ids = mem.cellRanges && mem.cellRanges.get(id);
+      if (!ids) continue;
+      instances += ids.length;
+      if (mem.hiddenCells) for (let k = 0; k < ids.length; k += 1) if (mem.hiddenCells.has(ids[k])) hidden += 1;
+    }
+    out.instances = instances;
+    out.hidden = hidden;
+    return true;
+  }
+
+  /**
    * True release of a SUBSET of cells (ENVCELL-POOL-SWAP).
    *
    * The grid releases whole TILES; an envcell LB is rebuilt on a granularity of

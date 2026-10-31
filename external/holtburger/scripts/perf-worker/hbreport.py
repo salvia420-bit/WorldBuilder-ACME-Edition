@@ -17,7 +17,8 @@ Rules implemented (text copied in docs/reengineering/queue-1070/batch-R3-M1-2026
       assert is not applicable, so a --compat v1 rep with no window target / DayGroup / skytime pin is
       not INVALID for that alone); an arm.gate that read false (hbbench stops the rep: INVALID, never a
       loss); with --queue, an arm the queue gates (O-rigs: mode 'rigs' and cellsSkipped > 0;
-      rustEntityWorld: projections === 1) whose rep did not evaluate exactly that gate true (a rep
+      rustEntityWorld: projections === 1, an arm in `removedArms` since the flag was deleted
+      2026-10-30, still gated for the stored runs) whose rep did not evaluate exactly that gate true (a rep
       from an older queue or a snapshot that predates the flag may be a silent A/A). Box samples = the run
       JSON's own (v2) PLUS the dir's boxwatch.log samples inside the rep's window (v1, and the
       `--compat v1` reps whose own samples sit only before launch and after the tour). Plus the manual
@@ -595,10 +596,18 @@ def probe_rows(reps, arms, statuses):
     return out
 
 
+def item_arms(it):
+    """A queue item's arms as a stored run may have run them: `arms` plus `removedArms` (2026-10-30: the
+    arms of a deleted flag move there with a `removed` note; hbbench's loadArms runs `arms` only, so they
+    never run again, but a run stored before the deletion keeps its gate and prediction here)."""
+    return list(it.get("arms", []) or []) + list(it.get("removedArms", []) or [])
+
+
 def queue_gates(queue, item=None):
-    """{arm name: gate expression} the queue gives the arms a bench ran. `item` (hbbench's run.json
-    `item`, or `--item` in its argv) picks the item; without it an arm name counts only when every
-    queue arm of that name carries the same gate (arm names like A / A-AA repeat across items)."""
+    """{arm name: gate expression} the queue gives the arms a bench ran (removedArms included, see
+    item_arms). `item` (hbbench's run.json `item`, or `--item` in its argv) picks the item; without it
+    an arm name counts only when every queue arm of that name carries the same gate (arm names like
+    A / A-AA repeat across items)."""
     out = {}
     if not queue:
         return out
@@ -607,7 +616,7 @@ def queue_gates(queue, item=None):
         items = [it for it in items if it.get("id") == item]
     seen = collections.defaultdict(set)
     for it in items:
-        for a in it.get("arms", []) or []:
+        for a in item_arms(it):
             if a.get("name"):
                 seen[a["name"]].add(a.get("gate") or (it.get("armDefaults") or {}).get("gate") or None)
     for name, gs in seen.items():
@@ -619,8 +628,9 @@ def queue_gates(queue, item=None):
 
 
 def queue_predicts(queue, item=None):
-    """{arm name: predict} for the bench's queue item, resolved like queue_gates (without an item, an
-    arm name counts only when every queue arm of that name carries the same prediction)."""
+    """{arm name: predict} for the bench's queue item, resolved like queue_gates (removedArms included;
+    without an item, an arm name counts only when every queue arm of that name carries the same
+    prediction)."""
     out = {}
     if not queue:
         return out
@@ -629,7 +639,7 @@ def queue_predicts(queue, item=None):
         items = [it for it in items if it.get("id") == item]
     seen = collections.defaultdict(list)
     for it in items:
-        for a in it.get("arms", []) or []:
+        for a in item_arms(it):
             if a.get("name"):
                 seen[a["name"]].append(a.get("predict") or None)
     for name, ps in seen.items():
