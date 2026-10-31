@@ -198,3 +198,27 @@ S2 arms EB-512 / STACK-512), `4a967837` (review fixes; gate 967/967). Snapshot *
   `/mnt/wbterminal1/tmp/claude-scratch/rustcore-2026-10-29/r3-batching/pools-indoor/repro_preview_race.{mjs,out}`.
   Fix sketch there (re-offer after atlasRefeed, re-fuse the cell, re-plan the interior batch). Deferred until S2 decides
   `?interiorBatch`: it already takes the shells the pools refuse, so if it flips ON the fix matters much less.
+
+### 2026-10-31 findings from the 1070 checks and the render-JS analysis
+
+- **1070 real-GPU checks (r3c, `r3-s2/chk/`):** M1a-LAYERMIP PASS (24 textures, 192 levels byte-equal, copyTexSubImage3D and
+  blit, sensitivity controls detected); gpuParticles self-check true, 0 patch failures, 2,824 emitters; interior batch in room
+  a9b40121 240 / 291 legacy meshes batched and at TownNetwork 315 / 411 (3 chunks active), bitMismatch 0, giveUps 0 — but
+  **texture-swap churn** (room 33 / TownNetwork 62 texture re-plans, cap 64; fixed by 1dd3b2cd on r3d) and **the shared
+  128 MiB kit cap exhausted at TownNetwork** (134 MB reserved / 94 MB live, 4,651 refused admits; 82 interior members and
+  3,965 entity leaves legacy for pageFull) → S2-DUNGEON / S2-LINVAK gained STACK-512 arms; kit fragmentation (reserved >>
+  live after churn) is a follow-up if the settle fix does not cure it. **Context loss / restore** (all three batches): the
+  client recovers (lost → restored 3.0 s → 20 / 20 rehydrated), interior and particles clean, **entity batch verify()
+  rowMismatches 8 after the restore** (0 before): lane `eb-ctx` investigating.
+- **M1a-WEBGPU:** raw submission CPU per draw ~0.4 us (WebGL2 drawElements, WebGPU bundles), ~1 us (WebGPU drawIndexed),
+  against ~13 us of three.js renderJs per info.call: the GL call is ~3% of a draw.
+- **Why the stack's 41% fewer draws bought ~9% renderJs** (analysis lane, scratch `r3-batching/renderjs/`): renderJs has a
+  ~4.9-5.2 ms fixed intercept (quiet-box D1 regression; marginal 7.9-8.7 us per info.call); the "22 walks" are one world walk
+  (14.9 of 15.8 ms) plus 21 tiny ones (~1 ms); **three's per-material SWITCH path (setProgram + uniform refresh) is ~5 ms /
+  frame** (~434 switches over ~1,097 draws, only 66 useProgram); batching mostly removed cheap same-material continuations
+  (~2.5-3 us) while ~197 BatchedMesh calls (148 chunk buckets) cost ~15-25 us each; batch draws bypass draw_exec's fast path.
+  Ranked levers: (1) a same-program material-switch fast path in draw_exec, GL stream identical (−2…−3 ms [D]) — lane
+  `dx-switch` building `?drawExecSwitch` (default OFF); (2) chunk buckets → class-material draws (−2 ms [D]); (3) finish the
+  entity / interior batches (−1.2…−1.5 ms each [D]); (4) entity batch as a plain Mesh draw_exec accepts (−0.2 ms); (5) fewer
+  bloom mip walks (−0.1 ms, look change); detaching parked leaves (−0.1…−0.2 ms, high risk) and cheaper class materials (~0)
+  are not worth it.
