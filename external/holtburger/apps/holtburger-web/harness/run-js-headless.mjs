@@ -1492,6 +1492,8 @@ const TIER5 = [
   // 2026-10-31 real-boot rework: layer footprint / cap reclaim / no refusal churn / one reset per context transition.
   { tier: 5, flag: "entityBatchRealboot", file: "tests/entity_batch_realboot.test.mjs" },
   { tier: 5, flag: "entityBatchPom", file: "tests/entity_batch_pom.test.mjs" },
+  // 2026-10-31: AO / roughness / emissive parts (texchan planes + the emissive alias batch through map-set classes).
+  { tier: 5, flag: "entityBatchMaps", file: "tests/entity_batch_maps.test.mjs" },
   // R3-5: ?interiorBatch (scene3d/gpu_batch/interior_batch.js + the cells.js hooks).
   { tier: 5, flag: "interiorBatchBits", file: "tests/interior_batch_bits.test.mjs" },
   { tier: 5, flag: "interiorBatchMerge", file: "tests/interior_batch_merge.test.mjs" },

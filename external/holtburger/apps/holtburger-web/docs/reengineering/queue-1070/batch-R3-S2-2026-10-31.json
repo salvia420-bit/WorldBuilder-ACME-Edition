@@ -8,14 +8,14 @@
  "sessionRules": "vistest-preamble-v1",
  "sessionRulesInline": [
   "Inherit every rule of batch-R3-D1-2026-10-30.json sessionRulesInline verbatim (it inherits batch-P0's: MODE T off-screen + muted, OWNER-RUN, kill only by user-data-dir, ?nosw=1, fresh profile per arm-rep, uncapped frames + targetFps=0, release wasm only, >= 65 s between boots on one account, reject-never-average). Read memory/fleet-runbooks.md before driving the 1070.",
-  "Build under test: snapshot /mnt/wbterminal2/hb-snap/r3b-20261031 (cut 2026-10-31 from 9315dfd7, real release pkg copy; SNAPSHOT_COMMIT.txt), served with `python3 scripts/serve.py --bind 127.0.0.1 --port 8766` from the snapshot (`--check` validates and EXITS: run it once, then serve without it). Check: `node scripts/perf-worker/hbbench.mjs --arms apps/holtburger-web/docs/reengineering/queue-1070/batch-R3-S2-2026-10-31.json --check-snapshot /mnt/wbterminal2/hb-snap/r3b-20261031`.",
+  "Build under test: snapshot /mnt/wbterminal2/hb-snap/r3c-20261031 (cut 2026-10-31 from the entity-maps commit, real release pkg copy; SNAPSHOT_COMMIT.txt), served with `python3 scripts/serve.py --bind 127.0.0.1 --port 8766` from the snapshot (`--check` validates and EXITS: run it once, then serve without it). Check: `node scripts/perf-worker/hbbench.mjs --arms apps/holtburger-web/docs/reengineering/queue-1070/batch-R3-S2-2026-10-31.json --check-snapshot /mnt/wbterminal2/hb-snap/r3c-20261031`.",
   "Laptop memory: SwiftShader boots of the batch arms hold ~3.4 GB (GPU process ~2 GB + renderer ~1.4 GB); never run a laptop batch boot while the 1070 bench's laptop side (serve.py, ACE, tunnel) is near the earlyoom line. The 1070 runs the arms; the laptop only serves."
  ],
  "accounts": "Bench account tailnet1 (hbbench default). M1c needs a SECOND Developer-level account for WebAC (or run the two clients one after the other); credentials only in the URL / environment at run time, never in this file.",
  "urlBase": "http://127.0.0.1:8766/apps/holtburger-web/index.html",
  "b0Snapshot": {
-  "what": "S2 snapshot = r3b-20261031: the merged, gated tree at 9315dfd7 (full JS gate 966/966 2026-10-31) with a real release pkg copy.",
-  "check": "node scripts/perf-worker/hbbench.mjs --arms apps/holtburger-web/docs/reengineering/queue-1070/batch-R3-S2-2026-10-31.json --check-snapshot /mnt/wbterminal2/hb-snap/r3b-20261031",
+  "what": "S2 snapshot = r3c-20261031: the merged, gated tree with the entity-maps commit (on top of 1d30b7d4) with a real release pkg copy.",
+  "check": "node scripts/perf-worker/hbbench.mjs --arms apps/holtburger-web/docs/reengineering/queue-1070/batch-R3-S2-2026-10-31.json --check-snapshot /mnt/wbterminal2/hb-snap/r3c-20261031",
   "rule": "Each requirement's file must exist in the snapshot, be the snapshot's own copy (no symlink anywhere on its path) and match every pattern (JS RegExp source). The check refuses the live tree itself and never reads url-flags.md. Patterns pin the a2 versions where an a2 lane changed the reader's module (route probe, nullRender install, generation keying, compaction, the legacy re-show fix), so a phase-A-only snapshot fails.",
   "requiredReaders": [
    {
@@ -26,6 +26,15 @@
      "window\\.__entityBatch = \\{"
     ],
     "why": "EB-on, STACK"
+   },
+   {
+    "flag": "entityBatch (AO / roughness / emissive parts, 2026-10-31)",
+    "file": "apps/holtburger-web/scene3d/gpu_batch/entity_batch.js",
+    "patterns": [
+     "const out = \\{ entities: 0, rowMismatches: 0, stateMismatches: 0, pomMismatches: 0, mapMismatches: 0, parkMismatches: 0, attrMismatches: 0, details: \\[\\] \\};",
+     "mapArrivals: 0, // texchan planes that arrived on a batched member"
+    ],
+    "why": "EB-on / STACK: a snapshot before the maps commit routes the 47 AO + roughness leaves legacy (laptop boot 2026-10-31)"
    },
    {
     "flag": "interiorBatch (AO / roughness / emissive members, page-full waits, mesh diag)",
@@ -161,7 +170,7 @@
  ],
  "suggestedOrder": [
   "S2-PRE",
-  "S2-BENCH (Holtburg, 12 arms x 3 reps, ~3.3 h [D] at ~5.5 min per arm-rep)",
+  "S2-BENCH (Holtburg, 14 arms x 3 reps, ~3.9 h [D] at ~5.5 min per arm-rep)",
   "S2-ANATOMY (A, A-AA, EB-on, IB-on, GP-on, HD-on; 3 reps over the session)",
   "S2-LINVAK (6 arms x 3 reps)",
   "S2-DUNGEON (5 arms x 3 reps)",
@@ -201,6 +210,28 @@
      "flags": "entityBatch=on",
      "note": "R3-4 ?entityBatch: entity part-surfaces as one kit InstancedMesh per rig, one draw per (side, class, chain, page) run",
      "gate": "!!window.__entityBatch && ((window.__entityBatch.stats().byStatus || {}).active || 0) > 0",
+     "gateInfo": "window.__entityBatch ? window.__entityBatch.stats() : null",
+     "prediction": "[D] (R3-4 report) Holtburg entity part-surface draws 285 -> ~105 (90-120); main -0.8...-2.3 ms (likely -1.4); CrGpuMain -1.0...-1.1 ms; GPU ~0; R6 stop trips if main moves < ~0.7 ms",
+     "scored": "still / moving / tour fps (the D1 rule); main busy per frame, CrGpuMain WEBGL per present, GPU ms (S2-ANATOMY); p50 / p95 for the record",
+     "diagReads": [
+      {
+       "read": "gateInfo after the settle (every rep), then window.__entityBatch.verify() once per rep",
+       "pass": "byStatus.active > 0; fallbacks.unstable absent or small; reparked 0; context.resets 0; verify() rowMismatches / stateMismatches / pomMismatches / parkMismatches / attrMismatches all 0 (laptop boot 2026-10-31: 14 rigs active, all 0)"
+      }
+     ],
+     "look": {
+      "class": "HOW",
+      "why": "draw order inside a rig; part x root composed in f32 on the GPU",
+      "rcEye": [
+       "chase cam, NPC crowd, an equip / dye change, luminous gear at night (owner rule: looks for the record, fps decides)"
+      ]
+     }
+    },
+    {
+     "name": "EB-512",
+     "flags": "entityBatch=on&gpuBatchVramMB=512",
+     "note": "EB-on with the kit VRAM cap at 512 MiB: the 1070 live-tree check (2026-10-31, ultra, Holtburg) filled the default 128 MiB cap (116 MB live, 134 MB reserved; 44 leaves legacy for pageFull, 32 layers refused). Prices whether the cap limits the batch; a win here and not in EB-on is a default-cap decision for the owner (R7: tier preset)",
+     "gate": "!!window.__entityBatch && ((window.__entityBatch.stats().byStatus || {}).active || 0) > 0 && new URLSearchParams(location.search).get(\"gpuBatchVramMB\") === \"512\"",
      "gateInfo": "window.__entityBatch ? window.__entityBatch.stats() : null",
      "prediction": "[D] (R3-4 report) Holtburg entity part-surface draws 285 -> ~105 (90-120); main -0.8...-2.3 ms (likely -1.4); CrGpuMain -1.0...-1.1 ms; GPU ~0; R6 stop trips if main moves < ~0.7 ms",
      "scored": "still / moving / tour fps (the D1 rule); main busy per frame, CrGpuMain WEBGL per present, GPU ms (S2-ANATOMY); p50 / p95 for the record",
@@ -321,6 +352,14 @@
      "name": "STACK",
      "flags": "entityBatch=on&interiorBatch=on&gpuParticles=on&hudDiet=on",
      "note": "the four ship candidates together: additivity check (a winner that only wins alone is reported, not stacked blindly)",
+     "gate": "(!!window.__entityBatch && ((window.__entityBatch.stats().byStatus || {}).active || 0) > 0) && (!!window.__interiorBatch && !!window.__interiorBatch.stats() && window.__interiorBatch.stats().mode === \"on\" && window.__interiorBatch.stats().objects > 0) && (!!window.__gpuParticlesDiag && window.__gpuParticlesDiag().on === true && window.__gpuParticlesDiag().emitters > 0 && window.__gpuParticlesDiag().selfCheck !== false) && (!!window.__hudBisect && Array.isArray(window.__hudBisect.diet) && window.__hudBisect.diet.length > 0)",
+     "gateInfo": "({eb: window.__entityBatch ? window.__entityBatch.stats().byStatus : null, ib: window.__interiorBatch ? window.__interiorBatch.stats().meshes : null, gp: window.__gpuParticlesDiag ? window.__gpuParticlesDiag().emitters : null, hud: window.__hudBisect || null})",
+     "scored": "still / moving / tour fps (the D1 rule); main busy per frame, CrGpuMain WEBGL per present, GPU ms (S2-ANATOMY); p50 / p95 for the record"
+    },
+    {
+     "name": "STACK-512",
+     "flags": "entityBatch=on&interiorBatch=on&gpuParticles=on&hudDiet=on&gpuBatchVramMB=512",
+     "note": "STACK with the kit VRAM cap at 512 MiB (entity + interior + anim-scenery batches share one cap)",
      "gate": "(!!window.__entityBatch && ((window.__entityBatch.stats().byStatus || {}).active || 0) > 0) && (!!window.__interiorBatch && !!window.__interiorBatch.stats() && window.__interiorBatch.stats().mode === \"on\" && window.__interiorBatch.stats().objects > 0) && (!!window.__gpuParticlesDiag && window.__gpuParticlesDiag().on === true && window.__gpuParticlesDiag().emitters > 0 && window.__gpuParticlesDiag().selfCheck !== false) && (!!window.__hudBisect && Array.isArray(window.__hudBisect.diet) && window.__hudBisect.diet.length > 0)",
      "gateInfo": "({eb: window.__entityBatch ? window.__entityBatch.stats().byStatus : null, ib: window.__interiorBatch ? window.__interiorBatch.stats().meshes : null, gp: window.__gpuParticlesDiag ? window.__gpuParticlesDiag().emitters : null, hud: window.__hudBisect || null})",
      "scored": "still / moving / tour fps (the D1 rule); main busy per frame, CrGpuMain WEBGL per present, GPU ms (S2-ANATOMY); p50 / p95 for the record"

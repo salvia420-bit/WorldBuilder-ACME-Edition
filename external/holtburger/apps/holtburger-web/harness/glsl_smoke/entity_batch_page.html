@@ -2,9 +2,11 @@
 <script type="importmap">{ "imports": { "three": "/three/three.module.js", "three/addons/": "/three-addons/" } }</script>
 <script type="module">
 // entity_batch_smoke.mjs page (R3-4 stage A `?entityBatch`). `?arm=` one of
-// humans | clamp | mixed | front | flash | overlap | pom | layers, `&entityBatch=on`
+// humans | clamp | mixed | front | flash | overlap | pom | maps | layers, `&entityBatch=on`
 // for the batched load; `&pom=1` gives any arm the POM material cache (the
-// layers arm then reads the R8 height layers back too). The REAL EntityManager (scene3d/entities.js) spawns
+// layers arm then reads the R8 height layers back too); `&maps=1` the texchan
+// material cache (AO / roughness planes: the layers arm reads the AO and
+// roughness layers back too). The REAL EntityManager (scene3d/entities.js) spawns
 // the rigs of harness/glsl_smoke/entity_batch_lib.mjs; frames are stepped by
 // the arm itself (no wall-clock rAF), so the off and on loads pose
 // identically.
@@ -40,9 +42,11 @@ try {
   const pause = () => new Promise((res) => setTimeout(res, 20));
   const pom = q.get("pom") === "1";
   out.pom = pom;
-  const r = await LIB.runEntityArm(THREE, renderer, mods, { arm: arm === "layers" ? "humans" : arm, batch: arm === "layers" ? true : batch, pause, readFrame, pom });
+  const maps = q.get("maps") === "1";
+  out.maps = maps;
+  const r = await LIB.runEntityArm(THREE, renderer, mods, { arm: arm === "layers" ? "humans" : arm, batch: arm === "layers" ? true : batch, pause, readFrame, maps, pom });
   out.status = r.status;
-  out.stats = r.stats ? { byStatus: r.stats.byStatus, draws: r.stats.draws, leafRoutes: r.stats.leafRoutes, fallbacks: r.stats.fallbacks, demoteReasons: r.stats.demoteReasons, layers: r.stats.layers, entries: r.stats.entries, programKeys: r.stats.programKeys } : null;
+  out.stats = r.stats ? { byStatus: r.stats.byStatus, draws: r.stats.draws, leafRoutes: r.stats.leafRoutes, fallbacks: r.stats.fallbacks, demoteReasons: r.stats.demoteReasons, layers: r.stats.layers, entries: r.stats.entries, programKeys: r.stats.programKeys, mapMembers: r.stats.mapMembers, extraMaps: r.stats.extraMaps } : null;
   out.verify = r.verify;
   if (arm === "layers") {
     out.layers = LIB.readbackLayers(r.em._entityBatch, mods.kit.kitPages(renderer));

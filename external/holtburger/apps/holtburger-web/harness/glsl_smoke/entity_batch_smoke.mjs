@@ -34,6 +34,15 @@
 //            rows admitted, verify() clean incl. the POM rows, a `|pom1`
 //            program linked), and `layers&pom=1`: every R8 height layer, every
 //            level, byte-equal to the member's own 2D height texture;
+//   maps     (2026-10-31) the arms' gates on the mixed rig over cache
+//            materials carrying the light clamp and materials.js's texchan
+//            planes (R8 cavity AO + RGBA8 linear roughness): AO / roughness
+//            classes drew (`|xmar` programs linked, map rows admitted,
+//            verify() clean incl. `mapMismatches`), no leaf refused for a
+//            map, the luminous leaf (planes + emissive alias) and the
+//            translucent one legacy; and `layers&maps=1`: every AO (R8) and
+//            roughness (RGBA8) layer, every level, byte-equal to the member's
+//            own 2D plane;
 //   every program links, no page error, no console error, no GL error, no
 //   missing module.
 // NOT part of the node gate (it launches a browser — one heavy job at a time,
@@ -110,6 +119,12 @@ console.log(`layers+pom: ${JSON.stringify({ status: LP.status, layers: LP.layers
 check("layers+pom: every R8 height layer level reads back byte-equal to the member's 2D height texture", LP.layers && LP.layers.pom >= 8 && LP.layers.mismatched === 0,
   JSON.stringify(LP.layers));
 check("layers+pom: clean", clean(LP), err(LP));
+// AO / roughness layers (R8 + linear RGBA8 pages): the same readback on the texchan material cache.
+const LM = await run("?arm=layers&maps=1");
+console.log(`layers+maps: ${JSON.stringify({ status: LM.status, layers: LM.layers, mapMembers: LM.stats && LM.stats.mapMembers })}`);
+check("layers+maps: every AO / roughness layer level reads back byte-equal to the member's 2D plane", LM.layers && LM.layers.ao >= 5 && LM.layers.roughness >= 5 && LM.layers.mismatched === 0,
+  JSON.stringify(LM.layers));
+check("layers+maps: clean", clean(LM), err(LM));
 
 // --- arms -------------------------------------------------------------------------
 // Every field of an arm is read below (tests/entity_batch_lifecycle.test.mjs 7b checks it).
@@ -120,6 +135,7 @@ const ARMS = {
   front: { status: ["active", "active"], fewerCalls: true },
   flash: { status: ["demoted", "active"], fewerCalls: true }, // one rig still batched
   pom: { status: ["active", "active"], fewerCalls: true, pom: true }, // POM classes (height layers + extension rows)
+  maps: { status: ["active", "active"], legacyLeaves: true, fewerCalls: true, maps: true }, // AO / roughness classes (+ the luminous leaf legacy)
 };
 for (const [arm, want] of Object.entries(ARMS)) {
   const off = await run(`?arm=${arm}`);
@@ -137,6 +153,12 @@ for (const [arm, want] of Object.entries(ARMS)) {
     check(`${arm}: POM parts batched (height layers + extension rows, POM rows verified, a POM class program)`,
       on.stats && on.stats.layers.pom >= 8 && on.verify && on.verify.pomMismatches === 0 && (on.stats.programKeys || []).some((k) => /\|pom1$/.test(k)),
       JSON.stringify({ layers: on.stats && on.stats.layers, verify: on.verify, keys: on.stats && on.stats.programKeys }));
+  }
+  if (want.maps) {
+    check(`${arm}: AO / roughness parts batched (map rows, verify() incl. mapMismatches, an |xmar class program, no map refusal)`,
+      on.stats && on.stats.mapMembers && on.stats.mapMembers.ao >= 5 && on.stats.mapMembers.roughness >= 5 && on.verify && on.verify.mapMismatches === 0
+        && Object.keys(on.stats.extraMaps || {}).length === 0 && (on.stats.programKeys || []).some((k) => /\|xmar$/.test(k)),
+      JSON.stringify({ mapMembers: on.stats && on.stats.mapMembers, extraMaps: on.stats && on.stats.extraMaps, verify: on.verify, keys: on.stats && on.stats.programKeys }));
   }
   check(`${arm}: the rigs are on screen`, lo > 1500, `${lo} lit px`);
   check(`${arm}: no structural difference (lit pixels within 0.1%)`, Math.abs(ln - lo) <= Math.ceil(0.001 * d.pixels), `${lo} vs ${ln}`);

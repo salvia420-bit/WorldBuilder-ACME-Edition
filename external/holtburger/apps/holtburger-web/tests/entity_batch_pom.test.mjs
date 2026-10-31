@@ -13,7 +13,9 @@
 //       its verdict carries the very height plane materials.js keeps for it
 //       and the scalars it recorded; a p1 flag over a light-clamp chain is
 //       batchable without POM; every other rule still applies through the
-//       p0-keyed view (a roughness map refuses); a non-p1 refused key, a
+//       p0-keyed view (a metalness map refuses; a texchan roughness plane is
+//       accepted since the map parts, tests/entity_batch_maps.test.mjs); a
+//       non-p1 refused key, a
 //       mangled POM text and a missing normal map stay legacy; the run key
 //       of a POM part carries its chain fingerprint and height page key, a
 //       plain member's run key is unchanged.
@@ -32,8 +34,10 @@
 //   EP4 the smoke's pom arm dry-runs in node (two active rigs, POM layers,
 //       verify clean, a pom1 class) and the layers readback walks the R8
 //       height layers; the page and the runner carry the arms.
-//   EP5 the extra-map census (`stats().extraMaps`): a leaf refused for its
-//       texchan planes (aoMap + roughnessMap) is counted by its whole set.
+//   EP5 the extra-map census (`stats().extraMaps`): a leaf refused for an
+//       extra map is counted by its whole set (texchan planes included: a
+//       light map next to aoMap + roughnessMap); planes alone batch (the map
+//       parts) and are counted in `stats().mapLeaves` instead.
 //
 // Each check fails on the pre-change tree (POM parts routed "shader-chain";
 // no POM rows / R8 pages / POM class).
@@ -98,9 +102,13 @@ await check("EP1 routing: POM parts batch, flag-only p1 batches without POM, eve
   assert.equal(EB.entityArrayReason(flag), null);
   assert.equal(EB.entityPomVerdict(flag).pom, null, "no POM text: batched as the chain it runs");
   // Every other unitArrayReason rule, through the p0-keyed view.
+  const metal = R.LIB.materialCacheFor(M, ADAPTER, { pom: true }).materials.get(D.B);
+  metal.metalnessMap = smallTex();
+  assert.equal(EB.entityArrayReason(metal), "map:metalnessMap");
+  // (A roughness plane is a map part since 2026-10-31: tests/entity_batch_maps.test.mjs.)
   const rough = R.LIB.materialCacheFor(M, ADAPTER, { pom: true }).materials.get(D.B);
   rough.roughnessMap = smallTex();
-  assert.equal(EB.entityArrayReason(rough), "map:roughnessMap");
+  assert.equal(EB.entityArrayReason(rough), null);
   // Refusals.
   const keyed = new THREE.MeshStandardMaterial({ map: smallTex() });
   keyed.onBeforeCompile = function () {};
@@ -244,18 +252,24 @@ await check("EP4 the smoke's pom arm + the R8 layers readback dry-run; the page 
   assert.ok(runner.includes('run("?arm=layers&pom=1")') && /\n  pom: \{ status: \["active", "active"\]/.test(runner) && runner.includes("if (want.pom)"), "the runner loads the pom arms and gates them");
 });
 
-await check("EP5 the extra-map census: a leaf refused for texchan planes is counted by its whole extra-map set", async () => {
+await check("EP5 the extra-map census: a leaf refused for an extra map is counted by its whole extra-map set; planes alone batch", async () => {
   const mc = pomCache();
   const m = mc.materials.get(D.C);
   m.roughnessMap = ADAPTER.surfacePixelsToRoughnessTexture(new Uint8Array(32 * 32).fill(40), 32, 32);
   m.aoMap = ADAPTER.surfacePixelsToAoTexture(new Uint8Array(32 * 32).fill(200), 32, 32);
+  m.lightMap = ADAPTER.surfacePixelsToTexture(new Uint8Array(32 * 32 * 4).fill(90), 32, 32);
+  const e = mc.materials.get(D.E);
+  e.roughnessMap = ADAPTER.surfacePixelsToRoughnessTexture(new Uint8Array(128 * 64).fill(40), 128, 64);
+  e.aoMap = ADAPTER.surfacePixelsToAoTexture(new Uint8Array(128 * 64).fill(200), 128, 64);
   const w = await R.world(true, { materialCache: mc });
   const inst = await w.spawn(0x50000c02);
   w.settle(60);
   assert.equal(inst._hbBatch.status, "active", "the rest of the rig batches");
   const st = w.em._entityBatch.stats();
-  assert.ok((st.leafRoutes["map:aoMap"] || 0) >= 1, JSON.stringify(st.leafRoutes));
-  assert.ok((st.extraMaps["aoMap+roughnessMap"] || 0) >= 1, JSON.stringify(st.extraMaps));
+  assert.ok((st.leafRoutes["map:lightMap"] || 0) >= 1, JSON.stringify(st.leafRoutes));
+  assert.ok((st.extraMaps["lightMap+aoMap+roughnessMap"] || 0) >= 1, JSON.stringify(st.extraMaps));
+  assert.equal(st.extraMaps["aoMap+roughnessMap"], undefined, "planes alone are not refused");
+  assert.ok((st.mapLeaves["aoMap+roughnessMap"] || 0) >= 1, JSON.stringify(st.mapLeaves));
   w.em._entityBatch.dispose();
 });
 

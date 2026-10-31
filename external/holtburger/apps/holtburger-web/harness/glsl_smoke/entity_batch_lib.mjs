@@ -159,15 +159,81 @@ export function heightPixelsFor(did) {
 }
 
 /**
+ * A texchan record for `did` (the decoded sidecar materials.js's `_applyRough`
+ * takes: per-texel roughness contrast and cavity AO, 128..255 since cavity AO
+ * only darkens), deterministic per surface.
+ */
+export function texchanRecordFor(did) {
+  const s = SURF[did >>> 0];
+  const n = s.w * s.h;
+  const roughness = new Uint8Array(n);
+  const ao = new Uint8Array(n);
+  for (let i = 0; i < n; i += 1) {
+    roughness[i] = (i * 37 + (did & 255) * 11) & 255;
+    ao[i] = 128 + ((i * 13 + (did & 255) * 7) & 127);
+  }
+  return { roughness, ao, width: s.w, height: s.h };
+}
+
+/**
+ * The surfaces `opts.texchan` gives texchan planes (2026-10-31, AO / roughness
+ * parts): the body's plain and ClipMap surfaces and the luminous one (its
+ * planes ride its emissive alias: the realboot's aoMap + roughnessMap +
+ * emissiveMap leaf); the head's H1 / H2 / A2 stay plane-less, so one rig
+ * carries both a plain and a map class.
+ */
+export const TEXCHAN_DIDS = Object.freeze([D.A, D.B, D.C, D.E, D.CLIP, D.LUM]);
+
+/**
+ * Give `mc` a texchan source the way the production cache has one (the
+ * manifest maps a surface DID to its stem; `_texchanSource.getByKey` answers
+ * the decoded record synchronously, `getByKeyAsync` when the fetch lands), so
+ * materials.js's OWN `_attachRoughnessMap` -> `_resolveRough` -> `_applyRough`
+ * attaches the planes (a late record: on the cache material in place, then
+ * `_reseatVariantsForDid`). `late`: getByKey answers null (cold) and the
+ * async arm waits for `release()`.
+ */
+export function installTexchan(mc, records, late = false) {
+  const byStem = new Map();
+  const manifest = new Map();
+  for (const [did, rec] of records) { const stem = `tc-${(did >>> 0).toString(16)}`; byStem.set(stem, rec); manifest.set(did >>> 0, stem); }
+  const pending = [];
+  mc.materialBakeEnabled = true;
+  mc._texchanInit = true;
+  mc._texchanManifest = manifest;
+  mc._texchanSource = {
+    getByKey: (stem) => (late ? null : byStem.get(stem) || null),
+    getByKeyAsync: (stem) => new Promise((res) => pending.push(() => res(byStem.get(stem) || null))),
+  };
+  return {
+    records, late,
+    pending: () => pending.length,
+    /** Land every waiting async fetch (their `.then` runs on the next microtasks). */
+    release() { for (const f of pending.splice(0)) f(); },
+  };
+}
+
+/**
  * The rigs' MaterialCache (cache path: every SURF installed). `opts.clamp`:
  * the retail light clamp chain on the plain ones. `opts.pom` (2026-10-31):
  * built the way the ultra preset builds it (`pomEnabled`), every surface with
  * a normal and a seam-height plane and the Stone category, so materials.js's
  * own `_materialFromFlags` installs its POM patch (+ the light clamp after it)
- * on every opaque / ClipMap surface.
+ * on every opaque / ClipMap surface. `opts.texchan` (2026-10-31, AO /
+ * roughness parts): `true` or `{ late, dids }` — the TEXCHAN_DIDS surfaces
+ * get a texchan record (`installTexchan`), attached by materials.js's own
+ * `_attachRoughnessMap` right after `_materialFromFlags` (the order of
+ * `_installFromPixels`); the handle is `mc.__texchan`.
  */
 export function materialCacheFor(M, adapter, opts = {}) {
   const mc = new M.MaterialCache(opts.pom ? { pomEnabled: true } : undefined);
+  let tch = null;
+  if (opts.texchan) {
+    const tc = opts.texchan === true ? {} : opts.texchan;
+    const recs = new Map();
+    for (const did of tc.dids || TEXCHAN_DIDS) recs.set(did >>> 0, texchanRecordFor(did));
+    tch = installTexchan(mc, recs, tc.late === true);
+  }
   for (const k of Object.keys(SURF)) {
     const did = Number(k) >>> 0;
     const s = SURF[did];
@@ -182,6 +248,7 @@ export function materialCacheFor(M, adapter, opts = {}) {
     }
     const m = mc._materialFromFlags(s.flags, tex, cat, ntex, undefined, htex,
       { translucency: s.translucency ?? 0, luminosity: s.luminosity ?? 0, diffuse: 1, hasPalette: s.hasPalette });
+    if (tch) mc._attachRoughnessMap(m, did);
     m.userData = { ...(m.userData || {}), __cacheOwned: true };
     if (opts.clamp && typeof M.installLightClampShaderPatch === "function" && m.onBeforeCompile === Object.getPrototypeOf(m).onBeforeCompile) {
       M.installLightClampShaderPatch(m);
@@ -189,6 +256,7 @@ export function materialCacheFor(M, adapter, opts = {}) {
     mc.materials.set(did, m);
   }
   mc.preload = async () => {};
+  if (tch) mc.__texchan = tch;
   return mc;
 }
 
@@ -285,9 +353,17 @@ export const SMOKE_FRAMES = 40;
  *             inside the POM LOD band (full strength below 5 m): POM classes
  *             (height layers + POM extension rows). `pom: true` gives any arm
  *             the POM cache (the layers arm's R8 readback).
+ *   maps      (2026-10-31) the mixed rig on cache materials carrying the
+ *             retail light clamp and texchan planes (TEXCHAN_DIDS: an R8
+ *             cavity-AO plane + a roughness plane each, attached by
+ *             materials.js's own `_attachRoughnessMap`): AO / roughness
+ *             classes (`|xmar`: AO + roughness layers, extension rows), the
+ *             luminous surface (planes + its emissive alias) and the
+ *             translucent one legacy. `maps: true` gives any arm the texchan
+ *             cache (the layers arm's AO / roughness readback).
  * Returns { scene, camera, em, stats, batchDraws, status }.
  */
-export async function runEntityArm(THREE, renderer, mods, { arm = "humans", batch = false, frames = SMOKE_FRAMES, pause = async () => {}, readFrame = null, pom = false } = {}) {
+export async function runEntityArm(THREE, renderer, mods, { arm = "humans", batch = false, frames = SMOKE_FRAMES, pause = async () => {}, readFrame = null, pom = false, maps = false } = {}) {
   const w = globalThis.window;
   w.__hbWasm = { ...(w.__hbWasm || {}), MotionSequence: w.__hbWasm?.MotionSequence || SmokeMotionSequence };
   mods.kit.resetKit();
@@ -297,8 +373,8 @@ export async function runEntityArm(THREE, renderer, mods, { arm = "humans", batc
   w.liveScene3d = { renderer, camera, scene, frameTime: { tsMs: ts, tsSec: 1, dt: 0 } };
   const front = arm === "front" ? new Set([1, 2, 6, 10]) : null;
   if (front) globalThis.__perPolyCull = true;
-  const mc = materialCacheFor(mods.materials, mods.adapter, { clamp: arm === "clamp", pom: pom || arm === "pom" });
-  const parts = arm === "mixed" ? MIXED_PARTS : HUMAN_PARTS;
+  const mc = materialCacheFor(mods.materials, mods.adapter, { clamp: arm === "clamp" || arm === "maps", pom: pom || arm === "pom", texchan: maps || arm === "maps" });
+  const parts = arm === "mixed" || arm === "maps" ? MIXED_PARTS : HUMAN_PARTS;
   const em = new mods.entities.EntityManager({ entitiesGroup, materialCache: mc }, wasmFor(THREE, parts, front));
   em._tweenClockMs = 1000;
   const rigs = [];
@@ -361,7 +437,7 @@ export async function runEntityArm(THREE, renderer, mods, { arm = "humans", batc
  * texture's own levels via ArrayPages.admitAs). `pages`: kitPages(renderer).
  */
 export function readbackLayers(eb, pages) {
-  const out = { layers: 0, levels: 0, mismatched: 0, first: null, value: 0, pom: 0 };
+  const out = { layers: 0, levels: 0, mismatched: 0, first: null, value: 0, pom: 0, ao: 0, roughness: 0 };
   const seen = new Set();
   const cmp = (page, layer, tex, key) => {
     for (let l = 0; l < page.desc.levels; l += 1) {
@@ -389,6 +465,20 @@ export function readbackLayers(eb, pages) {
         out.layers += 1;
         out.pom += 1;
         cmp(row.pomPage, row.pomLayer, row.pom.texture, row.pomKey);
+      }
+      // Map parts (2026-10-31): the R8 AO layer and the RGBA8 roughness layer
+      // vs the 2D texchan planes the member binds as aoMap / roughnessMap.
+      if (row.aoKey && !seen.has(row.aoKey)) {
+        seen.add(row.aoKey);
+        out.layers += 1;
+        out.ao += 1;
+        cmp(row.aoPage, row.aoLayer, row.aoTex, row.aoKey);
+      }
+      if (row.rghKey && !seen.has(row.rghKey)) {
+        seen.add(row.rghKey);
+        out.layers += 1;
+        out.roughness += 1;
+        cmp(row.rghPage, row.rghLayer, row.rghTex, row.rghKey);
       }
     }
   }

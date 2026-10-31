@@ -62,9 +62,11 @@
 //   - single leaves (in the graph, unparked, drawn and sorted as today):
 //     translucent / additive (retail's alpha list), luminous, any member a
 //     kit class cannot reproduce (anim_scenery_batch.js unitArrayReason:
-//     POM, detail, CSM, baked light, VFX chains, extra maps, ...), animated
-//     surfaces, a non-identity leaf transform, a geometry layout that does not
-//     merge, a layer mask unlike the rest, a held item's root.
+//     detail, CSM, baked light, VFX chains, extra maps other than the
+//     texchan AO / roughness planes and the emissive alias, ...; POM and
+//     those maps: `entityArrayReason`), animated surfaces, a non-identity
+//     leaf transform, a geometry layout that does not merge, a layer mask
+//     unlike the rest, a held item's root.
 //
 // MUTATIONS. TransparentPart (7) / Transparent (20) ramps are classified by
 // VALUE before the clone getter runs (`routeRamp`): show (0 -> 0) clears and
@@ -139,6 +141,53 @@
 // texture's re-upload re-plans like a map swap; a demoted rig whose members
 // changed re-plans instead of adopting when a POM member is involved.
 //
+// AO / ROUGHNESS / EMISSIVE PARTS (2026-10-31; laptop real boot, Holtburg,
+// `?entityBatch=on`: leafRoutes {map:aoMap 48, map:emissiveMap 2},
+// extraMaps {aoMap+roughnessMap 47, aoMap+roughnessMap+emissiveMap 1,
+// emissiveMap 2}). The model is interior_batch.js "AO / ROUGHNESS /
+// EMISSIVE MEMBERS", on this consumer's rows. The texchan planes materials.js
+// `_applyRough` attaches to a cache material (aoMap: R8 cavity AO at
+// `aoMapIntensity`; roughnessMap: RGBA8 linear, the value in .g) and an
+// emissiveMap that IS the member's map are accepted (`entityArrayReason`:
+// unitArrayReason judges the member with those three maps hidden, so every
+// other rule still applies; an AO / roughness plane a page cannot hold
+// refuses `ao-map-format` / `roughness-map-format`). Everything else stays
+// as it was: a luminous leaf (a non-black emissive: the luminous ladder's
+// white emissive with its emissiveMap alias, a Luminous hook) stays legacy
+// (`luminous`), an emissiveMap that is not the map stays `map:emissiveMap`,
+// and lightMap / bumpMap / displacementMap / metalnessMap / alphaMap /
+// envMap still route `map:<name>`. So an emissive member here has a black
+// emissive (its emissive radiance is zero, as three's is). A member batches
+// with a class of its MAP SET (class_materials.js "EXTRA-MAP MEMBERS": one
+// class and program per set, `|xm<a|r|e>` on the program key, three's own
+// aomap / roughnessmap / emissivemap chunks with the page samples
+// substituted, A1-E2): the AO plane is a kit R8 page layer, the roughness
+// plane an RGBA8 page layer (three's own uploads copied level by level), the
+// emissive layer the map's own layer; the member's EXTENSION ROW (the POM
+// row, now layer_state.js packExtState: POM half and map half, either zero)
+// carries the layers, aoMapIntensity and the emissive uniform, rewritten
+// every sync from the member. Run keys gain the set key and the AO /
+// roughness page keys; runs and classes split by AO / roughness page as by
+// map page and are keyed by the ROW's set (the planes the row admitted), so
+// a run never mixes sets. Drift (`_memberDrift`): a plane that leaves, is
+// swapped or re-uploads re-plans (`drift:map`, the map path and its limit);
+// an emissive alias change is a `drift:luminous` demote (as before: the
+// poll re-plans on the new run key); a plane that ARRIVES (texchan's async
+// arm mutates the cache material in place) hands the rig back to legacy in
+// that sync (`drift:ao-map-arrived` / `drift:roughness-map-arrived`) and
+// re-plans it into the new set ENTITY_BATCH_MAP_SETTLE_FRAMES later (a burst
+// is one re-plan), outside ENTITY_BATCH_REPLAN_LIMIT (arrivals happen once
+// per member; ENTITY_BATCH_MAP_ARRIVAL_LIMIT bounds them per rig). A map
+// member's layers + extension row are its own: a demoted rig re-plans
+// instead of adopting when one is involved. The layers go through the same
+// kit pages (budget, byte cap, demand-sized pages, page-full: the member
+// stays a legacy leaf and is re-tried). Diag: `stats().mapMembers` (live
+// rows by plane / set), `stats().mapLeaves` (batched leaves by extra-map set,
+// counted per plan like `leafRoutes`; `extraMaps` counts the refused ones
+// only), `stats().layers.{ao, roughness, emissive}`, `stats().mapArrivals`,
+// `verify().mapMismatches` (the map half of every extension row, the planes
+// each row samples, each run's class set).
+//
 // FLAG OFF: entities.js creates no EntityBatch and calls nothing here; this
 // module allocates nothing at import (every structure is made in the
 // constructor) and installs no listener or global.
@@ -159,10 +208,10 @@ import { UPLOAD_KIND, uploadNowMs } from "./upload_budget.js";
 import { RowTexture, instanceRedirectChunk, injectVertexHeader, ROW_REDIRECT_MARKER } from "./row_texture.js";
 import {
   makeClassMaterial, classKeyOf, classPrewarmProxy, classPatchMissing, dummyMap, SLOT_ATTR,
-  chainFingerprintOf, pomStateOf, fnv1aHex,
+  chainFingerprintOf, pomStateOf, fnv1aHex, memberMapSet, MAP_SET_NONE, extraMapStateOf,
 } from "./class_materials.js";
 import {
-  fillStateFromMaterial, blendClassOf, layerStateFromMaterial, packLayerState, packPomState, LAYER_STATE_FLOATS,
+  fillStateFromMaterial, blendClassOf, layerStateFromMaterial, packLayerState, packExtState, LAYER_STATE_FLOATS,
 } from "./layer_state.js";
 import {
   unitArrayReason, memberClass, memberProgramKey, memberChainHook, arraySignature,
@@ -224,6 +273,15 @@ export const ENTITY_BATCH_MIN_RADIUS = 6;
 export const ENTITY_BATCH_PAGEFULL_RETRY_FRAMES = 600;
 /** A batched rig whose root stays hidden (culled) this long frees its batch (frames). */
 export const ENTITY_BATCH_HIDDEN_HOLD_FRAMES = 1800;
+/**
+ * A texchan AO / roughness plane ARRIVING on a batched member (header "AO /
+ * ROUGHNESS / EMISSIVE PARTS") hands the rig back to legacy at once and
+ * re-plans it this many frames later (texchan's async arm lands one fetch at
+ * a time: a burst is one re-plan). Arrivals happen once per member, so they
+ * count toward ENTITY_BATCH_MAP_ARRIVAL_LIMIT per rig, not the churn limit.
+ */
+export const ENTITY_BATCH_MAP_SETTLE_FRAMES = 30;
+export const ENTITY_BATCH_MAP_ARRIVAL_LIMIT = 64;
 /** Reasons that keep an entity legacy for life when they demote it. */
 // (Predicates, not Sets: the module allocates nothing at import.)
 function _permanentDemote(reason) {
@@ -463,7 +521,7 @@ function _isIdentityTransform(o) {
 // POM verdicts (header "POM PARTS"), cached per member version + chain +
 // key function. Lazy: nothing at import.
 let _pomVerdicts = null; // WeakMap member -> { version, obc, cpk, res }
-let _keyViews = null;    // WeakMap member -> its p0-keyed view
+let _arrayViews = null;  // WeakMap member -> its array view (p0 key, the accepted maps hidden)
 let _pomScratchMat = null;
 
 /**
@@ -486,52 +544,83 @@ export function entityPomVerdict(member) {
   return res;
 }
 
-/** `member` as unitArrayReason would see it with `|p0|` in its key (every other read falls through). */
-function _keyView(member) {
-  if (!_keyViews) _keyViews = new WeakMap();
-  let v = _keyViews.get(member);
+/**
+ * `member` as unitArrayReason would see it with `|p0|` in its key and without
+ * the maps this consumer reproduces itself (aoMap, roughnessMap, emissiveMap:
+ * header "AO / ROUGHNESS / EMISSIVE PARTS"); every other read falls through.
+ * The key function is the member's own status (a member with no key of its
+ * own keeps three's: unitArrayReason tells "no chain" by identity).
+ */
+function _arrayView(member) {
+  if (!_arrayViews) _arrayViews = new WeakMap();
+  let v = _arrayViews.get(member);
   if (!v) {
     v = Object.create(member);
+    const p0Key = function hbEntityP0Key() { return String(member.customProgramCacheKey()).replace("|p1|", "|p0|"); };
     Object.defineProperty(v, "customProgramCacheKey", {
-      value: function hbEntityP0Key() { return String(member.customProgramCacheKey()).replace("|p1|", "|p0|"); },
-      configurable: true, writable: true, enumerable: false,
+      get() { return member.customProgramCacheKey === _PROTO_KEY ? _PROTO_KEY : p0Key; },
+      configurable: true, enumerable: false,
     });
-    _keyViews.set(member, v);
+    for (const k of ["aoMap", "roughnessMap", "emissiveMap"]) {
+      Object.defineProperty(v, k, { value: null, configurable: true, writable: false, enumerable: false });
+    }
+    _arrayViews.set(member, v);
   }
   return v;
 }
 
 /**
- * unitArrayReason with POM parts (header "POM PARTS"): a member refused only
- * for a `p1` key is judged by its chain dry run, then by every other rule of
- * unitArrayReason; a real POM chain also needs the normal map and an R8-page
- * height map.
+ * unitArrayReason with POM parts (header "POM PARTS") and the texchan AO /
+ * roughness planes + the emissive alias (header "AO / ROUGHNESS / EMISSIVE
+ * PARTS"): a member refused only for a `p1` key is judged by its chain dry
+ * run, a member refused for an aoMap / roughnessMap / emissiveMap with those
+ * maps hidden, and either one by every other rule of unitArrayReason (the
+ * array view: another extra map, a luminous emissive, ... still refuse). A
+ * real POM chain also needs the normal map and an R8-page height map; an
+ * emissiveMap must be the map itself; the AO / roughness planes must fit a
+ * kit page (R8 or RGBA8 / RGBA8).
  */
 export function entityArrayReason(member) {
   const r = unitArrayReason(member);
-  if (r !== "shader-chain") return r;
-  const v = entityPomVerdict(member);
-  if (!v) return r;
-  if (v.reason) return v.reason;
-  const r2 = unitArrayReason(_keyView(member));
+  if (r === null) return null;
+  let v = null;
+  if (r === "shader-chain") {
+    v = entityPomVerdict(member);
+    if (!v) return r;
+    if (v.reason) return v.reason;
+  } else if (r !== "map:aoMap" && r !== "map:roughnessMap" && r !== "map:emissiveMap") return r;
+  // E2: an emissive class samples the emissive layer from the MAP page.
+  if (member.emissiveMap && member.emissiveMap !== member.map) return "map:emissiveMap";
+  const r2 = unitArrayReason(_arrayView(member));
   if (r2) return r2;
-  if (v.pom) {
+  if (v && v.pom) {
     if (!member.normalMap) return "pom-no-normal";
     if (!describeTexture(v.pom.texture, R8_PLANES)) return "pom-map-format";
   }
+  if (member.aoMap && !describeTexture(member.aoMap, R8_PLANES)) return "ao-map-format";
+  if (member.roughnessMap && !describeTexture(member.roughnessMap)) return "roughness-map-format";
   return null;
 }
 
 /**
  * The run key of a batchable member: anim_scenery_batch.js arraySignature,
- * plus (POM parts) the chain fingerprint and the height page key.
+ * plus (POM parts) the chain fingerprint and the height page key, plus (map
+ * parts) the map-set key and the AO / roughness page keys.
  */
 export function entityRunKeyOf(member) {
-  const sig = arraySignature(member);
+  let k = arraySignature(member);
   const v = entityPomVerdict(member);
-  if (!v || v.reason) return sig;
-  const hd = v.pom ? describeTexture(v.pom.texture, R8_PLANES) : null;
-  return sig + "|pomc" + v.id + (hd ? "|h:" + pageKeyOf(hd) : "");
+  if (v && !v.reason) {
+    const hd = v.pom ? describeTexture(v.pom.texture, R8_PLANES) : null;
+    k += "|pomc" + v.id + (hd ? "|h:" + pageKeyOf(hd) : "");
+  }
+  const ms = memberMapSet(member);
+  if (ms.any) {
+    const ad = ms.ao ? describeTexture(member.aoMap, R8_PLANES) : null;
+    const rd = ms.rough ? describeTexture(member.roughnessMap) : null;
+    k += ms.key + (ms.ao ? "|a:" + (ad ? pageKeyOf(ad) : "-") : "") + (ms.rough ? "|r:" + (rd ? pageKeyOf(rd) : "-") : "");
+  }
+  return k;
 }
 
 let _extraMapNames = null; // lazy (nothing at import)
@@ -548,7 +637,34 @@ function _pomOf(member) {
   return v && !v.reason && v.pom ? v.pom : null;
 }
 
+// Map parts (header "AO / ROUGHNESS / EMISSIVE PARTS"): row helpers.
+
+/** Does `row` no longer hold the planes / set `m` carries now (a shared row is then admitted afresh)? */
+function _rowMapsStale(row, m) {
+  const ao = row.aoTex || null, rgh = row.rghTex || null;
+  if ((m.aoMap || null) !== ao || (ao && ao.version !== row.aoVersion)) return true;
+  if ((m.roughnessMap || null) !== rgh || (rgh && rgh.version !== row.rghVersion)) return true;
+  return memberMapSet(m) !== (row.maps || MAP_SET_NONE);
+}
+
+/** The run / class key part of a row's map set and AO / roughness pages ("" without maps). */
+function _rowMapPagesKey(row) {
+  const ms = row.maps || MAP_SET_NONE;
+  if (!ms.any) return "";
+  return `${ms.key}|a${row.aoPage ? row.aoPage.id : "-"}|r${row.rghPage ? row.rghPage.id : "-"}`;
+}
+
+/**
+ * The map half of a row's extension row (class_materials.js extraMapStateOf
+ * into `out`, the row's own object in the sync: no allocation). E2: the
+ * emissive layer is the map layer.
+ */
+function _rowMapState(row, mat, out) {
+  return extraMapStateOf(mat, row.aoLayer, row.rghLayer, row.maps.emissive ? row.layer : 0, out);
+}
+
 const _PROTO_BEFORE = THREE.Object3D.prototype.onBeforeRender;
+const _PROTO_KEY = THREE.Material.prototype.customProgramCacheKey;
 const _PROTO_AFTER = THREE.Object3D.prototype.onAfterRender;
 const _PROTO_RAYCAST = THREE.Mesh.prototype.raycast;
 
@@ -777,6 +893,8 @@ export class EntityBatch {
       reparked: 0, contextResets: 0, sweeps: 0,
       fallbacks: {}, leafRoutes: {}, hooks: {}, demoteReasons: {}, replanReasons: {},
       extraMaps: {}, // leaves refused for an extra map, by their whole extra-map set (census)
+      mapLeaves: {}, // batched leaves carrying AO / roughness / emissive maps, by the same set names (per plan)
+      mapArrivals: 0, // texchan planes that arrived on a batched member (header "AO / ROUGHNESS / EMISSIVE PARTS")
       entries: { hits: 0, misses: 0, collisions: 0 },
       // value / identity: admits that returned a layer (fresh or not); fresh*:
       // the ones that uploaded (fromLegacy = copied from the resident legacy
@@ -786,6 +904,7 @@ export class EntityBatch {
         value: 0, identity: 0, identityAdmits: 0, deferred: 0, refused: 0,
         freshValue: 0, freshIdentity: 0, fromLegacy: 0, scratch: 0, freshBytes: 0, refusedMembers: 0,
         pom: 0, // POM parts admitted (a height layer + an extension row each)
+        ao: 0, roughness: 0, emissive: 0, // map parts admitted with an AO / roughness layer, an emissive set
       },
       rows: { lateFrames: 0, lateWrites: 0, lateSkips: 0, lateZeros: 0, partRows: 0 },
       // Waits that are not fallbacks (the rig is polled, nothing allocated).
@@ -1235,7 +1354,11 @@ export class EntityBatch {
         _count(this._stats.leafRoutes, c.reason);
         // Census (2026-10-31): the whole extra-map set of a leaf refused for a map.
         if (c.reason.startsWith("map:") && c.leaf.material && !Array.isArray(c.leaf.material)) _count(this._stats.extraMaps, _extraMapSet(c.leaf.material));
-      } else batch.push(c);
+      } else {
+        batch.push(c);
+        // The same census for the map parts that batch (header "AO / ROUGHNESS / EMISSIVE PARTS").
+        if (memberMapSet(c.leaf.material).any) _count(this._stats.mapLeaves, _extraMapSet(c.leaf.material));
+      }
     }
     if (batch.length < 2) {
       // Leaves the cap refused (pages full) are not a verdict on the rig: it
@@ -1385,55 +1508,83 @@ export class EntityBatch {
       if (b.noBatchMats && b.noBatchMats.has(m)) continue;
       let row = this._rows.get(m);
       if (row && (row.map !== m.map || row.mapVersion !== m.map.version || row.pagesGen !== plan.pagesGen
-        || (row.pom && row.pom.texture.version !== row.pomVersion))) row = null; // stale (drift is handled per tick)
+        || (row.pom && row.pom.texture.version !== row.pomVersion) || _rowMapsStale(row, m))) row = null; // stale (drift is handled per tick)
       if (!row) {
         const did = plan.batch[i].did;
         const r = this._admitMap(b, m, did, pages, budget);
         if (r && r.deferred) { this._stats.layers.deferred += 1; return false; }
         if (!r) { this._admitRefused(b, m); continue; }
-        let nrm = null;
-        if (m.normalMap) {
-          nrm = pages.admit(m.normalMap, budget);
-          if (nrm && nrm.deferred) { pages.release(r.contentKey); this._stats.layers.deferred += 1; return false; }
-          if (!nrm) { pages.release(r.contentKey); this._admitRefused(b, m); continue; }
-        }
-        // POM parts: the height plane's layer and the POM extension row.
+        // The member's further layers, each through the same kit pages: the
+        // normal map; (POM parts) the height plane; (map parts) the AO plane
+        // (R8) and the roughness plane (header "AO / ROUGHNESS / EMISSIVE
+        // PARTS"). A deferral drops what was taken and retries next frame; a
+        // refusal drops it and leaves the member a legacy leaf.
+        const held = [r.contentKey];
+        let fail = 0; // 1 = deferred, 2 = refused
+        const more = (tex, opts) => {
+          if (fail) return null;
+          const x = pages.admit(tex, budget, opts);
+          if (x && x.deferred) { fail = 1; return null; }
+          if (!x) { fail = 2; return null; }
+          held.push(x.contentKey);
+          return x;
+        };
+        const nrm = m.normalMap ? more(m.normalMap, null) : null;
         const pom = _pomOf(m);
-        let hgt = null;
-        let pomRow = 0;
-        let pomState = null;
-        if (pom) {
-          hgt = pages.admit(pom.texture, budget, R8_PLANES);
-          if (hgt && hgt.deferred) { pages.release(r.contentKey); if (nrm) pages.release(nrm.contentKey); this._stats.layers.deferred += 1; return false; }
-          if (!hgt) { pages.release(r.contentKey); if (nrm) pages.release(nrm.contentKey); this._admitRefused(b, m); continue; }
-          pomState = {};
-          pomRow = table.addPom(pomStateOf(m, pom, hgt.layer, pomState), budget);
-          if (pomRow < 0) { pages.release(r.contentKey); if (nrm) pages.release(nrm.contentKey); pages.release(hgt.contentKey); return false; }
-          this._stats.layers.pom += 1;
+        const hgt = pom ? more(pom.texture, R8_PLANES) : null;
+        const maps = memberMapSet(m);
+        const ao = maps.ao ? more(m.aoMap, R8_PLANES) : null;
+        const rgh = maps.rough ? more(m.roughnessMap, null) : null;
+        const drop = () => { for (const k of held) pages.release(k); };
+        if (fail === 1) { drop(); this._stats.layers.deferred += 1; return false; }
+        if (fail === 2) { drop(); this._admitRefused(b, m); continue; }
+        // The extension row (POM state and / or the extra-map state; layer_state.js packExtState).
+        let extRow = 0;
+        const pomState = pom ? {} : null;
+        const mapState = maps.any ? {} : null;
+        if (pom || maps.any) {
+          extRow = table.addExt(pom ? pomStateOf(m, pom, hgt.layer, pomState) : null,
+            maps.any ? extraMapStateOf(m, ao ? ao.layer : 0, rgh ? rgh.layer : 0, maps.emissive ? r.layer : 0, mapState) : null, budget);
+          if (extRow < 0) { drop(); return false; }
+          if (pom) this._stats.layers.pom += 1;
         }
-        const slot = table.addFromMaterial(m, r.layer, budget, nrm ? nrm.layer : 0, pomRow);
+        const slot = table.addFromMaterial(m, r.layer, budget, nrm ? nrm.layer : 0, extRow);
         if (slot < 0) {
-          pages.release(r.contentKey);
-          if (nrm) pages.release(nrm.contentKey);
-          if (hgt) { pages.release(hgt.contentKey); table.remove(pomRow); }
+          drop();
+          if (extRow > 0) table.remove(extRow);
           return false;
         }
+        if (ao) this._stats.layers.ao += 1;
+        if (rgh) this._stats.layers.roughness += 1;
+        if (maps.emissive) this._stats.layers.emissive += 1;
         row = {
           member: m, slot, refs: 0, page: r.page, layer: r.layer, contentKey: r.contentKey,
           nrmPage: nrm ? nrm.page : null, nrmLayer: nrm ? nrm.layer : 0, nrmKey: nrm ? nrm.contentKey : null,
           map: m.map, mapVersion: m.map.version, normalMap: m.normalMap || null,
           nrmVersion: m.normalMap ? m.normalMap.version : -1, pagesGen: plan.pagesGen, pages,
           pom, pomPage: hgt ? hgt.page : null, pomLayer: hgt ? hgt.layer : 0, pomKey: hgt ? hgt.contentKey : null,
-          pomRow, pomState, pomVersion: pom ? pom.texture.version : -1,
+          pomState, pomVersion: pom ? pom.texture.version : -1,
+          // The extension row (0 = none) and, for POM parts, its POM-era name.
+          extRow,
+          get pomRow() { return this.pom ? this.extRow : 0; },
+          // Map parts: the set the row was admitted for, its planes and layers, the map half of the extension row.
+          maps, mapState,
+          aoTex: ao ? m.aoMap : null, aoVersion: ao ? m.aoMap.version : -1, aoPage: ao ? ao.page : null, aoLayer: ao ? ao.layer : 0, aoKey: ao ? ao.contentKey : null,
+          rghTex: rgh ? m.roughnessMap : null, rghVersion: rgh ? m.roughnessMap.version : -1, rghPage: rgh ? rgh.page : null,
+          rghLayer: rgh ? rgh.layer : 0, rghKey: rgh ? rgh.contentKey : null,
           snap: this._snapshotMember(m), users: new Set(),
         };
         this._rows.set(m, row);
       } else {
-        // One layer reference per (entity, content key).
-        const again = pages.alloc.lookup(row.contentKey) ? pages.alloc.acquire(row.page.desc, row.contentKey) : null;
-        if (!again) { this._rows.delete(m); i -= 1; continue; }
+        // One layer reference per (entity, content key). (A layer of the row
+        // no longer resident: the row is admitted afresh, planes included.)
+        const gone = (k) => !!k && !pages.alloc.lookup(k);
+        if (gone(row.contentKey) || gone(row.aoKey) || gone(row.rghKey)) { this._rows.delete(m); i -= 1; continue; }
+        pages.alloc.acquire(row.page.desc, row.contentKey);
         if (row.nrmKey) pages.alloc.acquire(row.nrmPage.desc, row.nrmKey);
         if (row.pomKey) pages.alloc.acquire(row.pomPage.desc, row.pomKey);
+        if (row.aoKey) pages.alloc.acquire(row.aoPage.desc, row.aoKey);
+        if (row.rghKey) pages.alloc.acquire(row.rghPage.desc, row.rghKey);
       }
       row.refs += 1;
       row.users.add(b);
@@ -1457,11 +1608,12 @@ export class EntityBatch {
       plan.partRow[p] = r;
       this._stats.rows.partRows += 1;
     }
-    // Runs: consecutive leaves with one run key and one (map page, normal page, height page).
+    // Runs: consecutive leaves with one run key and one (map page, normal
+    // page, height page; the row's map set and its AO / roughness pages).
     const runs = [];
     for (let i = 0; i < plan.batch.length; i += 1) {
       const row = plan.memberRefs.get(plan.members[i]);
-      const pk = `${row.page.id}|${row.nrmPage ? row.nrmPage.id : "-"}${row.pomPage ? "|h" + row.pomPage.id : ""}`;
+      const pk = `${row.page.id}|${row.nrmPage ? row.nrmPage.id : "-"}${row.pomPage ? "|h" + row.pomPage.id : ""}${_rowMapPagesKey(row)}`;
       const last = runs[runs.length - 1];
       if (last && last.runKey === plan.runKeys[i] && last.pk === pk) { last.count += 1; continue; }
       runs.push({ runKey: plan.runKeys[i], pk, first: i, count: 1, row, classEntry: null });
@@ -1500,10 +1652,12 @@ export class EntityBatch {
     try { row.pages.release(row.contentKey); } catch (_) { /* fail-soft */ }
     if (row.nrmKey) { try { row.pages.release(row.nrmKey); } catch (_) { /* fail-soft */ } }
     if (row.pomKey) { try { row.pages.release(row.pomKey); } catch (_) { /* fail-soft */ } }
+    if (row.aoKey) { try { row.pages.release(row.aoKey); } catch (_) { /* fail-soft */ } }
+    if (row.rghKey) { try { row.pages.release(row.rghKey); } catch (_) { /* fail-soft */ } }
     if (row.refs <= 0) {
       if (this._rows.get(m) === row) this._rows.delete(m);
       try { kitStateTable().remove(row.slot); } catch (_) { /* fail-soft */ }
-      if (row.pomRow > 0) { try { kitStateTable().remove(row.pomRow); } catch (_) { /* fail-soft */ } }
+      if (row.extRow > 0) { try { kitStateTable().remove(row.extRow); } catch (_) { /* fail-soft */ } }
     }
   }
 
@@ -1536,6 +1690,15 @@ export class EntityBatch {
         const hd = describeTexture(pom.texture, R8_PLANES);
         if (!hd || !pages.alloc.wouldAcquire(hd, contentKeyOf(pom.texture))) return false;
       }
+      // Map parts: the AO (R8) and roughness planes.
+      if (m.aoMap) {
+        const ad = describeTexture(m.aoMap, R8_PLANES);
+        if (!ad || !pages.alloc.wouldAcquire(ad, contentKeyOf(m.aoMap))) return false;
+      }
+      if (m.roughnessMap) {
+        const rd = describeTexture(m.roughnessMap);
+        if (!rd || !pages.alloc.wouldAcquire(rd, contentKeyOf(m.roughnessMap))) return false;
+      }
     }
     return true;
   }
@@ -1563,6 +1726,14 @@ export class EntityBatch {
       const live = m.userData ? m.userData.pomShaderUniforms : null;
       if (live && live.uPomMap && live.uPomMap.value !== row.pom.texture) return "drift:map";
     }
+    // Map parts (header "AO / ROUGHNESS / EMISSIVE PARTS"): a texchan plane
+    // that ARRIVED (told before the version compare: `_applyRough` bumps the
+    // version too); one that left, was swapped or re-uploaded is a map swap.
+    const ao = row.aoTex || null, rgh = row.rghTex || null;
+    if ((m.aoMap || null) !== ao) return ao === null ? "drift:ao-map-arrived" : "drift:map";
+    if (ao && ao.version !== row.aoVersion) return "drift:map";
+    if ((m.roughnessMap || null) !== rgh) return rgh === null ? "drift:roughness-map-arrived" : "drift:map";
+    if (rgh && rgh.version !== row.rghVersion) return "drift:map";
     if ((m.transparent === true) !== s.transparent || m.blending !== s.blending) return "drift:blend";
     if ((m.alphaTest > 0) !== s.alphaTest) return "drift:blend";
     if (m.side !== s.side) return "drift:side";
@@ -1593,12 +1764,17 @@ export class EntityBatch {
           if (drift === "drift:blend" || drift === "drift:luminous") {
             // A demoted user waits for its poll (which re-qualifies every leaf).
             if (b.status !== "demoted") this.demote(b.inst, drift);
-          } else this._replan(b, drift);
+          } else if (drift === "drift:ao-map-arrived" || drift === "drift:roughness-map-arrived") this._mapArrival(b, drift);
+          else this._replan(b, drift);
         }
         continue;
       }
-      table.writeFromMaterial(row.slot, row.member, row.layer, row.nrmLayer, row.pomRow > 0 ? row.pomRow : 0);
-      if (row.pomRow > 0) table.writePom(row.pomRow, pomStateOf(row.member, row.pom, row.pomLayer, row.pomState));
+      const ext = row.extRow > 0 ? row.extRow : 0;
+      table.writeFromMaterial(row.slot, row.member, row.layer, row.nrmLayer, ext);
+      if (ext > 0) {
+        table.writeExt(ext, row.pom ? pomStateOf(row.member, row.pom, row.pomLayer, row.pomState) : null,
+          row.maps.any ? _rowMapState(row, row.member, row.mapState) : null);
+      }
     }
   }
 
@@ -1613,7 +1789,12 @@ export class EntityBatch {
   // Warming: class materials and their programs.
   // -------------------------------------------------------------------------
 
-  _classOpts(member, cls, mapUniform, normalUniform, pomUniform = null) {
+  /**
+   * `maps` (map parts, header "AO / ROUGHNESS / EMISSIVE PARTS"): null, or
+   * { aoUniform, roughnessUniform, emissive } (the AO / roughness page
+   * holders; emissive samples the map page).
+   */
+  _classOpts(member, cls, mapUniform, normalUniform, pomUniform = null, maps = null) {
     const rows = this._partRowTex();
     // POM parts: the chain fingerprint keys the program (header "POM PARTS").
     const pv = entityPomVerdict(member);
@@ -1625,6 +1806,9 @@ export class EntityBatch {
       mapUniform,
       normalUniform,
       pomUniform,
+      aoUniform: maps && maps.aoUniform ? maps.aoUniform : null,
+      roughnessUniform: maps && maps.roughnessUniform ? maps.roughnessUniform : null,
+      emissive: !!(maps && maps.emissive),
       stateUniform: kitStateTable().rows.uniform,
       vertexHook: (shader) => {
         shader.uniforms[ENTITY_PART_SAMPLER] = rows.uniform;
@@ -1655,12 +1839,17 @@ export class EntityBatch {
     const mapPage = run.row.page;
     const nrmPage = run.row.nrmPage;
     const pomPage = run.row.pomPage || null;
-    const key = `${classKeyOf(cls)}|${mapPage.id}|${nrmPage ? nrmPage.id : "-"}${pomPage ? "|h" + pomPage.id : ""}|${run.runKey}`;
+    // Map parts: the ROW's set and its AO / roughness pages (a run never mixes them: `_admit`).
+    const ms = run.row.maps || MAP_SET_NONE;
+    const aoPage = run.row.aoPage || null;
+    const rghPage = run.row.rghPage || null;
+    const key = `${classKeyOf(cls)}|${mapPage.id}|${nrmPage ? nrmPage.id : "-"}${pomPage ? "|h" + pomPage.id : ""}${_rowMapPagesKey(run.row)}|${run.runKey}`;
     let e = this._classMats.get(key);
     if (!e) {
       const opts = this._classOpts(m, cls, { value: mapPage.gl.texture }, nrmPage ? { value: nrmPage.gl.texture } : null,
-        pomPage ? { value: pomPage.gl.texture } : null);
-      if (classPatchMissing({ chain: opts.chain, withNormal: !!nrmPage, withPom: !!pomPage }) !== 0) return null;
+        pomPage ? { value: pomPage.gl.texture } : null,
+        ms.any ? { aoUniform: aoPage ? { value: aoPage.gl.texture } : null, roughnessUniform: rghPage ? { value: rghPage.gl.texture } : null, emissive: ms.emissive } : null);
+      if (classPatchMissing({ chain: opts.chain, withNormal: !!nrmPage, withPom: !!pomPage, maps: ms }) !== 0) return null;
       const material = this._makeClass(m, cls, opts);
       const programKey = material.customProgramCacheKey();
       if (!this._warm.has(programKey)) {
@@ -2286,8 +2475,11 @@ export class EntityBatch {
       // material can itself have changed while the rig was demoted).
       if (leafRouteReason(leaf, ctx, this._scratchState)) { if (hold) this._release2Pending(b, "hold"); return; } // still faded / lit: wait
       if (m.map !== plan.maps[i] || m.map.version !== plan.mapVersions[i] || entityRunKeyOf(m) !== plan.runKeys[i]) { this._replan(b, "promote:changed"); return; }
-      // A POM member's height layer + extension row are its own: re-plan, never adopt.
-      if (m !== plan.members[i] && (_pomOf(m) || _pomOf(plan.members[i]))) { this._replan(b, "promote:changed"); return; }
+      // A POM / map member's layers + extension row are its own: re-plan, never adopt.
+      if (m !== plan.members[i] && (_pomOf(m) || _pomOf(plan.members[i]) || memberMapSet(m).any || memberMapSet(plan.members[i]).any)) {
+        this._replan(b, "promote:changed");
+        return;
+      }
       if (m !== plan.members[i]) changed.push(i);
     }
     if (changed.length > 0 && !this._adoptMembers(b, changed)) return;
@@ -2318,6 +2510,10 @@ export class EntityBatch {
           nrmPage: oldRow.nrmPage, nrmLayer: oldRow.nrmLayer, nrmKey: oldRow.nrmKey,
           map: m.map, mapVersion: m.map.version, normalMap: m.normalMap || null,
           nrmVersion: m.normalMap ? m.normalMap.version : -1, pagesGen: plan.pagesGen, pages: oldRow.pages,
+          // (Never a POM / map member: `_pollDemoted` re-plans those.)
+          pom: null, extRow: 0, pomRow: 0, maps: MAP_SET_NONE, mapState: null,
+          aoTex: null, aoVersion: -1, aoPage: null, aoLayer: 0, aoKey: null,
+          rghTex: null, rghVersion: -1, rghPage: null, rghLayer: 0, rghKey: null,
           snap: this._snapshotMember(m), users: new Set(),
         };
         this._rows.set(m, row);
@@ -2345,7 +2541,9 @@ export class EntityBatch {
       try { row.pages.release(row.contentKey); } catch (_) { /* fail-soft */ }
       if (row.nrmKey) { try { row.pages.release(row.nrmKey); } catch (_) { /* fail-soft */ } }
       if (row.pomKey) { try { row.pages.release(row.pomKey); } catch (_) { /* fail-soft */ } }
-      if (row.refs <= 0) { if (this._rows.get(m) === row) this._rows.delete(m); table.remove(row.slot); if (row.pomRow > 0) table.remove(row.pomRow); }
+      if (row.aoKey) { try { row.pages.release(row.aoKey); } catch (_) { /* fail-soft */ } }
+      if (row.rghKey) { try { row.pages.release(row.rghKey); } catch (_) { /* fail-soft */ } }
+      if (row.refs <= 0) { if (this._rows.get(m) === row) this._rows.delete(m); table.remove(row.slot); if (row.extRow > 0) table.remove(row.extRow); }
     }
     for (const run of plan.runs) run.row = plan.memberRefs.get(plan.members[run.first]);
     return true;
@@ -2406,6 +2604,28 @@ export class EntityBatch {
     b.status = "pending";
     b.reason = reason;
     b.retryFrame = this._frameNo + 1;
+  }
+
+  /**
+   * A texchan AO / roughness plane ARRIVED on a member of `b` (header "AO /
+   * ROUGHNESS / EMISSIVE PARTS"; texchan's async arm attached it to the cache
+   * material in place): the legacy leaves draw it from this frame (teardown:
+   * unparked, batch mesh gone) and the rig re-plans into the new set
+   * ENTITY_BATCH_MAP_SETTLE_FRAMES later, so a burst of arrivals is one
+   * re-plan. Not churn (arrivals happen once per member), bounded per rig
+   * by ENTITY_BATCH_MAP_ARRIVAL_LIMIT.
+   */
+  _mapArrival(b, reason) {
+    if (b.status === "legacy" || b.status === "released") return;
+    b.mapArrivals = (b.mapArrivals | 0) + 1;
+    this._stats.mapArrivals += 1;
+    if (b.mapArrivals > ENTITY_BATCH_MAP_ARRIVAL_LIMIT) {
+      if (b.status !== "pending") this._teardown(b);
+      this._setLegacy(b, "unstable");
+      return;
+    }
+    this._softReplan(b, reason);
+    b.retryFrame = this._frameNo + ENTITY_BATCH_MAP_SETTLE_FRAMES;
   }
 
   /**
@@ -2603,12 +2823,28 @@ export class EntityBatch {
       layers: { ...s.layers, valueKeys: this._palKeys.size, ...this._palKeys.stats },
       rows: { ...s.rows, capacity: this._partRows ? this._partRows.capacity : 0, ...(this._partRows ? this._partRows.stats : {}) },
       stateRows: this._rows.size,
+      mapMembers: this._mapMemberCounts(),
       classMaterials: this._classMats.size,
       programKeys: [...this._warm.keys()],
       context: this._contextStats(),
       footprint: this._footprint(),
       kit: kitSummary(),
     };
+  }
+
+  /** Live map-part rows (header "AO / ROUGHNESS / EMISSIVE PARTS"): by plane and by map-set key. */
+  _mapMemberCounts() {
+    const out = { members: 0, ao: 0, roughness: 0, emissive: 0, sets: {} };
+    for (const row of this._rows.values()) {
+      const ms = row.maps || MAP_SET_NONE;
+      if (!ms.any) continue;
+      out.members += 1;
+      if (row.aoKey) out.ao += 1;
+      if (row.rghKey) out.roughness += 1;
+      if (ms.emissive) out.emissive += 1;
+      out.sets[ms.key] = (out.sets[ms.key] || 0) + 1;
+    }
+    return out;
   }
 
   /** GL-context transitions as this consumer saw them (one reset per transition). */
@@ -2644,7 +2880,7 @@ export class EntityBatch {
     const mine = new Map(); // content key -> layer bytes
     const byKey = {};
     for (const row of this._rows.values()) {
-      for (const [k, p] of [[row.contentKey, row.page], [row.nrmKey, row.nrmPage], [row.pomKey, row.pomPage]]) {
+      for (const [k, p] of [[row.contentKey, row.page], [row.nrmKey, row.nrmPage], [row.pomKey, row.pomPage], [row.aoKey, row.aoPage], [row.rghKey, row.rghPage]]) {
         if (!k || !p || mine.has(k)) continue;
         mine.set(k, p.layerBytes);
         const e = byKey[p.key] || (byKey[p.key] = { layers: 0, bytes: 0 });
@@ -2665,11 +2901,15 @@ export class EntityBatch {
 
   /**
    * Every active entity's part rows equal f32(compose(part)), its state rows
-   * equal packLayerState(member) at the row's layer, its leaves are parked
-   * and its `hbBatchSlot` / `hbEntPart` hold the plan's rows. Counts.
+   * equal packLayerState(member) at the row's layer, its extension rows
+   * equal packExtState(member) (`pomMismatches`: the POM half, texels 0-1;
+   * `mapMismatches`: the map half, texels 2-3, plus a row whose planes / set
+   * are not the member's own now and a run whose class samples another set),
+   * its leaves are parked and its `hbBatchSlot` / `hbEntPart` hold the plan's
+   * rows. Counts.
    */
   verify() {
-    const out = { entities: 0, rowMismatches: 0, stateMismatches: 0, pomMismatches: 0, parkMismatches: 0, attrMismatches: 0, details: [] };
+    const out = { entities: 0, rowMismatches: 0, stateMismatches: 0, pomMismatches: 0, mapMismatches: 0, parkMismatches: 0, attrMismatches: 0, details: [] };
     const m = new THREE.Matrix4();
     const f = Math.fround;
     const table = kitStateTable();
@@ -2692,16 +2932,35 @@ export class EntityBatch {
         }
       }
       for (const [mat, row] of plan.memberRefs) {
-        packLayerState(fillStateFromMaterial(st, mat), row.layer, pack, 0, row.nrmLayer, row.pomRow > 0 ? row.pomRow : 0);
+        const ext = row.extRow > 0 ? row.extRow : 0;
+        packLayerState(fillStateFromMaterial(st, mat), row.layer, pack, 0, row.nrmLayer, ext);
         const d = table.rows.data;
         for (let k = 0; k < LAYER_STATE_FLOATS; k += 1) {
           if (d[row.slot * LAYER_STATE_FLOATS + k] !== pack[k]) { out.stateMismatches += 1; out.details.push(`state ${mat.name}[${k}]`); break; }
         }
-        if (row.pomRow > 0) {
-          packPomState(pomStateOf(mat, row.pom, row.pomLayer, {}), pack, 0);
-          for (let k = 0; k < LAYER_STATE_FLOATS; k += 1) {
-            if (d[row.pomRow * LAYER_STATE_FLOATS + k] !== pack[k]) { out.pomMismatches += 1; out.details.push(`pom ${mat.name}[${k}]`); break; }
+        const ms = row.maps || MAP_SET_NONE;
+        if (ext > 0) {
+          packExtState(row.pom ? pomStateOf(mat, row.pom, row.pomLayer, {}) : null, ms.any ? _rowMapState(row, mat, {}) : null, pack, 0);
+          for (let k = 0; k < 8; k += 1) {
+            if (d[ext * LAYER_STATE_FLOATS + k] !== pack[k]) { out.pomMismatches += 1; out.details.push(`pom ${mat.name}[${k}]`); break; }
           }
+          for (let k = 8; k < LAYER_STATE_FLOATS; k += 1) {
+            if (d[ext * LAYER_STATE_FLOATS + k] !== pack[k]) { out.mapMismatches += 1; out.details.push(`maps ${mat.name}[${k}]`); break; }
+          }
+        }
+        // The planes the row samples are the member's own now (an arrival / swap re-plans: never a stale layer).
+        if (memberMapSet(mat) !== ms || (mat.aoMap || null) !== (row.aoTex || null) || (mat.roughnessMap || null) !== (row.rghTex || null)
+          || (ms.any && ext <= 0) || (ms.ao && !row.aoKey) || (ms.rough && !row.rghKey) || (ms.emissive && mat.emissiveMap !== mat.map)) {
+          out.mapMismatches += 1;
+          out.details.push(`planes ${mat.name}`);
+        }
+      }
+      // Each run's class samples exactly its rows' set.
+      for (const run of plan.runs) {
+        const want = run.classEntry && run.classEntry.material.userData ? (run.classEntry.material.userData.hbBatchMaps || "") : null;
+        for (let k = 0; k < run.count; k += 1) {
+          const row = plan.memberRefs.get(plan.members[run.first + k]);
+          if (!row || (row.maps || MAP_SET_NONE).key !== want) { out.mapMismatches += 1; out.details.push(`class set run ${run.first}`); break; }
         }
       }
       for (let i = 0; i < b.leaves.length; i += 1) {
