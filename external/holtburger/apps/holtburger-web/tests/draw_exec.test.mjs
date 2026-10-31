@@ -594,6 +594,26 @@ function buildWorld(o = {}) {
     [A, B].forEach((m, i) => { m.position.set(i * 2 - 1, -8, 0.5); m.updateMatrix(); m.matrixAutoUpdate = false; m.frustumCulled = false; m.renderOrder = 20 + i; m.name = `dispose-static-${i}`; statics.add(m); });
     W.dispMat = M;
   }
+  if (o.envMats) {
+    // (?drawExecSwitch, 2026-10-31) per-material environment maps next to the world's cube-UV
+    // scene.environment: a cube-UV map on Standard (PMREM path), a CubeTexture on Lambert / Phong
+    // (the cube path, three's flip of a non-target cube), several materials per program
+    const cubeTex = (k) => { const faces = []; for (let i = 0; i < 6; i++) faces.push({ data: new Uint8Array(16 * 4).map((_, j) => (j * 11 + i * 40 + k * 7) & 255), width: 4, height: 4 }); const c = new THREE.CubeTexture(faces); c.needsUpdate = true; return c; };
+    const cube = cubeTex(1), cuv = cubeUvTex();
+    W.envMats = [];
+    for (let i = 0; i < 9; i++) {
+      const k = i % 3;
+      const mat = k === 0 ? new THREE.MeshStandardMaterial({ map: dataTex(), envMap: cuv, envMapIntensity: 0.4 + i * 0.1, envMapRotation: new THREE.Euler(0, i * 0.3, 0) })
+        : k === 1 ? new THREE.MeshLambertMaterial({ map: dataTex(), envMap: cube, reflectivity: 0.2 + i * 0.05, refractionRatio: 0.95 })
+          : new THREE.MeshPhongMaterial({ map: dataTex(), envMap: cube, reflectivity: 0.3 + i * 0.05, envMapRotation: new THREE.Euler(i * 0.1, 0, 0) });
+      W.envMats.push(mat);
+      for (let c = 0; c < 2; c++) {
+        const m = new THREE.Mesh(geoms[(i + c) % 4], mat);
+        m.position.set(r() * 30 - 15, r() * 30 - 15, r() * 2); m.updateMatrix(); m.matrixAutoUpdate = false; m.frustumCulled = false; m.name = `env-static-${i}-${c}`;
+        statics.add(m);
+      }
+    }
+  }
   if (o.nested) {
     const mini = new THREE.Scene();
     mini.add(new THREE.Mesh(geoms[0], new THREE.MeshBasicMaterial({ color: 0xff00ff })));
@@ -649,6 +669,10 @@ function step(W, f, arm) {
   if (f === ev.poolDelete) { W.pools[3].deleteInstance(0); }
   if (f === ev.matrixMove) { W.singles[8].position.x += 0.5; W.singles[8].updateMatrix(); W.singles[8].updateMatrixWorld(true); }
   if (f === ev.uniformsNeedUpdate) W.terrainMesh.material.uniformsNeedUpdate = true;
+  if (W.envMats) {
+    W.scene.environmentIntensity = 0.7 + 0.2 * Math.sin(f);
+    if (f === ev.envEdit) { W.envMats[3].envMapIntensity = 1.9; W.envMats[4].reflectivity = 0.7; W.envMats[5].envMapRotation.y = 0.8; W.scene.environmentRotation.y = 0.5; }
+  }
   // Lifecycle (2026-10-26, lane X2): a shared geometry disposed while its meshes stay in the scene
   // (three deletes its buffers + every VAO of it, rebuilds them at the next draw), and a shared
   // material disposed (its programs released, its properties dropped): records must die with them.
@@ -1512,6 +1536,9 @@ if (!BENCH) {
     frames: 12, glWrappers: true, events: { texDispose: 4, clipOn: 7, clipOff: 10, poolAdd: 3, poolDelete: 5 },
   }, { clipped: true });
   // Coverage (2026-10-26, lane X2): kinds the town draws that the executor now owns.
+  await scenario("per-material environment maps (cube-UV Standard, CubeTexture Lambert / Phong) next to the cube-UV scene.environment, intensity / reflectivity / rotation edits", {
+    frames: 8, envMats: true, events: { envEdit: 4 },
+  });
   await scenario("occlusion proxies (one box + one material, query hooks, end of the transparent list) + empty buckets (one never recorded) + skip_empty's off seam", {
     frames: 10, proxies: true, events: { hideAll: 3, showAll: 7, skipEmptyOff: 4, skipEmptyOn: 5 },
   }, { proxies: true, empty: true });

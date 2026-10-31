@@ -131,7 +131,8 @@
 // the whole upload list. The executor does what three r184's setProgram + state.setMaterial do for
 // exactly that case, in three's order:
 //   textures.resetTextureUnits(); the batching samplers (through their own setters, which allocate
-//   the units in three's order; batched_runs' run texture in force); receiveShadow; dfgLUT;
+//   the units in three's order; batched_runs' run texture in force); receiveShadow; the scene
+//   environment's envMapIntensity; dfgLUT;
 //   toneMappingExposure; a ShaderMaterial's light uniforms marked clean; the fog uniforms (getRGB
 //   memoised on every input it reads); the material refresh (WebGLMaterials' Basic / Lambert / Toon /
 //   Phong / Standard paths write for write, ShaderMaterial: uniformsNeedUpdate = false); the upload
@@ -142,6 +143,17 @@
 //   call as they do under three; the three matrix setters; state.setMaterial. Not written (no reader
 //   before three's next refresh rewrites them, which only a program change reaches): the values of
 //   uniforms the program does not use, and a built-in material's light needsUpdate flags.
+// THE ENVIRONMENT (2026-10-31, after the 1070 run r3f refused every lit Holtburg switch "envMap": the
+// app's ?ibl scene.environment is a PMREMGenerator.fromScene cube-UV target). setProgram's
+// envMap = environments.get( material.envMap || environment, usePMREM ) is emulated where three's
+// WebGLEnvironments returns the texture as it is (`envOf`: a cube-UV PMREM target, a cube map without
+// PMREM, a plain texture) and compared with materialProperties.envMap by identity, as three does; a
+// texture three would CONVERT (an equirect map, a cube map under PMREM: private caches, versions,
+// renders) is refused `envMapConvert`. The switch then writes setProgram's scene envMapIntensity and
+// the common refresh's envMap block (envMap, envMapRotation from materialProperties' Euler — three's
+// own `_m1` / `_m` work, the flip of a non-target cube —, reflectivity, ior, refractionRatio). The
+// program-key inputs three never compares per draw (envMapMode, envMapCubeUVHeight) are not compared
+// either: three keys them at getProgram, which a changed texture identity reaches first.
 // Each needsProgramChange compare is proven false per draw from public state (material / object /
 // renderer / scene fields, three's materialProperties) plus two witnesses three itself leaves: the
 // lights state version (a lit material's lightsStateVersion after any setProgram of this render
@@ -221,6 +233,14 @@ export const THREE_SWITCH_PREMISES = Object.freeze([
   "let program = programs.get( programCacheKey ); if ( program !== undefined ) { // early out if program and light state is identical if ( materialProperties.currentProgram === program && materialProperties.lightsStateVersion === lightsStateVersion ) { updateCommonMaterialProperties( material, parameters ); return program; } } else {",
   "materialProperties.lightProbeGrid = currentRenderState.state.lightProbeGridArray.length > 0; materialProperties.currentProgram = program; materialProperties.uniformsList = null;",
   "parameters.numLightProbeGrids > 0 ? '#define USE_LIGHT_PROBES_GRID' : '',",
+  // the environment (2026-10-31: ?drawExecSwitch with scene.environment / material.envMap): setProgram's
+  // envMap derivation, WebGLEnvironments.get's pure paths (envOf), the common refresh's envMap block
+  "const usePMREM = material.isMeshStandardMaterial || ( material.isMeshLambertMaterial && ! material.envMap ) || ( material.isMeshPhongMaterial && ! material.envMap ); const envMap = environments.get( material.envMap || environment, usePMREM );",
+  "function get( texture, usePMREM = false ) { if ( texture === null || texture === undefined ) return null; if ( usePMREM ) { return getPMREM( texture ); } return getCube( texture ); } function getCube( texture ) { if ( texture && texture.isTexture ) { const mapping = texture.mapping; if ( mapping === EquirectangularReflectionMapping || mapping === EquirectangularRefractionMapping ) {",
+  "} } return texture; } function getPMREM( texture ) { if ( texture && texture.isTexture ) { const mapping = texture.mapping; const isEquirectMap = ( mapping === EquirectangularReflectionMapping || mapping === EquirectangularRefractionMapping ); const isCubeMap = ( mapping === CubeReflectionMapping || mapping === CubeRefractionMapping ); // equirect/cube map to cubeUV conversion if ( isEquirectMap || isCubeMap ) {",
+  "} } return texture; } function mapTextureMapping( texture, mapping ) {",
+  "const envMap = materialProperties.envMap; const envMapRotation = materialProperties.envMapRotation; if ( envMap ) { uniforms.envMap.value = envMap; // note: since the matrix is orthonormal, we can use the more-efficient transpose() in lieu of invert() uniforms.envMapRotation.value.setFromMatrix4( _m1.makeRotationFromEuler( envMapRotation ) ).transpose(); if ( envMap.isCubeTexture && envMap.isRenderTargetTexture === false ) { uniforms.envMapRotation.value.premultiply( _m ); } uniforms.reflectivity.value = material.reflectivity; uniforms.ior.value = material.ior; uniforms.refractionRatio.value = material.refractionRatio; } if ( material.lightMap ) {",
+  "const _m1 = /*@__PURE__*/ new Matrix4(); const _m = /*@__PURE__*/ new Matrix3(); _m.set( -1, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0 ); function WebGLMaterials( renderer, properties ) {",
   // the light uniforms markUniformsLightsNeedsUpdate toggles (the executor skips exactly these entries)
   "uniforms.ambientLightColor.needsUpdate = value; uniforms.lightProbe.needsUpdate = value; uniforms.directionalLights.needsUpdate = value; uniforms.directionalLightShadows.needsUpdate = value; uniforms.pointLights.needsUpdate = value; uniforms.pointLightShadows.needsUpdate = value; uniforms.spotLights.needsUpdate = value; uniforms.spotLightShadows.needsUpdate = value; uniforms.rectAreaLights.needsUpdate = value; uniforms.hemisphereLights.needsUpdate = value;",
   "static upload( gl, seq, values, textures ) { for ( let i = 0, n = seq.length; i !== n; ++ i ) { const u = seq[ i ], v = values[ u.id ]; if ( v.needsUpdate !== false ) { // note: always updating when .needsUpdate is undefined u.setValue( gl, v.value, textures ); } } }",
@@ -248,6 +268,7 @@ const SAMPLER_TYPES = new Set([0x8b5e, 0x8b5f, 0x8b60, 0x8b62, 0x8d66, 0x8dc1, 0
 // the refresh paths the executor replays (WebGLMaterials.refreshMaterialUniforms' dispatch order)
 const K_BASIC = 1, K_LAMBERT = 2, K_TOON = 3, K_PHONG = 4, K_STANDARD = 5, K_SHADER = 6;
 const SYNC_ABORT = { hbDxSyncAbort: true };
+const ENV_CONVERT = { hbDxEnvConvert: true }; // envOf: environments.get would convert (not modelled)
 const EMPTY_LIST = Object.freeze([]);
 function hbDxSyncNoopSetValue() { /* the sync's p_uniforms.setValue: no GL */ }
 function hbDxSyncNoopSetMaterial() { /* the sync's state.setMaterial: no GL */ }
@@ -259,14 +280,18 @@ function hbDxSyncNoopSetMaterial() { /* the sync's state.setMaterial: no GL */ }
 // uniform the program does not use (not in its upload list) is dropped: three reads such a value only
 // in an upload, which only a refresh that rewrites it first can reach (a program change). Texture
 // matrices are still updated for every present map (Texture.updateMatrix is a public side effect).
-// THREE_SWITCH_PREMISES pins the originals. refreshUniformsCommon's envMap block is left out: the
-// switch proves materialProperties.envMap === null first, so three skips it too.
+// THREE_SWITCH_PREMISES pins the originals. The envMap block reads three's materialProperties
+// (envMap, envMapRotation), which the switch's proof holds equal to what setProgram derives.
 const REFRESHED = Object.freeze(["opacity", "diffuse", "emissive", "map", "mapTransform", "alphaMap", "alphaMapTransform",
   "bumpMap", "bumpMapTransform", "bumpScale", "normalMap", "normalMapTransform", "normalScale", "displacementMap",
   "displacementMapTransform", "displacementScale", "displacementBias", "emissiveMap", "emissiveMapTransform", "specularMap",
   "specularMapTransform", "alphaTest", "lightMap", "lightMapIntensity", "lightMapTransform", "aoMap", "aoMapIntensity",
   "aoMapTransform", "metalness", "metalnessMap", "metalnessMapTransform", "roughness", "roughnessMap", "roughnessMapTransform",
-  "envMapIntensity", "specular", "shininess", "gradientMap", "fogColor", "fogNear", "fogFar", "fogDensity", "dfgLUT"]);
+  "envMapIntensity", "specular", "shininess", "gradientMap", "fogColor", "fogNear", "fogFar", "fogDensity", "dfgLUT",
+  "envMap", "envMapRotation", "reflectivity", "ior", "refractionRatio"]);
+// WebGLMaterials' module-level scratch / constant for the env rotation (three r184: `_m1`, `_m`)
+const _dxEnvM4 = new THREE.Matrix4();
+const _dxEnvFlip = new THREE.Matrix3().set(-1, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0);
 /** Per plan: each refreshed uniform's index in the upload list, -1 when the program does not use it. */
 function refreshIndex(ids) {
   const ix = Object.create(null);
@@ -280,7 +305,7 @@ function refreshTransformIx(map, C, i) {
   }
   if (i >= 0) C[i].value.copy(map.matrix);
 }
-function refreshCommonIx(C, ix, material) {
+function refreshCommonIx(C, ix, material, mp) {
   if (ix.opacity >= 0) C[ix.opacity].value = material.opacity;
   if (material.color) {
     if (ix.diffuse >= 0) C[ix.diffuse].value.copy(material.color);
@@ -335,7 +360,22 @@ function refreshCommonIx(C, ix, material) {
   if (material.alphaTest > 0) {
     if (ix.alphaTest >= 0) C[ix.alphaTest].value = material.alphaTest;
   }
-  // (materialProperties.envMap: null, proven — three's `if ( envMap ) { … }` is skipped)
+  const envMap = mp.envMap;
+  const envMapRotation = mp.envMapRotation;
+  if (envMap) {
+    if (ix.envMap >= 0) C[ix.envMap].value = envMap;
+    // (the matrix is orthonormal: transpose() for invert(), as three)
+    if (ix.envMapRotation >= 0) {
+      const u = C[ix.envMapRotation];
+      u.value.setFromMatrix4(_dxEnvM4.makeRotationFromEuler(envMapRotation)).transpose();
+      if (envMap.isCubeTexture && envMap.isRenderTargetTexture === false) {
+        u.value.premultiply(_dxEnvFlip);
+      }
+    }
+    if (ix.reflectivity >= 0) C[ix.reflectivity].value = material.reflectivity;
+    if (ix.ior >= 0) C[ix.ior].value = material.ior;
+    if (ix.refractionRatio >= 0) C[ix.refractionRatio].value = material.refractionRatio;
+  }
   if (material.lightMap) {
     if (ix.lightMap >= 0) C[ix.lightMap].value = material.lightMap;
     if (ix.lightMapIntensity >= 0) C[ix.lightMapIntensity].value = material.lightMapIntensity;
@@ -348,27 +388,27 @@ function refreshCommonIx(C, ix, material) {
   }
 }
 /** WebGLMaterials.refreshMaterialUniforms for the kinds the switch takes (three's dispatch order). */
-function refreshMaterialIx(kind, C, ix, material) {
+function refreshMaterialIx(kind, C, ix, material, mp) {
   switch (kind) {
     case K_BASIC:
-      refreshCommonIx(C, ix, material);
+      refreshCommonIx(C, ix, material, mp);
       break;
     case K_LAMBERT:
-      refreshCommonIx(C, ix, material);
+      refreshCommonIx(C, ix, material, mp);
       if (material.envMap) { if (ix.envMapIntensity >= 0) C[ix.envMapIntensity].value = material.envMapIntensity; }
       break;
     case K_TOON:
-      refreshCommonIx(C, ix, material);
+      refreshCommonIx(C, ix, material, mp);
       if (material.gradientMap) { if (ix.gradientMap >= 0) C[ix.gradientMap].value = material.gradientMap; }
       break;
     case K_PHONG:
-      refreshCommonIx(C, ix, material);
+      refreshCommonIx(C, ix, material, mp);
       if (ix.specular >= 0) C[ix.specular].value.copy(material.specular);
       if (ix.shininess >= 0) C[ix.shininess].value = Math.max(material.shininess, 1e-4); // to prevent pow( 0.0, 0.0 )
       if (material.envMap) { if (ix.envMapIntensity >= 0) C[ix.envMapIntensity].value = material.envMapIntensity; }
       break;
     case K_STANDARD:
-      refreshCommonIx(C, ix, material);
+      refreshCommonIx(C, ix, material, mp);
       // refreshUniformsStandard
       if (ix.metalness >= 0) C[ix.metalness].value = material.metalness;
       if (material.metalnessMap) {
@@ -1260,8 +1300,10 @@ export function installDrawExec(renderer, getMainScene, opts = {}) {
       if (!caseB) stats.switchSyncFailed += 1;
       return;
     }
-    const env = (F.isMeshStandardMaterial || F.isMeshLambertMaterial || F.isMeshPhongMaterial) && sScene !== null && sScene !== undefined && sScene.isScene === true ? sScene.environment : null;
-    if (F.envMap || env) { stats.switchSyncFailed += 1; return; } // (environments.get could do PMREM work)
+    // (setProgram's and getProgram's environments.get must be pure: no conversion — see envOf)
+    if (sScene !== null && sScene !== undefined && sScene.isScene === true ? envOf(F, sScene) === ENV_CONVERT : (F.envMap && envOf(F, { environment: null }) === ENV_CONVERT)) {
+      stats.switchSyncFailed += 1; return;
+    }
     const pu = prog.getUniforms();
     const ownSet = Object.prototype.hasOwnProperty.call(pu, "setValue") ? pu.setValue : undefined;
     const list0 = mpF.uniformsList, rs0 = mpF.receiveShadow, ver0 = mpF.__version, unu0 = F.uniformsNeedUpdate;
@@ -1466,6 +1508,26 @@ export function installDrawExec(renderer, getMainScene, opts = {}) {
     // C: this draw's containers, looked up by name once (the walk's own lookups), shared by the refresh
     return { list, m: mp.uniforms, pu: rec.pu, kind, ups, ids, C: new Array(ids.length).fill(null), ix: refreshIndex(ids), uTME: rec.pu.map.toneMappingExposure };
   };
+  /**
+   * three r184 WebGLEnvironments.get( material.envMap || environment, usePMREM ) as setProgram calls it,
+   * where it is a pure function: no texture → null; a texture it would CONVERT — an equirect map
+   * (to a cube, or with PMREM to cube-UV) or a cube map under PMREM — reads its private caches and may
+   * render (versions, pmremVersion): ENV_CONVERT, not modelled; anything else (a cube-UV PMREM target
+   * — ibl_environment.js's scene.environment —, a cube map without PMREM, a plain texture) is
+   * returned as it is.
+   */
+  const envOf = (material, scene) => {
+    const slp = material.isMeshStandardMaterial || material.isMeshLambertMaterial || material.isMeshPhongMaterial;
+    const tex = material.envMap || (slp ? scene.environment : null);
+    if (tex === null || tex === undefined) return null;
+    if (tex && tex.isTexture) {
+      const mapping = tex.mapping;
+      if (mapping === THREE.EquirectangularReflectionMapping || mapping === THREE.EquirectangularRefractionMapping) return ENV_CONVERT;
+      const usePMREM = material.isMeshStandardMaterial || (material.isMeshLambertMaterial && !material.envMap) || (material.isMeshPhongMaterial && !material.envMap);
+      if (usePMREM && (mapping === THREE.CubeReflectionMapping || mapping === THREE.CubeRefractionMapping)) return ENV_CONVERT;
+    }
+    return tex;
+  };
   /** three r184's needsProgramChange for this draw, each compare: null when all are false. */
   const keepProof = (rec, mp, material, object, scene) => {
     if (material.version !== mp.__version) return "version";
@@ -1481,11 +1543,11 @@ export function installDrawExec(renderer, getMainScene, opts = {}) {
     } else if (mp.batching === true) return "batching";
     if (object.isInstancedMesh || mp.instancing === true) return "instancing";
     if (object.isSkinnedMesh || mp.skinning === true) return "skinning";
-    const env = (material.isMeshStandardMaterial || material.isMeshLambertMaterial || material.isMeshPhongMaterial) ? scene.environment : null;
-    const envTex = material.envMap || env;
-    // (environments.get: null for no texture; anything else is PMREM / cube state the executor does not model)
-    if (envTex !== null && envTex !== undefined) return "envMap";
-    if (mp.envMap !== null) return "envMap";
+    // setProgram's envMap = environments.get( material.envMap || environment, usePMREM ), where it is
+    // pure (see envOf); three compares it with materialProperties.envMap by identity
+    const envMap = envOf(material, scene);
+    if (envMap === ENV_CONVERT) return "envMapConvert";
+    if (mp.envMap !== envMap) return "envMap";
     if (material.fog === true && mp.fog !== scene.fog) return "fog";
     // (three's clipping plane counts are 0 for a session that never clipped; unknown after)
     if (mp.numClippingPlanes !== undefined && (rcEver || mp.numClippingPlanes !== 0 || mp.numIntersection !== 0)) return "clipping";
@@ -1565,10 +1627,12 @@ export function installDrawExec(renderer, getMainScene, opts = {}) {
     }
     mp.receiveShadow = object.receiveShadow;
     if (rec.uRS !== undefined) rec.uRS.setValue(gl, object.receiveShadow);
-    // (envMapIntensity from scene.environment: the proof has the environment null)
     // the upload list's containers, by name, once (three's walk looks each up; the refresh writes them)
     const ups = plan.ups, ids = plan.ids, C = plan.C;
     for (let i = 0; i < ids.length; i++) C[i] = m[ids[i]];
+    if ((material.isMeshStandardMaterial || material.isMeshLambertMaterial || material.isMeshPhongMaterial) && material.envMap === null && scene.environment !== null) {
+      if (ix.envMapIntensity >= 0) C[ix.envMapIntensity].value = scene.environmentIntensity;
+    }
     if (ix.dfgLUT >= 0) C[ix.dfgLUT].value = dfgLut;
     // refreshMaterial
     if (plan.uTME !== undefined) plan.uTME.setValue(gl, renderer.toneMappingExposure);
@@ -1589,7 +1653,7 @@ export function installDrawExec(renderer, getMainScene, opts = {}) {
     }
     const fog = scene.fog;
     if (fog && material.fog === true) refreshFogIx(C, ix, fog);
-    refreshMaterialIx(plan.kind, C, ix, material);
+    refreshMaterialIx(plan.kind, C, ix, material, mp);
     // WebGLUniforms.upload( gl, uniformsList, m_uniforms, textures ) — the light entries are clean
     for (let i = 0; i < ups.length; i++) {
       const v = C[i];

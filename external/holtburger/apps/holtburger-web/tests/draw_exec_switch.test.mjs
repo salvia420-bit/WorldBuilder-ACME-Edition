@@ -239,6 +239,19 @@ function buildWorld(o = {}) {
     }
   }
   fam.cache = cacheMaterials(8, 5);
+  if (o.envMats) {
+    // per-material environment maps, one program per family: a cube-UV map on Standard (PMREM path:
+    // returned as is), a CubeTexture on Lambert / Phong / Basic (no PMREM: the cube path, with three's
+    // flip of a non-target cube in envMapRotation), varied intensity / reflectivity / refraction / rotation
+    const cubeTex = (k) => { const faces = []; for (let i = 0; i < 6; i++) faces.push({ data: new Uint8Array(16 * 4).map((_, j) => (j * 11 + i * 40 + k * 7) & 255), width: 4, height: 4 }); const c = new THREE.CubeTexture(faces); c.needsUpdate = true; return c; };
+    const cube = cubeTex(1), cube2 = cubeTex(2);
+    const cuv = cubeUvTex();
+    const rot = () => new THREE.Euler(r() * 0.5, r() * 2, 0);
+    fam.envStd = []; for (let i = 0; i < 4; i++) fam.envStd.push(new THREE.MeshStandardMaterial({ map: dataTex(4, 250 + i), envMap: cuv, envMapIntensity: 0.5 + r(), envMapRotation: rot(), roughness: 0.3 + r() * 0.6, color: col() }));
+    fam.envLambert = []; for (let i = 0; i < 3; i++) fam.envLambert.push(new THREE.MeshLambertMaterial({ map: dataTex(4, 260 + i), envMap: i === 2 ? cube2 : cube, reflectivity: r(), refractionRatio: 0.9 + r() * 0.1, envMapRotation: rot(), color: col() }));
+    fam.envPhong = []; for (let i = 0; i < 3; i++) fam.envPhong.push(new THREE.MeshPhongMaterial({ map: dataTex(4, 270 + i), envMap: i === 1 ? cube2 : cube, reflectivity: r(), envMapRotation: rot(), shininess: 20 + r() * 40, color: col() }));
+    fam.envBasic = []; for (let i = 0; i < 3; i++) fam.envBasic.push(new THREE.MeshBasicMaterial({ map: dataTex(4, 280 + i), envMap: cube, reflectivity: r(), combine: THREE.MixOperation, color: col() }));
+  }
   // statics: 2-3 meshes per material, spread over the static roots
   const roots = [statics, buildings, terrain];
   const all = [];
@@ -408,6 +421,16 @@ function step(W, f, arm) {
   if (at("lightAdd")) { const p = new THREE.PointLight(0x66aaff, 1, 20, 2); p.position.set(4, 4, 4); W.lights.add(p); }
   if (at("envOn")) W.scene.environment = (W.cube ||= cubeUvTex());
   if (at("envOff")) W.scene.environment = null;
+  if (W.scene.environment) W.scene.environmentIntensity = 0.6 + 0.3 * Math.sin(f * 0.7); // (ibl_environment.js: every frame)
+  if (at("envRot")) W.scene.environmentRotation.y = 0.7;
+  if (at("envRotObj")) W.scene.environmentRotation = new THREE.Euler(0.1, 1.1, 0); // (materialProperties keep the old Euler until getProgram)
+  if (at("envMatEdit") && F.envStd) {
+    F.envStd[1].envMapIntensity = 2.2; F.envStd[2].envMapRotation.y = 0.9; F.envPhong[1].reflectivity = 0.3; F.envPhong[2].envMapRotation.x = 0.4;
+    F.envLambert[1].refractionRatio = 0.5; F.envLambert[1].reflectivity = 0.8; F.envBasic[1].reflectivity = 0.9;
+  }
+  if (at("envUniform") && F.patched[3].userData.sh) F.patched[3].userData.sh.uniforms.envMap.value = F.std[0].map; // an app write behind three's back: its next refresh puts materialProperties.envMap back
+  if (at("envCopy") && W.pmrem) { W.skyMat.color.setHex(0xaa8844); const rt = W.pmrem.fromScene(W.sky, 0.03, 0.1, 100); arm.renderer.copyTextureToTexture(rt.texture, W.envRT.texture); rt.dispose(); } // ?iblStableEnv
+  if (at("envSwap") && W.pmrem) { const old = W.envRT; W.envRT = W.pmrem.fromScene(W.sky, 0.03, 0.1, 100); W.scene.environment = W.envRT.texture; old.dispose(); } // the swap path
   if (at("colorSpace")) arm.renderer.outputColorSpace = THREE.LinearSRGBColorSpace; // every program moves; the fog colour's target space too
   if (at("staticLate") && W.ho) {
     // a static on the switched material D, first drawn right after D's switch (a full-chain record)
@@ -420,6 +443,24 @@ function step(W, f, arm) {
     if (W.ho.mode !== "key" && W.ho.mD.map === null) { W.ho.mD.map = W.ho.dMap; W.ho.mD.needsUpdate = true; }
   }
   if (at("resetState")) arm.renderer.resetState();
+}
+
+// scene.environment as the app builds it (ibl_environment.js: three's PMREMGenerator.fromScene of a sky
+// scene → a cube-UV render-target texture; ?iblStableEnv copies each refresh into the kept target), or a
+// cube-UV DataTexture, or an equirect / cube map three must convert (refused: environments.get renders).
+function makeEnvironment(renderer, W, kind) {
+  if (kind === "pmrem") {
+    const sky = new THREE.Scene();
+    W.skyMat = new THREE.MeshBasicMaterial({ color: 0x6688cc, side: THREE.BackSide });
+    sky.add(new THREE.Mesh(new THREE.SphereGeometry(10, 8, 6), W.skyMat));
+    W.pmrem = new THREE.PMREMGenerator(renderer);
+    W.sky = sky;
+    W.envRT = W.pmrem.fromScene(sky, 0.03, 0.1, 100);
+    W.scene.environment = W.envRT.texture;
+  } else if (kind === "cubeuv") W.scene.environment = cubeUvTex();
+  else if (kind === "equirect") { const t = dataTex(8, 9); t.mapping = THREE.EquirectangularReflectionMapping; W.scene.environment = t; }
+  else if (kind === "cube") { const faces = []; for (let i = 0; i < 6; i++) faces.push({ data: new Uint8Array(16 * 4).fill(30 * i), width: 4, height: 4 }); const c = new THREE.CubeTexture(faces); c.needsUpdate = true; W.scene.environment = c; }
+  W.scene.environmentIntensity = 0.8;
 }
 
 /** One arm: a fresh fake context + renderer, every production patch in index.js order. */
@@ -444,6 +485,7 @@ function makeArm(exec, sc) {
   installAsyncLinkGuard(renderer, () => W.scene);
   SKIP.installSkipEmptyMultiDraw(renderer, { force: true });
   RUNS.installBatchedRuns(renderer);
+  if (sc.env) makeEnvironment(renderer, W, sc.env);
   const arm = { gl, canvas, renderer, W, dx: null, calls, rt: sc.msaa ? new THREE.WebGLRenderTarget(800, 600, { samples: 4, type: THREE.HalfFloatType }) : null };
   arm.install = () => { if (exec && arm.dx === null) arm.dx = DX.installDrawExec(renderer, () => W.scene, { force: true, rigs: true, switch: true }); };
   if (!sc.lateInstall) arm.install();
@@ -604,7 +646,17 @@ async function scenario(name, sc, expect = {}) {
 const EV = { colors: 2, mapSwap: 3, upload: 4, version: 5, uniforms: 6, fog: 7, transform: 8, receiveShadow: 9, fogObject: 10, lightAdd: 12, envOn: 15, envOff: 18, colorSpace: 21 };
 await scenario("switch-heavy world: every family on one program each, tone mapping on, events between frames (colours, maps, uploads, versions, toneMappingExposure, uniforms + containers + a clean-marked one, fog, transforms, receiveShadow, a light, an environment, the output colour space)", {
   frames: 24, events: EV, toneMapping: true,
-}, { minSps: 200, refused: ["fog", "envMap"], kinds: ["std", "nrm", "alpha", "maps", "basic", "lambert", "phong", "toon", "shader", "patched", "cache", "pool"] });
+}, { minSps: 200, refused: ["fog"], kinds: ["std", "nrm", "alpha", "maps", "basic", "lambert", "phong", "toon", "shader", "patched", "cache", "pool"] });
+// 2026-10-31 (1070 run r3f: every lit switch refused "envMap" — the app's ?ibl PMREM scene.environment)
+const EVE = { colors: 2, envMatEdit: 3, upload: 4, envRot: 5, version: 6, envCopy: 7, fog: 8, envRotObj: 9, receiveShadow: 10, envUniform: 11, envSwap: 12, lightAdd: 15 };
+await scenario("ENVIRONMENT: scene.environment = three's PMREMGenerator.fromScene cube-UV target (as ibl_environment.js), environmentIntensity every frame, environmentRotation changed / replaced, a ?iblStableEnv copy into the kept target, an app write into a patched material's envMap uniform, a target swap; per-material env maps (cube-UV Standard, CubeTexture Lambert / Phong / Basic) edited; every family", {
+  frames: 18, env: "pmrem", envMats: true, toneMapping: true, events: EVE,
+}, { minSps: 300, refused: ["envMap"], kinds: ["std", "nrm", "alpha", "maps", "basic", "lambert", "phong", "toon", "shader", "patched", "cache", "pool", "envStd", "envLambert", "envPhong", "envBasic"] });
+await scenario("ENVIRONMENT + three's material tracker: hand-overs with a PMREM scene.environment (syncs through setProgram's environments.get)", {
+  frames: 12, env: "pmrem", envMats: true, handover: true, events: { staticLate: 5, envCopy: 7 }, hoPlan: (f) => (f >= 2 && f < 4 ? "color" : f === 8 || f === 10 ? "version" : "none"),
+}, { syncsOwn: true, syncsTracked: true });
+await scenario("ENVIRONMENT three converts (an equirect scene.environment: PMREM-rendered by three; refused)", { frames: 6, env: "equirect", events: { colors: 3 } }, { refused: ["envMapConvert"] });
+await scenario("ENVIRONMENT three converts (a CubeTexture scene.environment under PMREM; refused) next to per-material cube maps (taken)", { frames: 6, env: "cube", envMats: true, events: { envMatEdit: 3 } }, { refused: ["envMapConvert"], kinds: ["envLambert", "envPhong", "envBasic"] });
 await scenario("three's material tracker: hand-overs of three's tracked material (plain + InstancedMesh) and of the switched material (mirrored), across render() end, a mid-frame colour change / upload / toneMappingExposure / setRenderTarget between switch and hand-over, a static first drawn inside a switched run", {
   frames: 16, handover: true, toneMapping: true, events: { staticLate: 6, colors: 3 }, hoPlan: (f) => (f >= 2 && f < 5 ? "color" : f >= 8 && f < 11 ? "stage" : f >= 12 && f < 15 ? "srt" : "none"),
 }, { syncsOwn: true, syncsTracked: true });
