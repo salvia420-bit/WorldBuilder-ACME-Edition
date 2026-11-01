@@ -1,0 +1,16 @@
+{
+ "name": "m0",
+ "timeoutMin": 25,
+ "sessions": [
+  {"role": "pilot", "account": "agentp10", "flags": "vehicles=on"},
+  {"role": "observer", "account": "agentp09", "flags": "wireframe=1", "minMeshes": 20}
+ ],
+ "steps": [
+  {"label": "pilot to Holtburg", "page": "pilot", "teleloc": "0xA9B40019 84 7.1 94", "afterTeleportMs": 12000},
+  {"label": "observer next to the pilot", "page": "observer", "teleloc": "0xA9B40019 70 20 94", "afterTeleportMs": 12000},
+  {"label": "spawn the stand-in", "page": "pilot", "eval": "vehicle-spawn.eval.js"},
+  {"label": "@vehicles lists it", "page": "pilot", "chat": ["@vehicles"], "sleepMs": 1500},
+  {"label": "observer sees the parked stand-in", "page": "observer", "eval": "vehicle-observe.eval.js", "sampleMs": 3000},
+  {"label": "pilot sees it too", "page": "pilot", "eval": "vehicle-observe.eval.js", "sampleMs": 2000}
+ ]
+}

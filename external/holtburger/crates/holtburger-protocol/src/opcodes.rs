@@ -521,6 +521,17 @@ pub enum GameActionOpcode {
     /// `PacketOpCodeNames.cs:430` id 687 names it
     /// `Evt_Admin__QueryPluginListResponse_ID` but ships no handler.
     QueryPluginListResponse = 0x02AF,
+
+    // --- HBV1 vehicles (holtburger custom, additive; docs/vehicles-2026-11-01) ---
+    /// C2S: HBV1 ClientCapabilities (observe / pilot / patch bits). Custom
+    /// opcode block 0x0900-0x090F, unused by retail, ACE and Chorizite.
+    VehicleClientCapabilities = 0x0900,
+    /// C2S: HBV1 VehicleBoard.
+    VehicleBoard = 0x0902,
+    /// C2S: HBV1 VehicleExit (exit / bail).
+    VehicleExit = 0x0903,
+    /// C2S: HBV1 VehicleInput (30 Hz while seated, redundant frames).
+    VehicleInput = 0x0905,
     // /// C2S: Response to an admin plugin detail query.
     // QueryPluginResponse = 0x02B2,
     /// C2S: Finalize character changes in a barber session (retail
@@ -1054,6 +1065,20 @@ pub enum GameEventOpcode {
     /// ACE `PacketOpCodeNames.cs:429` id 686
     /// (`Evt_Admin__Recv_QueryPluginList_ID`), no handler, no sender.
     AdminQueryPluginList = 0x02AE,
+
+    // --- HBV1 vehicles (holtburger custom, additive; docs/vehicles-2026-11-01) ---
+    /// S2C: HBV1 CapabilitiesAck.
+    VehicleCapabilitiesAck = 0x0900,
+    /// S2C: HBV1 VehicleProfile (once per vehicle per observing session).
+    VehicleProfile = 0x0901,
+    /// S2C: HBV1 VehicleSeat (seat changes / board refusals).
+    VehicleSeat = 0x0904,
+    /// S2C: HBV1 VehicleState (20 Hz pilot / 10 Hz observers).
+    VehicleState = 0x0906,
+    /// S2C: HBV1 VehicleFire (tracers).
+    VehicleFire = 0x0907,
+    /// S2C: HBV1 VehicleEvent (takeoff, landed, crashed, despawn, bail, chute, ...).
+    VehicleEvent = 0x0908,
     // /// S2C: Admin-only query for a specific plugin's status.
     // AdminQueryPlugin = 0x02B1,
     // /// S2C: Admin-only response to a plugin query.

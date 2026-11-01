@@ -2112,6 +2112,7 @@ fn game_event_opcode_for(event: &holtburger_protocol::messages::GameEvent) -> u3
         GameEvent::UpdateHar(_) => 0x0257,
         GameEvent::HouseAvailableHouses(_) => 0x0271,
         GameEvent::AdminQueryPluginList(_) => 0x02AE,
+        GameEvent::Vehicle(v) => v.opcode(),
         GameEvent::Unknown(raw, _) => *raw,
     }
 }
@@ -2388,6 +2389,11 @@ mod ping_round_trip;
 // (`cargo test -p holtburger-web --lib wire_integrity`).
 #[cfg(any(target_arch = "wasm32", test))]
 mod wire_integrity;
+
+// holtburger vehicles (HBV1, docs/vehicles-2026-11-01): the wasm side's shared vehicle
+// state — inbox drained by JS, the seat lock the movement tick honours, wire stats.
+#[cfg(target_arch = "wasm32")]
+mod vehicle_link;
 
 // RND-04 — retail static-light vertex bake (`SetStaticLightingVertexColors`
 // acclient.c:454918 / `calc_point_light` acclient.c:454579). Gate mirrors
@@ -33401,6 +33407,13 @@ enum SessionCommand {
         vital_type: u32,
         xp_spent: u32,
     },
+    /// holtburger vehicles (HBV1): send one vehicle game action
+    /// (ClientCapabilities / Board / Exit / Input) built by the
+    /// `vehicle*` SessionHandle methods. Never sent unless the JS
+    /// vehicle module (`?vehicles=on`) asks.
+    VehicleSend {
+        msg: holtburger_protocol::messages::vehicle::VehicleC2S,
+    },
 }
 
 /// Tagged-payload envelope for events the wasm bundle drains to JS via
@@ -47089,6 +47102,91 @@ impl SessionHandle {
     /// (`ConfirmationType::SwearAllegiance` = 1); answer with
     /// [`SessionHandle::send_confirmation_response`]. An unanswered
     /// dialog times out server-side as a decline.
+    // ------------------------------------------------------------------
+    // holtburger vehicles (HBV1, docs/vehicles-2026-11-01). Nothing here runs
+    // unless the JS vehicle module (`?vehicles=on`) calls it: a session that
+    // never sends `vehicleCapabilities` is never sent a vehicle message.
+    // ------------------------------------------------------------------
+
+    fn vehicle_send(&self, msg: holtburger_protocol::messages::vehicle::VehicleC2S) -> Result<(), JsValue> {
+        use futures::channel::mpsc::TrySendError;
+        self.cmd_tx
+            .unbounded_send(SessionCommand::VehicleSend { msg })
+            .map_err(|e: TrySendError<_>| JsValue::from_str(&format!("vehicle: cmd channel closed ({e})")))
+    }
+
+    /// HBV1 ClientCapabilities: `flags` bit 0 = observe, 1 = pilot, 2 = DAT patch.
+    /// The server answers with CapabilitiesAck (`drainVehicleMessages`, type "ack").
+    #[wasm_bindgen(js_name = vehicleCapabilities)]
+    pub fn vehicle_capabilities(&self, flags: u32) -> Result<(), JsValue> {
+        self.vehicle_send(holtburger_protocol::messages::vehicle::VehicleC2S::ClientCapabilities { flags })
+    }
+
+    /// HBV1 VehicleBoard (pilot bit). The answer is a VehicleSeat (occupied or refused + reason).
+    #[wasm_bindgen(js_name = vehicleBoard)]
+    pub fn vehicle_board(&self, vehicle: u32, seat: u32) -> Result<(), JsValue> {
+        self.vehicle_send(holtburger_protocol::messages::vehicle::VehicleC2S::Board { vehicle, seat })
+    }
+
+    /// HBV1 VehicleExit: `mode` 0 = exit (parked), 1 = bail.
+    #[wasm_bindgen(js_name = vehicleExit)]
+    pub fn vehicle_exit(&self, vehicle: u32, mode: u32) -> Result<(), JsValue> {
+        self.vehicle_send(holtburger_protocol::messages::vehicle::VehicleC2S::Exit { vehicle, mode })
+    }
+
+    /// HBV1 VehicleInput: `frames` = flat [seq, throttle(0..255), pitch, roll, yaw (-127..127), buttons] × 1..3,
+    /// newest first.
+    #[wasm_bindgen(js_name = vehicleInput)]
+    pub fn vehicle_input(&self, vehicle: u32, frames: &[i32]) -> Result<(), JsValue> {
+        use holtburger_protocol::messages::vehicle::{VehicleC2S, VehicleInputFrame};
+        let n = (frames.len() / 6).min(3);
+        if n == 0 {
+            return Err(JsValue::from_str("vehicleInput: need 6 ints per frame"));
+        }
+        let clamp_i8 = |v: i32| v.clamp(-127, 127) as i8;
+        let frames: Vec<VehicleInputFrame> = (0..n)
+            .map(|i| {
+                let f = &frames[i * 6..i * 6 + 6];
+                VehicleInputFrame {
+                    seq: f[0] as u32,
+                    throttle: f[1].clamp(0, 255) as u8,
+                    pitch: clamp_i8(f[2]),
+                    roll: clamp_i8(f[3]),
+                    yaw: clamp_i8(f[4]),
+                    buttons: (f[5] & 0xFF) as u8,
+                    reserved: [0; 3],
+                }
+            })
+            .collect();
+        self.vehicle_send(VehicleC2S::Input { vehicle, frames })
+    }
+
+    /// Every vehicle message received since the last call, as a JSON array
+    /// (shapes: scene3d/vehicle/protocol.js).
+    #[wasm_bindgen(js_name = drainVehicleMessages)]
+    pub fn drain_vehicle_messages(&self) -> String {
+        crate::vehicle_link::drain_json()
+    }
+
+    /// Slave the local body to the predicted seat pose (AC cell + landblock-local metres, compass heading in
+    /// radians). Call every frame while seated. Returns false when the server already released this seat.
+    #[wasm_bindgen(js_name = setVehicleSeat)]
+    pub fn set_vehicle_seat(&self, vehicle: u32, cell: u32, x: f32, y: f32, z: f32, heading: f32) -> bool {
+        crate::vehicle_link::set_seat(crate::vehicle_link::SeatPose { vehicle, cell, x, y, z, heading })
+    }
+
+    /// Release the seat lock (the local body is the player's again).
+    #[wasm_bindgen(js_name = clearVehicleSeat)]
+    pub fn clear_vehicle_seat(&self) {
+        crate::vehicle_link::clear_seat()
+    }
+
+    /// Vehicle wire counters + the seat lock, JSON.
+    #[wasm_bindgen(js_name = vehicleWireStats)]
+    pub fn vehicle_wire_stats(&self) -> String {
+        crate::vehicle_link::stats_json()
+    }
+
     #[wasm_bindgen(js_name = pendingConfirmations)]
     pub fn pending_confirmations(&self) -> JsValue {
         let drained: Vec<PendingConfirmation> =

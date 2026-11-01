@@ -28,6 +28,7 @@ pub mod trade;
 pub mod transport;
 pub mod ui_events;
 pub mod utils;
+pub mod vehicle;
 
 pub use game_action::*;
 pub use game_event::*;

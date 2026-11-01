@@ -1,0 +1,53 @@
+From e119a6b1c292e630aea1d161aef38e5eedaf0992 Mon Sep 17 00:00:00 2001
+From: salvia420-bit <salvia420@gmail.com>
+Date: Sun, 1 Nov 2026 05:43:17 -0330
+Subject: [PATCH 1/2] ACE.Database: points-of-interest cache trims names and
+ does not cache misses
+
+Local change the live server has run with since before the vehicles work:
+@telepoi lookups trim the name, and a lookup that finds nothing no longer
+stores a null entry (which made a later-added POI unreachable until restart).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ Source/ACE.Database/WorldDatabaseWithEntityCache.cs | 9 +++++----
+ 1 file changed, 5 insertions(+), 4 deletions(-)
+
+diff --git a/Source/ACE.Database/WorldDatabaseWithEntityCache.cs b/Source/ACE.Database/WorldDatabaseWithEntityCache.cs
+index 8e28ecc..dcf428e 100644
+--- a/Source/ACE.Database/WorldDatabaseWithEntityCache.cs
++++ b/Source/ACE.Database/WorldDatabaseWithEntityCache.cs
+@@ -664,7 +664,7 @@ public void CacheAllPointsOfInterest()
+                     .AsNoTracking();
+ 
+                 foreach (var result in results)
+-                    cachedPointsOfInterest[result.Name.ToLower()] = result;
++                    cachedPointsOfInterest[result.Name.Trim().ToLower()] = result;
+             }
+         }
+ 
+@@ -686,9 +686,9 @@ public ConcurrentDictionary<string, PointsOfInterest> GetPointsOfInterestCache()
+ 
+         public PointsOfInterest GetCachedPointOfInterest(string name)
+         {
+-            var nameToLower = name.ToLower();
++            var nameToLower = name.Trim().ToLower();
+ 
+-            if (cachedPointsOfInterest.TryGetValue(nameToLower, out var value))
++            if (cachedPointsOfInterest.TryGetValue(nameToLower, out var value) && value != null)
+                 return value;
+ 
+             using (var context = new WorldDbContext())
+@@ -697,7 +697,8 @@ public PointsOfInterest GetCachedPointOfInterest(string name)
+                     .AsNoTracking()
+                     .FirstOrDefault(r => r.Name.ToLower() == nameToLower);
+ 
+-                cachedPointsOfInterest[nameToLower] = result;
++                if (result != null)
++                    cachedPointsOfInterest[result.Name.Trim().ToLower()] = result;
+                 return result;
+             }
+         }
+-- 
+2.47.3
+

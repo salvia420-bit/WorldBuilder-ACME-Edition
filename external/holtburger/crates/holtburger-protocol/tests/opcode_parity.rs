@@ -265,6 +265,57 @@ const CATEGORIZATION_GATE_ALLOWLIST: &[(&str, u32, &str)] = &[
          BookModifyPage request → BookModifyPageResponse reply pair is \
          analogous.",
     ),
+    // ----- HBV1 vehicles (custom block 0x0900-0x090F) -----
+    (
+        "GameActionOpcode",
+        0x0900,
+        "HBV1 vehicles (holtburger custom, additive, capability-gated): the 0x0900-0x090F block is unused by retail, ACE and Chorizite (checked 2026-11-01). Spec: apps/holtburger-web/docs/vehicles-2026-11-01/protocol/vehicles.protocol.xml.",
+    ),
+    (
+        "GameActionOpcode",
+        0x0902,
+        "HBV1 vehicles (holtburger custom, additive, capability-gated): the 0x0900-0x090F block is unused by retail, ACE and Chorizite (checked 2026-11-01). Spec: apps/holtburger-web/docs/vehicles-2026-11-01/protocol/vehicles.protocol.xml.",
+    ),
+    (
+        "GameActionOpcode",
+        0x0903,
+        "HBV1 vehicles (holtburger custom, additive, capability-gated): the 0x0900-0x090F block is unused by retail, ACE and Chorizite (checked 2026-11-01). Spec: apps/holtburger-web/docs/vehicles-2026-11-01/protocol/vehicles.protocol.xml.",
+    ),
+    (
+        "GameActionOpcode",
+        0x0905,
+        "HBV1 vehicles (holtburger custom, additive, capability-gated): the 0x0900-0x090F block is unused by retail, ACE and Chorizite (checked 2026-11-01). Spec: apps/holtburger-web/docs/vehicles-2026-11-01/protocol/vehicles.protocol.xml.",
+    ),
+    (
+        "GameEventOpcode",
+        0x0900,
+        "HBV1 vehicles (holtburger custom, additive, capability-gated): the 0x0900-0x090F block is unused by retail, ACE and Chorizite (checked 2026-11-01). Spec: apps/holtburger-web/docs/vehicles-2026-11-01/protocol/vehicles.protocol.xml.",
+    ),
+    (
+        "GameEventOpcode",
+        0x0901,
+        "HBV1 vehicles (holtburger custom, additive, capability-gated): the 0x0900-0x090F block is unused by retail, ACE and Chorizite (checked 2026-11-01). Spec: apps/holtburger-web/docs/vehicles-2026-11-01/protocol/vehicles.protocol.xml.",
+    ),
+    (
+        "GameEventOpcode",
+        0x0904,
+        "HBV1 vehicles (holtburger custom, additive, capability-gated): the 0x0900-0x090F block is unused by retail, ACE and Chorizite (checked 2026-11-01). Spec: apps/holtburger-web/docs/vehicles-2026-11-01/protocol/vehicles.protocol.xml.",
+    ),
+    (
+        "GameEventOpcode",
+        0x0906,
+        "HBV1 vehicles (holtburger custom, additive, capability-gated): the 0x0900-0x090F block is unused by retail, ACE and Chorizite (checked 2026-11-01). Spec: apps/holtburger-web/docs/vehicles-2026-11-01/protocol/vehicles.protocol.xml.",
+    ),
+    (
+        "GameEventOpcode",
+        0x0907,
+        "HBV1 vehicles (holtburger custom, additive, capability-gated): the 0x0900-0x090F block is unused by retail, ACE and Chorizite (checked 2026-11-01). Spec: apps/holtburger-web/docs/vehicles-2026-11-01/protocol/vehicles.protocol.xml.",
+    ),
+    (
+        "GameEventOpcode",
+        0x0908,
+        "HBV1 vehicles (holtburger custom, additive, capability-gated): the 0x0900-0x090F block is unused by retail, ACE and Chorizite (checked 2026-11-01). Spec: apps/holtburger-web/docs/vehicles-2026-11-01/protocol/vehicles.protocol.xml.",
+    ),
 ];
 
 /// True if `(label, value)` is on the allowlist.

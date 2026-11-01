@@ -1959,6 +1959,34 @@ pub(super) async fn handle(ctx: &mut LoopCtx, message: GameMessage) -> LoopFlow 
                         f32_payload: None,
                     });
                 }
+                // holtburger vehicles (HBV1): every vehicle event goes to the
+                // JS inbox; a seat release / touchdown for the local player is
+                // applied here, in stream order (vehicle_link.rs).
+                holtburger_protocol::messages::GameEvent::Vehicle(v) => {
+                    let local: u32 = world
+                        .borrow()
+                        .as_ref()
+                        .map(|w| w.player.guid.into())
+                        .unwrap_or(0);
+                    if let crate::vehicle_link::LinkAction::Snap { cell, x, y, z } =
+                        crate::vehicle_link::on_s2c(&v, local)
+                        && let Some(w) = world.borrow_mut().as_mut()
+                    {
+                        let rotation = w
+                            .local_player_runtime_pose()
+                            .map(|p| p.rotation)
+                            .unwrap_or_default();
+                        let pose = holtburger_common::position::WorldPosition {
+                            landblock_id: holtburger_common::Guid(cell),
+                            coords: holtburger_common::math::Vector3::new(x, y, z),
+                            rotation,
+                        };
+                        let _ = w.set_player_position_with_sync(
+                            pose,
+                            holtburger_world::AuthoritativeBodySync::Reset,
+                        );
+                    }
+                }
                 _ => {
                     // Non-chat GameEvents drop through
                     // to the no-op outer catch-all.

@@ -178,6 +178,10 @@ pub enum GameEvent {
     /// P6.1: admin plugin-manifest query (`0x02AE`), answered by
     /// `GameAction::QueryPluginListResponse` (`0x02AF`).
     AdminQueryPluginList(Box<AdminQueryPluginListEventData>),
+    /// HBV1 vehicles (0x0900 / 0x0901 / 0x0904 / 0x0906 / 0x0907 / 0x0908): one
+    /// variant for the whole block. A payload without the `HBV1` tag (another
+    /// mod reusing the opcode) unpacks as `Unknown` and is dropped.
+    Vehicle(Box<crate::messages::vehicle::VehicleS2C>),
     Unknown(u32, Vec<u8>),
 }
 
@@ -512,6 +516,25 @@ impl ProtocolUnpack for GameEventMessage {
                 GameEventOpcode::AdminQueryPluginList => GameEvent::AdminQueryPluginList(
                     Box::new(AdminQueryPluginListEventData::unpack(data, offset)?),
                 ),
+                GameEventOpcode::VehicleCapabilitiesAck
+                | GameEventOpcode::VehicleProfile
+                | GameEventOpcode::VehicleSeat
+                | GameEventOpcode::VehicleState
+                | GameEventOpcode::VehicleFire
+                | GameEventOpcode::VehicleEvent => {
+                    match crate::messages::vehicle::VehicleS2C::unpack_payload(
+                        event_type_raw,
+                        data,
+                        offset,
+                    ) {
+                        Some(v) => GameEvent::Vehicle(Box::new(v)),
+                        None => {
+                            let remaining = data[*offset..].to_vec();
+                            *offset = data.len();
+                            GameEvent::Unknown(event_type_raw, remaining)
+                        }
+                    }
+                }
             },
             None => {
                 log::warn!(
@@ -1015,6 +1038,10 @@ impl ProtocolPack for GameEventMessage {
                 buf.write_u32::<LittleEndian>(GameEventOpcode::AdminQueryPluginList as u32)
                     .unwrap();
                 data.pack(buf);
+            }
+            GameEvent::Vehicle(v) => {
+                buf.write_u32::<LittleEndian>(v.opcode()).unwrap();
+                v.pack_payload(buf);
             }
             GameEvent::Unknown(opcode, data) => {
                 buf.write_u32::<LittleEndian>(*opcode).unwrap();

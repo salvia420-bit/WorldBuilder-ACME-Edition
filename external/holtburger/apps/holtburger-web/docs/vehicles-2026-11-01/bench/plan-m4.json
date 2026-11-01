@@ -1,0 +1,12 @@
+{
+ "name": "m4-bail-from-450m",
+ "timeoutMin": 20,
+ "sessions": [{"role": "pilot", "account": "agentp10", "flags": "vehicles=on"}],
+ "steps": [
+  {"label": "pilot to Holtburg", "page": "pilot", "teleloc": "0xA9B40019 84 7.1 94", "afterTeleportMs": 12000},
+  {"label": "clean slate", "page": "pilot", "chat": ["@vehicle despawn all"], "sleepMs": 1000},
+  {"label": "spawn", "page": "pilot", "eval": "vehicle-spawn.eval.js"},
+  {"label": "climb to the 450 m ceiling and bail", "page": "pilot", "eval": "vehicle-bail.eval.js", "climbAgl": 449, "maxSec": 240},
+  {"label": "costs", "page": "pilot", "chat": ["@vehicles"], "sleepMs": 1000}
+ ]
+}

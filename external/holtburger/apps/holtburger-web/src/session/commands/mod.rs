@@ -15,11 +15,13 @@ mod inventory;
 mod lifecycle;
 mod movement;
 mod social;
+mod vehicle;
 
 /// Handle one JS-side command. `LoopFlow::Exit` = the loop must return
 /// (a send failed and `CLIENT_EVENT_KIND_DISCONNECTED` was queued).
 pub(crate) async fn handle_command(ctx: &mut LoopCtx, cmd: SessionCommand) -> LoopFlow {
     match cmd {
+        c @ SessionCommand::VehicleSend { .. } => vehicle::handle(ctx, c).await,
         c @ (SessionCommand::PopulateTerrain { .. }
         | SessionCommand::RecallAllegianceHometown { .. }
         | SessionCommand::TeleToLifestone { .. }

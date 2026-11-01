@@ -2943,6 +2943,12 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
       }
       try {
         tickPerFrame(liveScene3dRef, liveScene3dRef.sessionHandle, dt);
+        // Vehicles (2026-11-01, ?vehicles=on, DEFAULT OFF): `vehicles` is only
+        // ever set by installVehicles (scene3d/vehicle/index.js), so with the
+        // flag off this is one property read and no call. It runs AFTER the
+        // entity tick so the predicted vehicle / pilot transforms it writes
+        // are the last word before render.
+        liveScene3dRef.vehicles?.afterTick?.(ts, dt);
       } catch (e) {
         // eslint-disable-next-line no-console
         console.warn("[scene3d.loop] tickPerFrame threw:", e);
@@ -3483,6 +3489,12 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
       }
       try {
         tickPerFrame(liveScene3dRef, liveScene3dRef.sessionHandle, dt);
+        // Vehicles (2026-11-01, ?vehicles=on, DEFAULT OFF): `vehicles` is only
+        // ever set by installVehicles (scene3d/vehicle/index.js), so with the
+        // flag off this is one property read and no call. It runs AFTER the
+        // entity tick so the predicted vehicle / pilot transforms it writes
+        // are the last word before render.
+        liveScene3dRef.vehicles?.afterTick?.(now, dt);
       } catch (e) {
         // eslint-disable-next-line no-console
         if (!liveScene3dRef._netDrainTickWarned) {
@@ -4927,6 +4939,17 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
         },
       }))
       .catch((err) => console.warn("[film] failed to load:", err));
+  }
+  // ── Vehicles (2026-11-01, ?vehicles=on, DEFAULT OFF) ───────────────────
+  // holtburger vehicles (docs/vehicles-2026-11-01/DESIGN.md): an exact-match
+  // opt-in, reached ONLY through this dynamic import, so the boot graph is
+  // unchanged and a session without the flag never announces the vehicle
+  // capability (the server then never sends it a vehicle message). Installs
+  // `window.__vehicles` and `liveScene3d.vehicles.afterTick`.
+  if (new URLSearchParams(window.location.search).get("vehicles") === "on") {
+    import("./vehicle/index.js")
+      .then((m) => m.installVehicles({ liveScene3d, THREE, window }))
+      .catch((err) => console.warn("[vehicles] failed to load:", err));
   }
   // ── Terrain-VFX spine (Wave 0B, plan §2.2) ────────────────────────────
   // Constructed HERE, immediately after `window.liveScene3d` is set, because

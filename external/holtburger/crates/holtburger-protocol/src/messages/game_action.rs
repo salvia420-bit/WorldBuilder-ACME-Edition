@@ -157,6 +157,10 @@ pub enum GameAction {
     /// (0x0311) — the barber page's Apply. Body = the 16 u32 of
     /// `GameEventStartBarber` (`FinishBarberActionData`).
     FinishBarber(Box<FinishBarberActionData>),
+    /// HBV1 vehicles (0x0900 / 0x0902 / 0x0903 / 0x0905): one variant for the whole
+    /// block; the inner enum carries the opcode. A payload without the `HBV1` tag
+    /// unpacks as `Unknown` (dropped), never as an error.
+    Vehicle(Box<crate::messages::vehicle::VehicleC2S>),
     Unknown(u32, Vec<u8>),
 }
 
@@ -492,6 +496,23 @@ impl ProtocolUnpack for GameActionMessage {
                 GameActionOpcode::FinishBarber => GameAction::FinishBarber(Box::new(
                     FinishBarberActionData::unpack(data, offset)?,
                 )),
+                GameActionOpcode::VehicleClientCapabilities
+                | GameActionOpcode::VehicleBoard
+                | GameActionOpcode::VehicleExit
+                | GameActionOpcode::VehicleInput => {
+                    match crate::messages::vehicle::VehicleC2S::unpack_payload(
+                        action_type_raw,
+                        data,
+                        offset,
+                    ) {
+                        Some(v) => GameAction::Vehicle(Box::new(v)),
+                        None => {
+                            let remaining = data[*offset..].to_vec();
+                            *offset = data.len();
+                            GameAction::Unknown(action_type_raw, remaining)
+                        }
+                    }
+                }
             },
             None => {
                 let remaining = data[*offset..].to_vec();
@@ -1036,6 +1057,10 @@ impl ProtocolPack for GameActionMessage {
                 buf.write_u32::<LittleEndian>(GameActionOpcode::FinishBarber as u32)
                     .unwrap();
                 data.pack(buf);
+            }
+            GameAction::Vehicle(v) => {
+                buf.write_u32::<LittleEndian>(v.opcode()).unwrap();
+                v.pack_payload(buf);
             }
             GameAction::Unknown(opcode, data) => {
                 buf.write_u32::<LittleEndian>(*opcode).unwrap();

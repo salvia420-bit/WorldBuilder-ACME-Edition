@@ -1,0 +1,250 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  HBV1 — holtburger vehicles wire spec, v1 (2026-11-01).
+
+  THE single definition of the vehicle messages (DESIGN.md §5, §5.1 rule 1). Written in the style of Chorizite's
+  protocol.xml (external/chorizite/Chorizite.ACProtocol/Chorizite.ACProtocol/protocol.xml) so a Chorizite plugin can
+  generate its readers / writers from it later. Implementations, all checked against the same byte fixtures
+  (vehicle-wire-fixtures.json, produced from THIS file by gen_fixtures.py):
+    - ACE (C#):   ~/ace-server/Source/ACE.Server/Vehicles/VehicleWire.cs        (test: ACE.Server.Tests/Vehicles)
+    - Rust:       crates/holtburger-protocol/src/messages/vehicle/              (test: vehicle::tests)
+    - Python:     gen_fixtures.py (interprets this file; the fixture generator)
+
+  Framing (standard AC, unchanged): client -> server messages are game actions inside 0xF7B1
+  (u32 sequence, u32 action opcode, payload); server -> client messages are game events inside 0xF7B0
+  (u32 target guid, u32 event sequence, u32 event opcode, payload). Opcodes 0x0900-0x090F in both tables
+  (unused by ACE, Chorizite and holtburger as of 2026-11-01). All values little-endian.
+
+  Every payload starts with VehicleHeader: the 4-byte tag "HBV1" and the protocol version. A receiver drops a
+  payload whose tag is not "HBV1". A receiver that sees a HIGHER version parses the v1 fields it knows and
+  ignores trailing bytes (versions only ever append fields). Session gating (DESIGN §5): S2C vehicle events go
+  only to sessions whose ClientCapabilities granted the matching bit; C2S pilot actions from a session without
+  the pilot bit are ignored.
+
+  Units: metres, seconds, radians. Positions are AC cell + landblock-local coordinates. Angles: heading is a
+  COMPASS angle (0 = north/+y, pi/2 = east/+x, clockwise); pitch is nose-up positive; bank is right-wing-down
+  positive. Stick values are signed bytes scaled by 1/127 (-128 clamps to -1). Throttle is u8 scaled by 1/255.
+-->
+<schema text="holtburger vehicles (HBV1) — additive, capability-gated vehicle messages">
+  <enums>
+    <enum name="VehicleCapability" parent="uint" mask="true" text="ClientCapabilities.Flags / CapabilitiesAck.Granted">
+      <value value="0x00000001" name="Observe" text="receive VehicleProfile / VehicleSeat / VehicleState / VehicleFire / VehicleEvent" />
+      <value value="0x00000002" name="Pilot" text="may send VehicleBoard / VehicleInput / VehicleExit" />
+      <value value="0x00000004" name="DatPatch" text="has the vehicle DAT patch (tier 1): may be sent custom Setup DIDs" />
+    </enum>
+    <enum name="VehicleLocomotion" parent="uint">
+      <value value="1" name="Air" />
+      <value value="2" name="Ground" text="reserved (jeeps, later)" />
+    </enum>
+    <enum name="VehicleMode" parent="byte" text="VehicleState.Mode">
+      <value value="0" name="Parked" />
+      <value value="1" name="Takeoff" />
+      <value value="2" name="Flight" />
+      <value value="3" name="Landing" />
+      <value value="4" name="Crashed" />
+      <value value="5" name="Derelict" text="no pilot after a bail-out: autopilot glide and descent" />
+    </enum>
+    <enum name="VehicleStateFlags" parent="byte" mask="true">
+      <value value="0x01" name="PilotCopy" text="sent to the pilot: AckInputSeq is valid" />
+      <value value="0x02" name="InputSubstituted" text="the server repeated the last input for this step (the pilot's was late)" />
+      <value value="0x04" name="BackPressure" text="the server lowered VCap (preload behind)" />
+    </enum>
+    <enum name="VehicleButtons" parent="byte" mask="true" text="VehicleInputFrame.Buttons">
+      <value value="0x01" name="Boost" />
+      <value value="0x02" name="Fire" />
+      <value value="0x04" name="Land" text="held in Flight: slow to LandingSpeed, then Landing" />
+    </enum>
+    <enum name="VehicleSeatRole" parent="uint">
+      <value value="0" name="Pilot" />
+      <value value="1" name="Gunner" />
+    </enum>
+    <enum name="VehicleSeatState" parent="uint">
+      <value value="0" name="Empty" text="the seat emptied (exit, bail, logout)" />
+      <value value="1" name="Occupied" />
+      <value value="2" name="Refused" text="a VehicleBoard was refused; Reason says why" />
+    </enum>
+    <enum name="VehicleRefusal" parent="uint">
+      <value value="0" name="None" />
+      <value value="1" name="TooFar" />
+      <value value="2" name="SeatTaken" />
+      <value value="3" name="NotParked" />
+      <value value="4" name="Indoors" />
+      <value value="5" name="InCombatMode" />
+      <value value="6" name="NoCapability" />
+      <value value="7" name="Busy" text="teleporting, dead, already seated, ..." />
+      <value value="8" name="Disabled" text="the server's vehicles_enabled property is off" />
+    </enum>
+    <enum name="VehicleExitMode" parent="uint">
+      <value value="0" name="Exit" text="parked / on the ground only" />
+      <value value="1" name="Bail" text="any altitude at or above the floor: freefall + parachute" />
+      <value value="2" name="Chute" text="while falling after a bail-out: open the parachute now (else it opens at 150 m above the ground)" />
+    </enum>
+    <enum name="VehicleWeaponKind" parent="uint">
+      <value value="1" name="RepeatingCrossbow" />
+      <value value="2" name="Missile" text="reserved (later)" />
+    </enum>
+    <enum name="VehicleEventKind" parent="uint">
+      <value value="1" name="Takeoff" />
+      <value value="2" name="Landed" />
+      <value value="3" name="Crashed" text="Subject = pilot (0 if none); Cell/Pos = impact point" />
+      <value value="4" name="Despawn" />
+      <value value="5" name="Bail" text="Subject = the player who bailed; Cell/Pos = where" />
+      <value value="6" name="Chute" text="Subject = the falling player; the parachute opened" />
+      <value value="7" name="Touchdown" text="Subject = the player; back on foot; Value = vertical speed at contact" />
+      <value value="8" name="Hit" text="Subject = the creature hit by a bolt; Value = damage" />
+    </enum>
+  </enums>
+  <types>
+    <type name="sbyte" primitive="sbyte" />
+    <type name="short" primitive="short" />
+    <type name="VehicleHeader" text="Starts every HBV1 payload">
+      <field type="uint" name="Tag" text="0x31564248 = the bytes 'H' 'B' 'V' '1'" />
+      <field type="ushort" name="Version" text="1" />
+      <field type="ushort" name="Reserved" text="0 in v1" />
+    </type>
+    <type name="VehicleSeatDef">
+      <field type="VehicleSeatRole" name="Role" />
+      <field type="uint" name="Motion" text="retail MotionCommand the occupant shows to everyone (Sitting = 0x41000013)" />
+      <field type="Vector3" name="Offset" text="seat position in the vehicle frame (x right, y forward, z up)" />
+    </type>
+    <type name="VehicleWeaponDef">
+      <field type="VehicleWeaponKind" name="Kind" />
+      <field type="float" name="RoundsPerSecond" />
+      <field type="float" name="Spread" text="half-angle of the cone, radians" />
+      <field type="float" name="Range" />
+      <field type="float" name="Damage" text="per round" />
+      <field type="uint" name="Magazine" />
+      <field type="Vector3" name="Muzzle" text="muzzle position in the vehicle frame" />
+    </type>
+    <type name="VehiclePartDef" text="The vehicle's looks as data (DESIGN §5.1 rule 2): one retail Setup (0x02xxxxxx) or GfxObj (0x01xxxxxx) placed in the vehicle frame">
+      <field type="uint" name="Did" />
+      <field type="Vector3" name="Offset" />
+      <field type="Quaternion" name="Rotation" text="W, X, Y, Z" />
+      <field type="float" name="Scale" />
+    </type>
+    <type name="VehicleInputFrame" text="One 30 Hz step of pilot input (12 bytes)">
+      <field type="uint" name="Seq" text="the client's step index; the server consumes one per step in order" />
+      <field type="byte" name="Throttle" text="0..255 -> 0..1" />
+      <field type="sbyte" name="Pitch" text="-127..127 -> -1..1, nose up positive" />
+      <field type="sbyte" name="Roll" text="right positive" />
+      <field type="sbyte" name="Yaw" text="right positive (rudder)" />
+      <field type="VehicleButtons" name="Buttons" />
+      <field type="byte" name="Reserved0" />
+      <field type="byte" name="Reserved1" />
+      <field type="byte" name="Reserved2" />
+    </type>
+  </types>
+  <gameactions>
+    <type name="Vehicle_ClientCapabilities" queue="Weenie" type="0x0900" text="A capable client announces itself after entering the world (once per login)">
+      <field type="VehicleHeader" name="Header" />
+      <field type="VehicleCapability" name="Flags" />
+    </type>
+    <type name="Vehicle_Board" queue="Weenie" type="0x0902" text="Take a seat (pilot bit required)">
+      <field type="VehicleHeader" name="Header" />
+      <field type="ObjectId" name="Vehicle" />
+      <field type="uint" name="Seat" />
+    </type>
+    <type name="Vehicle_Exit" queue="Weenie" type="0x0903" text="Leave the seat: exit (parked) or bail (in the air)">
+      <field type="VehicleHeader" name="Header" />
+      <field type="ObjectId" name="Vehicle" />
+      <field type="VehicleExitMode" name="Mode" />
+    </type>
+    <type name="Vehicle_Input" queue="Weenie" type="0x0905" text="30 Hz while seated; newest frame first, then up to 2 previous frames (redundancy)">
+      <field type="VehicleHeader" name="Header" />
+      <field type="ObjectId" name="Vehicle" />
+      <field type="uint" name="Count" text="1..3" />
+      <vector name="Frames" length="Count" type="VehicleInputFrame" />
+    </type>
+  </gameactions>
+  <gameevents>
+    <type name="Vehicle_CapabilitiesAck" queue="UIQueue" type="0x0900" text="Answers ClientCapabilities">
+      <field type="VehicleHeader" name="Header" />
+      <field type="VehicleCapability" name="Granted" text="requested AND enabled on this server" />
+      <field type="ushort" name="SimHz" text="the server's vehicle step rate (30)" />
+      <field type="ushort" name="Reserved" />
+    </type>
+    <type name="Vehicle_Profile" queue="UIQueue" type="0x0901" text="The vehicle's type, sent once per vehicle per observing session (on first sight)">
+      <field type="VehicleHeader" name="Header" />
+      <field type="ObjectId" name="Vehicle" />
+      <field type="string" name="ProfileKey" text="e.g. hellcat-demo" />
+      <field type="string" name="DisplayName" />
+      <field type="VehicleLocomotion" name="Locomotion" />
+      <field type="uint" name="StandInSetup" text="the base-DAT Setup every retail client is sent in CreateObject" />
+      <field type="ushort" name="SimHz" />
+      <field type="ushort" name="Reserved" />
+      <field type="float" name="VMin" />
+      <field type="float" name="VCruise" />
+      <field type="float" name="VMax" />
+      <field type="float" name="SpeedCap" text="the server's current hard cap (69 m/s until M3)" />
+      <field type="float" name="Accel" />
+      <field type="float" name="Decel" />
+      <field type="float" name="MaxBank" />
+      <field type="float" name="RollRate" />
+      <field type="float" name="MaxPitch" />
+      <field type="float" name="PitchRate" />
+      <field type="float" name="YawRate" />
+      <field type="float" name="ClimbMax" />
+      <field type="float" name="SinkMax" />
+      <field type="float" name="FloorAgl" />
+      <field type="float" name="CeilingAgl" />
+      <field type="float" name="TakeoffClimb" />
+      <field type="float" name="LandingSpeed" />
+      <field type="float" name="LeadSeconds" text="client streaming: shift the load point forward by velocity x this" />
+      <field type="uint" name="ObjectRadius" text="client streaming: object radius in landblocks while seated" />
+      <field type="uint" name="SeatCount" />
+      <vector name="Seats" length="SeatCount" type="VehicleSeatDef" />
+      <field type="uint" name="WeaponCount" />
+      <vector name="Weapons" length="WeaponCount" type="VehicleWeaponDef" />
+      <field type="uint" name="PartCount" />
+      <vector name="Parts" length="PartCount" type="VehiclePartDef" />
+    </type>
+    <type name="Vehicle_Seat" queue="UIQueue" type="0x0904" text="A seat changed (or a board was refused)">
+      <field type="VehicleHeader" name="Header" />
+      <field type="ObjectId" name="Vehicle" />
+      <field type="uint" name="Seat" />
+      <field type="ObjectId" name="Occupant" text="0 when empty" />
+      <field type="VehicleSeatState" name="State" />
+      <field type="VehicleRefusal" name="Reason" />
+    </type>
+    <type name="Vehicle_State" queue="UIQueue" type="0x0906" text="Authoritative vehicle state: 20 Hz to the pilot, 10 Hz to other observers in sight">
+      <field type="VehicleHeader" name="Header" />
+      <field type="ObjectId" name="Vehicle" />
+      <field type="uint" name="Step" text="the vehicle's server step counter" />
+      <field type="uint" name="AckInputSeq" text="the last pilot input consumed (pilot copy only; 0 otherwise)" />
+      <field type="LandcellId" name="Cell" />
+      <field type="Vector3" name="Position" text="landblock-local" />
+      <field type="float" name="Heading" />
+      <field type="float" name="Pitch" />
+      <field type="float" name="Bank" />
+      <field type="float" name="Speed" />
+      <field type="float" name="VCap" text="speed cap in force for this step (profile cap, lowered by back-pressure)" />
+      <field type="ushort" name="Ammo" text="rounds left in mount 0" />
+      <field type="VehicleMode" name="Mode" />
+      <field type="VehicleStateFlags" name="Flags" />
+    </type>
+    <type name="Vehicle_Fire" queue="UIQueue" type="0x0907" text="Rounds fired this step (tracers); hits arrive through the standard damage messages">
+      <field type="VehicleHeader" name="Header" />
+      <field type="ObjectId" name="Vehicle" />
+      <field type="uint" name="Step" />
+      <field type="ushort" name="Mount" />
+      <field type="ushort" name="Count" />
+      <field type="LandcellId" name="Cell" />
+      <field type="Vector3" name="Muzzle" text="landblock-local" />
+      <field type="short" name="DirX" text="unit direction x 32767" />
+      <field type="short" name="DirY" />
+      <field type="short" name="DirZ" />
+      <field type="ushort" name="Reserved" />
+      <field type="uint" name="Seed" text="spread RNG seed of this burst" />
+    </type>
+    <type name="Vehicle_Event" queue="UIQueue" type="0x0908" text="Discrete vehicle events">
+      <field type="VehicleHeader" name="Header" />
+      <field type="ObjectId" name="Vehicle" />
+      <field type="VehicleEventKind" name="Kind" />
+      <field type="uint" name="Step" />
+      <field type="ObjectId" name="Subject" />
+      <field type="LandcellId" name="Cell" />
+      <field type="Vector3" name="Position" text="landblock-local" />
+      <field type="float" name="Value" />
+    </type>
+  </gameevents>
+</schema>

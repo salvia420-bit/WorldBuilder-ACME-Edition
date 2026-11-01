@@ -1,0 +1,17 @@
+{
+ "name": "m2-kill-from-the-air",
+ "timeoutMin": 30,
+ "sessions": [
+  {"role": "pilot", "account": "agentp10", "flags": "vehicles=on"},
+  {"role": "observer", "account": "agentp09", "flags": "wireframe=1", "minMeshes": 20}
+ ],
+ "steps": [
+  {"label": "pilot to Holtburg", "page": "pilot", "teleloc": "0xA9B40019 84 7.1 94", "afterTeleportMs": 12000},
+  {"label": "clean slate", "page": "pilot", "chat": ["@vehicle despawn all"], "sleepMs": 1000},
+  {"label": "spawn the vehicle", "page": "pilot", "eval": "vehicle-spawn.eval.js"},
+  {"label": "put a Drudge Skulker 400 m south", "page": "pilot", "eval": "vehicle-m2-setup.eval.js", "wcid": 7, "offset": [0, -400]},
+  {"label": "observer next to the drudge", "page": "observer", "eval": "vehicle-m2-observer.eval.js", "phase": "position"},
+  {"label": "strafe it", "page": "pilot", "eval": "vehicle-strafe.eval.js", "outM": 450, "maxPasses": 6, "maxSec": 420},
+  {"label": "observer saw it die", "page": "observer", "eval": "vehicle-m2-observer.eval.js", "phase": "verify", "sleepMs": 3000}
+ ]
+}

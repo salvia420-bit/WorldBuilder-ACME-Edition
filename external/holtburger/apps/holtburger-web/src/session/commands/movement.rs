@@ -1397,7 +1397,24 @@ pub(super) async fn handle(ctx: &mut LoopCtx, cmd: SessionCommand) -> LoopFlow {
             // byte-identical to pre-M2.
             let mut spine_despawned: Vec<holtburger_common::Guid> =
                 Vec::new();
-            let tick_result: anyhow::Result<()> = if unified_tick_on {
+            // holtburger vehicles (HBV1): while seated the local body rides the
+            // predicted seat pose the JS vehicle module sets each frame — no
+            // local physics, so no AutonomousPosition / MoveToState is built
+            // (vehicle_link.rs). Everything else in this arm runs as usual.
+            let vehicle_seat = crate::vehicle_link::seat_pose();
+            let tick_result: anyhow::Result<()> = if let Some(seat) = vehicle_seat {
+                let pose = holtburger_common::position::WorldPosition {
+                    landblock_id: holtburger_common::Guid(seat.cell),
+                    coords: holtburger_common::math::Vector3::new(seat.x, seat.y, seat.z),
+                    rotation: crate::vehicle_link::heading_quat(seat.heading),
+                };
+                let _ = w.set_player_position_with_sync(
+                    pose,
+                    holtburger_world::AuthoritativeBodySync::Snapshot,
+                );
+                crate::vehicle_link::note_seat_tick();
+                Ok(())
+            } else if unified_tick_on {
                 tick_spine
                     .tick_frame(now, w, &mut *movement, &mut *session)
                     .await

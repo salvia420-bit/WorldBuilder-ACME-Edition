@@ -1,0 +1,59 @@
+{
+ "name": "m3-400kmh-out-and-back",
+ "timeoutMin": 25,
+ "sessions": [
+  {
+   "role": "pilot",
+   "account": "agentp10",
+   "flags": "vehicles=on&pvsRingRadius=3&objRadius=2"
+  }
+ ],
+ "steps": [
+  {
+   "label": "pilot to Holtburg",
+   "page": "pilot",
+   "teleloc": "0xA9B40019 84 7.1 94",
+   "afterTeleportMs": 12000
+  },
+  {
+   "label": "clean slate",
+   "page": "pilot",
+   "chat": [
+    "@vehicle despawn all"
+   ],
+   "sleepMs": 1000
+  },
+  {
+   "label": "spawn",
+   "page": "pilot",
+   "eval": "vehicle-spawn.eval.js"
+  },
+  {
+   "label": "fly 5 km out and 5 km back at 400 km/h (revisits)",
+   "page": "pilot",
+   "eval": "vehicle-flight.eval.js",
+   "route": [
+    {
+     "heading": 111,
+     "metres": 5000
+    },
+    {
+     "heading": 291,
+     "metres": 5000
+    }
+   ],
+   "agl": 100,
+   "throttle": 1,
+   "boost": true,
+   "maxSec": 360
+  },
+  {
+   "label": "costs",
+   "page": "pilot",
+   "chat": [
+    "@vehicles"
+   ],
+   "sleepMs": 1000
+  }
+ ]
+}

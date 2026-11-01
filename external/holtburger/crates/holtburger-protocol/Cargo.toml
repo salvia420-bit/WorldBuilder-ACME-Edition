@@ -29,3 +29,5 @@ encoding_rs.workspace = true
 roxmltree = "0.20"
 
 [dev-dependencies]
+# HBV1 vehicle fixture tests (src/messages/vehicle/tests.rs) read the shared JSON fixtures.
+serde_json.workspace = true
