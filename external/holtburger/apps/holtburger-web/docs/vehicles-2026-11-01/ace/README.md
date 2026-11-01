@@ -9,8 +9,9 @@ revision, because they share the HBV1 wire format, its byte fixtures and the fli
 |---|---|
 | `0001-ACE.Database-points-of-interest-cache-…` | A small local change the live server already ran before the vehicles work (`@telepoi` name trimming, no cached misses). Not vehicle-related. |
 | `0002-Vehicles-holtburger-fork-…` | The vehicles server: HBV1 messages + capability handshake, `VehicleManager` (flight model, board / exit / bail-out, gun, derelicts, retail chat), fast-flight streaming, diagnostics, `ACE.Server.Tests/Vehicles`. 45 files with 0001, +5,270 lines. |
+| `0003-Vehicles-holtburger-fork-1070-fixes-…` | Session 2 (2026-11-01 evening): the seat and gun muzzle in the stand-in balloon's basket; the M3 world-loop residual — bring-up / load-origin / single-threaded diagnostics, vehicle-only marking on the physics / heartbeat / relocation load paths, link children's weenies prefetched, physics GfxObjs warmed off-thread, GC-first stall classification. 7 files. |
 
-On this laptop the same two commits are on the local branch `vehicles-2026-11-01` of `~/ace-server` (its `origin` is
+On this laptop the same commits are on the local branch `vehicles-2026-11-01` of `~/ace-server` (its `origin` is
 upstream ACE, so they are not pushed anywhere else).
 
 ## Apply
@@ -22,7 +23,7 @@ git checkout -b vehicles-2026-11-01 a8ff29f
 git am /path/to/WorldBuilder-ACME-Edition/external/holtburger/apps/holtburger-web/docs/vehicles-2026-11-01/ace/*.patch
 ```
 
-Verified 2026-11-01: both patches apply to `a8ff29f` and reproduce the branch tree exactly.
+Verified 2026-11-01 (again after 0003): the patches apply to `a8ff29f` and reproduce the branch tree exactly.
 
 ## Build, deploy, enable
 

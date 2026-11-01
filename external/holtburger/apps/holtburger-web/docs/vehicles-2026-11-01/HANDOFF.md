@@ -141,3 +141,81 @@ All bench runs: headless Chromium (SwiftShader) on the laptop, `?nullRender=1&hu
   at 5.0 m/s, the derelict crashed and despawned; 0 `MOVEMENT SPEED`; no landblock / vehicle stalls while flying, only six
   GC pauses of 55–100 ms (no headless browser on the laptop — the benches' 300–790 ms pauses were memory pressure); one
   935 ms landblock tick at login, before any flight (ACE loading the arrival area). The 1070 eye test is still to do.
+
+## 2026-11-01 evening — the first 1070 look, and the M3 residual (session 2)
+
+**The 1070 (owner-directed, MODE T: off-screen, muted test Chrome via the box's hidden hbprobe task; gate override
+written for the session).** `bench/vehicle-1070.mjs` = the eye-test tour (Holtburg → spawn → board → 300 km/h cruise, a
+banked turn, cockpit, guns, 400 km/h, land, exit → climb to 450 m, bail, chute, touchdown), recording a CDP screencast
+(→ `bench/frames_to_mp4.py`) and stills; `bench/vehicle-1070-probe.mjs` = a short probe of the stand-in / pilot rig
+state. Pictures and video go to the owner's phone with Taildrop (`tailscale file cp … redmi-note-13-5g:`). Runs:
+`/mnt/wbterminal1/tmp/claude-scratch/vehicles/1070-tour-{a,b,c}/`, `1070-probe-{a,b}/`.
+- Tour A (before the fixes, server warm): flight 7.7 km, **0 corrections at RTT 83 ms** (the 1070 → SSH tunnel →
+  wsbridge path), first sight 82 % ahead / 79 % ≥ 1 s; bail from 450 m, chute at 140 m, 5 m/s, unhurt, derelict gone.
+  Found: the balloon vanished ~30 s into the flight (decision 40), the cockpit view was the pilot's hair (41), the pilot
+  sat ~5 m below the balloon's basket (39); the stand-in is a drudge-faced hot-air balloon, not a basket vehicle.
+- Tour B (seat / reaper / chase-aim fixes, server cold): the balloon stays through 400 km/h, 2 corrections (0.06 m);
+  a network stall on the laptop's Wi-Fi path cost 46 substituted inputs (ack lag 62 steps at the end, first sight 60 %
+  ahead) — no vehicle-caused server stall (3 GC + one vanilla decorative-corpse loot roll, 334 ms, in an ordinary
+  landblock while parked).
+- Probe B: in the basket the seated pilot is hidden by the basket wall from behind (present, visible, exactly at seat);
+  cockpit hides pilot + balloon; the stand-in's first rig build stayed in flight 16-20 s after `@vehicle spawn`.
+- Tour C (+ hop, canopy, cockpit hides, server warm-ups; server cold): flight 2 corrections (0.04 m), ack lag 1, RTT
+  37 ms, first sight **91 % ahead / 87 % ≥ 1 s (median 2.35 s)**; the boarding hop carries the pilot from the ground
+  into the basket; cockpit = clean first-person view from the basket. Found: the fall was filmed from the ground (the
+  follow camera never followed the falling body, decision 49 — also in tour A); the far_terrain "RADIUS POLICY
+  VIOLATION" console error fires at the cockpit switch (tours A and C) — open; the stand-in rig built 19.2 s after the
+  spawn — open.
+- Tour D (+ fall camera, muzzle in the basket, GC-first stall classification; server cold): flight **0 corrections** at
+  RTT 62 ms, first sight 87 % ahead / 83 % ≥ 1 s; bail clean; the fall camera follows the body and the canopy draws —
+  but the avatar was invisible under it (decision 52, fixed; probe C confirms).
+- Probe C (`--bail --flags spawnTrace=1`): the rig visible through the fall; the slow stand-in appearance is the
+  client's general spawn backlog after login (decision 53).
+- Trees + cloud halo (Opus 5.5 agent, report relayed to the owner): two opt-in fixes, `?objRefire=on` (dropped statics
+  bakes re-fired every 250 ms, ahead of travel first — the grid only re-fired a live tile on a crossing; simulation:
+  58 → 94 % of the window's trees baked in flight) and `?cloudEdgeResolve=on` (a depth-aware temporal resolve at
+  object silhouettes — takram's documented disocclusion artifact at the 4x4 cloud upscale; synthetic test: edge error
+  -73 %). Also by design: trees exist only within `objRadius` landblocks; and the vehicle's load-point lead
+  (`onPositionUpdate`) moves the bake priority centre and fires `landblockChanged` twice per lead change — the agent
+  recommends a dedicated residency hint instead (open).
+- **1070 verification of the two agent flags:** tours E (`objRefire=on&cloudEdgeResolve=on`) / F (baseline), same route:
+  statics baked in the 7x7 object window during flight **0.96 (E) vs 0.63 (F)** (cruise 0.97 / 0.63, 400 km/h 0.94 /
+  0.63; 35-36 samples each); cloudEdgeResolve installed, 5,660 passes, no shader error. Halo: `bench/vehicle-1070-probe.mjs
+  --halo2` (the parked balloon from below against clouds, free camera orbiting, `?skytime=12`, the resolve toggled live
+  in the same session): OFF = the gridded / dotted fringe around the balloon and roof lines, ON = clean edges
+  (`/mnt/wbterminal1/tmp/claude-scratch/vehicles/1070-probe-halo2/pair-{0..3}.png`). **Owner flipped both DEFAULT ON (2026-11-01
+  evening)**; `?objRefire=off` / `?cloudEdgeResolve=off` escape (fps cost unmeasured: the off-screen tab is capped at 30).
+- **m3-z (laptop bench, plan-m3, server with all of decisions 45-48):** 12.9 km at 399.6 km/h, 2 corrections (0.02 m);
+  world ticks over 50 ms 15 = gc 10 / other 4 / vehicle 1 (m3-x 20 = gc 8 / other 12; m3-y 15 = gc 7 / other 8). The
+  non-GC rest: Necromancer / Royal Guard first InitPhysicsObj 48 / 67 ms (was 73 / 106: their landblock's instances were
+  added before the serialized spawn warm-up reached them — the warm-up gates generators, not instance additions); the
+  pilot's CreateObject of the Mansion House 0x7BCAD044 60 ms (the one "vehicle" stall; the same object was the worst
+  CreateObject in m3-x / m3-y: 18 / 23 ms); two unattributed 62 ms ticks (Sessions; one landblock tick). Physics warm-up:
+  1,046 GfxObjs built off-thread in 326 ms total. 0 ordinary landblock loads outside the vehicle loader.
+
+**Open after session 2:** the Mansion House CreateObject cost (60 ms worst); instance additions racing the spawn
+warm-up (an instance-first physics pass, or gate instance creatures on it); the far_terrain RADIUS POLICY VIOLATION at
+the cockpit switch; the client's spawn backlog after login (decision 53); the vehicle's load-point lead via
+`onPositionUpdate` (agent: use a residency hint); thicker tracers; the owner's calls on the stand-in (keep the balloon?),
+the seat, the two agent flags' default, and EYETEST's questions. Committed (owner, 2026-11-01 evening): the client half
+pushed to origin/master; the server half = `~/ace-server` commit 0003 on `vehicles-2026-11-01` (local), exported as
+`ace/0003-…patch` (the three patches re-verified to reproduce the branch tree on `a8ff29f`).
+- Owner feedback during the session: few trees while flying; artifacts (a speckled halo) around the balloon against
+  clouds → an Opus 5.5 agent investigates both (scope: outside scene3d/vehicle and ACE).
+
+**1070 power (owner, 2026-11-01 ~20:00):** the display turns off after 10 min idle (`powercfg /change
+monitor-timeout-ac 10` and `-dc 10`; was never); sleep / hibernate stay NEVER (a sleeping box drops SSH, the tunnel and
+test Chrome). Test drivers hold `navigator.wakeLock.request("screen")` for their run (vehicle-1070*.mjs now, hbsess.mjs
+already) so a dark display never throttles a test tab; the lock ends when the page leaves. Revert: `powercfg /change
+monitor-timeout-ac 0`.
+
+**M3 residual (server).** Instrumentation + three fixes (decisions 45-48): vehicle-only marking on the physics /
+heartbeat / relocation load paths; link children's weenies fetched on CreateWorldObjects' background task; physics
+GfxObjs warmed off-thread with the spawn caches. m3-y (instrumentation + marking): stalls > 50 ms 15 (gc 7 / other 8)
+vs m3-x 20 (gc 8 / other 12); the remaining "other" = house links (fixed since), cold model physics (fixed since), one
+40 ms creature heartbeat, one unexplained 89 ms tick.
+
+**Live ACE restarts (session 2):** 16:47 (instrumentation build), 18:43 (seat + link prefetch + physics warm-up),
+18:59 (muzzle + stall classification).
+Rollback of the session-1 final build: `/mnt/wbterminal2/ace-rollback/net10.0-vehicles-20261101-0457/`. All ACE
+changes are uncommitted in `~/ace-server` (branch `vehicles-2026-11-01`).

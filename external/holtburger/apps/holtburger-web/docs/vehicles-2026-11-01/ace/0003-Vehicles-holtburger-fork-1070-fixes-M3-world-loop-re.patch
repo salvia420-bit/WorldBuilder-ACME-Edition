@@ -1,0 +1,657 @@
+From 6d8b0a5d87a9cd97c11c5f09f2061e88a8c078e1 Mon Sep 17 00:00:00 2001
+From: salvia420-bit <salvia420@gmail.com>
+Date: Sun, 1 Nov 2026 19:52:42 -0330
+Subject: [PATCH 3/3] Vehicles (holtburger fork): 1070 fixes + M3 world-loop
+ residual
+
+Found on the first real-GPU look at the Hellcat demo (2026-11-01):
+- Seat in the stand-in balloon's basket (0, 0, 5.75): Setup 0x020016F1 draws its
+  balloon from 19 m up, so at the 0.3 scale the old (0, -0.5, 0.6) seated the
+  pilot ~5 m below the basket, for retail observers too. Gun muzzle moved to
+  the basket (0, 0.8, 6.0).
+
+M3 residual (whole world loop while vehicles exist):
+- Diagnostics: bring-up items over 30 ms split by cause ([HEAVYADD]: GC pause,
+  indoor cells, link weenie fetch / construct / SetLinkProperties, physics init /
+  placement / notify, who loaded the landblock), landblock loads outside the
+  vehicle loader by origin ([LOAD]), per-landblock single-threaded work and its
+  worst heartbeat ([LBSINGLE]), lazy indoor-cell builds outside items ([CELLS]).
+- Landblocks loaded by a vehicle-only landblock's physics step, heartbeat or
+  object relocation are vehicle-only too (they were ordinary: no budget, no
+  spawn warm-up, cold generator camps).
+- Link children's weenies (a house's hooks / slumlord / storage) fetched on
+  CreateWorldObjects' background task (vehicle_landblock_budget): a cottage's
+  53 links 62 ms -> ~1 ms on the landblock tick.
+- The spawn warm-up builds each weenie's Setup parts into the permanent
+  GfxObjCache off-thread (first InitPhysicsObj of a model: 45-106 ms).
+- Stall classification tests GC before the vehicle phase.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ Source/ACE.Server/Entity/Landblock.cs         |  93 +++++++--
+ .../ACE.Server/Managers/LandblockManager.cs   |  46 ++++-
+ Source/ACE.Server/Physics/Common/LScape.cs    |  16 +-
+ Source/ACE.Server/Vehicles/VehicleProfile.cs  |   9 +-
+ .../ACE.Server/Vehicles/VehicleStreaming.cs   |  44 ++++-
+ .../ACE.Server/Vehicles/WorldTickMonitor.cs   | 185 +++++++++++++++++-
+ .../WorldObjects/WorldObject_Links.cs         |   7 +-
+ 7 files changed, 362 insertions(+), 38 deletions(-)
+
+diff --git a/Source/ACE.Server/Entity/Landblock.cs b/Source/ACE.Server/Entity/Landblock.cs
+index 9aa76fd..2067ea4 100644
+--- a/Source/ACE.Server/Entity/Landblock.cs
++++ b/Source/ACE.Server/Entity/Landblock.cs
+@@ -78,6 +78,11 @@ public class Landblock : IActor
+         /// generators wait; VehicleStreaming.WarmSpawnsAsync).</summary>
+         public volatile bool SpawnWarmupPending;
+ 
++        /// <summary>holtburger vehicles fork (diagnostics): who loaded this landblock while vehicles existed, and whether
++        /// its indoor cells were built off-thread before it was published (VehicleStreaming.PrewarmCells).</summary>
++        public string LoadOrigin;
++        public bool CellsPrewarmed;
++
+         /// <summary>
+         /// This must be true before a player enters a landblock.
+         /// This prevents a player from possibly pasing through a door that hasn't spawned in yet, and other scenarios.
+@@ -224,6 +229,14 @@ private void CreateWorldObjects()
+             var objects = DatabaseManager.World.GetCachedInstancesByLandblock(Id.Landblock);
+             var shardObjects = DatabaseManager.Shard.BaseDatabase.GetStaticObjectsByLandblock(Id.Landblock);
+             var factoryObjects = WorldObjectFactory.CreateNewWorldObjects(objects, shardObjects);
++            // holtburger vehicles fork (vehicle_landblock_budget): the factory above skips link children (a house's hooks,
++            // slumlord, storage; a generator's linked spawns) — ActivateLinks fetches their weenies later on the landblock
++            // tick, cold (1070 tour m3-y: a cottage's 53 links 62 ms, a mansion's 27 links 82 ms). Fetch them here, on
++            // this background task, before the adds are queued.
++            if (Vehicles.VehicleStreaming.LandblockBudget)
++                foreach (var inst in objects)
++                    if (inst.IsLinkChild)
++                        DatabaseManager.World.GetCachedWeenie(inst.WeenieClassId);
+ 
+             actionQueue.EnqueueAction(new ActionEventDelegate(() => AddCreatedWorldObjects(factoryObjects, objects, shardObjects, new List<House>(), 0)));
+         }
+@@ -247,6 +260,8 @@ private void AddCreatedWorldObjects(List<WorldObject> factoryObjects, List<ACE.D
+                         return;
+                     }
+                     var tb = budgeted ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
++                    if (budgeted)
++                        Vehicles.WorldTickMonitor.BeginItem();
+                     var fo = factoryObjects[i];
+                     WorldObject parent = null;
+                     if (fo.WeenieType == WeenieType.House)
+@@ -331,6 +346,8 @@ private void SpawnEncounters()
+                         return;
+                     }
+                     var tb = System.Diagnostics.Stopwatch.GetTimestamp();
++                    if (budgeted)
++                        Vehicles.WorldTickMonitor.BeginItem();
+                     PlaceEncounter(wo, encounter);
+                     if (budgeted)
+                     {
+@@ -471,13 +488,26 @@ public void TickPhysics(double portalYearTicks, ConcurrentBag<WorldObject> moved
+ 
+             ProcessPendingWorldObjectAdditionsAndRemovals();
+ 
+-            foreach (WorldObject wo in worldObjects.Values)
++            try
+             {
+-                // set to TRUE if object changes landblock
+-                var landblockUpdate = wo.UpdateObjectPhysics();
++                foreach (WorldObject wo in worldObjects.Values)
++                {
++                    // holtburger vehicles fork: a landblock an object's physics step loads here (a cell across the border)
++                    // is vehicle-caused when this one is vehicle-only — unless the mover is a player on foot (decision 35)
++                    TickingVehicleOnly = VehicleOnly && !(wo is Player);
++                    TickingObject = wo;
+ 
+-                if (landblockUpdate)
+-                    movedObjects.Add(wo);
++                    // set to TRUE if object changes landblock
++                    var landblockUpdate = wo.UpdateObjectPhysics();
++
++                    if (landblockUpdate)
++                        movedObjects.Add(wo);
++                }
++            }
++            finally
++            {
++                TickingVehicleOnly = false;
++                TickingObject = null;
+             }
+ 
+             Monitor5m.Pause();
+@@ -726,6 +756,10 @@ private void RestoreDeferredGenerators()
+         /// — an edge object touching an unloaded neighbour — is vehicle-caused as well).</summary>
+         [ThreadStatic] public static bool TickingVehicleOnly;
+ 
++        /// <summary>holtburger vehicles fork (diagnostics): the object whose physics step / heartbeat / relocation this
++        /// thread is running (names the cause of a landblock load in the [LOAD] log).</summary>
++        [ThreadStatic] public static WorldObject TickingObject;
++
+         /// <summary>holtburger vehicles fork: multi-threaded ticks since this landblock loaded (the world-tick monitor).</summary>
+         public int VehicleTicks;
+         public int WorldObjectCount => worldObjects.Count;
+@@ -749,29 +783,54 @@ public void TickSingleThreadedWork(double currentUnixTime)
+ 
+             ProcessPendingWorldObjectAdditionsAndRemovals();
+ 
++            var vsT0 = System.Diagnostics.Stopwatch.GetTimestamp(); // holtburger vehicles fork: single-threaded split (diagnostic)
+             stopwatch.Restart();
+             foreach (var player in players)
+                 player.Player_Tick(currentUnixTime);
+             ServerPerformanceMonitor.AddToCumulativeEvent(ServerPerformanceMonitor.CumulativeEventHistoryType.Landblock_Tick_Player_Tick, stopwatch.Elapsed.TotalSeconds);
++            var vsT1 = System.Diagnostics.Stopwatch.GetTimestamp();
++            WorldObject vsWorst = null;
++            long vsWorstTicks = 0;
++            var vsTiming = Vehicles.WorldTickMonitor.Active;
+ 
+             stopwatch.Restart();
+-            while (sortedWorldObjectsByNextHeartbeat.Count > 0) // Heartbeat()
++            try
+             {
+-                var first = sortedWorldObjectsByNextHeartbeat.First.Value;
+-
+-                // If they wanted to run before or at now
+-                if (first.NextHeartbeatTime <= currentUnixTime)
+-                {
+-                    sortedWorldObjectsByNextHeartbeat.RemoveFirst();
+-                    first.Heartbeat(currentUnixTime);
+-                    InsertWorldObjectIntoSortedHeartbeatList(first); // WorldObjects can have heartbeats at different intervals
+-                }
+-                else
++                while (sortedWorldObjectsByNextHeartbeat.Count > 0) // Heartbeat()
+                 {
+-                    break;
++                    var first = sortedWorldObjectsByNextHeartbeat.First.Value;
++
++                    // If they wanted to run before or at now
++                    if (first.NextHeartbeatTime <= currentUnixTime)
++                    {
++                        sortedWorldObjectsByNextHeartbeat.RemoveFirst();
++                        // holtburger vehicles fork: what a heartbeat here loads (a generator spawning across the border) is
++                        // vehicle-caused in a vehicle-only landblock, unless it is a player on foot's (decision 35)
++                        TickingVehicleOnly = VehicleOnly && !(first is Player);
++                        TickingObject = first;
++                        var vsH0 = vsTiming ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
++                        first.Heartbeat(currentUnixTime);
++                        if (vsTiming)
++                        {
++                            var spent = System.Diagnostics.Stopwatch.GetTimestamp() - vsH0;
++                            if (spent > vsWorstTicks) { vsWorstTicks = spent; vsWorst = first; }
++                        }
++                        InsertWorldObjectIntoSortedHeartbeatList(first); // WorldObjects can have heartbeats at different intervals
++                    }
++                    else
++                    {
++                        break;
++                    }
+                 }
+             }
++            finally
++            {
++                TickingVehicleOnly = false;
++                TickingObject = null;
++            }
+             ServerPerformanceMonitor.AddToCumulativeEvent(ServerPerformanceMonitor.CumulativeEventHistoryType.Landblock_Tick_WorldObject_Heartbeat, stopwatch.Elapsed.TotalSeconds);
++            if (vsTiming)
++                Vehicles.WorldTickMonitor.NoteSingleThreaded(this, vsT0, vsT1, System.Diagnostics.Stopwatch.GetTimestamp(), vsWorst, vsWorstTicks);
+ 
+             Monitor5m.RegisterEventEnd();
+             Monitor1h.RegisterEventEnd();
+diff --git a/Source/ACE.Server/Managers/LandblockManager.cs b/Source/ACE.Server/Managers/LandblockManager.cs
+index 7ac914c..f1482ed 100644
+--- a/Source/ACE.Server/Managers/LandblockManager.cs
++++ b/Source/ACE.Server/Managers/LandblockManager.cs
+@@ -360,14 +360,28 @@ private static void TickPhysics(double portalYearTicks)
+             }
+ 
+             // iterate through objects that have changed landblocks
+-            foreach (var movedObject in movedObjects)
++            try
+             {
+-                // NOTE: The object's Location can now be null, if a player logs out, or an item is picked up
+-                if (movedObject.Location == null)
+-                    continue;
+-
+-                // assume adjacency move here?
+-                RelocateObjectForPhysics(movedObject, true);
++                foreach (var movedObject in movedObjects)
++                {
++                    // NOTE: The object's Location can now be null, if a player logs out, or an item is picked up
++                    if (movedObject.Location == null)
++                        continue;
++
++                    // holtburger vehicles fork: the relocation loads the new landblock WITH its 3x3 for any mover — from a
++                    // vehicle-only landblock (a monster wandering out of the corridor's edge) those loads are vehicle-caused
++                    // too (decision 35), unless the mover is a player on foot
++                    Landblock.TickingVehicleOnly = !(movedObject is Player) && movedObject.CurrentLandblock?.VehicleOnly == true;
++                    Landblock.TickingObject = movedObject;
++
++                    // assume adjacency move here?
++                    RelocateObjectForPhysics(movedObject, true);
++                }
++            }
++            finally
++            {
++                Landblock.TickingVehicleOnly = false;
++                Landblock.TickingObject = null;
+             }
+         }
+ 
+@@ -582,6 +596,20 @@ static void NoteLockWait(long t0, string what, uint id)
+ 
+         static readonly object lockStats = new object();
+ 
++        /// <summary>holtburger vehicles fork (diagnostics, while vehicles exist): who is loading a landblock now.</summary>
++        static string DescribeLoadOrigin()
++        {
++            if (IsVehicleLoaderThread)
++                return "the vehicle loader";
++            var world = Environment.CurrentManagedThreadId == WorldThreadId;
++            if (Vehicles.VehicleManager.InVehicleTick && world)
++                return "the vehicle tick";
++            var who = Landblock.TickingObject;
++            var cause = who != null ? $" ({who.Name} 0x{who.Guid.Full:X8} {who.WeenieType} in {who.CurrentLandblock?.Id.Raw >> 16:X4})" : "";
++            var thread = world ? "world thread" : CurrentMultiThreadedTickingLandblockGroup.Value != null ? "landblock-group thread" : $"thread {Environment.CurrentManagedThreadId}";
++            return $"{(Landblock.TickingVehicleOnly ? "a vehicle-only landblock's " : "")}{Vehicles.WorldTickMonitor.CurrentPhase} on the {thread}{cause}";
++        }
++
+         /// <summary>holtburger vehicles fork (M3 diagnosis): landblock loads by the thread that ran them.</summary>
+         public static readonly long[] LoadsByKind = new long[4];
+         public static readonly double[] LoadMsByKind = new double[4];
+@@ -693,6 +721,8 @@ public static Landblock GetLandblock(LandblockId landblockId, bool loadAdjacents
+                         landblock = landblocks[landblockId.LandblockX, landblockId.LandblockY] = new Landblock(landblockId);
+                         landblock.Initializing = true;
+                         loadedHere = landblock;
++                        if (Vehicles.WorldTickMonitor.Active)
++                            landblock.LoadOrigin = DescribeLoadOrigin();
+                         // before its first tick (object budget, loot deferral): loaded by a vehicle background load, or by
+                         // the world thread during the vehicle tick (the pilot's / vehicle's own relocation)
+                         if (IsVehicleLoaderThread || Landblock.TickingVehicleOnly || (Vehicles.VehicleManager.InVehicleTick && Environment.CurrentManagedThreadId == WorldThreadId))
+@@ -729,6 +759,8 @@ public static Landblock GetLandblock(LandblockId landblockId, bool loadAdjacents
+                         Vehicles.VehicleStreaming.PrewarmCells(landblock);
+                     LastLoadInitMs = swInit.Elapsed.TotalMilliseconds;
+                     NoteLoad(landblockId.Raw, swLoad.Elapsed.TotalMilliseconds);
++                    if (!IsVehicleLoaderThread && landblock.LoadOrigin != null)
++                        Vehicles.WorldTickMonitor.NoteLoad(landblock, landblock.LoadOrigin, swLoad.Elapsed.TotalMilliseconds - swInit.Elapsed.TotalMilliseconds, swInit.Elapsed.TotalMilliseconds);
+ 
+                     setAdjacents = true;
+                 }
+diff --git a/Source/ACE.Server/Physics/Common/LScape.cs b/Source/ACE.Server/Physics/Common/LScape.cs
+index a85bdb8..f2ceb03 100644
+--- a/Source/ACE.Server/Physics/Common/LScape.cs
++++ b/Source/ACE.Server/Physics/Common/LScape.cs
+@@ -153,10 +153,18 @@ public static ObjCell get_landcell(uint blockCellID)
+                     if (landblock.LandCells.TryGetValue((int)cellID, out cell))
+                         return cell;
+ 
+-                    cell = DBObj.GetEnvCell(blockCellID);
+-                    landblock.LandCells.TryAdd((int)cellID, cell);
+-                    var envCell = (EnvCell)cell;
+-                    envCell.PostInit();
++                    Vehicles.WorldTickMonitor.CellBuildBegin(blockCellID); // holtburger vehicles fork: lazy indoor-cell builds (diagnostic)
++                    try
++                    {
++                        cell = DBObj.GetEnvCell(blockCellID);
++                        landblock.LandCells.TryAdd((int)cellID, cell);
++                        var envCell = (EnvCell)cell;
++                        envCell.PostInit();
++                    }
++                    finally
++                    {
++                        Vehicles.WorldTickMonitor.CellBuildEnd();
++                    }
+                 }
+             }
+             return cell;
+diff --git a/Source/ACE.Server/Vehicles/VehicleProfile.cs b/Source/ACE.Server/Vehicles/VehicleProfile.cs
+index cf51f5d..78cf338 100644
+--- a/Source/ACE.Server/Vehicles/VehicleProfile.cs
++++ b/Source/ACE.Server/Vehicles/VehicleProfile.cs
+@@ -68,11 +68,16 @@ public static VehicleProfile HellcatDemo()
+                 LeadSeconds = 6f, ObjectRadius = 4,
+                 SightRadius = 112.5f, PreloadSeconds = 6f, MaxLandblockLoadsPerSec = 4f,
+             };
+-            p.Seats.Add(new VehicleSeatDef { Role = 0, Motion = MotionSitting, Offset = new Vector3(0f, -0.5f, 0.6f) });
++            // In the stand-in's basket (1070 tour 2026-11-01): Setup 0x020016F1 draws its balloon (envelope + basket, one
++            // part) from z 19 m up, so at the 0.3 scale the basket floor is ~5.7 m above the vehicle origin. The old
++            // (0, -0.5, 0.6) seated the pilot ~5 m BELOW the basket, for retail observers too.
++            p.Seats.Add(new VehicleSeatDef { Role = 0, Motion = MotionSitting, Offset = new Vector3(0f, 0f, 5.75f) });
+             p.Weapons.Add(new VehicleWeaponDef
+             {
+                 Kind = 1, RoundsPerSecond = 8f, Spread = Deg(1.5), Range = 120f, Damage = 12f, Magazine = 200,
+-                Muzzle = new Vector3(0f, 4f, 0.5f),
++                // from the basket (with the seat, decision 39): the old (0, 4, 0.5) fired from under the balloon, ~6 m below the
++                // cockpit eye
++                Muzzle = new Vector3(0f, 0.8f, 6.0f),
+             });
+             // Looks as data (DESIGN §5.1 rule 2): a placeholder composite of retail parts. v1 = the stand-in itself;
+             // the composite airframe replaces it in M5 without a protocol change.
+diff --git a/Source/ACE.Server/Vehicles/VehicleStreaming.cs b/Source/ACE.Server/Vehicles/VehicleStreaming.cs
+index d57c74c..7c5234a 100644
+--- a/Source/ACE.Server/Vehicles/VehicleStreaming.cs
++++ b/Source/ACE.Server/Vehicles/VehicleStreaming.cs
+@@ -105,6 +105,7 @@ public static void PrewarmCells(Landblock lb)
+             var baseId = lb.Id.Raw & 0xFFFF0000;
+             for (uint i = 0; i < info.NumCells; i++)
+                 ACE.Server.Physics.Common.LScape.get_landcell(baseId | (0x100 + i));
++            lb.CellsPrewarmed = true;
+             var ms = sw.Elapsed.TotalMilliseconds;
+             lock (statsLock)
+             {
+@@ -144,10 +145,13 @@ public static void WarmSpawnsAsync(Landblock lb)
+         public static void NoteHeavyAdd(WorldObject wo, long ticks, string what)
+         {
+             var ms = ticks * 1000.0 / Stopwatch.Frequency;
++            var split = WorldTickMonitor.EndItem(ms); // closes the item scope (Landblock bring-up), null below 30 ms
+             if (ms < 30.0)
+                 return;
+-            if (Interlocked.Increment(ref heavyAddLogs) <= 30)
+-                log.Warn($"[VEHICLE][HEAVYADD] {what} {wo.Name} 0x{wo.Guid.Full:X8} wcid {wo.WeenieClassId} {wo.WeenieType} took {ms:0.0} ms in landblock {wo.CurrentLandblock?.Id.Raw >> 16:X4}");
++            var lb = wo.CurrentLandblock;
++            if (Interlocked.Increment(ref heavyAddLogs) <= 120)
++                log.Warn($"[VEHICLE][HEAVYADD] {what} {wo.Name} 0x{wo.Guid.Full:X8} wcid {wo.WeenieClassId} {wo.WeenieType}{(wo.LinkedInstances.Count > 0 ? $" ({wo.LinkedInstances.Count} links)" : "")} took {ms:0.0} ms in landblock {lb?.Id.Raw >> 16:X4}" +
++                    $" (loaded by {lb?.LoadOrigin ?? "?"}, indoor cells {(lb?.CellsPrewarmed == true ? "prewarmed" : "lazy")}): {split ?? "-"}");
+         }
+         static int heavyAddLogs;
+ 
+@@ -381,11 +385,43 @@ static void WarmWeenieTree(uint wcid, HashSet<uint> seen, int depth)
+             if (dids.TryGetValue(ACE.Entity.Enum.Properties.PropertyDataId.DeathTreasureType, out var death))
+                 ACE.Database.DatabaseManager.World.GetCachedDeathTreasure(death);
+             if (dids.TryGetValue(ACE.Entity.Enum.Properties.PropertyDataId.Setup, out var setupId))
+-                DatManager.PortalDat.ReadFromDat<SetupModel>(setupId);
++                WarmPhysicsParts(DatManager.PortalDat.ReadFromDat<SetupModel>(setupId));
+             if (dids.TryGetValue(ACE.Entity.Enum.Properties.PropertyDataId.MotionTable, out var motionTable))
+                 DatManager.PortalDat.ReadFromDat<MotionTable>(motionTable);
+         }
+ 
++        /// <summary>
++        /// The physics GfxObjs (polygons + BSP trees) of a Setup's parts, built off the world thread into ACE's permanent
++        /// GfxObjCache (a ConcurrentDictionary; the polygon / vertex / BSP sub-caches are disabled, so construction shares
++        /// no state). Without it the first InitPhysicsObj of a model builds them on the landblock tick: m3-y on the
++        /// 1070-session server: Royal Guard 106 ms, Necromancer 73 ms, a door 96 ms, a Festival Stone 45 ms.
++        /// </summary>
++        static void WarmPhysicsParts(SetupModel setup)
++        {
++            if (setup?.Parts == null)
++                return;
++            foreach (var part in setup.Parts)
++            {
++                if (part == 0 || !warmedGfxObjs.TryAdd(part, 0))
++                    continue;
++                var t0 = Stopwatch.GetTimestamp();
++                try
++                {
++                    ACE.Server.Physics.Entity.GfxObjCache.Get(part);
++                }
++                catch (Exception e)
++                {
++                    log.Debug($"[VEHICLE] physics warm-up of GfxObj {part:X8} failed: {e.Message}");
++                }
++                Interlocked.Increment(ref GfxObjsWarmed);
++                Interlocked.Add(ref gfxWarmTicks, Stopwatch.GetTimestamp() - t0);
++            }
++        }
++        static readonly ConcurrentDictionary<uint, byte> warmedGfxObjs = new ConcurrentDictionary<uint, byte>();
++        public static long GfxObjsWarmed;
++        static long gfxWarmTicks;
++        public static double GfxObjWarmMs => gfxWarmTicks * 1000.0 / Stopwatch.Frequency;
++
+         /// <summary>Per piloted vehicle, after its steps this tick.</summary>
+         public static void Tick(Vehicle v, Player pilot)
+         {
+@@ -584,7 +620,7 @@ public static string Report() =>
+             $"off-thread loads {OffThreadBuilds} (avg {(OffThreadBuilds > 0 ? BuildMsTotal / OffThreadBuilds : 0):0.0} ms, max {BuildMsMax:0.0} ms, on a background task) collected {Published} failed {BuildFailures}, " +
+             $"landblock budget={LandblockBudget}: {BringUpChunks} object chunks deferred to later ticks, {PowerUpYields} generator power-ups continued next tick, loot generators deferred {LootGeneratorsDeferred} (restored {LootGeneratorsRestored}), loot profiles held {LootProfilesDeferred}; " +
+             $"late spawn warm-ups (vehicle-only landblocks loaded outside the corridor) {LateWarmups}; indoor cells built off-thread {CellsPrewarmed} in {CellPrewarmLandblocks} landblocks (avg {(CellPrewarmLandblocks > 0 ? CellPrewarmMsTotal / CellPrewarmLandblocks : 0):0.0} ms, max {CellPrewarmMsMax:0.0} ms); " +
+-            $"prefetches {PrefetchesStarted} (warm at load {PrefetchesWarm}; spawn caches: {WarmupLandblocks} landblocks, {WeeniesWarmed} weenies, avg {(WarmupLandblocks > 0 ? WarmupMsTotal / WarmupLandblocks : 0):0.0} ms, max {WarmupMsMax:0.0} ms, off-thread), back-pressure events {VehicleManager.BackPressureEvents}";
++            $"prefetches {PrefetchesStarted} (warm at load {PrefetchesWarm}; spawn caches: {WarmupLandblocks} landblocks, {WeeniesWarmed} weenies, avg {(WarmupLandblocks > 0 ? WarmupMsTotal / WarmupLandblocks : 0):0.0} ms, max {WarmupMsMax:0.0} ms, off-thread; physics GfxObjs {GfxObjsWarmed} in {GfxObjWarmMs:0} ms), back-pressure events {VehicleManager.BackPressureEvents}";
+     }
+ 
+     /// <summary>Per-vehicle streaming state.</summary>
+diff --git a/Source/ACE.Server/Vehicles/WorldTickMonitor.cs b/Source/ACE.Server/Vehicles/WorldTickMonitor.cs
+index 8b6c23a..2ec243f 100644
+--- a/Source/ACE.Server/Vehicles/WorldTickMonitor.cs
++++ b/Source/ACE.Server/Vehicles/WorldTickMonitor.cs
+@@ -56,6 +56,173 @@ public static void Mark(Phase p)
+             var now = Stopwatch.GetTimestamp();
+             ms[(int)p] += (now - last) * 1000.0 / Stopwatch.Frequency;
+             last = now;
++            lastMarked = p;
++        }
++
++        // the phase the world thread is in now = the one after the last marked (phases are marked when they end)
++        static Phase lastMarked = Phase.Sessions;
++        public static string CurrentPhase => lastMarked switch
++        {
++            Phase.Sessions => "Players",
++            Phase.Players => "Inbound",
++            Phase.Inbound => "Actions",
++            Phase.Actions => "Delay",
++            Phase.Delay => "Vehicles",
++            Phase.Vehicles => "LbPending",
++            Phase.LbPending => "LbPhysics",
++            Phase.LbPhysics => "LbMultiThreaded",
++            Phase.LbMultiThreaded => "LbSingleThreaded",
++            Phase.LbSingleThreaded => "LbUnload",
++            Phase.LbUnload => "Houses",
++            _ => "Sessions",
++        };
++        public static bool Active => active;
++
++        // ---- M3 residual: where a heavy bring-up item spends its time --------------------------------------------------
++        // One bring-up item of a landblock (a landblock instance with all its links, an encounter placement) on its
++        // landblock-group thread: the GC pause inside it, the indoor cells it built (LScape.get_landcell builds an EnvCell
++        // lazily and, through EnvCell.PostInit → build_visible_cells, every cell visible from it), its links' creation and
++        // SetLinkProperties (WorldObject.ActivateLinks), and every AddWorldObject's physics init / placement / notify.
++        // Thread-static, armed only while vehicles exist; a few timestamps per object.
++        [ThreadStatic] static bool itemOn;
++        [ThreadStatic] static int itAdds, itCells, itLinks, cellDepth;
++        [ThreadStatic] static long itInit, itPlace, itNotify, itCellTicks, itLinkCreate, itLinkSet, itLinkWeenie, cellT0;
++        [ThreadStatic] static TimeSpan itGc0;
++
++        public static void BeginItem()
++        {
++            itemOn = active;
++            if (!itemOn)
++                return;
++            itAdds = itCells = itLinks = 0;
++            itInit = itPlace = itNotify = itCellTicks = itLinkCreate = itLinkSet = itLinkWeenie = 0;
++            itGc0 = GC.GetTotalPauseDuration();
++        }
++
++        static double TicksMs(long t) => t * 1000.0 / Stopwatch.Frequency;
++
++        public static long HeavyItems, HeavyItemsGc, HeavyItemsCells, HeavyItemsLinks, HeavyItemsAdds;
++        public static double HeavyItemsMs, HeavyItemsGcMs, HeavyItemsCellsMs;
++
++        /// <summary>Ends the item. For a heavy one (≥ 30 ms) returns its split and counts it by its largest part.</summary>
++        public static string EndItem(double totalMs)
++        {
++            if (!itemOn)
++                return null;
++            itemOn = false;
++            if (totalMs < 30.0)
++                return null;
++            var gcMs = (GC.GetTotalPauseDuration() - itGc0).TotalMilliseconds;
++            var cellsMs = TicksMs(itCellTicks);
++            var linksMs = TicksMs(itLinkWeenie + itLinkCreate + itLinkSet);
++            var addsMs = TicksMs(itInit + itNotify) + Math.Max(0, TicksMs(itPlace) - cellsMs);
++            lock (lbLock)
++            {
++                HeavyItems++;
++                HeavyItemsMs += totalMs;
++                HeavyItemsGcMs += gcMs;
++                HeavyItemsCellsMs += cellsMs;
++                if (gcMs >= cellsMs && gcMs >= linksMs && gcMs >= addsMs) HeavyItemsGc++;
++                else if (cellsMs >= linksMs && cellsMs >= addsMs) HeavyItemsCells++;
++                else if (linksMs >= addsMs) HeavyItemsLinks++;
++                else HeavyItemsAdds++;
++            }
++            return $"gc {gcMs:0.0}, indoor cells built {itCells} in {cellsMs:0.0}, links {itLinks} (weenie fetch {TicksMs(itLinkWeenie):0.0}, construct {TicksMs(itLinkCreate):0.0}, SetLinkProperties {TicksMs(itLinkSet):0.0}), " +
++                $"adds {itAdds} (physics init {TicksMs(itInit):0.0}, placement {TicksMs(itPlace):0.0} incl. the cells, notify {TicksMs(itNotify):0.0})";
++        }
++
++        /// <summary>WorldObject.ActivateLinks: one link's weenie looked up (t0 → tw), constructed (tw → t1) and given its link
++        /// properties (t1 → t2).</summary>
++        public static void NoteLink(long t0, long tw, long t1, long t2)
++        {
++            if (!itemOn)
++                return;
++            itLinks++;
++            itLinkWeenie += tw - t0;
++            itLinkCreate += t1 - tw;
++            itLinkSet += t2 - t1;
++        }
++
++        // indoor cells built while vehicles exist outside a bring-up item (world / landblock-group threads; the vehicle
++        // loader's prewarm is counted by VehicleStreaming): count, ms, the worst outermost build
++        public static long CellBuildsOther, CellBuildCallsOther;
++        public static double CellBuildMsOther, CellBuildWorstMsOther;
++        public static string CellBuildWorstOther = "";
++        [ThreadStatic] static uint cellOuterId;
++
++        /// <summary>LScape.get_landcell: an indoor cell is about to be built (builds nest through visible cells).</summary>
++        public static void CellBuildBegin(uint blockCellId)
++        {
++            if (!active || LandblockManager.IsVehicleLoaderThread)
++                return;
++            if (itemOn)
++                itCells++;
++            else
++                Interlocked.Increment(ref CellBuildsOther);
++            if (cellDepth++ == 0)
++            {
++                cellT0 = Stopwatch.GetTimestamp();
++                cellOuterId = blockCellId;
++            }
++        }
++
++        public static void CellBuildEnd()
++        {
++            if (cellDepth == 0)
++                return;
++            if (--cellDepth != 0)
++                return;
++            var t = Stopwatch.GetTimestamp() - cellT0;
++            if (itemOn)
++            {
++                itCellTicks += t;
++                return;
++            }
++            var msBuilt = TicksMs(t);
++            lock (lbLock)
++            {
++                CellBuildCallsOther++;
++                CellBuildMsOther += msBuilt;
++                if (msBuilt > CellBuildWorstMsOther)
++                {
++                    CellBuildWorstMsOther = msBuilt;
++                    CellBuildWorstOther = $"{cellOuterId:X8} {msBuilt:0.0} ms during {CurrentPhase}{(Environment.CurrentManagedThreadId == LandblockManager.WorldThreadId ? "" : " (group thread)")}";
++                }
++            }
++            if (msBuilt >= 20.0 && Interlocked.Increment(ref cellLogs) <= 40)
++                log.Warn($"[VEHICLE][CELLS] indoor cells from {cellOuterId:X8} built in {msBuilt:0.0} ms outside a bring-up item, during {CurrentPhase}{(Environment.CurrentManagedThreadId == LandblockManager.WorldThreadId ? "" : " (group thread)")}");
++        }
++        static int cellLogs;
++
++        // ---- landblock loads outside the vehicle loader while vehicles exist: who loaded it, and as what -------------
++        static int loadLogs;
++        public static long LoadsOrdinary, LoadsVehicleOnly;
++
++        public static void NoteLoad(Entity.Landblock lb, string origin, double constructMs, double initMs)
++        {
++            if (!active)
++                return;
++            if (lb.VehicleOnly) Interlocked.Increment(ref LoadsVehicleOnly);
++            else Interlocked.Increment(ref LoadsOrdinary);
++            if (Interlocked.Increment(ref loadLogs) <= 150)
++                log.Warn($"[VEHICLE][LOAD] landblock {lb.Id.Raw >> 16:X4} loaded by {origin} in {constructMs:0.0} + {initMs:0.0} ms ({(lb.VehicleOnly ? "vehicle-only" : "ORDINARY")})");
++        }
++
++        // ---- per-landblock single-threaded work (player ticks, heartbeats) over 20 ms while vehicles exist -----------
++        static int stLogs;
++        public static long SlowSingleThreaded;
++
++        public static void NoteSingleThreaded(Entity.Landblock lb, long t0, long t1, long t2, WorldObjects.WorldObject worst, long worstTicks)
++        {
++            if (!active)
++                return;
++            var total = TicksMs(t2 - t0);
++            if (total < 20.0)
++                return;
++            SlowSingleThreaded++;
++            if (stLogs++ < 60)
++                log.Warn($"[VEHICLE][LBSINGLE] landblock {lb.Id.Raw >> 16:X4} single-threaded work {total:0.0} ms ({(lb.VehicleOnly ? "vehicle-only, " : "")}{lb.WorldObjectCount} objects): " +
++                    $"player ticks {TicksMs(t1 - t0):0.0}, heartbeats {TicksMs(t2 - t1):0.0}; worst heartbeat {(worst != null ? $"{worst.Name} 0x{worst.Guid.Full:X8} wcid {worst.WeenieClassId} {worst.WeenieType} {TicksMs(worstTicks):0.0} ms" : "-")}");
+         }
+ 
+         public static void End()
+@@ -73,8 +240,10 @@ public static void End()
+             var lockMs = LandblockManager.TickLockWaitMs;
+             var vehicleMs = ms[(int)Phase.Vehicles] + lockMs;
+             string cause;
+-            if (vehicleMs >= total * 0.5) { cause = "vehicle"; StallsVehicle++; }
+-            else if (gcMs >= total * 0.5) { cause = "gc"; StallsGc++; }
++            // a GC pause suspends whichever phase it lands in: test it first (a pause inside the vehicle phase is not a
++            // vehicle cost — 18:53:52 tour C: 109.9 ms, 105.6 of them GC, was counted as "vehicle")
++            if (gcMs >= total * 0.5) { cause = "gc"; StallsGc++; }
++            else if (vehicleMs >= total * 0.5) { cause = "vehicle"; StallsVehicle++; }
+             else { cause = "other"; StallsOther++; }
+             Stalls++;
+ 
+@@ -153,6 +322,13 @@ public static void NoteAdd(WorldObjects.WorldObject wo, long t0, long t1, long t
+             lastAddInitMs = f(t0, t1);
+             lastAddPlaceMs = f(t1, t2);
+             lastAddNotifyMs = f(t3, t4);
++            if (itemOn)
++            {
++                itAdds++;
++                itInit += t1 - t0;
++                itPlace += t2 - t1;
++                itNotify += t4 - t3;
++            }
+         }
+ 
+         // creation split of the most recent constructor on this thread (base WorldObject, then Creature)
+@@ -229,6 +405,9 @@ public static void NoteSpawn(WorldObjects.WorldObject gen, System.Collections.Ge
+ 
+         public static string Report() =>
+             $"world ticks while vehicles exist: {Ticks}, over {StallMs:0} ms: {Stalls} (vehicle {StallsVehicle}, gc {StallsGc}, other {StallsOther}); worst {(MaxMs > 0 ? MaxDesc : "-")}; " +
+-            $"world write-lock deferrals {LandblockManager.WorldWriteLockDeferrals}; DAT stream lock (non-prefetch threads, process lifetime): {ACE.DatLoader.DatDatabase.ForegroundReads} reads, waited {ACE.DatLoader.DatDatabase.ForegroundWaitTicks * 1000.0 / Stopwatch.Frequency:0} ms total, max {ACE.DatLoader.DatDatabase.ForegroundWaitMaxTicks * 1000.0 / Stopwatch.Frequency:0.0} ms; landblock ticks >= 20 ms: {LbSlowTicks} (vehicle-only {LbSlowTicksVehicleOnly}, within 3 ticks of loading {LbSlowFirstTicks}), worst {(LbWorstMs > 0 ? LbWorstDesc : "-")}; generator calls >= 30 ms: {GenSlowCalls}; spawns >= 20 ms: {SpawnsSlow} (create {SpawnFactoryMsTotal:0} ms, place {SpawnPlaceMsTotal:0} ms of which physics init {SpawnInitPhysMsTotal:0}, placement {SpawnAddPhysMsTotal:0}, notify {SpawnNotifyMsTotal:0}); {LandblockManager.LoadReport()}";
++            $"world write-lock deferrals {LandblockManager.WorldWriteLockDeferrals}; DAT stream lock (non-prefetch threads, process lifetime): {ACE.DatLoader.DatDatabase.ForegroundReads} reads, waited {ACE.DatLoader.DatDatabase.ForegroundWaitTicks * 1000.0 / Stopwatch.Frequency:0} ms total, max {ACE.DatLoader.DatDatabase.ForegroundWaitMaxTicks * 1000.0 / Stopwatch.Frequency:0.0} ms; landblock ticks >= 20 ms: {LbSlowTicks} (vehicle-only {LbSlowTicksVehicleOnly}, within 3 ticks of loading {LbSlowFirstTicks}), worst {(LbWorstMs > 0 ? LbWorstDesc : "-")}; generator calls >= 30 ms: {GenSlowCalls}; spawns >= 20 ms: {SpawnsSlow} (create {SpawnFactoryMsTotal:0} ms, place {SpawnPlaceMsTotal:0} ms of which physics init {SpawnInitPhysMsTotal:0}, placement {SpawnAddPhysMsTotal:0}, notify {SpawnNotifyMsTotal:0}); " +
++            $"bring-up items >= 30 ms: {HeavyItems} ({HeavyItemsMs:0} ms; mostly gc {HeavyItemsGc} / indoor cells {HeavyItemsCells} / links {HeavyItemsLinks} / adds {HeavyItemsAdds}; gc {HeavyItemsGcMs:0} ms, cells {HeavyItemsCellsMs:0} ms); " +
++            $"indoor cells built outside items: {CellBuildsOther} in {CellBuildCallsOther} builds ({CellBuildMsOther:0} ms, worst {(CellBuildWorstMsOther > 0 ? CellBuildWorstOther : "-")}); " +
++            $"loads outside the vehicle loader: vehicle-only {LoadsVehicleOnly}, ordinary {LoadsOrdinary}; landblock single-threaded work >= 20 ms: {SlowSingleThreaded}; {LandblockManager.LoadReport()}";
+     }
+ }
+diff --git a/Source/ACE.Server/WorldObjects/WorldObject_Links.cs b/Source/ACE.Server/WorldObjects/WorldObject_Links.cs
+index 467e237..2241a5f 100644
+--- a/Source/ACE.Server/WorldObjects/WorldObject_Links.cs
++++ b/Source/ACE.Server/WorldObjects/WorldObject_Links.cs
+@@ -32,10 +32,13 @@ public void ActivateLinks(List<LandblockInstance> sourceObjects, List<Biota> bio
+ 
+             foreach (var link in LinkedInstances)
+             {
++                var vlT0 = System.Diagnostics.Stopwatch.GetTimestamp(); // holtburger vehicles fork: link cost split (diagnostic)
+                 WorldObject wo = null;
+                 var biota = biotas.FirstOrDefault(b => b.Id == link.Guid);
++                var vlWeenie = biota == null ? DatabaseManager.World.GetCachedWeenie(link.WeenieClassId) : null;
++                var vlTw = System.Diagnostics.Stopwatch.GetTimestamp();
+                 if (biota == null)
+-                    wo = WorldObjectFactory.CreateWorldObject(DatabaseManager.World.GetCachedWeenie(link.WeenieClassId), new ObjectGuid(link.Guid));
++                    wo = WorldObjectFactory.CreateWorldObject(vlWeenie, new ObjectGuid(link.Guid));
+                 else
+                 {
+                     wo = WorldObjectFactory.CreateWorldObject(biota);
+@@ -45,7 +48,9 @@ public void ActivateLinks(List<LandblockInstance> sourceObjects, List<Biota> bio
+                 if (wo == null) continue;
+ 
+                 wo.Location = new Position(link.ObjCellId, link.OriginX, link.OriginY, link.OriginZ, link.AnglesX, link.AnglesY, link.AnglesZ, link.AnglesW);
++                var vlT1 = System.Diagnostics.Stopwatch.GetTimestamp();
+                 parent.SetLinkProperties(wo);
++                Vehicles.WorldTickMonitor.NoteLink(vlT0, vlTw, vlT1, System.Diagnostics.Stopwatch.GetTimestamp());
+                 CurrentLandblock?.AddWorldObject(wo);
+                 if (wo.PhysicsObj != null)
+                     wo.PhysicsObj.Order = 0;
+-- 
+2.47.3
+

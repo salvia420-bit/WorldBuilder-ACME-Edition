@@ -485,6 +485,35 @@ export class CloudVolume {
         ' (clouds+shadow), shadow temporalAlpha=0.05 — anti-cycling 2026-08-01');
     }
 
+    // ?cloudEdgeResolve (2026-11-01, DEFAULT ON after the 1070 live A/B; `=off` escapes) — depth-aware temporal upscale
+    // at scene-object silhouettes: the balloon halo / gridded trail in front of
+    // clouds (scene3d/cloud_edge_resolve.js has the root cause). Absent: nothing
+    // is installed and the resolve shader is takram's, byte for byte.
+    // The module is loaded only when asked for (kept out of the static boot
+    // graph / modulepreload block); the resolve material recompiles once if it
+    // had already been compiled. Grammar = cloud_edge_resolve.js.
+    this._edgeResolve = null;
+    let edgeOn = false;
+    try {
+      const v = (new URLSearchParams(window.location.search).get('cloudEdgeResolve') || '').trim().toLowerCase();
+      edgeOn = !(v === 'off' || v === '0' || v === 'false' || v === 'no');
+    } catch (_) { edgeOn = true; }
+    if (edgeOn) {
+      import('./cloud_edge_resolve.js').then((m) => {
+        if (!m.cloudEdgeResolveEnabled()) return;
+        this._edgeResolve = m.installCloudEdgeResolve(this.effect, THREE, { gamma: m.cloudEdgeGamma() });
+        if (this._edgeResolve) {
+          try { window.__cloudEdgeResolve = this._edgeResolve; } catch (_) {}
+          // eslint-disable-next-line no-console
+          console.log('[clouds] cloudEdgeResolve ON — depth-aware resolve, edge gamma=' +
+            this._edgeResolve.stats().gamma);
+        }
+      }).catch((e) => {
+        // eslint-disable-next-line no-console
+        console.warn('[clouds] cloudEdgeResolve: module load failed — NOT installed', e);
+      });
+    }
+
     // Weather drift (2026-08-01, owner: "the pattern shouldn't be frozen in
     // place, or else maybe Holtburg would always be cloudy"). Two modes,
     // because LINEAR drift and GEOGRAPHIC anchoring are incompatible — a

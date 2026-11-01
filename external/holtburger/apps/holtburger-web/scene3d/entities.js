@@ -20555,7 +20555,11 @@ export class EntityManager {
     let kill = null;
     for (const [guid, inst] of this.entityMap) {
       if ((guid >>> 0) === localGuid) continue; // never the local player
-      const lbId = inst?.meta?.landblockId;
+      // The entity's CURRENT landblock: the latest server cell (`_wireCellId`, stamped by every KIND_POSITION —
+      // cells.js noteEntityLandcell — and by scene3d/vehicle for the vehicles it poses), else the spawn cell.
+      // `meta.landblockId` alone is the SPAWN landblock: a mover that travelled > REAP_PVS_RADIUS from where it
+      // spawned (a vehicle flying with its pilot, 2026-11-01 1070 tour) was reaped while beside the player.
+      const lbId = inst?._wireCellId || inst?.meta?.landblockId;
       if (lbId == null) continue;
       const lb = lbId >>> 0;
       if (lb === 0) continue; // wielded/contained — rides the player, no landblock

@@ -21,6 +21,9 @@ import { createVehicleControls } from "./controls.js";
 import { createVehicleOsd } from "./osd.js";
 import { createTracers } from "./weapons.js";
 import { stepFall } from "./fall_model.js";
+import { boardAnimEnabled, headingOfQuat, hopDuration, hopHeading, hopPoint, HOP } from "./board_hop.js";
+import { chuteEnabled, createChutes } from "./chute.js";
+import { wireframeFlagOn } from "../wireframe_flag.js";
 import { createCameraOwner } from "../film/runtime/camera_owner.js";
 import { createDroneAudio } from "../drone/audio.js";
 
@@ -29,6 +32,8 @@ export const CAP_PILOT = 0x2;
 export const BOARD_RANGE_M = 8;
 export const CHASE = Object.freeze({ back: 16, up: 4.5, lookAhead: 30, pitch: -0.12, fov: 70, headingTau: 0.25 });
 export const COCKPIT = Object.freeze({ up: 0.9, forward: 0.1, fov: 78 });
+/** Camera while falling after a bail-out: behind and a little above the body, so the canopy is in frame. */
+export const FALL_CAM = Object.freeze({ back: 12, up: 3.5, pitch: -0.08, fov: 70, headingTau: 0.6 });
 export const EVENT_NAMES = Object.freeze({ 1: "takeoff", 2: "landed", 3: "crashed", 4: "despawn", 5: "bail", 6: "chute", 7: "touchdown", 8: "hit" });
 /** Retail motion commands the pilot's rig holds (the server shows the same Sitting to every client). */
 export const MOTION = Object.freeze({ SITTING: 0x41000013, READY: 0x41000003, NONCOMBAT: 0x8000003d });
@@ -36,6 +41,7 @@ export const MOTION = Object.freeze({ SITTING: 0x41000013, READY: 0x41000003, NO
 export function vehicleAudioEnabled(search) {
   try { return new URLSearchParams(search || "").get("vehicleAudio") !== "off"; } catch (_) { return true; }
 }
+const NEUTRAL_INPUT = Object.freeze({ throttle: 0, pitch: 0, roll: 0, yaw: 0, boost: false, fire: false, land: false });
 export const REFUSAL = Object.freeze(["", "too far", "seat taken", "not parked", "indoors", "leave combat mode first", "no capability", "busy", "vehicles are disabled on this server"]);
 
 function nowSec() {
@@ -74,10 +80,15 @@ export function installVehicles(deps = {}) {
   const stats = { frames: 0, msgs: 0, states: 0, profiles: 0, fires: 0, events: 0, parseErrors: 0, inputsSent: 0, sendErrors: 0, boardRefusals: 0, lastRefusal: null, pruned: 0 };
   const osd = createVehicleOsd({ document: win.document });
   const tracers = createTracers({ liveScene3d: live, THREE });
+  const search = win.location?.search ?? "";
+  // parachute canopies (chute.js) over every body whose Chute event arrived; `?vehicleChute=off` draws none
+  const chutes = chuteEnabled(search) ? createChutes({ liveScene3d: live, THREE, wireframe: (() => { try { return wireframeFlagOn(search); } catch (_) { return false; } })() }) : null;
   let pilot = null; // active piloting session
   let fall = null; // bail-out freefall of the local player (server-owned body, predicted here)
   let pendingBoard = null;
   let disposed = false;
+  let exitHop = null; // the local rig going back down from the seat to the exit placement (board_hop.js)
+  const hopsOn = boardAnimEnabled(win.location?.search);
   let bailArmedAt = -1e9;
 
   // ---------------------------------------------------------------- inbox
@@ -171,6 +182,9 @@ export function installVehicles(deps = {}) {
           if (pilot) stopPiloting("touchdown");
           if (fall) stopFall("touchdown");
         }
+        // canopies: open over any body whose chute opened (ours or an observed player's), fold at its touchdown
+        if (m.kind === 6 && m.subject) chutes?.open(m.subject);
+        else if (m.kind === 7 && m.subject) chutes?.close(m.subject);
         break;
       }
       default:
@@ -212,6 +226,22 @@ export function installVehicles(deps = {}) {
 
   // ---------------------------------------------------------------- piloting
 
+  /**
+   * The follow camera fades the local avatar out as its eye closes on the player (camera.js A12-C2 near-fade), and the
+   * film camera owner freezes that fade while it owns the camera. Released for a frame at the bail, the follow camera
+   * collapsed onto the body and the fall was flown with an invisible avatar under the canopy (1070 tour D): our own
+   * cameras always keep the avatar opaque.
+   */
+  function unfadeAvatar() {
+    try {
+      const cs = live.cameraSwitcher;
+      if (cs && typeof cs._applyCameraPlayerFade === "function") {
+        cs._camFadeLastOpacity = undefined; // past the dedupe cache
+        cs._applyCameraPlayerFade(1);
+      }
+    } catch (_) { /* cosmetic */ }
+  }
+
   function makePredictor(v, m) {
     return createPilotPredictor({ params: v.params, ground, initial: stateFromMsg(m), vCap: m.vCap, startSeq: 1 });
   }
@@ -226,6 +256,7 @@ export function installVehicles(deps = {}) {
     try {
       camera = createCameraOwner({ liveScene3d: live, THREE, window: win, get sessionHandle() { return sh(); } });
       camera.own();
+      unfadeAvatar();
     } catch (e) {
       camera = null;
       console.warn("[vehicles] camera owner unavailable:", e && e.message ? e.message : e);
@@ -239,11 +270,19 @@ export function installVehicles(deps = {}) {
         audio.start();
       } catch (_) { audio = null; }
     }
+    // M5 boarding hop: from where the rig stands now up to the seat (local presentation; board_hop.js)
+    let hop = null;
+    exitHop = null;
+    const rig = em()?.entityMap?.get(localGuid());
+    if (hopsOn && rig?.root) {
+      const r = rig.root;
+      hop = { from: { x: r.position.x, y: r.position.y, z: r.position.z }, h0: headingOfQuat([r.quaternion.w, r.quaternion.x, r.quaternion.y, r.quaternion.z]), t: 0, dur: 0 };
+    }
     pilot = {
-      audio,
+      audio, hop,
       vehicle: v, seat, controls, camera, acc: 0, predictor: v.last ? makePredictor(v, v.last) : null,
       startedAt: nowSec(), view: "chase", camHeading: null, lastServer: v.last, leadLb: 0, sent: 0,
-      unsub: null,
+      unsub: null, lastSeat: null,
     };
     pilot.unsub = controls.onAction((a) => {
       if (a.type === "camera") pilot.view = pilot.view === "chase" ? "cockpit" : "chase";
@@ -264,6 +303,8 @@ export function installVehicles(deps = {}) {
     try { sh()?.clearVehicleSeat?.(); } catch (_) {}
     try { p.audio?.stop({ fadeSec: 0.6 }); setTimeout(() => { try { p.audio?.dispose(); } catch (_) {} }, 1000); } catch (_) {}
     try { em()?.setMotion?.(localGuid(), MOTION.READY, MOTION.NONCOMBAT, 1.0); } catch (_) {}
+    if (p.rigHidden) { try { em()?.setFilmHidden?.(localGuid(), false); em()?.setFilmHidden?.(p.vehicle.guid, false); } catch (_) { /* */ } }
+    if (hopsOn && p.lastSeat && (why === "seat released" || why === "touchdown")) exitHop = { from: p.lastSeat, h: p.lastSeat.heading, t: 0, dur: HOP.exitSec };
     osd.update(null);
     console.log(`[vehicles] stopped piloting (${why})`);
   }
@@ -273,10 +314,19 @@ export function installVehicles(deps = {}) {
   function startFall(m, v) {
     const vel = pilot && pilot.predictor && v?.params ? FM.velocity(pilot.predictor.state, v.params) : [0, 0, 0];
     if (pilot) stopPiloting("bail");
+    exitHop = null; // the seat may have been released (VehicleSeat) before the Bail event: no hop down from altitude
     const [x, y, z] = FM.toGlobal(m.cell, m.x, m.y, m.z);
     const controls = createVehicleControls({ window: win });
     controls.lock();
-    fall = { x, y, z, vx: vel[0], vy: vel[1], vz: vel[2], heading: m.value, chute: false, acc: 0, controls, vehicle: m.vehicle >>> 0, startedAt: nowSec(), lastWall: undefined };
+    // the camera follows the falling body (the follow camera would stay where the body was last placed on the ground —
+    // the server owns the fall and never echoes our own position)
+    let camera = null;
+    try {
+      camera = createCameraOwner({ liveScene3d: live, THREE, window: win, get sessionHandle() { return sh(); } });
+      camera.own();
+      unfadeAvatar();
+    } catch (_) { camera = null; }
+    fall = { x, y, z, vx: vel[0], vy: vel[1], vz: vel[2], heading: m.value, chute: false, acc: 0, controls, camera, camHeading: m.value, vehicle: m.vehicle >>> 0, startedAt: nowSec(), lastWall: undefined };
     fall.unsub = controls.onAction((a) => {
       if (a.type === "exit" && fall && !fall.chute) {
         try { sh().vehicleExit(fall.vehicle, 2); } catch (_) { /* */ }
@@ -293,6 +343,7 @@ export function installVehicles(deps = {}) {
     fall = null;
     try { f.unsub?.(); } catch (_) {}
     try { f.controls.dispose(); } catch (_) {}
+    try { f.camera?.release(); f.camera?.dispose(); } catch (_) {}
     try { sh()?.clearVehicleSeat?.(); } catch (_) {}
     console.log(`[vehicles] fall ended (${why}) after ${(nowSec() - f.startedAt).toFixed(1)} s`);
   }
@@ -315,7 +366,19 @@ export function installVehicles(deps = {}) {
     // keyed on the player (the vehicle's seat was released by the server)
     try { sh().setVehicleSeat(localGuid(), cl.cell, cl.x, cl.y, cl.z, f.heading); } catch (_) {}
     writeEntity(localGuid(), f.x, f.y, f.z, FM.orientation(f.heading, 0, 0));
-    if (wallNow - f.startedAt > 120) stopFall("timeout"); // never stuck: the server places the body anyway
+    if (f.camera && f.camera.owned) {
+      // chase the body: heading of the horizontal motion (the glide under the chute), smoothed
+      const hv = Math.hypot(f.vx, f.vy);
+      const want = hv > 0.5 ? Math.atan2(f.vx, f.vy) : f.camHeading;
+      f.camHeading = FM.wrapHeading(f.camHeading + angleDiff(want, f.camHeading) * (1 - Math.exp(-Math.max(0, wallDt) / FALL_CAM.headingTau)));
+      const ch = f.camHeading;
+      let ez = f.z + FALL_CAM.up;
+      const ex = f.x - Math.sin(ch) * FALL_CAM.back, ey = f.y - Math.cos(ch) * FALL_CAM.back;
+      const g = ground(ex, ey);
+      if (!Number.isNaN(g) && ez < g + 2) ez = g + 2;
+      f.camera.write({ pos: [ex, ey, ez], h: ch, p: FALL_CAM.pitch, r: 0, fov: FALL_CAM.fov });
+    }
+    if (wallNow - f.startedAt > 120) { chutes?.close(localGuid()); stopFall("timeout"); } // never stuck: the server places the body anyway
   }
 
   function requestExit(mode) {
@@ -364,11 +427,22 @@ export function installVehicles(deps = {}) {
     return { x: pose.x + r[0], y: pose.y + r[1], z: pose.z + r[2], q };
   }
 
-  function writeEntity(guid, x, y, z, q) {
+  /**
+   * Pose an entity rig (after the entity tick: last write wins). `stampCell` keeps the entity's current-cell
+   * bookkeeping on the pose we draw — the entity reaper (entities.js reapStaleEntities) and the cell gates read
+   * `_wireCellId`; without it a vehicle that flew > 8 landblocks from where it spawned was reaped ~30 s later
+   * while beside its pilot (1070 tour 2026-11-01). Not for the local player (its cell is managed elsewhere).
+   */
+  function writeEntity(guid, x, y, z, q, stampCell = false) {
     const inst = em()?.entityMap?.get(guid >>> 0);
     if (!inst || !inst.root) return false;
     inst.root.position.set(x, y, z);
     inst.root.quaternion.set(q[1], q[2], q[3], q[0]);
+    if (stampCell) {
+      const cell = FM.toCellLocal(x, y, z).cell >>> 0;
+      inst._wireCellId = cell;
+      inst._wireCellIdx = cell & 0xffff;
+    }
     return true;
   }
 
@@ -389,10 +463,11 @@ export function installVehicles(deps = {}) {
     if (wallDt > 1.0) wallDt = 1.0;
     p.acc += wallDt;
     let n = 0;
+    const hopping = !!p.hop; // boarding hop in progress: the vehicle stays parked
     while (p.acc >= FM.DT && n < 30) {
       p.acc -= FM.DT;
-      const raw = p.controls.poll(FM.DT);
-      p.predictor.stepLocal(raw);
+      const raw = p.controls.poll(FM.DT); // polled while hopping too: the throttle lever keeps its travel
+      p.predictor.stepLocal(hopping ? NEUTRAL_INPUT : raw);
       sendInput(p);
       n++;
     }
@@ -409,8 +484,36 @@ export function installVehicles(deps = {}) {
 
     // draw: the vehicle and the pilot's rig at the predicted pose (after the entity tick → last write wins)
     const q = FM.orientation(pose.heading, pose.pitch, pose.bank);
-    writeEntity(v.guid, pose.x, pose.y, pose.z, q);
-    writeEntity(localGuid(), seat.x, seat.y, seat.z, q);
+    writeEntity(v.guid, pose.x, pose.y, pose.z, q, true);
+    p.lastSeat = { x: seat.x, y: seat.y, z: seat.z, heading: pose.heading };
+    if (p.hop) {
+      // boarding hop: the rig arcs from where it stood into the seat; the vehicle is parked meanwhile (neutral input)
+      const hp = p.hop;
+      if (hp.dur === 0) hp.dur = hopDuration(Math.hypot(seat.x - hp.from.x, seat.y - hp.from.y, seat.z - hp.from.z));
+      hp.t += dt;
+      const u = hp.t / hp.dur;
+      if (u >= 1) {
+        p.hop = null;
+        writeEntity(localGuid(), seat.x, seat.y, seat.z, q);
+      } else {
+        const at = hopPoint(hp.from, seat, u);
+        writeEntity(localGuid(), at.x, at.y, at.z, FM.orientation(hopHeading(hp.h0, pose.heading, u), 0, 0));
+      }
+    } else {
+      writeEntity(localGuid(), seat.x, seat.y, seat.z, q);
+    }
+
+    // cockpit view: the eye sits where the seated pilot's head is, and the retail stand-in has no interior (the demo
+    // balloon's envelope starts right above the seat) — hide our own rig AND our vehicle's model there (render-only,
+    // local: everyone else still sees both); shown again in chase view and on leaving the seat
+    const wantHidden = p.view === "cockpit";
+    if (wantHidden !== !!p.rigHidden) {
+      try {
+        em()?.setFilmHidden?.(localGuid(), wantHidden);
+        em()?.setFilmHidden?.(v.guid, wantHidden);
+        p.rigHidden = wantHidden;
+      } catch (_) { /* never fatal */ }
+    }
 
     // camera
     if (p.camera && p.camera.owned) {
@@ -421,9 +524,10 @@ export function installVehicles(deps = {}) {
         if (p.camHeading === null) p.camHeading = pose.heading;
         p.camHeading = FM.wrapHeading(p.camHeading + angleDiff(pose.heading, p.camHeading) * (1 - Math.exp(-dt / CHASE.headingTau)));
         const ch = p.camHeading;
-        const ex = pose.x - Math.sin(ch) * CHASE.back;
-        const ey = pose.y - Math.cos(ch) * CHASE.back;
-        let ez = pose.z + CHASE.up;
+        // aim at the seat, not the vehicle origin: the stand-in's crew sits up in its basket (profile seat offset)
+        const ex = seat.x - Math.sin(ch) * CHASE.back;
+        const ey = seat.y - Math.cos(ch) * CHASE.back;
+        let ez = seat.z + CHASE.up;
         const g = ground(ex, ey);
         if (!Number.isNaN(g) && ez < g + 2) ez = g + 2;
         p.camera.write({ pos: [ex, ey, ez], h: ch, p: CHASE.pitch + pose.pitch * 0.4, r: pose.bank * 0.25, fov: CHASE.fov });
@@ -461,6 +565,22 @@ export function installVehicles(deps = {}) {
     });
   }
 
+  /** Exit hop: the rig goes from the seat down to where the entity tick now places the body (the server's exit spot). */
+  function tickExitHop(dt) {
+    const h = exitHop;
+    const inst = em()?.entityMap?.get(localGuid());
+    if (!inst || !inst.root) { exitHop = null; return; }
+    h.t += dt;
+    const u = h.t / h.dur;
+    if (u >= 1) { exitHop = null; return; } // the entity tick owns the rig again
+    const r = inst.root.position;
+    // a hop only bridges the seat → exit spot beside the vehicle; anything farther (a teleport, a missed bail) snaps
+    if (Math.hypot(r.x - h.from.x, r.y - h.from.y, r.z - h.from.z) > 30) { exitHop = null; return; }
+    const at = hopPoint(h.from, { x: r.x, y: r.y, z: r.z }, u, HOP.arcM);
+    const hq = inst.root.quaternion;
+    writeEntity(localGuid(), at.x, at.y, at.z, FM.orientation(hopHeading(h.h, headingOfQuat([hq.w, hq.x, hq.y, hq.z]), u), 0, 0));
+  }
+
   // ---------------------------------------------------------------- observers + board prompt
 
   function tickObservers() {
@@ -471,11 +591,11 @@ export function installVehicles(deps = {}) {
       const pose = v.track.pose(t);
       if (!pose) continue;
       const q = FM.orientation(pose.heading, pose.pitch, pose.bank);
-      writeEntity(v.guid, pose.x, pose.y, pose.z, q);
+      writeEntity(v.guid, pose.x, pose.y, pose.z, q, true);
       const occ = v.seats[0] >>> 0;
       if (occ && occ !== localGuid() && v.profile) {
         const seat = seatOf(v, pose, 0);
-        writeEntity(occ, seat.x, seat.y, seat.z, q);
+        writeEntity(occ, seat.x, seat.y, seat.z, q, true);
       }
     }
   }
@@ -546,10 +666,21 @@ export function installVehicles(deps = {}) {
     drainInbox();
     if (pilot) tickPilot(dt);
     else if (fall) tickFall();
+    else if (exitHop) tickExitHop(dt);
     tickObservers();
     pruneVehicles();
     tickPrompt();
     tracers.tick(dt);
+    chutes?.tick(dt, chutePose);
+  }
+
+  /** The body under a canopy: the local fall twin while we fall, else the entity rig (observed players, landing). */
+  function chutePose(guid) {
+    if (fall && guid === localGuid()) return { x: fall.x, y: fall.y, z: fall.z, heading: fall.heading };
+    const inst = em()?.entityMap?.get(guid >>> 0);
+    if (!inst || !inst.root) return null;
+    const r = inst.root, q = r.quaternion;
+    return { x: r.position.x, y: r.position.y, z: r.position.z, heading: headingOfQuat([q.w, q.x, q.y, q.z]) };
   }
 
   live.vehicles = { afterTick };
@@ -579,6 +710,7 @@ export function installVehicles(deps = {}) {
         } : null,
         wire,
         tracers: tracers.stats(),
+        chutes: chutes ? chutes.stats() : null,
       };
     },
     vehicles: () => [...vehicles.values()],
@@ -609,6 +741,7 @@ export function installVehicles(deps = {}) {
       try { win.removeEventListener("keydown", onKeyB, true); } catch (_) {}
       osd.dispose();
       tracers.dispose();
+      chutes?.dispose();
       if (live.vehicles && live.vehicles.afterTick === afterTick) delete live.vehicles;
       if (win.__vehicles === api) delete win.__vehicles;
     },

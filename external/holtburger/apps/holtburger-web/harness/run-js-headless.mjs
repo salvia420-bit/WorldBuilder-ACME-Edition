@@ -1523,6 +1523,14 @@ const TIER5 = [
   // 2026-10-31: demand-sized kit pages replayed on the real-boot key mix (client_portal.dat texture dims).
   { tier: 5, flag: "gpuBatchPagesRealboot", file: "tests/gpu_batch_pages_realboot.test.mjs",
     requires: () => process.env.HB_PORTAL_DAT || "/home/wbterminal/ac_base_dats/client_portal.dat" },
+  // 2026-11-01 vehicle tour (owner: few trees in flight; balloon halo in front of clouds):
+  // ?objRefire (object-window refire on the slot-grid arm) and ?cloudEdgeResolve (depth-aware
+  // cloud temporal upscale at silhouettes; CPU model only — the GLSL needs a GPU run).
+  { tier: 5, flag: "objRefire", file: "tests/obj_refire.test.mjs" },
+  { tier: 5, flag: "cloudEdgeResolve", file: "tests/cloud_edge_resolve.test.mjs" },
+  // 2026-11-01 vehicles (?vehicles=on): flight-model golden parity with the ACE server model, predictor,
+  // observer track, fall model, tracer spread replay, boarding hop, parachute canopy (unregistered since session 1).
+  { tier: 5, flag: "vehicles", file: "tests/vehicle_flight.test.mjs" },
 ];
 
 // Registered but KNOWN-FAILING because the APP is wrong (a real bug, named

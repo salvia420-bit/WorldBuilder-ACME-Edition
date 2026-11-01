@@ -9,6 +9,9 @@
 //       less than one step's divergence and converges on the server's trajectory; acks far behind adopt.
 //   V5  observer track interpolates between snapshots.
 //   V6  tracer spread replay matches the golden xorshift / SpreadOffset samples (shared with C#).
+//   V7  boarding / exit hop (board_hop.js): ends exactly at the seat, arcs above the straight line, duration clamps,
+//       heading short-way interpolation, the quaternion heading inverts FM.orientation, the URL flag.
+//   V8  parachute canopy (chute.js): geometry sizes / extents, opening and collapse curves, the URL flag.
 //
 // Run: node tests/vehicle_flight.test.mjs
 
@@ -20,6 +23,8 @@ const FM = await import("../scene3d/vehicle/flight_model.js");
 const P = await import("../scene3d/vehicle/predictor.js");
 const W = await import("../scene3d/vehicle/weapons.js");
 const F = await import("../scene3d/vehicle/fall_model.js");
+const H = await import("../scene3d/vehicle/board_hop.js");
+const C = await import("../scene3d/vehicle/chute.js");
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const golden = JSON.parse(readFileSync(join(HERE, "../docs/vehicles-2026-11-01/flight/flight-golden.json"), "utf8"));
@@ -201,6 +206,48 @@ check("xorshift32 and SpreadOffset match the shared golden samples", () => {
     near(o.dUp, golden.spread.offsets[i].dUp, 0, `dUp ${i}`);
     assert(Math.hypot(o.dRight, o.dUp) <= golden.spread.spread + 1e-12, "inside the cone");
   });
+});
+
+console.log("V7 boarding / exit hop");
+check("the hop starts at the rig, ends exactly at the seat and arcs above the straight line", () => {
+  const from = { x: 10, y: 20, z: 94 }, to = { x: 13, y: 26, z: 99.75 };
+  const a = H.hopPoint(from, to, 0), b = H.hopPoint(from, to, 1), m = H.hopPoint(from, to, 0.5);
+  for (const k of ["x", "y", "z"]) { near(a[k], from[k], 1e-12, `start ${k}`); near(b[k], to[k], 1e-12, `end ${k}`); }
+  assert(m.z > (from.z + to.z) / 2 + 0.5, `mid-hop arc ${m.z}`);
+  near(H.hopPoint(from, to, 7).z, to.z, 1e-12, "u clamps at 1");
+});
+check("duration grows with distance and clamps", () => {
+  near(H.hopDuration(0), H.HOP.minSec, 1e-12, "min");
+  near(H.hopDuration(1e6), H.HOP.maxSec, 1e-12, "max");
+  assert(H.hopDuration(6) > H.hopDuration(1), "monotone");
+});
+check("heading goes the short way and the quaternion heading inverts FM.orientation", () => {
+  near(H.hopHeading(3.0, -3.0, 1), -3.0 + 2 * Math.PI, 1e-12, "wraps through pi");
+  for (const h of [0, 0.7, 2.5, -1.9, Math.PI - 0.01]) near(H.headingOfQuat(FM.orientation(h, 0, 0)), h, 1e-9, `heading ${h}`);
+});
+check("?vehicleBoardAnim=off is the only way off", () => {
+  assert(H.boardAnimEnabled("") && H.boardAnimEnabled("?vehicleBoardAnim=1") && !H.boardAnimEnabled("?vehicleBoardAnim=off"), "flag");
+});
+
+console.log("V8 parachute canopy");
+check("canopy geometry: gored dome over the harness, rim at `rise`, apex at rise + height", () => {
+  const g = C.canopyGeometry();
+  const tris = C.CANOPY.gores * (2 * C.CANOPY.rings - 1);
+  assert(g.positions.length === tris * 9 && g.colors.length === g.positions.length, `dome ${g.positions.length}`);
+  assert(g.lines.length === C.CANOPY.lines * 6, "shroud lines");
+  let zmin = Infinity, zmax = -Infinity, rmax = 0;
+  for (let i = 0; i < g.positions.length; i += 3) {
+    zmin = Math.min(zmin, g.positions[i + 2]); zmax = Math.max(zmax, g.positions[i + 2]);
+    rmax = Math.max(rmax, Math.hypot(g.positions[i], g.positions[i + 1]));
+  }
+  near(zmin, C.CANOPY.rise, 1e-5, "rim height"); near(zmax, C.CANOPY.rise + C.CANOPY.height, 1e-5, "apex");
+  near(rmax, C.CANOPY.radius, 1e-5, "rim radius");
+});
+check("the canopy opens (0.15 → 1) and collapses (0 → 1) on their clocks", () => {
+  near(C.openScale(0), 0.15, 1e-12, "closed"); near(C.openScale(C.CANOPY.openSec), 1, 1e-12, "open"); near(C.openScale(99), 1, 1e-12, "stays open");
+  assert(C.openScale(0.2) < C.openScale(0.4), "monotone");
+  near(C.collapseProgress(0), 0, 1e-12, "start"); near(C.collapseProgress(C.CANOPY.collapseSec), 1, 1e-12, "gone");
+  assert(C.chuteEnabled("") && !C.chuteEnabled("?vehicleChute=off"), "flag");
 });
 
 console.log(`\nvehicle_flight: ${passed} passed, ${failed} failed`);

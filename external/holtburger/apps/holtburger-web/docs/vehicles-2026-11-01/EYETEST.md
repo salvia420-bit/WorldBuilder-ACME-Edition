@@ -3,6 +3,26 @@
 Everything here is about look and feel, which the laptop (SwiftShader, headless) cannot judge. The structural checks
 (prediction, streaming, kills, bail-out, compatibility) are in `HANDOFF.md`. One sitting; ~20 minutes.
 
+## Agent pass on the 1070 (2026-11-01 evening, owner-directed; MODE T off-screen + muted, 30 fps cap)
+
+Tours `bench/vehicle-1070.mjs` (A before the fixes, B/C after) — stills + video on the owner's phone (Taildrop) and in
+`/mnt/wbterminal1/tmp/claude-scratch/vehicles/1070-tour-{a,b,c}/`. What the pictures settled and what stays the owner's call:
+
+| # | Status after the agent pass |
+|---|---|
+| 1 Board | B boards; now a 0.6-1.2 s hop up into the seat (decision 42, `?vehicleBoardAnim=off`). The stand-in's FIRST rig build after `@vehicle spawn` takes 16-20 s on a fresh client ("Press B" shows before the balloon) — open |
+| 2 Takeoff | works (vertical to 30 m); style = owner's call |
+| 3 Feel | chase camera now aims at the seat: the balloon is framed centre (it banks with the aircraft) — feel = owner |
+| 4 Corrections | tour A 0 at RTT 83 ms; B 2 (0.06 m) at 400 km/h despite a Wi-Fi stall (46 substituted inputs); C 2 (0.02 m) |
+| 5 Cockpit | was broken (the eye inside the pilot's head, then inside the envelope) → the pilot and the vehicle are hidden in cockpit view (decision 41); now a clean first-person view from basket height |
+| 6 400 km/h | world keeps up; the balloon used to VANISH ~30 s into a flight (the entity reaper, decision 40) — fixed (tour B/C keep it through 400 km/h) |
+| 7 Guns | tracers fire but read as thin 1-px lines; the muzzle was under the balloon (moved into the basket, server profile) — thicker tracers = open |
+| 9 Landing | lands, parks, exits beside (exit hop back down) |
+| 10 Bail | 450 m → free fall → chute at ~140 m → 5 m/s → unhurt; the camera now follows the fall (decision 49 — it used to stay on the ground), the canopy is drawn (decision 43, `?vehicleChute=off`), and the avatar is visible under it (decision 52) |
+| 12 Stand-in | it is a drudge-faced HOT-AIR BALLOON (Setup 0x020016F1: envelope + basket from 19 m up; at 0.3 = 5.7-12 m above the vehicle origin) — keep or replace = owner |
+| 13 Seat | was ~5 m below the basket (for retail too) → (0, 0, 5.75) = in the basket; from behind the basket wall hides the seated pilot |
+| — | owner: few trees in flight → `?objRefire=on` (1070: 0.63 → 0.96 of the object window baked in flight); halo around the balloon against clouds → `?cloudEdgeResolve=on` (1070 live A/B: fringe gone). Both DEFAULT ON since the owner's flip (2026-11-01); `=off` escapes |
+
 ## Setup
 
 - ACE: the vehicles fork (`~/ace-server`, branch `vehicles-2026-11-01`) with `vehicles_enabled` and

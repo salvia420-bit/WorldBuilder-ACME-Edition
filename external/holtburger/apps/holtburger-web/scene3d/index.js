@@ -65,7 +65,7 @@ import {
 // evictStaticAtlasForLb above, for the cross-LB per-material ?staticBatch
 // buckets (plain specifier everywhere → one module instance → shared state).
 import { evictStaticBatchXForLb, parkStaticBatchXForLb, unparkStaticBatchXForLb } from "./static_batch_x.js";
-import { afterObjectBake, afterUnpark as objRadiusAfterUnpark, getObjectRadiusStats, objectRadiusHides, objectBakeAllowed } from "./object_radius.js";
+import { afterObjectBake, afterUnpark as objRadiusAfterUnpark, getObjectRadiusStats, objectRadiusHides, objectBakeAllowed, objRadiusSetting } from "./object_radius.js";
 import { getStaticGeomCache } from "./static_geom_cache.js";
 // Frame-split probe (2026-08-06) — imported for its side effect only: it
 // installs `window.__frameSplitArm/Report/Census/Ballast` and nothing else.
@@ -7441,6 +7441,40 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
               }
             },
           };
+          // ?objRefire (2026-11-01, DEFAULT ON after the 1070 A/B, `=off` escapes; scene3d/object_refire.js). The grid
+          // re-fires a LIVE tile's objects only on a crossing (refireWindowFeeds)
+          // and the 250 ms retry covers STAGED tiles alone, so a statics bake the
+          // stream guard's skip-cap dropped waited for the next crossing (tens of
+          // seconds on foot; at flight speed the window ahead stayed bare). ON:
+          // every 250 ms, after the staged refire, re-fire the object window's
+          // unbaked statics/buildings, ahead-of-travel first. Same guard and cap.
+          // Loaded only when asked for (not in the static boot graph, so the
+          // modulepreload block is unchanged); grammar = object_refire.js.
+          let orf = null;
+          try {
+            const v = (new URLSearchParams(window.location.search).get("objRefire") || "").trim().toLowerCase();
+            if (!(v === "off" || v === "0" || v === "false" || v === "no")) orf = await import("./object_refire.js");
+          } catch (_) {
+            orf = null;
+          }
+          const objRefire = orf && orf.objRefireEnabled()
+            ? orf.createObjectRefire({
+                fireLb: (x, y) => feeds.fireLb(x, y),
+                needs: (lbKey) => {
+                  try { if (landblockLru.isParked(lbKey)) return false; } catch (_) {}
+                  const s = liveScene3d.staticsBakedLbs;
+                  const b = liveScene3d.buildingsBakedLbs;
+                  return !(s instanceof Set && s.has(lbKey)) || !(b instanceof Set && b.has(lbKey));
+                },
+                radius: () => objRadiusSetting(),
+                fallbackRadius: rg.R_LB,
+                liveStates: new Set([rg.SLOT_STATE.LIVE, rg.SLOT_STATE.STAGED]),
+                tileLbKeys: rg.tileLbKeys,
+              })
+            : null;
+          if (typeof window !== "undefined") {
+            window.__objRefire = () => (objRefire ? { enabled: true, ...objRefire.stats } : { enabled: false });
+          }
           const lruDeps = {
             parkLb: (lb) => landblockLru.park(lb) === true,
             unparkLb: (lb) => landblockLru.unpark(lb) === true,
@@ -7593,6 +7627,7 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
                   const lbOnly = ((lbx << 24) | (lby << 16)) >>> 0;
                   const crossed = gridPlayerLbKey !== null && gridPlayerLbKey !== lbOnly;
                   gridPlayerLbKey = lbOnly;
+                  if (objRefire) objRefire.notePlayer(lbOnly, now());
                   const res = grid.update(lbx, lby);
                   adapter.onUpdate(res);
                   // A crossing moves the ?objRadius window even when no tile
@@ -7620,6 +7655,9 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
                   this._lastRefireMs = t;
                   adapter.refireStagedFeeds();
                 }
+                // ?objRefire: self-throttled to 250 ms; after the staged refire
+                // so terrain for STAGED tiles keeps first claim on free slots.
+                if (objRefire) objRefire.tick(grid, gridPlayerLbKey, t);
                 if (t - this._lastSliceMs >= 1000) {
                   this._lastSliceMs = t;
                   for (const p of sessionPins) {
