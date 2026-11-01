@@ -1,0 +1,139 @@
+{
+ "name": "matrix-s2",
+ "account": "agentp10",
+ "carryKmh": 800,
+ "setupChat": [
+  "@cloak on"
+ ],
+ "timeoutMin": 90,
+ "minMemAvailMB": 900,
+ "extraFlags": "hud=none",
+ "chromeArgs": [
+  "--disable-gpu-compositing"
+ ],
+ "viewport": "960x540",
+ "steps": [
+  {
+   "label": "s300-agl50-NNE",
+   "teleloc": "0xA9B40019 84 7.1 94",
+   "settleMaxSec": 180,
+   "quietSec": 15,
+   "speedKmh": 300,
+   "aglM": 50,
+   "legs": [
+    {
+     "heading": 21,
+     "metres": 5000
+    }
+   ],
+   "pitchDeg": -25,
+   "settleMs": 8000,
+   "maxSec": 400
+  },
+  {
+   "label": "s300-agl150-SSW",
+   "teleloc": "0xA9B40019 84 7.1 94",
+   "settleMaxSec": 180,
+   "quietSec": 15,
+   "speedKmh": 300,
+   "aglM": 150,
+   "legs": [
+    {
+     "heading": 201,
+     "metres": 5000
+    }
+   ],
+   "pitchDeg": -25,
+   "settleMs": 8000,
+   "maxSec": 400
+  },
+  {
+   "label": "s750-agl100-WNW",
+   "teleloc": "0xA9B40019 84 7.1 94",
+   "settleMaxSec": 180,
+   "quietSec": 15,
+   "speedKmh": 750,
+   "aglM": 100,
+   "legs": [
+    {
+     "heading": 291,
+     "metres": 8000
+    }
+   ],
+   "pitchDeg": -25,
+   "settleMs": 8000,
+   "maxSec": 400
+  },
+  {
+   "label": "s300-square",
+   "teleloc": "0xA9B40019 84 7.1 94",
+   "settleMaxSec": 180,
+   "quietSec": 15,
+   "speedKmh": 300,
+   "aglM": 100,
+   "legs": [
+    {
+     "heading": 111,
+     "metres": 2500
+    },
+    {
+     "heading": 201,
+     "metres": 2500
+    },
+    {
+     "heading": 291,
+     "metres": 2500
+    },
+    {
+     "heading": 21,
+     "metres": 2500
+    }
+   ],
+   "pitchDeg": -25,
+   "settleMs": 8000,
+   "maxSec": 400
+  },
+  {
+   "label": "s200-outback-ESE",
+   "teleloc": "0xA9B40019 84 7.1 94",
+   "settleMaxSec": 180,
+   "quietSec": 15,
+   "speedKmh": 200,
+   "aglM": 100,
+   "legs": [
+    {
+     "heading": 111,
+     "metres": 3000
+    },
+    {
+     "heading": 291,
+     "metres": 3000
+    }
+   ],
+   "pitchDeg": -25,
+   "settleMs": 8000,
+   "maxSec": 400
+  },
+  {
+   "label": "s750-outback-SSE",
+   "teleloc": "0xA9B40019 84 7.1 94",
+   "settleMaxSec": 180,
+   "quietSec": 15,
+   "speedKmh": 750,
+   "aglM": 100,
+   "legs": [
+    {
+     "heading": 156,
+     "metres": 6000
+    },
+    {
+     "heading": 336,
+     "metres": 6000
+    }
+   ],
+   "pitchDeg": -25,
+   "settleMs": 8000,
+   "maxSec": 400
+  }
+ ]
+}

@@ -1,0 +1,38 @@
+{
+ "name": "render-census-carrycam",
+ "account": "agentp10",
+ "carryKmh": 800,
+ "render": true,
+ "setupChat": [
+  "@cloak on"
+ ],
+ "timeoutMin": 90,
+ "extraFlags": "hud=none",
+ "chromeArgs": [
+  "--disable-gpu-compositing"
+ ],
+ "viewport": "960x540",
+ "steps": [
+  {
+   "label": "carrycam-render",
+   "eval": "carry-census.eval.js",
+   "mode": "carryCam",
+   "aglList": [
+    15,
+    50,
+    100,
+    150
+   ],
+   "frames": 2,
+   "moveFrames": 0,
+   "headingDeg": 111,
+   "pitchDeg": -25,
+   "settleQuietSec": 12,
+   "settleMaxSec": 240,
+   "teleloc": "0xA9B40019 84 7.1 94",
+   "quietSec": 20,
+   "fovDeg": 75
+  }
+ ],
+ "minMemAvailMB": 900
+}

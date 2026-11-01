@@ -1,0 +1,169 @@
+--- a/apps/holtburger-web/scene3d/drone/index.js
++++ b/apps/holtburger-web/scene3d/drone/index.js
+@@ -235,9 +235,12 @@
+ export function readDroneFlags(search) {
+   try {
+     const q = new URLSearchParams(search ?? "");
+-    return { debug: q.get("droneDebug") === "on", audio: !(q.get("droneAudio") === "off") };
++    // EXPERIMENT hb-carry (2026-10-31): ?droneCarry=on — the drone carries the player (see CARRY below).
++    const kmh = Number(q.get("droneCarryKmh")), acc = Number(q.get("droneCarryAccel"));
++    return { debug: q.get("droneDebug") === "on", audio: !(q.get("droneAudio") === "off"), carry: q.get("droneCarry") === "on",
++      carryKmh: Number.isFinite(kmh) && kmh > 0 ? Math.min(kmh, 1400) : 760, carryAccel: Number.isFinite(acc) && acc > 0 ? acc : 25 };
+   } catch (_) {
+-    return { debug: false, audio: true };
++    return { debug: false, audio: true, carry: false, carryKmh: 760, carryAccel: 25 };
+   }
+ }
+ 
+@@ -694,6 +697,61 @@
+     search = "";
+   }
+   const flags = readDroneFlags(search);
++  // ---- EXPERIMENT hb-carry (2026-10-31): the drone carries the player ------------------------------------------
++  // With carry on, every deploy's craft gets the carry speed / acceleration limits, the tether and battery are
++  // lifted, the pilot-moved abort is off, and while the drone flies the player's pose is sent to ACE under it
++  // (wasm debugDragPose → one AutonomousPosition) at `hz`, so ACE's first-sight bubble and the client's
++  // player-centred streaming follow the drone. A send never jumps more than `maxStepM` (ACE rejects a step that is
++  // both > 50 m and > 1 landblock, then freezes the server position): a lagging carry catches up in steps.
++  const carryCfg = { on: flags.carry === true, kmh: flags.carryKmh, accel: flags.carryAccel, hangM: 3, hz: 10, maxStepM: 150 };
++  const carry = { active: false, sends: 0, catchUps: 0, maxStepM: 0, maxGapM: 0, metres: 0, errors: 0, lastErr: null,
++    last: null, lastAt: 0 };
++  const carryCraftOpts = () => (carryCfg.on ? { vmax: carryCfg.kmh / 3.6, vzMax: 30, amax: carryCfg.accel, jmax: carryCfg.accel * 2 } : null);
++  const carryTether = (t) => {
++    const out = { pos: [0, 0, 0], signal: 1, limited: false, kind: null, normal: null, distM: 0 };
++    const dr = { battery: 1, warn: false, rth: false, empty: false };
++    return { ...t, clamp(pos, home) {
++      out.pos[0] = pos[0]; out.pos[1] = pos[1]; out.pos[2] = pos[2];
++      out.distM = home ? Math.hypot(pos[0] - home[0], pos[1] - home[1], pos[2] - home[2]) : 0;
++      return out;
++    }, drain() { return dr; } };
++  };
++  const carryCell = (x, y) => {
++    const lbx = Math.floor(x / 192), lby = Math.floor(y / 192), lx = x - lbx * 192, ly = y - lby * 192;
++    const ci = Math.min(7, Math.max(0, Math.floor(lx / 24))) * 8 + Math.min(7, Math.max(0, Math.floor(ly / 24))) + 1;
++    return { cell: ((lbx << 24) | (lby << 16) | ci) >>> 0, lx, ly };
++  };
++  function carryTick(h, st, pp, tMs) {
++    const active = st === "flying" || st === "returning";
++    carry.active = active;
++    if (!active) { carry.last = null; return; }
++    if (carry.last && tMs - carry.lastAt < 1000 / carryCfg.hz) return;
++    if (!h || typeof h.debugDragPose !== "function") { carry.errors++; carry.lastErr = "debugDragPose missing (not the hb-carry wasm)"; return; }
++    try {
++      let x = pp[0], y = pp[1], z = pp[2] - carryCfg.hangM;
++      const L = carry.last;
++      if (L) {
++        const dx = x - L[0], dy = y - L[1], d = Math.hypot(dx, dy);
++        if (d > carry.maxGapM) carry.maxGapM = d;
++        if (d > carryCfg.maxStepM) { const f = carryCfg.maxStepM / d; x = L[0] + dx * f; y = L[1] + dy * f; z = L[2] + (z - L[2]) * f; carry.catchUps++; }
++        const step = Math.hypot(x - L[0], y - L[1]);
++        if (step > carry.maxStepM) carry.maxStepM = step;
++        carry.metres += step;
++      }
++      const c = carryCell(x, y);
++      h.debugDragPose(c.cell, c.lx, c.ly, z);
++      carry.sends++;
++      carry.last = [x, y, z];
++      carry.lastAt = tMs;
++    } catch (e) {
++      carry.errors++;
++      carry.lastErr = String(e?.message ?? e).slice(0, 200);
++    }
++  }
++  const carryStatus = () => ({ cfg: { ...carryCfg }, active: carry.active, sends: carry.sends, catchUps: carry.catchUps,
++    maxStepM: rnd(carry.maxStepM, 2), maxGapM: rnd(carry.maxGapM, 2), metres: rnd(carry.metres, 1), errors: carry.errors,
++    lastErr: carry.lastErr, last: carry.last ? carry.last.map((v) => rnd(v, 2)) : null });
++  // ------------------------------------------------------------------------------------------------------------
+   const fetchJson = typeof d.fetchJson === "function" ? d.fetchJson : defaultFetchJson;
+ 
+   const [M, THREE, rawProfiles] = await Promise.all([
+@@ -988,8 +1046,10 @@
+     }, () => {
+       if (C === c && c.gestures === g) c.readyKind = "no-hands";
+     });
+-    c.craft = M.createManualCraft({ mode: settings.mode, rates: { rc: settings.acroRc, super: settings.acroSuper, expo: settings.acroExpo } });
++    c.craft = M.createManualCraft({ mode: settings.mode, rates: { rc: settings.acroRc, super: settings.acroSuper, expo: settings.acroExpo },
++      carry: carryCraftOpts() });
+     c.tether = M.createTether({ rangeM: settings.rangeM, ceilingAglM: settings.ceilingAglM, batterySec: settings.batteryMin * 60 });
++    if (carryCfg.on) c.tether = carryTether(c.tether); // EXPERIMENT hb-carry: no range / ceiling / battery
+     let nav = null;
+     try {
+       nav = win?.navigator ?? (typeof navigator !== "undefined" ? navigator : null);
+@@ -1669,7 +1729,7 @@
+       const dx = c.pilotNow.x - c.anchor.x, dy = c.pilotNow.y - c.anchor.y, dz = c.pilotNow.z - c.anchor.z;
+       c.pilotMovedM = Math.sqrt(dx * dx + dy * dy + dz * dz);
+     }
+-    s.pilotMovedM = latched.pilotMoved ? 1e9 : c.pilotMovedM;
++    s.pilotMovedM = latched.pilotMoved ? 1e9 : carryCfg.on ? 0 : c.pilotMovedM; // EXPERIMENT hb-carry: the pilot moves with the drone
+     let sess = latched.session;
+     if (!sess) {
+       try {
+@@ -1938,6 +1998,7 @@
+       }
+       // 10. the drone mesh
+       props.setDronePose(pp, frameC.body.q);
++      if (carryCfg.on) carryTick(linkHandle(c.live), state, pp, perfNowMs()); // EXPERIMENT hb-carry
+       props.setGround(gz);
+       const thr = fin(frameC.throttle) ? frameC.throttle : 0;
+       props.setRotor(c.arm.level * (frameC.landed ? 0.35 : clamp(thr, 0.35, 2.5)), now);
+@@ -2396,6 +2457,7 @@
+       camera: { owned: !!(c && c.link && c.link.cameraOwner.owned), fovDeg: settings.fovDeg },
+       flags: { debug: flags.debug, audio: flags.audio, signals: typeof d.onSignal === "function" ? "bus" : "levels-only" },
+       lastAbort: lastAbort ? { reason: lastAbort.reason, from: lastAbort.from, at: rnd(lastAbort.at, 3) } : null,
++      carry: carryStatus(), // EXPERIMENT hb-carry
+     };
+   }
+ 
+@@ -2490,6 +2552,15 @@
+     setSettings: method(setSettings),
+     tune: method(tune),
+     dispose: method(dispose),
++    // EXPERIMENT hb-carry: carry(patch?) reads / sets {on, kmh, accel, hangM, hz, maxStepM}; craft limits apply at the next deploy.
++    carry: method((patch) => {
++      if (isObj(patch)) {
++        if (typeof patch.on === "boolean") carryCfg.on = patch.on;
++        for (const k of ["kmh", "accel", "hangM", "hz", "maxStepM"]) if (fin(patch[k]) && patch[k] > 0) carryCfg[k] = patch[k];
++        if (patch.resetStats) Object.assign(carry, { sends: 0, catchUps: 0, maxStepM: 0, maxGapM: 0, metres: 0, errors: 0, lastErr: null });
++      }
++      return { ok: true, ...carryStatus() };
++    }),
+   };
+   if (flags.debug) {
+     api.debug = Object.freeze({
+--- a/apps/holtburger-web/scene3d/drone/manual_flight.js
++++ b/apps/holtburger-web/scene3d/drone/manual_flight.js
+@@ -617,7 +617,12 @@
+ export function createManualCraft(deps = {}) {
+   const d = deps && typeof deps === "object" ? deps : {};
+   const makeDrone = typeof d.createDrone === "function" ? d.createDrone : createDrone;
+-  const C = CRAFT_TUNING.cine, AN = CRAFT_TUNING.angle, AC = CRAFT_TUNING.acro, CM = CRAFT_TUNING.common;
++  // EXPERIMENT hb-carry (2026-10-31): `d.carry = {vmax, vzMax, amax, jmax}` lifts the cine speed /
++  // climb / acceleration limits for the drone-carries-the-player experiment (?droneCarry=on).
++  const CARRY = d.carry && typeof d.carry === "object" && Number.isFinite(d.carry.vmax) ? d.carry : null;
++  const C = CARRY ? Object.freeze({ ...CRAFT_TUNING.cine, vmaxH: CARRY.vmax, vmaxBoost: CARRY.vmax, vzMax: CARRY.vzMax })
++    : CRAFT_TUNING.cine;
++  const AN = CRAFT_TUNING.angle, AC = CRAFT_TUNING.acro, CM = CRAFT_TUNING.common;
+   const R = CRAFT_TUNING.rth, CR = CRAFT_TUNING.crash;
+   const G = CM.gravity;
+   const PITCH_MIN = C.pitchMinDeg * DEG, PITCH_MAX = C.pitchMaxDeg * DEG;
+@@ -626,7 +631,8 @@
+   let mode = typeof d.mode === "string" && CRAFT_MODES.includes(d.mode) ? d.mode : "cine";
+   const rates = { rc: AC.rc, super: AC.super, expo: AC.expo };
+ 
+-  const cine = makeDrone({ preset: "cinema", vmax: C.vmaxBoost });
++  const cine = makeDrone(CARRY ? { preset: "cinema", vmax: C.vmaxBoost, amax: CARRY.amax, jmax: CARRY.jmax }
++    : { preset: "cinema", vmax: C.vmaxBoost });
+   const cfg = cine && cine.config && typeof cine.config === "object" ? cine.config : DRONE_PRESETS.cinema;
+   const AMAX = Number.isFinite(cfg.amax) ? cfg.amax : DRONE_PRESETS.cinema.amax;
+   const JMAX = Number.isFinite(cfg.jmax) ? cfg.jmax : DRONE_PRESETS.cinema.jmax;
+--- a/apps/holtburger-web/scene3d/film/drone/flight_model.js
++++ b/apps/holtburger-web/scene3d/film/drone/flight_model.js
+@@ -121,7 +121,7 @@
+  * @type {Readonly<Record<string, ReadonlyArray<number|boolean>>>}
+  */
+ const NUMERIC_RULES = Object.freeze({
+-  vmax: [0, 200, true],
++  vmax: [0, 400, true], // EXPERIMENT hb-carry (2026-10-31): was 200 — the carry drone flies up to ~210 m/s
+   amax: [0, 200, true],
+   jmax: [0, 10000, true],
+   maxTiltDeg: [0, 89, true],

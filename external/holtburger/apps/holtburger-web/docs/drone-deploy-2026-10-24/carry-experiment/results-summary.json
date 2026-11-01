@@ -1,0 +1,8429 @@
+{
+ "schema": "hb-carry-summary-v1",
+ "sources": [
+  {
+   "file": "/mnt/wbterminal1/tmp/claude-scratch/carry/smoke.json",
+   "url": "http://127.0.0.1:8766/apps/holtburger-web/index.html?autoLogin=1&account=agentp10&password=***&autoSpawn=first&agent=1&nosw=1&quality=high&csm=off&renderScale=1&adaptiveRes=off&droneCarry=on&droneDebug=on&droneAudio=off&camDebug=on&portalSpace=off&droneCarryKmh=800&nullRender=1&targetFps=0",
+   "render": false,
+   "viewport": [
+    1920,
+    1080
+   ],
+   "startedAt": "2026-11-01T01:10:10.956Z",
+   "errors": []
+  },
+  {
+   "file": "/mnt/wbterminal1/tmp/claude-scratch/carry/diag.json",
+   "url": "http://127.0.0.1:8766/apps/holtburger-web/index.html?autoLogin=1&account=agentp10&password=***&autoSpawn=first&agent=1&nosw=1&quality=high&csm=off&renderScale=1&adaptiveRes=off&droneCarry=on&droneDebug=on&droneAudio=off&camDebug=on&portalSpace=off&droneCarryKmh=1300&nullRender=1&hud=none&targetFps=0",
+   "render": false,
+   "viewport": [
+    960,
+    540
+   ],
+   "startedAt": "2026-11-01T01:15:36.847Z",
+   "errors": []
+  },
+  {
+   "file": "/mnt/wbterminal1/tmp/claude-scratch/carry/matrix-s1.json",
+   "url": "http://127.0.0.1:8766/apps/holtburger-web/index.html?autoLogin=1&account=agentp10&password=***&autoSpawn=first&agent=1&nosw=1&quality=high&csm=off&renderScale=1&adaptiveRes=off&droneCarry=on&droneDebug=on&droneAudio=off&camDebug=on&portalSpace=off&droneCarryKmh=800&nullRender=1&hud=none&targetFps=0",
+   "render": false,
+   "viewport": [
+    960,
+    540
+   ],
+   "startedAt": "2026-11-01T01:19:40.428Z",
+   "errors": []
+  },
+  {
+   "file": "/mnt/wbterminal1/tmp/claude-scratch/carry/matrix2.json",
+   "url": "http://127.0.0.1:8766/apps/holtburger-web/index.html?autoLogin=1&account=agentp10&password=***&autoSpawn=first&agent=1&nosw=1&quality=high&csm=off&renderScale=1&adaptiveRes=off&droneCarry=on&droneDebug=on&droneAudio=off&camDebug=on&portalSpace=off&droneCarryKmh=800&nullRender=1&hud=none&targetFps=0",
+   "render": false,
+   "viewport": [
+    960,
+    540
+   ],
+   "startedAt": "2026-11-01T01:33:24.943Z",
+   "errors": [
+    "stopped for memory before s300-square (886 MB)"
+   ]
+  },
+  {
+   "file": "/mnt/wbterminal1/tmp/claude-scratch/carry/matrix3.json",
+   "url": "http://127.0.0.1:8766/apps/holtburger-web/index.html?autoLogin=1&account=agentp10&password=***&autoSpawn=first&agent=1&nosw=1&quality=high&csm=off&renderScale=1&adaptiveRes=off&droneCarry=on&droneDebug=on&droneAudio=off&camDebug=on&portalSpace=off&droneCarryKmh=800&nullRender=1&hud=none&targetFps=0",
+   "render": false,
+   "viewport": [
+    960,
+    540
+   ],
+   "startedAt": "2026-11-01T01:40:45.835Z",
+   "errors": []
+  },
+  {
+   "file": "/mnt/wbterminal1/tmp/claude-scratch/carry/census.json",
+   "url": "http://127.0.0.1:8766/apps/holtburger-web/index.html?autoLogin=1&account=agentp10&password=***&autoSpawn=first&agent=1&nosw=1&quality=high&csm=off&renderScale=1&adaptiveRes=off&droneCarry=on&droneDebug=on&droneAudio=off&camDebug=on&portalSpace=off&droneCarryKmh=800&hud=none&targetFps=0",
+   "render": true,
+   "viewport": [
+    960,
+    540
+   ],
+   "startedAt": "2026-11-01T01:56:01.104Z",
+   "errors": []
+  },
+  {
+   "file": "/mnt/wbterminal1/tmp/claude-scratch/carry/census3.json",
+   "url": "http://127.0.0.1:8766/apps/holtburger-web/index.html?autoLogin=1&account=agentp10&password=***&autoSpawn=first&agent=1&nosw=1&quality=high&csm=off&renderScale=1&adaptiveRes=off&droneCarry=on&droneDebug=on&droneAudio=off&camDebug=on&portalSpace=off&droneCarryKmh=800&hud=none&targetFps=0",
+   "render": true,
+   "viewport": [
+    960,
+    540
+   ],
+   "startedAt": "2026-11-01T02:29:11.105Z",
+   "errors": []
+  }
+ ],
+ "runs": [
+  {
+   "run": "smoke-60kmh-60m",
+   "file": "smoke.json",
+   "step": {
+    "label": "smoke-60kmh-60m",
+    "teleloc": "0xA9B40019 84 7.1 94",
+    "settleMaxSec": 180,
+    "quietSec": 15,
+    "speedKmh": 60,
+    "aglM": 60,
+    "legs": [
+     {
+      "heading": 111,
+      "metres": 600
+     }
+    ],
+    "pitchDeg": -25,
+    "settleMs": 6000,
+    "maxSec": 240
+   },
+   "ace": {
+    "cpuPct": 3.5,
+    "rssMB": 549,
+    "log": []
+   },
+   "chrome": null,
+   "memAvailMB": 1863,
+   "error": null,
+   "errors": [],
+   "deploySec": 5.4,
+   "climbSec": 10.1,
+   "flySec": 106.7,
+   "summary": {
+    "metres": 605,
+    "flySec": 106.7,
+    "achievedKmh": 20.4,
+    "cruiseKmhMed": 61.2,
+    "deploySec": 5.4,
+    "climbSec": 10.1,
+    "aglMed": 61.5,
+    "aglMin": 58.4,
+    "blindCtlFrac": 0.003,
+    "terrainUnderBakedFrac": 1,
+    "r1Mean": 1,
+    "r2Mean": 1,
+    "r3Mean": 1,
+    "r5Mean": 1,
+    "leadMed": 1248,
+    "leadMin": 960,
+    "physLeadMed": 200,
+    "physLeadMin": 0,
+    "bubbleMean": 27.7,
+    "bubbleZeroFrac": 0,
+    "newObjectsInFlight": 55,
+    "preKnown": 101,
+    "firstSeen": {
+     "min": 83.8,
+     "median": 96.9,
+     "max": 109.7
+    },
+    "firstSeenAheadFrac": 1,
+    "censusDrawsMed": 200,
+    "censusDrawsMax": 820,
+    "censusMsMed": 1.6,
+    "longTaskMsPerSec": 48,
+    "longTaskMax": 159,
+    "rafP95Med": 183.4,
+    "rafMax": 6699.8,
+    "heapStart": 1064,
+    "heapEnd": 1513,
+    "heapMax": 1519,
+    "lruResidentMax": 161,
+    "lruEvicted": 0,
+    "bakeQueueMax": null,
+    "playerGapMax": 3.3,
+    "carry": {
+     "cfg": {
+      "on": true,
+      "kmh": 800,
+      "accel": 25,
+      "hangM": 3,
+      "hz": 10,
+      "maxStepM": 150
+     },
+     "active": true,
+     "sends": 388,
+     "catchUps": 0,
+     "maxStepM": 3.35,
+     "maxGapM": 3.35,
+     "metres": 614.9,
+     "errors": 0,
+     "lastErr": null,
+     "last": [
+      33100.1,
+      34342.76,
+      101.26
+     ]
+    },
+    "droneState": "flying",
+    "lastAbort": null,
+    "pageErrors": 0,
+    "portalSeen": false
+   },
+   "firstSeenSample": [
+    {
+     "t": 19.1,
+     "d": 98.6,
+     "along": 71.7,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 32,
+     "d": 105.6,
+     "along": 54,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 32,
+     "d": 106.8,
+     "along": 79.9,
+     "name": "Journeyman Scrivener of War Magic"
+    },
+    {
+     "t": 32,
+     "d": 106.7,
+     "along": 80.5,
+     "name": "Apprentice Scrivener of Life Magic"
+    },
+    {
+     "t": 32,
+     "d": 104,
+     "along": 80.4,
+     "name": "Apprentice Scrivener of Creature Magic"
+    },
+    {
+     "t": 32,
+     "d": 104.2,
+     "along": 83.3,
+     "name": "Scrivener of Creature Magic"
+    },
+    {
+     "t": 32,
+     "d": 106.5,
+     "along": 86,
+     "name": "Journeyman Scrivener of Creature Magic"
+    },
+    {
+     "t": 32,
+     "d": 105.3,
+     "along": 83.9,
+     "name": "Scrivener of War Magic"
+    },
+    {
+     "t": 34.1,
+     "d": 95.1,
+     "along": 61.5,
+     "name": "Chest"
+    },
+    {
+     "t": 34.1,
+     "d": 96.9,
+     "along": 63.6,
+     "name": "Door"
+    },
+    {
+     "t": 34.1,
+     "d": 94,
+     "along": 66,
+     "name": "Door"
+    },
+    {
+     "t": 34.1,
+     "d": 92.2,
+     "along": 64.1,
+     "name": "Door"
+    },
+    {
+     "t": 34.1,
+     "d": 95.2,
+     "along": 64.5,
+     "name": "Door"
+    },
+    {
+     "t": 35.2,
+     "d": 92.9,
+     "along": 61.3,
+     "name": "Apprentice Scrivener of Item and War Magic"
+    },
+    {
+     "t": 35.2,
+     "d": 87.6,
+     "along": 59.9,
+     "name": "Apprentice Scrivener of Life Magic"
+    },
+    {
+     "t": 35.2,
+     "d": 88.1,
+     "along": 60,
+     "name": "Apprentice Scrivener of Creature Magic"
+    },
+    {
+     "t": 35.2,
+     "d": 90,
+     "along": 54.6,
+     "name": "Journeyman Scrivener of Life Magic"
+    },
+    {
+     "t": 35.2,
+     "d": 91,
+     "along": 56.2,
+     "name": "Scrivener of Life Magic"
+    },
+    {
+     "t": 35.2,
+     "d": 95.5,
+     "along": 61.7,
+     "name": "Journeyman Scrivener of Item Magic"
+    },
+    {
+     "t": 35.2,
+     "d": 100.3,
+     "along": 82.9,
+     "name": "Sentry"
+    },
+    {
+     "t": 35.2,
+     "d": 87.6,
+     "along": 61.9,
+     "name": "Scrivener of Item Magic"
+    },
+    {
+     "t": 35.2,
+     "d": 98.7,
+     "along": 88,
+     "name": "Royal Guard"
+    },
+    {
+     "t": 35.2,
+     "d": 90.8,
+     "along": 55.2,
+     "name": "Scrivener of Void Magic"
+    },
+    {
+     "t": 36,
+     "d": 90.4,
+     "along": 57.7,
+     "name": "Apprentice Scrivener of Item and War Magic"
+    },
+    {
+     "t": 36,
+     "d": 106,
+     "along": 95.1,
+     "name": "Sir Rylanan"
+    },
+    {
+     "t": 36,
+     "d": 88.5,
+     "along": 87.9,
+     "name": "Mite Scion"
+    },
+    {
+     "t": 37.1,
+     "d": 86.5,
+     "along": 85.8,
+     "name": "Gnawer Shreth"
+    },
+    {
+     "t": 37.1,
+     "d": 97.1,
+     "along": 80.4,
+     "name": "Aun Kielerea"
+    },
+    {
+     "t": 39.1,
+     "d": 95.7,
+     "along": 82.8,
+     "name": "Door"
+    },
+    {
+     "t": 39.1,
+     "d": 96.7,
+     "along": 83.1,
+     "name": "Underground Passage"
+    },
+    {
+     "t": 47.1,
+     "d": 103.1,
+     "along": 52.8,
+     "name": "Drudge Skulker"
+    },
+    {
+     "t": 47.1,
+     "d": 92.9,
+     "along": 76.4,
+     "name": "Sentry"
+    },
+    {
+     "t": 52,
+     "d": 85,
+     "along": 71.4,
+     "name": "Sentry"
+    },
+    {
+     "t": 52,
+     "d": 83.8,
+     "along": 80.6,
+     "name": "Mite Snippet"
+    },
+    {
+     "t": 60.1,
+     "d": 96.5,
+     "along": 85.8,
+     "name": "Young Mosswart"
+    },
+    {
+     "t": 62.1,
+     "d": 98.8,
+     "along": 71.7,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 62.1,
+     "d": 97.4,
+     "along": 84.7,
+     "name": "Red Phyntos Wasp"
+    },
+    {
+     "t": 62.1,
+     "d": 94.8,
+     "along": 81.6,
+     "name": "Red Phyntos Wasp"
+    },
+    {
+     "t": 64,
+     "d": 105.4,
+     "along": 92.9,
+     "name": "Creeper Mosswart"
+    },
+    {
+     "t": 67,
+     "d": 107.8,
+     "along": 13,
+     "name": "Life Stone"
+    },
+    {
+     "t": 75.1,
+     "d": 101.1,
+     "along": 85.8,
+     "name": "Door"
+    },
+    {
+     "t": 75.1,
+     "d": 99.4,
+     "along": 81.7,
+     "name": "Merchant"
+    },
+    {
+     "t": 77.1,
+     "d": 91.9,
+     "along": 75.7,
+     "name": "Well"
+    },
+    {
+     "t": 77.1,
+     "d": 94.7,
+     "along": 93.2,
+     "name": "Black Rabbit"
+    },
+    {
+     "t": 79,
+     "d": 103.1,
+     "along": 75.7,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 82,
+     "d": 105.4,
+     "along": 52,
+     "name": "Young Banderling"
+    },
+    {
+     "t": 94.1,
+     "d": 106.7,
+     "along": 10.2,
+     "name": "Creeper Mosswart"
+    },
+    {
+     "t": 94.1,
+     "d": 98.5,
+     "along": 61.4,
+     "name": "Destroyed Portal to Sanamar"
+    },
+    {
+     "t": 94.1,
+     "d": 92.5,
+     "along": 90.7,
+     "name": "Black Rabbit"
+    },
+    {
+     "t": 96.1,
+     "d": 100.6,
+     "along": 34.2,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 98.1,
+     "d": 95.2,
+     "along": 92.4,
+     "name": "Mite Snippet"
+    },
+    {
+     "t": 110.1,
+     "d": 108.9,
+     "along": 102.2,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 110.1,
+     "d": 109.7,
+     "along": 50.4,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 121,
+     "d": 91.8,
+     "along": 70,
+     "name": "Mite Scion"
+    },
+    {
+     "t": 123.1,
+     "d": 105.4,
+     "along": 76.4,
+     "name": "Drudge Slinker"
+    }
+   ]
+  },
+  {
+   "run": "diag-fly200",
+   "file": "diag.json",
+   "step": {
+    "label": "diag-fly200",
+    "speedKmh": 200,
+    "aglM": 100,
+    "legs": [
+     {
+      "heading": 111,
+      "metres": 2500
+     }
+    ],
+    "pitchDeg": -25,
+    "settleMs": 5000,
+    "maxSec": 200
+   },
+   "ace": {
+    "cpuPct": 5.9,
+    "rssMB": 559,
+    "log": []
+   },
+   "chrome": {
+    "cpuPct": 352.8,
+    "gpuProcCpuPct": 267.5,
+    "rssMB": 3512
+   },
+   "memAvailMB": 1747,
+   "error": null,
+   "errors": [],
+   "deploySec": 3.7,
+   "climbSec": 4.1,
+   "flySec": 50.8,
+   "summary": {
+    "metres": 2505,
+    "flySec": 50.8,
+    "achievedKmh": 177.5,
+    "cruiseKmhMed": 204.1,
+    "deploySec": 3.7,
+    "climbSec": 4.1,
+    "aglMed": 101.6,
+    "aglMin": 52.9,
+    "blindCtlFrac": 0.011,
+    "terrainUnderBakedFrac": 1,
+    "r1Mean": 1,
+    "r2Mean": 1,
+    "r3Mean": 1,
+    "r5Mean": 1,
+    "leadMed": 1152,
+    "leadMin": 864,
+    "physLeadMed": 200,
+    "physLeadMin": 0,
+    "bubbleMean": 16.9,
+    "bubbleZeroFrac": 0,
+    "newObjectsInFlight": 196,
+    "preKnown": 53,
+    "firstSeen": {
+     "min": 2.9,
+     "median": 73.4,
+     "max": 117.4
+    },
+    "firstSeenAheadFrac": 0.82,
+    "censusDrawsMed": 141,
+    "censusDrawsMax": 442,
+    "censusMsMed": 2.2,
+    "longTaskMsPerSec": 265.2,
+    "longTaskMax": 394,
+    "rafP95Med": 66.7,
+    "rafMax": 516.7,
+    "heapStart": 1155,
+    "heapEnd": 1136,
+    "heapMax": 1422,
+    "lruResidentMax": 168,
+    "lruEvicted": 28,
+    "bakeQueueMax": null,
+    "playerGapMax": 19.5,
+    "carry": {
+     "cfg": {
+      "on": true,
+      "kmh": 1300,
+      "accel": 25,
+      "hangM": 3,
+      "hz": 10,
+      "maxStepM": 150
+     },
+     "active": true,
+     "sends": 467,
+     "catchUps": 0,
+     "maxStepM": 12.07,
+     "maxGapM": 12.07,
+     "metres": 2588.1,
+     "errors": 0,
+     "lastErr": null,
+     "last": [
+      34940.65,
+      33631.47,
+      191.06
+     ]
+    },
+    "droneState": "flying",
+    "lastAbort": null,
+    "pageErrors": 0,
+    "portalSeen": false
+   },
+   "firstSeenSample": [
+    {
+     "t": 10,
+     "d": 95.3,
+     "along": 67.6,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 11.2,
+     "d": 94,
+     "along": 64.9,
+     "name": "Chest"
+    },
+    {
+     "t": 11.2,
+     "d": 93.2,
+     "along": 69.4,
+     "name": "Door"
+    },
+    {
+     "t": 11.2,
+     "d": 91.4,
+     "along": 67.5,
+     "name": "Door"
+    },
+    {
+     "t": 11.2,
+     "d": 94.3,
+     "along": 67.9,
+     "name": "Door"
+    },
+    {
+     "t": 11.2,
+     "d": 93.3,
+     "along": 35.6,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 12.1,
+     "d": 69.1,
+     "along": 35.7,
+     "name": "Apprentice Scrivener of Life Magic"
+    },
+    {
+     "t": 12.1,
+     "d": 68,
+     "along": 29.4,
+     "name": "Apprentice Scrivener of Creature Magic"
+    },
+    {
+     "t": 12.1,
+     "d": 69.6,
+     "along": 35.9,
+     "name": "Apprentice Scrivener of Creature Magic"
+    },
+    {
+     "t": 12.1,
+     "d": 71.7,
+     "along": 29.6,
+     "name": "Apprentice Scrivener of Life Magic"
+    },
+    {
+     "t": 12.1,
+     "d": 73.4,
+     "along": 30.4,
+     "name": "Journeyman Scrivener of Life Magic"
+    },
+    {
+     "t": 12.1,
+     "d": 76.5,
+     "along": 34.4,
+     "name": "Door"
+    },
+    {
+     "t": 12.1,
+     "d": 66.3,
+     "along": 32.4,
+     "name": "Scrivener of Creature Magic"
+    },
+    {
+     "t": 12.1,
+     "d": 74,
+     "along": 32.1,
+     "name": "Scrivener of Life Magic"
+    },
+    {
+     "t": 12.1,
+     "d": 67.4,
+     "along": 33,
+     "name": "Scrivener of War Magic"
+    },
+    {
+     "t": 12.1,
+     "d": 67.9,
+     "along": 35,
+     "name": "Journeyman Scrivener of Creature Magic"
+    },
+    {
+     "t": 12.1,
+     "d": 88.3,
+     "along": 77,
+     "name": "Door"
+    },
+    {
+     "t": 12.1,
+     "d": 89.3,
+     "along": 77.3,
+     "name": "Underground Passage"
+    },
+    {
+     "t": 13.2,
+     "d": 57.6,
+     "along": -2.1,
+     "name": "Scrivener of Item Magic"
+    },
+    {
+     "t": 13.2,
+     "d": 67.4,
+     "along": -10.9,
+     "name": "Journeyman Scrivener of War Magic"
+    },
+    {
+     "t": 13.2,
+     "d": 68.2,
+     "along": -8.8,
+     "name": "Scrivener of Void Magic"
+    },
+    {
+     "t": 13.2,
+     "d": 65.3,
+     "along": -2.7,
+     "name": "Apprentice Scrivener of Item and War Magic"
+    },
+    {
+     "t": 13.2,
+     "d": 31,
+     "along": 27.3,
+     "name": "Mite Scion"
+    },
+    {
+     "t": 13.2,
+     "d": 68.5,
+     "along": -2.3,
+     "name": "Journeyman Scrivener of Item Magic"
+    },
+    {
+     "t": 14.3,
+     "d": 42.4,
+     "along": 1.4,
+     "name": "Sir Rylanan"
+    },
+    {
+     "t": 14.3,
+     "d": 53.5,
+     "along": -13.3,
+     "name": "Sentry"
+    },
+    {
+     "t": 14.3,
+     "d": 41.3,
+     "along": -9,
+     "name": "Royal Guard"
+    },
+    {
+     "t": 14.3,
+     "d": 74.6,
+     "along": -36,
+     "name": "Apprentice Scrivener of Item and War Magic"
+    },
+    {
+     "t": 15.2,
+     "d": 24.9,
+     "along": -23.8,
+     "name": "Gnawer Shreth"
+    },
+    {
+     "t": 15.2,
+     "d": 48.5,
+     "along": 4.2,
+     "name": "Sentry"
+    },
+    {
+     "t": 15.2,
+     "d": 58,
+     "along": -29.2,
+     "name": "Aun Kielerea"
+    },
+    {
+     "t": 15.2,
+     "d": 86.6,
+     "along": -20,
+     "name": "Drudge Skulker"
+    },
+    {
+     "t": 15.2,
+     "d": 71.7,
+     "along": 66.2,
+     "name": "Mite Snippet"
+    },
+    {
+     "t": 16.1,
+     "d": 42,
+     "along": 3.4,
+     "name": "Sentry"
+    },
+    {
+     "t": 16.1,
+     "d": 79.1,
+     "along": 47.2,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 16.1,
+     "d": 54.9,
+     "along": 37.9,
+     "name": "Young Mosswart"
+    },
+    {
+     "t": 17.1,
+     "d": 52.5,
+     "along": 2.6,
+     "name": "Red Phyntos Wasp"
+    },
+    {
+     "t": 17.1,
+     "d": 52.6,
+     "along": -0.4,
+     "name": "Red Phyntos Wasp"
+    },
+    {
+     "t": 17.1,
+     "d": 56.9,
+     "along": 34.3,
+     "name": "Creeper Mosswart"
+    },
+    {
+     "t": 17.1,
+     "d": 102,
+     "along": 84,
+     "name": "Door"
+    },
+    {
+     "t": 17.1,
+     "d": 111.6,
+     "along": -7.2,
+     "name": "Life Stone"
+    },
+    {
+     "t": 18.1,
+     "d": 65.7,
+     "along": 24.2,
+     "name": "Merchant"
+    },
+    {
+     "t": 18.1,
+     "d": 60.3,
+     "along": 56.6,
+     "name": "Black Rabbit"
+    },
+    {
+     "t": 18.1,
+     "d": 68.7,
+     "along": 39.1,
+     "name": "Well"
+    },
+    {
+     "t": 18.1,
+     "d": 90.6,
+     "along": 62.5,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 19.1,
+     "d": 88.9,
+     "along": 16.5,
+     "name": "Young Banderling"
+    },
+    {
+     "t": 20.1,
+     "d": 102.3,
+     "along": -9.1,
+     "name": "Creeper Mosswart"
+    },
+    {
+     "t": 20.1,
+     "d": 72.7,
+     "along": 71.4,
+     "name": "Black Rabbit"
+    },
+    {
+     "t": 20.1,
+     "d": 84,
+     "along": 42.1,
+     "name": "Destroyed Portal to Sanamar"
+    },
+    {
+     "t": 21,
+     "d": 99.5,
+     "along": -9.5,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 21,
+     "d": 75.5,
+     "along": 70.5,
+     "name": "Mite Snippet"
+    },
+    {
+     "t": 22.1,
+     "d": 89.6,
+     "along": 70.7,
+     "name": "Mite Scion"
+    },
+    {
+     "t": 22.1,
+     "d": 69.6,
+     "along": 61.2,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 22.1,
+     "d": 102.3,
+     "along": 9.4,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 23.1,
+     "d": 81.5,
+     "along": 44.7,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 24,
+     "d": 105.4,
+     "along": -8.9,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 24,
+     "d": 56.7,
+     "along": 56.7,
+     "name": "Drudge Skulker"
+    },
+    {
+     "t": 24,
+     "d": 54.8,
+     "along": 48.9,
+     "name": "Drudge Skulker"
+    },
+    {
+     "t": 24,
+     "d": 94.7,
+     "along": 59.2,
+     "name": "Young Banderling"
+    },
+    {
+     "t": 24,
+     "d": 83.3,
+     "along": 79.5,
+     "name": "Door"
+    },
+    {
+     "t": 24,
+     "d": 87.1,
+     "along": 86.3,
+     "name": "Drudge Skulker"
+    },
+    {
+     "t": 24,
+     "d": 72.3,
+     "along": 72.3,
+     "name": "Cabbage"
+    },
+    {
+     "t": 24,
+     "d": 72.8,
+     "along": 72.7,
+     "name": "Cabbage"
+    },
+    {
+     "t": 24,
+     "d": 74.1,
+     "along": 74,
+     "name": "Cabbage"
+    },
+    {
+     "t": 24,
+     "d": 75.6,
+     "along": 75.4,
+     "name": "Cabbage"
+    },
+    {
+     "t": 24,
+     "d": 76.3,
+     "along": 76.2,
+     "name": "Cabbage"
+    },
+    {
+     "t": 24,
+     "d": 75.9,
+     "along": 75.8,
+     "name": "Cabbage"
+    },
+    {
+     "t": 24,
+     "d": 74.5,
+     "along": 74.5,
+     "name": "Cabbage"
+    },
+    {
+     "t": 24,
+     "d": 73.1,
+     "along": 73.1,
+     "name": "Cabbage"
+    },
+    {
+     "t": 24,
+     "d": 88.4,
+     "along": 83.8,
+     "name": "Book Shelf"
+    },
+    {
+     "t": 25.2,
+     "d": 2.9,
+     "along": 2.8,
+     "name": "Cow"
+    },
+    {
+     "t": 25.2,
+     "d": 13.3,
+     "along": 12.8,
+     "name": "Cow"
+    },
+    {
+     "t": 25.2,
+     "d": 9.9,
+     "along": 6.7,
+     "name": "Cow"
+    },
+    {
+     "t": 25.2,
+     "d": 8.5,
+     "along": 8.3,
+     "name": "Cow"
+    },
+    {
+     "t": 25.2,
+     "d": 104,
+     "along": -37.2,
+     "name": "Fish"
+    },
+    {
+     "t": 25.2,
+     "d": 99.4,
+     "along": -29.4,
+     "name": "Fish"
+    },
+    {
+     "t": 25.2,
+     "d": 102.2,
+     "along": -29.3,
+     "name": "Fish"
+    },
+    {
+     "t": 25.2,
+     "d": 29.4,
+     "along": 10.6,
+     "name": "Peddler"
+    },
+    {
+     "t": 25.2,
+     "d": 70.2,
+     "along": 49.3,
+     "name": "Creeper Mosswart"
+    },
+    {
+     "t": 25.2,
+     "d": 91.6,
+     "along": 82.7,
+     "name": "Young Banderling"
+    },
+    {
+     "t": 26.1,
+     "d": 100.8,
+     "along": 4.1,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 26.1,
+     "d": 64.7,
+     "along": 60.5,
+     "name": "Mite Scion"
+    },
+    {
+     "t": 26.1,
+     "d": 96.1,
+     "along": 49.1,
+     "name": "Mite Snippet"
+    },
+    {
+     "t": 26.1,
+     "d": 99.9,
+     "along": 99.1,
+     "name": "Creeper Mosswart"
+    },
+    {
+     "t": 27,
+     "d": 107,
+     "along": 70.8,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 28.1,
+     "d": 54.3,
+     "along": 53,
+     "name": "Young Mosswart"
+    },
+    {
+     "t": 28.1,
+     "d": 57.7,
+     "along": 46.3,
+     "name": "Black Rabbit"
+    },
+    {
+     "t": 29,
+     "d": 66.5,
+     "along": 65,
+     "name": "Young Mosswart"
+    },
+    {
+     "t": 30,
+     "d": 93.1,
+     "along": 56.7,
+     "name": "Young Banderling"
+    },
+    {
+     "t": 30,
+     "d": 82.9,
+     "along": 70.6,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 31.1,
+     "d": 103.9,
+     "along": 81.8,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 31.1,
+     "d": 102.5,
+     "along": 81,
+     "name": "Fish"
+    },
+    {
+     "t": 32.1,
+     "d": 74.8,
+     "along": 28.1,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 32.1,
+     "d": 77.9,
+     "along": 24.3,
+     "name": "Drudge Skulker"
+    },
+    {
+     "t": 32.1,
+     "d": 70.3,
+     "along": 30.3,
+     "name": "Drudge Prowler"
+    },
+    {
+     "t": 32.1,
+     "d": 66.6,
+     "along": 25.4,
+     "name": "Drudge Prowler"
+    },
+    {
+     "t": 32.1,
+     "d": 68.4,
+     "along": 29.1,
+     "name": "Drudge Prowler"
+    },
+    {
+     "t": 32.1,
+     "d": 70.1,
+     "along": 47.1,
+     "name": "Mite Squib"
+    },
+    {
+     "t": 32.1,
+     "d": 107.2,
+     "along": 89.3,
+     "name": "Drudge Prowler"
+    },
+    {
+     "t": 33.1,
+     "d": 98.8,
+     "along": 97.2,
+     "name": "Drudge Prowler"
+    }
+   ]
+  },
+  {
+   "run": "s100-agl100",
+   "file": "matrix-s1.json",
+   "step": {
+    "label": "s100-agl100",
+    "teleloc": "0xA9B40019 84 7.1 94",
+    "settleMaxSec": 180,
+    "quietSec": 15,
+    "speedKmh": 100,
+    "aglM": 100,
+    "legs": [
+     {
+      "heading": 111,
+      "metres": 2500
+     }
+    ],
+    "pitchDeg": -25,
+    "settleMs": 8000,
+    "maxSec": 400
+   },
+   "ace": {
+    "cpuPct": 4.9,
+    "rssMB": 526,
+    "log": []
+   },
+   "chrome": {
+    "cpuPct": 362.1,
+    "gpuProcCpuPct": 289.7,
+    "rssMB": 3808
+   },
+   "memAvailMB": 1515,
+   "error": null,
+   "errors": [],
+   "deploySec": 3.9,
+   "climbSec": 4.1,
+   "flySec": 94.1,
+   "summary": {
+    "metres": 2505,
+    "flySec": 94.1,
+    "achievedKmh": 95.8,
+    "cruiseKmhMed": 100.4,
+    "deploySec": 3.9,
+    "climbSec": 4.1,
+    "aglMed": 100.4,
+    "aglMin": 82.4,
+    "blindCtlFrac": 0.005,
+    "terrainUnderBakedFrac": 1,
+    "r1Mean": 1,
+    "r2Mean": 1,
+    "r3Mean": 1,
+    "r5Mean": 1,
+    "leadMed": 1344,
+    "leadMin": 960,
+    "physLeadMed": 200,
+    "physLeadMin": 0,
+    "bubbleMean": 17.7,
+    "bubbleZeroFrac": 0.02,
+    "newObjectsInFlight": 214,
+    "preKnown": 53,
+    "firstSeen": {
+     "min": 37.1,
+     "median": 90.6,
+     "max": 111.3
+    },
+    "firstSeenAheadFrac": 0.99,
+    "censusDrawsMed": 273,
+    "censusDrawsMax": 657,
+    "censusMsMed": 2.1,
+    "longTaskMsPerSec": 189.2,
+    "longTaskMax": 247,
+    "rafP95Med": 50,
+    "rafMax": 433.3,
+    "heapStart": 1055,
+    "heapEnd": 1606,
+    "heapMax": 1610,
+    "lruResidentMax": 172,
+    "lruEvicted": 112,
+    "bakeQueueMax": null,
+    "playerGapMax": 7.9,
+    "carry": {
+     "cfg": {
+      "on": true,
+      "kmh": 800,
+      "accel": 25,
+      "hangM": 3,
+      "hz": 10,
+      "maxStepM": 150
+     },
+     "active": true,
+     "sends": 875,
+     "catchUps": 0,
+     "maxStepM": 6.04,
+     "maxGapM": 6.04,
+     "metres": 2533.2,
+     "errors": 0,
+     "lastErr": null,
+     "last": [
+      34885.97,
+      33655.92,
+      182.22
+     ]
+    },
+    "droneState": "flying",
+    "lastAbort": null,
+    "pageErrors": 0,
+    "portalSeen": false
+   },
+   "firstSeenSample": [
+    {
+     "t": 10.1,
+     "d": 102.4,
+     "along": 76.6,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 12.1,
+     "d": 103,
+     "along": 52.2,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 12.1,
+     "d": 105.7,
+     "along": 84,
+     "name": "Door"
+    },
+    {
+     "t": 13.2,
+     "d": 91.2,
+     "along": 66,
+     "name": "Apprentice Scrivener of Creature Magic"
+    },
+    {
+     "t": 13.2,
+     "d": 92.6,
+     "along": 60.6,
+     "name": "Journeyman Scrivener of Life Magic"
+    },
+    {
+     "t": 13.2,
+     "d": 87.4,
+     "along": 62.5,
+     "name": "Scrivener of Creature Magic"
+    },
+    {
+     "t": 13.2,
+     "d": 88.6,
+     "along": 63.1,
+     "name": "Scrivener of War Magic"
+    },
+    {
+     "t": 13.2,
+     "d": 90.8,
+     "along": 65.8,
+     "name": "Apprentice Scrivener of Life Magic"
+    },
+    {
+     "t": 13.2,
+     "d": 87.9,
+     "along": 59.6,
+     "name": "Apprentice Scrivener of Creature Magic"
+    },
+    {
+     "t": 13.2,
+     "d": 90.9,
+     "along": 59.7,
+     "name": "Apprentice Scrivener of Life Magic"
+    },
+    {
+     "t": 13.2,
+     "d": 89.6,
+     "along": 65.2,
+     "name": "Journeyman Scrivener of Creature Magic"
+    },
+    {
+     "t": 14.1,
+     "d": 79.9,
+     "along": 38.9,
+     "name": "Journeyman Scrivener of War Magic"
+    },
+    {
+     "t": 14.1,
+     "d": 77.4,
+     "along": 47.7,
+     "name": "Scrivener of Item Magic"
+    },
+    {
+     "t": 14.1,
+     "d": 83,
+     "along": 42.4,
+     "name": "Chest"
+    },
+    {
+     "t": 14.1,
+     "d": 84.6,
+     "along": 44.4,
+     "name": "Door"
+    },
+    {
+     "t": 14.1,
+     "d": 80.8,
+     "along": 46.8,
+     "name": "Door"
+    },
+    {
+     "t": 14.1,
+     "d": 82.5,
+     "along": 45.4,
+     "name": "Door"
+    },
+    {
+     "t": 14.1,
+     "d": 82,
+     "along": 42.1,
+     "name": "Scrivener of Life Magic"
+    },
+    {
+     "t": 15.2,
+     "d": 47.7,
+     "along": 46.4,
+     "name": "Mite Scion"
+    },
+    {
+     "t": 15.2,
+     "d": 67.4,
+     "along": 38.8,
+     "name": "Sentry"
+    },
+    {
+     "t": 15.2,
+     "d": 73.8,
+     "along": 16.8,
+     "name": "Journeyman Scrivener of Item Magic"
+    },
+    {
+     "t": 15.2,
+     "d": 61.3,
+     "along": 43.1,
+     "name": "Royal Guard"
+    },
+    {
+     "t": 15.2,
+     "d": 70.6,
+     "along": 16.4,
+     "name": "Apprentice Scrivener of Item and War Magic"
+    },
+    {
+     "t": 15.2,
+     "d": 71.8,
+     "along": 10.3,
+     "name": "Scrivener of Void Magic"
+    },
+    {
+     "t": 15.2,
+     "d": 55.2,
+     "along": 54.2,
+     "name": "Gnawer Shreth"
+    },
+    {
+     "t": 15.2,
+     "d": 73.3,
+     "along": 56.2,
+     "name": "Door"
+    },
+    {
+     "t": 15.2,
+     "d": 74.5,
+     "along": 56.6,
+     "name": "Underground Passage"
+    },
+    {
+     "t": 15.2,
+     "d": 70.4,
+     "along": 53.6,
+     "name": "Sir Rylanan"
+    },
+    {
+     "t": 15.2,
+     "d": 70.5,
+     "along": 16.1,
+     "name": "Apprentice Scrivener of Item and War Magic"
+    },
+    {
+     "t": 16.2,
+     "d": 62.1,
+     "along": 31.8,
+     "name": "Aun Kielerea"
+    },
+    {
+     "t": 16.2,
+     "d": 83.1,
+     "along": 65.2,
+     "name": "Sentry"
+    },
+    {
+     "t": 16.2,
+     "d": 96.6,
+     "along": 41,
+     "name": "Drudge Skulker"
+    },
+    {
+     "t": 18.1,
+     "d": 76.6,
+     "along": 61.9,
+     "name": "Sentry"
+    },
+    {
+     "t": 18.1,
+     "d": 75.1,
+     "along": 71.1,
+     "name": "Mite Snippet"
+    },
+    {
+     "t": 19.1,
+     "d": 82.1,
+     "along": 69.9,
+     "name": "Young Mosswart"
+    },
+    {
+     "t": 20,
+     "d": 84.8,
+     "along": 52.3,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 20,
+     "d": 81.7,
+     "along": 65.3,
+     "name": "Red Phyntos Wasp"
+    },
+    {
+     "t": 20,
+     "d": 79.4,
+     "along": 62.2,
+     "name": "Red Phyntos Wasp"
+    },
+    {
+     "t": 21.1,
+     "d": 83.4,
+     "along": 67.7,
+     "name": "Creeper Mosswart"
+    },
+    {
+     "t": 21.1,
+     "d": 111.3,
+     "along": 26.2,
+     "name": "Life Stone"
+    },
+    {
+     "t": 22.1,
+     "d": 105.3,
+     "along": 90,
+     "name": "Door"
+    },
+    {
+     "t": 23.1,
+     "d": 82.3,
+     "along": 58.5,
+     "name": "Merchant"
+    },
+    {
+     "t": 24.1,
+     "d": 71.6,
+     "along": 47.9,
+     "name": "Well"
+    },
+    {
+     "t": 24.1,
+     "d": 99.1,
+     "along": 71.3,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 24.1,
+     "d": 67.7,
+     "along": 65.4,
+     "name": "Black Rabbit"
+    },
+    {
+     "t": 27,
+     "d": 90.6,
+     "along": 2.1,
+     "name": "Young Banderling"
+    },
+    {
+     "t": 27,
+     "d": 109.9,
+     "along": 32.1,
+     "name": "Creeper Mosswart"
+    },
+    {
+     "t": 28,
+     "d": 87.4,
+     "along": 85.7,
+     "name": "Black Rabbit"
+    },
+    {
+     "t": 28,
+     "d": 94.6,
+     "along": 56.4,
+     "name": "Destroyed Portal to Sanamar"
+    },
+    {
+     "t": 29.1,
+     "d": 99.2,
+     "along": 25.8,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 30.1,
+     "d": 80.6,
+     "along": 77,
+     "name": "Mite Snippet"
+    },
+    {
+     "t": 31.1,
+     "d": 104.8,
+     "along": 98.3,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 31.1,
+     "d": 109,
+     "along": 46.5,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 33,
+     "d": 79.1,
+     "along": 53.5,
+     "name": "Mite Scion"
+    },
+    {
+     "t": 34.1,
+     "d": 89.3,
+     "along": 53.5,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 35.1,
+     "d": 102.3,
+     "along": 10.2,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 35.1,
+     "d": 75.7,
+     "along": 75.7,
+     "name": "Drudge Skulker"
+    },
+    {
+     "t": 35.1,
+     "d": 71.2,
+     "along": 67.9,
+     "name": "Drudge Skulker"
+    },
+    {
+     "t": 36.2,
+     "d": 93.1,
+     "along": 52.2,
+     "name": "Young Banderling"
+    },
+    {
+     "t": 36.2,
+     "d": 77.7,
+     "along": 72.5,
+     "name": "Door"
+    },
+    {
+     "t": 36.2,
+     "d": 80.7,
+     "along": 79.3,
+     "name": "Drudge Skulker"
+    },
+    {
+     "t": 36.2,
+     "d": 65.6,
+     "along": 65.3,
+     "name": "Cabbage"
+    },
+    {
+     "t": 36.2,
+     "d": 66.1,
+     "along": 65.7,
+     "name": "Cabbage"
+    },
+    {
+     "t": 36.2,
+     "d": 67.5,
+     "along": 67,
+     "name": "Cabbage"
+    },
+    {
+     "t": 36.2,
+     "d": 68.9,
+     "along": 68.5,
+     "name": "Cabbage"
+    },
+    {
+     "t": 36.2,
+     "d": 69.6,
+     "along": 69.2,
+     "name": "Cabbage"
+    },
+    {
+     "t": 36.2,
+     "d": 69,
+     "along": 68.8,
+     "name": "Cabbage"
+    },
+    {
+     "t": 36.2,
+     "d": 67.7,
+     "along": 67.5,
+     "name": "Cabbage"
+    },
+    {
+     "t": 36.2,
+     "d": 66.3,
+     "along": 66.1,
+     "name": "Cabbage"
+    },
+    {
+     "t": 36.2,
+     "d": 83,
+     "along": 76.8,
+     "name": "Book Shelf"
+    },
+    {
+     "t": 36.2,
+     "d": 76.9,
+     "along": 70.5,
+     "name": "Peddler"
+    },
+    {
+     "t": 36.2,
+     "d": 96.6,
+     "along": 22.7,
+     "name": "Fish"
+    },
+    {
+     "t": 36.2,
+     "d": 96.7,
+     "along": 30.5,
+     "name": "Fish"
+    },
+    {
+     "t": 36.2,
+     "d": 100.7,
+     "along": 32.6,
+     "name": "Fish"
+    },
+    {
+     "t": 36.2,
+     "d": 98.3,
+     "along": 23,
+     "name": "Fish"
+    },
+    {
+     "t": 36.2,
+     "d": 96.7,
+     "along": 28.9,
+     "name": "Fish"
+    },
+    {
+     "t": 36.2,
+     "d": 99.4,
+     "along": 30.5,
+     "name": "Fish"
+    },
+    {
+     "t": 36.2,
+     "d": 73,
+     "along": 72.7,
+     "name": "Cow"
+    },
+    {
+     "t": 36.2,
+     "d": 67.4,
+     "along": 66.6,
+     "name": "Cow"
+    },
+    {
+     "t": 36.2,
+     "d": 62.8,
+     "along": 62.7,
+     "name": "Cow"
+    },
+    {
+     "t": 36.2,
+     "d": 68.2,
+     "along": 68.2,
+     "name": "Cow"
+    },
+    {
+     "t": 38,
+     "d": 73.8,
+     "along": 57.2,
+     "name": "Creeper Mosswart"
+    },
+    {
+     "t": 39,
+     "d": 74.8,
+     "along": 61.3,
+     "name": "Young Banderling"
+    },
+    {
+     "t": 39,
+     "d": 109,
+     "along": 32.8,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 39,
+     "d": 91.4,
+     "along": 89.3,
+     "name": "Mite Scion"
+    },
+    {
+     "t": 40.2,
+     "d": 103.1,
+     "along": 101.9,
+     "name": "Creeper Mosswart"
+    },
+    {
+     "t": 40.2,
+     "d": 100.4,
+     "along": 51.9,
+     "name": "Mite Snippet"
+    },
+    {
+     "t": 43,
+     "d": 94.8,
+     "along": 44.8,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 43,
+     "d": 86.8,
+     "along": 86.4,
+     "name": "Young Mosswart"
+    },
+    {
+     "t": 43,
+     "d": 88.2,
+     "along": 79.7,
+     "name": "Black Rabbit"
+    },
+    {
+     "t": 45,
+     "d": 95.9,
+     "along": 94.3,
+     "name": "Young Mosswart"
+    },
+    {
+     "t": 48.1,
+     "d": 96.3,
+     "along": 57.6,
+     "name": "Young Banderling"
+    },
+    {
+     "t": 48.1,
+     "d": 85.4,
+     "along": 71.5,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 51,
+     "d": 91.8,
+     "along": 62.3,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 51,
+     "d": 90.3,
+     "along": 61.5,
+     "name": "Fish"
+    },
+    {
+     "t": 51,
+     "d": 89.5,
+     "along": 61.6,
+     "name": "Drudge Prowler"
+    },
+    {
+     "t": 51,
+     "d": 92.3,
+     "along": 65.4,
+     "name": "Drudge Prowler"
+    },
+    {
+     "t": 51,
+     "d": 94.2,
+     "along": 66.6,
+     "name": "Drudge Prowler"
+    },
+    {
+     "t": 51,
+     "d": 97,
+     "along": 64.3,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 52.1,
+     "d": 82.6,
+     "along": 28.9,
+     "name": "Drudge Skulker"
+    }
+   ]
+  },
+  {
+   "run": "s200-agl100",
+   "file": "matrix-s1.json",
+   "step": {
+    "label": "s200-agl100",
+    "teleloc": "0xA9B40019 84 7.1 94",
+    "settleMaxSec": 180,
+    "quietSec": 15,
+    "speedKmh": 200,
+    "aglM": 100,
+    "legs": [
+     {
+      "heading": 111,
+      "metres": 4000
+     }
+    ],
+    "pitchDeg": -25,
+    "settleMs": 8000,
+    "maxSec": 400
+   },
+   "ace": {
+    "cpuPct": 8.1,
+    "rssMB": 741,
+    "log": [
+     "2026-10-31 22:55:12,323 [World Manager] WARN  (ACE.Server.WorldObjects.Player) [PERFORMANCE][PHYSICS] 5000017E:+Probe 912 took 329.5 ms to process UpdatePlayerPosition() at loc: B7AE0007 [0.43065387 148.8742 204.67436]"
+    ]
+   },
+   "chrome": {
+    "cpuPct": 358.4,
+    "gpuProcCpuPct": 292.2,
+    "rssMB": 3766
+   },
+   "memAvailMB": 1315,
+   "error": null,
+   "errors": [],
+   "deploySec": 3.6,
+   "climbSec": 4.1,
+   "flySec": 75,
+   "summary": {
+    "metres": 4008,
+    "flySec": 75,
+    "achievedKmh": 192.4,
+    "cruiseKmhMed": 200.9,
+    "deploySec": 3.6,
+    "climbSec": 4.1,
+    "aglMed": 103.4,
+    "aglMin": 80.8,
+    "blindCtlFrac": 0.005,
+    "terrainUnderBakedFrac": 1,
+    "r1Mean": 1,
+    "r2Mean": 1,
+    "r3Mean": 1,
+    "r5Mean": 1,
+    "leadMed": 1248,
+    "leadMin": 960,
+    "physLeadMed": 600,
+    "physLeadMin": 0,
+    "bubbleMean": 19.2,
+    "bubbleZeroFrac": 0.04,
+    "newObjectsInFlight": 393,
+    "preKnown": 53,
+    "firstSeen": {
+     "min": 0.6,
+     "median": 66.5,
+     "max": 127
+    },
+    "firstSeenAheadFrac": 0.95,
+    "censusDrawsMed": 146,
+    "censusDrawsMax": 826,
+    "censusMsMed": 2.2,
+    "longTaskMsPerSec": 75.7,
+    "longTaskMax": 350,
+    "rafP95Med": 33.4,
+    "rafMax": 366.6,
+    "heapStart": 1272,
+    "heapEnd": 1455,
+    "heapMax": 1597,
+    "lruResidentMax": 174,
+    "lruEvicted": 276,
+    "bakeQueueMax": null,
+    "playerGapMax": 13.9,
+    "carry": {
+     "cfg": {
+      "on": true,
+      "kmh": 800,
+      "accel": 25,
+      "hangM": 3,
+      "hz": 10,
+      "maxStepM": 150
+     },
+     "active": true,
+     "sends": 1649,
+     "catchUps": 0,
+     "maxStepM": 13.93,
+     "maxGapM": 13.93,
+     "metres": 6652,
+     "errors": 0,
+     "lastErr": null,
+     "last": [
+      36370.02,
+      33083.29,
+      227.66
+     ]
+    },
+    "droneState": "flying",
+    "lastAbort": {
+     "reason": "pilotMoved",
+     "from": "flying",
+     "at": 221.51
+    },
+    "pageErrors": 0,
+    "portalSeen": false
+   },
+   "firstSeenSample": [
+    {
+     "t": 10.1,
+     "d": 86.2,
+     "along": 55.4,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 11,
+     "d": 89.7,
+     "along": 23.2,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 11,
+     "d": 84.7,
+     "along": 56.9,
+     "name": "Door"
+    },
+    {
+     "t": 11,
+     "d": 82.9,
+     "along": 55.1,
+     "name": "Door"
+    },
+    {
+     "t": 11,
+     "d": 86.2,
+     "along": 52.5,
+     "name": "Chest"
+    },
+    {
+     "t": 11,
+     "d": 81.8,
+     "along": 55.8,
+     "name": "Apprentice Scrivener of Life Magic"
+    },
+    {
+     "t": 11,
+     "d": 79.3,
+     "along": 49.6,
+     "name": "Apprentice Scrivener of Creature Magic"
+    },
+    {
+     "t": 11,
+     "d": 82.3,
+     "along": 56,
+     "name": "Apprentice Scrivener of Creature Magic"
+    },
+    {
+     "t": 11,
+     "d": 82.5,
+     "along": 49.7,
+     "name": "Apprentice Scrivener of Life Magic"
+    },
+    {
+     "t": 11,
+     "d": 84.3,
+     "along": 50.6,
+     "name": "Journeyman Scrivener of Life Magic"
+    },
+    {
+     "t": 11,
+     "d": 85.2,
+     "along": 52.2,
+     "name": "Scrivener of Life Magic"
+    },
+    {
+     "t": 11,
+     "d": 80.6,
+     "along": 55.2,
+     "name": "Journeyman Scrivener of Creature Magic"
+    },
+    {
+     "t": 11,
+     "d": 85,
+     "along": 51.2,
+     "name": "Scrivener of Void Magic"
+    },
+    {
+     "t": 11,
+     "d": 87.9,
+     "along": 54.5,
+     "name": "Door"
+    },
+    {
+     "t": 11,
+     "d": 86.1,
+     "along": 55.5,
+     "name": "Door"
+    },
+    {
+     "t": 11,
+     "d": 78.5,
+     "along": 52.5,
+     "name": "Scrivener of Creature Magic"
+    },
+    {
+     "t": 11,
+     "d": 79.7,
+     "along": 53.1,
+     "name": "Scrivener of War Magic"
+    },
+    {
+     "t": 11,
+     "d": 82.8,
+     "along": 49.1,
+     "name": "Journeyman Scrivener of War Magic"
+    },
+    {
+     "t": 11,
+     "d": 86.8,
+     "along": 57,
+     "name": "Apprentice Scrivener of Item and War Magic"
+    },
+    {
+     "t": 11,
+     "d": 81.8,
+     "along": 57.8,
+     "name": "Scrivener of Item Magic"
+    },
+    {
+     "t": 11,
+     "d": 106.5,
+     "along": 97.1,
+     "name": "Door"
+    },
+    {
+     "t": 11,
+     "d": 107.5,
+     "along": 97.4,
+     "name": "Underground Passage"
+    },
+    {
+     "t": 12.1,
+     "d": 66,
+     "along": -4.8,
+     "name": "Apprentice Scrivener of Item and War Magic"
+    },
+    {
+     "t": 12.1,
+     "d": 69.2,
+     "along": -4.4,
+     "name": "Journeyman Scrivener of Item Magic"
+    },
+    {
+     "t": 12.1,
+     "d": 55.2,
+     "along": 17.6,
+     "name": "Sentry"
+    },
+    {
+     "t": 12.1,
+     "d": 46.3,
+     "along": 21.9,
+     "name": "Royal Guard"
+    },
+    {
+     "t": 12.1,
+     "d": 33.9,
+     "along": 33,
+     "name": "Gnawer Shreth"
+    },
+    {
+     "t": 12.1,
+     "d": 28.9,
+     "along": 25.2,
+     "name": "Mite Scion"
+    },
+    {
+     "t": 12.1,
+     "d": 53.7,
+     "along": 32.4,
+     "name": "Sir Rylanan"
+    },
+    {
+     "t": 12.1,
+     "d": 57.7,
+     "along": 27.7,
+     "name": "Aun Kielerea"
+    },
+    {
+     "t": 12.1,
+     "d": 78.1,
+     "along": 61.1,
+     "name": "Sentry"
+    },
+    {
+     "t": 12.1,
+     "d": 92.4,
+     "along": 36.9,
+     "name": "Drudge Skulker"
+    },
+    {
+     "t": 13.1,
+     "d": 71.2,
+     "along": 57.3,
+     "name": "Sentry"
+    },
+    {
+     "t": 13.1,
+     "d": 71.7,
+     "along": 66.5,
+     "name": "Mite Snippet"
+    },
+    {
+     "t": 14,
+     "d": 58.6,
+     "along": 42.5,
+     "name": "Young Mosswart"
+    },
+    {
+     "t": 14,
+     "d": 82.4,
+     "along": 51.8,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 14,
+     "d": 83.1,
+     "along": 64.8,
+     "name": "Red Phyntos Wasp"
+    },
+    {
+     "t": 14,
+     "d": 80.8,
+     "along": 61.8,
+     "name": "Red Phyntos Wasp"
+    },
+    {
+     "t": 15,
+     "d": 60.2,
+     "along": 38.9,
+     "name": "Creeper Mosswart"
+    },
+    {
+     "t": 16.1,
+     "d": 64.4,
+     "along": 29.2,
+     "name": "Door"
+    },
+    {
+     "t": 16.1,
+     "d": 127,
+     "along": -61.9,
+     "name": "Life Stone"
+    },
+    {
+     "t": 16.1,
+     "d": 65.5,
+     "along": 25.1,
+     "name": "Merchant"
+    },
+    {
+     "t": 16.1,
+     "d": 68.8,
+     "along": 40.1,
+     "name": "Well"
+    },
+    {
+     "t": 16.1,
+     "d": 61,
+     "along": 57.5,
+     "name": "Black Rabbit"
+    },
+    {
+     "t": 16.1,
+     "d": 91.7,
+     "along": 63.4,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 17,
+     "d": 90.2,
+     "along": 20.2,
+     "name": "Young Banderling"
+    },
+    {
+     "t": 18,
+     "d": 102.5,
+     "along": -4.5,
+     "name": "Creeper Mosswart"
+    },
+    {
+     "t": 18,
+     "d": 86.9,
+     "along": 46.7,
+     "name": "Destroyed Portal to Sanamar"
+    },
+    {
+     "t": 18,
+     "d": 77.3,
+     "along": 76,
+     "name": "Black Rabbit"
+    },
+    {
+     "t": 18,
+     "d": 108.8,
+     "along": 46.2,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 19.1,
+     "d": 71.9,
+     "along": 66.8,
+     "name": "Mite Snippet"
+    },
+    {
+     "t": 20,
+     "d": 70.7,
+     "along": 62.1,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 20,
+     "d": 101.8,
+     "along": 10.3,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 21,
+     "d": 57.8,
+     "along": 15.9,
+     "name": "Mite Scion"
+    },
+    {
+     "t": 21,
+     "d": 82.5,
+     "along": 45.6,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 21,
+     "d": 109,
+     "along": 31.1,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 21,
+     "d": 96.6,
+     "along": 96.6,
+     "name": "Drudge Skulker"
+    },
+    {
+     "t": 21,
+     "d": 92,
+     "along": 88.8,
+     "name": "Drudge Skulker"
+    },
+    {
+     "t": 22,
+     "d": 54.8,
+     "along": 54.8,
+     "name": "Cow"
+    },
+    {
+     "t": 22,
+     "d": 86.6,
+     "along": 44.3,
+     "name": "Young Banderling"
+    },
+    {
+     "t": 22,
+     "d": 69.4,
+     "along": 64.7,
+     "name": "Door"
+    },
+    {
+     "t": 22,
+     "d": 74.7,
+     "along": 68.9,
+     "name": "Book Shelf"
+    },
+    {
+     "t": 22,
+     "d": 57.5,
+     "along": 57.4,
+     "name": "Cabbage"
+    },
+    {
+     "t": 22,
+     "d": 58,
+     "along": 57.8,
+     "name": "Cabbage"
+    },
+    {
+     "t": 22,
+     "d": 59.4,
+     "along": 59.1,
+     "name": "Cabbage"
+    },
+    {
+     "t": 22,
+     "d": 60.8,
+     "along": 60.6,
+     "name": "Cabbage"
+    },
+    {
+     "t": 22,
+     "d": 61.5,
+     "along": 61.4,
+     "name": "Cabbage"
+    },
+    {
+     "t": 22,
+     "d": 61,
+     "along": 61,
+     "name": "Cabbage"
+    },
+    {
+     "t": 22,
+     "d": 59.7,
+     "along": 59.7,
+     "name": "Cabbage"
+    },
+    {
+     "t": 22,
+     "d": 58.2,
+     "along": 58.2,
+     "name": "Cabbage"
+    },
+    {
+     "t": 22,
+     "d": 68.6,
+     "along": 62.6,
+     "name": "Peddler"
+    },
+    {
+     "t": 22,
+     "d": 64.9,
+     "along": 64.8,
+     "name": "Cow"
+    },
+    {
+     "t": 22,
+     "d": 59.2,
+     "along": 58.7,
+     "name": "Cow"
+    },
+    {
+     "t": 22,
+     "d": 60.3,
+     "along": 60.3,
+     "name": "Cow"
+    },
+    {
+     "t": 22,
+     "d": 72.5,
+     "along": 71.4,
+     "name": "Drudge Skulker"
+    },
+    {
+     "t": 22,
+     "d": 100,
+     "along": 22.7,
+     "name": "Fish"
+    },
+    {
+     "t": 22,
+     "d": 97.7,
+     "along": 14.8,
+     "name": "Fish"
+    },
+    {
+     "t": 22,
+     "d": 97.1,
+     "along": 22.7,
+     "name": "Fish"
+    },
+    {
+     "t": 22,
+     "d": 99.4,
+     "along": 15.1,
+     "name": "Fish"
+    },
+    {
+     "t": 22,
+     "d": 97.3,
+     "along": 21,
+     "name": "Fish"
+    },
+    {
+     "t": 22,
+     "d": 101.1,
+     "along": 24.7,
+     "name": "Fish"
+    },
+    {
+     "t": 23,
+     "d": 69.1,
+     "along": 48.4,
+     "name": "Creeper Mosswart"
+    },
+    {
+     "t": 23,
+     "d": 91,
+     "along": 81.8,
+     "name": "Young Banderling"
+    },
+    {
+     "t": 24,
+     "d": 101.4,
+     "along": -5.2,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 24,
+     "d": 92.2,
+     "along": 39.9,
+     "name": "Mite Snippet"
+    },
+    {
+     "t": 24,
+     "d": 55.9,
+     "along": 51.2,
+     "name": "Mite Scion"
+    },
+    {
+     "t": 24,
+     "d": 90.8,
+     "along": 89.9,
+     "name": "Creeper Mosswart"
+    },
+    {
+     "t": 25,
+     "d": 100.5,
+     "along": 59.7,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 26.1,
+     "d": 45.1,
+     "along": 43.7,
+     "name": "Young Mosswart"
+    },
+    {
+     "t": 26.1,
+     "d": 51,
+     "along": 37.1,
+     "name": "Black Rabbit"
+    },
+    {
+     "t": 27,
+     "d": 55,
+     "along": 53,
+     "name": "Young Mosswart"
+    },
+    {
+     "t": 28.1,
+     "d": 86.8,
+     "along": 44.7,
+     "name": "Young Banderling"
+    },
+    {
+     "t": 28.1,
+     "d": 73.2,
+     "along": 58.6,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 29,
+     "d": 99.3,
+     "along": 75.3,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 29,
+     "d": 97.9,
+     "along": 74.5,
+     "name": "Fish"
+    },
+    {
+     "t": 30.1,
+     "d": 66.5,
+     "along": 18.3,
+     "name": "Drudge Prowler"
+    },
+    {
+     "t": 30.1,
+     "d": 63.5,
+     "along": 13.4,
+     "name": "Drudge Prowler"
+    },
+    {
+     "t": 30.1,
+     "d": 64.7,
+     "along": 17.1,
+     "name": "Drudge Prowler"
+    },
+    {
+     "t": 30.1,
+     "d": 71.7,
+     "along": 16.1,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 30.1,
+     "d": 75.6,
+     "along": 12.3,
+     "name": "Drudge Skulker"
+    }
+   ]
+  },
+  {
+   "run": "s300-agl100",
+   "file": "matrix-s1.json",
+   "step": {
+    "label": "s300-agl100",
+    "teleloc": "0xA9B40019 84 7.1 94",
+    "settleMaxSec": 180,
+    "quietSec": 15,
+    "speedKmh": 300,
+    "aglM": 100,
+    "legs": [
+     {
+      "heading": 111,
+      "metres": 5000
+     }
+    ],
+    "pitchDeg": -25,
+    "settleMs": 8000,
+    "maxSec": 400
+   },
+   "ace": {
+    "cpuPct": 7.2,
+    "rssMB": 901,
+    "log": []
+   },
+   "chrome": {
+    "cpuPct": 359.8,
+    "gpuProcCpuPct": 282.9,
+    "rssMB": 3307
+   },
+   "memAvailMB": 1301,
+   "error": null,
+   "errors": [],
+   "deploySec": 3.5,
+   "climbSec": 4.2,
+   "flySec": 64.8,
+   "summary": {
+    "metres": 5004,
+    "flySec": 64.8,
+    "achievedKmh": 278,
+    "cruiseKmhMed": 302,
+    "deploySec": 3.5,
+    "climbSec": 4.2,
+    "aglMed": 105,
+    "aglMin": 77.5,
+    "blindCtlFrac": 0.004,
+    "terrainUnderBakedFrac": 1,
+    "r1Mean": 1,
+    "r2Mean": 1,
+    "r3Mean": 1,
+    "r5Mean": 1,
+    "leadMed": 1152,
+    "leadMin": 864,
+    "physLeadMed": 800,
+    "physLeadMin": 0,
+    "bubbleMean": 16.2,
+    "bubbleZeroFrac": 0.03,
+    "newObjectsInFlight": 456,
+    "preKnown": 53,
+    "firstSeen": {
+     "min": 9.1,
+     "median": 70,
+     "max": 202.9
+    },
+    "firstSeenAheadFrac": 0.75,
+    "censusDrawsMed": 59,
+    "censusDrawsMax": 290,
+    "censusMsMed": 1.6,
+    "longTaskMsPerSec": 193.5,
+    "longTaskMax": 383,
+    "rafP95Med": 50.1,
+    "rafMax": 433.4,
+    "heapStart": 1436,
+    "heapEnd": 1161,
+    "heapMax": 1999,
+    "lruResidentMax": 171,
+    "lruEvicted": 400,
+    "bakeQueueMax": null,
+    "playerGapMax": 19.5,
+    "carry": {
+     "cfg": {
+      "on": true,
+      "kmh": 800,
+      "accel": 25,
+      "hangM": 3,
+      "hz": 10,
+      "maxStepM": 150
+     },
+     "active": true,
+     "sends": 2280,
+     "catchUps": 0,
+     "maxStepM": 18.11,
+     "maxGapM": 18.11,
+     "metres": 11845.5,
+     "errors": 0,
+     "lastErr": null,
+     "last": [
+      37371.14,
+      32694.02,
+      200.55
+     ]
+    },
+    "droneState": "flying",
+    "lastAbort": {
+     "reason": "pilotMoved",
+     "from": "flying",
+     "at": 359.404
+    },
+    "pageErrors": 0,
+    "portalSeen": false
+   },
+   "firstSeenSample": [
+    {
+     "t": 10.1,
+     "d": 84.3,
+     "along": 53.6,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 11,
+     "d": 85.3,
+     "along": 15.4,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 11,
+     "d": 79.3,
+     "along": 44.7,
+     "name": "Chest"
+    },
+    {
+     "t": 11,
+     "d": 77.5,
+     "along": 49.1,
+     "name": "Door"
+    },
+    {
+     "t": 11,
+     "d": 75.8,
+     "along": 47.3,
+     "name": "Door"
+    },
+    {
+     "t": 11,
+     "d": 74.5,
+     "along": 48,
+     "name": "Apprentice Scrivener of Life Magic"
+    },
+    {
+     "t": 11,
+     "d": 72.4,
+     "along": 41.8,
+     "name": "Apprentice Scrivener of Creature Magic"
+    },
+    {
+     "t": 11,
+     "d": 75,
+     "along": 48.2,
+     "name": "Apprentice Scrivener of Creature Magic"
+    },
+    {
+     "t": 11,
+     "d": 75.7,
+     "along": 41.9,
+     "name": "Apprentice Scrivener of Life Magic"
+    },
+    {
+     "t": 11,
+     "d": 77.5,
+     "along": 42.8,
+     "name": "Journeyman Scrivener of Life Magic"
+    },
+    {
+     "t": 11,
+     "d": 78.3,
+     "along": 43.4,
+     "name": "Scrivener of Void Magic"
+    },
+    {
+     "t": 11,
+     "d": 78.4,
+     "along": 44.4,
+     "name": "Scrivener of Life Magic"
+    },
+    {
+     "t": 11,
+     "d": 81,
+     "along": 46.7,
+     "name": "Door"
+    },
+    {
+     "t": 11,
+     "d": 79,
+     "along": 47.7,
+     "name": "Door"
+    },
+    {
+     "t": 11,
+     "d": 73.3,
+     "along": 47.4,
+     "name": "Journeyman Scrivener of Creature Magic"
+    },
+    {
+     "t": 11,
+     "d": 71.4,
+     "along": 44.7,
+     "name": "Scrivener of Creature Magic"
+    },
+    {
+     "t": 11,
+     "d": 72.5,
+     "along": 45.3,
+     "name": "Scrivener of War Magic"
+    },
+    {
+     "t": 11,
+     "d": 76.1,
+     "along": 41.2,
+     "name": "Journeyman Scrivener of War Magic"
+    },
+    {
+     "t": 11,
+     "d": 74.4,
+     "along": 50,
+     "name": "Scrivener of Item Magic"
+    },
+    {
+     "t": 11,
+     "d": 98.3,
+     "along": 89.3,
+     "name": "Door"
+    },
+    {
+     "t": 11,
+     "d": 99.2,
+     "along": 89.6,
+     "name": "Underground Passage"
+    },
+    {
+     "t": 11,
+     "d": 79.7,
+     "along": 49.2,
+     "name": "Apprentice Scrivener of Item and War Magic"
+    },
+    {
+     "t": 11,
+     "d": 79.9,
+     "along": 49.5,
+     "name": "Apprentice Scrivener of Item and War Magic"
+    },
+    {
+     "t": 12,
+     "d": 69.3,
+     "along": -25.4,
+     "name": "Journeyman Scrivener of Item Magic"
+    },
+    {
+     "t": 12,
+     "d": 47.8,
+     "along": -3.3,
+     "name": "Sentry"
+    },
+    {
+     "t": 12,
+     "d": 36.2,
+     "along": 1,
+     "name": "Royal Guard"
+    },
+    {
+     "t": 12,
+     "d": 19.2,
+     "along": 4.2,
+     "name": "Mite Scion"
+    },
+    {
+     "t": 12,
+     "d": 39.9,
+     "along": 11.4,
+     "name": "Sir Rylanan"
+    },
+    {
+     "t": 12,
+     "d": 46.5,
+     "along": 6.7,
+     "name": "Aun Kielerea"
+    },
+    {
+     "t": 12,
+     "d": 12.5,
+     "along": 12.1,
+     "name": "Gnawer Shreth"
+    },
+    {
+     "t": 12,
+     "d": 59.7,
+     "along": 40.1,
+     "name": "Sentry"
+    },
+    {
+     "t": 12,
+     "d": 81.7,
+     "along": 15.9,
+     "name": "Drudge Skulker"
+    },
+    {
+     "t": 13.1,
+     "d": 38.4,
+     "along": 7.3,
+     "name": "Sentry"
+    },
+    {
+     "t": 13.1,
+     "d": 35.7,
+     "along": 16.5,
+     "name": "Mite Snippet"
+    },
+    {
+     "t": 13.1,
+     "d": 54.9,
+     "along": 41.8,
+     "name": "Young Mosswart"
+    },
+    {
+     "t": 13.1,
+     "d": 78.4,
+     "along": 51,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 13.1,
+     "d": 85.4,
+     "along": 64,
+     "name": "Red Phyntos Wasp"
+    },
+    {
+     "t": 13.1,
+     "d": 83.3,
+     "along": 61,
+     "name": "Red Phyntos Wasp"
+    },
+    {
+     "t": 14.1,
+     "d": 43.5,
+     "along": 13.5,
+     "name": "Creeper Mosswart"
+    },
+    {
+     "t": 14.1,
+     "d": 88.6,
+     "along": 63.2,
+     "name": "Door"
+    },
+    {
+     "t": 14.1,
+     "d": 88,
+     "along": 59.2,
+     "name": "Merchant"
+    },
+    {
+     "t": 15,
+     "d": 60.7,
+     "along": -3.9,
+     "name": "Well"
+    },
+    {
+     "t": 15,
+     "d": 28.4,
+     "along": 13.6,
+     "name": "Black Rabbit"
+    },
+    {
+     "t": 15,
+     "d": 114.9,
+     "along": -38.6,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 15,
+     "d": 64.5,
+     "along": 19.5,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 15,
+     "d": 88.2,
+     "along": 29.2,
+     "name": "Young Banderling"
+    },
+    {
+     "t": 16.1,
+     "d": 103.1,
+     "along": -32.7,
+     "name": "Creeper Mosswart"
+    },
+    {
+     "t": 16.1,
+     "d": 71,
+     "along": 18.5,
+     "name": "Destroyed Portal to Sanamar"
+    },
+    {
+     "t": 16.1,
+     "d": 48.8,
+     "along": 47.8,
+     "name": "Black Rabbit"
+    },
+    {
+     "t": 16.1,
+     "d": 104.7,
+     "along": 18.1,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 17.1,
+     "d": 37.9,
+     "along": 21.4,
+     "name": "Mite Snippet"
+    },
+    {
+     "t": 18,
+     "d": 51,
+     "along": -1.6,
+     "name": "Mite Scion"
+    },
+    {
+     "t": 18,
+     "d": 31.2,
+     "along": -11.1,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 18,
+     "d": 123.2,
+     "along": -62.9,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 18,
+     "d": 70,
+     "along": 28.1,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 18,
+     "d": 110.5,
+     "along": -15.8,
+     "name": "Chicken"
+    },
+    {
+     "t": 18,
+     "d": 79.4,
+     "along": 79.1,
+     "name": "Drudge Skulker"
+    },
+    {
+     "t": 18,
+     "d": 76.9,
+     "along": 71.3,
+     "name": "Drudge Skulker"
+    },
+    {
+     "t": 19,
+     "d": 69.9,
+     "along": 3.6,
+     "name": "Young Banderling"
+    },
+    {
+     "t": 19,
+     "d": 126.7,
+     "along": -64.4,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 19,
+     "d": 31.6,
+     "along": 23.9,
+     "name": "Door"
+    },
+    {
+     "t": 19,
+     "d": 37.1,
+     "along": 28.2,
+     "name": "Book Shelf"
+    },
+    {
+     "t": 19,
+     "d": 16.7,
+     "along": 16.7,
+     "name": "Cabbage"
+    },
+    {
+     "t": 19,
+     "d": 17.1,
+     "along": 17.1,
+     "name": "Cabbage"
+    },
+    {
+     "t": 19,
+     "d": 18.4,
+     "along": 18.4,
+     "name": "Cabbage"
+    },
+    {
+     "t": 19,
+     "d": 19.9,
+     "along": 19.9,
+     "name": "Cabbage"
+    },
+    {
+     "t": 19,
+     "d": 20.7,
+     "along": 20.7,
+     "name": "Cabbage"
+    },
+    {
+     "t": 19,
+     "d": 20.4,
+     "along": 20.3,
+     "name": "Cabbage"
+    },
+    {
+     "t": 19,
+     "d": 19.2,
+     "along": 19,
+     "name": "Cabbage"
+    },
+    {
+     "t": 19,
+     "d": 32,
+     "along": 21.9,
+     "name": "Peddler"
+    },
+    {
+     "t": 19,
+     "d": 31.6,
+     "along": 30.7,
+     "name": "Drudge Skulker"
+    },
+    {
+     "t": 19,
+     "d": 17.7,
+     "along": 17.5,
+     "name": "Cabbage"
+    },
+    {
+     "t": 19,
+     "d": 24.1,
+     "along": 24.1,
+     "name": "Cow"
+    },
+    {
+     "t": 19,
+     "d": 18.3,
+     "along": 18,
+     "name": "Cow"
+    },
+    {
+     "t": 19,
+     "d": 14.5,
+     "along": 14.1,
+     "name": "Cow"
+    },
+    {
+     "t": 19,
+     "d": 20.5,
+     "along": 19.6,
+     "name": "Cow"
+    },
+    {
+     "t": 19,
+     "d": 104.5,
+     "along": -25.9,
+     "name": "Fish"
+    },
+    {
+     "t": 19,
+     "d": 81.2,
+     "along": 60.6,
+     "name": "Creeper Mosswart"
+    },
+    {
+     "t": 19,
+     "d": 103.6,
+     "along": -18,
+     "name": "Fish"
+    },
+    {
+     "t": 19,
+     "d": 100.7,
+     "along": -18.1,
+     "name": "Fish"
+    },
+    {
+     "t": 19,
+     "d": 103.9,
+     "along": -16,
+     "name": "Fish"
+    },
+    {
+     "t": 19,
+     "d": 106.1,
+     "along": -25.6,
+     "name": "Fish"
+    },
+    {
+     "t": 19,
+     "d": 101.6,
+     "along": -19.7,
+     "name": "Fish"
+    },
+    {
+     "t": 20.1,
+     "d": 36.5,
+     "along": 9,
+     "name": "Young Banderling"
+    },
+    {
+     "t": 20.1,
+     "d": 98.5,
+     "along": -19.5,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 20.1,
+     "d": 45.8,
+     "along": 37,
+     "name": "Mite Scion"
+    },
+    {
+     "t": 20.1,
+     "d": 82.6,
+     "along": 25.6,
+     "name": "Mite Snippet"
+    },
+    {
+     "t": 20.1,
+     "d": 76.1,
+     "along": 75.6,
+     "name": "Creeper Mosswart"
+    },
+    {
+     "t": 21.2,
+     "d": 77.6,
+     "along": 14.8,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 21.2,
+     "d": 58.3,
+     "along": 49.7,
+     "name": "Black Rabbit"
+    },
+    {
+     "t": 21.2,
+     "d": 58.6,
+     "along": 56.4,
+     "name": "Young Mosswart"
+    },
+    {
+     "t": 22,
+     "d": 45.4,
+     "along": 44.3,
+     "name": "Young Mosswart"
+    },
+    {
+     "t": 23.1,
+     "d": 69.9,
+     "along": 4.9,
+     "name": "Young Banderling"
+    },
+    {
+     "t": 23.1,
+     "d": 43.6,
+     "along": 18.8,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 24.1,
+     "d": 60.5,
+     "along": 7.7,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 24.1,
+     "d": 66,
+     "along": 9.7,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 24.1,
+     "d": 70.2,
+     "along": 5.9,
+     "name": "Drudge Skulker"
+    },
+    {
+     "t": 24.1,
+     "d": 59.2,
+     "along": 6.9,
+     "name": "Fish"
+    },
+    {
+     "t": 24.1,
+     "d": 58.8,
+     "along": 9,
+     "name": "Fish"
+    },
+    {
+     "t": 24.1,
+     "d": 60.5,
+     "along": 12,
+     "name": "Drudge Prowler"
+    }
+   ]
+  },
+  {
+   "run": "s400-agl100",
+   "file": "matrix-s1.json",
+   "step": {
+    "label": "s400-agl100",
+    "teleloc": "0xA9B40019 84 7.1 94",
+    "settleMaxSec": 180,
+    "quietSec": 15,
+    "speedKmh": 400,
+    "aglM": 100,
+    "legs": [
+     {
+      "heading": 111,
+      "metres": 5900
+     }
+    ],
+    "pitchDeg": -25,
+    "settleMs": 8000,
+    "maxSec": 400
+   },
+   "ace": {
+    "cpuPct": 5.9,
+    "rssMB": 902,
+    "log": [
+     "2026-10-31 22:59:05,948 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from AFB10007 [13.597223 147.8742 132.39243] to B1B00010 [43.93944 180.78848 105.57822], speed: 444.64227194453747",
+     "2026-10-31 22:59:06,009 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from AFB10007 [13.597223 147.8742 132.39243] to B1B00018 [56.069416 176.13121 106.64027], speed: 457.5516022810979",
+     "2026-10-31 22:59:06,058 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from AFB10007 [13.597223 147.8742 132.39243] to B1B00018 [56.069416 176.13121 106.64027], speed: 457.5516022810979",
+     "2026-10-31 22:59:06,125 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from AFB10007 [13.597223 147.8742 132.39243] to B1B00018 [69.94685 170.80301 108.27152], speed: 472.3077982100232",
+     "2026-10-31 22:59:06,177 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from AFB10007 [13.597223 147.8742 132.39243] to B1B00018 [69.94685 170.80301 108.27152], speed: 472.3077982100232",
+     "2026-10-31 22:59:06,225 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from AFB10007 [13.597223 147.8742 132.39243] to B1B0001F [80.33917 166.8129 109.78495], speed: 483.35246908958686",
+     "2026-10-31 22:59:06,275 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from AFB10007 [13.597223 147.8742 132.39243] to B1B0001F [80.33917 166.8129 109.78495], speed: 483.35246908958686",
+     "2026-10-31 22:59:06,341 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from AFB10007 [13.597223 147.8742 132.39243] to B1B0001F [92.479034 162.15182 111.86836], speed: 496.2519993662494",
+     "2026-10-31 22:59:06,375 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from AFB10007 [13.597223 147.8742 132.39243] to B1B0001F [92.479034 162.15182 111.86836], speed: 496.2519993662494",
+     "2026-10-31 22:59:06,458 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from AFB10007 [13.597223 147.8742 132.39243] to B1B00027 [104.61836 157.49095 114.29205], speed: 509.1525741366727",
+     "2026-10-31 22:59:06,492 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from AFB10007 [13.597223 147.8742 132.39243] to B1B00027 [104.61836 157.49095 114.29205], speed: 509.1525741366727",
+     "2026-10-31 22:59:06,559 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from AFB10007 [13.597223 147.8742 132.39243] to B1B00027 [115.02027 153.49718 116.62765], speed: 520.2119159534891",
+     "2026-10-31 22:59:06,609 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from AFB10007 [13.597223 147.8742 132.39243] to B1B00027 [115.02027 153.49718 116.62765], speed: 520.2119159534891",
+     "2026-10-31 22:59:06,676 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from AFB10007 [13.597223 147.8742 132.39243] to B1B0002F [125.42185 149.50351 119.15657], speed: 531.279822692336",
+     "2026-10-31 22:59:06,726 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from AFB10007 [13.597223 147.8742 132.39243] to B1B0002F [125.42185 149.50351 119.15657], speed: 531.279822692336",
+     "2026-10-31 22:59:06,792 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from AFB10007 [13.597223 147.8742 132.39243] to B1B0002F [139.29741 144.17603 122.744774], speed: 546.0632976130148",
+     "2026-10-31 22:59:06,825 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from AFB10007 [13.597223 147.8742 132.39243] to B1B0002F [139.29741 144.17603 122.744774], speed: 546.0632976130148",
+     "2026-10-31 22:59:06,892 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from AFB10007 [13.597223 147.8742 132.39243] to B1B00036 [149.68854 140.18637 125.53264], speed: 557.1510118450832",
+     "2026-10-31 22:59:06,925 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from AFB10007 [13.597223 147.8742 132.39243] to B1B00036 [149.68854 140.18637 125.53264], speed: 557.1510118450832",
+     "2026-10-31 22:59:06,992 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from AFB10007 [13.597223 147.8742 132.39243] to B1B00036 [160.10045 136.18874 128.38338], speed: 568.2759287969182",
+     "2026-10-31 22:59:07,043 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from AFB10007 [13.597223 147.8742 132.39243] to B1B00036 [160.10045 136.18874 128.38338], speed: 568.2759287969182",
+     "2026-10-31 22:59:07,109 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from AFB10007 [13.597223 147.8742 132.39243] to B1B0003E [172.22874 131.5321 131.75658], speed: 581.2536559024812",
+     "2026-10-31 22:59:07,158 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from AFB10007 [13.597223 147.8742 132.39243] to B1B0003E [172.22874 131.5321 131.75658], speed: 581.2536559024812",
+     "2026-10-31 22:59:07,209 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from AFB10007 [13.597223 147.8742 132.39243] to B1B0003E [182.63052 127.53837 134.68216], speed: 592.3998596809422",
+     "2026-10-31 22:59:07,258 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from AFB10007 [13.597223 147.8742 132.39243] to B1B0003E [182.63052 127.53837 134.68216], speed: 592.3998596809422",
+     "2026-10-31 22:59:07,325 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from AFB10007 [13.597223 147.8742 132.39243] to B2B00006 [2.7695801 122.87761 138.12358], speed: 605.4256250771023",
+     "2026-10-31 22:59:07,376 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from AFB10007 [13.597223 147.8742 132.39243] to B2B00006 [2.7695801 122.87761 138.12358], speed: 605.4256250771023",
+     "2026-10-31 22:59:07,425 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from AFB10007 [13.597223 147.8742 132.39243] to B2B00005 [11.434382 119.55078 140.5932], speed: 614.7346988742379",
+     "2026-10-31 22:59:07,526 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from AFB10007 [13.597223 147.8742 132.39243] to B2B00005 [11.434382 119.55078 140.5932], speed: 614.7346988742379",
+     "2026-10-31 22:59:07,592 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from AFB10007 [13.597223 147.8742 132.39243] to B2B0000D [27.03743 113.56003 145.05974], speed: 631.5206103129177",
+     "2026-10-31 22:59:07,659 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from AFB10007 [13.597223 147.8742 132.39243] to B2B0000D [27.03743 113.56003 145.05974], speed: 631.5206103129177",
+     "2026-10-31 22:59:07,692 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from AFB10007 [13.597223 147.8742 132.39243] to B2B0000D [32.238544 111.56307 146.55283], speed: 637.1222655424938",
+     "2026-10-31 22:59:07,759 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from AFB10007 [13.597223 147.8742 132.39243] to B2B0000D [32.238544 111.56307 146.55283], speed: 637.1222655424938",
+     "2026-10-31 22:59:07,809 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from AFB10007 [13.597223 147.8742 132.39243] to B2B00015 [51.30637 104.24203 152.03891], speed: 657.6833869727895",
+     "2026-10-31 22:59:07,859 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from AFB10007 [13.597223 147.8742 132.39243] to B2B00015 [51.30637 104.24203 152.03891], speed: 657.6833869727895",
+     "2026-10-31 22:59:07,959 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from AFB10007 [13.597223 147.8742 132.39243] to B2B00015 [63.435658 99.585014 155.53555], speed: 670.7817966745968",
+     "2026-10-31 22:59:07,976 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from AFB10007 [13.597223 147.8742 132.39243] to B2B00015 [63.435658 99.585014 155.53555], speed: 670.7817966745968",
+     "2026-10-31 22:59:08,059 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from AFB10007 [13.597223 147.8742 132.39243] to B2B0001C [79.0495 93.59011 160.0416], speed: 687.6636623379194",
+     "2026-10-31 22:59:08,076 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from AFB10007 [13.597223 147.8742 132.39243] to B2B0001C [79.0495 93.59011 160.0416], speed: 687.6636623379194",
+     "2026-10-31 22:59:08,160 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from AFB10007 [13.597223 147.8742 132.39243] to B2B0001C [91.17806 88.93338 163.54437], speed: 700.7921410803634",
+     "2026-10-31 22:59:08,175 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from AFB10007 [13.597223 147.8742 132.39243] to B2B0001C [91.17806 88.93338 163.54437], speed: 700.7921410803634",
+     "2026-10-31 22:59:08,276 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from AFB10007 [13.597223 147.8742 132.39243] to B2B00024 [101.57977 84.93967 166.54965], speed: 712.0612026012933",
+     "2026-10-31 22:59:08,292 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from AFB10007 [13.597223 147.8742 132.39243] to B2B00024 [101.57977 84.93967 166.54965], speed: 712.0612026012933",
+     "2026-10-31 22:59:08,376 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from AFB10007 [13.597223 147.8742 132.39243] to B2B00024 [111.98131 80.94602 169.55568], speed: 723.3386568544502",
+     "2026-10-31 22:59:08,392 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from AFB10007 [13.597223 147.8742 132.39243] to B2B00024 [111.98131 80.94602 169.55568], speed: 723.3386568544502",
+     "2026-10-31 22:59:08,477 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from AFB10007 [13.597223 147.8742 132.39243] to B2B0002C [120.65594 77.61542 172.0631], speed: 732.7500426475593",
+     "2026-10-31 22:59:08,510 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from AFB10007 [13.597223 147.8742 132.39243] to B2B0002C [120.65594 77.61542 172.0631], speed: 732.7500426475593",
+     "2026-10-31 22:59:08,577 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from AFB10007 [13.597223 147.8742 132.39243] to B2B0002C [134.51068 72.29592 176.06848], speed: 747.7928356169241",
+     "2026-10-31 22:59:08,610 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from AFB10007 [13.597223 147.8742 132.39243] to B2B0002C [134.51068 72.29592 176.06848], speed: 747.7928356169241",
+     "2026-10-31 22:59:08,694 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from AFB10007 [13.597223 147.8742 132.39243] to B2B00033 [146.65988 67.63127 179.58125], speed: 760.9946205460325",
+     "2026-10-31 22:59:08,711 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from AFB10007 [13.597223 147.8742 132.39243] to B2B00033 [146.65988 67.63127 179.58125], speed: 760.9946205460325",
+     "2026-10-31 22:59:08,810 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from AFB10007 [13.597223 147.8742 132.39243] to B2B00033 [157.06136 63.637646 182.58893], speed: 772.3049511041606",
+     "2026-10-31 22:59:08,827 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from AFB10007 [13.597223 147.8742 132.39243] to B2B00033 [157.06136 63.637646 182.58893], speed: 772.3049511041606",
+     "2026-10-31 22:59:08,927 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from AFB10007 [13.597223 147.8742 132.39243] to B2B0003B [169.18956 58.98105 186.09612], speed: 785.5013924239727",
+     "2026-10-31 22:59:09,044 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from AFB10007 [13.597223 147.8742 132.39243] to B2B0003B [181.31763 54.32451 189.6034], speed: 798.7062977089889",
+     "2026-10-31 22:59:09,143 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from AFB10007 [13.597223 147.8742 132.39243] to B2B0003B [191.71909 50.33089 192.61147], speed: 810.0378849165019",
+     "2026-10-31 22:59:09,160 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from AFB10007 [13.597223 147.8742 132.39243] to B2B0003B [191.71909 50.33089 192.61147], speed: 810.0378849165019",
+     "2026-10-31 22:59:09,276 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from AFB10007 [13.597223 147.8742 132.39243] to B3B00002 [10.130717 46.33337 195.62253], speed: 821.3865183334823",
+     "2026-10-31 22:59:09,293 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from AFB10007 [13.597223 147.8742 132.39243] to B3B00002 [10.130717 46.33337 195.62253], speed: 821.3865183334823",
+     "2026-10-31 22:59:09,394 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from AFB10007 [13.597223 147.8742 132.39243] to B3B00002 [23.985598 41.01382 199.62944], speed: 836.4967498442537"
+    ]
+   },
+   "chrome": {
+    "cpuPct": 358.1,
+    "gpuProcCpuPct": 291.3,
+    "rssMB": 3441
+   },
+   "memAvailMB": 1236,
+   "error": null,
+   "errors": [],
+   "deploySec": 3.6,
+   "climbSec": 4.1,
+   "flySec": 57.4,
+   "summary": {
+    "metres": 5904,
+    "flySec": 57.4,
+    "achievedKmh": 370.3,
+    "cruiseKmhMed": 403.2,
+    "deploySec": 3.6,
+    "climbSec": 4.1,
+    "aglMed": 107.4,
+    "aglMin": 79.7,
+    "blindCtlFrac": 0.004,
+    "terrainUnderBakedFrac": 1,
+    "r1Mean": 1,
+    "r2Mean": 1,
+    "r3Mean": 1,
+    "r5Mean": 1,
+    "leadMed": 1152,
+    "leadMin": 864,
+    "physLeadMed": 800,
+    "physLeadMin": 0,
+    "bubbleMean": 6.3,
+    "bubbleZeroFrac": 0.77,
+    "newObjectsInFlight": 100,
+    "preKnown": 53,
+    "firstSeen": {
+     "min": 16.6,
+     "median": 67.4,
+     "max": 211.3
+    },
+    "firstSeenAheadFrac": 0.64,
+    "censusDrawsMed": 48,
+    "censusDrawsMax": 175,
+    "censusMsMed": 2.3,
+    "longTaskMsPerSec": 166.4,
+    "longTaskMax": 432,
+    "rafP95Med": 50,
+    "rafMax": 433.3,
+    "heapStart": 1301,
+    "heapEnd": 1186,
+    "heapMax": 1888,
+    "lruResidentMax": 172,
+    "lruEvicted": 492,
+    "bakeQueueMax": null,
+    "playerGapMax": 22.3,
+    "carry": {
+     "cfg": {
+      "on": true,
+      "kmh": 800,
+      "accel": 25,
+      "hangM": 3,
+      "hz": 10,
+      "maxStepM": 150
+     },
+     "active": true,
+     "sends": 2871,
+     "catchUps": 0,
+     "maxStepM": 25.99,
+     "maxGapM": 25.99,
+     "metres": 18051.3,
+     "errors": 0,
+     "lastErr": null,
+     "last": [
+      38314.67,
+      32326.91,
+      143.11
+     ]
+    },
+    "droneState": "flying",
+    "lastAbort": {
+     "reason": "pilotMoved",
+     "from": "flying",
+     "at": 491.617
+    },
+    "pageErrors": 0,
+    "portalSeen": false
+   },
+   "firstSeenSample": [
+    {
+     "t": 10,
+     "d": 83,
+     "along": 52,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 11.1,
+     "d": 73.2,
+     "along": 36,
+     "name": "Chest"
+    },
+    {
+     "t": 11.1,
+     "d": 70.8,
+     "along": 40.4,
+     "name": "Door"
+    },
+    {
+     "t": 11.1,
+     "d": 69.2,
+     "along": 38.6,
+     "name": "Door"
+    },
+    {
+     "t": 11.1,
+     "d": 72.6,
+     "along": 38.9,
+     "name": "Door"
+    },
+    {
+     "t": 11.1,
+     "d": 82.4,
+     "along": 6.7,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 11.1,
+     "d": 67.8,
+     "along": 39.3,
+     "name": "Apprentice Scrivener of Life Magic"
+    },
+    {
+     "t": 11.1,
+     "d": 66.2,
+     "along": 33.1,
+     "name": "Apprentice Scrivener of Creature Magic"
+    },
+    {
+     "t": 11.1,
+     "d": 68.3,
+     "along": 39.5,
+     "name": "Apprentice Scrivener of Creature Magic"
+    },
+    {
+     "t": 11.1,
+     "d": 69.7,
+     "along": 33.2,
+     "name": "Apprentice Scrivener of Life Magic"
+    },
+    {
+     "t": 11.1,
+     "d": 72.2,
+     "along": 34.7,
+     "name": "Scrivener of Void Magic"
+    },
+    {
+     "t": 11.1,
+     "d": 74.8,
+     "along": 38,
+     "name": "Door"
+    },
+    {
+     "t": 11.1,
+     "d": 72.2,
+     "along": 35.7,
+     "name": "Scrivener of Life Magic"
+    },
+    {
+     "t": 11.1,
+     "d": 71.5,
+     "along": 34.1,
+     "name": "Journeyman Scrivener of Life Magic"
+    },
+    {
+     "t": 11.1,
+     "d": 66.6,
+     "along": 38.7,
+     "name": "Journeyman Scrivener of Creature Magic"
+    },
+    {
+     "t": 11.1,
+     "d": 64.8,
+     "along": 36,
+     "name": "Scrivener of Creature Magic"
+    },
+    {
+     "t": 11.1,
+     "d": 65.9,
+     "along": 36.6,
+     "name": "Scrivener of War Magic"
+    },
+    {
+     "t": 11.1,
+     "d": 89.6,
+     "along": 80.6,
+     "name": "Door"
+    },
+    {
+     "t": 11.1,
+     "d": 90.6,
+     "along": 80.9,
+     "name": "Underground Passage"
+    },
+    {
+     "t": 11.1,
+     "d": 70.2,
+     "along": 32.5,
+     "name": "Journeyman Scrivener of War Magic"
+    },
+    {
+     "t": 11.1,
+     "d": 78.6,
+     "along": 78.6,
+     "name": "Gnawer Shreth"
+    },
+    {
+     "t": 11.1,
+     "d": 67.4,
+     "along": 41.3,
+     "name": "Scrivener of Item Magic"
+    },
+    {
+     "t": 11.1,
+     "d": 73.1,
+     "along": 40.5,
+     "name": "Apprentice Scrivener of Item and War Magic"
+    },
+    {
+     "t": 11.1,
+     "d": 73.4,
+     "along": 40.8,
+     "name": "Apprentice Scrivener of Item and War Magic"
+    },
+    {
+     "t": 11.1,
+     "d": 76.2,
+     "along": 41.2,
+     "name": "Journeyman Scrivener of Item Magic"
+    },
+    {
+     "t": 12,
+     "d": 46.4,
+     "along": -14.1,
+     "name": "Sentry"
+    },
+    {
+     "t": 12,
+     "d": 34.2,
+     "along": -9.8,
+     "name": "Royal Guard"
+    },
+    {
+     "t": 12,
+     "d": 23.1,
+     "along": -6.6,
+     "name": "Mite Scion"
+    },
+    {
+     "t": 12,
+     "d": 34.8,
+     "along": 0.6,
+     "name": "Sir Rylanan"
+    },
+    {
+     "t": 12,
+     "d": 42.7,
+     "along": -4.1,
+     "name": "Aun Kielerea"
+    },
+    {
+     "t": 12,
+     "d": 50.2,
+     "along": 29.3,
+     "name": "Sentry"
+    },
+    {
+     "t": 12,
+     "d": 76.9,
+     "along": 5.1,
+     "name": "Drudge Skulker"
+    },
+    {
+     "t": 12,
+     "d": 89,
+     "along": 82.2,
+     "name": "Sentry"
+    },
+    {
+     "t": 13.1,
+     "d": 38.2,
+     "along": -12.4,
+     "name": "Mite Snippet"
+    },
+    {
+     "t": 13.1,
+     "d": 33.8,
+     "along": 12.9,
+     "name": "Young Mosswart"
+    },
+    {
+     "t": 13.1,
+     "d": 59.3,
+     "along": 22.2,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 13.1,
+     "d": 70.4,
+     "along": 35.2,
+     "name": "Red Phyntos Wasp"
+    },
+    {
+     "t": 13.1,
+     "d": 69.1,
+     "along": 32.1,
+     "name": "Red Phyntos Wasp"
+    },
+    {
+     "t": 13.1,
+     "d": 76.3,
+     "along": 66.8,
+     "name": "Creeper Mosswart"
+    },
+    {
+     "t": 14,
+     "d": 66.6,
+     "along": 5.7,
+     "name": "Door"
+    },
+    {
+     "t": 14,
+     "d": 69.5,
+     "along": 1.6,
+     "name": "Merchant"
+    },
+    {
+     "t": 14,
+     "d": 105.5,
+     "along": -18.2,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 14,
+     "d": 67,
+     "along": 16.5,
+     "name": "Well"
+    },
+    {
+     "t": 14,
+     "d": 44.9,
+     "along": 34,
+     "name": "Black Rabbit"
+    },
+    {
+     "t": 16,
+     "d": 190.3,
+     "along": -181.5,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 16,
+     "d": 140.8,
+     "along": -91,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 16,
+     "d": 169.7,
+     "along": -141.7,
+     "name": "Creeper Mosswart"
+    },
+    {
+     "t": 16,
+     "d": 37.2,
+     "along": -11,
+     "name": "Mite Snippet"
+    },
+    {
+     "t": 16,
+     "d": 111,
+     "along": -90.5,
+     "name": "Destroyed Portal to Sanamar"
+    },
+    {
+     "t": 16,
+     "d": 61.4,
+     "along": -61.2,
+     "name": "Black Rabbit"
+    },
+    {
+     "t": 16,
+     "d": 189,
+     "along": -171.8,
+     "name": "Young Banderling"
+    },
+    {
+     "t": 16,
+     "d": 44.8,
+     "along": 37.2,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 16,
+     "d": 66,
+     "along": 46.8,
+     "name": "Mite Scion"
+    },
+    {
+     "t": 16,
+     "d": 111.2,
+     "along": -14.6,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 16,
+     "d": 97,
+     "along": 76.4,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 17.1,
+     "d": 133.7,
+     "along": -82.6,
+     "name": "Chicken"
+    },
+    {
+     "t": 17.1,
+     "d": 28.5,
+     "along": 27.9,
+     "name": "Cabbage"
+    },
+    {
+     "t": 17.1,
+     "d": 28.6,
+     "along": 28.3,
+     "name": "Cabbage"
+    },
+    {
+     "t": 17.1,
+     "d": 29.8,
+     "along": 29.6,
+     "name": "Cabbage"
+    },
+    {
+     "t": 17.1,
+     "d": 31.3,
+     "along": 31.1,
+     "name": "Cabbage"
+    },
+    {
+     "t": 17.1,
+     "d": 32.3,
+     "along": 31.9,
+     "name": "Cabbage"
+    },
+    {
+     "t": 17.1,
+     "d": 32.1,
+     "along": 31.5,
+     "name": "Cabbage"
+    },
+    {
+     "t": 17.1,
+     "d": 16.6,
+     "along": 12.3,
+     "name": "Drudge Skulker"
+    },
+    {
+     "t": 17.1,
+     "d": 31,
+     "along": 30.2,
+     "name": "Cabbage"
+    },
+    {
+     "t": 17.1,
+     "d": 29.5,
+     "along": 28.7,
+     "name": "Cabbage"
+    },
+    {
+     "t": 17.1,
+     "d": 33.5,
+     "along": 4.5,
+     "name": "Drudge Skulker"
+    },
+    {
+     "t": 17.1,
+     "d": 29.2,
+     "along": 29.2,
+     "name": "Cow"
+    },
+    {
+     "t": 17.1,
+     "d": 26.4,
+     "along": 25.3,
+     "name": "Cow"
+    },
+    {
+     "t": 17.1,
+     "d": 32.5,
+     "along": 30.8,
+     "name": "Cow"
+    },
+    {
+     "t": 17.1,
+     "d": 67.1,
+     "along": 14.8,
+     "name": "Young Banderling"
+    },
+    {
+     "t": 17.1,
+     "d": 35.6,
+     "along": 35.3,
+     "name": "Cow"
+    },
+    {
+     "t": 17.1,
+     "d": 42,
+     "along": 41.9,
+     "name": "Drudge Skulker"
+    },
+    {
+     "t": 17.1,
+     "d": 38.7,
+     "along": 35.1,
+     "name": "Door"
+    },
+    {
+     "t": 17.1,
+     "d": 44.1,
+     "along": 39.4,
+     "name": "Book Shelf"
+    },
+    {
+     "t": 17.1,
+     "d": 38.2,
+     "along": 33.1,
+     "name": "Peddler"
+    },
+    {
+     "t": 17.1,
+     "d": 106.6,
+     "along": -14.7,
+     "name": "Fish"
+    },
+    {
+     "t": 17.1,
+     "d": 106.5,
+     "along": -6.8,
+     "name": "Fish"
+    },
+    {
+     "t": 17.1,
+     "d": 103.6,
+     "along": -6.9,
+     "name": "Fish"
+    },
+    {
+     "t": 17.1,
+     "d": 107.1,
+     "along": -4.8,
+     "name": "Fish"
+    },
+    {
+     "t": 17.1,
+     "d": 108.2,
+     "along": -14.4,
+     "name": "Fish"
+    },
+    {
+     "t": 17.1,
+     "d": 104.3,
+     "along": -8.5,
+     "name": "Fish"
+    },
+    {
+     "t": 17.1,
+     "d": 92.5,
+     "along": 71.8,
+     "name": "Creeper Mosswart"
+    },
+    {
+     "t": 18,
+     "d": 96.2,
+     "along": -27.3,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 18,
+     "d": 31.1,
+     "along": 1.2,
+     "name": "Young Banderling"
+    },
+    {
+     "t": 21,
+     "d": 204,
+     "along": -203,
+     "name": "Young Mosswart"
+    },
+    {
+     "t": 21,
+     "d": 55.2,
+     "along": -8.9,
+     "name": "Fish"
+    },
+    {
+     "t": 21,
+     "d": 112.6,
+     "along": -91.6,
+     "name": "Young Banderling"
+    },
+    {
+     "t": 21,
+     "d": 85.2,
+     "along": -77.7,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 21,
+     "d": 211.3,
+     "along": -209.7,
+     "name": "Black Rabbit"
+    },
+    {
+     "t": 21,
+     "d": 140.1,
+     "along": -140,
+     "name": "Young Mosswart"
+    },
+    {
+     "t": 21,
+     "d": 56.3,
+     "along": -8.1,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 21,
+     "d": 61.2,
+     "along": -6,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 21,
+     "d": 66.3,
+     "along": -9.8,
+     "name": "Drudge Skulker"
+    },
+    {
+     "t": 21,
+     "d": 53.9,
+     "along": -8.7,
+     "name": "Drudge Prowler"
+    },
+    {
+     "t": 21,
+     "d": 55.1,
+     "along": -3.8,
+     "name": "Drudge Prowler"
+    },
+    {
+     "t": 21,
+     "d": 53.6,
+     "along": -5,
+     "name": "Drudge Prowler"
+    },
+    {
+     "t": 21,
+     "d": 54.2,
+     "along": -6.8,
+     "name": "Fish"
+    },
+    {
+     "t": 21,
+     "d": 45.4,
+     "along": 13,
+     "name": "Mite Squib"
+    },
+    {
+     "t": 21,
+     "d": 75,
+     "along": 55.2,
+     "name": "Drudge Prowler"
+    },
+    {
+     "t": 22.1,
+     "d": 51,
+     "along": -15.8,
+     "name": "Mosswart Feeder"
+    }
+   ]
+  },
+  {
+   "run": "s750-agl100",
+   "file": "matrix-s1.json",
+   "step": {
+    "label": "s750-agl100",
+    "teleloc": "0xA9B40019 84 7.1 94",
+    "settleMaxSec": 180,
+    "quietSec": 15,
+    "speedKmh": 750,
+    "aglM": 100,
+    "legs": [
+     {
+      "heading": 111,
+      "metres": 5900
+     },
+     {
+      "heading": 157,
+      "metres": 4270
+     }
+    ],
+    "pitchDeg": -25,
+    "settleMs": 8000,
+    "maxSec": 400
+   },
+   "ace": {
+    "cpuPct": 6.4,
+    "rssMB": 901,
+    "log": [
+     "2026-10-31 23:00:46,091 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from ACB20007 [9.280642 161.66624 224.16293] to AFB1000D [44.220745 116.87441 135.2727], speed: 661.2258974813373",
+     "2026-10-31 23:00:46,124 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from ACB20007 [9.280642 161.66624 224.16293] to AFB1000D [44.220745 116.87441 135.2727], speed: 661.2258974813373",
+     "2026-10-31 23:00:46,224 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from ACB20007 [9.280642 161.66624 224.16293] to AFB10015 [70.21716 106.89452 131.33096], speed: 689.3491042280392",
+     "2026-10-31 23:00:46,257 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from ACB20007 [9.280642 161.66624 224.16293] to AFB10015 [70.21716 106.89452 131.33096], speed: 689.3491042280392",
+     "2026-10-31 23:00:46,407 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from ACB20007 [9.280642 161.66624 224.16293] to AFB10025 [96.214645 96.9143 127.57022], speed: 717.4491271163413",
+     "2026-10-31 23:00:46,440 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from ACB20007 [9.280642 161.66624 224.16293] to AFB10025 [96.214645 96.9143 127.57022], speed: 717.4491271163413",
+     "2026-10-31 23:00:46,525 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from ACB20007 [9.280642 161.66624 224.16293] to AFB1002C [128.72765 84.432884 123.302284], speed: 752.5330972787841",
+     "2026-10-31 23:00:46,558 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from ACB20007 [9.280642 161.66624 224.16293] to AFB1002C [128.72765 84.432884 123.302284], speed: 752.5330972787841",
+     "2026-10-31 23:00:46,642 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from ACB20007 [9.280642 161.66624 224.16293] to AFB10034 [154.72653 74.45218 120.35992], speed: 780.5253439190813",
+     "2026-10-31 23:00:46,658 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from ACB20007 [9.280642 161.66624 224.16293] to AFB10034 [154.72653 74.45218 120.35992], speed: 780.5253439190813",
+     "2026-10-31 23:00:46,758 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from ACB20007 [9.280642 161.66624 224.16293] to AFB10033 [167.73561 69.45813 119.05422], speed: 794.5099904972876",
+     "2026-10-31 23:00:46,775 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from ACB20007 [9.280642 161.66624 224.16293] to AFB10033 [167.73561 69.45813 119.05422], speed: 794.5099904972876",
+     "2026-10-31 23:00:46,875 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from ACB20007 [9.280642 161.66624 224.16293] to B0B10003 [4.991298 58.227173 116.52462], speed: 825.9080987010601",
+     "2026-10-31 23:00:47,041 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from ACB20007 [9.280642 161.66624 224.16293] to B0B1000B [24.495039 50.73989 115.15068], speed: 846.801555855916",
+     "2026-10-31 23:00:47,058 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from ACB20007 [9.280642 161.66624 224.16293] to B0B1000B [24.495039 50.73989 115.15068], speed: 846.801555855916",
+     "2026-10-31 23:00:47,142 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from ACB20007 [9.280642 161.66624 224.16293] to B0B10012 [57.00804 38.258488 113.41658], speed: 881.5656881367378",
+     "2026-10-31 23:00:47,209 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from ACB20007 [9.280642 161.66624 224.16293] to B0B10012 [57.00804 38.258488 113.41658], speed: 881.5656881367378",
+     "2026-10-31 23:00:47,342 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from ACB20007 [9.280642 161.66624 224.16293] to B0B1001A [79.76921 29.520712 112.61609], speed: 905.8565697724999",
+     "2026-10-31 23:00:47,375 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from ACB20007 [9.280642 161.66624 224.16293] to B0B1001A [79.76921 29.520712 112.61609], speed: 905.8565697724999",
+     "2026-10-31 23:00:47,441 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from ACB20007 [9.280642 161.66624 224.16293] to B0B10021 [109.0061 18.296972 112.08762], speed: 937.0063700423813",
+     "2026-10-31 23:00:47,526 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from ACB20007 [9.280642 161.66624 224.16293] to B0B10021 [109.0061 18.296972 112.08762], speed: 937.0063700423813",
+     "2026-10-31 23:00:47,609 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from ACB20007 [9.280642 161.66624 224.16293] to B0B10029 [131.74849 9.566403 112.06498], speed: 961.1990233557252",
+     "2026-10-31 23:00:47,625 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from ACB20007 [9.280642 161.66624 224.16293] to B0B10029 [131.74849 9.566403 112.06498], speed: 961.1990233557252",
+     "2026-10-31 23:00:47,725 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from ACB20007 [9.280642 161.66624 224.16293] to B0B00038 [164.24362 189.09186 112.62204], speed: 995.7145361497943",
+     "2026-10-31 23:00:47,793 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from ACB20007 [9.280642 161.66624 224.16293] to B0B00038 [164.24362 189.09186 112.62204], speed: 995.7145361497943",
+     "2026-10-31 23:00:47,893 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from ACB20007 [9.280642 161.66624 224.16293] to B0B00040 [190.26323 179.10321 113.56822], speed: 1023.3121163652856",
+     "2026-10-31 23:00:47,926 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from ACB20007 [9.280642 161.66624 224.16293] to B0B00040 [190.26323 179.10321 113.56822], speed: 1023.3121163652856",
+     "2026-10-31 23:00:48,026 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from ACB20007 [9.280642 161.66624 224.16293] to B1B0000F [27.520618 167.8716 115.163765], speed: 1054.3069406012653",
+     "2026-10-31 23:00:48,043 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from ACB20007 [9.280642 161.66624 224.16293] to B1B0000F [27.520618 167.8716 115.163765], speed: 1054.3069406012653",
+     "2026-10-31 23:00:48,209 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from ACB20007 [9.280642 161.66624 224.16293] to B1B0000F [47.025887 160.38373 116.54009], speed: 1074.9515686764682",
+     "2026-10-31 23:00:48,309 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from ACB20007 [9.280642 161.66624 224.16293] to B1B0000F [47.025887 160.38373 116.54009], speed: 1074.9515686764682",
+     "2026-10-31 23:00:48,342 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from ACB20007 [9.280642 161.66624 224.16293] to B1B00017 [66.531525 152.89572 118.16643], speed: 1095.583520321477",
+     "2026-10-31 23:00:48,475 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from ACB20007 [9.280642 161.66624 224.16293] to B1B00017 [66.531525 152.89572 118.16643], speed: 1095.583520321477",
+     "2026-10-31 23:00:48,561 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from ACB20007 [9.280642 161.66624 224.16293] to B1B0001F [86.037094 145.40773 120.04255], speed: 1116.204226385118",
+     "2026-10-31 23:00:48,693 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from ACB20007 [9.280642 161.66624 224.16293] to B1B0001F [86.037094 145.40773 120.04255], speed: 1116.204226385118",
+     "2026-10-31 23:00:48,710 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from ACB20007 [9.280642 161.66624 224.16293] to B1B00026 [105.54302 137.9196 122.168884], speed: 1136.8158382077547",
+     "2026-10-31 23:00:48,811 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from ACB20007 [9.280642 161.66624 224.16293] to B1B0002E [138.04016 125.44429 126.22507], speed: 1171.1428713013627",
+     "2026-10-31 23:00:48,926 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from ACB20007 [9.280642 161.66624 224.16293] to B1B00035 [164.0615 115.45497 129.81328], speed: 1198.632554204999",
+     "2026-10-31 23:00:49,026 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from ACB20007 [9.280642 161.66624 224.16293] to B1B0003D [186.82507 106.71627 133.09955], speed: 1222.6925206281421",
+     "2026-10-31 23:00:49,127 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from ACB20007 [9.280642 161.66624 224.16293] to B1B0003D [186.82507 106.71627 133.09955], speed: 1222.6925206281421",
+     "2026-10-31 23:00:49,143 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from ACB20007 [9.280642 161.66624 224.16293] to B2B00005 [14.311047 99.23581 135.96988], speed: 1243.3010496255522",
+     "2026-10-31 23:00:49,260 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from ACB20007 [9.280642 161.66624 224.16293] to B2B00005 [14.311047 99.23581 135.96988], speed: 1243.3010496255522",
+     "2026-10-31 23:00:49,393 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from ACB20007 [9.280642 161.66624 224.16293] to B2B0000C [37.07371 90.49746 139.36732], speed: 1267.391267525542",
+     "2026-10-31 23:00:49,443 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from ACB20007 [9.280642 161.66624 224.16293] to B2B0000C [37.07371 90.49746 139.36732], speed: 1267.391267525542",
+     "2026-10-31 23:00:49,509 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from ACB20007 [9.280642 161.66624 224.16293] to B2B00014 [69.570595 78.02224 144.2753], speed: 1301.8140228158552",
+     "2026-10-31 23:00:49,544 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from ACB20007 [9.280642 161.66624 224.16293] to B2B00014 [69.570595 78.02224 144.2753], speed: 1301.8140228158552",
+     "2026-10-31 23:00:49,677 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from ACB20007 [9.280642 161.66624 224.16293] to B2B0001C [82.58106 73.02766 146.2536], speed: 1315.6056590027272",
+     "2026-10-31 23:00:49,710 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from ACB20007 [9.280642 161.66624 224.16293] to B2B0001C [82.58106 73.02766 146.2536], speed: 1315.6056590027272",
+     "2026-10-31 23:00:49,793 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from ACB20007 [9.280642 161.66624 224.16293] to B2B00023 [111.84006 61.795433 150.72105], speed: 1346.641795356137",
+     "2026-10-31 23:00:49,876 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from ACB20007 [9.280642 161.66624 224.16293] to B2B00023 [111.84006 61.795433 150.72105], speed: 1346.641795356137",
+     "2026-10-31 23:00:49,976 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from ACB20007 [9.280642 161.66624 224.16293] to B2B0002B [124.85058 56.80083 152.71364], speed: 1360.4513956771848",
+     "2026-10-31 23:00:49,994 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from ACB20007 [9.280642 161.66624 224.16293] to B2B0002B [124.85058 56.80083 152.71364], speed: 1360.4513956771848",
+     "2026-10-31 23:00:50,093 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from ACB20007 [9.280642 161.66624 224.16293] to B2B00032 [160.62445 43.067616 158.20508], speed: 1398.4494091671675",
+     "2026-10-31 23:00:50,160 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from ACB20007 [9.280642 161.66624 224.16293] to B2B00032 [160.62445 43.067616 158.20508], speed: 1398.4494091671675",
+     "2026-10-31 23:00:50,194 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from ACB20007 [9.280642 161.66624 224.16293] to B2B0003A [176.87271 36.83008 160.70358], speed: 1415.7204879495105",
+     "2026-10-31 23:00:50,293 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from ACB20007 [9.280642 161.66624 224.16293] to B3B00002 [7.6168704 28.098827 164.2039], speed: 1439.9088946874383",
+     "2026-10-31 23:00:50,410 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from ACB20007 [9.280642 161.66624 224.16293] to B3B00002 [7.6168704 28.098827 164.2039], speed: 1439.9088946874383",
+     "2026-10-31 23:00:50,427 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from ACB20007 [9.280642 161.66624 224.16293] to B3B00009 [30.380754 19.36001 167.70967], speed: 1464.1323369149388",
+     "2026-10-31 23:00:50,510 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from ACB20007 [9.280642 161.66624 224.16293] to B3B00009 [30.380754 19.36001 167.70967], speed: 1464.1323369149388",
+     "2026-10-31 23:00:50,527 [World Manager] WARN  (ACE.Server.WorldObjects.Player) MOVEMENT SPEED: +Probe 912 trying to move from ACB20007 [9.280642 161.66624 224.16293] to B3B00011 [53.144463 10.621258 171.21707], speed: 1488.368989867768"
+    ]
+   },
+   "chrome": {
+    "cpuPct": 353.1,
+    "gpuProcCpuPct": 257.4,
+    "rssMB": 3596
+   },
+   "memAvailMB": 810,
+   "error": null,
+   "errors": [],
+   "deploySec": 3.6,
+   "climbSec": 4.1,
+   "flySec": 60.2,
+   "summary": {
+    "metres": 10331,
+    "flySec": 60.2,
+    "achievedKmh": 617.8,
+    "cruiseKmhMed": 753.1,
+    "deploySec": 3.6,
+    "climbSec": 4.1,
+    "aglMed": 106.7,
+    "aglMin": 36.6,
+    "blindCtlFrac": 0.032,
+    "terrainUnderBakedFrac": 1,
+    "r1Mean": 1,
+    "r2Mean": 0.9,
+    "r3Mean": 0.8,
+    "r5Mean": 0.6,
+    "leadMed": 480,
+    "leadMin": 96,
+    "physLeadMed": 800,
+    "physLeadMin": 0,
+    "bubbleMean": 4.7,
+    "bubbleZeroFrac": 0.85,
+    "newObjectsInFlight": 53,
+    "preKnown": 53,
+    "firstSeen": {
+     "min": 15.3,
+     "median": 67.8,
+     "max": 150.2
+    },
+    "firstSeenAheadFrac": 0.68,
+    "censusDrawsMed": 34,
+    "censusDrawsMax": 331,
+    "censusMsMed": 3.6,
+    "longTaskMsPerSec": 339.1,
+    "longTaskMax": 763,
+    "rafP95Med": 116.7,
+    "rafMax": 816.5,
+    "heapStart": 1543,
+    "heapEnd": 1622,
+    "heapMax": 2171,
+    "lruResidentMax": 185,
+    "lruEvicted": 524,
+    "bakeQueueMax": null,
+    "playerGapMax": 45.3,
+    "carry": {
+     "cfg": {
+      "on": true,
+      "kmh": 800,
+      "accel": 25,
+      "hangM": 3,
+      "hz": 10,
+      "maxStepM": 150
+     },
+     "active": true,
+     "sends": 3409,
+     "catchUps": 0,
+     "maxStepM": 48.75,
+     "maxGapM": 48.75,
+     "metres": 29304.8,
+     "errors": 0,
+     "lastErr": null,
+     "last": [
+      40587.83,
+      27878.57,
+      106.69
+     ]
+    },
+    "droneState": "flying",
+    "lastAbort": {
+     "reason": "pilotMoved",
+     "from": "flying",
+     "at": 610.803
+    },
+    "pageErrors": 0,
+    "portalSeen": false
+   },
+   "firstSeenSample": [
+    {
+     "t": 10.1,
+     "d": 78.2,
+     "along": 46.6,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 11,
+     "d": 70.9,
+     "along": 35.9,
+     "name": "Chest"
+    },
+    {
+     "t": 11,
+     "d": 68.6,
+     "along": 40.4,
+     "name": "Door"
+    },
+    {
+     "t": 11,
+     "d": 67,
+     "along": 38.5,
+     "name": "Door"
+    },
+    {
+     "t": 11,
+     "d": 70.3,
+     "along": 38.9,
+     "name": "Door"
+    },
+    {
+     "t": 11,
+     "d": 79.7,
+     "along": 6.7,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 11,
+     "d": 70.9,
+     "along": 40.4,
+     "name": "Apprentice Scrivener of Item and War Magic"
+    },
+    {
+     "t": 11,
+     "d": 65.6,
+     "along": 39.3,
+     "name": "Apprentice Scrivener of Life Magic"
+    },
+    {
+     "t": 11,
+     "d": 63.8,
+     "along": 33,
+     "name": "Apprentice Scrivener of Creature Magic"
+    },
+    {
+     "t": 11,
+     "d": 66.1,
+     "along": 39.5,
+     "name": "Apprentice Scrivener of Creature Magic"
+    },
+    {
+     "t": 11,
+     "d": 67.4,
+     "along": 33.1,
+     "name": "Apprentice Scrivener of Life Magic"
+    },
+    {
+     "t": 11,
+     "d": 72.5,
+     "along": 38,
+     "name": "Door"
+    },
+    {
+     "t": 11,
+     "d": 69.9,
+     "along": 34.6,
+     "name": "Scrivener of Void Magic"
+    },
+    {
+     "t": 11,
+     "d": 69.1,
+     "along": 34,
+     "name": "Journeyman Scrivener of Life Magic"
+    },
+    {
+     "t": 11,
+     "d": 69.9,
+     "along": 35.6,
+     "name": "Scrivener of Life Magic"
+    },
+    {
+     "t": 11,
+     "d": 64.4,
+     "along": 38.6,
+     "name": "Journeyman Scrivener of Creature Magic"
+    },
+    {
+     "t": 11,
+     "d": 62.6,
+     "along": 36,
+     "name": "Scrivener of Creature Magic"
+    },
+    {
+     "t": 11,
+     "d": 67.8,
+     "along": 32.5,
+     "name": "Journeyman Scrivener of War Magic"
+    },
+    {
+     "t": 11,
+     "d": 63.7,
+     "along": 36.6,
+     "name": "Scrivener of War Magic"
+    },
+    {
+     "t": 11,
+     "d": 65.3,
+     "along": 41.3,
+     "name": "Scrivener of Item Magic"
+    },
+    {
+     "t": 11,
+     "d": 78.5,
+     "along": 78.5,
+     "name": "Gnawer Shreth"
+    },
+    {
+     "t": 11,
+     "d": 71.1,
+     "along": 40.7,
+     "name": "Apprentice Scrivener of Item and War Magic"
+    },
+    {
+     "t": 11,
+     "d": 74,
+     "along": 41.1,
+     "name": "Journeyman Scrivener of Item Magic"
+    },
+    {
+     "t": 12,
+     "d": 32.9,
+     "along": -19,
+     "name": "Royal Guard"
+    },
+    {
+     "t": 12,
+     "d": 32.2,
+     "along": -15.8,
+     "name": "Mite Scion"
+    },
+    {
+     "t": 12,
+     "d": 30.1,
+     "along": -8.6,
+     "name": "Sir Rylanan"
+    },
+    {
+     "t": 12,
+     "d": 44.9,
+     "along": -23.3,
+     "name": "Sentry"
+    },
+    {
+     "t": 12,
+     "d": 38.9,
+     "along": -13.3,
+     "name": "Aun Kielerea"
+    },
+    {
+     "t": 12,
+     "d": 30.8,
+     "along": -5.9,
+     "name": "Door"
+    },
+    {
+     "t": 12,
+     "d": 32.2,
+     "along": -5.6,
+     "name": "Underground Passage"
+    },
+    {
+     "t": 12,
+     "d": 40.2,
+     "along": 20.1,
+     "name": "Sentry"
+    },
+    {
+     "t": 12,
+     "d": 70.9,
+     "along": -4.1,
+     "name": "Drudge Skulker"
+    },
+    {
+     "t": 12,
+     "d": 78.3,
+     "along": 73,
+     "name": "Sentry"
+    },
+    {
+     "t": 12,
+     "d": 91.8,
+     "along": 82.2,
+     "name": "Mite Snippet"
+    },
+    {
+     "t": 13.1,
+     "d": 21.5,
+     "along": -2.5,
+     "name": "Young Mosswart"
+    },
+    {
+     "t": 13.1,
+     "d": 45.6,
+     "along": 6.8,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 13.1,
+     "d": 73.6,
+     "along": 19.8,
+     "name": "Red Phyntos Wasp"
+    },
+    {
+     "t": 13.1,
+     "d": 73,
+     "along": 16.7,
+     "name": "Red Phyntos Wasp"
+    },
+    {
+     "t": 13.1,
+     "d": 58.1,
+     "along": 51.5,
+     "name": "Creeper Mosswart"
+    },
+    {
+     "t": 14.1,
+     "d": 103.8,
+     "along": -51.3,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 14.1,
+     "d": 84.5,
+     "along": -27.4,
+     "name": "Door"
+    },
+    {
+     "t": 14.1,
+     "d": 88.9,
+     "along": -31.4,
+     "name": "Merchant"
+    },
+    {
+     "t": 14.1,
+     "d": 44.1,
+     "along": 6.9,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 14.1,
+     "d": 80.2,
+     "along": -16.5,
+     "name": "Well"
+    },
+    {
+     "t": 14.1,
+     "d": 42.9,
+     "along": 1,
+     "name": "Black Rabbit"
+    },
+    {
+     "t": 14.1,
+     "d": 67.3,
+     "along": 16.5,
+     "name": "Young Banderling"
+    },
+    {
+     "t": 15,
+     "d": 119.8,
+     "along": -91.4,
+     "name": "Creeper Mosswart"
+    },
+    {
+     "t": 15,
+     "d": 150.2,
+     "along": -104.4,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 15,
+     "d": 62.8,
+     "along": -40.2,
+     "name": "Destroyed Portal to Sanamar"
+    },
+    {
+     "t": 15,
+     "d": 15.3,
+     "along": -10.9,
+     "name": "Black Rabbit"
+    },
+    {
+     "t": 15,
+     "d": 64.8,
+     "along": 39.3,
+     "name": "Mite Snippet"
+    },
+    {
+     "t": 15,
+     "d": 101.8,
+     "along": 97,
+     "name": "Mite Scion"
+    },
+    {
+     "t": 15,
+     "d": 87.9,
+     "along": 87.5,
+     "name": "Drudge Slinker"
+    }
+   ]
+  },
+  {
+   "run": "s300-agl50-NNE",
+   "file": "matrix2.json",
+   "step": {
+    "label": "s300-agl50-NNE",
+    "teleloc": "0xA9B40019 84 7.1 94",
+    "settleMaxSec": 180,
+    "quietSec": 15,
+    "speedKmh": 300,
+    "aglM": 50,
+    "legs": [
+     {
+      "heading": 21,
+      "metres": 5000
+     }
+    ],
+    "pitchDeg": -25,
+    "settleMs": 8000,
+    "maxSec": 400
+   },
+   "ace": {
+    "cpuPct": 7.5,
+    "rssMB": 909,
+    "log": []
+   },
+   "chrome": {
+    "cpuPct": 354.2,
+    "gpuProcCpuPct": 255,
+    "rssMB": 3634
+   },
+   "memAvailMB": 1432,
+   "error": null,
+   "errors": [],
+   "deploySec": 3.9,
+   "climbSec": 2.5,
+   "flySec": 74.1,
+   "summary": {
+    "metres": 5043,
+    "flySec": 74.1,
+    "achievedKmh": 245,
+    "cruiseKmhMed": 305.3,
+    "deploySec": 3.9,
+    "climbSec": 2.5,
+    "aglMed": 59.5,
+    "aglMin": 2.2,
+    "blindCtlFrac": 0.031,
+    "terrainUnderBakedFrac": 1,
+    "r1Mean": 1,
+    "r2Mean": 1,
+    "r3Mean": 1,
+    "r5Mean": 1,
+    "leadMed": 1056,
+    "leadMin": 768,
+    "physLeadMed": 200,
+    "physLeadMin": 0,
+    "bubbleMean": 13.8,
+    "bubbleZeroFrac": 0.04,
+    "newObjectsInFlight": 506,
+    "preKnown": 53,
+    "firstSeen": {
+     "min": 6.4,
+     "median": 75.3,
+     "max": 197.2
+    },
+    "firstSeenAheadFrac": 0.35,
+    "censusDrawsMed": 104,
+    "censusDrawsMax": 994,
+    "censusMsMed": 3.2,
+    "longTaskMsPerSec": 348.3,
+    "longTaskMax": 887,
+    "rafP95Med": 116.6,
+    "rafMax": 900,
+    "heapStart": 924,
+    "heapEnd": 1073,
+    "heapMax": 1461,
+    "lruResidentMax": 168,
+    "lruEvicted": 240,
+    "bakeQueueMax": null,
+    "playerGapMax": 23.7,
+    "carry": {
+     "cfg": {
+      "on": true,
+      "kmh": 800,
+      "accel": 25,
+      "hangM": 3,
+      "hz": 10,
+      "maxStepM": 150
+     },
+     "active": true,
+     "sends": 624,
+     "catchUps": 0,
+     "maxStepM": 20.9,
+     "maxGapM": 20.9,
+     "metres": 5219.3,
+     "errors": 0,
+     "lastErr": null,
+     "last": [
+      34432.73,
+      39387.59,
+      186.28
+     ]
+    },
+    "droneState": "flying",
+    "lastAbort": null,
+    "pageErrors": 0,
+    "portalSeen": false
+   },
+   "firstSeenSample": [
+    {
+     "t": 10.1,
+     "d": 114.3,
+     "along": -103.9,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 11,
+     "d": 95.8,
+     "along": 92.3,
+     "name": "Chest"
+    },
+    {
+     "t": 11,
+     "d": 94.3,
+     "along": 89.5,
+     "name": "Chest"
+    },
+    {
+     "t": 11,
+     "d": 96.3,
+     "along": 89.4,
+     "name": "Door"
+    },
+    {
+     "t": 11,
+     "d": 99.1,
+     "along": 95.6,
+     "name": "Door"
+    },
+    {
+     "t": 12.1,
+     "d": 92.4,
+     "along": 46.5,
+     "name": "Chest"
+    },
+    {
+     "t": 12.1,
+     "d": 90.7,
+     "along": 48.9,
+     "name": "Door"
+    },
+    {
+     "t": 12.1,
+     "d": 47.6,
+     "along": 47.4,
+     "name": "Royal Guard"
+    },
+    {
+     "t": 12.1,
+     "d": 88.7,
+     "along": 47.3,
+     "name": "The Taut String"
+    },
+    {
+     "t": 12.1,
+     "d": 75.3,
+     "along": 67.4,
+     "name": "Monyra the Jeweler"
+    },
+    {
+     "t": 12.1,
+     "d": 73.2,
+     "along": 63.1,
+     "name": "Archmage Cindrue"
+    },
+    {
+     "t": 12.1,
+     "d": 74.5,
+     "along": 60.7,
+     "name": "Monyra's Jewels"
+    },
+    {
+     "t": 13,
+     "d": 85.2,
+     "along": -10.8,
+     "name": "Fletching Forge"
+    },
+    {
+     "t": 13,
+     "d": 105.6,
+     "along": -16.9,
+     "name": "Door"
+    },
+    {
+     "t": 13,
+     "d": 114,
+     "along": -27.6,
+     "name": "Chest"
+    },
+    {
+     "t": 13,
+     "d": 89,
+     "along": -0.7,
+     "name": "Door"
+    },
+    {
+     "t": 13,
+     "d": 112.6,
+     "along": -14.1,
+     "name": "Chest"
+    },
+    {
+     "t": 13,
+     "d": 103.7,
+     "along": 9.7,
+     "name": "Holtburg"
+    },
+    {
+     "t": 13,
+     "d": 90.6,
+     "along": -7.2,
+     "name": "Sontella Dagroff the Bowyer"
+    },
+    {
+     "t": 13,
+     "d": 102.2,
+     "along": -16.2,
+     "name": "Sedor Wystan the Blacksmith"
+    },
+    {
+     "t": 13,
+     "d": 37.5,
+     "along": 7.2,
+     "name": "Asenala"
+    },
+    {
+     "t": 13,
+     "d": 55.7,
+     "along": 12.9,
+     "name": "Alchemy Forge"
+    },
+    {
+     "t": 14.1,
+     "d": 128.5,
+     "along": -72,
+     "name": "Holtburg"
+    },
+    {
+     "t": 14.1,
+     "d": 125.5,
+     "along": -59.3,
+     "name": "Collector"
+    },
+    {
+     "t": 14.1,
+     "d": 117.7,
+     "along": -55.1,
+     "name": "Town Crier"
+    },
+    {
+     "t": 14.1,
+     "d": 100.2,
+     "along": -48.2,
+     "name": "Cow"
+    },
+    {
+     "t": 14.1,
+     "d": 127.9,
+     "along": -70.3,
+     "name": "Town Crier"
+    },
+    {
+     "t": 14.1,
+     "d": 122.5,
+     "along": -56.7,
+     "name": "Well"
+    },
+    {
+     "t": 14.1,
+     "d": 87.7,
+     "along": 79.3,
+     "name": "Chicken"
+    },
+    {
+     "t": 14.1,
+     "d": 52.2,
+     "along": 41.5,
+     "name": "Fishing Sign"
+    },
+    {
+     "t": 15.1,
+     "d": 21.6,
+     "along": -15.3,
+     "name": "Fishing Hole"
+    },
+    {
+     "t": 15.1,
+     "d": 33.4,
+     "along": -17.4,
+     "name": "Fishing Hole"
+    },
+    {
+     "t": 15.1,
+     "d": 15.6,
+     "along": 1.6,
+     "name": "Fishing Hole"
+    },
+    {
+     "t": 15.1,
+     "d": 32.9,
+     "along": -6.6,
+     "name": "Fishing Hole"
+    },
+    {
+     "t": 15.1,
+     "d": 43.8,
+     "along": -11.1,
+     "name": "Fishing Hole"
+    },
+    {
+     "t": 15.1,
+     "d": 37,
+     "along": -19.8,
+     "name": "Fishing Hole"
+    },
+    {
+     "t": 15.1,
+     "d": 29.9,
+     "along": -12,
+     "name": "Fishing Hole"
+    },
+    {
+     "t": 15.1,
+     "d": 28.6,
+     "along": -6.1,
+     "name": "Fishing Hole"
+    },
+    {
+     "t": 15.1,
+     "d": 38.8,
+     "along": -7.9,
+     "name": "Fishing Hole"
+    },
+    {
+     "t": 15.1,
+     "d": 46.9,
+     "along": -13.3,
+     "name": "Fishing Hole"
+    },
+    {
+     "t": 15.1,
+     "d": 42.8,
+     "along": -6.7,
+     "name": "Fishing Hole"
+    },
+    {
+     "t": 15.1,
+     "d": 26.5,
+     "along": -13.3,
+     "name": "Fishing Hole"
+    },
+    {
+     "t": 15.1,
+     "d": 27.6,
+     "along": -17.7,
+     "name": "Fishing Hole"
+    },
+    {
+     "t": 15.1,
+     "d": 36.8,
+     "along": 0.8,
+     "name": "Fishing Hole"
+    },
+    {
+     "t": 15.1,
+     "d": 56.5,
+     "along": -44,
+     "name": "Tackle Master"
+    },
+    {
+     "t": 16.1,
+     "d": 43.9,
+     "along": -3.9,
+     "name": "Drudge Skulker"
+    },
+    {
+     "t": 17.1,
+     "d": 54.3,
+     "along": -6.3,
+     "name": "Black Rabbit"
+    },
+    {
+     "t": 17.1,
+     "d": 70,
+     "along": 67.8,
+     "name": "Drudge Skulker"
+    },
+    {
+     "t": 17.1,
+     "d": 110.3,
+     "along": -26.5,
+     "name": "Fish"
+    },
+    {
+     "t": 18.1,
+     "d": 116.7,
+     "along": -48.3,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 18.1,
+     "d": 80.7,
+     "along": -2,
+     "name": "Drudge Skulker"
+    },
+    {
+     "t": 18.1,
+     "d": 76.3,
+     "along": 42.2,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 18.1,
+     "d": 70.7,
+     "along": -9.5,
+     "name": "Mite Snippet"
+    },
+    {
+     "t": 18.1,
+     "d": 92.9,
+     "along": -24.2,
+     "name": "Mite Scion"
+    },
+    {
+     "t": 18.1,
+     "d": 40.9,
+     "along": 39,
+     "name": "Mite Scion"
+    },
+    {
+     "t": 19,
+     "d": 37.5,
+     "along": 24.3,
+     "name": "Drudge Skulker"
+    },
+    {
+     "t": 19,
+     "d": 108.9,
+     "along": 0.1,
+     "name": "Drudge Skulker"
+    },
+    {
+     "t": 19,
+     "d": 83.9,
+     "along": 58.4,
+     "name": "Mite Snippet"
+    },
+    {
+     "t": 19,
+     "d": 90.8,
+     "along": 60.2,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 19,
+     "d": 96.7,
+     "along": -1,
+     "name": "Creeper Mosswart"
+    },
+    {
+     "t": 21,
+     "d": 57.7,
+     "along": 36.1,
+     "name": "Red Phyntos Wasp"
+    },
+    {
+     "t": 22.1,
+     "d": 63.3,
+     "along": -25.4,
+     "name": "Drudge Prowler"
+    },
+    {
+     "t": 22.1,
+     "d": 94.4,
+     "along": 75.9,
+     "name": "Drudge Prowler"
+    },
+    {
+     "t": 23.2,
+     "d": 64.6,
+     "along": 42.9,
+     "name": "Mite Squib"
+    },
+    {
+     "t": 26.1,
+     "d": 107.8,
+     "along": -91.3,
+     "name": "Scavenger Ursuin"
+    },
+    {
+     "t": 26.1,
+     "d": 76.1,
+     "along": 30.6,
+     "name": "Red Phyntos Wasp"
+    },
+    {
+     "t": 26.1,
+     "d": 41.8,
+     "along": -14.8,
+     "name": "Mite Digger"
+    },
+    {
+     "t": 26.1,
+     "d": 106.7,
+     "along": -100.3,
+     "name": "Carrion Shreth"
+    },
+    {
+     "t": 26.1,
+     "d": 66.6,
+     "along": -33.4,
+     "name": "Carrion Shreth"
+    },
+    {
+     "t": 27.1,
+     "d": 113.7,
+     "along": -38.2,
+     "name": "Mosswart Feeder"
+    },
+    {
+     "t": 27.1,
+     "d": 65,
+     "along": 21.7,
+     "name": "Drudge Servant"
+    },
+    {
+     "t": 27.1,
+     "d": 61.6,
+     "along": 21.8,
+     "name": "Drudge Servant"
+    },
+    {
+     "t": 27.1,
+     "d": 64,
+     "along": 22.6,
+     "name": "Drudge Slave"
+    },
+    {
+     "t": 27.1,
+     "d": 54,
+     "along": 43.1,
+     "name": "Mite Squire"
+    },
+    {
+     "t": 27.1,
+     "d": 89.8,
+     "along": 81.8,
+     "name": "Bonfire"
+    },
+    {
+     "t": 28.2,
+     "d": 115.2,
+     "along": -47.9,
+     "name": "Blue Phyntos Wasp"
+    },
+    {
+     "t": 28.2,
+     "d": 75.3,
+     "along": -14.1,
+     "name": "Small Shadow Child"
+    },
+    {
+     "t": 28.2,
+     "d": 70.1,
+     "along": 62.6,
+     "name": "Drudge Servant"
+    },
+    {
+     "t": 28.2,
+     "d": 68.6,
+     "along": 62.7,
+     "name": "Drudge Servant"
+    },
+    {
+     "t": 28.2,
+     "d": 70.3,
+     "along": 63.6,
+     "name": "Drudge Slave"
+    },
+    {
+     "t": 28.2,
+     "d": 39.5,
+     "along": -3,
+     "name": "Outcast Monouga"
+    },
+    {
+     "t": 28.2,
+     "d": 40.7,
+     "along": -9.1,
+     "name": "Outcast Monouga"
+    },
+    {
+     "t": 28.2,
+     "d": 37.5,
+     "along": -11.3,
+     "name": "Outcast Monouga"
+    },
+    {
+     "t": 29,
+     "d": 79.7,
+     "along": 18.7,
+     "name": "Outcast Monouga"
+    },
+    {
+     "t": 30,
+     "d": 113.4,
+     "along": -79.8,
+     "name": "Banderling Scout"
+    },
+    {
+     "t": 30,
+     "d": 143.3,
+     "along": -94.7,
+     "name": "Auroch Yearling"
+    },
+    {
+     "t": 30,
+     "d": 144.9,
+     "along": -92,
+     "name": "Auroch Yearling"
+    },
+    {
+     "t": 31.1,
+     "d": 121.3,
+     "along": -53.6,
+     "name": "Drudge Servant"
+    },
+    {
+     "t": 31.1,
+     "d": 117.9,
+     "along": -53.5,
+     "name": "Drudge Servant"
+    },
+    {
+     "t": 31.1,
+     "d": 121.3,
+     "along": -54.9,
+     "name": "Bonfire"
+    },
+    {
+     "t": 31.1,
+     "d": 85.9,
+     "along": 50.3,
+     "name": "Outcast Monouga"
+    },
+    {
+     "t": 31.1,
+     "d": 87.6,
+     "along": 50,
+     "name": "Outcast Monouga"
+    },
+    {
+     "t": 31.1,
+     "d": 95.5,
+     "along": 58.3,
+     "name": "Outcast Monouga"
+    },
+    {
+     "t": 31.1,
+     "d": 92,
+     "along": 52.2,
+     "name": "Outcast Monouga"
+    },
+    {
+     "t": 32,
+     "d": 99.3,
+     "along": 6.6,
+     "name": "Outcast Monouga"
+    },
+    {
+     "t": 32,
+     "d": 98.8,
+     "along": 0.4,
+     "name": "Outcast Monouga"
+    },
+    {
+     "t": 32,
+     "d": 101.6,
+     "along": 0.9,
+     "name": "Bonfire"
+    },
+    {
+     "t": 32,
+     "d": 103.5,
+     "along": 2.4,
+     "name": "Banderling Scout"
+    },
+    {
+     "t": 34.8,
+     "d": 62.8,
+     "along": 8.4,
+     "name": "Pile of Long Sticks"
+    },
+    {
+     "t": 34.8,
+     "d": 61.6,
+     "along": 11.2,
+     "name": "Mudlurk Mosswart"
+    }
+   ]
+  },
+  {
+   "run": "s300-agl150-SSW",
+   "file": "matrix2.json",
+   "step": {
+    "label": "s300-agl150-SSW",
+    "teleloc": "0xA9B40019 84 7.1 94",
+    "settleMaxSec": 180,
+    "quietSec": 15,
+    "speedKmh": 300,
+    "aglM": 150,
+    "legs": [
+     {
+      "heading": 201,
+      "metres": 5000
+     }
+    ],
+    "pitchDeg": -25,
+    "settleMs": 8000,
+    "maxSec": 400
+   },
+   "ace": {
+    "cpuPct": 11.5,
+    "rssMB": 932,
+    "log": []
+   },
+   "chrome": {
+    "cpuPct": 348.7,
+    "gpuProcCpuPct": 265,
+    "rssMB": 3454
+   },
+   "memAvailMB": 1274,
+   "error": null,
+   "errors": [],
+   "deploySec": 3.8,
+   "climbSec": 5.8,
+   "flySec": 64.8,
+   "summary": {
+    "metres": 5003,
+    "flySec": 64.8,
+    "achievedKmh": 278,
+    "cruiseKmhMed": 304.2,
+    "deploySec": 3.8,
+    "climbSec": 5.8,
+    "aglMed": 156.8,
+    "aglMin": 110.1,
+    "blindCtlFrac": 0.019,
+    "terrainUnderBakedFrac": 1,
+    "r1Mean": 1,
+    "r2Mean": 1,
+    "r3Mean": 1,
+    "r5Mean": 1,
+    "leadMed": 1152,
+    "leadMin": 864,
+    "physLeadMed": 200,
+    "physLeadMin": 0,
+    "bubbleMean": 20.5,
+    "bubbleZeroFrac": 0.02,
+    "newObjectsInFlight": 643,
+    "preKnown": 53,
+    "firstSeen": {
+     "min": 5.1,
+     "median": 68.9,
+     "max": 193.4
+    },
+    "firstSeenAheadFrac": 0.76,
+    "censusDrawsMed": 91,
+    "censusDrawsMax": 179,
+    "censusMsMed": 1.6,
+    "longTaskMsPerSec": 96.2,
+    "longTaskMax": 566,
+    "rafP95Med": 33.4,
+    "rafMax": 716.6,
+    "heapStart": 1162,
+    "heapEnd": 1097,
+    "heapMax": 1513,
+    "lruResidentMax": 183,
+    "lruEvicted": 396,
+    "bakeQueueMax": null,
+    "playerGapMax": 16.7,
+    "carry": {
+     "cfg": {
+      "on": true,
+      "kmh": 800,
+      "accel": 25,
+      "hangM": 3,
+      "hz": 10,
+      "maxStepM": 150
+     },
+     "active": true,
+     "sends": 1313,
+     "catchUps": 0,
+     "maxStepM": 20.9,
+     "maxGapM": 20.9,
+     "metres": 10403,
+     "errors": 0,
+     "lastErr": null,
+     "last": [
+      30677.06,
+      29730.98,
+      210.26
+     ]
+    },
+    "droneState": "flying",
+    "lastAbort": {
+     "reason": "pilotMoved",
+     "from": "flying",
+     "at": 166.922
+    },
+    "pageErrors": 0,
+    "portalSeen": false
+   },
+   "firstSeenSample": [
+    {
+     "t": 12.1,
+     "d": 86,
+     "along": 83,
+     "name": "Chicken"
+    },
+    {
+     "t": 12.1,
+     "d": 95.6,
+     "along": 26,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 13,
+     "d": 101.3,
+     "along": -5.4,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 13,
+     "d": 85.6,
+     "along": 84.5,
+     "name": "Drudge Hideout"
+    },
+    {
+     "t": 14.1,
+     "d": 113.1,
+     "along": -28.8,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 15.1,
+     "d": 105.6,
+     "along": -18.3,
+     "name": "Chicken"
+    },
+    {
+     "t": 15.1,
+     "d": 77.6,
+     "along": 66.2,
+     "name": "Drudge Skulker"
+    },
+    {
+     "t": 16.1,
+     "d": 67.3,
+     "along": 22,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 16.1,
+     "d": 113.2,
+     "along": -42,
+     "name": "Door"
+    },
+    {
+     "t": 16.1,
+     "d": 108.6,
+     "along": -30,
+     "name": "Door"
+    },
+    {
+     "t": 16.1,
+     "d": 104.2,
+     "along": -13.7,
+     "name": "Mite Scion"
+    },
+    {
+     "t": 16.1,
+     "d": 46.9,
+     "along": 34.8,
+     "name": "Young Banderling"
+    },
+    {
+     "t": 16.1,
+     "d": 94.7,
+     "along": 94.6,
+     "name": "Cabbage"
+    },
+    {
+     "t": 17.1,
+     "d": 160.7,
+     "along": -120.2,
+     "name": "Aluvian High-Stakes Gamesmaster"
+    },
+    {
+     "t": 17.1,
+     "d": 159.3,
+     "along": -117.4,
+     "name": "Aluvian High-Stakes Gamesmaster"
+    },
+    {
+     "t": 17.1,
+     "d": 162.5,
+     "along": -120.9,
+     "name": "Aluvian Mid-Stakes Gamesmaster"
+    },
+    {
+     "t": 17.1,
+     "d": 152.2,
+     "along": -115.1,
+     "name": "Exquisite Casino Chest"
+    },
+    {
+     "t": 17.1,
+     "d": 161.3,
+     "along": -118.6,
+     "name": "Monty's Golden Chest"
+    },
+    {
+     "t": 17.1,
+     "d": 153.1,
+     "along": -114.9,
+     "name": "Grand Casino Chest"
+    },
+    {
+     "t": 17.1,
+     "d": 10.3,
+     "along": 7,
+     "name": "Crumpled Note"
+    },
+    {
+     "t": 17.1,
+     "d": 164.2,
+     "along": -121.6,
+     "name": "Aluvian Low-Stakes Gamesmaster"
+    },
+    {
+     "t": 17.1,
+     "d": 168.1,
+     "along": -129.1,
+     "name": "Monty the Munificent"
+    },
+    {
+     "t": 17.1,
+     "d": 50,
+     "along": -21.1,
+     "name": "Gnawer Shreth"
+    },
+    {
+     "t": 17.1,
+     "d": 161.1,
+     "along": -118.1,
+     "name": "Aluvian Mid-Stakes Gamesmaster"
+    },
+    {
+     "t": 17.1,
+     "d": 162.9,
+     "along": -118.8,
+     "name": "Aluvian Low-Stakes Gamesmaster"
+    },
+    {
+     "t": 17.1,
+     "d": 154.8,
+     "along": -109.8,
+     "name": "Pawn Shopkeep"
+    },
+    {
+     "t": 17.1,
+     "d": 158.7,
+     "along": -118.3,
+     "name": "Wheel of Knowledge"
+    },
+    {
+     "t": 17.1,
+     "d": 119.1,
+     "along": -48.4,
+     "name": "Mite Snippet"
+    },
+    {
+     "t": 18.1,
+     "d": 69.1,
+     "along": 48.3,
+     "name": "Black Rabbit"
+    },
+    {
+     "t": 18.1,
+     "d": 100.3,
+     "along": 21.4,
+     "name": "A Rat Nest"
+    },
+    {
+     "t": 18.1,
+     "d": 97.6,
+     "along": 23.6,
+     "name": "Warning Sign"
+    },
+    {
+     "t": 19.1,
+     "d": 36.6,
+     "along": 33.9,
+     "name": "Mite Snippet"
+    },
+    {
+     "t": 19.1,
+     "d": 94.8,
+     "along": 17.4,
+     "name": "Chicken"
+    },
+    {
+     "t": 19.1,
+     "d": 73.2,
+     "along": 68.7,
+     "name": "Young Banderling"
+    },
+    {
+     "t": 19.1,
+     "d": 88.1,
+     "along": 86,
+     "name": "Drudge Skulker"
+    },
+    {
+     "t": 20.1,
+     "d": 71.8,
+     "along": -1.5,
+     "name": "Gnawer Shreth"
+    },
+    {
+     "t": 20.1,
+     "d": 43.3,
+     "along": 22.9,
+     "name": "Black Rabbit"
+    },
+    {
+     "t": 20.1,
+     "d": 88.5,
+     "along": 14.3,
+     "name": "Young Banderling"
+    },
+    {
+     "t": 20.1,
+     "d": 71.3,
+     "along": 44.7,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 20.1,
+     "d": 80.4,
+     "along": 79,
+     "name": "Young Banderling"
+    },
+    {
+     "t": 21.1,
+     "d": 60.6,
+     "along": 32.4,
+     "name": "Young Banderling"
+    },
+    {
+     "t": 21.1,
+     "d": 69,
+     "along": 41.7,
+     "name": "Mite Scion"
+    },
+    {
+     "t": 21.1,
+     "d": 109,
+     "along": 49.7,
+     "name": "Drudge Skulker"
+    },
+    {
+     "t": 21.1,
+     "d": 101.9,
+     "along": 98.5,
+     "name": "Mite Snippet"
+    },
+    {
+     "t": 22.1,
+     "d": 75.9,
+     "along": 72.6,
+     "name": "Drudge Skulker"
+    },
+    {
+     "t": 22.1,
+     "d": 88.7,
+     "along": 72.5,
+     "name": "Chicken"
+    },
+    {
+     "t": 22.1,
+     "d": 105.3,
+     "along": 16.4,
+     "name": "Mite Scion"
+    },
+    {
+     "t": 22.1,
+     "d": 87.3,
+     "along": 56.3,
+     "name": "Creeper Mosswart"
+    },
+    {
+     "t": 23,
+     "d": 86.6,
+     "along": -15.4,
+     "name": "Mite Scion"
+    },
+    {
+     "t": 23,
+     "d": 55.4,
+     "along": 8.7,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 24,
+     "d": 71.3,
+     "along": 59.8,
+     "name": "Banderling Scout"
+    },
+    {
+     "t": 24,
+     "d": 52.9,
+     "along": 31.8,
+     "name": "Blood Shreth"
+    },
+    {
+     "t": 26,
+     "d": 71.7,
+     "along": -12.6,
+     "name": "Drudge Sneaker"
+    },
+    {
+     "t": 26,
+     "d": 35.1,
+     "along": 15.3,
+     "name": "Outcast Monouga"
+    },
+    {
+     "t": 27,
+     "d": 21.5,
+     "along": 12.9,
+     "name": "Outcast Monouga"
+    },
+    {
+     "t": 27,
+     "d": 25.8,
+     "along": 11,
+     "name": "Outcast Monouga"
+    },
+    {
+     "t": 27,
+     "d": 23.5,
+     "along": 13.2,
+     "name": "Outcast Monouga"
+    },
+    {
+     "t": 27,
+     "d": 23.1,
+     "along": 10.6,
+     "name": "Bonfire"
+    },
+    {
+     "t": 27,
+     "d": 24.4,
+     "along": 15.5,
+     "name": "Blue Phyntos Wasp"
+    },
+    {
+     "t": 27,
+     "d": 29.1,
+     "along": 25.8,
+     "name": "Auroch Yearling"
+    },
+    {
+     "t": 27,
+     "d": 32.3,
+     "along": 25.1,
+     "name": "Auroch Yearling"
+    },
+    {
+     "t": 27,
+     "d": 58.3,
+     "along": 16.1,
+     "name": "Mite Squire"
+    },
+    {
+     "t": 27,
+     "d": 31.4,
+     "along": 26.8,
+     "name": "Auroch Cow"
+    },
+    {
+     "t": 27,
+     "d": 77.7,
+     "along": 44.9,
+     "name": "Blue Phyntos Wasp"
+    },
+    {
+     "t": 28.1,
+     "d": 45.4,
+     "along": 6.6,
+     "name": "Auroch Yearling"
+    },
+    {
+     "t": 28.1,
+     "d": 38.7,
+     "along": 5.9,
+     "name": "Auroch Yearling"
+    },
+    {
+     "t": 28.1,
+     "d": 36.8,
+     "along": 3.3,
+     "name": "Auroch Bull"
+    },
+    {
+     "t": 28.1,
+     "d": 88.9,
+     "along": 15.2,
+     "name": "Blue Phyntos Wasp"
+    },
+    {
+     "t": 28.1,
+     "d": 43.7,
+     "along": 36.5,
+     "name": "Mudlurk Mosswart"
+    },
+    {
+     "t": 29.1,
+     "d": 50.9,
+     "along": 20.9,
+     "name": "Bonfire"
+    },
+    {
+     "t": 29.1,
+     "d": 99.8,
+     "along": -70.6,
+     "name": "Reedshark Pup"
+    },
+    {
+     "t": 29.1,
+     "d": 100.4,
+     "along": -71.8,
+     "name": "Reedshark Pup"
+    },
+    {
+     "t": 29.1,
+     "d": 99.1,
+     "along": -71,
+     "name": "Adult Reedshark"
+    },
+    {
+     "t": 29.1,
+     "d": 49.9,
+     "along": 19.6,
+     "name": "Drudge Servant"
+    },
+    {
+     "t": 29.1,
+     "d": 50.7,
+     "along": 48.8,
+     "name": "Banderling Scout"
+    },
+    {
+     "t": 29.1,
+     "d": 51.8,
+     "along": 28.2,
+     "name": "Field Ursuin"
+    },
+    {
+     "t": 29.1,
+     "d": 50.9,
+     "along": 18.7,
+     "name": "Tumerok Warrior"
+    },
+    {
+     "t": 29.1,
+     "d": 88.8,
+     "along": 75.9,
+     "name": "Auroch Yearling"
+    },
+    {
+     "t": 29.1,
+     "d": 84.7,
+     "along": 72.5,
+     "name": "Auroch Yearling"
+    },
+    {
+     "t": 29.1,
+     "d": 91.6,
+     "along": 83.2,
+     "name": "Auroch Yearling"
+    },
+    {
+     "t": 30.1,
+     "d": 78.7,
+     "along": -4.6,
+     "name": "Drudge Servant"
+    },
+    {
+     "t": 30.1,
+     "d": 80.2,
+     "along": -5.6,
+     "name": "Tumerok Warrior"
+    },
+    {
+     "t": 30.1,
+     "d": 79.5,
+     "along": 13.9,
+     "name": "Auroch Yearling"
+    },
+    {
+     "t": 30.1,
+     "d": 79.2,
+     "along": -3.3,
+     "name": "Bonfire"
+    },
+    {
+     "t": 30.1,
+     "d": 89.1,
+     "along": 4.1,
+     "name": "Banderling Scout"
+    },
+    {
+     "t": 30.1,
+     "d": 81.9,
+     "along": 10.5,
+     "name": "Auroch Cow"
+    },
+    {
+     "t": 30.1,
+     "d": 79.7,
+     "along": 7.1,
+     "name": "Auroch Bull"
+    },
+    {
+     "t": 30.1,
+     "d": 64.6,
+     "along": 46,
+     "name": "Banderling Scout"
+    },
+    {
+     "t": 30.1,
+     "d": 86.3,
+     "along": 44.9,
+     "name": "Mudlurk Mosswart"
+    },
+    {
+     "t": 30.1,
+     "d": 88.9,
+     "along": 48.8,
+     "name": "Mudlurk Mosswart"
+    },
+    {
+     "t": 30.1,
+     "d": 93.5,
+     "along": 41.3,
+     "name": "Outcast Monouga"
+    },
+    {
+     "t": 30.1,
+     "d": 98.3,
+     "along": 46.9,
+     "name": "Bonfire"
+    },
+    {
+     "t": 30.1,
+     "d": 89.1,
+     "along": 47.7,
+     "name": "Pile of Long Sticks"
+    },
+    {
+     "t": 30.1,
+     "d": 96.1,
+     "along": 47.4,
+     "name": "Outcast Monouga"
+    },
+    {
+     "t": 30.1,
+     "d": 100.6,
+     "along": 49.5,
+     "name": "Outcast Monouga"
+    },
+    {
+     "t": 30.1,
+     "d": 91,
+     "along": 45.8,
+     "name": "Mosswart Feeder"
+    },
+    {
+     "t": 31,
+     "d": 58.9,
+     "along": 30,
+     "name": "Banderling Scout"
+    },
+    {
+     "t": 31,
+     "d": 66.2,
+     "along": 59.9,
+     "name": "Blue Phyntos Wasp"
+    },
+    {
+     "t": 31,
+     "d": 87.6,
+     "along": 41.4,
+     "name": "Hunter Shreth"
+    },
+    {
+     "t": 31,
+     "d": 92.8,
+     "along": 78,
+     "name": "Mudlurk Mosswart"
+    }
+   ]
+  },
+  {
+   "run": "s750-agl100-WNW",
+   "file": "matrix2.json",
+   "step": {
+    "label": "s750-agl100-WNW",
+    "teleloc": "0xA9B40019 84 7.1 94",
+    "settleMaxSec": 180,
+    "quietSec": 15,
+    "speedKmh": 750,
+    "aglM": 100,
+    "legs": [
+     {
+      "heading": 291,
+      "metres": 8000
+     }
+    ],
+    "pitchDeg": -25,
+    "settleMs": 8000,
+    "maxSec": 400
+   },
+   "ace": {
+    "cpuPct": 15.7,
+    "rssMB": 943,
+    "log": [
+     "2026-10-31 23:09:59,969 [World Manager] WARN  (ACE.Server.Managers.LandblockManager) [LANDBLOCK GROUP] TrySplit for x: 0x8B - 0xB4, y: 0x98 - 0xCE, w:  42, h:  55, Count:  358 took: 12.86 ms"
+    ]
+   },
+   "chrome": {
+    "cpuPct": 345.7,
+    "gpuProcCpuPct": 223.7,
+    "rssMB": 3536
+   },
+   "memAvailMB": 887,
+   "error": null,
+   "errors": [],
+   "deploySec": 3.7,
+   "climbSec": 4.6,
+   "flySec": 49.4,
+   "summary": {
+    "metres": 8132,
+    "flySec": 49.4,
+    "achievedKmh": 592.6,
+    "cruiseKmhMed": 752.4,
+    "deploySec": 3.7,
+    "climbSec": 4.6,
+    "aglMed": 117.1,
+    "aglMin": 24.9,
+    "blindCtlFrac": 0.079,
+    "terrainUnderBakedFrac": 1,
+    "r1Mean": 1,
+    "r2Mean": 1,
+    "r3Mean": 0.9,
+    "r5Mean": 0.8,
+    "leadMed": 864,
+    "leadMin": 192,
+    "physLeadMed": 100,
+    "physLeadMin": 0,
+    "bubbleMean": 6.5,
+    "bubbleZeroFrac": 0.12,
+    "newObjectsInFlight": 303,
+    "preKnown": 53,
+    "firstSeen": {
+     "min": 10.4,
+     "median": 96.7,
+     "max": 576.6
+    },
+    "firstSeenAheadFrac": 0.29,
+    "censusDrawsMed": 73,
+    "censusDrawsMax": 206,
+    "censusMsMed": 2.6,
+    "longTaskMsPerSec": 123.3,
+    "longTaskMax": 490,
+    "rafP95Med": 66.7,
+    "rafMax": 500,
+    "heapStart": 1257,
+    "heapEnd": 1322,
+    "heapMax": 1862,
+    "lruResidentMax": 187,
+    "lruEvicted": 564,
+    "bakeQueueMax": null,
+    "playerGapMax": 52.2,
+    "carry": {
+     "cfg": {
+      "on": true,
+      "kmh": 800,
+      "accel": 25,
+      "hangM": 3,
+      "hz": 10,
+      "maxStepM": 150
+     },
+     "active": true,
+     "sends": 1820,
+     "catchUps": 0,
+     "maxStepM": 41.79,
+     "maxGapM": 41.79,
+     "metres": 19296.2,
+     "errors": 0,
+     "lastErr": null,
+     "last": [
+      24348.85,
+      37673.08,
+      371.11
+     ]
+    },
+    "droneState": "flying",
+    "lastAbort": {
+     "reason": "pilotMoved",
+     "from": "flying",
+     "at": 296.403
+    },
+    "pageErrors": 0,
+    "portalSeen": false
+   },
+   "firstSeenSample": [
+    {
+     "t": 12.1,
+     "d": 111.3,
+     "along": -14.8,
+     "name": "Royal Guard"
+    },
+    {
+     "t": 12.1,
+     "d": 84.3,
+     "along": 26.6,
+     "name": "Drudge Skulker"
+    },
+    {
+     "t": 13.1,
+     "d": 94.9,
+     "along": 64.9,
+     "name": "Chicken"
+    },
+    {
+     "t": 14,
+     "d": 28.4,
+     "along": 27.3,
+     "name": "Door"
+    },
+    {
+     "t": 14,
+     "d": 34.2,
+     "along": 32.7,
+     "name": "Door"
+    },
+    {
+     "t": 14,
+     "d": 68.2,
+     "along": -13.1,
+     "name": "Black Rabbit"
+    },
+    {
+     "t": 14,
+     "d": 34.6,
+     "along": 34.2,
+     "name": "Healer"
+    },
+    {
+     "t": 14,
+     "d": 65.4,
+     "along": 8.2,
+     "name": "Chess Board"
+    },
+    {
+     "t": 14,
+     "d": 35.6,
+     "along": 35,
+     "name": "Peddler"
+    },
+    {
+     "t": 14,
+     "d": 59.3,
+     "along": 51.8,
+     "name": "Black Rabbit"
+    },
+    {
+     "t": 14,
+     "d": 79,
+     "along": 43.7,
+     "name": "Young Banderling"
+    },
+    {
+     "t": 14,
+     "d": 76.5,
+     "along": 67.5,
+     "name": "Chicken"
+    },
+    {
+     "t": 15,
+     "d": 28.4,
+     "along": 5.9,
+     "name": "Drudge Robber"
+    },
+    {
+     "t": 15,
+     "d": 27,
+     "along": 6.8,
+     "name": "Drudge Prowler"
+    },
+    {
+     "t": 15,
+     "d": 24.9,
+     "along": 4.3,
+     "name": "Drudge Sneaker"
+    },
+    {
+     "t": 15,
+     "d": 27.3,
+     "along": 5.9,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 15,
+     "d": 28.1,
+     "along": 3.8,
+     "name": "Fish"
+    },
+    {
+     "t": 15,
+     "d": 31.6,
+     "along": 18.7,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 15,
+     "d": 91.8,
+     "along": -13.3,
+     "name": "Young Banderling"
+    },
+    {
+     "t": 15,
+     "d": 61.5,
+     "along": 5.9,
+     "name": "Black Rabbit"
+    },
+    {
+     "t": 16,
+     "d": 19.5,
+     "along": 18.7,
+     "name": "Gnawer Shreth"
+    },
+    {
+     "t": 16,
+     "d": 55.5,
+     "along": 22.6,
+     "name": "Black Rabbit"
+    },
+    {
+     "t": 16,
+     "d": 95.1,
+     "along": 63.2,
+     "name": "Door"
+    },
+    {
+     "t": 16,
+     "d": 106.4,
+     "along": 56.4,
+     "name": "Life Stone"
+    },
+    {
+     "t": 17,
+     "d": 185.3,
+     "along": -151.9,
+     "name": "Well"
+    },
+    {
+     "t": 17,
+     "d": 173.2,
+     "along": -137.6,
+     "name": "Chest"
+    },
+    {
+     "t": 17,
+     "d": 159.8,
+     "along": -130.2,
+     "name": "LIFESTONES SIGN"
+    },
+    {
+     "t": 17,
+     "d": 166.4,
+     "along": -126,
+     "name": "Drudge Skulker"
+    },
+    {
+     "t": 17,
+     "d": 173.8,
+     "along": -134.7,
+     "name": "Door"
+    },
+    {
+     "t": 17,
+     "d": 74,
+     "along": -57.4,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 17,
+     "d": 187.5,
+     "along": -151.7,
+     "name": "Holtburg Outpost"
+    },
+    {
+     "t": 17,
+     "d": 66.5,
+     "along": -12.8,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 17,
+     "d": 115.2,
+     "along": -50,
+     "name": "Gnawer Shreth"
+    },
+    {
+     "t": 17,
+     "d": 35.8,
+     "along": 35.3,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 17,
+     "d": 82.7,
+     "along": -36.3,
+     "name": "Mite Scion"
+    },
+    {
+     "t": 17,
+     "d": 96.2,
+     "along": 1.9,
+     "name": "Drudge Skulker"
+    },
+    {
+     "t": 18,
+     "d": 173.8,
+     "along": -146.9,
+     "name": "Mite Snippet"
+    },
+    {
+     "t": 18,
+     "d": 99,
+     "along": -88.1,
+     "name": "Young Mosswart"
+    },
+    {
+     "t": 18,
+     "d": 152.6,
+     "along": -117.2,
+     "name": "Young Banderling"
+    },
+    {
+     "t": 18,
+     "d": 28.7,
+     "along": -28.4,
+     "name": "Drudge Skulker"
+    },
+    {
+     "t": 18,
+     "d": 141.9,
+     "along": -94.2,
+     "name": "Mite Snippet"
+    },
+    {
+     "t": 18,
+     "d": 26,
+     "along": 15.1,
+     "name": "Mite Scion"
+    },
+    {
+     "t": 18,
+     "d": 84.9,
+     "along": -31.5,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 18,
+     "d": 49.3,
+     "along": 39.1,
+     "name": "Drudge Skulker"
+    },
+    {
+     "t": 18,
+     "d": 78,
+     "along": 21.9,
+     "name": "Young Banderling"
+    },
+    {
+     "t": 18,
+     "d": 87.3,
+     "along": 6.6,
+     "name": "Young Banderling"
+    },
+    {
+     "t": 18,
+     "d": 55.2,
+     "along": 51,
+     "name": "Black Rabbit"
+    },
+    {
+     "t": 19,
+     "d": 137.1,
+     "along": -129.3,
+     "name": "Outcast Monouga"
+    },
+    {
+     "t": 19,
+     "d": 115.6,
+     "along": -83.9,
+     "name": "Reedshark Pup"
+    },
+    {
+     "t": 19,
+     "d": 63.3,
+     "along": -63.2,
+     "name": "Reedshark Pup"
+    },
+    {
+     "t": 19,
+     "d": 59,
+     "along": -34.9,
+     "name": "Drudge Prowler"
+    },
+    {
+     "t": 19,
+     "d": 98.1,
+     "along": 4.9,
+     "name": "Green Phyntos Wasp"
+    },
+    {
+     "t": 19,
+     "d": 85,
+     "along": 80.4,
+     "name": "Green Phyntos Wasp"
+    },
+    {
+     "t": 20,
+     "d": 124.7,
+     "along": -87.7,
+     "name": "Drudge Prowler"
+    },
+    {
+     "t": 20,
+     "d": 56.5,
+     "along": -55.5,
+     "name": "Banderling Scout"
+    },
+    {
+     "t": 20,
+     "d": 17.1,
+     "along": 3.7,
+     "name": "Banderling Scout"
+    },
+    {
+     "t": 20,
+     "d": 89.1,
+     "along": -35.8,
+     "name": "Hunter Shreth"
+    },
+    {
+     "t": 20,
+     "d": 70.1,
+     "along": 17.9,
+     "name": "Drudge Skulker"
+    },
+    {
+     "t": 20,
+     "d": 73,
+     "along": 18.5,
+     "name": "Drudge Sneaker"
+    },
+    {
+     "t": 20,
+     "d": 71.7,
+     "along": 19.1,
+     "name": "Drudge Sneaker"
+    },
+    {
+     "t": 20,
+     "d": 74.1,
+     "along": 20.9,
+     "name": "Drudge Prowler"
+    },
+    {
+     "t": 20,
+     "d": 72.5,
+     "along": 21.6,
+     "name": "Bonfire"
+    },
+    {
+     "t": 21,
+     "d": 156.2,
+     "along": -156.2,
+     "name": "Field Ursuin"
+    },
+    {
+     "t": 21,
+     "d": 202,
+     "along": -174.6,
+     "name": "Blue Phyntos Wasp"
+    },
+    {
+     "t": 21,
+     "d": 152.8,
+     "along": -125.1,
+     "name": "Adult Reedshark"
+    },
+    {
+     "t": 21,
+     "d": 25.3,
+     "along": 25.3,
+     "name": "Hunter Shreth"
+    },
+    {
+     "t": 21,
+     "d": 112.7,
+     "along": -33.5,
+     "name": "Outcast Monouga"
+    },
+    {
+     "t": 21,
+     "d": 116.5,
+     "along": -39.6,
+     "name": "Outcast Monouga"
+    },
+    {
+     "t": 21,
+     "d": 113.2,
+     "along": -35.7,
+     "name": "Outcast Monouga"
+    },
+    {
+     "t": 22,
+     "d": 332.4,
+     "along": -321.8,
+     "name": "Veteran Reedshark"
+    },
+    {
+     "t": 22,
+     "d": 279.1,
+     "along": -261.7,
+     "name": "Banderling Raider"
+    },
+    {
+     "t": 22,
+     "d": 93.9,
+     "along": -86.1,
+     "name": "Drudge Prowler"
+    },
+    {
+     "t": 22,
+     "d": 218.9,
+     "along": -204.9,
+     "name": "Wood Golem"
+    },
+    {
+     "t": 22,
+     "d": 135,
+     "along": -109.3,
+     "name": "Mite Scion"
+    },
+    {
+     "t": 22,
+     "d": 129.6,
+     "along": -102,
+     "name": "Mite Scion"
+    },
+    {
+     "t": 22,
+     "d": 330,
+     "along": -319.4,
+     "name": "Reedshark Elder"
+    },
+    {
+     "t": 22,
+     "d": 160.9,
+     "along": -131.6,
+     "name": "Mite Sentry"
+    },
+    {
+     "t": 22,
+     "d": 70.2,
+     "along": -70.2,
+     "name": "Dark Wisp"
+    },
+    {
+     "t": 22,
+     "d": 75,
+     "along": -10.3,
+     "name": "Jade Gromnie"
+    },
+    {
+     "t": 22,
+     "d": 143.2,
+     "along": -89.5,
+     "name": "Verdalim Plant"
+    },
+    {
+     "t": 22,
+     "d": 52,
+     "along": 34.6,
+     "name": "Outcast Monouga"
+    },
+    {
+     "t": 23,
+     "d": 188.5,
+     "along": -160.2,
+     "name": "Reedshark Pup"
+    },
+    {
+     "t": 23,
+     "d": 225.7,
+     "along": -199.4,
+     "name": "Olthoi Nettler"
+    },
+    {
+     "t": 23,
+     "d": 111,
+     "along": -110.2,
+     "name": "Drudge Prowler"
+    },
+    {
+     "t": 23,
+     "d": 108.8,
+     "along": -92.1,
+     "name": "Pile of Short Sticks"
+    },
+    {
+     "t": 23,
+     "d": 166.4,
+     "along": -148.3,
+     "name": "Mite Scion"
+    },
+    {
+     "t": 23,
+     "d": 169.6,
+     "along": -150.4,
+     "name": "Mite Scamp"
+    },
+    {
+     "t": 23,
+     "d": 49.4,
+     "along": 23,
+     "name": "Elaniwood Golem"
+    },
+    {
+     "t": 23,
+     "d": 109.2,
+     "along": -93.6,
+     "name": "Mite Digger"
+    },
+    {
+     "t": 23,
+     "d": 82.6,
+     "along": -10.4,
+     "name": "Mite Digger"
+    },
+    {
+     "t": 23,
+     "d": 83.7,
+     "along": -6,
+     "name": "Mite Digger"
+    },
+    {
+     "t": 23,
+     "d": 33.9,
+     "along": -26,
+     "name": "Mite Squire"
+    },
+    {
+     "t": 23,
+     "d": 66.5,
+     "along": 24.6,
+     "name": "Skeleton Lord"
+    },
+    {
+     "t": 24.1,
+     "d": 137.3,
+     "along": -126.4,
+     "name": "Elaniwood Golem"
+    },
+    {
+     "t": 24.1,
+     "d": 157.6,
+     "along": -142.2,
+     "name": "Drudge Lurker"
+    },
+    {
+     "t": 24.1,
+     "d": 122.7,
+     "along": -120.8,
+     "name": "Brutish Monouga"
+    },
+    {
+     "t": 24.1,
+     "d": 219.8,
+     "along": -194.2,
+     "name": "Wily Monouga"
+    },
+    {
+     "t": 24.1,
+     "d": 82.1,
+     "along": -79.5,
+     "name": "Scrawed Grievver"
+    },
+    {
+     "t": 24.1,
+     "d": 293.1,
+     "along": -282.5,
+     "name": "Banderling Captain"
+    },
+    {
+     "t": 24.1,
+     "d": 222.3,
+     "along": -193,
+     "name": "Olthoi Nymph"
+    }
+   ]
+  },
+  {
+   "run": "s300-square",
+   "file": "matrix3.json",
+   "step": {
+    "label": "s300-square",
+    "teleloc": "0xA9B40019 84 7.1 94",
+    "settleMaxSec": 180,
+    "quietSec": 15,
+    "speedKmh": 300,
+    "aglM": 100,
+    "legs": [
+     {
+      "heading": 111,
+      "metres": 2500
+     },
+     {
+      "heading": 201,
+      "metres": 2500
+     },
+     {
+      "heading": 291,
+      "metres": 2500
+     },
+     {
+      "heading": 21,
+      "metres": 2500
+     }
+    ],
+    "pitchDeg": -25,
+    "settleMs": 8000,
+    "maxSec": 400
+   },
+   "ace": {
+    "cpuPct": 12.1,
+    "rssMB": 1155,
+    "log": []
+   },
+   "chrome": {
+    "cpuPct": 352,
+    "gpuProcCpuPct": 251,
+    "rssMB": 3597
+   },
+   "memAvailMB": 1034,
+   "error": null,
+   "errors": [],
+   "deploySec": 3.8,
+   "climbSec": 4.2,
+   "flySec": 140.9,
+   "summary": {
+    "metres": 10477,
+    "flySec": 140.9,
+    "achievedKmh": 267.7,
+    "cruiseKmhMed": 302.8,
+    "deploySec": 3.8,
+    "climbSec": 4.2,
+    "aglMed": 104.4,
+    "aglMin": 68.1,
+    "blindCtlFrac": 0.03,
+    "terrainUnderBakedFrac": 1,
+    "r1Mean": 1,
+    "r2Mean": 1,
+    "r3Mean": 1,
+    "r5Mean": 1,
+    "leadMed": 1152,
+    "leadMin": 864,
+    "physLeadMed": 200,
+    "physLeadMin": 0,
+    "bubbleMean": 8.6,
+    "bubbleZeroFrac": 0.05,
+    "newObjectsInFlight": 510,
+    "preKnown": 53,
+    "firstSeen": {
+     "min": 12.2,
+     "median": 73.7,
+     "max": 221.8
+    },
+    "firstSeenAheadFrac": 0.71,
+    "censusDrawsMed": 91,
+    "censusDrawsMax": 374,
+    "censusMsMed": 1.6,
+    "longTaskMsPerSec": 245.2,
+    "longTaskMax": 487,
+    "rafP95Med": 83.3,
+    "rafMax": 500,
+    "heapStart": 1047,
+    "heapEnd": 1357,
+    "heapMax": 1926,
+    "lruResidentMax": 188,
+    "lruEvicted": 728,
+    "bakeQueueMax": null,
+    "playerGapMax": 32,
+    "carry": {
+     "cfg": {
+      "on": true,
+      "kmh": 800,
+      "accel": 25,
+      "hangM": 3,
+      "hz": 10,
+      "maxStepM": 150
+     },
+     "active": true,
+     "sends": 1187,
+     "catchUps": 0,
+     "maxStepM": 20.89,
+     "maxGapM": 20.89,
+     "metres": 10658.6,
+     "errors": 0,
+     "lastErr": null,
+     "last": [
+      32501.79,
+      34488.78,
+      192.34
+     ]
+    },
+    "droneState": "flying",
+    "lastAbort": null,
+    "pageErrors": 0,
+    "portalSeen": false
+   },
+   "firstSeenSample": [
+    {
+     "t": 10.2,
+     "d": 94.8,
+     "along": 67.3,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 11.1,
+     "d": 97.1,
+     "along": 70.2,
+     "name": "Chest"
+    },
+    {
+     "t": 11.1,
+     "d": 96.7,
+     "along": 74.7,
+     "name": "Door"
+    },
+    {
+     "t": 11.1,
+     "d": 94.8,
+     "along": 72.8,
+     "name": "Door"
+    },
+    {
+     "t": 11.1,
+     "d": 97.6,
+     "along": 73.2,
+     "name": "Door"
+    },
+    {
+     "t": 11.1,
+     "d": 94.7,
+     "along": 41,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 12.1,
+     "d": 61.8,
+     "along": 25.9,
+     "name": "Apprentice Scrivener of Life Magic"
+    },
+    {
+     "t": 12.1,
+     "d": 61.4,
+     "along": 19.6,
+     "name": "Apprentice Scrivener of Creature Magic"
+    },
+    {
+     "t": 12.1,
+     "d": 62.3,
+     "along": 26.1,
+     "name": "Apprentice Scrivener of Creature Magic"
+    },
+    {
+     "t": 12.1,
+     "d": 67,
+     "along": 20.6,
+     "name": "Journeyman Scrivener of Life Magic"
+    },
+    {
+     "t": 12.1,
+     "d": 65.2,
+     "along": 19.7,
+     "name": "Apprentice Scrivener of Life Magic"
+    },
+    {
+     "t": 12.1,
+     "d": 59.2,
+     "along": 22.6,
+     "name": "Scrivener of Creature Magic"
+    },
+    {
+     "t": 12.1,
+     "d": 67.4,
+     "along": 22.2,
+     "name": "Scrivener of Life Magic"
+    },
+    {
+     "t": 12.1,
+     "d": 69.7,
+     "along": 24.6,
+     "name": "Door"
+    },
+    {
+     "t": 12.1,
+     "d": 60.6,
+     "along": 25.2,
+     "name": "Journeyman Scrivener of Creature Magic"
+    },
+    {
+     "t": 12.1,
+     "d": 65.9,
+     "along": 19.1,
+     "name": "Journeyman Scrivener of War Magic"
+    },
+    {
+     "t": 12.1,
+     "d": 60.9,
+     "along": 27.9,
+     "name": "Scrivener of Item Magic"
+    },
+    {
+     "t": 12.1,
+     "d": 60.3,
+     "along": 23.2,
+     "name": "Scrivener of War Magic"
+    },
+    {
+     "t": 12.1,
+     "d": 67.7,
+     "along": 21.2,
+     "name": "Scrivener of Void Magic"
+    },
+    {
+     "t": 12.1,
+     "d": 78.2,
+     "along": 67.1,
+     "name": "Door"
+    },
+    {
+     "t": 12.1,
+     "d": 79.3,
+     "along": 67.5,
+     "name": "Underground Passage"
+    },
+    {
+     "t": 12.1,
+     "d": 67.6,
+     "along": 27.3,
+     "name": "Apprentice Scrivener of Item and War Magic"
+    },
+    {
+     "t": 12.1,
+     "d": 69.3,
+     "along": 49.7,
+     "name": "Sentry"
+    },
+    {
+     "t": 12.1,
+     "d": 70.7,
+     "along": 27.7,
+     "name": "Journeyman Scrivener of Item Magic"
+    },
+    {
+     "t": 12.1,
+     "d": 65.3,
+     "along": 54,
+     "name": "Royal Guard"
+    },
+    {
+     "t": 12.1,
+     "d": 75.3,
+     "along": 64.5,
+     "name": "Sir Rylanan"
+    },
+    {
+     "t": 13,
+     "d": 78.7,
+     "along": -49.6,
+     "name": "Apprentice Scrivener of Item and War Magic"
+    },
+    {
+     "t": 13,
+     "d": 80.3,
+     "along": -7.7,
+     "name": "Drudge Skulker"
+    },
+    {
+     "t": 13,
+     "d": 47,
+     "along": 16.5,
+     "name": "Sentry"
+    },
+    {
+     "t": 14.1,
+     "d": 73.1,
+     "along": -70.7,
+     "name": "Mite Scion"
+    },
+    {
+     "t": 14.1,
+     "d": 41.7,
+     "along": 18.1,
+     "name": "Sentry"
+    },
+    {
+     "t": 14.1,
+     "d": 82.1,
+     "along": -68.1,
+     "name": "Aun Kielerea"
+    },
+    {
+     "t": 15,
+     "d": 32.7,
+     "along": -7.5,
+     "name": "Mite Snippet"
+    },
+    {
+     "t": 15,
+     "d": 65.2,
+     "along": 27,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 15,
+     "d": 97.6,
+     "along": -97.6,
+     "name": "Gnawer Shreth"
+    },
+    {
+     "t": 15,
+     "d": 83.5,
+     "along": 72.1,
+     "name": "Mite Snippet"
+    },
+    {
+     "t": 16.1,
+     "d": 65.2,
+     "along": -54.7,
+     "name": "Young Mosswart"
+    },
+    {
+     "t": 16.1,
+     "d": 79.1,
+     "along": 48.9,
+     "name": "Door"
+    },
+    {
+     "t": 17.1,
+     "d": 62.5,
+     "along": 12.9,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 17.1,
+     "d": 70.4,
+     "along": -26.2,
+     "name": "Merchant"
+    },
+    {
+     "t": 17.1,
+     "d": 35.1,
+     "along": 15.8,
+     "name": "Chicken"
+    },
+    {
+     "t": 17.1,
+     "d": 85.5,
+     "along": 19.9,
+     "name": "Mite Snippet"
+    },
+    {
+     "t": 17.1,
+     "d": 117.3,
+     "along": -103.3,
+     "name": "Red Phyntos Wasp"
+    },
+    {
+     "t": 17.1,
+     "d": 120.7,
+     "along": -106.5,
+     "name": "Red Phyntos Wasp"
+    },
+    {
+     "t": 17.1,
+     "d": 61.7,
+     "along": -11.2,
+     "name": "Well"
+    },
+    {
+     "t": 18.1,
+     "d": 100.2,
+     "along": -24.1,
+     "name": "Drudge Skulker"
+    },
+    {
+     "t": 18.1,
+     "d": 162.1,
+     "along": -120.6,
+     "name": "Young Banderling"
+    },
+    {
+     "t": 18.1,
+     "d": 46.1,
+     "along": 45.6,
+     "name": "Chicken"
+    },
+    {
+     "t": 18.1,
+     "d": 73.9,
+     "along": 27.9,
+     "name": "Destroyed Portal to Sanamar"
+    },
+    {
+     "t": 19.1,
+     "d": 121.5,
+     "along": -65.2,
+     "name": "Drudge Skulker"
+    },
+    {
+     "t": 19.1,
+     "d": 35.3,
+     "along": 14.4,
+     "name": "Mite Scion"
+    },
+    {
+     "t": 19.1,
+     "d": 86.5,
+     "along": 70.2,
+     "name": "Gnawer Shreth"
+    },
+    {
+     "t": 19.1,
+     "d": 107.5,
+     "along": 10.2,
+     "name": "Drudge Skulker"
+    },
+    {
+     "t": 19.1,
+     "d": 68.1,
+     "along": 62.1,
+     "name": "Young Banderling"
+    },
+    {
+     "t": 20,
+     "d": 71.2,
+     "along": 31.3,
+     "name": "Drudge Skulker"
+    },
+    {
+     "t": 20,
+     "d": 79.6,
+     "along": 73.6,
+     "name": "Drudge Skulker"
+    },
+    {
+     "t": 20,
+     "d": 82.9,
+     "along": 82.7,
+     "name": "Mite Snippet"
+    },
+    {
+     "t": 21.2,
+     "d": 70.2,
+     "along": 11.3,
+     "name": "Drudge Skulker"
+    },
+    {
+     "t": 21.2,
+     "d": 123.4,
+     "along": -56.2,
+     "name": "Drudge Skulker"
+    },
+    {
+     "t": 21.2,
+     "d": 37.9,
+     "along": 31.9,
+     "name": "Door"
+    },
+    {
+     "t": 21.2,
+     "d": 43.4,
+     "along": 36.2,
+     "name": "Book Shelf"
+    },
+    {
+     "t": 21.2,
+     "d": 24.7,
+     "along": 24.7,
+     "name": "Cabbage"
+    },
+    {
+     "t": 21.2,
+     "d": 25.1,
+     "along": 25.1,
+     "name": "Cabbage"
+    },
+    {
+     "t": 21.2,
+     "d": 26.4,
+     "along": 26.4,
+     "name": "Cabbage"
+    },
+    {
+     "t": 21.2,
+     "d": 27.9,
+     "along": 27.8,
+     "name": "Cabbage"
+    },
+    {
+     "t": 21.2,
+     "d": 28.6,
+     "along": 28.6,
+     "name": "Cabbage"
+    },
+    {
+     "t": 21.2,
+     "d": 28.3,
+     "along": 28.2,
+     "name": "Cabbage"
+    },
+    {
+     "t": 21.2,
+     "d": 27.1,
+     "along": 26.9,
+     "name": "Cabbage"
+    },
+    {
+     "t": 21.2,
+     "d": 41.5,
+     "along": 40.7,
+     "name": "Drudge Skulker"
+    },
+    {
+     "t": 21.2,
+     "d": 25.6,
+     "along": 25.5,
+     "name": "Cabbage"
+    },
+    {
+     "t": 21.2,
+     "d": 37.9,
+     "along": 29.9,
+     "name": "Peddler"
+    },
+    {
+     "t": 21.2,
+     "d": 100.3,
+     "along": -10.4,
+     "name": "Fish"
+    },
+    {
+     "t": 21.2,
+     "d": 101.3,
+     "along": -10,
+     "name": "Fish"
+    },
+    {
+     "t": 21.2,
+     "d": 104.3,
+     "along": -17.7,
+     "name": "Fish"
+    },
+    {
+     "t": 22.1,
+     "d": 58.6,
+     "along": 19.4,
+     "name": "Creeper Mosswart"
+    },
+    {
+     "t": 22.1,
+     "d": 65,
+     "along": 54.7,
+     "name": "Creeper Mosswart"
+    },
+    {
+     "t": 22.1,
+     "d": 25.9,
+     "along": -25.8,
+     "name": "Cow"
+    },
+    {
+     "t": 22.1,
+     "d": 16.1,
+     "along": -16.1,
+     "name": "Cow"
+    },
+    {
+     "t": 22.1,
+     "d": 21.5,
+     "along": -21,
+     "name": "Cow"
+    },
+    {
+     "t": 22.1,
+     "d": 19.9,
+     "along": -19.3,
+     "name": "Cow"
+    },
+    {
+     "t": 22.1,
+     "d": 99.9,
+     "along": 27.1,
+     "name": "Drudge Skulker"
+    },
+    {
+     "t": 23,
+     "d": 206.8,
+     "along": -173.6,
+     "name": "Black Rabbit"
+    },
+    {
+     "t": 23,
+     "d": 30.3,
+     "along": 15,
+     "name": "Young Banderling"
+    },
+    {
+     "t": 23,
+     "d": 79.7,
+     "along": 3.6,
+     "name": "Drudge Skulker"
+    },
+    {
+     "t": 23,
+     "d": 55.8,
+     "along": 55,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 24.1,
+     "d": 76.4,
+     "along": -9.2,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 24.1,
+     "d": 37.3,
+     "along": 24.8,
+     "name": "Black Rabbit"
+    },
+    {
+     "t": 24.1,
+     "d": 37,
+     "along": 32.6,
+     "name": "Drudge Skulker"
+    },
+    {
+     "t": 24.1,
+     "d": 95.2,
+     "along": 94.6,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 26.1,
+     "d": 70.1,
+     "along": 4.6,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 26.1,
+     "d": 42.4,
+     "along": 17.9,
+     "name": "Drudge Skulker"
+    },
+    {
+     "t": 27.1,
+     "d": 64.4,
+     "along": 18.9,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 27.1,
+     "d": 69.1,
+     "along": 22,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 27.1,
+     "d": 70.6,
+     "along": 17,
+     "name": "Drudge Skulker"
+    },
+    {
+     "t": 27.1,
+     "d": 63.6,
+     "along": 22.4,
+     "name": "Fish"
+    },
+    {
+     "t": 27.1,
+     "d": 64.6,
+     "along": 25,
+     "name": "Drudge Prowler"
+    },
+    {
+     "t": 27.1,
+     "d": 61.1,
+     "along": 20,
+     "name": "Drudge Prowler"
+    },
+    {
+     "t": 27.1,
+     "d": 61.2,
+     "along": 22.7,
+     "name": "Drudge Prowler"
+    },
+    {
+     "t": 27.1,
+     "d": 92.8,
+     "along": 73.4,
+     "name": "Drudge Prowler"
+    },
+    {
+     "t": 28.2,
+     "d": 67.7,
+     "along": -42.5,
+     "name": "Outcast Monouga"
+    }
+   ]
+  },
+  {
+   "run": "s200-outback-ESE",
+   "file": "matrix3.json",
+   "step": {
+    "label": "s200-outback-ESE",
+    "teleloc": "0xA9B40019 84 7.1 94",
+    "settleMaxSec": 180,
+    "quietSec": 15,
+    "speedKmh": 200,
+    "aglM": 100,
+    "legs": [
+     {
+      "heading": 111,
+      "metres": 3000
+     },
+     {
+      "heading": 291,
+      "metres": 3000
+     }
+    ],
+    "pitchDeg": -25,
+    "settleMs": 8000,
+    "maxSec": 400
+   },
+   "ace": {
+    "cpuPct": 8.6,
+    "rssMB": 1161,
+    "log": []
+   },
+   "chrome": {
+    "cpuPct": 357.7,
+    "gpuProcCpuPct": 283.5,
+    "rssMB": 3647
+   },
+   "memAvailMB": 972,
+   "error": null,
+   "errors": [],
+   "deploySec": 3.6,
+   "climbSec": 4.1,
+   "flySec": 119.3,
+   "summary": {
+    "metres": 6248,
+    "flySec": 119.3,
+    "achievedKmh": 188.6,
+    "cruiseKmhMed": 200.9,
+    "deploySec": 3.6,
+    "climbSec": 4.1,
+    "aglMed": 105.1,
+    "aglMin": 87.8,
+    "blindCtlFrac": 0.001,
+    "terrainUnderBakedFrac": 1,
+    "r1Mean": 1,
+    "r2Mean": 1,
+    "r3Mean": 1,
+    "r5Mean": 1,
+    "leadMed": 1152,
+    "leadMin": 864,
+    "physLeadMed": 800,
+    "physLeadMin": 0,
+    "bubbleMean": 20.9,
+    "bubbleZeroFrac": 0.03,
+    "newObjectsInFlight": 392,
+    "preKnown": 62,
+    "firstSeen": {
+     "min": 8.1,
+     "median": 70.1,
+     "max": 122.6
+    },
+    "firstSeenAheadFrac": 0.78,
+    "censusDrawsMed": 111,
+    "censusDrawsMax": 3742,
+    "censusMsMed": 1.5,
+    "longTaskMsPerSec": 160.1,
+    "longTaskMax": 370,
+    "rafP95Med": 50,
+    "rafMax": 366.6,
+    "heapStart": 1227,
+    "heapEnd": 1475,
+    "heapMax": 1896,
+    "lruResidentMax": 179,
+    "lruEvicted": 396,
+    "bakeQueueMax": null,
+    "playerGapMax": 16.7,
+    "carry": {
+     "cfg": {
+      "on": true,
+      "kmh": 800,
+      "accel": 25,
+      "hangM": 3,
+      "hz": 10,
+      "maxStepM": 150
+     },
+     "active": true,
+     "sends": 2286,
+     "catchUps": 0,
+     "maxStepM": 20.89,
+     "maxGapM": 20.89,
+     "metres": 16989.1,
+     "errors": 0,
+     "lastErr": null,
+     "last": [
+      32433.01,
+      34535.55,
+      184.75
+     ]
+    },
+    "droneState": "flying",
+    "lastAbort": {
+     "reason": "pilotMoved",
+     "from": "flying",
+     "at": 244.686
+    },
+    "pageErrors": 0,
+    "portalSeen": false
+   },
+   "firstSeenSample": [
+    {
+     "t": 11,
+     "d": 85.1,
+     "along": 58.2,
+     "name": "Door"
+    },
+    {
+     "t": 11,
+     "d": 87,
+     "along": 54.3,
+     "name": "Scrivener of Void Magic"
+    },
+    {
+     "t": 11,
+     "d": 84,
+     "along": 59,
+     "name": "Apprentice Scrivener of Life Magic"
+    },
+    {
+     "t": 11,
+     "d": 81.3,
+     "along": 52.7,
+     "name": "Apprentice Scrivener of Creature Magic"
+    },
+    {
+     "t": 11,
+     "d": 84.5,
+     "along": 59.2,
+     "name": "Apprentice Scrivener of Creature Magic"
+    },
+    {
+     "t": 11,
+     "d": 84.5,
+     "along": 52.8,
+     "name": "Apprentice Scrivener of Life Magic"
+    },
+    {
+     "t": 11,
+     "d": 86.2,
+     "along": 53.7,
+     "name": "Journeyman Scrivener of Life Magic"
+    },
+    {
+     "t": 11,
+     "d": 89.9,
+     "along": 57.7,
+     "name": "Door"
+    },
+    {
+     "t": 11,
+     "d": 86.9,
+     "along": 60.1,
+     "name": "Door"
+    },
+    {
+     "t": 11,
+     "d": 88.2,
+     "along": 58.6,
+     "name": "Door"
+    },
+    {
+     "t": 11,
+     "d": 88.2,
+     "along": 55.6,
+     "name": "Chest"
+    },
+    {
+     "t": 11,
+     "d": 82.8,
+     "along": 58.3,
+     "name": "Journeyman Scrivener of Creature Magic"
+    },
+    {
+     "t": 11,
+     "d": 80.7,
+     "along": 55.6,
+     "name": "Scrivener of Creature Magic"
+    },
+    {
+     "t": 11,
+     "d": 81.9,
+     "along": 56.3,
+     "name": "Scrivener of War Magic"
+    },
+    {
+     "t": 12.2,
+     "d": 67.5,
+     "along": -7,
+     "name": "Journeyman Scrivener of War Magic"
+    },
+    {
+     "t": 12.2,
+     "d": 58.2,
+     "along": 1.8,
+     "name": "Scrivener of Item Magic"
+    },
+    {
+     "t": 12.2,
+     "d": 65.8,
+     "along": 1,
+     "name": "Apprentice Scrivener of Item and War Magic"
+    },
+    {
+     "t": 12.2,
+     "d": 65.9,
+     "along": 1.3,
+     "name": "Apprentice Scrivener of Item and War Magic"
+    },
+    {
+     "t": 12.2,
+     "d": 39.8,
+     "along": 39.1,
+     "name": "Gnawer Shreth"
+    },
+    {
+     "t": 12.2,
+     "d": 34.3,
+     "along": 31.2,
+     "name": "Mite Scion"
+    },
+    {
+     "t": 12.2,
+     "d": 67.8,
+     "along": -3.8,
+     "name": "Scrivener of Life Magic"
+    },
+    {
+     "t": 12.2,
+     "d": 69.1,
+     "along": 1.7,
+     "name": "Journeyman Scrivener of Item Magic"
+    },
+    {
+     "t": 12.2,
+     "d": 57.4,
+     "along": 23.7,
+     "name": "Sentry"
+    },
+    {
+     "t": 12.2,
+     "d": 49.5,
+     "along": 28,
+     "name": "Royal Guard"
+    },
+    {
+     "t": 12.2,
+     "d": 60.3,
+     "along": 41.1,
+     "name": "Door"
+    },
+    {
+     "t": 12.2,
+     "d": 61.7,
+     "along": 41.4,
+     "name": "Underground Passage"
+    },
+    {
+     "t": 12.2,
+     "d": 57.5,
+     "along": 38.4,
+     "name": "Sir Rylanan"
+    },
+    {
+     "t": 12.2,
+     "d": 60.8,
+     "along": 33.8,
+     "name": "Aun Kielerea"
+    },
+    {
+     "t": 12.2,
+     "d": 95,
+     "along": 42.9,
+     "name": "Drudge Skulker"
+    },
+    {
+     "t": 12.2,
+     "d": 83,
+     "along": 67.1,
+     "name": "Sentry"
+    },
+    {
+     "t": 13,
+     "d": 81.6,
+     "along": 77,
+     "name": "Mite Snippet"
+    },
+    {
+     "t": 13,
+     "d": 80,
+     "along": 67.8,
+     "name": "Sentry"
+    },
+    {
+     "t": 14,
+     "d": 61.7,
+     "along": 46.6,
+     "name": "Young Mosswart"
+    },
+    {
+     "t": 14,
+     "d": 85.1,
+     "along": 55.9,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 14,
+     "d": 85.8,
+     "along": 69.1,
+     "name": "Red Phyntos Wasp"
+    },
+    {
+     "t": 14,
+     "d": 83.8,
+     "along": 65.8,
+     "name": "Red Phyntos Wasp"
+    },
+    {
+     "t": 15,
+     "d": 63.9,
+     "along": 43.4,
+     "name": "Mite Snippet"
+    },
+    {
+     "t": 16,
+     "d": 69.3,
+     "along": 38.8,
+     "name": "Door"
+    },
+    {
+     "t": 16,
+     "d": 122.6,
+     "along": -52.3,
+     "name": "Life Stone"
+    },
+    {
+     "t": 16,
+     "d": 69.8,
+     "along": 34.8,
+     "name": "Merchant"
+    },
+    {
+     "t": 16,
+     "d": 74.8,
+     "along": 49.7,
+     "name": "Well"
+    },
+    {
+     "t": 16,
+     "d": 81.2,
+     "along": 76.8,
+     "name": "Chicken"
+    },
+    {
+     "t": 17,
+     "d": 68.7,
+     "along": 19.1,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 17,
+     "d": 91.7,
+     "along": 26.1,
+     "name": "Mite Snippet"
+    },
+    {
+     "t": 18,
+     "d": 102.1,
+     "along": 3.4,
+     "name": "Drudge Skulker"
+    },
+    {
+     "t": 18,
+     "d": 74.1,
+     "along": 73.1,
+     "name": "Chicken"
+    },
+    {
+     "t": 18,
+     "d": 91.9,
+     "along": 55.4,
+     "name": "Destroyed Portal to Sanamar"
+    },
+    {
+     "t": 19.1,
+     "d": 97.8,
+     "along": -2.9,
+     "name": "Drudge Skulker"
+    },
+    {
+     "t": 19.1,
+     "d": 81.5,
+     "along": 76.7,
+     "name": "Mite Scion"
+    },
+    {
+     "t": 20.1,
+     "d": 93.9,
+     "along": 75.9,
+     "name": "Gnawer Shreth"
+    },
+    {
+     "t": 20.1,
+     "d": 103.5,
+     "along": 15.9,
+     "name": "Drudge Skulker"
+    },
+    {
+     "t": 20.1,
+     "d": 75.3,
+     "along": 67.8,
+     "name": "Young Banderling"
+    },
+    {
+     "t": 21,
+     "d": 88.7,
+     "along": 56.1,
+     "name": "Drudge Skulker"
+    },
+    {
+     "t": 22.1,
+     "d": 106.6,
+     "along": -17.5,
+     "name": "Drudge Skulker"
+    },
+    {
+     "t": 22.1,
+     "d": 47.3,
+     "along": 39.9,
+     "name": "Drudge Skulker"
+    },
+    {
+     "t": 22.1,
+     "d": 49,
+     "along": 48.9,
+     "name": "Mite Snippet"
+    },
+    {
+     "t": 22.1,
+     "d": 60.3,
+     "along": 60.2,
+     "name": "Cow"
+    },
+    {
+     "t": 22.1,
+     "d": 89.3,
+     "along": 50,
+     "name": "Drudge Skulker"
+    },
+    {
+     "t": 22.1,
+     "d": 75,
+     "along": 70.6,
+     "name": "Door"
+    },
+    {
+     "t": 22.1,
+     "d": 63.5,
+     "along": 63.4,
+     "name": "Cabbage"
+    },
+    {
+     "t": 22.1,
+     "d": 64,
+     "along": 63.8,
+     "name": "Cabbage"
+    },
+    {
+     "t": 22.1,
+     "d": 80.2,
+     "along": 74.9,
+     "name": "Book Shelf"
+    },
+    {
+     "t": 22.1,
+     "d": 65.3,
+     "along": 65.1,
+     "name": "Cabbage"
+    },
+    {
+     "t": 22.1,
+     "d": 66.8,
+     "along": 66.6,
+     "name": "Cabbage"
+    },
+    {
+     "t": 22.1,
+     "d": 67.5,
+     "along": 67.3,
+     "name": "Cabbage"
+    },
+    {
+     "t": 22.1,
+     "d": 67,
+     "along": 66.9,
+     "name": "Cabbage"
+    },
+    {
+     "t": 22.1,
+     "d": 65.7,
+     "along": 65.6,
+     "name": "Cabbage"
+    },
+    {
+     "t": 22.1,
+     "d": 64.2,
+     "along": 64.2,
+     "name": "Cabbage"
+    },
+    {
+     "t": 22.1,
+     "d": 80.4,
+     "along": 79.4,
+     "name": "Drudge Skulker"
+    },
+    {
+     "t": 22.1,
+     "d": 70.1,
+     "along": 70,
+     "name": "Cow"
+    },
+    {
+     "t": 22.1,
+     "d": 65.7,
+     "along": 65.1,
+     "name": "Cow"
+    },
+    {
+     "t": 22.1,
+     "d": 66.8,
+     "along": 66.8,
+     "name": "Cow"
+    },
+    {
+     "t": 22.1,
+     "d": 74.1,
+     "along": 68.6,
+     "name": "Peddler"
+    },
+    {
+     "t": 22.1,
+     "d": 100.2,
+     "along": 21,
+     "name": "Fish"
+    },
+    {
+     "t": 22.1,
+     "d": 99.1,
+     "along": 28.3,
+     "name": "Fish"
+    },
+    {
+     "t": 22.1,
+     "d": 100.2,
+     "along": 28.7,
+     "name": "Fish"
+    },
+    {
+     "t": 23.1,
+     "d": 69.6,
+     "along": 47.9,
+     "name": "Creeper Mosswart"
+    },
+    {
+     "t": 23.1,
+     "d": 92.3,
+     "along": 83.2,
+     "name": "Creeper Mosswart"
+    },
+    {
+     "t": 24,
+     "d": 72.7,
+     "along": 69.5,
+     "name": "Young Banderling"
+    },
+    {
+     "t": 24,
+     "d": 102,
+     "along": 14.8,
+     "name": "Drudge Skulker"
+    },
+    {
+     "t": 25.1,
+     "d": 46.7,
+     "along": 44.5,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 25.1,
+     "d": 84.7,
+     "along": -6.9,
+     "name": "Drudge Skulker"
+    },
+    {
+     "t": 26.1,
+     "d": 82.3,
+     "along": 16.5,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 26.1,
+     "d": 59.6,
+     "along": 58.3,
+     "name": "Drudge Skulker"
+    },
+    {
+     "t": 26.1,
+     "d": 60.1,
+     "along": 50.5,
+     "name": "Black Rabbit"
+    },
+    {
+     "t": 27,
+     "d": 71.9,
+     "along": 70.2,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 28.1,
+     "d": 93,
+     "along": 55.4,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 28.1,
+     "d": 81.1,
+     "along": 68.6,
+     "name": "Drudge Skulker"
+    },
+    {
+     "t": 29,
+     "d": 108.5,
+     "along": 85.9,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 29,
+     "d": 107.1,
+     "along": 87,
+     "name": "Drudge Prowler"
+    },
+    {
+     "t": 30.1,
+     "d": 72.1,
+     "along": 32.6,
+     "name": "Drudge Prowler"
+    },
+    {
+     "t": 30.1,
+     "d": 68.6,
+     "along": 30.3,
+     "name": "Drudge Prowler"
+    },
+    {
+     "t": 30.1,
+     "d": 77.3,
+     "along": 24.6,
+     "name": "Drudge Skulker"
+    },
+    {
+     "t": 30.1,
+     "d": 70.9,
+     "along": 30,
+     "name": "Fish"
+    },
+    {
+     "t": 30.1,
+     "d": 76.2,
+     "along": 29.6,
+     "name": "Drudge Slinker"
+    },
+    {
+     "t": 30.1,
+     "d": 71.8,
+     "along": 43.1,
+     "name": "Outcast Monouga"
+    },
+    {
+     "t": 30.1,
+     "d": 101.7,
+     "along": 81,
+     "name": "Drudge Prowler"
+    },
+    {
+     "t": 31,
+     "d": 81.7,
+     "along": 54.6,
+     "name": "Carrion Shreth"
+    },
+    {
+     "t": 32,
+     "d": 43.3,
+     "along": 40.8,
+     "name": "Mosswart Feeder"
+    },
+    {
+     "t": 32,
+     "d": 101.4,
+     "along": 77.4,
+     "name": "Green Phyntos Wasp"
+    }
+   ]
+  }
+ ],
+ "census": [
+  {
+   "file": "diag.json",
+   "label": "benchNull",
+   "calls": null,
+   "tris": null,
+   "census": null,
+   "ratio": null,
+   "msPerFrame": null,
+   "programs": null,
+   "geometries": null,
+   "textures": null,
+   "agl": null,
+   "eye": null,
+   "camPitch": null,
+   "frames": 1199,
+   "p50": 16.7,
+   "p95": 16.8,
+   "max": 16.8,
+   "meanMs": 16.67
+  },
+  {
+   "file": "census.json",
+   "label": "bench-az0",
+   "calls": 863,
+   "tris": 436471,
+   "census": 911,
+   "ratio": 0.95,
+   "msPerFrame": 7724,
+   "programs": 164,
+   "geometries": 1077,
+   "textures": 993,
+   "agl": null,
+   "eye": null,
+   "camPitch": null,
+   "frames": null,
+   "p50": null,
+   "p95": null,
+   "max": null,
+   "meanMs": null
+  },
+  {
+   "file": "census.json",
+   "label": "bench-az90",
+   "calls": 530.5,
+   "tris": 437364,
+   "census": 541,
+   "ratio": 0.98,
+   "msPerFrame": 7163,
+   "programs": 179,
+   "geometries": 1167,
+   "textures": 1185,
+   "agl": null,
+   "eye": null,
+   "camPitch": null,
+   "frames": null,
+   "p50": null,
+   "p95": null,
+   "max": null,
+   "meanMs": null
+  },
+  {
+   "file": "census.json",
+   "label": "bench-az180",
+   "calls": 484,
+   "tris": 309021,
+   "census": 489,
+   "ratio": 0.99,
+   "msPerFrame": 7541,
+   "programs": 183,
+   "geometries": 1241,
+   "textures": 1301,
+   "agl": null,
+   "eye": null,
+   "camPitch": null,
+   "frames": null,
+   "p50": null,
+   "p95": null,
+   "max": null,
+   "meanMs": null
+  },
+  {
+   "file": "census.json",
+   "label": "bench-az270",
+   "calls": 738.5,
+   "tris": 365180,
+   "census": 738,
+   "ratio": 1,
+   "msPerFrame": 7042,
+   "programs": 188,
+   "geometries": 1309,
+   "textures": 1430,
+   "agl": null,
+   "eye": null,
+   "camPitch": null,
+   "frames": null,
+   "p50": null,
+   "p95": null,
+   "max": null,
+   "meanMs": null
+  },
+  {
+   "file": "census3.json",
+   "label": "carrycam-agl15",
+   "calls": 584,
+   "tris": 336384,
+   "census": 492,
+   "ratio": 1.19,
+   "msPerFrame": 14059,
+   "programs": 131,
+   "geometries": 1009,
+   "textures": 1232,
+   "agl": 15,
+   "eye": [
+    32532,
+    34567.1,
+    109
+   ],
+   "camPitch": -25,
+   "frames": null,
+   "p50": null,
+   "p95": null,
+   "max": null,
+   "meanMs": null
+  },
+  {
+   "file": "census3.json",
+   "label": "carrycam-agl50",
+   "calls": 657.5,
+   "tris": 314276,
+   "census": 567,
+   "ratio": 1.16,
+   "msPerFrame": 12585,
+   "programs": 132,
+   "geometries": 1014,
+   "textures": 1272,
+   "agl": 50,
+   "eye": [
+    32532,
+    34567.1,
+    144
+   ],
+   "camPitch": -25,
+   "frames": null,
+   "p50": null,
+   "p95": null,
+   "max": null,
+   "meanMs": null
+  },
+  {
+   "file": "census3.json",
+   "label": "carrycam-agl100",
+   "calls": 401,
+   "tris": 370413,
+   "census": 320,
+   "ratio": 1.25,
+   "msPerFrame": 14309,
+   "programs": 133,
+   "geometries": 1038,
+   "textures": 1303,
+   "agl": 100,
+   "eye": [
+    32532,
+    34567.1,
+    194
+   ],
+   "camPitch": -25,
+   "frames": null,
+   "p50": null,
+   "p95": null,
+   "max": null,
+   "meanMs": null
+  },
+  {
+   "file": "census3.json",
+   "label": "carrycam-agl150",
+   "calls": 266,
+   "tris": 364399,
+   "census": 202,
+   "ratio": 1.32,
+   "msPerFrame": 7699,
+   "programs": 133,
+   "geometries": 1063,
+   "textures": 1344,
+   "agl": 150,
+   "eye": [
+    32532,
+    34567.1,
+    244
+   ],
+   "camPitch": -25,
+   "frames": null,
+   "p50": null,
+   "p95": null,
+   "max": null,
+   "meanMs": null
+  }
+ ],
+ "glCensus": {
+  "perSec": {
+   "gl2.drawElements": 63.7,
+   "gl2.texImage2D": 0.1,
+   "gl2.clear": 0.7,
+   "gl2.drawArrays": 3.4,
+   "gl2.generateMipmap": 0.1
+  },
+  "contexts": 109
+ }
+}

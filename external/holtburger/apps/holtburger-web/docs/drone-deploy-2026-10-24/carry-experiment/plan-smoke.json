@@ -1,0 +1,11 @@
+{
+  "name": "smoke",
+  "account": "agentp10",
+  "carryKmh": 800,
+  "setupChat": ["@cloak on"],
+  "timeoutMin": 30,
+  "steps": [
+    { "label": "smoke-60kmh-60m", "teleloc": "0xA9B40019 84 7.1 94", "settleMaxSec": 180, "quietSec": 15,
+      "speedKmh": 60, "aglM": 60, "legs": [{ "heading": 111, "metres": 600 }], "pitchDeg": -25, "settleMs": 6000, "maxSec": 240 }
+  ]
+}

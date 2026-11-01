@@ -1,0 +1,52 @@
+{
+ "name": "render-census",
+ "account": "agentp10",
+ "carryKmh": 800,
+ "render": true,
+ "setupChat": [
+  "@cloak on"
+ ],
+ "timeoutMin": 90,
+ "extraFlags": "hud=none",
+ "chromeArgs": [
+  "--disable-gpu-compositing"
+ ],
+ "viewport": "960x540",
+ "steps": [
+  {
+   "label": "bench-render",
+   "teleloc": "0xA9B40019 84 7.1 94",
+   "settleMaxSec": 240,
+   "quietSec": 20,
+   "eval": "carry-census.eval.js",
+   "mode": "bench",
+   "azList": [
+    0,
+    90,
+    180,
+    270
+   ],
+   "frames": 3,
+   "settleQuietSec": 15,
+   "abortAfter": false
+  },
+  {
+   "label": "drone-render",
+   "eval": "carry-census.eval.js",
+   "mode": "drone",
+   "aglList": [
+    15,
+    50,
+    100,
+    150
+   ],
+   "frames": 3,
+   "moveFrames": 0,
+   "headingDeg": 111,
+   "pitchDeg": -25,
+   "settleQuietSec": 15,
+   "settleMaxSec": 240
+  }
+ ],
+ "minMemAvailMB": 900
+}

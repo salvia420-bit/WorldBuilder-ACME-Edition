@@ -1,0 +1,41 @@
+{
+ "name": "diag",
+ "account": "agentp10",
+ "carryKmh": 1300,
+ "setupChat": [
+  "@cloak on"
+ ],
+ "timeoutMin": 20,
+ "extraFlags": "hud=none",
+ "chromeArgs": [
+  "--disable-gpu-compositing"
+ ],
+ "viewport": "960x540",
+ "steps": [
+  {
+   "label": "diag-benchNull",
+   "teleloc": "0xA9B40019 84 7.1 94",
+   "settleMaxSec": 180,
+   "quietSec": 15,
+   "eval": "carry-census.eval.js",
+   "mode": "benchNull",
+   "seconds": 20,
+   "settleQuietSec": 10,
+   "abortAfter": false
+  },
+  {
+   "label": "diag-fly200",
+   "speedKmh": 200,
+   "aglM": 100,
+   "legs": [
+    {
+     "heading": 111,
+     "metres": 2500
+    }
+   ],
+   "pitchDeg": -25,
+   "settleMs": 5000,
+   "maxSec": 200
+  }
+ ]
+}
