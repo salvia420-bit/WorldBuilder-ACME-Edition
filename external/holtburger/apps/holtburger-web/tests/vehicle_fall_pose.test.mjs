@@ -542,6 +542,15 @@ await check("index.js ends the fall on the bound / a teleport, not a fixed 120 s
   assert(!/startedAt\s*>\s*120\b/.test(src), "no fixed 120 s timeout");
   assert(/fall\.maxSec\s*=\s*fallTimeoutSec\(/.test(src) && /f\.startedAt\s*>\s*f\.maxSec/.test(src), "the bound");
   assert(/portalSpaceOwnsFrame\(\)\)\s*\{[^}]*stopFall\("teleport"\)/.test(src), "a teleport ends it");
+  // ACE releases the seat BEFORE the Bail event: the twin starts from the velocity kept at stopPiloting (film take D2:
+  // a zero start velocity fell straight down and the Chute re-anchor jumped the body ~440 m)
+  assert(/lastPilotKin\s*=\s*p\.predictor/.test(src) && /vel\s*=\s*lastPilotKin\.vel/.test(src), "the bail keeps the aircraft's velocity");
+  // the drawn fall pose is interpolated between the last two 30 Hz steps (the raw state stood still on alternate frames)
+  assert(/f\.rx\s*=\s*f\.px\s*\+\s*\(f\.x\s*-\s*f\.px\)\s*\*\s*a/.test(src) && /writeEntity\(localGuid\(\),\s*f\.rx,\s*f\.ry,\s*f\.rz/.test(src)
+    && /x:\s*fall\.rx,\s*y:\s*fall\.ry,\s*z:\s*fall\.rz/.test(src), "the fall twin draws an interpolated pose (body, camera, canopy)");
+  // a touchdown keeps the fall camera FALL_CAM.landHoldSec (released early by a new pilot / fall session or dispose)
+  assert(/landHoldSec:\s*3\b/.test(src) && /why === "touchdown" && f\.camera && f\.camera\.owned/.test(src)
+    && (src.match(/releaseLandingCam\(\);/g) || []).length >= 4, "the landing hold of the fall camera");
   const f = { x: 255 * 192 + 50, y: 10, z: 500, vx: 100, vy: 0, vz: 0, heading: 0, chute: false };
   F.stepFall(f, FM.DT);
   near(f.x, 255 * 192 - 0.5, 1e-9, "clamped inside landblock 0xFE");

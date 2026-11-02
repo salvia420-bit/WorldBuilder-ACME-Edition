@@ -913,6 +913,11 @@ export function dispatchClientEvent(evt, D) {
       });
     } catch (_) {}
   } else if (evt.kind === ClientEventKind.PORTAL_SPACE_ENTERED /* PortalSpaceEntered */) {
+    // Vehicles (?vehicles=on): a teleport ends piloting, the bail hand-off and a fall NOW. ACE's OnPlayerTeleport
+    // releases the seat in the air with no Bail; this dispatch runs before this frame's vehicle tick, which would
+    // otherwise re-lock the body to the empty aircraft's seat over the teleport's destination (scene3d/vehicle/index.js
+    // onTeleport). Independent of ?portalSpace; one property read when vehicles are off.
+    try { window.liveScene3d?.vehicles?.onTeleport?.(); } catch (_) {}
     // ACPlugin PR-4 (2026-05-27): Character.OnPortalSpaceEntered
     // mirror. Bridges PlayerTeleport into the typed Character's
     // `applyEffectsPlayerTeleport` via WorldState's dispatcher,

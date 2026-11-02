@@ -6,13 +6,19 @@ seconds into that take's video): {"src": "A", "from": "boarded-1.5", "to": "take
 "note": "..."}. `from` / `to` are "<event>[+-seconds]" or plain seconds. Joins: "cut" (a one-frame xfade) or "dissolve"
 (0.6 s). The title card (PIL, DejaVu Serif) fades in over the first segment; the film fades to black at its end.
 Output: edit/hellcat-youtube.mp4 — 1920x1080, 30 fps, H.264 High (libx264 CRF 17), yuv420p, +faststart.
+--smooth (2026-11-02): first pass every segment through film-smooth.py (the recorder's held frames rebuilt by motion
+interpolation; edit/smooth/<src>-<from>-<to>.mp4, CRF 12, reused while newer than its take; summary in
+edit/smooth/summary.json), then cut from those files. A segment with "smooth": false is cut as recorded. --smooth-jobs N (default 3) = parallel interpolations.
 
-  python3 film-hellcat-assemble.py /mnt/wbterminal2/film-projects/hellcat-2026-11-02 [--dry-run]
+  python3 film-hellcat-assemble.py /mnt/wbterminal2/film-projects/hellcat-2026-11-02 [--dry-run] [--smooth [--smooth-jobs N]]
 """
 import json, os, re, subprocess, sys
 
 PROJ = sys.argv[1]
 DRY = "--dry-run" in sys.argv
+SMOOTH = "--smooth" in sys.argv
+SJOBS = sys.argv[sys.argv.index("--smooth-jobs") + 1] if "--smooth-jobs" in sys.argv else "3"
+SMOOTH_PY = os.path.join(os.path.dirname(os.path.abspath(__file__)), "film-smooth.py")
 TAKES = os.path.join(PROJ, "takes")
 EDIT = os.path.join(PROJ, "edit")
 os.makedirs(EDIT, exist_ok=True)
@@ -84,13 +90,39 @@ if DRY: sys.exit(0)
 title = os.path.join(EDIT, "title.png")
 title_png(title)
 inputs = []
-for src in srcs: inputs += ["-i", srcs[src]["mp4"]]
-inputs += ["-loop", "1", "-t", "7", "-i", title]
-idx = {src: i for i, src in enumerate(srcs)}
-ti = len(srcs)
 f = []
-for i, s in enumerate(segs):
-    f.append(f"[{idx[s['src']]}:v]trim=start={s['a']}:end={s['b']},setpts=PTS-STARTPTS,fps={FPS},scale=1920:1080:flags=lanczos,format=yuv420p,setsar=1[s{i}]")
+if SMOOTH:
+    sdir = os.path.join(EDIT, "smooth")
+    os.makedirs(sdir, exist_ok=True)
+    summary = []
+    for i, s in enumerate(segs):
+        take_mp4 = srcs[s["src"]]["mp4"]
+        out = os.path.join(sdir, f"{s['src']}-{s['a']:.3f}-{s['b']:.3f}.mp4")
+        if s.get("smooth") is False:
+            out = os.path.join(sdir, f"{s['src']}-{s['a']:.3f}-{s['b']:.3f}.raw.mp4")
+        if os.path.exists(out) and os.path.getmtime(out) > max(os.path.getmtime(take_mp4), os.path.getmtime(SMOOTH_PY)):
+            print(f"  smooth {i:2d} reuse {os.path.basename(out)}")
+            summary.append({"seg": i, "src": s["src"], "a": s["a"], "b": s["b"], "out": out, "reused": True})
+        else:
+            extra = ["--max-held", "0"] if s.get("smooth") is False else []  # "smooth": false in the EDL = cut as recorded
+            r = subprocess.run([sys.executable, SMOOTH_PY, take_mp4, "--from", str(s["a"]), "--to", str(s["b"]), "--out", out,
+                                "--jobs", SJOBS, "--tmp", os.path.join(sdir, ".tmp"), *extra], capture_output=True, text=True)
+            line = (r.stdout.strip().splitlines() or ["{}"])[-1]
+            print(f"  smooth {i:2d} {line}")
+            if r.returncode == 2 or not os.path.exists(out):
+                raise SystemExit(f"film-smooth failed on segment {i}: {r.stderr[-400:]}")
+            summary.append({"seg": i, **json.loads(line)})
+        inputs += ["-i", out]
+        f.append(f"[{i}:v]trim=start=0:end={s['d']},setpts=PTS-STARTPTS,fps={FPS},scale=1920:1080:flags=lanczos,format=yuv420p,setsar=1[s{i}]")
+    json.dump(summary, open(os.path.join(sdir, "summary.json"), "w"), indent=1)
+    ti = len(segs)
+else:
+    for src in srcs: inputs += ["-i", srcs[src]["mp4"]]
+    idx = {src: i for i, src in enumerate(srcs)}
+    ti = len(srcs)
+    for i, s in enumerate(segs):
+        f.append(f"[{idx[s['src']]}:v]trim=start={s['a']}:end={s['b']},setpts=PTS-STARTPTS,fps={FPS},scale=1920:1080:flags=lanczos,format=yuv420p,setsar=1[s{i}]")
+inputs += ["-loop", "1", "-t", "7", "-i", title]
 cur = "s0"
 for i in range(1, len(segs)):
     s = segs[i]

@@ -101,6 +101,39 @@ console.log("-- P3 the frame driver --------------------------------------------
   __setLbFadeForTest(undefined);
 }
 
+console.log("-- P3c cells the drive square left behind (film take A3: the navy square) ---");
+{
+  // a near grid frozen high up stays drawn far behind the aircraft, then parks (re-home / teleport / thaw): its
+  // G = 1 must not outlive it, or the far ring and the world tier discard landblocks nobody draws
+  const p = getLbPresence();
+  const grid = new Set(), objs = new Set();
+  const claim = (x0, y0) => {
+    for (let x = x0; x < x0 + 12; x += 1) for (let y = y0; y < y0 + 12; y += 1) grid.add(lbKeyXY(x, y));
+    objs.add(lbKeyXY(x0 + 5, y0 + 5));
+  };
+  let t = 50000;
+  const drive = (cx, cy) => { t += 16; tickLbPresence({ centreLb: lbKeyXY(cx, cy), nowMs: t, objWanted: (k) => objs.has(k), terDrawn: (k) => grid.has(k) }); };
+  const texG = (x, y) => p.bytes[((y - p.oy) * p.win + (x - p.ox)) * 2 + 1];
+  claim(150, 150);
+  drive(155, 155);
+  for (let x = 156; x <= 175; x += 1) drive(x, 155); // fly 20 LB east, the grid frozen behind
+  check("a claim still true outside the drive square is kept", texG(150, 150) === 255 && p.value(lbKeyXY(150, 150), CH_TER) === 1);
+  grid.clear(); objs.clear(); // the frozen grid parks
+  drive(175, 155);
+  check("a parked claim outside the drive square drops at once", texG(150, 150) === 0 && texG(161, 161) === 0, `${texG(150, 150)}`);
+  for (let i = 0; i < 40; i += 1) drive(175, 155);
+  check("its objects fade out (the far-forest impostors return)", p.value(lbKeyXY(155, 155), CH_OBJ) === 0);
+  // the A3 path: the grid parks while it is OUTSIDE the packed window, and a later recentre packs it again
+  claim(40, 40);
+  drive(45, 45);
+  for (let x = 46; x <= 85; x += 1) drive(x, 45);
+  check("(the claim left the packed window)", p.ox > 51);
+  grid.clear(); objs.clear();
+  drive(85, 45);
+  for (let x = 84; x >= 65; x -= 1) drive(x, 45);
+  check("a relayout does not republish a parked claim", p.ox <= 40 && texG(40, 40) === 0 && texG(51, 51) === 0, `ox ${p.ox} G ${texG(40, 40)}`);
+}
+
 console.log("-- P3b objects attached (not merely baked) -------------------------------");
 {
   const sc = { staticsBakedLbs: new Set(), buildingsBakedLbs: new Set() };

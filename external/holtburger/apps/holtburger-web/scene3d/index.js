@@ -2857,6 +2857,11 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
         }
       } catch (_) {}
     }
+    // Vehicles (?vehicles=on): a bail hand-off's seat lock must not outlive a
+    // teleport destination the recv loop applied since the last frame — the
+    // movement tick below would snap the body back onto it (vehicle/index.js
+    // beforeMovement). One property read with the flag off; never fatal.
+    try { liveScene3dRef?.vehicles?.beforeMovement?.(); } catch (_) {}
     try {
       handle.tickMovement();
       window.__syncTickLastEnqueueMs = performance.now();

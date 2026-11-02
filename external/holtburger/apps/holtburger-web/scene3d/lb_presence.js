@@ -105,8 +105,13 @@ export class LbPresence {
     this.cells = new Map();
     // RG, row-major from the origin. Undriven cells (beyond DRIVE_R = 12 LB, i.e. beyond any object window):
     // objects ABSENT (R 0 — the far-forest impostors draw there; lane B's review) and near terrain ABSENT (G 0 —
-    // the far ring and the world tier draw wherever the near ring is unknown).
+    // the far ring and the world tier draw wherever the near ring is unknown). A cell the drive square has LEFT
+    // keeps its claim only while the same reads still confirm it (tickLbPresence: there presence can only fall).
     this.bytes = new Uint8Array(win * win * 2);
+    // keys claimed (a non-zero target) outside the drive square, collected at each centre change (tickLbPresence)
+    this._outClaims = new Set();
+    this._outCx = -1;
+    this._outCy = -1;
     this._fillDefault();
     this.dirty = true;
     this.relayouts = 0;
@@ -486,6 +491,30 @@ export function tickLbPresence({ centreLb, nowMs, objWanted, terDrawn }) {
         p.setTarget(k, CH_TER, t);
       }
     }
+  }
+  // Cells the drive square has LEFT keep their last state, and _relayout republishes every remembered cell. So a
+  // claim outlived the near ring that made it: a grid frozen high up (altitude_policy gridFreeze) stays drawn far
+  // behind the aircraft, then parks on a re-home / teleport / thaw. Its G = 1 stayed, the far ring and the world
+  // tier discarded landblocks nobody drew, and the sky showed through as a flat navy square (film take A3,
+  // 2026-11-02). Outside the square a claim can only FALL: re-check it against the same reads and drop it once they
+  // say absent (terrain at once, objects with the usual fade, which also commits their deferred hide). A claim still
+  // true (the frozen grid while it is drawn) is kept, so no lower tier draws under it.
+  // Only targets set here raise a claim, and only inside the square, so a claim outside it appears only when the square
+  // MOVES: collect them once per centre change (`_outClaims`) and re-check just those each frame (a full pass over
+  // every remembered cell cost +100-220 us per frame on a long flight).
+  const inSquare = (k) => Math.abs(((k >>> 24) & 0xff) - cx) <= DRIVE_R && Math.abs(((k >>> 16) & 0xff) - cy) <= DRIVE_R;
+  const out = p._outClaims;
+  if (cx !== p._outCx || cy !== p._outCy) {
+    p._outCx = cx; p._outCy = cy;
+    out.clear();
+    for (const [k, c] of p.cells) if ((c[1] !== 0 || c[3] !== 0) && !inSquare(k)) out.add(k);
+  }
+  for (const k of out) {
+    const c = p.cells.get(k);
+    if (!c || inSquare(k)) { out.delete(k); continue; }
+    if (c[3] !== 0 && !terDrawn(k)) p.setTarget(k, CH_TER, 0);
+    if (c[1] !== 0 && !objWanted(k)) p.setTarget(k, CH_OBJ, 0);
+    if (c[1] === 0 && c[3] === 0) out.delete(k);
   }
   return p.tick(nowMs);
 }

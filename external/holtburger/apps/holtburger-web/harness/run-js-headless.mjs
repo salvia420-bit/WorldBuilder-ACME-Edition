@@ -1534,6 +1534,9 @@ const TIER5 = [
   // 2026-11-01 vehicles bail-out pose (?vehicleFallAnim, default on): retail Falling, the canopy grip clip from the
   // retail frames (DAT fixture), the per-heritage parachute pack, the state machine + driver, the 5 km fall bound.
   { tier: 5, flag: "vehicleFallAnim", file: "tests/vehicle_fall_pose.test.mjs" },
+  // 2026-11-02 film take D2-3: the bail hand-off (BAIL_HANDOFF) — the seat released before the Bail event keeps the
+  // camera, the aircraft (dead-reckoned, then its fresh track) and the body where they were drawn.
+  { tier: 5, flag: "vehicles", file: "tests/vehicle_bail_handoff.test.mjs" },
   // 2026-11-01 flight experience (docs/flight-experience-2026-11-01): the Phase 0
   // residency sampler (?residencyLog) — flips, holes, lead times on a mock scene.
   { tier: 5, flag: "residencyLog", file: "tests/residency_log.test.mjs" },

@@ -1,0 +1,49 @@
+From f335ad4564aabb0b47de9684f5d640730c8eee10 Mon Sep 17 00:00:00 2001
+From: salvia420-bit <salvia420@gmail.com>
+Date: Mon, 2 Nov 2026 12:00:35 -0330
+Subject: [PATCH] Vehicles (holtburger fork): teleport unseat sends the pilot a
+ Touchdown (no placement)
+
+A pilot unseated in the air by a teleport (portal, recall, death, admin) got only the
+seat release; the client took it for the first half of a bail and held the body on the
+empty aircraft's seat over the teleport's destination. OnPlayerTeleport now also sends
+Touchdown (cell 0, value -1), as VehicleBailout.Cancel does for a faller, right after
+the seat release on the same ordered stream; the wasm releases any seat lock on it.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ Source/ACE.Server/Vehicles/VehicleManager.cs | 12 +++++++++++-
+ 1 file changed, 11 insertions(+), 1 deletion(-)
+
+diff --git a/Source/ACE.Server/Vehicles/VehicleManager.cs b/Source/ACE.Server/Vehicles/VehicleManager.cs
+index 1f333d0..3cbfdef 100644
+--- a/Source/ACE.Server/Vehicles/VehicleManager.cs
++++ b/Source/ACE.Server/Vehicles/VehicleManager.cs
+@@ -927,13 +927,23 @@ public static void OnPlayerLogout(Player player)
+                 Unseat(v, player, placeOnGround: true);
+         }
+ 
+-        /// <summary>Player.Teleport hook: any teleport (portal, recall, admin) leaves the vehicle first.</summary>
++        /// <summary>
++        /// Player.Teleport hook: any teleport (portal, recall, admin) leaves the vehicle first. A pilot unseated in the air
++        /// also gets a Touchdown with no placement (cell 0, value -1), as VehicleBailout.Cancel sends a faller: its client
++        /// otherwise takes the bare seat release for the first half of a bail (the bail hand-off) and holds the body on
++        /// the empty aircraft's seat until its own bound, over the teleport's destination (the wasm movement tick snaps the
++        /// body to any seat lock). Sent right after the seat release, on the same ordered game-event stream, so it reaches
++        /// the client ahead of PlayerTeleport and the destination UpdatePosition; the wasm releases any lock on it.
++        /// </summary>
+         public static void OnPlayerTeleport(Player player)
+         {
+             VehicleBailout.Cancel(player);
+             var v = VehicleOf(player);
+             if (v != null)
++            {
+                 Unseat(v, player, placeOnGround: false);
++                SendEventTo(player, v.Guid.Full, VehicleEventKind.Touchdown, -1f, new Position());
++            }
+         }
+ 
+         // ================================================================ spawn / despawn
+-- 
+2.47.3
+

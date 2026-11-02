@@ -15,6 +15,15 @@ export const HISTORY = 256; // 8.5 s of steps
 export const SMOOTH_TAU_S = 0.15;
 export const SNAP_DISTANCE_M = 25; // beyond this a correction snaps instead of blending
 export const OBSERVER_DELAY_S = 0.12;
+// The observer playback clock: the offset (local − server seconds) is min-filtered over the samples, and the offset the
+// playback uses follows it at a bounded time warp (OBSERVER_CLOCK_WARP: at most 10 % faster / slower than real time).
+// Applied at once, a sample drained sooner than the ones before (the frame cadence + network jitter: up to a frame
+// period + the jitter) moved the playback time — and the aircraft — forward by that much in ONE frame: a fresh track
+// (the bail hand-off, an aircraft coming into view) jumped ~4 m ahead at 111 m/s (273 m/s for one 16.7 ms frame, the
+// camera-to-aircraft distance +15 %; vsync-quantized frames + 20 ms arrival jitter). Beyond OBSERVER_CLOCK_SNAP_S
+// (a stall, a re-sync) it snaps.
+export const OBSERVER_CLOCK_WARP = 0.1;
+export const OBSERVER_CLOCK_SNAP_S = 0.5;
 
 function angleDiff(a, b) {
   let d = a - b;
@@ -211,6 +220,19 @@ export function createPilotPredictor(o) {
 export function createObserverTrack() {
   const snaps = []; // {t (server seconds), state}
   let clockOffset = null; // localSec - serverSec (min-filtered)
+  let applied = null; // the offset the playback uses: follows clockOffset at OBSERVER_CLOCK_WARP
+  let posedAt = null; // localSec of the last pose()
+  /** The playback's clock offset at localSec (slewed toward the min-filtered one; see OBSERVER_CLOCK_WARP). */
+  function playbackOffset(localSec) {
+    const target = clockOffset ?? 0;
+    if (applied === null || !(Math.abs(target - applied) <= OBSERVER_CLOCK_SNAP_S)) applied = target;
+    else if (posedAt !== null && localSec > posedAt) {
+      const m = OBSERVER_CLOCK_WARP * (localSec - posedAt);
+      applied += Math.max(-m, Math.min(m, target - applied));
+    }
+    if (posedAt === null || localSec > posedAt) posedAt = localSec;
+    return applied;
+  }
   return {
     push(msg, localSec) {
       const t = msg.step * DT;
@@ -223,7 +245,7 @@ export function createObserverTrack() {
     },
     pose(localSec) {
       if (!snaps.length) return null;
-      const t = localSec - (clockOffset ?? 0) - OBSERVER_DELAY_S;
+      const t = localSec - playbackOffset(localSec) - OBSERVER_DELAY_S;
       if (t <= snaps[0].t) return { ...snaps[0].state };
       for (let i = snaps.length - 1; i > 0; i--) {
         const a = snaps[i - 1], b = snaps[i];

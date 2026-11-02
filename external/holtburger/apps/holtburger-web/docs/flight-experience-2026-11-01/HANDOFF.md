@@ -504,6 +504,40 @@ The takes, their beat events and the edit list sit next to it (`takes/`, `edit/e
 - Open: the observer sight radius did not reach victim 1 after its teleport (in take B the Hellcat shows ~1 s before
   the pass); the eval misses a death whose corpse arrives out of sight (the server log has every corpse).
 
+### The film reshoot (2026-11-02, 05:00 → 12:00 NST) — "a lot of issues with freezing"
+
+Diagnosis: the encode was fine; the FOOTAGE froze. Two defects: world freezes (take A's climb / clouds / sea / ceiling, up to
+10 s: prediction stalls from live CDP drains sharing the SSH tunnel with the game websocket) and recorder holds (repeated
+frames). Root cause of the holds (take A3's shooter): the UNCAPPED recorded page saturates the 1070 and starves the
+WebCodecs encoder's input copies (queue into the thousands, NVENC idle). Fix: `film-hellcat-1070.mjs --rec-cap 30` (now the
+DEFAULT for every take: a 30 fps runtime cap + a sequential grid sampler), drain only after a take, despawn before the flush.
+A held slot is RE-ENCODED, so it is not md5-identical: `bench/film-qa.py` now counts SOFT HOLDS (diff < 0.1, or < 40 % of the
+local motion for a keyframe-coded copy) in moving windows (`motion` >= 0.5), with `--strict` for a smoothed master; by it the
+first cut's "clean" take-A lift-off and forests were 41 % held. New `bench/film-smooth.py`: rebuilds held runs of <= 5 frames
+by motion interpolation (minterpolate fed only the 4 frames around each gap; skips camera switches / too-fast A→B jumps);
+`film-hellcat-assemble.py --smooth` (per-segment `"smooth": false` opt-out). Limit: in fast low cockpit flight the in-betweens
+of large near objects double (cacti, rocks) — those shots are cut as recorded.
+Takes (project `/mnt/wbterminal2/film-projects/hellcat-2026-11-02/takes/`): A3 (journey + climb + clouds + ceiling, pilot page
+only) and A3a; B2 (ground view on the green player's page, camera behind the blue one; ACE grants the observer radius only on
+the observer's own CELL CHANGE and admits <= 24 new objects per crossing, so the driver steps the observer across a cell line
+until nothing new arrives — Hellcat first seen at 364 m); D2 → D2-2 → D2-3 (fresh pilot page + an unrecorded rehearsal bail
+links every near-ground shader first: no stall; landing 9 m from the aim on the Al-Arqas oasis grass; --bitrate 10 M).
+Master v2 = `edit/hellcat-youtube-v2.mp4` (154.7 s, every shot strict-clean bar fades; Taildropped). Its known residue: a
+one-frame flash at 0:57, warped in-betweens in the K cockpit shots, a seam / dither whiteout in the cloud entry, a one-frame
+camera pop at the jump, the film opens just after lift-off, the second kill falls out of frame. A v3 cut (fixes chosen, not
+encoded) was stopped on the owner's call.
+Client bugs found by the footage, fixed (tests: vehicle_bail_handoff H1-H9 new, lb_presence P3c; full gate 981 PASS):
+- The "water quad" = a SKY HOLE: `lb_presence.js` kept stale "near terrain drawn" claims for landblocks left > 12 LB behind (a
+  frozen high-altitude grid, then a re-home); the world tier discarded them and takram's dark planet ground showed through.
+  Claims outside the drive square are re-checked against the real reads (a small out-of-square set, rebuilt on centre moves).
+- Bail: the seat release arrives before the Bail event — the fall twin now keeps the aircraft's velocity (no 440 m snap at
+  the chute), the fall pose is interpolated between fixed steps (no alternate-frame judder), and a BAIL_HANDOFF keeps the chase
+  camera, dead-reckons the empty aircraft at >= its bail speed and blends 1.2 s into the fall camera (no vanished aircraft /
+  camera pop); continuity bounded in tests (no backward step, <= 1.5x frame-to-frame).
+- Review fixes: an airborne teleport no longer re-locks the body to the empty seat (client `onTeleport` + ACE patch 0005),
+  dispose during a hand-off clears the lock, a ground exit no longer flashes the aircraft at its old parked spot, and the
+  observer track's playback clock slews (<= 10 %) instead of jumping a fresh track ~4 m in one frame.
+
 ## State at the end of the night (2026-11-02 ~04:30 NST)
 
 New default-ON tonight (each with an `=off` escape): `lbBand=open` (the green-lines fix), `cloudHighBandMarch`; the

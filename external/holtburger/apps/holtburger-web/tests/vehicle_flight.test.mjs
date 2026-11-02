@@ -176,6 +176,41 @@ check("interpolates 120 ms behind on the server step timeline", () => {
   const pose = tr.pose(100.1 + P.OBSERVER_DELAY_S - 0.05);
   assert(pose.x > a.x && pose.x < b.x, `between: ${pose.x - a.x}`);
 });
+check("a sample drained sooner than the ones before never jumps the playback ahead: the clock slews (<= 10 % warp)", () => {
+  // 100 m/s east; 10 Hz samples drained at 60 Hz frames: the first five 50 ms late, then on time (the offset drops 50 ms)
+  const v = 100, at = (k) => ({ ...init, heading: Math.PI / 2, x: init.x + v * 0.1 * k, speed: v });
+  // samples [dropAt, resumeAt) never arrive (a stall)
+  const run = (lateFrames, dropAt, resumeAt = dropAt) => {
+    const tr = P.createObserverTrack();
+    const xs = [];
+    let k = 0;
+    for (let n = 0; n <= 150; n++) {
+      const L = 110 + n / 60;
+      while (6 * k + (k < dropAt ? lateFrames : 0) <= n) {
+        if (k < dropAt || k >= resumeAt) tr.push(serverMsgFrom(at(k), 300 + 3 * k), L);
+        k++;
+      }
+      const p = tr.pose(L);
+      if (p) xs.push({ L, x: p.x });
+    }
+    return xs;
+  };
+  const xs = run(3, 5);
+  let vMax = 0, vMin = Infinity;
+  for (let i = 1; i < xs.length; i++) {
+    if (xs[i - 1].L < 110.3) continue; // the playback still before the first sample (held there)
+    const s = (xs[i].x - xs[i - 1].x) / (xs[i].L - xs[i - 1].L);
+    vMax = Math.max(vMax, s); vMin = Math.min(vMin, s);
+  }
+  assert(vMax <= v * (1 + P.OBSERVER_CLOCK_WARP) + 0.5 && vMin >= v - 0.5, `playback speed ${vMin.toFixed(1)}..${vMax.toFixed(1)} m/s (a jump: ~${(v * (1 + 0.05 * 60)).toFixed(0)})`);
+  // converged on the on-time samples' clock (offset 100 s) after 0.05 / 0.1 = 0.5 s
+  const last = xs[xs.length - 1];
+  near(last.x, init.x + v * (last.L - 100 - P.OBSERVER_DELAY_S - 10), 0.01, "on the min-filtered clock");
+  // a drop beyond OBSERVER_CLOCK_SNAP_S (samples 0.6 s late, a stall, then on time again) snaps at once
+  const ys = run(Math.round((P.OBSERVER_CLOCK_SNAP_S + 0.1) * 60), 5, 12);
+  const after = ys.find((p) => p.L >= 110 + 73 / 60);
+  near(after.x, init.x + v * (after.L - 100 - P.OBSERVER_DELAY_S - 10), 0.01, "snapped");
+});
 
 console.log("V5b bail-out fall");
 check("fall model reproduces the golden (terminal speed, chute sink and glide)", () => {

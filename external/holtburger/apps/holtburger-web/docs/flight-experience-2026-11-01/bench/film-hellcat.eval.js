@@ -3,11 +3,18 @@
 // sea, back to the town, bail out, free fall, chute, touchdown. Every beat is an event stamped with performance.now()
 // so the driver can cut the recording. The server resolves every bolt; this script only flies, aims and holds the
 // trigger (window.__vehicles.setSticks).
-// window.__vehicleRun: {mode: "full" | "attack", site: {x, y}, from: deg (the attack comes FROM this bearing),
-//   victims: [names], victimPos: [[x, y], ...], cruiseAgl, slowAtM, attackStartM, attackAgl, attackThrottle, rangeM,
-//   coneDeg, maxPasses, holdCockpitSec, climbHeading, ceilingAgl, ceilingHoldSec, town: {x, y}, bailLeadM,
-//   endAfterLandSec, flyOnM, maxSec}
+// window.__vehicleRun: {mode: "full" | "attack" | "bail" | "tour", site: {x, y}, from: deg (the attack comes FROM this
+//   bearing), victims: [names], victimPos: [[x, y], ...], cruiseAgl, slowAtM, attackStartM, attackAgl, attackThrottle,
+//   rangeM, coneDeg, maxPasses, holdCockpitSec, climbHeading, ceilingAgl, ceilingHoldSec, town: {x, y}, bailLeadM,
+//   endAfterLandSec, flyOnM, maxSec, climbAtM}
+// mode "tour" (take A3, 2026-11-02): no attack — cruise toward the site at full speed, climb at the full rate on
+//   climbHeading from climbAtM short of it, hold the ceiling on climbHeading for ceilingHoldSec, then "done".
+// take B2 (2026-11-02): R.channel — post the aircraft's position on that BroadcastChannel every loop (the ground
+//   observer's page, film-ground-probe.eval.js, times its sidestep with it); R.maxKills — hold fire after that many
+//   kills (the recording ground observer must live); window.__filmAbort = true ends the loop (event "abort").
 const R = window.__vehicleRun || {};
+window.__filmAbort = false;
+const bc = R.channel && typeof BroadcastChannel === "function" ? new BroadcastChannel(R.channel) : null;
 const V = window.__vehicles, W = window, L = window.liveScene3d, h = window.__sessionHandle;
 const out = { ok: false, events: [], passes: [], rows: [] };
 if (!V) return { ...out, fatal: "window.__vehicles missing" };
@@ -79,7 +86,7 @@ const fromRad = (R.from ?? 12) * DEG;
 const town = R.town;
 const mode = R.mode || "full";
 let phase = "takeoff", pass = 0, passRec = null, outHeading = null, lastSample = -1, killedAt = null, flyOnFrom = null;
-let ceilingAt = null, overSea = false;
+let ceilingAt = null, overSea = false, bailZ = null;
 const holdAgl = (s, agl, heading) => {
   // pitch toward the AGL target over the highest ground 0-300 m ahead
   let gmax = ground(s.x, s.y) ?? s.z - agl;
@@ -87,9 +94,11 @@ const holdAgl = (s, agl, heading) => {
   return clamp((gmax + agl - s.z) / 40, -1, 1);
 };
 while (tSec() < (R.maxSec ?? 900)) {
+  if (window.__filmAbort) { ev("abort"); break; }
   const p = V.status().pilot;
   if (!p || !p.state) { if (!V.piloting) break; await sleep(100); continue; }
   const s = p.state;
+  if (bc) { try { bc.postMessage({ te: performance.timeOrigin + now(), x: s.x, y: s.y, z: s.z, kmh: s.speed * 3.6, phase }); } catch (_) { /* */ } }
   const g0 = ground(s.x, s.y);
   const agl = g0 == null ? null : s.z - g0;
   let sticks = { throttle: 1, pitch: 0, roll: 0, yaw: 0, boost: true, fire: false, land: false };
@@ -110,8 +119,11 @@ while (tSec() < (R.maxSec ?? 900)) {
     const want = Math.atan2(dx, dy);
     sticks.roll = clamp(angleDiff(want, s.heading) * 3.0, -1, 1);
     sticks.pitch = holdAgl(s, R.cruiseAgl ?? 90, s.heading);
-    if (dist < (R.slowAtM ?? 2600)) { sticks.boost = false; sticks.throttle = R.attackThrottle ?? 0.45; }
-    if (dist < (R.attackStartM ?? 1500)) {
+    if (mode === "tour") {
+      // full speed all the way; the climb begins climbAtM short of the site
+      if (dist < (R.climbAtM ?? 2500)) { phase = "climb"; ev("climbStart", { dist: r1(dist), agl: r1(agl) }); }
+    } else if (dist < (R.slowAtM ?? 2600)) { sticks.boost = false; sticks.throttle = R.attackThrottle ?? 0.45; }
+    if (mode !== "tour" && dist < (R.attackStartM ?? 1500)) {
       phase = "attack"; pass = 1; passRec = { pass, minDist: 1e9, fired: 0, t: r1(tSec()) }; out.passes.push(passRec);
       V.setView(R.attackView ?? "cockpit");
       ev("attackStart", { dist: r1(dist) });
@@ -146,7 +158,8 @@ while (tSec() < (R.maxSec ?? 900)) {
       // stay at the attack height until ~250 m out, then nose onto the target (the floor clamp keeps ~30 m AGL)
       sticks.pitch = aH > 260 ? holdAgl(s, R.attackAgl ?? 32, s.heading) : clamp(wantPitch / (prof?.maxPitch ?? 0.436), -1, 1);
       passRec.minDist = Math.min(passRec.minDist, r1(dist));
-      if (dist < range && Math.abs(eH) < cone * 2 && Math.abs(eP) < cone * 2.5) {
+      const holdFire = R.maxKills != null && dead.size >= R.maxKills;
+      if (!holdFire && dist < range && Math.abs(eH) < cone * 2 && Math.abs(eP) < cone * 2.5) {
         sticks.fire = true; passRec.fired++;
         if (!out.events.some((e) => e.kind === "firstFire")) ev("firstFire", { dist: r1(dist) });
       }
@@ -182,9 +195,23 @@ while (tSec() < (R.maxSec ?? 900)) {
     sticks.roll = clamp(angleDiff(want, s.heading) * 3.0, -1, 1);
     sticks.pitch = 1;
     if (agl != null && agl > 1500 && !out.events.some((e) => e.kind === "throughClouds")) ev("throughClouds", { agl: r1(agl) });
+    // the sea below (sea-level ground; see the ceiling phase) — the climb can reach it before the ceiling
+    if (!overSea && g0 != null && g0 <= 0.5) { overSea = true; ev("overSea", { agl: r1(agl) }); }
     if (agl != null && agl >= (R.ceilingAgl ?? 4950)) { phase = "ceiling"; ceilingAt = now(); ev("ceiling", { agl: r1(agl) }); }
+  } else if (phase === "ceiling" && mode === "tour") {
+    // take A3: hold the ceiling on the climb heading (out over the western sea) for ceilingHoldSec, then done
+    sticks.roll = clamp(angleDiff((R.climbHeading ?? 252) * DEG, s.heading) * 2.5, -1, 1);
+    sticks.pitch = holdAgl(s, (R.ceilingAgl ?? 4950) + 50, s.heading);
+    if (!overSea && g0 != null && g0 <= 0.5) { overSea = true; ev("overSea", { agl: r1(agl) }); }
+    if ((now() - ceilingAt) / 1000 >= (R.ceilingHoldSec ?? 8)) { ev("done", { agl: r1(agl) }); phase = "done"; }
   } else if (phase === "ceiling") {
-    sticks.pitch = holdAgl(s, mode === "bail" ? (R.bailAgl ?? 2600) : (R.ceilingAgl ?? 4950) + 50, s.heading);
+    // D2-2: mode "bail" holds a FIXED altitude (the town's ground + bailAgl) instead of following the ground ahead:
+    // after the coast holdAgl chased the dunes' heights and the chase camera porpoised ~+-16 px at ~2.5 Hz in the
+    // seconds before the bail (take D2, 81.5-84.4 s). Over the sea the two are the same target (the sea is 0 m)
+    if (mode === "bail") {
+      if (bailZ == null) bailZ = (ground(town.x, town.y) ?? 0) + (R.bailAgl ?? 2600);
+      sticks.pitch = clamp((bailZ - s.z) / 40, -1, 1);
+    } else sticks.pitch = holdAgl(s, (R.ceilingAgl ?? 4950) + 50, s.heading);
     const hold = (now() - ceilingAt) / 1000 < (R.ceilingHoldSec ?? 8);
     const dx = town.x - s.x, dy = town.y - s.y, dist = Math.hypot(dx, dy);
     const want = hold ? (R.climbHeading ?? 252) * DEG : Math.atan2(dx, dy);
@@ -196,10 +223,20 @@ while (tSec() < (R.maxSec ?? 900)) {
     if (!overSea && g0 != null && g0 <= 0.5) { overSea = true; ev("overSea"); }
     if (overSea && g0 != null && g0 > 2 && !out.events.some((e) => e.kind === "coast")) ev("coast");
     const aligned = Math.abs(angleDiff(Math.atan2(dx, dy), s.heading)) < 25 * DEG;
-    if (!hold && aligned && dist < (R.bailLeadM ?? 700)) {
+    const lead = R.bailLeadM ?? 700;
+    let bailNow = !hold && aligned && dist < lead;
+    // D2: R.bailExact — within ~0.25 s of the lead, wait out the rest so the bail happens AT the lead (the ~50 ms loop
+    // at 111 m/s overshoots 0-12 m, and the landing in a town's hollow moves by as much or more)
+    if (!bailNow && R.bailExact && !hold && aligned && dist < lead + s.speed * 0.25) {
+      await sleep(((dist - lead) / Math.max(1, s.speed)) * 1000);
+      bailNow = true;
+    }
+    if (bailNow) {
+      // D2: where (the landing is predicted from it: the server's StepFall is deterministic)
+      const sb = V.status().pilot?.state || s;
       V.clearSticks();
       V.exit(1);
-      ev("bail", { dist: r1(dist), agl: r1(agl) });
+      ev("bail", { dist: r1(Math.hypot(town.x - sb.x, town.y - sb.y)), agl: r1(agl), x: r1(sb.x), y: r1(sb.y), z: r1(sb.z), hdg: r1(sb.heading / DEG), kmh: r1(sb.speed * 3.6), exact: !!R.bailExact });
       phase = "fall";
     }
   }
@@ -208,23 +245,46 @@ while (tSec() < (R.maxSec ?? 900)) {
   V.setSticks(sticks, 2000);
   if (tSec() - lastSample >= 1) {
     lastSample = tSec();
-    out.rows.push({ t: r1(tSec()), phase, x: r1(s.x), y: r1(s.y), agl: r1(agl), kmh: r1(s.speed * 3.6), hdg: r1(s.heading / DEG), mode: s.mode });
+    // + the recorder's grid counters (frames / held slots so far) and the predictor's corrections: per-second pacing
+    const vid = window.__hbVid, pst = p.predictor;
+    let vq = null;
+    try { vq = vid?.unsub ? vid.rec.stats().encodeQueueSize : null; } catch (_) { vq = null; }
+    out.rows.push({ t: r1(tSec()), phase, x: r1(s.x), y: r1(s.y), agl: r1(agl), kmh: r1(s.speed * 3.6), hdg: r1(s.heading / DEG), mode: s.mode,
+      vf: vid?.frames ?? null, vh: vid?.held ?? null, vq, corr: pst?.corrections ?? null, snaps: pst?.snaps ?? null });
   }
   await sleep(50);
 }
 V.clearSticks();
+try { bc?.close(); } catch (_) { /* */ }
 if (phase === "fall") {
   const tB = now();
   while (!V.falling && now() - tB < 5000) await sleep(100);
-  let chute = false;
+  let chute = false, lastFallRow = -1;
   while (V.falling && tSec() < (R.maxSec ?? 900) + 240) {
     const f = V.status().fall;
-    if (f && f.chute && !chute) { chute = true; ev("chute", { agl: r1(f.agl) }); }
-    if (f && !out.events.some((e) => e.kind === "fallThroughClouds") && f.agl < 2200) ev("fallThroughClouds", { agl: r1(f.agl) });
+    if (f && f.chute && !chute) { chute = true; ev("chute", { agl: r1(f.agl), x: r1(f.x), y: r1(f.y) }); }
+    // D2-2: the deck's top is ~1,800 m AGL over Al-Arqas (take D2: the first puffs reach the fall camera at ~1,790 m,
+    // the deck is overhead by ~1,070 m); the old 2,200 m fired ~9 s early, before any cloud was near
+    if (f && !out.events.some((e) => e.kind === "fallThroughClouds") && f.agl < (R.cloudTopAgl ?? 1800)) ev("fallThroughClouds", { agl: r1(f.agl) });
+    if (f && !out.events.some((e) => e.kind === "belowClouds") && f.agl < (R.cloudBaseAgl ?? 1050)) ev("belowClouds", { agl: r1(f.agl) });
+    // D2: the recorder's counters through the fall too (the jump, the clouds, the canopy are the take's point)
+    if (f && tSec() - lastFallRow >= 1) {
+      lastFallRow = tSec();
+      const vid = window.__hbVid;
+      let vq = null;
+      try { vq = vid?.unsub ? vid.rec.stats().encodeQueueSize : null; } catch (_) { vq = null; }
+      out.rows.push({ t: r1(tSec()), phase: f.chute ? "chute" : "fall", x: r1(f.x), y: r1(f.y), agl: r1(f.agl), vz: r1(f.vz), vf: vid?.frames ?? null, vh: vid?.held ?? null, vq });
+    }
     await sleep(100);
   }
   ev("touchdown");
-  await sleep((R.endAfterLandSec ?? 6) * 1000);
+  // D2: where the body came down (the server's placement; window.__cam.world() = the player's AC world position)
+  await sleep(1000);
+  try {
+    const w = window.__cam?.world?.();
+    if (w) out.landing = { x: r1(w.x), y: r1(w.y), z: r1(w.z), ground: r1(ground(w.x, w.y)), fromTown: town ? { east: r1(w.x - town.x), north: r1(w.y - town.y), dist: r1(Math.hypot(w.x - town.x, w.y - town.y)) } : null };
+  } catch (_) { /* */ }
+  await sleep(Math.max(0, (R.endAfterLandSec ?? 6) - 1) * 1000);
   ev("end");
 }
 out.dead = [...dead].map((i) => names[i]);
