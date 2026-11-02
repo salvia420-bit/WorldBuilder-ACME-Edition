@@ -219,3 +219,30 @@ vs m3-x 20 (gc 8 / other 12); the remaining "other" = house links (fixed since),
 18:59 (muzzle + stall classification).
 Rollback of the session-1 final build: `/mnt/wbterminal2/ace-rollback/net10.0-vehicles-20261101-0457/`. All ACE
 changes are uncommitted in `~/ace-server` (branch `vehicles-2026-11-01`).
+
+## Bail-out body pose (2026-11-01, owner request; decisions 54-61)
+
+Code: `scene3d/vehicle/fall_pose.js` (new; pure half + driver), thin hooks in `scene3d/vehicle/index.js` (bail / chute /
+touchdown / seat events, `startFall` / `stopFall` / `tickFall`, `afterTick`, `chutePose`, status, dispose — nothing in
+`tickPilot`), `chute.js` (lines to the hands, root scale), `fall_model.js` (world edge 255 x 192 - 0.5). Flag
+`?vehicleFallAnim` (default on; docs/url-flags.md). DAT data: `fall-pose/gen_fixtures.py` -> `fall-pose-fixtures.json`
+(`--check` = stale test). Test: `capped-build node tests/vehicle_fall_pose.test.mjs` (28 checks; registered in the gate
+as `vehicleFallAnim`); `tests/vehicle_flight.test.mjs` unchanged and green.
+- Free fall: retail Falling 0x40000015 via the MotionTable (+ the pack, packed); canopy: the calmer grip clip from the
+  retail Falling frames (+ the pack flattened, the canopy's lines to the hands); touchdown: clip off, Ready (landing link),
+  pack removed. Local faller and observed players. The fall twin's bound replaces the fixed 120 s (~20 min from 5 km).
+- ACE (`VehicleBailout.cs` + one `PropertyManager.cs` row, uncommitted in `~/ace-server`, NOT built): `vehicle_fall_motion`
+  (bool, default off) broadcasts Falling at the bail and Ready at every end; a teleport during a fall now sends the
+  faller a Touchdown with cell 0 (unconditional). To ship: build per `ace/README.md` (side dir), deploy `ACE.Server.dll`
+  + `.pdb` (ACE.DatLoader unchanged by this), restart, `modifybool vehicle_fall_motion true` to try it; then export the
+  next `ace/000N-…patch` and add `vehicle_fall_motion` to the property lists (`ace/README.md`, above).
+- Not judged yet (no GPU here): the look. 1070: `bench/vehicle-fall-pose.eval.js` through `vehicle-1070.mjs`'s
+  `runEval` with a director taking a still whenever `window.__fallPoseProbe.phase` changes (freefall / canopy / landed);
+  laptop structural run: `capped-build node vehicle-runner.mjs --plan plan-fall-pose.json`. Look for: arms spread in
+  free fall, hands on the risers beside the head under the canopy (no clipping through the head / Tumerok snout), the
+  pack on the back for a male and a female human, a Lugian, a Gear Knight; the pop-free loop; the landing crouch.
+
+## Next: the flight experience (2026-11-01, owner)
+
+Trees only near Holtburg, trees flashing, landblocks flickering / late, and a 10x-higher "above the clouds" band:
+a dedicated session's workflow is `../flight-experience-2026-11-01/WORKFLOW.md`.

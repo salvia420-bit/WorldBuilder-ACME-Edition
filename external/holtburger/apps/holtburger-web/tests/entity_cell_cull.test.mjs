@@ -580,6 +580,45 @@ await t("C10 source pins", () => {
   assert.match(pick, /if \(inst\.root\.visible === false\) continue;/);
 });
 
+// --- C11: the flight entity horizon (?flightLight, 2026-11-02) -----------------
+// While an aircraft is airborne (a live flight hint above 40 m AGL), rigs beyond FLIGHT_ENTITY_CULL_M of the
+// camera are not submitted; vehicles, the local player and the exemptions above never are; on foot nothing changes.
+await t("C11 flight entity horizon: far rigs culled only while airborne; vehicles and the local player kept", async () => {
+  const { setFlightHint, clearFlightHint } = await import("../scene3d/residency.js");
+  const { FLIGHT_ENTITY_CULL_M } = await import("../scene3d/entities.js");
+  const near = rig(0x80000101, 0, 0, 0);
+  const far = rig(0x80000102, 0, 0, 0);
+  const plane = rig(0x80000103, 0, 0, 0);
+  const local = rig(LOCAL, 0, 0, 0);
+  const entityMap = new Map([[near.guid, near], [far.guid, far], [plane.guid, plane], [local.guid, local]]);
+  const scene3d = { entityManager: { entityMap } };
+  // distance by rig: near 100 m, far / plane / local 2 km from the camera
+  const D = new Map([[near.root, 100], [far.root, 2000], [plane.root, 2000], [local.root, 2000]]);
+  const culler = { valid: true, isSphereInFrustum: () => true,
+    getDistanceSq: (x, y, z) => { for (const [r, d] of D) if (r.position.x === x && r.position.y === y && r.position.z === z && r.__probe) return d * d; return 0; } };
+  // give each rig a unique position so the distance mock can find it
+  near.root.position.set(1, 0, 0); far.root.position.set(2, 0, 0); plane.root.position.set(3, 0, 0); local.root.position.set(4, 0, 0);
+  for (const r of [near, far, plane, local]) r.root.__probe = true;
+  const prevVeh = globalThis.window.__vehicles;
+  globalThis.window.__vehicles = { isVehicle: (g) => (g >>> 0) === plane.guid };
+  try {
+    clearFlightHint();
+    tickEntityRenderVisibility(scene3d, culler);
+    assert.deepEqual([near.root.visible, far.root.visible, plane.root.visible, local.root.visible], [true, true, true, true],
+      "on foot: no horizon");
+    setFlightHint({ x: 0, y: 0, vx: 80, vy: 0, agl: 100 });
+    tickEntityRenderVisibility(scene3d, culler);
+    assert.deepEqual([near.root.visible, far.root.visible, plane.root.visible, local.root.visible], [true, false, true, true],
+      `airborne: rigs beyond ${FLIGHT_ENTITY_CULL_M} m culled, the vehicle and the local player kept`);
+    clearFlightHint();
+    tickEntityRenderVisibility(scene3d, culler);
+    assert.equal(far.root.visible, true, "landed: the far rig is back");
+  } finally {
+    clearFlightHint();
+    globalThis.window.__vehicles = prevVeh;
+  }
+});
+
 console.log(`entity cell cull: ${groups} groups ok, ${failures} failed`);
 // Explicit exit: importing entities.js with a `window` arms play_effect_vfx's
 // 30 s __pluginClient bind poll, which would otherwise hold node open.

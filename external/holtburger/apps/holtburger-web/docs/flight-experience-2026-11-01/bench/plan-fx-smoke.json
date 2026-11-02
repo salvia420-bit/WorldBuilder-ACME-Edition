@@ -1,0 +1,16 @@
+{
+ "name": "fx-smoke",
+ "note": "A short smoke flight (2.5 km low + a 1 km climb leg): compiles every flight-tier program on the GPU — use with --flags to test a depth mode or an escape (e.g. reversedZ=off for the log-depth fallback).",
+ "start": "0xA9B40019 84 7.1 94",
+ "settleMs": 15000,
+ "stillsAtSec": [10, 25, 40],
+ "flight": {
+  "route": [
+   { "heading": 200, "metres": 2500, "agl": 100, "boost": true },
+   { "heading": 200, "metres": 3000, "agl": 900, "boost": true }
+  ],
+  "agl": 100,
+  "throttle": 1,
+  "maxSec": 200
+ }
+}

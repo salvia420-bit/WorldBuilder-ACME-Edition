@@ -1,0 +1,618 @@
+// scene3d/world_terrain.js — the WORLD TIER (T2): all of Dereth, and ocean to the horizon, for flight
+// (`?worldTier`, docs/flight-experience-2026-11-01 Phase 4).
+//
+// WHY. The near ring (≈ 1 km) and the far composite ring (≈ 1.5 km) are the whole drawn world, and the range
+// fog closes before their edge. From an aircraft at 80 m the world ends in white fog 1.5 km away; from 4.5 km up
+// every ground pixel is farther than that, so the ground is pure fog. Neither ring can scale (per-landblock
+// fetches, a 1.3 MiB render target per far patch). The world tier is a separate, tiny, fully resident
+// representation of the WHOLE map:
+//   * DATA — two 2041² vertex grids baked once from the base DATs (`holtburger-dat` example
+//     `bake_world_terrain`: the LandHeightTable index and the terrain type + road of every terrain vertex) plus a
+//     255² per-landblock tall-tree density (lane B's retail scenery census), served as the `dist/world/` layer
+//     (~8.5 MB). Loaded lazily, the first time the tier is wanted.
+//   * GEOMETRY — CDLOD: a quadtree from 768 m leaves (32 × 24 m cells = exactly the terrain vertex grid) up to a
+//     196 km root centred on the map (the ocean beyond the edge is part of it, at sea level), selected per frame
+//     by 3D distance, drawn as ONE instanced 33×33 grid; vertices morph to the parent grid before a level
+//     boundary, so there are no pops and no cracks, and altitude coarsens the ground below for free.
+//   * SHADING — the near ring's OWN terrain atlas (`uAtlas`, one layer per terrain code, the same per-code
+//     tiling) sampled per cell corner and blended like the monolith, through the SAME lighting / fog tail
+//     (terrain_shared_glsl.js) as both rings: mips give real texture detail at 1-3 km and the true mean colour
+//     at 30 km. Plus what reads from the air: a sun glint on water, and a canopy tint where retail places
+//     forests.
+//   * HANDOFF — the tier draws only where the near ring does not: per landblock through the presence field
+//     (lb_presence.js: G = near ring drawn), keeping a 10 m band under a near landblock only along the edges
+//     where the near ring ends (LB_HANDOFF_GLSL, `?lbBand`), and a larger depth push than the far ring's.
+//     ⚠ The push does not beat the near ring's 1 cm retail lowering below ~470 m of camera height (it is
+//     relative: 2.1e-5 of the distance), so wherever this tier overlaps the near ring it WINS — the reason the
+//     band is kept off the near ring's interior edges. ⚠ There is no "far patch drawn" channel (the field is
+//     RG): the tier still draws under the far ring's patches (the far ring wins where the surfaces coincide;
+//     this tier's alternating cell diagonal pokes through where it is higher — 7.8 % of the cells near
+//     Holtburg, 1-11 m).
+//
+// RULES IT KEEPS: one program, no per-instance program key, no light-count change, opaque + depthWrite (every
+// depth consumer — aerial perspective, cloud march, soft particles — must see it as WORLD, not sky), never
+// touches statics / buildings / the LRU / per-landblock materials (the far ring's radius-policy rule).
+// `?worldTier` absent: nothing is created, fetched or compiled.
+
+import * as THREE from "three";
+import { TERRAIN_SHARED_TAIL_GLSL } from "./terrain_shared_glsl.js";
+import { radialFogTerrainGlsl } from "./radial_fog.js";
+import { REVERSED_BIAS_NOMINAL_FAR } from "./shader_logdepth.js";
+import { lbFadeUniforms, lbFadeOn, lbBandDefines, LB_HANDOFF_GLSL } from "./lb_presence.js";
+import { rlogSetWorldTierProbe } from "./residency_log.js";
+import { flightViewFlag } from "./flight_view_flag.js";
+import { withLogDepth } from "./shader_logdepth.js";
+
+export const WORLD_VERTS = 2041;              // 255 landblocks × 8 cells + 1
+export const CELL_M = 24;
+export const WORLD_M = (WORLD_VERTS - 1) * CELL_M; // 48,960 m
+const GRID = 32;                              // quads per node edge
+const LEAF_M = GRID * CELL_M;                 // 768 m
+const LEVELS = 9;                             // 768 m … 196,608 m
+const ROOT_M = LEAF_M * (1 << (LEVELS - 1));  // 196,608 m
+const ROOT_ORIGIN = -96 * LEAF_M;             // −73,728 m: the root grid aligns to 768 m and covers the map + ocean
+const MAX_NODES = 2048;
+const WATER_MIN = 16, WATER_MAX = 20;         // AC terrain codes 16..20 are water
+
+/** `?worldTier` — DEV opt-in until the 1070 eye test: on / 1 / true / yes → ON. */
+export function worldTierEnabled(search) {
+  try {
+    const s = search !== undefined ? search : (globalThis.location?.search || "");
+    const ps = new URLSearchParams(s);
+    const v = (ps.get("worldTier") || "").trim().toLowerCase();
+    if (v === "on" || v === "1" || v === "true" || v === "yes") return true;
+    if (v === "off" || v === "0" || v === "false" || v === "no") return false;
+    // ?flightView (altitude_policy.js, default ON) drives the tier: it implies it
+    return flightViewFlag(s);
+  } catch (_) {
+    return false;
+  }
+}
+
+/** `?worldTierRange0=M` — the level-0 LOD range in metres (default 1,536 = 2 leaves). */
+function range0M() {
+  try {
+    const v = Number(new URLSearchParams(globalThis.location?.search || "").get("worldTierRange0"));
+    if (Number.isFinite(v) && v >= 800 && v <= 6000) return v;
+  } catch (_) { /* default */ }
+  return 1536;
+}
+
+// ---------------------------------------------------------------------------
+// Pure helpers (unit-tested: tests/world_terrain.test.mjs)
+// ---------------------------------------------------------------------------
+
+/** LOD range of a level (metres): a level-k node is drawn only where the camera is farther than R(k−1). */
+export function levelRange(level, r0 = 1536) { return r0 * Math.pow(2, level); }
+
+/**
+ * CDLOD selection over the fixed root. `cam` = AC metres {x, y, z}; `visible(x0, y0, size)` an optional frustum
+ * test. Returns [{x0, y0, size, level}] (finest first is not required). A node is refined when the camera is
+ * within the range of the level below it (3D distance to the node's AABB, heights in [hMin, hMax]).
+ */
+export function selectNodes(cam, { r0 = 1536, hMin = 0, hMax = 700, visible = null, max = MAX_NODES } = {}) {
+  const out = [];
+  const stack = [[ROOT_ORIGIN, ROOT_ORIGIN, ROOT_M, LEVELS - 1]];
+  while (stack.length && out.length < max) {
+    const [x0, y0, size, level] = stack.pop();
+    if (visible && !visible(x0, y0, size)) continue;
+    const dx = Math.max(x0 - cam.x, 0, cam.x - (x0 + size));
+    const dy = Math.max(y0 - cam.y, 0, cam.y - (y0 + size));
+    const dz = Math.max(hMin - cam.z, 0, cam.z - hMax);
+    const d = Math.hypot(dx, dy, dz);
+    if (level === 0 || d > levelRange(level - 1, r0)) {
+      out.push({ x0, y0, size, level });
+      continue;
+    }
+    const h = size / 2;
+    stack.push([x0, y0, h, level - 1], [x0 + h, y0, h, level - 1], [x0, y0 + h, h, level - 1], [x0 + h, y0 + h, h, level - 1]);
+  }
+  return out;
+}
+
+/** CPU height (metres) at AC (x, y): bilinear over the vertex grid; off-map = sea level (table[0]). */
+export function heightAtGrid(hIdx, table, x, y) {
+  if (!hIdx || !table) return null;
+  const gx = x / CELL_M, gy = y / CELL_M;
+  if (gx < 0 || gy < 0 || gx > WORLD_VERTS - 1 || gy > WORLD_VERTS - 1) return table[0] ?? 0;
+  const ix = Math.min(WORLD_VERTS - 2, Math.floor(gx)), iy = Math.min(WORLD_VERTS - 2, Math.floor(gy));
+  const fx = gx - ix, fy = gy - iy;
+  const h = (cx, cy) => table[hIdx[cy * WORLD_VERTS + cx]] ?? 0;
+  const a = h(ix, iy), b = h(ix + 1, iy), c = h(ix, iy + 1), d = h(ix + 1, iy + 1);
+  return a * (1 - fx) * (1 - fy) + b * fx * (1 - fy) + c * (1 - fx) * fy + d * fx * fy;
+}
+
+// ---------------------------------------------------------------------------
+// GLSL
+// ---------------------------------------------------------------------------
+export const WORLD_VERTEX_GLSL = /* glsl */ `
+precision highp float;
+precision highp int;
+precision highp usampler2D;
+
+in vec4 aNode;                      // (x0, y0, size, level) of this instance's node, AC metres
+uniform usampler2D uHeightIdx;      // R8UI 2041x2041: LandHeightTable index per terrain vertex
+uniform float uHeightTable[256];
+uniform vec3 uCamAc;                // camera, AC metres
+uniform float uRange0;              // LOD range of level 0, metres
+
+out vec2 vWorldXy;
+out vec3 vAcNormal;
+out float vViewDepth;
+out float vMorph;
+
+#if defined( USE_LOGARITHMIC_DEPTH_BUFFER ) || defined( USE_LOGDEPTHBUF )
+out float vFragDepth;
+out float vIsPerspective;
+#endif
+#ifdef USE_REVERSED_DEPTH_BUFFER
+uniform float uWorldDepthBias;
+#endif
+
+float hbVertH(ivec2 v) {
+  if (v.x < 0 || v.y < 0 || v.x > 2040 || v.y > 2040) return uHeightTable[0];
+  return uHeightTable[int(texelFetch(uHeightIdx, v, 0).r)];
+}
+// bilinear over the vertex grid (exact at vertices; morphing vertices sit between two)
+float hbHeightAt(vec2 xy) {
+  vec2 g = xy / 24.0;
+  if (g.x < 0.0 || g.y < 0.0 || g.x > 2040.0 || g.y > 2040.0) return uHeightTable[0];
+  vec2 gf = floor(g);
+  ivec2 i = ivec2(gf);
+  vec2 f = g - gf;
+  float a = hbVertH(i), b = hbVertH(i + ivec2(1, 0)), c = hbVertH(i + ivec2(0, 1)), d = hbVertH(i + ivec2(1, 1));
+  return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+}
+
+void main() {
+  float quad = aNode.z / 32.0;
+  vec2 gridPos = position.xy;                          // 0..32
+  vec2 xy = aNode.xy + gridPos * quad;
+  // CDLOD morph: past 3/4 of this level's range, odd vertices slide onto the parent grid
+  float range = uRange0 * exp2(aNode.w);
+  float h0 = hbHeightAt(xy);
+  float d = distance(uCamAc, vec3(xy, h0));
+  float morph = clamp((d - 0.75 * range) / (0.25 * range), 0.0, 1.0);
+  vec2 odd = fract(gridPos * 0.5) * 2.0;
+  xy -= odd * quad * morph;
+  float h = hbHeightAt(xy);
+  // normal from the node's own vertex spacing (so a coarse level is lit by its coarse surface)
+  float e = max(quad, 24.0);
+  float hx = hbHeightAt(xy + vec2(e, 0.0)) - hbHeightAt(xy - vec2(e, 0.0));
+  float hy = hbHeightAt(xy + vec2(0.0, e)) - hbHeightAt(xy - vec2(0.0, e));
+  vAcNormal = normalize(vec3(-hx, -hy, 2.0 * e));
+  vWorldXy = xy;
+  vMorph = morph;
+  vec4 mvPos = modelViewMatrix * vec4(xy, h, 1.0);
+  vViewDepth = -mvPos.z;
+  gl_Position = projectionMatrix * mvPos;
+#if defined( USE_LOGARITHMIC_DEPTH_BUFFER ) || defined( USE_LOGDEPTHBUF )
+  vFragDepth = 1.0 + gl_Position.w;
+  vIsPerspective = float( projectionMatrix[2][3] == -1.0 );
+#endif
+#ifdef USE_REVERSED_DEPTH_BUFFER
+  // pushed farther than the far ring (far_terrain.js uses the same twin), so an overlap shows the finer tier
+  gl_Position.z *= exp2(-uWorldDepthBias * ${Math.log2(REVERSED_BIAS_NOMINAL_FAR + 1).toFixed(6)});
+#endif
+}
+`;
+
+export const WORLD_FRAGMENT_GLSL = /* glsl */ `
+precision highp float;
+precision highp int;
+precision highp sampler2D;
+precision highp sampler2DArray;
+precision highp usampler2D;
+
+in vec2 vWorldXy;
+in vec3 vAcNormal;
+in float vViewDepth;
+in float vMorph;
+
+out vec4 fragColor;
+
+#if defined( USE_LOGARITHMIC_DEPTH_BUFFER ) || defined( USE_LOGDEPTHBUF )
+uniform float logDepthBufFC;
+uniform float uWorldDepthBias;
+in float vFragDepth;
+in float vIsPerspective;
+#endif
+
+uniform usampler2D uTypes;          // R8UI 2041x2041: code (bits 0-4) | road (5-6) | no-record (7)
+uniform sampler2DArray uAtlas;      // the near ring's terrain atlas (one layer per code 0..32)
+uniform int uBaseTexTiling[33];     // the near ring's per-code tiling (texture repeats per cell)
+uniform sampler2D uTrees;           // R8 255x255: tall-tree density per landblock (0..255)
+uniform vec3 uCamAc;
+uniform vec3 uSunDir;
+uniform float uAcGouraudEnabled;
+uniform vec3 uAcSunVec;
+uniform vec3 uAcSunColor;
+uniform vec4 uPaintLight;
+uniform vec3 uAcAmbColor;
+uniform float uAcAmbLevel;
+uniform float uSlopeShadingEnabled;
+uniform float uWaterGlint;          // 0..1
+uniform float uCanopy;              // 0..1 strength of the forest tint
+#ifdef HB_WORLD_PRESENCE
+uniform highp sampler2D hbLbPresence;  // lb_presence.js: G = near ring drawn
+uniform vec2 hbLbPresenceOrigin;
+${LB_HANDOFF_GLSL}
+#endif
+
+${TERRAIN_SHARED_TAIL_GLSL}
+
+uint hbType(ivec2 v) {
+  if (v.x < 0 || v.y < 0 || v.x > 2040 || v.y > 2040) return 20u | 128u;
+  return texelFetch(uTypes, v, 0).r;
+}
+
+vec3 hbAtlas(uint t, vec2 cellUv, vec2 gx, vec2 gy) {
+  int code = int(t & 31u);
+  float tiling = float(uBaseTexTiling[clamp(code, 0, 32)]);
+  return textureGrad(uAtlas, vec3(fract(cellUv * tiling), float(code)), gx * tiling, gy * tiling).rgb;
+}
+
+void main() {
+#if defined( USE_LOGARITHMIC_DEPTH_BUFFER ) || defined( USE_LOGDEPTHBUF )
+  // the log-buffer twin of the vertex stage's reversed-Z push: the near rings win ties in the hand-off band
+  gl_FragDepth = min(1.0, gl_FragDepth + 2.0e-6);
+#endif
+#ifdef HB_WORLD_PRESENCE
+  // per landblock: the near ring draws here (a 10 m band stays under it only where it ends: lb_presence.js)
+  if (hbNearCovers(vWorldXy / 192.0)) discard;
+#endif
+  vec2 cell = vWorldXy / 24.0;
+  vec2 c0 = floor(cell);
+  vec2 f = cell - c0;
+  ivec2 i0 = ivec2(c0);
+  uint t00 = hbType(i0), t10 = hbType(i0 + ivec2(1, 0)), t01 = hbType(i0 + ivec2(0, 1)), t11 = hbType(i0 + ivec2(1, 1));
+  vec2 gx = dFdx(cell), gy = dFdy(cell);
+  vec3 a00 = hbAtlas(t00, f, gx, gy), a10 = hbAtlas(t10, f, gx, gy), a01 = hbAtlas(t01, f, gx, gy), a11 = hbAtlas(t11, f, gx, gy);
+  vec3 albedo = mix(mix(a00, a10, f.x), mix(a01, a11, f.x), f.y);
+  // roads: blend toward the road layer (code 32) by the corners that carry one
+  float r00 = float((t00 >> 5u) & 3u) > 0.0 ? 1.0 : 0.0, r10 = float((t10 >> 5u) & 3u) > 0.0 ? 1.0 : 0.0;
+  float r01 = float((t01 >> 5u) & 3u) > 0.0 ? 1.0 : 0.0, r11 = float((t11 >> 5u) & 3u) > 0.0 ? 1.0 : 0.0;
+  float road = mix(mix(r00, r10, f.x), mix(r01, r11, f.x), f.y);
+  // (a road crosses a cell diagonally through two corners, so the bilinear ridge peaks at 0.5: a low threshold
+  // keeps it a continuous line instead of a row of dots at each road vertex)
+  if (road > 0.0) albedo = mix(albedo, hbAtlas(32u, f, gx, gy), smoothstep(0.12, 0.45, road));
+  // water weight (codes 16..20, and the ocean beyond the records)
+  float w00 = float((t00 & 31u) >= 16u && (t00 & 31u) <= 20u), w10 = float((t10 & 31u) >= 16u && (t10 & 31u) <= 20u);
+  float w01 = float((t01 & 31u) >= 16u && (t01 & 31u) <= 20u), w11 = float((t11 & 31u) >= 16u && (t11 & 31u) <= 20u);
+  float water = mix(mix(w00, w10, f.x), mix(w01, w11, f.x), f.y);
+  // canopy: retail forests read as a darker, greener ground from the air (per-landblock density, bilinear)
+  float trees = texture(uTrees, (vWorldXy / 192.0) / 255.0).r;
+  float canopy = uCanopy * smoothstep(0.08, 0.55, trees) * (1.0 - water);
+  albedo = mix(albedo, albedo * vec3(0.42, 0.55, 0.36), canopy * 0.85);
+
+  vec3 n = normalize(vAcNormal);
+  vec3 sunDir = normalize(uSunDir);
+  bool acGouraud = uAcGouraudEnabled > 0.5;
+  if (acGouraud) {
+    albedo = terrainAcGouraud(albedo, n, uAcSunVec, uAcSunColor, uAcAmbColor, uAcAmbLevel);
+  }
+  albedo = terrainPaintLight(albedo, n, sunDir, vViewDepth, uPaintLight);
+  float ndotl = 1.0;
+  if (uSlopeShadingEnabled > 0.5 && !acGouraud) ndotl = terrainSunNdotl(n, sunDir);
+  vec3 lit = terrainApplyLight(albedo, ndotl, 1.0, 1.0);
+  // water seen from the air: Fresnel (little reflection looking straight down, more toward the horizon), a sky
+  // sheen from the fog colour (the horizon radiance) and a tight sun glint that is strongest at grazing angles
+  if (water > 0.0 && uWaterGlint > 0.0) {
+    vec3 hbP = vec3(vWorldXy, 0.0);
+    vec3 v = normalize(uCamAc - hbP);
+    float fres = 0.02 + 0.98 * pow(1.0 - clamp(v.z, 0.0, 1.0), 5.0);
+#ifdef USE_FOG
+    lit = mix(lit, fogColor * 0.92, water * fres * 0.65);
+#endif
+    vec3 r = reflect(-sunDir, vec3(0.0, 0.0, 1.0));
+    float s = max(dot(r, v), 0.0);
+    float glint = (0.08 * pow(s, 64.0) + 2.2 * pow(s, 900.0)) * (0.15 + fres);
+    lit += water * uWaterGlint * glint * uAcSunColor * max(sunDir.z, 0.0);
+  }
+  fragColor = vec4(terrainApplyFog(lit, vViewDepth), 1.0);
+#if defined( USE_LOGARITHMIC_DEPTH_BUFFER ) || defined( USE_LOGDEPTHBUF )
+  float hbDepth = vIsPerspective == 0.0 ? gl_FragCoord.z : log2(vFragDepth) * logDepthBufFC * 0.5;
+  gl_FragDepth = clamp(hbDepth + uWorldDepthBias, 0.0, 1.0);
+#endif
+}
+`;
+
+const WORLD_LIVE_GLSL = radialFogTerrainGlsl(WORLD_VERTEX_GLSL, WORLD_FRAGMENT_GLSL);
+
+// ---------------------------------------------------------------------------
+// Module state
+// ---------------------------------------------------------------------------
+let _st = null;
+let _loadPromise = null;
+const _diag = { enabled: false, loaded: false, loadMs: null, error: null, nodes: 0, levels: null, active: false, frames: 0, culled: 0 };
+
+const WORLD_BASE_URL = "../../dist/world/";
+
+async function _fetchBytes(url) {
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(`${url}: HTTP ${r.status}`);
+  return new Uint8Array(await r.arrayBuffer());
+}
+
+/** Load the baked grids once (lazy). Resolves to the data record or throws. */
+export function loadWorldData(base = WORLD_BASE_URL) {
+  if (_loadPromise) return _loadPromise;
+  const t0 = (typeof performance !== "undefined") ? performance.now() : Date.now();
+  _loadPromise = (async () => {
+    const meta = await (await fetch(`${base}world_meta.json`)).json();
+    const [hIdx, types, trees] = await Promise.all([
+      _fetchBytes(`${base}world_height.u8`),
+      _fetchBytes(`${base}world_types.u8`),
+      _fetchBytes(`${base}world_trees.u8`).catch(() => new Uint8Array(255 * 255)),
+    ]);
+    if (hIdx.length !== WORLD_VERTS * WORLD_VERTS || types.length !== WORLD_VERTS * WORLD_VERTS) {
+      throw new Error(`world grids: unexpected sizes ${hIdx.length} / ${types.length}`);
+    }
+    const table = new Float32Array(256);
+    (meta.landHeightTable || []).forEach((v, i) => { if (i < 256) table[i] = v; });
+    _diag.loaded = true;
+    _diag.loadMs = Math.round(((typeof performance !== "undefined") ? performance.now() : Date.now()) - t0);
+    return { meta, hIdx, types, trees, table };
+  })();
+  _loadPromise.catch((e) => { _diag.error = String(e?.message ?? e); });
+  return _loadPromise;
+}
+
+/** CPU ground height under any AC point once the grids are loaded (null before). */
+export function worldGroundHeight(x, y) {
+  const d = _st?.data;
+  return d ? heightAtGrid(d.hIdx, d.table, x, y) : null;
+}
+
+function _makeGridGeometry() {
+  const g = new THREE.InstancedBufferGeometry();
+  const verts = (GRID + 1) * (GRID + 1);
+  const pos = new Float32Array(verts * 3);
+  let p = 0;
+  for (let y = 0; y <= GRID; y += 1) for (let x = 0; x <= GRID; x += 1) { pos[p++] = x; pos[p++] = y; pos[p++] = 0; }
+  const idx = [];
+  for (let y = 0; y < GRID; y += 1) {
+    for (let x = 0; x < GRID; x += 1) {
+      const a = y * (GRID + 1) + x, b = a + 1, c = a + (GRID + 1), d = c + 1;
+      // alternate the diagonal per quad so a regular grid does not bias the silhouette one way
+      if ((x + y) & 1) idx.push(a, b, d, a, d, c); else idx.push(a, b, c, b, d, c);
+    }
+  }
+  g.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+  g.setIndex(idx);
+  const nodeAttr = new THREE.InstancedBufferAttribute(new Float32Array(MAX_NODES * 4), 4);
+  nodeAttr.setUsage(THREE.DynamicDrawUsage);
+  g.setAttribute("aNode", nodeAttr);
+  g.instanceCount = 0;
+  // never frustum-culled as a whole (per-node culling happens in the selection)
+  g.boundingSphere = new THREE.Sphere(new THREE.Vector3(WORLD_M / 2, WORLD_M / 2, 0), ROOT_M * 2);
+  return g;
+}
+
+function _makeMaterial(scene3d, data) {
+  const hTex = new THREE.DataTexture(data.hIdx, WORLD_VERTS, WORLD_VERTS, THREE.RedIntegerFormat, THREE.UnsignedByteType);
+  hTex.internalFormat = "R8UI";
+  const tTex = new THREE.DataTexture(data.types, WORLD_VERTS, WORLD_VERTS, THREE.RedIntegerFormat, THREE.UnsignedByteType);
+  tTex.internalFormat = "R8UI";
+  for (const t of [hTex, tTex]) {
+    t.minFilter = THREE.NearestFilter; t.magFilter = THREE.NearestFilter;
+    t.generateMipmaps = false; t.flipY = false; t.unpackAlignment = 1; t.needsUpdate = true;
+  }
+  const treeTex = new THREE.DataTexture(data.trees, 255, 255, THREE.RedFormat, THREE.UnsignedByteType);
+  treeTex.minFilter = THREE.LinearFilter; treeTex.magFilter = THREE.LinearFilter;
+  treeTex.generateMipmaps = false; treeTex.flipY = false; treeTex.unpackAlignment = 1; treeTex.needsUpdate = true;
+  const src = Array.isArray(scene3d?.terrainMaterials)
+    ? scene3d.terrainMaterials.find((m) => m && m.uniforms && m.uniforms.uAtlas && m.uniforms.uBaseTexTiling)
+    : null;
+  const tiling = src?.uniforms?.uBaseTexTiling?.value ?? new Array(33).fill(1);
+  const mat = new THREE.ShaderMaterial(withLogDepth({
+    uniforms: {
+      uHeightIdx: { value: hTex },
+      uHeightTable: { value: Array.from(data.table) },
+      uTypes: { value: tTex },
+      uAtlas: { value: src?.uniforms?.uAtlas?.value ?? null },
+      uBaseTexTiling: { value: tiling },
+      uTrees: { value: treeTex },
+      uCamAc: { value: new THREE.Vector3() },
+      uRange0: { value: range0M() },
+      uSunDir: { value: new THREE.Vector3(-0.4, -0.3, 1.0).normalize() },
+      uAcGouraudEnabled: { value: 0.0 },
+      uAcSunVec: { value: new THREE.Vector3(0, 0, 0) },
+      uAcSunColor: { value: new THREE.Color(1, 1, 1) },
+      uPaintLight: { value: new THREE.Vector4(0, 60, 300, 0) },
+      uAcAmbColor: { value: new THREE.Color(1, 1, 1) },
+      uAcAmbLevel: { value: 0.2 },
+      uSlopeShadingEnabled: { value: 1.0 },
+      uWaterGlint: { value: 1.0 },
+      uCanopy: { value: 1.0 },
+      uWorldDepthBias: { value: 2.5e-6 },
+      fogColor: { value: new THREE.Color(0xc3c8dc) },
+      fogNear: { value: 150 },
+      fogFar: { value: 2400 },
+      fogDensity: { value: 0.00025 },
+    },
+    vertexShader: WORLD_LIVE_GLSL.vertex,
+    fragmentShader: WORLD_LIVE_GLSL.fragment,
+    glslVersion: THREE.GLSL3,
+    side: THREE.FrontSide,
+    transparent: false,
+    depthWrite: true,
+    depthTest: true,
+    fog: true,
+  }));
+  if (lbFadeOn()) {
+    const pu = lbFadeUniforms(THREE);
+    if (pu) {
+      mat.defines = { ...(mat.defines || {}), HB_WORLD_PRESENCE: "", ...lbBandDefines() };
+      mat.uniforms.hbLbPresence = pu.hbLbPresence;
+      mat.uniforms.hbLbPresenceOrigin = pu.hbLbPresenceOrigin;
+    }
+  }
+  mat.name = "world-terrain";
+  return { mat, hTex, tTex, treeTex };
+}
+
+/** Create the tier (lazy data). Safe to call more than once; a no-op without `?worldTier`. */
+export function initWorldTerrain(scene3d, { parent = null } = {}) {
+  if (!worldTierEnabled()) return null;
+  _diag.enabled = true;
+  if (_st) return _st;
+  const group = new THREE.Group();
+  group.name = "world-terrain";
+  group.userData.__punchPhase = 0;
+  (parent ?? scene3d.terrainGroup?.parent ?? scene3d.terrainGroup).add(group);
+  _st = { group, mesh: null, data: null, mats: null, geo: null, wanted: false, frustum: new THREE.Frustum(), m4: new THREE.Matrix4(), box: new THREE.Box3() };
+  if (typeof window !== "undefined") window.__worldTerrain = () => worldTerrainDiag();
+  // ?residencyLog: wherever the tier is drawing, every landblock has ground (it discards only under the rings)
+  rlogSetWorldTierProbe(() => !!(_st && _st.mesh && _st.mesh.visible));
+  return _st;
+}
+
+/** Ask for the tier (first call starts the download); `false` hides it again. */
+export function setWorldTierWanted(scene3d, wanted) {
+  const st = _st || initWorldTerrain(scene3d);
+  if (!st) return;
+  st.wanted = !!wanted;
+  if (st.wanted && !st.data && !st.loading) {
+    st.loading = true;
+    loadWorldData().then((data) => { st.data = data; }).catch((e) => {
+      // eslint-disable-next-line no-console
+      console.warn("[world_terrain] world grids unavailable (dist/world/ missing?) — the tier stays off:", e?.message ?? e);
+    });
+  }
+}
+
+/** Copy the live lighting uniforms from a near-ring terrain material (the far ring does the same). */
+function _copyLighting(scene3d, u) {
+  const src = Array.isArray(scene3d?.terrainMaterials)
+    ? scene3d.terrainMaterials.find((m) => m && m.uniforms && m.uniforms.uSunDir)
+    : null;
+  if (!src) return;
+  const s = src.uniforms;
+  if (s.uSunDir) u.uSunDir.value.copy(s.uSunDir.value);
+  if (s.uAcGouraudEnabled) u.uAcGouraudEnabled.value = s.uAcGouraudEnabled.value;
+  if (s.uAcSunVec) u.uAcSunVec.value.copy(s.uAcSunVec.value);
+  if (s.uAcSunColor) u.uAcSunColor.value.copy(s.uAcSunColor.value);
+  if (s.uPaintLight && u.uPaintLight) u.uPaintLight.value.copy(s.uPaintLight.value);
+  if (s.uAcAmbColor) u.uAcAmbColor.value.copy(s.uAcAmbColor.value);
+  if (s.uAcAmbLevel) u.uAcAmbLevel.value = s.uAcAmbLevel.value;
+  if (s.uTerrainSlopeShadingEnabled) u.uSlopeShadingEnabled.value = s.uTerrainSlopeShadingEnabled.value;
+  if (!u.uAtlas.value && s.uAtlas) u.uAtlas.value = s.uAtlas.value;
+  if (s.uBaseTexTiling) u.uBaseTexTiling.value = s.uBaseTexTiling.value;
+}
+
+/** The tier's mesh + material (hidden until wanted); the program links off the frame. */
+function _buildMesh(st, scene3d, camera) {
+  st.mats = _makeMaterial(scene3d, st.data);
+  st.geo = _makeGridGeometry();
+  st.mesh = new THREE.Mesh(st.geo, st.mats.mat);
+  st.mesh.name = "world-terrain-nodes";
+  st.mesh.frustumCulled = false;
+  st.mesh.matrixAutoUpdate = false;
+  st.mesh.visible = false;
+  st.group.add(st.mesh);
+  // link the program off the frame (compileAsync / KHR_parallel_shader_compile; three's compile() walks hidden
+  // meshes too); drawn only once linked — a first-draw link is 0.5-1.7 s of FXC on the 1070
+  st.compiled = false;
+  try {
+    const r = scene3d?.renderer;
+    if (r && typeof r.compileAsync === "function") {
+      Promise.resolve(r.compileAsync(st.mesh, camera, scene3d.scene)).then(() => { st.compiled = true; }, () => { st.compiled = true; });
+    } else st.compiled = true;
+  } catch (_) { st.compiled = true; }
+}
+
+/**
+ * Idle prefetch (altitude_policy.js `?flightPrewarm`): load the grids, then build the mesh and link its program
+ * while the tier is NOT wanted (it stays hidden), so a take-off only has to open the view. Arm K (1070, cold
+ * caches): the take-off loaded 8 MB, linked the tier and the far forest and started 64 impostor bakes at once —
+ * a 3 s frame starved the server of inputs past its 2.5 s and the predictor took a 34 m correction.
+ */
+export function prefetchWorldTier(scene3d, camera) {
+  const st = _st || initWorldTerrain(scene3d);
+  if (!st) return;
+  if (!st.data) {
+    if (!st.loading) {
+      st.loading = true;
+      loadWorldData().then((data) => { st.data = data; }).catch((e) => {
+        // eslint-disable-next-line no-console
+        console.warn("[world_terrain] prefetch: world grids unavailable — the tier stays off:", e?.message ?? e);
+      });
+    }
+    return;
+  }
+  if (!st.mesh && camera) _buildMesh(st, scene3d, camera);
+}
+
+/**
+ * Per-frame: select nodes for `camera` (three world), upload the instance list, refresh uniforms. Hidden while
+ * not wanted or before the data arrived.
+ */
+export function tickWorldTerrain(scene3d, camera) {
+  const st = _st;
+  if (!st) return;
+  _diag.active = !!(st.wanted && st.data && st.compiled !== false);
+  if (!st.wanted || !st.data || !camera) {
+    if (st.mesh) st.mesh.visible = false;
+    return;
+  }
+  if (!st.mesh) _buildMesh(st, scene3d, camera);
+  st.mesh.visible = st.compiled !== false;
+  _diag.frames += 1;
+  const u = st.mats.mat.uniforms;
+  // camera in AC metres: three world (x, y, z) = AC (x, z, −y)
+  const cp = camera.getWorldPosition ? camera.getWorldPosition(st._cp || (st._cp = new THREE.Vector3())) : camera.position;
+  const cam = st._cam || (st._cam = { x: 0, y: 0, z: 0 });
+  cam.x = cp.x; cam.y = -cp.z; cam.z = cp.y;
+  u.uCamAc.value.set(cam.x, cam.y, cam.z);
+  _copyLighting(scene3d, u);
+  // frustum in three world; a node box is AC (x0..x0+s, y0..y0+s, 0..700) → world (x, h, −y)
+  camera.updateMatrixWorld?.();
+  st.m4.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+  st.frustum.setFromProjectionMatrix(st.m4);
+  const box = st.box;
+  let culled = 0;
+  const visible = (x0, y0, s) => {
+    box.min.set(x0, -50, -(y0 + s));
+    box.max.set(x0 + s, 800, -y0);
+    const ok = st.frustum.intersectsBox(box);
+    if (!ok) culled += 1;
+    return ok;
+  };
+  const nodes = selectNodes(cam, { r0: u.uRange0.value, visible });
+  const attr = st.geo.getAttribute("aNode");
+  const a = attr.array;
+  const levels = st._levels || (st._levels = new Array(LEVELS).fill(0));
+  levels.fill(0);
+  let n = 0;
+  for (const nd of nodes) {
+    if (n >= MAX_NODES) break;
+    a[n * 4] = nd.x0; a[n * 4 + 1] = nd.y0; a[n * 4 + 2] = nd.size; a[n * 4 + 3] = nd.level;
+    levels[nd.level] += 1;
+    n += 1;
+  }
+  attr.needsUpdate = true;
+  attr.clearUpdateRanges?.();
+  attr.addUpdateRange?.(0, n * 4);
+  st.geo.instanceCount = n;
+  _diag.nodes = n;
+  _diag.levels = levels.slice();
+  _diag.culled = culled;
+}
+
+export function worldTerrainDiag() {
+  return { ..._diag, wanted: !!_st?.wanted, hasMesh: !!_st?.mesh, program: _st?.mats?.mat?.name ?? null };
+}
+
+/** Teardown (context loss / tests). */
+export function disposeWorldTerrain() {
+  const st = _st;
+  if (!st) return;
+  try {
+    st.group.parent?.remove(st.group);
+    st.geo?.dispose();
+    st.mats?.mat?.dispose();
+    st.mats?.hTex?.dispose(); st.mats?.tTex?.dispose(); st.mats?.treeTex?.dispose();
+  } catch (_) { /* best effort */ }
+  _st = null;
+}

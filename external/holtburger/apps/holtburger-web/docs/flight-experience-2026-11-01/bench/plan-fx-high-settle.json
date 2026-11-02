@@ -1,0 +1,55 @@
+{
+ "name": "fx-high-settle",
+ "note": "Phase 4 high band: Holtburg take-off, 3 km low at 100 m (200 deg, boost), climb at full pitch to 5,000 m AGL over 12 km (needs the server's vehicle_ceiling_agl 5000 + vehicle_climb_max 40), 6 km west above the clouds, dive back to 120 m over 15 km heading north (sink 25 m/s), land. Exercises every altitude transition: world tier, far ring hand-off, object radius bands, the storm-deck high band, cloud camera height, fog/far plane, and the descent back to full detail. 35 s settle before the spawn (the idle prefetch of the flight tiers finishes first).",
+ "start": "0xA9B40019 84 7.1 94",
+ "settleMs": 35000,
+ "stillsAtSec": [
+  10,
+  25,
+  45,
+  70,
+  95,
+  120,
+  145,
+  170,
+  195,
+  220,
+  245,
+  270,
+  300,
+  330,
+  360,
+  390
+ ],
+ "flight": {
+  "route": [
+   {
+    "heading": 200,
+    "metres": 3000,
+    "agl": 100,
+    "boost": true
+   },
+   {
+    "heading": 200,
+    "metres": 12000,
+    "agl": 5000,
+    "boost": true
+   },
+   {
+    "heading": 270,
+    "metres": 6000,
+    "agl": 5000,
+    "boost": true
+   },
+   {
+    "heading": 0,
+    "metres": 15000,
+    "agl": 120,
+    "boost": false
+   }
+  ],
+  "agl": 100,
+  "throttle": 1,
+  "maxSec": 720
+ }
+}

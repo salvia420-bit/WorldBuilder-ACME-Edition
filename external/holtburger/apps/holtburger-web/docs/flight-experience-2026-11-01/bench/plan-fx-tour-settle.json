@@ -1,0 +1,32 @@
+{
+ "name": "fx-tour-settle",
+ "note": "plan-fx-tour with a 35 s settle before the spawn: the idle prefetch of the flight tiers (?flightPrewarm, 20 s into the world) has finished before take-off, as for a player who looks around first.",
+ "start": "0xA9B40019 84 7.1 94",
+ "settleMs": 35000,
+ "stillsAtSec": [
+  12,
+  25,
+  40,
+  55,
+  70,
+  85,
+  100
+ ],
+ "flight": {
+  "route": [
+   {
+    "heading": 225,
+    "metres": 5000,
+    "boost": false
+   },
+   {
+    "heading": 45,
+    "metres": 5000,
+    "boost": true
+   }
+  ],
+  "agl": 80,
+  "throttle": 1,
+  "maxSec": 300
+ }
+}

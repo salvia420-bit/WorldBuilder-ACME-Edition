@@ -1531,6 +1531,24 @@ const TIER5 = [
   // 2026-11-01 vehicles (?vehicles=on): flight-model golden parity with the ACE server model, predictor,
   // observer track, fall model, tracer spread replay, boarding hop, parachute canopy (unregistered since session 1).
   { tier: 5, flag: "vehicles", file: "tests/vehicle_flight.test.mjs" },
+  // 2026-11-01 vehicles bail-out pose (?vehicleFallAnim, default on): retail Falling, the canopy grip clip from the
+  // retail frames (DAT fixture), the per-heritage parachute pack, the state machine + driver, the 5 km fall bound.
+  { tier: 5, flag: "vehicleFallAnim", file: "tests/vehicle_fall_pose.test.mjs" },
+  // 2026-11-01 flight experience (docs/flight-experience-2026-11-01): the Phase 0
+  // residency sampler (?residencyLog) — flips, holes, lead times on a mock scene.
+  { tier: 5, flag: "residencyLog", file: "tests/residency_log.test.mjs" },
+  // Phase 1 presence field (?lbFade): fades instead of hard toggles, far ring per-landblock discard.
+  { tier: 5, flag: "lbFade", file: "tests/lb_presence.test.mjs" },
+  // 2026-11-02 the terrain hand-off band (?lbBand): the far ring / world tier keep their 10 m band under a near
+  // landblock only where the near ring ends (the owner's "green lines in square shape on terrain").
+  { tier: 5, flag: "lbBand", file: "tests/lb_handoff_band.test.mjs" },
+  // Phase 4: the world tier (CDLOD over the baked world grids) + the ?flightView altitude policy terms.
+  { tier: 5, flag: "worldTier", file: "tests/world_terrain.test.mjs" },
+  // Phase 2: far forests (retail trees past the object window as impostors).
+  { tier: 5, flag: "farForest", file: "tests/far_forest.test.mjs" },
+  // Phases 1 / 5: the flight hint, ?flightResidency (default ON) and the ?flightLight band (no interiors / wall AABBs
+  // while airborne).
+  { tier: 5, flag: "flightResidency", file: "tests/flight_residency.test.mjs" },
 ];
 
 // Registered but KNOWN-FAILING because the APP is wrong (a real bug, named

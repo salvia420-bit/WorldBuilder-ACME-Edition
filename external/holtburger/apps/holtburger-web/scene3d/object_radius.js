@@ -89,7 +89,34 @@ export function objRadiusSetting() {
 /** Test seam: a number arms it, null disarms, undefined re-reads the URL. */
 export function __setObjRadiusForTest(v) { _setting = v; }
 
-const _stats = { hides: 0, shows: 0, nodesHidden: 0, nodesShown: 0, lateHides: 0, unparkRehides: 0, forgets: 0 };
+// ?flightView (altitude_policy.js, flight experience Phase 3): the window narrows with altitude (from 1.5 km up a
+// tree is a few pixels and the far-forest impostors carry it). A policy radius never WIDENS the page's setting and
+// never applies when the setting is off (null). Setting it forces one re-evaluation on the next tick.
+let _policyRadius = null;
+export function setObjRadiusPolicy(n, scene3d = null) {
+  const v = Number.isFinite(n) ? Math.max(OBJ_RADIUS_MIN, Math.min(OBJ_RADIUS_MAX, n | 0)) : null;
+  if (v === _policyRadius) return false;
+  _policyRadius = v;
+  if (scene3d?._objRadius) scene3d._objRadius.sig = null;
+  return true;
+}
+function _effectiveRadius() {
+  const n = objRadiusSetting();
+  if (n == null) return null;
+  return _policyRadius == null ? n : Math.min(n, _policyRadius);
+}
+
+const _stats = { hides: 0, shows: 0, nodesHidden: 0, nodesShown: 0, lateHides: 0, unparkRehides: 0, forgets: 0,
+  fadeHides: 0, fadeCancels: 0, fadeCommits: 0 };
+
+// ?lbFade (flight experience Phase 1, scene3d/lb_presence.js): with the presence fade armed, a hide at the
+// window edge is DEFERRED — the landblock goes to `pendingHide`, its object presence fades to 0 over ~0.5 s,
+// and only then does the presence field call `objRadiusCommitHide`, which runs the real hide below. A
+// landblock that comes back to d <= N while fading is simply taken off `pendingHide` (it fades back in). Off:
+// every hide is the immediate toggle it always was.
+let _fadeDeferred = false;
+/** index.js arms this once when `?lbFade` is on. */
+export function setObjRadiusFadeDeferred(on) { _fadeDeferred = !!on; }
 
 function _lbKey(id) { return ((id >>> 0) & 0xffff0000) >>> 0; }
 function _cheb(a, b) {
@@ -100,7 +127,7 @@ function _cheb(a, b) {
 function _state(scene3d) {
   let st = scene3d._objRadius;
   if (!st) {
-    st = { hidden: new Set(), centers: [], sig: null };
+    st = { hidden: new Set(), pendingHide: new Set(), centers: [], sig: null };
     scene3d._objRadius = st;
   }
   return st;
@@ -121,7 +148,7 @@ function _dist(st, lbKey) {
  * given the player landblock set `seen`? Always true when the flag is off.
  */
 export function objectBakeAllowed(seen, lbKey) {
-  const n = objRadiusSetting();
+  const n = _effectiveRadius();
   if (n == null) return true;
   for (const c of seen) if (_cheb(c, lbKey) <= n) return true;
   return false;
@@ -190,6 +217,7 @@ function _show(scene3d, st, lbKey) {
 // off): `_poolShowLb` returns 0. `st.hidden` is cleared FIRST (as before).
 function _forget(scene3d, st, lbKey) {
   st.hidden.delete(lbKey);
+  st.pendingHide?.delete(lbKey);
   try { scene3d._poolShowLb?.(lbKey); } catch (_) { /* fail-soft */ }
   _stats.forgets += 1;
   globalThis.__hbRustWorld?.objrForget(scene3d, lbKey); // ?rustWorld
@@ -201,7 +229,7 @@ function _forget(scene3d, st, lbKey) {
  * landblock-crossing signal) changed.
  */
 export function tickObjectRadius(scene3d, seen) {
-  const n = objRadiusSetting();
+  const n = _effectiveRadius();
   if (n == null || !scene3d) return;
   const st = _state(scene3d);
   let sig = "";
@@ -215,19 +243,54 @@ export function tickObjectRadius(scene3d, seen) {
   // Evicted landblocks leave both baked sets; forget them (their nodes are gone,
   // and the pool registry's copy of the hide lifts with them: `_forget`).
   for (const k of st.hidden) if (!keys.has(k)) _forget(scene3d, st, k);
+  for (const k of st.pendingHide) if (!keys.has(k)) st.pendingHide.delete(k);
   for (const k of keys) {
     const d = _dist(st, k);
     if (d > n + 1) {
-      if (!st.hidden.has(k)) _hide(scene3d, st, k);
-    } else if (d <= n && st.hidden.has(k)) {
-      _show(scene3d, st, k);
+      if (!st.hidden.has(k)) {
+        if (_fadeDeferred) {
+          if (!st.pendingHide.has(k)) { st.pendingHide.add(k); _stats.fadeHides += 1; }
+        } else {
+          _hide(scene3d, st, k);
+        }
+      }
+    } else if (d <= n) {
+      if (st.pendingHide.has(k)) {
+        st.pendingHide.delete(k);
+        _stats.fadeCancels += 1;
+      } else if (st.hidden.has(k)) {
+        _show(scene3d, st, k);
+      }
     }
   }
 }
 
+/**
+ * ?lbFade: the presence fade-out of `lbKey`'s objects reached 0 — run the deferred hide now (no-op unless the
+ * landblock is still pending; a cancel or an eviction already took it off the list).
+ */
+export function objRadiusCommitHide(scene3d, lbKey) {
+  const st = scene3d?._objRadius;
+  if (!st || !st.pendingHide) return false;
+  const k = _lbKey(lbKey);
+  if (!st.pendingHide.has(k)) return false;
+  st.pendingHide.delete(k);
+  if (!st.hidden.has(k)) _hide(scene3d, st, k);
+  _stats.fadeCommits += 1;
+  return true;
+}
+
+/** ?lbFade: does the window want `lbKey`'s objects gone (hidden, or fading out toward the deferred hide)? */
+export function objectRadiusWantsHidden(scene3d, lbKey) {
+  const st = scene3d?._objRadius;
+  if (!st) return false;
+  const k = _lbKey(lbKey);
+  return st.hidden.has(k) || (st.pendingHide ? st.pendingHide.has(k) : false);
+}
+
 /** A statics/buildings bake for `lbKey` just attached its nodes. */
 export function afterObjectBake(scene3d, lbKey) {
-  const n = objRadiusSetting();
+  const n = _effectiveRadius();
   if (n == null || !scene3d) return;
   const st = _state(scene3d);
   const k = _lbKey(lbKey);
@@ -267,7 +330,7 @@ export function objectRadiusHides(scene3d, lbKey) {
 
 export function getObjectRadiusStats(scene3d) {
   const st = scene3d?._objRadius;
-  return { radius: objRadiusSetting(), hiddenLbs: st ? st.hidden.size : 0, ..._stats };
+  return { radius: objRadiusSetting(), policyRadius: _policyRadius, hiddenLbs: st ? st.hidden.size : 0, pendingHideLbs: st?.pendingHide ? st.pendingHide.size : 0, fadeDeferred: _fadeDeferred, ..._stats };
 }
 export function __resetObjectRadiusStatsForTest() {
   for (const k in _stats) _stats[k] = 0;

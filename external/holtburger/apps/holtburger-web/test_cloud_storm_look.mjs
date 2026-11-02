@@ -13,6 +13,10 @@ import {
   FAIR_LAYERS, STORM_LAYERS,
   FAIR_COVERAGE, STORM_COVERAGE,
   FAIR_HAZE_DENSITY, STORM_HAZE_DENSITY,
+  lookLayers, cloudLayersMatchLook, STORM_TOWER_HEIGHT_LOW, STORM_TOWER_HEIGHT_HIGH, FAIR_ALTO_DENSITY_HIGH_SCALE,
+  cloudHighBandEnabled, cloudHighBandWant,
+  cloudHighBandMarchEnabled, CLOUD_HIGH_BAND_MARCH, CLOUD_HIGH_BAND_SHAFTS_MUL, applyHighBandMarch, restoreHighBandMarch,
+  highBandMarchDrift,
 } from './scene3d/cloud_storm_look.js';
 
 let passed = 0, failed = 0;
@@ -119,6 +123,114 @@ const LAYER_KEYS = [
 
   check('missing/short cloudLayers fails soft (returns false)',
     applyCloudLook({}, true) === false && applyCloudLook(null, true) === false);
+}
+
+// --- ?flightView high band (2026-11-01): the storm towers flatten into a deck under a high aircraft ---
+{
+  check('high band 0: the fair look is the shipped table itself (ground players see no change)',
+    lookLayers(false, 0) === FAIR_LAYERS && lookLayers(false, undefined) === FAIR_LAYERS && lookLayers(false, -1) === FAIR_LAYERS);
+  const fhi = lookLayers(false, 1);
+  check('high band 1, fair: the alto deck thins (density x 0.1), the cumulus tops round (r / g bias 0.7), the rest verbatim',
+    FAIR_ALTO_DENSITY_HIGH_SCALE === 0.1 && Math.abs(fhi[3].densityScale - FAIR_LAYERS[3].densityScale * 0.1) < 1e-12
+      && fhi[3].altitude === FAIR_LAYERS[3].altitude && fhi[3].height === FAIR_LAYERS[3].height
+      && fhi[0].shapeAlteringBias === 0.7 && fhi[1].shapeAlteringBias === 0.7
+      && JSON.stringify(fhi[2]) === JSON.stringify(FAIR_LAYERS[2])
+      && FAIR_LAYERS[3].densityScale === 0.004 && FAIR_LAYERS[0].shapeAlteringBias === 0.35);
+  check('high band 0.5, fair: linear in between (bias 0.525, alto x 0.55)',
+    lookLayers(false, 0.5)[0].shapeAlteringBias === 0.525
+      && Math.abs(lookLayers(false, 0.5)[3].densityScale - 0.004 * 0.55) < 1e-12);
+  const fe = makeEffect();
+  applyCloudLook(fe, false, 1);
+  check('applyCloudLook writes the fair high-band look; the match test sees it as that look only',
+    cloudLayersMatchLook(fe, false, 1) && !cloudLayersMatchLook(fe, false, 0));
+  check('high band 0: the storm look is the shipped table itself (ground players see no change)',
+    lookLayers(true, 0) === STORM_LAYERS && lookLayers(true, undefined) === STORM_LAYERS);
+  const hi = lookLayers(true, 1);
+  const tower = STORM_LAYERS.findIndex((l) => l.height === STORM_TOWER_HEIGHT_LOW);
+  check('high band 1: the tower fades (height 6000 → 1900 m, density × 0.02), the deck tops round (r / g bias 0.7), the rest verbatim',
+    tower >= 0 && hi[tower].height === STORM_TOWER_HEIGHT_HIGH
+      && Math.abs(hi[tower].densityScale - STORM_LAYERS[tower].densityScale * 0.02) < 1e-9
+      && hi[0].shapeAlteringBias === 0.7 && hi[1].shapeAlteringBias === 0.7
+      && JSON.stringify(hi[2]) === JSON.stringify(STORM_LAYERS[2])
+      && STORM_LAYERS[tower].height === STORM_TOWER_HEIGHT_LOW && STORM_LAYERS[0].shapeAlteringBias === 0.35);
+  check('high band 0.5: linear in between, quantized to 1 %',
+    lookLayers(true, 0.5)[tower].height === 3950 && lookLayers(true, 0.504)[tower].height === 3950);
+  check('high band: out-of-range blends clamp', lookLayers(true, 7)[tower].height === STORM_TOWER_HEIGHT_HIGH
+    && lookLayers(true, -3) === STORM_LAYERS);
+  const e = makeEffect();
+  applyCloudLook(e, true, 1);
+  check('applyCloudLook writes the high-band tower; the match test sees it as the high-band look only',
+    e.cloudLayers[tower].height === STORM_TOWER_HEIGHT_HIGH
+      && cloudLayersMatchLook(e, true, 1) && !cloudLayersMatchLook(e, true, 0));
+  const vol = readFileSync(new URL('./scene3d/cloud_volume.js', import.meta.url), 'utf8');
+  check('cloud_volume re-applies the look on a high-band step (globalThis.__hbCloudHighBand)',
+    vol.includes('__hbCloudHighBand') && /applyCloudLook\(this\.effect, storm, this\._highBandApplied/.test(vol));
+}
+
+// --- ?cloudHighBand (2026-11-01): every-pixel half-res march above the deck -------------------------
+{
+  check('?cloudHighBand: DEFAULT ON, off / 0 / false / no escape',
+    cloudHighBandEnabled('') === true && cloudHighBandEnabled('?cloudHighBand=off') === false
+      && cloudHighBandEnabled('?cloudHighBand=0') === false && cloudHighBandEnabled('?cloudHighBand=on') === true);
+  check('high-band march: on above 0.65, off below 0.35 (hysteresis, no flapping on the 1 % ease)',
+    cloudHighBandWant(0.7, false) === true && cloudHighBandWant(0.6, false) === false
+      && cloudHighBandWant(0.4, true) === true && cloudHighBandWant(0.3, true) === false && cloudHighBandWant(undefined, true) === false);
+  const vol = readFileSync(new URL('./scene3d/cloud_volume.js', import.meta.url), 'utf8');
+  check('the every-pixel march keys on the ABOVE-DECK blend (1.8 km), not the storm-tower fade (900 m)',
+    vol.includes('__hbCloudAboveDeck') && !/cloudHighBandWant\(hb,/.test(vol));
+  check('cloud_volume switches temporalUpscale + resolutionScale only after the resolve variant is prewarmed (compileAsync)',
+    /_prewarmResolveVariant\(\)/.test(vol) && /compileAsync\(mesh/.test(vol) && /eff\.temporalUpscale = false/.test(vol)
+      && /eff\.resolutionScale = 0\.5/.test(vol) && /prewarm !== 'done'/.test(vol));
+}
+
+// --- ?cloudHighBandMarch (2026-11-02): the march from above without what it cannot show, uniforms only --------
+{
+  check('?cloudHighBandMarch: DEFAULT ON, off / 0 / false / no escape',
+    cloudHighBandMarchEnabled('') === true && cloudHighBandMarchEnabled('?cloudHighBandMarch=off') === false
+      && cloudHighBandMarchEnabled('?cloudHighBandMarch=no') === false && cloudHighBandMarchEnabled('?cloudHighBandMarch=on') === true);
+  check('the high band: one ground-bounce sample (the undersides are out of view), the light shafts x0',
+    CLOUD_HIGH_BAND_MARCH.maxIterationCountToGround === 1 && Object.keys(CLOUD_HIGH_BAND_MARCH).length === 1
+      && Object.isFrozen(CLOUD_HIGH_BAND_MARCH) && CLOUD_HIGH_BAND_SHAFTS_MUL === 0);
+  // takram's CloudsMaterial.onBeforeRender drops its GROUND_BOUNCE define (a relink of the clouds program, ~300 ms on
+  // the 1070, seconds cold) when maxIterationCountToGround is 0: the high band must never write 0 there
+  const vendor = readFileSync(new URL('./vendor/takram-three-clouds/build/index.js', import.meta.url), 'utf8');
+  check('no define flip: the march keeps maxIterationCountToGround > 0 (takram keys GROUND_BOUNCE on it)',
+    /maxIterationCountToGround\.value > 0/.test(vendor) && /GROUND_BOUNCE/.test(vendor)
+      && Object.entries(CLOUD_HIGH_BAND_MARCH).every(([k, v]) => k !== 'maxIterationCountToGround' || v > 0));
+  // takram's clouds params are accessors on the effect's `clouds` object: a class with getters / setters doubles it
+  class Clouds {
+    constructor() { this._u = { maxIterationCountToGround: 3, maxIterationCount: 500 }; }
+    get maxIterationCountToGround() { return this._u.maxIterationCountToGround; }
+    set maxIterationCountToGround(v) { this._u.maxIterationCountToGround = v; }
+    get maxIterationCount() { return this._u.maxIterationCount; }
+    set maxIterationCount(v) { this._u.maxIterationCount = v; }
+  }
+  const c = new Clouds();
+  const base = applyHighBandMarch(c);
+  check('apply writes the march through the accessors and returns exactly what it replaced',
+    c.maxIterationCountToGround === 1 && c.maxIterationCount === 500
+      && base.maxIterationCountToGround === 3 && Object.keys(base).length === 1);
+  check('no drift while the march holds', highBandMarchDrift(c) === null);
+  c.maxIterationCountToGround = 2; // a quality preset re-writes it while the aircraft is up
+  const drift = highBandMarchDrift(c);
+  check('drift reports the re-written param with its new value (the new base for the way down)',
+    drift && drift.maxIterationCountToGround === 2 && Object.keys(drift).length === 1);
+  restoreHighBandMarch(c, { ...base, ...drift });
+  check('restore puts the (updated) base back', c.maxIterationCountToGround === 2);
+  check('a march with several params: only the drifted ones are reported',
+    JSON.stringify(highBandMarchDrift({ a: 1, b: 5 }, { a: 1, b: 2 })) === JSON.stringify({ b: 5 }));
+  check('null-safe: no clouds object / no base', JSON.stringify(applyHighBandMarch(null)) === '{}'
+    && highBandMarchDrift(null) === null && (restoreHighBandMarch(null, base), true) && (restoreHighBandMarch(c, null), true));
+  const vol = readFileSync(new URL('./scene3d/cloud_volume.js', import.meta.url), 'utf8');
+  check('cloud_volume writes the march at the switch into the band, restores it on the way out, re-asserts it on drift',
+    /cloudHighBandMarchEnabled\(\) \? applyHighBandMarch\(eff\.clouds\)/.test(vol)
+      && /restoreHighBandMarch\(eff\.clouds, this\._hbBaseMarch\)/.test(vol)
+      && /highBandMarchDrift\(eff\.clouds\)/.test(vol));
+  check('the shafts go off through the ONE writer of maxShadowLengthRayDistance (?cloudNight scale x shaftMul), with or without ?cloudNight',
+    /'maxShadowLengthRayDistance', cn\.directFactor \* shaftMul\)/.test(vol)
+      && /_scaleCloudUniform\(u, 'maxShadowLengthRayDistance', shaftMul\)/.test(vol)
+      && /this\._hbShaftsOff = !!this\._hbBaseMarch/.test(vol) && /this\._hbShaftsOff = false/.test(vol)
+      && !/lightShafts\s*=\s*false/.test(vol));
 }
 
 // --- source audit: no WMO resurrection, one layer writer ---------------

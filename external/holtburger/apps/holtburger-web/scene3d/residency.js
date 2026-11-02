@@ -208,3 +208,150 @@ export const LRU_SIZING_RADIUS = Math.max(
   BUILDINGS_LRU_RADIUS,
   PVS_RING_RADIUS
 );
+
+// ===========================================================================
+// FLIGHT HINT — one residency centre for flight (flight experience Phase 1,
+// `?flightResidency`, docs/flight-experience-2026-11-01).
+// ===========================================================================
+//
+// WHY. The vehicle module used to feed the world streamer a LOAD POINT 6 s ahead
+// of the aircraft (`__worldStreamer.onPositionUpdate` with the lead cell): a
+// second centre that only the position-packet path heard (3×3 terrain + the
+// lead LB's objects), while the slot grid, the object window and the far ring
+// stayed centred on the aircraft — two centres, each correct alone, and the lead
+// call also stamped `noteServerLb` and fired `landblockChanged` twice per lead
+// change (plugins clear zone state on it).
+//
+// WHAT. The vehicle module publishes the aircraft's state here (position,
+// velocity, AGL) every frame it flies; every residency consumer asks this module
+// for its centre instead of using the rig's landblock directly:
+//   * the slot grid centre and the object window centre shift up to
+//     FLIGHT_BIAS_MAX_LB landblocks AHEAD along the velocity (lead
+//     FLIGHT_LEAD_SEC), so the 11×11 ring covers 7 ahead / 3 behind and the 9×9
+//     object window 6 ahead / 2 behind at 400 km/h — what is behind a fast
+//     aircraft is never looked at again, what is ahead arrives early;
+//   * nothing else moves: the rig's own landblock stays the player landblock for
+//     collision, cells, plugins, the LRU's protected 3×3.
+// A hint older than FLIGHT_HINT_STALE_MS is ignored (landed, bailed, a stalled
+// tab): the centre falls back to the rig at once.
+//
+// Phase 3 grows this into `residencyPolicy(agl, speed, heading)` (radii and
+// budgets per altitude band); the bias is its first term.
+
+/** Seconds of travel the residency centre leads the aircraft by. */
+export const FLIGHT_LEAD_SEC = 3.0;
+/** Largest centre shift, in landblocks (the rig must stay inside the 3×3 core of the 5-ring with margin). */
+export const FLIGHT_BIAS_MAX_LB = 2;
+/** Below this ground speed (m/s) there is no bias (taxi, takeoff, landing roll). */
+export const FLIGHT_BIAS_MIN_SPEED = 25;
+/** A hint is ignored once it is this old. */
+export const FLIGHT_HINT_STALE_MS = 750;
+
+/**
+ * `?flightResidency` — DEFAULT ON (2026-11-01, validated on the 1070 arms D-H); off / 0 / false / no → OFF (the
+ * vehicle keeps its old lead-point call).
+ */
+export function flightResidencyEnabled(search) {
+  // DEFAULT ON since 2026-11-01 (flight experience Phase 5, 1070 arms D-H); off / 0 / false / no escapes
+  try {
+    const s = search !== undefined ? search : (globalThis.location?.search || "");
+    const v = (new URLSearchParams(s).get("flightResidency") || "").trim().toLowerCase();
+    return !(v === "off" || v === "0" || v === "false" || v === "no");
+  } catch (_) {
+    return true;
+  }
+}
+
+let _flightHint = null;
+function _nowMs() {
+  return (typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now();
+}
+
+/** The vehicle module, every flying frame: AC metres + m/s (+ AGL m). */
+export function setFlightHint({ x, y, z = 0, vx = 0, vy = 0, vz = 0, agl = null } = {}) {
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+  _flightHint = { x, y, z, vx, vy, vz, agl, speed: Math.hypot(vx, vy), t: _nowMs() };
+}
+/** Landed / exited / bailed. */
+export function clearFlightHint() { _flightHint = null; }
+
+// ?flightLight (flight experience, 2026-11-01; DEFAULT ON, `=off` escapes) — while an aircraft is airborne above
+// FLIGHT_LIGHT_AGL the streaming that only matters to a body on the ground is skipped: building INTERIORS (EnvCells:
+// up to hundreds of cells per town landblock, a decode + bake + a lights rescan on every crossing) and the building-
+// collision AABB prefetch (a 3x3 per crossing; the aircraft's floor is the terrain). Nothing inside a building is
+// visible from an aircraft and nothing walks into a wall. Both callers run on every position update and are
+// idempotent per landblock, so both load on the first update after the aircraft is down (or the pilot has bailed:
+// the hint is cleared at the bail).
+export const FLIGHT_LIGHT_AGL = 40;
+export function flightLightEnabled(search) {
+  try {
+    const s = search !== undefined ? search : (globalThis.location?.search || "");
+    const v = (new URLSearchParams(s).get("flightLight") || "").trim().toLowerCase();
+    return !(v === "off" || v === "0" || v === "false" || v === "no");
+  } catch (_) {
+    return true;
+  }
+}
+/** Pure: is this hint an aircraft airborne above the light band? */
+export function flightLightFor(hint, aglMin = FLIGHT_LIGHT_AGL) {
+  return !!hint && Number.isFinite(hint.agl) && hint.agl > aglMin;
+}
+let _flightLightFlag;
+/** Live: skip the on-foot-only streaming now (the flag and a live hint above the band). */
+export function flightLightActive(nowMs = _nowMs()) {
+  if (_flightLightFlag === undefined) _flightLightFlag = flightLightEnabled();
+  return _flightLightFlag && flightLightFor(getFlightHint(nowMs));
+}
+// for app/ modules that do not import scene3d (landblock_stream.js)
+try { globalThis.__hbFlightLightActive = () => flightLightActive(); } catch (_) { /* no global */ }
+/** The live hint, or null (none / stale). */
+export function getFlightHint(nowMs = _nowMs()) {
+  const h = _flightHint;
+  if (!h || nowMs - h.t > FLIGHT_HINT_STALE_MS) return null;
+  return h;
+}
+
+/**
+ * Pure: the integer landblock offset a hint asks for. Rounds the lead vector per axis (a diagonal flight
+ * shifts both axes), clamps each axis to `maxLb`.
+ */
+export function flightBiasLb(hint, { leadSec = FLIGHT_LEAD_SEC, maxLb = FLIGHT_BIAS_MAX_LB, minSpeed = FLIGHT_BIAS_MIN_SPEED } = {}) {
+  if (!hint || !(hint.speed >= minSpeed)) return { dx: 0, dy: 0 };
+  const cl = (v) => Math.max(-maxLb, Math.min(maxLb, Math.round(v)));
+  return { dx: cl((hint.vx * leadSec) / 192), dy: cl((hint.vy * leadSec) / 192) };
+}
+
+/**
+ * The residency centre for `playerLbKey` (a landblock key `0xXXYY0000`): the rig's landblock shifted by the
+ * flight bias, clamped to the map. With no live hint (or the flag off) it is `playerLbKey` itself.
+ */
+/**
+ * `?flightBias` — DEV opt-in (default OFF). The 1070 arm C (2026-11-01) measured the forward bias as NET NEGATIVE:
+ * the rounded lead oscillated between 1 and 2 landblocks as speed and heading wobbled, so the object window
+ * jumped back and forth (166 object flips in 10 s windows, 0 without), and neither lead time improved (objects
+ * p5 5.7 → 3.6 s, terrain p5 7.7 → 3.7 s) — the unbiased grid is already 6-14 s ahead at 400 km/h.
+ */
+let _biasFlag;
+export function flightBiasEnabled(search) {
+  if (search === undefined && _biasFlag !== undefined) return _biasFlag;
+  let on = false;
+  try {
+    const s = search !== undefined ? search : (globalThis.location?.search || "");
+    const v = (new URLSearchParams(s).get("flightBias") || "").trim().toLowerCase();
+    on = v === "on" || v === "1" || v === "true" || v === "yes";
+  } catch (_) { on = false; }
+  if (search === undefined) _biasFlag = on;
+  return on;
+}
+
+export function residencyCentreLbKey(playerLbKey, nowMs = _nowMs()) {
+  if (playerLbKey == null) return playerLbKey;
+  if (!flightBiasEnabled()) return playerLbKey;
+  const h = getFlightHint(nowMs);
+  if (!h) return playerLbKey;
+  const b = flightBiasLb(h);
+  if (b.dx === 0 && b.dy === 0) return playerLbKey;
+  const x = Math.max(0, Math.min(0xff, ((playerLbKey >>> 24) & 0xff) + b.dx));
+  const y = Math.max(0, Math.min(0xff, ((playerLbKey >>> 16) & 0xff) + b.dy));
+  return (((x & 0xff) << 24) | ((y & 0xff) << 16)) >>> 0;
+}

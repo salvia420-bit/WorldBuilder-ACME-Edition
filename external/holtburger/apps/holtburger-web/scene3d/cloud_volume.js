@@ -40,7 +40,11 @@ import { AtmosphereParameters } from '@takram/three-atmosphere';
 // weatherForState) lives in loop.js::tickWeatherState (clouds-independent).
 // This module only READS the storm flag (real DayGroup SkyObject signal).
 import { readWeatherFlags } from './weather_state.js';
-import { applyCloudLook, cloudLayersMatchLook } from './cloud_storm_look.js';
+import {
+  applyCloudLook, cloudLayersMatchLook, cloudHighBandEnabled, cloudHighBandWant,
+  cloudHighBandMarchEnabled, CLOUD_HIGH_BAND_MARCH, CLOUD_HIGH_BAND_SHAFTS_MUL, applyHighBandMarch, restoreHighBandMarch,
+  highBandMarchDrift,
+} from './cloud_storm_look.js';
 // 2026-10-07 — ?cloudNight (DEFAULT ON): light the clouds with the sky's
 // night-ramped elevation instead of the raw never-setting retail pitch, and
 // fade cloud shadows + light shafts with the direct sun. Rationale: cloud_night.js.
@@ -141,6 +145,9 @@ function _cloudShadowsPushFast(terrainMats, shadowTex, src, strength) {
 // weather→layer machinery this flag used to gate is deleted — see
 // cloud_storm_look.js. Cached; read once.
 let _cloudWeatherAutoCache;
+// ?cloudHighBand — see cloud_storm_look.js cloudHighBandEnabled (the pure half lives there, unit-tested).
+const _highBandStats = { prewarm: 'idle', switches: 0, on: false, baseRes: null };
+
 function readCloudWeatherAutoFlag() {
   if (_cloudWeatherAutoCache !== undefined) return _cloudWeatherAutoCache;
   try {
@@ -450,6 +457,7 @@ export class CloudVolume {
     this.effect.correctAltitude = false;
     this._bottomRadius = bottomRadius;
     this.material = this.effect.cloudsPass.currentMaterial;
+    _hbInstallTrueCameraHeight(this.effect, bottomRadius);
 
     // Temporal-resolve variance clipping, LOOSENED (2026-08-01, live 1070
     // A/B). takram's varianceGamma=2 clips the history buffer so hard
@@ -715,9 +723,12 @@ export class CloudVolume {
     //  - maxShadowLengthRayDistance × directFactor: light shafts fade with the
     //    direct sun and are 0 (march exits on step one) once it has set — the
     //    beer-shadow map they read is built along a below-horizon sun then.
+    // ?cloudHighBandMarch: above the deck the light shafts are off through the same uniform (× 0: the march exits on
+    // its first step) — one writer; the base is kept, so the way down restores it (cloud_storm_look.js).
+    const shaftMul = this._hbShaftsOff ? CLOUD_HIGH_BAND_SHAFTS_MUL : 1;
     if (cn.enabled) {
       this._scaleCloudUniform(u, 'skyLightScale', cn.skyLightMul);
-      this._scaleCloudUniform(u, 'maxShadowLengthRayDistance', cn.directFactor);
+      this._scaleCloudUniform(u, 'maxShadowLengthRayDistance', cn.directFactor * shaftMul);
       // Night floor: weight 0 while the sun is up → (0,0,0), i.e. golden
       // hour and day are untouched; smoothstep to full by −6 deg.
       if (this._nightAmbientPatched && u.cloudNightAmbient) {
@@ -731,6 +742,9 @@ export class CloudVolume {
         const w = cn.ambientWeight;
         u.cloudNightAmbient.value.set(b[0] * w, b[1] * w, b[2] * w);
       }
+    } else if (this._hbShaftsOff || Number.isFinite(this._cloudNightBase.maxShadowLengthRayDistance.written)) {
+      // ?cloudNight=off: the high band's shafts switch alone (and, once written, the restore on the way down)
+      this._scaleCloudUniform(u, 'maxShadowLengthRayDistance', shaftMul);
     }
 
     this._lastState = state;
@@ -764,19 +778,98 @@ export class CloudVolume {
     // the sky-tick rate), the look is written again (`driftReapplies`).
     if (readCloudWeatherAutoFlag()) {
       const storm = !!readWeatherFlags(this._wxFlags).is_storm;
-      const drift = storm === this._stormLookApplied && !cloudLayersMatchLook(this.effect, storm);
-      if (storm !== this._stormLookApplied || drift) {
+      // ?flightView high band (cloud_storm_look.js lookLayers): eased by the altitude policy, quantized to 1 %
+      const hb = Math.round(Math.max(0, Math.min(1, Number(globalThis.__hbCloudHighBand) || 0)) * 100) / 100;
+      const drift = storm === this._stormLookApplied && hb === (this._highBandApplied ?? 0)
+        && !cloudLayersMatchLook(this.effect, storm, hb);
+      if (storm !== this._stormLookApplied || hb !== (this._highBandApplied ?? 0) || drift) {
         const why = drift ? 'drift'
-          : this._stormLookApplied === undefined ? (this._lookInvalidated ?? 'boot') : 'edge';
+          : this._stormLookApplied === undefined ? (this._lookInvalidated ?? 'boot')
+          : storm !== this._stormLookApplied ? 'edge' : 'highBand';
+        this._highBandApplied = hb;
         this._applyLook(storm, why);
       }
     }
+
+    if (cloudHighBandEnabled()) this._tickHighBandMarch();
 
     // Cloud-shadow push to terrain moved to CloudOverlay.preRender so
     // it runs AFTER composer.render fills the cascade matrices for
     // THIS frame. Pushing here would copy last-frame's matrix into
     // the terrain uniform, producing a one-frame lag visible as
     // shadow drift on fast time-of-day changes.
+  }
+
+  /** ?cloudHighBand: switch the march to every-pixel half resolution above the deck (see cloudHighBandEnabled). */
+  _tickHighBandMarch() {
+    const eff = this.effect;
+    if (!eff || !eff.cloudsPass) return;
+    this._prewarmResolveVariant();
+    const deck = Math.max(0, Math.min(1, Number(globalThis.__hbCloudAboveDeck) || 0));
+    const want = cloudHighBandWant(deck, !!this._hbFull);
+    if (want !== !!this._hbFull) {
+      // the switch waits for the prewarmed variant (a synchronous link of the resolve program would stall a frame)
+      if (_highBandStats.prewarm !== 'done' && _highBandStats.prewarm !== 'failed' && _highBandStats.prewarm !== 'none') return;
+      if (want) {
+        this._hbBaseRes = eff.resolutionScale;
+        eff.temporalUpscale = false;
+        eff.resolutionScale = 0.5;
+        // ?cloudHighBandMarch: the cheaper march from above (uniforms only), the replaced values kept for the way down
+        this._hbBaseMarch = cloudHighBandMarchEnabled() ? applyHighBandMarch(eff.clouds) : null;
+        this._hbShaftsOff = !!this._hbBaseMarch;
+      } else {
+        eff.temporalUpscale = true;
+        eff.resolutionScale = Number.isFinite(this._hbBaseRes) ? this._hbBaseRes : 1;
+        restoreHighBandMarch(eff.clouds, this._hbBaseMarch);
+        this._hbBaseMarch = null;
+        this._hbShaftsOff = false;
+      }
+      this._hbFull = want;
+      _highBandStats.switches += 1;
+      _highBandStats.on = want;
+      _highBandStats.baseRes = this._hbBaseRes ?? null;
+      _highBandStats.march = this._hbBaseMarch ? { ...CLOUD_HIGH_BAND_MARCH, shaftsMul: CLOUD_HIGH_BAND_SHAFTS_MUL } : null;
+    } else if (this._hbFull) {
+      // a quality preset assigns resolutionScale 1 back (cloud_res_scale.js): keep the high-band scale
+      if (eff.resolutionScale !== 0.5) eff.resolutionScale = 0.5;
+      // ...and re-writes the march: what it wrote is the new base for the way down, the high band's march again
+      const drift = this._hbBaseMarch ? highBandMarchDrift(eff.clouds) : null;
+      if (drift) {
+        this._hbBaseMarch = { ...this._hbBaseMarch, ...drift };
+        applyHighBandMarch(eff.clouds);
+        _highBandStats.marchReapplies = (_highBandStats.marchReapplies || 0) + 1;
+      }
+    }
+  }
+
+  /** Link the resolve material's other TEMPORAL_UPSCALE variant off the frame, once (kept in its program cache). */
+  _prewarmResolveVariant() {
+    if (_highBandStats.prewarm !== 'idle') return;
+    const rm = this.effect?.cloudsPass?.resolveMaterial;
+    let r = null;
+    try { r = globalThis.window?.liveScene3d?.renderer ?? null; } catch (_) { r = null; }
+    if (!r) return; // liveScene3d arrives ~35 s after the world: try again next tick
+    if (!rm || typeof r.compileAsync !== 'function' || !('temporalUpscale' in rm)) {
+      _highBandStats.prewarm = 'none';
+      return;
+    }
+    _highBandStats.prewarm = 'pending';
+    const was = rm.temporalUpscale;
+    let p = null;
+    try {
+      rm.temporalUpscale = !was;
+      const mesh = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), rm);
+      mesh.frustumCulled = false;
+      p = r.compileAsync(mesh, new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1));
+    } catch (_) {
+      p = null;
+    } finally {
+      rm.temporalUpscale = was; // the live variant again before the next render
+    }
+    Promise.resolve(p).then(
+      () => { _highBandStats.prewarm = p ? 'done' : 'failed'; },
+      () => { _highBandStats.prewarm = 'failed'; },
+    );
   }
 
   /**
@@ -918,7 +1011,7 @@ export class CloudVolume {
   _applyLook(storm, why) {
     this._stormLookApplied = storm;
     this._lookInvalidated = null;
-    const ok = applyCloudLook(this.effect, storm);
+    const ok = applyCloudLook(this.effect, storm, this._highBandApplied ?? 0);
     this._lookApplies++;
     if (why === 'drift') this._lookDriftReapplies++;
     const t = typeof performance !== 'undefined' ? Math.round(performance.now()) : Date.now();
@@ -1087,3 +1180,48 @@ if (typeof window !== 'undefined') {
 export const _internals = {
   sunDirFromHeadingPitch,
 };
+
+
+// ?cloudTrueHeight (flight experience, 2026-11-01; DEFAULT ON, `=off` escape). takram's CloudsPass.update calls
+// copyCameraSettings — which sets `cameraHeight` from a WGS-84 ellipsoid — IMMEDIATELY before the march. In our
+// frame (world +Y = ECEF +y, an equatorial point) that height is ~AC z − 18,137 m, so the march has always taken
+// the "camera below the clouds" branch, and cloud_overlay.js's own cameraHeight patch (applied AFTER the render)
+// never reached it. Harmless while the camera really is below the deck; once it climbs into the deck (the storm
+// base is 600 m radial, ~420 m AC over Holtburg — a hilltop, a balloon, an aircraft) the below branch finds no
+// interval at all and EVERY cloud vanishes (1070 probe 2026-11-01: clouds at 240 m, none at 500 m and above).
+// Fix: after takram's copy, write the RADIAL altitude (the march's own geometry: |world→ECEF · cam| − bottomRadius
+// = y + (x² + z²)/2R) — but only from 150 m below the lowest layer upward, so on-foot frames keep takram's value
+// and today's look exactly. The negative height also kept takram's haze term at zero (approximateHaze returns 0
+// for cameraHeight · modulation < 0); hazeDensityScale is held at 0 while the true height is in use, so the haze
+// stays what it has always been.
+function _hbInstallTrueCameraHeight(effect, bottomRadius) {
+  try {
+    const v = (new URLSearchParams(globalThis.location?.search || "").get("cloudTrueHeight") || "").trim().toLowerCase();
+    if (v === "off" || v === "0" || v === "false" || v === "no") return;
+  } catch (_) { /* default on */ }
+  const pass = effect?.cloudsPass;
+  if (!pass || typeof pass.copyCameraSettings !== "function" || pass.__hbTrueHeight) return;
+  const orig = pass.copyCameraSettings;
+  const tmp = new THREE.Vector3();
+  const stats = { frames: 0, trueFrames: 0, lastHeight: null };
+  pass.__hbTrueHeight = stats;
+  if (typeof window !== "undefined") window.__cloudTrueHeight = () => ({ ...stats });
+  if (typeof window !== "undefined" && !window.__cloudHighBand) window.__cloudHighBand = () => ({ enabled: cloudHighBandEnabled(), ..._highBandStats });
+  pass.copyCameraSettings = function hbTrueCameraHeight(camera) {
+    orig.call(this, camera);
+    stats.frames += 1;
+    try {
+      const u = this.currentMaterial?.uniforms;
+      if (!u || !u.cameraHeight || !camera || typeof camera.getWorldPosition !== "function") return;
+      const p = camera.getWorldPosition(tmp);
+      const radial = Math.max(0, p.y + (p.x * p.x + p.z * p.z) / (2 * bottomRadius));
+      const minH = Number.isFinite(u.minHeight?.value) ? u.minHeight.value : 750;
+      if (radial >= minH - 150) {
+        u.cameraHeight.value = radial;
+        if (u.hazeDensityScale) u.hazeDensityScale.value = 0;
+        stats.trueFrames += 1;
+        stats.lastHeight = radial;
+      }
+    } catch (_) { /* never break the march */ }
+  };
+}

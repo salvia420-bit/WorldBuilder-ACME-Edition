@@ -65,7 +65,16 @@ import {
 // evictStaticAtlasForLb above, for the cross-LB per-material ?staticBatch
 // buckets (plain specifier everywhere → one module instance → shared state).
 import { evictStaticBatchXForLb, parkStaticBatchXForLb, unparkStaticBatchXForLb } from "./static_batch_x.js";
-import { afterObjectBake, afterUnpark as objRadiusAfterUnpark, getObjectRadiusStats, objectRadiusHides, objectBakeAllowed, objRadiusSetting } from "./object_radius.js";
+import { afterObjectBake, afterUnpark as objRadiusAfterUnpark, getObjectRadiusStats, objectRadiusHides, objectBakeAllowed, objRadiusSetting, objectRadiusWantsHidden, objRadiusCommitHide, setObjRadiusFadeDeferred, tickObjectRadius } from "./object_radius.js";
+// ?residencyLog (flight-experience Phase 0, default OFF): per-frame residency sampler.
+import { residencyLogEnabled, tickResidencyLog, installResidencyLogProbe, rlogSetGridModule, rlogSetPresenceProbe, rlogSetObjFadeActive } from "./residency_log.js";
+// ?lbFade (flight experience Phase 1, DEV opt-in): the per-landblock presence field.
+// ?worldTier / ?flightView (flight experience Phase 4): the world tier + the altitude-driven view policy.
+import { initWorldTerrain } from "./world_terrain.js";
+import { initFarForest, farForestEnabled } from "./far_forest.js";
+import { flightViewEnabled, tickAltitudePolicy, flightViewDiag, altitudeGridFreeze } from "./altitude_policy.js";
+const FLIGHT_VIEW_ON = flightViewEnabled();
+import { lbFadeOn, objFadeOn, installLbFadeChunks, tickLbPresence, flushLbPresence, getLbPresence, lbPresenceDiag, CH_OBJ, noteObjectsAttached, objectsAttached } from "./lb_presence.js";
 import { getStaticGeomCache } from "./static_geom_cache.js";
 // Frame-split probe (2026-08-06) — imported for its side effect only: it
 // installs `window.__frameSplitArm/Report/Census/Ballast` and nothing else.
@@ -88,7 +97,7 @@ import "./stall_probe.js";
 // extension three's `convert()` yields a null gl format and warns per texture,
 // so the whole path gates on this one probe (see bc7_textures.js header).
 import { initBc7, bc7RecordCacheBytes } from "./bc7_textures.js";
-import { buildEnvCellsForLandblock } from "./cells.js";
+import { buildEnvCellsForLandblock, objectWindowCentres, OBJ_WINDOW_RIG_ON } from "./cells.js";
 // Phase D.1 — synthetic ACE entity-spawn injector. The third
 // placement stream (after `fetch_landblock_objects` DAT-explicit and
 // `fetch_landblock_scenery` DAT-baked). See `scene3d/spawns.js`'s
@@ -166,7 +175,7 @@ import { RECOLOR_ON } from "./recolor_flag.js";
 // 2026-08-03 residency #9 — the five residency radii now derive from ONE base
 // policy constant; see scene3d/residency.js for the derivation + the URL-flag
 // grammars (unchanged) it preserves.
-import { PVS_RING_RADIUS, LRU_SIZING_RADIUS } from "./residency.js";
+import { PVS_RING_RADIUS, LRU_SIZING_RADIUS, flightResidencyEnabled, residencyCentreLbKey, flightLightActive } from "./residency.js";
 import { CameraSwitcher, createOrthoCamera } from "./camera.js";
 import { retailFovEnabled, clampGameFovDeg, applyRetailFov, RETAIL_GAME_FOV_DEFAULT_DEG } from "./camera_math.js";
 import { setupSceneLighting, attachSetupModelLights } from "./lighting.js";
@@ -1311,6 +1320,12 @@ export async function preInit3D(canvas) {
   // shaders' vFogDist (scene3d/radial_fog.js). Must precede every compile.
   // Under ?radialFog=off nothing is touched.
   installRadialFog(THREE);
+  // ?lbFade (flight experience Phase 1, DEV opt-in): the per-landblock presence
+  // fade (scene3d/lb_presence.js) — three's common / project_vertex /
+  // clipping_planes_fragment chunks gain an `#ifdef HB_LB_FADE` screen-door
+  // fade; only materials that `applyLbFade` gives the define compile it.
+  // Must precede every compile. Off: nothing is touched.
+  try { installLbFadeChunks(THREE); } catch (_) { /* never break boot */ }
   // ?reversedZ (2026-10-17; DEFAULT ON since 2026-10-19, `=off` escape):
   // reversed-Z depth instead of the logarithmic buffer, so opaque draws keep
   // early depth rejection (the log buffer makes every program write
@@ -3063,6 +3078,97 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
         // current-LB read; no-op unless ?lodRebake=on. Detects the LB change,
         // re-points the LOD reference, and drains one queued re-bake/frame.
         tickTerrainLodRebake(liveScene3dRef, currentLbKey);
+        // ?objWindowRig (DEFAULT ON, cells.js objectWindowCentres): tick the object
+        // window from the rig's landblock every frame — tickPvsLoadExpansion only
+        // reaches it while the wasm render set is non-empty, and in flight the
+        // render set stops following the aircraft. Cheap: returns at once unless
+        // the centre changed.
+        if (OBJ_WINDOW_RIG_ON) {
+          try {
+            const oc = objectWindowCentres(liveScene3dRef, null);
+            if (oc.size > 0) tickObjectRadius(liveScene3dRef, oc); // rig unknown (pre-spawn): leave the window alone
+          } catch (_) { /* fail-soft */ }
+        }
+        // ?flightView (flight experience Phases 3-4, DEV opt-in): the altitude
+        // policy — world tier, fog band, far plane, haze, cloud height — from
+        // the camera's height above ground (altitude_policy.js). On foot: inert.
+        if (FLIGHT_VIEW_ON) {
+          try {
+            const cam = liveScene3dRef.camera;
+            const shG = typeof window !== "undefined" ? window.__sessionHandle : null;
+            // the player's own position (AC metres: entities live under the AC-frame worldRoot) decides "high"
+            // without an aircraft (a bail-out fall); the parked debug free camera counts its own height
+            const pg = typeof window !== "undefined" ? window.getLocalPlayerGuid?.() : null;
+            const pr = pg != null ? liveScene3dRef.entityManager?.entityMap?.get(pg >>> 0)?.root?.position : null;
+            tickAltitudePolicy(liveScene3dRef, cam, {
+              nowMs: (typeof performance !== "undefined") ? performance.now() : Date.now(),
+              groundAt: shG && typeof shG.terrainHeightAt === "function" ? (x, y) => shG.terrainHeightAt(x, y) : null,
+              subject: pr ? { x: pr.x, y: pr.y, z: pr.z } : null,
+              freeCam: typeof window !== "undefined" && !!window.__cam?.parked,
+            });
+            if (typeof window !== "undefined" && !window.__flightView) window.__flightView = () => flightViewDiag();
+          } catch (e) {
+            if (!liveScene3dRef._flightViewWarned) {
+              liveScene3dRef._flightViewWarned = true;
+              // eslint-disable-next-line no-console
+              console.warn("[flightView] tick threw:", e);
+            }
+          }
+        }
+        // ?lbFade (flight experience Phase 1, DEV opt-in): the per-landblock
+        // presence field (scene3d/lb_presence.js). Targets come from the same
+        // authoritative state the residency log samples; values fade toward them
+        // and the texture every faded material + the far ring read is flushed
+        // once per frame. The object window's hides are deferred until their
+        // fade-out completes (object_radius.js objRadiusCommitHide).
+        if (lbFadeOn()) {
+          try {
+            const s3 = liveScene3dRef;
+            if (!s3._lbPresenceWired) {
+              s3._lbPresenceWired = true;
+              // the deferred hide means something when object materials fade (?objFade) OR when the far-forest
+              // impostors fade in under the window edge (they need the near trees to stay until they are in)
+              const ffOn = farForestEnabled();
+              setObjRadiusFadeDeferred(objFadeOn() || ffOn);
+              rlogSetObjFadeActive(objFadeOn() || ffOn);
+              getLbPresence().onFadeOutDone((k, ch) => { if (ch === CH_OBJ) objRadiusCommitHide(s3, k); });
+              rlogSetPresenceProbe((k) => getLbPresence().value(k, CH_OBJ));
+              if (typeof window !== "undefined") window.__lbPresence = () => lbPresenceDiag();
+            }
+            const lruP = s3.landblockLru;
+            const parkedP = (k) => { try { return !!lruP?.isParked?.(k); } catch (_) { return false; } };
+            const nowP = (typeof performance !== "undefined") ? performance.now() : Date.now();
+            tickLbPresence({
+              centreLb: currentLbKey,
+              nowMs: nowP,
+              objWanted: (k) => objectsAttached(s3, k, nowP) && !parkedP(k) && !objectRadiusWantsHidden(s3, k),
+              terDrawn: (k) => (s3.terrainBakedLbs?.has?.(k) || s3._lodRebakeInFlight?.has?.(k)) && !parkedP(k),
+            });
+            flushLbPresence();
+          } catch (e) {
+            if (!liveScene3dRef._lbPresenceWarned) {
+              liveScene3dRef._lbPresenceWarned = true;
+              // eslint-disable-next-line no-console
+              console.warn("[lbFade] presence tick threw (fades idle this frame):", e);
+            }
+          }
+        }
+        // ?residencyLog (default OFF): sample every landblock's drawn state
+        // around the aircraft / player and log the changes (residency_log.js).
+        if (residencyLogEnabled()) {
+          try {
+            installResidencyLogProbe();
+            const g = typeof window !== "undefined" ? window.getLocalPlayerGuid?.() : null;
+            const rp = g != null ? liveScene3dRef.entityManager?.entityMap?.get(g >>> 0)?.root?.position : null;
+            const sh = typeof window !== "undefined" ? window.__sessionHandle : null;
+            tickResidencyLog(liveScene3dRef, {
+              centreLb: currentLbKey,
+              pose: rp ? { x: rp.x, y: rp.y, z: rp.z } : null,
+              groundZ: sh && typeof sh.terrainHeightAt === "function" ? (x, y) => sh.terrainHeightAt(x, y) : null,
+              objRadiusLb: objRadiusSetting() ?? (liveScene3dRef.pvsRingRadius ?? 5),
+            });
+          } catch (_) { /* instrumentation never breaks a frame */ }
+        }
         // Bug 5 (2026-10-07) — 1 Hz terrain self-heal (retail LScape rescans
         // every grid slot): re-request any landblock in the draw ring that is
         // parked, unbaked-and-idle, or marked baked with no mesh.
@@ -4357,6 +4463,9 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
       return this._setupLightsRescanChain;
     },
     loadEnvCellsForLandblock(landblockId) {
+      // ?flightLight (residency.js): no building interiors for an airborne aircraft — the next position update on
+      // the ground loads them (world_stream calls this on every update; the build is idempotent per landblock)
+      if (flightLightActive()) return Promise.resolve({ skipped: "flightLight" });
       const p = buildEnvCellsForLandblock(this, landblockId, this.wasmExports);
       const lbKeyForLru = (landblockId & 0xffff_0000) >>> 0;
       const self = this;
@@ -4778,6 +4887,9 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
         // ?objRadius (perf T7, default off ⇒ no-op): a bake landing outside
         // the near radius is hidden on arrival.
         afterObjectBake(self, lbKeyForLru);
+        // flight experience (lb_presence.js objectsAttached): `buildingsBakedLbs`
+        // is set BEFORE the fetch + attach; this is the moment the nodes exist.
+        noteObjectsAttached(self, lbKeyForLru, "b");
         // GAP 2 (2026-05-29) — light newly-streamed building geometry.
         self._rescanSetupLights();
         if (self.wireframeMode && self.materialCache && self.buildingsGroup) {
@@ -4838,6 +4950,9 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
         } catch (_) {}
         // ?objRadius (perf T7, default off ⇒ no-op): see the buildings loader.
         afterObjectBake(self, lbKeyForLru);
+        // flight experience: statics (= all procedural scenery, the trees) attached now
+        // (`staticsBakedLbs` is set before the fetch + attach, statics.js).
+        noteObjectsAttached(self, lbKeyForLru, "s");
         // GAP 2 (2026-05-29) — light newly-streamed static geometry.
         self._rescanSetupLights();
         if (self.wireframeMode && self.materialCache && self.staticsGroup) {
@@ -4984,6 +5099,22 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
   // reports through it too); allocates nothing unless `?farRing=on`.
   try {
     initFarTerrain(liveScene3d, { parent: worldRoot, renderer });
+    // ?worldTier (flight experience Phase 4, DEV opt-in; ?flightView turns it on when flying): the whole map +
+    // ocean as a CDLOD tier under the far ring. No-op (nothing allocated or fetched) when off.
+    try {
+      if (flightViewEnabled()) initWorldTerrain(liveScene3d, { parent: worldRoot });
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn("[world_terrain] init failed (the tier stays off):", e);
+    }
+    // ?farForest (flight experience Phase 2; implied by ?flightView): retail trees past the object window as
+    // impostors. Nothing is fetched or baked until the flight view asks for it.
+    try {
+      if (farForestEnabled()) initFarForest(liveScene3d, { parent: worldRoot, renderer });
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn("[far_forest] init failed (the tier stays off):", e);
+    }
   } catch (e) {
     // eslint-disable-next-line no-console
     console.warn("[far_terrain] initFarTerrain threw (far ring disabled):", e);
@@ -7342,6 +7473,7 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
             import("./residency_grid.js"),
             import("./pack_fetch_controller.js"),
           ]);
+          rlogSetGridModule(rg); // ?residencyLog: tile states (no-op when the log is off)
           const now = () => {
             try {
               if (typeof performance !== "undefined" && performance.now) return performance.now();
@@ -7419,8 +7551,11 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
               }
             : null; // legacy-lane fetch arm (no world_index): grid still owns residency
           // The player's landblock as the grid last saw it (sgCtl.tick sets it
-          // before every update), for the object gate below.
+          // before every update), for the object gate below. Under
+          // ?flightResidency this is the flight-biased residency centre.
           let gridPlayerLbKey = null;
+          let gridFrozenLbKey = null; // ?flightView: the grid's centre while frozen high up (altitude_policy.js)
+          const flightResidencyOn = flightResidencyEnabled();
           const feeds = {
             fireLb: (lbX, lbY) => {
               // The tickPvsLoadExpansion fireOne population, event-driven
@@ -7622,12 +7757,24 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
                   grid.anchor = null; // re-seed at the exit position
                 }
                 if (currentLbKey != null) {
-                  const lbx = (currentLbKey >>> 24) & 0xff;
-                  const lby = (currentLbKey >>> 16) & 0xff;
-                  const lbOnly = ((lbx << 24) | (lby << 16)) >>> 0;
+                  const plbx = (currentLbKey >>> 24) & 0xff;
+                  const plby = (currentLbKey >>> 16) & 0xff;
+                  const playerLbOnly = ((plbx << 24) | (plby << 16)) >>> 0;
+                  // ?flightResidency (flight experience Phase 1): while flying, the grid AND the object
+                  // window centre lead the aircraft along its velocity (residency.js residencyCentreLbKey);
+                  // the rig's own landblock stays the player landblock for everything else.
+                  let lbOnly = flightResidencyOn ? residencyCentreLbKey(playerLbOnly) : playerLbOnly;
+                  // ?flightView: high above the ground the grid stays where it is (altitude_policy.js
+                  // altitudeGridFreeze — the world tier draws the ground below; no tile re-bakes at 5 km)
+                  if (FLIGHT_VIEW_ON && altitudeGridFreeze()) {
+                    if (gridFrozenLbKey == null) gridFrozenLbKey = gridPlayerLbKey ?? lbOnly;
+                    lbOnly = gridFrozenLbKey;
+                  } else gridFrozenLbKey = null;
+                  const lbx = (lbOnly >>> 24) & 0xff;
+                  const lby = (lbOnly >>> 16) & 0xff;
                   const crossed = gridPlayerLbKey !== null && gridPlayerLbKey !== lbOnly;
                   gridPlayerLbKey = lbOnly;
-                  if (objRefire) objRefire.notePlayer(lbOnly, now());
+                  if (objRefire) objRefire.notePlayer(playerLbOnly, now());
                   const res = grid.update(lbx, lby);
                   adapter.onUpdate(res);
                   // A crossing moves the ?objRadius window even when no tile

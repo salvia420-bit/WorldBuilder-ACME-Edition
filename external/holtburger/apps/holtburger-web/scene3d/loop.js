@@ -2633,6 +2633,13 @@ function _tickDistanceFogDay(scene3d) {
       const farPin = farFogFarPin();
       if (Number.isFinite(nearPin)) near = nearPin;
       if (Number.isFinite(farPin)) far = farPin;
+      // ?flightView (altitude_policy.js): while flying with the world tier on screen the band opens toward the
+      // altitude's view distance, blended by the policy weight (0 on foot: untouched). Outdoors only.
+      const fov = scene3d._flightFogOverride;
+      if (fov && fov.w > 0 && !skyBlocked && Number.isFinite(fov.near) && Number.isFinite(fov.far)) {
+        near = near + (Math.max(near, fov.near) - near) * fov.w;
+        far = far + (Math.max(far, fov.far) - far) * fov.w;
+      }
       if (far > near) {
         fog.near = near;
         fog.far = far;

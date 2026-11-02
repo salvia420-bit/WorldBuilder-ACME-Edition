@@ -23,7 +23,8 @@ export const TAKEOFF_THROTTLE = 0.25;
 export const MIN_TURN_SPEED = 10.0;
 export const LANDING_SPEED_SLACK = 0.5;
 export const WORLD_MIN = 0.5;
-export const WORLD_MAX = 256.0 * 192.0 - 0.5;
+// 255 landblocks a side (0x00-0xFE): landblock 0xFF does not exist (same constant as the server's FlightModel.WorldMax)
+export const WORLD_MAX = 255.0 * 192.0 - 0.5;
 const TWO_PI = 2.0 * Math.PI;
 
 export const BUTTON = Object.freeze({ BOOST: 0x01, FIRE: 0x02, LAND: 0x04 });

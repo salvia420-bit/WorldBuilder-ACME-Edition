@@ -1,0 +1,13 @@
+{
+ "name": "fall-pose-bail-300m",
+ "timeoutMin": 15,
+ "sessions": [{"role": "pilot", "account": "agentp10", "flags": "vehicles=on"}],
+ "steps": [
+  {"label": "pilot to Holtburg", "page": "pilot", "teleloc": "0xA9B40019 84 7.1 94", "afterTeleportMs": 12000},
+  {"label": "clean slate", "page": "pilot", "chat": ["@vehicle despawn all"], "sleepMs": 1000},
+  {"label": "spawn", "page": "pilot", "eval": "vehicle-spawn.eval.js"},
+  {"label": "bail from 300 m: free fall, canopy, touchdown pose", "page": "pilot", "eval": "vehicle-fall-pose.eval.js", "climbAgl": 300, "maxSec": 240, "holdSec": 2.5},
+  {"label": "spawn again", "page": "pilot", "eval": "vehicle-spawn.eval.js"},
+  {"label": "bail from 300 m, chute by X after 4 s (a long canopy: the loop re-play)", "page": "pilot", "eval": "vehicle-fall-pose.eval.js", "climbAgl": 300, "maxSec": 240, "manualChute": true, "chuteAfterSec": 4, "holdSec": 2.5}
+ ]
+}

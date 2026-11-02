@@ -954,8 +954,9 @@ export class CloudOverlay {
       const camWorldY = cam?.position?.y ?? 0;
       const matUniforms = this.volume.effect.cloudsPass.currentMaterial?.uniforms;
       if (matUniforms?.cameraHeight) {
-        matUniforms.cameraHeight.value = Math.max(0, camWorldY);
+        matUniforms.cameraHeight.value = _hbCloudCameraHeight(cam, camWorldY);
       }
+      _hbPinCloudShadowFar(this.volume?.effect, cam);
 
       // Cloud-shadow push to terrain materials. Moved here from
       // CloudVolume.tick so it runs AFTER composer.render has filled
@@ -1013,8 +1014,9 @@ export class CloudOverlay {
       try {
         const matUniforms = this.volume?.effect?.cloudsPass?.currentMaterial?.uniforms;
         if (matUniforms?.cameraHeight) {
-          matUniforms.cameraHeight.value = Math.max(0, this._mainPassCam?.position?.y ?? 0);
+          matUniforms.cameraHeight.value = _hbCloudCameraHeight(this._mainPassCam, this._mainPassCam?.position?.y ?? 0);
         }
+        _hbPinCloudShadowFar(this.volume?.effect, this._mainPassCam);
       } catch (_) {}
       return; // AerialPerspective already composited the clouds.
     }
@@ -1338,4 +1340,31 @@ export function cloudStateSnapshot(overlay, renderer, opts = {}) {
     } : null;
   }
   return out;
+}
+
+
+// ?flightView (altitude_policy.js, flight experience Phase 4). The cloud march runs on a sphere whose pole sits
+// under AC (0, 0), so a camera's height in that frame is its RADIAL altitude, AC z + d²/2R — 177 m more than AC
+// z over Holtburg, 380 m at the NE corner. The cameraHeight patch fed AC z, so a camera climbing through a layer
+// took the below / inside / above branch at the wrong height. Blended by the flight-view weight
+// (globalThis.__hbCloudRadialW, 0 on foot): the on-foot value is unchanged.
+function _hbCloudCameraHeight(cam, camWorldY) {
+  const base = Math.max(0, camWorldY);
+  const w = globalThis.__hbCloudRadialW;
+  if (!(w > 0) || !cam?.position) return base;
+  const x = cam.position.x, z = cam.position.z;
+  const radial = Math.max(0, camWorldY + (x * x + z * z) / (2 * 6360000));
+  return base + (radial - base) * Math.min(1, w);
+}
+
+// The cloud-shadow cascades follow camera.far (takram CascadedShadowMaps, maxFar null): once the flight view
+// raises the far plane to tens of km, cascade 0 — the only one pushed to the terrain — would stretch from ~0.8 km
+// to ~10-40 km and the near cloud shadows would blur. Pin it to today's 5 km layout (identical while far = 5 km).
+function _hbPinCloudShadowFar(effect, cam) {
+  try {
+    const sm = effect?.shadowMaps;
+    if (!sm || !cam) return;
+    if (cam.far > 5000) { if (sm.maxFar !== 5000) sm.maxFar = 5000; }
+    else if (sm.maxFar === 5000) sm.maxFar = null;
+  } catch (_) { /* vendor shape changed: leave it */ }
 }

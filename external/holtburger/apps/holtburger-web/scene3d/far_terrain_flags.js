@@ -352,10 +352,16 @@ export function farFogFarPin() {
 }
 
 /**
- * Depth push applied to the far ring, in log-depth units, so the opaque near
- * ring deterministically wins the ~10 m near/far handoff overlap. Applied in
- * the shader because the far shader writes gl_FragDepth, which overrides
- * material polygonOffset. `?farDepthBias=0` for an A/B of the raw seam.
+ * Depth push applied to the far ring, in log-depth units, meant to let the
+ * opaque near ring win the ~10 m near/far handoff overlap. Applied in the
+ * shader because the far shader writes gl_FragDepth, which overrides material
+ * polygonOffset. `?farDepthBias=0` for an A/B of the raw seam.
+ * ⚠ It does NOT win against the near ring's retail 1 cm lowering
+ * (terrain.js ZFIGHT_TERRAIN_ADJUST_M): the push is relative, 1e-6 ≈ 8.5e-6
+ * of the view distance, and a 1 cm vertical gap seen from H metres up is
+ * 1 cm × distance / H of depth — the near ring wins only above H ≈ 1.2 km.
+ * So the far ring wins its overlap band; the band therefore exists only
+ * where the near ring ends (lb_presence.js `?lbBand`).
  */
 export function farDepthBias() {
   return _num("farDepthBias", 1e-6, 0, 1e-3);

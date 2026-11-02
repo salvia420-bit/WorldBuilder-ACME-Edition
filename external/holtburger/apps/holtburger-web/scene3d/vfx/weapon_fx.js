@@ -130,6 +130,14 @@ let _forced = auraForElement(String(_strParam("weaponAuraForce") || "").toLowerC
 const _cal = { value: 0.2 };
 /** Beyond this camera distance a pole stops simulating (its bend relaxes to 0). */
 const FLEX_RANGE_M = 45;
+/**
+ * Beyond this camera distance a weapon is a few pixels: its glow level, shine and flex cannot be seen, so the
+ * per-frame tick runs only every FAR_TICK_EVERY frames (materials still converge; a weapon coming into range is
+ * caught up on its next frame). Flight experience 2026-11-01: from an aircraft the client holds hundreds of
+ * wielded weapons below, and the per-weapon tick was 12 % of the main thread at 5 km (1070 arm G profile).
+ */
+const FAR_TICK_RANGE_M = 300;
+const FAR_TICK_EVERY = 30;
 
 // ---------------------------------------------------------------------------
 // Decision at spawn
@@ -633,6 +641,15 @@ function _startShine(st, tVfx, dur, strength) {
 function _tickOne(st, scene3d, now, dt, tVfx, camPos) {
   const inst = st.inst;
   if (st.disposed || !inst || !inst.root) { _live.delete(st); return; }
+  if (camPos) {
+    // matrixWorld may lag a frame for a hidden rig: a coarse range test is all this needs
+    const e = inst.root.matrixWorld.elements;
+    const dx = e[12] - camPos.x, dy = e[13] - camPos.y, dz = e[14] - camPos.z;
+    if (dx * dx + dy * dy + dz * dz > FAR_TICK_RANGE_M * FAR_TICK_RANGE_M) {
+      st.farTicks = (st.farTicks || 0) + 1;
+      if (st.farTicks % FAR_TICK_EVERY !== 0) return;
+    } else st.farTicks = 0;
+  }
   _syncMaterials(st);
   const part = Array.isArray(inst.parts) ? inst.parts[st.partIndex] : null;
   const held = inst._attachedParentGuid != null && !!inst.root.parent;

@@ -101,6 +101,43 @@ import { attachStaticDefaultScriptsWorld, tickStaticScriptRadius } from "./stati
 // Task #9 — interior animated scenery (banners/flags via default_animation 0x03).
 import { attachAnimatedScenery, animSceneryEnabled } from "./animated_scenery.js";
 import { objectBakeAllowed, tickObjectRadius } from "./object_radius.js";
+// ?flightResidency (flight experience Phase 1): the object window follows the flight-biased centre.
+import { flightResidencyEnabled, residencyCentreLbKey, flightLightActive } from "./residency.js";
+const FLIGHT_RESIDENCY_ON = flightResidencyEnabled();
+// ?objWindowRig (flight experience, 2026-11-01; DEFAULT ON, `=off` escape). The object window (?objRadius) and
+// the static-script radius were centred on the wasm RENDER SET. In flight that set stops following the aircraft
+// (the 1070 tour A residency log: 603 of 641 object-window hides fired at Chebyshev 4 from the aircraft — inside
+// the window — and 690 of 777 statics attaches landed at d = 4, then were hidden on arrival against the stale
+// centre: the owner's "trees only around Holtburg"). The window is now centred on the RIG's landblock (the same
+// centre the slot grid and its object gate use; outdoors on foot it is the render set's landblock), flight-biased
+// under ?flightResidency, and ticked every frame from index.js so an empty render set cannot freeze it.
+export const OBJ_WINDOW_RIG_ON = (() => {
+  try {
+    const v = (new URLSearchParams(globalThis.location?.search || "").get("objWindowRig") || "").trim().toLowerCase();
+    return !(v === "off" || v === "0" || v === "false" || v === "no");
+  } catch (_) {
+    return true;
+  }
+})();
+/**
+ * The object window's centre set: the rig's landblock (flight-biased), or the render set's landblocks when the
+ * rig is unknown / ?objWindowRig=off. Reuses one scratch Set per scene.
+ */
+export function objectWindowCentres(scene3d, seen) {
+  const out = scene3d._objWindowSeenScratch || (scene3d._objWindowSeenScratch = new Set());
+  out.clear();
+  let rig = null;
+  if (OBJ_WINDOW_RIG_ON) {
+    try { rig = scene3d.landblockLru?.getCurrentLbId?.(); } catch (_) { rig = null; }
+  }
+  if (typeof rig === "number" && rig !== 0) {
+    const k = ((rig >>> 16) << 16) >>> 0;
+    out.add(FLIGHT_RESIDENCY_ON ? residencyCentreLbKey(k) : k);
+    return out;
+  }
+  if (seen) for (const k of seen) out.add(FLIGHT_RESIDENCY_ON ? residencyCentreLbKey(k) : k);
+  return out;
+}
 import {
   VIEWER_CELL_ON,
   VIEWER_SPHERE_RADIUS_M,
@@ -776,9 +813,14 @@ function heightSamplerFor(sessionHandle) {
   }
   if (_heightSamplerHandle === sessionHandle) return _heightSampler;
   _heightSamplerHandle = sessionHandle;
+  // The method is resolved ONCE: `window.__sessionHandle` is the rejection-feedback Proxy, and a property read per
+  // sample went through its `get` trap — the punch's terrain LOS rays read 12-48 samples per ray, several rays per
+  // aperture, every frame (1070 uncapped profile: the trap alone was 1.7 % of the main thread). `.bind` keeps the
+  // raw wasm object working too (its methods need `this`); the Proxy already returns a bound wrapper.
+  const heightAt = sessionHandle.terrainHeightAt.bind(sessionHandle);
   _heightSampler = (x, y) => {
     try {
-      return sessionHandle.terrainHeightAt(x, y);
+      return heightAt(x, y);
     } catch (_) {
       return null;
     }
@@ -3969,6 +4011,14 @@ export function tickPortalPunch(scene3d, sessionHandle) {
   // reader) is not computed.
   const wantRect = pass.inScene !== true;
 
+  // ?flightLight (residency.js): an aircraft airborne above 40 m sees into no doorway; the per-frame terrain LOS
+  // rays over every aperture were ~6 % of the main thread in flight (1070 uncapped profile, Holtburg's interiors
+  // still resident after take-off). Same disarm as indoors: interiors draw occluded, the split stops.
+  if (flightLightActive()) {
+    pass.setApertures(null);
+    _punchDiag(scene3d, "airborne(flightLight)");
+    return;
+  }
   // Outdoor only. Indoor / no camera → clear apertures so the split disarms and
   // the shared world pass draws interiors normally again.
   if (
@@ -4673,11 +4723,15 @@ export function tickPvsLoadExpansion(scene3d, sessionHandle) {
     seen.add(lbKey);
   }
   // ?objRadius (perf T7, default off ⇒ no-op): hide/show object-baked LBs
-  // against the near radius on each landblock crossing.
-  tickObjectRadius(scene3d, seen);
+  // against the near radius on each landblock crossing. ?flightResidency
+  // (flight experience Phase 1): while flying the window is centred on the
+  // flight-biased residency centre (the same one the slot grid uses).
+  const objCentres = objectWindowCentres(scene3d, seen);
+  tickObjectRadius(scene3d, objCentres);
   // ?staticScriptRadius (default 2): static default_script emitters only
   // within the near radius; torn down / rebuilt on each landblock crossing.
-  tickStaticScriptRadius(scene3d, seen);
+  // (?objWindowRig: the same rig-centred set, so emitters follow an aircraft.)
+  tickStaticScriptRadius(scene3d, OBJ_WINDOW_RIG_ON ? objCentres : seen);
   // 2026-05-28 perf: expand the load ring by one LB so prefetch leads
   // motion. Drive-2 captured a 3.3s spike at +101.9s when the player
   // approached the edge of the original PVS-driven ring and 6 new LBs
@@ -4934,7 +4988,7 @@ export function tickPvsLoadExpansion(scene3d, sessionHandle) {
     const lbX = (lbKey >>> 24) & 0xff;
     const lbY = (lbKey >>> 16) & 0xff;
     // ?objRadius (perf T7): outside the near radius the ring is terrain-only.
-    const objOk = objectBakeAllowed(seen, lbKey);
+    const objOk = objectBakeAllowed(objCentres, lbKey);
     if (loadTerrain) {
       try {
         loadTerrain(lbX, lbY);
@@ -4994,7 +5048,7 @@ export function tickPvsLoadExpansion(scene3d, sessionHandle) {
     try { if (lru?.isParked?.(lbKey)) return true; } catch (_) { /* fall through */ }
     // ?objRadius (perf T7): objects outside the near radius are never "new" —
     // fireOne will not start them, so counting them would hold the sweep open.
-    const objOk = objectBakeAllowed(seen, lbKey);
+    const objOk = objectBakeAllowed(objCentres, lbKey);
     if (loadTerrain && tBaked && !tBaked.has(lbKey)) return true;
     if (objOk && loadStatics && sBaked && !sBaked.has(lbKey)) return true;
     if (objOk && loadBuildings && bBaked && !bBaked.has(lbKey)) return true;

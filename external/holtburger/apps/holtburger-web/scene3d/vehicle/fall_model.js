@@ -8,7 +8,7 @@ import { moveToward } from "./flight_model.js";
 export const FALL = Object.freeze({
   GRAVITY: 9.8, TERMINAL: 50.0, HORIZONTAL_TAU: 4.0, CHUTE_AGL: 150.0, CHUTE_SINK: 5.0, CHUTE_GLIDE: 8.0, CHUTE_DECEL: 15.0,
 });
-const WORLD_MIN = 0.5, WORLD_MAX = 256.0 * 192.0 - 0.5;
+const WORLD_MIN = 0.5, WORLD_MAX = 255.0 * 192.0 - 0.5; // landblock 0xFF does not exist (= ACE FlightModel.WorldMax)
 const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
 
 /** One step IN PLACE: f = {x, y, z, vx, vy, vz, heading, chute}. */

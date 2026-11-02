@@ -10,6 +10,8 @@
 //   * while seated: the input lock (controls.js), 30 Hz VehicleInput with two redundant frames, the local body slaved
 //     to the predicted seat (SessionHandle.setVehicleSeat), the chase / cockpit camera through film's camera owner,
 //     the OSD, and the client streaming load point fed ahead of the aircraft (velocity × the profile's lead seconds).
+//   * after a bail: the fall twin (fall_model.js) under the fall camera, the canopy (chute.js) and the body's pose —
+//     retail Falling, the canopy grip, the parachute pack (fall_pose.js, `?vehicleFallAnim`) — for observed fallers too.
 // `liveScene3d.vehicles.afterTick(ts, dt)` runs every frame after tickPerFrame (scene3d/index.js), so the transforms
 // written here are the last word before render.
 //
@@ -23,9 +25,13 @@ import { createTracers } from "./weapons.js";
 import { stepFall } from "./fall_model.js";
 import { boardAnimEnabled, headingOfQuat, hopDuration, hopHeading, hopPoint, HOP } from "./board_hop.js";
 import { chuteEnabled, createChutes } from "./chute.js";
+import { createFallPose, fallAnimEnabled, fallTimeoutSec } from "./fall_pose.js";
+import { portalSpaceOwnsFrame } from "../portal_space.js";
 import { wireframeFlagOn } from "../wireframe_flag.js";
 import { createCameraOwner } from "../film/runtime/camera_owner.js";
 import { createDroneAudio } from "../drone/audio.js";
+import { rlogEvent, RLOG } from "../residency_log.js";
+import { flightResidencyEnabled, setFlightHint, clearFlightHint } from "../residency.js";
 
 export const CAP_OBSERVE = 0x1;
 export const CAP_PILOT = 0x2;
@@ -42,6 +48,9 @@ export function vehicleAudioEnabled(search) {
   try { return new URLSearchParams(search || "").get("vehicleAudio") !== "off"; } catch (_) { return true; }
 }
 const NEUTRAL_INPUT = Object.freeze({ throttle: 0, pitch: 0, roll: 0, yaw: 0, boost: false, fire: false, land: false });
+// ?flightResidency (flight experience Phase 1, residency.js): publish the aircraft state as the residency centre
+// instead of feeding the world streamer a second load point.
+const FLIGHT_RESIDENCY = flightResidencyEnabled();
 export const REFUSAL = Object.freeze(["", "too far", "seat taken", "not parked", "indoors", "leave combat mode first", "no capability", "busy", "vehicles are disabled on this server"]);
 
 function nowSec() {
@@ -81,8 +90,18 @@ export function installVehicles(deps = {}) {
   const osd = createVehicleOsd({ document: win.document });
   const tracers = createTracers({ liveScene3d: live, THREE });
   const search = win.location?.search ?? "";
+  const wireframe = (() => { try { return wireframeFlagOn(search); } catch (_) { return false; } })();
   // parachute canopies (chute.js) over every body whose Chute event arrived; `?vehicleChute=off` draws none
-  const chutes = chuteEnabled(search) ? createChutes({ liveScene3d: live, THREE, wireframe: (() => { try { return wireframeFlagOn(search); } catch (_) { return false; } })() }) : null;
+  const chutes = chuteEnabled(search) ? createChutes({ liveScene3d: live, THREE, wireframe }) : null;
+  // the falling body's pose (fall_pose.js): retail Falling in free fall, the canopy grip under the chute, the parachute
+  // pack — the local faller and observed players; `?vehicleFallAnim=off` keeps the old pose
+  const fallPose = fallAnimEnabled(search)
+    ? createFallPose({
+      liveScene3d: live, THREE, wireframe, ground,
+      onChute: (g) => chutes?.open(g), // a chute inferred from an observed body's sink rate (its event never came)
+      onLanded: (g) => chutes?.close(g), // an observed body on the ground without a Touchdown event
+    })
+    : null;
   let pilot = null; // active piloting session
   let fall = null; // bail-out freefall of the local player (server-owned body, predicted here)
   let pendingBoard = null;
@@ -120,6 +139,7 @@ export function installVehicles(deps = {}) {
       }
       case "seat": {
         const v = vehicleOf(m.vehicle);
+        if (m.state === 1 && (m.occupant >>> 0)) fallPose?.end(m.occupant, "seated");
         if (m.state === 1) v.seats[m.seat] = m.occupant >>> 0;
         else if (m.state === 0) v.seats[m.seat] = 0;
         if (m.state === 2) {
@@ -180,11 +200,18 @@ export function installVehicles(deps = {}) {
           Object.assign(fall, { x, y, z, vz: m.value, chute: true });
         } else if (m.kind === 7 && mine) { // touchdown (exit placement / landing): back on foot
           if (pilot) stopPiloting("touchdown");
-          if (fall) stopFall("touchdown");
+          if (fall) stopFall(m.cell ? "touchdown" : "teleport"); // cell 0: the server cancelled the fall (a teleport)
         }
         // canopies: open over any body whose chute opened (ours or an observed player's), fold at its touchdown
         if (m.kind === 6 && m.subject) chutes?.open(m.subject);
         else if (m.kind === 7 && m.subject) chutes?.close(m.subject);
+        // the fall pose (ours from startFall / stopFall): observed bodies fall at their Bail, every canopy pose starts at
+        // its Chute, and any Touchdown hands the body back (idempotent)
+        if (fallPose && m.subject) {
+          if (m.kind === 5 && !mine) fallPose.begin(m.subject);
+          else if (m.kind === 6 && (!mine || fall)) fallPose.chute(m.subject, { local: mine });
+          else if (m.kind === 7) fallPose.end(m.subject, m.cell ? "touchdown" : "teleport");
+        }
         break;
       }
       default:
@@ -296,7 +323,7 @@ export function installVehicles(deps = {}) {
   function stopPiloting(why) {
     if (!pilot) return;
     const p = pilot;
-    pilot = null;
+    pilot = null; if (FLIGHT_RESIDENCY) clearFlightHint();
     try { p.unsub?.(); } catch (_) {}
     try { p.controls.dispose(); } catch (_) {}
     try { p.camera?.release(); p.camera?.dispose(); } catch (_) {}
@@ -327,6 +354,11 @@ export function installVehicles(deps = {}) {
       unfadeAvatar();
     } catch (_) { camera = null; }
     fall = { x, y, z, vx: vel[0], vy: vel[1], vz: vel[2], heading: m.value, chute: false, acc: 0, controls, camera, camHeading: m.value, vehicle: m.vehicle >>> 0, startedAt: nowSec(), lastWall: undefined };
+    // the last-resort bound (the real ends: Touchdown, a teleport, dispose): the slowest descent from here — a chute
+    // opened at once sinks 5 m/s, so ~20 min from a 5 km bail (fall_pose.js fallTimeoutSec)
+    fall.maxSec = fallTimeoutSec(z, ground(x, y));
+    // the body: retail Falling + the parachute pack (fall_pose.js)
+    fallPose?.begin(localGuid(), { local: true });
     fall.unsub = controls.onAction((a) => {
       if (a.type === "exit" && fall && !fall.chute) {
         try { sh().vehicleExit(fall.vehicle, 2); } catch (_) { /* */ }
@@ -345,6 +377,7 @@ export function installVehicles(deps = {}) {
     try { f.controls.dispose(); } catch (_) {}
     try { f.camera?.release(); f.camera?.dispose(); } catch (_) {}
     try { sh()?.clearVehicleSeat?.(); } catch (_) {}
+    fallPose?.end(localGuid(), why); // the canopy clip off, Ready (the landing link), the pack removed
     console.log(`[vehicles] fall ended (${why}) after ${(nowSec() - f.startedAt).toFixed(1)} s`);
   }
 
@@ -378,7 +411,11 @@ export function installVehicles(deps = {}) {
       if (!Number.isNaN(g) && ez < g + 2) ez = g + 2;
       f.camera.write({ pos: [ex, ey, ez], h: ch, p: FALL_CAM.pitch, r: 0, fov: FALL_CAM.fov });
     }
-    if (wallNow - f.startedAt > 120) { chutes?.close(localGuid()); stopFall("timeout"); } // never stuck: the server places the body anyway
+    // never stuck — the fall ends on Touchdown (also the server's teleport cancel: Touchdown with cell 0) or here: a
+    // teleport's portal space, or the bound (fallTimeoutSec: a 5 km bail free-falls ~2 min and a chute opened high
+    // drifts for many minutes, so the old fixed 120 s cut long falls short)
+    if (portalSpaceOwnsFrame()) { chutes?.close(localGuid()); stopFall("teleport"); }
+    else if (wallNow - f.startedAt > f.maxSec) { chutes?.close(localGuid()); stopFall("timeout"); } // the server places the body anyway
   }
 
   function requestExit(mode) {
@@ -534,13 +571,40 @@ export function installVehicles(deps = {}) {
       }
     }
 
-    // client streaming: the load point leads the aircraft by velocity × lead seconds (DESIGN §6.3)
-    try {
+    // client streaming. ?flightResidency (flight experience Phase 1): ONE residency centre — publish the aircraft's
+    // state and let residency.js lead the slot grid + object window along the velocity (no second load point, no
+    // noteServerLb / landblockChanged per lead change). Off: the load point leads the aircraft by velocity × lead
+    // seconds through the world streamer (DESIGN §6.3).
+    if (FLIGHT_RESIDENCY) {
+      try {
+        const vel = FM.velocity(pose, v.params);
+        const gz = ground(pose.x, pose.y);
+        setFlightHint({ x: pose.x, y: pose.y, z: pose.z, vx: vel[0], vy: vel[1], vz: vel[2], agl: Number.isNaN(gz) ? null : pose.z - gz });
+        // ONE centre: the server never echoes the pilot's own position, so feed the world streamer the AIRCRAFT's
+        // landblock on each crossing (noteServerLb / landblockChanged / the collision 3x3 then mean what they say)
+        const own = (cl.cell >>> 16) << 16;
+        if (own !== p.ownLb && win.__worldStreamer && typeof win.__worldStreamer.onPositionUpdate === "function") {
+          p.ownLb = own;
+          win.__worldStreamer.onPositionUpdate({ guid: localGuid(), landblockId: cl.cell });
+        }
+        // and keep the wasm COLLISION terrain (terrainHeightAt, the predictor's floor) resident ahead: the 3x3
+        // around the lead point only — no second residency centre
+        const lead = Number.isFinite(v.profile.leadSeconds) ? v.profile.leadSeconds : 6;
+        const lp = FM.toCellLocal(pose.x + vel[0] * lead, pose.y + vel[1] * lead, pose.z);
+        const lb = (lp.cell >>> 16) << 16;
+        if (lb !== p.leadLb && typeof win.__ensureCollisionTerrain === "function") {
+          rlogEvent(RLOG.LEAD, lb, p.leadLb | 0, 1);
+          p.leadLb = lb;
+          try { const r = win.__ensureCollisionTerrain(lb >>> 0); if (r && typeof r.catch === "function") r.catch(() => {}); } catch (_) { /* hint only */ }
+        }
+      } catch (_) { /* streaming hint only */ }
+    } else try {
       const vel = FM.velocity(pose, v.params);
       const lead = Number.isFinite(v.profile.leadSeconds) ? v.profile.leadSeconds : 6;
       const lp = FM.toCellLocal(pose.x + vel[0] * lead, pose.y + vel[1] * lead, pose.z);
       const lb = (lp.cell >>> 16) << 16;
       if (lb !== p.leadLb && win.__worldStreamer && typeof win.__worldStreamer.onPositionUpdate === "function") {
+        rlogEvent(RLOG.LEAD, lb, p.leadLb | 0, 0);
         p.leadLb = lb;
         win.__worldStreamer.onPositionUpdate({ guid: localGuid(), landblockId: lp.cell });
       }
@@ -668,19 +732,25 @@ export function installVehicles(deps = {}) {
     else if (fall) tickFall();
     else if (exitHop) tickExitHop(dt);
     tickObservers();
+    fallPose?.tick(dt, nowSec()); // after the rig writes, before the canopies (they read the riser grips)
     pruneVehicles();
     tickPrompt();
     tracers.tick(dt);
     chutes?.tick(dt, chutePose);
   }
 
-  /** The body under a canopy: the local fall twin while we fall, else the entity rig (observed players, landing). */
+  /**
+   * The body under a canopy: the local fall twin while we fall, else the entity rig (observed players, landing); with
+   * the rig's root scale (the heritage's CharGen scale) and, under the canopy pose, the riser grips (fall_pose.js).
+   */
   function chutePose(guid) {
-    if (fall && guid === localGuid()) return { x: fall.x, y: fall.y, z: fall.z, heading: fall.heading };
     const inst = em()?.entityMap?.get(guid >>> 0);
+    const scale = inst?.root?.scale?.x ?? 1;
+    const risers = fallPose ? fallPose.risers(guid) : null;
+    if (fall && guid === localGuid()) return { x: fall.x, y: fall.y, z: fall.z, heading: fall.heading, scale, risers };
     if (!inst || !inst.root) return null;
     const r = inst.root, q = r.quaternion;
-    return { x: r.position.x, y: r.position.y, z: r.position.z, heading: headingOfQuat([q.w, q.x, q.y, q.z]) };
+    return { x: r.position.x, y: r.position.y, z: r.position.z, heading: headingOfQuat([q.w, q.x, q.y, q.z]), scale, risers };
   }
 
   live.vehicles = { afterTick };
@@ -700,7 +770,8 @@ export function installVehicles(deps = {}) {
           speed: v.last?.speed ?? null, cell: v.last?.cell ?? null, step: v.last?.step ?? null,
           pos: v.last ? stateFromMsg(v.last) : null,
         })),
-        fall: fall ? { x: fall.x, y: fall.y, z: fall.z, vz: fall.vz, chute: fall.chute, agl: fall.z - ground(fall.x, fall.y) } : null,
+        fall: fall ? { x: fall.x, y: fall.y, z: fall.z, vz: fall.vz, chute: fall.chute, agl: fall.z - ground(fall.x, fall.y), sec: nowSec() - fall.startedAt, maxSec: fall.maxSec } : null,
+        fallPose: fallPose ? fallPose.status() : { enabled: false },
         pilot: pilot ? {
           vehicle: pilot.vehicle.guid, seat: pilot.seat, view: pilot.view, sent: pilot.sent,
           state: pilot.predictor ? { ...pilot.predictor.state } : null,
@@ -714,6 +785,8 @@ export function installVehicles(deps = {}) {
       };
     },
     vehicles: () => [...vehicles.values()],
+    /** Allocation-free membership test (entities.js: the flight entity horizon never culls a vehicle). */
+    isVehicle: (guid) => vehicles.has(guid >>> 0),
     events: () => events.slice(),
     nearest: () => nearestBoardable()?.guid ?? null,
     board(guid) {
@@ -741,6 +814,7 @@ export function installVehicles(deps = {}) {
       try { win.removeEventListener("keydown", onKeyB, true); } catch (_) {}
       osd.dispose();
       tracers.dispose();
+      fallPose?.dispose();
       chutes?.dispose();
       if (live.vehicles && live.vehicles.afterTick === afterTick) delete live.vehicles;
       if (win.__vehicles === api) delete win.__vehicles;

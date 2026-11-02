@@ -71,6 +71,11 @@ import {
 } from "./terrain_shared_glsl.js";
 import { radialFogTerrainGlsl } from "./radial_fog.js";
 import { REVERSED_BIAS_NOMINAL_FAR } from "./shader_logdepth.js";
+// ?residencyLog (flight-experience Phase 0): the sampler asks this module which
+// landblocks the far ring draws and which it discards (rlogSetFarProbe below).
+import { residencyLogEnabled, rlogSetFarProbe } from "./residency_log.js";
+// ?lbFade (flight experience Phase 1): the near ring's per-landblock presence replaces the discard SQUARE.
+import { lbFadeOn, lbFadeUniforms, lbBandDefines, LB_HANDOFF_GLSL } from "./lb_presence.js";
 import {
   farTerrainEnabled,
   farRingEnabled,
@@ -483,9 +488,17 @@ uniform float uSlopeShadingEnabled;
 // boundary lands exactly on the near ring's outer edge.
 uniform vec2 uPlayerLbXy;
 uniform float uNearFadeLb;
+#ifdef HB_FAR_PRESENCE
+// ?lbFade (scene3d/lb_presence.js): G = 1 while the near ring really draws that landblock's ground.
+uniform highp sampler2D hbLbPresence;
+uniform vec2 hbLbPresenceOrigin;
+${LB_HANDOFF_GLSL}
+#endif
 
-// Depth push, in log-depth units, applied to the far ring so the near ring wins
-// the ~10 m handoff overlap deterministically.
+// Depth push, in log-depth units, applied to the far ring (meant to let the
+// near ring win the ~10 m handoff overlap; it does not below ~1.2 km of camera
+// height, the near ring being drawn 1 cm below grade — far_terrain_flags.js
+// farDepthBias — so the overlap exists only where the near ring ends).
 //
 // ⚠ WHY NOT polygonOffset: this shader WRITES gl_FragDepth (the hand-rolled
 // log-depth chunk), and an explicit gl_FragDepth write overrides polygon offset
@@ -504,7 +517,23 @@ void main() {
   vec2 lbPos = vWorldXy / 192.0;
   vec2 dv = abs(lbPos - (uPlayerLbXy + vec2(0.5)));
   float dLb = max(dv.x, dv.y);
+#ifdef HB_FAR_PRESENCE
+  // Per landblock, not a square: discard only where the near ring is actually drawn, so a near landblock
+  // that is not there yet (the leading edge at speed, a parked tile) is always backed by far terrain. A 10 m
+  // band stays drawn under a near landblock ONLY along the edges where the near ring ends (lb_presence.js
+  // LB_HANDOFF_GLSL, ?lbBand), so the seam between two different meshes can never open a crack. Not along
+  // every edge: the near ring sits 1 cm below grade (retail zFightTerrainAdjust) and uFarDepthBias is a
+  // relative push (8.5e-6 of the distance), so this band WINS the depth test below ~1.2 km of camera height —
+  // a band on every edge was a grid of flat far-ring strips over the near ring.
+  ivec2 hbLb = ivec2(floor(lbPos)) - ivec2(hbLbPresenceOrigin);
+  if (hbLb.x >= 0 && hbLb.y >= 0 && hbLb.x < 64 && hbLb.y < 64) {
+    if (hbNearCovers(lbPos)) discard;
+  } else if (dLb < uNearFadeLb) {
+    discard;
+  }
+#else
   if (dLb < uNearFadeLb) discard;
+#endif
 
   // --- albedo -------------------------------------------------------------
   vec3 albedo = texture(uComposite, vTileUv).rgb;
@@ -1064,6 +1093,16 @@ function ensureFarMaterial(scene3d) {
   // only, the log-depth write survives). ?radialFog=off: the same string objects.
   if (FAR_LIVE_GLSL.vertex !== FAR_VERTEX_GLSL) mat.vertexShader = FAR_LIVE_GLSL.vertex;
   if (FAR_LIVE_GLSL.fragment !== FAR_FRAGMENT_GLSL) mat.fragmentShader = FAR_LIVE_GLSL.fragment;
+  // ?lbFade: per-landblock near presence instead of the discard square (shared uniform objects); ?lbBand: where
+  // the 10 m hand-off band stays under a near landblock (HB_LB_BAND, lb_presence.js).
+  if (lbFadeOn()) {
+    const pu = lbFadeUniforms(THREE);
+    if (pu) {
+      mat.defines = { ...(mat.defines || {}), HB_FAR_PRESENCE: "", ...lbBandDefines() };
+      mat.uniforms.hbLbPresence = pu.hbLbPresence;
+      mat.uniforms.hbLbPresenceOrigin = pu.hbLbPresenceOrigin;
+    }
+  }
   mat.name = "far-terrain";
   st.material = mat;
   return mat;
@@ -1073,6 +1112,11 @@ function ensureFarMaterial(scene3d) {
 function makePatchMaterial(scene3d, patch) {
   const base = ensureFarMaterial(scene3d);
   const mat = base.clone();
+  // ?lbFade: clone() deep-copies uniforms (a cloned Texture would never see the field's updates) — share them.
+  if (base.uniforms.hbLbPresence) {
+    mat.uniforms.hbLbPresence = base.uniforms.hbLbPresence;
+    mat.uniforms.hbLbPresenceOrigin = base.uniforms.hbLbPresenceOrigin;
+  }
   mat.name = `far-terrain-${patch.px}-${patch.py}`;
   mat.uniforms.uComposite.value = patch.rt.texture;
   mat.uniforms.uPatchOriginXy.value.set(
@@ -1175,12 +1219,28 @@ function assertRadiusPolicy(scene3d) {
   notePlayerNear(scene3d, st, plb, gate);
   const beyond = [];
   let farOnly = 0;
+  // 2026-11-01 (flight experience): the slot grid (?slotGrid, default on) legitimately keeps landblocks it
+  // owns — a tile in its window / hysteresis, or PARKED in its warm pool (30 s UseTime floor) — with their baked
+  // marks set while the player is far away (a fast flight leaves ~40 parked tiles behind). Those are the near
+  // ring's own residency, not a far-ring leak; the 1070 tours flagged them "at the cockpit switch".
+  const lru = scene3d?.landblockLru;
+  const grid = scene3d?._slotGridCtl?.grid;
+  const ownedByNear = (key) => {
+    try { if (lru?.isParked?.(key)) return true; } catch (_) { /* no lru */ }
+    try {
+      if (grid?.records) {
+        const tx = ((key >>> 24) & 0xff) >> 1, ty = ((key >>> 16) & 0xff) >> 1;
+        if (grid.records.has(((tx & 0xff) << 8) | (ty & 0xff))) return true;
+      }
+    } catch (_) { /* no grid */ }
+    return false;
+  };
   for (const key of st.farLbKeys) {
     const lbX = (key >>> 24) & 0xff;
     const lbY = (key >>> 16) & 0xff;
     if (Math.max(Math.abs(lbX - plb.x), Math.abs(lbY - plb.y)) <= gate) continue;
     farOnly += 1;
-    if (!st.nearSeenLbs.has(key)) beyond.push(key);
+    if (!st.nearSeenLbs.has(key) && !ownedByNear(key)) beyond.push(key);
   }
   st.farOnlyLbCount = farOnly;
   const violations = [];
@@ -1313,6 +1373,20 @@ export function initFarTerrain(scene3d, { parent, renderer } = {}) {
       bakeCompileMs: null, // `?farBakeCompileAsync`: async link wall time
     },
   };
+  if (residencyLogEnabled()) {
+    rlogSetFarProbe(() => {
+      const st = _state;
+      if (!st || _disabled) return null;
+      return {
+        plb: st.lastPlb || null,
+        nearFadeLb: st.nearFadeLb,
+        covered: (x, y) => {
+          const p = st.patches.get(_patchKey(x >> 2, y >> 2));
+          return !!(p && p.mesh && p.mesh.parent);
+        },
+      };
+    });
+  }
   // eslint-disable-next-line no-console
   console.log(
     `[far_terrain] far composite ring ON — R_far=${_state.radius} `
@@ -1340,6 +1414,12 @@ export function tickFarTerrain(scene3d, sessionHandle, renderer) {
   const st = _state;
   const r = renderer ?? st.renderer ?? scene3d?.renderer;
   if (r && !st.renderer) st.renderer = r;
+
+  // ?flightView (altitude_policy.js): high above the ground the world tier owns the ring's area and the ring's
+  // baked albedo would read as a square seam under the aircraft — hide it, and fetch / bake nothing meanwhile.
+  const suppressed = scene3d?._farRingSuppressed === true;
+  if (st.group.visible === suppressed) st.group.visible = !suppressed;
+  if (suppressed) return;
 
   publishFarUniforms(scene3d);
 
@@ -1649,11 +1729,13 @@ function publishFarUniforms(scene3d) {
   const nearR = nearRingEffectiveRadiusLb(scene3d, { floor: false });
   // +0.5 puts the boundary on the near ring's OUTER LB edge; the small
   // subtraction gives ~10 m of overlap so a rounding wobble cannot open a
-  // one-pixel crack (polygonOffset keeps the near ring winning the depth test
-  // in that band).
+  // one-pixel crack. (The far ring WINS that band at low camera heights — the
+  // near ring is drawn 1 cm below grade and uFarDepthBias is a relative push —
+  // which only moves the hand-off line 10 m inward; see lb_presence.js ?lbBand.)
   const fade = Math.max(0, nearR + 0.5 - 0.05);
   st.nearFadeLb = fade;
   st.nearEffectiveR = nearR;
+  st.lastPlb = plb; // ?residencyLog: the centre the discard square uses this frame
 
   const apply = (mat) => {
     const u = mat.uniforms;

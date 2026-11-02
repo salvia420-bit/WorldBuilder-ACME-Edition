@@ -1,0 +1,14 @@
+{
+ "name": "fx-bail",
+ "note": "Phase 4/5 bail-out from the high band: a short low hop to warm the flight view, land, re-spawn, then the vehicles bench's fall-pose eval climbs to 5,000 m AGL and bails (free fall ~100 s, the chute at 150 m, touchdown). Checks the falling pose + parachute pack (vehicleFallAnim), the flight view during the fall (player AGL), the cloud high-band march switch on the way up, and the derelict despawn (vehicle_derelict_high_agl).",
+ "start": "0xA9B40019 84 7.1 94",
+ "settleMs": 15000,
+ "stillsAtSec": [10, 25],
+ "flight": {
+  "route": [ { "heading": 200, "metres": 2500, "agl": 100, "boost": true } ],
+  "agl": 100,
+  "throttle": 1,
+  "maxSec": 180
+ },
+ "fall": { "climbAgl": 5000, "maxSec": 720, "holdSec": 2.5 }
+}

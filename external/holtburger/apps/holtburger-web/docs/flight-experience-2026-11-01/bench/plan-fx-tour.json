@@ -1,0 +1,16 @@
+{
+ "name": "fx-tour",
+ "note": "Phase 0/1 tour: Holtburg take-off, 5 km at 225 deg over the densest forest near Holtburg (lane B tall-tree counts: 17 LBs >= 80 tall trees) at 300 km/h, 5 km back at 45 deg at 400 km/h across Holtburg (town pass), land. 80 m AGL.",
+ "start": "0xA9B40019 84 7.1 94",
+ "settleMs": 15000,
+ "stillsAtSec": [12, 25, 40, 55, 70, 85, 100],
+ "flight": {
+  "route": [
+   { "heading": 225, "metres": 5000, "boost": false },
+   { "heading": 45, "metres": 5000, "boost": true }
+  ],
+  "agl": 80,
+  "throttle": 1,
+  "maxSec": 300
+ }
+}

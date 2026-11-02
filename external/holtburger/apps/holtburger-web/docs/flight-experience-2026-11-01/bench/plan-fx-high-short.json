@@ -1,0 +1,43 @@
+{
+ "name": "fx-high-short",
+ "note": "The high band without the descent: 35 s settle, 3 km low at 100 m, climb to 5,000 m AGL over 12 km, 6 km above the clouds, end in the air (no landing) \u2014 for frame-rate A/Bs at altitude.",
+ "start": "0xA9B40019 84 7.1 94",
+ "settleMs": 35000,
+ "stillsAtSec": [
+  10,
+  45,
+  70,
+  95,
+  120,
+  145,
+  175,
+  200
+ ],
+ "flight": {
+  "route": [
+   {
+    "heading": 200,
+    "metres": 3000,
+    "agl": 100,
+    "boost": true
+   },
+   {
+    "heading": 200,
+    "metres": 12000,
+    "agl": 5000,
+    "boost": true
+   },
+   {
+    "heading": 270,
+    "metres": 6000,
+    "agl": 5000,
+    "boost": true
+   }
+  ],
+  "agl": 100,
+  "throttle": 1,
+  "maxSec": 420,
+  "land": false,
+  "exit": false
+ }
+}

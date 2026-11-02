@@ -1,0 +1,61 @@
+{
+ "name": "fx0-baseline",
+ "note": "Phase 0 structural baseline at today's client defaults (objRadius 4, ring 5, far ring 8, slot grid): 300 km/h out, 400 km/h back, 80 m AGL, residency log on.",
+ "timeoutMin": 25,
+ "minStartMemMB": 2500,
+ "minMemAvailMB": 900,
+ "sessions": [
+  {
+   "role": "pilot",
+   "account": "agentp10",
+   "flags": "vehicles=on&residencyLog=on&skytime=12"
+  }
+ ],
+ "steps": [
+  {
+   "label": "pilot to Holtburg",
+   "page": "pilot",
+   "teleloc": "0xA9B40019 84 7.1 94",
+   "afterTeleportMs": 12000
+  },
+  {
+   "label": "clean slate",
+   "page": "pilot",
+   "chat": [
+    "@vehicle despawn all"
+   ],
+   "sleepMs": 1000
+  },
+  {
+   "label": "spawn",
+   "page": "pilot",
+   "eval": "vehicle-spawn.eval.js"
+  },
+  {
+   "label": "flight: 300 km/h ESE 3 km, 400 km/h back WNW 3.5 km, 80 m AGL",
+   "page": "pilot",
+   "eval": "flight.eval.js",
+   "route": [
+    {
+     "heading": 111,
+     "metres": 3000,
+     "boost": false
+    },
+    {
+     "heading": 291,
+     "metres": 3500,
+     "boost": true
+    }
+   ],
+   "agl": 80,
+   "throttle": 1,
+   "maxSec": 300
+  },
+  {
+   "label": "residency dump",
+   "page": "pilot",
+   "eval": "residency-dump.eval.js",
+   "minMemAvailMB": 250
+  }
+ ]
+}

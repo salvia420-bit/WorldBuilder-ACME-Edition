@@ -1,0 +1,81 @@
+{
+ "name": "fx-high-ab",
+ "note": "For live A/Bs at altitude (fps-ab-1070.mjs run alongside): 3 km low, the climb to 5,000 m AGL over 12 km heading 200, then two 10 km squares at 5 km (80 km, ~12 min at 400 km/h) so the aircraft stays over the middle of the map while the A/B arms run. Ends in the air: the driver re-homes the character.",
+ "start": "0xA9B40019 84 7.1 94",
+ "settleMs": 35000,
+ "stillsAtSec": [
+  10,
+  45,
+  95,
+  145
+ ],
+ "flight": {
+  "route": [
+   {
+    "heading": 200,
+    "metres": 3000,
+    "agl": 100,
+    "boost": true
+   },
+   {
+    "heading": 200,
+    "metres": 12000,
+    "agl": 5000,
+    "boost": true
+   },
+   {
+    "heading": 290,
+    "metres": 10000,
+    "agl": 5000,
+    "boost": true
+   },
+   {
+    "heading": 20,
+    "metres": 10000,
+    "agl": 5000,
+    "boost": true
+   },
+   {
+    "heading": 110,
+    "metres": 10000,
+    "agl": 5000,
+    "boost": true
+   },
+   {
+    "heading": 200,
+    "metres": 10000,
+    "agl": 5000,
+    "boost": true
+   },
+   {
+    "heading": 290,
+    "metres": 10000,
+    "agl": 5000,
+    "boost": true
+   },
+   {
+    "heading": 20,
+    "metres": 10000,
+    "agl": 5000,
+    "boost": true
+   },
+   {
+    "heading": 110,
+    "metres": 10000,
+    "agl": 5000,
+    "boost": true
+   },
+   {
+    "heading": 200,
+    "metres": 10000,
+    "agl": 5000,
+    "boost": true
+   }
+  ],
+  "agl": 100,
+  "throttle": 1,
+  "maxSec": 1100,
+  "land": false,
+  "exit": false
+ }
+}

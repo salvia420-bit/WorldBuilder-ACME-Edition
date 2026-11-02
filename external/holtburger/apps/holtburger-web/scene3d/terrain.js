@@ -28,6 +28,8 @@ import { prewarmSubtree } from "./bake_prewarm.js";
 // far-patch shader (scene3d/far_terrain.js), so the near/far seam cannot drift
 // apart. See scene3d/terrain_shared_glsl.js for the full rationale.
 import { TERRAIN_SHARED_TAIL_GLSL } from "./terrain_shared_glsl.js";
+// ?residencyLog (flight-experience Phase 0): the LOD re-bake swap is logged.
+import { rlogEvent, RLOG } from "./residency_log.js";
 // ?radialFog (DEFAULT ON since 2026-10-19, =off escape; added 2026-10-13): retail range
 // fog for the terrain fog call (scene3d/radial_fog.js). Applied to the assembled pair
 // below TERRAIN_FRAGMENT_GLSL.
@@ -6447,6 +6449,7 @@ function drainOneTerrainLodRebake(scene3d) {
     }
     // The replacement is in (and, under ?terrainBatch, absorbed in place of
     // the old batch row). Now retire the old meshes only.
+    rlogEvent(RLOG.LOD, lbKey, mesh?.userData?.subdivLevel ?? -1, old[0]?.userData?.subdivLevel ?? -1);
     _teardownTerrainChildren(scene3d, lbKey, old.filter((c) => c !== mesh));
   }).catch(() => {
     inflight.delete(lbKey);
@@ -6468,6 +6471,13 @@ export function tickTerrainLodRebake(scene3d, currentLbKey) {
   if (!scene3d || !scene3d.terrainGroup) return;
   const opts = scene3d.terrainOpts;
   if (!opts || !opts.canSubdivide) return;
+  // ?flightView (altitude_policy.js): airborne, the subdivided 3x3 would chase the aircraft — a re-mesh of the
+  // ground under it every ~1.7 s at 400 km/h, visible as a geometry change and pure bake cost. Frozen while the
+  // policy says airborne; the first frame back on the ground reconciles the new centre.
+  if (scene3d._lodRebakeFrozen === true) {
+    drainOneTerrainLodRebake(scene3d);
+    return;
+  }
   const key = (currentLbKey == null) ? null : (currentLbKey >>> 0);
   if (key != null && key !== scene3d._lodLastCentre) {
     scene3d._lodLastCentre = key;

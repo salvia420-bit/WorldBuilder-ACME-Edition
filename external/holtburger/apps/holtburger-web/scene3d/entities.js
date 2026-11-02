@@ -1157,7 +1157,7 @@ import { isNearPlayerLb } from "./landblock_lru.js";
 // 2026-08-03 residency #9 — reaper keep-zone radius, derived from the one
 // residency policy constant (base 5 + 3 = 8, unchanged). `?entityReapRadius`
 // grammar is preserved verbatim there. See the block near REAP_GRACE_MS above.
-import { REAP_PVS_RADIUS } from "./residency.js";
+import { REAP_PVS_RADIUS, flightLightActive } from "./residency.js";
 // `entMB` instrument (2026-07-26, RESULTS-matcache-falsifier next-move 1):
 // count + byte-sum every entity-OWNED texture/material across ALL live
 // instances. Charged O(1) at register time; a poll never walks the rigs.
@@ -3209,6 +3209,12 @@ function _setEntityStateVisible(inst, visible) {
 // sphere center is the entity's AC-space root position (entitiesGroup is
 // under worldRoot, so `root.position` IS AC-local — see file header).
 const ENTITY_CULL_RADIUS = 6;
+// ?flightLight (residency.js): while an aircraft is airborne, rigs farther than this from the camera are not
+// submitted. The frustum from an aircraft takes in kilometres of ground, and every rig in it was drawn — ~40 part
+// draws per humanoid — at a few pixels: the 1070 uncapped census at 100 m AGL had 923 entities and 13.7k visible
+// meshes, and the client is CPU-bound on submission (HANDOFF "Q5 measured"). A 2 m figure at 450 m is ~4 px.
+// Vehicles (big, and what a pilot looks for), the local player and the exemptions below are never culled by it.
+export const FLIGHT_ENTITY_CULL_M = 450;
 // Reused scratch sphere for the per-entity frustum test — radius is fixed,
 // only the center is rewritten per entity. Zero per-frame allocation.
 const _entityCullSphere = new THREE.Sphere(new THREE.Vector3(), ENTITY_CULL_RADIUS);
@@ -3322,6 +3328,8 @@ export function tickEntityRenderVisibility(scene3d, culler) {
   let tested = 0;
   let culled = 0;
   let occluded = 0;
+  const flightHorizonSq = flightLightActive() ? FLIGHT_ENTITY_CULL_M * FLIGHT_ENTITY_CULL_M : Infinity;
+  const vehicleApi = flightHorizonSq !== Infinity && typeof window !== "undefined" ? window.__vehicles : null;
   const occ = getOcclusionCuller(scene3d, THREE);
   const frameNo = occ ? occ.frame : 0;
   // ?rigCellGate (cells-portals-1, DEFAULT ON; =off escape) — retail draws an
@@ -3387,6 +3395,9 @@ export function tickEntityRenderVisibility(scene3d, culler) {
     if (want && distHorizonSq !== Infinity) {
       const distSq = culler.getDistanceSq(p.x, p.y, p.z);
       if (distSq > distHorizonSq) want = false;
+    }
+    if (want && flightHorizonSq !== Infinity && !(vehicleApi && vehicleApi.isVehicle?.(inst.guid))) {
+      if (culler.getDistanceSq(p.x, p.y, p.z) > flightHorizonSq) want = false;
     }
     // ?rigCellGate — the rig's cell is not drawn this frame (and its cull
     // sphere reaches no drawn cell). Fails open on any unknown.
@@ -16897,7 +16908,22 @@ export class EntityManager {
     // X) so we need the WORLD-space position — matches the lighting
     // pattern at lighting.js:549-555. Use the scratch Vector3 so we
     // don't allocate per-entity per-frame.
-    if (typeof inst.root.getWorldPosition === "function") {
+    const gateGroup = this.scene3d?.entitiesGroup ?? null;
+    if (
+      gateGroup !== null && inst.root.parent === gateGroup &&
+      inst.root.getWorldPosition === _object3dGetWorldPosition && typeof inst.root.updateWorldMatrix === "function"
+    ) {
+      // The ORIGIN decides, as in _shouldTickEntityHoisted (keep the two identical — tests/rust_rig_parity.test.mjs
+      // G): the parent chain, then the rig's matrix only when it passes.
+      gateGroup.updateWorldMatrix(true, false);
+      _tickGateScratch.copy(inst.root.position).applyMatrix4(gateGroup.matrixWorld);
+      const ox = _tickGateScratch.x - camera.position.x;
+      const oy = _tickGateScratch.y - camera.position.y;
+      const oz = _tickGateScratch.z - camera.position.z;
+      if (ox * ox + oy * oy + oz * oz > MAX_TICK_DIST_SQ) return false;
+      inst.root.updateWorldMatrix(false, false);
+      _tickGateScratch.setFromMatrixPosition(inst.root.matrixWorld);
+    } else if (typeof inst.root.getWorldPosition === "function") {
       inst.root.getWorldPosition(_tickGateScratch);
     } else if (inst.root.position) {
       _tickGateScratch.set(
@@ -16968,6 +16994,16 @@ export class EntityManager {
         g.group.updateWorldMatrix(true, false);
         g.chainFresh = true;
       }
+      // The rig's ORIGIN decides (perf 2026-11-02, the 1070 uncapped flight profile: this gate alone was 6 % of a
+      // frame): root.position through the group's world matrix. The rig's own rotation / scale do not move its
+      // origin, and the visual-ground lift in its matrix is noise against a 120 m gate. The old path composed every
+      // rig's world matrix — with a ground-height sample in the visual-ground updateMatrix — for all ~900 rigs a
+      // frame. A rig that passes still gets that update, exactly as before (its tick's readers expect it fresh).
+      _tickGateScratch.copy(root.position).applyMatrix4(g.group.matrixWorld);
+      const gx = _tickGateScratch.x - camera.position.x;
+      const gy = _tickGateScratch.y - camera.position.y;
+      const gz = _tickGateScratch.z - camera.position.z;
+      if (gx * gx + gy * gy + gz * gz > MAX_TICK_DIST_SQ) return false;
       root.updateWorldMatrix(false, false);
       const e = root.matrixWorld.elements;
       _tickGateScratch.x = e[12];

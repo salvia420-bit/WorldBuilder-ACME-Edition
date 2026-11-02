@@ -1,7 +1,7 @@
 From 6d8b0a5d87a9cd97c11c5f09f2061e88a8c078e1 Mon Sep 17 00:00:00 2001
 From: salvia420-bit <salvia420@gmail.com>
 Date: Sun, 1 Nov 2026 19:52:42 -0330
-Subject: [PATCH 3/3] Vehicles (holtburger fork): 1070 fixes + M3 world-loop
+Subject: [PATCH 3/4] Vehicles (holtburger fork): 1070 fixes + M3 world-loop
  residual
 
 Found on the first real-GPU look at the Hellcat demo (2026-11-01):

@@ -2608,9 +2608,20 @@ export function unparkStaticAtlasForLb(lbKey) {
  * never reached) unless ?statNra=on. Fail-soft: an entry whose layer has since
  * been recycled to a DIFFERENT surface is dropped, never re-written.
  */
+// Per-tick time budgets of the ~10 Hz atlas pass (2026-11-01, flight experience: 1070 arm H, a 210 ms frame that was
+// mostly packNraLayer / _liftChannel and the bucket compaction — every pending layer and every dirty bucket in ONE
+// call). The rest waits for the next tick (~100 ms later): a roughness / AO channel or a compaction lands a tick
+// later instead of a frame stalling. At least one unit of work always runs, so nothing starves.
+export const ATLAS_NRA_DRAIN_BUDGET_MS = 4;
+export const ATLAS_OPTIMIZE_BUDGET_MS = 6;
+const _atlasNow = () => (typeof performance !== "undefined" && performance.now ? performance.now() : Date.now());
+
 function _drainNraPending() {
   const touched = new Set();
+  const t0 = _atlasNow();
+  let packed = 0;
   for (let i = _nraPending.length - 1; i >= 0; i--) {
+    if (packed > 0 && _atlasNow() - t0 > ATLAS_NRA_DRAIN_BUDGET_MS) break; // budget: the rest next tick
     const p = _nraPending[i];
     const cur = p.ud?.layerOf?.get(p.texUuid);
     if (!p.ud?.nraArray || !cur || cur.layer !== p.layer) { _nraPending.splice(i, 1); continue; }
@@ -2627,6 +2638,7 @@ function _drainNraPending() {
       // memory-1 — the bucket's nra layer size (the feed queued the same
       // dims in p.w/p.h; the bucket record is the authority).
       packNraLayer(p.ud.nraArray, p.layer, p.mat, p.ud.nraW ?? p.w, p.ud.nraH ?? p.h, s);
+      packed += 1;
       // Single-layer dirty mark — see the feed path; keeps the ~10 Hz repack
       // from re-uploading the whole nra array per drained entry.
       if (typeof p.ud.nraArray.addLayerUpdate === "function") p.ud.nraArray.addLayerUpdate(p.layer);
@@ -2659,7 +2671,12 @@ function _drainNraPending() {
 export function tickStatAtlasOptimize() {
   if (_nraPending.length > 0) _drainNraPending();
   if (_dirtyBuckets.size === 0) return;
-  for (const bucketKey of _dirtyBuckets) {
+  const t0 = _atlasNow();
+  let compacted = 0;
+  for (const bucketKey of [..._dirtyBuckets]) {
+    // budget (see ATLAS_OPTIMIZE_BUDGET_MS): buckets not reached stay dirty for the next tick
+    if (compacted > 0 && _atlasNow() - t0 > ATLAS_OPTIMIZE_BUDGET_MS) break;
+    _dirtyBuckets.delete(bucketKey);
     const b = _buckets.get(bucketKey);
     if (!b) continue;
     const bm = b.bm;
@@ -2670,9 +2687,10 @@ export function tickStatAtlasOptimize() {
     // compacts away the dead verts, so the used extent drops by deadVerts.
     if (ud.usedVerts > 0 && ud.deadVerts / ud.usedVerts > _ATLAS_OPTIMIZE_FRAC) {
       try { bm.optimize(); ud.usedVerts -= ud.deadVerts; ud.deadVerts = 0; } catch (_) {}
+      compacted += 1;
     }
   }
-  _dirtyBuckets.clear();
+  if (_dirtyBuckets.size > 0) return; // the budget ran out: the empty-bucket GC waits for a complete pass
   // ST5 — empty-bucket GC (D-05.6.3): buckets emptied by re-homes (typically
   // preview-dim ones) are torn down on this pass. Flag-gated: the OFF arm
   // keeps its session-lived buckets exactly as before. A bucket is created

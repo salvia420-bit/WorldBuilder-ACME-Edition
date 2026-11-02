@@ -792,6 +792,11 @@ export function terrainVfxTick(dt, ctx, liveTsSec) {
   // cheap, order-independent way to survive that (3 identity compares/facade).
   installTerrainVfxHooks(scene3d);
 
+  // ?flightLight (residency.js): an aircraft airborne above 40 m — the near-ground effects (grass, pebbles, the trail)
+  // re-scattered around the pilot every frame at 400 km/h, 100 m below the camera (1070 uncapped flight profile:
+  // 2.8 % of the main thread). They hold where they are and resume on the way down.
+  try { if (globalThis.__hbFlightLightActive?.()) return; } catch (_) { /* fail-soft: tick */ }
+
   // Single time source (plan §2.3) — never `performance.now()` in an effect.
   // The caller's live monotonic stamp wins when it is offered; frameTime is the
   // fallback for callers that predate the third argument (and for tests that

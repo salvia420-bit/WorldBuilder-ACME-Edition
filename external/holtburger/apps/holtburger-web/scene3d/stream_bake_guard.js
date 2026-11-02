@@ -22,6 +22,10 @@
 // so the fire-and-forget `index.html` callers can't leak unhandled
 // rejections either.
 
+// ?residencyLog (flight-experience Phase 0): bake start / done / fail events and
+// cap / cooldown / in-flight skip counts. No-ops unless the flag is on.
+import { rlogBake, rlogBakeSkip } from "./residency_log.js";
+
 export const STREAM_BAKE_RETRY_COOLDOWN_MS = 2500;
 
 // Global cap on concurrently-running bakes (across all keys) when a caller
@@ -194,6 +198,7 @@ export function guardedStreamBake(state, kind, lbKey, run, opts = {}) {
   // In-flight dedup: a bake for this LB is already running — skip.
   if (state.inFlight.has(guardKey)) {
     if (rec) rec.skipInFlight += 1;
+    rlogBakeSkip("inflight");
     return Promise.resolve(null);
   }
 
@@ -202,6 +207,7 @@ export function guardedStreamBake(state, kind, lbKey, run, opts = {}) {
   if (until != null) {
     if (now() < until) {
       if (rec) rec.skipCooldown += 1;
+      rlogBakeSkip("cooldown");
       return Promise.resolve(null);
     }
     state.failUntil.delete(guardKey);
@@ -215,6 +221,7 @@ export function guardedStreamBake(state, kind, lbKey, run, opts = {}) {
   // opts doc above.
   if (opts.urgent !== true && state.inFlight.size >= maxInFlight) {
     if (rec) rec.skipCap += 1;
+    rlogBakeSkip("cap");
     return Promise.resolve(null);
   }
 
@@ -224,16 +231,20 @@ export function guardedStreamBake(state, kind, lbKey, run, opts = {}) {
     rec.inFlightAtStart = state.inFlight.size;
   }
   state.inFlight.add(guardKey);
+  const startedMs = now();
+  rlogBake(kind, "start", k, state.inFlight.size);
   return Promise.resolve()
     .then(run)
     .then((r) => {
       // Success clears any prior failure backoff for this LB.
       state.failUntil.delete(guardKey);
       if (rec) { rec.endMs = now(); rec.durMs = rec.endMs - rec.startMs; rec.ok = true; }
+      rlogBake(kind, "done", k, Math.round(now() - startedMs));
       return r;
     })
     .catch((err) => {
       if (rec) { rec.endMs = now(); rec.durMs = rec.endMs - rec.startMs; rec.ok = false; }
+      rlogBake(kind, "fail", k, 0);
       state.failUntil.set(guardKey, now() + cooldownMs);
       // The baker already logged the root cause; throttle a single warn
       // per cooldown so the retry can't flood the console.

@@ -1,0 +1,406 @@
+From 00521d9ca649b7250f08855b1722b691391a3d19 Mon Sep 17 00:00:00 2001
+From: salvia420-bit <salvia420@gmail.com>
+Date: Mon, 2 Nov 2026 04:39:41 -0330
+Subject: [PATCH 4/4] Vehicles (holtburger fork): the high band, the bail-out
+ pose, film properties, map-edge unseat fix
+
+Flight experience (2026-11-01/02), every behaviour behind a property that defaults off:
+- vehicle_ceiling_agl / vehicle_climb_max applied at spawn (the 5,000 m AGL high band);
+  vehicle_derelict_high_agl: an empty vehicle high up despawns 30 s after it went derelict;
+  vehicle_high_band_agl: a pilot above it sees by 3D distance (ObjectMaint.Sight3D) and skips
+  the monster-awareness checks.
+- FlightModel.WorldMax: 255 landblocks (0xFF does not exist).
+- vehicle_fall_motion: a bailed-out body is broadcast in retail's Falling motion; a teleport
+  during a fall sends the faller a placement-less Touchdown.
+- vehicle_gun_players: the gun also hits players on foot, through Player.TakeDamage's own path
+  (lifestone protection, death, corpse); never the pilot, a seated or a falling player.
+- vehicle_observer_sight_radius: a capable client on foot gets a wider first-sight radius
+  (landmarks only beyond 112.5 m), restored on unseat.
+- Fix: Unseat clamps the body's placement to landblocks 1-253. A pilot logging out from a
+  vehicle drifted into the map's north-east corner put the body in landblock (254, 254), whose
+  adjacents ACE cannot load (LandblockManager.GetLandblock IndexOutOfRange took the world
+  thread down).
+
+Vehicle tests: 9/9.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ Source/ACE.Server/Managers/PropertyManager.cs |  8 ++
+ .../ACE.Server/Physics/Common/ObjectMaint.cs  |  9 +-
+ Source/ACE.Server/Vehicles/FlightModel.cs     |  4 +-
+ Source/ACE.Server/Vehicles/VehicleBailout.cs  | 54 +++++++++++-
+ Source/ACE.Server/Vehicles/VehicleManager.cs  | 83 ++++++++++++++++++-
+ Source/ACE.Server/Vehicles/VehicleWeapons.cs  | 21 ++++-
+ 6 files changed, 169 insertions(+), 10 deletions(-)
+
+diff --git a/Source/ACE.Server/Managers/PropertyManager.cs b/Source/ACE.Server/Managers/PropertyManager.cs
+index 403869c..deb395c 100644
+--- a/Source/ACE.Server/Managers/PropertyManager.cs
++++ b/Source/ACE.Server/Managers/PropertyManager.cs
+@@ -613,6 +613,8 @@ public static void LoadDefaultProperties()
+                 ("vehicle_preload_offthread", new Property<bool>(false, "(holtburger vehicles, M3 v2) with vehicle_preload: load corridor landblocks with ACE's own GetLandblock on a background task (after their DAT / spawn-cache warm-up) instead of on the world thread")),
+                 ("vehicle_short_retention", new Property<bool>(false, "(holtburger vehicles, M3) landblocks only a vehicle caused to load unload after 60 s instead of 5 min (until a player on foot is in one)")),
+                 ("vehicle_landblock_budget", new Property<bool>(false, "(holtburger vehicles, M3) landblocks only a vehicle caused to load add their objects within a shared 8 ms per world tick, and their loot generators (chests, decorative corpses, treasure, shops) wait until a player on foot is there")),
++                ("vehicle_gun_players", new Property<bool>(false, "(holtburger vehicles, 2026-11-02) a vehicle's gun also hits players on foot (not the pilot, not a seated or falling player), through the player's own damage path (lifestone protection, death, corpse); vehicle PvP for filming, PK status not checked; false = monsters only")),
++                ("vehicle_fall_motion", new Property<bool>(false, "(holtburger vehicles, M4/M5) a bailed-out player's body is broadcast in the retail Falling motion (0x40000015) while the server owns its fall, and back to Ready at touchdown / logout / teleport, so retail and non-capable clients show the airborne pose too")),
+                 ("landblock_wake_on_entry", new Property<bool>(false, "(holtburger vehicles) wake a dormant landblock (and its neighbours) when a player or vehicle is relocated into it, so fast movers never stall in dormant landblocks")),
+                 ("use_wield_requirements", new Property<bool>(true, "disable this to bypass wield requirements. mostly for dev debugging")),
+                 ("version_info_enabled", new Property<bool>(false, "toggles the /aceversion player command")),
+@@ -643,8 +645,14 @@ public static void LoadDefaultProperties()
+             DictOf(
+ 
+                 ("cantrip_drop_rate", new Property<double>(1.0, "Scales the chance for cantrips to drop in each tier. Defaults to 1.0, as per end of retail")),
++                ("vehicle_observer_sight_radius", new Property<double>(0.0, "(holtburger vehicles, 2026-11-02) first-sight radius in metres for capable (HBV1) clients ON FOOT — beyond ACE's 112.5 m only landmarks (vehicles, creatures, portals, lifestones, doors), at most two landblock rings (~380 m); so a ground observer sees an aircraft coming from that far instead of 112.5 m; 0 = off")),
+                 ("vehicle_sight_radius", new Property<double>(112.5, "(holtburger vehicles, M3) first-sight radius in metres for seated pilots (landmarks only beyond ACE's 112.5 m; 350 = the M3 value)")),
+                 ("vehicle_speed_cap", new Property<double>(69.0, "(holtburger vehicles) hard speed cap for vehicles in m/s: 69 = 250 km/h (demo, M1); 111 = 400 km/h after M3")),
++                // holtburger flight experience (2026-11-01), the high band. All default 0 = off (today's behaviour).
++                ("vehicle_ceiling_agl", new Property<double>(0.0, "(holtburger vehicles, flight experience) flight ceiling in metres above ground for vehicles spawned from now on; 0 = the profile's own (Hellcat 450); 5000 = the high band above the clouds")),
++                ("vehicle_climb_max", new Property<double>(0.0, "(holtburger vehicles, flight experience) maximum climb rate in m/s for vehicles spawned from now on; 0 = the profile's own (Hellcat 20); 40 = the high band (about 2.5 min to 5 km)")),
++                ("vehicle_derelict_high_agl", new Property<double>(0.0, "(holtburger vehicles, flight experience) an empty (derelict) vehicle more than this many metres above ground despawns 30 s after it went derelict instead of gliding down for minutes and loading landblocks nobody sees; 0 = off")),
++                ("vehicle_high_band_agl", new Property<double>(0.0, "(holtburger vehicles, flight experience) a pilot more than this many metres above ground sees by 3D distance (no ground objects from hundreds of metres up; ACE's first sight is 2D) and skips the monster-awareness checks; 0 = off")),
+                 ("cloak_cooldown_seconds", new Property<double>(5.0, "The number of seconds between possible cloak procs.")),
+                 ("cloak_max_proc_base", new Property<double>(0.25, "The max proc chance of a cloak.")),
+                 ("cloak_max_proc_damage_percentage", new Property<double>(0.30, "The damage percentage at which cloak proc chance plateaus.")),
+diff --git a/Source/ACE.Server/Physics/Common/ObjectMaint.cs b/Source/ACE.Server/Physics/Common/ObjectMaint.cs
+index dc0ec53..e07ce81 100644
+--- a/Source/ACE.Server/Physics/Common/ObjectMaint.cs
++++ b/Source/ACE.Server/Physics/Common/ObjectMaint.cs
+@@ -447,6 +447,13 @@ private IEnumerable<PhysicsObj> ApplyFilter(List<PhysicsObj> objs, VisibleObject
+         /// <summary>Landblock rings searched for first sight outdoors: 1 = ACE's 3×3; 2 = 5×5 (pilots beyond 192 m).</summary>
+         public int SightRings = 1;
+ 
++        /// <summary>
++        /// holtburger flight experience (vehicle_high_band_agl): a pilot high above the ground admits by 3D distance —
++        /// the ground objects hundreds of metres below are out of sight, another aircraft alongside is not. Set by
++        /// VehicleManager per pilot tick; false = ACE's 2D first-sight test.
++        /// </summary>
++        public bool Sight3D;
++
+         public void SetSightRadius(float radius)
+         {
+             var r = Math.Max(InitialClamp_Dist, radius);
+@@ -476,7 +483,7 @@ public bool AddVisibleObject(PhysicsObj obj)
+ 
+                 if (InitialClamp && !KnownObjects.ContainsKey(obj.ID))
+                 {
+-                    var distSq = PhysicsObj.Position.Distance2DSquared(obj.Position);
++                    var distSq = Sight3D ? PhysicsObj.Position.DistanceSquared(obj.Position) : PhysicsObj.Position.Distance2DSquared(obj.Position);
+ 
+                     if (distSq > SightRadiusSq)
+                         return false;
+diff --git a/Source/ACE.Server/Vehicles/FlightModel.cs b/Source/ACE.Server/Vehicles/FlightModel.cs
+index 1c4d82b..f06e25e 100644
+--- a/Source/ACE.Server/Vehicles/FlightModel.cs
++++ b/Source/ACE.Server/Vehicles/FlightModel.cs
+@@ -93,7 +93,9 @@ public static class FlightModel
+         /// <summary>Flight → Landing once the speed is within this of LandingSpeed (with Land held).</summary>
+         public const double LandingSpeedSlack = 0.5;
+         public const double WorldMin = 0.5;
+-        public const double WorldMax = 256.0 * 192.0 - 0.5;
++        // 255 landblocks a side (0x00-0xFE): landblock 0xFF does not exist, so the last metre inside the map is 255 × 192
++        // (the old 256 × 192 let a vehicle — and a bail-out fall — reach x / y in 0xFF at the north / east edge)
++        public const double WorldMax = 255.0 * 192.0 - 0.5;
+         const double TwoPi = 2.0 * Math.PI;
+ 
+         public static double MoveToward(double cur, double target, double maxDelta)
+diff --git a/Source/ACE.Server/Vehicles/VehicleBailout.cs b/Source/ACE.Server/Vehicles/VehicleBailout.cs
+index 17e9ed7..429f284 100644
+--- a/Source/ACE.Server/Vehicles/VehicleBailout.cs
++++ b/Source/ACE.Server/Vehicles/VehicleBailout.cs
+@@ -5,6 +5,9 @@
+ 
+ using log4net;
+ 
++using ACE.Entity.Enum;
++using ACE.Server.Entity;
++using ACE.Server.Managers;
+ using ACE.Server.Network.GameMessages.Messages;
+ using ACE.Server.WorldObjects;
+ 
+@@ -47,6 +50,35 @@ public sealed class FallState
+             public uint Steps;
+             public DateTime StartedUtc = DateTime.UtcNow;
+             public double StartAgl;
++            /// <summary>The Falling motion went out for this fall (vehicle_fall_motion): Ready follows at its end.</summary>
++            public bool FallMotionSent;
++        }
++
++        /// <summary>
++        /// `vehicle_fall_motion` (default off): the falling body is broadcast in the retail airborne motion,
++        /// MotionCommand.Falling (0x40000015) — the one motion retail plays for every body off the ground, jumping or
++        /// falling (CMotionInterp::apply_interpreted_movement, acclient.c:344193) — and back to Ready when the fall
++        /// ends (touchdown, logout, teleport). Standard UpdateMotion messages only: every client shows it, retail and
++        /// non-capable ones included, and a client that first sees the faller mid-fall gets it in the CreateObject
++        /// (CurrentMotionState). Off: the bail broadcasts Ready only (VehicleManager.Unseat), as before.
++        /// </summary>
++        public static bool FallMotion => PropertyManager.GetBool("vehicle_fall_motion", false).Item;
++
++        static void BroadcastFallMotion(Player p, MotionCommand command)
++        {
++            var motion = new Motion(MotionStance.NonCombat, command);
++            p.CurrentMotionState = motion;
++            p.EnqueueBroadcastMotion(motion);
++        }
++
++        /// <summary>The fall is over: Ready again for everyone (never on a corpse: its Dead motion stands).</summary>
++        static void EndFallMotion(FallState f)
++        {
++            var p = f.Player;
++            if (!f.FallMotionSent || p == null || p.IsDead)
++                return;
++            f.FallMotionSent = false;
++            BroadcastFallMotion(p, MotionCommand.Ready);
+         }
+ 
+         static readonly Dictionary<uint, FallState> falls = new Dictionary<uint, FallState>();
+@@ -96,6 +128,12 @@ public static void Bail(Vehicle v, Player player)
+                 Heading = heading, StartAgl = double.IsNaN(g) ? 0 : sz - g,
+             };
+             falls[player.Guid.Full] = f;
++            // after Unseat's Ready: the airborne motion for every client (vehicle_fall_motion, default off)
++            if (FallMotion)
++            {
++                BroadcastFallMotion(player, MotionCommand.Falling);
++                f.FallMotionSent = true;
++            }
+             // Value = the vehicle's heading at the bail: the chute glides along it (the client needs the same number)
+             VehicleManager.BroadcastEvent(v, VehicleEventKind.Bail, player.Guid.Full, (float)heading, seat, player);
+             log.Info($"[VEHICLE] {player.Name} bailed out of {v.Name} 0x{v.Guid.Full:X8} at {f.StartAgl:0} m AGL");
+@@ -190,6 +228,7 @@ static void Land(FallState f, Position pos)
+                 if (ratio > 0)
+                     p.TakeDamage_Falling((float)(ratio * 87.293810));
+             }
++            EndFallMotion(f); // back to Ready (after the damage: a body the landing killed keeps its Dead motion)
+             var v = VehicleManager.Get(f.Vehicle);
+             if (v != null && !v.IsDestroyed && v.PhysicsObj != null)
+                 VehicleManager.BroadcastEvent(v, VehicleEventKind.Touchdown, p.Guid.Full, (float)impact, pos, p);
+@@ -211,11 +250,20 @@ public static void LandNow(Player player)
+             falls.Remove(player.Guid.Full);
+         }
+ 
+-        /// <summary>A teleport while falling ends the fall (the teleport places the body).</summary>
++        /// <summary>
++        /// A teleport while falling ends the fall (the teleport places the body). The capable faller gets a Touchdown
++        /// with no placement (cell 0, value -1): its client ends the fall twin and releases the seat lock (the wasm only
++        /// snaps to a non-zero cell), instead of holding the body in the air until its own bound — the client's bound
++        /// is long now (up to ~20 min for a 5 km bail). With vehicle_fall_motion the body is back in Ready before the
++        /// teleport re-creates it at the destination.
++        /// </summary>
+         public static void Cancel(Player player)
+         {
+-            if (player != null)
+-                falls.Remove(player.Guid.Full);
++            if (player == null || !falls.TryGetValue(player.Guid.Full, out var f))
++                return;
++            falls.Remove(player.Guid.Full);
++            EndFallMotion(f);
++            VehicleManager.SendEventTo(player, f.Vehicle, VehicleEventKind.Touchdown, -1f, new Position());
+         }
+ 
+         public static string Report() => $"falling: {falls.Count}";
+diff --git a/Source/ACE.Server/Vehicles/VehicleManager.cs b/Source/ACE.Server/Vehicles/VehicleManager.cs
+index 9bbd3d0..1f333d0 100644
+--- a/Source/ACE.Server/Vehicles/VehicleManager.cs
++++ b/Source/ACE.Server/Vehicles/VehicleManager.cs
+@@ -58,9 +58,25 @@ public static class VehicleManager
+ 
+         public static bool Enabled => PropertyManager.GetBool("vehicles_enabled", false).Item;
+         public static float SpeedCap => (float)PropertyManager.GetDouble("vehicle_speed_cap", 69.0).Item;
++        // the flight-experience high band (2026-11-01); all 0 = off
++        public static double CeilingAglOverride => PropertyManager.GetDouble("vehicle_ceiling_agl", 0.0).Item;
++        public static double ClimbMaxOverride => PropertyManager.GetDouble("vehicle_climb_max", 0.0).Item;
++        public static double DerelictHighAgl => PropertyManager.GetDouble("vehicle_derelict_high_agl", 0.0).Item;
++        public static double HighBandAgl => PropertyManager.GetDouble("vehicle_high_band_agl", 0.0).Item;
++        const double DerelictHighDespawnSeconds = 30.0;
+         /// <summary>First-sight radius for seated pilots (M3; 112.5 = ACE's own). Landmarks only beyond 112.5 m.</summary>
+         public static float SightRadius => (float)Math.Max(Physics.Common.ObjectMaint.InitialClamp_Dist, PropertyManager.GetDouble("vehicle_sight_radius", 112.5).Item);
+ 
++        /// <summary>Body placement bounds: landblocks 1..253 (the edge rows cannot load their adjacents).</summary>
++        const double BodyEdgeMin = 192.0 + 1.0, BodyEdgeMax = 254.0 * 192.0 - 1.0;
++
++        /// <summary>vehicle_observer_sight_radius (default 0 = off): the first-sight radius of a capable client on foot.</summary>
++        public static float ObserverSightRadius => (float)Math.Max(Physics.Common.ObjectMaint.InitialClamp_Dist, PropertyManager.GetDouble("vehicle_observer_sight_radius", 0.0).Item);
++
++        /// <summary>The on-foot sight radius for this player: the observer radius for a capable (observe) session, else ACE's.</summary>
++        public static float OnFootSightRadius(Player player) =>
++            player?.Session != null && (player.Session.VehicleCapabilities & VehicleWire.CapObserve) != 0 ? ObserverSightRadius : Physics.Common.ObjectMaint.InitialClamp_Dist;
++
+         public static int Count => vehicles.Count;
+         public static IEnumerable<Vehicle> All => vehicles.Values;
+ 
+@@ -136,12 +152,14 @@ static void TickInner()
+                 }
+                 if (v.State.Mode == VehicleMode.Crashed && (DateTime.UtcNow - v.ModeSinceUtc).TotalSeconds >= CrashedDespawnSeconds)
+                     (despawn ??= new List<(Vehicle, string)>()).Add((v, "crashed"));
++                else if (v.State.Mode == VehicleMode.Derelict && IsDerelictHigh(v))
++                    (despawn ??= new List<(Vehicle, string)>()).Add((v, "derelict high"));
+             }
+ 
+             if (despawn != null)
+                 foreach (var (v, why) in despawn)
+                 {
+-                    if (why != "crashed")
++                    if (why != "crashed" && why != "derelict high")
+                         log.Warn($"[VEHICLE] {v.Name} 0x{v.Guid.Full:X8}: {why} outside VehicleManager — despawning");
+                     Despawn(v, why);
+                 }
+@@ -150,6 +168,48 @@ static void TickInner()
+             if (LastTickMicros > MaxTickMicros) MaxTickMicros = LastTickMicros;
+         }
+ 
++        /// <summary>Height above the ground under the vehicle (NaN off the map).</summary>
++        static double Agl(Vehicle v) => v.State.Z - VehicleTerrain.Ground(v.State.X, v.State.Y);
++
++        /// <summary>
++        /// vehicle_derelict_high_agl (flight experience): an empty vehicle left high in the air (its pilot bailed out of the
++        /// high band) glides down at idle for many minutes — ~13 min and ~25 km from 5 km up — loading a 3×3 of landblocks
++        /// at every crossing for nobody. Above the threshold it despawns 30 s after it went derelict (it is a dot by then).
++        /// </summary>
++        static bool IsDerelictHigh(Vehicle v)
++        {
++            var band = DerelictHighAgl;
++            if (band <= 0 || (DateTime.UtcNow - v.ModeSinceUtc).TotalSeconds < DerelictHighDespawnSeconds)
++                return false;
++            var agl = Agl(v);
++            return !double.IsNaN(agl) && agl > band;
++        }
++
++        /// <summary>vehicle_high_band_agl (flight experience): the pilot is above the band where the ground matters.</summary>
++        public static bool InHighBand(Vehicle v)
++        {
++            var band = HighBandAgl;
++            if (band <= 0)
++                return false;
++            var agl = Agl(v);
++            return !double.IsNaN(agl) && agl > band;
++        }
++
++        /// <summary>
++        /// The flight-experience high band (2026-11-01): vehicle_ceiling_agl / vehicle_climb_max replace the profile's
++        /// ceiling and climb rate for vehicles spawned from now on (0 = the profile's own). The profile travels to capable
++        /// clients in VehicleProfileMsg, so their predictors integrate with exactly the same numbers.
++        /// </summary>
++        static void ApplyEnvelopeOverrides(VehicleProfile p)
++        {
++            var ceiling = CeilingAglOverride;
++            if (ceiling > 0)
++                p.CeilingAgl = (float)Math.Clamp(ceiling, p.FloorAgl + 10.0, 20000.0);
++            var climb = ClimbMaxOverride;
++            if (climb > 0)
++                p.ClimbMax = (float)Math.Clamp(climb, 1.0, 200.0);
++        }
++
+         /// <summary>A piloted vehicle steps only on the pilot's inputs: after this long without any, it steps on its own.</summary>
+         const double StarvationSeconds = 2.5;
+         /// <summary>Steps owed beyond this are forgiven (the pilot's client runs slower than real time).</summary>
+@@ -372,7 +432,12 @@ static void MovePilot(Vehicle v, Player pilot, Position seatPos)
+             var tc = Stopwatch.GetTimestamp();
+             if (seatPos.Landblock != prevLb)
+                 Relocate(pilot, v);
+-            if (v.SimStep % 6 == 0)
++            // vehicle_high_band_agl: high above the ground the pilot sees by 3D distance (no ground objects from
++            // hundreds of metres up) and wakes no monsters
++            var high = InHighBand(v);
++            if (pilot.PhysicsObj.ObjMaint.Sight3D != high)
++                pilot.PhysicsObj.ObjMaint.Sight3D = high;
++            if (v.SimStep % 6 == 0 && !high)
+                 pilot.CheckMonsters();
+             v.Costs.PhasePilotRelocMonstersMs = (Stopwatch.GetTimestamp() - tc) * 1000.0 / Stopwatch.Frequency;
+         }
+@@ -652,6 +717,9 @@ public static void HandleCapabilities(Session session, VehicleClientCapabilities
+             log.Info($"[VEHICLE] {session.Player?.Name}: ClientCapabilities 0x{msg.Flags:X} → granted 0x{granted:X}");
+             if ((granted & VehicleWire.CapObserve) != 0 && session.Player?.PhysicsObj != null)
+             {
++                // vehicle_observer_sight_radius: a capable client on foot sees aircraft (landmarks) from farther than 112.5 m
++                if (!IsSeated(session.Player) && ObserverSightRadius > Physics.Common.ObjectMaint.InitialClamp_Dist)
++                    session.Player.PhysicsObj.ObjMaint.SetSightRadius(ObserverSightRadius);
+                 foreach (var po in session.Player.PhysicsObj.ObjMaint.GetKnownObjectsValues())
+                     if (po.WeenieObj?.WorldObject is Vehicle v && !v.IsDestroyed)
+                         SendIntro(session.Player, v);
+@@ -763,7 +831,8 @@ public static void Unseat(Vehicle v, Player player, bool placeOnGround, bool kee
+             seated.Remove(player.Guid.Full);
+             v.SeatOccupants[s.seat] = 0;
+             v.Input.Reset();
+-            player.PhysicsObj?.ObjMaint.SetSightRadius(Physics.Common.ObjectMaint.InitialClamp_Dist);
++            player.PhysicsObj?.ObjMaint.SetSightRadius(OnFootSightRadius(player));
++            if (player.PhysicsObj != null) player.PhysicsObj.ObjMaint.Sight3D = false;
+ 
+             if (!keepAirborne)
+             {
+@@ -780,6 +849,11 @@ public static void Unseat(Vehicle v, Player player, bool placeOnGround, bool kee
+             if (placeOnGround)
+             {
+                 var (x, y, _) = v.LocalToWorld(new Vector3(-3.0f, 0.0f, 0.0f));
++                // a vehicle at the world's edge (FlightModel WorldMax) would put the body in the map's last landblock
++                // row / column, whose adjacents ACE cannot load (GetLandblock IndexOutOfRange took the world thread
++                // down, 2026-11-02 03:23, a pilot logging out from a Hellcat drifted into the north-east corner)
++                x = Math.Clamp(x, BodyEdgeMin, BodyEdgeMax);
++                y = Math.Clamp(y, BodyEdgeMin, BodyEdgeMax);
+                 var gz = VehicleTerrain.HeightAt((float)x, (float)y);
+                 if (float.IsNaN(gz)) gz = (float)v.State.Z;
+                 var pos = Vehicle.ToPosition(x, y, gz + 0.05, Vehicle.YawOnly(v.State.Heading));
+@@ -878,6 +952,7 @@ public static Vehicle Spawn(Player by, VehicleProfile profile, out string error)
+             var gz = VehicleTerrain.Ground(gx, gy);
+             if (double.IsNaN(gz)) { error = "no terrain there"; return null; }
+ 
++            ApplyEnvelopeOverrides(profile);
+             var guid = GuidManager.NewDynamicGuid();
+             var v = new Vehicle(Vehicle.BuildWeenie(profile), guid, profile);
+             v.State = new FlightState { X = gx, Y = gy, Z = gz, Heading = FlightModel.WrapHeading(heading), Mode = VehicleMode.Parked };
+@@ -891,7 +966,7 @@ public static Vehicle Spawn(Player by, VehicleProfile profile, out string error)
+                 return null;
+             }
+             vehicles[guid.Full] = v;
+-            log.Info($"[VEHICLE] {by.Name} spawned {profile.Key} 0x{guid.Full:X8} at {v.Location.ToLOCString()}");
++            log.Info($"[VEHICLE] {by.Name} spawned {profile.Key} 0x{guid.Full:X8} at {v.Location.ToLOCString()} (ceiling {profile.CeilingAgl:0} m AGL, climb {profile.ClimbMax:0.#} m/s)");
+             return v;
+         }
+ 
+diff --git a/Source/ACE.Server/Vehicles/VehicleWeapons.cs b/Source/ACE.Server/Vehicles/VehicleWeapons.cs
+index 1503c5b..636e2ab 100644
+--- a/Source/ACE.Server/Vehicles/VehicleWeapons.cs
++++ b/Source/ACE.Server/Vehicles/VehicleWeapons.cs
+@@ -126,9 +126,18 @@ static List<Candidate> Candidates(Player pilot, Vector3 muzzle, float range)
+             var list = new List<Candidate>();
+             if (pilot?.PhysicsObj == null)
+                 return list;
++            var gunPlayers = GunHitsPlayers;
+             foreach (var c in pilot.PhysicsObj.ObjMaint.GetKnownObjectsValuesAsCreature())
+             {
+-                if (c == null || c is Player || c.IsDead || !c.Attackable || c.PhysicsObj == null || c.Location == null || c.Location.Indoors)
++                if (c == null || c.IsDead || c.PhysicsObj == null || c.Location == null || c.Location.Indoors)
++                    continue;
++                // players only with vehicle_gun_players, and never the pilot, a seated player or a player in a server-owned fall
++                if (c is Player p)
++                {
++                    if (!gunPlayers || p == pilot || VehicleManager.IsSeated(p) || VehicleBailout.IsFalling(p))
++                        continue;
++                }
++                else if (!c.Attackable)
+                     continue;
+                 var (cx, cy, cz) = Vehicle.ToGlobal(c.Location);
+                 var b = new Vector3((float)cx, (float)cy, (float)cz);
+@@ -211,10 +220,20 @@ static bool TerrainOccludes(Vector3 o, Vector3 d, double tHit)
+             return false;
+         }
+ 
++        /// <summary>vehicle_gun_players (default off): the gun also hits players on foot (filming vehicle PvP).</summary>
++        public static bool GunHitsPlayers => ACE.Server.Managers.PropertyManager.GetBool("vehicle_gun_players", false).Item;
++
+         static void ApplyHit(Vehicle v, Player pilot, Creature target, VehicleWeaponDef wpn)
+         {
+             v.Costs.BoltsHit++;
+             var amount = wpn.Damage * (float)(0.85 + 0.3 * VehicleRng.NextDouble());
++            if (target is Player victim)
++            {
++                // the player's own path: invincibility, lifestone protection, hit sound / splatter, death, corpse
++                var taken = victim.TakeDamage(pilot, DamageType.Pierce, amount, BodyPart.Chest, false);
++                VehicleManager.BroadcastEvent(v, VehicleEventKind.Hit, victim.Guid.Full, (uint)Math.Max(0, taken));
++                return;
++            }
+             var dealt = target.TakeDamage(pilot, DamageType.Pierce, amount, false);
+ 
+             if (target.IsAlive && dealt > 0)
+-- 
+2.47.3
+

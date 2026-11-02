@@ -163,6 +163,9 @@ export class LayeredHazePass extends Pass {
     const cam = this.camera;
     let strength = this.strength;
     try { if (this.isSkyBlocked()) strength = 0; } catch (_) { /* haze on */ }
+    // ?flightView (altitude_policy.js): the haze fades out with altitude while flying (1 on foot)
+    const fly = globalThis.__hbFlightHazeScale;
+    if (Number.isFinite(fly)) strength *= Math.max(0, Math.min(1, fly));
     if (!u.tDepth.value || !cam || !cam.isPerspectiveCamera) strength = 0;
     if (cam) {
       u.uLogFar.value = Math.log2(cam.far + 1.0);

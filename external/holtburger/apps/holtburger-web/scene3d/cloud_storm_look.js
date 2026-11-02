@@ -94,6 +94,53 @@ export const STORM_LAYERS = [
     densityProfile: { expTerm: 0, exponent: 0, linearTerm: -0.55, constantTerm: 1.0 } },
 ];
 
+// ?flightView high band (flight experience Phase 4, 2026-11-01): flying through and above a storm. The cumulonimbus
+// layer is the storm's 2D weather map extruded through 6 km with a sharp coverage edge: from the ground it reads as
+// towers, but from an aircraft it is streaky vertical walls, and inside it (0.6-6.6 km) a featureless murk. The 1070
+// A/B (forced storm, 1.2 km and 5 km, bench/cloud-ab-1070.mjs) showed that light shafts, the march step and the shape
+// detail are NOT the cause, and that without the tower layer the storm reads right from the air: flying among its
+// cumulus deck (the r / g layers, 0.6-2 km) with gaps onto the ground, and from above a deck below the aircraft. So
+// while the aircraft is up (the altitude policy eases `highBand` 0 → 1 above 900 m AGL, back below 700 m) the
+// tower FADES OUT (density × 0.02) as its height eases 6,000 → 1,900 m. Everything else is the storm look verbatim;
+// players on the ground never see it (highBand 0).
+export const STORM_TOWER_HEIGHT_LOW = 6000;
+export const STORM_TOWER_HEIGHT_HIGH = 1900;
+export const STORM_TOWER_DENSITY_HIGH_SCALE = 0.02;
+// ...and the cumulus deck's tops round off (shapeAlteringBias 0.35 → 0.7 on r / g): the same A/B, fewer vertical
+// striations on the flanks seen from above, the gaps onto the ground kept (a wider coverage filter closed them).
+export const STORM_DECK_SHAPE_BIAS_HIGH = 0.7;
+// The FAIR look, from the air (2026-11-02, 1070 A/B on a live flight at 5 km, bench/fps-ab-1070.mjs, paired shots): its
+// alto deck (3.5 km, 600 m, density 0.004 — a faint high veil from below) lay over the whole view from above as one
+// grey-lavender sheet: at the grazing angles of a view from 4-5 km its path is kilometres long, so the cumulus deck
+// and the ground under it were a blur. While the aircraft is up (the same `highBand` blend) the alto deck thins
+// (density × 0.1; × 0.25 still read as haze) and the cumulus tops round off as the storm deck's do. The frame rate is
+// unchanged (within the A/B's noise). Players on the ground never see it (highBand 0).
+export const FAIR_ALTO_DENSITY_HIGH_SCALE = 0.1;
+/** The look's layer table for a storm flag and a high-band blend (0..1, quantized to 1 %). */
+export function lookLayers(isStorm, highBand = 0) {
+  const b = Math.max(0, Math.min(1, Math.round((Number(highBand) || 0) * 100) / 100));
+  if (!isStorm) {
+    if (b === 0) return FAIR_LAYERS;
+    const out = FAIR_LAYERS.map((l) => ({ ...l }));
+    out[3].densityScale = FAIR_LAYERS[3].densityScale * (1 + (FAIR_ALTO_DENSITY_HIGH_SCALE - 1) * b);
+    for (const i of [0, 1]) {
+      const base = FAIR_LAYERS[i].shapeAlteringBias;
+      out[i].shapeAlteringBias = Math.round((base + (STORM_DECK_SHAPE_BIAS_HIGH - base) * b) * 1000) / 1000;
+    }
+    return out;
+  }
+  if (b === 0) return STORM_LAYERS;
+  const out = STORM_LAYERS.map((l) => ({ ...l }));
+  const t = out[3];
+  t.height = Math.round(STORM_TOWER_HEIGHT_LOW + (STORM_TOWER_HEIGHT_HIGH - STORM_TOWER_HEIGHT_LOW) * b);
+  t.densityScale = STORM_LAYERS[3].densityScale * (1 + (STORM_TOWER_DENSITY_HIGH_SCALE - 1) * b);
+  for (const i of [0, 1]) {
+    const base = STORM_LAYERS[i].shapeAlteringBias;
+    out[i].shapeAlteringBias = Math.round((base + (STORM_DECK_SHAPE_BIAS_HIGH - base) * b) * 1000) / 1000;
+  }
+  return out;
+}
+
 const LAYER_KEYS = [
   'channel', 'altitude', 'height', 'densityScale', 'shapeAmount',
   'shapeDetailAmount', 'weatherExponent', 'shapeAlteringBias',
@@ -146,10 +193,10 @@ export function cloudCoverageOwnedByKnob(effect) {
  * @param {boolean} isStorm — the DayGroup SkyObject storm signal
  * @returns {boolean} false if the effect had no usable cloudLayers
  */
-export function applyCloudLook(effect, isStorm) {
+export function applyCloudLook(effect, isStorm, highBand = 0) {
   const layers = effect?.cloudLayers;
   if (!layers || layers.length < 4) return false;
-  const src = isStorm ? STORM_LAYERS : FAIR_LAYERS;
+  const src = lookLayers(isStorm, highBand);
   for (let i = 0; i < 4; i++) {
     for (const key of LAYER_KEYS) layers[i][key] = src[i][key];
     // densityProfile: write the spec'd terms, or RESET to takram's default
@@ -194,10 +241,10 @@ export function applyCloudLook(effect, isStorm) {
  * @param {boolean} isStorm
  * @returns {boolean} also true when the effect has no usable cloudLayers
  */
-export function cloudLayersMatchLook(effect, isStorm) {
+export function cloudLayersMatchLook(effect, isStorm, highBand = 0) {
   const layers = effect?.cloudLayers;
   if (!layers || layers.length < 4) return true;
-  const src = isStorm ? STORM_LAYERS : FAIR_LAYERS;
+  const src = lookLayers(isStorm, highBand);
   for (let i = 0; i < 4; i++) {
     const l = layers[i];
     for (const key of LAYER_KEYS) if (l[key] !== src[i][key]) return false;
@@ -209,4 +256,91 @@ export function cloudLayersMatchLook(effect, isStorm) {
     }
   }
   return true;
+}
+
+// ?cloudHighBand (flight experience, 2026-11-01; DEFAULT ON, `=off` escapes) — above the deck (the altitude
+// policy's above-deck blend `__hbCloudAboveDeck`, > 1.8 km AGL) the clouds march EVERY pixel at half resolution
+// instead of takram's temporal upscale. The upscale refreshes one pixel per 4x4 block per frame and keeps the
+// other 15 from history; seen from above, the cloud tops showed as salt-and-pepper speckle that never averaged
+// out (1070 probe, a still camera for 24 s at 5 km; a looser variance clip, gamma 12, did not help). With the
+// upscale off at half resolution the tops are smooth: 4x the march texels of the upscale, and the 1070 held
+// 27-28 fps at 5 km under its 30 fps off-screen cap. The switch flips the RESOLVE material's TEMPORAL_UPSCALE
+// define, so its other variant is linked off the frame first (compileAsync) and the switch waits for it.
+let _cloudHighBandCache;
+export function cloudHighBandEnabled(search) {
+  if (search === undefined && _cloudHighBandCache !== undefined) return _cloudHighBandCache;
+  let on = true;
+  try {
+    const s = search !== undefined ? search : (globalThis.location?.search || '');
+    const v = (new URLSearchParams(s).get('cloudHighBand') || '').trim().toLowerCase();
+    on = !(v === 'off' || v === '0' || v === 'false' || v === 'no');
+  } catch (_) {
+    on = true;
+  }
+  if (search === undefined) _cloudHighBandCache = on;
+  return on;
+}
+/** The full-march state for the above-deck blend (0..1; `__hbCloudAboveDeck`), with hysteresis: on above 0.65, off below 0.35. */
+export function cloudHighBandWant(hb, current) {
+  const b = Number(hb) || 0;
+  return current ? b > 0.35 : b > 0.65;
+}
+
+// ?cloudHighBandMarch (2026-11-02; DEFAULT ON, `=off` escapes) — the every-pixel march above the deck without the
+// two parts of takram's "high" preset the view from above does not show. Uniforms only (no program change): applied at
+// the switch into the high band, put back when the march leaves it. 1070 A/B on a live flight at 5 km AGL over the storm
+// deck (bench/fps-ab-1070.mjs; vsync, 120 Hz; paired screenshots 0.7 s apart): the high band as built held 39 fps.
+//   * The light shafts OFF (CLOUD_HIGH_BAND_SHAFTS_MUL): their per-pixel march (the aerial perspective in cloud
+//     shadow, 50 m steps growing x1.01, ~160 over the 20 km of a view ray from 5 km) was the largest single cost —
+//     39 → 65 fps without it, and the paired shots are indistinguishable from above. It goes through the SAME
+//     uniform ?cloudNight already scales for the night (maxShadowLengthRayDistance × mul; 0 = the march exits on its
+//     first step), so there is one writer and no define flip (`lightShafts = false` would relink the clouds program).
+//   * maxIterationCountToGround 3 → 1: the ground-bounce samples light the deck's UNDERSIDES, out of view from above.
+//     NOT 0: takram's CloudsMaterial.onBeforeRender deletes its GROUND_BOUNCE define when the count is 0 (or the
+//     bounce scale is), and that relinks the whole clouds program — the ~300 ms frame at the switch into the band in
+//     the 1070 runs U11 / U12 (on a cold shader cache it would be seconds). At 1 the define stays: uniforms only.
+//   Rejected: a coarser shaft step (400 m: 45 fps), resolution 0.45 (58 fps with both of the above, visibly grainier).
+export const CLOUD_HIGH_BAND_MARCH = Object.freeze({ maxIterationCountToGround: 1 });
+export const CLOUD_HIGH_BAND_SHAFTS_MUL = 0;
+let _cloudHighBandMarchCache;
+export function cloudHighBandMarchEnabled(search) {
+  if (search === undefined && _cloudHighBandMarchCache !== undefined) return _cloudHighBandMarchCache;
+  let on = true;
+  try {
+    const s = search !== undefined ? search : (globalThis.location?.search || '');
+    const v = (new URLSearchParams(s).get('cloudHighBandMarch') || '').trim().toLowerCase();
+    on = !(v === 'off' || v === '0' || v === 'false' || v === 'no');
+  } catch (_) {
+    on = true;
+  }
+  if (search === undefined) _cloudHighBandMarchCache = on;
+  return on;
+}
+/** Write `march` onto the effect's clouds params; returns the values it replaced (for restoreHighBandMarch). */
+export function applyHighBandMarch(clouds, march = CLOUD_HIGH_BAND_MARCH) {
+  const base = {};
+  if (!clouds || !march) return base;
+  for (const k of Object.keys(march)) {
+    if (!(k in clouds)) continue;
+    base[k] = clouds[k];
+    clouds[k] = march[k];
+  }
+  return base;
+}
+/** Put back the values applyHighBandMarch replaced. */
+export function restoreHighBandMarch(clouds, base) {
+  if (!clouds || !base) return;
+  for (const k of Object.keys(base)) clouds[k] = base[k];
+}
+/**
+ * What something (a quality preset) has re-written since applyHighBandMarch: { key: its value now } for each param
+ * that no longer holds the high band's value, or null. Those values are the new base for the way down.
+ */
+export function highBandMarchDrift(clouds, march = CLOUD_HIGH_BAND_MARCH) {
+  if (!clouds || !march) return null;
+  let out = null;
+  for (const k of Object.keys(march)) {
+    if (k in clouds && clouds[k] !== march[k]) (out || (out = {}))[k] = clouds[k];
+  }
+  return out;
 }

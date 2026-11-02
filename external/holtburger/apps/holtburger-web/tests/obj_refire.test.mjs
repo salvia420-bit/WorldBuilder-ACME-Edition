@@ -209,7 +209,9 @@ console.log("-- O6 wiring (index.js) -------------------------------------------
   const iStaged = src.indexOf("adapter.refireStagedFeeds();\n");
   const iTick = src.indexOf("if (objRefire) objRefire.tick(grid, gridPlayerLbKey, t);");
   check("refire ticks after the staged refire", iStaged > 0 && iTick > iStaged);
-  check("crossing memory fed on each grid tick", src.includes("if (objRefire) objRefire.notePlayer(lbOnly, now());"));
+  // 2026-11-01 flight experience: the crossing memory is fed the RIG's landblock (the grid/object centre may be
+  // flight-biased under ?flightResidency, the travel direction must not be)
+  check("crossing memory fed on each grid tick", src.includes("if (objRefire) objRefire.notePlayer(playerLbOnly, now());"));
   check("module loaded only when the flag is on (not statically imported)",
     !/^import .*object_refire\.js/m.test(src) && src.includes('await import("./object_refire.js")'));
   check("feeds stay the objRadius-gated fireLb", src.includes("fireLb: (x, y) => feeds.fireLb(x, y),"));

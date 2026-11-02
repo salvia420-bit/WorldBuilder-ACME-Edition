@@ -597,6 +597,9 @@ export function createLandblockStream(D) {
     } catch (_) {}
   }, 500);
   async function ensureBuildingAabbsAroundLandblock(centreLb) {
+    // ?flightLight (scene3d/residency.js): an airborne aircraft walks into no wall — the next position update on the
+    // ground populates the ring (this runs on every update and is idempotent per landblock)
+    try { if (globalThis.__hbFlightLightActive?.()) return; } catch (_) { /* fail-soft: populate */ }
     // Same 3x3 ring as `ensureTerrainAroundLandblock`: the player
     // needs collision in the cells surrounding the spawn / current
     // LB so a sprint across an LB boundary doesn't tear through a
@@ -868,6 +871,10 @@ export function createLandblockStream(D) {
     objectsRenderAddedLbs,
   });
   window.__worldStreamer = worldStreamer; // headless-test / diag introspection
+  // flight experience (?flightResidency, scene3d/vehicle/index.js): the wasm COLLISION terrain prefetch alone
+  // (the 3x3 around a landblock: terrainHeightAt + the predictor's floor), for the aircraft's lead point — without
+  // the position-packet side effects (noteServerLb, landblockChanged, the render ring).
+  window.__ensureCollisionTerrain = ensureTerrainAroundLandblock;
 
   function handlePositionUpdate(upd) {
     // No meta on Position — reuse what the prior Spawn deposited

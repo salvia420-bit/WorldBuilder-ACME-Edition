@@ -6,6 +6,12 @@
 // players (positioned by their entity rig) — it blossoms open over 0.8 s, sways gently, and collapses at touchdown.
 // Retail clients see the falling body only (no canopy object exists on the server).
 // `?vehicleChute=off` (exact) draws none. Geometry lives under liveScene3d.worldRoot (AC frame: x east, y north, z up).
+//
+// Fall pose (fall_pose.js, `?vehicleFallAnim`, decision 57): a body whose canopy pose is playing hands its riser
+// grips to the pose (`poseOf(guid).risers` = [{grip, shoulder}] x 2, rig units): the shroud lines then run to the two
+// hands and a riser strap joins each hand to its shoulder; without them the lines meet at one harness point. The whole
+// canopy follows the rig's root scale (`poseOf(guid).scale`, the heritage's CharGen scale). The line ends at the body
+// never shrink with the opening dome.
 
 export const CANOPY = Object.freeze({
   radius: 3.5, // rim radius (m) — a ~7 m WW2-era canopy
@@ -61,12 +67,27 @@ export function canopyGeometry(c = CANOPY) {
       for (const tri of tris) for (const v of tri) { pos.push(v[0], v[1], v[2]); col.push(k[0], k[1], k[2]); }
     }
   }
-  const lines = [];
+  return { positions: new Float32Array(pos), colors: new Float32Array(col), lines: lineSegments(1, 1, null, c) };
+}
+
+/**
+ * Shroud lines (+ riser straps) in the canopy frame for an opening scale (`s` horizontal, `sz` vertical: the dome's
+ * current scale; the rim points scale with it, the ends at the body do not). `risers` = null → every line meets the
+ * harness point (0, 0, harness); [{grip, shoulder}, {grip, shoulder}] (left, right) → the lines on each side run to
+ * that hand's grip and two more segments join each grip to its shoulder. Pure.
+ */
+export function lineSegments(s = 1, sz = 1, risers = null, c = CANOPY) {
+  const out = [];
+  const two = Array.isArray(risers) && risers.length === 2 && risers.every((r) => r && Array.isArray(r.grip) && Array.isArray(r.shoulder));
   for (let i = 0; i < c.lines; i++) {
     const a = (i / c.lines) * 2 * Math.PI;
-    lines.push(c.radius * Math.sin(a), c.radius * Math.cos(a), c.rise, 0, 0, c.harness);
+    const x = c.radius * Math.sin(a) * s, y = c.radius * Math.cos(a) * s, z = c.rise * sz;
+    // left side (x < 0, and the back line) to the left grip; right side (x > 0, and the front line) to the right
+    const end = two ? (Math.sin(a) < -1e-9 || (Math.abs(Math.sin(a)) <= 1e-9 && Math.cos(a) < 0) ? risers[0].grip : risers[1].grip) : [0, 0, c.harness];
+    out.push(x, y, z, end[0], end[1], end[2]);
   }
-  return { positions: new Float32Array(pos), colors: new Float32Array(col), lines: new Float32Array(lines) };
+  if (two) for (const r of risers) out.push(r.grip[0], r.grip[1], r.grip[2], r.shoulder[0], r.shoulder[1], r.shoulder[2]);
+  return new Float32Array(out);
 }
 
 /**
@@ -75,8 +96,8 @@ export function canopyGeometry(c = CANOPY) {
 export function createChutes(deps = {}) {
   const live = deps.liveScene3d ?? null;
   const THREE = deps.THREE ?? null;
-  const canopies = new Map(); // guid → {group, t, closing, ct}
-  let shared = null; // geometries + materials, built on first use
+  const canopies = new Map(); // guid → {group, dome, lines, t, closing, ct, linesKey}
+  let shared = null; // the dome geometry + materials, built on first use
   let opened = 0;
 
   function ensureShared() {
@@ -87,16 +108,13 @@ export function createChutes(deps = {}) {
     dome.setAttribute("color", new THREE.BufferAttribute(g.colors, 3));
     dome.computeVertexNormals();
     dome.userData.__disposable = true;
-    const lines = new THREE.BufferGeometry();
-    lines.setAttribute("position", new THREE.BufferAttribute(g.lines, 3));
-    lines.userData.__disposable = true;
     const domeMat = deps.wireframe
       ? new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide })
       : new THREE.MeshStandardMaterial({ vertexColors: true, side: THREE.DoubleSide, roughness: 0.95, metalness: 0 });
     domeMat.userData.__disposable = true;
     const lineMat = new THREE.LineBasicMaterial({ color: 0x3a3a30 });
     lineMat.userData.__disposable = true;
-    shared = { dome, lines, domeMat, lineMat };
+    shared = { dome, domeMat, lineMat };
     return shared;
   }
 
@@ -108,14 +126,20 @@ export function createChutes(deps = {}) {
     if (!live || !live.worldRoot || !ensureShared()) return;
     const group = new THREE.Group();
     group.name = `vehicle-chute-${g.toString(16)}`;
+    const domeGroup = new THREE.Group();
     const dome = new THREE.Mesh(shared.dome, shared.domeMat);
     dome.frustumCulled = false;
-    const lines = new THREE.LineSegments(shared.lines, shared.lineMat);
+    domeGroup.add(dome);
+    // per-canopy lines (their body ends follow the riser grips; ≤ 10 segments, rewritten only when they move)
+    const lineGeom = new THREE.BufferGeometry();
+    lineGeom.setAttribute("position", new THREE.BufferAttribute(new Float32Array((CANOPY.lines + 2) * 6), 3));
+    lineGeom.setDrawRange(0, CANOPY.lines * 2);
+    const lines = new THREE.LineSegments(lineGeom, shared.lineMat);
     lines.frustumCulled = false;
-    group.add(dome, lines);
+    group.add(domeGroup, lines);
     group.visible = false; // until the first pose
     live.worldRoot.add(group);
-    canopies.set(g, { group, t: 0, closing: false, ct: 0 });
+    canopies.set(g, { group, domeGroup, lines, lineGeom, t: 0, closing: false, ct: 0, lastS: NaN, lastSz: NaN, lastRisers: undefined });
     opened++;
   }
 
@@ -128,12 +152,25 @@ export function createChutes(deps = {}) {
     const c = canopies.get(guid >>> 0);
     if (!c) return;
     try { c.group.parent?.remove(c.group); } catch (_) { /* gone */ }
+    try { c.lineGeom.dispose(); } catch (_) { /* gone */ }
     canopies.delete(guid >>> 0);
+  }
+
+  // rewritten only when the dome's scale or the riser grips (a cached array per body) change: the opening / collapse
+  function writeLines(c, s, sz, risers) {
+    if (s === c.lastS && sz === c.lastSz && risers === c.lastRisers) return;
+    c.lastS = s; c.lastSz = sz; c.lastRisers = risers;
+    const seg = lineSegments(s, sz, risers);
+    const attr = c.lineGeom.getAttribute("position");
+    attr.array.set(seg);
+    attr.needsUpdate = true;
+    c.lineGeom.setDrawRange(0, seg.length / 3);
   }
 
   /**
    * @param {number} dt seconds
-   * @param {(guid: number) => ({x:number,y:number,z:number,heading:number}|null)} poseOf the body's feet + heading
+   * @param {(guid: number) => ({x:number,y:number,z:number,heading:number,scale?:number,risers?:Array}|null)} poseOf
+   *   the body's feet + heading (+ the rig's root scale and, from the fall pose, the riser grips)
    */
   function tick(dt, poseOf) {
     for (const [guid, c] of canopies) {
@@ -151,10 +188,13 @@ export function createChutes(deps = {}) {
         s = s * (1 + 0.25 * k); // and spreads
         sink = 2.5 * k;
       }
+      const k = Number.isFinite(p.scale) && p.scale > 0 ? p.scale : 1;
       const w = 2 * Math.PI * CANOPY.swayHz * c.t;
       c.group.position.set(p.x, p.y, p.z - sink);
       c.group.rotation.set(CANOPY.swayRad * Math.sin(w), CANOPY.swayRad * 0.6 * Math.sin(w * 1.3 + 1), -(p.heading || 0), "ZXY");
-      c.group.scale.set(s, s, sz);
+      c.group.scale.set(k, k, k);
+      c.domeGroup.scale.set(s, s, sz);
+      writeLines(c, s, sz, c.closing ? null : (p.risers ?? null));
       c.group.visible = true;
     }
   }
@@ -166,7 +206,7 @@ export function createChutes(deps = {}) {
     dispose() {
       for (const g of [...canopies.keys()]) remove(g);
       if (shared) {
-        try { shared.dome.dispose(); shared.lines.dispose(); shared.domeMat.dispose(); shared.lineMat.dispose(); } catch (_) { /* */ }
+        try { shared.dome.dispose(); shared.domeMat.dispose(); shared.lineMat.dispose(); } catch (_) { /* */ }
         shared = null;
       }
     },

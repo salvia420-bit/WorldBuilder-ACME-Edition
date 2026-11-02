@@ -10,6 +10,7 @@ revision, because they share the HBV1 wire format, its byte fixtures and the fli
 | `0001-ACE.Database-points-of-interest-cache-…` | A small local change the live server already ran before the vehicles work (`@telepoi` name trimming, no cached misses). Not vehicle-related. |
 | `0002-Vehicles-holtburger-fork-…` | The vehicles server: HBV1 messages + capability handshake, `VehicleManager` (flight model, board / exit / bail-out, gun, derelicts, retail chat), fast-flight streaming, diagnostics, `ACE.Server.Tests/Vehicles`. 45 files with 0001, +5,270 lines. |
 | `0003-Vehicles-holtburger-fork-1070-fixes-…` | Session 2 (2026-11-01 evening): the seat and gun muzzle in the stand-in balloon's basket; the M3 world-loop residual — bring-up / load-origin / single-threaded diagnostics, vehicle-only marking on the physics / heartbeat / relocation load paths, link children's weenies prefetched, physics GfxObjs warmed off-thread, GC-first stall classification. 7 files. |
+| `0004-Vehicles-holtburger-fork-the-high-band-…` | Flight experience Phase 4 and the film shoot (2026-11-01 late → 11-02; committed in `~/ace-server` on the owner's "commit and push", 2026-11-02; vehicle tests 9/9). Spawn-time `vehicle_ceiling_agl` / `vehicle_climb_max`; `vehicle_derelict_high_agl` (an empty vehicle high up despawns after 30 s); `vehicle_high_band_agl` (a pilot above it sees by 3D distance, `ObjectMaint.Sight3D`, and skips `CheckMonsters`); the world edge `FlightModel.WorldMax` 256 → 255 landblocks (0xFF does not exist; the client's flight / fall models match). Plus the bail-out animation work: `vehicle_fall_motion` (default off; the bailed body is broadcast in retail's Falling motion 0x40000015 and back to Ready at every end, never on a corpse) and, unconditionally, a teleport during a fall sends the faller a placement-less Touchdown so its client releases the body at once. 5 files. Apply after 0003 with `git apply`. Design: `../../flight-experience-2026-11-01/HIGH-BAND.md` §5. Plus the film shoot (2026-11-02, the owner's Hellcat video): `vehicle_gun_players` (bool, default off — the gun also hits players on foot through `Player.TakeDamage`'s own path: lifestone protection, death, corpse; never the pilot, a seated or a falling player; PK status not checked), `vehicle_observer_sight_radius` (double, default 0 — a capable client on foot gets this first-sight radius, landmarks only beyond 112.5 m, two rings max), and a crash fix: `Unseat` clamps the body's placement to landblocks 1-253 (a pilot logging out from a Hellcat drifted into the map's north-east corner took the world thread down in `LandblockManager.GetLandblock`, IndexOutOfRange, 03:23 NST). Both properties were set for the shoot and set back to their defaults afterwards. |
 
 On this laptop the same commits are on the local branch `vehicles-2026-11-01` of `~/ace-server` (its `origin` is
 upstream ACE, so they are not pushed anywhere else).
@@ -23,7 +24,7 @@ git checkout -b vehicles-2026-11-01 a8ff29f
 git am /path/to/WorldBuilder-ACME-Edition/external/holtburger/apps/holtburger-web/docs/vehicles-2026-11-01/ace/*.patch
 ```
 
-Verified 2026-11-01 (again after 0003): the patches apply to `a8ff29f` and reproduce the branch tree exactly.
+Verified 2026-11-01 (again after 0003): the patches apply to `a8ff29f` and reproduce the branch tree exactly. All four regenerated 2026-11-02 after 0004.
 
 ## Build, deploy, enable
 
@@ -34,7 +35,11 @@ Verified 2026-11-01 (again after 0003): the patches apply to `a8ff29f` and repro
 - Every feature is behind a server property that defaults off (with all off, ACE behaves as upstream):
   `vehicles_enabled`, `landblock_wake_on_entry`, `vehicle_preload`, `vehicle_preload_offthread`,
   `vehicle_short_retention`, `vehicle_landblock_budget`, `vehicle_retail_chat` (bools; console `modifybool <name> true`),
-  `vehicle_speed_cap` (69 → 111 for 400 km/h), `vehicle_sight_radius` (112.5 → 350) (`modifydouble <name> <value>`).
+  `vehicle_speed_cap` (69 → 111 for 400 km/h), `vehicle_sight_radius` (112.5 → 350), and with 0004
+  `vehicle_ceiling_agl` (0 = profile 450; 5000 = the high band), `vehicle_climb_max` (0 = profile 20; 40),
+  `vehicle_derelict_high_agl` (0 = off; 600), `vehicle_high_band_agl` (0 = off; 600) (`modifydouble <name> <value>`), and
+  `vehicle_fall_motion` (bool, default off; `modifybool vehicle_fall_motion true`), `vehicle_gun_players` (bool, default off)
+  and `vehicle_observer_sight_radius` (double, default 0; 380 for the film).
 - Tests: `capped-build dotnet test Source/ACE.Server.Tests/ACE.Server.Tests.csproj -c Debug --filter FullyQualifiedName~Vehicles`
   (Debug only: a Release test build writes into the live directory).
 
