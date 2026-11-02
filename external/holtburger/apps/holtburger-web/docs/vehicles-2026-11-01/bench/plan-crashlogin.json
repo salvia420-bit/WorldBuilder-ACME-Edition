@@ -1,0 +1,9 @@
+{
+ "name": "crashlogin",
+ "note": "H2 test part 2: log in after the crash; where does the character enter?",
+ "timeoutMin": 8,
+ "sessions": [ {"role": "pilot", "account": "agentp10", "flags": "vehicles=on", "setupChat": [], "minMeshes": 20} ],
+ "steps": [
+  {"label": "where did we enter", "page": "pilot", "eval": "vehicle-crashlogin.eval.js"}
+ ]
+}

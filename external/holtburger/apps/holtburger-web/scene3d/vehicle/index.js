@@ -18,10 +18,11 @@
 // Debug / bench surface: `window.__vehicles` (status, board, exit, setSticks, spawn, despawn, ...).
 
 import * as FM from "./flight_model.js";
-import { createObserverTrack, createPilotPredictor, stateFromMsg } from "./predictor.js";
+import { createObserverTrack, createPilotPredictor, stateFromMsg, OBSERVER_DELAY_S } from "./predictor.js";
 import { createVehicleControls } from "./controls.js";
 import { createVehicleOsd } from "./osd.js";
-import { createTracers } from "./weapons.js";
+import { createWeaponsFx, predictImpact } from "./weapons.js";
+import { airframeEnabled, createAirframes, hasComposite, kindOrdinal } from "./airframe.js";
 import { stepFall } from "./fall_model.js";
 import { boardAnimEnabled, headingOfQuat, hopDuration, hopHeading, hopPoint, HOP } from "./board_hop.js";
 import { chuteEnabled, createChutes } from "./chute.js";
@@ -37,7 +38,13 @@ export const CAP_OBSERVE = 0x1;
 export const CAP_PILOT = 0x2;
 export const BOARD_RANGE_M = 8;
 export const CHASE = Object.freeze({ back: 16, up: 4.5, lookAhead: 30, pitch: -0.12, fov: 70, headingTau: 0.25 });
-export const COCKPIT = Object.freeze({ up: 0.9, forward: 0.1, fov: 78 });
+// up 1.25: the eye over the Hellcat's long nose (at 1.0 the cowling filled the lower third of the view, 1070 2026-11-02)
+export const COCKPIT = Object.freeze({ up: 1.25, forward: 0.1, fov: 78 });
+/** The bomb release adds this downward speed (m/s) to the aircraft's velocity (the server's BombEjectSpeed). */
+export const BOMB_EJECT = 1.5;
+/** Seconds between two bomb-pipper solutions (the ballistic walk samples the terrain): 3.5 m of travel at 250 km/h — at
+ *  0.1 s the pipper lagged ~7 m and a release on it landed ~11 m long (bench armament-a). */
+export const PIPPER_SEC = 0.05;
 /** Camera while falling after a bail-out: behind and a little above the body, so the canopy is in frame. */
 // landHoldSec: after the Touchdown the fall camera keeps its last pose this long before the follow camera takes over —
 // the landing link and the canopy's 0.7 s collapse play in the descent's own framing (released at once it cut to a
@@ -78,7 +85,8 @@ function pushTrail(trail, seat, t) {
   trail.push({ x: seat.x, y: seat.y, z: seat.z, t });
   if (trail.length > BAIL_HANDOFF.trailLen) trail.shift();
 }
-export const EVENT_NAMES = Object.freeze({ 1: "takeoff", 2: "landed", 3: "crashed", 4: "despawn", 5: "bail", 6: "chute", 7: "touchdown", 8: "hit" });
+export const EVENT_NAMES = Object.freeze({ 1: "takeoff", 2: "landed", 3: "crashed", 4: "despawn", 5: "bail", 6: "chute", 7: "touchdown", 8: "hit",
+  9: "bombRelease", 10: "explosion", 11: "rearmed" });
 /** Retail motion commands the pilot's rig holds (the server shows the same Sitting to every client). */
 export const MOTION = Object.freeze({ SITTING: 0x41000013, READY: 0x41000003, NONCOMBAT: 0x8000003d });
 /** `?vehicleAudio=off` (exact) builds no engine hum. */
@@ -127,8 +135,10 @@ export function installVehicles(deps = {}) {
   const stats = { frames: 0, msgs: 0, states: 0, profiles: 0, fires: 0, events: 0, parseErrors: 0, inputsSent: 0, sendErrors: 0, boardRefusals: 0, lastRefusal: null, pruned: 0,
     handoffs: 0, lastHandoff: null };
   const osd = createVehicleOsd({ document: win.document });
-  const tracers = createTracers({ liveScene3d: live, THREE });
+  // the armament's looks (quarrels, rail flashes, falling bombs, explosions) and the composite airframe (airframe.js)
+  const fx = createWeaponsFx({ liveScene3d: live, THREE, ground });
   const search = win.location?.search ?? "";
+  const airframes = airframeEnabled(search) ? createAirframes({ liveScene3d: live, THREE }) : null;
   const wireframe = (() => { try { return wireframeFlagOn(search); } catch (_) { return false; } })();
   // parachute canopies (chute.js) over every body whose Chute event arrived; `?vehicleChute=off` draws none
   const chutes = chuteEnabled(search) ? createChutes({ liveScene3d: live, THREE, wireframe }) : null;
@@ -167,16 +177,71 @@ export function installVehicles(deps = {}) {
   }
   const hopsOn = boardAnimEnabled(win.location?.search);
   let bailArmedAt = -1e9;
+  // one tracked timer for every transient prompt (refusal, bail hints, bomb away, rearmed): cleared on dispose; when it
+  // expires the board prompt is re-evaluated (tickPrompt only rewrites on a change of the nearest vehicle)
+  let promptTimer = null;
+  let promptVehicle = null;
+  function flashPrompt(text, ms) {
+    osd.prompt(text);
+    try { clearTimeout(promptTimer); } catch (_) {}
+    promptTimer = setTimeout(() => {
+      promptTimer = null;
+      if (disposed) return;
+      osd.prompt(null);
+      promptVehicle = null;
+    }, ms);
+  }
 
   // ---------------------------------------------------------------- inbox
 
   function vehicleOf(guid) {
     let v = vehicles.get(guid >>> 0);
     if (!v) {
-      v = { guid: guid >>> 0, profile: null, params: null, seats: [], last: null, track: createObserverTrack(), firstSeen: nowSec(), lastMsgAt: nowSec() };
+      v = { guid: guid >>> 0, profile: null, params: null, seats: [], last: null, track: createObserverTrack(), firstSeen: nowSec(), lastMsgAt: nowSec(),
+        spent: new Set(), standInHidden: false };
       vehicles.set(v.guid, v);
     }
     return v;
+  }
+
+  /** A vehicle leaves this client (despawn, prune, dispose): its airframe goes, its stand-in guid is no longer hidden
+   *  (ACE recycles dynamic guids: a later object with the same guid must not come back hidden). */
+  function forgetVehicle(v) {
+    if (!v) return;
+    try { airframes?.remove(v.guid); } catch (_) { /* gone */ }
+    if (v.standInHidden) {
+      v.standInHidden = false;
+      try { em()?.setFilmHidden?.(v.guid, false); } catch (_) { /* gone */ }
+    }
+  }
+
+  /**
+   * Draw a vehicle at a pose: the composite airframe when its template is ready (the retail stand-in hidden, render-only),
+   * else the stand-in entity itself. The stand-in entity is posed in both cases (the reaper / cell bookkeeping).
+   */
+  function drawVehicle(v, pose, q, opts = {}) {
+    writeEntity(v.guid, pose.x, pose.y, pose.z, q, true);
+    const inst = airframes && v.profile ? airframes.ensure(v) : null;
+    if (!inst) return false;
+    const inEm = em()?.entityMap?.get(v.guid);
+    if (!v.standInHidden || (inEm && inEm._filmHidden !== true)) {
+      try { if (em()?.setFilmHidden?.(v.guid, true)) v.standInHidden = true; } catch (_) { /* never fatal */ }
+    }
+    const g = ground(pose.x, pose.y);
+    const last = v.last;
+    // the pilot's "fired" marks hide a rail / station at once; dropped when the server's mask agrees (or it was rearmed)
+    if (v.spent.size && last) {
+      for (const w of [...v.spent]) {
+        const { kind, ordinal } = kindOrdinal(v.profile, w);
+        const mask = kind === 2 ? last.missileMask : kind === 3 ? last.bombMask : undefined;
+        if (Number.isFinite(mask) && ((mask >>> ordinal) & 1) === 0) v.spent.delete(w);
+      }
+    }
+    airframes.pose(inst, pose, {
+      q, dt: opts.dt ?? 1 / 60, throttle: opts.throttle, agl: Number.isNaN(g) ? undefined : pose.z - g, cockpit: !!opts.cockpit,
+      missileMask: last?.missileMask, bombMask: last?.bombMask, localSpent: v.spent,
+    });
+    return true;
   }
 
   function handleMsg(m) {
@@ -191,6 +256,8 @@ export function installVehicles(deps = {}) {
         v.profile = m;
         v.params = FM.paramsFromProfile(m);
         stats.profiles++;
+        // start decoding the composite airframe now (the stand-in stays until it is ready)
+        if (airframes && hasComposite(m)) { try { airframes.ensure(v); } catch (_) { /* stand-in */ } }
         // The pilot's model is the stand-in object itself in v1 (profile.parts = [the stand-in]); it stays visible
         // and is posed by afterTick. A composite airframe would hide the stand-in here (setFilmHidden).
         break;
@@ -204,8 +271,7 @@ export function installVehicles(deps = {}) {
           stats.boardRefusals++;
           stats.lastRefusal = REFUSAL[m.reason] ?? `reason ${m.reason}`;
           pendingBoard = null;
-          osd.prompt(`Cannot board: ${stats.lastRefusal}`);
-          setTimeout(() => osd.prompt(null), 2500);
+          flashPrompt(`Cannot board: ${stats.lastRefusal}`, 2500);
         } else if (m.state === 1 && (m.occupant >>> 0) === localGuid()) {
           pendingBoard = null;
           startPiloting(v, m.seat);
@@ -231,14 +297,18 @@ export function installVehicles(deps = {}) {
       case "fire": {
         stats.fires++;
         const v = vehicles.get(m.vehicle >>> 0);
+        if (!v) break;
+        const w = v.profile?.weapons?.[m.mount];
+        if (w && w.kind === 2) v.spent.add(m.mount >>> 0); // the rail's wand empties now
         if (pilot && pilot.vehicle === v && pilot.predictor) {
-          // the pilot's own gun: tracers leave the PREDICTED muzzle (the server's is ~RTT/2 behind)
+          // the pilot's own guns: the quarrels leave the PREDICTED muzzles (the server's are ~RTT/2 behind)
           const s = pilot.predictor.state;
           const q = FM.orientation(s.heading, s.pitch, s.bank);
-          const r = FM.rotate(q, v.profile?.weapons?.[m.mount]?.muzzle ?? [0, 4, 0.5]);
-          tracers.add(m, v, [s.x + r[0], s.y + r[1], s.z + r[2]], s);
+          const r = FM.rotate(q, w?.muzzle ?? [0, 4, 0.5]);
+          fx.fire(m, v, s, [s.x + r[0], s.y + r[1], s.z + r[2]], v.params ? FM.velocity(s, v.params) : null);
         } else {
-          tracers.add(m, v);
+          const vel = v.last && v.params ? FM.velocity(stateFromMsg(v.last), v.params) : null;
+          fx.fire(m, v, v.last ? { heading: v.last.heading, pitch: v.last.pitch, bank: v.last.bank } : null, undefined, vel);
         }
         break;
       }
@@ -251,7 +321,30 @@ export function installVehicles(deps = {}) {
         if (m.kind === 4) { // despawn
           if (pilot && pilot.vehicle === v) stopPiloting("despawned");
           if (handoff && handoff.v === v) endHandoff("despawned");
+          forgetVehicle(v);
           vehicles.delete(m.vehicle >>> 0);
+        } else if (m.kind === 9) { // a bomb left its station: fly it with the server's model (fall_model stepBomb)
+          if (v) {
+            const aux = m.aux >>> 0;
+            v.spent.add(aux);
+            const mine = pilot && pilot.vehicle === v;
+            // the pilot runs ahead of the server by its prediction lead: the bomb starts that many steps into its fall;
+            // observers draw the aircraft OBSERVER_DELAY_S late: the bomb waits as long
+            const lead = mine && pilot.predictor && pilot.lastServer ? Math.max(0, ((pilot.predictor.seq - 1) - (pilot.lastServer.ack >>> 0)) | 0) : 0;
+            fx.releaseBomb(m, {
+              meshes: airframes ? airframes.ordnanceMeshes(v.guid, aux) : [],
+              muzzle: v.profile?.weapons?.[aux]?.muzzle, terminal: v.profile?.weaponExt?.[aux]?.dragTerminal,
+              advanceSteps: Math.min(30, lead), delaySec: mine ? 0 : OBSERVER_DELAY_S,
+            });
+            if (mine) flashPrompt(`Bomb away — ${Math.round(m.value)} lb`, 1800);
+          }
+        } else if (m.kind === 10) { // explosion (also for bombs whose vehicle is gone / out of our sight)
+          fx.explosionEvent(m);
+        } else if (m.kind === 11) { // rearmed on the ground
+          if (v) {
+            v.spent.clear();
+            if (pilot && pilot.vehicle === v) flashPrompt("Rearmed: quarrels, lightning bolts and bombs", 2500);
+          }
         } else if (m.kind === 5 && mine) { // bail: the server now owns our falling body
           startFall(m, v);
         } else if (m.kind === 6 && mine && fall) { // chute: re-anchor on the server's opening point
@@ -404,7 +497,8 @@ export function installVehicles(deps = {}) {
     try { sh()?.clearVehicleSeat?.(); } catch (_) {}
     try { p.audio?.stop({ fadeSec: 0.6 }); setTimeout(() => { try { p.audio?.dispose(); } catch (_) {} }, 1000); } catch (_) {}
     if (!inAir) { try { em()?.setMotion?.(localGuid(), MOTION.READY, MOTION.NONCOMBAT, 1.0); } catch (_) {} }
-    if (p.rigHidden) { try { em()?.setFilmHidden?.(localGuid(), false); em()?.setFilmHidden?.(p.vehicle.guid, false); } catch (_) { /* */ } }
+    // (the stand-in stays hidden under a composite airframe: un-hiding it flashed the retail stand-in for a frame)
+    if (p.rigHidden) { try { em()?.setFilmHidden?.(localGuid(), false); if (!p.rigComposite) em()?.setFilmHidden?.(p.vehicle.guid, false); } catch (_) { /* */ } }
     // the aircraft got no observer samples while piloted (its states came as pilot copies): drop the stale ones from
     // before boarding — drawn for 1-3 frames at the old parked spot after a landing + exit, km away after a bail. In
     // the air it is dead-reckoned from the predictor (neutral input) while the FRESH track fills; parked it stays
@@ -570,14 +664,20 @@ export function installVehicles(deps = {}) {
     return pose;
   }
 
+  // bench / film: {yaw (rad, around the aircraft), back (m), up (m)} — the chase camera orbits the seat by `yaw`
+  let camTweak = null;
   /** The chase camera's pose for a seat on a vehicle pose (camHeading already smoothed). */
-  function chaseCamPose(seat, pose, ch) {
-    const ex = seat.x - Math.sin(ch) * CHASE.back;
-    const ey = seat.y - Math.cos(ch) * CHASE.back;
-    let ez = seat.z + CHASE.up;
+  function chaseCamPose(seat, pose, ch0) {
+    const ch = ch0 + (camTweak?.yaw ?? 0);
+    const back = camTweak?.back ?? CHASE.back, up = camTweak?.up ?? CHASE.up;
+    const ex = seat.x - Math.sin(ch) * back;
+    const ey = seat.y - Math.cos(ch) * back;
+    let ez = seat.z + up;
     const g = ground(ex, ey);
     if (!Number.isNaN(g) && ez < g + 2) ez = g + 2;
-    return { pos: [ex, ey, ez], h: ch, p: CHASE.pitch + pose.pitch * 0.4, r: pose.bank * 0.25, fov: CHASE.fov };
+    // a tweaked orbit looks at the seat (the default chase framing looks a little down along the flight path)
+    const pc = camTweak ? -Math.atan2(ez - seat.z, back) : CHASE.pitch + pose.pitch * 0.4;
+    return { pos: [ex, ey, ez], h: ch, p: pc, r: camTweak ? 0 : pose.bank * 0.25, fov: CHASE.fov };
   }
 
   /** Between the seat release and the Bail event: the body rides the dead-reckoned seat under the chase camera. */
@@ -680,8 +780,7 @@ export function installVehicles(deps = {}) {
         try { sh().vehicleExit(fall.vehicle, 2); } catch (_) { /* */ }
       }
     });
-    osd.prompt("Bailed out — X opens the parachute (it opens by itself at 150 m)");
-    setTimeout(() => osd.prompt(null), 3000);
+    flashPrompt("Bailed out — X (or Back) opens the parachute (it opens by itself at 150 m)", 3000);
     console.log("[vehicles] bail-out: falling");
   }
 
@@ -706,6 +805,8 @@ export function installVehicles(deps = {}) {
   function tickFall() {
     const f = fall;
     const wallNow = nowSec();
+    // the gamepad's Back opens the chute: its edges are read only by polling (the fall steps no vehicle)
+    try { f.controls.pollEdges?.(); } catch (_) { /* no pad */ }
     let wallDt = f.lastWall === undefined ? 0 : wallNow - f.lastWall;
     f.lastWall = wallNow;
     f.acc += Math.min(1, Math.max(0, wallDt));
@@ -781,8 +882,7 @@ export function installVehicles(deps = {}) {
         const t = nowSec();
         if (t - bailArmedAt > 1.5) {
           bailArmedAt = t;
-          osd.prompt("Press X again to bail out");
-          setTimeout(() => osd.prompt(null), 1500);
+          flashPrompt("Press X again to bail out", 1500);
           return;
         }
         m = 1;
@@ -807,10 +907,29 @@ export function installVehicles(deps = {}) {
     }
   }
 
-  /** Seat world position + orientation for a vehicle pose. */
+  /**
+   * Seat world position + orientation for a vehicle pose. With a composite airframe the parked aircraft sits tail-down
+   * on its wheels (airframe.js GEAR_PITCH about the main wheels' contact line): the seat rides that tilt too.
+   */
   function seatOf(v, pose, seat) {
-    const q = FM.orientation(pose.heading, pose.pitch, pose.bank);
-    const off = v.profile?.seats?.[seat]?.offset ?? [0, 0, 0];
+    let q = FM.orientation(pose.heading, pose.pitch, pose.bank);
+    let off = v.profile?.seats?.[seat]?.offset ?? [0, 0, 0];
+    const tilt = airframes ? airframes.tiltOf(v.guid) : 0;
+    if (tilt) {
+      const inst = airframes.get(v.guid);
+      const py = inst?.t?.pivotY ?? 0;
+      const c = Math.cos(tilt), s2 = Math.sin(tilt);
+      const y = off[1] - py, z = off[2];
+      off = [off[0], py + y * c - z * s2, y * s2 + z * c];
+      const h = Math.sin(tilt / 2);
+      const qt = [Math.cos(tilt / 2), h, 0, 0]; // about the vehicle's x (nose up)
+      q = [
+        q[0] * qt[0] - q[1] * qt[1] - q[2] * qt[2] - q[3] * qt[3],
+        q[0] * qt[1] + q[1] * qt[0] + q[2] * qt[3] - q[3] * qt[2],
+        q[0] * qt[2] - q[1] * qt[3] + q[2] * qt[0] + q[3] * qt[1],
+        q[0] * qt[3] + q[1] * qt[2] - q[2] * qt[1] + q[3] * qt[0],
+      ];
+    }
     const r = FM.rotate(q, off);
     return { x: pose.x + r[0], y: pose.y + r[1], z: pose.z + r[2], q };
   }
@@ -872,7 +991,8 @@ export function installVehicles(deps = {}) {
 
     // draw: the vehicle and the pilot's rig at the predicted pose (after the entity tick → last write wins)
     const q = FM.orientation(pose.heading, pose.pitch, pose.bank);
-    writeEntity(v.guid, pose.x, pose.y, pose.z, q, true);
+    const thrNow = p.controls.status().throttle;
+    const composite = drawVehicle(v, pose, q, { dt, throttle: thrNow, cockpit: p.view === "cockpit" });
     p.lastSeat = { x: seat.x, y: seat.y, z: seat.z, heading: pose.heading, t: wallNow };
     pushTrail(p.trail, seat, wallNow);
     if (p.hop) {
@@ -883,38 +1003,49 @@ export function installVehicles(deps = {}) {
       const u = hp.t / hp.dur;
       if (u >= 1) {
         p.hop = null;
-        writeEntity(localGuid(), seat.x, seat.y, seat.z, q);
+        writeEntity(localGuid(), seat.x, seat.y, seat.z, seat.q);
       } else {
         const at = hopPoint(hp.from, seat, u);
         writeEntity(localGuid(), at.x, at.y, at.z, FM.orientation(hopHeading(hp.h0, pose.heading, u), 0, 0));
       }
     } else {
-      writeEntity(localGuid(), seat.x, seat.y, seat.z, q);
+      writeEntity(localGuid(), seat.x, seat.y, seat.z, seat.q);
     }
 
     // cockpit view: the eye sits where the seated pilot's head is, and the retail stand-in has no interior (the demo
     // balloon's envelope starts right above the seat) — hide our own rig AND our vehicle's model there (render-only,
     // local: everyone else still sees both); shown again in chase view and on leaving the seat
+    // With the composite airframe the cockpit keeps the aircraft: the nose, the wings and the guns ahead (its canopy part
+    // is hidden; airframe.js), only our own rig goes. The stand-in balloon (no composite) still hides as before.
     const wantHidden = p.view === "cockpit";
-    if (wantHidden !== !!p.rigHidden) {
+    if (wantHidden !== !!p.rigHidden || composite !== p.rigComposite) {
       try {
         em()?.setFilmHidden?.(localGuid(), wantHidden);
-        em()?.setFilmHidden?.(v.guid, wantHidden);
+        if (!composite) em()?.setFilmHidden?.(v.guid, wantHidden);
         p.rigHidden = wantHidden;
+        p.rigComposite = composite;
       } catch (_) { /* never fatal */ }
     }
 
-    // camera
+    // camera (+ the shake of a nearby explosion)
     if (p.camera && p.camera.owned) {
+      let cam;
       if (p.view === "cockpit") {
-        const eye = FM.rotate(q, [0, COCKPIT.forward, COCKPIT.up]);
-        p.camera.write({ pos: [seat.x + eye[0], seat.y + eye[1], seat.z + eye[2]], h: pose.heading, p: pose.pitch, r: pose.bank, fov: COCKPIT.fov });
+        const eye = FM.rotate(seat.q, [0, COCKPIT.forward, COCKPIT.up]);
+        cam = { pos: [seat.x + eye[0], seat.y + eye[1], seat.z + eye[2]], h: pose.heading, p: pose.pitch, r: pose.bank, fov: COCKPIT.fov };
       } else {
         if (p.camHeading === null) p.camHeading = pose.heading;
         p.camHeading = FM.wrapHeading(p.camHeading + angleDiff(pose.heading, p.camHeading) * (1 - Math.exp(-dt / CHASE.headingTau)));
         // aim at the seat, not the vehicle origin: the stand-in's crew sits up in its basket (profile seat offset)
-        p.camera.write(chaseCamPose(seat, pose, p.camHeading));
+        cam = chaseCamPose(seat, pose, p.camHeading);
       }
+      const shake = fx.shakeAt(cam.pos);
+      if (shake > 0.01) {
+        cam.pos = [cam.pos[0] + (Math.random() - 0.5) * shake, cam.pos[1] + (Math.random() - 0.5) * shake, cam.pos[2] + (Math.random() - 0.5) * shake];
+        cam.p += (Math.random() - 0.5) * shake * 0.01;
+        cam.r += (Math.random() - 0.5) * shake * 0.01;
+      }
+      p.camera.write(cam);
     }
 
     // client streaming. ?flightResidency (flight experience Phase 1): ONE residency centre — publish the aircraft's
@@ -962,17 +1093,104 @@ export function installVehicles(deps = {}) {
       p.audio?.update({ throttle: 0.6 + thr * 1.4, speed: pose.speed, level: pose.mode === FM.MODE.PARKED && thr < 0.05 ? 0.4 : 1, fpv: p.view === "cockpit", pos: [pose.x, pose.y, pose.z] });
     } catch (_) { /* audio never breaks flight */ }
 
-    // OSD
+    // OSD + sights
     const g0 = ground(pose.x, pose.y);
     const st = p.predictor.stats();
     const raw = p.controls.status();
     osd.update({
       name: v.profile?.displayName, speed: pose.speed, agl: Number.isNaN(g0) ? 0 : pose.z - g0, heading: pose.heading,
-      throttle: raw.throttle, mode: pose.mode, ammo: p.lastServer?.ammo, vCap: p.predictor.vCap,
+      throttle: raw.throttle, mode: pose.mode, vCap: p.predictor.vCap,
       boost: !!(raw.override?.boost), land: false,
       corr: `corr ${st.corrections} (last ${st.lastCorrectionM.toFixed(2)} m)`,
       warn: p.lastServer && (p.lastServer.flags & 0x04),
+      arms: armament(v, p.lastServer),
     });
+    tickSights(p, v, pose, q, wallNow);
+  }
+
+  /** The OSD's armament block from the profile and the last pilot state. */
+  function armament(v, last) {
+    const ws = v.profile?.weapons || [];
+    if (!ws.length) return null;
+    const ext = v.profile?.weaponExt || [];
+    let guns = 0, rails = 0;
+    const bombs = [];
+    for (let i = 0; i < ws.length; i++) {
+      if (ws[i].kind === 1) guns++;
+      else if (ws[i].kind === 2) rails++;
+      else if (ws[i].kind === 3) bombs.push(Math.round((ext[i]?.massKg ?? 0) * 2.20462 / 100) * 100 || "?");
+    }
+    let missileMask = last?.missileMask, bombMask = last?.bombMask;
+    // the pilot's own fired marks show at once (the server's mask follows within a state)
+    for (const w of v.spent) {
+      const { kind, ordinal } = kindOrdinal(v.profile, w);
+      if (kind === 2 && Number.isFinite(missileMask)) missileMask &= ~(1 << ordinal);
+      if (kind === 3 && Number.isFinite(bombMask)) bombMask &= ~(1 << ordinal);
+    }
+    return { guns, quarrels: last?.ammo ?? 0, rails, missileMask: missileMask ?? 0, bombs, bombMask: bombMask ?? 0 };
+  }
+
+  /** The next bomb station the server will release (its BombOrder: heaviest first, then left before right), or -1. */
+  function nextBomb(v, last) {
+    const ws = v.profile?.weapons || [];
+    const ext = v.profile?.weaponExt || [];
+    const cands = [];
+    for (let i = 0; i < ws.length; i++) {
+      if (ws[i].kind !== 3) continue;
+      const { ordinal } = kindOrdinal(v.profile, i);
+      const loaded = Number.isFinite(last?.bombMask) ? ((last.bombMask >>> ordinal) & 1) === 1 : true;
+      if (loaded && !v.spent.has(i)) cands.push(i);
+    }
+    cands.sort((a, b) => ((ext[b]?.massKg ?? 0) - (ext[a]?.massKg ?? 0)) || ((ws[a].muzzle?.[0] ?? 0) - (ws[b].muzzle?.[0] ?? 0)));
+    return cands.length ? cands[0] : -1;
+  }
+
+  const _proj = THREE ? new THREE.Vector3() : null;
+  /** AC world point → CSS px on the canvas, or null (behind the camera / no camera). */
+  function project(pt, camera) {
+    const cam = camera ?? live.camera;
+    if (!_proj || !cam || !live.worldRoot) return null;
+    try {
+      cam.updateMatrixWorld?.();
+      _proj.set(pt[0], pt[1], pt[2]).applyMatrix4(live.worldRoot.matrixWorld).project(cam);
+      if (!(_proj.z > -1 && _proj.z < 1) || Math.abs(_proj.x) > 1.2 || Math.abs(_proj.y) > 1.2) return null;
+      const el = live.renderer?.domElement;
+      const w = el?.clientWidth || win.innerWidth || 0, h = el?.clientHeight || win.innerHeight || 0;
+      return { x: (_proj.x * 0.5 + 0.5) * w, y: (-_proj.y * 0.5 + 0.5) * h };
+    } catch (_) { return null; }
+  }
+
+  /** Gunsight at the guns' convergence point; bomb pipper at the predicted impact of the next bomb (10 Hz solution). */
+  function tickSights(p, v, pose, q, t) {
+    const airborne = pose.mode === FM.MODE.FLIGHT || pose.mode === FM.MODE.LANDING;
+    const ws = v.profile?.weapons || [];
+    const cam = p.camera && p.camera.owned && typeof p.camera.camera === "function" ? p.camera.camera() : null;
+    let ret = null, pip = null, label = "";
+    if (!airborne) p.pipper = null;
+    if (airborne) {
+      const g = ws.findIndex((w) => w.kind === 1);
+      if (g >= 0 && cam) {
+        const conv = v.profile?.weaponExt?.[g]?.convergence || 110;
+        const m = ws[g].muzzle ?? [0, 0, 0];
+        const r = FM.rotate(q, [0, m[1] + conv, m[2]]);
+        ret = project([pose.x + r[0], pose.y + r[1], pose.z + r[2]], cam);
+      }
+      const b = nextBomb(v, p.lastServer);
+      if (b >= 0) {
+        if (!p.pipper || t - p.pipper.at >= PIPPER_SEC) {
+          const m = ws[b].muzzle ?? [0, 0, 0];
+          const r = FM.rotate(q, m);
+          const vel = FM.velocity(pose, v.params);
+          const start = { x: pose.x + r[0], y: pose.y + r[1], z: pose.z + r[2], vx: vel[0], vy: vel[1], vz: vel[2] - BOMB_EJECT,
+            terminal: v.profile?.weaponExt?.[b]?.dragTerminal || 280 };
+          const hit = predictImpact(start, ground);
+          const lb = Math.round((v.profile?.weaponExt?.[b]?.massKg ?? 0) * 2.20462 / 100) * 100;
+          p.pipper = { at: t, hit, label: hit ? `${lb} lb  ${hit.t.toFixed(1)} s` : "" };
+        }
+        if (p.pipper.hit && cam) { pip = project([p.pipper.hit.x, p.pipper.hit.y, p.pipper.hit.z], cam); label = p.pipper.label; }
+      } else p.pipper = null;
+    }
+    osd.sights(ret, pip, label);
   }
 
   /** Exit hop: the rig goes from the seat down to where the entity tick now places the body (the server's exit spot). */
@@ -993,6 +1211,7 @@ export function installVehicles(deps = {}) {
 
   // ---------------------------------------------------------------- observers + board prompt
 
+  let frameDt = 1 / 60;
   function tickObservers() {
     const t = nowSec();
     for (const v of vehicles.values()) {
@@ -1001,11 +1220,11 @@ export function installVehicles(deps = {}) {
       const pose = observedPose(v, t);
       if (!pose) continue;
       const q = FM.orientation(pose.heading, pose.pitch, pose.bank);
-      writeEntity(v.guid, pose.x, pose.y, pose.z, q, true);
+      drawVehicle(v, pose, q, { dt: frameDt, throttle: pose.mode === FM.MODE.PARKED ? 0 : undefined });
       const occ = v.seats[0] >>> 0;
       if (occ && occ !== localGuid() && v.profile) {
         const seat = seatOf(v, pose, 0);
-        writeEntity(occ, seat.x, seat.y, seat.z, q, true);
+        writeEntity(occ, seat.x, seat.y, seat.z, seat.q, true);
       }
     }
   }
@@ -1023,6 +1242,7 @@ export function installVehicles(deps = {}) {
     for (const [guid, v] of vehicles) {
       if (pilot && pilot.vehicle === v) continue;
       if (map.has(guid) || t - (v.lastMsgAt ?? 0) < 5) continue;
+      forgetVehicle(v);
       vehicles.delete(guid);
       stats.pruned++;
     }
@@ -1044,9 +1264,10 @@ export function installVehicles(deps = {}) {
     return best;
   }
 
-  let promptVehicle = null;
   function tickPrompt() {
-    if (pilot || caps.granted === null || !(caps.granted & CAP_PILOT)) {
+    if (promptTimer) return; // a transient prompt is showing
+    // never while falling / in the bail hand-off: ACE would seat a body it is still dropping (it now refuses too)
+    if (pilot || fall || handoff || caps.granted === null || !(caps.granted & CAP_PILOT)) {
       if (promptVehicle) { promptVehicle = null; osd.prompt(null); }
       return;
     }
@@ -1061,7 +1282,7 @@ export function installVehicles(deps = {}) {
     if (ev.code !== "KeyB" || ev.repeat || ev.ctrlKey || ev.altKey || ev.metaKey) return;
     const el = win.document?.activeElement;
     if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)) return;
-    if (!promptVehicle || pilot) return;
+    if (!promptVehicle || pilot || fall || handoff) return;
     api.board(promptVehicle.guid);
   };
   win.addEventListener("keydown", onKeyB, true);
@@ -1071,6 +1292,7 @@ export function installVehicles(deps = {}) {
   function afterTick(ts, dtMs) {
     if (disposed) return;
     const dt = Number.isFinite(dtMs) ? (dtMs > 5 ? dtMs / 1000 : dtMs) : 1 / 60;
+    frameDt = dt;
     stats.frames++;
     handshake();
     drainInbox();
@@ -1082,7 +1304,8 @@ export function installVehicles(deps = {}) {
     fallPose?.tick(dt, nowSec()); // after the rig writes, before the canopies (they read the riser grips)
     pruneVehicles();
     tickPrompt();
-    tracers.tick(dt);
+    fx.tick(dt);
+    if (!pilot) osd.sights(null, null, "");
     chutes?.tick(dt, chutePose);
   }
 
@@ -1116,6 +1339,8 @@ export function installVehicles(deps = {}) {
           guid: v.guid, key: v.profile?.profileKey ?? null, seats: v.seats.slice(), mode: v.last?.mode ?? null,
           speed: v.last?.speed ?? null, cell: v.last?.cell ?? null, step: v.last?.step ?? null,
           pos: v.last ? stateFromMsg(v.last) : null,
+          ammo: v.last?.ammo ?? null, missileMask: v.last?.missileMask ?? null, bombMask: v.last?.bombMask ?? null,
+          airframe: airframes ? airframes.status(v.profile) : "off", standInHidden: !!v.standInHidden,
         })),
         fall: fall ? { x: fall.x, y: fall.y, z: fall.z, vz: fall.vz, chute: fall.chute, agl: fall.z - ground(fall.x, fall.y), sec: nowSec() - fall.startedAt, maxSec: fall.maxSec,
           handoffMs: fall.handoffMs, offsetM: fall.off ? Math.hypot(fall.off[0], fall.off[1], fall.off[2]) : 0, camBlend: !!fall.camBlend } : null,
@@ -1129,7 +1354,9 @@ export function installVehicles(deps = {}) {
           server: pilot.lastServer ? { step: pilot.lastServer.step, ack: pilot.lastServer.ack, mode: pilot.lastServer.mode, speed: pilot.lastServer.speed } : null,
         } : null,
         wire,
-        tracers: tracers.stats(),
+        weapons: fx.stats(),
+        tracers: (() => { const w = fx.stats(); return { live: w.liveQuarrels, added: w.quarrels }; })(),
+        airframes: airframes ? airframes.stats() : { enabled: false },
         chutes: chutes ? chutes.stats() : null,
       };
     },
@@ -1139,6 +1366,7 @@ export function installVehicles(deps = {}) {
     events: () => events.slice(),
     nearest: () => nearestBoardable()?.guid ?? null,
     board(guid) {
+      if (pilot || fall || handoff) return { ok: false, reason: "busy" };
       const g = (guid ?? nearestBoardable()?.guid ?? [...vehicles.keys()][0]) >>> 0;
       if (!g) return { ok: false, reason: "no vehicle" };
       pendingBoard = { guid: g, t: nowSec() };
@@ -1151,6 +1379,12 @@ export function installVehicles(deps = {}) {
     clearSticks() { pilot?.controls.clearOverride(); },
     setView(view) { if (pilot) pilot.view = view === "cockpit" ? "cockpit" : "chase"; },
     corrections: () => pilot?.predictor?.corrections() ?? [],
+    /** Bench / film: orbit the chase camera ({yaw, back, up}; null = the default chase framing). */
+    setCameraTweak(t) { camTweak = t && typeof t === "object" ? { ...t } : null; return true; },
+    /** The bomb pipper's solution for the next station: {x, y, z, t} (AC world, seconds to impact), or null. */
+    pipper: () => (pilot?.pipper?.hit ? { ...pilot.pipper.hit } : null),
+    /** Bench / debug: draw an explosion (lb) at an AC world point (client-side only). */
+    debugExplode(at, lb = 2000) { fx.debugExplode(at, lb); return true; },
     spawn(profile) { try { sh().sendChat(`@vehicle spawn ${profile ?? ""}`.trim()); return true; } catch (_) { return false; } },
     despawn(all) { try { sh().sendChat(all ? "@vehicle despawn all" : "@vehicle despawn"); return true; } catch (_) { return false; } },
     get piloting() { return !!pilot; },
@@ -1163,8 +1397,12 @@ export function installVehicles(deps = {}) {
       stopFall("dispose");
       releaseLandingCam();
       try { win.removeEventListener("keydown", onKeyB, true); } catch (_) {}
+      try { clearTimeout(promptTimer); } catch (_) {}
+      promptTimer = null;
+      for (const v of vehicles.values()) forgetVehicle(v);
       osd.dispose();
-      tracers.dispose();
+      fx.dispose();
+      airframes?.dispose();
       fallPose?.dispose();
       chutes?.dispose();
       if (live.vehicles && live.vehicles.afterTick === afterTick) delete live.vehicles;

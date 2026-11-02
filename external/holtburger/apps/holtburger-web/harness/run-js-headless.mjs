@@ -1537,6 +1537,9 @@ const TIER5 = [
   // 2026-11-02 film take D2-3: the bail hand-off (BAIL_HANDOFF) — the seat released before the Bail event keeps the
   // camera, the aircraft (dead-reckoned, then its fresh track) and the body where they were drawn.
   { tier: 5, flag: "vehicles", file: "tests/vehicle_bail_handoff.test.mjs" },
+  // the Hellcat built from AC parts + its armament (HBV1 v2: quarrels, lightning rails, bombs) and the 2026-11-02 client
+  // review fixes (no boarding while falling, chute leak, seq resync, latched G / V, pad edges in the fall)
+  { tier: 5, flag: "vehicles", file: "tests/vehicle_armament.test.mjs" },
   // 2026-11-01 flight experience (docs/flight-experience-2026-11-01): the Phase 0
   // residency sampler (?residencyLog) — flips, holes, lead times on a mock scene.
   { tier: 5, flag: "residencyLog", file: "tests/residency_log.test.mjs" },

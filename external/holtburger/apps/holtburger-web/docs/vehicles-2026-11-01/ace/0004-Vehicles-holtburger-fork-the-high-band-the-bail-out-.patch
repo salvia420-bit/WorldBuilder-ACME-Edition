@@ -1,7 +1,7 @@
 From 00521d9ca649b7250f08855b1722b691391a3d19 Mon Sep 17 00:00:00 2001
 From: salvia420-bit <salvia420@gmail.com>
 Date: Mon, 2 Nov 2026 04:39:41 -0330
-Subject: [PATCH 4/4] Vehicles (holtburger fork): the high band, the bail-out
+Subject: [PATCH 4/6] Vehicles (holtburger fork): the high band, the bail-out
  pose, film properties, map-edge unseat fix
 
 Flight experience (2026-11-01/02), every behaviour behind a property that defaults off:

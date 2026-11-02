@@ -1,8 +1,8 @@
 From f335ad4564aabb0b47de9684f5d640730c8eee10 Mon Sep 17 00:00:00 2001
 From: salvia420-bit <salvia420@gmail.com>
 Date: Mon, 2 Nov 2026 12:00:35 -0330
-Subject: [PATCH] Vehicles (holtburger fork): teleport unseat sends the pilot a
- Touchdown (no placement)
+Subject: [PATCH 5/6] Vehicles (holtburger fork): teleport unseat sends the
+ pilot a Touchdown (no placement)
 
 A pilot unseated in the air by a teleport (portal, recall, death, admin) got only the
 seat release; the client took it for the first half of a bail and held the body on the

@@ -1,18 +1,25 @@
 #!/usr/bin/env python3
 """HBV1 byte fixtures, generated FROM the wire spec.
 
-Interprets vehicles.protocol.xml (field order, types, vectors) and packs the sample values in
-fixtures-input.json, so the bytes come from the spec itself rather than from either implementation.
+Interprets vehicles.protocol.xml (field order, types, vectors, since= / default=) and packs the sample values
+in fixtures-input.json, so the bytes come from the spec itself rather than from either implementation.
 Writes vehicle-wire-fixtures.json, which the Rust (holtburger-protocol) and C# (ACE.Server.Tests) tests
-round-trip: unpack(hex) == fields and pack(fields) == hex.
+round-trip: unpack(hex) == fields, and pack(fields) == pack(unpack(hex)) == repack_hex if present, else hex.
 
   python3 gen_fixtures.py            # regenerate
   python3 gen_fixtures.py --check    # exit 1 if the committed JSON is stale
 
 Fixture payloads start at the HBV1 header (right after the GameAction / GameEvent opcode). The "fields"
-objects omit the header (Tag 0x31564248, Version 1, Reserved 0 are implied) except where a fixture
-overrides it (the bad-tag / future-version cases). Two fixtures also carry the full AC frame
-("frame_hex": 0xF7B1 game action / 0xF7B0 game event) to test the framing.
+objects omit the header (Tag 0x31564248, Version = the schema's version, Reserved 0 are implied) except where
+a fixture overrides it (the legacy-version, bad-tag and future-version cases). Every record carries the
+payload's header "version".
+
+Versioning: an element marked since="N" is packed only when the payload's header Version >= N. For an older
+payload "fields" still lists it, at its default (default="..." in the XML, else 0 / empty) -- exactly what a
+current reader yields -- and the input must not give it. When a current-version writer would emit different
+bytes for "fields" (an older payload, or a newer one with trailing bytes), the record carries "repack_hex":
+the payload as the current writer emits it. Three fixtures also carry the full AC frame ("frame_hex": 0xF7B1
+game action / 0xF7B0 game event) to test the framing.
 """
 import json
 import struct
@@ -36,6 +43,10 @@ BUILTIN_TYPES = {
 }
 
 
+def since(el):
+    return int(el.get("since", "1"))
+
+
 def f32(v):
     return struct.unpack("<f", struct.pack("<f", float(v)))[0]
 
@@ -43,6 +54,11 @@ def f32(v):
 class Spec:
     def __init__(self, path):
         root = ET.parse(path).getroot()
+        # the version every current writer emits (Rust HBV1_VERSION, C# VehicleWire.Version)
+        self.version = int(root.get("version", "1"))
+        newest = max(since(el) for el in root.iter() if el.tag in ("field", "vector"))
+        if newest > self.version:
+            raise ValueError(f"an element is since={newest} but the schema is version {self.version}")
         self.enums = {e.get("name"): e.get("parent") for e in root.iter("enum")}
         self.types = {}
         for t in root.find("types"):
@@ -62,7 +78,27 @@ class Spec:
             return PRIMS[self.enums[tname]]
         return None
 
-    def pack_type(self, tname, value, out):
+    def zero(self, tname, default=None):
+        """The value a reader yields for an element of type tname that is not on the wire."""
+        prim = self.prim_of(tname)
+        if prim:
+            if prim == "<f":
+                return f32(float(default)) if default is not None else 0.0
+            return int(default, 0) if default is not None else 0
+        if tname == "string":
+            return default or ""
+        if tname in BUILTIN_TYPES:
+            return {n: self.zero(t) for t, n in BUILTIN_TYPES[tname]}
+        if tname in self.types:
+            return {c.get("name"): self.default_of(c) for c in self.types[tname]}
+        raise KeyError(f"unknown type {tname}")
+
+    def default_of(self, el):
+        if el.tag == "vector":
+            return []
+        return self.zero(el.get("type"), el.get("default"))
+
+    def pack_type(self, tname, value, out, version):
         prim = self.prim_of(tname)
         if prim:
             v = f32(value) if prim == "<f" else int(value)
@@ -77,31 +113,43 @@ class Spec:
             fields = [(t, n) for t, n in BUILTIN_TYPES[tname]]
             norm = {}
             for t, n in fields:
-                norm[n] = self.pack_type(t, value[n], out)
+                norm[n] = self.pack_type(t, value[n], out, version)
             return norm
         if tname in self.types:
-            return self.pack_children(self.types[tname], value, out)
+            return self.pack_children(self.types[tname], value, out, version)
         raise KeyError(f"unknown type {tname}")
 
-    def pack_children(self, children, values, out):
+    def pack_children(self, children, values, out, version=None):
+        """Packs children in order. The message's VehicleHeader (omitted from values = the current version)
+        sets the version that decides which since= elements are on the wire."""
+        if version is None:
+            version = self.version
         norm = {}
         for child in children:
             tag = child.tag
             name = child.get("name")
-            if tag == "field":
-                tname = child.get("type")
-                if tname == "VehicleHeader" and name == "Header":
-                    hdr = values.get("Header", {"Tag": TAG, "Version": 1, "Reserved": 0})
-                    h = self.pack_type("VehicleHeader", hdr, out)
-                    if "Header" in values:
-                        norm["Header"] = h
-                    continue
-                norm[name] = self.pack_type(tname, values[name], out)
-            elif tag == "vector":
-                items = values[name]
-                norm[name] = [self.pack_type(child.get("type"), it, out) for it in items]
-            else:
+            if tag not in ("field", "vector"):
                 raise KeyError(f"unsupported element {tag}")
+            if tag == "field" and child.get("type") == "VehicleHeader" and name == "Header":
+                hdr = values.get("Header", {"Tag": TAG, "Version": self.version, "Reserved": 0})
+                h = self.pack_type("VehicleHeader", hdr, out, version)
+                version = h["Version"]
+                if "Header" in values:
+                    norm["Header"] = h
+                continue
+            if version < since(child):
+                if name in values:
+                    raise ValueError(f"{name} is since={since(child)}: not on the wire of a v{version} payload")
+                norm[name] = self.default_of(child)
+                continue
+            if tag == "field":
+                norm[name] = self.pack_type(child.get("type"), values[name], out, version)
+            else:
+                items = values[name]
+                length = child.get("length")
+                if length and norm.get(length) != len(items):
+                    raise ValueError(f"{name}: {len(items)} items but {length} = {norm.get(length)}")
+                norm[name] = [self.pack_type(child.get("type"), it, out, version) for it in items]
         return norm
 
 
@@ -112,15 +160,23 @@ def build(spec, inputs):
         payload = bytearray()
         fields = spec.pack_children(children, fx["fields"], payload)
         payload += bytes.fromhex(fx.get("trailing_hex", ""))
+        expect = fx.get("expect", "ok")
         rec = {
             "name": fx["name"],
             "message": fx["message"],
             "dir": direction,
             "opcode": opcode,
-            "expect": fx.get("expect", "ok"),
+            "version": fields["Header"]["Version"] if "Header" in fields else spec.version,
+            "expect": expect,
             "fields": fields,
             "hex": payload.hex(),
         }
+        if expect == "ok":
+            # what a current-version writer emits for these fields (header implied, every element packed)
+            again = bytearray()
+            spec.pack_children(children, {k: v for k, v in fields.items() if k != "Header"}, again)
+            if again != payload:
+                rec["repack_hex"] = again.hex()
         if "trailing_hex" in fx:
             rec["trailing_hex"] = fx["trailing_hex"]
         frame = fx.get("frame")
@@ -133,9 +189,9 @@ def build(spec, inputs):
             rec["frame_hex"] = (head + payload).hex()
         fixtures.append(rec)
     return {
-        "spec": "HBV1 vehicles wire v1 — generated by gen_fixtures.py from vehicles.protocol.xml; do not edit",
+        "spec": f"HBV1 vehicles wire v{spec.version} — generated by gen_fixtures.py from vehicles.protocol.xml; do not edit",
         "tag": TAG,
-        "version": 1,
+        "version": spec.version,
         "fixtures": fixtures,
     }
 

@@ -14,6 +14,9 @@
 // never shrink with the opening dome.
 
 export const CANOPY = Object.freeze({
+  // a body out of view this long never gets its Touchdown here (events go to sessions still tracking the derelict, which
+  // crashes and despawns): the canopy is dropped instead of leaking open — and reappearing over the player on foot
+  goneSec: 5.0,
   radius: 3.5, // rim radius (m) — a ~7 m WW2-era canopy
   height: 2.0, // apex above the rim
   rise: 4.4, // rim height above the harness / feet
@@ -175,7 +178,13 @@ export function createChutes(deps = {}) {
   function tick(dt, poseOf) {
     for (const [guid, c] of canopies) {
       const p = poseOf(guid);
-      if (!p) { if (c.closing) remove(guid); else c.group.visible = false; continue; }
+      if (!p) {
+        c.group.visible = false;
+        c.goneFor = (c.goneFor || 0) + Math.max(0, dt);
+        if (c.closing || c.goneFor > CANOPY.goneSec) remove(guid);
+        continue;
+      }
+      c.goneFor = 0;
       c.t += dt;
       let s = openScale(c.t);
       let sz = s;

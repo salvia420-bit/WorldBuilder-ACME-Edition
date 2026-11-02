@@ -1,5 +1,5 @@
 {
- "comment": "Sample values for gen_fixtures.py. Header fields are implied unless a fixture overrides them. Floats are rounded to f32 by the generator.",
+ "comment": "Sample values for gen_fixtures.py. The header is implied (Tag HBV1, the schema's current version, Reserved 0) unless a fixture overrides it: the *_v1 fixtures are legacy v1 payloads (no since=2 fields; the generator fills those in at their defaults, as a v2 reader parses them), plus the bad-tag and future-version cases. Floats are rounded to f32 by the generator.",
  "fixtures": [
   {
    "name": "client_capabilities",
@@ -34,6 +34,55 @@
     "LeadSeconds": 6.0, "ObjectRadius": 4,
     "SeatCount": 1,
     "Seats": [{"Role": 0, "Motion": 1090519059, "Offset": {"X": 0.0, "Y": -0.5, "Z": 0.75}}],
+    "WeaponCount": 3,
+    "Weapons": [
+     {"Kind": 1, "RoundsPerSecond": 8.0, "Spread": 0.02617993877991494, "Range": 120.0,
+      "Damage": 12.0, "Magazine": 200, "Muzzle": {"X": 0.0, "Y": 3.5, "Z": 0.25}},
+     {"Kind": 2, "RoundsPerSecond": 3.3333333333333335, "Spread": 0.0, "Range": 150.0,
+      "Damage": 40.0, "Magazine": 4, "Muzzle": {"X": -2.25, "Y": 1.0, "Z": -0.5}},
+     {"Kind": 3, "RoundsPerSecond": 1.0, "Spread": 0.0, "Range": 8.0,
+      "Damage": 120.0, "Magazine": 1, "Muzzle": {"X": 0.0, "Y": 0.5, "Z": -1.0}}
+    ],
+    "PartCount": 4,
+    "Parts": [
+     {"Did": 33554433, "Offset": {"X": 0.0, "Y": 0.0, "Z": 0.0}, "Rotation": {"W": 1.0, "X": 0.0, "Y": 0.0, "Z": 0.0}, "Scale": 1.0},
+     {"Did": 16777217, "Offset": {"X": 2.5, "Y": -1.0, "Z": 0.5}, "Rotation": {"W": 0.7071067811865476, "X": 0.0, "Y": 0.0, "Z": 0.7071067811865476}, "Scale": 0.5},
+     {"Did": 16777218, "Offset": {"X": 0.0, "Y": 1.5, "Z": -1.25}, "Rotation": {"W": 1.0, "X": 0.0, "Y": 0.0, "Z": 0.0}, "Scale": 1.0},
+     {"Did": 16777219, "Offset": {"X": 0.0, "Y": 0.5, "Z": -1.0}, "Rotation": {"W": 1.0, "X": 0.0, "Y": 0.0, "Z": 0.0}, "Scale": 0.75}
+    ],
+    "PartRoleCount": 4,
+    "PartRoles": [0, 1, 2, 131076],
+    "WeaponExtCount": 3,
+    "WeaponExt": [
+     {"MuzzleVelocity": 180.0, "Convergence": 250.0, "MassKg": 0.0, "DragTerminal": 0.0, "SpellId": 0},
+     {"MuzzleVelocity": 40.0, "Convergence": 0.0, "MassKg": 0.0, "DragTerminal": 0.0, "SpellId": 80},
+     {"MuzzleVelocity": 0.0, "Convergence": 0.0, "MassKg": 226.796185, "DragTerminal": 120.0, "SpellId": 0}
+    ]
+   }
+  },
+  {
+   "name": "vehicle_profile_hellcat_v1",
+   "message": "Vehicle_Profile",
+   "fields": {
+    "Header": {"Tag": 827736648, "Version": 1, "Reserved": 0},
+    "Vehicle": 2147486209,
+    "ProfileKey": "hellcat-demo",
+    "DisplayName": "Hellcat",
+    "Locomotion": 1,
+    "StandInSetup": 33554433,
+    "SimHz": 30,
+    "Reserved": 0,
+    "VMin": 30.0, "VCruise": 83.0, "VMax": 97.0, "SpeedCap": 69.0,
+    "Accel": 8.0, "Decel": 12.0,
+    "MaxBank": 1.0471975511965976, "RollRate": 1.5707963267948966,
+    "MaxPitch": 0.4363323129985824, "PitchRate": 0.7853981633974483,
+    "YawRate": 0.17453292519943295,
+    "ClimbMax": 20.0, "SinkMax": 25.0,
+    "FloorAgl": 30.0, "CeilingAgl": 450.0,
+    "TakeoffClimb": 8.0, "LandingSpeed": 25.0,
+    "LeadSeconds": 6.0, "ObjectRadius": 4,
+    "SeatCount": 1,
+    "Seats": [{"Role": 0, "Motion": 1090519059, "Offset": {"X": 0.0, "Y": -0.5, "Z": 0.75}}],
     "WeaponCount": 1,
     "Weapons": [{"Kind": 1, "RoundsPerSecond": 8.0, "Spread": 0.02617993877991494, "Range": 120.0,
                  "Damage": 12.0, "Magazine": 200, "Muzzle": {"X": 0.0, "Y": 3.5, "Z": 0.25}}],
@@ -50,6 +99,11 @@
    "fields": {"Vehicle": 2147486209, "Seat": 0}
   },
   {
+   "name": "vehicle_board_v1",
+   "message": "Vehicle_Board",
+   "fields": {"Header": {"Tag": 827736648, "Version": 1, "Reserved": 0}, "Vehicle": 2147486209, "Seat": 0}
+  },
+  {
    "name": "vehicle_exit_bail",
    "message": "Vehicle_Exit",
    "fields": {"Vehicle": 2147486209, "Mode": 1}
@@ -62,7 +116,7 @@
     "Count": 3,
     "Frames": [
      {"Seq": 1002, "Throttle": 255, "Pitch": 64, "Roll": -127, "Yaw": 0, "Buttons": 3, "Reserved0": 0, "Reserved1": 0, "Reserved2": 0},
-     {"Seq": 1001, "Throttle": 128, "Pitch": 0, "Roll": -128, "Yaw": 5, "Buttons": 0, "Reserved0": 0, "Reserved1": 0, "Reserved2": 0},
+     {"Seq": 1001, "Throttle": 128, "Pitch": 0, "Roll": -128, "Yaw": 5, "Buttons": 24, "Reserved0": 0, "Reserved1": 0, "Reserved2": 0},
      {"Seq": 1000, "Throttle": 0, "Pitch": -100, "Roll": 127, "Yaw": -5, "Buttons": 4, "Reserved0": 0, "Reserved1": 0, "Reserved2": 0}
     ]
    },
@@ -85,9 +139,21 @@
     "Vehicle": 2147486209, "Step": 123456, "AckInputSeq": 1002, "Cell": 2847146009,
     "Position": {"X": 84.125, "Y": 7.5, "Z": 132.25},
     "Heading": 1.9373154697137058, "Pitch": -0.05, "Bank": 0.6,
-    "Speed": 68.75, "VCap": 69.0, "Ammo": 187, "Mode": 2, "Flags": 1
+    "Speed": 68.75, "VCap": 69.0, "Ammo": 187, "Mode": 2, "Flags": 1,
+    "MissileMask": 3, "BombMask": 1, "Reserved2": 0
    },
    "frame": {"target": 1342177281, "sequence": 42}
+  },
+  {
+   "name": "vehicle_state_pilot_v1",
+   "message": "Vehicle_State",
+   "fields": {
+    "Header": {"Tag": 827736648, "Version": 1, "Reserved": 0},
+    "Vehicle": 2147486209, "Step": 123456, "AckInputSeq": 1002, "Cell": 2847146009,
+    "Position": {"X": 84.125, "Y": 7.5, "Z": 132.25},
+    "Heading": 1.9373154697137058, "Pitch": -0.05, "Bank": 0.6,
+    "Speed": 68.75, "VCap": 69.0, "Ammo": 187, "Mode": 2, "Flags": 1
+   }
   },
   {
    "name": "vehicle_fire",
@@ -95,13 +161,43 @@
    "fields": {
     "Vehicle": 2147486209, "Step": 123457, "Mount": 0, "Count": 1, "Cell": 2847146009,
     "Muzzle": {"X": 85.5, "Y": 9.75, "Z": 132.0},
+    "DirX": 30000, "DirY": -13000, "DirZ": -1200, "Reserved": 0, "Seed": 3735928559,
+    "MountCount": 2, "Reserved2": 0, "Speed": 152.5
+   }
+  },
+  {
+   "name": "vehicle_fire_v1",
+   "message": "Vehicle_Fire",
+   "fields": {
+    "Header": {"Tag": 827736648, "Version": 1, "Reserved": 0},
+    "Vehicle": 2147486209, "Step": 123457, "Mount": 0, "Count": 1, "Cell": 2847146009,
+    "Muzzle": {"X": 85.5, "Y": 9.75, "Z": 132.0},
     "DirX": 30000, "DirY": -13000, "DirZ": -1200, "Reserved": 0, "Seed": 3735928559
    }
   },
   {
-   "name": "vehicle_event_crashed",
+   "name": "vehicle_event_bomb_release",
    "message": "Vehicle_Event",
    "fields": {
+    "Vehicle": 2147486209, "Kind": 9, "Step": 124000, "Subject": 1342177281, "Cell": 2847146009,
+    "Position": {"X": 120.0, "Y": 64.5, "Z": 180.25}, "Value": 500.0,
+    "Aux": 2, "Velocity": {"X": 12.5, "Y": 66.25, "Z": -1.5}
+   }
+  },
+  {
+   "name": "vehicle_event_explosion",
+   "message": "Vehicle_Event",
+   "fields": {
+    "Vehicle": 2147486209, "Kind": 10, "Step": 124150, "Subject": 1342177281, "Cell": 2847146010,
+    "Position": {"X": 3.5, "Y": 40.0, "Z": 61.75}, "Value": 500.0,
+    "Aux": 2, "Velocity": {"X": 0.0, "Y": 0.0, "Z": 0.0}
+   }
+  },
+  {
+   "name": "vehicle_event_crashed_v1",
+   "message": "Vehicle_Event",
+   "fields": {
+    "Header": {"Tag": 827736648, "Version": 1, "Reserved": 0},
     "Vehicle": 2147486209, "Kind": 3, "Step": 123999, "Subject": 1342177281, "Cell": 2847146009,
     "Position": {"X": 100.0, "Y": 50.5, "Z": 60.25}, "Value": 0.0
    }
@@ -110,17 +206,18 @@
    "name": "bad_tag_rejected",
    "message": "Vehicle_Board",
    "expect": "reject",
-   "fields": {"Header": {"Tag": 827736649, "Version": 1, "Reserved": 0}, "Vehicle": 2147486209, "Seat": 0}
+   "fields": {"Header": {"Tag": 827736649, "Version": 2, "Reserved": 0}, "Vehicle": 2147486209, "Seat": 0}
   },
   {
    "name": "future_version_extra_bytes",
    "message": "Vehicle_State",
    "expect": "ok",
    "fields": {
-    "Header": {"Tag": 827736648, "Version": 2, "Reserved": 0},
+    "Header": {"Tag": 827736648, "Version": 3, "Reserved": 0},
     "Vehicle": 2147486209, "Step": 7, "AckInputSeq": 0, "Cell": 2847146009,
     "Position": {"X": 1.0, "Y": 2.0, "Z": 3.0},
-    "Heading": 0.0, "Pitch": 0.0, "Bank": 0.0, "Speed": 0.0, "VCap": 69.0, "Ammo": 200, "Mode": 0, "Flags": 0
+    "Heading": 0.0, "Pitch": 0.0, "Bank": 0.0, "Speed": 0.0, "VCap": 69.0, "Ammo": 200, "Mode": 0, "Flags": 0,
+    "MissileMask": 1, "BombMask": 0, "Reserved2": 0
    },
    "trailing_hex": "deadbeef"
   }

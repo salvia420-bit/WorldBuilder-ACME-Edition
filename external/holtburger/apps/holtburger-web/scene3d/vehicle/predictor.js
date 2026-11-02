@@ -106,6 +106,10 @@ export function createPilotPredictor(o) {
         state = server;
         prev = cloneState(server);
         foldOffset(before, renderPoseRaw(1));
+        // the server consumed (substituted) past our newest frame while we were silent (a tab stall past ACE's 2.5 s
+        // starvation): continue AFTER its ack — kept at the old seq, every frame up to the ack was dropped as late, the
+        // server stalled waiting for one it would accept, and the aircraft snapped back ~1.5 s × speed when it resumed
+        if (stats.lastAckLagSteps < 0) { seq = (ack + 1) >>> 0; stats.resyncs = (stats.resyncs || 0) + 1; }
       }
       return { corrected: false, error: NaN };
     }

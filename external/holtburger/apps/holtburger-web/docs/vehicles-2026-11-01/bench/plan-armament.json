@@ -1,0 +1,15 @@
+{
+ "name": "armament-hellcat",
+ "timeoutMin": 25,
+ "sessions": [
+  {"role": "pilot", "account": "agentp10", "flags": "vehicles=on"}
+ ],
+ "steps": [
+  {"label": "pilot to Holtburg", "page": "pilot", "teleloc": "0xA9B40019 84 7.1 94", "afterTeleportMs": 12000},
+  {"label": "clean slate", "page": "pilot", "chat": ["@vehicle despawn all"], "sleepMs": 1000},
+  {"label": "spawn the vehicle", "page": "pilot", "eval": "vehicle-spawn.eval.js"},
+  {"label": "a Drudge Skulker 400 m south", "page": "pilot", "eval": "vehicle-m2-setup.eval.js", "wcid": 7, "offset": [0, -400]},
+  {"label": "guns, rails, bombs, rearm", "page": "pilot", "eval": "vehicle-armament.eval.js", "outM": 650, "aglM": 130, "maxSec": 420},
+  {"label": "clean up", "page": "pilot", "chat": ["@vehicle despawn all"], "sleepMs": 1500}
+ ]
+}

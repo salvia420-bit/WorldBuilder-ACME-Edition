@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  HBV1 — holtburger vehicles wire spec, v1 (2026-11-01).
+  HBV1 — holtburger vehicles wire spec, protocol version 2 (v1 2026-11-01, v2 2026-11-02). "HBV1" is the
+  protocol's name and tag, not its version.
 
   THE single definition of the vehicle messages (DESIGN.md §5, §5.1 rule 1). Written in the style of Chorizite's
   protocol.xml (external/chorizite/Chorizite.ACProtocol/Chorizite.ACProtocol/protocol.xml) so a Chorizite plugin can
@@ -16,16 +17,30 @@
   (unused by ACE, Chorizite and holtburger as of 2026-11-01). All values little-endian.
 
   Every payload starts with VehicleHeader: the 4-byte tag "HBV1" and the protocol version. A receiver drops a
-  payload whose tag is not "HBV1". A receiver that sees a HIGHER version parses the v1 fields it knows and
-  ignores trailing bytes (versions only ever append fields). Session gating (DESIGN §5): S2C vehicle events go
-  only to sessions whose ClientCapabilities granted the matching bit; C2S pilot actions from a session without
-  the pilot bit are ignored.
+  payload whose tag is not "HBV1". Versions only ever APPEND fields at the end of a message: a <field> / <vector>
+  marked since="N" is on the wire only when the payload's Version >= N; a reader given an older payload uses the
+  element's default (default="..." when given, else 0 / empty). A receiver that sees a HIGHER version than its
+  own parses the fields it knows and ignores the trailing bytes. Writers always emit their own (current)
+  version, schema/@version. Session gating (DESIGN §5): S2C vehicle events go only to sessions whose
+  ClientCapabilities granted the matching bit; C2S pilot actions from a session without the pilot bit are
+  ignored.
+
+  Versions:
+    v1 (2026-11-01)  the base messages.
+    v2 (2026-11-02)  weapons: the Missile / Bomb buttons, weapon kinds Missile / Bomb, event kinds BombRelease /
+                     Explosion / Rearmed, and the VehiclePartRole enum. Appended fields (since="2"):
+                       Vehicle_Profile  PartRoleCount, PartRoles (VehiclePartRole per part), WeaponExtCount,
+                                        WeaponExt (VehicleWeaponExt per weapon)
+                       Vehicle_State    MissileMask, BombMask, Reserved2
+                       Vehicle_Fire     MountCount (default 1), Reserved2, Speed
+                       Vehicle_Event    Aux, Velocity
+                     C2S messages gain no fields (a v2 action differs from v1 only in the header version).
 
   Units: metres, seconds, radians. Positions are AC cell + landblock-local coordinates. Angles: heading is a
   COMPASS angle (0 = north/+y, pi/2 = east/+x, clockwise); pitch is nose-up positive; bank is right-wing-down
   positive. Stick values are signed bytes scaled by 1/127 (-128 clamps to -1). Throttle is u8 scaled by 1/255.
 -->
-<schema text="holtburger vehicles (HBV1) — additive, capability-gated vehicle messages">
+<schema text="holtburger vehicles (HBV1) — additive, capability-gated vehicle messages" version="2">
   <enums>
     <enum name="VehicleCapability" parent="uint" mask="true" text="ClientCapabilities.Flags / CapabilitiesAck.Granted">
       <value value="0x00000001" name="Observe" text="receive VehicleProfile / VehicleSeat / VehicleState / VehicleFire / VehicleEvent" />
@@ -53,6 +68,8 @@
       <value value="0x01" name="Boost" />
       <value value="0x02" name="Fire" />
       <value value="0x04" name="Land" text="held in Flight: slow to LandingSpeed, then Landing" />
+      <value value="0x08" name="Missile" text="fire a lightning-bolt rail; held: the next rail every 0.3 s" />
+      <value value="0x10" name="Bomb" text="rising edge: release the next bomb" />
     </enum>
     <enum name="VehicleSeatRole" parent="uint">
       <value value="0" name="Pilot" />
@@ -81,7 +98,8 @@
     </enum>
     <enum name="VehicleWeaponKind" parent="uint">
       <value value="1" name="RepeatingCrossbow" />
-      <value value="2" name="Missile" text="reserved (later)" />
+      <value value="2" name="Missile" text="a war-magic projectile spell launched from a rail; WeaponExt.SpellId" />
+      <value value="3" name="Bomb" text="free-fall bomb; Damage = blast damage at the centre, Range = blast radius, Magazine = 1" />
     </enum>
     <enum name="VehicleEventKind" parent="uint">
       <value value="1" name="Takeoff" />
@@ -92,6 +110,16 @@
       <value value="6" name="Chute" text="Subject = the falling player; the parachute opened" />
       <value value="7" name="Touchdown" text="Subject = the player; back on foot; Value = vertical speed at contact" />
       <value value="8" name="Hit" text="Subject = the creature hit by a bolt; Value = damage" />
+      <value value="9" name="BombRelease" text="Subject = the pilot; Cell/Position = release point; Value = mass in lb; v2: Aux = the station's weapon index, Velocity = the bomb's initial velocity" />
+      <value value="10" name="Explosion" text="Subject = the pilot; Cell/Position = the impact point; Value = mass in lb; Aux = the station's weapon index" />
+      <value value="11" name="Rearmed" text="Subject = the pilot; the vehicle's guns, rails and bomb stations are full again" />
+    </enum>
+    <enum name="VehiclePartRole" parent="uint" text="Vehicle_Profile.PartRoles: the role in the low 16 bits; Ordnance carries a weapon index in bits 16-23">
+      <value value="0" name="Static" />
+      <value value="1" name="Propeller" text="spins about the vehicle's forward (y) axis through the part's Offset" />
+      <value value="2" name="Gear" text="drawn only while Parked / Takeoff / Landing" />
+      <value value="3" name="Canopy" text="hidden in the cockpit view" />
+      <value value="4" name="Ordnance" text="drawn while its weapon is loaded; the weapon index is in bits 16-23: role = 4 | (weaponIndex &lt;&lt; 16)" />
     </enum>
   </enums>
   <types>
@@ -99,8 +127,8 @@
     <type name="short" primitive="short" />
     <type name="VehicleHeader" text="Starts every HBV1 payload">
       <field type="uint" name="Tag" text="0x31564248 = the bytes 'H' 'B' 'V' '1'" />
-      <field type="ushort" name="Version" text="1" />
-      <field type="ushort" name="Reserved" text="0 in v1" />
+      <field type="ushort" name="Version" text="the writer's protocol version: 2 (1 from v1 writers)" />
+      <field type="ushort" name="Reserved" text="0" />
     </type>
     <type name="VehicleSeatDef">
       <field type="VehicleSeatRole" name="Role" />
@@ -115,6 +143,13 @@
       <field type="float" name="Damage" text="per round" />
       <field type="uint" name="Magazine" />
       <field type="Vector3" name="Muzzle" text="muzzle position in the vehicle frame" />
+    </type>
+    <type name="VehicleWeaponExt" text="v2: per-weapon extras, parallel to Vehicle_Profile.Weapons (20 bytes)">
+      <field type="float" name="MuzzleVelocity" text="m/s relative to the vehicle: the quarrel / bolt launch speed" />
+      <field type="float" name="Convergence" text="m: guns aim at the boresight point this far ahead; 0 = parallel" />
+      <field type="float" name="MassKg" text="bombs" />
+      <field type="float" name="DragTerminal" text="m/s: a bomb's terminal velocity" />
+      <field type="uint" name="SpellId" text="missiles: the war spell launched" />
     </type>
     <type name="VehiclePartDef" text="The vehicle's looks as data (DESIGN §5.1 rule 2): one retail Setup (0x02xxxxxx) or GfxObj (0x01xxxxxx) placed in the vehicle frame">
       <field type="uint" name="Did" />
@@ -197,6 +232,10 @@
       <vector name="Weapons" length="WeaponCount" type="VehicleWeaponDef" />
       <field type="uint" name="PartCount" />
       <vector name="Parts" length="PartCount" type="VehiclePartDef" />
+      <field type="uint" name="PartRoleCount" since="2" text="0 or PartCount" />
+      <vector name="PartRoles" length="PartRoleCount" type="uint" since="2" text="a VehiclePartRole per part, in Parts order" />
+      <field type="uint" name="WeaponExtCount" since="2" text="0 or WeaponCount" />
+      <vector name="WeaponExt" length="WeaponExtCount" type="VehicleWeaponExt" since="2" text="one per weapon, in Weapons order" />
     </type>
     <type name="Vehicle_Seat" queue="UIQueue" type="0x0904" text="A seat changed (or a board was refused)">
       <field type="VehicleHeader" name="Header" />
@@ -218,9 +257,12 @@
       <field type="float" name="Bank" />
       <field type="float" name="Speed" />
       <field type="float" name="VCap" text="speed cap in force for this step (profile cap, lowered by back-pressure)" />
-      <field type="ushort" name="Ammo" text="rounds left in mount 0" />
+      <field type="ushort" name="Ammo" text="rounds left across all gun mounts" />
       <field type="VehicleMode" name="Mode" />
       <field type="VehicleStateFlags" name="Flags" />
+      <field type="byte" name="MissileMask" since="2" text="bit i = the i-th Missile weapon in profile order is loaded" />
+      <field type="byte" name="BombMask" since="2" text="bit i = the i-th Bomb weapon is loaded" />
+      <field type="ushort" name="Reserved2" since="2" />
     </type>
     <type name="Vehicle_Fire" queue="UIQueue" type="0x0907" text="Rounds fired this step (tracers); hits arrive through the standard damage messages">
       <field type="VehicleHeader" name="Header" />
@@ -235,6 +277,9 @@
       <field type="short" name="DirZ" />
       <field type="ushort" name="Reserved" />
       <field type="uint" name="Seed" text="spread RNG seed of this burst" />
+      <field type="ushort" name="MountCount" since="2" default="1" text="Mount, Mount+1, … Mount+MountCount-1 each fired Count rounds this step; 1 in v1" />
+      <field type="ushort" name="Reserved2" since="2" />
+      <field type="float" name="Speed" since="2" text="m/s: the rounds' speed over the ground, for drawing" />
     </type>
     <type name="Vehicle_Event" queue="UIQueue" type="0x0908" text="Discrete vehicle events">
       <field type="VehicleHeader" name="Header" />
@@ -245,6 +290,8 @@
       <field type="LandcellId" name="Cell" />
       <field type="Vector3" name="Position" text="landblock-local" />
       <field type="float" name="Value" />
+      <field type="uint" name="Aux" since="2" text="per Kind (BombRelease / Explosion: the station's weapon index)" />
+      <field type="Vector3" name="Velocity" since="2" text="per Kind (BombRelease: the bomb's initial velocity, m/s)" />
     </type>
   </gameevents>
 </schema>

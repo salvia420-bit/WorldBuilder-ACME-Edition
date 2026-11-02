@@ -67,3 +67,25 @@ Y camera, Back exit.
 - Takeoff style (#2): keep the short vertical takeoff, or runways later?
 - Ammo: the demo magazine (200) refills 2 s after it empties (effectively unlimited) — keep for demos?
 - The seated pilot takes no damage in the demo — keep until hull HP exists?
+
+## Session 3 (2026-11-02): the Hellcat built from AC items + its armament
+
+Default URL as above (`?vehicles=on`). `?vehicleAirframe=off` shows the old stand-in for comparison.
+
+| # | What | Look for |
+|---|---|---|
+| 16 | The airframe parked | a WW2 fighter silhouette of AC items (barrel fuselage, steel-keg cowling, bucket cockpit, tower-shield wings, kite-shield tail, Spadone prop, crossbows, purple wands, keg bombs, round-shield wheels); sitting 11° tail-down on its wheels, the tail wheel on the ground, the prop clear of it; the pilot's head and shoulders above the bucket's rim. Textures / light / shadows as statics |
+| 17 | Take-off / landing | the tail lifts as it takes off, the gear vanishes in flight, comes back and the tail settles on landing; the prop spins faster with the throttle |
+| 18 | Cockpit (Tab) | you see the cowling, the wings and the crossbows ahead (an open cockpit: no windscreen part), your own body is not in the view; the gunsight ring sits where the quarrels converge (110 m) |
+| 19 | Guns (Space) | six crossbows fire together: quarrel models with a golden streak, a small flash at each muzzle, converging ahead; hits on a monster arrive when the quarrel would; 2,400 quarrels on the OSD, counting down |
+| 20 | Lightning rails (G) | each press launches one Lightning Bolt (the retail bolt, also seen by retail clients) from the next wand (inboard first), the wand disappears; held, one every 0.3 s; a monster within 5° of the nose is the target (bolts track) |
+| 21 | Bombs (V) | the dashed pipper on the ground (lb + seconds to impact) — release on it: the keg leaves the rack, falls nose-down along its arc, bursts on the pipper: a soft billowing fireball (yellow core, orange / red rim), a brief flash, a faint dust skirt racing out ~70 m, dark clods thrown up, a soft smoke column for ~10 s; no hard-edged balls or solid rings (reworked 2026-11-02 after the 1070 stills); the camera shakes if you are close; retail clients see the retail fire bursts. 2,000 lb first, then the two 1,000 lb |
+| 22 | Rearm | land and wait 6 s: "Rearmed" — quarrels, wands and kegs back |
+| 23 | Retail stand-in | retail clients now see a flying bucket (the cockpit tub at 2x) with the pilot sitting in it — acceptable? |
+
+## Questions for the owner (session 3)
+
+- The parts chosen for the airframe (airframe/README.md) — any to swap (the crystal windscreen was dropped: the cockpit is open)?
+- Damage numbers: quarrel 9 (Pierce), bolt = Incantation of Lightning Bolt via a 400-spellcraft launcher, 2,000 lb 1,200 at the centre / 45 m radius, 1,000 lb 700 / 32 m. Bombs and bolts kill most low-level monsters outright.
+- Rearm only on the ground after 6 s parked (no more infinite 2-s reload) — keep?
+- GC launch settings (`~/ace-server/run-ace-live.sh`) on this laptop: keep, or back to ACE's defaults?

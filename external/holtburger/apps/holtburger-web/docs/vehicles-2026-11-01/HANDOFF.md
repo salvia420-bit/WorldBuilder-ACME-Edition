@@ -246,3 +246,124 @@ as `vehicleFallAnim`); `tests/vehicle_flight.test.mjs` unchanged and green.
 
 Trees only near Holtburg, trees flashing, landblocks flickering / late, and a 10x-higher "above the clouds" band:
 a dedicated session's workflow is `../flight-experience-2026-11-01/WORKFLOW.md`.
+
+## Session 3 (2026-11-02 afternoon): the Hellcat built from AC items, its armament, a bug review, the GC
+
+Owner's goal: bug-finding and user-quality work on the flying vehicle (holtburger-web + ACE); make it more like a Grumman
+F6F Hellcat, built from Asheron's Call things and themed; crossbow quarrels instead of bullets, lightning-bolt spells for
+missiles, a real 2,000 lb bomb and two 1,000 lb bombs; the leftover GC issues and every other high-importance issue.
+Decisions 62-72 (DESIGN.md) carry the details; EYETEST.md items 16-23 the look.
+
+**What changed**
+- **Airframe** (decision 62): 55 retail parts (barrels, a steel keg, a bucket, tower / kite / round shields, Spadones,
+  crossbows, wands, kegs, staves; table: `airframe/README.md`, generator `airframe/hellcat.py`, offline DAT renderer
+  `airframe/acmodel.py`, previews `airframe/*.png`) drawn by `scene3d/vehicle/airframe.js` (merged per material: 13 buckets,
+  51 meshes); parked tail-down on its gear, the prop spins with the throttle, gear up in flight, ordnance shown while loaded.
+  The retail stand-in is now the cockpit tub (the Bucket at 2x) so retail sees the pilot in it.
+- **HBV1 v2** (decision 63) in the XML, the fixture generator (19 fixtures: v1 + v2 + a v3 future case), Rust, C#, the wasm
+  JSON (`vehicle_link.rs`) — an Opus 5.5 agent, compiled and tested here (Rust 7/7 vehicle, ACE 12/12).
+- **Armament** (decisions 64-68): `ACE …/Vehicles/VehicleWeapons.cs` (rewritten), `VehicleOrdnance.cs` (new),
+  `scene3d/vehicle/weapons.js` (rewritten), `controls.js` (G / V latched, pad LT / A, `pollEdges`), `osd.js` (armament line,
+  gunsight, pipper, DOM writes on change), `fall_model.js stepBomb`, `flight_model.js` buttons.
+- **Review fixes** (decisions 69-70; three read-only Opus 5.5 reviews: client, server, GC — reports in the session scratchpad,
+  summarized there): see the decisions; the two highest: the north / east edge crash path through landblock 0xFF (seat,
+  muzzle, bail positions) and pilots saved in the sky (now an `AirborneSaveMark` bool on the character, snapped at login).
+- **GC** (decision 71): root cause = deep-sea dungeon landblocks built cell by cell for the first object placed in them;
+  `vehicle_defer_dungeons` + `vehicle_shared_cellstructs` (ON live), the promoted-MB stall line, the armament warm-up off
+  the world thread (the first salvo / launch / explosion cost 75-85 ms on the world thread: spell + weenie DB loads, JIT).
+
+**Tests**: `tests/vehicle_armament.test.mjs` (new, 16 checks, registered in the gate): buttons, latched keys, the salvo
+replay = the server's loop, convergence, the bomb twin bit-identical to the server's step, the pipper, the airframe roles /
+stance / prop, the OSD after dispose, the chute leak, the seq resync, installVehicles end to end. `vehicle_flight` 23,
+`vehicle_bail_handoff` 29, `vehicle_fall_pose` 28 — all pass. ACE `--filter Vehicles` 12/12. Rust `holtburger-protocol
+vehicle` 7/7. **Full JS gate** (`capped-build node harness/run-js-headless.mjs`, once, at the end): **982 passed, 0 failed** (16 min).
+
+**Live bench** (`bench/plan-armament.json` + `bench/vehicle-armament.eval.js`; laptop, headless, `?nullRender=1`; one bot,
+agentp10; a Drudge Skulker created 400 m south): board → take off → 1.5 s of guns → ripple the six rails → turn in → three
+bombs on the pipper → land → rearm → exit.
+- armament-a (ACE's default GC): composite ready + stand-in hidden; 48 quarrels in 8 salvos (ammo 2,400 → 2,352); rails mask
+  63 → 0; 3 releases, 3 explosions (server: the 2,000 lb 18.7 m from the drudge, 3 hit / 3 killed; a 1,000 lb 2 / 2);
+  target killed; parked; Rearmed; exited. The pipper read 7.9 m at the release (PIPPER_SEC 0.1 → 0.05 since).
+- armament-b / -c / -d: the same result (d: the pipper vs the server's burst for the same station — 5.6 / 4.8 m for the two
+  1,000 lb released in steady flight (= the 1-3 steps of input latency at 250 km/h), 25 m for the 2,000 lb released while the
+  bench was still pulling out of its turn-in: the pipper is a "release now" solution).
+- **GC arms** (same bench; the server's `[gc]` stall lines now carry the promoted MB): a = ACE's default (Server GC + DATAS):
+  gen0 ~157 MB, a 705 ms BLOCKING gen2 at ~90 % box memory; b = the gen0 cap MISNAMED (`GCgen0MaxBudget`, silently ignored on
+  Linux; the runtime's name is `GCGen0MaxBudget`): a 428 ms ephemeral GC promoting 118 MB; c = the cap applied (16 MB / heap,
+  2 heaps, DATAS off, no affinitize, HighMemPercent 97): gen0 23-28 MB, worst 153 ms (38 MB promoted), then 57 ms. Kept: the
+  live launch is `~/ace-server/run-ace-live.sh`.
+- Both runs: the bench's on-foot teleport into Holtburg costs a 4-5 s world tick in vanilla ACE's cold loot generation
+  ("Monty's Golden Chest" 15 items in 2.5 s) — not vehicle code, not changed.
+
+**Deploys (live ACE)**: 15:52 (session-3 build; rollback `/mnt/wbterminal2/ace-rollback/net10.0-20261102-pre-hellcat-v2/`),
+16:00 (+ warm-up / stand-in / fireball), 16:04 (GC env name fix). Launch now `~/ace-server/run-ace-live.sh` (the runbook's line
++ the GC env; revert = the plain line). Nobody but the bot was online. wasm: `pkg-hellcat` → `pkg` (backup
+`/mnt/wbterminal2/pkg-prev-20261102-prehellcat-v2`). ACE server changes: `ace/0006-…patch` (committed at the end of the
+evening, below).
+
+**The look on the 1070** (owner: "can you not use the 1070? why swiftshader" — the laptop's SwiftShader stills were a
+low-quality stopgap; `bench/vehicle-look-1070.mjs`, MODE T: off-screen, muted, own profile; the box's gate refused because
+its idle-watch heartbeat is ~44 h stale (not restarted after a reboot) with the owner's browser open, so a 40-min
+`gate-owner-ok.txt` override was written on the owner's ask and removed after the runs). Stills
+`/mnt/wbterminal1/tmp/claude-scratch/vehicles/1070-look-{a,b}/` (`sheet*.jpg` contact sheets):
+- the composite reads as a WW2 fighter of AC items parked (tail-down), in flight (chase / side / quarter) and from the cockpit
+  (wings, cowling, sword prop ahead; the quarrel models and their streaks converging; the Lightning Bolt streaking ahead of the
+  nose; the keg falling under the fuselage);
+- fixed from the stills: the rail / muzzle flashes hung in the air as a flat pale disc (now short and carried with the aircraft);
+  the explosion was one flat disc + ring (now a billowing multi-colour fireball, thrown dirt, a darker smoke column, larger:
+  fireball 24 / 16 m); the cockpit eye 1.0 → 1.25 m over the long nose; the windscreen part dropped (an open cockpit; the blue
+  figure in the stills is the bench pilot under `@cloak`).
+- The explosion after the size change: judged in the evening (below) — reworked to soft sprites + a dust skirt. Sound: not
+  judged (the 1070 is muted by rule).
+
+**Open / next** (updated at the end of the evening section below)
+1. The owner's eye test (EYETEST items 16-23) and the questions there (parts, damage numbers, rearm rule, GC launch settings).
+2. The 1070 box's idle-watch heartbeat task (`hbidlewatch`) is stale since its last reboot — the gate refuses every unattended
+   run until it is restarted (or an owner override is written).
+3. A retail client has not seen the new weapons (the Lightning Bolts are standard spell projectiles, the bomb fireball is Flame
+   Bolt bursts — both should draw on retail; unverified).
+4. Committed and pushed at the owner's ask (end of the evening, below): the client repo to `origin/master`; the server as
+   `a04bad6` on `~/ace-server` `vehicles-2026-11-01` (its `origin` is upstream ACE: not pushed) + `ace/0006-…patch`.
+5. The intermittent take-off "Inbound" world tick (77-156 ms, three runs right after an ACE restart) — `[VEHICLE][INBOUND]`
+   will name it; GC pauses of 50-150 ms remain under the bench's CPU load (decision 73).
+6. The live ACE process carries `oom_score_adj` +300 (inherited from the Claude tool shell that launched it, so earlyoom would
+   pick it like a build job); a launch from a login shell / cron keeps the default.
+
+## Session 3, evening (2026-11-02): live checks, the villa basements, the gen1 cap, the explosion rework
+
+Everything below ran on the live laptop ACE (one bot, agentp10 / +Probe 912; nobody else online) — one heavy job at a time.
+
+**Review fixes, live** (`bench/plan-reviewfix.json`, run `reviewfix-a`): all four pass — seated + parked, a lifestone recall and
+melee mode are refused (the seat moved 0.7 m in 16 s); exit and board again accepted; climbing at 91 m AGL, `@smite` on the
+pilot: unseated in 1.2 s, the server's Touchdown placed the body on the ground (z 66.1 in Holtburg), the aircraft went
+derelict (mode 5), the death teleport followed. (The 222 ms world tick of that `@smite` is vanilla death processing + the
+lifestone's cold landblock — named by the new `[VEHICLE][INBOUND]` line.)
+
+**H2, pilot saved in the sky, under a real crash** (`bench/plan-crashsave.json` + `plan-crashlogin.json`, driver:
+`bench/vehicle-crash-h2.sh`): `player_save_interval` 10 s, fly at ~105 m AGL, three periodic saves in the air, `kill -9` of the
+ACE process, restart (`run-ace-live.sh`), log in: `[VEHICLE] +Probe 912 was saved in the air (… 89 m above the ground):
+entering at …` and the character entered ON the ground (0.05 m above the terrain). `player_save_interval` back to 300;
+no `AirborneSaveMark` (PropertyBool 9001) row left in the shard.
+
+**Villa / mansion basements + the gen1 cap** (decision 73; sea benches gc-sea-d … gc-sea-h, the same 20.9 km route): the
+basement link costs fixed one by one (House 100-341 ms → one 1-10 ms query; HousePortal 37-150 → 24 ms first, 0 after; the
+house-portal / outdoor-house warm-up at startup). `DOTNET_GCGen1MaxBudget=0x1000000` added to `run-ace-live.sh`. Pauses over the
+route 51-152 ms, ~1 per 100 s of flight; their length no longer follows the promoted MB (152 ms for 19 MB) — the laptop's 2
+physical cores are shared with the bench's headless Chrome at 250-360 % CPU. The pilot does not see them: prediction
+corrections P95 0.02-0.06 m, none over 2 m, in every sea run. NOT found: an intermittent 77-156 ms "Inbound" world tick ~5 s
+after boarding (at the take-off) in three runs right after an ACE restart, absent in gc-sea-h and the other benches; the new
+`[VEHICLE][INBOUND]` line will name the message the next time.
+
+**The explosion, reworked** (the 1070 stills `1070-look-c`, MODE T, 15-20 min owner-ask overrides, removed after each run):
+the enlarged burst read as a peach ball of hard-edged spheres, a brown ball of smoke and an opaque sand-coloured ring band
+~150 m across clipped by the terrain into a "C". Now (`scene3d/vehicle/weapons.js`): fire lobes, the flash, the smoke puffs and
+the muzzle flashes are camera-facing sprites with a soft radial falloff (a 64² DataTexture, no DOM), the ring is a faint dust
+skirt (a flat quad with a soft ring profile, out to ~3 R = 72 m for the 2,000 lb in 0.8 s, opacity 0.4 → 0), the flash is
+smaller, the dirt darker. Checked in the laptop renderer (`bench/vehicle-boom-laptop.mjs`, run `boom-a`) and on the 1070
+(`1070-look-d`, the burst-ahead shot reframed: the chase camera had left it out of frame). `vehicle_armament` 16/16,
+`vehicle_flight` 23/23.
+
+**Final checks (end of the evening)**: ACE `--filter Vehicles` 12/12; full JS gate (`capped-build node harness/run-js-headless.mjs`,
+after the explosion rework) **982 passed, 0 failed**; the server committed in `~/ace-server` (`a04bad6`) and the patch series regenerated (`ace/0001-0006`, `git am` on `a8ff29f` = the branch tree). Six
+1070 stills (`1070-look-d`: the 2,000 lb burst from above, the fireball below the aircraft, a Lightning Bolt, flight, parked in
+Holtburg, the cockpit) taildropped to the owner's phone. Committed and pushed to `origin/master` on the owner's ask.

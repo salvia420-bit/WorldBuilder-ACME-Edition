@@ -29,3 +29,21 @@ export function stepFall(f, dt) {
   f.z += f.vz * dt;
   return f;
 }
+
+// Free-fall bombs (weapon kind 3; HBV1 v2): the client twin of ACE Vehicles/VehicleOrdnance.cs Step — gravity and quadratic
+// drag with the profile's terminal velocity, semi-implicit Euler at the 30 Hz step, the same operation order. The server
+// owns the bomb and its explosion; capable clients fly the bomb from its BombRelease event (position + velocity) with this.
+export const BOMB = Object.freeze({ GRAVITY: 9.8 });
+
+/** One bomb step IN PLACE: b = {x, y, z, vx, vy, vz, terminal}. */
+export function stepBomb(b, dt) {
+  const sp = Math.sqrt(b.vx * b.vx + b.vy * b.vy + b.vz * b.vz);
+  const k = b.terminal > 0 ? BOMB.GRAVITY / (b.terminal * b.terminal) : 0.0;
+  b.vx += -k * sp * b.vx * dt;
+  b.vy += -k * sp * b.vy * dt;
+  b.vz += (-BOMB.GRAVITY - k * sp * b.vz) * dt;
+  b.x += b.vx * dt;
+  b.y += b.vy * dt;
+  b.z += b.vz * dt;
+  return b;
+}

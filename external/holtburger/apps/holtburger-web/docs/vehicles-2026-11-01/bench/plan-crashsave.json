@@ -1,0 +1,13 @@
+{
+ "name": "crashsave",
+ "note": "H2 test part 1: a pilot flying at ~150 m AGL while the periodic save runs (player_save_interval lowered to 10 s by the driver); the driver SIGKILLs ACE after this plan's eval returns.",
+ "timeoutMin": 10,
+ "sessions": [ {"role": "pilot", "account": "agentp10", "flags": "vehicles=on"} ],
+ "steps": [
+  {"label": "pilot to Holtburg", "page": "pilot", "teleloc": "0xA9B40019 84 7.1 94", "afterTeleportMs": 12000},
+  {"label": "clean slate", "page": "pilot", "chat": ["@vehicle despawn all"], "sleepMs": 1000},
+  {"label": "spawn the vehicle", "page": "pilot", "eval": "vehicle-spawn.eval.js"},
+  {"label": "fly and get saved in the sky", "page": "pilot", "eval": "vehicle-crashsave.eval.js", "aglM": 150, "holdSec": 30},
+  {"label": "keep flying while the driver kills ACE", "page": "pilot", "chat": ["@loc"], "sleepMs": 60000}
+ ]
+}

@@ -27,7 +27,9 @@ export const WORLD_MIN = 0.5;
 export const WORLD_MAX = 255.0 * 192.0 - 0.5;
 const TWO_PI = 2.0 * Math.PI;
 
-export const BUTTON = Object.freeze({ BOOST: 0x01, FIRE: 0x02, LAND: 0x04 });
+// HBV1 v2: MISSILE (held: the next lightning rail every 0.3 s), BOMB (rising edge: release the next bomb) — the server's
+// VehicleInputFrame.ButtonMissile / ButtonBomb; neither changes the flight, so the predictor stays exact
+export const BUTTON = Object.freeze({ BOOST: 0x01, FIRE: 0x02, LAND: 0x04, MISSILE: 0x08, BOMB: 0x10 });
 
 export function moveToward(cur, target, maxDelta) {
   let d = target - cur;
@@ -61,6 +63,8 @@ export function quantizeInput(raw) {
   if (r.boost) buttons |= BUTTON.BOOST;
   if (r.fire) buttons |= BUTTON.FIRE;
   if (r.land) buttons |= BUTTON.LAND;
+  if (r.missile) buttons |= BUTTON.MISSILE;
+  if (r.bomb) buttons |= BUTTON.BOMB;
   return { throttle: thr, pitch: q(r.pitch), roll: q(r.roll), yaw: q(r.yaw), buttons };
 }
 
@@ -74,6 +78,8 @@ export function inputFromFrame(f) {
     boost: (f.buttons & BUTTON.BOOST) !== 0,
     fire: (f.buttons & BUTTON.FIRE) !== 0,
     land: (f.buttons & BUTTON.LAND) !== 0,
+    missile: (f.buttons & BUTTON.MISSILE) !== 0,
+    bomb: (f.buttons & BUTTON.BOMB) !== 0,
   };
 }
 
@@ -249,8 +255,9 @@ export function rotate(q, v) {
 export function toCellLocal(gx, gy, gz) {
   let lbX = Math.floor(gx / 192.0);
   let lbY = Math.floor(gy / 192.0);
-  lbX = clamp(lbX, 0, 255);
-  lbY = clamp(lbY, 0, 255);
+  // 0..254 (= the server's Vehicle.ToPosition): landblock 0xFF does not exist
+  lbX = clamp(lbX, 0, 254);
+  lbY = clamp(lbY, 0, 254);
   const lx = clamp(Math.fround(gx - lbX * 192.0), 0, 191.999);
   const ly = clamp(Math.fround(gy - lbY * 192.0), 0, 191.999);
   const cellX = Math.floor(lx / 24.0);

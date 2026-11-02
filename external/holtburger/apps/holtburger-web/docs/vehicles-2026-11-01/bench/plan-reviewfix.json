@@ -1,0 +1,15 @@
+{
+ "name": "reviewfix",
+ "note": "Server review fixes live (decision 69): recall + melee refused while seated, a clean re-board, a pilot killed in the air unseated onto the ground.",
+ "timeoutMin": 15,
+ "sessions": [
+  {"role": "pilot", "account": "agentp10", "flags": "vehicles=on"}
+ ],
+ "steps": [
+  {"label": "pilot to Holtburg", "page": "pilot", "teleloc": "0xA9B40019 84 7.1 94", "afterTeleportMs": 12000},
+  {"label": "clean slate", "page": "pilot", "chat": ["@vehicle despawn all"], "sleepMs": 1000},
+  {"label": "spawn the vehicle", "page": "pilot", "eval": "vehicle-spawn.eval.js"},
+  {"label": "review fixes", "page": "pilot", "eval": "vehicle-reviewfix.eval.js", "name": "+Probe 912", "aglM": 90},
+  {"label": "clean up", "page": "pilot", "chat": ["@vehicle despawn all"], "sleepMs": 1500}
+ ]
+}

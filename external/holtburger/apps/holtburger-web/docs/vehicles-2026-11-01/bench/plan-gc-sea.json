@@ -1,0 +1,21 @@
+{
+ "name": "gc-sea",
+ "note": "GC fix check (decision 71): take off from the coast at landblock ~0x8A4B and fly west over the open sea across the block of deep-sea dungeon landblocks (x 0x60-0x65, y 0x48-0x4C: 716-1,517 cells each) and back. With vehicle_defer_dungeons the corridor loads them vehicle-only and brings up nothing (no [HEAVYADD] cell builds, DungeonsDeferred > 0); the [gc] stall lines carry the promoted MB.",
+ "timeoutMin": 25,
+ "sessions": [
+  {"role": "pilot", "account": "agentp10", "flags": "vehicles=on"}
+ ],
+ "steps": [
+  {"label": "pilot to the coast east of the dungeon block", "page": "pilot", "chat": ["@tele 41.6s,8.8e"], "sleepMs": 15000},
+  {"label": "clean slate", "page": "pilot", "chat": ["@vehicle despawn all"], "sleepMs": 1000},
+  {"label": "spawn the vehicle", "page": "pilot", "eval": "vehicle-spawn.eval.js"},
+  {"label": "west over the dungeon block and back", "page": "pilot", "eval": "../../flight-experience-2026-11-01/bench/flight.eval.js",
+   "route": [
+    {"heading": 270, "metres": 9000, "agl": 120, "boost": true},
+    {"heading": 90, "metres": 9000, "agl": 120, "boost": true}
+   ],
+   "agl": 120, "throttle": 1, "boost": true, "maxSec": 420},
+  {"label": "server report", "page": "pilot", "chat": ["@vehicles"], "sleepMs": 2000},
+  {"label": "clean up", "page": "pilot", "chat": ["@vehicle despawn all"], "sleepMs": 1500}
+ ]
+}

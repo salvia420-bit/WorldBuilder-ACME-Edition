@@ -8,8 +8,13 @@
 //! Framing: C2S = game actions 0x0900–0x0905 (inside 0xF7B1), S2C = game events 0x0900–0x0908 (inside
 //! 0xF7B0). Every payload starts with the 8-byte [`VehicleHeader`] (`"HBV1"`, version, reserved). A payload
 //! without the tag is rejected (`unpack_payload` → `None`; the event dispatcher then keeps it as
-//! `GameEvent::Unknown`, i.e. dropped). A higher version is parsed for its v1 fields and its trailing
-//! bytes are skipped (versions only append).
+//! `GameEvent::Unknown`, i.e. dropped).
+//!
+//! Versions only append fields. Writers emit [`HBV1_VERSION`] (2). A v1 payload parses with the v2 fields at
+//! their defaults (0 / empty; `VehicleFire::mount_count` = 1); a payload newer than v2 is parsed for its v2
+//! fields and its trailing bytes are skipped. v2 appends: `VehicleProfile::{part_roles, weapon_ext}`,
+//! `VehicleState::{missile_mask, bomb_mask, reserved2}`, `VehicleFire::{mount_count, reserved2, speed}`,
+//! `VehicleEvent::{aux, velocity}`. C2S messages are unchanged apart from the header version.
 
 use crate::messages::utils::{read_string16, write_string16};
 use byteorder::{ByteOrder, LittleEndian, WriteBytesExt};
@@ -19,8 +24,10 @@ mod tests;
 
 /// `"HBV1"` as a little-endian u32 (bytes `48 42 56 31`).
 pub const HBV1_TAG: u32 = 0x3156_4248;
-/// The protocol version this module writes.
-pub const HBV1_VERSION: u16 = 1;
+/// The protocol version this module writes (and the newest it parses fully).
+pub const HBV1_VERSION: u16 = 2;
+/// The first version carrying the v2 fields.
+const V2: u16 = 2;
 
 /// ClientCapabilities / CapabilitiesAck bits.
 pub mod caps {
@@ -65,6 +72,70 @@ pub mod buttons {
     pub const BOOST: u8 = 0x01;
     pub const FIRE: u8 = 0x02;
     pub const LAND: u8 = 0x04;
+    /// v2: fire a lightning-bolt rail; held: the next rail every 0.3 s.
+    pub const MISSILE: u8 = 0x08;
+    /// v2: rising edge: release the next bomb.
+    pub const BOMB: u8 = 0x10;
+}
+
+/// `VehicleWeaponDef.kind`.
+pub mod weapon_kind {
+    pub const REPEATING_CROSSBOW: u32 = 1;
+    /// A war-magic projectile spell launched from a rail (`VehicleWeaponExt::spell_id`).
+    pub const MISSILE: u32 = 2;
+    /// Free-fall bomb: `damage` = blast damage at the centre, `range` = blast radius, `magazine` = 1.
+    pub const BOMB: u32 = 3;
+}
+
+/// `VehicleEvent.kind`.
+pub mod event_kind {
+    pub const TAKEOFF: u32 = 1;
+    pub const LANDED: u32 = 2;
+    /// Subject = pilot (0 if none); cell / position = impact point.
+    pub const CRASHED: u32 = 3;
+    pub const DESPAWN: u32 = 4;
+    /// Subject = the player who bailed; cell / position = where.
+    pub const BAIL: u32 = 5;
+    /// Subject = the falling player; the parachute opened.
+    pub const CHUTE: u32 = 6;
+    /// Subject = the player; back on foot; value = vertical speed at contact.
+    pub const TOUCHDOWN: u32 = 7;
+    /// Subject = the creature hit by a bolt; value = damage.
+    pub const HIT: u32 = 8;
+    /// Subject = the pilot; cell / position = release point; value = mass in lb; aux = the station's weapon
+    /// index; velocity = the bomb's initial velocity.
+    pub const BOMB_RELEASE: u32 = 9;
+    /// Subject = the pilot; cell / position = the impact point; value = mass in lb; aux = the station's weapon
+    /// index.
+    pub const EXPLOSION: u32 = 10;
+    /// Subject = the pilot; the vehicle's guns, rails and bomb stations are full again.
+    pub const REARMED: u32 = 11;
+}
+
+/// `VehicleProfile.part_roles`: the role in the low 16 bits; `ORDNANCE` carries a weapon index in bits 16–23.
+pub mod part_role {
+    pub const STATIC: u32 = 0;
+    /// Spins about the vehicle's forward (y) axis through the part's offset.
+    pub const PROPELLER: u32 = 1;
+    /// Drawn only while Parked / Takeoff / Landing.
+    pub const GEAR: u32 = 2;
+    /// Hidden in the cockpit view.
+    pub const CANOPY: u32 = 3;
+    /// Drawn while its weapon is loaded (`ORDNANCE | (weapon_index << 16)`).
+    pub const ORDNANCE: u32 = 4;
+
+    /// The `ORDNANCE` role for weapon `index`.
+    pub const fn ordnance(index: u8) -> u32 {
+        ORDNANCE | ((index as u32) << 16)
+    }
+    /// The role without its weapon index.
+    pub const fn role(value: u32) -> u32 {
+        value & 0xFFFF
+    }
+    /// The weapon index of an `ORDNANCE` role.
+    pub const fn weapon_index(value: u32) -> u8 {
+        ((value >> 16) & 0xFF) as u8
+    }
 }
 
 // ---------------------------------------------------------------- primitives
@@ -135,6 +206,7 @@ pub struct VehicleHeader {
 }
 
 impl VehicleHeader {
+    /// The `HBV1` header this module writes (version [`HBV1_VERSION`]; "V1" is the tag's name, not the version).
     pub const V1: VehicleHeader = VehicleHeader {
         tag: HBV1_TAG,
         version: HBV1_VERSION,
@@ -162,7 +234,7 @@ impl VehicleHeader {
     }
 }
 
-/// Skip the bytes a newer version appended after the v1 fields.
+/// Skip the bytes a newer version appended after the fields this module knows (v2).
 fn skip_future(hdr: &VehicleHeader, data: &[u8], offset: &mut usize) {
     if hdr.version > HBV1_VERSION {
         *offset = data.len();
@@ -189,6 +261,25 @@ pub struct VehicleWeaponDef {
     pub damage: f32,
     pub magazine: u32,
     pub muzzle: [f32; 3],
+}
+
+/// v2: per-weapon extras, parallel to `VehicleProfile::weapons` (20 bytes on the wire).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct VehicleWeaponExt {
+    /// m/s relative to the vehicle: the quarrel / bolt launch speed.
+    pub muzzle_velocity: f32,
+    /// m: guns aim at the boresight point this far ahead; 0 = parallel.
+    pub convergence: f32,
+    /// Bombs.
+    pub mass_kg: f32,
+    /// m/s: a bomb's terminal velocity.
+    pub drag_terminal: f32,
+    /// Missiles: the war spell launched.
+    pub spell_id: u32,
+}
+
+impl VehicleWeaponExt {
+    const WIRE: usize = 20;
 }
 
 /// One retail Setup / GfxObj of the vehicle's looks, in the vehicle frame.
@@ -368,6 +459,10 @@ pub struct VehicleProfile {
     pub seats: Vec<VehicleSeatDef>,
     pub weapons: Vec<VehicleWeaponDef>,
     pub parts: Vec<VehiclePartDef>,
+    /// v2: a [`part_role`] per part, in `parts` order (empty, or `parts.len()`).
+    pub part_roles: Vec<u32>,
+    /// v2: one per weapon, in `weapons` order (empty, or `weapons.len()`).
+    pub weapon_ext: Vec<VehicleWeaponExt>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -392,9 +487,16 @@ pub struct VehicleState {
     pub bank: f32,
     pub speed: f32,
     pub v_cap: f32,
+    /// Rounds left across all gun mounts.
     pub ammo: u16,
     pub mode: u8,
     pub flags: u8,
+    /// v2: bit i = the i-th Missile weapon in profile order is loaded.
+    pub missile_mask: u8,
+    /// v2: bit i = the i-th Bomb weapon is loaded.
+    pub bomb_mask: u8,
+    /// v2.
+    pub reserved2: u16,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -409,6 +511,12 @@ pub struct VehicleFire {
     pub dir: [i16; 3],
     pub reserved: u16,
     pub seed: u32,
+    /// v2: mounts `mount .. mount + mount_count` each fired `count` rounds this step (1 for a v1 payload).
+    pub mount_count: u16,
+    /// v2.
+    pub reserved2: u16,
+    /// v2: m/s, the rounds' speed over the ground (for drawing).
+    pub speed: f32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -420,6 +528,10 @@ pub struct VehicleEvent {
     pub cell: u32,
     pub position: [f32; 3],
     pub value: f32,
+    /// v2: per kind (BombRelease / Explosion: the station's weapon index).
+    pub aux: u32,
+    /// v2: per kind (BombRelease: the bomb's initial velocity, m/s).
+    pub velocity: [f32; 3],
 }
 
 /// Server → client vehicle game events.
@@ -525,6 +637,18 @@ impl VehicleS2C {
                     }
                     buf.write_f32::<LittleEndian>(part.scale).unwrap();
                 }
+                // v2
+                buf.write_u32::<LittleEndian>(p.part_roles.len() as u32).unwrap();
+                for role in &p.part_roles {
+                    buf.write_u32::<LittleEndian>(*role).unwrap();
+                }
+                buf.write_u32::<LittleEndian>(p.weapon_ext.len() as u32).unwrap();
+                for x in &p.weapon_ext {
+                    for v in [x.muzzle_velocity, x.convergence, x.mass_kg, x.drag_terminal] {
+                        buf.write_f32::<LittleEndian>(v).unwrap();
+                    }
+                    buf.write_u32::<LittleEndian>(x.spell_id).unwrap();
+                }
             }
             Self::Seat(s) => {
                 for v in [s.vehicle, s.seat, s.occupant, s.state, s.reason] {
@@ -543,6 +667,10 @@ impl VehicleS2C {
                 buf.write_u16::<LittleEndian>(s.ammo).unwrap();
                 buf.push(s.mode);
                 buf.push(s.flags);
+                // v2
+                buf.push(s.missile_mask);
+                buf.push(s.bomb_mask);
+                buf.write_u16::<LittleEndian>(s.reserved2).unwrap();
             }
             Self::Fire(f) => {
                 buf.write_u32::<LittleEndian>(f.vehicle).unwrap();
@@ -556,6 +684,10 @@ impl VehicleS2C {
                 }
                 buf.write_u16::<LittleEndian>(f.reserved).unwrap();
                 buf.write_u32::<LittleEndian>(f.seed).unwrap();
+                // v2
+                buf.write_u16::<LittleEndian>(f.mount_count).unwrap();
+                buf.write_u16::<LittleEndian>(f.reserved2).unwrap();
+                buf.write_f32::<LittleEndian>(f.speed).unwrap();
             }
             Self::Event(e) => {
                 for v in [e.vehicle, e.kind, e.step, e.subject, e.cell] {
@@ -563,6 +695,9 @@ impl VehicleS2C {
                 }
                 w_vec3(buf, e.position);
                 buf.write_f32::<LittleEndian>(e.value).unwrap();
+                // v2
+                buf.write_u32::<LittleEndian>(e.aux).unwrap();
+                w_vec3(buf, e.velocity);
             }
         }
     }
@@ -582,6 +717,8 @@ impl VehicleS2C {
         let msg = {
             let mut r = Rd { data, off: &mut *offset };
             hdr = VehicleHeader::read(&mut r)?;
+            // v1 payloads end before the v2 fields: those keep their defaults
+            let v2 = hdr.version >= V2;
             match opcode {
                 s2c::CAPABILITIES_ACK => Self::CapabilitiesAck {
                     granted: r.u32()?,
@@ -633,6 +770,26 @@ impl VehicleS2C {
                             scale: r.f32()?,
                         });
                     }
+                    let mut part_roles = Vec::new();
+                    let mut weapon_ext = Vec::new();
+                    if v2 {
+                        let n = r.count(4)?;
+                        part_roles.reserve(n);
+                        for _ in 0..n {
+                            part_roles.push(r.u32()?);
+                        }
+                        let n = r.count(VehicleWeaponExt::WIRE)?;
+                        weapon_ext.reserve(n);
+                        for _ in 0..n {
+                            weapon_ext.push(VehicleWeaponExt {
+                                muzzle_velocity: r.f32()?,
+                                convergence: r.f32()?,
+                                mass_kg: r.f32()?,
+                                drag_terminal: r.f32()?,
+                                spell_id: r.u32()?,
+                            });
+                        }
+                    }
                     Self::Profile(Box::new(VehicleProfile {
                         vehicle,
                         profile_key,
@@ -663,6 +820,8 @@ impl VehicleS2C {
                         seats,
                         weapons,
                         parts,
+                        part_roles,
+                        weapon_ext,
                     }))
                 }
                 s2c::SEAT => Self::Seat(VehicleSeat {
@@ -686,6 +845,10 @@ impl VehicleS2C {
                     ammo: r.u16()?,
                     mode: r.u8()?,
                     flags: r.u8()?,
+                    // struct-literal fields evaluate in source order: the v2 tail follows `flags`
+                    missile_mask: if v2 { r.u8()? } else { 0 },
+                    bomb_mask: if v2 { r.u8()? } else { 0 },
+                    reserved2: if v2 { r.u16()? } else { 0 },
                 }),
                 s2c::FIRE => Self::Fire(VehicleFire {
                     vehicle: r.u32()?,
@@ -697,6 +860,9 @@ impl VehicleS2C {
                     dir: [r.i16()?, r.i16()?, r.i16()?],
                     reserved: r.u16()?,
                     seed: r.u32()?,
+                    mount_count: if v2 { r.u16()? } else { 1 },
+                    reserved2: if v2 { r.u16()? } else { 0 },
+                    speed: if v2 { r.f32()? } else { 0.0 },
                 }),
                 s2c::EVENT => Self::Event(VehicleEvent {
                     vehicle: r.u32()?,
@@ -706,6 +872,8 @@ impl VehicleS2C {
                     cell: r.u32()?,
                     position: r.vec3()?,
                     value: r.f32()?,
+                    aux: if v2 { r.u32()? } else { 0 },
+                    velocity: if v2 { r.vec3()? } else { [0.0; 3] },
                 }),
                 _ => return None,
             }
