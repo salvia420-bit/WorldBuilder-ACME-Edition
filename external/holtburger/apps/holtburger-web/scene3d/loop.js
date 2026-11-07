@@ -2004,6 +2004,9 @@ function _issueFogFence(renderer, now) {
     gl.bindBuffer(gl.PIXEL_PACK_BUFFER, f.buf);
     gl.bufferData(gl.PIXEL_PACK_BUFFER, _fogProbeBuf.byteLength, gl.STREAM_READ);
     gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
+  } else {
+    gl.bindBuffer(gl.PIXEL_PACK_BUFFER, f.buf);
+    gl.bufferData(gl.PIXEL_PACK_BUFFER, _fogProbeBuf.byteLength, gl.STREAM_READ);
   }
   _fogProbeBuf.fill(0xffff);
   gl.bindBuffer(gl.PIXEL_PACK_BUFFER, f.buf);
@@ -2041,11 +2044,13 @@ function _harvestFogFence(now) {
     if (status === null || now - f.issuedAt > FOG_FENCE_TIMEOUT_MS) {
       _fogFenceStats.timeouts += 1;
       _dropFogFence();
+      f.buf = null; // never write again to a fenced buffer that was not read back
       return _fogProbeFailed(new Error("far-fog fence never signalled"));
     }
     return _FOG_PENDING;
   }
   if (asyncLinkBusy()) return _FOG_PENDING;
+  _fogProbeBuf.fill(0xffff); // sentinel: a failed read stays NaN
   const t0 = performance.now();
   try {
     gl.bindBuffer(gl.PIXEL_PACK_BUFFER, f.buf);

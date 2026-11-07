@@ -87,6 +87,9 @@ def _decode_avg(tex):
                               32, 4, four, 0, 0, 0, 0, 0, 0x1000, b"\0" * 16)
             im = Image.open(io.BytesIO(hdr + data)).convert("RGBA")
             a = np.asarray(im, dtype=np.float64)
+        elif fmt == 500:  # 0x1F4 JPEG
+            im = Image.open(io.BytesIO(data)).convert("RGBA")
+            a = np.asarray(im, dtype=np.float64)
         elif fmt in (20, 0xF3):
             a = np.frombuffer(data[: w * h * 3], dtype=np.uint8).reshape(-1, 3)[:, ::-1].astype(np.float64)
             a = np.concatenate([a, np.full((a.shape[0], 1), 255.0)], 1)

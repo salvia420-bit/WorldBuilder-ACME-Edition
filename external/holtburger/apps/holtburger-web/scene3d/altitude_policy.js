@@ -191,7 +191,7 @@ export function tickAltitudePolicy(scene3d, camera, { nowMs, groundAt = null, su
   // (world grids + program, far-forest index + programs + the impostors trickled one at a time) so a take-off only
   // opens the view (world_terrain.js prefetchWorldTier)
   if (subject && _st.inWorldMs == null) _st.inWorldMs = nowMs;
-  if (!_st.wanted && _st.inWorldMs != null && nowMs - _st.inWorldMs > 20000 && flightPrewarmOn()) {
+  if (!_st.wanted && _st.inWorldMs != null && nowMs - _st.inWorldMs > 2000 && flightPrewarmOn()) {
     prefetchWorldTier(scene3d, camera);
     prefetchFarForest(scene3d, { nowMs, frameMs: dt * 1000 });
   }

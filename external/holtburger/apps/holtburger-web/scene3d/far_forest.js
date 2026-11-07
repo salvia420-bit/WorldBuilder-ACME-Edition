@@ -29,6 +29,7 @@ import { lbFadeUniforms, lbFadeOn } from "./lb_presence.js";
 import { rlogSetFarForestProbe } from "./residency_log.js";
 import { flightViewFlag } from "./flight_view_flag.js";
 import { withLogDepth } from "./shader_logdepth.js";
+import { prewarmSubtree } from "./bake_prewarm.js";
 
 const BASE_URL = "../../dist/farforest/";
 const VIEWS = 8;
@@ -370,6 +371,7 @@ function _bakeViews(st, m, built) {
     cam.lookAt(c.x, c.y, zMin);
     cam.updateMatrixWorld(true);
     const [col, row] = atlasCell(m, k);
+    rt.texture.generateMipmaps = (k === VIEWS - 1);
     renderer.setViewport(col * CELL_PX, row * CELL_PX, CELL_PX, CELL_PX);
     renderer.setScissor(col * CELL_PX, row * CELL_PX, CELL_PX, CELL_PX);
     renderer.clear(true, true, false);
@@ -522,9 +524,10 @@ function _compileAhead(st, mesh) {
   const r = st.renderer;
   const cam = st.scene3d?.camera;
   const scene = st.scene3d?.scene;
-  if (!r || typeof r.compileAsync !== "function" || !cam) { st.compiled = true; return; }
+  if (!r || typeof r.compile !== "function" || !cam) { st.compiled = true; return; }
   try {
-    Promise.resolve(r.compileAsync(mesh, cam, scene)).then(() => { st.compiled = true; }, () => { st.compiled = true; });
+    const p = scene ? prewarmSubtree(st.scene3d, mesh) : r.compileAsync?.(mesh, cam, scene);
+    Promise.resolve(p).then(() => { st.compiled = true; }, () => { st.compiled = true; });
   } catch (_) { st.compiled = true; }
 }
 
@@ -579,7 +582,7 @@ function _fetchRegion(st, rx, ry) {
  * bake start per PREFETCH_BAKE_MS, and only on a frame with headroom (`frameMs` under PREFETCH_FRAME_MS) — so the
  * atlas is complete before the first take-off instead of 64 bakes landing on it.
  */
-const PREFETCH_BAKE_MS = 350;
+const PREFETCH_BAKE_MS = 50;
 const PREFETCH_FRAME_MS = 25;
 export function prefetchFarForest(scene3d, { nowMs = 0, frameMs = 0 } = {}) {
   const st = _st || initFarForest(scene3d);
@@ -608,7 +611,11 @@ export function tickFarForest(scene3d, camera) {
     return;
   }
   _ensureMesh(st);
-  _bakeNext(st);
+  const nowMs = (typeof performance !== "undefined") ? performance.now() : Date.now();
+  if (!st.baking && st.bakeQueue.length && nowMs - (st.lastBakeMs || 0) >= 80) {
+    st.lastBakeMs = nowMs;
+    _bakeNext(st);
+  }
   if (st.atlasDirty) {
     st.atlasDirty = false;
     const u = st.mat.uniforms.uModel.value;
@@ -626,9 +633,8 @@ export function tickFarForest(scene3d, camera) {
   // The region bookkeeping below (two 8 km disc scans, a sorted signature string) runs only when the camera has
   // moved to another region or every 250 ms, not per frame: at 400 km/h a region (1.5 km) takes ~14 s, and the
   // per-frame arrays and strings were garbage for the major GCs that stall a frame (1070 arm O: a 0.65 s GC at 5 km).
-  const nowMs = (typeof performance !== "undefined") ? performance.now() : Date.now();
   const crx = Math.floor(cx / REGION_M), cry = Math.floor(cy / REGION_M);
-  if (crx === st._lastRx && cry === st._lastRy && range === st._lastRange && nowMs - (st._lastScanMs || 0) < 250) return 0;
+  if (crx === st._lastRx && cry === st._lastRy && Math.abs(range - (st._lastRange || 0)) < 250 && nowMs - (st._lastScanMs || 0) < 250) return 0;
   st._lastRx = crx; st._lastRy = cry; st._lastRange = range; st._lastScanMs = nowMs;
   const inRange = regionsInRange(cx, cy, range);
   _diag.regionsWanted = inRange.length;
@@ -651,10 +657,12 @@ export function tickFarForest(scene3d, camera) {
   }
   // Rebuild the instance list only when the set of LOADED regions in range changes, at most every 1.5 s (arm E
   // rebuilt 1,144 times in 160 s — every region crossing the disc edge, up to 4 MB per upload). Regions come into the
-  // list with an 800 m margin; the vertex shader culls by the exact range, so a listed region beyond it costs nothing.
-  const listed = regionsInRange(cx, cy, range + 800);
+  // list with an 800 m margin quantized to 800 m steps so continuous climb/descent doesn't churn the region set.
+  const listRange = Math.ceil((range + 800) / 800) * 800;
+  const listed = regionsInRange(cx, cy, listRange);
   const sig = listed.filter((r) => st.regions.get(`${r.rx}_${r.ry}`)?.data).map((r) => `${r.rx}_${r.ry}`).sort().join(",");
-  if (sig !== st.sig && nowMs - (st.lastRebuildMs || 0) >= 1500) {
+  const minRebuildMs = st.loading.size > 0 && st.sig ? 2500 : 1500;
+  if (sig !== st.sig && nowMs - (st.lastRebuildMs || 0) >= minRebuildMs) {
     st.sig = sig;
     st.lastRebuildMs = nowMs;
     _rebuildInstances(st, listed);

@@ -2,6 +2,10 @@
 
 Conservative triage pass. 12 March/April-2026 files moved to `archive/`. Nothing deleted. Everything else left in place (most top-level docs are code-referenced or referenced from root-level docs like `README.md` / `spin.md` / `wireprompt.md` — moving would break links).
 
+## Design sets
+
+- `trifecta/` — **the Trifecta expansion system design** (started 2026-11-03): factories, a monster ecology and air power on top of the intact classic game; scaling ACE + holtburger-web to 1,000+ players; the dynamic-world overlay. Start at `trifecta/README.md`.
+
 ## Live methods + active plan (cite from code; do NOT move)
 
 - `diagnostic-toolset-plan-2026-05-19.md` — active 14-surface toolset plan + 5-wave team-agent execution. **LOCKED — Wave 3.A editing concurrently.**

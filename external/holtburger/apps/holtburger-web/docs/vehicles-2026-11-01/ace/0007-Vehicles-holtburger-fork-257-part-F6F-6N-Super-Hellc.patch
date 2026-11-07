@@ -1,0 +1,961 @@
+From 9e271802ce5fa3da2dc47101a54bcadc0db82c01 Mon Sep 17 00:00:00 2001
+From: salvia420-bit <salvia420@gmail.com>
+Date: Sat, 7 Nov 2026 01:15:06 -0330
+Subject: [PATCH 7/7] Vehicles (holtburger fork): 257-part F6F-6N Super-Hellcat
+ profile, flight/server optimizations, bug fixes
+
+---
+ Source/ACE.DatLoader/DatDatabase.cs           |   2 +-
+ Source/ACE.Server/Entity/GeneratorProfile.cs  |  74 ++--
+ Source/ACE.Server/Entity/Landblock.cs         |  17 +-
+ .../ACE.Server/Managers/LandblockManager.cs   |   5 +-
+ Source/ACE.Server/Managers/PropertyManager.cs |   1 +
+ Source/ACE.Server/Physics/Common/Landblock.cs |  17 +-
+ .../ACE.Server/Physics/Common/ObjectMaint.cs  |   6 +-
+ Source/ACE.Server/Vehicles/Vehicle.cs         |   9 +
+ Source/ACE.Server/Vehicles/VehicleBailout.cs  |  10 +-
+ Source/ACE.Server/Vehicles/VehicleCommands.cs |  19 +-
+ Source/ACE.Server/Vehicles/VehicleManager.cs  |  42 ++-
+ Source/ACE.Server/Vehicles/VehicleOrdnance.cs |   6 +-
+ Source/ACE.Server/Vehicles/VehicleProfile.cs  | 328 ++++++++++++++----
+ .../ACE.Server/Vehicles/VehicleStreaming.cs   |  16 +-
+ Source/ACE.Server/Vehicles/VehicleWeapons.cs  |  14 +-
+ 15 files changed, 431 insertions(+), 135 deletions(-)
+
+diff --git a/Source/ACE.DatLoader/DatDatabase.cs b/Source/ACE.DatLoader/DatDatabase.cs
+index 1df61d7..906d706 100644
+--- a/Source/ACE.DatLoader/DatDatabase.cs
++++ b/Source/ACE.DatLoader/DatDatabase.cs
+@@ -21,7 +21,7 @@ public class DatDatabase
+ 
+         private FileStream stream { get; }
+ 
+-        private static readonly object streamMutex = new object();
++        private readonly object streamMutex = new object();
+ 
+         /// <summary>holtburger vehicles fork: set on background prefetch / loader threads (diagnosis of lock waits).</summary>
+         [ThreadStatic] public static bool BackgroundReaderThread;
+diff --git a/Source/ACE.Server/Entity/GeneratorProfile.cs b/Source/ACE.Server/Entity/GeneratorProfile.cs
+index 4c26241..d9e6957 100644
+--- a/Source/ACE.Server/Entity/GeneratorProfile.cs
++++ b/Source/ACE.Server/Entity/GeneratorProfile.cs
+@@ -58,6 +58,8 @@ public class GeneratorProfile
+         /// </summary>
+         public bool GeneratedTreasureItem { get; private set; }
+ 
++        private int failedFirstSpawns;
++
+         /// <summary>
+         /// The total # of active spawned objects + awaiting spawning
+         /// </summary>
+@@ -67,7 +69,7 @@ public int CurrentCreate
+             {
+                 if (!GeneratedTreasureItem)
+                 {
+-                    return Spawned.Count + SpawnQueue.Count;
++                    return Spawned.Count + SpawnQueue.Count + failedFirstSpawns;
+                 }
+                 else
+                 {
+@@ -208,7 +210,7 @@ public void ProcessQueue()
+                     continue;
+                 }
+ 
+-                if (MaxCreate == -1 || Spawned.Count < MaxCreate)
++                if (MaxCreate == -1 || Spawned.Count + failedFirstSpawns < MaxCreate)
+                 {
+                     var objects = Spawn();
+ 
+@@ -257,6 +259,18 @@ public List<WorldObject> Spawn()
+             }
+             else
+             {
++                if (RegenLocationType.HasFlag(RegenLocationType.Specific))
++                {
++                    var prePos = GetSpecificPosition();
++                    if (!VerifyLandblock(prePos) || !VerifyWalkableSlope(prePos))
++                    {
++                        if (FirstSpawn)
++                            failedFirstSpawns++;
++                        Vehicles.WorldTickMonitor.NoteSpawn(Generator, objects, vsT0, vsT0, System.Diagnostics.Stopwatch.GetTimestamp());
++                        return objects;
++                    }
++                }
++
+                 var wo = WorldObjectFactory.CreateNewWorldObject(Biota.WeenieClassId);
+                 if (wo == null)
+                 {
+@@ -326,34 +340,34 @@ public List<WorldObject> Spawn()
+             return spawned;
+         }
+ 
+-        /// <summary>
+-        /// Spawns an object at a specific position
+-        /// </summary>
+-        public bool Spawn_Specific(WorldObject obj)
++        public ACE.Entity.Position GetSpecificPosition()
+         {
+-            // specific position
+             if ((Biota.ObjCellId ?? 0) > 0)
+-                obj.Location = new ACE.Entity.Position(Biota.ObjCellId ?? 0, Biota.OriginX ?? 0, Biota.OriginY ?? 0, Biota.OriginZ ?? 0, Biota.AnglesX ?? 0, Biota.AnglesY ?? 0, Biota.AnglesZ ?? 0, Biota.AnglesW ?? 0);
++                return new ACE.Entity.Position(Biota.ObjCellId ?? 0, Biota.OriginX ?? 0, Biota.OriginY ?? 0, Biota.OriginZ ?? 0, Biota.AnglesX ?? 0, Biota.AnglesY ?? 0, Biota.AnglesZ ?? 0, Biota.AnglesW ?? 0);
+ 
+-            // offset from generator location
+-            else
++            if (PropertyManager.GetBool("use_generator_rotation_offset").Item)
+             {
+-                if (PropertyManager.GetBool("use_generator_rotation_offset").Item)
+-                {
+-                    var offset = Vector3.Transform(new Vector3(Biota.OriginX ?? 0, Biota.OriginY ?? 0, Biota.OriginZ ?? 0), Generator.Location.Rotation);
++                var offset = Vector3.Transform(new Vector3(Biota.OriginX ?? 0, Biota.OriginY ?? 0, Biota.OriginZ ?? 0), Generator.Location.Rotation);
+ 
+-                    if (Generator.GeneratorType == GeneratorType.Relative)
+-                    {
+-                        var rotate = new Quaternion(Biota.AnglesX ?? 0, Biota.AnglesY ?? 0, Biota.AnglesZ ?? 0, Biota.AnglesW ?? 0) * Generator.Location.Rotation;
++                if (Generator.GeneratorType == GeneratorType.Relative)
++                {
++                    var rotate = new Quaternion(Biota.AnglesX ?? 0, Biota.AnglesY ?? 0, Biota.AnglesZ ?? 0, Biota.AnglesW ?? 0) * Generator.Location.Rotation;
+ 
+-                        obj.Location = new ACE.Entity.Position(Generator.Location.Cell, Generator.Location.PositionX + offset.X, Generator.Location.PositionY + offset.Y, Generator.Location.PositionZ + offset.Z, rotate.X, rotate.Y, rotate.Z, rotate.W);
+-                    }
+-                    else
+-                        obj.Location = new ACE.Entity.Position(Generator.Location.Cell, Generator.Location.PositionX + offset.X, Generator.Location.PositionY + offset.Y, Generator.Location.PositionZ + offset.Z, Biota.AnglesX ?? 0, Biota.AnglesY ?? 0, Biota.AnglesZ ?? 0, Biota.AnglesW ?? 0);
++                    return new ACE.Entity.Position(Generator.Location.Cell, Generator.Location.PositionX + offset.X, Generator.Location.PositionY + offset.Y, Generator.Location.PositionZ + offset.Z, rotate.X, rotate.Y, rotate.Z, rotate.W);
+                 }
+                 else
+-                    obj.Location = new ACE.Entity.Position(Generator.Location.Cell, Generator.Location.PositionX + Biota.OriginX ?? 0, Generator.Location.PositionY + Biota.OriginY ?? 0, Generator.Location.PositionZ + Biota.OriginZ ?? 0, Biota.AnglesX ?? 0, Biota.AnglesY ?? 0, Biota.AnglesZ ?? 0, Biota.AnglesW ?? 0);
++                    return new ACE.Entity.Position(Generator.Location.Cell, Generator.Location.PositionX + offset.X, Generator.Location.PositionY + offset.Y, Generator.Location.PositionZ + offset.Z, Biota.AnglesX ?? 0, Biota.AnglesY ?? 0, Biota.AnglesZ ?? 0, Biota.AnglesW ?? 0);
+             }
++            else
++                return new ACE.Entity.Position(Generator.Location.Cell, Generator.Location.PositionX + Biota.OriginX ?? 0, Generator.Location.PositionY + Biota.OriginY ?? 0, Generator.Location.PositionZ + Biota.OriginZ ?? 0, Biota.AnglesX ?? 0, Biota.AnglesY ?? 0, Biota.AnglesZ ?? 0, Biota.AnglesW ?? 0);
++        }
++
++        /// <summary>
++        /// Spawns an object at a specific position
++        /// </summary>
++        public bool Spawn_Specific(WorldObject obj)
++        {
++            obj.Location = GetSpecificPosition();
+ 
+             if (!VerifyLandblock(obj) || !VerifyWalkableSlope(obj))
+                 return false;
+@@ -437,26 +451,24 @@ public bool Spawn_Default(WorldObject obj)
+             return obj.EnterWorld();
+         }
+ 
+-        public bool VerifyLandblock(WorldObject obj)
++        public bool VerifyLandblock(ACE.Entity.Position loc)
+         {
+-            if (obj.Location == null || obj.Location.Landblock != Generator.Location.Landblock)
+-            {
+-                //log.DebugFormat("{0}.VerifyLandblock({1}) - spawn location is invalid landblock", _generator.Name, obj.Name);
++            if (loc == null || Generator?.Location == null || loc.Landblock != Generator.Location.Landblock)
+                 return false;
+-            }
+             return true;
+         }
+ 
+-        public bool VerifyWalkableSlope(WorldObject obj)
++        public bool VerifyLandblock(WorldObject obj) => VerifyLandblock(obj?.Location);
++
++        public bool VerifyWalkableSlope(ACE.Entity.Position loc)
+         {
+-            if (!obj.Location.Indoors && !obj.Location.IsWalkable() && !VerifyWalkableSlopeExcludedLandblocks.Contains(obj.Location.LandblockId.Landblock))
+-            {
+-                //log.DebugFormat("{0}.VerifyWalkableSlope({1}) - spawn location is unwalkable slope", _generator.Name, obj.Name);
++            if (loc != null && !loc.Indoors && !loc.IsWalkable() && !VerifyWalkableSlopeExcludedLandblocks.Contains(loc.LandblockId.Landblock))
+                 return false;
+-            }
+             return true;
+         }
+ 
++        public bool VerifyWalkableSlope(WorldObject obj) => VerifyWalkableSlope(obj?.Location);
++
+         /// <summary>
+         /// A list of landblocks the excluded from VerifyWalkableSlope check
+         /// 
+diff --git a/Source/ACE.Server/Entity/Landblock.cs b/Source/ACE.Server/Entity/Landblock.cs
+index 0a2a388..0fd3dcb 100644
+--- a/Source/ACE.Server/Entity/Landblock.cs
++++ b/Source/ACE.Server/Entity/Landblock.cs
+@@ -332,7 +332,10 @@ private void AddCreatedWorldObjects(List<WorldObject> factoryObjects, List<ACE.D
+                     }
+ 
+                     AddWorldObject(fo);
+-                    fo.ActivateLinks(objects, shardObjects, parent);
++                    if (budgeted && fo.WeenieType == WeenieType.House)
++                        (deferredHouseLinks ??= new List<(WorldObject, List<ACE.Database.Models.World.LandblockInstance>, List<ACE.Database.Models.Shard.Biota>, WorldObject)>()).Add((fo, objects, shardObjects, parent));
++                    else
++                        fo.ActivateLinks(objects, shardObjects, parent);
+ 
+                     if (fo.PhysicsObj != null)
+                         fo.PhysicsObj.Order = 0;
+@@ -758,9 +761,10 @@ public void TickMultiThreadedWork(double currentUnixTime)
+             Monitor1h.Pause();
+         }
+ 
+-        // holtburger vehicles fork (vehicle_landblock_budget): loot generators / loot profiles waiting for a player on foot
++        // holtburger vehicles fork (vehicle_landblock_budget): loot generators / loot profiles / house links waiting for a player on foot
+         private HashSet<WorldObject> deferredGeneratorUpdates, deferredGeneratorRegenerations;
+         private HashSet<GeneratorProfile> deferredLootProfiles;
++        private List<(WorldObject house, List<ACE.Database.Models.World.LandblockInstance> objects, List<ACE.Database.Models.Shard.Biota> shardObjects, WorldObject parent)> deferredHouseLinks;
+ 
+         /// <summary>Returns true the first time this profile is held.</summary>
+         public bool DeferLootProfile(GeneratorProfile profile) => (deferredLootProfiles ??= new HashSet<GeneratorProfile>()).Add(profile);
+@@ -775,6 +779,15 @@ private bool DeferLootGenerator(WorldObject generator)
+ 
+         private void RestoreDeferredGenerators()
+         {
++            if (deferredHouseLinks != null && deferredHouseLinks.Count > 0)
++            {
++                var houses = deferredHouseLinks.ToList();
++                deferredHouseLinks.Clear();
++                foreach (var h in houses)
++                    if (h.house != null && !h.house.IsDestroyed && worldObjects.ContainsKey(h.house.Guid))
++                        h.house.ActivateLinks(h.objects, h.shardObjects, h.parent);
++                PhysicsLandblock.SortObjects();
++            }
+             if (deferredGeneratorUpdates != null && deferredGeneratorUpdates.Count > 0)
+             {
+                 foreach (var g in deferredGeneratorUpdates)
+diff --git a/Source/ACE.Server/Managers/LandblockManager.cs b/Source/ACE.Server/Managers/LandblockManager.cs
+index 30ae862..ad7bfc9 100644
+--- a/Source/ACE.Server/Managers/LandblockManager.cs
++++ b/Source/ACE.Server/Managers/LandblockManager.cs
+@@ -721,8 +721,7 @@ public static Landblock GetLandblock(LandblockId landblockId, bool loadAdjacents
+                         landblock = landblocks[landblockId.LandblockX, landblockId.LandblockY] = new Landblock(landblockId);
+                         landblock.Initializing = true;
+                         loadedHere = landblock;
+-                        if (Vehicles.WorldTickMonitor.Active)
+-                            landblock.LoadOrigin = DescribeLoadOrigin();
++                        landblock.LoadOrigin = DescribeLoadOrigin();
+                         // before its first tick (object budget, loot deferral): loaded by a vehicle background load, or by
+                         // the world thread during the vehicle tick (the pilot's / vehicle's own relocation)
+                         if (IsVehicleLoaderThread || Landblock.TickingVehicleOnly || (Vehicles.VehicleManager.InVehicleTick && Environment.CurrentManagedThreadId == WorldThreadId))
+@@ -926,7 +925,7 @@ private static void SetAdjacents(Landblock landblock, bool traverse = true, bool
+             if (traverse)
+             {
+                 foreach (var adjacent in landblock.Adjacents)
+-                    SetAdjacents(adjacent, false);
++                    SetAdjacents(adjacent, false, pSync);
+             }
+         }
+ 
+diff --git a/Source/ACE.Server/Managers/PropertyManager.cs b/Source/ACE.Server/Managers/PropertyManager.cs
+index 7021c64..7d9ae26 100644
+--- a/Source/ACE.Server/Managers/PropertyManager.cs
++++ b/Source/ACE.Server/Managers/PropertyManager.cs
+@@ -613,6 +613,7 @@ public static void LoadDefaultProperties()
+                 ("vehicle_preload_offthread", new Property<bool>(false, "(holtburger vehicles, M3 v2) with vehicle_preload: load corridor landblocks with ACE's own GetLandblock on a background task (after their DAT / spawn-cache warm-up) instead of on the world thread")),
+                 ("vehicle_short_retention", new Property<bool>(false, "(holtburger vehicles, M3) landblocks only a vehicle caused to load unload after 60 s instead of 5 min (until a player on foot is in one)")),
+                 ("vehicle_landblock_budget", new Property<bool>(false, "(holtburger vehicles, M3) landblocks only a vehicle caused to load add their objects within a shared 8 ms per world tick, and their loot generators (chests, decorative corpses, treasure, shops) wait until a player on foot is there")),
++                ("vehicle_infinite_ammo", new Property<bool>(false, "(holtburger vehicles, cheat) vehicle guns, lightning rails and bomb stations never run out (refilled every flight step; fire rate and rail cooldown unchanged). @vehicle infammo on|off")),
+                 ("vehicle_gun_players", new Property<bool>(false, "(holtburger vehicles, 2026-11-02) a vehicle's gun also hits players on foot (not the pilot, not a seated or falling player), through the player's own damage path (lifestone protection, death, corpse); vehicle PvP for filming, PK status not checked; false = monsters only")),
+                 ("vehicle_defer_dungeons", new Property<bool>(false, "(holtburger vehicles, GC) a dungeon landblock only vehicles have been in (an aircraft over the deep sea) creates no objects, builds no cells and warms no spawns until a player on foot is in it — vanilla ACE builds the whole dungeon (up to ~1,500 cells, 20-30 MB that survives into gen1/gen2) for the first object placed in it")),
+                 ("vehicle_shared_cellstructs", new Property<bool>(false, "(holtburger vehicles, GC) indoor cells share one immutable physics CellStruct per (environment, cell structure) and skip the never-read DrawingBSP, instead of building a private copy per cell (5 deep-sea dungeons: ~93 MB of polygons / BSP trees -> ~6 MB, once per process)")),
+diff --git a/Source/ACE.Server/Physics/Common/Landblock.cs b/Source/ACE.Server/Physics/Common/Landblock.cs
+index 3fc59d5..54f88c7 100644
+--- a/Source/ACE.Server/Physics/Common/Landblock.cs
++++ b/Source/ACE.Server/Physics/Common/Landblock.cs
+@@ -648,13 +648,10 @@ public List<Landblock> get_adjacents()
+         /// <param name="landblocks"></param>
+         public void SetAdjacents(List<Server.Entity.Landblock> landblocks)
+         {
+-            if (adjacents == null)
+-                adjacents = new List<Landblock>(landblocks.Count);
+-            else
+-                adjacents.Clear();
+-
++            var next = new List<Landblock>(landblocks.Count);
+             foreach (var landblock in landblocks)
+-                adjacents.Add(landblock.PhysicsLandblock);
++                next.Add(landblock.PhysicsLandblock);
++            adjacents = next;
+         }
+ 
+         public List<PhysicsObj> GetServerObjects(bool includeAdjacents)
+@@ -663,8 +660,12 @@ public List<PhysicsObj> GetServerObjects(bool includeAdjacents)
+ 
+             if (includeAdjacents)
+             {
+-                foreach (var adjacent in adjacents)
+-                    results.AddRange(adjacent.ServerObjects);
++                var adj = adjacents;
++                if (adj != null)
++                {
++                    foreach (var adjacent in adj)
++                        results.AddRange(adjacent.ServerObjects);
++                }
+             }
+ 
+             return results;
+diff --git a/Source/ACE.Server/Physics/Common/ObjectMaint.cs b/Source/ACE.Server/Physics/Common/ObjectMaint.cs
+index d182544..5d2eaf7 100644
+--- a/Source/ACE.Server/Physics/Common/ObjectMaint.cs
++++ b/Source/ACE.Server/Physics/Common/ObjectMaint.cs
+@@ -531,7 +531,7 @@ public List<PhysicsObj> AddVisibleObjects(ICollection<PhysicsObj> objs)
+                 if (SightRings > 1 && PhysicsObj.WeenieObj?.WorldObject is Player sightPlayer && Vehicles.VehicleManager.IsSeated(sightPlayer))
+                 {
+                     budget = WideSightNewPerCall;
+-                    order = objs.OrderBy(o => PhysicsObj.Position.Distance2DSquared(o.Position));
++                    order = objs.OrderBy(o => Sight3D ? PhysicsObj.Position.DistanceSquared(o.Position) : PhysicsObj.Position.Distance2DSquared(o.Position));
+                 }
+                 foreach (var obj in order)
+                 {
+@@ -1075,9 +1075,9 @@ private bool AddVisibleTarget(PhysicsObj obj, bool clamp = true, bool foeType =
+                 return false;
+             }
+ 
+-            if (clamp && InitialClamp && obj.IsPlayer && !obj.ObjMaint.KnownObjects.ContainsKey(obj.ID))
++            if (clamp && InitialClamp && obj.IsPlayer && !obj.ObjMaint.KnownObjects.ContainsKey(PhysicsObj.ID))
+             {
+-                var distSq = PhysicsObj.Position.Distance2DSquared(obj.Position);
++                var distSq = obj.ObjMaint.Sight3D ? PhysicsObj.Position.DistanceSquared(obj.Position) : PhysicsObj.Position.Distance2DSquared(obj.Position);
+ 
+                 if (distSq > InitialClamp_DistSq)
+                     return false;
+diff --git a/Source/ACE.Server/Vehicles/Vehicle.cs b/Source/ACE.Server/Vehicles/Vehicle.cs
+index 1f8b8ff..ae6cab3 100644
+--- a/Source/ACE.Server/Vehicles/Vehicle.cs
++++ b/Source/ACE.Server/Vehicles/Vehicle.cs
+@@ -234,6 +234,15 @@ public class Vehicle : WorldObject
+ 
+         static byte FullMask(int n) => (byte)((1 << Math.Min(8, n)) - 1);
+ 
++        /// <summary>vehicle_infinite_ammo: refill magazines/rails/stations without touching the fire rate or cooldown.</summary>
++        public void TopUp()
++        {
++            if (GunIdx.Length > 0)
++                GunRounds = (int)Profile.Weapons[GunIdx[0]].Magazine;
++            MissileMask = FullMask(RailIdx.Length);
++            BombMask = FullMask(BombIdx.Length);
++        }
++
+         /// <summary>Guns, rails and bomb stations full (the landing rearm, @vehicle rearm).</summary>
+         public void Rearm()
+         {
+diff --git a/Source/ACE.Server/Vehicles/VehicleBailout.cs b/Source/ACE.Server/Vehicles/VehicleBailout.cs
+index 5c4ed10..847e433 100644
+--- a/Source/ACE.Server/Vehicles/VehicleBailout.cs
++++ b/Source/ACE.Server/Vehicles/VehicleBailout.cs
+@@ -112,8 +112,8 @@ public static void StepFall(ref double x, ref double y, ref double z, ref double
+                 vx = MoveToward(vx, Math.Sin(heading) * ChuteGlide, ChuteDecel * 0.5 * dt);
+                 vy = MoveToward(vy, Math.Cos(heading) * ChuteGlide, ChuteDecel * 0.5 * dt);
+             }
+-            x = Math.Clamp(x + vx * dt, FlightModel.WorldMin, FlightModel.WorldMax);
+-            y = Math.Clamp(y + vy * dt, FlightModel.WorldMin, FlightModel.WorldMax);
++            x = Math.Clamp(x + vx * dt, VehicleManager.BodyEdgeMin, VehicleManager.BodyEdgeMax);
++            y = Math.Clamp(y + vy * dt, VehicleManager.BodyEdgeMin, VehicleManager.BodyEdgeMax);
+             z += vz * dt;
+         }
+ 
+@@ -121,9 +121,9 @@ public static void Bail(Vehicle v, Player player)
+         {
+             var seat = v.SeatPosition(0);
+             var (sx, sy, sz) = Vehicle.ToGlobal(seat);
+-            // inside the map (the seat of a vehicle banked against the edge sits past it)
+-            sx = Math.Clamp(sx, FlightModel.WorldMin, FlightModel.WorldMax);
+-            sy = Math.Clamp(sy, FlightModel.WorldMin, FlightModel.WorldMax);
++            // inside the safe landblock 1..253 bounds (row/col 0 and 254 cannot load adjacents)
++            sx = Math.Clamp(sx, VehicleManager.BodyEdgeMin, VehicleManager.BodyEdgeMax);
++            sy = Math.Clamp(sy, VehicleManager.BodyEdgeMin, VehicleManager.BodyEdgeMax);
+             var vel = v.WorldVelocity();
+             var heading = v.State.Heading;
+             VehicleManager.Unseat(v, player, placeOnGround: false);
+diff --git a/Source/ACE.Server/Vehicles/VehicleCommands.cs b/Source/ACE.Server/Vehicles/VehicleCommands.cs
+index 3380569..1aca572 100644
+--- a/Source/ACE.Server/Vehicles/VehicleCommands.cs
++++ b/Source/ACE.Server/Vehicles/VehicleCommands.cs
+@@ -21,7 +21,8 @@ public static class VehicleCommands
+             "list              - list vehicles\n" +
+             "terrain           - the vehicle terrain sampler's height under you (parity check vs the client)\n" +
+             "board             - (debug) seat yourself in the nearest vehicle regardless of capability\n" +
+-            "rearm [all]       - fill the guns, lightning rails and bomb stations of the nearest vehicle (or all) now")]
++            "rearm [all]       - fill the guns, lightning rails and bomb stations of the nearest vehicle (or all) now\n" +
++            "infammo [on|off]  - infinite vehicle ammo cheat (server-wide; no argument = show the current state)")]
+         public static void HandleVehicle(Session session, params string[] parameters)
+         {
+             var player = session.Player;
+@@ -97,8 +98,22 @@ public static void HandleVehicle(Session session, params string[] parameters)
+                     CommandHandlerHelper.WriteOutputInfo(session, targets.Count == 0 ? "no vehicles" : $"rearmed {targets.Count} vehicle(s)");
+                     return;
+                 }
++                case "infammo":
++                case "infiniteammo":
++                {
++                    if (parameters.Length > 1)
++                    {
++                        var on = parameters[1].ToLowerInvariant() is "on" or "1" or "true" or "yes";
++                        PropertyManager.ModifyBool("vehicle_infinite_ammo", on);
++                        if (on)
++                            foreach (var v in VehicleManager.All.ToList())
++                                VehicleManager.RearmNow(v);
++                    }
++                    CommandHandlerHelper.WriteOutputInfo(session, $"vehicle infinite ammo is {(VehicleWeapons.InfiniteAmmo ? "ON" : "OFF")}");
++                    return;
++                }
+                 default:
+-                    CommandHandlerHelper.WriteOutputInfo(session, "usage: @vehicle spawn [profile] | despawn [all] | list | terrain | board | rearm [all]");
++                    CommandHandlerHelper.WriteOutputInfo(session, "usage: @vehicle spawn [profile] | despawn [all] | list | terrain | board | rearm [all] | infammo [on|off]");
+                     return;
+             }
+         }
+diff --git a/Source/ACE.Server/Vehicles/VehicleManager.cs b/Source/ACE.Server/Vehicles/VehicleManager.cs
+index b6c0037..96f2fd0 100644
+--- a/Source/ACE.Server/Vehicles/VehicleManager.cs
++++ b/Source/ACE.Server/Vehicles/VehicleManager.cs
+@@ -82,7 +82,7 @@ public static class VehicleManager
+         public static float SightRadius => (float)Math.Max(Physics.Common.ObjectMaint.InitialClamp_Dist, PropertyManager.GetDouble("vehicle_sight_radius", 112.5).Item);
+ 
+         /// <summary>Body placement bounds: landblocks 1..253 (the edge rows cannot load their adjacents).</summary>
+-        const double BodyEdgeMin = 192.0 + 1.0, BodyEdgeMax = 254.0 * 192.0 - 1.0;
++        public const double BodyEdgeMin = 192.0 + 1.0, BodyEdgeMax = 254.0 * 192.0 - 1.0;
+ 
+         /// <summary>vehicle_observer_sight_radius (default 0 = off): the first-sight radius of a capable client on foot.</summary>
+         public static float ObserverSightRadius => (float)Math.Max(Physics.Common.ObjectMaint.InitialClamp_Dist, PropertyManager.GetDouble("vehicle_observer_sight_radius", 0.0).Item);
+@@ -451,6 +451,24 @@ static void EnsureLoaded(Position pos, Vehicle v)
+             var id = new LandblockId(pos.Cell | 0xFFFF);
+             var lbx = id.LandblockX;
+             var lby = id.LandblockY;
++            var high = InHighBand(v);
++            if (high)
++            {
++                if (LandblockManager.GetLoadedLandblock(lbx, lby) != null)
++                    return;
++                var tHigh = Stopwatch.GetTimestamp();
++                var lbHigh = LandblockManager.GetLandblock(id, false);
++                var msHigh = (Stopwatch.GetTimestamp() - tHigh) * 1000.0 / Stopwatch.Frequency;
++                if (lbHigh != null) lbHigh.VehicleOnly = true;
++                v.Costs.LandblockLoads++;
++                TotalLandblockLoads++;
++                v.Costs.RecentLoads.Enqueue(DateTime.UtcNow);
++                v.Costs.LoadsLast60s(DateTime.UtcNow);
++                v.Costs.LoadMsTotal += msHigh;
++                v.Costs.LastLoadMs = msHigh;
++                if (msHigh > v.Costs.LoadMsMax) v.Costs.LoadMsMax = msHigh;
++                return;
++            }
+             Span<bool> before = stackalloc bool[9];
+             var missing = 0;
+             for (var i = 0; i < 9; i++)
+@@ -493,16 +511,19 @@ static void MovePilot(Vehicle v, Player pilot, Position seatPos)
+             var prevLb = pilot.Location.Landblock;
+             if (seatPos.Landblock != prevLb)
+                 EnsureLoaded(seatPos, v);
++            // vehicle_high_band_agl: high above the ground (or climbing past 200 m AGL) the pilot sees by 3D distance
++            // (no ground objects from hundreds of metres up) and wakes no monsters; set BEFORE set_current_pos so
++            // enter_cell_server → handle_visible_cells uses 3D distance on the cell transition itself
++            var high = InHighBand(v);
++            var agl = Agl(v);
++            var sight3d = high || (!double.IsNaN(agl) && agl > 200.0);
++            if (pilot.PhysicsObj.ObjMaint.Sight3D != sight3d)
++                pilot.PhysicsObj.ObjMaint.Sight3D = sight3d;
+             pilot.Location = seatPos;
+             pilot.PhysicsObj.set_current_pos(new Physics.Common.Position(seatPos));
+             var tc = Stopwatch.GetTimestamp();
+             if (seatPos.Landblock != prevLb)
+                 Relocate(pilot, v);
+-            // vehicle_high_band_agl: high above the ground the pilot sees by 3D distance (no ground objects from
+-            // hundreds of metres up) and wakes no monsters
+-            var high = InHighBand(v);
+-            if (pilot.PhysicsObj.ObjMaint.Sight3D != high)
+-                pilot.PhysicsObj.ObjMaint.Sight3D = high;
+             if (v.SimStep % 6 == 0 && !high)
+                 pilot.CheckMonsters();
+             v.Costs.PhasePilotRelocMonstersMs = (Stopwatch.GetTimestamp() - tc) * 1000.0 / Stopwatch.Frequency;
+@@ -514,11 +535,12 @@ static void Relocate(WorldObject wo, Vehicle v)
+             // which of the 3×3 the relocation (loadAdjacents) is about to load: those become vehicle-only
+             var lbx = wo.Location.LandblockId.LandblockX;
+             var lby = wo.Location.LandblockId.LandblockY;
++            var loadAdj = !InHighBand(v);
+             Span<bool> before = stackalloc bool[9];
+             for (var i = 0; i < 9; i++)
+                 before[i] = LandblockManager.GetLoadedLandblock(lbx + i / 3 - 1, lby + i % 3 - 1) != null;
+             var t0 = Stopwatch.GetTimestamp();
+-            LandblockManager.RelocateObjectForPhysics(wo, true);
++            LandblockManager.RelocateObjectForPhysics(wo, loadAdj);
+             for (var i = 0; i < 9; i++)
+             {
+                 if (before[i]) continue;
+@@ -586,7 +608,7 @@ static void SendStates(Vehicle v, Player pilot, int steps)
+             var observers = observerBuffer;
+             observers.Clear();
+             if (v.ObserverStateAcc >= 1.0 || retailChatThisTick)
+-                v.PhysicsObj.ObjMaint.CopyKnownPlayersTo(observers);
++                v.PhysicsObj?.ObjMaint?.CopyKnownPlayersTo(observers);
+             RetailIndication(v, observers);
+ 
+             if (pilot != null && v.PilotStateAcc >= 1.0)
+@@ -747,8 +769,8 @@ static void WarmArmament()
+                 if (x.SpellId != 0) spells.Add(x.SpellId);
+             foreach (var id in spells)
+             {
+-                var sp = new Spell(id);
+-                if (sp.NotFound || sp.Wcid == 0)
++                var sp = VehicleWeapons.GetSpell(id);
++                if (sp == null || sp.NotFound || sp.Wcid == 0)
+                     continue;
+                 // the projectile's weenie and the physics of its model (the fireball builds 7 of them at once)
+                 var w = DatabaseManager.World.GetCachedWeenie(sp.Wcid);
+diff --git a/Source/ACE.Server/Vehicles/VehicleOrdnance.cs b/Source/ACE.Server/Vehicles/VehicleOrdnance.cs
+index 51f65db..ecc42fa 100644
+--- a/Source/ACE.Server/Vehicles/VehicleOrdnance.cs
++++ b/Source/ACE.Server/Vehicles/VehicleOrdnance.cs
+@@ -192,7 +192,7 @@ static void Detonate(Bomb b, double x, double y, double z)
+             var x1 = (int)Math.Floor((x + r) / 192.0);
+             var y0 = (int)Math.Floor((y - r) / 192.0);
+             var y1 = (int)Math.Floor((y + r) / 192.0);
+-            var gunPlayers = VehicleWeapons.GunHitsPlayers;
++            var gunPlayers = VehicleManager.GunPlayersThisTick;
+             victims.Clear();
+             for (var lx = x0; lx <= x1; lx++)
+                 for (var ly = y0; ly <= y1; ly++)
+@@ -253,8 +253,8 @@ static void Detonate(Bomb b, double x, double y, double z)
+         /// </summary>
+         static void SpawnFireball(Position at, Bomb b, Player pilot)
+         {
+-            var spell = new Spell(BurstSpellId);
+-            if (spell.NotFound || spell.Wcid == 0)
++            var spell = VehicleWeapons.GetSpell(BurstSpellId);
++            if (spell == null || spell.NotFound || spell.Wcid == 0)
+                 return;
+             var ring = b.MassLb >= 1500 ? 4 : 2;
+             var ringR = b.Radius * 0.35;
+diff --git a/Source/ACE.Server/Vehicles/VehicleProfile.cs b/Source/ACE.Server/Vehicles/VehicleProfile.cs
+index 9ea0e7e..d3ed2dc 100644
+--- a/Source/ACE.Server/Vehicles/VehicleProfile.cs
++++ b/Source/ACE.Server/Vehicles/VehicleProfile.cs
+@@ -112,83 +112,285 @@ public static VehicleProfile HellcatDemo()
+                 SightRadius = 112.5f, PreloadSeconds = 6f, MaxLandblockLoadsPerSec = 4f,
+             };
+             // In the cockpit tub (the open bucket) behind the cowling; the pilot's head and shoulders clear its rim.
+-            p.Seats.Add(new VehicleSeatDef { Role = 0, Motion = MotionSitting, Offset = new Vector3(0f, -0.92f, 2.18f) });
++            p.Seats.Add(new VehicleSeatDef { Role = 0, Motion = MotionSitting, Offset = new Vector3(0f, -0.4f, 2.34f) });
+ 
+             // Guns 0-5: three repeating crossbows in each wing (outboard → inboard on the left, inboard → outboard on the right),
+             // 5 quarrels/s each (30/s together), 400 quarrels each, harmonized on a point 110 m ahead.
+             var gunExt = new VehicleWeaponExt { MuzzleVelocity = 120f, Convergence = 110f };
+-            foreach (var gx in new[] { -3.1f, -2.55f, -2.0f, 2.0f, 2.55f, 3.1f })
+-                Weapon(p, KindCrossbow, 5f, 1.2, 140f, 9f, 400, new Vector3(gx, 1.82f, 1.72f), gunExt);
++            foreach (var (gx, gy, gz) in new[] { (-3.85f, 1.95f, 2.3575f), (-3.2f, 1.95f, 2.2719f), (-2.55f, 1.95f, 2.1863f), (2.55f, 1.95f, 2.1863f), (3.2f, 1.95f, 2.2719f), (3.85f, 1.95f, 2.3575f) })
++                Weapon(p, KindCrossbow, 5f, 1.2, 140f, 9f, 400, new Vector3(gx, gy, gz), gunExt);
+             // Rails 6-11: six wands under the outer wings, each launching one Lightning Bolt (Incantation, spell 4451); held, the
+             // next rail fires every 0.3 s.
+             var railExt = new VehicleWeaponExt { MuzzleVelocity = 60f, SpellId = 4451 };
+-            foreach (var (rx, rz) in new[] { (-4.55f, 1.534f), (-4.05f, 1.497f), (-3.55f, 1.46f), (3.55f, 1.46f), (4.05f, 1.497f), (4.55f, 1.534f) })
+-                Weapon(p, KindMissile, 1f / 0.3f, 0, 600f, 0f, 1, new Vector3(rx, 1.54f, rz), railExt);
++            foreach (var (rx, ry, rz) in new[] { (-5.75f, 1.7455f, 2.3076f), (-5.1f, 1.7455f, 2.222f), (-4.45f, 1.7455f, 2.1365f), (4.45f, 1.7455f, 2.1365f), (5.1f, 1.7455f, 2.222f), (5.75f, 1.7455f, 2.3076f) })
++                Weapon(p, KindMissile, 1f / 0.3f, 0, 600f, 0f, 1, new Vector3(rx, ry, rz), railExt);
+             // Stations 12-14: the 2,000 lb bomb on the centreline (AN-M66 class: 907 kg, terminal ~300 m/s), two 1,000 lb bombs
+             // under the wings (AN-M65 class: 454 kg, ~270 m/s). Damage = blast damage at the centre, Range = blast radius.
+-            Weapon(p, KindBomb, 0f, 0, 45f, 1200f, 1, new Vector3(0f, 0.35f, 1.1f), new VehicleWeaponExt { MassKg = 907f, DragTerminal = 300f });
+-            Weapon(p, KindBomb, 0f, 0, 32f, 700f, 1, new Vector3(-1.55f, 0.4f, 1.2f), new VehicleWeaponExt { MassKg = 454f, DragTerminal = 270f });
+-            Weapon(p, KindBomb, 0f, 0, 32f, 700f, 1, new Vector3(1.55f, 0.4f, 1.2f), new VehicleWeaponExt { MassKg = 454f, DragTerminal = 270f });
++            Weapon(p, KindBomb, 0f, 0, 45f, 1200f, 1, new Vector3(0f, 0.35f, 1.3f), new VehicleWeaponExt { MassKg = 907f, DragTerminal = 300f });
++            Weapon(p, KindBomb, 0f, 0, 32f, 700f, 1, new Vector3(-1.68f, 0.42f, 1.54f), new VehicleWeaponExt { MassKg = 454f, DragTerminal = 270f });
++            Weapon(p, KindBomb, 0f, 0, 32f, 700f, 1, new Vector3(1.68f, 0.42f, 1.54f), new VehicleWeaponExt { MassKg = 454f, DragTerminal = 270f });
+ 
+             // The airframe: retail parts in the vehicle frame (x right, y forward, z up; origin = the ground under the main wheels,
+             // level). Generated by docs/vehicles-2026-11-01/airframe/hellcat.py (previews: airframe/*.png). The Gear parts are
+             // authored for the taildragger's parked stance: capable clients tip the parked aircraft 11° tail-down about the
+             // main wheels' contact line (the most forward Gear part), so the tail wheel touches the ground.
+-            Part(p, 0x02001888, 0f, -6.15f, 2.48f, 0.707107f, -0.707107f, 0f, 0f, 0.5f, VehiclePartRole.Static); // tail cone
+-            Part(p, 0x02001888, 0f, -5.6405f, 2.42f, 0.707107f, -0.707107f, 0f, 0f, 0.68f, VehiclePartRole.Static); // tail cone
+-            Part(p, 0x02001888, 0f, -4.9476f, 2.37f, 0.707107f, -0.707107f, 0f, 0f, 0.9f, VehiclePartRole.Static); // rear fuselage
+-            Part(p, 0x02001888, 0f, -4.0305f, 2.33f, 0.707107f, -0.707107f, 0f, 0f, 1.12f, VehiclePartRole.Static); // rear fuselage
+-            Part(p, 0x02001888, 0f, -2.8892f, 2.3f, 0.707107f, -0.707107f, 0f, 0f, 1.32f, VehiclePartRole.Static); // fuselage
+-            Part(p, 0x0200043C, 0f, -0.8441f, 1.68f, 1f, 0f, 0f, 0f, 0.86f, VehiclePartRole.Static); // cockpit tub
+-            Part(p, 0x02001888, 0f, -0.2441f, 2.3f, 0.707107f, -0.707107f, 0f, 0f, 1.42f, VehiclePartRole.Static); // forward fuselage
+-            Part(p, 0x0200188D, 0f, 1.1829f, 2.3f, 0.707107f, -0.707107f, 0f, 0f, 1.78f, VehiclePartRole.Static); // cowling (steel keg)
+-            Part(p, 0x02000162, 0f, 2.6269f, 2.3f, 0.707107f, -0.707107f, 0f, 0f, 0.95f, VehiclePartRole.Propeller); // spinner
+-            Part(p, 0x0200130B, 0f, 2.7069f, 2.3f, 0.696364f, 0.696364f, 0.122788f, 0.122788f, 1.38f, VehiclePartRole.Propeller); // prop blade 0
+-            Part(p, 0x0200130B, 0f, 2.7069f, 2.3f, 0.241845f, 0.454519f, 0.664463f, -0.541675f, 1.38f, VehiclePartRole.Propeller); // prop blade 1
+-            Part(p, 0x0200130B, 0f, 2.7069f, 2.3f, -0.454519f, -0.241845f, 0.541675f, -0.664463f, 1.38f, VehiclePartRole.Propeller); // prop blade 2
+-            Part(p, 0x02000161, 2.263f, 0.55f, 1.68f, 0.707107f, 0f, 0f, -0.707107f, 2.55f, VehiclePartRole.Static); // wing inner panel
+-            Part(p, 0x02000161, 4.3018f, 0.55f, 1.73f, 0.705788f, 0.043168f, -0.043168f, -0.705788f, 2.25f, VehiclePartRole.Static); // wing outer panel
+-            Part(p, 0x02000164, 5.0467f, 0.6f, 1.94f, 0.705788f, -0.043168f, -0.043168f, 0.705788f, 1.55f, VehiclePartRole.Static); // wing tip
+-            Part(p, 0x02000161, -2.263f, 0.55f, 1.68f, 0.707107f, 0f, 0f, 0.707107f, 2.55f, VehiclePartRole.Static); // wing inner panel
+-            Part(p, 0x02000161, -4.3018f, 0.55f, 1.73f, 0.705788f, 0.043168f, 0.043168f, 0.705788f, 2.25f, VehiclePartRole.Static); // wing outer panel
+-            Part(p, 0x02000164, -5.0467f, 0.6f, 1.94f, 0.705788f, -0.043168f, 0.043168f, -0.705788f, 1.55f, VehiclePartRole.Static); // wing tip
+-            Part(p, 0x02000164, 0.5551f, -5.35f, 2.42f, 0.707107f, 0f, 0f, 0.707107f, 1.55f, VehiclePartRole.Static); // tailplane
+-            Part(p, 0x02000164, -0.5551f, -5.35f, 2.42f, 0.707107f, 0f, 0f, -0.707107f, 1.55f, VehiclePartRole.Static); // tailplane
+-            Part(p, 0x02000164, 0f, -5.4f, 2.6f, -0.435338f, 0.557208f, -0.435338f, 0.557208f, 2.1f, VehiclePartRole.Static); // fin
+-            Part(p, 0x0200054D, 0f, -1.8941f, 2.92f, 0.777146f, 0.62932f, 0f, 0f, 0.62f, VehiclePartRole.Static); // radio mast
+-            Part(p, 0x02000874, -3.1f, 1.4f, 1.72f, 0.707107f, 0f, 0f, -0.707107f, 0.62f, VehiclePartRole.Static); // gun 0 (crossbow)
+-            Part(p, 0x02000874, -2.55f, 1.4f, 1.72f, 0.707107f, 0f, 0f, -0.707107f, 0.62f, VehiclePartRole.Static); // gun 1 (crossbow)
+-            Part(p, 0x02000874, -2f, 1.4f, 1.72f, 0.707107f, 0f, 0f, -0.707107f, 0.62f, VehiclePartRole.Static); // gun 2 (crossbow)
+-            Part(p, 0x02000874, 2f, 1.4f, 1.72f, 0.707107f, 0f, 0f, -0.707107f, 0.62f, VehiclePartRole.Static); // gun 3 (crossbow)
+-            Part(p, 0x02000874, 2.55f, 1.4f, 1.72f, 0.707107f, 0f, 0f, -0.707107f, 0.62f, VehiclePartRole.Static); // gun 4 (crossbow)
+-            Part(p, 0x02000874, 3.1f, 1.4f, 1.72f, 0.707107f, 0f, 0f, -0.707107f, 0.62f, VehiclePartRole.Static); // gun 5 (crossbow)
+-            Part(p, 0x0200017C, -4.55f, 0.35f, 1.5337f, 1f, 0f, 0f, 0f, 1.75f, Ordnance(6)); // lightning rail 6 (wand)
+-            Part(p, 0x0200017C, -4.05f, 0.35f, 1.4968f, 1f, 0f, 0f, 0f, 1.75f, Ordnance(7)); // lightning rail 7 (wand)
+-            Part(p, 0x0200017C, -3.55f, 0.35f, 1.46f, 1f, 0f, 0f, 0f, 1.75f, Ordnance(8)); // lightning rail 8 (wand)
+-            Part(p, 0x0200017C, 3.55f, 0.35f, 1.46f, 1f, 0f, 0f, 0f, 1.75f, Ordnance(9)); // lightning rail 9 (wand)
+-            Part(p, 0x0200017C, 4.05f, 0.35f, 1.4968f, 1f, 0f, 0f, 0f, 1.75f, Ordnance(10)); // lightning rail 10 (wand)
+-            Part(p, 0x0200017C, 4.55f, 0.35f, 1.5337f, 1f, 0f, 0f, 0f, 1.75f, Ordnance(11)); // lightning rail 11 (wand)
+-            Part(p, 0x0200188D, 0f, -0.11f, 1.1f, 0.707107f, -0.707107f, 0f, 0f, 1.15f, Ordnance(12)); // 2000 lb bomb (centreline)
+-            Part(p, 0x02000164, 0f, -0.13f, 1.1f, 0.270598f, 0.270598f, -0.653281f, 0.653281f, 0.483f, Ordnance(12)); // 2000 lb bomb (centreline) fin
+-            Part(p, 0x02000164, 0f, -0.13f, 1.1f, 0.653281f, 0.653281f, -0.270598f, 0.270598f, 0.483f, Ordnance(12)); // 2000 lb bomb (centreline) fin
+-            Part(p, 0x02000164, 0f, -0.13f, 1.1f, 0.653281f, 0.653281f, 0.270598f, -0.270598f, 0.483f, Ordnance(12)); // 2000 lb bomb (centreline) fin
+-            Part(p, 0x02000164, 0f, -0.13f, 1.1f, 0.270598f, 0.270598f, 0.653281f, -0.653281f, 0.483f, Ordnance(12)); // 2000 lb bomb (centreline) fin
+-            Part(p, 0x0200188D, -1.55f, 0.032f, 1.2f, 0.707107f, -0.707107f, 0f, 0f, 0.92f, Ordnance(13)); // 1000 lb bomb (wing)
+-            Part(p, 0x02000164, -1.55f, 0.012f, 1.2f, 0.270598f, 0.270598f, -0.653281f, 0.653281f, 0.3864f, Ordnance(13)); // 1000 lb bomb (wing) fin
+-            Part(p, 0x02000164, -1.55f, 0.012f, 1.2f, 0.653281f, 0.653281f, -0.270598f, 0.270598f, 0.3864f, Ordnance(13)); // 1000 lb bomb (wing) fin
+-            Part(p, 0x02000164, -1.55f, 0.012f, 1.2f, 0.653281f, 0.653281f, 0.270598f, -0.270598f, 0.3864f, Ordnance(13)); // 1000 lb bomb (wing) fin
+-            Part(p, 0x02000164, -1.55f, 0.012f, 1.2f, 0.270598f, 0.270598f, 0.653281f, -0.653281f, 0.3864f, Ordnance(13)); // 1000 lb bomb (wing) fin
+-            Part(p, 0x0200188D, 1.55f, 0.032f, 1.2f, 0.707107f, -0.707107f, 0f, 0f, 0.92f, Ordnance(14)); // 1000 lb bomb (wing)
+-            Part(p, 0x02000164, 1.55f, 0.012f, 1.2f, 0.270598f, 0.270598f, -0.653281f, 0.653281f, 0.3864f, Ordnance(14)); // 1000 lb bomb (wing) fin
+-            Part(p, 0x02000164, 1.55f, 0.012f, 1.2f, 0.653281f, 0.653281f, -0.270598f, 0.270598f, 0.3864f, Ordnance(14)); // 1000 lb bomb (wing) fin
+-            Part(p, 0x02000164, 1.55f, 0.012f, 1.2f, 0.653281f, 0.653281f, 0.270598f, -0.270598f, 0.3864f, Ordnance(14)); // 1000 lb bomb (wing) fin
+-            Part(p, 0x02000164, 1.55f, 0.012f, 1.2f, 0.270598f, 0.270598f, 0.653281f, -0.653281f, 0.3864f, Ordnance(14)); // 1000 lb bomb (wing) fin
+-            Part(p, 0x02000162, -1.75f, 1.05f, 0.41f, 0.707107f, 0f, -0.707107f, 0f, 1.24f, VehiclePartRole.Gear); // main wheel
+-            Part(p, 0x0200013D, -1.7f, 1.05f, 1.47f, 0.706138f, 0.706138f, -0.037007f, 0.037007f, 0.8f, VehiclePartRole.Gear); // main strut
+-            Part(p, 0x02000162, 1.75f, 1.05f, 0.41f, 0.707107f, 0f, 0.707107f, 0f, 1.24f, VehiclePartRole.Gear); // main wheel
+-            Part(p, 0x0200013D, 1.7f, 1.05f, 1.47f, 0.706138f, 0.706138f, 0.037007f, -0.037007f, 0.8f, VehiclePartRole.Gear); // main strut
+-            Part(p, 0x02000162, 0.1f, -5f, 1.396f, 0.707107f, 0f, 0.707107f, 0f, 0.62f, VehiclePartRole.Gear); // tail wheel
+-            Part(p, 0x0200013D, 0f, -5f, 1.946f, 0.707107f, 0.707107f, 0f, 0f, 0.42f, VehiclePartRole.Gear); // tail strut
++            Part(p, 0x02001888, 0f, -7.1f, 2.9f, 0.707107f, -0.707107f, 0f, 0f, 0.62f, VehiclePartRole.Static); // tailcone tip
++            Part(p, 0x02001888, 0f, -6.6f, 2.87f, 0.707107f, -0.707107f, 0f, 0f, 0.8f, VehiclePartRole.Static); // tailcone aft
++            Part(p, 0x02001888, 0f, -6f, 2.83f, 0.707107f, -0.707107f, 0f, 0f, 0.98f, VehiclePartRole.Static); // tailcone mid
++            Part(p, 0x02001888, 0f, -5.25f, 2.79f, 0.707107f, -0.707107f, 0f, 0f, 1.16f, VehiclePartRole.Static); // rear fuselage aft
++            Part(p, 0x02001888, 0f, -4.4f, 2.75f, 0.707107f, -0.707107f, 0f, 0f, 1.34f, VehiclePartRole.Static); // rear fuselage mid
++            Part(p, 0x02001888, 0f, -3.45f, 2.72f, 0.707107f, -0.707107f, 0f, 0f, 1.5f, VehiclePartRole.Static); // rear fuselage fwd
++            Part(p, 0x02001888, 0f, -2.4f, 2.7f, 0.707107f, -0.707107f, 0f, 0f, 1.62f, VehiclePartRole.Static); // mid fuselage aft
++            Part(p, 0x02001888, 0f, -1.35f, 2.68f, 0.707107f, -0.707107f, 0f, 0f, 1.7f, VehiclePartRole.Static); // cockpit under-fuselage
++            Part(p, 0x02001888, 0f, -0.2f, 2.68f, 0.707107f, -0.707107f, 0f, 0f, 1.76f, VehiclePartRole.Static); // cockpit forward fuselage
++            Part(p, 0x02001888, 0f, 0.85f, 2.7f, 0.707107f, -0.707107f, 0f, 0f, 1.84f, VehiclePartRole.Static); // firewall fuselage
++            Part(p, 0x02001888, 0f, -5.4f, 2.56f, 0.707107f, -0.707107f, 0f, 0f, 0.72f, VehiclePartRole.Static); // ventral tail strake barrel
++            Part(p, 0x02001888, 0f, -4.5f, 2.44f, 0.707107f, -0.707107f, 0f, 0f, 0.92f, VehiclePartRole.Static); // ventral rear belly
++            Part(p, 0x02001888, 0f, -3.5f, 2.32f, 0.707107f, -0.707107f, 0f, 0f, 1.12f, VehiclePartRole.Static); // ventral mid-aft belly
++            Part(p, 0x02001888, 0f, -2.4f, 2.22f, 0.707107f, -0.707107f, 0f, 0f, 1.28f, VehiclePartRole.Static); // ventral mid belly
++            Part(p, 0x02001888, 0f, -1.25f, 2.16f, 0.707107f, -0.707107f, 0f, 0f, 1.38f, VehiclePartRole.Static); // ventral cockpit belly
++            Part(p, 0x02001888, 0f, -0.1f, 2.14f, 0.707107f, -0.707107f, 0f, 0f, 1.44f, VehiclePartRole.Static); // ventral wing-root belly
++            Part(p, 0x02001888, 0f, 0.95f, 2.18f, 0.707107f, -0.707107f, 0f, 0f, 1.48f, VehiclePartRole.Static); // ventral forward belly
++            Part(p, 0x02001888, 0f, -6.1f, 3.02f, 0.707107f, -0.707107f, 0f, 0f, 0.58f, VehiclePartRole.Static); // dorsal spine tail
++            Part(p, 0x02001888, 0f, -5.35f, 3.1f, 0.707107f, -0.707107f, 0f, 0f, 0.76f, VehiclePartRole.Static); // dorsal spine aft
++            Part(p, 0x02001888, 0f, -4.45f, 3.18f, 0.707107f, -0.707107f, 0f, 0f, 0.94f, VehiclePartRole.Static); // dorsal spine mid-aft
++            Part(p, 0x02001888, 0f, -3.45f, 3.26f, 0.707107f, -0.707107f, 0f, 0f, 1.12f, VehiclePartRole.Static); // dorsal spine mid
++            Part(p, 0x02001888, 0f, -2.35f, 3.34f, 0.707107f, -0.707107f, 0f, 0f, 1.28f, VehiclePartRole.Static); // dorsal spine fwd
++            Part(p, 0x02001888, 0f, -1.45f, 3.38f, 0.707107f, -0.707107f, 0f, 0f, 1.36f, VehiclePartRole.Static); // dorsal turtledeck
++            Part(p, 0x02000161, 0f, -5.3f, 3.16f, 0.998392f, 0.056693f, 0f, 0f, 1.22f, VehiclePartRole.Static); // dorsal turtledeck fairing
++            Part(p, 0x02001975, 0f, -5.35f, 3.19f, 0.998392f, 0.056693f, 0f, 0f, 1.0736f, VehiclePartRole.Static); // dorsal armor spine plate
++            Part(p, 0x02000161, 0f, -4.25f, 3.28f, 0.99824f, 0.059306f, 0f, 0f, 1.38f, VehiclePartRole.Static); // dorsal turtledeck fairing
++            Part(p, 0x02001975, 0f, -4.3f, 3.31f, 0.99824f, 0.059306f, 0f, 0f, 1.2144f, VehiclePartRole.Static); // dorsal armor spine plate
++            Part(p, 0x02000161, 0f, -3.1f, 3.41f, 0.998135f, 0.061049f, 0f, 0f, 1.54f, VehiclePartRole.Static); // dorsal turtledeck fairing
++            Part(p, 0x02001975, 0f, -3.15f, 3.44f, 0.998135f, 0.061049f, 0f, 0f, 1.3552f, VehiclePartRole.Static); // dorsal armor spine plate
++            Part(p, 0x02000161, 0f, -1.9f, 3.54f, 0.998392f, 0.056693f, 0f, 0f, 1.68f, VehiclePartRole.Static); // dorsal turtledeck fairing
++            Part(p, 0x02001975, 0f, -1.95f, 3.57f, 0.998392f, 0.056693f, 0f, 0f, 1.4784f, VehiclePartRole.Static); // dorsal armor spine plate
++            Part(p, 0x02000161, 0f, 1.25f, 3.34f, 0.999534f, -0.030539f, 0f, 0f, 1.72f, VehiclePartRole.Static); // dorsal turtledeck fairing
++            Part(p, 0x02001975, 0f, 1.2f, 3.37f, 0.999534f, -0.030539f, 0f, 0f, 1.5136f, VehiclePartRole.Static); // dorsal armor spine plate
++            Part(p, 0x02001523, -0.36f, -5.2f, 2.84f, 0.706292f, 0.033926f, -0.706292f, 0.033926f, 1.18f, VehiclePartRole.Static); // fuselage cheek armor
++            Part(p, 0x02001523, -0.48f, -4f, 2.84f, 0.706562f, 0.027761f, -0.706562f, 0.027761f, 1.38f, VehiclePartRole.Static); // fuselage cheek armor
++            Part(p, 0x02001523, -0.58f, -2.7f, 2.84f, 0.706864f, 0.01851f, -0.706864f, 0.01851f, 1.54f, VehiclePartRole.Static); // fuselage cheek armor
++            Part(p, 0x02001523, -0.66f, -1.4f, 2.82f, 0.70708f, 0.006171f, -0.70708f, 0.006171f, 1.66f, VehiclePartRole.Static); // fuselage cheek armor
++            Part(p, 0x02001523, -0.7f, -0.1f, 2.78f, 0.707107f, 0f, -0.707107f, 0f, 1.72f, VehiclePartRole.Static); // fuselage cheek armor
++            Part(p, 0x02001523, -0.72f, 1.15f, 2.76f, 0.707046f, -0.009256f, -0.707046f, -0.009256f, 1.72f, VehiclePartRole.Static); // fuselage cheek armor
++            Part(p, 0x02001523, 0.36f, -5.2f, 2.84f, 0.706292f, 0.033926f, 0.706292f, -0.033926f, 1.18f, VehiclePartRole.Static); // fuselage cheek armor
++            Part(p, 0x02001523, 0.48f, -4f, 2.84f, 0.706562f, 0.027761f, 0.706562f, -0.027761f, 1.38f, VehiclePartRole.Static); // fuselage cheek armor
++            Part(p, 0x02001523, 0.58f, -2.7f, 2.84f, 0.706864f, 0.01851f, 0.706864f, -0.01851f, 1.54f, VehiclePartRole.Static); // fuselage cheek armor
++            Part(p, 0x02001523, 0.66f, -1.4f, 2.82f, 0.70708f, 0.006171f, 0.70708f, -0.006171f, 1.66f, VehiclePartRole.Static); // fuselage cheek armor
++            Part(p, 0x02001523, 0.7f, -0.1f, 2.78f, 0.707107f, 0f, 0.707107f, 0f, 1.72f, VehiclePartRole.Static); // fuselage cheek armor
++            Part(p, 0x02001523, 0.72f, 1.15f, 2.76f, 0.707046f, -0.009256f, 0.707046f, 0.009256f, 1.72f, VehiclePartRole.Static); // fuselage cheek armor
++            Part(p, 0x020018C8, 0f, -5.85f, 2.9f, 0.707107f, -0.707107f, 0f, 0f, 1.05f, VehiclePartRole.Static); // fuselage gearknight frame ring
++            Part(p, 0x020018C8, 0f, -3.6f, 2.86f, 0.707107f, -0.707107f, 0f, 0f, 1.48f, VehiclePartRole.Static); // fuselage gearknight frame ring
++            Part(p, 0x020018C8, 0f, -1.25f, 2.8f, 0.707107f, -0.707107f, 0f, 0f, 1.76f, VehiclePartRole.Static); // fuselage gearknight frame ring
++            Part(p, 0x020018C8, 0f, 0.85f, 2.76f, 0.707107f, -0.707107f, 0f, 0f, 1.88f, VehiclePartRole.Static); // fuselage gearknight frame ring
++            Part(p, 0x0200188D, 0f, 2f, 2.7f, 0.707107f, -0.707107f, 0f, 0f, 2.22f, VehiclePartRole.Static); // main engine cowling
++            Part(p, 0x0200188D, 0f, 2.38f, 2.7f, 0.707107f, -0.707107f, 0f, 0f, 2.12f, VehiclePartRole.Static); // forward engine cowling
++            Part(p, 0x0200188D, 0f, 2.22f, 2.1f, 0.707107f, -0.707107f, 0f, 0f, 1.42f, VehiclePartRole.Static); // chin oil-cooler intake
++            Part(p, 0x02001523, 0f, 2.85f, 1.66f, 0.994522f, -0.104528f, 0f, 0f, 1.35f, VehiclePartRole.Static); // chin scoop armor lip
++            Part(p, 0x020018C8, 0f, 3.3f, 2.1f, 0.707107f, -0.707107f, 0f, 0f, 1.15f, VehiclePartRole.Static); // oil-cooler intake grille
++            Part(p, 0x02001975, 0f, 3.05f, 3.58f, 0.99863f, -0.052336f, 0f, 0f, 1.48f, VehiclePartRole.Static); // cowl armor petal 0
++            Part(p, 0x02001975, 0.5173f, 3.05f, 3.4119f, 0.949753f, -0.049774f, 0.308593f, 0.016173f, 1.48f, VehiclePartRole.Static); // cowl armor petal 1
++            Part(p, 0x02001975, 0.8369f, 3.05f, 2.9719f, 0.807908f, -0.042341f, 0.58698f, 0.030762f, 1.48f, VehiclePartRole.Static); // cowl armor petal 2
++            Part(p, 0x02001975, 0.8369f, 3.05f, 2.4281f, 0.58698f, -0.030762f, 0.807908f, 0.042341f, 1.48f, VehiclePartRole.Static); // cowl armor petal 3
++            Part(p, 0x02001975, 0.5173f, 3.05f, 1.9881f, 0.308593f, -0.016173f, 0.949753f, 0.049774f, 1.48f, VehiclePartRole.Static); // cowl armor petal 4
++            Part(p, 0x02001975, 0f, 3.05f, 1.82f, 0f, 0f, 0.99863f, 0.052336f, 1.48f, VehiclePartRole.Static); // cowl armor petal 5
++            Part(p, 0x02001975, -0.5173f, 3.05f, 1.9881f, -0.308593f, 0.016173f, 0.949753f, 0.049774f, 1.48f, VehiclePartRole.Static); // cowl armor petal 6
++            Part(p, 0x02001975, -0.8369f, 3.05f, 2.4281f, -0.58698f, 0.030762f, 0.807908f, 0.042341f, 1.48f, VehiclePartRole.Static); // cowl armor petal 7
++            Part(p, 0x02001975, -0.8369f, 3.05f, 2.9719f, -0.807908f, 0.042341f, 0.58698f, 0.030762f, 1.48f, VehiclePartRole.Static); // cowl armor petal 8
++            Part(p, 0x02001975, -0.5173f, 3.05f, 3.4119f, -0.949753f, 0.049774f, 0.308593f, 0.016173f, 1.48f, VehiclePartRole.Static); // cowl armor petal 9
++            Part(p, 0x020018C8, 0f, 3.6f, 2.68f, 0.707107f, -0.707107f, 0f, 0f, 1.85f, VehiclePartRole.Static); // R-2800 crankcase reduction gear
++            Part(p, 0x020018C8, 0f, 3.72f, 2.68f, 0.707107f, -0.707107f, 0f, 0f, 1.32f, VehiclePartRole.Static); // R-2800 front cam ring
++            Part(p, 0x0200188D, 0f, 3.38f, 2.92f, 1f, 0f, 0f, 0f, 0.78f, VehiclePartRole.Static); // radial cylinder 0
++            Part(p, 0x0200188D, 0.1543f, 3.38f, 2.8639f, 0.939693f, 0f, 0.34202f, 0f, 0.78f, VehiclePartRole.Static); // radial cylinder 1
++            Part(p, 0x0200188D, 0.2364f, 3.38f, 2.7217f, 0.766044f, 0f, 0.642788f, 0f, 0.78f, VehiclePartRole.Static); // radial cylinder 2
++            Part(p, 0x0200188D, 0.2078f, 3.38f, 2.56f, 0.5f, 0f, 0.866025f, 0f, 0.78f, VehiclePartRole.Static); // radial cylinder 3
++            Part(p, 0x0200188D, 0.0821f, 3.38f, 2.4545f, 0.173648f, 0f, 0.984808f, 0f, 0.78f, VehiclePartRole.Static); // radial cylinder 4
++            Part(p, 0x0200188D, -0.0821f, 3.38f, 2.4545f, -0.173648f, 0f, 0.984808f, 0f, 0.78f, VehiclePartRole.Static); // radial cylinder 5
++            Part(p, 0x0200188D, -0.2078f, 3.38f, 2.56f, -0.5f, 0f, 0.866025f, 0f, 0.78f, VehiclePartRole.Static); // radial cylinder 6
++            Part(p, 0x0200188D, -0.2364f, 3.38f, 2.7217f, -0.766044f, 0f, 0.642788f, 0f, 0.78f, VehiclePartRole.Static); // radial cylinder 7
++            Part(p, 0x0200188D, -0.1543f, 3.38f, 2.8639f, -0.939693f, 0f, 0.34202f, 0f, 0.78f, VehiclePartRole.Static); // radial cylinder 8
++            Part(p, 0x020000A8, -0.78f, 1.85f, 2.5f, 0.701057f, -0.701057f, -0.092296f, 0.092296f, 0.95f, VehiclePartRole.Static); // supercharger manifold
++            Part(p, 0x0200013D, -0.72f, 1.55f, 2.6f, 0.974425f, 0.085251f, -0.018121f, 0.207121f, 0.52f, VehiclePartRole.Static); // exhaust stack 0
++            Part(p, 0x0200013D, -0.72f, 1.85f, 2.5f, 0.974425f, 0.085251f, -0.018121f, 0.207121f, 0.52f, VehiclePartRole.Static); // exhaust stack 1
++            Part(p, 0x0200013D, -0.72f, 2.15f, 2.4f, 0.974425f, 0.085251f, -0.018121f, 0.207121f, 0.52f, VehiclePartRole.Static); // exhaust stack 2
++            Part(p, 0x020000A8, 0.78f, 1.85f, 2.5f, 0.701057f, -0.701057f, 0.092296f, -0.092296f, 0.95f, VehiclePartRole.Static); // supercharger manifold
++            Part(p, 0x0200013D, 0.72f, 1.55f, 2.6f, 0.974425f, 0.085251f, 0.018121f, -0.207121f, 0.52f, VehiclePartRole.Static); // exhaust stack 0
++            Part(p, 0x0200013D, 0.72f, 1.85f, 2.5f, 0.974425f, 0.085251f, 0.018121f, -0.207121f, 0.52f, VehiclePartRole.Static); // exhaust stack 1
++            Part(p, 0x0200013D, 0.72f, 2.15f, 2.4f, 0.974425f, 0.085251f, 0.018121f, -0.207121f, 0.52f, VehiclePartRole.Static); // exhaust stack 2
++            Part(p, 0x02000162, 0f, 3.84f, 2.68f, 0.707107f, -0.707107f, 0f, 0f, 1.32f, VehiclePartRole.Propeller); // spinner base dome
++            Part(p, 0x020018C8, 0f, 3.84f, 2.68f, 0.707107f, -0.707107f, 0f, 0f, 1.38f, VehiclePartRole.Propeller); // spinner pitch-gear collar
++            Part(p, 0x0200188D, 0f, 3.76f, 2.68f, 0.707107f, -0.707107f, 0f, 0f, 0.82f, VehiclePartRole.Propeller); // spinner core cone
++            Part(p, 0x02000162, 0f, 4.2f, 2.68f, 0.707107f, -0.707107f, 0f, 0f, 0.88f, VehiclePartRole.Propeller); // spinner forward cone
++            Part(p, 0x02000162, 0f, 4.36f, 2.68f, 0.707107f, -0.707107f, 0f, 0f, 0.52f, VehiclePartRole.Propeller); // spinner tip cap
++            Part(p, 0x02001916, 0f, 3.84f, 2.68f, 0.694115f, 0.694115f, 0.134922f, 0.134922f, 1.42f, VehiclePartRole.Propeller); // prop main blade 0
++            Part(p, 0x0200130B, 0f, 3.84f, 2.68f, 0.688984f, 0.688984f, 0.159064f, 0.159064f, 1.48f, VehiclePartRole.Propeller); // prop blade cuff 0
++            Part(p, 0x02001916, 0f, 3.84f, 2.68f, 0.395409f, 0.586218f, 0.586218f, -0.395409f, 1.42f, VehiclePartRole.Propeller); // prop main blade 1
++            Part(p, 0x0200130B, 0f, 3.84f, 2.68f, 0.37471f, 0.599661f, 0.599661f, -0.37471f, 1.48f, VehiclePartRole.Propeller); // prop blade cuff 1
++            Part(p, 0x02001916, 0f, 3.84f, 2.68f, -0.134922f, 0.134922f, 0.694115f, -0.694115f, 1.42f, VehiclePartRole.Propeller); // prop main blade 2
++            Part(p, 0x0200130B, 0f, 3.84f, 2.68f, -0.159064f, 0.159064f, 0.688984f, -0.688984f, 1.48f, VehiclePartRole.Propeller); // prop blade cuff 2
++            Part(p, 0x02001916, 0f, 3.84f, 2.68f, -0.586218f, -0.395409f, 0.395409f, -0.586218f, 1.42f, VehiclePartRole.Propeller); // prop main blade 3
++            Part(p, 0x0200130B, 0f, 3.84f, 2.68f, -0.599661f, -0.37471f, 0.37471f, -0.599661f, 1.48f, VehiclePartRole.Propeller); // prop blade cuff 3
++            Part(p, 0x0200043C, 0f, -0.35f, 2.08f, 1f, 0f, 0f, 0f, 1.02f, VehiclePartRole.Static); // cockpit armored tub
++            Part(p, 0x02001523, 0f, -1.1f, 3.5f, 0.75471f, -0.656059f, 0f, 0f, 1.22f, VehiclePartRole.Static); // cockpit armor bulkhead
++            Part(p, 0x020018C8, 0f, -1.03f, 3.76f, 0.707107f, -0.707107f, 0f, 0f, 0.92f, VehiclePartRole.Static); // cockpit headrest ring
++            Part(p, 0x02001858, -0.64f, -0.33f, 3.24f, 0.707107f, 0f, -0.707107f, 0f, 1.45f, VehiclePartRole.Static); // cockpit side coaming
++            Part(p, 0x02001523, -0.56f, -1f, 3.44f, 0.706138f, -0.037007f, -0.706138f, 0.037007f, 1.15f, VehiclePartRole.Static); // cockpit rear quarter armor
++            Part(p, 0x02001858, 0.64f, -0.33f, 3.24f, 0.707107f, 0f, 0.707107f, 0f, 1.45f, VehiclePartRole.Static); // cockpit side coaming
++            Part(p, 0x02001523, 0.56f, -1f, 3.44f, 0.706138f, -0.037007f, 0.706138f, -0.037007f, 1.15f, VehiclePartRole.Static); // cockpit rear quarter armor
++            Part(p, 0x02001975, 0f, 0.5f, 3.4f, 0.992546f, 0.121869f, 0f, 0f, 1.32f, VehiclePartRole.Static); // forward anti-glare coaming
++            Part(p, 0x020018C8, 0f, 0.23f, 3.56f, 0.707107f, -0.707107f, 0f, 0f, 0.36f, VehiclePartRole.Static); // reflector gunsight ring
++            Part(p, 0x020018C8, 0f, 0.27f, 3.14f, 0.707107f, -0.707107f, 0f, 0f, 0.68f, VehiclePartRole.Static); // instrument console
++            Part(p, 0x020004B5, 0f, -0.1f, 2.63f, 1f, 0f, 0f, 0f, 0.85f, VehiclePartRole.Static); // control stick
++            Part(p, 0x0200013D, -0.34f, 0.07f, 4.04f, 0.928466f, -0.356405f, 0.097586f, 0.03746f, 0.54f, VehiclePartRole.Canopy); // windscreen pillar
++            Part(p, 0x0200013D, -0.3f, 0f, 4.12f, 0.995134f, 0.069587f, 0.069587f, -0.004866f, 0.78f, VehiclePartRole.Canopy); // canopy upper rail
++            Part(p, 0x0200013D, -0.52f, -0.03f, 3.64f, 0.999048f, 0.043619f, 0f, 0f, 0.78f, VehiclePartRole.Canopy); // canopy waist rail
++            Part(p, 0x0200013D, 0.34f, 0.07f, 4.04f, 0.928466f, -0.356405f, -0.097586f, -0.03746f, 0.54f, VehiclePartRole.Canopy); // windscreen pillar
++            Part(p, 0x0200013D, 0.3f, 0f, 4.12f, 0.995134f, 0.069587f, -0.069587f, 0.004866f, 0.78f, VehiclePartRole.Canopy); // canopy upper rail
++            Part(p, 0x0200013D, 0.52f, -0.03f, 3.64f, 0.999048f, 0.043619f, 0f, 0f, 0.78f, VehiclePartRole.Canopy); // canopy waist rail
++            Part(p, 0x0200013D, 0f, 0f, 4.2f, 0.996917f, 0.078459f, 0f, 0f, 0.8f, VehiclePartRole.Canopy); // canopy dorsal rail
++            Part(p, 0x02001858, 0f, 0.27f, 3.72f, 0.951057f, -0.309017f, 0f, 0f, 0.92f, VehiclePartRole.Canopy); // windscreen armored brow
++            Part(p, 0x02001523, 1.15f, 0.8f, 2.26f, 0.994181f, 0.026034f, -0.104493f, -0.002736f, 1.65f, VehiclePartRole.Static); // wing root upper fillet
++            Part(p, 0x02001523, 1.15f, 0f, 2.22f, 0.996043f, -0.017386f, -0.087142f, 0.001521f, 1.55f, VehiclePartRole.Static); // wing root trailing fillet
++            Part(p, 0x02000161, 2.0286f, 0.89f, 2.15f, 0.706999f, 0.012341f, 0.012341f, -0.706999f, 2.15f, VehiclePartRole.Static); // inner wing fwd upper
++            Part(p, 0x02000161, 1.9931f, 0.85f, 2.04f, 0.707046f, -0.009256f, -0.009256f, -0.707046f, 2.1f, VehiclePartRole.Static); // inner wing fwd lower
++            Part(p, 0x02000161, 2.0286f, 0.17f, 2.14f, 0.706999f, -0.012341f, -0.012341f, -0.706999f, 2.15f, VehiclePartRole.Static); // inner wing aft upper
++            Part(p, 0x02000161, 1.9931f, 0.15f, 2.04f, 0.70708f, 0.006171f, 0.006171f, -0.70708f, 2.1f, VehiclePartRole.Static); // inner wing aft lower
++            Part(p, 0x02001975, 2.0364f, 0.53f, 2.19f, 0.707107f, 0f, 0f, -0.707107f, 1.95f, VehiclePartRole.Static); // inner wing armor walk
++            Part(p, 0x020018C8, 2.35f, 0.53f, 2.08f, 0.707107f, 0f, 0.707107f, 0f, 0.92f, VehiclePartRole.Static); // wing fold knuckle rib
++            Part(p, 0x02000161, 4.063f, 0.83f, 2.22f, 0.706138f, 0.055479f, -0.037007f, -0.704927f, 2.55f, VehiclePartRole.Static); // mid wing fwd upper
++            Part(p, 0x02000161, 4.0275f, 0.8f, 2.13f, 0.704927f, 0.037007f, -0.055479f, -0.706138f, 2.5f, VehiclePartRole.Static); // mid wing fwd lower
++            Part(p, 0x02000161, 4.063f, 0.17f, 2.21f, 0.704678f, 0.033926f, -0.058554f, -0.706292f, 2.55f, VehiclePartRole.Static); // mid wing aft upper
++            Part(p, 0x02000161, 4.0275f, 0.15f, 2.13f, 0.70597f, 0.052403f, -0.040088f, -0.705162f, 2.5f, VehiclePartRole.Static); // mid wing aft lower
++            Part(p, 0x02001975, 4.0209f, 0.51f, 2.26f, 0.705593f, 0.046247f, -0.046247f, -0.705593f, 2.35f, VehiclePartRole.Static); // mid wing dorsal armor
++            Part(p, 0x02000161, 6.0995f, 0.73f, 2.4865f, 0.706138f, 0.055479f, -0.037007f, -0.704927f, 2.32f, VehiclePartRole.Static); // outer wing fwd upper
++            Part(p, 0x02000161, 6.0711f, 0.7f, 2.4165f, 0.705162f, 0.040088f, -0.052403f, -0.70597f, 2.28f, VehiclePartRole.Static); // outer wing fwd lower
++            Part(p, 0x02000161, 6.0995f, 0.21f, 2.4765f, 0.704678f, 0.033926f, -0.058554f, -0.706292f, 2.32f, VehiclePartRole.Static); // outer wing aft upper
++            Part(p, 0x02001858, 6.1142f, 0.47f, 2.5265f, 0.705593f, 0.046247f, -0.046247f, -0.705593f, 2.2f, VehiclePartRole.Static); // outer wing trim skin
++            Part(p, 0x0200013D, 3.8f, 0.77f, 2.2909f, 0.705593f, 0.046247f, -0.046247f, -0.705593f, 2.1f, VehiclePartRole.Static); // main front wing spar
++            Part(p, 0x0200013D, 3.8f, 0.23f, 2.2909f, 0.705593f, 0.046247f, -0.046247f, -0.705593f, 2.1f, VehiclePartRole.Static); // main rear wing spar
++            Part(p, 0x02001975, 2.202f, -0.17f, 2.06f, 0.705384f, -0.049325f, -0.049325f, -0.705384f, 1.55f, VehiclePartRole.Static); // inboard slotted flap
++            Part(p, 0x02001975, 3.8942f, -0.13f, 2.1919f, 0.702205f, 0.009256f, -0.083111f, -0.707046f, 1.75f, VehiclePartRole.Static); // mid slotted flap
++            Part(p, 0x02001858, 5.9654f, -0.03f, 2.4884f, 0.70414f, 0.027761f, -0.064701f, -0.706562f, 1.85f, VehiclePartRole.Static); // aileron
++            Part(p, 0x02000164, 6.8662f, 0.49f, 2.7979f, 0.705593f, -0.046247f, -0.046247f, 0.705593f, 1.78f, VehiclePartRole.Static); // wing tip main
++            Part(p, 0x02001858, 6.7558f, 0.51f, 2.8379f, 0.705593f, -0.046247f, -0.046247f, 0.705593f, 1.45f, VehiclePartRole.Static); // wing tip trim
++            Part(p, 0x0200054D, 6.8854f, 1.1f, 2.7779f, 1f, 0f, 0f, 0f, 0.68f, VehiclePartRole.Static); // wingtip pitot tube
++            Part(p, 0x02001523, -1.15f, 0.8f, 2.26f, 0.994181f, 0.026034f, 0.104493f, 0.002736f, 1.65f, VehiclePartRole.Static); // wing root upper fillet
++            Part(p, 0x02001523, -1.15f, 0f, 2.22f, 0.996043f, -0.017386f, 0.087142f, -0.001521f, 1.55f, VehiclePartRole.Static); // wing root trailing fillet
++            Part(p, 0x02000161, -2.0286f, 0.89f, 2.15f, 0.706999f, 0.012341f, -0.012341f, 0.706999f, 2.15f, VehiclePartRole.Static); // inner wing fwd upper
++            Part(p, 0x02000161, -1.9931f, 0.85f, 2.04f, 0.707046f, -0.009256f, 0.009256f, 0.707046f, 2.1f, VehiclePartRole.Static); // inner wing fwd lower
++            Part(p, 0x02000161, -2.0286f, 0.17f, 2.14f, 0.706999f, -0.012341f, 0.012341f, 0.706999f, 2.15f, VehiclePartRole.Static); // inner wing aft upper
++            Part(p, 0x02000161, -1.9931f, 0.15f, 2.04f, 0.70708f, 0.006171f, -0.006171f, 0.70708f, 2.1f, VehiclePartRole.Static); // inner wing aft lower
++            Part(p, 0x02001975, -2.0364f, 0.53f, 2.19f, 0.707107f, 0f, 0f, 0.707107f, 1.95f, VehiclePartRole.Static); // inner wing armor walk
++            Part(p, 0x020018C8, -2.35f, 0.53f, 2.08f, 0.707107f, 0f, -0.707107f, 0f, 0.92f, VehiclePartRole.Static); // wing fold knuckle rib
++            Part(p, 0x02000161, -4.063f, 0.83f, 2.22f, 0.706138f, 0.055479f, 0.037007f, 0.704927f, 2.55f, VehiclePartRole.Static); // mid wing fwd upper
++            Part(p, 0x02000161, -4.0275f, 0.8f, 2.13f, 0.704927f, 0.037007f, 0.055479f, 0.706138f, 2.5f, VehiclePartRole.Static); // mid wing fwd lower
++            Part(p, 0x02000161, -4.063f, 0.17f, 2.21f, 0.704678f, 0.033926f, 0.058554f, 0.706292f, 2.55f, VehiclePartRole.Static); // mid wing aft upper
++            Part(p, 0x02000161, -4.0275f, 0.15f, 2.13f, 0.70597f, 0.052403f, 0.040088f, 0.705162f, 2.5f, VehiclePartRole.Static); // mid wing aft lower
++            Part(p, 0x02001975, -4.0209f, 0.51f, 2.26f, 0.705593f, 0.046247f, 0.046247f, 0.705593f, 2.35f, VehiclePartRole.Static); // mid wing dorsal armor
++            Part(p, 0x02000161, -6.0995f, 0.73f, 2.4865f, 0.706138f, 0.055479f, 0.037007f, 0.704927f, 2.32f, VehiclePartRole.Static); // outer wing fwd upper
++            Part(p, 0x02000161, -6.0711f, 0.7f, 2.4165f, 0.705162f, 0.040088f, 0.052403f, 0.70597f, 2.28f, VehiclePartRole.Static); // outer wing fwd lower
++            Part(p, 0x02000161, -6.0995f, 0.21f, 2.4765f, 0.704678f, 0.033926f, 0.058554f, 0.706292f, 2.32f, VehiclePartRole.Static); // outer wing aft upper
++            Part(p, 0x02001858, -6.1142f, 0.47f, 2.5265f, 0.705593f, 0.046247f, 0.046247f, 0.705593f, 2.2f, VehiclePartRole.Static); // outer wing trim skin
++            Part(p, 0x0200013D, -3.8f, 0.77f, 2.2909f, 0.705593f, 0.046247f, 0.046247f, 0.705593f, 2.1f, VehiclePartRole.Static); // main front wing spar
++            Part(p, 0x0200013D, -3.8f, 0.23f, 2.2909f, 0.705593f, 0.046247f, 0.046247f, 0.705593f, 2.1f, VehiclePartRole.Static); // main rear wing spar
++            Part(p, 0x02001975, -2.202f, -0.17f, 2.06f, 0.705384f, -0.049325f, 0.049325f, 0.705384f, 1.55f, VehiclePartRole.Static); // inboard slotted flap
++            Part(p, 0x02001975, -3.8942f, -0.13f, 2.1919f, 0.702205f, 0.009256f, 0.083111f, 0.707046f, 1.75f, VehiclePartRole.Static); // mid slotted flap
++            Part(p, 0x02001858, -5.9654f, -0.03f, 2.4884f, 0.70414f, 0.027761f, 0.064701f, 0.706562f, 1.85f, VehiclePartRole.Static); // aileron
++            Part(p, 0x02000164, -6.8662f, 0.49f, 2.7979f, 0.705593f, -0.046247f, 0.046247f, -0.705593f, 1.78f, VehiclePartRole.Static); // wing tip main
++            Part(p, 0x02001858, -6.7558f, 0.51f, 2.8379f, 0.705593f, -0.046247f, 0.046247f, -0.705593f, 1.45f, VehiclePartRole.Static); // wing tip trim
++            Part(p, 0x0200054D, -6.8854f, 1.1f, 2.7779f, 1f, 0f, 0f, 0f, 0.68f, VehiclePartRole.Static); // wingtip pitot tube
++            Part(p, 0x02001975, 1.282f, -6.13f, 2.94f, 0.707107f, 0f, 0f, -0.707107f, 1.55f, VehiclePartRole.Static); // tailplane inboard
++            Part(p, 0x02000164, 1.6219f, -6.25f, 2.92f, 0.707107f, 0f, 0f, 0.707107f, 1.95f, VehiclePartRole.Static); // tailplane tip
++            Part(p, 0x02001858, 1.44f, -6.43f, 2.95f, 0.707107f, 0f, 0f, 0.707107f, 1.45f, VehiclePartRole.Static); // elevator trim
++            Part(p, 0x0200013D, 0.85f, -6.2f, 2.66f, 0.698401f, 0.110616f, -0.110616f, -0.698401f, 0.72f, VehiclePartRole.Static); // tailplane brace strut
++            Part(p, 0x02001975, -1.282f, -6.13f, 2.94f, 0.707107f, 0f, 0f, 0.707107f, 1.55f, VehiclePartRole.Static); // tailplane inboard
++            Part(p, 0x02000164, -1.6219f, -6.25f, 2.92f, 0.707107f, 0f, 0f, -0.707107f, 1.95f, VehiclePartRole.Static); // tailplane tip
++            Part(p, 0x02001858, -1.44f, -6.43f, 2.95f, 0.707107f, 0f, 0f, -0.707107f, 1.45f, VehiclePartRole.Static); // elevator trim
++            Part(p, 0x0200013D, -0.85f, -6.2f, 2.66f, 0.698401f, 0.110616f, 0.110616f, 0.698401f, 0.72f, VehiclePartRole.Static); // tailplane brace strut
++            Part(p, 0x02000164, 0f, -6.57f, 3.26f, -0.073913f, 0.703233f, -0.073913f, 0.703233f, 2.15f, VehiclePartRole.Static); // dorsal fin strake
++            Part(p, 0x02000164, 0f, -6.3f, 3.1f, -0.435338f, 0.557208f, -0.435338f, 0.557208f, 2.55f, VehiclePartRole.Static); // vertical fin main
++            Part(p, 0x02001975, 0f, -6.67f, 3.2f, -0.463904f, 0.53366f, -0.463904f, 0.53366f, 2.15f, VehiclePartRole.Static); // rudder surface
++            Part(p, 0x02001858, 0f, -6.77f, 3.56f, -0.473147f, 0.525483f, -0.473147f, 0.525483f, 1.55f, VehiclePartRole.Static); // rudder trim tab
++            Part(p, 0x02000164, 0f, -6.1f, 2.63f, 0.379928f, 0.596368f, 0.379928f, 0.596368f, 1.15f, VehiclePartRole.Static); // ventral tail bumper
++            Part(p, 0x0200054D, 0f, -6.6f, 2.46f, 0.981627f, 0.190809f, 0f, 0f, 0.72f, VehiclePartRole.Static); // carrier arrestor hook
++            Part(p, 0x0200054D, 0f, -2.05f, 3.73f, 0.788011f, 0.615661f, 0f, 0f, 0.78f, VehiclePartRole.Static); // forward dorsal radio mast
++            Part(p, 0x0200054D, 0f, -6.4f, 4.13f, 0.788011f, 0.615661f, 0f, 0f, 0.52f, VehiclePartRole.Static); // fin tip antenna
++            Part(p, 0x02001958, -3.85f, 1.21f, 2.3375f, 0f, 0f, 0f, 1f, 1.05f, VehiclePartRole.Static); // gun 0 gearknight housing
++            Part(p, 0x02000874, -3.85f, 1.43f, 2.3575f, 0.707107f, 0f, 0f, -0.707107f, 0.78f, VehiclePartRole.Static); // gun 0 barrel
++            Part(p, 0x02001958, -3.2f, 1.21f, 2.2519f, 0f, 0f, 0f, 1f, 1.05f, VehiclePartRole.Static); // gun 1 gearknight housing
++            Part(p, 0x02000874, -3.2f, 1.43f, 2.2719f, 0.707107f, 0f, 0f, -0.707107f, 0.78f, VehiclePartRole.Static); // gun 1 barrel
++            Part(p, 0x02001958, -2.55f, 1.21f, 2.1663f, 0f, 0f, 0f, 1f, 1.05f, VehiclePartRole.Static); // gun 2 gearknight housing
++            Part(p, 0x02000874, -2.55f, 1.43f, 2.1863f, 0.707107f, 0f, 0f, -0.707107f, 0.78f, VehiclePartRole.Static); // gun 2 barrel
++            Part(p, 0x02001958, 2.55f, 1.21f, 2.1663f, 0f, 0f, 0f, 1f, 1.05f, VehiclePartRole.Static); // gun 3 gearknight housing
++            Part(p, 0x02000874, 2.55f, 1.43f, 2.1863f, 0.707107f, 0f, 0f, -0.707107f, 0.78f, VehiclePartRole.Static); // gun 3 barrel
++            Part(p, 0x02001958, 3.2f, 1.21f, 2.2519f, 0f, 0f, 0f, 1f, 1.05f, VehiclePartRole.Static); // gun 4 gearknight housing
++            Part(p, 0x02000874, 3.2f, 1.43f, 2.2719f, 0.707107f, 0f, 0f, -0.707107f, 0.78f, VehiclePartRole.Static); // gun 4 barrel
++            Part(p, 0x02001958, 3.85f, 1.21f, 2.3375f, 0f, 0f, 0f, 1f, 1.05f, VehiclePartRole.Static); // gun 5 gearknight housing
++            Part(p, 0x02000874, 3.85f, 1.43f, 2.3575f, 0.707107f, 0f, 0f, -0.707107f, 0.78f, VehiclePartRole.Static); // gun 5 barrel
++            Part(p, 0x02000164, -5.75f, 0.35f, 2.4476f, -0.5f, -0.5f, -0.5f, -0.5f, 0.58f, VehiclePartRole.Static); // rail 6 pylon
++            Part(p, 0x0200017C, -5.75f, 0.4f, 2.3076f, 1f, 0f, 0f, 0f, 2.05f, Ordnance(6)); // lightning rail 6 (wand)
++            Part(p, 0x0200054D, -5.75f, 0.55f, 2.3176f, 1f, 0f, 0f, 0f, 0.58f, Ordnance(6)); // lightning rail 6 body
++            Part(p, 0x02000164, -5.1f, 0.35f, 2.362f, -0.5f, -0.5f, -0.5f, -0.5f, 0.58f, VehiclePartRole.Static); // rail 7 pylon
++            Part(p, 0x0200017C, -5.1f, 0.4f, 2.222f, 1f, 0f, 0f, 0f, 2.05f, Ordnance(7)); // lightning rail 7 (wand)
++            Part(p, 0x0200054D, -5.1f, 0.55f, 2.232f, 1f, 0f, 0f, 0f, 0.58f, Ordnance(7)); // lightning rail 7 body
++            Part(p, 0x02000164, -4.45f, 0.35f, 2.2765f, -0.5f, -0.5f, -0.5f, -0.5f, 0.58f, VehiclePartRole.Static); // rail 8 pylon
++            Part(p, 0x0200017C, -4.45f, 0.4f, 2.1365f, 1f, 0f, 0f, 0f, 2.05f, Ordnance(8)); // lightning rail 8 (wand)
++            Part(p, 0x0200054D, -4.45f, 0.55f, 2.1465f, 1f, 0f, 0f, 0f, 0.58f, Ordnance(8)); // lightning rail 8 body
++            Part(p, 0x02000164, 4.45f, 0.35f, 2.2765f, -0.5f, -0.5f, -0.5f, -0.5f, 0.58f, VehiclePartRole.Static); // rail 9 pylon
++            Part(p, 0x0200017C, 4.45f, 0.4f, 2.1365f, 1f, 0f, 0f, 0f, 2.05f, Ordnance(9)); // lightning rail 9 (wand)
++            Part(p, 0x0200054D, 4.45f, 0.55f, 2.1465f, 1f, 0f, 0f, 0f, 0.58f, Ordnance(9)); // lightning rail 9 body
++            Part(p, 0x02000164, 5.1f, 0.35f, 2.362f, -0.5f, -0.5f, -0.5f, -0.5f, 0.58f, VehiclePartRole.Static); // rail 10 pylon
++            Part(p, 0x0200017C, 5.1f, 0.4f, 2.222f, 1f, 0f, 0f, 0f, 2.05f, Ordnance(10)); // lightning rail 10 (wand)
++            Part(p, 0x0200054D, 5.1f, 0.55f, 2.232f, 1f, 0f, 0f, 0f, 0.58f, Ordnance(10)); // lightning rail 10 body
++            Part(p, 0x02000164, 5.75f, 0.35f, 2.4476f, -0.5f, -0.5f, -0.5f, -0.5f, 0.58f, VehiclePartRole.Static); // rail 11 pylon
++            Part(p, 0x0200017C, 5.75f, 0.4f, 2.3076f, 1f, 0f, 0f, 0f, 2.05f, Ordnance(11)); // lightning rail 11 (wand)
++            Part(p, 0x0200054D, 5.75f, 0.55f, 2.3176f, 1f, 0f, 0f, 0f, 0.58f, Ordnance(11)); // lightning rail 11 body
++            Part(p, 0x0200013D, -0.26f, 0.35f, 1.86f, 0.694115f, 0.694115f, -0.134922f, 0.134922f, 0.42f, VehiclePartRole.Static); // centreline bomb sway brace
++            Part(p, 0x0200013D, 0.26f, 0.35f, 1.86f, 0.694115f, 0.694115f, 0.134922f, -0.134922f, 0.42f, VehiclePartRole.Static); // centreline bomb sway brace
++            Part(p, 0x0200188D, 0f, -0.1288f, 1.3f, 0.707107f, -0.707107f, 0f, 0f, 1.26f, Ordnance(12)); // 2000 lb bomb (centreline) body
++            Part(p, 0x020014F6, 0f, -0.5068f, 1.3f, 0.707107f, -0.707107f, 0f, 0f, 1.0332f, Ordnance(12)); // 2000 lb bomb (centreline) aft cone
++            Part(p, 0x02000162, 0f, 0.8792f, 1.3f, 0.707107f, -0.707107f, 0f, 0f, 1.1088f, Ordnance(12)); // 2000 lb bomb (centreline) nose dome
++            Part(p, 0x020018C8, 0f, 0.8036f, 1.3f, 0.707107f, -0.707107f, 0f, 0f, 1.071f, Ordnance(12)); // 2000 lb bomb (centreline) fuse ring
++            Part(p, 0x020018C8, 0f, -0.1792f, 1.3f, 0.707107f, -0.707107f, 0f, 0f, 1.1592f, Ordnance(12)); // 2000 lb bomb (centreline) tail ring
++            Part(p, 0x02000164, 0f, -0.2548f, 1.3f, 0.270598f, 0.270598f, -0.653281f, 0.653281f, 0.6048f, Ordnance(12)); // 2000 lb bomb (centreline) fin
++            Part(p, 0x02000164, 0f, -0.2548f, 1.3f, 0.653281f, 0.653281f, -0.270598f, 0.270598f, 0.6048f, Ordnance(12)); // 2000 lb bomb (centreline) fin
++            Part(p, 0x02000164, 0f, -0.2548f, 1.3f, 0.653281f, 0.653281f, 0.270598f, -0.270598f, 0.6048f, Ordnance(12)); // 2000 lb bomb (centreline) fin
++            Part(p, 0x02000164, 0f, -0.2548f, 1.3f, 0.270598f, 0.270598f, 0.653281f, -0.653281f, 0.6048f, Ordnance(12)); // 2000 lb bomb (centreline) fin
++            Part(p, 0x02000164, -1.68f, 0.32f, 1.94f, -0.5f, -0.5f, -0.5f, -0.5f, 0.82f, VehiclePartRole.Static); // wing bomb 13 pylon
++            Part(p, 0x0200188D, -1.68f, 0.0476f, 1.54f, 0.707107f, -0.707107f, 0f, 0f, 0.98f, Ordnance(13)); // 1000 lb bomb (wing) body
++            Part(p, 0x020014F6, -1.68f, -0.2464f, 1.54f, 0.707107f, -0.707107f, 0f, 0f, 0.8036f, Ordnance(13)); // 1000 lb bomb (wing) aft cone
++            Part(p, 0x02000162, -1.68f, 0.8316f, 1.54f, 0.707107f, -0.707107f, 0f, 0f, 0.8624f, Ordnance(13)); // 1000 lb bomb (wing) nose dome
++            Part(p, 0x020018C8, -1.68f, 0.7728f, 1.54f, 0.707107f, -0.707107f, 0f, 0f, 0.833f, Ordnance(13)); // 1000 lb bomb (wing) fuse ring
++            Part(p, 0x020018C8, -1.68f, 0.0084f, 1.54f, 0.707107f, -0.707107f, 0f, 0f, 0.9016f, Ordnance(13)); // 1000 lb bomb (wing) tail ring
++            Part(p, 0x02000164, -1.68f, -0.0504f, 1.54f, 0.270598f, 0.270598f, -0.653281f, 0.653281f, 0.4704f, Ordnance(13)); // 1000 lb bomb (wing) fin
++            Part(p, 0x02000164, -1.68f, -0.0504f, 1.54f, 0.653281f, 0.653281f, -0.270598f, 0.270598f, 0.4704f, Ordnance(13)); // 1000 lb bomb (wing) fin
++            Part(p, 0x02000164, -1.68f, -0.0504f, 1.54f, 0.653281f, 0.653281f, 0.270598f, -0.270598f, 0.4704f, Ordnance(13)); // 1000 lb bomb (wing) fin
++            Part(p, 0x02000164, -1.68f, -0.0504f, 1.54f, 0.270598f, 0.270598f, 0.653281f, -0.653281f, 0.4704f, Ordnance(13)); // 1000 lb bomb (wing) fin
++            Part(p, 0x02000164, 1.68f, 0.32f, 1.94f, -0.5f, -0.5f, -0.5f, -0.5f, 0.82f, VehiclePartRole.Static); // wing bomb 14 pylon
++            Part(p, 0x0200188D, 1.68f, 0.0476f, 1.54f, 0.707107f, -0.707107f, 0f, 0f, 0.98f, Ordnance(14)); // 1000 lb bomb (wing) body
++            Part(p, 0x020014F6, 1.68f, -0.2464f, 1.54f, 0.707107f, -0.707107f, 0f, 0f, 0.8036f, Ordnance(14)); // 1000 lb bomb (wing) aft cone
++            Part(p, 0x02000162, 1.68f, 0.8316f, 1.54f, 0.707107f, -0.707107f, 0f, 0f, 0.8624f, Ordnance(14)); // 1000 lb bomb (wing) nose dome
++            Part(p, 0x020018C8, 1.68f, 0.7728f, 1.54f, 0.707107f, -0.707107f, 0f, 0f, 0.833f, Ordnance(14)); // 1000 lb bomb (wing) fuse ring
++            Part(p, 0x020018C8, 1.68f, 0.0084f, 1.54f, 0.707107f, -0.707107f, 0f, 0f, 0.9016f, Ordnance(14)); // 1000 lb bomb (wing) tail ring
++            Part(p, 0x02000164, 1.68f, -0.0504f, 1.54f, 0.270598f, 0.270598f, -0.653281f, 0.653281f, 0.4704f, Ordnance(14)); // 1000 lb bomb (wing) fin
++            Part(p, 0x02000164, 1.68f, -0.0504f, 1.54f, 0.653281f, 0.653281f, -0.270598f, 0.270598f, 0.4704f, Ordnance(14)); // 1000 lb bomb (wing) fin
++            Part(p, 0x02000164, 1.68f, -0.0504f, 1.54f, 0.653281f, 0.653281f, 0.270598f, -0.270598f, 0.4704f, Ordnance(14)); // 1000 lb bomb (wing) fin
++            Part(p, 0x02000164, 1.68f, -0.0504f, 1.54f, 0.270598f, 0.270598f, 0.653281f, -0.653281f, 0.4704f, Ordnance(14)); // 1000 lb bomb (wing) fin
++            Part(p, 0x02000162, -2.05f, 1.2f, 0.47f, 0.707107f, 0f, -0.707107f, 0f, 1.42f, VehiclePartRole.Gear); // main wheel outer
++            Part(p, 0x02000162, -1.95f, 1.2f, 0.47f, 0.707107f, 0f, 0.707107f, 0f, 1.42f, VehiclePartRole.Gear); // main wheel inner
++            Part(p, 0x020018C8, -2.09f, 1.2f, 0.47f, 0.707107f, 0f, -0.707107f, 0f, 0.96f, VehiclePartRole.Gear); // main wheel gearknight hub
++            Part(p, 0x0200013D, -1.96f, 1.2f, 1.69f, 0.706676f, 0.706676f, -0.024678f, 0.024678f, 1.02f, VehiclePartRole.Gear); // main oleo strut
++            Part(p, 0x0200013D, -1.72f, 0.82f, 1.52f, 0.818831f, 0.552308f, 0.12969f, -0.087477f, 0.82f, VehiclePartRole.Gear); // main gear diagonal brace
++            Part(p, 0x02000164, -2.18f, 1.16f, 1.39f, 0.5f, 0.5f, -0.5f, -0.5f, 1.38f, VehiclePartRole.Gear); // main gear door
++            Part(p, 0x02000162, 2.05f, 1.2f, 0.47f, 0.707107f, 0f, 0.707107f, 0f, 1.42f, VehiclePartRole.Gear); // main wheel outer
++            Part(p, 0x02000162, 1.95f, 1.2f, 0.47f, 0.707107f, 0f, -0.707107f, 0f, 1.42f, VehiclePartRole.Gear); // main wheel inner
++            Part(p, 0x020018C8, 2.09f, 1.2f, 0.47f, 0.707107f, 0f, 0.707107f, 0f, 0.96f, VehiclePartRole.Gear); // main wheel gearknight hub
++            Part(p, 0x0200013D, 1.96f, 1.2f, 1.69f, 0.706676f, 0.706676f, 0.024678f, -0.024678f, 1.02f, VehiclePartRole.Gear); // main oleo strut
++            Part(p, 0x0200013D, 1.72f, 0.82f, 1.52f, 0.818831f, 0.552308f, -0.12969f, 0.087477f, 0.82f, VehiclePartRole.Gear); // main gear diagonal brace
++            Part(p, 0x02000164, 2.18f, 1.16f, 1.39f, 0.5f, 0.5f, 0.5f, 0.5f, 1.38f, VehiclePartRole.Gear); // main gear door
++            Part(p, 0x02000162, 0.06f, -5.9f, 1.6377f, 0.707107f, 0f, 0.707107f, 0f, 0.72f, VehiclePartRole.Gear); // tail wheel
++            Part(p, 0x020018C8, 0.09f, -5.9f, 1.6377f, 0.707107f, 0f, 0.707107f, 0f, 0.48f, VehiclePartRole.Gear); // tail wheel hub
++            Part(p, 0x0200013D, 0f, -5.9f, 2.3377f, 0.707107f, 0.707107f, 0f, 0f, 0.56f, VehiclePartRole.Gear); // tail gear strut
+             return p;
+         }
+ 
+diff --git a/Source/ACE.Server/Vehicles/VehicleStreaming.cs b/Source/ACE.Server/Vehicles/VehicleStreaming.cs
+index 08cc9cb..b641d53 100644
+--- a/Source/ACE.Server/Vehicles/VehicleStreaming.cs
++++ b/Source/ACE.Server/Vehicles/VehicleStreaming.cs
+@@ -424,6 +424,16 @@ static void WarmWeenieTree(uint wcid, HashSet<uint> seen, int depth)
+                 WarmPhysicsParts(DatManager.PortalDat.ReadFromDat<SetupModel>(setupId));
+             if (dids.TryGetValue(ACE.Entity.Enum.Properties.PropertyDataId.MotionTable, out var motionTable))
+                 DatManager.PortalDat.ReadFromDat<MotionTable>(motionTable);
++            if (dids.TryGetValue(ACE.Entity.Enum.Properties.PropertyDataId.ClothingBase, out var clothingBase))
++            {
++                var ct = DatManager.PortalDat.ReadFromDat<ClothingTable>(clothingBase);
++                if (ct?.ClothingSubPalEffects != null)
++                    foreach (var spe in ct.ClothingSubPalEffects.Values)
++                        if (spe?.CloSubPalettes != null)
++                            foreach (var csp in spe.CloSubPalettes)
++                                if (csp.PaletteSet != 0)
++                                    DatManager.PortalDat.ReadFromDat<PaletteSet>(csp.PaletteSet);
++            }
+         }
+ 
+         /// <summary>
+@@ -482,6 +492,8 @@ public static void Tick(Vehicle v, Player pilot)
+             targets.Clear();
+             var seen = v.Stream.Seen;
+             seen.Clear();
++            var high = VehicleManager.InHighBand(v);
++            var ring = high ? 0 : 1;
+             var horizon = Math.Max(1.0, v.Profile.PreloadSeconds);
+             for (var t = 0.0; t <= horizon + 1e-9; t += CorridorStepSeconds)
+             {
+@@ -489,8 +501,8 @@ public static void Tick(Vehicle v, Player pilot)
+                 var py = v.State.Y + vel.Y * t;
+                 var lbx = (int)Math.Floor(px / 192.0);
+                 var lby = (int)Math.Floor(py / 192.0);
+-                for (var dx = -1; dx <= 1; dx++)
+-                    for (var dy = -1; dy <= 1; dy++)
++                for (var dx = -ring; dx <= ring; dx++)
++                    for (var dy = -ring; dy <= ring; dy++)
+                     {
+                         int x = lbx + dx, y = lby + dy;
+                         if (x < 0 || y < 0 || x > 254 || y > 254) continue;
+diff --git a/Source/ACE.Server/Vehicles/VehicleWeapons.cs b/Source/ACE.Server/Vehicles/VehicleWeapons.cs
+index 5291278..4646dd1 100644
+--- a/Source/ACE.Server/Vehicles/VehicleWeapons.cs
++++ b/Source/ACE.Server/Vehicles/VehicleWeapons.cs
+@@ -109,8 +109,14 @@ public static void Step(Vehicle v, Player pilot, byte buttons)
+                 FireMissile(v, pilot);
+             if (armed && (buttons & VehicleInputFrame.ButtonBomb) != 0 && (prev & VehicleInputFrame.ButtonBomb) == 0)
+                 ReleaseBomb(v, pilot);
++            if (InfiniteAmmo)
++                v.TopUp();
+         }
+ 
++        /// <summary>vehicle_infinite_ammo (default off; cheat): guns, rails and bomb stations refill after every step
++        /// (rates and the rail cooldown still apply). Toggle: @vehicle infammo on|off, or @modifybool.</summary>
++        public static bool InfiniteAmmo => PropertyManager.GetBool("vehicle_infinite_ammo", false).Item;
++
+         // ------------------------------------------------------------------------------------------------ guns
+ 
+         static void StepGuns(Vehicle v, Player pilot)
+@@ -375,6 +381,10 @@ static void ApplyHit(Vehicle v, Player pilot, Creature target, float amount)
+         const float MissileAssistCos = 0.9962f; // 5°
+         const float MissileAssistRange = 400f;
+ 
++        static readonly System.Collections.Concurrent.ConcurrentDictionary<uint, Spell> spellCache = new System.Collections.Concurrent.ConcurrentDictionary<uint, Spell>();
++
++        public static Spell GetSpell(uint id) => spellCache.GetOrAdd(id, k => new Spell(k));
++
+         static void FireMissile(Vehicle v, Player pilot)
+         {
+             var ordinal = -1;
+@@ -389,8 +399,8 @@ static void FireMissile(Vehicle v, Player pilot)
+             v.MissileMask &= (byte)~(1 << ordinal);
+             v.Costs.MissilesFired++;
+ 
+-            var spell = new Spell(ext.SpellId);
+-            if (spell.NotFound || spell.Wcid == 0)
++            var spell = GetSpell(ext.SpellId);
++            if (spell == null || spell.NotFound || spell.Wcid == 0)
+             {
+                 log.Warn($"[VEHICLE] {v.Name}: rail spell {ext.SpellId} not found");
+                 return;
+-- 
+2.47.3
+

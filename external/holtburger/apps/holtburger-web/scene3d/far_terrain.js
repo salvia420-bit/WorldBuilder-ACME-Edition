@@ -744,7 +744,12 @@ function ensureBakeRig(scene3d) {
     : null;
   if (!src) return null; // near ring has not baked a material yet — try next tick
 
+  const savedRt = [];
+  for (const u of Object.values(src.uniforms)) {
+    if (u && u.value && u.value.isRenderTargetTexture) { savedRt.push([u, u.value]); u.value = null; }
+  }
   const mat = src.clone();
+  for (const [u, v] of savedRt) u.value = v;
   mat.name = "far-terrain-bake";
   // `clone()` deep-copies the uniform objects, so writing the values below
   // cannot disturb the live near-ring material. It does NOT keep textures by

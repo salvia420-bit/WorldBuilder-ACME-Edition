@@ -23,6 +23,7 @@
 import { meshToGeometryGroups } from "../adapter.js";
 import { surfacePixelsFetcher } from "../bake_worker_client.js";
 import { materialCanCastShadow } from "../materials.js";
+import { prewarmSubtree } from "../bake_prewarm.js";
 
 export const PART_ROLE = Object.freeze({ STATIC: 0, PROPELLER: 1, GEAR: 2, CANOPY: 3, ORDNANCE: 4 });
 export const GEAR_PITCH = (11 * Math.PI) / 180;
@@ -227,7 +228,23 @@ export function createAirframes(deps = {}) {
       t.promise = buildTemplate(profile).then((r) => {
         Object.assign(t, r);
         t.status = t.buckets.length ? "ready" : "failed";
-        if (t.status === "ready") stats.built++; else stats.failed++;
+        if (t.status === "ready") {
+          stats.built++;
+          try {
+            const grp = new THREE.Group();
+            for (const b of t.buckets) {
+              for (const mm of b.meshes) {
+                const m = new THREE.Mesh(mm.geometry, mm.material);
+                m.castShadow = mm.cast;
+                m.receiveShadow = true;
+                grp.add(m);
+              }
+            }
+            prewarmSubtree(live, grp).catch(() => {});
+          } catch (_) { /* best effort */ }
+        } else {
+          stats.failed++;
+        }
       }).catch((e) => {
         t.status = "failed";
         t.error = String(e && e.message ? e.message : e);

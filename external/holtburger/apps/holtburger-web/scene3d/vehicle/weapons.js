@@ -17,6 +17,7 @@
 import { orientation, rotate, toGlobal, DT } from "./flight_model.js";
 import { stepBomb } from "./fall_model.js";
 import { decodeModel } from "./airframe.js";
+import { prewarmSubtree } from "../bake_prewarm.js";
 
 export const QUARREL_SETUP = 0x0200012a;
 export const QUARREL_SCALE = 1.8;
@@ -162,6 +163,7 @@ export function createWeaponsFx(deps = {}) {
   const ground = deps.ground ?? (() => NaN);
   const quarrels = []; // {o, d, t, life, speed}
   const flashes = []; // {mesh, t, life, r0, r1}
+  const flashPool = []; // reusable THREE.Sprite pool (avoids per-shot clone + dispose)
   const bombs = []; // {key, x,y,z,vx,vy,vz, terminal, group, lb, vehicle, station, exploded}
   const explosions = []; // {meshes..., t, at, lb}
   const recent = []; // recently exploded {key, at, t} (dedupe the server's Explosion against our twin's)
@@ -200,19 +202,29 @@ export function createWeaponsFx(deps = {}) {
     smokeMat = new THREE.SpriteMaterial({ map: softTex, color: 0x2c2722, transparent: true, opacity: 0.7, depthWrite: false });
     ringMat = new THREE.MeshBasicMaterial({ map: ringTex, color: 0x8c7a5c, transparent: true, opacity: 0.4, depthWrite: false, side: THREE.DoubleSide });
     dirtMat = new THREE.MeshBasicMaterial({ color: 0x2e2216, transparent: true, opacity: 0.9, depthWrite: false });
-    // link the effect programs off the frame (a first explosion would otherwise compile them synchronously)
-    prewarm([fireMat, smokeMat, ringMat, dirtMat]);
+    // pre-populate reusable muzzle flash sprites so gunfire never clones/disposes materials mid-frame
+    for (let i = 0; i < 24; i++) {
+      const s = new THREE.Sprite(flashMat.clone());
+      s.renderOrder = 6;
+      s.visible = false;
+      root.add(s);
+      flashPool.push(s);
+    }
+    // link the effect programs off the frame (against live.scene + HalfFloat composer target via prewarmSubtree)
+    prewarm([fireMat, flashMat, smokeMat, ringMat, dirtMat]);
     loadQuarrel();
     return true;
   }
 
   function prewarm(mats) {
     try {
-      const r = live.renderer;
-      if (!r || typeof r.compileAsync !== "function" || !live.camera) return;
-      const scene = new THREE.Scene();
-      for (const m of mats) scene.add(m.isSpriteMaterial ? new THREE.Sprite(m) : new THREE.Mesh(sphereGeom, m));
-      r.compileAsync(scene, live.camera).catch(() => {});
+      const grp = new THREE.Group();
+      if (streakGeom && streakMat) grp.add(new THREE.LineSegments(streakGeom, streakMat));
+      for (const m of mats) {
+        if (!m) continue;
+        grp.add(m.isSpriteMaterial ? new THREE.Sprite(m) : new THREE.Mesh(m === ringMat ? ringGeom : sphereGeom, m));
+      }
+      prewarmSubtree(live, grp).catch(() => {});
     } catch (_) { /* best effort */ }
   }
 
@@ -231,16 +243,19 @@ export function createWeaponsFx(deps = {}) {
       });
       stats.model = "loading-program";
       try {
-        const r = live.renderer;
-        if (r && typeof r.compileAsync === "function" && live.camera) {
-          const scene = new THREE.Scene();
-          for (const im of quarrelMeshes) { const c = new THREE.InstancedMesh(im.geometry, im.material, 1); scene.add(c); }
-          r.compileAsync(scene, live.camera).then(() => { for (const im of quarrelMeshes || []) im.visible = true; stats.model = "ready"; }).catch(() => {});
-        } else {
-          for (const im of quarrelMeshes) im.visible = true;
+        const grp = new THREE.Group();
+        for (const im of quarrelMeshes) grp.add(new THREE.InstancedMesh(im.geometry, im.material, 1));
+        prewarmSubtree(live, grp).then(() => {
+          for (const im of quarrelMeshes || []) im.visible = true;
           stats.model = "ready";
-        }
-      } catch (_) { for (const im of quarrelMeshes) im.visible = true; }
+        }).catch(() => {
+          for (const im of quarrelMeshes || []) im.visible = true;
+          stats.model = "ready";
+        });
+      } catch (_) {
+        for (const im of quarrelMeshes) im.visible = true;
+        stats.model = "ready";
+      }
     }).catch(() => { stats.model = "failed"; });
   }
 
@@ -248,13 +263,20 @@ export function createWeaponsFx(deps = {}) {
    *  read as a flat pale disc behind the aircraft on the 1070). */
   function addFlash(pos, r0, r1, life, vel) {
     if (!ensure()) return;
-    if (flashes.length > 48) { const f = flashes.shift(); f.mesh.parent?.remove(f.mesh); f.mesh.material.dispose(); }
-    const m = flashMat.clone();
-    const mesh = new THREE.Sprite(m);
+    let mesh;
+    if (flashes.length >= 48) {
+      mesh = flashes.shift().mesh;
+    } else if (flashPool.length > 0) {
+      mesh = flashPool.pop();
+    } else {
+      mesh = new THREE.Sprite(flashMat.clone());
+      mesh.renderOrder = 6;
+      root.add(mesh);
+    }
     mesh.position.set(pos[0], pos[1], pos[2]);
     mesh.scale.setScalar(SOFT * r0);
-    mesh.renderOrder = 6;
-    root.add(mesh);
+    mesh.material.opacity = 1;
+    mesh.visible = true;
     flashes.push({ mesh, t: 0, life, r0, r1, vel: Array.isArray(vel) ? vel : null });
     stats.flashes++;
   }
@@ -490,7 +512,8 @@ export function createWeaponsFx(deps = {}) {
       f.t += dt;
       const u = f.t / f.life;
       if (u >= 1) {
-        try { f.mesh.parent?.remove(f.mesh); f.mesh.material.dispose(); } catch (_) {}
+        f.mesh.visible = false;
+        flashPool.push(f.mesh);
         flashes.splice(i, 1);
         continue;
       }
@@ -501,6 +524,8 @@ export function createWeaponsFx(deps = {}) {
   }
 
   return {
+    /** Pre-warm weapon meshes and shaders ahead of combat so the first salvo/bomb never compiles on the frame. */
+    warm() { ensure(); },
     /**
      * A "fire" inbox message. v = the vehicle record; pose = the pose the spread frame is taken in ({heading, pitch,
      * bank}); origin0 = the first mount's world muzzle (the pilot's predicted one), else the message's.
@@ -564,6 +589,8 @@ export function createWeaponsFx(deps = {}) {
       explosions.length = 0;
       for (const f of flashes) { try { f.mesh.parent?.remove(f.mesh); f.mesh.material.dispose(); } catch (_) {} }
       flashes.length = 0;
+      for (const s of flashPool) { try { s.parent?.remove(s); s.material.dispose(); } catch (_) {} }
+      flashPool.length = 0;
       quarrels.length = 0;
       try {
         for (const im of quarrelMeshes || []) { im.parent?.remove(im); im.geometry.dispose(); im.dispose?.(); }

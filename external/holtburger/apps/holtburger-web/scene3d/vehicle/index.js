@@ -39,7 +39,7 @@ export const CAP_PILOT = 0x2;
 export const BOARD_RANGE_M = 8;
 export const CHASE = Object.freeze({ back: 16, up: 4.5, lookAhead: 30, pitch: -0.12, fov: 70, headingTau: 0.25 });
 // up 1.25: the eye over the Hellcat's long nose (at 1.0 the cowling filled the lower third of the view, 1070 2026-11-02)
-export const COCKPIT = Object.freeze({ up: 1.25, forward: 0.1, fov: 78 });
+export const COCKPIT = Object.freeze({ up: 1.68, forward: 0.15, fov: 78 });
 /** The bomb release adds this downward speed (m/s) to the aircraft's velocity (the server's BombEjectSpeed). */
 export const BOMB_EJECT = 1.5;
 /** Seconds between two bomb-pipper solutions (the ballistic walk samples the terrain): 3.5 m of travel at 250 km/h — at
@@ -258,6 +258,9 @@ export function installVehicles(deps = {}) {
         stats.profiles++;
         // start decoding the composite airframe now (the stand-in stays until it is ready)
         if (airframes && hasComposite(m)) { try { airframes.ensure(v); } catch (_) { /* stand-in */ } }
+        if (live?.renderer) {
+          try { if (m.weapons?.length) fx.warm?.(); chutes?.warm?.(); } catch (_) { /* best effort */ }
+        }
         // The pilot's model is the stand-in object itself in v1 (profile.parts = [the stand-in]); it stays visible
         // and is posed by afterTick. A composite airframe would hide the stand-in here (setFilmHidden).
         break;
@@ -323,6 +326,8 @@ export function installVehicles(deps = {}) {
           if (handoff && handoff.v === v) endHandoff("despawned");
           forgetVehicle(v);
           vehicles.delete(m.vehicle >>> 0);
+        } else if (m.kind === 3) { // crashed: derelict aircraft struck terrain → 2,000 lb fireball + smoke column
+          fx.explosionEvent({ ...m, aux: 99, value: m.value || 2000 });
         } else if (m.kind === 9) { // a bomb left its station: fly it with the server's model (fall_model stepBomb)
           if (v) {
             const aux = m.aux >>> 0;
@@ -676,8 +681,9 @@ export function installVehicles(deps = {}) {
     const g = ground(ex, ey);
     if (!Number.isNaN(g) && ez < g + 2) ez = g + 2;
     // a tweaked orbit looks at the seat (the default chase framing looks a little down along the flight path)
-    const pc = camTweak ? -Math.atan2(ez - seat.z, back) : CHASE.pitch + pose.pitch * 0.4;
-    return { pos: [ex, ey, ez], h: ch, p: pc, r: camTweak ? 0 : pose.bank * 0.25, fov: CHASE.fov };
+    const pc = camTweak ? (camTweak.pitch ?? -Math.atan2(ez - seat.z, back)) : CHASE.pitch + pose.pitch * 0.4;
+    const rl = camTweak ? (camTweak.roll ?? 0) : pose.bank * 0.25;
+    return { pos: [ex, ey, ez], h: ch, p: pc, r: rl, fov: camTweak?.fov ?? CHASE.fov };
   }
 
   /** Between the seat release and the Bail event: the body rides the dead-reckoned seat under the chase camera. */
@@ -839,10 +845,12 @@ export function installVehicles(deps = {}) {
       const hv = Math.hypot(f.vx, f.vy);
       const want = hv > 0.5 ? Math.atan2(f.vx, f.vy) : f.camHeading;
       f.camHeading = FM.wrapHeading(f.camHeading + angleDiff(want, f.camHeading) * (1 - Math.exp(-Math.max(0, wallDt) / FALL_CAM.headingTau)));
-      const ch = f.camHeading;
-      let ez = f.rz + FALL_CAM.up;
-      let ex = f.rx - Math.sin(ch) * FALL_CAM.back, ey = f.ry - Math.cos(ch) * FALL_CAM.back;
-      const cam = { h: ch, p: FALL_CAM.pitch, r: 0, fov: FALL_CAM.fov };
+      const ch = f.camHeading + (camTweak?.yaw ?? 0);
+      const back = camTweak?.back ?? FALL_CAM.back;
+      const up = camTweak?.up ?? FALL_CAM.up;
+      let ez = f.rz + up;
+      let ex = f.rx - Math.sin(ch) * back, ey = f.ry - Math.cos(ch) * back;
+      const cam = { h: ch, p: camTweak?.pitch ?? FALL_CAM.pitch, r: camTweak?.roll ?? 0, fov: camTweak?.fov ?? FALL_CAM.fov };
       // BAIL_HANDOFF: the chase framing → the fall framing (smoothstep), the offset taken relative to the drawn body
       const cb = f.camBlend;
       if (cb) {
@@ -861,7 +869,14 @@ export function installVehicles(deps = {}) {
       }
       const g = ground(ex, ey);
       if (!Number.isNaN(g) && ez < g + 2) ez = g + 2;
-      f.camera.write({ pos: [ex, ey, ez], ...cam });
+      let pos = [ex, ey, ez];
+      const shake = fx.shakeAt(pos);
+      if (shake > 0.01) {
+        pos = [pos[0] + (Math.random() - 0.5) * shake, pos[1] + (Math.random() - 0.5) * shake, pos[2] + (Math.random() - 0.5) * shake];
+        cam.p += (Math.random() - 0.5) * shake * 0.01;
+        cam.r += (Math.random() - 0.5) * shake * 0.01;
+      }
+      f.camera.write({ pos, ...cam });
     }
     // never stuck — the fall ends on Touchdown (also the server's teleport cancel: Touchdown with cell 0) or here: a
     // teleport's portal space, or the bound (fallTimeoutSec: a 5 km bail free-falls ~2 min and a chute opened high
@@ -891,13 +906,19 @@ export function installVehicles(deps = {}) {
     try { h.vehicleExit(pilot.vehicle.guid, m); } catch (_) {}
   }
 
+  const _inputBuf1 = new Int32Array(6);
+  const _inputBuf2 = new Int32Array(12);
+  const _inputBuf3 = new Int32Array(18);
   function sendInput(p) {
     const frames = p.predictor.recentFrames(3);
-    if (!frames.length) return;
-    const flat = new Int32Array(frames.length * 6);
-    frames.forEach((f, i) => {
-      flat.set([f.seq, f.throttle, f.pitch, f.roll, f.yaw, f.buttons], i * 6);
-    });
+    const len = frames.length;
+    if (!len) return;
+    const flat = len === 3 ? _inputBuf3 : len === 2 ? _inputBuf2 : len === 1 ? _inputBuf1 : new Int32Array(len * 6);
+    for (let i = 0; i < len; i++) {
+      const f = frames[i], o = i * 6;
+      flat[o] = f.seq; flat[o + 1] = f.throttle; flat[o + 2] = f.pitch;
+      flat[o + 3] = f.roll; flat[o + 4] = f.yaw; flat[o + 5] = f.buttons;
+    }
     try {
       sh().vehicleInput(p.vehicle.guid, flat);
       stats.inputsSent++;
@@ -1112,14 +1133,19 @@ export function installVehicles(deps = {}) {
   function armament(v, last) {
     const ws = v.profile?.weapons || [];
     if (!ws.length) return null;
-    const ext = v.profile?.weaponExt || [];
-    let guns = 0, rails = 0;
-    const bombs = [];
-    for (let i = 0; i < ws.length; i++) {
-      if (ws[i].kind === 1) guns++;
-      else if (ws[i].kind === 2) rails++;
-      else if (ws[i].kind === 3) bombs.push(Math.round((ext[i]?.massKg ?? 0) * 2.20462 / 100) * 100 || "?");
+    if (v._armProfile !== v.profile) {
+      const ext = v.profile?.weaponExt || [];
+      let guns = 0, rails = 0;
+      const bombs = [];
+      for (let i = 0; i < ws.length; i++) {
+        if (ws[i].kind === 1) guns++;
+        else if (ws[i].kind === 2) rails++;
+        else if (ws[i].kind === 3) bombs.push(Math.round((ext[i]?.massKg ?? 0) * 2.20462 / 100) * 100 || "?");
+      }
+      v._armProfile = v.profile;
+      v._armStatic = { guns, rails, bombs };
     }
+    const { guns, rails, bombs } = v._armStatic;
     let missileMask = last?.missileMask, bombMask = last?.bombMask;
     // the pilot's own fired marks show at once (the server's mask follows within a state)
     for (const w of v.spent) {
@@ -1133,16 +1159,22 @@ export function installVehicles(deps = {}) {
   /** The next bomb station the server will release (its BombOrder: heaviest first, then left before right), or -1. */
   function nextBomb(v, last) {
     const ws = v.profile?.weapons || [];
+    const bm = Number.isFinite(last?.bombMask) ? last.bombMask : -1;
+    const key = `${bm}:${v.spent.size}`;
+    if (v._nextBombProfile === v.profile && v._nextBombKey === key) return v._nextBombIdx;
     const ext = v.profile?.weaponExt || [];
     const cands = [];
     for (let i = 0; i < ws.length; i++) {
       if (ws[i].kind !== 3) continue;
       const { ordinal } = kindOrdinal(v.profile, i);
-      const loaded = Number.isFinite(last?.bombMask) ? ((last.bombMask >>> ordinal) & 1) === 1 : true;
+      const loaded = bm >= 0 ? ((bm >>> ordinal) & 1) === 1 : true;
       if (loaded && !v.spent.has(i)) cands.push(i);
     }
     cands.sort((a, b) => ((ext[b]?.massKg ?? 0) - (ext[a]?.massKg ?? 0)) || ((ws[a].muzzle?.[0] ?? 0) - (ws[b].muzzle?.[0] ?? 0)));
-    return cands.length ? cands[0] : -1;
+    v._nextBombProfile = v.profile;
+    v._nextBombKey = key;
+    v._nextBombIdx = cands.length ? cands[0] : -1;
+    return v._nextBombIdx;
   }
 
   const _proj = THREE ? new THREE.Vector3() : null;

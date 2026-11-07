@@ -13,6 +13,8 @@
 // canopy follows the rig's root scale (`poseOf(guid).scale`, the heritage's CharGen scale). The line ends at the body
 // never shrink with the opening dome.
 
+import { prewarmSubtree } from "../bake_prewarm.js";
+
 export const CANOPY = Object.freeze({
   // a body out of view this long never gets its Touchdown here (events go to sessions still tracking the derelict, which
   // crashes and despawns): the canopy is dropped instead of leaking open — and reappearing over the player on foot
@@ -118,6 +120,14 @@ export function createChutes(deps = {}) {
     const lineMat = new THREE.LineBasicMaterial({ color: 0x3a3a30 });
     lineMat.userData.__disposable = true;
     shared = { dome, domeMat, lineMat };
+    try {
+      const grp = new THREE.Group();
+      grp.add(new THREE.Mesh(dome, domeMat));
+      const lg = new THREE.BufferGeometry();
+      lg.setAttribute("position", new THREE.BufferAttribute(new Float32Array(6), 3));
+      grp.add(new THREE.LineSegments(lg, lineMat));
+      prewarmSubtree(live, grp).then(() => lg.dispose(), () => lg.dispose());
+    } catch (_) { /* best effort */ }
     return shared;
   }
 
@@ -210,6 +220,7 @@ export function createChutes(deps = {}) {
 
   return {
     open, close, tick, remove,
+    warm() { ensureShared(); },
     has: (guid) => canopies.has(guid >>> 0),
     stats: () => ({ live: canopies.size, opened }),
     dispose() {
