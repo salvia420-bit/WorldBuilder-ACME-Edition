@@ -266,6 +266,10 @@ uniform float uAcAmbLevel;
 uniform float uSlopeShadingEnabled;
 uniform float uWaterGlint;          // 0..1
 uniform float uCanopy;              // 0..1 strength of the forest tint
+uniform float uCloudShadowEnabled;
+uniform sampler2DArray uCloudShadowMap;
+uniform mat4 uCloudShadowMatrix0;
+uniform float uCloudShadowStrength;
 #ifdef HB_WORLD_PRESENCE
 uniform highp sampler2D hbLbPresence;  // lb_presence.js: G = near ring drawn
 uniform vec2 hbLbPresenceOrigin;
@@ -374,7 +378,22 @@ void main() {
   albedo = terrainPaintLight(albedo, n, sunDir, vViewDepth, uPaintLight);
   float ndotl = 1.0;
   if (uSlopeShadingEnabled > 0.5 && !acGouraud) ndotl = terrainSunNdotl(n, sunDir);
-  vec3 lit = terrainApplyLight(albedo, ndotl, 1.0, 1.0);
+  float cloudShadow = 1.0;
+  if (uCloudShadowEnabled > 0.5) {
+    vec3 worldPos3 = vec3(vWorldXy.x, vWorldZ, -vWorldXy.y);
+    vec4 csClip = uCloudShadowMatrix0 * vec4(worldPos3, 1.0);
+    vec2 csUv = (csClip.xy / csClip.w) * 0.5 + 0.5;
+    vec2 csEdge = smoothstep(vec2(0.0), vec2(0.08), csUv)
+                * smoothstep(vec2(0.0), vec2(0.08), vec2(1.0) - csUv);
+    float csInBounds = csEdge.x * csEdge.y;
+    if (csInBounds > 0.001) {
+      vec4 bsm = texture(uCloudShadowMap, vec3(csUv, 0.0));
+      float opticalDepth = bsm.b + bsm.a;
+      float shadowTrans = max(exp(-opticalDepth * uCloudShadowStrength), 0.25);
+      cloudShadow = mix(1.0, shadowTrans, csInBounds);
+    }
+  }
+  vec3 lit = terrainApplyLight(albedo, ndotl, cloudShadow, 1.0);
   // water seen from the air: Fresnel (little reflection looking straight down, more toward the horizon), a sky
   // sheen from the fog colour (the horizon radiance) and a tight sun glint that is strongest at grazing angles
   if (water > 0.0 && uWaterGlint > 0.0) {
@@ -524,6 +543,10 @@ function _makeMaterial(scene3d, data) {
     ? scene3d.terrainMaterials.find((m) => m && m.uniforms && m.uniforms.uAtlas && m.uniforms.uBaseTexTiling)
     : null;
   const tiling = src?.uniforms?.uBaseTexTiling?.value ?? new Array(33).fill(1);
+  const dummyShadowArr = new THREE.DataArrayTexture(new Uint8Array(4), 1, 1, 1);
+  dummyShadowArr.format = THREE.RGBAFormat;
+  dummyShadowArr.type = THREE.UnsignedByteType;
+  dummyShadowArr.needsUpdate = true;
   const mat = new THREE.ShaderMaterial(withLogDepth({
     uniforms: {
       uHeightIdx: { value: hTex },
@@ -547,6 +570,10 @@ function _makeMaterial(scene3d, data) {
       uSlopeShadingEnabled: { value: 1.0 },
       uWaterGlint: { value: 1.0 },
       uCanopy: { value: 1.0 },
+      uCloudShadowEnabled: { value: 0.0 },
+      uCloudShadowMap: { value: dummyShadowArr },
+      uCloudShadowMatrix0: { value: new THREE.Matrix4() },
+      uCloudShadowStrength: { value: 2.0 },
       uWorldDepthBias: { value: 2.5e-6 },
       fogColor: { value: new THREE.Color(0xc3c8dc) },
       fogNear: { value: 150 },
@@ -606,6 +633,20 @@ export function setWorldTierWanted(scene3d, wanted) {
 
 /** Copy the live lighting uniforms from a near-ring terrain material (the far ring does the same). */
 function _copyLighting(scene3d, u) {
+  const vol = scene3d?.cloudOverlay?.volume;
+  const cp = vol?.effect?.cloudsPass;
+  const shadowTex = cp?.shadowBuffer;
+  const shadowMats = vol?.material?.uniforms?.shadowMatrices?.value;
+  if (shadowTex && shadowMats && shadowMats[0] && !scene3d?.__cloudShadowDisabled) {
+    u.uCloudShadowEnabled.value = 1.0;
+    u.uCloudShadowMap.value = shadowTex;
+    u.uCloudShadowMatrix0.value.copy(shadowMats[0]);
+    if (Number.isFinite(scene3d.__cloudShadowStrength)) {
+      u.uCloudShadowStrength.value = scene3d.__cloudShadowStrength;
+    }
+  } else if (scene3d?.__cloudShadowDisabled) {
+    u.uCloudShadowEnabled.value = 0.0;
+  }
   const src = Array.isArray(scene3d?.terrainMaterials)
     ? scene3d.terrainMaterials.find((m) => m && m.uniforms && m.uniforms.uSunDir)
     : null;

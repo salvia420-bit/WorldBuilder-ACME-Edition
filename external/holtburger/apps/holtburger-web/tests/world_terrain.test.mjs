@@ -12,7 +12,7 @@ import {
   WORLD_VERTEX_GLSL, WORLD_FRAGMENT_GLSL, sampleHeight, worldGroundHeight,
 } from "../scene3d/world_terrain.js";
 import {
-  flightViewEnabled, viewDistanceM, flightFogBand, quantizedFar, hazeScale, radialAltitude, FLY_ENTER_AGL, FLY_EXIT_AGL,
+  flightViewEnabled, viewDistanceM, flightFogBand, quantizedFar, hazeScale, radialAltitude, ecefAnchorForWorld, FLY_ENTER_AGL, FLY_EXIT_AGL,
   highSubjectAgl, objRadiusForAgl, flightPrewarmEnabled,
 } from "../scene3d/altitude_policy.js";
 import { TERRAIN_SHARED_TAIL_GLSL } from "../scene3d/terrain_shared_glsl.js";
@@ -91,6 +91,9 @@ check("fragment: per-landblock presence discard through the shared hand-off rule
   && /if \(hbNearCovers\(vWorldXy \/ 192\.0\)\) discard;/.test(WORLD_FRAGMENT_GLSL));
 check("fragment: no read of a presence B channel (the field is RG: B is always 0)", !/\bpr\.b\b|\.b > 0\.5/.test(WORLD_FRAGMENT_GLSL));
 check("fragment: the near ring's atlas + per-code tiling", /uniform sampler2DArray uAtlas/.test(WORLD_FRAGMENT_GLSL) && /uBaseTexTiling\[33\]/.test(WORLD_FRAGMENT_GLSL));
+check("fragment: takram cloud shadow cascade sampling (uCloudShadowMap + uCloudShadowMatrix0)",
+  /uniform sampler2DArray uCloudShadowMap;/.test(WORLD_FRAGMENT_GLSL) && /uCloudShadowMatrix0/.test(WORLD_FRAGMENT_GLSL)
+  && /terrainApplyLight\(albedo, ndotl, cloudShadow, 1\.0\)/.test(WORLD_FRAGMENT_GLSL));
 check("fragment: the SHARED lighting + fog tail, verbatim", WORLD_FRAGMENT_GLSL.includes(TERRAIN_SHARED_TAIL_GLSL));
 check("no backticks inside the GLSL", !WORLD_VERTEX_GLSL.slice(1).includes("`") && !WORLD_FRAGMENT_GLSL.slice(1).includes("`"));
 
@@ -105,6 +108,10 @@ check("far quantizer: 5 km floor, ×1.5 steps, ≥ 1.25 D, ≤ 250 km",
 check("haze: 1 on the ground and to 300 m, 0 from 1.5 km", hazeScale(0) === 1 && hazeScale(300) === 1 && hazeScale(1500) === 0 && hazeScale(900) > 0 && hazeScale(900) < 1);
 check("radial altitude: AC z + d²/2R (177 m over Holtburg)", Math.abs(radialAltitude(33000, 100, -36000) - (100 + (33000 ** 2 + 36000 ** 2) / (2 * 6360000))) < 1e-6
   && Math.abs(radialAltitude(33000, 0, -36000) - 187.5) < 2);
+check("ECEF tangent anchor keeps Ocean flight & Dericost cameras below the 750 m cumulus deck",
+  ecefAnchorForWorld(33000, -36000).anchorZ === 0
+  && radialAltitude(24480, 220, -58944) > 300 && radialAltitude(24480, 220, -58944) < 500
+  && radialAltitude(12380, 439, -107615) > 150 && radialAltitude(12380, 439, -107615) < 450);
 check("hysteresis band: enter above exit", FLY_ENTER_AGL > FLY_EXIT_AGL);
 check("?flightPrewarm: default ON on a page that can fly, never without vehicles, =off escapes",
   flightPrewarmEnabled("", true) === true && flightPrewarmEnabled("", false) === false

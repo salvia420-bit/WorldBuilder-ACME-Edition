@@ -2408,6 +2408,15 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
       // 2026-10-07 `?aerialSun` — AerialPerspective lights its inscatter with
       // the sky's sun (it was (0,0,0); see aerialSunEnabled). Two vec3 compares.
       if (aerialSunOn && atmosphereSky) syncAerialSun(aerialPerspective, atmosphereSky);
+      if (mainCamera?.position) {
+        const cx = mainCamera.position.x, cz = mainCamera.position.z;
+        if (atmosphereSky?.syncWorldECEF) {
+          atmosphereSky.syncWorldECEF(cx, cz);
+        }
+        if (aerialPerspective?.worldToECEFMatrix && atmosphereSky?.skyMaterial?.worldToECEFMatrix) {
+          aerialPerspective.worldToECEFMatrix.copy(atmosphereSky.skyMaterial.worldToECEFMatrix);
+        }
+      }
       const isIndoor = !!skyDome?._lastIsIndoor;
       // cells-portals-2 `?indoorLandscapeGate` (default ON): this armed indoor
       // frame draws no landscape — retail's sky (GameSky::Draw) is inside

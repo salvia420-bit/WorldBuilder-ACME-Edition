@@ -58,6 +58,7 @@ import {
   DISPLAY_EXPOSURE_DEFAULT,
 } from './cloud_night.js';
 import { rustFlag } from './rust/scene_core.js';
+import { ecefAnchorForWorld } from './altitude_policy.js';
 // Lane F2 (2026-10-26) — `?hotTerrainShared` (DEFAULT OFF): the terrain cloud
 // shadow uniforms as one shared `{value}` each (scene3d/terrain_shared_uniforms.js).
 import {
@@ -456,8 +457,11 @@ export class CloudVolume {
     // see [[project_holtburger_clouds_f_done]]; we patch it in tick().
     this.effect.correctAltitude = false;
     this._bottomRadius = bottomRadius;
+    this._anchorY = 0;
+    this._anchorZ = 0;
+    this._camScratch = new THREE.Vector3();
     this.material = this.effect.cloudsPass.currentMaterial;
-    _hbInstallTrueCameraHeight(this.effect, bottomRadius);
+    _hbInstallTrueCameraHeight(this.effect, bottomRadius, this);
 
     // Temporal-resolve variance clipping, LOOSENED (2026-08-01, live 1070
     // A/B). takram's varianceGamma=2 clips the history buffer so hard
@@ -666,6 +670,40 @@ export class CloudVolume {
   }
 
   /**
+   * Synchronize the ECEF tangent-sphere origin with the active camera so
+   * extended coordinates (Ocean transit corridor AC Y=48.96..68.93 km and
+   * Dericost AC Y=68.93..117.89 km) do not drop below the spherical horizon
+   * or tilt rayIntersectsGround. On Dereth (AC Y <= 36 km), anchorY=0 and
+   * anchorZ=0 so the transform is 100% unchanged.
+   */
+  syncWorldECEF(camera) {
+    const cam = camera || this.effect?.camera;
+    if (!cam || !this.effect) return;
+    const p = typeof cam.getWorldPosition === 'function' ? cam.getWorldPosition(this._camScratch) : cam.position;
+    if (!p) return;
+    const { anchorY, anchorZ } = ecefAnchorForWorld(p.x, p.z);
+    if (anchorY === this._anchorY && anchorZ === this._anchorZ) return;
+    const dY = anchorY - this._anchorY;
+    const dZ = anchorZ - this._anchorZ;
+    this._anchorY = anchorY;
+    this._anchorZ = anchorZ;
+    this.effect.worldToECEFMatrix.makeTranslation(0, this._bottomRadius - anchorY, -anchorZ);
+    this.effect.ecefToWorldMatrix.copy(this.effect.worldToECEFMatrix).invert();
+    if (this.effect.shapeOffset && this.effect.shapeRepeat) {
+      this.effect.shapeOffset.y += dY * this.effect.shapeRepeat.y;
+      this.effect.shapeOffset.z += dZ * this.effect.shapeRepeat.z;
+    }
+    if (this.effect.shapeDetailOffset && this.effect.shapeDetailRepeat) {
+      this.effect.shapeDetailOffset.y += dY * this.effect.shapeDetailRepeat.y;
+      this.effect.shapeDetailOffset.z += dZ * this.effect.shapeDetailRepeat.z;
+    }
+    if (!this._driftWobble && this.effect.localWeatherOffset) {
+      this.effect.localWeatherOffset.x += (-dZ / 90000) * 0.35;
+      this.effect.localWeatherOffset.y += (-dZ / 90000) * 0.65;
+    }
+  }
+
+  /**
    * Apply an AC SkyState snapshot to the cloud material's uniforms.
    * No-op if `state` is null/undefined (matches sky_lighting.js's
    * tick semantics — when no session is up, leave defaults).
@@ -677,6 +715,7 @@ export class CloudVolume {
    */
   tick(state, _objStates) {
     if (!state) return;
+    this.syncWorldECEF(this.effect?.camera);
     const u = this.material.uniforms;
 
     // Sky-K.6 follow-on: clouds now sample the real Bruneton tables
@@ -1194,7 +1233,7 @@ export const _internals = {
 // and today's look exactly. The negative height also kept takram's haze term at zero (approximateHaze returns 0
 // for cameraHeight · modulation < 0); hazeDensityScale is held at 0 while the true height is in use, so the haze
 // stays what it has always been.
-function _hbInstallTrueCameraHeight(effect, bottomRadius) {
+function _hbInstallTrueCameraHeight(effect, bottomRadius, volume = null) {
   try {
     const v = (new URLSearchParams(globalThis.location?.search || "").get("cloudTrueHeight") || "").trim().toLowerCase();
     if (v === "off" || v === "0" || v === "false" || v === "no") return;
@@ -1208,13 +1247,17 @@ function _hbInstallTrueCameraHeight(effect, bottomRadius) {
   if (typeof window !== "undefined") window.__cloudTrueHeight = () => ({ ...stats });
   if (typeof window !== "undefined" && !window.__cloudHighBand) window.__cloudHighBand = () => ({ enabled: cloudHighBandEnabled(), ..._highBandStats });
   pass.copyCameraSettings = function hbTrueCameraHeight(camera) {
+    if (volume && typeof volume.syncWorldECEF === "function") volume.syncWorldECEF(camera);
     orig.call(this, camera);
     stats.frames += 1;
     try {
       const u = this.currentMaterial?.uniforms;
       if (!u || !u.cameraHeight || !camera || typeof camera.getWorldPosition !== "function") return;
       const p = camera.getWorldPosition(tmp);
-      const radial = Math.max(0, p.y + (p.x * p.x + p.z * p.z) / (2 * bottomRadius));
+      const { anchorY, anchorZ } = ecefAnchorForWorld(p.x, p.z);
+      const yEcef = p.y - anchorY;
+      const zEcef = p.z - anchorZ;
+      const radial = Math.max(0, yEcef + (p.x * p.x + zEcef * zEcef) / (2 * bottomRadius));
       const minH = Number.isFinite(u.minHeight?.value) ? u.minHeight.value : 750;
       if (radial >= minH - 150) {
         u.cameraHeight.value = radial;

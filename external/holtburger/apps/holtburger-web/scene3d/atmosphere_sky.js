@@ -49,6 +49,7 @@ import {
 // Before the sky is populated (NaN / stale pkg) the legacy formula is used
 // unchanged.
 import { gameDateMsNow } from "./sky_game_date.js";
+import { ecefAnchorForWorld } from "./altitude_policy.js";
 
 /**
  * Synthesize a Date that advances at AC game-time pace from the launch
@@ -81,6 +82,7 @@ export class AtmosphereSky {
     const atm = atmosphere ?? AtmosphereParameters.DEFAULT;
     const tex = atmosphereRuntime.textures;
 
+    this._bottomRadius = atm.bottomRadius;
     this.skyScene = skyScene;
     this.skyDome = skyDome ?? null;
 
@@ -330,6 +332,22 @@ export class AtmosphereSky {
 
     this._lastState = state;
     this._tickCount += 1;
+  }
+
+  /**
+   * Keep the sky and star ECEF frame aligned with CloudVolume and AerialPerspective
+   * when flying north across the Ocean corridor and Dericost.
+   */
+  syncWorldECEF(x3, z3) {
+    const { anchorY, anchorZ } = ecefAnchorForWorld(x3, z3);
+    const y = (this._bottomRadius || 6360000) - anchorY;
+    const z = -anchorZ;
+    if (this.skyMaterial?.worldToECEFMatrix) {
+      this.skyMaterial.worldToECEFMatrix.makeTranslation(0, y, z);
+    }
+    if (this.starsMaterial?.worldToECEFMatrix) {
+      this.starsMaterial.worldToECEFMatrix.makeTranslation(0, y, z);
+    }
   }
 
   /**

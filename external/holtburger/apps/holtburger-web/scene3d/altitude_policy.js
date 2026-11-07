@@ -130,9 +130,34 @@ export function hazeScale(agl) {
   const t = Math.min(1, Math.max(0, (agl - 300) / 1200));
   return 1 - t * t * (3 - 2 * t);
 }
-/** takram's radial altitude of a three-world point (the ECEF pole sits under AC (0, 0)). */
+function _ecefSmoothstep(a, b, x) {
+  const t = Math.min(1, Math.max(0, (x - a) / (b - a)));
+  return t * t * (3 - 2 * t);
+}
+
+/**
+ * ECEF tangent-sphere anchor for extended world coordinates beyond Dereth (Ocean transit corridor & Dericost).
+ * For Dereth south/central (z3 >= -36000, i.e. AC Y <= 36000, including Holtburg), returns {anchorY: 0, anchorZ: 0}
+ * so Dereth's spherical frame is 100% byte-identical. North of AC Y = 36 km, anchorZ tracks z3 + 36000 so
+ * z_ecef stays at -36000 m (preventing the d^2/2R spherical drop-off and horizon normal tilt at 50-118 km),
+ * and anchorY lifts smoothly onto Dericost's plateau datum so the 750 m cumulus deck sits 350-550 m AGL across Dericost.
+ */
+export function ecefAnchorForWorld(x3, z3) {
+  if (!(z3 < -36000)) return { anchorY: 0, anchorZ: 0 };
+  const acY = -z3;
+  const anchorZ = z3 + 36000;
+  const tContinent = _ecefSmoothstep(64000, 74000, acY);
+  const tNorth = _ecefSmoothstep(75000, 106000, acY);
+  const anchorY = tContinent * (140 + 180 * tNorth);
+  return { anchorY, anchorZ };
+}
+
+/** takram's radial altitude of a three-world point (anchored for extended Ocean + Dericost coordinates). */
 export function radialAltitude(x3, y3, z3) {
-  return y3 + (x3 * x3 + z3 * z3) / (2 * EARTH_R);
+  const { anchorY, anchorZ } = ecefAnchorForWorld(x3, z3);
+  const yEcef = y3 - anchorY;
+  const zEcef = z3 - anchorZ;
+  return yEcef + (x3 * x3 + zEcef * zEcef) / (2 * EARTH_R);
 }
 
 // ---------------------------------------------------------------------------

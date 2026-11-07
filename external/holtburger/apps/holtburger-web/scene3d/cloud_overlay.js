@@ -42,6 +42,7 @@ import * as THREE from 'three';
 import { CloudVolume } from './cloud_volume.js';
 import { applyCloudLook, cloudLayersMatchLook } from './cloud_storm_look.js';
 import { updateFromPosition as wxUpdateFromPosition } from './weather_state.js';
+import { ecefAnchorForWorld } from './altitude_policy.js';
 import {
   CloudShape, CloudShapeDetail, LocalWeather, Turbulence,
 } from '@takram/three-clouds';
@@ -865,6 +866,7 @@ export class CloudOverlay {
     // (exposure × AgX); hand the volume the live exposure (`?exposure`,
     // `__setExposure`). A number compare per frame; re-solves only on change.
     this.volume?.setDisplayExposure?.(renderer.toneMappingExposure);
+    this.volume?.syncWorldECEF?.(activeCam ?? this.camera);
     if (this._mainPass) {
       // `?cloudsMainPass=on`: the main composer's fxPass runs the raymarch
       // (CloudsEffect.update) with the real scene depth; arm exactly one
@@ -1353,7 +1355,10 @@ function _hbCloudCameraHeight(cam, camWorldY) {
   const w = globalThis.__hbCloudRadialW;
   if (!(w > 0) || !cam?.position) return base;
   const x = cam.position.x, z = cam.position.z;
-  const radial = Math.max(0, camWorldY + (x * x + z * z) / (2 * 6360000));
+  const { anchorY, anchorZ } = ecefAnchorForWorld(x, z);
+  const yEcef = camWorldY - anchorY;
+  const zEcef = z - anchorZ;
+  const radial = Math.max(0, yEcef + (x * x + zEcef * zEcef) / (2 * 6360000));
   return base + (radial - base) * Math.min(1, w);
 }
 
