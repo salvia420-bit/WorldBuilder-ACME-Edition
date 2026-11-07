@@ -1115,6 +1115,7 @@ const _terrainDirtWarn = { hit: false };
  *  **false on all four tiers** this wave (§5.9 ship-OFF; the promotion target is
  *  high/ultra true). */
 export function terrainDirtEnabled() {
+  if (globalThis.__hbDericostVfxActive === true && _strFlag("terrainDirt") === null) return true;
   if (_terrainDirt !== undefined) return _terrainDirt;
   const r = _terrainStrictFlag("terrainDirt", "terrainDirt", false, _terrainDirtWarn);
   return r.memo ? (_terrainDirt = r.value) : r.value;
@@ -1270,6 +1271,7 @@ const _terrainSwampWarn = { hit: false };
  *  opt-in; absent ⇒ the quality preset's `terrainSwamp`, **false on all four
  *  tiers** this wave (§5.9 ship-OFF; the promotion target is high/ultra true). */
 export function terrainSwampEnabled() {
+  if (globalThis.__hbDericostVfxActive === true && _strFlag("terrainSwamp") === null) return true;
   if (_terrainSwamp !== undefined) return _terrainSwamp;
   const r = _terrainStrictFlag("terrainSwamp", "terrainSwamp", false, _terrainSwampWarn);
   return r.memo ? (_terrainSwamp = r.value) : r.value;

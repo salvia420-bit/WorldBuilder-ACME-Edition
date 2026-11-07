@@ -842,6 +842,20 @@ function _readPlayerPos(scene3d, out) {
   try {
     const cs = scene3d?.cameraSwitcher;
     const p = cs && typeof cs._safePlayerPos === "function" ? cs._safePlayerPos() : null;
+    const cam = scene3d?.camera || cs?.activeCamera || null;
+    const camPos = cam?.position;
+    if (camPos && Number.isFinite(camPos.x) && Number.isFinite(camPos.z)) {
+      const camAcX = camPos.x;
+      const camAcY = -camPos.z;
+      const camOnDericost = camAcY >= 68928 && camAcY <= 117888;
+      if (camOnDericost && (!p || !Number.isFinite(p.x) || !Number.isFinite(p.y) || Math.hypot(p.x - camAcX, p.y - camAcY) > 500)) {
+        out.x = camAcX;
+        out.y = camAcY;
+        const gh = _oracle && typeof _oracle.heightAt === "function" ? _oracle.heightAt(camAcX, camAcY) : null;
+        out.z = Number.isFinite(gh) ? gh : (Number.isFinite(camPos.y) ? camPos.y : 0);
+        return true;
+      }
+    }
     if (p && Number.isFinite(p.x) && Number.isFinite(p.y)) {
       out.x = p.x; out.y = p.y; out.z = Number.isFinite(p.z) ? p.z : 0;
       return true;

@@ -176,7 +176,9 @@ export class LayeredHazePass extends Pass {
     }
     try { const c = this.getFogColor(); if (c && c.isColor) u.uHazeColor.value.copy(c); } catch (_) { /* last colour */ }
     const p = this.params;
-    u.uHaze.value.set(strength, p.nearM, p.distScaleM, p.heightScaleM);
+    const onDericost = !!(cam && cam.position && -cam.position.z >= 68928);
+    const heightScaleM = onDericost ? Math.max(p.heightScaleM, (Number.isFinite(cam.position.y) ? Math.max(0, cam.position.y) : 200) + p.heightScaleM) : p.heightScaleM;
+    u.uHaze.value.set(strength, p.nearM, p.distScaleM, heightScaleM);
     u.uHazeTone.value.set(p.blue, p.maxHaze);
   }
 

@@ -14,9 +14,13 @@ import * as THREE from "three";
 import { softenCanopyNormals, canopySoftenStrength } from "./canopy_soften.js";
 import { isTreeDid } from "./tree_wind.js";
 import { windSwayGpu } from "./vfx/components/windSwayGpu.js";
-import { worldGroundHeight, loadWorldData, DERICOST_Y_MIN, DERICOST_Y_MAX } from "./world_terrain.js";
+import { worldGroundHeight, loadWorldData, extractDericostLandblockData, DERICOST_Y_MIN, DERICOST_Y_MAX } from "./world_terrain.js";
+import { terrainVfxNoteLandblockMesh, terrainVfxLandblockGone, lbKeyFromXY } from "./terrain_vfx.js";
+import { initTerrainSwamp } from "./terrain_swamp.js";
+import { initTerrainDirt } from "./terrain_dirt.js";
+import { readParticleEnv } from "./vfx/particle_env.js";
 
-const VFX_GLOBALS = { uTime: { value: 0 } };
+const VFX_GLOBALS = { uTime: { value: 0 }, uWindDir: { value: new THREE.Vector2(0.707, 0.707) }, uWetness: { value: 0 } };
 
 const LB_M = 192.0;
 const STREAM_RADIUS_LBS = 3; // 7x7 landblocks around camera (1.34 km x 1.34 km)
@@ -848,6 +852,8 @@ export function initDericostWorld(scene3d, { parent = null } = {}) {
     buildingTemplates,
     doorTemplate,
     lbGroups: new Map(), // lbHex -> { status, group, lastTouchMs }
+    vfxNoted: new Map(), // lbHex -> { lbX, lbY }
+    vfxSwampDirtInited: false,
     fetchQueue: [],
     activeFetches: 0,
     lastCenterKey: null,
@@ -857,6 +863,7 @@ export function initDericostWorld(scene3d, { parent = null } = {}) {
   if (typeof window !== "undefined") {
     window.__dericostWorld = () => ({
       loadedLandblocks: _state.lbGroups.size,
+      vfxNotedLandblocks: _state.vfxNoted.size,
       builtLandblocks: Math.max(0, _state.root.children.length - 3),
       activeFetches: _state.activeFetches,
       queuedFetches: _state.fetchQueue.length,
@@ -1135,14 +1142,36 @@ export function tickDericostWorld(scene3d, camera, nowMs = 0) {
   // Only stream Dericost props when camera is near or over Dericost (Y >= 67,000 m) and below 2,800 m altitude
   if (ay < 67000.0 || ay > DERICOST_Y_MAX + 2000.0 || az > 2800.0) {
     st.root.visible = ay >= 67000.0;
+    if (ay < 67000.0 && st.vfxNoted.size > 0) {
+      for (const [, v] of st.vfxNoted.entries()) {
+        try { terrainVfxLandblockGone(lbKeyFromXY(v.lbX, v.lbY), "evict"); } catch (_) {}
+      }
+      st.vfxNoted.clear();
+      globalThis.__hbDericostVfxActive = false;
+    }
     return;
   }
   st.root.visible = true;
+  globalThis.__hbDericostVfxActive = true;
+  if (!st.vfxSwampDirtInited) {
+    st.vfxSwampDirtInited = true;
+    try {
+      const parent = scene3d?.terrainGroup?.parent || st.root.parent;
+      if (typeof window !== "undefined" && !window.__terrainDirt) {
+        const dirt = initTerrainDirt({ THREE, scene3d, parent, globals: VFX_GLOBALS, readEnv: readParticleEnv });
+        if (dirt) window.__terrainDirt = dirt;
+      }
+      if (typeof window !== "undefined" && !window.__terrainSwamp) {
+        const swamp = initTerrainSwamp({ THREE, scene3d, parent, readEnv: readParticleEnv });
+        if (swamp) window.__terrainSwamp = swamp;
+      }
+    } catch (_) { /* fail-soft */ }
+  }
 
   const centerLbX = Math.max(0, Math.min(254, Math.floor(ax / LB_M)));
   const centerLbY = Math.max(0, Math.min(254, Math.floor((ay - DERICOST_Y_MIN) / LB_M)));
   const centerKey = `${centerLbX}_${centerLbY}`;
-  if (centerKey === st.lastCenterKey && st.fetchQueue.length === 0) return;
+  if (centerKey === st.lastCenterKey && st.fetchQueue.length === 0 && st.vfxNoted.size >= 25) return;
   st.lastCenterKey = centerKey;
 
   const wanted = new Set();
@@ -1155,6 +1184,23 @@ export function tickDericostWorld(scene3d, camera, nowMs = 0) {
       const hex = (((lbX << 8) | lbY) >>> 0).toString(16).toUpperCase().padStart(4, "0");
       wanted.add(hex);
       candidates.push({ lbX, lbY, hex, dist2: dx * dx + dy * dy });
+      if (!st.vfxNoted.has(hex)) {
+        const lbData = extractDericostLandblockData(lbX, lbY);
+        if (lbData) {
+          try {
+            terrainVfxNoteLandblockMesh(scene3d, {
+              userData: {
+                lbX,
+                lbY: lbData.lbY,
+                terrainCodes: lbData.codes,
+                heights: lbData.heights,
+                roadCodes: lbData.roads,
+              },
+            });
+            st.vfxNoted.set(hex, { lbX, lbY: lbData.lbY, dLbY: lbY });
+          } catch (_) { /* fail-soft */ }
+        }
+      }
     }
   }
   candidates.sort((a, b) => a.dist2 - b.dist2);
@@ -1166,6 +1212,13 @@ export function tickDericostWorld(scene3d, camera, nowMs = 0) {
       entry.status = "evicted";
       if (entry.group) st.root.remove(entry.group);
       st.lbGroups.delete(hex);
+    }
+  }
+  for (const [hex, vfxEntry] of st.vfxNoted.entries()) {
+    const d2 = (vfxEntry.lbX - centerLbX) ** 2 + ((vfxEntry.dLbY ?? (vfxEntry.lbY - 359)) - centerLbY) ** 2;
+    if (d2 > (STREAM_RADIUS_LBS + 2) ** 2) {
+      try { terrainVfxLandblockGone(lbKeyFromXY(vfxEntry.lbX, vfxEntry.lbY), "evict"); } catch (_) {}
+      st.vfxNoted.delete(hex);
     }
   }
 

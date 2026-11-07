@@ -518,16 +518,17 @@ export function createTerrainOracle(opts = {}) {
     }
     const lbX = Math.floor(x / METERS_PER_LANDBLOCK);
     const lbY = Math.floor(y / METERS_PER_LANDBLOCK);
-    // Off-world. Matches `WorldState::terrain_height_at`'s `(0..256)` guard —
+    // Off-world. Matches `WorldState::terrain_height_at`'s `(0..256)` guard on X
+    // and extends Y through Dericost (lbY = 359..613) —
     // and is REQUIRED, because `lbKeyFromXY` masks with `& 0xff` and would
     // otherwise wrap -1 onto landblock 255.
-    if (lbX < 0 || lbX > 255 || lbY < 0 || lbY > 255) {
+    if (lbX < 0 || lbX > 255 || lbY < 0 || lbY > 614) {
       misses += 1;
       return null;
     }
     const lbKey = lbKeyFromXY(lbX, lbY);
     const e = entryFor(lbKey);
-    if (!e) {
+    if (!e || e.lbY !== lbY) {
       misses += 1;
       return null;
     }
@@ -648,13 +649,13 @@ export function createTerrainOracle(opts = {}) {
     }
     const lbX = Math.floor(x / METERS_PER_LANDBLOCK);
     const lbY = Math.floor(y / METERS_PER_LANDBLOCK);
-    if (lbX < 0 || lbX > 255 || lbY < 0 || lbY > 255) {
+    if (lbX < 0 || lbX > 255 || lbY < 0 || lbY > 614) {
       misses += 1;
       return -1;
     }
     const lbKey = lbKeyFromXY(lbX, lbY);
     const e = entryFor(lbKey);
-    if (!e) {
+    if (!e || e.lbY !== lbY) {
       misses += 1;
       return -1;
     }

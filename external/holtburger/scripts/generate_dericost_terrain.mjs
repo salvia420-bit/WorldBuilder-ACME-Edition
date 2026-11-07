@@ -550,64 +550,62 @@ export function assignTerrainType(x, yLocal, z, maxNeighborDeltaM = 0.0) {
   const biome = resolveBiomeAt(x, yGlobal, z);
   const n = (sMain.fbm(x / 480.0, yLocal / 480.0, 3) + 1.0) * 0.5;
   const detailNoise = (sDune.fbm(x / 180.0, yLocal / 180.0, 3) + 1.0) * 0.5;
-  const isSteepCliff = maxNeighborDeltaM >= 6.5;
-  const isModerateSlope = maxNeighborDeltaM >= 4.0;
+  const isSteepCliff = maxNeighborDeltaM >= 19.5;
+  const isModerateSlope = maxNeighborDeltaM >= 14.5;
 
   switch (biome) {
     case 'Gelid Plateau Alpine':
       if (isSteepCliff) return (n > 0.35) ? CODE.BarrenRock : CODE.SemiBarrenRock;
-      if (isModerateSlope && n > 0.5) return CODE.SemiBarrenRock;
+      if (isModerateSlope && detailNoise > 0.65) return CODE.SemiBarrenRock;
       if (z >= 620.0) return (n > 0.4) ? CODE.BlueIce : CODE.Snow;
-      if (z >= 580.0) return (n > 0.5) ? CODE.Snow : CODE.Ice;
-      return (n > 0.55) ? CODE.Snow : ((n > 0.28) ? CODE.BarrenRock : CODE.Ice);
+      if (z >= 560.0) return (n > 0.45) ? CODE.Snow : ((detailNoise > 0.35) ? CODE.Ice : CODE.BlueIce);
+      return (n > 0.42) ? CODE.Snow : ((detailNoise > 0.30) ? CODE.Ice : CODE.BarrenRock);
 
     case 'Gelid Plateau':
       if (isSteepCliff) return (n > 0.4) ? CODE.BarrenRock : CODE.SemiBarrenRock;
-      if (isModerateSlope && n > 0.48) return CODE.BarrenRock;
-      if (z >= 500.0) return (n > 0.38) ? CODE.Snow : CODE.Ice;
-      if (z >= 430.0) return (n > 0.55) ? CODE.Snow : ((n > 0.28) ? CODE.Ice : CODE.SemiBarrenRock);
-      return (n > 0.48) ? CODE.Snow : ((n > 0.25) ? CODE.Ice : CODE.BarrenRock);
+      if (isModerateSlope && detailNoise > 0.68) return CODE.BarrenRock;
+      if (z >= 500.0) return (n > 0.36) ? CODE.Snow : ((detailNoise > 0.35) ? CODE.Ice : CODE.BlueIce);
+      if (z >= 415.0) return (n > 0.38) ? CODE.Snow : ((detailNoise > 0.30) ? CODE.Ice : CODE.SemiBarrenRock);
+      return (n > 0.36) ? CODE.Snow : ((detailNoise > 0.28) ? CODE.Ice : CODE.BarrenRock);
 
     case 'Ashatiri Lowlands':
       if (isSteepCliff) return (n > 0.45) ? CODE.BarrenRock : CODE.SedimentaryRock;
-      if (isModerateSlope) return (n > 0.5) ? CODE.SemiBarrenRock : CODE.SedimentaryRock;
-      if (z >= 140.0) return (n > 0.5) ? CODE.BarrenRock : CODE.SemiBarrenRock;
-      if (z >= 90.0) return (n > 0.55) ? CODE.PatchyGrassland : ((n > 0.3) ? CODE.PackedDirt : CODE.SedimentaryRock);
-      return (n > 0.5) ? CODE.Grassland : ((n > 0.25) ? CODE.PatchyDirt : CODE.MudRichDirt);
+      if (isModerateSlope && detailNoise > 0.58) return (n > 0.5) ? CODE.SemiBarrenRock : CODE.SedimentaryRock;
+      if (z >= 210.0) return (n > 0.5) ? CODE.BarrenRock : CODE.SemiBarrenRock;
+      if (z >= 135.0) return (n > 0.52) ? CODE.PatchyGrassland : ((n > 0.28) ? CODE.PackedDirt : CODE.SedimentaryRock);
+      return (n > 0.48) ? CODE.Grassland : ((detailNoise > 0.48) ? CODE.PackedDirt : ((detailNoise > 0.24) ? CODE.PatchyDirt : CODE.MudRichDirt));
 
     case 'Valley of Tresimaen':
-      if (isSteepCliff) return (detailNoise > 0.82) ? CODE.Volcano1 : CODE.ObsidianPlain;
-      if (isModerateSlope) return (n > 0.45) ? CODE.ObsidianPlain : CODE.Volcano2;
-      if (detailNoise > 0.88) return CODE.Volcano1; // Lava fissure lines
-      if (n > 0.68) return CODE.ObsidianPlain;
-      if (n > 0.48) return CODE.Volcano2; // Ash
-      if (n > 0.26) return CODE.ForestFloor;
-      return (detailNoise > 0.5) ? CODE.Moss : CODE.Grassland;
+      if (isSteepCliff) return (detailNoise > 0.65) ? CODE.Volcano1 : CODE.ObsidianPlain;
+      if (detailNoise > 0.62 || (n > 0.56 && detailNoise > 0.48)) return CODE.Volcano1; // Active lava fields & fissures
+      if (n > 0.46 || detailNoise > 0.46) return CODE.Volcano2; // Volcanic ash plains
+      if (n > 0.24) return CODE.ObsidianPlain; // Vitrified obsidian flows
+      return (detailNoise > 0.5) ? CODE.ForestFloor : CODE.PatchyDirt;
 
     case 'Dericost Marshes':
       if (isSteepCliff) return CODE.SedimentaryRock;
-      if (isModerateSlope) return (n > 0.5) ? CODE.PatchyGrassland : CODE.MudRichDirt;
       if (z < 12.0 && detailNoise > 0.62) return CODE.WaterStandingFresh;
-      if (n > 0.58) return CODE.MarshSparseSwamp;
-      if (n > 0.36) return CODE.SeaSlime;
-      if (n > 0.20) return CODE.DarkMoss;
-      return CODE.MudRichDirt;
+      if (n > 0.44 || detailNoise > 0.54) return CODE.MarshSparseSwamp;
+      if (n > 0.30) return CODE.SeaSlime;
+      if (detailNoise > 0.34) return CODE.Argila;
+      if (n > 0.18) return CODE.MudRichDirt;
+      return CODE.DarkMoss;
 
     case 'The High Desert Plateau':
-      if (isSteepCliff) return (n > 0.38) ? CODE.SedimentaryRock : CODE.BarrenRock;
-      if (isModerateSlope) return (n > 0.45) ? CODE.SandRockStrewn : CODE.SedimentaryRock;
-      if (z >= 340.0) return (n > 0.45) ? CODE.SedimentaryRock : CODE.BarrenRock;
-      if (n > 0.48) return CODE.SandYellow;
-      if (n > 0.28) return CODE.SandRockStrewn;
-      if (n > 0.14) return CODE.SandGrey;
-      return CODE.Argila;
+      if (isSteepCliff && z >= 335.0) return (n > 0.38) ? CODE.SedimentaryRock : CODE.BarrenRock;
+      if (z >= 375.0 && detailNoise > 0.60) return (n > 0.45) ? CODE.SedimentaryRock : CODE.BarrenRock;
+      if (n > 0.42) return CODE.SandYellow;
+      if (n > 0.22) return CODE.SandRockStrewn;
+      if (detailNoise > 0.28) return CODE.SandGrey;
+      return (detailNoise > 0.14) ? CODE.PackedDirt : CODE.Argila;
 
     case 'Nesortania Maritime Coast':
       if (isSteepCliff) return (n > 0.4) ? CODE.SedimentaryRock : CODE.BarrenRock;
       if (z < 4.0) return (n > 0.5) ? CODE.WaterShallowSea : CODE.WaterShallowStillSea;
-      if (z < 14.0) return (n > 0.45) ? CODE.SandYellow : CODE.SandRockStrewn;
-      if (z > 65.0) return (n > 0.5) ? CODE.SedimentaryRock : CODE.BarrenRock;
-      return (n > 0.5) ? CODE.LushGrass : CODE.Grassland;
+      if (z < 16.0) return (n > 0.45) ? CODE.SandYellow : CODE.SandRockStrewn;
+      if (z > 135.0 && detailNoise > 0.55) return (n > 0.5) ? CODE.SedimentaryRock : CODE.BarrenRock;
+      if (detailNoise < 0.26) return (n > 0.5) ? CODE.PackedDirt : CODE.PatchyDirt;
+      return (n > 0.48) ? CODE.LushGrass : ((detailNoise > 0.62) ? CODE.RichGrass : CODE.Grassland);
 
     default:
       return CODE.WaterDeepSea | NO_RECORD;

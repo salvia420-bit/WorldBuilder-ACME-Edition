@@ -238,7 +238,12 @@ export function tickAltitudePolicy(scene3d, camera, { nowMs, groundAt = null, su
 
   // fog: loop.js blends today's band toward this by w (scene3d._flightFogOverride)
   const fb = flightFogBand(agl);
-  _st.fog = { near: fb.near, far: fb.far, w };
+  if (onDericostOrOcean && !_st.flying && agl < 150) {
+    const lowT = Math.min(1, Math.max(0, agl / 150));
+    _st.fog = { near: 650 + (fb.near - 650) * lowT, far: 4500 + (fb.far - 4500) * lowT, w };
+  } else {
+    _st.fog = { near: fb.near, far: fb.far, w };
+  }
   scene3d._flightFogOverride = w > 0 ? _st.fog : null;
 
   // far plane: quantized, raised at once, lowered after 3 s

@@ -110,13 +110,13 @@ export function desertWeightAt(lbs, px, py, tuning = MIRAGE_TUNING) {
   for (let dx = -R; dx <= R; dx += 1) {
     for (let dy = -R; dy <= R; dy += 1) {
       const lx = cx + dx, ly = cy + dy;
-      if (lx < 0 || ly < 0 || lx > 255 || ly > 255) continue;
+      if (lx < 0 || ly < 0 || lx > 255 || ly > 614) continue;
       const ox = lx * 192 + 96 - px, oy = ly * 192 + 96 - py;
       const w = 1 - Math.hypot(ox, oy) / tuning.tentM;
       if (w <= 0) continue;
-      const rec = lbs.get((((lx << 24) | (ly << 16)) >>> 0));
+      const rec = lbs.get((((lx & 0xff) << 24) | ((ly & 0xff) << 16)) >>> 0);
       wSum += w;
-      if (rec) fSum += w * rec.frac;
+      if (rec && (!Number.isFinite(rec.y) || Math.abs(rec.y - (ly * 192 + 96)) <= 96)) fSum += w * rec.frac;
     }
   }
   return wSum > 0 ? fSum / wSum : 0;

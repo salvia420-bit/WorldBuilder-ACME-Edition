@@ -1025,7 +1025,7 @@ export function createTerrainGrassProvider(opts = {}) {
   // vertex shader places the blades (GPU PLACEMENT in the header). Without
   // THREE the field / mask arrays and the ring states still exist (the mirror
   // and the node tests read them); only the GPU objects are skipped.
-  const gpuMode = !!(cfg && cfg.gpu === true && !opts.material);
+  let gpuMode = !!(cfg && cfg.gpu === true && !opts.material);
   // 2026-10-12 — GRASS LOD: one scatter pool (+ geometry, material, uniform
   // bag) per ring; ring 0 is what `_pool` / `stats().pool` always meant.
   let lodLook = resolveGrassLodLook(opts.lodLook || {});
@@ -1603,6 +1603,11 @@ export function createTerrainGrassProvider(opts = {}) {
     update(dt, ctx) {
       lastCtx = ctx;
       if (!cfg) return;
+      if (gpuMode && ctx && ctx.playerPos && Number.isFinite(ctx.playerPos.y) && ctx.playerPos.y >= 68928 && ctx.playerPos.y <= 117888) {
+        if (built) provider.dispose();
+        gpuMode = false;
+        lastCtx = ctx;
+      }
       if (!built) build(ctx);
       if (!rings.length) return;
       if (!ctx || ctx.hasPlayer !== true) return;

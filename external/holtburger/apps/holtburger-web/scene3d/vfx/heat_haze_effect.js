@@ -152,6 +152,11 @@ export class HeatHazeEffect extends Effect {
   update(_renderer, _inputBuffer, _deltaTime) {
     const s = this.state;
     const u = this.uniforms;
+    try {
+      const cam = typeof window !== "undefined" ? window.liveScene3d?.camera : null;
+      if (cam && Number.isFinite(cam.far) && cam.far > 0) u.get("uCameraFar").value = cam.far;
+      if (cam && Number.isFinite(cam.near) && cam.near > 0) u.get("uCameraNear").value = cam.near;
+    } catch (_) { /* fail-soft */ }
     // 2026-10-23 — towns stand both arms down (terrain_desert_haze.js).
     const town = s && Number.isFinite(s.townFactor) ? Math.max(0, Math.min(1, s.townFactor)) : 1;
     // Desert arm (ground shimmer + mirage): independent of the volcano disc.

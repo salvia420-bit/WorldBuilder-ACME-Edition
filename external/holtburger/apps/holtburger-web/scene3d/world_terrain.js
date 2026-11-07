@@ -266,6 +266,7 @@ uniform float uAcAmbLevel;
 uniform float uSlopeShadingEnabled;
 uniform float uWaterGlint;          // 0..1
 uniform float uCanopy;              // 0..1 strength of the forest tint
+uniform float uTime;
 uniform float uCloudShadowEnabled;
 uniform sampler2DArray uCloudShadowMap;
 uniform mat4 uCloudShadowMatrix0;
@@ -298,6 +299,25 @@ vec3 hbAtlas(uint t, vec2 cellUv, vec2 gx, vec2 gy) {
   int code = int(t & 31u);
   float tiling = float(uBaseTexTiling[clamp(code, 0, 32)]);
   return textureGrad(uAtlas, vec3(fract(cellUv * tiling), float(code)), gx * tiling, gy * tiling).rgb;
+}
+
+vec3 hbCellHash3(vec2 cell, uint salt) {
+  uvec3 v = uvec3(ivec2(floor(cell)), int(salt)) * 1664525u + 1013904223u;
+  v.x += v.y * v.z; v.y += v.z * v.x; v.z += v.x * v.y;
+  v ^= v >> 16u;
+  v.x += v.y * v.z; v.y += v.z * v.x; v.z += v.x * v.y;
+  return vec3(v) * (1.0 / 4294967295.0);
+}
+
+float hbValueNoise2D(vec2 p) {
+  vec2 i = floor(p);
+  vec2 f = fract(p);
+  vec2 u = f * f * (3.0 - 2.0 * f);
+  float a = fract(sin(dot(i, vec2(127.1, 311.7))) * 43758.5453);
+  float b = fract(sin(dot(i + vec2(1.0, 0.0), vec2(127.1, 311.7))) * 43758.5453);
+  float c = fract(sin(dot(i + vec2(0.0, 1.0), vec2(127.1, 311.7))) * 43758.5453);
+  float d = fract(sin(dot(i + vec2(1.0, 1.0), vec2(127.1, 311.7))) * 43758.5453);
+  return mix(mix(a, b, u.x), mix(c, d, u.x), u.y) - 0.5;
 }
 
 void main() {
@@ -348,7 +368,39 @@ void main() {
 
   vec3 n = normalize(vAcNormal);
   vec3 sunDir = normalize(uSunDir);
+  vec2 dWorldDx = dFdx(vWorldXy);
+  vec2 dWorldDy = dFdy(vWorldXy);
+  float wFoot = max(length(dWorldDx), length(dWorldDy));
+  vec3 iblSpec = vec3(0.0);
+  vec3 sandSparkle = vec3(0.0);
+  float powderW = 0.0;
   if (vWorldXy.y >= 68928.0 && vWorldXy.y <= 117888.0 && water < 0.5) {
+    uint c00 = t00 & 31u, c10 = t10 & 31u, c01 = t01 & 31u, c11 = t11 & 31u;
+    float s00 = float(c00 >= 10u && c00 <= 12u), s10 = float(c10 >= 10u && c10 <= 12u);
+    float s01 = float(c01 >= 10u && c01 <= 12u), s11 = float(c11 >= 10u && c11 <= 12u);
+    float sandW = mix(mix(s00, s10, f.x), mix(s01, s11, f.x), f.y);
+
+    float sn00 = float(c00 == 2u || c00 == 15u || c00 == 27u), sn10 = float(c10 == 2u || c10 == 15u || c10 == 27u);
+    float sn01 = float(c01 == 2u || c01 == 15u || c01 == 27u), sn11 = float(c11 == 2u || c11 == 15u || c11 == 27u);
+    float snowW = mix(mix(sn00, sn10, f.x), mix(sn01, sn11, f.x), f.y);
+
+    float ic00 = float(c00 == 2u || c00 == 27u), ic10 = float(c10 == 2u || c10 == 27u);
+    float ic01 = float(c01 == 2u || c01 == 27u), ic11 = float(c11 == 2u || c11 == 27u);
+    float iceW = mix(mix(ic00, ic10, f.x), mix(ic01, ic11, f.x), f.y);
+    powderW = clamp(snowW - iceW, 0.0, 1.0);
+
+    float v00 = float(c00 == 25u), v10 = float(c10 == 25u);
+    float v01 = float(c01 == 25u), v11 = float(c11 == 25u);
+    float volcW = mix(mix(v00, v10, f.x), mix(v01, v11, f.x), f.y);
+
+    float ob00 = float(c00 == 6u), ob10 = float(c10 == 6u);
+    float ob01 = float(c01 == 6u), ob11 = float(c11 == 6u);
+    float obsidianW = mix(mix(ob00, ob10, f.x), mix(ob01, ob11, f.x), f.y);
+
+    float cl00 = float(c00 == 4u || c00 == 24u), cl10 = float(c10 == 4u || c10 == 24u);
+    float cl01 = float(c01 == 4u || c01 == 24u), cl11 = float(c11 == 4u || c11 == 24u);
+    float clayW = mix(mix(cl00, cl10, f.x), mix(cl01, cl11, f.x), f.y);
+
     // Sub-cell dune ripple & rock facet normal perturbation
     float rippleFade = 1.0 - smoothstep(120.0, 900.0, vViewDepth);
     float ripPhase = (vWorldXy.x * 0.82 + vWorldXy.y * 0.57) * 0.35 + sin(vWorldXy.x * 0.08 - vWorldXy.y * 0.06) * 1.5;
@@ -370,10 +422,139 @@ void main() {
       : mix(vec3(1.0), vec3(0.44, 0.51, 0.68), clamp(-slopeLight * 2.6, 0.0, 1.0));
     float gullyAo = 1.0 - 0.26 * smoothstep(0.06, 0.35, slopeSteep);
     albedo *= slopeTint * gullyAo;
+
+    vec3 viewAc = normalize(vec3(vWorldXy.x, vWorldXy.y, vWorldZ) - uCamAc);
+    float sunGate = smoothstep(0.05, 0.25, sunDir.z) * min(length(uAcSunVec) * 1.25, 1.0);
+
+    // 1. LAVA CRACK GLOW (FAM_VOLCANO code 25)
+    if (volcW > 0.0) {
+      float crackFade = 1.0 - smoothstep(140.0, 420.0, vViewDepth);
+      float crackHeat = smoothstep(0.03, 0.20, albedo.r - max(0.55 * albedo.g, albedo.b));
+      float crackW = crackHeat * volcW * crackFade;
+      if (crackW > 0.001) {
+        float crackPhase = 6.2831853 * hbValueNoise2D(vWorldXy * 0.05) + uTime * 0.8;
+        float crackPulse = 1.0 - 0.35 * (0.5 + 0.5 * sin(crackPhase));
+        iblSpec += albedo * vec3(2.4, 0.65, 0.12) * (1.8 * crackW * crackPulse);
+      }
+    }
+
+    // 2. SNOW CRYSTAL SPARKLE (FAM_SNOWICE codes 2, 15, 27)
+    if (snowW > 0.0) {
+      float snowFade = (1.0 - smoothstep(45.0, 140.0, vViewDepth)) * sunGate;
+      float snowFoot = wFoot * 12.0;
+      snowFade *= 1.0 - smoothstep(0.35, 0.85, snowFoot);
+      if (snowFade > 0.001) {
+        vec2 crystalXy = vWorldXy * 12.0;
+        vec2 ccell = floor(crystalXy);
+        vec3 ch = hbCellHash3(ccell, 3u);
+        vec3 crystalN = normalize(vec3((ch.x - 0.5) * 2.4, (ch.y - 0.5) * 2.4, 0.45 + ch.z * 1.1));
+        vec3 snowHalfAc = normalize(sunDir - viewAc);
+        float snowLobe = pow(clamp(dot(crystalN, snowHalfAc), 0.0, 1.0), 90.0);
+        vec2 snowC = vec2(0.25) + 0.5 * hbCellHash3(ccell, 4u).xy;
+        float snowRad = max(0.22, 0.75 * max(snowFoot, 0.001));
+        float snowCore = 1.0 - smoothstep(snowRad * 0.45, snowRad, length(fract(crystalXy) - snowC));
+        float snowPhase = uTime * 1.1 + ch.x * 6.2831853 + ch.y * 23.0;
+        float snowTwinkle = 0.3 + 0.7 * (0.5 + 0.5 * sin(snowPhase));
+        iblSpec += uAcSunColor * (2.6 * snowW * snowFade * snowLobe * snowTwinkle * snowCore);
+      }
+    }
+
+    // 3. ICE MATERIAL TREATMENT (codes 2, 27)
+    if (iceW > 0.0) {
+      vec2 iuv = vWorldXy * 1.7;
+      float ih0 = hbValueNoise2D(iuv);
+      float ihx = hbValueNoise2D(iuv + vec2(0.6, 0.0));
+      float ihy = hbValueNoise2D(iuv + vec2(0.0, 0.6));
+      vec3 iceN = normalize(vec3((ih0 - ihx) * 0.5, (ih0 - ihy) * 0.5, 1.0));
+      vec3 iceHalfAc = normalize(sunDir - viewAc);
+      float iceLobe = pow(clamp(dot(iceN, iceHalfAc), 0.0, 1.0), 160.0);
+      float iceFres = 0.04 + 0.96 * pow(1.0 - clamp(dot(-viewAc, iceN), 0.0, 1.0), 5.0);
+      vec3 iceSky = uAcAmbColor * max(uAcAmbLevel, 0.35) * vec3(0.78, 0.90, 1.12);
+      iblSpec += (uAcSunColor * (iceLobe * 0.85 * sunGate) + iceSky * iceFres * 0.55) * iceW;
+    }
+
+    // 4. OBSIDIAN GLASS SHEEN + FACET GLINTS (FAM_OBSIDIAN code 6)
+    if (obsidianW > 0.0) {
+      float obsA = hbValueNoise2D(vWorldXy * 0.071) + 0.5;
+      float obsB = hbValueNoise2D(vWorldXy * 0.31 + vec2(17.3, 4.1)) + 0.5;
+      float obsC = hbValueNoise2D(vWorldXy * 0.31 + vec2(2.9, 33.7)) + 0.5;
+      float obsGlassy = 0.45 + 0.55 * smoothstep(0.3, 0.72, obsA);
+      vec3 obsN = normalize(n + vec3((obsB - 0.5) * 0.3, (obsC - 0.5) * 0.3, 0.0));
+      float obsCos = clamp(dot(-viewAc, obsN), 0.0, 1.0);
+      float obsFres = min(0.045 + 0.955 * pow(1.0 - obsCos, 5.0), 0.6);
+      float obsSheenFade = 1.0 - 0.6 * smoothstep(80.0, 260.0, vViewDepth);
+      iblSpec += (uAcAmbColor * max(uAcAmbLevel, 0.35)) * vec3(0.45, 0.26, 0.62)
+               * (0.95 * obsFres * obsGlassy * obsSheenFade * obsidianW);
+      float obsFade = (1.0 - smoothstep(40.0, 130.0, vViewDepth)) * sunGate;
+      float obsFoot = wFoot * 8.0;
+      obsFade *= 1.0 - smoothstep(0.4, 0.9, obsFoot);
+      if (obsFade > 0.001) {
+        vec2 facetXy = vWorldXy * 8.0;
+        vec2 fcell = floor(facetXy);
+        vec3 fh = hbCellHash3(fcell, 5u);
+        if (hbCellHash3(fcell, 6u).x < 0.28) {
+          vec3 facetN = normalize(n * (0.6 + 0.8 * fh.z) + vec3((fh.x - 0.5) * 2.0, (fh.y - 0.5) * 2.0, 0.0));
+          vec3 obsHalf = normalize(sunDir - viewAc);
+          float obsLobe = pow(clamp(dot(facetN, obsHalf), 0.0, 1.0), 110.0);
+          vec2 obsCtr = vec2(0.25) + 0.5 * hbCellHash3(fcell, 7u).xy;
+          float obsRad = max(0.22, 0.75 * max(obsFoot, 0.001));
+          float obsCore = 1.0 - smoothstep(obsRad * 0.45, obsRad, length(fract(facetXy) - obsCtr));
+          iblSpec += uAcSunColor * (2.4 * obsidianW * obsFade * obsLobe * obsCore);
+        }
+      }
+    }
+
+    // 5. WET MUD & MARSH CLAY SHEEN (FAM_SWAMP code 4, FAM_DIRT code 24)
+    if (clayW > 0.0) {
+      float mudWetUp = smoothstep(0.05, 0.6, n.z);
+      float mudWetAmt = 0.65 * mudWetUp * clayW * (1.0 - smoothstep(80.0, 320.0, vViewDepth));
+      albedo *= mix(vec3(1.0), vec3(0.62, 0.58, 0.54), mudWetAmt);
+      vec2 muv = vWorldXy * 2.6;
+      float mh0 = hbValueNoise2D(muv);
+      float mhx = hbValueNoise2D(muv + vec2(0.55, 0.0));
+      float mhy = hbValueNoise2D(muv + vec2(0.0, 0.55));
+      vec3 mudN = normalize(vec3((mh0 - mhx) * 0.35, (mh0 - mhy) * 0.35, 1.0));
+      vec3 mudHalfAc = normalize(sunDir - viewAc);
+      float mudLobe = pow(clamp(dot(mudN, mudHalfAc), 0.0, 1.0), 95.0);
+      float mudFres = 0.04 + 0.96 * pow(1.0 - clamp(dot(-viewAc, mudN), 0.0, 1.0), 5.0);
+      iblSpec += (uAcSunColor * (mudLobe * 0.55 * sunGate) + uAcAmbColor * uAcAmbLevel * mudFres * 0.35) * mudWetAmt;
+    }
+
+    // 6. SAND GRAIN SPARKLE (FAM_SAND codes 10, 11, 12)
+    if (sandW > 0.0) {
+      float sparkFade = 1.0 - smoothstep(35.0, 110.0, vViewDepth);
+      if (sparkFade > 0.001) {
+        float graze = 1.0 - clamp(dot(n, -viewAc), 0.0, 1.0);
+        graze = 0.35 + 0.65 * graze * graze;
+        vec2 grainXy = vWorldXy * 16.0;
+        vec2 gcell = floor(grainXy);
+        vec3 gh = hbCellHash3(gcell, 1u);
+        float gpp = max(wFoot * 16.0, 0.001);
+        float cellsPerPx = max(gpp, 1.0);
+        if (gh.z < min(1.0, 0.18 * cellsPerPx)) {
+          vec3 grainN = normalize(n + vec3((gh.x - 0.5) * 2.2, (gh.y - 0.5) * 2.2, 0.0));
+          vec3 halfAc = normalize(sunDir - viewAc);
+          float lobe = pow(clamp(dot(grainN, halfAc), 0.0, 1.0), 80.0);
+          vec2 gpt = vec2(hbCellHash3(gcell, 2u).x, gh.x) * 0.5 + 0.25;
+          float gRad = max(0.22, 0.75 * gpp);
+          float gDot = 1.0 - smoothstep(gRad * 0.45, gRad, length(fract(grainXy) - gpt));
+          float phase = uTime * 1.7 + gh.x * 6.2831853 + gh.y * 17.0;
+          float twinkle = 0.5 + 0.5 * sin(phase);
+          twinkle = 0.25 + 0.75 * twinkle * twinkle;
+          sandSparkle = uAcSunColor * (2.8 * sandW * graze * sunGate * sparkFade * lobe * twinkle * gDot / cellsPerPx);
+        }
+      }
+    }
   }
   bool acGouraud = uAcGouraudEnabled > 0.5 && dot(uAcSunVec, uAcSunVec) > 1.0e-4;
   if (acGouraud) {
     albedo = terrainAcGouraud(albedo, n, uAcSunVec, uAcSunColor, uAcAmbColor, uAcAmbLevel);
+  }
+  if (powderW > 0.0) {
+    vec3 snowRef = min(vec3(1.0), uAcSunColor * max(uAcSunVec.z, 0.0) + uAcAmbColor * uAcAmbLevel);
+    float snowDay = dot(snowRef, vec3(0.2126, 0.7152, 0.0722));
+    float snowExpo = mix(1.0, 0.65, smoothstep(0.25, 0.6, snowDay));
+    albedo *= mix(1.0, snowExpo, powderW);
   }
   albedo = terrainPaintLight(albedo, n, sunDir, vViewDepth, uPaintLight);
   float ndotl = 1.0;
@@ -394,6 +575,7 @@ void main() {
     }
   }
   vec3 lit = terrainApplyLight(albedo, ndotl, cloudShadow, 1.0);
+  lit += iblSpec + sandSparkle * cloudShadow;
   // water seen from the air: Fresnel (little reflection looking straight down, more toward the horizon), a sky
   // sheen from the fog colour (the horizon radiance) and a tight sun glint that is strongest at grazing angles
   if (water > 0.0 && uWaterGlint > 0.0) {
@@ -495,6 +677,33 @@ export function sampleHeight(worldPos, yCoord) {
   return worldGroundHeight(x, y);
 }
 
+/**
+ * Extract the 9x9 column-major `codes`, `roads`, and `heights` arrays for a Dericost landblock
+ * `(lbX, dLbY)` (`lbX = 0..254`, `dLbY = 0..254`, global `lbY = 359 + dLbY`) so `terrain_vfx.js`
+ * and `terrain_oracle.js` can drive all terrain VFX providers on Dericost.
+ */
+export function extractDericostLandblockData(lbX, dLbY) {
+  const d = _st?.data;
+  if (!d || !d.hIdxDericost || !d.typesDericost || !d.table) return null;
+  if (lbX < 0 || lbX > 254 || dLbY < 0 || dLbY > 254) return null;
+  const codes = new Uint8Array(81);
+  const roads = new Uint8Array(81);
+  const heights = new Float32Array(81);
+  for (let col = 0; col <= 8; col += 1) {
+    const cx = lbX * 8 + col;
+    for (let row = 0; row <= 8; row += 1) {
+      const cy = dLbY * 8 + row;
+      const gIdx = cy * WORLD_VERTS + cx;
+      const t = d.typesDericost[gIdx] ?? 0;
+      const idx = col * 9 + row;
+      codes[idx] = t & 0x1f;
+      roads[idx] = (t >> 5) & 0x3;
+      heights[idx] = d.table[d.hIdxDericost[gIdx]] ?? 0;
+    }
+  }
+  return { lbX, lbY: 359 + dLbY, codes, roads, heights };
+}
+
 function _makeGridGeometry() {
   const g = new THREE.InstancedBufferGeometry();
   const verts = (GRID + 1) * (GRID + 1);
@@ -570,6 +779,7 @@ function _makeMaterial(scene3d, data) {
       uSlopeShadingEnabled: { value: 1.0 },
       uWaterGlint: { value: 1.0 },
       uCanopy: { value: 1.0 },
+      uTime: { value: 0.0 },
       uCloudShadowEnabled: { value: 0.0 },
       uCloudShadowMap: { value: dummyShadowArr },
       uCloudShadowMatrix0: { value: new THREE.Matrix4() },
@@ -633,6 +843,12 @@ export function setWorldTierWanted(scene3d, wanted) {
 
 /** Copy the live lighting uniforms from a near-ring terrain material (the far ring does the same). */
 function _copyLighting(scene3d, u) {
+  const tsSec = scene3d?.frameTime?.tsSec;
+  if (Number.isFinite(tsSec) && u.uTime) {
+    u.uTime.value = tsSec % 3600;
+  } else if (u.uTime && typeof performance !== "undefined") {
+    u.uTime.value = (performance.now() * 0.001) % 3600;
+  }
   const vol = scene3d?.cloudOverlay?.volume;
   const cp = vol?.effect?.cloudsPass;
   const shadowTex = cp?.shadowBuffer;
