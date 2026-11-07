@@ -46,6 +46,11 @@ import { withLogDepth } from "./shader_logdepth.js";
 export const WORLD_VERTS = 2041;              // 255 landblocks × 8 cells + 1
 export const CELL_M = 24;
 export const WORLD_M = (WORLD_VERTS - 1) * CELL_M; // 48,960 m
+export const DERETH_Y_MAX = 48960.0;
+export const OCEAN_Y_MIN = 48960.0;
+export const OCEAN_Y_MAX = 68928.0;
+export const DERICOST_Y_MIN = 68928.0;
+export const DERICOST_Y_MAX = 117888.0;
 const GRID = 32;                              // quads per node edge
 const LEAF_M = GRID * CELL_M;                 // 768 m
 const LEVELS = 9;                             // 768 m … 196,608 m
@@ -132,11 +137,13 @@ precision highp usampler2D;
 
 in vec4 aNode;                      // (x0, y0, size, level) of this instance's node, AC metres
 uniform usampler2D uHeightIdx;      // R8UI 2041x2041: LandHeightTable index per terrain vertex
+uniform usampler2D uHeightIdxDericost; // R8UI 2041x2041: LandHeightTable index per terrain vertex (Dericost)
 uniform float uHeightTable[256];
 uniform vec3 uCamAc;                // camera, AC metres
 uniform float uRange0;              // LOD range of level 0, metres
 
 out vec2 vWorldXy;
+out float vWorldZ;
 out vec3 vAcNormal;
 out float vViewDepth;
 out float vMorph;
@@ -153,15 +160,37 @@ float hbVertH(ivec2 v) {
   if (v.x < 0 || v.y < 0 || v.x > 2040 || v.y > 2040) return uHeightTable[0];
   return uHeightTable[int(texelFetch(uHeightIdx, v, 0).r)];
 }
+float hbVertHDericost(ivec2 v) {
+  if (v.x < 0 || v.y < 0 || v.x > 2040 || v.y > 2040) return uHeightTable[0];
+  return uHeightTable[int(texelFetch(uHeightIdxDericost, v, 0).r)];
+}
 // bilinear over the vertex grid (exact at vertices; morphing vertices sit between two)
 float hbHeightAt(vec2 xy) {
-  vec2 g = xy / 24.0;
-  if (g.x < 0.0 || g.y < 0.0 || g.x > 2040.0 || g.y > 2040.0) return uHeightTable[0];
-  vec2 gf = floor(g);
-  ivec2 i = ivec2(gf);
-  vec2 f = g - gf;
-  float a = hbVertH(i), b = hbVertH(i + ivec2(1, 0)), c = hbVertH(i + ivec2(0, 1)), d = hbVertH(i + ivec2(1, 1));
-  return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+  if (xy.x < 0.0 || xy.x > 48960.0) return uHeightTable[0];
+  if (xy.y >= 0.0 && xy.y <= 48960.0) {
+    vec2 g = xy / 24.0;
+    vec2 gf = floor(g);
+    ivec2 i = ivec2(gf);
+    vec2 f = g - gf;
+    float a = hbVertH(i), b = hbVertH(i + ivec2(1, 0)), c = hbVertH(i + ivec2(0, 1)), d = hbVertH(i + ivec2(1, 1));
+    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+  }
+  // Ocean transit corridor (48960 < xy.y < 68928): sea level 0.0 m (uHeightTable[0])
+  if (xy.y > 48960.0 && xy.y < 68928.0) return uHeightTable[0];
+  // Dericost continent (68928 <= xy.y <= 117888)
+  if (xy.y >= 68928.0 && xy.y <= 117888.0) {
+    vec2 g = vec2(xy.x, xy.y - 68928.0) / 24.0;
+    vec2 gf = floor(g);
+    ivec2 i = ivec2(gf);
+    vec2 f = g - gf;
+    float a = hbVertHDericost(i), b = hbVertHDericost(i + ivec2(1, 0)), c = hbVertHDericost(i + ivec2(0, 1)), d = hbVertHDericost(i + ivec2(1, 1));
+    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+  }
+  return uHeightTable[0];
+}
+
+float sampleHeight(vec2 worldPos) {
+  return hbHeightAt(worldPos);
 }
 
 void main() {
@@ -182,6 +211,7 @@ void main() {
   float hy = hbHeightAt(xy + vec2(0.0, e)) - hbHeightAt(xy - vec2(0.0, e));
   vAcNormal = normalize(vec3(-hx, -hy, 2.0 * e));
   vWorldXy = xy;
+  vWorldZ = h;
   vMorph = morph;
   vec4 mvPos = modelViewMatrix * vec4(xy, h, 1.0);
   vViewDepth = -mvPos.z;
@@ -205,6 +235,7 @@ precision highp sampler2DArray;
 precision highp usampler2D;
 
 in vec2 vWorldXy;
+in float vWorldZ;
 in vec3 vAcNormal;
 in float vViewDepth;
 in float vMorph;
@@ -219,9 +250,11 @@ in float vIsPerspective;
 #endif
 
 uniform usampler2D uTypes;          // R8UI 2041x2041: code (bits 0-4) | road (5-6) | no-record (7)
+uniform usampler2D uTypesDericost;  // R8UI 2041x2041: Dericost terrain types
 uniform sampler2DArray uAtlas;      // the near ring's terrain atlas (one layer per code 0..32)
 uniform int uBaseTexTiling[33];     // the near ring's per-code tiling (texture repeats per cell)
 uniform sampler2D uTrees;           // R8 255x255: tall-tree density per landblock (0..255)
+uniform sampler2D uTreesDericost;   // R8 255x255: Dericost tall-tree density per landblock
 uniform vec3 uCamAc;
 uniform vec3 uSunDir;
 uniform float uAcGouraudEnabled;
@@ -242,8 +275,19 @@ ${LB_HANDOFF_GLSL}
 ${TERRAIN_SHARED_TAIL_GLSL}
 
 uint hbType(ivec2 v) {
-  if (v.x < 0 || v.y < 0 || v.x > 2040 || v.y > 2040) return 20u | 128u;
-  return texelFetch(uTypes, v, 0).r;
+  if (v.x < 0 || v.x > 2040) return 20u | 128u;
+  if (v.y >= 0 && v.y <= 2040) {
+    return texelFetch(uTypes, v, 0).r;
+  }
+  // Ocean transit corridor: 2040 < v.y < 2872 (48960m to 68928m)
+  if (v.y < 2872) {
+    return 20u | 128u;
+  }
+  // Dericost continent: 2872 <= v.y <= 4912 (68928m to 117888m)
+  if (v.y <= 4912) {
+    return texelFetch(uTypesDericost, ivec2(v.x, v.y - 2872), 0).r;
+  }
+  return 20u | 128u;
 }
 
 vec3 hbAtlas(uint t, vec2 cellUv, vec2 gx, vec2 gy) {
@@ -259,7 +303,9 @@ void main() {
 #endif
 #ifdef HB_WORLD_PRESENCE
   // per landblock: the near ring draws here (a 10 m band stays under it only where it ends: lb_presence.js)
-  if (hbNearCovers(vWorldXy / 192.0)) discard;
+  if (vWorldXy.y <= 48960.0) {
+    if (hbNearCovers(vWorldXy / 192.0)) discard;
+  }
 #endif
   vec2 cell = vWorldXy / 24.0;
   vec2 c0 = floor(cell);
@@ -281,13 +327,47 @@ void main() {
   float w01 = float((t01 & 31u) >= 16u && (t01 & 31u) <= 20u), w11 = float((t11 & 31u) >= 16u && (t11 & 31u) <= 20u);
   float water = mix(mix(w00, w10, f.x), mix(w01, w11, f.x), f.y);
   // canopy: retail forests read as a darker, greener ground from the air (per-landblock density, bilinear)
-  float trees = texture(uTrees, (vWorldXy / 192.0) / 255.0).r;
+  float trees = 0.0;
+  if (vWorldXy.y <= 48960.0) {
+    trees = texture(uTrees, (vWorldXy / 192.0) / 255.0).r;
+  } else if (vWorldXy.y >= 68928.0 && vWorldXy.y <= 117888.0) {
+    vec2 dericostLb = vec2(vWorldXy.x, vWorldXy.y - 68928.0) / 192.0;
+    trees = texture(uTreesDericost, dericostLb / 255.0).r;
+    // Close-up micro-detail for ground-level Dericost rendering
+    float dMicro1 = fract(sin(dot(floor(vWorldXy * 1.5), vec2(12.9898, 78.233))) * 43758.5453);
+    float dMicro2 = fract(sin(dot(floor(vWorldXy * 0.25), vec2(39.346, 11.135))) * 24634.6345);
+    float detailFade = 1.0 - smoothstep(40.0, 450.0, vViewDepth);
+    albedo *= mix(1.0, 0.86 + 0.18 * dMicro1 + 0.10 * dMicro2, detailFade * (1.0 - water));
+  }
   float canopy = uCanopy * smoothstep(0.08, 0.55, trees) * (1.0 - water);
   albedo = mix(albedo, albedo * vec3(0.42, 0.55, 0.36), canopy * 0.85);
 
   vec3 n = normalize(vAcNormal);
   vec3 sunDir = normalize(uSunDir);
-  bool acGouraud = uAcGouraudEnabled > 0.5;
+  if (vWorldXy.y >= 68928.0 && vWorldXy.y <= 117888.0 && water < 0.5) {
+    // Sub-cell dune ripple & rock facet normal perturbation
+    float rippleFade = 1.0 - smoothstep(120.0, 900.0, vViewDepth);
+    float ripPhase = (vWorldXy.x * 0.82 + vWorldXy.y * 0.57) * 0.35 + sin(vWorldXy.x * 0.08 - vWorldXy.y * 0.06) * 1.5;
+    vec2 microGrad = vec2(cos(ripPhase) * 0.28, sin(ripPhase) * 0.20) * rippleFade;
+    n = normalize(vec3(n.xy - microGrad * 0.22, n.z));
+
+    // Geological cliff stratification & exposed rock on slopes
+    float slopeSteep = clamp(1.0 - n.z, 0.0, 1.0);
+    float cliffWeight = smoothstep(0.035, 0.22, slopeSteep);
+    uint cliffCode = (vWorldXy.y < 88000.0 && vWorldXy.x >= 24000.0) ? 13u : 0u;
+    vec3 cliffTex = hbAtlas(cliffCode, f, gx, gy);
+    float strata = 0.72 + 0.22 * sin(vWorldZ * 0.45 + vWorldXy.x * 0.012) + 0.14 * cos(vWorldZ * 1.45 - vWorldXy.y * 0.015);
+    albedo = mix(albedo, mix(albedo, cliffTex, 0.55) * strata, cliffWeight);
+
+    // Crisp 3D directional sun-slope relief contrast (warm sunlit windward slopes vs cool shaded leeward slip-faces)
+    float slopeLight = dot(n, sunDir) - sunDir.z;
+    vec3 slopeTint = slopeLight >= 0.0
+      ? mix(vec3(1.0), vec3(1.26, 1.15, 0.94), clamp(slopeLight * 2.4, 0.0, 1.0))
+      : mix(vec3(1.0), vec3(0.44, 0.51, 0.68), clamp(-slopeLight * 2.6, 0.0, 1.0));
+    float gullyAo = 1.0 - 0.26 * smoothstep(0.06, 0.35, slopeSteep);
+    albedo *= slopeTint * gullyAo;
+  }
+  bool acGouraud = uAcGouraudEnabled > 0.5 && dot(uAcSunVec, uAcSunVec) > 1.0e-4;
   if (acGouraud) {
     albedo = terrainAcGouraud(albedo, n, uAcSunVec, uAcSunColor, uAcAmbColor, uAcAmbLevel);
   }
@@ -340,11 +420,17 @@ export function loadWorldData(base = WORLD_BASE_URL) {
   const t0 = (typeof performance !== "undefined") ? performance.now() : Date.now();
   _loadPromise = (async () => {
     const meta = await (await fetch(`${base}world_meta.json`)).json();
-    const [hIdx, types, trees] = await Promise.all([
+    const [hIdx, types, trees, dericostPack] = await Promise.all([
       _fetchBytes(`${base}world_height.u8`),
       _fetchBytes(`${base}world_types.u8`),
       _fetchBytes(`${base}world_trees.u8`).catch(() => new Uint8Array(255 * 255)),
+      Promise.all([
+        _fetchBytes(`${base}dericost_height.u8`).catch(() => _fetchBytes(`../../dist/dericost/dericost_height.u8`)).catch(() => null),
+        _fetchBytes(`${base}dericost_types.u8`).catch(() => _fetchBytes(`../../dist/dericost/dericost_types.u8`)).catch(() => null),
+        _fetchBytes(`${base}dericost_trees.u8`).catch(() => _fetchBytes(`../../dist/dericost/dericost_trees.u8`)).catch(() => null),
+      ]),
     ]);
+    const [hIdxDericost, typesDericost, treesDericost] = dericostPack;
     if (hIdx.length !== WORLD_VERTS * WORLD_VERTS || types.length !== WORLD_VERTS * WORLD_VERTS) {
       throw new Error(`world grids: unexpected sizes ${hIdx.length} / ${types.length}`);
     }
@@ -352,7 +438,12 @@ export function loadWorldData(base = WORLD_BASE_URL) {
     (meta.landHeightTable || []).forEach((v, i) => { if (i < 256) table[i] = v; });
     _diag.loaded = true;
     _diag.loadMs = Math.round(((typeof performance !== "undefined") ? performance.now() : Date.now()) - t0);
-    return { meta, hIdx, types, trees, table };
+    return {
+      meta, hIdx, types, trees, table,
+      hIdxDericost: hIdxDericost || new Uint8Array(WORLD_VERTS * WORLD_VERTS),
+      typesDericost: typesDericost || new Uint8Array(WORLD_VERTS * WORLD_VERTS),
+      treesDericost: treesDericost || new Uint8Array(255 * 255),
+    };
   })();
   _loadPromise.catch((e) => { _diag.error = String(e?.message ?? e); });
   return _loadPromise;
@@ -361,7 +452,28 @@ export function loadWorldData(base = WORLD_BASE_URL) {
 /** CPU ground height under any AC point once the grids are loaded (null before). */
 export function worldGroundHeight(x, y) {
   const d = _st?.data;
-  return d ? heightAtGrid(d.hIdx, d.table, x, y) : null;
+  if (!d) return null;
+  if (x < 0.0 || x > 48960.0 || y < 0.0 || y > DERICOST_Y_MAX) {
+    return d.table[0] ?? 0;
+  }
+  if (y <= DERETH_Y_MAX) {
+    return heightAtGrid(d.hIdx, d.table, x, y);
+  }
+  if (y >= DERICOST_Y_MIN && y <= DERICOST_Y_MAX && d.hIdxDericost) {
+    return heightAtGrid(d.hIdxDericost, d.table, x, y - DERICOST_Y_MIN);
+  }
+  // Ocean transit corridor (48960 < y < 68928) and unbaked Dericost return sea level
+  return d.table[0] ?? 0;
+}
+
+/** Sample height at any global AC coordinates (array [x, y], object {x, y}, or separate (x, y)). */
+export function sampleHeight(worldPos, yCoord) {
+  if (typeof worldPos === "number" && typeof yCoord === "number") {
+    return worldGroundHeight(worldPos, yCoord);
+  }
+  const x = Array.isArray(worldPos) ? worldPos[0] : (worldPos?.x ?? 0);
+  const y = Array.isArray(worldPos) ? worldPos[1] : (worldPos?.y ?? 0);
+  return worldGroundHeight(x, y);
 }
 
 function _makeGridGeometry() {
@@ -394,13 +506,20 @@ function _makeMaterial(scene3d, data) {
   hTex.internalFormat = "R8UI";
   const tTex = new THREE.DataTexture(data.types, WORLD_VERTS, WORLD_VERTS, THREE.RedIntegerFormat, THREE.UnsignedByteType);
   tTex.internalFormat = "R8UI";
-  for (const t of [hTex, tTex]) {
+  const hDericostTex = new THREE.DataTexture(data.hIdxDericost || new Uint8Array(WORLD_VERTS * WORLD_VERTS), WORLD_VERTS, WORLD_VERTS, THREE.RedIntegerFormat, THREE.UnsignedByteType);
+  hDericostTex.internalFormat = "R8UI";
+  const tDericostTex = new THREE.DataTexture(data.typesDericost || new Uint8Array(WORLD_VERTS * WORLD_VERTS), WORLD_VERTS, WORLD_VERTS, THREE.RedIntegerFormat, THREE.UnsignedByteType);
+  tDericostTex.internalFormat = "R8UI";
+  for (const t of [hTex, tTex, hDericostTex, tDericostTex]) {
     t.minFilter = THREE.NearestFilter; t.magFilter = THREE.NearestFilter;
     t.generateMipmaps = false; t.flipY = false; t.unpackAlignment = 1; t.needsUpdate = true;
   }
   const treeTex = new THREE.DataTexture(data.trees, 255, 255, THREE.RedFormat, THREE.UnsignedByteType);
   treeTex.minFilter = THREE.LinearFilter; treeTex.magFilter = THREE.LinearFilter;
   treeTex.generateMipmaps = false; treeTex.flipY = false; treeTex.unpackAlignment = 1; treeTex.needsUpdate = true;
+  const treeDericostTex = new THREE.DataTexture(data.treesDericost || new Uint8Array(255 * 255), 255, 255, THREE.RedFormat, THREE.UnsignedByteType);
+  treeDericostTex.minFilter = THREE.LinearFilter; treeDericostTex.magFilter = THREE.LinearFilter;
+  treeDericostTex.generateMipmaps = false; treeDericostTex.flipY = false; treeDericostTex.unpackAlignment = 1; treeDericostTex.needsUpdate = true;
   const src = Array.isArray(scene3d?.terrainMaterials)
     ? scene3d.terrainMaterials.find((m) => m && m.uniforms && m.uniforms.uAtlas && m.uniforms.uBaseTexTiling)
     : null;
@@ -408,11 +527,14 @@ function _makeMaterial(scene3d, data) {
   const mat = new THREE.ShaderMaterial(withLogDepth({
     uniforms: {
       uHeightIdx: { value: hTex },
+      uHeightIdxDericost: { value: hDericostTex },
       uHeightTable: { value: Array.from(data.table) },
       uTypes: { value: tTex },
+      uTypesDericost: { value: tDericostTex },
       uAtlas: { value: src?.uniforms?.uAtlas?.value ?? null },
       uBaseTexTiling: { value: tiling },
       uTrees: { value: treeTex },
+      uTreesDericost: { value: treeDericostTex },
       uCamAc: { value: new THREE.Vector3() },
       uRange0: { value: range0M() },
       uSunDir: { value: new THREE.Vector3(-0.4, -0.3, 1.0).normalize() },
@@ -449,7 +571,7 @@ function _makeMaterial(scene3d, data) {
     }
   }
   mat.name = "world-terrain";
-  return { mat, hTex, tTex, treeTex };
+  return { mat, hTex, tTex, treeTex, hDericostTex, tDericostTex, treeDericostTex };
 }
 
 /** Create the tier (lazy data). Safe to call more than once; a no-op without `?worldTier`. */
@@ -489,13 +611,16 @@ function _copyLighting(scene3d, u) {
     : null;
   if (!src) return;
   const s = src.uniforms;
-  if (s.uSunDir) u.uSunDir.value.copy(s.uSunDir.value);
-  if (s.uAcGouraudEnabled) u.uAcGouraudEnabled.value = s.uAcGouraudEnabled.value;
-  if (s.uAcSunVec) u.uAcSunVec.value.copy(s.uAcSunVec.value);
-  if (s.uAcSunColor) u.uAcSunColor.value.copy(s.uAcSunColor.value);
-  if (s.uPaintLight && u.uPaintLight) u.uPaintLight.value.copy(s.uPaintLight.value);
-  if (s.uAcAmbColor) u.uAcAmbColor.value.copy(s.uAcAmbColor.value);
-  if (s.uAcAmbLevel) u.uAcAmbLevel.value = s.uAcAmbLevel.value;
+  if (s.uSunDir && s.uSunDir.value.lengthSq() > 1e-4) u.uSunDir.value.copy(s.uSunDir.value);
+  const hasLiveGouraud = s.uAcSunVec && s.uAcSunVec.value && s.uAcSunVec.value.lengthSq() > 1e-4;
+  if (hasLiveGouraud) {
+    if (s.uAcGouraudEnabled) u.uAcGouraudEnabled.value = s.uAcGouraudEnabled.value;
+    u.uAcSunVec.value.copy(s.uAcSunVec.value);
+    if (s.uAcSunColor) u.uAcSunColor.value.copy(s.uAcSunColor.value);
+    if (s.uAcAmbColor) u.uAcAmbColor.value.copy(s.uAcAmbColor.value);
+    if (s.uAcAmbLevel) u.uAcAmbLevel.value = s.uAcAmbLevel.value;
+  }
+  if (s.uPaintLight && u.uPaintLight && s.uPaintLight.value.x > 0) u.uPaintLight.value.copy(s.uPaintLight.value);
   if (s.uTerrainSlopeShadingEnabled) u.uSlopeShadingEnabled.value = s.uTerrainSlopeShadingEnabled.value;
   if (!u.uAtlas.value && s.uAtlas) u.uAtlas.value = s.uAtlas.value;
   if (s.uBaseTexTiling) u.uBaseTexTiling.value = s.uBaseTexTiling.value;

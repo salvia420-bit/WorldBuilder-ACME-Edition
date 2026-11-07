@@ -456,21 +456,27 @@ namespace WorldBuilder.Shared.Lib {
             // 0x0100 + currentNumCells and then skip past any cell ID that is already occupied in the
             // DAT, guaranteeing we never reuse a live cell, and we hard-cap at the 0xFFFD ceiling
             // (0xFFFE = LandBlockInfo, 0xFFFF = LandBlock are reserved).
-            const ushort MaxEnvCellSuffix = 0xFFFD;
+            bool isDericost = (currentNumCells & 0x8000) != 0 ||
+                              (lbId & 0x8000) != 0 ||
+                              (lbId & 0x80000000) != 0 ||
+                              newOrigin.Y >= 68928f ||
+                              (blueprint.Cells.Count > 0 && (blueprint.Cells[0].OriginalCellId & 0x8000) != 0);
+            uint continentMask = isDericost ? 0x8000u : 0u;
+            ushort maxEnvCellSuffix = (ushort)(0x7FFD | continentMask);
             var remap = new Dictionary<ushort, ushort>(blueprint.Cells.Count);
-            uint nextCellId = (uint)(currentNumCells + 0x0100);
+            uint nextCellId = (uint)(((currentNumCells & 0x7FFF) + 0x0100) | continentMask);
             foreach (var cell in blueprint.Cells) {
                 // Advance past any already-occupied cell so we never clobber a live EnvCell.
-                while (nextCellId <= MaxEnvCellSuffix &&
+                while (nextCellId <= maxEnvCellSuffix &&
                        dats.TryGet<EnvCell>((lbId << 16) | nextCellId, out _)) {
                     nextCellId++;
                 }
-                if (nextCellId > MaxEnvCellSuffix) {
+                if (nextCellId > maxEnvCellSuffix) {
                     logger?.LogError(
                         "[Blueprint] Cannot instantiate building 0x{ModelId:X8} in landblock 0x{LbId:X4}: ran out of EnvCell IDs (next 0x{Next:X4} exceeds ceiling 0x{Ceiling:X4}).",
-                        blueprint.ModelId, (ushort)lbId, nextCellId, MaxEnvCellSuffix);
+                        blueprint.ModelId, (ushort)lbId, nextCellId, maxEnvCellSuffix);
                     throw new InvalidOperationException(
-                        $"InstantiateBlueprint: EnvCell ID 0x{nextCellId:X4} for building 0x{blueprint.ModelId:X8} in landblock 0x{(ushort)lbId:X4} exceeds the 0x{MaxEnvCellSuffix:X4} ceiling — too many interior cells in this landblock.");
+                        $"InstantiateBlueprint: EnvCell ID 0x{nextCellId:X4} for building 0x{blueprint.ModelId:X8} in landblock 0x{(ushort)lbId:X4} exceeds the 0x{maxEnvCellSuffix:X4} ceiling — too many interior cells in this landblock.");
                 }
                 remap[cell.OriginalCellId] = (ushort)nextCellId;
                 nextCellId++;
@@ -549,8 +555,9 @@ namespace WorldBuilder.Shared.Lib {
                 // clamping to a wrong same-LB cell, which would recreate the walk-through-wall bug.
                 for (int v = envCell.VisibleCells.Count - 1; v >= 0; v--) {
                     var vc = envCell.VisibleCells[v];
-                    if (vc >= 0x0001 && vc <= 0x0040) {
-                        var (vcCellX, vcCellY) = LandCellToXY(vc);
+                    ushort localVc = (ushort)(vc & 0x7FFF);
+                    if (localVc >= 0x0001 && localVc <= 0x0040) {
+                        var (vcCellX, vcCellY) = LandCellToXY(localVc);
                         var (rotDx, rotDy) = RotateCellOffset(vcCellX - donorCellX, vcCellY - donorCellY, yawQuadrant);
                         int fixedX = newCellX + rotDx;
                         int fixedY = newCellY + rotDy;
@@ -564,11 +571,12 @@ namespace WorldBuilder.Shared.Lib {
                         }
 
                         ushort fixedLandCell = XYToLandCell(fixedX, fixedY);
-                        if (vc != fixedLandCell) {
+                        ushort targetLandCell = (ushort)(fixedLandCell | continentMask);
+                        if (vc != targetLandCell) {
                             logger?.LogInformation("[Blueprint]     VisibleCell LandCell fixup: 0x{Old:X4} -> 0x{New:X4} (donor cell ({DX},{DY}) -> new cell ({NX},{NY}), quadrant {Q})",
-                                vc, fixedLandCell, donorCellX, donorCellY, newCellX, newCellY, yawQuadrant);
+                                vc, targetLandCell, donorCellX, donorCellY, newCellX, newCellY, yawQuadrant);
                         }
-                        envCell.VisibleCells[v] = fixedLandCell;
+                        envCell.VisibleCells[v] = targetLandCell;
                     }
                 }
 

@@ -375,7 +375,7 @@ export function dispatchClientEvent(evt, D) {
         // that normally owns this never fires for a stationary
         // spawn). Idempotent per-LB; optional-chained — the
         // cell-watchdog above covers a not-yet-built liveScene3d.
-        if ((spawnCell & 0xffff) >= 0x100) {
+        if ((spawnCell & 0x7fff) >= 0x100) {
           window.liveScene3d?.loadEnvCellsForLandblock?.(spawnLb);
         }
         console.log(

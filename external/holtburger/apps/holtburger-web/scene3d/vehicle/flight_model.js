@@ -23,8 +23,13 @@ export const TAKEOFF_THROTTLE = 0.25;
 export const MIN_TURN_SPEED = 10.0;
 export const LANDING_SPEED_SLACK = 0.5;
 export const WORLD_MIN = 0.5;
-// 255 landblocks a side (0x00-0xFE): landblock 0xFF does not exist (same constant as the server's FlightModel.WorldMax)
-export const WORLD_MAX = 255.0 * 192.0 - 0.5;
+export const WORLD_MAX = 255.0 * 192.0 - 0.5; // Backward-compatible alias for WORLD_X_MAX
+export const WORLD_X_MIN = 0.5;
+export const WORLD_X_MAX = 255.0 * 192.0 - 0.5; // 48,959.5 m
+export const WORLD_Y_MIN = 0.5;
+// 614 landblocks north (Dereth 255 + Ocean 104 + Dericost 255): (359 + 255) * 192 - 0.5 = 117,887.5 m
+export const WORLD_Y_MAX = (359.0 + 255.0) * 192.0 - 0.5; // 117,887.5 m
+export const DERICOST_Y_OFFSET = 68928.0;
 const TWO_PI = 2.0 * Math.PI;
 
 // HBV1 v2: MISSILE (held: the next lightning rail every 0.3 s), BOMB (rising edge: release the next bomb) — the server's
@@ -151,8 +156,8 @@ export function step(s, u, p, vCap, ground, dt = DT) {
       const w = clamp(s.speed * Math.sin(s.pitch), -p.sinkMax, p.climbMax);
       const h = s.speed * Math.cos(s.pitch);
       // 5. integrate, then the envelope
-      const nx = clamp(s.x + h * Math.sin(s.heading) * dt, WORLD_MIN, WORLD_MAX);
-      const ny = clamp(s.y + h * Math.cos(s.heading) * dt, WORLD_MIN, WORLD_MAX);
+      const nx = clamp(s.x + h * Math.sin(s.heading) * dt, WORLD_X_MIN, WORLD_X_MAX);
+      const ny = clamp(s.y + h * Math.cos(s.heading) * dt, WORLD_Y_MIN, WORLD_Y_MAX);
       let nz = s.z + w * dt;
       const g = ground(nx, ny);
       if (!Number.isNaN(g)) {
@@ -178,8 +183,8 @@ export function step(s, u, p, vCap, ground, dt = DT) {
       s.pitch = moveToward(s.pitch, 0.0, p.pitchRate * dt);
       s.speed = moveToward(s.speed, 0.0, p.decel * dt);
       s.heading = wrapHeading(s.heading + clamp(u.yaw, -1.0, 1.0) * p.yawRate * dt);
-      const nx = clamp(s.x + s.speed * Math.sin(s.heading) * dt, WORLD_MIN, WORLD_MAX);
-      const ny = clamp(s.y + s.speed * Math.cos(s.heading) * dt, WORLD_MIN, WORLD_MAX);
+      const nx = clamp(s.x + s.speed * Math.sin(s.heading) * dt, WORLD_X_MIN, WORLD_X_MAX);
+      const ny = clamp(s.y + s.speed * Math.cos(s.heading) * dt, WORLD_Y_MIN, WORLD_Y_MAX);
       let nz = s.z - p.takeoffClimb * dt;
       const g = ground(nx, ny);
       if (!Number.isNaN(g) && nz <= g) {
@@ -253,22 +258,27 @@ export function rotate(q, v) {
 
 /** Global AC metres → {cell, x, y, z} landblock-local outdoor position (the server's Vehicle.ToPosition). */
 export function toCellLocal(gx, gy, gz) {
+  const continent = gy >= DERICOST_Y_OFFSET ? 1 : 0;
+  const localGy = continent === 1 ? gy - DERICOST_Y_OFFSET : gy;
   let lbX = Math.floor(gx / 192.0);
-  let lbY = Math.floor(gy / 192.0);
+  let lbY = Math.floor(localGy / 192.0);
   // 0..254 (= the server's Vehicle.ToPosition): landblock 0xFF does not exist
   lbX = clamp(lbX, 0, 254);
   lbY = clamp(lbY, 0, 254);
   const lx = clamp(Math.fround(gx - lbX * 192.0), 0, 191.999);
-  const ly = clamp(Math.fround(gy - lbY * 192.0), 0, 191.999);
+  const ly = clamp(Math.fround(localGy - lbY * 192.0), 0, 191.999);
   const cellX = Math.floor(lx / 24.0);
   const cellY = Math.floor(ly / 24.0);
-  const cell = ((lbX << 24) | (lbY << 16) | (cellX * 8 + cellY + 1)) >>> 0;
-  return { cell, x: lx, y: ly, z: gz };
+  const cellIdx = (cellX * 8 + cellY + 1) & 0x7fff;
+  const cell = ((lbX << 24) | (lbY << 16) | ((continent & 1) << 15) | cellIdx) >>> 0;
+  return { cell, x: lx, y: ly, z: gz, continent };
 }
 
 /** {cell, x, y} landblock-local → global AC metres. */
-export function toGlobal(cell, x, y, z) {
+export function toGlobal(cell, x, y, z, continent = ((cell >>> 15) & 1)) {
+  const cont = (continent != null) ? continent : ((cell >>> 15) & 1);
+  const isDericost = (cont & 1) === 1;
   const lbX = (cell >>> 24) & 0xff;
   const lbY = (cell >>> 16) & 0xff;
-  return [lbX * 192.0 + x, lbY * 192.0 + y, z];
+  return [lbX * 192.0 + x, (isDericost ? DERICOST_Y_OFFSET : 0.0) + lbY * 192.0 + y, z];
 }

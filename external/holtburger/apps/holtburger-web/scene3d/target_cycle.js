@@ -150,7 +150,7 @@ export const RADAR_RANGE_INDOOR = 25;
 
 /** An outdoor LandCell (cell index 1..0x40 — SmartBox::is_player_outside). */
 export function isOutdoorCell(cellId) {
-  const c = (cellId >>> 0) & 0xffff;
+  const c = (cellId >>> 0) & 0x7fff;
   return c >= 1 && c <= 0x40;
 }
 

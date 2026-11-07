@@ -9,7 +9,7 @@
 
 import {
   worldTierEnabled, levelRange, selectNodes, heightAtGrid, WORLD_VERTS, WORLD_M, CELL_M,
-  WORLD_VERTEX_GLSL, WORLD_FRAGMENT_GLSL,
+  WORLD_VERTEX_GLSL, WORLD_FRAGMENT_GLSL, sampleHeight, worldGroundHeight,
 } from "../scene3d/world_terrain.js";
 import {
   flightViewEnabled, viewDistanceM, flightFogBand, quantizedFar, hazeScale, radialAltitude, FLY_ENTER_AGL, FLY_EXIT_AGL,
@@ -78,10 +78,14 @@ console.log("-- W3 CPU height over the grid ------------------------------------
   check("exact at a vertex", heightAtGrid(hIdx, table, 20 * 24, 10 * 24) === 100);
   check("bilinear between two vertices", Math.abs(heightAtGrid(hIdx, table, 20.5 * 24, 10 * 24) - 150) < 1e-3);
   check("off the map = sea level (table[0])", heightAtGrid(hIdx, table, -5, 100) === 0 && heightAtGrid(hIdx, table, 60000, 100) === 0);
+  check("sampleHeight function interface exists", typeof sampleHeight === "function" && typeof worldGroundHeight === "function");
+  check("sampleHeight handles array and object coordinates", (sampleHeight([1000, 2000]) === null || typeof sampleHeight([1000, 2000]) === "number") && (sampleHeight({x: 1000, y: 2000}) === null || typeof sampleHeight({x: 1000, y: 2000}) === "number"));
 }
 
 console.log("-- W4 GLSL shape --------------------------------------------------------");
 check("vertex: instanced node + CDLOD morph + reversed-Z push", /in vec4 aNode/.test(WORLD_VERTEX_GLSL) && /morph/.test(WORLD_VERTEX_GLSL) && /USE_REVERSED_DEPTH_BUFFER/.test(WORLD_VERTEX_GLSL));
+check("vertex: dual heightmap uniform uHeightIdxDericost", /uniform usampler2D uHeightIdxDericost;/.test(WORLD_VERTEX_GLSL));
+check("fragment: dual sampling uniforms uTypesDericost and uTreesDericost", /uniform usampler2D uTypesDericost;/.test(WORLD_FRAGMENT_GLSL) && /uniform sampler2D uTreesDericost;/.test(WORLD_FRAGMENT_GLSL));
 check("fragment: per-landblock presence discard through the shared hand-off rule (lb_presence.js ?lbBand)",
   /HB_WORLD_PRESENCE/.test(WORLD_FRAGMENT_GLSL) && WORLD_FRAGMENT_GLSL.includes(LB_HANDOFF_GLSL)
   && /if \(hbNearCovers\(vWorldXy \/ 192\.0\)\) discard;/.test(WORLD_FRAGMENT_GLSL));

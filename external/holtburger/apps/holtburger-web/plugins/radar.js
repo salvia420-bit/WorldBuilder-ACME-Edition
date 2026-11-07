@@ -228,7 +228,7 @@ export function outdoorCellId(landblockId, x, y) {
 export function mapCoordsForCell(cellId) {
   const id = cellId >>> 0;
   if (!isOutdoorCell(id)) return null;
-  const cell = id & 0xffff;
+  const cell = id & 0x7fff;
   const lx = ((id >>> 21) & 0x7f8) + ((cell - 1) >>> 3);
   const ly = 8 * ((id >>> 16) & 0xff) + ((cell - 1) & 7);
   if (lx < 0 || ly < 0 || lx >= 2040 || ly >= 2040) return null;

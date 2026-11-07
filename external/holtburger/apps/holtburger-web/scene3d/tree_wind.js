@@ -124,6 +124,27 @@ const TREE_WIND_DIDS = new Set([
   0x02000246, // small tree, 5-part, 232k
   0x02000258, // tall tree ~22m (trunk + branch + canopy parts)
   0x0200035f, // tree, 11-part
+  // Dericost unique flora DIDs (M3) — Complete 20-DID Catalog
+  0x02100001, // Gelid Ironwood Pine (18-35m, Rung 2 canopy tree)
+  0x02100002, // Tresimaen Ash-Cedar (12-22m, Rung 2 canopy tree)
+  0x02100003, // Gelid Ghost-Fern (1.2-2.2m, Rung 4 fern)
+  0x02100004, // Tresimaen Sulfur-Fern (1.5-2.8m, Rung 4 fern)
+  0x02100005, // High Desert Ironwood (6-14m, Rung 2 canopy tree)
+  0x02100006, // Blood-Thorn Cactus (2.5-7m, Rung 4 succulent/tree)
+  0x02100007, // Daralet Bog-Willow (5-15m, Rung 4 understory tree)
+  0x02100008, // Ashatiri Mountain Cypress (10-24m, Rung 2 canopy tree)
+  0x02100009, // Maritime Salt-Pine (10-18m, Rung 2 canopy tree)
+  0x02100010, // Coastal Salt-Fern (0.8-1.6m, Rung 4 fern)
+  0x02100011, // Crystal Frost-Shrub (0.8-1.8m, Rung 4 understory)
+  0x02100012, // Alpine Lichen Mat (0.2-0.5m, Rung 4 understory)
+  0x02100013, // Obsidian Thornbush (1.0-2.2m, Rung 4 understory)
+  0x02100014, // Canopy Rift Moss (1.5-3.5m, Rung 4 understory)
+  0x02100015, // Granite Creeping Fern (0.8-1.8m, Rung 4 fern)
+  0x02100017, // Blue Alpine Thistle (0.5-1.3m, Rung 4 understory)
+  0x02100018, // Marsh Ghost-Cane (1.5-3.2m, Rung 4 fern)
+  0x0210001A, // Carnivorous Mire Pitcher (0.7-1.5m, Rung 4 understory)
+  0x0210001C, // Red Dune Scrub (0.5-1.2m, Rung 4 understory)
+  0x0210001D, // Salt-Marsh Cordgrass (1.0-2.2m, Rung 4 understory)
 ]);
 
 /** True if this SetupModel DID is on the wind allowlist. */

@@ -1081,16 +1081,28 @@ export function installVehicles(deps = {}) {
         // ONE centre: the server never echoes the pilot's own position, so feed the world streamer the AIRCRAFT's
         // landblock on each crossing (noteServerLb / landblockChanged / the collision 3x3 then mean what they say)
         const own = (cl.cell >>> 16) << 16;
-        if (own !== p.ownLb && win.__worldStreamer && typeof win.__worldStreamer.onPositionUpdate === "function") {
+        const inOcean = pose.y >= 48960.0 && pose.y < 68928.0;
+        if ((own !== p.ownLb || inOcean !== p.inOcean) && win.__worldStreamer && typeof win.__worldStreamer.onPositionUpdate === "function") {
           p.ownLb = own;
-          win.__worldStreamer.onPositionUpdate({ guid: localGuid(), landblockId: cl.cell });
+          p.inOcean = inOcean;
+          win.__worldStreamer.onPositionUpdate({
+            guid: localGuid(),
+            landblockId: cl.cell,
+            x: cl.x,
+            y: cl.y,
+            gy: pose.y,
+            continent: cl.continent,
+            isOceanCorridor: inOcean,
+          });
         }
         // and keep the wasm COLLISION terrain (terrainHeightAt, the predictor's floor) resident ahead: the 3x3
         // around the lead point only — no second residency centre
         const lead = Number.isFinite(v.profile.leadSeconds) ? v.profile.leadSeconds : 6;
         const lp = FM.toCellLocal(pose.x + vel[0] * lead, pose.y + vel[1] * lead, pose.z);
         const lb = (lp.cell >>> 16) << 16;
-        if (lb !== p.leadLb && typeof win.__ensureCollisionTerrain === "function") {
+        const leadGy = pose.y + vel[1] * lead;
+        const leadInOcean = leadGy >= 48960.0 && leadGy < 68928.0;
+        if (!leadInOcean && lb !== p.leadLb && typeof win.__ensureCollisionTerrain === "function") {
           rlogEvent(RLOG.LEAD, lb, p.leadLb | 0, 1);
           p.leadLb = lb;
           try { const r = win.__ensureCollisionTerrain(lb >>> 0); if (r && typeof r.catch === "function") r.catch(() => {}); } catch (_) { /* hint only */ }
@@ -1101,10 +1113,21 @@ export function installVehicles(deps = {}) {
       const lead = Number.isFinite(v.profile.leadSeconds) ? v.profile.leadSeconds : 6;
       const lp = FM.toCellLocal(pose.x + vel[0] * lead, pose.y + vel[1] * lead, pose.z);
       const lb = (lp.cell >>> 16) << 16;
-      if (lb !== p.leadLb && win.__worldStreamer && typeof win.__worldStreamer.onPositionUpdate === "function") {
+      const leadGy = pose.y + vel[1] * lead;
+      const inOcean = leadGy >= 48960.0 && leadGy < 68928.0;
+      if ((lb !== p.leadLb || inOcean !== p.inOcean) && win.__worldStreamer && typeof win.__worldStreamer.onPositionUpdate === "function") {
         rlogEvent(RLOG.LEAD, lb, p.leadLb | 0, 0);
         p.leadLb = lb;
-        win.__worldStreamer.onPositionUpdate({ guid: localGuid(), landblockId: lp.cell });
+        p.inOcean = inOcean;
+        win.__worldStreamer.onPositionUpdate({
+          guid: localGuid(),
+          landblockId: lp.cell,
+          x: lp.x,
+          y: lp.y,
+          gy: leadGy,
+          continent: lp.continent,
+          isOceanCorridor: inOcean,
+        });
       }
     } catch (_) { /* streaming hint only */ }
 

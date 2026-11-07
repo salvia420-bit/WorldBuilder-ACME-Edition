@@ -680,7 +680,7 @@ export const BLOOD_TERRAIN_TRUST_M = 2.5;
  */
 export function resolveIndoor(inst, terrainAt = _terrainHeightAt) {
   const cellIdx = (inst?._outdoorCellIdx ?? inst?._cellIdx ?? 0) >>> 0;
-  const stamped = (cellIdx & 0xffff) >= 0x0100;
+  const stamped = (cellIdx & 0x7fff) >= 0x0100;
   const p = inst?.root?.position;
   if (!p || !Number.isFinite(p.x) || !Number.isFinite(p.y) || !Number.isFinite(p.z)) {
     return stamped;

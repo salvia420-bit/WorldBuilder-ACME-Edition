@@ -285,6 +285,7 @@ public class JsonCommandProcessor {
             ["ace-shard-db-status"] = CmdAceShardDbStatus,
             ["fresh-start"] = CmdFreshStart,
             ["generate-world"] = CmdGenerateWorld,
+            ["generate-dericost-terrain"] = CmdGenerateDericostTerrain,
             ["export-towns-csv"] = CmdExportTownsCsv,
             ["bulk-place-objects"] = CmdBulkPlaceObjects,
             ["generate-terrain"] = CmdGenerateTerrain,
@@ -3808,6 +3809,26 @@ public class JsonCommandProcessor {
         return Serialize(new {
             success = r.Success, command = "export-towns-csv",
             outPath = r.OutPath, rows = r.Rows
+        });
+    }
+
+    private string CmdGenerateDericostTerrain(System.Text.Json.Nodes.JsonNode node) {
+        string outDir = node["outputDir"]?.GetValue<string>()
+            ?? node["out"]?.GetValue<string>()
+            ?? throw new ArgumentException("Missing 'outputDir' field");
+        var r = _engine.GenerateDericostTerrain(outDir);
+        return Serialize(new {
+            success = r.Success,
+            command = "generate-dericost-terrain",
+            outputDir = r.OutputDir,
+            width = r.Width,
+            height = r.Height,
+            dryLandVertices = r.DryLandVertices,
+            dryLandAreaKm2 = r.DryLandAreaKm2,
+            avgLandblockReliefM = r.AvgLandblockReliefM,
+            avgCellDeltaM = r.AvgCellDeltaM,
+            minHeightM = r.MinHeightM,
+            maxHeightM = r.MaxHeightM
         });
     }
 

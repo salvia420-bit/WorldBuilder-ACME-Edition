@@ -348,7 +348,7 @@ export function readPlayerCell(win, out) {
     }
     if (!(cell >>> 16) || !Number.isFinite(x) || !Number.isFinite(y)) return false; // landblock 0: portal space
     out.valid = true;
-    out.outdoor = (cell & 0xffff) < 0x0100; // 0x0100+ are EnvCells (buildings, dungeons)
+    out.outdoor = (cell & 0x7fff) < 0x0100; // 0x0100+ are EnvCells (buildings, dungeons)
     out.x = ((cell >>> 24) & 0xff) * 192 + x;
     out.y = ((cell >>> 16) & 0xff) * 192 + y;
     out.cell = cell;

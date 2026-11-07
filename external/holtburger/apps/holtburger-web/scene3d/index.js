@@ -71,6 +71,7 @@ import { residencyLogEnabled, tickResidencyLog, installResidencyLogProbe, rlogSe
 // ?lbFade (flight experience Phase 1, DEV opt-in): the per-landblock presence field.
 // ?worldTier / ?flightView (flight experience Phase 4): the world tier + the altitude-driven view policy.
 import { initWorldTerrain } from "./world_terrain.js";
+import { initDericostWorld } from "./dericost_world.js";
 import { initFarForest, farForestEnabled } from "./far_forest.js";
 import { flightViewEnabled, tickAltitudePolicy, flightViewDiag, altitudeGridFreeze } from "./altitude_policy.js";
 const FLIGHT_VIEW_ON = flightViewEnabled();
@@ -4810,7 +4811,7 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
       const lbId = ((cell >>> 16) << 16) >>> 0;
       const cx = (lbId >>> 24) & 0xff;
       const cy = (lbId >>> 16) & 0xff;
-      const indoor = (cell & 0xffff) >= 0x100;
+      const indoor = (cell & 0x7fff) >= 0x100;
       const x = Number.isFinite(+loc.x) ? +loc.x : 96;
       const y = Number.isFinite(+loc.y) ? +loc.y : 96;
       const z = Number.isFinite(+loc.z) ? +loc.z : 80;
@@ -5107,7 +5108,10 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
     // ?worldTier (flight experience Phase 4, DEV opt-in; ?flightView turns it on when flying): the whole map +
     // ocean as a CDLOD tier under the far ring. No-op (nothing allocated or fetched) when off.
     try {
-      if (flightViewEnabled()) initWorldTerrain(liveScene3d, { parent: worldRoot });
+      if (flightViewEnabled()) {
+        initWorldTerrain(liveScene3d, { parent: worldRoot });
+        initDericostWorld(liveScene3d, { parent: worldRoot });
+      }
     } catch (e) {
       // eslint-disable-next-line no-console
       console.warn("[world_terrain] init failed (the tier stays off):", e);

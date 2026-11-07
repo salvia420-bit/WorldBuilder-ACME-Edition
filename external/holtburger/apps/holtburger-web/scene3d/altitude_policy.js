@@ -28,6 +28,7 @@
 import { getFlightHint } from "./residency.js";
 import { setWorldTierWanted, tickWorldTerrain, worldGroundHeight, worldTerrainDiag, prefetchWorldTier } from "./world_terrain.js";
 import { setFarForestWanted, tickFarForest, farForestDiag, prefetchFarForest } from "./far_forest.js";
+import { tickDericostWorld } from "./dericost_world.js";
 import { setObjRadiusPolicy } from "./object_radius.js";
 import { flightViewFlag } from "./flight_view_flag.js";
 
@@ -186,7 +187,8 @@ export function tickAltitudePolicy(scene3d, camera, { nowMs, groundAt = null, su
     if (!_st.high && _st.subjectAgl > FLY_ENTER_AGL) _st.high = true;
     else if (_st.high && _st.subjectAgl < FLY_EXIT_AGL) _st.high = false;
   } else _st.high = false;
-  _st.wanted = _st.flying || _st.high;
+  const onDericostOrOcean = ay > 48500.0;
+  _st.wanted = _st.flying || _st.high || onDericostOrOcean;
   // ?flightPrewarm (default ON, only on a page with vehicles): 20 s into the world, prefetch the flight tiers at idle
   // (world grids + program, far-forest index + programs + the impostors trickled one at a time) so a take-off only
   // opens the view (world_terrain.js prefetchWorldTier)
@@ -199,6 +201,7 @@ export function tickAltitudePolicy(scene3d, camera, { nowMs, groundAt = null, su
   tickWorldTerrain(scene3d, camera);
   setFarForestWanted(scene3d, _st.wanted, { rangeM: farForestRangeM(_st.agl) });
   tickFarForest(scene3d, camera);
+  tickDericostWorld(scene3d, camera, nowMs);
   // the weight opens only once the world tier is actually on screen
   const wd = worldTerrainDiag();
   _st.worldFrames = wd.active && wd.nodes > 0 ? _st.worldFrames + 1 : 0;

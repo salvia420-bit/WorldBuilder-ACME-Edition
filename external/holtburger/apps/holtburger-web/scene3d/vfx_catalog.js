@@ -10,6 +10,7 @@
 // player if EITHER selects it).
 //
 // Import-cycle-safe: imports nothing from the scene3d graph.
+import { isTreeDid } from "./tree_wind.js";
 
 function _strFlag(name) {
   try {
@@ -157,7 +158,19 @@ export function ensureVfxCatalog() {
 
 /** The descriptor for a DID, or null. */
 export function vfxDescriptorFor(did) {
-  return _catalog.get((did >>> 0)) || null;
+  const d = _catalog.get((did >>> 0));
+  if (d) return d;
+  if (isTreeDid(did)) {
+    return {
+      archetype: "trunk-canopy",
+      componentIds: new Set(["deformation.windBend"]),
+      config: { ampDeg: 7, fps: 30, loopSeconds: 4, dirDeg: 135, strength: 1, cycles1: 3, cycles2: 11, flutter: 0.3, trunkSuppress: 0.3 },
+      sidecars: {},
+      schemaVersion: 1,
+      raw: { did: "0x" + (did >>> 0).toString(16), archetype: "trunk-canopy" }
+    };
+  }
+  return null;
 }
 
 /** The set of runtime mechanisms a descriptor's components need (the router). */

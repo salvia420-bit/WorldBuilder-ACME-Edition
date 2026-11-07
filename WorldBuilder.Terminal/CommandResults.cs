@@ -1365,6 +1365,18 @@ public record GenerateWorldResult(
 
 public record ExportTownsCsvResult(bool Success, string OutPath, int Rows);
 
+public record GenerateDericostTerrainResult(
+    bool Success,
+    string OutputDir,
+    int Width,
+    int Height,
+    int DryLandVertices,
+    double DryLandAreaKm2,
+    double AvgLandblockReliefM,
+    double AvgCellDeltaM,
+    double MinHeightM,
+    double MaxHeightM);
+
 // ── O6: Outdoor + Dungeon Instance Placements ──────────────
 public record PlacementListRow(
     string Kind,

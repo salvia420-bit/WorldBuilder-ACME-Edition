@@ -569,7 +569,7 @@ function _buildEnv(inst, opts) {
   // So it is a HINT, and it is used as one: it decides nothing on its own, it
   // only answers when the live probe below cannot.
   const cellIdx = (inst._outdoorCellIdx ?? inst._cellIdx ?? 0) >>> 0;
-  let indoor = (cellIdx & 0xffff) >= 0x0100;
+  let indoor = (cellIdx & 0x7fff) >= 0x0100;
 
   /* --- base floor ---------------------------------------------------- */
 

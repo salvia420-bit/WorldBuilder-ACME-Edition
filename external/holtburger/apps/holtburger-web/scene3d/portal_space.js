@@ -612,7 +612,7 @@ export function createPortalSequencer(rng = Math.random) {
 export function destinationCellsReady(scene3d, cellId) {
   const id = cellId >>> 0;
   if (!id) return false;
-  if ((id & 0xffff) >= 0x100) {
+  if ((id & 0x7fff) >= 0x100) {
     const m = scene3d?.cellContainers3d;
     return m && typeof m.has === "function" ? m.has(id) : true;
   }
@@ -627,7 +627,7 @@ export function destinationCellsReady(scene3d, cellId) {
  */
 export function destinationBuildInFlight(scene3d, cellId) {
   const id = cellId >>> 0;
-  if (!id || (id & 0xffff) < 0x100) return false;
+  if (!id || (id & 0x7fff) < 0x100) return false;
   const s = scene3d?.envCellBuildInFlight;
   return !!(s && typeof s.has === "function" && s.has((id & 0xffff0000) >>> 0));
 }
@@ -1674,7 +1674,7 @@ function computeLoginWorldReady(scene3d) {
   }
   const waited = _clock - _arrivedAt;
   if (waited >= ARRIVAL_CELLS_WAIT_MAX) {
-    const indoor = (_arrivalCell & 0xffff) >= 0x100;
+    const indoor = (_arrivalCell & 0x7fff) >= 0x100;
     if (PORTAL_HOLD_BUILD && waited < ARRIVAL_BUILD_WAIT_MAX &&
         (destinationBuildInFlight(scene3d, _arrivalCell) ||
          (indoor && globalThis.__interiorBuildPending === true))) {

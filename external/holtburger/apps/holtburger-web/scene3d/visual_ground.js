@@ -558,7 +558,7 @@ export function visualGroundBeginFrame(scene3d) {
   _localGuid = lg;
   let pose = null;
   try { pose = sh ? readLocalPlayerPose(sh) : null; } catch (_) { pose = null; }
-  _localIndoor = !!pose && ((pose.landblockId >>> 0) & 0xffff) >= 0x0100;
+  _localIndoor = !!pose && ((pose.landblockId >>> 0) & 0x7fff) >= 0x0100;
   if (_fadeActive) _updateCamAc(scene3d); else _camAc = null;
 }
 
@@ -615,7 +615,7 @@ export function entityVisualGroundDz(inst) {
       indoor = _localIndoor;
     } else {
       const ci = inst._wireCellIdx ?? inst._outdoorCellIdx;
-      indoor = ci != null && Number.isFinite(ci) && (ci & 0xffff) >= 0x0100;
+      indoor = ci != null && Number.isFinite(ci) && (ci & 0x7fff) >= 0x0100;
     }
     if (indoor) {
       why = VG_WHY.INDOOR;

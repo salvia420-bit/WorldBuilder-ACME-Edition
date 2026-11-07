@@ -52,7 +52,7 @@ export const VIEWER_PIVOT_Z_M = 1.5;
 
 /** An EnvCell id (low word ≥ 0x100) is an indoor cell. */
 export function isIndoorCellId(cell) {
-  return ((cell >>> 0) & 0xffff) >= 0x100;
+  return ((cell >>> 0) & 0x7fff) >= 0x100;
 }
 
 const _state = {

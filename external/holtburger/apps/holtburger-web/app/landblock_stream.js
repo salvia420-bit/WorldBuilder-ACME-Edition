@@ -526,12 +526,12 @@ export function createLandblockStream(D) {
       // snapshot (`getCurrentCellId` — server-truth carried cell, the one
       // accessor verified correct in that wedge) whenever the raw pose
       // does not read as an interior cell.
-      if ((cellId & 0xffff) < 0x100) {
+      if ((cellId & 0x7fff) < 0x100) {
         let snapCell = 0;
         try {
           snapCell = typeof h.getCurrentCellId === "function" ? h.getCurrentCellId() >>> 0 : 0;
         } catch (_) { snapCell = 0; }
-        if ((snapCell & 0xffff) < 0x100) return; // genuinely outdoors — normal path owns it
+        if ((snapCell & 0x7fff) < 0x100) return; // genuinely outdoors — normal path owns it
         cellId = snapCell;
       }
       const lbId = (cellId & 0xffff0000) >>> 0;

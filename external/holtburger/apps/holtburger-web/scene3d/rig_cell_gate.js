@@ -109,9 +109,9 @@ function _installRigCellGateDiag() {
   } catch (_) {}
 }
 
-/** An EnvCell id (`cell & 0xFFFF >= 0x100`); landcells are 0x01-0x40. */
+/** An EnvCell id (`cell & 0x7FFF >= 0x100`); landcells are 0x01-0x40. */
 export function isEnvCellId(cellId) {
-  return ((cellId >>> 0) & 0xffff) >= 0x100;
+  return ((cellId >>> 0) & 0x7fff) >= 0x100;
 }
 
 /**
@@ -145,7 +145,7 @@ export function sphereTouchesBox(cx, cy, cz, r, b) {
 export function rigCellHidden(cellId, registry, drawnCellBoxes, center, radius, outsideViewCount) {
   if (cellId === undefined || cellId === null || !Number.isFinite(cellId)) return false;
   const id = cellId >>> 0;
-  const low = id & 0xffff;
+  const low = id & 0x7fff;
   if (low === 0) return false;
   if (low >= 0x100) {
     if (!registry || typeof registry.get !== "function") return false;

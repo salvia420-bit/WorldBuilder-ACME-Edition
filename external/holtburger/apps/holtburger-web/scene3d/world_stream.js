@@ -158,9 +158,26 @@ const LOAD_POINT_SHIFT_ONLY = (() => {
 
 // Retail's outdoor discriminator: the low word of the cell id is the EnvCell
 // index; < 0x100 == an outdoor landcell (acclient.c:146439, and mirrored at
-// scene3d/camera.js:1313 `(landblockId & 0xffff) >= 0x0100`).
+// scene3d/camera.js:1313 `(landblockId & 0xffff) >= 0x0100`). Mask Bit 15 (Continent flag).
 function isIndoorCell(landblockId) {
-  return ((landblockId >>> 0) & 0xffff) >= 0x100;
+  return ((landblockId >>> 0) & 0x7fff) >= 0x100;
+}
+
+export const OCEAN_CORRIDOR_Y_MIN = 48960.0;
+export const OCEAN_CORRIDOR_Y_MAX = 68928.0;
+
+export function isOceanCorridor(upd) {
+  if (!upd) return false;
+  if (upd.isOceanCorridor === true) return true;
+  if (typeof upd.gy === "number") return upd.gy >= OCEAN_CORRIDOR_Y_MIN && upd.gy < OCEAN_CORRIDOR_Y_MAX;
+  if (typeof upd.landblockId === "number" && typeof upd.y === "number") {
+    const lbY = (upd.landblockId >>> 16) & 0xFF;
+    const isDericost = ((upd.landblockId >>> 15) & 1) === 1 || upd.continent === 1;
+    const gy = (isDericost ? 68928.0 : 0.0) + lbY * 192.0 + upd.y;
+    if (gy >= OCEAN_CORRIDOR_Y_MIN && gy < OCEAN_CORRIDOR_Y_MAX) return true;
+  }
+  if (typeof upd.y === "number") return upd.y >= OCEAN_CORRIDOR_Y_MIN && upd.y < OCEAN_CORRIDOR_Y_MAX;
+  return false;
 }
 
 /**
@@ -262,16 +279,21 @@ export function createWorldStreamer(deps) {
       // low word is retail's `objcell_id` low word with no pose-freeze lag —
       // the same discriminator `CellManager::UpdateLoadPoint` gates on.
       const indoors = isIndoorCell(upd.landblockId);
+      const inOcean = isOceanCorridor(upd);
       gateStats.positionPackets += 1;
       gateStats.indoorNow = indoors;
+      gateStats.oceanNow = inOcean;
       gateStats.lastCell = (upd.landblockId >>> 0) & 0xffff;
       if (indoors) gateStats.indoorPackets += 1;
+      if (inOcean) gateStats.oceanPackets = (gateStats.oceanPackets || 0) + 1;
       // Effect (A): indoors → no new outdoor render-layer admissions.
       const gateHeld = indoors && DUNGEON_STREAM_GATE_ON;
       // Effect (B): outdoors (or gate off) → only rebuild on a real shift.
       const shiftSkipped =
         !gateHeld && LOAD_POINT_SHIFT_ONLY && lbId !== 0 && lbId === lastRingLb;
-      const streamOutdoor = lbId !== 0 && !gateHeld && !shiftSkipped;
+      // Effect (C): ocean corridor → suppress outdoor terrain ring & object streaming.
+      const oceanHeld = inOcean;
+      const streamOutdoor = lbId !== 0 && !gateHeld && !shiftSkipped && !oceanHeld;
       if (indoors) gateStats.wouldHoldRingEvals += 1;
       if (gateHeld) {
         gateStats.heldRingEvals += 1;
@@ -286,6 +308,9 @@ export function createWorldStreamer(deps) {
         // ran indoors, so its stored load point is likewise stale on return.)
         lastRingLb = 0;
         noteHeld(getLiveScene3d());
+      } else if (oceanHeld) {
+        gateStats.oceanSkippedRingEvals = (gateStats.oceanSkippedRingEvals || 0) + 1;
+        lastRingLb = 0;
       } else if (shiftSkipped) {
         gateStats.shiftSkippedRingEvals += 1;
       } else if (streamOutdoor) {
@@ -325,7 +350,7 @@ export function createWorldStreamer(deps) {
         lastLb = lbId;
         emitLandblockChanged(prevLb, lbId);
       }
-      if (lbId !== 0 && !terrainPrefetchedLbs.has(lbId)) {
+      if (lbId !== 0 && !oceanHeld && !terrainPrefetchedLbs.has(lbId)) {
         // Fire-and-forget; the integrator preserves pose Z on
         // cache miss until the prefetch lands.
         ensureTerrainAroundLandblock(lbId);
@@ -334,7 +359,7 @@ export function createWorldStreamer(deps) {
       // (every position update for the local player), same 3x3 ring,
       // same lazy gate. Until this lands collision, the player walks
       // through walls outside the spawn neighbourhood.
-      if (lbId !== 0 && !buildingAabbsPopulatedLbs.has(lbId)) {
+      if (lbId !== 0 && !oceanHeld && !buildingAabbsPopulatedLbs.has(lbId)) {
         ensureBuildingAabbsAroundLandblock(lbId);
       }
       // Lazy-fetch + bake EnvCells when entering a landblock.
@@ -357,13 +382,14 @@ export function createWorldStreamer(deps) {
       const rendererUpForCells = !!getLiveScene3d();
       if (
         lbId !== 0
+        && !oceanHeld
         && !cellContainersPopulatedLbs.has(lbId)
         && !rendererUpForCells
       ) {
         ensureCellContainersForLandblock(lbId);
       }
       const s3d = getLiveScene3d();
-      if (lbId !== 0 && s3d?.loadEnvCellsForLandblock) {
+      if (lbId !== 0 && !oceanHeld && s3d?.loadEnvCellsForLandblock) {
         s3d.loadEnvCellsForLandblock(lbId);
       }
       // World-expand step 1 Objective 6: mirror the wasm-side

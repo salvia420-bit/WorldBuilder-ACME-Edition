@@ -3914,7 +3914,7 @@ export function tickPortalStencil(scene3d, sessionHandle) {
     if (registry instanceof Map) {
       for (const [cid, container] of registry) {
         if (!container?.visible) continue;
-        if (((cid >>> 0) & 0xffff) < 0x100) continue; // interior cells only
+        if (((cid >>> 0) & 0x7fff) < 0x100) continue; // interior cells only
         cells.push(container);
         wanted.add(container);
         if (!moved.has(container)) {
@@ -4616,7 +4616,7 @@ export function markOutdoorEntities(scene3d) {
     const isSelf = self !== 0 && (guid >>> 0) === self;
     const outdoor = isSelf
       ? selfOutdoor
-      : ci != null && Number.isFinite(ci) && (ci & 0xffff) < 0x0100;
+      : ci != null && Number.isFinite(ci) && (ci & 0x7fff) < 0x0100;
     root.userData.__splitOutdoor = outdoor;
     if (outdoor) n++;
   });

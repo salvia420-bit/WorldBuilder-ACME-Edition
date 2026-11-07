@@ -43,7 +43,7 @@ const GROUND_CLAMP_MAX_LIFT = 10.0;  // bound: never lift more than 10 m (struct
 // bury depth exceeds the bound.
 function _groundClampZ(wx, wy, z, cellIdx) {
   if (!GROUND_CLAMP_ON) return z;
-  if ((cellIdx & 0xffff) >= 0x0100) return z; // indoor EnvCell — no terrain
+  if ((cellIdx & 0x7fff) >= 0x0100) return z; // indoor EnvCell — no terrain
   const sh = (typeof window !== "undefined") ? window.__sessionHandle : null;
   if (!sh || typeof sh.terrainHeightAt !== "function") return z;
   const groundZ = sh.terrainHeightAt(wx, wy);
@@ -6034,7 +6034,7 @@ export class EntityManager {
         // above the local terrain sample (a bolt fired across a rise can be
         // authored below our sample — see the ground-clamp skip above).
         inst._ballisticTerrainOk = false;
-        if (PROJECTILE_TERRAIN_STOP_ON && (inst._outdoorCellIdx & 0xffff) < 0x0100) {
+        if (PROJECTILE_TERRAIN_STOP_ON && (inst._outdoorCellIdx & 0x7fff) < 0x0100) {
           const gz = _terrainZAt(inst.root.position.x, inst.root.position.y);
           inst._ballisticTerrainOk =
             gz != null && inst.root.position.z >= gz - PROJECTILE_TERRAIN_STOP_EPS;
@@ -17354,7 +17354,7 @@ export class EntityManager {
     const t = sweepProjectileSegment(ctx.sh, p0, pos, {
       cells: projectileSweepCells(ctx.renderSet, cellId),
       // physics-collision-3: an outdoor bolt also sweeps the scenery.
-      scenery: PROJECTILE_SCENERY_SWEEP_ON && (cellId & 0xffff) < 0x0100,
+      scenery: PROJECTILE_SCENERY_SWEEP_ON && (cellId & 0x7fff) < 0x0100,
       entities: ctx.entities,
       objects: ctx.objects,
       missileGuid: inst.guid >>> 0,
@@ -17413,7 +17413,7 @@ export class EntityManager {
   _projectileTrackCell(inst, x0, y0, z0) {
     if (!PROJECTILE_SCENERY_SWEEP_ON && !PROJECTILE_TERRAIN_CROSSING_ON) return;
     const cell = (inst._ballisticCellId ?? 0) >>> 0;
-    if ((cell & 0xffff) < 0x0100) return;
+    if ((cell & 0x7fff) < 0x0100) return;
     const sh = (typeof window !== "undefined") ? window.__sessionHandle : null;
     if (!sh || typeof sh.resolveViewerCell !== "function") return;
     const pos = inst.root.position;
@@ -17425,7 +17425,7 @@ export class EntityManager {
     }
     if (next === 0 || next === cell) return;
     inst._ballisticCellId = next;
-    if ((next & 0xffff) >= 0x0100) return; // into another room
+    if ((next & 0x7fff) >= 0x0100) return; // into another room
     if (PROJECTILE_TERRAIN_STOP_ON && PROJECTILE_TERRAIN_CROSSING_ON && !inst._ballisticTerrainOk) {
       const gz = _terrainZAt(pos.x, pos.y);
       inst._ballisticTerrainOk = gz != null && pos.z >= gz - PROJECTILE_TERRAIN_STOP_EPS;

@@ -215,7 +215,7 @@ export function readDeploySignals(win = globalThis.window, cache = S, droneState
   const busy = (typeof droneState === "string" ? droneState : read(() => w.__drone?.status?.()?.state, "idle")) !== "idle";
   const targeting = read(() => w.__useTargeting?.pending != null, false); // pending: null | {itemGuid, itemName} (app/hud_panels.js)
   const cell = read(() => h.getCurrentCellId?.() >>> 0, 0);
-  const indoors = read(() => h.isCurrentCellIndoor?.() === true, false) || (cell & 0xffff) >= 0x100;
+  const indoors = read(() => h.isCurrentCellIndoor?.() === true, false) || (cell & 0x7fff) >= 0x100;
   const low = read(() => (w.__getCurrentStanceLow?.() ?? 0x3d) & 0xffff, 0x3d);
   const combat = low !== 0 && low !== 0x3d;                      // NonCombat 0x8000003D; magic 0x49 counts as combat
   let onGround = true;

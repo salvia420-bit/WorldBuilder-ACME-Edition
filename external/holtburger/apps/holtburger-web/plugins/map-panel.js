@@ -129,9 +129,9 @@ export function mapPxToCoords(px, py, area = MAP_MARKER_AREA) {
 /** Map px per one coordinate unit (both axes ≈ 1.18 at 1:1). */
 export const MAP_PX_PER_COORD = ((MAP_MARKER_AREA.x1 - MAP_MARKER_AREA.x0 + 1) * 10) / 2048;
 
-/** SmartBox::is_player_outside: (objcell_id & 0xFFFF) < 0x100. */
+/** SmartBox::is_player_outside: (objcell_id & 0x7FFF) < 0x100. */
 export function isOutdoorCell(cellId) {
-  return ((cellId >>> 0) & 0xffff) < 0x100;
+  return ((cellId >>> 0) & 0x7fff) < 0x100;
 }
 
 /**

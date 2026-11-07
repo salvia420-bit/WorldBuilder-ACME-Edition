@@ -158,7 +158,7 @@ export function projectileHitStops(t, nDotDir, inLaunchWindow) {
  */
 export function projectileSweepCells(renderSet, ownCellId) {
   const own = ownCellId >>> 0;
-  const indoor = (own & 0xffff) >= 0x0100;
+  const indoor = (own & 0x7fff) >= 0x0100;
   if (!indoor) return renderSet && renderSet.length > 0 ? renderSet : null;
   if (!renderSet || renderSet.length === 0) return Uint32Array.of(own);
   if (renderSet.includes(own)) return renderSet;

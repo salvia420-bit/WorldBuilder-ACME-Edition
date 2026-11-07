@@ -74,9 +74,9 @@ export function loadLastLocation(storage, key) {
   }
 }
 
-/** Retail `(objcell_id & 0xffff) >= 0x100`: inside an EnvCell. */
+/** Retail `(objcell_id & 0x7fff) >= 0x100`: inside an EnvCell. */
 export function isIndoorCell(cell) {
-  return ((Number(cell) >>> 0) & 0xffff) >= 0x100;
+  return ((Number(cell) >>> 0) & 0x7fff) >= 0x100;
 }
 
 /**

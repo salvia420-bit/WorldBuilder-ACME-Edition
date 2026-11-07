@@ -1980,7 +1980,7 @@ export class CameraSwitcher {
     // (stitch-seam gaps, shell triangles living in skipped layers).
     if (
       this._camCellClampOn &&
-      (landblockId & 0xffff) >= 0x0100
+      (landblockId & 0x7fff) >= 0x0100
     ) {
       try {
         if (typeof handle.clipCameraToCellSpace === "function") {
@@ -2026,7 +2026,7 @@ export class CameraSwitcher {
     // overworld"). Indoors the EnvCell triangle sweep (step 5) is the correct
     // collider, so skip the outdoor layers entirely. Default OFF pending live
     // A/B on a real GPU (window.__setIndoorCam to toggle without a reload).
-    const indoor = this._indoorCamOn && (landblockId & 0xffff) >= 0x0100;
+    const indoor = this._indoorCamOn && (landblockId & 0x7fff) >= 0x0100;
     return { handle, landblockId, indoor };
   }
 
