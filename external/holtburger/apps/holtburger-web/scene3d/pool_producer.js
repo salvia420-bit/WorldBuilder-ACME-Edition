@@ -273,8 +273,11 @@ export function addSingletonsToPools(nodes, scene3d, opts = {}) {
       // `offPage`. Both are refusals with a KNOWN future event — the BC7
       // verdict settling — after which the member's dims stop moving and it
       // can take a page layer. Everything else (needsResample, deformed,
-      // layerFull) has no event and is not filed.
-      if (admit.reason === REFUSE.BC7_PENDING || admit.reason === REFUSE.OFF_PAGE) {
+      // layerFull) has no event and is not filed. Env-cell surfaces ("ec")
+      // are temporary unparented meshes that cells.js immediately fuses into
+      // surfaces-fused-opaque on refusal, so holding them out leaks detached
+      // Mesh + BufferGeometry objects into _world.holdouts.
+      if (domain !== "ec" && (admit.reason === REFUSE.BC7_PENDING || admit.reason === REFUSE.OFF_PAGE)) {
         _holdOut(n, scene3d, opts, mat, admit.reason);
       }
       passthrough.push(n);

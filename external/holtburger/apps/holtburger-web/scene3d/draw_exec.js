@@ -290,9 +290,25 @@ const REFRESHED = Object.freeze(["opacity", "diffuse", "emissive", "map", "mapTr
   "aoMapTransform", "metalness", "metalnessMap", "metalnessMapTransform", "roughness", "roughnessMap", "roughnessMapTransform",
   "envMapIntensity", "specular", "shininess", "gradientMap", "fogColor", "fogNear", "fogFar", "fogDensity", "dfgLUT",
   "envMap", "envMapRotation", "reflectivity", "ior", "refractionRatio"]);
+const REFRESHED_SET = new Set(REFRESHED);
+function detNeg(mw) {
+  const te = mw.elements;
+  if (te !== undefined && te[3] === 0 && te[7] === 0 && te[11] === 0 && te[15] === 1) {
+    const n11 = te[0], n12 = te[4], n13 = te[8];
+    const n21 = te[1], n22 = te[5], n23 = te[9];
+    const n31 = te[2], n32 = te[6], n33 = te[10];
+    return (n11 * (n22 * n33 - n23 * n32) - n12 * (n21 * n33 - n23 * n31) + n13 * (n21 * n32 - n22 * n31)) < 0;
+  }
+  return mw.determinant() < 0;
+}
 // WebGLMaterials' module-level scratch / constant for the env rotation (three r184: `_m1`, `_m`)
 const _dxEnvM4 = new THREE.Matrix4();
+const _dxEnvM3 = new THREE.Matrix3();
 const _dxEnvFlip = new THREE.Matrix3().set(-1, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0);
+let _erX = NaN, _erY = NaN, _erZ = NaN, _erOrder = null, _erFlip = null;
+const TEX_UPDATE_MATRIX = THREE.Texture.prototype.updateMatrix;
+const M3_SET_UV = THREE.Matrix3.prototype.setUvTransform;
+const M3_SET = THREE.Matrix3.prototype.set;
 /** Per plan: each refreshed uniform's index in the upload list, -1 when the program does not use it. */
 function refreshIndex(ids) {
   const ix = Object.create(null);
@@ -302,7 +318,16 @@ function refreshIndex(ids) {
 }
 function refreshTransformIx(map, C, i) {
   if (map.matrixAutoUpdate === true) {
-    map.updateMatrix();
+    const m = map.matrix;
+    if (map.updateMatrix === TEX_UPDATE_MATRIX && m && m.setUvTransform === M3_SET_UV && m.set === M3_SET && map.rotation === 0) {
+      const tx = map.offset.x, ty = map.offset.y, sx = map.repeat.x, sy = map.repeat.y, cx = map.center.x, cy = map.center.y;
+      const te = m.elements;
+      te[0] = sx; te[1] = -sy * 0; te[2] = 0;
+      te[3] = sx * 0; te[4] = sy; te[5] = 0;
+      te[6] = -sx * cx + cx + tx; te[7] = -sy * cy + cy + ty; te[8] = 1;
+    } else {
+      map.updateMatrix();
+    }
   }
   if (i >= 0) C[i].value.copy(map.matrix);
 }
@@ -365,13 +390,17 @@ function refreshCommonIx(C, ix, material, mp) {
   const envMapRotation = mp.envMapRotation;
   if (envMap) {
     if (ix.envMap >= 0) C[ix.envMap].value = envMap;
-    // (the matrix is orthonormal: transpose() for invert(), as three)
+    // (the matrix is orthonormal: transpose() for invert(), as three — memoised on its Euler + flip inputs)
     if (ix.envMapRotation >= 0) {
       const u = C[ix.envMapRotation];
-      u.value.setFromMatrix4(_dxEnvM4.makeRotationFromEuler(envMapRotation)).transpose();
-      if (envMap.isCubeTexture && envMap.isRenderTargetTexture === false) {
-        u.value.premultiply(_dxEnvFlip);
+      const flip = !!(envMap.isCubeTexture && envMap.isRenderTargetTexture === false);
+      const ex = envMapRotation._x, ey = envMapRotation._y, ez = envMapRotation._z, eo = envMapRotation._order;
+      if (ex !== _erX || ey !== _erY || ez !== _erZ || eo !== _erOrder || flip !== _erFlip) {
+        _dxEnvM3.setFromMatrix4(_dxEnvM4.makeRotationFromEuler(envMapRotation)).transpose();
+        if (flip) _dxEnvM3.premultiply(_dxEnvFlip);
+        _erX = ex; _erY = ey; _erZ = ez; _erOrder = eo; _erFlip = flip;
       }
+      u.value.copy(_dxEnvM3);
     }
     if (ix.reflectivity >= 0) C[ix.reflectivity].value = material.reflectivity;
     if (ix.ior >= 0) C[ix.ior].value = material.ior;
@@ -1502,21 +1531,24 @@ export function installDrawExec(renderer, getMainScene, opts = {}) {
     const list = mp.uniformsList;
     if (!Array.isArray(list)) return "plan:uniformsList";
     const lit = mp.needsLights === true;
-    const ups = [], ids = [];
+    const m = mp.uniforms;
+    const ups = [], ids = [], C = [], customIdx = [];
     let sampler = null;
     for (let i = 0; i < list.length; i++) {
       const u = list[i];
       if (lit && LIGHT_ID_SET.has(u.id)) continue; // marked clean right before the walk: upload skips them
-      ups.push(u); ids.push(u.id);
+      const idx = ups.length;
+      ups.push(u); ids.push(u.id); C.push(m[u.id]);
+      if (!REFRESHED_SET.has(u.id)) customIdx.push(idx);
       if (sampler === null && SAMPLER_TYPES.has(u.type)) sampler = u;
     }
     if (textures === null && sampler !== null) armTexturesCapture(sampler);
     // three's DFG LUT (setProgram just wrote it into every dfgLUT uniform it refreshed)
-    const d = mp.uniforms.dfgLUT;
+    const d = m.dfgLUT;
     if (dfgLut === null && d !== undefined && d !== null && d.value && d.value.isDataTexture === true && d.value.name === "DFG_LUT") dfgLut = d.value;
     stats.switchPlans += 1;
-    // C: this draw's containers, looked up by name once (the walk's own lookups), shared by the refresh
-    return { list, m: mp.uniforms, pu: rec.pu, kind, ups, ids, C: new Array(ids.length).fill(null), ix: refreshIndex(ids), uTME: rec.pu.map.toneMappingExposure };
+    // C: this draw's containers, pre-resolved for built-in REFRESHED uniforms (m is held by plan.m)
+    return { list, m, pu: rec.pu, kind, ups, ids, C, customIdx, ix: refreshIndex(ids), uTME: rec.pu.map.toneMappingExposure };
   };
   /**
    * three r184 WebGLEnvironments.get( material.envMap || environment, usePMREM ) as setProgram calls it,
@@ -1637,9 +1669,18 @@ export function installDrawExec(renderer, getMainScene, opts = {}) {
     }
     mp.receiveShadow = object.receiveShadow;
     if (rec.uRS !== undefined) rec.uRS.setValue(gl, object.receiveShadow);
-    // the upload list's containers, by name, once (three's walk looks each up; the refresh writes them)
+    // the upload list's containers: built-in REFRESHED uniforms are fixed on plan.m; only ShaderMaterial
+    // or non-REFRESHED custom uniforms (onBeforeCompile) can have their container object replaced in m
     const ups = plan.ups, ids = plan.ids, C = plan.C;
-    for (let i = 0; i < ids.length; i++) C[i] = m[ids[i]];
+    if (plan.kind === K_SHADER) {
+      for (let i = 0; i < ids.length; i++) C[i] = m[ids[i]];
+    } else {
+      const customIdx = plan.customIdx;
+      for (let k = 0; k < customIdx.length; k++) {
+        const i = customIdx[k];
+        C[i] = m[ids[i]];
+      }
+    }
     if ((material.isMeshStandardMaterial || material.isMeshLambertMaterial || material.isMeshPhongMaterial) && material.envMap === null && scene.environment !== null) {
       if (ix.envMapIntensity >= 0) C[ix.envMapIntensity].value = scene.environmentIntensity;
     }
@@ -1668,14 +1709,13 @@ export function installDrawExec(renderer, getMainScene, opts = {}) {
     for (let i = 0; i < ups.length; i++) {
       const v = C[i];
       if (v.needsUpdate !== false) ups[i].setValue(gl, v.value, textures);
-      C[i] = null; // (no container kept past the draw)
     }
     // (ShaderMaterial: uniformsNeedUpdate is false after the refresh; no sprite; no UBO — refused)
     if (rec.uMV !== undefined) rec.uMV.setValue(gl, object.modelViewMatrix);
     if (rec.uNM !== undefined) rec.uNM.setValue(gl, object.normalMatrix);
     if (rec.uMM !== undefined) rec.uMM.setValue(gl, object.matrixWorld);
     // renderBufferDirect: state.setMaterial( material, frontFaceCW )
-    const ff = object.matrixWorld.determinant() < 0;
+    const ff = detNeg(object.matrixWorld);
     state.setMaterial(material, ff);
     smMat = material; smObj = object; smSerial = serial; smDraw = stats.draws; smFF = ff ? 1 : 0;
     // GL now holds this material's refresh (stock's tracker); three's tracker is still thrMat
@@ -1745,13 +1785,13 @@ export function installDrawExec(renderer, getMainScene, opts = {}) {
       if (rec.uMV !== undefined) rec.uMV.setValue(gl, object.modelViewMatrix);
       if (rec.uNM !== undefined) rec.uNM.setValue(gl, object.normalMatrix);
       if (rec.uMM !== undefined) rec.uMM.setValue(gl, object.matrixWorld);
-      const ff = object.matrixWorld.determinant() < 0;
+      const ff = detNeg(object.matrixWorld);
       // smFF: the front face the last setMaterial was called with — exact when the executor made
       // that call (1 / 0), unknown (-1) after three's, which re-derives it from smObj as before.
       if (smMat === material && smDraw === stats.draws - 1 && smSerial === serial
         && smObj.onAfterRender === O3D_AFTER && material.onBeforeRender === MAT_BEFORE
         && (object.onBeforeRender === O3D_BEFORE || object.onBeforeRender === BM_BEFORE)
-        && (smFF !== -1 ? smFF === (ff ? 1 : 0) : (smObj.isMesh === true && smObj.matrixWorld.determinant() < 0) === ff)) {
+        && (smFF !== -1 ? smFF === (ff ? 1 : 0) : (smObj.isMesh === true && detNeg(smObj.matrixWorld)) === ff)) {
         stats.smSkips += 1;
         smObj = object; smDraw = stats.draws; smFF = ff ? 1 : 0; // WebGLState holds what setMaterial(material, ff) sets for this draw too
       } else {

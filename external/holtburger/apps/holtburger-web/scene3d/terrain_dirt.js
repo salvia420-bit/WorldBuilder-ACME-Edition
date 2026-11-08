@@ -1745,24 +1745,33 @@ export function pushMudTrailUniforms(materials, trail, wetness, overrides) {
   const on = tex ? 1 : 0;
   const wet = Number.isFinite(wetness) ? Math.min(1, Math.max(0, wetness)) : 0;
   let touched = 0;
-  for (const mat of materials) {
+  for (let i = 0; i < materials.length; i++) {
+    const mat = materials[i];
     const u = mat && mat.uniforms;
-    if (!u || !u.uMudTrailEnabled) continue;   // pre-Wave-3B material: skip
-    if (tex && u.uSnowTrailMap) u.uSnowTrailMap.value = tex;
+    const uEn = u ? u.uMudTrailEnabled : null;
+    if (!uEn) continue;   // pre-Wave-3B material: skip
     if (tex) {
-      const c = u.uSnowTrailCenter ? u.uSnowTrailCenter.value : null;
+      const uMap = u.uSnowTrailMap;
+      if (uMap) uMap.value = tex;
+      const uCenter = u.uSnowTrailCenter;
+      const c = uCenter ? uCenter.value : null;
       // Written componentwise rather than with .set(): the batched material's
       // clone is a real Vector2, but a headless/stub material may carry a plain
       // {x, y} and this path must not care.
       if (c) { c.x = cx; c.y = cy; }
-      if (u.uSnowTrailRadius) u.uSnowTrailRadius.value = radius;
+      const uRad = u.uSnowTrailRadius;
+      if (uRad) uRad.value = radius;
     }
-    u.uMudTrailEnabled.value = on;
-    if (u.uMudWetness) u.uMudWetness.value = wet;
+    uEn.value = on;
+    const uWet = u.uMudWetness;
+    if (uWet) uWet.value = wet;
     if (overrides) {
-      if (Number.isFinite(overrides.printDarken) && u.uMudPrintDarken) u.uMudPrintDarken.value = overrides.printDarken;
-      if (Number.isFinite(overrides.printDryScale) && u.uMudPrintDryScale) u.uMudPrintDryScale.value = overrides.printDryScale;
-      if (Number.isFinite(overrides.printDepth) && u.uMudPrintDepth) u.uMudPrintDepth.value = overrides.printDepth;
+      const uDark = u.uMudPrintDarken;
+      if (Number.isFinite(overrides.printDarken) && uDark) uDark.value = overrides.printDarken;
+      const uDry = u.uMudPrintDryScale;
+      if (Number.isFinite(overrides.printDryScale) && uDry) uDry.value = overrides.printDryScale;
+      const uDep = u.uMudPrintDepth;
+      if (Number.isFinite(overrides.printDepth) && uDep) uDep.value = overrides.printDepth;
     }
     touched += 1;
   }

@@ -823,34 +823,27 @@ function buildDoorTemplate(mats) {
 
 let _state = null;
 
+function ensureDericostAssets(st) {
+  if (!st.mats) st.mats = createMaterials();
+  if (!st.doorTemplate) st.doorTemplate = buildDoorTemplate(st.mats);
+}
+
 export function initDericostWorld(scene3d, { parent = null } = {}) {
   if (_state) return _state;
   const root = new THREE.Group();
   root.name = "dericost-world-props";
+  root.visible = false;
   (parent ?? scene3d.terrainGroup?.parent ?? scene3d.scene).add(root);
 
-  // Dedicated Dericost directional sun + sky hemisphere fill (in AC Z-up space under worldRoot)
-  const sunLight = new THREE.DirectionalLight(0xfff4e0, 2.2);
-  sunLight.position.set(-4000, -3000, 8000);
-  sunLight.target.position.set(0, 0, 0);
-  root.add(sunLight);
-  root.add(sunLight.target);
-
-  const hemiLight = new THREE.HemisphereLight(0xdce8ff, 0x4a5244, 1.15);
-  hemiLight.position.set(0, 0, 1000);
-  root.add(hemiLight);
-
-  const mats = createMaterials();
   const sceneryTemplates = new Map();
   const buildingTemplates = new Map();
-  const doorTemplate = buildDoorTemplate(mats);
 
   _state = {
     root,
-    mats,
+    mats: null,
     sceneryTemplates,
     buildingTemplates,
-    doorTemplate,
+    doorTemplate: null,
     lbGroups: new Map(), // lbHex -> { status, group, lastTouchMs }
     vfxNoted: new Map(), // lbHex -> { lbX, lbY }
     vfxSwampDirtInited: false,
@@ -864,7 +857,7 @@ export function initDericostWorld(scene3d, { parent = null } = {}) {
     window.__dericostWorld = () => ({
       loadedLandblocks: _state.lbGroups.size,
       vfxNotedLandblocks: _state.vfxNoted.size,
-      builtLandblocks: Math.max(0, _state.root.children.length - 3),
+      builtLandblocks: _state.root.children.length,
       activeFetches: _state.activeFetches,
       queuedFetches: _state.fetchQueue.length,
       lastCenterKey: _state.lastCenterKey,
@@ -1005,6 +998,7 @@ function augmentProvinceFlora(lbX, lbY, sceneryRecs, buildingRecs) {
 }
 
 function buildLandblockGroup(st, lbX, lbY, rawSceneryRecs, buildingRecs) {
+  ensureDericostAssets(st);
   const group = new THREE.Group();
   const hex = (((lbX << 8) | lbY) >>> 0).toString(16).toUpperCase().padStart(4, "0");
   group.name = `dericost-lb-0x${hex}`;
@@ -1129,27 +1123,44 @@ export function tickDericostWorld(scene3d, camera, nowMs = 0) {
   const st = _state || initDericostWorld(scene3d);
   if (!st || !camera) return;
 
-  // Advance shared VFX wind clock so TreeSway animates even when Dereth oscillators are idle
-  if (VFX_GLOBALS && VFX_GLOBALS.uTime && nowMs > 0) {
-    VFX_GLOBALS.uTime.value = (nowMs * 0.001) % 3600;
-  }
-
-  const cp = camera.getWorldPosition ? camera.getWorldPosition(st._cp || (st._cp = new THREE.Vector3())) : camera.position;
+  const cp = (!camera.parent || camera.parent.isScene)
+    ? camera.position
+    : (camera.getWorldPosition ? camera.getWorldPosition(st._cp || (st._cp = new THREE.Vector3())) : camera.position);
   const ax = cp.x;
   const ay = -cp.z;
   const az = cp.y;
 
   // Only stream Dericost props when camera is near or over Dericost (Y >= 67,000 m) and below 2,800 m altitude
   if (ay < 67000.0 || ay > DERICOST_Y_MAX + 2000.0 || az > 2800.0) {
-    st.root.visible = ay >= 67000.0;
-    if (ay < 67000.0 && st.vfxNoted.size > 0) {
-      for (const [, v] of st.vfxNoted.entries()) {
-        try { terrainVfxLandblockGone(lbKeyFromXY(v.lbX, v.lbY), "evict"); } catch (_) {}
+    const vis = ay >= 67000.0;
+    if (st.root.visible !== vis) st.root.visible = vis;
+    if (vis) {
+      if (VFX_GLOBALS && VFX_GLOBALS.uTime && nowMs > 0) {
+        VFX_GLOBALS.uTime.value = (nowMs * 0.001) % 3600;
       }
-      st.vfxNoted.clear();
-      globalThis.__hbDericostVfxActive = false;
+    } else {
+      if (st.fetchQueue.length > 0) {
+        for (const job of st.fetchQueue) {
+          const e = st.lbGroups.get(job.hex);
+          if (e && e.status === "queued") st.lbGroups.delete(job.hex);
+        }
+        st.fetchQueue.length = 0;
+        st.lastCenterKey = null;
+      }
+      if (st.vfxNoted.size > 0) {
+        for (const [, v] of st.vfxNoted.entries()) {
+          try { terrainVfxLandblockGone(lbKeyFromXY(v.lbX, v.lbY), "evict"); } catch (_) {}
+        }
+        st.vfxNoted.clear();
+        globalThis.__hbDericostVfxActive = false;
+      }
     }
     return;
+  }
+  ensureDericostAssets(st);
+  // Advance shared VFX wind clock so TreeSway animates even when Dereth oscillators are idle
+  if (VFX_GLOBALS && VFX_GLOBALS.uTime && nowMs > 0) {
+    VFX_GLOBALS.uTime.value = (nowMs * 0.001) % 3600;
   }
   st.root.visible = true;
   globalThis.__hbDericostVfxActive = true;

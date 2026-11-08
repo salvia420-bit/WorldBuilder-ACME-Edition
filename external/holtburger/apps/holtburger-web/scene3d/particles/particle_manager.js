@@ -1769,10 +1769,12 @@ export function rp6CullSphere(emitter, out) {
   // Bit-identical: the cached value is the very float the branch computed.
   const pud = parent.userData;
   const frozenFast = !!pud && pud.__anchorFrozen === true && particleFrozenPartFastEnabled();
+  const travelOn = rp6TravelReachEnabled();
   const fc = frozenFast ? emitter._rp6FrozenCentre : null;
   if (fc && fc.parent === parent && fc.pi === pi && fc.trueSphere === trueSphere
-      && fc.epoch === (pud.__scriptEpoch | 0)) {
+      && fc.travelOn === travelOn && fc.epoch === (pud.__scriptEpoch | 0)) {
     out.copy(fc.v);
+    return fc.r;
   } else {
     const partFrame =
       trueSphere && pi !== -1 && (pi >>> 0) !== 0xffffffff && parent.partFrames
@@ -1792,14 +1794,6 @@ export function rp6CullSphere(emitter, out) {
     } else {
       return -1; // no position → bail open
     }
-    if (frozenFast) {
-      const c = fc || (emitter._rp6FrozenCentre = { v: new THREE.Vector3(), parent: null, pi: 0, trueSphere: false, epoch: 0 });
-      c.v.copy(out);
-      c.parent = parent;
-      c.pi = pi;
-      c.trueSphere = trueSphere;
-      c.epoch = pud.__scriptEpoch | 0;
-    }
   }
 
   // The particles' travel from the anchor. Adding it to the frustum-test
@@ -1811,7 +1805,6 @@ export function rp6CullSphere(emitter, out) {
   // per-type travel bound `info.cullReach` (particle_emitter_info.js).
   const info = emitter.info;
   let radius = info?.sortingSphere?.radius ?? 0;
-  const travelOn = rp6TravelReachEnabled();
   if (travelOn && Number.isFinite(info?.cullReach) && info.cullReach > radius) {
     radius = info.cullReach;
   }
@@ -1828,6 +1821,16 @@ export function rp6CullSphere(emitter, out) {
     radius += off.length() * gain;
   }
   if (trueSphere) radius += rp6SpriteReach(emitter);
+  if (frozenFast) {
+    const c = fc || (emitter._rp6FrozenCentre = { v: new THREE.Vector3(), parent: null, pi: 0, trueSphere: false, travelOn: false, epoch: 0, r: 0 });
+    c.v.copy(out);
+    c.parent = parent;
+    c.pi = pi;
+    c.trueSphere = trueSphere;
+    c.travelOn = travelOn;
+    c.epoch = pud.__scriptEpoch | 0;
+    c.r = radius;
+  }
   return radius;
 }
 
@@ -3023,6 +3026,8 @@ export class ParticleManager {
       if (rust !== null) rustOut = rust.tick(ctx);
     }
 
+    const cullFreeze = particleCullFreezeEnabled();
+    const protoStop = ParticleEmitter.prototype.stopEmitter;
     for (const [id, emitter] of (rust !== null ? this._jsTable : this.particleTable)) {
       // ?rp6Stagger: this emitter's own re-check phase (ids are the manager's
       // integer counter or the caller's emitter id; anything else → phase 0).
@@ -3060,7 +3065,7 @@ export class ParticleManager {
           _rp6Thaw(emitter, currentTime());
           _setPartsVisible(emitter, true);
         } else if (nowCulled && !wasCulled && emitter.stopped !== true
-                   && _isPersistentEmitter(emitter) && particleCullFreezeEnabled()) {
+                   && _isPersistentEmitter(emitter) && cullFreeze) {
           // PLIFECYCLE-2 (a): freeze a running persistent emitter's ages for
           // as long as it stays culled (retail degraded birthtime reset).
           emitter._rp6FrozenAt = currentTime();
@@ -3068,6 +3073,12 @@ export class ParticleManager {
       }
 
       if (emitter._rp6Culled === true) {
+        if (emitter.stopped !== true && _isPersistentEmitter(emitter) && emitter.stopEmitter === protoStop) {
+          if (!(leanCulled && emitter._instKey !== null && emitter._instKey !== undefined)) {
+            _setPartsVisible(emitter, false);
+          }
+          continue;
+        }
         // Off-screen: SKIP the expensive per-particle work ONLY while the
         // emitter is still actively emitting. Advance its stop bound so a
         // time/count-limited emitter flips `stopped`.
@@ -3105,7 +3116,7 @@ export class ParticleManager {
         // retail schedule while culled, so the stopEmitter() below flips on
         // its count as well as its clock.
         if (emitter.stopped !== true && emitter.info && !_isPersistentEmitter(emitter)
-            && particleCullFreezeEnabled()) {
+            && cullFreeze) {
           try { _rp6VirtualEmit(emitter, currentTime()); } catch (_) {}
         }
         try {

@@ -176,14 +176,19 @@ export function armEnvCellPoolGroups({ staticsGroup, cellsGroup, indoorLayer = 1
 /** A geometry minus its `acBakedLight` attribute, sharing every other
  *  attribute VIEW (no copy). Used when the class is unbaked but the source
  *  bundle carried the attribute — BatchedMesh fixes its attribute set at the
- *  first `addGeometry`, so a class's members must agree. */
+ *  first `addGeometry`, so a class's members must agree. Memoised per source
+ *  geometry so cross-cell surfaces reuse the same BufferGeometry and content key. */
+const _strippedByGeom = new WeakMap();
 function _withoutBake(geom) {
-  const g = new THREE.BufferGeometry();
+  let g = _strippedByGeom.get(geom);
+  if (g !== undefined) return g;
+  g = new THREE.BufferGeometry();
   for (const [name, attr] of Object.entries(geom.attributes)) {
     if (name === "acBakedLight") continue;
     g.setAttribute(name, attr);
   }
   if (geom.index) g.setIndex(geom.index);
+  _strippedByGeom.set(geom, g);
   return g;
 }
 

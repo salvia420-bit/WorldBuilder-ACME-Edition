@@ -1460,9 +1460,11 @@ export function pushSnowTrailUniforms(materials, trail) {
     ? tu.uTrailRadius.value : 48;
   const on = tex ? 1 : 0;
   let touched = 0;
-  for (const mat of materials) {
+  for (let i = 0; i < materials.length; i++) {
+    const mat = materials[i];
     const u = mat && mat.uniforms;
-    if (!u || !u.uSnowTrailEnabled) continue;   // pre-Wave-2A material: skip
+    const uEn = u ? u.uSnowTrailEnabled : null;
+    if (!uEn) continue;   // pre-Wave-2A material: skip
     // ⚠ uSnowTrailMap / uSnowTrailCenter / uSnowTrailRadius are SHARED with the
     // wave-3B MUD family (there is one trail map and one sampler; the snow name
     // is a wave-2A artefact — see terrain_dirt.js::pushMudTrailUniforms). Only
@@ -1475,15 +1477,18 @@ export function pushSnowTrailUniforms(materials, trail) {
     // over the whole dirt family. Each family clears its OWN gate and nothing
     // else; a stale texture ref behind two closed gates is never read.
     if (tex) {
-      if (u.uSnowTrailMap) u.uSnowTrailMap.value = tex;
-      const c = u.uSnowTrailCenter ? u.uSnowTrailCenter.value : null;
+      const uMap = u.uSnowTrailMap;
+      if (uMap) uMap.value = tex;
+      const uCenter = u.uSnowTrailCenter;
+      const c = uCenter ? uCenter.value : null;
       // Written componentwise rather than with .set(): the batched material's
       // clone is a real Vector2, but a headless/stub material may carry a plain
       // {x, y} and this path must not care.
       if (c) { c.x = cx; c.y = cy; }
-      if (u.uSnowTrailRadius) u.uSnowTrailRadius.value = radius;
+      const uRad = u.uSnowTrailRadius;
+      if (uRad) uRad.value = radius;
     }
-    u.uSnowTrailEnabled.value = on;
+    uEn.value = on;
     touched += 1;
   }
   return touched;

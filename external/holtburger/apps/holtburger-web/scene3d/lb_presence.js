@@ -103,6 +103,8 @@ export class LbPresence {
     this.cy = -1;
     /** lbKey -> Float32Array(4): [objValue, objTarget, terValue, terTarget] */
     this.cells = new Map();
+    /** lbKeys with an active fade (c[0] !== c[1] || c[2] !== c[3]) */
+    this._fading = new Set();
     // RG, row-major from the origin. Undriven cells (beyond DRIVE_R = 12 LB, i.e. beyond any object window):
     // objects ABSENT (R 0 — the far-forest impostors draw there; lane B's review) and near terrain ABSENT (G 0 —
     // the far ring and the world tier draw wherever the near ring is unknown). A cell the drive square has LEFT
@@ -145,7 +147,10 @@ export class LbPresence {
     const lo = -this.win, hi = 2 * this.win;
     for (const k of [...this.cells.keys()]) {
       const x = ((k >>> 24) & 0xff) - this.ox, y = ((k >>> 16) & 0xff) - this.oy;
-      if (x < lo || y < lo || x >= hi || y >= hi) this.cells.delete(k);
+      if (x < lo || y < lo || x >= hi || y >= hi) {
+        this.cells.delete(k);
+        this._fading.delete(k);
+      }
     }
     this.dirty = true;
   }
@@ -181,14 +186,22 @@ export class LbPresence {
    * value too, so the world never fades in around a standing player.
    */
   setTarget(k, ch, target, { snap = false } = {}) {
+    const key = k >>> 0;
     const tv = target > 0.5 ? 1 : 0;
-    const c = this._cell(k >>> 0, ch === CH_OBJ ? (snap ? tv : 0) : 0, ch === CH_TER ? (snap ? tv : 0) : 0);
+    const c = this._cell(key, ch === CH_OBJ ? (snap ? tv : 0) : 0, ch === CH_TER ? (snap ? tv : 0) : 0);
     const vi = ch === CH_OBJ ? 0 : 2;
-    if (snap) { c[vi] = tv; c[vi + 1] = tv; this._write(k >>> 0, c); return; }
+    if (snap) {
+      c[vi] = tv; c[vi + 1] = tv;
+      if (c[0] === c[1] && c[2] === c[3]) this._fading.delete(key);
+      this._write(key, c);
+      return;
+    }
     if (c[vi + 1] !== tv) {
       if (tv === 1) this.stats.fadesIn += 1; else this.stats.fadesOut += 1;
       if (tv === 1 && c[vi] > 0 && c[vi] < 1) this.stats.cancels += 1;
       c[vi + 1] = tv;
+      if (c[0] !== c[1] || c[2] !== c[3]) this._fading.add(key);
+      else this._fading.delete(key);
     }
   }
 
@@ -212,10 +225,12 @@ export class LbPresence {
   tick(nowMs) {
     const dt = this.lastMs == null ? 0 : Math.max(0, Math.min(250, nowMs - this.lastMs));
     this.lastMs = nowMs;
-    if (dt === 0) return 0;
+    if (dt === 0 || this._fading.size === 0) return 0;
     const upIn = dt / this.fadeInMs, upOut = dt / this.fadeOutMs;
     let moved = 0;
-    for (const [k, c] of this.cells) {
+    for (const k of this._fading) {
+      const c = this.cells.get(k);
+      if (!c) { this._fading.delete(k); continue; }
       let ch = false;
       for (let vi = 0; vi <= 2; vi += 2) {
         const v = c[vi], t = c[vi + 1];
@@ -230,6 +245,7 @@ export class LbPresence {
         c[vi] = n;
         ch = true;
       }
+      if (c[0] === c[1] && c[2] === c[3]) this._fading.delete(k);
       if (ch) { moved += 1; this._write(k, c); }
     }
     if (this._pendingDone.length) {
@@ -444,12 +460,13 @@ export function noteObjectsAttached(scene3d, lbKey, kind) {
  * (evicted) is dropped, so a re-bake waits for its own attach.
  */
 export function objectsAttached(scene3d, lbKey, nowMs) {
-  const k = lbKey >>> 0;
   const m = scene3d?._objAttach;
-  const r = m ? m.get(k) : null;
-  const sB = !!scene3d?.staticsBakedLbs?.has?.(k), bB = !!scene3d?.buildingsBakedLbs?.has?.(k);
-  if (!sB && !bB) { if (r) m.delete(k); return false; }
+  if (!m) return false;
+  const k = lbKey >>> 0;
+  const r = m.get(k);
   if (!r) return false;
+  const sB = !!scene3d?.staticsBakedLbs?.has?.(k), bB = !!scene3d?.buildingsBakedLbs?.has?.(k);
+  if (!sB && !bB) { m.delete(k); return false; }
   const s = r.s > 0 && sB, b = r.b > 0 && bB;
   if (s && b) return true;
   if (!s && !b) return false;
@@ -460,6 +477,8 @@ export function objectsAttached(scene3d, lbKey, nowMs) {
 // The per-frame driver: targets from the authoritative state
 // ---------------------------------------------------------------------------
 const DRIVE_R = 12; // landblocks around the centre whose targets are refreshed every frame
+const SNAP_ON = Object.freeze({ snap: true });
+const SNAP_OFF = Object.freeze({ snap: false });
 
 /**
  * `objWanted(k)` / `terDrawn(k)` are the authoritative reads (index.js wires them: baked sets, parks, the object
@@ -471,6 +490,7 @@ export function tickLbPresence({ centreLb, nowMs, objWanted, terDrawn }) {
   if (!centreLb) return 0;
   const cx = (centreLb >>> 24) & 0xff, cy = (centreLb >>> 16) & 0xff;
   p.setCentre(cx, cy);
+  const cells = p.cells;
   for (let dx = -DRIVE_R; dx <= DRIVE_R; dx += 1) {
     const x = cx + dx;
     if (x < 0 || x > 0xff) continue;
@@ -478,17 +498,17 @@ export function tickLbPresence({ centreLb, nowMs, objWanted, terDrawn }) {
       const y = cy + dy;
       if (y < 0 || y > 0xff) continue;
       const k = lbKeyXY(x, y);
-      const seen = p.cells.has(k);
+      const c = cells.get(k);
       const o = objWanted(k) ? 1 : 0;
       const t = terDrawn(k) ? 1 : 0;
-      if (!seen) {
+      if (c === undefined) {
         // first sight: objects that are already drawn snap on (boot / teleport); objects that are not drawn yet
         // start at 0 and fade in when they arrive. Terrain always snaps (it is binary).
-        p.setTarget(k, CH_OBJ, o, { snap: o === 1 });
-        p.setTarget(k, CH_TER, t, { snap: true });
+        p.setTarget(k, CH_OBJ, o, o === 1 ? SNAP_ON : SNAP_OFF);
+        p.setTarget(k, CH_TER, t, SNAP_ON);
       } else {
-        p.setTarget(k, CH_OBJ, o);
-        p.setTarget(k, CH_TER, t);
+        if (c[1] !== o) p.setTarget(k, CH_OBJ, o);
+        if (c[3] !== t) p.setTarget(k, CH_TER, t);
       }
     }
   }
