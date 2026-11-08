@@ -342,12 +342,48 @@ impl ClientSimulationSystem {
             gates.world_frame_terrain_plane = movement.terrain_plane_frame_enabled();
             gates.airborne_check_contact = movement.airborne_check_contact_enabled();
             gates.walkable_landing_ground = movement.walkable_landing_ground_enabled();
+            let was_airborne = world.player.is_airborne && !control.force_grounded;
+            let dt_s = slice_dt.as_secs_f32();
+            let dt_secs = dt_s.max(1e-6);
+
+            let mut desired_delta = control.desired_world_delta;
+            let mut descending = true;
+            let mut entry_descending = true;
+
+            if was_airborne {
+                const AZ: f32 = -9.8000002;
+                const MAX_FALL_VELOCITY: f32 = 50.0;
+                let mut vz = world.player.vertical_velocity;
+                entry_descending = vz <= 0.0;
+
+                // Terminal velocity entry clamp (retail acclient.c:317740-317748)
+                if vz < -MAX_FALL_VELOCITY {
+                    vz = -MAX_FALL_VELOCITY;
+                } else if vz > MAX_FALL_VELOCITY {
+                    vz = MAX_FALL_VELOCITY;
+                }
+
+                // Taylor series position displacement: dz = vz * dt + 0.5 * az * dt^2
+                let dz = vz * dt_s + 0.5 * AZ * dt_s * dt_s;
+                desired_delta.z += dz;
+
+                // Acceleration step: vz += az * dt
+                vz += AZ * dt_s;
+                if vz < -MAX_FALL_VELOCITY {
+                    vz = -MAX_FALL_VELOCITY;
+                }
+                world.player.vertical_velocity = vz;
+                descending = vz <= 0.0;
+            } else if control.force_grounded {
+                world.player.vertical_velocity = 0.0;
+            }
+
             let end = holtburger_common::position::WorldPosition {
                 landblock_id: pose.landblock_id,
                 coords: Vector3::new(
-                    pose.coords.x + control.desired_world_delta.x,
-                    pose.coords.y + control.desired_world_delta.y,
-                    pose.coords.z + control.desired_world_delta.z,
+                    pose.coords.x + desired_delta.x,
+                    pose.coords.y + desired_delta.y,
+                    pose.coords.z + desired_delta.z,
                 ),
                 rotation: pose.rotation,
             };
@@ -355,21 +391,21 @@ impl ClientSimulationSystem {
                 begin: pose,
                 end,
                 object,
-                airborne: world.player.is_airborne && !control.force_grounded,
-                descending: true,
-                entry_descending: true,
+                airborne: was_airborne,
+                descending,
+                entry_descending,
                 force_grounded: control.force_grounded,
                 gates,
                 last_known_wall_normal: world.player.last_known_wall_normal,
-                frames_stationary_fall: 0,
+                frames_stationary_fall: world.player.frames_stationary_fall,
                 // USE_RETAIL_GROUND: same contact-plane carry as the manual
                 // slice (system.rs twin).
                 last_contact_plane: world.player.last_contact_plane,
                 // USE_AIRBORNE_CHECK_CONTACT: the mover's physics velocity for
                 // retail's exact `check_contact` dot (system.rs twin).
                 physics_velocity: Vector3::new(
-                    world.player.current_planar_velocity.x,
-                    world.player.current_planar_velocity.y,
+                    control.desired_world_delta.x / dt_secs,
+                    control.desired_world_delta.y / dt_secs,
                     world.player.vertical_velocity,
                 ),
             };
@@ -388,6 +424,17 @@ impl ClientSimulationSystem {
             if gates.retail_ground {
                 world.player.last_contact_plane = outcome.contact_plane;
             }
+
+            // Stationary fall progression read-back (retail CPhysicsObj::report_collision_end)
+            let fsf_advanced = outcome.frames_stationary_fall != world.player.frames_stationary_fall;
+            if outcome.frames_stationary_fall > 1 && fsf_advanced {
+                world.player.vertical_velocity = 0.0;
+            }
+            world.player.frames_stationary_fall = match outcome.frames_stationary_fall {
+                1 | 2 => outcome.frames_stationary_fall,
+                _ => 0,
+            };
+
             let mut next_pose = outcome.pose;
             let current_heading = pose.rotation.to_heading();
             let desired_heading = control.desired_heading.unwrap_or(current_heading);
@@ -422,18 +469,69 @@ impl ClientSimulationSystem {
                 _ => desired_heading,
             };
             next_pose.rotation = Quaternion::from_heading(realized_heading);
-            let dt_secs = slice_dt.as_secs_f32().max(1e-6);
+
+            // Grounding & Airborne State Transitions:
+            let is_grounded = control.force_grounded || outcome.grounded;
+            if is_grounded {
+                if was_airborne {
+                    world.player.land();
+                }
+            } else {
+                let candidate_moved = desired_delta.length_squared() > 0.0;
+                let transition_ok = !matches!(
+                    outcome.state,
+                    holtburger_world::spatial::collision::TransitionState::Collided
+                        | holtburger_world::spatial::collision::TransitionState::Invalid
+                );
+                let keep_ground = !(transition_ok && candidate_moved);
+                if !was_airborne && !keep_ground && !control.force_grounded {
+                    world.player.begin_fall();
+                } else if was_airborne {
+                    // Fell-through-world failsafe (6.0s freefall below terrain floor)
+                    const FELL_THROUGH_MIN_AIRBORNE_SECS: f32 = 6.0;
+                    const FELL_THROUGH_TERRAIN_MARGIN: f32 = 50.0;
+                    world.player.airborne_secs += dt_s;
+                    if world.player.airborne_secs >= FELL_THROUGH_MIN_AIRBORNE_SECS {
+                        let global = next_pose.global_coords();
+                        if let Some(tz) = world.terrain_height_at(global.x, global.y) {
+                            if next_pose.coords.z < tz - FELL_THROUGH_TERRAIN_MARGIN {
+                                log::warn!(
+                                    "[fell-through-failsafe] autonomous drive airborne {:.1}s at z={:.1} (terrain {:.1}) cell 0x{:08X} — re-seating on terrain",
+                                    world.player.airborne_secs,
+                                    next_pose.coords.z,
+                                    tz,
+                                    next_pose.landblock_id.0,
+                                );
+                                next_pose.landblock_id = Guid((next_pose.landblock_id.0 & 0xFFFF_0000) | 0x0001);
+                                next_pose.coords.z = tz + 0.005;
+                                next_pose = next_pose.rebucket_outdoor_landblock().normalize_outdoor_cell();
+                                world.player.land();
+                            }
+                        }
+                    }
+                }
+            }
+
+            let solved_velocity = Vector3::new(
+                control.desired_world_delta.x / dt_secs,
+                control.desired_world_delta.y / dt_secs,
+                if world.player.is_airborne {
+                    world.player.vertical_velocity
+                } else {
+                    0.0
+                },
+            );
             let solved = SolvedBodyKinematics {
                 body_id,
                 pose: next_pose,
-                velocity: control.desired_world_delta / dt_secs,
+                velocity: solved_velocity,
                 omega: Vector3::zero(),
-                contact: if control.force_grounded || outcome.grounded {
+                contact: if is_grounded {
                     ContactState::Grounded
                 } else {
                     ContactState::Airborne
                 },
-                projection_state: Some(if control.force_grounded || outcome.grounded {
+                projection_state: Some(if is_grounded {
                     holtburger_world::SelfPlayerDriveProjectionState::LocalGroundedDirectDrive
                 } else {
                     holtburger_world::SelfPlayerDriveProjectionState::LocalAirborne
@@ -446,6 +544,12 @@ impl ClientSimulationSystem {
                     events: Vec::new(),
                 },
             ));
+
+            world.player.current_planar_velocity = Vector3::new(
+                control.desired_world_delta.x / dt_secs,
+                control.desired_world_delta.y / dt_secs,
+                0.0,
+            );
             // SLOW-RUN detector: a drive can carry a held run too (a server
             // MoveTo that a held key no longer cancels).
             let delta = control.desired_world_delta;

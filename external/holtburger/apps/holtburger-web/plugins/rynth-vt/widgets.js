@@ -94,7 +94,7 @@ export function setValue(input, v) {
 
 export function checkbox(doc, label, title) {
   const lab = el(doc, "label", "hbk-label rvt-check");
-  const cb = el(doc, "input", "hbk-check");
+  const cb = el(doc, "input", "hbk-check rvt-switch");
   cb.type = "checkbox";
   lab.append(cb, el(doc, "span", null, label));
   if (title) lab.title = title;
@@ -365,11 +365,54 @@ export function fileButton(doc, label, opts, onFile) {
 }
 
 /** <input type=number> + unit, for grids (Main ranges, the vitals matrix). */
-export function numField(doc, { unit = "", title = "", cls = "rvt-num-xs" } = {}) {
+export function numField(doc, { unit = "", title = "", cls = "rvt-num-xs", steppers = true } = {}) {
   const wrap = el(doc, "span", "rvt-numf");
+  const box = el(doc, "span", "rvt-num-box");
   const input = numInput(doc, { cls });
   if (title) input.title = title;
-  wrap.appendChild(input);
+  box.appendChild(input);
+  if (steppers) {
+    const btns = el(doc, "span", "rvt-steppers");
+    const up = el(doc, "button", "rvt-step-btn is-up", "▲");
+    up.type = "button";
+    up.tabIndex = -1;
+    up.setAttribute("aria-label", "Increase");
+    const dn = el(doc, "button", "rvt-step-btn is-down", "▼");
+    dn.type = "button";
+    dn.tabIndex = -1;
+    dn.setAttribute("aria-label", "Decrease");
+    const step = (dir) => {
+      if (input.disabled || input.readOnly || input.hasAttribute?.("disabled") || input.hasAttribute?.("readonly") || input.getAttribute?.("aria-disabled") === "true") return;
+      const rawStep = Number(input.step);
+      const stepVal = Number.isFinite(rawStep) && rawStep > 0 ? rawStep : 1;
+      const rawVal = Number(input.value);
+      const cur = input.value !== "" && Number.isFinite(rawVal) ? rawVal : 0;
+      const min = input.min !== "" && input.min != null && Number.isFinite(Number(input.min)) ? Number(input.min) : -Infinity;
+      const max = input.max !== "" && input.max != null && Number.isFinite(Number(input.max)) ? Number(input.max) : Infinity;
+      const nxt = Math.max(min, Math.min(max, Math.round((cur + dir * stepVal) * 1e6) / 1e6));
+      input.value = String(nxt);
+      let ev;
+      if (typeof doc.createEvent === "function") {
+        ev = typeof doc.defaultView?.Event === "function"
+          ? new doc.defaultView.Event("change", { bubbles: true })
+          : (typeof Event === "function" ? new Event("change", { bubbles: true }) : { type: "change", bubbles: true });
+      } else {
+        ev = { type: "change", bubbles: true };
+      }
+      try {
+        input.dispatchEvent?.(ev);
+      } catch {
+        try {
+          input.dispatchEvent?.({ type: "change", bubbles: true });
+        } catch {}
+      }
+    };
+    up.addEventListener("click", (e) => { e.preventDefault?.(); step(+1); });
+    dn.addEventListener("click", (e) => { e.preventDefault?.(); step(-1); });
+    btns.append(up, dn);
+    box.appendChild(btns);
+  }
+  wrap.appendChild(box);
   if (unit) wrap.appendChild(el(doc, "span", "rvt-unit", unit));
   return { wrap, input };
 }

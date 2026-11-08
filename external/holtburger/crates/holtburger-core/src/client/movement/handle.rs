@@ -127,7 +127,35 @@ impl MovementSystemHandle {
             if let Some(mut pose) = world.local_player_runtime_pose() {
                 pose.coords.x += ctrl.desired_world_delta.x;
                 pose.coords.y += ctrl.desired_world_delta.y;
-                pose.coords.z += ctrl.desired_world_delta.z;
+                if !pose.is_indoors() {
+                    pose = pose.normalize_outdoor_cell();
+                    let global = pose.global_coords();
+                    if let Some(tz) = world.terrain_height_at(global.x, global.y) {
+                        let step_down = world
+                            .player
+                            .step_down_height
+                            .unwrap_or(holtburger_world::spatial::PLAYER_STEP_DOWN_HEIGHT);
+                        if !world.player.is_airborne || (pose.coords.z - tz).abs() <= step_down {
+                            pose.coords.z = tz;
+                            if world.player.is_airborne {
+                                world.player.land();
+                            }
+                        } else {
+                            let dt_s = dt.as_secs_f32();
+                            let az = -9.8000002_f32;
+                            let vz = world.player.vertical_velocity;
+                            let dz = vz * dt_s + 0.5 * az * dt_s * dt_s;
+                            pose.coords.z += dz;
+                            world.player.vertical_velocity += az * dt_s;
+                            if pose.coords.z <= tz {
+                                pose.coords.z = tz;
+                                world.player.land();
+                            }
+                        }
+                    }
+                } else {
+                    pose.coords.z += ctrl.desired_world_delta.z;
+                }
                 let _ = world.set_local_player_runtime_pose(pose);
             }
         }

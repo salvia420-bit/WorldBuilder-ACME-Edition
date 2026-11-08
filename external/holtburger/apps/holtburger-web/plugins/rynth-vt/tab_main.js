@@ -141,9 +141,11 @@ export function createMainTab(ctx) {
   vit.appendChild(r2);
 
   // ── Ranges ───────────────────────────────────────────────────────────────
-  const rng = card("Ranges");
+  const rng = card("Ranges", "rvt-card-ranges");
+  const rgWrap = el(doc, "div", "rvt-ranges-wrap");
+  rng.appendChild(rgWrap);
   const rg = el(doc, "div", "rvt-ranges");
-  rng.appendChild(rg);
+  rgWrap.appendChild(rg);
   for (const k of Object.keys(RANGE_LABELS)) {
     const l = el(doc, "span", "rvt-lbl", RANGE_LABELS[k]);
     const f = numField(doc, { unit: "m", cls: "rvt-num-xs" });
@@ -152,8 +154,24 @@ export function createMainTab(ctx) {
     binders.push([(vw) => vw.ranges.find((r) => r.key === k) || null, bindRow({ ...f, tip: l }, commit)]);
   }
 
+  // Embedded circular golden radar display
+  const radar = el(doc, "div", "rvt-radar");
+  radar.setAttribute("aria-hidden", "true");
+  const radarFace = el(doc, "div", "rvt-radar-face");
+  const radarSweep = el(doc, "div", "rvt-radar-sweep");
+  const radarBlip = el(doc, "div", "rvt-radar-blip");
+  const radarCenter = el(doc, "div", "rvt-radar-center");
+  radarFace.append(radarSweep, radarBlip, radarCenter);
+  radar.appendChild(radarFace);
+  rgWrap.appendChild(radar);
+
   // ── Pets ─────────────────────────────────────────────────────────────────
-  const pets = card("Pets");
+  const pets = card("Pets", "rvt-card-pets");
+  const petsWrap = el(doc, "div", "rvt-pets-wrap");
+  pets.appendChild(petsWrap);
+  const petsCtl = el(doc, "div", "rvt-pets-ctl");
+  petsWrap.appendChild(petsCtl);
+
   const summon = checkbox(doc, "Summon Pets");
   summon.cb.dataset.key = "SummonPets";
   const custom = checkbox(doc, "Custom range");
@@ -169,7 +187,13 @@ export function createMainTab(ctx) {
   const pr3 = el(doc, "div", "rvt-row is-nowrap");
   const mmLbl = el(doc, "span", "rvt-lbl", "Min. monsters");
   pr3.append(mmLbl, minMon.wrap);
-  pets.append(pr1, pr2, pr3);
+  petsCtl.append(pr1, pr2, pr3);
+
+  // Atmospheric golden wolf vignette
+  const wolfVignette = el(doc, "div", "rvt-vignette rvt-vignette-wolf");
+  wolfVignette.setAttribute("aria-hidden", "true");
+  petsWrap.appendChild(wolfVignette);
+
   const petRow = (k) => (vw) => vw.pets.find((r) => r.key === k) || null;
   binders.push([petRow("SummonPets"), bindRow({ input: summon.cb, tip: summon.lab }, commit)]);
   binders.push([petRow("CustomPetRangeEnabled"), bindRow({ input: custom.cb, tip: custom.lab }, commit)]);
@@ -177,9 +201,16 @@ export function createMainTab(ctx) {
   binders.push([petRow("PetMinMonsters"), bindRow({ ...minMon, tip: mmLbl }, commit)]);
 
   // ── Behaviour (the Options-page switches; built from the rows) ───────────
-  const beh = card("Behaviour", "rvt-span2");
+  const beh = card("Behaviour", "rvt-span2 rvt-card-beh");
+  const behWrap = el(doc, "div", "rvt-beh-wrap");
+  beh.appendChild(behWrap);
   const checks = el(doc, "div", "rvt-checks");
-  beh.appendChild(checks);
+  behWrap.appendChild(checks);
+
+  // Atmospheric mountain castle peaks vignette
+  const castleVignette = el(doc, "div", "rvt-vignette rvt-vignette-castle");
+  castleVignette.setAttribute("aria-hidden", "true");
+  behWrap.appendChild(castleVignette);
   const behEditors = new Map();
 
   function update(snap, { force = false } = {}) {

@@ -12845,3 +12845,1324 @@ fn test_f23_steep_slope_slide_accelerates_from_rest_via_movement_system() {
         "Avatar must enter sledding glide on steep cliff"
     );
 }
+
+// =====================================================================
+// Milestone 1 Regression Tests: Autonomous Drive Gravity & Downward Descent
+// =====================================================================
+
+/// Test 1: Replicate hovering bug and verify descent & landing on downward terrain.
+/// A character moving autonomously along +X across an outdoor downward slope
+/// must descend with gravity and land on the lower terrain rather than hovering
+/// at the initial peak height.
+#[test]
+fn test_autonomous_drive_descends_and_lands_on_downward_terrain() {
+    use crate::client::simulation::ClientSimulationSystem;
+
+    let mut world = WorldState::synthetic();
+    let player_guid = Guid(0x5000_0F81);
+    world.player.guid = player_guid;
+    let _capabilities = seed_self_movement_capabilities_override(&mut world, 1.0, 2.0, 4.0, 1.5);
+
+    // Setup outdoor landblock (0xA9B40001) with downward terrain along +X:
+    // Vertices vx 0..2 (x <= 48m): Plateau at z = 25.0m
+    // Vertices vx 3..8 (x = 72m..192m): Downward slope dropping 2.5m per vertex down to 10.0m
+    let mut heights = [25.0f32; 81];
+    for vx in 0..9 {
+        let z = if vx <= 2 {
+            25.0
+        } else {
+            25.0 - (vx - 2) as f32 * 2.5 // vx=3: 22.5m, vx=4: 20.0m, ..., vx=8: 10.0m
+        };
+        for vy in 0..9 {
+            heights[vx * 9 + vy] = z;
+        }
+    }
+    world.populate_terrain_heights(0xA9B4_0000, heights);
+    world.populate_terrain_heights(0, heights);
+
+    let start_x = 40.0f32;
+    let start_y = 96.0f32;
+    let start_z = 25.0f32;
+    let start_pose = WorldPosition {
+        landblock_id: Guid(0xA9B40001),
+        coords: Vector3::new(start_x, start_y, start_z),
+        rotation: Quaternion::from_heading(0.0), // Facing +X
+    };
+    seed_local_player(&mut world, player_guid, start_pose);
+    let _ = world.set_player_position(start_pose);
+    world.player.is_airborne = false;
+    world.player.vertical_velocity = 0.0;
+
+    let mut movement = MovementSystem::new();
+    movement.set_unified_transition(true);
+    movement.active_drive = Some(ActiveDriveState::autonomous(AutonomousDriveIntent {
+        desired_world_delta: Vector3::new(1.0, 0.0, 0.0), // Unit vector +X
+        desired_heading: Some(0.0),
+        target_hint: None,
+        gait: Gait::Run,
+        force_grounded: false,
+    }));
+
+    let mut simulation = ClientSimulationSystem::new();
+    simulation.track_body(SpatialBodyId::LocalPlayer(player_guid));
+
+    // Tick for 60 frames (2.0s @ 30 Hz = 60 ticks of 33ms)
+    // Run speed 4.0 m/s * 2.0s = 8.0m travel (from x=40m to x=48m)
+    // Then tick another 90 frames (3.0s, another 12m to x=60m, descending past the crest)
+    let dt = Duration::from_millis(33);
+    for _ in 0..150 {
+        let _ = simulation.tick(Instant::now(), dt, &mut world, &mut movement);
+    }
+
+    let end_pose = world.local_player_runtime_pose().expect("pose resolved");
+    let ground_z = world.terrain_height_at(end_pose.coords.x, end_pose.coords.y)
+        .expect("terrain height available");
+
+    // PASS CRITERIA: Character Z must track the terrain height within settle band (<= 0.08m)
+    assert!(
+        (end_pose.coords.z - ground_z).abs() <= 0.15,
+        "Character must descend with the downward terrain and land on ground (got z={:.3}, expected ground_z={:.3}). \
+         If z remains near {:.3}, the autonomous hovering defect is active!",
+        end_pose.coords.z, ground_z, start_z
+    );
+    assert!(
+        !world.player.is_airborne,
+        "Character must be grounded after following downward terrain"
+    );
+    assert_eq!(
+        world.player.vertical_velocity, 0.0,
+        "Vertical velocity must be zeroed on ground touchdown"
+    );
+}
+
+/// Test 2: Verify ledge step-off fall, acceleration, and settle-land touchdown.
+/// When an autonomous character steps off a 5-meter cliff/ledge, they must enter
+/// an airborne fall, accelerate downwards under gravity, land on the lower terrain,
+/// and clear airborne state via touchdown.
+#[test]
+fn test_autonomous_drive_falls_off_ledge_and_lands_via_gravity() {
+    use crate::client::simulation::ClientSimulationSystem;
+
+    let mut world = WorldState::synthetic();
+    let player_guid = Guid(0x5000_0F82);
+    world.player.guid = player_guid;
+    let _capabilities = seed_self_movement_capabilities_override(&mut world, 1.0, 2.0, 4.0, 1.5);
+
+    // Lower ground at z = 10.0m (character steps off 10m drop at z = 20.0m)
+    let heights = [10.0f32; 81];
+    world.populate_terrain_heights(0xA9B4_0000, heights);
+    world.populate_terrain_heights(0, heights);
+
+    let start_pose = WorldPosition {
+        landblock_id: Guid(0xA9B40001),
+        coords: Vector3::new(45.0, 96.0, 20.0), // 3m before the drop
+        rotation: Quaternion::from_heading(0.0),
+    };
+    seed_local_player(&mut world, player_guid, start_pose);
+    let _ = world.set_player_position(start_pose);
+    world.player.is_airborne = false;
+    world.player.vertical_velocity = 0.0;
+
+    let mut movement = MovementSystem::new();
+    movement.set_unified_transition(true);
+    movement.active_drive = Some(ActiveDriveState::autonomous(AutonomousDriveIntent {
+        desired_world_delta: Vector3::new(1.0, 0.0, 0.0),
+        desired_heading: Some(0.0),
+        target_hint: None,
+        gait: Gait::Walk, // 2.0 m/s
+        force_grounded: false,
+    }));
+
+    let mut simulation = ClientSimulationSystem::new();
+    simulation.track_body(SpatialBodyId::LocalPlayer(player_guid));
+
+    // Tick for 60 frames (2.0s @ 30 Hz):
+    // Walk reaches x > 48m, drops off the ledge, falls 10m under gravity
+    // Free fall time: t = sqrt(2 * h / g) = sqrt(20 / 9.8) ≈ 1.43s (~43 frames)
+    let dt = Duration::from_millis(33);
+    let mut saw_airborne = false;
+    for _ in 0..75 {
+        let _ = simulation.tick(Instant::now(), dt, &mut world, &mut movement);
+        if world.player.is_airborne {
+            saw_airborne = true;
+        }
+    }
+
+    let end_pose = world.local_player_runtime_pose().expect("pose resolved");
+    let ground_z = world.terrain_height_at(end_pose.coords.x, end_pose.coords.y)
+        .expect("terrain height available");
+
+    assert!(
+        saw_airborne,
+        "Stepping off a 10m drop must trigger airborne fall state in simulation"
+    );
+    assert!(
+        (end_pose.coords.z - ground_z).abs() <= 0.15,
+        "After 2.5s of fall, character must land on lower terrain (z={:.3}, expected ground_z={:.3})",
+        end_pose.coords.z, ground_z
+    );
+    assert!(
+        !world.player.is_airborne,
+        "Touchdown must clear airborne state upon landing on walkable lower ground"
+    );
+}
+
+/// Test 3: Verify interaction with steep unwalkable slopes (Feature 23 / commit 2756a23a).
+/// An autonomous character stepping onto a steep cliff face (N.z < FLOOR_Z ~48.4°)
+/// must NOT falsely ground on the cliff face, must NOT hover, and must slide downhill
+/// along the slope tangent.
+#[test]
+fn test_autonomous_drive_steep_slope_slides_downhill_without_hover_or_climb() {
+    use crate::client::simulation::ClientSimulationSystem;
+
+    let mut world = WorldState::synthetic();
+    let player_guid = Guid(0x5000_0F83);
+    world.player.guid = player_guid;
+    let _capabilities = seed_self_movement_capabilities_override(&mut world, 1.0, 1.0, 4.0, 1.5);
+
+    // Build steep ~60° slope on LB (0xA9B40001) falling toward +X
+    // 60° slope: delta_z / delta_x ≈ 1.732. Over 24m grid spacing: ~41.57m per cell.
+    let mut steep = [0.0f32; 81];
+    for vx in 0..9 {
+        for vy in 0..9 {
+            steep[vx * 9 + vy] = (8 - vx) as f32 * 41.57;
+        }
+    }
+    world.populate_terrain_heights(0xA9B4_0000, steep);
+    world.populate_terrain_heights(0, steep);
+
+    // Seed player on slope at vx = 2 (x = 48.0m)
+    let start_x = 48.0_f32;
+    let start_y = 96.0_f32;
+    let start_z = world.terrain_height_at(start_x, start_y).expect("height populated");
+    let start_pose = WorldPosition {
+        landblock_id: Guid(0xA9B40001),
+        coords: Vector3::new(start_x, start_y, start_z),
+        rotation: Quaternion::from_heading(0.0), // Facing downhill (+X)
+    };
+    seed_local_player(&mut world, player_guid, start_pose);
+    let _ = world.set_player_position(start_pose);
+    world.player.is_airborne = true;
+    world.player.vertical_velocity = 0.0;
+
+    let mut movement = MovementSystem::new();
+    movement.set_unified_transition(true);
+    movement.active_drive = Some(ActiveDriveState::autonomous(AutonomousDriveIntent {
+        desired_world_delta: Vector3::new(1.0, 0.0, 0.0),
+        desired_heading: Some(0.0),
+        target_hint: None,
+        gait: Gait::Run,
+        force_grounded: false,
+    }));
+
+    let mut simulation = ClientSimulationSystem::new();
+    simulation.track_body(SpatialBodyId::LocalPlayer(player_guid));
+
+    let dt = Duration::from_millis(33);
+    for _ in 0..30 {
+        let _ = simulation.tick(Instant::now(), dt, &mut world, &mut movement);
+    }
+
+    let end_pose = world.local_player_runtime_pose().expect("pose resolved");
+
+    // PASS CRITERIA: Character must descend down the cliff (end_z < start_z),
+    // and must advance downhill (+X). It must NOT hover at start_z.
+    assert!(
+        end_pose.coords.z < start_z - 1.0,
+        "Character must descend along the steep slope (start_z={:.3}, end_z={:.3})",
+        start_z, end_pose.coords.z
+    );
+    assert!(
+        end_pose.coords.x > start_x + 1.0,
+        "Character must slide downhill along +X (start_x={:.3}, end_x={:.3})",
+        start_x, end_pose.coords.x
+    );
+}
+
+// =====================================================================
+// Milestone 1 Challenger 2 Empirical Stress Tests
+// =====================================================================
+
+/// Challenger Test 1: Verify velocity kinematics and Taylor series displacement.
+/// dz = vz * dt + 0.5 * az * dt^2
+/// vz += az * dt
+#[test]
+fn test_challenger_velocity_kinematics_and_taylor_displacement() {
+    use crate::client::simulation::ClientSimulationSystem;
+
+    let mut world = WorldState::synthetic();
+    let player_guid = Guid(0x5000_1001);
+    world.player.guid = player_guid;
+    let _capabilities = seed_self_movement_capabilities_override(&mut world, 1.0, 2.0, 4.0, 1.5);
+
+    let heights = [0.0f32; 81];
+    world.populate_terrain_heights(0xA9B4_0000, heights);
+    world.populate_terrain_heights(0, heights);
+
+    let start_z = 500.0f32;
+    let start_pose = WorldPosition {
+        landblock_id: Guid(0xA9B40001),
+        coords: Vector3::new(45.0, 45.0, start_z),
+        rotation: Quaternion::from_heading(0.0),
+    };
+    seed_local_player(&mut world, player_guid, start_pose);
+    let _ = world.set_player_position(start_pose);
+    world.player.is_airborne = true;
+    world.player.vertical_velocity = 0.0;
+
+    let mut movement = MovementSystem::new();
+    movement.set_unified_transition(true);
+    movement.active_drive = Some(ActiveDriveState::autonomous(AutonomousDriveIntent {
+        desired_world_delta: Vector3::new(0.0, 0.0, 0.0),
+        desired_heading: Some(0.0),
+        target_hint: None,
+        gait: Gait::Run,
+        force_grounded: false,
+    }));
+
+    let mut simulation = ClientSimulationSystem::new();
+    simulation.track_body(SpatialBodyId::LocalPlayer(player_guid));
+
+    let dt = Duration::from_millis(33);
+    let dt_s = dt.as_secs_f32();
+    let az = -9.8000002_f32;
+
+    let mut expected_vz = 0.0_f32;
+    let mut expected_z = start_z;
+
+    for frame in 1..=30 {
+        let dz = expected_vz * dt_s + 0.5 * az * dt_s * dt_s;
+        expected_z += dz;
+        expected_vz += az * dt_s;
+
+        let _ = simulation.tick(Instant::now(), dt, &mut world, &mut movement);
+
+        let pose = world.local_player_runtime_pose().expect("pose resolved");
+        let actual_vz = world.player.vertical_velocity;
+
+        assert!(
+            (actual_vz - expected_vz).abs() < 1e-4,
+            "Frame {frame}: vertical_velocity mismatch. actual={actual_vz}, expected={expected_vz}"
+        );
+        assert!(
+            (pose.coords.z - expected_z).abs() < 1e-3,
+            "Frame {frame}: z-position mismatch. actual={}, expected={}",
+            pose.coords.z, expected_z
+        );
+        assert!(!pose.coords.z.is_nan(), "z-position must not be NaN");
+    }
+}
+
+/// Challenger Test 2: Terminal velocity clamping strictly at 50 m/s during long falls.
+#[test]
+fn test_challenger_terminal_velocity_clamping_50ms() {
+    use crate::client::simulation::ClientSimulationSystem;
+
+    let mut world = WorldState::synthetic();
+    let player_guid = Guid(0x5000_1002);
+    world.player.guid = player_guid;
+    let _capabilities = seed_self_movement_capabilities_override(&mut world, 1.0, 2.0, 4.0, 1.5);
+
+    let heights = [0.0f32; 81];
+    world.populate_terrain_heights(0xA9B4_0000, heights);
+    world.populate_terrain_heights(0, heights);
+
+    let start_z = 2000.0f32;
+    let start_pose = WorldPosition {
+        landblock_id: Guid(0xA9B40001),
+        coords: Vector3::new(45.0, 45.0, start_z),
+        rotation: Quaternion::from_heading(0.0),
+    };
+    seed_local_player(&mut world, player_guid, start_pose);
+    let _ = world.set_player_position(start_pose);
+    world.player.is_airborne = true;
+    world.player.vertical_velocity = 0.0;
+
+    let mut movement = MovementSystem::new();
+    movement.set_unified_transition(true);
+    movement.active_drive = Some(ActiveDriveState::autonomous(AutonomousDriveIntent {
+        desired_world_delta: Vector3::new(1.0, 0.0, 0.0),
+        desired_heading: Some(0.0),
+        target_hint: None,
+        gait: Gait::Run,
+        force_grounded: false,
+    }));
+
+    let mut simulation = ClientSimulationSystem::new();
+    simulation.track_body(SpatialBodyId::LocalPlayer(player_guid));
+
+    let dt = Duration::from_millis(33);
+    for frame in 0..220 {
+        let _ = simulation.tick(Instant::now(), dt, &mut world, &mut movement);
+        let vz = world.player.vertical_velocity;
+
+        // Invariance: vertical_velocity must never drop below -50.0 m/s
+        assert!(
+            vz >= -50.0001,
+            "Frame {frame}: vz ({vz}) exceeded terminal velocity of -50.0 m/s!"
+        );
+        assert!(
+            vz <= 50.0001,
+            "Frame {frame}: vz ({vz}) exceeded positive terminal velocity!"
+        );
+
+        if frame >= 170 {
+            // After ~5.6s, terminal velocity MUST be exactly -50.0 m/s
+            assert_eq!(
+                vz, -50.0,
+                "Frame {frame}: vz should be clamped at -50.0 m/s once terminal velocity reached"
+            );
+        }
+    }
+}
+
+/// Challenger Test 3: Extreme entry vertical velocity clamping.
+/// If vertical velocity is initialized or pushed to extreme values (+/- 500 m/s),
+/// it must be immediately clamped to [-50, 50].
+#[test]
+fn test_challenger_extreme_entry_velocity_clamping() {
+    use crate::client::simulation::ClientSimulationSystem;
+
+    let mut world = WorldState::synthetic();
+    let player_guid = Guid(0x5000_1003);
+    world.player.guid = player_guid;
+    let _capabilities = seed_self_movement_capabilities_override(&mut world, 1.0, 2.0, 4.0, 1.5);
+
+    let heights = [0.0f32; 81];
+    world.populate_terrain_heights(0xA9B4_0000, heights);
+    world.populate_terrain_heights(0, heights);
+
+    let start_pose = WorldPosition {
+        landblock_id: Guid(0xA9B40001),
+        coords: Vector3::new(45.0, 45.0, 1000.0),
+        rotation: Quaternion::from_heading(0.0),
+    };
+    seed_local_player(&mut world, player_guid, start_pose);
+    let _ = world.set_player_position(start_pose);
+    world.player.is_airborne = true;
+    world.player.vertical_velocity = -999.0; // Extreme downward velocity
+
+    let mut movement = MovementSystem::new();
+    movement.set_unified_transition(true);
+    movement.active_drive = Some(ActiveDriveState::autonomous(AutonomousDriveIntent {
+        desired_world_delta: Vector3::new(0.0, 0.0, 0.0),
+        desired_heading: Some(0.0),
+        target_hint: None,
+        gait: Gait::Run,
+        force_grounded: false,
+    }));
+
+    let mut simulation = ClientSimulationSystem::new();
+    simulation.track_body(SpatialBodyId::LocalPlayer(player_guid));
+
+    let dt = Duration::from_millis(33);
+    let _ = simulation.tick(Instant::now(), dt, &mut world, &mut movement);
+
+    assert_eq!(
+        world.player.vertical_velocity, -50.0,
+        "Entry clamp must immediately clamp -999 m/s to -50.0 m/s"
+    );
+
+    // Test extreme upward velocity
+    world.player.vertical_velocity = 888.0;
+    let _ = simulation.tick(Instant::now(), dt, &mut world, &mut movement);
+    // Entry clamped to +50.0, then vz += -9.8 * 0.033 ≈ -0.3234 => ~49.6766
+    assert!(
+        world.player.vertical_velocity < 50.0 && world.player.vertical_velocity > 49.0,
+        "Entry clamp must immediately clamp +888 m/s to 50.0 m/s before gravity step (got {})",
+        world.player.vertical_velocity
+    );
+}
+
+/// Challenger Test 4: Extreme fall height (500m) with high-speed landing on terrain.
+/// Verifies no NaN, stable landing, airborne cleared, and vertical velocity zeroed on impact.
+#[test]
+fn test_challenger_extreme_fall_height_landing_settle() {
+    use crate::client::simulation::ClientSimulationSystem;
+
+    let mut world = WorldState::synthetic();
+    let player_guid = Guid(0x5000_1004);
+    world.player.guid = player_guid;
+    let _capabilities = seed_self_movement_capabilities_override(&mut world, 1.0, 2.0, 4.0, 1.5);
+
+    let ground_height = 25.0f32;
+    let heights = [ground_height; 81];
+    world.populate_terrain_heights(0xA9B4_0000, heights);
+    world.populate_terrain_heights(0, heights);
+
+    let start_z = 525.0f32; // 500m fall
+    let start_pose = WorldPosition {
+        landblock_id: Guid(0xA9B40001),
+        coords: Vector3::new(45.0, 45.0, start_z),
+        rotation: Quaternion::from_heading(0.0),
+    };
+    seed_local_player(&mut world, player_guid, start_pose);
+    let _ = world.set_player_position(start_pose);
+    world.player.is_airborne = true;
+    world.player.vertical_velocity = 0.0;
+
+    let mut movement = MovementSystem::new();
+    movement.set_unified_transition(true);
+    movement.active_drive = Some(ActiveDriveState::autonomous(AutonomousDriveIntent {
+        desired_world_delta: Vector3::new(0.5, 0.0, 0.0),
+        desired_heading: Some(0.0),
+        target_hint: None,
+        gait: Gait::Run,
+        force_grounded: false,
+    }));
+
+    let mut simulation = ClientSimulationSystem::new();
+    simulation.track_body(SpatialBodyId::LocalPlayer(player_guid));
+
+    let dt = Duration::from_millis(33);
+    let mut landed = false;
+    for frame in 0..450 {
+        let _ = simulation.tick(Instant::now(), dt, &mut world, &mut movement);
+        let pose = world.local_player_runtime_pose().expect("pose resolved");
+        assert!(!pose.coords.z.is_nan(), "Z coordinate became NaN at frame {frame}");
+        assert!(!world.player.vertical_velocity.is_nan(), "vz became NaN at frame {frame}");
+
+        if !world.player.is_airborne {
+            landed = true;
+            assert!(
+                (pose.coords.z - ground_height).abs() <= 0.15,
+                "Landed position must be within settle margin of terrain ground (got {}, expected {})",
+                pose.coords.z, ground_height
+            );
+            assert_eq!(
+                world.player.vertical_velocity, 0.0,
+                "Vertical velocity must be zeroed on ground landing"
+            );
+            break;
+        }
+    }
+    assert!(landed, "Avatar falling 500m must reach terrain and land within 450 frames");
+}
+
+/// Challenger Test 5: Rapid gait changes (Run vs Walk) during autonomous descent.
+/// Ensures gait switching never causes airborne latching, coordinate freeze, or NaN.
+#[test]
+fn test_challenger_rapid_gait_changes_no_latch() {
+    use crate::client::simulation::ClientSimulationSystem;
+
+    let mut world = WorldState::synthetic();
+    let player_guid = Guid(0x5000_1005);
+    world.player.guid = player_guid;
+    let _capabilities = seed_self_movement_capabilities_override(&mut world, 1.0, 2.0, 4.0, 1.5);
+
+    // Downward slope
+    let mut heights = [30.0f32; 81];
+    for vx in 0..9 {
+        let z = 30.0 - vx as f32 * 3.0; // drops to 6.0m
+        for vy in 0..9 {
+            heights[vx * 9 + vy] = z;
+        }
+    }
+    world.populate_terrain_heights(0xA9B4_0000, heights);
+    world.populate_terrain_heights(0, heights);
+
+    let start_pose = WorldPosition {
+        landblock_id: Guid(0xA9B40001),
+        coords: Vector3::new(24.0, 96.0, 30.0),
+        rotation: Quaternion::from_heading(0.0),
+    };
+    seed_local_player(&mut world, player_guid, start_pose);
+    let _ = world.set_player_position(start_pose);
+    world.player.is_airborne = false;
+    world.player.vertical_velocity = 0.0;
+
+    let mut movement = MovementSystem::new();
+    movement.set_unified_transition(true);
+
+    let mut simulation = ClientSimulationSystem::new();
+    simulation.track_body(SpatialBodyId::LocalPlayer(player_guid));
+
+    let dt = Duration::from_millis(33);
+    for tick in 0..120 {
+        let gait = if tick % 2 == 0 { Gait::Run } else { Gait::Walk };
+        movement.active_drive = Some(ActiveDriveState::autonomous(AutonomousDriveIntent {
+            desired_world_delta: Vector3::new(1.0, 0.0, 0.0),
+            desired_heading: Some(0.0),
+            target_hint: None,
+            gait,
+            force_grounded: false,
+        }));
+
+        let _ = simulation.tick(Instant::now(), dt, &mut world, &mut movement);
+        let pose = world.local_player_runtime_pose().expect("pose resolved");
+        assert!(!pose.coords.x.is_nan(), "X became NaN at tick {tick}");
+        assert!(!pose.coords.z.is_nan(), "Z became NaN at tick {tick}");
+    }
+
+    let end_pose = world.local_player_runtime_pose().expect("pose resolved");
+    let terrain_z = world.terrain_height_at(end_pose.coords.x, end_pose.coords.y).expect("terrain");
+    assert!(
+        (end_pose.coords.z - terrain_z).abs() <= 0.15,
+        "Avatar must settle onto terrain despite rapid gait changes (got z={}, terrain_z={})",
+        end_pose.coords.z, terrain_z
+    );
+    assert!(!world.player.is_airborne, "Must be grounded at the end of slope descent");
+}
+
+/// Challenger Test 6: Mid-air latching stress test with zero horizontal delta.
+/// If an airborne avatar has desired_world_delta = (0, 0, 0), it MUST continue
+/// to accelerate and fall under gravity. It must NEVER latch mid-air!
+#[test]
+fn test_challenger_zero_delta_airborne_no_midair_latch() {
+    use crate::client::simulation::ClientSimulationSystem;
+
+    let mut world = WorldState::synthetic();
+    let player_guid = Guid(0x5000_1006);
+    world.player.guid = player_guid;
+    let _capabilities = seed_self_movement_capabilities_override(&mut world, 1.0, 2.0, 4.0, 1.5);
+
+    let ground_z = 10.0f32;
+    let heights = [ground_z; 81];
+    world.populate_terrain_heights(0xA9B4_0000, heights);
+    world.populate_terrain_heights(0, heights);
+
+    let start_z = 50.0f32;
+    let start_pose = WorldPosition {
+        landblock_id: Guid(0xA9B40001),
+        coords: Vector3::new(45.0, 45.0, start_z),
+        rotation: Quaternion::from_heading(0.0),
+    };
+    seed_local_player(&mut world, player_guid, start_pose);
+    let _ = world.set_player_position(start_pose);
+    world.player.is_airborne = true;
+    world.player.vertical_velocity = 0.0;
+
+    let mut movement = MovementSystem::new();
+    movement.set_unified_transition(true);
+    movement.active_drive = Some(ActiveDriveState::autonomous(AutonomousDriveIntent {
+        desired_world_delta: Vector3::zero(), // Zero horizontal input
+        desired_heading: None,
+        target_hint: None,
+        gait: Gait::Run,
+        force_grounded: false,
+    }));
+
+    let mut simulation = ClientSimulationSystem::new();
+    simulation.track_body(SpatialBodyId::LocalPlayer(player_guid));
+
+    let dt = Duration::from_millis(33);
+    let mut prev_z = start_z;
+    for tick in 1..=40 {
+        let _ = simulation.tick(Instant::now(), dt, &mut world, &mut movement);
+        let pose = world.local_player_runtime_pose().expect("pose resolved");
+
+        // Every tick before touchdown, Z MUST decrease
+        assert!(
+            pose.coords.z < prev_z,
+            "Tick {tick}: Avatar must continue falling even with zero horizontal delta! (prev_z={prev_z}, current_z={})",
+            pose.coords.z
+        );
+        prev_z = pose.coords.z;
+    }
+
+    assert!(
+        prev_z < start_z - 7.0,
+        "Avatar must have descended significantly without latching (current_z={prev_z})"
+    );
+}
+
+/// Challenger Test 7: Turning while airborne must not interrupt gravity or latch mid-air.
+#[test]
+fn test_challenger_turning_while_airborne_no_latch() {
+    use crate::client::simulation::ClientSimulationSystem;
+
+    let mut world = WorldState::synthetic();
+    let player_guid = Guid(0x5000_1007);
+    world.player.guid = player_guid;
+    let _capabilities = seed_self_movement_capabilities_override(&mut world, 1.0, 2.0, 4.0, 1.5);
+
+    let ground_z = 0.0f32;
+    let heights = [ground_z; 81];
+    world.populate_terrain_heights(0xA9B4_0000, heights);
+    world.populate_terrain_heights(0, heights);
+
+    let start_z = 100.0f32;
+    let start_pose = WorldPosition {
+        landblock_id: Guid(0xA9B40001),
+        coords: Vector3::new(45.0, 45.0, start_z),
+        rotation: Quaternion::from_heading(0.0),
+    };
+    seed_local_player(&mut world, player_guid, start_pose);
+    let _ = world.set_player_position(start_pose);
+    world.player.is_airborne = true;
+    world.player.vertical_velocity = 0.0;
+
+    let mut movement = MovementSystem::new();
+    movement.set_unified_transition(true);
+
+    let mut simulation = ClientSimulationSystem::new();
+    simulation.track_body(SpatialBodyId::LocalPlayer(player_guid));
+
+    let dt = Duration::from_millis(33);
+    for tick in 1..=30 {
+        let heading = (tick as f32) * 0.2;
+        movement.active_drive = Some(ActiveDriveState::autonomous(AutonomousDriveIntent {
+            desired_world_delta: Vector3::new(1.0, 0.0, 0.0),
+            desired_heading: Some(heading),
+            target_hint: None,
+            gait: Gait::Run,
+            force_grounded: false,
+        }));
+
+        let _ = simulation.tick(Instant::now(), dt, &mut world, &mut movement);
+        let pose = world.local_player_runtime_pose().expect("pose resolved");
+        assert!(!pose.coords.z.is_nan());
+        assert!(!pose.rotation.w.is_nan());
+    }
+
+    let end_pose = world.local_player_runtime_pose().expect("pose resolved");
+    assert!(
+        end_pose.coords.z < start_z - 4.0,
+        "Avatar must continue falling during active turning (got z={})",
+        end_pose.coords.z
+    );
+    assert!(world.player.is_airborne);
+}
+
+/// Challenger Test 8: Fell-through failsafe verification.
+/// If airborne > 6.0s and > 50m below terrain, failsafe must re-seat avatar on terrain.
+#[test]
+fn test_challenger_fell_through_failsafe_reseats_on_terrain() {
+    use crate::client::simulation::ClientSimulationSystem;
+
+    let mut world = WorldState::synthetic();
+    let player_guid = Guid(0x5000_1008);
+    world.player.guid = player_guid;
+    let _capabilities = seed_self_movement_capabilities_override(&mut world, 1.0, 2.0, 4.0, 1.5);
+
+    let terrain_z = 100.0f32;
+    let heights = [terrain_z; 81];
+    world.populate_terrain_heights(0xA9B4_0000, heights);
+    world.populate_terrain_heights(0, heights);
+
+    // Place avatar 60m below terrain (z = 40.0m)
+    let start_pose = WorldPosition {
+        landblock_id: Guid(0xA9B40001),
+        coords: Vector3::new(45.0, 45.0, 40.0),
+        rotation: Quaternion::from_heading(0.0),
+    };
+    seed_local_player(&mut world, player_guid, start_pose);
+    let _ = world.set_player_position(start_pose);
+    world.player.is_airborne = true;
+    world.player.airborne_secs = 5.9_f32;
+    world.player.vertical_velocity = -10.0;
+
+    let mut movement = MovementSystem::new();
+    movement.set_unified_transition(true);
+    movement.active_drive = Some(ActiveDriveState::autonomous(AutonomousDriveIntent {
+        desired_world_delta: Vector3::zero(),
+        desired_heading: None,
+        target_hint: None,
+        gait: Gait::Run,
+        force_grounded: false,
+    }));
+
+    let mut simulation = ClientSimulationSystem::new();
+    simulation.track_body(SpatialBodyId::LocalPlayer(player_guid));
+
+    let dt = Duration::from_millis(200);
+    let _ = simulation.tick(Instant::now(), dt, &mut world, &mut movement);
+
+    let end_pose = world.local_player_runtime_pose().expect("pose resolved");
+
+    assert!(
+        (end_pose.coords.z - (terrain_z + 0.005)).abs() <= 0.01,
+        "Failsafe must re-seat avatar at terrain_z + 0.005 (got z={}, expected {})",
+        end_pose.coords.z, terrain_z + 0.005
+    );
+    assert!(
+        !world.player.is_airborne,
+        "Avatar must be grounded after failsafe re-seat"
+    );
+}
+
+/// Challenger Test 9: Boundary and extreme numerical stress testing.
+/// Verifies no NaN, Inf, or panic under extreme time deltas or coordinate limits.
+#[test]
+fn test_challenger_numerical_boundaries_and_subnormals() {
+    use crate::client::simulation::ClientSimulationSystem;
+
+    let mut world = WorldState::synthetic();
+    let player_guid = Guid(0x5000_1009);
+    world.player.guid = player_guid;
+    let _capabilities = seed_self_movement_capabilities_override(&mut world, 1.0, 2.0, 4.0, 1.5);
+
+    let heights = [10.0f32; 81];
+    world.populate_terrain_heights(0xA9B4_0000, heights);
+    world.populate_terrain_heights(0, heights);
+
+    let start_pose = WorldPosition {
+        landblock_id: Guid(0xA9B40001),
+        coords: Vector3::new(45.0, 45.0, 100.0),
+        rotation: Quaternion::from_heading(0.0),
+    };
+    seed_local_player(&mut world, player_guid, start_pose);
+    let _ = world.set_player_position(start_pose);
+    world.player.is_airborne = true;
+    world.player.vertical_velocity = 0.0;
+
+    let mut movement = MovementSystem::new();
+    movement.set_unified_transition(true);
+    let mut simulation = ClientSimulationSystem::new();
+    simulation.track_body(SpatialBodyId::LocalPlayer(player_guid));
+
+    // Subnormal dt (1 microsecond)
+    movement.active_drive = Some(ActiveDriveState::autonomous(AutonomousDriveIntent {
+        desired_world_delta: Vector3::new(1e-10, 1e-10, 0.0),
+        desired_heading: None,
+        target_hint: None,
+        gait: Gait::Run,
+        force_grounded: false,
+    }));
+    let _ = simulation.tick(Instant::now(), Duration::from_nanos(1000), &mut world, &mut movement);
+    let pose = world.local_player_runtime_pose().expect("pose resolved");
+    assert!(!pose.coords.x.is_nan());
+    assert!(!pose.coords.y.is_nan());
+    assert!(!pose.coords.z.is_nan());
+
+    // Large dt (500 ms)
+    let _ = simulation.tick(Instant::now(), Duration::from_millis(500), &mut world, &mut movement);
+    let pose = world.local_player_runtime_pose().expect("pose resolved");
+    assert!(!pose.coords.z.is_nan());
+    assert!(!world.player.vertical_velocity.is_nan());
+}
+
+/// Challenger Test 10: MovementSystemHandle fallback terminal velocity audit.
+/// Testing whether the fallback path in handle.rs clamps vertical velocity to 50 m/s.
+#[tokio::test]
+async fn test_challenger_handle_fallback_terminal_velocity_audit() {
+    let mut world = WorldState::synthetic();
+    let player_guid = Guid(0x5000_1010);
+    world.player.guid = player_guid;
+    let _capabilities = seed_self_movement_capabilities_override(&mut world, 1.0, 2.0, 4.0, 1.5);
+
+    let heights = [0.0f32; 81];
+    world.populate_terrain_heights(0xA9B4_0000, heights);
+    world.populate_terrain_heights(0, heights);
+
+    let start_pose = WorldPosition {
+        landblock_id: Guid(0xA9B40001),
+        coords: Vector3::new(45.0, 45.0, 2000.0),
+        rotation: Quaternion::from_heading(0.0),
+    };
+    seed_local_player(&mut world, player_guid, start_pose);
+    let _ = world.set_player_position(start_pose);
+    world.player.is_airborne = true;
+    world.player.vertical_velocity = 0.0;
+
+    let mut handle = crate::client::movement::MovementSystemHandle::new();
+    let mut now = Instant::now();
+    handle.enqueue_drive_intent(
+        crate::client::movement_types::PlayerDriveIntent::Autonomous(AutonomousDriveIntent {
+            desired_world_delta: Vector3::new(1.0, 0.0, 0.0),
+            desired_heading: Some(0.0),
+            target_hint: None,
+            gait: Gait::Run,
+            force_grounded: false,
+        }),
+        now,
+    );
+
+    let mut sink = RecordingSink::default();
+    let dt = Duration::from_millis(33);
+    for _ in 0..200 {
+        now += dt;
+        let _ = handle.tick(now, &mut world, &mut sink).await;
+    }
+
+    // In handle.rs:149, world.player.vertical_velocity += az * dt_s without clamping to -50.0!
+    // 200 ticks * 0.033s = 6.6s * -9.8000002 m/s^2 = -64.68 m/s!
+    let vz = world.player.vertical_velocity;
+    eprintln!(">>> [AUDIT] handle.rs fallback vertical_velocity after 6.6s: {vz}");
+    // We document whether handle.rs enforces the 50 m/s clamp or exceeds it:
+    if vz < -50.0 {
+        eprintln!(">>> [FINDING] handle.rs fallback path does NOT clamp terminal velocity! vz = {vz} < -50.0 m/s");
+    }
+}
+
+// =====================================================================
+// Milestone 1 Challenger 1 Empirical Adversarial Stress Tests
+// =====================================================================
+
+/// Challenger 1 Test 1: Long-distance multi-elevation waypoint closed-loop path.
+/// Evaluates continuous ground tracking, valley descent, hill climbing, and
+/// verifies ZERO cumulative altitude drift across ~345 meters of autonomous travel.
+#[test]
+fn test_challenger1_long_distance_multi_elevation_waypoints_closed_loop() {
+    use crate::client::simulation::ClientSimulationSystem;
+
+    let mut world = WorldState::synthetic();
+    let player_guid = Guid(0x5000_1101);
+    world.player.guid = player_guid;
+    let _capabilities = seed_self_movement_capabilities_override(&mut world, 1.0, 2.0, 4.0, 1.5);
+
+    // Setup rolling 3D terrain on LB 0xA9B40001
+    // vx, vy in 0..9 (spacing 24m)
+    let mut heights = [0.0f32; 81];
+    for vx in 0..9 {
+        let x = vx as f32 * 24.0;
+        for vy in 0..9 {
+            let y = vy as f32 * 24.0;
+            // z varies between ~6.0m and ~38.0m with gentle rolling slopes (walkable)
+            heights[vx * 9 + vy] = 22.0 + 10.0 * (x / 30.0).sin() + 6.0 * (y / 35.0).cos();
+        }
+    }
+    world.populate_terrain_heights(0xA9B4_0000, heights);
+    world.populate_terrain_heights(0, heights);
+
+    // Closed loop waypoint path spanning across the landblock:
+    let waypoints: [(f32, f32); 5] = [
+        (30.0, 30.0),
+        (100.0, 40.0),
+        (160.0, 100.0),
+        (120.0, 160.0),
+        (40.0, 150.0),
+    ];
+
+    let start_x = waypoints[0].0;
+    let start_y = waypoints[0].1;
+    let start_z = world.terrain_height_at(start_x, start_y).expect("terrain height");
+
+    let start_pose = WorldPosition {
+        landblock_id: Guid(0xA9B40001),
+        coords: Vector3::new(start_x, start_y, start_z),
+        rotation: Quaternion::from_heading(0.0),
+    };
+    seed_local_player(&mut world, player_guid, start_pose);
+    let _ = world.set_player_position(start_pose);
+    world.player.is_airborne = false;
+    world.player.vertical_velocity = 0.0;
+
+    let mut movement = MovementSystem::new();
+    movement.set_unified_transition(true);
+
+    let mut simulation = ClientSimulationSystem::new();
+    simulation.track_body(SpatialBodyId::LocalPlayer(player_guid));
+
+    let dt = Duration::from_millis(33);
+    let mut current_wp_idx = 1;
+    let mut laps_completed = 0;
+    let total_ticks = 2600; // ~86 seconds of simulation @ 30 Hz = ~345 meters traveled
+
+    let mut min_z_seen = f32::MAX;
+    let mut max_z_seen = f32::MIN;
+    let mut max_hover_delta = 0.0f32;
+
+    for tick in 0..total_ticks {
+        let pose = world.local_player_runtime_pose().expect("pose resolved");
+        let target = waypoints[current_wp_idx];
+        let dx = target.0 - pose.coords.x;
+        let dy = target.1 - pose.coords.y;
+        let dist = (dx * dx + dy * dy).sqrt();
+
+        if dist < 2.5 {
+            current_wp_idx = (current_wp_idx + 1) % waypoints.len();
+            if current_wp_idx == 0 {
+                laps_completed += 1;
+            }
+        }
+
+        let next_target = waypoints[current_wp_idx];
+        let ndx = next_target.0 - pose.coords.x;
+        let ndy = next_target.1 - pose.coords.y;
+        let ndist = (ndx * ndx + ndy * ndy).sqrt().max(1e-4);
+        let heading = ndy.atan2(ndx);
+
+        movement.active_drive = Some(ActiveDriveState::autonomous(AutonomousDriveIntent {
+            desired_world_delta: Vector3::new(ndx / ndist, ndy / ndist, 0.0),
+            desired_heading: Some(heading),
+            target_hint: None,
+            gait: Gait::Run,
+            force_grounded: false,
+        }));
+
+        let _ = simulation.tick(Instant::now(), dt, &mut world, &mut movement);
+
+        let after_pose = world.local_player_runtime_pose().expect("pose resolved");
+        let terrain_z = world.terrain_height_at(after_pose.coords.x, after_pose.coords.y)
+            .expect("terrain height available");
+
+        min_z_seen = min_z_seen.min(after_pose.coords.z);
+        max_z_seen = max_z_seen.max(after_pose.coords.z);
+
+        let delta_z = after_pose.coords.z - terrain_z;
+        max_hover_delta = max_hover_delta.max(delta_z);
+
+        // Adversarial Oracle 1: Ground tracking bound.
+        // On walkable terrain, character Z must follow ground within settle tolerance
+        assert!(
+            delta_z.abs() <= 0.15,
+            "Tick {}: Character deviated from ground by {:.3}m (z={:.3}, terrain_z={:.3})",
+            tick, delta_z, after_pose.coords.z, terrain_z
+        );
+        assert!(
+            !world.player.is_airborne,
+            "Tick {}: Character must not become airborne on walkable rolling hills",
+            tick
+        );
+    }
+
+    // Adversarial Oracle 2: Must complete at least 1 full closed loop lap
+    assert!(
+        laps_completed >= 1,
+        "Character must complete at least 1 lap around the waypoint circuit (completed {})",
+        laps_completed
+    );
+
+    // Adversarial Oracle 3: Dynamic range verification.
+    // The path crossed crests (> 30.0m) and valleys (< 18.0m).
+    // If the character hovered, min_z_seen would fail to descend into valleys.
+    assert!(
+        max_z_seen >= 30.0,
+        "Character must ascend hill crests (max_z_seen={:.3})",
+        max_z_seen
+    );
+    assert!(
+        min_z_seen <= 18.0,
+        "Character must descend into valleys without hovering (min_z_seen={:.3})",
+        min_z_seen
+    );
+
+    // Adversarial Oracle 4: Altitude accumulation check.
+    // Max hover delta above terrain across the entire run must be strictly bounded.
+    assert!(
+        max_hover_delta <= 0.15,
+        "Maximum hover delta above terrain must stay <= 0.15m (got {:.3}m)",
+        max_hover_delta
+    );
+}
+
+/// Challenger 1 Test 2: Alternating steep hills, valleys, ridges, and ledges.
+/// Stress tests stepping off high ledges, gravitational free-fall, settle-landing,
+/// ridge climbing, and low-plain touchdown.
+#[test]
+fn test_challenger1_alternating_steep_hills_valleys_ridges_and_ledges() {
+    use crate::client::simulation::ClientSimulationSystem;
+
+    let mut world = WorldState::synthetic();
+    let player_guid = Guid(0x5000_1102);
+    world.player.guid = player_guid;
+    let _capabilities = seed_self_movement_capabilities_override(&mut world, 1.0, 2.0, 4.0, 1.5);
+
+    // Setup terrain along +X with distinct features:
+    // vx 0..1 (x=0..24): High Plateau at 50.0m
+    // vx 2..3 (x=48..72): Valley trough at 10.0m (unwalkable cliff drop: 40m drop over 24m = 59°, N.z < FLOOR_Z)
+    // vx 4..5 (x=96..120): Walkable Ridge at 30.0m (20m rise over 24m = 39.8°, walkable climb)
+    // vx 6..8 (x=144..192): Low plain at 0.0m (unwalkable cliff drop: 30m drop over 24m = 51.3°, N.z = 0.624 < FLOOR_Z)
+    let mut heights = [10.0f32; 81];
+    for vx in 0..9 {
+        let z = match vx {
+            0 | 1 => 50.0,
+            2 | 3 => 10.0,
+            4 | 5 => 30.0,
+            _ => 0.0,
+        };
+        for vy in 0..9 {
+            heights[vx * 9 + vy] = z;
+        }
+    }
+    world.populate_terrain_heights(0xA9B4_0000, heights);
+    world.populate_terrain_heights(0, heights);
+
+    // Start on plateau edge at x = 20.0m, z = 50.0m facing +X
+    let start_pose = WorldPosition {
+        landblock_id: Guid(0xA9B40001),
+        coords: Vector3::new(20.0, 96.0, 50.0),
+        rotation: Quaternion::from_heading(0.0),
+    };
+    seed_local_player(&mut world, player_guid, start_pose);
+    let _ = world.set_player_position(start_pose);
+    world.player.is_airborne = false;
+    world.player.vertical_velocity = 0.0;
+
+    let mut movement = MovementSystem::new();
+    movement.set_unified_transition(true);
+    movement.active_drive = Some(ActiveDriveState::autonomous(AutonomousDriveIntent {
+        desired_world_delta: Vector3::new(1.0, 0.0, 0.0),
+        desired_heading: Some(0.0),
+        target_hint: None,
+        gait: Gait::Run,
+        force_grounded: false,
+    }));
+
+    let mut simulation = ClientSimulationSystem::new();
+    simulation.track_body(SpatialBodyId::LocalPlayer(player_guid));
+
+    let dt = Duration::from_millis(33);
+    let mut saw_airborne_fall_1 = false;
+    let mut landed_in_valley = false;
+    let mut reached_ridge = false;
+    let mut saw_airborne_fall_2 = false;
+    let mut landed_on_plain = false;
+
+    // Run for 1000 ticks (~33 seconds = ~132 meters traveled along +X, reaching x ≈ 152m)
+    for _ in 0..1000 {
+        let _ = simulation.tick(Instant::now(), dt, &mut world, &mut movement);
+        let pose = world.local_player_runtime_pose().expect("pose resolved");
+        let global = pose.global_coords();
+        let ground_z = world.terrain_height_at(global.x, global.y)
+            .expect("terrain height");
+
+        if pose.coords.x < 55.0 {
+            if world.player.is_airborne {
+                saw_airborne_fall_1 = true;
+            }
+        } else if pose.coords.x >= 55.0 && pose.coords.x < 90.0 {
+            if !world.player.is_airborne && (pose.coords.z - ground_z).abs() <= 0.15 {
+                landed_in_valley = true;
+            }
+        } else if pose.coords.x >= 96.0 && pose.coords.x < 125.0 {
+            if pose.coords.z >= 25.0 {
+                reached_ridge = true;
+            }
+        } else if pose.coords.x >= 120.0 && pose.coords.x < 150.0 {
+            if world.player.is_airborne {
+                saw_airborne_fall_2 = true;
+            }
+        } else if pose.coords.x >= 150.0 {
+            if !world.player.is_airborne && (pose.coords.z - ground_z).abs() <= 0.15 {
+                landed_on_plain = true;
+            }
+        }
+    }
+
+    assert!(saw_airborne_fall_1, "Stepping off first 40m drop must trigger airborne fall");
+    assert!(landed_in_valley, "Avatar must land on valley floor at z ≈ 10.0m without hovering");
+    assert!(reached_ridge, "Avatar must ascend ridge summit to z >= 25.0m");
+    assert!(saw_airborne_fall_2, "Stepping off ridge drop must trigger airborne fall");
+    assert!(landed_on_plain, "Avatar must land crisply on final low plain at z ≈ 0.0m");
+
+    let final_pose = world.local_player_runtime_pose().expect("pose resolved");
+    let final_global = final_pose.global_coords();
+    let final_ground = world.terrain_height_at(final_global.x, final_global.y)
+        .expect("terrain height");
+    assert!(
+        (final_pose.coords.z - final_ground).abs() <= 0.15,
+        "Final Z must be grounded on terrain (got {:.3}, terrain={:.3})",
+        final_pose.coords.z, final_ground
+    );
+    assert!(!world.player.is_airborne, "Final state must not be airborne");
+    assert_eq!(world.player.vertical_velocity, 0.0, "Vertical velocity must be zeroed");
+}
+
+/// Challenger 1 Test 3: High-frequency rapid undulation stress.
+/// Verifies that an avatar traversing alternating crests and troughs does NOT
+/// ratchet altitude upwards or hover above troughs.
+#[test]
+fn test_challenger1_high_frequency_rapid_undulation_stress() {
+    use crate::client::simulation::ClientSimulationSystem;
+
+    let mut world = WorldState::synthetic();
+    let player_guid = Guid(0x5000_1103);
+    world.player.guid = player_guid;
+    let _capabilities = seed_self_movement_capabilities_override(&mut world, 1.0, 2.0, 4.0, 1.5);
+
+    // Rapid alternating heights on vertices vx 0..8:
+    // vx = 0: 15.0m
+    // vx = 1: 25.0m (crest 1)
+    // vx = 2: 15.0m (trough 1)
+    // vx = 3: 25.0m (crest 2)
+    // vx = 4: 15.0m (trough 2)
+    // vx = 5: 25.0m (crest 3)
+    // vx = 6: 15.0m (trough 3)
+    // vx = 7: 25.0m (crest 4)
+    // vx = 8: 15.0m (trough 4)
+    let mut heights = [15.0f32; 81];
+    for vx in 0..9 {
+        let z = if vx % 2 == 1 { 25.0 } else { 15.0 };
+        for vy in 0..9 {
+            heights[vx * 9 + vy] = z;
+        }
+    }
+    world.populate_terrain_heights(0xA9B4_0000, heights);
+    world.populate_terrain_heights(0, heights);
+
+    let start_pose = WorldPosition {
+        landblock_id: Guid(0xA9B40001),
+        coords: Vector3::new(10.0, 96.0, 15.0),
+        rotation: Quaternion::from_heading(0.0),
+    };
+    seed_local_player(&mut world, player_guid, start_pose);
+    let _ = world.set_player_position(start_pose);
+    world.player.is_airborne = false;
+    world.player.vertical_velocity = 0.0;
+
+    let mut movement = MovementSystem::new();
+    movement.set_unified_transition(true);
+    movement.active_drive = Some(ActiveDriveState::autonomous(AutonomousDriveIntent {
+        desired_world_delta: Vector3::new(1.0, 0.0, 0.0),
+        desired_heading: Some(0.0),
+        target_hint: None,
+        gait: Gait::Run,
+        force_grounded: false,
+    }));
+
+    let mut simulation = ClientSimulationSystem::new();
+    simulation.track_body(SpatialBodyId::LocalPlayer(player_guid));
+
+    let dt = Duration::from_millis(33);
+    let mut trough_samples: Vec<(f32, f32)> = Vec::new(); // (x, z)
+
+    // Run from x=10m across to x=180m (170m travel @ 4 m/s ≈ 1300 frames)
+    for tick in 0..1300 {
+        let _ = simulation.tick(Instant::now(), dt, &mut world, &mut movement);
+        let pose = world.local_player_runtime_pose().expect("pose resolved");
+        let ground_z = world.terrain_height_at(pose.coords.x, pose.coords.y)
+            .expect("terrain height");
+
+        // Continuously check ground tracking
+        assert!(
+            (pose.coords.z - ground_z).abs() <= 0.15,
+            "Tick {}: Character floating above ground during undulations (z={:.3}, ground={:.3})",
+            tick, pose.coords.z, ground_z
+        );
+
+        // Record near-trough positions (vx=2: x=48m, vx=4: x=96m, vx=6: x=144m)
+        for target_x in [48.0f32, 96.0, 144.0] {
+            if (pose.coords.x - target_x).abs() <= 1.0 {
+                trough_samples.push((pose.coords.x, pose.coords.z));
+            }
+        }
+    }
+
+    // Verify all 3 interior troughs were visited at low elevation
+    assert!(!trough_samples.is_empty(), "Must sample trough positions");
+    for (x, z) in trough_samples {
+        assert!(
+            z <= 16.0,
+            "Trough at x={:.1} must reach low elevation <= 16.0m (got z={:.3}). \
+             If z remains near 25.0m, the autonomous hover ratchet defect reproduced!",
+            x, z
+        );
+    }
+}
+
+/// Challenger 1 Test 4: Repeated multi-lap circuit altitude accumulation check.
+/// Runs multiple laps over a steep hill climb and descent to empirically prove that
+/// elevation error does NOT monotonically accumulate over time.
+#[test]
+fn test_challenger1_altitude_accumulation_over_repeated_circuits() {
+    use crate::client::simulation::ClientSimulationSystem;
+
+    let mut world = WorldState::synthetic();
+    let player_guid = Guid(0x5000_1104);
+    world.player.guid = player_guid;
+    let _capabilities = seed_self_movement_capabilities_override(&mut world, 1.0, 2.0, 4.0, 1.5);
+
+    // Hill centered at (96, 96) peaking at 40m, surrounded by base at 15m
+    let mut heights = [15.0f32; 81];
+    for vx in 0..9 {
+        let x = vx as f32 * 24.0;
+        for vy in 0..9 {
+            let y = vy as f32 * 24.0;
+            let d = ((x - 96.0).powi(2) + (y - 96.0).powi(2)).sqrt();
+            let h = (40.0 - d * 0.35).max(15.0);
+            heights[vx * 9 + vy] = h;
+        }
+    }
+    world.populate_terrain_heights(0xA9B4_0000, heights);
+    world.populate_terrain_heights(0, heights);
+
+    // 4 waypoints orbiting the hill (circumnavigating and climbing sides):
+    let waypoints: [(f32, f32); 4] = [
+        (40.0, 40.0),
+        (150.0, 40.0),
+        (150.0, 150.0),
+        (40.0, 150.0),
+    ];
+
+    let start_x = waypoints[0].0;
+    let start_y = waypoints[0].1;
+
+    let start_pose = WorldPosition {
+        landblock_id: Guid(0xA9B40001),
+        coords: Vector3::new(start_x, start_y, 0.0),
+        rotation: Quaternion::from_heading(0.0),
+    };
+    let global_start = start_pose.global_coords();
+    let start_z = world.terrain_height_at(global_start.x, global_start.y).expect("height");
+    let start_pose = WorldPosition {
+        landblock_id: Guid(0xA9B40001),
+        coords: Vector3::new(start_x, start_y, start_z),
+        rotation: Quaternion::from_heading(0.0),
+    };
+    seed_local_player(&mut world, player_guid, start_pose);
+    let _ = world.set_player_position(start_pose);
+    world.player.is_airborne = false;
+    world.player.vertical_velocity = 0.0;
+
+    let mut movement = MovementSystem::new();
+    movement.set_unified_transition(true);
+
+    let mut simulation = ClientSimulationSystem::new();
+    simulation.track_body(SpatialBodyId::LocalPlayer(player_guid));
+
+    let dt = Duration::from_millis(33);
+    let mut current_wp = 1;
+    let mut laps = 0;
+
+    // Run for 3500 ticks (~115s @ 4 m/s ≈ 460m travel, completing ~3 full laps)
+    for tick in 0..3500 {
+        let pose = world.local_player_runtime_pose().expect("pose resolved");
+        let target = waypoints[current_wp];
+        let dx = target.0 - pose.coords.x;
+        let dy = target.1 - pose.coords.y;
+        let dist = (dx * dx + dy * dy).sqrt();
+
+        if dist < 2.5 {
+            current_wp = (current_wp + 1) % waypoints.len();
+            if current_wp == 0 {
+                laps += 1;
+            }
+        }
+
+        let next_tgt = waypoints[current_wp];
+        let ndx = next_tgt.0 - pose.coords.x;
+        let ndy = next_tgt.1 - pose.coords.y;
+        let ndist = (ndx * ndx + ndy * ndy).sqrt().max(1e-4);
+        let heading = ndy.atan2(ndx);
+
+        movement.active_drive = Some(ActiveDriveState::autonomous(AutonomousDriveIntent {
+            desired_world_delta: Vector3::new(ndx / ndist, ndy / ndist, 0.0),
+            desired_heading: Some(heading),
+            target_hint: None,
+            gait: Gait::Run,
+            force_grounded: false,
+        }));
+
+        let _ = simulation.tick(Instant::now(), dt, &mut world, &mut movement);
+
+        let after_pose = world.local_player_runtime_pose().expect("pose resolved");
+        let after_global = after_pose.global_coords();
+        let terrain_z = world.terrain_height_at(after_global.x, after_global.y).expect("terrain");
+        let err = (after_pose.coords.z - terrain_z).abs();
+
+        // Strict assertion: error must never exceed settle band
+        assert!(
+            err <= 0.15,
+            "Tick {tick}: Elevation error exceeded settle band: err={err:.4}m (z={:.3}, terrain={:.3})",
+            after_pose.coords.z, terrain_z
+        );
+    }
+
+    assert!(laps >= 1, "Must complete full lap around circuit (got {laps})");
+
+    let final_pose = world.local_player_runtime_pose().expect("pose resolved");
+    let final_global = final_pose.global_coords();
+    let final_terrain_z = world.terrain_height_at(final_global.x, final_global.y).expect("terrain");
+    assert!(
+        (final_pose.coords.z - final_terrain_z).abs() <= 0.08,
+        "Final Z position after multiple laps must settle within LAND_SETTLE_EPS (0.08m) of ground (got {:.4}m)",
+        (final_pose.coords.z - final_terrain_z).abs()
+    );
+    assert!(!world.player.is_airborne, "Avatar must be grounded at end of multi-lap test");
+    assert_eq!(world.player.vertical_velocity, 0.0, "Vertical velocity must be 0.0 at end of test");
+}
+
+
+

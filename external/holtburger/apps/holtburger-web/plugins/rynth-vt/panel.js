@@ -157,7 +157,21 @@ function buildWindow() {
   root.setAttribute("aria-label", "RynthSuite VTank");
   applyOpacity(root);
 
+  // Decorative corner flourish brackets and anchor crest (aria-hidden)
+  const cTl = el(doc, "div", "rvt-corner rvt-corner-tl");
+  const cTr = el(doc, "div", "rvt-corner rvt-corner-tr");
+  const cBl = el(doc, "div", "rvt-corner rvt-corner-bl");
+  const cBr = el(doc, "div", "rvt-corner rvt-corner-br");
+  const crest = el(doc, "div", "rvt-anchor-crest");
+  for (const e of [cTl, cTr, cBl, cBr, crest]) {
+    e.setAttribute("aria-hidden", "true");
+    root.appendChild(e);
+  }
+
   const { bar } = makeTitlebar("RynthSuite — VTank", { onClose: () => closeVtPanel() });
+  const titleCrest = el(doc, "div", "rvt-title-crest");
+  titleCrest.setAttribute("aria-hidden", "true");
+  bar.insertBefore(titleCrest, bar.firstChild);
   const close = bar.querySelector(".hbk-close");
   const lockBtn = btn(doc, "Lock", "Lock the window in place", "rvt-hdr-btn");
   const fadeBtn = btn(doc, "−", "More transparent", "rvt-hdr-btn");
