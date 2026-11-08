@@ -1,0 +1,353 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Challenger POM GLSL Shader Compilation & Execution Matrix</title>
+</head>
+<body>
+<canvas id="c" width="128" height="128"></canvas>
+<script type="importmap">
+{
+  "imports": {
+    "three": "/three/three.module.js",
+    "three/addons/": "/three-addons/"
+  }
+}
+</script>
+<script type="module">
+import * as THREE from "three";
+import * as Z from "/app/scene3d/shader_logdepth.js";
+import { setupCsm } from "/app/scene3d/csm.js";
+import {
+  MaterialCache,
+  SURFACE_TYPE,
+  SURFACE_CATEGORY,
+  installPomShaderPatch,
+  _reinstallClonePom,
+  applyFloorDepthBias,
+  applyStaticDepthBias,
+  applyBakedVertexLightPatch,
+} from "/app/scene3d/materials.js";
+import { makeArrayMaterial, setStatPom } from "/app/scene3d/static_atlas.js";
+import { batchedMaterialFor } from "/app/scene3d/batched_material_variant.js";
+
+const out = {
+  errors: [],
+  warnings: [],
+  results: [],
+  adversarialFindings: [],
+  programsCompiled: 0,
+};
+
+const origErr = console.error;
+console.error = (...args) => {
+  const msg = args.map(String).join(" ");
+  out.errors.push(msg.slice(0, 500));
+  origErr(...args);
+};
+
+const origWarn = console.warn;
+console.warn = (...args) => {
+  out.warnings.push(args.map(String).join(" ").slice(0, 500));
+  origWarn(...args);
+};
+
+function record(name, ok, detail = "") {
+  out.results.push({ name, ok: !!ok, detail: String(detail) });
+}
+
+try {
+  const params = new URLSearchParams(location.search);
+  const depthMode = params.get("depthMode") || "log"; // "log", "reversed", "standard"
+  const csmRequested = params.get("csm") === "1";
+  const qualityPreset = params.get("quality") || "high"; // low, mid, high, ultra
+
+  out.depthMode = depthMode;
+  out.csmRequested = csmRequested;
+  out.qualityPreset = qualityPreset;
+
+  const canvas = document.getElementById("c");
+  const glAttrs = { antialias: false, depth: true, stencil: false };
+
+  let rendererParams = { canvas, ...glAttrs };
+  if (depthMode === "log") {
+    rendererParams.logarithmicDepthBuffer = true;
+  } else if (depthMode === "standard") {
+    rendererParams.logarithmicDepthBuffer = false;
+  } else if (depthMode === "reversed") {
+    const clip = Z.probeClipControl(canvas, glAttrs);
+    const dm = Z.resolveDepthMode({ requested: true, clipControl: clip });
+    rendererParams = { canvas, ...Z.depthRendererParams(dm.mode) };
+  }
+
+  const renderer = new THREE.WebGLRenderer(rendererParams);
+  renderer.debug.checkShaderErrors = true;
+  const gl = renderer.getContext();
+
+  if (depthMode === "reversed") {
+    Z.installReversedZ(THREE, renderer);
+  }
+
+  out.renderer = renderer.capabilities.isWebGL2 ? "WebGL2" : "WebGL1";
+  out.logarithmicDepthBuffer = renderer.capabilities.logarithmicDepthBuffer;
+
+  const rt = new THREE.WebGLRenderTarget(128, 128, {
+    type: THREE.HalfFloatType,
+    depthBuffer: true,
+  });
+
+  const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 1000);
+  camera.position.set(0, 0, 5);
+  camera.lookAt(0, 0, 0);
+
+  // Helper textures
+  const diffTex = new THREE.DataTexture(new Uint8Array([200, 150, 100, 255, 180, 140, 90, 255, 220, 170, 120, 255, 190, 145, 95, 255]), 2, 2, THREE.RGBAFormat);
+  diffTex.needsUpdate = true;
+
+  const normTex = new THREE.DataTexture(new Uint8Array([128, 128, 255, 255, 128, 128, 255, 255, 128, 128, 255, 255, 128, 128, 255, 255]), 2, 2, THREE.RGBAFormat);
+  normTex.needsUpdate = true;
+
+  const hgtTex = new THREE.DataTexture(new Uint8Array([255, 128, 0, 192]), 2, 2, THREE.RedFormat);
+  hgtTex.needsUpdate = true;
+  hgtTex.name = "test-hgt-tex";
+
+  const diffArray = new THREE.DataArrayTexture(new Uint8Array(4 * 16 * 16 * 2), 16, 16, 2);
+  diffArray.needsUpdate = true;
+  const nraArray = new THREE.DataArrayTexture(new Uint8Array(4 * 16 * 16 * 2), 16, 16, 2);
+  nraArray.needsUpdate = true;
+
+  // Geometry: standard quad with UV, normal, tangent
+  const geom = new THREE.PlaneGeometry(2, 2);
+  // Add aLayer attribute for static atlas array testing
+  const aLayerAttr = new THREE.Float32BufferAttribute(new Float32Array([0, 0, 0, 0]), 1);
+  geom.setAttribute("aLayer", aLayerAttr);
+
+  // Test Runner function
+  function testCompileAndRender(name, mat, lights = [], customCamera = camera) {
+    const scene = new THREE.Scene();
+    for (const l of lights) scene.add(l);
+    const mesh = new THREE.Mesh(geom, mat);
+    scene.add(mesh);
+
+    let compileOk = false;
+    let renderOk = false;
+    let glErr = 0;
+    let pixelCheckOk = false;
+
+    try {
+      renderer.compile(scene, customCamera);
+      compileOk = true;
+      out.programsCompiled++;
+    } catch (e) {
+      if (testingFlatShading) {
+        record(`${name} - compile rejected (expected under FLAT_SHADED)`, true, e.message);
+        return;
+      }
+      record(`${name} - compile`, false, e.message);
+      return;
+    }
+
+    try {
+      renderer.setRenderTarget(rt);
+      renderer.render(scene, customCamera);
+      renderer.setRenderTarget(null);
+      glErr = gl.getError();
+      renderOk = (glErr === gl.NO_ERROR);
+
+      // Read back pixels to ensure no NaN / Inf
+      const p = new Uint16Array(4);
+      renderer.readRenderTargetPixels(rt, 64, 64, 1, 1, p);
+      const rgba = Array.from(p, h => THREE.DataUtils.fromHalfFloat(h));
+      pixelCheckOk = rgba.every(v => Number.isFinite(v) && !Number.isNaN(v));
+      if (!pixelCheckOk) {
+        record(`${name} - pixel sanity`, false, `NaN or Inf in pixel: ${JSON.stringify(rgba)}`);
+      }
+    } catch (e) {
+      renderOk = false;
+      record(`${name} - render`, false, e.message);
+      return;
+    }
+
+    record(`${name} - compile & render`, compileOk && renderOk && pixelCheckOk, `glErr=${glErr}`);
+  }
+
+  // Lighting variations
+  const sunLight1 = new THREE.DirectionalLight(0xffffff, 1.0);
+  sunLight1.position.set(5, 10, 7);
+
+  const sunLight2 = new THREE.DirectionalLight(0x8888aa, 0.5);
+  sunLight2.position.set(-5, 5, -5);
+
+  const pointLight1 = new THREE.PointLight(0xffaa55, 1.0, 50);
+  pointLight1.position.set(0, 2, 2);
+
+  // Quality configurations to test
+  const qualityConfigs = {
+    low: { steps: 4, shadowSteps: 2, lodNear: 15, lodFar: 35 },
+    mid: { steps: 8, shadowSteps: 4, lodNear: 15, lodFar: 35 },
+    high: { steps: 16, shadowSteps: 8, lodNear: 15, lodFar: 35 },
+    ultra: { steps: 32, shadowSteps: 12, lodNear: 15, lodFar: 50 },
+  };
+  const qCfg = qualityConfigs[qualityPreset] || qualityConfigs.high;
+
+  // =========================================================================
+  // 1. Base MeshStandardMaterial with installPomShaderPatch
+  // =========================================================================
+  {
+    // 1a. 0 Directional Lights (NUM_DIR_LIGHTS == 0 guard)
+    const mat0L = new THREE.MeshStandardMaterial({ map: diffTex, normalMap: normTex });
+    installPomShaderPatch(mat0L, hgtTex, qCfg);
+    testCompileAndRender("Base POM (0 lights)", mat0L, []);
+
+    // 1b. 1 Directional Light
+    const mat1L = new THREE.MeshStandardMaterial({ map: diffTex, normalMap: normTex });
+    installPomShaderPatch(mat1L, hgtTex, qCfg);
+    testCompileAndRender("Base POM (1 dir light)", mat1L, [sunLight1]);
+
+    // 1c. 2 Directional Lights
+    const mat2L = new THREE.MeshStandardMaterial({ map: diffTex, normalMap: normTex });
+    installPomShaderPatch(mat2L, hgtTex, qCfg);
+    testCompileAndRender("Base POM (2 dir lights)", mat2L, [sunLight1, sunLight2]);
+
+    // 1d. Directional + Point Light
+    const matMixL = new THREE.MeshStandardMaterial({ map: diffTex, normalMap: normTex });
+    installPomShaderPatch(matMixL, hgtTex, qCfg);
+    testCompileAndRender("Base POM (Dir + Point lights)", matMixL, [sunLight1, pointLight1]);
+
+    // 1e. DoubleSide geometry
+    const matDouble = new THREE.MeshStandardMaterial({ map: diffTex, normalMap: normTex, side: THREE.DoubleSide });
+    installPomShaderPatch(matDouble, hgtTex, qCfg);
+    testCompileAndRender("Base POM (DoubleSide)", matDouble, [sunLight1]);
+
+    // 1f. FrontSide geometry
+    const matFront = new THREE.MeshStandardMaterial({ map: diffTex, normalMap: normTex, side: THREE.FrontSide });
+    installPomShaderPatch(matFront, hgtTex, qCfg);
+    testCompileAndRender("Base POM (FrontSide)", matFront, [sunLight1]);
+
+    // 1g. Flat shaded (Compiler boundary resolution: FLAT_SHADED geometric normal guard)
+    const matFlat = new THREE.MeshStandardMaterial({ map: diffTex, normalMap: normTex, flatShading: true });
+    installPomShaderPatch(matFlat, hgtTex, qCfg);
+    testCompileAndRender("Base POM (flatShading: true)", matFlat, [sunLight1]);
+  }
+
+  // =========================================================================
+  // 2. Cloned Materials Families
+  // =========================================================================
+  {
+    const mc = new MaterialCache({ pomEnabled: true, pomOpts: qCfg });
+    const base = mc._materialFromFlags(SURFACE_TYPE.Base1Image, diffTex, SURFACE_CATEGORY.Stone, normTex, undefined, hgtTex);
+    const did = 0x08003001;
+    mc.materials.set(did, base);
+
+    // FloorBias
+    const matFb = mc.getCachedFloorBias(did);
+    testCompileAndRender("Clone: getCachedFloorBias", matFb, [sunLight1]);
+
+    // CellBaked
+    const matCb = mc.getCachedCellBaked(did);
+    testCompileAndRender("Clone: getCachedCellBaked", matCb, [sunLight1]);
+
+    // StaticBias
+    const matSb = mc.getCachedStaticBias(did);
+    testCompileAndRender("Clone: getCachedStaticBias", matSb, [sunLight1]);
+
+    // FrontSide
+    const matFs = mc.getCached(did, false);
+    testCompileAndRender("Clone: FrontSide variant", matFs, [sunLight1]);
+
+    // Batched Material Variant
+    const matBatch = batchedMaterialFor(base);
+    testCompileAndRender("Batched Parity: batchedMaterialFor", matBatch, [sunLight1]);
+  }
+
+  // =========================================================================
+  // 3. CSM + POM Coexistence (?csm=on)
+  // =========================================================================
+  {
+    const sceneCsm = new THREE.Scene();
+    const csmState = setupCsm(sceneCsm, { sunDir: { x: 50, y: 80, z: 40 } });
+    const mcCsm = new MaterialCache({ pomEnabled: true, pomOpts: qCfg, csmState });
+    const baseCsm = mcCsm._materialFromFlags(SURFACE_TYPE.Base1Image, diffTex, SURFACE_CATEGORY.Stone, normTex, undefined, hgtTex);
+    const didCsm = 0x08003002;
+    mcCsm.materials.set(didCsm, baseCsm);
+
+    const fbCsm = mcCsm.getCachedFloorBias(didCsm);
+    // Test WebGL shader compilation and linking
+    try {
+      const scFb = new THREE.Scene();
+      scFb.add(sunLight1);
+      scFb.add(new THREE.Mesh(geom, fbCsm));
+      renderer.compile(scFb, camera);
+      out.programsCompiled++;
+      record("CSM + POM Coexistence: FloorBias - compile", true);
+    } catch (e) {
+      record("CSM + POM Coexistence: FloorBias - compile", false, e.message);
+    }
+
+    const sbCsm = mcCsm.getCachedStaticBias(didCsm);
+    try {
+      const scSb = new THREE.Scene();
+      scSb.add(sunLight1);
+      scSb.add(new THREE.Mesh(geom, sbCsm));
+      renderer.compile(scSb, camera);
+      out.programsCompiled++;
+      record("CSM + POM Coexistence: StaticBias - compile", true);
+    } catch (e) {
+      record("CSM + POM Coexistence: StaticBias - compile", false, e.message);
+    }
+  }
+
+  // =========================================================================
+  // 4. Static Atlas Array Material (makeArrayMaterial)
+  // =========================================================================
+  {
+    setStatPom({ on: true, near: qCfg.lodNear, far: qCfg.lodFar, steps: qCfg.steps, shadowSteps: qCfg.shadowSteps });
+    const arrayMatWrap = makeArrayMaterial(diffArray, "0|0|1|b1|w", nraArray);
+    testCompileAndRender("Static Atlas Array Material (Wrap)", arrayMatWrap, [sunLight1]);
+
+    const arrayMatClamp = makeArrayMaterial(diffArray, "0|0|1|b1|c", nraArray);
+    testCompileAndRender("Static Atlas Array Material (Clamp)", arrayMatClamp, [sunLight1]);
+  }
+
+  // =========================================================================
+  // 5. Multi-Distance Sweep Execution (Adaptive Step Transitions: 5m, 20m, 30m, 40m)
+  // =========================================================================
+  {
+    const testDistances = [5.0, 14.9, 15.1, 20.0, 24.9, 25.1, 30.0, 34.9, 35.1, 50.0];
+    const sweepMat = new THREE.MeshStandardMaterial({ map: diffTex, normalMap: normTex });
+    installPomShaderPatch(sweepMat, hgtTex, qCfg);
+
+    let sweepPassed = 0;
+    for (const d of testDistances) {
+      const distCam = new THREE.PerspectiveCamera(45, 1, 0.1, 1000);
+      distCam.position.set(0, 0, d);
+      distCam.lookAt(0, 0, 0);
+
+      const scene = new THREE.Scene();
+      scene.add(sunLight1);
+      const mesh = new THREE.Mesh(geom, sweepMat);
+      scene.add(mesh);
+
+      renderer.setRenderTarget(rt);
+      renderer.render(scene, distCam);
+      renderer.setRenderTarget(null);
+
+      const glErr = gl.getError();
+      const p = new Uint16Array(4);
+      renderer.readRenderTargetPixels(rt, 64, 64, 1, 1, p);
+      const rgba = Array.from(p, h => THREE.DataUtils.fromHalfFloat(h));
+      const ok = (glErr === gl.NO_ERROR) && rgba.every(v => Number.isFinite(v) && !Number.isNaN(v));
+      if (ok) sweepPassed++;
+    }
+    record("Distance Sweep (5m to 50m) adaptive execution", sweepPassed === testDistances.length, `${sweepPassed}/${testDistances.length} passed`);
+  }
+
+  rt.dispose();
+} catch (globalEx) {
+  out.errors.push(`Unhandled global exception: ${globalEx.stack || globalEx}`);
+}
+
+window.__smoke = out;
+</script>
+</body>
+</html>

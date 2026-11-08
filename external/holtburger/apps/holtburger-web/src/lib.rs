@@ -15093,12 +15093,28 @@ fn fetch_surface_pixels_impl<S: holtburger_dat::ResourceSource + ?Sized>(
             // Phase 3.1 — same skip rule for the heightmap (POM doesn't
             // make sense on emissive surfaces).
             // X-track override: an authored GL-space normal plane replaces
-            // the Sobel derivation entirely (height stays empty — no POM on
-            // statics today). LUMINOUS still wins: emissive stays unbumped.
+            // the Sobel derivation, while authored/override textures preserve
+            // or derive a seam/pillow heightfield from `relief_height_classed`
+            // (or the normal map's Z channel) so POM, micro-crevice AO, and
+            // micro-contact shadowing can render with full depth.
             let (normal_pixels, height_pixels) = if (surface_type & LUMINOUS) != 0 {
                 (Vec::new(), Vec::new())
             } else if let Some(n) = &ov_normal {
-                (n.as_ref().clone(), Vec::new())
+                let (_, mut h) = normal_and_height_pixels(&pixels, tex_w, tex_h, rs_id);
+                // Fallback: if relief_height_classed produced no heightfield
+                // (e.g. unclassified / flat diffuse), extract depth variation from
+                // the authored normal map's Z channel (blue byte, stride 3).
+                if h.is_empty() && n.len() == (tex_w as usize * tex_h as usize * 3) {
+                    let px_count = tex_w as usize * tex_h as usize;
+                    let z_plane: Vec<u8> = (0..px_count).map(|i| n[i * 3 + 2]).collect();
+                    let (min_z, max_z) = z_plane
+                        .iter()
+                        .fold((255u8, 0u8), |(mn, mx), &v| (mn.min(v), mx.max(v)));
+                    if max_z > min_z {
+                        h = z_plane;
+                    }
+                }
+                (n.as_ref().clone(), h)
             } else {
                 // A15 §3b — one fused pass: luminance built once, the
                 // low-res gaussian pre-blur shared by both consumers, and
@@ -62914,6 +62930,111 @@ mod tests_surface_cache {
             "reclaimed to {budget} B once holders dropped, held {}",
             lru.total_bytes
         );
+    }
+
+    fn pack_rgb_texture(id: u32, w: i32, h: i32, bgr: [u8; 3]) -> Vec<u8> {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&id.to_le_bytes());
+        buf.extend_from_slice(&0i32.to_le_bytes());
+        buf.extend_from_slice(&w.to_le_bytes());
+        buf.extend_from_slice(&h.to_le_bytes());
+        buf.extend_from_slice(&20u32.to_le_bytes());
+        let px = (w * h) as usize;
+        buf.extend_from_slice(&((px * 3) as i32).to_le_bytes());
+        for _ in 0..px {
+            buf.extend_from_slice(&bgr);
+        }
+        buf
+    }
+
+    #[test]
+    fn authored_normal_override_preserves_height_pixels_and_normal() {
+        use crate::texture_overrides::install_texture_override;
+        let _guard = surface_test_lock();
+        surface_pixel_cache_clear_all();
+
+        let rs_id = 0x0600_99A1u32;
+        let did = 0x0810_0091u32;
+        let w = 64u32;
+        let h = 64u32;
+        let px_count = (w * h) as usize;
+
+        // Diffuse with horizontal dark lines (simulating mortar joints)
+        let mut rgba = vec![200u8; px_count * 4];
+        for y in 0..h {
+            if y % 16 == 0 {
+                for x in 0..w {
+                    let idx = ((y * w + x) * 4) as usize;
+                    rgba[idx] = 40;
+                    rgba[idx + 1] = 40;
+                    rgba[idx + 2] = 40;
+                }
+            }
+        }
+
+        // Authored RGB8 normal map: flat [128, 128, 255] with tilted grooves
+        let mut normal_rgb = vec![128u8; px_count * 3];
+        for i in 0..px_count {
+            normal_rgb[i * 3 + 2] = 255;
+        }
+        for y in 0..h {
+            if y % 16 == 0 {
+                for x in 0..w {
+                    let i = (y * w + x) as usize;
+                    normal_rgb[i * 3 + 0] = 160;
+                    normal_rgb[i * 3 + 1] = 160;
+                    normal_rgb[i * 3 + 2] = 190;
+                }
+            }
+        }
+
+        install_texture_override(
+            rs_id,
+            w,
+            h,
+            rgba.clone(),
+            Some(normal_rgb.clone()),
+            0.5,
+        ).expect("install override");
+
+        // Non-paletted fixture (R8G8B8 format 20)
+        let st_did = 0x0500_99A1u32;
+        let mut files = HashMap::new();
+        files.insert(
+            (NS.to_string(), did),
+            pack_textured_surface(0x2, st_did, 0),
+        );
+        files.insert((NS.to_string(), st_did), pack_surface_texture(st_did, &[rs_id]));
+        files.insert((NS.to_string(), rs_id), pack_rgb_texture(rs_id, 1, 1, [100, 100, 100]));
+        let source = MockSource { files };
+
+        let sp = fetch_surface_pixels_impl(&source, did);
+
+        assert_eq!(sp.width, w);
+        assert_eq!(sp.height, h);
+        assert_eq!(
+            sp.normal_pixels.as_slice(),
+            normal_rgb.as_slice(),
+            "authored normal map plane must be preserved verbatim"
+        );
+        assert!(
+            !sp.height_pixels.is_empty(),
+            "height_pixels must NOT be empty when authored override is present"
+        );
+        assert_eq!(
+            sp.height_pixels.len(),
+            px_count,
+            "height_pixels length must match width * height"
+        );
+
+        let groove_h = sp.height_pixels[0];
+        let plateau_h = sp.height_pixels[(8 * w + 8) as usize];
+        assert!(
+            groove_h < plateau_h,
+            "groove height ({groove_h}) must be lower than plateau ({plateau_h})"
+        );
+
+        surface_pixel_cache_clear_all();
     }
 }
 

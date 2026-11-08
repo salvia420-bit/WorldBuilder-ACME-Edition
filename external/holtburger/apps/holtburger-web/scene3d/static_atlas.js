@@ -405,13 +405,21 @@ export function statPomConfig() {
       if (Number.isFinite(v)) depth = Math.min(0.15, Math.max(0, v));
     }
   } catch (_) { /* keep default */ }
+  let near = 15.0;
+  let far = 35.0;
+  try {
+    const f = getQuality()?.flags || {};
+    if (Number.isFinite(f.pomLodNear)) near = f.pomLodNear;
+    if (Number.isFinite(f.pomLodFar)) far = f.pomLodFar;
+    else if (getQuality()?.preset === "ultra") far = 50.0;
+  } catch (_) {}
   _statPomCfg = {
     enabled,
     steps: Math.min(24, Math.max(4, steps | 0)),
     shadowSteps: Math.min(12, Math.max(2, shadowSteps | 0)),
     depth,
-    near: 5.0,   // full strength below (m)
-    far: 14.0,   // fully off beyond (m) — bounds the dependent-fetch loop cost
+    near,   // full strength below (m) — extended to 15m
+    far,   // fully off beyond (m) — bounds the dependent-fetch loop cost
     shadowDark: 0.55,
   };
   return _statPomCfg;
@@ -798,6 +806,10 @@ export function makeArrayMaterial(diffArray, stateKey, nraArray, arrays) {
       shader.uniforms.uStatPomSteps = { value: pc.steps };
       shader.uniforms.uStatPomShadowSteps = { value: pc.shadowSteps };
       shader.uniforms.uStatPomShadowDark = { value: pc.shadowDark };
+      // Micro-surface enhancement uniforms
+      shader.uniforms.uStatCreviceAo = { value: 1.0 };
+      shader.uniforms.uStatMicroShadow = { value: 1.0 };
+      shader.uniforms.uStatEdgeRim = { value: 0.3 };
       m.userData._statPomUniforms = shader.uniforms;
     }
     shader.vertexShader = shader.vertexShader
@@ -822,6 +834,9 @@ export function makeArrayMaterial(diffArray, stateKey, nraArray, arrays) {
               "\nuniform int uStatPomSteps;" +
               "\nuniform int uStatPomShadowSteps;" +
               "\nuniform float uStatPomShadowDark;" +
+              "\nuniform float uStatCreviceAo;" +
+              "\nuniform float uStatMicroShadow;" +
+              "\nuniform float uStatEdgeRim;" +
               "\nvec4 _statNraTexel;" +
               "\nvec2 _statPomUv;" +
               "\nfloat _statPomFade = 0.0;" +
@@ -858,9 +873,13 @@ export function makeArrayMaterial(diffArray, stateKey, nraArray, arrays) {
                 // undefined behaviour, and it is 4 derivatives — cheap.
                 "\t_statPomUv = vMapUv;",
                 "\tfloat _pomFace = gl_FrontFacing ? 1.0 : -1.0;",
-                "\tvec3 _pomN = normalize( vNormal );",
-                "\t#ifdef DOUBLE_SIDED",
-                "\t\t_pomN *= _pomFace;",
+                "\t#ifdef FLAT_SHADED",
+                "\t\tvec3 _pomN = normalize( cross( dFdx( vViewPosition ), dFdy( vViewPosition ) ) );",
+                "\t#else",
+                "\t\tvec3 _pomN = normalize( vNormal );",
+                "\t\t#ifdef DOUBLE_SIDED",
+                "\t\t\t_pomN *= _pomFace;",
+                "\t\t#endif",
                 "\t#endif",
                 "\t_statPomTbn = getTangentFrame( - vViewPosition, _pomN, vMapUv );",
                 "\t#if defined( DOUBLE_SIDED ) && ! defined( FLAT_SHADED )",
@@ -875,13 +894,20 @@ export function makeArrayMaterial(diffArray, stateKey, nraArray, arrays) {
                 // — same pair of guards terrain.js's shipping POM uses.
                 "\t\tif ( _pomV.z > 0.15 ) {",
                 "\t\t\t_statPomFade = 1.0 - smoothstep( uStatPomNear, uStatPomFar, _pomVd );",
-                "\t\t\tvec2 _pomStep = ( _pomV.xy / _pomV.z ) * ( uStatPomDepth * _statPomFade ) / float( uStatPomSteps );",
-                "\t\t\tfloat _pomLayerStep = 1.0 / float( uStatPomSteps );",
+                "\t\t\tint _statEffSteps = uStatPomSteps;",
+                "\t\t\tfloat _statMid = mix( uStatPomNear, uStatPomFar, 0.5 );",
+                "\t\t\tif ( _pomVd > _statMid ) {",
+                "\t\t\t\t_statEffSteps = max( 4, uStatPomSteps / 4 );",
+                "\t\t\t} else if ( _pomVd > uStatPomNear ) {",
+                "\t\t\t\t_statEffSteps = max( 4, uStatPomSteps / 2 );",
+                "\t\t\t}",
+                "\t\t\tvec2 _pomStep = ( _pomV.xy / _pomV.z ) * ( uStatPomDepth * _statPomFade ) / float( _statEffSteps );",
+                "\t\t\tfloat _pomLayerStep = 1.0 / float( _statEffSteps );",
                 "\t\t\tvec2 _pomUv = vMapUv;",
                 "\t\t\tfloat _pomLd = 0.0;",
                 "\t\t\tfloat _pomHd = 1.0 - _statPomHeightAt( _pomUv );",
                 "\t\t\tfor ( int i = 0; i < 24; i ++ ) {",
-                "\t\t\t\tif ( i >= uStatPomSteps || _pomLd >= _pomHd ) break;",
+                "\t\t\t\tif ( i >= _statEffSteps || _pomLd >= _pomHd ) break;",
                 "\t\t\t\t_pomUv -= _pomStep;",
                 "\t\t\t\t_pomLd += _pomLayerStep;",
                 "\t\t\t\t_pomHd = 1.0 - _statPomHeightAt( _pomUv );",
@@ -939,34 +965,57 @@ export function makeArrayMaterial(diffArray, stateKey, nraArray, arrays) {
             "\tnormal = normalize( tbn * mapN );",
           ].join("\n")
         )
+        .replace(
+          "#include <lights_fragment_begin>",
+          [
+            "#include <lights_fragment_begin>",
+            "#if ( NUM_DIR_LIGHTS > 0 )",
+            "\tif ( uStatMicroShadow > 0.001 ) {",
+            "\t\tvec3 _statSunL = directionalLights[ 0 ].direction;",
+            "\t\tvec3 _statSunLt = normalize( transpose( _statPomTbn ) * _statSunL );",
+            "\t\tif ( _statSunLt.z > 0.0 ) {",
+            "\t\t\tfloat _statSlope = clamp( ( dot( geometryNormal, _statSunL ) + 0.08 ) / max( dot( normal, _statSunL ), 0.08 ), 0.0, 1.0 );",
+            "\t\t\tvec2 _statProbe1 = _statPomUv + _statSunLt.xy * 0.015;",
+            "\t\t\tvec2 _statProbe2 = _statPomUv + _statSunLt.xy * 0.035;",
+            "\t\t\tfloat _statH0 = _statNraTexel.a;",
+            "\t\t\tfloat _statH1 = _statPomHeightAt( _statProbe1 );",
+            "\t\t\tfloat _statH2 = _statPomHeightAt( _statProbe2 );",
+            "\t\t\tfloat _statOcc = max( max( 0.0, _statH1 - _statH0 ), max( 0.0, _statH2 - _statH0 ) );",
+            "\t\t\tfloat _statHorizonShadow = clamp( 1.0 - 2.5 * _statOcc, 0.0, 1.0 );",
+            "\t\t\tfloat _statMicroTerm = min( _statSlope, _statHorizonShadow );",
+            "\t\t\tfloat _statAtten = mix( 1.0, _statMicroTerm, uStatMicroShadow );",
+            "\t\t\treflectedLight.directDiffuse *= _statAtten;",
+            "\t\t\treflectedLight.directSpecular *= _statAtten;",
+            "\t\t}",
+            "\t}",
+            "#endif",
+          ].join("\n")
+        )
         // A channel = seam height (or the texchan AO fallback — same formula
-        // shades both correctly, see packNraLayer). Three terms land here:
-        //   1. cavity AO on indirect light (the pre-S3 behaviour, now derived
-        //      from the seam field: a groove darkens across its full width);
-        //   2. Frostbite-style micro-shadow on DIRECT light — the term that
-        //      turned a 6%-of-the-normal-map effect into a first-order cue;
-        //   3. the POM self-shadow ray toward the REAL sun (the single
-        //      largest measured "this is 3D" term, +0.61 on timber) — the
-        //      legacy patch marched toward a camera proxy, which is the most
-        //      reliable way to make relief read as painted-on.
+        // shades both correctly, see packNraLayer).
         // aomap_fragment runs AFTER lights_fragment_end, so directDiffuse is
         // fully accumulated and `normal`/`directionalLights` are in scope.
         .replace(
           "#include <aomap_fragment>",
           [
+            // Micro-crevice cavity AO: operates at all distances independent of POM raymarching
+            "\tfloat _statCavity = clamp( 1.0 - uStatCreviceAo * 1.5 * ( 1.0 - _statNraTexel.a ), 0.0, 1.0 );",
             `\tfloat ambientOcclusion = ( _statNraTexel.a - 1.0 ) * ${aoMapIntensityValue().toFixed(3)} + 1.0;`,
+            "\tambientOcclusion *= _statCavity;",
             "\treflectedLight.indirectDiffuse *= ambientOcclusion;",
             "\t#if defined( USE_ENVMAP ) && defined( STANDARD )",
             "\t\tfloat dotNV = saturate( dot( geometryNormal, geometryViewDir ) );",
             "\t\treflectedLight.indirectSpecular *= computeSpecularOcclusion( dotNV, ambientOcclusion, material.roughness );",
             "\t#endif",
+            // Protruding masonry specular rim highlight
             "\t#if NUM_DIR_LIGHTS > 0",
+            "\tif ( uStatEdgeRim > 0.001 ) {",
+            "\t\tfloat _statRim = max( 0.0, _statNraTexel.a - 0.7 ) * ( 1.0 - abs( dot( geometryNormal, geometryViewDir ) ) );",
+            "\t\treflectedLight.directSpecular += _statRim * uStatEdgeRim * directionalLights[ 0 ].color;",
+            "\t}",
+            // POM secondary ray march toward real sun (active only when POM enabled and within LOD distance)
             "\tif ( uStatPomOn > 0.5 && _statPomFade > 0.001 ) {",
             "\t\tvec3 _pomL = directionalLights[ 0 ].direction;",
-            "\t\tfloat _pomNdl = saturate( dot( normal, _pomL ) );",
-            // ao = 1 ⇒ saturate(ndl + 1) = 1: flat texels are untouched, so
-            // the term can only darken grooves, never shift overall exposure.
-            "\t\tfloat _pomMicro = clamp( _pomNdl + 2.0 * ambientOcclusion - 1.0, 0.0, 1.0 );",
             "\t\tfloat _pomSun = 1.0;",
             "\t\tvec3 _pomLt = normalize( transpose( _statPomTbn ) * _pomL );",
             "\t\tif ( _pomLt.z > 0.05 && _statPomHitDepth > 0.001 ) {",
@@ -981,7 +1030,7 @@ export function makeArrayMaterial(diffArray, stateKey, nraArray, arrays) {
             "\t\t\t\t_sunD -= _sunLayerStep;",
             "\t\t\t}",
             "\t\t}",
-            "\t\tfloat _pomDirect = mix( 1.0, min( _pomMicro, _pomSun ), _statPomFade );",
+            "\t\tfloat _pomDirect = mix( 1.0, _pomSun, _statPomFade );",
             "\t\treflectedLight.directDiffuse *= _pomDirect;",
             "\t\treflectedLight.directSpecular *= _pomDirect;",
             "\t}",
@@ -997,7 +1046,7 @@ export function makeArrayMaterial(diffArray, stateKey, nraArray, arrays) {
   // cost); with ?statNra absent the key is byte-identical to v1.
   m.customProgramCacheKey = () =>
     (wrapBucket ? "statAtlasArrayMatV4w" : "statAtlasArrayMatV4c")
-    + (nraArray ? "nra" + aoMapIntensityValue().toFixed(3) : "");
+    + (nraArray ? "nra" + aoMapIntensityValue().toFixed(3) + "|mc1|ms1" : "");
   m.userData = { __statAtlasMat: true };
   return m;
 }

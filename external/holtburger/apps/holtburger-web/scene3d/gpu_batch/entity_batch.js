@@ -240,7 +240,7 @@ export function __setEntityBatchForTest(v) { _flag = v === undefined ? null : !!
  * The program keys a POM member may carry (header "POM PARTS"): the kit's
  * array pattern (anim_scenery_batch.js ARRAY_CHAIN_KEY) with `p1`.
  */
-export const ENTITY_POM_CHAIN_KEY = /^hb\|d0\|c0\|p1\|l[01]\|a0\|b0\|f0\|s0\|k0\|v$/;
+export const ENTITY_POM_CHAIN_KEY = /^hb\|d0\|c0\|p1\|l[01]\|a0\|b0\|f0\|s0\|k0(?:\|mc[01]\|ms[01])?\|v$/;
 /** The layer a batched leaf is parked on: no camera and no raycaster enables it. */
 export const ENTITY_PARK_LAYER = 31;
 /** `Layers.set(31)`'s mask, as three r184 stores it (`(1 << layer | 0) >>> 0`: unsigned). */

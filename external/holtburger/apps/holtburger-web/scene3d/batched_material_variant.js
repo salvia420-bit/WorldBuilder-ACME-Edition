@@ -23,6 +23,7 @@
 // `?batchMatVariant=off` restores sharing the member object.
 
 import { rustFlag } from "./rust/scene_core.js";
+import { heightTexForMaterial, _inheritHeightTex } from "./materials.js";
 
 const _variantOf = new WeakMap(); // member material -> variant
 const _memberOf = new WeakMap();  // variant -> member material
@@ -228,6 +229,10 @@ export function batchedMaterialFor(mat) {
   _mirror(v, mat, keys, null);
   _variantOf.set(mat, v);
   _memberOf.set(v, mat);
+  const hTex = heightTexForMaterial(mat);
+  if (hTex) {
+    try { _inheritHeightTex(mat, v); } catch (_) {}
+  }
   const e = { mat, keys, hot: HOT_DEFAULT.filter((k) => keys.includes(k)), ver: mat.version,
     onVariantDispose: null, onMemberDispose: null, hotFn: undefined, fullFn: undefined };
   _live.set(v, e);

@@ -56,6 +56,7 @@ import {
 } from "./adapter.js";
 import { aoMapIntensityValue, materialBakeEnabled } from "./vfx_flags.js";
 import { getQuality } from "./quality.js";
+import { memberMaterialOf } from "./batched_material_variant.js";
 import { SuiteAssetSource, loadTexchanManifest } from "./suite_assets.js";
 // X6 (`?texBc7=on`, DEFAULT-OFF) — direct BC7/BPTC albedo upload. Every entry
 // point below is inert unless the flag is on AND the GPU reports
@@ -638,6 +639,8 @@ function _patchSetCacheKey(material) {
     // the shared program. Appended INSIDE the k token only when set, so every
     // un-baked key (and ?vertexBake=lit / ?bakedDirectOut=off) is unchanged.
     (u.__acBakedDirectOut ? "d" : "") +
+    ((u.__creviceAo || u.microCreviceAo) ? "|mc1" : "|mc0") +
+    ((u.__microShadow || u.microContactShadow) ? "|ms1" : "|ms0") +
     // VFX component-SET key (Visual-Behavior Suite, spec §2.4). Encodes the
     // component SET + each component's linkVariant() — NEVER per-instance
     // config/hash — so program count ≈ distinct sets, not 10k DIDs. Empty ""
@@ -1806,10 +1809,9 @@ const POM_UNIFORM_DEFAULTS = Object.freeze({
   // and the effect is invisible.
   depth: 0.08,
   // Distance-based LOD ramp (camera-to-fragment, metres). POM full
-  // strength below 5m, fades to zero between 5-10m. Per §Phase 3.1
-  // Objective #3: "distance < 10m only".
-  lodNear: 5.0,
-  lodFar: 10.0,
+  // strength below 15m, fades to zero between 15-35m (up to 50m ultra).
+  lodNear: 15.0,
+  lodFar: 35.0,
   // Self-shadow secondary ray step count + bias.
   shadowSteps: 8,
   shadowDarkness: 0.5, // [0,1] — 0=fully dark, 1=no shadow
@@ -1817,6 +1819,9 @@ const POM_UNIFORM_DEFAULTS = Object.freeze({
 
 function _installPomShaderPatch(material, heightTexture, opts = {}) {
   if (!heightTexture) return;
+  if (!_heightTexByMaterial.has(material)) {
+    _heightTexByMaterial.set(material, heightTexture);
+  }
   // Perf D2: pull primary + self-shadow step counts from the quality
   // preset (`pomStepsPrimary`, `pomStepsSelfShadow`) so `mid` can run
   // POM at ~50% the cost of `high`. Per-call `opts.steps` still wins
@@ -1838,10 +1843,16 @@ function _installPomShaderPatch(material, heightTexture, opts = {}) {
   const _qShadow = Number.isFinite(_qFlags?.pomStepsSelfShadow)
     ? _qFlags.pomStepsSelfShadow
     : null;
+  const _qLodNear = Number.isFinite(_qFlags?.pomLodNear)
+    ? _qFlags.pomLodNear
+    : null;
+  const _qLodFar = Number.isFinite(_qFlags?.pomLodFar)
+    ? _qFlags.pomLodFar
+    : null;
   const steps = opts.steps ?? _qPrimary ?? POM_UNIFORM_DEFAULTS.steps;
   const depth = opts.depth ?? POM_UNIFORM_DEFAULTS.depth;
-  const lodNear = opts.lodNear ?? POM_UNIFORM_DEFAULTS.lodNear;
-  const lodFar = opts.lodFar ?? POM_UNIFORM_DEFAULTS.lodFar;
+  const lodNear = opts.lodNear ?? _qLodNear ?? POM_UNIFORM_DEFAULTS.lodNear;
+  const lodFar = opts.lodFar ?? _qLodFar ?? POM_UNIFORM_DEFAULTS.lodFar;
   const shadowSteps =
     opts.shadowSteps ?? _qShadow ?? POM_UNIFORM_DEFAULTS.shadowSteps;
   const shadowDarkness =
@@ -1861,14 +1872,23 @@ function _installPomShaderPatch(material, heightTexture, opts = {}) {
       shadowDarkness,
     },
   };
-  _chainBeforeCompile(material, (shader) => {
-    shader.uniforms.uPomMap = { value: heightTexture };
-    shader.uniforms.uPomSteps = { value: steps };
-    shader.uniforms.uPomDepth = { value: depth };
-    shader.uniforms.uPomLodNear = { value: lodNear };
-    shader.uniforms.uPomLodFar = { value: lodFar };
-    shader.uniforms.uPomShadowSteps = { value: shadowSteps };
-    shader.uniforms.uPomShadowDarkness = { value: shadowDarkness };
+  _chainBeforeCompile(material, function pomBeforeCompile(shader) {
+    const activeMat = this || material;
+    const activeHeightTex =
+      heightTexForMaterial(activeMat) ||
+      heightTexForMaterial(material) ||
+      heightTexture;
+    shader.uniforms.uPomMap = { value: activeHeightTex };
+    const activeUniforms =
+      activeMat?.userData?.pomUniforms ||
+      material?.userData?.pomUniforms ||
+      {};
+    shader.uniforms.uPomSteps = { value: activeUniforms.steps ?? steps };
+    shader.uniforms.uPomDepth = { value: activeUniforms.depth ?? depth };
+    shader.uniforms.uPomLodNear = { value: activeUniforms.lodNear ?? lodNear };
+    shader.uniforms.uPomLodFar = { value: activeUniforms.lodFar ?? lodFar };
+    shader.uniforms.uPomShadowSteps = { value: activeUniforms.shadowSteps ?? shadowSteps };
+    shader.uniforms.uPomShadowDarkness = { value: activeUniforms.shadowDarkness ?? shadowDarkness };
     // 2026-08-02 — grazing-angle step ramp + amplitude fade. DEFAULT ON;
     // `?pomGraze=off` restores the pre-fix numbers exactly (0.05 epsilon,
     // fixed step count, hard `z > 0.15` cut) for a same-session A/B.
@@ -1932,12 +1952,16 @@ vec2 _pomPerturbedUv(vec2 baseUv, vec3 vTanDir, float depthScale, int steps) {
   //  (b) BOUNDED PROJECTION. The 0.05 epsilon allowed a 20x UV shift, i.e. a
   //      smear up to 20 * depthScale long, which is the stalactite itself.
   //      0.12 bounds it at ~8x, still ample for real relief.
-  float _pz = max(abs(vTanDir.z), uPomGraze > 0.5 ? 0.12 : 0.05);
+  // Feature 10: Adaptive POM Grazing Silhouette Clamping
+  float _pz = max(abs(vTanDir.z), 0.15);
   int nSteps = steps;
   if (uPomGraze > 0.5) {
     nSteps = int(min(64.0, float(steps) * clamp(1.0 / _pz, 1.0, 3.0) + 0.5));
   }
   vec2 uvStep = vTanDir.xy / _pz * depthScale / float(nSteps);
+  // Strict per-step displacement bounding: eliminates stalactites and texture smearing
+  float maxStepShift = (0.05 * depthScale) / float(nSteps);
+  uvStep = clamp(uvStep, vec2(-maxStepShift), vec2(maxStepShift));
   float layerStep = 1.0 / float(nSteps);
   steps = nSteps;
   vec2 currentUv = baseUv;
@@ -2013,30 +2037,41 @@ vec2 _pomUv = _pomBaseUv;
 // and a derivative inside the non-uniform LOD branch is undefined
 // behaviour. Four derivatives — cheap.
 float _pomFace = gl_FrontFacing ? 1.0 : -1.0;
+#ifdef FLAT_SHADED
+vec3 _pomGeomN = normalize(cross(dFdx(vViewPosition), dFdy(vViewPosition)));
+#else
 vec3 _pomGeomN = normalize(vNormal);
 #ifdef DOUBLE_SIDED
 _pomGeomN *= _pomFace;
+#endif
 #endif
 _pomTbnG = getTangentFrame(-vViewPosition, _pomGeomN, vMapUv);
 #if defined( DOUBLE_SIDED ) && ! defined( FLAT_SHADED )
 _pomTbnG[0] *= _pomFace;
 _pomTbnG[1] *= _pomFace;
 #endif
+float _pomDist = length(vViewPosition);
 float _pomLod = 1.0 - smoothstep(uPomLodNear, uPomLodFar, length(vViewPosition));
 if (_pomLod > 0.001) {
   vec3 _pomTanDir = normalize(transpose(_pomTbnG) * normalize(vViewPosition));
-  // 2026-08-02 GRAZING FADE (?pomGraze=off restores the hard gate). The legacy
-  // gate was a hard z > 0.15 cut, so the effect ran at FULL amplitude right
-  // up to 81 deg and then popped off in one pixel. The band 66-81 deg is
-  // precisely where a pitched roof is seen from the ground, and it is where the
-  // smear lived. Ramp the amplitude to zero across it instead: the geometry
-  // stops smearing AND the cut-off stops popping.
+  // Feature 10: Smoothstep silhouette clamping between 63° and 81.4° glancing angles
+  float _pomTanZ = abs(_pomTanDir.z);
   float _pomGrazeW = (uPomGraze > 0.5)
-    ? smoothstep(0.12, 0.45, _pomTanDir.z)
-    : step(0.15, _pomTanDir.z);
+    ? smoothstep(0.15, 0.45, _pomTanZ)
+    : step(0.15, _pomTanZ);
   if (_pomGrazeW > 0.001) {
     float _pomAmt = _pomLod * _pomGrazeW;
-    _pomUv = _pomPerturbedUv(_pomBaseUv, _pomTanDir, uPomDepth, uPomSteps);
+    // Feature 2: Distance-adaptive step scaling (16 -> 8 -> 4 steps)
+    // Preserves SIMD warp coherence: all threads on a polygon at similar
+    // distance execute identical iteration bounds.
+    int _pomEffSteps = uPomSteps;
+    float _pomMid = mix(uPomLodNear, uPomLodFar, 0.5);
+    if (_pomDist > _pomMid) {
+      _pomEffSteps = max(4, uPomSteps / 4);
+    } else if (_pomDist > uPomLodNear) {
+      _pomEffSteps = max(4, uPomSteps / 2);
+    }
+    _pomUv = _pomPerturbedUv(_pomBaseUv, _pomTanDir, uPomDepth, _pomEffSteps);
     _pomUv = mix(_pomBaseUv, _pomUv, _pomAmt);
     _pomLodG = _pomAmt;
   }
@@ -2083,8 +2118,13 @@ diffuseColor *= sampledDiffuseColor;
 if (_pomLodG > 0.001) {
   vec3 _pomLightTan = normalize(transpose(_pomTbnG) * directionalLights[0].direction);
   float _pomHitDepth = 1.0 - texture2D(uPomMap, _pomUvG).r;
+  float _pomDist = length(vViewPosition);
+  float _pomMid = mix(uPomLodNear, uPomLodFar, 0.5);
+  int _pomEffShadowSteps = (_pomDist > _pomMid)
+    ? max(2, uPomShadowSteps / 4)
+    : ((_pomDist > uPomLodNear) ? max(2, uPomShadowSteps / 2) : uPomShadowSteps);
   float _pomShadowFactor = _pomShadow(_pomUvG, _pomHitDepth, _pomLightTan,
-                                       uPomDepth, uPomShadowSteps);
+                                       uPomDepth, _pomEffShadowSteps);
   gl_FragColor.rgb *= mix(1.0, _pomShadowFactor, _pomLodG);
 }
 #endif
@@ -2093,7 +2133,11 @@ if (_pomLodG > 0.001) {
 
     // Stash the patched shader handle so tests can read uniforms post-
     // compile (three.js doesn't expose shader.uniforms otherwise).
-    _defineLiveUserData(material, "pomShaderUniforms", shader.uniforms);
+    if (activeHeightTex && (activeMat?.userData || material?.userData)) {
+      const ud = activeMat?.userData || material?.userData;
+      ud.pomTextureName = activeHeightTex.name ?? null;
+    }
+    _defineLiveUserData(activeMat || material, "pomShaderUniforms", shader.uniforms);
   });
   material.needsUpdate = true;
 }
@@ -2104,6 +2148,271 @@ if (_pomLodG > 0.001) {
 export function installPomShaderPatch(material, heightTexture, opts) {
   _installPomShaderPatch(material, heightTexture, opts);
 }
+
+// === Feature 6 & Feature 7 & Feature 8 & Feature 9: Micro-Surface Visual Enhancements ===
+export const CREVICE_AO_DEFAULTS = Object.freeze({
+  gain: 1.5,           // CREVICE_AO_GAIN from harness.mjs
+  gamma: 0.5,          // EDGE_RIM_DEFAULT_GAMMA from harness.mjs
+  texelSize: [1.0 / 512.0, 1.0 / 512.0],
+});
+
+/**
+ * Installs Micro-Surface Crevice Ambient Occlusion (Feature 6), Specular Edge Rim
+ * Highlighting (Feature 7), Directional Micro-Contact Shadowing (Feature 8), and
+ * Oblique Horizon Slope Shading (Feature 9) onto a MeshStandardMaterial.
+ *
+ * @param {THREE.Material} material
+ * @param {THREE.Texture|object} [heightTextureOrOpts]
+ * @param {object} [opts]
+ */
+export function applyMicroSurfaceEnhancement(material, heightTextureOrOpts, opts = {}) {
+  if (!material) return;
+
+  let heightTexture = null;
+  let options = {};
+  if (
+    heightTextureOrOpts &&
+    (heightTextureOrOpts.isTexture ||
+      heightTextureOrOpts.isDataTexture ||
+      "image" in heightTextureOrOpts)
+  ) {
+    heightTexture = heightTextureOrOpts;
+    options = opts || {};
+  } else {
+    options = heightTextureOrOpts || {};
+    heightTexture = heightTexForMaterial(material) || options.heightTexture;
+  }
+
+  if (!heightTexture) return;
+  if (!_heightTexByMaterial.has(material)) {
+    _heightTexByMaterial.set(material, heightTexture);
+  }
+
+  let qFlags = null;
+  try {
+    qFlags = getQuality()?.flags || null;
+  } catch (_) {
+    qFlags = typeof window !== "undefined" ? window.liveScene3d?.quality?.flags : null;
+  }
+
+  const creviceAoEnabled = options.microCreviceAo ?? options.creviceAo ?? qFlags?.microCreviceAo ?? true;
+  const shadowEnabled = options.microContactShadow ?? options.microShadow ?? qFlags?.microContactShadow ?? false;
+
+  const gain = options.gain ?? options.creviceAoGain ?? CREVICE_AO_DEFAULTS.gain;
+  const gamma = options.gamma ?? options.rimGamma ?? CREVICE_AO_DEFAULTS.gamma;
+  const texWidth = heightTexture.image?.width || 512;
+  const texHeight = heightTexture.image?.height || 512;
+  const texelSize = options.texelSize ?? [1.0 / texWidth, 1.0 / texHeight];
+  const shadowStrength = options.shadowStrength ?? 0.65;
+  const shadowScale = options.shadowScale ?? 1.0;
+
+  // Stamp userData flags
+  material.userData = {
+    ...(material.userData || {}),
+    microCreviceAo: !!creviceAoEnabled,
+    __creviceAo: !!creviceAoEnabled,
+    microContactShadow: !!shadowEnabled,
+    __microShadow: !!shadowEnabled,
+    creviceAoUniforms: {
+      gain,
+      gamma,
+      texelSize,
+      enabled: creviceAoEnabled ? 1.0 : 0.0,
+    },
+    microShadowUniforms: {
+      strength: shadowStrength,
+      scale: shadowScale,
+      enabled: shadowEnabled ? 1.0 : 0.0,
+    },
+  };
+
+  _chainBeforeCompile(material, function microSurfaceBeforeCompile(shader) {
+    const activeMat = this || material;
+    const activeHeightTex =
+      heightTexForMaterial(activeMat) ||
+      heightTexForMaterial(material) ||
+      heightTexture;
+
+    if (!shader.uniforms.uPomMap) {
+      shader.uniforms.uPomMap = { value: activeHeightTex };
+    }
+    const curCrevice = activeMat?.userData?.creviceAoUniforms;
+    const curShadow = activeMat?.userData?.microShadowUniforms;
+
+    shader.uniforms.uCreviceAoGain = { value: curCrevice?.gain ?? gain };
+    shader.uniforms.uRimGamma = { value: curCrevice?.gamma ?? gamma };
+    const curTexel = curCrevice?.texelSize ?? texelSize;
+    shader.uniforms.uCreviceAoTexelSize = {
+      value: new THREE.Vector2(curTexel[0], curTexel[1]),
+    };
+    shader.uniforms.uCreviceAoEnabled = {
+      value: (activeMat?.userData?.microCreviceAo || activeMat?.userData?.__creviceAo) ? 1.0 : 0.0,
+    };
+    shader.uniforms.uMicroShadowEnabled = {
+      value: (activeMat?.userData?.microContactShadow || activeMat?.userData?.__microShadow) ? 1.0 : 0.0,
+    };
+    shader.uniforms.uMicroContactShadowStrength = {
+      value: curShadow?.strength ?? shadowStrength,
+    };
+    shader.uniforms.uMicroContactShadowScale = {
+      value: curShadow?.scale ?? shadowScale,
+    };
+
+    // 1. Declarations in <common>
+    const pomMapDecl = shader.fragmentShader.includes("uniform sampler2D uPomMap;")
+      ? ""
+      : "uniform sampler2D uPomMap;\n";
+
+    const pomGlobalsDecl = shader.fragmentShader.includes("_pomTbnG")
+      ? ""
+      : "mat3 _pomTbnG;\nfloat _pomLodG = 0.0;\nvec2 _pomUvG = vec2(0.0);\n";
+
+    if (!shader.fragmentShader.includes("uCreviceAoGain")) {
+      shader.fragmentShader = shader.fragmentShader.replace(
+        "#include <common>",
+        `#include <common>
+${pomMapDecl}uniform float uCreviceAoGain;
+uniform float uRimGamma;
+uniform vec2 uCreviceAoTexelSize;
+uniform float uCreviceAoEnabled;
+uniform float uMicroShadowEnabled;
+uniform float uMicroContactShadowStrength;
+uniform float uMicroContactShadowScale;
+${pomGlobalsDecl}`
+      );
+    }
+
+    // 2. Feature 8 & 9: Directional Micro-Contact Shadowing & Oblique Slope Shading in <lights_fragment_begin>
+    if (!shader.fragmentShader.includes("Feature 8: Directional Micro-Contact Shadowing")) {
+      const microShadowCode = `
+#if NUM_DIR_LIGHTS > 0
+if (uMicroShadowEnabled > 0.5) {
+  // Feature 8: Directional Micro-Contact Shadowing & Feature 9: Oblique Horizon Slope Shading
+  vec3 _msLightDir = directionalLights[0].direction;
+
+  #ifdef FLAT_SHADED
+  vec3 _msGeomN = normalize(cross(dFdx(vViewPosition), dFdy(vViewPosition)));
+  #else
+  vec3 _msGeomN = normalize(vNormal);
+  #ifdef DOUBLE_SIDED
+  _msGeomN *= (gl_FrontFacing ? 1.0 : -1.0);
+  #endif
+  #endif
+
+  #ifdef USE_MAP
+  vec2 _msMapUv = vMapUv;
+  #elif defined( USE_UV )
+  vec2 _msMapUv = vUv;
+  #else
+  vec2 _msMapUv = vec2(0.0);
+  #endif
+
+  mat3 _msTbn = (_pomLodG > 0.0001 || _pomTbnG[2] != vec3(0.0)) ? _pomTbnG : getTangentFrame(-vViewPosition, _msGeomN, _msMapUv);
+  vec3 _msLt = normalize(transpose(_msTbn) * _msLightDir);
+
+  if (_msLt.z > 0.001) {
+    vec2 _msBaseUv = (_pomLodG > 0.001) ? _pomUvG : _msMapUv;
+    float _msH0 = texture2D(uPomMap, _msBaseUv).r;
+
+    float _msScale = uMicroContactShadowScale;
+    vec2 _msProbe1 = _msBaseUv + _msLt.xy * (0.015 * _msScale);
+    vec2 _msProbe2 = _msBaseUv + _msLt.xy * (0.035 * _msScale);
+
+    float _msH1 = texture2D(uPomMap, _msProbe1).r;
+    float _msH2 = texture2D(uPomMap, _msProbe2).r;
+
+    float _msOcc = max(max(0.0, _msH1 - _msH0), max(0.0, _msH2 - _msH0));
+    float _msHorizonShadow = clamp(1.0 - 2.5 * _msOcc, 0.0, 1.0);
+
+    float _msSlope = clamp((dot(geometryNormal, _msLightDir) + 0.08) / max(dot(normal, _msLightDir), 0.08), 0.0, 1.0);
+
+    float _msAtten = mix(1.0, min(_msSlope, _msHorizonShadow), uMicroContactShadowStrength);
+
+    reflectedLight.directDiffuse *= _msAtten;
+    reflectedLight.directSpecular *= _msAtten;
+  }
+}
+#endif
+`;
+      if (shader.fragmentShader.includes("#include <lights_fragment_begin>")) {
+        shader.fragmentShader = shader.fragmentShader.replace(
+          "#include <lights_fragment_begin>",
+          "#include <lights_fragment_begin>\n" + microShadowCode
+        );
+      } else if (shader.fragmentShader.includes("#include <lights_fragment_maps>")) {
+        shader.fragmentShader = shader.fragmentShader.replace(
+          "#include <lights_fragment_maps>",
+          microShadowCode + "\n#include <lights_fragment_maps>"
+        );
+      }
+    }
+
+    // 3. Feature 6 & 7: Crevice AO and Specular Edge Rim Highlighting in <aomap_fragment>
+    if (!shader.fragmentShader.includes("Feature 6: Micro-Surface Crevice AO")) {
+      const creviceAoCode = `
+#include <aomap_fragment>
+
+// Feature 6: Micro-Surface Crevice AO and Feature 7: Specular Edge Rim
+if (uCreviceAoEnabled > 0.5) {
+  #ifdef USE_MAP
+  vec2 _cBaseUv = vMapUv;
+  #elif defined( USE_UV )
+  vec2 _cBaseUv = vUv;
+  #else
+  vec2 _cBaseUv = vec2(0.0);
+  #endif
+
+  vec2 _cStep = max(fwidth(_cBaseUv), uCreviceAoTexelSize);
+  float _cH0 = texture2D(uPomMap, _cBaseUv).r;
+  float _cHR = texture2D(uPomMap, _cBaseUv + vec2(_cStep.x, 0.0)).r;
+  float _cHL = texture2D(uPomMap, _cBaseUv - vec2(_cStep.x, 0.0)).r;
+  float _cHU = texture2D(uPomMap, _cBaseUv + vec2(0.0, _cStep.y)).r;
+  float _cHD = texture2D(uPomMap, _cBaseUv - vec2(0.0, _cStep.y)).r;
+  float _cDeltaH = 4.0 * _cH0 - (_cHR + _cHL + _cHU + _cHD);
+
+  // Feature 6: Cavity Ambient Occlusion in crevices/mortar
+  float _cCavityDip = max(0.0, -_cDeltaH);
+  float _cCavityAo = clamp(1.0 - uCreviceAoGain * _cCavityDip, 0.0, 1.0);
+  reflectedLight.indirectDiffuse *= _cCavityAo;
+
+  #if defined( USE_ENVMAP ) && defined( STANDARD )
+  float _cDotNV_ao = saturate(dot(geometryNormal, geometryViewDir));
+  reflectedLight.indirectSpecular *= computeSpecularOcclusion(_cDotNV_ao, _cCavityAo, material.roughness);
+  #endif
+
+  // Feature 7: Specular Edge Rim Highlighting along silhouettes
+  #if !defined( FLAT_SHADED )
+  vec3 _cNorm = normalize(vNormal);
+  #ifdef DOUBLE_SIDED
+  _cNorm *= (gl_FrontFacing ? 1.0 : -1.0);
+  #endif
+  vec3 _cView = normalize(vViewPosition);
+  float _cDotNV = saturate(abs(dot(_cNorm, _cView)));
+  float _cEdgeRim = uRimGamma * max(0.0, _cDeltaH) * (1.0 - _cDotNV);
+
+  #if NUM_DIR_LIGHTS > 0
+  reflectedLight.directSpecular += _cEdgeRim * directionalLights[0].color;
+  #else
+  reflectedLight.directSpecular += vec3(_cEdgeRim);
+  #endif
+  #endif
+}
+`;
+      shader.fragmentShader = shader.fragmentShader.replace(
+        "#include <aomap_fragment>",
+        creviceAoCode
+      );
+    }
+
+    _defineLiveUserData(activeMat || material, "creviceAoShaderUniforms", shader.uniforms);
+    _defineLiveUserData(activeMat || material, "microSurfaceShaderUniforms", shader.uniforms);
+  });
+
+  _installPatchSetCacheKey(material);
+  material.needsUpdate = true;
+}
+
+export const installMicroSurfaceEnhancement = applyMicroSurfaceEnhancement;
 
 // === "Retail light response" combined patch — R2.B + L3 (2026-05-29) ===
 //
@@ -3385,13 +3694,22 @@ const _heightTexByMaterial = new WeakMap();
 /** The seam-height plane for a material, or null. Read by static_atlas.js. */
 export function heightTexForMaterial(mat) {
   if (!mat) return null;
-  return _heightTexByMaterial.get(mat) || null;
+  let h = _heightTexByMaterial.get(mat);
+  if (!h && typeof memberMaterialOf === "function") {
+    const member = memberMaterialOf(mat);
+    if (member && member !== mat) h = _heightTexByMaterial.get(member);
+  }
+  return h || null;
 }
 
 /** Carry the base's height plane onto a derived clone (clones share textures). */
-function _inheritHeightTex(base, clone) {
+export function _inheritHeightTex(base, clone) {
   const h = base && _heightTexByMaterial.get(base);
-  if (h && clone) _heightTexByMaterial.set(clone, h);
+  if (h && clone) {
+    _heightTexByMaterial.set(clone, h);
+  } else if (clone) {
+    _heightTexByMaterial.delete(clone);
+  }
 }
 
 // === 2026-08-03 — derived-clone re-seat ====================================
@@ -3452,13 +3770,13 @@ const _CLONE_LOST_PATCH_FLAGS = [
 const _RESEAT_KEEP_USERDATA = [
   "__cacheOwned", "__floorBiased", "__staticBiased", "__acBakedLight",
   "__aoPatched", "__depthBiased", "__vfxSetKey", "__vfxColorPassOnly",
-  "detailEnabled", "csmEnabled", "pomEnabled", "lightClampRetail",
-  "__envDetailKind",
+  "detailEnabled", "csmEnabled", "lightClampRetail",
+  "__envDetailKind", "microCreviceAo", "microContactShadow", "__creviceAo", "__microShadow",
 ];
 /** Non-enumerable live handles (see `_defineLiveUserData`) — a spread skips them. */
 const _LIVE_USERDATA_KEYS = [
   "acBakedLightUniforms", "detailShaderUniforms", "csmShaderUniforms",
-  "pomShaderUniforms", "lightClampShaderUniforms",
+  "pomShaderUniforms", "lightClampShaderUniforms", "creviceAoShaderUniforms", "microSurfaceShaderUniforms",
 ];
 
 // === 2026-10-20 (improvement hunt gpu-shading-2, CSM half) — clone CSM =======
@@ -3506,6 +3824,49 @@ function _reinstallCloneCsm(clone, base, csmState) {
   _cloneCsmGated.add(clone);
 }
 
+const _clonePomGated = new WeakSet();
+export function _reinstallClonePom(clone, base, opts) {
+  if (!clone || _clonePomGated.has(clone)) return;
+  // Clean up any unbacked copied pomEnabled claim immediately so that premature
+  // early returns (e.g. missing base POM flag or missing height texture) never leak pomEnabled: true.
+  if (clone.userData) delete clone.userData.pomEnabled;
+  if (!(base && base.userData && base.userData.pomEnabled)) return;
+  const hTex = heightTexForMaterial(base) || heightTexForMaterial(clone);
+  if (!hTex) return;
+  // Register the clone into _heightTexByMaterial so clone chains of arbitrary depth
+  // (base -> c1 -> c2 -> c3) retain the height texture plane.
+  _inheritHeightTex(base, clone);
+  _heightTexByMaterial.set(clone, hTex);
+  const prev = clone.onBeforeCompile;
+  clone.onBeforeCompile = THREE.Material.prototype.onBeforeCompile;
+  const pomOpts = opts ?? base.userData?.pomUniforms ?? {};
+  _installPomShaderPatch(clone, hTex, pomOpts);
+  if (base.userData?.pomForced) clone.userData.pomForced = base.userData.pomForced;
+  const pomHook = clone.onBeforeCompile;
+  clone.onBeforeCompile = prev;
+  _chainBeforeCompile(clone, function clonePomGate(shader, renderer) {
+    if (this && this.userData && this.userData.pomEnabled) {
+      if (this.userData.__staticBiased && typeof window !== "undefined" && window.__interiorBatch) {
+        return;
+      }
+      pomHook.call(this, shader, renderer);
+    }
+  });
+  _clonePomGated.add(clone);
+  if (base.userData?.__creviceAo || base.userData?.microCreviceAo || base.userData?.__microShadow || base.userData?.microContactShadow) {
+    clone.userData.__creviceAo = !!(base.userData.__creviceAo || base.userData.microCreviceAo);
+    clone.userData.microCreviceAo = !!(base.userData.__creviceAo || base.userData.microCreviceAo);
+    clone.userData.__microShadow = !!(base.userData.__microShadow || base.userData.microContactShadow);
+    clone.userData.microContactShadow = !!(base.userData.__microShadow || base.userData.microContactShadow);
+    applyMicroSurfaceEnhancement(clone, hTex, {
+      ...(base.userData?.creviceAoUniforms || {}),
+      ...(base.userData?.microShadowUniforms || {}),
+      microCreviceAo: clone.userData.microCreviceAo,
+      microContactShadow: clone.userData.microContactShadow,
+    });
+  }
+}
+
 function _reseatSurfaceState(clone, base) {
   for (const k of _RESEAT_FIELDS) clone[k] = base[k];
   // Colour-valued fields are objects — copy VALUES so the clone never aliases
@@ -3529,12 +3890,58 @@ function _reseatSurfaceState(clone, base) {
   if (_cloneCsmGated.has(clone) && !(base.userData && base.userData.csmEnabled)) {
     clone.userData.csmEnabled = false;
   }
+  if (_clonePomGated.has(clone) && !(base.userData && base.userData.pomEnabled)) {
+    clone.userData.pomEnabled = false;
+  }
   // Carry the clone's own live handles across — the spread above skips
   // non-enumerable keys, and csm.js reads csmShaderUniforms every frame.
   for (const k of _LIVE_USERDATA_KEYS) {
     if (prev[k] !== undefined) _defineLiveUserData(clone, k, prev[k]);
   }
   _inheritHeightTex(base, clone);
+  const newHTex = heightTexForMaterial(base) || heightTexForMaterial(clone);
+  if (base.userData && base.userData.pomEnabled) {
+    // 1. Live uniform update for already-compiled shader program:
+    if (clone.userData?.pomShaderUniforms?.uPomMap && newHTex) {
+      clone.userData.pomShaderUniforms.uPomMap.value = newHTex;
+    }
+    // 2. Metadata texture name update:
+    if (clone.userData && newHTex) {
+      clone.userData.pomTextureName = newHTex.name ?? null;
+    }
+    // 3. Propagate updated POM uniform parameters if base defines them:
+    if (clone.userData?.pomShaderUniforms && base.userData?.pomUniforms) {
+      const pUni = clone.userData.pomShaderUniforms;
+      const bUni = base.userData.pomUniforms;
+      if (pUni.uPomSteps && bUni.steps != null) pUni.uPomSteps.value = bUni.steps;
+      if (pUni.uPomDepth && bUni.depth != null) pUni.uPomDepth.value = bUni.depth;
+      if (pUni.uPomLodNear && bUni.lodNear != null) pUni.uPomLodNear.value = bUni.lodNear;
+      if (pUni.uPomLodFar && bUni.lodFar != null) pUni.uPomLodFar.value = bUni.lodFar;
+      if (pUni.uPomShadowSteps && bUni.shadowSteps != null) pUni.uPomShadowSteps.value = bUni.shadowSteps;
+      if (pUni.uPomShadowDarkness && bUni.shadowDarkness != null) pUni.uPomShadowDarkness.value = bUni.shadowDarkness;
+    }
+  } else {
+    if (clone.userData?.pomShaderUniforms?.uPomMap) {
+      clone.userData.pomShaderUniforms.uPomMap.value = null;
+    }
+  }
+  if (base.userData && (base.userData.__creviceAo || base.userData.microCreviceAo)) {
+    clone.userData.__creviceAo = true;
+    clone.userData.microCreviceAo = true;
+    if (clone.userData?.creviceAoShaderUniforms?.uPomMap && newHTex) {
+      clone.userData.creviceAoShaderUniforms.uPomMap.value = newHTex;
+    }
+  }
+  if (base.userData && (base.userData.__microShadow || base.userData.microContactShadow)) {
+    clone.userData.__microShadow = true;
+    clone.userData.microContactShadow = true;
+    if (clone.userData?.microSurfaceShaderUniforms?.uPomMap && newHTex) {
+      clone.userData.microSurfaceShaderUniforms.uPomMap.value = newHTex;
+    }
+  }
+  if (!_clonePomGated.has(clone) && (base.userData && base.userData.pomEnabled)) {
+    _reinstallClonePom(clone, base);
+  }
   clone.needsUpdate = true;
 }
 
@@ -3882,6 +4289,10 @@ export class MaterialCache {
     this.pomEnabled = !!opts.pomEnabled;
     this.pomOpts = opts.pomOpts ?? null;
     this.forcePom = !!opts.forcePom;
+    this.creviceAoEnabled = opts.creviceAoEnabled ?? opts.microCreviceAo ?? false;
+    this.creviceAoOpts = opts.creviceAoOpts ?? null;
+    this.microShadowEnabled = opts.microShadowEnabled ?? opts.microContactShadow ?? false;
+    this.microShadowOpts = opts.microShadowOpts ?? null;
 
     // === Wave 2.B — procedural normals (2026-05-28) ===
     // Phase 1.1 normal map gate. Defaults to `true` so legacy callers and
@@ -4350,6 +4761,7 @@ export class MaterialCache {
       // (Material.copy hands back a JSON round-trip) and carry the height plane.
       front.userData = { ...(base.userData || {}), __cacheOwned: true };
       _inheritHeightTex(base, front);
+      _reinstallClonePom(front, base, this.pomOpts);
       this.frontSideMaterials.set(key, front);
     }
     return front;
@@ -4374,6 +4786,7 @@ export class MaterialCache {
       _inheritHeightTex(base, v);
       // gpu-shading-2: the CSM receiver the clone lost (no-op with CSM off).
       _reinstallCloneCsm(v, base, this.csmState);
+      _reinstallClonePom(v, base, this.pomOpts);
       applyFloorDepthBias(v);
       this.floorBiasMaterials.set(key, v);
     }
@@ -4408,6 +4821,7 @@ export class MaterialCache {
       _inheritHeightTex(base, v);
       // gpu-shading-2: the CSM receiver the clone lost (no-op with CSM off).
       _reinstallCloneCsm(v, base, this.csmState);
+      _reinstallClonePom(v, base, this.pomOpts);
       applyBakedVertexLightPatch(v, { suppressDirect: VERTEX_BAKE.suppressDirect });
       this.cellBakedMaterials.set(key, v);
     }
@@ -4458,6 +4872,7 @@ export class MaterialCache {
       _inheritHeightTex(base, v);
       // gpu-shading-2: the CSM receiver the clone lost (no-op with CSM off).
       _reinstallCloneCsm(v, base, this.csmState);
+      _reinstallClonePom(v, base, this.pomOpts);
       applyStaticDepthBias(v);
       this.staticBiasMaterials.set(key, v);
     }
@@ -4499,6 +4914,7 @@ export class MaterialCache {
       // `transformed` at begin_vertex, so the receiver's world position (read
       // after project_vertex) follows the swaying geometry.
       _reinstallCloneCsm(v, base, this.csmState);
+      _reinstallClonePom(v, base, this.pomOpts);
       try { builder?.(v); } catch (e) { console.warn(`[vfx] getCachedVariant builder failed for ${key}:`, e); }
       v.needsUpdate = true;
       this.vfxVariants.set(key, v);
@@ -4577,12 +4993,14 @@ export class MaterialCache {
     const ud = { ...(v.userData || {}) };
     const hadCsm = !!(base.userData && base.userData.csmEnabled);
     const hadClamp = !!(base.userData && base.userData.lightClampRetail);
+    const hadPom = !!(base.userData && base.userData.pomEnabled);
     for (const k of _CLONE_LOST_PATCH_FLAGS) delete ud[k];
     delete ud.__cacheOwned;
     v.userData = { ...ud, __disposable: true, __vfxSetKey: setKey, __vfxColorPassOnly: true };
     _inheritHeightTex(base, v);
     if (hadCsm && this.csmState) _installCsmShaderPatch(v, this.csmState);
     if (hadClamp) _installLightClampShaderPatch(v);
+    if (hadPom) _reinstallClonePom(v, base, this.pomOpts);
     try { builder?.(v); } catch (e) { console.warn(`[vfx] makeOwnedVariant builder failed for ${setKey}:`, e); }
     v.needsUpdate = true;
     return v;
@@ -5606,6 +6024,33 @@ export class MaterialCache {
         ...(mat.userData || {}),
         pomForced: !stoneish && this.forcePom,
       };
+    }
+    // Feature 6, 7, 8, 9: Micro-Surface Enhancements (Crevice AO, Rim Highlighting, Micro-Shadows)
+    let _qMicroAo = null;
+    let _qMicroShadow = null;
+    try {
+      const qf = getQuality()?.flags;
+      _qMicroAo = qf?.microCreviceAo ?? null;
+      _qMicroShadow = qf?.microContactShadow ?? null;
+    } catch (_) {
+      const qf = typeof window !== "undefined" ? window.liveScene3d?.quality?.flags : null;
+      _qMicroAo = qf?.microCreviceAo ?? null;
+      _qMicroShadow = qf?.microContactShadow ?? null;
+    }
+    const creviceAoShouldApply =
+      this.creviceAoEnabled &&
+      heightTexture &&
+      !isAdditive &&
+      !isTranslucent &&
+      !isAlpha &&
+      (stoneish || this.forcePom);
+
+    if (creviceAoShouldApply) {
+      applyMicroSurfaceEnhancement(mat, heightTexture, {
+        ...(this.creviceAoOpts || {}),
+        microCreviceAo: true,
+        microContactShadow: (this.microShadowEnabled ?? false),
+      });
     }
     // Visual-fidelity Phase 3.3 — install the CSM cascade-sample
     // shader patch when the cache was constructed with a csmState

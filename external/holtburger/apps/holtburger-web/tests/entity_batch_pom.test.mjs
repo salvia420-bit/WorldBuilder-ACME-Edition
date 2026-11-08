@@ -84,7 +84,7 @@ const undoP3 = (s) => s.replace(/texture\( hbBatchPomArr, vec3\( ([A-Za-z_][A-Za
 await check("EP1 routing: POM parts batch, flag-only p1 batches without POM, every other rule still applies", () => {
   const mc = pomCache();
   const base = mc.materials.get(D.A);
-  assert.equal(memberProgramKey(base), "hb|d0|c0|p1|l1|a0|b0|f0|s0|k0|v", "premise: the realboot POM part key");
+  assert.equal(memberProgramKey(base), "hb|d0|c0|p1|l1|a0|b0|f0|s0|k0|mc0|ms0|v", "premise: the realboot POM part key");
   assert.equal(unitArrayReason(base), "shader-chain", "premise: the kit's array rule refuses it for the key");
   assert.equal(EB.entityArrayReason(base), null, "batchable");
   const v = EB.entityPomVerdict(base);
@@ -98,7 +98,7 @@ await check("EP1 routing: POM parts batch, flag-only p1 batches without POM, eve
   const flag = new THREE.MeshStandardMaterial({ map: smallTex(), side: THREE.DoubleSide });
   M.installLightClampShaderPatch(flag);
   flag.userData.pomEnabled = true;
-  assert.equal(memberProgramKey(flag), "hb|d0|c0|p1|l1|a0|b0|f0|s0|k0|v");
+  assert.equal(memberProgramKey(flag), "hb|d0|c0|p1|l1|a0|b0|f0|s0|k0|mc0|ms0|v");
   assert.equal(EB.entityArrayReason(flag), null);
   assert.equal(EB.entityPomVerdict(flag).pom, null, "no POM text: batched as the chain it runs");
   // Every other unitArrayReason rule, through the p0-keyed view.

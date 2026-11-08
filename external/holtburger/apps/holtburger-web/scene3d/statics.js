@@ -889,6 +889,8 @@ export function getOrCreateMaterialCache(scene3d) {
     csmState: scene3d.csmState ?? null,
     pomEnabled: !!scene3d.pomEnabled,
     forcePom: !!scene3d.forcePom,
+    creviceAoEnabled: scene3d.creviceAoEnabled ?? true,
+    microShadowEnabled: scene3d.microShadowEnabled ?? false,
     // Render-completeness audit (2026-05-29) — animated SurfaceTextures.
     // 2026-10-13: default OFF (`?surfaceAnim=on`) — a 2-level SurfaceTexture
     // is a retail detail pair, not frames (surface_anim_flag.js).

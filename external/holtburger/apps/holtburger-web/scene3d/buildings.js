@@ -1024,6 +1024,8 @@ function resolveBuildingsOpts(scene3d) {
       csmState: scene3d.csmState ?? null,
       pomEnabled: !!scene3d.pomEnabled,
       forcePom: !!scene3d.forcePom,
+      creviceAoEnabled: scene3d.creviceAoEnabled ?? true,
+      microShadowEnabled: scene3d.microShadowEnabled ?? false,
       // Phase-5 — wasm namespace for the baked-roughness by-key suite fetch.
       wasmExports: scene3d.wasmExports ?? null,
       // === Wave 2.B — procedural normals (2026-05-28) ===

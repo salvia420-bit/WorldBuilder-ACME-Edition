@@ -96,7 +96,7 @@ impl Default for RemodelConfig {
         Self {
             width_m: 0.06,
             height_m: 0.05,
-            min_edge_m: 1.0,
+            min_edge_m: 0.60,
             scale: 1.0,
             rail_width_m: 0.05,
             rail_height_m: 0.03,
@@ -148,9 +148,9 @@ pub struct ModelGate {
 impl Default for ModelGate {
     fn default() -> Self {
         Self {
-            min_bbox_extent_m: 4.0,
-            min_median_edge_m: 0.60,
-            min_area_m2: 50.0,
+            min_bbox_extent_m: 2.0,
+            min_median_edge_m: 0.35,
+            min_area_m2: 10.0,
             max_double_sided_frac: 0.25,
         }
     }
@@ -1027,5 +1027,48 @@ mod tests {
             double_sided_frac: 0.9,
         };
         assert!(!t.passes_gate(&g), "a foliage cluster must not pass");
+    }
+
+    #[test]
+    fn gate_accepts_perimeter_walls_fences_and_steps() {
+        let g = ModelGate::default();
+        // 1. Perimeter stone wall: extent 2.5m, median edge 0.50m, area 12.0m²
+        let wall = ModelTopology {
+            faces: HashMap::new(),
+            edges: HashMap::new(),
+            pinned: HashSet::new(),
+            verts: HashMap::new(),
+            median_edge_m: 0.50,
+            bbox_extent_m: 2.5,
+            total_area_m2: 12.0,
+            double_sided_frac: 0.0,
+        };
+        assert!(wall.passes_gate(&g), "perimeter wall section must pass relaxed gate");
+
+        // 2. Low stone fence: extent 3.0m, median edge 0.40m, area 10.5m²
+        let fence = ModelTopology {
+            faces: HashMap::new(),
+            edges: HashMap::new(),
+            pinned: HashSet::new(),
+            verts: HashMap::new(),
+            median_edge_m: 0.40,
+            bbox_extent_m: 3.0,
+            total_area_m2: 10.5,
+            double_sided_frac: 0.0,
+        };
+        assert!(fence.passes_gate(&g), "low stone fence must pass relaxed gate");
+
+        // 3. Stone steps: extent 2.0m, median edge 0.35m, area 10.0m²
+        let steps = ModelTopology {
+            faces: HashMap::new(),
+            edges: HashMap::new(),
+            pinned: HashSet::new(),
+            verts: HashMap::new(),
+            median_edge_m: 0.35,
+            bbox_extent_m: 2.0,
+            total_area_m2: 10.0,
+            double_sided_frac: 0.0,
+        };
+        assert!(steps.passes_gate(&g), "stone steps must pass relaxed gate");
     }
 }

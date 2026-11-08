@@ -1,0 +1,14 @@
+{
+  "sampleCount": 600,
+  "totalDurationMs": 9999.3,
+  "meanDeltaMs": 16.665,
+  "meanFps": 60,
+  "minDeltaMs": 16.3,
+  "p50DeltaMs": 16.7,
+  "p90DeltaMs": 16.7,
+  "p95DeltaMs": 16.7,
+  "p99DeltaMs": 16.8,
+  "maxDeltaMs": 16.8,
+  "stutter33msCount": 0,
+  "stutter50msCount": 0
+}

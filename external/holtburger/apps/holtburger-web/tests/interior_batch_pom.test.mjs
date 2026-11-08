@@ -262,7 +262,7 @@ await t("P3 eligibility of materials.js's own POM members: the real chain, flag-
   assert.equal(IB.chainFingerprint(bad).reason, "chain-pom-shape", "POM text of another shape: refused, never half-patched");
   const tx = new THREE.MeshStandardMaterial({ map: tex() });
   tx.onBeforeCompile = function texChain(sh) { sh.uniforms.uFoo = { value: tex() }; };
-  tx.customProgramCacheKey = () => "hb|d0|c0|p0|l1|a0|b0|f0|s0|k0|v";
+  tx.customProgramCacheKey = () => "hb|d0|c0|p0|l1|a0|b0|f0|s0|k0|mc0|ms0|v";
   assert.equal(IB.chainFingerprint(tx).reason, "chain-uniform:uFoo", "any other texture uniform still refuses");
 });
 

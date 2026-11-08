@@ -1556,4 +1556,16 @@ mod tests {
         // Empty field must read as "fully proud", i.e. no displacement change.
         assert_eq!(sample_height(&[], 2, 2, [0.5, 0.5]), 1.0);
     }
+
+    #[test]
+    fn classed_brick_carves_macro_seams_and_pillows() {
+        let t = tex(128, 128, |_, y| if y % 32 == 0 { 0.05 } else { 0.75 });
+        let hf = relief_height_classed(&t, 128, 128, Some(ReliefClass::Brick), 7);
+        assert!(!hf.is_empty(), "Brick heightfield must not be empty");
+        assert!(ReliefClass::Brick.allows_macro(), "Brick must allow macro");
+        assert!(hf[0 * 128 + 64] < 0.3, "mortar joint must carve under Brick class");
+        let a = hf[16 * 128 + 10];
+        let b = hf[16 * 128 + 90];
+        assert!(a > 0.8 && b > 0.8, "brick face interior must pillow proud");
+    }
 }

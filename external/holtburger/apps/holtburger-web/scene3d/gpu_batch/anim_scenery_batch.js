@@ -178,7 +178,7 @@ const _NO_EXTRA_MAPS = ["lightMap", "aoMap", "bumpMap", "displacementMap", "roug
 // patch (detail `d1`, CSM `c2`, POM `p1` — its height texture is per surface —
 // AO, depth biases, baked light, VFX, env detail) keeps its member program
 // (SAME draws).
-const ARRAY_CHAIN_KEY = /^hb\|d0\|c0\|p0\|l[01]\|a0\|b0\|f0\|s0\|k0\|v$/;
+const ARRAY_CHAIN_KEY = /^hb\|d0\|c0\|p0\|l[01]\|a0\|b0\|f0\|s0\|k0(?:\|mc[01]\|ms[01])?\|v$/;
 // Live uniform handles a member's hooks stash on its (shared) userData; a
 // class compile must not steal them (anim_scenery_gpu.js `_LIVE_HANDLE_KEYS`).
 const LIVE_HANDLE_KEYS = [

@@ -165,6 +165,10 @@ export const PRESETS = {
         pom: false,
         pomStepsPrimary: 0,
         pomStepsSelfShadow: 0,
+        microCreviceAo: false,
+        creviceAo: false,
+        microContactShadow: false,
+        microShadow: false,
         // statPom — the ATLAS-side parallax (static_atlas.js): marches the
         // per-surface seam-height field packed into the nra alpha channel.
         // `low` exists to not pay per-fragment dependent-fetch loops -- but statPom
@@ -349,6 +353,10 @@ export const PRESETS = {
         pom: true,
         pomStepsPrimary: 8,
         pomStepsSelfShadow: 4,
+        microCreviceAo: true,
+        creviceAo: true,
+        microContactShadow: false,
+        microShadow: false,
         // statPom ON at mid (2026-07-30): unlike the legacy singleton `pom`,
         // the atlas POM is fade-limited, marches the mid-tier 8/4 step counts
         // above, and the 2026-07-30 1070 measurement showed the
@@ -458,6 +466,10 @@ export const PRESETS = {
         pom: true,
         pomStepsPrimary: 16,
         pomStepsSelfShadow: 8,
+        microCreviceAo: true,
+        creviceAo: true,
+        microContactShadow: true,
+        microShadow: true,
         statPom: true,
         // OFF 2026-10-17 (owner, outdoor-fps measurement on the 1070): any moving entity in
         // range re-rendered all three cascades (~12 ms main thread, +7 fps idle / +13 fps moving
@@ -570,6 +582,10 @@ export const PRESETS = {
         pom: true,
         pomStepsPrimary: 24,
         pomStepsSelfShadow: 12,
+        microCreviceAo: true,
+        creviceAo: true,
+        microContactShadow: true,
+        microShadow: true,
         statPom: true,
         // OFF 2026-10-17 (owner, outdoor-fps measurement on the 1070): any moving entity in
         // range re-rendered all three cascades (~12 ms main thread, +7 fps idle / +13 fps moving
@@ -688,6 +704,10 @@ const BOOL_FLAGS = new Set([
     "triplanar",
     "pom",
     "statPom",
+    "microCreviceAo",
+    "creviceAo",
+    "microContactShadow",
+    "microShadow",
     "csm",
     "bloom",
     "vignette",
@@ -837,6 +857,36 @@ function parseOverrides(params) {
         if (!params.has(flag)) continue;
         const v = parseBool(params.get(flag));
         if (v !== null) overrides[flag] = v;
+    }
+    // Synchronize creviceAo <-> microCreviceAo URL aliases
+    if (params.has("creviceAo")) {
+        const v = parseBool(params.get("creviceAo"));
+        if (v !== null) {
+            overrides.creviceAo = v;
+            overrides.microCreviceAo = v;
+        }
+    }
+    if (params.has("microCreviceAo")) {
+        const v = parseBool(params.get("microCreviceAo"));
+        if (v !== null) {
+            overrides.creviceAo = v;
+            overrides.microCreviceAo = v;
+        }
+    }
+    // Synchronize microShadow <-> microContactShadow URL aliases
+    if (params.has("microShadow")) {
+        const v = parseBool(params.get("microShadow"));
+        if (v !== null) {
+            overrides.microShadow = v;
+            overrides.microContactShadow = v;
+        }
+    }
+    if (params.has("microContactShadow")) {
+        const v = parseBool(params.get("microContactShadow"));
+        if (v !== null) {
+            overrides.microShadow = v;
+            overrides.microContactShadow = v;
+        }
     }
     for (const flag of INT_FLAGS) {
         if (!params.has(flag)) continue;
@@ -1019,7 +1069,9 @@ export function getQuality(url, userAgent) {
     let params;
     try {
         params = resolvedUrl
-            ? new URL(resolvedUrl).searchParams
+            ? (resolvedUrl.startsWith("?") || resolvedUrl.startsWith("&")
+                ? new URLSearchParams(resolvedUrl)
+                : new URL(resolvedUrl, "http://localhost").searchParams)
             : new URLSearchParams("");
     } catch (_) {
         params = new URLSearchParams("");

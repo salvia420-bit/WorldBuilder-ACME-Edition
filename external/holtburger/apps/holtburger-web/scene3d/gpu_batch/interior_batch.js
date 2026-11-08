@@ -333,7 +333,7 @@ export const IB_MERGE_MS_DEFAULT = 2;
 // accepted — each is a pure function of the shader text and constant
 // uniforms (POM: plus its per-slot uniforms), and the class material runs the
 // member's own chain (proven per member by `chainFingerprint`).
-export const INTERIOR_CHAIN_KEY = /^hb\|d0\|c0\|p[01]\|l[01]\|a0\|b0\|f0\|s[01]\|k(0|1d?)\|v$/;
+export const INTERIOR_CHAIN_KEY = /^hb\|d0\|c0\|p[01]\|l[01]\|a0\|b0\|f0\|s[01]\|k(0|1d?)(?:\|mc[01]\|ms[01])?\|v$/;
 
 // Every extra map three can bind (the census names a refused member's whole
 // set by this list); the ones a class cannot reproduce (header "AO /

@@ -1,0 +1,214 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Challenger M1-IT2 Deep WebGL Shader Matrix</title>
+</head>
+<body>
+<canvas id="c" width="128" height="128"></canvas>
+<script type="importmap">
+{
+  "imports": {
+    "three": "/three/three.module.js",
+    "three/addons/": "/three-addons/"
+  }
+}
+</script>
+<script type="module">
+import * as THREE from "three";
+import {
+  MaterialCache,
+  SURFACE_TYPE,
+  SURFACE_CATEGORY,
+  _reinstallClonePom,
+  installPomShaderPatch,
+} from "/app/scene3d/materials.js";
+import { makeArrayMaterial, setStatPom } from "/app/scene3d/static_atlas.js";
+import { batchedMaterialFor } from "/app/scene3d/batched_material_variant.js";
+
+const out = {
+  checks: [],
+  errors: [],
+  programsCompiled: 0,
+};
+
+window.addEventListener("error", (e) => {
+  out.errors.push(String(e.message || e));
+});
+
+function record(name, ok, detail = "") {
+  out.checks.push({ name, ok: !!ok, detail: String(detail) });
+}
+
+try {
+  const canvas = document.getElementById("c");
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, depth: true });
+  renderer.debug.checkShaderErrors = true;
+  const gl = renderer.getContext();
+  const rt = new THREE.WebGLRenderTarget(128, 128, { type: THREE.HalfFloatType, depthBuffer: true });
+
+  const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 1000);
+  camera.position.set(0, 0, 5);
+  camera.lookAt(0, 0, 0);
+
+  const geom = new THREE.PlaneGeometry(2, 2);
+  const aLayerAttr = new THREE.Float32BufferAttribute(new Float32Array([0, 0, 0, 0]), 1);
+  geom.setAttribute("aLayer", aLayerAttr);
+
+  const diffTexA = new THREE.DataTexture(new Uint8Array([200, 150, 100, 255, 180, 140, 90, 255, 220, 170, 120, 255, 190, 145, 95, 255]), 2, 2, THREE.RGBAFormat);
+  diffTexA.needsUpdate = true;
+  diffTexA.name = "diffA";
+
+  const normTex = new THREE.DataTexture(new Uint8Array([128, 128, 255, 255, 128, 128, 255, 255, 128, 128, 255, 255, 128, 128, 255, 255]), 2, 2, THREE.RGBAFormat);
+  normTex.needsUpdate = true;
+
+  const hgtTexA = new THREE.DataTexture(new Uint8Array([255, 128, 0, 192]), 2, 2, THREE.RedFormat);
+  hgtTexA.needsUpdate = true;
+  hgtTexA.name = "hgtA";
+
+  const diffTexB = new THREE.DataTexture(new Uint8Array([150, 50, 50, 255, 160, 60, 60, 255, 140, 45, 45, 255, 170, 70, 70, 255]), 2, 2, THREE.RGBAFormat);
+  diffTexB.needsUpdate = true;
+  diffTexB.name = "diffB";
+
+  const hgtTexB = new THREE.DataTexture(new Uint8Array([200, 100, 50, 220]), 2, 2, THREE.RedFormat);
+  hgtTexB.needsUpdate = true;
+  hgtTexB.name = "hgtB";
+
+  const diffArray = new THREE.DataArrayTexture(new Uint8Array(4 * 16 * 16 * 2), 16, 16, 2);
+  diffArray.needsUpdate = true;
+  const nraArray = new THREE.DataArrayTexture(new Uint8Array(4 * 16 * 16 * 2), 16, 16, 2);
+  nraArray.needsUpdate = true;
+
+  function testCompileAndRender(name, mat, lights = [], testCam = camera) {
+    const sc = new THREE.Scene();
+    for (const l of lights) sc.add(l);
+    sc.add(new THREE.Mesh(geom, mat));
+
+    let compileOk = false;
+    let renderOk = false;
+    let glErr = 0;
+    let pixelCheckOk = false;
+
+    try {
+      renderer.compile(sc, testCam);
+      compileOk = true;
+      out.programsCompiled++;
+    } catch (e) {
+      record(`${name} - compile`, false, e.message);
+      return;
+    }
+
+    try {
+      renderer.setRenderTarget(rt);
+      renderer.render(sc, testCam);
+      renderer.setRenderTarget(null);
+      glErr = gl.getError();
+      renderOk = (glErr === gl.NO_ERROR);
+
+      const p = new Uint16Array(4);
+      renderer.readRenderTargetPixels(rt, 64, 64, 1, 1, p);
+      const rgba = Array.from(p, h => THREE.DataUtils.fromHalfFloat(h));
+      pixelCheckOk = rgba.every(v => Number.isFinite(v) && !Number.isNaN(v));
+    } catch (e) {
+      renderOk = false;
+      record(`${name} - render`, false, e.message);
+      return;
+    }
+
+    record(name, compileOk && renderOk && pixelCheckOk, `glErr=${glErr}`);
+  }
+
+  const sun1 = new THREE.DirectionalLight(0xffffff, 1.0);
+  sun1.position.set(5, 10, 7);
+  const sun2 = new THREE.DirectionalLight(0x8888aa, 0.5);
+  sun2.position.set(-5, 5, -5);
+  const point1 = new THREE.PointLight(0xffaa55, 1.0, 50);
+  point1.position.set(0, 2, 2);
+
+  // 1. Repeated clone chain in WebGL (base -> c1 -> c2 -> c3 -> c4)
+  const mc = new MaterialCache({ pomEnabled: true });
+  const did = 0x08007001;
+  const base = mc._materialFromFlags(SURFACE_TYPE.Base1Image, diffTexA, SURFACE_CATEGORY.Stone, normTex, undefined, hgtTexA);
+  mc.materials.set(did, base);
+
+  const c1 = base.clone(); _reinstallClonePom(c1, base);
+  const c2 = c1.clone(); _reinstallClonePom(c2, c1);
+  const c3 = c2.clone(); _reinstallClonePom(c3, c2);
+  const c4 = c3.clone(); _reinstallClonePom(c4, c3);
+
+  testCompileAndRender("Deep Chain c1", c1, [sun1]);
+  testCompileAndRender("Deep Chain c2", c2, [sun1]);
+  testCompileAndRender("Deep Chain c3", c3, [sun1]);
+  testCompileAndRender("Deep Chain c4", c4, [sun1]);
+
+  // 2. Variants and makeOwnedVariant
+  const fb = mc.getCachedFloorBias(did);
+  const cb = mc.getCachedCellBaked(did);
+  const sb = mc.getCachedStaticBias(did);
+  const fs = mc.getCached(did, false);
+  const owned = mc.makeOwnedVariant(base, "ownedVfxSetKey", (m) => { m.userData.customFlag = true; });
+  const batched = batchedMaterialFor(fb);
+
+  testCompileAndRender("FloorBias Variant", fb, [sun1]);
+  testCompileAndRender("CellBaked Variant", cb, [sun1]);
+  testCompileAndRender("StaticBias Variant", sb, [sun1]);
+  testCompileAndRender("FrontSide Variant", fs, [sun1]);
+  testCompileAndRender("Owned Variant", owned, [sun1]);
+  testCompileAndRender("Batched Variant", batched, [sun1]);
+
+  // 3. Reseating in WebGL
+  // Swap to Brick B
+  const baseB = mc._materialFromFlags(SURFACE_TYPE.Base1Image, diffTexB, SURFACE_CATEGORY.Brick, normTex, undefined, hgtTexB);
+  mc.materials.set(did, baseB);
+  mc._reseatVariantsForDid(did);
+  testCompileAndRender("Reseat to Brick B (fb)", fb, [sun1]);
+  testCompileAndRender("Reseat to Brick B (sb)", sb, [sun1]);
+
+  // Reseat to non-POM fallback
+  const baseFallback = new THREE.MeshStandardMaterial({ color: 0x888888 });
+  baseFallback.userData = { pomEnabled: false };
+  mc.materials.set(did, baseFallback);
+  mc._reseatVariantsForDid(did);
+  testCompileAndRender("Reseat to non-POM fallback (fb)", fb, [sun1]);
+
+  // Reseat back to Stone A
+  mc.materials.set(did, base);
+  mc._reseatVariantsForDid(did);
+  testCompileAndRender("Reseat recovery back to Stone A (fb)", fb, [sun1]);
+
+  // 4. Static Atlas Array Material under lighting matrix
+  setStatPom({ on: true, near: 15.0, far: 35.0, steps: 16 });
+  const arrWrap = makeArrayMaterial(diffArray, "0|0|1|b1|w", nraArray);
+  const arrClamp = makeArrayMaterial(diffArray, "0|0|1|b1|c", nraArray);
+
+  testCompileAndRender("Static Atlas (0 lights)", arrWrap, []);
+  testCompileAndRender("Static Atlas (1 sun)", arrWrap, [sun1]);
+  testCompileAndRender("Static Atlas (2 suns)", arrWrap, [sun1, sun2]);
+  testCompileAndRender("Static Atlas (Sun + Point)", arrWrap, [sun1, point1]);
+  testCompileAndRender("Static Atlas Clamp (1 sun)", arrClamp, [sun1]);
+
+  // Toggle statPom OFF
+  setStatPom({ on: false });
+  testCompileAndRender("Static Atlas (statPom OFF)", arrWrap, [sun1]);
+
+  // 5. Grazing Angle Boundary Views (80 deg, 82 deg, 85 deg)
+  const grazeAngles = [80.0, 82.0, 85.0];
+  for (const deg of grazeAngles) {
+    const rad = deg * (Math.PI / 180.0);
+    const grazeCam = new THREE.PerspectiveCamera(45, 1, 0.1, 1000);
+    // Camera positioned at grazing angle relative to surface normal (Z axis)
+    const dist = 5.0;
+    grazeCam.position.set(dist * Math.sin(rad), 0, dist * Math.cos(rad));
+    grazeCam.lookAt(0, 0, 0);
+    testCompileAndRender(`Grazing view ${deg} deg`, base, [sun1], grazeCam);
+  }
+
+  rt.dispose();
+} catch (e) {
+  out.errors.push(String(e.stack || e));
+}
+
+window.__smoke = out;
+</script>
+</body>
+</html>
