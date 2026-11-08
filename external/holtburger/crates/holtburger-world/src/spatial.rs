@@ -66,6 +66,10 @@ pub use physics::{
     slide_residual_along_wall_tangent,
     step_down_decision, step_down_resolve, step_up_decision, sweep_sphere_against_aabbs,
     sweep_sphere_against_static_aabbs, sweep_sphere_against_triangles,
+    SLEDDING_STEEP_NORMAL_Z, SLEDDING_HIGH_VELOCITY, SLEDDING_HIGH_VELOCITY_SQ,
+    SLEDDING_LOW_VELOCITY, SLEDDING_LOW_VELOCITY_SQ, SLEDDING_FRICTION,
+    RETAIL_EPSILON, RETAIL_EPSILON_SQ, is_walkable_normal, is_sledding_slope,
+    slope_tangent_gravity, CreaseSlideResult, crease_slide_projection,
 };
 pub use scene::{
     CellMembership, CellPhysicsBsp, LocalStickyStep, RemoteCorrectionCtx, SpatialScene,

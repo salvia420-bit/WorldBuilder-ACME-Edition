@@ -1482,6 +1482,17 @@ impl LandingBounce {
     }
 }
 
+/// Runtime state for stop coasting deceleration link (retail hop2 link 0x030004AE / LOCALSIM-3).
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct StopCoastingState {
+    /// Planar velocity when locomotion input was released.
+    pub initial_velocity: Vector3,
+    /// Total nominal transition link duration (0.40s for Run->Ready, 0.20s for Walk->Ready).
+    pub duration_s: f32,
+    /// Elapsed time in the current coasting window.
+    pub elapsed_s: f32,
+}
+
 /// Session-local player model and derived player-facing state.
 ///
 /// `PlayerState` owns player-specific data such as attributes, vitals, spells, inventory, and
@@ -1779,6 +1790,17 @@ pub struct PlayerState {
     ///
     /// Default: zero (player starts stationary).
     pub current_planar_velocity: Vector3,
+    /// Smoothed turning angular velocity (yaw omega around Z axis in rad/s).
+    /// Eliminates instantaneous snapping to base omegas (1.5 / 2.25 rad/s)
+    /// when initiating or releasing turns.
+    pub current_turn_omega: f32,
+    /// Retail `SLEDDING_PS` (0x0080_0000) state flag (Feature 24, acclient.c:316124).
+    /// Active when sliding/moving on slopes > 10° (N.z < 0.98480775) at speed >= 2.5 m/s.
+    /// Modulates ground friction to 0.2 (high-speed glide) and bypasses grounded
+    /// acceleration suppression. Cleared when speed drops below 1.25 m/s or on takeoff.
+    pub is_sledding: bool,
+    /// Active stop-coasting state (Feature 26, LOCALSIM-3 / retail hop2 link 0x030004AE).
+    pub stop_coasting: Option<StopCoastingState>,
     /// Physics deep-dive 2026-06-01 (gap 1): leftover frame time
     /// (seconds) below `MIN_QUANTUM` carried forward to the next
     /// integration frame. Mirrors ACE's `update_object` advancing
@@ -2030,6 +2052,9 @@ impl PlayerState {
             // Wave 10 Phase 10.3 (2026-05-26) — player spawns
             // stationary; the integrator ramps from zero.
             current_planar_velocity: Vector3::zero(),
+            current_turn_omega: 0.0,
+            is_sledding: false,
+            stop_coasting: None,
             // Physics deep-dive 2026-06-01 (gap 1) — no carried
             // frame time at spawn.
             physics_time_accumulator: 0.0,
@@ -2223,6 +2248,8 @@ impl PlayerState {
         // 4 × run_rate — under a manual drive, R1 motioninterp-1; the
         // legacy intent / integrator-store arms otherwise).
         self.standing_long_jump_charge = false;
+        self.is_sledding = false;
+        self.stop_coasting = None;
         // Trajectory lock (Track B3) — deliberately leave
         // `current_planar_velocity` untouched: the last grounded tick's
         // world-space planar velocity becomes the immutable airborne
@@ -2288,6 +2315,8 @@ impl PlayerState {
         // F1-6 / G-7 — touchdown (or teleport, which routes through land)
         // drops any held standing-long-jump charge, per the field doc.
         self.standing_long_jump_charge = false;
+        self.is_sledding = false;
+        self.stop_coasting = None;
         // Physics deep-dive 2026-06-01 (cliff_slide Stage-2) — touchdown
         // is a contact reset, so the wall tracked while airborne (if any)
         // is no longer the `LastKnownContactPlane` for the next grounded

@@ -41,6 +41,31 @@ import { retimeHooksToFrameExit } from "./hook_windows.js";
 const FLOATS_PER_PART_PER_FRAME = 7;
 
 /**
+ * Authoritative Animation Crossfade Standards (Feature 37, ORIGINAL_REQUEST §R2)
+ */
+export const CROSSFADE_LOCO_MS = 120;     // Locomotion blend duration (0.120s)
+export const CROSSFADE_STANCE_MS = 150;   // Combat stance switch blend duration (0.150s)
+export const CROSSFADE_TAKEOFF_MS = 80;   // Jump takeoff link blend duration (0.080s)
+export const CROSSFADE_LANDING_MS = 60;   // Landing recovery link blend duration (0.060s)
+
+export const FADE_LOCOMOTION_MS = CROSSFADE_LOCO_MS;
+export const FADE_STANCE_SWAP_MS = CROSSFADE_STANCE_MS;
+export const FADE_TAKEOFF_MS = CROSSFADE_TAKEOFF_MS;
+export const FADE_LANDING_MS = CROSSFADE_LANDING_MS;
+
+export const FADE_LOCOMOTION_SEC = 0.120;
+export const FADE_STANCE_SWAP_SEC = 0.150;
+export const FADE_TAKEOFF_SEC = 0.080;
+export const FADE_LANDING_SEC = 0.060;
+
+export const CROSSFADE_STANDARDS = Object.freeze({
+  locomotion: CROSSFADE_LOCO_MS,
+  stance: CROSSFADE_STANCE_MS,
+  takeoff: CROSSFADE_TAKEOFF_MS,
+  landing: CROSSFADE_LANDING_MS,
+});
+
+/**
  * Build a `THREE.AnimationClip` from raw wasm keyframe data.
  *
  * @param {object} animData - shape:

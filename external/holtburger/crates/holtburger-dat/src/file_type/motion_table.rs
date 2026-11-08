@@ -58,6 +58,8 @@ impl MotionTable {
     pub const RUN_FORWARD_COMMAND: u32 = 0x4400_0007;
     pub const TURN_RIGHT_COMMAND: u32 = 0x6500_000D;
     pub const TURN_LEFT_COMMAND: u32 = 0x6500_000E;
+    pub const SIDESTEP_RIGHT_COMMAND: u32 = 0x6500_000F;
+    pub const SIDESTEP_LEFT_COMMAND: u32 = 0x6500_0010;
 
     pub fn read<R: Read + Seek>(reader: &mut R) -> BinResult<Self> {
         let id = u32::read_le(reader)?;
@@ -285,6 +287,11 @@ impl MotionTable {
             turn_right: self
                 .motion_data_for_cycle(stance, Self::TURN_RIGHT_COMMAND)
                 .map(MotionCommandKinematics::from_motion_data),
+            sidestep_right: self
+                .motion_data_for_cycle(stance, Self::SIDESTEP_RIGHT_COMMAND)
+                .or_else(|| self.modifiers.get(&cycle_key(stance, Self::SIDESTEP_RIGHT_COMMAND)))
+                .or_else(|| self.modifiers.get(&cycle_key(0, Self::SIDESTEP_RIGHT_COMMAND)))
+                .map(MotionCommandKinematics::from_motion_data),
         }
     }
 
@@ -301,6 +308,7 @@ pub struct MotionTableMovementProfile {
     pub run_forward: Option<MotionCommandKinematics>,
     pub turn_left: Option<MotionCommandKinematics>,
     pub turn_right: Option<MotionCommandKinematics>,
+    pub sidestep_right: Option<MotionCommandKinematics>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize)]
@@ -310,7 +318,7 @@ pub struct MotionCommandKinematics {
 }
 
 impl MotionCommandKinematics {
-    fn from_motion_data(data: &MotionData) -> Self {
+    pub fn from_motion_data(data: &MotionData) -> Self {
         Self {
             velocity: data.velocity,
             omega: data.omega,

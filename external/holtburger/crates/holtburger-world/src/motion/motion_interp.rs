@@ -364,12 +364,11 @@ fn apply_run_to_forward(
 ) -> (InterpretedForwardCommand, f32) {
     match command {
         InterpretedForwardCommand::WalkForward => {
-            let command = if speed > 0.0 {
-                InterpretedForwardCommand::RunForward
+            if speed > 0.0 {
+                (InterpretedForwardCommand::RunForward, speed * run_rate)
             } else {
-                InterpretedForwardCommand::WalkForward
-            };
-            (command, speed * run_rate)
+                (InterpretedForwardCommand::WalkForward, speed)
+            }
         }
         // ACE's switch has no RunForward arm — passes through untouched.
         // FU6: stored substates (gestures) likewise pass through — the
@@ -597,11 +596,16 @@ impl MotionInterp {
     /// unit) is the conversion both retail and ACE use. NO magnitude
     /// clamp here — `add_motion` composition is unclamped (the legacy
     /// diagonal-composition behaviour, `common.rs:699-705`).
-    pub fn ground_velocity(&self, walk_base_speed: f32, run_base_speed: f32) -> Vector3 {
+    pub fn ground_velocity(
+        &self,
+        walk_base_speed: f32,
+        run_base_speed: f32,
+        sidestep_base_speed: f32,
+    ) -> Vector3 {
         let state = &self.interpreted_state;
         let mut velocity = Vector3::zero();
         if state.sidestep {
-            velocity.x = SIDESTEP_ANIM_SPEED * state.sidestep_speed;
+            velocity.x = sidestep_base_speed * state.sidestep_speed;
         }
         match state.forward_command {
             Some(InterpretedForwardCommand::WalkForward) => {
@@ -1818,9 +1822,18 @@ pub fn interpreted_velocity_for_state(
     let body = interp.ground_velocity(
         capabilities.base_walk_forward_speed(),
         capabilities.base_run_forward_speed(),
+        capabilities.base_sidestep_speed(),
     );
-    planar_velocity_for_heading(heading, body.y)
-        + planar_velocity_for_heading(heading + FRAC_PI_2, body.x)
+    let mut v = planar_velocity_for_heading(heading, body.y)
+        + planar_velocity_for_heading(heading + FRAC_PI_2, body.x);
+    let max_speed = capabilities
+        .resolved_manual_run_speed()
+        .max(RUN_ANIM_SPEED * capabilities.run_rate_scalar);
+    let mag = v.length();
+    if mag > max_speed && mag > 0.0 {
+        v = v * (max_speed / mag);
+    }
+    v
 }
 
 /// A3-D3-5 (`USE_LEAVE_GROUND_VELOCITY`) — the retail launch-velocity
@@ -1877,6 +1890,7 @@ mod tests {
                 base_run_forward_velocity: Vector3::new(0.0, 4.0, 0.0),
                 base_turn_left_omega: Vector3::new(0.0, 0.0, -1.5),
                 base_turn_right_omega: Vector3::new(0.0, 0.0, 1.5),
+                base_sidestep_right_velocity: Vector3::new(1.25, 0.0, 0.0),
             },
             run_rate_scalar,
         }
@@ -1915,7 +1929,7 @@ mod tests {
             Some(InterpretedForwardCommand::WalkForward),
             "negative speed must NOT promote to RunForward"
         );
-        assert!((run.interpreted_state.forward_speed - (-BACKWARDS_FACTOR * 2.0)).abs() < 1e-6);
+        assert!((run.interpreted_state.forward_speed - (-BACKWARDS_FACTOR)).abs() < 1e-6);
     }
 
     /// Sidestep normal form: Left negates, every sidestep scales by
@@ -2058,7 +2072,7 @@ mod tests {
     #[test]
     fn velocity_contract_unavailable_run_rate_falls_back_to_my_run_rate() {
         let interp = interp_for(MotionState::builder().run().forward().build(), None);
-        let v = interp.ground_velocity(2.602, 4.0);
+        let v = interp.ground_velocity(2.602, 4.0, SIDESTEP_ANIM_SPEED);
         assert!(
             (v.y - 4.0).abs() < 1e-6,
             "no run-rate input → my_run_rate 1.0 → 4.0 m/s, got {}",
@@ -2132,7 +2146,7 @@ mod tests {
         );
         assert_eq!(interp.interpreted_state.forward_command, None);
         assert!(!interp.interpreted_state.sidestep);
-        assert_eq!(interp.ground_velocity(2.602, 4.0), Vector3::zero());
+        assert_eq!(interp.ground_velocity(2.602, 4.0, SIDESTEP_ANIM_SPEED), Vector3::zero());
     }
 
     /// 15-bit stamp compare: directional half-window (0x3FFF) with
@@ -2901,7 +2915,10 @@ mod tests {
             launch.length()
         );
         let legacy = interpreted_velocity_for_state(0.7, state, &capabilities);
-        assert!(legacy.length() > launch.length(), "legacy freeze was unclamped");
+        assert!(
+            (legacy.length() - launch.length()).abs() < 1e-4,
+            "both ground and launch forms clamp to run_rate * 4.0"
+        );
 
         // No input → ~zero closed form → integrator fallback verbatim.
         let idle = MotionState::builder().build();
@@ -3098,7 +3115,7 @@ mod forward_slot_tests {
             !motion_allows_jump_id(minterp.interpreted_forward_motion_id()),
             "cast-gesture-in-slot blocks jumping (retail blocked band)"
         );
-        let v = minterp.ground_velocity(2.602, 4.0);
+        let v = minterp.ground_velocity(2.602, 4.0, SIDESTEP_ANIM_SPEED);
         assert_eq!(v.y, 0.0, "gesture carries no forward locomotion");
 
         // Ready resets the slot to the canonical empty form.

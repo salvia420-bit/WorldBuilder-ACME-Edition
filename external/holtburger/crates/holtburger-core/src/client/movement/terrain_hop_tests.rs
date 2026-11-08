@@ -70,6 +70,7 @@ fn capabilities(run_rate: f32) -> SelfMovementCapabilities {
             base_run_forward_velocity: Vector3::new(0.0, RUN_BASE, 0.0),
             base_turn_left_omega: Vector3::new(0.0, 0.0, -1.5),
             base_turn_right_omega: Vector3::new(0.0, 0.0, 1.5),
+            base_sidestep_right_velocity: Vector3::new(1.25, 0.0, 0.0),
         },
         run_rate_scalar: run_rate,
     }

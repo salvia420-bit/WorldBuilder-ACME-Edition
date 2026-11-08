@@ -1313,7 +1313,21 @@ impl PositionManager {
                 node,
                 ..
             } => {
-                offset = interp_offset;
+                // Feature 27: Blend clamped error offset with manual displacement
+                // for autonomous reconciliation (keep_heading=true). When directive
+                // interp takes control (keep_heading=false), it replaces manual intent.
+                if self.interpolation.keep_heading && intended_offset.length_squared() > 1e-6 {
+                    let max_correction = intended_offset.length() * 0.5;
+                    let corr_len = interp_offset.length();
+                    let clamped_corr = if corr_len > max_correction && corr_len > 1e-6 {
+                        interp_offset * (max_correction / corr_len)
+                    } else {
+                        interp_offset
+                    };
+                    offset = intended_offset + clamped_corr;
+                } else {
+                    offset = interp_offset;
+                }
                 if !self.interpolation.keep_heading {
                     // Full-frame delta apply: the heading snaps to the
                     // node heading (`:389252-389269`); keep_heading
@@ -2224,5 +2238,29 @@ mod tests {
         assert_eq!(out.offset, intended, "expired window pulls nothing");
         assert_eq!(out.rotation, None);
         assert!(!manager.sticky.is_active());
+    }
+
+    /// Feature 27: Position reconciliation blending in adjust_offset_chain.
+    /// When the player is actively moving, the interpolation correction is clamped
+    /// to 0.5x of the intended manual displacement and added rather than wiping manual travel.
+    #[test]
+    fn adjust_offset_chain_blends_interpolation_with_manual_offset() {
+        let mut manager = PositionManager::default();
+        let cur = pose(50.0, 50.0, 0.0);
+        // Enqueue an interpolation target behind the player (reconciliation tug backwards)
+        manager.interpolation.interpolate_to(cur, pose(49.0, 50.0, 0.0), true, BLIP);
+
+        // Player is actively moving forward at 4.0 m/s: intended = (0.4, 0.0, 0.0) in dt=0.1s
+        let intended = Vector3::new(0.4, 0.0, 0.0);
+        let out = manager.adjust_offset_chain(cur, intended, 0.1, MAX_SPEED, 4.0, 0.0, true);
+
+        // Outbound AP Stutter Mitigation:
+        // Correction must NOT overwrite intended offset with -1.0 backwards jump.
+        // Instead, the net offset must still move forward (>= intended * 0.5 = 0.2m)!
+        assert!(
+            out.offset.x >= 0.2,
+            "Blended offset must preserve forward progress (got {}), preventing stutter",
+            out.offset.x
+        );
     }
 }

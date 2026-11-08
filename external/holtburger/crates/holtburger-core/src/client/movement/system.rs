@@ -1,12 +1,14 @@
 use super::common::{
     AUTONOMOUS_POSITION_HEARTBEAT_INTERVAL, HUGE_QUANTUM, MAX_QUANTUM, MAX_VELOCITY, MIN_QUANTUM,
     PHYSICS_ENTRY_EPSILON, PLAYER_GROUND_FRICTION_PER_SEC, PLAYER_GROUND_FRICTION_RETAIL,
-    PLAYER_LATERAL_ACCELERATION_CAP_M_PER_SEC_SQ, PLAYER_VELOCITY_SNAP_THRESHOLD_M_PER_SEC,
-    RETAIL_MAX_QUANTUM, RUN_TURN_FACTOR, build_autonomous_position, build_jump,
-    build_motion_state_raw_motion_state, build_move_to_state, build_raw_state_raw_motion_state,
-    calc_friction,
+    PLAYER_LATERAL_ACCELERATION_CAP_M_PER_SEC_SQ, PLAYER_ROTATIONAL_ACCELERATION_RAD_PER_SEC_SQ,
+    PLAYER_ROTATIONAL_FRICTION, PLAYER_ROTATIONAL_SNAP_THRESHOLD_RAD_PER_SEC,
+    PLAYER_VELOCITY_SNAP_THRESHOLD_M_PER_SEC, RETAIL_MAX_QUANTUM, RUN_TURN_FACTOR,
+    build_autonomous_position, build_jump, build_motion_state_raw_motion_state,
+    build_move_to_state, build_raw_state_raw_motion_state, calc_friction,
     has_autonomous_position_sync_target, local_omega_for_state, local_velocity_for_state,
     normalize_heading, raw_motion_state_with_motion_style, signed_heading_delta,
+    step_rotational_velocity,
 };
 use super::interp_state::{InterpretedForwardCommand, InterpretedState};
 use super::jump_charge::{JumpChargeClock, JumpOutcome, JumpRefusal};
@@ -2055,8 +2057,6 @@ fn edge_slide_refused_step_up(
                 ) {
                     return lateral_clamped + seam_slide;
                 }
-                // `None` ⇒ near-parallel planes (degenerate seam):
-                // fall through to the Stage-1 single-plane slide.
             }
         }
     }
@@ -6238,6 +6238,7 @@ impl MovementSystem {
         let body = interp.ground_velocity(
             capabilities.base_walk_forward_speed(),
             capabilities.base_run_forward_speed(),
+            capabilities.base_sidestep_speed(),
         );
         let velocity = crate::client::movement_types::planar_velocity_for_heading(heading, body.y)
             + crate::client::movement_types::planar_velocity_for_heading(
@@ -6640,6 +6641,22 @@ impl MovementSystem {
         // contact gate) — that is handled by the omega path below, which
         // rotates `pose.rotation` only and never re-derives this frozen
         // world-space velocity.
+        let normal = world
+            .player
+            .last_contact_plane
+            .map(|(p, _)| p.normal)
+            .or_else(|| {
+                if !pose.is_indoors() {
+                    let g = pose.global_coords();
+                    world.terrain_normal_at(g.x, g.y)
+                } else {
+                    None
+                }
+            })
+            .unwrap_or(Vector3::new(0.0, 0.0, 1.0));
+
+        let is_steep_unwalkable = normal.z < holtburger_world::spatial::FLOOR_Z;
+
         let smoothed_planar = if world.player.is_airborne {
             // Airborne — use the frozen launch velocity verbatim. Do NOT
             // recompute from `target_velocity` (that would let new WASD
@@ -6648,36 +6665,155 @@ impl MovementSystem {
             // `common.rs`, which rotates the magnitudes by heading), so it
             // is applied to position below WITHOUT re-rotating by the
             // in-flight heading.
+            world.player.stop_coasting = None;
             world.player.current_planar_velocity
+        } else if is_steep_unwalkable {
+            // Feature 23: Steep Slope Sliding (N.z < FLOOR_Z)
+            // Suppress WASD linear translation while preserving yaw turning.
+            // Downward gravity projected along slope tangent drives downhill slide.
+            world.player.stop_coasting = None;
+            let mut v = Vector3::new(
+                world.player.current_planar_velocity.x,
+                world.player.current_planar_velocity.y,
+                world.player.vertical_velocity,
+            );
+            let a_tangent = holtburger_world::spatial::slope_tangent_gravity(normal, -9.8000002);
+            v.x += a_tangent.x * dt_s;
+            v.y += a_tangent.y * dt_s;
+            v.z += a_tangent.z * dt_s;
+
+            let vel_mag_sq = v.length_squared();
+            calc_friction(
+                &mut v,
+                normal,
+                vel_mag_sq,
+                PLAYER_GROUND_FRICTION_RETAIL,
+                world.player.is_sledding,
+                dt_s,
+            );
+
+            let mag_sq = v.length_squared();
+            if mag_sq > MAX_VELOCITY * MAX_VELOCITY {
+                let len = mag_sq.sqrt();
+                v = (v / len) * MAX_VELOCITY;
+            }
+
+            world.player.current_planar_velocity.x = v.x;
+            world.player.current_planar_velocity.y = v.y;
+            world.player.current_planar_velocity.z = 0.0;
+            world.player.vertical_velocity = v.z;
+            Vector3::new(v.x, v.y, 0.0)
         } else if USE_INTERPRETED_VELOCITY {
-            // STAGE 1 (2026-06-11) — retail direct-set, absorbed from the
-            // F1-1 `USE_DIRECT_GROUND_VELOCITY` gate. Retail's
-            // `apply_raw_movement` sets the motion velocity straight from the
-            // interpreted state every tick and on-ground translation is the
-            // authored cycle velocity × speed_mod reached INSTANTLY (no
-            // friction/accel-cap ramp for self-powered locomotion —
-            // `add_motion` acclient.c:337431-337474). `target_velocity`
-            // above is the interpreted-pipeline derivation; setting the
-            // planar store to it removes the legacy ~11.7 m/s steady-state
-            // ceiling (so high-Run characters reach retail's 18 m/s), the
-            // 1.5–4 s ice-skating ramp, and the ~5 m stop-skid. The target
-            // is already planar; Z stays owned by the jump/fall arc +
-            // floor-Z snap below, so we zero it in the store exactly as the
-            // friction path did.
-            let mut v = target_velocity;
-            v.z = 0.0;
-            // Retail small-velocity snap (`PhysicsObj` `small_velocity`): when
-            // the input is released the interpreted forward command goes to 0,
-            // so the target drops below threshold and the body stops THIS tick
-            // — an instant stop, matching retail (no skid for self-powered
-            // locomotion).
+            let is_stopped = world.scene.local_server_controlled()
+                || self.command_interpreter.as_ref().map_or(false, |i| i.controlled_by_server)
+                || world.player.standing_long_jump_charge;
+            let target_mag_sq = target_velocity.x * target_velocity.x + target_velocity.y * target_velocity.y;
+            let mut v = if is_stopped {
+                world.player.stop_coasting = None;
+                world.player.is_sledding = false;
+                Vector3::zero()
+            } else if target_mag_sq > f32::EPSILON {
+                // Active linear drive on walkable ground
+                world.player.stop_coasting = None;
+                world.player.is_sledding = false;
+                let mut v_active = target_velocity;
+                v_active.z = 0.0;
+                v_active
+            } else if world.player.is_sledding {
+                // SLEDDING GLIDE (Feature 24): passive high-speed glide when no WASD is pressed on slope > 10°
+                world.player.stop_coasting = None;
+                let mut v = Vector3::new(
+                    world.player.current_planar_velocity.x,
+                    world.player.current_planar_velocity.y,
+                    world.player.vertical_velocity,
+                );
+                let a_tangent = holtburger_world::spatial::slope_tangent_gravity(normal, -9.8000002);
+                v.x += a_tangent.x * dt_s;
+                v.y += a_tangent.y * dt_s;
+                v.z += a_tangent.z * dt_s;
+
+                let vel_mag_sq = v.length_squared();
+                calc_friction(
+                    &mut v,
+                    normal,
+                    vel_mag_sq,
+                    PLAYER_GROUND_FRICTION_RETAIL,
+                    world.player.is_sledding,
+                    dt_s,
+                );
+
+                let mag_sq = v.length_squared();
+                if mag_sq > MAX_VELOCITY * MAX_VELOCITY {
+                    let len = mag_sq.sqrt();
+                    v = (v / len) * MAX_VELOCITY;
+                }
+
+                if mag_sq < holtburger_world::spatial::SLEDDING_LOW_VELOCITY_SQ {
+                    v = Vector3::zero();
+                    world.player.is_sledding = false;
+                }
+
+                world.player.current_planar_velocity.x = v.x;
+                world.player.current_planar_velocity.y = v.y;
+                world.player.current_planar_velocity.z = 0.0;
+                world.player.vertical_velocity = v.z;
+
+                Vector3::new(v.x, v.y, 0.0)
+            } else {
+                let current_mag_sq = world.player.current_planar_velocity.x * world.player.current_planar_velocity.x
+                    + world.player.current_planar_velocity.y * world.player.current_planar_velocity.y;
+
+                if world.player.stop_coasting.is_none()
+                    && current_mag_sq >= PLAYER_VELOCITY_SNAP_THRESHOLD_M_PER_SEC * PLAYER_VELOCITY_SNAP_THRESHOLD_M_PER_SEC
+                {
+                    let current_speed = current_mag_sq.sqrt();
+                    let duration_s = if current_speed > 3.2 { 0.40 } else { 0.20 };
+                    world.player.stop_coasting = Some(holtburger_world::player::StopCoastingState {
+                        initial_velocity: world.player.current_planar_velocity,
+                        duration_s,
+                        elapsed_s: 0.0,
+                    });
+                }
+
+                if let Some(ref mut coasting) = world.player.stop_coasting {
+                    coasting.elapsed_s += dt_s;
+                    if coasting.elapsed_s >= coasting.duration_s {
+                        world.player.stop_coasting = None;
+                        Vector3::zero()
+                    } else {
+                        let fraction = (coasting.elapsed_s / coasting.duration_s).clamp(0.0, 1.0);
+                        let mut v_coast = coasting.initial_velocity * (1.0 - fraction);
+                        v_coast.z = 0.0;
+                        let coast_mag_sq = v_coast.x * v_coast.x + v_coast.y * v_coast.y;
+                        if coast_mag_sq < PLAYER_VELOCITY_SNAP_THRESHOLD_M_PER_SEC * PLAYER_VELOCITY_SNAP_THRESHOLD_M_PER_SEC {
+                            world.player.stop_coasting = None;
+                            Vector3::zero()
+                        } else {
+                            v_coast
+                        }
+                    }
+                } else {
+                    Vector3::zero()
+                }
+            };
+
+            // Terminal velocity clamp: 50.0 m/s
             let mag_sq = v.x * v.x + v.y * v.y;
+            if mag_sq > MAX_VELOCITY * MAX_VELOCITY {
+                let len = mag_sq.sqrt();
+                v.x = (v.x / len) * MAX_VELOCITY;
+                v.y = (v.y / len) * MAX_VELOCITY;
+            }
+
+            // Low-speed cutoff snapping: snap to 0 when magnitude < 0.25 m/s
             let threshold_sq =
                 PLAYER_VELOCITY_SNAP_THRESHOLD_M_PER_SEC * PLAYER_VELOCITY_SNAP_THRESHOLD_M_PER_SEC;
-            if mag_sq < threshold_sq {
+            if v.x * v.x + v.y * v.y < threshold_sq {
                 v.x = 0.0;
                 v.y = 0.0;
+                world.player.stop_coasting = None;
             }
+
             world.player.current_planar_velocity = v;
             v
         } else {
@@ -6802,7 +6938,11 @@ impl MovementSystem {
         let raw_delta = Vector3::new(
             smoothed_planar.x * dt_s,
             smoothed_planar.y * dt_s,
-            target_velocity.z * dt_s,
+            if is_steep_unwalkable || world.player.is_sledding {
+                world.player.vertical_velocity * dt_s
+            } else {
+                target_velocity.z * dt_s
+            },
         );
         // Lateral (X/Y) clamp. Two paths:
         //   - Outdoor: Phase 6 step B sweep-sphere against the
@@ -8195,8 +8335,26 @@ impl MovementSystem {
         // before this rotation and is applied to position as a world-frame
         // delta, so turning the rig in flight changes where the player
         // looks without curving the locked trajectory.
-        if omega.z.abs() > f32::EPSILON {
-            let new_heading = normalize_heading(heading + omega.z * dt_s);
+        let is_server_locked = world.scene.local_server_controlled()
+            || self.command_interpreter.as_ref().map_or(false, |i| i.controlled_by_server);
+        let smoothed_omega = if is_server_locked {
+            world.player.current_turn_omega = 0.0;
+            0.0
+        } else {
+            let target_omega = omega;
+            let smoothed = step_rotational_velocity(
+                world.player.current_turn_omega,
+                target_omega.z,
+                PLAYER_ROTATIONAL_ACCELERATION_RAD_PER_SEC_SQ,
+                PLAYER_ROTATIONAL_FRICTION,
+                PLAYER_ROTATIONAL_SNAP_THRESHOLD_RAD_PER_SEC,
+                dt_s,
+            );
+            world.player.current_turn_omega = smoothed;
+            smoothed
+        };
+        if smoothed_omega.abs() > f32::EPSILON {
+            let new_heading = normalize_heading(heading + smoothed_omega * dt_s);
             pose.rotation = Quaternion::from_heading(new_heading);
         }
 
@@ -8738,34 +8896,188 @@ impl MovementSystem {
         } else {
             target_velocity
         };
+        let normal = world
+            .player
+            .last_contact_plane
+            .map(|(p, _)| p.normal)
+            .or_else(|| {
+                if !pose.is_indoors() {
+                    let g = pose.global_coords();
+                    world.terrain_normal_at(g.x, g.y)
+                } else {
+                    None
+                }
+            })
+            .unwrap_or(Vector3::new(0.0, 0.0, 1.0));
+
+        let is_steep_unwalkable = normal.z < holtburger_world::spatial::FLOOR_Z;
+
         let smoothed_planar = if world.player.is_airborne {
             // Frozen world-frame launch velocity — mid-air WASD does not
             // re-aim the trajectory (retail contact gate).
+            world.player.stop_coasting = None;
             world.player.current_planar_velocity
+        } else if is_steep_unwalkable {
+            // Feature 23: Steep Slope Sliding (N.z < FLOOR_Z)
+            // Suppress WASD linear translation while preserving yaw turning.
+            // Downward gravity projected along slope tangent drives downhill slide.
+            world.player.stop_coasting = None;
+            let mut v = Vector3::new(
+                world.player.current_planar_velocity.x,
+                world.player.current_planar_velocity.y,
+                world.player.vertical_velocity,
+            );
+            let a_tangent = holtburger_world::spatial::slope_tangent_gravity(normal, -9.8000002);
+            v.x += a_tangent.x * dt_s;
+            v.y += a_tangent.y * dt_s;
+            v.z += a_tangent.z * dt_s;
+
+            let vel_mag_sq = v.length_squared();
+            calc_friction(
+                &mut v,
+                normal,
+                vel_mag_sq,
+                PLAYER_GROUND_FRICTION_RETAIL,
+                world.player.is_sledding,
+                dt_s,
+            );
+
+            let mag_sq = v.length_squared();
+            if mag_sq > MAX_VELOCITY * MAX_VELOCITY {
+                let len = mag_sq.sqrt();
+                v = (v / len) * MAX_VELOCITY;
+            }
+
+            world.player.current_planar_velocity.x = v.x;
+            world.player.current_planar_velocity.y = v.y;
+            world.player.current_planar_velocity.z = 0.0;
+            world.player.vertical_velocity = v.z;
+            Vector3::new(v.x, v.y, 0.0)
         } else {
-            // Retail direct-set + small-velocity snap (the Stage-1
-            // grounded model; see USE_INTERPRETED_VELOCITY). This snap is
-            // the locomotion-model emulation and deliberately keeps the
-            // slack-less `< 0.0625` planar form; the retail stop check
-            // (full 3D, `mag² − 0.25² < 0.0002`, acclient.c:317750) lives
-            // in the airborne arm and the landing residual tail, where
-            // physics velocity — not the direct-set target — is in play.
-            let mut v = target_velocity;
-            v.z = 0.0;
+            // Milestone 1 & 2 Grounded Acceleration, Sledding & Stop Coasting on walkable ground:
+            let is_stopped = world.scene.local_server_controlled()
+                || self.command_interpreter.as_ref().map_or(false, |i| i.controlled_by_server)
+                || world.player.standing_long_jump_charge;
+            let target_mag_sq = target_velocity.x * target_velocity.x + target_velocity.y * target_velocity.y;
+            let mut v = if is_stopped {
+                world.player.stop_coasting = None;
+                world.player.is_sledding = false;
+                Vector3::zero()
+            } else if target_mag_sq > f32::EPSILON {
+                // Re-pressing movement cancels coasting immediately (B13.2)
+                world.player.stop_coasting = None;
+                world.player.is_sledding = false;
+                let mut v_active = target_velocity;
+                v_active.z = 0.0;
+                v_active
+            } else if world.player.is_sledding {
+                // SLEDDING GLIDE (Feature 24): passive high-speed glide when no WASD is pressed on slope > 10°
+                world.player.stop_coasting = None;
+                let mut v = Vector3::new(
+                    world.player.current_planar_velocity.x,
+                    world.player.current_planar_velocity.y,
+                    world.player.vertical_velocity,
+                );
+                let a_tangent = holtburger_world::spatial::slope_tangent_gravity(normal, -9.8000002);
+                v.x += a_tangent.x * dt_s;
+                v.y += a_tangent.y * dt_s;
+                v.z += a_tangent.z * dt_s;
+
+                let vel_mag_sq = v.length_squared();
+                calc_friction(
+                    &mut v,
+                    normal,
+                    vel_mag_sq,
+                    PLAYER_GROUND_FRICTION_RETAIL,
+                    world.player.is_sledding,
+                    dt_s,
+                );
+
+                let mag_sq = v.length_squared();
+                if mag_sq > MAX_VELOCITY * MAX_VELOCITY {
+                    let len = mag_sq.sqrt();
+                    v = (v / len) * MAX_VELOCITY;
+                }
+
+                if mag_sq < holtburger_world::spatial::SLEDDING_LOW_VELOCITY_SQ {
+                    v = Vector3::zero();
+                    world.player.is_sledding = false;
+                }
+
+                world.player.current_planar_velocity.x = v.x;
+                world.player.current_planar_velocity.y = v.y;
+                world.player.current_planar_velocity.z = 0.0;
+                world.player.vertical_velocity = v.z;
+
+                Vector3::new(v.x, v.y, 0.0)
+            } else {
+                // Locomotion input ceased on walkable ground: execute retail link deceleration (Feature 26 / LOCALSIM-3)
+                let current_mag_sq = world.player.current_planar_velocity.x * world.player.current_planar_velocity.x
+                    + world.player.current_planar_velocity.y * world.player.current_planar_velocity.y;
+
+                if world.player.stop_coasting.is_none()
+                    && current_mag_sq >= PLAYER_VELOCITY_SNAP_THRESHOLD_M_PER_SEC * PLAYER_VELOCITY_SNAP_THRESHOLD_M_PER_SEC
+                {
+                    let current_speed = current_mag_sq.sqrt();
+                    // 0.40s for Run->Ready (12 frames @ 30 fps), 0.20s for Walk->Ready (6 frames @ 30 fps)
+                    let duration_s = if current_speed > 3.2 { 0.40 } else { 0.20 };
+                    world.player.stop_coasting = Some(holtburger_world::player::StopCoastingState {
+                        initial_velocity: world.player.current_planar_velocity,
+                        duration_s,
+                        elapsed_s: 0.0,
+                    });
+                }
+
+                if let Some(ref mut coasting) = world.player.stop_coasting {
+                    coasting.elapsed_s += dt_s;
+                    if coasting.elapsed_s >= coasting.duration_s {
+                        world.player.stop_coasting = None;
+                        Vector3::zero()
+                    } else {
+                        let fraction = (coasting.elapsed_s / coasting.duration_s).clamp(0.0, 1.0);
+                        let mut v_coast = coasting.initial_velocity * (1.0 - fraction);
+                        v_coast.z = 0.0;
+                        let coast_mag_sq = v_coast.x * v_coast.x + v_coast.y * v_coast.y;
+                        if coast_mag_sq < PLAYER_VELOCITY_SNAP_THRESHOLD_M_PER_SEC * PLAYER_VELOCITY_SNAP_THRESHOLD_M_PER_SEC {
+                            world.player.stop_coasting = None;
+                            Vector3::zero()
+                        } else {
+                            v_coast
+                        }
+                    }
+                } else {
+                    Vector3::zero()
+                }
+            };
+
+            // Terminal velocity clamp: 50.0 m/s
             let mag_sq = v.x * v.x + v.y * v.y;
+            if mag_sq > MAX_VELOCITY * MAX_VELOCITY {
+                let len = mag_sq.sqrt();
+                v.x = (v.x / len) * MAX_VELOCITY;
+                v.y = (v.y / len) * MAX_VELOCITY;
+            }
+
+            // Low-speed cutoff snapping: snap to 0 when magnitude < 0.25 m/s
             let threshold_sq =
                 PLAYER_VELOCITY_SNAP_THRESHOLD_M_PER_SEC * PLAYER_VELOCITY_SNAP_THRESHOLD_M_PER_SEC;
-            if mag_sq < threshold_sq {
+            if v.x * v.x + v.y * v.y < threshold_sq {
                 v.x = 0.0;
                 v.y = 0.0;
+                world.player.stop_coasting = None;
             }
+
             world.player.current_planar_velocity = v;
             v
         };
         let raw_delta = Vector3::new(
             smoothed_planar.x * dt_s,
             smoothed_planar.y * dt_s,
-            target_velocity.z * dt_s,
+            if is_steep_unwalkable || world.player.is_sledding {
+                world.player.vertical_velocity * dt_s
+            } else {
+                target_velocity.z * dt_s
+            },
         );
         // A sticky idle slice shares the tail; drop any offset it noted.
         let _ = self.slow_run.take_leash_offset();
@@ -9033,13 +9345,42 @@ impl MovementSystem {
             // old velocity + half-step (:317757-317775) → v += a·q
             // (:317778-317783, unconditional). Stays outside the
             // transition pipeline; the pipeline consumes the deltas.
-            let az = -9.8_f32;
             let mut vx = world.player.current_planar_velocity.x;
             let mut vy = world.player.current_planar_velocity.y;
             let mut vz = world.player.vertical_velocity;
             // Capture the entry sign BEFORE any clamp/stop/gravity mutation —
             // "was the mover rising when the slice began?" (settle-land guard).
             entry_descending = vz <= 0.0;
+
+            let contact_normal = world
+                .player
+                .last_contact_plane
+                .map(|(p, _)| p.normal)
+                .or_else(|| {
+                    if !pose.is_indoors() {
+                        let g = pose.global_coords();
+                        world.terrain_normal_at(g.x, g.y)
+                    } else {
+                        None
+                    }
+                });
+
+            // Feature 23: Steep Slope Sliding Downhill Tangential Gravity Acceleration
+            // On a non-walkable slope (N.z < FLOOR_Z), retail calc_acceleration applies gravity
+            // projected along the slope tangent: a_tangent = g - (g · n) n
+            let is_steep_slope = match contact_normal {
+                Some(n) => n.z < holtburger_world::spatial::FLOOR_Z && n.z > 0.0,
+                None => false,
+            };
+
+            let (ax, ay, az) = if is_steep_slope {
+                let n = contact_normal.unwrap();
+                let a_tan = holtburger_world::spatial::slope_tangent_gravity(n, -9.8000002);
+                (a_tan.x, a_tan.y, a_tan.z)
+            } else {
+                (0.0, 0.0, -9.8000002_f32)
+            };
+
             let mut mag2 = vx * vx + vy * vy + vz * vz;
             let d;
             if mag2 > 0.0 {
@@ -9060,8 +9401,8 @@ impl MovementSystem {
                 // mag² − 0.25² < 0.0002 (:317750-317756 — 0.0002_f32
                 // shares bits with retail's 0.00019999999). Fires at a
                 // vertical-jump apex; a running jump's planar component
-                // keeps mag² above it.
-                if mag2 - 0.25 * 0.25 < 0.0002 {
+                // keeps mag² above it. Do not stop if on a steep slope.
+                if mag2 - 0.25 * 0.25 < 0.0002 && !is_steep_slope {
                     vx = 0.0;
                     vy = 0.0;
                     vz = 0.0;
@@ -9070,8 +9411,12 @@ impl MovementSystem {
                 // half-step (:317757-317775); the planar delta replaces
                 // the caller's pre-clamp `smoothed_planar * dt`.
                 d = vz * dt_s + 0.5 * az * dt_s * dt_s;
-                raw_delta.x = vx * dt_s;
-                raw_delta.y = vy * dt_s;
+                raw_delta.x = vx * dt_s + 0.5 * ax * dt_s * dt_s;
+                raw_delta.y = vy * dt_s + 0.5 * ay * dt_s * dt_s;
+            } else if is_steep_slope {
+                d = 0.5 * az * dt_s * dt_s;
+                raw_delta.x = 0.5 * ax * dt_s * dt_s;
+                raw_delta.y = 0.5 * ay * dt_s * dt_s;
             } else {
                 // mag² ≤ 0 skips the position add entirely — no lone
                 // half-step term on the first from-rest fall quantum
@@ -9084,6 +9429,8 @@ impl MovementSystem {
             // stored speed may exceed MAX_VELOCITY by |a|·q until the
             // NEXT quantum's entry clamp re-caps it — retail stores the
             // same overshoot.
+            vx += ax * dt_s;
+            vy += ay * dt_s;
             vz += az * dt_s;
             world.player.current_planar_velocity.x = vx;
             world.player.current_planar_velocity.y = vy;
@@ -9623,7 +9970,7 @@ impl MovementSystem {
                 } else {
                     PLAYER_GROUND_FRICTION_PER_SEC
                 };
-                calc_friction(&mut v, normal, mag2, friction, false, dt_s);
+                calc_friction(&mut v, normal, mag2, friction, world.player.is_sledding, dt_s);
                 if mag2 - 0.25 * 0.25 < 0.0002 {
                     v = Vector3::zero();
                 }
@@ -9658,20 +10005,47 @@ impl MovementSystem {
             && !outcome.grounded
             && let Some((plane, _)) = outcome.contact_plane
         {
-            let n = plane.normal;
-            let mut v = Vector3::new(
-                world.player.current_planar_velocity.x,
-                world.player.current_planar_velocity.y,
-                world.player.vertical_velocity,
-            );
-            let d = v.dot(&n);
-            if d < 0.0 {
-                const ELASTICITY: f32 = 0.05;
-                v = v - n * ((1.0 + ELASTICITY) * d);
-                world.player.current_planar_velocity.x = v.x;
-                world.player.current_planar_velocity.y = v.y;
-                world.player.vertical_velocity = v.z;
+            let n_new = plane.normal;
+            if let Some(n_last) = world.player.last_known_wall_normal {
+                if (n_new - n_last).length_squared() > holtburger_world::spatial::RETAIL_EPSILON {
+                    let v = Vector3::new(
+                        world.player.current_planar_velocity.x,
+                        world.player.current_planar_velocity.y,
+                        world.player.vertical_velocity,
+                    );
+                    match holtburger_world::spatial::crease_slide_projection(v, n_last, n_new) {
+                        holtburger_world::spatial::CreaseSlideResult::Slid(v_crease) => {
+                            world.player.current_planar_velocity.x = v_crease.x;
+                            world.player.current_planar_velocity.y = v_crease.y;
+                            world.player.vertical_velocity = v_crease.z;
+                        }
+                        holtburger_world::spatial::CreaseSlideResult::Blocked => {
+                            world.player.current_planar_velocity = Vector3::zero();
+                            world.player.vertical_velocity = 0.0;
+                        }
+                        holtburger_world::spatial::CreaseSlideResult::DegenerateSinglePlane(v_tangent) => {
+                            world.player.current_planar_velocity.x = v_tangent.x;
+                            world.player.current_planar_velocity.y = v_tangent.y;
+                            world.player.vertical_velocity = v_tangent.z;
+                        }
+                    }
+                }
+            } else {
+                let mut v = Vector3::new(
+                    world.player.current_planar_velocity.x,
+                    world.player.current_planar_velocity.y,
+                    world.player.vertical_velocity,
+                );
+                let d = v.dot(&n_new);
+                if d < 0.0 {
+                    const ELASTICITY: f32 = 0.05;
+                    v = v - n_new * ((1.0 + ELASTICITY) * d);
+                    world.player.current_planar_velocity.x = v.x;
+                    world.player.current_planar_velocity.y = v.y;
+                    world.player.vertical_velocity = v.z;
+                }
             }
+            world.player.last_known_wall_normal = Some(n_new);
         }
         if !was_airborne && !outcome.grounded && !keep_ground {
             let n = self.ground_loss_logs.get();
@@ -9749,12 +10123,54 @@ impl MovementSystem {
                 plane.normal,
                 mag2,
                 PLAYER_GROUND_FRICTION_RETAIL,
-                true, // Sledding — retail sets it on the steep-slide state
+                world.player.is_sledding,
                 dt_s,
             );
             world.player.current_planar_velocity.x = v.x;
             world.player.current_planar_velocity.y = v.y;
             world.player.vertical_velocity = v.z;
+        }
+
+        // Feature 24: Sledding State & High-Speed Glide
+        let contact_normal = outcome
+            .contact_plane
+            .map(|(plane, _)| plane.normal)
+            .or_else(|| {
+                if !pose.is_indoors() {
+                    let g = pose.global_coords();
+                    world.terrain_normal_at(g.x, g.y)
+                } else {
+                    None
+                }
+            })
+            .unwrap_or(Vector3::new(0.0, 0.0, 1.0));
+
+        let speed_sq = world.player.current_planar_velocity.length_squared()
+            + world.player.vertical_velocity * world.player.vertical_velocity;
+
+        let is_active_locomotion = state.forward.is_some() || state.sidestep.is_some();
+
+        // Entry: slope > 10° (N.z < 0.98480775) and speed >= 2.5 m/s (speed_sq >= 6.25) when not actively driving
+        if !is_active_locomotion
+            && contact_normal.z < holtburger_world::spatial::SLEDDING_STEEP_NORMAL_Z
+            && speed_sq >= holtburger_world::spatial::SLEDDING_HIGH_VELOCITY_SQ
+            && outcome.grounded
+        {
+            world.player.is_sledding = true;
+        }
+
+        // Exit: speed drops below 1.25 m/s (speed_sq < 1.5625) or active locomotion engaged
+        if world.player.is_sledding
+            && (speed_sq < holtburger_world::spatial::SLEDDING_LOW_VELOCITY_SQ
+                || is_active_locomotion)
+        {
+            world.player.is_sledding = false;
+        }
+
+        // Sledding Heading Alignment (acclient.c:322806):
+        if world.player.is_sledding && world.player.current_planar_velocity.length_squared() > 1e-4 {
+            let slide_heading = Vector3::zero().heading_to(&world.player.current_planar_velocity);
+            pose.rotation = Quaternion::from_heading(slide_heading);
         }
 
         // Fell-through-world failsafe (2026-07-01, re-homed 2026-07-02).
@@ -9796,8 +10212,26 @@ impl MovementSystem {
         // interpolation + runtime write-back (same shape as the legacy
         // slice's tail; the pipeline already rebucketted per step).
         let omega = local_omega_for_state(state, capabilities);
-        if omega.z.abs() > f32::EPSILON {
-            let new_heading = normalize_heading(heading + omega.z * dt_s);
+        let is_server_locked = world.scene.local_server_controlled()
+            || self.command_interpreter.as_ref().map_or(false, |i| i.controlled_by_server);
+        let smoothed_omega = if is_server_locked {
+            world.player.current_turn_omega = 0.0;
+            0.0
+        } else {
+            let target_omega = omega;
+            let smoothed = step_rotational_velocity(
+                world.player.current_turn_omega,
+                target_omega.z,
+                PLAYER_ROTATIONAL_ACCELERATION_RAD_PER_SEC_SQ,
+                PLAYER_ROTATIONAL_FRICTION,
+                PLAYER_ROTATIONAL_SNAP_THRESHOLD_RAD_PER_SEC,
+                dt_s,
+            );
+            world.player.current_turn_omega = smoothed;
+            smoothed
+        };
+        if smoothed_omega.abs() > f32::EPSILON {
+            let new_heading = normalize_heading(heading + smoothed_omega * dt_s);
             pose.rotation = Quaternion::from_heading(new_heading);
         }
         let body_id = SpatialBodyId::LocalPlayer(world.player.guid);
@@ -11440,6 +11874,9 @@ impl super::command_interpreter::InterpreterSeams for SystemInterpreterSeams<'_>
             gait: self.drive.gait,
             ..MotionState::default()
         };
+        self.world.player.current_planar_velocity = Vector3::zero();
+        self.world.player.stop_coasting = None;
+        self.world.player.is_sledding = false;
         self.dispatched = true;
     }
     fn stop_interpolating(&mut self) {

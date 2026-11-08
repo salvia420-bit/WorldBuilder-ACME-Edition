@@ -49616,6 +49616,11 @@ fn fallback_self_movement_capabilities() -> holtburger_world::SelfMovementCapabi
                 y: 0.0,
                 z: -1.5,
             },
+            base_sidestep_right_velocity: holtburger_common::Vector3 {
+                x: 1.25,
+                y: 0.0,
+                z: 0.0,
+            },
         },
         run_rate_scalar: FALLBACK_RUN_RATE_SCALAR,
     }

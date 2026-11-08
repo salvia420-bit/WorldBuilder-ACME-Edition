@@ -1485,7 +1485,12 @@ impl WorldState {
                     .map(|current| current.distance_to(&position))
                     .unwrap_or_default();
                 crate::pose_snap_diag::record(1, delta_m);
-                events.extend(self.set_player_position(position));
+                // Feature 27: Guard routine echo against snapping the autonomous player
+                if USE_LOCAL_PLAYER_AUTONOMOUS_GUARD {
+                    let _ = self.update_player_position_authoritative_only(position);
+                } else {
+                    events.extend(self.set_player_position(position));
+                }
                 return true;
             }
 

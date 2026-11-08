@@ -438,6 +438,7 @@ fn resolve_self_movement_capabilities_prefers_synthetic_override() {
             base_run_forward_velocity: Vector3::new(2.0, 0.0, 0.0),
             base_turn_left_omega: Vector3::new(0.0, 0.0, -1.25),
             base_turn_right_omega: Vector3::new(0.0, 0.0, 1.25),
+            base_sidestep_right_velocity: Vector3::new(1.25, 0.0, 0.0),
         },
         run_rate_scalar: 3.25,
     };
@@ -8226,5 +8227,44 @@ fn test_usetarget_live_objects_pass_the_can_use_with_gate() {
     assert!(
         !state.can_use_with(kit_guid, mote_a),
         "a mote is no Creature target"
+    );
+}
+
+#[test]
+fn test_public_position_update_does_not_snap_autonomous_player() {
+    let mut world = WorldState::synthetic();
+    let player_guid = Guid(0x1234_5678);
+    let predicted_pose = WorldPosition {
+        landblock_id: Guid(0x0001_0001),
+        coords: Vector3::new(100.0, 100.0, 10.0),
+        rotation: holtburger_common::math::Quaternion::identity(),
+    };
+    world.seed_local_player_entity(player_guid, "Player", predicted_pose);
+
+    // Echo arrives from 140ms ago (player was at x=98.0)
+    let stale_echo = WorldPosition {
+        landblock_id: Guid(0x0001_0001),
+        coords: Vector3::new(98.0, 100.0, 10.0),
+        rotation: holtburger_common::math::Quaternion::identity(),
+    };
+    let mut events = Vec::new();
+    let handled = world.apply_public_position_update(
+        player_guid,
+        PositionType::Location,
+        stale_echo,
+        &mut events,
+    );
+
+    assert!(handled);
+    assert!(
+        events.is_empty(),
+        "Must not emit EntityMoved snap events for autonomous player"
+    );
+    let runtime_pose = world
+        .local_player_runtime_pose()
+        .expect("player runtime pose");
+    assert_eq!(
+        runtime_pose.coords.x, 100.0,
+        "Autonomous player runtime pose must NOT snap back to stale echo (Feature 27)"
     );
 }

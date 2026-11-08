@@ -696,6 +696,7 @@ mod tests {
                 base_run_forward_velocity: Vector3::new(run_speed, 0.0, 0.0),
                 base_turn_left_omega: Vector3::new(0.0, 0.0, -turn_speed_rad_per_sec),
                 base_turn_right_omega: Vector3::new(0.0, 0.0, turn_speed_rad_per_sec),
+                base_sidestep_right_velocity: Vector3::new(1.25, 0.0, 0.0),
             },
             run_rate_scalar,
         }
@@ -1078,6 +1079,7 @@ mod tests {
                     base_run_forward_velocity: Vector3::new(2.0, 0.0, 0.0),
                     base_turn_left_omega: Vector3::new(0.0, 0.0, -1.5),
                     base_turn_right_omega: Vector3::new(0.0, 0.0, 1.5),
+                    base_sidestep_right_velocity: Vector3::new(1.25, 0.0, 0.0),
                 },
                 run_rate_scalar: 1.0,
             },

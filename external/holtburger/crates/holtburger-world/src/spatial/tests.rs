@@ -5509,14 +5509,17 @@ fn retail_leash_chain_accumulates_once_where_split_sites_burned_twice() {
         .position_manager
         .constraint
         .constraint_pos_offset();
+    // Feature 27: Additive reconciliation blending blends manual intent (0.5m)
+    // with clamped correction (0.5 * 0.5m = 0.25m) giving composed offset 0.75m.
+    let expected_composed = 0.75_f32;
     assert!(
-        (chain_budget - cap).abs() < 1e-4,
-        "chain accumulates ONCE on the composed (interp-replaced) offset {cap}, got {chain_budget}"
+        (chain_budget - expected_composed).abs() < 1e-4,
+        "chain accumulates ONCE on the composed (blended) offset {expected_composed}, got {chain_budget}"
     );
     assert!(chain_budget < split_budget, "double-accumulate removed");
     assert!(
-        (out.offset.x - cap).abs() < 1e-4,
-        "interp pull replaced the manual intent, got {:?}",
+        (out.offset.x - expected_composed).abs() < 1e-4,
+        "interp pull blended with the manual intent, got {:?}",
         out.offset
     );
 }

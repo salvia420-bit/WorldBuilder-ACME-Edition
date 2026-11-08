@@ -381,11 +381,23 @@ pub fn clamp_delta_against_buildings_with_normal(
         ),
         rotation: pose.rotation,
     };
-    let slide_clamped = match sweep_sphere_against_aabbs(candidates, &slide_pose, slide, radius) {
-        Some(slide_hit) => slide * (slide_hit.t - backoff / slide.length().max(1e-6)).max(0.0),
-        None => slide,
+    let (slide_clamped, out_normal) = match sweep_sphere_against_aabbs(candidates, &slide_pose, slide, radius) {
+        Some(second_hit) => {
+            let n1 = hit.normal;
+            let n2 = second_hit.normal;
+            let safe_t2 = (second_hit.t - backoff / slide.length().max(1e-6)).max(0.0);
+            let stopped_slide = slide * safe_t2;
+            let remaining_slide = slide * (1.0 - safe_t2);
+            let crease_v = match crease_slide_projection(remaining_slide, n1, n2) {
+                CreaseSlideResult::Slid(v_crease) => v_crease,
+                CreaseSlideResult::DegenerateSinglePlane(v_tangent) => v_tangent,
+                CreaseSlideResult::Blocked => Vector3::zero(),
+            };
+            (stopped_slide + crease_v, second_hit.normal)
+        }
+        None => (slide, wall_normal),
     };
-    (stopped_delta + slide_clamped, Some(wall_normal))
+    (stopped_delta + slide_clamped, Some(out_normal))
 }
 
 /// Phase 6 follow-on (academy rubberband, 2026-05-10): clamp a
@@ -495,6 +507,118 @@ pub const FLOOR_Z: f32 = 0.664_174_15;
 /// truth — `movement/system.rs`'s `LAND_SETTLE_EPS` re-uses this const so the
 /// legacy chain and the reachable `resolve_floor_for_step` gate can never drift.
 pub const LAND_SETTLE_EPS: f32 = 0.08;
+
+/// Steep-slope cutoff gating the SLEDDING high-speed override: the glide
+/// survives only when `ContactPlane.Normal.Z < SLEDDING_STEEP_NORMAL_Z` (slope steeper than 10°).
+/// Retail `calc_friction` (acclient.c:316127): `cos(0.1745329251994329) = 0.98480775`.
+pub const SLEDDING_STEEP_NORMAL_Z: f32 = 0.984_807_75;
+
+/// SLEDDING entry and glide high-speed threshold: 2.5 m/s (6.25 m²/s²).
+pub const SLEDDING_HIGH_VELOCITY: f32 = 2.5;
+pub const SLEDDING_HIGH_VELOCITY_SQ: f32 = 6.25;
+
+/// SLEDDING exit low-speed threshold: 1.25 m/s (1.5625 m²/s²).
+pub const SLEDDING_LOW_VELOCITY: f32 = 1.25;
+pub const SLEDDING_LOW_VELOCITY_SQ: f32 = 1.5625;
+
+/// SLEDDING high-speed glide friction coefficient (retail acclient.c:316124).
+pub const SLEDDING_FRICTION: f32 = 0.2;
+
+/// PhysicsGlobals.EPSILON threshold used in retail acclient.c:358899 / ACE PhysicsGlobals.cs.
+pub const RETAIL_EPSILON: f32 = 0.0002;
+pub const RETAIL_EPSILON_SQ: f32 = RETAIL_EPSILON * RETAIL_EPSILON;
+
+/// Returns true if the surface normal is walkable (N.z >= FLOOR_Z ~48.38°).
+#[inline]
+pub fn is_walkable_normal(normal: Vector3) -> bool {
+    normal.z >= FLOOR_Z
+}
+
+/// Returns true if the surface normal qualifies for sledding glide (slope > 10°).
+#[inline]
+pub fn is_sledding_slope(normal: Vector3) -> bool {
+    normal.z < SLEDDING_STEEP_NORMAL_Z
+}
+
+/// Computes downward gravity acceleration projected along the slope tangent:
+/// a = g - (g · n) n
+/// Where g = (0, 0, gravity). For unit normal n:
+/// ax = -gravity * n.z * n.x
+/// ay = -gravity * n.z * n.y
+/// az = gravity * (1.0 - n.z * n.z)
+pub fn slope_tangent_gravity(normal: Vector3, gravity: f32) -> Vector3 {
+    let n_len_sq = normal.length_squared();
+    if n_len_sq < 1e-12 {
+        return Vector3::new(0.0, 0.0, gravity);
+    }
+    let n = if (n_len_sq - 1.0).abs() > 1e-5 {
+        normal / n_len_sq.sqrt()
+    } else {
+        normal
+    };
+    let g = Vector3::new(0.0, 0.0, gravity);
+    let into_normal = g.dot(&n);
+    g - n * into_normal
+}
+
+/// Result of multi-plane crease slide projection (retail acclient.c:358899 `CSphere::slide_sphere`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum CreaseSlideResult {
+    /// Motion successfully projected along the 3D crease line.
+    /// `projected` is parallel to N1 × N2, with zero into-plane component for both planes.
+    Slid(Vector3),
+    /// Motion along the crease ceases (projected velocity is sub-EPSILON, or opposing acute pinch).
+    Blocked,
+    /// The two planes are coplanar/parallel (||N1 × N2||² < EPSILON, N1 · N2 >= 0).
+    /// Falls back to single-plane tangent projection against N2.
+    DegenerateSinglePlane(Vector3),
+}
+
+/// Feature 25: 3D Crease Slide Projection (acclient.c:358899 `CSphere::slide_sphere`, ACE `Sphere.cs:558-605`).
+///
+/// When moving or sliding into multiple intersecting collision planes (e.g. terrain valley, ravine,
+/// wall-ground junction, or corner), projects the proposed velocity/displacement `v` along the
+/// intersection crease vector D = N1 × N2.
+///
+/// Math:
+/// - D = N1 × N2 (full 3D cross product, Z preserved)
+/// - If ||D||² >= RETAIL_EPSILON:
+///     V_proj = (V · D / ||D||²) * D
+///     If ||V_proj||² < RETAIL_EPSILON => Blocked (motion ceases)
+///     Else => Slid(V_proj)
+/// - Else (||D||² < RETAIL_EPSILON, parallel/coplanar):
+///     If N1 · N2 >= 0.0 => DegenerateSinglePlane(V - (V · N2) * N2)
+///     Else (N1 · N2 < 0.0, opposing pinch) => Blocked
+#[inline]
+pub fn crease_slide_projection(
+    v: Vector3,
+    n1: Vector3,
+    n2: Vector3,
+) -> CreaseSlideResult {
+    let d = n1.cross(&n2);
+    let d_len_sq = d.length_squared();
+
+    if d_len_sq >= RETAIL_EPSILON {
+        let dot = v.dot(&d);
+        let v_proj = d * (dot / d_len_sq);
+        if v_proj.length_squared() < RETAIL_EPSILON {
+            CreaseSlideResult::Blocked
+        } else {
+            CreaseSlideResult::Slid(v_proj)
+        }
+    } else {
+        // Parallel or anti-parallel planes
+        if n1.dot(&n2) >= 0.0 {
+            // Coplanar / same hemisphere: single-plane tangent projection on n2
+            let into_n2 = v.dot(&n2);
+            let v_tangent = v - n2 * into_n2;
+            CreaseSlideResult::DegenerateSinglePlane(v_tangent)
+        } else {
+            // Opposing acute pinch trap: motion ceases
+            CreaseSlideResult::Blocked
+        }
+    }
+}
 
 /// 2026-05-10 indoor collision (Phase 6 step G follow-on): return the
 /// highest "floor" Z below `(x, y)` from the given triangles, or
@@ -1268,28 +1392,24 @@ pub fn clamp_delta_against_cell_walls_substepped(
             exclusion_aabbs,
         );
 
-        total_clamped = total_clamped + clamped_step;
-        // Carry the most-recent wall normal across steps. This is the
-        // `LastKnownContactPlane` accumulation hook for the deferred
-        // cliff_slide cross-product (see the TODO above): a later step
-        // that hits a DIFFERENT wall has both planes available here.
-        if step_normal.is_some() {
-            last_normal = step_normal;
+        // Intra-substep crease slide (Feature 25, retail acclient.c:358899 CSphere::slide_sphere):
+        // When this step hit a wall (n_new) AND a previous step's wall is known (n_last),
+        // project along the 3D crease line.
+        let mut final_clamped = clamped_step;
+        if let Some(n_new) = step_normal {
+            if let Some(n_last) = last_normal {
+                if (n_new - n_last).length_squared() > RETAIL_EPSILON {
+                    match crease_slide_projection(clamped_step, n_last, n_new) {
+                        CreaseSlideResult::Slid(v_crease) => final_clamped = v_crease,
+                        CreaseSlideResult::Blocked => final_clamped = Vector3::zero(),
+                        CreaseSlideResult::DegenerateSinglePlane(v_tangent) => final_clamped = v_tangent,
+                    }
+                }
+            }
+            last_normal = Some(n_new);
         }
 
-        // Intra-substep cliff_slide (Stage-2 seam-skid), DEFAULT-OFF. When
-        // enabled, if this step hit a wall (N_new) AND a previous step's wall
-        // is known (N_last), replace the clamped residual with the seam-skid
-        // (cross-product of the two normals) before advancing. Purely additive:
-        // when off, `final_clamped == clamped_step` and the pose advances
-        // identically to shipped behaviour.
-        let mut final_clamped = clamped_step;
-        if USE_CLIFF_SLIDE_INTRA_SUBSTEP
-            && let (Some(n_new), Some(n_last)) = (step_normal, last_normal)
-            && let Some(seam_skid) = cliff_slide_residual_along_seam(clamped_step, n_new, n_last)
-        {
-            final_clamped = seam_skid;
-        }
+        total_clamped = total_clamped + final_clamped;
 
         // Advance the working pose by the (possibly seam-skidded) segment so
         // the next step sweeps from where we actually ended up.
@@ -1299,7 +1419,7 @@ pub fn clamp_delta_against_cell_walls_substepped(
         // lateral travel collapsed to ~0 (wall dead-ahead, no tangent to
         // slide along), the remaining steps would re-push the same stuck
         // origin into the same wall. Nothing more to accumulate.
-        let step_lat = (clamped_step.x * clamped_step.x + clamped_step.y * clamped_step.y).sqrt();
+        let step_lat = (final_clamped.x * final_clamped.x + final_clamped.y * final_clamped.y).sqrt();
         if step_lat <= EPSILON {
             break;
         }
@@ -2865,5 +2985,137 @@ mod tests {
             "negative-angle skid stays non-advancing, got proj {}",
             seam.dot(&out_neg)
         );
+    }
+
+    #[test]
+    fn test_is_walkable_and_is_sledding_slope_thresholds() {
+        // Flat ground: walkable (Nz = 1.0 >= FLOOR_Z), not sledding slope (Nz = 1.0 >= SLEDDING_STEEP_NORMAL_Z)
+        let flat = Vector3::new(0.0, 0.0, 1.0);
+        assert!(is_walkable_normal(flat));
+        assert!(!is_sledding_slope(flat));
+
+        // 15° slope (Nz = cos(15°) ≈ 0.9659): walkable (>= FLOOR_Z), qualifies for sledding (< 0.9848)
+        let slope_15 = Vector3::new(0.0, 0.258819, 0.9659258);
+        assert!(is_walkable_normal(slope_15));
+        assert!(is_sledding_slope(slope_15));
+
+        // Exactly at FLOOR_Z (0.66417415, ~48.381°): walkable
+        let edge_walkable = Vector3::new(0.747582, 0.0, FLOOR_Z);
+        assert!(is_walkable_normal(edge_walkable));
+        assert!(is_sledding_slope(edge_walkable));
+
+        // Steep slope (60° cliff, Nz = 0.5 < FLOOR_Z): non-walkable, sledding slope
+        let steep_60 = Vector3::new(0.8660254, 0.0, 0.5);
+        assert!(!is_walkable_normal(steep_60));
+        assert!(is_sledding_slope(steep_60));
+
+        // Vertical wall (Nz = 0.0): non-walkable, sledding slope
+        let vert = Vector3::new(1.0, 0.0, 0.0);
+        assert!(!is_walkable_normal(vert));
+        assert!(is_sledding_slope(vert));
+    }
+
+    #[test]
+    fn test_slope_tangent_gravity_acceleration() {
+        let g = -9.8000002_f32;
+
+        // 1. Flat ground (0, 0, 1) -> a = (0, 0, 0)
+        let a_flat = slope_tangent_gravity(Vector3::new(0.0, 0.0, 1.0), g);
+        assert!(a_flat.length() < 1e-5, "Flat ground must have zero downhill acceleration");
+
+        // 2. Vertical wall (1, 0, 0) -> a = (0, 0, g)
+        let a_vert = slope_tangent_gravity(Vector3::new(1.0, 0.0, 0.0), g);
+        assert!((a_vert.x).abs() < 1e-5);
+        assert!((a_vert.y).abs() < 1e-5);
+        assert!((a_vert.z - g).abs() < 1e-5);
+
+        // 3. 45° slope rising toward +X: normal = (-1/sqrt(2), 0, 1/sqrt(2))
+        // Downhill acceleration must point toward -X and -Z with equal magnitude:
+        // ax = 9.8 * Nz * Nx = 9.8 * (1/sqrt(2)) * (-1/sqrt(2)) = -4.9
+        // az = -9.8 * (1 - Nz^2) = -9.8 * (1 - 0.5) = -4.9
+        let inv_sqrt2 = 1.0 / std::f32::consts::SQRT_2;
+        let n_45 = Vector3::new(-inv_sqrt2, 0.0, inv_sqrt2);
+        let a_45 = slope_tangent_gravity(n_45, g);
+        assert!((a_45.x - (-4.9000001)).abs() < 1e-4, "ax must be -4.9, got {}", a_45.x);
+        assert!((a_45.y).abs() < 1e-5, "ay must be 0, got {}", a_45.y);
+        assert!((a_45.z - (-4.9000001)).abs() < 1e-4, "az must be -4.9, got {}", a_45.z);
+
+        // Downhill acceleration must be strictly orthogonal to surface normal: a · n == 0
+        let dot = a_45.dot(&n_45);
+        assert!(dot.abs() < 1e-5, "a · n must be 0, got {dot}");
+
+        // Total downhill magnitude = 9.8 * sin(45°) = 9.8 / sqrt(2) ≈ 6.9296 m/s²
+        let mag = a_45.length();
+        let expected_mag = 9.8000002 * inv_sqrt2;
+        assert!((mag - expected_mag).abs() < 1e-4, "magnitude must be {expected_mag}, got {mag}");
+    }
+
+    #[test]
+    fn test_crease_slide_projection_non_degenerate_and_invariance() {
+        // Two intersecting planes:
+        // Plane 1: Wall facing +X: normal N1 = (1, 0, 0)
+        // Plane 2: Wall facing +Y: normal N2 = (0, 1, 0)
+        // Crease vector D = N1 × N2 = (0, 0, 1) (vertical crease line)
+        let n1 = Vector3::new(1.0, 0.0, 0.0);
+        let n2 = Vector3::new(0.0, 1.0, 0.0);
+
+        // Motion into corner with vertical component: V = (-2.0, -3.0, 5.0)
+        let v = Vector3::new(-2.0, -3.0, 5.0);
+
+        let res1 = crease_slide_projection(v, n1, n2);
+        let res2 = crease_slide_projection(v, n2, n1);
+
+        // Result must be Slid along Z axis
+        match res1 {
+            CreaseSlideResult::Slid(v_proj) => {
+                assert!((v_proj.x).abs() < 1e-5);
+                assert!((v_proj.y).abs() < 1e-5);
+                assert!((v_proj.z - 5.0).abs() < 1e-5, "Vertical velocity preserved along vertical crease");
+
+                // Check zero normal penetration
+                assert!(v_proj.dot(&n1).abs() < 1e-5, "No penetration into plane 1");
+                assert!(v_proj.dot(&n2).abs() < 1e-5, "No penetration into plane 2");
+            }
+            other => panic!("Expected Slid, got {:?}", other),
+        }
+
+        // Crease projection must be invariant under normal argument order
+        match res2 {
+            CreaseSlideResult::Slid(v_proj2) => {
+                assert!((v_proj2.x).abs() < 1e-5);
+                assert!((v_proj2.y).abs() < 1e-5);
+                assert!((v_proj2.z - 5.0).abs() < 1e-5);
+            }
+            other => panic!("Expected Slid, got {:?}", other),
+        }
+
+        // Horizontal motion into corner: V = (-2.0, -3.0, 0.0)
+        // Projection onto vertical crease D is 0, below threshold -> Blocked
+        let v_horiz = Vector3::new(-2.0, -3.0, 0.0);
+        assert_eq!(crease_slide_projection(v_horiz, n1, n2), CreaseSlideResult::Blocked);
+    }
+
+    #[test]
+    fn test_crease_slide_projection_degenerate_coplanar_and_pinch() {
+        let v = Vector3::new(2.0, 3.0, 0.0);
+
+        // Coplanar / parallel: N1 = (1, 0, 0), N2 = (1, 0, 0)
+        // N1 · N2 = 1.0 >= 0 -> single-plane tangent projection on N2
+        let n1 = Vector3::new(1.0, 0.0, 0.0);
+        let n2 = Vector3::new(1.0, 0.0, 0.0);
+        match crease_slide_projection(v, n1, n2) {
+            CreaseSlideResult::DegenerateSinglePlane(v_tangent) => {
+                // v - (v · N2) * N2 = (2, 3, 0) - 2 * (1, 0, 0) = (0, 3, 0)
+                assert!((v_tangent.x).abs() < 1e-5);
+                assert!((v_tangent.y - 3.0).abs() < 1e-5);
+                assert!((v_tangent.z).abs() < 1e-5);
+            }
+            other => panic!("Expected DegenerateSinglePlane, got {:?}", other),
+        }
+
+        // Acute opposing pinch: N1 = (1, 0, 0), N2 = (-1, 0, 0)
+        // N1 · N2 = -1.0 < 0 -> motion ceases (Blocked)
+        let n_opp = Vector3::new(-1.0, 0.0, 0.0);
+        assert_eq!(crease_slide_projection(v, n1, n_opp), CreaseSlideResult::Blocked);
     }
 }

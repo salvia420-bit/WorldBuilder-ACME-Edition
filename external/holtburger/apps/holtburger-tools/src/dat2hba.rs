@@ -395,6 +395,27 @@ fn derive_motion_kinematics_from_parsed_portal_assets(
             );
         }
 
+        let mut modifier_keys: Vec<u32> = motion_table.modifiers.keys().copied().collect();
+        modifier_keys.sort_unstable();
+        for modifier_key in modifier_keys {
+            if !derived_table
+                .cycle_kinematics_by_key
+                .contains_key(&modifier_key)
+            {
+                let motion_data = motion_table
+                    .modifiers
+                    .get(&modifier_key)
+                    .expect("sorted modifier key should exist");
+                derived_table.cycle_kinematics_by_key.insert(
+                    modifier_key,
+                    MotionCommandKinematics {
+                        velocity: motion_data.velocity,
+                        omega: motion_data.omega,
+                    },
+                );
+            }
+        }
+
         asset.motion_tables.insert(motion_table.id, derived_table);
     }
 
@@ -430,6 +451,7 @@ fn should_derive_forward_velocity(cycle_key: u32, motion_data: &MotionData) -> b
         cycle_command_suffix(cycle_key),
         command if command == command_suffix(MotionTable::WALK_FORWARD_COMMAND)
             || command == command_suffix(MotionTable::RUN_FORWARD_COMMAND)
+            || command == command_suffix(MotionTable::SIDESTEP_RIGHT_COMMAND)
     )
 }
 

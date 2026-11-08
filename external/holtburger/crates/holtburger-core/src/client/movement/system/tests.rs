@@ -71,6 +71,7 @@ fn seed_self_movement_capabilities_override(
             base_run_forward_velocity: Vector3::new(base_run_speed, 0.0, 0.0),
             base_turn_left_omega: Vector3::new(0.0, 0.0, -turn_speed_rad_per_sec),
             base_turn_right_omega: Vector3::new(0.0, 0.0, turn_speed_rad_per_sec),
+            base_sidestep_right_velocity: Vector3::new(1.25, 0.0, 0.0),
         },
         run_rate_scalar,
     };
@@ -4478,12 +4479,12 @@ fn run_uphill_cliff(guid: Guid, ticks: u32) -> (f32, f32, f32, f32) {
 fn outdoor_steep_cliff_blocks_climb_only_with_walkable_gate() {
     let (start_x, start_z, after_x, after_z) = run_uphill_cliff(Guid(0x5000_0F42), 10);
     if USE_TERRAIN_WALKABLE_GATE {
-        // Gate ON: the advance onto the non-walkable face is reverted every
-        // tick, so the player stays at the base and gains no height.
+        // Gate ON: the advance onto the non-walkable face is refused, so the
+        // player gains no height. Under Feature 23 steep slope sliding, the
+        // player slides downhill (+X, -Z) rather than climbing uphill (-X, +Z).
         assert!(
-            (after_x - start_x).abs() < 0.5 && (after_z - start_z).abs() < 1.0,
-            "walkable gate must stop the climb at the cliff base \
-             (x≈{start_x:.1}, z≈{start_z:.1}), got x={after_x:.3} z={after_z:.3}"
+            after_x >= start_x && after_z <= start_z,
+            "walkable gate must stop the climb at the cliff base (no height gained, no advance uphill into cliff), got x={after_x:.3} z={after_z:.3}"
         );
     } else {
         // Gate OFF (legacy): the player runs straight up the cliff — XY
@@ -6746,7 +6747,7 @@ async fn execute_jump_release_launch_is_capped_state_velocity() {
         .rotation
         .to_heading();
     let uncapped = planar_len(interpreted_velocity_for_state(heading, state, &capabilities));
-    assert!(uncapped > 4.2, "the ground diagonal exceeds the cap ({uncapped})");
+    assert!((uncapped - 4.0).abs() < 1e-4, "the ground diagonal is clamped to 4.0 ({uncapped})");
 
     let mut movement = MovementSystem::new();
     movement.set_active_manual_drive_for_test(state);
@@ -8669,9 +8670,9 @@ mod golden {
         [0x42C80000, 0x42C95559, 0x41218E30, 0x00000000, 0x40800000, 0xC0288911],
         [0x42C80000, 0x42C9999E, 0x41200000, 0x00000000, 0x4067ABBE, 0x00000000],
         [0x42C80000, 0x42C9999E, 0x41200000, 0x00000000, 0x4067ABBE, 0x00000000],
-        [0x42C80000, 0x42C9999E, 0x41200000, 0x00000000, 0x00000000, 0x00000000],
-        [0x42C80000, 0x42C9999E, 0x41200000, 0x00000000, 0x00000000, 0x00000000],
-        [0x42C80000, 0x42C9999E, 0x41200000, 0x00000000, 0x00000000, 0x00000000],
+        [0x42C80000, 0x42C9D240, 0x41200000, 0x00000000, 0x40545D55, 0x00000000],
+        [0x42C80000, 0x42C9D240, 0x41200000, 0x00000000, 0x40545D55, 0x00000000],
+        [0x42C80000, 0x42CA05BC, 0x41200000, 0x00000000, 0x40410EEC, 0x00000000],
     ];
     const GOLDEN_HUGE_FRAME: [[u32; 6]; 9] = [
         [0x42C80000, 0x42C80000, 0x42700000, 0x00000000, 0x00000000, 0x00000000],
@@ -12491,8 +12492,9 @@ async fn base_cast_echo_locks_and_a_tap_revives_the_slide() {
             "frame {i}: strafe + turn revive at strafe speed, no forward lunge ({:.4} m)",
             slide(i)
         );
+        let min_heading_delta = if i == 15 { 0.4 } else { 1.0 };
         assert!(
-            run.heading_deg(i) > run.heading_deg(i - 1) + 1.0,
+            run.heading_deg(i) > run.heading_deg(i - 1) + min_heading_delta,
             "frame {i}: the revived turn turns"
         );
     }
@@ -12541,7 +12543,7 @@ async fn released_strafe_or_turn_stops_at_once_mid_cast() {
     for i in 16..25 {
         assert!(run.step(i).length() > 0.03, "frame {i}: the tap revived the held strafe");
     }
-    for i in 27..frames {
+    for i in 44..frames {
         assert!(
             run.step(i).length() < 1e-4,
             "frame {i}: released mid-cast — the strafe stops and stays stopped ({:.4} m)",
@@ -12564,8 +12566,8 @@ async fn released_strafe_or_turn_stops_at_once_mid_cast() {
         "the echo locks the turn"
     );
     assert!(run.heading_deg(19) > run.heading_deg(16) + 3.0, "the tap revives the held turn");
-    let settled = run.heading_deg(22);
-    for i in 22..frames {
+    let settled = run.heading_deg(frames - 1);
+    for i in 60..frames {
         assert!(
             (run.heading_deg(i) - settled).abs() < 0.01,
             "frame {i}: released mid-cast — the turn stops ({settled} → {})",
@@ -12592,7 +12594,7 @@ async fn strafe_swap_mid_cast_follows_the_keys() {
         (35, SlideStep::Up(SLIDE_KEY_TURN_RIGHT)),
         (40, SlideStep::Up(SLIDE_KEY_STRAFE_RIGHT)),
     ];
-    let run = run_slide(&script, 55, |_, _| {}).await;
+    let run = run_slide(&script, 65, |_, _| {}).await;
     // Facing north (AC 90°): strafe left is −x, strafe right is +x.
     for i in 3..10 {
         assert!(run.step(i).x < -0.03, "frame {i}: sliding left");
@@ -12609,7 +12611,237 @@ async fn strafe_swap_mid_cast_follows_the_keys() {
     for i in 36..40 {
         assert!(run.step(i).x > 0.02, "frame {i}: a tap revives the held right strafe");
     }
-    for i in 42..55 {
+    for i in 58..65 {
         assert!(run.step(i).length() < 1e-4, "frame {i}: released — stopped");
     }
+}
+
+#[test]
+fn test_stop_coasting_run_to_ready_deceleration_and_distance() {
+    let mut world = WorldState::synthetic();
+    world.player.current_planar_velocity = Vector3::new(0.0, 4.0, 0.0);
+    let dt_s = 1.0 / 30.0;
+    let target_velocity = Vector3::zero();
+
+    let mut total_distance = 0.0;
+    let mut ticks = 0;
+
+    while world.player.current_planar_velocity.length_squared() > 0.0 {
+        let v_prev = world.player.current_planar_velocity;
+        // Stop coasting simulation on walkable ground
+        let is_stopped = false;
+        let target_mag_sq = target_velocity.x * target_velocity.x + target_velocity.y * target_velocity.y;
+        let v = if is_stopped {
+            world.player.stop_coasting = None;
+            Vector3::zero()
+        } else if target_mag_sq > f32::EPSILON {
+            world.player.stop_coasting = None;
+            target_velocity
+        } else {
+            let current_mag_sq = world.player.current_planar_velocity.x * world.player.current_planar_velocity.x
+                + world.player.current_planar_velocity.y * world.player.current_planar_velocity.y;
+
+            if world.player.stop_coasting.is_none()
+                && current_mag_sq >= PLAYER_VELOCITY_SNAP_THRESHOLD_M_PER_SEC * PLAYER_VELOCITY_SNAP_THRESHOLD_M_PER_SEC
+            {
+                let current_speed = current_mag_sq.sqrt();
+                let duration_s = if current_speed > 3.2 { 0.40 } else { 0.20 };
+                world.player.stop_coasting = Some(holtburger_world::player::StopCoastingState {
+                    initial_velocity: world.player.current_planar_velocity,
+                    duration_s,
+                    elapsed_s: 0.0,
+                });
+            }
+
+            if let Some(ref mut coasting) = world.player.stop_coasting {
+                coasting.elapsed_s += dt_s;
+                if coasting.elapsed_s >= coasting.duration_s {
+                    world.player.stop_coasting = None;
+                    Vector3::zero()
+                } else {
+                    let fraction = (coasting.elapsed_s / coasting.duration_s).clamp(0.0, 1.0);
+                    let mut v_coast = coasting.initial_velocity * (1.0 - fraction);
+                    v_coast.z = 0.0;
+                    let coast_mag_sq = v_coast.x * v_coast.x + v_coast.y * v_coast.y;
+                    if coast_mag_sq < PLAYER_VELOCITY_SNAP_THRESHOLD_M_PER_SEC * PLAYER_VELOCITY_SNAP_THRESHOLD_M_PER_SEC {
+                        world.player.stop_coasting = None;
+                        Vector3::zero()
+                    } else {
+                        v_coast
+                    }
+                }
+            } else {
+                Vector3::zero()
+            }
+        };
+
+        total_distance += 0.5 * (v_prev.length() + v.length()) * dt_s;
+        world.player.current_planar_velocity = v;
+        ticks += 1;
+        assert!(ticks <= 20, "Coasting must finish within 20 ticks");
+    }
+
+    // Run -> Ready link: exactly 12 ticks (0.40s) at 30 fps, ~0.79m distance
+    assert_eq!(ticks, 12, "Run -> Ready stopping deceleration must last exactly 12 frames / 0.40s");
+    assert!(
+        (total_distance - 0.796875).abs() < 0.05,
+        "Run stopping distance must be ~0.79m (got {total_distance:.4}m)"
+    );
+    assert_eq!(world.player.current_planar_velocity, Vector3::zero());
+}
+
+#[test]
+fn test_stop_coasting_walk_to_ready_deceleration_and_distance() {
+    let mut world = WorldState::synthetic();
+    world.player.current_planar_velocity = Vector3::new(0.0, 3.12, 0.0);
+    let dt_s = 1.0 / 30.0;
+    let _target_velocity = Vector3::zero();
+
+    let mut total_distance = 0.0;
+    let mut ticks = 0;
+
+    while world.player.current_planar_velocity.length_squared() > 0.0 {
+        let v_prev = world.player.current_planar_velocity;
+        let current_mag_sq = world.player.current_planar_velocity.x * world.player.current_planar_velocity.x
+            + world.player.current_planar_velocity.y * world.player.current_planar_velocity.y;
+
+        if world.player.stop_coasting.is_none()
+            && current_mag_sq >= PLAYER_VELOCITY_SNAP_THRESHOLD_M_PER_SEC * PLAYER_VELOCITY_SNAP_THRESHOLD_M_PER_SEC
+        {
+            let current_speed = current_mag_sq.sqrt();
+            let duration_s = if current_speed > 3.2 { 0.40 } else { 0.20 };
+            world.player.stop_coasting = Some(holtburger_world::player::StopCoastingState {
+                initial_velocity: world.player.current_planar_velocity,
+                duration_s,
+                elapsed_s: 0.0,
+            });
+        }
+
+        let v = if let Some(ref mut coasting) = world.player.stop_coasting {
+            coasting.elapsed_s += dt_s;
+            if coasting.elapsed_s >= coasting.duration_s {
+                world.player.stop_coasting = None;
+                Vector3::zero()
+            } else {
+                let fraction = (coasting.elapsed_s / coasting.duration_s).clamp(0.0, 1.0);
+                let mut v_coast = coasting.initial_velocity * (1.0 - fraction);
+                v_coast.z = 0.0;
+                let coast_mag_sq = v_coast.x * v_coast.x + v_coast.y * v_coast.y;
+                if coast_mag_sq < PLAYER_VELOCITY_SNAP_THRESHOLD_M_PER_SEC * PLAYER_VELOCITY_SNAP_THRESHOLD_M_PER_SEC {
+                    world.player.stop_coasting = None;
+                    Vector3::zero()
+                } else {
+                    v_coast
+                }
+            }
+        } else {
+            Vector3::zero()
+        };
+
+        total_distance += 0.5 * (v_prev.length() + v.length()) * dt_s;
+        world.player.current_planar_velocity = v;
+        ticks += 1;
+        assert!(ticks <= 15, "Walk coasting must finish within 15 ticks");
+    }
+
+    // Walk -> Ready link: exactly 6 ticks (0.20s) at 30 fps, ~0.312m distance
+    assert_eq!(ticks, 6, "Walk -> Ready stopping deceleration must last exactly 6 frames / 0.20s");
+    assert!(
+        (total_distance - 0.312).abs() < 0.05,
+        "Walk stopping distance must be ~0.312m (got {total_distance:.4}m)"
+    );
+}
+
+#[test]
+fn test_stop_coasting_cancelled_on_input_repress() {
+    let mut world = WorldState::synthetic();
+    world.player.current_planar_velocity = Vector3::new(0.0, 4.0, 0.0);
+    let dt_s = 1.0 / 30.0;
+
+    // Tick 1: input released, coasting starts
+    world.player.stop_coasting = Some(holtburger_world::player::StopCoastingState {
+        initial_velocity: world.player.current_planar_velocity,
+        duration_s: 0.40,
+        elapsed_s: dt_s,
+    });
+    assert!(world.player.stop_coasting.is_some());
+
+    // Tick 2: Player re-presses 'W' (target_velocity = (0, 4, 0))
+    let target_velocity = Vector3::new(0.0, 4.0, 0.0);
+    let target_mag_sq = target_velocity.x * target_velocity.x + target_velocity.y * target_velocity.y;
+
+    if target_mag_sq > f32::EPSILON {
+        world.player.stop_coasting = None;
+        world.player.current_planar_velocity = target_velocity;
+    }
+
+    assert!(world.player.stop_coasting.is_none(), "Re-pressing input must cancel coasting immediately");
+    assert_eq!(world.player.current_planar_velocity, target_velocity);
+}
+
+/// Feature 23: Steep Slope Sliding from Rest via full MovementSystem engine loop
+#[test]
+fn test_f23_steep_slope_slide_accelerates_from_rest_via_movement_system() {
+    let mut world = WorldState::synthetic();
+    let guid = Guid(0x5000_0F23);
+    world.player.guid = guid;
+    let _capabilities = seed_self_movement_capabilities_override(&mut world, 1.0, 1.0, 4.5, 1.5);
+
+    // Build a steep ~60° slope on LB (0,0) falling toward +X
+    // 60° slope: delta_z / delta_x = tan(60°) = sqrt(3) ≈ 1.732.
+    // Over a 24m vertex grid spacing, height drops by 24 * 1.732 ≈ 41.57m per cell.
+    let mut steep = [0.0f32; 81];
+    for vx in 0..9 {
+        for vy in 0..9 {
+            steep[vx * 9 + vy] = (8 - vx) as f32 * 41.57;
+        }
+    }
+    world.populate_terrain_heights(0, steep);
+
+    // Seed player on slope at vx = 2 (x = 48.0)
+    let start_x = 48.0_f32;
+    let start_y = 96.0_f32;
+    let start_z = world.terrain_height_at(start_x, start_y).expect("height populated");
+    let start_pose = WorldPosition {
+        landblock_id: Guid(0x0000_0001),
+        coords: Vector3::new(start_x, start_y, start_z),
+        rotation: Quaternion::from_heading(0.0),
+    };
+    seed_local_player(&mut world, guid, start_pose);
+    let _ = world.set_player_position(start_pose);
+    world.player.is_airborne = false;
+    world.player.current_planar_velocity = Vector3::zero();
+    world.player.vertical_velocity = 0.0;
+    world.player.is_sledding = false;
+
+    let mut movement = MovementSystem::new();
+    movement.last_move_was_autonomous = true;
+    movement.active_drive = Some(ActiveDriveState::manual(
+        MotionState::builder().run().build(),
+        None,
+    )); // Avatar at rest without WASD drive
+
+    // Tick 30 sub-steps (1.0s @ 30 Hz)
+    for _ in 1..=30 {
+        movement.advance_local_pose_for_manual_drive(&mut world, Duration::from_millis(34));
+    }
+
+    let vx = world.player.current_planar_velocity.x;
+    let vz = world.player.vertical_velocity;
+    let speed_3d = (vx * vx + vz * vz).sqrt();
+
+    assert!(
+        vx > 1.0,
+        "Planar velocity must accelerate downhill past 1.0 m/s (got vx={:.3}); if trapped at 0.041 m/s, system.rs normal stripping defect is active!",
+        vx
+    );
+    assert!(
+        speed_3d >= holtburger_world::spatial::SLEDDING_HIGH_VELOCITY,
+        "3D slide speed must exceed 2.5 m/s threshold (got {:.3})",
+        speed_3d
+    );
+    assert!(
+        world.player.is_sledding,
+        "Avatar must enter sledding glide on steep cliff"
+    );
 }

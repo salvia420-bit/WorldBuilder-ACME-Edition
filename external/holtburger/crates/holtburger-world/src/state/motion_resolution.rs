@@ -130,6 +130,9 @@ impl WorldState {
                     if p.turn_right.is_none() {
                         p.turn_right = d.turn_right;
                     }
+                    if p.sidestep_right.and_then(|k| k.velocity).is_none() {
+                        p.sidestep_right = d.sidestep_right;
+                    }
                     Some(r)
                 }
                 (None, d) => d,
@@ -361,6 +364,10 @@ impl WorldState {
                 turn_right: self
                     .motion_kinematics
                     .cycle_kinematics(motion_table_id, stance, MotionTable::TURN_RIGHT_COMMAND)
+                    .copied(),
+                sidestep_right: self
+                    .motion_kinematics
+                    .cycle_kinematics(motion_table_id, stance, MotionTable::SIDESTEP_RIGHT_COMMAND)
                     .copied(),
             },
         })

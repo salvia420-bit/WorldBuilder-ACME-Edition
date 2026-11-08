@@ -244,11 +244,8 @@ pub(crate) fn segment_crosses_polygon(
 const USE_RETAIL_INTERPOLATE: bool = true;
 
 /// Bug-A leash echo gate (2026-07-03) — native baseline for
-/// [`SpatialScene::set_leash_echo_gate`]. `false` keeps the test/golden
-/// baseline on the pre-gate arm (the `retailQuantum` carrier-split
-/// precedent); the browser rides `?leashEchoGate` (DEFAULT-ON since
-/// F-2026-07-04 — 1070 confirm capture: applied +0 / gated +344 /
-/// carriers 0, user verdict "no snapback"; `=off` is the escape).
+/// [`SpatialScene::set_leash_echo_gate`]. Gated routine echo
+/// `remote_interpolate_to` on `autonomy_level != 2` (Feature 27).
 const USE_LEASH_ECHO_GATE: bool = false;
 
 /// Physics deep-dive 2026-06-01 (gap 4) — retail autonomy-blip /

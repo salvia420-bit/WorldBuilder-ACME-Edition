@@ -123,6 +123,7 @@ const TIER1 = [
   { flag: "retailCamZoom+camStiffness+mouseSmooth", file: "tests/camera_retail_math.test.cjs" },
   { flag: "remoteInterp(JS)", file: "tests/remote_interp_ownership.test.cjs" },
   { flag: "jumpParity(JS)", file: "tests/jump_charge_parity.test.cjs" },
+  { flag: "playerMovementE2E", file: "tests/player_movement_multi_tier_e2e.test.mjs" },
   // Unified poser vs mixer-clip parity, incl. the in-place locomotion fix.
   { flag: "unifiedMotion(poser)", file: "test_motion_sequence.mjs" },
   // Exercises the REAL compiled wasm MotionSequence boundary (entities.js path);
@@ -192,6 +193,8 @@ const TIER4 = [
   { flag: "unifiedQueuePreempt", file: "tests/unified_queue_preempt.test.mjs" },
   { flag: "unifiedMotionAuthority", file: "tests/unified_motion_authority.test.mjs" },
   { flag: "signedMotionSpeed", file: "tests/turn_left_reverse.test.mjs" },
+  { flag: "jumpLifecycle", file: "tests/jump_animation_lifecycle.test.mjs" },
+  { flag: "stanceRoutingLoco", file: "tests/stance_routing_and_loco_transitions.test.mjs" },
   { flag: "projectileAlignPath", file: "tests/projectile_align_path.test.mjs" },
   { flag: "projectileOmega+particleRotAce", file: "tests/projectile_spin.test.mjs" },
 ].map((t) => ({ ...t, tier: 4 }));

@@ -77,7 +77,7 @@ pub fn burden_load_modifier(burden: f32) -> f32 {
 /// the snapback class Stage 1 fixed returns exactly at stamina 0.
 /// Default-off const-gate pattern (url-flags.md §6); flipping it means
 /// editing this source + wasm rebuild. Rollback: const off.
-pub const USE_EXHAUSTION_RUN_RATE: bool = false;
+pub const USE_EXHAUSTION_RUN_RATE: bool = true;
 
 /// The exhaustion input fold: wire Stamina current == 0 → run skill
 /// treated as 0 (ACE server-side `runSkill = stamina == 0 ? 0 : ...`;

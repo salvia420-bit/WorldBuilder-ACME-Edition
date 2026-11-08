@@ -1141,7 +1141,19 @@ import { retailVolume } from "./audio/retail_sound_rules.js";
 // audio-2 (2026-10-08 round 2): sound emitters at the object's WORLD position
 // (a wielded rig's root is hand-local).
 import { emitterPosThree, threeToAc } from "./audio/emitter_position.js";
-import { AnimationCache, cycleTimeScale } from "./animation.js";
+import {
+  AnimationCache,
+  cycleTimeScale,
+  CROSSFADE_LOCO_MS,
+  CROSSFADE_STANCE_MS,
+  CROSSFADE_TAKEOFF_MS,
+  CROSSFADE_LANDING_MS,
+  FADE_LOCOMOTION_SEC,
+  FADE_STANCE_SWAP_SEC,
+  FADE_TAKEOFF_SEC,
+  FADE_LANDING_SEC,
+  CROSSFADE_STANDARDS,
+} from "./animation.js";
 // Routes the recolored/paletted entity-surface decode through the bake worker
 // (off the main thread) with a transparent main-thread fallback.
 // `surfacePixelsFetcher` does the same for the non-recolored entity surface
@@ -1708,14 +1720,45 @@ const LOCO_PREWARM_ON = (() => {
 })();
 
 // Low-16 substates a locomotion link joins: Ready, WalkForward, WalkBackwards,
-// RunForward, TurnRight/Left, SideStepRight/Left, Falling.
-const LOCO_LINK_LOWS = new Set([0x0003, 0x0005, 0x0006, 0x0007, 0x000d, 0x000e, 0x000f, 0x0010, 0x0015]);
+// RunForward, TurnRight/Left, SideStepRight/Left, Crouch, Falling.
+const LOCO_LINK_LOWS = new Set([0x0003, 0x0005, 0x0006, 0x0007, 0x000d, 0x000e, 0x000f, 0x0010, 0x0012, 0x0015]);
 /** A link whose both ends are locomotion substates (or "no motion yet"). */
 export function isLocomotionLink(fromCmd, toCmd) {
   const f = (fromCmd >>> 0) & 0xffff;
   const t = (toCmd >>> 0) & 0xffff;
   return (f === 0 || LOCO_LINK_LOWS.has(f)) && LOCO_LINK_LOWS.has(t);
 }
+
+/**
+ * Canonical closed-form base speeds (m/s) for humanoid/player locomotion cycles.
+ * Prevents 0-speed cache-miss stalls during async MotionTable hydration.
+ */
+export function canonicalCycleBaseSpeed(motionCommand) {
+  const low = (motionCommand >>> 0) & 0xffff;
+  switch (low) {
+    case 0x0007: // RunForward (0x44000007)
+      return 4.0000;
+    case 0x0005: // WalkForward (0x45000005) & canonicalized backward walk
+      return 2.6017;
+    case 0x000f: // SideStepRight (0x6500000F) & canonicalized SideStepLeft
+    case 0x0010:
+      return 1.2500;
+    default:
+      return 0.0;
+  }
+}
+
+export {
+  CROSSFADE_LOCO_MS,
+  CROSSFADE_STANCE_MS,
+  CROSSFADE_TAKEOFF_MS,
+  CROSSFADE_LANDING_MS,
+  FADE_LOCOMOTION_SEC,
+  FADE_STANCE_SWAP_SEC,
+  FADE_TAKEOFF_SEC,
+  FADE_LANDING_SEC,
+  CROSSFADE_STANDARDS,
+};
 
 // A5-P2 (unification survey 2026-06-11) — `?tweenClock` (DEFAULT ON since
 // 2026-10-19, ahead of its 1070 eye test; `=off|0|false|no|wall` keeps the
@@ -3830,6 +3873,13 @@ function isMissileReloadCommand(cmd) {
 }
 function isMissileSubstateCommand(cmd) {
   return isMissileAimCommand(cmd) || isMissileReloadCommand(cmd);
+}
+function isPostureSubstateCommand(cmd) {
+  const c = (cmd >>> 0) & 0xffff;
+  return c === 0x0012; // Crouch (0x41000012)
+}
+function isSubstateTransitionCommand(cmd) {
+  return isMissileSubstateCommand(cmd) || isPostureSubstateCommand(cmd);
 }
 // The wasm bridge filters a forward-slot use command (Reload, Eat, Drink) out of
 // KIND_MOTION and leaves motion_command 0 there (position.rs), which setMotion
@@ -10377,6 +10427,7 @@ export class EntityManager {
       speed: (inst._motionSpeed ?? 1.0) * ((inst._motionSpeedSign ?? 1) < 0 ? -1 : 1),
     };
     inst._airborneSinceMs = performance.now();
+    inst._takeoffCrossfadeMs = CROSSFADE_TAKEOFF_MS;
     if (this._jumpAnimLogOk(g)) {
       try {
         // eslint-disable-next-line no-console
@@ -10394,6 +10445,7 @@ export class EntityManager {
     const gm = inst._groundMotion;
     inst._groundMotion = null;
     inst._airborneSinceMs = 0;
+    inst._landingCrossfadeMs = CROSSFADE_LANDING_MS;
     const stance = ((gm?.stance || inst.currentStance || inst.lastStance || 0) >>> 0);
     const cmd = gm?.cmd && (gm.cmd & 0xffff) !== CMD_LOW_FALLING ? gm.cmd >>> 0 : CMD_READY_FULL;
     if (this._jumpAnimLogOk(g)) {
@@ -11571,30 +11623,42 @@ export class EntityManager {
 
   _unifiedLocoGaitScale(inst, base) {
     let scale;
-    // MoveTo refactor phase D (2026-10-10): a WALK cycle plays at its
-    // `forward_speed` on every rig, players included — COL-10 reverted, the
-    // walking body moves at the table's walk speed × forward_speed (retail
-    // root motion), so retail's `change_cycle_speed` cadence keeps the feet
-    // planted. The velScale path divided the 3.12 m/s `get_state_velocity`
-    // constant by the table's 2.6017 and played the walk at 1.199×.
-    // `?creatureGait=off` restores it.
-    const walkCycle = ((inst?._forwardCommand >>> 0) === 0x45000005);
-    // ?retailGaitTempo: every rig, players included, plays at its speed_mod.
-    // `?creatureGait=off` stays the escape for all of it (the old velScale
-    // tempo for everyone, url-flags.md).
-    const serverMover = CREATURE_GAIT_RETAIL_ON && (RETAIL_GAIT_TEMPO_ON
-      || walkCycle || (((inst?.guid >>> 0) & 0xF0000000) >>> 0) !== 0x50000000);
-    if (base > 0 && !serverMover) {
+    const isPlayer = (((inst?.guid >>> 0) & 0xF0000000) >>> 0) === 0x50000000;
+    const fwdCmd = (inst?._forwardCommand >>> 0) || ((inst?._unifiedLoco?.desc?.motionCommand >>> 0) || 0);
+    const sideCmd = (inst?._sidestepCommand >>> 0);
+    const walkCycle = ((fwdCmd & 0xffff) === 0x0005);
+    const runCycle = ((fwdCmd & 0xffff) === 0x0007);
+    const sideCycle = ((sideCmd & 0xffff) === 0x000f) || ((sideCmd & 0xffff) === 0x0010)
+      || ((fwdCmd & 0xffff) === 0x000f) || ((fwdCmd & 0xffff) === 0x0010);
+    const isLocomotion = walkCycle || runCycle || sideCycle;
+
+    // Resolve base speed: use cached authored base, falling back to closed-form canonical
+    let effectiveBase = base;
+    if (effectiveBase <= 1e-4 && isLocomotion) {
+      effectiveBase = canonicalCycleBaseSpeed(fwdCmd || sideCmd || (inst._unifiedLoco?.desc?.motionCommand));
+    }
+
+    // Player rigs with locomotion cycles ALWAYS use velocity-to-playback scaling (Feature 28)
+    const applyVelScale = isPlayer && isLocomotion && effectiveBase > 1e-4;
+
+    if (applyVelScale) {
+      // 1. Prefer actual physical ground speed (wasm / EMA / stateGroundSpeed)
       let actual = this._resolveStateGroundSpeed(inst);
       const fromGetter = Number.isFinite(actual) && actual > 0;
-      if (!fromGetter) actual = inst._emaSpeed ?? 0;
-      const velComp = cycleTimeScale(actual, base);
-      // Getter path: velComp is the complete scale (motionSpeed already encoded,
-      // matching the mixer tick). EMA fallback composes with motionSpeed.
-      scale = fromGetter ? velComp : velComp * (inst._motionSpeed ?? 1.0);
+      if (!fromGetter) {
+        actual = inst._emaSpeed ?? 0;
+      }
+      // 2. Compute timeScale = clamp(0.25, 4.0, |actual| / base)
+      scale = cycleTimeScale(actual, effectiveBase);
+    } else if (effectiveBase > 0 && !CREATURE_GAIT_RETAIL_ON) {
+      let actual = this._resolveStateGroundSpeed(inst);
+      if (!Number.isFinite(actual) || actual <= 0) actual = inst._emaSpeed ?? 0;
+      scale = cycleTimeScale(actual, effectiveBase);
     } else {
+      // Native / creature rate fallback or non-locomotion (Ready idle, turns)
       scale = inst._motionSpeed ?? 1.0;
     }
+
     const signed = scale * (inst._motionSpeedSign ?? 1);
     // Guard against a zero/negative-at-rest stall (idle still needs to tick its
     // cycle); fall back to native rate on a non-finite result.
@@ -12917,8 +12981,7 @@ export class EntityManager {
       const linkTo = (isSubstateCastGesture(fromMotion) && cmd === CMD_LOW_READY)
         ? CMD_READY_FULL : cmd;
       const toSignedSpeed = (inst._motionSpeed ?? 1.0) * (inst._motionSpeedSign ?? 1);
-      if (this._missileSubstateOn && !styleLinksP &&
-          (isMissileSubstateCommand(cmd) || isMissileSubstateCommand(fromMotion))) {
+      if (!styleLinksP && (isSubstateTransitionCommand(cmd) || isSubstateTransitionCommand(fromMotion))) {
         hopsP = this._fetchSubstateLinks(inst, setupId, mtableId, fromMotion, linkTo, stance, prevSubstateSpeed);
       } else if (SIGNED_LINKS_ON && (prevSignedSpeed < 0 || toSignedSpeed < 0) &&
                  isLocomotionLink(fromMotion, linkTo)) {
@@ -13113,14 +13176,16 @@ export class EntityManager {
       paletteId: (inst.meta.paletteId ?? 0) >>> 0,
       paletteSubsFlat: inst.meta.subPalettes ?? new Uint32Array(0),
     };
-    const READY = CMD_READY_FULL, WALK = 0x45000005, RUN = 0x44000007;
-    for (const cmd of [RUN, WALK, 0x6500000f, 0x6500000d, 0x40000015]) {
+    const READY = CMD_READY_FULL, WALK = 0x45000005, RUN = 0x44000007, CROUCH = 0x41000012, FALLING = 0x40000015;
+    for (const cmd of [RUN, WALK, 0x6500000f, 0x6500000d, FALLING, CROUCH]) {
       Promise.resolve()
         .then(() => this.animationCache.get(setupId, mtableId, cmd, stance, fetchKeyframes, opts))
         .catch(() => {});
     }
     const links = [
       [READY, RUN], [RUN, READY], [READY, WALK], [WALK, READY], [WALK, RUN], [RUN, WALK],
+      [READY, CROUCH], [CROUCH, READY],
+      [RUN, FALLING], [READY, FALLING], [FALLING, READY], [FALLING, RUN],
     ];
     for (const [a, b] of links) {
       this._fetchLinkEntry(inst, setupId, mtableId, a, b, stance).catch(() => {});

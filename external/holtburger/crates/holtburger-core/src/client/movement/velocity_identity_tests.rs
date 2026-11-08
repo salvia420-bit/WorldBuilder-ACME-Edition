@@ -28,6 +28,7 @@ fn authored_capabilities(run_rate_scalar: f32) -> SelfMovementCapabilities {
             base_run_forward_velocity: Vector3::new(0.0, 4.0, 0.0),
             base_turn_left_omega: Vector3::new(0.0, 0.0, -1.5),
             base_turn_right_omega: Vector3::new(0.0, 0.0, 1.5),
+            base_sidestep_right_velocity: Vector3::new(1.25, 0.0, 0.0),
         },
         run_rate_scalar,
     }
@@ -92,7 +93,8 @@ fn identity_interpreted_matches_legacy_local_velocity_for_state() {
 /// scaling, `:343539-343594` state velocity):
 ///   forward = run_base(4.0) x run_rate
 ///   sidestep = 1.25 x min(1.248 x run_rate, 3.0)
-///   diagonal = hypot(forward, sidestep)   [UNCAPPED on the ground]
+/// Milestone 1: diagonal velocity magnitude is clamped to 4.0 * run_rate
+/// (retail get_state_velocity acclient.c:343586).
 #[test]
 fn o6_strafe_diagonal_closed_form_matches_retail_capture() {
     // Solve the capture's run_rate from the run-forward realization.
@@ -126,24 +128,18 @@ fn o6_strafe_diagonal_closed_form_matches_retail_capture() {
     // Forward reproduces the capture exactly, by construction.
     assert!((forward_only.length() - 7.884).abs() < 1e-3);
 
-    // The closed form predicts ~8.462 for that same run_rate.
-    let expected = ((4.0_f32 * run_rate).powi(2)
-        + (SIDESTEP_ANIM_SPEED
-            * (SIDESTEP_FACTOR * (WALK_ANIM_SPEED / SIDESTEP_ANIM_SPEED) * run_rate)
-                .min(MAX_SIDESTEP_ANIM_RATE))
-        .powi(2))
-    .sqrt();
+    // Milestone 1: Diagonal velocity is clamped to RUN_ANIM_SPEED * run_rate (4.0 * run_rate = 7.884 m/s).
+    let expected_cap = 4.0_f32 * run_rate;
     assert!(
-        (diagonal.length() - expected).abs() < 1e-3,
-        "diagonal {} != closed form {}",
+        (diagonal.length() - expected_cap).abs() < 1e-3,
+        "diagonal {} != clamped cap {}",
         diagonal.length(),
-        expected
+        expected_cap
     );
-
-    // And that closed form is within tolerance of RETAIL's 8.468 —
-    // i.e. the FORMULA is not the O6 defect.
     assert!(
-        (expected - 8.468).abs() < 0.05,
-        "closed form {expected} should track retail 8.468"
+        (legacy_diagonal.length() - expected_cap).abs() < 1e-3,
+        "legacy diagonal {} != clamped cap {}",
+        legacy_diagonal.length(),
+        expected_cap
     );
 }

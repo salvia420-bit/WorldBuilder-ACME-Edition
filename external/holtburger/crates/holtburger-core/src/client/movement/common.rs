@@ -781,14 +781,14 @@ pub(super) const PLAYER_GROUND_FRICTION_RETAIL: f32 = 0.95;
 /// this, friction is forced to `1.0` (full stop within the quantum). Retail
 /// `calc_friction` (`PhysicsObj.cs:2132-2133`): `velocity_mag2 < 1.5625f`.
 /// `1.5625 = 1.25^2` (1.25 m/s).
-pub(super) const SLEDDING_LOW_VELOCITY_SQ: f32 = 1.5625;
+pub const SLEDDING_LOW_VELOCITY_SQ: f32 = 1.5625;
 
 /// SLEDDING high-speed override: when sledding *and* on a STEEP slope
 /// (`ContactPlane.Normal.Z < SLEDDING_STEEP_NORMAL_Z`) and `velocity_mag^2`
 /// is at/above this, friction stays at `0.2` (near-frictionless glide — the
 /// retail mountain-slide). Retail `calc_friction` (acclient.c:316124-316128):
 /// `velocity_mag2 >= 6.25f`. `6.25 = 2.5^2` (2.5 m/s).
-pub(super) const SLEDDING_HIGH_VELOCITY_SQ: f32 = 6.25;
+pub const SLEDDING_HIGH_VELOCITY_SQ: f32 = 6.25;
 
 /// Steep-slope cutoff gating the SLEDDING high-speed override: the glide
 /// survives only when `ContactPlane.Normal.Z <` this (slope steeper than
@@ -798,7 +798,7 @@ pub(super) const SLEDDING_HIGH_VELOCITY_SQ: f32 = 6.25;
 /// f32 bits (0x3F7C1C5C) with `cos(10°)` narrowed. ACE inverted this gate
 /// (`PhysicsObj.cs:2135` `N.z > 0.99999536` — glide on DEAD-FLAT ground);
 /// the old `SLEDDING_FLAT_NORMAL_Z = 0.99999536` port inherited the bug.
-pub(super) const SLEDDING_STEEP_NORMAL_Z: f32 = 0.98480775;
+pub const SLEDDING_STEEP_NORMAL_Z: f32 = 0.98480775;
 
 /// Into-surface early-return cutoff. Retail `calc_friction`
 /// (`PhysicsObj.cs:2125`): if `dot(Velocity, ContactPlane.Normal) >= 0.25f`
@@ -806,7 +806,7 @@ pub(super) const SLEDDING_STEEP_NORMAL_Z: f32 = 0.98480775;
 /// applies this quantum. `0.25` is the same magnitude as
 /// [`PLAYER_VELOCITY_SNAP_THRESHOLD_M_PER_SEC`] (retail `SmallVelocity`),
 /// reused here as the surface-separation gate.
-pub(super) const FRICTION_AWAY_FROM_SURFACE_CUTOFF: f32 = 0.25;
+pub const FRICTION_AWAY_FROM_SURFACE_CUTOFF: f32 = 0.25;
 
 /// Port of ACE `PhysicsObj.calc_friction` (`external/ACE/Source/ACE.Server/
 /// Physics/PhysicsObj.cs:2120-2141`) — the 1:1 readable proxy for retail
@@ -828,7 +828,7 @@ pub(super) const FRICTION_AWAY_FROM_SURFACE_CUTOFF: f32 = 0.25;
 /// is the caller's pre-projection `velocity.length_squared()` — matches ACE,
 /// which passes `Velocity.LengthSquared()` (post-`MaxVelocity` clamp) from
 /// `UpdatePhysicsInternal` (`PhysicsObj.cs:1834,1849`).
-pub(super) fn calc_friction(
+pub fn calc_friction(
     velocity: &mut Vector3,
     normal: Vector3,
     velocity_mag2: f32,
@@ -910,6 +910,50 @@ pub(crate) const HUGE_QUANTUM: f32 = 2.0;
 /// unbounded; retail caps it at 50 m/s.
 pub(super) const MAX_VELOCITY: f32 = 50.0;
 
+/// Milestone 1: Rotational acceleration in rad/s^2 for player heading yaw.
+/// Prevents instantaneous snapping to target turn omega (1.5 / 2.25 rad/s).
+/// At 8.0 rad/s^2, ramping to 1.5 rad/s takes ~0.19 s; ramping to 2.25 rad/s takes ~0.28 s.
+pub(super) const PLAYER_ROTATIONAL_ACCELERATION_RAD_PER_SEC_SQ: f32 = 8.0;
+
+/// Milestone 1: Rotational damping / friction decay factor per second when turning input ceases.
+/// Mirrors ground friction decay shape for angular velocity: omega *= pow(1.0 - f, dt).
+pub(super) const PLAYER_ROTATIONAL_FRICTION: f32 = 0.95;
+
+/// Milestone 1: Cutoff below which residual rotational velocity snaps to zero (rad/s).
+/// Approx 2.86 deg/s (~0.05 rad/s), preventing micro-drift at rest.
+pub(super) const PLAYER_ROTATIONAL_SNAP_THRESHOLD_RAD_PER_SEC: f32 = 0.05;
+
+/// Step rotational velocity (yaw omega around Z axis) toward `target_omega` over quantum `dt_s`.
+///
+/// When turning input is active (`target_omega.abs() > f32::EPSILON`), smoothly accelerates
+/// toward `target_omega` capped by `accel_rad_per_sec_sq * dt_s`.
+///
+/// When turning input ceases (`target_omega.abs() <= f32::EPSILON`), applies exponential
+/// damping decay `omega *= pow(1.0 - rot_friction, dt_s)` and snaps to 0 when below `snap_threshold`.
+pub(super) fn step_rotational_velocity(
+    current_omega: f32,
+    target_omega: f32,
+    accel_rad_per_sec_sq: f32,
+    rot_friction: f32,
+    snap_threshold: f32,
+    dt_s: f32,
+) -> f32 {
+    if target_omega.abs() > f32::EPSILON {
+        let max_step = accel_rad_per_sec_sq * dt_s;
+        let delta = target_omega - current_omega;
+        current_omega + delta.clamp(-max_step, max_step)
+    } else if current_omega.abs() > f32::EPSILON {
+        let decayed = current_omega * (1.0 - rot_friction).powf(dt_s);
+        if decayed.abs() < snap_threshold {
+            0.0
+        } else {
+            decayed
+        }
+    } else {
+        0.0
+    }
+}
+
 /// Retail `update_object` entry epsilon: a frame of `dt <= 0.0002` s is
 /// CONSUMED (update_time = cur_time) and nothing integrates
 /// (acclient.c:323123 `if (v6 > 0.00019999999)`). `0.0002_f32` shares
@@ -941,6 +985,7 @@ const MAX_SIDESTEP_ANIM_RATE: f32 = 3.0;
 /// the m/s velocity per unit sidestep anim rate in `get_state_velocity`
 /// (`velocity.X = SidestepAnimSpeed * SideStepSpeed`,
 /// `MotionInterp.cs:682-683`).
+#[allow(dead_code)]
 const SIDESTEP_ANIM_SPEED: f32 = 1.25;
 
 /// ACE `adjust_motion`'s SideStep speed adjustment
@@ -1010,10 +1055,8 @@ fn forward_axis_speed(state: MotionState, capabilities: &SelfMovementCapabilitie
         (_, None) => 0.0,
         (Gait::Run, Some(ForwardLocomotion::Forward)) => capabilities.resolved_manual_run_speed(),
         (Gait::Walk, Some(ForwardLocomotion::Forward)) => capabilities.base_walk_forward_speed(),
-        (Gait::Run, Some(ForwardLocomotion::Backstep)) => {
-            capabilities.base_walk_forward_speed() * BACKWARDS_FACTOR * capabilities.run_rate_scalar
-        }
-        (Gait::Walk, Some(ForwardLocomotion::Backstep)) => {
+        (Gait::Run, Some(ForwardLocomotion::Backstep))
+        | (Gait::Walk, Some(ForwardLocomotion::Backstep)) => {
             capabilities.base_walk_forward_speed() * BACKWARDS_FACTOR
         }
     }
@@ -1028,14 +1071,15 @@ fn forward_axis_speed(state: MotionState, capabilities: &SelfMovementCapabilitie
 /// values (walk 1.0, run `min(run_rate, 3.0)`) were 0.64× retail below
 /// the clamp knee and 0.8× at the maxed run rate.
 fn sidestep_axis_speed(state: MotionState, capabilities: &SelfMovementCapabilities) -> f32 {
+    let base_speed = capabilities.base_sidestep_speed();
     match (state.gait, state.sidestep) {
         (_, None) => 0.0,
         (Gait::Run, Some(_)) => {
             let anim_rate =
                 (SIDESTEP_ADJUST_FACTOR * capabilities.run_rate_scalar).min(MAX_SIDESTEP_ANIM_RATE);
-            SIDESTEP_ANIM_SPEED * anim_rate
+            base_speed * anim_rate
         }
-        (Gait::Walk, Some(_)) => SIDESTEP_ANIM_SPEED * SIDESTEP_ADJUST_FACTOR,
+        (Gait::Walk, Some(_)) => base_speed * SIDESTEP_ADJUST_FACTOR,
     }
 }
 
@@ -1048,7 +1092,9 @@ fn sidestep_axis_speed(state: MotionState, capabilities: &SelfMovementCapabiliti
 /// `player_run_rate()`) IS that already-resolved number, so the fallback
 /// ladder is upstream of us. ACE: `MotionInterp.cs:665-675,689-693`.
 fn state_velocity_speed_cap(capabilities: &SelfMovementCapabilities) -> f32 {
-    RUN_ANIM_SPEED * capabilities.run_rate_scalar
+    capabilities
+        .resolved_manual_run_speed()
+        .max(RUN_ANIM_SPEED * capabilities.run_rate_scalar)
 }
 
 /// MOVE-F6 — the renormalize tail of `CMotionInterp::get_state_velocity`
@@ -1195,7 +1241,7 @@ pub(super) fn local_velocity_for_state(
         velocity = velocity + planar_velocity_for_heading(sign_heading, sidestep_axis_speed(state, capabilities));
     }
 
-    velocity
+    cap_state_velocity(velocity, state_velocity_speed_cap(capabilities))
 }
 
 /// F1-3 (movement bughunt 2026-06-09): the raw wire turn speed is the
@@ -1272,6 +1318,7 @@ mod tests {
                 base_run_forward_velocity: Vector3::new(2.0, 0.0, 0.0),
                 base_turn_left_omega: Vector3::new(0.0, 0.0, -1.5),
                 base_turn_right_omega: Vector3::new(0.0, 0.0, 1.5),
+                base_sidestep_right_velocity: Vector3::new(1.25, 0.0, 0.0),
             },
             run_rate_scalar: 1.0,
         }
@@ -1560,8 +1607,7 @@ mod tests {
         let cap = state_velocity_speed_cap(&capabilities);
         assert!((cap - 18.0).abs() < 1e-5, "ceiling expected 18.0, got {cap}");
 
-        let heading = 0.7_f32;
-        let raw = local_velocity_for_state(heading, run_diagonal(), &capabilities);
+        let raw = Vector3::new(18.0, 3.75, 0.0);
         assert!(
             raw.length() > cap,
             "fixture must exceed the ceiling, got {:.4}",
@@ -1634,25 +1680,93 @@ mod tests {
     /// (`:343586-343593`) and its only consumer is
     /// `get_leave_ground_velocity` (`:343821`).
     #[test]
-    fn ground_composition_is_not_capped() {
+    fn ground_composition_is_capped_at_state_velocity_speed_cap() {
         let capabilities = retail_walk_base_capabilities(4.5);
         let cap = state_velocity_speed_cap(&capabilities);
 
         let ground = local_velocity_for_state(0.7, run_diagonal(), &capabilities);
         assert!(
-            ground.length() > cap,
-            "the ground diagonal must exceed the launch ceiling as retail's does \
-             ({:.4} vs {cap}) — capping here would slow the shipped ground lane \
-             below retail and split it from `motion_interp::ground_velocity`",
+            (ground.length() - cap).abs() < 1e-3,
+            "ground diagonal @rr=4.5 must clamp to {cap:.4} m/s, got {:.4}",
             ground.length(),
         );
-        // Retail's numbers, spelled out: 4.0×4.5 forward ⊕ 3.0×1.25 strafe.
-        let expected = ((4.0_f32 * 4.5).powi(2) + 3.75_f32.powi(2)).sqrt();
-        assert!(
-            (ground.length() - expected).abs() < 1e-3,
-            "ground diagonal @rr=4.5 expected {expected:.4} m/s, got {:.4}",
-            ground.length(),
+    }
+
+    #[test]
+    fn backward_locomotion_speed_is_equal_across_gaits() {
+        let capabilities = retail_walk_base_capabilities(2.0);
+        let walk_back = local_velocity_for_state(
+            0.0,
+            MotionState::builder().walk().backstep().build(),
+            &capabilities,
         );
+        let run_back = local_velocity_for_state(
+            0.0,
+            MotionState::builder().run().backstep().build(),
+            &capabilities,
+        );
+        assert_eq!(walk_back, run_back);
+        assert!((walk_back.length() - 3.12 * BACKWARDS_FACTOR).abs() < 1e-3);
+    }
+
+    #[test]
+    fn step_rotational_velocity_smoothly_accelerates_toward_target() {
+        let dt = 1.0 / 30.0;
+        let mut omega = 0.0_f32;
+        let target = 2.25_f32;
+        omega = step_rotational_velocity(
+            omega,
+            target,
+            PLAYER_ROTATIONAL_ACCELERATION_RAD_PER_SEC_SQ,
+            PLAYER_ROTATIONAL_FRICTION,
+            PLAYER_ROTATIONAL_SNAP_THRESHOLD_RAD_PER_SEC,
+            dt,
+        );
+        let expected_step = 8.0 * dt;
+        assert!((omega - expected_step).abs() < 1e-5);
+        assert!(omega < target);
+
+        for _ in 0..10 {
+            omega = step_rotational_velocity(
+                omega,
+                target,
+                PLAYER_ROTATIONAL_ACCELERATION_RAD_PER_SEC_SQ,
+                PLAYER_ROTATIONAL_FRICTION,
+                PLAYER_ROTATIONAL_SNAP_THRESHOLD_RAD_PER_SEC,
+                dt,
+            );
+        }
+        assert!((omega - target).abs() < 1e-5);
+    }
+
+    #[test]
+    fn step_rotational_velocity_smoothly_damps_on_release() {
+        let dt = 1.0 / 30.0;
+        let mut omega = 2.25_f32;
+        let target = 0.0_f32;
+        omega = step_rotational_velocity(
+            omega,
+            target,
+            PLAYER_ROTATIONAL_ACCELERATION_RAD_PER_SEC_SQ,
+            PLAYER_ROTATIONAL_FRICTION,
+            PLAYER_ROTATIONAL_SNAP_THRESHOLD_RAD_PER_SEC,
+            dt,
+        );
+        let expected_decay = 2.25 * (1.0 - 0.95_f32).powf(dt);
+        assert!((omega - expected_decay).abs() < 1e-4);
+        assert!(omega > 0.0);
+
+        for _ in 0..60 {
+            omega = step_rotational_velocity(
+                omega,
+                target,
+                PLAYER_ROTATIONAL_ACCELERATION_RAD_PER_SEC_SQ,
+                PLAYER_ROTATIONAL_FRICTION,
+                PLAYER_ROTATIONAL_SNAP_THRESHOLD_RAD_PER_SEC,
+                dt,
+            );
+        }
+        assert_eq!(omega, 0.0);
     }
 
     /// The capped composition IS retail's leave-ground form. Cross-check
@@ -1848,6 +1962,7 @@ mod tests {
                 base_run_forward_velocity: Vector3::new(0.0, 4.0, 0.0),
                 base_turn_left_omega: Vector3::new(0.0, 0.0, -1.5),
                 base_turn_right_omega: Vector3::new(0.0, 0.0, 1.5),
+                base_sidestep_right_velocity: Vector3::new(1.25, 0.0, 0.0),
             },
             run_rate_scalar,
         }
@@ -1881,10 +1996,12 @@ mod tests {
         let state = MotionState::builder().run().backstep().build();
 
         let velocity = local_velocity_for_state(0.0, state, &capabilities);
-        let expected = 3.12 * BACKWARDS_FACTOR * run_factor; // ≈ 2.028 * 2.0
+        // Retail backward walking speed is invariant across walk and run gaits:
+        // run_rate_scalar does NOT multiply backstep speed.
+        let expected = 3.12 * BACKWARDS_FACTOR;
         assert!(
             (velocity.length() - expected).abs() < 1e-4,
-            "run backstep speed expected ≈ {expected:.4} m/s (3.12 * 0.65 * {run_factor}), got {:.4}",
+            "run backstep speed expected ≈ {expected:.4} m/s (3.12 * 0.65), got {:.4}",
             velocity.length(),
         );
     }
@@ -2267,5 +2384,51 @@ mod tests {
         set_retail_raw_default_omission(Some(false));
         let data = build_move_to_state(&world, raw(), MovementPacketMetadata::default());
         assert_eq!(data.raw_motion_state, raw());
+    }
+
+    #[test]
+    fn test_calc_friction_sledding_glide_and_exit() {
+        // Flat ground normal
+        let flat_n = Vector3::new(0.0, 0.0, 1.0);
+        // 20° slope normal (Nz = cos(20°) ≈ 0.93969 < SLEDDING_STEEP_NORMAL_Z)
+        let steep_n = Vector3::new(0.34202, 0.0, 0.9396926);
+
+        let dt = 1.0 / 30.0;
+        let ground_friction = PLAYER_GROUND_FRICTION_RETAIL; // 0.95
+
+        // Case 1: Sledding active, high speed (3.0 m/s >= 2.5 m/s) on steep slope
+        // Friction modulated to 0.2: decay is (1 - 0.2)^dt = 0.8^dt
+        let mut v_glide = Vector3::new(0.0, 3.0, 0.0);
+        let speed_sq = v_glide.length_squared(); // 9.0 >= 6.25
+        calc_friction(&mut v_glide, steep_n, speed_sq, ground_friction, true, dt);
+        let expected_speed = 3.0 * (1.0 - 0.2_f32).powf(dt);
+        assert!(
+            (v_glide.length() - expected_speed).abs() < 1e-4,
+            "Sledding on steep slope must glide with f=0.2, expected {expected_speed}, got {}",
+            v_glide.length()
+        );
+
+        // Case 2: Sledding active on flat ground (Nz = 1.0 >= SLEDDING_STEEP_NORMAL_Z)
+        // Friction reverts to default ground friction (0.95)
+        let mut v_flat = Vector3::new(3.0, 0.0, 0.0);
+        let speed_sq_flat = v_flat.length_squared();
+        calc_friction(&mut v_flat, flat_n, speed_sq_flat, ground_friction, true, dt);
+        let expected_flat = 3.0 * (1.0 - ground_friction).powf(dt);
+        assert!(
+            (v_flat.length() - expected_flat).abs() < 1e-4,
+            "Sledding onto flat ground must revert to default ground friction 0.95, expected {expected_flat}, got {}",
+            v_flat.length()
+        );
+
+        // Case 3: Sledding active, low speed (1.0 m/s < 1.25 m/s threshold, speed_sq = 1.0 < 1.5625)
+        // Friction forced to 1.0: velocity completely stopped
+        let mut v_slow = Vector3::new(0.0, 1.0, 0.0);
+        let speed_sq_slow = v_slow.length_squared();
+        calc_friction(&mut v_slow, steep_n, speed_sq_slow, ground_friction, true, dt);
+        assert_eq!(
+            v_slow,
+            Vector3::zero(),
+            "Sledding below 1.25 m/s must force friction to 1.0 (full stop)"
+        );
     }
 }

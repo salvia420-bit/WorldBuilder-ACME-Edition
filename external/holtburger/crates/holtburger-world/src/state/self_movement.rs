@@ -30,9 +30,14 @@ pub struct SelfMovementKinematics {
     pub base_run_forward_velocity: Vector3,
     pub base_turn_left_omega: Vector3,
     pub base_turn_right_omega: Vector3,
+    pub base_sidestep_right_velocity: Vector3,
 }
 
 impl SelfMovementKinematics {
+    pub fn base_sidestep_speed(&self) -> f32 {
+        let speed = self.base_sidestep_right_velocity.length();
+        if speed > 1e-4 { speed } else { 1.25 }
+    }
     pub fn base_walk_forward_speed(&self) -> f32 {
         self.base_walk_forward_velocity.length()
     }
@@ -127,6 +132,10 @@ impl SelfMovementCapabilities {
 
     pub fn base_turn_right_speed_rad_per_sec(&self) -> f32 {
         self.kinematics.base_turn_right_speed_rad_per_sec()
+    }
+
+    pub fn base_sidestep_speed(&self) -> f32 {
+        self.kinematics.base_sidestep_speed()
     }
 
     pub fn kinematics(&self) -> &SelfMovementKinematics {
@@ -263,6 +272,8 @@ impl WorldState {
             base_run_forward_velocity,
             base_turn_left_omega,
             base_turn_right_omega,
+            base_sidestep_right_velocity: optional_sidestep_velocity(&resolution)
+                .unwrap_or(Vector3::new(1.25, 0.0, 0.0)),
         })
     }
 
@@ -339,6 +350,13 @@ fn optional_turn_right_omega(resolution: &PlayerMotionTableResolution) -> Option
         .movement_profile
         .turn_right
         .and_then(|entry| entry.omega)
+}
+
+fn optional_sidestep_velocity(resolution: &PlayerMotionTableResolution) -> Option<Vector3> {
+    resolution
+        .movement_profile
+        .sidestep_right
+        .and_then(|entry| entry.velocity)
 }
 
 fn resolved_turn_omegas(

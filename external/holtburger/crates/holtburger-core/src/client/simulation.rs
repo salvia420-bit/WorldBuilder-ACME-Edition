@@ -474,7 +474,7 @@ impl ClientSimulationSystem {
                             planar.y,
                             world.player.vertical_velocity,
                         ),
-                        omega: Vector3::zero(),
+                        omega: Vector3::new(0.0, 0.0, world.player.current_turn_omega),
                         contact: if world.player.is_airborne {
                             ContactState::Airborne
                         } else {
