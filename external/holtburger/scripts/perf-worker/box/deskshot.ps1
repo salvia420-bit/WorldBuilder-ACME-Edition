@@ -25,8 +25,8 @@ $out = New-Object System.Collections.Generic.List[string]
     $pn = (Get-Process -Id $p -ErrorAction SilentlyContinue).ProcessName
     if ($t.Length -gt 0 -or $c.ToString() -eq 'ConsoleWindowClass') { $out.Add("pid=$p proc=$pn class=$($c.ToString()) rect=$($r.L),$($r.T),$($r.R),$($r.B) title=[$($t.ToString())]") }
   }; return $true }, [IntPtr]::Zero) | Out-Null
-$out | Set-Content -Path 'D:\Temp\hbbench\deskwin.txt' -Encoding UTF8
+$out | Set-Content -Path 'C:\tmp\hbbench\deskwin.txt' -Encoding UTF8
 $b = [System.Windows.Forms.SystemInformation]::VirtualScreen
 $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
 $g = [System.Drawing.Graphics]::FromImage($bmp); $g.CopyFromScreen($b.Left, $b.Top, 0, 0, $bmp.Size)
-$bmp.Save('D:\Temp\hbbench\desk.png', [System.Drawing.Imaging.ImageFormat]::Png); $g.Dispose(); $bmp.Dispose()
+$bmp.Save('C:\tmp\hbbench\desk.png', [System.Drawing.Imaging.ImageFormat]::Png); $g.Dispose(); $bmp.Dispose()

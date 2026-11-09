@@ -631,6 +631,8 @@ export class GridResidencyAdapter {
     // Pressure state (S4). Floors are ladder-adjustable, NEVER below
     // PARK_FLOOR_EMERGENCY_MS, NEVER 0.
     this.parkFloorMs = PARK_FLOOR_MS;
+    this._traversalSpeedMps = 0;
+    this._lastShiftMs = 0;
     this.parkBudgetScale = 1; // R2 halves for the emergency's duration
     this.sealedCore = null; // Set<tileKey> pinned return core while sealed
     this._sealedEntryTile = -1;
@@ -665,7 +667,14 @@ export class GridResidencyAdapter {
       this.parkSched.reset();
       if (res.vacated.length > 0) this._beginTeleportDrain(res.vacated);
     } else {
-      // Shift: a re-entering tile cancels its pending park (anti zig-zag).
+      // Shift: track traversal velocity and cancel pending park for re-entering tiles
+      const now = this.now();
+      if (this._lastShiftMs > 0) {
+        const dt = Math.max(0.5, (now - this._lastShiftMs) / 1000);
+        const instSpeed = 384 / dt; // 1 tile = 2 LBs = 384m
+        this._traversalSpeedMps = this._traversalSpeedMps ? (0.7 * this._traversalSpeedMps + 0.3 * instSpeed) : instSpeed;
+      }
+      this._lastShiftMs = now;
       this.parkSched.onResident(res.admitted);
       for (const tile of res.vacated) this._vacate(tile);
     }
@@ -1079,11 +1088,27 @@ export class GridResidencyAdapter {
   }
 
   /**
+   * Velocity-sensitive adaptive park floor calculation (Milestone 2 optimization):
+   * When the player is traversing expanses, trailing landblocks will not be immediately
+   * revisited. Scale parkFloorMs adaptively from 30 s down to 8–10 s during high-speed
+   * forward travel so trailing landblocks drain smoothly tick-by-tick.
+   */
+  getAdaptiveParkFloorMs() {
+    const base = this.parkFloorMs;
+    const speed = this._traversalSpeedMps || 0;
+    if (speed > 10) {
+      const factor = Math.min(1.0, (speed - 10) / 25.0);
+      return Math.max(PARK_FLOOR_EMERGENCY_MS, Math.round(base - factor * (base - 8000)));
+    }
+    return base;
+  }
+
+  /**
    * The class-local park-pool budget loop (S4.1): ≤40 tiles AND
-   * ≤128 MiB × parkBudgetScale, floor honored (30 s; ladder R4 lowers to
-   * 5 s, never 0), farthest-from-player-first oldest-tie, ≤1 tile released
-   * per tick. All-young + over-budget ⇒ run over and count. The sealed
-   * return core and the player's 3×3 are never victims (R1–R3).
+   * ≤128 MiB × parkBudgetScale, floor honored (30 s adaptively scaled down to 8-10 s
+   * during traversal; ladder R4 lowers to 5 s, never 0), farthest-from-player-first
+   * oldest-tie, ≤1 tile released per tick. All-young + over-budget ⇒ run over and count.
+   * The sealed return core and the player's 3×3 are never victims (R1–R3).
    * @param {boolean} [emergency]  R4: core pins may be shed (loudly)
    */
   tickPressure(emergency = false) {
@@ -1092,8 +1117,8 @@ export class GridResidencyAdapter {
     const maxBytes = Math.floor(PARK_POOL_MAX_BYTES * this.parkBudgetScale);
     if (pool.length <= maxTiles && bytes <= maxBytes) return;
     const nowMs = this.now();
-    // Floor: NEVER zero (the deleted landblock_lru.js:1373-1374 pathology).
-    const floorMs = Math.max(PARK_FLOOR_EMERGENCY_MS, this.parkFloorMs);
+    // Velocity-sensitive adaptive floor: scales down during traversal, never below emergency floor
+    const floorMs = Math.max(PARK_FLOOR_EMERGENCY_MS, this.getAdaptiveParkFloorMs());
     const playerTile = this.grid.playerTile;
     const candidates = [];
     let deferred = 0;

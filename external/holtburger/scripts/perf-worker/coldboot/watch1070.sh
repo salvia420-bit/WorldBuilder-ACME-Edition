@@ -26,14 +26,14 @@ END=0; [ -n "$WATCH1070_MAX_S" ] && END=$(( $(date +%s) + WATCH1070_MAX_S ))
 echo "$(date +%H:%M:%S) watch1070 started (pid $$${WATCH1070_MAX_S:+, max ${WATCH1070_MAX_S}s})"
 last=$(cat "$ST" 2>/dev/null); fails=0; gpuhits=0; previdle=-1; brhits=0; rearmed=0
 killchrome() {
-  timeout 30 ssh -o ConnectTimeout=10 -o BatchMode=yes $BOX 'powershell -NoProfile -ExecutionPolicy Bypass -File D:\Temp\hbbench\hbbench-kill.ps1' >/dev/null 2>&1
+  timeout 30 ssh -o ConnectTimeout=10 -o BatchMode=yes $BOX 'powershell -NoProfile -ExecutionPolicy Bypass -File C:\tmp\hbbench\hbbench-kill.ps1' >/dev/null 2>&1
 }
 while true; do
   if [ "$END" -gt 0 ] && [ "$(date +%s)" -ge "$END" ]; then
     echo "$(date +%H:%M:%S) watch1070 lifetime reached — exiting (gate1070.sh now refuses until a watcher runs again)"
     exit 0
   fi
-  line=$(timeout 25 ssh -o ConnectTimeout=10 -o BatchMode=yes $BOX 'powershell -NoProfile -ExecutionPolicy Bypass -File D:\Temp\hbbench\hbwho.ps1' 2>/dev/null | tr -d '\r' | grep '^idle=' | tail -1)
+  line=$(timeout 25 ssh -o ConnectTimeout=10 -o BatchMode=yes $BOX 'powershell -NoProfile -ExecutionPolicy Bypass -File C:\tmp\hbbench\hbwho.ps1' 2>/dev/null | tr -d '\r' | grep '^idle=' | tail -1)
   if [ -z "$line" ]; then
     fails=$((fails+1)); [ $fails -ge 3 ] && state=UNREACHABLE || { sleep 15; continue; }
   else
@@ -58,7 +58,7 @@ while true; do
   echo "$(date +%s) $state $line" > "$POLL.tmp" && mv -f "$POLL.tmp" "$POLL"
   if [ "$state" = WATCHER-STALE ] && [ $(( $(date +%s) - rearmed )) -ge 300 ]; then
     rearmed=$(date +%s)
-    timeout 30 ssh -o ConnectTimeout=10 -o BatchMode=yes $BOX 'if not exist D:\Temp\hbbench\idlewatch.stop schtasks /run /tn hbidle' >/dev/null 2>&1 \
+    timeout 30 ssh -o ConnectTimeout=10 -o BatchMode=yes $BOX 'if not exist C:\tmp\hbbench\idlewatch.stop schtasks /run /tn hbidle' >/dev/null 2>&1 \
       && echo "$(date +%H:%M:%S) 1070 heartbeat stale — re-ran hbidle" || echo "$(date +%H:%M:%S) 1070 heartbeat stale — hbidle re-run FAILED"
   fi
   if [ "$state" != "$last" ]; then

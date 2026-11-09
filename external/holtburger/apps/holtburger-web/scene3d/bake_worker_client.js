@@ -532,7 +532,8 @@ function aliasSplitFlagEnabled() {
 // same `isNearPlayerLb` signal now promotes to lane 0 like surface/mesh.
 // `?bakeQueue=off` (also 0/false) restores post-immediately; `?bakeQueueCap=N`
 // tunes the cap. Observe via `__diag.bakeWorkerStats().queue`.
-const DEFAULT_BAKE_QUEUE_CAP = 4;
+// Tuned to 8 (from 4) for parallel decoding of surface meshes & textures during rapid traversal.
+const DEFAULT_BAKE_QUEUE_CAP = 8;
 
 // F1 (2026-08-03) — post-crash respawn cooldown, doubling per CONSECUTIVE
 // failure. 1 s is short enough that a one-off fault costs at most one bake's
@@ -1474,7 +1475,10 @@ export class BakeWorkerClient {
     if (!lane || lane.length === 0) return null;
     const seen = new Set();
     for (const d of head.body.dids) seen.add(d >>> 0);
-    if (seen.size >= cap) return null;
+    // Smooth coalescing: cap merged submissions at 20 DIDs (within 16–24 range down from 64)
+    // to prevent massive synchronous geometry/texture construction spikes on the main thread.
+    const effectiveCap = cap > 24 ? 20 : cap;
+    if (seen.size >= effectiveCap) return null;
     const urgent = head.body.urgent === true;
     const riders = [];
     for (let i = 0; i < lane.length; ) {
@@ -1488,7 +1492,7 @@ export class BakeWorkerClient {
         const v = d >>> 0;
         if (!seen.has(v)) fresh.add(v);
       }
-      if (seen.size + fresh.size > cap) break;
+      if (seen.size + fresh.size > effectiveCap) break;
       for (const v of fresh) seen.add(v);
       riders.push(e);
       lane.splice(i, 1);
@@ -1499,7 +1503,7 @@ export class BakeWorkerClient {
   /**
    * `?bakeUrgentReserve`: may a lane-0 entry post although the cap is full?
    * Open while fewer than `slots` lane-0 messages are in flight and the mode
-   * applies (`all`, or `packs` with the pack controller armed).
+   * applies (`all`, or `packs` with the pack controller armed, or near-player urgent).
    */
   _urgentReserveOpen() {
     const r = this.urgentReserve;
@@ -1508,7 +1512,10 @@ export class BakeWorkerClient {
     if (r.mode !== "packs") return false;
     try {
       const f = globalThis.__hbFetch;
-      return !!(f && f.enabled === true);
+      if (f && f.enabled === true) return true;
+      if (globalThis.__hbUrgentReserveActive) return true;
+      if (typeof location !== "undefined" && new URLSearchParams(location.search).get("bakeUrgentReserve") === "all") return true;
+      return false;
     } catch (_) {
       return false;
     }

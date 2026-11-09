@@ -3,7 +3,7 @@
 // sample (box/hbwho.ps1 + top processes by CPU, one ssh round trip; lib/hb_v2.mjs builds and parses
 // it). The commands are hbbench.mjs's own (box/hbprobe-launch.bat reads profile.txt / winsize.txt /
 // uncapped.txt / angle.txt / disablefeatures.txt / extraflags.txt; box/hbbench-kill.ps1 kills only
-// Chrome whose command line is under D:\Temp\hbbench\). Nothing here runs at import time.
+// Chrome whose command line is under C:\tmp\hbbench\). Nothing here runs at import time.
 // Kill discipline (2026-10-30): every launching path kills in a `finally` that a failed write or box
 // sample cannot skip, and armKillOnSignal covers Ctrl-C (tests/hb_v2.test.mjs pins both).
 //
@@ -30,9 +30,9 @@ export function sshRetry(cmd, o = {}) {
   return retry(() => ssh(cmd, o), { tries: o.tries || 3, delays: o.delays || [5000, 20000] });
 }
 
-/** Kill only the bench Chrome (profile under D:\Temp\hbbench\) and drop old hbb-* profiles. Never throws. */
+/** Kill only the bench Chrome (profile under C:\tmp\hbbench\) and drop old hbb-* profiles. Never throws. */
 export function killBench() {
-  try { ssh("powershell -NoProfile -ExecutionPolicy Bypass -File D:\\Temp\\hbbench\\hbbench-kill.ps1"); } catch (_) { /* box gone: the next launch step reports it */ }
+  try { ssh("powershell -NoProfile -ExecutionPolicy Bypass -File C:\\tmp\\hbbench\\hbbench-kill.ps1"); } catch (_) { /* box gone: the next launch step reports it */ }
 }
 
 /** Exit codes of a signal-terminated run (128 + signal number). */
@@ -71,18 +71,18 @@ const META = /[&|<>^"]/;
  */
 export async function prepareLaunch({ profile, windowOuter = "1280,720", uncapped = false, chrome = {} }) {
   for (const v of [profile, windowOuter]) if (META.test(String(v))) throw new Error(`cmd metacharacters are not allowed (${v})`);
-  await sshRetry(`echo ${profile}> D:\\Temp\\hbbench\\profile.txt`);
-  await sshRetry(`echo ${windowOuter}> D:\\Temp\\hbbench\\winsize.txt`);
-  await sshRetry(uncapped ? "echo 1> D:\\Temp\\hbbench\\uncapped.txt" : "if exist D:\\Temp\\hbbench\\uncapped.txt del D:\\Temp\\hbbench\\uncapped.txt");
+  await sshRetry(`echo ${profile}> C:\\tmp\\hbbench\\profile.txt`);
+  await sshRetry(`echo ${windowOuter}> C:\\tmp\\hbbench\\winsize.txt`);
+  await sshRetry(uncapped ? "echo 1> C:\\tmp\\hbbench\\uncapped.txt" : "if exist C:\\tmp\\hbbench\\uncapped.txt del C:\\tmp\\hbbench\\uncapped.txt");
   const ch = chrome || {};
   for (const [file, val] of [["angle.txt", ch.angle || ""], ["disablefeatures.txt", ch.disableFeatures || ""], ["extraflags.txt", ch.extraFlags || ""]]) {
     if (META.test(val)) throw new Error(`${file}: cmd metacharacters are not allowed (${val})`);
-    await sshRetry(val ? `echo ${val}> D:\\Temp\\hbbench\\${file}` : `if exist D:\\Temp\\hbbench\\${file} del /q D:\\Temp\\hbbench\\${file}`);
+    await sshRetry(val ? `echo ${val}> C:\\tmp\\hbbench\\${file}` : `if exist C:\\tmp\\hbbench\\${file} del /q C:\\tmp\\hbbench\\${file}`);
   }
 }
 
-/** The scheduled task + launcher every existing caller uses (hbprobe-launch.bat: fresh D:\Temp\hbbench\ profile). */
-export const LAUNCH_DEFAULTS = Object.freeze({ task: "hbprobe", launcher: "D:\\Temp\\hbbench\\hbprobe-launch.bat" });
+/** The scheduled task + launcher every existing caller uses (hbprobe-launch.bat: fresh C:\tmp\hbbench\ profile). */
+export const LAUNCH_DEFAULTS = Object.freeze({ task: "hbprobe", launcher: "C:\\tmp\\hbbench\\hbprobe-launch.bat" });
 
 /**
  * The box command that (re)creates and runs the hidden launch task (2026-10-30, M1c lane: `task` /
@@ -93,7 +93,7 @@ export const LAUNCH_DEFAULTS = Object.freeze({ task: "hbprobe", launcher: "D:\\T
 export function launchTaskCommand({ task = LAUNCH_DEFAULTS.task, launcher = LAUNCH_DEFAULTS.launcher } = {}) {
   if (!/^hb[A-Za-z0-9_-]{1,40}$/.test(String(task))) throw new Error(`launch task name must be hb<word> (got ${task})`);
   if (META.test(String(launcher)) || /\s/.test(String(launcher)) || !/^[A-Za-z]:\\[^\s]+\.bat$/i.test(String(launcher))) throw new Error(`launcher must be an absolute .bat path without spaces or cmd metacharacters (got ${launcher})`);
-  return `schtasks /create /tn ${task} /tr "wscript.exe //B //Nologo D:\\Temp\\hbbench\\hidden-run.vbs ${launcher}" /sc once /st 00:00 /it /f >nul 2>nul & schtasks /run /tn ${task} >nul`;
+  return `schtasks /create /tn ${task} /tr "wscript.exe //B //Nologo C:\\tmp\\hbbench\\hidden-run.vbs ${launcher}" /sc once /st 00:00 /it /f >nul 2>nul & schtasks /run /tn ${task} >nul`;
 }
 
 /**

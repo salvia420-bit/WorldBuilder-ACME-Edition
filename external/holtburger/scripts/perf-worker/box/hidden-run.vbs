@@ -10,7 +10,7 @@
 ' so the off-screen window still renders. Same pattern as idlewatch.vbs.
 '
 ' Scheduled-task action (scripts/perf-worker/*.mjs create it this way):
-'   wscript.exe //B //Nologo D:\Temp\hbbench\hidden-run.vbs D:\Temp\hbbench\hbprobe-launch.bat
+'   wscript.exe //B //Nologo C:\tmp\hbbench\hidden-run.vbs C:\tmp\hbbench\hbprobe-launch.bat
 ' The batch's exit code is the task's result (hbgate refusal = 1).
 Option Explicit
 Dim sh, cmd, i

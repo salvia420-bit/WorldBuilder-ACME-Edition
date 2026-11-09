@@ -71,7 +71,7 @@ export const ITEM = "M1c-WEBAC";
 export const SCHEMA = "m1c-webac-w-v1";
 /** The WebAC profile: FIXED and PERSISTENT (its OPFS holds the ~1.27 GB DAT cache), unlike our fresh-profile arms. */
 export const PROFILE = "C:\\Temp\\hbm1c-webac";
-export const LAUNCHER = "D:\\Temp\\hbbench\\m1c-webac-launch.bat";
+export const LAUNCHER = "C:\\tmp\\hbbench\\m1c-webac-launch.bat";
 export const TASK = "hbm1cwebac";
 /** A kill ROOT must carry all of these (the owner's MODE P Chrome on the same profile carries none of the last two). */
 export const ROOT_FLAGS = Object.freeze(["--remote-debugging-port=9333", "--mute-audio", "--window-position=-32000,-32000"]);
@@ -237,7 +237,7 @@ export function chromeArgs({ profile = PROFILE, window = DEFAULTS.window, uncapp
     "--disable-backgrounding-occluded-windows", ...(uncapped ? ["--disable-frame-rate-limit", "--disable-gpu-vsync"] : [])];
 }
 
-/** D:\Temp\hbbench\m1c-webac-launch.bat (CRLF). hbgate.ps1 first (the owner rule), noflash.ps1 after. */
+/** C:\Temp\hbbench\m1c-webac-launch.bat (CRLF). hbgate.ps1 first (the owner rule), noflash.ps1 after. */
 export function launcherBat(o = {}) {
   const profile = o.profile || PROFILE;
   return [
@@ -245,10 +245,10 @@ export function launcherBat(o = {}) {
     "rem m1c-webac-launch.bat - written by scripts/perf-worker/m1c-webac.mjs before every M1c W rep; edit the .mjs, not this file.",
     "rem MODE T: off-screen at -32000,-32000 and never minimized, muted, CDP 9333, and the PERSISTENT WebAC profile",
     `rem ${profile} whose OPFS keeps the 1.27 GB DAT cache between reps. Owner gate first, as in hbprobe-launch.bat.`,
-    "powershell -NoProfile -ExecutionPolicy Bypass -File D:\\Temp\\hbbench\\hbgate.ps1",
+    "powershell -NoProfile -ExecutionPolicy Bypass -File C:\\tmp\\hbbench\\hbgate.ps1",
     "if errorlevel 1 exit /b 1",
     `start "" "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe" ${chromeArgs({ ...o, profile }).join(" ")} about:blank`,
-    "start \"\" /b powershell -NoProfile -ExecutionPolicy Bypass -File D:\\Temp\\hbbench\\noflash.ps1 -Seconds 3600",
+    "start \"\" /b powershell -NoProfile -ExecutionPolicy Bypass -File C:\\tmp\\hbbench\\noflash.ps1 -Seconds 3600",
   ].join("\r\n") + "\r\n";
 }
 

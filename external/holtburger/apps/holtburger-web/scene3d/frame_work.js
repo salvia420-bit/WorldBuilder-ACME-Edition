@@ -230,10 +230,10 @@ export const MODES = Object.freeze(["NORMAL", "BOOT", "TELEPORT", "EMERGENCY", "
 const TELEPORT_CHEBYSHEV = 6;
 // Per-resume cost estimate clamp for W6 yield grants (real cost is reported at
 // the NEXT yield; until then the grant is charged at the family's last chunk
-// ms, defaulting to the house 6).
+// ms, defaulting to 3).
 const EST_MIN_MS = 0.5;
 const EST_MAX_MS = 50;
-const EST_DEFAULT_MS = 6;
+const EST_DEFAULT_MS = 3;
 
 function _lbChebyshev(a, b) {
   const ax = (a >>> 24) & 0xff; const ay = (a >>> 16) & 0xff;
@@ -268,8 +268,11 @@ export class FrameWorkScheduler {
       crossingBudgetMs: opts.crossingBudgetMs ?? 12,
       minBudgetMs: opts.minBudgetMs ?? 2,
       maxDeferFrames: opts.maxDeferFrames ?? 3,
+      maxForceSliceMs: opts.maxForceSliceMs ?? 4,
+      maxForcePerFrame: opts.maxForcePerFrame ?? 2,
       shrink: opts.shrink ?? true,
       crossing: opts.crossing ?? false,
+      adaptiveCrossing: opts.adaptiveCrossing ?? true,
       byteBudget: opts.byteBudget ?? 8 * 1024 * 1024,
       allocBudget: opts.allocBudget ?? 2,
       destinationReserve: opts.destinationReserve ?? 0.75,
@@ -297,6 +300,7 @@ export class FrameWorkScheduler {
     this._teleportArmed = false;
     this._emergency = false;
     this._lastLbKey = null;
+    this._traversalCrossingFrames = 0;
     /** @type {Record<string, Array<any>>} */
     this._queues = {};
     this._rows = {};
@@ -409,9 +413,15 @@ export class FrameWorkScheduler {
   noteLbKey(lbKey) {
     if (!Number.isFinite(lbKey) || lbKey === 0) return;
     const k = lbKey >>> 0;
-    if (this._lastLbKey !== null && _lbChebyshev(this._lastLbKey, k) >= TELEPORT_CHEBYSHEV) {
-      this._teleportArmed = true;
-      this.teleports += 1;
+    if (this._lastLbKey !== null) {
+      const dist = _lbChebyshev(this._lastLbKey, k);
+      if (dist >= TELEPORT_CHEBYSHEV) {
+        this._teleportArmed = true;
+        this.teleports += 1;
+      } else if (dist > 0 && this.cfg.adaptiveCrossing) {
+        // Continuous walk/traversal crossing: elevate stream budget
+        this._traversalCrossingFrames = 60;
+      }
     }
     this._lastLbKey = k;
   }
@@ -481,7 +491,7 @@ export class FrameWorkScheduler {
     if (this._emergency) return "EMERGENCY";
     if (this._teleportArmed) return "TELEPORT"; // one-shot; consumed by run()
     if (
-      this.cfg.crossing
+      (this.cfg.crossing || (this.cfg.adaptiveCrossing && this._traversalCrossingFrames > 0))
       && (this._queues.W1.length > 0 || this._queues.W3.length > 0 || this._queues.W6.length > 0)
       && Number.isFinite(frameStartMs) && targetPeriodMs > 0
       && (t0 - frameStartMs) < 0.8 * targetPeriodMs
@@ -554,7 +564,19 @@ export class FrameWorkScheduler {
       this.cfg.shrink && (mode === "NORMAL" || mode === "CROSSING")
       && Number.isFinite(frameStartMs) && targetPeriodMs > 0
     ) {
-      budget = Math.max(this.cfg.minBudgetMs, budget - Math.max(0, (t0 - frameStartMs) - targetPeriodMs));
+      const overage = Math.max(0, (t0 - frameStartMs) - targetPeriodMs);
+      let minFloor = this.cfg.minBudgetMs;
+      // Adaptive floor during traversal or under stream starvation:
+      // When stream classes (W3/W6) are accumulating deferrals or during active traversal,
+      // adapt floor to prevent complete streaming starvation while maintaining frame pacing.
+      const hasStarvingStreamWork = (this._rows.W3.deferredFrames > 0 || this._rows.W6.deferredFrames > 0 || this._traversalCrossingFrames > 0);
+      if (hasStarvingStreamWork && this.cfg.minBudgetMs < 3) {
+        minFloor = Math.min(budget, Math.max(this.cfg.minBudgetMs, 3));
+      }
+      budget = Math.max(minFloor, budget - overage);
+    }
+    if (this._traversalCrossingFrames > 0) {
+      this._traversalCrossingFrames -= 1;
     }
     this.mode = mode;
     this.lastBudgetMs = budget;
@@ -610,16 +632,26 @@ export class FrameWorkScheduler {
     // oldest item has waited >= maxDeferFrames force-runs one item. The
     // EMERGENCY W2 pause outranks the ceiling (a paused upload lane must
     // stay paused; R4 windows are short by construction).
+    let forceCount = 0;
+    const maxForcePerFrame = this.cfg.maxForcePerFrame ?? 2;
+    const forceSliceMs = Math.min(budget, this.cfg.maxForceSliceMs ?? 4);
     for (const cls of WORK_CLASSES) {
       if (mode === "EMERGENCY" && cls === "W2") continue;
       const q = this._queues[cls];
       if (q.length === 0 || this._rows[cls].itemsThisFrame > 0) continue;
       if (this._frameIdx - q[0].frameEnqueued >= this.cfg.maxDeferFrames) {
-        // Forced: runs regardless of every cap, but a splitting item still
-        // reads a bounded slice (the mode budget), not Infinity.
-        this._limit = this._spentMs() + budget;
+        if (ranAny && forceCount >= maxForcePerFrame) {
+          // Bounded execution: micro-slice multiple starved classes across subsequent frames
+          // to prevent dumping massive indivisible tasks synchronously.
+          break;
+        }
+        // Forced: runs regardless of every cap, but bounded by micro-slice
+        // to prevent 50–500 ms hitches.
+        this._limit = this._spentMs() + forceSliceMs;
         this._serveOne(cls, q.shift(), true);
         this._limit = Infinity;
+        forceCount += 1;
+        ranAny = true;
       }
     }
     this._inSlot = false;

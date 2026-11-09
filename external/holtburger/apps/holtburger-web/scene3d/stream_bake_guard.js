@@ -25,6 +25,7 @@
 // ?residencyLog (flight-experience Phase 0): bake start / done / fail events and
 // cap / cooldown / in-flight skip counts. No-ops unless the flag is on.
 import { rlogBake, rlogBakeSkip } from "./residency_log.js";
+import { isNearPlayerLb } from "./landblock_lru.js";
 
 export const STREAM_BAKE_RETRY_COOLDOWN_MS = 2500;
 
@@ -183,6 +184,13 @@ export function guardedStreamBake(state, kind, lbKey, run, opts = {}) {
   const k = lbKey >>> 0;
   const guardKey = `${kind}:${k}`;
 
+  // Prioritize near-player bakes: check explicit urgent flag, near-player opts,
+  // or isNearPlayerLb against live scene state.
+  const scene = opts.scene3d || (typeof globalThis !== "undefined" ? (globalThis.liveScene3d || globalThis.__scene3d) : null);
+  const nearPlayer = opts.urgent === true ||
+    opts.isNearPlayer === true ||
+    (scene ? isNearPlayerLb(scene, k) : false);
+
   // Session 7 (1114 §3) — record the ask + its outcome on the wait log so
   // the teleport-window investigation can see WHERE a current-LB bake
   // waits (pre-admission vs in-run) and whether the urgent lane engaged.
@@ -192,7 +200,7 @@ export function guardedStreamBake(state, kind, lbKey, run, opts = {}) {
   if (rec) {
     rec.asks += 1;
     rec.lastAskMs = nowMs;
-    if (opts.urgent === true) rec.urgentAsks += 1;
+    if (nearPlayer) rec.urgentAsks += 1;
   }
 
   // In-flight dedup: a bake for this LB is already running — skip.
@@ -214,12 +222,10 @@ export function guardedStreamBake(state, kind, lbKey, run, opts = {}) {
   }
 
   // Global concurrency cap: if too many bakes are already running (across all
-  // keys), skip STARTING this one. The PVS ring re-fires on later ticks, so a
-  // skipped bake is retried, not lost. Checked after the per-key dedup +
-  // cooldown so neither is bypassed by the cap. streamFix (2026-07-02):
-  // urgent (player-blocking, current-LB/3×3) bakes are cap-exempt — see the
-  // opts doc above.
-  if (opts.urgent !== true && state.inFlight.size >= maxInFlight) {
+  // keys), skip STARTING distant speculative bakes. streamFix / M2:
+  // urgent and near-player (isNearPlayerLb) bakes are cap-exempt so they are never
+  // starved or dropped (skipCap) by distant horizon sweeps.
+  if (!nearPlayer && state.inFlight.size >= maxInFlight) {
     if (rec) rec.skipCap += 1;
     rlogBakeSkip("cap");
     return Promise.resolve(null);

@@ -43,6 +43,7 @@
 // stay candidates and go next tick). Flag OFF the read is Infinity and every
 // loop below keeps its own private budget — byte-identical.
 import { frameWorkSlotRemainingMs, frameWorkNoteSlotYield } from "./frame_work.js";
+import { armLandscapeTexture } from "./texture_release.js";
 // 2026-10-20 (improvement hunt A3 / open-frontier-perf-2 step 1) — pure leaf
 // (no imports), so landblock_lru stays a leaf for lighting.js's lbKeyOf import.
 import { removeChildrenBulk } from "./bulk_child_remove.js";
@@ -710,6 +711,12 @@ export class LandblockLRU {
     this._geomPressureEngagements = 0;
     this._geomPressureActive = false;
 
+    // Milestone 2 — Traversal velocity tracking & amortized buffer disposal
+    this._traversalSpeedMps = 0;
+    this._lastPacedLbKey = null;
+    this._lastPacedLbTs = 0;
+    this._deferredBufferDisposals = [];
+
     // ── #11 sealedPark reserve (2026-08-03) ──────────────────────────────
     // The pinned return core: Map<lbKey, bytes> mirroring the parkPool slots
     // that the sealed purge parked near the keep LB. Membership is the ONLY
@@ -984,7 +991,14 @@ export class LandblockLRU {
       for (const m of options.materials) if (m) d.materials.push(m);
     }
     if (Array.isArray(options.textures)) {
-      for (const t of options.textures) if (t) d.textures.push(t);
+      for (const t of options.textures) {
+        if (t) {
+          d.textures.push(t);
+          if (t.isTexture && !t.isDataArrayTexture && !t.userData?.__rp4Pooled) {
+            armLandscapeTexture(t, t.userData?.surfaceDid || 0x06000001);
+          }
+        }
+      }
     }
     if (Array.isArray(options.lights)) {
       for (const l of options.lights) if (l) d.lights.push(l);
@@ -1194,7 +1208,42 @@ export class LandblockLRU {
     return Number.isFinite(r) && r > 0 ? (r | 0) : 0;
   }
 
+  _enqueueDeferredBufferDisposals(geometries) {
+    if (!Array.isArray(geometries) || geometries.length === 0) return;
+    for (const g of geometries) {
+      if (g && g.userData?.__cacheOwned !== true) this._deferredBufferDisposals.push(g);
+    }
+  }
+
+  _drainDeferredBufferDisposals(maxCount = 40) {
+    if (!this._deferredBufferDisposals || this._deferredBufferDisposals.length === 0) return;
+    const slice = this._deferredBufferDisposals.splice(0, maxCount);
+    for (const g of slice) {
+      try { g.dispose && g.dispose(); } catch (_) {}
+    }
+  }
+
+  /**
+   * Velocity-sensitive adaptive park floor calculation (Milestone 2 optimization):
+   * When moving fast across expanses, trailing landblocks will not be revisited.
+   * Scale park floor adaptively from 30 s down to 8–10 s during high-speed travel
+   * so trailing landblocks drain smoothly tick-by-tick and prevent memory bloat.
+   */
+  getAdaptiveParkFloorMs(nowMs = (typeof performance !== "undefined" ? performance.now() : Date.now())) {
+    const base = PARK_USE_TIME_MS;
+    if (base <= 0) return 0;
+    const speed = this._traversalSpeedMps || 0;
+    if (speed > 5) {
+      const factor = Math.min(1.0, (speed - 5) / 20.0);
+      return Math.max(8000, Math.round(base - factor * (base - 8000)));
+    }
+    return base;
+  }
+
   tickEviction(currentLbKeyArg, sealedKeepLbKeyArg = 0) {
+    // Drain any deferred WebGL buffer deletions
+    this._drainDeferredBufferDisposals(40);
+
     // ST7 `?slotGrid` — ASSERT-ONLY arm (see the constructor note): the
     // grid owns residency; this tick computes + diffs, acts on nothing.
     if (this._gridAssert) {
@@ -1204,6 +1253,23 @@ export class LandblockLRU {
     const currentLbKey = currentLbKeyArg != null
       ? lbKeyOf(currentLbKeyArg >>> 0)
       : null;
+
+    // Milestone 2: track traversal movement velocity across landblocks
+    if (currentLbKey && currentLbKey !== this._lastPacedLbKey) {
+      const now = (typeof performance !== "undefined") ? performance.now() : Date.now();
+      if (this._lastPacedLbKey && this._lastPacedLbTs) {
+        const dt = Math.max(0.1, (now - this._lastPacedLbTs) / 1000);
+        const x0 = (this._lastPacedLbKey >>> 24) & 0xff;
+        const y0 = (this._lastPacedLbKey >>> 16) & 0xff;
+        const x1 = (currentLbKey >>> 24) & 0xff;
+        const y1 = (currentLbKey >>> 16) & 0xff;
+        const distM = Math.hypot(x1 - x0, y1 - y0) * 192;
+        const instSpeed = distM / dt;
+        this._traversalSpeedMps = this._traversalSpeedMps ? (0.7 * this._traversalSpeedMps + 0.3 * instSpeed) : instSpeed;
+      }
+      this._lastPacedLbKey = currentLbKey;
+      this._lastPacedLbTs = now;
+    }
 
     // Sealed-dungeon residency purge (2026-07-08). When the player is in a
     // fully-enclosed indoor dungeon (isCurrentCellIndoor && no exterior
@@ -1510,7 +1576,7 @@ export class LandblockLRU {
     for (let i = 0; i < victims.length; i++) {
       // Perf T4 — one LB per stage; an exhausted slot leaves the rest as
       // candidates for the next tick (they are still tracked, still oldest).
-      if (i > 0 && frameWorkSlotRemainingMs() <= 0) {
+      if (i > 0 && frameWorkSlotRemainingMs() < -0.5) {
         this._reclaimSlotDeferred += victims.length - i;
         frameWorkNoteSlotYield();
         break;
@@ -1572,7 +1638,9 @@ export class LandblockLRU {
     // only a genuine geometry-ceiling breach bypasses it (normal play, under the
     // high default cap, never engages this).
     const overGeomAtEntry = this._geomPressure();
-    const floorMs = overGeomAtEntry ? 0 : PARK_USE_TIME_MS;
+    // Milestone 2: Velocity-sensitive adaptive park floor scales from 30 s down to 8–10 s
+    // during high-speed travel, draining trailing landblocks smoothly tick-by-tick.
+    const floorMs = overGeomAtEntry ? 0 : this.getAdaptiveParkFloorMs(nowMs);
     // ── #11 sealedPark RESERVE (2026-08-03) ────────────────────────────────
     // While the player is inside a sealed dungeon, the pinned return core is
     // exempt from BOTH pressure halves. The byte half is obvious. The GEOMETRY
@@ -2002,15 +2070,22 @@ export class LandblockLRU {
     }
 
     // 5. Dispose per-LB owned resources. Skip anything tagged
-    //    `__cacheOwned` (shared MaterialCache surfaces) defensively
-    //    even though track() callers shouldn't be passing those in.
-    for (const g of entry.disposables.geometries) {
-      if (!g) continue;
-      // A11-F3 (landed with Phase 9a): honor the __cacheOwned tag on
-      // geometries too — the comment above always claimed it, and park
-      // widens the population flowing through this loop.
-      if (g.userData?.__cacheOwned === true) continue;
-      try { g.dispose && g.dispose(); } catch (_) {}
+    //    `__cacheOwned` (shared MaterialCache surfaces) defensively.
+    //    Amortize large geometry buffer lists under pressure to prevent WebGL deletion bursts.
+    const geoms = entry.disposables.geometries;
+    const MAX_BURST_GEOM_DISPOSE = 40;
+    if (geoms.length > MAX_BURST_GEOM_DISPOSE) {
+      const immediate = geoms.splice(0, MAX_BURST_GEOM_DISPOSE);
+      for (const g of immediate) {
+        if (!g || g.userData?.__cacheOwned === true) continue;
+        try { g.dispose && g.dispose(); } catch (_) {}
+      }
+      this._enqueueDeferredBufferDisposals(geoms);
+    } else {
+      for (const g of geoms) {
+        if (!g || g.userData?.__cacheOwned === true) continue;
+        try { g.dispose && g.dispose(); } catch (_) {}
+      }
     }
     for (const m of entry.disposables.materials) {
       if (!m) continue;

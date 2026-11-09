@@ -60,6 +60,17 @@
 import { registerReleasedTexture, unregisterReleasedTexture } from "./texture_rehydrate.js";
 import { PLANE, planeFor, warmPlanes } from "./surface_planes.js";
 
+let _landscapeCpuReleaseEnabled = false;
+
+/** Enable or disable CPU memory dropping for streamed landscape textures. */
+export function enableLandscapeCpuRelease(val = true) {
+  _landscapeCpuReleaseEnabled = !!val;
+}
+
+export function isLandscapeCpuReleaseEnabled() {
+  return _landscapeCpuReleaseEnabled || (typeof globalThis !== "undefined" && !!globalThis.__enableLandscapeCpuRelease);
+}
+
 /** Strict `=on` opt-in. See the preconditions above — this one is not a taste
  *  knob, it is gated on other work being finished. */
 export function texFreeCpuEnabled(search = (typeof location !== "undefined" ? location.search : "")) {
@@ -93,7 +104,9 @@ function planeBytes(tex) {
  */
 export function armCpuRelease(tex, plane, surfaceDid, opts = {}) {
   if (!tex || !tex.isTexture) return false;
-  if (!(opts.force || texFreeCpuEnabled())) return false;
+  const isLandscape = !!(opts.landscape || opts.streamed || tex.userData?.isLandscape || tex.userData?.streamed || tex.userData?.isTerrain);
+  const allowLandscape = isLandscape && isLandscapeCpuReleaseEnabled();
+  if (!(opts.force || allowLandscape || texFreeCpuEnabled())) return false;
   if (tex.__cpuReleaseArmed) return true;
   if (!surfaceDid) { _stats.skipped += 1; return false; }
   // Excluded classes — see the header. These are not "unsupported yet", they
@@ -112,6 +125,11 @@ export function armCpuRelease(tex, plane, surfaceDid, opts = {}) {
     releaseNow(tex, plane, surfaceDid);
   };
   return true;
+}
+
+/** Convenience armer for streamed landscape textures. */
+export function armLandscapeTexture(tex, surfaceDid, plane = "albedo") {
+  return armCpuRelease(tex, plane, surfaceDid, { landscape: true, force: true });
 }
 
 /**
@@ -143,6 +161,11 @@ export function releaseNow(tex, plane, surfaceDid) {
   );
 
   if (tex.image) tex.image.data = null;
+  if (Array.isArray(tex.mipmaps)) {
+    for (let i = 0; i < tex.mipmaps.length; i++) {
+      if (tex.mipmaps[i] && tex.mipmaps[i].data) tex.mipmaps[i].data = null;
+    }
+  }
   _stats.released += 1;
   _stats.bytesReleased += bytes;
   return true;
@@ -160,5 +183,6 @@ export function textureReleaseStats() {
 }
 
 export function __resetTextureReleaseForTests() {
+  _landscapeCpuReleaseEnabled = false;
   for (const k of Object.keys(_stats)) _stats[k] = 0;
 }

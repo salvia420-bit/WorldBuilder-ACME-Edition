@@ -163,9 +163,9 @@ await check("DAT_SHIM does what the doc says: every datIterations write reports 
 // hb_box additions (backward compatible)
 // ------------------------------------------------------------------------------------------
 await check("hb_box launchTaskCommand(): with no options byte-identical to the pre-M1c launchChrome command; the W task + launcher ride hidden-run.vbs", () => {
-  assert.equal(BOX.launchTaskCommand(), 'schtasks /create /tn hbprobe /tr "wscript.exe //B //Nologo D:\\Temp\\hbbench\\hidden-run.vbs D:\\Temp\\hbbench\\hbprobe-launch.bat" /sc once /st 00:00 /it /f >nul 2>nul & schtasks /run /tn hbprobe >nul');
-  assert.equal(BOX.launchTaskCommand({ task: M.TASK, launcher: M.LAUNCHER }), 'schtasks /create /tn hbm1cwebac /tr "wscript.exe //B //Nologo D:\\Temp\\hbbench\\hidden-run.vbs D:\\Temp\\hbbench\\m1c-webac-launch.bat" /sc once /st 00:00 /it /f >nul 2>nul & schtasks /run /tn hbm1cwebac >nul');
-  for (const bad of [{ task: "x&y" }, { task: "probe" }, { launcher: "D:\\Temp\\a b.bat" }, { launcher: "D:\\Temp\\x.bat&calc" }, { launcher: "relative.bat" }]) assert.throws(() => BOX.launchTaskCommand(bad), Error, JSON.stringify(bad));
+  assert.equal(BOX.launchTaskCommand(), 'schtasks /create /tn hbprobe /tr "wscript.exe //B //Nologo C:\\tmp\\hbbench\\hidden-run.vbs C:\\tmp\\hbbench\\hbprobe-launch.bat" /sc once /st 00:00 /it /f >nul 2>nul & schtasks /run /tn hbprobe >nul');
+  assert.equal(BOX.launchTaskCommand({ task: M.TASK, launcher: M.LAUNCHER }), 'schtasks /create /tn hbm1cwebac /tr "wscript.exe //B //Nologo C:\\tmp\\hbbench\\hidden-run.vbs C:\\tmp\\hbbench\\m1c-webac-launch.bat" /sc once /st 00:00 /it /f >nul 2>nul & schtasks /run /tn hbm1cwebac >nul');
+  for (const bad of [{ task: "x&y" }, { task: "probe" }, { launcher: "C:\\Temp\\a b.bat" }, { launcher: "C:\\Temp\\x.bat&calc" }, { launcher: "relative.bat" }]) assert.throws(() => BOX.launchTaskCommand(bad), Error, JSON.stringify(bad));
 });
 
 await check("hb_box launchChrome(cdp, {task, launcher, run, fetch, sleep}): sends the task command, polls /json/version", async () => {
