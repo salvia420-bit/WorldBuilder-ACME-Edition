@@ -284,6 +284,7 @@ export function createWeaponsFx(deps = {}) {
   // ------------------------------------------------------------------ explosions
 
   function explode(at, lb) {
+    try { deps.onExplode?.(at, lb); } catch (_) {}
     if (!ensure()) return;
     stats.explosions++;
     while (explosions.length >= MAX_EXPLOSIONS) disposeExplosion(explosions.shift());

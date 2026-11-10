@@ -1543,6 +1543,11 @@ const TIER5 = [
   // the Hellcat built from AC parts + its armament (HBV1 v2: quarrels, lightning rails, bombs) and the 2026-11-02 client
   // review fixes (no boarding while falling, chute leak, seq resync, latched G / V, pad edges in the fall)
   { tier: 5, flag: "vehicles", file: "tests/vehicle_armament.test.mjs" },
+  // 2026-11-10 Hellcat overhaul: procedural R-2800 WebAudio + Doppler, procedural F6F-5/F6F-6 PBR airframe + AeroFX,
+  // Mouse-Aim PD instructor + 3-mode camera rig + graphical fighter HUD + full-stack installVehicles E2E.
+  { tier: 5, flag: "vehicleAudio", file: "tests/vehicle_audio.test.mjs" },
+  { tier: 5, flag: "vehicleModel", file: "tests/vehicle_airframe_model.test.mjs" },
+  { tier: 5, flag: "vehicles", file: "tests/vehicle_experience.test.mjs" },
   // 2026-11-01 flight experience (docs/flight-experience-2026-11-01): the Phase 0
   // residency sampler (?residencyLog) — flips, holes, lead times on a mock scene.
   { tier: 5, flag: "residencyLog", file: "tests/residency_log.test.mjs" },

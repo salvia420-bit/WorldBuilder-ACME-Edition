@@ -89,3 +89,23 @@ Default URL as above (`?vehicles=on`). `?vehicleAirframe=off` shows the old stan
 - Damage numbers: quarrel 9 (Pierce), bolt = Incantation of Lightning Bolt via a 400-spellcraft launcher, 2,000 lb 1,200 at the centre / 45 m radius, 1,000 lb 700 / 32 m. Bombs and bolts kill most low-level monsters outright.
 - Rearm only on the ground after 6 s parked (no more infinite 2-s reload) — keep?
 - GC launch settings (`~/ace-server/run-ace-live.sh`) on this laptop: keep, or back to ACE's defaults?
+
+## Session 4 (2026-11-10): Procedural F6F-5/F6F-6 airframe, R-2800 soundscape, Mouse-Aim & Fighter HUD
+
+Default URL: `?vehicles=on` (procedural Hellcat model, R-2800 audio, and AeroFX are all default **on**). Comparison escapes: `?vehicleModel=retail` (reverts to the AC-item composite airframe), `?vehicleAeroFx=off`, `?vehicleAudio=off`, `?vehicleDebug=on`.
+
+Updated keys while seated:
+- `M`: toggle Pointer-Lock Mouse-Aim Instructor (move mouse to place aim ring; aircraft banks/pitches smoothly onto cursor; `LMB` fire `.50 cal`, `MMB` HVAR rocket, `RMB` or `C` freelook, mouse wheel throttle `±4%`)
+- `[` / `]` / `\`: nose-down / nose-up / reset elevator pitch trim
+- `1` / `2` / `3`: drop specific bomb station (`V` drops heaviest remaining)
+- `Tab`: cycle `chase` → `cockpit` (through Mk 8 reflector sight) → `hood` (gun-camera over cowling)
+
+| # | What | Look & listen for |
+|---|---|---|
+| 24 | Procedural F6F-5 parked | USN WWII tricolor finish (Non-Specular Sea Blue spine, Intermediate Blue flanks, Insignia White belly), US star-and-bar insignia, "smiling" lower cowling intake with 18-cylinder R-2800 radial visible inside, canopy slid open while parked, 11° tail-down stance on oleo main struts + tailwheel, HVAR rockets & AN-M65/M66 bombs slung cleanly under gull-break wings |
+| 25 | Control surfaces, gear & prop | On ground/flight: `A/D`, `W/S`, `Q/E` visibly deflect ailerons (differential), elevators, and rudder; `L` lowers landing flaps; takeoff slides the canopy shut and twists the main gear 90° backward flush into the wing wells; 3-blade Hamilton Standard prop transitions smoothly into a translucent motion-blur disc with yellow tip ring as RPM rises; cowling exhaust stacks glow orange/blue at high throttle / `Shift` WEP |
+| 26 | 3-mode camera & cockpit sight (`Tab`) | `Chase`: banks 48% with aircraft, pulls back slightly on WEP surge, looks into banked turns, subtle gun/G-buffet shake. `Cockpit`: framed cleanly behind the armored windscreen looking through the glowing amber Mk 8 reflector sight reticle over the cowling (no pilot head clipping). `Hood`: dramatic over-the-cowling gun-camera view |
+| 27 | Mouse-Aim (`M`) & Fighter HUD | Press `M` to lock pointer and fly one-handed with the mouse; pitch ladder + horizon bar tilt/scroll cleanly, compass tape tracks heading, velocity vector (`—o—`) shows true flight path, dive-bomb fall-line connects velocity vector to ground CCIP pipper, `EventKind.Hit` flashes a crisp center hitmarker `X` + damage pop, sustained `>4.2 G` dims peripheral G-vignette |
+| 28 | AeroFX (`?vehicleAeroFx`) | Hard `>3 G` banked pull draws white wingtip condensation vortex ribbons trailing behind both wingtips; engine startup and `Shift` WEP emit subtle dark radial exhaust puffs; flying `< 34 m` AGL kicks up tan dust swirls over land and white spray over water |
+| 29 | R-2800 soundscape (`?vehicleAudio`) | Cold-start crank/cough on board; lumpy 18-cylinder radial idle lope opening into a throaty R-2800 roar + 3-blade prop chop + supercharger whine with throttle/WEP; rising slipstream + dive howl above 280 km/h; AoA buffet rumble near stall; punchy 6× `.50 BMG` burst + metallic link-chute clatter; rocket ignition whoosh; bomb whistle + speed-of-sound delayed distant boom (`~1 s` delay per `343 m` slant range); gear/canopy foley; wind rush + silk snap on bailout |
+| 30 | Observer flyby Doppler | Second client on foot watching a low pass at 350–400 km/h: spatialized radial roar pitches up on approach and drops cleanly (`computeDoppler`) past the listener |
