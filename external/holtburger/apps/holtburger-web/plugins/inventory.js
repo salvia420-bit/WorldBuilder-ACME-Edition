@@ -427,7 +427,7 @@ function ensureStyles() {
       left: ${PAPERDOLL_HIT_RECT.x}px; top: ${PAPERDOLL_HIT_RECT.y}px;
       width: ${PAPERDOLL_HIT_RECT.w}px; height: ${PAPERDOLL_HIT_RECT.h}px;
       z-index: 1;
-      cursor: pointer;
+      cursor: default;
     }
     #${OVERLAY_ID}.slots-view .hb-inv-doll-hit { display: none; }
     /* Aetheria sigil slots are hidden until PropertyInt::AetheriaBitfield
@@ -1058,7 +1058,7 @@ function doMount(parentEl, _ctx) {
     if (hit === me) {
       showItemTooltip(dollHit, playerName() || "You");
     } else {
-      const row = rowsByGuid.get(hit);
+      const row = displayRow(hit);
       if (row) showItemTooltip(dollHit, row.name || "Equipped item");
     }
   });
@@ -1091,16 +1091,20 @@ function doMount(parentEl, _ctx) {
     ev.stopPropagation();
     const me = localPlayerGuid();
     if (hit !== me) setSelectedGuid(hit);
+    const row = hit !== me ? displayRow(hit) : null;
     if (hit !== me && typeof window.__openContextMenuFor === "function") {
       try {
         window.__openContextMenuFor({
           source: "inv-paperdoll", guid: hit,
-          name: rowsByGuid.get(hit)?.name || "Item",
+          name: row?.name || "Item",
           clientX: ev.clientX, clientY: ev.clientY,
         });
       } catch (_) {}
     } else if (typeof window.__showExamineFor === "function") {
-      try { window.__showExamineFor(hit, { name: playerName() || "You" }); } catch (_) {}
+      const opts = hit === me
+        ? { name: playerName() || "You" }
+        : { name: row?.name || "Item", fromInventory: true };
+      try { window.__showExamineFor(hit, opts); } catch (_) {}
     }
   });
   dollHit.addEventListener("dragstart", (ev) => {
@@ -1192,14 +1196,18 @@ function doMount(parentEl, _ctx) {
       const guid = (parseInt(el.dataset.itemGuid, 10) >>> 0) || 0;
       if (!guid) return;
       setSelectedGuid(guid);
-      if (typeof window.__openContextMenuFor !== "function") return;
-      try {
-        window.__openContextMenuFor({
-          source: "inv-paperdoll", guid,
-          name: el.dataset.itemName || s.name,
-          clientX: ev.clientX, clientY: ev.clientY,
-        });
-      } catch (e) { console.warn("[paperdoll-rc] context menu failed:", e); }
+      const name = el.dataset.itemName || s.name;
+      if (typeof window.__openContextMenuFor === "function") {
+        try {
+          window.__openContextMenuFor({
+            source: "inv-paperdoll", guid,
+            name,
+            clientX: ev.clientX, clientY: ev.clientY,
+          });
+        } catch (e) { console.warn("[paperdoll-rc] context menu failed:", e); }
+      } else if (typeof window.__showExamineFor === "function") {
+        try { window.__showExamineFor(guid, { name, fromInventory: true }); } catch (_) {}
+      }
     });
     paperdoll.appendChild(el);
     dollSlotEls[s.equipMask] = { el, icon, slot: s };
@@ -2139,6 +2147,25 @@ function doMount(parentEl, _ctx) {
         ? (playerName() || "You") : (displayRow(key)?.name || "pack")),
       canEquip: (item, mask) => canEquipInSlot(item, mask >>> 0, equipState()),
       isBeingTraded: (guid) => traded.has(guid >>> 0),
+      isContainedBy: (targetGuid, ancestorGuid) => {
+        let cur = (targetGuid >>> 0) || 0;
+        const anc = (ancestorGuid >>> 0) || 0;
+        if (!cur || !anc || cur === anc) return false;
+        const h = sessionHandleNow();
+        const seen = new Set([cur]);
+        for (let depth = 0; depth < 16 && cur; depth++) {
+          let parent = (rowsByGuid.get(cur)?.containerId >>> 0) || 0;
+          if (!parent && typeof h?.objectInstanceIdProperty === "function") {
+            try { parent = (h.objectInstanceIdProperty(cur, 2) >>> 0) || 0; } catch (_) { parent = 0; }
+          }
+          if (!parent) return false;
+          if (parent === anc) return true;
+          if (seen.has(parent)) return false;
+          seen.add(parent);
+          cur = parent;
+        }
+        return false;
+      },
       packWithRoom: () => {
         for (const g of orders.get(PACKS_KEY) || []) {
           const r = displayRow(g);

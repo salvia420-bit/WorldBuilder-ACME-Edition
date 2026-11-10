@@ -1832,6 +1832,31 @@ export class RynthWebHost {
           if ((mask & 0x00080000) && !(worn & 0x00080000)) mask = 0x00080000;
           else if ((mask & 0x00040000) && !(worn & 0x00040000)) mask = 0x00040000;
           else mask = (mask & 0x00080000) ? 0x00080000 : 0x00040000;
+        } else if ((mask & 0x70000000) !== 0 && ((mask & ~0x70000000) >>> 0) === 0) {
+          let rawAetheria;
+          try {
+            if (typeof this.s?.playerAetheriaBits === "number") rawAetheria = this.s.playerAetheriaBits;
+          } catch (_) {}
+          if (typeof rawAetheria !== "number") {
+            const pid = this.GetPlayerId();
+            rawAetheria = pid ? this.TryGetObjectIntProperty(pid, 322) : undefined;
+          }
+          const unlocked = typeof rawAetheria === "number" ? (rawAetheria >>> 0) : 0x7;
+          const sigils = [
+            [0x10000000, 0x1],
+            [0x20000000, 0x2],
+            [0x40000000, 0x4],
+          ];
+          let picked = 0;
+          for (const [bit, ubit] of sigils) {
+            if ((mask & bit) && (unlocked & ubit) && !(worn & bit)) { picked = bit; break; }
+          }
+          if (!picked) {
+            for (const [bit, ubit] of sigils) {
+              if ((mask & bit) && (unlocked & ubit)) { picked = bit; break; }
+            }
+          }
+          mask = (picked || (mask & -mask)) >>> 0;
         } else {
           const wp = (mask & 0x03500000) >>> 0;
           const pick = wp || mask;

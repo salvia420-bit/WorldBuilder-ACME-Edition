@@ -875,7 +875,9 @@ export function decideItemDrop(drag, target, ctx = {}) {
     case DROP_TARGET.PACK_SLOT: {
       const pack = (target.packGuid >>> 0) || 0;
       if (!pack) return NOOP;
-      if (pack === guid) return reject("You cannot place an object within itself!");
+      if (pack === guid || ctxTrue(ctx.isContainedBy, pack, guid)) {
+        return reject("You cannot place an object within itself!");
+      }
       if (ctxTrue(ctx.isBeingTraded, guid)) return reject(`You are trading the ${name}, it cannot be moved`);
       if (isPack) {
         // Reorder within Inv_ContainerList.
@@ -925,17 +927,27 @@ export function decideItemDrop(drag, target, ctx = {}) {
         if (drag.owned && !isPack && (occ.equipMask >>> 0) === 0) {
           let ok = null;
           try { ok = ctx.canUseWith ? ctx.canUseWith(guid, occ.guid >>> 0) : null; } catch (_) { ok = null; }
-          if (ok === true) return { op: "usewith", guid, target: occ.guid >>> 0 };
+          if (ok === true) {
+            if (ctxTrue(ctx.isBeingTraded, occ.guid >>> 0)) {
+              return reject(`You can't use the ${name} on an item you are trading`);
+            }
+            return { op: "usewith", guid, target: occ.guid >>> 0 };
+          }
         }
         // 3. a (nested) pack under the pointer takes the item
         if (occ.isPack && occ.canHoldItems !== false && !isPack && !isExt) {
           const p = occ.guid >>> 0;
+          if (p === guid || ctxTrue(ctx.isContainedBy, p, guid)) {
+            return reject("You cannot place an object within itself!");
+          }
           if (full(p)) return reject(`The ${occ.name || "pack"} is completely full!`);
           return { op: "move", guid, container: p, placement: 0, listKey: p, index: 0, amount };
         }
       }
       if (isExt) {
-        if ((key >>> 0) === guid) return reject("You cannot place an object within itself!");
+        if ((key >>> 0) === guid || ctxTrue(ctx.isContainedBy, key >>> 0, guid)) {
+          return reject("You cannot place an object within itself!");
+        }
         if (drag.owned && ctx.isCorpse?.(key)) return reject(`The ${cname(key)} cannot accept items`);
       } else if (isPack) {
         // Retail: "Cannot place container in item list". A pack that is NOT
@@ -946,6 +958,8 @@ export function decideItemDrop(drag, target, ctx = {}) {
         }
         if (full(PACKS_KEY)) return reject(`${cname(MAIN_PACK_KEY)} can carry no more containers!`);
         return { op: "move", guid, container: me, placement: 0, listKey: PACKS_KEY, index: 0, amount };
+      } else if (key !== MAIN_PACK_KEY && ((key >>> 0) === guid || ctxTrue(ctx.isContainedBy, key >>> 0, guid))) {
+        return reject("You cannot place an object within itself!");
       }
       const same = !!(src && src.key === key);
       if (!isExt && (!same || isSplit) && full(key)) {
@@ -1980,4 +1994,28 @@ export function paperdollItemAt(map, x, y, rows, playerGuid = 0) {
   if (o + 2 >= map.data.length) return 0;
   const mask = paperdollHitColorMask(map.data[o], map.data[o + 1], map.data[o + 2]);
   return paperdollUpperWornObject(rows, mask, playerGuid);
+}
+
+/**
+ * Retail ItemHolder::TargetAcquired (acclient.c:433600-433619):
+ * an empty Mana Stone (`ItemType 0x80000`, `!(pwd._effects & UiEffects.Magical)`
+ * and `!(curMana > 0)`) used on a non-self target refuses `Retained` items
+ * (`PropertyBool 91`) and otherwise opens the item-destruction confirmation
+ * (`TargetedUsageConfirmation_ManaStone`, acclient.c:403181) before sending
+ * `UseWithTargetEvent`.
+ *
+ * @returns {"none"|"refuse-retained"|"confirm-drain"}
+ */
+export function evaluateManaStoneDrain({
+  itemType = 0,
+  uiEffects = 0,
+  curMana = 0,
+  isSelfTarget = false,
+  targetRetained = false,
+} = {}) {
+  if (((itemType >>> 0) & 0x00080000) === 0) return "none";
+  if (isSelfTarget) return "none";
+  if (((uiEffects >>> 0) & 0x1) !== 0 || Number(curMana) > 0) return "none";
+  if (targetRetained === true) return "refuse-retained";
+  return "confirm-drain";
 }

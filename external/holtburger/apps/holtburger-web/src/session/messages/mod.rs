@@ -460,14 +460,10 @@ pub(crate) async fn handle_message(ctx: &mut LoopCtx, event: SessionEvent) -> Lo
                 let container_u32 = u32::from(data.container_guid);
                 {
                     let mut cache = latest_container_contents.borrow_mut();
-                    for (&cid, list) in cache.iter_mut() {
-                        if cid != container_u32 {
-                            list.retain(|&g| g != item_u32);
-                        }
+                    for list in cache.values_mut() {
+                        list.retain(|&g| g != item_u32);
                     }
-                    if let Some(list) = cache.get_mut(&container_u32)
-                        && !list.contains(&item_u32)
-                    {
+                    if let Some(list) = cache.get_mut(&container_u32) {
                         let idx = (data.slot as usize).min(list.len());
                         list.insert(idx, item_u32);
                     }
@@ -866,6 +862,15 @@ pub(crate) async fn handle_message(ctx: &mut LoopCtx, event: SessionEvent) -> Lo
                                 holtburger_common::properties::PropertyInstanceId::Wielder,
                                 w_id,
                             ) if *w_id != holtburger_common::Guid::NULL => {
+                                let item_u32 = u32::from(*guid);
+                                for list in latest_container_contents.borrow_mut().values_mut() {
+                                    list.retain(|&g| g != item_u32);
+                                }
+                            }
+                            holtburger_common::properties::PropertyUpdate::Int(
+                                holtburger_common::properties::PropertyInt::StackSize,
+                                s,
+                            ) if *s <= 0 => {
                                 let item_u32 = u32::from(*guid);
                                 for list in latest_container_contents.borrow_mut().values_mut() {
                                     list.retain(|&g| g != item_u32);

@@ -248,9 +248,21 @@ impl InventoryRequestTracker {
 /// - Multi-bit bracelet (`0x0003_0000`) / ring (`0x000C_0000`) masks pick the
 ///   first unoccupied slot in retail `AutoSort` order (Right -> Left), falling
 ///   back to Right (`0x0002_0000` / `0x0008_0000`).
+/// - Multi-bit Aetheria sigil masks (`0x7000_0000`) pick the first unlocked
+///   and unoccupied sigil slot in `AutoWield` order (`0x1000_0000` ->
+///   `0x2000_0000` -> `0x4000_0000`), falling back to the first unlocked slot.
 /// - Multi-bit weapon masks (e.g. `MELEE_WEAPON | SHIELD` `0x0030_0000`) pick
 ///   their primary weapon bit (`0x0350_0000`), else the lowest set bit.
+#[allow(dead_code)]
 pub(crate) fn normalize_wield_mask(mask: u32, worn_mask: u32) -> u32 {
+    normalize_wield_mask_with_aetheria(mask, worn_mask, None)
+}
+
+pub(crate) fn normalize_wield_mask_with_aetheria(
+    mask: u32,
+    worn_mask: u32,
+    aetheria_bits: Option<u32>,
+) -> u32 {
     const PURE_WEARABLE: u32 = 0x0800_7FFF;
     const WRIST_L: u32 = 0x0001_0000;
     const WRIST_R: u32 = 0x0002_0000;
@@ -258,6 +270,10 @@ pub(crate) fn normalize_wield_mask(mask: u32, worn_mask: u32) -> u32 {
     const RING_L: u32 = 0x0004_0000;
     const RING_R: u32 = 0x0008_0000;
     const RING_BOTH: u32 = RING_L | RING_R;
+    const SIGIL_1: u32 = 0x1000_0000;
+    const SIGIL_2: u32 = 0x2000_0000;
+    const SIGIL_3: u32 = 0x4000_0000;
+    const SIGIL_ALL: u32 = SIGIL_1 | SIGIL_2 | SIGIL_3;
     const PRIMARY_WEAPONS: u32 = 0x0350_0000;
 
     if mask == 0 || mask.is_power_of_two() || (mask & !PURE_WEARABLE) == 0 {
@@ -280,6 +296,21 @@ pub(crate) fn normalize_wield_mask(mask: u32, worn_mask: u32) -> u32 {
         } else {
             RING_R
         };
+    }
+    if (mask & SIGIL_ALL) != 0 && (mask & !SIGIL_ALL) == 0 {
+        let unlocked = aetheria_bits.unwrap_or(0x7);
+        let sigils = [(SIGIL_1, 0x1u32), (SIGIL_2, 0x2u32), (SIGIL_3, 0x4u32)];
+        for (slot, ubit) in sigils {
+            if (mask & slot) != 0 && (unlocked & ubit) != 0 && (worn_mask & slot) == 0 {
+                return slot;
+            }
+        }
+        for (slot, ubit) in sigils {
+            if (mask & slot) != 0 && (unlocked & ubit) != 0 {
+                return slot;
+            }
+        }
+        return mask & mask.wrapping_neg();
     }
     let primary = mask & PRIMARY_WEAPONS;
     if primary != 0 {
@@ -754,6 +785,23 @@ mod tests {
         assert_eq!(normalize_wield_mask(0x000C_0000, 0x0008_0000), 0x0004_0000);
         // Dual-wield weapon mask (MELEE_WEAPON | SHIELD) picks MELEE_WEAPON.
         assert_eq!(normalize_wield_mask(0x0030_0000, 0), 0x0010_0000);
+        // Multi-slot Aetheria sigils (0x7000_0000) pick the first unlocked &
+        // unoccupied slot in Blue -> Yellow -> Red order.
+        assert_eq!(normalize_wield_mask(0x7000_0000, 0), 0x1000_0000);
+        assert_eq!(normalize_wield_mask(0x7000_0000, 0x1000_0000), 0x2000_0000);
+        assert_eq!(normalize_wield_mask(0x7000_0000, 0x3000_0000), 0x4000_0000);
+        assert_eq!(
+            normalize_wield_mask_with_aetheria(0x7000_0000, 0, Some(0x2)),
+            0x2000_0000
+        );
+        assert_eq!(
+            normalize_wield_mask_with_aetheria(0x7000_0000, 0x2000_0000, Some(0x6)),
+            0x4000_0000
+        );
+        assert_eq!(
+            normalize_wield_mask_with_aetheria(0x7000_0000, 0x6000_0000, Some(0x6)),
+            0x2000_0000
+        );
     }
 
     #[test]

@@ -31,7 +31,7 @@
 import { hudPoint, hudRect, hudViewport, getHudScale } from "../ui/hud_scale.js";
 import { placeNearPointer } from "./hover-tooltip.js";
 import { modalConfirmCallback } from "./modal-dialog.js";
-import { worldUseLeaf } from "./inventory_helpers.js";
+import { takeInventoryRows, worldUseLeaf } from "./inventory_helpers.js";
 import { consumeWorldUseThrottle } from "../scene3d/target_cycle.js";
 
 const OVERLAY_ID = "hb-radial-menu";
@@ -268,8 +268,7 @@ function getInventoryItem(guid) {
     const handle = window.__sessionHandle ?? window.__pluginClient?._handle;
     if (typeof handle?.playerInventory !== "function") return null;
     const g = guid >>> 0;
-    const items = handle.playerInventory();
-    return items.find((it) => (it.guid >>> 0) === g) || null;
+    return takeInventoryRows(handle).find((it) => (it.guid >>> 0) === g) || null;
   } catch (_) { return null; }
 }
 
@@ -301,8 +300,9 @@ function pickWieldSlotMaskShared(vl) {
 }
 
 // Single-bit splitter — used by the Equip submenu when ValidLocations has
-// multiple bits set (e.g. rings fit L + R finger).
-function enumerateEquipSlots(vl) {
+// multiple bits set (e.g. rings fit L + R finger, 1H melee weapons fit Main +
+// Off-Hand, unlocked Aetheria sigil slots).
+export function enumerateEquipSlots(vl, invItem = null, aetheriaBits = null) {
   const v = (vl >>> 0) || 0;
   const out = [];
   // HUD overhaul 2026-10-05 — the left/right jewelry pairs (EquipMask
@@ -310,21 +310,35 @@ function enumerateEquipSlots(vl) {
   // 0x40000/0x80000) were missing, so the ring case this splitter exists
   // for never produced a flyout. Armor coverage bits stay out on purpose:
   // armor occupies all of its locations at once, it doesn't pick one.
+  const canDualWieldOffHand =
+    (v & 0x00100000) !== 0 &&
+    (v & 0x00200000) === 0 &&
+    ((invItem?.combatUse >>> 0) || 0) !== 5;
   const NAMES = {
     0x00010000: "Left Wrist", 0x00020000: "Right Wrist",
     0x00040000: "Left Finger", 0x00080000: "Right Finger",
-    0x00100000: "Melee",   0x00200000: "Shield",  0x00400000: "Missile",
+    0x00100000: canDualWieldOffHand ? "Main Hand" : "Melee",
+    0x00200000: "Shield",  0x00400000: "Missile",
     0x00800000: "Ammo",    0x01000000: "Held",    0x02000000: "Two-Handed",
     0x04000000: "Trinket", 0x08000000: "Cloak",
     0x10000000: "Blue Aetheria", 0x20000000: "Yellow Aetheria", 0x40000000: "Red Aetheria",
   };
+  const AETHERIA_GATE = { 0x10000000: 0x1, 0x20000000: 0x2, 0x40000000: 0x4 };
   for (const bit of Object.keys(NAMES).map((k) => +k)) {
-    if ((v & bit) !== 0) out.push({ mask: bit, name: NAMES[bit] });
+    if ((v & bit) !== 0) {
+      if (aetheriaBits !== null && AETHERIA_GATE[bit] && ((aetheriaBits >>> 0) & AETHERIA_GATE[bit]) === 0) {
+        continue;
+      }
+      out.push({ mask: bit, name: NAMES[bit] });
+      if (bit === 0x00100000 && canDualWieldOffHand) {
+        out.push({ mask: 0x00200000, name: "Off-Hand" });
+      }
+    }
   }
   return out;
 }
 
-function buildItems(ctx) {
+export function buildItems(ctx) {
   const guid = (ctx.guid >>> 0) || 0;
   const source = ctx.source || "scene3d";
   const items = [];
@@ -353,11 +367,15 @@ function buildItems(ctx) {
   // We insert AFTER Examine so Examine stays the natural top entry for non-hotbar;
   // for hotbar we splice Remove Binding to slot 1 below.
 
-  // Equip submenu — for items with multi-bit ValidLocations show ring options.
+  // Equip submenu — for items with multi-bit ValidLocations show ring/hand/sigil options.
   if (typeof handle?.setWielded === "function" && invItem) {
     const vl = (invItem.validLocations >>> 0) || 0;
-    const options = enumerateEquipSlots(vl);
-    if (vl !== 0 && options.length > 1) {
+    const aetheriaBits = typeof handle?.playerAetheriaBits === "number" ? (handle.playerAetheriaBits >>> 0) : null;
+    const rawOptions = enumerateEquipSlots(vl, invItem, aetheriaBits);
+    const options = isEquipped ? rawOptions.filter((o) => ((o.mask >>> 0) & invEquipMask) === 0) : rawOptions;
+    const allSigilsLocked =
+      vl !== 0 && ((vl & ~0x70000000) >>> 0) === 0 && aetheriaBits !== null && rawOptions.length === 0;
+    if (vl !== 0 && ((isInPack && options.length > 1) || (isEquipped && options.length >= 1))) {
       items.push({
         label: "Equip ▸",
         children: options.map((o) => ({
@@ -368,12 +386,18 @@ function buildItems(ctx) {
           },
         })),
       });
-    } else if (isInPack && vl !== 0) {
+    } else if (isInPack && vl !== 0 && !allSigilsLocked) {
       items.push({
         label: "Equip",
         action: () => {
+          try {
+            if (window.__inventory?.activateItem?.(guid) === true) return;
+          } catch (_) {}
+          const fallbackMask = ((vl & ~0x08007fff) >>> 0) === 0
+            ? (vl >>> 0)
+            : (options.length === 1 ? (options[0].mask >>> 0) : pickWieldSlotMaskShared(vl));
           try { window.__audioOptimistic?.playOptimistic?.(0x8C, guid); } catch (_) {}
-          try { handle.setWielded(guid, pickWieldSlotMaskShared(vl)); } catch (e) { console.warn("[ctx-menu] equip failed:", e); }
+          try { handle.setWielded(guid, fallbackMask); } catch (e) { console.warn("[ctx-menu] equip failed:", e); }
         },
       });
     }
@@ -466,8 +490,11 @@ function buildItems(ctx) {
       },
     });
   }
-  // Add To Hotbar — flyout 1..18, using opaque __hotbar API.
-  if (invItem && window.__hotbar && typeof window.__hotbar.bindItemToSlot === "function") {
+  // Add To Hotbar — flyout 1..18, using opaque __hotbar API (excluding
+  // Containers 0x200 and Aetheria sigils 0x70000000 per retail gmShortcutManager).
+  const canHotbar = invItem && !itemTypeIsContainer(invItem)
+    && ((((invItem.validLocations >>> 0) | invEquipMask) & 0x70000000) === 0);
+  if (canHotbar && window.__hotbar && typeof window.__hotbar.bindItemToSlot === "function") {
     const first = (typeof window.__hotbar.findFirstEmpty === "function") ? window.__hotbar.findFirstEmpty() : null;
     const children = [];
     // HUD overhaul 2026-10-05: offer only the visible toolbar slots.

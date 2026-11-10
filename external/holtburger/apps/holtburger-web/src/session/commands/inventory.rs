@@ -585,15 +585,26 @@ pub(super) async fn handle(ctx: &mut LoopCtx, cmd: SessionCommand) -> LoopFlow {
             let mut effective_mask = equip_mask;
             let mut displaced: Vec<(u32, u32)> = Vec::new();
             if let Some(w) = world.borrow().as_ref() {
-                use holtburger_common::properties::EquipMask as PropEquipMask;
+                use holtburger_common::properties::{
+                    EquipMask as PropEquipMask, PropertyInt,
+                    WorldObjectPropertyAccessors as _,
+                };
                 let worn_mask: u32 = w
                     .player
                     .equipment
                     .iter()
                     .filter(|(g, _)| g.0 != item_guid)
                     .fold(0u32, |acc, (_, m)| acc | m.bits());
-                effective_mask =
-                    crate::inventory_request::normalize_wield_mask(equip_mask, worn_mask);
+                let aetheria_bits = w
+                    .entities
+                    .get(w.player.guid)
+                    .and_then(|e| e.get_int_prop(PropertyInt::AetheriaBitfield))
+                    .map(|b| b as u32);
+                effective_mask = crate::inventory_request::normalize_wield_mask_with_aetheria(
+                    equip_mask,
+                    worn_mask,
+                    aetheria_bits,
+                );
                 let requested =
                     PropEquipMask::from_bits_truncate(effective_mask);
                 let to_unequip: Vec<u32> =

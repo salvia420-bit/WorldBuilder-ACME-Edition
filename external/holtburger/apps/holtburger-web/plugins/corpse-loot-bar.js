@@ -468,6 +468,28 @@ function extCtx() {
   return {
     playerGuid: localPlayerGuid(),
     isCorpse: (g) => isCorpseEntity(g),
+    isContainedBy: (targetGuid, ancestorGuid) => {
+      let cur = (targetGuid >>> 0) || 0;
+      const anc = (ancestorGuid >>> 0) || 0;
+      if (!cur || !anc || cur === anc) return false;
+      const root = (state.corpseGuid >>> 0) || 0;
+      if (anc === root && state.packs.some((p) => (p.guid >>> 0) === cur)) return true;
+      const h = playerHandle();
+      const seen = new Set([cur]);
+      for (let depth = 0; depth < 16 && cur; depth++) {
+        let parent = 0;
+        if (typeof h?.objectInstanceIdProperty === "function") {
+          try { parent = (h.objectInstanceIdProperty(cur, 2) >>> 0) || 0; } catch (_) { parent = 0; }
+        }
+        if (!parent && root && state.packs.some((p) => (p.guid >>> 0) === cur)) parent = root;
+        if (!parent) return false;
+        if (parent === anc) return true;
+        if (seen.has(parent)) return false;
+        seen.add(parent);
+        cur = parent;
+      }
+      return false;
+    },
     capacity: (key) => {
       const cap = bagCapacity(key);
       return cap > 0 ? { used: contentsCount(key), cap } : null;

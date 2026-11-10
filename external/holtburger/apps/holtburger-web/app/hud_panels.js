@@ -6,6 +6,7 @@
 // dispatcher.
 
 import { escapeHtml } from "./dom_utils.js";
+import { evaluateManaStoneDrain } from "../plugins/inventory_helpers.js";
 
 export function initHudPanels(D) {
   const { skillName, attributeName, vitalName } = D;
@@ -91,6 +92,27 @@ export function initHudPanels(D) {
       if (ok) {
         const srcGuid = itemGuid >>> 0;
         const dstGuid = targetGuid >>> 0;
+        // Retail TargetCompatibleWithObject (acclient.c:432362): refuse
+        // targeting an item currently offered in secure trade.
+        let targetTraded = false;
+        if (typeof h?.playerTrade === "function") {
+          let snap = null;
+          try {
+            snap = h.playerTrade();
+            for (const it of Array.from(snap?.myItems || [])) {
+              try { if ((it?.guid >>> 0) === dstGuid) targetTraded = true; } catch (_) {}
+              try { it?.free?.(); } catch (_) {}
+            }
+          } catch (_) {}
+          finally { try { snap?.free?.(); } catch (_) {} }
+        }
+        if (targetTraded) {
+          window.__pluginClient?.events?.emit?.("clientActionRejected", {
+            message: `You can't use the ${itemName} on an item you are trading`,
+          });
+          this.cancel();
+          return true;
+        }
         // Retail ItemHolder::TargetAcquired (acclient.c:433600-433619):
         // an empty Mana Stone (ItemType 0x80000, !(pwd._effects & UiEffects.Magical))
         // refuses Retained targets (PropertyBool 91) and confirms item destruction.
@@ -101,29 +123,36 @@ export function initHudPanels(D) {
           try { uiEffects = (h?.objectIntProperty?.(srcGuid, 18) >>> 0) || 0; } catch (_) {}
           let curMana = 0;
           try { curMana = Number(h?.objectIntProperty?.(srcGuid, 107)) || 0; } catch (_) {}
-          if ((uiEffects & 0x1) === 0 && !(curMana > 0)) {
-            let retained = false;
-            try { retained = h?.objectBoolProperty?.(dstGuid, 91) === true; } catch (_) {}
-            if (retained) {
-              window.__pluginClient?.events?.emit?.("clientActionRejected", {
-                message: 'You cannot drain the mana of this item because it is "Retained".',
-              });
-              this.cancel();
-              return true;
-            }
-            if (typeof window.__showManastoneConfirm === "function") {
-              let targetName = "";
-              try { targetName = String(h?.objectName?.(dstGuid) || "").trim(); } catch (_) {}
-              this.cancel();
-              window.__showManastoneConfirm({
-                itemGuid: srcGuid,
-                name: itemName,
-                targetGuid: dstGuid,
-                targetName: targetName || "item",
-                mode: "drain",
-              });
-              return true;
-            }
+          let meGuid = 0;
+          try { meGuid = (h?.localPlayerGuid >>> 0) || (window.getLocalPlayerGuid?.() >>> 0) || 0; } catch (_) {}
+          let retained = false;
+          try { retained = h?.objectBoolProperty?.(dstGuid, 91) === true; } catch (_) {}
+          const drainVerdict = evaluateManaStoneDrain({
+            itemType: toolType,
+            uiEffects,
+            curMana,
+            isSelfTarget: meGuid !== 0 && dstGuid === meGuid,
+            targetRetained: retained,
+          });
+          if (drainVerdict === "refuse-retained") {
+            window.__pluginClient?.events?.emit?.("clientActionRejected", {
+              message: 'You cannot drain the mana of this item because it is "Retained".',
+            });
+            this.cancel();
+            return true;
+          }
+          if (drainVerdict === "confirm-drain" && typeof window.__showManastoneConfirm === "function") {
+            let targetName = "";
+            try { targetName = String(h?.objectName?.(dstGuid) || "").trim(); } catch (_) {}
+            this.cancel();
+            window.__showManastoneConfirm({
+              itemGuid: srcGuid,
+              name: itemName,
+              targetGuid: dstGuid,
+              targetName: targetName || "item",
+              mode: "drain",
+            });
+            return true;
           }
         }
         try { h.useWithTarget(srcGuid, dstGuid); }

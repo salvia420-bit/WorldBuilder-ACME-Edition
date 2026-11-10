@@ -45,6 +45,7 @@ import {
   DEFAULT_PLAYER_CONTAINERS_CAPACITY,
   DEFAULT_PLAYER_ITEMS_CAPACITY,
   DROP_TARGET,
+  evaluateManaStoneDrain,
   MAIN_PACK_KEY,
   PACKS_KEY,
   pendingExpect,
@@ -627,11 +628,29 @@ function itemInOpenTrade(guid) {
   return hit;
 }
 
+export function isContainedByGuid(targetGuid, ancestorGuid, handle = sessionHandle()) {
+  let cur = (targetGuid >>> 0) || 0;
+  const anc = (ancestorGuid >>> 0) || 0;
+  if (!cur || !anc || cur === anc || typeof handle?.objectInstanceIdProperty !== "function") return false;
+  const seen = new Set([cur]);
+  for (let depth = 0; depth < 16 && cur; depth++) {
+    let parent = 0;
+    try { parent = (handle.objectInstanceIdProperty(cur, 2) >>> 0) || 0; } catch (_) { parent = 0; }
+    if (!parent) return false;
+    if (parent === anc) return true;
+    if (seen.has(parent)) return false;
+    seen.add(parent);
+    cur = parent;
+  }
+  return false;
+}
+
 function defaultCtx() {
   return {
     playerGuid: localPlayerGuid(),
     retailPlace3D: RETAIL_PLACE_3D,
     isBeingTraded: (g) => itemInOpenTrade(g),
+    isContainedBy: (targetGuid, ancestorGuid) => isContainedByGuid(targetGuid, ancestorGuid),
     playerOnGround: () => playerOnGroundNow(),
     canUseWith: (a, b) => {
       const h = sessionHandle();
@@ -732,11 +751,55 @@ export function executeItemAction(action, s, opts = {}) {
   let sent = false;
   switch (action.op) {
     case "usewith": {
+      const dstGuid = (action.target >>> 0) || 0;
+      // Retail ItemHolder::TargetAcquired (acclient.c:433600-433619):
+      // dragging an empty Mana Stone onto an item must enforce the same
+      // Retained refusal and destruction confirmation as click-to-target.
+      let toolType = (s?.item?.itemType >>> 0) || 0;
+      if (!toolType) {
+        try { toolType = (h?.objectIntProperty?.(guid, 1) >>> 0) || 0; } catch (_) {}
+      }
+      if ((toolType & 0x00080000) !== 0) {
+        let uiEffects = (s?.item?.uiEffects >>> 0) || 0;
+        try { uiEffects = (uiEffects | ((h?.objectIntProperty?.(guid, 18) >>> 0) || 0)) >>> 0; } catch (_) {}
+        let curMana = Number(s?.item?.curMana) || 0;
+        try { curMana = curMana || Number(h?.objectIntProperty?.(guid, 107)) || 0; } catch (_) {}
+        const meGuid = localPlayerGuid();
+        let retained = false;
+        try { retained = h?.objectBoolProperty?.(dstGuid, 91) === true; } catch (_) {}
+        const drainVerdict = evaluateManaStoneDrain({
+          itemType: toolType,
+          uiEffects,
+          curMana,
+          isSelfTarget: meGuid !== 0 && dstGuid === meGuid,
+          targetRetained: retained,
+        });
+        if (drainVerdict === "refuse-retained") {
+          const msg = 'You cannot drain the mana of this item because it is "Retained".';
+          showItemToast(msg);
+          try { window.__pluginClient?.events?.emit?.("clientActionRejected", { message: msg }); } catch (_) {}
+          uiError();
+          flashElement(s?.sourceEl);
+          return false;
+        }
+        if (drainVerdict === "confirm-drain" && typeof window.__showManastoneConfirm === "function") {
+          let targetName = "";
+          try { targetName = String(h?.objectName?.(dstGuid) || "").trim(); } catch (_) {}
+          window.__showManastoneConfirm({
+            itemGuid: guid,
+            name: s?.item?.name || "Mana Stone",
+            targetGuid: dstGuid,
+            targetName: targetName || "item",
+            mode: "drain",
+          });
+          return true;
+        }
+      }
       // plugins/tradeskill.js owns the use-with dispatch (and its
       // optional confirmation popup).
       try {
         window.dispatchEvent(new CustomEvent("hb:inventory-item-on-item-drop", {
-          detail: { sourceGuid: guid, targetGuid: action.target >>> 0, sourceIsEquipSlot: false, targetIsEquipSlot: false },
+          detail: { sourceGuid: guid, targetGuid: dstGuid, sourceIsEquipSlot: false, targetIsEquipSlot: false },
         }));
         return true;
       } catch (_) { return false; }

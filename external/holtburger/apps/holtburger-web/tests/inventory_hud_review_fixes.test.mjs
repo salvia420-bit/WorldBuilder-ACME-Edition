@@ -45,7 +45,7 @@ const {
   EQUIP, DROP_TARGET, MAIN_PACK_KEY, effectiveValidLocationsForSlot, decideItemDrop, canEquipInSlot,
   isOpenableContainer, planPlaceInBackpack, primaryUseAction, planWear, planAutoSortJewelry,
   PAPERDOLL_HIT_DID, PAPERDOLL_HIT_RECT, paperdollHitColorMask, paperdollUpperWornObject, paperdollItemAt,
-  copyInventoryRow,
+  copyInventoryRow, evaluateManaStoneDrain,
 } = helpers;
 
 function loadSpliced(rel, expose, stubs) {
@@ -366,6 +366,9 @@ const hitRgba = new Uint8Array(100 * 214 * 4);
   const p = (30 * 100 + 15) * 4;
   hitRgba[p + 1] = 255;
   hitRgba[p + 3] = 255;
+  const pHead = (10 * 100 + 80) * 4;
+  hitRgba[pHead] = 255;
+  hitRgba[pHead + 3] = 255;
 }
 globalThis.__hbWasm = {
   fetch_icon_pixels: (did) => (did >>> 0) === 0x06004d8b
@@ -548,6 +551,181 @@ await check("promptStackAmount rejects 0/negative input and resolveDropAction sk
   okBtn.dispatchEvent(new FakeEvent("click", { bubbles: true }));
   const chosen = await p;
   assert.equal(chosen, 4);
+});
+
+await check("Empty Mana Stone drag-onto-item enforces Retained refusal & drain confirm (never fires raw tradeskill)", async () => {
+  assert.equal(evaluateManaStoneDrain({ itemType: 0x00080000, uiEffects: 0, curMana: 0, targetRetained: true }), "refuse-retained");
+  assert.equal(evaluateManaStoneDrain({ itemType: 0x00080000, uiEffects: 0, curMana: 0, targetRetained: false }), "confirm-drain");
+  assert.equal(evaluateManaStoneDrain({ itemType: 0x00080000, uiEffects: 1, curMana: 0, targetRetained: false }), "none");
+  assert.equal(evaluateManaStoneDrain({ itemType: 0x00080000, uiEffects: 0, curMana: 500, targetRetained: false }), "none");
+  assert.equal(evaluateManaStoneDrain({ itemType: 0x00080000, uiEffects: 0, curMana: 0, isSelfTarget: true }), "none");
+
+  const STONE = 0x80009001;
+  const RETAINED_WAND = 0x80009002;
+  const NORMAL_WAND = 0x80009003;
+  const prevHandle = window.__sessionHandle;
+  const prevConfirm = window.__showManastoneConfirm;
+  let confirmArg = null;
+  let dropEvents = 0;
+  const onDropEvt = () => { dropEvents++; };
+  window.addEventListener("hb:inventory-item-on-item-drop", onDropEvt);
+  try {
+    window.__showManastoneConfirm = (opts) => { confirmArg = opts; };
+    window.__sessionHandle = {
+      ...prevHandle,
+      objectIntProperty: (g, prop) => (g === STONE && prop === 1 ? 0x00080000 : 0),
+      objectBoolProperty: (g, prop) => (g === RETAINED_WAND && prop === 91),
+      objectName: (g) => (g === NORMAL_WAND ? "Silver Wand" : "Retained Wand"),
+    };
+    const stoneDrag = { guid: STONE, owned: true, item: { guid: STONE, name: "Mana Stone", itemType: 0x00080000, uiEffects: 0, stackSize: 1 } };
+    const r1 = drag.executeItemAction({ op: "usewith", guid: STONE, target: RETAINED_WAND }, stoneDrag);
+    assert.equal(r1, false, "Retained target must be refused");
+    assert.equal(confirmArg, null);
+    assert.equal(dropEvents, 0, "Retained target must not dispatch raw tradeskill drop");
+
+    const r2 = drag.executeItemAction({ op: "usewith", guid: STONE, target: NORMAL_WAND }, stoneDrag);
+    assert.equal(r2, true);
+    assert.equal(dropEvents, 0, "Empty Mana Stone must open confirm modal instead of firing raw tradeskill drop");
+    assert.deepEqual(confirmArg, {
+      itemGuid: STONE,
+      name: "Mana Stone",
+      targetGuid: NORMAL_WAND,
+      targetName: "Silver Wand",
+      mode: "drain",
+    });
+
+    // Charged Mana Stone (uiEffects & 1) dispatches normal use-with without destruction modal.
+    confirmArg = null;
+    const chargedDrag = { guid: STONE, owned: true, item: { guid: STONE, name: "Mana Stone", itemType: 0x00080000, uiEffects: 1, stackSize: 1 } };
+    const r3 = drag.executeItemAction({ op: "usewith", guid: STONE, target: NORMAL_WAND }, chargedDrag);
+    assert.equal(r3, true);
+    assert.equal(confirmArg, null);
+    assert.equal(dropEvents, 1);
+  } finally {
+    window.removeEventListener("hb:inventory-item-on-item-drop", onDropEvt);
+    window.__sessionHandle = prevHandle;
+    window.__showManastoneConfirm = prevConfirm;
+  }
+});
+
+await check("decideItemDrop enforces isContainedBy ancestor cycle guard and target trade-lock on usewith", () => {
+  const outerPack = { guid: 0x7001, name: "Outer Pack", isPack: true, stackSize: 1 };
+  const cycExt = decideItemDrop(
+    { guid: 0x7001, item: outerPack, owned: false },
+    { kind: DROP_TARGET.EMPTY_CELL, listKey: 0x7002, listKind: "ext", index: 0, count: 0 },
+    { playerGuid: ME, isContainedBy: (target, anc) => target === 0x7002 && anc === 0x7001 },
+  );
+  assert.deepEqual(cycExt, { op: "reject", message: "You cannot place an object within itself!" });
+
+  const dye = { guid: 0x7010, name: "Dye Pot", isPack: false, stackSize: 1 };
+  const tradedCoat = { guid: 0x7011, name: "Coat", equipMask: 0, isPack: false, stackSize: 1 };
+  const tradedCombine = decideItemDrop(
+    { guid: 0x7010, item: dye, owned: true },
+    { kind: DROP_TARGET.ITEM_CELL, listKey: MAIN_PACK_KEY, listKind: "inventory", index: 0, count: 2, item: tradedCoat },
+    {
+      playerGuid: ME,
+      canUseWith: () => true,
+      isBeingTraded: (g) => g === 0x7011,
+    },
+  );
+  assert.deepEqual(tradedCombine, { op: "reject", message: "You can't use the Dye Pot on an item you are trading" });
+});
+
+await check("dollHit right-click examine fallback passes equipped item name + fromInventory (not player name)", () => {
+  const hitEl = document.querySelector(".hb-inv-doll-hit");
+  hitEl.getBoundingClientRect = () => ({ left: 0, top: 0, width: 100, height: 214 });
+  const prevMenu = window.__openContextMenuFor;
+  const prevExam = window.__showExamineFor;
+  let examined = null;
+  try {
+    delete window.__openContextMenuFor;
+    window.__showExamineFor = (guid, opts) => { examined = { guid, opts }; };
+    // (15, 30) hits CHEST_PLATE; (80, 10) hits bare Head silhouette (ME).
+    hitEl.dispatchEvent(new FakeEvent("contextmenu", { bubbles: true, clientX: 15, clientY: 30 }));
+    assert.deepEqual(examined, { guid: CHEST_PLATE, opts: { name: "Breastplate", fromInventory: true } });
+    hitEl.dispatchEvent(new FakeEvent("contextmenu", { bubbles: true, clientX: 80, clientY: 10 }));
+    assert.equal(examined?.guid, ME);
+    assert.equal(examined?.opts?.fromInventory, undefined);
+  } finally {
+    window.__openContextMenuFor = prevMenu;
+    window.__showExamineFor = prevExam;
+  }
+});
+
+await check("RynthWebHost.WieldItem & radial-menu handle multi-slot Aetheria sigils, 1H off-hand, wearables & WASM free()", async () => {
+  const { RynthWebHost } = await import(pathToFileURL(path.join(APP, "rynth", "webhost.js")).href);
+  const wieldedCalls = [];
+  let aetheriaProp = 0x7;
+  let invRows = [
+    { guid: 0x9101, validLocations: 0x70000000, equipMask: 0x10000000 },
+    { guid: 0x9102, validLocations: 0x70000000, equipMask: 0 },
+  ];
+  const host = new RynthWebHost({
+    get playerAetheriaBits() { return aetheriaProp; },
+    playerInventory: () => invRows,
+    wieldFromPack: (g, m) => { wieldedCalls.push([g >>> 0, m >>> 0]); },
+  });
+  host.WieldItem(0x9102, 0);
+  assert.deepEqual(wieldedCalls.pop(), [0x9102, 0x20000000], "Blue occupied -> picks Yellow sigil");
+  invRows = [{ guid: 0x9102, validLocations: 0x70000000, equipMask: 0 }];
+  aetheriaProp = 0x4; // only Red unlocked
+  host.WieldItem(0x9102, 0);
+  assert.deepEqual(wieldedCalls.pop(), [0x9102, 0x40000000], "Only Red unlocked -> picks Red sigil");
+  host.dispose();
+
+  const rm = await import(pathToFileURL(path.join(APP, "plugins", "radial-menu.js")).href);
+  // 1H melee offers Main Hand + Off-Hand; 2H does not.
+  assert.deepEqual(
+    rm.enumerateEquipSlots(EQUIP.MeleeWeapon, { combatUse: 1 }, 0x7),
+    [{ mask: EQUIP.MeleeWeapon, name: "Main Hand" }, { mask: EQUIP.Shield, name: "Off-Hand" }],
+  );
+  // Locked Aetheria slots are filtered out.
+  assert.deepEqual(
+    rm.enumerateEquipSlots(0x70000000, {}, 0x2),
+    [{ mask: 0x20000000, name: "Yellow Aetheria" }],
+  );
+
+  let freed = 0;
+  let setWieldedArgs = null;
+  const prevHandle = window.__sessionHandle;
+  const prevInv = window.__inventory;
+  const prevHb = window.__hotbar;
+  try {
+    window.__inventory = null; // exercise standalone fallback mask
+    window.__hotbar = {
+      slotCount: () => 2,
+      findFirstEmpty: () => 0,
+      getSlot: () => null,
+      bindItemToSlot: () => {},
+    };
+    window.__sessionHandle = {
+      playerAetheriaBits: 0,
+      setWielded: (g, m) => { setWieldedArgs = [g >>> 0, m >>> 0]; },
+      playerInventory: () => [
+        { guid: 0x9201, name: "Coat", itemType: 0x4, validLocations: 0x00001A00, equipMask: 0, stackSize: 1, free() { freed++; } },
+        { guid: 0x9202, name: "Blue Aetheria", itemType: 0x8, validLocations: 0x70000000, equipMask: 0, stackSize: 1, free() { freed++; } },
+        { guid: 0x9203, name: "Side Pack", itemType: 0x200, validLocations: 0, equipMask: 0, stackSize: 1, free() { freed++; } },
+      ],
+    };
+    const { items: coatItems } = rm.buildItems({ source: "inv-grid", guid: 0x9201, name: "Coat" });
+    assert.equal(freed, 3, "radial-menu must free() all WASM InventoryItem entries");
+    const coatEquip = coatItems.find((i) => i.label === "Equip");
+    assert.ok(coatEquip, "Coat has single Equip action");
+    coatEquip.action();
+    assert.deepEqual(setWieldedArgs, [0x9201, 0x00001A00], "Coat fallback Equip preserves full wearable coverage mask");
+    assert.ok(coatItems.some((i) => i.label === "Add To Hotbar ▸"), "Coat can bind to hotbar");
+
+    const { items: sigilItems } = rm.buildItems({ source: "inv-grid", guid: 0x9202, name: "Blue Aetheria" });
+    assert.ok(!sigilItems.some((i) => i.label.startsWith("Equip")), "Sigil hides Equip when playerAetheriaBits === 0");
+    assert.ok(!sigilItems.some((i) => i.label === "Add To Hotbar ▸"), "Sigil excluded from Add To Hotbar");
+
+    const { items: packItems } = rm.buildItems({ source: "inv-grid", guid: 0x9203, name: "Side Pack" });
+    assert.ok(!packItems.some((i) => i.label === "Add To Hotbar ▸"), "Container excluded from Add To Hotbar");
+  } finally {
+    window.__sessionHandle = prevHandle;
+    window.__inventory = prevInv;
+    window.__hotbar = prevHb;
+  }
 });
 
 unmount?.();
