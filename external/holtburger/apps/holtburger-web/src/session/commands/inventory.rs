@@ -582,10 +582,20 @@ pub(super) async fn handle(ctx: &mut LoopCtx, cmd: SessionCommand) -> LoopFlow {
             // AutoWearIsLegal refuses, it never strips) and a
             // same-wcid ammo stack (retail AttemptMerge) move
             // nothing.
+            let mut effective_mask = equip_mask;
+            let mut displaced: Vec<(u32, u32)> = Vec::new();
             if let Some(w) = world.borrow().as_ref() {
                 use holtburger_common::properties::EquipMask as PropEquipMask;
+                let worn_mask: u32 = w
+                    .player
+                    .equipment
+                    .iter()
+                    .filter(|(g, _)| g.0 != item_guid)
+                    .fold(0u32, |acc, (_, m)| acc | m.bits());
+                effective_mask =
+                    crate::inventory_request::normalize_wield_mask(equip_mask, worn_mask);
                 let requested =
-                    PropEquipMask::from_bits_truncate(equip_mask);
+                    PropEquipMask::from_bits_truncate(effective_mask);
                 let to_unequip: Vec<u32> =
                     holtburger_world::equip::wield_unequip_conflicts(
                         w,
@@ -597,6 +607,12 @@ pub(super) async fn handle(ctx: &mut LoopCtx, cmd: SessionCommand) -> LoopFlow {
                     .collect();
                 let pack_guid = w.player.guid.0;
                 for g in to_unequip {
+                    let old_slot_bits = w
+                        .player
+                        .equipment
+                        .get(&Guid(g))
+                        .map(|m| m.bits())
+                        .unwrap_or(0);
                     console_log_str(&format!(
                         "[paperdoll/wield] auto-unequip 0x{g:08X} → pack (slot conflict)",
                     ));
@@ -614,12 +630,15 @@ pub(super) async fn handle(ctx: &mut LoopCtx, cmd: SessionCommand) -> LoopFlow {
                         );
                         break;
                     }
+                    if old_slot_bits != 0 {
+                        displaced.push((g, old_slot_bits));
+                    }
                 }
             }
             let action = GameAction::GetAndWieldItem(Box::new(
                 GetAndWieldItemActionData {
                     item_guid: Guid(item_guid),
-                    equip_mask: EquipMask::from_bits_truncate(equip_mask),
+                    equip_mask: EquipMask::from_bits_truncate(effective_mask),
                 },
             ));
             send_or_disconnect!(
@@ -633,8 +652,9 @@ pub(super) async fn handle(ctx: &mut LoopCtx, cmd: SessionCommand) -> LoopFlow {
             // messages-objects-1: retail `UIAttemptWield` → IR_WIELD (the
             // auto-unequips above record nothing).
             inventory_requests.record(item_guid, InventoryRequest::Wield);
+            inventory_requests.record_displaced_equip(item_guid, displaced);
             console_log_str(&format!(
-                "[paperdoll/wield] item=0x{item_guid:08X} slot=0x{equip_mask:08X}",
+                "[paperdoll/wield] item=0x{item_guid:08X} slot=0x{effective_mask:08X}",
             ));
         }
         SessionCommand::DropItem { item_guid } => {

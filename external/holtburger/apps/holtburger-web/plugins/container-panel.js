@@ -183,6 +183,8 @@ function resolveItemMeta(guid, invSnapshot) {
           iconId: (it.iconId >>> 0) || 0,
           stackSize: it.stackSize || 1,
           uiEffects: (it.uiEffects >>> 0) || 0,
+          iconOverlay: (it.iconOverlay >>> 0) || 0,
+          iconUnderlay: (it.iconUnderlay >>> 0) || 0,
         };
       }
     }
@@ -196,7 +198,10 @@ function resolveItemMeta(guid, invSnapshot) {
         guid: g,
         name: meta.name || ent.name || fmtGuid(g),
         iconId: (meta.iconId >>> 0) || 0,
-        stackSize: 1,
+        stackSize: Math.max(1, Number(meta.stackSize) || 1),
+        uiEffects: (meta.uiEffects >>> 0) || 0,
+        iconOverlay: (meta.iconOverlay >>> 0) || 0,
+        iconUnderlay: (meta.iconUnderlay >>> 0) || 0,
       };
     }
   } catch (_) {}
@@ -222,6 +227,7 @@ function buildOverlay() {
   header.appendChild(title);
   const closeBtn = document.createElement("button");
   closeBtn.type = "button";
+  closeBtn.tabIndex = -1;
   closeBtn.className = "hcp-close";
   closeBtn.title = "Close (Esc)";
   setAcText(closeBtn, "Close");
@@ -456,7 +462,8 @@ function openContainer(containerGuid, containerName) {
   if (!g) return;
   if (!overlayEl) overlayEl = buildOverlay();
   overlayEl._containerGuid = g;
-  setAcText(overlayEl._titleEl, containerName || "Container", { color: "#f0c87c" });
+  overlayEl._containerName = containerName || "Container";
+  setAcText(overlayEl._titleEl, overlayEl._containerName, { color: "#f0c87c" });
 
   const handle = window.__sessionHandle;
   let guids = [];
@@ -561,12 +568,19 @@ function isOwnTopLevelPack(guid) {
       if ((it.guid >>> 0) !== g) continue;
       const pack = typeof it.requiresBackpackSlot === "boolean"
         ? it.requiresBackpackSlot : (((it.itemType >>> 0) & 0x200) !== 0);
-      return pack && (it.containerId >>> 0) === 0 && (it.equipMask >>> 0) === 0;
+      const openable = (((it.itemType >>> 0) & 0x200) !== 0) || (Number(it.itemsCapacity) > 0);
+      return pack && openable && (it.containerId >>> 0) === 0 && (it.equipMask >>> 0) === 0;
     }
   } finally {
     snap.free();
   }
   return false;
+}
+
+function onPlayerInventoryChanged() {
+  if (overlayEl?.dataset.open === "1" && overlayEl._containerGuid) {
+    openContainer(overlayEl._containerGuid, overlayEl._containerName || "Container");
+  }
 }
 
 // Subscribe at module-load. Match radial-menu's pattern: poll for the
@@ -577,6 +591,7 @@ function trySubscribe() {
   if (!client?.events?.on) return false;
   client.events.on("containerOpened", onContainerOpened);
   client.events.on("kind:21", onContainerOpened);
+  client.events.on("playerInventoryChanged", onPlayerInventoryChanged);
   return true;
 }
 if (typeof window !== "undefined") {
@@ -587,6 +602,7 @@ if (typeof window !== "undefined") {
         _subscribeTimer = null;
       }
     }, 500);
+    _subscribeTimer?.unref?.();
   }
 
   // Debug hook — bypass wire, render whatever getContainerContents has

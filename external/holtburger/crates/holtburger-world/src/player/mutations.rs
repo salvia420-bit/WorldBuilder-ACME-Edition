@@ -655,7 +655,8 @@ impl PlayerState {
 
         self.equipment.clear();
         for (item_guid, slot, _) in &data.equipped_objects {
-            if let Some(mask) = EquipMask::from_bits(*slot) {
+            let mask = EquipMask::from_bits_truncate(*slot);
+            if !mask.is_empty() {
                 self.wield_item(*item_guid, mask);
             }
         }

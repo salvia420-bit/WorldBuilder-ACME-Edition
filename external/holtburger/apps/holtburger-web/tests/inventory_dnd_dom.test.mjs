@@ -168,7 +168,9 @@ const inventoryMod = load("plugins/inventory.js", ["view"], {
     // 2026-10-08: shared take/drag auto-merge rule + retail UseObject routing.
     "findAutoMergeTarget", "primaryUseAction", "defaultOnUrlFlag",
     // items-4: retail AutoWearIsLegal / ready-slot merge (?retailAutoWear).
-    "planWear", "planAmmoWield", "readySlotOccupant", "WEARABLE_LOCATIONS",
+    "planWear", "planAutoSortJewelry", "planAmmoWield", "readySlotOccupant", "WEARABLE_LOCATIONS",
+    "isOpenableContainer", "PAPERDOLL_HIT_DID", "PAPERDOLL_HIT_RECT", "paperdollItemAt",
+    "cooldownStep", "matchCooldownEnchantment",
     "DEFAULT_PLAYER_ITEMS_CAPACITY", "DEFAULT_PLAYER_CONTAINERS_CAPACITY",
     "beginItemDrag", "registerDropZone", "resolveDropAction", "executeItemAction", "pendingOps",
     "showItemTooltip", "hideItemTooltip", "localPlayerGuid", "consumeUseThrottle",

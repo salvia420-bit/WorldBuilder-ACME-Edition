@@ -37,6 +37,11 @@ let _warnedMissingExport = false;
 // Enter/Esc handling come from modal-dialog.js.
 export function buildMessage(opts) {
   const name = (typeof opts?.name === "string" && opts.name.trim()) ? opts.name.trim() : "this mana stone";
+  if (opts?.mode === "drain") {
+    const targetName = (typeof opts?.targetName === "string" && opts.targetName.trim())
+      ? opts.targetName.trim() : "item";
+    return `Are you sure you want to attempt to destroy your ${targetName} and drain its mana into this stone?`;
+  }
   const target = opts?.mode === "all" ? "every magic item you are carrying" : "the selected item";
   const pct = Number(opts?.charge);
   const amount = Number.isFinite(pct) && pct > 0 ? ` at ${Math.round(pct)}% efficiency` : "";
@@ -46,9 +51,16 @@ export function buildMessage(opts) {
 
 function fireConsume(opts) {
   const guid = (opts?.itemGuid >>> 0) || 0;
-  if (!guid) return;
+  if (!guid) return false;
   const handle = window.__sessionHandle ?? window.__pluginClient?._handle;
   try {
+    if (opts?.mode === "drain") {
+      const target = (opts?.targetGuid >>> 0) || 0;
+      if (target && typeof handle?.useWithTarget === "function") {
+        handle.useWithTarget(guid, target);
+        return true;
+      }
+    }
     if (typeof handle?.consumeManaStone === "function") {
       // Server-side expects (stoneGuid, targetGuid? or 0 for "all").
       // Until the wasm signature is locked in, pass the stone guid and
@@ -69,13 +81,14 @@ function fireConsume(opts) {
 }
 
 export function show(opts) {
+  const isDrain = opts?.mode === "drain";
   modalConfirmCallback({
-    title: "Use Mana Stone",
+    title: isDrain ? "Drain Item Mana" : "Use Mana Stone",
     message: buildMessage(opts),
-    confirmLabel: "Use Stone",
-    cancelLabel: "Cancel",
+    confirmLabel: isDrain ? "Yes" : "Use Stone",
+    cancelLabel: isDrain ? "No" : "Cancel",
     dialogId: DIALOG_ID,
-    action: opts?.mode === "all" ? "use-all" : "use-single",
+    action: opts?.mode === "all" ? "use-all" : (isDrain ? "drain-item" : "use-single"),
     onConfirm: () => {
       const sent = fireConsume(opts);
       try { opts?.onResolve?.({ result: true, sent }); } catch (_) {}
@@ -107,6 +120,7 @@ export function mount() {
       charge: d.charge,
       mode: d.mode,
       targetGuid: d.targetGuid,
+      targetName: d.targetName,
       onResolve: d.onResolve,
     });
   }

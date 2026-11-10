@@ -998,6 +998,36 @@ pub(super) async fn handle(ctx: &mut LoopCtx, message: GameMessage) -> LoopFlow 
                     // restores the Debug-label payload and the old line.
                     let (object_guid, request) =
                         inventory_requests.attempt_failed(data.item_guid.0);
+                    let failed_displaced = inventory_requests.take_failed_displaced();
+                    if !failed_displaced.is_empty() {
+                        use holtburger_common::Guid;
+                        use holtburger_protocol::messages::GetAndWieldItemActionData;
+                        use holtburger_protocol::messages::inventory::types::EquipMask;
+                        for (old_guid, old_mask) in failed_displaced {
+                            if old_mask == 0 {
+                                continue;
+                            }
+                            let should_restore = world.borrow().as_ref().is_some_and(|w| {
+                                let g = Guid(old_guid);
+                                w.player.inventory.contains(&g)
+                                    && !w.player.equipment.contains_key(&g)
+                            });
+                            if should_restore {
+                                let restore_act = GameAction::GetAndWieldItem(Box::new(
+                                    GetAndWieldItemActionData {
+                                        item_guid: Guid(old_guid),
+                                        equip_mask: EquipMask::from_bits_truncate(old_mask),
+                                    },
+                                ));
+                                if let Err(e) = send_ordered!(movement, session, restore_act) {
+                                    log::warn!(
+                                        "recv_loop: wield bounce restore 0x{old_guid:08X}: {e}"
+                                    );
+                                    break;
+                                }
+                            }
+                        }
+                    }
                     if crate::inventory_request::retail_attempt_failed_enabled(&flag_search()) {
                         let names = world.borrow().as_ref().and_then(|w| {
                             use holtburger_common::properties::{

@@ -3602,6 +3602,30 @@ fn test_inventory_put_object_in_3d() {
             false
         }
     }));
+    assert_eq!(state.inventory_placement(obj_guid), None);
+}
+
+#[test]
+fn test_stale_prior_container_placement_does_not_drop_item_from_new_container() {
+    let mut state = WorldState::synthetic();
+    let player = Guid(0x5000_0001);
+    state.player.guid = player;
+    let pack_a = Guid(0x6001);
+    let pack_b = Guid(0x6002);
+    let _ = update_object_first_slot_create(&mut state, pack_a, Some(player), None, None, Some(24));
+    let _ = update_object_first_slot_create(&mut state, pack_b, Some(player), None, None, Some(24));
+    let item1 = Guid(0x7001);
+    let item2 = Guid(0x7002);
+    let _ = update_object_first_slot_create(&mut state, item1, Some(pack_b), None, None, None);
+    let _ = update_object_first_slot_create(&mut state, item2, Some(pack_b), None, None, None);
+    state.container_placement.insert(item1, (pack_a, 0, false));
+    state.record_inventory_placement(item2, pack_b, 0, false);
+    assert_eq!(state.inventory_placement(item2), Some(0));
+    assert_eq!(
+        state.inventory_placement(item1),
+        Some(1),
+        "item1 must not be omitted from pack_b's ordered list"
+    );
 }
 
 #[test]

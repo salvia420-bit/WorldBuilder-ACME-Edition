@@ -456,10 +456,26 @@ pub(crate) async fn handle_message(ctx: &mut LoopCtx, event: SessionEvent) -> Lo
             // this the picked-up dagger's ground mesh stayed
             // clickable while the item sat in the pack.
             GameEvent::InventoryPutObjInContainer(data) => {
-                js_spawned_guids.remove(&u32::from(data.item_guid));
+                let item_u32 = u32::from(data.item_guid);
+                let container_u32 = u32::from(data.container_guid);
+                {
+                    let mut cache = latest_container_contents.borrow_mut();
+                    for (&cid, list) in cache.iter_mut() {
+                        if cid != container_u32 {
+                            list.retain(|&g| g != item_u32);
+                        }
+                    }
+                    if let Some(list) = cache.get_mut(&container_u32)
+                        && !list.contains(&item_u32)
+                    {
+                        let idx = (data.slot as usize).min(list.len());
+                        list.insert(idx, item_u32);
+                    }
+                }
+                js_spawned_guids.remove(&item_u32);
                 entity_updates.borrow_mut().push(EntityUpdate {
                     kind: ENTITY_UPDATE_KIND_REMOVE,
-                    guid: u32::from(data.item_guid),
+                    guid: item_u32,
                     model_id: 0,
                     landblock_id: 0,
                     x: 0.0,
@@ -495,6 +511,18 @@ pub(crate) async fn handle_message(ctx: &mut LoopCtx, event: SessionEvent) -> Lo
                     physics_translucency: 0.0,
                     is_autonomous: false,
                 });
+            }
+            GameEvent::WieldObject(data) => {
+                let obj_u32 = u32::from(data.object_guid);
+                for list in latest_container_contents.borrow_mut().values_mut() {
+                    list.retain(|&g| g != obj_u32);
+                }
+            }
+            GameEvent::InventoryPutObjectIn3D(data) => {
+                let obj_u32 = u32::from(data.object_guid);
+                for list in latest_container_contents.borrow_mut().values_mut() {
+                    list.retain(|&g| g != obj_u32);
+                }
             }
             GameEvent::FellowshipFullUpdate(_) => {
                 fellowship_update_type = 1;
@@ -712,6 +740,9 @@ pub(crate) async fn handle_message(ctx: &mut LoopCtx, event: SessionEvent) -> Lo
                     // closed object is the ground container
                     // (acclient.c:394878-394880).
                     if *rynth_ground_container.borrow() == container_guid_u32 {
+                        latest_container_contents
+                            .borrow_mut()
+                            .remove(&container_guid_u32);
                         *rynth_ground_container.borrow_mut() = 0;
                     }
                     // `w` (the mutable borrow established
@@ -810,6 +841,39 @@ pub(crate) async fn handle_message(ctx: &mut LoopCtx, event: SessionEvent) -> Lo
                             ) if *c != holtburger_common::Guid::NULL
                         )
                     });
+                    for u in updates {
+                        match u {
+                            holtburger_common::properties::PropertyUpdate::InstanceId(
+                                holtburger_common::properties::PropertyInstanceId::Container,
+                                c,
+                            ) => {
+                                let item_u32 = u32::from(*guid);
+                                let new_c = u32::from(*c);
+                                let mut cache = latest_container_contents.borrow_mut();
+                                for (&cid, list) in cache.iter_mut() {
+                                    if cid != new_c {
+                                        list.retain(|&g| g != item_u32);
+                                    }
+                                }
+                                if new_c != 0
+                                    && let Some(list) = cache.get_mut(&new_c)
+                                    && !list.contains(&item_u32)
+                                {
+                                    list.push(item_u32);
+                                }
+                            }
+                            holtburger_common::properties::PropertyUpdate::InstanceId(
+                                holtburger_common::properties::PropertyInstanceId::Wielder,
+                                w_id,
+                            ) if *w_id != holtburger_common::Guid::NULL => {
+                                let item_u32 = u32::from(*guid);
+                                for list in latest_container_contents.borrow_mut().values_mut() {
+                                    list.retain(|&g| g != item_u32);
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
                     if contained {
                         let guid_u32 = u32::from(*guid);
                         js_spawned_guids.remove(&guid_u32);

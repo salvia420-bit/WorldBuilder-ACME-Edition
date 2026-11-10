@@ -34595,6 +34595,11 @@ pub struct InventoryItem {
     /// items-4: `PropertyInt::CombatUse` (51) — melee / missile / ammo /
     /// shield / two-handed classification. `0` when absent.
     combat_use: u32,
+    icon_overlay: u32,
+    icon_underlay: u32,
+    icon_overlay_secondary: u32,
+    retained: bool,
+    plural_name: String,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -34803,6 +34808,31 @@ impl InventoryItem {
     #[wasm_bindgen(getter, js_name = combatUse)]
     pub fn combat_use(&self) -> u32 {
         self.combat_use
+    }
+
+    #[wasm_bindgen(getter, js_name = iconOverlay)]
+    pub fn icon_overlay(&self) -> u32 {
+        self.icon_overlay
+    }
+
+    #[wasm_bindgen(getter, js_name = iconUnderlay)]
+    pub fn icon_underlay(&self) -> u32 {
+        self.icon_underlay
+    }
+
+    #[wasm_bindgen(getter, js_name = iconOverlaySecondary)]
+    pub fn icon_overlay_secondary(&self) -> u32 {
+        self.icon_overlay_secondary
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn retained(&self) -> bool {
+        self.retained
+    }
+
+    #[wasm_bindgen(getter, js_name = pluralName)]
+    pub fn plural_name(&self) -> String {
+        self.plural_name.clone()
     }
 }
 
@@ -42828,11 +42858,11 @@ impl SessionHandle {
     /// so the open-time cache is usually empty for a corpse's items.
     #[wasm_bindgen(js_name = getObjectIconId)]
     pub fn get_object_icon_id(&self, guid: u32) -> u32 {
-        let cached = self.latest_object_icons.borrow().get(&guid).copied().unwrap_or(0);
-        if cached != 0 {
-            return cached;
+        let live = self.with_entity(guid, |e| e.icon_id).unwrap_or(0);
+        if live != 0 {
+            return live;
         }
-        self.with_entity(guid, |e| e.icon_id).unwrap_or(0)
+        self.latest_object_icons.borrow().get(&guid).copied().unwrap_or(0)
     }
 
     // ─── rynth-integration Phase 1 (2026-07-16) ─────────────────────────
@@ -49294,6 +49324,7 @@ pub async fn start_session(
         }
     };
 
+    mark_player_inventory_dirty();
     Ok(SessionHandle {
         cmd_tx,
         queued_events,
@@ -50438,7 +50469,8 @@ fn publish_player_inventory_snapshot(
     latest_inventory: &std::rc::Rc<std::cell::RefCell<Vec<InventoryItem>>>,
 ) {
     use holtburger_common::properties::{
-        PropertyFloat, PropertyInt, WorldObjectExt as _, WorldObjectPropertyAccessors as _,
+        PropertyDataId, PropertyFloat, PropertyInt, WorldObjectExt as _,
+        WorldObjectPropertyAccessors as _,
     };
     let mut items: Vec<InventoryItem> =
         Vec::with_capacity(world.player.inventory.len());
@@ -50446,6 +50478,9 @@ fn publish_player_inventory_snapshot(
         let Some(entity) = world.entities.get(guid) else {
             continue;
         };
+        if entity.get_int_prop(PropertyInt::StackSize) == Some(0) {
+            continue;
+        }
         let equip_mask = world
             .player
             .equipment
@@ -50563,6 +50598,14 @@ fn publish_player_inventory_snapshot(
         // CPlayerSystem::AutoWearIsLegal, acclient.c:397338).
         let clothing_priority = entity.priority().unwrap_or(0);
         let combat_use = entity.combat_use().unwrap_or(0);
+        let icon_overlay = entity.icon_overlay_id().map(u32::from).unwrap_or(0);
+        let icon_underlay = entity.icon_underlay_id().map(u32::from).unwrap_or(0);
+        let icon_overlay_secondary = entity
+            .get_data_prop(PropertyDataId::IconOverlaySecondary)
+            .map(u32::from)
+            .unwrap_or(0);
+        let retained = entity.is_retained();
+        let plural_name = entity.plural_name().unwrap_or_default().to_string();
         items.push(InventoryItem {
             guid: u32::from(guid),
             wcid: entity.wcid.unwrap_or(0),
@@ -50592,6 +50635,11 @@ fn publish_player_inventory_snapshot(
             cooldown_duration,
             clothing_priority,
             combat_use,
+            icon_overlay,
+            icon_underlay,
+            icon_overlay_secondary,
+            retained,
+            plural_name,
         });
     }
     // Sort: equipped first (by mask), then by name. Stable so JS

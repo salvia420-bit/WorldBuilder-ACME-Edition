@@ -160,6 +160,8 @@ function resolveItemMeta(guid, invSnapshot) {
           wcid: (it.wcid >>> 0) || 0,
           itemType: (it.itemType >>> 0) || 0,
           uiEffects: (it.uiEffects >>> 0) || 0,
+          iconOverlay: (it.iconOverlay >>> 0) || 0,
+          iconUnderlay: (it.iconUnderlay >>> 0) || 0,
         };
       }
     }
@@ -177,6 +179,8 @@ function resolveItemMeta(guid, invSnapshot) {
         wcid: (meta.wcid >>> 0) || 0,
         itemType: (meta.itemType >>> 0) || 0,
         uiEffects: (meta.uiEffects >>> 0) || 0,
+        iconOverlay: (meta.iconOverlay >>> 0) || 0,
+        iconUnderlay: (meta.iconUnderlay >>> 0) || 0,
       };
     }
   } catch (_) {}
@@ -358,6 +362,7 @@ function buildOverlay() {
   actions.className = "hclb-actions";
   const takeBtn = document.createElement("button");
   takeBtn.type = "button";
+  takeBtn.tabIndex = -1;
   takeBtn.className = "hbk-btn-small";
   takeBtn.textContent = "Take";
   takeBtn.title = "Move the selected item into your pack (or double-click it)";
@@ -367,6 +372,7 @@ function buildOverlay() {
   });
   const allBtn = document.createElement("button");
   allBtn.type = "button";
+  allBtn.tabIndex = -1;
   allBtn.className = "hbk-btn-small";
   allBtn.textContent = "Loot all";
   allBtn.title = "Take every item, one at a time";
@@ -446,9 +452,26 @@ function buildOverlay() {
   return overlay;
 }
 
+function isCorpseEntity(guid) {
+  const g = guid >>> 0;
+  try {
+    const em = window.liveScene3d?.entityManager;
+    const ent = em?.entityMap?.get?.(g) || em?.entityMap?.get?.(String(g)) || null;
+    if (!ent) return false;
+    const meta = ent.meta || ent;
+    if (meta?.objectClass === "Corpse") return true;
+    return (((meta?.objDescFlags >>> 0) || 0) & 0x00002000) !== 0;
+  } catch (_) { return false; }
+}
+
 function extCtx() {
   return {
     playerGuid: localPlayerGuid(),
+    isCorpse: (g) => isCorpseEntity(g),
+    capacity: (key) => {
+      const cap = bagCapacity(key);
+      return cap > 0 ? { used: contentsCount(key), cap } : null;
+    },
     containerName: (key) => {
       const k = (key >>> 0) || 0;
       const pack = k && k !== (state.corpseGuid >>> 0) ? state.packs.find((p) => (p.guid >>> 0) === k) : null;
@@ -549,7 +572,13 @@ function takeItem(itemGuid) {
   }
   const sent = executeItemAction(action, { guid: g, item: meta, owned: false }, {
     stub: action.op === "move"
-      ? { name: meta.name, iconId: meta.iconId, stackSize: meta.stackSize || 1, wcid: meta.wcid || 0, itemType: meta.itemType || 0, equipMask: 0 }
+      ? {
+        name: meta.name, iconId: meta.iconId, stackSize: meta.stackSize || 1,
+        wcid: meta.wcid || 0, itemType: meta.itemType || 0, equipMask: 0,
+        uiEffects: (meta.uiEffects >>> 0) || 0,
+        iconOverlay: (meta.iconOverlay >>> 0) || 0,
+        iconUnderlay: (meta.iconUnderlay >>> 0) || 0,
+      }
       : null,
   });
   if (!sent) {
@@ -698,7 +727,12 @@ function makeCell() {
   cell.draggable = true;
   cell.addEventListener("click", (ev) => {
     ev.stopPropagation();
-    state.selectedGuid = (parseInt(cell.dataset.guid, 10) >>> 0) || 0;
+    const g = (parseInt(cell.dataset.guid, 10) >>> 0) || 0;
+    if (g && window.__useTargeting?.pending && typeof window.__useTargeting.resolve === "function") {
+      window.__useTargeting.resolve(g);
+      return;
+    }
+    state.selectedGuid = g;
     render();
   });
   cell.addEventListener("dblclick", (ev) => {
@@ -759,7 +793,7 @@ function makeBagCell() {
 }
 function setBagCapacity(cell, used, cap) {
   const frac = cap > 0 ? Math.max(0, Math.min(1, used / cap)) : 0;
-  cell._cap.style.display = cap > 0 ? "" : "none";
+  cell._cap.style.display = (cap > 0 && used > 0) ? "" : "none";
   cell._cap.firstChild.style.setProperty("--cap", `${Math.round(frac * 100)}%`);
 }
 // A pack inside the ground object: click (or double-click) opens it in
@@ -839,6 +873,11 @@ function renderPackRow() {
   for (const el of want) {
     if (el === cur) { cur = cur.nextSibling; continue; }
     list.insertBefore(el, cur);
+  }
+  while (cur) {
+    const nxt = cur.nextSibling;
+    cur.remove();
+    cur = nxt;
   }
 }
 
@@ -931,6 +970,11 @@ function render() {
     if (el === cur) { cur = cur.nextSibling; continue; }
     strip.insertBefore(el, cur);
   }
+  while (cur) {
+    const nxt = cur.nextSibling;
+    cur.remove();
+    cur = nxt;
+  }
   requestAnimationFrame(placeWindow);
 }
 
@@ -971,7 +1015,9 @@ function refreshContents() {
       // extcontainer-5: the packs go in the container row; the strip shows
       // the open container — the ground object, or the pack opened in place
       // (its contents came with the chest's ViewContents).
-      const packs = externalContainerView({ root: g, rootItems }).packs;
+      const rootSplit = externalContainerView({ root: g, rootItems });
+      const packs = rootSplit.packs;
+      state.counts.set(g, rootSplit.items.length);
       for (const p of packs) state.counts.set(p.guid >>> 0, notOwned(contentsOf(p.guid >>> 0)).length);
       const wantSub = (state.openSub >>> 0) || 0;
       let subItems = null;

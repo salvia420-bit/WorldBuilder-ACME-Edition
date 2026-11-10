@@ -813,6 +813,11 @@ function renderEntityPaperdoll(wrapEl, guid, viewport = null) {
     meta.subPalettes ?? new Uint32Array(0),
     wieldedItems,
     stanceLow,
+    {
+      modelChanges: meta.modelChanges ?? new Uint32Array(0),
+      textureChanges: meta.textureChanges ?? new Uint32Array(0),
+      heritage: (meta.heritage >>> 0) || 0,
+    },
   ).catch(() => { /* loadPlayer logs internally on failure */ });
   try {
     window.__diag?.examine?.onPaperdollMounted?.({

@@ -3,9 +3,9 @@ use crate::hydration::WorldObjectPropertiesHydrationExt;
 use crate::identify::{self, IdentifyTarget};
 use holtburger_common::position::WorldPosition;
 use holtburger_common::properties::{
-    HasProperties, HasPropertiesMut, ObjectDescriptionFlag, PhysicsState, PropertyInstanceId,
-    PropertyInt, PropertyString, PropertyUpdate, WeenieHeaderFlag, WeenieHeaderFlag2,
-    WorldObjectProperties, WorldObjectPropertyAccessorsMut,
+    HasProperties, HasPropertiesMut, ObjectDescriptionFlag, PhysicsState, PropertyDataId,
+    PropertyInstanceId, PropertyInt, PropertyString, PropertyUpdate, WeenieHeaderFlag,
+    WeenieHeaderFlag2, WorldObjectProperties, WorldObjectPropertyAccessorsMut,
 };
 use holtburger_common::sequence::is_newer_u16;
 use holtburger_common::{Guid, Vector3};
@@ -1333,6 +1333,10 @@ impl Entity {
     }
 
     pub fn set_property(&mut self, update: PropertyUpdate) {
+        if let PropertyUpdate::DataId(PropertyDataId::Icon, v) = update {
+            let raw = u32::from(v);
+            self.icon_id = (raw != 0).then_some(raw);
+        }
         self.properties.apply(update);
     }
 

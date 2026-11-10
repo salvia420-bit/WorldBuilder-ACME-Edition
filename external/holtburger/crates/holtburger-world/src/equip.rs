@@ -20,8 +20,36 @@
 //! the coat.
 
 use crate::context::WorldContext;
+use crate::entity::Entity;
 use holtburger_common::Guid;
-use holtburger_common::properties::{EquipMask, WorldObjectExt};
+use holtburger_common::properties::{
+    EquipMask, PropertyInt, WorldObjectExt, WorldObjectPropertyAccessors,
+};
+
+const COMBAT_USE_MISSILE: i32 = 2;
+const COMBAT_USE_TWO_HANDED: i32 = 5;
+const ITEM_TYPE_CASTER: u32 = 0x8000;
+
+/// Retail `ACCWeenieObject::BlocksUseOfShield` (`acclient.c:395589`):
+/// Caster (`ItemType & 0x8000`), TwoHanded (`CombatUse == 5`), or Launcher
+/// (`CombatUse == 2` with non-zero `AmmoType`), falling back to `loc` bits
+/// when `CombatUse` has not arrived yet.
+fn entity_blocks_shield(entity: Option<&Entity>, loc: EquipMask) -> bool {
+    if let Some(e) = entity {
+        if (e.item_type_int().unwrap_or(0) & ITEM_TYPE_CASTER) != 0 {
+            return true;
+        }
+        let ammo = e.ammo_type().unwrap_or(0);
+        if let Some(cu) = e.get_int_prop(PropertyInt::CombatUse)
+            && cu != 0
+        {
+            return (cu == COMBAT_USE_MISSILE && ammo != 0) || cu == COMBAT_USE_TWO_HANDED;
+        }
+    }
+    let ammo = entity.and_then(|e| e.ammo_type()).unwrap_or(0);
+    loc.intersects(EquipMask::TWO_HANDED | EquipMask::CASTER)
+        || (loc.intersects(EquipMask::MISSILE_WEAPON) && ammo != 0)
+}
 
 /// Retail `CPlayerSystem::AutoWearIsLegal`'s wearable family
 /// (`valid_locations & 0x8007FFF`): the fourteen armor / clothing slots plus
@@ -64,9 +92,15 @@ pub fn wield_unequip_conflicts<W: WorldContext>(
     let new_item = world.get_entity(item_guid);
     let new_ammo_type = new_item.and_then(|e| e.ammo_type()).unwrap_or(0);
     let new_wcid = new_item.and_then(|e| e.wcid);
-    let new_is_launcher = requested.intersects(EquipMask::MISSILE_WEAPON) && new_ammo_type != 0;
-    let new_blocks_shield =
-        new_is_launcher || requested.intersects(EquipMask::TWO_HANDED | EquipMask::CASTER);
+    let new_combat_use = new_item
+        .and_then(|e| e.get_int_prop(PropertyInt::CombatUse))
+        .unwrap_or(0);
+    let new_is_launcher = if new_combat_use != 0 {
+        new_combat_use == COMBAT_USE_MISSILE && new_ammo_type != 0
+    } else {
+        requested.intersects(EquipMask::MISSILE_WEAPON) && new_ammo_type != 0
+    };
+    let new_blocks_shield = entity_blocks_shield(new_item, requested);
 
     let mut to_unequip = Vec::new();
     for guid in world.iter_equipment() {
@@ -90,10 +124,8 @@ pub fn wield_unequip_conflicts<W: WorldContext>(
         let same_slot = loc.intersects(requested);
         let weapon_swap = requested.intersects(weapon_family) && loc.intersects(weapon_family);
         let shield_clear = new_blocks_shield && loc.intersects(EquipMask::SHIELD);
-        let shield_vs_weapon = requested.intersects(EquipMask::SHIELD)
-            && (loc.intersects(EquipMask::TWO_HANDED | EquipMask::CASTER)
-                || (loc.intersects(EquipMask::MISSILE_WEAPON)
-                    && equipped.ammo_type().unwrap_or(0) != 0));
+        let shield_vs_weapon =
+            requested.intersects(EquipMask::SHIELD) && entity_blocks_shield(Some(equipped), loc);
         // Launcher swap with mismatched equipped ammo (e.g. longbow over
         // quarrels) — ACE rejects the wield on AmmoType mismatch, so pull
         // the stale ammo too.
@@ -253,6 +285,46 @@ mod tests {
         assert_eq!(
             conflicts(&state, 0x8000_0063, 0x0040_0000),
             vec![0x8000_0060, 0x8000_0061]
+        );
+    }
+
+    #[test]
+    fn plan_wield_two_handed_combat_use_and_dual_wield_offhand() {
+        let mut state = world();
+        // Shield equipped in 0x0020_0000.
+        wielded(&mut state, 0x8000_0070, 500, 0x0020_0000, 0);
+        // Two-handed weapon whose ValidLocations is MELEE_WEAPON (0x0010_0000)
+        // with CombatUse = 5 (TwoHanded): clears shield.
+        pack_item(&mut state, 0x8000_0071, 501, 0x0010_0000, 0);
+        state
+            .entities
+            .get_mut(Guid(0x8000_0071))
+            .unwrap()
+            .properties
+            .ints
+            .insert(PropertyInt::CombatUse, 5);
+        assert_eq!(
+            conflicts(&state, 0x8000_0071, 0x0010_0000),
+            vec![0x8000_0070]
+        );
+
+        // Dual-wielding a 1H sword into SHIELD (0x0020_0000) while a 2H sword
+        // is equipped in MELEE_WEAPON clears the 2H sword, NOT a 1H main-hand sword.
+        let mut state2 = world();
+        wielded(&mut state2, 0x8000_0072, 502, 0x0010_0000, 0); // 1H main-hand
+        pack_item(&mut state2, 0x8000_0073, 503, 0x0010_0000, 0); // 1H off-hand
+        assert!(conflicts(&state2, 0x8000_0073, 0x0020_0000).is_empty());
+
+        state2
+            .entities
+            .get_mut(Guid(0x8000_0072))
+            .unwrap()
+            .properties
+            .ints
+            .insert(PropertyInt::CombatUse, 5);
+        assert_eq!(
+            conflicts(&state2, 0x8000_0073, 0x0020_0000),
+            vec![0x8000_0072]
         );
     }
 }

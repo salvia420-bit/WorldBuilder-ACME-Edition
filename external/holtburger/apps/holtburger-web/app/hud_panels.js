@@ -89,7 +89,44 @@ export function initHudPanels(D) {
       let ok = false;
       try { ok = !!(h && typeof h.canUseWith === "function" && h.canUseWith(itemGuid >>> 0, targetGuid >>> 0)); } catch (_) {}
       if (ok) {
-        try { h.useWithTarget(itemGuid >>> 0, targetGuid >>> 0); }
+        const srcGuid = itemGuid >>> 0;
+        const dstGuid = targetGuid >>> 0;
+        // Retail ItemHolder::TargetAcquired (acclient.c:433600-433619):
+        // an empty Mana Stone (ItemType 0x80000, !(pwd._effects & UiEffects.Magical))
+        // refuses Retained targets (PropertyBool 91) and confirms item destruction.
+        let toolType = 0;
+        try { toolType = (h?.objectIntProperty?.(srcGuid, 1) >>> 0) || 0; } catch (_) {}
+        if ((toolType & 0x00080000) !== 0) {
+          let uiEffects = 0;
+          try { uiEffects = (h?.objectIntProperty?.(srcGuid, 18) >>> 0) || 0; } catch (_) {}
+          let curMana = 0;
+          try { curMana = Number(h?.objectIntProperty?.(srcGuid, 107)) || 0; } catch (_) {}
+          if ((uiEffects & 0x1) === 0 && !(curMana > 0)) {
+            let retained = false;
+            try { retained = h?.objectBoolProperty?.(dstGuid, 91) === true; } catch (_) {}
+            if (retained) {
+              window.__pluginClient?.events?.emit?.("clientActionRejected", {
+                message: 'You cannot drain the mana of this item because it is "Retained".',
+              });
+              this.cancel();
+              return true;
+            }
+            if (typeof window.__showManastoneConfirm === "function") {
+              let targetName = "";
+              try { targetName = String(h?.objectName?.(dstGuid) || "").trim(); } catch (_) {}
+              this.cancel();
+              window.__showManastoneConfirm({
+                itemGuid: srcGuid,
+                name: itemName,
+                targetGuid: dstGuid,
+                targetName: targetName || "item",
+                mode: "drain",
+              });
+              return true;
+            }
+          }
+        }
+        try { h.useWithTarget(srcGuid, dstGuid); }
         catch (e) { console.warn(`[use-target] useWithTarget: ${e?.message ?? e}`); }
       } else {
         window.__pluginClient?.events?.emit?.("clientActionRejected", {

@@ -68,6 +68,7 @@ import {
   formatAppraisalTooltip,
   takeInventoryRows,
   rowUsesPackSlot,
+  isOpenableContainer,
   createPackOrder,
   packCapacity,
   DROP_TARGET,
@@ -79,11 +80,17 @@ import {
   primaryUseAction,
   defaultOnUrlFlag,
   planWear,
+  planAutoSortJewelry,
   planAmmoWield,
   readySlotOccupant,
   WEARABLE_LOCATIONS,
   DEFAULT_PLAYER_ITEMS_CAPACITY,
   DEFAULT_PLAYER_CONTAINERS_CAPACITY,
+  PAPERDOLL_HIT_DID,
+  PAPERDOLL_HIT_RECT,
+  paperdollItemAt,
+  cooldownStep,
+  matchCooldownEnchantment,
 } from "./inventory_helpers.js";
 import {
   beginItemDrag,
@@ -120,11 +127,12 @@ const MAIN_PACK_ICON_META = Object.freeze({ iconId: PLAYER_PACK_ICON, itemType: 
 // (PropertyDataId 50 / 52) come from the wasm entity store.
 function iconMetaForRow(row) {
   const g = (row?.guid >>> 0) || 0;
-  let ovl = 0, und = 0;
+  let ovl = (row?.iconOverlay >>> 0) || 0;
+  let und = (row?.iconUnderlay >>> 0) || 0;
   const h = (typeof window !== "undefined") ? window.__sessionHandle : null;
   if (g && h) {
-    try { ovl = (h.objectDataIdProperty?.(g, 50) >>> 0) || 0; } catch (_) { ovl = 0; }
-    try { und = (h.objectDataIdProperty?.(g, 52) >>> 0) || 0; } catch (_) { und = 0; }
+    if (!ovl) { try { ovl = (h.objectDataIdProperty?.(g, 50) >>> 0) || 0; } catch (_) { ovl = 0; } }
+    if (!und) { try { und = (h.objectDataIdProperty?.(g, 52) >>> 0) || 0; } catch (_) { und = 0; } }
   }
   return {
     iconId: (row?.iconId >>> 0) || 0,
@@ -133,6 +141,41 @@ function iconMetaForRow(row) {
     iconOverlay: ovl,
     iconUnderlay: und,
   };
+}
+
+// UIElement_UIItem::SetShortcutNum (acclient.c:271599): normal & magic-stance
+// shortcut badge DIDs for slots 0..9 (keys 1..9, 0).
+const SHORTCUT_NUM_DIDS = Object.freeze([
+  0x0600109e, 0x0600109f, 0x060010a0, 0x060010a1, 0x060010a2,
+  0x060010a3, 0x060010a4, 0x060010a5, 0x060010a6, 0x060074d3,
+]);
+const SHORTCUT_NUM_GHOST_DIDS = Object.freeze([
+  0x06001acc, 0x06001acd, 0x06001ace, 0x06001acf, 0x06001ad0,
+  0x06001ad1, 0x06001ad2, 0x06001ad3, 0x06001ad4, 0x060074d2,
+]);
+
+// gmPaperDollUI::CreateClickMap (acclient.c:220420): 100×214 PaperDollHitTest
+// silhouette decoded once per session from client_portal.dat (0x06004D8B).
+let hitTestMap = null;
+let hitTestInflight = null;
+function loadPaperdollHitMap() {
+  if (hitTestMap) return Promise.resolve(hitTestMap);
+  if (hitTestInflight) return hitTestInflight;
+  const wasm = (typeof window !== "undefined") ? (window.__hbWasm ?? window.__wasm ?? null) : null;
+  const fetchIcon = wasm?.fetch_icon_pixels;
+  if (typeof fetchIcon !== "function") return Promise.resolve(null);
+  hitTestInflight = Promise.resolve()
+    .then(() => fetchIcon(PAPERDOLL_HIT_DID >>> 0))
+    .then((r) => {
+      if (r && r.width && r.height && r.pixels?.length) {
+        hitTestMap = { width: r.width >>> 0, height: r.height >>> 0, data: new Uint8Array(r.pixels) };
+      }
+      try { r?.free?.(); } catch (_) {}
+      return hitTestMap;
+    })
+    .catch(() => null)
+    .finally(() => { hitTestInflight = null; });
+  return hitTestInflight;
 }
 // Retail human defaults when the snapshot has not surfaced the property
 // yet (ACE human weenie: ItemsCapacity 102, ContainersCapacity 7).
@@ -372,7 +415,21 @@ function ensureStyles() {
       background: url("${SP}/0x0600109A.png") center / 100% 100% no-repeat;
       pointer-events: none;
     }
+    #${OVERLAY_ID} .hb-inv-doll-slot.is-selected::after {
+      content: ""; position: absolute; inset: 0; z-index: 4;
+      background: url("${SP}/0x06004D09.png") center / 100% 100% no-repeat;
+      pointer-events: none;
+    }
     #${OVERLAY_ID} .hb-inv-doll-slot.is-drag-source { opacity: 0.4; }
+    /* gmPaperDollUI drag/click band 0x100001d6 (51,0 100×214) over the figure. */
+    #${OVERLAY_ID} .hb-inv-doll-hit {
+      position: absolute;
+      left: ${PAPERDOLL_HIT_RECT.x}px; top: ${PAPERDOLL_HIT_RECT.y}px;
+      width: ${PAPERDOLL_HIT_RECT.w}px; height: ${PAPERDOLL_HIT_RECT.h}px;
+      z-index: 1;
+      cursor: pointer;
+    }
+    #${OVERLAY_ID}.slots-view .hb-inv-doll-hit { display: none; }
     /* Aetheria sigil slots are hidden until PropertyInt::AetheriaBitfield
        unlocks them (gmPaperDollUI::UpdateAetheria). */
     #${OVERLAY_ID} .hb-inv-doll-slot.aetheria-locked { display: none; }
@@ -486,17 +543,39 @@ function ensureStyles() {
       pointer-events: none;
     }
     #${OVERLAY_ID} .hb-inv-bag.is-drag-source { opacity: 0.4; }
+    #${OVERLAY_ID} .hb-inv-bag.is-selected { outline: 1px solid #f3d27a; outline-offset: -2px; }
+
+    /* UIElement_UIItem state overlays: Trade (0x0600109D), Sell (0x060012D9),
+       Cooldown 10..100 (0x060067CF..0x060067D8), ShortcutNum (0x0600109E..). */
+    #${OVERLAY_ID} .hb-uiitem-trade,
+    #${OVERLAY_ID} .hb-uiitem-sell,
+    #${OVERLAY_ID} .hb-uiitem-cd,
+    #${OVERLAY_ID} .hb-uiitem-sc {
+      position: absolute; inset: 0; z-index: 3;
+      background: transparent center / 100% 100% no-repeat;
+      image-rendering: pixelated;
+      pointer-events: none;
+    }
+    #${OVERLAY_ID} .hb-inv-bag > .hb-uiitem-trade,
+    #${OVERLAY_ID} .hb-inv-bag > .hb-uiitem-sell,
+    #${OVERLAY_ID} .hb-inv-bag > .hb-uiitem-cd,
+    #${OVERLAY_ID} .hb-inv-bag > .hb-uiitem-sc {
+      inset: auto; left: 2px; top: 2px; width: 32px; height: 32px;
+    }
+    #${OVERLAY_ID} .hb-uiitem-trade { background-image: url("${SP}/0x0600109D.png"); }
+    #${OVERLAY_ID} .hb-uiitem-sell { background-image: url("${SP}/0x060012D9.png"); }
 
     /* ── gm3DItemsUI grid: fills the space under the paperdoll, left of
        the backpack column (retail ThreeDItemsField 234 wide), and scrolls
-       with the rope scrollbar. ── */
+       with the rope scrollbar. Explicit 6-column track avoids subpixel 5-col
+       collapse on fractional DPI zoom (288 - 66 - 16 - 2 = 204 >= 202). ── */
     #${OVERLAY_ID} .hb-inv-items {
       position: absolute;
       left: 0; top: ${PAPERDOLL_H}px; right: ${BAG_COL_W + 5}px; bottom: 0;
       box-sizing: border-box;
-      padding: 3px 2px;
+      padding: 3px 1px;
       display: grid;
-      grid-template-columns: repeat(auto-fill, 32px);
+      grid-template-columns: repeat(6, 32px);
       grid-auto-rows: 32px;
       gap: 2px;
       align-content: start;
@@ -651,6 +730,23 @@ function wieldEquipState(rows) {
     retailWieldLegal: RETAIL_WIELD_LEGAL,
   });
 }
+function tradedGuidsSet(h) {
+  const set = new Set();
+  if (typeof h?.playerTrade !== "function") return set;
+  let snap = null;
+  try {
+    snap = h.playerTrade();
+    const my = snap?.myItems;
+    if (my) {
+      for (const it of Array.from(my)) {
+        try { if (it?.guid) set.add(it.guid >>> 0); } catch (_) {}
+        try { it?.free?.(); } catch (_) {}
+      }
+    }
+  } catch (_) {}
+  finally { try { snap?.free?.(); } catch (_) {} }
+  return set;
+}
 function activateItem(guid, { cell = null } = {}) {
   const g = (guid >>> 0) || 0;
   if (!g) return false;
@@ -670,7 +766,12 @@ function activateItem(guid, { cell = null } = {}) {
   let equippedMask = 0;
   for (const r of rows) equippedMask |= (r.equipMask >>> 0);
   const act = primaryUseAction(row, { needsTarget, equippedMask: equippedMask >>> 0 });
-  const src = { guid: g, item: { ...row, isPack: rowUsesPackSlot(row) }, owned: true, sourceEl: cell };
+  const src = { guid: g, item: { ...row, isPack: rowUsesPackSlot(row), canHoldItems: isOpenableContainer(row) }, owned: true, sourceEl: cell };
+  if (act.kind !== "open" && tradedGuidsSet(h).has(g)) {
+    const verb = (act.kind === "wield" || act.kind === "wear") ? "wielded" : "used";
+    executeItemAction({ op: "reject", message: `You are trading the ${row.name || "item"}, it cannot be ${verb}` }, src);
+    return true;
+  }
   switch (act.kind) {
     case "open":
       if ((row.containerId >>> 0) === 0) openPack(g);
@@ -683,6 +784,15 @@ function activateItem(guid, { cell = null } = {}) {
       if (RETAIL_AUTO_WEAR) {
         if (act.kind === "wear" && (slotMask & WEARABLE_LOCATIONS) !== 0) {
           const plan = planWear(row, rows);
+          if (plan.op === "reject") { executeItemAction(plan, src); return true; }
+          if (plan.op === "wear") slotMask = plan.slotMask >>> 0;
+        } else if (act.kind === "wear") {
+          let aetheriaBits;
+          if (typeof h?.playerAetheriaBits === "number") aetheriaBits = h.playerAetheriaBits | 0;
+          else if (typeof h?.playerAetheriaBits === "function") {
+            try { aetheriaBits = h.playerAetheriaBits() | 0; } catch (_) {}
+          }
+          const plan = planAutoSortJewelry(row, rows, aetheriaBits !== undefined ? { aetheriaBits } : {});
           if (plan.op === "reject") { executeItemAction(plan, src); return true; }
           if (plan.op === "wear") slotMask = plan.slotMask >>> 0;
         } else if (act.kind === "wield") {
@@ -779,11 +889,85 @@ function doMount(parentEl, _ctx) {
     const g = guid >>> 0;
     return rowsByGuid.get(g) || stubs.get(g) || null;
   }
-  function withPack(row) { return row ? { ...row, isPack: rowUsesPackSlot(row) } : null; }
+  function withPack(row) {
+    return row ? { ...row, isPack: rowUsesPackSlot(row), canHoldItems: isOpenableContainer(row) } : null;
+  }
   function gridKey() { return selectedPackContainerId === 0 ? MAIN_PACK_KEY : selectedPackContainerId; }
   function mainCap() { return (readHandleNumber("playerItemsCapacity") >>> 0) || DEFAULT_MAIN_CAP; }
   function packsCap() { return (readHandleNumber("playerContainersCapacity") >>> 0) || DEFAULT_PACKS_CAP; }
   function capacityOf(key) { return packCapacity(rows, key, { mainCap: mainCap(), packsCap: packsCap() }); }
+
+  // ── UIElement_UIItem state overlays (Trade / Sell / Cooldown / Shortcut) ──
+  const cdReceivedAt = new Map(); // "spell:layer:start" -> wall-clock s first seen
+  let cdTimer = 0;
+  function setLazyOverlay(el, prop, cls, on) {
+    if (on) {
+      if (!el[prop]) {
+        const sp = document.createElement("span");
+        sp.className = cls;
+        el.appendChild(sp);
+        el[prop] = sp;
+      }
+      return el[prop];
+    }
+    if (el[prop]) {
+      el[prop].remove();
+      el[prop] = null;
+    }
+    return null;
+  }
+  function setUiItemTrade(el, traded) {
+    if (!!el._traded === !!traded) return;
+    el._traded = !!traded;
+    if (traded) el.dataset.traded = "1";
+    else delete el.dataset.traded;
+    setLazyOverlay(el, "_tradeEl", "hb-uiitem-trade", traded);
+  }
+  function setUiItemSell(el, selling) {
+    if (!!el._selling === !!selling) return;
+    el._selling = !!selling;
+    if (selling) el.dataset.selling = "1";
+    else delete el.dataset.selling;
+    setLazyOverlay(el, "_sellEl", "hb-uiitem-sell", selling);
+  }
+  function setUiItemCooldown(el, step) {
+    const s = step | 0;
+    if ((el._cdStep | 0) === s) return;
+    el._cdStep = s;
+    if (s > 0) el.dataset.cdStep = String(s);
+    else delete el.dataset.cdStep;
+    const node = setLazyOverlay(el, "_cdEl", "hb-uiitem-cd", s > 0);
+    if (node) {
+      const hex = "0x" + (0x060067ce + s).toString(16).toUpperCase().padStart(8, "0");
+      node.style.backgroundImage = `url("${SP}/${hex}.png")`;
+    }
+  }
+  function setUiItemShortcut(el, slotIdx, ghosted) {
+    const idx = slotIdx >= 0 && slotIdx < 10 ? (slotIdx | 0) : -1;
+    const gh = !!ghosted;
+    const key = idx >= 0 ? `${idx}:${gh ? 1 : 0}` : "";
+    if ((el._scKey || "") === key) return;
+    el._scKey = key;
+    if (idx >= 0) el.dataset.shortcut = String(idx === 9 ? 0 : idx + 1);
+    else delete el.dataset.shortcut;
+    const node = setLazyOverlay(el, "_scEl", "hb-uiitem-sc", idx >= 0);
+    if (node) {
+      const did = (gh ? SHORTCUT_NUM_GHOST_DIDS : SHORTCUT_NUM_DIDS)[idx] >>> 0;
+      node.style.backgroundImage = "";
+      const hit = getIconImmediate(did);
+      if (hit) { node.style.backgroundImage = `url("${hit}")`; return; }
+      fetchIconDataUrlShared(did, "inventory").then((url) => {
+        if (el._scKey !== key || !el._scEl) return;
+        if (typeof url === "string" && url) el._scEl.style.backgroundImage = `url("${url}")`;
+      }).catch(() => {});
+    }
+  }
+  function clearUiItemOverlays(el) {
+    setUiItemTrade(el, false);
+    setUiItemSell(el, false);
+    setUiItemCooldown(el, 0);
+    setUiItemShortcut(el, -1, false);
+  }
 
   // ── usetarget-1: target mode in the inventory views ─────────────
   /** The pending use-on-target this view resolves, or null. */
@@ -841,6 +1025,105 @@ function doMount(parentEl, _ctx) {
   viewportWrap.appendChild(paperdollViewport.dom);
   paperdoll.appendChild(viewportWrap);
 
+  function unwieldGuidToPack(guid) {
+    const h = sessionHandleNow();
+    try { window.__audioOptimistic?.playOptimistic?.(0x8D, guid); } catch (_) {}
+    if (typeof h?.unwieldToPack === "function") {
+      try { h.unwieldToPack(guid); } catch (e) { console.warn("[paperdoll-dblclick] unwieldToPack failed:", e); }
+    } else if (typeof h?.moveItem === "function" && localPlayerGuid()) {
+      try { h.moveItem(guid, localPlayerGuid(), 0); } catch (_) {}
+    }
+  }
+
+  // gmPaperDollUI::CreateClickMap / GetPaperDollItemUnderMouse (acclient.c:
+  // 220420, 220495) — the 100×214 silhouette drag/click band 0x100001d6.
+  loadPaperdollHitMap();
+  const dollHit = document.createElement("div");
+  dollHit.className = "hb-inv-doll-hit";
+  dollHit.dataset.elemId = "0x100001D6";
+  dollHit.draggable = true;
+  function hitGuidOnFigure(ev) {
+    if (slotsViewChecked || !hitTestMap) return 0;
+    const rect = dollHit.getBoundingClientRect();
+    const x = rect.width > 0 ? ((ev.clientX - rect.left) * hitTestMap.width / rect.width) : (ev.offsetX ?? ev.clientX ?? -1);
+    const y = rect.height > 0 ? ((ev.clientY - rect.top) * hitTestMap.height / rect.height) : (ev.offsetY ?? ev.clientY ?? -1);
+    return paperdollItemAt(hitTestMap, x, y, rows, localPlayerGuid());
+  }
+  dollHit.addEventListener("mousemove", (ev) => {
+    const hit = hitGuidOnFigure(ev);
+    const me = localPlayerGuid();
+    dollHit.style.cursor = hit ? "pointer" : "default";
+    if (!hit) { unmarkUseTarget(dollHit); hideItemTooltip(); return; }
+    if (pendingUseTarget()) { markUseTarget(dollHit, me || hit); }
+    if (hit === me) {
+      showItemTooltip(dollHit, playerName() || "You");
+    } else {
+      const row = rowsByGuid.get(hit);
+      if (row) showItemTooltip(dollHit, row.name || "Equipped item");
+    }
+  });
+  dollHit.addEventListener("mouseleave", () => { unmarkUseTarget(dollHit); hideItemTooltip(); });
+  dollHit.addEventListener("click", (ev) => {
+    if (ev.button !== 0) return;
+    const hit = hitGuidOnFigure(ev);
+    if (!hit) return;
+    const me = localPlayerGuid();
+    if (pendingUseTarget() && resolveUseTarget(me || hit)) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      return;
+    }
+    if (hit !== me) setSelectedGuid(hit);
+  });
+  dollHit.addEventListener("dblclick", (ev) => {
+    if (ev.button !== 0) return;
+    const hit = hitGuidOnFigure(ev);
+    const me = localPlayerGuid();
+    if (!hit || hit === me || justTargeted(hit) || justTargeted(me)) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    unwieldGuidToPack(hit);
+  });
+  dollHit.addEventListener("contextmenu", (ev) => {
+    const hit = hitGuidOnFigure(ev);
+    if (!hit) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    const me = localPlayerGuid();
+    if (hit !== me) setSelectedGuid(hit);
+    if (hit !== me && typeof window.__openContextMenuFor === "function") {
+      try {
+        window.__openContextMenuFor({
+          source: "inv-paperdoll", guid: hit,
+          name: rowsByGuid.get(hit)?.name || "Item",
+          clientX: ev.clientX, clientY: ev.clientY,
+        });
+      } catch (_) {}
+    } else if (typeof window.__showExamineFor === "function") {
+      try { window.__showExamineFor(hit, { name: playerName() || "You" }); } catch (_) {}
+    }
+  });
+  dollHit.addEventListener("dragstart", (ev) => {
+    const hit = hitGuidOnFigure(ev);
+    const me = localPlayerGuid();
+    if (SELF_SHORTCUT && hit && hit === me) {
+      hideItemTooltip();
+      beginItemDrag(ev, {
+        guid: me, self: true, owned: true, sourceList: null, sourceIndex: -1, sourceEl: dollHit,
+        item: { name: playerName() || "Main Pack", ...MAIN_PACK_ICON_META },
+      });
+      return;
+    }
+    const row = (hit && hit !== me) ? rowsByGuid.get(hit) : null;
+    if (!row) { ev.preventDefault(); return; }
+    hideItemTooltip();
+    beginItemDrag(ev, {
+      guid: hit, item: withPack(row), owned: true,
+      sourceList: null, sourceIndex: -1, sourceEl: dollHit,
+    });
+  });
+  paperdoll.appendChild(dollHit);
+
   const dollSlotEls = {};
   const aetheriaSlotEls = [];
   for (const s of PAPERDOLL_SLOTS) {
@@ -866,6 +1149,7 @@ function doMount(parentEl, _ctx) {
     const icon = document.createElement("div");
     icon.className = "hb-inv-doll-icon";
     el.appendChild(icon);
+    el._stackN = 0;
     el.addEventListener("mouseenter", () => {
       const nm = el.dataset.itemName;
       showItemTooltip(el, nm ? `${nm}\n${s.name}` : s.name);
@@ -873,10 +1157,13 @@ function doMount(parentEl, _ctx) {
     });
     el.addEventListener("mouseleave", () => { unmarkUseTarget(el); hideItemTooltip(); });
     // usetarget-1: with a target awaited, a worn item's slot targets that
-    // item (each slot is an item list — HandleTargetedUseLeftClick).
+    // item (each slot is an item list — HandleTargetedUseLeftClick); else
+    // retail left-click selects the equipped item.
     el.addEventListener("click", (ev) => {
       if (ev.button !== 0) return;
-      if (resolveUseTarget(parseInt(el.dataset.itemGuid, 10))) { ev.preventDefault(); ev.stopPropagation(); }
+      const guid = (parseInt(el.dataset.itemGuid, 10) >>> 0) || 0;
+      if (resolveUseTarget(guid)) { ev.preventDefault(); ev.stopPropagation(); return; }
+      if (guid) setSelectedGuid(guid);
     });
     // Equipped item → drag source (to a pack, the grid, the world, the hotbar…).
     el.addEventListener("dragstart", (ev) => {
@@ -897,19 +1184,15 @@ function doMount(parentEl, _ctx) {
       ev.preventDefault();
       ev.stopPropagation();
       if (justTargeted(guid)) return; // its first press was a target click
-      const h = sessionHandleNow();
-      try { window.__audioOptimistic?.playOptimistic?.(0x8D, guid); } catch (_) {}
-      if (typeof h?.unwieldToPack === "function") {
-        try { h.unwieldToPack(guid); } catch (e) { console.warn("[paperdoll-dblclick] unwieldToPack failed:", e); }
-      } else if (typeof h?.moveItem === "function" && localPlayerGuid()) {
-        try { h.moveItem(guid, localPlayerGuid(), 0); } catch (_) {}
-      }
+      unwieldGuidToPack(guid);
     });
     el.addEventListener("contextmenu", (ev) => {
       ev.preventDefault();
       ev.stopPropagation();
       const guid = (parseInt(el.dataset.itemGuid, 10) >>> 0) || 0;
-      if (!guid || typeof window.__openContextMenuFor !== "function") return;
+      if (!guid) return;
+      setSelectedGuid(guid);
+      if (typeof window.__openContextMenuFor !== "function") return;
       try {
         window.__openContextMenuFor({
           source: "inv-paperdoll", guid,
@@ -997,7 +1280,7 @@ function doMount(parentEl, _ctx) {
   }
   function setBagCapacity(cell, used, cap) {
     const frac = cap > 0 ? Math.max(0, Math.min(1, used / cap)) : 0;
-    cell._cap.style.display = cap > 0 ? "" : "none";
+    cell._cap.style.display = (cap > 0 && used > 0) ? "" : "none";
     cell._cap.firstChild.style.setProperty("--cap", `${Math.round(frac * 100)}%`);
   }
 
@@ -1045,6 +1328,10 @@ function doMount(parentEl, _ctx) {
     const g = (parseInt(cell.dataset.packGuid, 10) >>> 0) || 0;
     if (!g) { showItemTooltip(cell, "Empty pack slot"); return; }
     const row = displayRow(g);
+    if (row && !isOpenableContainer(row)) {
+      showItemTooltip(cell, row.name || "Item");
+      return;
+    }
     const c = capacityOf(g);
     showItemTooltip(cell, `${row?.name || "Pack"}\n${c.used} / ${c.cap || "?"} items`);
   }
@@ -1063,10 +1350,17 @@ function doMount(parentEl, _ctx) {
       if (!cell) {
         cell = makeBagCell();
         cell.draggable = true;
-        cell.addEventListener("click", () => {
+        cell.addEventListener("click", (ev) => {
           const pg = (parseInt(cell.dataset.packGuid, 10) >>> 0) || 0;
           if (resolveUseTarget(pg)) return; // usetarget-1: the pack is the target
-          if (pg) selectPack(pg);
+          if (!pg) return;
+          const r = displayRow(pg);
+          if (r && !isOpenableContainer(r)) {
+            setSelectedGuid(pg);
+            if (ev.detail >= 2 && !justTargeted(pg)) useOrEquip(r, cell);
+            return;
+          }
+          selectPack(pg);
         });
         cell.addEventListener("mouseenter", (ev) => {
           onBagEnter(ev);
@@ -1088,11 +1382,14 @@ function doMount(parentEl, _ctx) {
         cell.addEventListener("contextmenu", (ev) => {
           ev.preventDefault();
           const pg = (parseInt(cell.dataset.packGuid, 10) >>> 0) || 0;
-          if (!pg || typeof window.__openContextMenuFor !== "function") return;
+          if (!pg) return;
+          const r = displayRow(pg);
+          if (r && !isOpenableContainer(r)) setSelectedGuid(pg);
+          if (typeof window.__openContextMenuFor !== "function") return;
           try {
             window.__openContextMenuFor({
               source: "inv-grid", guid: pg, srcLi: legacyLi(pg, cell),
-              name: displayRow(pg)?.name || "Pack", clientX: ev.clientX, clientY: ev.clientY,
+              name: r?.name || "Pack", clientX: ev.clientX, clientY: ev.clientY,
             });
           } catch (_) {}
         });
@@ -1104,9 +1401,14 @@ function doMount(parentEl, _ctx) {
       cell.dataset.guid = String(g);
       cell.dataset.index = String(i);
       setBagIcon(cell, iconMetaForRow(row));
-      const c = capacityOf(g);
-      setBagCapacity(cell, c.used, c.cap);
+      if (row && !isOpenableContainer(row)) {
+        setBagCapacity(cell, 0, 0);
+      } else {
+        const c = capacityOf(g);
+        setBagCapacity(cell, c.used, c.cap);
+      }
       cell.classList.toggle("is-open", selectedPackContainerId === g);
+      cell.classList.toggle("is-selected", selectedGuid !== 0 && selectedGuid === g);
       cell.classList.toggle("is-pending", pendingOps.has(g));
       want.push(cell);
       used.add(key);
@@ -1230,6 +1532,7 @@ function doMount(parentEl, _ctx) {
   function updateItemCell(cell, e) {
     const g = String(e.guid);
     if (cell.dataset.guid !== g) {
+      clearTimeout(cell._tipTimer);
       cell.dataset.guid = g;
       cell._iconId = -1;
       cell._iconKey = null;
@@ -1324,6 +1627,19 @@ function doMount(parentEl, _ctx) {
     for (const cell of cellCache.values()) {
       if (cell.dataset.empty) continue;
       cell.classList.toggle("is-selected", cellGuid(cell) === selectedGuid);
+    }
+    if (typeof dollSlotEls !== "undefined") {
+      for (const k of Object.keys(dollSlotEls)) {
+        const el = dollSlotEls[k].el;
+        el.classList.toggle("is-selected", selectedGuid !== 0 && ((parseInt(el.dataset.itemGuid, 10) >>> 0) === selectedGuid));
+      }
+    }
+    if (typeof bagCache !== "undefined") {
+      for (const cell of bagCache.values()) {
+        if (cell.classList.contains("is-empty")) continue;
+        const pg = (parseInt(cell.dataset.packGuid, 10) >>> 0) || 0;
+        cell.classList.toggle("is-selected", selectedGuid !== 0 && pg === selectedGuid);
+      }
     }
     publishSelection(selectedGuid);
   }
@@ -1424,13 +1740,17 @@ function doMount(parentEl, _ctx) {
   // ── packs / title ───────────────────────────────────────────────
   function selectPack(containerId) {
     const c = (containerId >>> 0) || 0;
-    if (c !== 0 && !(orders.get(PACKS_KEY) || []).includes(c)) return;
+    if (c !== 0) {
+      const r = displayRow(c);
+      if (!(orders.get(PACKS_KEY) || []).includes(c) || (r && !isOpenableContainer(r))) return;
+    }
     if (c === selectedPackContainerId) return;
     selectedPackContainerId = c;
     lastSelectedPack = c;
     itemsGrid.scrollTop = 0; // retail ScrollToHome on a new parent container
     renderBagColumn();
     renderGrid();
+    refreshUiItemStates();
     refreshPanelTitle();
   }
 
@@ -1451,11 +1771,13 @@ function doMount(parentEl, _ctx) {
   function clearPaperdoll() {
     for (const k of Object.keys(dollSlotEls)) {
       const e = dollSlotEls[k];
-      e.el.classList.remove("equipped", "is-pending");
+      e.el.classList.remove("equipped", "is-pending", "is-selected");
       delete e.el.dataset.itemGuid;
       delete e.el.dataset.itemName;
       delete e.el.dataset.guid;
       e.el.draggable = false;
+      setCellStack(e.el, 0);
+      clearUiItemOverlays(e.el);
       e.icon.style.backgroundImage = "";
       e.icon.dataset.iconId = "";
       e.icon.dataset.iconKey = "";
@@ -1480,13 +1802,16 @@ function doMount(parentEl, _ctx) {
   }
   function showInDoll(slotEntry, row, pending) {
     const el = slotEntry.el;
-    const g = String(row.guid >>> 0);
+    const guid = row.guid >>> 0;
+    const g = String(guid);
     el.classList.add("equipped");
     el.classList.toggle("is-pending", !!pending);
+    el.classList.toggle("is-selected", selectedGuid !== 0 && guid === selectedGuid);
     el.dataset.itemGuid = g;
     el.dataset.guid = g;
     el.dataset.itemName = row.name || slotEntry.slot.name;
     el.draggable = !pending;
+    setCellStack(el, Math.max(1, row.stackSize | 0 || 1));
     // Bug 12: equipped-slot icons are the retail composite too.
     const meta = iconMetaForRow(row);
     const iconKey = meta.iconId ? itemIconKey(meta) : "";
@@ -1615,6 +1940,114 @@ function doMount(parentEl, _ctx) {
     burdenMeter.title = over ? `Burden ${text} — over capacity` : `Burden ${text}`;
   }
 
+  // UIElement_UIItem state pass across grid, bag and paperdoll slots.
+  function refreshUiItemStates() {
+    if (!overlay.isConnected) return;
+    const h = sessionHandleNow();
+    const traded = tradedGuidsSet(h);
+    const selling = new Set();
+    try {
+      for (const g of window.__vendorUi?.sellListGuids?.() || []) {
+        if (g) selling.add(g >>> 0);
+      }
+    } catch (_) {}
+    const shortcuts = new Map();
+    let selfSlot = -1;
+    try {
+      const hb = window.__hotbar;
+      if (typeof hb?.getSlot === "function") {
+        const me = localPlayerGuid();
+        for (let i = 0; i < 10; i++) {
+          const s = hb.getSlot(i);
+          if (!s) continue;
+          if (s.self || (me && (s.itemGuid >>> 0) === me)) {
+            if (selfSlot < 0) selfSlot = i;
+          } else if (s.itemGuid) {
+            const ig = s.itemGuid >>> 0;
+            if (!shortcuts.has(ig)) shortcuts.set(ig, i);
+          }
+        }
+      }
+    } catch (_) {}
+    let magicStance = false;
+    try {
+      if (typeof h?.combatMode === "function") magicStance = ((h.combatMode() >>> 0) || 1) === 8;
+    } catch (_) { magicStance = false; }
+
+    const cdStepByGuid = new Map();
+    let anyActiveCd = false;
+    const hasSharedCd = rows.some((r) => (r.sharedCooldown >>> 0) > 0);
+    if (hasSharedCd && typeof h?.playerEnchantments === "function") {
+      const enchs = [];
+      let raw = [];
+      try { raw = h.playerEnchantments() || []; } catch (_) { raw = []; }
+      for (const e of raw) {
+        try {
+          enchs.push({
+            spellId: e.spellId >>> 0, layer: e.layer | 0,
+            startTime: Number(e.startTime) || 0, duration: Number(e.duration) || 0,
+          });
+        } catch (_) {}
+        try { e?.free?.(); } catch (_) {}
+      }
+      const nowS = Date.now() / 1000;
+      const liveKeys = new Set();
+      for (const r of rows) {
+        const sc = (r.sharedCooldown >>> 0) || 0;
+        if (!sc) continue;
+        const e = matchCooldownEnchantment(enchs, sc);
+        if (!e) continue;
+        const key = `${e.spellId}:${e.layer}:${e.startTime}`;
+        liveKeys.add(key);
+        if (!cdReceivedAt.has(key)) cdReceivedAt.set(key, nowS);
+        const dur = Number(r.cooldownDuration) > 0 ? Number(r.cooldownDuration) : e.duration;
+        const remaining = e.duration + e.startTime - (nowS - cdReceivedAt.get(key));
+        const step = cooldownStep(dur, remaining);
+        if (step > 0) {
+          cdStepByGuid.set(r.guid >>> 0, step);
+          anyActiveCd = true;
+        }
+      }
+      for (const k of Array.from(cdReceivedAt.keys())) {
+        if (!liveKeys.has(k)) cdReceivedAt.delete(k);
+      }
+    } else if (cdReceivedAt.size > 0) {
+      cdReceivedAt.clear();
+    }
+    if (anyActiveCd && !cdTimer) {
+      cdTimer = setInterval(refreshUiItemStates, 250);
+      cdTimer?.unref?.();
+    }
+    else if (!anyActiveCd && cdTimer) { clearInterval(cdTimer); cdTimer = 0; }
+
+    setUiItemShortcut(mainSlot, selfSlot, magicStance);
+    for (const cell of cellCache.values()) {
+      if (cell.dataset.empty) continue;
+      const g = cellGuid(cell);
+      setUiItemTrade(cell, traded.has(g));
+      setUiItemSell(cell, selling.has(g));
+      setUiItemCooldown(cell, cdStepByGuid.get(g) || 0);
+      setUiItemShortcut(cell, shortcuts.has(g) ? shortcuts.get(g) : -1, magicStance);
+    }
+    for (const cell of bagCache.values()) {
+      if (cell.classList.contains("is-empty")) { clearUiItemOverlays(cell); continue; }
+      const pg = (parseInt(cell.dataset.packGuid, 10) >>> 0) || 0;
+      setUiItemTrade(cell, traded.has(pg));
+      setUiItemSell(cell, selling.has(pg));
+      setUiItemCooldown(cell, cdStepByGuid.get(pg) || 0);
+      setUiItemShortcut(cell, shortcuts.has(pg) ? shortcuts.get(pg) : -1, magicStance);
+    }
+    for (const k of Object.keys(dollSlotEls)) {
+      const el = dollSlotEls[k].el;
+      const dg = (parseInt(el.dataset.itemGuid, 10) >>> 0) || 0;
+      if (!dg) { clearUiItemOverlays(el); continue; }
+      setUiItemTrade(el, traded.has(dg));
+      setUiItemSell(el, selling.has(dg));
+      setUiItemCooldown(el, cdStepByGuid.get(dg) || 0);
+      setUiItemShortcut(el, shortcuts.has(dg) ? shortcuts.get(dg) : -1, magicStance);
+    }
+  }
+
   // ── rebuild ─────────────────────────────────────────────────────
   function buildGroups() {
     const groups = new Map([[MAIN_PACK_KEY, []], [PACKS_KEY, []]]);
@@ -1662,9 +2095,12 @@ function doMount(parentEl, _ctx) {
       packOrder.hintArrival(e.guid, e.toKey, e.index | 0);
     }
     orders = packOrder.reconcile(buildGroups());
-    if (selectedPackContainerId !== 0 && !(orders.get(PACKS_KEY) || []).includes(selectedPackContainerId)) {
-      selectedPackContainerId = 0;
-      lastSelectedPack = 0;
+    if (selectedPackContainerId !== 0) {
+      const selRow = displayRow(selectedPackContainerId);
+      if (!(orders.get(PACKS_KEY) || []).includes(selectedPackContainerId) || (selRow && !isOpenableContainer(selRow))) {
+        selectedPackContainerId = 0;
+        lastSelectedPack = 0;
+      }
     }
     clearPaperdoll();
     orphanEquipped = [];
@@ -1675,6 +2111,7 @@ function doMount(parentEl, _ctx) {
     applyPendingWieldsToDoll();
     renderBagColumn();
     renderGrid();
+    refreshUiItemStates();
     refreshPaperdollViewport();
     refreshAetheriaGating();
     refreshBurden();
@@ -1694,14 +2131,18 @@ function doMount(parentEl, _ctx) {
 
   // ── drop zones ──────────────────────────────────────────────────
   function dropCtx() {
+    const traded = tradedGuidsSet(sessionHandleNow());
     return {
       playerGuid: localPlayerGuid(),
       capacity: (key) => capacityOf(key),
       containerName: (key) => ((key === MAIN_PACK_KEY || key === PACKS_KEY)
         ? (playerName() || "You") : (displayRow(key)?.name || "pack")),
       canEquip: (item, mask) => canEquipInSlot(item, mask >>> 0, equipState()),
+      isBeingTraded: (guid) => traded.has(guid >>> 0),
       packWithRoom: () => {
         for (const g of orders.get(PACKS_KEY) || []) {
+          const r = displayRow(g);
+          if (r && !isOpenableContainer(r)) continue;
           const c = capacityOf(g);
           if (c.cap === 0 || c.used < c.cap) return g;
         }
@@ -1767,6 +2208,9 @@ function doMount(parentEl, _ctx) {
           name: s.item?.name || "", iconId: (s.item?.iconId >>> 0) || 0,
           stackSize: action.amount ?? stack, wcid: s.item?.wcid || 0,
           itemType: s.item?.itemType || 0, equipMask: 0,
+          uiEffects: (s.item?.uiEffects >>> 0) || 0,
+          iconOverlay: (s.item?.iconOverlay >>> 0) || 0,
+          iconUnderlay: (s.item?.iconUnderlay >>> 0) || 0,
         };
       }
     }
@@ -1808,8 +2252,10 @@ function doMount(parentEl, _ctx) {
         if (!bag) return null;
         const pg = (parseInt(bag.dataset.packGuid, 10) >>> 0) || 0;
         if (pg && !bag.classList.contains("is-empty")) {
+          const row = displayRow(pg);
           return hitFor(bag, s, {
-            kind: DROP_TARGET.PACK_SLOT, packGuid: pg, packName: displayRow(pg)?.name || "pack",
+            kind: DROP_TARGET.PACK_SLOT, packGuid: pg, packName: row?.name || "pack",
+            canHoldItems: !row || isOpenableContainer(row),
             index: packs.indexOf(pg), count: packs.length,
           }, null);
         }
@@ -1860,6 +2306,7 @@ function doMount(parentEl, _ctx) {
     pollTimer = setInterval(() => {
       if (tryHook()) { clearInterval(pollTimer); pollTimer = null; scheduleRebuild(); }
     }, 500);
+    pollTimer?.unref?.();
   }
 
   // Wave 14 — retry the doll until the local player's meta exists.
@@ -1877,6 +2324,7 @@ function doMount(parentEl, _ctx) {
     viewportLoadTimer = setInterval(() => {
       if (tryLoadViewport()) { clearInterval(viewportLoadTimer); viewportLoadTimer = null; }
     }, 500);
+    viewportLoadTimer?.unref?.();
   }
 
   // Bug 13 (2026-10-07): loop.js calls this once the LOCAL player's
@@ -1894,12 +2342,17 @@ function doMount(parentEl, _ctx) {
   }
   window.addEventListener("keydown", onKey);
 
+  const onOverlayStateEvent = () => refreshUiItemStates();
+  window.addEventListener("hb-vendor-sell-list", onOverlayStateEvent);
+  window.addEventListener("hb-vendor-closed", onOverlayStateEvent);
+  window.addEventListener("hb-hotbar-changed", onOverlayStateEvent);
+
   const unsubs = [];
   unsubs.push(pendingOps.onChange(scheduleRebuild));
   try {
     const client = window.__pluginClient;
     if (client?.events?.on) {
-      const onStats = () => { refreshBurden(); refreshAetheriaGating(); };
+      const onStats = () => { refreshBurden(); refreshAetheriaGating(); refreshUiItemStates(); };
       // 2026-10-07 — kind:47/49 fire for every wielder transition in view;
       // rebuild (panel + doll) only for ours (inventory_helpers.js
       // wieldEventTouchesLocal). Read synchronously: the detail is the wasm
@@ -1914,6 +2367,8 @@ function doMount(parentEl, _ctx) {
       const evs = [
         ["playerStatsUpdated", onStats],
         ["playerInventoryChanged", scheduleRebuild],
+        ["sharedCooldownChanged", onOverlayStateEvent],
+        ["tradeUpdated", onOverlayStateEvent],
         ["kind:47", onWieldChange],
         ["kind:49", onWieldChange],
       ];
@@ -1927,6 +2382,10 @@ function doMount(parentEl, _ctx) {
   return () => {
     window.removeEventListener("keydown", onKey);
     publishSelection(0); // the view (and its selection) is gone (W1-8 seam)
+    window.removeEventListener("hb-vendor-sell-list", onOverlayStateEvent);
+    window.removeEventListener("hb-vendor-closed", onOverlayStateEvent);
+    window.removeEventListener("hb-hotbar-changed", onOverlayStateEvent);
+    if (cdTimer) { clearInterval(cdTimer); cdTimer = 0; }
     delete window.__isInventoryItem;
     if (window.__inventoryRebuildStats === rebuildStats) delete window.__inventoryRebuildStats;
     if (window.__refreshPaperdoll === refreshPaperdollViewport) delete window.__refreshPaperdoll;
@@ -1935,6 +2394,7 @@ function doMount(parentEl, _ctx) {
     for (const u of unsubs) { try { u(); } catch (_) {} }
     for (const u of unregisterZones) { try { u(); } catch (_) {} }
     for (const o of observers) o.disconnect();
+    for (const cell of cellCache.values()) clearTimeout(cell._tipTimer);
     if (mountedApi) mountedApi = null;
     hideItemTooltip();
     // Wave 14 / hud-audio-2 — hand the doll back: the canvas leaves the
@@ -1955,6 +2415,7 @@ function patchChildren(parent, want, cache, used) {
   for (const [k, el] of cache) {
     if (!used.has(k)) { el.remove(); cache.delete(k); }
   }
+  const wantSet = new Set(want);
   let cur = parent.firstChild;
   for (const el of want) {
     if (el === cur) { cur = cur.nextSibling; continue; }
@@ -1962,7 +2423,7 @@ function patchChildren(parent, want, cache, used) {
   }
   while (cur) {
     const next = cur.nextSibling;
-    if (!want.includes(cur)) cur.remove();
+    if (!wantSet.has(cur)) cur.remove();
     cur = next;
   }
 }

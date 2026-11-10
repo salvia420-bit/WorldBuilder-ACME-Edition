@@ -1813,8 +1813,31 @@ export class RynthWebHost {
   WieldItem(itemGuid, equipMask) {
     let mask = equipMask >>> 0;
     if (!mask) {
-      const row = this.TryGetPlayerInventory().find((i) => i.guid === (itemGuid >>> 0));
-      mask = row ? row.validLocations : 0;
+      const inv = this.TryGetPlayerInventory();
+      const row = inv.find((i) => i.guid === (itemGuid >>> 0));
+      mask = row ? (row.validLocations >>> 0) : 0;
+      // Multi-bit non-wearable masks (wrist 0x30000, ring 0xC0000, dual-wield)
+      // resolve to a single preferred/free slot bit for GetAndWieldItem;
+      // pure clothing/armor/cloak masks inside 0x08007fff stay intact.
+      if (mask && ((mask & (mask - 1)) >>> 0) !== 0 && ((mask & ~0x08007fff) >>> 0) !== 0) {
+        let worn = 0;
+        for (const r of inv) {
+          if (r.guid !== (itemGuid >>> 0)) worn |= (r.equipMask >>> 0);
+        }
+        if ((mask & 0x00030000) !== 0) {
+          if ((mask & 0x00020000) && !(worn & 0x00020000)) mask = 0x00020000;
+          else if ((mask & 0x00010000) && !(worn & 0x00010000)) mask = 0x00010000;
+          else mask = (mask & 0x00020000) ? 0x00020000 : 0x00010000;
+        } else if ((mask & 0x000c0000) !== 0) {
+          if ((mask & 0x00080000) && !(worn & 0x00080000)) mask = 0x00080000;
+          else if ((mask & 0x00040000) && !(worn & 0x00040000)) mask = 0x00040000;
+          else mask = (mask & 0x00080000) ? 0x00080000 : 0x00040000;
+        } else {
+          const wp = (mask & 0x03500000) >>> 0;
+          const pick = wp || mask;
+          mask = (pick & -pick) >>> 0;
+        }
+      }
     }
     if (!mask) return false;
     return this._act("WieldFromPack", itemGuid, mask);

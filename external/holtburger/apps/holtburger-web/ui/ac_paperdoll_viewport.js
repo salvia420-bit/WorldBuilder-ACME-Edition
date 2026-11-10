@@ -333,7 +333,9 @@ export class PaperdollViewport {
       if (!this._held) this.dispose();
     };
     this._onContextRestored = () => {
-      if (!this._disposed && this._held) this.renderNow();
+      if (this._disposed) return;
+      this._contextLost = false;
+      if (this._held) this.renderNow();
     };
     try {
       el.addEventListener("webglcontextlost", this._onContextLost);
@@ -519,12 +521,26 @@ export class PaperdollViewport {
               matByDid.set(did, this._fallbackMaterial());
               continue;
             }
+            const palSurfaceState = {
+              surfaceType: (sp.surfaceType ?? 0) >>> 0,
+              translucency: typeof sp.translucency === "number" ? sp.translucency : 0.0,
+              luminosity: typeof sp.luminosity === "number" ? sp.luminosity : 0.0,
+              diffuse: typeof sp.diffuse === "number" ? sp.diffuse : 0.0,
+              hasPalette: typeof sp.hasPalette === "boolean" ? sp.hasPalette : undefined,
+            };
             const tex = surfacePixelsToTexture(sp.pixels, sp.width, sp.height);
             if (sp.free) try { sp.free(); } catch (_) {}
             const mat = new THREE.MeshStandardMaterial({
               map: tex, roughness: 0.85, metalness: 0.0,
               side: THREE.DoubleSide,
+              transparent: false,
             });
+            if (typeof em._applyPalettedSurfaceRenderState === "function") {
+              em._applyPalettedSurfaceRenderState(mat, palSurfaceState);
+            } else if ((palSurfaceState.surfaceType & 0x10) !== 0) {
+              mat.alphaTest = 0.5;
+              mat.transparent = false;
+            }
             this._ownedMaterials.push(mat);
             this._ownedTextures.push(tex);
             matByDid.set(did, mat);

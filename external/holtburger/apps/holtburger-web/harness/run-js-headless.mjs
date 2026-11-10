@@ -1563,6 +1563,7 @@ const TIER5 = [
   // Phases 1 / 5: the flight hint, ?flightResidency (default ON) and the ?flightLight band (no interiors / wall AABBs
   // while airborne).
   { tier: 5, flag: "flightResidency", file: "tests/flight_residency.test.mjs" },
+  { tier: 5, flag: "inventoryHudReview", file: "tests/inventory_hud_review_fixes.test.mjs" },
 ];
 
 // Registered but KNOWN-FAILING because the APP is wrong (a real bug, named

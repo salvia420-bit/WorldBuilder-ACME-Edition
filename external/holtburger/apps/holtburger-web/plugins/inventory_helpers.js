@@ -284,6 +284,22 @@ export function buildPlayerEquipState(snapshot, opts) {
  * default ON) skips that cascade for retail CPlayerSystem::AutoWieldIsLegal
  * (retailWieldVerdict below); the pending-attributes guard stays first.
  */
+/**
+ * gmPaperDollUI::AcceptDragObject (acclient.c:219999-220003) +
+ * gmPaperDollUI::OnItemListDragOver (:220399-220400):
+ * dragging a 1H melee weapon (`ValidLocations & 0x00100000`) onto the
+ * Off-Hand / Shield ready slot (`0x00200000`) widens its effective
+ * ValidLocations with `0x00200000` (`UI_SLOT_SIDE_LEFT = 1`) for dual-wield.
+ */
+export function effectiveValidLocationsForSlot(validLocations, slotMask) {
+  const vl = (validLocations >>> 0) || 0;
+  const slot = (slotMask >>> 0) || 0;
+  if (slot === EQUIP.Shield && (vl & EQUIP.MeleeWeapon) !== 0) {
+    return (vl | EQUIP.Shield) >>> 0;
+  }
+  return vl;
+}
+
 export function canEquipInSlot(item, slotMask, playerEquipState) {
   if (!item) return { ok: false, reason: "No item." };
   const slot = (slotMask >>> 0) || 0;
@@ -292,11 +308,16 @@ export function canEquipInSlot(item, slotMask, playerEquipState) {
   if (vl === 0) {
     // Weapon-type items must NOT speculatively pass when validLocations
     // hasn't hydrated — ACE Creature.TrySetChild rejects multi-bit / wrong
-    // wield masks server-side, causing combat-toggle revert (F11-1). Non-
-    // weapon items keep speculative-ok so armor/clothing isn't gated.
+    // wield masks server-side, causing combat-toggle revert (F11-1).
     const WEAPON_BITS = EQUIP.MeleeWeapon | EQUIP.MissileWeapon | EQUIP.Held | EQUIP.TwoHanded;
     if ((equipMask & WEAPON_BITS) !== 0) {
       return { ok: false, reason: "Item attributes pending — try again." };
+    }
+    // Under retailWieldLegal (gmPaperDollUI::AcceptDragObject, acclient.c:219987),
+    // an unequipped item with ValidLocations == 0 (potions, gems, pyreals, etc.)
+    // is quietly refused rather than speculatively equipping into a paperdoll slot.
+    if (playerEquipState?.retailWieldLegal && equipMask === 0) {
+      return { ok: false, silent: true, reason: "" };
     }
     return { ok: true, speculative: true, reason: "" };
   }
@@ -309,7 +330,8 @@ export function canEquipInSlot(item, slotMask, playerEquipState) {
   const mainCombatStyle = (main?.defaultCombatStyle >>> 0) || 0;
   const mainMask = (main?.equipMask >>> 0) || 0;
   // Shield rejection cascade.
-  if (slot === EQUIP.Shield || (vl & EQUIP.Shield) !== 0) {
+  const wantsShield = slot === EQUIP.Shield || (slot === 0 && (vl & EQUIP.Shield) !== 0 && (vl & ~EQUIP.Shield) === 0);
+  if (wantsShield) {
     if (main && (mainMask & EQUIP.TwoHanded) !== 0) {
       return { ok: false, reason: `A shield may not be worn with the ${main.name || "two-handed weapon"}` };
     }
@@ -487,6 +509,13 @@ export function copyInventoryRow(it) {
   // — only on a wasm that has the InventoryItem getters; absent = unknown.
   if (typeof it?.clothingPriority === "number") row.clothingPriority = it.clothingPriority >>> 0;
   if (typeof it?.combatUse === "number") row.combatUse = it.combatUse >>> 0;
+  if (typeof it?.sharedCooldown === "number") row.sharedCooldown = it.sharedCooldown >>> 0;
+  if (typeof it?.cooldownDuration === "number") row.cooldownDuration = Number(it.cooldownDuration) || 0;
+  if (typeof it?.iconOverlay === "number") row.iconOverlay = it.iconOverlay >>> 0;
+  if (typeof it?.iconUnderlay === "number") row.iconUnderlay = it.iconUnderlay >>> 0;
+  if (typeof it?.iconOverlaySecondary === "number") row.iconOverlaySecondary = it.iconOverlaySecondary >>> 0;
+  if (typeof it?.retained === "boolean") row.retained = it.retained;
+  if (typeof it?.pluralName === "string" && it.pluralName) row.pluralName = it.pluralName;
   return row;
 }
 
@@ -509,6 +538,18 @@ export function rowUsesPackSlot(row) {
   if (!row) return false;
   if (typeof row.requiresBackpackSlot === "boolean") return row.requiresBackpackSlot;
   return ((row.itemType >>> 0) & ITEM_TYPE_CONTAINER) !== 0;
+}
+
+/**
+ * Retail Container vs Foci distinction (`acclient.c:273779`, `:274412`):
+ * Foci carry `RequiresBackpackSlot = true` (they sit in the bag column),
+ * but lack `ItemType.Container` (`0x200`) and have `itemsCapacity === 0`,
+ * so they cannot be opened or accept items.
+ */
+export function isOpenableContainer(row) {
+  if (!row) return false;
+  if (((Number(row.itemType) >>> 0) & ITEM_TYPE_CONTAINER) !== 0) return true;
+  return Number(row.itemsCapacity) > 0;
 }
 
 /**
@@ -667,6 +708,9 @@ export function decideItemDrop(drag, target, ctx = {}) {
   if (!guid || !target) return NOOP;
   const it = drag.item || {};
   const me = (ctx.playerGuid >>> 0) || 0;
+  if (me && guid === me && target.kind !== DROP_TARGET.WORLD) {
+    return reject("You cannot place yourself in your inventory!");
+  }
   const stack = Math.max(1, it.stackSize | 0 || 1);
   const amount = drag.split > 0 && drag.split < stack ? (drag.split | 0) : stack;
   const isSplit = amount < stack;
@@ -756,6 +800,7 @@ export function decideItemDrop(drag, target, ctx = {}) {
       const mask = (target.slotMask >>> 0) || 0;
       if (!mask) return NOOP;
       if ((it.equipMask >>> 0) !== 0 && ((it.equipMask >>> 0) & mask) !== 0) return NOOP;
+      if (ctxTrue(ctx.isBeingTraded, guid)) return reject(`You are trading the ${name}, it cannot be wielded`);
       const verdict = ctx.canEquip ? ctx.canEquip(it, mask) : { ok: true };
       if (verdict && verdict.ok === false) {
         // inventory-session-2: a slot outside the item's ValidLocations takes
@@ -768,16 +813,22 @@ export function decideItemDrop(drag, target, ctx = {}) {
       // ACE stores the location verbatim and a multi-bit one breaks combat
       // stance derivation. Without ValidLocations (an un-appraised chest
       // item) the bit is unknowable, so the multi-bit slot refuses.
-      const vl = (it.validLocations >>> 0) || 0;
-      if (!vl && ((mask & (mask - 1)) >>> 0) !== 0) return reject("Item attributes pending — try again.");
+      // For off-hand dual-wield (mask === EQUIP.Shield + MeleeWeapon),
+      // effectiveValidLocationsForSlot widens vl with EQUIP.Shield.
+      const rawVl = (it.validLocations >>> 0) || 0;
+      const vl = effectiveValidLocationsForSlot(rawVl, mask);
+      if (!rawVl && ((mask & (mask - 1)) >>> 0) !== 0) return reject("Item attributes pending — try again.");
       const loc = ((vl & mask) >>> 0) ? pickWieldSlotMask(vl & mask) : mask;
       // items-4 (`?retailAutoWear`, ctx hooks absent = old path): an
-      // overlapping wear is refused before anything moves (planWear), and a
-      // second stack of the wielded ammo / thrown weapon merges into it
-      // (planAmmoWield) instead of swapping.
+      // overlapping wear is refused before anything moves (planWear), a
+      // multi-slot wearable dropped onto a covered slot sends its FULL
+      // wearable ValidLocations (gmPaperDollUI::AcceptDragObject :220015 →
+      // AutoWear), and a second stack of the wielded ammo / thrown weapon
+      // merges into it (planAmmoWield) instead of swapping.
       if ((loc & WEARABLE_LOCATIONS) !== 0 && typeof ctx.wearPlan === "function") {
         const p = ctx.wearPlan({ ...it, guid });
         if (p?.op === "reject") return reject(p.message);
+        if (p?.op === "wear") return { op: "wield", guid, slotMask: p.slotMask >>> 0, amount, speculative: !!verdict?.speculative };
       }
       if (typeof ctx.readySlotOccupant === "function") {
         const p = planAmmoWield({ ...it, guid }, ctx.readySlotOccupant(loc >>> 0), { amount });
@@ -792,6 +843,7 @@ export function decideItemDrop(drag, target, ctx = {}) {
       const vl = (it.validLocations >>> 0) || 0;
       if ((vl & WEARABLE_LOCATIONS) === 0) return reject("You can't put that item there");
       if ((it.equipMask >>> 0) !== 0) return NOOP;
+      if (ctxTrue(ctx.isBeingTraded, guid)) return reject(`You are trading the ${name}, it cannot be wielded`);
       // items-4: retail AutoWearIsLegal → AutoWear (full ValidLocations).
       if (typeof ctx.wearPlan === "function") {
         const p = ctx.wearPlan({ ...it, guid });
@@ -803,6 +855,7 @@ export function decideItemDrop(drag, target, ctx = {}) {
 
     case DROP_TARGET.MAIN_PACK: {
       // Inv_MainPackSlot: destination = player, place 0, auto-merge on.
+      if (ctxTrue(ctx.isBeingTraded, guid)) return reject(`You are trading the ${name}, it cannot be moved`);
       if (isPack) {
         if (src && src.key === PACKS_KEY && drag.sourceIndex === 0) return NOOP;
         return { op: "move", guid, container: me, placement: 0, listKey: PACKS_KEY, index: 0, amount };
@@ -811,7 +864,7 @@ export function decideItemDrop(drag, target, ctx = {}) {
       const into = merged(MAIN_PACK_KEY);
       if (into) return { op: "merge", guid, target: into, amount };
       const inMain = !!(src && src.key === MAIN_PACK_KEY);
-      if (!inMain && full(MAIN_PACK_KEY)) {
+      if ((!inMain || isSplit) && full(MAIN_PACK_KEY)) {
         const alt = (ctx.packWithRoom?.(MAIN_PACK_KEY) >>> 0) || 0;
         if (alt) return { op: "move", guid, container: alt, placement: 0, listKey: alt, index: 0, amount };
         return reject(`${cname(MAIN_PACK_KEY)} is completely full!`);
@@ -821,7 +874,9 @@ export function decideItemDrop(drag, target, ctx = {}) {
 
     case DROP_TARGET.PACK_SLOT: {
       const pack = (target.packGuid >>> 0) || 0;
-      if (!pack || pack === guid) return NOOP;
+      if (!pack) return NOOP;
+      if (pack === guid) return reject("You cannot place an object within itself!");
+      if (ctxTrue(ctx.isBeingTraded, guid)) return reject(`You are trading the ${name}, it cannot be moved`);
       if (isPack) {
         // Reorder within Inv_ContainerList.
         const same = !!(src && src.key === PACKS_KEY);
@@ -829,10 +884,13 @@ export function decideItemDrop(drag, target, ctx = {}) {
         if (r.noop) return NOOP;
         return { op: "move", guid, container: me, placement: r.placement, listKey: PACKS_KEY, index: target.index | 0, amount };
       }
+      if (target.canHoldItems === false) {
+        return reject(`The ${target.packName || cname(pack)} cannot accept items`);
+      }
       if (src && src.key === pack && drag.sourceIndex === 0 && !isSplit) return NOOP;
       const into = merged(pack);
       if (into) return { op: "merge", guid, target: into, amount };
-      if (!(src && src.key === pack) && full(pack)) {
+      if ((!(src && src.key === pack) || isSplit) && full(pack)) {
         return reject(`The ${target.packName || cname(pack)} is completely full!`);
       }
       return { op: "move", guid, container: pack, placement: 0, listKey: pack, index: 0, amount };
@@ -840,6 +898,7 @@ export function decideItemDrop(drag, target, ctx = {}) {
 
     case DROP_TARGET.EMPTY_PACK_SLOT: {
       if (!isPack) return reject("Cannot place item in container list");
+      if (ctxTrue(ctx.isBeingTraded, guid)) return reject(`You are trading the ${name}, it cannot be moved`);
       const same = !!(src && src.key === PACKS_KEY);
       const r = retailPlacement(same ? drag.sourceIndex : -1, target.count, same, false, target.count);
       if (r.noop) return NOOP;
@@ -853,6 +912,7 @@ export function decideItemDrop(drag, target, ctx = {}) {
       const isExt = target.listKind === "ext";
       const occ = target.kind === DROP_TARGET.ITEM_CELL ? (target.item || null) : null;
       if (occ && (occ.guid >>> 0) === guid) return NOOP;
+      if (ctxTrue(ctx.isBeingTraded, guid)) return reject(`You are trading the ${name}, it cannot be moved`);
       if (occ) {
         // 1. merge onto a matching stack (AttemptMerge, quiet)
         const m = mergeAmount(it, occ, amount);
@@ -868,13 +928,14 @@ export function decideItemDrop(drag, target, ctx = {}) {
           if (ok === true) return { op: "usewith", guid, target: occ.guid >>> 0 };
         }
         // 3. a (nested) pack under the pointer takes the item
-        if (occ.isPack && !isPack && !isExt) {
+        if (occ.isPack && occ.canHoldItems !== false && !isPack && !isExt) {
           const p = occ.guid >>> 0;
           if (full(p)) return reject(`The ${occ.name || "pack"} is completely full!`);
           return { op: "move", guid, container: p, placement: 0, listKey: p, index: 0, amount };
         }
       }
       if (isExt) {
+        if ((key >>> 0) === guid) return reject("You cannot place an object within itself!");
         if (drag.owned && ctx.isCorpse?.(key)) return reject(`The ${cname(key)} cannot accept items`);
       } else if (isPack) {
         // Retail: "Cannot place container in item list". A pack that is NOT
@@ -887,7 +948,7 @@ export function decideItemDrop(drag, target, ctx = {}) {
         return { op: "move", guid, container: me, placement: 0, listKey: PACKS_KEY, index: 0, amount };
       }
       const same = !!(src && src.key === key);
-      if (!isExt && !same && full(key)) {
+      if (!isExt && (!same || isSplit) && full(key)) {
         if (key === MAIN_PACK_KEY) {
           // AttemptToPlaceInContainer: a full main pack overflows into the
           // first side pack with room.
@@ -1335,9 +1396,14 @@ export function planPlaceInBackpack(rows, item, opts = {}) {
     try { o = opts.order?.(key); } catch (_) { o = null; }
     return Array.isArray(o) ? o : containerOrder(list, key);
   };
-  const packs = orderOf(PACKS_KEY).map((g) => g >>> 0);
+  const byGuid = new Map(list.map((r) => [r.guid >>> 0, r]));
+  const packs = orderOf(PACKS_KEY)
+    .map((g) => g >>> 0)
+    .filter((g) => {
+      const r = byGuid.get(g);
+      return !r || isOpenableContainer(r);
+    });
   if (!isPack) {
-    const byGuid = new Map(list.map((r) => [r.guid >>> 0, r]));
     const candidates = [];
     for (const key of [MAIN_PACK_KEY, ...packs]) {
       for (const g of orderOf(key)) {
@@ -1399,7 +1465,7 @@ const COMBAT_USE_SLOT = Object.freeze({
  */
 export function primaryUseAction(row, opts = {}) {
   if (!row) return { kind: "none" };
-  if (rowUsesPackSlot(row)) return { kind: "open" };
+  if (isOpenableContainer(row)) return { kind: "open" };
   const it = (row.itemType >>> 0) || 0;
   const vl = (row.validLocations >>> 0) || 0;
   const loc = (row.equipMask >>> 0) || 0;
@@ -1501,18 +1567,26 @@ export function planWear(item, rows) {
   const prio = (item.clothingPriority >>> 0) || 0;
   const worn = [];
   let mask = 0;
+  let wornLocMask = 0;
   for (const r of Array.isArray(rows) ? rows : []) {
     const loc = (r?.equipMask >>> 0) || 0;
     if (!loc) continue;
     worn.push(r);
-    if ((loc & WEARABLE_LOCATIONS) !== 0) mask |= (r.clothingPriority >>> 0) || 0;
+    if ((loc & WEARABLE_LOCATIONS) !== 0) {
+      mask |= (r.clothingPriority >>> 0) || 0;
+      wornLocMask |= (loc & WEARABLE_LOCATIONS) >>> 0;
+    }
   }
-  if (((mask & prio) >>> 0) === 0) return { op: "wear", guid, slotMask: wear };
   const name = item.name || "item";
   if ((item.equipMask >>> 0) !== 0 || worn.some((r) => (r.guid >>> 0) === guid)) {
     return reject(`The ${name} is already being worn`);
   }
-  const overlaps = (r) => (r.guid >>> 0) !== guid && (((r.clothingPriority >>> 0) & prio) >>> 0) !== 0;
+  const locClashWhenZeroPrio = prio === 0 && ((wornLocMask & wear) >>> 0) !== 0;
+  if (((mask & prio) >>> 0) === 0 && !locClashWhenZeroPrio) return { op: "wear", guid, slotMask: wear };
+  const overlaps = (r) => (r.guid >>> 0) !== guid && (
+    (((r.clothingPriority >>> 0) & prio) >>> 0) !== 0
+    || (prio === 0 && (((r.equipMask >>> 0) & wear) >>> 0) !== 0)
+  );
   // Retail stays silent when no worn item also shares a location; name the
   // first priority overlap instead so the refusal is never blank.
   const blocker = worn.find((r) => overlaps(r) && (((r.equipMask >>> 0) & vl) >>> 0) !== 0)
@@ -1641,8 +1715,9 @@ export function blocksUseOfShield(weapon) {
  * @returns {string|null} null = legal; "" = illegal without a message (no
  *   ValidLocations); else the retail refusal line.
  */
-export function retailAutoWieldIllegal(item, rows, inCombat) {
-  const vl = (item?.validLocations >>> 0) || 0;
+export function retailAutoWieldIllegal(item, rows, inCombat, targetSlot = 0) {
+  const rawVl = (item?.validLocations >>> 0) || 0;
+  const vl = targetSlot ? effectiveValidLocationsForSlot(rawVl, targetSlot) : rawVl;
   if ((vl & 0x7fffffff) === 0) return "";
   const weapon = readySlotOccupant(rows, WEAPON_READY_LOCATIONS);
   if ((vl & EQUIP.MissileAmmo) !== 0 && weapon) {
@@ -1651,7 +1726,8 @@ export function retailAutoWieldIllegal(item, rows, inCombat) {
       return `Cannot be used with ${retailAppropriateName(weapon, "weapon")}`;
     }
   }
-  if ((vl & EQUIP.Shield) !== 0 && weapon && blocksUseOfShield(weapon)) {
+  const checkShield = targetSlot ? (targetSlot >>> 0) === EQUIP.Shield : (vl & EQUIP.Shield) !== 0;
+  if (checkShield && weapon && blocksUseOfShield(weapon)) {
     return `A shield may not be worn with the ${weapon.name || "weapon"}`;
   }
   if ((vl & EQUIP.Held) !== 0 && inCombat && (((item.itemType >>> 0) || 0) & ITEM_TYPE_CASTER) === 0) {
@@ -1667,9 +1743,9 @@ export function retailAutoWieldIllegal(item, rows, inCombat) {
  * AutoWieldIsLegal.
  */
 function retailWieldVerdict(item, slot, state) {
-  const vl = (item.validLocations >>> 0) || 0;
+  const vl = effectiveValidLocationsForSlot(item.validLocations, slot);
   if (slot !== 0 && (vl & slot) === 0) return { ok: false, silent: true, reason: "" };
-  const why = retailAutoWieldIllegal(item, state.rows, !!state.inCombatMode);
+  const why = retailAutoWieldIllegal(item, state.rows, !!state.inCombatMode, slot);
   if (why === null) return { ok: true, reason: "" };
   return why ? { ok: false, reason: why } : { ok: false, silent: true, reason: "" };
 }
@@ -1753,4 +1829,155 @@ export function worldUseLeaf(guid, {
   }
   sendUse();
   return "used";
+}
+
+// ════════════════════════════════════════════════════════════════════
+// Retail AutoSort jewelry / trinket / sigil planner (acclient.c:398905-399250)
+// and PaperdollHitTest click-map helpers (acclient.c:220420-220600;
+// adapted in part from WebAC packages/renderer/src/ui/PaperdollHitTest.ts,
+// AGPL-3.0).
+// ════════════════════════════════════════════════════════════════════
+
+/** Non-clothing AutoSort locations: Neck, Wrists, Rings, Trinket, Sigils. */
+export const JEWELRY_AUTOSORT_LOCATIONS = 0x740f8000;
+
+/**
+ * CPlayerSystem::AutoSort → AutoWield(item, SLOT_SIDE_RIGHT=2, trySecond=1,
+ * unblock=0) (acclient.c:398905-399250) for jewellery, trinket and aetheria:
+ *   - Wrist (0x30000) and Ring (0xC0000) try RIGHT (0x20000 / 0x80000) before
+ *     LEFT (0x10000 / 0x40000);
+ *   - With `_unblock = 0` (AutoSort / double-click / shortcut), occupied slots
+ *     are NEVER swapped — retail emits the exact occupied notice instead;
+ *   - When `opts.aetheriaBits` is provided, locked Aetheria sigil slots are
+ *     refused before sending an optimistic WieldFromPack.
+ */
+export function planAutoSortJewelry(item, rows, opts = {}) {
+  const vl = (item?.validLocations >>> 0) || 0;
+  if (!item || (vl & JEWELRY_AUTOSORT_LOCATIONS) === 0) return { op: "none" };
+  if (((item.equipMask >>> 0) & JEWELRY_AUTOSORT_LOCATIONS) !== 0) return { op: "none" };
+  const guid = (item.guid >>> 0) || 0;
+  let equippedMask = 0;
+  for (const r of Array.isArray(rows) ? rows : []) {
+    equippedMask = (equippedMask | ((r?.equipMask >>> 0) || 0)) >>> 0;
+  }
+  const hasAetheriaBits = typeof opts.aetheriaBits === "number";
+  const bits = hasAetheriaBits ? (opts.aetheriaBits | 0) : 0x7;
+  const blueOk = (vl & EQUIP.SigilBlue) !== 0 && (!hasAetheriaBits || !aetheriaSlotIsLocked(bits, 0x1));
+  const yellowOk = (vl & EQUIP.SigilYellow) !== 0 && (!hasAetheriaBits || !aetheriaSlotIsLocked(bits, 0x2));
+  const redOk = (vl & EQUIP.SigilRed) !== 0 && (!hasAetheriaBits || !aetheriaSlotIsLocked(bits, 0x4));
+  if ((vl & EQUIP_SIGIL_MASK) !== 0 && hasAetheriaBits && !blueOk && !yellowOk && !redOk) {
+    return reject("That aetheria slot has not been unlocked.");
+  }
+  let refusal = "";
+  if ((vl & 0x00008000) !== 0) {
+    if ((equippedMask & 0x00008000) === 0) return { op: "wear", guid, slotMask: 0x00008000 };
+    refusal = "You're already wearing jewelry on your neck.";
+  }
+  if ((vl & EQUIP.TrinketOne) !== 0) {
+    if ((equippedMask & EQUIP.TrinketOne) === 0) return { op: "wear", guid, slotMask: EQUIP.TrinketOne };
+    refusal = "You're already wearing a trinket.";
+  }
+  if (blueOk) {
+    if ((equippedMask & EQUIP.SigilBlue) === 0) return { op: "wear", guid, slotMask: EQUIP.SigilBlue };
+    refusal = "You're already using aetheria of Lyr.";
+  }
+  if (yellowOk) {
+    if ((equippedMask & EQUIP.SigilYellow) === 0) return { op: "wear", guid, slotMask: EQUIP.SigilYellow };
+    refusal = "You're already using aetheria of Kor.";
+  }
+  if (redOk) {
+    if ((equippedMask & EQUIP.SigilRed) === 0) return { op: "wear", guid, slotMask: EQUIP.SigilRed };
+    refusal = "You're already using aetheria of Tem.";
+  }
+  if ((vl & 0x00030000) !== 0) {
+    if ((vl & 0x00020000) !== 0 && (equippedMask & 0x00020000) === 0) return { op: "wear", guid, slotMask: 0x00020000 };
+    if ((vl & 0x00010000) !== 0 && (equippedMask & 0x00010000) === 0) return { op: "wear", guid, slotMask: 0x00010000 };
+    refusal = "You're already wearing jewelry on both wrists.";
+  }
+  if ((vl & 0x000c0000) !== 0) {
+    if ((vl & 0x00080000) !== 0 && (equippedMask & 0x00080000) === 0) return { op: "wear", guid, slotMask: 0x00080000 };
+    if ((vl & 0x00040000) !== 0 && (equippedMask & 0x00040000) === 0) return { op: "wear", guid, slotMask: 0x00040000 };
+    refusal = "You're already wearing jewelry on both hands.";
+  }
+  return reject(refusal || "You cannot wear that right now.");
+}
+
+/** UIASSET PaperDollHitTest RenderSurface DID (`GetDIDByEnum(0x1000000C)`). */
+export const PAPERDOLL_HIT_DID = 0x06004d8b;
+/** Layout `0x21000024` drag band `0x100001d6` rect inside the 224×214 paperdoll. */
+export const PAPERDOLL_HIT_RECT = Object.freeze({ x: 51, y: 0, w: 100, h: 214 });
+
+/**
+ * RGBAColor_HitTest_* constants (acclient.c:220495 GetPaperDollItemUnderMouse;
+ * WebAC PaperdollHitTest.ts, AGPL-3.0) mapped to EquipMask query bits.
+ */
+export const PAPERDOLL_HIT_COLORS = Object.freeze([
+  Object.freeze({ rgb: Object.freeze([0, 0, 255]), mask: 0x0001 }),   // HeadWear
+  Object.freeze({ rgb: Object.freeze([0, 255, 0]), mask: 0x0202 }),   // ChestWear | ChestArmor
+  Object.freeze({ rgb: Object.freeze([255, 0, 0]), mask: 0x0404 }),   // AbdomenWear | AbdomenArmor
+  Object.freeze({ rgb: Object.freeze([0, 255, 255]), mask: 0x0808 }), // UpperArmWear | UpperArmArmor
+  Object.freeze({ rgb: Object.freeze([255, 0, 255]), mask: 0x1010 }), // LowerArmWear | LowerArmArmor
+  Object.freeze({ rgb: Object.freeze([255, 255, 0]), mask: 0x2040 }), // UpperLegWear | UpperLegArmor
+  Object.freeze({ rgb: Object.freeze([0, 0, 128]), mask: 0x4080 }),   // LowerLegWear | LowerLegArmor
+  Object.freeze({ rgb: Object.freeze([0, 128, 0]), mask: 0x0020 }),   // HandWear
+  Object.freeze({ rgb: Object.freeze([128, 0, 0]), mask: 0x0100 }),   // FootWear
+]);
+
+/** Map a click-map RGB pixel to its EquipMask query (0 = background / miss). */
+export function paperdollHitColorMask(r, g, b) {
+  for (const c of PAPERDOLL_HIT_COLORS) {
+    if (c.rgb[0] === r && c.rgb[1] === g && c.rgb[2] === b) return c.mask;
+  }
+  return 0;
+}
+
+/** InventoryPlacement::DetermineHigherPriority (acclient.c:220265). */
+function paperdollHigherPriority(a, b, mask) {
+  const aLoc = (a.loc & mask) >>> 0;
+  const bLoc = (b.loc & mask) >>> 0;
+  let aPri = a.priority >>> 0;
+  let bPri = b.priority >>> 0;
+  if (aLoc !== 0 && aPri === 0 && aLoc > 0x1ff && aLoc < 0x4001) aPri = 0x7f;
+  if (bLoc !== 0 && bPri === 0) {
+    if (bLoc < 0x200 || bLoc > 0x4000) return a;
+    bPri = 0x7f;
+  }
+  return aPri < bPri ? b : a;
+}
+
+/**
+ * gmPaperDollUI::GetUpperInvObj (acclient.c:220382; WebAC PaperdollHitTest.ts,
+ * AGPL-3.0): returns the topmost worn item's guid on `mask`, or `playerGuid`
+ * when the silhouette region is bare, or 0 for mask 0.
+ */
+export function paperdollUpperWornObject(rows, mask, playerGuid = 0) {
+  const m = (mask >>> 0) || 0;
+  if (!m) return 0;
+  let best = { id: 0, loc: 0, priority: 0 };
+  for (const r of Array.isArray(rows) ? rows : []) {
+    const loc = (r?.equipMask >>> 0) || 0;
+    if ((loc & m) === 0) continue;
+    const cand = {
+      id: (r.guid >>> 0) || 0,
+      loc,
+      priority: (r.clothingPriority >>> 0) || 0,
+    };
+    best = paperdollHigherPriority(cand, best, m);
+  }
+  return best.id !== 0 ? best.id : (playerGuid >>> 0);
+}
+
+/**
+ * gmPaperDollUI::GetPaperDollItemUnderMouse (acclient.c:220495; WebAC
+ * PaperdollHitTest.ts, AGPL-3.0) at `(x, y)` px inside the 100×214 drag band.
+ */
+export function paperdollItemAt(map, x, y, rows, playerGuid = 0) {
+  if (!map || !map.width || !map.height || !map.data?.length) return 0;
+  const px = Math.floor(x);
+  const py = Math.floor(y);
+  if (px < 0 || py < 0 || px >= map.width || py >= map.height) return 0;
+  const o = (py * map.width + px) * 4;
+  if (o + 2 >= map.data.length) return 0;
+  const mask = paperdollHitColorMask(map.data[o], map.data[o + 1], map.data[o + 2]);
+  return paperdollUpperWornObject(rows, mask, playerGuid);
 }

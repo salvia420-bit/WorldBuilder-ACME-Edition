@@ -706,6 +706,7 @@ function render() {
 
   if (state.currentTab === "items") renderItemsPane(cur);
   else renderQueuePane(state.currentTab, cur);
+  try { window.dispatchEvent(new CustomEvent("hb-vendor-sell-list")); } catch (_) {}
 }
 
 function filteredStock() {
@@ -1428,5 +1429,6 @@ if (typeof window !== "undefined") {
     currentVendor,
     stageSell: (guid, opts) => stageSell(guid, opts),
     attemptSellToVendor,
+    sellListGuids: () => (state.win?.isOpen?.() ? state.sellQueue.map((q) => q.itemGuid >>> 0) : []),
   };
 }

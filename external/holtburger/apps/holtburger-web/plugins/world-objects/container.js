@@ -37,10 +37,10 @@ import { Item } from './item.js';
 // `crates/holtburger-common/src/properties/property_keys/ints.rs`.
 const PROP_INSTANCE_CONTAINER  = 2;
 
-// PR-2-era capacity properties already shipped here. Keep them for callers
-// that read off the type-stub.
-const PROP_ITEMS_CAPACITY      = 81;
-const PROP_CONTAINERS_CAPACITY = 82;
+// Capacity properties (`PropertyInt.ItemsCapacity = 6`, `ContainersCapacity = 7`,
+// matching `world_object.js` and `crates/holtburger-common/src/properties/property_keys/ints.rs`).
+const PROP_ITEMS_CAPACITY      = 6;
+const PROP_CONTAINERS_CAPACITY = 7;
 
 // `ContainerProperties` enum (Chorizite.Common.Enums.ContainerProperties.cs):
 //   None=0, Container=1, Foci=2

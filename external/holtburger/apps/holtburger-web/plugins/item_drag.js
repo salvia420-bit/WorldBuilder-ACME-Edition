@@ -363,6 +363,8 @@ function setHighlight(el, ok) {
 }
 
 function endSession() {
+  if (ghostRaf) { cancelAnimationFrame(ghostRaf); ghostRaf = 0; }
+  ghostXY = null;
   if (!session && !highlightEl) return;
   setHighlight(null);
   const s = session;
@@ -680,6 +682,10 @@ export async function resolveDropAction(s, target, { ctx = null, anchor = null }
     // (AttemptPlaceIn3D, acclient.c:433256); a shift-drop is the split size,
     // so it is refused without asking how many.
     if (whole.op === "sell3d") return { op: "reject", message: PLACE_IN_3D_TEXT.splitToSell };
+    // Pre-validate that a split onto this target isn't immediately rejected,
+    // no-op, or a recipe combine before opening the split dialog.
+    const trial = decideItemDrop({ ...s, split: 1 }, target, merged);
+    if (trial.op === "reject" || trial.op === "noop" || trial.op === "usewith") return trial;
     const n = await promptStackAmount({
       max: stack,
       initial: Math.max(1, Math.floor(stack / 2)),
@@ -912,6 +918,9 @@ export function placeInBackpack(guid, meta = null) {
     ? {
       name: item.name || "", iconId: (item.iconId >>> 0) || 0, stackSize: action.amount ?? item.stackSize ?? 1,
       wcid: (item.wcid >>> 0) || 0, itemType: (item.itemType >>> 0) || 0, equipMask: 0,
+      uiEffects: (item.uiEffects >>> 0) || 0,
+      iconOverlay: (item.iconOverlay >>> 0) || 0,
+      iconUnderlay: (item.iconUnderlay >>> 0) || 0,
     }
     : null;
   const sent = executeItemAction(action, { guid: g, item, owned: false }, { stub });
@@ -1035,16 +1044,21 @@ export function promptStackAmount({ max, initial, clientX = 0, clientY = 0, name
   el.style.top = `${Math.max(4, Math.min(clientY / z - hgt - 8, vh - hgt - 4))}px`;
   return new Promise((resolve) => {
     const clampVal = (v) => Math.max(1, Math.min(cap, Math.round(Number(v) || 1)));
+    const submitVal = () => {
+      const raw = Math.trunc(Number(num.value));
+      if (!Number.isFinite(raw) || raw < 1) { uiError(); return; }
+      finish(Math.min(cap, raw));
+    };
     const onRange = () => { num.value = range.value; };
     const onNum = () => { range.value = String(clampVal(num.value)); };
     const onKey = (e) => {
       e.stopPropagation();
-      if (e.key === "Enter") { e.preventDefault(); finish(clampVal(num.value)); }
+      if (e.key === "Enter") { e.preventDefault(); submitVal(); }
       else if (e.key === "Escape") { e.preventDefault(); finish(null); }
     };
     const onClick = (e) => {
       const act = e.target?.closest?.("[data-act]")?.dataset?.act;
-      if (act === "ok") finish(clampVal(num.value));
+      if (act === "ok") submitVal();
       else if (act === "cancel") finish(null);
     };
     const onOutside = (e) => { if (!el.contains(e.target)) finish(null); };
@@ -1105,15 +1119,20 @@ if (hasDom && !window.__hbItemDragInstalled) {
   window.addEventListener("drop", onDrop, true);
   window.addEventListener("dragend", onDragEnd, true);
   window.addEventListener("mousemove", onMouseMove, true);
+  window.addEventListener("blur", onDragEnd);
+  document.addEventListener("visibilitychange", () => { if (document.hidden) endSession(); });
+  window.addEventListener("keydown", (ev) => { if (session && ev.key === "Escape") endSession(); }, true);
   if (!wireBus()) {
     const t = setInterval(() => { if (wireBus()) clearInterval(t); }, 500);
+    t?.unref?.();
   }
   // Pending-ledger sweep on a timer too, so TTL expiry repaints even when
   // no inventory event arrives (a lost server echo).
-  setInterval(() => {
+  const sweepTimer = setInterval(() => {
     if (pendingOps.size() === 0) return;
     pendingOps.sweep(new Map(takeInventoryRows(sessionHandle()).map((r) => [r.guid, r])));
   }, 1500);
+  sweepTimer?.unref?.();
   window.__itemDrag = {
     session: () => session,
     pending: () => pendingOps.all(),

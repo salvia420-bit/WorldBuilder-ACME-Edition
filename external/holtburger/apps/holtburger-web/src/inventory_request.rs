@@ -90,6 +90,11 @@ pub(crate) struct InventoryRequestTracker {
     last: Option<(u32, InventoryRequest)>,
     /// Every request not answered yet, oldest first, one per object.
     in_flight: Vec<(u32, InventoryRequest)>,
+    /// Auto-unequipped `(item_guid, old_equip_mask)` pairs sent right before a
+    /// pending `Wield`, restored if that wield bounces with 0x00A0.
+    displaced_equip: std::collections::HashMap<u32, Vec<(u32, u32)>>,
+    /// Displaced equipment captured by the most recent [`Self::attempt_failed`].
+    last_failed_displaced: Vec<(u32, u32)>,
 }
 
 impl InventoryRequestTracker {
@@ -100,10 +105,32 @@ impl InventoryRequestTracker {
         }
         self.in_flight.retain(|&(g, _)| g != guid);
         if self.in_flight.len() >= MAX_IN_FLIGHT {
+            if let Some((evicted, _)) = self.in_flight.first().copied() {
+                self.displaced_equip.remove(&evicted);
+            }
             self.in_flight.remove(0);
         }
         self.in_flight.push((guid, request));
         self.last = Some((guid, request));
+    }
+
+    /// Remember equipment auto-unequipped ahead of `guid`'s `Wield` request so
+    /// a server-side 0x00A0 rejection can re-wield those items.
+    pub(crate) fn record_displaced_equip(&mut self, guid: u32, displaced: Vec<(u32, u32)>) {
+        if guid == 0 {
+            return;
+        }
+        if displaced.is_empty() {
+            self.displaced_equip.remove(&guid);
+        } else {
+            self.displaced_equip.insert(guid, displaced);
+        }
+    }
+
+    /// Drain the auto-unequipped `(guid, equip_mask)` list captured when the
+    /// last [`Self::attempt_failed`] answered a bounced `Wield`.
+    pub(crate) fn take_failed_displaced(&mut self) -> Vec<(u32, u32)> {
+        std::mem::take(&mut self.last_failed_displaced)
     }
 
     /// The unanswered request on object `guid`, if any.
@@ -119,6 +146,7 @@ impl InventoryRequestTracker {
     /// request (and retail's pending one when it is that object). Returns
     /// whether anything was pending on it.
     pub(crate) fn respond(&mut self, guid: u32) -> bool {
+        self.displaced_equip.remove(&guid);
         let before = self.in_flight.len();
         self.in_flight.retain(|&(g, _)| g != guid);
         let mut cleared = self.in_flight.len() != before;
@@ -159,6 +187,18 @@ impl InventoryRequestTracker {
             GameMessage::InventoryRemoveObject(d) => d.object_guid.0,
             GameMessage::SetStackSize(d) => d.object_guid.0,
             GameMessage::ObjectDelete(d) => d.guid.0,
+            GameMessage::PublicUpdatePropertyInstanceId(d) => {
+                use holtburger_common::properties::PropertyInstanceId;
+                if d.guid.0 == 0
+                    || !matches!(
+                        PropertyInstanceId::from_repr(d.property),
+                        Some(PropertyInstanceId::Container | PropertyInstanceId::Wielder)
+                    )
+                {
+                    return;
+                }
+                d.guid.0
+            }
             GameMessage::ObjectCreate(d) | GameMessage::UpdateObject(d) => {
                 // SetWeenieDesc moves the object (and so answers it) when
                 // the new desc puts it in a container or on a wielder.
@@ -191,9 +231,61 @@ impl InventoryRequestTracker {
             (None, Some((guid, request))) => (guid, Some(request)),
             (None, None) => (wire_guid, None),
         };
+        self.last_failed_displaced = if chosen.1 == Some(InventoryRequest::Wield) {
+            self.displaced_equip.remove(&chosen.0).unwrap_or_default()
+        } else {
+            self.displaced_equip.remove(&chosen.0);
+            Vec::new()
+        };
         self.respond(chosen.0);
         chosen
     }
+}
+
+/// Normalize a `GetAndWieldItem` equip mask to a valid retail target mask:
+/// - `0`, single-bit masks, and pure wearable coverage masks (`0x0800_7FFF`
+///   armor + clothing + cloak) pass through unchanged.
+/// - Multi-bit bracelet (`0x0003_0000`) / ring (`0x000C_0000`) masks pick the
+///   first unoccupied slot in retail `AutoSort` order (Right -> Left), falling
+///   back to Right (`0x0002_0000` / `0x0008_0000`).
+/// - Multi-bit weapon masks (e.g. `MELEE_WEAPON | SHIELD` `0x0030_0000`) pick
+///   their primary weapon bit (`0x0350_0000`), else the lowest set bit.
+pub(crate) fn normalize_wield_mask(mask: u32, worn_mask: u32) -> u32 {
+    const PURE_WEARABLE: u32 = 0x0800_7FFF;
+    const WRIST_L: u32 = 0x0001_0000;
+    const WRIST_R: u32 = 0x0002_0000;
+    const WRIST_BOTH: u32 = WRIST_L | WRIST_R;
+    const RING_L: u32 = 0x0004_0000;
+    const RING_R: u32 = 0x0008_0000;
+    const RING_BOTH: u32 = RING_L | RING_R;
+    const PRIMARY_WEAPONS: u32 = 0x0350_0000;
+
+    if mask == 0 || mask.is_power_of_two() || (mask & !PURE_WEARABLE) == 0 {
+        return mask;
+    }
+    if mask == WRIST_BOTH {
+        return if (worn_mask & WRIST_R) == 0 {
+            WRIST_R
+        } else if (worn_mask & WRIST_L) == 0 {
+            WRIST_L
+        } else {
+            WRIST_R
+        };
+    }
+    if mask == RING_BOTH {
+        return if (worn_mask & RING_R) == 0 {
+            RING_R
+        } else if (worn_mask & RING_L) == 0 {
+            RING_L
+        } else {
+            RING_R
+        };
+    }
+    let primary = mask & PRIMARY_WEAPONS;
+    if primary != 0 {
+        return primary & primary.wrapping_neg();
+    }
+    mask & mask.wrapping_neg()
 }
 
 /// The name fields `ACCWeenieObject::GetObjectName` (acclient.c:439093)
@@ -643,5 +735,73 @@ mod tests {
         assert!(!retail_attempt_failed_enabled("?retailAttemptFailed=off"));
         assert!(!retail_attempt_failed_enabled("?a=1&retailAttemptFailed=0"));
         assert!(!retail_attempt_failed_enabled("retailAttemptFailed=false"));
+    }
+
+    #[test]
+    fn normalize_wield_mask_preserves_wearables_and_resolves_jewelry_or_weapons() {
+        assert_eq!(normalize_wield_mask(0, 0), 0);
+        // Single-bit mask stays unchanged.
+        assert_eq!(normalize_wield_mask(0x0020_0000, 0), 0x0020_0000);
+        // Multi-bit pure wearable (robe/coat) keeps all coverage bits.
+        assert_eq!(normalize_wield_mask(0x0000_1A00, 0), 0x0000_1A00);
+        assert_eq!(normalize_wield_mask(0x0800_0002, 0), 0x0800_0002);
+        // Bracelets: R (0x0002_0000) first, then L (0x0001_0000).
+        assert_eq!(normalize_wield_mask(0x0003_0000, 0), 0x0002_0000);
+        assert_eq!(normalize_wield_mask(0x0003_0000, 0x0002_0000), 0x0001_0000);
+        assert_eq!(normalize_wield_mask(0x0003_0000, 0x0003_0000), 0x0002_0000);
+        // Rings: R (0x0008_0000) first, then L (0x0004_0000).
+        assert_eq!(normalize_wield_mask(0x000C_0000, 0), 0x0008_0000);
+        assert_eq!(normalize_wield_mask(0x000C_0000, 0x0008_0000), 0x0004_0000);
+        // Dual-wield weapon mask (MELEE_WEAPON | SHIELD) picks MELEE_WEAPON.
+        assert_eq!(normalize_wield_mask(0x0030_0000, 0), 0x0010_0000);
+    }
+
+    #[test]
+    fn displaced_equip_is_returned_only_when_wield_attempt_fails() {
+        let mut t = InventoryRequestTracker::default();
+        t.record(ITEM_A, InventoryRequest::Wield);
+        t.record_displaced_equip(ITEM_A, vec![(ITEM_B, 0x0020_0000)]);
+        assert_eq!(
+            t.attempt_failed(ITEM_A),
+            (ITEM_A, Some(InventoryRequest::Wield))
+        );
+        assert_eq!(t.take_failed_displaced(), vec![(ITEM_B, 0x0020_0000)]);
+        assert!(t.take_failed_displaced().is_empty());
+
+        // When answered normally, displaced_equip is cleared and never replayed.
+        t.record(ITEM_A, InventoryRequest::Wield);
+        t.record_displaced_equip(ITEM_A, vec![(ITEM_B, 0x0010_0000)]);
+        assert!(t.respond(ITEM_A));
+        assert_eq!(t.attempt_failed(ITEM_A), (ITEM_A, None));
+        assert!(t.take_failed_displaced().is_empty());
+    }
+
+    #[test]
+    fn public_update_property_instance_id_answers_container_or_wielder() {
+        use holtburger_common::properties::PropertyInstanceId;
+        use holtburger_protocol::messages::PublicUpdatePropertyInstanceIdData;
+
+        let mut t = InventoryRequestTracker::default();
+        t.record(ITEM_A, InventoryRequest::Drop);
+        // Non-placement InstanceId (e.g. Owner = 1) does not answer.
+        t.observe_response(&GameMessage::PublicUpdatePropertyInstanceId(Box::new(
+            PublicUpdatePropertyInstanceIdData {
+                sequence: 1,
+                guid: Guid(ITEM_A),
+                property: PropertyInstanceId::Owner as u32,
+                value: Guid::NULL,
+            },
+        )));
+        assert_eq!(t.pending(ITEM_A), Some(InventoryRequest::Drop));
+        // Container (2) answers the pending Drop.
+        t.observe_response(&GameMessage::PublicUpdatePropertyInstanceId(Box::new(
+            PublicUpdatePropertyInstanceIdData {
+                sequence: 2,
+                guid: Guid(ITEM_A),
+                property: PropertyInstanceId::Container as u32,
+                value: Guid::NULL,
+            },
+        )));
+        assert_eq!(t.pending(ITEM_A), None);
     }
 }

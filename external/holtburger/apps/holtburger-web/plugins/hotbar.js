@@ -842,6 +842,7 @@ export function mount(ctx) {
     : emptyState();
   function saveState(s) {
     if (stateKey) writeState(stateKey, s);
+    try { window.dispatchEvent(new CustomEvent("hb-hotbar-changed")); } catch (_) {}
   }
   /** This character's cache key, or null before the character is known. */
   function characterStorageKey() {

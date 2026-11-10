@@ -50,6 +50,10 @@ pub(crate) fn handle_message(
                     data.stack_size as i32,
                 ));
                 entity.set_property(PropertyUpdate::Int(PropertyInt::Value, data.value as i32));
+                if data.stack_size == 0 {
+                    state.update_player_inventory_recursive(guid, false);
+                    state.container_placement.remove(&guid);
+                }
                 events.push(WorldEvent::PropertiesUpdated {
                     guid,
                     updates: vec![

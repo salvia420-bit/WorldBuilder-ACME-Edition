@@ -956,6 +956,7 @@ impl WorldState {
         events: &mut Vec<WorldEvent>,
     ) {
         self.bootstrap_player_entity_from_description(data);
+        self.reconcile_player_owned_entities();
 
         // HUD overhaul 2026-10-05: the main pack's display order. ACE
         // GameEventPlayerDescription writes the main pack's direct contents
@@ -1814,7 +1815,13 @@ impl WorldState {
             .filter(|e| e.container_id() == Some(container))
             .filter(|e| e.uses_player_container_slot() == uses_pack_slot)
             .map(|e| e.guid)
-            .filter(|g| Some(*g) != exclude && !self.container_placement.contains_key(g))
+            .filter(|g| {
+                Some(*g) != exclude
+                    && !self
+                        .container_placement
+                        .get(g)
+                        .is_some_and(|(c, _, k)| *c == container && *k == uses_pack_slot)
+            })
             .collect();
         extra.sort_by_key(|g| u32::from(*g));
         list.extend(extra);
@@ -1910,6 +1917,7 @@ impl WorldState {
         if !self.set_entity_inventory_location(guid, Guid::NULL, Guid::NULL, EquipMask::NONE) {
             return false;
         }
+        self.container_placement.remove(&guid);
 
         self.finalize_entity_inventory_location_update(
             guid,
@@ -1938,6 +1946,7 @@ impl WorldState {
         if !self.set_entity_inventory_location(object_guid, Guid::NULL, wielder_guid, equip_mask) {
             return false;
         }
+        self.container_placement.remove(&object_guid);
 
         self.finalize_entity_inventory_location_update(
             object_guid,
@@ -2014,6 +2023,15 @@ impl WorldState {
                 attached_new_wielder = Some(u32::from(value));
                 self.prior_wielders.insert(item_guid_u32, u32::from(value));
             }
+        }
+
+        if property == PropertyInstanceId::Container
+            && self
+                .container_placement
+                .get(&target_guid)
+                .is_some_and(|(c, _, _)| *c != value)
+        {
+            self.container_placement.remove(&target_guid);
         }
 
         if let Some(entity) = self.entities.get_mut(target_guid) {
