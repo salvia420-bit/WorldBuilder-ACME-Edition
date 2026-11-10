@@ -439,7 +439,9 @@ def build_health():
 
 def is_rotational(path: Path) -> bool | None:
     """Is `path` on a spinning disk? (sysfs queue/rotational of its block device;
-    None when it cannot tell, e.g. tmpfs or a network mount.)"""
+    None when it cannot tell, e.g. tmpfs or a network mount; False on non-Linux.)"""
+    if not hasattr(os, "major") or not hasattr(os, "minor"):
+        return False
     try:
         st = os.stat(path)
         dev = os.path.realpath(f"/sys/dev/block/{os.major(st.st_dev)}:{os.minor(st.st_dev)}")
@@ -447,7 +449,7 @@ def is_rotational(path: Path) -> bool | None:
             q = os.path.join(d, "queue", "rotational")
             if os.path.exists(q):
                 return open(q).read().strip() == "1"
-    except OSError:
+    except (OSError, AttributeError):
         pass
     return None
 
@@ -655,6 +657,101 @@ _READTHROUGH_LOCK = threading.Lock()
 _DIST_PREFIX = str(DIST_LINK) + os.sep
 
 
+class _RangeFile:
+    """File wrapper that limits reads to an exact byte length for Range responses."""
+
+    def __init__(self, f, length: int):
+        self._f = f
+        self._remain = length
+
+    def read(self, size: int = -1) -> bytes:
+        if self._remain <= 0:
+            return b""
+        if size < 0 or size > self._remain:
+            size = self._remain
+        data = self._f.read(size)
+        self._remain -= len(data)
+        return data
+
+    def close(self):
+        self._f.close()
+
+    @property
+    def closed(self) -> bool:
+        return self._f.closed
+
+    def readable(self) -> bool:
+        return True
+
+
+def _parse_byte_range(range_header: str, total_bytes: int) -> tuple[int, int] | None | bool:
+    """Parse a single RFC 7233 byte-range specification.
+
+    Returns:
+      (start, end): inclusive byte offsets for satisfiable range (HTTP 206).
+      False: unsatisfiable range (triggers HTTP 416 Range Not Satisfiable).
+      None: invalid syntax, unrecognized unit, or multipart (triggers fallback to HTTP 200 full representation).
+    """
+    if not range_header:
+        return None
+    unit, sep, spec = range_header.partition("=")
+    if sep != "=" or unit.strip().lower() != "bytes":
+        return None  # Unknown unit; ignore per RFC 7233 §3.1
+    spec = spec.strip()
+    if "," in spec:
+        # Multipart ranges unsupported; ignore Range header per RFC 7233 §3.1
+        return None
+    if spec.count("-") != 1:
+        return None  # Malformed syntax; ignore per RFC 7233 §3.1
+    start_str, _, end_str = spec.partition("-")
+    start_str = start_str.strip()
+    end_str = end_str.strip()
+
+    if total_bytes <= 0:
+        return False  # Empty representation cannot satisfy any byte range
+
+    if not start_str and not end_str:
+        return None  # Malformed 'bytes=-'
+
+    if not start_str:
+        # Suffix range: bytes=-suffix (final N bytes)
+        try:
+            suffix = int(end_str)
+        except ValueError:
+            return None
+        if suffix <= 0:
+            return False  # Suffix length of 0 is unsatisfiable
+        start = max(0, total_bytes - suffix)
+        end = total_bytes - 1
+        return start, end
+
+    try:
+        start = int(start_str)
+    except ValueError:
+        return None
+
+    if start < 0 or start >= total_bytes:
+        return False  # Out of bounds
+
+    if not end_str:
+        # Prefix range: bytes=start- (from start to EOF)
+        end = total_bytes - 1
+        return start, end
+
+    try:
+        end = int(end_str)
+    except ValueError:
+        return None
+
+    if end < start:
+        return False  # Syntactically invalid or unsatisfiable
+
+    if end >= total_bytes:
+        end = total_bytes - 1  # Truncate to EOF per RFC 7233 §2.1
+
+    return start, end
+
+
 class Handler(SimpleHTTPRequestHandler):
     """Serve the external/holtburger/ tree with dev no-cache headers (the reason
     the old /tmp/nocache-server.py existed — Firefox/Chrome ES-module + wasm
@@ -827,6 +924,110 @@ class Handler(SimpleHTTPRequestHandler):
             return
         super().do_GET()
 
+    def send_head(self):
+        """Common code for GET and HEAD commands, with RFC 7233 Range support."""
+        range_header = self.headers.get("Range")
+        if not range_header:
+            return super().send_head()
+
+        path = self.translate_path(self.path)
+        if os.path.isdir(path):
+            clean_path = self.path.split("?", 1)[0].split("#", 1)[0]
+            if not clean_path.endswith("/"):
+                return super().send_head()
+            for index in self.index_pages:
+                idx = os.path.join(path, index)
+                if os.path.isfile(idx):
+                    path = idx
+                    break
+            else:
+                return super().send_head()
+
+        if not os.path.isfile(path):
+            return super().send_head()
+
+        try:
+            f = open(path, "rb")
+        except OSError:
+            self.send_error(HTTPStatus.NOT_FOUND, "File not found")
+            return None
+
+        try:
+            fs = os.fstat(f.fileno())
+            total = fs.st_size
+            mtime_str = self.date_time_string(fs.st_mtime)
+
+            # Conditional Range check: If-Range (RFC 7233 §3.2)
+            if_range = self.headers.get("If-Range")
+            if if_range and if_range.strip() != mtime_str:
+                return self._serve_full(f, fs, path)
+
+            # Conditional check: If-Modified-Since
+            if "If-Modified-Since" in self.headers and "If-None-Match" not in self.headers:
+                try:
+                    ims = email.utils.parsedate_to_datetime(self.headers["If-Modified-Since"])
+                except (TypeError, IndexError, OverflowError, ValueError):
+                    pass
+                else:
+                    if ims.tzinfo is None:
+                        ims = ims.replace(tzinfo=datetime.timezone.utc)
+                    if ims.tzinfo is datetime.timezone.utc:
+                        last_modif = datetime.datetime.fromtimestamp(
+                            fs.st_mtime, datetime.timezone.utc
+                        ).replace(microsecond=0)
+                        if last_modif <= ims:
+                            self.send_response(HTTPStatus.NOT_MODIFIED)
+                            self.end_headers()
+                            f.close()
+                            return None
+
+            range_parsed = _parse_byte_range(range_header, total)
+            if range_parsed is False:
+                # Unsatisfiable range (e.g. start >= total, end < start, empty file)
+                self.send_response(HTTPStatus.RANGE_NOT_SATISFIABLE)
+                self.send_header("Content-Range", f"bytes */{total}")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                f.close()
+                return None
+
+            if range_parsed is None:
+                # Invalid syntax or unsupported unit or multi-range -> ignore Range per RFC 7233 §3.1
+                return self._serve_full(f, fs, path)
+
+            start, end = range_parsed
+            length = end - start + 1
+            f.seek(start)
+
+            self.send_response(HTTPStatus.PARTIAL_CONTENT)
+            self.send_header("Content-Type", self.guess_type(path))
+            self.send_header("Content-Range", f"bytes {start}-{end}/{total}")
+            self.send_header("Content-Length", str(length))
+            self.send_header("Last-Modified", mtime_str)
+            self.end_headers()
+            return _RangeFile(f, length)
+
+        except Exception:
+            f.close()
+            raise
+
+    def _serve_full(self, f, fs, path):
+        """Helper to fulfill full representation for fallback paths."""
+        f.seek(0)
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", self.guess_type(path))
+        self.send_header("Content-Length", str(fs.st_size))
+        self.send_header("Last-Modified", self.date_time_string(fs.st_mtime))
+        self.end_headers()
+        return f
+
+    def copyfile(self, source, outputfile):
+        """Wrap copyfile to gracefully handle socket disconnects during seeking."""
+        try:
+            super().copyfile(source, outputfile)
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            pass
+
     def send_response_only(self, code, message=None):
         # Stash the status so end_headers() can gate immutable caching on a 2xx
         # (a 304/404 for a convention-URL shard miss must NOT be cached forever).
@@ -849,6 +1050,8 @@ class Handler(SimpleHTTPRequestHandler):
         # cache in front — SW, proxy.cjs, browser — from mixing encodings).
         if os.path.splitext(path)[1].lower() in TEXT_COMPRESS_EXTS | BIN_COMPRESS_EXTS:
             self.send_header("Vary", "Accept-Encoding")
+        if 200 <= status < 300 or status == HTTPStatus.RANGE_NOT_SATISFIABLE:
+            self.send_header("Accept-Ranges", "bytes")
         if COI:
             # Both headers are required — COOP alone does not isolate. Same-origin
             # workers (bake_worker, net worker) inherit isolation; the wsbridge
@@ -887,7 +1090,9 @@ class Handler(SimpleHTTPRequestHandler):
              # unchanged tier collapses to a 304 on both the compressed
              # path's If-Modified-Since check and the stdlib one. The tier
              # manifest.json stays no-store (excluded just below).
-             ".hbc7")
+             ".hbc7",
+             # Video extensions for HTML5 video range caching
+             ".mp4", ".webm", ".ogg")
         ) and not path.endswith("manifest.json"):
             # Login-boot diagnosis 2026-06-11: no-store forced a full ~23MB /
             # 150-request re-download on EVERY reload and retry cycle.

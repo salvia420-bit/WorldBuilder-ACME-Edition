@@ -100,7 +100,7 @@ import { modelMeshFetcher, surfacePixelsFetcher } from "./bake_worker_client.js"
 import { attachStaticDefaultScriptsWorld, tickStaticScriptRadius } from "./statics.js";
 // Task #9 — interior animated scenery (banners/flags via default_animation 0x03).
 import { attachAnimatedScenery, animSceneryEnabled } from "./animated_scenery.js";
-import { objectBakeAllowed, tickObjectRadius } from "./object_radius.js";
+import { objectBakeAllowed, buildingBakeAllowed, tickObjectRadius } from "./object_radius.js";
 // ?flightResidency (flight experience Phase 1): the object window follows the flight-biased centre.
 import { flightResidencyEnabled, residencyCentreLbKey, flightLightActive } from "./residency.js";
 const FLIGHT_RESIDENCY_ON = flightResidencyEnabled();
@@ -4987,8 +4987,10 @@ export function tickPvsLoadExpansion(scene3d, sessionHandle) {
   const fireOne = (lbKey) => {
     const lbX = (lbKey >>> 24) & 0xff;
     const lbY = (lbKey >>> 16) & 0xff;
-    // ?objRadius (perf T7): outside the near radius the ring is terrain-only.
+    // ?objRadius (perf T7): outside the near radius the ring is terrain-only;
+    // buildings extend out to bldRadiusSetting() (d<=5).
     const objOk = objectBakeAllowed(objCentres, lbKey);
+    const bldOk = buildingBakeAllowed(objCentres, lbKey);
     if (loadTerrain) {
       try {
         loadTerrain(lbX, lbY);
@@ -5000,6 +5002,17 @@ export function tickPvsLoadExpansion(scene3d, sessionHandle) {
         }
       }
     }
+    if (loadBuildings && bldOk) {
+      try {
+        loadBuildings(lbX, lbY);
+      } catch (e) {
+        if (!scene3d._pvsLoadBuildingsWarned) {
+          scene3d._pvsLoadBuildingsWarned = true;
+          // eslint-disable-next-line no-console
+          console.warn("[scene3d.cells] PVS loadBuildingsForLandblock threw:", e);
+        }
+      }
+    }
     if (loadStatics && objOk) {
       try {
         loadStatics(lbX, lbY);
@@ -5008,17 +5021,6 @@ export function tickPvsLoadExpansion(scene3d, sessionHandle) {
           scene3d._pvsLoadStaticsWarned = true;
           // eslint-disable-next-line no-console
           console.warn("[scene3d.cells] PVS loadStaticsForLandblock threw:", e);
-        }
-      }
-    }
-    if (loadBuildings && objOk) {
-      try {
-        loadBuildings(lbX, lbY);
-      } catch (e) {
-        if (!scene3d._pvsLoadBuildingsWarned) {
-          scene3d._pvsLoadBuildingsWarned = true;
-          // eslint-disable-next-line no-console
-          console.warn("[scene3d.cells] PVS loadBuildingsForLandblock threw:", e);
         }
       }
     }
@@ -5049,14 +5051,15 @@ export function tickPvsLoadExpansion(scene3d, sessionHandle) {
     // ?objRadius (perf T7): objects outside the near radius are never "new" —
     // fireOne will not start them, so counting them would hold the sweep open.
     const objOk = objectBakeAllowed(objCentres, lbKey);
+    const bldOk = buildingBakeAllowed(objCentres, lbKey);
     if (loadTerrain && tBaked && !tBaked.has(lbKey)) return true;
+    if (bldOk && loadBuildings && bBaked && !bBaked.has(lbKey)) return true;
     if (objOk && loadStatics && sBaked && !sBaked.has(lbKey)) return true;
-    if (objOk && loadBuildings && bBaked && !bBaked.has(lbKey)) return true;
     // No baked-Set wired for a present domain → can't prove baked; treat as new
     // so we still make progress (and the per-key guard dedups the re-fire).
     if (loadTerrain && !tBaked) return true;
+    if (bldOk && loadBuildings && !bBaked) return true;
     if (objOk && loadStatics && !sBaked) return true;
-    if (objOk && loadBuildings && !bBaked) return true;
     return false;
   };
 

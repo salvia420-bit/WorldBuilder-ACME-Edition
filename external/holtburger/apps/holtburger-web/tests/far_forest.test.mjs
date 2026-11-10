@@ -8,7 +8,7 @@
 
 import { readFileSync } from "node:fs";
 import {
-  farForestEnabled, regionOf, regionsInRange, decodeRegion, atlasCell, viewAzimuth, FF_VERTEX_GLSL, FF_FRAGMENT_GLSL,
+  farForestEnabled, regionOf, regionsInRange, decodeRegion, atlasCell, viewAzimuth, farForestRegionStride, FF_VERTEX_GLSL, FF_FRAGMENT_GLSL,
 } from "../scene3d/far_forest.js";
 import { farForestRangeM } from "../scene3d/altitude_policy.js";
 
@@ -52,7 +52,11 @@ console.log("-- F3 record decode -----------------------------------------------
 console.log("-- F4 atlas + views ----------------------------------------------------");
 check("8 views per model, 16 cells per row", JSON.stringify(atlasCell(0, 0)) === "[0,0]" && JSON.stringify(atlasCell(1, 7)) === "[15,0]" && JSON.stringify(atlasCell(2, 0)) === "[0,1]");
 check("view azimuths: k / 8 of a turn", viewAzimuth(0) === 0 && Math.abs(viewAzimuth(2) - Math.PI / 2) < 1e-9);
-check("range: 4.5 km low, 8 km cap", farForestRangeM(0) === 4500 && farForestRangeM(1000) === 5900 && farForestRangeM(1e5) === 8000);
+check("range: 5.5 km low (<= 150 m), linear ramp to 10 km at 2.5 km AGL",
+  farForestRangeM(0) === 5500 && farForestRangeM(150) === 5500 && farForestRangeM(1325) === 7750 && farForestRangeM(2500) === 10000 && farForestRangeM(1e5) === 10000);
+check("region stride by distance",
+  farForestRegionStride(3000) === 1 && farForestRegionStride(3800) === 1 && farForestRegionStride(5000) === 2
+  && farForestRegionStride(7000) === 3 && farForestRegionStride(9000) === 4);
 
 console.log("-- F5 GLSL shape ------------------------------------------------------");
 check("vertex: cylindrical card + per-instance view pick + range cull", /vec2 right = vec2\(-dir\.y, dir\.x\)/.test(FF_VERTEX_GLSL) && /iScaleYaw\.y/.test(FF_VERTEX_GLSL) && /uRange\.y/.test(FF_VERTEX_GLSL));

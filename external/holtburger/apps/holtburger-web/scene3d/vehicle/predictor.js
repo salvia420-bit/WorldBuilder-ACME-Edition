@@ -124,6 +124,7 @@ export function createPilotPredictor(o) {
     // reset to the server at `ack` and replay the newer frames
     const before = renderPoseRaw(1);
     const s = cloneState(server);
+    e.state = cloneState(server);
     let last = ack;
     for (let k = (ack + 1) >>> 0; k !== seq; k = (k + 1) >>> 0) {
       const he = entryFor(k);

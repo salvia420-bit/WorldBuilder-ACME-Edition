@@ -29,7 +29,7 @@ import { getFlightHint } from "./residency.js";
 import { setWorldTierWanted, tickWorldTerrain, worldGroundHeight, worldTerrainDiag, prefetchWorldTier } from "./world_terrain.js";
 import { setFarForestWanted, tickFarForest, farForestDiag, prefetchFarForest } from "./far_forest.js";
 import { tickDericostWorld } from "./dericost_world.js";
-import { setObjRadiusPolicy } from "./object_radius.js";
+import { setObjRadiusPolicy, setBldRadiusPolicy } from "./object_radius.js";
 import { flightViewFlag } from "./flight_view_flag.js";
 
 /**
@@ -44,31 +44,36 @@ export function highSubjectAgl(cameraAgl, subject, freeCam, groundAt) {
 }
 
 /**
- * Object-window radius by AGL band, with hysteresis (null = the page's own setting). Bands: < 600 m → the page
- * default (4), or 3 while an aircraft is airborne (`flying`, above 40 m); 600-1,500 → 3; 1,500-2,500 → 2; above
- * 2,500 → 1 (exits 150-300 m lower). The far forests carry
- * the trees past the window on the presence complement. 1070 arm G: at 5 km the radius-2 window still baked ~45
- * statics / buildings landblocks per 3 s for objects 5 km below (a few pixels), with frames up to 0.8 s.
+ * Object-window radius by AGL band, with hysteresis (null = the page's own setting). Bands: <= 600 m → the page
+ * default (4, 768..960 m, kept across low-to-medium flight); 600-1,500 → 3 (exit < 500); 1,500-2,500 → 2 (exit < 1,300);
+ * above 2,500 → 1 (exit < 2,200). The far forests carry the trees past the window on the presence complement.
  */
-export function objRadiusForAgl(agl, prev = null, flying = false) {
+export function objRadiusForAgl(agl, prev = null, _flying = false) {
   const a = Number.isFinite(agl) ? agl : 0;
-  let r;
-  if (prev === 1) r = a > 2200 ? 1 : (a > 1300 ? 2 : (a > 450 ? 3 : null));
-  else if (prev === 2) r = a > 2500 ? 1 : (a > 1300 ? 2 : (a > 450 ? 3 : null));
-  else if (prev === 3) r = a > 2500 ? 1 : (a > 1500 ? 2 : (a > 450 ? 3 : null));
-  else r = a > 2500 ? 1 : (a > 1500 ? 2 : (a > 600 ? 3 : null));
-  // an aircraft airborne in the low band: radius 3 (49 landblocks of real meshes instead of 81) — the far forests
-  // carry the trees past it on the presence crossfade; at 400 km/h every crossing baked 9 new landblocks of statics /
-  // buildings (7 now), and the bakes, their program prewarm and the texture uploads were ~12 % of the main thread
-  // at low cruise (1070 arm H profile). Back to the page default on the ground (exit below 25 m).
-  if (flying && r === null && a > (prev === 3 ? 25 : 40)) r = 3;
-  return r;
+  if (prev === 1) return a >= 2200 ? 1 : (a >= 1300 ? 2 : (a >= 500 ? 3 : null));
+  if (prev === 2) return a > 2500 ? 1 : (a >= 1300 ? 2 : (a >= 500 ? 3 : null));
+  if (prev === 3) return a > 2500 ? 1 : (a > 1500 ? 2 : (a >= 500 ? 3 : null));
+  return a > 2500 ? 1 : (a > 1500 ? 2 : (a > 600 ? 3 : null));
 }
 
-/** Far-forest range at `agl` (m): 4.5 km low, out to 8 km by 2.5 km up (trees there are a few px tall). */
+/**
+ * Decoupled building-window radius by AGL band, with hysteresis (null = DEFAULT_BLD_RADIUS = 5, 960..1,152 m).
+ * Bands: <= 600 m → null (5); 600-1,500 → 4 (exit < 500); 1,500-2,500 → 3 (exit < 1,300); above 2,500 → 2 (exit < 2,200).
+ */
+export function bldRadiusForAgl(agl, prev = null) {
+  const a = Number.isFinite(agl) ? agl : 0;
+  if (prev === 2) return a >= 2200 ? 2 : (a >= 1300 ? 3 : (a >= 500 ? 4 : null));
+  if (prev === 3) return a > 2500 ? 2 : (a >= 1300 ? 3 : (a >= 500 ? 4 : null));
+  if (prev === 4) return a > 2500 ? 2 : (a > 1500 ? 3 : (a >= 500 ? 4 : null));
+  return a > 2500 ? 2 : (a > 1500 ? 3 : (a > 600 ? 4 : null));
+}
+
+/** Far-forest range at `agl` (m): 5.5 km at <= 150 m, linearly ramping to 10 km by 2.5 km up. */
 export function farForestRangeM(agl) {
   const a = Math.max(0, Number.isFinite(agl) ? agl : 0);
-  return Math.min(8000, 4500 + 1.4 * a);
+  if (a <= 150) return 5500;
+  if (a >= 2500) return 10000;
+  return 5500 + ((a - 150) / (2500 - 150)) * (10000 - 5500);
 }
 
 export const FLY_ENTER_AGL = 60;     // AGL (m) of the player (or the free camera) that counts as "high" without a flight hint
@@ -177,7 +182,20 @@ export function altitudeGridFreeze() { return !!_st.gridFreeze; }
 
 export function altitudePolicyState() {
   return { agl: _st.agl, subjectAgl: _st.subjectAgl ?? null, flying: _st.flying, high: _st.high, wanted: _st.wanted, w: _st.w, far: _st.far, fog: _st.fog,
-    farRingOff: !!_st.farRingOff, objR: _st.objR ?? null, gridFreeze: !!_st.gridFreeze };
+    farRingOff: !!_st.farRingOff, objR: _st.objR ?? null, bldR: _st.bldR ?? null, bldRadius: _st.bldR ?? null, gridFreeze: !!_st.gridFreeze };
+}
+
+export function altitudePolicySummary(agl, state = null) {
+  return {
+    agl,
+    viewDistanceM: viewDistanceM(agl),
+    fogBand: flightFogBand(agl),
+    far: quantizedFar(viewDistanceM(agl)),
+    hazeScale: hazeScale(agl),
+    farForestRangeM: farForestRangeM(agl),
+    objRadius: objRadiusForAgl(agl, state?.objRadius ?? state?.objR ?? null),
+    bldRadius: bldRadiusForAgl(agl, state?.bldRadius ?? state?.bldR ?? null),
+  };
 }
 
 /**
@@ -268,6 +286,8 @@ export function tickAltitudePolicy(scene3d, camera, { nowMs, groundAt = null, su
   scene3d._farRingSuppressed = !!_st.farRingOff;
   _st.objR = _st.wanted ? objRadiusForAgl(aglNow, _st.objR ?? null, _st.flying) : null;
   setObjRadiusPolicy(_st.objR, scene3d);
+  _st.bldR = _st.wanted ? bldRadiusForAgl(aglNow, _st.bldR ?? null) : null;
+  setBldRadiusPolicy(_st.bldR, scene3d);
   scene3d._lodRebakeFrozen = _st.wanted;
   // the near grid stops following the aircraft high up (index.js grid tick): the world tier draws the ground below
   // at that height and every grid move re-baked 2x2-landblock tiles nobody can tell apart from it (1070 arm N: ~25

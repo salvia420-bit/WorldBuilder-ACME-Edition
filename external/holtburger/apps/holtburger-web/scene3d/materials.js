@@ -6370,6 +6370,7 @@ export class MaterialCache {
     // resolved material instead of the fallback.
     const need = [];
     const alreadyPending = [];
+    let resolvedSync = 0;
     for (const did of surfaceDids) {
       const d = did >>> 0;
       if (d === FALLBACK_SURFACE_DID) continue;
@@ -6383,6 +6384,18 @@ export class MaterialCache {
       // Negative cache: skip a known catalog-absent DID (no wasm fetch, no
       // re-warn). Checked after materials.has so a real material always wins.
       if (this._negCacheEnabled && this.missingSurfaces.has(d)) continue;
+      // ST5 (`?texCompressedOnly`) — compressed-only SYNC build first: scalars
+      // + resident PVW preview, no pixel decode (pass 5 D-05.5), matching
+      // `get()` at line 6164 so `preload()` does not send resident surfaces to
+      // `fetchSurfacesPixels` only to discard their pixels in `_installFromPixels`.
+      if (texCompressedOnlyActive()) {
+        const mat = this._tryCompressedOnlyBuild(d);
+        if (mat) {
+          this._noteHandout(d);
+          resolvedSync += 1;
+          continue;
+        }
+      }
       const inflight = this.pendingFetches.get(d);
       if (inflight) { alreadyPending.push(inflight); continue; }
       need.push(d);
@@ -6391,7 +6404,7 @@ export class MaterialCache {
       // Nothing fresh to fetch, but a sibling bake may still be resolving
       // surfaces this caller is about to `getCached()` — wait for them.
       if (alreadyPending.length) await Promise.allSettled(alreadyPending);
-      return 0;
+      return resolvedSync;
     }
 
     // Install one shared promise per DID before the wasm call so
@@ -6456,7 +6469,7 @@ export class MaterialCache {
       this.pendingFetches.delete(d);
       this.pendingStartTimes.delete(d);
     }
-    return resolved;
+    return resolved + resolvedSync;
   }
 
   /**

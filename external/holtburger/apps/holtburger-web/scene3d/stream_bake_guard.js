@@ -26,6 +26,7 @@
 // cap / cooldown / in-flight skip counts. No-ops unless the flag is on.
 import { rlogBake, rlogBakeSkip } from "./residency_log.js";
 import { isNearPlayerLb } from "./landblock_lru.js";
+import { getFlightHint } from "./residency.js";
 
 export const STREAM_BAKE_RETRY_COOLDOWN_MS = 2500;
 
@@ -37,6 +38,19 @@ export const STREAM_BAKE_RETRY_COOLDOWN_MS = 2500;
 // skipped here are retried — not lost.
 export const STREAM_BAKE_DEFAULT_MAX_IN_FLIGHT = 6;
 
+// Per-kind concurrency caps (Pass 1 streaming priority): partition capacity by
+// baker kind so slow statics bakes cannot starve terrain and buildings bakes.
+export const DEFAULT_KIND_CAPS = Object.freeze({
+  terrain: 8,
+  buildings: 6,
+  statics: 6,
+});
+export const FLIGHT_KIND_CAPS = Object.freeze({
+  terrain: 12,
+  buildings: 8,
+  statics: 8,
+});
+
 // Bake-wait instrumentation cap (session 7, 1114 §3): per-(kind,lbKey)
 // lifecycle records kept on the state bag. Bounded so a long telepoi
 // session can't grow the map unboundedly; oldest records evicted first
@@ -47,12 +61,54 @@ const WAIT_LOG_MAX_KEYS = 1024;
 export function createStreamGuardState() {
   return {
     inFlight: new Set(),
+    inFlightByKind: {
+      terrain: new Set(),
+      buildings: new Set(),
+      statics: new Set(),
+    },
     failUntil: new Map(),
     warnedAt: new Map(),
     // Session 7 (1114 §3, teleport fetch/bake flush groundwork): per
     // guard-key wait/lifecycle records — see _waitRec + summarizeStreamBakeWait.
     waitLog: new Map(),
+    maxInFlight: STREAM_BAKE_DEFAULT_MAX_IN_FLIGHT,
+    _customMaxInFlight: false,
   };
+}
+
+let _defaultGuardState = null;
+function _getDefaultGuardState() {
+  if (!_defaultGuardState) _defaultGuardState = createStreamGuardState();
+  return _defaultGuardState;
+}
+
+export function setStreamBakeMaxInFlight(stateOrN, maybeN) {
+  if (typeof stateOrN === "object" && stateOrN !== null) {
+    stateOrN.maxInFlight = Math.max(1, Number(maybeN) || STREAM_BAKE_DEFAULT_MAX_IN_FLIGHT);
+    stateOrN._customMaxInFlight = true;
+    return stateOrN.maxInFlight;
+  }
+  const s = _getDefaultGuardState();
+  s.maxInFlight = Math.max(1, Number(stateOrN) || STREAM_BAKE_DEFAULT_MAX_IN_FLIGHT);
+  s._customMaxInFlight = true;
+  return s.maxInFlight;
+}
+
+export function resetStreamBakeGuard(state) {
+  const s = state || _getDefaultGuardState();
+  s.inFlight?.clear?.();
+  if (s.inFlightByKind) {
+    for (const set of Object.values(s.inFlightByKind)) {
+      if (set instanceof Set) set.clear();
+    }
+  } else {
+    s.inFlightByKind = { terrain: new Set(), buildings: new Set(), statics: new Set() };
+  }
+  s.failUntil?.clear?.();
+  s.warnedAt?.clear?.();
+  s.waitLog?.clear?.();
+  s.maxInFlight = STREAM_BAKE_DEFAULT_MAX_IN_FLIGHT;
+  s._customMaxInFlight = false;
 }
 
 // Fetch-or-create the wait record for a guard key. A fresh ask AFTER a
@@ -171,8 +227,17 @@ export function summarizeStreamBakeWait(state, { top = 20 } = {}) {
  * @returns {Promise<any>} the bake result, or null when skipped/failed. Never rejects.
  */
 export function guardedStreamBake(state, kind, lbKey, run, opts = {}) {
+  const st = state || _getDefaultGuardState();
+  if (!st.inFlightByKind) {
+    st.inFlightByKind = {
+      terrain: new Set(),
+      buildings: new Set(),
+      statics: new Set(),
+    };
+  }
   const cooldownMs = opts.cooldownMs ?? STREAM_BAKE_RETRY_COOLDOWN_MS;
-  const maxInFlight = opts.maxInFlight ?? STREAM_BAKE_DEFAULT_MAX_IN_FLIGHT;
+  const maxInFlight = opts.maxInFlight ?? st.maxInFlight ?? STREAM_BAKE_DEFAULT_MAX_IN_FLIGHT;
+  const customMaxInFlight = opts.maxInFlight != null || st._customMaxInFlight === true;
   const now = opts.now ?? (() => performance.now());
   const warn =
     opts.warn ??
@@ -196,7 +261,7 @@ export function guardedStreamBake(state, kind, lbKey, run, opts = {}) {
   // waits (pre-admission vs in-run) and whether the urgent lane engaged.
   // Fail-soft: instrumentation must never affect guard semantics.
   const nowMs = now();
-  const rec = _waitRec(state, guardKey, kind, k, nowMs);
+  const rec = _waitRec(st, guardKey, kind, k, nowMs);
   if (rec) {
     rec.asks += 1;
     rec.lastAskMs = nowMs;
@@ -204,46 +269,61 @@ export function guardedStreamBake(state, kind, lbKey, run, opts = {}) {
   }
 
   // In-flight dedup: a bake for this LB is already running — skip.
-  if (state.inFlight.has(guardKey)) {
+  if (st.inFlight.has(guardKey)) {
     if (rec) rec.skipInFlight += 1;
     rlogBakeSkip("inflight");
     return Promise.resolve(null);
   }
 
   // Cooldown: this LB failed recently — skip until the window elapses.
-  const until = state.failUntil.get(guardKey);
+  const until = st.failUntil.get(guardKey);
   if (until != null) {
     if (now() < until) {
       if (rec) rec.skipCooldown += 1;
       rlogBakeSkip("cooldown");
       return Promise.resolve(null);
     }
-    state.failUntil.delete(guardKey);
+    st.failUntil.delete(guardKey);
   }
 
-  // Global concurrency cap: if too many bakes are already running (across all
-  // keys), skip STARTING distant speculative bakes. streamFix / M2:
-  // urgent and near-player (isNearPlayerLb) bakes are cap-exempt so they are never
-  // starved or dropped (skipCap) by distant horizon sweeps.
-  if (!nearPlayer && state.inFlight.size >= maxInFlight) {
-    if (rec) rec.skipCap += 1;
-    rlogBakeSkip("cap");
-    return Promise.resolve(null);
+  // Concurrency cap: partition capacity by kind in default runtime so slow
+  // statics bakes do not starve terrain and buildings bakes during flight.
+  // If a caller/test explicitly overrides maxInFlight, respect the global cap.
+  // Urgent and near-player (isNearPlayerLb) bakes remain cap-exempt.
+  const kindSet = st.inFlightByKind?.[kind];
+  if (!nearPlayer) {
+    if (customMaxInFlight) {
+      if (st.inFlight.size >= maxInFlight) {
+        if (rec) rec.skipCap += 1;
+        rlogBakeSkip("cap");
+        return Promise.resolve(null);
+      }
+    } else {
+      const fh = getFlightHint();
+      const flying = !!(fh && fh.active !== false);
+      const kindCap = (flying ? FLIGHT_KIND_CAPS[kind] : DEFAULT_KIND_CAPS[kind]) ?? maxInFlight;
+      if ((kindSet ? kindSet.size : st.inFlight.size) >= kindCap) {
+        if (rec) rec.skipCap += 1;
+        rlogBakeSkip("cap");
+        return Promise.resolve(null);
+      }
+    }
   }
 
   if (rec) {
     rec.startMs = now();
     rec.waitMs = rec.startMs - rec.firstAskMs;
-    rec.inFlightAtStart = state.inFlight.size;
+    rec.inFlightAtStart = st.inFlight.size;
   }
-  state.inFlight.add(guardKey);
+  st.inFlight.add(guardKey);
+  if (kindSet) kindSet.add(k);
   const startedMs = now();
-  rlogBake(kind, "start", k, state.inFlight.size);
+  rlogBake(kind, "start", k, st.inFlight.size);
   return Promise.resolve()
     .then(run)
     .then((r) => {
       // Success clears any prior failure backoff for this LB.
-      state.failUntil.delete(guardKey);
+      st.failUntil.delete(guardKey);
       if (rec) { rec.endMs = now(); rec.durMs = rec.endMs - rec.startMs; rec.ok = true; }
       rlogBake(kind, "done", k, Math.round(now() - startedMs));
       return r;
@@ -251,12 +331,12 @@ export function guardedStreamBake(state, kind, lbKey, run, opts = {}) {
     .catch((err) => {
       if (rec) { rec.endMs = now(); rec.durMs = rec.endMs - rec.startMs; rec.ok = false; }
       rlogBake(kind, "fail", k, 0);
-      state.failUntil.set(guardKey, now() + cooldownMs);
+      st.failUntil.set(guardKey, now() + cooldownMs);
       // The baker already logged the root cause; throttle a single warn
       // per cooldown so the retry can't flood the console.
-      const lastWarn = state.warnedAt.get(guardKey) ?? -Infinity;
+      const lastWarn = st.warnedAt.get(guardKey) ?? -Infinity;
       if (now() - lastWarn > cooldownMs) {
-        state.warnedAt.set(guardKey, now());
+        st.warnedAt.set(guardKey, now());
         warn(
           `[stream] ${kind} bake for LB 0x${k.toString(16)} failed; backing off ${cooldownMs}ms`,
           err?.message ?? err
@@ -265,6 +345,11 @@ export function guardedStreamBake(state, kind, lbKey, run, opts = {}) {
       return null;
     })
     .finally(() => {
-      state.inFlight.delete(guardKey);
+      st.inFlight.delete(guardKey);
+      if (kindSet) kindSet.delete(k);
     });
+}
+
+export function guardedLbBake(kind, lbKey, fn, opts = {}) {
+  return guardedStreamBake(_getDefaultGuardState(), kind, lbKey, fn, opts);
 }

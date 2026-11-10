@@ -92,6 +92,7 @@ import { batchedMaterialFor, holdBatchedMaterial, releaseBatchedMaterial } from 
 // already in the graph (index.js / statics.js import them): no new preload.
 import { markBatchedRuns } from "./batched_runs.js";
 import { applyStaticEarlyOut, freezeStaticNodeMatrices } from "./static_batch_x.js";
+import { buildingBakeAllowed, buildingRadiusHides } from "./object_radius.js";
 
 const METERS_PER_LANDBLOCK = 192.0;
 // HOLTBURG_X/HOLTBURG_Y retired (spawn-driven-boot): the bake-time shadow gate
@@ -469,6 +470,12 @@ function _carriesEnvDetail(n) {
 // neither ever moves; the legacy whole-placement groups (hinge wrappers) are
 // attached elsewhere and stay live.
 function _attachFlatBuildingNode(scene3d, n) {
+  const st = scene3d?._objRadius;
+  const lbKey = n?.userData?.landblockId != null ? ((n.userData.landblockId >>> 0) & 0xffff0000) >>> 0 : 0;
+  if (st && lbKey && (st.hiddenBld?.has?.(lbKey) ?? buildingRadiusHides(lbKey, scene3d.currentLandblockKey >>> 0))) {
+    n.visible = false;
+    n.userData.__bldRadiusHidden = true;
+  }
   scene3d.buildingsGroup.add(n);
   if (n && n.parent && typeof freezeStaticNodeMatrices === "function") freezeStaticNodeMatrices(n);
 }
@@ -515,8 +522,9 @@ function _feedBuildingGroupsToAtlas(groups, scene3d, opts = null) {
   // by owning LB, since a pool's residency is tile-granular), and the residue
   // continues into the unchanged atlas / buildingsGroup path. Inert unless the
   // full F-11.3 chain armed the pooled world ⇒ OFF arm byte-identical.
+  const matBatch = _matBatchActive(scene3d);
   let toAtlas = singletons;
-  if (poolWorldActive() && singletons.length > 0) {
+  if (!matBatch && poolWorldActive() && singletons.length > 0) {
     try {
       const byLb = new Map();
       for (const n of singletons) {
@@ -542,7 +550,6 @@ function _feedBuildingGroupsToAtlas(groups, scene3d, opts = null) {
   // group — the atlas is not resurrected by the pooled arm.
   // ?buildingMatBatch: the residue is batched by its OWN material instead and
   // is never offered to the atlas (whose array material would change the image).
-  const matBatch = _matBatchActive(scene3d);
   const { passthrough } = (!matBatch && BUILDING_BATCH && statAtlasEnabled())
     ? addSingletonsToCrossLbAtlas(toAtlas, scene3d)
     : { passthrough: toAtlas };
@@ -1408,6 +1415,10 @@ export async function bakeBuildingsForLandblock(
         _feedBuildingGroupsToAtlas(_pendingGroups, scene3d);
       } else {
         for (const g of _pendingGroups) scene3d.buildingsGroup.add(g);
+        const st = scene3d._objRadius;
+        if (st && (st.hiddenBld?.has?.(lbKey) ?? buildingRadiusHides(lbKey, scene3d.currentLandblockKey >>> 0))) {
+          for (const g of _pendingGroups) { g.visible = false; if (g.userData) g.userData.__bldRadiusHidden = true; }
+        }
       }
     }
 

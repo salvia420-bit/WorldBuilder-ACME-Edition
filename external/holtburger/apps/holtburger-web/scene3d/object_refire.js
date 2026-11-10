@@ -44,11 +44,16 @@
 // own events. Parked landblocks are skipped (park belongs to the grid).
 // Flag OFF (absent): the caller never constructs this — byte-identical.
 
+import { getFlightHint } from "./residency.js";
+
 export const OBJ_REFIRE_MS = 250;
+export const OBJ_REFIRE_FLIGHT_MS = 80;
+export const OBJ_REFIRE_FLIGHT_CAP = 12;
 export const TRAVEL_MEMORY_MS = 8000;
 // Score = Chebyshev distance − AHEAD_WEIGHT·cos(angle to travel dir): an LB
 // 3 away dead ahead (1.5) outranks one 2 away abeam (2) and one 2 behind (3.5).
 export const AHEAD_WEIGHT = 1.5;
+export const AHEAD_WEIGHT_FLIGHT = 2.4;
 const TRAVEL_HISTORY = 4;
 
 /** `?objRefire` — DEFAULT ON (owner flip 2026-11-01 after the 1070 A/B: statics baked in the object window in flight
@@ -107,7 +112,7 @@ export function travelDir(tr, nowMs) {
 }
 
 /** Refire score of `lbKey` (lower = sooner). */
-export function refireScore(lbKey, plx, ply, dir) {
+export function refireScore(lbKey, plx, ply, dir, aheadWeight = AHEAD_WEIGHT) {
   const x = (lbKey >>> 24) & 0xff;
   const y = (lbKey >>> 16) & 0xff;
   const d = _cheb(x, y, plx, ply);
@@ -115,7 +120,7 @@ export function refireScore(lbKey, plx, ply, dir) {
   const ox = x - plx;
   const oy = y - ply;
   const cos = (ox * dir.x + oy * dir.y) / Math.hypot(ox, oy);
-  return d - AHEAD_WEIGHT * cos;
+  return d - aheadWeight * cos;
 }
 
 /**
@@ -132,9 +137,20 @@ export function refireScore(lbKey, plx, ply, dir) {
  * @param {number} a.radius  object radius (landblocks)
  * @param {(lbKey:number)=>boolean} a.needs
  * @param {{x:number,y:number}|null} a.dir  unit travel direction or null
+ * @param {number} [a.aheadWeight]  directional bias weight
  * @returns {number[]}
  */
-export function collectObjectRefire({ windowTiles, stateOf, liveStates, tileLbKeys, playerLbKey, radius, needs, dir }) {
+export function collectObjectRefire({
+  windowTiles,
+  stateOf,
+  liveStates,
+  tileLbKeys,
+  playerLbKey,
+  radius,
+  needs,
+  dir,
+  aheadWeight = AHEAD_WEIGHT,
+}) {
   const plx = (playerLbKey >>> 24) & 0xff;
   const ply = (playerLbKey >>> 16) & 0xff;
   const out = [];
@@ -150,7 +166,7 @@ export function collectObjectRefire({ windowTiles, stateOf, liveStates, tileLbKe
   }
   if (out.length > 1) {
     const score = new Map();
-    for (const k of out) score.set(k, refireScore(k, plx, ply, dir));
+    for (const k of out) score.set(k, refireScore(k, plx, ply, dir, aheadWeight));
     out.sort((a, b) => score.get(a) - score.get(b) || a - b);
   }
   return out;
@@ -172,6 +188,7 @@ export function collectObjectRefire({ windowTiles, stateOf, liveStates, tileLbKe
 export function createObjectRefire({ fireLb, needs, radius, fallbackRadius, liveStates, tileLbKeys }) {
   const tracker = createTravelTracker();
   const stats = { ticks: 0, sweeps: 0, fired: 0, lastCandidates: 0, lastDir: null, lastError: null };
+  let lastAtMs = -Infinity;
   let nextAtMs = -Infinity;
   return {
     stats,
@@ -185,12 +202,24 @@ export function createObjectRefire({ fireLb, needs, radius, fallbackRadius, live
     tick(grid, playerLbKey, nowMs) {
       stats.ticks += 1;
       if (playerLbKey == null || !grid) return 0;
-      if (nowMs < nextAtMs) return 0;
-      nextAtMs = nowMs + OBJ_REFIRE_MS;
+      const fh = getFlightHint(nowMs);
+      const flying = !!(fh && fh.active !== false);
+      const cadenceMs = flying ? OBJ_REFIRE_FLIGHT_MS : OBJ_REFIRE_MS;
+      if (nowMs - lastAtMs < cadenceMs && nowMs < nextAtMs) return 0;
+      lastAtMs = nowMs;
+      nextAtMs = nowMs + cadenceMs;
       try {
         let r = radius();
         if (!(Number.isFinite(r) && r >= 0)) r = fallbackRadius;
-        const dir = travelDir(tracker, nowMs);
+        let dir;
+        let aheadW = AHEAD_WEIGHT;
+        const fSpd = flying ? Math.hypot(fh.vx, fh.vy) : 0;
+        if (flying && fSpd > 1.0) {
+          dir = { x: fh.vx / fSpd, y: fh.vy / fSpd };
+          aheadW = AHEAD_WEIGHT_FLIGHT;
+        } else {
+          dir = travelDir(tracker, nowMs);
+        }
         stats.lastDir = dir;
         const lbs = collectObjectRefire({
           windowTiles: grid.windowTiles,
@@ -201,12 +230,14 @@ export function createObjectRefire({ fireLb, needs, radius, fallbackRadius, live
           radius: r,
           needs,
           dir,
+          aheadWeight: aheadW,
         });
         stats.sweeps += 1;
         stats.lastCandidates = lbs.length;
-        for (const k of lbs) fireLb((k >>> 24) & 0xff, (k >>> 16) & 0xff);
-        stats.fired += lbs.length;
-        return lbs.length;
+        const toFire = flying && lbs.length > OBJ_REFIRE_FLIGHT_CAP ? lbs.slice(0, OBJ_REFIRE_FLIGHT_CAP) : lbs;
+        for (const k of toFire) fireLb((k >>> 24) & 0xff, (k >>> 16) & 0xff);
+        stats.fired += toFire.length;
+        return toFire.length;
       } catch (e) {
         stats.lastError = String(e && e.message ? e.message : e);
         return 0;

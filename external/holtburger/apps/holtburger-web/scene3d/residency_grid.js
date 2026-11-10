@@ -152,6 +152,8 @@ const LEGAL = {
 // tile helpers
 // ---------------------------------------------------------------------------
 
+import { getFlightHint } from "./residency.js";
+
 /** Pack a tile coordinate pair (0..127 each) into one key. -1 = absent. */
 export function tileKeyOf(tx, ty) {
   return ((tx & 0xff) << 8) | (ty & 0xff);
@@ -169,6 +171,21 @@ export function tileChebyshev(a, b) {
     Math.abs(tileXOf(a) - tileXOf(b)),
     Math.abs(tileYOf(a) - tileYOf(b)),
   );
+}
+
+/** Forward-biased tile priority score (lower = sooner). */
+export function _tileForwardScore(tx, ty, cx, cy) {
+  const dx = tx - cx;
+  const dy = ty - cy;
+  const dCheb = Math.max(Math.abs(dx), Math.abs(dy));
+  if (dCheb === 0) return 0;
+  const fh = getFlightHint();
+  const flying = !!(fh && fh.active !== false);
+  const spd = flying ? Math.hypot(fh.vx, fh.vy) : 0;
+  if (!flying || !(spd > 1.0)) return dCheb;
+  const len = Math.hypot(dx, dy);
+  const dot = (dx * (fh.vx / spd) + dy * (fh.vy / spd)) / len;
+  return dCheb - dot * 2.0;
 }
 
 /** The player's own tile for an LB coordinate. */
@@ -653,6 +670,23 @@ export class GridResidencyAdapter {
 
   // ── admit / vacate (grid event handlers; wire these to the SlotGrid) ─────
 
+  _tileForwardScore(tx, ty, cx, cy) {
+    return _tileForwardScore(tx, ty, cx, cy);
+  }
+
+  _sortTilesForward(tiles) {
+    if (tiles.length <= 1) return tiles;
+    const pt = this.grid?.playerTile;
+    if (pt == null || pt < 0) return tiles;
+    const cx = (pt >> 8) & 0xff;
+    const cy = pt & 0xff;
+    return tiles.sort(
+      (a, b) =>
+        _tileForwardScore((a >> 8) & 0xff, a & 0xff, cx, cy) -
+        _tileForwardScore((b >> 8) & 0xff, b & 0xff, cx, cy),
+    );
+  }
+
   /** Handle a grid update result (seed/shift/teleport). */
   onUpdate(res) {
     if (!res || !res.moved) {
@@ -678,7 +712,16 @@ export class GridResidencyAdapter {
       this.parkSched.onResident(res.admitted);
       for (const tile of res.vacated) this._vacate(tile);
     }
-    for (const tile of res.admitted) this._admit(tile);
+    const admitted = this._sortTilesForward([...res.admitted]);
+    const fastFiredTiles = [];
+    for (const tile of admitted) {
+      if (this._admit(tile, { deferStatics: true })) {
+        fastFiredTiles.push(tile);
+      }
+    }
+    for (const tile of fastFiredTiles) {
+      this._fireTileStaticsBakes(tile);
+    }
     if (!res.teleport && !res.seed) this.parkSched.drain();
     // Per-crossing window touch (legacy parity — see the touchLb dep doc):
     // one Map write per window LB, the recency signal the retired
@@ -692,9 +735,10 @@ export class GridResidencyAdapter {
     }
   }
 
-  _admit(tile) {
+  _admit(tile, opts = {}) {
     const g = this.grid;
     const st = g.stateOf(tile);
+    const deferStatics = opts.deferStatics === true;
     if (st === SLOT_STATE.PARKED) {
       // PARKED → LIVE: pointer re-adopt — zero fetch, zero decode. The
       // loaders' unpark fast-path does the re-attach when feeds re-fire.
@@ -703,11 +747,16 @@ export class GridResidencyAdapter {
         try { if (this.lru.isParkedLb(lbKey)) this.lru.unparkLb(lbKey); } catch (_) {}
       }
       this._stats.reAdopts += 1;
+      if (deferStatics) {
+        this._stats.feedsFired += 1;
+        this._fireTileFastBakes(tile);
+        return true;
+      }
       this._fireFeeds(tile); // idempotent; re-arms baked-set fast paths
-      return;
+      return false;
     }
     if (st === SLOT_STATE.LIVE || st === SLOT_STATE.STAGED || st === SLOT_STATE.FETCHING) {
-      return; // already managed (zig-zag re-entry inside hysteresis)
+      return false; // already managed (zig-zag re-entry inside hysteresis)
     }
     if (this.packs) {
       if (this.packs.isQuarantined(tile)) {
@@ -716,7 +765,7 @@ export class GridResidencyAdapter {
         // next admit retries naturally.
         g.setState(tile, SLOT_STATE.QUARANTINED);
         this._stats.quarantineHolds += 1;
-        return;
+        return false;
       }
       g.setState(tile, SLOT_STATE.FETCHING); // EMPTY→ or QUARANTINED→ (timed re-eligibility)
       this._stats.packFetches += 1;
@@ -724,11 +773,18 @@ export class GridResidencyAdapter {
         () => this._onTileStaged(tile),
         (e) => this._onTileFetchFailed(tile, e),
       );
+      return false;
     } else {
       // Legacy-lane arm (no pack dist): records fetch per-record inside the
       // guarded bakes — the slot stages immediately.
       g.setState(tile, SLOT_STATE.STAGED);
+      if (deferStatics) {
+        this._stats.feedsFired += 1;
+        this._fireTileFastBakes(tile);
+        return true;
+      }
       this._fireFeeds(tile);
+      return false;
     }
   }
 
@@ -762,17 +818,48 @@ export class GridResidencyAdapter {
     this._fireFeedLbs(tile);
   }
 
-  _fireFeedLbs(tile) {
+  _fireTileFastBakes(txOrTile, ty) {
+    const tile = ty !== undefined ? tileKeyOf(txOrTile, ty) : txOrTile;
+    const hasSplit =
+      typeof this.feeds.fireFastLb === "function" &&
+      typeof this.feeds.fireStaticsLb === "function";
     for (const lbKey of tileLbKeys(tile)) {
       const lbx = (lbKey >>> 24) & 0xff;
       const lby = (lbKey >>> 16) & 0xff;
       try {
-        this.feeds.fireLb(lbx, lby);
+        if (hasSplit) {
+          this.feeds.fireFastLb(lbx, lby);
+        } else {
+          this.feeds.fireLb(lbx, lby);
+        }
         this._stats.feedLbs += 1;
       } catch (e) {
         if (!this._stats.lastError) this._stats.lastError = String(e && e.message ? e.message : e);
       }
     }
+  }
+
+  _fireTileStaticsBakes(txOrTile, ty) {
+    if (typeof this.feeds.fireStaticsLb !== "function") return;
+    const tile = ty !== undefined ? tileKeyOf(txOrTile, ty) : txOrTile;
+    for (const lbKey of tileLbKeys(tile)) {
+      const lbx = (lbKey >>> 24) & 0xff;
+      const lby = (lbKey >>> 16) & 0xff;
+      try {
+        this.feeds.fireStaticsLb(lbx, lby);
+      } catch (e) {
+        if (!this._stats.lastError) this._stats.lastError = String(e && e.message ? e.message : e);
+      }
+    }
+  }
+
+  _fireTileBakes(txOrTile, ty) {
+    this._fireTileFastBakes(txOrTile, ty);
+    this._fireTileStaticsBakes(txOrTile, ty);
+  }
+
+  _fireFeedLbs(tile) {
+    this._fireTileBakes(tile);
   }
 
   /**
@@ -798,7 +885,16 @@ export class GridResidencyAdapter {
     for (const tile of g.windowTiles) {
       if (g.stateOf(tile) === SLOT_STATE.EMPTY) empty.push(tile);
     }
-    for (const tile of empty) this._admit(tile);
+    this._sortTilesForward(empty);
+    const fastFiredTiles = [];
+    for (const tile of empty) {
+      if (this._admit(tile, { deferStatics: true })) {
+        fastFiredTiles.push(tile);
+      }
+    }
+    for (const tile of fastFiredTiles) {
+      this._fireTileStaticsBakes(tile);
+    }
     return empty.length;
   }
 
@@ -808,7 +904,7 @@ export class GridResidencyAdapter {
    * `?objRadius` near radius cells.js applies on the legacy ring), so a landblock CROSSING can
    * bring a resident tile's landblocks into object range without any grid event: the caller fires
    * this once per crossing. Idempotent per LB through the same guard/baked-Sets as the staged
-   * refire below; nearest tiles first.
+   * refire below; nearest/forward tiles first, terrain+buildings pass before statics pass.
    *
    * @returns {number} tiles re-fired.
    */
@@ -820,17 +916,13 @@ export class GridResidencyAdapter {
       if (st === SLOT_STATE.LIVE || st === SLOT_STATE.STAGED) tiles.push(tile);
     }
     if (tiles.length === 0) return 0;
-    const pt = g.playerTile;
-    if (pt != null && pt >= 0) {
-      const px = (pt >> 8) & 0xff;
-      const py = pt & 0xff;
-      const cheb = (t) =>
-        Math.max(Math.abs(((t >> 8) & 0xff) - px), Math.abs((t & 0xff) - py));
-      tiles.sort((a, b) => cheb(a) - cheb(b));
-    }
+    this._sortTilesForward(tiles);
     for (const tile of tiles) {
       this._stats.crossingRefires += 1;
-      this._fireFeedLbs(tile);
+      this._fireTileFastBakes(tile);
+    }
+    for (const tile of tiles) {
+      this._fireTileStaticsBakes(tile);
     }
     return tiles.length;
   }
@@ -849,7 +941,7 @@ export class GridResidencyAdapter {
    * battery). This method restores the legacy retry semantics THROUGH the
    * same guard: idempotent per LB (already-baked fast-path + per-key
    * in-flight dedup + skip-cap all live in the guard/producers), fired
-   * nearest-tile-first (the legacy distance order), throttled by the caller
+   * nearest/forward-tile-first, throttled by the caller
    * (index.js re-fires at 250 ms). Bounded: ≤36 tiles × 4 LB calls, each a
    * cheap Set/Map check when saturated.
    *
@@ -862,17 +954,13 @@ export class GridResidencyAdapter {
       if (g.stateOf(tile) === SLOT_STATE.STAGED) staged.push(tile);
     }
     if (staged.length === 0) return 0;
-    const pt = g.playerTile;
-    if (pt != null && pt >= 0) {
-      const px = (pt >> 8) & 0xff;
-      const py = pt & 0xff;
-      const cheb = (t) =>
-        Math.max(Math.abs(((t >> 8) & 0xff) - px), Math.abs((t & 0xff) - py));
-      staged.sort((a, b) => cheb(a) - cheb(b));
-    }
+    this._sortTilesForward(staged);
     for (const tile of staged) {
       this._stats.feedRefires += 1;
-      this._fireFeedLbs(tile);
+      this._fireTileFastBakes(tile);
+    }
+    for (const tile of staged) {
+      this._fireTileStaticsBakes(tile);
     }
     return staged.length;
   }

@@ -24,6 +24,7 @@ import { meshToGeometryGroups } from "../adapter.js";
 import { surfacePixelsFetcher } from "../bake_worker_client.js";
 import { materialCanCastShadow } from "../materials.js";
 import { prewarmSubtree } from "../bake_prewarm.js";
+import { geomBundlesActive, assembleModels as assembleGeomBundles, bundleToPartGroups } from "../geom_bundles.js";
 
 export const PART_ROLE = Object.freeze({ STATIC: 0, PROPELLER: 1, GEAR: 2, CANOPY: 3, ORDNANCE: 4 });
 export const GEAR_PITCH = (11 * Math.PI) / 180;
@@ -88,41 +89,157 @@ export function gearTarget(mode, agl) {
   return 0;
 }
 
+function _getCachedMat(mc, sid) {
+  if (!mc || !sid) return null;
+  if (mc.materials instanceof Map) {
+    if (!mc.materials.has(sid)) return null;
+    return typeof mc.getCached === "function" ? mc.getCached(sid) : mc.materials.get(sid);
+  }
+  if (typeof mc.getCached === "function") {
+    const m = mc.getCached(sid);
+    if (m && (!mc.fallbackMaterial || m !== mc.fallbackMaterial)) return m;
+  }
+  return null;
+}
+
 /**
  * Decode one retail model into [{geometry, material, doubleSided}] in the model's own frame (the Setup's placement
  * frames applied). Shared by the airframe and the quarrels. Returns [] when the client cannot decode (tests, no wasm).
  */
-export async function decodeModel(live, THREE, did) {
+export async function decodeModel(live, THREE, did, preAssembled = null) {
   const wasm = live?.wasmExports;
   const mc = live?.materialCache;
-  if (!THREE || !wasm || typeof wasm.fetchBuildingPlacement !== "function" || !mc) return [];
-  const bundle = await wasm.fetchBuildingPlacement(did >>> 0);
-  const partCount = bundle.partCount | 0;
-  const partMeshes = partCount ? bundle.takePartMeshes() : [];
-  const hinge = typeof bundle.takePartHingeFrames === "function" ? bundle.takePartHingeFrames() : [];
-  try { bundle.free?.(); } catch (_) { /* freed */ }
+  if (!THREE || !mc) return [];
+
+  const modelDid = did >>> 0;
+  let partList = null;
+
+  // Fast path: try resident HBG1 geometry bundles first.
+  if (geomBundlesActive()) {
+    try {
+      const bMap = preAssembled || (await assembleGeomBundles([modelDid]));
+      const b = bMap?.byModel ? bMap.byModel.get(modelDid) : bMap?.get?.(modelDid);
+      if (b) {
+        const bpg = bundleToPartGroups(b, bMap?.buffer);
+        if (bpg && Array.isArray(bpg.parts)) {
+          partList = bpg.parts.map((pt) => ({
+            hinge: pt.hinge || null,
+            groups: (pt.groups || []).map((grp) => ({
+              geometry:
+                grp.geometry?.index && typeof grp.geometry.toNonIndexed === "function"
+                  ? grp.geometry.toNonIndexed()
+                  : grp.geometry,
+              surfaceDid: Number(grp.surfaceDid ?? 0) >>> 0,
+              doubleSided: !!grp.doubleSided,
+            })),
+          }));
+        } else if (Array.isArray(bpg)) {
+          partList = [
+            {
+              hinge: null,
+              groups: bpg.map((grp) => ({
+                geometry:
+                  grp.geometry?.index && typeof grp.geometry.toNonIndexed === "function"
+                    ? grp.geometry.toNonIndexed()
+                    : grp.geometry,
+                surfaceDid: Number(grp.surfaceDid ?? 0) >>> 0,
+                doubleSided: !!grp.doubleSided,
+              })),
+            },
+          ];
+        }
+      }
+    } catch (_) { /* fall through to wasm placement fetch */ }
+  }
+
+  // Fallback: fetch placement via urgent lane so airframe decode isn't starved by background bakes.
+  if (!partList) {
+    if (!wasm || typeof wasm.fetchBuildingPlacement !== "function") return [];
+    let placement = null;
+    try {
+      placement = await wasm.fetchBuildingPlacement(modelDid, true);
+    } catch (_) {
+      return [];
+    }
+    if (!placement) return [];
+    if (typeof placement.partGroups === "function") {
+      const groups = placement.partGroups() || [];
+      try { placement.free?.(); } catch (_) { /* freed */ }
+      partList = [
+        {
+          hinge: null,
+          groups: groups.map((grp) => ({
+            geometry: grp.geometry,
+            surfaceDid: Number(grp.surfaceDid ?? 0) >>> 0,
+            doubleSided: !!grp.doubleSided,
+          })),
+        },
+      ];
+    } else {
+      const partCount = placement.partCount | 0;
+      const partMeshes = partCount ? placement.takePartMeshes() : [];
+      const hinge = typeof placement.takePartHingeFrames === "function" ? placement.takePartHingeFrames() : [];
+      try { placement.free?.(); } catch (_) { /* freed */ }
+      partList = [];
+      for (let i = 0; i < partCount; i++) {
+        const wm = partMeshes[i];
+        if (!wm) continue;
+        try {
+          const { groups, surfaceDids } = meshToGeometryGroups(wm);
+          const normGroups = [];
+          for (let g = 0; g < (groups?.length || 0); g++) {
+            const grp = groups[g];
+            normGroups.push({
+              geometry: grp.geometry,
+              surfaceDid: Number(grp.surfaceDid || surfaceDids?.[g] || 0) >>> 0,
+              doubleSided: !!grp.doubleSided,
+            });
+          }
+          partList.push({ hinge: hinge[i] || null, groups: normGroups });
+        } catch (_) { /* a part that does not build is left out */ }
+        try { wm.free?.(); } catch (_) { /* freed */ }
+      }
+    }
+  }
+
   const fetchPixels = surfacePixelsFetcher(wasm);
+  const urgentFetchPixels = (dids) => fetchPixels(dids, true);
+
+  // Batch preload all uncached surface textures for this model on the urgent lane.
+  const missingSidsSet = new Set();
+  for (let i = 0; i < partList.length; i++) {
+    const groups = partList[i].groups || [];
+    for (let g = 0; g < groups.length; g++) {
+      const sid = Number(groups[g].surfaceDid) >>> 0;
+      if (sid !== 0 && !_getCachedMat(mc, sid)) {
+        missingSidsSet.add(sid);
+      }
+    }
+  }
+  const missingSids = [...missingSidsSet];
+  if (missingSids.length > 0 && typeof mc.preload === "function") {
+    try {
+      await mc.preload(missingSids, urgentFetchPixels);
+    } catch (_) { /* per-group get falls back cleanly */ }
+  }
+
   const out = [];
   const m = new THREE.Matrix4();
-  for (let i = 0; i < partCount; i++) {
-    const wm = partMeshes[i];
-    if (!wm) continue;
-    const h = hinge[i];
+  for (let i = 0; i < partList.length; i++) {
+    const { hinge: h, groups } = partList[i];
     m.identity();
     if (h) m.compose(new THREE.Vector3(h.x, h.y, h.z), new THREE.Quaternion(h.qx, h.qy, h.qz, h.qw), new THREE.Vector3(1, 1, 1));
     try {
-      const { groups, surfaceDids } = meshToGeometryGroups(wm);
       for (let g = 0; g < (groups?.length || 0); g++) {
         const grp = groups[g];
-        const sid = grp.surfaceDid || surfaceDids?.[g] || 0;
+        const sid = Number(grp.surfaceDid ?? 0) >>> 0;
         // eslint-disable-next-line no-await-in-loop
-        const material = await mc.get(sid, fetchPixels);
+        const material = _getCachedMat(mc, sid) || (await mc.get(sid, urgentFetchPixels));
         if (!grp.geometry || !material) continue;
         if (h) grp.geometry.applyMatrix4(m);
         out.push({ geometry: grp.geometry, material, doubleSided: !!grp.doubleSided });
       }
     } catch (_) { /* a part that does not build is left out */ }
-    try { wm.free?.(); } catch (_) { /* freed */ }
   }
   return out;
 }
@@ -167,11 +284,21 @@ export function createAirframes(deps = {}) {
   async function buildTemplate(profile) {
     const parts = profile.parts || [];
     const roles = profile.partRoles || [];
-    const models = new Map(); // did → decoded pieces (shared geometry: cloned per placement below)
-    for (const p of parts) {
-      const did = p.did >>> 0;
-      if (!models.has(did)) models.set(did, await decodeModel(live, THREE, did));
+    let preAssembled = null;
+    if (geomBundlesActive() && parts.length > 0) {
+      try {
+        preAssembled = await assembleGeomBundles(parts.map((m) => m.did >>> 0));
+      } catch (_) {
+        preAssembled = null;
+      }
     }
+    const uniqueDids = [...new Set(parts.map((p) => p.did >>> 0))];
+    const models = new Map(); // did → decoded pieces (shared geometry: cloned per placement below)
+    await Promise.all(
+      uniqueDids.map(async (did) => {
+        models.set(did, await decodeModel(live, THREE, did, preAssembled));
+      })
+    );
     // hub = the first propeller part's offset (the spinner's / blades' common pivot)
     let hub = null;
     for (let i = 0; i < parts.length; i++) if (roleKind(roles[i] ?? 0) === PART_ROLE.PROPELLER) { hub = parts[i].offset; break; }

@@ -11,10 +11,14 @@
 //   const cdp = await ctx.newCDPSession(pg); await cdp.send("Profiler.start")
 //   await rawTrace(CDP, outPath, categories, async () => { ... })   // browser-wide Tracing to a file
 import { createRequire } from "node:module";
-import { createWriteStream } from "node:fs";
+import { createWriteStream, existsSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const require = createRequire(import.meta.url);
-const PLAYWRIGHT_CORE = process.env.PLAYWRIGHT_CORE || "/home/wbterminal/.npm/_npx/e41f203b7505f1fb/node_modules/playwright-core";
+const DEFAULT_PWC = "/home/wbterminal/.npm/_npx/e41f203b7505f1fb/node_modules/playwright-core";
+const LOCAL_PWC = join(dirname(fileURLToPath(import.meta.url)), "../../../apps/holtburger-web/node_modules/playwright-core");
+const PLAYWRIGHT_CORE = process.env.PLAYWRIGHT_CORE || (existsSync(DEFAULT_PWC) ? DEFAULT_PWC : LOCAL_PWC);
 const { ws: WS } = require(`${PLAYWRIGHT_CORE}/lib/utilsBundle.js`);
 
 /** One CDP connection over a target's WebSocket URL: `send`, `on(event, fn)`, `close`. */

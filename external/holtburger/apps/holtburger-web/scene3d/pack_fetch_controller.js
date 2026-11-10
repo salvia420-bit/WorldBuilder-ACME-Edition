@@ -953,16 +953,31 @@ export function createPackFetchController(opts = {}) {
       const dx = Math.sign(lbx - prev.lbx), dy = Math.sign(lby - prev.lby);
       const edge = 3; // ring is 6x6 tiles → edge offset 3 beyond player tile
       const ptx = lbx >> 1, pty = lby >> 1;
-      for (let k = -3; k <= 3; k += 1) {
-        let tx, ty;
-        if (dx !== 0) { tx = ptx + dx * edge; ty = pty + k; }
-        else if (dy !== 0) { tx = ptx + k; ty = pty + dy * edge; }
-        else continue;
+      const lookTiles = [];
+      if (dx !== 0) {
+        for (let k = -3; k <= 3; k += 1) lookTiles.push({ tx: ptx + dx * edge, ty: pty + k });
+      }
+      if (dy !== 0) {
+        for (let k = -3; k <= 3; k += 1) lookTiles.push({ tx: ptx + k, ty: pty + dy * edge });
+      }
+      for (const { tx, ty } of lookTiles) {
         const ord = tilePackOrd(index, tx, ty);
         if (ord < 0) continue;
         const url = packUrl(index.packs[ord].hash);
+        if (keep.has(url)) continue;
         keep.add(url);
         if (!resident.has(url)) jobs.push(needPack(ord, { lane: "R", tileKey: `${tx},${ty}` }).catch(() => {}));
+      }
+    }
+    // Preserve any SlotGrid 6x6 window tiles (ptx-3..ptx+2, pty-3..pty+2) in
+    // `keep` so odd-LB crossings never drop a pack SlotGrid already admitted.
+    {
+      const ptx = lbx >> 1, pty = lby >> 1;
+      for (let tx = ptx - 3; tx <= ptx + 3; tx += 1) {
+        for (let ty = pty - 3; ty <= pty + 3; ty += 1) {
+          const ord = tilePackOrd(index, tx, ty);
+          if (ord >= 0) keep.add(packUrl(index.packs[ord].hash));
+        }
       }
     }
     dropQueuedOutside(keep);

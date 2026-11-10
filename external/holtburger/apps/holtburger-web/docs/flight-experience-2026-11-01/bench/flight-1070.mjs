@@ -111,7 +111,16 @@ log("gpu", res.gpu);
 if (!/1070/.test(res.gpu)) { log("NOT the GTX 1070 — stopping"); save(); process.exit(1); }
 let ready = false;
 for (let i = 0; i < 180 && !ready; i++) {
-  ready = await pg.evaluate(() => !!window.liveScene3d && !!window.__sessionHandle && !!window.__vehicles && (window.__bootStateHistory || []).some((s) => (s.state || s) === "ready")).catch(() => false);
+  ready = await pg.evaluate(() => {
+    if (!window.liveScene3d || !window.__sessionHandle || !window.__vehicles) return false;
+    const me = (window.getLocalPlayerGuid?.() ?? 0) >>> 0;
+    if (!me || !window.liveScene3d.entityManager?.entityMap?.get(me)) return false;
+    const h = (window.__bootStateHistory || []).map((s) => s.state || s);
+    if (!h.includes("in-world")) return false;
+    let meshes = 0;
+    try { window.liveScene3d.scene.traverse((o) => { if (o.isMesh) meshes += 1; }); } catch (_) { return false; }
+    return meshes > 300;
+  }).catch(() => false);
   if (!ready) await sleep(1000);
 }
 if (!ready) { res.boot = await pg.evaluate(() => window.__bootStateHistory).catch(() => null); log("boot FAILED", JSON.stringify(res.boot)); save(); process.exit(1); }
@@ -396,6 +405,7 @@ res.diag = await pg.evaluate(() => ({
   objRefire: (() => { try { return window.__objRefire?.() ?? null; } catch (e) { return String(e); } })(),
   worldTier: (() => { try { return window.__worldTerrain?.() ?? null; } catch (e) { return String(e); } })(),
   farForest: (() => { try { return window.__farForest?.() ?? null; } catch (e) { return String(e); } })(),
+  airframes: (() => { try { return window.__vehicles?.status?.()?.airframes ?? null; } catch (e) { return String(e); } })(),
 })).catch(() => null);
 res.consoleErrors = await pg.evaluate(() => window.__hbConsoleErrors || []).catch(() => null);
 save();

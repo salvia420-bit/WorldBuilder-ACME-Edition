@@ -22,6 +22,9 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /** One ssh command on the box (cmd.exe is the remote shell). Throws on failure / timeout. */
 export function ssh(cmd, { timeout = 60000 } = {}) {
+  if (process.platform === "win32" && !process.env.HB_FORCE_SSH) {
+    return execFileSync("cmd.exe", ["/d", "/s", "/c", cmd], { encoding: "utf8", timeout, windowsHide: true });
+  }
   return execFileSync("ssh", ["-o", "BatchMode=yes", "-o", "ConnectTimeout=20", BOX, cmd], { encoding: "utf8", timeout });
 }
 

@@ -65,7 +65,7 @@ import {
 // evictStaticAtlasForLb above, for the cross-LB per-material ?staticBatch
 // buckets (plain specifier everywhere → one module instance → shared state).
 import { evictStaticBatchXForLb, parkStaticBatchXForLb, unparkStaticBatchXForLb } from "./static_batch_x.js";
-import { afterObjectBake, afterUnpark as objRadiusAfterUnpark, getObjectRadiusStats, objectRadiusHides, objectBakeAllowed, objRadiusSetting, objectRadiusWantsHidden, objRadiusCommitHide, setObjRadiusFadeDeferred, tickObjectRadius } from "./object_radius.js";
+import { afterObjectBake, afterUnpark as objRadiusAfterUnpark, getObjectRadiusStats, objectRadiusHides, objectBakeAllowed, buildingBakeAllowed, objRadiusSetting, bldRadiusSetting, objectRadiusWantsHidden, objRadiusCommitHide, setObjRadiusFadeDeferred, tickObjectRadius } from "./object_radius.js";
 // ?residencyLog (flight-experience Phase 0, default OFF): per-frame residency sampler.
 import { residencyLogEnabled, tickResidencyLog, installResidencyLogProbe, rlogSetGridModule, rlogSetPresenceProbe, rlogSetObjFadeActive } from "./residency_log.js";
 // ?lbFade (flight experience Phase 1, DEV opt-in): the per-landblock presence field.
@@ -4439,10 +4439,15 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
     // onto one chain so two concurrent LB streams can't race the tags.
     _rescanSetupLights() {
       if (!this.wasmExports) return Promise.resolve(null);
+      if (this._setupLightsRescanQueued) return this._setupLightsRescanChain;
+      this._setupLightsRescanQueued = true;
       const self = this;
       this._setupLightsRescanChain = Promise.resolve(this._setupLightsRescanChain)
         .catch(() => {})
-        .then(() => attachSetupModelLights(self, self.wasmExports))
+        .then(() => {
+          self._setupLightsRescanQueued = false;
+          return attachSetupModelLights(self, self.wasmExports);
+        })
         .then((summary) => {
           // C3 #6 — fan the per-lb-key light buckets into the LRU so
           // eviction can splice/detach/dispose each LB's SetupModel
@@ -4897,7 +4902,7 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
         // is set BEFORE the fetch + attach; this is the moment the nodes exist.
         noteObjectsAttached(self, lbKeyForLru, "b");
         // GAP 2 (2026-05-29) — light newly-streamed building geometry.
-        self._rescanSetupLights();
+        if ((r?.placementCount ?? 0) > 0 && !flightLightActive()) self._rescanSetupLights();
         if (self.wireframeMode && self.materialCache && self.buildingsGroup) {
           self.materialCache.addFillCompanions(self.buildingsGroup);
         }
@@ -4960,7 +4965,7 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
         // (`staticsBakedLbs` is set before the fetch + attach, statics.js).
         noteObjectsAttached(self, lbKeyForLru, "s");
         // GAP 2 (2026-05-29) — light newly-streamed static geometry.
-        self._rescanSetupLights();
+        if ((r?.placementCount ?? 0) > 0 && !flightLightActive()) self._rescanSetupLights();
         if (self.wireframeMode && self.materialCache && self.staticsGroup) {
           self.materialCache.addFillCompanions(self.staticsGroup);
         }
@@ -7570,18 +7575,32 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
               // The tickPvsLoadExpansion fireOne population, event-driven
               // (idempotent per domain via baked-Sets + the stream guard).
               // 2026-10-25: objects obey ?objRadius exactly as cells.js fireOne
-              // does — terrain fills the whole window, statics/buildings only
-              // within the near radius of the player's landblock. The grid was
-              // built before ?objRadius existed and baked objects for all 144
-              // window LBs against the legacy ring's 81 (the 1070 breakdown's
-              // grid term); sgCtl.tick re-fires the window on each crossing so
-              // landblocks coming into range get their objects.
+              // does — terrain fills the whole window, buildings out to
+              // bldRadiusSetting (d<=5), statics within objRadiusSetting (d<=4).
               const lbKey = (((lbX & 0xff) << 24) | ((lbY & 0xff) << 16)) >>> 0;
               const objOk = gridPlayerLbKey == null || objectBakeAllowed([gridPlayerLbKey], lbKey);
+              const bldOk = gridPlayerLbKey == null || buildingBakeAllowed([gridPlayerLbKey], lbKey);
               try { liveScene3d.loadTerrainForLandblock(lbX, lbY); } catch (_) {}
+              if (bldOk) {
+                try { liveScene3d.loadBuildingsForLandblock(lbX, lbY); } catch (_) {}
+              }
               if (objOk) {
                 try { liveScene3d.loadStaticsForLandblock(lbX, lbY); } catch (_) {}
+              }
+            },
+            fireFastLb: (lbX, lbY) => {
+              const lbKey = (((lbX & 0xff) << 24) | ((lbY & 0xff) << 16)) >>> 0;
+              const bldOk = gridPlayerLbKey == null || buildingBakeAllowed([gridPlayerLbKey], lbKey);
+              try { liveScene3d.loadTerrainForLandblock(lbX, lbY); } catch (_) {}
+              if (bldOk) {
                 try { liveScene3d.loadBuildingsForLandblock(lbX, lbY); } catch (_) {}
+              }
+            },
+            fireStaticsLb: (lbX, lbY) => {
+              const lbKey = (((lbX & 0xff) << 24) | ((lbY & 0xff) << 16)) >>> 0;
+              const objOk = gridPlayerLbKey == null || objectBakeAllowed([gridPlayerLbKey], lbKey);
+              if (objOk) {
+                try { liveScene3d.loadStaticsForLandblock(lbX, lbY); } catch (_) {}
               }
             },
           };
@@ -7606,11 +7625,15 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
                 fireLb: (x, y) => feeds.fireLb(x, y),
                 needs: (lbKey) => {
                   try { if (landblockLru.isParked(lbKey)) return false; } catch (_) {}
+                  const objOk = gridPlayerLbKey == null || objectBakeAllowed([gridPlayerLbKey], lbKey);
+                  const bldOk = gridPlayerLbKey == null || buildingBakeAllowed([gridPlayerLbKey], lbKey);
                   const s = liveScene3d.staticsBakedLbs;
                   const b = liveScene3d.buildingsBakedLbs;
-                  return !(s instanceof Set && s.has(lbKey)) || !(b instanceof Set && b.has(lbKey));
+                  const needS = objOk && !(s instanceof Set && s.has(lbKey));
+                  const needB = bldOk && !(b instanceof Set && b.has(lbKey));
+                  return needS || needB;
                 },
-                radius: () => objRadiusSetting(),
+                radius: () => Math.max(objRadiusSetting(), bldRadiusSetting()),
                 fallbackRadius: rg.R_LB,
                 liveStates: new Set([rg.SLOT_STATE.LIVE, rg.SLOT_STATE.STAGED]),
                 tileLbKeys: rg.tileLbKeys,
@@ -7789,11 +7812,11 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
                   // A crossing moves the ?objRadius window even when no tile
                   // shifts (the feeds gate objects by distance).
                   if (crossed) adapter.refireWindowFeeds();
-                  if (res.moved && packsArmed) {
+                  if ((res.moved || crossed) && packsArmed) {
                     // Keep the controller's ring/lookahead in lockstep with
                     // grid crossings (idempotent; the index.html 2 s pose
                     // poll remains the fallback driver until ST10).
-                    try { ctl.notePlayerLandblock(currentLbKey >>> 0); } catch (_) {}
+                    try { ctl.notePlayerLandblock(lbOnly >>> 0); } catch (_) {}
                   }
                 }
                 adapter.tickTeleportDrain();

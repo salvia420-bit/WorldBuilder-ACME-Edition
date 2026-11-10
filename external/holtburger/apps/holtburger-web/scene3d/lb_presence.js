@@ -467,10 +467,20 @@ export function objectsAttached(scene3d, lbKey, nowMs) {
   if (!r) return false;
   const sB = !!scene3d?.staticsBakedLbs?.has?.(k), bB = !!scene3d?.buildingsBakedLbs?.has?.(k);
   if (!sB && !bB) { m.delete(k); return false; }
+  if (!sB) return false;
   const s = r.s > 0 && sB, b = r.b > 0 && bB;
   if (s && b) return true;
   if (!s && !b) return false;
   return nowMs - Math.max(r.s, r.b) >= ATTACH_WAIT_MS;
+}
+
+export function landblockTreesCoveredByScene(scene3d, lbKey) {
+  const k = ((lbKey >>> 0) & 0xffff0000) >>> 0;
+  const sH = !!scene3d?._objRadius?.hidden?.has?.(k) || !!scene3d?._objRadius?.pendingHide?.has?.(k);
+  if (sH) return false;
+  const sB = !!scene3d?.staticsBakedLbs?.has?.(k);
+  if (!sB) return false;
+  return true;
 }
 
 // ---------------------------------------------------------------------------

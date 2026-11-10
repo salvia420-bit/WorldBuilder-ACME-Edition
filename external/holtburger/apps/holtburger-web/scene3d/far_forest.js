@@ -30,13 +30,16 @@ import { rlogSetFarForestProbe } from "./residency_log.js";
 import { flightViewFlag } from "./flight_view_flag.js";
 import { withLogDepth } from "./shader_logdepth.js";
 import { prewarmSubtree } from "./bake_prewarm.js";
+import { geomBundlesActive, assembleModels as assembleGeomBundles, bundleToPartGroups } from "./geom_bundles.js";
 
 const BASE_URL = "../../dist/farforest/";
 const VIEWS = 8;
 const CELL_PX = 128;
 const ATLAS_COLS = 16;              // 2 models x 8 views per atlas row
-const MAX_MODELS = 64;
-const MAX_INSTANCES = 180000;
+const MAX_MODELS = 96;
+const ATLAS_ROWS = Math.ceil((MAX_MODELS * VIEWS) / ATLAS_COLS);
+const MAX_INSTANCES = 262144;
+const MAX_REGIONS_RESIDENT = 220;
 const REGION_M = 8 * 192;           // 1,536 m
 const REC_BYTES = 20;
 
@@ -98,6 +101,13 @@ export function decodeRegion(buf) {
 export function atlasCell(m, k) { const c = m * VIEWS + k; return [c % ATLAS_COLS, Math.floor(c / ATLAS_COLS)]; }
 /** The bake camera's azimuth for view k (radians, counter-clockwise from +x, the model's own frame). */
 export function viewAzimuth(k) { return (k / VIEWS) * Math.PI * 2; }
+/** Distance-based instance decimation stride for distant far-forest regions. */
+export function farForestRegionStride(distM) {
+  if (!(distM > 3800)) return 1;
+  if (distM <= 6000) return 2;
+  if (distM <= 8200) return 3;
+  return 4;
+}
 
 // ---------------------------------------------------------------------------
 // GLSL
@@ -228,7 +238,7 @@ export function initFarForest(scene3d, { parent = null, renderer = null } = {}) 
     scene3d, group, renderer: renderer ?? scene3d.renderer ?? null,
     index: null, models: null, regions: new Map(), loading: new Set(), wanted: false,
     mesh: null, geo: null, mat: null, atlas: null, bakeQueue: [], baking: false, modelData: new Float32Array(MAX_MODELS * 4),
-    sig: "", rangeM: 4500,
+    sig: null, rangeM: 4500,
   };
   if (typeof window !== "undefined") window.__farForest = () => farForestDiag();
   rlogSetFarForestProbe((k) => _ffDrawsLb(k));
@@ -251,9 +261,25 @@ async function _loadIndex(st) {
     fetch(`${BASE_URL}models.json`).then((r) => { if (!r.ok) throw new Error(`farforest models: HTTP ${r.status}`); return r.json(); }),
   ]);
   st.index = index;
-  st.models = models.slice(0, MAX_MODELS).map((m) => ({ id: parseInt(m.id, 16) >>> 0, placements: m.placements }));
+  st.models = models.slice(0, MAX_MODELS).map((m) => ({ id: parseInt(m.id, 16) >>> 0, placements: m.placements, retries: 0 }));
   _diag.models = st.models.length;
-  st.bakeQueue = st.models.map((_, i) => i);
+  const order = st.models.map((_, i) => i);
+  if (geomBundlesActive() && st.models.length > 0) {
+    try {
+      const bRes = await assembleGeomBundles(st.models.map((m) => m.id));
+      const byModel = bRes?.byModel || bRes;
+      if (byModel && typeof byModel.has === "function") {
+        const resident = [], missing = [];
+        for (const i of order) {
+          if (byModel.has(st.models[i].id)) resident.push(i);
+          else missing.push(i);
+        }
+        st.bakeQueue = [...resident, ...missing];
+        return;
+      }
+    } catch (_) { /* keep default order */ }
+  }
+  st.bakeQueue = order;
 }
 
 /** The far forest is wanted (flying): starts the index fetch + the impostor bakes on first call. */
@@ -278,7 +304,7 @@ export function setFarForestWanted(scene3d, wanted, { rangeM = null } = {}) {
 // ---------------------------------------------------------------------------
 function _ensureAtlas(st) {
   if (st.atlas) return st.atlas;
-  const rows = Math.ceil((MAX_MODELS * VIEWS) / ATLAS_COLS);
+  const rows = ATLAS_ROWS;
   const rt = new THREE.WebGLRenderTarget(ATLAS_COLS * CELL_PX, rows * CELL_PX, {
     type: THREE.UnsignedByteType, format: THREE.RGBAFormat, depthBuffer: true, stencilBuffer: false,
     generateMipmaps: true, minFilter: THREE.LinearMipmapLinearFilter, magFilter: THREE.LinearFilter,
@@ -292,46 +318,93 @@ function _ensureAtlas(st) {
 async function _buildModelGroup(scene3d, setupId) {
   const wasm = scene3d.wasmExports;
   const mc = scene3d.materialCache;
-  if (!wasm || typeof wasm.fetchBuildingPlacement !== "function" || !mc) throw new Error("no wasm/material cache");
-  const bundle = await wasm.fetchBuildingPlacement(setupId);
-  const partCount = bundle.partCount | 0;
-  const partMeshes = partCount ? bundle.takePartMeshes() : [];
-  const hinge = typeof bundle.takePartHingeFrames === "function" ? bundle.takePartHingeFrames() : [];
-  bundle.free?.();
+  if (!mc) throw new Error("no material cache");
+  const partsList = [];
+  if (geomBundlesActive()) {
+    try {
+      const bRes = await assembleGeomBundles([setupId >>> 0]);
+      const entry = bRes?.byModel ? bRes.byModel.get(setupId >>> 0) : bRes?.get?.(setupId >>> 0);
+      if (entry) {
+        const bpg = bundleToPartGroups(entry, bRes.buffer);
+        if (Array.isArray(bpg)) {
+          partsList.push({ groups: bpg, hinge: null });
+        } else if (Array.isArray(bpg?.parts)) {
+          for (const p of bpg.parts) partsList.push({ groups: p.groups || [], hinge: p.hinge || null });
+        }
+      }
+    } catch (_) { /* fallback to wasm */ }
+  }
+  if (partsList.length === 0) {
+    if (!wasm || typeof wasm.fetchBuildingPlacement !== "function") throw new Error("no wasm/material cache");
+    const bundle = await wasm.fetchBuildingPlacement(setupId >>> 0, true);
+    if (bundle && typeof bundle.partGroups === "function") {
+      const groups = bundle.partGroups() || [];
+      partsList.push({ groups, hinge: null });
+      bundle.free?.();
+    } else if (bundle) {
+      const partCount = bundle.partCount | 0;
+      const partMeshes = partCount ? bundle.takePartMeshes() : [];
+      const hinge = typeof bundle.takePartHingeFrames === "function" ? bundle.takePartHingeFrames() : [];
+      bundle.free?.();
+      for (let i = 0; i < partCount; i += 1) {
+        const wm = partMeshes[i];
+        if (wm) {
+          try {
+            const { groups, surfaceDids } = meshToGeometryGroups(wm);
+            partsList.push({ groups: groups || [], surfaceDids, hinge: hinge[i] || null });
+          } catch (_) { /* skip part */ }
+          wm.free?.();
+        }
+      }
+    }
+  }
   // the fetcher INSTANCE: surfacePixelsFetcher is a factory (bake_worker_client.js). Passing the factory itself made
   // every material-cache miss "fetch" a function, so the cache handed back its grey fallback: every tree whose
   // surfaces the near tier had not already loaded was baked as a grey card — white-ish in the desert sun (1070 film
   // shoot 2026-11-02; the atlas dump showed 60 of 64 models untextured at a desert login).
   const fetchPixels = surfacePixelsFetcher(wasm);
+  const urgentFetch = (dids) => fetchPixels(dids, true);
+  const isCached = (s) => (mc.materials instanceof Map ? mc.materials.has(s) : false);
+  const missingSids = [];
+  const seenSids = new Set();
+  for (let p = 0; p < partsList.length; p += 1) {
+    const groups = partsList[p].groups || [];
+    const surfaceDids = partsList[p].surfaceDids;
+    for (let g = 0; g < groups.length; g += 1) {
+      const sid = Number(groups[g].surfaceDid || surfaceDids?.[g] || 0) >>> 0;
+      if (sid && !isCached(sid) && !seenSids.has(sid)) {
+        seenSids.add(sid);
+        missingSids.push(sid);
+      }
+    }
+  }
+  if (missingSids.length > 0 && typeof mc.preload === "function") {
+    try { await mc.preload(missingSids, urgentFetch); } catch (_) { /* best effort */ }
+  }
   const group = new THREE.Group();
   const owned = [];
   let fallbackParts = 0;
-  for (let i = 0; i < partCount; i += 1) {
+  for (let i = 0; i < partsList.length; i += 1) {
     const pg = new THREE.Group();
-    const h = hinge[i];
+    const h = partsList[i].hinge;
     if (h) { pg.position.set(h.x, h.y, h.z); pg.quaternion.set(h.qx, h.qy, h.qz, h.qw); }
-    const wm = partMeshes[i];
-    if (wm) {
-      try {
-        const { groups, surfaceDids } = meshToGeometryGroups(wm);
-        for (let g = 0; g < (groups?.length || 0); g += 1) {
-          const grp = groups[g];
-          const sid = grp.surfaceDid || surfaceDids?.[g] || 0;
-          // eslint-disable-next-line no-await-in-loop
-          const src = await mc.get(sid, fetchPixels);
-          if (!grp.geometry || !src) continue;
-          // a surface the cache could not decode comes back as its grey fallback: leave the part out (no grey card)
-          if (src === mc.fallbackMaterial) { fallbackParts += 1; continue; }
-          // UNLIT albedo capture: a basic material over the surface's own texture (no lit program variants)
-          const m = new THREE.MeshBasicMaterial({
-            map: src.map ?? null, color: src.color ? src.color.clone() : new THREE.Color(1, 1, 1),
-            alphaTest: Math.max(0.3, src.alphaTest || 0), transparent: false, side: THREE.DoubleSide,
-          });
-          owned.push(m);
-          pg.add(new THREE.Mesh(grp.geometry, m));
-        }
-      } catch (_) { /* a part that does not build is skipped */ }
-      wm.free?.();
+    const groups = partsList[i].groups || [];
+    const surfaceDids = partsList[i].surfaceDids;
+    for (let g = 0; g < groups.length; g += 1) {
+      const grp = groups[g];
+      const sid = (grp.surfaceDid || surfaceDids?.[g] || 0) >>> 0;
+      // eslint-disable-next-line no-await-in-loop
+      const src = (isCached(sid) ? mc.materials.get(sid) : null) || await mc.get(sid, fetchPixels);
+      if (!grp.geometry || !src) continue;
+      // a surface the cache could not decode comes back as its grey fallback: leave the part out (no grey card)
+      if (src === mc.fallbackMaterial) { fallbackParts += 1; continue; }
+      // UNLIT albedo capture: a basic material over the surface's own texture (no lit program variants)
+      const m = new THREE.MeshBasicMaterial({
+        map: src.map ?? null, color: src.color ? src.color.clone() : new THREE.Color(1, 1, 1),
+        alphaTest: Math.max(0.3, src.alphaTest || 0), transparent: false, side: THREE.DoubleSide,
+      });
+      owned.push(m);
+      pg.add(new THREE.Mesh(grp.geometry, m));
     }
     group.add(pg);
   }
@@ -371,7 +444,7 @@ function _bakeViews(st, m, built) {
     cam.lookAt(c.x, c.y, zMin);
     cam.updateMatrixWorld(true);
     const [col, row] = atlasCell(m, k);
-    rt.texture.generateMipmaps = (k === VIEWS - 1);
+    rt.texture.generateMipmaps = (k === VIEWS - 1) && (st.bakeQueue.length === 0 || ((_diag.baked + 1) % 8 === 0));
     renderer.setViewport(col * CELL_PX, row * CELL_PX, CELL_PX, CELL_PX);
     renderer.setScissor(col * CELL_PX, row * CELL_PX, CELL_PX, CELL_PX);
     renderer.clear(true, true, false);
@@ -399,8 +472,9 @@ function _bakeViews(st, m, built) {
 function _precompileBake(st) {
   if (st.bakePrecompile) return st.bakePrecompile;
   const r = st.renderer;
-  if (!r || typeof r.compileAsync !== "function") {
+  if (!r || typeof r.compile !== "function") {
     st.bakeReady = true;
+    st.bakeCompilePending = false;
     st.bakePrecompile = Promise.resolve();
     return st.bakePrecompile;
   }
@@ -418,18 +492,40 @@ function _precompileBake(st) {
   for (const m of mats) { const mesh = new THREE.Mesh(geo, m); mesh.frustumCulled = false; scene.add(mesh); }
   const cam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 10);
   st.bakeKeep = { geo, tex, mats }; // never disposed: they hold the two programs for the session
-  const prevTarget = r.getRenderTarget();
+  st.bakeCompilePending = true;
   let p;
   try {
-    // the atlas target is current while compiling: the same output colour space / tone mapping as the bake
-    r.setRenderTarget(_ensureAtlas(st));
-    p = r.compileAsync(scene, cam, scene);
+    const rt = _ensureAtlas(st);
+    const prevTarget = typeof r.getRenderTarget === "function" ? r.getRenderTarget() : null;
+    try {
+      if (typeof r.setRenderTarget === "function") r.setRenderTarget(rt);
+      r.compile(scene, cam, scene);
+    } finally {
+      try { if (typeof r.setRenderTarget === "function") r.setRenderTarget(prevTarget); } catch (_) {}
+    }
+    p = Promise.race([
+      new Promise((resolve) => {
+        const check = () => {
+          let ready = true;
+          try {
+            for (const m of mats) {
+              const prog = r.properties?.get?.(m)?.currentProgram;
+              if (prog && typeof prog.isReady === "function" && !prog.isReady()) { ready = false; break; }
+            }
+          } catch (_) { ready = true; }
+          if (ready) resolve(); else setTimeout(check, 10);
+        };
+        check();
+      }),
+      new Promise((res) => setTimeout(res, 1500)),
+    ]);
   } catch (_) {
     p = null;
-  } finally {
-    r.setRenderTarget(prevTarget);
   }
-  st.bakePrecompile = Promise.resolve(p).catch(() => {}).then(() => { st.bakeReady = true; });
+  st.bakePrecompile = Promise.resolve(p).catch(() => {}).then(() => {
+    st.bakeReady = true;
+    st.bakeCompilePending = false;
+  });
   return st.bakePrecompile;
 }
 
@@ -437,21 +533,36 @@ async function _bakeNext(st) {
   if (st.baking || !st.bakeQueue.length || !st.models) return;
   if (!st.bakeReady) { _precompileBake(st); return; }
   st.baking = true;
-  const m = st.bakeQueue.shift();
-  const setupId = st.models[m].id;
-  let built = null;
   try {
-    built = await _buildModelGroup(st.scene3d, setupId);
-    if (_bakeViews(st, m, built)) _diag.baked += 1; else _diag.bakeFailed += 1;
-  } catch (e) {
-    _diag.bakeFailed += 1;
-    if (!_diag.error) _diag.error = `bake 0x${setupId.toString(16)}: ${e?.message ?? e}`;
-  } finally {
-    // the geometries belong to the meshes we built (not cached): dispose them with our basic materials
+    const m = st.bakeQueue.shift();
+    if (m == null) return;
+    const entry = st.models[m];
+    const setupId = entry.id;
+    let built = null;
+    let timer = null;
     try {
-      built?.group?.traverse((o) => { if (o.isMesh) o.geometry?.dispose?.(); });
-      for (const mat of built?.owned || []) mat.dispose();
-    } catch (_) { /* best effort */ }
+      built = await Promise.race([
+        _buildModelGroup(st.scene3d, setupId),
+        new Promise((_, rej) => { timer = setTimeout(() => rej(new Error("bake timeout")), 10000); }),
+      ]);
+      if (built && _bakeViews(st, m, built)) _diag.baked += 1; else _diag.bakeFailed += 1;
+    } catch (e) {
+      entry.retries = (entry.retries || 0) + 1;
+      if (entry.retries <= 2) {
+        st.bakeQueue.push(m);
+      } else {
+        _diag.bakeFailed += 1;
+        if (!_diag.error) _diag.error = `bake 0x${setupId.toString(16)}: ${e?.message ?? e}`;
+      }
+    } finally {
+      if (timer) clearTimeout(timer);
+      // the geometries belong to the meshes we built (not cached): dispose them with our basic materials
+      try {
+        built?.group?.traverse((o) => { if (o.isMesh) o.geometry?.dispose?.(); });
+        for (const mat of built?.owned || []) mat.dispose();
+      } catch (_) { /* best effort */ }
+    }
+  } finally {
     st.baking = false;
   }
 }
@@ -508,11 +619,12 @@ function _ensureMesh(st) {
     }
   }
   mat.name = "far-forest";
+  mat.userData.__asyncLink = true;
   const mesh = new THREE.Mesh(g, mat);
   mesh.name = "far-forest-cards";
   mesh.frustumCulled = false;
   mesh.matrixAutoUpdate = false;
-  st.group.add(mesh);
+  mesh.visible = true;
   st.mesh = mesh; st.geo = g; st.mat = mat;
   _compileAhead(st, mesh);
 }
@@ -521,14 +633,24 @@ function _ensureMesh(st) {
 // hidden until it is linked — a first-draw link is 0.5-1.7 s of FXC on the 1070, i.e. a visible stall mid-flight.
 function _compileAhead(st, mesh) {
   st.compiled = false;
+  const finish = () => {
+    st.compiled = true;
+    if (st.mesh) {
+      st.mesh.visible = !!st.wanted;
+      if (!st.mesh.parent) st.group.add(st.mesh);
+    }
+  };
   const r = st.renderer;
   const cam = st.scene3d?.camera;
   const scene = st.scene3d?.scene;
-  if (!r || typeof r.compile !== "function" || !cam) { st.compiled = true; return; }
+  if (!r || typeof r.compile !== "function" || !cam) { finish(); return; }
   try {
-    const p = scene ? prewarmSubtree(st.scene3d, mesh) : r.compileAsync?.(mesh, cam, scene);
-    Promise.resolve(p).then(() => { st.compiled = true; }, () => { st.compiled = true; });
-  } catch (_) { st.compiled = true; }
+    const p = Promise.race([
+      Promise.resolve(scene ? prewarmSubtree(st.scene3d, mesh) : r.compileAsync?.(mesh, cam, scene)),
+      new Promise((res) => setTimeout(res, 1500)),
+    ]);
+    p.then(finish, finish);
+  } catch (_) { finish(); }
 }
 
 function _copyLight(st) {
@@ -543,7 +665,7 @@ function _copyLight(st) {
   if (s.uAcAmbLevel) u.uAcAmbLevel.value = s.uAcAmbLevel.value;
 }
 
-function _rebuildInstances(st, inRange) {
+function _rebuildInstances(st, inRange, cx = 0, cy = 0) {
   const g = st.geo;
   const pos = g.getAttribute("iPos"), sy = g.getAttribute("iScaleYaw"), md = g.getAttribute("iModel");
   let n = 0;
@@ -552,14 +674,41 @@ function _rebuildInstances(st, inRange) {
     const r = st.regions.get(`${rx}_${ry}`);
     if (!r || !r.data) continue;
     const d = r.data;
-    if (n + d.n > MAX_INSTANCES) break;
-    pos.array.set(d.pos, n * 3);
-    sy.array.set(d.sy, n * 2);
-    md.array.set(d.model, n);
-    n += d.n;
-    r.inUse = true;
+    const regCx = (rx * 8 + 4) * 192;
+    const regCy = (ry * 8 + 4) * 192;
+    const distM = Math.hypot(regCx - cx, regCy - cy);
+    const stride = farForestRegionStride(distM);
+    if (stride <= 1 && n + d.n <= MAX_INSTANCES) {
+      pos.array.set(d.pos, n * 3);
+      sy.array.set(d.sy, n * 2);
+      md.array.set(d.model, n);
+      n += d.n;
+      r.inUse = true;
+    } else {
+      let added = 0;
+      for (let i = 0; i < d.n && n < MAX_INSTANCES; i += stride) {
+        const p3 = i * 3, n3 = n * 3;
+        pos.array[n3] = d.pos[p3];
+        pos.array[n3 + 1] = d.pos[p3 + 1];
+        pos.array[n3 + 2] = d.pos[p3 + 2];
+        const p2 = i * 2, n2 = n * 2;
+        sy.array[n2] = d.sy[p2];
+        sy.array[n2 + 1] = d.sy[p2 + 1];
+        md.array[n] = d.model[i];
+        n += 1;
+        added += 1;
+      }
+      if (added > 0) r.inUse = true;
+      if (n >= MAX_INSTANCES) break;
+    }
   }
-  for (const a of [pos, sy, md]) { a.needsUpdate = true; a.clearUpdateRanges?.(); a.addUpdateRange?.(0, n * a.itemSize); }
+  for (const a of [pos, sy, md]) {
+    if (typeof a.clearUpdateRanges === "function" && typeof a.addUpdateRange === "function") {
+      a.clearUpdateRanges();
+      if (n > 0) a.addUpdateRange(0, n * a.itemSize);
+    }
+    a.needsUpdate = true;
+  }
   g.instanceCount = n;
   _diag.instances = n;
   _diag.rebuilds += 1;
@@ -571,7 +720,7 @@ function _fetchRegion(st, rx, ry) {
   if (!st.index?.regions?.[name]) { st.regions.set(key, { data: { n: 0, pos: new Float32Array(0), sy: new Float32Array(0), model: new Float32Array(0), lbCount: new Map() } }); return; }
   st.loading.add(key);
   fetch(`${BASE_URL}r_${name}.bin`).then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(new Error(`HTTP ${r.status}`))))
-    .then((buf) => { st.regions.set(key, { data: decodeRegion(buf) }); st.sig = ""; })
+    .then((buf) => { st.regions.set(key, { data: decodeRegion(buf) }); })
     .catch(() => { st.regions.set(key, { data: null }); })
     .finally(() => { st.loading.delete(key); });
 }
@@ -582,8 +731,8 @@ function _fetchRegion(st, rx, ry) {
  * bake start per PREFETCH_BAKE_MS, and only on a frame with headroom (`frameMs` under PREFETCH_FRAME_MS) — so the
  * atlas is complete before the first take-off instead of 64 bakes landing on it.
  */
-const PREFETCH_BAKE_MS = 50;
-const PREFETCH_FRAME_MS = 25;
+const PREFETCH_BAKE_MS = 35;
+const PREFETCH_FRAME_MS = 45;
 export function prefetchFarForest(scene3d, { nowMs = 0, frameMs = 0 } = {}) {
   const st = _st || initFarForest(scene3d);
   if (!st) return;
@@ -612,7 +761,7 @@ export function tickFarForest(scene3d, camera) {
   }
   _ensureMesh(st);
   const nowMs = (typeof performance !== "undefined") ? performance.now() : Date.now();
-  if (!st.baking && st.bakeQueue.length && nowMs - (st.lastBakeMs || 0) >= 80) {
+  if (!st.baking && st.bakeQueue.length && nowMs - (st.lastBakeMs || 0) >= 35) {
     st.lastBakeMs = nowMs;
     _bakeNext(st);
   }
@@ -647,7 +796,7 @@ export function tickFarForest(scene3d, camera) {
     }
   }
   // drop regions far outside the range (memory), keep a margin
-  if (st.regions.size > 120) {
+  if (st.regions.size > MAX_REGIONS_RESIDENT) {
     for (const [key] of st.regions) {
       const [rx, ry] = key.split("_").map(Number);
       const dx = Math.max(rx * REGION_M - cx, 0, cx - (rx + 1) * REGION_M);
@@ -665,7 +814,7 @@ export function tickFarForest(scene3d, camera) {
   if (sig !== st.sig && nowMs - (st.lastRebuildMs || 0) >= minRebuildMs) {
     st.sig = sig;
     st.lastRebuildMs = nowMs;
-    _rebuildInstances(st, listed);
+    _rebuildInstances(st, listed, cx, cy);
   }
   let inUse = 0;
   for (const r of st.regions.values()) if (r.inUse) inUse += 1;

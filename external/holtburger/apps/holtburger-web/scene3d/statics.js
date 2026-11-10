@@ -3320,34 +3320,6 @@ export async function bakeStaticsForLandblock(
       }
     }
   }
-  // Item 4 (2026-06-22): pre-warm this LB's static/scenery nodes (per-DID material program
-  // link + texture upload) in the driver background BEFORE attaching, so the first render
-  // frame after attach doesn't hitch — the cost the 1070 r10 probe flagged. Unlike terrain/
-  // buildings, statics time-slices its build loop and CAN be evicted across an await, so the
-  // prewarm await re-checks residency afterward (mirrors the cancellation guard above).
-  // `?bakePrewarm=off` skips straight to the attach. Use the post-batch `nodesToAdd`.
-  if (BAKE_PREWARM && nodesToAdd.length > 0) {
-    const _tmp = new THREE.Group();
-    for (const n of nodesToAdd) _tmp.add(n);
-    await prewarmSubtree(scene3d, _tmp);
-    for (const n of [..._tmp.children]) _tmp.remove(n);
-    // Unconditional — the prewarm await yields regardless of ?noStaticsTimeSlice.
-    if (!scene3d.staticsBakedLbs.has(lbKey)) {
-      // Evicted while the prewarm await was outstanding — dispose this LB's per-surface
-      // group geometries (full + degraded) and bail without attaching (same as the
-      // time-slice cancellation guard above; nodes were never added to the scene graph).
-      disposeBakeOwnedGeometries(primary.groupsByModel, degradedGeomByModel);
-      // The per-LB batches were never attached, so no evict scan will see them.
-      for (const n of nodesToAdd) {
-        if (n?.userData?.__staticBatch === true) { try { n.dispose(); } catch (_) { /* fail-soft */ } }
-      }
-      return {
-        ...makeEmptySummary(),
-        evictedDuringBuild: true,
-        disposables: { geometries: [], materials: [], textures: [] },
-      };
-    }
-  }
   // ST9 (`?drawPools`, T22-PRODUCER — SPEC §1.5 / pass-07 S1) — THE PRODUCER
   // SWAP, consumer 1 of 3. The pooled producer sits AHEAD of the atlas at the
   // atlas's own seam (SPEC §1.5: "Atlas: subsumed wholesale") and takes every
@@ -3421,6 +3393,35 @@ export async function bakeStaticsForLandblock(
       // fail-soft: keep the unbatched nodesToAdd as-is.
       // eslint-disable-next-line no-console
       console.warn("[scene3d.statics/statAtlas per-LB] failed, adding singletons unbatched:", String(e?.message ?? e));
+    }
+  }
+  // Item 4 (2026-06-22): pre-warm this LB's remaining non-atlased static/scenery nodes
+  // (per-DID material program link + texture upload) in the driver background BEFORE
+  // attaching, so the first render frame after attach doesn't hitch — the cost the 1070
+  // r10 probe flagged. Placed AFTER addSingletonsToPools / addSingletonsToCrossLbAtlas
+  // so absorbed singletons don't compile standalone MeshStandardMaterial programs that
+  // are immediately discarded in favour of the cross-LB BatchedMesh shader.
+  // `?bakePrewarm=off` skips straight to the attach.
+  if (BAKE_PREWARM && nodesToAdd.length > 0) {
+    const _tmp = new THREE.Group();
+    for (const n of nodesToAdd) _tmp.add(n);
+    await prewarmSubtree(scene3d, _tmp);
+    for (const n of [..._tmp.children]) _tmp.remove(n);
+    // Unconditional — the prewarm await yields regardless of ?noStaticsTimeSlice.
+    if (!scene3d.staticsBakedLbs.has(lbKey)) {
+      // Evicted while the prewarm await was outstanding — dispose this LB's per-surface
+      // group geometries (full + degraded) and bail without attaching (same as the
+      // time-slice cancellation guard above; nodes were never added to the scene graph).
+      disposeBakeOwnedGeometries(primary.groupsByModel, degradedGeomByModel);
+      // The per-LB batches were never attached, so no evict scan will see them.
+      for (const n of nodesToAdd) {
+        if (n?.userData?.__staticBatch === true) { try { n.dispose(); } catch (_) { /* fail-soft */ } }
+      }
+      return {
+        ...makeEmptySummary(),
+        evictedDuringBuild: true,
+        disposables: { geometries: [], materials: [], textures: [] },
+      };
     }
   }
   for (const node of nodesToAdd) _attachStaticNode(scene3d, node);

@@ -8,12 +8,16 @@
 // `browser_ui` targets exist (lib/cdp_raw.mjs): connectAtLaunch() connects right after launch, as
 // hbbench.mjs always has; attach() falls back to raw CDP for later attaches.
 import { createRequire } from "node:module";
-import { statSync, openSync, readSync, closeSync } from "node:fs";
+import { statSync, openSync, readSync, closeSync, existsSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { ACE_LOG, CDP } from "./hb_box.mjs";
 import { detectWasmProfile } from "../../../apps/holtburger-web/harness/lib/wasm_profile.mjs";
 
 const require = createRequire(import.meta.url);
-export const PLAYWRIGHT_CORE = process.env.PLAYWRIGHT_CORE || "/home/wbterminal/.npm/_npx/e41f203b7505f1fb/node_modules/playwright-core";
+const DEFAULT_PWC = "/home/wbterminal/.npm/_npx/e41f203b7505f1fb/node_modules/playwright-core";
+const LOCAL_PWC = join(dirname(fileURLToPath(import.meta.url)), "../../../apps/holtburger-web/node_modules/playwright-core");
+export const PLAYWRIGHT_CORE = process.env.PLAYWRIGHT_CORE || (existsSync(DEFAULT_PWC) ? DEFAULT_PWC : LOCAL_PWC);
 let _chromium = null;
 function chromium() {
   if (_chromium === null) _chromium = require(PLAYWRIGHT_CORE).chromium;

@@ -2643,6 +2643,7 @@
               );
               setInterval(() => {
                 try {
+                  if (window.liveScene3d && window.liveScene3d._slotGridDrivesRing) return;
                   const p = window.getLocalPlayerPose ? window.getLocalPlayerPose() : null;
                   if (p && p.landblockId) __packCtl.notePlayerLandblock(p.landblockId >>> 0);
                 } catch (_) { /* pose pre-login → skip */ }

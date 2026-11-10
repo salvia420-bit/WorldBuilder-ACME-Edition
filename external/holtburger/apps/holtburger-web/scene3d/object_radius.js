@@ -64,13 +64,18 @@
 const OBJ_RADIUS_MIN = 1;   // the player's neighbours always keep their objects (= retail's 3x3)
 const OBJ_RADIUS_MAX = 12;  // matches ?pvsRingRadius's ceiling
 const OBJ_RADIUS_DEFAULT = 4; // beyond retail (see FIDELITY); unchanged until decision (g)
+export const DEFAULT_OBJ_RADIUS = OBJ_RADIUS_DEFAULT;
+export const DEFAULT_BLD_RADIUS = 5; // 960–1152 m for buildings (full 6×6 SlotGrid / 11×11 ring)
 
 let _setting; // undefined = unread, null = off, else N
+let _testOverride; // undefined = none, else test value
+let _bldTestOverride; // undefined = none, else test value
 /**
  * `?objRadius=N` (integer 1..12) ⇒ N; `off`/`0`/`false`/`no` ⇒ null (objects on
  * the whole residency ring); absent or anything else ⇒ 4 (the default).
  */
 export function objRadiusSetting() {
+  if (_testOverride !== undefined) return _testOverride;
   if (_setting !== undefined) return _setting;
   let n = OBJ_RADIUS_DEFAULT;
   try {
@@ -87,12 +92,14 @@ export function objRadiusSetting() {
   return n;
 }
 /** Test seam: a number arms it, null disarms, undefined re-reads the URL. */
-export function __setObjRadiusForTest(v) { _setting = v; }
+export function __setObjRadiusForTest(v) { _testOverride = v; _setting = v; }
+export function __setBldRadiusForTest(v) { _bldTestOverride = v; }
 
 // ?flightView (altitude_policy.js, flight experience Phase 3): the window narrows with altitude (from 1.5 km up a
 // tree is a few pixels and the far-forest impostors carry it). A policy radius never WIDENS the page's setting and
 // never applies when the setting is off (null). Setting it forces one re-evaluation on the next tick.
 let _policyRadius = null;
+let _policyBldRadius = null;
 export function setObjRadiusPolicy(n, scene3d = null) {
   const v = Number.isFinite(n) ? Math.max(OBJ_RADIUS_MIN, Math.min(OBJ_RADIUS_MAX, n | 0)) : null;
   if (v === _policyRadius) return false;
@@ -100,10 +107,49 @@ export function setObjRadiusPolicy(n, scene3d = null) {
   if (scene3d?._objRadius) scene3d._objRadius.sig = null;
   return true;
 }
+export function setBldRadiusPolicy(n, scene3d = null) {
+  const v = Number.isFinite(n) ? Math.max(OBJ_RADIUS_MIN, Math.min(OBJ_RADIUS_MAX, n | 0)) : null;
+  if (v === _policyBldRadius) return false;
+  _policyBldRadius = v;
+  if (scene3d?._objRadius) {
+    scene3d._objRadius.policyBldRadius = v;
+    scene3d._objRadius.sig = null;
+  }
+  return true;
+}
+export function bldRadiusSetting() {
+  if (_bldTestOverride !== undefined) {
+    if (_bldTestOverride == null) return null;
+    return _policyBldRadius == null ? _bldTestOverride : Math.min(_bldTestOverride, _policyBldRadius);
+  }
+  if (_testOverride !== undefined) {
+    if (_testOverride == null) return null;
+    return _policyBldRadius == null ? _testOverride : Math.min(_testOverride, _policyBldRadius);
+  }
+  let n = DEFAULT_BLD_RADIUS;
+  try {
+    if (typeof globalThis !== "undefined" && globalThis.location?.search) {
+      const ps = new URLSearchParams(globalThis.location.search);
+      const rawBld = (ps.get("bldRadius") || "").trim().toLowerCase();
+      const rawObj = (ps.get("objRadius") || "").trim().toLowerCase();
+      const raw = rawBld || rawObj;
+      if (raw === "off" || raw === "0" || raw === "false" || raw === "no") n = null;
+      else if (/^[0-9]+$/.test(raw)) {
+        const v = Number(raw);
+        if (v >= OBJ_RADIUS_MIN && v <= OBJ_RADIUS_MAX) n = v;
+      }
+    }
+  } catch (_) { n = DEFAULT_BLD_RADIUS; }
+  if (n == null) return null;
+  return _policyBldRadius == null ? n : Math.min(n, _policyBldRadius);
+}
 function _effectiveRadius() {
   const n = objRadiusSetting();
   if (n == null) return null;
   return _policyRadius == null ? n : Math.min(n, _policyRadius);
+}
+function _effectiveBldRadius() {
+  return bldRadiusSetting();
 }
 
 const _stats = { hides: 0, shows: 0, nodesHidden: 0, nodesShown: 0, lateHides: 0, unparkRehides: 0, forgets: 0,
@@ -127,8 +173,10 @@ function _cheb(a, b) {
 function _state(scene3d) {
   let st = scene3d._objRadius;
   if (!st) {
-    st = { hidden: new Set(), pendingHide: new Set(), centers: [], sig: null };
+    st = { hidden: new Set(), hiddenBld: new Set(), pendingHide: new Set(), centers: [], sig: null, policyBldRadius: _policyBldRadius };
     scene3d._objRadius = st;
+  } else if (!(st.hiddenBld instanceof Set)) {
+    st.hiddenBld = new Set();
   }
   return st;
 }
@@ -143,25 +191,46 @@ function _dist(st, lbKey) {
   return best;
 }
 
-/**
- * Bake gate for cells.js: may the statics/buildings hooks fire for `lbKey`,
- * given the player landblock set `seen`? Always true when the flag is off.
- */
-export function objectBakeAllowed(seen, lbKey) {
-  const n = _effectiveRadius();
+function _bakeAllowedWithRadius(n, a, b) {
   if (n == null) return true;
-  for (const c of seen) if (_cheb(c, lbKey) <= n) return true;
-  return false;
+  if (a == null || b == null) return true;
+  if (typeof a === "number" && typeof b === "number") {
+    if (a === 0 || b === 0) return true;
+    return _cheb(a, b) <= n;
+  }
+  if (typeof a === "number" && typeof b[Symbol.iterator] === "function") {
+    for (const c of b) if (_cheb(c, a) <= n) return true;
+    return false;
+  }
+  if (typeof b === "number" && typeof a[Symbol.iterator] === "function") {
+    for (const c of a) if (_cheb(c, b) <= n) return true;
+    return false;
+  }
+  return true;
 }
 
-function _forEachTopNode(scene3d, lbKey, fn) {
-  for (const grp of [scene3d.staticsGroup, scene3d.buildingsGroup]) {
-    const kids = grp?.children;
-    if (!kids) continue;
-    for (const c of kids) {
-      const lb = c.userData?.landblockId;
-      if (lb != null && _lbKey(lb) === lbKey) fn(c);
-    }
+/**
+ * Bake gate for cells.js / index.js: may the statics hooks fire for `lbKey`,
+ * given the player landblock set `seen` (or `(lbKey, centerLbKey)`)? Always true when the flag is off.
+ */
+export function objectBakeAllowed(a, b) {
+  return _bakeAllowedWithRadius(_effectiveRadius(), a, b);
+}
+
+/**
+ * Decoupled bake gate for buildings (`DEFAULT_BLD_RADIUS = 5`, narrowed at high altitude via `bldRadiusForAgl`).
+ * Accepts either `(seen, lbKey)` or `(lbKey, centerLbKey)`.
+ */
+export function buildingBakeAllowed(a, b) {
+  return _bakeAllowedWithRadius(_effectiveBldRadius(), a, b);
+}
+
+function _forEachGroupNode(grp, lbKey, fn) {
+  const kids = grp?.children;
+  if (!kids) return;
+  for (const c of kids) {
+    const lb = c.userData?.landblockId;
+    if (lb != null && _lbKey(lb) === lbKey) fn(c);
   }
 }
 
@@ -171,7 +240,7 @@ function _isParked(scene3d, lbKey) {
 
 function _hide(scene3d, st, lbKey) {
   let n = 0;
-  _forEachTopNode(scene3d, lbKey, (c) => {
+  _forEachGroupNode(scene3d.staticsGroup, lbKey, (c) => {
     if (c.visible) { c.visible = false; c.userData.__objRadiusHidden = true; n += 1; }
   });
   try { scene3d._parkStaticBatchXForLb?.(lbKey); } catch (_) { /* fail-soft */ }
@@ -186,7 +255,7 @@ function _hide(scene3d, st, lbKey) {
 
 function _show(scene3d, st, lbKey) {
   let n = 0;
-  _forEachTopNode(scene3d, lbKey, (c) => {
+  _forEachGroupNode(scene3d.staticsGroup, lbKey, (c) => {
     if (c.userData.__objRadiusHidden) { c.visible = true; delete c.userData.__objRadiusHidden; n += 1; }
   });
   // Pools: the registry's sticky hide lifts here; it re-shows only instances
@@ -204,6 +273,24 @@ function _show(scene3d, st, lbKey) {
   globalThis.__hbRustWorld?.objrShow(scene3d, lbKey); // ?rustWorld
 }
 
+function _hideBld(scene3d, st, lbKey) {
+  let n = 0;
+  _forEachGroupNode(scene3d.buildingsGroup, lbKey, (c) => {
+    if (c.visible) { c.visible = false; c.userData.__objRadiusHidden = true; n += 1; }
+  });
+  st.hiddenBld.add(lbKey);
+  _stats.nodesHidden += n;
+}
+
+function _showBld(scene3d, st, lbKey) {
+  let n = 0;
+  _forEachGroupNode(scene3d.buildingsGroup, lbKey, (c) => {
+    if (c.userData.__objRadiusHidden) { c.visible = true; delete c.userData.__objRadiusHidden; n += 1; }
+  });
+  st.hiddenBld.delete(lbKey);
+  _stats.nodesShown += n;
+}
+
 // An evicted landblock left both baked sets: drop it from the hidden set (its
 // nodes are gone) AND lift the pool registry's own sticky copy of the hide.
 // 2026-10-29 (lane W review r2): the forget used to drop only `st.hidden`, and
@@ -217,6 +304,7 @@ function _show(scene3d, st, lbKey) {
 // off): `_poolShowLb` returns 0. `st.hidden` is cleared FIRST (as before).
 function _forget(scene3d, st, lbKey) {
   st.hidden.delete(lbKey);
+  st.hiddenBld?.delete(lbKey);
   st.pendingHide?.delete(lbKey);
   try { scene3d._poolShowLb?.(lbKey); } catch (_) { /* fail-soft */ }
   _stats.forgets += 1;
@@ -226,44 +314,57 @@ function _forget(scene3d, st, lbKey) {
 /**
  * Re-evaluate every object-baked landblock against the player's centre set.
  * Cheap to call every frame: it returns at once unless the centre set (the
- * landblock-crossing signal) changed.
+ * landblock-crossing signal) or effective radii changed.
  */
 export function tickObjectRadius(scene3d, seen) {
   const n = _effectiveRadius();
-  if (n == null || !scene3d) return;
+  const nb = _effectiveBldRadius();
+  if ((n == null && nb == null) || !scene3d) return;
   const st = _state(scene3d);
-  let sig = "";
-  for (const k of seen) sig += k + ",";
+  const iter = typeof seen === "number" ? [seen >>> 0] : seen;
+  let sig = `${n},${nb}:`;
+  for (const k of iter) sig += k + ",";
   if (sig === st.sig) return;
   st.sig = sig;
-  st.centers = [...seen];
+  st.centers = [...iter];
   const keys = new Set();
   if (scene3d.staticsBakedLbs instanceof Set) for (const k of scene3d.staticsBakedLbs) keys.add(k >>> 0);
   if (scene3d.buildingsBakedLbs instanceof Set) for (const k of scene3d.buildingsBakedLbs) keys.add(k >>> 0);
   // Evicted landblocks leave both baked sets; forget them (their nodes are gone,
   // and the pool registry's copy of the hide lifts with them: `_forget`).
   for (const k of st.hidden) if (!keys.has(k)) _forget(scene3d, st, k);
+  for (const k of st.hiddenBld) if (!keys.has(k)) st.hiddenBld.delete(k);
   for (const k of st.pendingHide) if (!keys.has(k)) st.pendingHide.delete(k);
   for (const k of keys) {
     const d = _dist(st, k);
-    if (d > n + 1) {
-      if (!st.hidden.has(k)) {
-        if (_fadeDeferred) {
-          if (!st.pendingHide.has(k)) { st.pendingHide.add(k); _stats.fadeHides += 1; }
-        } else {
-          _hide(scene3d, st, k);
+    if (n != null) {
+      if (d > n + 1) {
+        if (!st.hidden.has(k)) {
+          if (_fadeDeferred) {
+            if (!st.pendingHide.has(k)) { st.pendingHide.add(k); _stats.fadeHides += 1; }
+          } else {
+            _hide(scene3d, st, k);
+          }
+        }
+      } else if (d <= n) {
+        if (st.pendingHide.has(k)) {
+          st.pendingHide.delete(k);
+          _stats.fadeCancels += 1;
+        } else if (st.hidden.has(k)) {
+          _show(scene3d, st, k);
         }
       }
-    } else if (d <= n) {
-      if (st.pendingHide.has(k)) {
-        st.pendingHide.delete(k);
-        _stats.fadeCancels += 1;
-      } else if (st.hidden.has(k)) {
-        _show(scene3d, st, k);
+    }
+    if (nb != null) {
+      if (d > nb + 1) {
+        if (!st.hiddenBld.has(k)) _hideBld(scene3d, st, k);
+      } else if (d <= nb) {
+        if (st.hiddenBld.has(k)) _showBld(scene3d, st, k);
       }
     }
   }
 }
+export const tickObjectRadiusVisibility = tickObjectRadius;
 
 /**
  * ?lbFade: the presence fade-out of `lbKey`'s objects reached 0 — run the deferred hide now (no-op unless the
@@ -291,46 +392,99 @@ export function objectRadiusWantsHidden(scene3d, lbKey) {
 /** A statics/buildings bake for `lbKey` just attached its nodes. */
 export function afterObjectBake(scene3d, lbKey) {
   const n = _effectiveRadius();
-  if (n == null || !scene3d) return;
+  const nb = _effectiveBldRadius();
+  if ((n == null && nb == null) || !scene3d) return;
   const st = _state(scene3d);
   const k = _lbKey(lbKey);
   if (st.centers.length === 0) return;
   const d = _dist(st, k);
   // Hide on arrival when outside the band, and re-hide a hidden landblock so
   // the nodes this bake added are covered too (idempotent per node/instance).
-  if (d > n + 1 || st.hidden.has(k)) {
+  if (n != null && (d > n + 1 || st.hidden.has(k))) {
     _hide(scene3d, st, k);
     _stats.lateHides += 1;
+  }
+  if (nb != null && (d > nb + 1 || st.hiddenBld.has(k))) {
+    _hideBld(scene3d, st, k);
   }
 }
 
 /** Warm-park just re-showed `lbKey`'s bucket/atlas instances. */
 export function afterUnpark(scene3d, lbKey) {
-  if (objRadiusSetting() == null || !scene3d) return;
+  if ((objRadiusSetting() == null && bldRadiusSetting() == null) || !scene3d) return;
   const st = _state(scene3d);
   const k = _lbKey(lbKey);
   if (!st.hidden.has(k)) {
     // Shown while it was parked: its detached nodes missed the restore.
-    _forEachTopNode(scene3d, k, (c) => {
+    _forEachGroupNode(scene3d.staticsGroup, k, (c) => {
       if (c.userData.__objRadiusHidden) { c.visible = true; delete c.userData.__objRadiusHidden; _stats.nodesShown += 1; }
     });
-    return;
+  } else {
+    // Park detached the nodes, so a hide while parked could not reach them, and
+    // unpark re-showed the bucket/atlas instances: hide everything again.
+    _hide(scene3d, st, k);
+    _stats.unparkRehides += 1;
   }
-  // Park detached the nodes, so a hide while parked could not reach them, and
-  // unpark re-showed the bucket/atlas instances: hide everything again.
-  _hide(scene3d, st, k);
-  _stats.unparkRehides += 1;
+  if (!st.hiddenBld.has(k)) {
+    _forEachGroupNode(scene3d.buildingsGroup, k, (c) => {
+      if (c.userData.__objRadiusHidden) { c.visible = true; delete c.userData.__objRadiusHidden; _stats.nodesShown += 1; }
+    });
+  } else {
+    _hideBld(scene3d, st, k);
+  }
 }
 
 /** Is `lbKey`'s object set currently hidden by the near radius? */
-export function objectRadiusHides(scene3d, lbKey) {
-  const st = scene3d?._objRadius;
-  return !!st && st.hidden.has(_lbKey(lbKey));
+export function objectRadiusHides(a, b) {
+  if (a && typeof a === "object") {
+    const st = a._objRadius;
+    return !!st && st.hidden.has(_lbKey(b));
+  }
+  if (b && typeof b === "object") {
+    const st = b._objRadius;
+    return !!st && st.hidden.has(_lbKey(a));
+  }
+  if (typeof a === "number" && typeof b === "number") {
+    if (b === 0) return false;
+    const n = _effectiveRadius();
+    if (n == null) return false;
+    return _cheb(a, b) > n + 1;
+  }
+  return false;
+}
+
+/** Is `lbKey`'s building set currently hidden by the building radius? */
+export function buildingRadiusHides(a, b) {
+  if (a && typeof a === "object") {
+    const st = a._objRadius;
+    return !!st && st.hiddenBld instanceof Set && st.hiddenBld.has(_lbKey(b));
+  }
+  if (b && typeof b === "object") {
+    const st = b._objRadius;
+    return !!st && st.hiddenBld instanceof Set && st.hiddenBld.has(_lbKey(a));
+  }
+  if (typeof a === "number" && typeof b === "number") {
+    if (b === 0) return false;
+    const nb = _effectiveBldRadius();
+    if (nb == null) return false;
+    return _cheb(a, b) > nb + 1;
+  }
+  return false;
 }
 
 export function getObjectRadiusStats(scene3d) {
   const st = scene3d?._objRadius;
-  return { radius: objRadiusSetting(), policyRadius: _policyRadius, hiddenLbs: st ? st.hidden.size : 0, pendingHideLbs: st?.pendingHide ? st.pendingHide.size : 0, fadeDeferred: _fadeDeferred, ..._stats };
+  return {
+    radius: objRadiusSetting(),
+    bldRadius: bldRadiusSetting(),
+    policyRadius: _policyRadius,
+    policyBldRadius: _policyBldRadius,
+    hiddenLbs: st ? st.hidden.size : 0,
+    hiddenBldLbs: st?.hiddenBld ? st.hiddenBld.size : 0,
+    pendingHideLbs: st?.pendingHide ? st.pendingHide.size : 0,
+    fadeDeferred: _fadeDeferred,
+    ..._stats,
+  };
 }
 export function __resetObjectRadiusStatsForTest() {
   for (const k in _stats) _stats[k] = 0;

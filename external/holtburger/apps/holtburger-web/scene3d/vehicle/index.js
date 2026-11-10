@@ -37,7 +37,11 @@ import { flightResidencyEnabled, setFlightHint, clearFlightHint } from "../resid
 export const CAP_OBSERVE = 0x1;
 export const CAP_PILOT = 0x2;
 export const BOARD_RANGE_M = 8;
-export const CHASE = Object.freeze({ back: 16, up: 4.5, lookAhead: 30, pitch: -0.12, fov: 70, headingTau: 0.25 });
+export const CHASE = Object.freeze({
+  back: 16, up: 4.5, lookAhead: 30, pitch: -0.12, fov: 70,
+  headingTau: 0.25, pitchTau: 0.14, rollTau: 0.14,
+  groundClear: 2, groundAttackTau: 0.06, groundReleaseTau: 0.28,
+});
 // up 1.25: the eye over the Hellcat's long nose (at 1.0 the cowling filled the lower third of the view, 1070 2026-11-02)
 export const COCKPIT = Object.freeze({ up: 1.68, forward: 0.15, fov: 78 });
 /** The bomb release adds this downward speed (m/s) to the aircraft's velocity (the server's BombEjectSpeed). */
@@ -469,12 +473,17 @@ export function installVehicles(deps = {}) {
     pilot = {
       audio, hop,
       vehicle: v, seat, controls, camera, acc: 0, predictor: v.last ? makePredictor(v, v.last) : null,
-      startedAt: nowSec(), view: "chase", camHeading: null, lastServer: v.last, leadLb: 0, sent: 0,
+      startedAt: nowSec(), view: "chase", camHeading: null, camPitch: null, camRoll: null, camLift: 0, lastServer: v.last, leadLb: 0, sent: 0,
       unsub: null, lastSeat: null, trail: [],
     };
     pilot.unsub = controls.onAction((a) => {
-      if (a.type === "camera") pilot.view = pilot.view === "chase" ? "cockpit" : "chase";
-      else if (a.type === "hideHud") osd.toggleHidden();
+      if (a.type === "camera") {
+        pilot.view = pilot.view === "chase" ? "cockpit" : "chase";
+        pilot.camHeading = null;
+        pilot.camPitch = null;
+        pilot.camRoll = null;
+        pilot.camLift = 0;
+      } else if (a.type === "hideHud") osd.toggleHidden();
       else if (a.type === "exit") requestExit();
     });
     osd.prompt(null);
@@ -526,7 +535,7 @@ export function installVehicles(deps = {}) {
   function startHandoff(p) {
     endHandoff("restart");
     // the aircraft is dead-reckoned already (stopPiloting: v.reckon)
-    handoff = { v: p.vehicle, seat: p.seat, camera: p.camera && p.camera.owned ? p.camera : null, camHeading: p.camHeading, lastSeat: p.lastSeat, startedAt: nowSec(),
+    handoff = { v: p.vehicle, seat: p.seat, camera: p.camera && p.camera.owned ? p.camera : null, camHeading: p.camHeading, camPitch: p.camPitch, camRoll: p.camRoll, camLift: p.camLift ?? 0, lastSeat: p.lastSeat, startedAt: nowSec(),
       trail: Array.isArray(p.trail) ? p.trail.slice() : [], onLock: !!p.onLock }; // the pilot's last locks: the body sits on one (beforeMovement)
     if (p.camera && !handoff.camera) { try { p.camera.release(); p.camera.dispose(); } catch (_) {} }
     stats.handoffs++;
@@ -672,17 +681,39 @@ export function installVehicles(deps = {}) {
   // bench / film: {yaw (rad, around the aircraft), back (m), up (m)} — the chase camera orbits the seat by `yaw`
   let camTweak = null;
   /** The chase camera's pose for a seat on a vehicle pose (camHeading already smoothed). */
-  function chaseCamPose(seat, pose, ch0) {
+  function chaseCamPose(seat, pose, ch0, dt = 0, st = null) {
     const ch = ch0 + (camTweak?.yaw ?? 0);
     const back = camTweak?.back ?? CHASE.back, up = camTweak?.up ?? CHASE.up;
     const ex = seat.x - Math.sin(ch) * back;
     const ey = seat.y - Math.cos(ch) * back;
     let ez = seat.z + up;
     const g = ground(ex, ey);
-    if (!Number.isNaN(g) && ez < g + 2) ez = g + 2;
+    const wantLift = Number.isFinite(g) ? Math.max(0, (g + CHASE.groundClear) - ez) : 0;
+    if (st) {
+      const prevLift = Number.isFinite(st.camLift) ? st.camLift : 0;
+      const tau = wantLift > prevLift ? CHASE.groundAttackTau : CHASE.groundReleaseTau;
+      const aLift = dt > 0 ? 1 - Math.exp(-dt / tau) : 1;
+      st.camLift = prevLift + (wantLift - prevLift) * aLift;
+      ez += st.camLift;
+      if (Number.isFinite(g) && ez < g + CHASE.groundClear * 0.5) ez = g + CHASE.groundClear * 0.5;
+    } else if (Number.isFinite(g) && ez < g + CHASE.groundClear) {
+      ez = g + CHASE.groundClear;
+    }
+    const rawPitch = Number.isFinite(pose.pitch) ? pose.pitch : 0;
+    const rawRoll = Number.isFinite(pose.bank) ? pose.bank : 0;
+    let pitch = rawPitch;
+    let roll = rawRoll;
+    if (st) {
+      const aPitch = dt > 0 ? 1 - Math.exp(-dt / CHASE.pitchTau) : 1;
+      const aRoll = dt > 0 ? 1 - Math.exp(-dt / CHASE.rollTau) : 1;
+      st.camPitch = Number.isFinite(st.camPitch) ? st.camPitch + (rawPitch - st.camPitch) * aPitch : rawPitch;
+      st.camRoll = Number.isFinite(st.camRoll) ? st.camRoll + (rawRoll - st.camRoll) * aRoll : rawRoll;
+      pitch = st.camPitch;
+      roll = st.camRoll;
+    }
     // a tweaked orbit looks at the seat (the default chase framing looks a little down along the flight path)
-    const pc = camTweak ? (camTweak.pitch ?? -Math.atan2(ez - seat.z, back)) : CHASE.pitch + pose.pitch * 0.4;
-    const rl = camTweak ? (camTweak.roll ?? 0) : pose.bank * 0.25;
+    const pc = camTweak ? (camTweak.pitch ?? -Math.atan2(ez - seat.z, back)) : CHASE.pitch + pitch * 0.4;
+    const rl = camTweak ? (camTweak.roll ?? 0) : roll * 0.25;
     return { pos: [ex, ey, ez], h: ch, p: pc, r: rl, fov: camTweak?.fov ?? CHASE.fov };
   }
 
@@ -705,7 +736,7 @@ export function installVehicles(deps = {}) {
     if (ho.camera && ho.camera.owned) {
       if (ho.camHeading === null || ho.camHeading === undefined) ho.camHeading = pose.heading;
       ho.camHeading = FM.wrapHeading(ho.camHeading + angleDiff(pose.heading, ho.camHeading) * (1 - Math.exp(-dt / CHASE.headingTau)));
-      ho.camera.write(chaseCamPose(seat, pose, ho.camHeading));
+      ho.camera.write(chaseCamPose(seat, pose, ho.camHeading, dt, ho));
     }
   }
 
@@ -1058,7 +1089,7 @@ export function installVehicles(deps = {}) {
         if (p.camHeading === null) p.camHeading = pose.heading;
         p.camHeading = FM.wrapHeading(p.camHeading + angleDiff(pose.heading, p.camHeading) * (1 - Math.exp(-dt / CHASE.headingTau)));
         // aim at the seat, not the vehicle origin: the stand-in's crew sits up in its basket (profile seat offset)
-        cam = chaseCamPose(seat, pose, p.camHeading);
+        cam = chaseCamPose(seat, pose, p.camHeading, dt, p);
       }
       const shake = fx.shakeAt(cam.pos);
       if (shake > 0.01) {
@@ -1432,7 +1463,15 @@ export function installVehicles(deps = {}) {
     /** Bench: drive the analog input (throttle, pitch, roll, yaw, boost, fire, land) for `ms`. */
     setSticks(axes, ms) { if (!pilot) return false; pilot.controls.setOverride(axes, ms); return true; },
     clearSticks() { pilot?.controls.clearOverride(); },
-    setView(view) { if (pilot) pilot.view = view === "cockpit" ? "cockpit" : "chase"; },
+    setView(view) {
+      if (pilot) {
+        pilot.view = view === "cockpit" ? "cockpit" : "chase";
+        pilot.camHeading = null;
+        pilot.camPitch = null;
+        pilot.camRoll = null;
+        pilot.camLift = 0;
+      }
+    },
     corrections: () => pilot?.predictor?.corrections() ?? [],
     /** Bench / film: orbit the chase camera ({yaw, back, up}; null = the default chase framing). */
     setCameraTweak(t) { camTweak = t && typeof t === "object" ? { ...t } : null; return true; },

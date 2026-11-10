@@ -42,6 +42,7 @@ import { lbFadeUniforms, lbFadeOn, lbBandDefines, LB_HANDOFF_GLSL } from "./lb_p
 import { rlogSetWorldTierProbe } from "./residency_log.js";
 import { flightViewFlag } from "./flight_view_flag.js";
 import { withLogDepth } from "./shader_logdepth.js";
+import { prewarmSubtree } from "./bake_prewarm.js";
 
 export const WORLD_VERTS = 2041;              // 255 landblocks × 8 cells + 1
 export const CELL_M = 24;
@@ -74,13 +75,15 @@ export function worldTierEnabled(search) {
   }
 }
 
-/** `?worldTierRange0=M` — the level-0 LOD range in metres (default 1,536 = 2 leaves). */
+export const DEFAULT_RANGE0_M = 2304;
+
+/** `?worldTierRange0=M` — the level-0 LOD range in metres (default 2,304 = 3 leaves). */
 function range0M() {
   try {
     const v = Number(new URLSearchParams(globalThis.location?.search || "").get("worldTierRange0"));
     if (Number.isFinite(v) && v >= 800 && v <= 6000) return v;
   } catch (_) { /* default */ }
-  return 1536;
+  return DEFAULT_RANGE0_M;
 }
 
 // ---------------------------------------------------------------------------
@@ -88,14 +91,14 @@ function range0M() {
 // ---------------------------------------------------------------------------
 
 /** LOD range of a level (metres): a level-k node is drawn only where the camera is farther than R(k−1). */
-export function levelRange(level, r0 = 1536) { return r0 * Math.pow(2, level); }
+export function levelRange(level, r0 = DEFAULT_RANGE0_M) { return r0 * Math.pow(2, level); }
 
 /**
  * CDLOD selection over the fixed root. `cam` = AC metres {x, y, z}; `visible(x0, y0, size)` an optional frustum
  * test. Returns [{x0, y0, size, level}] (finest first is not required). A node is refined when the camera is
  * within the range of the level below it (3D distance to the node's AABB, heights in [hMin, hMax]).
  */
-export function selectNodes(cam, { r0 = 1536, hMin = 0, hMax = 700, visible = null, max = MAX_NODES } = {}) {
+export function selectNodes(cam, { r0 = DEFAULT_RANGE0_M, hMin = 0, hMax = 700, visible = null, max = MAX_NODES } = {}) {
   const out = [];
   const stack = [[ROOT_ORIGIN, ROOT_ORIGIN, ROOT_M, LEVELS - 1]];
   while (stack.length && out.length < max) {
@@ -621,17 +624,16 @@ export function loadWorldData(base = WORLD_BASE_URL) {
   const t0 = (typeof performance !== "undefined") ? performance.now() : Date.now();
   _loadPromise = (async () => {
     const meta = await (await fetch(`${base}world_meta.json`)).json();
-    const [hIdx, types, trees, dericostPack] = await Promise.all([
+    const [hIdx, types, trees] = await Promise.all([
       _fetchBytes(`${base}world_height.u8`),
       _fetchBytes(`${base}world_types.u8`),
       _fetchBytes(`${base}world_trees.u8`).catch(() => new Uint8Array(255 * 255)),
-      Promise.all([
-        _fetchBytes(`${base}dericost_height.u8`).catch(() => _fetchBytes(`../../dist/dericost/dericost_height.u8`)).catch(() => null),
-        _fetchBytes(`${base}dericost_types.u8`).catch(() => _fetchBytes(`../../dist/dericost/dericost_types.u8`)).catch(() => null),
-        _fetchBytes(`${base}dericost_trees.u8`).catch(() => _fetchBytes(`../../dist/dericost/dericost_trees.u8`)).catch(() => null),
-      ]),
     ]);
-    const [hIdxDericost, typesDericost, treesDericost] = dericostPack;
+    const [hIdxDericost, typesDericost, treesDericost] = await Promise.all([
+      _fetchBytes(`${base}dericost_height.u8`).catch(() => _fetchBytes(`../../dist/dericost/dericost_height.u8`)).catch(() => null),
+      _fetchBytes(`${base}dericost_types.u8`).catch(() => _fetchBytes(`../../dist/dericost/dericost_types.u8`)).catch(() => null),
+      _fetchBytes(`${base}dericost_trees.u8`).catch(() => _fetchBytes(`../../dist/dericost/dericost_trees.u8`)).catch(() => null),
+    ]);
     if (hIdx.length !== WORLD_VERTS * WORLD_VERTS || types.length !== WORLD_VERTS * WORLD_VERTS) {
       throw new Error(`world grids: unexpected sizes ${hIdx.length} / ${types.length}`);
     }
@@ -808,6 +810,7 @@ function _makeMaterial(scene3d, data) {
     }
   }
   mat.name = "world-terrain";
+  mat.userData.__asyncLink = true;
   return { mat, hTex, tTex, treeTex, hDericostTex, tDericostTex, treeDericostTex };
 }
 
@@ -891,17 +894,25 @@ function _buildMesh(st, scene3d, camera) {
   st.mesh.name = "world-terrain-nodes";
   st.mesh.frustumCulled = false;
   st.mesh.matrixAutoUpdate = false;
-  st.mesh.visible = false;
-  st.group.add(st.mesh);
-  // link the program off the frame (compileAsync / KHR_parallel_shader_compile; three's compile() walks hidden
-  // meshes too); drawn only once linked — a first-draw link is 0.5-1.7 s of FXC on the 1070
+  st.mesh.visible = true;
+  // link the program off the frame against the EffectComposer warm target before attaching to st.group
   st.compiled = false;
+  const finish = () => {
+    st.compiled = true;
+    if (st.mesh) {
+      st.mesh.visible = !!st.wanted;
+      if (!st.mesh.parent) st.group.add(st.mesh);
+    }
+  };
   try {
-    const r = scene3d?.renderer;
-    if (r && typeof r.compileAsync === "function") {
-      Promise.resolve(r.compileAsync(st.mesh, camera, scene3d.scene)).then(() => { st.compiled = true; }, () => { st.compiled = true; });
-    } else st.compiled = true;
-  } catch (_) { st.compiled = true; }
+    const p = Promise.race([
+      Promise.resolve(prewarmSubtree(scene3d, st.mesh)),
+      new Promise((res) => setTimeout(res, 1500)),
+    ]);
+    p.then(finish, finish);
+  } catch (_) {
+    finish();
+  }
 }
 
 /**

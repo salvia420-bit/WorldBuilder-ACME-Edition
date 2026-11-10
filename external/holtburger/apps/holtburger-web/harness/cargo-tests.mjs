@@ -233,6 +233,16 @@ function parseArgs(argv) {
 // cargo / capped-build detection
 // ---------------------------------------------------------------------------
 function which(bin) {
+  if (process.platform === "win32") {
+    const ext = bin.endsWith(".exe") ? "" : ".exe";
+    const cargoHome = process.env.CARGO_HOME || "D:\\.cargo";
+    if (existsSync(path.join(cargoHome, "bin", `${bin}${ext}`))) {
+      return path.join(cargoHome, "bin", `${bin}${ext}`);
+    }
+    const w = spawnSync("where.exe", [bin], { encoding: "utf8", windowsHide: true });
+    const first = (w.stdout || "").split(/\r?\n/).map((s) => s.trim()).find(Boolean);
+    if (w.status === 0 && first) return first;
+  }
   // Use the INHERITED env PATH (non-login `sh -c`). A login shell (`sh -lc`)
   // re-sources profile and can DROP ~/.cargo/bin (cargo's PATH is usually added
   // via ~/.cargo/env sourced from ~/.bashrc, which a login `dash` won't read) →
@@ -255,7 +265,7 @@ function which(bin) {
 // "Big box" heuristic for cap auto-detect: lots of RAM => no cap needed.
 function looksLikeBigBox() {
   const totalGiB = os.totalmem() / 1024 ** 3;
-  return totalGiB >= 24; // the laptop is 8GB; the buildbox is far larger.
+  return totalGiB >= 15 || process.platform === "win32"; // the Linux laptop is 8GB; 16GB+ / Windows 1070 box has no Linux cgroup wrapper.
 }
 
 // ---------------------------------------------------------------------------
@@ -300,8 +310,9 @@ async function liveCrossCheck() {
 // command building
 // ---------------------------------------------------------------------------
 function buildCargoArgs(crate, names, exact) {
-  // cargo test -p <crate> --lib [-j2] -- [--exact] <names...>
-  const base = ["test", "-p", crate, "--lib", "-j2", "--"];
+  // cargo test -p <crate> --lib [-j2/-j6] -- [--exact] <names...>
+  const jobs = looksLikeBigBox() ? "-j6" : "-j2";
+  const base = ["test", "-p", crate, "--lib", jobs, "--"];
   if (exact) {
     const withExact = [];
     for (const n of names) {

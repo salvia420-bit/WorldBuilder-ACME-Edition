@@ -8,12 +8,12 @@
 //   node tests/world_terrain.test.mjs
 
 import {
-  worldTierEnabled, levelRange, selectNodes, heightAtGrid, WORLD_VERTS, WORLD_M, CELL_M,
+  worldTierEnabled, levelRange, selectNodes, heightAtGrid, WORLD_VERTS, WORLD_M, CELL_M, DEFAULT_RANGE0_M,
   WORLD_VERTEX_GLSL, WORLD_FRAGMENT_GLSL, sampleHeight, worldGroundHeight,
 } from "../scene3d/world_terrain.js";
 import {
   flightViewEnabled, viewDistanceM, flightFogBand, quantizedFar, hazeScale, radialAltitude, ecefAnchorForWorld, FLY_ENTER_AGL, FLY_EXIT_AGL,
-  highSubjectAgl, objRadiusForAgl, flightPrewarmEnabled,
+  highSubjectAgl, objRadiusForAgl, bldRadiusForAgl, flightPrewarmEnabled,
 } from "../scene3d/altitude_policy.js";
 import { TERRAIN_SHARED_TAIL_GLSL } from "../scene3d/terrain_shared_glsl.js";
 import { LB_HANDOFF_GLSL } from "../scene3d/lb_presence.js";
@@ -54,10 +54,10 @@ console.log("-- W2 CDLOD selection ---------------------------------------------
   // altitude coarsens the ground below: at 4.5 km no leaf is selected (3D distance > range(0))
   const high = selectNodes({ x: 32000, y: 36000, z: 4600 });
   const minLevel = Math.min(...high.map((n) => n.level));
-  check("at 4.5 km the finest level below is coarser than a leaf", minLevel >= 2, String(minLevel));
+  check("at 4.5 km the finest level below is coarser than a leaf", minLevel >= 1, String(minLevel));
   check("...and the count drops", high.length < nodes.length, `${high.length} vs ${nodes.length}`);
   // the level ranges double
-  check("ranges double per level", levelRange(3) === 1536 * 8 && levelRange(0, 2000) === 2000);
+  check("ranges double per level", DEFAULT_RANGE0_M === 2304 && levelRange(3) === 2304 * 8 && levelRange(0, 2000) === 2000);
   // a neighbour is never more than one level apart along the camera's row (CDLOD property)
   const row = nodes.filter((n) => cam.y >= n.y0 && cam.y < n.y0 + n.size).sort((a, b) => a.x0 - b.x0);
   let maxJump = 0;
@@ -119,13 +119,17 @@ check("?flightPrewarm: default ON on a page that can fly, never without vehicles
 {
   // the object window narrows with altitude, one band at a time, with hysteresis (no flapping over hills)
   let r = null;
-  const seq = [100, 700, 1400, 1600, 2400, 2600, 5000, 2300, 2100, 1400, 1200, 500, 400].map((a) => (r = objRadiusForAgl(a, r)));
+  const seq = [100, 700, 1400, 1600, 2400, 2600, 5000, 2300, 2100, 1400, 1200, 550, 400].map((a) => (r = objRadiusForAgl(a, r)));
   check("object radius by AGL: page default → 3 → 2 → 1 and back, with hysteresis",
     JSON.stringify(seq) === JSON.stringify([null, 3, 3, 2, 2, 1, 1, 1, 2, 2, 3, 3, null]), JSON.stringify(seq));
+  let b = null;
+  const bSeq = [100, 700, 1400, 1600, 2400, 2600, 5000, 2300, 2100, 1400, 1200, 550, 400].map((a) => (b = bldRadiusForAgl(a, b)));
+  check("building radius by AGL: page default (5) → 4 → 3 → 2 and back, with hysteresis",
+    JSON.stringify(bSeq) === JSON.stringify([null, 4, 4, 3, 3, 2, 2, 2, 3, 3, 4, 4, null]), JSON.stringify(bSeq));
   let f = null;
-  const fly = [0, 30, 50, 100, 30, 20, 0].map((a) => (f = objRadiusForAgl(a, f, true)));
-  check("an airborne aircraft in the low band: radius 3 from 40 m, back to the page default below 25 m",
-    JSON.stringify(fly) === JSON.stringify([null, null, 3, 3, 3, null, null]), JSON.stringify(fly));
+  const fly = [0, 80, 260, 500, 650, 550, 450, 0].map((a) => (f = objRadiusForAgl(a, f, true)));
+  check("low-to-medium flight (<= 600 m AGL) keeps full DEFAULT_OBJ_RADIUS (null)",
+    JSON.stringify(fly) === JSON.stringify([null, null, null, null, 3, 3, null, null]), JSON.stringify(fly));
   check("...on foot (not flying) the low band keeps the page default", objRadiusForAgl(100, null, false) === null);
 }
 {

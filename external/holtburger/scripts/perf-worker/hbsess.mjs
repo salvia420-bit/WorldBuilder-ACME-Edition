@@ -20,12 +20,16 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { uncappedBenchUrl } from "./lib/bench-url.mjs";
 import { rawSession } from "./lib/cdp_raw.mjs";
 
-import { statSync, openSync, readSync, closeSync } from "node:fs";
+import { statSync, openSync, readSync, closeSync, existsSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 const ACE_LOG = "/home/wbterminal/ace-server/Source/ACE.Server/bin/Release/net10.0/ACE_Log.txt";
 function aceLogTail(bytes = 262144) {
-  const size = statSync(ACE_LOG).size, fd = openSync(ACE_LOG, "r");
-  const buf = Buffer.alloc(Math.min(bytes, size)); readSync(fd, buf, 0, buf.length, size - buf.length); closeSync(fd);
-  return buf.toString("utf8");
+  try {
+    const size = statSync(ACE_LOG).size, fd = openSync(ACE_LOG, "r");
+    const buf = Buffer.alloc(Math.min(bytes, size)); readSync(fd, buf, 0, buf.length, size - buf.length); closeSync(fd);
+    return buf.toString("utf8");
+  } catch (_) { return ""; }
 }
 async function waitAccountFree(maxMs = 150000) {
   const end = Date.now() + maxMs;
@@ -38,7 +42,9 @@ async function waitAccountFree(maxMs = 150000) {
   return false;
 }
 const require = createRequire(import.meta.url);
-const { chromium } = require("/home/wbterminal/.npm/_npx/e41f203b7505f1fb/node_modules/playwright-core");
+const DEFAULT_PWC = "/home/wbterminal/.npm/_npx/e41f203b7505f1fb/node_modules/playwright-core";
+const LOCAL_PWC = join(dirname(fileURLToPath(import.meta.url)), "../../apps/holtburger-web/node_modules/playwright-core");
+const { chromium } = require(process.env.PLAYWRIGHT_CORE || (existsSync(DEFAULT_PWC) ? DEFAULT_PWC : LOCAL_PWC));
 const BOX = "young@100.127.215.75";
 const CDP = "http://127.0.0.1:9333";
 const APP = "http://127.0.0.1:8765/apps/holtburger-web/index.html";
@@ -47,7 +53,9 @@ const argv = process.argv.slice(2);
 const cmd = argv[0];
 const opt = (k, d) => { const i = argv.indexOf(k); return i >= 0 ? argv[i + 1] : d; };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const ssh = (c) => execFileSync("ssh", ["-o", "BatchMode=yes", BOX, c], { encoding: "utf8", timeout: 60000 });
+const ssh = (c) => process.platform === "win32" && !process.env.HB_FORCE_SSH
+  ? execFileSync("cmd.exe", ["/d", "/s", "/c", c], { encoding: "utf8", timeout: 60000, windowsHide: true })
+  : execFileSync("ssh", ["-o", "BatchMode=yes", BOX, c], { encoding: "utf8", timeout: 60000 });
 const killBench = () => { try { ssh("powershell -NoProfile -ExecutionPolicy Bypass -File D:\\Temp\\hbbench\\hbbench-kill.ps1"); } catch (_) {} };
 
 // 2026-10-29: on the box's Chrome 156, connectOverCDP hangs once the browser lists `browser_ui`
