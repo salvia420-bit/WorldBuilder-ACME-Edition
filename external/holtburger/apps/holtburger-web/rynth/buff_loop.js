@@ -320,7 +320,7 @@ const UPGRADE_PRIOR_SLACK_MS = 5_000;
 const COMPONENTS_PARK_MS = 5 * 60_000;
 const MANA_BACKOFF_MS = 15_000;
 const TRANSIENT_BACKOFF_MS = 1_000;
-const PLACE_PARK_MS = 60_000;
+export const PLACE_PARK_MS = 60_000;
 // Layer B7 (header, "Worn armor"): an item cast that enchanted nothing is
 // retried after this long; silent twice in a row it waits noShowCooldownMs
 // (B9's two strikes).
@@ -1473,9 +1473,15 @@ export class RynthBuffLoop {
    *  cast enchants it, so it is never cast twice. */
   _itemPass(now) {
     const w = this._wornArmor(now);
-    if (!w || !w.entries.length) return this.itemBuffs;
+    const inv = this._inventoryRows();
+    const invGuids = new Set(inv.map((r) => Number(r.guid) >>> 0));
+    let rest = this.itemBuffs;
+    if (invGuids.size > 0) {
+      rest = rest.filter((ib) => invGuids.has(Number(ib.itemGuid) >>> 0));
+    }
+    if (!w || !w.entries.length) return rest;
     const fams = new Set(w.entries.map((e) => e.family));
-    const rest = this.itemBuffs.filter((ib) => !(w.covers.has(ib.itemGuid) && fams.has(WORN_FAMILY_OF.get(ib.spellId))));
+    rest = rest.filter((ib) => !(w.covers.has(ib.itemGuid) && fams.has(WORN_FAMILY_OF.get(ib.spellId))));
     return [...w.entries, ...rest];
   }
 
@@ -1485,9 +1491,9 @@ export class RynthBuffLoop {
    *  _itemRecastAfterMs(windowS) after its confirmation. */
   _itemDue(ib, now, windowS = this._idleWindowS()) {
     const key = `${ib.spellId}:${ib.itemGuid}`;
+    if ((this._itemHeldUntil.get(key) ?? 0) > now) return false;
     const last = this._itemLastCast.get(key) ?? 0;
     if (typeof this.optFn !== "function") return now - last >= this.itemRecastMs;
-    if ((this._itemHeldUntil.get(key) ?? 0) > now) return false;
     if (this._itemForceAt && last < this._itemForceAt) return true;
     return now - last >= this._itemRecastAfterMs(windowS);
   }
@@ -1559,7 +1565,12 @@ export class RynthBuffLoop {
       }
       this.log(`item enchant ${p.spellId} fizzled ${n}x in a row — held ${FIZZLE_WALK_RETRY_MS / 60_000} min`);
     } else if (cls === "transient") {
-      this._backoffUntil = Math.max(this._backoffUntil, now + TRANSIENT_BACKOFF_MS);
+      if (!p.worn && ((p.refusal?.code & 0xffff) === 0x042c || p.refusal?.code === 0x042c)) {
+        this._itemHeldUntil.set(key, now + PLACE_PARK_MS);
+        this.log(`item enchant ${p.spellId} target 0x${(p.itemGuid >>> 0).toString(16)} not acquired (0x042c) — held ${PLACE_PARK_MS / 1000} s`);
+      } else {
+        this._backoffUntil = Math.max(this._backoffUntil, now + TRANSIENT_BACKOFF_MS);
+      }
     } else if (cls === "unknown-spell") {
       if (p.worn) {
         this._wornUnresolvable.add(p.spellId);
@@ -2255,7 +2266,13 @@ export class RynthBuffLoop {
           this._backoffUntil = Math.max(this._backoffUntil, now + ms);
           this._block(r.cls, ms, now);
         }
-        if (p.layer) this._holdRefusedItem(p, r.cls, now);
+        if (!p.worn && ((r.code & 0xffff) === 0x042c || r.code === 0x042c)) {
+          const key = `${p.spellId}:${p.itemGuid}`;
+          this._itemHeldUntil.set(key, now + PLACE_PARK_MS);
+          this.log(`item enchant ${p.spellId} target 0x${(p.itemGuid >>> 0).toString(16)} not acquired (0x042c) — held ${PLACE_PARK_MS / 1000} s`);
+        } else if (p.layer) {
+          this._holdRefusedItem(p, r.cls, now);
+        }
         this.log(`item enchant ${p.spellId} refused (${r.cls})`);
         this._itemPending = null;
         this._release();

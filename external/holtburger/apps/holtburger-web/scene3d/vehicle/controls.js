@@ -214,7 +214,7 @@ export function createVehicleControls(deps = {}) {
     pointerLockPending = false;
     wasPointerLocked = false;
     try {
-      if (isPointerLocked() && typeof doc?.exitPointerLock === "function") {
+      if ((isPointerLocked() || doc?.pointerLockElement) && typeof doc?.exitPointerLock === "function") {
         doc.exitPointerLock();
       }
     } catch (_) { /* ignore */ }
@@ -381,11 +381,16 @@ export function createVehicleControls(deps = {}) {
 
   function onBlur() {
     for (const c of VEHICLE_KEY_CODES) down[c] = false;
+    for (const c of Object.keys(down)) down[c] = false;
     for (const c of LATCHED_CODES) latched[c] = false;
+    for (const c of Object.keys(latched)) latched[c] = false;
     latched.MouseMiddle = false;
     mouseFire = false;
     mouseMiddleDown = false;
     rmbDown = false;
+    sticks.pitch = 0;
+    sticks.roll = 0;
+    sticks.yaw = 0;
   }
 
   function lock() {
@@ -423,7 +428,11 @@ export function createVehicleControls(deps = {}) {
   }
 
   function restore() {
-    if (!locked) return { ok: true, wasLocked: false };
+    if (!locked && !listening && !docListening) {
+      exitPointerLockClean();
+      onBlur();
+      return { ok: true, wasLocked: false };
+    }
     exitPointerLockClean();
     mouseAim = false;
     programmaticMouseAim = false;
@@ -445,11 +454,22 @@ export function createVehicleControls(deps = {}) {
     if (s && s.didPoison && readFault(s.ref) === "gate" && typeof s.ref.unpoison === "function") {
       try { s.ref.unpoison(); } catch (_) { /* best effort */ }
     }
+    if (s && s.ref && typeof s.ref.releaseHeld === "function") {
+      try { s.ref.releaseHeld("vehicle"); } catch (_) {}
+    }
+    const gf = win ? win.__inputFunnel : null;
+    if (gf && typeof gf.unpoison === "function" && readFault(gf) === "gate") {
+      try { gf.unpoison(); } catch (_) {}
+    }
+    if (gf && typeof gf.releaseHeld === "function") {
+      try { gf.releaseHeld("vehicle"); } catch (_) {}
+    }
     saved = null;
     locked = false;
     onBlur();
     freelookYaw = 0;
     freelookPitch = 0;
+    throttle = 0;
     return { ok: true, wasLocked: true };
   }
 
@@ -657,6 +677,7 @@ export function createVehicleControls(deps = {}) {
     set pitchTrim(v) { if (Number.isFinite(v)) pitchTrim = clamp(v, -PITCH_TRIM_MAX, PITCH_TRIM_MAX); },
     get mouseAim() { return mouseAim; },
     setMouseAim,
+    requestPointerLock: (target) => requestCanvasPointerLock(target),
     /** Bench / debug: drive the analog input for `ms` (axes: throttle, pitch, roll, yaw, boost, fire, land, missile, bomb). */
     setOverride(axes, ms = 1e9) {
       const now = performance?.now?.() ?? 0;
@@ -664,6 +685,12 @@ export function createVehicleControls(deps = {}) {
     },
     clearOverride() { override = null; },
     status,
-    dispose() { const r = restore(); actionFns.clear(); return r; },
+    dispose() {
+      const r = restore();
+      actionFns.clear();
+      onBlur();
+      exitPointerLockClean();
+      return r;
+    },
   };
 }

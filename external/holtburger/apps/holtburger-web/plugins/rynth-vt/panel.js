@@ -435,7 +435,12 @@ function stopTimer() {
 
 // ── public API (§3.16) ─────────────────────────────────────────────────────
 export function openVtPanel({ tab } = {}) {
-  import(DISPLAY_URL).then((m) => m.installVtDisplay?.(env().win)).catch(() => {});
+  S.displayDisposed = false;
+  S.displayLoading = import(DISPLAY_URL).then((m) => {
+    if (!S.displayDisposed) {
+      S.vtDisplay = m.installVtDisplay?.(env().win);
+    }
+  }).catch(() => {});
   try {
     if (!S.root) {
       S.ui = loadUi();
@@ -487,6 +492,7 @@ export function isVtPanelOpen() {
  *  meta-view renderer this panel attached (its windows need the stylesheet). */
 export function disposeVtPanel() {
   stopTimer();
+  S.displayDisposed = true;
   try { env().clearTimeout(S.msgTimer); } catch { /* ignore */ }
   for (const t of Object.values(S.tabs)) {
     try { t.dispose?.(); } catch { /* ignore */ }
@@ -497,11 +503,18 @@ export function disposeVtPanel() {
     if (S.viewRenderer && S.bridge && typeof S.bridge.releaseViewRenderer === "function") S.bridge.releaseViewRenderer(S.viewRenderer);
   } catch { /* ignore */ }
   try {
+    S.vtDisplay?.dispose?.();
+    S.vtDisplay = null;
+  } catch { /* ignore */ }
+  try {
+    env().win?.__rynthVtDisplay?.dispose?.();
+  } catch { /* ignore */ }
+  try {
     if (S.root && S.onKey) S.root.removeEventListener("keydown", S.onKey);
   } catch { /* ignore */ }
   try { S.root?.remove(); } catch { /* ignore */ }
   removeVtStyles(env().doc);
-  Object.assign(S, { bridge: S.cfg?.bridge ?? null, root: null, refs: null, bar: null, tabs: {}, active: null, timer: 0, msgTimer: 0, onKey: null, viewRenderer: null });
+  Object.assign(S, { bridge: S.cfg?.bridge ?? null, root: null, refs: null, bar: null, tabs: {}, active: null, timer: 0, msgTimer: 0, onKey: null, viewRenderer: null, vtDisplay: null, displayDisposed: false, displayLoading: null });
 }
 
 export default { openVtPanel, closeVtPanel, toggleVtPanel, isVtPanelOpen, disposeVtPanel };

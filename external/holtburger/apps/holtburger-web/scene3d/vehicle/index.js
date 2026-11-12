@@ -114,6 +114,18 @@ function angleDiff(a, b) {
   return d;
 }
 
+export function initVehicles(liveOrDeps = {}, opts = {}) {
+  if (liveOrDeps && liveOrDeps.liveScene3d) {
+    return installVehicles(liveOrDeps);
+  }
+  return installVehicles({
+    liveScene3d: liveOrDeps,
+    THREE: opts.THREE ?? null,
+    window: opts.window ?? (typeof window !== "undefined" ? window : null),
+    ...opts,
+  });
+}
+
 export function installVehicles(deps = {}) {
   const live = deps.liveScene3d;
   const THREE = deps.THREE ?? null;
@@ -209,6 +221,62 @@ export function installVehicles(deps = {}) {
     try { clearTimeout(h.timer); } catch (_) {}
     try { h.camera.release(); h.camera.dispose(); } catch (_) {}
   }
+
+  function teardownSession(why) {
+    if (pilot) stopPiloting(why);
+    endHandoff(why);
+    if (fall) { chutes?.close(localGuid()); stopFall(why); }
+    releaseLandingCam();
+    try {
+      vehicleAudio?.stop({ fadeSec: 0 });
+      vehicleAudio?.dispose();
+    } catch (_) {}
+    try {
+      sh()?.clearVehicleSeat?.();
+    } catch (_) {}
+    try {
+      if (win?.__inputFunnel && typeof win.__inputFunnel.unpoison === "function") {
+        win.__inputFunnel.unpoison();
+      }
+      if (win?.__inputFunnel && typeof win.__inputFunnel.releaseHeld === "function") {
+        win.__inputFunnel.releaseHeld("vehicle");
+      }
+    } catch (_) {}
+    unfadeAvatar();
+  }
+
+  let lastDiscTs = 0;
+  function isSessionLost() {
+    if (!win) return false;
+    if (win.__hbLoggingOff === true || win.__hbLoggedOff === true) return true;
+    const d = win.__lastDisconnect;
+    if (d && Number.isFinite(d.ts) && d.ts !== lastDiscTs) {
+      lastDiscTs = d.ts;
+      return true;
+    }
+    const s = win.__bootState;
+    if (s && s !== "in-world" && s !== "ready") return true;
+    const h = sh();
+    if (caps.handle && h && h !== caps.handle) return true;
+    return false;
+  }
+
+  const canvasEl = deps.canvas ?? (live.renderer?.domElement ?? (win?.document?.querySelector?.("canvas") ?? null));
+  const onContextLost = () => {
+    console.log("[vehicles] webglcontextlost — tearing down vehicle session");
+    teardownSession("context-loss");
+  };
+  const onPageHide = () => { teardownSession("disconnect"); };
+  const onLogoutEvt = () => { teardownSession("logout"); };
+  try {
+    canvasEl?.addEventListener?.("webglcontextlost", onContextLost, false);
+  } catch (_) {}
+  try {
+    win?.addEventListener?.("pagehide", onPageHide, false);
+    win?.addEventListener?.("beforeunload", onPageHide, false);
+    win?.addEventListener?.("hb-logged-out", onLogoutEvt, false);
+    win?.addEventListener?.("hb-disconnected", onPageHide, false);
+  } catch (_) {}
   const hopsOn = boardAnimEnabled(win.location?.search);
   let bailArmedAt = -1e9;
   // one tracked timer for every transient prompt (refusal, bail hints, bomb away, rearmed): cleared on dispose; when it
@@ -595,14 +663,24 @@ export function installVehicles(deps = {}) {
     const mode = p.predictor?.state?.mode;
     const v = p.vehicle;
     const flying = !disposed && p.predictor && v?.params && vehicles.get(v.guid) === v && mode !== FM.MODE.PARKED && mode !== FM.MODE.CRASHED;
-    const inAir = why === "seat released" && flying && !teleportUnderWay();
+    const isTeardown = why === "disconnect" || why === "context-loss" || why === "logout" || why === "dispose";
+    const inAir = !isTeardown && why === "seat released" && flying && !teleportUnderWay();
     try { p.unsub?.(); } catch (_) {}
     try { p.controls.dispose(); } catch (_) {}
     if (!inAir) { try { p.camera?.release(); p.camera?.dispose(); } catch (_) {} }
     try { sh()?.clearVehicleSeat?.(); } catch (_) {}
     try {
-      vehicleAudio?.stop({ fadeSec: inAir ? 0.25 : 0.55 });
+      vehicleAudio?.stop({ fadeSec: (inAir && !isTeardown) ? 0.25 : 0 });
       if (!inAir && why === "seat released") vehicleAudio?.canopy({ open: true, mine: true, fpv: false });
+      if (isTeardown) vehicleAudio?.dispose();
+    } catch (_) {}
+    try {
+      if (win?.__inputFunnel && typeof win.__inputFunnel.unpoison === "function") {
+        win.__inputFunnel.unpoison();
+      }
+      if (win?.__inputFunnel && typeof win.__inputFunnel.releaseHeld === "function") {
+        win.__inputFunnel.releaseHeld("vehicle");
+      }
     } catch (_) {}
     if (!inAir) { try { em()?.setMotion?.(localGuid(), MOTION.READY, MOTION.NONCOMBAT, 1.0); } catch (_) {} }
     // (the stand-in stays hidden under a composite airframe: un-hiding it flashed the retail stand-in for a frame)
@@ -1524,6 +1602,10 @@ export function installVehicles(deps = {}) {
 
   function afterTick(ts, dtMs) {
     if (disposed) return;
+    if (isSessionLost()) {
+      teardownSession("disconnect");
+      return;
+    }
     const dt = Number.isFinite(dtMs) ? (dtMs > 5 ? dtMs / 1000 : dtMs) : 1 / 60;
     frameDt = dt;
     stats.frames++;
@@ -1642,11 +1724,13 @@ export function installVehicles(deps = {}) {
     openChute() { if (fall) { try { sh().vehicleExit(fall.vehicle, 2); } catch (_) {} return true; } return false; },
     dispose() {
       disposed = true;
-      stopPiloting("dispose");
-      endHandoff("dispose");
-      stopFall("dispose");
-      releaseLandingCam();
-      try { win.removeEventListener("keydown", onKeyB, true); } catch (_) {}
+      teardownSession("dispose");
+      try { canvasEl?.removeEventListener?.("webglcontextlost", onContextLost, false); } catch (_) {}
+      try { win?.removeEventListener?.("pagehide", onPageHide, false); } catch (_) {}
+      try { win?.removeEventListener?.("beforeunload", onPageHide, false); } catch (_) {}
+      try { win?.removeEventListener?.("hb-logged-out", onLogoutEvt, false); } catch (_) {}
+      try { win?.removeEventListener?.("hb-disconnected", onPageHide, false); } catch (_) {}
+      try { win?.removeEventListener?.("keydown", onKeyB, true); } catch (_) {}
       try { clearTimeout(promptTimer); } catch (_) {}
       promptTimer = null;
       for (const v of vehicles.values()) forgetVehicle(v);

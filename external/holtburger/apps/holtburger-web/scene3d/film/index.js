@@ -1076,12 +1076,19 @@ export function installFilmMode(deps = {}) {
         cleanFrame.apply({});
         cleanApplied = true;
       }
-      const report = await takePlayer.shoot({
-        fps: o.fps, width: o.width, height: o.height, codec: o.codec, bitrate: o.bitrate, keyIntervalSec: o.keyIntervalSec,
-        mode: o.mode, locked: o.locked === true, includeTable: o.includeTable === true, maxOverrun: o.maxOverrun,
-      });
-      lastReport = report;
-      return { ...report, cleanApplied };
+      try {
+        const report = await takePlayer.shoot({
+          fps: o.fps, width: o.width, height: o.height, codec: o.codec, bitrate: o.bitrate, keyIntervalSec: o.keyIntervalSec,
+          mode: o.mode, locked: o.locked === true, includeTable: o.includeTable === true, maxOverrun: o.maxOverrun,
+        });
+        lastReport = report;
+        return { ...report, cleanApplied };
+      } catch (err) {
+        if (cleanApplied) {
+          try { cleanFrame.restore(); } catch (_) {}
+        }
+        throw err;
+      }
     });
   }
 
@@ -1158,6 +1165,13 @@ export function installFilmMode(deps = {}) {
 
   function dispose() {
     takePlayer.abort();
+    if (typeof takePlayer.dispose === "function") {
+      try { takePlayer.dispose(); } catch (_) {}
+    }
+    const rec = takePlayer.currentRecorder();
+    if (rec && typeof rec.dispose === "function") {
+      try { rec.dispose(); } catch (_) {}
+    }
     try {
       if (lensOverlay && typeof lensOverlay.dispose === "function" && lensOverlay !== d.lensOverlay) lensOverlay.dispose();
     } catch (_) {
@@ -1212,7 +1226,8 @@ export function installFilmMode(deps = {}) {
     // The next prepare applies its take's whole look again.
     release: safeSync(() => {
       if (cameraBusy()) throw new FilmError("release: a take is running", "FILM_BUSY");
-      return { ...cameraOwner.release(), owned: cameraOwner.owned, look: look.restore() };
+      const cleanResult = cleanFrame.active ? cleanFrame.restore() : null;
+      return { ...cameraOwner.release(), owned: cameraOwner.owned, look: look.restore(), clean: cleanResult };
     }),
     pose: safeSync(pose),
     world: {

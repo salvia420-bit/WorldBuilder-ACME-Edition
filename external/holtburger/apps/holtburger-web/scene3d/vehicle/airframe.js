@@ -172,10 +172,14 @@ export async function decodeModel(live, THREE, did, preAssembled = null) {
           partList = bpg.parts.map((pt) => ({
             hinge: pt.hinge || null,
             groups: (pt.groups || []).map((grp) => ({
-              geometry:
-                grp.geometry?.index && typeof grp.geometry.toNonIndexed === "function"
-                  ? grp.geometry.toNonIndexed()
-                  : grp.geometry,
+              geometry: (() => {
+                if (grp.geometry?.index && typeof grp.geometry.toNonIndexed === "function") {
+                  const nonIndexed = grp.geometry.toNonIndexed();
+                  try { grp.geometry.dispose(); } catch (_) {}
+                  return nonIndexed;
+                }
+                return grp.geometry;
+              })(),
               surfaceDid: Number(grp.surfaceDid ?? 0) >>> 0,
               doubleSided: !!grp.doubleSided,
             })),
@@ -185,10 +189,14 @@ export async function decodeModel(live, THREE, did, preAssembled = null) {
             {
               hinge: null,
               groups: bpg.map((grp) => ({
-                geometry:
-                  grp.geometry?.index && typeof grp.geometry.toNonIndexed === "function"
-                    ? grp.geometry.toNonIndexed()
-                    : grp.geometry,
+                geometry: (() => {
+                  if (grp.geometry?.index && typeof grp.geometry.toNonIndexed === "function") {
+                    const nonIndexed = grp.geometry.toNonIndexed();
+                    try { grp.geometry.dispose(); } catch (_) {}
+                    return nonIndexed;
+                  }
+                  return grp.geometry;
+                })(),
                 surfaceDid: Number(grp.surfaceDid ?? 0) >>> 0,
                 doubleSided: !!grp.doubleSided,
               })),
@@ -282,7 +290,10 @@ export async function decodeModel(live, THREE, did, preAssembled = null) {
         const sid = Number(grp.surfaceDid ?? 0) >>> 0;
         // eslint-disable-next-line no-await-in-loop
         const material = _getCachedMat(mc, sid) || (await mc.get(sid, urgentFetchPixels));
-        if (!grp.geometry || !material) continue;
+        if (!grp.geometry || !material) {
+          if (grp.geometry) { try { grp.geometry.dispose(); } catch (_) {} }
+          continue;
+        }
         if (h) grp.geometry.applyMatrix4(m);
         out.push({ geometry: grp.geometry, material, doubleSided: !!grp.doubleSided });
       }
@@ -1589,11 +1600,12 @@ export function buildProceduralHellcatTemplate(THREE, profile, live = null) {
   const ownedGeometries = [];
   const ownedMaterials = [];
   const ownedTextures = [];
-  const trackGeom = (g) => { ownedGeometries.push(g); return g; };
-  const trackMat = (m) => { ownedMaterials.push(m); return m; };
-  const trackTex = (t) => { ownedTextures.push(t); return t; };
+  const trackGeom = (g) => { if (g) ownedGeometries.push(g); return g; };
+  const trackMat = (m) => { if (m) ownedMaterials.push(m); return m; };
+  const trackTex = (t) => { if (t) ownedTextures.push(t); return t; };
 
-  // Shared materials (4 materials total across the entire aircraft!)
+  try {
+    // Shared materials (4 materials total across the entire aircraft!)
   const matAirframe = trackMat(new THREE.MeshStandardMaterial({
     vertexColors: true,
     roughness: 0.44,
@@ -1718,31 +1730,37 @@ export function buildProceduralHellcatTemplate(THREE, profile, live = null) {
     } catch (_) { /* best effort */ }
   }
 
-  return {
-    procedural: true,
-    buckets,
-    hub: [...F6F_HUB],
-    pivotY: F6F_MAIN_Y,
-    meshCount,
-    materials: { matAirframe, matGlazing, matPropBlur, matAdditive },
-    geometries: {
-      static: geomStatic,
-      windscreen: geomWindscreen,
-      canopy: geomCanopy,
-      propSolid: geomPropSolid,
-      propBlur: geomPropBlur,
-      gearL: geomGearL,
-      gearR: geomGearR,
-      gearTail: geomGearTail,
-      surfaces: geomSurfaces,
-      fxTemplate: geomFxTemplate,
-      ordnance: ordnanceGeoms,
-    },
-    fxSpec,
-    ownedGeometries,
-    ownedMaterials,
-    ownedTextures,
-  };
+    return {
+      procedural: true,
+      buckets,
+      hub: [...F6F_HUB],
+      pivotY: F6F_MAIN_Y,
+      meshCount,
+      materials: { matAirframe, matGlazing, matPropBlur, matAdditive },
+      geometries: {
+        static: geomStatic,
+        windscreen: geomWindscreen,
+        canopy: geomCanopy,
+        propSolid: geomPropSolid,
+        propBlur: geomPropBlur,
+        gearL: geomGearL,
+        gearR: geomGearR,
+        gearTail: geomGearTail,
+        surfaces: geomSurfaces,
+        fxTemplate: geomFxTemplate,
+        ordnance: ordnanceGeoms,
+      },
+      fxSpec,
+      ownedGeometries,
+      ownedMaterials,
+      ownedTextures,
+    };
+  } catch (err) {
+    for (const g of ownedGeometries) { try { g.dispose?.(); } catch (_) {} }
+    for (const m of ownedMaterials) { try { m.dispose?.(); } catch (_) {} }
+    for (const t of ownedTextures) { try { t.dispose?.(); } catch (_) {} }
+    throw err;
+  }
 }
 
 function updateProceduralExhaustAndStrobe(inst, pose, thr, boost, dt) {
@@ -2250,7 +2268,11 @@ export function createAirframes(deps = {}) {
       blurMesh.material.opacity = inst.propBlurOpacity;
       blurMesh.visible = inst.propBlurOpacity > 0.005;
       const hiSpin = clamp(inst.propBlurOpacity / 0.40, 0, 1);
-      solidMesh.material.transparent = hiSpin > 0.03;
+      const nextTransparent = hiSpin > 0.03;
+      if (solidMesh.material.transparent !== nextTransparent) {
+        solidMesh.material.transparent = nextTransparent;
+        solidMesh.material.needsUpdate = true;
+      }
       solidMesh.material.opacity = 1 - 0.65 * hiSpin;
 
       // 4. Articulated Control Surfaces & Carrier Arrestor Hook

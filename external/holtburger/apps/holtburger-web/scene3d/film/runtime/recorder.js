@@ -622,6 +622,18 @@ export function createRecorder(opts = {}) {
     return st.stopPromise;
   }
 
+  function releaseQueue() {
+    for (let i = 0; i < st.queue.length; i++) {
+      const item = st.queue[i];
+      if (item) {
+        item.bytes = null;
+        item.b64 = null;
+      }
+    }
+    st.queue.length = 0;
+    c.bufferedBytes = 0;
+  }
+
   function abort(reason) {
     if (!finished()) {
       if (reason !== undefined) st.errors.push(`aborted: ${msgOf(reason)}`);
@@ -630,6 +642,13 @@ export function createRecorder(opts = {}) {
     }
     // Also after a grab / output failure: fail() leaves the (hardware) encoder configured.
     closeEncoder();
+    releaseQueue();
+    return stats();
+  }
+
+  function dispose() {
+    abort("disposed");
+    releaseQueue();
     return stats();
   }
 
@@ -667,6 +686,7 @@ export function createRecorder(opts = {}) {
     drain,
     stop,
     abort,
+    dispose,
     stats,
     get state() {
       return st.state;

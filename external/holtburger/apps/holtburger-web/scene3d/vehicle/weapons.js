@@ -228,10 +228,20 @@ export function createWeaponsFx(deps = {}) {
     } catch (_) { /* best effort */ }
   }
 
+  let disposed = false;
+
   function loadQuarrel() {
     if (quarrelLoad) return;
     quarrelLoad = decodeModel(live, THREE, QUARREL_SETUP).then((pieces) => {
-      if (!root || !pieces.length) { stats.model = "none"; return; }
+      if (!pieces || !pieces.length) {
+        stats.model = "none";
+        return;
+      }
+      if (!root || disposed) {
+        for (const p of pieces) { try { p.geometry?.dispose(); } catch (_) {} }
+        stats.model = "none";
+        return;
+      }
       quarrelMeshes = pieces.map((p) => {
         const im = new THREE.InstancedMesh(p.geometry, p.material, MAX_QUARRELS);
         im.count = 0;
@@ -246,13 +256,28 @@ export function createWeaponsFx(deps = {}) {
         const grp = new THREE.Group();
         for (const im of quarrelMeshes) grp.add(new THREE.InstancedMesh(im.geometry, im.material, 1));
         prewarmSubtree(live, grp).then(() => {
+          if (disposed) {
+            for (const im of quarrelMeshes || []) { im.parent?.remove(im); im.geometry?.dispose(); im.dispose?.(); }
+            quarrelMeshes = null;
+            return;
+          }
           for (const im of quarrelMeshes || []) im.visible = true;
           stats.model = "ready";
         }).catch(() => {
+          if (disposed) {
+            for (const im of quarrelMeshes || []) { im.parent?.remove(im); im.geometry?.dispose(); im.dispose?.(); }
+            quarrelMeshes = null;
+            return;
+          }
           for (const im of quarrelMeshes || []) im.visible = true;
           stats.model = "ready";
         });
       } catch (_) {
+        if (disposed) {
+          for (const im of quarrelMeshes || []) { im.parent?.remove(im); im.geometry?.dispose(); im.dispose?.(); }
+          quarrelMeshes = null;
+          return;
+        }
         for (const im of quarrelMeshes) im.visible = true;
         stats.model = "ready";
       }
@@ -584,6 +609,7 @@ export function createWeaponsFx(deps = {}) {
     /** Bench / debug: an explosion now at an AC world point. */
     debugExplode(at, lb) { explode(at, lb); },
     dispose() {
+      disposed = true;
       for (const b of bombs) removeBomb(b);
       bombs.length = 0;
       for (const e of explosions) disposeExplosion(e);
@@ -594,7 +620,7 @@ export function createWeaponsFx(deps = {}) {
       flashPool.length = 0;
       quarrels.length = 0;
       try {
-        for (const im of quarrelMeshes || []) { im.parent?.remove(im); im.geometry.dispose(); im.dispose?.(); }
+        for (const im of quarrelMeshes || []) { im.parent?.remove(im); im.geometry?.dispose(); im.dispose?.(); }
         root?.parent?.remove(root);
         streakGeom?.dispose(); streakMat?.dispose();
         sphereGeom?.dispose(); ringGeom?.dispose();

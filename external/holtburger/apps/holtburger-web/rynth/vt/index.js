@@ -819,7 +819,7 @@ export async function createVtLayer(bot, { aux = null, win = globalThis, storage
     });
 
     // ── (12) item buffs (D38): the Items tab projected onto buff.setItemBuffs ─
-    const ib = { buff: undefined, sig: null, wrote: false, knownSig: null, loaded: false };
+    const ib = { buff: undefined, sig: null, wrote: false, knownSig: null, loaded: false, invSig: null };
     function projectItemBuffs(force = false) {
       if (disposed) return;
       const buff = bot.buff || null;
@@ -1085,8 +1085,13 @@ export async function createVtLayer(bot, { aux = null, win = globalThis, storage
       // or a changed spellbook re-projects the item buffs.
       const entries = safe(() => items.list().length, 0);
       if ((bot.buff || null) !== sc.buff || (bot.vitals || null) !== sc.vitals) projectSkillCap();
+      const invSig = entries ? safe(() => {
+        const inv = typeof callHost === "function" ? (callHost("TryGetPlayerInventory") || []) : [];
+        return inv.map((x) => Number(x?.guid ?? x) >>> 0).filter(Boolean).sort((a, b) => a - b).join(",");
+      }, null) : null;
       if (bot.buff !== ib.buff) projectItemBuffs(true);
-      else if (entries && (!ib.loaded ? combatSpellsLoaded() === true : knownSig((callHost("TryGetKnownSpells") || []).map((x) => Number(x) >>> 0)) !== ib.knownSig)) {
+      else if (entries && (!ib.loaded ? combatSpellsLoaded() === true : knownSig((callHost("TryGetKnownSpells") || []).map((x) => Number(x) >>> 0)) !== ib.knownSig || (invSig !== null && invSig !== ib.invSig))) {
+        ib.invSig = invSig;
         projectItemBuffs(true);
       }
       // A finished wand restore lets an inactive planner detach.
