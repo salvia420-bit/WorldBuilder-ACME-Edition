@@ -240,6 +240,29 @@ function ensureStyles() {
   document.head.appendChild(s);
 }
 
+function lookupItemName(guid) {
+  const g = guid >>> 0;
+  if (!g) return "item";
+  try {
+    const handle = (typeof window !== "undefined") ? (window.__sessionHandle ?? window.__pluginClient?._handle ?? null) : null;
+    const n = handle?.objectName?.(g);
+    if (typeof n === "string" && n.trim().length) return n.trim();
+  } catch (_) {}
+  try {
+    const handle = (typeof window !== "undefined") ? (window.__sessionHandle ?? null) : null;
+    if (typeof handle?.playerInventory === "function") {
+      const inv = handle.playerInventory();
+      if (Array.isArray(inv)) {
+        const item = inv.find((it) => (it?.guid >>> 0) === g);
+        const name = item?.name;
+        for (const it of inv) { try { it?.free?.(); } catch (_) {} }
+        if (typeof name === "string" && name.trim().length) return name.trim();
+      }
+    }
+  } catch (_) {}
+  return `Item 0x${g.toString(16).toUpperCase()}`;
+}
+
 function makeConfirmPopup() {
   const overlay = document.createElement("div");
   overlay.id = OVERLAY_ID;
@@ -276,7 +299,7 @@ function makeConfirmPopup() {
   row.appendChild(okBtn);
   overlay.appendChild(row);
 
-  return { overlay, okBtn, cancelBtn };
+  return { overlay, body, okBtn, cancelBtn };
 }
 
 // ─── Mount ───────────────────────────────────────────────────────
@@ -321,7 +344,14 @@ export function mount(ctx) {
 
   function openPopup(sourceGuid, targetGuid) {
     const parts = maybeMakePopup();
-    pending = { sourceGuid: sourceGuid >>> 0, targetGuid: targetGuid >>> 0 };
+    const src = sourceGuid >>> 0;
+    const tgt = targetGuid >>> 0;
+    pending = { sourceGuid: src, targetGuid: tgt };
+    const srcName = lookupItemName(src);
+    const tgtName = lookupItemName(tgt);
+    if (parts.body) {
+      parts.body.textContent = `Apply ${srcName} to ${tgtName}?`;
+    }
     parts.overlay.setAttribute("data-open", "1");
   }
 

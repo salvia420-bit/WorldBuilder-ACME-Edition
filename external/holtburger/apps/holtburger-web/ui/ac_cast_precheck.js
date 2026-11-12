@@ -1,23 +1,26 @@
 // =============================================================================
-// WS14 (2026-07-12) — client-side pre-cast checks (?castPrecheck, default-OFF)
+// WS14 (2026-07-12) — client-side pre-cast checks (?castPrecheck, default-ON: "components")
 // =============================================================================
 //
 // Retail's ClientMagicSystem::CastSpell (acclient.c:404671-404783) checked the
 // spell's COMPONENTS client-side BEFORE the send (acclient.c:404710
 // ComponentIsOwned → 404719 "You do not have all of this spell's components").
 // It never checked mana client-side — mana (0x401) was server-only. So:
-//   ?castPrecheck=components  → retail-authentic component-ownership pre-check
-//   ?castPrecheck=on          → components + a NON-retail mana pre-check
-//   ?castPrecheck=off (default)→ send is authoritative; server rejects; the
-//                                transient-chat toast renders (unchanged).
+//   ?castPrecheck=components (default) → retail-authentic component-ownership pre-check
+//   ?castPrecheck=on                   → components + a NON-retail mana pre-check
+//   ?castPrecheck=off                  → send is authoritative; server rejects; the
+//                                        transient-chat toast renders (unchanged).
 //
 // FAIL-OPEN is load-bearing (foundation §4.8, packet R5): if any datum needed
 // to run a check is missing (spell record not loaded, component table not
 // fetched, inventory unavailable), the check returns null → the cast SENDS.
 // We never block a cast on missing data — only on a POSITIVELY-determined miss.
-//
-// Strict opt-in per the flag footgun: only the exact strings "components" /
-// "on" enable; the param being absent, "off", or anything else = off.
+
+import {
+  areSpellComponentsRequired,
+  getEffectiveSpellFormula,
+  getAccountName,
+} from "./ac_spell_formula.js";
 
 // Retail pre-check strings (the CLIENT strings, distinct from the server-reject
 // 0x400/0x401 strings that already toast via the transient-chat path §1.4).
@@ -38,15 +41,15 @@ export function parsePrecheckMode(raw) {
   return "off";
 }
 
-/** Read ?castPrecheck from the current URL. Returns "off" when unavailable. */
+/** Read ?castPrecheck from the current URL. Defaults to "components" unless explicitly set otherwise. */
 export function castPrecheckMode() {
   try {
-    if (typeof window === "undefined" || !window.location) return "off";
-    return parsePrecheckMode(
-      new URLSearchParams(window.location.search).get("castPrecheck"),
-    );
+    if (typeof window === "undefined" || !window.location) return "components";
+    const params = new URLSearchParams(window.location.search);
+    if (!params.has("castPrecheck")) return "components";
+    return parsePrecheckMode(params.get("castPrecheck"));
   } catch (_) {
-    return "off";
+    return "components";
   }
 }
 
@@ -150,28 +153,64 @@ export function preCheckSpell(spellId, mode) {
 
   // ── components (retail-authentic; both "components" and "on") ──────────
   {
-    const compIds = _recField(rec, "components");
-    if (Array.isArray(compIds) && compIds.length > 0) {
-      if (_componentTable === null) {
-        _kickComponentTableLoad(); // fail-open this cast; ready for the next
-      } else {
-        const requiredNames = compIds
-          .map((id) => _componentTable[String(id)]?.name)
-          .filter((n) => typeof n === "string" && n.length > 0);
-        let ownedLower = null;
-        try {
-          const handle = (typeof window !== "undefined") ? window.__sessionHandle : null;
-          const inv = (typeof handle?.playerInventory === "function") ? handle.playerInventory() : null;
-          if (Array.isArray(inv)) {
-            ownedLower = new Set();
-            for (const it of inv) {
-              const nm = (it && typeof it.name === "string") ? it.name.toLowerCase().trim() : "";
-              if (nm) ownedLower.add(nm);
+    const handle = (typeof window !== "undefined") ? window.__sessionHandle : null;
+    if (areSpellComponentsRequired(handle)) {
+      const baseCompIds = _recField(rec, "components");
+      if (Array.isArray(baseCompIds) && baseCompIds.length > 0) {
+        if (_componentTable === null) {
+          _kickComponentTableLoad(); // fail-open this cast; ready for the next
+        } else {
+          let ownedLower = null;
+          let ownedWcids = null;
+          let inv = null;
+          try {
+            inv = (typeof handle?.playerInventory === "function") ? handle.playerInventory() : null;
+            if (Array.isArray(inv)) {
+              ownedLower = new Set();
+              ownedWcids = new Set();
+              for (const it of inv) {
+                try {
+                  const nm = (it && typeof it.name === "string") ? it.name.toLowerCase().trim() : "";
+                  if (nm) ownedLower.add(nm);
+                  const w = (it?.wcid >>> 0) || 0;
+                  if (w) ownedWcids.add(w);
+                } finally {
+                  try { it?.free?.(); } catch (_) {}
+                }
+              }
+            }
+          } catch (_) {
+            ownedLower = null;
+            ownedWcids = null;
+          } finally {
+            if (Array.isArray(inv)) {
+              for (const it of inv) {
+                try { it?.free?.(); } catch (_) {}
+              }
             }
           }
-        } catch (_) { ownedLower = null; }
-        if (ownedLower && evalComponentPrecheck(requiredNames, ownedLower)) {
-          return MSG_MISSING_COMPONENTS;
+
+          // Calculate effective formula (Foci or Personalized)
+          const school = _recField(rec, "school");
+          const power = _recField(rec, "power");
+          const level = _recField(rec, "roughLevel") || _recField(rec, "level");
+          const formulaVersion = _recField(rec, "formulaVersion");
+          const effectiveCompIds = getEffectiveSpellFormula({
+            spell: { components: baseCompIds, school, power, level, formulaVersion },
+            accountName: getAccountName(),
+            inventoryWcids: ownedWcids,
+          });
+          const compIds = (Array.isArray(effectiveCompIds) && effectiveCompIds.length > 0)
+            ? effectiveCompIds
+            : baseCompIds;
+
+          const requiredNames = compIds
+            .map((id) => _componentTable[String(id)]?.name)
+            .filter((n) => typeof n === "string" && n.length > 0);
+
+          if (ownedLower && evalComponentPrecheck(requiredNames, ownedLower)) {
+            return MSG_MISSING_COMPONENTS;
+          }
         }
       }
     }

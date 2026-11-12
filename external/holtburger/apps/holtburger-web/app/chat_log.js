@@ -32,6 +32,7 @@ export const CHAT_CATEGORY = Object.freeze({
   // heard patron/vassal/co-vassal/AB lines), SocialSend (11, your own
   // `You say to your Vassals, "…"`).
   TELL_SEND: 24, SOCIAL: 25, SOCIAL_SEND: 26,
+  COMBAT_SELF: 27,
 });
 
 // ── Retail chat colours ───────────────────────────────────────────────────
@@ -70,6 +71,7 @@ const CATEGORY_COLOR = Object.freeze({
   [C.CHANNEL]: RGB.pink,
   [C.EMOTE]: RGB.grey,
   [C.COMBAT]: RGB.darkRed,
+  [C.COMBAT_SELF]: RGB.lightRed,
   [C.DEATH]: RGB.darkRed,
   [C.MAGIC]: RGB.lightBlue,
   [C.ADVANCEMENT]: RGB.cyan,

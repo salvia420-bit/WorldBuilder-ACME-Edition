@@ -202,15 +202,26 @@ function _ensureComponentCatalog() {
  *
  * @returns {Record<string, number>}
  */
+export function _setComponentCatalogForTest(catalog) {
+  _componentCatalog = catalog || {};
+  _componentNameToId = new Map();
+  for (const [id, rec] of Object.entries(_componentCatalog)) {
+    if (rec && typeof rec.name === "string") {
+      _componentNameToId.set(rec.name, id);
+    }
+  }
+}
+
 export function getComponentTracker() {
   const catalog = _componentCatalog ?? _ensureComponentCatalog();
   if (!catalog || !_componentNameToId) return {};
   const out = {};
+  let items = null;
   try {
     const handle = (typeof window !== "undefined") ? window.__sessionHandle : null;
     const inv = (typeof handle?.playerInventory === "function") ? handle.playerInventory() : null;
     if (!inv) return out;
-    const items = Array.isArray(inv) ? inv : Array.from(inv);
+    items = Array.isArray(inv) ? inv : Array.from(inv);
     for (const it of items) {
       if (typeof it?.name !== "string") continue;
       const id = _componentNameToId.get(it.name);
@@ -218,7 +229,14 @@ export function getComponentTracker() {
       const stack = (it.stackSize >>> 0) || 1;
       out[id] = (out[id] || 0) + stack;
     }
-  } catch (_) {}
+  } catch (_) {
+  } finally {
+    if (items) {
+      for (const it of items) {
+        try { it?.free?.(); } catch (_) {}
+      }
+    }
+  }
   return out;
 }
 

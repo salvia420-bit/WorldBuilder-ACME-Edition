@@ -47,6 +47,7 @@ import { resolveLocalBinding, matchesBinding, LOCAL_ACTION_IDS } from "../ui/key
 import { getInputFunnel, inputFunnelV2On } from "../ui/input-funnel.js";
 import { getIconImmediate, fetchIconDataUrl, fetchSpellIconDataUrl } from "../ui/ac_icon_cache.js";
 import { hudPoint, hudViewport } from "../ui/hud_scale.js";
+import { getEffectiveSpellFormula, getAccountName } from "../ui/ac_spell_formula.js";
 import {
   castNeedsNoSelection,
   catalogSelfTargetedOnly,
@@ -202,6 +203,7 @@ function spellRecordFromWasm(spellId) {
     desc:        raw.description,
     duration:    raw.duration ?? 0,
     components:  Array.isArray(raw.components) ? raw.components : [],
+    formulaVersion: raw.formulaVersion ?? 0,
     // New Wave F.1 fields available to consumers that want them:
     _waveF1:     true,
     bitfield:    raw.bitfield,
@@ -909,9 +911,34 @@ function showSpellDetail(meta, ev, componentNames) {
     card.appendChild(desc);
   }
   if (Array.isArray(meta.components) && meta.components.length > 0) {
+    let ownedWcids = null;
+    let rawInv = null;
+    try {
+      rawInv = window.__sessionHandle?.playerInventory?.() ?? null;
+      if (Array.isArray(rawInv)) {
+        ownedWcids = new Set();
+        for (const it of rawInv) {
+          const w = (it?.wcid >>> 0) || 0;
+          if (w) ownedWcids.add(w);
+        }
+      }
+    } catch (_) {}
+    finally {
+      if (Array.isArray(rawInv)) {
+        for (const it of rawInv) {
+          try { it?.free?.(); } catch (_) {}
+        }
+      }
+    }
+    const effComps = getEffectiveSpellFormula({
+      spell: meta,
+      accountName: getAccountName(),
+      inventoryWcids: ownedWcids,
+    });
+    const compsToRender = (Array.isArray(effComps) && effComps.length > 0) ? effComps : meta.components;
     const comps = document.createElement("div");
     comps.className = "hb-sb-detail-comps";
-    const names = meta.components.map((c) => resolveComponentName(c, componentNames));
+    const names = compsToRender.map((c) => resolveComponentName(c, componentNames));
     comps.textContent = `Components: ${names.join(", ")}`;
     card.appendChild(comps);
   }
@@ -1331,10 +1358,21 @@ function doMount(parentEl, ctx) {
       if (v && typeof v.name === "string") nameSet.add(v.name);
     }
     const counts = new Map();
-    for (const it of items) {
-      const itName = it?.name;
-      if (typeof itName !== "string" || !nameSet.has(itName)) continue;
-      counts.set(itName, (counts.get(itName) || 0) + ((it?.stackSize >>> 0) || 1));
+    try {
+      for (const it of items) {
+        try {
+          const itName = it?.name;
+          if (typeof itName === "string" && nameSet.has(itName)) {
+            counts.set(itName, (counts.get(itName) || 0) + ((it?.stackSize >>> 0) || 1));
+          }
+        } finally {
+          try { it?.free?.(); } catch (_) {}
+        }
+      }
+    } finally {
+      for (const it of items) {
+        try { it?.free?.(); } catch (_) {}
+      }
     }
     return [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
   }

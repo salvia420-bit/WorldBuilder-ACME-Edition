@@ -1543,9 +1543,10 @@ function installSpellStrip() {
   // on every show (and each visibility tick) so a taller toolbar or another
   // HUD scale never overlaps it. A saved (dragged) position is left alone,
   // except that one stranded off-screen snaps back to the dock.
-  function dockStrip() {
+  function dockStrip(forceBoundaryCheck = false) {
     if (root.style.display === "none") return;
     if (userPlaced()) {
+      if (!forceBoundaryCheck) return;
       try {
         const r = root.getBoundingClientRect();
         if (!r.width || !r.height) return;
@@ -1561,8 +1562,8 @@ function installSpellStrip() {
     root.style.bottom = `${spellStripDockBottom(root)}px`;
   }
   try {
-    window.addEventListener("resize", () => dockStrip());
-    document.addEventListener("hb-hud-scale-changed", () => dockStrip());
+    window.addEventListener("resize", () => dockStrip(true));
+    document.addEventListener("hb-hud-scale-changed", () => dockStrip(true));
   } catch (_) {}
 
   loadCatalog().then((c) => { catalog = c; render(); }).catch(() => {});
@@ -1727,10 +1728,12 @@ function installSpellStrip() {
       if (on) {
         render();
         setName(selectionName());
-        dockStrip();
+        dockStrip(true);
       }
     } else if (on && (++dockTick % 2) === 0) {
-      dockStrip(); // ~1 Hz: track the toolbar below growing / shrinking
+      if (!userPlaced()) {
+        dockStrip(false); // ~1 Hz: track the toolbar below growing / shrinking (docked only, 0 reflow when user-placed)
+      }
     }
     if (on) {
       const a = armedId();
@@ -1890,11 +1893,18 @@ function renderStanceHeader(bodyEl, client) {
       const handle = window.__sessionHandle;
       let targetMode = 1; // NonCombat (entering Peace).
       if (!inCombat) {
-        let inv = [];
+        let inv = null;
         try {
           inv = typeof handle?.playerInventory === "function" ? handle.playerInventory() : [];
-        } catch (_) {}
-        targetMode = suggestedCombatModeFromInventory(inv);
+          targetMode = suggestedCombatModeFromInventory(inv);
+        } catch (_) {
+        } finally {
+          if (Array.isArray(inv)) {
+            for (const it of inv) {
+              try { it?.free?.(); } catch (_) {}
+            }
+          }
+        }
       }
       const send = () => {
         if (typeof handle?.setCombatMode === "function") {
@@ -2557,11 +2567,19 @@ function renderSpellPicker(bodyEl, state) {
     // Caster wielded? Recomputed every render so equip/unequip transitions
     // refresh the tooltip suffix. EquipMask Held|TwoHanded = 0x03000000.
     let casterWielded = false;
+    let inv = null;
     try {
       const handle = window.__sessionHandle ?? null;
-      const inv = typeof handle?.playerInventory === "function" ? handle.playerInventory() : [];
+      inv = typeof handle?.playerInventory === "function" ? handle.playerInventory() : [];
       casterWielded = Array.isArray(inv) && inv.some((it) => ((it.equipMask >>> 0) & 0x03000000) !== 0);
-    } catch (_) {}
+    } catch (_) {
+    } finally {
+      if (Array.isArray(inv)) {
+        for (const it of inv) {
+          try { it?.free?.(); } catch (_) {}
+        }
+      }
+    }
     // Mana Conversion trained/specialized? Drives the tooltip's cost
     // note: ACE only rolls the cost reduction when the skill is at
     // least Trained (Creature_Magic.cs CalculateManaUsage — untrained

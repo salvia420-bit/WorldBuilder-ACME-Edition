@@ -156,12 +156,13 @@ function _resolveEquippedWeaponDamageMod(weapon, sessionHandle) {
   // 2. Scan `sessionHandle.playerInventory()` for the local player's
   //    primary weapon. The accessor is the same wasm export
   //    `scene3d/entities.js#getEquippedWeapon` reads.
+  let inventory = null;
   try {
     const handle =
       sessionHandle
       ?? ((typeof window !== "undefined") ? window.__sessionHandle : null);
     if (!handle || typeof handle.playerInventory !== "function") return 1.0;
-    const inventory = handle.playerInventory();
+    inventory = handle.playerInventory();
     if (!Array.isArray(inventory) || inventory.length === 0) return 1.0;
     for (const item of inventory) {
       const mask = (item?.equipMask ?? 0) >>> 0;
@@ -171,6 +172,12 @@ function _resolveEquippedWeaponDamageMod(weapon, sessionHandle) {
     }
   } catch {
     // Defensive: any wasm-bridge surprise falls back to neutral.
+  } finally {
+    if (Array.isArray(inventory)) {
+      for (const item of inventory) {
+        try { item?.free?.(); } catch (_) {}
+      }
+    }
   }
 
   // 3. No weapon, no session, no PropertyFloat 63 yet — neutral.

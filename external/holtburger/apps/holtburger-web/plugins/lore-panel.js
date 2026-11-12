@@ -103,7 +103,26 @@ function getHandle() {
 function fetchInventory() {
   const handle = getHandle();
   if (typeof handle?.playerInventory !== "function") return [];
-  try { return handle.playerInventory() ?? []; } catch (_) { return []; }
+  let raw = null;
+  try {
+    raw = handle.playerInventory() ?? [];
+    if (!Array.isArray(raw)) return [];
+    return raw.map((it) => ({
+      guid: (it?.guid ?? 0) >>> 0,
+      wcid: (it?.wcid ?? 0) >>> 0,
+      itemType: (it?.itemType ?? 0) >>> 0,
+      name: it?.name || "",
+      icon: (it?.icon ?? 0) >>> 0,
+    }));
+  } catch (_) {
+    return [];
+  } finally {
+    if (Array.isArray(raw)) {
+      for (const it of raw) {
+        try { it?.free?.(); } catch (_) {}
+      }
+    }
+  }
 }
 
 let stylesInjected = false;

@@ -123,7 +123,11 @@ pub(super) async fn handle(ctx: &mut LoopCtx, message: GameMessage) -> LoopFlow 
             // only when its type is not globally squelched.
             let (_, globals_mask) = squelch_inputs(latest_squelch, 0);
             if textbox_visible(data.chat_type, globals_mask) {
-                let category = chat_category_for_message_type(data.chat_type);
+                let category = if data.chat_type == 0x16 {
+                    27
+                } else {
+                    chat_category_for_message_type(data.chat_type)
+                };
                 queued_events.borrow_mut().push(ClientEvent {
                     kind: CLIENT_EVENT_KIND_CHAT_RECEIVED,
                     string_payload: Some(data.message.clone()),

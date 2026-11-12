@@ -288,8 +288,8 @@ pub(super) async fn handle(ctx: &mut LoopCtx, message: GameMessage) -> LoopFlow 
                     queued_events.borrow_mut().push(ClientEvent {
                         kind: CLIENT_EVENT_KIND_CHAT_RECEIVED,
                         string_payload: Some(line),
-                        u32_payload: Some(0),
-                        u32_payload_2: Some(CHAT_CATEGORY_COMBAT),
+                        u32_payload: Some(0x16),
+                        u32_payload_2: Some(27),
                         f32_payload: None,
                     });
                     queued_events.borrow_mut().push(ClientEvent {
@@ -338,7 +338,7 @@ pub(super) async fn handle(ctx: &mut LoopCtx, message: GameMessage) -> LoopFlow 
                     queued_events.borrow_mut().push(ClientEvent {
                         kind: CLIENT_EVENT_KIND_CHAT_RECEIVED,
                         string_payload: Some(line),
-                        u32_payload: Some(0),
+                        u32_payload: Some(0x15),
                         u32_payload_2: Some(CHAT_CATEGORY_COMBAT),
                         f32_payload: None,
                     });
@@ -375,8 +375,8 @@ pub(super) async fn handle(ctx: &mut LoopCtx, message: GameMessage) -> LoopFlow 
                                 &data.defender_name,
                             ),
                         ),
-                        u32_payload: Some(0),
-                        u32_payload_2: Some(CHAT_CATEGORY_COMBAT),
+                        u32_payload: Some(0x16),
+                        u32_payload_2: Some(27),
                         f32_payload: None,
                     });
                     queued_events.borrow_mut().push(ClientEvent {
@@ -405,7 +405,7 @@ pub(super) async fn handle(ctx: &mut LoopCtx, message: GameMessage) -> LoopFlow 
                                 &data.attacker_name,
                             ),
                         ),
-                        u32_payload: Some(0),
+                        u32_payload: Some(0x15),
                         u32_payload_2: Some(CHAT_CATEGORY_COMBAT),
                         f32_payload: None,
                     });

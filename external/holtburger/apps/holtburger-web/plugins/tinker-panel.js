@@ -29,6 +29,9 @@ import {
   createKitWindow, COMMERCE_WINDOW_ID, KIT_COLOR, kitButton, fillSlotIcon,
   wireDropTarget, inventoryRows, objectDisplayName, objectIconId,
 } from "./commerce_window.js";
+import {
+  calculateTinkerOdds, readTinkeredCount, readWorkmanship, readMaterialType, getRelevantTinkerSkill,
+} from "../ui/ac_tinker_calc.js";
 
 const OVERLAY_ID = "hb-tinker-panel";
 const STYLE_ID = "hb-tinker-panel-style";
@@ -41,6 +44,7 @@ const state = {
   client: null,
   unsubInventory: null,
   pendingFire: false,
+  pendingTimer: null,
   warnedMissingSend: false,
 };
 
@@ -72,6 +76,10 @@ function ensureStyles() {
     #${OVERLAY_ID} .htk-arrow {
       align-self: center; margin-top: -10px;
       color: var(--hbk-gold); font-size: 20px; text-align: center; text-shadow: 0 1px 0 #000;
+    }
+    #${OVERLAY_ID} .htk-odds {
+      padding: 0 10px 4px; min-height: 16px; text-align: center;
+      color: var(--hbk-gold, #c4a000); font-size: 11px; font-weight: bold;
     }
     #${OVERLAY_ID} .htk-status { padding: 2px 10px 6px; min-height: 30px; color: var(--hbk-text-dim); font-size: 11px; line-height: 13px; }
     #${OVERLAY_ID} .htk-status.is-good { color: var(--hbk-value); }
@@ -167,12 +175,50 @@ function updateButtons() {
   const r = state.refs;
   if (!r) return;
   const ready = !!(state.toolGuid && state.targetGuid);
-  r.fireBtn.disabled = !ready;
+  let oddsInfo = null;
+  if (ready) {
+    const targetGuid = state.targetGuid >>> 0;
+    const toolGuid = state.toolGuid >>> 0;
+    const tinkCount = readTinkeredCount(targetGuid);
+    const targetWork = readWorkmanship(targetGuid);
+    const toolWork = readWorkmanship(toolGuid);
+    const mat = readMaterialType(toolGuid) || readMaterialType(targetGuid);
+    const skill = getRelevantTinkerSkill(mat);
+    oddsInfo = calculateTinkerOdds({
+      skill,
+      materialType: mat,
+      itemWorkmanship: targetWork,
+      toolWorkmanship: toolWork,
+      tinkeredCount: tinkCount,
+    });
+  } else if (state.targetGuid) {
+    const tinkCount = readTinkeredCount(state.targetGuid >>> 0);
+    oddsInfo = { tinkeredCount: tinkCount, maxTinkers: 10, canTinker: tinkCount < 10 };
+  }
+
+  if (r.odds) {
+    if (oddsInfo) {
+      if (oddsInfo.successPercent != null) {
+        r.odds.textContent = `${oddsInfo.tinkeredCount}/10 tinkers · Success: ${oddsInfo.successPercent}% (Diff ${oddsInfo.difficulty})`;
+      } else {
+        r.odds.textContent = `${oddsInfo.tinkeredCount}/10 tinkers`;
+      }
+    } else {
+      r.odds.textContent = "";
+    }
+  }
+
+  const canFire = ready && (oddsInfo ? oddsInfo.canTinker : true);
+  r.fireBtn.disabled = !canFire;
   r.clearBtn.disabled = !(state.toolGuid || state.targetGuid);
   if (!state.pendingFire) {
-    setStatus(ready
-      ? `Apply ${objectDisplayName(state.toolGuid)} to ${objectDisplayName(state.targetGuid)}.`
-      : "Drag the salvage or tool into Use, and the item to improve into On.");
+    if (ready && oddsInfo && !oddsInfo.canTinker) {
+      setStatus("This item cannot be tinkered any further (10/10).", "bad");
+    } else {
+      setStatus(ready
+        ? `Apply ${objectDisplayName(state.toolGuid)} to ${objectDisplayName(state.targetGuid)}.`
+        : "Drag the salvage or tool into Use, and the item to improve into On.");
+    }
   }
 }
 
@@ -203,6 +249,15 @@ function fireTinker() {
     return;
   }
   state.pendingFire = true;
+  if (state.pendingTimer) clearTimeout(state.pendingTimer);
+  state.pendingTimer = setTimeout(() => {
+    if (state.pendingFire) {
+      state.pendingFire = false;
+      state.pendingTimer = null;
+      setStatus("Timed out waiting for response.", "bad");
+      updateButtons();
+    }
+  }, 10000);
   setStatus("Working… the outcome appears in chat.", "");
   try {
     window.dispatchEvent(new CustomEvent("hb:tinker-panel-fired", { detail: { toolGuid: tool, targetGuid: target } }));
@@ -215,11 +270,34 @@ function onInventoryChanged() {
   // leaves its slot.
   if (!state.pendingFire) return;
   state.pendingFire = false;
+  if (state.pendingTimer) {
+    clearTimeout(state.pendingTimer);
+    state.pendingTimer = null;
+  }
   const owned = new Set(inventoryRows().map((r) => r.guid));
-  if (state.toolGuid && !owned.has(state.toolGuid)) setSlotGuid("tool", 0);
-  if (state.targetGuid && !owned.has(state.targetGuid)) setSlotGuid("target", 0);
+  const toolLost = state.toolGuid && !owned.has(state.toolGuid);
+  const targetLost = state.targetGuid && !owned.has(state.targetGuid);
+  if (toolLost) setSlotGuid("tool", 0);
+  if (targetLost) setSlotGuid("target", 0);
   if (state.refs?.target && state.targetGuid) renderTarget(state.refs.target, state.targetGuid, "target");
-  setStatus("Done — see chat for the result.", "good");
+  if (targetLost) {
+    setStatus("Tinkering failed — the item was destroyed.", "bad");
+  } else {
+    setStatus("Done — see chat for the result.", "good");
+  }
+  updateButtons();
+}
+
+function onUseFailed(evt) {
+  if (!state.pendingFire) return;
+  state.pendingFire = false;
+  if (state.pendingTimer) {
+    clearTimeout(state.pendingTimer);
+    state.pendingTimer = null;
+  }
+  const msg = evt?.text || evt?.detail?.text || "Action failed or rejected by server.";
+  setStatus(msg, "bad");
+  updateButtons();
 }
 
 function ensurePanel() {
@@ -237,6 +315,10 @@ function ensurePanel() {
     className: "hb-tinker",
     onHide: () => {
       state.pendingFire = false;
+      if (state.pendingTimer) {
+        clearTimeout(state.pendingTimer);
+        state.pendingTimer = null;
+      }
       try { window.dispatchEvent(new CustomEvent("hb:tinker-panel-closed")); } catch (_) {}
     },
   });
@@ -246,6 +328,7 @@ function ensurePanel() {
   const arrow = el("div", "htk-arrow", slots);
   arrow.textContent = "→";
   const target = makeTarget(slots, "target");
+  const odds = el("div", "htk-odds", win.body);
   const status = el("div", "htk-status", win.body);
   const footer = el("div", "hbk-footer", win.body);
   const clearBtn = kitButton("Clear", "hbk-btn-small", () => {
@@ -262,7 +345,7 @@ function ensurePanel() {
       fireTinker();
     }
   });
-  state.refs = { tool, target, status, clearBtn, fireBtn };
+  state.refs = { tool, target, odds, status, clearBtn, fireBtn };
   return win;
 }
 
@@ -310,9 +393,15 @@ export function mount(ctx) {
     state.client = client;
     try {
       client.events.on("playerInventoryChanged", onInventoryChanged);
-      state.unsubInventory = () => client.events.off?.("playerInventoryChanged", onInventoryChanged);
+      client.events.on("useFailed", onUseFailed);
+      client.events.on("kind:13", onUseFailed);
+      state.unsubInventory = () => {
+        try { client.events.off?.("playerInventoryChanged", onInventoryChanged); } catch (_) {}
+        try { client.events.off?.("useFailed", onUseFailed); } catch (_) {}
+        try { client.events.off?.("kind:13", onUseFailed); } catch (_) {}
+      };
     } catch (e) {
-      console.warn("[tinker-panel] playerInventoryChanged subscribe failed:", e);
+      console.warn("[tinker-panel] event subscribe failed:", e);
     }
   };
   const client = ctx?.client ?? window.__pluginClient ?? null;
@@ -323,6 +412,10 @@ export function mount(ctx) {
     try { state.unsubInventory?.(); } catch (_) {}
     state.unsubInventory = null;
     state.client = null;
+    if (state.pendingTimer) {
+      clearTimeout(state.pendingTimer);
+      state.pendingTimer = null;
+    }
   };
 }
 
