@@ -880,6 +880,7 @@ function _offerCellSurfaces(scene3d, snap, meshGroup, resolved, cellsShadow, lbK
       lbKey: lbKey >>> 0,
       cellId: snap.cellId >>> 0,
       cellMatrix: meshGroup.matrix,
+      meshGroup,
       entries: resolved.map((e) => ({
         ...e,
         castShadow: cellsShadow ? materialCanCastShadow(e.material) : false,

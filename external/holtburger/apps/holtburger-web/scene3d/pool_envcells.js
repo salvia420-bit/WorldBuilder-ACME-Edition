@@ -58,7 +58,7 @@
 
 import * as THREE from "three";
 import {
-  poolWorldActive, getPoolWorld, addSingletonsToPools,
+  poolWorldActive, getPoolWorld, addSingletonsToPools, releaseHoldoutsForLb,
 } from "./pool_producer.js";
 
 // ---------------------------------------------------------------------------
@@ -216,7 +216,7 @@ function _withoutBake(geom) {
  */
 export function offerCellSurfacesToPools(scene3d, args) {
   if (!envCellPoolsActive()) return null;
-  const { lbKey, cellId, cellMatrix, entries } = args || {};
+  const { lbKey, cellId, cellMatrix, meshGroup, entries } = args || {};
   if (!Array.isArray(entries) || entries.length === 0) return null;
   const s = _st();
   s.stats.cellsOffered += 1;
@@ -293,14 +293,29 @@ export function offerCellSurfacesToPools(scene3d, args) {
   const refused = new Set(passthrough);
   const out = entries.map(() => false);
   let pooled = 0;
+  let heldOut = 0;
   for (let k = 0; k < nodes.length; k += 1) {
-    if (refused.has(nodes[k])) continue;
-    out[nodeIndex[k]] = true;
-    pooled += 1;
+    const n = nodes[k];
+    if (!refused.has(n)) {
+      out[nodeIndex[k]] = true;
+      pooled += 1;
+    } else if (n.userData && n.userData.__poolHeldRs != null) {
+      // Held out (BC7_PENDING or OFF_PAGE). Parent to meshGroup as a temporary
+      // singleton so it renders during texture fetch without being permanently
+      // fused into per-cell legacy meshes. When atlasRefeed settles, it will be
+      // reoffered and rehomed into the pool.
+      if (meshGroup) {
+        try { meshGroup.add(n); } catch (_) { /* fail-soft */ }
+      }
+      out[nodeIndex[k]] = true;
+      heldOut += 1;
+    }
   }
-  if (pooled > 0) {
-    s.stats.surfacesPooled += pooled;
-    s.stats.cellsPooled += 1;
+  if (pooled > 0 || heldOut > 0) {
+    if (pooled > 0) {
+      s.stats.surfacesPooled += pooled;
+      s.stats.cellsPooled += 1;
+    }
     const key = lbKey >>> 0;
     let set = s.cellsByLb.get(key);
     if (!set) { set = new Set(); s.cellsByLb.set(key, set); }
@@ -409,6 +424,7 @@ export function poolCellsSetAllVisible() {
  */
 export function releasePooledCellsForLb(lbKey) {
   if (!poolWorldActive()) return 0;
+  try { releaseHoldoutsForLb(lbKey, "ec"); } catch (_) { /* fail-soft */ }
   const w = getPoolWorld();
   const reg = w && w.registry;
   if (!reg) return 0;
