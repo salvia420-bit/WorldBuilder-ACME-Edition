@@ -171,14 +171,19 @@ function createShellGate(opts = {}) {
 }
 
 function defaultRunBuild({ holtRoot }, done) {
-  // Niced + idle IO class: this laptop has 8 GB and the build is a background
+  // Niced + idle IO class on Unix: this laptop has 8 GB and the build is a background
   // courtesy (≈240 MB peak, ≈2 s), never something that should compete with a
-  // session.
-  const args = ["-n", "15", "ionice", "-c3", process.execPath, path.join(holtRoot, "scripts", "build-shell.mjs"), "--quiet"];
+  // session. On Windows, execute process.execPath directly.
+  const scriptPath = path.join(holtRoot, "scripts", "build-shell.mjs");
+  const isWin = process.platform === "win32";
+  const cmd = isWin ? process.execPath : "nice";
+  const args = isWin
+    ? [scriptPath, "--quiet"]
+    : ["-n", "15", "ionice", "-c3", process.execPath, scriptPath, "--quiet"];
   let err = "";
   let child;
   try {
-    child = spawn("nice", args, { cwd: holtRoot, stdio: ["ignore", "ignore", "pipe"] });
+    child = spawn(cmd, args, { cwd: holtRoot, stdio: ["ignore", "ignore", "pipe"], windowsHide: true });
   } catch (e) {
     done(false, e.message);
     return;

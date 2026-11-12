@@ -100,11 +100,18 @@ const MIME = {
 };
 const mimeFor = (p) => MIME[extname(p).toLowerCase()] || "application/octet-stream";
 
-// Same cache policy as serve.py: content-addressed shards are immutable; every
-// other (stable-named, re-pointed-per-bake) asset stays no-cache for dev.
+// Same cache policy as serve.py: content-addressed shards, packs, and indices
+// are immutable; every other (stable-named, re-pointed-per-bake) asset stays no-cache for dev.
 function cacheHeaders(urlPath, status) {
-  if (urlPath.startsWith("/dist/shards/") && status >= 200 && status < 300) {
-    return { "cache-control": "public, max-age=31536000, immutable" };
+  const clean = (urlPath || "").split("?")[0];
+  if (
+    (clean.startsWith("/dist/shards/") ||
+      clean.startsWith("/dist/packs/") ||
+      clean.startsWith("/dist/index/")) &&
+    status >= 200 &&
+    status < 300
+  ) {
+    return { "cache-control": "public, max-age=31536000, immutable, no-transform" };
   }
   return {
     "cache-control": "no-cache, no-store, must-revalidate",

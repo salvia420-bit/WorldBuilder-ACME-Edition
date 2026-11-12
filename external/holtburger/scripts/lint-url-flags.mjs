@@ -110,7 +110,7 @@ function walk(d) {
   }
 }
 // app/ = the ES modules extracted from index.html's inline script (2026-10-05).
-for (const sub of ["scene3d", "app"]) walk(path.join(appDir, sub));
+for (const sub of ["scene3d", "app", "ui"]) walk(path.join(appDir, sub));
 files.push(path.join(appDir, "index.html"));
 
 // ── docs rows ───────────────────────────────────────────────────────────────

@@ -469,6 +469,7 @@ await (async () => {
   const holtRoot = path.resolve(APP_ROOT, "..", "..");
   const proc = spawn("python3", [path.join(holtRoot, "scripts", "serve.py"), "--port", String(port)], {
     stdio: "ignore",
+    windowsHide: true,
   });
   const fetchHead = async (p) => {
     const res = await fetch(`http://127.0.0.1:${port}${p}`, {

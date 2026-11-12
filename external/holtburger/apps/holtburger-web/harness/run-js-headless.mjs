@@ -80,7 +80,8 @@
 // Bypass: CI=true or HB_HEAVY_LOCK=0. `node <one test file>` takes no lock.
 // ============================================================================
 
-import { spawnSync } from "node:child_process";
+import { spawnSync, spawn } from "node:child_process";
+import os from "node:os";
 import { existsSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -1564,6 +1565,24 @@ const TIER5 = [
   // while airborne).
   { tier: 5, flag: "flightResidency", file: "tests/flight_residency.test.mjs" },
   { tier: 5, flag: "inventoryHudReview", file: "tests/inventory_hud_review_fixes.test.mjs" },
+  { tier: 5, flag: "proxy_hardening", file: "tests/proxy_hardening.test.mjs" },
+  { tier: 5, flag: "challenger_m1_it2_deep_stress", file: "tests/challenger_m1_it2_deep_stress.test.mjs" },
+  { tier: 5, flag: "challenger_m1_pom_stress", file: "tests/challenger_m1_pom_stress.test.mjs" },
+  { tier: 5, flag: "challenger_m2_atlas_cache_stress", file: "tests/challenger_m2_atlas_cache_stress.test.mjs" },
+  { tier: 5, flag: "challenger_m2_combat_stress", file: "tests/challenger_m2_combat_stress.test.mjs" },
+  { tier: 5, flag: "challenger_m2_empirical_stress", file: "tests/challenger_m2_empirical_stress.test.mjs" },
+  { tier: 5, flag: "challenger_m2_nav_unwedge_stress", file: "tests/challenger_m2_nav_unwedge_stress.test.mjs" },
+  { tier: 5, flag: "challenger_m2_surface_stress", file: "tests/challenger_m2_surface_stress.test.mjs" },
+  { tier: 5, flag: "challenger_m3_stepper_adversarial", file: "tests/challenger_m3_stepper_adversarial.test.mjs" },
+  { tier: 5, flag: "challenger_m3_stress", file: "tests/challenger_m3_stress.test.mjs" },
+  { tier: 5, flag: "challenger_m3_tier5_edge_cases", file: "tests/challenger_m3_tier5_edge_cases.test.mjs" },
+  { tier: 5, flag: "challenger_m3_tier5_lifecycle_stress", file: "tests/challenger_m3_tier5_lifecycle_stress.test.mjs" },
+  { tier: 5, flag: "challenger_m4_2_stress", file: "tests/challenger_m4_2_stress.test.mjs" },
+  { tier: 5, flag: "challenger_static_atlas_raymarch", file: "tests/challenger_static_atlas_raymarch.test.mjs" },
+  { tier: 5, flag: "clone_pom_persistence", file: "tests/clone_pom_persistence.test.mjs" },
+  { tier: 5, flag: "m4_stress_bake_worker", file: "tests/m4_stress_bake_worker.test.mjs" },
+  { tier: 5, flag: "m4_stress_framework", file: "tests/m4_stress_framework.test.mjs" },
+  { tier: 5, flag: "m4_stress_residency_drainage", file: "tests/m4_stress_residency_drainage.test.mjs" },
 ];
 
 // Registered but KNOWN-FAILING because the APP is wrong (a real bug, named
@@ -1713,6 +1732,7 @@ function parseArgs(argv) {
     strictFixtures: false,
     coverage: false,
     help: false,
+    jobs: 1,
   };
   for (const a of argv) {
     if (a === "--quiet") opts.quiet = true;
@@ -1724,7 +1744,12 @@ function parseArgs(argv) {
     else if (a === "--run-quarantined") opts.runQuarantined = true;
     else if (a === "--strict-fixtures") opts.strictFixtures = true;
     else if (a === "--help" || a === "-h") opts.help = true;
-    else if (a.startsWith("--only=")) {
+    else if (a.startsWith("--jobs=") || a.startsWith("-j=")) {
+      const n = Number(a.split("=")[1]);
+      if (Number.isFinite(n) && n >= 1) opts.jobs = Math.floor(n);
+    } else if (a === "-j" || a === "--jobs") {
+      opts.jobs = Math.max(1, os.cpus().length);
+    } else if (a.startsWith("--only=")) {
       opts.only = a
         .slice("--only=".length)
         .split(",")
@@ -1844,6 +1869,7 @@ function runOne(entry, opts) {
     encoding: "utf8",
     timeout: timeoutMs,
     maxBuffer: 64 * 1024 * 1024,
+    windowsHide: true,
   });
   // spawnSync sets .error (e.g. ETIMEDOUT) and/or .signal on a kill.
   const timedOut = run.error && run.error.code === "ETIMEDOUT";
@@ -1868,10 +1894,78 @@ function runOne(entry, opts) {
   return { ...entry, status, code: run.status, detail, output };
 }
 
+function runOneAsync(entry, opts) {
+  return new Promise((resolve) => {
+    const abs = path.resolve(APP_ROOT, entry.file);
+    if (!existsSync(abs)) {
+      resolve({ ...entry, status: STATUS.MISSING, code: null, detail: "file not present", output: "" });
+      return;
+    }
+    const need = typeof entry.requires === "function" ? entry.requires() : entry.requires;
+    if (need && !existsSync(path.resolve(APP_ROOT, need))) {
+      resolve({ ...entry, status: STATUS.NOFIXTURE, code: null, detail: `fixture absent: ${need}`, output: "" });
+      return;
+    }
+    const timeoutMs = Math.max(Number(entry.timeoutMs) || 0, opts.timeoutMs);
+    let child;
+    let stdout = "";
+    let stderr = "";
+    let timedOut = false;
+    let timer = null;
+
+    try {
+      child = spawn(process.execPath, [...CHILD_HEAP_ARGS, entry.file], {
+        cwd: APP_ROOT,
+        windowsHide: true,
+      });
+    } catch (err) {
+      resolve({ ...entry, status: STATUS.FAIL, code: null, detail: err.message, output: "" });
+      return;
+    }
+
+    if (timeoutMs > 0) {
+      timer = setTimeout(() => {
+        timedOut = true;
+        child.kill("SIGTERM");
+        setTimeout(() => { if (!child.killed) child.kill("SIGKILL"); }, 2000);
+      }, timeoutMs);
+    }
+
+    child.stdout.on("data", (d) => { stdout += d; });
+    child.stderr.on("data", (d) => { stderr += d; });
+
+    child.on("error", (err) => {
+      if (timer) clearTimeout(timer);
+      resolve({ ...entry, status: STATUS.FAIL, code: null, detail: err.message, output: stdout + stderr });
+    });
+
+    child.on("close", (code, signal) => {
+      if (timer) clearTimeout(timer);
+      const killed = !!signal;
+      const ok = !timedOut && !killed && code === 0;
+      const output = [stdout, stderr].join("");
+      let detail = "";
+      if (!ok) {
+        if (timedOut) detail = `timeout ${timeoutMs}ms`;
+        else if (killed) detail = `signal ${signal}`;
+        else detail = `exit ${code}`;
+      }
+      let status;
+      if (!ok) status = STATUS.FAIL;
+      else if (looksSkipped(output)) {
+        status = STATUS.SKIP;
+        const line = output.split("\n").find((l) => looksSkipped(l));
+        detail = (line || "skipped").trim().slice(0, 100);
+      } else status = STATUS.PASS;
+      resolve({ ...entry, status, code, detail, output });
+    });
+  });
+}
+
 // ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------
-function main() {
+async function main() {
   const opts = parseArgs(process.argv.slice(2));
   if (opts.help) {
     console.log(
@@ -1942,40 +2036,95 @@ function main() {
   }
 
   const results = [];
-  for (const entry of plan) {
-    process.stdout.write(`\n----- [tier${entry.tier}] ${entry.flag} :: ${entry.file} -----\n`);
-    const res = runOne(entry, opts);
-    results.push(res);
+  if (opts.jobs > 1) {
+    console.log(`  running with worker pool (--jobs=${opts.jobs}) ...\n`);
+    const resultsMap = new Map();
+    let nextIdx = 0;
+    let bailed = false;
 
-    const showOutput =
-      res.status === STATUS.FAIL ||
-      (res.status === STATUS.MISSING && opts.strictMissing) ||
-      !opts.quiet;
-    if (res.status === STATUS.MISSING) {
-      console.log(`  MISSING: ${entry.file} not present at ${APP_ROOT}` +
-        (opts.strictMissing ? " (STRICT → counts as FAIL)" : " (tolerated)"));
-    } else {
-      if (showOutput && res.output.trim()) {
-        // Indent child output for readability.
-        process.stdout.write(
-          res.output
-            .replace(/\n$/, "")
-            .split("\n")
-            .map((l) => `    ${l}`)
-            .join("\n") + "\n"
-        );
+    async function worker() {
+      while (nextIdx < plan.length && !bailed) {
+        const idx = nextIdx++;
+        const entry = plan[idx];
+        const res = await runOneAsync(entry, opts);
+        resultsMap.set(idx, res);
+
+        const showOutput =
+          res.status === STATUS.FAIL ||
+          (res.status === STATUS.MISSING && opts.strictMissing) ||
+          !opts.quiet;
+        if (res.status === STATUS.MISSING) {
+          console.log(`[tier${entry.tier}] MISSING: ${entry.file} not present at ${APP_ROOT}` +
+            (opts.strictMissing ? " (STRICT → counts as FAIL)" : " (tolerated)"));
+        } else {
+          console.log(`[tier${entry.tier}] ${entry.flag} :: ${entry.file} → ${res.status}${res.detail ? ` (${res.detail})` : ""}`);
+          if (showOutput && res.output.trim()) {
+            process.stdout.write(
+              res.output
+                .replace(/\n$/, "")
+                .split("\n")
+                .map((l) => `    ${l}`)
+                .join("\n") + "\n"
+            );
+          }
+        }
+
+        const isFailNow =
+          res.status === STATUS.FAIL ||
+          (res.status === STATUS.SKIP && !opts.allowSkips) ||
+          (res.status === STATUS.MISSING && opts.strictMissing) ||
+          (res.status === STATUS.NOFIXTURE && opts.strictFixtures);
+        if (opts.bail && isFailNow) {
+          bailed = true;
+          console.log("\n[run-js-headless] --bail: stopping at first failure.");
+          break;
+        }
       }
-      console.log(`  → ${res.status}` + (res.detail ? ` (${res.detail})` : ""));
     }
 
-    const isFailNow =
-      res.status === STATUS.FAIL ||
-      (res.status === STATUS.SKIP && !opts.allowSkips) ||
-      (res.status === STATUS.MISSING && opts.strictMissing) ||
-      (res.status === STATUS.NOFIXTURE && opts.strictFixtures);
-    if (opts.bail && isFailNow) {
-      console.log("\n[run-js-headless] --bail: stopping at first failure.");
-      break;
+    const poolSize = Math.min(opts.jobs, plan.length);
+    const workers = Array.from({ length: poolSize }, () => worker());
+    await Promise.all(workers);
+
+    for (let i = 0; i < plan.length; i++) {
+      if (resultsMap.has(i)) results.push(resultsMap.get(i));
+    }
+  } else {
+    for (const entry of plan) {
+      process.stdout.write(`\n----- [tier${entry.tier}] ${entry.flag} :: ${entry.file} -----\n`);
+      const res = runOne(entry, opts);
+      results.push(res);
+
+      const showOutput =
+        res.status === STATUS.FAIL ||
+        (res.status === STATUS.MISSING && opts.strictMissing) ||
+        !opts.quiet;
+      if (res.status === STATUS.MISSING) {
+        console.log(`  MISSING: ${entry.file} not present at ${APP_ROOT}` +
+          (opts.strictMissing ? " (STRICT → counts as FAIL)" : " (tolerated)"));
+      } else {
+        if (showOutput && res.output.trim()) {
+          // Indent child output for readability.
+          process.stdout.write(
+            res.output
+              .replace(/\n$/, "")
+              .split("\n")
+              .map((l) => `    ${l}`)
+              .join("\n") + "\n"
+          );
+        }
+        console.log(`  → ${res.status}` + (res.detail ? ` (${res.detail})` : ""));
+      }
+
+      const isFailNow =
+        res.status === STATUS.FAIL ||
+        (res.status === STATUS.SKIP && !opts.allowSkips) ||
+        (res.status === STATUS.MISSING && opts.strictMissing) ||
+        (res.status === STATUS.NOFIXTURE && opts.strictFixtures);
+      if (opts.bail && isFailNow) {
+        console.log("\n[run-js-headless] --bail: stopping at first failure.");
+        break;
+      }
     }
   }
 
@@ -2046,4 +2195,4 @@ function main() {
   process.exit(exitNonZero ? 1 : 0);
 }
 
-main();
+await main();

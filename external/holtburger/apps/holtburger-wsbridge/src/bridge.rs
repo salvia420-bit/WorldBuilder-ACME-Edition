@@ -19,7 +19,8 @@
 //! `link_health.rs`.
 
 use crate::admission::{
-    Admission, ConnLimiter, FrameBucket, HANDSHAKE_TIMEOUT, MAX_WS_MESSAGE_BYTES, TargetPolicy,
+    extract_forwarded_ip, Admission, ConnLimiter, ConnSlot, FrameBucket, HANDSHAKE_TIMEOUT,
+    MAX_WS_MESSAGE_BYTES, TargetPolicy,
 };
 use crate::capture::{Direction, PcapCapture};
 use crate::config::Config;
@@ -337,9 +338,7 @@ pub async fn accept_loop_admitted(
         let admission = Arc::clone(&admission);
         let capture = capture.clone();
         tokio::spawn(async move {
-            // Held for the handler's whole life, however it ends.
-            let _slot = slot;
-            if let Err(err) = handle_connection(cfg, admission, tcp, peer, capture).await {
+            if let Err(err) = handle_connection(cfg, admission, tcp, peer, capture, slot).await {
                 log::info!("[{peer}] connection ended: {err:#}");
             } else {
                 log::info!("[{peer}] connection closed");
@@ -364,6 +363,7 @@ async fn handle_connection(
     tcp: TcpStream,
     peer: SocketAddr,
     capture: Option<Arc<PcapCapture>>,
+    slot: ConnSlot,
 ) -> Result<()> {
     log::info!("[{peer}] accepted; upgrading to ws");
     // latency (2026-10-05): TCP_NODELAY. Each WS frame carries one small AC
@@ -382,17 +382,29 @@ async fn handle_connection(
     // a miss), and the upgrade is bounded so a socket that never upgrades
     // cannot hold a connection slot.
     let origins = &admission.origins;
+    let slot_cell = Arc::new(Mutex::new(slot));
+    let slot_clone = Arc::clone(&slot_cell);
     let origin_gate = move |request: &Request, response: Response| {
-        match origins.check_upgrade(request) {
-            Ok(()) => Ok::<Response, ErrorResponse>(response),
-            Err(refusal) => {
-                log::warn!(
-                    "[{peer}] refused websocket upgrade: {}",
-                    refusal.body().as_deref().unwrap_or("forbidden")
-                );
-                Err(refusal)
+        if let Err(refusal) = origins.check_upgrade(request) {
+            log::warn!(
+                "[{peer}] refused websocket upgrade: {}",
+                refusal.body().as_deref().unwrap_or("forbidden")
+            );
+            return Err(refusal);
+        }
+        if peer.ip().is_loopback() {
+            if let Some(forwarded_ip) = extract_forwarded_ip(request.headers()) {
+                if let Ok(mut s) = slot_clone.lock() {
+                    if let Err(refusal) = s.bind_forwarded_ip(forwarded_ip) {
+                        log::warn!("[{peer}] forwarded client [{forwarded_ip}] refused: {refusal}");
+                        let mut resp = ErrorResponse::new(Some(format!("{refusal}")));
+                        *resp.status_mut() = tokio_tungstenite::tungstenite::http::StatusCode::TOO_MANY_REQUESTS;
+                        return Err(resp);
+                    }
+                }
             }
         }
+        Ok(response)
     };
     let ws = tokio::time::timeout(
         HANDSHAKE_TIMEOUT,
@@ -401,6 +413,8 @@ async fn handle_connection(
     .await
     .map_err(|_| anyhow!("[{peer}] websocket upgrade timed out after {HANDSHAKE_TIMEOUT:?}"))?
     .with_context(|| format!("[{peer}] websocket handshake"))?;
+
+    let _slot = slot_cell;
 
     let (mut ws_sink, mut ws_stream) = ws.split();
 

@@ -247,7 +247,7 @@ function which(bin) {
   // re-sources profile and can DROP ~/.cargo/bin (cargo's PATH is usually added
   // via ~/.cargo/env sourced from ~/.bashrc, which a login `dash` won't read) →
   // a false "cargo not found" → silent print-only fallback.
-  const r = spawnSync("sh", ["-c", `command -v ${bin}`], { encoding: "utf8" });
+  const r = spawnSync("sh", ["-c", `command -v ${bin}`], { encoding: "utf8", windowsHide: true });
   const out = (r.stdout || "").trim();
   if (r.status === 0 && out) return out;
   // Fallback: probe well-known absolute locations directly.
@@ -448,6 +448,7 @@ async function main() {
       cwd: WORKSPACE_ROOT,
       stdio: opts.quiet ? ["ignore", "pipe", "inherit"] : "inherit",
       encoding: "utf8",
+      windowsHide: true,
     });
     const ok = run.status === 0;
     if (opts.quiet && !ok && run.stdout) process.stdout.write(run.stdout);
