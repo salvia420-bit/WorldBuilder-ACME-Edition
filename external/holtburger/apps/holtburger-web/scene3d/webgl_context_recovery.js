@@ -63,6 +63,7 @@ import {
   rehydrateReleasedTextures,
   installTextureRehydrateDevtools,
 } from "./texture_rehydrate.js";
+import { bumpFarCompositeEpoch } from "./far_terrain.js";
 
 const HISTORY_CAP = 16;
 
@@ -229,6 +230,18 @@ export function installWebglContextRecovery({
     // pre-loss cam/sun deltas and would early-out of the next
     // updateCsm. Invalidate so the next frame rebuilds cascades.
     try { live?.csmState?.invalidate?.(); } catch (_) {}
+
+    // Invalidate far terrain composite so patches are re-baked on restored context:
+    try { bumpFarCompositeEpoch(); } catch (_) {}
+
+    // Reset IBL environment and trigger atmospheric re-bake on restore:
+    try {
+      live?.iblEnvironment?.onContextRestored?.(renderer);
+    } catch (_) {}
+    try {
+      const atmo = live?.atmosphereRuntime || (typeof window !== "undefined" ? window.__atmosphereRuntime : null);
+      atmo?.onContextRestored?.(renderer);
+    } catch (_) {}
 
     // Belt-and-suspenders: reset Three's RT binding to the canvas.
     try { renderer.setRenderTarget(null); } catch (_) {}

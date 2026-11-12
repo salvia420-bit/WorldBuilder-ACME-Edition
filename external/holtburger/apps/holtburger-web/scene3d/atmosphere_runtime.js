@@ -95,6 +95,10 @@ export class AtmosphereRuntime {
     this.plan = plan.reason;
     this.loadTimedOut = false;
     const timeoutMs = Number.isFinite(loadTimeoutMs) ? loadTimeoutMs : plan.timeoutMs;
+    this._onContextRestored = () => this.onContextRestored(this.renderer);
+    try {
+      this.renderer?.domElement?.addEventListener?.("webglcontextrestored", this._onContextRestored);
+    } catch (_) {}
     this._readyPromise = this._init(plan.preferLoad, timeoutMs);
   }
 
@@ -204,7 +208,29 @@ export class AtmosphereRuntime {
     return this._readyPromise;
   }
 
+  /** Re-bake atmospheric runtime bakes on context restore when source was 'bake'. */
+  async onContextRestored(renderer) {
+    if (renderer) this.renderer = renderer;
+    if (this.source === 'bake') {
+      try {
+        this.generator?.dispose?.();
+        this.generator = new PrecomputedTexturesGenerator(this.renderer);
+        await this.generator.update(this.atmosphere);
+        this._textures = this.generator.textures;
+        this.ready = true;
+      } catch (err) {
+        this.error = err;
+        this.ready = false;
+        // eslint-disable-next-line no-console
+        console.warn('[sky-k.1] AtmosphereRuntime re-bake on context restore failed:', err);
+      }
+    }
+  }
+
   dispose() {
+    try {
+      this.renderer?.domElement?.removeEventListener?.("webglcontextrestored", this._onContextRestored);
+    } catch (_) {}
     this.generator?.dispose?.();
   }
 }

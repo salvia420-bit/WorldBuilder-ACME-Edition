@@ -862,6 +862,8 @@ function bakeProgramReady(renderer, rig, rt, geom) {
 
 /** Test seam. */
 export const _bakeProgramReadyForTest = bakeProgramReady;
+export const _bakePatchForTest = bakePatch;
+export const _finishPatchForTest = finishPatch;
 
 /** Per-LB scratch data textures — two total, rewritten per bake, never pooled. */
 function ensureScratchTextures() {
@@ -919,7 +921,7 @@ function bakePatch(scene3d, renderer, patch) {
   const texels = _state.texels;
   if (!patch.rt) {
     patch.rt = new THREE.WebGLRenderTarget(texels * PATCH_LB, texels * PATCH_LB, {
-      depthBuffer: true,
+      depthBuffer: false,
       stencilBuffer: false,
       // Mips + aniso at CONSTRUCTION. three allocates immutable storage, so
       // mip levels CANNOT be retrofitted onto a render target created without
@@ -1664,29 +1666,39 @@ function startPatchFetch(scene3d, sessionHandle, patch) {
 function finishPatch(scene3d, patch) {
   const st = _state;
   const geom = buildPatchGeometry(patch.lbData, patch.px, patch.py);
-  if (!geom) { patch.state = "baked"; return; }
-  patch.geom = geom;
-  patch.mat = makePatchMaterial(scene3d, patch);
-  const mesh = new THREE.Mesh(geom, patch.mat);
-  mesh.name = `far-patch-${patch.px}-${patch.py}`;
-  mesh.position.set(
-    patch.px * PATCH_LB * METERS_PER_LANDBLOCK,
-    patch.py * PATCH_LB * METERS_PER_LANDBLOCK,
-    0,
-  );
-  mesh.castShadow = false;
-  mesh.receiveShadow = false;
-  mesh.frustumCulled = true;  // retail culls frustum-only, no distance radius
-  mesh.renderOrder = -1;      // draw before the near ring: cheap early-z for it
-  mesh.userData = { __farTerrainPatch: true };
-  patch.mesh = mesh;
-  st.group.add(mesh);
+  if (geom) {
+    patch.geom = geom;
+    patch.mat = makePatchMaterial(scene3d, patch);
+    const mesh = new THREE.Mesh(geom, patch.mat);
+    mesh.name = `far-patch-${patch.px}-${patch.py}`;
+    mesh.position.set(
+      patch.px * PATCH_LB * METERS_PER_LANDBLOCK,
+      patch.py * PATCH_LB * METERS_PER_LANDBLOCK,
+      0,
+    );
+    mesh.castShadow = false;
+    mesh.receiveShadow = false;
+    mesh.frustumCulled = true;  // retail culls frustum-only, no distance radius
+    mesh.renderOrder = -1;      // draw before the near ring: cheap early-z for it
+    mesh.userData = { __farTerrainPatch: true };
+    patch.mesh = mesh;
+    st.group.add(mesh);
+  }
   patch.state = "baked";
   // The per-LB bake geometry has done its job; the merged patch geometry owns
-  // the vertices from here.
+  // the vertices from here. Release dead lbData typed arrays to free heap.
   for (const d of patch.lbData.values()) {
     if (d.geom) { d.geom.dispose(); d.geom = null; }
+    d.positions = null;
+    d.indices = null;
+    d.terrainCodes = null;
+    d.roadCodes = null;
+    d.mergeData = null;
+    d.heights = null;
+    d.acNormals = null;
+    d.acLightNormals = null;
   }
+  patch.lbData.clear();
 }
 
 function disposePatch(patch) {
@@ -1893,6 +1905,7 @@ export function bumpFarCompositeEpoch() {
 
 /** Full teardown (context loss / test seam). */
 export function disposeFarTerrain() {
+  _disabled = false;
   if (!_state) return;
   for (const patch of _state.patches.values()) disposePatch(patch);
   _state.patches.clear();
