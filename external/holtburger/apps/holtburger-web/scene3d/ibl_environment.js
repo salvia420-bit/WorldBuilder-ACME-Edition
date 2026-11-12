@@ -257,6 +257,10 @@ export class IblEnvironment {
     this._pmrem = new THREE.PMREMGenerator(renderer);
     this._pmrem.compileCubemapShader();
     this._pmremRT = null;
+    this._onContextRestored = () => this.onContextRestored(this.renderer);
+    try {
+      this.renderer?.domElement?.addEventListener?.("webglcontextrestored", this._onContextRestored);
+    } catch (_) {}
     // ?iblStableEnv — see readIblStableEnvFlag. Diag
     // (liveScene3d.iblEnvironment.stableEnvStats): refreshes copied into the
     // kept target, and refreshes that had to swap although the flag is on.
@@ -697,7 +701,24 @@ export class IblEnvironment {
     }
   }
 
+  onContextRestored(renderer) {
+    if (renderer) this.renderer = renderer;
+    try { this._pmrem?.dispose?.(); } catch (_) {}
+    this._pmrem = new THREE.PMREMGenerator(this.renderer);
+    try { this._pmrem.compileCubemapShader(); } catch (_) {}
+    this._pmremWarmed = false;
+    this._lastRefreshMs = -Infinity;
+    this._lastCubeMs = -Infinity;
+    if (this._pmremRT) {
+      try { this._pmremRT.dispose(); } catch (_) {}
+      this._pmremRT = null;
+    }
+  }
+
   dispose() {
+    try {
+      this.renderer?.domElement?.removeEventListener?.("webglcontextrestored", this._onContextRestored);
+    } catch (_) {}
     if (this.atmosphereLights) this.atmosphereLights.iblOwnsDiffuse = false;
     this.scene.environment = null;
     if (this._pmremRT) this._pmremRT.dispose();

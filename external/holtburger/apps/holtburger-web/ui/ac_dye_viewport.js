@@ -84,6 +84,26 @@ export class DyeViewport {
     this._rafId = null;
     this._rotation = 0;
     this._disposed = false;
+    this._contextLost = false;
+
+    this._onContextLost = (e) => {
+      e?.preventDefault?.();
+      if (this._disposed) return;
+      this._contextLost = true;
+      if (this._rafId !== null) {
+        cancelAnimationFrame(this._rafId);
+        this._rafId = null;
+      }
+    };
+    this._onContextRestored = () => {
+      if (this._disposed) return;
+      this._contextLost = false;
+      this.start();
+    };
+    try {
+      this.renderer.domElement.addEventListener("webglcontextlost", this._onContextLost);
+      this.renderer.domElement.addEventListener("webglcontextrestored", this._onContextRestored);
+    } catch (_) {}
     // R9 (2026-08-03) — race-cancel token, the same device the sibling
     // ac_paperdoll_viewport.js got in Wave C / PR8 (2026-06-06) and this
     // viewport never did. `loadDyedItem` / `loadPlayerMesh` each await twice
@@ -468,15 +488,19 @@ export class DyeViewport {
     return {
       dyedRigPartCount: this.rigRoot?.children?.length ?? 0,
       playerRigPartCount: this.playerRigRoot?.children?.length ?? 0,
+      contextLost: this._contextLost,
       size: { ...this.size },
     };
   }
 
   /** Begin rAF render loop. Idempotent. */
   start() {
-    if (this._rafId !== null || this._disposed) return;
+    if (this._rafId !== null || this._disposed || this._contextLost) return;
     const tick = () => {
-      if (this._disposed) return;
+      if (this._disposed || this._contextLost) {
+        this._rafId = null;
+        return;
+      }
       this._rafId = requestAnimationFrame(tick);
       this._rotation += ROTATION_SPEED;
       this.rigRoot.rotation.y = this._rotation;
@@ -497,6 +521,11 @@ export class DyeViewport {
       cancelAnimationFrame(this._rafId);
       this._rafId = null;
     }
+    const el = this.renderer.domElement;
+    try {
+      el?.removeEventListener?.("webglcontextlost", this._onContextLost);
+      el?.removeEventListener?.("webglcontextrestored", this._onContextRestored);
+    } catch (_) {}
     this._clearRig();
     while (this.playerRigRoot.children.length > 0) {
       const child = this.playerRigRoot.children[0];
@@ -511,8 +540,7 @@ export class DyeViewport {
     this._ownedTextures.length = 0;
     this._ownedMaterials.length = 0;
     try { this.renderer.dispose(); } catch (_) {}
-    try { this.renderer.forceContextLoss(); } catch (_) {}
-    const el = this.renderer.domElement;
+    if (!this._contextLost) { try { this.renderer.forceContextLoss(); } catch (_) {} }
     if (el?.parentNode) el.parentNode.removeChild(el);
   }
 }

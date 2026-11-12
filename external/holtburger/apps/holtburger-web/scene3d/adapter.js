@@ -1549,7 +1549,7 @@ async function _decodePngRgba(url) {
  * `THREE.DataArrayTexture` (depth=5). Resolves to `{ texture, keys }`
  * on success or `null` on any load/decode failure.
  *
- * Memory: 1024 × 1024 × 5 layers × 4 bytes (RGBA) = ~20 MB GPU.
+ * Memory: 1024 × 1024 × 5 layers × 2 bytes (RG8) = ~10 MB GPU (13.3 MB with mips).
  *
  * @param {{ baseUrl?: string, THREE?: object }} opts
  * @returns {Promise<{ texture: THREE.DataArrayTexture, keys: string[] } | null>}
@@ -1586,17 +1586,23 @@ export async function loadTerrainDetailNormalArray(opts = {}) {
     return null;
   }
 
-  // Pack RGBA byte plane into a single contiguous Uint8Array of size
-  // (w * h * 4) * depth. DataArrayTexture expects RGBAFormat + UnsignedByteType
-  // in three.js r0.184.
-  const layerStride = w * h * 4;
+  // Pack RG8 byte plane into a single contiguous Uint8Array of size
+  // (w * h * 2) * depth. DataArrayTexture expects RGFormat + UnsignedByteType
+  // in three.js r0.184 since shaders only read .rg.
+  const numPixels = w * h;
+  const layerStride = numPixels * 2;
   const data = new Uint8Array(layerStride * decoded.length);
   for (let i = 0; i < decoded.length; i += 1) {
-    data.set(decoded[i].rgba, i * layerStride);
+    const rgba = decoded[i].rgba;
+    const layerOffset = i * layerStride;
+    for (let p = 0; p < numPixels; p += 1) {
+      data[layerOffset + p * 2] = rgba[p * 4];         // R
+      data[layerOffset + p * 2 + 1] = rgba[p * 4 + 1]; // G
+    }
   }
 
   const tex = new T.DataArrayTexture(data, w, h, decoded.length);
-  tex.format = T.RGBAFormat;
+  tex.format = T.RGFormat;
   tex.type = T.UnsignedByteType;
   // Linear colour space — these are normal vectors, not sRGB-encoded
   // colour data. Wrong colour-space causes a visible bias on the

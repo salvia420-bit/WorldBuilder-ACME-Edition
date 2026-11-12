@@ -1029,9 +1029,10 @@ function buildLandblockGroup(st, lbX, lbY, rawSceneryRecs, buildingRecs) {
     for (let p = 0; p < parts.length; p++) {
       const { geometry, material } = parts[p];
       const im = new THREE.InstancedMesh(geometry, material, count);
-      im.frustumCulled = false;
+      im.frustumCulled = true;
       im.castShadow = false;
       im.receiveShadow = false;
+      im.matrixAutoUpdate = false;
 
       for (let i = 0; i < count; i++) {
         const r = recs[i];
@@ -1047,48 +1048,103 @@ function buildLandblockGroup(st, lbX, lbY, rawSceneryRecs, buildingRecs) {
         im.setMatrixAt(i, dummyMat);
       }
       im.instanceMatrix.needsUpdate = true;
+      im.updateMatrix();
+      if (typeof im.computeBoundingSphere === "function") im.computeBoundingSphere();
       group.add(im);
     }
   }
 
-  // 2. Build town buildings & doors
-  for (const rec of buildingRecs) {
-    const wx = wx0 + (Number(rec.x) || 0);
-    const wy = wy0 + (Number(rec.y) || 0);
-    const gh = worldGroundHeight(wx, wy);
-    const baseGroundZ = Number.isFinite(gh) && gh > 0.05 ? gh : (Number(rec.z) || 0);
-
+  // 2. Batch and freeze town buildings & doors
+  const bldgsByDid = new Map();
+  const doors = [];
+  for (const rec of (buildingRecs || [])) {
     if (rec.is_building) {
       const did = String(rec.obj_id || "");
-      const parts = getBuildingTemplate(st, did);
-      if (!parts.length) continue;
-      const bGroup = new THREE.Group();
-      bGroup.position.set(wx, wy, baseGroundZ);
-      bGroup.quaternion.set(Number(rec.qx) || 0, Number(rec.qy) || 0, Number(rec.qz) || 0, Number(rec.qw) ?? 1);
-      for (const { geometry, material } of parts) {
-        const m = new THREE.Mesh(geometry, material);
-        m.castShadow = false;
-        m.receiveShadow = false;
-        bGroup.add(m);
-      }
-      group.add(bGroup);
+      if (!did) continue;
+      let arr = bldgsByDid.get(did);
+      if (!arr) { arr = []; bldgsByDid.set(did, arr); }
+      arr.push(rec);
     } else if (rec.is_door) {
-      const dGroup = new THREE.Group();
-      // Preserve elevated door offset (e.g. +3m on Stilted_Fen_Manor)
-      const zOffset = (Number(rec.z) || 0) > baseGroundZ + 1.5 ? 3.0 : 0.0;
-      dGroup.position.set(wx, wy, baseGroundZ + zOffset);
-      dGroup.quaternion.set(Number(rec.qx) || 0, Number(rec.qy) || 0, Number(rec.qz) || 0, Number(rec.qw) ?? 1);
-      for (const { geometry, material } of st.doorTemplate) {
-        const m = new THREE.Mesh(geometry, material);
-        m.castShadow = false;
-        m.receiveShadow = false;
-        dGroup.add(m);
-      }
-      group.add(dGroup);
+      doors.push(rec);
     }
   }
 
+  // Batch town buildings by archetype using InstancedMesh per template part
+  for (const [did, recs] of bldgsByDid.entries()) {
+    const parts = getBuildingTemplate(st, did);
+    const count = recs.length;
+    if (!count || !parts.length) continue;
+
+    for (let p = 0; p < parts.length; p++) {
+      const { geometry, material } = parts[p];
+      const im = new THREE.InstancedMesh(geometry, material, count);
+      im.frustumCulled = true;
+      im.castShadow = false;
+      im.receiveShadow = false;
+      im.matrixAutoUpdate = false;
+
+      for (let i = 0; i < count; i++) {
+        const r = recs[i];
+        const wx = wx0 + (Number(r.x) || 0);
+        const wy = wy0 + (Number(r.y) || 0);
+        const gh = worldGroundHeight(wx, wy);
+        const baseGroundZ = Number.isFinite(gh) && gh > 0.05 ? gh : (Number(r.z) || 0);
+        posV.set(wx, wy, baseGroundZ);
+        quatQ.set(Number(r.qx) || 0, Number(r.qy) || 0, Number(r.qz) || 0, Number(r.qw) ?? 1);
+        scaleV.set(1, 1, 1);
+        dummyMat.compose(posV, quatQ, scaleV);
+        im.setMatrixAt(i, dummyMat);
+      }
+      im.instanceMatrix.needsUpdate = true;
+      im.updateMatrix();
+      if (typeof im.computeBoundingSphere === "function") im.computeBoundingSphere();
+      group.add(im);
+    }
+  }
+
+  // Batch town doors using InstancedMesh
+  if (doors.length > 0 && st.doorTemplate?.length) {
+    for (const { geometry, material } of st.doorTemplate) {
+      const count = doors.length;
+      const im = new THREE.InstancedMesh(geometry, material, count);
+      im.frustumCulled = true;
+      im.castShadow = false;
+      im.receiveShadow = false;
+      im.matrixAutoUpdate = false;
+
+      for (let i = 0; i < count; i++) {
+        const rec = doors[i];
+        const wx = wx0 + (Number(rec.x) || 0);
+        const wy = wy0 + (Number(rec.y) || 0);
+        const gh = worldGroundHeight(wx, wy);
+        const baseGroundZ = Number.isFinite(gh) && gh > 0.05 ? gh : (Number(rec.z) || 0);
+        const zOffset = (Number(rec.z) || 0) > baseGroundZ + 1.5 ? 3.0 : 0.0;
+        posV.set(wx, wy, baseGroundZ + zOffset);
+        quatQ.set(Number(rec.qx) || 0, Number(rec.qy) || 0, Number(rec.qz) || 0, Number(rec.qw) ?? 1);
+        scaleV.set(1, 1, 1);
+        dummyMat.compose(posV, quatQ, scaleV);
+        im.setMatrixAt(i, dummyMat);
+      }
+      im.instanceMatrix.needsUpdate = true;
+      im.updateMatrix();
+      if (typeof im.computeBoundingSphere === "function") im.computeBoundingSphere();
+      group.add(im);
+    }
+  }
+
+  group.matrixAutoUpdate = false;
+  group.updateMatrix();
   return group;
+}
+
+function disposeLandblockGroup(st, grp) {
+  if (!grp) return;
+  st.root.remove(grp);
+  grp.traverse((obj) => {
+    if (obj.isInstancedMesh && typeof obj.dispose === "function") {
+      obj.dispose();
+    }
+  });
 }
 
 function pumpFetchQueue(st) {
@@ -1139,11 +1195,17 @@ export function tickDericostWorld(scene3d, camera, nowMs = 0) {
         VFX_GLOBALS.uTime.value = (nowMs * 0.001) % 3600;
       }
     } else {
-      if (st.fetchQueue.length > 0) {
-        for (const job of st.fetchQueue) {
-          const e = st.lbGroups.get(job.hex);
-          if (e && e.status === "queued") st.lbGroups.delete(job.hex);
+      // Evict all Dericost landblocks when returning to Dereth (ay < 67000)
+      for (const [hex, entry] of st.lbGroups.entries()) {
+        entry.status = "evicted";
+        if (entry.group) {
+          disposeLandblockGroup(st, entry.group);
+          entry.group = null;
         }
+      }
+      st.lbGroups.clear();
+
+      if (st.fetchQueue.length > 0) {
         st.fetchQueue.length = 0;
         st.lastCenterKey = null;
       }
@@ -1221,7 +1283,10 @@ export function tickDericostWorld(scene3d, camera, nowMs = 0) {
     const d2 = (entry.lbX - centerLbX) ** 2 + (entry.lbY - centerLbY) ** 2;
     if (d2 > (STREAM_RADIUS_LBS + 2) ** 2) {
       entry.status = "evicted";
-      if (entry.group) st.root.remove(entry.group);
+      if (entry.group) {
+        disposeLandblockGroup(st, entry.group);
+        entry.group = null;
+      }
       st.lbGroups.delete(hex);
     }
   }
@@ -1240,4 +1305,17 @@ export function tickDericostWorld(scene3d, camera, nowMs = 0) {
     }
   }
   pumpFetchQueue(st);
+}
+
+export { buildLandblockGroup, disposeLandblockGroup };
+
+export function __resetDericostWorldForTest() {
+  if (_state) {
+    for (const [, entry] of _state.lbGroups.entries()) {
+      if (entry.group) disposeLandblockGroup(_state, entry.group);
+    }
+    _state.lbGroups.clear();
+    try { _state.root.clear(); } catch (_) {}
+    _state = null;
+  }
 }
