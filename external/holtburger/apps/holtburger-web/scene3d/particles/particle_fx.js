@@ -664,6 +664,7 @@ uniform mat4 uFxCsmM1;
 uniform mat4 uFxCsmM2;
 uniform vec2 uFxCsmSplits;
 uniform float uFxCsmFar;
+uniform float uFxCsmSelDist;
 float hbFxCsmTap( highp sampler2DShadow sm, mat4 m, vec3 wp ) {
 	vec4 sc = m * vec4( wp, 1.0 );
 	sc.xyz /= max( sc.w, 1e-6 );
@@ -855,7 +856,8 @@ const VERT_DEPTH = /* glsl */`
 		if ( fxShAmt > 0.0 ) {
 			vec4 fxCw = modelMatrix * instanceMatrix * vec4( 0.0, 0.0, 0.0, 1.0 );
 			vec4 fxCv = viewMatrix * fxCw;
-			fxVis = hbFxCsm( fxCw.xyz, -fxCv.z );
+			float fxDist = ( uFxCsmSelDist > 0.5 ) ? length( fxCv.xyz ) : -fxCv.z;
+			fxVis = hbFxCsm( fxCw.xyz, fxDist );
 		}
 	#endif
 		vFxF.w = mix( 1.0, fxVis, fxShAmt );
@@ -1137,6 +1139,14 @@ export function patchParticleFxShader(shader) {
   shader.uniforms.uFxMinPx = FX_UNIFORMS.uFxMinPx;
   // the CSM's own shared uniform set (csm.js `csmState.uniforms`), BY IDENTITY:
   // refreshCsmUniforms rewrites it every frame
+  if (!_csmUniforms) {
+    try {
+      const u = globalThis.window?.liveScene3d?.csmState?.uniforms ?? globalThis.__hbCsmState?.uniforms ?? null;
+      if (u && u.uCsmShadowMap0 && u.uCsmMatrix0 && u.uCsmSplits && u.uCsmFar) {
+        _csmUniforms = u;
+      }
+    } catch (_) { /* ignore */ }
+  }
   const cu = _csmUniforms;
   if (cu) {
     shader.uniforms.uFxCsm0 = cu.uCsmShadowMap0;
@@ -1147,6 +1157,7 @@ export function patchParticleFxShader(shader) {
     shader.uniforms.uFxCsmM2 = cu.uCsmMatrix2;
     shader.uniforms.uFxCsmSplits = cu.uCsmSplits;
     shader.uniforms.uFxCsmFar = cu.uCsmFar;
+    shader.uniforms.uFxCsmSelDist = cu.uCsmSelDist ?? { value: 1 };
   }
   return true;
 }
@@ -1160,13 +1171,15 @@ let _csmUniforms = null;
 function _tier1Variant() {
   if (_smokeOn === null) {
     _smokeOn = fxTier1Enabled("fxSmoke");
-    if (_smokeOn) {
-      try {
-        const u = globalThis.window?.liveScene3d?.csmState?.uniforms ?? null;
-        _csmUniforms = u && u.uCsmShadowMap0 && u.uCsmMatrix0 && u.uCsmSplits && u.uCsmFar ? u : null;
-      } catch (_) { _csmUniforms = null; }
-      if (!FX_UNIFORMS.uFxNoise.value) FX_UNIFORMS.uFxNoise.value = particleFxNoiseTexture();
+    if (_smokeOn && !FX_UNIFORMS.uFxNoise.value) {
+      FX_UNIFORMS.uFxNoise.value = particleFxNoiseTexture();
     }
+  }
+  if (_smokeOn && !_csmUniforms) {
+    try {
+      const u = globalThis.window?.liveScene3d?.csmState?.uniforms ?? globalThis.__hbCsmState?.uniforms ?? null;
+      _csmUniforms = u && u.uCsmShadowMap0 && u.uCsmMatrix0 && u.uCsmSplits && u.uCsmFar ? u : null;
+    } catch (_) { _csmUniforms = null; }
   }
   return { smoke: _smokeOn, csm: _smokeOn && !!_csmUniforms };
 }

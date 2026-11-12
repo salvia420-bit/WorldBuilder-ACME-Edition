@@ -32,7 +32,7 @@
 //     one (`switchSyncsOwn`), a static first drawn mid-session inside a switched run;
 //   * render shapes: two render() per frame (layers split) into an MSAA target, two cameras per
 //     frame, an ArrayCamera, a nested render + setRenderTarget in a hook, resetState and a context
-//     loss + restore, shadows on (the switch refuses shadow samplers), the executor installed after
+//     loss + restore, shadows on (the switch unblocks shadow samplers via reserved units), the executor installed after
 //     programs were linked (refused as unknown programs).
 // Every scenario compares the stock arm (no executor) with the switch arm (?drawExec + ?drawExecRigs
 // + ?drawExecSwitch): every GL call with its arguments, renderer.info + __batchedRuns.frame() per
@@ -698,7 +698,7 @@ await scenario("two cameras per frame (one render() each)", { frames: 8, twoCame
 await scenario("ArrayCamera (sub-cameras inside one render())", { frames: 7, arrayCamera: true, events: { colors: 3 } }, {});
 await scenario("a nested render + setRenderTarget inside an onBeforeRender (three's tracker reset mid-frame)", { frames: 7, nested: true, handover: true, hoPlan: () => "none" }, {});
 await scenario("resetState and a context loss + restore mid-session", { frames: 12, events: { resetState: 3, restore: 7, colors: 9 } }, {});
-await scenario("shadows on (lit programs with shadow samplers: refused)", { frames: 7, shadows: true, events: { colors: 3 } }, { refused: ["plan:shadowMaps"] });
+await scenario("shadows on (lit programs with shadow samplers: unblocked via reserved units)", { frames: 7, shadows: true, events: { colors: 3 } }, { minSps: 200 });
 await scenario("the executor installed after three linked the programs (unknown programs refused; new ones taken)", { frames: 10, lateInstall: 2, events: { lightAdd: 6 } }, { refused: ["plan:programUnknown"] });
 
 check(`[total] ${TOTAL.scenarios} scenarios: ${TOTAL.frames} frames, ${TOTAL.calls} GL calls compared, ${TOTAL.sps} same-program switches`, TOTAL.sps > 0 && TOTAL.scenarios > 0);
