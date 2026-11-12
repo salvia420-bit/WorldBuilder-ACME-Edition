@@ -274,10 +274,9 @@ export function addSingletonsToPools(nodes, scene3d, opts = {}) {
       // verdict settling — after which the member's dims stop moving and it
       // can take a page layer. Everything else (needsResample, deformed,
       // layerFull) has no event and is not filed. Env-cell surfaces ("ec")
-      // are temporary unparented meshes that cells.js immediately fuses into
-      // surfaces-fused-opaque on refusal, so holding them out leaks detached
-      // Mesh + BufferGeometry objects into _world.holdouts.
-      if (domain !== "ec" && (admit.reason === REFUSE.BC7_PENDING || admit.reason === REFUSE.OFF_PAGE)) {
+      // are held out and re-offered on atlasRefeed, parented to meshGroup as
+      // temporary singletons rather than permanently fused into per-cell meshes.
+      if (admit.reason === REFUSE.BC7_PENDING || admit.reason === REFUSE.OFF_PAGE) {
         _holdOut(n, scene3d, opts, mat, admit.reason);
       }
       passthrough.push(n);
@@ -816,6 +815,69 @@ export function poolTickP4() {
 // ---------------------------------------------------------------------------
 
 /**
+ * Drop any pending holdouts owned by a landblock (e.g. on cell release or eviction).
+ * Prevents memory leaks of held-out nodes when an LB is torn down before verdicts settle.
+ * @param {number} lbKey
+ * @param {"st"|"ec"|null} [domain]
+ * @returns {number} holdouts dropped
+ */
+export function releaseHoldoutsForLb(lbKey, domain = null) {
+  if (!_world || !_world.holdouts) return 0;
+  const k = lbKey >>> 0;
+  let dropped = 0;
+  for (const [rsId, list] of _world.holdouts) {
+    const remaining = [];
+    for (const h of list) {
+      const hLb = (h.opts?.lbKey >>> 0);
+      const matchDomain = !domain || h.opts?.domain === domain;
+      if (hLb === k && matchDomain) {
+        dropped += 1;
+        if (h.node && h.node.userData) delete h.node.userData.__poolHeldRs;
+      } else {
+        remaining.push(h);
+      }
+    }
+    if (remaining.length === 0) _world.holdouts.delete(rsId);
+    else _world.holdouts.set(rsId, remaining);
+  }
+  return dropped;
+}
+
+function _isHoldoutParked(h) {
+  try {
+    const lbKey = h.opts?.lbKey ?? h.node?.userData?.landblockId;
+    if (lbKey == null) return false;
+    const lru = h.scene3d?.landblockLru
+      || (typeof window !== "undefined" && (window.liveScene3d?.landblockLru || window.__landblockLru))
+      || null;
+    return lru?.isParked?.(lbKey >>> 0) === true;
+  } catch (_) {
+    return false;
+  }
+}
+
+function _isHoldoutStale(h) {
+  if (!h || !h.node) return true;
+  const isParked = _isHoldoutParked(h);
+  if (isParked) return false;
+  if (!h.node.parent) return true;
+  if (h.opts?.domain === "ec") {
+    const cellId = h.node.userData?.__poolCellId ?? h.node.userData?.cellId;
+    const s3d = h.scene3d
+      || (typeof window !== "undefined" && (window.liveScene3d || window.__scene3d))
+      || null;
+    if (s3d?.cellContainers3d instanceof Map && cellId != null) {
+      if (!s3d.cellContainers3d.has(cellId)) return true;
+    }
+    let cur = h.node.parent;
+    while (cur && cur.parent) cur = cur.parent;
+    if (s3d?.cellsGroup && cur !== s3d.cellsGroup) return true;
+    return false;
+  }
+  return false;
+}
+
+/**
  * The pool half of `atlasRefeed(rsId)`, in two parts:
  *   1. every class-page layer this rsId owns is REWRITTEN from the upgraded
  *      material (same page dims ⇒ same class ⇒ an in-place layer write);
@@ -846,13 +908,11 @@ export function poolAtlasRefeed(rsId) {
   // Group by (scene3d, lbKey, domain) so each re-offer is one TilePlan.
   const groups = new Map();
   for (const h of held) {
-    // STALE: both producer call sites parent every passthrough node the same
-    // synchronous turn they take it back (statics.js:2653,
-    // buildings.js:192), and a verdict can only resolve on a LATER turn — so
-    // a parentless node here is one whose landblock was evicted while its
-    // texture was in flight. Re-offering it would resurrect an evicted LB's
-    // geometry into a pool no residency event owns. Dropped, and counted.
-    if (!h.node || !h.node.parent) {
+    // STALE: a parentless node whose landblock was evicted while its
+    // texture was in flight must be dropped. But warm-PARKED outdoor "st"
+    // holdouts have their nodes detached without being evicted (isParked),
+    // and EnvCell "ec" holdouts are parented to meshGroup.
+    if (_isHoldoutStale(h)) {
       _world.stats.reOfferStale += 1;
       if (h.node && h.node.userData) delete h.node.userData.__poolHeldRs;
       continue;
@@ -897,7 +957,31 @@ export function poolAtlasRefeed(rsId) {
         rehomed += 1;
         // The held-out node WAS scene-resident (it rendered as passthrough);
         // now that a pool owns its geometry it must leave the graph.
-        if (n.parent) { try { n.parent.remove(n); } catch (_) { /* fail-soft */ } }
+        if (n.parent) {
+          try { n.parent.remove(n); } catch (_) { /* fail-soft */ }
+        } else {
+          // If the node was parked, remove it from the parkPool's statics/buildings stash
+          // so unpark does not duplicate it back into the scene graph.
+          try {
+            const lru = g.scene3d?.landblockLru
+              || (typeof window !== "undefined" && (window.liveScene3d?.landblockLru || window.__landblockLru))
+              || null;
+            const lbKey = g.opts?.lbKey ?? n.userData?.landblockId;
+            if (lru && lbKey != null && typeof lru.parkPool?.get === "function") {
+              const p = lru.parkPool.get(lbKey >>> 0) || lru.parkPool.get(lbKey);
+              if (p) {
+                if (Array.isArray(p.statics)) {
+                  const idx = p.statics.indexOf(n);
+                  if (idx >= 0) p.statics.splice(idx, 1);
+                }
+                if (Array.isArray(p.buildings)) {
+                  const idx = p.buildings.indexOf(n);
+                  if (idx >= 0) p.buildings.splice(idx, 1);
+                }
+              }
+            }
+          } catch (_) { /* fail-soft */ }
+        }
       }
     } catch (_) { /* fail-soft: the node keeps rendering as it is */ }
   }

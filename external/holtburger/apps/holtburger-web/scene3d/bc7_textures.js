@@ -816,6 +816,45 @@ export function makeBc7ArrayTexture(w, h, depth, opts = {}) {
   arr.wrapS = THREE.ClampToEdgeWrapping;
   arr.wrapT = THREE.ClampToEdgeWrapping;
   arr.needsUpdate = true;
+
+  // Defer clearLayerUpdates across the synchronous mip loop and flush in
+  // onUpdate to eliminate 16x-64x PCIe upload amplification on Three r184.
+  const protoClearLayerUpdates = typeof arr.clearLayerUpdates === "function"
+    ? arr.clearLayerUpdates.bind(arr)
+    : () => { arr.layerUpdates?.clear?.(); };
+
+  let layerUpdatesDeferred = false;
+  arr.clearLayerUpdates = function (force = false) {
+    if (force) {
+      layerUpdatesDeferred = false;
+      protoClearLayerUpdates();
+    } else {
+      layerUpdatesDeferred = true;
+    }
+  };
+
+  let customOnUpdate = typeof opts.onUpdate === "function" ? opts.onUpdate : null;
+  Object.defineProperty(arr, "onUpdate", {
+    get() {
+      return function (t) {
+        try {
+          customOnUpdate?.call(this, t);
+        } catch (_) {
+          /* never break an upload */
+        }
+        if (layerUpdatesDeferred) {
+          layerUpdatesDeferred = false;
+          protoClearLayerUpdates();
+        }
+      };
+    },
+    set(fn) {
+      customOnUpdate = typeof fn === "function" ? fn : null;
+    },
+    configurable: true,
+    enumerable: true,
+  });
+
   return arr;
 }
 
@@ -827,9 +866,10 @@ export function makeBc7ArrayTexture(w, h, depth, opts = {}) {
  * chain at least as deep as the array's — a shallow payload into a chain
  * array is a LOUD diagnostic failure (pass 5 S5: level-0-only compressed
  * uploads are illegal on the compressed-only arm), never a silent
- * level-0-only write. Upload-cost note: three r184 clears `layerUpdates`
- * after mip 0, so this write uploads marked layers at level 0 + full depth
- * at levels 1+ (see the header).
+ * level-0-only write. Deferral note: three r184 clears `layerUpdates`
+ * inside the mip loop at level 0; makeBc7ArrayTexture defers clearLayerUpdates
+ * across all mip levels and flushes in onUpdate, uploading only the marked
+ * layers at every level and eliminating PCIe upload amplification.
  * @returns {boolean} true when written.
  */
 export function writeBc7ArrayLayer(arr, layer, parsed) {
