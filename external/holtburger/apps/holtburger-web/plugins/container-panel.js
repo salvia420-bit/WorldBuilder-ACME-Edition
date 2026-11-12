@@ -524,7 +524,10 @@ function hidePanel() {
 function onContainerOpened(ev) {
   const detail = ev?.detail || {};
   const guid = (detail.u32Payload ?? detail.u32_payload ?? 0) >>> 0;
-  if (!guid || isOwnOpenableContainer(guid)) return;
+  if (!guid) return;
+  if (groundObjectGateEnabled() && typeof isOwnOpenableContainer === "function" && isOwnOpenableContainer(guid)) {
+    return;
+  }
   const name = detail.stringPayload || "Container";
   const h = window.__sessionHandle;
   const facts = groundObjectGateEnabled() ? groundObjectFacts(h, guid) : null;

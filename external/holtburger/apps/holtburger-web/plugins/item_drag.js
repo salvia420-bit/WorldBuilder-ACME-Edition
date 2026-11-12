@@ -914,7 +914,26 @@ export function executeItemAction(action, s, opts = {}) {
         return false;
       }
       const plan = planBackpackPlacement(s?.item || { guid }, { forceMainPack: true });
-      if (!plan || plan.op === "noop") return false;
+      if (!plan || plan.op === "noop") {
+        if (!localPlayerGuid() && (typeof h?.unwieldToPack === "function" || typeof h?.unwield === "function")) {
+          sent = call("unwieldToPack", guid) || call("unwield", guid);
+          if (sent) {
+            sfx(0x8D, guid);
+            pendingOps.add(guid, {
+              op: "move",
+              toKey: MAIN_PACK_KEY,
+              index: 0,
+              external: false,
+              amount: stack,
+              expect: (row) => !!row && (row.equipMask >>> 0) === 0,
+              undo,
+              stub: opts.stub || null,
+            });
+          }
+          break;
+        }
+        return false;
+      }
       if (plan.op === "reject") {
         showItemToast(plan.message);
         uiError();

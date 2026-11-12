@@ -98,8 +98,14 @@ pub(crate) struct InventoryRequestTracker {
 }
 
 impl InventoryRequestTracker {
-    /// `RecordRequest`: `request` on object `guid` is now the pending one.
-    pub(crate) fn record(&mut self, guid: u32, request: InventoryRequest) {
+    /// Track an auxiliary server action on `guid` in `in_flight` without
+    /// overwriting retail's `self.last` (`prevRequestObjectID`). Used for
+    /// auto-unequip `PutItemInContainer` packets sent ahead of `WieldFromPack`
+    /// or `SplitStackToWield` so a `0x00A0` bounce on `conflict_guid` resolves
+    /// its own `PutInContainer`, while a `0x00A0` bounce on an unrecorded
+    /// `StackableSplitToWield` (`stack_guid`) is never misattributed to
+    /// `conflict_guid`.
+    pub(crate) fn record_in_flight(&mut self, guid: u32, request: InventoryRequest) {
         if guid == 0 {
             return;
         }
@@ -111,6 +117,14 @@ impl InventoryRequestTracker {
             self.in_flight.remove(0);
         }
         self.in_flight.push((guid, request));
+    }
+
+    /// `RecordRequest`: `request` on object `guid` is now the pending one.
+    pub(crate) fn record(&mut self, guid: u32, request: InventoryRequest) {
+        if guid == 0 {
+            return;
+        }
+        self.record_in_flight(guid, request);
         self.last = Some((guid, request));
     }
 
@@ -226,12 +240,18 @@ impl InventoryRequestTracker {
             .iter()
             .find(|&&(g, _)| g == wire_guid)
             .map(|&(_, r)| r);
-        let chosen = match (own, self.last) {
-            (Some(request), _) => (wire_guid, Some(request)),
-            (None, Some((guid, request))) => (guid, Some(request)),
-            (None, None) => (wire_guid, None),
+        let chosen = if let Some(request) = own {
+            (wire_guid, Some(request))
+        } else if self.displaced_equip.contains_key(&wire_guid) {
+            (wire_guid, None)
+        } else if let Some((guid, request)) = self.last {
+            (guid, Some(request))
+        } else {
+            (wire_guid, None)
         };
-        self.last_failed_displaced = if chosen.1 == Some(InventoryRequest::Wield) {
+        self.last_failed_displaced = if chosen.1 == Some(InventoryRequest::Wield)
+            || (chosen.1.is_none() && chosen.0 == wire_guid)
+        {
             self.displaced_equip.remove(&chosen.0).unwrap_or_default()
         } else {
             self.displaced_equip.remove(&chosen.0);
@@ -862,8 +882,8 @@ mod tests {
         const NEW_BOW: u32 = 0x8000_00BB;
         let mut t = InventoryRequestTracker::default();
 
-        // WieldFromPack records PutInContainer on conflict_guid ahead of Wield on item_guid.
-        t.record(OLD_SHIELD, InventoryRequest::PutInContainer);
+        // WieldFromPack records PutInContainer on conflict_guid in-flight ahead of Wield on item_guid.
+        t.record_in_flight(OLD_SHIELD, InventoryRequest::PutInContainer);
         t.record(NEW_BOW, InventoryRequest::Wield);
         t.record_displaced_equip(NEW_BOW, vec![(OLD_SHIELD, 0x0020_0000)]);
 
@@ -886,7 +906,7 @@ mod tests {
 
         // Conversely, when PutInContainer(OLD_SHIELD) succeeds and NEW_BOW bounces,
         // OLD_SHIELD IS returned for re-wield restore.
-        t.record(OLD_SHIELD, InventoryRequest::PutInContainer);
+        t.record_in_flight(OLD_SHIELD, InventoryRequest::PutInContainer);
         t.record(NEW_BOW, InventoryRequest::Wield);
         t.record_displaced_equip(NEW_BOW, vec![(OLD_SHIELD, 0x0020_0000)]);
         assert!(t.respond(OLD_SHIELD));
@@ -896,5 +916,55 @@ mod tests {
             (NEW_BOW, Some(InventoryRequest::Wield))
         );
         assert_eq!(t.take_failed_displaced(), vec![(OLD_SHIELD, 0x0020_0000)]);
+    }
+
+    #[test]
+    fn split_stack_to_wield_conflict_neither_steals_last_nor_drops_displaced_restore() {
+        const OLD_DART: u32 = 0x8000_00CC;
+        const DART_STACK: u32 = 0x8000_00DD;
+        let mut t = InventoryRequestTracker::default();
+
+        // SplitStackToWield records conflict PutInContainer via `record_in_flight`
+        // and records NO request on `DART_STACK` (`acclient.c:438132`).
+        t.record_in_flight(OLD_DART, InventoryRequest::PutInContainer);
+        t.record_displaced_equip(DART_STACK, vec![(OLD_DART, 0x0040_0000)]);
+
+        // Case 1: StackableSplitToWield bounces BEFORE OLD_DART's unequip answers.
+        // Because `record_in_flight` left `self.last = None`, `attempt_failed(DART_STACK)`
+        // returns `(DART_STACK, None)` instead of falsely blaming `OLD_DART`!
+        assert_eq!(t.attempt_failed(DART_STACK), (DART_STACK, None));
+        assert_eq!(t.take_failed_displaced(), vec![(OLD_DART, 0x0040_0000)]);
+        assert_eq!(t.pending(OLD_DART), Some(InventoryRequest::PutInContainer));
+        assert!(t.respond(OLD_DART));
+
+        // Case 2: OLD_DART unequips first, then StackableSplitToWield bounces -> restores OLD_DART.
+        t.record_in_flight(OLD_DART, InventoryRequest::PutInContainer);
+        t.record_displaced_equip(DART_STACK, vec![(OLD_DART, 0x0040_0000)]);
+        assert!(t.respond(OLD_DART));
+        assert_eq!(t.attempt_failed(DART_STACK), (DART_STACK, None));
+        assert_eq!(t.take_failed_displaced(), vec![(OLD_DART, 0x0040_0000)]);
+
+        // Case 3: OLD_DART's unequip bounces (`0x00A0(OLD_DART)`), then StackableSplitToWield bounces ->
+        // OLD_DART was pruned from `displaced_equip` because it never unequipped.
+        t.record_in_flight(OLD_DART, InventoryRequest::PutInContainer);
+        t.record_displaced_equip(DART_STACK, vec![(OLD_DART, 0x0040_0000)]);
+        assert_eq!(
+            t.attempt_failed(OLD_DART),
+            (OLD_DART, Some(InventoryRequest::PutInContainer))
+        );
+        assert!(t.take_failed_displaced().is_empty());
+        assert_eq!(t.attempt_failed(DART_STACK), (DART_STACK, None));
+        assert!(t.take_failed_displaced().is_empty());
+
+        // Case 4: Even when an unrelated request is still in `self.last`, a bounce
+        // naming `DART_STACK` (`displaced_equip` key) resolves `DART_STACK` directly.
+        const PRIOR_DROP: u32 = 0x8000_00EE;
+        t.record(PRIOR_DROP, InventoryRequest::Drop);
+        t.record_in_flight(OLD_DART, InventoryRequest::PutInContainer);
+        t.record_displaced_equip(DART_STACK, vec![(OLD_DART, 0x0040_0000)]);
+        assert!(t.respond(OLD_DART));
+        assert_eq!(t.attempt_failed(DART_STACK), (DART_STACK, None));
+        assert_eq!(t.take_failed_displaced(), vec![(OLD_DART, 0x0040_0000)]);
+        assert_eq!(t.pending(PRIOR_DROP), Some(InventoryRequest::Drop));
     }
 }

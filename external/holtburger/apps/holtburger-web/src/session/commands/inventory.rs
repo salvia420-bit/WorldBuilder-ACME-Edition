@@ -646,7 +646,7 @@ pub(super) async fn handle(ctx: &mut LoopCtx, cmd: SessionCommand) -> LoopFlow {
                         );
                         break;
                     }
-                    inventory_requests.record(g, put_in_container_request(false));
+                    inventory_requests.record_in_flight(g, put_in_container_request(false));
                     if old_slot_bits != 0 {
                         displaced.push((g, old_slot_bits));
                     }
@@ -808,6 +808,7 @@ pub(super) async fn handle(ctx: &mut LoopCtx, cmd: SessionCommand) -> LoopFlow {
                 StackableSplitToWieldActionData,
             };
             let mut effective_mask = equip_mask;
+            let mut displaced: Vec<(u32, u32)> = Vec::new();
             if let Some(w) = world.borrow().as_ref() {
                 use holtburger_common::properties::{
                     EquipMask as PropEquipMask, PropertyInt,
@@ -846,6 +847,12 @@ pub(super) async fn handle(ctx: &mut LoopCtx, cmd: SessionCommand) -> LoopFlow {
                     } else {
                         w.player.guid
                     };
+                    let old_slot_bits = w
+                        .player
+                        .equipment
+                        .get(&g_guid)
+                        .map(|m| m.bits())
+                        .unwrap_or(0);
                     console_log_str(&format!(
                         "[inventory/split-wield] auto-unequip 0x{g:08X} → 0x{:08X} (slot conflict)",
                         dest_guid.0,
@@ -863,7 +870,10 @@ pub(super) async fn handle(ctx: &mut LoopCtx, cmd: SessionCommand) -> LoopFlow {
                         );
                         break;
                     }
-                    inventory_requests.record(g, put_in_container_request(false));
+                    inventory_requests.record_in_flight(g, put_in_container_request(false));
+                    if old_slot_bits != 0 {
+                        displaced.push((g, old_slot_bits));
+                    }
                 }
             }
             let action = GameAction::StackableSplitToWield(Box::new(
@@ -882,7 +892,9 @@ pub(super) async fn handle(ctx: &mut LoopCtx, cmd: SessionCommand) -> LoopFlow {
                 LoopFlow::Exit
             );
             // messages-objects-1: retail `UIAttemptWield`'s split branch
-            // records no request (acclient.c:438132).
+            // records no request (acclient.c:438132), while `displaced_equip`
+            // remembers auto-unequipped items in case `StackableSplitToWield` bounces.
+            inventory_requests.record_displaced_equip(stack_guid, displaced);
             console_log_str(&format!(
                 "[inventory/split-wield] stack=0x{stack_guid:08X} slot=0x{effective_mask:08X} amount={amount}",
             ));

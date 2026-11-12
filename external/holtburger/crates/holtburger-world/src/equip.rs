@@ -540,4 +540,45 @@ mod tests {
             ]
         );
     }
+
+    #[test]
+    fn unequip_destinations_honors_pack_placement_order_and_23_of_24_boundary() {
+        let mut state = world();
+        wielded(&mut state, 0x8000_0200, 600, 0x0010_0000, 0); // main-hand sword
+        wielded(&mut state, 0x8000_0201, 601, 0x0020_0000, 0); // off-hand shield
+
+        // Deliberately assign higher GUID `0x7000_0099` to pack slot 0 and lower
+        // GUID `0x7000_0010` to pack slot 1 (plus a non-container Foci at slot 0
+        // before them) so GUID sort alone would pick the wrong side pack.
+        side_pack(&mut state, 0x7000_0005, 0, false); // Foci in slot 0
+        side_pack(&mut state, 0x7000_0099, 24, false); // Pack #1 in slot 1 (23/24 full)
+        side_pack(&mut state, 0x7000_0010, 24, false); // Pack #2 in slot 2 (0/24 empty)
+        state.record_inventory_placement(Guid(0x7000_0005), PLAYER, 0, true);
+        state.record_inventory_placement(Guid(0x7000_0099), PLAYER, 1, true);
+        state.record_inventory_placement(Guid(0x7000_0010), PLAYER, 2, true);
+
+        for i in 0..23u32 {
+            let g = Guid(0x6100_0000 + i);
+            let mut e = Entity::new(g, format!("pouch item {i}"), WorldPosition::default());
+            e.properties.iids.insert(
+                holtburger_common::properties::PropertyInstanceId::Container,
+                Guid(0x7000_0099),
+            );
+            state.entities.insert(e);
+            state.player.add_to_inventory(g);
+        }
+        for i in 0..102u32 {
+            main_pack_filler(&mut state, 0x6200_0000 + i);
+        }
+
+        // Main pack is 102/102 full, Pack #1 (`0x7000_0099`) has 23/24 items (1 free),
+        // so conflict #1 lands in `0x7000_0099` and conflict #2 spills into `0x7000_0010`.
+        assert_eq!(
+            unequip_destinations(&state, &[Guid(0x8000_0200), Guid(0x8000_0201)]),
+            vec![
+                (Guid(0x8000_0200), Guid(0x7000_0099)),
+                (Guid(0x8000_0201), Guid(0x7000_0010)),
+            ]
+        );
+    }
 }

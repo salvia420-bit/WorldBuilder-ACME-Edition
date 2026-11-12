@@ -454,14 +454,6 @@ export function buildItems(ctx) {
         label: "Equip",
         disabled: isBusyNow(),
         action: () => {
-          if (isBusyNow() || pendingOps.has(guid)) return;
-          if (itemInOpenTrade(guid, handle)) {
-            showItemToast(`You are trading the ${invItem.name || "item"}, it cannot be wielded`);
-            return;
-          }
-          try {
-            if (window.__inventory?.activateItem?.(guid) === true) return;
-          } catch (_) {}
           const fallbackMask = ((vl & ~WEARABLE_LOCATIONS) >>> 0) === 0
             ? (vl >>> 0)
             : (options.length === 1 ? (options[0].mask >>> 0) : pickWieldSlotMaskShared(vl));
@@ -523,12 +515,16 @@ export function buildItems(ctx) {
       disabled: attuned || isBusyNow(),
       action: () => {
         if (attuned || isBusyNow() || pendingOps.has(guid)) return;
+        const src = { guid, item: invItem, owned: true, sourceEl: ctx.srcLi };
         if (itemInOpenTrade(guid, handle)) {
-          showItemToast(`You are trading the ${invItem.name || "item"}, it cannot be dropped`);
+          executeItemAction({
+            op: "reject",
+            message: `You are trading the ${invItem.name || "item"}, it cannot be dropped`,
+          }, src);
           return;
         }
         if (playerOnGroundNow(handle) === false) {
-          showItemToast(PLACE_IN_3D_TEXT.midAir);
+          executeItemAction({ op: "reject", message: PLACE_IN_3D_TEXT.midAir }, src);
           return;
         }
         if (bonded) {
@@ -596,11 +592,14 @@ export function buildItems(ctx) {
           executeItemAction({ op: "drop", guid, amount: n }, src);
         };
         if (itemInOpenTrade(guid, handle)) {
-          showItemToast(`You are trading the ${invItem.name || "item"}, it cannot be dropped`);
+          executeItemAction({
+            op: "reject",
+            message: `You are trading the ${invItem.name || "item"}, it cannot be dropped`,
+          }, src);
           return;
         }
         if (playerOnGroundNow(handle) === false) {
-          showItemToast(PLACE_IN_3D_TEXT.midAir);
+          executeItemAction({ op: "reject", message: PLACE_IN_3D_TEXT.midAir }, src);
           return;
         }
         if (bonded) {

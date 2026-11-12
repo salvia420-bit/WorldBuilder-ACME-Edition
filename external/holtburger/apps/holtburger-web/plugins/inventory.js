@@ -204,6 +204,20 @@ const packOrder = createPackOrder();
 let lastSelectedPack = 0;
 let viewedContainersPlayer = 0;
 const viewedContainers = new Set();
+const viewedInFlightAt = new Map();
+const unconfirmedViewed = new Set();
+const VIEW_INFLIGHT_COOLDOWN_MS = 1500;
+
+function clearUnconfirmedContainerView(guid = 0) {
+  const g = (guid >>> 0) || 0;
+  if (g) {
+    viewedInFlightAt.delete(g);
+    unconfirmedViewed.delete(g);
+  } else {
+    viewedInFlightAt.clear();
+    unconfirmedViewed.clear();
+  }
+}
 
 function ensureOwnedContainerViewedRows(containerGuid, rowsList) {
   const c = (containerGuid >>> 0) || 0;
@@ -212,15 +226,23 @@ function ensureOwnedContainerViewedRows(containerGuid, rowsList) {
   if (me && me !== viewedContainersPlayer) {
     viewedContainersPlayer = me;
     viewedContainers.clear();
+    viewedInFlightAt.clear();
+    unconfirmedViewed.clear();
   }
   if (viewedContainers.has(c)) return;
   const h = sessionHandleNow();
-  if (typeof h?.hasViewedContainer === "function") {
+  const hasViewedFn = typeof h?.hasViewedContainer === "function";
+  if (hasViewedFn) {
     let seen = false;
     try { seen = !!h.hasViewedContainer(c); } catch (_) { seen = false; }
-    if (seen) { viewedContainers.add(c); return; }
+    if (seen) {
+      viewedInFlightAt.delete(c);
+      viewedContainers.add(c);
+      return;
+    }
   } else {
     if (Array.isArray(rowsList) && rowsList.some((r) => (r.containerId >>> 0) === c)) {
+      unconfirmedViewed.delete(c);
       viewedContainers.add(c);
       return;
     }
@@ -231,11 +253,26 @@ function ensureOwnedContainerViewedRows(containerGuid, rowsList) {
         const arr = Array.isArray(cached) ? cached : [];
         let len = 0;
         for (const it of arr) { len++; try { it?.free?.(); } catch (_) {} }
-        if (len > 0) { viewedContainers.add(c); return; }
+        if (len > 0) {
+          unconfirmedViewed.delete(c);
+          viewedContainers.add(c);
+          return;
+        }
       } catch (_) {}
     }
+    if (unconfirmedViewed.has(c)) return;
   }
-  viewedContainers.add(c);
+  if (typeof window !== "undefined" && typeof window.__isBusy === "function" && window.__isBusy()) {
+    return;
+  }
+  const now = typeof performance !== "undefined" ? performance.now() : Date.now();
+  if (hasViewedFn) {
+    const prevAt = viewedInFlightAt.get(c) ?? -Infinity;
+    if (now - prevAt < VIEW_INFLIGHT_COOLDOWN_MS) return;
+    viewedInFlightAt.set(c, now);
+  } else {
+    unconfirmedViewed.add(c);
+  }
   if (typeof h?.useObject === "function") {
     try { h.useObject(c); } catch (_) {}
   }
@@ -801,7 +838,7 @@ function tradedGuidsSet(h) {
   let snap = null;
   try {
     snap = h.playerTrade();
-    const my = snap?.myItems;
+    const my = snap && snap.isOpen !== false ? snap.myItems : null;
     if (my) {
       for (const it of Array.from(my)) {
         try { if (it?.guid) set.add(it.guid >>> 0); } catch (_) {}
@@ -1135,8 +1172,9 @@ function doMount(parentEl, _ctx) {
       try { u = (h.objectIntProperty(g, 16) >>> 0) || 0; } catch (_) { u = 0; }
     }
     const srcBits = u & 0xffff;
-    const wieldedUsable = srcBits !== 0 && srcBits !== 0x0001 && (srcBits & 0x0004) !== 0;
+    const wieldedUsable = (srcBits & 0x0001) === 0 && (srcBits & 0x003c) !== 0;
     if (wieldedUsable) {
+      if (typeof window !== "undefined" && typeof window.__isBusy === "function" && window.__isBusy()) return;
       if (!consumeUseThrottle(nowMs())) return;
       const src = { guid: g, item: withPack(row) || { guid: g }, owned: true, sourceEl };
       if (tradedGuidsSet(h).has(g)) {
@@ -1170,6 +1208,7 @@ function doMount(parentEl, _ctx) {
   dollHit.dataset.elemId = "0x100001D6";
   dollHit.draggable = true;
   let cachedDollHitRect = null;
+  let cachedDollHitRectAt = -Infinity;
   let lastDollHoverGuid = 0;
   function hitGuidOnFigure(ev, { freshRect = false } = {}) {
     if (slotsViewChecked) return 0;
@@ -1177,8 +1216,10 @@ function doMount(parentEl, _ctx) {
       loadPaperdollHitMap();
       if (!hitTestMap) return 0;
     }
-    if (freshRect || !cachedDollHitRect) {
+    const now = nowMs();
+    if (freshRect || !cachedDollHitRect || (now - cachedDollHitRectAt > 200)) {
       cachedDollHitRect = dollHit.getBoundingClientRect();
+      cachedDollHitRectAt = now;
     }
     const rect = cachedDollHitRect;
     const x = rect.width > 0 ? ((ev.clientX - rect.left) * hitTestMap.width / rect.width) : (ev.offsetX ?? ev.clientX ?? -1);
@@ -2562,8 +2603,14 @@ function doMount(parentEl, _ctx) {
         const d = ev?.detail;
         const g = (d?.u32Payload ?? d?.u32_payload ?? 0) >>> 0;
         if (!g) return;
+        clearUnconfirmedContainerView(g);
         viewedContainers.add(g);
         if (g === selectedPackContainerId || rowsByGuid.has(g)) scheduleRebuild();
+      };
+      const onActionRejected = (ev) => {
+        const d = ev?.detail ?? ev;
+        const g = (d?.u32Payload ?? d?.u32_payload ?? d?.guid ?? 0) >>> 0;
+        clearUnconfirmedContainerView(g);
       };
       // 2026-10-07 — kind:47/49 fire for every wielder transition in view;
       // rebuild (panel + doll) only for ours (inventory_helpers.js
@@ -2580,6 +2627,8 @@ function doMount(parentEl, _ctx) {
         ["playerStatsUpdated", onStats],
         ["playerInventoryChanged", scheduleRebuild],
         ["containerOpened", onOwnedContainerOpened],
+        ["clientActionRejected", onActionRejected],
+        ["kind:48", onActionRejected],
         ["sharedCooldownChanged", onOverlayStateEvent],
         ["tradeUpdated", onOverlayStateEvent],
         ["kind:47", onWieldChange],

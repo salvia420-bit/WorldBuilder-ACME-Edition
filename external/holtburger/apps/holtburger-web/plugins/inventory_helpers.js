@@ -543,14 +543,17 @@ export function structureBarFraction(row) {
 }
 
 /**
- * Retail `ItemUses` `SOURCE_WIELDED` (`Usable::WIELDED = 0x0004` in the low-16
- * source bits of `PropertyInt::ItemUseable`, `acclient.c:433412-433421`):
- * `true` when an equipped item is usable while wielded on the paperdoll.
+ * Retail `ItemUses::IsUseable` + `GetLeastLimitedSourceUse` (`acclient.c:
+ * 296802-296840`, `433412-433421`) and `WorldContextExt::current_usable_location_flags`
+ * (`crates/holtburger-world/src/context.rs:825-831`): an equipped item is
+ * usable while wielded on the paperdoll when `Usable::NO` (`0x0001`) is clear
+ * and any source flag satisfied while wielded (`WIELDED 0x04 | CONTAINED 0x08 |
+ * VIEWED 0x10 | REMOTE 0x20` = `0x003c`) is set.
  */
 export function isWieldedUsable(row) {
   const u = (row?.itemUseable >>> 0) || 0;
   const src = u & 0xffff;
-  return src !== 0 && src !== 0x0001 && (src & 0x0004) !== 0;
+  return (src & 0x0001) === 0 && (src & 0x003c) !== 0;
 }
 
 /**

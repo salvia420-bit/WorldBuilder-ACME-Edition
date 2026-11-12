@@ -790,8 +790,10 @@ await check("Item Structure Bar (0x10000348) and copyInventoryRow preserve struc
   assert.equal(helpers.structureBarFraction({ structure: 25, maxStructure: 50 }), 0.5);
   assert.equal(helpers.structureBarFraction({ structure: 0, maxStructure: 50 }), 0);
   assert.equal(helpers.isWieldedUsable({ itemUseable: 0x0001 }), false);
-  assert.equal(helpers.isWieldedUsable({ itemUseable: 0x0008 }), false);
+  assert.equal(helpers.isWieldedUsable({ itemUseable: 0x0002 }), false);
+  assert.equal(helpers.isWieldedUsable({ itemUseable: 0x0005 }), false);
   assert.equal(helpers.isWieldedUsable({ itemUseable: 0x0004 }), true);
+  assert.equal(helpers.isWieldedUsable({ itemUseable: 0x0008 }), true);
   assert.equal(helpers.isWieldedUsable({ itemUseable: 0x00080004 }), true);
 
   const KIT_HALF = 0x9411;
@@ -994,6 +996,45 @@ await check("Paperdoll dollHit caches getBoundingClientRect across mousemove, an
       await settle();
       assert.deepEqual(targetBegun, [TARGET_ORB, "Casting Ring"]);
       assert.equal(calls.length, 0);
+
+      // Usable::CONTAINED (`0x0008`) worn items ALSO use on paperdoll dblclick (not unwield),
+      // while `Usable::NO | Usable::WIELDED` (`0x0005`) is NOT usable and unwields:
+      assert.equal(helpers.isWieldedUsable({ itemUseable: 0x0008 }), true, "Usable::CONTAINED is usable while wielded");
+      assert.equal(helpers.isWieldedUsable({ itemUseable: 0x00220008 }), true, "SOURCE_CONTAINED_TARGET_REMOTE_OR_SELF is usable while wielded");
+      assert.equal(helpers.isWieldedUsable({ itemUseable: 0x0010 }), true, "Usable::VIEWED is usable while wielded");
+      assert.equal(helpers.isWieldedUsable({ itemUseable: 0x0020 }), true, "Usable::REMOTE is usable while wielded");
+      assert.equal(helpers.isWieldedUsable({ itemUseable: 0x0005 }), false, "Usable::NO bit 0 overrides source bits");
+
+      const CONTAINED_ROBE = 0x9503;
+      const DISABLED_RING = 0x9504;
+      inv = inv.filter((r) => r.guid !== TARGET_ORB);
+      inv.push(
+        {
+          guid: CONTAINED_ROBE, wcid: 403, name: "Robe of Recall", iconId: 0x06001033, itemType: 0x4,
+          stackSize: 1, equipMask: 0x00008000, containerId: 0, validLocations: 0x00008000,
+          requiresBackpackSlot: false, itemsCapacity: 0, itemUseable: 0x0008,
+        },
+        {
+          guid: DISABLED_RING, wcid: 404, name: "Inert Band", iconId: 0x06001034, itemType: 0x8,
+          stackSize: 1, equipMask: 0x00080000, containerId: 0, validLocations: 0x000C0000,
+          requiresBackpackSlot: false, itemsCapacity: 0, itemUseable: 0x0005,
+        },
+      );
+      bus.emit("playerInventoryChanged", { detail: {} });
+      await settle();
+      calls.length = 0;
+      await new Promise((r) => setTimeout(r, 220));
+      neckSlot.dispatchEvent(new FakeEvent("dblclick", { bubbles: true, button: 0 }));
+      await settle();
+      assert.ok(calls.some((c) => c[0] === "useObject" && c[1] === CONTAINED_ROBE), "Usable::CONTAINED worn item sends useObject on paperdoll dblclick");
+      assert.ok(!calls.some((c) => c[0] === "moveItem" || c[0] === "unwield"), "Usable::CONTAINED worn item must NOT unwield on dblclick");
+
+      calls.length = 0;
+      ringSlot.dispatchEvent(new FakeEvent("dblclick", { bubbles: true, button: 0 }));
+      await settle();
+      assert.ok(calls.some((c) => c[0] === "moveItem" && c[1] === DISABLED_RING) || calls.some((c) => c[0] === "unwieldToPack" && c[1] === DISABLED_RING), "Usable::NO (0x0005) item unwields on paperdoll dblclick");
+      for (const e of drag.pendingOps.all()) drag.pendingOps.fail(e.guid);
+      inv = inv.filter((r) => r.guid !== CONTAINED_ROBE && r.guid !== DISABLED_RING);
     } finally {
       inv = inv.filter((r) => r.guid !== FOCUS_ORB && r.guid !== TARGET_ORB);
       window.__useTargeting = prevUseTgt;
@@ -1118,21 +1159,43 @@ await check("radial-menu Split/Drop/Give/Equip/Unequip and paperdoll unwield enf
     assert.equal(actionCalls.length, 0, "busy blocks Equip");
     busy = false;
 
-    const prevInvHook = window.__inventory;
-    window.__inventory = null; // test radial-menu's own runValidatedEquip path directly!
-    try {
-      const shieldEquip = rm.buildItems({ source: "inv-grid", guid: SHIELD_ITEM, name: "Buckler" }).items.find((i) => i.label === "Equip");
-      shieldEquip.action();
-      assert.equal(actionCalls.length, 0, "Shield Equip refused while Greataxe is wielded");
-      assert.match(document.getElementById("hb-item-toast")?.textContent || "", /shield may not be worn/i);
+    // Run WITH live `window.__inventory` mounted (never nulling `window.__inventory`!):
+    const shieldEquip = rm.buildItems({ source: "inv-grid", guid: SHIELD_ITEM, name: "Buckler" }).items.find((i) => i.label === "Equip");
+    shieldEquip.action();
+    assert.equal(actionCalls.length, 0, "Shield Equip refused while Greataxe is wielded");
+    assert.match(document.getElementById("hb-item-toast")?.textContent || "", /shield may not be worn/i);
 
-      const arrowEquip = rm.buildItems({ source: "inv-grid", guid: LOOSE_ARROW, name: "Greater Arrow" }).items.find((i) => i.label === "Equip");
-      arrowEquip.action();
-      assert.deepEqual(actionCalls.pop(), ["mergeStacks", LOOSE_ARROW, AMMO, 30], "Equip on matching ammo merges into wielded stack");
-      drag.pendingOps.clear?.();
-    } finally {
-      window.__inventory = prevInvHook;
-    }
+    const arrowEquip = rm.buildItems({ source: "inv-grid", guid: LOOSE_ARROW, name: "Greater Arrow" }).items.find((i) => i.label === "Equip");
+    arrowEquip.action();
+    assert.deepEqual(actionCalls.pop(), ["mergeStacks", LOOSE_ARROW, AMMO, 30], "Equip on matching ammo merges into wielded stack");
+    clearPending();
+
+    // Single-slot Necklace swap via context-menu `Equip` WITH `window.__inventory` mounted
+    // AND immediately after an `activateItem` call (must NOT hit AutoSort refusal or 200ms Use throttle!):
+    const WORN_NECK = 0x9609;
+    const PACK_NECK = 0x960a;
+    testInv.push(
+      { guid: WORN_NECK, wcid: 510, name: "Gold Gorget", itemType: 0x8, stackSize: 1, equipMask: 0x00008000, containerId: 0, validLocations: 0x00008000 },
+      { guid: PACK_NECK, wcid: 511, name: "Silver Amulet", itemType: 0x8, stackSize: 1, equipMask: 0, containerId: 0, validLocations: 0x00008000 },
+    );
+    // Spend the 200ms Use throttle right before clicking Equip:
+    window.__inventory?.activateItem?.(WORN_NECK);
+    actionCalls.length = 0;
+    // Also verify WASM prototype-getter-only `InventoryItem` boxes (zero own properties):
+    const origPlayerInv = window.__sessionHandle.playerInventory;
+    window.__sessionHandle.playerInventory = () => testInv.map((raw) => {
+      const proto = {};
+      for (const [k, v] of Object.entries(raw)) {
+        Object.defineProperty(proto, k, { get: () => v, enumerable: false });
+      }
+      proto.free = () => {};
+      return Object.create(proto);
+    });
+    const neckEquip = rm.buildItems({ source: "inv-grid", guid: PACK_NECK, name: "Silver Amulet" }).items.find((i) => i.label === "Equip");
+    neckEquip.action();
+    assert.deepEqual(actionCalls.pop(), ["setWielded", PACK_NECK, 0x00008000], "Context-menu Equip swaps occupied Necklace with live __inventory & WASM getter prototype");
+    window.__sessionHandle.playerInventory = origPlayerInv;
+    clearPending();
 
     // 4. Unequip & unwield overflow to openable side pack when 102/102 main pack is full.
     const filler = Array.from({ length: 102 }, (_, i) => ({
@@ -1228,6 +1291,123 @@ await check("loadPaperdollHitMap lazily hydrates when window.__hbWasm.fetch_icon
     host2.remove();
   } finally {
     globalThis.__hbWasm = prevWasm;
+  }
+});
+
+await check("Owned container ViewContents request defers while busy, retries after 0x00A0 bounce, and closed trade does not lock items", async () => {
+  const RETRY_BAG = 0x9701;
+  const TEST_GEM = 0x9702;
+  const prevHandle = window.__sessionHandle;
+  const prevBusy = window.__isBusy;
+  let busy = true;
+  let viewedOnServer = false;
+  let closedTrade = true;
+  const useCalls = [];
+  const unwieldCalls = [];
+  const bagInv = [
+    { guid: RETRY_BAG, wcid: 105, name: "Traveler's Sack", itemType: 0x200, stackSize: 1, equipMask: 0, containerId: 0, requiresBackpackSlot: true, itemsCapacity: 24 },
+    { guid: TEST_GEM, wcid: 300, name: "Sapphire", itemType: 0x800, stackSize: 1, equipMask: 0, containerId: 0, requiresBackpackSlot: false, itemsCapacity: 0 },
+  ];
+  const host3 = document.createElement("div");
+  document.body.appendChild(host3);
+  let unmount3 = null;
+  try {
+    const freshInvMod = loadSpliced("plugins/inventory.js", ["view"], {
+      setAcText: "(el, t) => { if (el) el.textContent = String(t ?? ''); }",
+      fetchIconDataUrlShared: "(did) => Promise.resolve('data:icon/' + (did >>> 0).toString(16))",
+      getIconImmediate: "(did) => 'data:icon/' + (did >>> 0).toString(16)",
+      fetchItemIconDataUrl: "() => Promise.resolve(null)",
+      getItemIconImmediate: "() => null",
+      itemIconKey: "(m) => 'item:' + ((m && m.iconId) >>> 0)",
+      PLAYER_PACK_ICON: "0x0600127E",
+      ITEM_TYPE_CONTAINER: "0x200",
+      uiEffectIconsEnabled: "() => false",
+      uiEffectBadgesEnabled: "() => false",
+      uiEffectIconsFor: "() => []",
+      uiEffectTintCss: "() => null",
+      PaperdollViewport: "class { static acquire() { return new this(); } constructor() { this.dom = document.createElement('canvas'); } loadPlayer() { return Promise.resolve(false); } start() {} release() {} dispose() {} }",
+      ...real([
+        "aetheriaSlotIsLocked", "formatBurdenText", "burdenMeterFraction", "computeInventoryTitle",
+        "parseSlotsViewChecked", "canEquipInSlot", "buildPlayerEquipState", "formatAppraisalTooltip",
+        "takeInventoryRows", "rowUsesPackSlot", "pickWieldSlotMask", "createPackOrder", "packCapacity",
+        "mergeAmount", "DROP_TARGET", "MAIN_PACK_KEY", "PACKS_KEY", "decideItemDrop",
+        "wieldEventTouchesLocal", "findAutoMergeTarget", "primaryUseAction", "defaultOnUrlFlag",
+        "planWear", "planAutoSortJewelry", "planAmmoWield", "readySlotOccupant", "WEARABLE_LOCATIONS",
+        "isOpenableContainer", "PAPERDOLL_HIT_DID", "PAPERDOLL_HIT_RECT", "paperdollItemAt",
+        "cooldownStep", "matchCooldownEnchantment",
+        "DEFAULT_PLAYER_ITEMS_CAPACITY", "DEFAULT_PLAYER_CONTAINERS_CAPACITY",
+        "beginItemDrag", "registerDropZone", "resolveDropAction", "executeItemAction", "pendingOps",
+        "showItemTooltip", "hideItemTooltip", "localPlayerGuid", "consumeUseThrottle",
+      ]),
+    });
+    window.__isBusy = () => busy;
+    window.__sessionHandle = {
+      playerInventory: () => bagInv.map((r) => ({ ...r, free() {} })),
+      playerItemsCapacity: 102,
+      playerContainersCapacity: 7,
+      playerBurden: 0.25,
+      playerAetheriaBits: 0,
+      hasViewedContainer: (g) => (g >>> 0) === RETRY_BAG && viewedOnServer,
+      playerTrade: () => ({ isOpen: !closedTrade, myItems: [{ guid: TEST_GEM, free() {} }], free() {} }),
+      useObject: (g) => { useCalls.push(g >>> 0); },
+      unwieldToPack: (g) => { unwieldCalls.push(g >>> 0); },
+      getObjectIconId: () => 0,
+    };
+    unmount3 = freshInvMod.view.mount(host3, {});
+    await settle();
+
+    // Closed trade (`isOpen: false`) must NOT stamp `.hb-uiitem-trade` on TEST_GEM:
+    const gemCell = host3.querySelector(`.hb-inv-slot[data-guid="${TEST_GEM}"]`);
+    assert.ok(gemCell, "Sapphire rendered in main pack");
+    assert.equal(gemCell.dataset.traded, undefined, "closed trade snapshot must not mark item traded");
+
+    // 1. Opening RETRY_BAG while busy selects the bag UI without firing useObject or latching viewed state:
+    assert.equal(window.__inventory.openPack(RETRY_BAG), true);
+    assert.equal(useCalls.length, 0, "busy defers useObject(RETRY_BAG)");
+
+    // 2. Once no longer busy, clicking/opening RETRY_BAG fires useObject(RETRY_BAG):
+    busy = false;
+    assert.equal(window.__inventory.openPack(RETRY_BAG), true);
+    assert.deepEqual(useCalls, [RETRY_BAG], "unbusy openPack sends useObject(RETRY_BAG)");
+
+    // Immediate rebuild while in-flight does not spam a second useObject:
+    bus.emit("playerInventoryChanged", { detail: {} });
+    await settle();
+    assert.deepEqual(useCalls, [RETRY_BAG], "in-flight debounce suppresses duplicate useObject on rebuild");
+
+    // 3. Simulate server 0x00A0 rejection (`kind:48`) before ViewContents arrives -> re-opening retries useObject:
+    bus.emit("kind:48", { detail: { u32Payload: RETRY_BAG, u32Payload2: 0x1d } });
+    assert.equal(window.__inventory.openPack(RETRY_BAG), true);
+    assert.deepEqual(useCalls, [RETRY_BAG, RETRY_BAG], "0x00A0 bounce clears in-flight latch so openPack retries useObject");
+
+    // 4. Once ViewContents arrives (`viewedOnServer = true` + `containerOpened`), no further useObject is sent:
+    viewedOnServer = true;
+    bus.emit("containerOpened", { detail: { u32Payload: RETRY_BAG } });
+    await settle();
+    bus.emit("kind:48", { detail: { u32Payload: RETRY_BAG, u32Payload2: 0x1d } });
+    assert.equal(window.__inventory.openPack(RETRY_BAG), true);
+    assert.deepEqual(useCalls, [RETRY_BAG, RETRY_BAG], "confirmed ViewContents stays cached");
+
+    // 5. `executeItemAction({ op: 'unwield' })` falls back to `unwieldToPack` even if localPlayerGuid() is 0:
+    const prevScene = window.liveScene3d;
+    const prevPlayer = window.__pluginClient?.player;
+    try {
+      window.liveScene3d = null;
+      if (window.__pluginClient) window.__pluginClient.player = {};
+      const sent = drag.executeItemAction({ op: "unwield", guid: 0x9799 }, { guid: 0x9799, item: { guid: 0x9799, equipMask: 1 }, owned: true });
+      assert.equal(sent, true, "unwield succeeds via unwieldToPack fallback when localPlayerGuid() === 0");
+      assert.deepEqual(unwieldCalls, [0x9799]);
+      for (const e of drag.pendingOps.all()) drag.pendingOps.fail(e.guid);
+    } finally {
+      window.liveScene3d = prevScene;
+      if (window.__pluginClient) window.__pluginClient.player = prevPlayer;
+    }
+  } finally {
+    window.__inventory?.openPack?.(0);
+    unmount3?.();
+    host3.remove();
+    window.__sessionHandle = prevHandle;
+    window.__isBusy = prevBusy;
   }
 });
 
