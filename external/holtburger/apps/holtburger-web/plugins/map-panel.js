@@ -69,6 +69,10 @@ import { LOCAL_ACTION_IDS, resolveLocalBinding, matchesBinding } from "../ui/key
 /** 0x0600127D — the whole-world parchment bitmap, drawn 1:1 by m_pMap. */
 export const MAP_W = 257;
 export const MAP_H = 267;
+/** Northern extent of world map in map pixel space (covers Dericost up to +390 N). */
+export const MAP_NORTH_Y = -370;
+export const DERICOST_Y_OFFSET = 68928.0;
+export const DERICOST_NS_OFFSET = 287.2;
 /** gmMapUI::m_boxMapMarkerArea — m_pMap int attributes 0x1000004E (x0),
  *  0x1000004F (x1), 0x10000050 (y0), 0x10000051 (y1); read in
  *  gmMapUI::PostInit, values from data/retail-layouts/0x21000026.json. */
@@ -89,12 +93,15 @@ export function coordsToWorld(ew, ns) {
   return { wx: (ew + COORD_ORIGIN) * METRES_PER_COORD, wy: (ns + COORD_ORIGIN) * METRES_PER_COORD };
 }
 
-/** Landblock/cell id ((x<<24)|(y<<16)|cell) + LB-local metres → coords. */
+/** Landblock/cell id ((x<<24)|(y<<16)|cell) + LB-local metres → coords.
+ *  Supports Dericost continent Bit 15 (0x8000) with +68,928 m / +287.2 NS offset. */
 export function lbToCoords(landblockId, x, y) {
   const id = landblockId >>> 0;
+  const isDericost = (id & 0x8000) !== 0 || ((id >>> 15) & 1) === 1;
   const lbX = (id >>> 24) & 0xff;
   const lbY = (id >>> 16) & 0xff;
-  return worldToCoords(lbX * LB_METRES + (Number(x) || 0), lbY * LB_METRES + (Number(y) || 0));
+  const wy = (isDericost ? DERICOST_Y_OFFSET : 0.0) + lbY * LB_METRES + (Number(y) || 0);
+  return worldToCoords(lbX * LB_METRES + (Number(x) || 0), wy);
 }
 
 function fmtAxis(v, pos, neg) {
@@ -215,7 +222,8 @@ export function centreView(scale, w, h, mx, my) {
   return { scale, ox: w / 2 - mx * scale, oy: h / 2 - my * scale };
 }
 
-/** Keep at least `margin` px of the map inside the viewport on each axis. */
+/** Keep at least `margin` px of the map inside the viewport on each axis.
+ *  Allows northern panning up through the ocean corridor and Dericost (MAP_NORTH_Y). */
 export function clampView(view, w, h, margin = 48) {
   const mw = MAP_W * view.scale;
   const mh = MAP_H * view.scale;
@@ -224,7 +232,7 @@ export function clampView(view, w, h, margin = 48) {
   return {
     scale: view.scale,
     ox: Math.min(Math.max(view.ox, mx - mw), w - mx),
-    oy: Math.min(Math.max(view.oy, my - mh), h - my),
+    oy: Math.min(Math.max(view.oy, my - mh), h - my - MAP_NORTH_Y * view.scale),
   };
 }
 
@@ -289,12 +297,12 @@ export function placeLabels(items, viewW, viewH, pad = 2) {
   return out;
 }
 
-/** Validate a persisted waypoint. */
+/** Validate a persisted waypoint. Allows coordinates across Dereth and Dericost (-110..410 NS). */
 export function sanitizeWaypoint(raw) {
   if (!raw || typeof raw !== "object") return null;
   const ew = Number(raw.ew);
   const ns = Number(raw.ns);
-  if (!Number.isFinite(ew) || !Number.isFinite(ns) || Math.abs(ew) > 110 || Math.abs(ns) > 110) return null;
+  if (!Number.isFinite(ew) || !Number.isFinite(ns) || Math.abs(ew) > 110 || ns < -110 || ns > 410) return null;
   const label = typeof raw.label === "string" ? raw.label.slice(0, 48) : "";
   return { ew, ns, label };
 }
@@ -453,11 +461,79 @@ export const MAP_LOCATIONS = Object.freeze(RETAIL_MAP_NOTES.map(([name, x, y, w,
   return Object.freeze({ name, x, y, w, h, tier: w >= 7 ? 1 : 2, ew: c.ew, ns: c.ns, exact: !!at, cx: centre.x, cy: centre.y });
 }));
 
-/** Retail note under a map-px point (`slop` widens each rect). */
+/** 41 canonical towns across the 6 provinces of Dericost (dericost_towns_index.json). */
+export const DERICOST_TOWNS = Object.freeze([
+  ["Vasmora", 8636.4, 103272.7, 411.9, "Gelid Plateau", "Undead Oligarchs / Filinuvekta"],
+  ["Frore", 12272.7, 113454.5, 433.9, "Gelid Plateau", "Undead Oligarchs / Filinuvekta"],
+  ["Frisirth", 15909.1, 105818.2, 453.8, "Gelid Plateau", "Undead Oligarchs / Filinuvekta"],
+  ["Minesh", 19545.5, 110909.1, 508.2, "Gelid Plateau", "Undead Oligarchs / Filinuvekta"],
+  ["Kelnir", 23181.8, 108363.6, 482.9, "Gelid Plateau", "Undead Oligarchs / Filinuvekta"],
+  ["Gelid-Keep", 26818.2, 108363.6, 588.6, "Gelid Plateau", "Undead Oligarchs / Filinuvekta"],
+  ["Coldwatch", 30454.5, 110909.1, 569.7, "Gelid Plateau", "Undead Oligarchs / Filinuvekta"],
+  ["Boreal-Spires", 34090.9, 105818.2, 408.7, "Gelid Plateau", "Undead Oligarchs / Filinuvekta"],
+  ["Saliane", 37727.3, 113454.5, 295.5, "Gelid Plateau", "Undead Oligarchs / Filinuvekta"],
+  ["Glacier-Reach", 41363.6, 103272.7, 533.9, "Gelid Plateau", "Undead Oligarchs / Filinuvekta"],
+  ["Antaoc", 5111.1, 89555.6, 89.8, "Ashatiri Lowlands", "Living Serfs & Nobles"],
+  ["Hirschi", 7222.2, 98888.9, 94.4, "Ashatiri Lowlands", "Living Serfs & Nobles"],
+  ["Nehane", 9333.3, 92666.7, 126.4, "Ashatiri Lowlands", "Living Serfs & Nobles"],
+  ["Stone-Cleft", 11444.4, 95777.8, 128, "Ashatiri Lowlands", "Living Serfs & Nobles"],
+  ["Iron-Garrison", 13555.6, 95777.8, 175, "Ashatiri Lowlands", "Living Serfs & Nobles"],
+  ["Grymar's Stand", 15666.7, 92666.7, 62.7, "Ashatiri Lowlands", "Living Serfs & Nobles"],
+  ["Cynreft", 17777.8, 98888.9, 109.9, "Ashatiri Lowlands", "Living Serfs & Nobles"],
+  ["High-Quarry", 19888.9, 89555.6, 102.8, "Ashatiri Lowlands", "Living Serfs & Nobles"],
+  ["Cannthalo", 22777.8, 89555.6, 157.2, "Valley of Tresimaen", "Living Nobles & Latzimestal"],
+  ["Zemal Foothills", 25555.6, 98888.9, 132.2, "Valley of Tresimaen", "Living Nobles & Latzimestal"],
+  ["Tresimaen", 28333.3, 92666.7, 157, "Valley of Tresimaen", "Living Nobles & Latzimestal"],
+  ["Hendrel's Gate", 31111.1, 95777.8, 251.5, "Valley of Tresimaen", "Living Nobles & Latzimestal"],
+  ["Obsidian-Bluff", 33888.9, 95777.8, 150.6, "Valley of Tresimaen", "Living Nobles & Latzimestal"],
+  ["Ash-Haven", 36666.7, 92666.7, 190.8, "Valley of Tresimaen", "Living Nobles & Latzimestal"],
+  ["Sulfur-Springs", 39444.4, 98888.9, 50.7, "Valley of Tresimaen", "Living Nobles & Latzimestal"],
+  ["Orisis-Deep", 42222.2, 89555.6, 130.4, "Valley of Tresimaen", "Living Nobles & Latzimestal"],
+  ["Daralet", 5142.9, 77714.3, 6, "Dericost Marshes", "Undead Oligarchs / House Mhoire"],
+  ["Fen-Gate", 8285.7, 84571.4, 87.4, "Dericost Marshes", "Undead Oligarchs / House Mhoire"],
+  ["Mhoire-Crosse", 11428.6, 81142.9, 64.4, "Dericost Marshes", "Undead Oligarchs / House Mhoire"],
+  ["Bog-Haven", 14571.4, 81142.9, 50.6, "Dericost Marshes", "Undead Oligarchs / House Mhoire"],
+  ["Weeping-Creek", 17714.3, 84571.4, 19.5, "Dericost Marshes", "Undead Oligarchs / House Mhoire"],
+  ["Mire-Watch", 20857.1, 77714.3, 10.3, "Dericost Marshes", "Undead Oligarchs / House Mhoire"],
+  ["Shakrassekor", 28142.9, 77714.3, 267.4, "The High Desert Plateau", "High Desert Nomads / Sand Kings"],
+  ["Berkesh", 31285.7, 84571.4, 220.8, "The High Desert Plateau", "High Desert Nomads / Sand Kings"],
+  ["Ayn Tayan", 34428.6, 81142.9, 280.7, "The High Desert Plateau", "High Desert Nomads / Sand Kings"],
+  ["Harebach Crose", 37571.4, 81142.9, 308.3, "The High Desert Plateau", "High Desert Nomads / Sand Kings"],
+  ["Sand-Bastion", 40714.3, 84571.4, 277.5, "The High Desert Plateau", "High Desert Nomads / Sand Kings"],
+  ["Pines-Foot", 43857.1, 77714.3, 169.1, "The High Desert Plateau", "High Desert Nomads / Sand Kings"],
+  ["Nesortania", 20000, 71125, 9.6, "Nesortania Maritime Coast", "Living Nobles & Imperial Navy"],
+  ["Galleys-Anchorage", 25000, 72750, 57.5, "Nesortania Maritime Coast", "Living Nobles & Imperial Navy"],
+  ["South-Haven", 30000, 74375, 6, "Nesortania Maritime Coast", "Living Nobles & Imperial Navy"]
+]);
+
+export const DERICOST_MAP_LOCATIONS = Object.freeze(DERICOST_TOWNS.map(([name, wx, wy, wz, province, culture]) => {
+  const c = worldToCoords(wx, wy);
+  const pt = coordsToMapPx(c.ew, c.ns);
+  return Object.freeze({
+    name,
+    x: pt.x - 3,
+    y: pt.y - 3,
+    w: 6,
+    h: 6,
+    tier: 1,
+    ew: c.ew,
+    ns: c.ns,
+    exact: true,
+    cx: pt.x,
+    cy: pt.y,
+    province,
+    culture,
+    isDericost: true,
+  });
+}));
+
+export const ALL_MAP_LOCATIONS = Object.freeze([...MAP_LOCATIONS, ...DERICOST_MAP_LOCATIONS]);
+
+/** Note under a map-px point (`slop` widens each rect). Searches Dereth and Dericost locations. */
 export function locationAtMapPx(px, py, slop = 0) {
   let best = null;
   let bestD = Infinity;
-  for (const loc of MAP_LOCATIONS) {
+  for (const loc of ALL_MAP_LOCATIONS) {
     if (px < loc.x - slop || px > loc.x + loc.w + slop || py < loc.y - slop || py > loc.y + loc.h + slop) continue;
     const d = Math.hypot(px - loc.cx, py - loc.cy);
     if (d < bestD) { best = loc; bestD = d; }
@@ -1384,7 +1460,7 @@ function clickAt(p) {
   if (loc) {
     setWaypoint({ ew: loc.ew, ns: loc.ns, label: loc.name });
   } else {
-    if (m.x < 0 || m.y < 0 || m.x > MAP_W || m.y > MAP_H) return;
+    if (m.x < 0 || m.y < MAP_NORTH_Y || m.x > MAP_W || m.y > MAP_H) return;
     const cc = mapPxToCoords(m.x, m.y);
     setWaypoint({ ew: cc.ew, ns: cc.ns, label: "" });
   }
@@ -1517,7 +1593,7 @@ function updateStatus(fix) {
   let cur = "Scroll to zoom · drag to pan · click to drop a waypoint";
   if (wm.cursor && wm.view) {
     const m = toMapPx(wm.view, wm.cursor.x, wm.cursor.y);
-    if (m.x >= 0 && m.y >= 0 && m.x <= MAP_W && m.y <= MAP_H) {
+    if (m.x >= 0 && m.y >= MAP_NORTH_Y && m.x <= MAP_W && m.y <= MAP_H) {
       const c = mapPxToCoords(m.x, m.y);
       cur = `Cursor: ${formatCoords(c.ew, c.ns)}`;
     }
@@ -1560,6 +1636,7 @@ function drawWorldMap(fix) {
     ctx.drawImage(map, view.ox, view.oy, MAP_W * view.scale, MAP_H * view.scale);
   }
   ctx.imageSmoothingEnabled = true;
+  drawDericostLandmass();
   if (wm.prefs.grid) drawGrid();
   wm.dots = []; // hover targets collected while drawing (local px)
   drawHouse();
@@ -1578,6 +1655,57 @@ function drawWorldMap(fix) {
   drawScaleBar();
 }
 
+function drawDericostLandmass() {
+  const { ctx, view } = wm;
+  const cSW = worldToCoords(0, 68928);
+  const cNE = worldToCoords(48960, 117888);
+  const pSW = coordsToMapPx(cSW.ew, cSW.ns);
+  const pNE = coordsToMapPx(cNE.ew, cNE.ns);
+
+  const localTopLeft = toLocalPx(view, pSW.x, pNE.y);
+  const localWidth = (pNE.x - pSW.x) * view.scale;
+  const localHeight = (pSW.y - pNE.y) * view.scale;
+
+  ctx.save();
+  ctx.fillStyle = "#cbb38b";
+  ctx.strokeStyle = "rgba(70, 48, 24, 0.75)";
+  ctx.lineWidth = Math.max(1, 1.5 * view.scale);
+
+  ctx.beginPath();
+  if (typeof ctx.roundRect === "function") {
+    ctx.roundRect(localTopLeft.x, localTopLeft.y, localWidth, localHeight, Math.max(2, 6 * view.scale));
+  } else {
+    ctx.rect(localTopLeft.x, localTopLeft.y, localWidth, localHeight);
+  }
+  ctx.fill();
+  ctx.stroke();
+
+  ctx.font = `bold ${Math.max(10, Math.min(24, Math.round(14 * view.scale)))}px ${wm.font || "sans-serif"}`;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillStyle = "rgba(45, 30, 15, 0.85)";
+  ctx.fillText("DERICOST", localTopLeft.x + localWidth / 2, localTopLeft.y + localHeight * 0.15);
+
+  const cSea = worldToCoords(24480, (48960 + 68928) / 2);
+  const pSea = coordsToMapPx(cSea.ew, cSea.ns);
+  const lSea = toLocalPx(view, pSea.x, pSea.y);
+  ctx.font = `italic ${Math.max(9, Math.min(16, Math.round(11 * view.scale)))}px ${wm.font || "sans-serif"}`;
+  ctx.fillStyle = "rgba(200, 185, 150, 0.65)";
+  ctx.fillText("The Great Northern Sea", lSea.x, lSea.y);
+
+  for (const t of DERICOST_MAP_LOCATIONS) {
+    const pt = toLocalPx(view, t.cx, t.cy);
+    ctx.fillStyle = "#3a2610";
+    ctx.beginPath();
+    ctx.arc(pt.x, pt.y, Math.max(2, 3 * view.scale), 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = "#f3deb0";
+    ctx.lineWidth = 1;
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
 function drawGrid() {
   const { ctx, w, h, view } = wm;
   const pxPerCoord = MAP_PX_PER_COORD * view.scale;
@@ -1585,10 +1713,10 @@ function drawGrid() {
   const br = toMapPx(view, w, h);
   const cTL = mapPxToCoords(tl.x, tl.y);
   const cBR = mapPxToCoords(br.x, br.y);
-  const ewMin = Math.max(-102, cTL.ew);
-  const ewMax = Math.min(103, cBR.ew);
-  const nsMin = Math.max(-102, cBR.ns);
-  const nsMax = Math.min(103, cTL.ns);
+  const ewMin = Math.max(-102, Math.min(cTL.ew, cBR.ew));
+  const ewMax = Math.min(103, Math.max(cTL.ew, cBR.ew));
+  const nsMin = Math.max(-102, Math.min(cBR.ns, cTL.ns));
+  const nsMax = Math.min(410, Math.max(cTL.ns, cBR.ns));
 
   // Landblock lines (192 m = 0.8 coords) once they are ≥ ~10 px apart.
   if (view.scale >= LB_LINES_MIN_SCALE) {
@@ -1599,7 +1727,7 @@ function drawGrid() {
       const x = toLocalPx(view, coordsToMapPx(lb * 0.8 - COORD_ORIGIN, 0).x, 0).x;
       ctx.moveTo(Math.round(x) + 0.5, 0); ctx.lineTo(Math.round(x) + 0.5, h);
     }
-    for (let lb = Math.max(0, Math.floor((nsMin + COORD_ORIGIN) / 0.8)); lb <= Math.min(255, Math.ceil((nsMax + COORD_ORIGIN) / 0.8)); lb++) {
+    for (let lb = Math.max(0, Math.floor((nsMin + COORD_ORIGIN) / 0.8)); lb <= Math.min(614, Math.ceil((nsMax + COORD_ORIGIN) / 0.8)); lb++) {
       const y = toLocalPx(view, 0, coordsToMapPx(0, lb * 0.8 - COORD_ORIGIN).y).y;
       ctx.moveTo(0, Math.round(y) + 0.5); ctx.lineTo(w, Math.round(y) + 0.5);
     }
@@ -1648,7 +1776,7 @@ function drawTownLabels() {
   ctx.textAlign = "left";
   const items = [];
   const metas = [];
-  for (const loc of MAP_LOCATIONS) {
+  for (const loc of ALL_MAP_LOCATIONS) {
     if (loc.tier === 2 && !showOutposts) continue;
     const a = toLocalPx(view, loc.x + loc.w, loc.cy);
     const tw = ctx.measureText(loc.name).width;

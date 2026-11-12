@@ -210,29 +210,39 @@ export function compassTokenPosition(dir, heading, geom = RADAR_GEOMETRY) {
   return { left: trunc0(cx - r.w * 0.5), top: trunc0(cy - r.h * 0.5) };
 }
 
+export const DERICOST_Y_OFFSET = 68928.0;
+export const DERICOST_NS_OFFSET = 287.2;
+
 /**
  * Outdoor cell id for a landblock-local position (cell = cx·8 + cy + 1, 24 m
- * cells). Keeps the landblock bytes of `landblockId`.
+ * cells). Keeps the landblock bytes of `landblockId` and Continent Bit 15 (0x8000).
  */
 export function outdoorCellId(landblockId, x, y) {
+  const id = landblockId >>> 0;
   const cx = Math.max(0, Math.min(7, Math.floor(Number(x) / 24)));
   const cy = Math.max(0, Math.min(7, Math.floor(Number(y) / 24)));
-  return (((landblockId >>> 0) & 0xffff0000) | (cx * 8 + cy + 1)) >>> 0;
+  const continentBit = (id & 0x8000) !== 0 ? 0x8000 : 0;
+  const lbBits = id <= 0xffff ? (id << 16) : (id & 0xffff0000);
+  return (((lbBits | continentBit | (cx * 8 + cy + 1)))) >>> 0;
 }
 
 /**
  * CPlayerSystem::InqPlayerCoords via LandDefs::gid_to_lcoord. Returns
  * {ew, ns} map coordinates (east/north positive) or null for an indoor /
  * invalid cell (retail then hides the coordinates).
+ * Supports Dericost continent coordinates with +287.2 NS offset for Bit 15 cells.
  */
 export function mapCoordsForCell(cellId) {
   const id = cellId >>> 0;
   if (!isOutdoorCell(id)) return null;
+  const isDericost = (id & 0x8000) !== 0 || ((id >>> 15) & 1) === 1;
   const cell = id & 0x7fff;
   const lx = ((id >>> 21) & 0x7f8) + ((cell - 1) >>> 3);
   const ly = 8 * ((id >>> 16) & 0xff) + ((cell - 1) & 7);
   if (lx < 0 || ly < 0 || lx >= 2040 || ly >= 2040) return null;
-  return { ew: (lx - 1024) * 0.1 + 0.5, ns: (ly - 1024) * 0.1 + 0.5 };
+  const baseNs = (ly - 1024) * 0.1 + 0.5;
+  const ns = isDericost ? baseNs + DERICOST_NS_OFFSET : baseNs;
+  return { ew: (lx - 1024) * 0.1 + 0.5, ns };
 }
 
 /** gmRadarUI::UpdateCoordinates format: "%.1f%s,%.1f%s" — NS first. */
@@ -508,13 +518,15 @@ function readPlayer(sh, em, localGuid) {
   const curCell = (callNum(sh, "getCurrentCellId") ?? 0) >>> 0;
   if (pose && Number.isFinite(pose.x) && Number.isFinite(pose.y)) {
     const lb = pose.landblockId >>> 0;
+    const isDericost = ((curCell & 0x8000) !== 0) || ((lb & 0x8000) !== 0) || (pose.continent === 1) || (pose.y >= 67000);
+    const contOffset = isDericost && pose.y < 67000 ? DERICOST_Y_OFFSET : 0.0;
     return {
       wx: ((lb >>> 24) & 0xff) * 192 + pose.x,
-      wy: ((lb >>> 16) & 0xff) * 192 + pose.y,
+      wy: ((lb >>> 16) & 0xff) * 192 + pose.y + contOffset,
       z: Number(pose.z) || 0,
       heading: compassHeadingFromPoseYaw(pose.heading),
       landblockId: lb, lx: pose.x, ly: pose.y,
-      cellId: curCell || lb,
+      cellId: curCell || (isDericost ? (lb | 0x8000) : lb),
     };
   }
   // No wasm pose (stale pkg / harness): the scene's own player rig.
@@ -522,11 +534,13 @@ function readPlayer(sh, em, localGuid) {
   if (!p) return null;
   let heading = 0;
   try { heading = Number(em.getLocalPlayerHeading?.()) || 0; } catch (_) {}
+  const isDericost = p.y >= 67000 || ((curCell & 0x8000) !== 0);
+  const localPy = isDericost && p.y >= DERICOST_Y_OFFSET ? p.y - DERICOST_Y_OFFSET : p.y;
   const lbX = Math.max(0, Math.min(254, Math.floor(p.x / 192)));
-  const lbY = Math.max(0, Math.min(254, Math.floor(p.y / 192)));
-  const lb = ((lbX << 24) | (lbY << 16)) >>> 0;
+  const lbY = Math.max(0, Math.min(254, Math.floor(localPy / 192)));
+  const lb = (((lbX << 24) | (lbY << 16) | (isDericost ? 0x8000 : 0))) >>> 0;
   const lx = p.x - lbX * 192;
-  const ly = p.y - lbY * 192;
+  const ly = localPy - lbY * 192;
   const h = heading % TAU;
   return {
     wx: p.x, wy: p.y, z: p.z || 0, heading: h < 0 ? h + TAU : h,
@@ -549,8 +563,10 @@ function gatherCandidates(sh, em, localGuid, player, range, now) {
       // A wielded/held object's root is a hand-local frame, not a world pose.
       if (inst._attachedParentGuid != null) continue;
       const p = inst.root.position;
-      const dx = p.x - player.wx;
-      const dy = p.y - player.wy;
+      let dx = p.x - player.wx;
+      let dy = p.y - player.wy;
+      if (Math.abs(dy - DERICOST_Y_OFFSET) < range) dy -= DERICOST_Y_OFFSET;
+      else if (Math.abs(dy + DERICOST_Y_OFFSET) < range) dy += DERICOST_Y_OFFSET;
       if (dx * dx + dy * dy >= r2) continue;
       const info = radarInfoFor(g, inst.meta, sh, now);
       if (!info.showable) continue;
@@ -572,8 +588,12 @@ function gatherCandidates(sh, em, localGuid, player, range, now) {
     try { pos = sh.objectPosition(g); } catch (_) { pos = null; }
     if (!pos || pos.length < 4) continue;
     const lb = pos[0] >>> 0;
+    const isEntDericost = ((lb & 0x8000) !== 0) || ((player.cellId & 0x8000) !== 0) || (pos.length > 4 && pos[4] === 1);
+    const contOffset = isEntDericost && pos[2] < 67000 ? DERICOST_Y_OFFSET : 0.0;
     const dx = ((lb >>> 24) & 0xff) * 192 + pos[1] - player.wx;
-    const dy = ((lb >>> 16) & 0xff) * 192 + pos[2] - player.wy;
+    let dy = ((lb >>> 16) & 0xff) * 192 + pos[2] + contOffset - player.wy;
+    if (Math.abs(dy - DERICOST_Y_OFFSET) < range) dy -= DERICOST_Y_OFFSET;
+    else if (Math.abs(dy + DERICOST_Y_OFFSET) < range) dy += DERICOST_Y_OFFSET;
     if (dx * dx + dy * dy >= r2) continue;
     out.push({ guid: g, dx, dy, dz: pos[3] - player.z, info, inst: null });
   }
