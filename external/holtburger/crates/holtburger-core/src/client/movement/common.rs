@@ -630,8 +630,9 @@ pub(super) fn build_raw_state_raw_motion_state(
         RawForwardCommand::WalkBackwards => Some(WALK_BACKWARD_MOTION_COMMAND),
         // F5-2: run rides the hold key; the wire stays walk-class.
         RawForwardCommand::RunForward => Some(WALK_FORWARD_MOTION_COMMAND),
-        // FU6: a stored substate (cast gesture, crouch…) owns the slot at
-        // zero locomotion — the raw send omits the forward fields.
+        // FU6: a stored substate (cast gesture, crouch, sit, sleep…) owns the slot at
+        // zero locomotion — send over wire when 0x4000_0000 bit is set.
+        RawForwardCommand::Substate(cmd) if cmd & 0x4000_0000 != 0 => Some(cmd),
         RawForwardCommand::Substate(_) => None,
     });
     if let Some(command) = forward_command {
@@ -678,6 +679,17 @@ pub(super) fn build_raw_state_raw_motion_state(
         // Magnitude from the live raw state (keyboard = 1.0; a camera-lane
         // override rides through), sign from the direction encoding.
         raw_motion_state.turn_speed = Some(raw.turn_speed.abs() * sign);
+    }
+
+    for action in &raw.actions {
+        raw_motion_state.commands.push(
+            holtburger_protocol::messages::movement::types::MotionItem::new(
+                action.action as u16,
+                action.stamp,
+                action.autonomous,
+                action.speed,
+            ),
+        );
     }
 
     raw_motion_state_with_motion_style(world, raw_motion_state, motion_style)
@@ -2257,6 +2269,26 @@ mod tests {
         );
         assert_eq!(wire.current_hold_key, Some(HoldKey::Run as u32));
         assert_eq!(wire.forward_speed, Some(1.0), "unit speed");
+
+        // Posture substate (0x4000_0000 bit set, e.g. Crouch) rides forward_command.
+        let mut posture = RawState::default();
+        posture.forward_command = Some(RawForwardCommand::Substate(0x4100_0012)); // Crouch
+        let wire_posture = build_raw_state_raw_motion_state(&world, &posture, MotionStyle::PreserveServer);
+        assert!(wire_posture.flags.contains(RawMotionFlags::FORWARD_COMMAND));
+        assert_eq!(wire_posture.forward_command, Some(0x4100_0012));
+
+        // Queued one-shot actions (emotes, etc.) pack into raw_motion_state.commands.
+        let mut action_state = RawState::default();
+        action_state.actions.push(crate::client::movement::raw_state::RawAction {
+            action: 0x1000_00E5, // Wave
+            speed: 1.0,
+            stamp: 42,
+            autonomous: true,
+        });
+        let wire_action = build_raw_state_raw_motion_state(&world, &action_state, MotionStyle::PreserveServer);
+        assert_eq!(wire_action.commands.len(), 1);
+        assert_eq!(wire_action.commands[0].sequence(), 42);
+        assert!(wire_action.commands[0].is_autonomous());
     }
 
     fn packed_raw(raw: &RawMotionState) -> Vec<u8> {

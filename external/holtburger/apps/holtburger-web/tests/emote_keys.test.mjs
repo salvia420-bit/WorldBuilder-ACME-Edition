@@ -9,8 +9,8 @@
 //       MotionTable (tests/fixtures/ws01_player_mt_fromReady.json, NonCombat).
 //   [3] the defaults collide with no live LOCAL_ACTIONS / hard-coded key, no
 //       selection key and no index.html CMD_INTERP_ACTIONS key.
-//   [4] `?emoteKeys` parsing (DEFAULT-OFF).
-//   [5] installEmoteKeys on a real InputFunnel: off by default, needs the
+//   [4] `?emoteKeys` parsing (DEFAULT-ON).
+//   [5] installEmoteKeys on a real InputFunnel: on by default, needs the
 //       cmdInterp lane, binds under retail ids, forwards presses only,
 //       rebindable, stale-pkg safe, unbinds.
 //   [6] static wiring: index.html installs it with the handle + CMD_INTERP_ON.
@@ -156,10 +156,10 @@ test("the defaults collide with no selection key and no CMD_INTERP_ACTIONS key",
 });
 
 // ── [4] the flag ─────────────────────────────────────────────────────────
-test("?emoteKeys is DEFAULT-OFF; on/1/true opt in, off/0/false opt out", () => {
-  assert.equal(EK.EMOTE_KEYS_DEFAULT_ON, false);
-  assert.equal(EK.emoteKeysOn(""), false);
-  assert.equal(EK.emoteKeysOn("?foo=1"), false);
+test("?emoteKeys is DEFAULT-ON; on/1/true opt in, off/0/false opt out", () => {
+  assert.equal(EK.EMOTE_KEYS_DEFAULT_ON, true);
+  assert.equal(EK.emoteKeysOn(""), true);
+  assert.equal(EK.emoteKeysOn("?foo=1"), true);
   for (const v of ["on", "ON", "1", "true"]) assert.equal(EK.emoteKeysOn(`?emoteKeys=${v}`), true, v);
   for (const v of ["off", "0", "false"]) assert.equal(EK.emoteKeysOn(`?emoteKeys=${v}`), false, v);
   assert.equal(EK.emoteKeysOn("?emoteKeys=maybe"), EK.EMOTE_KEYS_DEFAULT_ON);
@@ -178,27 +178,27 @@ function fakeHandle() {
   return { calls, handleKeyAction(action, down) { calls.push([action, down]); } };
 }
 
-test("nothing is bound by default, without the cmdInterp lane, or without a funnel", () => {
+test("nothing is bound when opted out via ?emoteKeys=off, without the cmdInterp lane, or without a funnel", () => {
   const h = fakeHandle();
   const f1 = new InputFunnel();
-  EK.installEmoteKeys(f1, { getHandle: () => h, cmdInterpOn: true, search: "" });
-  assert.equal(f1.actions.length, 0, "default off");
+  EK.installEmoteKeys(f1, { getHandle: () => h, cmdInterpOn: true, search: "?emoteKeys=off" });
+  assert.equal(f1.actions.length, 0, "explicit off binds nothing");
   const f2 = new InputFunnel();
-  EK.installEmoteKeys(f2, { getHandle: () => h, cmdInterpOn: false, search: "?emoteKeys=on" });
+  EK.installEmoteKeys(f2, { getHandle: () => h, cmdInterpOn: false, search: "" });
   assert.equal(f2.actions.length, 0, "?cmdInterp=off has no emote hash");
   const f3 = new InputFunnel();
-  EK.installEmoteKeys(f3, { getHandle: () => h, search: "?emoteKeys=on" });
+  EK.installEmoteKeys(f3, { getHandle: () => h, search: "" });
   assert.equal(f3.actions.length, 0, "cmdInterpOn must be passed explicitly");
-  assert.equal(typeof EK.installEmoteKeys(null, { cmdInterpOn: true, search: "?emoteKeys=on" }), "function");
+  assert.equal(typeof EK.installEmoteKeys(null, { cmdInterpOn: true, search: "" }), "function");
   f1.handleKeyDown(keyEv("KeyG"));
   assert.deepEqual(h.calls, [], "G does nothing when off");
   assert.equal(K.retailActionStatus(0x10000096, { funnelActions: f1.actions }).status, "unavailable");
 });
 
-test("opted in: 91 actions under retail ids; a press forwards handleKeyAction(id, true) once", () => {
+test("default-on: 91 actions under retail ids; a press forwards handleKeyAction(id, true) once", () => {
   const funnel = new InputFunnel();
   const h = fakeHandle();
-  const off = EK.installEmoteKeys(funnel, { getHandle: () => h, cmdInterpOn: true, search: "?emoteKeys=on" });
+  const off = EK.installEmoteKeys(funnel, { getHandle: () => h, cmdInterpOn: true, search: "" });
   const hashes = funnel.actions.map((a) => a.labelHash);
   assert.equal(hashes.length, 91);
   assert.ok(hashes.includes("0x10000096") && hashes.includes("0x100000E5"));

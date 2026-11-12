@@ -73,6 +73,11 @@ const EPSILON: f32 = 0.0002;
 /// (`InterpolationManager.cs:230` `FrameCounter < 5`).
 const PROGRESS_WINDOW_FRAMES: i32 = 5;
 
+/// Retail 5/30 s (166.7 ms) progress quantum floor. High-refresh rates (e.g. 120 Hz)
+/// evaluate 5 frames in only ~41.7 ms; the progress stall window must not fail
+/// prematurely until at least this quantum has elapsed.
+pub const PROGRESS_WINDOW_MIN_QUANTUM: f32 = (5.0 / 30.0) - 1e-4;
+
 /// Minimum fraction of `maxSpeed` the interpolation must be closing the
 /// gap at over the 5-frame window or the node fails
 /// (`InterpolationManager.cs:231` `... / maxSpeed >= 0.3f`).
@@ -284,8 +289,10 @@ impl RetailForcePositionInterpolator {
         let progressing = delta >= EPSILON
             && self.progress_quantum > EPSILON
             && (delta / self.progress_quantum / max_speed) >= MIN_PROGRESS_RATIO;
-        let keep_interpolating =
-            self.frame_counter < PROGRESS_WINDOW_FRAMES || progressing || sticky_active;
+        let keep_interpolating = self.frame_counter < PROGRESS_WINDOW_FRAMES
+            || self.progress_quantum < PROGRESS_WINDOW_MIN_QUANTUM
+            || progressing
+            || sticky_active;
 
         if !keep_interpolating {
             // Near-complete stall: `curr_distance < 0.2` COMPLETES the
@@ -300,9 +307,11 @@ impl RetailForcePositionInterpolator {
             return InterpStep::Failed { pose: current };
         }
 
-        // Re-seed the progress window every 5 frames
+        // Re-seed the progress window every 5 frames once minimum quantum elapsed
         // (ACE InterpolationManager.cs:233-238).
-        if self.frame_counter >= PROGRESS_WINDOW_FRAMES {
+        if self.frame_counter >= PROGRESS_WINDOW_FRAMES
+            && self.progress_quantum >= PROGRESS_WINDOW_MIN_QUANTUM
+        {
             self.frame_counter = 0;
             self.progress_quantum = 0.0;
             self.original_distance = dist;
@@ -736,5 +745,32 @@ mod near_complete_tests {
             }
         }
         assert!(failed, "far stall still fails");
+    }
+
+    #[test]
+    fn quantum_floor_prevents_premature_stall_failure_at_120hz() {
+        let mut interp = RetailForcePositionInterpolator::default();
+        let cur = pose(0.0, 0.0, 0.0);
+        interp.install(cur, pose(3.0, 0.0, 0.0), 10.0, 100.0, true);
+        // At 120 Hz, dt = 1/120 ~ 0.00833 s. 5 frames = ~0.0416 s.
+        let dt_120hz = 1.0 / 120.0;
+        for _ in 0..5 {
+            let step = interp.step(cur, dt_120hz, 36.0, true);
+            assert!(
+                matches!(step, InterpStep::Progressed { .. }),
+                "5 frames at 120 Hz ({:.4}s) must not fail because quantum < 5/30s floor",
+                5.0 * dt_120hz
+            );
+        }
+        assert!(interp.is_interpolating());
+        // Once >= 5/30 s (21 frames * 0.00833 = 0.175 s) elapses without progress, it fails.
+        let mut failed = false;
+        for _ in 5..30 {
+            if let InterpStep::Failed { .. } = interp.step(cur, dt_120hz, 36.0, true) {
+                failed = true;
+                break;
+            }
+        }
+        assert!(failed, "stall past 5/30 s floor must fail");
     }
 }

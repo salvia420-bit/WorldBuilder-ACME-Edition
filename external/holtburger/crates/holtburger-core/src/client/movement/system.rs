@@ -2224,6 +2224,13 @@ fn stamp_leave_ground_velocity(
     world.player.current_planar_velocity = velocity;
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct PendingCmdInterpSend {
+    pub drive: MotionState,
+    pub substate: Option<u32>,
+    pub actions: Vec<super::raw_state::RawAction>,
+}
+
 pub(crate) struct MovementSystem {
     sequence_diagnostics: MovementSequenceDiagnostics,
     queued_drive_commands: Vec<QueuedDriveCommand>,
@@ -2511,13 +2518,16 @@ pub(crate) struct MovementSystem {
     /// Wave-1 step 5 (row 9) — MoveToState pulses queued by the
     /// interpreter seam's `send_move_to_state` (the seam is sync,
     /// `Session::send_action` is async — the same queue-then-flush
-    /// pattern the pulse sends use). Each entry is the composed drive
-    /// at seam-call time; the tick flushes them in order through the
+    /// pattern the pulse sends use). Each entry is the composed drive,
+    /// forward substate, and one-shot actions at seam-call time;
+    /// the tick flushes them in order through the
     /// M1 converter and stamps `note_server_motion_sent`, which is
     /// exactly what keeps the tick's own edge-detector silent for
     /// key-driven edges (one sender per edge, zero new suppression
     /// state).
-    pending_cmd_interp_sends: Vec<MotionState>,
+    pending_cmd_interp_sends: Vec<PendingCmdInterpSend>,
+    /// Track stamina exhaustion transitions to report exhaustion.
+    was_exhausted: bool,
     /// Combat requests (attack / cast) that must reach ACE AFTER the
     /// MaybeStopCompletely MoveToState queued with them. Retail stops at
     /// press (`StartAttackRequest` acclient.c:408917) and sends the attack
@@ -3063,6 +3073,7 @@ impl MovementSystem {
             cmd_interp_runtime: None,
             command_interpreter: None,
             pending_cmd_interp_sends: Vec::new(),
+            was_exhausted: false,
             pending_post_stop_actions: Vec::new(),
             motion_state_pulses_sent: 0,
             pending_cmd_interp_jump_release: false,
@@ -3787,6 +3798,8 @@ impl MovementSystem {
             world,
             now,
             drive: base,
+            substate: None,
+            actions: Vec::new(),
             dispatched: false,
         };
         interp.enable(&mut seams); // :716912
@@ -3888,6 +3901,8 @@ impl MovementSystem {
             world,
             now,
             drive: base,
+            substate: None,
+            actions: Vec::new(),
             dispatched: false,
         };
         let handled = match op {
@@ -4030,6 +4045,8 @@ impl MovementSystem {
             world,
             now,
             drive: base,
+            substate: None,
+            actions: Vec::new(),
             dispatched: false,
         };
         interp.use_time(&mut seams);
@@ -5219,6 +5236,25 @@ impl MovementSystem {
         self.reconcile_server_controlled_projection(world, now);
         self.expire_cast_move_lock(now);
 
+        // Stamina exhaustion tracking: report exhaustion when stamina reaches 0
+        let stamina_current = world
+            .player
+            .vitals
+            .as_ref()
+            .map(|v| v.stamina.current)
+            .unwrap_or(u32::MAX);
+        let is_exhausted = stamina_current == 0;
+        if is_exhausted && !self.was_exhausted {
+            self.was_exhausted = true;
+            let guid = world.player.guid;
+            let inq_run_rate = world.player_composed_run_rate();
+            if let Some(manager) = self.movement_managers.get_mut(&guid) {
+                manager.report_exhaustion(self.last_move_was_autonomous, inq_run_rate);
+            }
+        } else if !is_exhausted && self.was_exhausted {
+            self.was_exhausted = false;
+        }
+
         // A2-P3 (2026-06-12, W3+ S9) — consume the deferred sticky
         // timeout: ACE `StickyManager.ClearTarget` also cancels the
         // MoveTo (`cancel_moveto`, StickyManager.cs:38-40); our analog
@@ -5319,11 +5355,16 @@ impl MovementSystem {
         // reclaims, script ManualSets) still ride the detector — same
         // send the legacy FU5 revival produces.
         let interp_sends = std::mem::take(&mut self.pending_cmd_interp_sends);
-        for state in interp_sends {
+        for item in interp_sends {
             let metadata = MovementPacketMetadata::default();
+            let mut raw_state = super::raw_state::RawState::from_motion_state(item.drive);
+            if let Some(substate) = item.substate {
+                raw_state.forward_command = Some(super::raw_state::RawForwardCommand::Substate(substate));
+            }
+            raw_state.actions = item.actions;
             let raw = build_raw_state_raw_motion_state(
                 world,
-                &super::raw_state::RawState::from_motion_state(state),
+                &raw_state,
                 metadata.motion_style,
             );
             let data = build_move_to_state(world, raw, metadata);
@@ -5331,7 +5372,7 @@ impl MovementSystem {
                 .send_action(GameAction::MoveToState(Box::new(data)))
                 .await?;
             self.motion_state_pulses_sent = self.motion_state_pulses_sent.wrapping_add(1);
-            self.note_server_motion_sent(server_motion_intent(state, metadata.motion_style));
+            self.note_server_motion_sent(server_motion_intent(item.drive, metadata.motion_style));
             self.note_movement_event_sent(now, world);
         }
         // Combat requests queued behind the MaybeStopCompletely above —
@@ -10315,6 +10356,8 @@ impl MovementSystem {
                 for command in out.commands {
                     match command {
                         holtburger_world::spatial::InterpolationCommand::SetPosition(p) => {
+                            let delta_m = pose.distance_to(&p);
+                            holtburger_world::pose_snap_diag::record(4, delta_m);
                             blip = Some(p);
                         }
                         holtburger_world::spatial::InterpolationCommand::SetVelocity(v) => {
@@ -11799,6 +11842,8 @@ struct SystemInterpreterSeams<'a> {
     /// each dispatched motion rewrites ONE axis — retail
     /// `InterpretedMotionState::ApplyMotion` shape, acclient.c:332759).
     drive: MotionState,
+    substate: Option<u32>,
+    actions: Vec<super::raw_state::RawAction>,
     /// At least one motion was dispatched (the edge was not silent) — the
     /// caller installs `drive` as the active manual drive iff set.
     dispatched: bool,
@@ -11823,8 +11868,9 @@ impl SystemInterpreterSeams<'_> {
                 self.drive.forward = press.then_some(ForwardLocomotion::Backstep);
             }
             MOTION_READY => {
-                // The Ready reset press clears the forward slot.
+                // The Ready reset press clears the forward slot and substate.
                 self.drive.forward = None;
+                self.substate = None;
             }
             MOTION_SIDESTEP_RIGHT => {
                 self.drive.sidestep = press.then_some(SidestepLocomotion::StrafeRight);
@@ -11839,10 +11885,13 @@ impl SystemInterpreterSeams<'_> {
                 self.drive.turning = press.then_some(Turn::Left);
             }
             _ if cmd & 0x4000_0000 != 0 => {
-                // A stored substate (gesture/crouch/…) owns the forward
+                // A stored substate (gesture/crouch/sit/sleep…) owns the forward
                 // slot at ZERO locomotion (FU6).
                 if press {
                     self.drive.forward = None;
+                    self.substate = Some(cmd);
+                } else if self.substate == Some(cmd) {
+                    self.substate = None;
                 }
             }
             _ => {}
@@ -11854,12 +11903,22 @@ impl super::command_interpreter::InterpreterSeams for SystemInterpreterSeams<'_>
     fn cur_time(&self) -> f64 {
         0.0 // heartbeat cadence stays with the tick this wave (row 9)
     }
-    fn do_motion(&mut self, cmd: u32, _params: &MovementParameters) -> u32 {
+    fn do_motion(&mut self, cmd: u32, params: &MovementParameters) -> u32 {
         // Retail `CPhysicsObj::DoMotion` stamps the autonomy latch
         // (:317325) — row 1: this seam is the lane's only latch raiser.
         self.system.last_move_was_autonomous = true;
-        self.apply_axis(cmd, true);
-        self.dispatched = true;
+        if cmd & 0x1000_0000 != 0 {
+            self.actions.push(super::raw_state::RawAction {
+                action: cmd,
+                speed: params.speed.max(1.0),
+                stamp: 0,
+                autonomous: true,
+            });
+            self.dispatched = true;
+        } else {
+            self.apply_axis(cmd, true);
+            self.dispatched = true;
+        }
         0
     }
     fn stop_motion(&mut self, cmd: u32, _params: &MovementParameters) {
@@ -11874,6 +11933,8 @@ impl super::command_interpreter::InterpreterSeams for SystemInterpreterSeams<'_>
             gait: self.drive.gait,
             ..MotionState::default()
         };
+        self.substate = None;
+        self.actions.clear();
         self.world.player.current_planar_velocity = Vector3::zero();
         self.world.player.stop_coasting = None;
         self.world.player.is_sledding = false;
@@ -11978,7 +12039,13 @@ impl super::command_interpreter::InterpreterSeams for SystemInterpreterSeams<'_>
             && (self.system.local_cast_window_active || self.system.cast_request_in_flight())
             && !self.world.player.is_airborne
     }
-    fn player_report_exhaustion(&mut self) {}
+    fn player_report_exhaustion(&mut self) {
+        let guid = self.world.player.guid;
+        let inq_run_rate = self.world.player_composed_run_rate();
+        if let Some(manager) = self.system.movement_managers.get_mut(&guid) {
+            manager.report_exhaustion(self.system.last_move_was_autonomous, inq_run_rate);
+        }
+    }
     fn player_turn_to_heading(&mut self, _params: &MovementParameters) {
         // command_turn_to_heading is unwired this wave (server/UI turn
         // requests ride the MoveTo driver lane).
@@ -12054,7 +12121,11 @@ impl super::command_interpreter::InterpreterSeams for SystemInterpreterSeams<'_>
         // guards emits ONE MoveToState — including an action command's
         // stop_completely + terminal pair. Returning true lets the
         // interpreter stamp its cadence bookkeeping.
-        self.system.pending_cmd_interp_sends.push(self.drive);
+        self.system.pending_cmd_interp_sends.push(PendingCmdInterpSend {
+            drive: self.drive,
+            substate: self.substate,
+            actions: std::mem::take(&mut self.actions),
+        });
         true
     }
     fn send_autonomous_position(&mut self) -> bool {

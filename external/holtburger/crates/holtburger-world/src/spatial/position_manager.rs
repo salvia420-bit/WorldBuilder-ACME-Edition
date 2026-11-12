@@ -77,6 +77,11 @@ const EPSILON: f32 = 0.0002;
 /// (`acclient.c:389243`; ACE `InterpolationManager.cs:230`).
 const PROGRESS_WINDOW_FRAMES: i32 = 5;
 
+/// Retail 5/30 s (166.7 ms) progress quantum floor. High-refresh rates (e.g. 120 Hz)
+/// evaluate 5 frames in only ~41.7 ms; the progress stall window must not fail
+/// prematurely until at least this quantum has elapsed.
+pub const PROGRESS_WINDOW_MIN_QUANTUM: f32 = (5.0 / 30.0) - 1e-4;
+
 /// Minimum closing fraction of `max_speed` over the window
 /// (`acclient.c:389243-389245`; ACE `:231`).
 const MIN_PROGRESS_RATIO: f32 = 0.3;
@@ -187,6 +192,7 @@ impl InterpolationManager {
     /// reset the progress fields (ACE `InterpolationManager.cs:133-140`).
     pub fn stop_interpolating(&mut self) {
         self.position_queue.clear();
+        self.blipto_position = None;
         self.node_fail_counter = 0;
         self.frame_counter = 0;
         self.progress_quantum = 0.0;
@@ -359,12 +365,12 @@ impl InterpolationManager {
                     if let Some(pos) = last_position {
                         commands.push(InterpolationCommand::SetPosition(pos));
                         commands.push(InterpolationCommand::SetVelocity(tail.velocity));
-                    } else if let Some(blip) = self.blipto_position {
+                    } else if let Some(blip) = self.blipto_position.take() {
                         commands.push(InterpolationCommand::SetPosition(blip));
                     }
                 }
                 None => {
-                    if let Some(blip) = self.blipto_position {
+                    if let Some(blip) = self.blipto_position.take() {
                         commands.push(InterpolationCommand::SetPosition(blip));
                     }
                 }
@@ -441,8 +447,10 @@ impl InterpolationManager {
         let progressing = delta >= EPSILON
             && self.progress_quantum > EPSILON
             && (delta / self.progress_quantum / max_speed) >= MIN_PROGRESS_RATIO;
-        let keep_interpolating =
-            self.frame_counter < PROGRESS_WINDOW_FRAMES || progressing || sticky_active;
+        let keep_interpolating = self.frame_counter < PROGRESS_WINDOW_FRAMES
+            || self.progress_quantum < PROGRESS_WINDOW_MIN_QUANTUM
+            || progressing
+            || sticky_active;
 
         if !keep_interpolating {
             // Near-complete stall: `curr_distance < 0.2` completes the
@@ -458,7 +466,9 @@ impl InterpolationManager {
             return InterpOffsetAdjust::Failed;
         }
 
-        if self.frame_counter >= PROGRESS_WINDOW_FRAMES {
+        if self.frame_counter >= PROGRESS_WINDOW_FRAMES
+            && self.progress_quantum >= PROGRESS_WINDOW_MIN_QUANTUM
+        {
             self.frame_counter = 0;
             self.progress_quantum = 0.0;
             self.original_distance = dist;
@@ -1120,6 +1130,8 @@ impl PositionManager {
         // A drain that blipped (recovery) reports the blip pose as
         // the step outcome so the owner lands the body there.
         if let Some(InterpolationCommand::SetPosition(pos)) = commands.first().copied() {
+            let delta_m = current.distance_to(&pos);
+            crate::pose_snap_diag::record(4, delta_m);
             return (InterpStep::Completed { pose: pos }, commands);
         }
         if !self.retail_leash
@@ -1373,7 +1385,20 @@ impl PositionManager {
         //    tick end) — fed the pose the composed offset steps to,
         //    the same estimate `step_queue` drains with.
         let stepped = reproject_global_into(current.global_coords() + offset, current);
-        let commands = self.interpolation.use_time(stepped);
+        let mut commands = self.interpolation.use_time(stepped);
+        // Prevent running "jut back": when server reconciliation target trails behind
+        // a running player (keep_heading active with manual intended_offset),
+        // backward blipto SetPosition snaps the player backward. Drop backward SetPosition blips.
+        if self.interpolation.keep_heading && intended_offset.length_squared() > 1e-6 {
+            commands.retain(|cmd| {
+                if let InterpolationCommand::SetPosition(pos) = cmd {
+                    let to_blip = pos.global_coords() - current.global_coords();
+                    intended_offset.dot(to_blip) >= 0.0
+                } else {
+                    true
+                }
+            });
+        }
 
         OffsetChainOutcome {
             offset,
@@ -1505,7 +1530,7 @@ mod tests {
             // Never move `cur`: stall for the full window each time.
             let mut failed = false;
             for _ in 0..PROGRESS_WINDOW_FRAMES + 1 {
-                match interp.step_position_head(cur, 0.0, MAX_SPEED, true, &mut constraint, false, false)
+                match interp.step_position_head(cur, 0.035, MAX_SPEED, true, &mut constraint, false, false)
                 {
                     InterpStep::Failed { .. } => {
                         failed = true;
@@ -2262,5 +2287,59 @@ mod tests {
             "Blended offset must preserve forward progress (got {}), preventing stutter",
             out.offset.x
         );
+    }
+
+    #[test]
+    fn high_refresh_stall_window_respects_quantum_floor() {
+        let mut interp = InterpolationManager::default();
+        let mut constraint = ConstraintManager::default();
+        let cur = pose(0.0, 0.0, 0.0);
+        interp.interpolate_to(cur, pose(3.0, 0.0, 0.0), true, BLIP);
+        let dt_120hz = 1.0 / 120.0;
+        // 5 frames at 120 Hz = ~0.0416 s < PROGRESS_WINDOW_MIN_QUANTUM (0.1666 s).
+        for _ in 0..5 {
+            let step = interp.step_position_head(cur, dt_120hz, MAX_SPEED, true, &mut constraint, false, false);
+            assert!(
+                matches!(step, InterpStep::Progressed { .. }),
+                "5 frames at 120 Hz must not fail before quantum floor"
+            );
+        }
+        assert_eq!(interp.node_fail_counter(), 0);
+        // After 21 frames (~0.175 s), the stall window elapses and fails.
+        let mut failed = false;
+        for _ in 5..30 {
+            if let InterpStep::Failed { .. } = interp.step_position_head(cur, dt_120hz, MAX_SPEED, true, &mut constraint, false, false) {
+                failed = true;
+                break;
+            }
+        }
+        assert!(failed, "stall past quantum floor must fail the node");
+    }
+
+    #[test]
+    fn adjust_offset_chain_drops_backward_blipto_when_running() {
+        let mut manager = PositionManager::default();
+        let cur = pose(50.0, 50.0, 0.0);
+        // Target is behind running player (-x direction)
+        let trailing_target = pose(47.0, 50.0, 0.0);
+        manager.interpolation.interpolate_to(cur, trailing_target, true, BLIP);
+
+        // Player is running forward (+x direction)
+        let intended = Vector3::new(0.5, 0.0, 0.0);
+        // Force failure of the trailing interpolation node:
+        manager.interpolation.node_fail_counter = 4;
+        manager.interpolation.node_completed(false, cur);
+
+        let out = manager.adjust_offset_chain(cur, intended, 0.05, MAX_SPEED, 4.0, 0.0, true);
+        // Any backward SetPosition blipto command must be filtered out
+        for cmd in &out.commands {
+            if let InterpolationCommand::SetPosition(pos) = cmd {
+                let to_blip = pos.global_coords() - cur.global_coords();
+                assert!(
+                    intended.dot(to_blip) >= 0.0,
+                    "backward blipto command must not be emitted when running forward"
+                );
+            }
+        }
     }
 }
