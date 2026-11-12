@@ -29,12 +29,15 @@ const QUALITY_BOOL_FLAGS = [
   "detailFlag",
   "triplanar",
   "pom",
+  "statPom",
   "terrainDetailNormal",
   "bloom",
   "vignette",
   "lightShafts",
+  "clouds",
+  "ssao",
 ];
-const QUALITY_INT_FLAGS = ["subdivLevel"];
+const QUALITY_INT_FLAGS = ["subdivLevel", "anisotropy"];
 
 // Non-quality extras persisted alongside the flags. Only `renderScale`
 // (live, window.__setRenderScale) and `castStabilityRing` (live,
@@ -62,6 +65,10 @@ const EXTRA_DEFAULTS = Object.freeze({
   // default — an opt-in aid, no retail equivalent (retail only toasted the
   // server's "You have moved too far!" WeenieError, drew no circle).
   castStabilityRing: false,
+  // HUD & Interface options (Area 10 parity)
+  vitalsOrbs: true,
+  orbScale: 0.72,
+  chatFade: false,
 });
 
 export function loadGraphicsState() {
@@ -148,10 +155,14 @@ function clearOverrides(state) {
 // Live-applyable changes — these don't require reload.
 function applyRenderScaleLive(scale) {
   if (typeof window === "undefined") return;
-  if (typeof window.__setRenderScale !== "function") return;
+  if (typeof window.__setRenderScale === "function") {
+    try {
+      window.__setRenderScale(scale, { manual: true });
+    } catch (_e) { /* live setter may not be ready yet */ }
+  }
   try {
-    window.__setRenderScale(scale);
-  } catch (_e) { /* live setter may not be ready yet */ }
+    window.__adaptiveRenderScale?.notifyManual?.(scale);
+  } catch (_) {}
 }
 
 /**
@@ -163,6 +174,16 @@ function applyRenderScaleLive(scale) {
 export function reapplyLiveGraphics() {
   const s = loadGraphicsState();
   applyRenderScaleLive(Number(s.extras.renderScale) || 1);
+  if (typeof document !== "undefined") {
+    const orbsRoot = document.getElementById("hb-vitals-orbs");
+    if (orbsRoot && s.extras.orbScale) {
+      orbsRoot.style.transform = `scale(${s.extras.orbScale})`;
+    }
+    const overlay = document.getElementById("hb-chat-overlay");
+    if (overlay && s.extras.chatFade !== undefined) {
+      overlay.dataset.fade = s.extras.chatFade ? "1" : "0";
+    }
+  }
   dispatchQualityChanged({ kind: "restore" });
 }
 
@@ -280,8 +301,22 @@ export function renderGraphicsTab(containerEl, { onAnyChange } = {}) {
   containerEl.appendChild(boolRow("Triplanar mapping", effective.triplanar, (v) => {
     setQualityFlag(state, "triplanar", v); markDirty();
   }));
-  containerEl.appendChild(boolRow("Parallax occlusion", effective.pom, (v) => {
-    setQualityFlag(state, "pom", v); markDirty();
+  containerEl.appendChild(boolRow("Parallax relief (POM)", effective.pom, (v) => {
+    setQualityFlag(state, "pom", v);
+    setQualityFlag(state, "statPom", v);
+    markDirty();
+  }));
+  containerEl.appendChild(selectRow({
+    label: "Anisotropic filtering",
+    options: [
+      ["1", "1× (Off)"],
+      ["2", "2×"],
+      ["4", "4×"],
+      ["8", "8×"],
+      ["16", "16×"],
+    ],
+    value: String(effective.anisotropy || 1),
+    onChange: (v) => { setQualityFlag(state, "anisotropy", Number(v)); markDirty(); },
   }));
   // "Hero models" checkbox REMOVED 2026-08: `hero` was a preset key with zero
   // consumers repo-wide (never read by any render path), so the checkbox
@@ -299,6 +334,12 @@ export function renderGraphicsTab(containerEl, { onAnyChange } = {}) {
     onChange: (v) => { setQualityFlag(state, "subdivLevel", Number(v)); markDirty(); },
   }));
 
+  // --- Environment ---------------------------------------------------------
+  containerEl.appendChild(makeSectionHeader("Environment"));
+  containerEl.appendChild(boolRow("Volumetric clouds", effective.clouds, (v) => {
+    setQualityFlag(state, "clouds", v); markDirty();
+  }, { hint: "Enables volumetric cloud raymarching (required for light shafts)." }));
+
   // --- Post-processing -----------------------------------------------------
   containerEl.appendChild(makeSectionHeader("Post-processing"));
   containerEl.appendChild(boolRow("Bloom", effective.bloom, (v) => {
@@ -310,6 +351,39 @@ export function renderGraphicsTab(containerEl, { onAnyChange } = {}) {
   containerEl.appendChild(boolRow("Light shafts", effective.lightShafts, (v) => {
     setQualityFlag(state, "lightShafts", v); markDirty();
   }));
+  containerEl.appendChild(boolRow("Screen-space ambient occlusion (SSAO)", effective.ssao, (v) => {
+    setQualityFlag(state, "ssao", v); markDirty();
+  }, { hint: "Adds contact darkening at corners, recesses, and ground seams." }));
+
+  // --- Interface -----------------------------------------------------------
+  containerEl.appendChild(makeSectionHeader("Interface"));
+  containerEl.appendChild(boolRow("Vitals orbs", state.extras.vitalsOrbs, (v) => {
+    setExtra(state, "vitalsOrbs", v);
+    try { localStorage.setItem("hb_vitals_orbs", v ? "1" : "0"); } catch (_) {}
+    markDirty();
+  }, { hint: "Show health/stamina/mana as liquid orbs instead of classic bars (reload to apply)." }));
+  containerEl.appendChild(rangeRow({
+    label: "Orb scale",
+    min: 0.5, max: 1.5, step: 0.05,
+    value: Number(state.extras.orbScale) || 1.0,
+    format: (v) => `${Math.round(v * 100)}%`,
+    hint: "Size multiplier for vitals orbs.",
+    onInput: (v) => {
+      setExtra(state, "orbScale", v);
+      try { localStorage.setItem("hb_orb_scale", String(v)); } catch (_) {}
+      const orbsRoot = document.getElementById("hb-vitals-orbs");
+      if (orbsRoot) orbsRoot.style.transform = `scale(${v})`;
+    },
+  }));
+  containerEl.appendChild(boolRow("Fade chat window", state.extras.chatFade, (v) => {
+    setExtra(state, "chatFade", v);
+    try {
+      if (v) localStorage.setItem("hb_chat_panel_fade", "1");
+      else localStorage.removeItem("hb_chat_panel_fade");
+      const overlay = document.getElementById("hb-chat-overlay");
+      if (overlay) overlay.dataset.fade = v ? "1" : "0";
+    } catch (_) {}
+  }, { hint: "Fades chat to 45% opacity at rest, opaque on hover or while typing." }));
 
   // --- Combat --------------------------------------------------------------
   // Cast-stability ring applies live (no reload) — spell_shape_preview.js
@@ -553,6 +627,10 @@ function effectiveFlags(state) {
     detailFlag: true,
     triplanar: true,
     pom: false,
+    statPom: false,
+    clouds: false,
+    ssao: false,
+    anisotropy: 4,
     terrainDetailNormal: true,
     bloom: true,
     vignette: false,

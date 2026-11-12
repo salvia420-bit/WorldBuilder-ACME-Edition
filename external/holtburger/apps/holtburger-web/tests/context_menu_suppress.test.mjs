@@ -185,7 +185,9 @@ function rig(search = "") {
       stopPropagation() { this._stopped = true; },
     };
     run(win, ev, true);
+    if (ev._stopped) return ev;
     run(doc, ev, true);
+    if (ev._stopped) return ev;
     for (const h of handlers) { h(ev); if (ev._stopped) return ev; }
     run(doc, ev, false);
     if (!ev._stopped) run(win, ev, false);
@@ -279,9 +281,40 @@ test("[c] ?nativeContextMenu=on installs nothing — the browser menu opens as b
   } finally { r.restore(); }
 });
 
-test("[c] the document listener is bubble phase; the press reset is capture phase", () => {
+test("[c] window capture listener stops propagation strictly on canvas right press, protecting radial-menu and HUD slots", () => {
   const r = rig();
   try {
+    let docCaptureFired = false;
+    let slotHandlerFired = false;
+    r.doc.addEventListener("contextmenu", () => { docCaptureFired = true; }, true);
+    const slotHandler = () => { slotHandlerFired = true; };
+
+    // 1. Right press on canvas (camera turn / 3D target context click)
+    const cameraMouseDown = (ev) => { if (ev.button === 2) r.f.noteCanvasRightPress(); };
+    r.dispatch("mousedown", canvas, { button: 2, handlers: [cameraMouseDown] });
+
+    // Release over HUD slot (Windows fires contextmenu on mouse-up target)
+    const ev = r.dispatch("contextmenu", radar, { handlers: [slotHandler] });
+    assert.equal(ev.defaultPrevented, true, "menu suppressed");
+    assert.equal(ev._stopped, true, "propagation stopped at window capture");
+    assert.equal(docCaptureFired, false, "doc capture listener (radial-menu closer) did not fire");
+    assert.equal(slotHandlerFired, false, "HUD slot right-click did not fire");
+    assert.equal(r.f.stats.contextMenusSuppressed, 1);
+
+    // 2. Normal right-click on HUD without canvas press -> doc capture and slot handler DO fire
+    docCaptureFired = false;
+    slotHandlerFired = false;
+    const ev2 = r.dispatch("contextmenu", radar, { handlers: [slotHandler] });
+    assert.equal(docCaptureFired, true, "doc capture listener received event");
+    assert.equal(slotHandlerFired, true, "HUD slot handler received event");
+  } finally { r.restore(); }
+});
+
+test("[c] the document listener is bubble phase; the window listener is capture phase; the press reset is capture phase", () => {
+  const r = rig();
+  try {
+    const winL = r.win.listeners.filter((l) => l.type === "contextmenu" && l.capture === true);
+    assert.equal(winL.length, 1, "window capture contextmenu listener registered");
     const ctxL = r.doc.listeners.filter((l) => l.type === "contextmenu");
     assert.equal(ctxL.length, 1);
     assert.equal(ctxL[0].capture, false, "bubble: element handlers (rynth-hud, hotbar…) run first");

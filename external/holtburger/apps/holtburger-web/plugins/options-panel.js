@@ -44,6 +44,7 @@
 
 import * as graphicsSettings from "../ui/graphics_settings.js";
 import * as cameraSettings from "../ui/camera_settings.js";
+import { isVitalsOrbsActive, setVitalsOrbsActive, getOrbScale, setOrbScale } from "./vitals-orbs.js";
 import {
   LOCAL_ACTIONS,
   getKeybindings,
@@ -1234,6 +1235,32 @@ function renderInterfaceSection(bodyEl, env) {
   btnRow.appendChild(resetSize);
   btnRow.appendChild(resetPos);
   bodyEl.appendChild(btnRow);
+
+  const orbsActive = isVitalsOrbsActive();
+  const orbsRow = graphicsSettings.boolRow("Vitals orbs", orbsActive, (v) => {
+    setVitalsOrbsActive(v);
+    const gfx = graphicsSettings.loadGraphicsState();
+    graphicsSettings.setExtra(gfx, "vitalsOrbs", v);
+    env.setStatus?.("Vitals display style will update on next reload.");
+  }, { hint: "Show health/stamina/mana as liquid orbs instead of classic bars (reload to apply)." });
+  bodyEl.appendChild(orbsRow);
+
+  const curOrbScale = getOrbScale();
+  const orbScaleRow = graphicsSettings.rangeRow({
+    label: "Orb scale",
+    min: 0.5, max: 1.5, step: 0.05,
+    value: curOrbScale,
+    format: (v) => `${Math.round(v * 100)}%`,
+    hint: "Size multiplier for vitals orbs.",
+    onInput: (v) => {
+      setOrbScale(v);
+      const gfx = graphicsSettings.loadGraphicsState();
+      graphicsSettings.setExtra(gfx, "orbScale", v);
+      const orbsRoot = document.getElementById("hb-vitals-orbs");
+      if (orbsRoot) orbsRoot.style.transform = `scale(${v})`;
+    },
+  });
+  bodyEl.appendChild(orbScaleRow);
 }
 
 function resetWindowPositions(env) {
@@ -1327,6 +1354,30 @@ function renderChatTab(bodyEl, env) {
   const ctx = getCharacterOptionContext();
   renderOfflineBanner(bodyEl, ctx);
   renderCharacterOptionGroups(bodyEl, CHAT_OPTION_GROUPS, ctx, env);
+
+  bodyEl.appendChild(sectionTitle("Chat Display"));
+  const isFade = (() => {
+    try {
+      const p = new URLSearchParams(window.location.search).get("chatFade");
+      if (p === "1") return true;
+      if (p === "0") return false;
+      const raw = localStorage.getItem("hb_chat_panel_fade");
+      if (raw === "1") return true;
+      const gfx = graphicsSettings.loadGraphicsState();
+      return gfx?.extras?.chatFade === true;
+    } catch (_) { return false; }
+  })();
+  const fadeRow = graphicsSettings.boolRow("Fade chat at rest", isFade, (v) => {
+    try {
+      if (v) localStorage.setItem("hb_chat_panel_fade", "1");
+      else localStorage.removeItem("hb_chat_panel_fade");
+      const gfx = graphicsSettings.loadGraphicsState();
+      graphicsSettings.setExtra(gfx, "chatFade", v);
+      const overlay = document.getElementById("hb-chat-overlay");
+      if (overlay) overlay.dataset.fade = v ? "1" : "0";
+    } catch (_) {}
+  }, { hint: "Fades chat to 45% opacity at rest, opaque on hover or while typing." });
+  bodyEl.appendChild(fadeRow);
 }
 
 function renderConfigTab(bodyEl, env) {

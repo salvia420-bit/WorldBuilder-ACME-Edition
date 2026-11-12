@@ -211,7 +211,34 @@ export function isVitalsOrbsActive() {
   // DEFAULT ON — USER 1070 SIGN-OFF 2026-08-01 (in-person vistest).
   // `?vitalsOrbs=off` restores the classic bars (vitals-hud.js reads this
   // same function for its no-op mount, so the exclusion stays two-sided).
-  return urlParam("vitalsOrbs") !== "off";
+  const url = urlParam("vitalsOrbs");
+  if (url === "off" || url === "0" || url === "false" || url === "no") return false;
+  if (url === "on" || url === "1" || url === "true" || url === "yes") return true;
+  try {
+    const raw = localStorage.getItem("hb_vitals_orbs");
+    if (raw === "0" || raw === "false" || raw === "off" || raw === "no") return false;
+    if (raw === "1" || raw === "true" || raw === "on" || raw === "yes") return true;
+    const gfx = JSON.parse(localStorage.getItem("holtburger_graphics_v1") || "{}");
+    if (gfx?.extras?.vitalsOrbs === false) return false;
+    if (gfx?.extras?.vitalsOrbs === true) return true;
+  } catch (_) {}
+  return true;
+}
+
+export function setVitalsOrbsActive(active) {
+  try {
+    localStorage.setItem("hb_vitals_orbs", active ? "1" : "0");
+  } catch (_) {}
+}
+
+export function setOrbScale(scale) {
+  try {
+    localStorage.setItem("hb_orb_scale", String(scale));
+  } catch (_) {}
+}
+
+export function getOrbScale() {
+  return orbScale();
 }
 
 /** Caustics are the priciest layer (two feTurbulence + one
@@ -244,9 +271,17 @@ function orbHz() {
   return Number.isFinite(v) && v >= 5 && v <= 120 ? v : DEFAULT_HZ;
 }
 
-function orbScale() {
+export function orbScale() {
   const v = parseFloat(urlParam("orbScale") ?? "");
-  return Number.isFinite(v) && v > 0.2 && v <= 2 ? v : DEFAULT_SCALE;
+  if (Number.isFinite(v) && v > 0.2 && v <= 2) return v;
+  try {
+    const raw = parseFloat(localStorage.getItem("hb_orb_scale") ?? "");
+    if (Number.isFinite(raw) && raw > 0.2 && raw <= 2) return raw;
+    const gfx = JSON.parse(localStorage.getItem("holtburger_graphics_v1") || "{}");
+    const s = parseFloat(gfx?.extras?.orbScale);
+    if (Number.isFinite(s) && s > 0.2 && s <= 2) return s;
+  } catch (_) {}
+  return DEFAULT_SCALE;
 }
 
 /** `?orbRender` — the vessel renderer. DEFAULT "canvas" (Canvas2D cores;

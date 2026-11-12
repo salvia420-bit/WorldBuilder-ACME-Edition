@@ -1033,10 +1033,11 @@ export async function preInit3D(canvas) {
   const _isAgentMode =
     typeof document !== "undefined" &&
     document.documentElement?.classList?.contains("agent-mode");
-  const layoutChromeH = _isAgentMode ? 0 : 320;
-  const layoutMarginW = _isAgentMode ? 0 : 32;
-  const cssW = Math.min(window.innerWidth - layoutMarginW, _isAgentMode ? 4096 : 1920);
-  const cssH = Math.min(window.innerHeight - layoutChromeH, _isAgentMode ? 2160 : 1080);
+  const _isFsInitial = typeof document !== "undefined" && !!document.fullscreenElement;
+  const layoutChromeH = (_isAgentMode || _isFsInitial) ? 0 : 320;
+  const layoutMarginW = (_isAgentMode || _isFsInitial) ? 0 : 32;
+  const cssW = Math.min(window.innerWidth - layoutMarginW, (_isAgentMode || _isFsInitial) ? 4096 : 1920);
+  const cssH = Math.min(window.innerHeight - layoutChromeH, (_isAgentMode || _isFsInitial) ? 2160 : 1080);
   if (!_isAgentMode) {
     // Normal mode: pin the canvas's CSS size explicitly so the layout
     // doesn't shift as content loads. In agent mode the CSS-rule
@@ -1522,6 +1523,18 @@ export async function preInit3D(canvas) {
     if (Number.isFinite(_raw) && _raw > 0 && _raw <= 2) {
       _renderScale = _raw;
       _explicitRenderScale = true; // user override → no adaptive / smart default
+    } else if (typeof localStorage !== "undefined") {
+      try {
+        const rawStored = localStorage.getItem("holtburger_graphics_v1");
+        if (rawStored) {
+          const parsed = JSON.parse(rawStored);
+          const storedScale = parseFloat(parsed?.extras?.renderScale);
+          if (Number.isFinite(storedScale) && storedScale > 0 && storedScale <= 2) {
+            _renderScale = storedScale;
+            _explicitRenderScale = true;
+          }
+        }
+      } catch (_) {}
     }
   } catch (_) { /* default 1 */ }
   const _basePixelRatio = Math.min(window.devicePixelRatio || 1, 2);
@@ -1547,7 +1560,7 @@ export async function preInit3D(canvas) {
   // setSize on the renderer + atmosphere pipeline + cloud overlay so
   // every RT in the chain rebuilds at the new resolution.
   if (typeof window !== "undefined") {
-    window.__setRenderScale = (scale) => {
+    window.__setRenderScale = (scale, opt = {}) => {
       const n = Number(scale);
       if (!Number.isFinite(n) || n <= 0 || n > 2) {
         // eslint-disable-next-line no-console
@@ -1563,6 +1576,9 @@ export async function preInit3D(canvas) {
       const lp = (typeof window !== "undefined") ? window.liveScene3d : null;
       try { lp?.atmospherePipeline?.setSize?.(ccW, ccH); } catch (_) {}
       try { lp?.cloudOverlay?.setSize?.(ccW, ccH); } catch (_) {}
+      if (opt.manual || opt.user) {
+        window.__adaptiveRenderScale?.notifyManual?.(n);
+      }
       // eslint-disable-next-line no-console
       console.log(`[render-scale] applied scale=${n} → pixelRatio=${pr}`);
     };
@@ -2164,11 +2180,16 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
   // rewire, and the cloud overlay's internal RTs. `orthoCamera` is
   // declared with `const` further down in init3D's body but is always in
   // scope by the time a real resize event can fire the deferred callback.
-  window.addEventListener("resize", () => {
+  const handleResize = () => {
     if (resizeDebounce) clearTimeout(resizeDebounce);
     resizeDebounce = setTimeout(() => {
-      const newW = Math.min(window.innerWidth - layoutMarginW, _isAgentMode ? 4096 : 1920);
-      const newH = Math.min(window.innerHeight - layoutChromeH, _isAgentMode ? 2160 : 1080);
+      const isFullscreen = typeof document !== "undefined" && !!document.fullscreenElement;
+      const effectiveMarginW = (_isAgentMode || isFullscreen) ? 0 : layoutMarginW;
+      const effectiveChromeH = (_isAgentMode || isFullscreen) ? 0 : layoutChromeH;
+      const maxW = isFullscreen ? window.innerWidth : (_isAgentMode ? 4096 : 1920);
+      const maxH = isFullscreen ? window.innerHeight : (_isAgentMode ? 2160 : 1080);
+      const newW = Math.min(window.innerWidth - effectiveMarginW, maxW);
+      const newH = Math.min(window.innerHeight - effectiveChromeH, maxH);
       if (!_isAgentMode) {
         canvas.style.width = `${newW}px`;
         canvas.style.height = `${newH}px`;
@@ -2211,7 +2232,11 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
         liveScene3d.cloudOverlay.setSize(newW, newH);
       }
     }, 150);
-  });
+  };
+  window.addEventListener("resize", handleResize);
+  if (typeof document !== "undefined") {
+    document.addEventListener("fullscreenchange", handleResize);
+  }
 
   // Phase 7.1 — build Holtburg 9-LB terrain when real wasmExports
   // are available. The Phase 7.0 capture still calls init3D with an
@@ -6290,8 +6315,10 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
       const cloudsFlag = params.get("clouds");
       const cloudsOff = cloudsFlag === "off" || cloudsFlag === "0" || cloudsFlag === "false" || cloudsFlag === "no";
       const cloudsBot = params.get("nullRender") === "1";
+      const qualityClouds = (typeof window !== "undefined") ? window.__quality?.flags?.clouds : null;
       const cloudsTier = ["high", "ultra"].includes(globalThis.window?.__quality?.preset) && !cloudsBot;
-      if ((cloudsFlag === "on" || (cloudsTier && !cloudsOff)) && !wireframeMode) {
+      const cloudsEffective = qualityClouds != null ? !!qualityClouds : (cloudsTier && !cloudsOff);
+      if ((cloudsFlag === "on" || cloudsEffective) && !cloudsOff && !wireframeMode) {
         // Optional URL knobs for the eye-test on real GPU. Allow the
         // user to crank coverage / quality without reloading + opening
         // dev console.
