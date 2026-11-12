@@ -186,6 +186,8 @@ pub(crate) fn handle_message(
                         // the ForceBlip arm (own heading, no constrain) —
                         // teleport wins when both advanced (retail gate
                         // order, acclient.c:145156-145171).
+                        let snap_delta_m = state.player.position.distance_to(&data.pos.pos);
+                        crate::pose_snap_diag::record(3, snap_delta_m);
                         state.set_player_position_with_sync(
                             data.pos.pos,
                             if teleport_advance {

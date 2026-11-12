@@ -22,15 +22,9 @@
 //                            Wave J
 // The other 82 emotes start unbound (no retail default) but are bindable.
 //
-// `?emoteKeys` is DEFAULT-OFF for now (`=on` opts in; `=off` will be the
-// escape once it flips). The interpreter dispatches the motion, but the
-// movement system's cmdInterp send path carries locomotion only:
-// SystemInterpreterSeams::apply_axis (system.rs) and
-// build_raw_state_raw_motion_state (common.rs, "FU6: a stored substate …
-// the raw send omits the forward fields") drop a posture/emote command, and
-// an action emote runs StopCompletely first. So, with the flag on, G does not
-// sit and O stops you without cheering. Flip EMOTE_KEYS_DEFAULT_ON once that
-// path sends the forward substate and the action list.
+// `?emoteKeys` is DEFAULT-ON (`=off` is the escape). The interpreter
+// dispatches the motion, and the movement system's cmdInterp send path
+// wires forward substate (G Sit, H Crouch, B Sleep) and one-shot actions (O/U/I/K/J).
 //
 // The emote hash exists only in the `?cmdInterp` lane (default on);
 // `?cmdInterp=off` binds nothing here, because the legacy lane has no
@@ -42,7 +36,7 @@
 import { retailActionBindingId } from "./keymap.js";
 
 /** `?emoteKeys` value when the param is absent (see the header). */
-export const EMOTE_KEYS_DEFAULT_ON = false;
+export const EMOTE_KEYS_DEFAULT_ON = true;
 
 /**
  * `?emoteKeys`: `on`/`1`/`true` binds the keys, `off`/`0`/`false` binds
