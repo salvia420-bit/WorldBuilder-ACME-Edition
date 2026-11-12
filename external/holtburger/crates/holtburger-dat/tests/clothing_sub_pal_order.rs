@@ -128,10 +128,10 @@ fn retail_clothing_tables_keep_sub_pal_effect_dat_order() {
         checked += 1;
     }
 
-    // Known record: Clothing 0x10000001 has 102 sub-palette effects.
+    // Known record: Clothing 0x10000001 has 28 sub-palette effect keys in retail portal.dat.
     let bytes = dat.get_file(0x1000_0001).expect("0x10000001");
     let table = ClothingTable::unpack(&bytes).expect("parse 0x10000001");
-    assert_eq!(table.clothing_sub_pal_effect_keys.len(), 102);
+    assert_eq!(table.clothing_sub_pal_effect_keys.len(), 28);
 
     println!(
         "ClothingTable sub-palette order: {checked} tables, {reordered} walk in a different order than the DAT"

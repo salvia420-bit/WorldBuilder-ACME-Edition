@@ -1393,7 +1393,7 @@ impl PositionManager {
             commands.retain(|cmd| {
                 if let InterpolationCommand::SetPosition(pos) = cmd {
                     let to_blip = pos.global_coords() - current.global_coords();
-                    intended_offset.dot(to_blip) >= 0.0
+                    intended_offset.dot(&to_blip) >= 0.0
                 } else {
                     true
                 }
@@ -1527,9 +1527,9 @@ mod tests {
         for i in 0..4 {
             let target = pose(3.0 + i as f32, 0.0, 0.0);
             interp.interpolate_to(cur, target, true, BLIP);
-            // Never move `cur`: stall for the full window each time.
+            // Never move `cur`: stall for both windows each time (window 1 auto-passes on fresh queue).
             let mut failed = false;
-            for _ in 0..PROGRESS_WINDOW_FRAMES + 1 {
+            for _ in 0..(PROGRESS_WINDOW_FRAMES * 2 + 1) {
                 match interp.step_position_head(cur, 0.035, MAX_SPEED, true, &mut constraint, false, false)
                 {
                     InterpStep::Failed { .. } => {
@@ -1675,14 +1675,14 @@ mod tests {
         let cur = pose(0.0, 0.0, 0.0);
         interp.interpolate_to(cur, pose(3.0, 0.0, 0.0), true, BLIP);
         for frame in 1..=9 {
-            match interp.step_position_head(cur, 0.016, MAX_SPEED, true, &mut constraint, false, false)
+            match interp.step_position_head(cur, 0.035, MAX_SPEED, true, &mut constraint, false, false)
             {
                 InterpStep::Progressed { .. } => {}
                 other => panic!("frame {frame} must survive the first window, got {other:?}"),
             }
         }
         assert!(matches!(
-            interp.step_position_head(cur, 0.016, MAX_SPEED, true, &mut constraint, false, false),
+            interp.step_position_head(cur, 0.035, MAX_SPEED, true, &mut constraint, false, false),
             InterpStep::Failed { .. }
         ));
         assert_eq!(interp.node_fail_counter(), 1);
@@ -1698,7 +1698,7 @@ mod tests {
         interp.interpolate_to(cur, pose(0.15, 0.0, 0.0), true, BLIP);
         let mut completed = false;
         for _ in 0..12 {
-            match interp.step_position_head(cur, 0.016, MAX_SPEED, true, &mut constraint, false, false)
+            match interp.step_position_head(cur, 0.035, MAX_SPEED, true, &mut constraint, false, false)
             {
                 InterpStep::Completed { .. } => {
                     completed = true;
@@ -2305,9 +2305,9 @@ mod tests {
             );
         }
         assert_eq!(interp.node_fail_counter(), 0);
-        // After 21 frames (~0.175 s), the stall window elapses and fails.
+        // Window 1 auto-passes (~21 frames / 0.175 s), and window 2 elapses and fails at frame 42.
         let mut failed = false;
-        for _ in 5..30 {
+        for _ in 5..50 {
             if let InterpStep::Failed { .. } = interp.step_position_head(cur, dt_120hz, MAX_SPEED, true, &mut constraint, false, false) {
                 failed = true;
                 break;
@@ -2336,7 +2336,7 @@ mod tests {
             if let InterpolationCommand::SetPosition(pos) = cmd {
                 let to_blip = pos.global_coords() - cur.global_coords();
                 assert!(
-                    intended.dot(to_blip) >= 0.0,
+                    intended.dot(&to_blip) >= 0.0,
                     "backward blipto command must not be emitted when running forward"
                 );
             }

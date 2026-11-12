@@ -85,7 +85,7 @@ import os from "node:os";
 import { existsSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { acquireHeavyLockSync, childHeapArgs } from "./lib/heavy_lock.mjs";
+import { acquireHeavyLockSync, childHeapArgs, availableMemoryBytes, DEFAULT_MIN_FREE_MB, DEFAULT_TEST_HEAP_MB } from "./lib/heavy_lock.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 // harness/ → apps/holtburger-web/ (the app root; child cwd + path base).
@@ -1583,6 +1583,36 @@ const TIER5 = [
   { tier: 5, flag: "m4_stress_bake_worker", file: "tests/m4_stress_bake_worker.test.mjs" },
   { tier: 5, flag: "m4_stress_framework", file: "tests/m4_stress_framework.test.mjs" },
   { tier: 5, flag: "m4_stress_residency_drainage", file: "tests/m4_stress_residency_drainage.test.mjs" },
+  // 2026-11-12 holtburger-web 14 improvements (14 lanes)
+  { tier: 5, flag: "animCacheLazyClip", file: "tests/anim_cache_single_getter_lazy_clip.test.mjs" },
+  { tier: 5, flag: "bc7ArrayMipLayer", file: "tests/bc7_array_mip_layer_updates.test.mjs" },
+  { tier: 5, flag: "cloneLightClampPomGrad", file: "tests/clone_light_clamp_and_pom_grad.test.mjs" },
+  { tier: 5, flag: "csmRefitMatrixSync", file: "tests/csm_refit_matrix_sync.test.mjs" },
+  { tier: 5, flag: "dericostRadarMap", file: "tests/dericost_radar_map.test.mjs" },
+  { tier: 5, flag: "dericostWorldStreaming", file: "tests/dericost_world_streaming.test.mjs" },
+  { tier: 5, flag: "disconnectCleanup", file: "tests/disconnect_cleanup.test.mjs" },
+  { tier: 5, flag: "domSinkSanitization", file: "tests/dom_sink_sanitization.test.mjs" },
+  { tier: 5, flag: "entityHotloopVelAttach", file: "tests/entity_hotloop_vel_and_attach.test.mjs" },
+  { tier: 5, flag: "envcellPoolReoffer", file: "tests/envcell_pool_reoffer.test.mjs" },
+  { tier: 5, flag: "farTerrainMemory", file: "tests/far_terrain_memory.test.mjs" },
+  { tier: 5, flag: "fullscreenViewportSizing", file: "tests/fullscreen_viewport_sizing.test.mjs" },
+  { tier: 5, flag: "graphicsHudOptionsSync", file: "tests/graphics_and_hud_options_sync.test.mjs" },
+  { tier: 5, flag: "hotbarCooldownSprites", file: "tests/hotbar_cooldown_sprites.test.mjs" },
+  { tier: 5, flag: "offlineImportmap", file: "tests/offline_importmap.test.mjs" },
+  { tier: 5, flag: "particleBillboardInstanced", file: "tests/particle_billboard_instanced_worldroot.test.mjs" },
+  { tier: 5, flag: "playEffectScriptQueue", file: "tests/play_effect_script_queue.test.mjs" },
+  { tier: 5, flag: "poolNraArrayCsm", file: "tests/pool_nra_and_array_csm.test.mjs" },
+  { tier: 5, flag: "rynthCombatNetbrainIndoor", file: "tests/rynth_combat_netbrain_indoor.test.mjs" },
+  { tier: 5, flag: "rynthVtMissingItemBuff", file: "tests/rynth_vt_missing_item_buff.test.mjs" },
+  { tier: 5, flag: "selectionBracketsOffscreen", file: "tests/selection_brackets_offscreen.test.mjs" },
+  { tier: 5, flag: "speechBubbleIndoorLayer", file: "tests/speech_bubble_indoor_layer.test.mjs" },
+  { tier: 5, flag: "spellFormulaPrecheck", file: "tests/spell_formula_precheck.test.mjs" },
+  { tier: 5, flag: "tinkerPanelOutcomesOdds", file: "tests/tinker_panel_outcomes_and_odds.test.mjs" },
+  { tier: 5, flag: "vehicleSessionLifecycle", file: "tests/vehicle_session_lifecycle.test.mjs" },
+  { tier: 5, flag: "wasmInventoryBoxFreeAudit", file: "tests/wasm_inventory_box_free_audit.test.mjs" },
+  { tier: 5, flag: "webglContextRestoreTargets", file: "tests/webgl_context_restore_targets.test.mjs" },
+  { tier: 5, flag: "workerPanicStallRecovery", file: "tests/worker_panic_and_stall_recovery.test.mjs" },
+  { tier: 5, flag: "worldObjectLiveUpdates", file: "tests/world_object_live_updates.test.mjs" },
 ];
 
 // Registered but KNOWN-FAILING because the APP is wrong (a real bug, named
@@ -1718,6 +1748,17 @@ function printUnregistered(unregistered) {
 // args
 // ---------------------------------------------------------------------------
 function parseArgs(argv) {
+  let defaultJobs = 1;
+  const envJobs = process.env.HB_TEST_JOBS ? Number(process.env.HB_TEST_JOBS) : null;
+  if (Number.isFinite(envJobs) && envJobs >= 1) {
+    defaultJobs = Math.floor(envJobs);
+  } else if (process.platform === "linux" && os.totalmem() >= 32 * 1024 ** 3) {
+    const availMb = availableMemoryBytes() / (1024 * 1024);
+    const minFreeMb = Number(process.env.HB_MIN_FREE_MB) || DEFAULT_MIN_FREE_MB;
+    const childHeapMb = Number(process.env.HB_TEST_HEAP_MB) || DEFAULT_TEST_HEAP_MB;
+    defaultJobs = Math.max(1, Math.min(os.cpus().length, Math.floor((availMb - minFreeMb) / childHeapMb)));
+  }
+
   const opts = {
     only: null,
     tier: "all",
@@ -1732,7 +1773,7 @@ function parseArgs(argv) {
     strictFixtures: false,
     coverage: false,
     help: false,
-    jobs: 1,
+    jobs: defaultJobs,
   };
   for (const a of argv) {
     if (a === "--quiet") opts.quiet = true;

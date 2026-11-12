@@ -11,15 +11,13 @@ use super::three_ext::{add_scaled, make_basis, quat_from_unit_vectors};
 use crate::math::{Quat, Vec3};
 
 /// `_billboardEmitter(emitter, camera)` over one emitter's slots.
-/// Converts Three.js Y-up camera coordinates to AC Z-up particle frame.
 pub fn sprite(slots: &mut [Slot], normal: Option<Vec3>, cam: Vec3) {
-    let cam_ac = Vec3::new(cam.x, -cam.z, cam.y);
     for s in slots.iter_mut() {
         if !s.live || !s.visible {
             continue;
         }
         let Some(n_local) = normal else { continue };
-        let mut dir = cam_ac.sub(s.pos);
+        let mut dir = cam.sub(s.pos);
         if dir.length_sq() < 1e-10 {
             continue;
         }

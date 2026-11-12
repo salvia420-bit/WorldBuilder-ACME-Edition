@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
+import { EXPECTED_WASM_MANIFEST_VERSION } from "../scene3d/wasm_manifest_version.js";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const APP_DIR = path.resolve(HERE, "..");
@@ -110,6 +111,7 @@ await test("service-worker.js has SW_V3 = true and no dead prefetch URLs", () =>
 
 // 5. index.html checks EXPECTED_WASM_MANIFEST_VERSION and parallelizes plugins & wasm
 await test("index.html imports EXPECTED_WASM_MANIFEST_VERSION and parallelizes pluginBarPromise", () => {
+  assert.ok(typeof EXPECTED_WASM_MANIFEST_VERSION === "number" && EXPECTED_WASM_MANIFEST_VERSION >= 1, "EXPECTED_WASM_MANIFEST_VERSION is a valid number");
   const html = fs.readFileSync(INDEX_HTML, "utf8");
 
   // EXPECTED_WASM_MANIFEST_VERSION check

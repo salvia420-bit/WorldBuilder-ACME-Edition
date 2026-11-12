@@ -2,8 +2,18 @@
 trigger: always_on
 ---
 
-# 1070 Screen-Safety & Resource Rules (`desktop-4anudo2`)
+# Screen-Safety & Resource Rules: Dual Environment Profiles
 
+## Profile A — Vast.ai Linux Cloud GPU Workstation (`linux` / `/workspace/wb`)
+1. **Parallelism & Concurrency**:
+   - Utilize all CPU cores (`mold`, `sccache` active): `CARGO_BUILD_JOBS=$(nproc)`, `HB_TEST_JOBS=$(nproc)`.
+   - `heavy_lock.mjs` auto-scales child heap to 3072 MB on >=32 GiB systems.
+2. **Headless EGL GPU Testing**:
+   - Run tests on local NVIDIA GPU via headless Chromium (`--headless=new --use-gl=angle --use-angle=gl-egl --ignore-gpu-blocklist --mute-audio --window-position=-32000,-32000`). Never use `--enable-logging`.
+3. **Storage & Ephemeral Safety**:
+   - NVMe is ephemeral. Run `/usr/local/bin/save-sccache-to-pool` before terminating instances.
+
+## Profile B — Windows 1070 Box (`desktop-4anudo2`)
 1. **Zero Screen Pop-Ups / Taskbar Flashes / Audio**:
    - A person uses this Windows GTX 1070 machine (`desktop-4anudo2`). Never allow any console, terminal, or browser window to pop up on screen or flash on the taskbar.
    - Always pass `-NoNewWindow` or `-WindowStyle Hidden` to `Start-Process`.

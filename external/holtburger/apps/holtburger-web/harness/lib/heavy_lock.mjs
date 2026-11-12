@@ -54,7 +54,7 @@ export const ORPHAN_LOCK_MS = 30_000;
 export const HELD_ENV = "HB_HEAVY_LOCK_HELD";
 export const DEFAULT_MIN_FREE_MB = 2560;
 export const DEFAULT_MEM_WAIT_MIN = 10;
-export const DEFAULT_TEST_HEAP_MB = 1536;
+export const DEFAULT_TEST_HEAP_MB = os.totalmem() >= 32 * 1024 ** 3 ? 3072 : 1536;
 const LOG_EVERY_MS = 15_000;
 const MB = 1024 * 1024;
 

@@ -14,7 +14,6 @@
     "test_static_callpes.mjs",
     "test_terrain_cell_frac_clamp.mjs",
     "test_trail_map_stamp_falloff.mjs",
-    "test_wasm_preload_stamp.mjs",
     "tests/ace_obj_maint.test.mjs",
     "tests/buff_expiry_line.test.mjs",
     "tests/character_info_pk_status.test.mjs",

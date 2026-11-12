@@ -800,11 +800,11 @@ mod tests {
     }
 
     #[test]
-    fn default_targets_are_loopback_and_coldeve_on_ace_ports() {
+    fn default_targets_are_loopback_on_ace_ports() {
         let TargetPolicy::Only(list) = TargetPolicy::defaults() else {
             panic!("defaults must be a list");
         };
-        assert_eq!(list, vec![target("localhost:9000:9001"), target("play.coldeve.ac:9000:9001")]);
+        assert_eq!(list, vec![target("localhost:9000:9001")]);
     }
 
     #[tokio::test]
@@ -828,11 +828,14 @@ mod tests {
         assert!(!policy.permits("127.0.0.1", ip("127.0.0.1"), 53, 54).await);
         // Any other host (TEST-NET-1; play.coldeve.ac never resolves there).
         assert!(!policy.permits("192.0.2.7", ip("192.0.2.7"), 9000, 9001).await);
-        // The coldeve entry admits a handshake that named it, at its resolved IP.
+        // External targets like play.coldeve.ac are refused by default (require explicit --allow-target).
         let coldeve = ip("51.79.80.150");
-        assert!(policy.permits("play.coldeve.ac", coldeve, 9000, 9001).await);
-        assert!(policy.permits("PLAY.coldeve.ac.", coldeve, 9000, 9001).await);
-        assert!(!policy.permits("play.coldeve.ac", coldeve, 9000, 9002).await);
+        assert!(!policy.permits("play.coldeve.ac", coldeve, 9000, 9001).await);
+        // Explicit policy permits coldeve.
+        let explicit = TargetPolicy::Only(vec![target("play.coldeve.ac:9000:9001")]);
+        assert!(explicit.permits("play.coldeve.ac", coldeve, 9000, 9001).await);
+        assert!(explicit.permits("PLAY.coldeve.ac.", coldeve, 9000, 9001).await);
+        assert!(!explicit.permits("play.coldeve.ac", coldeve, 9000, 9002).await);
     }
 
     #[tokio::test]

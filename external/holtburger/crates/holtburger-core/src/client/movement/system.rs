@@ -40,6 +40,7 @@ use holtburger_world::spatial::{
     PLAYER_CAPSULE_RADIUS, USE_STICKY_MANAGER,
 };
 use holtburger_world::{AuthoritativeBodySync, SpatialBodyId, WorldEvent, WorldState};
+use holtburger_world::context::WorldContextExt;
 use std::collections::HashMap;
 use std::time::Duration;
 use web_time::Instant;
@@ -5240,8 +5241,8 @@ impl MovementSystem {
         let stamina_current = world
             .player
             .vitals
-            .as_ref()
-            .map(|v| v.stamina.current)
+            .get(&holtburger_common::stats::VitalType::Stamina)
+            .map(|v| v.current)
             .unwrap_or(u32::MAX);
         let is_exhausted = stamina_current == 0;
         if is_exhausted && !self.was_exhausted {
