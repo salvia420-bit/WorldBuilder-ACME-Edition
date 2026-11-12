@@ -775,6 +775,9 @@ const TEX_WORKER_TERRAIN_READY_MS = 10_000;
 // see `transcodeXu7WithNra`). Same class as the terrain bound [A].
 const TEX_WORKER_UPGRADE_READY_MS = 10_000;
 
+// Maximum duration a texture worker job may run before being considered wedged.
+export const TW_JOB_TIMEOUT_MS = 15_000;
+
 const _TW_UNROUTED = Symbol("texWorker-unrouted");
 
 let _twWorker = null;
@@ -844,6 +847,10 @@ function _twDie(reason) {
     _twReadyResolve = null;
   }
   const drop = (job) => {
+    if (job && job.timeoutId) {
+      clearTimeout(job.timeoutId);
+      job.timeoutId = null;
+    }
     _twStats.pendingNulled += 1;
     try {
       job.resolve(null);
@@ -932,9 +939,17 @@ function _twOnMessage(msg) {
     }
     return;
   }
+  if (msg.type === "error") {
+    _twDie("worker reported error: " + (msg.err || "unknown"));
+    return;
+  }
   if (msg.type !== "result") return;
   const job = _twPending.get(msg.seq);
   if (!job) return;
+  if (job.timeoutId) {
+    clearTimeout(job.timeoutId);
+    job.timeoutId = null;
+  }
   _twPending.delete(msg.seq);
   // RESULTS-ENQUEUE-ONLY: settling the promise is ALL this callback does —
   // the caller's continuation is a microtask, the exact shape the budgeted
@@ -961,10 +976,22 @@ function _twPump() {
   if (_twState !== "ready" || _twPending.size > 0) return;
   const job = _twQueue.shift();
   if (!job) return;
+  if (TW_JOB_TIMEOUT_MS > 0) {
+    job.timeoutId = setTimeout(() => {
+      if (_twPending.has(job.msg.seq)) {
+        _twDie(`texture worker job timed out / wedged after ${TW_JOB_TIMEOUT_MS}ms (seq=${job.msg.seq})`);
+      }
+    }, TW_JOB_TIMEOUT_MS);
+    if (typeof job.timeoutId?.unref === "function") job.timeoutId.unref();
+  }
   _twPending.set(job.msg.seq, job);
   try {
     _twWorker.postMessage(job.msg, job.transfers);
   } catch (e) {
+    if (job.timeoutId) {
+      clearTimeout(job.timeoutId);
+      job.timeoutId = null;
+    }
     _twDie(`postMessage: ${String(e && e.message ? e.message : e)}`);
   }
 }
@@ -990,6 +1017,11 @@ export function cancelTextureWorkerJob(seq) {
     }
   }
   if (_twPending.has(seq) && _twWorker) {
+    const job = _twPending.get(seq);
+    if (job && job.timeoutId) {
+      clearTimeout(job.timeoutId);
+      job.timeoutId = null;
+    }
     _twStats.cancels += 1;
     try {
       _twWorker.postMessage({ type: "cancel", seq });
@@ -1181,6 +1213,10 @@ export function _resetTexWorkerForTest() {
     }
   }
   for (const [, j] of _twPending) {
+    if (j && j.timeoutId) {
+      clearTimeout(j.timeoutId);
+      j.timeoutId = null;
+    }
     try {
       j.resolve(null);
     } catch (_) {

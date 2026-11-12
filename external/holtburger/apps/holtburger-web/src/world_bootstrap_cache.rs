@@ -160,13 +160,35 @@ where
             )),
         },
         LatchDecision::Drive(state_rc) => {
+            // Guard against cancellation across .await (e.g. caller drops future mid-load):
+            // if the future is dropped before completing, reset state to Idle so subsequent
+            // callers do not wedge indefinitely in Loading waiting for a dead driver.
+            struct CancellationGuard<'a> {
+                state_rc: &'a Rc<RefCell<LoadState>>,
+                completed: bool,
+            }
+            impl<'a> Drop for CancellationGuard<'a> {
+                fn drop(&mut self) {
+                    if !self.completed {
+                        publish_failure(self.state_rc);
+                    }
+                }
+            }
+
+            let mut guard = CancellationGuard {
+                state_rc: &state_rc,
+                completed: false,
+            };
+
             let result = loader().await;
             match result {
                 Ok(bootstrap) => {
+                    guard.completed = true;
                     publish_loaded(&state_rc, bootstrap.clone());
                     Ok(bootstrap)
                 }
                 Err(e) => {
+                    guard.completed = true;
                     publish_failure(&state_rc);
                     Err(e)
                 }

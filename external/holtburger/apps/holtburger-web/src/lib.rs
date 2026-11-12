@@ -22292,6 +22292,11 @@ fn purge_pending_populate_products(lb_high: u32) {
         .with(|c| c.try_borrow_mut().map(|mut v| retain_off_landblock(&mut v, lb_high)));
     let _ = SCENERY_COLLIDER_PENDING
         .with(|c| c.try_borrow_mut().map(|mut v| retain_off_landblock(&mut v, lb_high)));
+    let _ = OUTDOOR_OVERLAP_BAKE_PENDING
+        .with(|c| c.try_borrow_mut().map(|mut s| s.retain(|&k| (k & 0xFFFF_0000) != lb_high)));
+    let _ = LANDBLOCK_COLLISION_PARTS_PENDING.with(|c| {
+        c.try_borrow_mut().map(|mut v| v.retain(|(lb, _)| (*lb & 0xFFFF_0000) != lb_high))
+    });
 }
 
 #[cfg(any(target_arch = "wasm32", test))]
@@ -22640,6 +22645,7 @@ async fn populate_building_aabbs_for_landblock_impl(
     const LB_M: f32 = 192.0;
 
     let landblock_high = landblock_id & 0xFFFF_0000;
+    let evict_hold = LandblockBuildEpoch::begin(landblock_high);
     let info_cell = landblock_high | 0x0000_FFFE;
     let lb_x_byte = ((landblock_high >> 24) & 0xFF) as f32;
     let lb_y_byte = ((landblock_high >> 16) & 0xFF) as f32;
@@ -22656,6 +22662,10 @@ async fn populate_building_aabbs_for_landblock_impl(
         .map_err(|e| JsValue::from_str(&format!(
             "populateBuildingAabbsForLandblock: prefetch landblock 0x{landblock_high:08X}: {e}"
         )))?;
+
+    if !evict_hold.live() {
+        return Ok(0);
+    }
 
     let info_bytes = match source.get_file_by_key(ResourceKey::new("eor/cell", info_cell)) {
         Ok(b) => b,
@@ -22675,6 +22685,10 @@ async fn populate_building_aabbs_for_landblock_impl(
             "populateBuildingAabbsForLandblock: LandblockInfo::unpack 0x{info_cell:08X}: {e}"
         ))
     })?;
+
+    if !evict_hold.live() {
+        return Ok(0);
+    }
 
     // Collision F1: register every building's portals on its landcell
     // (retail `CLandBlock::init_buildings`, acclient.c:352114) — origin
@@ -22728,6 +22742,10 @@ async fn populate_building_aabbs_for_landblock_impl(
         ))
     })?;
 
+    if !evict_hold.live() {
+        return Ok(0);
+    }
+
     let mut total = 0u32;
     // 0x02 multi-part building per-part BSP — DEFAULT-ON, `?buildingBsp02=off`
     // to disable (door-leaf caveat — see `parse_building_bsp_02_flag`). Read
@@ -22779,6 +22797,9 @@ async fn populate_building_aabbs_for_landblock_impl(
                         .prefetch(&[ResourceKey::new("eor/portal", model_id)])
                         .await
                         .ok();
+                    if !evict_hold.live() {
+                        return Ok(0);
+                    }
                     match source.get_file_by_key(ResourceKey::new("eor/portal", model_id))
                     {
                         Ok(bytes) => match holtburger_dat::file_type::GfxObj::unpack(
@@ -22911,6 +22932,9 @@ async fn populate_building_aabbs_for_landblock_impl(
                             "populateBuildingAabbsForLandblock: ensure_walk_prefetched 0x{model_id:08X}: {e:?}"
                         );
                         continue;
+                    }
+                    if !evict_hold.live() {
+                        return Ok(0);
                     }
                     match walk_setup_parts_with_geom_and_physics(source.as_ref(), model_id) {
                         Some(v) => v,
@@ -23061,8 +23085,10 @@ async fn populate_building_aabbs_for_landblock_impl(
 pub async fn populate_building_aabbs_for_landblock(
     landblock_id: u32,
 ) -> Result<u32, JsValue> {
+    let landblock_high = landblock_id & 0xFFFF_0000;
+    let evict_hold = LandblockBuildEpoch::begin(landblock_high);
     let queued = populate_building_aabbs_for_landblock_impl(landblock_id).await;
-    if queued.is_ok() {
+    if queued.is_ok() && evict_hold.live() {
         note_landblock_collision_part(
             landblock_id,
             holtburger_world::spatial::LANDBLOCK_COLLISION_BUILDINGS,
@@ -23144,6 +23170,7 @@ async fn populate_statics_aabbs_for_landblock_impl(
     const LB_M: f32 = 192.0;
 
     let landblock_high = landblock_id & 0xFFFF_0000;
+    let evict_hold = LandblockBuildEpoch::begin(landblock_high);
     let info_cell = landblock_high | 0x0000_FFFE;
     let lb_x_byte = ((landblock_high >> 24) & 0xFF) as f32;
     let lb_y_byte = ((landblock_high >> 16) & 0xFF) as f32;
@@ -23158,6 +23185,10 @@ async fn populate_statics_aabbs_for_landblock_impl(
         .map_err(|e| JsValue::from_str(&format!(
             "populateStaticsAabbsForLandblock: prefetch landblock 0x{landblock_high:08X}: {e}"
         )))?;
+
+    if !evict_hold.live() {
+        return Ok(0);
+    }
 
     let info_bytes = match source.get_file_by_key(ResourceKey::new("eor/cell", info_cell)) {
         Ok(b) => b,
@@ -23191,6 +23222,10 @@ async fn populate_statics_aabbs_for_landblock_impl(
         ))
     })?;
 
+    if !evict_hold.live() {
+        return Ok(0);
+    }
+
     let mut total = 0u32;
 
     for stab in info.objects.iter() {
@@ -23220,6 +23255,9 @@ async fn populate_statics_aabbs_for_landblock_impl(
                     .prefetch(&[ResourceKey::new("eor/portal", model_id)])
                     .await
                     .ok();
+                if !evict_hold.live() {
+                    return Ok(0);
+                }
                 match source.get_file_by_key(ResourceKey::new("eor/portal", model_id)) {
                     Ok(bytes) => match holtburger_dat::file_type::GfxObj::unpack(
                         &mut std::io::Cursor::new(&bytes),
@@ -23310,6 +23348,9 @@ async fn populate_statics_aabbs_for_landblock_impl(
                         "populateStaticsAabbsForLandblock: ensure_walk_prefetched 0x{model_id:08X}: {e:?}"
                     );
                     continue;
+                }
+                if !evict_hold.live() {
+                    return Ok(0);
                 }
                 match walk_setup_parts_with_geom_and_bsp(source.as_ref(), model_id) {
                     Some(parts) => {
@@ -23426,8 +23467,10 @@ async fn populate_statics_aabbs_for_landblock_impl(
 pub async fn populate_statics_aabbs_for_landblock(
     landblock_id: u32,
 ) -> Result<u32, JsValue> {
+    let landblock_high = landblock_id & 0xFFFF_0000;
+    let evict_hold = LandblockBuildEpoch::begin(landblock_high);
     let queued = populate_statics_aabbs_for_landblock_impl(landblock_id).await;
-    if queued.is_ok() {
+    if queued.is_ok() && evict_hold.live() {
         // spawnz: the statics part of the settle residency (see
         // `LANDBLOCK_COLLISION_PARTS_PENDING`).
         note_landblock_collision_part(
@@ -23678,6 +23721,7 @@ async fn populate_scenery_colliders_for_landblock_impl(
     const LB_M: f32 = 192.0;
 
     let landblock_high = landblock_id & 0xFFFF_0000;
+    let evict_hold = LandblockBuildEpoch::begin(landblock_high);
     let origin_x = ((landblock_high >> 24) & 0xFF) as f32 * LB_M;
     let origin_y = ((landblock_high >> 16) & 0xFF) as f32 * LB_M;
 
@@ -23696,6 +23740,10 @@ async fn populate_scenery_colliders_for_landblock_impl(
                 "populateSceneryCollidersForLandblock: 0x{landblock_high:08X}: {e}"
             ))
         })?;
+
+    if !evict_hold.live() {
+        return Ok(0);
+    }
     if recs.is_empty() {
         return Ok(0);
     }
@@ -23722,6 +23770,10 @@ async fn populate_scenery_colliders_for_landblock_impl(
     // misses and those placements drop out, which is the same fail-soft
     // contract as every other collision populate.
     source.prefetch(&keys).await.ok();
+
+    if !evict_hold.live() {
+        return Ok(0);
+    }
 
     let mut batch = SceneryColliderBatch::with_capacity(recs.len());
     // Rung-1 placements we classified but did not stage — logged so the
@@ -23777,6 +23829,9 @@ async fn populate_scenery_colliders_for_landblock_impl(
              {bsp_deferred} rung-1 (physics BSP) placement(s) classified and \
              DEFERRED — see the TODO on this function"
         );
+    }
+    if !evict_hold.live() {
+        return Ok(0);
     }
     let staged = batch.len() as u32;
     if staged > 0 {

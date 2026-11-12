@@ -631,7 +631,40 @@ pub(crate) async fn handle_message(ctx: &mut LoopCtx, event: SessionEvent) -> Lo
                 // hydrate) maps to `f32_payload: None` and JS
                 // consumers must treat it as "delta unavailable".
                 WorldEvent::VitalUpdated { vital, prev_current } => {
-                    stats_changed = true;
+                    // Vital-Tick Throttle (Area 2 / F7):
+                    // Routine vital pool ticks (health/stamina/mana changes from
+                    // regen, stamina heartbeat, or damage) carry their own narrow
+                    // kind=42/43/44 events. Rebuilding all 3 snapshots (stats,
+                    // spells, enchantments) and emitting broad kind=8 (PLAYER_STATS_UPDATED)
+                    // on routine vital ticks storms vitalsTable.innerHTML and ~50 plugin
+                    // subscribers every stamina tick.
+                    // Only trigger a full stats_changed rebuild if the vital's STATS
+                    // (base, buffed_max, ranks, or unhydrated) actually changed.
+                    let vital_stats_changed = match latest_stats.borrow().as_ref() {
+                        Some(stats) => {
+                            let found = stats
+                                .vitals
+                                .chunks_exact(4)
+                                .find(|c| c[0] == vital.vital_type as u32);
+                            match found {
+                                Some(c) => c[2] != vital.base || c[3] != vital.buffed_max,
+                                None => true,
+                            }
+                        }
+                        None => true,
+                    };
+                    if vital_stats_changed {
+                        stats_changed = true;
+                    } else if let Some(stats) = latest_stats.borrow_mut().as_mut() {
+                        if let Some(c) = stats
+                            .vitals
+                            .chunks_exact_mut(4)
+                            .find(|c| c[0] == vital.vital_type as u32)
+                        {
+                            c[1] = vital.current;
+                        }
+                    }
+
                     use holtburger_world::stats::VitalType;
                     let kind = match vital.vital_type {
                         VitalType::Health => CLIENT_EVENT_KIND_VITAL_HEALTH,

@@ -117,6 +117,9 @@ pr-run-mode = "skip"
 # Whether to install an updater program
 install-updater = false
 
+[profile.release]
+lto = "thin"
+
 # The profile that 'cargo dist' will build with
 [profile.dist]
 inherits = "release"

@@ -642,6 +642,23 @@ const _IS_WORKER_SCOPE =
   typeof self.document === "undefined";
 
 if (_IS_WORKER_SCOPE) {
+  self.onerror = (e) => {
+    try {
+      self.postMessage({
+        type: "error",
+        err: "texture_worker uncaught error: " + ((e && e.message) || e),
+      });
+    } catch (_) {}
+  };
+  self.onunhandledrejection = (ev) => {
+    const reason = ev && ev.reason;
+    try {
+      self.postMessage({
+        type: "error",
+        err: "texture_worker unhandled rejection: " + ((reason && reason.message) || reason),
+      });
+    } catch (_) {}
+  };
   self.onmessage = (ev) => {
     handleTextureWorkerMessage(ev.data, (msg, transfers) => {
       try {

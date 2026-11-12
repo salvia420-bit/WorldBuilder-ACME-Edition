@@ -45,6 +45,29 @@ import init, {
 } from "../pkg/holtburger_web.js?v=wasmrev-20261029b";
 
 const READY_TIMEOUT_MS = 12000;
+export const NET_WORKER_STALL_TIMEOUT_MS = 30000;
+
+// Stall watchdog timer for detecting wedged worker
+let _stallWatchdog = null;
+
+function resetStallWatchdog() {
+  if (_stallWatchdog) clearTimeout(_stallWatchdog);
+  _stallWatchdog = setTimeout(() => {
+    console.warn(`[net_worker_client] net worker stalled (no traffic for ${NET_WORKER_STALL_TIMEOUT_MS}ms); terminating wedged worker`);
+    terminateActiveWorker();
+    net_proxy_push_disconnect("net worker wedged (stall timeout)");
+  }, NET_WORKER_STALL_TIMEOUT_MS);
+  if (typeof _stallWatchdog?.unref === "function") {
+    _stallWatchdog.unref();
+  }
+}
+
+function clearStallWatchdog() {
+  if (_stallWatchdog) {
+    clearTimeout(_stallWatchdog);
+    _stallWatchdog = null;
+  }
+}
 
 // At most one net worker alive at a time (see lifecycle note 1).
 let _activeWorker = null;
@@ -97,6 +120,7 @@ export function netWorkerMemCensus(timeoutMs = 3000) {
 }
 
 function terminateActiveWorker() {
+  clearStallWatchdog();
   if (_cancelReadyWait) {
     const cancel = _cancelReadyWait;
     _cancelReadyWait = null;
@@ -253,11 +277,21 @@ export async function startNetWorkerSession(bridgeUrl, serverHost, serverPort, a
   worker.onmessage = (ev) => {
     const m = ev.data || {};
     if (m.t === "rx") {
+      resetStallWatchdog();
       net_proxy_push_inbound(m.bytes); // one game-message payload → proxy inbound
+    } else if (m.t === "rx_batch") {
+      resetStallWatchdog();
+      if (Array.isArray(m.batch)) {
+        for (let i = 0; i < m.batch.length; i++) {
+          net_proxy_push_inbound(m.batch[i]);
+        }
+      }
     } else if (m.t === "timesync") {
+      resetStallWatchdog();
       // Server clock sample → SessionEvent::TimeSync in the main recv loop.
       net_proxy_push_timesync(Number(m.time));
     } else if (m.t === "linkstatus") {
+      resetStallWatchdog();
       // net-transport-6: the worker measures the ping RTT + packet loss (the
       // main thread stamps no ping in this mode). Guarded for a stale pkg/.
       if (typeof liveHandle?.netWorkerLinkStatus === "function") {
@@ -266,6 +300,7 @@ export async function startNetWorkerSession(bridgeUrl, serverHost, serverPort, a
         } catch (_) {}
       }
     } else if (m.t === "memCensus") {
+      resetStallWatchdog();
       // T20 census relay reply (see netWorkerMemCensus below).
       const p = _censusPending.get(m.seq);
       if (p) {
@@ -273,12 +308,15 @@ export async function startNetWorkerSession(bridgeUrl, serverHost, serverPort, a
         p(m.payload ?? null);
       }
     } else if (m.t === "disconnect") {
+      clearStallWatchdog();
       net_proxy_push_disconnect(String(m.reason || "net worker disconnect"));
     } else if (m.t === "error") {
+      clearStallWatchdog();
       net_proxy_push_disconnect(String(m.reason || "net worker error"));
     }
   };
   worker.onerror = (e) => {
+    clearStallWatchdog();
     // Surface a post-ready worker crash as a disconnect so the live recv loop
     // tears down cleanly (recv_message → Err → Disconnected event → exit).
     console.warn("[net_worker_client] worker error:", (e && e.message) || e);
@@ -320,6 +358,7 @@ export async function startNetWorkerSession(bridgeUrl, serverHost, serverPort, a
   }
   const handle = await start_session(bridgeUrl, serverHost, serverPort, account, password);
   liveHandle = handle;
+  resetStallWatchdog();
   // Keep the worker referenced off the handle so it isn't GC'd; the module
   // singleton (`_activeWorker`) is what actually gets terminated on the next
   // session start.
