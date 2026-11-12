@@ -666,11 +666,14 @@ export function createLandblockStream(D) {
         // clamp engages. Same trigger/dedup as the building pass; its own
         // try so a static failure doesn't disturb building bookkeeping.
         try {
+          if (!notEvicted()) return;
           const sCount = await populateStaticsAabbsForLandblock(lbId);
+          if (!notEvicted()) return;
           console.log(
             `[b4] queued ${sCount} static AABBs for landblock 0x${lbId.toString(16).padStart(8, "0")}`
           );
         } catch (se) {
+          if (!notEvicted()) return;
           console.warn(
             `[b4] populateStaticsAabbsForLandblock(0x${lbId.toString(16)}) failed:`, se
           );
