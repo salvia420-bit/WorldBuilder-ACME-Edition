@@ -1060,7 +1060,7 @@ export class EntityBatch {
       // tick leaves that write behind. `hiddenDids` (hides) collapses leaves;
       // `shownDids` (shows) only waits for an exit. Each did is in one of them.
       const rec = {
-        hookType, startMs: performance.now(), durationMs: Math.max(0, (+hook.rampTime) * 1000),
+        hookType, startMs: (this.em && typeof this.em._tweenNowMs === "function") ? this.em._tweenNowMs() : performance.now(), durationMs: Math.max(0, (+hook.rampTime) * 1000),
         rampStart: +hook.rampStart, rampEnd: +hook.rampEnd,
       };
       const put = cls === "hide" ? "hiddenDids" : "shownDids";
@@ -2440,7 +2440,7 @@ export class EntityBatch {
   /** `_materializeHidden` for one did -> tween-record map. */
   _materializeRamps(b, hd, mode) {
     const inst = b.inst;
-    const now = performance.now();
+    const now = (this.em && typeof this.em._tweenNowMs === "function") ? this.em._tweenNowMs() : performance.now();
     for (const [did, rec] of hd) {
       const elapsed = now - rec.startMs;
       const running = rec.durationMs > 0 && elapsed < rec.durationMs;

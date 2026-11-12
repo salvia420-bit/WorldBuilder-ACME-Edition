@@ -74,7 +74,7 @@ const clean = (eb) => {
 };
 const leafOfDid = (inst, did) => R.leavesOf(inst).filter((l) => l.userData.surfaceDid === did);
 const AFK = { rampStart: 0, rampEnd: 0, rampTime: 0.833 };
-// Material ramp tweens run on the wall clock (performance.now): age them.
+// Material ramp tweens run on the tween clock (_tweenNowMs()): age them.
 const ageTweens = (inst, ms) => { for (const tw of inst._materialHookTweens || []) tw.startMs -= ms; };
 
 await check("1. TransparentPart 0 -> 0 on every part: no clone of a batched surface, still active", async () => {

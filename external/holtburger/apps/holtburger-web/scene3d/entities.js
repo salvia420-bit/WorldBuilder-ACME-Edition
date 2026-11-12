@@ -19710,7 +19710,7 @@ export class EntityManager {
       }
       inst._materialHookTweens = keep;
     }
-    const startMs = performance.now();
+    const startMs = this._tweenNowMs();
     for (const did of surfaceDids) {
       const mat = this._getOrCloneEntityMaterial(inst, did);
       if (!mat) continue; // fallback / cache miss — silent no-op
@@ -20304,7 +20304,7 @@ export class EntityManager {
           this._applyMaterialRamp(tw.hookType, mat, tw.rampEnd);
           continue; // tween done
         }
-        const t = elapsed / tw.durationMs;
+        const t = Math.max(0, elapsed) / tw.durationMs;
         const v = tw.rampStart + (tw.rampEnd - tw.rampStart) * t;
         this._applyMaterialRamp(tw.hookType, mat, v);
         survivors.push(tw);
