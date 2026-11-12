@@ -1218,91 +1218,6 @@ pub(super) async fn handle(ctx: &mut LoopCtx, cmd: SessionCommand) -> LoopFlow {
                 }
             }
 
-            // Workstream A (3D camera/game-feel fix): fan
-            // out the local player's authoritative pose to
-            // JS at ≤30 Hz as a KIND_POSITION EntityUpdate.
-            // Pre-A the only local-player KIND_POSITION was
-            // ACE's ~1Hz UpdatePosition broadcast — too
-            // coarse for the 3D camera's 60 FPS prediction
-            // layer. The integrator updates the local
-            // runtime body pose every tick; we surface it
-            // here at the throttled 30 Hz cadence so the
-            // JS-side `__lastEntityWorldPos` updates
-            // smoothly and the camera follow tracks without
-            // 1-second jumps. Read `local_player_runtime_pose`
-            // (not `player_position`) so the fan-out matches
-            // the heartbeat trace + the camera's prediction
-            // layer; the runtime pose is what the integrator
-            // simulated against this tick. Gated on
-            // `local_player_spawn_emitted` so we don't emit
-            // a KIND_POSITION before the JS side has seen
-            // the KIND_SPAWN that built the entity entry
-            // (the spawn handler stamps `lastPosX/Y/T` at
-            // the same time as the entry insert; without it
-            // the position handler's first lookup misses
-            // and silently drops the update).
-            if *local_player_spawn_emitted
-                && let Some(pose) = w.local_player_runtime_pose()
-                && pose.landblock_id != holtburger_common::Guid::NULL
-            {
-                // 30 Hz = one emit per ≥ 33.3 ms. Compare
-                // wall-clock against the last emit instant;
-                // if enough time has elapsed (or this is the
-                // first emit), enqueue the update + reset
-                // the clock. `web_time::Instant::now()` is
-                // already in scope as the TickMovement arm's
-                // `now` parameter.
-                let throttle_ok = match *last_local_player_position_emit {
-                    Some(prev) => {
-                        now.saturating_duration_since(prev)
-                            >= std::time::Duration::from_millis(33)
-                    }
-                    None => true,
-                };
-                if throttle_ok {
-                    *last_local_player_position_emit = Some(now);
-                    entity_updates.borrow_mut().push(EntityUpdate {
-                        kind: ENTITY_UPDATE_KIND_POSITION,
-                        guid: u32::from(w.player.guid),
-                        model_id: 0,
-                        landblock_id: u32::from(pose.landblock_id),
-                        x: pose.coords.x,
-                        y: pose.coords.y,
-                        z: pose.coords.z,
-                        qw: pose.rotation.w,
-                        qx: pose.rotation.x,
-                        qy: pose.rotation.y,
-                        qz: pose.rotation.z,
-                        wcid: 0,
-                        item_type: 0,
-                        name: String::new(),
-                        obj_scale: 1.0,
-                        icon_id: 0,
-                        palette_id: 0,
-                        mtable_id: 0,
-                        model_changes: Vec::new(),
-                        texture_changes: Vec::new(),
-                        sub_palettes: Vec::new(),
-                        placement_id: 0,
-                        portal_destination: String::new(),
-                        vx: 0.0,
-                        vy: 0.0,
-                        vz: 0.0,
-                        omega_z: 0.0,
-                        motion_command: 0,
-                        motion_stance: 0,
-                        physics_script_did: 0,
-                        sound_table_did: 0,
-                        obj_desc_flags: 0,
-                        weenie_flags: 0,
-                    // A1 (2026-05-29): non-MOTION updates carry no
-                    // playback speed — identity (no anim scaling).
-                    motion_speed: 1.0,
-                    physics_translucency: 0.0,
-                        is_autonomous: false,
-                    });
-                }
-            }
             // Watchdog: when real movement caps regress to
             // Err between PlayerDescription's clear-and-test
             // and now (e.g., a property update wiped the
@@ -1429,6 +1344,66 @@ pub(super) async fn handle(ctx: &mut LoopCtx, cmd: SessionCommand) -> LoopFlow {
             };
             match tick_result {
                 Ok(()) => {
+                    // Workstream A (3D camera/game-feel fix) — Area 2 fix:
+                    // Fan out the local player's authoritative pose to JS at
+                    // ≤30 Hz as a KIND_POSITION EntityUpdate POST-TICK (not
+                    // pre-tick, which was 1 tick stale). The integrator simulated
+                    // against this tick just now, so this surfaces the freshly
+                    // integrated runtime body pose.
+                    if *local_player_spawn_emitted
+                        && let Some(pose) = w.local_player_runtime_pose()
+                        && pose.landblock_id != holtburger_common::Guid::NULL
+                    {
+                        let throttle_ok = match *last_local_player_position_emit {
+                            Some(prev) => {
+                                now.saturating_duration_since(prev)
+                                    >= std::time::Duration::from_millis(33)
+                            }
+                            None => true,
+                        };
+                        if throttle_ok {
+                            *last_local_player_position_emit = Some(now);
+                            entity_updates.borrow_mut().push(EntityUpdate {
+                                kind: ENTITY_UPDATE_KIND_POSITION,
+                                guid: u32::from(w.player.guid),
+                                model_id: 0,
+                                landblock_id: u32::from(pose.landblock_id),
+                                x: pose.coords.x,
+                                y: pose.coords.y,
+                                z: pose.coords.z,
+                                qw: pose.rotation.w,
+                                qx: pose.rotation.x,
+                                qy: pose.rotation.y,
+                                qz: pose.rotation.z,
+                                wcid: 0,
+                                item_type: 0,
+                                name: String::new(),
+                                obj_scale: 1.0,
+                                icon_id: 0,
+                                palette_id: 0,
+                                mtable_id: 0,
+                                model_changes: Vec::new(),
+                                texture_changes: Vec::new(),
+                                sub_palettes: Vec::new(),
+                                placement_id: 0,
+                                portal_destination: String::new(),
+                                vx: 0.0,
+                                vy: 0.0,
+                                vz: 0.0,
+                                omega_z: 0.0,
+                                motion_command: 0,
+                                motion_stance: 0,
+                                physics_script_did: 0,
+                                sound_table_did: 0,
+                                obj_desc_flags: 0,
+                                weenie_flags: 0,
+                                motion_speed: 1.0,
+                                physics_translucency: 0.0,
+                                is_autonomous: false,
+                            });
+                        }
+                    }
+
                     // cmdInterp post-flip diag: mirror the
                     // local registry minterp's pending
                     // completion-node count for the

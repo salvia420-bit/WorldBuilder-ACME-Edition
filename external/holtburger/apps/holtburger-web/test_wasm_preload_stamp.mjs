@@ -9,6 +9,7 @@
 //
 // Run: cd apps/holtburger-web && node test_wasm_preload_stamp.mjs
 import { readFileSync } from "node:fs";
+import { EXPECTED_WASM_MANIFEST_VERSION } from "./scene3d/wasm_manifest_version.js";
 
 let passed = 0, failed = 0;
 function check(name, ok, detail = "") {
@@ -40,6 +41,19 @@ check("…and it is the preload's stamp", stamps.has(preStamp));
 // the main init() call site uses the same relative path as the preload
 check("init() fetches ./pkg/holtburger_web_bg.wasm with that stamp",
   html.includes(`"./pkg/holtburger_web_bg.wasm?v=${preStamp}"`));
+
+// WASM export manifest version consistency check
+check("wasm_manifest_version.js exports EXPECTED_WASM_MANIFEST_VERSION === 7",
+  EXPECTED_WASM_MANIFEST_VERSION === 7,
+  String(EXPECTED_WASM_MANIFEST_VERSION));
+
+const libRs = readFileSync("src/lib.rs", "utf8");
+const rustManifestMatch = libRs.match(/pub\s+const\s+WASM_EXPORT_MANIFEST_VERSION:\s*u32\s*=\s*(\d+);/);
+const rustManifestVer = rustManifestMatch ? Number(rustManifestMatch[1]) : null;
+check("src/lib.rs declares WASM_EXPORT_MANIFEST_VERSION", rustManifestVer !== null);
+check("rust WASM_EXPORT_MANIFEST_VERSION matches EXPECTED_WASM_MANIFEST_VERSION",
+  rustManifestVer === EXPECTED_WASM_MANIFEST_VERSION,
+  `${rustManifestVer} vs ${EXPECTED_WASM_MANIFEST_VERSION}`);
 
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

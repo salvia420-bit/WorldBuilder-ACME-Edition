@@ -297,6 +297,23 @@ function handleTileBake(msg) {
   self.postMessage(message, transfer);
 }
 
+self.onerror = (e) => {
+  self.postMessage({
+    type: "error",
+    id: null,
+    message: "worker uncaught error: " + ((e && e.message) || e),
+  });
+};
+
+self.onunhandledrejection = (ev) => {
+  const reason = ev && ev.reason;
+  self.postMessage({
+    type: "error",
+    id: null,
+    message: "worker unhandled rejection: " + ((reason && reason.message) || reason),
+  });
+};
+
 self.onmessage = async (ev) => {
   const msg = ev.data;
   try {

@@ -106,6 +106,14 @@ pub const RX_KIND_TIMESYNC: u8 = 2;
 /// `net_worker_client.js` hands it to `SessionHandle::net_worker_link_status`.
 /// Posted on every keepalive tick and on every measured round trip.
 pub const RX_KIND_LINK_STATUS: u8 = 3;
+/// net-worker batch delivery (2026-11-12): an Array of Uint8Array message payloads.
+pub const RX_KIND_BATCH: u8 = 4;
+
+fn is_character_logoff_message(payload: &[u8]) -> bool {
+    payload.len() >= 4
+        && u32::from_le_bytes([payload[0], payload[1], payload[2], payload[3]])
+            == holtburger_protocol::opcodes::GameOpcode::CharacterLogOff as u32
+}
 
 thread_local! {
     /// net-transport-6: the packet-loss figure `sessionPacketLossPct` reads.
@@ -396,6 +404,18 @@ fn worker_post(kind: u8, bytes: &[u8]) {
     });
 }
 
+fn worker_post_batch(batch: &[Vec<u8>]) {
+    WORKER_SINK.with(|c| {
+        if let Some(sink) = c.borrow().as_ref() {
+            let arr = js_sys::Array::new();
+            for item in batch {
+                arr.push(&Uint8Array::from(item.as_slice()));
+            }
+            let _ = sink.call2(&JsValue::NULL, &JsValue::from(RX_KIND_BATCH), &arr);
+        }
+    });
+}
+
 /// net-transport-6: post the worker's link numbers to the main thread
 /// ([`RX_KIND_LINK_STATUS`]).
 fn worker_post_link_status(ping: &PingRoundTrip, session: &Session) {
@@ -462,6 +482,8 @@ pub async fn net_worker_run(
             recv = session.recv_message() => {
                 match recv {
                     Ok(events) => {
+                        let mut msg_batch: Vec<Vec<u8>> = Vec::new();
+                        let mut rtt_measured = false;
                         for ev in events {
                             match ev {
                                 SessionEvent::Message(bytes) => {
@@ -470,20 +492,21 @@ pub async fn net_worker_run(
                                     // main thread still decodes every message.
                                     if ping_round_trip::is_player_create_message(&bytes) {
                                         in_world = true;
-                                        // `in_world` never clears, so after a
-                                        // logoff the character-select pings
-                                        // were counted; ACE answered none.
+                                        ping.note_entered_world();
+                                    } else if is_character_logoff_message(&bytes) {
+                                        // Reset in_world on logoff so character-select pings
+                                        // are not counted before re-entering the world.
+                                        in_world = false;
                                         ping.note_entered_world();
                                     }
-                                    let rtt_measured =
-                                        ping_round_trip::is_ping_response_message(&bytes)
-                                            && ping
-                                                .note_response_ms(web_time::Instant::now())
-                                                .is_some();
-                                    worker_post(RX_KIND_MESSAGE, &bytes);
-                                    if rtt_measured {
-                                        worker_post_link_status(&ping, &session);
+                                    if ping_round_trip::is_ping_response_message(&bytes)
+                                        && ping
+                                            .note_response_ms(web_time::Instant::now())
+                                            .is_some()
+                                    {
+                                        rtt_measured = true;
                                     }
+                                    msg_batch.push(bytes);
                                 }
                                 // P4.2 TIMESYNC (2026-07-27): forward the
                                 // server clock instead of dropping it — the
@@ -493,12 +516,30 @@ pub async fn net_worker_run(
                                 // (~47 years ahead of ACE's PortalYearTicks
                                 // domain).
                                 SessionEvent::TimeSync(server_time) => {
+                                    if !msg_batch.is_empty() {
+                                        if msg_batch.len() == 1 {
+                                            worker_post(RX_KIND_MESSAGE, &msg_batch[0]);
+                                        } else {
+                                            worker_post_batch(&msg_batch);
+                                        }
+                                        msg_batch.clear();
+                                    }
                                     worker_post(
                                         RX_KIND_TIMESYNC,
                                         &server_time.to_le_bytes(),
                                     );
                                 }
                             }
+                        }
+                        if !msg_batch.is_empty() {
+                            if msg_batch.len() == 1 {
+                                worker_post(RX_KIND_MESSAGE, &msg_batch[0]);
+                            } else {
+                                worker_post_batch(&msg_batch);
+                            }
+                        }
+                        if rtt_measured {
+                            worker_post_link_status(&ping, &session);
                         }
                     }
                     Err(e) => {
@@ -540,10 +581,15 @@ pub async fn net_worker_run(
                 // worker's own, so its answer is not credited to a later one.
                 let is_ping = kind == TX_KIND_ACTION
                     && ping_round_trip::is_ping_request_message(&bytes);
+                let is_logoff = kind == TX_KIND_MESSAGE && is_character_logoff_message(&bytes);
                 match crate::net_worker_outbound::apply_outbound(&mut session, kind, &bytes).await {
                     Ok(OutboundOutcome::Sent) => {
                         if is_ping {
                             ping.note_sent(web_time::Instant::now(), in_world);
+                        }
+                        if is_logoff {
+                            in_world = false;
+                            ping.note_entered_world();
                         }
                     }
                     Ok(OutboundOutcome::Dropped) => {

@@ -355,7 +355,12 @@ export function pumpEntityUpdatesAndInput(D) {
       // default true. This is intentionally conservative —
       // the C# oracle's own on_ground predicate is the
       // load-bearing signal for the on-ground gate.
-      if (typeof handle?.setLastClientPrediction === "function") {
+      //
+      // Area 2 fix: In 3D mode (window.liveScene3d), 3D camera.js owns
+      // setLastClientPrediction with full 3D coordinates. Eliminate dead 2D
+      // getLocalPlayerPose() wasm-boxing and 2D setLastClientPrediction in 3D mode.
+      const is3D = Boolean(window.liveScene3d || window.__scene3dActive);
+      if (!is3D && typeof handle?.setLastClientPrediction === "function") {
         let zEst = 0.0;
         // Copy-then-free: wasm-bindgen LocalPlayerPose box. This
         // is the PER-FRAME reader (the R1#6 ~60 orphans/s shape),

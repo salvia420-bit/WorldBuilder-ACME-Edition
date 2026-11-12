@@ -78,6 +78,13 @@ function urlFlagEnabled() {
 const DEFAULT_FETCH_CONCURRENCY = 32; // mirrors concurrency.rs DEFAULT_FETCH_CONCURRENCY
 const WORKER_FETCH_SHARE_FRACTION = 0.25;
 
+export const BAKE_JOB_TIMEOUT_MS = 30000;
+
+let _bakeTimeoutFn = globalThis.setTimeout;
+export function _setBakeTimeoutForTest(fn) {
+  _bakeTimeoutFn = fn || globalThis.setTimeout;
+}
+
 // A15 §1 shard-cache budget (2026-07-25).
 //
 // `V2Source::shards` — the resource source's DAT-record cache — never evicted:
@@ -1403,9 +1410,27 @@ export class BakeWorkerClient {
       } catch (_) { /* stats must never affect the request */ }
     };
     return new Promise((resolve, reject) => {
+      let timeoutId = null;
+      if (BAKE_JOB_TIMEOUT_MS > 0) {
+        timeoutId = _bakeTimeoutFn(() => {
+          if (this._pending.has(id)) {
+            console.warn(`[bake_worker_client] bake worker job ${type} (id=${id}) timed out after ${BAKE_JOB_TIMEOUT_MS}ms; recovering from wedged worker`);
+            this._failAll(new Error(`bake worker job ${type} (id=${id}) timed out / wedged`), { backoff: true });
+          }
+        }, BAKE_JOB_TIMEOUT_MS);
+        if (typeof timeoutId?.unref === "function") timeoutId.unref();
+      }
       this._pending.set(id, {
-        resolve: (v) => { done(true); resolve(v); },
-        reject: (e) => { done(false); reject(e); },
+        resolve: (v) => {
+          if (timeoutId) clearTimeout(timeoutId);
+          done(true);
+          resolve(v);
+        },
+        reject: (e) => {
+          if (timeoutId) clearTimeout(timeoutId);
+          done(false);
+          reject(e);
+        },
       });
       // F2 (2026-08-03) — INVARIANT: every promise handed out here settles.
       // The client is worker-less between a `_failAll` and the next
@@ -1714,6 +1739,10 @@ export class BakeWorkerClient {
         this._pump();
       }
       this._settleCoalesced(group, msg);
+      return;
+    }
+    if (msg && msg.type === "error" && (msg.id === null || msg.id === undefined)) {
+      this._failAll(new Error("bake worker unhandled error: " + (msg.message || "unknown")), { backoff: true });
       return;
     }
     const entry = this._pending.get(msg && msg.id);

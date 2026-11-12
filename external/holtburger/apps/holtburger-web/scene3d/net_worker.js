@@ -42,6 +42,16 @@ const RX_KIND_MESSAGE = 0;
 const RX_KIND_DISCONNECT = 1;
 const RX_KIND_TIMESYNC = 2;
 const RX_KIND_LINK_STATUS = 3;
+const RX_KIND_BATCH = 4;
+
+self.onerror = (e) => {
+  self.postMessage({ t: "error", reason: "worker uncaught error: " + ((e && e.message) || e) });
+};
+
+self.onunhandledrejection = (ev) => {
+  const reason = ev && ev.reason;
+  self.postMessage({ t: "error", reason: "worker unhandled rejection: " + ((reason && reason.message) || reason) });
+};
 
 /**
  * net-transport-6: decode an RX_KIND_LINK_STATUS payload (8 bytes: u32 LE
@@ -70,6 +80,21 @@ function postToMain(kind, bytes) {
     // `bytes` is a fresh Uint8Array minted by the wasm side — transfer its
     // buffer so the hop is zero-copy.
     self.postMessage({ t: "rx", bytes }, [bytes.buffer]);
+  } else if (kind === RX_KIND_BATCH) {
+    // `bytes` is an Array of Uint8Arrays minted by worker_post_batch.
+    // Transfer all underlying ArrayBuffers so the burst hop is zero-copy.
+    const transfer = [];
+    const batch = [];
+    if (Array.isArray(bytes)) {
+      for (let i = 0; i < bytes.length; i++) {
+        const u8 = bytes[i];
+        if (u8 && u8.buffer) {
+          transfer.push(u8.buffer);
+          batch.push(u8);
+        }
+      }
+    }
+    self.postMessage({ t: "rx_batch", batch }, transfer);
   } else if (kind === RX_KIND_TIMESYNC) {
     // 8-byte LE f64: server clock seconds (ACE PortalYearTicks domain).
     // Decoded here so the main thread receives a plain number.
