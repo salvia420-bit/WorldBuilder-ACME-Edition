@@ -607,30 +607,35 @@ pub(super) async fn handle(ctx: &mut LoopCtx, cmd: SessionCommand) -> LoopFlow {
                 );
                 let requested =
                     PropEquipMask::from_bits_truncate(effective_mask);
-                let to_unequip: Vec<u32> =
+                let to_unequip =
                     holtburger_world::equip::wield_unequip_conflicts(
                         w,
                         Guid(item_guid),
                         requested,
-                    )
-                    .into_iter()
-                    .map(|g| g.0)
-                    .collect();
-                let pack_guid = w.player.guid.0;
-                for g in to_unequip {
+                    );
+                let unequip_plan =
+                    holtburger_world::equip::unequip_destinations(w, &to_unequip);
+                for (g_guid, dest_pack) in unequip_plan {
+                    let g = g_guid.0;
+                    let dest_guid = if dest_pack != Guid::NULL {
+                        dest_pack
+                    } else {
+                        w.player.guid
+                    };
                     let old_slot_bits = w
                         .player
                         .equipment
-                        .get(&Guid(g))
+                        .get(&g_guid)
                         .map(|m| m.bits())
                         .unwrap_or(0);
                     console_log_str(&format!(
-                        "[paperdoll/wield] auto-unequip 0x{g:08X} → pack (slot conflict)",
+                        "[paperdoll/wield] auto-unequip 0x{g:08X} → 0x{:08X} (slot conflict)",
+                        dest_guid.0,
                     ));
                     let act = GameAction::PutItemInContainer(
                         Box::new(PutItemInContainerActionData {
-                            item_guid: Guid(g),
-                            container_guid: Guid(pack_guid),
+                            item_guid: g_guid,
+                            container_guid: dest_guid,
                             placement: 0,
                         }),
                     );
@@ -641,6 +646,7 @@ pub(super) async fn handle(ctx: &mut LoopCtx, cmd: SessionCommand) -> LoopFlow {
                         );
                         break;
                     }
+                    inventory_requests.record(g, put_in_container_request(false));
                     if old_slot_bits != 0 {
                         displaced.push((g, old_slot_bits));
                     }
@@ -660,8 +666,9 @@ pub(super) async fn handle(ctx: &mut LoopCtx, cmd: SessionCommand) -> LoopFlow {
                 "wield_from_pack: {e}",
                 LoopFlow::Exit
             );
-            // messages-objects-1: retail `UIAttemptWield` → IR_WIELD (the
-            // auto-unequips above record nothing).
+            // messages-objects-1: retail `UIAttemptWield` → IR_WIELD (recorded
+            // AFTER auto-unequip PutInContainer entries so `self.last` tracks
+            // `item_guid` while each `conflict_guid` owns its `in_flight` slot).
             inventory_requests.record(item_guid, InventoryRequest::Wield);
             inventory_requests.record_displaced_equip(item_guid, displaced);
             console_log_str(&format!(
@@ -757,11 +764,17 @@ pub(super) async fn handle(ctx: &mut LoopCtx, cmd: SessionCommand) -> LoopFlow {
                 );
                 return LoopFlow::Continue;
             }
+            let dest_guid = holtburger_world::equip::unequip_destination(w, Guid(item_guid));
+            let target_container = if dest_guid != Guid::NULL {
+                dest_guid
+            } else {
+                Guid(player_guid_raw)
+            };
             drop(world_guard);
             let action = GameAction::PutItemInContainer(Box::new(
                 PutItemInContainerActionData {
                     item_guid: Guid(item_guid),
-                    container_guid: Guid(player_guid_raw),
+                    container_guid: target_container,
                     placement: 0,
                 },
             ));
@@ -779,7 +792,8 @@ pub(super) async fn handle(ctx: &mut LoopCtx, cmd: SessionCommand) -> LoopFlow {
                 inventory_requests.record(item_guid, put_in_container_request(in_3d));
             }
             console_log_str(&format!(
-                "[inventory/unwield] item=0x{item_guid:08X} player=0x{player_guid_raw:08X}",
+                "[inventory/unwield] item=0x{item_guid:08X} dest=0x{:08X}",
+                target_container.0,
             ));
         }
         SessionCommand::SplitStackToWield {
@@ -790,12 +804,72 @@ pub(super) async fn handle(ctx: &mut LoopCtx, cmd: SessionCommand) -> LoopFlow {
             use holtburger_common::Guid;
             use holtburger_protocol::messages::inventory::types::EquipMask;
             use holtburger_protocol::messages::{
-                GameAction, StackableSplitToWieldActionData,
+                GameAction, PutItemInContainerActionData,
+                StackableSplitToWieldActionData,
             };
+            let mut effective_mask = equip_mask;
+            if let Some(w) = world.borrow().as_ref() {
+                use holtburger_common::properties::{
+                    EquipMask as PropEquipMask, PropertyInt,
+                    WorldObjectPropertyAccessors as _,
+                };
+                let worn_mask: u32 = w
+                    .player
+                    .equipment
+                    .iter()
+                    .filter(|(g, _)| g.0 != stack_guid)
+                    .fold(0u32, |acc, (_, m)| acc | m.bits());
+                let aetheria_bits = w
+                    .entities
+                    .get(w.player.guid)
+                    .and_then(|e| e.get_int_prop(PropertyInt::AetheriaBitfield))
+                    .map(|b| b as u32);
+                effective_mask = crate::inventory_request::normalize_wield_mask_with_aetheria(
+                    equip_mask,
+                    worn_mask,
+                    aetheria_bits,
+                );
+                let requested =
+                    PropEquipMask::from_bits_truncate(effective_mask);
+                let to_unequip =
+                    holtburger_world::equip::wield_unequip_conflicts(
+                        w,
+                        Guid(stack_guid),
+                        requested,
+                    );
+                let unequip_plan =
+                    holtburger_world::equip::unequip_destinations(w, &to_unequip);
+                for (g_guid, dest_pack) in unequip_plan {
+                    let g = g_guid.0;
+                    let dest_guid = if dest_pack != Guid::NULL {
+                        dest_pack
+                    } else {
+                        w.player.guid
+                    };
+                    console_log_str(&format!(
+                        "[inventory/split-wield] auto-unequip 0x{g:08X} → 0x{:08X} (slot conflict)",
+                        dest_guid.0,
+                    ));
+                    let act = GameAction::PutItemInContainer(
+                        Box::new(PutItemInContainerActionData {
+                            item_guid: g_guid,
+                            container_guid: dest_guid,
+                            placement: 0,
+                        }),
+                    );
+                    if let Err(e) = send_ordered!(movement, session, act) {
+                        log::warn!(
+                            "recv_loop: split-wield auto-unequip: {e}"
+                        );
+                        break;
+                    }
+                    inventory_requests.record(g, put_in_container_request(false));
+                }
+            }
             let action = GameAction::StackableSplitToWield(Box::new(
                 StackableSplitToWieldActionData {
                     stack_guid: Guid(stack_guid),
-                    equip_mask: EquipMask::from_bits_truncate(equip_mask),
+                    equip_mask: EquipMask::from_bits_truncate(effective_mask),
                     amount: amount as i32,
                 },
             ));
@@ -810,7 +884,7 @@ pub(super) async fn handle(ctx: &mut LoopCtx, cmd: SessionCommand) -> LoopFlow {
             // messages-objects-1: retail `UIAttemptWield`'s split branch
             // records no request (acclient.c:438132).
             console_log_str(&format!(
-                "[inventory/split-wield] stack=0x{stack_guid:08X} slot=0x{equip_mask:08X} amount={amount}",
+                "[inventory/split-wield] stack=0x{stack_guid:08X} slot=0x{effective_mask:08X} amount={amount}",
             ));
         }
         SessionCommand::SplitStackToContainer {

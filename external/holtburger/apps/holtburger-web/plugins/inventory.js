@@ -158,24 +158,29 @@ const SHORTCUT_NUM_GHOST_DIDS = Object.freeze([
 // silhouette decoded once per session from client_portal.dat (0x06004D8B).
 let hitTestMap = null;
 let hitTestInflight = null;
+function applyHitMapResult(r) {
+  if (r && r.width && r.height && r.pixels?.length) {
+    hitTestMap = { width: r.width >>> 0, height: r.height >>> 0, data: new Uint8Array(r.pixels) };
+  }
+  try { r?.free?.(); } catch (_) {}
+  return hitTestMap;
+}
 function loadPaperdollHitMap() {
   if (hitTestMap) return Promise.resolve(hitTestMap);
   if (hitTestInflight) return hitTestInflight;
   const wasm = (typeof window !== "undefined") ? (window.__hbWasm ?? window.__wasm ?? null) : null;
   const fetchIcon = wasm?.fetch_icon_pixels;
   if (typeof fetchIcon !== "function") return Promise.resolve(null);
-  hitTestInflight = Promise.resolve()
-    .then(() => fetchIcon(PAPERDOLL_HIT_DID >>> 0))
-    .then((r) => {
-      if (r && r.width && r.height && r.pixels?.length) {
-        hitTestMap = { width: r.width >>> 0, height: r.height >>> 0, data: new Uint8Array(r.pixels) };
-      }
-      try { r?.free?.(); } catch (_) {}
-      return hitTestMap;
-    })
-    .catch(() => null)
-    .finally(() => { hitTestInflight = null; });
-  return hitTestInflight;
+  let res;
+  try { res = fetchIcon.call(wasm, PAPERDOLL_HIT_DID >>> 0); } catch (_) { return Promise.resolve(null); }
+  if (res && typeof res.then === "function") {
+    hitTestInflight = res
+      .then((r) => applyHitMapResult(r))
+      .catch(() => null)
+      .finally(() => { hitTestInflight = null; });
+    return hitTestInflight;
+  }
+  return Promise.resolve(applyHitMapResult(res));
 }
 // Retail human defaults when the snapshot has not surfaced the property
 // yet (ACE human weenie: ItemsCapacity 102, ContainersCapacity 7).
@@ -197,6 +202,44 @@ function typeTint(itemType) {
 // and reopening the panel (retail keeps both on the client).
 const packOrder = createPackOrder();
 let lastSelectedPack = 0;
+let viewedContainersPlayer = 0;
+const viewedContainers = new Set();
+
+function ensureOwnedContainerViewedRows(containerGuid, rowsList) {
+  const c = (containerGuid >>> 0) || 0;
+  if (!c) return;
+  const me = localPlayerGuid();
+  if (me && me !== viewedContainersPlayer) {
+    viewedContainersPlayer = me;
+    viewedContainers.clear();
+  }
+  if (viewedContainers.has(c)) return;
+  const h = sessionHandleNow();
+  if (typeof h?.hasViewedContainer === "function") {
+    let seen = false;
+    try { seen = !!h.hasViewedContainer(c); } catch (_) { seen = false; }
+    if (seen) { viewedContainers.add(c); return; }
+  } else {
+    if (Array.isArray(rowsList) && rowsList.some((r) => (r.containerId >>> 0) === c)) {
+      viewedContainers.add(c);
+      return;
+    }
+    if (typeof h?.getContainerContents === "function") {
+      let cached = null;
+      try {
+        cached = h.getContainerContents(c);
+        const arr = Array.isArray(cached) ? cached : [];
+        let len = 0;
+        for (const it of arr) { len++; try { it?.free?.(); } catch (_) {} }
+        if (len > 0) { viewedContainers.add(c); return; }
+      } catch (_) {}
+    }
+  }
+  viewedContainers.add(c);
+  if (typeof h?.useObject === "function") {
+    try { h.useObject(c); } catch (_) {}
+  }
+}
 
 // Paperdoll equipment slot table — element IDs + equipMask bits from
 // the Wave 16 LayoutDesc 0x21000037 dump (24 top-level 32×32 element
@@ -546,7 +589,8 @@ function ensureStyles() {
     #${OVERLAY_ID} .hb-inv-bag.is-selected { outline: 1px solid #f3d27a; outline-offset: -2px; }
 
     /* UIElement_UIItem state overlays: Trade (0x0600109D), Sell (0x060012D9),
-       Cooldown 10..100 (0x060067CF..0x060067D8), ShortcutNum (0x0600109E..). */
+       Cooldown 10..100 (0x060067CF..0x060067D8), ShortcutNum (0x0600109E..),
+       StructureBar 0x10000348 (0x06004D24 rail + 0x06004D25 fill at 26,1 5x30). */
     #${OVERLAY_ID} .hb-uiitem-trade,
     #${OVERLAY_ID} .hb-uiitem-sell,
     #${OVERLAY_ID} .hb-uiitem-cd,
@@ -564,6 +608,18 @@ function ensureStyles() {
     }
     #${OVERLAY_ID} .hb-uiitem-trade { background-image: url("${SP}/0x0600109D.png"); }
     #${OVERLAY_ID} .hb-uiitem-sell { background-image: url("${SP}/0x060012D9.png"); }
+    #${OVERLAY_ID} .hb-uiitem-struct {
+      position: absolute; left: 26px; top: 1px; width: 5px; height: 30px; z-index: 3;
+      background: url("${SP}/0x06004D24.png") center / 100% 100% no-repeat;
+      image-rendering: pixelated;
+      pointer-events: none;
+    }
+    #${OVERLAY_ID} .hb-inv-bag > .hb-uiitem-struct { left: 28px; top: 3px; }
+    #${OVERLAY_ID} .hb-uiitem-struct > i {
+      position: absolute; left: 0; right: 0; bottom: 0;
+      height: var(--struct, 0%);
+      background: url("${SP}/0x06004D25.png") center bottom / 5px 30px no-repeat;
+    }
 
     /* ── gm3DItemsUI grid: fills the space under the paperdoll, left of
        the backpack column (retail ThreeDItemsField 234 wide), and scrolls
@@ -650,9 +706,18 @@ function setArmedItem(guid) {
 // Retail ItemList_OpenContainer from outside the view (container-panel's
 // "Open" on one of the player's own packs, radial "Open").
 let mountedApi = null;
-function openPack(guid) {
-  lastSelectedPack = (guid >>> 0) || 0;
-  if (mountedApi) mountedApi.selectPack(lastSelectedPack);
+function openPack(guid, rowsOpt = null) {
+  const c = (guid >>> 0) || 0;
+  if (mountedApi) return mountedApi.selectPack(c);
+  if (c !== 0) {
+    const list = Array.isArray(rowsOpt) ? rowsOpt : takeInventoryRows(sessionHandleNow());
+    const r = list.find((it) => (it.guid >>> 0) === c);
+    if (!r || (r.equipMask >>> 0) !== 0 || !isOpenableContainer(r)) return false;
+    lastSelectedPack = c;
+    ensureOwnedContainerViewedRows(c, list);
+    return true;
+  }
+  lastSelectedPack = 0;
   return true;
 }
 
@@ -774,8 +839,11 @@ function activateItem(guid, { cell = null } = {}) {
   }
   switch (act.kind) {
     case "open":
-      if ((row.containerId >>> 0) === 0) openPack(g);
-      else { try { window.__openContainerFor?.(g, row.name); } catch (_) {} }
+      openPack(g, rows);
+      try {
+        const mp = window.__mainPanel;
+        if (mp && (mp.currentViewId?.() !== "inventory" || !mp.isOpen?.())) mp.showView?.("inventory");
+      } catch (_) {}
       return true;
     case "wield":
     case "wear": {
@@ -943,12 +1011,12 @@ function doMount(parentEl, _ctx) {
     }
   }
   function setUiItemShortcut(el, slotIdx, ghosted) {
-    const idx = slotIdx >= 0 && slotIdx < 10 ? (slotIdx | 0) : -1;
+    const idx = slotIdx >= 0 && slotIdx < 9 ? (slotIdx | 0) : -1;
     const gh = !!ghosted;
     const key = idx >= 0 ? `${idx}:${gh ? 1 : 0}` : "";
     if ((el._scKey || "") === key) return;
     el._scKey = key;
-    if (idx >= 0) el.dataset.shortcut = String(idx === 9 ? 0 : idx + 1);
+    if (idx >= 0) el.dataset.shortcut = String(idx + 1);
     else delete el.dataset.shortcut;
     const node = setLazyOverlay(el, "_scEl", "hb-uiitem-sc", idx >= 0);
     if (node) {
@@ -962,11 +1030,33 @@ function doMount(parentEl, _ctx) {
       }).catch(() => {});
     }
   }
+  function setUiItemStructure(el, row) {
+    const max = row ? (Number(row.maxStructure) || 0) : 0;
+    const curRaw = row ? Number(row.structure ?? 0) : 0;
+    const cur = Number.isFinite(curRaw) ? curRaw : 0;
+    const show = max > 0 && cur < max;
+    const key = show ? `${cur}/${max}` : "";
+    if ((el._structKey || "") === key) return;
+    el._structKey = key;
+    if (show) el.dataset.structure = key;
+    else delete el.dataset.structure;
+    const node = setLazyOverlay(el, "_structEl", "hb-uiitem-struct", show);
+    if (node) {
+      let fill = node.firstChild;
+      if (!fill) {
+        fill = document.createElement("i");
+        node.appendChild(fill);
+      }
+      const frac = Math.max(0, Math.min(1, cur / max));
+      fill.style.setProperty("--struct", `${(frac * 100).toFixed(1)}%`);
+    }
+  }
   function clearUiItemOverlays(el) {
     setUiItemTrade(el, false);
     setUiItemSell(el, false);
     setUiItemCooldown(el, 0);
     setUiItemShortcut(el, -1, false);
+    setUiItemStructure(el, null);
   }
 
   // ── usetarget-1: target mode in the inventory views ─────────────
@@ -1025,14 +1115,51 @@ function doMount(parentEl, _ctx) {
   viewportWrap.appendChild(paperdollViewport.dom);
   paperdoll.appendChild(viewportWrap);
 
-  function unwieldGuidToPack(guid) {
+  function unwieldGuidToPack(guid, sourceEl = null) {
+    const g = (guid >>> 0) || 0;
+    if (!g) return;
+    const row = displayRow(g);
+    executeItemAction(
+      { op: "unwield", guid: g },
+      { guid: g, item: withPack(row) || { guid: g }, owned: true, sourceEl },
+    );
+  }
+
+  function activateOrUnwieldPaperdollItem(guid, sourceEl = null) {
+    const g = (guid >>> 0) || 0;
+    if (!g) return;
     const h = sessionHandleNow();
-    try { window.__audioOptimistic?.playOptimistic?.(0x8D, guid); } catch (_) {}
-    if (typeof h?.unwieldToPack === "function") {
-      try { h.unwieldToPack(guid); } catch (e) { console.warn("[paperdoll-dblclick] unwieldToPack failed:", e); }
-    } else if (typeof h?.moveItem === "function" && localPlayerGuid()) {
-      try { h.moveItem(guid, localPlayerGuid(), 0); } catch (_) {}
+    const row = displayRow(g);
+    let u = (row?.itemUseable >>> 0) || 0;
+    if (!u && typeof row?.itemUseable !== "number" && typeof h?.objectIntProperty === "function") {
+      try { u = (h.objectIntProperty(g, 16) >>> 0) || 0; } catch (_) { u = 0; }
     }
+    const srcBits = u & 0xffff;
+    const wieldedUsable = srcBits !== 0 && srcBits !== 0x0001 && (srcBits & 0x0004) !== 0;
+    if (wieldedUsable) {
+      if (!consumeUseThrottle(nowMs())) return;
+      const src = { guid: g, item: withPack(row) || { guid: g }, owned: true, sourceEl };
+      if (tradedGuidsSet(h).has(g)) {
+        executeItemAction({ op: "reject", message: `You are trading the ${row?.name || "item"}, it cannot be used` }, src);
+        return;
+      }
+      let needsTarget = (((u >>> 16) & 0xffff & ~0x0001) !== 0);
+      if (typeof h?.classifyUse === "function") {
+        let intent = null;
+        try { intent = h.classifyUse(g); needsTarget = !!intent?.needsTarget || needsTarget; } catch (_) {}
+        finally { try { intent?.free?.(); } catch (_) {} }
+      }
+      if (needsTarget && typeof window.__useTargeting?.begin === "function") {
+        window.__useTargeting.begin(g, row?.name || "item");
+        return;
+      }
+      if (typeof h?.useObject === "function") {
+        try { h.useObject(g); } catch (e) { console.warn("[paperdoll-use] useObject failed:", e); }
+        try { if (((row?.itemType >>> 0) & 0x00002000) !== 0 && h.bookData) h.bookData(g); } catch (_) {}
+      }
+      return;
+    }
+    unwieldGuidToPack(g, sourceEl);
   }
 
   // gmPaperDollUI::CreateClickMap / GetPaperDollItemUnderMouse (acclient.c:
@@ -1042,30 +1169,58 @@ function doMount(parentEl, _ctx) {
   dollHit.className = "hb-inv-doll-hit";
   dollHit.dataset.elemId = "0x100001D6";
   dollHit.draggable = true;
-  function hitGuidOnFigure(ev) {
-    if (slotsViewChecked || !hitTestMap) return 0;
-    const rect = dollHit.getBoundingClientRect();
+  let cachedDollHitRect = null;
+  let lastDollHoverGuid = 0;
+  function hitGuidOnFigure(ev, { freshRect = false } = {}) {
+    if (slotsViewChecked) return 0;
+    if (!hitTestMap) {
+      loadPaperdollHitMap();
+      if (!hitTestMap) return 0;
+    }
+    if (freshRect || !cachedDollHitRect) {
+      cachedDollHitRect = dollHit.getBoundingClientRect();
+    }
+    const rect = cachedDollHitRect;
     const x = rect.width > 0 ? ((ev.clientX - rect.left) * hitTestMap.width / rect.width) : (ev.offsetX ?? ev.clientX ?? -1);
     const y = rect.height > 0 ? ((ev.clientY - rect.top) * hitTestMap.height / rect.height) : (ev.offsetY ?? ev.clientY ?? -1);
     return paperdollItemAt(hitTestMap, x, y, rows, localPlayerGuid());
   }
+  dollHit.addEventListener("mouseenter", () => { cachedDollHitRect = null; });
   dollHit.addEventListener("mousemove", (ev) => {
     const hit = hitGuidOnFigure(ev);
     const me = localPlayerGuid();
     dollHit.style.cursor = hit ? "pointer" : "default";
-    if (!hit) { unmarkUseTarget(dollHit); hideItemTooltip(); return; }
-    if (pendingUseTarget()) { markUseTarget(dollHit, me || hit); }
+    if (!hit) {
+      if (lastDollHoverGuid !== 0) {
+        lastDollHoverGuid = 0;
+        unmarkUseTarget(dollHit);
+      }
+      hideItemTooltip();
+      return;
+    }
+    if (pendingUseTarget() && hit !== lastDollHoverGuid) {
+      markUseTarget(dollHit, me || hit);
+    }
+    lastDollHoverGuid = hit;
+    const pt = (Number.isFinite(ev.clientX) && Number.isFinite(ev.clientY))
+      ? { clientX: ev.clientX, clientY: ev.clientY }
+      : null;
     if (hit === me) {
-      showItemTooltip(dollHit, playerName() || "You");
+      showItemTooltip(dollHit, playerName() || "You", pt);
     } else {
       const row = displayRow(hit);
-      if (row) showItemTooltip(dollHit, row.name || "Equipped item");
+      if (row) showItemTooltip(dollHit, row.name || "Equipped item", pt);
     }
   });
-  dollHit.addEventListener("mouseleave", () => { unmarkUseTarget(dollHit); hideItemTooltip(); });
+  dollHit.addEventListener("mouseleave", () => {
+    cachedDollHitRect = null;
+    lastDollHoverGuid = 0;
+    unmarkUseTarget(dollHit);
+    hideItemTooltip();
+  });
   dollHit.addEventListener("click", (ev) => {
     if (ev.button !== 0) return;
-    const hit = hitGuidOnFigure(ev);
+    const hit = hitGuidOnFigure(ev, { freshRect: true });
     if (!hit) return;
     const me = localPlayerGuid();
     if (pendingUseTarget() && resolveUseTarget(me || hit)) {
@@ -1077,15 +1232,15 @@ function doMount(parentEl, _ctx) {
   });
   dollHit.addEventListener("dblclick", (ev) => {
     if (ev.button !== 0) return;
-    const hit = hitGuidOnFigure(ev);
+    const hit = hitGuidOnFigure(ev, { freshRect: true });
     const me = localPlayerGuid();
     if (!hit || hit === me || justTargeted(hit) || justTargeted(me)) return;
     ev.preventDefault();
     ev.stopPropagation();
-    unwieldGuidToPack(hit);
+    activateOrUnwieldPaperdollItem(hit, dollHit);
   });
   dollHit.addEventListener("contextmenu", (ev) => {
-    const hit = hitGuidOnFigure(ev);
+    const hit = hitGuidOnFigure(ev, { freshRect: true });
     if (!hit) return;
     ev.preventDefault();
     ev.stopPropagation();
@@ -1108,7 +1263,7 @@ function doMount(parentEl, _ctx) {
     }
   });
   dollHit.addEventListener("dragstart", (ev) => {
-    const hit = hitGuidOnFigure(ev);
+    const hit = hitGuidOnFigure(ev, { freshRect: true });
     const me = localPlayerGuid();
     if (SELF_SHORTCUT && hit && hit === me) {
       hideItemTooltip();
@@ -1180,7 +1335,7 @@ function doMount(parentEl, _ctx) {
         sourceList: null, sourceIndex: -1, sourceEl: el,
       });
     });
-    // Double-click → unwield back to the main pack.
+    // Double-click → SourceWielded Use if usable while worn, else unwield back to pack.
     el.addEventListener("dblclick", (ev) => {
       if (ev.button !== 0) return;
       const guid = (parseInt(el.dataset.itemGuid, 10) >>> 0) || 0;
@@ -1188,7 +1343,7 @@ function doMount(parentEl, _ctx) {
       ev.preventDefault();
       ev.stopPropagation();
       if (justTargeted(guid)) return; // its first press was a target click
-      unwieldGuidToPack(guid);
+      activateOrUnwieldPaperdollItem(guid, el);
     });
     el.addEventListener("contextmenu", (ev) => {
       ev.preventDefault();
@@ -1746,13 +1901,17 @@ function doMount(parentEl, _ctx) {
   }
 
   // ── packs / title ───────────────────────────────────────────────
+  function isOpenableOwnedContainer(c) {
+    const g = (c >>> 0) || 0;
+    if (!g) return false;
+    const r = displayRow(g);
+    return !!r && (r.equipMask >>> 0) === 0 && isOpenableContainer(r);
+  }
   function selectPack(containerId) {
     const c = (containerId >>> 0) || 0;
-    if (c !== 0) {
-      const r = displayRow(c);
-      if (!(orders.get(PACKS_KEY) || []).includes(c) || (r && !isOpenableContainer(r))) return;
-    }
-    if (c === selectedPackContainerId) return;
+    if (c !== 0 && !isOpenableOwnedContainer(c)) return false;
+    if (c !== 0) ensureOwnedContainerViewedRows(c, rows);
+    if (c === selectedPackContainerId) return true;
     selectedPackContainerId = c;
     lastSelectedPack = c;
     itemsGrid.scrollTop = 0; // retail ScrollToHome on a new parent container
@@ -1760,14 +1919,18 @@ function doMount(parentEl, _ctx) {
     renderGrid();
     refreshUiItemStates();
     refreshPanelTitle();
+    return true;
   }
 
   // gmInventoryUI::RecvNotice_NewParentContainer: "Inventory of <player>"
-  // on the main pack, "Contents of <pack>" on a side pack.
+  // on the main pack, "Contents of <pack>" on any owned open container.
   function refreshPanelTitle() {
     let next;
     if (selectedPackContainerId !== 0) {
       const packs = (orders.get(PACKS_KEY) || []).map((g) => ({ containerId: g, name: displayRow(g)?.name || "" }));
+      if (!packs.some((p) => (p.containerId >>> 0) === selectedPackContainerId)) {
+        packs.push({ containerId: selectedPackContainerId, name: displayRow(selectedPackContainerId)?.name || "" });
+      }
       next = computeInventoryTitle(selectedPackContainerId, packs, null);
     } else {
       next = view.nameFor({});
@@ -1965,7 +2128,9 @@ function doMount(parentEl, _ctx) {
       const hb = window.__hotbar;
       if (typeof hb?.getSlot === "function") {
         const me = localPlayerGuid();
-        for (let i = 0; i < 10; i++) {
+        // Only Row 1 slots 0..8 (keys 1..9) have retail ShortcutNum badges;
+        // slot 9 is Row 2 Slot 1 (Alt+1), not key "0".
+        for (let i = 0; i < 9; i++) {
           const s = hb.getSlot(i);
           if (!s) continue;
           if (s.self || (me && (s.itemGuid >>> 0) === me)) {
@@ -2030,12 +2195,13 @@ function doMount(parentEl, _ctx) {
 
     setUiItemShortcut(mainSlot, selfSlot, magicStance);
     for (const cell of cellCache.values()) {
-      if (cell.dataset.empty) continue;
+      if (cell.dataset.empty) { clearUiItemOverlays(cell); continue; }
       const g = cellGuid(cell);
       setUiItemTrade(cell, traded.has(g));
       setUiItemSell(cell, selling.has(g));
       setUiItemCooldown(cell, cdStepByGuid.get(g) || 0);
       setUiItemShortcut(cell, shortcuts.has(g) ? shortcuts.get(g) : -1, magicStance);
+      setUiItemStructure(cell, displayRow(g));
     }
     for (const cell of bagCache.values()) {
       if (cell.classList.contains("is-empty")) { clearUiItemOverlays(cell); continue; }
@@ -2044,6 +2210,7 @@ function doMount(parentEl, _ctx) {
       setUiItemSell(cell, selling.has(pg));
       setUiItemCooldown(cell, cdStepByGuid.get(pg) || 0);
       setUiItemShortcut(cell, shortcuts.has(pg) ? shortcuts.get(pg) : -1, magicStance);
+      setUiItemStructure(cell, displayRow(pg));
     }
     for (const k of Object.keys(dollSlotEls)) {
       const el = dollSlotEls[k].el;
@@ -2053,6 +2220,7 @@ function doMount(parentEl, _ctx) {
       setUiItemSell(el, selling.has(dg));
       setUiItemCooldown(el, cdStepByGuid.get(dg) || 0);
       setUiItemShortcut(el, shortcuts.has(dg) ? shortcuts.get(dg) : -1, magicStance);
+      setUiItemStructure(el, displayRow(dg));
     }
   }
 
@@ -2060,7 +2228,12 @@ function doMount(parentEl, _ctx) {
   function buildGroups() {
     const groups = new Map([[MAIN_PACK_KEY, []], [PACKS_KEY, []]]);
     for (const r of rows) {
-      if ((r.equipMask >>> 0) === 0 && (r.containerId >>> 0) === 0 && rowUsesPackSlot(r)) groups.set(r.guid, []);
+      if ((r.equipMask >>> 0) === 0 && (
+        ((r.containerId >>> 0) === 0 && rowUsesPackSlot(r))
+        || isOpenableContainer(r)
+      )) {
+        groups.set(r.guid, []);
+      }
     }
     const push = (key, row) => {
       if (!groups.has(key)) groups.set(key, []);
@@ -2088,6 +2261,8 @@ function doMount(parentEl, _ctx) {
   const rebuildStats = (window.__inventoryRebuildStats = { rebuilds: 0, wieldEventsSkipped: 0 });
   function rebuild() {
     rebuildStats.rebuilds += 1;
+    if (!hitTestMap) loadPaperdollHitMap();
+    cachedDollHitRect = null;
     rows = takeInventoryRows(sessionHandleNow());
     rowsByGuid = new Map(rows.map((r) => [r.guid, r]));
     stubs = new Map();
@@ -2104,10 +2279,11 @@ function doMount(parentEl, _ctx) {
     }
     orders = packOrder.reconcile(buildGroups());
     if (selectedPackContainerId !== 0) {
-      const selRow = displayRow(selectedPackContainerId);
-      if (!(orders.get(PACKS_KEY) || []).includes(selectedPackContainerId) || (selRow && !isOpenableContainer(selRow))) {
+      if (!isOpenableOwnedContainer(selectedPackContainerId)) {
         selectedPackContainerId = 0;
         lastSelectedPack = 0;
+      } else {
+        ensureOwnedContainerViewedRows(selectedPackContainerId, rows);
       }
     }
     clearPaperdoll();
@@ -2308,7 +2484,7 @@ function doMount(parentEl, _ctx) {
   // Other plugins: is this guid one of my items?
   window.__isInventoryItem = (guid) => rowsByGuid.has(guid >>> 0);
 
-  mountedApi = { selectPack: (g) => { selectPack(g); } };
+  mountedApi = { selectPack: (g) => selectPack(g) };
 
   // ── event wiring ────────────────────────────────────────────────
   // Every source funnels into ONE microtask-coalesced rebuild: the
@@ -2370,9 +2546,11 @@ function doMount(parentEl, _ctx) {
   window.addEventListener("keydown", onKey);
 
   const onOverlayStateEvent = () => refreshUiItemStates();
+  const onResize = () => { cachedDollHitRect = null; };
   window.addEventListener("hb-vendor-sell-list", onOverlayStateEvent);
   window.addEventListener("hb-vendor-closed", onOverlayStateEvent);
   window.addEventListener("hb-hotbar-changed", onOverlayStateEvent);
+  window.addEventListener("resize", onResize);
 
   const unsubs = [];
   unsubs.push(pendingOps.onChange(scheduleRebuild));
@@ -2380,6 +2558,13 @@ function doMount(parentEl, _ctx) {
     const client = window.__pluginClient;
     if (client?.events?.on) {
       const onStats = () => { refreshBurden(); refreshAetheriaGating(); refreshUiItemStates(); };
+      const onOwnedContainerOpened = (ev) => {
+        const d = ev?.detail;
+        const g = (d?.u32Payload ?? d?.u32_payload ?? 0) >>> 0;
+        if (!g) return;
+        viewedContainers.add(g);
+        if (g === selectedPackContainerId || rowsByGuid.has(g)) scheduleRebuild();
+      };
       // 2026-10-07 — kind:47/49 fire for every wielder transition in view;
       // rebuild (panel + doll) only for ours (inventory_helpers.js
       // wieldEventTouchesLocal). Read synchronously: the detail is the wasm
@@ -2394,6 +2579,7 @@ function doMount(parentEl, _ctx) {
       const evs = [
         ["playerStatsUpdated", onStats],
         ["playerInventoryChanged", scheduleRebuild],
+        ["containerOpened", onOwnedContainerOpened],
         ["sharedCooldownChanged", onOverlayStateEvent],
         ["tradeUpdated", onOverlayStateEvent],
         ["kind:47", onWieldChange],
@@ -2412,6 +2598,7 @@ function doMount(parentEl, _ctx) {
     window.removeEventListener("hb-vendor-sell-list", onOverlayStateEvent);
     window.removeEventListener("hb-vendor-closed", onOverlayStateEvent);
     window.removeEventListener("hb-hotbar-changed", onOverlayStateEvent);
+    window.removeEventListener("resize", onResize);
     if (cdTimer) { clearInterval(cdTimer); cdTimer = 0; }
     delete window.__isInventoryItem;
     if (window.__inventoryRebuildStats === rebuildStats) delete window.__inventoryRebuildStats;

@@ -411,6 +411,11 @@ pub trait WorldContext {
     fn equipment_contains(&self, guid: Guid) -> bool {
         self.iter_equipment().any(|candidate| candidate == guid)
     }
+
+    /// Server display-order rank of `guid` inside its container (`0..`), when known.
+    fn inventory_placement(&self, _guid: Guid) -> Option<u32> {
+        None
+    }
 }
 
 impl WorldContext for WorldState {
@@ -436,6 +441,10 @@ impl WorldContext for WorldState {
 
     fn equipment_contains(&self, guid: Guid) -> bool {
         self.player.equipment.contains_key(&guid)
+    }
+
+    fn inventory_placement(&self, guid: Guid) -> Option<u32> {
+        WorldState::inventory_placement(self, guid)
     }
 
     fn iter_entities(&self) -> impl Iterator<Item = &Entity> + '_ {

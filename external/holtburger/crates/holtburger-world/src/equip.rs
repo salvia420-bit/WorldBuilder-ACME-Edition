@@ -19,12 +19,18 @@
 //! `ClothingPriority` overlap: the player ended up stripped and not wearing
 //! the coat.
 
-use crate::context::WorldContext;
+use crate::context::{WorldContext, WorldContextExt};
 use crate::entity::Entity;
 use holtburger_common::Guid;
 use holtburger_common::properties::{
-    EquipMask, PropertyInt, WorldObjectExt, WorldObjectPropertyAccessors,
+    EquipMask, PropertyBool, PropertyInt, WorldObjectExt, WorldObjectPropertyAccessors,
 };
+
+/// Default human player main-pack capacities (`Player.cs` in ACE omits
+/// `PropertyInt::ItemsCapacity` and `PropertyInt::ContainersCapacity` on the
+/// player's own `CreateObject`, so live player entities default to 102 / 7).
+pub const DEFAULT_PLAYER_ITEMS_CAPACITY: u32 = 102;
+pub const DEFAULT_PLAYER_CONTAINERS_CAPACITY: u32 = 7;
 
 const COMBAT_USE_MISSILE: i32 = 2;
 const COMBAT_USE_TWO_HANDED: i32 = 5;
@@ -138,6 +144,138 @@ pub fn wield_unequip_conflicts<W: WorldContext>(
         }
     }
     to_unequip
+}
+
+/// Retail `ItemHolder::AttemptToPlaceInContainer(item, playerID, 0, 1, 0)`
+/// (`acclient.c:399403`, `:432960-432985`) destination container selection for
+/// one or more items moving off the paperdoll back into the player's packs:
+/// - Main pack (`player_guid`) when it has free item slots (`< 102`, or the
+///   player's explicit `ItemsCapacity` when > 0);
+/// - Else the first owned, top-level, unlocked openable side pack
+///   (`container_id == Some(player_guid)`, `items_capacity > 0`) in inventory
+///   slot order with free item capacity, tracking slots consumed across a
+///   multi-item conflict batch (e.g. a 2H weapon displacing both main-hand +
+///   shield when main pack is at `101/102`);
+/// - Falls back to `player_guid` when every pack is full so the server emits
+///   its authoritative full-pack rejection.
+pub fn unequip_destinations<W: WorldContext>(
+    world: &W,
+    item_guids: &[Guid],
+) -> Vec<(Guid, Guid)> {
+    let Some(player_guid) = world.get_player_guid().filter(|&g| g != Guid::NULL) else {
+        return item_guids.iter().map(|&g| (g, Guid::NULL)).collect();
+    };
+    if item_guids.is_empty() {
+        return Vec::new();
+    }
+
+    let main_item_cap = world
+        .get_entity(player_guid)
+        .and_then(|e| e.items_capacity())
+        .filter(|&c| c > 0)
+        .unwrap_or(DEFAULT_PLAYER_ITEMS_CAPACITY);
+    let main_container_cap = world
+        .get_entity(player_guid)
+        .and_then(|e| e.containers_capacity())
+        .filter(|&c| c > 0)
+        .unwrap_or(DEFAULT_PLAYER_CONTAINERS_CAPACITY);
+
+    let mut main_item_used = 0u32;
+    let mut main_container_used = 0u32;
+    let mut counts_by_container: std::collections::HashMap<Guid, u32> =
+        std::collections::HashMap::new();
+
+    for child in world.iter_entities() {
+        if child.guid == player_guid
+            || world.is_equipped_item(child.guid)
+            || !child.wield_location().is_empty()
+            || child.wielder_id().is_some_and(|w| w != Guid::NULL)
+        {
+            continue;
+        }
+        let Some(cid) = child.container_id().filter(|&c| c != Guid::NULL) else {
+            continue;
+        };
+        if cid == player_guid {
+            if child.uses_player_container_slot() {
+                main_container_used += 1;
+            } else {
+                main_item_used += 1;
+            }
+        } else {
+            *counts_by_container.entry(cid).or_default() += 1;
+        }
+    }
+
+    let mut main_item_free = main_item_cap.saturating_sub(main_item_used);
+    let mut main_container_free = main_container_cap.saturating_sub(main_container_used);
+
+    // Collect top-level openable side packs in server `inventory_placement`
+    // slot order (`player.inventory` is a `HashSet`, so never rely on its hash
+    // iteration order!), falling back to ascending GUID when placement is unset.
+    let mut ordered_candidates: Vec<Guid> = world
+        .iter_entities()
+        .filter(|e| e.container_id() == Some(player_guid))
+        .map(|e| e.guid)
+        .collect();
+    ordered_candidates.sort_by_key(|&g| (world.inventory_placement(g).unwrap_or(u32::MAX), g.0));
+
+    let mut side_packs: Vec<(Guid, u32)> = Vec::new();
+    for g in ordered_candidates {
+        if g == player_guid || world.is_equipped_item(g) {
+            continue;
+        }
+        let Some(pack) = world.get_entity(g) else {
+            continue;
+        };
+        if pack.container_id() != Some(player_guid)
+            || !pack.wield_location().is_empty()
+            || pack.wielder_id().is_some_and(|w| w != Guid::NULL)
+            || !pack.uses_player_container_slot()
+            || pack.get_bool_prop(PropertyBool::Locked)
+        {
+            continue;
+        }
+        let cap = pack.items_capacity().unwrap_or(0);
+        if cap == 0 {
+            continue; // Foci (`RequiresBackpackSlot = true`, `ItemsCapacity = 0`) cannot hold items.
+        }
+        let used = counts_by_container.get(&g).copied().unwrap_or(0);
+        side_packs.push((g, cap.saturating_sub(used)));
+    }
+
+    let mut out = Vec::with_capacity(item_guids.len());
+    for &item_guid in item_guids {
+        let uses_pack_slot = world
+            .get_entity(item_guid)
+            .is_some_and(|e| e.uses_player_container_slot());
+        if uses_pack_slot {
+            main_container_free = main_container_free.saturating_sub(1);
+            out.push((item_guid, player_guid));
+            continue;
+        }
+        if main_item_free > 0 {
+            main_item_free -= 1;
+            out.push((item_guid, player_guid));
+            continue;
+        }
+        if let Some((pack_guid, free)) = side_packs.iter_mut().find(|(pg, f)| *pg != item_guid && *f > 0) {
+            *free -= 1;
+            out.push((item_guid, *pack_guid));
+        } else {
+            out.push((item_guid, player_guid));
+        }
+    }
+    out
+}
+
+/// Convenience single-item wrapper around [`unequip_destinations`].
+pub fn unequip_destination<W: WorldContext>(world: &W, item_guid: Guid) -> Guid {
+    unequip_destinations(world, &[item_guid])
+        .into_iter()
+        .next()
+        .map(|(_, dest)| dest)
+        .unwrap_or_else(|| world.get_player_guid().unwrap_or(Guid::NULL))
 }
 
 #[cfg(test)]
@@ -325,6 +463,81 @@ mod tests {
         assert_eq!(
             conflicts(&state2, 0x8000_0073, 0x0020_0000),
             vec![0x8000_0072]
+        );
+    }
+
+    fn main_pack_filler(state: &mut WorldState, guid: u32) {
+        let mut entity = Entity::new(Guid(guid), format!("gem {guid:x}"), WorldPosition::default());
+        entity
+            .properties
+            .iids
+            .insert(holtburger_common::properties::PropertyInstanceId::Container, PLAYER);
+        state.entities.insert(entity);
+        state.player.add_to_inventory(Guid(guid));
+    }
+
+    fn side_pack(state: &mut WorldState, guid: u32, cap: u32, locked: bool) {
+        let mut entity = Entity::new(Guid(guid), format!("pack {guid:x}"), WorldPosition::default());
+        entity
+            .properties
+            .iids
+            .insert(holtburger_common::properties::PropertyInstanceId::Container, PLAYER);
+        entity
+            .properties
+            .bools
+            .insert(PropertyBool::RequiresBackpackSlot, true);
+        if cap > 0 {
+            entity
+                .properties
+                .ints
+                .insert(PropertyInt::ItemsCapacity, cap as i32);
+        }
+        if locked {
+            entity.properties.bools.insert(PropertyBool::Locked, true);
+        }
+        state.entities.insert(entity);
+        state.player.add_to_inventory(Guid(guid));
+    }
+
+    #[test]
+    fn unequip_destinations_overflows_full_main_pack_into_openable_side_pack() {
+        let mut state = world();
+        wielded(&mut state, 0x8000_0100, 600, 0x0010_0000, 0); // sword
+        wielded(&mut state, 0x8000_0101, 601, 0x0020_0000, 0); // shield
+
+        // Foci (RequiresBackpackSlot = true, ItemsCapacity = 0), locked pack,
+        // 1-slot side pack, and 24-slot side pack.
+        side_pack(&mut state, 0x7000_0001, 0, false); // Foci — cannot hold items
+        side_pack(&mut state, 0x7000_0002, 24, true); // Locked — skipped
+        side_pack(&mut state, 0x7000_0003, 1, false); // 1 free slot
+        side_pack(&mut state, 0x7000_0004, 24, false); // 24 free slots
+
+        // Fill 101 of 102 main-pack item slots: first unequip fits main pack,
+        // second overflows past Foci & locked pack into 0x7000_0003.
+        for i in 0..101u32 {
+            main_pack_filler(&mut state, 0x6000_1000 + i);
+        }
+        assert_eq!(
+            unequip_destinations(&state, &[Guid(0x8000_0100), Guid(0x8000_0101)]),
+            vec![
+                (Guid(0x8000_0100), PLAYER),
+                (Guid(0x8000_0101), Guid(0x7000_0003)),
+            ]
+        );
+
+        // Fill the 102nd main-pack slot: sword goes to 1-slot pack 0x7000_0003,
+        // shield overflows into 0x7000_0004.
+        main_pack_filler(&mut state, 0x6000_10FF);
+        assert_eq!(
+            unequip_destination(&state, Guid(0x8000_0100)),
+            Guid(0x7000_0003)
+        );
+        assert_eq!(
+            unequip_destinations(&state, &[Guid(0x8000_0100), Guid(0x8000_0101)]),
+            vec![
+                (Guid(0x8000_0100), Guid(0x7000_0003)),
+                (Guid(0x8000_0101), Guid(0x7000_0004)),
+            ]
         );
     }
 }

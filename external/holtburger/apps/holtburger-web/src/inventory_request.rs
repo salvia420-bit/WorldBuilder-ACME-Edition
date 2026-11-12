@@ -235,6 +235,9 @@ impl InventoryRequestTracker {
             self.displaced_equip.remove(&chosen.0).unwrap_or_default()
         } else {
             self.displaced_equip.remove(&chosen.0);
+            for list in self.displaced_equip.values_mut() {
+                list.retain(|&(g, _)| g != chosen.0);
+            }
             Vec::new()
         };
         self.respond(chosen.0);
@@ -851,5 +854,47 @@ mod tests {
             },
         )));
         assert_eq!(t.pending(ITEM_A), None);
+    }
+
+    #[test]
+    fn recorded_conflict_unequip_bounce_does_not_steal_pending_wield() {
+        const OLD_SHIELD: u32 = 0x8000_00AA;
+        const NEW_BOW: u32 = 0x8000_00BB;
+        let mut t = InventoryRequestTracker::default();
+
+        // WieldFromPack records PutInContainer on conflict_guid ahead of Wield on item_guid.
+        t.record(OLD_SHIELD, InventoryRequest::PutInContainer);
+        t.record(NEW_BOW, InventoryRequest::Wield);
+        t.record_displaced_equip(NEW_BOW, vec![(OLD_SHIELD, 0x0020_0000)]);
+
+        // If PutInContainer(OLD_SHIELD) bounces with 0x00A0, it answers OLD_SHIELD's
+        // PutInContainer without stealing self.last (NEW_BOW's Wield) or emitting
+        // a bogus re-wield restore while OLD_SHIELD never unequipped.
+        assert_eq!(
+            t.attempt_failed(OLD_SHIELD),
+            (OLD_SHIELD, Some(InventoryRequest::PutInContainer))
+        );
+        assert!(t.take_failed_displaced().is_empty());
+        assert_eq!(t.pending(NEW_BOW), Some(InventoryRequest::Wield));
+
+        // When NEW_BOW subsequently bounces too, OLD_SHIELD was pruned from displaced_equip.
+        assert_eq!(
+            t.attempt_failed(NEW_BOW),
+            (NEW_BOW, Some(InventoryRequest::Wield))
+        );
+        assert!(t.take_failed_displaced().is_empty());
+
+        // Conversely, when PutInContainer(OLD_SHIELD) succeeds and NEW_BOW bounces,
+        // OLD_SHIELD IS returned for re-wield restore.
+        t.record(OLD_SHIELD, InventoryRequest::PutInContainer);
+        t.record(NEW_BOW, InventoryRequest::Wield);
+        t.record_displaced_equip(NEW_BOW, vec![(OLD_SHIELD, 0x0020_0000)]);
+        assert!(t.respond(OLD_SHIELD));
+        assert_eq!(t.pending(NEW_BOW), Some(InventoryRequest::Wield));
+        assert_eq!(
+            t.attempt_failed(NEW_BOW),
+            (NEW_BOW, Some(InventoryRequest::Wield))
+        );
+        assert_eq!(t.take_failed_displaced(), vec![(OLD_SHIELD, 0x0020_0000)]);
     }
 }

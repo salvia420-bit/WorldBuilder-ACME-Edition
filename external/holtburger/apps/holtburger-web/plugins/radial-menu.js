@@ -31,7 +31,28 @@
 import { hudPoint, hudRect, hudViewport, getHudScale } from "../ui/hud_scale.js";
 import { placeNearPointer } from "./hover-tooltip.js";
 import { modalConfirmCallback } from "./modal-dialog.js";
-import { takeInventoryRows, worldUseLeaf } from "./inventory_helpers.js";
+import {
+  takeInventoryRows,
+  worldUseLeaf,
+  blocksUseOfShield,
+  canEquipInSlot,
+  buildPlayerEquipState,
+  defaultOnUrlFlag,
+  planWear,
+  planAmmoWield,
+  readySlotOccupant,
+  WEARABLE_LOCATIONS,
+  isOpenableContainer,
+  PLACE_IN_3D_TEXT,
+} from "./inventory_helpers.js";
+import {
+  executeItemAction,
+  pendingOps,
+  itemInOpenTrade,
+  playerOnGroundNow,
+  showItemToast,
+  localPlayerGuid,
+} from "./item_drag.js";
 import { consumeWorldUseThrottle } from "../scene3d/target_cycle.js";
 
 const OVERLAY_ID = "hb-radial-menu";
@@ -286,8 +307,7 @@ function confirmBondedDrop(name, onConfirm) {
 }
 
 function itemTypeIsContainer(invItem) {
-  // Per ACE.Entity/Enum/ItemType.cs: Container = 0x00000200.
-  return ((invItem?.itemType >>> 0) & 0x00000200) !== 0;
+  return isOpenableContainer(invItem);
 }
 
 function pickWieldSlotMaskShared(vl) {
@@ -313,7 +333,7 @@ export function enumerateEquipSlots(vl, invItem = null, aetheriaBits = null) {
   const canDualWieldOffHand =
     (v & 0x00100000) !== 0 &&
     (v & 0x00200000) === 0 &&
-    ((invItem?.combatUse >>> 0) || 0) !== 5;
+    !(invItem && blocksUseOfShield(invItem));
   const NAMES = {
     0x00010000: "Left Wrist", 0x00020000: "Right Wrist",
     0x00040000: "Left Finger", 0x00080000: "Right Finger",
@@ -367,8 +387,52 @@ export function buildItems(ctx) {
   // We insert AFTER Examine so Examine stays the natural top entry for non-hotbar;
   // for hotbar we splice Remove Binding to slot 1 below.
 
+  const isBusyNow = () => typeof window.__isBusy === "function" && !!window.__isBusy();
+  const buildEquipState = (rows, h) => {
+    let inCombatMode = !!window.__combatBarState?.inCombatMode;
+    try {
+      if (typeof h?.combatMode === "function") inCombatMode = ((h.combatMode() >>> 0) || 1) !== 1;
+    } catch (_) {}
+    return buildPlayerEquipState(rows, {
+      stance: (typeof window.__getCurrentStanceLow === "function" ? window.__getCurrentStanceLow() : 0) >>> 0,
+      inCombatMode,
+      retailWieldLegal: defaultOnUrlFlag("retailWieldLegal"),
+    });
+  };
+  const runValidatedEquip = (targetMask) => {
+    const mask = targetMask >>> 0;
+    if (!mask || isBusyNow() || pendingOps.has(guid)) return;
+    const src = { guid, item: invItem, owned: true, sourceEl: ctx.srcLi };
+    if (itemInOpenTrade(guid, handle)) {
+      executeItemAction({
+        op: "reject",
+        message: `You are trading the ${invItem.name || "item"}, it cannot be wielded`,
+      }, src);
+      return;
+    }
+    const liveRows = takeInventoryRows(handle);
+    const rows = liveRows.length > 0 ? liveRows : [invItem];
+    if (defaultOnUrlFlag("retailAutoWear")) {
+      if ((mask & WEARABLE_LOCATIONS) !== 0 && ((mask & ~WEARABLE_LOCATIONS) >>> 0) === 0) {
+        const wear = planWear(invItem, rows);
+        if (wear.op === "reject") { executeItemAction(wear, src); return; }
+      } else {
+        const aw = planAmmoWield(invItem, readySlotOccupant(rows, mask));
+        if (aw.op === "merge" || aw.op === "reject") { executeItemAction(aw, src); return; }
+      }
+    }
+    const verdict = canEquipInSlot(invItem, mask, buildEquipState(rows, handle));
+    if (verdict && verdict.ok === false) {
+      if (!verdict.silent) {
+        executeItemAction({ op: "reject", message: verdict.reason || "Cannot equip there." }, src);
+      }
+      return;
+    }
+    executeItemAction({ op: "wield", guid, slotMask: mask, amount: invItem.stackSize }, src);
+  };
+
   // Equip submenu — for items with multi-bit ValidLocations show ring/hand/sigil options.
-  if (typeof handle?.setWielded === "function" && invItem) {
+  if ((typeof handle?.setWielded === "function" || typeof handle?.wieldFromPack === "function") && invItem) {
     const vl = (invItem.validLocations >>> 0) || 0;
     const aetheriaBits = typeof handle?.playerAetheriaBits === "number" ? (handle.playerAetheriaBits >>> 0) : null;
     const rawOptions = enumerateEquipSlots(vl, invItem, aetheriaBits);
@@ -378,44 +442,43 @@ export function buildItems(ctx) {
     if (vl !== 0 && ((isInPack && options.length > 1) || (isEquipped && options.length >= 1))) {
       items.push({
         label: "Equip ▸",
+        disabled: isBusyNow(),
         children: options.map((o) => ({
           label: `Equip — ${o.name}`,
-          action: () => {
-            try { window.__audioOptimistic?.playOptimistic?.(0x8C, guid); } catch (_) {}
-            try { handle.setWielded(guid, o.mask >>> 0); } catch (e) { console.warn("[ctx-menu] equip failed:", e); }
-          },
+          disabled: isBusyNow(),
+          action: () => runValidatedEquip(o.mask >>> 0),
         })),
       });
     } else if (isInPack && vl !== 0 && !allSigilsLocked) {
       items.push({
         label: "Equip",
+        disabled: isBusyNow(),
         action: () => {
+          if (isBusyNow() || pendingOps.has(guid)) return;
+          if (itemInOpenTrade(guid, handle)) {
+            showItemToast(`You are trading the ${invItem.name || "item"}, it cannot be wielded`);
+            return;
+          }
           try {
             if (window.__inventory?.activateItem?.(guid) === true) return;
           } catch (_) {}
-          const fallbackMask = ((vl & ~0x08007fff) >>> 0) === 0
+          const fallbackMask = ((vl & ~WEARABLE_LOCATIONS) >>> 0) === 0
             ? (vl >>> 0)
             : (options.length === 1 ? (options[0].mask >>> 0) : pickWieldSlotMaskShared(vl));
-          try { window.__audioOptimistic?.playOptimistic?.(0x8C, guid); } catch (_) {}
-          try { handle.setWielded(guid, fallbackMask); } catch (e) { console.warn("[ctx-menu] equip failed:", e); }
+          runValidatedEquip(fallbackMask);
         },
       });
     }
   }
-  // Unequip — uses Wave A unwieldToPack.
-  if (isEquipped && typeof handle?.unwieldToPack === "function") {
+  // Unequip — routes through executeItemAction("unwield") so trade locks,
+  // pendingOps, ammo auto-merge, and side-pack overflow (when 102/102 main pack
+  // is full) match drag-to-pack and paperdoll double-click.
+  if (isEquipped && (typeof handle?.unwieldToPack === "function" || typeof handle?.moveItem === "function")) {
     items.push({
       label: "Unequip",
+      disabled: isBusyNow(),
       action: () => {
-        // Wave C / PR10 (2026-06-06): optimistic UnwieldObject sound BEFORE the
-        // wire send. Apply agent replicates the matching one-liner at the four
-        // other radial-menu action sites:
-        //   setWielded (equip) line ~261     -> 0x8C (WieldObject)
-        //   setWielded (auto)  line ~267     -> 0x8C (WieldObject)
-        //   dropItem           line ~286     -> 0x90 (DropItem)
-        //   splitStackTo3D     line ~316     -> 0x90 (DropItem)
-        try { window.__audioOptimistic?.playOptimistic?.(0x8D, guid); } catch (_) {}
-        try { handle.unwieldToPack(guid); } catch (e) { console.warn("[ctx-menu] unwield failed:", e); }
+        executeItemAction({ op: "unwield", guid }, { guid, item: invItem, owned: true, sourceEl: ctx.srcLi });
       },
     });
   }
@@ -433,60 +496,118 @@ export function buildItems(ctx) {
       },
     });
   }
-  // Drop — Attuned blocks; Bonded gets confirm overlay.
+  // Drop — Attuned blocks; Bonded gets confirm overlay; enforces trade-lock,
+  // mid-air ("You cannot do that in mid air"), and pendingOps.
   if (invItem && (isInPack || isEquipped) && typeof handle?.dropItem === "function") {
     const attuned = (invItem.attuned >>> 0) !== 0;
     const bonded = (invItem.bonded >>> 0) !== 0;
+    const doDrop = () => {
+      if (attuned || isBusyNow() || pendingOps.has(guid)) return;
+      const src = { guid, item: invItem, owned: true, sourceEl: ctx.srcLi };
+      if (itemInOpenTrade(guid, handle)) {
+        executeItemAction({
+          op: "reject",
+          message: `You are trading the ${invItem.name || "item"}, it cannot be dropped`,
+        }, src);
+        return;
+      }
+      if (playerOnGroundNow(handle) === false) {
+        executeItemAction({ op: "reject", message: PLACE_IN_3D_TEXT.midAir }, src);
+        return;
+      }
+      const stack = Math.max(1, invItem.stackSize | 0 || 1);
+      executeItemAction({ op: "drop", guid, amount: stack }, src);
+    };
     items.push({
-      // Wave D / PR13 (2026-06-06): also gate on window.__isBusy() so
-      // Drop is unavailable mid-cast / mid-teleport. Attuned remains the
-      // primary blocker (label changes to reflect that).
       label: attuned ? "Drop (attuned)" : "Drop",
-      disabled: attuned || (typeof window.__isBusy === "function" && window.__isBusy()),
+      disabled: attuned || isBusyNow(),
       action: () => {
-        if (attuned) return;
-        if (typeof window.__isBusy === "function" && window.__isBusy()) return;
-        if (bonded) {
-          confirmBondedDrop(invItem.name, () => {
-            try { window.__audioOptimistic?.playOptimistic?.(0x90, guid); } catch (_) {}
-            try { handle.dropItem(guid); } catch (e) { console.warn("[ctx-menu] drop failed:", e); }
-          });
+        if (attuned || isBusyNow() || pendingOps.has(guid)) return;
+        if (itemInOpenTrade(guid, handle)) {
+          showItemToast(`You are trading the ${invItem.name || "item"}, it cannot be dropped`);
           return;
         }
-        try { window.__audioOptimistic?.playOptimistic?.(0x90, guid); } catch (_) {}
-        try { handle.dropItem(guid); } catch (e) { console.warn("[ctx-menu] drop failed:", e); }
+        if (playerOnGroundNow(handle) === false) {
+          showItemToast(PLACE_IN_3D_TEXT.midAir);
+          return;
+        }
+        if (bonded) {
+          confirmBondedDrop(invItem.name, doDrop);
+          return;
+        }
+        doDrop();
       },
     });
   }
-  // Give — disabled-with-tooltip when no target selected.
+  // Give — disabled-with-tooltip when no target selected or self-targeted;
+  // gives whole stack (`acclient.c:438160`) and rejects trade-locked items.
   if (invItem && typeof handle?.giveObject === "function") {
     const target = (() => { try { return window.liveScene3d?.entityManager?.getSelectedTarget?.() >>> 0; } catch (_) { return 0; } })();
+    const me = localPlayerGuid();
+    const validTarget = target !== 0 && (me === 0 || target !== me);
     items.push({
-      // Wave D / PR13 (2026-06-06): isBusy gate (cast-windup / boot).
-      label: target ? "Give" : "Give (no target)",
-      disabled: !target || (typeof window.__isBusy === "function" && window.__isBusy()),
+      label: validTarget ? "Give" : "Give (no target)",
+      disabled: !validTarget || isBusyNow(),
       action: () => {
-        if (!target) return;
-        if (typeof window.__isBusy === "function" && window.__isBusy()) return;
-        try { handle.giveObject(target, guid, 1); } catch (e) { console.warn("[ctx-menu] give failed:", e); }
+        const meNow = localPlayerGuid();
+        if (!target || (meNow !== 0 && target === meNow)) return;
+        if (isBusyNow() || pendingOps.has(guid)) return;
+        const src = { guid, item: invItem, owned: true, sourceEl: ctx.srcLi };
+        if (itemInOpenTrade(guid, handle)) {
+          executeItemAction({
+            op: "reject",
+            message: `You are trading the ${invItem.name || "item"}, it cannot be given away`,
+          }, src);
+          return;
+        }
+        const giveAmount = (invItem.stackSize >>> 0) || 1;
+        executeItemAction({ op: "give", guid, target, amount: giveAmount }, src);
       },
     });
   }
   // Split Stack — INLINE numeric prompt (no modal); count from stackSize.
+  // Enforces attuned, bonded confirmation, trade-lock, mid-air, and pendingOps.
   const count = (invItem?.stackSize >>> 0) || 0;
   if (invItem && count > 1 && typeof handle?.splitStackTo3D === "function") {
+    const attuned = (invItem.attuned >>> 0) !== 0;
+    const bonded = (invItem.bonded >>> 0) !== 0;
     items.push({
-      label: "Split Stack…",
-      // Wave D / PR13 (2026-06-06): isBusy gate. Split Stack had no
-      // disabled property before; mirror Drop/Give to keep the trio
-      // consistent.
-      disabled: (typeof window.__isBusy === "function" && window.__isBusy()),
+      label: attuned ? "Split Stack… (attuned)" : "Split Stack…",
+      disabled: attuned || isBusyNow(),
       splitPrompt: { max: count - 1 },
       action: (amount) => {
-        if (typeof window.__isBusy === "function" && window.__isBusy()) return;
+        if (attuned || isBusyNow() || pendingOps.has(guid)) return;
         const n = Math.max(1, Math.min((amount | 0), count - 1));
-        try { window.__audioOptimistic?.playOptimistic?.(0x90, guid); } catch (_) {}
-        try { handle.splitStackTo3D(guid, n); } catch (e) { console.warn("[ctx-menu] split failed:", e); }
+        if (!(n > 0 && n < count)) return;
+        const src = { guid, item: { ...invItem, stackSize: count }, owned: true, sourceEl: ctx.srcLi };
+        const doSplit = () => {
+          if (attuned || isBusyNow() || pendingOps.has(guid)) return;
+          if (itemInOpenTrade(guid, handle)) {
+            executeItemAction({
+              op: "reject",
+              message: `You are trading the ${invItem.name || "item"}, it cannot be dropped`,
+            }, src);
+            return;
+          }
+          if (playerOnGroundNow(handle) === false) {
+            executeItemAction({ op: "reject", message: PLACE_IN_3D_TEXT.midAir }, src);
+            return;
+          }
+          executeItemAction({ op: "drop", guid, amount: n }, src);
+        };
+        if (itemInOpenTrade(guid, handle)) {
+          showItemToast(`You are trading the ${invItem.name || "item"}, it cannot be dropped`);
+          return;
+        }
+        if (playerOnGroundNow(handle) === false) {
+          showItemToast(PLACE_IN_3D_TEXT.midAir);
+          return;
+        }
+        if (bonded) {
+          confirmBondedDrop(invItem.name, doSplit);
+          return;
+        }
+        doSplit();
       },
     });
   }
@@ -510,11 +631,22 @@ export function buildItems(ctx) {
     }
     items.push({ label: "Add To Hotbar ▸", children });
   }
-  // Open — for containers; routes to the container-panel plugin's public hook.
-  if (invItem && itemTypeIsContainer(invItem) && typeof window.__openContainerFor === "function") {
+  // Open — for openable containers; routes to container-panel's public hook
+  // (or inventory.js directly for owned containers when container-panel isn't mounted).
+  if (invItem && isOpenableContainer(invItem) && (typeof window.__openContainerFor === "function" || typeof window.__inventory?.openPack === "function")) {
     items.push({
       label: "Open",
-      action: () => { try { window.__openContainerFor(guid, invItem.name); } catch (e) { console.warn("[ctx-menu] open failed:", e); } },
+      action: () => {
+        try {
+          if (typeof window.__openContainerFor === "function") {
+            window.__openContainerFor(guid, invItem.name);
+            return;
+          }
+          window.__inventory?.openPack?.(guid);
+          const mp = window.__mainPanel;
+          if (mp && (mp.currentViewId?.() !== "inventory" || !mp.isOpen?.())) mp.showView?.("inventory");
+        } catch (e) { console.warn("[ctx-menu] open failed:", e); }
+      },
     });
   }
   // Source-specific entries.

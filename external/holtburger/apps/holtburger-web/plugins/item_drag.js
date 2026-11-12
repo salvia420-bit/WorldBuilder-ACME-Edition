@@ -595,8 +595,8 @@ const RETAIL_PLACE_3D = hasDom ? retailPlace3DEnabled() : true;
 
 /** The local player's on-ground flag (wasm pose `isOnGround`), null when
  *  unknown. Retail AttemptPlaceIn3D reads CPhysicsObj::on_ground. */
-function playerOnGroundNow() {
-  const h = sessionHandle();
+export function playerOnGroundNow(handle = sessionHandle()) {
+  const h = handle;
   if (typeof h?.getLocalPlayerPose !== "function") return null;
   let p = null;
   try { p = h.getLocalPlayerPose(); } catch (_) { return null; }
@@ -608,9 +608,9 @@ function playerOnGroundNow() {
 
 /** Is `guid` one of the player's own offers in the open trade? (retail
  *  AttemptPlaceIn3D: "You are trading the %s, it cannot be dropped"). */
-function itemInOpenTrade(guid) {
+export function itemInOpenTrade(guid, handle = sessionHandle()) {
   const g = guid >>> 0;
-  const h = sessionHandle();
+  const h = handle;
   if (!g || typeof h?.playerTrade !== "function") return false;
   let snap = null;
   try { snap = h.playerTrade(); } catch (_) { return false; }
@@ -904,6 +904,52 @@ export function executeItemAction(action, s, opts = {}) {
       }
       break;
     }
+    case "unwield": {
+      if (!guid || pendingOps.has(guid)) return false;
+      if (typeof window !== "undefined" && typeof window.__isBusy === "function" && window.__isBusy()) return false;
+      if (itemInOpenTrade(guid, h)) {
+        showItemToast(`You cannot move the ${s?.item?.name || "item"} because you are trading it`);
+        uiError();
+        flashElement(s?.sourceEl);
+        return false;
+      }
+      const plan = planBackpackPlacement(s?.item || { guid }, { forceMainPack: true });
+      if (!plan || plan.op === "noop") return false;
+      if (plan.op === "reject") {
+        showItemToast(plan.message);
+        uiError();
+        flashElement(s?.sourceEl);
+        return false;
+      }
+      if (plan.op === "merge") {
+        return executeItemAction(plan, { ...s, guid, owned: true }, opts);
+      }
+      if (plan.op === "move") {
+        const me = localPlayerGuid();
+        const toMain = me !== 0 && (plan.container >>> 0) === me && !split;
+        if (toMain && typeof h?.unwieldToPack === "function") {
+          sent = call("unwieldToPack", guid);
+        } else {
+          sent = call("moveItem", guid, plan.container >>> 0, plan.placement | 0)
+            || call("putItemInContainer", guid, plan.container >>> 0, plan.placement | 0)
+            || (toMain ? (call("unwieldToPack", guid) || call("unwield", guid)) : false);
+        }
+        if (sent) {
+          sfx(0x8D, guid);
+          pendingOps.add(guid, {
+            op: "move",
+            toKey: plan.listKey,
+            index: plan.index | 0,
+            external: false,
+            amount: plan.amount ?? stack,
+            expect: (row) => !!row && (row.equipMask >>> 0) === 0,
+            undo,
+            stub: opts.stub || null,
+          });
+        }
+      }
+      break;
+    }
     default:
       return false;
   }
@@ -937,7 +983,7 @@ function handleNumber(h, name) {
  * main pack, the first side pack with room. `item` = {guid, wcid, name,
  * stackSize, itemType, maxStackSize?}.
  */
-export function planBackpackPlacement(item, { amount } = {}) {
+export function planBackpackPlacement(item, { amount, forceMainPack = false } = {}) {
   const guid = (item?.guid >>> 0) || 0;
   const me = localPlayerGuid();
   if (!guid || !me) return { op: "noop" };
@@ -956,6 +1002,7 @@ export function planBackpackPlacement(item, { amount } = {}) {
     playerGuid: me,
     amount,
     preferredPack,
+    forceMainPack: !!forceMainPack,
     // charopt-3 — "Use main pack as default pickup destination" (retail
     // PlayerModule::MainPackPreferred, acclient.c:395895).
     mainPackPreferred: isCharacterOptionEnabled(CHARACTER_OPTION.MainPackPreferred, false) === true,
@@ -991,7 +1038,7 @@ export function placeInBackpack(guid, meta = null) {
 }
 
 // ── tooltip ─────────────────────────────────────────────────────────
-export function showItemTooltip(anchorEl, text) {
+export function showItemTooltip(anchorEl, text, point = null) {
   if (!hasDom || !anchorEl || !text) return;
   ensureStyles();
   let tip = document.getElementById(TOOLTIP_ID);
@@ -1001,16 +1048,33 @@ export function showItemTooltip(anchorEl, text) {
     tip.className = "hbk-tooltip";
     document.body.appendChild(tip);
   }
-  tip.textContent = text;
+  const wasShownSame = tip.dataset.show === "1" && tip._lastText === text && tip._cachedZ > 0;
+  if (!wasShownSame) {
+    tip.textContent = text;
+    tip._lastText = text;
+  }
   tip.dataset.show = "1";
   // Everything in the tooltip's own (zoomed) CSS px: rects are screen px.
-  const z = zoomOf(tip);
-  const r = anchorEl.getBoundingClientRect();
+  const z = wasShownSame ? tip._cachedZ : zoomOf(tip);
+  const usePoint = point && Number.isFinite(point.clientX) && Number.isFinite(point.clientY);
+  const r = usePoint
+    ? { left: point.clientX, right: point.clientX, top: point.clientY - 12, bottom: point.clientY + 18, width: 0 }
+    : anchorEl.getBoundingClientRect();
   const vw = window.innerWidth / z;
   const vh = window.innerHeight / z;
-  const tr = tip.getBoundingClientRect();
-  const tw = tr.width / z;
-  const th = tr.height / z;
+  let tw = 0;
+  let th = 0;
+  if (wasShownSame && Number.isFinite(tip._cachedTw) && Number.isFinite(tip._cachedTh)) {
+    tw = tip._cachedTw;
+    th = tip._cachedTh;
+  } else {
+    const tr = tip.getBoundingClientRect();
+    tw = tr.width / z;
+    th = tr.height / z;
+    tip._cachedZ = z;
+    tip._cachedTw = tw;
+    tip._cachedTh = th;
+  }
   let x = (r.left + r.width / 2) / z - tw / 2;
   let y = r.top / z - th - 6;
   if (y < 4) y = r.bottom / z + 6;

@@ -34600,6 +34600,9 @@ pub struct InventoryItem {
     icon_overlay_secondary: u32,
     retained: bool,
     plural_name: String,
+    structure: u32,
+    max_structure: u32,
+    item_useable: u32,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -34833,6 +34836,24 @@ impl InventoryItem {
     #[wasm_bindgen(getter, js_name = pluralName)]
     pub fn plural_name(&self) -> String {
         self.plural_name.clone()
+    }
+
+    /// `PropertyInt::Structure` (92) — current uses / structure (`0` when absent/depleted).
+    #[wasm_bindgen(getter)]
+    pub fn structure(&self) -> u32 {
+        self.structure
+    }
+
+    /// `PropertyInt::MaxStructure` (91) — maximum uses / structure (`0` when absent).
+    #[wasm_bindgen(getter, js_name = maxStructure)]
+    pub fn max_structure(&self) -> u32 {
+        self.max_structure
+    }
+
+    /// `PropertyInt::ItemUseable` (16) — packed source (`0xFFFF`) + target (`0xFFFF0000`) usability flags.
+    #[wasm_bindgen(getter, js_name = itemUseable)]
+    pub fn item_useable(&self) -> u32 {
+        self.item_useable
     }
 }
 
@@ -42849,6 +42870,15 @@ impl SessionHandle {
             .unwrap_or_default()
     }
 
+    /// `true` once a `ViewContents` (`0x0196`) snapshot has been received for
+    /// `container_guid` (including empty containers whose item list is `[]`).
+    #[wasm_bindgen(js_name = hasViewedContainer)]
+    pub fn has_viewed_container(&self, container_guid: u32) -> bool {
+        self.latest_container_contents
+            .borrow()
+            .contains_key(&container_guid)
+    }
+
     /// Icon DID for any object by GUID, populated at container-open time
     /// for items that don't survive the JS spawn gate (contained items
     /// with model_id=0). Returns 0 when the GUID is unknown.
@@ -50606,6 +50636,18 @@ fn publish_player_inventory_snapshot(
             .unwrap_or(0);
         let retained = entity.is_retained();
         let plural_name = entity.plural_name().unwrap_or_default().to_string();
+        let structure = entity
+            .get_int_prop(PropertyInt::Structure)
+            .map(|v| v.max(0) as u32)
+            .unwrap_or(0);
+        let max_structure = entity
+            .get_int_prop(PropertyInt::MaxStructure)
+            .map(|v| v.max(0) as u32)
+            .unwrap_or(0);
+        let item_useable = entity
+            .get_int_prop(PropertyInt::ItemUseable)
+            .map(|v| v as u32)
+            .unwrap_or(0);
         items.push(InventoryItem {
             guid: u32::from(guid),
             wcid: entity.wcid.unwrap_or(0),
@@ -50640,6 +50682,9 @@ fn publish_player_inventory_snapshot(
             icon_overlay_secondary,
             retained,
             plural_name,
+            structure,
+            max_structure,
+            item_useable,
         });
     }
     // Sort: equipped first (by mask), then by name. Stable so JS

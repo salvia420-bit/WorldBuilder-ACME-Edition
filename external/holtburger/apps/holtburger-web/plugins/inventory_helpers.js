@@ -284,17 +284,23 @@ export function buildPlayerEquipState(snapshot, opts) {
  * default ON) skips that cascade for retail CPlayerSystem::AutoWieldIsLegal
  * (retailWieldVerdict below); the pending-attributes guard stays first.
  */
+const ITEM_TYPE_CASTER = 0x00008000;
+const COMBAT_USE_MISSILE = 2;
+const COMBAT_USE_TWO_HANDED = 5;
+
 /**
  * gmPaperDollUI::AcceptDragObject (acclient.c:219999-220003) +
  * gmPaperDollUI::OnItemListDragOver (:220399-220400):
  * dragging a 1H melee weapon (`ValidLocations & 0x00100000`) onto the
  * Off-Hand / Shield ready slot (`0x00200000`) widens its effective
- * ValidLocations with `0x00200000` (`UI_SLOT_SIDE_LEFT = 1`) for dual-wield.
+ * ValidLocations with `0x00200000` (`UI_SLOT_SIDE_LEFT = 1`) for dual-wield,
+ * suppressed when `blocksUseOfShield(item)` is true (TwoHanded `CombatUse === 5`,
+ * Caster `ItemType & 0x8000`, or Launcher).
  */
-export function effectiveValidLocationsForSlot(validLocations, slotMask) {
+export function effectiveValidLocationsForSlot(validLocations, slotMask, item = null) {
   const vl = (validLocations >>> 0) || 0;
   const slot = (slotMask >>> 0) || 0;
-  if (slot === EQUIP.Shield && (vl & EQUIP.MeleeWeapon) !== 0) {
+  if (slot === EQUIP.Shield && (vl & EQUIP.MeleeWeapon) !== 0 && !(item && blocksUseOfShield(item))) {
     return (vl | EQUIP.Shield) >>> 0;
   }
   return vl;
@@ -516,7 +522,35 @@ export function copyInventoryRow(it) {
   if (typeof it?.iconOverlaySecondary === "number") row.iconOverlaySecondary = it.iconOverlaySecondary >>> 0;
   if (typeof it?.retained === "boolean") row.retained = it.retained;
   if (typeof it?.pluralName === "string" && it.pluralName) row.pluralName = it.pluralName;
+  if (typeof it?.structure === "number" && Number.isFinite(it.structure)) row.structure = Math.max(0, it.structure | 0) >>> 0;
+  if (typeof it?.maxStructure === "number" && Number.isFinite(it.maxStructure)) row.maxStructure = Math.max(0, it.maxStructure | 0) >>> 0;
+  if (typeof it?.itemUseable === "number") row.itemUseable = it.itemUseable >>> 0;
   return row;
+}
+
+/**
+ * UIElement_UIItem::UpdateStructureDisplay (acclient.c:271741-271783):
+ * returns `-1` when the structure meter (`0x10000348`) should be hidden
+ * (`maxStructure <= 0` or `structure >= maxStructure`), else the clamped
+ * `[0, 1)` fill fraction (with `0` keeping the empty rail visible).
+ */
+export function structureBarFraction(row) {
+  if (!row) return -1;
+  const max = Number(row.maxStructure);
+  const cur = Number(row.structure ?? 0);
+  if (!(max > 0) || !Number.isFinite(cur) || cur >= max) return -1;
+  return Math.max(0, Math.min(1, cur / max));
+}
+
+/**
+ * Retail `ItemUses` `SOURCE_WIELDED` (`Usable::WIELDED = 0x0004` in the low-16
+ * source bits of `PropertyInt::ItemUseable`, `acclient.c:433412-433421`):
+ * `true` when an equipped item is usable while wielded on the paperdoll.
+ */
+export function isWieldedUsable(row) {
+  const u = (row?.itemUseable >>> 0) || 0;
+  const src = u & 0xffff;
+  return src !== 0 && src !== 0x0001 && (src & 0x0004) !== 0;
 }
 
 /**
@@ -816,7 +850,7 @@ export function decideItemDrop(drag, target, ctx = {}) {
       // For off-hand dual-wield (mask === EQUIP.Shield + MeleeWeapon),
       // effectiveValidLocationsForSlot widens vl with EQUIP.Shield.
       const rawVl = (it.validLocations >>> 0) || 0;
-      const vl = effectiveValidLocationsForSlot(rawVl, mask);
+      const vl = effectiveValidLocationsForSlot(rawVl, mask, it);
       if (!rawVl && ((mask & (mask - 1)) >>> 0) !== 0) return reject("Item attributes pending — try again.");
       const loc = ((vl & mask) >>> 0) ? pickWieldSlotMask(vl & mask) : mask;
       // items-4 (`?retailAutoWear`, ctx hooks absent = old path): an
@@ -1437,7 +1471,10 @@ export function planPlaceInBackpack(rows, item, opts = {}) {
     return hasRoom(PACKS_KEY) ? move(me, PACKS_KEY) : reject(`${who} can carry no more containers!`);
   }
   const pref = (opts.mainPackPreferred || opts.forceMainPack) ? 0 : ((opts.preferredPack >>> 0) || 0);
-  if (pref && pref !== me && pref !== guid && packs.includes(pref) && hasRoom(pref)) return move(pref, pref);
+  const prefRow = pref ? byGuid.get(pref) : null;
+  const prefOpenable = packs.includes(pref)
+    || (!!prefRow && (prefRow.equipMask >>> 0) === 0 && isOpenableContainer(prefRow));
+  if (pref && pref !== me && pref !== guid && prefOpenable && hasRoom(pref)) return move(pref, pref);
   if (hasRoom(MAIN_PACK_KEY)) return move(me, MAIN_PACK_KEY);
   for (const p of packs) {
     if (p !== guid && hasRoom(p)) return move(p, p);
@@ -1445,7 +1482,6 @@ export function planPlaceInBackpack(rows, item, opts = {}) {
   return reject(`${who} is completely full!`);
 }
 
-const ITEM_TYPE_CASTER = 0x00008000;
 const ITEM_TYPE_TINKERING_TOOL = 0x20000000;
 /** Weapon-family wield locations (MeleeWeapon, Shield, MissileWeapon,
  *  MissileAmmo, Held, TwoHanded). Stands in for retail's combatUse /
@@ -1678,9 +1714,7 @@ export function planAmmoWield(item, wielded, opts = {}) {
 // ════════════════════════════════════════════════════════════════════
 
 // Caster = ITEM_TYPE_CASTER above (retail `InqType() & 0x8000`).
-// COMBAT_USE (acclient.h enum COMBAT_USE).
-const COMBAT_USE_MISSILE = 2;
-const COMBAT_USE_TWO_HANDED = 5;
+// COMBAT_USE (acclient.h enum COMBAT_USE) hoisted above.
 
 /**
  * ACCWeenieObject::GetObjectName(NAME_APPROPRIATE) (acclient.c:439093):
@@ -1731,7 +1765,7 @@ export function blocksUseOfShield(weapon) {
  */
 export function retailAutoWieldIllegal(item, rows, inCombat, targetSlot = 0) {
   const rawVl = (item?.validLocations >>> 0) || 0;
-  const vl = targetSlot ? effectiveValidLocationsForSlot(rawVl, targetSlot) : rawVl;
+  const vl = targetSlot ? effectiveValidLocationsForSlot(rawVl, targetSlot, item) : rawVl;
   if ((vl & 0x7fffffff) === 0) return "";
   const weapon = readySlotOccupant(rows, WEAPON_READY_LOCATIONS);
   if ((vl & EQUIP.MissileAmmo) !== 0 && weapon) {
@@ -1757,7 +1791,7 @@ export function retailAutoWieldIllegal(item, rows, inCombat, targetSlot = 0) {
  * AutoWieldIsLegal.
  */
 function retailWieldVerdict(item, slot, state) {
-  const vl = effectiveValidLocationsForSlot(item.validLocations, slot);
+  const vl = effectiveValidLocationsForSlot(item.validLocations, slot, item);
   if (slot !== 0 && (vl & slot) === 0) return { ok: false, silent: true, reason: "" };
   const why = retailAutoWieldIllegal(item, state.rows, !!state.inCombatMode, slot);
   if (why === null) return { ok: true, reason: "" };

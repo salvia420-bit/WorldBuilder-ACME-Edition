@@ -524,7 +524,7 @@ function hidePanel() {
 function onContainerOpened(ev) {
   const detail = ev?.detail || {};
   const guid = (detail.u32Payload ?? detail.u32_payload ?? 0) >>> 0;
-  if (!guid) return;
+  if (!guid || isOwnOpenableContainer(guid)) return;
   const name = detail.stringPayload || "Container";
   const h = window.__sessionHandle;
   const facts = groundObjectGateEnabled() ? groundObjectFacts(h, guid) : null;
@@ -559,17 +559,17 @@ function openGround(guid, name) {
   openContainer(guid, name);
 }
 
-// One of the player's own top-level side packs? (containerId 0 + pack slot)
-function isOwnTopLevelPack(guid) {
+// Any player-owned openable container in playerInventory() (side pack,
+// main-grid chest/box with requiresBackpackSlot === false, or nested pack).
+function isOwnOpenableContainer(guid) {
   const g = guid >>> 0;
+  if (!g) return false;
   const snap = takeInventorySnapshot(window.__sessionHandle);
   try {
     for (const it of snap.inv) {
       if ((it.guid >>> 0) !== g) continue;
-      const pack = typeof it.requiresBackpackSlot === "boolean"
-        ? it.requiresBackpackSlot : (((it.itemType >>> 0) & 0x200) !== 0);
       const openable = (((it.itemType >>> 0) & 0x200) !== 0) || (Number(it.itemsCapacity) > 0);
-      return pack && openable && (it.containerId >>> 0) === 0 && (it.equipMask >>> 0) === 0;
+      return openable && (it.equipMask >>> 0) === 0;
     }
   } finally {
     snap.free();
@@ -611,7 +611,7 @@ if (typeof window !== "undefined") {
   window.__openContainerFor = (guid, name) => {
     const g = guid >>> 0;
     if (!g) return;
-    if (isOwnTopLevelPack(g) && typeof window.__inventory?.openPack === "function") {
+    if (isOwnOpenableContainer(g) && typeof window.__inventory?.openPack === "function") {
       try {
         // openPack first: a fresh inventory mount starts on that pack.
         window.__inventory.openPack(g);

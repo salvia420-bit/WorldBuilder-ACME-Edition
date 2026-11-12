@@ -728,7 +728,508 @@ await check("RynthWebHost.WieldItem & radial-menu handle multi-slot Aetheria sig
   }
 });
 
+// ── 9. Post-commit audit fixes (items 1–7) ──────────────────────────────────
+await check("blocksUseOfShield suppresses off-hand EQUIP.Shield widening in helpers, drop rules, and radial-menu", async () => {
+  const rm = await import(pathToFileURL(path.join(APP, "plugins", "radial-menu.js")).href);
+  const twoHandOnMelee = { guid: 0x9301, name: "Two-Handed Spear", validLocations: EQUIP.MeleeWeapon, equipMask: 0, combatUse: 5 };
+  const casterOnMelee = { guid: 0x9302, name: "Staff Caster", validLocations: EQUIP.MeleeWeapon, equipMask: 0, itemType: 0x8000, combatUse: 4 };
+  const launcherOnMelee = { guid: 0x9303, name: "Atlatl", validLocations: EQUIP.MeleeWeapon, equipMask: 0, combatUse: 2, ammoType: 1 };
+  const oneHandMelee = { guid: 0x9304, name: "Hand Axe", validLocations: EQUIP.MeleeWeapon, equipMask: 0, combatUse: 1 };
+
+  for (const blocked of [twoHandOnMelee, casterOnMelee, launcherOnMelee]) {
+    assert.equal(effectiveValidLocationsForSlot(EQUIP.MeleeWeapon, EQUIP.Shield, blocked), EQUIP.MeleeWeapon);
+    const state = { rows: [blocked], retailWieldLegal: true, inCombatMode: false };
+    assert.deepEqual(canEquipInSlot(blocked, EQUIP.Shield, state), { ok: false, silent: true, reason: "" });
+    const drop = decideItemDrop(
+      { guid: blocked.guid, item: blocked, owned: true },
+      { kind: DROP_TARGET.DOLL_SLOT, slotMask: EQUIP.Shield },
+      { playerGuid: ME, canEquip: (it, m) => canEquipInSlot(it, m, state) },
+    );
+    assert.equal(drop.op, "noop");
+    assert.equal(drop.refused, true);
+    assert.deepEqual(rm.enumerateEquipSlots(EQUIP.MeleeWeapon, blocked, 0x7), [{ mask: EQUIP.MeleeWeapon, name: "Melee" }]);
+  }
+  assert.equal(effectiveValidLocationsForSlot(EQUIP.MeleeWeapon, EQUIP.Shield, oneHandMelee), EQUIP.MeleeWeapon | EQUIP.Shield);
+  assert.equal(canEquipInSlot(oneHandMelee, EQUIP.Shield, { rows: [oneHandMelee], retailWieldLegal: true, inCombatMode: false }).ok, true);
+  // Legacy strict branch (retailWieldLegal falsy) remains strict.
+  assert.equal(canEquipInSlot({ equipMask: EQUIP.MeleeWeapon, validLocations: EQUIP.MeleeWeapon }, EQUIP.Shield, {}).ok, false);
+});
+
+await check("Hotbar shortcut badge covers Row 1 slots 0..8 (1..9) and excludes Row 2 slot 9 (Alt+1)", async () => {
+  const prevHb = window.__hotbar;
+  try {
+    window.__hotbar = {
+      getSlot: (i) => {
+        if (i === 8) return { itemGuid: POTION };
+        if (i === 9) return { itemGuid: GEM };
+        return null;
+      },
+    };
+    window.dispatchEvent(new FakeEvent("hb-hotbar-changed"));
+    await settle();
+    const potCell = document.querySelector(`.hb-inv-slot[data-guid="${POTION}"]`);
+    const gemCell = document.querySelector(`.hb-inv-slot[data-guid="${GEM}"]`);
+    assert.equal(potCell?.dataset?.shortcut, "9", "slot 8 (key 9) gets badge 9");
+    assert.ok(potCell?.querySelector(".hb-uiitem-sc"), "slot 8 renders .hb-uiitem-sc");
+    assert.equal(gemCell?.dataset?.shortcut, undefined, "slot 9 (Alt+1) must NOT get badge 0");
+    assert.equal(gemCell?.querySelector(".hb-uiitem-sc"), null, "slot 9 renders no .hb-uiitem-sc");
+  } finally {
+    window.__hotbar = prevHb;
+    window.dispatchEvent(new FakeEvent("hb-hotbar-changed"));
+    await settle();
+  }
+});
+
+await check("Item Structure Bar (0x10000348) and copyInventoryRow preserve structure, maxStructure, and itemUseable", async () => {
+  const rowFull = copyInventoryRow({ guid: 0x9401, structure: 50, maxStructure: 50, itemUseable: 0x0004 });
+  assert.equal(rowFull.structure, 50);
+  assert.equal(rowFull.maxStructure, 50);
+  assert.equal(rowFull.itemUseable, 0x0004);
+  assert.equal(helpers.structureBarFraction({ structure: 0, maxStructure: 0 }), -1);
+  assert.equal(helpers.structureBarFraction({ structure: 50, maxStructure: 50 }), -1);
+  assert.equal(helpers.structureBarFraction({ structure: 25, maxStructure: 50 }), 0.5);
+  assert.equal(helpers.structureBarFraction({ structure: 0, maxStructure: 50 }), 0);
+  assert.equal(helpers.isWieldedUsable({ itemUseable: 0x0001 }), false);
+  assert.equal(helpers.isWieldedUsable({ itemUseable: 0x0008 }), false);
+  assert.equal(helpers.isWieldedUsable({ itemUseable: 0x0004 }), true);
+  assert.equal(helpers.isWieldedUsable({ itemUseable: 0x00080004 }), true);
+
+  const KIT_HALF = 0x9411;
+  const KIT_EMPTY = 0x9412;
+  const KIT_FULL = 0x9413;
+  const WORN_ORB = 0x9414;
+  inv.push(
+    { guid: KIT_HALF, wcid: 201, name: "Healer's Kit", iconId: 0x06001011, itemType: 0x80, stackSize: 1, equipMask: 0, containerId: 0, validLocations: 0, requiresBackpackSlot: false, itemsCapacity: 0, structure: 25, maxStructure: 50 },
+    { guid: KIT_EMPTY, wcid: 202, name: "Spent Kit", iconId: 0x06001012, itemType: 0x80, stackSize: 1, equipMask: 0, containerId: 0, validLocations: 0, requiresBackpackSlot: false, itemsCapacity: 0, structure: 0, maxStructure: 50 },
+    { guid: KIT_FULL, wcid: 203, name: "Fresh Kit", iconId: 0x06001013, itemType: 0x80, stackSize: 1, equipMask: 0, containerId: 0, validLocations: 0, requiresBackpackSlot: false, itemsCapacity: 0, structure: 50, maxStructure: 50 },
+    { guid: WORN_ORB, wcid: 204, name: "Shield", iconId: 0x06001014, itemType: 0x2, stackSize: 1, equipMask: EQUIP.Shield, containerId: 0, validLocations: EQUIP.Shield, requiresBackpackSlot: false, itemsCapacity: 0, structure: 10, maxStructure: 40 },
+  );
+  bus.emit("playerInventoryChanged", { detail: {} });
+  await settle();
+
+  const halfCell = document.querySelector(`.hb-inv-slot[data-guid="${KIT_HALF}"]`);
+  const emptyCell = document.querySelector(`.hb-inv-slot[data-guid="${KIT_EMPTY}"]`);
+  const fullCell = document.querySelector(`.hb-inv-slot[data-guid="${KIT_FULL}"]`);
+  const potCell = document.querySelector(`.hb-inv-slot[data-guid="${POTION}"]`);
+  const shieldSlot = document.querySelector(`.hb-inv-doll-slot[data-equip-mask="${EQUIP.Shield}"]`);
+
+  assert.equal(halfCell?.dataset?.structure, "25/50");
+  assert.equal(halfCell?.querySelector(".hb-uiitem-struct > i")?.style.getPropertyValue("--struct"), "50.0%");
+  assert.equal(emptyCell?.dataset?.structure, "0/50");
+  assert.equal(emptyCell?.querySelector(".hb-uiitem-struct > i")?.style.getPropertyValue("--struct"), "0.0%");
+  assert.equal(fullCell?.querySelector(".hb-uiitem-struct"), null, "full structure hides bar");
+  assert.equal(potCell?.querySelector(".hb-uiitem-struct"), null, "maxStructure=0 hides bar");
+  assert.equal(shieldSlot?.dataset?.structure, "10/40");
+  assert.equal(shieldSlot?.querySelector(".hb-uiitem-struct > i")?.style.getPropertyValue("--struct"), "25.0%");
+
+  // Removing WORN_ORB clears structure bar on the emptied paperdoll slot.
+  inv = inv.filter((r) => ![KIT_HALF, KIT_EMPTY, KIT_FULL, WORN_ORB].includes(r.guid));
+  bus.emit("playerInventoryChanged", { detail: {} });
+  await settle();
+  assert.equal(shieldSlot?.querySelector(".hb-uiitem-struct"), null);
+});
+
+await check("Owned non-side-pack (main-grid) & nested containers open in inventory.js instead of corpse-loot-bar", async () => {
+  const groundMod = await import(pathToFileURL(path.join(APP, "plugins", "ground_container_rules.js")).href);
+  const dropFlagsMod = await import(pathToFileURL(path.join(APP, "plugins", "drop_item_flags.js")).href);
+  globalThis.__CP = { ...helpers, ...groundMod, ...dropFlagsMod };
+  loadSpliced("plugins/container-panel.js", [], {
+    resolveContainedItemMeta: "() => ({ name: 'Item', iconId: 0, itemType: 0, stackSize: 1 })",
+    setAcText: "(el, t) => { if (el) el.textContent = String(t ?? ''); }",
+    fetchIconDataUrlShared: "() => Promise.resolve(null)",
+    fetchItemIconDataUrl: "() => Promise.resolve(null)",
+    clearPlaceholderGlyph: "() => {}",
+    uiEffectBadgesEnabled: "() => false",
+    uiEffectIconsFor: "() => []",
+    uiEffectTintCss: "() => null",
+    takeInventorySnapshot: "globalThis.__CP.takeInventorySnapshot",
+    DropItemFlags: "globalThis.__CP.DropItemFlags",
+    isDropAccepted: "globalThis.__CP.isDropAccepted",
+    groundObjectGateEnabled: "globalThis.__CP.groundObjectGateEnabled",
+    groundObjectFacts: "globalThis.__CP.groundObjectFacts",
+    isLandscapeGroundObject: "globalThis.__CP.isLandscapeGroundObject",
+    replacedGroundObject: "globalThis.__CP.replacedGroundObject",
+  });
+
+  const MAIN_CHEST = 0x71000001;
+  const NESTED_POUCH = 0x71000002;
+  const NESTED_RING = 0x71000003;
+  let lastTitle = "";
+  let corpseLootOpens = 0;
+  const prevTitleFn = window.__mainPanel.setTitle;
+  const prevLootBar = window.__corpseLootBar;
+  try {
+    window.__mainPanel.setTitle = (t) => { lastTitle = String(t ?? ""); return true; };
+    window.__corpseLootBar = { openFor: () => { corpseLootOpens++; }, isOpen: () => false };
+    inv.push(
+      {
+        guid: MAIN_CHEST, wcid: 301, name: "Small Chest", iconId: 0x06001021, itemType: 0x200,
+        stackSize: 1, equipMask: 0, containerId: 0, validLocations: 0,
+        requiresBackpackSlot: false, itemsCapacity: 20,
+      },
+      {
+        guid: NESTED_POUCH, wcid: 302, name: "Nested Pouch", iconId: 0x06001022, itemType: 0x200,
+        stackSize: 1, equipMask: 0, containerId: PACK, validLocations: 0,
+        requiresBackpackSlot: true, itemsCapacity: 10,
+      },
+      {
+        guid: NESTED_RING, wcid: 303, name: "Silver Ring", iconId: 0x06001023, itemType: 0x8,
+        stackSize: 1, equipMask: 0, containerId: NESTED_POUCH, validLocations: 0x000C0000,
+        requiresBackpackSlot: false, itemsCapacity: 0,
+      },
+    );
+    bus.emit("playerInventoryChanged", { detail: {} });
+    await settle();
+
+    // 1. Main-grid container (requiresBackpackSlot=false) opens via activateItem, sends Use once when unviewed.
+    calls.length = 0;
+    await new Promise((r) => setTimeout(r, 220));
+    assert.equal(window.__inventory.activateItem(MAIN_CHEST), true);
+    await settle();
+    assert.equal(window.__inventory.selectedPack(), MAIN_CHEST);
+    assert.equal(lastTitle, "Contents of Small Chest");
+    assert.equal(corpseLootOpens, 0, "owned main-grid chest must NOT open corpse-loot-bar");
+    assert.equal(calls.filter((c) => c[0] === "useObject" && c[1] === MAIN_CHEST).length, 1, "unviewed container sends useObject once");
+    window.__inventory.openPack(MAIN_CHEST);
+    assert.equal(calls.filter((c) => c[0] === "useObject" && c[1] === MAIN_CHEST).length, 1, "re-selecting viewed container does not resend useObject");
+
+    // 2. Nested container inside PACK opens via window.__openContainerFor & radial Open inside inventory.js.
+    window.__openContainerFor(NESTED_POUCH, "Nested Pouch");
+    await settle();
+    assert.equal(window.__inventory.selectedPack(), NESTED_POUCH);
+    assert.equal(lastTitle, "Contents of Nested Pouch");
+    assert.equal(corpseLootOpens, 0, "owned nested pouch must NOT open corpse-loot-bar");
+    assert.ok(document.querySelector(`.hb-inv-slot[data-guid="${NESTED_RING}"]`), "nested pouch item renders in inventory grid");
+
+    // Even a containerOpened bus event for an owned container must NOT open corpse-loot-bar.
+    bus.emit("containerOpened", { detail: { u32Payload: NESTED_POUCH, stringPayload: "Nested Pouch" } });
+    await settle();
+    assert.equal(corpseLootOpens, 0);
+
+    // Non-container Foci and unowned GUIDs are rejected by openPack.
+    window.__inventory.openPack(0);
+    await settle();
+    assert.equal(window.__inventory.openPack(FOCI), false);
+    assert.equal(window.__inventory.openPack(0xdeadbeef), false);
+    assert.equal(window.__inventory.selectedPack(), 0);
+  } finally {
+    inv = inv.filter((r) => ![MAIN_CHEST, NESTED_POUCH, NESTED_RING].includes(r.guid));
+    window.__inventory.openPack(0);
+    window.__mainPanel.setTitle = prevTitleFn;
+    window.__corpseLootBar = prevLootBar;
+    bus.emit("playerInventoryChanged", { detail: {} });
+    await settle();
+  }
+});
+
+await check("Paperdoll dollHit caches getBoundingClientRect across mousemove, anchors tooltip near cursor, and respects SourceWielded on dblclick", async () => {
+  const hitEl = document.querySelector(".hb-inv-doll-hit");
+  let rectReads = 0;
+  hitEl.getBoundingClientRect = () => {
+    rectReads++;
+    return { left: 0, top: 0, width: 100, height: 214 };
+  };
+  const prevW = window.innerWidth;
+  const prevH = window.innerHeight;
+  window.innerWidth = 800;
+  window.innerHeight = 600;
+  try {
+    hitEl.dispatchEvent(new FakeEvent("mouseenter", { bubbles: false }));
+    for (let i = 0; i < 5; i++) {
+      hitEl.dispatchEvent(new FakeEvent("mousemove", { bubbles: true, clientX: 15, clientY: 30 }));
+    }
+    assert.equal(rectReads, 1, "5 mousemoves in one hover should call dollHit.getBoundingClientRect once");
+    const tip = document.getElementById("hb-item-tooltip");
+    assert.equal(tip?.dataset?.show, "1");
+    const topAt30 = parseFloat(tip.style.top);
+
+    // Paint another chest pixel at y=160 so cursor movement down the silhouette moves the tooltip too.
+    const pLow = (160 * 100 + 15) * 4;
+    hitRgba[pLow + 1] = 255;
+    hitRgba[pLow + 3] = 255;
+
+    // Force fresh hit-map NOT needed because hitTestMap copied pixels; test cursor anchor directly on head pixel at y=10 vs chest at y=30:
+    hitEl.dispatchEvent(new FakeEvent("mousemove", { bubbles: true, clientX: 80, clientY: 10 }));
+    const topAt10 = parseFloat(tip.style.top);
+    assert.notEqual(topAt30, topAt10, "tooltip vertical position tracks cursor point rather than static 214px box top");
+    assert.equal(rectReads, 1, "moving across hit regions still reuses cached dollHit rect");
+    hitEl.dispatchEvent(new FakeEvent("mouseleave", { bubbles: false }));
+
+    // SourceWielded double-click on paperdoll slot:
+    const FOCUS_ORB = 0x9501;
+    const TARGET_ORB = 0x9502;
+    let targetBegun = null;
+    const prevUseTgt = window.__useTargeting;
+    window.__useTargeting = { begin: (g, nm) => { targetBegun = [g >>> 0, nm]; } };
+    try {
+      inv.push({
+        guid: FOCUS_ORB, wcid: 401, name: "Amulet of Focusing", iconId: 0x06001031, itemType: 0x8,
+        stackSize: 1, equipMask: 0x00008000, containerId: 0, validLocations: 0x00008000,
+        requiresBackpackSlot: false, itemsCapacity: 0, itemUseable: 0x0004,
+      });
+      bus.emit("playerInventoryChanged", { detail: {} });
+      await settle();
+
+      const neckSlot = document.querySelector(`.hb-inv-doll-slot[data-equip-mask="${0x00008000}"]`);
+      calls.length = 0;
+      await new Promise((r) => setTimeout(r, 220));
+      neckSlot.dispatchEvent(new FakeEvent("dblclick", { bubbles: true, button: 0 }));
+      await settle();
+      assert.ok(calls.some((c) => c[0] === "useObject" && c[1] === FOCUS_ORB), "SourceWielded untargeted item sends useObject on paperdoll dblclick");
+      assert.ok(!calls.some((c) => c[0] === "moveItem" || c[0] === "unwield"), "SourceWielded item must NOT unwield on dblclick");
+
+      // Targeted SourceWielded item enters target mode on paperdoll dblclick.
+      inv = inv.filter((r) => r.guid !== FOCUS_ORB);
+      inv.push({
+        guid: TARGET_ORB, wcid: 402, name: "Casting Ring", iconId: 0x06001032, itemType: 0x8,
+        stackSize: 1, equipMask: 0x00080000, containerId: 0, validLocations: 0x000C0000,
+        requiresBackpackSlot: false, itemsCapacity: 0, itemUseable: 0x00080004,
+      });
+      bus.emit("playerInventoryChanged", { detail: {} });
+      await settle();
+      const ringSlot = document.querySelector(`.hb-inv-doll-slot[data-equip-mask="${0x00080000}"]`);
+      calls.length = 0;
+      await new Promise((r) => setTimeout(r, 220));
+      ringSlot.dispatchEvent(new FakeEvent("dblclick", { bubbles: true, button: 0 }));
+      await settle();
+      assert.deepEqual(targetBegun, [TARGET_ORB, "Casting Ring"]);
+      assert.equal(calls.length, 0);
+    } finally {
+      inv = inv.filter((r) => r.guid !== FOCUS_ORB && r.guid !== TARGET_ORB);
+      window.__useTargeting = prevUseTgt;
+      bus.emit("playerInventoryChanged", { detail: {} });
+      await settle();
+    }
+  } finally {
+    window.innerWidth = prevW;
+    window.innerHeight = prevH;
+  }
+});
+
+await check("radial-menu Split/Drop/Give/Equip/Unequip and paperdoll unwield enforce trade, busy, mid-air, bonded, whole-stack & side-pack overflow guards", async () => {
+  const rm = await import(pathToFileURL(path.join(APP, "plugins", "radial-menu.js")).href);
+  const STACK_COINS = 0x9601;
+  const ATTUNED_COINS = 0x9602;
+  const BONDED_COINS = 0x9603;
+  const TRADED_COINS = 0x9604;
+  const SHIELD_ITEM = 0x9605;
+  const TWO_HANDER = 0x9606;
+  const LOOSE_ARROW = 0x9607;
+  const WORN_HELM = 0x9608;
+  const NPC_TARGET = 0x80001234;
+
+  const prevHandle = window.__sessionHandle;
+  const prevBusy = window.__isBusy;
+  const prevScene = window.liveScene3d;
+  const clearPending = () => { for (const e of drag.pendingOps.all()) drag.pendingOps.fail(e.guid); };
+  let selectedTarget = 0;
+  let airborne = false;
+  let busy = false;
+  const actionCalls = [];
+  const recA = (n) => (...a) => { actionCalls.push([n, ...a]); };
+  let testInv = [
+    { guid: STACK_COINS, wcid: 273, name: "Pyreal", itemType: 0x80, stackSize: 25, maxStackSize: 10000, equipMask: 0, containerId: 0, validLocations: 0, attuned: 0, bonded: 0 },
+    { guid: ATTUNED_COINS, wcid: 273, name: "Attuned Token", itemType: 0x80, stackSize: 5, maxStackSize: 100, equipMask: 0, containerId: 0, validLocations: 0, attuned: 1, bonded: 0 },
+    { guid: BONDED_COINS, wcid: 273, name: "Bonded Note", itemType: 0x80, stackSize: 5, maxStackSize: 100, equipMask: 0, containerId: 0, validLocations: 0, attuned: 0, bonded: 1 },
+    { guid: TRADED_COINS, wcid: 273, name: "Traded Gem", itemType: 0x800, stackSize: 4, maxStackSize: 50, equipMask: 0, containerId: 0, validLocations: 0, attuned: 0, bonded: 0 },
+    { guid: TWO_HANDER, wcid: 500, name: "Greataxe", itemType: 1, stackSize: 1, equipMask: EQUIP.TwoHanded, containerId: 0, validLocations: EQUIP.TwoHanded, combatUse: 5 },
+    { guid: SHIELD_ITEM, wcid: 501, name: "Buckler", itemType: 2, stackSize: 1, equipMask: 0, containerId: 0, validLocations: EQUIP.Shield, combatUse: 3 },
+    { guid: AMMO, wcid: 102, name: "Greater Arrow", itemType: 1, stackSize: 200, maxStackSize: 250, equipMask: EQUIP.MissileAmmo, containerId: 0, validLocations: EQUIP.MissileAmmo },
+    { guid: LOOSE_ARROW, wcid: 102, name: "Greater Arrow", itemType: 1, stackSize: 30, maxStackSize: 250, equipMask: 0, containerId: 0, validLocations: EQUIP.MissileAmmo },
+    { guid: WORN_HELM, wcid: 502, name: "Helm", itemType: 2, stackSize: 1, equipMask: 0x00000001, containerId: 0, validLocations: 0x00000001 },
+    { guid: PACK, wcid: 105, name: "Overflow Pack", itemType: 0x200, stackSize: 1, equipMask: 0, containerId: 0, requiresBackpackSlot: true, itemsCapacity: 24 },
+  ];
+
+  try {
+    drag.pendingOps.clear?.();
+    window.__isBusy = () => busy;
+    window.liveScene3d = { entityManager: { getSelectedTarget: () => selectedTarget } };
+    window.__sessionHandle = {
+      playerInventory: () => testInv.map((r) => ({ ...r, free() {} })),
+      playerItemsCapacity: 102,
+      playerContainersCapacity: 7,
+      playerAetheriaBits: 0x7,
+      combatMode: () => 1,
+      getLocalPlayerPose: () => ({ isOnGround: !airborne, free() {} }),
+      playerTrade: () => ({ myItems: [{ guid: TRADED_COINS, free() {} }], free() {} }),
+      splitStackTo3D: recA("splitStackTo3D"),
+      dropItem: recA("dropItem"),
+      giveObject: recA("giveObject"),
+      setWielded: recA("setWielded"),
+      mergeStacks: recA("mergeStacks"),
+      unwieldToPack: recA("unwieldToPack"),
+      moveItem: recA("moveItem"),
+    };
+
+    // 1. Split Stack… disabled on attuned, blocked on trade & mid-air, prompts bonded confirm.
+    const attunedMenu = rm.buildItems({ source: "inv-grid", guid: ATTUNED_COINS, name: "Attuned Token" }).items;
+    const attunedSplit = attunedMenu.find((i) => i.label.startsWith("Split Stack"));
+    assert.equal(attunedSplit?.disabled, true, "attuned stack disables Split Stack…");
+
+    const tradedMenu = rm.buildItems({ source: "inv-grid", guid: TRADED_COINS, name: "Traded Gem" }).items;
+    tradedMenu.find((i) => i.label === "Split Stack…").action(2);
+    assert.equal(actionCalls.length, 0, "traded stack cannot Split Stack…");
+    tradedMenu.find((i) => i.label === "Drop").action();
+    assert.equal(actionCalls.length, 0, "traded stack cannot Drop");
+
+    airborne = true;
+    const coinMenuAir = rm.buildItems({ source: "inv-grid", guid: STACK_COINS, name: "Pyreal" }).items;
+    coinMenuAir.find((i) => i.label === "Split Stack…").action(5);
+    coinMenuAir.find((i) => i.label === "Drop").action();
+    assert.equal(actionCalls.length, 0, "mid-air blocks both Split Stack… and Drop");
+    assert.equal(document.getElementById("hb-item-toast")?.textContent, helpers.PLACE_IN_3D_TEXT.midAir);
+    airborne = false;
+
+    // Bonded Split Stack… opens bonded confirmation modal: cancel aborts, confirm sends splitStackTo3D.
+    const bondedMenu = rm.buildItems({ source: "inv-grid", guid: BONDED_COINS, name: "Bonded Note" }).items;
+    bondedMenu.find((i) => i.label === "Split Stack…").action(2);
+    let modal = document.querySelector(".hb-dlg");
+    assert.equal(modal?.getAttribute("data-open"), "1", "bonded split opens confirmation modal");
+    const cancelBtn = modal.querySelector("button[data-action='cancel']");
+    cancelBtn.onclick();
+    assert.equal(actionCalls.length, 0, "cancelling bonded confirmation aborts splitStackTo3D");
+
+    bondedMenu.find((i) => i.label === "Split Stack…").action(2);
+    modal = document.querySelector(".hb-dlg");
+    const okBtn = modal.querySelector("button[data-action='confirm']");
+    okBtn.onclick();
+    assert.deepEqual(actionCalls.pop(), ["splitStackTo3D", BONDED_COINS, 2]);
+    drag.pendingOps.clear?.();
+
+    // 2. Give passes full stackSize (25), blocks self-target and traded items.
+    selectedTarget = ME;
+    const selfGive = rm.buildItems({ source: "inv-grid", guid: STACK_COINS, name: "Pyreal" }).items.find((i) => i.label.startsWith("Give"));
+    assert.equal(selfGive?.disabled, true, "self target disables Give");
+
+    selectedTarget = NPC_TARGET;
+    const tradedGive = rm.buildItems({ source: "inv-grid", guid: TRADED_COINS, name: "Traded Gem" }).items.find((i) => i.label === "Give");
+    tradedGive.action();
+    assert.equal(actionCalls.length, 0, "traded item cannot Give");
+
+    const coinGive = rm.buildItems({ source: "inv-grid", guid: STACK_COINS, name: "Pyreal" }).items.find((i) => i.label === "Give");
+    coinGive.action();
+    assert.deepEqual(actionCalls.pop(), ["giveObject", NPC_TARGET, STACK_COINS, 25], "Give passes full stackSize");
+    drag.pendingOps.clear?.();
+
+    // 3. Equip checks busy, canEquipInSlot (Shield vs Two-Hander), and planAmmoWield merge.
+    busy = true;
+    const shieldEquipBusy = rm.buildItems({ source: "inv-grid", guid: SHIELD_ITEM, name: "Buckler" }).items.find((i) => i.label === "Equip");
+    shieldEquipBusy.action();
+    assert.equal(actionCalls.length, 0, "busy blocks Equip");
+    busy = false;
+
+    const prevInvHook = window.__inventory;
+    window.__inventory = null; // test radial-menu's own runValidatedEquip path directly!
+    try {
+      const shieldEquip = rm.buildItems({ source: "inv-grid", guid: SHIELD_ITEM, name: "Buckler" }).items.find((i) => i.label === "Equip");
+      shieldEquip.action();
+      assert.equal(actionCalls.length, 0, "Shield Equip refused while Greataxe is wielded");
+      assert.match(document.getElementById("hb-item-toast")?.textContent || "", /shield may not be worn/i);
+
+      const arrowEquip = rm.buildItems({ source: "inv-grid", guid: LOOSE_ARROW, name: "Greater Arrow" }).items.find((i) => i.label === "Equip");
+      arrowEquip.action();
+      assert.deepEqual(actionCalls.pop(), ["mergeStacks", LOOSE_ARROW, AMMO, 30], "Equip on matching ammo merges into wielded stack");
+      drag.pendingOps.clear?.();
+    } finally {
+      window.__inventory = prevInvHook;
+    }
+
+    // 4. Unequip & unwield overflow to openable side pack when 102/102 main pack is full.
+    const filler = Array.from({ length: 102 }, (_, i) => ({
+      guid: 0xa0000 + i, wcid: 900, name: `Rock ${i}`, itemType: 0x80,
+      stackSize: 1, equipMask: 0, containerId: 0, requiresBackpackSlot: false, itemsCapacity: 0,
+    }));
+    testInv = [...filler, ...testInv.filter((r) => r.guid === WORN_HELM || r.guid === PACK)];
+    const helmUnequip = rm.buildItems({ source: "inv-paperdoll", guid: WORN_HELM, name: "Helm" }).items.find((i) => i.label === "Unequip");
+    helmUnequip.action();
+    assert.deepEqual(actionCalls.pop(), ["moveItem", WORN_HELM, PACK, 0], "Unequip overflows to side pack when 102/102 main pack is full");
+    // While WORN_HELM is in pendingOps, duplicate Unequip is suppressed:
+    helmUnequip.action();
+    assert.equal(actionCalls.length, 0, "pendingOps suppresses duplicate Unequip");
+    clearPending();
+
+    // Paperdoll dblclick (unwieldGuidToPack) also overflows to PACK when 102/102 main pack is full:
+    const prevLiveInv = inv;
+    inv = testInv;
+    bus.emit("playerInventoryChanged", { detail: {} });
+    await settle();
+    const headSlot = document.querySelector(`.hb-inv-doll-slot[data-equip-mask="${0x00000001}"]`);
+    headSlot.dispatchEvent(new FakeEvent("dblclick", { bubbles: true, button: 0 }));
+    await settle();
+    assert.deepEqual(actionCalls.pop(), ["moveItem", WORN_HELM, PACK, 0], "Paperdoll dblclick unwield overflows to side pack when 102/102 main pack is full");
+    clearPending();
+    inv = prevLiveInv;
+    bus.emit("playerInventoryChanged", { detail: {} });
+    await settle();
+  } finally {
+    clearPending();
+    window.__sessionHandle = prevHandle;
+    window.__isBusy = prevBusy;
+    window.liveScene3d = prevScene;
+  }
+});
+
 unmount?.();
+
+await check("loadPaperdollHitMap lazily hydrates when window.__hbWasm.fetch_icon_pixels arrives AFTER mount()", async () => {
+  const prevWasm = globalThis.__hbWasm;
+  try {
+    globalThis.__hbWasm = null;
+    const lazyInvMod = loadSpliced("plugins/inventory.js", ["view"], {
+      setAcText: "(el, t) => { if (el) el.textContent = String(t ?? ''); }",
+      fetchIconDataUrlShared: "(did) => Promise.resolve('data:icon/' + (did >>> 0).toString(16))",
+      getIconImmediate: "(did) => 'data:icon/' + (did >>> 0).toString(16)",
+      fetchItemIconDataUrl: "() => Promise.resolve(null)",
+      getItemIconImmediate: "() => null",
+      itemIconKey: "(m) => 'item:' + ((m && m.iconId) >>> 0)",
+      PLAYER_PACK_ICON: "0x0600127E",
+      ITEM_TYPE_CONTAINER: "0x200",
+      uiEffectIconsEnabled: "() => false",
+      uiEffectBadgesEnabled: "() => false",
+      uiEffectIconsFor: "() => []",
+      uiEffectTintCss: "() => null",
+      PaperdollViewport: "class { static acquire() { return new this(); } constructor() { this.dom = document.createElement('canvas'); } loadPlayer() { return Promise.resolve(false); } start() {} release() {} dispose() {} }",
+      ...real([
+        "aetheriaSlotIsLocked", "formatBurdenText", "burdenMeterFraction", "computeInventoryTitle",
+        "parseSlotsViewChecked", "canEquipInSlot", "buildPlayerEquipState", "formatAppraisalTooltip",
+        "takeInventoryRows", "rowUsesPackSlot", "pickWieldSlotMask", "createPackOrder", "packCapacity",
+        "mergeAmount", "DROP_TARGET", "MAIN_PACK_KEY", "PACKS_KEY", "decideItemDrop",
+        "wieldEventTouchesLocal", "findAutoMergeTarget", "primaryUseAction", "defaultOnUrlFlag",
+        "planWear", "planAutoSortJewelry", "planAmmoWield", "readySlotOccupant", "WEARABLE_LOCATIONS",
+        "isOpenableContainer", "PAPERDOLL_HIT_DID", "PAPERDOLL_HIT_RECT", "paperdollItemAt",
+        "cooldownStep", "matchCooldownEnchantment",
+        "DEFAULT_PLAYER_ITEMS_CAPACITY", "DEFAULT_PLAYER_CONTAINERS_CAPACITY",
+        "beginItemDrag", "registerDropZone", "resolveDropAction", "executeItemAction", "pendingOps",
+        "showItemTooltip", "hideItemTooltip", "localPlayerGuid", "consumeUseThrottle",
+      ]),
+    });
+    const host2 = document.createElement("div");
+    document.body.appendChild(host2);
+    const unmount2 = lazyInvMod.view.mount(host2, {});
+    await settle();
+    const hitEl2 = host2.querySelector(".hb-inv-doll-hit");
+    hitEl2.getBoundingClientRect = () => ({ left: 0, top: 0, width: 100, height: 214 });
+
+    // Before WASM hydrates, cursor stays default.
+    hitEl2.dispatchEvent(new FakeEvent("mousemove", { bubbles: true, clientX: 15, clientY: 30 }));
+    assert.equal(hitEl2.style.cursor, "default");
+
+    // Hydrate async fetch_icon_pixels AFTER mount:
+    globalThis.__hbWasm = {
+      fetch_icon_pixels: async (did) => ((did >>> 0) === 0x06004d8b
+        ? { width: 100, height: 214, pixels: hitRgba, free() {} }
+        : null),
+    };
+    hitEl2.dispatchEvent(new FakeEvent("mousemove", { bubbles: true, clientX: 15, clientY: 30 }));
+    await settle();
+    hitEl2.dispatchEvent(new FakeEvent("mousemove", { bubbles: true, clientX: 15, clientY: 30 }));
+    assert.equal(hitEl2.style.cursor, "pointer", "lazy hit-map hydration enables silhouette hit-testing without remount");
+    unmount2();
+    host2.remove();
+  } finally {
+    globalThis.__hbWasm = prevWasm;
+  }
+});
 
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);
