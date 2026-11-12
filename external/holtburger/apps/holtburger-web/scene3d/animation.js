@@ -653,7 +653,8 @@ export class AnimationCache {
             // Bugs 2/15/18 (2026-10-07): did the requested LINK resolve, or is
             // this the cycle the bake fell back to? `null` = an older pkg/
             // without the getter (unknown; callers keep the old behaviour).
-            const isLink = typeof animData.isLink === "boolean" ? animData.isLink : null;
+            const rawIsLink = animData.isLink;
+            const isLink = typeof rawIsLink === "boolean" ? rawIsLink : null;
 
             // First-call-per-setup: stash the partNames so future
             // bakes for other commands/stances reuse the same labels
@@ -727,15 +728,16 @@ export class AnimationCache {
             // lifecycle as the clip. Empty fallback handles old wasm
             // builds without the new getters (callers see
             // length-0 typed arrays and skip the apply step).
+            // Read wasm getters once to avoid redundant clones.
+            const rawRestOrigins = animData.restOrigins;
             const restOrigins =
-                typeof animData.restOrigins === "object" &&
-                animData.restOrigins !== null
-                    ? animData.restOrigins
+                typeof rawRestOrigins === "object" && rawRestOrigins !== null
+                    ? rawRestOrigins
                     : new Float32Array(0);
+            const rawRestOrientations = animData.restOrientations;
             const restOrientations =
-                typeof animData.restOrientations === "object" &&
-                animData.restOrientations !== null
-                    ? animData.restOrientations
+                typeof rawRestOrientations === "object" && rawRestOrientations !== null
+                    ? rawRestOrientations
                     : new Float32Array(0);
             // Completeness audit (2026-07-02): a 0x02 Setup entry with an
             // empty rest pose renders world objects collapsed/buried —
@@ -749,7 +751,7 @@ export class AnimationCache {
             // the hooks (raw + frame-exit) and the root-motion net come from the
             // geometry-free half shared with `getLink`, so a link entry carries
             // the same frames, times and hooks whichever export baked it.
-            const { clip, sequenceDescriptor, hooks, exitHooks, rootMotionNet } =
+            const motionFields =
                 AnimationCache._motionFields(animData, partCount, numFrames, framerate, partNames, key);
             // Last read of `animData` (rest pose and meshes are drained above):
             // free the wasm box now, as `getLink` does.
@@ -758,8 +760,11 @@ export class AnimationCache {
             }
 
             return {
-                clip,
-                sequenceDescriptor,
+                get clip() {
+                    return motionFields.clip;
+                },
+                hasClip: motionFields.hasClip,
+                sequenceDescriptor: motionFields.sequenceDescriptor,
                 // Pre-converted three.js groups (one per part). Each
                 // entry: `{ groups: [{geometry, surfaceDid}], surfaceDids: [] }`.
                 // Shared across all consumers — see comment block above.
@@ -776,13 +781,13 @@ export class AnimationCache {
                 isLink,
                 restOrigins,
                 restOrientations,
-                hooks,
+                hooks: motionFields.hooks,
                 // `{ timeline, byFrame }` (hook_windows.js), or null (no hooks).
-                exitHooks,
+                exitHooks: motionFields.exitHooks,
                 // A5-P3: Float32Array(7) net root displacement, or null
                 // ("no clip / unknown / pre-P3 wasm"). Consumed by
                 // entities.js `_tryPlayLink` under `?rootMotionObject=1`.
-                rootMotionNet,
+                rootMotionNet: motionFields.rootMotionNet,
             };
         })();
         this._insertPending(key, promise);
@@ -845,120 +850,91 @@ export class AnimationCache {
      * @private
      */
     static _motionFields(animData, partCount, numFrames, framerate, partNames, key) {
-        // Read partFrames once (clones from wasm). After this,
-        // animData is dead weight.
+        // Read each #[wasm_bindgen(getter)] property ONCE into a local variable
+        // to prevent redundant Vec<f32> clones from WASM memory.
+        const rawPartFrames = animData.partFrames;
         const partFrames =
-            typeof animData.partFrames === "object" &&
-            animData.partFrames !== null
-                ? animData.partFrames
-                : (animData.partFrames ?? new Float32Array(0));
-
-        // Render-completeness audit (2026-05-29) — root motion offset
-        // track (clones from wasm). Empty / all-zero for cycles without
-        // pos_frames (idle, walk/run); non-zero for one-shot translating
-        // anims. Empty fallback handles older wasm bundles without the
-        // `posFrames` getter (buildAnimationClip then applies no offset).
-        const posFrames =
-            typeof animData.posFrames === "object" &&
-            animData.posFrames !== null
-                ? animData.posFrames
+            typeof rawPartFrames === "object" && rawPartFrames !== null
+                ? rawPartFrames
                 : new Float32Array(0);
 
-        // A5-P3 (2026-06-12, `?rootMotionObject=1`) — net rigid root
-        // displacement of the whole clip, `[tx,ty,tz, qw,qx,qy,qz]`
-        // (AC w-first), model space relative to clip start. Snapshot
-        // BEFORE the wasm handle dies; `null` fail-soft covers older
-        // wasm bundles without the getter AND the "no cycle resolved"
-        // empty vec (both → consumer never arms). Copied into a fresh
-        // Float32Array so the cache entry owns plain data.
+        const rawPosFrames = animData.posFrames;
+        const posFrames =
+            typeof rawPosFrames === "object" && rawPosFrames !== null
+                ? rawPosFrames
+                : new Float32Array(0);
+
+        const rawRootMotionNet = animData.rootMotionNet;
         const rootMotionNet =
-            animData.rootMotionNet &&
-            typeof animData.rootMotionNet.length === "number" &&
-            animData.rootMotionNet.length === 7
-                ? Float32Array.from(animData.rootMotionNet)
+            rawRootMotionNet &&
+            typeof rawRootMotionNet.length === "number" &&
+            rawRootMotionNet.length === 7
+                ? Float32Array.from(rawRootMotionNet)
                 : null;
 
-        // T3 (2026-06-02): forward the wasm-provided per-frame
-        // `frameTimes` + total `duration` to the clip builder. Previously
-        // this call site DROPPED both, so every clip fell through to the
-        // uniform `t = i/framerate` fallback using the AVERAGED framerate
-        // (numFrames/duration). Single-segment cycles (idle/walk/run/Ready)
-        // are identical either way, but a MotionData that chains multiple
-        // AnimData (~23% of retail: swing windup→strike→recover→settle,
-        // casts) has per-segment framerates AND signs — the averaged rate
-        // plays every segment at the wrong relative speed. The wasm bake
-        // (`build_concatenated_motion_frames`) already emits correct
-        // cumulative per-frame times + total_duration; buildAnimationClip
-        // already consumes them (animation.js:114-134, :204-212) and snaps
-        // each non-uniform key via InterpolateDiscrete — we just stop
-        // discarding the data. NOTE: non-uniform `frameTimes` REQUIRE the
-        // discrete-interpolation path (animation.js:189/197) — a linear/
-        // SLERP track over uneven times would interpolate poses across
-        // segment boundaries the animators never authored.
+        const rawFrameTimes = animData.frameTimes;
         const frameTimes =
-            typeof animData.frameTimes === "object" &&
-            animData.frameTimes !== null
-                ? animData.frameTimes
-                : (animData.frameTimes ?? undefined);
+            typeof rawFrameTimes === "object" && rawFrameTimes !== null
+                ? rawFrameTimes
+                : undefined;
         const duration = +animData.duration;
-        let clip = null;
-        if (numFrames > 0 && framerate > 0) {
-            clip = buildAnimationClip(
-                {
-                    partCount,
-                    numFrames,
-                    framerate,
-                    partFrames,
-                    posFrames,
-                    // T3: stop dropping these two — the per-segment timing
-                    // path keyed on them already exists in the builder.
-                    frameTimes,
-                    duration: Number.isFinite(duration) ? duration : undefined,
-                },
-                partNames,
-            );
-            if (clip) {
-                clip.name = key;
+
+        // Sequence descriptor segment getters - read once
+        const segmentStarts = animData.segmentStarts;
+        const segmentCounts = animData.segmentCounts;
+        const segmentFramerates = animData.segmentFramerates;
+        const segmentAnimIds = animData.segmentAnimIds;
+        let rootFrames = null;
+        try {
+            const rf = animData.rootFrames;
+            if (rf && typeof rf.length === "number" && rf.length === numFrames * 7) rootFrames = rf;
+        } catch (_) {}
+
+        // Lazy AnimationClip on demand: buildAnimationClip is only evaluated if/when
+        // entry.clip is read, rather than eagerly building unused clips.
+        let _clip = undefined;
+        const clipGetter = () => {
+            if (_clip === undefined) {
+                if (numFrames > 0 && framerate > 0) {
+                    _clip = buildAnimationClip(
+                        {
+                            partCount,
+                            numFrames,
+                            framerate,
+                            partFrames,
+                            posFrames,
+                            frameTimes,
+                            duration: Number.isFinite(duration) ? duration : undefined,
+                        },
+                        partNames,
+                    );
+                    if (_clip) {
+                        _clip.name = key;
+                    }
+                } else {
+                    _clip = null;
+                }
             }
-        }
+            return _clip;
+        };
 
         // Task E (2026-05-12) — AnimationHook timeline drain.
-        // The wasm `EntityAnimationData.takeHooks()` returns a
-        // sorted-by-time list of `AnimationHookJs` entries baked
-        // from each `AnimationFrame.hooks` in the resolved cycle.
-        // Snapshot to plain JS POJOs IMMEDIATELY so the cache
-        // doesn't hold stale wasm-bindgen handles past `.free()`
-        // (the same lifetime hazard `EntityUpdate` has — see
-        // `__scene3dCloneEntityUpdate` in index.html). Empty
-        // fallback handles old wasm bundles without the getter
-        // (callers see `hooks.length === 0` and the per-frame
-        // executor skips this action's timeline entirely).
         let hooks = [];
-        if (typeof animData.takeHooks === "function") {
-            const raw = animData.takeHooks();
+        const rawTakeHooks = animData.takeHooks;
+        if (typeof rawTakeHooks === "function") {
+            const raw = rawTakeHooks.call(animData);
             hooks = new Array(raw.length);
             for (let i = 0; i < raw.length; i += 1) {
                 const h = raw[i];
-                // Snapshot each field through the wasm getter into
-                // a plain object — the wasm-bindgen handle gets
-                // freed below.
                 hooks[i] = {
                     time: +h.timeInClipS,
                     hookType: h.hookType >>> 0,
                     direction: h.direction | 0,
-                    // Sound (1) + SoundTweaked (21) decoded fields.
                     soundWaveId: h.soundWaveId >>> 0,
                     soundEnum: h.soundEnum >>> 0,
                     soundProbability: +h.soundProbability,
                     soundVolume: +h.soundVolume,
                     soundPriority: +h.soundPriority,
-                    // Wave 1 — particle hook decoded fields.
-                    // CreateParticle (13) / CreateBlockingParticle (26):
-                    // emitter info + Frame offset + per-script handle.
-                    // DestroyParticle (14) / StopParticle (15): reuse
-                    // `particleEmitterId` getter for the handle (it's
-                    // hookType-aware on the Rust side).
-                    // CallPES (19): pes_did + pes_pause.
                     emitterInfoId: h.emitterInfoId >>> 0,
                     createPartIndex: h.createPartIndex >>> 0,
                     offsetOriginX: +h.offsetOriginX,
@@ -971,33 +947,17 @@ export class AnimationCache {
                     particleEmitterId: h.particleEmitterId >>> 0,
                     callPesDid: h.callPesDid >>> 0,
                     callPesPause: +h.callPesPause,
-                    // Wave 3 — material/transform/visibility hook fields.
-                    // rampStart/End/Time cover Transparent (20),
-                    // Luminous (8), Diffuse (10), TransparentPart (7),
-                    // LuminousPart (9), DiffusePart (11), Scale (12).
-                    // Scale has only end+time (rampStart is 0); all
-                    // others have all three.
                     rampStart: +h.rampStart,
                     rampEnd: +h.rampEnd,
                     rampTime: +h.rampTime,
-                    // Ethereal (6), NoDraw (16) — boolean-ish toggles.
                     etherealValue: h.etherealValue | 0,
                     noDrawValue: h.noDrawValue >>> 0,
-                    // SetOmega (22) — angular velocity axis (rad/s).
                     omegaX: +h.omegaX,
                     omegaY: +h.omegaY,
                     omegaZ: +h.omegaZ,
-                    // TextureVelocity (23) / TextureVelocityPart (24)
-                    // — UV scroll velocity.
                     textureUSpeed: +h.textureUSpeed,
                     textureVSpeed: +h.textureVSpeed,
-                    // SetLight (25) — boolean: lights on/off.
                     lightsOn: h.lightsOn | 0,
-                    // Wave 4 — per-part variants + ReplaceObject.
-                    // partIndex covers hooks 7/9/11/18/24 (sentinel
-                    // `0xFFFFFFFF` for non-part-aware hooks).
-                    // replacePartIndex + replaceNewGfxObjId cover
-                    // ReplaceObject (5).
                     partIndex: h.partIndex >>> 0,
                     replacePartIndex: h.replacePartIndex >>> 0,
                     replaceNewGfxObjId: h.replaceNewGfxObjId >>> 0,
@@ -1008,15 +968,22 @@ export class AnimationCache {
             }
         }
 
-        // The raw sequence descriptor (per-segment AnimData) the Rust
-        // MotionSequence playhead consumes — the ONLY animation driver
-        // since the mixer was retired (null when no frames resolved).
-        const sequenceDescriptor = buildSequenceDescriptor(animData);
-        // ?hookFrameExit (2026-10-08): the same hooks re-keyed to the moment
-        // their frame is LEFT, minus each segment's last frame (retail
-        // CSequence::update_internal, acclient.c:340710-340726), plus a
-        // per-frame index for reverse playback. entities.js drains these;
-        // `hooks` stays the raw frame-entry list for `=off`.
+        // Pass already extracted values so buildSequenceDescriptor does not re-read animData getters
+        const sequenceDescriptor = buildSequenceDescriptor({
+            partCount,
+            numFrames,
+            framerate,
+            partFrames,
+            frameTimes,
+            duration,
+            posFrames,
+            segmentStarts,
+            segmentCounts,
+            segmentFramerates,
+            segmentAnimIds,
+            rootFrames,
+        });
+
         const exitHooks = hooks.length && sequenceDescriptor
             ? retimeHooksToFrameExit(
                 hooks,
@@ -1028,7 +995,14 @@ export class AnimationCache {
             )
             : null;
 
-        return { clip, sequenceDescriptor, hooks, exitHooks, rootMotionNet };
+        return {
+            get clip() { return clipGetter(); },
+            hasClip: (numFrames > 0 && framerate > 0),
+            sequenceDescriptor,
+            hooks,
+            exitHooks,
+            rootMotionNet,
+        };
     }
 
     /**
@@ -1098,14 +1072,15 @@ export class AnimationCache {
             const numFrames = animData.numFrames >>> 0;
             const framerate = +animData.framerate;
             const resolvedStance = animData.resolvedStance >>> 0;
-            const isLink = typeof animData.isLink === "boolean" ? animData.isLink : true;
+            const rawIsLink = animData.isLink;
+            const isLink = typeof rawIsLink === "boolean" ? rawIsLink : true;
             // Same partNames memo (and length invariant) as `get`.
             let partNames = this.partNames.get(setupId);
             if (!partNames || partNames.length !== partCount) {
                 partNames = Array.from({ length: partCount }, (_, i) => `part_${i}`);
                 this.partNames.set(setupId, partNames);
             }
-            const { clip, sequenceDescriptor, hooks, exitHooks, rootMotionNet } =
+            const motionFields =
                 AnimationCache._motionFields(animData, partCount, numFrames, framerate, partNames, key);
             // Everything above is a copy (the getters clone, the hooks are
             // snapshotted): free the wasm box now, not at a later GC.
@@ -1113,8 +1088,11 @@ export class AnimationCache {
                 try { animData.free(); } catch (_) {}
             }
             return {
-                clip,
-                sequenceDescriptor,
+                get clip() {
+                    return motionFields.clip;
+                },
+                hasClip: motionFields.hasClip,
+                sequenceDescriptor: motionFields.sequenceDescriptor,
                 // No rig geometry: a link entry is played from its descriptor.
                 partGroups: [],
                 partMeshes: [],
@@ -1124,9 +1102,9 @@ export class AnimationCache {
                 isLink,
                 restOrigins: new Float32Array(0),
                 restOrientations: new Float32Array(0),
-                hooks,
-                exitHooks,
-                rootMotionNet,
+                hooks: motionFields.hooks,
+                exitHooks: motionFields.exitHooks,
+                rootMotionNet: motionFields.rootMotionNet,
                 linkOnly: true,
             };
         })();

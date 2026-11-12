@@ -1382,6 +1382,9 @@ import {
   surfaceResultDecodeMisses,
   surfaceResultProvenAbsent,
   materialRendersNothing,
+  installCsmShaderPatch,
+  installLightClampShaderPatch,
+  _reinstallClonePom,
 } from "./materials.js";
 // HIDEFX (2026-10-07): `noteEntityVisibility` / `forgetEntityHiddenState` are
 // the retail set_state→set_hidden script hook (PS_Hidden / PS_UnHide) — see
@@ -2617,17 +2620,17 @@ const DEFAULT_SCRIPT_PLAY_AT_SPAWN_ON = (() => {
 // `CPhysicsObj::play_default_script(part_index)` walks the CHILDLIST
 // (acclient.c:320378-320412), it never plays the animating object's own
 // script (that is the no-arg overload, hook 17). Nothing held there → nothing
-// plays. Off (default) = the W4.7 owner-anchored arm, byte-identical. See
+// plays. Default ON; `=off` opts out (legacy owner arm). See
 // `_playHeldChildDefaultScript`.
 const DEFAULT_SCRIPT_PART_CHILD_ON = (() => {
   try {
-    if (typeof window === "undefined" || !window.location) return false;
+    if (typeof window === "undefined" || !window.location) return true;
     return (
       new URLSearchParams(window.location.search)
-        .get("defaultScriptPartChild")?.toLowerCase() === "on"
+        .get("defaultScriptPartChild")?.toLowerCase() !== "off"
     );
   } catch (_) {
-    return false;
+    return true;
   }
 })();
 
@@ -5112,7 +5115,7 @@ export class EntityManager {
     // for the SINGLE spawn of that key — the second-spawn race still
     // happens against an old cache, but doesn't crash.
     const partCount = animEntry.partCount;
-    const initialClip = animEntry.clip;
+    const initialClip = animEntry.hasClip ?? (animEntry.sequenceDescriptor != null);
     const resolvedStance = animEntry.resolvedStance >>> 0;
     const restOrigins = animEntry.restOrigins ?? new Float32Array(0);
     const restOrientations = animEntry.restOrientations ?? new Float32Array(0);
@@ -7843,14 +7846,16 @@ export class EntityManager {
       c.root.position.set(0, 0, 0);
       c.root.quaternion.identity();
     }
-    // The wielder root may carry obj_scale; the child inherits it (and the
-    // ScaleHook tween / jump-squash) through the part node. NOT retail:
-    // `CPhysicsObj::UpdateChild` (acclient.c:320039) places the child at
-    // `Frame::combine(part frame, holding frame)` and a Frame has no scale,
-    // so retail draws the child at its own scale with an unscaled holding
-    // offset. Known gap held-1 (openac-comparison FINDINGS-round2), deferred
-    // for render impact pending the 1070 eye-test. Keep the child's own
-    // scale untouched.
+    // Prevent held weapon scaling distortion on monster rigs:
+    // When parent carries scale (e.g. monster rig obj_scale), counter-scale the child
+    // so its world scale remains true to childBaseScale and undistorted (retail
+    // CPhysicsObj::UpdateChild acclient.c:320039 places child at unscaled holding frame).
+    const psx = (p.root.scale && p.root.scale.x) || 1.0;
+    const psy = (p.root.scale && p.root.scale.y) || 1.0;
+    const psz = (p.root.scale && p.root.scale.z) || 1.0;
+    const childBaseScale = c.meta?.obj_scale ?? c.meta?.scale ?? 1.0;
+    c.root.scale.set(childBaseScale / psx, childBaseScale / psy, childBaseScale / psz);
+
     // FCULL (2026-06-08) — set the STATE-visible baseline (true on attach);
     // while attached the child is excluded from the cull walk (it follows
     // the wielder's hierarchy visibility) so `_renderCullHidden` stays clear.
@@ -7983,6 +7988,9 @@ export class EntityManager {
       if (p && p._attachedChildren) p._attachedChildren.delete(cGuid);
     }
     if (c.root.parent) c.root.parent.remove(c.root);
+    // Restore base scale on unlink
+    const childBaseScale = c.meta?.obj_scale ?? c.meta?.scale ?? 1.0;
+    c.root.scale.set(childBaseScale, childBaseScale, childBaseScale);
     // EQUIP-3: clear the mount brand (see `attachChildToParent`).
     if (c.root.userData) delete c.root.userData.__attachedChildOf;
     if (this.scene3d?.entitiesGroup) this.scene3d.entitiesGroup.add(c.root);
@@ -11821,8 +11829,8 @@ export class EntityManager {
       return;
     }
     if (inst._disposed || this.entityMap.get(g) !== inst) return; // gone or respawned
-    const clip = entry?.clip;
-    if (!clip) {
+    const hasClip = entry?.hasClip ?? (entry?.sequenceDescriptor != null);
+    if (!hasClip) {
       // WS-B teardown (2026-06-18): the setSwingPose vibe-pose fallback was
       // removed — the Rust motion authority (unifiedMotion default-on) is the
       // swing path; when no real MotionTable link/clip resolves, the entity
@@ -13016,7 +13024,7 @@ export class EntityManager {
             paletteSubsFlat: inst.meta.subPalettes ?? new Uint32Array(0),
           }
         );
-        cycleMissing = !entry?.clip;
+        cycleMissing = !(entry?.hasClip ?? !!entry?.sequenceDescriptor);
       } catch (e) {
         // eslint-disable-next-line no-console
         console.warn(
@@ -13042,7 +13050,7 @@ export class EntityManager {
     // substate (acclient.c:337763-337767, falls to LABEL_80). A creature table
     // without Reload (a lugian's rock throw) must stay in its aim, so the
     // closing Ready still plays Aim*→Ready, which IS that creature's throw.
-    if (this._missileSubstateOn && isMissileSubstateCommand(cmd) && !styleLinksP && !entry?.clip) {
+    if (this._missileSubstateOn && isMissileSubstateCommand(cmd) && !styleLinksP && !(entry?.hasClip ?? !!entry?.sequenceDescriptor)) {
       if ((inst.lastMotionCommand >>> 0) === (cmd >>> 0)) inst.lastMotionCommand = fromMotion;
       return;
     }
@@ -13094,14 +13102,14 @@ export class EntityManager {
     if (castGestureSubstate && !this._isLocalPlayerGuid(guid >>> 0)) {
       try {
         window.__diag?.remoteSync?.onCastGesture?.(
-          guid >>> 0, cmd >>> 0, entryPlayed, !!entry?.clip, inst.meta?.name,
+          guid >>> 0, cmd >>> 0, entryPlayed, !!(entry?.hasClip ?? entry?.sequenceDescriptor), inst.meta?.name,
         );
       } catch (_) {}
     }
     // No animation resolved for this (cmd, stance) → the playhead keeps its
     // current cycle (the mixer used to fade to the rest pose here, which the
     // playhead never did).
-    if (!entry?.clip) return;
+    if (!(entry?.hasClip ?? !!entry?.sequenceDescriptor)) return;
     // Drive the cycle through the Rust authority. Phase is carried across a
     // cycle swap (walk→run) via the Rust seekPhase so the feet don't pop — the
     // reason the mixer-era band-aids (150 ms stance crossfade, 200 ms
@@ -15029,7 +15037,7 @@ export class EntityManager {
       return null;
     }
     if (inst._disposed || this.entityMap.get(inst.guid >>> 0) !== inst) return null;
-    if (!entry?.clip) return null;
+    if (!(entry?.hasClip ?? !!entry?.sequenceDescriptor)) return null;
     // Bugs 2/15/18 (2026-10-07): when the requested link does not exist the
     // wasm bake falls back to the target's CYCLE (lib.rs
     // build_entity_animation_data_inner_v2), and this used to hand that whole
@@ -15495,6 +15503,30 @@ export class EntityManager {
     return this._worldParticleManager;
   }
 
+  _preserveCloneShaderPatches(clone, source, materialCache, scene3d) {
+    if (!clone || !source) return;
+    const hadCsm = !!(source.userData && (source.userData.csmEnabled || source.userData.__csmShaderPatched));
+    const hadClamp = !!(source.userData && (source.userData.lightClampRetail || source.userData.__lightClampPatched || source.userData.__lightClampRetailPatched));
+    const hadPom = !!(source.userData && (source.userData.pomEnabled || source.userData.__pomPatched));
+    const csmState = materialCache?.csmState ?? scene3d?.csmState ?? null;
+    const pomOpts = materialCache?.pomOpts ?? null;
+    if (hadCsm && csmState) {
+      installCsmShaderPatch(clone, csmState);
+    }
+    if (hadClamp) {
+      installLightClampShaderPatch(clone);
+    }
+    if (hadPom) {
+      _reinstallClonePom(clone, source, pomOpts);
+    }
+    if (!clone.onBeforeCompile && source.onBeforeCompile) {
+      clone.onBeforeCompile = source.onBeforeCompile;
+    }
+    if (!clone.customProgramCacheKey && source.customProgramCacheKey) {
+      clone.customProgramCacheKey = source.customProgramCacheKey;
+    }
+  }
+
   /**
    * Wave 5 (2026-05-28) — Clone-on-write helper for entity materials.
    * Returns a material OWNED by this entity (cloned from the shared
@@ -15544,6 +15576,7 @@ export class EntityManager {
       const owned = existing.clone();
       owned.userData = { ...(owned.userData || {}), __disposable: true };
       delete owned.userData.__cacheOwned;
+      this._preserveCloneShaderPatches(owned, existing, this.materialCache, this.scene3d);
       // ?lumCloneAdopt: the clone copied `hbLumBase`, so ?lumNight would refuse
       // to register it and its glow would freeze at the scale live right now.
       adoptLuminousClone(owned);
@@ -15578,6 +15611,7 @@ export class EntityManager {
     // Strip `__cacheOwned` if it carried over via spread — the clone
     // is per-entity, not cache-owned.
     if (cloned.userData.__cacheOwned) delete cloned.userData.__cacheOwned;
+    this._preserveCloneShaderPatches(cloned, shared, this.materialCache, this.scene3d);
     // ?lumCloneAdopt — as above: keep the clone on the ?lumNight scale.
     adoptLuminousClone(cloned);
     if (opts.cloneTexture && cloned.map) {
@@ -15850,6 +15884,15 @@ export class EntityManager {
   // through CallPES recursion so sub-scripts inherit it. (anim-deep FIX-PLAN
   // W4.7.)
   async _attachParticleChainForEntity(guid, rig, pesId, depth = 0, defaultPartIndex = -1) {
+    const initialInst = this.entityMap.get(guid >>> 0);
+    const isAlive = () =>
+      !this._disposed &&
+      initialInst &&
+      !initialInst._disposed &&
+      this.entityMap.get(guid >>> 0) === initialInst;
+    if (!isAlive()) {
+      return { ok: false, emitterCount: 0, soundHookCount: 0, reason: "entity_not_alive" };
+    }
     // F.D-fu (2026-05-20): emit a chain-walker entry log so validators
     // (and devs eyeballing console) can correlate spawn dispatch with
     // chain-walker firing. Critical for diagnosing "no PhysicsScriptHook
@@ -15877,6 +15920,9 @@ export class EntityManager {
         reason: `fetchPhysicsScript_failed:${String(e?.message ?? e)}`,
       };
     }
+    if (!isAlive()) {
+      return { ok: false, emitterCount: 0, soundHookCount: 0, reason: "entity_not_alive" };
+    }
     const entries = ps.takeEntries();
     // eslint-disable-next-line no-console
     console.log(
@@ -15885,6 +15931,9 @@ export class EntityManager {
 
     // Lazy-create the world-side ParticleManager on first chain walk.
     await this._ensureWorldParticleManager(rig);
+    if (!isAlive()) {
+      return { ok: false, emitterCount: 0, soundHookCount: 0, reason: "entity_not_alive" };
+    }
 
     // A11-S1 (unification survey 2026-06-11): when `?scriptQueue=on`, route
     // this script through the per-owner time-ordered `ScriptManager` and the
@@ -15898,6 +15947,9 @@ export class EntityManager {
     }
 
     const THREE = (await import("three")).default ?? (await import("three"));
+    if (!isAlive()) {
+      return { ok: false, emitterCount: 0, soundHookCount: 0, reason: "entity_not_alive" };
+    }
     // B2 (perf plan 2026-05-18): the per-hook `new Vector3(...)` /
     // `new Quaternion(...)` allocations these locals used to back are
     // now pooled into module-scope `_particleAttachScratch*` — the
@@ -16171,6 +16223,9 @@ export class EntityManager {
         );
         continue;
       }
+      if (!isAlive()) {
+        return { ok: false, emitterCount: emitterIds.length, soundHookCount: timeoutIds.length, reason: "entity_not_alive" };
+      }
 
       // Perf B2 (2026-05-18): scratch-pool the offset frame.
       // `ParticleManager.addEmitter` eventually calls
@@ -16311,6 +16366,12 @@ export class EntityManager {
         renderLayer: entityParticleRenderLayer(),
       })
         .then((id) => {
+          if (!isAlive()) {
+            if (id !== 0) {
+              try { this._worldParticleManager?.destroyParticleEmitter(id); } catch (_) {}
+            }
+            return;
+          }
           if (id !== 0) {
             emitterIds.push(id);
           }
@@ -18212,14 +18273,15 @@ export class EntityManager {
         const _velSample = runSmoothing;
         inst._velAccumDt = (inst._velAccumDt || 0) + dt;
         if (_velSample) {
-          if (inst._velPrevX !== undefined && inst._velAccumDt > 0) {
+          if (inst._velPrevX !== undefined && inst._velPrevY !== undefined && inst._velAccumDt > 0) {
             const dx = p.x - inst._velPrevX;
-            const dz = p.z - inst._velPrevZ;
-            const sp = Math.hypot(dx, dz) / inst._velAccumDt;
+            const dy = p.y - inst._velPrevY;
+            const sp = Math.hypot(dx, dy) / inst._velAccumDt;
             inst._emaSpeed =
               inst._emaSpeed === undefined ? sp : inst._emaSpeed * 0.7 + sp * 0.3;
           }
           inst._velPrevX = p.x;
+          inst._velPrevY = p.y;
           inst._velPrevZ = p.z;
           inst._velAccumDt = 0;
         }
@@ -18426,16 +18488,14 @@ export class EntityManager {
         }
       }
       // Wave 6 (2026-05-28) — material ramp tweens + UV scroll.
-      // Gated on either material tweens being active OR any cloned
-      // material carrying a __hookTexVel tag. The check is one
-      // truthy-Map read on the fast path; entities with no material
-      // hooks pay zero per-frame cost.
-      if (
-        (inst._materialHookTweens && inst._materialHookTweens.length > 0) ||
-        (inst._entityMaterials && inst._entityMaterials.size > 0)
-      ) {
+      // Gated on either material tweens being active OR persistent UV-scroll
+      // materials. Clothed entities without material hooks pay zero per-frame cost,
+      // avoiding redundant performance.now() calls and _entityMaterials scans.
+      const _hasMatTweens = (inst._materialHookTweens && inst._materialHookTweens.length > 0);
+      const _hasTexVel = (inst._texVelMaterials && inst._texVelMaterials.size > 0);
+      if (_hasMatTweens || _hasTexVel) {
         try {
-          this._tickMaterialHooks(inst, dt, performance.now());
+          this._tickMaterialHooks(inst, dt, _hasMatTweens ? this._tweenNowMs() : 0);
         } catch (e) {
           // eslint-disable-next-line no-console
           if (!this._materialHookTickWarned) {
@@ -20172,8 +20232,11 @@ export class EntityManager {
       if (!mat) continue;
       if (stop) {
         delete mat.userData.__hookTexVel;
+        if (inst._texVelMaterials) inst._texVelMaterials.delete(mat);
       } else {
         mat.userData.__hookTexVel = { us, vs };
+        if (!inst._texVelMaterials) inst._texVelMaterials = new Set();
+        inst._texVelMaterials.add(mat);
         // DIM1-4 / W4.4 (2026-06-05): the per-frame UV scroll in
         // `_tickMaterialHooks` hard-gates `if (!mat.map) continue;`, so a
         // material whose diffuse texture hasn't been lazily upgraded yet would
@@ -20247,8 +20310,8 @@ export class EntityManager {
       }
       inst._materialHookTweens = survivors.length > 0 ? survivors : null;
     }
-    if (inst._entityMaterials && inst._entityMaterials.size > 0) {
-      for (const mat of inst._entityMaterials.values()) {
+    if (inst._texVelMaterials && inst._texVelMaterials.size > 0) {
+      for (const mat of inst._texVelMaterials) {
         const vel = mat.userData?.__hookTexVel;
         if (!vel) continue;
         if (!mat.map) continue;
@@ -20617,6 +20680,7 @@ export class EntityManager {
     // held-4 / held-5 per-guid attach state, same dead-session guid space.
     this._attachGen.clear();
     this._leftWorldChildren.clear();
+    this._lastAttach.clear();
     // death-5: the opened-corpse ledger, same guid space.
     this._openedCorpses.clear();
   }
@@ -20736,6 +20800,7 @@ export class EntityManager {
     this.spawnInFlight.clear();
     // Batch 9 #2 (2026-06-07): drop all spawn-generation tokens.
     this._spawnGen.clear();
+    this._lastAttach.clear();
     this.animationCache.dispose();
     if (this._entityBatch) { try { this._entityBatch.dispose(); } catch (_) {} }
     if (this._sharedFallback) {

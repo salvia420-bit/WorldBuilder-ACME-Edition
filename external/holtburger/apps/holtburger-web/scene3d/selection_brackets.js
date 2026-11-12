@@ -1108,9 +1108,9 @@ export class SelectionBracketLayer {
     );
     const px = halfW + nx * s;
     const py = halfH - ny * s;
-    // Point the triangle down the screen-space direction (it is authored
-    // pointing UP, hence the +180° / atan2 ordering).
-    const deg = (Math.atan2(nx, ny) * 180) / Math.PI + 180;
+    // Point the triangle down the screen-space direction toward the target
+    // (the indicator triangle is authored pointing UP, matching atan2(nx, ny) = 0).
+    const deg = (Math.atan2(nx, ny) * 180) / Math.PI;
     this._arrow.style.transform =
       `translate3d(${px | 0}px, ${py | 0}px, 0) translate(-50%, -50%) rotate(${deg.toFixed(1)}deg)`;
     if (this._arrow.style.display !== "block") this._arrow.style.display = "block";
