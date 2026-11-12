@@ -600,6 +600,13 @@ const DETAIL_UNIFORM_DEFAULTS = Object.freeze({
 // so the order of patch installation never matters.
 function _patchSetCacheKey(material) {
   const u = material.userData || {};
+  const useConsolidated = !!(u.__depthBiasConsolidated || readDepthBiasConsolidatedFlag());
+  const hasBias = !!(u.__depthBiased || u.__floorBiased || u.__staticBiased || u.__hbDepthBiased || u.__depthBiasPatched);
+  const depthKey = useConsolidated
+    ? "|b" + (hasBias ? 1 : 0) + "|f0|s0"
+    : "|b" + (u.__depthBiased ? 1 : 0) +
+      "|f" + (u.__floorBiased ? 1 : 0) +
+      "|s" + (u.__staticBiased ? 1 : 0);
   return (
     "hb" +
     "|d" + (u.detailEnabled ? 1 : 0) +
@@ -615,8 +622,7 @@ function _patchSetCacheKey(material) {
     "|p" + (u.pomEnabled ? 1 : 0) +
     "|l" + (u.lightClampRetail ? 1 : 0) +
     "|a" + (u.__aoPatched ? 1 : 0) +
-    "|b" + (u.__depthBiased ? 1 : 0) +
-    "|f" + (u.__floorBiased ? 1 : 0) +
+    depthKey +
     // 2026-07-28 — the two patch flags that were shipped WITHOUT a key bit and
     // therefore silently collapsed onto the un-patched program. `__staticBiased`
     // (applyStaticDepthBias, 2026-07-06) and `__acBakedLight`
@@ -629,7 +635,6 @@ function _patchSetCacheKey(material) {
     // static lamps from the live pool on the strength of the bake. Interiors
     // rendered on ambient alone (measured: 28 programs live, zero carrying
     // `uAcBakedGain`). One bit each; the un-patched key is unchanged.
-    "|s" + (u.__staticBiased ? 1 : 0) +
     "|k" + (u.__acBakedLight ? 1 : 0) +
     // 2026-10-20 (improvement hunt building-fill-2) — `d` = the bake patch
     // compiled the direct-light loops out (`#undef RE_Direct`, default arm).
@@ -798,89 +803,123 @@ function _revDepthBiasGlsl(logDelta) {
 // while the fill still writes depth to occlude geometry behind it. Tunable via
 // the constant below — raise if a corner still flickers, lower if the fill
 // detaches at silhouettes.
+export const FILL_DEPTH_BIAS = 2.0e-4;
+export const FLOOR_DEPTH_BIAS = -2.0e-4;
+export const STATIC_DEPTH_BIAS = -4.0e-4;
+
+let _depthBiasConsolidatedOverride = null;
+
+export function readDepthBiasConsolidatedFlag() {
+  if (_depthBiasConsolidatedOverride !== null) return _depthBiasConsolidatedOverride;
+  try {
+    if (typeof window !== "undefined" && window.location) {
+      const v = new URLSearchParams(window.location.search).get("depthBiasConsolidated");
+      if (v === "on" || v === "1" || v === "true") return true;
+      if (v === "off" || v === "false" || v === "0") return false;
+    }
+  } catch (_) {}
+  if (typeof process !== "undefined" && process.env && (process.env.HB_DEPTH_BIAS_UNIFIED === "1" || process.env.HB_DEPTH_BIAS_CONSOLIDATED === "1")) {
+    return true;
+  }
+  return false;
+}
+
+export function setConsolidatedDepthBias(on = true) {
+  _depthBiasConsolidatedOverride = on;
+}
+
+function _applyUnifiedDepthBias(material, delta, flagName) {
+  if (!material) return;
+  material.userData = material.userData ?? {};
+  if (flagName) material.userData[flagName] = true;
+  material.userData.uHbLogDepthBias = delta;
+  material.userData.__hbLogDepthBias = delta;
+
+  if (material.userData.__depthBiasPatched) {
+    if (material.userData.depthBiasUniforms?.uHbLogDepthBias) {
+      material.userData.depthBiasUniforms.uHbLogDepthBias.value = delta;
+    }
+    return;
+  }
+
+  const useConsolidated = readDepthBiasConsolidatedFlag() || material.userData.__depthBiasConsolidated;
+
+  _chainBeforeCompile(material, (shader) => {
+    shader.uniforms.uHbLogDepthBias = {
+      value: material.userData?.uHbLogDepthBias ?? delta,
+    };
+
+    if (useConsolidated) {
+      shader.fragmentShader = shader.fragmentShader
+        .replace(
+          "void main() {",
+          "uniform float uHbLogDepthBias;\nvoid main() {",
+        )
+        .replace(
+          "#include <logdepthbuf_fragment>",
+          `#include <logdepthbuf_fragment>
+#if defined( USE_LOGARITHMIC_DEPTH_BUFFER ) || defined( USE_LOGDEPTHBUF )
+        gl_FragDepth += uHbLogDepthBias;
+#endif`,
+        );
+
+      shader.vertexShader = shader.vertexShader
+        .replace(
+          "void main() {",
+          "uniform float uHbLogDepthBias;\nvoid main() {",
+        )
+        .replace(
+          "#include <logdepthbuf_vertex>",
+          `#include <logdepthbuf_vertex>
+#ifdef USE_REVERSED_DEPTH_BUFFER
+        gl_Position.z *= pow(3001.0, -uHbLogDepthBias);
+#endif`,
+        );
+    } else {
+      const sign = delta >= 0 ? "+" : "-";
+      const absDeltaStr = Math.abs(delta).toExponential(1);
+      shader.fragmentShader = shader.fragmentShader.replace(
+        "#include <logdepthbuf_fragment>",
+        `#include <logdepthbuf_fragment>
+      #if defined( USE_LOGARITHMIC_DEPTH_BUFFER ) || defined( USE_LOGDEPTHBUF )
+        gl_FragDepth ${sign}= ${absDeltaStr};
+      #endif`,
+      );
+      shader.vertexShader = shader.vertexShader.replace(
+        "#include <logdepthbuf_vertex>",
+        "#include <logdepthbuf_vertex>" + _revDepthBiasGlsl(delta),
+      );
+    }
+
+    _defineLiveUserData(material, "depthBiasUniforms", shader.uniforms);
+  });
+
+  material.userData.__depthBiasPatched = true;
+}
+
 export function applyFillDepthBias(material) {
   if (!material || material.userData?.__depthBiased) return;
-  _chainBeforeCompile(material, (shader) => {
-    shader.fragmentShader = shader.fragmentShader.replace(
-      "#include <logdepthbuf_fragment>",
-      `#include <logdepthbuf_fragment>
-      #if defined( USE_LOGARITHMIC_DEPTH_BUFFER ) || defined( USE_LOGDEPTHBUF )
-        gl_FragDepth += 2.0e-4;
-      #endif`,
-    );
-    // ?reversedZ=on: the same bias on reversed clip z, after the last gl_Position
-    // write (scale < 1: pushed away). Compiles out under the log buffer.
-    shader.vertexShader = shader.vertexShader.replace(
-      "#include <logdepthbuf_vertex>",
-      "#include <logdepthbuf_vertex>" + _revDepthBiasGlsl(2.0e-4),
-    );
-  });
-  material.userData = material.userData ?? {};
-  material.userData.__depthBiased = true;
+  _applyUnifiedDepthBias(material, FILL_DEPTH_BIAS, "__depthBiased");
 }
 
-// 2026-06-15 — building/EnvCell floor-vs-terrain z-fight fix. Same log-depth
-// space as applyFillDepthBias, OPPOSITE sign. A SetupModel building's floor (or
-// an EnvCell floor) and the terrain beneath it write the IDENTICAL logarithmic
-// gl_FragDepth and are coplanar to ~cm at a building footprint, so under
-// GL_LESS the depth test is a tie → per-pixel/per-frame flicker (the "floor vs
-// grass, shows both" bug). Subtracting a tiny epsilon pulls the surface a hair
-// NEARER so it deterministically wins against the coplanar terrain. polygonOffset
-// is dead here (see applyFillDepthBias above — manual gl_FragDepth discards it).
-// The epsilon only breaks exact coplanar ties — far too small to push a floor up
-// through a real hill. Applied via getCachedFloorBias (cache-owned CLONE) so the
-// shared base material is never mutated.
 export function applyFloorDepthBias(material) {
   if (!material || material.userData?.__floorBiased) return;
-  _chainBeforeCompile(material, (shader) => {
-    shader.fragmentShader = shader.fragmentShader.replace(
-      "#include <logdepthbuf_fragment>",
-      `#include <logdepthbuf_fragment>
-      #if defined( USE_LOGARITHMIC_DEPTH_BUFFER ) || defined( USE_LOGDEPTHBUF )
-        gl_FragDepth -= 2.0e-4;
-      #endif`,
-    );
-    // ?reversedZ=on: the same bias on reversed clip z, after the last gl_Position
-    // write (scale > 1: pulled toward the eye). Compiles out under the log buffer.
-    shader.vertexShader = shader.vertexShader.replace(
-      "#include <logdepthbuf_vertex>",
-      "#include <logdepthbuf_vertex>" + _revDepthBiasGlsl(-2.0e-4),
-    );
-  });
-  material.userData = material.userData ?? {};
-  material.userData.__floorBiased = true;
+  _applyUnifiedDepthBias(material, FLOOR_DEPTH_BIAS, "__floorBiased");
 }
 
-// 2026-07-06 — cell-static décor z-fight fix. Wall/floor décor props (tapestries,
-// sconces, signs, rugs) are separate SetupModels placed FLUSH against an EnvCell
-// wall or floor, so the prop face and the cell surface write the IDENTICAL
-// logarithmic gl_FragDepth and tie under GL_LESS → per-pixel flicker (the
-// "z-fight near walls" seen in dungeon hallways + building interiors). Same
-// log-depth trick as applyFloorDepthBias, OPPOSITE of terrain, but a STRONGER
-// pull (−4e-4 vs the floor's −2e-4) so the décor wins even over a surface that
-// itself already carries the floor bias. The epsilon only breaks exact coplanar
-// ties — far too small to visibly detach a prop from its wall. Applied via
-// getCachedStaticBias (cache-owned CLONE) so the shared base is never mutated.
 export function applyStaticDepthBias(material) {
   if (!material || material.userData?.__staticBiased) return;
-  _chainBeforeCompile(material, (shader) => {
-    shader.fragmentShader = shader.fragmentShader.replace(
-      "#include <logdepthbuf_fragment>",
-      `#include <logdepthbuf_fragment>
-      #if defined( USE_LOGARITHMIC_DEPTH_BUFFER ) || defined( USE_LOGDEPTHBUF )
-        gl_FragDepth -= 4.0e-4;
-      #endif`,
-    );
-    // ?reversedZ=on: the same bias on reversed clip z, after the last gl_Position
-    // write (scale > 1: pulled toward the eye). Compiles out under the log buffer.
-    shader.vertexShader = shader.vertexShader.replace(
-      "#include <logdepthbuf_vertex>",
-      "#include <logdepthbuf_vertex>" + _revDepthBiasGlsl(-4.0e-4),
-    );
-  });
-  material.userData = material.userData ?? {};
-  material.userData.__staticBiased = true;
+  _applyUnifiedDepthBias(material, STATIC_DEPTH_BIAS, "__staticBiased");
 }
+
+export function applyLogDepthBias(material, delta = 0.0) {
+  if (!material) return;
+  material.userData = material.userData ?? {};
+  material.userData.__depthBiasConsolidated = true;
+  _applyUnifiedDepthBias(material, delta, "__hbDepthBiased");
+}
+
+export const applyDepthBias = applyLogDepthBias;
 
 // === RND-04 (2026-07-27) — BAKED STATIC LIGHT (retail vertex burn-in) ======
 //
@@ -1800,6 +1839,36 @@ export function pomGrazeEnabled(search) {
   }
 }
 
+let _pomGradOverride = null;
+
+/**
+ * `?pomGrad` — Interior/Singleton POM textureGrad.
+ * Evaluates derivatives (dFdx/dFdy) pre-loop and uses `textureGrad` for all in-loop heightmap,
+ * diffuse map, and normal map samples, avoiding divergent-loop undefined GLSL ES 3.00
+ * derivatives and ANGLE D3D11 loop-unrolling/FLATTEN stalls.
+ */
+export function pomGradEnabled(search) {
+  if (_pomGradOverride !== null) return _pomGradOverride;
+  try {
+    const q = typeof search === "string"
+      ? search
+      : (typeof window !== "undefined" && window.location ? window.location.search : "");
+    const v = new URLSearchParams(q || "").get("pomGrad");
+    if (v === "off" || v === "false" || v === "0" || v === "no") return false;
+    if (v === "on" || v === "true" || v === "1" || v === "yes") return true;
+  } catch (_) {}
+  if (typeof process !== "undefined" && process.env) {
+    if (process.env.HB_POM_GRAD === "1" || process.env.HB_POM_GRAD === "on") return true;
+    if (process.env.HB_POM_GRAD === "0" || process.env.HB_POM_GRAD === "off") return false;
+  }
+  if (typeof window !== "undefined" && typeof document !== "undefined") return true;
+  return false;
+}
+
+export function setPomGradEnabled(on = true) {
+  _pomGradOverride = on;
+}
+
 const POM_UNIFORM_DEFAULTS = Object.freeze({
   steps: 16,
   ultraSteps: 32,
@@ -1859,9 +1928,13 @@ function _installPomShaderPatch(material, heightTexture, opts = {}) {
     opts.shadowDarkness ?? POM_UNIFORM_DEFAULTS.shadowDarkness;
   // Mark on userData BEFORE _chainBeforeCompile so the test harness can
   // assert installation without waiting for first render.
+  const useGrad = opts?.grad !== undefined
+    ? !!opts.grad
+    : (material?.userData?.pomGrad !== undefined ? !!material.userData.pomGrad : pomGradEnabled());
   material.userData = {
     ...(material.userData || {}),
     pomEnabled: true,
+    pomGrad: useGrad,
     pomTextureName: heightTexture.name ?? null,
     pomUniforms: {
       steps,
@@ -1894,6 +1967,8 @@ function _installPomShaderPatch(material, heightTexture, opts = {}) {
     // fixed step count, hard `z > 0.15` cut) for a same-session A/B.
     shader.uniforms.uPomGraze = { value: pomGrazeEnabled() ? 1.0 : 0.0 };
 
+    const activeUseGrad = activeMat?.userData?.pomGrad ?? useGrad;
+
     // S4 fix (2026-07-30) — the vertex-stage TBN this patch used to
     // fabricate (`cross(view-space up, normal)`) had no relationship
     // to the UV layout and ROTATED WITH THE CAMERA — the parallax
@@ -1909,6 +1984,11 @@ function _installPomShaderPatch(material, heightTexture, opts = {}) {
     // patch the `<map_fragment>` chunk so the diffuse sample uses the
     // perturbed UV. We have to inject BEFORE `<map_fragment>` so the
     // perturbed UV is in scope by the time the chunk samples `map`.
+    const gradCommonDecl = activeUseGrad ? "\nvec2 _pomGx = vec2(0.0);\nvec2 _pomGy = vec2(0.0);" : "";
+    const samplePomHeight = activeUseGrad
+      ? (uvExpr) => `textureGrad(uPomMap, ${uvExpr}, _pomGx, _pomGy).r`
+      : (uvExpr) => `texture2D(uPomMap, ${uvExpr}).r`;
+
     shader.fragmentShader = shader.fragmentShader.replace(
       "#include <common>",
       `#include <common>
@@ -1926,7 +2006,7 @@ uniform float uPomGraze;
 // covers every early-out so the self-shadow block self-gates.
 mat3 _pomTbnG;
 float _pomLodG = 0.0;
-vec2 _pomUvG = vec2(0.0);
+vec2 _pomUvG = vec2(0.0);${gradCommonDecl}
 
 // Ray-march a heightfield in tangent UV space. Returns the perturbed
 // UV — sample diffuse/normal/etc at this UV to get the POM look.
@@ -1971,13 +2051,13 @@ vec2 _pomPerturbedUv(vec2 baseUv, vec3 vTanDir, float depthScale, int steps) {
   // lines carve). Convert to depth: depth = 1 - height. We walk INTO
   // the surface (current layer depth increases), and stop when our
   // current depth exceeds the heightmap depth at the current UV.
-  float currentHeight = 1.0 - texture2D(uPomMap, currentUv).r;
+  float currentHeight = 1.0 - ${samplePomHeight("currentUv")};
   for (int i = 0; i < 64; i++) {
     if (i >= steps) break;
     if (currentLayerDepth >= currentHeight) break;
     currentUv -= uvStep;
     currentLayerDepth += layerStep;
-    currentHeight = 1.0 - texture2D(uPomMap, currentUv).r;
+    currentHeight = 1.0 - ${samplePomHeight("currentUv")};
   }
   // One-step secant refinement: lerp between the last two samples by
   // the crossing fraction. afterDepth is <= 0 once the ray crossed and
@@ -1987,7 +2067,7 @@ vec2 _pomPerturbedUv(vec2 baseUv, vec3 vTanDir, float depthScale, int steps) {
   // common texel) keeps the un-refined uv.
   vec2 prevUv = currentUv + uvStep;
   float afterDepth = currentHeight - currentLayerDepth;
-  float beforeDepth = (1.0 - texture2D(uPomMap, prevUv).r)
+  float beforeDepth = (1.0 - ${samplePomHeight("prevUv")})
                       - (currentLayerDepth - layerStep);
   float den = afterDepth - beforeDepth;
   float w = den < -1e-6 ? clamp(afterDepth / den, 0.0, 1.0) : 0.0;
@@ -2008,7 +2088,7 @@ float _pomShadow(vec2 hitUv, float hitDepth, vec3 lTan, float depthScale, int sS
   for (int i = 0; i < 16; i++) {
     if (i >= sSteps) break;
     if (currentDepth <= 0.0) break;
-    float h = 1.0 - texture2D(uPomMap, currentUv).r;
+    float h = 1.0 - ${samplePomHeight("currentUv")};
     if (h < currentDepth) {
       // Heightfield is ABOVE our ray (occluder blocking sun).
       return uPomShadowDarkness;
@@ -2028,11 +2108,16 @@ float _pomShadow(vec2 hitUv, float hitDepth, vec3 lTan, float depthScale, int sS
     //
     // LOD ramp: blend the perturbed-UV diffuse toward the flat-UV
     // diffuse over the [uPomLodNear, uPomLodFar] camera-distance band.
+    const gradEval = activeUseGrad ? "\n_pomGx = dFdx(vMapUv);\n_pomGy = dFdy(vMapUv);" : "";
+    const sampleMap = activeUseGrad
+      ? "vec4 sampledDiffuseColor = textureGrad(map, _pomUv, _pomGx, _pomGy);"
+      : "vec4 sampledDiffuseColor = texture2D(map, _pomUv);";
+
     shader.fragmentShader = shader.fragmentShader.replace(
       "#include <map_fragment>",
       `// Phase 3.1 POM begin (S4-fixed frame: fragment-stage getTangentFrame)
 vec2 _pomBaseUv = vMapUv;
-vec2 _pomUv = _pomBaseUv;
+vec2 _pomUv = _pomBaseUv;${gradEval}
 // The TBN is computed UNCONDITIONALLY: getTangentFrame takes dFdx/dFdy,
 // and a derivative inside the non-uniform LOD branch is undefined
 // behaviour. Four derivatives — cheap.
@@ -2078,7 +2163,7 @@ if (_pomLod > 0.001) {
 }
 _pomUvG = _pomUv;
 #ifdef USE_MAP
-vec4 sampledDiffuseColor = texture2D(map, _pomUv);
+${sampleMap}
 #ifdef DECODE_VIDEO_TEXTURE
 sampledDiffuseColor = sRGBTransferOETF(sampledDiffuseColor);
 #endif
@@ -2094,14 +2179,25 @@ diffuseColor *= sampledDiffuseColor;
     // Three.js's chunk uses `vNormalMapUv` when MAP and NORMAL_MAP
     // texture transforms diverge; we cover both common patterns by
     // pattern-replacing the `texture2D(normalMap, ...)` invocation.
-    shader.fragmentShader = shader.fragmentShader.replace(
-      "texture2D( normalMap, vNormalMapUv )",
-      "texture2D( normalMap, _pomUv )"
-    );
-    shader.fragmentShader = shader.fragmentShader.replace(
-      "texture2D( normalMap, vMapUv )",
-      "texture2D( normalMap, _pomUv )"
-    );
+    if (activeUseGrad) {
+      shader.fragmentShader = shader.fragmentShader.replace(
+        "texture2D( normalMap, vNormalMapUv )",
+        "textureGrad( normalMap, _pomUv, _pomGx, _pomGy )"
+      );
+      shader.fragmentShader = shader.fragmentShader.replace(
+        "texture2D( normalMap, vMapUv )",
+        "textureGrad( normalMap, _pomUv, _pomGx, _pomGy )"
+      );
+    } else {
+      shader.fragmentShader = shader.fragmentShader.replace(
+        "texture2D( normalMap, vNormalMapUv )",
+        "texture2D( normalMap, _pomUv )"
+      );
+      shader.fragmentShader = shader.fragmentShader.replace(
+        "texture2D( normalMap, vMapUv )",
+        "texture2D( normalMap, _pomUv )"
+      );
+    }
 
     // Self-shadowing (S4 fix): march toward the REAL sun. The legacy
     // proxy (the negated tangent view direction) made the micro-shadow
@@ -2112,12 +2208,16 @@ diffuseColor *= sampledDiffuseColor;
     // transform it with the same fragment-stage TBN the primary march
     // used (`_pomTbnG`). `_pomLodG` is non-zero only when the primary
     // march actually ran, so this self-gates on every early-out.
+    const sampleHitDepth = activeUseGrad
+      ? `float _pomHitDepth = 1.0 - textureGrad(uPomMap, _pomUvG, _pomGx, _pomGy).r;`
+      : `float _pomHitDepth = 1.0 - texture2D(uPomMap, _pomUvG).r;`;
+
     shader.fragmentShader = shader.fragmentShader.replace(
       "#include <dithering_fragment>",
       `#if NUM_DIR_LIGHTS > 0
 if (_pomLodG > 0.001) {
   vec3 _pomLightTan = normalize(transpose(_pomTbnG) * directionalLights[0].direction);
-  float _pomHitDepth = 1.0 - texture2D(uPomMap, _pomUvG).r;
+  ${sampleHitDepth}
   float _pomDist = length(vViewPosition);
   float _pomMid = mix(uPomLodNear, uPomLodFar, 0.5);
   int _pomEffShadowSteps = (_pomDist > _pomMid)
@@ -3371,6 +3471,7 @@ function _installLightClampShaderPatch(material) {
 export function installLightClampShaderPatch(material) {
   _installLightClampShaderPatch(material);
 }
+export const installRetailLightClamp = installLightClampShaderPatch;
 
 // ===========================================================================
 // `?matBudgetMB=N` — byte-budget LRU over the four per-surface-DID maps
@@ -3772,11 +3873,13 @@ const _RESEAT_KEEP_USERDATA = [
   "__aoPatched", "__depthBiased", "__vfxSetKey", "__vfxColorPassOnly",
   "detailEnabled", "csmEnabled", "lightClampRetail",
   "__envDetailKind", "microCreviceAo", "microContactShadow", "__creviceAo", "__microShadow",
+  "__depthBiasPatched", "__hbDepthBiased", "uHbLogDepthBias", "__hbLogDepthBias", "__depthBiasConsolidated",
 ];
 /** Non-enumerable live handles (see `_defineLiveUserData`) — a spread skips them. */
 const _LIVE_USERDATA_KEYS = [
   "acBakedLightUniforms", "detailShaderUniforms", "csmShaderUniforms",
   "pomShaderUniforms", "lightClampShaderUniforms", "creviceAoShaderUniforms", "microSurfaceShaderUniforms",
+  "depthBiasUniforms",
 ];
 
 // === 2026-10-20 (improvement hunt gpu-shading-2, CSM half) — clone CSM =======
@@ -3867,6 +3970,27 @@ export function _reinstallClonePom(clone, base, opts) {
   }
 }
 
+const _cloneLightClampGated = new WeakSet();
+export function _reinstallCloneLightClamp(clone, base) {
+  if (!clone || _cloneLightClampGated.has(clone)) return;
+  if (clone.userData) {
+    delete clone.userData.lightClampRetail;
+    delete clone.userData.__lightClampPatched;
+  }
+  if (!(base && base.userData && (base.userData.lightClampRetail || base.userData.__lightClampPatched))) return;
+  const prev = clone.onBeforeCompile;
+  clone.onBeforeCompile = THREE.Material.prototype.onBeforeCompile;
+  _installLightClampShaderPatch(clone);
+  const clampHook = clone.onBeforeCompile;
+  clone.onBeforeCompile = prev;
+  _chainBeforeCompile(clone, function cloneLightClampGate(shader, renderer) {
+    if (this && this.userData && (this.userData.lightClampRetail || this.userData.__lightClampPatched)) {
+      clampHook.call(this, shader, renderer);
+    }
+  });
+  _cloneLightClampGated.add(clone);
+}
+
 function _reseatSurfaceState(clone, base) {
   for (const k of _RESEAT_FIELDS) clone[k] = base[k];
   // Colour-valued fields are objects — copy VALUES so the clone never aliases
@@ -3889,6 +4013,10 @@ function _reseatSurfaceState(clone, base) {
   // across re-installs. Clones without the hook keep the old behaviour.
   if (_cloneCsmGated.has(clone) && !(base.userData && base.userData.csmEnabled)) {
     clone.userData.csmEnabled = false;
+  }
+  if (_cloneLightClampGated.has(clone) && !(base.userData && (base.userData.lightClampRetail || base.userData.__lightClampPatched))) {
+    clone.userData.lightClampRetail = false;
+    clone.userData.__lightClampPatched = false;
   }
   if (_clonePomGated.has(clone) && !(base.userData && base.userData.pomEnabled)) {
     clone.userData.pomEnabled = false;
@@ -3938,6 +4066,9 @@ function _reseatSurfaceState(clone, base) {
     if (clone.userData?.microSurfaceShaderUniforms?.uPomMap && newHTex) {
       clone.userData.microSurfaceShaderUniforms.uPomMap.value = newHTex;
     }
+  }
+  if (!_cloneLightClampGated.has(clone) && (base.userData && (base.userData.lightClampRetail || base.userData.__lightClampPatched))) {
+    _reinstallCloneLightClamp(clone, base);
   }
   if (!_clonePomGated.has(clone) && (base.userData && base.userData.pomEnabled)) {
     _reinstallClonePom(clone, base);
@@ -4761,6 +4892,8 @@ export class MaterialCache {
       // (Material.copy hands back a JSON round-trip) and carry the height plane.
       front.userData = { ...(base.userData || {}), __cacheOwned: true };
       _inheritHeightTex(base, front);
+      _reinstallCloneCsm(front, base, this.csmState);
+      _reinstallCloneLightClamp(front, base);
       _reinstallClonePom(front, base, this.pomOpts);
       this.frontSideMaterials.set(key, front);
     }
@@ -4786,6 +4919,7 @@ export class MaterialCache {
       _inheritHeightTex(base, v);
       // gpu-shading-2: the CSM receiver the clone lost (no-op with CSM off).
       _reinstallCloneCsm(v, base, this.csmState);
+      _reinstallCloneLightClamp(v, base);
       _reinstallClonePom(v, base, this.pomOpts);
       applyFloorDepthBias(v);
       this.floorBiasMaterials.set(key, v);
@@ -4821,6 +4955,7 @@ export class MaterialCache {
       _inheritHeightTex(base, v);
       // gpu-shading-2: the CSM receiver the clone lost (no-op with CSM off).
       _reinstallCloneCsm(v, base, this.csmState);
+      _reinstallCloneLightClamp(v, base);
       _reinstallClonePom(v, base, this.pomOpts);
       applyBakedVertexLightPatch(v, { suppressDirect: VERTEX_BAKE.suppressDirect });
       this.cellBakedMaterials.set(key, v);
@@ -4872,6 +5007,7 @@ export class MaterialCache {
       _inheritHeightTex(base, v);
       // gpu-shading-2: the CSM receiver the clone lost (no-op with CSM off).
       _reinstallCloneCsm(v, base, this.csmState);
+      _reinstallCloneLightClamp(v, base);
       _reinstallClonePom(v, base, this.pomOpts);
       applyStaticDepthBias(v);
       this.staticBiasMaterials.set(key, v);
@@ -4914,6 +5050,7 @@ export class MaterialCache {
       // `transformed` at begin_vertex, so the receiver's world position (read
       // after project_vertex) follows the swaying geometry.
       _reinstallCloneCsm(v, base, this.csmState);
+      _reinstallCloneLightClamp(v, base);
       _reinstallClonePom(v, base, this.pomOpts);
       try { builder?.(v); } catch (e) { console.warn(`[vfx] getCachedVariant builder failed for ${key}:`, e); }
       v.needsUpdate = true;
@@ -4947,6 +5084,10 @@ export class MaterialCache {
       // getCachedVariant. The clone shares the paletted base's owned texture
       // (Material.clone copies the .map reference; dispose() never frees textures).
       v.userData = { ...(baseMaterial.userData || {}), __cacheOwned: true, __vfxSetKey: setKey, __vfxColorPassOnly: true };
+      _inheritHeightTex(baseMaterial, v);
+      _reinstallCloneCsm(v, baseMaterial, this.csmState);
+      _reinstallCloneLightClamp(v, baseMaterial);
+      _reinstallClonePom(v, baseMaterial, this.pomOpts);
       try { builder?.(v); } catch (e) { console.warn(`[vfx] getCachedVariantFromPaletted builder failed for ${key}:`, e); }
       v.needsUpdate = true;
       this.vfxPalettedVariants.set(key, v);
