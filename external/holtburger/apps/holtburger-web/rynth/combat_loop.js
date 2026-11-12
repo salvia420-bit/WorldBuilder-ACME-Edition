@@ -1238,7 +1238,11 @@ export class RynthCombatLoop {
       const pos = h.TryGetObjectPosition(g);
       if (!pos) continue; // absence = C# transient-miss encoding (keeps the lock via grace)
       const cell = pos.objCellId >>> 0;
-      const dist = Math.hypot(gX(cell, pos.x) - meGx, gY(cell, pos.y) - meGy, pos.z - me.z);
+      const meCell = me.objCellId >>> 0;
+      const sameLb = (cell >>> 16) === (meCell >>> 16);
+      const bothOutdoor = (cell & 0xffff) < 0x100 && (meCell & 0xffff) < 0x100;
+      if (!sameLb && !bothOutdoor) continue;
+      const dist = sameLb ? Math.hypot(pos.x - me.x, pos.y - me.y, pos.z - me.z) : Math.hypot(gX(cell, pos.x) - meGx, gY(cell, pos.y) - meGy, pos.z - me.z);
       if (g !== preLock && dist > NB_RANGE_M) continue;
       const killedAt = this.recentlyKilled.get(g);
       // One desc-flags read feeds Attackable + AttackableUnknown (both sides

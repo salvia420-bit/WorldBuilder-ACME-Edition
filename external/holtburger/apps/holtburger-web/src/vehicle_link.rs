@@ -211,6 +211,15 @@ pub(crate) fn clear_seat() {
     })
 }
 
+pub(crate) fn reset() {
+    LINK.with(|l| {
+        let mut l = l.borrow_mut();
+        l.inbox.clear();
+        l.seat = None;
+        l.released_vehicle = None;
+    })
+}
+
 pub(crate) fn seat_pose() -> Option<SeatPose> {
     LINK.with(|l| l.borrow().seat)
 }

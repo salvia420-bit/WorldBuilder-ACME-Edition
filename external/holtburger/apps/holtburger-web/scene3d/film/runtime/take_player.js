@@ -859,7 +859,7 @@ export function createTakePlayer(deps = {}) {
   let run = null;
   let abortRequested = false;
   /** @type {object|null} */
-  let recorderRef = null;
+  let recorderRef = (d.recorder && typeof d.recorder === "object") ? d.recorder : null;
   /** @type {object|null} */
   let lastTable = null;
   /** @type {object|null} */
@@ -3807,7 +3807,23 @@ export function createTakePlayer(deps = {}) {
   function abort() {
     const was = !!run;
     if (run) abortRequested = true;
+    if (recorderRef) {
+      try {
+        if (typeof recorderRef.abort === "function") recorderRef.abort("aborted");
+      } catch (_) {}
+    }
     return { ok: true, wasRunning: was };
+  }
+
+  function dispose() {
+    abort();
+    if (recorderRef) {
+      try {
+        if (typeof recorderRef.dispose === "function") recorderRef.dispose();
+        else if (typeof recorderRef.abort === "function") recorderRef.abort("disposed");
+      } catch (_) {}
+      recorderRef = null;
+    }
   }
 
   function status() {
@@ -3825,6 +3841,7 @@ export function createTakePlayer(deps = {}) {
     rehearse,
     shoot,
     abort,
+    dispose,
     status,
     currentRecorder: () => recorderRef,
     lastRealisedTable: () => lastTable,
