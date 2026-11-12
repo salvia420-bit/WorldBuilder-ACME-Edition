@@ -135,6 +135,48 @@ import {
   setBurstAge,
   setBurstLook,
 } from "./play_effect_burst_fx.js";
+import { ScriptManager } from "./script_manager.js";
+import { currentTime } from "./particles/time_rng.js";
+
+// ── Wire 0xF755 PlayScript ScriptManager FIFO Queue ──
+const _playEffectScriptManagers = new Map();
+
+function _getScriptManagerForEntity(em, guid) {
+  const gKey = guid >>> 0;
+  if (em && em._scriptManagersForGuid) {
+    let mgr = em._scriptManagersForGuid.get(gKey);
+    if (!mgr) {
+      mgr = new ScriptManager({ owner: gKey });
+      em._scriptManagersForGuid.set(gKey, mgr);
+    }
+    return mgr;
+  }
+  let mgr = _playEffectScriptManagers.get(gKey);
+  if (!mgr) {
+    mgr = new ScriptManager({ owner: gKey });
+    _playEffectScriptManagers.set(gKey, mgr);
+  }
+  return mgr;
+}
+
+function _ensureManagerPump(mgr) {
+  if (mgr._pumpTimer || !mgr.active) return;
+  const now = currentTime();
+  const nextTime = mgr._nextHookTime;
+  const delayMs = Number.isFinite(nextTime)
+    ? Math.max(0, Math.min(50, Math.round(((nextTime - now) * 1000) || 16)))
+    : 16;
+  mgr._pumpTimer = setTimeout(() => {
+    mgr._pumpTimer = null;
+    mgr.update();
+    if (mgr.active) _ensureManagerPump(mgr);
+  }, delayMs);
+}
+
+export function getPlayEffectScriptManager(emOrGuid, maybeGuid) {
+  if (typeof emOrGuid === "number") return _playEffectScriptManagers.get(emOrGuid >>> 0) || null;
+  return _getScriptManagerForEntity(emOrGuid, maybeGuid);
+}
 
 /** `?ragdoll` (DEFAULT ON, `=off` escape) — hoisted; the URL cannot change. */
 const _RAGDOLL_ON_FOR_KILL_DIR = (() => {
@@ -2513,6 +2555,8 @@ async function _tryResolveRealVfx(targetGuid, scriptId, speed, _t0, silent = fal
   // retail runs every PhysicsScript hook (SoundHook/SoundTableHook/
   // SoundTweakedHook::Execute, acclient.c:342188-342221).
   // `?playEffectSound=off` skips it.
+  const queueEntries = [];
+
   if (!silent && PLAY_EFFECT_SOUND_ON && typeof em._firePlayEffectSoundHook === "function") {
     for (const e of entriesJs) {
       const ht = e.hookType | 0;
@@ -2542,11 +2586,25 @@ async function _tryResolveRealVfx(targetGuid, scriptId, speed, _t0, silent = fal
       } else if (desc.soundWaveId === 0) {
         continue;
       }
-      _realVfxStats.soundHooksFired += 1;
-      em._firePlayEffectSoundHook(targetGuid >>> 0, desc);
+      queueEntries.push({
+        startTime: desc.startTime,
+        execute: () => {
+          _realVfxStats.soundHooksFired += 1;
+          const immediateDesc = { ...desc, startTime: 0 };
+          em._firePlayEffectSoundHook(targetGuid >>> 0, immediateDesc);
+        },
+      });
     }
   }
-  if (soundOnly) return false;
+  if (soundOnly) {
+    if (queueEntries.length > 0) {
+      const mgr = _getScriptManagerForEntity(em, targetGuid);
+      const maxTime = Math.max(0, ...queueEntries.map((q) => q.startTime));
+      mgr.addScript(pesId || scriptId, queueEntries, { length: maxTime + 0.05 });
+      _ensureManagerPump(mgr);
+    }
+    return false;
+  }
 
   // HIDEFX (2026-10-07, `?playEffectLifecycle`): run the script's
   // StopParticle(15) / DestroyParticle(14) hooks — retail
@@ -2569,19 +2627,22 @@ async function _tryResolveRealVfx(targetGuid, scriptId, speed, _t0, silent = fal
         .getUint32(0, true) >>> 0;
       if (handle === 0) continue;
       stopHookCount += 1;
-      const delayMs = Math.max(0, (+e.startTime || 0) * 1000);
-      setTimeout(() => {
-        if (!_isLiveInstance(em, targetGuid, inst)) return;
-        // `scopedOnly`: a script handle addresses the per-object handle table
-        // ONLY — never an unrelated emitter whose global facade id == handle.
-        if (ht === 15) {
-          try { ownerRegistry.stopEmitter(targetGuid >>> 0, handle, { scopedOnly: true }); } catch (_) {}
-          _realVfxStats.stopHooksFired += 1;
-        } else {
-          try { ownerRegistry.destroyEmitter(targetGuid >>> 0, handle, { scopedOnly: true }); } catch (_) {}
-          _realVfxStats.destroyHooksFired += 1;
-        }
-      }, delayMs);
+      const hookStartTime = Math.max(0, +e.startTime || 0);
+      queueEntries.push({
+        startTime: hookStartTime,
+        execute: () => {
+          if (!_isLiveInstance(em, targetGuid, inst)) return;
+          // `scopedOnly`: a script handle addresses the per-object handle table
+          // ONLY — never an unrelated emitter whose global facade id == handle.
+          if (ht === 15) {
+            try { ownerRegistry.stopEmitter(targetGuid >>> 0, handle, { scopedOnly: true }); } catch (_) {}
+            _realVfxStats.stopHooksFired += 1;
+          } else {
+            try { ownerRegistry.destroyEmitter(targetGuid >>> 0, handle, { scopedOnly: true }); } catch (_) {}
+            _realVfxStats.destroyHooksFired += 1;
+          }
+        },
+      });
     }
     // A played UnHide ends the guid's hidden-state hold however it arrived
     // (client-local set_hidden path or a server that does send 0x75).
@@ -2597,6 +2658,10 @@ async function _tryResolveRealVfx(targetGuid, scriptId, speed, _t0, silent = fal
   if (particleHookCount === 0 && stopHookCount > 0) {
     // A stop-only script (UnHide) IS the real effect — no placeholder upgrade
     // is owed and it is not a `noCreateParticleHook` miss.
+    const mgr = _getScriptManagerForEntity(em, targetGuid);
+    const maxTime = Math.max(0, ...queueEntries.map((q) => q.startTime));
+    mgr.addScript(pesId || scriptId, queueEntries, { length: maxTime + 0.05 });
+    _ensureManagerPump(mgr);
     _castLat("stop", t0, `stop/destroy hooks=${stopHookCount}`);
     // eslint-disable-next-line no-console
     console.log(
@@ -2822,108 +2887,116 @@ async function _tryResolveRealVfx(targetGuid, scriptId, speed, _t0, silent = fal
       ? ((e.createParticleEmitterInstanceId >>> 0) || 0)
       : 0;
 
-    // StartTime-driven schedule (entities.js:~6649/~6738 pattern).
-    const startDelayMs = Math.max(0, (+e.startTime || 0) * 1000);
+    // StartTime-driven schedule via ScriptManager queue (replaces raw setTimeout).
+    const hookStartTime = Math.max(0, +e.startTime || 0);
+    const startDelayMs = hookStartTime * 1000;
     if (startDelayMs > maxStartTimeMs) maxStartTimeMs = startDelayMs;
     pendingSpawnCount += 1;
-    // Retail StartTime is a DELIBERATE delay (ScriptManager::AddScript
-    // schedules each hook at cur_time + start_time). If `attach` lands far
-    // after `emitters`, check this number before blaming the network.
     _castLat("sched", t0, `emitter=0x${emitterDid.toString(16)} startTime=${startDelayMs.toFixed(0)}ms`);
-    setTimeout(() => {
-      // Wave-1 review (RP6 cap): if this group was FIFO-evicted under
-      // concurrent-emitter cap pressure during the StartTime delay, do
-      // NOT spawn the late emitter — the eviction's force-destroy already
-      // ran and a late spawn would escape the cap. (`_rp6Group` is declared
-      // ABOVE the loop, so it's always initialized when this callback fires —
-      // even when a StartTime=0 timer races the loop's `await`.)
-      if (_rp6Group._evicted) return;
-      // The target may have despawned during the StartTime delay; if so, skip
-      // the spawn. IDENTITY guard, not `.has()`: a same-guid respawn (LOD
-      // recycle / death+recreate) inside the delay answers `.has()` true while
-      // the captured `inst` is the DISPOSED rig, so `parent: inst.root` would
-      // strand the emitter on a detached root. Same shape as the established
-      // entities.js sibling guards (:5315 / :5414 / :11388).
-      if (!_isLiveInstance(em, targetGuid, inst)) return;
-      const req = {
-        emitterInfo,
-        parent: inst.root,
-        partIndex,
-        parentOffset: offset,
-        blocking: blockingHook,
-        renderLayer: entityParticleRenderLayer(), // the target entity's layer (particles/render_layer.js)
-      };
-      if (scopedHandle !== 0) req.emitterId = scopedHandle;
-      // A11-S2: on-path, register under the TARGET entity's guid owner —
-      // entity-remove's single `destroyAllForOwner` then reaps PlayEffect
-      // one-shots too (and the facade's epoch tombstone covers a despawn
-      // racing this very resolve, replacing the manual destroy below).
-      (particleOwnerOn()
-        ? ownerRegistry.addEmitter(targetGuid >>> 0, wm, req)
-        : wm.addEmitter(req))
-        .then((emitterId) => {
-          _castLat("attach", t0, `emitter=0x${emitterDid.toString(16)} id=${emitterId}`);
-          if (emitterId !== 0) {
-            // Wave-1 review: a despawn that raced this addEmitter resolve
-            // already tore down (and dropped) this guid's per-emitter
-            // bucket; re-seeding it would strand a live emitter the
-            // entity-remove path can no longer reap. Destroy it now.
-            // (A11-S2 on-path: the facade already returned 0 + self-
-            // destroyed in that race, so this branch only acts off-path.)
-            // Identity guard again (see the StartTime callback above): the
-            // despawn may have landed DURING the addEmitter await, and a
-            // same-guid respawn must not adopt this emitter.
-            if (!_isLiveInstance(em, targetGuid, inst)) {
-              if (particleOwnerOn()) {
-                try { ownerRegistry.destroySome(targetGuid >>> 0, [emitterId]); } catch (_) {}
-              } else {
-                try { wm.destroyParticleEmitter(emitterId); } catch (_) {}
+
+    queueEntries.push({
+      startTime: hookStartTime,
+      execute: () => {
+        // Wave-1 review (RP6 cap): if this group was FIFO-evicted under
+        // concurrent-emitter cap pressure during the StartTime delay, do
+        // NOT spawn the late emitter — the eviction's force-destroy already
+        // ran and a late spawn would escape the cap. (`_rp6Group` is declared
+        // ABOVE the loop, so it's always initialized when this callback fires —
+        // even when a StartTime=0 timer races the loop's `await`.)
+        if (_rp6Group._evicted) return;
+        // The target may have despawned during the StartTime delay; if so, skip
+        // the spawn. IDENTITY guard, not `.has()`: a same-guid respawn (LOD
+        // recycle / death+recreate) inside the delay answers `.has()` true while
+        // the captured `inst` is the DISPOSED rig, so `parent: inst.root` would
+        // strand the emitter on a detached root. Same shape as the established
+        // entities.js sibling guards (:5315 / :5414 / :11388).
+        if (!_isLiveInstance(em, targetGuid, inst)) return;
+        const req = {
+          emitterInfo,
+          parent: inst.root,
+          partIndex,
+          parentOffset: offset,
+          blocking: blockingHook,
+          renderLayer: entityParticleRenderLayer(), // the target entity's layer (particles/render_layer.js)
+        };
+        if (scopedHandle !== 0) req.emitterId = scopedHandle;
+        // A11-S2: on-path, register under the TARGET entity's guid owner —
+        // entity-remove's single `destroyAllForOwner` then reaps PlayEffect
+        // one-shots too (and the facade's epoch tombstone covers a despawn
+        // racing this very resolve, replacing the manual destroy below).
+        (particleOwnerOn()
+          ? ownerRegistry.addEmitter(targetGuid >>> 0, wm, req)
+          : wm.addEmitter(req))
+          .then((emitterId) => {
+            _castLat("attach", t0, `emitter=0x${emitterDid.toString(16)} id=${emitterId}`);
+            if (emitterId !== 0) {
+              // Wave-1 review: a despawn that raced this addEmitter resolve
+              // already tore down (and dropped) this guid's per-emitter
+              // bucket; re-seeding it would strand a live emitter the
+              // entity-remove path can no longer reap. Destroy it now.
+              // (A11-S2 on-path: the facade already returned 0 + self-
+              // destroyed in that race, so this branch only acts off-path.)
+              // Identity guard again (see the StartTime callback above): the
+              // despawn may have landed DURING the addEmitter await, and a
+              // same-guid respawn must not adopt this emitter.
+              if (!_isLiveInstance(em, targetGuid, inst)) {
+                if (particleOwnerOn()) {
+                  try { ownerRegistry.destroySome(targetGuid >>> 0, [emitterId]); } catch (_) {}
+                } else {
+                  try { wm.destroyParticleEmitter(emitterId); } catch (_) {}
+                }
+                return;
               }
-              return;
-            }
-            spawnedEmitterIds.push(emitterId);
-            // HIDEFX (2026-10-07): the attach may land AFTER this group's
-            // lifecycle already ended — the one-shot reaper ran (it only
-            // reaps ids already in the list), or the hidden-state hold was
-            // released. Both used to leak the emitter for the session, and an
-            // infinite (0/0) emitter like Hide's then emits forever.
-            if (PLAY_EFFECT_LIFECYCLE_ON) {
-              if (_rp6Group._held) {
-                if (_rp6Group._released) _stopAndReapIds(targetGuid >>> 0, [emitterId]);
-              } else if (_rp6Group._reaped) {
-                _reapLateAttach(em, wm, targetGuid >>> 0, emitterId);
+              spawnedEmitterIds.push(emitterId);
+              // HIDEFX (2026-10-07): the attach may land AFTER this group's
+              // lifecycle already ended — the one-shot reaper ran (it only
+              // reaps ids already in the list), or the hidden-state hold was
+              // released. Both used to leak the emitter for the session, and an
+              // infinite (0/0) emitter like Hide's then emits forever.
+              if (PLAY_EFFECT_LIFECYCLE_ON) {
+                if (_rp6Group._held) {
+                  if (_rp6Group._released) _stopAndReapIds(targetGuid >>> 0, [emitterId]);
+                } else if (_rp6Group._reaped) {
+                  _reapLateAttach(em, wm, targetGuid >>> 0, emitterId);
+                }
               }
+              // Keep the per-guid tracking honest as late hooks land so
+              // entity-remove can tear them down (the synchronous block
+              // below created the array; push into the live one if it
+              // still exists, otherwise re-seed it). A11-S2 on-path: the
+              // facade is the registry of record — skip the legacy map.
+              if (particleOwnerOn()) return;
+              let perGuidIds = em._particleEmittersForGuid.get(targetGuid);
+              if (!perGuidIds) {
+                perGuidIds = [];
+                em._particleEmittersForGuid.set(targetGuid, perGuidIds);
+              }
+              perGuidIds.push(emitterId);
+            } else {
+              _realVfxStats.missAddEmitter += 1;
             }
-            // Keep the per-guid tracking honest as late hooks land so
-            // entity-remove can tear them down (the synchronous block
-            // below created the array; push into the live one if it
-            // still exists, otherwise re-seed it). A11-S2 on-path: the
-            // facade is the registry of record — skip the legacy map.
-            if (particleOwnerOn()) return;
-            let perGuidIds = em._particleEmittersForGuid.get(targetGuid);
-            if (!perGuidIds) {
-              perGuidIds = [];
-              em._particleEmittersForGuid.set(targetGuid, perGuidIds);
-            }
-            perGuidIds.push(emitterId);
-          } else {
+          })
+          .catch((err) => {
             _realVfxStats.missAddEmitter += 1;
-          }
-        })
-        .catch((err) => {
-          _realVfxStats.missAddEmitter += 1;
-          // eslint-disable-next-line no-console
-          console.warn(
-            `[play-effect-vfx/real] addEmitter(0x${emitterDid.toString(16)}) threw:`,
-            err,
-          );
-        });
-    }, startDelayMs);
+            // eslint-disable-next-line no-console
+            console.warn(
+              `[play-effect-vfx/real] addEmitter(0x${emitterDid.toString(16)}) threw:`,
+              err,
+            );
+          });
+      },
+    });
   }
 
   if (pendingSpawnCount === 0) {
     return false;
   }
+
+  // Queue particle/sound hooks in FIFO order onto target entity's ScriptManager
+  const mgr = _getScriptManagerForEntity(em, targetGuid);
+  const scriptLength = Math.max(0.1, maxStartTimeMs / 1000);
+  const scriptData = mgr.addScript(pesId || scriptId, queueEntries, { length: scriptLength });
+  _ensureManagerPump(mgr);
 
   // Wave 3 / A5 fix (2026-05-28) — register the PlayEffect emitters
   // with the entity manager's per-guid tracking so entity-remove
@@ -2989,6 +3062,8 @@ async function _tryResolveRealVfx(targetGuid, scriptId, speed, _t0, silent = fal
     //     tail used to be cut at 2.5 s), persistent ones are stopped and
     //     reaped after the drain window — see `_reapOneShotIds`.
     const ONE_SHOT_LIFETIME_MS = _LIFECYCLE_MS.oneShotBase + maxStartTimeMs;
+    const nowSec = currentTime();
+    const queueDelayMs = Math.max(0, Math.round(((scriptData.startTime - nowSec) * 1000) || 0));
     setTimeout(() => {
       // HIDEFX: from here on a late attach reaps itself (see `.then` above).
       _rp6Group._reaped = true;
@@ -3024,7 +3099,7 @@ async function _tryResolveRealVfx(targetGuid, scriptId, speed, _t0, silent = fal
           em._particleEmittersForGuid.set(targetGuid, remaining);
         }
       }
-    }, ONE_SHOT_LIFETIME_MS);
+    }, queueDelayMs + ONE_SHOT_LIFETIME_MS);
   }
 
   _realVfxStats.resolved += 1;

@@ -2,22 +2,24 @@
 //! sprites) and `_billboardEmitterRetail` (retail deg_mode 2..5 facing) for
 //! instanced emitters. Both write only the slot quaternion. On the instanced
 //! path the slot meshes are scene-detached carriers (`mesh.parent === null`),
-//! so the sprite pass compares the camera's `position` with the carrier's
-//! local position and applies no parent rotation — reproduced as is.
+//! so the sprite pass converts Three.js camera position into the AC Z-up
+//! particle coordinate frame (x_ac = x_three, y_ac = -z_three, z_ac = y_three)
+//! so billboards face the camera properly rather than orienting sideways.
 
 use super::particle::Slot;
 use super::three_ext::{add_scaled, make_basis, quat_from_unit_vectors};
 use crate::math::{Quat, Vec3};
 
 /// `_billboardEmitter(emitter, camera)` over one emitter's slots.
+/// Converts Three.js Y-up camera coordinates to AC Z-up particle frame.
 pub fn sprite(slots: &mut [Slot], normal: Option<Vec3>, cam: Vec3) {
+    let cam_ac = Vec3::new(cam.x, -cam.z, cam.y);
     for s in slots.iter_mut() {
         if !s.live || !s.visible {
             continue;
         }
         let Some(n_local) = normal else { continue };
-        // parent === null: _bbMeshWorld.copy(mesh.position)
-        let mut dir = cam.sub(s.pos);
+        let mut dir = cam_ac.sub(s.pos);
         if dir.length_sq() < 1e-10 {
             continue;
         }

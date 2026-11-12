@@ -105,8 +105,8 @@ export const GP_ROW = Object.freeze({
   EMITTER0: 9,
   // manager row texels
   M_CLOCK: 0,    // Chi, Clo, dtTick, bbOn
-  M_CAMLOCAL: 1, // camera in _scene-local space (retail degrade-mode billboards)
-  M_CAMWORLD: 2, // camera.position (the POJO sprite billboard's quirk)
+  M_CAMLOCAL: 1, // camera in _scene-local space (retail degrade-mode billboards & POJO sprite billboards)
+  M_CAMWORLD: 2, // camera.position in world space
   // emitter row texels
   E_ANCHOR: 0,   // anchor position xyz, manager row
   E_QUAT: 1,     // anchor quaternion
@@ -279,7 +279,7 @@ export const GP_GLSL_HEADER = [
   "\tint bb = int( e3.z + 0.5 );",
   "\tif ( bb != 0 && m0.w > 0.5 ) {",
   "\t\tif ( bb == 6 ) {",
-  "\t\t\tvec3 d6 = hbGpE( mr, 2 ).xyz - P;",
+  "\t\t\tvec3 d6 = hbGpE( mr, 1 ).xyz - P;",
   "\t\t\tif ( dot( d6, d6 ) >= 1e-10 ) R = hbGpQMat( hbGpUnitVectors( hbGpE( er, 4 ).xyz, normalize( d6 ) ) );",
   "\t\t} else {",
   "\t\t\tvec3 d = P - hbGpE( mr, 1 ).xyz;",
