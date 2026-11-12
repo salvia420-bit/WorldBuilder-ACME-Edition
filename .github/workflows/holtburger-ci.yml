@@ -65,6 +65,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: external/holtburger
@@ -76,10 +78,12 @@ jobs:
         run: |
           git clone --filter=blob:none https://github.com/Chorizite/Chorizite.ACProtocol.git external/chorizite/Chorizite.ACProtocol
           git -C external/chorizite/Chorizite.ACProtocol checkout --quiet ff7dffd6afa53c4e2b2ba14bd89962258ebd4371
+      - name: Cargo check wasm32-unknown-unknown (holtburger-web)
+        run: cargo check --target wasm32-unknown-unknown -p holtburger-web
       # `--tests` adds the integration targets (crates/*/tests/*.rs) to the lib
       # unit tests; `--lib` alone never built them, so opcode_parity's
       # categorization gate and the 71 generated_parity checks ran in no gate.
       # Doctests stay out. A rotted integration test gets #[ignore = "reason"],
       # not a dropped `--tests`.
       - name: Unit + integration tests (no DAT fixtures needed)
-        run: cargo test -p holtburger-common -p holtburger-protocol -p holtburger-core --lib --tests
+        run: cargo test -p holtburger-common -p holtburger-protocol -p holtburger-core -p holtburger-scene -p holtburger-manifest -p holtburger-session -p holtburger-world -p holtburger-web -p holtburger-wsbridge --lib --tests

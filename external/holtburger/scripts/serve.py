@@ -61,6 +61,13 @@ from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+# Python <3.13 fallback: RANGE_NOT_SATISFIABLE was added in 3.13; earlier versions use REQUESTED_RANGE_NOT_SATISFIABLE or 416
+HTTP_RANGE_NOT_SATISFIABLE = getattr(
+    HTTPStatus,
+    "RANGE_NOT_SATISFIABLE",
+    getattr(HTTPStatus, "REQUESTED_RANGE_NOT_SATISFIABLE", 416),
+)
+
 # external/holtburger/ — the web root the page fetches `../../dist` + `../../dats`
 # against. Derived from this file's location so the server is cwd-independent
 # (no more "you must launch from external/holtburger" footgun).
@@ -984,7 +991,7 @@ class Handler(SimpleHTTPRequestHandler):
             range_parsed = _parse_byte_range(range_header, total)
             if range_parsed is False:
                 # Unsatisfiable range (e.g. start >= total, end < start, empty file)
-                self.send_response(HTTPStatus.RANGE_NOT_SATISFIABLE)
+                self.send_response(HTTP_RANGE_NOT_SATISFIABLE)
                 self.send_header("Content-Range", f"bytes */{total}")
                 self.send_header("Content-Length", "0")
                 self.end_headers()
@@ -1050,7 +1057,7 @@ class Handler(SimpleHTTPRequestHandler):
         # cache in front — SW, proxy.cjs, browser — from mixing encodings).
         if os.path.splitext(path)[1].lower() in TEXT_COMPRESS_EXTS | BIN_COMPRESS_EXTS:
             self.send_header("Vary", "Accept-Encoding")
-        if 200 <= status < 300 or status == HTTPStatus.RANGE_NOT_SATISFIABLE:
+        if 200 <= status < 300 or status == int(HTTP_RANGE_NOT_SATISFIABLE):
             self.send_header("Accept-Ranges", "bytes")
         if COI:
             # Both headers are required — COOP alone does not isolate. Same-origin
@@ -1092,8 +1099,10 @@ class Handler(SimpleHTTPRequestHandler):
              # manifest.json stays no-store (excluded just below).
              ".hbc7",
              # Video extensions for HTML5 video range caching
-             ".mp4", ".webm", ".ogg")
-        ) and not path.endswith("manifest.json"):
+             ".mp4", ".webm", ".ogg",
+             # Area 14: serve .json and .jsonl as conditional-304 no-cache
+             ".json", ".jsonl")
+        ) and not path.endswith(("manifest.json", "_health.json")):
             # Login-boot diagnosis 2026-06-11: no-store forced a full ~23MB /
             # 150-request re-download on EVERY reload and retry cycle.
             # `no-cache` (without no-store) still revalidates every request —

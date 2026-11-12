@@ -49,6 +49,30 @@ const { createShellGate } = require("./shell_gate.cjs");
 const PROXY_PORT = Number(process.env.PROXY_PORT || 7080);
 const HTTP_BACKEND = { host: "127.0.0.1", port: Number(process.env.HTTP_BACKEND_PORT || 8765) };
 const WS_BACKEND = { host: "127.0.0.1", port: Number(process.env.WS_BACKEND_PORT || 8080) };
+const UPGRADE_TIMEOUT_MS = Number(process.env.WS_UPGRADE_TIMEOUT_MS || 10000);
+
+function getClientIp(headers, socket) {
+  const cf = headers && (headers["cf-connecting-ip"] || headers["CF-Connecting-IP"]);
+  if (cf && typeof cf === "string") {
+    return cf.trim().split(",")[0].trim().replace(/^::ffff:/, "");
+  }
+  const remote = (socket && socket.remoteAddress) || "127.0.0.1";
+  return String(remote).replace(/^::ffff:/, "");
+}
+
+function isPathContained(rawPath) {
+  if (typeof rawPath !== "string") return false;
+  let decoded = rawPath;
+  try {
+    decoded = decodeURIComponent(rawPath);
+  } catch {}
+  if (decoded.includes("..") && (decoded.startsWith("/..") || decoded.includes("/../") || decoded.endsWith("/..") || decoded.startsWith(".."))) {
+    return false;
+  }
+  const resolved = path.posix.resolve("/", decoded);
+  if (!resolved.startsWith("/")) return false;
+  return true;
+}
 
 // The bundled app shell (2026-10-06, scripts/shell_gate.cjs): a request for
 // /apps/holtburger-web/index.html gets the T11 bundle (index-bundled.html,
@@ -68,23 +92,44 @@ const shellGate = createShellGate({
 const upstreamAgent = new http.Agent({ keepAlive: true, maxSockets: 32, maxFreeSockets: 16 });
 
 function proxyHttp(clientReq, clientRes) {
+  const reqUrl = clientReq.url || "/";
+  const rawPath = reqUrl.split("?")[0];
+  // Path traversal containment: ensure path stays within root
+  if (!isPathContained(rawPath)) {
+    clientRes.writeHead(403);
+    clientRes.end("Forbidden");
+    return;
+  }
+  let parsedUrl;
+  try {
+    parsedUrl = new URL(reqUrl, "http://127.0.0.1");
+  } catch {
+    clientRes.writeHead(400);
+    clientRes.end("Bad Request");
+    return;
+  }
+  const resolvedPath = path.posix.resolve("/", parsedUrl.pathname);
+
   // Strip /wsbridge prefix if it ever shows up as a regular HTTP request
   // (it shouldn't — that path is only for upgrade requests — but be safe).
-  let targetPath = clientReq.url;
+  let targetPath = resolvedPath + parsedUrl.search;
   if (targetPath.startsWith("/wsbridge")) {
     // Plain HTTP at /wsbridge probably came from a misclick; serve the
     // base server's response (404 or whatever) by stripping the prefix.
-    targetPath = targetPath.replace(/^\/wsbridge\/?/, "/");
+    targetPath = targetPath.replace(/^\/wsbridge\/?/, "/") || "/";
   }
 
-  // Cache-Control for content-addressable assets. /dist/shards/{prefix}/
-  // {sha256}.bin URLs are immutable by construction — once the SHA matches,
+  // Cache-Control for content-addressable assets: /dist/shards/, /dist/packs/, /dist/index/
+  // URLs are immutable by construction — once the SHA matches,
   // the bytes never change, so a year-long max-age with `immutable` lets the
   // browser skip even the revalidation round-trip. Leaves manifest.json,
   // boot.hba (which re-points each bake), index.html, wasm bundle (regen on
   // every wasm-pack), and atlas.{js,png} (non-hash-named) revalidating as
   // before so a fresh bake propagates immediately.
-  const isImmutable = /^\/dist\/shards\/[0-9a-f]{2}\/[0-9a-f]+\.bin/i.test(targetPath);
+  const cleanPath = (targetPath || "").split("?")[0];
+  const isImmutable = cleanPath.startsWith("/dist/shards/") ||
+                      cleanPath.startsWith("/dist/packs/") ||
+                      cleanPath.startsWith("/dist/index/");
 
   let shellHeader = null;
   if (clientReq.method === "GET" || clientReq.method === "HEAD") {
@@ -96,6 +141,17 @@ function proxyHttp(clientReq, clientRes) {
     }
   }
 
+  // Overwrite X-Forwarded-For properly to prevent IP spoofing
+  const clientIp = getClientIp(clientReq.headers, clientReq.socket);
+  const forwardedHeaders = { ...clientReq.headers };
+  for (const k of Object.keys(forwardedHeaders)) {
+    if (k.toLowerCase() === "x-forwarded-for") {
+      delete forwardedHeaders[k];
+    }
+  }
+  forwardedHeaders["x-forwarded-for"] = clientIp;
+  forwardedHeaders["host"] = `${HTTP_BACKEND.host}:${HTTP_BACKEND.port}`;
+
   const proxyReq = http.request(
     {
       host: HTTP_BACKEND.host,
@@ -103,12 +159,12 @@ function proxyHttp(clientReq, clientRes) {
       agent: upstreamAgent,
       method: clientReq.method,
       path: targetPath,
-      headers: { ...clientReq.headers, host: `${HTTP_BACKEND.host}:${HTTP_BACKEND.port}` },
+      headers: forwardedHeaders,
     },
     (proxyRes) => {
       const outHeaders = { ...proxyRes.headers };
       if (isImmutable && proxyRes.statusCode === 200) {
-        outHeaders["cache-control"] = "public, max-age=31536000, immutable";
+        outHeaders["cache-control"] = "public, max-age=31536000, immutable, no-transform";
       }
       if (shellHeader) outHeaders["x-hb-shell"] = shellHeader;
       clientRes.writeHead(proxyRes.statusCode, outHeaders);
@@ -148,11 +204,25 @@ function proxyUpgrade(clientReq, clientSocket, head) {
   // Forward to wsbridge with the prefix stripped (wsbridge expects /).
   const upstreamPath = requestedPath.replace(/^\/wsbridge\/?/, "/") || "/";
 
+  // Properly overwrite X-Forwarded-For
+  const clientIp = getClientIp(clientReq.headers, clientSocket);
+  const headers = { ...clientReq.headers };
+  for (const k of Object.keys(headers)) {
+    if (k.toLowerCase() === "x-forwarded-for") {
+      delete headers[k];
+    }
+  }
+  headers["x-forwarded-for"] = clientIp;
+
+  let connected = false;
+
   const upstream = net.connect(WS_BACKEND.port, WS_BACKEND.host, () => {
+    connected = true;
+    clearTimeout(timeoutTimer);
     // Re-issue the HTTP upgrade request to the wsbridge with our chosen
     // path. Headers carried through (including Sec-WebSocket-Key etc.)
     // so the upstream completes the upgrade correctly.
-    const headerLines = Object.entries(clientReq.headers).map(
+    const headerLines = Object.entries(headers).map(
       ([k, v]) => `${k}: ${Array.isArray(v) ? v.join(", ") : v}`
     );
     const req =
@@ -164,7 +234,24 @@ function proxyUpgrade(clientReq, clientSocket, head) {
     clientSocket.pipe(upstream);
     upstream.pipe(clientSocket);
   });
+
+  const timeoutTimer = setTimeout(() => {
+    if (!connected) {
+      upstream.destroy();
+      try {
+        clientSocket.write(
+          "HTTP/1.1 504 Gateway Timeout\r\n" +
+            "Connection: close\r\n" +
+            "Content-Length: 0\r\n\r\n"
+        );
+      } catch {}
+      clientSocket.destroy();
+    }
+  }, UPGRADE_TIMEOUT_MS);
+  if (typeof timeoutTimer.unref === "function") timeoutTimer.unref();
+
   upstream.on("error", (err) => {
+    clearTimeout(timeoutTimer);
     console.error(`[ws] wsbridge connect error: ${err.message}`);
     try {
       clientSocket.write(
@@ -175,20 +262,37 @@ function proxyUpgrade(clientReq, clientSocket, head) {
     } catch {}
     clientSocket.destroy();
   });
-  clientSocket.on("error", () => upstream.destroy());
+  clientSocket.on("error", () => {
+    clearTimeout(timeoutTimer);
+    upstream.destroy();
+  });
+  clientSocket.on("close", () => {
+    clearTimeout(timeoutTimer);
+    if (!connected) upstream.destroy();
+  });
 }
 
 const server = http.createServer(proxyHttp);
 server.on("upgrade", proxyUpgrade);
-// 2026-06-09 — bind all interfaces so the app + /wsbridge are reachable
-// over Tailscale (e.g. http://100.x:7080) directly, without a cloudflared
-// quick-tunnel (which kept resetting long-lived game WebSockets). Tailscale
-// is WireGuard, so this is only reachable by tailnet peers + the LAN; the
-// game UDP bridge it fronts (wsbridge :8080) already binds 0.0.0.0.
-server.listen(PROXY_PORT, "0.0.0.0", () => {
-  console.log(
-    `proxy listening on 0.0.0.0:${PROXY_PORT}` +
-      `; HTTP→${HTTP_BACKEND.host}:${HTTP_BACKEND.port}` +
-      `; WS /wsbridge→${WS_BACKEND.host}:${WS_BACKEND.port}`
-  );
-});
+
+if (require.main === module) {
+  server.listen(PROXY_PORT, "0.0.0.0", () => {
+    console.log(
+      `proxy listening on 0.0.0.0:${PROXY_PORT}` +
+        `; HTTP→${HTTP_BACKEND.host}:${HTTP_BACKEND.port}` +
+        `; WS /wsbridge→${WS_BACKEND.host}:${WS_BACKEND.port}`
+    );
+  });
+}
+
+module.exports = {
+  server,
+  proxyHttp,
+  proxyUpgrade,
+  createShellGate,
+  getClientIp,
+  isPathContained,
+  UPGRADE_TIMEOUT_MS,
+  HTTP_BACKEND,
+  WS_BACKEND,
+};

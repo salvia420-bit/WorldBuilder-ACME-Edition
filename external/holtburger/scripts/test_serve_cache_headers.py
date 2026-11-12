@@ -79,8 +79,16 @@ with tempfile.TemporaryDirectory() as td:
     macro.mkdir(parents=True)
     (macro / "m.png").write_bytes(b"\x89PNG" + bytes(600))
     (tier / "notes.xyz").write_bytes(b"x" * 600)
+    data_json = tier / "data.json"
+    data_json.write_text('{"count":42}' + " " * 300)
+    data_jsonl = tier / "layers.jsonl"
+    data_jsonl.write_text('{"layer":1}\n{"layer":2}\n' + " " * 300)
+    dist_dir = root / "dist"
+    dist_dir.mkdir(parents=True)
+    health_json = dist_dir / "_health.json"
+    health_json.write_text('{"status":"ok"}')
     mtime = 1_790_000_000  # fixed, so Last-Modified is deterministic
-    for p in (hbc7, tier / "manifest.json", macro / "m.png", tier / "notes.xyz"):
+    for p in (hbc7, tier / "manifest.json", macro / "m.png", tier / "notes.xyz", data_json, data_jsonl, health_json):
         os.utime(p, (mtime, mtime))
     lm = formatdate(mtime, usegmt=True)
     older = formatdate(mtime - 86400, usegmt=True)
@@ -119,10 +127,27 @@ with tempfile.TemporaryDirectory() as td:
 
     s, h, _ = request(root, "/apps/holtburger-web/scene3d/assets/terrain_bc7/t1024/manifest.json")
     check("H6 tier manifest.json stays no-store", s == 200 and no_store(h), str(h))
+    s, h, _ = request(root, "/dist/_health.json")
+    check("H6 dist _health.json stays no-store", s == 200 and no_store(h), str(h))
     s, h, _ = request(root, "/apps/holtburger-web/scene3d/assets/terrain_bc7/t1024/notes.xyz")
     check("H6 unknown extension stays no-store", s == 200 and no_store(h), str(h))
     s, h, _ = request(root, "/apps/holtburger-web/scene3d/assets/terrain_macro/m.png")
     check("H6 .png stays no-cache", s == 200 and h.get("cache-control") == "no-cache", str(h))
+
+    # Area 14: .json / .jsonl as conditional-304 no-cache
+    s, h, _ = request(root, "/apps/holtburger-web/scene3d/assets/terrain_bc7/t1024/data.json")
+    check("H7 .json identity: 200 no-cache", s == 200 and h.get("cache-control") == "no-cache" and not no_store(h), str(h))
+    s, h, b = request(root, "/apps/holtburger-web/scene3d/assets/terrain_bc7/t1024/data.json", {"If-Modified-Since": lm})
+    check("H7 .json identity + IMS: 304", s == 304 and b == b"", str(s))
+
+    s, h, _ = request(root, "/apps/holtburger-web/scene3d/assets/terrain_bc7/t1024/layers.jsonl")
+    check("H8 .jsonl identity: 200 no-cache", s == 200 and h.get("cache-control") == "no-cache" and not no_store(h), str(h))
+    s, h, b = request(root, "/apps/holtburger-web/scene3d/assets/terrain_bc7/t1024/layers.jsonl", {"If-Modified-Since": lm})
+    check("H8 .jsonl identity + IMS: 304", s == 304 and b == b"", str(s))
+
+    # Area 14: Python <3.13 416 Range Not Satisfiable handling without AttributeError
+    s, h, b = request(root, url, {"Range": "bytes=999999-9999999"})
+    check("H9 416 Range Not Satisfiable", s == 416 and "bytes */" in h.get("content-range", ""), str((s, h)))
 
 print(f"\n{'OK' if failures == 0 else f'{failures} FAILURE(S)'}")
 sys.exit(1 if failures else 0)

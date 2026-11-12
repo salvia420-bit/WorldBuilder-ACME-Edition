@@ -37,10 +37,19 @@ const docsPath = path.join(appDir, "docs", "url-flags.md");
 const docsLines = fs.readFileSync(docsPath, "utf8").split("\n");
 const docRows = new Map(); // name → {values, defaultCol, readerCol, effect, where, section, line}
 let section = "(preamble)";
+let defaultColIdx = 1;
 for (let i = 0; i < docsLines.length; i += 1) {
-  const h = /^#{2,3}\s+(.*)$/.exec(docsLines[i]);
+  const line = docsLines[i];
+  const h = /^#{2,3}\s+(.*)$/.exec(line);
   if (h) { section = h[1].trim(); continue; }
-  const m = /^\| `([A-Za-z_][A-Za-z0-9_]*)`(?:=[^|`]*)?\s*\|(.*)$/.exec(docsLines[i]);
+  const tableHeader = /^\|\s*Flag\s*\|(.*)$/i.exec(line);
+  if (tableHeader) {
+    const cols = tableHeader[1].split(/(?<!\\)\|/).map((s) => s.trim().toLowerCase());
+    const dIdx = cols.findIndex((c) => c.includes("default"));
+    defaultColIdx = dIdx >= 0 ? dIdx : 1;
+    continue;
+  }
+  const m = /^\| `([A-Za-z_][A-Za-z0-9_]*)`(?:=[^|`]*)?\s*\|(.*)$/.exec(line);
   if (!m || docRows.has(m[1])) continue;
   // Split on UNESCAPED pipes only. Rows legitimately carry `\|` inside a cell
   // (`` `on`\|`off` ``); splitting on those shifts every later column left and
@@ -48,7 +57,7 @@ for (let i = 0; i < docsLines.length; i += 1) {
   // pass of this audit "found" four mismatches that did not exist.
   const c = m[2].split(/(?<!\\)\|/).map((x) => x.trim());
   docRows.set(m[1], {
-    values: c[0] || "", defaultCol: c[1] || "", readerCol: c[2] || "",
+    values: c[0] || "", defaultCol: c[defaultColIdx] || "", readerCol: c[2] || "",
     effect: c[3] || "", where: c[4] || "", section, line: i + 1,
   });
 }
@@ -65,7 +74,7 @@ function walk(d) {
     else if (/\.(js|mjs|html)$/.test(e.name)) files.push(p);
   }
 }
-for (const t of ["scene3d", "app", "index.html", "plugins", "rynth", "netbrain"]) walk(path.join(appDir, t));
+for (const t of ["scene3d", "app", "index.html", "plugins", "rynth", "netbrain", "ui"]) walk(path.join(appDir, t));
 
 const readers = new Map(); // name → [{file,line,stmt,comment,idiom}]
 const GET_RE = /\.get\(\s*["']([A-Za-z_][A-Za-z0-9_]*)["']\s*\)/g;
@@ -151,13 +160,15 @@ for (const [f, lines] of SRC) {
     helpers.set(fnName, { file: path.relative(appDir, f), semantics: body });
   }
 }
-for (const [f, lines] of SRC) {
-  for (let i = 0; i < lines.length; i += 1) {
-    for (const [fnName, h] of helpers) {
-      const call = new RegExp(`\\b${fnName}\\(\\s*["']([A-Za-z_][A-Za-z0-9_]*)["']`, "g");
-      for (const m of lines[i].matchAll(call)) {
+const helperNames = [...helpers.keys()];
+if (helperNames.length > 0) {
+  const helperCallRegex = new RegExp(`\\b(${helperNames.join("|")})\\(\\s*["']([A-Za-z_][A-Za-z0-9_]*)["']`, "g");
+  for (const [f, lines] of SRC) {
+    for (let i = 0; i < lines.length; i += 1) {
+      for (const m of lines[i].matchAll(helperCallRegex)) {
         // classify from the HELPER's body, not the call site
-        record(m[1], f, i, lines, `via ${fnName}()`, h.semantics);
+        const h = helpers.get(m[1]);
+        record(m[2], f, i, lines, `via ${m[1]}()`, h?.semantics);
       }
     }
   }
@@ -245,12 +256,14 @@ function classify(sites) {
   return { def: "?", kind: "UNCLASSIFIED — read the site" };
 }
 function docPolarity(cell) {
-  // 2026-10-05: drop backticked ESCAPE mentions (`?flag=off`, `=off`) before
-  // reading polarity — they describe how to turn a default OFF, not the
+  // 2026-10-05: drop backticked ESCAPE mentions (`?flag=off`, `=off`, `?vehicles=on`) before
+  // reading polarity — they describe how to turn a default OFF or an escape condition, not the
   // default. The unifiedMotion cell ("**ALL classes including locomotion** …
   // `?unifiedMotion=off` is the escape") was read as an OFF claim because the
   // escape was the only on/off token in it.
-  const t = cell.replace(/`[^`]*=\s*off`/gi, "").replace(/\*/g, "").trim().toLowerCase();
+  const t = cell.replace(/`[^`]*=\s*(off|on)`/gi, "").replace(/\*/g, "").trim().toLowerCase();
+  // An enum/preset default cell ("auto", "preset", etc.) carries no boolean polarity
+  if (/^`?(auto|preset|procedural|retail)\b/.test(t)) return null;
   // A numeric default cell ("0.4", "`0`/`off`/`false` disables", "32") carries
   // no boolean polarity — `0.4` must not read as OFF just because it starts
   // with a zero.

@@ -2019,6 +2019,9 @@ EFFECTIVE absent-param behavior traced from the reader code, not from comments.
 | `hudScale` | numeric 0.25–6 | auto (`clamp(h/720,1,3)` × Options multiplier, capped to keep ≥1024×640 HUD px) | ui/hud_scale.js:70 — HUD overhaul 2026-10-05: forces the HUD `zoom` factor (e.g. `?hudScale=2` for an eye test) |
 | `vfxGauge` | regex opt-in | OFF | index.js:496 |
 | `vfxGaugeFence` | regex opt-in | OFF | index.js:517 |
+| `bldRadius` | numeric; off→null | 80 (clamped 16..256, alias for objRadius) | scene3d/object_radius.js:133 |
+| `cloudEdgeGamma` | numeric | 2 (clamped 0..16) | scene3d/cloud_edge_resolve.js:74 |
+| `worldTierRange0` | numeric | 2304 (clamped 800..6000) | scene3d/world_terrain.js:83 |
 | `?statBatchChunk=off` (default **ON** — 2026-07-03 1070 A/B: rest 24→66 fps / 1,057→223 calls; moving ~29→~47 fps / ~630→~270 calls; instances scale 226/LB across live evict/refeed; the win also revealed legacy per-LB batches were cull-exempted since 527ffd99 and all drew every frame) | Region-chunked static batching: one BatchedMesh per (3x3-LB region, surface material) — v1's cross-LB geometry dedupe WITH node-level frustum culling (chunks are spatially bounded; `frustumCulled=true`, bounds lazily recomputed by three when membership nulls `boundingSphere`). Same seam/eviction/idempotence machinery as v1 (re-bake replaces; per-LB gid excise via `_evictStaticBatchXForLb`; lazy optimize on the PVS tick). Off-screen chunks cost zero draws AND zero per-instance range-building. | 1070: moving A/B vs legacy per-LB batches — calls and fps must beat ~29 fps / ~630 calls; props identical; evict/revisit clean. | Moving fps >= legacy, calls down, no missing props; `=off` = byte-identical legacy. |
 
 ### 2026-07-27 — COL-20 remote turn-phase animation gate (JS-only, F4)

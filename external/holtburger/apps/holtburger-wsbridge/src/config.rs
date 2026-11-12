@@ -42,7 +42,7 @@ pub struct Cli {
     /// and LOGIN+1; `localhost` = any loopback address; IPv6 as
     /// `[::1]:9000:9001`). The address the handshake's host resolves to and
     /// both ports must match an entry. Repeatable; replaces the default list
-    /// (localhost:9000:9001, play.coldeve.ac:9000:9001).
+    /// (localhost:9000:9001).
     #[arg(long, value_name = "HOST[:LOGIN[:WORLD]]")]
     pub allow_target: Vec<String>,
 
@@ -69,10 +69,10 @@ pub struct Cli {
     #[arg(long, default_value_t = admission::DEFAULT_MAX_CONNS_PER_IP)]
     pub max_conns_per_ip: usize,
 
-    /// Opt-in: most binary frames per second one connection relays to ACE
+    /// Most binary frames per second one connection relays to ACE
     /// (bursts up to twice that); frames over the rate are dropped. 0 = no
-    /// limit (the default).
-    #[arg(long, default_value_t = 0)]
+    /// limit (default 500, burst 1,000).
+    #[arg(long, default_value_t = admission::DEFAULT_MAX_FRAMES_PER_SEC)]
     pub max_frames_per_sec: u32,
 
     /// Milliseconds between the WebSocket pings that time each connection's
@@ -190,7 +190,7 @@ mod tests {
         assert!(!adm.origins.any);
         assert_eq!(adm.max_conns, admission::DEFAULT_MAX_CONNS);
         assert_eq!(adm.max_conns_per_ip, admission::DEFAULT_MAX_CONNS_PER_IP);
-        assert_eq!(adm.max_frames_per_sec, 0);
+        assert_eq!(adm.max_frames_per_sec, admission::DEFAULT_MAX_FRAMES_PER_SEC);
         // The listen default is unchanged.
         assert_eq!(parse(&[]).unwrap().listen.to_string(), "0.0.0.0:8080");
     }

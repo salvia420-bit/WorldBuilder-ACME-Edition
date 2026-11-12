@@ -42,10 +42,8 @@ pub const ACE_WORLD_PORT: u16 = 9001;
 /// The targets a bridge started without `--allow-target` relays to. `localhost`
 /// is the local ACE: the login form's default `server_host=127.0.0.1`, the
 /// tunnel recipe, the multi-agent drivers and the Rynth supervisor all use it.
-/// `play.coldeve.ac` is the public server the owner plays through this bridge
-/// (22 bridged sessions in /mnt/wbterminal2/wsbridge_console.log, latest
-/// 2026-10-08). Giving any `--allow-target` replaces this list.
-pub const DEFAULT_ALLOW_TARGETS: &[&str] = &["localhost:9000:9001", "play.coldeve.ac:9000:9001"];
+/// Giving any `--allow-target` replaces this list.
+pub const DEFAULT_ALLOW_TARGETS: &[&str] = &["localhost:9000:9001"];
 
 /// Default `--max-conns`. Each connection holds two file descriptors (the
 /// WebSocket and its UDP socket); this keeps the bridge well under the usual
@@ -54,6 +52,9 @@ pub const DEFAULT_MAX_CONNS: usize = 256;
 
 /// Default `--max-conns-per-ip` for non-loopback peers.
 pub const DEFAULT_MAX_CONNS_PER_IP: usize = 16;
+
+/// Default `--max-frames-per-sec` for binary frames (burst 2x = 1,000 frames/s).
+pub const DEFAULT_MAX_FRAMES_PER_SEC: u32 = 500;
 
 /// Bound on the WebSocket upgrade, and separately on the JSON handshake that
 /// follows it. Every client (the browser's `WsTransport`, holtburger-wsshim)
@@ -88,7 +89,7 @@ impl Default for Admission {
             origins: OriginPolicy::default(),
             max_conns: DEFAULT_MAX_CONNS,
             max_conns_per_ip: DEFAULT_MAX_CONNS_PER_IP,
-            max_frames_per_sec: 0,
+            max_frames_per_sec: DEFAULT_MAX_FRAMES_PER_SEC,
         }
     }
 }
@@ -544,6 +545,55 @@ pub struct ConnSlot {
     per_ip: Option<IpAddr>,
 }
 
+impl ConnSlot {
+    /// Bind a forwarded client IP (from `CF-Connecting-IP` or `X-Forwarded-For`)
+    /// against `--max-conns-per-ip`. Loopback addresses are ignored.
+    pub fn bind_forwarded_ip(&mut self, forwarded: IpAddr) -> std::result::Result<(), CapRefusal> {
+        let forwarded = forwarded.to_canonical();
+        if forwarded.is_loopback() {
+            return Ok(());
+        }
+        let mut guard = self.limiter.lock();
+        let counts = &mut *guard;
+        if self.limiter.max_per_ip != 0 {
+            let current = counts.per_ip.get(&forwarded).copied().unwrap_or(0);
+            if current >= self.limiter.max_per_ip {
+                return Err(CapRefusal::PerIp {
+                    ip: forwarded,
+                    limit: self.limiter.max_per_ip,
+                });
+            }
+        }
+        if let Some(old) = self.per_ip.take() {
+            if let Some(n) = counts.per_ip.get_mut(&old) {
+                *n = n.saturating_sub(1);
+                if *n == 0 {
+                    counts.per_ip.remove(&old);
+                }
+            }
+        }
+        *counts.per_ip.entry(forwarded).or_insert(0) += 1;
+        self.per_ip = Some(forwarded);
+        Ok(())
+    }
+}
+
+/// Extract the real client IP from `CF-Connecting-IP` or `X-Forwarded-For` HTTP headers.
+pub fn extract_forwarded_ip(headers: &tokio_tungstenite::tungstenite::http::HeaderMap) -> Option<IpAddr> {
+    if let Some(val) = headers.get("cf-connecting-ip").and_then(|v| v.to_str().ok()) {
+        if let Ok(ip) = val.trim().parse::<IpAddr>() {
+            return Some(ip.to_canonical());
+        }
+    }
+    if let Some(val) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()) {
+        let first = val.split(',').next().unwrap_or("").trim();
+        if let Ok(ip) = first.parse::<IpAddr>() {
+            return Some(ip.to_canonical());
+        }
+    }
+    None
+}
+
 impl ConnLimiter {
     /// `0` disables a cap.
     pub fn new(max_total: usize, max_per_ip: usize) -> Arc<Self> {
@@ -988,11 +1038,39 @@ mod tests {
     fn admission_display_summarizes_policy() {
         let text = Admission::default().to_string();
         assert!(text.contains("localhost:9000:9001"), "{text}");
-        assert!(text.contains("play.coldeve.ac:9000:9001"), "{text}");
+        assert!(!text.contains("play.coldeve.ac"), "{text}");
         assert!(text.contains("max conns 256 (16 per non-loopback IP)"), "{text}");
-        assert!(!text.contains("frames/s"), "{text}");
+        assert!(text.contains("max 500 frames/s"), "{text}");
         let open = Admission::unrestricted().to_string();
         assert!(open.contains("ANY (--allow-any-target)"), "{open}");
         assert!(open.contains("unlimited"), "{open}");
+    }
+
+    #[test]
+    fn bind_forwarded_ip_counts_against_per_ip_cap() {
+        let limiter = ConnLimiter::new(10, 2);
+        let mut slot1 = limiter.try_acquire(ip("127.0.0.1")).unwrap();
+        let mut slot2 = limiter.try_acquire(ip("127.0.0.1")).unwrap();
+        let mut slot3 = limiter.try_acquire(ip("127.0.0.1")).unwrap();
+
+        let client = ip("198.51.100.5");
+        slot1.bind_forwarded_ip(client).unwrap();
+        assert_eq!(limiter.active_for(client), 1);
+
+        slot2.bind_forwarded_ip(client).unwrap();
+        assert_eq!(limiter.active_for(client), 2);
+
+        // Third connection from same client rejected by per-IP cap
+        assert!(slot3.bind_forwarded_ip(client).is_err());
+        assert_eq!(limiter.active_for(client), 2);
+
+        // Loopback forwarded IP is ignored
+        slot3.bind_forwarded_ip(ip("127.0.0.1")).unwrap();
+
+        // Dropping slot decrements count
+        drop(slot1);
+        assert_eq!(limiter.active_for(client), 1);
+        drop(slot2);
+        assert_eq!(limiter.active_for(client), 0);
     }
 }
