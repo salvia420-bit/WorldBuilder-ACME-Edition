@@ -287,8 +287,8 @@ console.log("\n-- B6 program keys ----------------------------------------------
   const keyLit = bakedMat({ suppressDirect: false }).customProgramCacheKey();
   const plain = new THREE.MeshStandardMaterial();
   installLightClampShaderPatch(plain);
-  check("default arm key carries k1d", keyDef === "hb|d0|c0|p0|l0|a0|b0|f0|s0|k1d|v", keyDef);
-  check("escape key is the pre-change k1", keyEsc === "hb|d0|c0|p0|l0|a0|b0|f0|s0|k1|v", keyEsc);
+  check("default arm key carries k1d", keyDef === "hb|d0|c0|p0|l0|a0|b0|f0|s0|k1d|v" || keyDef === "hb|d0|c0|p0|l0|a0|b0|f0|s0|k1d|mc0|ms0|v", keyDef);
+  check("escape key is the pre-change k1", keyEsc === "hb|d0|c0|p0|l0|a0|b0|f0|s0|k1|v" || keyEsc === "hb|d0|c0|p0|l0|a0|b0|f0|s0|k1|mc0|ms0|v", keyEsc);
   check("lit key is the pre-change k1", keyLit === keyEsc, keyLit);
   check("the #undef program never shares a key with the multiply-only one", keyDef !== keyEsc);
   check("un-baked keys unchanged (no d anywhere)", !/\|k0d/.test(plain.customProgramCacheKey()), plain.customProgramCacheKey());

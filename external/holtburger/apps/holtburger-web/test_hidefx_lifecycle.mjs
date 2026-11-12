@@ -805,7 +805,7 @@ function setVisibility(arm, guid, visible, physicsState) {
   const prev = ON.setLifecycleTiming({ oneShotBase: 5000 }); // keep the reaper out of it
   const a = await ON.tryResolveRealVfx(G, PS.AttribUpPurple, 0.4);
   const b = await ON.tryResolveRealVfx(G, PS.LevelUp, 1.0);
-  await sleep(20);
+  await sleep(150);
   check("§10 AttribUpPurple (speed 0.4 → 0x33000040) + LevelUp resolve, not held",
     a === true && b === true && ON.hiddenState(G).holdGroups === 0);
   check("§10 4 finite emitters attached (1 + 3)", sim.liveFor(root).length === 4, `${sim.liveFor(root).length}`);

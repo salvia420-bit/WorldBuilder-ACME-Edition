@@ -40,13 +40,16 @@ test("bakes the run/walk/strafe/turn/fall cycles and the gait links for the stan
   prewarm.call(self, human(), 0x8000003d);
   await settle();
   assert.deepEqual(self.cycles.sort(), [
-    "0x40000015@0x8000003d", "0x44000007@0x8000003d", "0x45000005@0x8000003d",
+    "0x40000015@0x8000003d", "0x41000012@0x8000003d", "0x44000007@0x8000003d", "0x45000005@0x8000003d",
     "0x6500000d@0x8000003d", "0x6500000f@0x8000003d",
   ]);
   assert.deepEqual(self.links, [
     "0x41000003>0x44000007@0x8000003d", "0x44000007>0x41000003@0x8000003d",
     "0x41000003>0x45000005@0x8000003d", "0x45000005>0x41000003@0x8000003d",
     "0x45000005>0x44000007@0x8000003d", "0x44000007>0x45000005@0x8000003d",
+    "0x41000003>0x41000012@0x8000003d", "0x41000012>0x41000003@0x8000003d",
+    "0x44000007>0x40000015@0x8000003d", "0x41000003>0x40000015@0x8000003d",
+    "0x40000015>0x41000003@0x8000003d", "0x40000015>0x44000007@0x8000003d",
     // The backpedal start / stop pair, as _fetchSignedLocoLinks asks for it.
     "0x41000003>0x45000005@0x8000003d signed-reversed",
     "0x45000005>0x41000003@0x8000003d signed-reversed",
@@ -59,11 +62,11 @@ test("once per setup:table:stance; a stance change bakes the new stance", async 
   prewarm.call(self, inst, 0x8000003d);
   prewarm.call(self, inst, 0x8000003d);
   await settle();
-  assert.equal(self.cycles.length, 5, "the second call is a no-op");
+  assert.equal(self.cycles.length, 6, "the second call is a no-op");
   prewarm.call(self, inst, 0x8000003c); // UA combat
   await settle();
-  assert.equal(self.cycles.length, 10);
-  assert.ok(self.cycles.slice(5).every((c) => c.endsWith("@0x8000003c")));
+  assert.equal(self.cycles.length, 12);
+  assert.ok(self.cycles.slice(6).every((c) => c.endsWith("@0x8000003c")));
 });
 
 test("a bare low-16 stance is widened to the full stance id", async () => {

@@ -171,7 +171,7 @@ function setSlotGuid(role, guid) {
   updateButtons();
 }
 
-function updateButtons() {
+function updateButtons(preserveStatus = false) {
   const r = state.refs;
   if (!r) return;
   const ready = !!(state.toolGuid && state.targetGuid);
@@ -211,7 +211,7 @@ function updateButtons() {
   const canFire = ready && (oddsInfo ? oddsInfo.canTinker : true);
   r.fireBtn.disabled = !canFire;
   r.clearBtn.disabled = !(state.toolGuid || state.targetGuid);
-  if (!state.pendingFire) {
+  if (!state.pendingFire && !preserveStatus) {
     if (ready && oddsInfo && !oddsInfo.canTinker) {
       setStatus("This item cannot be tinkered any further (10/10).", "bad");
     } else {
@@ -285,7 +285,7 @@ function onInventoryChanged() {
   } else {
     setStatus("Done — see chat for the result.", "good");
   }
-  updateButtons();
+  updateButtons(true);
 }
 
 function onUseFailed(evt) {
@@ -297,7 +297,7 @@ function onUseFailed(evt) {
   }
   const msg = evt?.text || evt?.detail?.text || "Action failed or rejected by server.";
   setStatus(msg, "bad");
-  updateButtons();
+  updateButtons(true);
 }
 
 function ensurePanel() {

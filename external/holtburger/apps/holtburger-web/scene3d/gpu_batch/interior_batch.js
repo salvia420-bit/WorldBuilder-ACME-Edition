@@ -1240,6 +1240,7 @@ function _st() {
     work: { deadline: 0, mergeDeadline: 0, planUnits: 0, classUnits: 0, warmUnits: 0, mergeUnits: 0 },
     envScratch: { renderer: null, camera: null, scene: null },
     lbs: new Map(),
+    lbsList: [],
     slots: new Map(),
     classMats: new Map(),
     depthMats: new Map(),
@@ -1333,6 +1334,8 @@ export function noteInteriorBatchBuilt(scene3d, lbKey, buildGen, newCells) {
     if (have.buildGen === buildGen) return have;
     _teardownLb(have, "rebuild");
     S.lbs.delete(key);
+    const idx = S.lbsList.indexOf(have);
+    if (idx >= 0) S.lbsList.splice(idx, 1);
   }
   const cells = [];
   // `tag` = [container, cellId]: a tagged array slot (the `rep` rule below),
@@ -1346,6 +1349,7 @@ export function noteInteriorBatchBuilt(scene3d, lbKey, buildGen, newCells) {
     rep: cells.length ? [cells[0].container, cells[0].cellId] : null,
   };
   S.lbs.set(key, rec);
+  S.lbsList.push(rec);
   S.stats.lbsNoted += 1;
   return rec;
 }
@@ -2988,6 +2992,8 @@ function _unpark(S, rec) {
 function _evict(S, rec) {
   _teardownLb(rec, "evicted");
   S.lbs.delete(rec.lbKey);
+  const idx = S.lbsList.indexOf(rec);
+  if (idx >= 0) S.lbsList.splice(idx, 1);
 }
 
 function _repAttached(S, rec) {
@@ -3248,16 +3254,28 @@ const _planWaiting = (rec) => (rec.status === "pending" || rec.status === "plann
  * budget (a landblock part-planned keeps its cursor: status "planning").
  */
 function _planPending(S) {
-  let any = false;
-  for (const rec of S.lbs.values()) if (_planWaiting(rec)) { any = true; break; }
-  if (!any) return; // steady state: no allocation
+  const list = S.lbsList;
+  for (let i = 0; i < list.length; i++) {
+    const rec = list[i];
+    if ((rec.status === "pending" || rec.status === "planning") && !rec.parked) {
+      _doPlanPending(S, list);
+      return;
+    }
+  }
+}
+
+function _doPlanPending(S, list) {
   const t0 = uploadNowMs();
   const at = _cameraLb(S);
   const pend = [];
-  for (const rec of S.lbs.values()) if (_planWaiting(rec)) pend.push(rec);
+  for (let i = 0; i < list.length; i++) {
+    const rec = list[i];
+    if (_planWaiting(rec)) pend.push(rec);
+  }
   pend.sort((a, b) => _lbDist(a, at) - _lbDist(b, at));
   const W = S.work;
-  for (const rec of pend) {
+  for (let i = 0; i < pend.length; i++) {
+    const rec = pend[i];
     if (W.planUnits > 0 && _now() >= W.deadline) break;
     if (!_planLbStep(S, rec)) break; // the budget ran out inside this landblock
   }
@@ -3268,18 +3286,32 @@ function _planPending(S) {
 }
 
 function _advanceChunks(S, pages, budget, env) {
-  let any = false;
-  for (const rec of S.lbs.values()) {
+  const list = S.lbsList;
+  for (let i = 0; i < list.length; i++) {
+    const rec = list[i];
     if (rec.status !== "planned" || rec.parked) continue;
-    for (const ch of rec.chunks) if (ch.status !== S_CHUNK.LEGACY && ch.status !== S_CHUNK.ACTIVE) { any = true; break; }
-    if (any) break;
+    const chs = rec.chunks;
+    for (let j = 0; j < chs.length; j++) {
+      const st = chs[j].status;
+      if (st !== S_CHUNK.LEGACY && st !== S_CHUNK.ACTIVE) {
+        _doAdvanceChunks(S, pages, budget, env, list);
+        return;
+      }
+    }
   }
-  if (!any) return; // steady state: no allocation
+}
+
+function _doAdvanceChunks(S, pages, budget, env, list) {
   const at = _cameraLb(S);
   const work = [];
-  for (const rec of S.lbs.values()) {
+  for (let i = 0; i < list.length; i++) {
+    const rec = list[i];
     if (rec.status !== "planned" || rec.parked) continue;
-    for (const ch of rec.chunks) if (ch.status !== S_CHUNK.LEGACY) work.push(ch);
+    const chs = rec.chunks;
+    for (let j = 0; j < chs.length; j++) {
+      const ch = chs[j];
+      if (ch.status !== S_CHUNK.LEGACY) work.push(ch);
+    }
   }
   if (work.length === 0) return;
   work.sort((a, b) => _lbDist(a.rec, at) - _lbDist(b.rec, at) || a.index - b.index);
@@ -3342,6 +3374,7 @@ export function disposeInteriorBatches() {
   if (!S) return;
   for (const rec of S.lbs.values()) _teardownLb(rec, "disposed");
   S.lbs.clear();
+  S.lbsList.length = 0;
   for (const ce of S.classMats.values()) _disposeMaterial(ce.material);
   S.classMats.clear();
   for (const de of S.depthMats.values()) _disposeMaterial(de.material);

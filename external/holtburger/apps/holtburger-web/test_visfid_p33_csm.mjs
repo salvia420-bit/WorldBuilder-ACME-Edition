@@ -225,9 +225,7 @@ refreshCsmUniforms(csmState);
 
 check(
     "refreshCsmUniforms pushes shadow.matrix into uCsmMatrix0",
-    fakeUniforms.uCsmMatrix0.value.elements[12] === 1 &&
-        fakeUniforms.uCsmMatrix0.value.elements[13] === 2 &&
-        fakeUniforms.uCsmMatrix0.value.elements[14] === 3,
+    fakeUniforms.uCsmMatrix0.value.equals(csmState.lights[0].shadow.matrix),
     `m[12,13,14]=${fakeUniforms.uCsmMatrix0.value.elements.slice(12, 15).join(",")}`
 );
 check(

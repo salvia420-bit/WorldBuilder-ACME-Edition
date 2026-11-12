@@ -145,6 +145,7 @@ for (const [search] of TABLE) {
 // that changes the shader STRING must move the key.
 const patchKeyFn = new Function(
   "material",
+  "const readDepthBiasConsolidatedFlag = () => false;\n" +
   slice("scene3d/materials.js", "function _patchSetCacheKey(material)", "\n}\n")
     .replace("function _patchSetCacheKey(material) {", "") +
     "\n",
@@ -171,7 +172,7 @@ for (const [label, ud] of KEY_CASES) {
 }
 check(
   "un-patched key shape unchanged (no gratuitous program split)",
-  BASE_KEY === "hb|d0|c0|p0|l1|a0|b0|f0|s0|k0|v",
+  BASE_KEY === "hb|d0|c0|p0|l1|a0|b0|f0|s0|k0|mc0|ms0|v",
   BASE_KEY,
 );
 

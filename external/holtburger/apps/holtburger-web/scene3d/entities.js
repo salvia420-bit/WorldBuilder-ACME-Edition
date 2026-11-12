@@ -2620,17 +2620,16 @@ const DEFAULT_SCRIPT_PLAY_AT_SPAWN_ON = (() => {
 // `CPhysicsObj::play_default_script(part_index)` walks the CHILDLIST
 // (acclient.c:320378-320412), it never plays the animating object's own
 // script (that is the no-arg overload, hook 17). Nothing held there → nothing
-// plays. Default ON; `=off` opts out (legacy owner arm). See
-// `_playHeldChildDefaultScript`.
+// plays. Default OFF; `=on` opts in. See `_playHeldChildDefaultScript`.
 const DEFAULT_SCRIPT_PART_CHILD_ON = (() => {
   try {
-    if (typeof window === "undefined" || !window.location) return true;
+    if (typeof window === "undefined" || !window.location) return false;
     return (
       new URLSearchParams(window.location.search)
-        .get("defaultScriptPartChild")?.toLowerCase() !== "off"
+        .get("defaultScriptPartChild")?.toLowerCase() === "on"
     );
   } catch (_) {
-    return true;
+    return false;
   }
 })();
 
@@ -11646,8 +11645,10 @@ export class EntityManager {
       effectiveBase = canonicalCycleBaseSpeed(fwdCmd || sideCmd || (inst._unifiedLoco?.desc?.motionCommand));
     }
 
-    // Player rigs with locomotion cycles ALWAYS use velocity-to-playback scaling (Feature 28)
-    const applyVelScale = isPlayer && isLocomotion && effectiveBase > 1e-4;
+    const isLocal = !!(inst?._isLocalPlayer || this._isLocalPlayerGuid(inst?.guid >>> 0));
+    // Player rigs with locomotion cycles use velocity-to-playback scaling (Feature 28)
+    // when local physics EMA speed is actively present.
+    const applyVelScale = isPlayer && isLocal && inst?._emaSpeed !== undefined && isLocomotion && effectiveBase > 1e-4;
 
     if (applyVelScale) {
       // 1. Prefer actual physical ground speed (wasm / EMA / stateGroundSpeed)

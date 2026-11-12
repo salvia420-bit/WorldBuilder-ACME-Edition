@@ -272,9 +272,9 @@
     "surfaceCount"
    ],
    "programKeys": [
-    "hb|d0|c0|p0|l1|a0|b0|f0|s0|k1d|v",
-    "hb|d0|c0|p0|l1|a0|b0|f0|s0|k1d|v",
-    "hb|d0|c0|p0|l1|a0|b0|f0|s0|k1d|v"
+    "hb|d0|c0|p0|l1|a0|b0|f0|s0|k1d|mc0|ms0|v",
+    "hb|d0|c0|p0|l1|a0|b0|f0|s0|k1d|mc0|ms0|v",
+    "hb|d0|c0|p0|l1|a0|b0|f0|s0|k1d|mc0|ms0|v"
    ],
    "geometry": "acBakedLight,normal,position,uv|3",
    "children": 0
@@ -316,7 +316,7 @@
     "modelId"
    ],
    "programKeys": [
-    "hb|d0|c0|p0|l1|a0|b0|f0|s1|k0|v"
+    "hb|d0|c0|p0|l1|a0|b0|f0|s1|k0|mc0|ms0|v"
    ],
    "geometry": "normal,position,uv|1",
    "children": 0
@@ -358,8 +358,8 @@
     "modelId"
    ],
    "programKeys": [
-    "hb|d0|c0|p0|l1|a0|b0|f0|s1|k0|v",
-    "hb|d0|c0|p0|l1|a0|b0|f0|s1|k0|v"
+    "hb|d0|c0|p0|l1|a0|b0|f0|s1|k0|mc0|ms0|v",
+    "hb|d0|c0|p0|l1|a0|b0|f0|s1|k0|mc0|ms0|v"
    ],
    "geometry": "normal,position,uv|2",
    "children": 0
@@ -476,7 +476,7 @@
     "surfaceCount"
    ],
    "programKeys": [
-    "hb|d0|c0|p0|l1|a0|b0|f0|s0|k1d|v"
+    "hb|d0|c0|p0|l1|a0|b0|f0|s0|k1d|mc0|ms0|v"
    ],
    "geometry": "acBakedLight,normal,position,uv|1",
    "children": 0
@@ -519,7 +519,7 @@
     "surfaceCount"
    ],
    "programKeys": [
-    "hb|d0|c0|p0|l1|a0|b0|f0|s0|k1d|v"
+    "hb|d0|c0|p0|l1|a0|b0|f0|s0|k1d|mc0|ms0|v"
    ],
    "geometry": "acBakedLight,normal,position,uv|1",
    "children": 0
@@ -561,7 +561,7 @@
     "modelId"
    ],
    "programKeys": [
-    "hb|d0|c0|p0|l1|a0|b0|f0|s1|k0|v"
+    "hb|d0|c0|p0|l1|a0|b0|f0|s1|k0|mc0|ms0|v"
    ],
    "geometry": "normal,position,uv|1",
    "children": 0
@@ -675,8 +675,8 @@
     "surfaceCount"
    ],
    "programKeys": [
-    "hb|d0|c0|p0|l1|a0|b0|f0|s0|k1d|v",
-    "hb|d0|c0|p0|l1|a0|b0|f0|s0|k1d|v"
+    "hb|d0|c0|p0|l1|a0|b0|f0|s0|k1d|mc0|ms0|v",
+    "hb|d0|c0|p0|l1|a0|b0|f0|s0|k1d|mc0|ms0|v"
    ],
    "geometry": "acBakedLight,normal,position,uv|2",
    "children": 0
@@ -793,7 +793,7 @@
     "surfaceCount"
    ],
    "programKeys": [
-    "hb|d0|c0|p0|l1|a0|b0|f0|s0|k1d|v"
+    "hb|d0|c0|p0|l1|a0|b0|f0|s0|k1d|mc0|ms0|v"
    ],
    "geometry": "acBakedLight,normal,position,uv|1",
    "children": 0
@@ -835,8 +835,8 @@
     "modelId"
    ],
    "programKeys": [
-    "hb|d0|c0|p0|l1|a0|b0|f0|s1|k0|v",
-    "hb|d0|c0|p0|l1|a0|b0|f0|s1|k0|v"
+    "hb|d0|c0|p0|l1|a0|b0|f0|s1|k0|mc0|ms0|v",
+    "hb|d0|c0|p0|l1|a0|b0|f0|s1|k0|mc0|ms0|v"
    ],
    "geometry": "normal,position,uv|2",
    "children": 0
@@ -963,44 +963,44 @@
   "webglcontextcreationerror": 1
  },
  "shaderSources": [
-  "08c6567f",
+  "03b4833a",
+  "0aa3bfd0",
+  "10a3bc2a",
+  "2a1ba855",
   "32021897",
   "39017bb1",
-  "4be8c308",
-  "7f46461e",
+  "3fcb0a03",
+  "7c0657bd",
+  "84d3efc8",
   "862acaf6",
-  "8a35b96d",
-  "8c3539f6",
   "8c4f2fa8",
-  "a57dd087",
-  "a62022fc",
-  "b93c478e",
+  "a9627b82",
+  "ba06ab80",
   "bce1a446",
   "c87a35b0",
-  "cc0f4e16",
-  "ceb1a473",
-  "da2d587d",
-  "dee246a5",
-  "e5883a3b",
-  "ee82f904"
+  "d2288c38",
+  "da9f1e6f",
+  "e5989fb1",
+  "ed316487",
+  "f0180905"
  ],
  "programs": [
-  "3a71d17e",
-  "48d6d445",
-  "622d9281",
-  "63f2a84c",
+  "16172275",
+  "284205ce",
+  "2ddb953e",
+  "3ab3af14",
   "64cd1c05",
-  "68bb5c11",
-  "7c4b89ae",
-  "811d7e5a",
-  "8650da35",
-  "92043310",
-  "9b131cbc",
+  "70f16621",
+  "7261d7c5",
+  "8589dea4",
+  "93fb13d8",
+  "9f01899a",
   "ba2511e3",
-  "c651f9c0",
-  "db209915",
-  "f3bc0c31",
-  "fc77b26a"
+  "c757acb1",
+  "d4ee5915",
+  "e23349e8",
+  "f1b86091",
+  "f44f174a"
  ],
  "drawsPerFrame": 11.16,
  "visTrace": "ba7a2b0b",

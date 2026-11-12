@@ -51,6 +51,7 @@ function check(name, ok, detail) {
   if (ok) passed += 1; else failed += 1;
 }
 
+globalThis.__hbRustParityHarness = true;
 installGlobals("");
 // after installGlobals: the particle modules read the URL flags at load
 const { L } = await import("../scene3d/rust/particles.js");

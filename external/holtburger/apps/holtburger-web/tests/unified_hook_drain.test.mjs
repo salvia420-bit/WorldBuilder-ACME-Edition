@@ -26,7 +26,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-globalThis.window = { location: { search: "" } };
+globalThis.window = { location: { search: "" }, __playEffectVfxBound: true, __spellShapePreviewBound: true };
 const THREE = await import("three");
 const { EntityManager } = await import("../scene3d/entities.js");
 const { installFakeMotionSequence } = await import("../harness/lib/fake_motion_sequence.mjs");

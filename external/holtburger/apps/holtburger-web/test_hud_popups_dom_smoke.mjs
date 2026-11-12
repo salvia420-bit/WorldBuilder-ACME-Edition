@@ -479,6 +479,8 @@ await guard("menu open + keys", async () => {
   press("Enter");
   check("Enter in the flyout equips the 2nd slot", wield.length === 1 && wield[0][1] === 0x00080000, JSON.stringify(wield));
   // Shift-click split: the menu opens pre-armed on the Split row.
+  const { pendingOps } = await load("plugins/item_drag.js");
+  pendingOps.resolve(0x50000002);
   window.__openContextMenuFor({ source: "inv-grid", guid: 0x50000002, name: "Ring", clientX: 50, clientY: 50, focusAction: "split" });
   const inp = document.getElementById("hb-radial-menu").querySelector(".hb-rm-split-input");
   check("focusAction split arms the Split field (not the row above it)", !!inp && document.activeElement === inp);

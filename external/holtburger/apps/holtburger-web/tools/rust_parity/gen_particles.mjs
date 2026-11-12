@@ -29,7 +29,11 @@ const SELF = fileURLToPath(import.meta.url);
 
 /** Install the browser-ish globals the particle modules read at import. */
 export function installGlobals(search = "") {
-  globalThis.location = { search };
+  let s = search;
+  if (!s.includes("particleFar30Hz")) {
+    s = s ? (s.includes("?") ? `${s}&particleFar30Hz=off` : `?${s}&particleFar30Hz=off`) : "?particleFar30Hz=off";
+  }
+  globalThis.location = { search: s };
   if (typeof globalThis.window === "undefined") globalThis.window = {};
   globalThis.window.location = globalThis.location;
 }

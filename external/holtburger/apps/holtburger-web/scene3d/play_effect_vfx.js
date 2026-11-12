@@ -143,7 +143,10 @@ const _playEffectScriptManagers = new Map();
 
 function _getScriptManagerForEntity(em, guid) {
   const gKey = guid >>> 0;
-  if (em && em._scriptManagersForGuid) {
+  if (em) {
+    if (!em._scriptManagersForGuid) {
+      em._scriptManagersForGuid = new Map();
+    }
     let mgr = em._scriptManagersForGuid.get(gKey);
     if (!mgr) {
       mgr = new ScriptManager({ owner: gKey });
@@ -2586,25 +2589,11 @@ async function _tryResolveRealVfx(targetGuid, scriptId, speed, _t0, silent = fal
       } else if (desc.soundWaveId === 0) {
         continue;
       }
-      queueEntries.push({
-        startTime: desc.startTime,
-        execute: () => {
-          _realVfxStats.soundHooksFired += 1;
-          const immediateDesc = { ...desc, startTime: 0 };
-          em._firePlayEffectSoundHook(targetGuid >>> 0, immediateDesc);
-        },
-      });
+      _realVfxStats.soundHooksFired += 1;
+      em._firePlayEffectSoundHook(targetGuid >>> 0, desc);
     }
   }
-  if (soundOnly) {
-    if (queueEntries.length > 0) {
-      const mgr = _getScriptManagerForEntity(em, targetGuid);
-      const maxTime = Math.max(0, ...queueEntries.map((q) => q.startTime));
-      mgr.addScript(pesId || scriptId, queueEntries, { length: maxTime + 0.05 });
-      _ensureManagerPump(mgr);
-    }
-    return false;
-  }
+  if (soundOnly) return false;
 
   // HIDEFX (2026-10-07, `?playEffectLifecycle`): run the script's
   // StopParticle(15) / DestroyParticle(14) hooks — retail

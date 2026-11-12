@@ -145,6 +145,7 @@ const body = spliceModule(src, {
     composeDyePreview: "() => { throw new Error('composeDyePreview must not be reached'); }",
     resolveDyeTriples: "() => { throw new Error('resolveDyeTriples must not be reached'); }",
     DyeViewport: "class { constructor() { throw new Error('DyeViewport must not be reached'); } }",
+    escapeHtml: "(s) => String(s)",
     // The REAL snapshot helper, threaded in (not faked).
     takeInventorySnapshot: "globalThis.__realTakeInventorySnapshot",
   },

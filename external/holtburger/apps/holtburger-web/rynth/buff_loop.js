@@ -1348,7 +1348,9 @@ export class RynthBuffLoop {
       const itemGuid = Number(ib && ib.itemGuid) >>> 0;
       if (!spellId || !itemGuid) continue;
       const itemName = typeof ib.itemName === "string" ? ib.itemName.trim() : "";
-      out.push(itemName ? { spellId, itemGuid, itemName } : { spellId, itemGuid });
+      const entry = itemName ? { spellId, itemGuid, itemName } : { spellId, itemGuid };
+      if (ib && ib.worn !== undefined) entry.worn = ib.worn;
+      out.push(entry);
     }
     this.itemBuffs = out;
     return out.length;
@@ -1442,7 +1444,9 @@ export class RynthBuffLoop {
       if (pick) entries.push({ spellId: pick.id, itemGuid: me, worn: true, family: f.family, spellName: pick.name });
     }
     if (entries.length) {
-      for (const r of this._inventoryRows()) {
+      const inv = this._inventoryRows();
+      w.invGuids = new Set(inv.map((r) => Number(r && r.guid) >>> 0));
+      for (const r of inv) {
         if ((Number(r && r.equipMask) >>> 0) !== 0 && ((Number(r.itemType) >>> 0) & ITEM_TYPE_WORN) !== 0) {
           w.covers.add(Number(r.guid) >>> 0);
         }
@@ -1473,11 +1477,15 @@ export class RynthBuffLoop {
    *  cast enchants it, so it is never cast twice. */
   _itemPass(now) {
     const w = this._wornArmor(now);
-    const inv = this._inventoryRows();
-    const invGuids = new Set(inv.map((r) => Number(r.guid) >>> 0));
     let rest = this.itemBuffs;
-    if (invGuids.size > 0) {
-      rest = rest.filter((ib) => invGuids.has(Number(ib.itemGuid) >>> 0));
+    if (w && w.invGuids && w.invGuids.size > 0) {
+      rest = rest.filter((ib) => ib.worn || w.invGuids.has(Number(ib.itemGuid) >>> 0));
+    } else if (rest.some((ib) => ib.worn === false)) {
+      const inv = this._inventoryRows();
+      if (inv.length > 0) {
+        const invGuids = new Set(inv.map((r) => Number(r && r.guid) >>> 0));
+        rest = rest.filter((ib) => ib.worn !== false || invGuids.has(Number(ib.itemGuid) >>> 0));
+      }
     }
     if (!w || !w.entries.length) return rest;
     const fams = new Set(w.entries.map((e) => e.family));

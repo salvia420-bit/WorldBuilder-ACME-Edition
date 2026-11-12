@@ -159,8 +159,8 @@ export function evalGpF32(recData, rowData, recIndex, opts = {}) {
   const bb = Math.floor(f(e3[2] + 0.5));
   if (bb !== 0 && m0[3] > 0.5) {
     if (bb === 6) {
-      const cw = fetch(rowData, mr, 2);
-      const d6 = sub([cw[0], cw[1], cw[2]], P);
+      const cl = fetch(rowData, mr, 1);
+      const d6 = sub([cl[0], cl[1], cl[2]], P);
       if (dot(d6, d6) >= K_EPS) {
         const nn = fetch(rowData, er, 4);
         R = qmat(unitVectors([nn[0], nn[1], nn[2]], norm(d6)));

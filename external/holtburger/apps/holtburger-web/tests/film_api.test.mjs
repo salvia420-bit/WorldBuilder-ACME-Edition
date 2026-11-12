@@ -1164,7 +1164,7 @@ check("A11 deps.modules.vfxCatalog replaces the import (a fake catalog makes the
   const api3 = install(S3, { wasmExports: placementWasm() });
   await api3.__runtime.worldQuery.staticsNear([LBX + 60, LBY + 60, 0], 30);
   const o3 = api3.__runtime.worldQuery.describeHit(oakHit);
-  assert.deepEqual([o3.kind, o3.fadeKey], ["rock", null], "never loads the catalog itself");
+  assert.deepEqual([o3.kind, o3.fadeKey], ["tree", null], "never loads the catalog itself (tree identified via isTreeDid)");
   api3.dispose();
 });
 

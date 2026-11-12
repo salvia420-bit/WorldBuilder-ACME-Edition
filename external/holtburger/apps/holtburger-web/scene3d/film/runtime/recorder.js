@@ -642,7 +642,6 @@ export function createRecorder(opts = {}) {
     }
     // Also after a grab / output failure: fail() leaves the (hardware) encoder configured.
     closeEncoder();
-    releaseQueue();
     return stats();
   }
 

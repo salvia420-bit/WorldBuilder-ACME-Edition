@@ -159,7 +159,7 @@ function method(name) {
 function managerClass(adopt) {
   return new Function(
     "weaponFxOwnedMaterial", "adoptLuminousClone", "releaseLuminousMaterial",
-    `return class {\n${method("_getOrCloneEntityMaterial")}\n${method("_repointEntityMeshes")}\n${method("_applyRampValueToMaterial")}\n};`,
+    `return class {\n${method("_getOrCloneEntityMaterial")}\n${method("_repointEntityMeshes")}\n${method("_applyRampValueToMaterial")}\n${method("_preserveCloneShaderPatches")}\n};`,
   )(() => null, adopt, L.releaseLuminousMaterial);
 }
 function rig(did, mat) {

@@ -860,9 +860,9 @@ export class AnimationCache {
 
         const rawPosFrames = animData.posFrames;
         const posFrames =
-            typeof rawPosFrames === "object" && rawPosFrames !== null
+            typeof rawPosFrames === "object" && rawPosFrames !== null && rawPosFrames.length > 0
                 ? rawPosFrames
-                : new Float32Array(0);
+                : null;
 
         const rawRootMotionNet = animData.rootMotionNet;
         const rootMotionNet =

@@ -5,13 +5,14 @@
 import { writeFileSync, mkdirSync } from "node:fs";
 import { CDP, prepareLaunch, launchChrome, killBench, armKillOnSignal } from "./lib/hb_box.mjs";
 import { connectAtLaunch, sizeWindow, waitBootReady, teleportSettle } from "./lib/hb_session.mjs";
+import { uncappedBenchUrl } from "./lib/bench-url.mjs";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const log = (...args) => console.log(`[${new Date().toISOString().slice(11, 19)}]`, ...args);
 
 const PROFILE = "hbb-m3-post";
 const TARGET_WINDOW = { w: 1280, h: 720 };
-const APP_URL = "http://127.0.0.1:8765/apps/holtburger-web/index.html?autoLogin=1&account=tailnet1&password=tailnet1&autoSpawn=first&renderer=3d&quality=mid&agentic=low&targetFps=0&nosw=1&camDebug=on";
+const APP_URL = uncappedBenchUrl("http://127.0.0.1:8765/apps/holtburger-web/index.html?autoLogin=1&account=tailnet1&password=tailnet1&autoSpawn=first&renderer=3d&quality=mid&agentic=low&targetFps=0&nosw=1&camDebug=on");
 const OUT_DIR = "/home/wbterminal/.agents/teamwork/teamwork_worker_m3";
 
 mkdirSync(OUT_DIR, { recursive: true });
@@ -372,7 +373,7 @@ try {
   try {
     if (page) {
       await page.evaluate(() => { try { window.__stallDisarm?.(); } catch (_) {} }).catch(() => {});
-      await page.goto("about:blank").catch(() => {});
+      await page.close().catch(() => {});
     }
   } catch (_) {}
   try {

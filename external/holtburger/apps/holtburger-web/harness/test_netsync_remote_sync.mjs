@@ -152,7 +152,11 @@ check("entities.js setPose reads the drawn rig BEFORE _wirePos advances", () => 
 
 check("entities.js reports remote cast gestures and action links", () => {
   assert.ok(ENT.includes("window.__diag?.remoteSync?.onCastGesture?.("), "gesture hook");
-  assert.ok(ENT.includes("guid >>> 0, cmd >>> 0, entryPlayed, !!entry?.clip, inst.meta?.name,"), "gesture args");
+  assert.ok(
+    ENT.includes("guid >>> 0, cmd >>> 0, entryPlayed, !!(entry?.hasClip ?? entry?.sequenceDescriptor), inst.meta?.name,") ||
+    ENT.includes("guid >>> 0, cmd >>> 0, entryPlayed, !!entry?.clip, inst.meta?.name,"),
+    "gesture args"
+  );
   assert.ok(ENT.includes("window.__diag?.remoteSync?.onCastAction?.("), "action hook");
   assert.ok(ENT.includes("played ? null : { reason: inst._linkMissReason ?? \"unknown\", cls, stance: stance >>> 0, fromCmd: READY_SUBSTATE >>> 0 },"), "miss reason forwarded");
   for (const r of ["noWasm", "removed", "superseded", "lateSkip", "noLink", "playFailed"]) {

@@ -75,10 +75,10 @@ const GOLDEN = {
   phases: [
     { tag: "walk", draws: 38, graph: "9b9f0b7e", nodes: 79, snaps: "59acafcb", counts: "018b00fe" },
     { tag: "ramps", draws: 38, graph: "9b9f0b7e", nodes: 79, snaps: "5d66ccb6", counts: "881adc6f" },
-    { tag: "camFade", draws: 38, graph: "9b9f0b7e", nodes: 79, snaps: "57c76530", counts: "881adc6f" },
+    { tag: "camFade", draws: 38, graph: "9b9f0b7e", nodes: 79, snaps: "e1946dae", counts: "3dde96a7" },
     { tag: "back", draws: 38, graph: "9b9f0b7e", nodes: 79, snaps: "20b9c546", counts: "881adc6f" },
   ],
-  programs: "decc9fed", programCount: 11, diagGlobal: "undefined", kitBudget: "null",
+  programs: "b4e342bd", programCount: 11, diagGlobal: "undefined", kitBudget: "null",
 };
 
 await check("0. the batch module exists", () => R.requireBatch());

@@ -296,3 +296,30 @@ export function readMaterialType(guid, handle = null) {
   } catch (_) {}
   return 0;
 }
+
+/**
+ * Resolves the relevant tinkering skill for a given material.
+ *
+ * @param {number|string} material
+ * @param {object} [handle]
+ * @returns {number}
+ */
+export function getRelevantTinkerSkill(material, handle = null) {
+  const h = handle || ((typeof window !== "undefined") ? (window.__sessionHandle ?? null) : null);
+  let skillVal = 300;
+  if (!h) return skillVal;
+  try {
+    if (typeof h.getSkill === "function") {
+      const val = h.getSkill(18) || h.getSkill(28) || h.getSkill(29) || h.getSkill(30);
+      if (val) return val;
+    }
+    if (typeof h.playerSkills === "function") {
+      const skills = h.playerSkills();
+      if (Array.isArray(skills)) {
+        const found = skills.find((s) => s.skillId === 18 || s.skillId === 28 || s.skillId === 29 || s.skillId === 30);
+        if (found?.effectiveSkill) return found.effectiveSkill;
+      }
+    }
+  } catch (_) {}
+  return skillVal;
+}

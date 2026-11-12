@@ -34,13 +34,13 @@ const { check, done } = R.suite("entity_batch_shader");
 
 await check("0. the batch module exists", () => R.requireBatch());
 
-const CLAMP = "hb|d0|c0|p0|l1|a0|b0|f0|s0|k0|v";
 function member(clamp, blend = "opaque", side = THREE.DoubleSide) {
   const m = new THREE.MeshStandardMaterial({ map: CM.dummyMap(), side, roughness: 0.9 });
   if (blend === "alphaTest") m.alphaTest = 100 / 255;
   if (clamp) M.installLightClampShaderPatch(m);
   return m;
 }
+const CLAMP = ASB.memberProgramKey(member(true));
 const eb = () => new EB.EntityBatch({ scene3d: {} }, { diagGlobal: false, env: () => ({}) });
 
 await check("1a. program keys for the stock and the light-clamp chain", () => {

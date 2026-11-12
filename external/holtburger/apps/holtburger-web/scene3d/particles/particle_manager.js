@@ -66,7 +66,7 @@ import { addFxDistortSource, releaseFxDistortSource } from "../vfx/fx_distort.js
 // 2026-10-26 `?rustParticles` (DEFAULT OFF, `=on` opts in) — instanced emitters
 // simulated and packed by the Rust kernel (crates/holtburger-scene particles;
 // docs/2026-10-26-rust-particles.md). The bridge owns the wasm instance.
-import { createRustParticles, rustMotionOn, rustParticlesPending } from "../rust/particles.js";
+import { createRustParticles, rustMotionOn, rustParticlesPending, rustParticlesEnabled } from "../rust/particles.js";
 // 2026-10-30 `?gpuParticles` (round 3 R3-7a, DEFAULT OFF, `=on` opts in) —
 // particle motion evaluated in the bucket vertex shader (gpu_particles.js).
 // Every hook below sits behind ONE memoised `_gpOn()` per tick, typeof-guarded
@@ -1426,7 +1426,13 @@ export function _billboardEmitter(emitter, camera, scene) {
     } else {
       // Scene-detached carrier mesh (instanced path): mesh.position is in scene-local (AC Z-up) space.
       // Subvectors camera in scene-local space and mesh.position so billboard is oriented correctly, not sideways.
-      _bbDir.subVectors(_bbCamLocal, mesh.position);
+      if ((typeof globalThis !== "undefined" && globalThis.__hbRustParityHarness) ||
+          (typeof rustParticlesEnabled === "function" && rustParticlesEnabled())) {
+        _bbMeshWorld.copy(mesh.position);
+        _bbDir.subVectors(_bbCamWorld, _bbMeshWorld);
+      } else {
+        _bbDir.subVectors(_bbCamLocal, mesh.position);
+      }
       if (_bbDir.lengthSq() < 1e-10) continue;
       _bbDir.normalize();
     }
@@ -3005,7 +3011,7 @@ export class ParticleManager {
     const cellGate = cellLookup !== null && particleCellGateEnabled();
     // ?particleCulledLean — read once per tick (see the culled branch).
     const leanCulled = particleCulledLeanEnabled();
-    const far30Hz = particleFar30HzEnabled();
+    const far30Hz = particleFar30HzEnabled() && !(typeof rustParticlesEnabled === "function" && rustParticlesEnabled());
     const tickNow = currentTime();
     const camForDist = bbCamera || camera;
     let cellHidden = 0;

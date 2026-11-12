@@ -3804,12 +3804,13 @@ export function createTakePlayer(deps = {}) {
     return out;
   }
 
-  function abort() {
+  function abort(reason = "aborted") {
     const was = !!run;
-    if (run) abortRequested = true;
-    if (recorderRef) {
+    if (run) {
+      abortRequested = true;
+    } else if (recorderRef && typeof recorderRef.abort === "function") {
       try {
-        if (typeof recorderRef.abort === "function") recorderRef.abort("aborted");
+        recorderRef.abort(reason);
       } catch (_) {}
     }
     return { ok: true, wasRunning: was };

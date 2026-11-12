@@ -152,7 +152,7 @@ console.log("account_boot — AccountBoot (0xF7DC) → retail boot line, termina
   check("boot: __lastDisconnect.booted is set, reason raw",
     window.__lastDisconnect?.booted === true && window.__lastDisconnect?.reason === PASSWORD_LINE,
     JSON.stringify(window.__lastDisconnect));
-  check("boot: the banner carries the line", banner === `DISCONNECTED — ${PASSWORD_LINE}`, String(banner));
+  check("boot: the banner carries the line", banner?.trim() === `DISCONNECTED — ${PASSWORD_LINE}`, String(banner));
   check("boot: no bot/agent auto-reload is scheduled", timers.length === 0 && storageWrites.length === 0,
     `timers=${JSON.stringify(timers)} writes=${storageWrites.length}`);
   check("boot: auto_login sees it as terminal",
@@ -178,7 +178,7 @@ console.log("account_boot — AccountBoot (0xF7DC) → retail boot line, termina
     D.loginStatus.innerHTML.includes("Reload the page to retry."), D.loginStatus.innerHTML);
   check("plain: __lastDisconnect.booted is false", window.__lastDisconnect?.booted === false);
   check("plain: the banner keeps its wording",
-    banner === "DISCONNECTED — session dead, reload to reconnect (recv_message: closed)", String(banner));
+    banner?.trim() === "DISCONNECTED — session dead, reload to reconnect (recv_message: closed)", String(banner));
   check("plain: the bot/agent auto-reload is still scheduled", timers.length === 1 && timers[0] === 10000,
     JSON.stringify(timers));
 }

@@ -1117,7 +1117,7 @@ section("G  GLSL source, the patch, program keys, the fog chain, the self-check"
     ["mode 5 keeps Z", "if ( bb == 5 ) R = mat3( third, aim, keep );"],
     ["mode 4 keeps Y", "else if ( bb == 4 ) R = mat3( aim, keep, third );"],
     ["mode 3 keeps X", "else R = mat3( keep, third, aim );"],
-    ["POJO sprite: camWorld - P (the scene-local quirk)", "vec3 d6 = hbGpE( mr, 2 ).xyz - P;"],
+    ["POJO sprite: camLocal - P", "vec3 d6 = hbGpE( mr, 1 ).xyz - P;"],
     ["velocity lag 1.5 ticks", "float tv = max( t - 1.5 * m0.z, 0.0 );"],
     ["spawn-tick / teleport zero", "if ( t < 0.5 * m0.z || dot( V, V ) > e3.w ) V = vec3( 0.0 );"],
     ["FX colour (op, fxAge, (fxLive ? row : 0) + seed)", "hbGpIc = vec3( op, fa, ( hbGpE( 0, 0 ).x > 0.5 ? e2.w : 0.0 ) + r3.w );"],

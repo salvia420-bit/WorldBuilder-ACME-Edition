@@ -32,7 +32,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   acquireHeavyLock, acquireHeavyLockSync, availableMemoryBytes, childHeapArgs, heavyLockBypass,
-  HELD_ENV, ORPHAN_LOCK_MS, parseMemAvailable, procStartTime, readOwner,
+  HELD_ENV, ORPHAN_LOCK_MS, parseMemAvailable, procStartTime, readOwner, DEFAULT_TEST_HEAP_MB,
 } from "./lib/heavy_lock.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -270,7 +270,7 @@ try {
 
   // ── 7: per-child heap cap ────────────────────────────────────────────────
   {
-    ok(JSON.stringify(childHeapArgs({})) === '["--max-old-space-size=1536"]', "7: default child heap cap 1536 MB");
+    ok(JSON.stringify(childHeapArgs({})) === JSON.stringify([`--max-old-space-size=${DEFAULT_TEST_HEAP_MB}`]), "7: default child heap cap");
     ok(JSON.stringify(childHeapArgs({ HB_TEST_HEAP_MB: "2048" })) === '["--max-old-space-size=2048"]', "7: HB_TEST_HEAP_MB overrides");
     ok(childHeapArgs({ HB_TEST_HEAP_MB: "0" }).length === 0, "7: HB_TEST_HEAP_MB=0 uncaps");
     ok(childHeapArgs({ HB_TEST_HEAP_MB: "junk" }).length === 0, "7: junk → uncapped, never a bad node flag");

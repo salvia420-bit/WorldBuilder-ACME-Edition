@@ -39,6 +39,8 @@ export const MATERIALS_JS_STUBS = Object.freeze({
   materialBakeEnabled: "() => false",
   // ./quality.js
   getQuality: "() => null",
+  // ./batched_material_variant.js
+  memberMaterialOf: "() => null",
   // ./suite_assets.js
   SuiteAssetSource: "class {}",
   loadTexchanManifest: "() => null",

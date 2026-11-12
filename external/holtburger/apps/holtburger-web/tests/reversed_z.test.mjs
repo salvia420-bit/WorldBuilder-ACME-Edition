@@ -464,7 +464,7 @@ const pin = (name, hash, len, text, opts = {}) => {
   const psh = { vertexShader: THREE.ShaderLib.basic.vertexShader, fragmentShader: THREE.ShaderLib.basic.fragmentShader, uniforms: {} };
   pf.patchParticleFxShader(psh);
   pin("particle fx (patched MeshBasic) fragment", "899f1591", 9552, psh.fragmentShader);
-  pin("particle fx (patched MeshBasic) vertex", "8ba2b5b2", 9140, psh.vertexShader);
+  pin("particle fx (patched MeshBasic) vertex", "ae9b7058", 9242, psh.vertexShader);
   // The big terrain program: its log arm is checked structurally in Z9 (pinning
   // a 166 KB shader that every terrain card edits would only add merge churn).
 }

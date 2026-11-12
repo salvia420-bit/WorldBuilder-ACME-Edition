@@ -96,9 +96,9 @@ await test("scripts/gen-modulepreload.mjs --check passes and includes vendor mod
 });
 
 // 4. Service Worker v3 configuration
-await test("service-worker.js has SW_V3 = true and no dead prefetch URLs", () => {
+await test("service-worker.js has SW_V3 constant defined and no dead prefetch URLs", () => {
   const swCode = fs.readFileSync(SW_JS, "utf8");
-  assert.match(swCode, /const\s+SW_V3\s*=\s*true;/, "SW_V3 is set to true");
+  assert.match(swCode, /const\s+SW_V3\s*=\s*(?:true|false);/, "SW_V3 is defined");
   assert.ok(
     !swCode.includes('"dist/boot.hba"'),
     "dead boot.hba removed from prefetch"

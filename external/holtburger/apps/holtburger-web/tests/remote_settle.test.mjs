@@ -110,8 +110,8 @@ test("S4: the wasm wiring", () => {
   assert.match(lib, /fn parse_remote_settle_flag\(search: &str\) -> bool \{[\s\S]{0,300}"remoteSettle=off" \| "remoteSettle=0" \| "remoteSettle=false"/);
   assert.match(lib, /set_remote_settle\(parse_remote_settle_flag\(&flag_search\(\)\)\)/);
   // Residency marks: each populate export marks its part only after it queued the geometry.
-  assert.match(lib, /populate_building_aabbs_for_landblock_impl\(landblock_id\)\.await;\s*if queued\.is_ok\(\) \{\s*note_landblock_collision_part\(\s*landblock_id,\s*holtburger_world::spatial::LANDBLOCK_COLLISION_BUILDINGS/);
-  assert.match(lib, /populate_statics_aabbs_for_landblock_impl\(landblock_id\)\.await;\s*if queued\.is_ok\(\) \{[\s\S]{0,400}LANDBLOCK_COLLISION_STATICS/);
+  assert.match(lib, /populate_building_aabbs_for_landblock_impl\(landblock_id\)\.await;\s*if queued\.is_ok\(\)(?:\s*&&\s*evict_hold\.live\(\))?\s*\{\s*note_landblock_collision_part\(\s*landblock_id,\s*holtburger_world::spatial::LANDBLOCK_COLLISION_BUILDINGS/);
+  assert.match(lib, /populate_statics_aabbs_for_landblock_impl\(landblock_id\)\.await;\s*if queued\.is_ok\(\)(?:\s*&&\s*evict_hold\.live\(\))?\s*\{[\s\S]{0,400}LANDBLOCK_COLLISION_STATICS/);
   // The Region is resident before both terrain fetchers decode heights (table, not byte * 2).
   for (const fn of ["pub async fn fetch_landblock_heightmaps(", "pub async fn fetch_subdivided_landblocks("]) {
     const body = lib.slice(lib.indexOf(fn), lib.indexOf(fn) + 4000);

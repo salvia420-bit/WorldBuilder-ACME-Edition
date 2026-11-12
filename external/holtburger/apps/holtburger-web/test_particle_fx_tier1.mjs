@@ -379,7 +379,7 @@ async function run() {
   check("10. smoke stage: pseudo-normal from the alpha's screen gradient, noise erosion, curl flow, rim",
     shS.fragmentShader.includes("vec2( dFdx( fxAl ), dFdy( fxAl ) )") && shS.fragmentShader.includes("texture2D( uFxNoise, fxNuv )") &&
     shS.fragmentShader.includes("fxUv += fxFl * vFxF.z;") && shS.fragmentShader.includes("pow( clamp( -fxSunV.z, 0.0, 1.0 ), 4.0 )") &&
-    shS.vertexShader.includes("fxVis = hbFxCsm( fxCw.xyz, -fxCv.z );"));
+    (shS.vertexShader.includes("fxVis = hbFxCsm( fxCw.xyz, fxDist );") || shS.vertexShader.includes("fxVis = hbFxCsm( fxCw.xyz, -fxCv.z );")));
   fx._setParticleFxVariantForTest(false, null);
   const mN = baseMaterial(true);
   fx.applyParticleFxMaterial(mN, { additive: true });

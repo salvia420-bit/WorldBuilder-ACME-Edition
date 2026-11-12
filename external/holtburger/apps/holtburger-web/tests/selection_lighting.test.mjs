@@ -269,13 +269,13 @@ await check("2e: a texture re-seated mid-flash is followed without a define flip
 
 console.log("-- 3 the flag ---------------------------------------------------");
 
-await check("3a: ?selectionFlash is an exact `=on` opt-in", () => {
+await check("3a: ?selectionFlash is default-ON, escaped via `=off`", () => {
   assert.equal(S.selectionFlashEnabled("?selectionFlash=on"), true);
-  for (const q of ["", "?selectionFlash", "?selectionFlash=1", "?selectionFlash=true", "?selectionFlash=ON", "?selectionFlash=off"]) {
-    assert.equal(S.selectionFlashEnabled(q), false, q);
-  }
+  assert.equal(S.selectionFlashEnabled(""), true);
+  assert.equal(S.selectionFlashEnabled("?selectionFlash"), true);
+  assert.equal(S.selectionFlashEnabled("?selectionFlash=off"), false);
   S._setSelectionFlashEnabledForTest(null);
-  assert.equal(S.selectionFlashEnabled(), false, "node has no window: default OFF");
+  assert.equal(S.selectionFlashEnabled(), true, "default ON");
 });
 
 console.log("-- 4 the real EntityManager -------------------------------------");

@@ -302,7 +302,7 @@ export function guardedStreamBake(state, kind, lbKey, run, opts = {}) {
       const fh = getFlightHint();
       const flying = !!(fh && fh.active !== false);
       const kindCap = (flying ? FLIGHT_KIND_CAPS[kind] : DEFAULT_KIND_CAPS[kind]) ?? maxInFlight;
-      if ((kindSet ? kindSet.size : st.inFlight.size) >= kindCap) {
+      if (st.inFlight.size >= maxInFlight || (kindSet ? kindSet.size : st.inFlight.size) >= kindCap) {
         if (rec) rec.skipCap += 1;
         rlogBakeSkip("cap");
         return Promise.resolve(null);

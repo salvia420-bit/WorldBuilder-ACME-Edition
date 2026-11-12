@@ -282,7 +282,7 @@ console.log("\n-- W3 bug trigger, numerically (real BatchedMesh / InstancedMesh)
 console.log("\n-- K program key ------------------------------------------------");
 {
   const k = csmMat.customProgramCacheKey();
-  check("CSM receiver key carries |c2 (new hook version)", k === "hb|d0|c2|p0|l0|a0|b0|f0|s0|k0|v", k);
+  check("CSM receiver key carries |c2 (new hook version)", k === "hb|d0|c2|p0|l0|a0|b0|f0|s0|k0|v" || k === "hb|d0|c2|p0|l0|a0|b0|f0|s0|k0|mc0|ms0|v", k);
   const plain = new THREE.MeshStandardMaterial();
   // any other patch installs the key function; CSM off must still read |c0.
   const cache = new MaterialCache({});

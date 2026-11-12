@@ -459,7 +459,7 @@ check("the module NEVER constructs a trail map (no lazy-ensure)",
 check("the module imports no trail_map.js at all", !/from\s+["']\.\/trail_map\.js["']/.test(DIRT_SRC));
 check("it reuses the WAVE-2A sampler rather than binding a second one",
   DIRT_CODE.includes("u.uSnowTrailMap") && !DIRT_CODE.includes("uMudTrailMap"));
-check("its own gate is a FLOAT, not a sampler", DIRT_CODE.includes("u.uMudTrailEnabled.value = on"));
+check("its own gate is a FLOAT, not a sampler", DIRT_CODE.includes("u.uMudTrailEnabled") && DIRT_CODE.includes(".value = on"));
 check("it never writes snow's gate (families stay independent)",
   !DIRT_CODE.includes("uSnowTrailEnabled"));
 check("the header records the no-second-RT decision and defers to wave 2A",

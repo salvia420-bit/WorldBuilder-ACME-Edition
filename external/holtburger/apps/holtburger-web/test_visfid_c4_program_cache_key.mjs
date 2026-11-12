@@ -169,12 +169,12 @@ check(
 // un-patched materials keep `|c0`.
 check(
     "CSM+POM key has the exact expected shape",
-    keyA === "hb|d0|c2|p1|l0|a0|b0|f0|s0|k0|v",
+    keyA === "hb|d0|c2|p1|l0|a0|b0|f0|s0|k0|mc0|ms0|v",
     `keyA=${keyA}`
 );
 check(
     "CSM+lightClamp key has the exact expected shape",
-    keyB === "hb|d0|c2|p0|l1|a0|b0|f0|s0|k0|v",
+    keyB === "hb|d0|c2|p0|l1|a0|b0|f0|s0|k0|mc0|ms0|v",
     `keyB=${keyB}`
 );
 
@@ -186,7 +186,7 @@ installCsmShaderPatch(matSingle, csmState);
 check(
     "single CSM-only patch still installs a customProgramCacheKey",
     typeof matSingle.customProgramCacheKey === "function" &&
-        matSingle.customProgramCacheKey() === "hb|d0|c2|p0|l0|a0|b0|f0|s0|k0|v",
+        matSingle.customProgramCacheKey() === "hb|d0|c2|p0|l0|a0|b0|f0|s0|k0|mc0|ms0|v",
     `key=${typeof matSingle.customProgramCacheKey === "function" ? matSingle.customProgramCacheKey() : "(none)"}`
 );
 
@@ -196,7 +196,7 @@ applyWireVertexAOPatch(matAO);
 check(
     "AO patch installs a key reflecting __aoPatched",
     typeof matAO.customProgramCacheKey === "function" &&
-        matAO.customProgramCacheKey() === "hb|d0|c0|p0|l0|a1|b0|f0|s0|k0|v",
+        matAO.customProgramCacheKey() === "hb|d0|c0|p0|l0|a1|b0|f0|s0|k0|mc0|ms0|v",
     `key=${typeof matAO.customProgramCacheKey === "function" ? matAO.customProgramCacheKey() : "(none)"}`
 );
 
@@ -205,7 +205,7 @@ applyFillDepthBias(matFill);
 applyWireVertexAOPatch(matFill);
 check(
     "depthBias + AO compose into ONE key with both bits set",
-    matFill.customProgramCacheKey() === "hb|d0|c0|p0|l0|a1|b1|f0|s0|k0|v",
+    matFill.customProgramCacheKey() === "hb|d0|c0|p0|l0|a1|b1|f0|s0|k0|mc0|ms0|v",
     `key=${matFill.customProgramCacheKey()}`
 );
 
@@ -248,8 +248,8 @@ installPomShaderPatch(matLazy, stubHeight, { forced: true });
 const keyAfterPom = matLazy.customProgramCacheKey();
 check(
     "key is read LAZILY: adding POM after CSM flips the p bit on the existing key",
-    keyBeforePom === "hb|d0|c2|p0|l0|a0|b0|f0|s0|k0|v" &&
-        keyAfterPom === "hb|d0|c2|p1|l0|a0|b0|f0|s0|k0|v",
+    keyBeforePom === "hb|d0|c2|p0|l0|a0|b0|f0|s0|k0|mc0|ms0|v" &&
+        keyAfterPom === "hb|d0|c2|p1|l0|a0|b0|f0|s0|k0|mc0|ms0|v",
     `before=${keyBeforePom}, after=${keyAfterPom}`
 );
 

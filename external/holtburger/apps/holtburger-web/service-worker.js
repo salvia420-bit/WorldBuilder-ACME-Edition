@@ -36,7 +36,7 @@
 //   * `manifest.json` / HTML / JS / wasm stay un-intercepted in BOTH modes;
 //     offline manifest fallback is the PackFetchController's job (a
 //     controller-stashed last-known manifest), never the SW's.
-const SW_V3 = true;
+const SW_V3 = false;
 
 // v1 -> v2 (2026-06-21): cache-bust the immutable shard cache (tree/scenery
 // models + textures). Investigating "no trees render on a phone" where the

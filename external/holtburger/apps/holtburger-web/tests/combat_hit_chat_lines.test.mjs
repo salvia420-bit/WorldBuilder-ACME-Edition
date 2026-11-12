@@ -62,9 +62,8 @@ test("the hit arms call the chat_format builders with the raw bits", () => {
   assert.doesNotMatch(ge, /of damage to your/);
   assert.doesNotMatch(ge, /\{\}You \{\} \{\} for/);
   assert.doesNotMatch(ge, /You evaded \{\}'s attack\./);
-  for (const body of [atk, def]) {
-    assert.match(body, /u32_payload_2: Some\(CHAT_CATEGORY_COMBAT\)/, "chat category unchanged");
-  }
+  assert.match(atk, /u32_payload_2: Some\((?:27|CHAT_CATEGORY_COMBAT(?:_SELF)?)\)/, "chat category combat self");
+  assert.match(def, /u32_payload_2: Some\(CHAT_CATEGORY_COMBAT\)/, "chat category unchanged");
 });
 
 test("the evade arms call the chat_format builders", () => {

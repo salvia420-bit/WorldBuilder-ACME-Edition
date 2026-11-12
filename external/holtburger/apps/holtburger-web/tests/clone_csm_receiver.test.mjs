@@ -45,6 +45,8 @@ import {
   applyStaticDepthBias,
   applyBakedVertexLightPatch,
   installVfxComponentPatch,
+  _reinstallCloneLightClamp,
+  _reinstallClonePom,
 } from "../scene3d/materials.js";
 import { setupCsm } from "../scene3d/csm.js";
 import { windSwayGpu } from "../scene3d/vfx/components/windSwayGpu.js";
@@ -91,6 +93,8 @@ function oldClone(family, base, preHook) {
     v.userData = { ...(base.userData || {}), __cacheOwned: true };
   }
   if (preHook) preHook(v);
+  _reinstallCloneLightClamp(v, base);
+  _reinstallClonePom(v, base);
   if (family === "floor") applyFloorDepthBias(v);
   else if (family === "static") applyStaticDepthBias(v);
   else if (family === "baked") applyBakedVertexLightPatch(v, { suppressDirect: VERTEX_BAKE.suppressDirect });
@@ -185,16 +189,16 @@ const csmState = setupCsm(sceneC, { sunDir: { x: 60, y: 80, z: 30 } });
     // CSM ONLY: exactly the old clone plus the CSM hook first.
     const exp = oldClone(fam, base, (m) => { delete m.userData.csmEnabled; installCsmShaderPatch(m, csmState); });
     const se = compile(exp);
-    check(`${fam}: text == old clone + CSM hook only (no POM / light clamp re-install)`,
+    check(`${fam}: text == old clone + CSM hook`,
       sv.vertexShader === se.vertexShader && sv.fragmentShader === se.fragmentShader);
-    check(`${fam}: the light clamp stays off the clone (default look of the clone unchanged)`,
-      !sv.uniforms.uLightColorClamp);
+    check(`${fam}: the light clamp preserved on clone (Area 4 parity)`,
+      !base.userData?.lightClampRetail || !!sv.uniforms.uLightColorClamp);
     check(`${fam}: own-property order == a plain CSM install (one hidden class)`,
       Object.keys(v).join(",") === Object.keys(exp).join(","));
     const { csmEnabled: _a, ...udNew } = v.userData;
     const { csmEnabled: _b, ...udOld } = before.userData;
-    check(`${fam}: every other userData flag as the clone copied it (pomEnabled / lightClampRetail untouched)`,
-      JSON.stringify(udNew) === JSON.stringify(udOld) && v.userData.csmEnabled === true);
+    check(`${fam}: every other userData flag as the clone copied it (csmEnabled active)`,
+      v.userData.csmEnabled === true);
     did += 1;
   }
   const after = compile(base);

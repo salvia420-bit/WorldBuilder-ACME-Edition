@@ -136,11 +136,16 @@ const patched = animSrc
         /^\s*import\s+\{[^}]*\}\s+from\s+["']\.\/hook_windows\.js["'];?\s*$/m,
         "",
     )
-    .replace(/^\s*export\s+function\s+/gm, "function ")
-    .replace(/^\s*export\s+class\s+/gm, "class ");
+    .replace(/^\s*export\s+(?:async\s+)?function\s+/gm, "function ")
+    .replace(/^\s*export\s+class\s+/gm, "class ")
+    .replace(/^\s*export\s+(const|let|var)\s+/gm, "$1 ")
+    .replace(/^\s*export\s*\{[^}]*\};?\s*$/gm, "");
 const hookWindowsSrc = (await import("node:fs"))
     .readFileSync(resolvePath(__dirname, "scene3d", "hook_windows.js"), "utf8")
-    .replace(/^\s*export\s+function\s+/gm, "function ");
+    .replace(/^\s*export\s+(?:async\s+)?function\s+/gm, "function ")
+    .replace(/^\s*export\s+class\s+/gm, "class ")
+    .replace(/^\s*export\s+(const|let|var)\s+/gm, "$1 ")
+    .replace(/^\s*export\s*\{[^}]*\};?\s*$/gm, "");
 // Wrap in a function that returns the symbols we need.
 const factory = new Function(
     "THREE",
