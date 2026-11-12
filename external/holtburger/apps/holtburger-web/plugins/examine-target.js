@@ -448,13 +448,40 @@ function getHandle() {
   return window.__sessionHandle ?? window.__pluginClient?._handle ?? null;
 }
 
+function snapshotInventoryItem(it) {
+  if (!it) return null;
+  return {
+    guid: it.guid,
+    name: it.name,
+    itemType: it.itemType,
+    stackSize: it.stackSize,
+    equipMask: it.equipMask,
+    validLocations: it.validLocations,
+    value: it.value,
+    burden: it.burden,
+    icon: it.icon,
+    iconOverlay: it.iconOverlay,
+  };
+}
+
 function getItemByGuid(guid) {
+  let items = null;
   try {
     const handle = getHandle();
     if (!handle?.playerInventory) return null;
-    const items = handle.playerInventory();
-    return items.find((it) => String(it.guid) === String(guid)) || null;
-  } catch (_) { return null; }
+    items = handle.playerInventory();
+    if (!Array.isArray(items)) return null;
+    const match = items.find((it) => String(it.guid) === String(guid)) || null;
+    return match ? snapshotInventoryItem(match) : null;
+  } catch (_) {
+    return null;
+  } finally {
+    if (Array.isArray(items)) {
+      for (const it of items) {
+        try { it?.free?.(); } catch (_) {}
+      }
+    }
+  }
 }
 
 function getEntityEntry(guid) {

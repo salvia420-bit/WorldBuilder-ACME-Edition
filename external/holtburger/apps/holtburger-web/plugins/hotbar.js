@@ -133,6 +133,28 @@ const url = (id) => `url("${SP}/${id}.png")`;
 
 // ── Pure helpers (unit-tested in test_toolbar_unified.mjs) ───────────
 
+export const COOLDOWN_SPRITE_IDS = Object.freeze([
+  0x060067CF,
+  0x060067D0,
+  0x060067D1,
+  0x060067D2,
+  0x060067D3,
+  0x060067D4,
+  0x060067D5,
+  0x060067D6,
+  0x060067D7,
+  0x060067D8,
+  0x060067D9,
+  0x060067DA,
+]);
+
+export function cooldownStep12(duration, remaining) {
+  const d = Number(duration);
+  const r = Number(remaining);
+  if (!(d > 0) || !(r > 0)) return 0;
+  return Math.max(1, Math.min(12, Math.trunc((r / d) * 12 + 1)));
+}
+
 /** Clamp a persisted / requested row count to 1 or 2. Anything but 2 is 1. */
 export function normalizeRowCount(v) {
   return Number(v) === 2 ? 2 : 1;
@@ -585,12 +607,33 @@ function ensureStyles() {
     }
     #${OVERLAY_ID} .hb-hotbar-slot.cooldown-active::after {
       content: ""; position: absolute; inset: 0; pointer-events: none;
+    }
+    #${OVERLAY_ID} .hb-hotbar-slot.cooldown-active[data-cd-step]::after {
+      background-size: 100% 100%;
+      background-position: center;
+      background-repeat: no-repeat;
+      clip-path: none;
+      animation: none;
+    }
+    #${OVERLAY_ID} .hb-hotbar-slot.cooldown-active:not([data-cd-step])::after {
       background: rgba(0,0,0,0.55);
       clip-path: polygon(50% 0, 100% 0, 100% 100%, 0 100%, 0 0, 50% 0);
       /* Per-item cooldowns (refreshSlotCooldowns) set the item's real
          duration and how far in it already is; unset = the 2.5 s sweep. */
       animation: hb-hotbar-cd var(--hb-cd-dur, 2500ms) linear var(--hb-cd-delay, 0s) forwards;
     }
+    #${OVERLAY_ID} .hb-hotbar-slot.cooldown-active[data-cd-step="1"]::after { background-image: url("${SP}/0x060067CF.png"); }
+    #${OVERLAY_ID} .hb-hotbar-slot.cooldown-active[data-cd-step="2"]::after { background-image: url("${SP}/0x060067D0.png"); }
+    #${OVERLAY_ID} .hb-hotbar-slot.cooldown-active[data-cd-step="3"]::after { background-image: url("${SP}/0x060067D1.png"); }
+    #${OVERLAY_ID} .hb-hotbar-slot.cooldown-active[data-cd-step="4"]::after { background-image: url("${SP}/0x060067D2.png"); }
+    #${OVERLAY_ID} .hb-hotbar-slot.cooldown-active[data-cd-step="5"]::after { background-image: url("${SP}/0x060067D3.png"); }
+    #${OVERLAY_ID} .hb-hotbar-slot.cooldown-active[data-cd-step="6"]::after { background-image: url("${SP}/0x060067D4.png"); }
+    #${OVERLAY_ID} .hb-hotbar-slot.cooldown-active[data-cd-step="7"]::after { background-image: url("${SP}/0x060067D5.png"); }
+    #${OVERLAY_ID} .hb-hotbar-slot.cooldown-active[data-cd-step="8"]::after { background-image: url("${SP}/0x060067D6.png"); }
+    #${OVERLAY_ID} .hb-hotbar-slot.cooldown-active[data-cd-step="9"]::after { background-image: url("${SP}/0x060067D7.png"); }
+    #${OVERLAY_ID} .hb-hotbar-slot.cooldown-active[data-cd-step="10"]::after { background-image: url("${SP}/0x060067D8.png"); }
+    #${OVERLAY_ID} .hb-hotbar-slot.cooldown-active[data-cd-step="11"]::after { background-image: url("${SP}/0x060067D9.png"); }
+    #${OVERLAY_ID} .hb-hotbar-slot.cooldown-active[data-cd-step="12"]::after { background-image: url("${SP}/0x060067DA.png"); }
     @keyframes hb-hotbar-cd {
       0%   { clip-path: polygon(50% 50%, 50% 0, 100% 0, 100% 100%, 0 100%, 0 0, 50% 0); }
       25%  { clip-path: polygon(50% 50%, 100% 50%, 100% 100%, 0 100%, 0 0, 50% 0); }
@@ -1745,6 +1788,7 @@ export function mount(ctx) {
     }
   }
   const onInventoryChanged = () => {
+    updateCachedInventoryCooldowns();
     refreshUnresolvedIcons();
     pruneStaleItemBindings();
   };
@@ -1779,17 +1823,8 @@ export function mount(ctx) {
   // sweep on every slot. A 250 ms timer runs only while a slot is cooling.
   const cdReceivedAt = new Map(); // "spell:layer:start" -> wall-clock s first seen
   let cdTimer = 0;
-  function clearSlotCooldown(el) {
-    if (!el.dataset.cdKey) return;
-    el.classList.remove("cooldown-active");
-    delete el.dataset.cdKey;
-    delete el.dataset.cdStep;
-    el.style.removeProperty?.("--hb-cd-dur");
-    el.style.removeProperty?.("--hb-cd-delay");
-  }
-  /** Per-item overlay pass; false = no per-item data (flag off / old pkg). */
-  function refreshSlotCooldowns() {
-    if (!SLOT_COOLDOWN) return false;
+  let cachedCdByGuid = null;
+  function updateCachedInventoryCooldowns() {
     const handle = window.__sessionHandle ?? null;
     let inv = [];
     try { inv = handle?.playerInventory?.() || []; } catch (_) { inv = []; }
@@ -1804,7 +1839,26 @@ export function mount(ctx) {
       } catch (_) {}
       try { it?.free?.(); } catch (_) {}
     }
-    if (!supported) return false;
+    cachedCdByGuid = supported ? cdByGuid : null;
+    return cachedCdByGuid;
+  }
+  function clearSlotCooldown(el) {
+    if (!el.dataset.cdKey) return;
+    el.classList.remove("cooldown-active");
+    delete el.dataset.cdKey;
+    delete el.dataset.cdStep;
+    el.style.removeProperty?.("--hb-cd-dur");
+    el.style.removeProperty?.("--hb-cd-delay");
+  }
+  /** Per-item overlay pass; false = no per-item data (flag off / old pkg). */
+  function refreshSlotCooldowns(fromTimer = false) {
+    if (!SLOT_COOLDOWN) return false;
+    const handle = window.__sessionHandle ?? null;
+    let cdByGuid = cachedCdByGuid;
+    if (cdByGuid === null && !fromTimer) {
+      cdByGuid = updateCachedInventoryCooldowns();
+    }
+    if (!cdByGuid) return false;
     // Copy-then-free, as buffs-hud.js does: AC start_time is relative
     // (<= 0) at receipt, so remaining = duration + start - time since seen.
     const enchs = [];
@@ -1833,7 +1887,7 @@ export function mount(ctx) {
       if (!cdReceivedAt.has(key)) cdReceivedAt.set(key, nowS);
       const dur = cd.duration > 0 ? cd.duration : e.duration;
       const remaining = e.duration + e.startTime - (nowS - cdReceivedAt.get(key));
-      const step = cooldownStep(dur, remaining);
+      const step = cooldownStep12(dur, remaining);
       if (step === 0) { clearSlotCooldown(el); continue; }
       anyActive = true;
       el.dataset.cdStep = String(step);
@@ -1845,12 +1899,13 @@ export function mount(ctx) {
       el.classList.add("cooldown-active");
     }
     for (const k of Array.from(cdReceivedAt.keys())) if (!liveKeys.has(k)) cdReceivedAt.delete(k);
-    if (anyActive && !cdTimer) cdTimer = setInterval(refreshSlotCooldowns, 250);
+    if (anyActive && !cdTimer) cdTimer = setInterval(() => refreshSlotCooldowns(true), 250);
     else if (!anyActive && cdTimer) { clearInterval(cdTimer); cdTimer = 0; }
     return true;
   }
   const onSharedCooldown = (e) => {
-    if (refreshSlotCooldowns()) return;
+    updateCachedInventoryCooldowns();
+    if (refreshSlotCooldowns(false)) return;
     // HUD rec #84 (2026-06-16) fallback: every slot, fixed 2.5 s sweep.
     const active = ((e?.activeCount ?? e?.detail?.activeCount) ?? 0) >>> 0;
     for (const slot of slotEls) slot.classList.toggle("cooldown-active", active > 0);
