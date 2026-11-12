@@ -1,6 +1,7 @@
 import { renderGraphicsTab } from "./graphics_settings.js";
 import { renderCameraTab } from "./camera_settings.js";
 import { resolveLocalBinding, matchesBinding, LOCAL_ACTION_IDS } from "./keymap.js";
+import { escapeHtml } from "./ac_html.js";
 
 const STYLE_ID = "hb-bar-style";
 const BAR_CLASS = "hb-bar";
@@ -836,7 +837,7 @@ export function mountBar({ client, root, slots: slotsOpt }) {
       content.innerHTML = `
         <div class="hb-settings-row">
           <label for="hb-set-color">Color</label>
-          <input id="hb-set-color" type="color" value="${state.color}">
+          <input id="hb-set-color" type="color" value="${escapeHtml(state.color)}">
         </div>
         <div class="hb-settings-row">
           <label for="hb-set-size">Icon size</label>

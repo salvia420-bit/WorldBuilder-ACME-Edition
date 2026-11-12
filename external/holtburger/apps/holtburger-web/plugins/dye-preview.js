@@ -40,6 +40,7 @@
 import { composeDyePreview, resolveDyeTriples } from "../ui/ac_dye_preview.js";
 import { DyeViewport } from "../ui/ac_dye_viewport.js";
 import { takeInventorySnapshot } from "./inventory_helpers.js";
+import { escapeHtml } from "../ui/ac_html.js";
 
 const TOOLTIP_ID = "hb-dye-preview-tooltip";
 const PLUGIN_STATE_KEY = "__hbDyePreviewState";
@@ -367,7 +368,7 @@ async function showTooltipFor(state, draggedItem, hoveredItem, x, y) {
   } catch (e) {
     if (viewport) try { viewport.dispose(); } catch (_) {}
     viewport = null;
-    viewportWrap.innerHTML = `<div style="padding:8px;opacity:0.7;">(viewport error: ${String(e?.message ?? e).slice(0, 60)})</div>`;
+    viewportWrap.innerHTML = `<div style="padding:8px;opacity:0.7;">(viewport error: ${escapeHtml(String(e?.message ?? e).slice(0, 60))})</div>`;
   }
 
   const note = document.createElement("div");

@@ -20,6 +20,7 @@
 // gmXxxUI instances mount into the same container slot.
 
 import { setAcText } from "../ui/ac_font.js";
+import { escapeHtml } from "../ui/ac_html.js";
 
 // HUD overhaul 2026-10-05 — retail TitleText font. Every gm*UI title
 // (gmCharacterInfoUI 0x2100001A "Character Information", the inventory /
@@ -301,7 +302,7 @@ function _mountCurrent() {
     console.warn(`[main-panel] no view registered: ${id} (showing not-yet-built placeholder)`);
     _runCleanup();
     setAcText(titleName, id.charAt(0).toUpperCase() + id.slice(1), { fontId: TITLE_FONT_ID, fit: true });
-    bodyEl.innerHTML = `<div style="padding:24px;color:var(--hb-text-muted);font-style:italic;text-align:center;font-size:11px;">View "${id}" not built yet.</div>`;
+    bodyEl.innerHTML = `<div style="padding:24px;color:var(--hb-text-muted);font-style:italic;text-align:center;font-size:11px;">View "${escapeHtml(id)}" not built yet.</div>`;
     currentCleanup = null;
     overlay.dataset.stackDepth = String(stack.length);
     show();

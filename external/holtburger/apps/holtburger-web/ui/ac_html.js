@@ -23,6 +23,7 @@
  * @returns {string}
  */
 export function escapeHtml(s) {
+  if (s == null) return "";
   return String(s)
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")

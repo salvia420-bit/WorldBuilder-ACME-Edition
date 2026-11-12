@@ -509,7 +509,12 @@ export function dispatchClientEvent(evt, D) {
       ? `<span class="fail">[FAIL]</span> ${escapeHtml(evt.stringPayload || "")}` +
         ` <span class="hint">Reload the page to log in again.</span>`
       : `<span class="fail">[FAIL]</span> Disconnected: <code>${escapeHtml(evt.stringPayload || "")}</code>` +
+        ` <button id="hbReconnectBtn" type="button" style="margin-left:8px;padding:2px 8px;cursor:pointer;">Reconnect</button>` +
         ` <span class="hint">Reload the page to retry.</span>`;
+    try {
+      const recBtn = document.getElementById("hbReconnectBtn");
+      if (recBtn) recBtn.addEventListener("click", () => location.reload());
+    } catch (_) {}
     // Stash the disconnect reason so the autoLogin
     // orchestrator can see it (it watches for kind=20
     // CharacterError + kind=4 disconnect as the two
@@ -519,6 +524,14 @@ export function dispatchClientEvent(evt, D) {
       reason: evt.stringPayload || "",
       booted,
     };
+    // Clean up disconnected transport / session state:
+    try {
+      if (D.handle?.disconnect) D.handle.disconnect();
+    } catch (_) {}
+    if (window.__sessionHandle === D.handle) {
+      window.__sessionHandle = null;
+    }
+    window.__bootState = "disconnected";
     // radar-4: the session's radar blackout ends with it (retail
     // ClientUISystem::OnEndCharacterSession, acclient.c:402065).
     window.__radarBlank = false;
@@ -527,6 +540,7 @@ export function dispatchClientEvent(evt, D) {
         ? `DISCONNECTED — ${evt.stringPayload || ""}`
         : "DISCONNECTED — session dead, reload to reconnect" +
           (evt.stringPayload ? ` (${evt.stringPayload})` : ""),
+      () => location.reload(),
     );
     // Entity reaping (2026-06-15): the dead session's entity
     // guids are all invalid now. Clear them so an in-page

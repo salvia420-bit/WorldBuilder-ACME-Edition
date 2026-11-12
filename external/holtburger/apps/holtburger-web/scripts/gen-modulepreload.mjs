@@ -82,20 +82,49 @@ function collectSpecifiers(src, followDynamic) {
 const hrefByFsPath = new Map();
 const visited = new Set(); // fsPaths whose imports we've already crawled
 
+const indexSrc = readFileSync(INDEX, "utf8");
+
+// Parse importmap from indexSrc to resolve local bare specifiers (boot-cache-3/4)
+const importmapMatch = indexSrc.match(/<script type="importmap">\s*([\s\S]*?)\s*<\/script>/);
+let importmap = {};
+if (importmapMatch) {
+  try {
+    importmap = JSON.parse(importmapMatch[1]).imports || {};
+  } catch (e) {
+    console.warn("[gen-modulepreload] could not parse importmap:", e);
+  }
+}
+
+function resolveImportmap(specifier) {
+  if (importmap[specifier]) return importmap[specifier];
+  for (const [k, v] of Object.entries(importmap)) {
+    if (k.endsWith("/") && specifier.startsWith(k)) {
+      return v + specifier.slice(k.length);
+    }
+  }
+  return null;
+}
+
 function consider(specifier, importerDirAbs) {
-  if (!isRelative(specifier)) return null; // bare specifiers resolve via importmap; skip
-  const noQuery = stripQuery(specifier);
-  const fsPath = resolve(importerDirAbs, noQuery);
+  let mapped = specifier;
+  let baseDir = importerDirAbs;
+  if (!isRelative(specifier)) {
+    const target = resolveImportmap(specifier);
+    if (!target || (!target.startsWith("./") && !target.startsWith("../"))) return null;
+    mapped = target;
+    baseDir = ROOT;
+  }
+  const noQuery = stripQuery(mapped);
+  const fsPath = resolve(baseDir, noQuery);
   if (!existsSync(fsPath)) return null; // false positive or stale path — never preload a 404
   // Keep the first href we see for this file (queried form preferred if present).
-  if (!hrefByFsPath.has(fsPath) || (specifier.includes("?") && !hrefByFsPath.get(fsPath).includes("?"))) {
-    hrefByFsPath.set(fsPath, specifier);
+  if (!hrefByFsPath.has(fsPath) || (mapped.includes("?") && !hrefByFsPath.get(fsPath).includes("?"))) {
+    hrefByFsPath.set(fsPath, mapped);
   }
   return fsPath;
 }
 
 // 1) Seeds from index.html (static + eager dynamic).
-const indexSrc = readFileSync(INDEX, "utf8");
 const queue = [];
 for (const spec of collectSpecifiers(indexSrc, /* followDynamic */ true)) {
   const fsPath = consider(spec, ROOT);

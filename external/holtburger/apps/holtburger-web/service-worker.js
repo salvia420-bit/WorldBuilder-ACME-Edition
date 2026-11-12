@@ -36,7 +36,7 @@
 //   * `manifest.json` / HTML / JS / wasm stay un-intercepted in BOTH modes;
 //     offline manifest fallback is the PackFetchController's job (a
 //     controller-stashed last-known manifest), never the SW's.
-const SW_V3 = false;
+const SW_V3 = true;
 
 // v1 -> v2 (2026-06-21): cache-bust the immutable shard cache (tree/scenery
 // models + textures). Investigating "no trees render on a phone" where the
@@ -70,18 +70,7 @@ const BOOT_PREFETCH_URLS = [
   // (Actually — manifest.json is intentionally re-fetched each load
   // per the SW header comment; pre-fetching it would race with that
   // refresh intent. Skip.)
-  // Login-boot diagnosis 2026-06-11: these were scope-relative
-  // ("boot.hba" → /apps/holtburger-web/boot.hba) and 404'd on EVERY
-  // install since the day they shipped — the real assets live under
-  // /dist/. The warming never happened; the page always fetched these
-  // cold at peak boot fan-out.
-  "../../dist/boot.hba",
-  "../../dist/manifest/holtburger-core.bin",
-  // eor-cell.bin is 15 MB — too big for an install-time pre-fetch
-  // (would block SW activation on slow connections). Lazy-fetch as
-  // before. eor-portal.bin (1.5 MB) is borderline; include it since
-  // every page load touches it for the EnvCell pipeline.
-  "../../dist/manifest/eor-portal.bin",
+  // SW v3: dead boot.hba and eor-portal.bin removed.
 ];
 
 self.addEventListener("install", (event) => {
