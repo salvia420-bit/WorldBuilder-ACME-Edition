@@ -660,15 +660,26 @@ export class InputFunnel {
       }
     }
     if (!nativeContextMenuOn()) {
-      // Page-wide context-menu suppression (input-options-8, 2026-10-13).
-      // The canvas (camera.js) and the HUD cells with their own right-click
-      // already prevent theirs; this covers the rest of the page, so a camera
-      // turn released over chat, radar or vitals no longer opens the browser
-      // menu (and the release-held fallback below rarely has to run). Bubble
-      // phase on document: every element handler has already run, and the
-      // window listener below runs after this one, so its `defaultPrevented`
-      // test still means "the browser menu really opened". Rules:
-      // `shouldSuppressContextMenu`. `?nativeContextMenu=on` skips this.
+      // Page-wide context-menu suppression (input-options-8, 2026-10-13; F1 fix 2026-11-12).
+      // Window capture listener: acting strictly when _rightPressOnCanvas === true,
+      // stops propagation early so radial menus don't immediately self-close on
+      // Windows (radial-menu.js:909 doc capture) and camera turn releases don't
+      // fire destructive HUD slot clicks.
+      const win = (typeof window !== "undefined" ? window : null) ?? d?.defaultView ?? null;
+      if (win && typeof win.addEventListener === "function") {
+        this._onWinContextMenuCapture = (ev) => {
+          if (!this._rightPressOnCanvas) return;
+          this._rightPressOnCanvas = false;
+          try {
+            ev.preventDefault();
+          } catch (_) {}
+          try {
+            ev.stopPropagation();
+          } catch (_) {}
+          this.stats.contextMenusSuppressed += 1;
+        };
+        win.addEventListener("contextmenu", this._onWinContextMenuCapture, true);
+      }
       this._onAnyPress = () => { this._rightPressOnCanvas = false; };
       d.addEventListener("mousedown", this._onAnyPress, true);
       this._onContextMenu = (ev) => {

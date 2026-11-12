@@ -196,6 +196,7 @@ export const PRESETS = {
         // contact darkening where walls meet the ground, eaves, recesses.
         // Half-res + depth-aware blur, ~0.5-1 ms on the 1070; high/ultra only.
         ssao: false,
+        clouds: false,
         // Tier-1 particle upgrade (2026-10-10, scene3d/vfx/fx_tier1.js): low preset.
         ...FX_TIER1_PRESETS.low,
         // Tier-2 particle upgrade (2026-10-10, scene3d/vfx/fx_tier2.js): low preset;
@@ -369,6 +370,7 @@ export const PRESETS = {
         lensFlare: false,
         lightShafts: false,
         ssao: false,
+        clouds: false,
         // Tier-1 particle upgrade (2026-10-10, scene3d/vfx/fx_tier1.js): mid preset.
         ...FX_TIER1_PRESETS.mid,
         // Tier-2 particle upgrade (2026-10-10, scene3d/vfx/fx_tier2.js): mid preset;
@@ -484,6 +486,7 @@ export const PRESETS = {
         // Kept true so shafts light up the moment clouds are promoted.
         lightShafts: true,
         ssao: true,
+        clouds: true,
         // Tier-1 particle upgrade (2026-10-10, scene3d/vfx/fx_tier1.js): high preset.
         ...FX_TIER1_PRESETS.high,
         // Tier-2 particle upgrade (2026-10-10, scene3d/vfx/fx_tier2.js): high preset;
@@ -600,6 +603,7 @@ export const PRESETS = {
         // Kept true so shafts light up the moment clouds are promoted.
         lightShafts: true,
         ssao: true,
+        clouds: true,
         // Tier-1 particle upgrade (2026-10-10, scene3d/vfx/fx_tier1.js): ultra preset.
         ...FX_TIER1_PRESETS.ultra,
         // Tier-2 particle upgrade (2026-10-10, scene3d/vfx/fx_tier2.js): ultra preset;
@@ -683,7 +687,7 @@ export const BANDWIDTH_LOW_FLAG_OFFS = Object.freeze(["terrainDetailNormal"]);
 
 // Boolean-typed flags. Values "on"/"true"/"1" → true; "off"/"false"/"0"
 // → false. Used by parseOverrides to coerce per-feature URL params.
-const BOOL_FLAGS = new Set([
+export const BOOL_FLAGS = new Set([
     "antialias",
     // "shadows" removed 2026-08-01 — see the PRESETS.low note: flags.shadows
     // had no reader; `?shadows=on` keeps its own exact-match reader in
@@ -714,6 +718,7 @@ const BOOL_FLAGS = new Set([
     "lensFlare",
     "lightShafts",
     "ssao",
+    "clouds",
     // Tier-1 particle upgrade (2026-10-10, scene3d/vfx/fx_tier1.js) — plain
     // on/off switches, so parseBool's 1/true/yes widening is harmless.
     "fxLights",
@@ -745,7 +750,8 @@ const BOOL_FLAGS = new Set([
 // NUMERIC knobs below are safe to expose here (they cannot turn the feature on
 // by themselves) so the Graphics-settings localStorage bag can carry them;
 // gfx_relief.js clamps whatever it reads, from either source.
-const INT_FLAGS = new Set([
+export const INT_FLAGS = new Set([
+    "anisotropy",
     "subdivLevel",
     "gfxSubdivLevel",
     "pomStepsPrimary",
@@ -793,7 +799,7 @@ const INT_FLAGS = new Set([
 ]);
 
 // Float-typed flags.
-const FLOAT_FLAGS = new Set([
+export const FLOAT_FLAGS = new Set([
     "gfxReliefScale",
     "terrainGrassRadius",
     "terrainTrailRadius",

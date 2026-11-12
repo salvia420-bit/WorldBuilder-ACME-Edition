@@ -32,7 +32,13 @@ export function mountFullscreenControl(containerEl) {
 
   function onClick() {
     if (document.fullscreenElement) {
-      document.exitFullscreen?.();
+      document.exitFullscreen?.()
+        .then(() => {
+          setTimeout(() => {
+            window.dispatchEvent(new Event("resize"));
+          }, 50);
+        })
+        .catch((e) => console.warn("[fullscreen] exit failed:", e));
     } else {
       document.documentElement.requestFullscreen?.()
         .then(() => {
@@ -50,7 +56,12 @@ export function mountFullscreenControl(containerEl) {
     setTimeout(refresh, 100);
   }
 
-  const onChange = () => refresh();
+  const onChange = () => {
+    refresh();
+    setTimeout(() => {
+      window.dispatchEvent(new Event("resize"));
+    }, 50);
+  };
   btn.addEventListener("click", onClick);
   document.addEventListener("fullscreenchange", onChange);
 

@@ -218,8 +218,9 @@ export function computeInitialRenderScale({
   cssH,
   maxScale = 1,
   minScale = 0.35,
-  // ~2.6 Mpx ≈ 1080p with a little headroom (1920×1080 = 2.07 Mpx).
-  pixelBudget = 2_600_000,
+  // ~3.7 Mpx covers 1440p (2560×1440 = 3.686 Mpx) at DPR=1 so it starts at 100%.
+  // 4K (3840×2160 = 8.29 Mpx) or 1080p@2x (8.29 Mpx) caps near ~3.7 Mpx (~1440p equivalent).
+  pixelBudget = 3_700_000,
 }) {
   // __diag is built during init3D, i.e. after this module loaded — re-stamp so
   // `__diag.renderScale` exists regardless of module/init ordering.
@@ -423,10 +424,30 @@ export class AdaptiveRenderScaleController {
     try { return this._isBooting() === true; } catch (_) { return false; }
   }
 
+  /**
+   * Manual slider input in graphics_settings.js: resets any active settle latch,
+   * updates raiseCeiling, clears oscillation history, and starts a cooldown so
+   * adaptive resolution does not fight the user's explicit preference.
+   */
+  notifyManual(scale) {
+    const s = Number(scale);
+    if (!Number.isFinite(s) || s <= 0) return;
+    this.manualScale = s;
+    this.raiseCeiling = Math.max(this._maxScale, s);
+    this._settleUntil = 0; // clear 5-minute settle latch
+    this._lastChange = null; // clear oscillation history
+    this._samples = [];
+    this._cooldownUntil = this._now() + 10_000; // 10s cooldown to allow user setting to breathe
+    if (this._log) {
+      this._log(`[adaptive-res] manual scale input: ${s} — unlatched settle and reset ceiling`);
+    }
+  }
+
   /** The highest scale a raise may reach right now. */
   _raiseCap(t) {
-    if (!this._settle) return this._maxScale;
-    if (t >= this._settleUntil) this.raiseCeiling = this._maxScale; // lock expired
+    const baseCap = Math.max(this._maxScale, this.manualScale ?? 0);
+    if (!this._settle) return baseCap;
+    if (t >= this._settleUntil) this.raiseCeiling = baseCap; // lock expired
     return this.raiseCeiling;
   }
 
@@ -594,6 +615,8 @@ export class AdaptiveRenderScaleController {
     const prev = this._lastChange;
     if (dir !== "down" || !prev || prev.dir !== "up") return;
     if (t - prev.t > this._settleWindowMs) return;
+    // Do not latch oscillation if GPU was not the bottleneck (e.g. streaming spike / main-thread hitch)
+    if (this._gpuProbe && this._gpuKnown > 0 && (this._gpuBehind / this._gpuKnown) < 0.5) return;
     const ceiling = Math.max(this._minScale, prev.from);
     const latched = t < this._settleUntil;
     if (latched && ceiling >= this.raiseCeiling) return;
