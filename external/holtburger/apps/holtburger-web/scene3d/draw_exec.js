@@ -1205,6 +1205,13 @@ export function installDrawExec(renderer, getMainScene, opts = {}) {
     // material switch); a continuation relies on their units still holding them (texture epoch).
     rec.shadowMaps = mp.needsLights === true
       && (map.directionalShadowMap !== undefined || map.spotShadowMap !== undefined || map.pointShadowMap !== undefined);
+    let su = 0;
+    if (rec.shadowMaps) {
+      if (map.directionalShadowMap && Array.isArray(map.directionalShadowMap.cache)) su += map.directionalShadowMap.cache.length;
+      if (map.spotShadowMap && Array.isArray(map.spotShadowMap.cache)) su += map.spotShadowMap.cache.length;
+      if (map.pointShadowMap && Array.isArray(map.pointShadowMap.cache)) su += map.pointShadowMap.cache.length;
+    }
+    rec.shadowUnits = su;
     if (rec.shadowMaps && !texHooked) hookTextureEpoch();
     rec.combo = objectCombo(object, material);
     rec.comboE = asyncApi !== null ? (rec.combo | asyncApi.comboEpoch) : rec.combo; // a restore bumps recEpoch too
@@ -1524,8 +1531,15 @@ export function installDrawExec(renderer, getMainScene, opts = {}) {
       || material.isLineBasicMaterial || material.isPointsMaterial || material.isSpriteMaterial || material.isShadowMaterial) return "plan:materialType";
     else if (material.isShaderMaterial) kind = K_SHADER;
     else return "plan:materialType";
-    // (lit programs with shadow samplers re-bind them per draw from the lights state: left to three)
-    if (rec.shadowMaps) return "plan:shadowMaps";
+    let shadowUnits = rec.shadowUnits || 0;
+    if (shadowUnits === 0 && rec.shadowMaps) {
+      const pmap = rec.pu?.map;
+      if (pmap) {
+        if (pmap.directionalShadowMap && Array.isArray(pmap.directionalShadowMap.cache)) shadowUnits += pmap.directionalShadowMap.cache.length;
+        if (pmap.spotShadowMap && Array.isArray(pmap.spotShadowMap.cache)) shadowUnits += pmap.spotShadowMap.cache.length;
+        if (pmap.pointShadowMap && Array.isArray(pmap.pointShadowMap.cache)) shadowUnits += pmap.pointShadowMap.cache.length;
+      }
+    }
     if (!knownProgs.has(rec.glProgram)) return "plan:programUnknown";
     if (probeProgs.has(rec.glProgram)) return "plan:lightProbeGrid";
     const list = mp.uniformsList;
@@ -1548,7 +1562,7 @@ export function installDrawExec(renderer, getMainScene, opts = {}) {
     if (dfgLut === null && d !== undefined && d !== null && d.value && d.value.isDataTexture === true && d.value.name === "DFG_LUT") dfgLut = d.value;
     stats.switchPlans += 1;
     // C: this draw's containers, pre-resolved for built-in REFRESHED uniforms (m is held by plan.m)
-    return { list, m, pu: rec.pu, kind, ups, ids, C, customIdx, ix: refreshIndex(ids), uTME: rec.pu.map.toneMappingExposure };
+    return { list, m, pu: rec.pu, kind, ups, ids, C, customIdx, ix: refreshIndex(ids), uTME: rec.pu.map.toneMappingExposure, shadowUnits };
   };
   /**
    * three r184 WebGLEnvironments.get( material.envMap || environment, usePMREM ) as setProgram calls it,
@@ -1650,6 +1664,7 @@ export function installDrawExec(renderer, getMainScene, opts = {}) {
       plan = r; rec.sw = r; rec.swNo = null;
     }
     if (textures === null) return swRefuse("noTextures");
+    if (rec.shadowMaps && texEpoch !== texSnap) return swRefuse("texEpoch");
     if (mp.needsLights && lsvSerial !== serial) return swRefuse("noLightsWitness");
     const why = keepProof(rec, mp, material, object, scene);
     if (why !== null) return swRefuse(why);
@@ -1659,7 +1674,15 @@ export function installDrawExec(renderer, getMainScene, opts = {}) {
     // ---- three r184 setProgram, this case, call for call (no GL call and no write above) ----------
     stats.sameProgramSwitches += 1;
     rec.swHits += 1;
+    const shadowUnits = plan.shadowUnits ?? rec.shadowUnits ?? 0;
     textures.resetTextureUnits();
+    if (rec.shadowMaps && shadowUnits > 0) {
+      if (typeof textures.setTextureUnits === "function") {
+        textures.setTextureUnits(shadowUnits);
+      } else {
+        for (let i = 0; i < shadowUnits; i++) textures.allocateTextureUnit();
+      }
+    }
     if (mp.needsLights && mp.lightProbeGrid !== null) mp.lightProbeGrid = null; // findLightProbeGrid([], object)
     // (camera uniforms: same program, same camera — none; shadow samplers: refused; skinning / morph: none)
     if (rec.batched) {

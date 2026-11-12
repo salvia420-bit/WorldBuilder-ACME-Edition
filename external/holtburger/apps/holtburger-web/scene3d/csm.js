@@ -434,6 +434,9 @@ export function setupCsm(scene, opts = {}) {
     light.shadow.camera.near = 0.1;
     light.shadow.camera.far = splits[i] * 6 + BACK_DIST_M * 2;
     light.shadow.camera.updateProjectionMatrix();
+    if (light.shadow && typeof light.shadow.updateMatrices === "function") {
+      light.shadow.updateMatrices(light);
+    }
     // Enable RENDER_LAYER_INDOOR (1) so the CSM cascade sun lights interior
     // EnvCells in the ?portalPunch cells pass too (three drops layer-mismatched
     // lights in projectObject) — interior lighting matches the outdoor view.
@@ -638,9 +641,11 @@ export function setupCsm(scene, opts = {}) {
         }
       }
       scene.remove(csmGroup);
+      if (globalThis.__hbCsmState === state) globalThis.__hbCsmState = null;
     },
   };
 
+  globalThis.__hbCsmState = state;
   return state;
 }
 
@@ -1008,6 +1013,15 @@ function _csmUniformRefs(mat) {
 
 export function refreshCsmUniforms(csmState) {
   if (!csmState) return;
+  const lights = csmState.lights;
+  if (lights) {
+    for (let i = 0; i < lights.length; i++) {
+      const l = lights[i];
+      if (l && l.shadow && typeof l.shadow.updateMatrices === "function") {
+        l.shadow.updateMatrices(l);
+      }
+    }
+  }
   // shadows-restore-7 (depthFit) — the cascade matrices with each receiver
   // class's bias folded in (null = the fixed bias: plain copies, as before).
   const fold = csmState.depthFit === true ? _prepareBiasFold(csmState) : null;
@@ -1288,6 +1302,9 @@ function _placeCascade(light, center, radius, lx, ly, lz, mapSize, depthFit) {
   // a receiver inside it, so the range ends there (plus float slack).
   cam.far = depthFit === true ? back + radius + CSM_FAR_PAD_M : BACK_DIST_M * 2 + radius;
   cam.updateProjectionMatrix();
+  if (light.shadow && typeof light.shadow.updateMatrices === "function") {
+    light.shadow.updateMatrices(light);
+  }
 }
 
 /**

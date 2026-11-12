@@ -79,7 +79,7 @@ import { pageDimsOf, needsResample } from "./pool_class_key.js";
 // material that does not carry the patch renders that dungeon on ambient
 // alone. Dungeon lighting is not negotiable: the class material takes the
 // patch, or the member does not pool.
-import { applyBakedVertexLightPatch, VERTEX_BAKE, heightTexForMaterial } from "./materials.js";
+import { applyBakedVertexLightPatch, VERTEX_BAKE, heightTexForMaterial, installCsmShaderPatch } from "./materials.js";
 
 /** Why a member was refused. Every value is COUNTED and routes the member to
  *  the legacy producer path — there is no silent drop. */
@@ -167,15 +167,18 @@ export class ClassMaterialRegistry {
   /**
    * @param {object} deps
    * @param {(m:string,d?:any)=>void} [deps.warn]
+   * @param {object} [deps.csmState]
    */
-  constructor({ warn } = {}) {
+  constructor({ warn, csmState } = {}) {
     this.warn = typeof warn === "function" ? warn : (m, d) => { try { console.warn(m, d); } catch (_) { /* fail-soft */ } };
+    this.csmState = csmState ?? null;
+    this._nraPending = [];
     /** classKey -> class page record */
     this.classes = new Map();
     this.stats = {
       classes: 0,
       layerAllocs: 0, layerHits: 0, layerRecycles: 0, layerGrows: 0, layerGrowFails: 0,
-      bc7Layers: 0, rgbaLayers: 0, nraLayers: 0, nraRepacks: 0, nraResizes: 0, nraResizeFails: 0,
+      bc7Layers: 0, rgbaLayers: 0, nraLayers: 0, nraRepacks: 0, nraPendingDropped: 0, nraResizes: 0, nraResizeFails: 0,
       refeedDimMismatch: 0, refeedFormatMismatch: 0,
       refused: { noTexture: 0, needsResample: 0, offPage: 0, bc7Pending: 0, deformed: 0, layerFull: 0, layerWriteFail: 0, noPixels: 0 },
       allocatedBytes: 0,
@@ -277,6 +280,11 @@ export class ClassMaterialRegistry {
         packNraLayer(c.arrays.nra, layer, material, c.nw, c.nh, null);
         _queueLayerUpload(c.arrays.nra, layer);
         this.stats.nraLayers += 1;
+        // Phase-5 texchan roughness/AO attach asynchronously; if they were not
+        // there yet, queue a re-pack rather than lose the relief for the session.
+        if (!material.roughnessMap || (!heightTexForMaterial(material) && !material.aoMap)) {
+          this._nraPending.push({ c, layer, mat: material, tries: 0 });
+        }
       } catch (_) { /* fail-soft: the flat texel shades like albedo-only v1 */ }
     }
     return { ok: true, layer };
@@ -374,6 +382,40 @@ export class ClassMaterialRegistry {
     return n;
   }
 
+  drainNraPending() {
+    if (!this._nraPending || this._nraPending.length === 0) return 0;
+    const _NRA_PENDING_TRIES = 600;
+    const touched = new Set();
+    let repacked = 0;
+    for (let i = this._nraPending.length - 1; i >= 0; i -= 1) {
+      const p = this._nraPending[i];
+      const cur = p.c && p.c.layerOf && p.c.layerOf.get(p.mat?.map?.uuid);
+      if (!cur || cur.layer !== p.layer) {
+        this._nraPending.splice(i, 1);
+        continue;
+      }
+      const both = !!(p.mat?.roughnessMap && (heightTexForMaterial(p.mat) || p.mat?.aoMap));
+      const expired = ++p.tries > _NRA_PENDING_TRIES;
+      if (!both && !expired) continue;
+      const any = !!(p.mat?.roughnessMap || p.mat?.aoMap || heightTexForMaterial(p.mat));
+      if (any && p.c.arrays.nra) {
+        try {
+          this._fitNra(p.c, p.mat);
+          packNraLayer(p.c.arrays.nra, p.layer, p.mat, p.c.nw, p.c.nh, null);
+          _queueLayerUpload(p.c.arrays.nra, p.layer);
+          this.stats.nraRepacks += 1;
+          repacked += 1;
+          touched.add(p.c.arrays.nra);
+        } catch (_) { /* fail-soft */ }
+      } else {
+        this.stats.nraPendingDropped = (this.stats.nraPendingDropped || 0) + 1;
+      }
+      this._nraPending.splice(i, 1);
+    }
+    for (const t of touched) t.needsUpdate = true;
+    return repacked;
+  }
+
   census() {
     const byClass = {};
     let allocated = 0;
@@ -390,10 +432,12 @@ export class ClassMaterialRegistry {
     return {
       classes: this.classes.size,
       pageBytes: { allocated, used },
+      nraPending: this._nraPending.length,
       layers: {
         allocs: this.stats.layerAllocs, hits: this.stats.layerHits,
         recycles: this.stats.layerRecycles, grows: this.stats.layerGrows,
         growFails: this.stats.layerGrowFails, nra: this.stats.nraLayers,
+        nraRepacks: this.stats.nraRepacks, nraPendingDropped: this.stats.nraPendingDropped,
         nraResizes: this.stats.nraResizes, nraResizeFails: this.stats.nraResizeFails,
         refeedDimMismatch: this.stats.refeedDimMismatch,
         refeedFormatMismatch: this.stats.refeedFormatMismatch,
@@ -404,6 +448,7 @@ export class ClassMaterialRegistry {
   }
 
   dispose() {
+    this._nraPending.length = 0;
     for (const c of this.classes.values()) {
       try { c.arrays.diff?.dispose?.(); } catch (_) { /* fail-soft */ }
       try { c.arrays.nra?.dispose?.(); } catch (_) { /* fail-soft */ }
@@ -444,7 +489,15 @@ export class ClassMaterialRegistry {
       return null;
     }
     const arrays = { diff, nra };
-    const material2 = makeArrayMaterial(diff, stateKey, nra, arrays);
+    const csm = this.csmState !== undefined ? this.csmState : (material?.userData?.csmState ?? globalThis.window?.liveScene3d?.csmState ?? globalThis.__hbCsmState ?? null);
+    const material2 = makeArrayMaterial(diff, stateKey, nra, arrays, csm);
+    if (csm && !material2.userData?.csmEnabled) {
+      const atlasKey = material2.customProgramCacheKey;
+      installCsmShaderPatch(material2, csm);
+      material2.customProgramCacheKey = typeof atlasKey === "function"
+        ? () => `${atlasKey()}|c2`
+        : material2.customProgramCacheKey;
+    }
     // The class material carries its own identity so the census, the prewarm
     // and devtools all join on the same string.
     material2.name = `pool-class-${classKey}`;
@@ -716,4 +769,9 @@ export function normalizeForPool(geom, layer) {
   for (let i = 0; i < cnt; i += 1) arr[i] = i;
   g.setIndex(new THREE.BufferAttribute(arr, 1));
   return g;
+}
+
+/** Convenience helper for draining pending async NRA repacks. */
+export function drainPoolNraPending(registry) {
+  return registry?.drainNraPending?.() ?? 0;
 }

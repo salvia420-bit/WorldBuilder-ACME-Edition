@@ -212,7 +212,7 @@ import { aoMapIntensityValue } from "./vfx_flags.js";
 import { getQuality } from "./quality.js";
 // 2026-08-03 — the seam-height plane moved out of `material.userData` (three's
 // Material.copy JSON round-trips userData); read it through the accessor.
-import { heightTexForMaterial } from "./materials.js";
+import { heightTexForMaterial, installCsmShaderPatch } from "./materials.js";
 // 2026-08-05 (task 2) — pixel source of last resort for atlas staging, so a
 // texture's CPU copy stops being the only place a surface's pixels live.
 import { PLANE, planeFor, canSupplyPlanes } from "./surface_planes.js";
@@ -742,11 +742,14 @@ function _applyStateKey(m, stateKey) {
 // mutates — three keeps `materialProperties.uniforms === parameters.uniforms`,
 // three.module.js:18153). Omitted ⇒ a holder is synthesised from the args, so
 // the non-growing per-(LB,size) path below is unchanged.
-export function makeArrayMaterial(diffArray, stateKey, nraArray, arrays) {
+export function makeArrayMaterial(diffArray, stateKey, nraArray, arrays, csmState) {
   // Shape decisions (shader source, defines, cache key) are taken from the
   // CONSTRUCTION-time nra presence, which growth never changes; only the array
   // OBJECTS are late-bound.
   const bound = arrays || { diff: diffArray, nra: nraArray };
+  const csm = csmState !== undefined
+    ? csmState
+    : (arrays?.csmState ?? _lastScene3d?.csmState ?? globalThis.__hbCsmState ?? null);
   const m = new THREE.MeshStandardMaterial({
     map: dummyMap(),
     side: THREE.DoubleSide,
@@ -1044,10 +1047,16 @@ export function makeArrayMaterial(diffArray, stateKey, nraArray, arrays) {
   // stock MeshStandard key so each variant links once. X5 adds a THIRD axis
   // (nra on/off) — still per-BUCKET-CLASS, never per instance (the #1 cold-load
   // cost); with ?statNra absent the key is byte-identical to v1.
-  m.customProgramCacheKey = () =>
+  const baseKey = () =>
     (wrapBucket ? "statAtlasArrayMatV4w" : "statAtlasArrayMatV4c")
-    + (nraArray ? "nra" + aoMapIntensityValue().toFixed(3) + "|mc1|ms1" : "");
+    + (nraArray ? "nra" + aoMapIntensityValue().toFixed(3) + "|mc1|ms1" : "")
+    + (m.userData && m.userData.csmEnabled ? "|c2" : "");
+  m.customProgramCacheKey = baseKey;
   m.userData = { __statAtlasMat: true };
+  if (csm) {
+    installCsmShaderPatch(m, csm);
+    m.customProgramCacheKey = baseKey;
+  }
   return m;
 }
 
@@ -1648,7 +1657,8 @@ function _getOrCreateBucket(bucketKey, w, h, stateKey, scene3d, bc7, pageDepth =
   // X7 — the mutable holder the material's onBeforeCompile closure reads. Owned
   // by the bucket record so a grow-swap is visible to a later RECOMPILE.
   const arrays = { diff: diffArray, nra: nraArray };
-  const material = makeArrayMaterial(diffArray, stateKey, nraArray, arrays);
+  const csm = scene3d?.csmState ?? _lastScene3d?.csmState ?? globalThis.__hbCsmState ?? null;
+  const material = makeArrayMaterial(diffArray, stateKey, nraArray, arrays, csm);
   const bm = new THREE.BatchedMesh(_ATLAS_INIT_INST, _ATLAS_INIT_VERTS, _ATLAS_INIT_VERTS * 2, material);
   globalThis.__hbRustWorld?.track(bm, "atlas"); // ?rustWorld shadow (scene3d/rust/world.js); off ⇒ nothing evaluated
   // ?batchedRuns: stock batching chunks (the array layer rides in the vertex
