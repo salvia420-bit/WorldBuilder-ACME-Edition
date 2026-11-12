@@ -131,6 +131,20 @@ export class ScriptManager {
   }
 
   /**
+   * Reserve an empty script interval of `length` duration. Subsequent scripts
+   * queue behind this reservation in FIFO order. Returns the assigned startTime.
+   *
+   * @param {number} scriptDid    0x33 DID or placeholder DID (diagnostics).
+   * @param {number} length       duration in seconds.
+   * @param {number} [now]        clock override; defaults to currentTime().
+   * @returns {number} the absolute startTime assigned to this script reservation.
+   */
+  reserve(scriptDid, length, now) {
+    const data = this.addScript(scriptDid, [], { length: Math.max(0, +length || 0), now });
+    return data.startTime;
+  }
+
+  /**
    * Queue a script. Mirrors AddScriptInternal (acclient.c:329069-329121):
    * the new script starts back-to-back after the last queued script's
    * `start_time + length`; if nothing is queued it starts at `now`.
@@ -245,9 +259,20 @@ export class ScriptManager {
       if (this._hookIndex < cur.entries.length) {
         const entry = cur.entries[this._hookIndex];
         this._hookIndex += 1;
-        // Fire via the shared executor (the seam). If no executor is wired,
-        // we still advance timing so the queue drains deterministically.
-        if (this._executeHook) {
+        // Fire via entry.execute (if entry defines its own executor) or the
+        // shared executor (the seam). If neither is wired, we still advance
+        // timing so the queue drains deterministically.
+        if (typeof entry.execute === "function") {
+          try {
+            entry.execute({
+              scriptDid: cur.scriptDid,
+              scriptStart: cur.startTime,
+              manager: this,
+            });
+          } catch (_) {
+            // A hook executor must never break the queue clock.
+          }
+        } else if (this._executeHook) {
           try {
             this._executeHook(entry, {
               scriptDid: cur.scriptDid,

@@ -714,11 +714,38 @@ const _defaultFrameId = () => {
 let _sharedFrameId = _defaultFrameId;
 /** Test seam: frame-id source for the shared alpha buckets. */
 export function __setSharedAlphaFrameSource(fn) { _sharedFrameId = typeof fn === "function" ? fn : _defaultFrameId; }
-/** Material equivalence for sharing one bucket: same texture and the state the bucket keeps. */
+// ── ?particleFar30Hz: stride emitters beyond 35m at 30 Hz (DEFAULT ON) ──
+let _FAR_30HZ_ON = null;
+export function particleFar30HzEnabled(search) {
+  if (_FAR_30HZ_ON === null) {
+    try {
+      const s = typeof search === "string"
+        ? search
+        : typeof window !== "undefined" && window.location
+        ? window.location.search
+        : typeof location !== "undefined" && location
+        ? location.search
+        : "";
+      const v = (new URLSearchParams(s).get("particleFar30Hz") || "").trim().toLowerCase();
+      _FAR_30HZ_ON = !(v === "off" || v === "0" || v === "false" || v === "no");
+    } catch (_) {
+      _FAR_30HZ_ON = true;
+    }
+  }
+  return _FAR_30HZ_ON;
+}
+export function setParticleFar30HzFlag(on) {
+  _FAR_30HZ_ON = on == null ? null : !!on;
+}
+
+/** Material equivalence for sharing one bucket: same texture and the state the bucket keeps. Memoized on mat.__alphaSig. */
 export function _alphaMatSig(mat) {
   if (!mat) return "";
-  return [mat.type, mat.map ? mat.map.uuid : "-", mat.side, mat.fog ? 1 : 0, mat.toneMapped ? 1 : 0,
+  if (mat.__alphaSig) return mat.__alphaSig;
+  const sig = [mat.type, mat.map ? mat.map.uuid : "-", mat.side, mat.fog ? 1 : 0, mat.toneMapped ? 1 : 0,
     mat.color && mat.color.getHex ? mat.color.getHex() : "-", mat.alphaTest, mat.depthTest ? 1 : 0].join("|");
+  mat.__alphaSig = sig;
+  return sig;
 }
 function _sameWorld(a, b) {
   if (a === b) return true;
@@ -1369,10 +1396,18 @@ function _billboardLocalNormal(geometry) {
  * cameraSwitcher.tick() has already made current this frame (same convention as
  * RP6's distance gate).
  */
-function _billboardEmitter(emitter, camera) {
+export function _billboardEmitter(emitter, camera, scene) {
   const parts = emitter.parts;
   if (!parts || !parts.length || !camera || !camera.position) return;
   _bbCamWorld.copy(camera.position);
+  const sc = scene || emitter._scene || null;
+  if (sc && sc.matrixWorld) {
+    _bbSceneInv.copy(sc.matrixWorld).invert();
+    _bbCamLocal.copy(camera.position).applyMatrix4(_bbSceneInv);
+  } else {
+    // Fallback if no scene: convert Three Y-up to AC Z-up (x_ac = x_three, y_ac = -z_three, z_ac = y_three)
+    _bbCamLocal.set(camera.position.x, -camera.position.z, camera.position.y);
+  }
   for (let i = 0; i < parts.length; i++) {
     const mesh = parts[i];
     if (!mesh || !mesh.visible) continue;
@@ -1381,15 +1416,19 @@ function _billboardEmitter(emitter, camera) {
     const parent = mesh.parent;
     if (parent && parent.matrixWorld) {
       _bbMeshWorld.copy(mesh.position).applyMatrix4(parent.matrixWorld);
+      _bbDir.subVectors(_bbCamWorld, _bbMeshWorld);
+      if (_bbDir.lengthSq() < 1e-10) continue;
+      _bbDir.normalize();
+      if (parent && parent.getWorldQuaternion) {
+        parent.getWorldQuaternion(_bbParentQuat).invert();
+        _bbDir.applyQuaternion(_bbParentQuat).normalize();
+      }
     } else {
-      _bbMeshWorld.copy(mesh.position);
-    }
-    _bbDir.subVectors(_bbCamWorld, _bbMeshWorld);
-    if (_bbDir.lengthSq() < 1e-10) continue;
-    _bbDir.normalize();
-    if (parent && parent.getWorldQuaternion) {
-      parent.getWorldQuaternion(_bbParentQuat).invert();
-      _bbDir.applyQuaternion(_bbParentQuat).normalize();
+      // Scene-detached carrier mesh (instanced path): mesh.position is in scene-local (AC Z-up) space.
+      // Subvectors camera in scene-local space and mesh.position so billboard is oriented correctly, not sideways.
+      _bbDir.subVectors(_bbCamLocal, mesh.position);
+      if (_bbDir.lengthSq() < 1e-10) continue;
+      _bbDir.normalize();
     }
     _bbNormal.copy(nLocal);
     mesh.quaternion.setFromUnitVectors(_bbNormal, _bbDir);
@@ -1545,6 +1584,7 @@ function _rp6ShouldCull(emitter, camera) {
   const dy = _rp6WorldPos.y - camera.position.y;
   const dz = _rp6WorldPos.z - camera.position.z;
   const distSq = dx * dx + dy * dy + dz * dz;
+  emitter._camDistSq = distSq;
   const slack = rp6DistanceCap(emitter) + radius;
   if (distSq > slack * slack) return true;
 
@@ -2965,6 +3005,9 @@ export class ParticleManager {
     const cellGate = cellLookup !== null && particleCellGateEnabled();
     // ?particleCulledLean — read once per tick (see the culled branch).
     const leanCulled = particleCulledLeanEnabled();
+    const far30Hz = particleFar30HzEnabled();
+    const tickNow = currentTime();
+    const camForDist = bbCamera || camera;
     let cellHidden = 0;
 
     // Instanced buckets are rebuilt from scratch every tick: reset the write
@@ -3183,7 +3226,26 @@ export class ParticleManager {
         continue;
       }
 
-      if (!emitter.updateParticles()) {
+      let alive = true;
+      let distSq = emitter._camDistSq;
+      if (distSq === undefined && camForDist && camForDist.position) {
+        if (rp6CullSphere(emitter, _rp6WorldPos) >= 0) {
+          const dx = _rp6WorldPos.x - camForDist.position.x;
+          const dy = _rp6WorldPos.y - camForDist.position.y;
+          const dz = _rp6WorldPos.z - camForDist.position.z;
+          distSq = dx * dx + dy * dy + dz * dz;
+          emitter._camDistSq = distSq;
+        }
+      }
+      const isFar = far30Hz && distSq !== undefined && distSq > 1225;
+      if (isFar && emitter._lastFarTick !== undefined && (tickNow - emitter._lastFarTick) < 0.032 && !(emitter.stopped && emitter.numParticles === 0)) {
+        // 30 Hz stride for far emitters (>35m): skip updateParticles simulation this frame
+      } else {
+        if (isFar) emitter._lastFarTick = tickNow;
+        alive = emitter.updateParticles();
+      }
+
+      if (!alive) {
         removeIds.push(id);
       } else if (emitter.filmHidden === true) {
         // Film mode (2026-10-13, ?filmMode=on, DEFAULT OFF): render-only lens
@@ -3218,7 +3280,7 @@ export class ParticleManager {
           if (emitter.info.billboard) {
             // On-screen, still live, opted-in: face its flat sprite quads at
             // the camera so they aren't edge-on invisible (HANDOFF Bug 3).
-            _billboardEmitter(emitter, bbCamera);
+            _billboardEmitter(emitter, bbCamera, this._scene);
           } else if (emitter._bbMode) {
             // Retail deg_mode 2-5 facing for DAT-replay emitters (waterfall
             // sheets, golem spray, flames) — calc_draw_frame parity. See the
@@ -3307,7 +3369,14 @@ export class ParticleManager {
     // 2026-10-07 `?skyGlow`: sky-chain emitters never share a bucket (or the
     // shared alpha bucket) with world emitters — their material is patched.
     const sky = emitter.skyGlow === true;
-    const key = `${gfx}|${layer}${alpha ? "|a" : ""}${sky ? "|sky" : ""}`;
+    let key = emitter._instBucketKey;
+    if (!key || emitter._instBucketLayer !== layer || emitter._instBucketAlpha !== alpha || emitter._instBucketSky !== sky) {
+      key = `${gfx}|${layer}${alpha ? "|a" : ""}${sky ? "|sky" : ""}`;
+      emitter._instBucketKey = key;
+      emitter._instBucketLayer = layer;
+      emitter._instBucketAlpha = alpha;
+      emitter._instBucketSky = sky;
+    }
     let bucket = null;
     if (alpha && !sky && particleSharedAlphaEnabled()) {
       bucket = sharedAlphaBuckets.acquire(key, this._scene, _alphaMatSig(emitter._instBaseMat),

@@ -22,6 +22,7 @@
 // kind=55 handler in index.html was removed after the eye-test PASS).
 
 import * as THREE from "three";
+import { RENDER_LAYER_INDOOR } from "./particles/render_layer.js";
 
 // Sits just above the nameplate (`NAMEPLATE_AC_Z_OFFSET = 2.2`) so the
 // two don't overlap when both are present.
@@ -138,10 +139,10 @@ function bakeBubble(text, colorHex) {
   const material = new THREE.SpriteMaterial({
     map: texture,
     transparent: true,
-    // Match the nameplate "X-ray" choice: depthTest off so the bubble
-    // isn't clipped by the speaker's own torso geometry; depthWrite off so
+    // Wall-occlusion parity under ?indoorDepthSplit: depthTest ON so dungeon walls
+    // occlude speech bubbles in adjacent rooms/corridors (no X-ray); depthWrite off so
     // overlapping bubbles don't z-fight.
-    depthTest: false,
+    depthTest: true,
     depthWrite: false,
     toneMapped: false,
   });
@@ -155,6 +156,46 @@ function disposeBubble(sprite) {
   try { sprite.parent && sprite.parent.remove(sprite); } catch (_) {}
   try { sprite.material && sprite.material.map && sprite.material.map.dispose(); } catch (_) {}
   try { sprite.material && sprite.material.dispose(); } catch (_) {}
+}
+
+// Module-level active bubble registry to avoid detached per-bubble rAF loops.
+const _activeBubbles = new Set();
+let _sharedBubbleRafId = null;
+
+function _stepSharedBubbles(now) {
+  _sharedBubbleRafId = null;
+  const current = (now !== undefined && now !== null) ? now : nowMs();
+  for (const item of _activeBubbles) {
+    const { inst, sprite, start } = item;
+    if (inst._speechBubble !== sprite || !sprite.parent) {
+      _activeBubbles.delete(item);
+      disposeBubble(sprite);
+      continue;
+    }
+    const elapsed = current - start;
+    if (elapsed >= BUBBLE_HOLD_MS + BUBBLE_FADE_MS) {
+      _activeBubbles.delete(item);
+      disposeBubble(sprite);
+      if (inst._speechBubble === sprite) inst._speechBubble = null;
+      continue;
+    }
+    if (elapsed > BUBBLE_HOLD_MS) {
+      const f = (elapsed - BUBBLE_HOLD_MS) / BUBBLE_FADE_MS;
+      if (sprite.material) {
+        sprite.material.opacity = Math.max(0, 1 - f);
+      }
+    }
+  }
+  if (_activeBubbles.size > 0 && typeof window !== "undefined" && typeof window.requestAnimationFrame === "function") {
+    _sharedBubbleRafId = window.requestAnimationFrame(_stepSharedBubbles);
+  }
+}
+
+function _scheduleSharedBubbleRaf() {
+  if (_sharedBubbleRafId !== null) return;
+  if (typeof window !== "undefined" && typeof window.requestAnimationFrame === "function") {
+    _sharedBubbleRafId = window.requestAnimationFrame(_stepSharedBubbles);
+  }
 }
 
 /**
@@ -175,6 +216,12 @@ export function showSpeechBubbleOnEntity(inst, text, isEmote) {
 
   // Replace an in-flight bubble on the same entity.
   if (inst._speechBubble) {
+    for (const item of _activeBubbles) {
+      if (item.sprite === inst._speechBubble) {
+        _activeBubbles.delete(item);
+        break;
+      }
+    }
     disposeBubble(inst._speechBubble);
     inst._speechBubble = null;
   }
@@ -184,6 +231,12 @@ export function showSpeechBubbleOnEntity(inst, text, isEmote) {
 
   const sprite = new THREE.Sprite(baked.material);
   sprite.name = "speech_bubble";
+  // Assign to correct indoor layer (RENDER_LAYER_INDOOR = 1) so under ?indoorDepthSplit
+  // bubbles composite with the interior rather than being wiped by the depth clear.
+  sprite.layers.set(RENDER_LAYER_INDOOR);
+  if (inst.root?.layers && inst.root.layers.mask !== 1) {
+    sprite.layers.mask = inst.root.layers.mask;
+  }
   sprite.scale.set(
     baked.canvasWidth / BUBBLE_PX_PER_METRE,
     baked.canvasHeight / BUBBLE_PX_PER_METRE,
@@ -200,33 +253,10 @@ export function showSpeechBubbleOnEntity(inst, text, isEmote) {
   inst.root.add(sprite);
   inst._speechBubble = sprite;
 
-  // Hold-then-fade via rAF. Guards: if the slot no longer points at this
-  // sprite (re-spoke), or the sprite was detached (despawn), bail + dispose.
+  // Hold-then-fade via centralized shared active-bubbles loop instead of detached per-bubble rAFs.
   const start = nowMs();
-  const raf =
-    (typeof window !== "undefined" && window.requestAnimationFrame)
-      ? window.requestAnimationFrame.bind(window)
-      : null;
-  if (raf) {
-    const step = (now) => {
-      if (inst._speechBubble !== sprite || !sprite.parent) {
-        disposeBubble(sprite);
-        return;
-      }
-      const elapsed = (now || nowMs()) - start;
-      if (elapsed >= BUBBLE_HOLD_MS + BUBBLE_FADE_MS) {
-        disposeBubble(sprite);
-        if (inst._speechBubble === sprite) inst._speechBubble = null;
-        return;
-      }
-      if (elapsed > BUBBLE_HOLD_MS) {
-        const f = (elapsed - BUBBLE_HOLD_MS) / BUBBLE_FADE_MS;
-        sprite.material.opacity = Math.max(0, 1 - f);
-      }
-      raf(step);
-    };
-    raf(step);
-  }
+  _activeBubbles.add({ inst, sprite, start });
+  _scheduleSharedBubbleRaf();
   return sprite;
 }
 
@@ -236,6 +266,42 @@ export function showSpeechBubbleOnEntity(inst, text, isEmote) {
  */
 export function removeSpeechBubbleFromEntity(inst) {
   if (!inst || !inst._speechBubble) return;
-  disposeBubble(inst._speechBubble);
+  const s = inst._speechBubble;
+  for (const item of _activeBubbles) {
+    if (item.sprite === s) {
+      _activeBubbles.delete(item);
+      break;
+    }
+  }
+  disposeBubble(s);
   inst._speechBubble = null;
+  if (_activeBubbles.size === 0 && _sharedBubbleRafId !== null && typeof window !== "undefined") {
+    try { window.cancelAnimationFrame(_sharedBubbleRafId); } catch (_) {}
+    _sharedBubbleRafId = null;
+  }
+}
+
+/** Drive active speech bubble hold+fade steps (for headless test / manual clock). */
+export function tickSpeechBubbles(now) {
+  _stepSharedBubbles(now);
+}
+
+/** Get list of currently active speech bubbles (test/diagnostic inspection). */
+export function getActiveSpeechBubbles() {
+  return Array.from(_activeBubbles);
+}
+
+/** Clear all active speech bubbles and cancel any scheduled shared rAF. */
+export function clearAllSpeechBubbles() {
+  for (const item of _activeBubbles) {
+    disposeBubble(item.sprite);
+    if (item.inst && item.inst._speechBubble === item.sprite) {
+      item.inst._speechBubble = null;
+    }
+  }
+  _activeBubbles.clear();
+  if (_sharedBubbleRafId !== null && typeof window !== "undefined") {
+    try { window.cancelAnimationFrame(_sharedBubbleRafId); } catch (_) {}
+    _sharedBubbleRafId = null;
+  }
 }
