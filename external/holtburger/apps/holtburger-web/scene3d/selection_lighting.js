@@ -75,16 +75,17 @@ const FLIP_EPS = 1e-6;
 let _memo = null;
 
 /**
- * `?selectionFlash=on` — exact opt-in. Read once per page (the query does not
- * change in a session); an explicit `search` (tests) is always re-read.
+ * `?selectionFlash` — default-ON (Area 7 / 2026-11). Escaped via `=off`.
+ * Read once per page (the query does not change in a session); an explicit
+ * `search` (tests) is always re-read.
  */
 export function selectionFlashEnabled(search) {
   const read = (s) => {
     try {
       const q = s ?? (typeof window !== "undefined" ? window.location?.search : "") ?? "";
-      return new URLSearchParams(q).get("selectionFlash") === "on";
+      return new URLSearchParams(q).get("selectionFlash") !== "off";
     } catch (_) {
-      return false;
+      return true;
     }
   };
   if (search !== undefined) return read(search);
