@@ -157,7 +157,7 @@
       .fail { color: #b30000; font-weight: bold; }
       .skip { color: #888; }
       #stage { display: flex; gap: 1rem; flex-wrap: wrap; align-items: flex-start; margin-top: 0.5rem; }
-      #stage canvas { border: 1px solid #ccc; background: #101010; image-rendering: pixelated; cursor: grab; touch-action: none; }
+      #stage canvas { border: 1px solid #ccc; background: #101010; cursor: grab; touch-action: none; }
       #stage canvas.dragging { cursor: grabbing; }
       /* Group C: "use item on target" targeting mode — retail's choose-a-target cursor. */
       body.use-targeting #stage canvas { cursor: crosshair; }
@@ -999,8 +999,8 @@
     <script type="importmap">
       {
         "imports": {
-          "three": "https://cdn.jsdelivr.net/npm/three@0.184.0/build/three.module.js",
-          "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.184.0/examples/jsm/",
+          "three": "./vendor/three/build/three.module.js",
+          "three/addons/": "./vendor/three/examples/jsm/",
           "@dgreenheck/three-pinata": "./vendor/dgreenheck/three-pinata.js",
           "@takram/three-clouds": "./vendor/takram-three-clouds/build/index.js",
           "@takram/three-atmosphere": "./vendor/takram/three-atmosphere.js",
@@ -1008,8 +1008,8 @@
           "@takram/three-geospatial": "./vendor/takram/three-geospatial.js",
           "@takram/three-geospatial/shaders": "./vendor/takram/three-geospatial-shaders.js",
           "@takram/three-geospatial-effects": "./vendor/takram/three-geospatial-effects.js",
-          "postprocessing": "https://cdn.jsdelivr.net/npm/postprocessing@6.39.1/build/index.js",
-          "tiny-invariant": "https://cdn.jsdelivr.net/npm/tiny-invariant@1.3.3/dist/esm/tiny-invariant.js"
+          "postprocessing": "./vendor/postprocessing/build/index.js",
+          "tiny-invariant": "./vendor/tiny-invariant/dist/esm/tiny-invariant.js"
         }
       }
     </script>
@@ -1048,8 +1048,6 @@
     <link rel="modulepreload" href="./app/slash_commands.js">
     <link rel="modulepreload" href="./app/social_commands.js">
     <link rel="modulepreload" href="./app/spawn_preview.js">
-    <link rel="modulepreload" href="./pkg/holtburger_web.js?v=wasmrev-20261029b">
-    <link rel="modulepreload" href="./pkg/snippets/holtburger-web-35e2cc366b0a5b65/inline0.js">
     <link rel="modulepreload" href="./plugins/allegiance-panel.js">
     <link rel="modulepreload" href="./plugins/api.js">
     <link rel="modulepreload" href="./plugins/appraisal_text.js">
@@ -1124,6 +1122,7 @@
     <link rel="modulepreload" href="./scene3d/ac_moons.js">
     <link rel="modulepreload" href="./scene3d/adapter.js">
     <link rel="modulepreload" href="./scene3d/adaptive_render_scale.js">
+    <link rel="modulepreload" href="./scene3d/altitude_policy.js">
     <link rel="modulepreload" href="./scene3d/always_daylight.js">
     <link rel="modulepreload" href="./scene3d/anim_scenery_gpu.js">
     <link rel="modulepreload" href="./scene3d/animated_scenery.js">
@@ -1173,6 +1172,7 @@
     <link rel="modulepreload" href="./scene3d/culling.js">
     <link rel="modulepreload" href="./scene3d/death_hold.js">
     <link rel="modulepreload" href="./scene3d/depth_band_sort.js">
+    <link rel="modulepreload" href="./scene3d/dericost_world.js">
     <link rel="modulepreload" href="./scene3d/diag.js">
     <link rel="modulepreload" href="./scene3d/diag/assets.js">
     <link rel="modulepreload" href="./scene3d/diag/cast.js">
@@ -1205,10 +1205,12 @@
     <link rel="modulepreload" href="./scene3d/entity_update_clone.js">
     <link rel="modulepreload" href="./scene3d/environ_override.js">
     <link rel="modulepreload" href="./scene3d/fade_alpha_state.js">
+    <link rel="modulepreload" href="./scene3d/far_forest.js">
     <link rel="modulepreload" href="./scene3d/far_terrain.js">
     <link rel="modulepreload" href="./scene3d/far_terrain_flags.js">
     <link rel="modulepreload" href="./scene3d/film/flags.js">
     <link rel="modulepreload" href="./scene3d/fixed_grid.js">
+    <link rel="modulepreload" href="./scene3d/flight_view_flag.js">
     <link rel="modulepreload" href="./scene3d/frame_pose.js">
     <link rel="modulepreload" href="./scene3d/frame_split.js">
     <link rel="modulepreload" href="./scene3d/frame_work.js">
@@ -1244,6 +1246,7 @@
     <link rel="modulepreload" href="./scene3d/landblock_lru.js">
     <link rel="modulepreload" href="./scene3d/layered_haze.js">
     <link rel="modulepreload" href="./scene3d/lb_objects_shared.js">
+    <link rel="modulepreload" href="./scene3d/lb_presence.js">
     <link rel="modulepreload" href="./scene3d/light_loops.js">
     <link rel="modulepreload" href="./scene3d/lighting.js">
     <link rel="modulepreload" href="./scene3d/limbs.js">
@@ -1299,6 +1302,7 @@
     <link rel="modulepreload" href="./scene3d/remote_moveto_phase.js">
     <link rel="modulepreload" href="./scene3d/residency.js">
     <link rel="modulepreload" href="./scene3d/residency_grid.js">
+    <link rel="modulepreload" href="./scene3d/residency_log.js">
     <link rel="modulepreload" href="./scene3d/retail_light_tick.js">
     <link rel="modulepreload" href="./scene3d/rig_cell_gate.js">
     <link rel="modulepreload" href="./scene3d/rust/anim_scenery.js">
@@ -1444,6 +1448,7 @@
     <link rel="modulepreload" href="./scene3d/wind_rig.js">
     <link rel="modulepreload" href="./scene3d/wireframe_flag.js">
     <link rel="modulepreload" href="./scene3d/world_stream.js">
+    <link rel="modulepreload" href="./scene3d/world_terrain.js">
     <link rel="modulepreload" href="./scene3d/xu7_textures.js">
     <link rel="modulepreload" href="./ui/ac_aim_level_for_velocity.js">
     <link rel="modulepreload" href="./ui/ac_attack_type_for_weapon.js">
@@ -1458,6 +1463,7 @@
     <link rel="modulepreload" href="./ui/ac_entity_icon.js">
     <link rel="modulepreload" href="./ui/ac_floaty_frame.js">
     <link rel="modulepreload" href="./ui/ac_font.js">
+    <link rel="modulepreload" href="./ui/ac_html.js">
     <link rel="modulepreload" href="./ui/ac_icon_cache.js">
     <link rel="modulepreload" href="./ui/ac_icon_compose.js">
     <link rel="modulepreload" href="./ui/ac_layout.js">
@@ -1496,6 +1502,19 @@
     <link rel="modulepreload" href="./ui/selection_keys.js">
     <link rel="modulepreload" href="./ui/spew_box.js">
     <link rel="modulepreload" href="./ui/ui_lock.js">
+    <link rel="modulepreload" href="./vendor/postprocessing/build/index.js">
+    <link rel="modulepreload" href="./vendor/takram-three-clouds/build/index.js">
+    <link rel="modulepreload" href="./vendor/takram/three-atmosphere-shaders-bruneton.js">
+    <link rel="modulepreload" href="./vendor/takram/three-atmosphere.js">
+    <link rel="modulepreload" href="./vendor/takram/three-geospatial-effects.js">
+    <link rel="modulepreload" href="./vendor/takram/three-geospatial-shaders.js">
+    <link rel="modulepreload" href="./vendor/takram/three-geospatial.js">
+    <link rel="modulepreload" href="./vendor/three/build/three.core.js">
+    <link rel="modulepreload" href="./vendor/three/build/three.module.js">
+    <link rel="modulepreload" href="./vendor/three/examples/jsm/controls/OrbitControls.js">
+    <link rel="modulepreload" href="./vendor/three/examples/jsm/libs/fflate.module.js">
+    <link rel="modulepreload" href="./vendor/three/examples/jsm/loaders/EXRLoader.js">
+    <link rel="modulepreload" href="./vendor/three/examples/jsm/utils/BufferGeometryUtils.js">
     <!-- END modulepreload -->
 
     <script type="module">
@@ -1876,6 +1895,7 @@
       // AudioContext panner). Mirrors the canonical fix already applied in
       // scene3d/entities.js Sound(1) hook (~:8498) and scene3d/index.js (~:3520).
       import { acToThree } from "./scene3d/adapter.js";
+      import { EXPECTED_WASM_MANIFEST_VERSION } from "./scene3d/wasm_manifest_version.js";
       // A15-Q2 (2026-06-11 unification survey) — single EntityUpdate clone/
       // field schema shared with the 3D path's toMeta (scene3d/loop.js).
       // Pure function, no DOM/wasm. Wired into the backlog/deferred-spawn
@@ -1993,7 +2013,8 @@
         console.log("[plugins-disabled] ?plugins=none — skipping bar + main-panel registration");
       }
 
-      await initPluginBar({
+      // Parallelize plugin manifest loading with WebAssembly compilation/streaming.
+      const pluginBarPromise = initPluginBar({
         __hbWasmNs,
         pluginsDisabled,
         get barInstance() { return barInstance; }, set barInstance(v) { barInstance = v; },
@@ -2012,7 +2033,7 @@
         );
       }
 
-      try {
+      const wasmPromise = (async () => {
         // Staged loading text so a slow mobile/Tailscale connection
         // shows progress instead of staring at "Loading wasm
         // bundle…" through both awaits below. Each await is a known
@@ -2020,7 +2041,11 @@
         // holtburger_web_bg.wasm; manifest fetch pulls the 195 MB
         // dist/manifest.json. The user-visible status lets them tell
         // wasm-stuck from manifest-stuck.
-        root.innerHTML = "<p class=\"hint\">Initializing wasm bundle (1.5 MB)…</p>";
+        if (root) root.innerHTML = "<p class=\"hint\">Initializing wasm bundle (1.5 MB)…</p>";
+        const __hbWasmUrl = new URL(
+          "./pkg/holtburger_web_bg.wasm?v=wasmrev-20261029b",
+          window.location.href,
+        );
         // EXPERIMENT (threads-lite, 2026-07-24): `?sharedWasm=on` makes the
         // bake worker JOIN this instance's linear memory instead of minting its
         // own. Requires a threaded pkg (SCOPE-2.5b recipe) + COOP/COEP.
@@ -2029,10 +2054,6 @@
           // The glue keeps its compiled module private, so compile it here and
           // pass it in; `memory` comes back out of InitOutput, which avoids
           // hardcoding the module's minimum page count.
-          const __hbWasmUrl = new URL(
-            "./pkg/holtburger_web_bg.wasm?v=wasmrev-20261029b",
-            window.location.href,
-          );
           const __hbModule = await WebAssembly.compileStreaming(fetch(__hbWasmUrl));
           const __hbOut = await init({ module_or_path: __hbModule });
           window.__hbSharedWasm = { module: __hbModule, memory: __hbOut.memory };
@@ -2041,25 +2062,28 @@
             "[threads-lite] main wasm init shared; memory.buffer is SAB:",
             __hbOut.memory?.buffer instanceof SharedArrayBuffer,
           );
+          return __hbOut;
         } else {
           // Keep `InitOutput.memory` — `scene3d/adapter.js` needs the identity
           // of this instance's linear memory to tell a wasm-backed view from a
-          // JS-owned buffer, which is what lets the surface-pixel helpers skip
-          // their defensive copy on the (default) worker-transferred and
-          // `.slice()`d-getter paths. Absent ⇒ the helpers copy unconditionally,
-          // exactly as before.
-          // Explicit STAMPED wasm URL: the glue's default derives the .wasm
-          // path from import.meta.url, which DROPS the ?v= query — so a
-          // bumped stamp refetched the glue but could pair it with a cached
-          // old binary (the 2026-08-02 limp/ragdoll staleness hole).
-          const __hbOutMain = await init({
-            module_or_path: new URL(
-              "./pkg/holtburger_web_bg.wasm?v=wasmrev-20261029b",
-              window.location.href,
-            ),
-          });
+          // JS-owned buffer.
+          // Compile streaming in parallel whenever available.
+          let moduleOrPath = __hbWasmUrl;
+          if (typeof WebAssembly.compileStreaming === "function") {
+            try {
+              moduleOrPath = await WebAssembly.compileStreaming(fetch(__hbWasmUrl));
+            } catch (_) {
+              moduleOrPath = __hbWasmUrl;
+            }
+          }
+          const __hbOutMain = await init({ module_or_path: moduleOrPath });
           window.__hbWasmMemory = __hbOutMain?.memory ?? null;
+          return __hbOutMain;
         }
+      })();
+
+      try {
+        await Promise.all([pluginBarPromise, wasmPromise]);
 
         // Wasm provenance banner (net-review A15-F1): pkg/ is gitignored, so a
         // dev-profile wasm (~4x slower) can ship silently. Size is same-origin
@@ -2090,16 +2114,17 @@
         // wrong, camera clips) when `pkg/` lags the Rust source. Assert the
         // wasm's export-manifest version meets what this JS bundle was built
         // against; on a stale bundle, console.error + an on-screen banner so
-        // the regression is LOUD instead of a clean-console mystery. BUMP
-        // both this and WASM_EXPORT_MANIFEST_VERSION (lib.rs) together when a
-        // load-bearing export is added.
-        const EXPECTED_WASM_MANIFEST_VERSION = 1;
+        // the regression is LOUD instead of a clean-console mystery.
+        // Interface contract: imported from ./scene3d/wasm_manifest_version.js (v7).
+        const expectedWasmVersion = (typeof EXPECTED_WASM_MANIFEST_VERSION !== "undefined")
+          ? EXPECTED_WASM_MANIFEST_VERSION
+          : 7;
         try {
           const manifestFn = __hbWasmNs?.wasm_export_manifest_version;
           const wasmManifest = (typeof manifestFn === "function")
             ? (manifestFn() >>> 0) : -1;
-          if (wasmManifest < EXPECTED_WASM_MANIFEST_VERSION) {
-            const msg = `wasm bundle is STALE: export-manifest v${wasmManifest} < expected v${EXPECTED_WASM_MANIFEST_VERSION}. ` +
+          if (wasmManifest < expectedWasmVersion) {
+            const msg = `wasm bundle is STALE: export-manifest v${wasmManifest} < expected v${expectedWasmVersion}. ` +
               `Rebuild pkg/ (wasm-pack build) — some gameplay will silently degrade until you do.`;
             // eslint-disable-next-line no-console
             console.error(`[F18-2] ${msg}`);
@@ -3090,8 +3115,10 @@
           // weak hardware; setTimeout(0) fallback for Safari/Firefox
           // that lack rIC pre-shim.
           try {
-            const wantRenderer3d =
-              new URLSearchParams(window.location.search).get("renderer") !== "2d";
+            if (new URLSearchParams(window.location.search).get("renderer") === "2d") {
+              console.warn("[renderer] ?renderer=2d is retired and deprecated; booting 3D renderer");
+            }
+            const wantRenderer3d = true;
             if (wantRenderer3d) {
               const eagerImport = () => {
                 Promise.all([
@@ -3321,7 +3348,7 @@
           : `<p class="fail">FAIL &mdash; one or more checks did not pass.</p>`;
         root.innerHTML = lines.join("\n") + summary;
       } catch (err) {
-        root.innerHTML = `<p class="fail">FAIL &mdash; bundle did not initialize.</p><pre>${err.stack || err}</pre>`;
+        root.innerHTML = `<p class="fail">FAIL &mdash; bundle did not initialize.</p><pre>${escapeHtml(err.stack || err)}</pre>`;
         document.getElementById("render-status").textContent =
           "Render skipped — bundle init failed.";
         throw err;
@@ -3661,11 +3688,8 @@
       // in a populated zone — pollEntityUpdates can carry 100s/sec).
       // Cap both with a keep-latest-N ring (one-time overflow warn).
       const ENTITY_BUFFER_CAP = 512;
-      // W6 flip (2026-06-18): 3D is the UNCONDITIONAL DEFAULT renderer.
-      // `?renderer=2d` is the escape hatch to the (soon-to-be-/legacy) PIXI
-      // path. All six `renderer` parse sites in this file read `!== "2d"`.
-      const __USE_RENDERER_3D =
-        new URLSearchParams(window.location.search).get("renderer") !== "2d";
+      // 3D is the unconditional renderer. ?renderer=2d is deprecated and boots 3D.
+      const __USE_RENDERER_3D = true;
       // `?spawnDefer2dOnly=on` (default-off): under ?renderer=3d the 2D
       // `liveScene` is PERMANENTLY null (the 2D PIXI bring-up is skipped),
       // so every KIND_SPAWN gets cloned into `deferredSpawns` that the 3D
@@ -3945,8 +3969,7 @@
         // spawn LB (world_stream.js#onPositionUpdate), so boot no longer touches any
         // Holtburg coordinates. The `if (useRenderer3d)` gate is kept so the retired
         // ?renderer=2d path still degrades cleanly to blank (skips init3D).
-        const useRenderer3d =
-          new URLSearchParams(window.location.search).get("renderer") !== "2d";
+        const useRenderer3d = true;
         if (useRenderer3d) {
           // #13 Option A — idempotency guard. The autoLogin / kick-retry
           // path can re-enter renderHoltburg after a char is already in
@@ -4252,7 +4275,7 @@
           ? "Regenerate the fixture with <code>cargo run -p holtburger-tools --bin dat2hba -- --profile pruned eor/portal=$HOME/ac_base_dats/client_portal.dat eor/cell=$HOME/ac_base_dats/client_cell_1.dat dats/assets.hba</code> from <code>external/holtburger/</code>."
           : "Open devtools console for the full stack.";
         renderStatus.innerHTML =
-          `<span class="fail">[FAIL]</span> Render failed: <code>${msg}</code><br/><span class="hint">${hint}</span>`;
+          `<span class="fail">[FAIL]</span> Render failed: <code>${escapeHtml(msg)}</code><br/><span class="hint">${hint}</span>`;
         // eslint-disable-next-line no-console
         console.error("renderHoltburg threw (terrain/init3D); picking still runs via finally:", err);
        } finally {
@@ -4265,8 +4288,7 @@
         // 3D-only) and picking's own guard no-ops if liveScene3d/sessionHandle
         // never came up.
         try {
-          const _pick3D =
-            new URLSearchParams(window.location.search).get("renderer") !== "2d";
+          const _pick3D = true;
           if (_pick3D) {
             const { setupClickPicking } = await import("./scene3d/picking.js");
             setupClickPicking({
@@ -5053,7 +5075,7 @@
                   });
                 } catch (err) {
                   createStatus.innerHTML =
-                    `<span class="fail">[FAIL]</span> character-creation plugin load failed: <code>${String(err?.message ?? err)}</code>`;
+                    `<span class="fail">[FAIL]</span> character-creation plugin load failed: <code>${escapeHtml(err?.message ?? err)}</code>`;
                 }
               });
             }
@@ -5449,7 +5471,7 @@
               handle.createTestCharacter(name);
             } catch (err) {
               createStatus.innerHTML =
-                `<span class="fail">[FAIL]</span> createTestCharacter rejected: <code>${String(err?.message ?? err)}</code>`;
+                `<span class="fail">[FAIL]</span> createTestCharacter rejected: <code>${escapeHtml(err?.message ?? err)}</code>`;
               return;
             }
             createBtn.disabled = true;
@@ -6321,87 +6343,26 @@
                 key, bubbles: true, cancelable: true,
               }));
             };
-            const SCALE_MIN = 0.05, SCALE_MAX = 120.0;
-            const vkZoom = (dir) => {
-              if (!window.liveScene?.cameraContainer) return;
-              const cam = window.liveScene.cameraContainer;
-              const renderer = window.liveScene?.app?.renderer;
-              const cw = renderer?.canvas?.width  ?? 512;
-              const ch = renderer?.canvas?.height ?? 512;
-              const cx = cw / 2, cy = ch / 2;
-              // 1.5× per tap: 8 taps ≈ 25× — gets the user from
-              // default fit-LB scale to "see yourself" zoom in a
-              // reasonable number of presses.
-              const factor = dir === "in" ? 1.5 : 1 / 1.5;
-              const next = cam.scale.x * factor;
-              if (next < SCALE_MIN || next > SCALE_MAX) return;
-              const preX = (cx - cam.position.x) / cam.scale.x;
-              const preY = (cy - cam.position.y) / cam.scale.y;
-              cam.scale.set(next, next);
-              const postX = (cx - cam.position.x) / next;
-              const postY = (cy - cam.position.y) / next;
-              cam.position.x += (postX - preX) * next;
-              cam.position.y += (postY - preY) * next;
-            };
-            const centreOnPlayer = () => {
-              if (!window.liveScene?.cameraContainer) return false;
-              const cam = window.liveScene.cameraContainer;
-              const renderer = window.liveScene?.app?.renderer;
-              const cw = renderer?.canvas?.width  ?? 512;
-              const ch = renderer?.canvas?.height ?? 512;
-              const lpg = (typeof window.getLocalPlayerGuid === "function")
-                ? window.getLocalPlayerGuid() : null;
-              if (lpg === null || lpg === undefined) return false;
-              const e = window.entityMap?.get(lpg >>> 0);
-              if (!e?.sprite) return false;
-              const sx = cam.scale.x;
-              cam.position.set(cw / 2 - e.sprite.x * sx, ch / 2 + e.sprite.y * sx);
-              return true;
-            };
-            const vkCenter = () => {
-              if (centreOnPlayer()) return;
-              // Fallback: normalise on current camera focus point.
-              const cam = window.liveScene?.cameraContainer;
-              const renderer = window.liveScene?.app?.renderer;
-              if (!cam || !renderer) return;
-              const cw = renderer.canvas?.width ?? 512;
-              const ch = renderer.canvas?.height ?? 512;
-              const wx = (cw / 2 - cam.position.x) / cam.scale.x;
-              const wy = (ch / 2 - cam.position.y) / cam.scale.y;
-              const sx = cam.scale.x;
-              cam.position.set(cw / 2 - wx * sx, ch / 2 + wy * sx);
-            };
+            const vkZoom = () => {};
+            const centreOnPlayer = () => false;
+            const vkCenter = () => {};
 
-            // Follow toggle. When ON, the per-rAF auto-pan tick
-            // (registered below + hooked into requestAnimationFrame)
-            // calls centreOnPlayer() each frame so the camera tracks
-            // the local player as they walk. Manual pan still works
-            // but gets overridden the next frame; manual zoom is
-            // preserved (centreOnPlayer doesn't touch cam.scale).
-            // window.toggleFollow() exposed for the capture script
-            // + dev console.
             let autoFollow = false;
             const setFollow = (on, btn) => {
-              autoFollow = on;
+              autoFollow = Boolean(on);
               if (btn) {
-                btn.classList.toggle("held", on);
-                btn.textContent = on ? "Follow ON" : "Follow OFF";
+                btn.classList.toggle("held", autoFollow);
+                btn.textContent = autoFollow ? "Follow ON" : "Follow OFF";
               } else {
-                // Find the keypad's follow button + sync its label.
                 const fbtn = document.querySelector("[data-vk-follow]");
                 if (fbtn) {
-                  fbtn.classList.toggle("held", on);
-                  fbtn.textContent = on ? "Follow ON" : "Follow OFF";
+                  fbtn.classList.toggle("held", autoFollow);
+                  fbtn.textContent = autoFollow ? "Follow ON" : "Follow OFF";
                 }
               }
             };
             window.setFollow = setFollow;
             window.isFollowing = () => autoFollow;
-            const followTick = () => {
-              if (autoFollow) centreOnPlayer();
-              requestAnimationFrame(followTick);
-            };
-            requestAnimationFrame(followTick);
             // Track which buttons have been locked down via toggle so
             // we can release them on a second tap or window blur.
             const heldByVk = new Set();
@@ -6696,9 +6657,15 @@
             const events = handle.poll_events();
             __clientEventDeps.panelBatch = __panelBatch;
             try {
-              for (const evt of events) {
+              for (let i = 0; i < events.length; i++) {
+                const evt = events[i];
                 const __k = __latTrack ? evt.kind : -1;
-                if (dispatchClientEvent(evt, __clientEventDeps) === STOP_PUMP) return;
+                if (dispatchClientEvent(evt, __clientEventDeps) === STOP_PUMP) {
+                  for (let j = i + 1; j < events.length; j++) {
+                    events[j]?.free?.();
+                  }
+                  return;
+                }
                 if (__latTrack) __lat.onEvent(__k);
               }
             } finally {

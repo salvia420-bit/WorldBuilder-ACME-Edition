@@ -34,3 +34,17 @@ git apply /tmp/upstream.patch    # resolve conflicts; never blindly accept
 ## License obligations
 
 Holtburger is AGPL v3. Anything that links it (statically or as a runtime dependency) — including the future emit-dynamic-site browser client — inherits AGPL v3 obligations under §13 (network use). The project's top-level [`LICENSE.md`](../../LICENSE.md) reflects this.
+
+## Vendored Browser Client Libraries (`apps/holtburger-web/vendor/`)
+
+For air-gapped offline operation without third-party CDN SPOFs (`cdn.jsdelivr.net`), the web client vendors external ESM libraries into `apps/holtburger-web/vendor/` via `apps/holtburger-web/scripts/sync-vendor.mjs`:
+
+| Package | Version | Vendor Path | License | Purpose |
+|---|---|---|---|---|
+| `three` | 0.184.0 | `vendor/three/` | MIT | 3D WebGL2 scene graph & core math |
+| `postprocessing` | 6.39.1 | `vendor/postprocessing/` | Zlib | Depth-of-field, bloom, effect composer |
+| `tiny-invariant` | 1.3.3 | `vendor/tiny-invariant/` | MIT | Lightweight assertion guard |
+| `@takram/*` | (bundled) | `vendor/takram/` | MIT | Atmospheric scattering & geospatial |
+| `@takram/three-clouds` | (bundled) | `vendor/takram-three-clouds/` | MIT | Volumetric cloud rendering |
+| `@dgreenheck/three-pinata` | (bundled) | `vendor/dgreenheck/` | MIT | Pinata particle helpers |
+

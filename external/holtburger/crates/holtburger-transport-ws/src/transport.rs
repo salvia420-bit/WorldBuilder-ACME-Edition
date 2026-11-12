@@ -8,6 +8,7 @@ use std::rc::Rc;
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use futures::channel::{mpsc, oneshot};
+use futures::future::{select, Either};
 use futures::lock::Mutex as FutMutex;
 use futures::{SinkExt, StreamExt};
 use holtburger_session::Transport;
@@ -194,12 +195,20 @@ impl WsTransport {
         };
         ws.set_onclose(Some(on_close.as_ref().unchecked_ref()));
 
-        match open_rx.await {
-            Ok(Ok(())) => {}
-            Ok(Err(msg)) => return Err(ConnectError::Handshake(msg)),
-            Err(_) => {
+        match select(open_rx, wait_timeout(10_000.0)).await {
+            Either::Left((res, _)) => match res {
+                Ok(Ok(())) => {}
+                Ok(Err(msg)) => return Err(ConnectError::Handshake(msg)),
+                Err(_) => {
+                    return Err(ConnectError::Handshake(
+                        "open notifier dropped before WS resolved".into(),
+                    ));
+                }
+            },
+            Either::Right(_) => {
+                let _ = ws.close();
                 return Err(ConnectError::Handshake(
-                    "open notifier dropped before WS resolved".into(),
+                    "ws connection timed out after 10s".into(),
                 ));
             }
         }
@@ -218,9 +227,17 @@ impl WsTransport {
             ConnectError::Handshake(format!("send ClientHello: {}", jsval_string(&e)))
         })?;
 
-        let reply = handshake_rx.await.map_err(|_| {
-            ConnectError::Handshake("ws closed before handshake reply".into())
-        })?;
+        let reply = match select(handshake_rx, wait_timeout(10_000.0)).await {
+            Either::Left((res, _)) => res.map_err(|_| {
+                ConnectError::Handshake("ws closed before handshake reply".into())
+            })?,
+            Either::Right(_) => {
+                let _ = ws.close();
+                return Err(ConnectError::Handshake(
+                    "ws handshake timed out after 10s".into(),
+                ));
+            }
+        };
         let parsed: ServerHello = serde_json::from_str(&reply).map_err(|e| {
             ConnectError::Handshake(format!("parse ServerHello: {e} (raw: {reply})"))
         })?;
@@ -318,4 +335,17 @@ fn jsval_string(v: &JsValue) -> String {
     v.as_string()
         .or_else(|| js_sys::JSON::stringify(v).ok().and_then(|s| s.as_string()))
         .unwrap_or_else(|| format!("{v:?}"))
+}
+
+fn wait_timeout(ms: f64) -> oneshot::Receiver<()> {
+    let (tx, rx) = oneshot::channel();
+    let cb = Closure::once_into_js(move || {
+        let _ = tx.send(());
+    });
+    if let Ok(func) = js_sys::Reflect::get(&js_sys::global(), &JsValue::from_str("setTimeout")) {
+        if let Ok(func) = func.dyn_into::<js_sys::Function>() {
+            let _ = func.call2(&js_sys::global(), &cb, &JsValue::from_f64(ms));
+        }
+    }
+    rx
 }
