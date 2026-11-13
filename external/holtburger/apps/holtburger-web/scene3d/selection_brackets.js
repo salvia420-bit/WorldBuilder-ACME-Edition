@@ -767,6 +767,7 @@ export class SelectionBracketLayer {
     this._size = this._diet ? makeCanvasCssSize(sceneCanvas) : null;
     this._cornersHidden = true;
     this._arrowHidden = true;
+    this._arrowXf = "";
     this._xf = this._diet ? new Map() : null;  // corner el -> last transform string
   }
 
@@ -787,6 +788,7 @@ export class SelectionBracketLayer {
     el.style.pointerEvents = "none";
     el.style.display = "none";
     el.style.boxSizing = "border-box";
+    el.style.filter = "drop-shadow(0 0 1px rgba(0, 0, 0, 0.95))";
     this._applyCornerCss(el, which, this.color);
     this.domRoot.appendChild(el);
     _onCornerArtVerdict((ok) => {
@@ -845,6 +847,7 @@ export class SelectionBracketLayer {
     el.style.borderLeft = "8px solid transparent";
     el.style.borderRight = "8px solid transparent";
     el.style.borderBottom = `14px solid ${this.color}`;
+    el.style.filter = "drop-shadow(0 0 2px rgba(0, 0, 0, 0.95))";
     el.style.pointerEvents = "none";
     el.style.display = "none";
     this.domRoot.appendChild(el);
@@ -1111,9 +1114,14 @@ export class SelectionBracketLayer {
     // Point the triangle down the screen-space direction toward the target
     // (the indicator triangle is authored pointing UP, matching atan2(nx, ny) = 0).
     const deg = (Math.atan2(nx, ny) * 180) / Math.PI;
-    this._arrow.style.transform =
-      `translate3d(${px | 0}px, ${py | 0}px, 0) translate(-50%, -50%) rotate(${deg.toFixed(1)}deg)`;
-    if (this._arrow.style.display !== "block") this._arrow.style.display = "block";
+    const xf = `translate3d(${px | 0}px, ${py | 0}px, 0) translate(-50%, -50%) rotate(${deg.toFixed(1)}deg)`;
+    if (!this._diet || this._arrowXf !== xf) {
+      this._arrow.style.transform = xf;
+      this._arrowXf = xf;
+    }
+    if (this._diet ? this._arrowHidden : this._arrow.style.display !== "block") {
+      this._arrow.style.display = "block";
+    }
     this._arrowHidden = false;
     this.lastStatus = 2;
     this.lastRect = null;

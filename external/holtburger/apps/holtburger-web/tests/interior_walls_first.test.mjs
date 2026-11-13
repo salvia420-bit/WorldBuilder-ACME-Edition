@@ -274,10 +274,11 @@ await t("W1 ON: walls attached before the statics' mesh fetch resolves; statics 
   assert.equal(s.envCellLoadedLbs.has(LB), true, "LB built after the statics");
   assert.equal(s.envCellBuildInFlight.has(LB), false, "in-flight released at the end");
   assert.equal(r.compiles.length, 2, "statics prewarmed separately");
-  assert.ok(r.compiles[1].length === 2 && r.compiles[1].every((n) => n.startsWith("cellstatic-")), "the second prewarm = the props");
+  assert.ok(r.compiles[1].length >= 1 && r.compiles[1].every((n) => n.startsWith("cellstatic-")), "the second prewarm = the props");
   const geoms = new Set(sum.disposables.geometries);
   assert.ok(geoms.has(meshGroupOf(cA).children[0].geometry), "walls geometry handed to the LRU");
-  assert.ok(st.every((m) => geoms.has(m.geometry)), "statics geometry handed to the LRU");
+  const stMeshes = cA.children.filter((k) => k.isMesh && (k.name || "").startsWith("cellstatic-"));
+  assert.ok(stMeshes.length >= 1 && stMeshes.every((m) => geoms.has(m.geometry)), "statics geometry handed to the LRU");
   assert.ok(r.handed.every((m) => m.freed === 1), "each wasm mesh freed once");
 }));
 
@@ -350,7 +351,9 @@ let refK = -1;
 const refG = (await disposedDuring(quiet(async () => {
   const r = rig({ mm: "now" });
   const sum = await on.buildEnvCellsForLandblock(r.scene3d, LB, r.wasm);
-  refK = sum.disposables.geometries.length;
+  // Stage-2 `?cellStaticMerge` creates its merged geometry only when the build
+  // is not cancelled before `deferredCellStatics` runs.
+  refK = sum.disposables.geometries.filter((g) => !g.userData?.__cellStaticMerged).length;
 }))).size;
 
 await t("W4 ON: evicted between walls and statics → nothing attached, all geometry disposed, clean rebuild", quiet(async () => {

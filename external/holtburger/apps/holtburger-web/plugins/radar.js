@@ -616,6 +616,7 @@ function ensureStyles() {
       position: fixed; top: 8px; right: 8px; z-index: 50;
       width: ${WIDTH}px; height: ${HEIGHT}px;
       pointer-events: none;
+      contain: layout style;
       user-select: none; -webkit-user-select: none;
     }
     #${OVERLAY_ID} > * { position: absolute; }
@@ -627,6 +628,7 @@ function ensureStyles() {
       background: url("${SPRITES}/0x06004CC1.png") center / 100% 100% no-repeat;
       image-rendering: pixelated;
       border-radius: 50%;
+      box-shadow: 0 0 0 1px rgba(138, 117, 68, 0.6), 0 3px 10px rgba(0, 0, 0, 0.82);
       pointer-events: auto;
     }
     #${OVERLAY_ID} .hb-radar-disk.is-over-blip { cursor: pointer; }
@@ -671,7 +673,12 @@ function ensureStyles() {
     #${OVERLAY_ID} .hb-radar-coords {
       ${px(RECT_COORDS)}
       display: flex; align-items: center; justify-content: center;
-      background: url("${SPRITES}/0x06004CC0.png") repeat;
+      background: linear-gradient(180deg, rgba(16, 17, 23, 0.62), rgba(9, 10, 14, 0.78)), url("${SPRITES}/0x06004CC0.png") repeat;
+      border: 1px solid rgba(138, 117, 68, 0.68);
+      border-top-color: rgba(217, 180, 90, 0.55);
+      box-shadow: inset 0 1px 0 rgba(255, 224, 150, 0.12), 0 2px 6px rgba(0, 0, 0, 0.75);
+      box-sizing: border-box;
+      font-variant-numeric: tabular-nums;
       pointer-events: none;
     }
     #${OVERLAY_ID} .hb-radar-coords[hidden] { display: none; }
@@ -684,16 +691,17 @@ function ensureStyles() {
     #${TOOLTIP_ID} {
       white-space: nowrap;
       z-index: 51;
-      padding: 2px 6px;
+      padding: 3px 7px;
       font-size: 11px;
       line-height: 1.3;
+      font-variant-numeric: tabular-nums;
     }
     #${TOOLTIP_ID}[hidden] { display: none; }
     #${TOOLTIP_ID} .hb-radar-tip-swatch {
       display: inline-block; width: 6px; height: 6px; margin-right: 5px;
       vertical-align: 1px; box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.8);
     }
-    #${TOOLTIP_ID} .hb-radar-tip-dist { color: var(--hbk-text-dim, #a8a090); margin-left: 6px; }
+    #${TOOLTIP_ID} .hb-radar-tip-dist { color: var(--hbk-text-dim, #a8a090); margin-left: 6px; font-variant-numeric: tabular-nums; }
   `;
   document.head.appendChild(style);
 }
@@ -965,19 +973,22 @@ export function mount(_ctx) {
   }
 
   // Repaint the blip canvas only when what it shows changed (fps review
-  // 2026-10-19). update() runs every 25 ms and used to clear and redraw the
-  // canvas each time, standing still or not. A redrawn canvas is a fresh
-  // raster on the GPU process's main thread — the thread that also executes
-  // every WebGL call (the 2026-10-06 gpu.angle trace measured ~4.7 ms/frame
-  // of DOM raster there). So drawPixels() only RECORDS each call, and
-  // flushPixels() replays the recorded list after a clear only when its key
-  // (backing size + every call's pixel set, position and colour, in order)
-  // differs from the list it last painted: an equal key is identical pixels.
-  // Resizing the backing store clears the canvas, so it drops the key.
-  let paintKey = "";
+  // 2026-10-19; Pass 2 zero-string FNV-1a dirty key). update() runs every 25 ms
+  // and used to clear and redraw the canvas each time, standing still or not.
+  // A redrawn canvas is a fresh raster on the GPU process's main thread — the
+  // thread that also executes every WebGL call. drawPixels() only RECORDS each
+  // call, and flushPixels() hashes (backing size, op count, and each call's
+  // pixel-set id, coordinates, and palette colour id) into a 64-bit numeric
+  // FNV-1a/Murmur pair with zero per-tick string allocations, replaying the
+  // draw list only when the key changes.
+  let paintH1 = -1;
+  let paintH2 = -1;
+  let paintNOps = -1;
   const ops = [];   // reused per update: { offsets, x, y, color }
   let nOps = 0;
   const pixelsIds = new Map(); // offsets array -> small id for the key
+  const colorIds = new Map();  // colour string -> small id for the key
+  const resetPaintKey = () => { paintH1 = -1; paintH2 = -1; paintNOps = -1; };
   const pixelsId = (offsets) => {
     // An empty set draws nothing (blipPixels hands out a fresh [] for an
     // unknown shape — never key those, or the map grows 40 times a second).
@@ -986,9 +997,18 @@ export function mount(_ctx) {
     if (id === undefined) {
       // The pixel sets are module constants; this only guards against a future
       // caller building arrays per call. New ids just force one repaint.
-      if (pixelsIds.size >= 256) { pixelsIds.clear(); paintKey = ""; }
+      if (pixelsIds.size >= 256) { pixelsIds.clear(); resetPaintKey(); }
       id = pixelsIds.size;
       pixelsIds.set(offsets, id);
+    }
+    return id;
+  };
+  const colorId = (color) => {
+    let id = colorIds.get(color);
+    if (id === undefined) {
+      if (colorIds.size >= 256) { colorIds.clear(); resetPaintKey(); }
+      id = colorIds.size + 1;
+      colorIds.set(color, id);
     }
     return id;
   };
@@ -1002,14 +1022,27 @@ export function mount(_ctx) {
 
   function flushPixels(k, W) {
     if (canvasesOff) { _paintStats.updates += 1; nOps = 0; return; }
-    let key = `${W}`;
+    let h1 = Math.imul((0x811c9dc5 ^ (W | 0)) >>> 0, 0x01000193) >>> 0;
+    let h2 = Math.imul((0x9e3779b9 ^ ((W << 7) ^ nOps)) >>> 0, 0x85ebca6b) >>> 0;
     for (let i = 0; i < nOps; i++) {
       const op = ops[i];
-      key += `|${pixelsId(op.offsets)},${op.x},${op.y},${op.color}`;
+      const pid = (pixelsId(op.offsets) + 2) | 0;
+      const qx = Math.round(op.x * 64) | 0;
+      const qy = Math.round(op.y * 64) | 0;
+      const cid = colorId(op.color);
+      h1 = Math.imul((h1 ^ pid) >>> 0, 0x01000193) >>> 0;
+      h1 = Math.imul((h1 ^ qx) >>> 0, 0x01000193) >>> 0;
+      h1 = Math.imul((h1 ^ qy) >>> 0, 0x01000193) >>> 0;
+      h1 = Math.imul((h1 ^ cid) >>> 0, 0x01000193) >>> 0;
+      const mix = (((pid << 20) ^ (cid << 12) ^ ((qx & 0xfff) << 6) ^ (qy & 0xfff)) | 0) >>> 0;
+      h2 = Math.imul((h2 ^ mix ^ i) >>> 0, 0x85ebca6b) >>> 0;
+      h2 = ((h2 << 13) | (h2 >>> 19)) >>> 0;
     }
     _paintStats.updates += 1;
-    if (key !== paintKey) {
-      paintKey = key;
+    if (h1 !== paintH1 || h2 !== paintH2 || nOps !== paintNOps) {
+      paintH1 = h1;
+      paintH2 = h2;
+      paintNOps = nOps;
       _paintStats.paints += 1;
       ctx.clearRect(0, 0, W, W);
       const intK = Number.isInteger(k);
@@ -1033,6 +1066,9 @@ export function mount(_ctx) {
     nOps = 0;
   }
 
+  let lastCoordsCell = -1;
+  let lastCoordsText = "";
+
   function update(now) {
     const sh = window.__sessionHandle;
     const em = window.liveScene3d?.entityManager || null;
@@ -1049,17 +1085,30 @@ export function mount(_ctx) {
     // Coordinates strip (UpdateCoordinates): outdoor cell only, option-gated.
     let coordsText = "";
     if (player && _slow.coordsOn && isOutdoorCell(player.cellId)) {
-      coordsText = radarCoordsText(outdoorCellId(player.landblockId, player.lx, player.ly));
+      const oc = outdoorCellId(player.landblockId, player.lx, player.ly) >>> 0;
+      if (oc === lastCoordsCell && lastCoordsText) {
+        coordsText = lastCoordsText;
+      } else {
+        lastCoordsCell = oc;
+        coordsText = radarCoordsText(oc);
+        lastCoordsText = coordsText;
+      }
     }
     // Unhide BEFORE setAcText: <ac-text> skips rendering while invisible and
     // would otherwise keep a stale canvas from the last outdoor cell.
-    if (coords.hidden !== !coordsText) coords.hidden = !coordsText;
-    if (coordsText) setAcText(coords, coordsText);
+    const wantHidden = !coordsText;
+    if (coords.hidden !== wantHidden) {
+      coords.hidden = wantHidden;
+      if (!wantHidden) setAcText(coords, coordsText);
+    } else if (coordsText && coords._lastRadarText !== coordsText) {
+      setAcText(coords, coordsText);
+    }
+    coords._lastRadarText = coordsText;
 
     // Canvas backing store tracks HUD zoom × DPR.
     const k = backingScale();
     const W = RADAR_GEOMETRY.size * k;
-    if (canvas.width !== W) { canvas.width = W; canvas.height = W; paintKey = ""; }
+    if (canvas.width !== W) { canvas.width = W; canvas.height = W; resetPaintKey(); }
     nOps = 0;
 
     const drawn = [];

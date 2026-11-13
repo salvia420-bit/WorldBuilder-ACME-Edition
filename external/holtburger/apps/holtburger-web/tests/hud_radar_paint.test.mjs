@@ -76,6 +76,7 @@ function fakeEl(tag) {
 
 const rafQueue = [];
 globalThis.window = globalThis;
+globalThis.location = { search: "?hudDiet=off" };
 globalThis.addEventListener = () => {};
 globalThis.removeEventListener = () => {};
 globalThis.innerWidth = 1920;

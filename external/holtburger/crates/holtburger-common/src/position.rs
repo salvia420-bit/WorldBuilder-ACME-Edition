@@ -73,10 +73,11 @@ impl WorldPosition {
     }
 
     pub fn is_indoors(&self) -> bool {
-        // In Asheron's Call, the low 16 bits of the landblock ID contain the cell.
-        // Cell IDs 0x0000 - 0x003F are used for the 64 outdoor cells in a landblock.
-        // Cell IDs 0x0100 and above are used for indoor/dungeon cells.
-        (self.landblock_id & 0xFFFF) >= 0x0100
+        // In Asheron's Call, the low 16 bits of the landblock ID contain the cell,
+        // with bit 15 (0x8000) reserved for the Dericost continent flag.
+        // Cell IDs 0x0000 - 0x003F (and Dericost 0x8000 - 0x803F) are outdoor cells.
+        // Cell IDs 0x0100 and above (after masking continent bit 15) are indoor/dungeon cells.
+        (self.landblock_id & 0x7FFF) >= 0x0100
     }
 
     pub fn landblock_coords(&self) -> (u8, u8) {
@@ -107,7 +108,7 @@ impl WorldPosition {
             return self;
         };
 
-        self.landblock_id = Guid((self.landblock_id.0 & 0xFFFF_0000) | cell_id);
+        self.landblock_id = Guid((self.landblock_id.0 & 0xFFFF_8000) | cell_id);
         self
     }
 
@@ -193,7 +194,7 @@ impl WorldPosition {
         if self.is_indoors() {
             return (0, 0); // Indoor cells don't have a 2d grid layout in the same way
         }
-        let cell_id = (self.landblock_id & 0xFFFF) as i32;
+        let cell_id = (self.landblock_id & 0x7FFF) as i32;
         let cell_index = cell_id - 1;
         if !(0..64).contains(&cell_index) {
             // For block-only landblocks (low word 0xFFFF), x/y is 0

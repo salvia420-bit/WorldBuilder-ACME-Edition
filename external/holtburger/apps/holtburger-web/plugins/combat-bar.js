@@ -440,8 +440,16 @@ function ensureStyles() {
       40%  { box-shadow: 0 0 8px 2px rgba(255, 220, 120, 0.95); transform: scaleY(1.35); }
       100% { box-shadow: 0 0 0 0 rgba(255, 220, 120, 0); transform: scaleY(1); }
     }
+    @keyframes hb-cb-strike-pulse-alt {
+      0%   { box-shadow: 0 0 0 0 rgba(255, 220, 120, 0); transform: scaleY(1); }
+      40%  { box-shadow: 0 0 8px 2px rgba(255, 220, 120, 0.95); transform: scaleY(1.35); }
+      100% { box-shadow: 0 0 0 0 rgba(255, 220, 120, 0); transform: scaleY(1); }
+    }
     .hb-cb-power-meter.strike-pulse .hb-cb-power-meter-bar {
       animation: hb-cb-strike-pulse 220ms ease-out;
+    }
+    .hb-cb-power-meter.strike-pulse.strike-pulse-alt .hb-cb-power-meter-bar {
+      animation-name: hb-cb-strike-pulse-alt;
     }
   `;
   document.head.appendChild(style);
@@ -1032,7 +1040,9 @@ function installSpellStrip() {
       color: var(--hbk-text, #e8dfc8);
       font-family: var(--hbk-font, var(--hb-font-serif));
       font-size: 11px;
+      font-variant-numeric: tabular-nums;
       box-shadow: 0 4px 14px rgba(0, 0, 0, 0.6);
+      contain: layout style;
     }
     ${spellStripFrameCss(`#${STRIP_ID}`)}
     #${STRIP_ID} .hb-ss-body {
@@ -1540,9 +1550,24 @@ function installSpellStrip() {
   };
 
   // Docked default — centred above the bottom-centre toolbar, re-measured
-  // on every show (and each visibility tick) so a taller toolbar or another
-  // HUD scale never overlaps it. A saved (dragged) position is left alone,
-  // except that one stranded off-screen snaps back to the dock.
+  // on show and when HUD layout changes (resize, HUD scale, hotbar resize,
+  // or #hb-* root mount/unmount) so steady-state ticks pay zero sync layout.
+  let dockDirty = true;
+  let lastDockBottom = "";
+  let observedHotbar = null;
+  let hotbarRo = null;
+  const syncHotbarObserver = () => {
+    try {
+      const hb = document.getElementById("hb-hotbar");
+      if (hb === observedHotbar) return;
+      if (hotbarRo) { hotbarRo.disconnect(); hotbarRo = null; }
+      observedHotbar = hb;
+      if (hb && typeof ResizeObserver === "function") {
+        hotbarRo = new ResizeObserver(() => { dockDirty = true; });
+        hotbarRo.observe(hb);
+      }
+    } catch (_) {}
+  };
   function dockStrip(forceBoundaryCheck = false) {
     if (root.style.display === "none") return;
     if (userPlaced()) {
@@ -1554,16 +1579,50 @@ function installSpellStrip() {
           r.right > window.innerWidth + 4 || r.bottom > window.innerHeight + 4;
         if (!off) return;
         posCtl?.resetPosition?.();
+        dockDirty = true;
       } catch (_) { return; }
     }
+    if (!forceBoundaryCheck && !dockDirty) return;
+    dockDirty = false;
+    syncHotbarObserver();
     root.style.left = "0px";
     root.style.right = "0px";
     root.style.top = "auto";
-    root.style.bottom = `${spellStripDockBottom(root)}px`;
+    const nextBottom = `${spellStripDockBottom(root)}px`;
+    if (lastDockBottom !== nextBottom) {
+      root.style.bottom = nextBottom;
+      lastDockBottom = nextBottom;
+    }
   }
   try {
-    window.addEventListener("resize", () => dockStrip(true));
-    document.addEventListener("hb-hud-scale-changed", () => dockStrip(true));
+    const onViewportOrScale = () => { dockDirty = true; dockStrip(true); };
+    window.addEventListener("resize", onViewportOrScale);
+    document.addEventListener("hb-hud-scale-changed", onViewportOrScale);
+    document.addEventListener("hb-hotbar-mounted", () => { dockDirty = true; syncHotbarObserver(); });
+    if (typeof MutationObserver === "function" && document.body) {
+      const mo = new MutationObserver((records) => {
+        for (let i = 0; i < records.length; i++) {
+          const rec = records[i];
+          const check = (list) => {
+            for (let j = 0; j < list.length; j++) {
+              const id = list[j]?.id || "";
+              if (id && id.startsWith("hb-") && id !== STRIP_ID
+                  && !/tooltip|tip\b|ghost|drag|toast|popup|menu|confirm|dialog/i.test(id)) {
+                return true;
+              }
+            }
+            return false;
+          };
+          if (check(rec.addedNodes) || check(rec.removedNodes)) {
+            dockDirty = true;
+            syncHotbarObserver();
+            break;
+          }
+        }
+      });
+      mo.observe(document.body, { childList: true });
+    }
+    syncHotbarObserver();
   } catch (_) {}
 
   loadCatalog().then((c) => { catalog = c; render(); }).catch(() => {});
@@ -2426,6 +2485,7 @@ function renderAttackControls(bodyEl, state) {
     // Filter to OUR swings only (`attackerGuid === localPlayerGuid`)
     // so an enemy hitting us doesn't trigger our recovery meter.
     let pulseTimeoutId = 0;
+    let pulseAlt = false;
     const onStrike = (ev) => {
       const detail = ev?.detail ?? {};
       const attackerGuid = (detail.attackerGuid >>> 0);
@@ -2435,16 +2495,15 @@ function renderAttackControls(bodyEl, state) {
         localGuid = (window.getLocalPlayerGuid?.() ?? 0) >>> 0;
       } catch (_) {}
       if (localGuid === 0 || attackerGuid !== localGuid) return;
-      // Animation is on a CSS class — restart it cleanly even if a
-      // previous pulse is still running by removing + reflowing +
-      // re-adding. `void offsetWidth` is the canonical force-reflow
-      // trick that resets the keyframe playhead.
+      // Restart the CSS keyframe animation without forcing synchronous layout
+      // (`offsetWidth`) by alternating keyframe names.
       if (pulseTimeoutId) clearTimeout(pulseTimeoutId);
-      meter.classList.remove("strike-pulse");
-      void meter.offsetWidth;
+      pulseAlt = !pulseAlt;
+      meter.classList.remove("strike-pulse", "strike-pulse-alt");
       meter.classList.add("strike-pulse");
+      if (pulseAlt) meter.classList.add("strike-pulse-alt");
       pulseTimeoutId = setTimeout(() => {
-        meter.classList.remove("strike-pulse");
+        meter.classList.remove("strike-pulse", "strike-pulse-alt");
         pulseTimeoutId = 0;
       }, 240);
     };
@@ -2464,7 +2523,7 @@ function renderAttackControls(bodyEl, state) {
     return () => {
       if (rafId) cancelAnimationFrame(rafId);
       if (pulseTimeoutId) clearTimeout(pulseTimeoutId);
-      meter.classList.remove("strike-pulse");
+      meter.classList.remove("strike-pulse", "strike-pulse-alt");
       // F11-3 — the lockout flag is NOT cleared on panel teardown any
       // more. Clearing it on close prematurely released a real in-flight
       // lockout (close the panel mid-swing → the next click double-fires

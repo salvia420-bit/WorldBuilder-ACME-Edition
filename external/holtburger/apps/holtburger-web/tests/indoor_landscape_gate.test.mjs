@@ -627,7 +627,8 @@ await t("L7 real pipeline: the skip frame clears, draws no world, keeps the cell
     calls.length = 0;
     p.preFrameSkySync(skyDome, camera);
     p.render(camera, 0);
-    const main = calls.filter((c) => c.kind === "render" && c.scene === scene);
+    const isMainScene = (sc) => sc === scene || sc?.name === "skipEmptyPasses.standIn";
+    const main = calls.filter((c) => c.kind === "render" && isMainScene(c.scene));
     const sky = calls.filter((c) => c.kind === "render" && c.scene === skyScene);
     return { main, sky, all: calls.slice() };
   };
@@ -653,7 +654,7 @@ await t("L7 real pipeline: the skip frame clears, draws no world, keeps the cell
   assert.equal(p.worldRenderPass.enabled, true, "the world RenderPass still runs");
   assert.equal(p.worldRenderPass.clear, true, "…and clears");
   assert.deepEqual(f.main.map((c) => c.mask), [0, 2], "world pass draws NO layer; cells pass unchanged");
-  const iWorld = f.all.findIndex((c) => c.kind === "render" && c.scene === scene);
+  const iWorld = f.all.findIndex((c) => c.kind === "render" && (c.scene === scene || c.scene?.name === "skipEmptyPasses.standIn"));
   assert.ok(
     f.all.slice(0, iWorld).some((c) => c.kind === "clear" && c.color && c.depth),
     "a colour + depth clear precedes the (empty) world pass",

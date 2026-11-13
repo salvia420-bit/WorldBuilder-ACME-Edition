@@ -65,10 +65,15 @@ import {
 } from "./static_atlas.js";
 import {
   makeBc7ArrayTexture,
+  makeBc7Texture,
   writeBc7ArrayLayer,
   bc7LevelBytes,
   texCompressedOnlyActive,
   materialRsId,
+  bc7AlphaFloor,
+  clipAlphaCutOf,
+  bc7ClipAlphaGuardEnabled,
+  bc7Source,
 } from "./bc7_textures.js";
 import { getAdapterMaxAnisotropy } from "./adapter.js";
 import { PLANE, planeFor, canSupplyPlanes } from "./surface_planes.js";
@@ -79,7 +84,10 @@ import { pageDimsOf, needsResample } from "./pool_class_key.js";
 // material that does not carry the patch renders that dungeon on ambient
 // alone. Dungeon lighting is not negotiable: the class material takes the
 // patch, or the member does not pool.
-import { applyBakedVertexLightPatch, VERTEX_BAKE, heightTexForMaterial, installCsmShaderPatch } from "./materials.js";
+import { applyBakedVertexLightPatch, VERTEX_BAKE, heightTexForMaterial, installCsmShaderPatch, VFX_GLOBALS, installVfxComponentPatch } from "./materials.js";
+import { windSwayGpu } from "./vfx/components/windSwayGpu.js";
+import { ensureVfxHashVarying } from "./vfx/per_instance.js";
+import { registerLuminousMaterial } from "./luminous_night.js";
 
 /** Why a member was refused. Every value is COUNTED and routes the member to
  *  the legacy producer path — there is no silent drop. */
@@ -107,6 +115,42 @@ function _queueLayerUpload(arr, layer) {
   if (!arr) return;
   if (typeof arr.addLayerUpdate === "function") arr.addLayerUpdate(layer);
   arr.needsUpdate = true;
+}
+
+/** Disable hardware mipmap auto-generation on DataArrayTexture NRA pages:
+ *  Three.js r184 DataArrayTexture partial layer uploads (addLayerUpdate) with
+ *  generateMipmaps=true either re-mip the entire array or emit GL_INVALID_VALUE (1281). */
+function _noMipNra(arr) {
+  if (!arr) return arr;
+  arr.generateMipmaps = false;
+  arr.minFilter = THREE.LinearFilter;
+  return arr;
+}
+
+const _VFX_HASH_PRELUDE = { id: "infra.vfxHash", inject: (s) => ensureVfxHashVarying(s) };
+
+function _texHasCutout(tex, mat) {
+  if (!bc7ClipAlphaGuardEnabled() || !tex || !mat) return false;
+  const cut = clipAlphaCutOf(mat);
+  if (!(cut > 0)) return false;
+  if (tex.isCompressedTexture && Array.isArray(tex.mipmaps) && tex.mipmaps[0]?.data) {
+    const floor = bc7AlphaFloor({ width: tex.mipmaps[0].width, height: tex.mipmaps[0].height, levels: tex.mipmaps }, cut);
+    return floor >= 0 && floor < cut;
+  }
+  const d = tex.image && tex.image.data;
+  if (d && typeof d.length === "number") {
+    for (let i = 3; i < d.length; i += 4) if (d[i] < cut) return true;
+  }
+  return false;
+}
+
+function _bc7LostCutout(tex, mat) {
+  if (!bc7ClipAlphaGuardEnabled() || !tex || !mat || !tex.isCompressedTexture) return false;
+  const cut = clipAlphaCutOf(mat);
+  if (!(cut > 0)) return false;
+  if (!Array.isArray(tex.mipmaps) || !tex.mipmaps[0]?.data) return false;
+  const floor = bc7AlphaFloor({ width: tex.mipmaps[0].width, height: tex.mipmaps[0].height, levels: tex.mipmaps }, cut);
+  return floor >= cut;
 }
 
 /**
@@ -168,10 +212,14 @@ export class ClassMaterialRegistry {
    * @param {object} deps
    * @param {(m:string,d?:any)=>void} [deps.warn]
    * @param {object} [deps.csmState]
+   * @param {object} [deps.stager]
+   * @param {boolean} [deps.preSizeBc7Nra]
    */
-  constructor({ warn, csmState } = {}) {
+  constructor({ warn, csmState, stager = null, preSizeBc7Nra = false } = {}) {
     this.warn = typeof warn === "function" ? warn : (m, d) => { try { console.warn(m, d); } catch (_) { /* fail-soft */ } };
     this.csmState = csmState ?? null;
+    this.stager = stager || null;
+    this.preSizeBc7Nra = preSizeBc7Nra === true;
     this._nraPending = [];
     /** classKey -> class page record */
     this.classes = new Map();
@@ -179,10 +227,20 @@ export class ClassMaterialRegistry {
       classes: 0,
       layerAllocs: 0, layerHits: 0, layerRecycles: 0, layerGrows: 0, layerGrowFails: 0,
       bc7Layers: 0, rgbaLayers: 0, nraLayers: 0, nraRepacks: 0, nraPendingDropped: 0, nraResizes: 0, nraResizeFails: 0,
-      refeedDimMismatch: 0, refeedFormatMismatch: 0,
+      refeedDimMismatch: 0, refeedFormatMismatch: 0, refeedAlphaVetoed: 0,
       refused: { noTexture: 0, needsResample: 0, offPage: 0, bc7Pending: 0, deformed: 0, layerFull: 0, layerWriteFail: 0, noPixels: 0 },
       allocatedBytes: 0,
     };
+  }
+
+  _stageDiff(arr, rsId, bytes) {
+    if (!this.stager || !arr || typeof this.stager.enqueueTexture !== "function") return;
+    this.stager.enqueueTexture({ texture: arr, rsId: rsId >>> 0, cls: "U-TEX", bytes: bytes | 0 });
+  }
+
+  _stageNra(arr, bytes) {
+    if (!this.stager || !arr || typeof this.stager.enqueueTexture !== "function") return;
+    this.stager.enqueueTexture({ texture: arr, rsId: 0, cls: "U-NRA", bytes: bytes | 0 });
   }
 
   /** The `PoolRegistry.materialFactory` dependency. The class page is always
@@ -205,20 +263,20 @@ export class ClassMaterialRegistry {
   admit(classKey, material, rec) {
     const tex = material && material.map;
     if (!tex || !tex.image) return this._refuse(REFUSE.NO_TEXTURE);
-    // A MECH-B vertex-deformed variant must never be consumed: the class
-    // material replaces the member's variant and would silently strip the
-    // deformation (the 2026-07-02 "trunk sways, foliage frozen" split).
+    // MECH-B vertex-deformed variants (e.g. `deformation.windSwayGpu`) are
+    // refused so swaying trees route through cross-LB `static_batch_x` /
+    // `InstancedMesh` without opening duplicate 2048² BC7 array pages.
     const setKey = material.userData && material.userData.__vfxSetKey;
-    if (typeof setKey === "string" && setKey.includes("deformation.")) return this._refuse(REFUSE.DEFORMED);
+    if (typeof setKey === "string" && setKey.length > 0) {
+      return this._refuse(REFUSE.DEFORMED);
+    }
     // A surface whose BC7 verdict is still in flight cannot be committed: the
     // page's format and dims are fixed by texStorage3D at allocation.
     if (bc7AtlasShouldDefer(material)) return this._refuse(REFUSE.BC7_PENDING);
     // THE PAGE-RESAMPLE AUTHORITY. `rec.texOffPage` is stamped by the producer
     // when TEXREF declares dims that differ from the ones currently on the
     // GPU: such a member's dims WILL move when its full tier lands, so a page
-    // layer taken now pins it to the wrong page for the session. The
-    // `FULL_PAGE_DIMS` tier bit is the authority here — the dims byte alone
-    // cannot be (a 1096² member rounds to a convincing 2048²).
+    // layer taken now pins it to the wrong page for the session.
     if (rec && rec.texOffPage === true) return this._refuse(REFUSE.OFF_PAGE);
     // THE D2 GATE. `rec` carries the page-tier facts the class key was built
     // from; a member off its page has no legal layer until the bake/transcode
@@ -241,6 +299,16 @@ export class ClassMaterialRegistry {
     if (hit) {
       hit.refs += 1;
       this.stats.layerHits += 1;
+      const rsHit = materialRsId(material) >>> 0;
+      if (rsHit && this.stager && typeof this.stager.isStaged === "function" && !this.stager.isStaged(rsHit)) {
+        if (!hit.rsId || this.stager.isStaged(hit.rsId)) {
+          if (typeof this.stager.markStaged === "function") this.stager.markStaged(rsHit);
+        } else if (typeof this.stager.enqueueRepoint === "function") {
+          this.stager.enqueueRepoint(hit.rsId, () => {
+            if (typeof this.stager.markStaged === "function") this.stager.markStaged(rsHit);
+          });
+        }
+      }
       return { ok: true, layer: hit.layer };
     }
 
@@ -254,23 +322,19 @@ export class ClassMaterialRegistry {
     // so a skipped or failed write leaves the previous tenant's texels resident
     // and the member renders someone else's texture. Every path below either
     // rewrites the layer in full or releases it.
-    if (!this._writeLayer(c, layer, tex, material)) {
+    const rsId = materialRsId(material);
+    if (!this._writeLayer(c, layer, tex, material, rsId)) {
       c.freeLayers.push(layer);
       return this._refuse(REFUSE.LAYER_WRITE);
     }
-    c.layerOf.set(uuid, {
+    const entry = {
       layer,
       refs: 1,
-      // RSID-MARKER: the ONE reader. Was an inline `__bc7RsId ?? __pvwRsId`,
-      // which reads 0 for a member admitted after a NEGATIVE verdict (the X6
-      // path stamps `__bc7RsId` only on success) — and a layer filed under
-      // rsId 0 is a layer `refeedRsId` can never find again.
-      rsId: materialRsId(material),
-      // The MATERIAL is retained so `refeedRsId` can re-read its (upgraded)
-      // `map` — `atlasRefeed(rsId)` carries no resolver, and re-deriving the
-      // surface from the DID here would duplicate the MaterialCache.
+      rsId,
       mat: material,
-    });
+      hadCutout: _texHasCutout(tex, material),
+    };
+    c.layerOf.set(uuid, entry);
     this.stats.layerAllocs += 1;
     // X5 — the nra layer is packed from THIS member's material (first member of
     // a deduped surface only, exactly like the diffuse pixels).
@@ -279,11 +343,21 @@ export class ClassMaterialRegistry {
         this._fitNra(c, material);
         packNraLayer(c.arrays.nra, layer, material, c.nw, c.nh, null);
         _queueLayerUpload(c.arrays.nra, layer);
+        this._stageNra(c.arrays.nra, c.nw * c.nh * 4);
         this.stats.nraLayers += 1;
-        // Phase-5 texchan roughness/AO attach asynchronously; if they were not
-        // there yet, queue a re-pack rather than lose the relief for the session.
-        if (!material.roughnessMap || (!heightTexForMaterial(material) && !material.aoMap)) {
-          this._nraPending.push({ c, layer, mat: material, tries: 0 });
+        // Phase-5 texchan roughness/AO and worker ST5 normal+height attach
+        // asynchronously; queue a re-pack keyed by entry/rsId so BC7 map UUID
+        // upgrades never orphan pending NRA relief!
+        if (!material.normalMap || !material.roughnessMap || (!heightTexForMaterial(material) && !material.aoMap)) {
+          this._nraPending.push({
+            c,
+            layer,
+            mat: material,
+            rsId,
+            entry,
+            hadNormalAtAdmit: !!(material.normalMap || heightTexForMaterial(material)),
+            tries: 0,
+          });
         }
       } catch (_) { /* fail-soft: the flat texel shades like albedo-only v1 */ }
     }
@@ -292,16 +366,6 @@ export class ClassMaterialRegistry {
 
   /**
    * Release one reference to a member's layer.
-   *
-   * NOT WIRED IN v1, deliberately (recorded as a deviation): the registry's
-   * membership record refcounts by rsId, not by source-texture uuid, so a tile
-   * release cannot name the layers it held without a second ledger. A layer
-   * handed back while another tile's instances still sample it renders someone
-   * else's texture — the exact failure the layer-write invariant exists to
-   * prevent — so v1 keeps class-page layers SESSION-RESIDENT: bounded by the
-   * unique-surface population (a few hundred), ceilinged by
-   * `_layerCapacityFor`, and the ceiling's `layerFull` refusal is the counted
-   * fail-soft. The uuid ledger lands with the tile-scoped release.
    */
   release(classKey, texUuid) {
     const c = this.classes.get(classKey);
@@ -327,15 +391,6 @@ export class ClassMaterialRegistry {
 
   /**
    * Re-write the layer a surface already owns from its (now upgraded) texture.
-   * This is the pool half of `atlasRefeed(rsId)` — the full tier lands, the
-   * material's `map` re-points, and the class page must follow or the pooled
-   * copy stays at preview resolution for the session (F-11.17).
-   *
-   * The retained MATERIAL is the source: `atlasRefeed` carries no resolver, and
-   * a member whose upgraded texture has DIFFERENT dims than its page belongs to
-   * a different class entirely — that member was never committed here (it was
-   * held out at admit time), so a dims mismatch is counted and skipped, never
-   * written into the wrong page.
    * @returns {number} layers rewritten
    */
   refeedRsId(rsId) {
@@ -350,27 +405,40 @@ export class ClassMaterialRegistry {
         if (tex.uuid === uuid) continue; // unchanged map — nothing to re-home
         if ((tex.image.width | 0) !== c.w || (tex.image.height | 0) !== c.h) {
           this.stats.refeedDimMismatch += 1;
+          // Even when diffuse stays at PVW page dims, the ST5 upgrade may have
+          // attached worker normal+height maps onto `mat` — repack NRA so
+          // buildings/statics still gain relief!
+          if (c.arrays.nra && (mat.normalMap || heightTexForMaterial(mat))) {
+            try {
+              this._fitNra(c, mat);
+              packNraLayer(c.arrays.nra, e.layer, mat, c.nw, c.nh, null);
+              _queueLayerUpload(c.arrays.nra, e.layer);
+              this._stageNra(c.arrays.nra, c.nw * c.nh * 4);
+              this.stats.nraRepacks += 1;
+            } catch (_) { /* fail-soft */ }
+          }
           continue;
         }
-        // RSID-MARKER: the page's FORMAT is fixed by texStorage3D too, and a
-        // swap can change it — a member admitted while its BC7 record was
-        // already cached takes an RGBA8 layer and then upgrades its `map` to
-        // a CompressedTexture. Writing that into an RGBA8 page finds no
-        // `image.data`, and the layer-write invariant would ZERO the layer:
-        // the member goes BLACK. Refuse, count, leave the layer alone (it
-        // holds correct — if now stale — pixels).
         if ((isBc7AtlasTexture(tex) === true) !== c.bc7) {
           this.stats.refeedFormatMismatch += 1;
           continue;
         }
-        if (!this._writeLayer(c, e.layer, tex, mat)) continue;
-        // The upgrade can bring the member's normal map with it (the ST5 worker NRA attaches in the
-        // same breath, before the refeed fires); the nra layer packed at admit had none.
+        // Guard BC7 full-tier (`tex-xu7`) promotion for cutout/transparent classes:
+        // if the admitted PVW layer had cutout alpha (`floor < cut`) and the
+        // upgraded texture lost it (`floor >= cut`), keep PVW and try `hbc7Fallback(rs)`.
+        if (e.hadCutout && _bc7LostCutout(tex, mat)) {
+          this.stats.refeedAlphaVetoed += 1;
+          this._tryHbc7Rescue(rs, mat, c);
+          continue;
+        }
+        if (!this._writeLayer(c, e.layer, tex, mat, rs)) continue;
+        if (_texHasCutout(tex, mat)) e.hadCutout = true;
         if (c.arrays.nra) {
           try {
             this._fitNra(c, mat);
             packNraLayer(c.arrays.nra, e.layer, mat, c.nw, c.nh, null);
             _queueLayerUpload(c.arrays.nra, e.layer);
+            this._stageNra(c.arrays.nra, c.nw * c.nh * 4);
             this.stats.nraRepacks += 1;
           } catch (_) { /* fail-soft: the layer keeps its admit-time texels */ }
         }
@@ -382,6 +450,43 @@ export class ClassMaterialRegistry {
     return n;
   }
 
+  _tryHbc7Rescue(rs, mat, c) {
+    try {
+      const src = bc7Source();
+      if (!src || typeof src.hbc7Fallback !== "function" || mat.userData?.__poolHbc7RescueTried) return;
+      mat.userData = mat.userData || {};
+      mat.userData.__poolHbc7RescueTried = true;
+      Promise.resolve(src.hbc7Fallback(rs)).then((twin) => {
+        if (!twin || twin.texDropped || !Array.isArray(twin.levels)) return;
+        const cut = clipAlphaCutOf(mat);
+        const floor = bc7AlphaFloor(twin, cut);
+        if (cut > 0 && floor >= 0 && floor >= cut) return;
+        const chain = c && c.arrays.diff && c.arrays.diff.mipmaps.length > 1;
+        const rescued = makeBc7Texture(twin, chain ? { mipChain: true, anisotropy: getAdapterMaxAnisotropy() } : {});
+        if (!rescued) return;
+        rescued.wrapS = mat.map?.wrapS ?? THREE.RepeatWrapping;
+        rescued.wrapT = mat.map?.wrapT ?? THREE.RepeatWrapping;
+        mat.map = rescued;
+        this.refeedRsId(rs);
+      }).catch(() => {});
+    } catch (_) { /* fail-soft */ }
+  }
+
+  _resolvePendingEntry(p) {
+    if (!p || !p.c || !p.c.layerOf) return null;
+    const byUuid = p.mat?.map?.uuid ? p.c.layerOf.get(p.mat.map.uuid) : null;
+    if (byUuid && byUuid.layer === p.layer) return byUuid;
+    if (p.entry && p.entry.refs > 0 && p.entry.layer === p.layer) {
+      for (const v of p.c.layerOf.values()) if (v === p.entry) return p.entry;
+    }
+    if (p.rsId > 0) {
+      for (const v of p.c.layerOf.values()) {
+        if (v.rsId === p.rsId && v.layer === p.layer) return v;
+      }
+    }
+    return null;
+  }
+
   drainNraPending() {
     if (!this._nraPending || this._nraPending.length === 0) return 0;
     const _NRA_PENDING_TRIES = 600;
@@ -389,24 +494,31 @@ export class ClassMaterialRegistry {
     let repacked = 0;
     for (let i = this._nraPending.length - 1; i >= 0; i -= 1) {
       const p = this._nraPending[i];
-      const cur = p.c && p.c.layerOf && p.c.layerOf.get(p.mat?.map?.uuid);
-      if (!cur || cur.layer !== p.layer) {
+      const cur = this._resolvePendingEntry(p);
+      if (!cur) {
         this._nraPending.splice(i, 1);
         continue;
       }
-      const both = !!(p.mat?.roughnessMap && (heightTexForMaterial(p.mat) || p.mat?.aoMap));
+      const mat = cur.mat || p.mat;
+      const texchanReady = !!(mat?.roughnessMap && (heightTexForMaterial(mat) || mat?.aoMap));
+      const normalArrived = !p.hadNormalAtAdmit && !!(mat?.normalMap || heightTexForMaterial(mat));
       const expired = ++p.tries > _NRA_PENDING_TRIES;
-      if (!both && !expired) continue;
-      const any = !!(p.mat?.roughnessMap || p.mat?.aoMap || heightTexForMaterial(p.mat));
+      if (!texchanReady && !normalArrived && !expired) continue;
+      const any = !!(mat?.normalMap || mat?.roughnessMap || mat?.aoMap || heightTexForMaterial(mat));
       if (any && p.c.arrays.nra) {
         try {
-          this._fitNra(p.c, p.mat);
-          packNraLayer(p.c.arrays.nra, p.layer, p.mat, p.c.nw, p.c.nh, null);
+          this._fitNra(p.c, mat);
+          packNraLayer(p.c.arrays.nra, p.layer, mat, p.c.nw, p.c.nh, null);
           _queueLayerUpload(p.c.arrays.nra, p.layer);
+          this._stageNra(p.c.arrays.nra, p.c.nw * p.c.nh * 4);
           this.stats.nraRepacks += 1;
           repacked += 1;
           touched.add(p.c.arrays.nra);
         } catch (_) { /* fail-soft */ }
+        if (normalArrived && !texchanReady && !expired) {
+          p.hadNormalAtAdmit = true;
+          continue;
+        }
       } else {
         this.stats.nraPendingDropped = (this.stats.nraPendingDropped || 0) + 1;
       }
@@ -441,6 +553,7 @@ export class ClassMaterialRegistry {
         nraResizes: this.stats.nraResizes, nraResizeFails: this.stats.nraResizeFails,
         refeedDimMismatch: this.stats.refeedDimMismatch,
         refeedFormatMismatch: this.stats.refeedFormatMismatch,
+        refeedAlphaVetoed: this.stats.refeedAlphaVetoed,
       },
       refused: { ...this.stats.refused },
       byClass,
@@ -470,11 +583,15 @@ export class ClassMaterialRegistry {
     const capacity = _layerCapacityFor(w, h, bc7);
     const alloc = _atlasStartLayersFor(w, h, bc7, capacity);
     const stateKey = _stateKeyOf(material);
-    // POOL-NRA-SOURCE-RES: the first member's ask; a flat first member starts the page at 1x1 and
-    // the first real plane grows it.
+    // POOL-NRA-SOURCE-RES: pre-size BC7 class NRA to the worker's half-res
+    // target (capped at 512) when `preSizeBc7Nra` is armed so ST5 NRA arrivals
+    // never trigger mid-stream `_resizeNra` reallocations.
     const ask = statNraEnabled() ? _nraAskFor(material, w, h) : null;
-    const nw = ask ? ask.w : 1;
-    const nh = ask ? ask.h : 1;
+    const preSize = this.preSizeBc7Nra && bc7 && texCompressedOnlyActive() && statNraEnabled() && nraSourceResEnabled();
+    const defNw = preSize ? Math.min(512, Math.min(w, Math.max(64, w >> 1))) : 1;
+    const defNh = preSize ? Math.min(512, Math.min(h, Math.max(64, h >> 1))) : 1;
+    const nw = ask ? Math.max(defNw, ask.w) : defNw;
+    const nh = ask ? Math.max(defNh, ask.h) : defNh;
     let diff = null;
     let nra = null;
     try {
@@ -482,7 +599,7 @@ export class ClassMaterialRegistry {
         ? makeBc7ArrayTexture(w, h, alloc,
             texCompressedOnlyActive() ? { mipChain: true, anisotropy: getAdapterMaxAnisotropy() } : {})
         : buildDiffuseArray([], w, h, alloc);
-      nra = statNraEnabled() ? buildNraArray(nw, nh, alloc) : null;
+      nra = statNraEnabled() ? _noMipNra(buildNraArray(nw, nh, alloc)) : null;
     } catch (e) {
       try { diff && diff.dispose && diff.dispose(); } catch (_) { /* fail-soft */ }
       this.warn(`[drawPools] class page allocation refused for ${classKey}`, e);
@@ -502,31 +619,33 @@ export class ClassMaterialRegistry {
     // and devtools all join on the same string.
     material2.name = `pool-class-${classKey}`;
     material2.userData = { ...(material2.userData || {}), __poolClassMat: true, classKey };
-    // ENVCELL-POOL-SWAP — THE INTERIOR BAKE. `__acBakedLight` is already a
-    // class-key axis (`pool_class_key.js:262`, the `k` bit of the patch token),
-    // so a baked surface and an unbaked one are DIFFERENT classes by
-    // construction and this decision is class-uniform. What was missing is the
-    // patch itself: the class material is `makeArrayMaterial`'s, which knows
-    // nothing about `acBakedLight`, so a pooled dungeon would have rendered
-    // with its static lamps ALREADY dropped from the live pool (the RND-04
-    // handshake in lighting.js fires on the ATTRIBUTE, not on who draws it) and
-    // no baked term to replace them — interiors on ambient alone, which is the
-    // exact regression `_patchSetCacheKey`'s `k` bit was added to fix.
-    //
-    // The patch is installed LAST (after the userData spread, which would
-    // otherwise drop the non-enumerable `acBakedLightUniforms` handle) and the
-    // cache key is COMPOSED, never replaced: `_chainBeforeCompile` installs
-    // `_patchSetCacheKey`, which knows nothing about the array material's own
-    // axes (wrap bucket, nra presence) — collapsing those onto one program is
-    // precisely the failure mode the atlas's per-bucket key exists to prevent.
+
+    // Preserve `sfLuminosity` / night-lit window & canopy emissive on pooled classes!
+    const lum = +(material?.userData?.__surfaceLuminosity ?? (material?.emissiveMap ? material.emissiveIntensity : 0)) || 0;
+    if (lum > 0) {
+      material2.emissive = new THREE.Color(0xffffff);
+      material2.emissiveIntensity = Math.min(2.0, lum);
+      material2.userData.__surfaceLuminosity = lum;
+      const prevCompile = material2.onBeforeCompile;
+      material2.onBeforeCompile = function (shader, renderer) {
+        if (typeof prevCompile === "function") prevCompile.call(this, shader, renderer);
+        if (shader.fragmentShader && !shader.fragmentShader.includes("/* hb_pool_lum */")) {
+          shader.fragmentShader = shader.fragmentShader.replace(
+            "#include <emissivemap_fragment>",
+            "#include <emissivemap_fragment>\n\t/* hb_pool_lum */ totalEmissiveRadiance *= diffuseColor.rgb;",
+          );
+        }
+      };
+      const prevKey = material2.customProgramCacheKey;
+      const boundPrev = typeof prevKey === "function" ? prevKey.bind(material2) : null;
+      material2.customProgramCacheKey = boundPrev ? () => `${boundPrev()}|m1` : () => `${classKey}|m1`;
+      registerLuminousMaterial(material2, lum);
+    }
+
+    // ENVCELL-POOL-SWAP — THE INTERIOR BAKE. Installed LAST so customProgramCacheKey
+    // composes over every preceding patch.
     if (material && material.userData && material.userData.__acBakedLight === true) {
       const atlasKey = material2.customProgramCacheKey;
-      // 2026-10-20 (improvement hunt building-fill-2): the same call also
-      // emits `#undef RE_Direct` under suppressDirect + ?bakedDirectOut (the
-      // default), so the pooled interior compiles its discarded direct-light
-      // loops out exactly like the singleton cell-baked material. The composed
-      // key gains a trailing `d` for it (read lazily from the install-time
-      // marker), so `=off` / ?vertexBake=lit keep their old `|k1s` / `|k1`.
       applyBakedVertexLightPatch(material2, { suppressDirect: VERTEX_BAKE.suppressDirect });
       const composed = typeof atlasKey === "function" ? atlasKey.bind(material2) : null;
       material2.customProgramCacheKey = composed
@@ -548,7 +667,7 @@ export class ClassMaterialRegistry {
     return c;
   }
 
-  _writeLayer(c, layer, tex, material) {
+  _writeLayer(c, layer, tex, material, rsId = 0) {
     const w = c.w;
     const h = c.h;
     if (c.bc7) {
@@ -561,6 +680,7 @@ export class ClassMaterialRegistry {
       if (ok) {
         this.stats.bc7Layers += 1;
         _queueLayerUpload(c.arrays.diff, layer);
+        this._stageDiff(c.arrays.diff, rsId, bc7LevelBytes(w, h));
       }
       return ok === true;
     }
@@ -578,6 +698,7 @@ export class ClassMaterialRegistry {
       c.arrays.diff.image.data.fill(0, layer * stride, (layer + 1) * stride);
     }
     _queueLayerUpload(c.arrays.diff, layer);
+    this._stageDiff(c.arrays.diff, rsId, stride);
     this.stats.rgbaLayers += 1;
     return true;
   }
@@ -608,7 +729,7 @@ export class ClassMaterialRegistry {
         newDiff.image.data.set(c.arrays.diff.image.data.subarray(0, c.allocLayers * rgbaStride), 0);
       }
       if (c.arrays.nra) {
-        newNra = buildNraArray(c.nw, c.nh, target);
+        newNra = _noMipNra(buildNraArray(c.nw, c.nh, target));
         newNra.image.data.set(c.arrays.nra.image.data.subarray(0, c.allocLayers * c.nw * c.nh * 4), 0);
       }
     } catch (_) {
@@ -628,6 +749,8 @@ export class ClassMaterialRegistry {
     c.allocLayers = target;
     newDiff.needsUpdate = true;
     if (newNra) newNra.needsUpdate = true;
+    this._stageDiff(newDiff, 0, _perLayerBytesFor(w, h, c.bc7, 0, 0) * c.nextLayer);
+    if (newNra) this._stageNra(newNra, c.nw * c.nh * 4 * c.nextLayer);
     // Re-point the live uniform objects (three keeps
     // materialProperties.uniforms === parameters.uniforms), then dispose.
     const u = c.material && c.material.userData && c.material.userData._statArrayUniforms;
@@ -655,7 +778,7 @@ export class ClassMaterialRegistry {
   _resizeNra(c, nw, nh) {
     let next = null;
     try {
-      next = buildNraArray(nw, nh, c.allocLayers);
+      next = _noMipNra(buildNraArray(nw, nh, c.allocLayers));
     } catch (_) {
       this.stats.nraResizeFails += 1;
       return false;
@@ -669,6 +792,7 @@ export class ClassMaterialRegistry {
     c.nw = nw;
     c.nh = nh;
     next.needsUpdate = true;
+    this._stageNra(next, nw * nh * 4 * c.layerOf.size);
     const u = c.material && c.material.userData && c.material.userData._statArrayUniforms;
     if (u && u.uNraArray) u.uNraArray.value = next;
     try { old && old.dispose && old.dispose(); } catch (_) { /* fail-soft */ }

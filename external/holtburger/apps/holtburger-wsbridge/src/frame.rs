@@ -40,8 +40,9 @@ pub fn decode_frame(buf: &[u8]) -> Result<(u16, &[u8])> {
     Ok((port, payload))
 }
 
-/// Build a WS binary frame from `(port, payload)`.
-pub fn encode_frame(port: u16, payload: &[u8]) -> Result<Vec<u8>> {
+/// Write a WS binary frame `[port:u16 BE][payload]` into `out`, reusing its
+/// existing allocation capacity when large enough.
+pub fn encode_frame_into(port: u16, payload: &[u8], out: &mut Vec<u8>) -> Result<()> {
     if payload.len() > MAX_PACKET_BYTES {
         return Err(anyhow!(
             "udp datagram {} bytes exceeds MAX_PACKET_BYTES={}",
@@ -49,9 +50,17 @@ pub fn encode_frame(port: u16, payload: &[u8]) -> Result<Vec<u8>> {
             MAX_PACKET_BYTES
         ));
     }
-    let mut out = Vec::with_capacity(PORT_PREFIX_LEN + payload.len());
+    out.clear();
+    out.reserve(PORT_PREFIX_LEN + payload.len());
     out.extend_from_slice(&port.to_be_bytes());
     out.extend_from_slice(payload);
+    Ok(())
+}
+
+/// Build a WS binary frame from `(port, payload)`.
+pub fn encode_frame(port: u16, payload: &[u8]) -> Result<Vec<u8>> {
+    let mut out = Vec::with_capacity(PORT_PREFIX_LEN + payload.len());
+    encode_frame_into(port, payload, &mut out)?;
     Ok(out)
 }
 
@@ -101,5 +110,16 @@ mod tests {
         let frame = encode_frame(9001, b"x").unwrap();
         assert_eq!(frame[0], 0x23);
         assert_eq!(frame[1], 0x29);
+    }
+
+    #[test]
+    fn encode_frame_into_reuses_and_overwrites_vec() {
+        let mut scratch = Vec::with_capacity(256);
+        let init_cap = scratch.capacity();
+        encode_frame_into(9001, b"first-packet", &mut scratch).unwrap();
+        assert_eq!(decode_frame(&scratch).unwrap(), (9001, &b"first-packet"[..]));
+        encode_frame_into(9000, b"xy", &mut scratch).unwrap();
+        assert_eq!(decode_frame(&scratch).unwrap(), (9000, &b"xy"[..]));
+        assert_eq!(scratch.capacity(), init_cap);
     }
 }

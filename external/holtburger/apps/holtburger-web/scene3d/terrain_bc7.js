@@ -444,12 +444,18 @@ export function terrainBc7Stats() {
  * Returns null (with one warn) on any failure — the flag then degrades to a
  * no-op, exactly like a checkout without the gitignored asset bake.
  */
+let _sawStubUnavailable = false;
+
 export async function loadTerrainBc7Manifest(baseUrl, { quiet = false } = {}) {
   const base = baseUrl ?? DEFAULT_BASE;
   try {
     const resp = await fetch(`${base}/manifest.json`);
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const m = await resp.json();
+    if (m && m.available === false) {
+      _sawStubUnavailable = true;
+      return null;
+    }
     const layers = m?.layers ?? {};
     const n = Object.keys(layers).length;
     if (n !== TERRAIN_BC7_DEPTH) {
@@ -1735,6 +1741,7 @@ export async function buildTerrainBc7Atlas({ baseUrl, anisotropy } = {}) {
   // an A/B arm that quietly renders the other tier is worse than a no-op.
   let manifest = null;
   let base = baseUrl ?? null;
+  _sawStubUnavailable = false;
   if (base) {
     manifest = await loadTerrainBc7Manifest(base);
   } else {
@@ -1752,7 +1759,7 @@ export async function buildTerrainBc7Atlas({ baseUrl, anisotropy } = {}) {
         break;
       }
     }
-    if (!manifest) {
+    if (!manifest && !_sawStubUnavailable) {
       // eslint-disable-next-line no-console
       console.warn(
         `[terrain-bc7] no tier manifest under ${DEFAULT_BASE} (tried ${order.join(", ")}) — ` +

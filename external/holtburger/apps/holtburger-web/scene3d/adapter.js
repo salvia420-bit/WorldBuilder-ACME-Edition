@@ -1204,9 +1204,51 @@ export function surfacePixelsToTexture(rgba8, width, height) {
  * Returns `null` if `normalRgb8` is empty (e.g. Luminous surfaces
  * skipped on the wasm side); caller leaves `material.normalMap` unset.
  */
+export function surfaceRgbaToNormalTexture(normalRgba, width, height) {
+  if (!normalRgba || normalRgba.byteLength === 0 || width === 0 || height === 0) {
+    return null;
+  }
+  const expected = width * height * 4;
+  if (normalRgba.byteLength < expected) {
+    return null;
+  }
+  const owned =
+    normalRgba.byteLength === expected &&
+    normalRgba.byteOffset === 0 &&
+    !isWasmBackedBuffer(normalRgba.buffer)
+      ? normalRgba
+      : (() => {
+          const c = new Uint8Array(expected);
+          c.set(normalRgba.subarray(0, expected));
+          return c;
+        })();
+  const ds = downscaleRgba(owned, width, height, _textureDownscaleDiv);
+  const tex = new THREE.DataTexture(
+    ds.rgba,
+    ds.width,
+    ds.height,
+    THREE.RGBAFormat,
+    THREE.UnsignedByteType
+  );
+  tex.colorSpace = THREE.NoColorSpace;
+  tex.unpackAlignment = 1;
+  tex.flipY = false;
+  tex.magFilter = THREE.LinearFilter;
+  tex.minFilter = THREE.LinearMipmapLinearFilter;
+  tex.generateMipmaps = true;
+  tex.anisotropy = _maxAnisotropy;
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  tex.needsUpdate = true;
+  return tex;
+}
+
 export function surfacePixelsToNormalTexture(normalRgb8, width, height) {
   if (!normalRgb8 || normalRgb8.byteLength === 0 || width === 0 || height === 0) {
     return null;
+  }
+  if (normalRgb8.byteLength === width * height * 4) {
+    return surfaceRgbaToNormalTexture(normalRgb8, width, height);
   }
   const expected = width * height * 3;
   if (normalRgb8.byteLength < expected) {
@@ -1231,6 +1273,7 @@ export function surfacePixelsToNormalTexture(normalRgb8, width, height) {
   );
   // CRITICAL: NoColorSpace. sRGB would corrupt the normal vectors.
   tex.colorSpace = THREE.NoColorSpace;
+  tex.unpackAlignment = 1;
   tex.flipY = false;
   tex.magFilter = THREE.LinearFilter;
   tex.minFilter = THREE.LinearMipmapLinearFilter;
@@ -1287,8 +1330,9 @@ export function surfacePixelsToHeightTexture(heightR8, width, height) {
     THREE.RedFormat,
     THREE.UnsignedByteType
   );
-  // CRITICAL: NoColorSpace. Heights are scalar depth, not colour.
+  // CRITICAL: NoColorSpace + unpackAlignment=1 for 1-byte R8 rows.
   tex.colorSpace = THREE.NoColorSpace;
+  tex.unpackAlignment = 1;
   tex.flipY = false;
   tex.magFilter = THREE.LinearFilter;
   tex.minFilter = THREE.LinearMipmapLinearFilter;
@@ -1340,6 +1384,7 @@ export function surfacePixelsToRoughnessTexture(roughR8, width, height) {
     THREE.UnsignedByteType
   );
   tex.colorSpace = THREE.NoColorSpace;
+  tex.unpackAlignment = 1;
   tex.flipY = false;
   tex.magFilter = THREE.LinearFilter;
   tex.minFilter = THREE.LinearMipmapLinearFilter;
@@ -1375,6 +1420,7 @@ export function surfacePixelsToAoTexture(aoR8, width, height) {
     THREE.UnsignedByteType
   );
   tex.colorSpace = THREE.NoColorSpace;
+  tex.unpackAlignment = 1;
   tex.flipY = false;
   tex.channel = 0; // sample the main "uv" attribute (NOT uv2) — r152+ UV channels
   tex.magFilter = THREE.LinearFilter;
@@ -1688,7 +1734,8 @@ export async function loadPbrTerrainAtlasSet({ tileSize, baseUrl } = {}) {
     );
     return null;
   }
-  const entries = Object.entries(manifest?.layers ?? {});
+  if (!manifest || manifest.available === false) return null;
+  const entries = Object.entries(manifest.layers ?? {});
   if (entries.length === 0) return null;
 
   const layers = new Map();

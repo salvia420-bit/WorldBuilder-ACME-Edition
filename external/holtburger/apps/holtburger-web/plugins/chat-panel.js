@@ -67,7 +67,7 @@ const MIN_W = 260;
 const MIN_H = 100;
 const MAX_W = 1000;
 const MAX_H = 640;
-const MAX_LINES = 300;        // scrollback; source #chat-log keeps 400
+const MAX_LINES = 200;        // scrollback cap (<= 200 DOM rows)
 const FILTER_FONT_ID = 0x40000025;  // FloatingChat1-4 label font (11×13)
 const BUTTON_FONT_ID = 0x40000002;  // ChatTargetButtonText / SendButton (16×16)
 const LABEL_COLOR = "#fff4dc";
@@ -96,6 +96,7 @@ const CSS = `
     min-height: ${MIN_H}px;
     box-sizing: border-box;
     padding: 5px;
+    contain: layout style;
     display: grid;
     grid-template-rows: minmax(0, 1fr) 17px;
     color: var(--hbk-text, #e8dfc8);
@@ -114,8 +115,8 @@ const CSS = `
       url("${SP}/0x0600612C.png") left bottom / 10px 5px repeat-x,
       url("${SP}/0x0600612B.png") left top / 5px 10px repeat-y,
       url("${SP}/0x0600612D.png") right top / 5px 10px repeat-y,
-      #0b0c10;
-    box-shadow: 0 0 0 1px #000, 0 6px 18px rgba(0, 0, 0, 0.6);
+      #0c0d12;
+    box-shadow: inset 0 1px 0 rgba(243, 210, 122, 0.14), 0 0 0 1px #000, 0 8px 20px rgba(0, 0, 0, 0.72);
   }
   #${OVERLAY_ID}.hb-window-dragging { cursor: grabbing; }
   #${OVERLAY_ID}[data-fade="1"] { opacity: 0.45; transition: opacity 0.3s ease-out; }
@@ -173,6 +174,7 @@ const CSS = `
     min-height: 0;
     min-width: 0;
     box-sizing: border-box;
+    contain: layout style paint;
     overflow-x: hidden;
     overflow-y: scroll;
     padding: 1px 18px 2px 4px;   /* right: keeps text clear of MaximizeButton */
@@ -654,21 +656,41 @@ export function mount(_ctx) {
     unread = 0;
     showUnread();
   }
+  let scrollRaf = 0;
   function scrollToBottom() {
+    flushPendingDirect();
+    if (scrollRaf) {
+      cancelAnimationFrame(scrollRaf);
+      scrollRaf = 0;
+    }
     log.scrollTop = log.scrollHeight;
     pinned = true;
     clearUnread();
+  }
+  function scheduleScrollToBottom() {
+    pinned = true;
+    clearUnread();
+    if (typeof requestAnimationFrame !== "function") {
+      log.scrollTop = log.scrollHeight;
+      return;
+    }
+    if (scrollRaf) return;
+    scrollRaf = requestAnimationFrame(() => {
+      scrollRaf = 0;
+      if (pinned && log.isConnected) log.scrollTop = log.scrollHeight;
+    });
   }
   // Pinned is USER intent: only a scroll that leaves the bottom un-pins.
   log.addEventListener("scroll", () => {
     pinned = isNearBottom(log);
     if (pinned) clearUnread();
+    else if (scrollRaf) { cancelAnimationFrame(scrollRaf); scrollRaf = 0; }
   }, { passive: true });
   // Retail gmMainChatUI::ResizeTo (acclient.c:254374) keeps the log at its
   // end across a resize when it was at the end.
   let ro = null;
   if (typeof ResizeObserver !== "undefined") {
-    ro = new ResizeObserver(() => { if (pinned) log.scrollTop = log.scrollHeight; });
+    ro = new ResizeObserver(() => { if (pinned) scheduleScrollToBottom(); });
     ro.observe(log);
   }
   pill.addEventListener("click", () => scrollToBottom());
@@ -679,6 +701,7 @@ export function mount(_ctx) {
   }
 
   function setFilter(id, { persist = true } = {}) {
+    flushPendingDirect();
     filter = normalizeFilterId(id);
     log.dataset.filter = filter;
     for (const [fid, btn] of filterBtns) btn.setAttribute("aria-selected", fid === filter ? "true" : "false");
@@ -687,7 +710,7 @@ export function mount(_ctx) {
     const src = document.getElementById("chat-log");
     if (src) src.dataset.tab = filter;
     updateEmpty();
-    scrollToBottom();
+    scheduleScrollToBottom();
   }
   gutter.addEventListener("click", (ev) => {
     const btn = ev.target.closest?.(".hb-chat-filter[data-filter]");
@@ -745,39 +768,97 @@ export function mount(_ctx) {
     }
   }
 
-  // Mirror one #chat-log <li>. `batch` defers the scroll/empty bookkeeping
-  // to the caller (initial sync).
-  function mirrorOne(srcLi, batch = false) {
-    if (!srcLi || srcLi.classList?.contains("empty")) return;
-    const text = srcLi.textContent || "";
-    if (!text) return;
-    const isEcho = srcLi.classList.contains("echo");
-    const ts = Number(srcLi.dataset?.ts) || Date.now();
-    const line = buildLine(text, srcLi.dataset?.cat ?? null, isEcho, ts);
-    log.appendChild(line);
-    counts[line.dataset.grp] = (counts[line.dataset.grp] ?? 0) + 1;
+  function appendItemsBatch(items, { initial = false } = {}) {
+    if (!items || items.length === 0) return;
+    const frag = typeof document.createDocumentFragment === "function"
+      ? document.createDocumentFragment()
+      : null;
+    const target = frag || log;
+    let anyEcho = false;
+    let added = 0;
+    let unreadAdded = 0;
+    for (const item of items) {
+      const text = item.text || "";
+      if (!text) continue;
+      const isEcho = !!item.isEcho;
+      const ts = Number(item.ts) || Date.now();
+      const line = buildLine(text, item.cat ?? null, isEcho, ts);
+      target.appendChild(line);
+      const grp = line.dataset.grp;
+      counts[grp] = (counts[grp] ?? 0) + 1;
+      if (isEcho) anyEcho = true;
+      else if (!pinned && lineVisibleInFilter(filter, grp)) unreadAdded += 1;
+      added += 1;
+    }
+    if (added === 0) return;
+    if (frag) log.appendChild(frag);
     trimLines();
-    if (batch) return;
     refreshTimestampFlag();
     updateEmpty();
-    // Your own message always brings you back to the latest line.
-    if (pinned || isEcho) scrollToBottom();
-    else if (lineVisibleInFilter(filter, line.dataset.grp)) { unread += 1; showUnread(); }
+    if (initial || pinned || anyEcho) scheduleScrollToBottom();
+    else if (unreadAdded > 0) { unread += unreadAdded; showUnread(); }
+  }
+
+  const pendingDirect = [];
+  let directFlushQueued = false;
+  function flushPendingDirect() {
+    directFlushQueued = false;
+    if (pendingDirect.length === 0) return;
+    const batch = pendingDirect.splice(0, pendingDirect.length);
+    appendItemsBatch(batch);
+  }
+  function onDirectChatItem(item) {
+    if (!item || !item.text) return;
+    if (!document.documentElement?.classList?.contains?.("agent-mode")) {
+      appendItemsBatch([item]);
+      return;
+    }
+    pendingDirect.push(item);
+    if (!directFlushQueued) {
+      directFlushQueued = true;
+      if (typeof queueMicrotask === "function") queueMicrotask(flushPendingDirect);
+      else flushPendingDirect();
+    }
+  }
+  window.__hbChatLogDirectSink = onDirectChatItem;
+
+  function liToItem(srcLi) {
+    if (!srcLi || srcLi._hbDirectMirrored || srcLi.classList?.contains("empty")) return null;
+    const text = srcLi.textContent || "";
+    if (!text) return null;
+    return {
+      text,
+      cat: srcLi.dataset?.cat ?? null,
+      isEcho: !!srcLi.classList?.contains("echo"),
+      ts: Number(srcLi.dataset?.ts) || Date.now(),
+    };
   }
 
   let observer = null;
   let retryTimer = null;
   function attachSource(src) {
-    for (const li of src.children) mirrorOne(li, true);
-    refreshTimestampFlag();
-    updateEmpty();
-    scrollToBottom();
+    const initialItems = [];
+    for (const li of src.children) {
+      const it = liToItem(li);
+      if (it) initialItems.push(it);
+    }
+    if (initialItems.length > 0) appendItemsBatch(initialItems, { initial: true });
+    else {
+      refreshTimestampFlag();
+      updateEmpty();
+      scheduleScrollToBottom();
+    }
     observer = new MutationObserver((records) => {
+      const batch = [];
       for (const r of records) {
         for (const node of r.addedNodes) {
-          if (node?.tagName === "LI") mirrorOne(node);
+          if (node?.tagName === "LI") {
+            const it = liToItem(node);
+            if (it) batch.push(it);
+          }
         }
       }
+      if (batch.length > 0) appendItemsBatch(batch);
     });
     observer.observe(src, { childList: true });
   }
@@ -1128,20 +1209,26 @@ export function mount(_ctx) {
     toggleMaximize: () => setMaximized(overlay.dataset.maximized !== "1"),
     scrollToBottom,
     startTell,
-    state: () => ({
-      filter, talkFocus: activeFocus.id, pinned, unread,
-      lines: log.childElementCount, maximized: overlay.dataset.maximized === "1",
-    }),
+    state: () => {
+      flushPendingDirect();
+      return {
+        filter, talkFocus: activeFocus.id, pinned, unread,
+        lines: log.childElementCount, maximized: overlay.dataset.maximized === "1",
+      };
+    },
   };
   window.__chatPanel = api;
 
   return () => {
+    if (window.__hbChatLogDirectSink === onDirectChatItem) window.__hbChatLogDirectSink = undefined;
+    pendingDirect.length = 0;
     if (observer) observer.disconnect();
     observer = null;
     if (retryTimer) { clearInterval(retryTimer); retryTimer = null; }
     if (ro) { try { ro.disconnect(); } catch (_) {} ro = null; }
     clearTimeout(errorTimer);
     cancelAnimationFrame(reflowRaf);
+    if (scrollRaf) { cancelAnimationFrame(scrollRaf); scrollRaf = 0; }
     document.removeEventListener("pointerdown", onDocPointerDown, true);
     document.removeEventListener("keydown", onDocKeyDown);
     document.removeEventListener(HUD_SCALE_EVENT, onViewportChange);

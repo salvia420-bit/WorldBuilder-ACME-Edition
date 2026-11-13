@@ -41767,6 +41767,61 @@ impl SessionHandle {
         std::mem::take(&mut *self.queued_events.borrow_mut())
     }
 
+    /// Bounded per-frame [`ClientEvent`] drain (`pollEventsBudgeted`).
+    ///
+    /// Town teleports (Shoushi / Holtburg) can enqueue hundreds of
+    /// non-urgent chat/appraisal/vital/sound events in one burst; crossing
+    /// all of them into JS in a single frame caused 21ms+ `drainEvents`
+    /// spikes. Drains at most `max_events` per rAF while keeping deferred
+    /// events inside Rust's contiguous `Vec` (zero premature wasm-bindgen
+    /// wrapper allocations), ALWAYS extending the slice through any urgent
+    /// lifecycle / control-plane event (`CHARACTER_LIST_RECEIVED`,
+    /// `PLAYER_SPAWNED`, `DISCONNECTED`, `CHARACTER_CREATED`,
+    /// `CHARACTER_CREATE_FAILED`, `ENTERED_WORLD`, `CHARACTER_ERROR`,
+    /// `DEATH`, `PORTAL_SPACE_ENTERED`, `ENVIRON_CHANGE`, `CMD_INTERP`,
+    /// `TELEPORT_ARRIVED`, `CONFIRMATION_REQUEST`, `CONFIRMATION_DONE`) so
+    /// boot/teleport/movement transitions never wait an extra frame.
+    /// Safety valve drains all if the backlog ever exceeds 2048.
+    #[wasm_bindgen(js_name = pollEventsBudgeted)]
+    pub fn poll_events_budgeted(&mut self, max_events: u32) -> Vec<ClientEvent> {
+        let budget = max_events as usize;
+        if budget == 0 {
+            return Vec::new();
+        }
+        let mut q = self.queued_events.borrow_mut();
+        if q.len() <= budget || q.len() > 2048 {
+            return std::mem::take(&mut *q);
+        }
+        let is_urgent = |kind: u32| {
+            matches!(
+                kind,
+                CLIENT_EVENT_KIND_CHARACTER_LIST_RECEIVED
+                    | CLIENT_EVENT_KIND_PLAYER_SPAWNED
+                    | CLIENT_EVENT_KIND_DISCONNECTED
+                    | CLIENT_EVENT_KIND_CHARACTER_CREATED
+                    | CLIENT_EVENT_KIND_CHARACTER_CREATE_FAILED
+                    | CLIENT_EVENT_KIND_ENTERED_WORLD
+                    | CLIENT_EVENT_KIND_CHARACTER_ERROR
+                    | CLIENT_EVENT_KIND_DEATH
+                    | CLIENT_EVENT_KIND_PORTAL_SPACE_ENTERED
+                    | CLIENT_EVENT_KIND_ENVIRON_CHANGE
+                    | CLIENT_EVENT_KIND_CMD_INTERP
+                    | CLIENT_EVENT_KIND_TELEPORT_ARRIVED
+                    | CLIENT_EVENT_KIND_CONFIRMATION_REQUEST
+                    | CLIENT_EVENT_KIND_CONFIRMATION_DONE
+            )
+        };
+        let mut take = budget;
+        if let Some(rel_last_urgent) = q[budget..].iter().rposition(|e| is_urgent(e.kind)) {
+            take = budget + rel_last_urgent + 1;
+        }
+        if take >= q.len() {
+            std::mem::take(&mut *q)
+        } else {
+            q.drain(..take).collect()
+        }
+    }
+
     /// Phase 4 step 2b: drain queued [`EntityUpdate`]s — position
     /// updates, entity spawns (`ObjectCreate`), and entity removals
     /// (`ObjectDelete`). JS calls this on the same rAF tick as
@@ -41782,6 +41837,25 @@ impl SessionHandle {
     #[wasm_bindgen(js_name = pollEntityUpdates)]
     pub fn poll_entity_updates(&mut self) -> Vec<EntityUpdate> {
         std::mem::take(&mut *self.entity_updates.borrow_mut())
+    }
+
+    /// Bounded per-frame [`EntityUpdate`] drain (`pollEntityUpdatesBudgeted`).
+    ///
+    /// Keeps deferred burst updates inside Rust's contiguous `Vec` until
+    /// their frame slice is consumed (safety valve drains all above 6000,
+    /// matching `app/frame_pump.js`).
+    #[wasm_bindgen(js_name = pollEntityUpdatesBudgeted)]
+    pub fn poll_entity_updates_budgeted(&mut self, max_updates: u32) -> Vec<EntityUpdate> {
+        let budget = max_updates as usize;
+        if budget == 0 {
+            return Vec::new();
+        }
+        let mut q = self.entity_updates.borrow_mut();
+        if q.len() <= budget || q.len() > 6000 {
+            std::mem::take(&mut *q)
+        } else {
+            q.drain(..budget).collect()
+        }
     }
 
     /// A2-P2 (2026-06-12, W3+ S8): drain the wasm-managed remote poses
@@ -44463,7 +44537,7 @@ impl SessionHandle {
     fn walk_root(&self, snap: &CellSceneSnapshot) -> (u32, bool) {
         let viewer = self.viewer_cell.get();
         if viewer != 0 && snap.current_cell != 0 {
-            (viewer, (viewer & 0xFFFF) >= 0x0100)
+            (viewer, (viewer & 0x7FFF) >= 0x0100)
         } else {
             (snap.current_cell, snap.is_indoor)
         }

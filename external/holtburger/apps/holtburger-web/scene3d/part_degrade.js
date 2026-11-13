@@ -177,14 +177,18 @@ export function setPartDegradeHidden(partGroup, hide) {
   return n;
 }
 
-/** `?partDegrade=on|1|true|yes` opts in. DEFAULT OFF (pending the 1070 look check). */
-export function partDegradeEnabled() {
+/** `?partDegrade=off|0|false|no` opts out. DEFAULT ON. */
+export function partDegradeEnabled(search) {
   try {
-    if (typeof window === "undefined" || !window.location) return false;
-    const v = (new URLSearchParams(window.location.search).get("partDegrade") || "").toLowerCase();
-    return v === "on" || v === "1" || v === "true" || v === "yes";
+    const s = typeof search === "string"
+      ? search
+      : (typeof window !== "undefined" && window && window.location && typeof window.location.search === "string"
+        ? window.location.search
+        : (typeof globalThis !== "undefined" && globalThis.location ? globalThis.location.search || "" : ""));
+    const v = (new URLSearchParams(s).get("partDegrade") || "").trim().toLowerCase();
+    return !(v === "off" || v === "0" || v === "false" || v === "no");
   } catch (_) {
-    return false;
+    return true;
   }
 }
 

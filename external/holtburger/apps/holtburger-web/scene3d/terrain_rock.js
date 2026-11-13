@@ -218,29 +218,29 @@ export const ROCK_VARIANTS = Object.freeze({
   // BarrenRock — the reference: bare stone, plenty of loose cobble.
   0: Object.freeze({
     density: 1.0, sizeM: 0.19, shape: [0.6, 0.2, 0.2],
-    tint: [0.56, 0.53, 0.5], emissive: 0, grit: 1.0, olthoi: false,
+    tint: [0.34, 0.31, 0.28], emissive: 0, grit: 1.0, olthoi: false,
   }),
   // SedimentaryRock — bedded stone, so it sheds PLATES above all.
   13: Object.freeze({
     density: 0.85, sizeM: 0.22, shape: [0.25, 0.65, 0.1],
-    tint: [0.6, 0.55, 0.46], emissive: 0, grit: 1.15, olthoi: false,
+    tint: [0.36, 0.31, 0.25], emissive: 0, grit: 1.15, olthoi: false,
   }),
   // SemiBarrenRock — the same beds, partly covered, so fewer of everything.
   14: Object.freeze({
     density: 0.7, sizeM: 0.2, shape: [0.35, 0.55, 0.1],
-    tint: [0.52, 0.51, 0.46], emissive: 0, grit: 0.8, olthoi: false,
+    tint: [0.28, 0.27, 0.24], emissive: 0, grit: 0.8, olthoi: false,
   }),
   // olthoi — chitinous shards over a sour, dark ground; the only emissive row.
   30: Object.freeze({
     density: 0.6, sizeM: 0.26, shape: [0.1, 0.15, 0.75],
-    tint: [0.35, 0.39, 0.28], emissive: 1, grit: 0.55, olthoi: true,
+    tint: [0.22, 0.25, 0.18], emissive: 1, grit: 0.55, olthoi: true,
   }),
 });
 
 /** The sickly olthoi glow, linear RGB. Dim on purpose: it is a FRAGMENT term
  *  added to an opaque surface, so it reads as luminescent chitin rather than as
  *  a light source — and it never becomes one (§5.2). */
-export const OLTHOI_EMISSIVE_COLOUR = Object.freeze([0.24, 0.72, 0.33]);
+export const OLTHOI_EMISSIVE_COLOUR = Object.freeze([0.06, 0.18, 0.08]);
 
 /** The terrain codes that are FAM_ROCK, DERIVED from the family LUT. */
 export function rockTerrainCodes() {
@@ -281,9 +281,12 @@ export const ROCK_TUNING = Object.freeze({
   // --- pebbles ------------------------------------------------------------
   // Sink: pebbles are pushed DOWN into the ground by this fraction of their
   // vertical half-extent, so they read as embedded rather than as dropped.
-  pebbleSinkFraction: 0.35,
+  pebbleSinkFraction: 0.42,
   // Per-instance albedo brightness spread, ±fraction.
   pebbleTintJitter: 0.18,
+  // Pre-exposure HDR Lambertian calibration (INV_PI * rockExposure ~= 0.248,
+  // matching terrain.js / MeshStandardMaterial under composer exposure = 5.0).
+  rockExposure: 0.78,
   // The olthoi glow breathes on a long, slow cycle so a shard field shimmers
   // rather than strobes. Hz.
   emissivePulseHz: 0.09,
@@ -311,8 +314,8 @@ export const ROCK_TUNING = Object.freeze({
   pulseThreshold: 0.5,
   // Colour + opacity: GREYER than sand (plan §3.3) and dimmer — additive over
   // the whole near field, so both cost and blow-out risk are fill-bound.
-  colour: [0.62, 0.6, 0.57],
-  opacity: 0.12,
+  colour: [0.32, 0.3, 0.28],
+  opacity: 0.055,
 });
 
 /**
@@ -686,6 +689,9 @@ uniform vec3  uSunColour; // dirColor * dirBright (0 at night, on purpose)
 uniform vec3  uAmbColour;
 uniform float uAmbLevel;  // floored at LSCAPE_LIGHT_MINIMUM
 uniform float uPulseHz;   // olthoi emissive breath
+uniform float uRockExposure; // pre-exposure HDR calibration (INV_PI * uRockExposure ~= 0.248)
+
+const float INV_PI = 0.318309886;
 
 varying vec3 vLight;
 varying vec3 vTint;
@@ -733,7 +739,15 @@ void main() {
   vec3 inv = 1.0 / max(s, vec3(1e-4));
   vec3 nAc = normalize(ex2 * (normal.x * inv.x) + ey * (normal.y * inv.y) + up2 * (normal.z * inv.z));
   float ndl = clamp(dot(nAc, uSunDir), 0.0, 1.0);
-  vLight = uAmbColour * uAmbLevel + uSunColour * ndl;
+  // Grounded 3D facet AO: steep side / underside facets and the embedded lower
+  // skirt darken into soil crevices, while sun-facing facets catch calibrated
+  // Lambertian (INV_PI * uRockExposure ~= 0.248) reflectance without HDR blowout.
+  float upDot = dot(nAc, up);
+  float baseAo = smoothstep(-0.5, 0.22, position.z);
+  float faceAo = mix(0.32, 0.94, smoothstep(-0.25, 0.78, upDot)) * mix(0.58, 1.0, baseAo);
+  float sunAo = smoothstep(-0.1, 0.45, upDot) * mix(0.68, 1.0, baseAo);
+  vec3 ambIrr = uAmbColour * uAmbLevel;
+  vLight = (ambIrr * faceAo + uSunColour * (ndl * sunAo)) * (INV_PI * uRockExposure);
 
   vTint = aTint;
   // The breath is phased by the instance yaw so a shard field shimmers instead
@@ -1013,6 +1027,7 @@ export function createPebbleField(opts = {}) {
     uAmbColour: { value: null },
     uAmbLevel: { value: ROCK_AMBIENT_MINIMUM },
     uPulseHz: { value: tuning.emissivePulseHz },
+    uRockExposure: { value: tuning.rockExposure },
     uEmissiveColour: { value: null },
     // Adopted + populated by the pool below (never placeholders to re-point).
     uScatterCenter: { value: null },

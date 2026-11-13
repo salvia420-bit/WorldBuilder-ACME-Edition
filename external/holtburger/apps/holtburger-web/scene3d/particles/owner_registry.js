@@ -503,7 +503,7 @@ export class ParticleOwnerRegistry {
   destroyAllForOwner(ownerKey) {
     // Epoch bump FIRST so in-flight addEmitter resolves self-destroy even
     // when no record exists yet (despawn racing the first create).
-    this._epochs.set(ownerKey, this._epoch(ownerKey) + 1);
+    this._bumpEpoch(ownerKey);
     const rec = this._owners.get(ownerKey);
     if (!rec) return 0;
     let n = 0;
@@ -519,6 +519,57 @@ export class ParticleOwnerRegistry {
     }
     this._owners.delete(ownerKey);
     return n;
+  }
+
+  /**
+   * Bump owner epoch with an LRU cap (2048 entries) so long-running sessions
+   * with continuous entity spawn/despawn churn never grow `_epochs` unboundedly.
+   */
+  _bumpEpoch(ownerKey) {
+    const next = this._epoch(ownerKey) + 1;
+    this._epochs.delete(ownerKey);
+    this._epochs.set(ownerKey, next);
+    const maxEpochs = 2048;
+    let guard = this._epochs.size;
+    while (this._epochs.size > maxEpochs && guard-- > 0) {
+      const oldest = this._epochs.keys().next().value;
+      if (oldest === undefined) break;
+      if (this._owners.has(oldest)) {
+        const v = this._epochs.get(oldest);
+        this._epochs.delete(oldest);
+        this._epochs.set(oldest, v);
+        continue;
+      }
+      this._epochs.delete(oldest);
+    }
+  }
+
+  /**
+   * Prune stale owner records & retired epoch tombstones on entity removal /
+   * landblock LRU eviction. `isOwnerLive(ownerKey)` returns true for owners
+   * that are still active in the world.
+   * @param {(ownerKey: number|string) => boolean} isOwnerLive
+   * @returns {number} owners destroyed
+   */
+  pruneStaleOwners(isOwnerLive) {
+    if (typeof isOwnerLive !== "function") return 0;
+    let pruned = 0;
+    for (const ownerKey of [...this._owners.keys()]) {
+      if (!isOwnerLive(ownerKey)) {
+        this.destroyAllForOwner(ownerKey);
+        this._epochs.delete(ownerKey);
+        pruned += 1;
+      }
+    }
+    if (this._epochs.size > 512) {
+      for (const ownerKey of [...this._epochs.keys()]) {
+        if (!this._owners.has(ownerKey) && !isOwnerLive(ownerKey)) {
+          this._epochs.delete(ownerKey);
+          if (this._epochs.size <= 512) break;
+        }
+      }
+    }
+    return pruned;
   }
 
   /** Drop empty owner records so churn doesn't accumulate dead owners.

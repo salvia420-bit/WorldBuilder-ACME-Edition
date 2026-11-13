@@ -183,6 +183,23 @@ async function handleInit(msg) {
   // `init_resource_source` is async (fetches the manifest) and MUST precede
   // any `fetch_*` call — the wasm panics otherwise.
   await init_resource_source(msg.manifestUrl);
+  // Seed the worker's pack-source index (when the page's PackFetchController is
+  // armed) so worker wasm decodes can resolve pack-indexed records and apply
+  // bounded pack-cache budgets instead of staying blind to `dist/packs`.
+  if (!(msg.sharedModule && msg.sharedMemory) && msg.packIndexBytes && typeof __wasmNs.pack_source_init === "function") {
+    try {
+      const idxBytes = msg.packIndexBytes instanceof Uint8Array
+        ? msg.packIndexBytes
+        : new Uint8Array(msg.packIndexBytes);
+      if (idxBytes.byteLength > 0 && __wasmNs.pack_source_init(idxBytes)) {
+        if (typeof __wasmNs.pack_source_set_budgets === "function") {
+          __wasmNs.pack_source_set_budgets(48 * 1024 * 1024, 24 * 1024 * 1024);
+        }
+      }
+    } catch (e) {
+      console.warn("[pack-source:bake-worker] init failed (non-fatal):", e);
+    }
+  }
   // X-track `?statTexOverride=on` — this worker decodes surfaces in its OWN
   // wasm instance (`fetch_surfaces_pixels` above), so it must install the
   // same override bundle or it bakes stale texels while the main thread

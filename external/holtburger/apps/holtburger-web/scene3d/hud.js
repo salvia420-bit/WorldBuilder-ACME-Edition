@@ -197,10 +197,13 @@ export class NameplateLayer {
     // setting it here just primes a sane starting transform.
     el.style.transform = "translate3d(0px, 0px, 0) translate(-50%, -100%)";
     el.style.padding = "2px 6px";
-    el.style.background = "rgba(0, 0, 0, 0.6)";
-    el.style.color = "#ffffff";
+    el.style.background = "rgba(10, 11, 16, 0.76)";
+    el.style.border = "1px solid rgba(138, 117, 68, 0.42)";
+    el.style.color = "#f4ecd8";
     el.style.font = "11px sans-serif";
-    el.style.borderRadius = "4px";
+    el.style.fontVariantNumeric = "tabular-nums";
+    el.style.textShadow = "0 1px 2px #000";
+    el.style.borderRadius = "3px";
     el.style.pointerEvents = "none";
     el.style.whiteSpace = "nowrap";
     el.style.userSelect = "none";
@@ -208,10 +211,10 @@ export class NameplateLayer {
     el.style.top = "0px";
     el.style.display = "none"; // start hidden until first tick projects it
     this.domRoot.appendChild(el);
-    // Perf B6 — stash last-written {left, top} on the record so the
-    // per-frame writer in `tick()` can skip identical transform writes.
+    // Perf B6 — stash last-written {left, top} + `_visible` on the record so
+    // `tick()` skips identical `transform` and `display` style writes.
     // NaN seeds force a first-frame write regardless of projected coords.
-    this.nodes.set(key, { el, textEl, follow: followObj3d, name, _lastLeft: NaN, _lastTop: NaN });
+    this.nodes.set(key, { el, textEl, follow: followObj3d, name, _lastLeft: NaN, _lastTop: NaN, _visible: false });
   }
 
   /**
@@ -275,7 +278,10 @@ export class NameplateLayer {
     for (const entry of this.nodes.values()) {
       const follow = entry.follow;
       if (!follow) {
-        entry.el.style.display = "none";
+        if (entry._visible !== false) {
+          entry.el.style.display = "none";
+          entry._visible = false;
+        }
         continue;
       }
       // Read the follow object's world position into our scratch
@@ -286,7 +292,10 @@ export class NameplateLayer {
       try {
         follow.getWorldPosition(this._tmpVec);
       } catch (_) {
-        entry.el.style.display = "none";
+        if (entry._visible !== false) {
+          entry.el.style.display = "none";
+          entry._visible = false;
+        }
         continue;
       }
       // Lift the projection point above the entity's origin in three.js
@@ -306,7 +315,10 @@ export class NameplateLayer {
       if (camera.reversedDepth === true
         ? this._tmpVec.z < 0
         : this._tmpVec.z > NAMEPLATE_HIDE_BEHIND_THRESHOLD) {
-        entry.el.style.display = "none";
+        if (entry._visible !== false) {
+          entry.el.style.display = "none";
+          entry._visible = false;
+        }
         hiddenBehind += 1;
         continue;
       }
@@ -319,7 +331,10 @@ export class NameplateLayer {
         this._tmpVec.y < -NAMEPLATE_NDC_OFFSCREEN_MARGIN ||
         this._tmpVec.y > NAMEPLATE_NDC_OFFSCREEN_MARGIN
       ) {
-        entry.el.style.display = "none";
+        if (entry._visible !== false) {
+          entry.el.style.display = "none";
+          entry._visible = false;
+        }
         continue;
       }
       // NDC → pixel coords. NDC x ∈ [-1, 1] maps to pixel x ∈ [0, w]:
@@ -351,7 +366,10 @@ export class NameplateLayer {
         entry._lastLeft = pxInt;
         entry._lastTop = pyInt;
       }
-      entry.el.style.display = "block";
+      if (entry._visible !== true) {
+        entry.el.style.display = "block";
+        entry._visible = true;
+      }
       visible += 1;
     }
     this.lastTickProjectedCount = projected;

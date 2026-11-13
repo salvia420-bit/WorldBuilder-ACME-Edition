@@ -472,6 +472,7 @@ export { WorldState, bindWorldStateToClient, bindWorldStateToManager } from './w
  */
 export function createClient(sessionHandle, opts = {}) {
   const bus = new EventTarget();
+  let _worldObjects = null;
 
   // P-unification (2026-07-28) — the ONE gameplay keyboard funnel, exposed on
   // the facade so plugins register actions instead of installing their own
@@ -1097,6 +1098,12 @@ export function createClient(sessionHandle, opts = {}) {
     // reference.
     get character() {
       return world.character;
+    },
+    get worldObjects() {
+      return _worldObjects;
+    },
+    set worldObjects(v) {
+      _worldObjects = v;
     },
   };
 

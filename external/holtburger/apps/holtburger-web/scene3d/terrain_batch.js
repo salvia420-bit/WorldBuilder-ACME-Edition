@@ -233,6 +233,10 @@ const WATER_FLOW_FETCH_ANCHOR = "  vec2 e = texelFetch(uVertexTypes, ivec2(18 + 
 const WATER_FLOW_FETCH_BATCHED = "  vec2 e = texelFetch(uVertexTypes, ivec3(18 + x, y, int(vLbSlot + 0.5)), 0).rg;";
 const WATER_FOAM_FETCH_ANCHOR = "  return texelFetch(uVertexTypes, ivec2(27 + x, y), 0).g;";
 const WATER_FOAM_FETCH_BATCHED = "  return texelFetch(uVertexTypes, ivec3(27 + x, y, int(vLbSlot + 0.5)), 0).g;";
+const VERTEX_AUX_FETCH_ANCHOR =
+  "  return int(texelFetch(uVertexTypes, ivec2(iu, iv), 0).g * 255.0 + 0.5) & 31;";
+const VERTEX_AUX_FETCH_BATCHED =
+  "  return int(texelFetch(uVertexTypes, ivec3(iu, iv, int(vLbSlot + 0.5)), 0).g * 255.0 + 0.5) & 31;";
 // 2026-10-07 — with the terrain shading bevel on (scene3d/terrain_round.js)
 // the per-LB vertex-types texture is 18 wide (columns 9..17 = retail normals).
 // The batch takes the layer width from the first texture it sees
@@ -438,6 +442,10 @@ function _buildBatchedGlsl(vertexGlsl, fragmentGlsl, noDrawId = null) {
     "frag vertexRoadAt",
   );
   if (f == null) return null;
+  if (f.includes(VERTEX_AUX_FETCH_ANCHOR)) {
+    f = _replaceOnce(f, VERTEX_AUX_FETCH_ANCHOR, VERTEX_AUX_FETCH_BATCHED, "frag vertexAuxByteAt");
+    if (f == null) return null;
+  }
   // 5. uMergeData: per-LB sampler2D → shared sampler2DArray.
   f = _replaceOnce(
     f,

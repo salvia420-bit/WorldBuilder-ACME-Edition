@@ -76,6 +76,7 @@ import { REVERSED_BIAS_NOMINAL_FAR } from "./shader_logdepth.js";
 import { residencyLogEnabled, rlogSetFarProbe } from "./residency_log.js";
 // ?lbFade (flight experience Phase 1): the near ring's per-landblock presence replaces the discard SQUARE.
 import { lbFadeOn, lbFadeUniforms, lbBandDefines, LB_HANDOFF_GLSL } from "./lb_presence.js";
+import { stampVertexWaterAuxBytes } from "./terrain_water_flow.js";
 import {
   farTerrainEnabled,
   farRingEnabled,
@@ -482,6 +483,9 @@ uniform vec3 uAcAmbColor;
 uniform float uAcAmbLevel;
 uniform float uDetailNormalEnabled;
 uniform float uSlopeShadingEnabled;
+uniform vec3 uCamAc;
+uniform float uWaterReflect;
+uniform float uSunGlint;
 
 // Near-ring handoff. uPlayerLbXy is the player's integer landblock; uNearFadeLb
 // is the near ring's EFFECTIVE radius (governor-aware) + a half-LB so the
@@ -535,8 +539,10 @@ void main() {
   if (dLb < uNearFadeLb) discard;
 #endif
 
-  // --- albedo -------------------------------------------------------------
-  vec3 albedo = texture(uComposite, vTileUv).rgb;
+  // --- albedo + baked water fraction (1 - alpha) ---------------------------
+  vec4 compSample = texture(uComposite, vTileUv);
+  vec3 albedo = compSample.rgb;
+  float waterW = clamp(1.0 - compSample.a, 0.0, 1.0);
 
   // --- live lighting, through the SHARED tail ------------------------------
   vec3 sunDir = normalize(uSunDir);
@@ -564,6 +570,19 @@ void main() {
   // 1.0 for viewDepth > uCsmFar (~300 m). Passing the literals keeps the shared
   // expression identical while spending no sampler on a term that cannot fire.
   vec3 lit = terrainApplyLight(albedo, ndotl, 1.0, 1.0);
+  if (waterW > 0.005) {
+    vec3 viewAc = normalize(vec3(vWorldXy, 0.0) - uCamAc);
+    float cosT = clamp(-viewAc.z, 0.0, 1.0);
+    float fresW = 0.02 + 0.98 * pow(1.0 - cosT, 5.0);
+    vec3 skyCol = uAcAmbColor * max(uAcAmbLevel, 0.22) * vec3(0.85, 0.98, 1.25);
+#ifdef USE_FOG
+    skyCol = mix(skyCol, fogColor, 0.60);
+#endif
+    vec3 halfAc = normalize(sunDir - viewAc);
+    float farGlint = pow(clamp(halfAc.z, 0.0, 1.0), 96.0) * uSunGlint
+                   * smoothstep(0.05, 0.25, sunDir.z) * min(length(uAcSunVec) * 1.25, 1.0);
+    lit += (skyCol * fresW * uWaterReflect + uAcSunColor * farGlint * 0.45) * waterW;
+  }
 
   fragColor = vec4(terrainApplyFog(lit, vViewDepth), 1.0);
 
@@ -740,9 +759,9 @@ function ensureBakeRig(scene3d) {
   const st = _state;
   if (st.bake) return st.bake;
   const src = Array.isArray(scene3d.terrainMaterials)
-    ? scene3d.terrainMaterials.find((m) => m && m.uniforms && m.uniforms.uBakeAlbedo)
+    ? scene3d.terrainMaterials.find((m) => m && m.name !== "terrain-batch" && m.uniforms && m.uniforms.uBakeAlbedo)
     : null;
-  if (!src) return null; // near ring has not baked a material yet — try next tick
+  if (!src) return null; // near ring has not baked an unbatched per-LB material yet — try next tick
 
   const savedRt = [];
   for (const u of Object.values(src.uniforms)) {
@@ -756,8 +775,25 @@ function ensureBakeRig(scene3d) {
   // reference, though: three r184's cloneUniforms clones every texture uniform.
   // Re-point them at the live objects (see shareLiveTextureUniforms).
   shareLiveTextureUniforms(mat, src);
-  // Albedo only.
+  // Albedo only; pack (1.0 - waterW) into composite alpha so far-ring water
+  // receives matching live Schlick Fresnel sky reflection + sun glint across the seam.
   mat.uniforms.uBakeAlbedo.value = 1.0;
+  if (mat.defines) {
+    delete mat.defines.HB_TERRAIN_CSM;
+    delete mat.defines.HB_TERRAIN_CSM_DIRECT;
+    delete mat.defines.HB_TERRAIN_TRAIL_MAP;
+  }
+  if (mat.uniforms.uCsmEnabled) mat.uniforms.uCsmEnabled.value = 0.0;
+  if (mat.uniforms.uCloudShadowEnabled) mat.uniforms.uCloudShadowEnabled.value = 0.0;
+  if (mat.uniforms.uIblEnabled) mat.uniforms.uIblEnabled.value = 0.0;
+  if (mat.uniforms.uSnowTrailEnabled) mat.uniforms.uSnowTrailEnabled.value = 0.0;
+  if (mat.uniforms.uSnowPrintEnabled) mat.uniforms.uSnowPrintEnabled.value = 0.0;
+  if (typeof mat.fragmentShader === "string") {
+    mat.fragmentShader = mat.fragmentShader.replace(
+      "if (uBakeAlbedo > 0.5) { fragColor = vec4(modulated, 1.0); return; }",
+      "if (uBakeAlbedo > 0.5) { fragColor = vec4(modulated, clamp(1.0 - waterW, 0.0, 1.0)); return; }",
+    );
+  }
   // The retail Gouraud term multiplies the albedo and TRACKS THE SUN, so it
   // must not be frozen into the composite. The far shader re-applies it live.
   if (mat.uniforms.uAcGouraudEnabled) mat.uniforms.uAcGouraudEnabled.value = 0.0;
@@ -884,7 +920,7 @@ function ensureScratchTextures() {
 }
 
 /** Rewrite the 9x9 vertex-types scratch texture for one LB. */
-function writeVertexTypes(terrainCodes, roadCodes) {
+function writeVertexTypes(terrainCodes, roadCodes, heights) {
   const bytes = _state.vtTex.image.data;
   for (let row = 0; row < 9; row += 1) {
     for (let col = 0; col < 9; col += 1) {
@@ -896,6 +932,7 @@ function writeVertexTypes(terrainCodes, roadCodes) {
       bytes[dst + 3] = 255;
     }
   }
+  stampVertexWaterAuxBytes(bytes, 9, terrainCodes, heights, 0x005f0000);
   _state.vtTex.needsUpdate = true;
 }
 
@@ -957,7 +994,9 @@ function bakePatch(scene3d, renderer, patch) {
   const prevTarget = renderer.getRenderTarget();
   const prevAutoClear = renderer.autoClear;
   const prevScissorTest = renderer.getScissorTest();
+  const prevClearAlpha = typeof renderer.getClearAlpha === "function" ? renderer.getClearAlpha() : 1.0;
   renderer.autoClear = false;
+  if (typeof renderer.setClearAlpha === "function") renderer.setClearAlpha(1.0);
   // NOTE deliberately NOT touched here: `renderer.toneMapping` and
   // `renderer.outputColorSpace` are both part of three's PROGRAM CACHE KEY, so
   // flipping them around the bake would fork a second program for every
@@ -992,7 +1031,7 @@ function bakePatch(scene3d, renderer, patch) {
       const d = patch.lbData.get(key);
       if (!d) continue;
 
-      writeVertexTypes(d.terrainCodes, d.roadCodes);
+      writeVertexTypes(d.terrainCodes, d.roadCodes, d.heights);
       mat.uniforms.uVertexTypes.value = _state.vtTex;
       if (mat.uniforms.uMergeData) {
         if (d.mergeData && mat.uniforms.uTexMergeEnabled) {
@@ -1043,6 +1082,7 @@ function bakePatch(scene3d, renderer, patch) {
   renderer.setScissorTest(prevScissorTest);
   renderer.setRenderTarget(prevTarget);
   renderer.autoClear = prevAutoClear;
+  if (typeof renderer.setClearAlpha === "function") renderer.setClearAlpha(prevClearAlpha);
   const size = renderer.getSize(new THREE.Vector2());
   renderer.setViewport(0, 0, size.x, size.y);
   renderer.setScissor(0, 0, size.x, size.y);
@@ -1073,6 +1113,9 @@ function ensureFarMaterial(scene3d) {
       uAcAmbLevel: { value: 0.2 },
       uDetailNormalEnabled: { value: 0.0 },
       uSlopeShadingEnabled: { value: 0.0 },
+      uCamAc: { value: new THREE.Vector3(0, 0, 120) },
+      uWaterReflect: { value: 0.35 },
+      uSunGlint: { value: 1.0 },
       uPlayerLbXy: { value: new THREE.Vector2(0, 0) },
       uNearFadeLb: { value: 5.5 },
       uFarDepthBias: { value: farDepthBias() },
@@ -1769,6 +1812,16 @@ function publishFarUniforms(scene3d) {
       if (s.uTerrainSlopeShadingEnabled) {
         u.uSlopeShadingEnabled.value = s.uTerrainSlopeShadingEnabled.value;
       }
+      if (s.uWaterReflect && u.uWaterReflect) {
+        u.uWaterReflect.value = s.uWaterReflect.value;
+      }
+      if (s.uSunGlint && u.uSunGlint) {
+        u.uSunGlint.value = s.uSunGlint.value;
+      }
+    }
+    const camPos = scene3d?.camera?.position;
+    if (camPos && u.uCamAc) {
+      u.uCamAc.value.set(camPos.x, -camPos.z, camPos.y);
     }
     if (plb) u.uPlayerLbXy.value.set(plb.x, plb.y);
     u.uNearFadeLb.value = fade;

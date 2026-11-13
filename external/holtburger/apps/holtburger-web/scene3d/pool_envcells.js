@@ -57,6 +57,7 @@
 // silently flattened.
 
 import * as THREE from "three";
+import { tileOfLb } from "./residency_grid.js";
 import {
   poolWorldActive, getPoolWorld, addSingletonsToPools, releaseHoldoutsForLb,
 } from "./pool_producer.js";
@@ -83,10 +84,15 @@ let _warnedStencil = false;
 function _freshState() {
   return {
     world: null,
+    scene3d: null,
     /** `?portalStencil` verdict, resolved once per armed world. */
     stencil: undefined,
     /** lbKey -> Set<cellId> with pooled instances (the rebuild ledger). */
     cellsByLb: new Map(),
+    /** lbKey -> Map<cellId, Array<ReplayEntry>> for unpark after tile release. */
+    replayByLb: new Map(),
+    /** cellIds whose pool feed HAS committed at least once (guards auto-reoffer). */
+    committedCells: new Set(),
     /** the PVS set as of the last tick (the pooled twin of `_lastCellVisibleSet`). */
     lastVisible: new Set(),
     /** cells fed but not yet committed by the W3 feed — hidden on arrival. */
@@ -96,6 +102,7 @@ function _freshState() {
       refusedBakedMissing: 0, bakeStripped: 0, skippedShape: 0,
       hides: 0, shows: 0, pendingHidden: 0, pendingDropped: 0,
       releasedCells: 0, releasedInstances: 0, lbsReleased: 0,
+      reofferedLbs: 0, reofferedCells: 0, reofferedSurfaces: 0,
       disarmedPortalStencil: 0, feedErrors: 0,
     },
   };
@@ -219,6 +226,15 @@ export function offerCellSurfacesToPools(scene3d, args) {
   const { lbKey, cellId, cellMatrix, meshGroup, entries } = args || {};
   if (!Array.isArray(entries) || entries.length === 0) return null;
   const s = _st();
+  if (scene3d) {
+    s.scene3d = scene3d;
+    if (scene3d._unparkPoolEnvCellsForLb !== _unparkHook) {
+      scene3d._unparkPoolEnvCellsForLb = _unparkHook;
+    }
+    if (scene3d._evictPoolEnvCellsForLb !== releasePooledCellsForLb) {
+      scene3d._evictPoolEnvCellsForLb = releasePooledCellsForLb;
+    }
+  }
   s.stats.cellsOffered += 1;
 
   const pos = new THREE.Vector3();
@@ -267,7 +283,14 @@ export function offerCellSurfacesToPools(scene3d, args) {
     n.receiveShadow = (e.receiveShadow !== undefined ? e.receiveShadow : args.receiveShadow) === true;
     // The producer reads this straight into the plan row (pool_producer.js:223)
     // and the registry turns it into the per-cell instance range (D-07.8).
-    n.userData = { __poolCellId: cellId >>> 0, cellId: cellId >>> 0, surfaceDid: e.group.surfaceDid };
+    n.userData = {
+      __poolCellId: cellId >>> 0,
+      cellId: cellId >>> 0,
+      surfaceDid: e.group.surfaceDid,
+      __poolCellPos: cellMatrix ? pos.clone() : null,
+      __poolCellQuat: cellMatrix ? quat.clone() : null,
+      __poolCellScl: cellMatrix ? scl.clone() : null,
+    };
     nodes.push(n);
     nodeIndex.push(i);
   }
@@ -294,21 +317,57 @@ export function offerCellSurfacesToPools(scene3d, args) {
   const out = entries.map(() => false);
   let pooled = 0;
   let heldOut = 0;
+  const replayNodes = [];
   for (let k = 0; k < nodes.length; k += 1) {
     const n = nodes[k];
     if (!refused.has(n)) {
       out[nodeIndex[k]] = true;
       pooled += 1;
+      replayNodes.push({
+        node: n,
+        geom: n.geometry,
+        mat: n.material,
+        name: n.name,
+        pos: n.position.clone(),
+        quat: n.quaternion.clone(),
+        scl: n.scale.clone(),
+        castShadow: n.castShadow,
+        receiveShadow: n.receiveShadow,
+        surfaceDid: n.userData.surfaceDid,
+        meshGroup: meshGroup || null,
+      });
     } else if (n.userData && n.userData.__poolHeldRs != null) {
       // Held out (BC7_PENDING or OFF_PAGE). Parent to meshGroup as a temporary
       // singleton so it renders during texture fetch without being permanently
-      // fused into per-cell legacy meshes. When atlasRefeed settles, it will be
-      // reoffered and rehomed into the pool.
+      // fused into per-cell legacy meshes. IMPORTANT: meshGroup ALREADY carries
+      // cellMatrix, so reset `n` to local identity before parenting under meshGroup
+      // (avoiding a 2x cellMatrix double-transform!).
+      const replayPos = n.position.clone();
+      const replayQuat = n.quaternion.clone();
+      const replayScl = n.scale.clone();
       if (meshGroup) {
+        n.position.set(0, 0, 0);
+        n.quaternion.identity();
+        n.scale.set(1, 1, 1);
+        n.updateMatrix();
+        if (meshGroup.layers) n.layers.mask = meshGroup.layers.mask;
         try { meshGroup.add(n); } catch (_) { /* fail-soft */ }
       }
       out[nodeIndex[k]] = true;
       heldOut += 1;
+      replayNodes.push({
+        node: n,
+        geom: n.geometry,
+        mat: n.material,
+        name: n.name,
+        pos: replayPos,
+        quat: replayQuat,
+        scl: replayScl,
+        castShadow: n.castShadow,
+        receiveShadow: n.receiveShadow,
+        surfaceDid: n.userData.surfaceDid,
+        meshGroup: meshGroup || null,
+      });
     }
   }
   if (pooled > 0 || heldOut > 0) {
@@ -317,15 +376,151 @@ export function offerCellSurfacesToPools(scene3d, args) {
       s.stats.cellsPooled += 1;
     }
     const key = lbKey >>> 0;
+    const cid = cellId >>> 0;
     let set = s.cellsByLb.get(key);
     if (!set) { set = new Set(); s.cellsByLb.set(key, set); }
-    set.add(cellId >>> 0);
+    set.add(cid);
+    if (replayNodes.length > 0) {
+      let byCell = s.replayByLb.get(key);
+      if (!byCell) { byCell = new Map(); s.replayByLb.set(key, byCell); }
+      byCell.set(cid, replayNodes);
+    }
     // A pooled instance is born VISIBLE at the LIVE flip (S2.4). Under stage B
     // the flip happens LATER (a W3 item), so the cell cannot be hidden here —
     // it is queued and hidden by the next PVS tick that sees it committed.
-    if (!s.lastVisible.has(cellId >>> 0)) s.pending.set(cellId >>> 0, 0);
+    if (!s.lastVisible.has(cid)) s.pending.set(cid, 0);
   }
   return out;
+}
+
+function _controllerFeedingCell(controller, cellId) {
+  if (!controller || !(controller._feeds instanceof Map)) return false;
+  const target = cellId >>> 0;
+  for (const entry of controller._feeds.values()) {
+    const jobs = Array.isArray(entry) ? entry : [entry];
+    for (let j = 0; j < jobs.length; j += 1) {
+      const job = jobs[j];
+      if (!job || job.committed) continue;
+      const plan = job.tilePlan || job.plan;
+      const items = plan?.members || plan?.items;
+      if (!Array.isArray(items)) continue;
+      for (let i = 0; i < items.length; i += 1) {
+        if ((items[i]?.cellId >>> 0) === target) return true;
+      }
+    }
+  }
+  return false;
+}
+
+function _unparkHook(lbKey) {
+  const s = _state;
+  return reofferParkedCellsIfReleased(s ? s.scene3d : null, lbKey);
+}
+
+/**
+ * Re-offer pooled EnvCell surfaces for a warm-parked LB whose SlotGrid tile was
+ * released while the player was away (`0x860201ad` dungeon teleport re-entry).
+ * Without this, `LandblockLRU.unpark` re-attaches `cellContainers` holding only
+ * unpooled furniture while `PoolRegistry` no longer holds the walls/floors.
+ */
+export function reofferParkedCellsIfReleased(scene3d, lbKey) {
+  if (!envCellPoolsActive()) return 0;
+  const w = getPoolWorld();
+  const reg = w && w.registry;
+  if (!reg) return 0;
+  const s = _st();
+  const effScene = scene3d || s.scene3d;
+  const key = (lbKey >>> 0) & 0xffff0000;
+  const byCell = s.replayByLb.get(key >>> 0);
+  if (!byCell || byCell.size === 0) return 0;
+
+  const toOffer = [];
+  const meta = [];
+  const touchedCells = new Set();
+  for (const [cellId, list] of byCell) {
+    if (reg.hasCell(cellId)) continue;
+    if (_controllerFeedingCell(w.controller, cellId)) continue;
+    for (let i = 0; i < list.length; i += 1) {
+      const rec = list[i];
+      // Still parented to meshGroup as an unsettled holdout -> already drawing.
+      if (rec.node && rec.node.parent !== null) continue;
+      const m = new THREE.Mesh(rec.geom, rec.mat);
+      m.name = rec.name;
+      m.position.copy(rec.pos);
+      m.quaternion.copy(rec.quat);
+      m.scale.copy(rec.scl);
+      m.castShadow = rec.castShadow;
+      m.receiveShadow = rec.receiveShadow;
+      m.userData = {
+        __poolCellId: cellId >>> 0,
+        cellId: cellId >>> 0,
+        surfaceDid: rec.surfaceDid,
+        __poolCellPos: rec.pos.clone(),
+        __poolCellQuat: rec.quat.clone(),
+        __poolCellScl: rec.scl.clone(),
+      };
+      rec.node = m;
+      toOffer.push(m);
+      meta.push(rec);
+      touchedCells.add(cellId >>> 0);
+    }
+  }
+  if (toOffer.length === 0) return 0;
+
+  // Ensure a previously vacated SlotGrid tile accepts the warm-unparked LB's
+  // plan instead of immediately abandoning it (`_vacated.has(tileKey)`).
+  if (w.controller && typeof w.controller.onReadmit === "function") {
+    const lbx = (key >>> 24) & 0xff;
+    const lby = (key >>> 16) & 0xff;
+    w.controller.onReadmit(tileOfLb(lbx, lby));
+  }
+
+  let passthrough = [];
+  try {
+    const r = addSingletonsToPools(toOffer, effScene, {
+      domain: "ec",
+      lbKey: key >>> 0,
+      urgent: true,
+    });
+    passthrough = r.passthrough || [];
+  } catch (e) {
+    s.stats.feedErrors += 1;
+    return 0;
+  }
+
+  const refused = new Set(passthrough);
+  let reoffered = 0;
+  for (let i = 0; i < toOffer.length; i += 1) {
+    const m = toOffer[i];
+    const rec = meta[i];
+    if (!refused.has(m)) {
+      reoffered += 1;
+    } else {
+      // Parent ANY refused mesh (whether held-out for BC7/offPage or refused by
+      // layer capacity / vacated fallback) onto meshGroup at local identity so
+      // no interior wall/floor disappears AND `rec.node.parent !== null` prevents
+      // repeated re-offer loops.
+      if (rec.meshGroup) {
+        m.position.set(0, 0, 0);
+        m.quaternion.identity();
+        m.scale.set(1, 1, 1);
+        m.updateMatrix();
+        if (rec.meshGroup.layers) m.layers.mask = rec.meshGroup.layers.mask;
+        try { rec.meshGroup.add(m); } catch (_) { /* fail-soft */ }
+      }
+      if (m.userData && m.userData.__poolHeldRs != null) reoffered += 1;
+    }
+  }
+  if (reoffered > 0) {
+    s.stats.reofferedLbs += 1;
+    s.stats.reofferedCells += touchedCells.size;
+    s.stats.reofferedSurfaces += reoffered;
+    for (const cid of touchedCells) {
+      s.lastVisible.delete(cid);
+      if (!s.lastVisible.has(cid)) s.pending.set(cid, 0);
+    }
+  }
+  return reoffered;
 }
 
 // ---------------------------------------------------------------------------
@@ -352,11 +547,40 @@ export function poolCellVisibilityTick(visibleSet) {
   const want = visibleSet instanceof Set ? visibleSet : new Set(visibleSet || []);
   let flips = 0;
 
+  // Auto-reoffer ONLY if PVS wants a cell that HAD previously committed to
+  // `PoolRegistry` (`committedCells.has(id)`) and subsequently lost its pooled
+  // instances during an away-teleport tile release (`!reg.hasCell(id)`). Never
+  // auto-reoffer a cell whose initial feed hasn't committed yet!
+  if (s.replayByLb.size > 0 && s.committedCells.size > 0) {
+    const checkedLbs = new Set();
+    for (const id of want) {
+      const cid = id >>> 0;
+      if (reg.hasCell(cid)) {
+        s.committedCells.add(cid);
+        continue;
+      }
+      if (!s.committedCells.has(cid) || s.pending.has(cid)) continue;
+      const lbKey = (cid & 0xffff0000) >>> 0;
+      if (checkedLbs.has(lbKey)) continue;
+      checkedLbs.add(lbKey);
+      const lbCells = s.cellsByLb.get(lbKey);
+      if (lbCells) {
+        for (const memberCid of lbCells) s.committedCells.delete(memberCid >>> 0);
+      } else {
+        s.committedCells.delete(cid);
+      }
+      if (s.replayByLb.has(lbKey)) {
+        reofferParkedCellsIfReleased(s.scene3d, lbKey);
+      }
+    }
+  }
+
   // Cells fed since the last tick: hide the ones the PVS does not want, as soon
   // as their feed has actually committed.
   if (s.pending.size > 0) {
     for (const [cellId, ticks] of [...s.pending]) {
       if (reg.hasCell(cellId)) {
+        s.committedCells.add(cellId >>> 0);
         s.pending.delete(cellId);
         if (!want.has(cellId)) {
           flips += reg.setCellsVisible([cellId], false);
@@ -374,8 +598,20 @@ export function poolCellVisibilityTick(visibleSet) {
 
   const entering = [];
   const leaving = [];
-  for (const id of want) if (!s.lastVisible.has(id)) entering.push(id);
-  for (const id of s.lastVisible) if (!want.has(id)) leaving.push(id);
+  let droppedUncommitted = false;
+  for (const id of want) {
+    if (reg.hasCell(id)) {
+      s.committedCells.add(id >>> 0);
+      if (!s.lastVisible.has(id)) entering.push(id);
+    }
+  }
+  for (const id of s.lastVisible) {
+    if (!reg.hasCell(id)) {
+      droppedUncommitted = true;
+    } else if (!want.has(id)) {
+      leaving.push(id);
+    }
+  }
   if (entering.length > 0) {
     flips += reg.setCellsVisible(entering, true);
     s.stats.shows += entering.length;
@@ -384,9 +620,11 @@ export function poolCellVisibilityTick(visibleSet) {
     flips += reg.setCellsVisible(leaving, false);
     s.stats.hides += leaving.length;
   }
-  if (entering.length > 0 || leaving.length > 0) {
+  if (entering.length > 0 || leaving.length > 0 || droppedUncommitted) {
     s.lastVisible.clear();
-    for (const id of want) s.lastVisible.add(id);
+    for (const id of want) {
+      if (reg.hasCell(id)) s.lastVisible.add(id);
+    }
   }
   return flips;
 }
@@ -430,6 +668,7 @@ export function releasePooledCellsForLb(lbKey) {
   if (!reg) return 0;
   const s = _st();
   const key = lbKey >>> 0;
+  s.replayByLb.delete(key);
   const set = s.cellsByLb.get(key);
   if (!set || set.size === 0) return 0;
   let n = 0;
@@ -441,7 +680,11 @@ export function releasePooledCellsForLb(lbKey) {
       console.warn("[drawPools/envcells] cell release failed:", String(e?.message ?? e));
     } catch (_) { /* fail-soft */ }
   }
-  for (const id of set) s.pending.delete(id);
+  for (const id of set) {
+    s.pending.delete(id);
+    s.lastVisible.delete(id);
+    s.committedCells.delete(id >>> 0);
+  }
   s.cellsByLb.delete(key);
   s.stats.releasedCells += set.size;
   s.stats.releasedInstances += n;

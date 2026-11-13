@@ -21,15 +21,21 @@ import { createFakeWebGL2, fakeCanvas } from "./helpers/fake_webgl2.mjs";
 // --- the URL every cells.js instance of the suites sees at import ------------
 // The occlusion culler and the aperture cull only narrow the visible set BEFORE
 // the three container.visible writes; the walks script that set directly.
-export const BASE_SEARCH = "?noEnvcellTimeSlice=1&occlusionCull=off&interiorApertureCull=off";
+export const BASE_SEARCH = "?noEnvcellTimeSlice=1&occlusionCull=off&interiorApertureCull=off&cellStaticMerge=off";
 
 /** Import a fresh cells.js instance under `extra` URL params (the walls-first test's trick). */
 export async function loadCells(extra = "") {
-  const search = BASE_SEARCH + (extra ? "&" + extra : "");
+  let effExtra = /\binteriorBatch=/.test(extra)
+    ? extra
+    : (extra ? `${extra}&interiorBatch=off` : "interiorBatch=off");
+  if (!/\bcellStaticMerge=/.test(effExtra)) {
+    effExtra += "&cellStaticMerge=off";
+  }
+  const search = BASE_SEARCH + "&" + effExtra;
   globalThis.window ??= {};
   globalThis.location = { search };
   globalThis.window.location = globalThis.location;
-  const mod = await import("../scene3d/cells.js" + (extra ? "?" + extra : ""));
+  const mod = await import("../scene3d/cells.js?" + effExtra);
   globalThis.location = { search: BASE_SEARCH };
   globalThis.window.location = globalThis.location;
   return mod;
@@ -455,7 +461,18 @@ export async function makeWorld(deps, opts = {}) {
   camera.lookAt(cx, 0, -cy);
   camera.layers.enableAll();
   camera.updateMatrixWorld(true);
-  const mc = await materialCache(M, adapter, opts.pools ? { ...SURF, ...SURF_POOLED } : SURF, { pom: opts.pom === true, texchan: opts.texchan || null, luminous: opts.luminous || null });
+  const surfForPools = opts.pools
+    ? {
+        ...Object.fromEntries(
+          Object.entries(SURF).map(([k, v]) => [
+            k,
+            Number(k) < 0x08000110 ? { ...v, w: 48, h: 48 } : v,
+          ]),
+        ),
+        ...SURF_POOLED,
+      }
+    : SURF;
+  const mc = await materialCache(M, adapter, surfForPools, { pom: opts.pom === true, texchan: opts.texchan || null, luminous: opts.luminous || null });
   const scene3d = {
     scene, worldRoot, camera, renderer,
     terrainGroup: groups.terrain, buildingsGroup: groups.buildings, staticsGroup: groups.statics,

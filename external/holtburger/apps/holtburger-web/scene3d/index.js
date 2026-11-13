@@ -51,6 +51,7 @@ import {
   bakeStaticsForLandblock,
   getOrCreateMaterialCache,
   SEALED_STATICS_SKIP_ON,
+  armWalkInInstanceDefault,
 } from "./statics.js";
 // ?statAtlas cross-LB static atlas per-LB eviction hook. Imported with the SAME
 // specifier statics.js uses (no ?v=) so it is the SAME module instance → shares
@@ -64,7 +65,7 @@ import {
 // ?statBatchCrossLb (default-OFF) — same deterministic-wiring story as
 // evictStaticAtlasForLb above, for the cross-LB per-material ?staticBatch
 // buckets (plain specifier everywhere → one module instance → shared state).
-import { evictStaticBatchXForLb, parkStaticBatchXForLb, unparkStaticBatchXForLb } from "./static_batch_x.js";
+import { evictStaticBatchXForLb, parkStaticBatchXForLb, unparkStaticBatchXForLb, armStaticBatchXDefaults } from "./static_batch_x.js";
 import { afterObjectBake, afterUnpark as objRadiusAfterUnpark, getObjectRadiusStats, objectRadiusHides, objectBakeAllowed, buildingBakeAllowed, objRadiusSetting, bldRadiusSetting, objectRadiusWantsHidden, objRadiusCommitHide, setObjRadiusFadeDeferred, tickObjectRadius } from "./object_radius.js";
 // ?residencyLog (flight-experience Phase 0, default OFF): per-frame residency sampler.
 import { residencyLogEnabled, tickResidencyLog, installResidencyLogProbe, rlogSetGridModule, rlogSetPresenceProbe, rlogSetObjFadeActive } from "./residency_log.js";
@@ -76,7 +77,7 @@ import { initFarForest, farForestEnabled } from "./far_forest.js";
 import { flightViewEnabled, tickAltitudePolicy, flightViewDiag, altitudeGridFreeze } from "./altitude_policy.js";
 const FLIGHT_VIEW_ON = flightViewEnabled();
 import { lbFadeOn, objFadeOn, installLbFadeChunks, tickLbPresence, flushLbPresence, getLbPresence, lbPresenceDiag, CH_OBJ, noteObjectsAttached, objectsAttached } from "./lb_presence.js";
-import { getStaticGeomCache } from "./static_geom_cache.js";
+import { getStaticGeomCache, armStaticGeomCacheDefault } from "./static_geom_cache.js";
 // Frame-split probe (2026-08-06) — imported for its side effect only: it
 // installs `window.__frameSplitArm/Report/Census/Ballast` and nothing else.
 // Costs one module parse and zero frame time until something arms it, the same
@@ -104,7 +105,9 @@ import { buildEnvCellsForLandblock, objectWindowCentres, OBJ_WINDOW_RIG_ON } fro
 // `fetch_landblock_scenery` DAT-baked). See `scene3d/spawns.js`'s
 // header for the dispatch-surface contract.
 import { ensureSpawnsForLandblock } from "./spawns.js";
-import { getBakeWorkerClient } from "./bake_worker_client.js"; // __diag.datDecode worker relay (A07 §3.6)
+import { getBakeWorkerClient, applyShardBudget } from "./bake_worker_client.js"; // __diag.datDecode worker relay (A07 §3.6)
+import { getPackFetchController } from "./pack_fetch_controller.js";
+import { atmosphereLutStartupPlan } from "./atmosphere_lut_plan.js";
 import { summarizeMemCensus, memCensusVerdict } from "./mem_census.js"; // __diag.wasmMem page roll-up (2026-08-05)
 import {
   texCensusEnabled,
@@ -131,6 +134,7 @@ import { portalSpaceOwnsFrame, renderPortalSpaceFrame, renderPortalSpaceOverlay,
 import {
   frameWorkEnabled,
   frameWorkP4,
+  frameWorkW1Run,
   frameWorkW6Run,
   frameWorkNoteLbKey,
   framePhaseBegin,
@@ -154,7 +158,29 @@ import { getPoolRegistry } from "./pool_registry.js";
 import { initPoolPrewarm, prewarmWorkList } from "./pool_prewarm.js";
 // ENVCELL-POOL-SWAP (ST9, `?drawPools`) — the interior producer's arming +
 // census. Inert unless initPoolWorld armed the full F-11.3 chain.
-import { armEnvCellPoolGroups, envCellPoolCensus } from "./pool_envcells.js";
+import {
+  armEnvCellPoolGroups,
+  envCellPoolCensus,
+  reofferParkedCellsIfReleased,
+  releasePooledCellsForLb,
+} from "./pool_envcells.js";
+
+if (typeof window !== "undefined") {
+  try {
+    armStaticGeomCacheDefault(true);
+    armStaticBatchXDefaults(true);
+    armWalkInInstanceDefault(false);
+    applyShardBudget(window, { defaultMb: 128 });
+    window.__hbGetPackIndexBytes = () => {
+      try {
+        const ctl = getPackFetchController();
+        return ctl?.armed ? ctl.getIndexBytes?.() : undefined;
+      } catch (_) {
+        return undefined;
+      }
+    };
+  } catch (_) { /* fail-soft */ }
+}
 // A11-S3 (`?particleClock=sim`): install the loop-owned sim clock into the
 // shared particle/script time hook (one clock for mixers + particles +
 // script queues, mirroring retail's single Timer::cur_time static,
@@ -708,6 +734,25 @@ const METERS_PER_LANDBLOCK = 192.0;
 // composer that is the post pass, so for an accurate draw-call TOTAL run with
 // ?atmosphere=off. Zero overhead unless the flag is set.
 let _renderDiagArmed;
+let _diagFrameCalls = 0;
+let _diagFrameTris = 0;
+let _diagCensusTick = 0;
+let _diagLastNodes = 0;
+let _diagLastMeshes = 0;
+function _ensureRenderDiagAccumulator(renderer) {
+  if (!renderer || renderer.__hbDiagWrapped || typeof renderer.render !== "function") return;
+  const origRender = renderer.render;
+  renderer.render = function hbDiagAccumRender() {
+    const r = origRender.apply(this, arguments);
+    const ri = this.info && this.info.render;
+    if (ri) {
+      _diagFrameCalls += ri.calls | 0;
+      _diagFrameTris += ri.triangles | 0;
+    }
+    return r;
+  };
+  Object.defineProperty(renderer, "__hbDiagWrapped", { value: true, configurable: true });
+}
 function recordRenderDiag(renderer, scene) {
   // ?vfxGauge=on (build-spec §11.7) — close the T_cpu/T_gpu window opened by
   // vfxGaugeBeginFrame just before the render submission. Independent of the
@@ -733,15 +778,20 @@ function recordRenderDiag(renderer, scene) {
     }
   }
   if (!_renderDiagArmed || !renderer || !renderer.info) return;
+  _ensureRenderDiagAccumulator(renderer);
   try {
-    let nodes = 0;
-    let meshes = 0;
-    if (scene && typeof scene.traverse === "function") {
+    if ((_diagCensusTick++ % 15) === 0 && scene && typeof scene.traverse === "function") {
+      let nCount = 0;
+      let mCount = 0;
       scene.traverse((o) => {
-        nodes += 1;
-        if (o.isMesh || o.isInstancedMesh || o.isBatchedMesh) meshes += 1;
+        nCount += 1;
+        if (o.isMesh || o.isInstancedMesh || o.isBatchedMesh) mCount += 1;
       });
+      _diagLastNodes = nCount;
+      _diagLastMeshes = mCount;
     }
+    const nodes = _diagLastNodes;
+    const meshes = _diagLastMeshes;
     if (!window.__diag) window.__diag = {};
     const info = renderer.info;
     // `calls` counts a BatchedMesh multidraw as ONE call however many ranges it
@@ -750,13 +800,17 @@ function recordRenderDiag(renderer, scene) {
     // ranges three was asked to draw, `issuedSubDraws` = ranges sent after
     // ?batchedRuns regrouped them (equal with the flag off).
     const br = batchedRunsFrameTotals();
+    const totalCalls = _diagFrameCalls > 0 ? _diagFrameCalls : (info.render?.calls ?? 0);
+    const totalTris = _diagFrameTris > 0 ? _diagFrameTris : (info.render?.triangles ?? 0);
+    _diagFrameCalls = 0;
+    _diagFrameTris = 0;
     window.__diag.render = {
       ts:
         typeof performance !== "undefined" && performance.now
           ? performance.now()
           : 0,
-      calls: info.render?.calls ?? 0,
-      triangles: info.render?.triangles ?? 0,
+      calls: totalCalls,
+      triangles: totalTris,
       programs: Array.isArray(info.programs) ? info.programs.length : 0,
       geometries: info.memory?.geometries ?? 0,
       textures: info.memory?.textures ?? 0,
@@ -1508,10 +1562,15 @@ export async function preInit3D(canvas) {
   // Wire-agent: skip atmosphere entirely. Render falls back to direct
   // renderer.render at L1218 when atmospherePipeline stays null, which
   // is the path we want for the wireframe scene.
+  const _lutStartup = atmosphereLutStartupPlan();
   const atmosphereRuntimePromise = wireframeMode
     ? Promise.resolve(null)
     : import("./atmosphere_runtime.js?v=lutbake").then(
-        ({ AtmosphereRuntime }) => new AtmosphereRuntime({ renderer })
+        ({ AtmosphereRuntime }) =>
+          new AtmosphereRuntime({
+            renderer,
+            ...(_lutStartup.useBakedInitial && !nullRender ? { preferLoad: false } : {}),
+          })
       );
   // Cap DPR at 2 — beyond that the cost outpaces the visual gain on
   // a textured-mesh scene of this complexity.
@@ -2575,6 +2634,68 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
   // a specific positive count. The cap-enforcement logic is exercised
   // unconditionally; even with 0 real lights a synthetic 100-light
   // stress test verifies the cap works.
+  function _buildSetupLightScanView(s3d, dirtyLbs) {
+    const carriersByLb = s3d._setupLightCarriersByLb;
+    if (!dirtyLbs) {
+      if (!(carriersByLb instanceof Map) || carriersByLb.size === 0) return s3d;
+      const bChildren = Array.isArray(s3d.buildingsGroup?.children) ? [...s3d.buildingsGroup.children] : [];
+      const sChildren = [];
+      if (Array.isArray(s3d.staticsGroup?.children)) {
+        for (const c of s3d.staticsGroup.children) {
+          const lbk = c?.userData?.landblockId != null ? ((c.userData.landblockId >>> 0) & 0xffff0000) >>> 0 : null;
+          if (lbk !== null && carriersByLb.has(lbk)) continue;
+          sChildren.push(c);
+        }
+      }
+      for (const bucket of carriersByLb.values()) {
+        for (const b of bucket.buildings) bChildren.push(b);
+        for (const st of bucket.statics) sChildren.push(st);
+      }
+      return Object.create(s3d, {
+        buildingsGroup: { value: { children: bChildren }, enumerable: true },
+        staticsGroup: { value: { children: sChildren }, enumerable: true },
+      });
+    }
+    const bChildren = [];
+    const sChildren = [];
+    const cChildren = [];
+    for (const lbk of dirtyLbs) {
+      const bucket = carriersByLb instanceof Map ? carriersByLb.get(lbk) : null;
+      if (bucket) {
+        for (const b of bucket.buildings) bChildren.push(b);
+        for (const st of bucket.statics) sChildren.push(st);
+      }
+    }
+    if (Array.isArray(s3d.buildingsGroup?.children)) {
+      for (const c of s3d.buildingsGroup.children) {
+        if (!c?.userData?.modelId) continue;
+        const lbk = ((c.userData.landblockId >>> 0) & 0xffff0000) >>> 0;
+        if (dirtyLbs.has(lbk)) bChildren.push(c);
+      }
+    }
+    if (Array.isArray(s3d.staticsGroup?.children)) {
+      for (const c of s3d.staticsGroup.children) {
+        if (!c?.userData?.modelId) continue;
+        const lbk = ((c.userData.landblockId >>> 0) & 0xffff0000) >>> 0;
+        if (dirtyLbs.has(lbk) && !(carriersByLb instanceof Map && carriersByLb.has(lbk))) {
+          sChildren.push(c);
+        }
+      }
+    }
+    if (Array.isArray(s3d.cellsGroup?.children)) {
+      for (const cc of s3d.cellsGroup.children) {
+        const cid = cc?.userData?.cellId >>> 0;
+        if (cid && dirtyLbs.has((cid & 0xffff0000) >>> 0)) cChildren.push(cc);
+      }
+    }
+    return Object.create(s3d, {
+      buildingsGroup: { value: { children: bChildren }, enumerable: true },
+      staticsGroup: { value: { children: sChildren }, enumerable: true },
+      cellsGroup: { value: { children: cChildren }, enumerable: true },
+      entityManager: { value: null, enumerable: true },
+    });
+  }
+
   let setupLightsSummary = null;
   if (
     !wireframeMode &&
@@ -2583,7 +2704,7 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
   ) {
     try {
       setupLightsSummary = await attachSetupModelLights(
-        scene3dForBuilders,
+        _buildSetupLightScanView(scene3dForBuilders, null),
         wasmExports
       );
       // eslint-disable-next-line no-console
@@ -3100,7 +3221,7 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
         if (liveScene3dRef._slotGridCtl) {
           const sg = liveScene3dRef._slotGridCtl;
           if (_frameWorkOn) {
-            frameWorkW6Run("slotGridResidency", () => sg.tick(currentLbKey, sealedKeepLbKey));
+            frameWorkW1Run("slotGridResidency", () => sg.tick(currentLbKey, sealedKeepLbKey));
           } else {
             sg.tick(currentLbKey, sealedKeepLbKey);
           }
@@ -4462,8 +4583,14 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
     // `attachSetupModelLights` is idempotent (per-object `__setupLightScanned`
     // tag), so each re-run only processes fresh geometry. Serialize re-runs
     // onto one chain so two concurrent LB streams can't race the tags.
-    _rescanSetupLights() {
+    _rescanSetupLights(lbKeyOpt) {
       if (!this.wasmExports) return Promise.resolve(null);
+      if (Number.isFinite(lbKeyOpt)) {
+        if (!this._setupLightsDirtyLbs) this._setupLightsDirtyLbs = new Set();
+        this._setupLightsDirtyLbs.add(((lbKeyOpt >>> 0) & 0xffff0000) >>> 0);
+      } else {
+        this._setupLightsScanAll = true;
+      }
       if (this._setupLightsRescanQueued) return this._setupLightsRescanChain;
       this._setupLightsRescanQueued = true;
       const self = this;
@@ -4471,7 +4598,14 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
         .catch(() => {})
         .then(() => {
           self._setupLightsRescanQueued = false;
-          return attachSetupModelLights(self, self.wasmExports);
+          const scanAll = !!self._setupLightsScanAll;
+          self._setupLightsScanAll = false;
+          let dirty = null;
+          if (!scanAll && self._setupLightsDirtyLbs && self._setupLightsDirtyLbs.size > 0) {
+            dirty = new Set(self._setupLightsDirtyLbs);
+          }
+          if (self._setupLightsDirtyLbs) self._setupLightsDirtyLbs.clear();
+          return attachSetupModelLights(_buildSetupLightScanView(self, dirty), self.wasmExports);
         })
         .then((summary) => {
           // C3 #6 — fan the per-lb-key light buckets into the LRU so
@@ -4533,7 +4667,7 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
         // world_stream fires this loader on every position update, and the
         // rescan walks statics + buildings + cells + entities: measured 201
         // rescans per 10 s on a settled 1070 session, every one a no-op.
-        if (!(r && (r.idempotent || r.inFlight))) self._rescanSetupLights();
+        if (!(r && (r.idempotent || r.inFlight))) self._rescanSetupLights(lbKeyForLru);
         if (self.wireframeMode && self.materialCache && self.cellsGroup) {
           self.materialCache.addFillCompanions(self.cellsGroup);
           // Phase 5 PView render-order fix (2026-05-25): re-stamp layer 1
@@ -4927,7 +5061,7 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
         // is set BEFORE the fetch + attach; this is the moment the nodes exist.
         noteObjectsAttached(self, lbKeyForLru, "b");
         // GAP 2 (2026-05-29) — light newly-streamed building geometry.
-        if ((r?.placementCount ?? 0) > 0 && !flightLightActive()) self._rescanSetupLights();
+        if ((r?.placementCount ?? 0) > 0 && !flightLightActive()) self._rescanSetupLights(lbKeyForLru);
         if (self.wireframeMode && self.materialCache && self.buildingsGroup) {
           self.materialCache.addFillCompanions(self.buildingsGroup);
         }
@@ -4990,7 +5124,7 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
         // (`staticsBakedLbs` is set before the fetch + attach, statics.js).
         noteObjectsAttached(self, lbKeyForLru, "s");
         // GAP 2 (2026-05-29) — light newly-streamed static geometry.
-        if ((r?.placementCount ?? 0) > 0 && !flightLightActive()) self._rescanSetupLights();
+        if ((r?.placementCount ?? 0) > 0 && !flightLightActive()) self._rescanSetupLights(lbKeyForLru);
         if (self.wireframeMode && self.materialCache && self.staticsGroup) {
           self.materialCache.addFillCompanions(self.staticsGroup);
         }
@@ -6969,18 +7103,37 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
                 const t = performance.now();
                 // ?shaderPrewarm=on: compile with the HalfFloat warm target
                 // bound so these passes warm the composer-path program
-                // variant the world renders with (shader_prewarm.js). The
-                // composer exists by now (createAtmospherePipeline above),
-                // but the dummy target keeps this order-independent.
-                withWarmTarget(renderer, () => renderer.compile(scene, camera));
-                // eslint-disable-next-line no-console
-                console.log(
-                  `[sky-k.3] renderer.compile ${label} ` +
-                    `${(performance.now() - t).toFixed(1)}ms ` +
-                    `(programs=${renderer.info.programs?.length ?? "?"}, ` +
-                    `textures=${renderer.info.memory.textures}, ` +
-                    `geometries=${renderer.info.memory.geometries})`
-                );
+                // variant the world renders with (shader_prewarm.js). Use
+                // `compileAsync` so `KHR_parallel_shader_compile` links
+                // off-thread without blocking on `getProgramParameter(LINK_STATUS)`.
+                if (typeof renderer.compileAsync === "function") {
+                  const p = withWarmTarget(renderer, () => renderer.compileAsync(scene, camera));
+                  Promise.resolve(p)
+                    .then(() => {
+                      // eslint-disable-next-line no-console
+                      console.log(
+                        `[sky-k.3] renderer.compileAsync ${label} ` +
+                          `${(performance.now() - t).toFixed(1)}ms ` +
+                          `(programs=${renderer.info.programs?.length ?? "?"}, ` +
+                          `textures=${renderer.info.memory.textures}, ` +
+                          `geometries=${renderer.info.memory.geometries})`
+                      );
+                    })
+                    .catch((eCompile) => {
+                      // eslint-disable-next-line no-console
+                      console.warn(`[sky-k.3] renderer.compileAsync ${label} failed:`, eCompile);
+                    });
+                } else {
+                  withWarmTarget(renderer, () => renderer.compile(scene, camera));
+                  // eslint-disable-next-line no-console
+                  console.log(
+                    `[sky-k.3] renderer.compile ${label} ` +
+                      `${(performance.now() - t).toFixed(1)}ms ` +
+                      `(programs=${renderer.info.programs?.length ?? "?"}, ` +
+                      `textures=${renderer.info.memory.textures}, ` +
+                      `geometries=${renderer.info.memory.geometries})`
+                  );
+                }
               } catch (eCompile) {
                 // eslint-disable-next-line no-console
                 console.warn(`[sky-k.3] renderer.compile ${label} failed:`, eCompile);
@@ -7469,11 +7622,17 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
     // unmet flag NAMED; with it null every producer's `poolWorldActive()` gate
     // reads false and the legacy stack is untouched.
     try {
-      initPoolWorld({ THREE, group: liveScene3d.staticsGroup });
+      initPoolWorld({
+        THREE,
+        group: liveScene3d.staticsGroup,
+        csmState: liveScene3d.csmState ?? csmState,
+      });
       // 2026-10-25: object_radius.js hides/shows a landblock's objects; pooled
       // members follow through the registry's sticky per-landblock hide.
       liveScene3d._poolHideLb = (lb) => { const r = getPoolRegistry(); return r ? r.hideLb(lb) : 0; };
       liveScene3d._poolShowLb = (lb) => { const r = getPoolRegistry(); return r ? r.showLb(lb) : 0; };
+      liveScene3d._unparkPoolEnvCellsForLb = (lbKey) => reofferParkedCellsIfReleased(liveScene3d, lbKey);
+      liveScene3d._evictPoolEnvCellsForLb = (lbKey) => releasePooledCellsForLb(lbKey);
       // ENVCELL-POOL-SWAP: interiors pool into the CELLS group on
       // RENDER_LAYER_INDOOR, never the layer-0 statics group — atmosphere_
       // pipeline renders layer 0, CLEARS DEPTH, then renders layer 1, and an

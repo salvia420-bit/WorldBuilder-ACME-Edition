@@ -2735,6 +2735,58 @@ export function clipAlphaGuardRefusals() {
   return out;
 }
 
+/**
+ * Compressed-only upgrade guard (`_upgradeCompressedFull` in `materials.js`):
+ * under `?texCompressedOnly`, `mat.map` starts as the PVW `CompressedTexture`
+ * (`tex-bc7-pre`, which preserves ClipMap cutouts), and upgrades asynchronously
+ * to `tex-xu7`. Inspects mip-0 BC7 blocks of `currentMapOrParsed` via
+ * `bc7AlphaFloor`: if the current PVW map has cutout texels (`floor < cut`)
+ * while `candidateParsed` has `bc7AlphaFloor >= cut` (lost transparency!),
+ * refuses the candidate (`false`) so the caller can try `hbc7Fallback` or keep
+ * the cutout-preserving PVW texture.
+ */
+export function bc7CompressedUpgradeAdmitted(currentMapOrParsed, candidateParsed, mat) {
+  if (!bc7ClipAlphaGuardEnabled() || !mat || !candidateParsed) return true;
+  const cut = clipAlphaCutOf(mat);
+  if (!(cut > 0)) return true;
+
+  let curHasCutout = false;
+  if (currentMapOrParsed && Array.isArray(currentMapOrParsed.levels) && currentMapOrParsed.levels.length > 0) {
+    const curFloor = bc7AlphaFloor(currentMapOrParsed, cut);
+    curHasCutout = curFloor >= 0 && curFloor < cut;
+  } else if (
+    currentMapOrParsed &&
+    currentMapOrParsed.isCompressedTexture &&
+    Array.isArray(currentMapOrParsed.mipmaps) &&
+    currentMapOrParsed.mipmaps.length > 0
+  ) {
+    const m0 = currentMapOrParsed.mipmaps[0];
+    const curFloor =
+      m0 && m0.data
+        ? bc7AlphaFloor(
+            { width: m0.width, height: m0.height, levels: currentMapOrParsed.mipmaps },
+            cut,
+          )
+        : -1;
+    curHasCutout = curFloor >= 0 && curFloor < cut;
+  } else if (currentMapOrParsed && !currentMapOrParsed.isCompressedTexture) {
+    curHasCutout = _albedoKeyed(currentMapOrParsed, cut, "cmp") === true;
+  }
+  if (!curHasCutout) return true;
+
+  _clipStats.payloadChecks += 1;
+  const candFloor = bc7AlphaFloor(candidateParsed, cut);
+  if (candFloor < 0 || candFloor < cut) {
+    _clipStats.admitted += 1;
+    return true;
+  }
+  _clipStats.vetoedFull += 1;
+  return false;
+}
+bc7ClipAlphaGateFor.compressedUpgradeAdmitted = bc7CompressedUpgradeAdmitted;
+bc7ClipAlphaGateFor.clipAlphaCutOf = clipAlphaCutOf;
+bc7ClipAlphaGateFor.TEX_DROPPED = TEX_DROPPED;
+
 /** Test hook — `_resetBc7ForTest` calls it too. */
 export function _resetClipAlphaGuardForTest() {
   for (const k of Object.keys(_clipStats)) _clipStats[k] = 0;

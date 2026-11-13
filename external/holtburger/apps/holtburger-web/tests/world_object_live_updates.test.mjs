@@ -354,6 +354,15 @@ await check("attachClient sets client.worldObjects and wires event stream", asyn
   assert.equal(obj.instanceValue(3), 0);
 });
 
+await check("attachClient succeeds on real frozen createClient() facade", async () => {
+  const { createClient } = await import("../plugins/api.js");
+  const frozenClient = createClient({});
+  assert.equal(Object.isFrozen(frozenClient), true, "createClient facade must remain frozen");
+  const wom = new WorldObjectManager();
+  wom.attachClient(frozenClient);
+  assert.equal(frozenClient.worldObjects, wom, "frozen createClient facade must expose worldObjects");
+});
+
 console.log("\n[6] Event Buffering Before load() & Replay");
 
 await check("Updates arriving during load() are buffered and replayed", async () => {

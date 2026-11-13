@@ -99,10 +99,23 @@ const { LandblockLRU } = await import("../scene3d/landblock_lru.js");
 const cellsOn = await R.loadCells("interiorBatch=on");
 const cellsPlan = await R.loadCells("interiorBatch=plan");
 
+// Pass 2 (`materials.js:applyBakedVertexLightPatch`) added `_acBakedRelief`
+// normal-relief modulation to the 8 baked-cell fragment shader variants; the
+// other 12 vertex/depth/prop shader hashes are unchanged from `GOLDEN`.
+const EXPECTED_BAKED_RELIEF_SHADER_SOURCES = [
+  "10a3bc2a", "32021897", "39017bb1", "3fcb0a03", "457cd6af",
+  "48688bb0", "5bac34e8", "7c0657bd", "84d3efc8", "862acaf6",
+  "8c4f2fa8", "9805f7a5", "b5b2d79a", "b8eecb32", "ba06ab80",
+  "bce1a446", "c58f12d3", "c87a35b0", "e1b0addd", "f0180905",
+];
+
 await t("L1 flag off: build + 200 ticks equal the pre-change golden; nothing of the batch exists", async () => {
   const golden = JSON.parse(readFileSync(GOLDEN, "utf8"));
   const snap = JSON.parse(JSON.stringify(await R.flagOffSnapshot(cellsOff, deps, KIT)));
-  for (const k of Object.keys(golden)) assert.deepEqual(snap[k], golden[k], `golden field ${k}`);
+  for (const k of Object.keys(golden)) {
+    const expected = k === "shaderSources" ? EXPECTED_BAKED_RELIEF_SHADER_SOURCES : golden[k];
+    assert.deepEqual(snap[k], expected, `golden field ${k}`);
+  }
   assert.deepEqual(Object.keys(snap).sort(), Object.keys(golden).sort());
   assert.equal(IB.__interiorBatchStateForTest(), null, "the module never created its state");
   assert.equal(IB.__interiorBatchLbsForTest(), null);
@@ -113,6 +126,7 @@ await t("L1 flag off: build + 200 ticks equal the pre-change golden; nothing of 
   assert.deepEqual([snap.kit.budget, snap.kit.pages, snap.kit.stateRows], [null, null, null], "the kit allocated nothing");
   assert.equal(IB.interiorBatchMode(""), "off", "DEFAULT OFF");
   assert.equal(IB.interiorBatchMode("?interiorBatch=nope"), "off");
+  for (const v of ["off", "0", "false", "no", "OFF"]) assert.equal(IB.interiorBatchMode(`?interiorBatch=${v}`), "off");
   for (const v of ["on", "1", "true", "yes", "ON"]) assert.equal(IB.interiorBatchMode(`?interiorBatch=${v}`), "on");
   assert.equal(IB.interiorBatchMode("?interiorBatch=plan"), "plan");
 });

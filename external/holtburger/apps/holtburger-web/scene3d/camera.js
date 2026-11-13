@@ -1498,7 +1498,7 @@ export class CameraSwitcher {
       try { p.free?.(); } catch (_) { /* already released */ }
       return {
         x: ((lb >>> 24) & 0xff) * 192 + px,
-        y: ((lb >>> 16) & 0xff) * 192 + py,
+        y: ((lb & 0x8000) !== 0 ? 68928 : 0) + ((lb >>> 16) & 0xff) * 192 + py,
         z: pz,
       };
     };
@@ -2785,9 +2785,10 @@ export class CameraSwitcher {
     }
     const lbX = (lbId >>> 24) & 0xff;
     const lbY = (lbId >>> 16) & 0xff;
+    const dericostY = (lbId & 0x8000) !== 0 ? 68928.0 : 0.0;
     return {
       x: lbX * 192.0 + lx,
-      y: lbY * 192.0 + ly,
+      y: dericostY + lbY * 192.0 + ly,
       z: lz,
       landblockId: lbId,
     };

@@ -986,8 +986,11 @@ export function makeOrbAnimSync(roots, opts) {
   // Reused per step: [animation, start, playState] triples (no per-tick garbage
   // beyond the `next` list release() needs).
   const todo = [];
-  // `opts.cached` forces the mode (tests); otherwise ?hudDiet=orbSync decides.
+  // `opts.cached` forces the mode (tests); otherwise ?hudDiet=orbSync decides
+  // when a rAF cadence loop exists (driver.invalidateAnims() announces loop set
+  // changes between rAF frames; bare non-rAF callers step uncached unless opted in).
   const cached = opts && opts.cached !== undefined ? !!opts.cached : hudDietOn("orbSync");
+  const useCached = cached && (!!(opts && opts.cached !== undefined) || typeof requestAnimationFrame === "function");
   let starts = [];   // cached: adoption start per `live` entry
   let dirty = true;  // cached: the next step must be a full one
   let light = 0;     // cached: light steps since the last full one
@@ -1019,7 +1022,7 @@ export function makeOrbAnimSync(roots, opts) {
     // keeps getAnimations' order — the writes touch only that animation, so no
     // read can see a different value for being taken earlier.
     step(now) {
-      if (cached && !dirty && light < ORB_SYNC_RECOLLECT_TICKS - 1 && lightStep(now)) {
+      if (useCached && !dirty && light < ORB_SYNC_RECOLLECT_TICKS - 1 && lightStep(now)) {
         light += 1;
         return;
       }
@@ -1046,7 +1049,7 @@ export function makeOrbAnimSync(roots, opts) {
         }
       }
       const next = [];
-      const nextStarts = cached ? [] : null;
+      const nextStarts = useCached ? [] : null;
       for (let i = 0; i < todo.length; i += 3) {
         const a = todo[i];
         try {
@@ -1058,7 +1061,7 @@ export function makeOrbAnimSync(roots, opts) {
       }
       todo.length = 0;
       live = next;
-      if (cached) { starts = nextStarts; dirty = false; light = 0; }
+      if (useCached) { starts = nextStarts; dirty = false; light = 0; }
     },
     /** Cached mode: make the next step a full one (no-op otherwise). */
     invalidate() { dirty = true; },
@@ -2282,6 +2285,7 @@ function installHitGate(paneList) {
     if (!core) return null;
     const scale = parseFloat(getComputedStyle(el).getPropertyValue("--hbo-scale"))
                   || DEFAULT_SCALE;
+    const z = Number(el.currentCSSZoom) > 0 ? Number(el.currentCSSZoom) : 1;
     const figs = [...el.querySelectorAll(".fig")].map((f) => {
       const url = figUrl(f);
       loadSpriteMask(url);
@@ -2293,6 +2297,7 @@ function installHitGate(paneList) {
     const read = el.querySelector(".orb-read");
     return {
       scale,
+      scaleZ: scale * z,
       cx: core.offsetLeft + core.offsetWidth / 2,
       cy: core.offsetTop + core.offsetHeight / 2,
       // the outermost glass rim is r=58.8 of the 0..120 viewBox
@@ -2313,10 +2318,10 @@ function installHitGate(paneList) {
     const g = r.geo;
     // HUD overhaul 2026-10-05 — the pane sits inside the HUD's CSS zoom
     // (ui/hud_scale.js): pointer + rect are screen px, the measured
-    // geometry is the pane's own px, so divide by both scales.
-    const z = Number(r.el.currentCSSZoom) > 0 ? Number(r.el.currentCSSZoom) : 1;
-    const x = (px - r.rect.left) / (g.scale * z);
-    const y = (py - r.rect.top) / (g.scale * z);
+    // geometry is the pane's own px, so divide by cached (scale * zoom).
+    const invScaleZ = g.scaleZ > 0 ? 1 / g.scaleZ : 1;
+    const x = (px - r.rect.left) * invScaleZ;
+    const y = (py - r.rect.top) * invScaleZ;
     if (x < 0 || y < 0 || x > PANE_W || y > PANE_H) return false;
     const dx = x - g.cx, dy = y - g.cy;
     if (dx * dx + dy * dy <= g.cr * g.cr) return true;
@@ -2344,7 +2349,13 @@ function installHitGate(paneList) {
     }
   };
   const onDown = (ev) => {
-    if (ev.target?.closest?.(".hbo-pane")) dragging = true;
+    const pane = ev.target?.closest?.(".hbo-pane");
+    if (pane) {
+      dragging = true;
+      for (const r of recs) {
+        if (r.el === pane && !r.rect && !r.el.hidden) r.rect = r.el.getBoundingClientRect();
+      }
+    }
   };
   const onUp = () => {
     if (!dragging) return;
@@ -2464,6 +2475,28 @@ function collectOrbs(panes, canvasOpts = null) {
 // moved. A 25% hit therefore sloshes four times harder than a 6% regen
 // tick, which is what makes the orb read as a gauge you can feel.
 function applyVital(orb, current, buffedMax, base, oldValue, driver) {
+  const curInt = Math.round(current);
+  const maxInt = Math.round(buffedMax);
+  const nextBase = Number.isFinite(base) && base > 0 ? base : orb.base;
+  const baseInt = Math.round(nextBase);
+  const hasDelta = Number.isFinite(oldValue) && oldValue !== current;
+  if (
+    orb._paintedOnce &&
+    !hasDelta &&
+    orb._lastCurInt === curInt &&
+    orb._lastMaxInt === maxInt &&
+    orb._lastBaseInt === baseInt &&
+    orb.current === current &&
+    orb.buffedMax === buffedMax
+  ) {
+    driver?.start();
+    return;
+  }
+  orb._paintedOnce = true;
+  orb._lastCurInt = curInt;
+  orb._lastMaxInt = maxInt;
+  orb._lastBaseInt = baseInt;
+
   if (Number.isFinite(base) && base > 0) orb.base = base;
   orb.current = current;
   orb.buffedMax = buffedMax;

@@ -119,6 +119,8 @@ in vec2 iScaleYaw;     // scale, yaw (radians, about AC +z)
 in float iModel;
 uniform vec4 uModel[${MAX_MODELS}];   // (halfWidth, height, zMin, baked) per model at scale 1
 uniform vec3 uCamAc;
+uniform vec3 uCamForward;             // AC camera forward unit vector (zero = cone cull off)
+uniform float uCamConeCos;            // cos(halfDiagFov + guardMargin)
 uniform vec2 uRange;                  // (fade start, end) metres
 uniform vec2 uAtlasGrid;              // (columns, rows)
 out vec2 vUv;
@@ -135,6 +137,18 @@ void main() {
   vec2 d2 = uCamAc.xy - iPos.xy;
   float dist = length(d2);
   if (md.w < 0.5 || dist > uRange.y || dist < 1.0) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
+  if (dot(uCamForward, uCamForward) > 0.25) {
+    vec3 treeCenter = vec3(iPos.xy, iPos.z + (md.z + 0.5 * md.y) * s);
+    vec3 toBillboard = treeCenter - uCamAc;
+    float guardR = max(md.x * 2.0, md.y) * s + 32.0;
+    float dist3 = length(toBillboard);
+    float fwdProj = dot(toBillboard, uCamForward);
+    if (fwdProj < -guardR) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
+    if (dist3 > guardR && (fwdProj + guardR) < uCamConeCos * dist3) {
+      gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+      return;
+    }
+  }
   vec2 dir = d2 / dist;
   vec2 right = vec2(-dir.y, dir.x);
   vec3 base = vec3(iPos.xy, iPos.z + md.z * s);
@@ -591,6 +605,8 @@ function _ensureMesh(st) {
       uAtlas: { value: _ensureAtlas(st).texture },
       uModel: { value: uModel },
       uCamAc: { value: new THREE.Vector3() },
+      uCamForward: { value: new THREE.Vector3(0, 0, 0) },
+      uCamConeCos: { value: -1.0 },
       uRange: { value: new THREE.Vector2(4000, 4500) },
       uAtlasGrid: { value: new THREE.Vector2(ATLAS_COLS, st.atlasRows) },
       uSunDir: { value: new THREE.Vector3(-0.4, -0.3, 1.0).normalize() },
@@ -776,6 +792,25 @@ export function tickFarForest(scene3d, camera) {
   _diag.rangeM = range;
   const u = st.mat.uniforms;
   u.uCamAc.value.set(cx, cy, cp.y);
+  if (typeof camera.getWorldDirection === "function") {
+    const fw = camera.getWorldDirection(st._fw || (st._fw = new THREE.Vector3()));
+    u.uCamForward.value.set(fw.x, -fw.z, fw.y);
+    if (u.uCamForward.value.lengthSq() > 1e-6) u.uCamForward.value.normalize();
+  } else if (camera.matrixWorld?.elements) {
+    const me = camera.matrixWorld.elements;
+    u.uCamForward.value.set(-me[8], me[10], -me[9]);
+    if (u.uCamForward.value.lengthSq() > 1e-6) u.uCamForward.value.normalize();
+  } else {
+    u.uCamForward.value.set(0, 0, 0);
+  }
+  if (camera.isOrthographicCamera) {
+    u.uCamConeCos.value = -1.0;
+  } else {
+    const vHalf = ((Number.isFinite(camera.fov) ? camera.fov : 65) * Math.PI) / 360;
+    const aspect = Number.isFinite(camera.aspect) && camera.aspect > 0 ? camera.aspect : 1.78;
+    const diagHalf = Math.atan(Math.tan(vHalf) * Math.hypot(1, aspect));
+    u.uCamConeCos.value = Math.cos(Math.min(Math.PI, diagHalf + 0.20));
+  }
   u.uRange.value.set(range * 0.82, range);
   _copyLight(st);
   st.mesh.visible = st.compiled !== false;

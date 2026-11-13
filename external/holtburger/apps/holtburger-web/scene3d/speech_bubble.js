@@ -28,8 +28,10 @@ import { RENDER_LAYER_INDOOR } from "./particles/render_layer.js";
 // two don't overlap when both are present.
 const BUBBLE_AC_Z_OFFSET = 3.05;
 // Same px/m density as the nameplate bake so text reads at a consistent
-// size relative to names.
+// size relative to names; baked at 2x internal resolution (`BUBBLE_DPR = 2`)
+// so overhead text and beveled brass border stay razor-crisp on 1080p/4K.
 const BUBBLE_PX_PER_METRE = 128;
+const BUBBLE_DPR = 2;
 const BUBBLE_FONT_PX = 30;
 const BUBBLE_LINE_HEIGHT_PX = 38;
 const BUBBLE_PAD_X = 18;
@@ -40,9 +42,9 @@ const BUBBLE_MAX_LINES = 5;
 // is time to read them.
 const BUBBLE_HOLD_MS = 4500;
 const BUBBLE_FADE_MS = 1200;
-// Say in white; emotes in a soft violet so "/wave" reads differently from
-// spoken words (matches the chat-panel emote colouring intent).
-const SPEECH_COLOR = "#ffffff";
+// Say in warm cream-white; emotes in a soft violet so "/wave" reads differently
+// from spoken words (matches the chat-panel emote colouring intent).
+const SPEECH_COLOR = "#f8f2e4";
 const EMOTE_COLOR = "#c7b3ff";
 
 // performance.now() with a Date.now() fallback for the no-perf harness.
@@ -93,37 +95,59 @@ function bakeBubble(text, colorHex) {
   const ctx = canvas.getContext("2d");
   if (!ctx) return null;
 
-  ctx.font = `bold ${BUBBLE_FONT_PX}px monospace`;
-  const maxTextW = BUBBLE_MAX_CANVAS_W - BUBBLE_PAD_X * 2;
+  const fontPx = BUBBLE_FONT_PX * BUBBLE_DPR;
+  const lineH = BUBBLE_LINE_HEIGHT_PX * BUBBLE_DPR;
+  const padX = BUBBLE_PAD_X * BUBBLE_DPR;
+  const padY = BUBBLE_PAD_Y * BUBBLE_DPR;
+  const maxCanvasW = BUBBLE_MAX_CANVAS_W * BUBBLE_DPR;
+  const fontSpec = `bold ${fontPx}px Georgia, "Times New Roman", serif`;
+
+  ctx.font = fontSpec;
+  const maxTextW = maxCanvasW - padX * 2;
   const lines = wrapLines(ctx, text, maxTextW);
 
   let widest = 0;
   for (const l of lines) widest = Math.max(widest, ctx.measureText(l).width);
-  const canvasWidth = Math.ceil(Math.min(BUBBLE_MAX_CANVAS_W, widest + BUBBLE_PAD_X * 2));
-  const canvasHeight = Math.ceil(lines.length * BUBBLE_LINE_HEIGHT_PX + BUBBLE_PAD_Y * 2);
+  const canvasWidth = Math.ceil(Math.min(maxCanvasW, widest + padX * 2));
+  const canvasHeight = Math.ceil(lines.length * lineH + padY * 2);
   canvas.width = canvasWidth;
   canvas.height = canvasHeight;
 
-  // Rounded translucent backdrop (matches the nameplate's 0.55 black).
-  const pad = 4;
-  ctx.fillStyle = "rgba(0, 0, 0, 0.6)";
+  // High-DPI dark obsidian plaque with beveled burnished brass border.
+  const pad = 4 * BUBBLE_DPR;
+  const radius = 8 * BUBBLE_DPR;
+  const bx = pad;
+  const by = pad;
+  const bw = canvasWidth - pad * 2;
+  const bh = canvasHeight - pad * 2;
+  ctx.fillStyle = "rgba(11, 12, 16, 0.86)";
   if (typeof ctx.roundRect === "function") {
     ctx.beginPath();
-    ctx.roundRect(pad, pad, canvasWidth - pad * 2, canvasHeight - pad * 2, 10);
+    ctx.roundRect(bx, by, bw, bh, radius);
     ctx.fill();
+    if (typeof ctx.stroke === "function") {
+      ctx.lineWidth = Math.max(1, 1.5 * BUBBLE_DPR);
+      ctx.strokeStyle = "rgba(217, 180, 90, 0.68)";
+      ctx.stroke();
+    }
   } else {
-    ctx.fillRect(pad, pad, canvasWidth - pad * 2, canvasHeight - pad * 2);
+    ctx.fillRect(bx, by, bw, bh);
+    if (typeof ctx.strokeRect === "function") {
+      ctx.lineWidth = Math.max(1, 1.5 * BUBBLE_DPR);
+      ctx.strokeStyle = "rgba(217, 180, 90, 0.68)";
+      ctx.strokeRect(bx, by, bw, bh);
+    }
   }
 
   // Canvas2d state resets on width/height assignment — re-set the font.
-  ctx.font = `bold ${BUBBLE_FONT_PX}px monospace`;
+  ctx.font = fontSpec;
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
-  ctx.lineWidth = Math.max(2, Math.round(BUBBLE_FONT_PX / 8));
+  ctx.lineWidth = Math.max(2, Math.round(fontPx / 7));
   ctx.strokeStyle = "#000000";
   ctx.lineJoin = "round";
   for (let i = 0; i < lines.length; i++) {
-    const cy = BUBBLE_PAD_Y + i * BUBBLE_LINE_HEIGHT_PX + BUBBLE_LINE_HEIGHT_PX / 2;
+    const cy = padY + i * lineH + lineH / 2;
     ctx.strokeText(lines[i], canvasWidth / 2, cy);
     ctx.fillStyle = colorHex;
     ctx.fillText(lines[i], canvasWidth / 2, cy);
@@ -147,7 +171,12 @@ function bakeBubble(text, colorHex) {
     toneMapped: false,
   });
   material.name = "speech-bubble";
-  return { texture, material, canvasWidth, canvasHeight };
+  return {
+    texture,
+    material,
+    canvasWidth: canvasWidth / BUBBLE_DPR,
+    canvasHeight: canvasHeight / BUBBLE_DPR,
+  };
 }
 
 // Detach + dispose a bubble sprite's GPU resources. Idempotent.

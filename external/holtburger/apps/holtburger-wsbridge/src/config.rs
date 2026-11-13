@@ -8,11 +8,22 @@
 //! targets, origins and how many connections; see `admission.rs`).
 
 use crate::admission::{self, Admission, AllowedTarget, OriginPolicy, TargetPolicy};
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use clap::Parser;
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
+
+/// Default maximum S2C UDP datagrams drained via `try_recv_from` and queued
+/// via `SinkExt::feed` before issuing a single `SinkExt::flush`.
+pub const DEFAULT_UDP_BATCH_MAX: usize = 32;
+
+/// Upper bound on `--udp-batch-max` so a single connection never monopolizes
+/// the executor task during a sustained packet flood.
+pub const MAX_UDP_BATCH_MAX: usize = 256;
+
+static CONFIGURED_UDP_BATCH_MAX: AtomicUsize = AtomicUsize::new(DEFAULT_UDP_BATCH_MAX);
 
 #[derive(Parser, Debug)]
 #[command(
@@ -80,6 +91,13 @@ pub struct Cli {
     /// 0 = no pings.
     #[arg(long, default_value_t = 1000)]
     pub ws_ping_ms: u64,
+
+    /// Maximum queued S2C UDP datagrams opportunistically drained via
+    /// `try_recv_from` and batched into a single WebSocket `flush()` (1..=256).
+    /// Cuts kernel/WebSocket syscall overhead by up to 32x during town bursts
+    /// while adding 0 us latency when no burst is queued.
+    #[arg(long, default_value_t = DEFAULT_UDP_BATCH_MAX)]
+    pub udp_batch_max: usize,
 }
 
 impl Cli {
@@ -122,12 +140,27 @@ impl Config {
             .listen
             .parse()
             .with_context(|| format!("invalid --listen value: {}", cli.listen))?;
+        if !(1..=MAX_UDP_BATCH_MAX).contains(&cli.udp_batch_max) {
+            return Err(anyhow!(
+                "invalid --udp-batch-max {}: must be in 1..={}",
+                cli.udp_batch_max,
+                MAX_UDP_BATCH_MAX
+            ));
+        }
+        if cli.udp_batch_max != DEFAULT_UDP_BATCH_MAX {
+            CONFIGURED_UDP_BATCH_MAX.store(cli.udp_batch_max, Ordering::Relaxed);
+        }
 
         Ok(Config {
             listen,
             default_world_port_offset: cli.default_world_port_offset,
             ws_ping_interval: (cli.ws_ping_ms > 0).then(|| Duration::from_millis(cli.ws_ping_ms)),
         })
+    }
+
+    /// Maximum S2C UDP datagrams batched per WebSocket flush (`--udp-batch-max`).
+    pub fn udp_batch_max(&self) -> usize {
+        CONFIGURED_UDP_BATCH_MAX.load(Ordering::Relaxed).max(1)
     }
 }
 
@@ -248,5 +281,19 @@ mod tests {
         let any = admission_of(&["--allow-origin", "*"]).unwrap();
         assert!(any.origins.any);
         assert!(admission_of(&["--max-conns", "-1"]).is_err());
+    }
+
+    #[test]
+    fn udp_batch_max_defaults_to_32_and_validates_bounds() {
+        CONFIGURED_UDP_BATCH_MAX.store(DEFAULT_UDP_BATCH_MAX, Ordering::Relaxed);
+        let cfg = parse(&[]).unwrap();
+        assert_eq!(cfg.udp_batch_max(), DEFAULT_UDP_BATCH_MAX);
+
+        let custom = parse(&["--udp-batch-max", "64"]).unwrap();
+        assert_eq!(custom.udp_batch_max(), 64);
+        CONFIGURED_UDP_BATCH_MAX.store(DEFAULT_UDP_BATCH_MAX, Ordering::Relaxed);
+
+        assert!(parse(&["--udp-batch-max", "0"]).is_err());
+        assert!(parse(&["--udp-batch-max", "257"]).is_err());
     }
 }

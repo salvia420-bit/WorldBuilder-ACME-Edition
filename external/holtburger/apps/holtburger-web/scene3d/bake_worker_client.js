@@ -112,6 +112,48 @@ export function _setBakeTimeoutForTest(fn) {
 // worker `init` message beside the budget (same per-instance value).
 export const DEFAULT_SHARD_MIN_AGE_S = 120; // mirrors shard_cache.rs DEFAULT_MIN_AGE_MS
 
+function _modelMeshPayloadBytes(p) {
+  return (
+    (p.positions?.byteLength || 0) +
+    (p.uvs?.byteLength || 0) +
+    (p.normals?.byteLength || 0) +
+    (p.surfaceIndices?.byteLength || 0) +
+    (p.sidesTypes?.byteLength || 0) +
+    (p.surfaces?.byteLength || 0) +
+    (p.bbox?.byteLength || 0)
+  );
+}
+
+function _snapshotModelMeshPayload(p) {
+  return {
+    positions: p.positions.slice(),
+    uvs: p.uvs ? p.uvs.slice() : new Float32Array(0),
+    normals: p.normals ? p.normals.slice() : new Float32Array(0),
+    surfaceIndices: p.surfaceIndices ? p.surfaceIndices.slice() : new Uint8Array(0),
+    sidesTypes: p.sidesTypes ? p.sidesTypes.slice() : new Uint8Array(0),
+    surfaces: p.surfaces ? p.surfaces.slice() : new Uint32Array(0),
+    bbox: p.bbox ? p.bbox.slice() : new Float32Array(6),
+    didDegrade: p.didDegrade >>> 0,
+    degradePartFrame: p.degradePartFrame ? Array.from(p.degradePartFrame) : null,
+    decodeMisses: (p.decodeMisses ?? 0) >>> 0,
+  };
+}
+
+function _cloneCachedModelMesh(snap) {
+  return reconstructModelMeshes([{
+    positions: snap.positions.slice(),
+    uvs: snap.uvs.slice(),
+    normals: snap.normals.slice(),
+    surfaceIndices: snap.surfaceIndices.slice(),
+    sidesTypes: snap.sidesTypes.slice(),
+    surfaces: snap.surfaces.slice(),
+    bbox: snap.bbox.slice(),
+    didDegrade: snap.didDegrade,
+    degradePartFrame: snap.degradePartFrame,
+    decodeMisses: snap.decodeMisses,
+  }])[0];
+}
+
 /** Parse one `shardMinAgeS` token → seconds (0 = no floor), or null (⇒ Rust default). */
 export function parseShardMinAgeS(raw) {
   if (raw === null || raw === undefined) return null;
@@ -122,14 +164,23 @@ export function parseShardMinAgeS(raw) {
   return Number.isFinite(n) && n >= 0 ? n : null;
 }
 
-export function applyShardBudget(g = globalThis) {
+export function applyShardBudget(g = globalThis, opts = undefined) {
   let mb = 0;
   let minAgeS = null;
   try {
     const params = new URLSearchParams(g.location?.search || "");
     const raw = params.get("shardBudgetMB");
-    const n = Number(raw);
-    if (raw !== null && Number.isFinite(n) && n > 0) mb = n;
+    if (raw === null || raw.trim() === "") {
+      if (opts && typeof opts.defaultMb === "number" && opts.defaultMb > 0) {
+        mb = opts.defaultMb;
+      }
+    } else {
+      const t = String(raw).trim().toLowerCase();
+      if (t !== "off" && t !== "false" && t !== "no") {
+        const n = Number(t);
+        if (Number.isFinite(n) && n > 0) mb = n;
+      }
+    }
     minAgeS = parseShardMinAgeS(params.get("shardMinAgeS"));
   } catch (_) {
     /* unbounded */
@@ -1354,6 +1405,16 @@ export class BakeWorkerClient {
       // which wasm instance happened to bake it. `undefined` (the default,
       // flag absent) → the worker calls `set_gfx_relief(false, 0, 0)`.
       gfxRelief: globalThis.__hbGfxRelief,
+      ...(() => {
+        try {
+          const b = typeof globalThis.__hbGetPackIndexBytes === "function"
+            ? globalThis.__hbGetPackIndexBytes()
+            : undefined;
+          return b instanceof Uint8Array && b.byteLength > 0 ? { packIndexBytes: b } : {};
+        } catch (_) {
+          return {};
+        }
+      })(),
     });
     return this._readyPromise;
   }
@@ -2180,15 +2241,69 @@ export class BakeWorkerClient {
     return this._fetchModelMeshesOnce(wasmExports, ids, urgent);
   }
 
-  /** One worker round-trip for model meshes (the pre-A16 body). */
+  /** One worker round-trip for model meshes (the pre-A16 body), with bounded
+   *  24 MiB / 192-model LRU cache on complete decodes. */
   async _fetchModelMeshesOnce(wasmExports, ids, urgent) {
     try {
+      const rawIds = Array.from(ids, (v) => v >>> 0);
+      if (rawIds.length === 0) return [];
+      const cache = this._modelMeshCache || (this._modelMeshCache = new Map());
+      if (this._modelMeshCacheBytes === undefined) this._modelMeshCacheBytes = 0;
+      const outSlots = new Array(rawIds.length);
+      const missIds = [];
+      const missIdx = [];
+      for (let i = 0; i < rawIds.length; i += 1) {
+        const id = rawIds[i];
+        const hit = cache.get(id);
+        if (hit) {
+          cache.delete(id);
+          cache.set(id, hit);
+          outSlots[i] = _cloneCachedModelMesh(hit.payload);
+        } else {
+          missIds.push(id);
+          missIdx.push(i);
+        }
+      }
+      if (missIds.length === 0) return outSlots;
       await this._ensureWorker();
       const res = await this._request("fetchModelMeshes", {
-        ids: Array.from(ids),
+        ids: missIds,
         urgent: urgent === true,
       });
-      return reconstructModelMeshes(res.payload);
+      const payloads = Array.isArray(res?.payload) ? res.payload : [];
+      const reconstructed = reconstructModelMeshes(payloads);
+      if (payloads.length !== missIds.length) {
+        if (missIds.length === rawIds.length) return reconstructed;
+        const partial = [];
+        let mPtr = 0;
+        for (let i = 0; i < rawIds.length; i += 1) {
+          if (outSlots[i] !== undefined) partial.push(outSlots[i]);
+          else if (mPtr < reconstructed.length) partial.push(reconstructed[mPtr++]);
+        }
+        return partial;
+      }
+      const MAX_BYTES = 24 * 1024 * 1024;
+      const MAX_ENTRIES = 192;
+      for (let k = 0; k < missIds.length; k += 1) {
+        const p = payloads[k];
+        outSlots[missIdx[k]] = reconstructed[k];
+        if (p && (p.decodeMisses ?? 0) === 0 && p.positions instanceof Float32Array) {
+          const bytes = _modelMeshPayloadBytes(p);
+          if (bytes > 0 && bytes <= 4 * 1024 * 1024 && !cache.has(missIds[k])) {
+            const snapPayload = _snapshotModelMeshPayload(p);
+            cache.set(missIds[k], { payload: snapPayload, bytes });
+            this._modelMeshCacheBytes += bytes;
+            while (cache.size > MAX_ENTRIES || this._modelMeshCacheBytes > MAX_BYTES) {
+              const oldestKey = cache.keys().next().value;
+              if (oldestKey === undefined) break;
+              const old = cache.get(oldestKey);
+              cache.delete(oldestKey);
+              this._modelMeshCacheBytes = Math.max(0, this._modelMeshCacheBytes - (old?.bytes || 0));
+            }
+          }
+        }
+      }
+      return outSlots;
     } catch (e) {
       this._noteMainThreadFallback("fetchModelMeshes", e);
       console.warn("[bake_worker_client] model-mesh worker failed; main-thread fallback:", e);

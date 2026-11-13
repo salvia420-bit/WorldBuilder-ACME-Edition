@@ -106,16 +106,39 @@ export function pageEdgeOf(tier) {
   return 1 << Math.max(PAGE_TIER_MIN, Math.min(PAGE_TIER_MAX, tier | 0));
 }
 
+/** Valid power-of-two array page dimension in [4, 2048] (supports <256 & rectangular pages). */
+function _isPotPageDim(n) {
+  const d = n | 0;
+  return d >= 4 && d <= 2048 && (d & (d - 1)) === 0;
+}
+
 /**
- * Page dims a member is RESAMPLED to. Returns `null` for the untextured
- * class (no page, no array, no resample).
- * @param {{hasTex?: boolean, texW?: number, texH?: number}} rec
+ * Page dims a member is allocated/resampled to.
+ * Supports BOTH:
+ *   - `pageDimsOf(w, h)` numeric power-of-two query (`512, 256`, `128, 128`, etc.)
+ *   - `pageDimsOf(rec)` axis-record query (`rec.texPotPage === true` keeps exact
+ *     rectangular / `<256` POT dims; legacy records without `texPotPage` keep the
+ *     T00 square tier `pageEdgeOf(pageTierOf(max(w, h)))`).
+ * Returns `null` for the untextured class (no page, no array, no resample).
+ * @param {{hasTex?: boolean, texW?: number, texH?: number, texPotPage?: boolean}|number} rec
+ * @param {number} [hArg]
  */
-export function pageDimsOf(rec) {
+export function pageDimsOf(rec, hArg) {
+  if (typeof rec === "number") {
+    const w = rec | 0;
+    const h = (hArg === undefined ? w : hArg) | 0;
+    if (w <= 0 || h <= 0) return null;
+    if (_isPotPageDim(w) && _isPotPageDim(h)) return { width: w, height: h };
+    const e = pageEdgeOf(pageTierOf(Math.max(w, h)));
+    return { width: e, height: e };
+  }
   if (rec && rec.hasTex === false) return null;
   const w = (rec && rec.texW) | 0;
   const h = (rec && rec.texH) | 0;
   if (!w && !h && !(rec && rec.hasTex)) return null;
+  if (rec && rec.texPotPage === true && _isPotPageDim(w) && _isPotPageDim(h)) {
+    return { width: w, height: h };
+  }
   const e = pageEdgeOf(pageTierOf(Math.max(w, h)));
   return { width: e, height: e };
 }
@@ -128,13 +151,21 @@ export function needsResample(rec) {
 }
 
 /**
- * `tex` token: `x{t}{f7|f8}` — page tier + compressed-format bit. The
- * untextured class is tier `0` (no page allocation at all).
+ * `tex` token: `x{log2W}{f7|f8}` for square POT pages (backward-compatible with
+ * `x{8..11}{f7|f8}` and extended to `<256` POT as `x{2..7}{f7|f8}`), or
+ * `x{log2W}x{log2H}{f7|f8}` for rectangular POT pages (`512x256` -> `x9x8f7`).
+ * The untextured class is tier `0` (no page allocation at all).
  */
 export function texKeyOf(rec) {
   const fmt = rec && rec.texCompressed ? "f7" : "f8";
   const dims = pageDimsOf(rec);
   if (!dims) return `x0${fmt}`;
+  if (dims.width === dims.height && _isPotPageDim(dims.width)) {
+    return `x${Math.round(Math.log2(dims.width))}${fmt}`;
+  }
+  if (_isPotPageDim(dims.width) && _isPotPageDim(dims.height)) {
+    return `x${Math.round(Math.log2(dims.width))}x${Math.round(Math.log2(dims.height))}${fmt}`;
+  }
   return `x${pageTierOf(Math.max(rec.texW | 0, rec.texH | 0))}${fmt}`;
 }
 
@@ -153,7 +184,7 @@ export function stateKeyOf(rec) {
   return `t${rec.transparent ? 1 : 0}a${at}w${dw}b${blend}r${wr}s${side}`;
 }
 
-/** `patch` token: `_patchSetCacheKey` verbatim + "#"+configKey for VFX sets. */
+/** `patch` token: `_patchSetCacheKey` verbatim + "#"+configKey for VFX sets + "|m<lum>" for luminous surfaces. */
 export function patchKeyOf(rec) {
   const u = rec.patch || {};
   let key = "hb"
@@ -162,6 +193,7 @@ export function patchKeyOf(rec) {
     + "|f" + (u.f ? 1 : 0) + "|s" + (u.s ? 1 : 0) + "|k" + (u.k ? 1 : 0)
     + "|v" + (u.v || "");
   if (u.v && rec.vfxConfigKey != null) key += "#" + rec.vfxConfigKey;
+  if (rec.luminosity > 0) key += "|m" + rec.luminosity;
   return key;
 }
 
@@ -182,7 +214,8 @@ export function classKeyOf(rec) {
  * the gate is `programClasses ≤ ~48` (T00 re-key §5/§6, measured 24/23).
  */
 export function programClassKeyOf(rec) {
-  return `${rec.domain}|${stateKeyOf(rec)}|${patchKeyOf(rec)}|${shadowKeyOf(rec)}`;
+  const progRec = rec && rec.luminosity > 0 ? { ...rec, luminosity: 1 } : rec;
+  return `${rec.domain}|${stateKeyOf(rec)}|${patchKeyOf(progRec)}|${shadowKeyOf(rec)}`;
 }
 
 /** passClass per D-07.3 (derived from renderState, never from a predicate). */
@@ -219,6 +252,7 @@ export function isPooledDomain(domain) {
  * @param {boolean} [opts.receiveShadow]
  * @param {{w:number,h:number,compressed?:boolean}|null} [opts.texRef]
  * @param {string|null} [opts.vfxConfigKey]
+ * @param {boolean} [opts.allowPotPages]
  */
 export function axisRecordOf(material, opts = {}) {
   const mat = material || {};
@@ -245,6 +279,10 @@ export function axisRecordOf(material, opts = {}) {
       texApprox = true;
     }
   }
+  const texPotPage = hasTex && _isPotPageDim(texW) && _isPotPageDim(texH)
+    && (texCompressed === true || opts.allowPotPages === true);
+  const rawLum = +(mu.__surfaceLuminosity ?? (mat.emissiveMap ? mat.emissiveIntensity : 0)) || 0;
+  const luminosity = rawLum > 0 ? (rawLum >= 0.6 ? 1 : 0.35) : 0;
   const b = (mat.blending === undefined || mat.blending === null) ? 1 : mat.blending;
   return {
     domain: opts.domain || "st",
@@ -262,8 +300,10 @@ export function axisRecordOf(material, opts = {}) {
       f: mu.__floorBiased ? 1 : 0, s: mu.__staticBiased ? 1 : 0, k: mu.__acBakedLight ? 1 : 0,
       v: typeof mu.__vfxSetKey === "string" ? mu.__vfxSetKey : "",
     },
-    vfxConfigKey: opts.vfxConfigKey ?? null,
+    vfxConfigKey: opts.vfxConfigKey ?? (typeof mu.__vfxConfigKey === "string" ? mu.__vfxConfigKey : null),
+    luminosity,
     texW, texH, texCompressed, hasTex, texApprox,
+    ...(texPotPage ? { texPotPage: true } : {}),
     castShadow: opts.castShadow === true,
     receiveShadow: opts.receiveShadow === true,
     surfaceDid: (mu.surfaceDid >>> 0) || 0,

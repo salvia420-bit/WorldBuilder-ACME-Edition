@@ -23,6 +23,7 @@
 
 import * as THREE from "three";
 import { sunDirFromHeadingPitch } from "./sun_direction.js";
+import { artSunPitchDeg, nightRampEnabled } from "./night_ramp.js";
 import {
   SunDirectionalLight,
   SkyLightProbe,
@@ -118,6 +119,18 @@ function finite3(v) {
 }
 function finiteNonZero3(v) {
   return finite3(v) && v.x * v.x + v.y * v.y + v.z * v.z > 1e-12;
+}
+
+/**
+ * Smooth twilight direct-sun fade across sunElevation +3° -> -4°.
+ * Pure math (no THREE / no imports) so eval-based unit tests stay safe.
+ */
+export function twilightDirectFade(elevDeg) {
+  if (!Number.isFinite(elevDeg)) return 1.0;
+  if (elevDeg >= 3.0) return 1.0;
+  if (elevDeg <= -4.0) return 0.0;
+  const t = (elevDeg - -4.0) / 7.0;
+  return t * t * (3.0 - 2.0 * t);
 }
 
 /**
@@ -280,11 +293,31 @@ export class AtmosphereLights {
     // put NaN into the sun's direction uniform and the probe's SH, which
     // blacks out every lit fragment. Keep the last good direction instead.
     if (!this._sunDirGood) this._sunDirGood = new THREE.Vector3(0, 1, 0);
-    sunDirFromHeadingPitch(state.dirHeading, state.dirPitch, this._sunDirScratch);
+    if (!this._probeDirScratch) this._probeDirScratch = new THREE.Vector3(0, 1, 0);
+    const rampOn = nightRampEnabled();
+    const rawPitch = +state.dirPitch;
+    const artPitch = (rampOn && Number.isFinite(rawPitch))
+      ? artSunPitchDeg(rawPitch)
+      : state.dirPitch;
+    const twilightFade = (rampOn && Number.isFinite(artPitch))
+      ? twilightDirectFade(artPitch)
+      : 1.0;
+    // Keep SunDirectionalLight slightly above the 0° transmittance LUT cliff
+    // while twilightFade smoothly attenuates intensity to 0 across +3° -> -4°.
+    const sunLookupPitch = (rampOn && Number.isFinite(artPitch))
+      ? Math.max(0.25, artPitch)
+      : state.dirPitch;
+    sunDirFromHeadingPitch(state.dirHeading, sunLookupPitch, this._sunDirScratch);
     if (finiteNonZero3(this._sunDirScratch)) this._sunDirGood.copy(this._sunDirScratch);
     else this._sunDirScratch.copy(this._sunDirGood);
     this.sun.sunDirection.copy(this._sunDirScratch);
-    this.skyProbe.sunDirection.copy(this._sunDirScratch);
+
+    sunDirFromHeadingPitch(state.dirHeading, artPitch, this._probeDirScratch);
+    if (finiteNonZero3(this._probeDirScratch)) {
+      this.skyProbe.sunDirection.copy(this._probeDirScratch);
+    } else {
+      this.skyProbe.sunDirection.copy(this._sunDirScratch);
+    }
 
     if (cameraWorldPos && finite3(cameraWorldPos)) {
       // sun.target.position anchors the parallel light's shadow
@@ -296,6 +329,11 @@ export class AtmosphereLights {
 
     this.sun.update();
     this.skyProbe.update();
+
+    // Keep getSunDirection() aligned with continuous twilight pitch for cloud/fog consumers.
+    if (finiteNonZero3(this._probeDirScratch)) {
+      this._sunDirScratch.copy(this._probeDirScratch);
+    }
 
     // === L1 (waves-2, 2026-05-29) — drive the probe intensity from AC's
     // diurnal ambient level with the 0.2 floor. Fail-soft: a missing /
@@ -333,7 +371,7 @@ export class AtmosphereLights {
         worldLightScale: s,
         indoorMute: !!this._indoorMute,
       });
-      this.sun.intensity = r.sunIntensity;
+      this.sun.intensity = r.sunIntensity * twilightFade;
       this.skyProbe.intensity = r.probeIntensity;
       // T3 (?ibl=on) — scene.environment now feeds standard materials their
       // indirect diffuse, so the probe must not double-count. Intensity 0,
@@ -353,7 +391,7 @@ export class AtmosphereLights {
       this._sunTintedColor.copy(this.sun.color);
       this._sunTintApplied = true;
     } else {
-      this.sun.intensity = this._indoorMute ? 0 : s;
+      this.sun.intensity = this._indoorMute ? 0 : s * twilightFade;
       this.skyProbe.intensity = Math.max(LSCAPE_LIGHT_MINIMUM, baseAmbient * s);
       // T3 (?ibl=on) — same handoff as the retail-sun branch above.
       this.lastProbeIntensity = this.skyProbe.intensity;

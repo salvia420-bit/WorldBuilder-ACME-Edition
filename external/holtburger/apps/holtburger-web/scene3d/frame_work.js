@@ -311,8 +311,14 @@ export class FrameWorkScheduler {
         maxItemMs: 0, queueDepth: 0, itemsThisFrame: 0,
       };
     }
+    this._w1RunPending = new Map(); // name -> item (coalescing)
     this._w6RunPending = new Map(); // name -> item (coalescing)
     this._w6LastChunkMs = new Map(); // name -> reported chunk ms
+    this._lastFrameStartMs = null;
+    this._emaFrameMs = 16.67;
+    this._dynamicCrossing = false;
+    this._resumeDeadlineMs = null;
+    this._resumeEpoch = 0;
     this.mode = "BOOT";
     this.lastBudgetMs = 0;
     this.teleports = 0;
@@ -378,6 +384,19 @@ export class FrameWorkScheduler {
       }
     }
     return purged;
+  }
+
+  /** W1 coalesced sync drain (residency/grid admission ahead of W2..W6). */
+  w1Run(name, fn) {
+    const existing = this._w1RunPending.get(name);
+    if (existing) {
+      existing.fn = fn;
+      return;
+    }
+    const item = { type: "run", name, fn, release: false, frameEnqueued: this._frameIdx };
+    this._w1RunPending.set(name, item);
+    this._queues.W1.push(item);
+    if (this._onPending) this._onPending();
   }
 
   /** W6 coalesced sync drain (latest fn per name wins). `opts.release` marks
@@ -458,8 +477,9 @@ export class FrameWorkScheduler {
    *  release limit under the TELEPORT reserve). Infinity outside a slot, so a
    *  caller that splits its work on this read is unchanged when unscheduled. */
   slotRemainingMs() {
-    if (!this._inSlot) return Infinity;
-    return this._limit - this._spentMs();
+    if (this._inSlot) return this._limit - this._spentMs();
+    if (this._resumeDeadlineMs !== null) return this._resumeDeadlineMs - this._now();
+    return Infinity;
   }
 
   /** Perf T4 — a long item that stops early because the slot ran out says so,
@@ -484,18 +504,30 @@ export class FrameWorkScheduler {
   }
 
   _resolveMode(frameStartMs, targetPeriodMs, t0) {
+    this._dynamicCrossing = false;
     if (!this._inWorldSeen) {
       if (this._isInWorld()) this._inWorldSeen = true;
       else return "BOOT";
     }
     if (this._emergency) return "EMERGENCY";
     if (this._teleportArmed) return "TELEPORT"; // one-shot; consumed by run()
-    if (
-      (this.cfg.crossing || (this.cfg.adaptiveCrossing && this._traversalCrossingFrames > 0))
-      && (this._queues.W1.length > 0 || this._queues.W3.length > 0 || this._queues.W6.length > 0)
-      && Number.isFinite(frameStartMs) && targetPeriodMs > 0
-      && (t0 - frameStartMs) < 0.8 * targetPeriodMs
-    ) return "CROSSING";
+    const hasStreamWork = this._queues.W1.length > 0 || this._queues.W3.length > 0 || this._queues.W6.length > 0;
+    if (hasStreamWork) {
+      if (
+        this.cfg.crossing
+        && Number.isFinite(frameStartMs) && targetPeriodMs > 0
+        && (t0 - frameStartMs) < 0.8 * targetPeriodMs
+      ) {
+        return "CROSSING";
+      }
+      if (!this.cfg.crossing && this.cfg.adaptiveCrossing && this._traversalCrossingFrames > 0) {
+        const effPeriod = Math.max(targetPeriodMs > 0 ? targetPeriodMs : 16.67, this._emaFrameMs);
+        if (!Number.isFinite(frameStartMs) || (t0 - frameStartMs) < 0.85 * effPeriod) {
+          this._dynamicCrossing = true;
+          return "CROSSING";
+        }
+      }
+    }
     return "NORMAL";
   }
 
@@ -503,7 +535,11 @@ export class FrameWorkScheduler {
     switch (mode) {
       case "BOOT": return this.cfg.bootBudgetMs;
       case "TELEPORT": return this.cfg.teleportBudgetMs;
-      case "CROSSING": return this.cfg.crossingBudgetMs;
+      case "CROSSING":
+        if (this._dynamicCrossing && this._emaFrameMs > 20) {
+          return Math.max(this.cfg.minBudgetMs, Math.min(this.cfg.crossingBudgetMs, Math.min(8.0, this._emaFrameMs * 0.45)));
+        }
+        return this.cfg.crossingBudgetMs;
       default: return this.cfg.budgetMs; // NORMAL + EMERGENCY (reweights, not a bigger pie)
     }
   }
@@ -512,17 +548,34 @@ export class FrameWorkScheduler {
     const row = this._rows[cls];
     if (item.type === "resume") {
       // Continuation runs in the microtask drain after run() returns; charge
-      // the grant at the family's last reported chunk cost.
+      // the grant at the family's last reported chunk cost, and bound the
+      // resumed microtask via `_resumeDeadlineMs` so `slotRemainingMs()` does
+      // not return `Infinity` inside the resumed async loop.
+      const grantMs = Number.isFinite(this._limit)
+        ? Math.max(0.5, this._limit - this._spentMs())
+        : Math.max(0.5, this.lastBudgetMs || this.cfg.budgetMs);
       const est = Math.min(
         EST_MAX_MS,
         Math.max(EST_MIN_MS, this._w6LastChunkMs.get(item.name) ?? EST_DEFAULT_MS),
       );
       this._estCharge += est;
+      const ep = ++this._resumeEpoch;
+      queueMicrotask(() => {
+        this._resumeDeadlineMs = this._now() + grantMs;
+      });
       try {
         item.resolve();
       } catch (_) { /* fail-soft */ }
+      queueMicrotask(() => {
+        queueMicrotask(() => {
+          if (this._resumeEpoch === ep) this._resumeDeadlineMs = null;
+        });
+      });
     } else {
-      if (item.type === "run") this._w6RunPending.delete(item.name);
+      if (item.type === "run") {
+        if (cls === "W1") this._w1RunPending.delete(item.name);
+        else this._w6RunPending.delete(item.name);
+      }
       this._bytes += item.bytes || 0;
       this._allocs += item.allocs || 0;
       const t = this._now();
@@ -557,6 +610,15 @@ export class FrameWorkScheduler {
     this._frameIdx += 1;
     const frameStartMs = opts.frameStartMs;
     const targetPeriodMs = opts.targetPeriodMs ?? 0;
+    if (Number.isFinite(frameStartMs)) {
+      if (this._lastFrameStartMs !== null) {
+        const dtFrame = frameStartMs - this._lastFrameStartMs;
+        if (dtFrame > 1 && dtFrame < 250) {
+          this._emaFrameMs = this._emaFrameMs * 0.8 + dtFrame * 0.2;
+        }
+      }
+      this._lastFrameStartMs = frameStartMs;
+    }
     const mode = this._resolveMode(frameStartMs, targetPeriodMs, t0);
     if (mode === "TELEPORT") this._teleportArmed = false; // one-shot consumed
     let budget = this._modeBudget(mode);
@@ -564,7 +626,8 @@ export class FrameWorkScheduler {
       this.cfg.shrink && (mode === "NORMAL" || mode === "CROSSING")
       && Number.isFinite(frameStartMs) && targetPeriodMs > 0
     ) {
-      const overage = Math.max(0, (t0 - frameStartMs) - targetPeriodMs);
+      const refPeriod = this._dynamicCrossing ? Math.max(targetPeriodMs, this._emaFrameMs) : targetPeriodMs;
+      const overage = Math.max(0, (t0 - frameStartMs) - refPeriod);
       let minFloor = this.cfg.minBudgetMs;
       // Adaptive floor during traversal or under stream starvation:
       // When stream classes (W3/W6) are accumulating deferrals or during active traversal,
@@ -785,6 +848,13 @@ export function frameWorkP4(opts) {
   _scheduler.run(opts || {});
   _publish();
   _armGuard();
+}
+
+/** W1 residency sync-drain adapter. Runs ahead of W2..W6. */
+export function frameWorkW1Run(name, fn) {
+  if (!_FW_ON) return false;
+  _scheduler.w1Run(name, fn);
+  return true;
 }
 
 /** W6 sync-drain adapter. Returns true when the scheduler owns the callback

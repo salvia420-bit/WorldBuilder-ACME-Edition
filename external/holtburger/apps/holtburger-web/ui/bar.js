@@ -92,9 +92,11 @@ const CSS = `
     left: 50%;
     transform: translateX(-50%);
     padding: 3px 8px;
-    background: rgba(10, 10, 14, 0.92);
-    border: 1px solid rgba(255, 255, 255, 0.18);
-    border-radius: 4px;
+    background: url("./data/ui-sprites/0x06004CC2.png") repeat, #0b0c10;
+    border: 1px solid var(--hbk-gold-dim, #8a7544);
+    box-shadow: inset 0 1px 0 rgba(243, 210, 122, 0.14), 0 3px 10px rgba(0, 0, 0, 0.82);
+    border-radius: 2px;
+    color: var(--hbk-text, #e8dfc8);
     font-size: 12px;
     white-space: nowrap;
     pointer-events: none;
@@ -115,7 +117,7 @@ const CSS = `
     width: 1px;
     height: 22px;
     margin: 0 4px;
-    background: rgba(255, 255, 255, 0.25);
+    background: rgba(217, 180, 90, 0.38);
     flex: 0 0 auto;
   }
   .hb-bar.hb-bar-vertical .hb-bar-sep {
@@ -135,32 +137,38 @@ const CSS = `
   .hb-panel {
     position: fixed;
     width: 280px;
-    background: rgba(28, 28, 32, 0.94);
-    color: #fff;
-    border: 1px solid rgba(255, 255, 255, 0.15);
-    border-radius: 8px;
-    font-family: ui-sans-serif, system-ui, -apple-system, sans-serif;
-    font-size: 13px;
+    background: url("./data/ui-sprites/0x06004CC2.png") repeat, var(--hbk-ink, #0b0c10);
+    color: var(--hbk-text, #e8dfc8);
+    border: 1px solid var(--hbk-gold-dim, #8a7544);
+    border-radius: 2px;
+    font-family: var(--hbk-font, var(--hb-font-serif, Georgia, serif));
+    font-size: 12px;
     z-index: 101;
-    box-shadow: 0 8px 28px rgba(0, 0, 0, 0.55);
+    box-shadow:
+      inset 0 0 0 1px #1c160b,
+      inset 0 1px 0 1px rgba(243, 210, 122, 0.12),
+      0 0 0 1px #000,
+      0 10px 28px rgba(0, 0, 0, 0.72);
     overflow: hidden;
-    backdrop-filter: blur(6px);
-    -webkit-backdrop-filter: blur(6px);
+    contain: layout style paint;
   }
   .hb-panel-title {
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 8px;
-    padding: 8px 10px;
-    background: rgba(255, 255, 255, 0.06);
-    border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+    padding: 6px 10px;
+    background: linear-gradient(180deg, rgba(74, 60, 30, 0.55) 0%, rgba(21, 18, 12, 0.85) 100%);
+    border-bottom: 1px solid var(--hbk-gold-dim, #8a7544);
+    color: var(--hbk-gold-bright, #f3d27a);
+    text-shadow: 0 1px 0 #000;
     cursor: move;
     user-select: none;
   }
   .hb-panel-title-text {
     font-weight: 600;
     font-size: 13px;
+    letter-spacing: 0.03em;
   }
   .hb-panel-close {
     width: 22px;
@@ -168,10 +176,10 @@ const CSS = `
     display: flex;
     align-items: center;
     justify-content: center;
-    background: transparent;
-    border: 1px solid transparent;
-    border-radius: 4px;
-    color: rgba(255, 255, 255, 0.7);
+    background: rgba(0, 0, 0, 0.45);
+    border: 1px solid var(--hbk-gold-deep, #4e3f1f);
+    border-radius: 2px;
+    color: var(--hbk-gold, #d9b45a);
     cursor: pointer;
     font-size: 16px;
     line-height: 1;
@@ -179,8 +187,9 @@ const CSS = `
     font-family: inherit;
   }
   .hb-panel-close:hover {
-    background: rgba(255, 255, 255, 0.12);
-    color: #fff;
+    background: rgba(243, 210, 122, 0.12);
+    border-color: var(--hbk-gold-dim, #8a7544);
+    color: var(--hbk-gold-bright, #f3d27a);
   }
   .hb-panel-body {
     padding: 12px;
@@ -189,7 +198,7 @@ const CSS = `
   .hb-panel-body .hb-panel-note {
     margin-top: 8px;
     font-size: 11px;
-    color: rgba(255, 255, 255, 0.55);
+    color: var(--hbk-text-faint, #77705f);
     font-style: italic;
   }
   .hb-settings {
@@ -197,59 +206,65 @@ const CSS = `
     width: 240px;
     max-height: 80vh;
     overflow-y: auto;
-    background: rgba(28, 28, 32, 0.96);
-    color: #fff;
-    border: 1px solid rgba(255, 255, 255, 0.18);
-    border-radius: 8px;
-    font-family: ui-sans-serif, system-ui, -apple-system, sans-serif;
+    background: url("./data/ui-sprites/0x06004CC2.png") repeat, var(--hbk-ink, #0b0c10);
+    color: var(--hbk-text, #e8dfc8);
+    border: 1px solid var(--hbk-gold-dim, #8a7544);
+    border-radius: 2px;
+    font-family: var(--hbk-font, var(--hb-font-serif, Georgia, serif));
     font-size: 12px;
     z-index: 102;
-    box-shadow: 0 8px 28px rgba(0, 0, 0, 0.6);
+    box-shadow:
+      inset 0 0 0 1px #1c160b,
+      inset 0 1px 0 1px rgba(243, 210, 122, 0.12),
+      0 0 0 1px #000,
+      0 10px 28px rgba(0, 0, 0, 0.75);
     padding: 10px 12px;
-    backdrop-filter: blur(6px);
-    -webkit-backdrop-filter: blur(6px);
+    contain: layout style paint;
   }
   .hb-settings.hb-settings-wide { width: 320px; }
   .hb-settings-tabs {
     display: flex;
-    gap: 4px;
+    gap: 3px;
     margin: -2px -2px 10px -2px;
-    padding-bottom: 8px;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+    padding-bottom: 6px;
+    border-bottom: 1px solid var(--hbk-gold-dim, #8a7544);
   }
   .hb-settings-tab {
     flex: 1 1 0;
-    padding: 5px 8px;
-    background: rgba(255, 255, 255, 0.04);
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    border-radius: 4px;
-    color: rgba(255, 255, 255, 0.7);
+    padding: 4px 8px;
+    background: linear-gradient(180deg, #2a2418 0%, #15120c 100%);
+    border: 1px solid #3a2f18;
+    border-radius: 2px;
+    color: var(--hbk-text-dim, #a8a090);
     cursor: pointer;
     font-family: inherit;
-    font-size: 12px;
+    font-size: 11px;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
   }
   .hb-settings-tab:hover {
-    background: rgba(255, 255, 255, 0.1);
-    color: #fff;
+    background: linear-gradient(180deg, #3a3020 0%, #1b170e 100%);
+    color: var(--hbk-text, #e8dfc8);
   }
   .hb-settings-tab.active {
-    background: rgba(120, 170, 255, 0.22);
-    border-color: rgba(120, 170, 255, 0.55);
-    color: #fff;
+    background: linear-gradient(180deg, #4a3c1e 0%, #1d180d 100%);
+    border-color: var(--hbk-gold-dim, #8a7544);
+    color: var(--hbk-gold-bright, #f3d27a);
+    box-shadow: inset 0 1px 0 rgba(243, 210, 122, 0.22);
   }
   .hb-graphics-section {
     margin: 12px 0 6px 0;
     font-size: 11px;
     text-transform: uppercase;
     letter-spacing: 0.08em;
-    color: rgba(255, 255, 255, 0.55);
-    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    color: var(--hbk-gold, #d9b45a);
+    border-bottom: 1px solid var(--hbk-gold-deep, #4e3f1f);
     padding-bottom: 3px;
   }
   .hb-graphics-section:first-child { margin-top: 2px; }
   .hb-graphics-row label {
     flex: 1 1 auto;
-    color: rgba(255, 255, 255, 0.85);
+    color: var(--hbk-text, #e8dfc8);
     font-size: 12px;
   }
   .hb-graphics-row input[type="checkbox"] {
@@ -257,25 +272,26 @@ const CSS = `
     width: 14px;
     height: 14px;
     margin: 0;
-    accent-color: rgba(120, 170, 255, 0.85);
+    accent-color: var(--hbk-gold, #d9b45a);
   }
   .hb-graphics-row input[type="range"] {
     flex: 1 1 90px;
     min-width: 0;
+    accent-color: var(--hbk-gold, #d9b45a);
   }
   .hb-graphics-select {
     flex: 0 0 auto;
-    background: rgba(255, 255, 255, 0.06);
-    color: #fff;
-    border: 1px solid rgba(255, 255, 255, 0.16);
-    border-radius: 4px;
+    background: rgba(0, 0, 0, 0.6);
+    color: var(--hbk-text, #e8dfc8);
+    border: 1px solid var(--hbk-gold-deep, #4e3f1f);
+    border-radius: 2px;
     font-size: 12px;
     padding: 2px 4px;
     font-family: inherit;
   }
   .hb-graphics-tag {
     flex: 0 0 auto;
-    color: rgba(120, 200, 255, 0.7);
+    color: var(--hbk-gold-bright, #f3d27a);
     font-size: 10px;
     margin-left: 4px;
   }
@@ -327,22 +343,24 @@ const CSS = `
   }
   .hb-settings-btn {
     flex: 1 1 0;
-    padding: 5px 8px;
-    background: rgba(255, 255, 255, 0.08);
-    border: 1px solid rgba(255, 255, 255, 0.16);
-    border-radius: 4px;
-    color: #fff;
+    padding: 4px 8px;
+    background: linear-gradient(180deg, #2a2418 0%, #15120c 100%);
+    border: 1px solid var(--hbk-gold-deep, #4e3f1f);
+    border-radius: 2px;
+    color: var(--hbk-text, #e8dfc8);
     cursor: pointer;
     font-family: inherit;
     font-size: 12px;
   }
   .hb-settings-btn:hover {
-    background: rgba(255, 255, 255, 0.16);
-    border-color: rgba(255, 255, 255, 0.3);
+    background: linear-gradient(180deg, #3a3020 0%, #1b170e 100%);
+    border-color: var(--hbk-gold-dim, #8a7544);
+    color: var(--hbk-gold-bright, #f3d27a);
   }
   .hb-settings-btn.active {
-    background: rgba(120, 170, 255, 0.25);
-    border-color: rgba(120, 170, 255, 0.6);
+    background: linear-gradient(180deg, #4a3c1e 0%, #1d180d 100%);
+    border-color: var(--hbk-gold, #d9b45a);
+    color: var(--hbk-gold-bright, #f3d27a);
   }
   .hb-pill {
     position: fixed;
@@ -508,6 +526,8 @@ function attachDrag(panel, handle) {
   let startY = 0;
   let originLeft = 0;
   let originTop = 0;
+  let dragW = 280;
+  let dragH = 140;
 
   function onDown(ev) {
     if (ev.button !== 0) return;
@@ -516,6 +536,8 @@ function attachDrag(panel, handle) {
     const rect = panel.getBoundingClientRect();
     originLeft = rect.left;
     originTop = rect.top;
+    dragW = rect.width || 280;
+    dragH = rect.height || 140;
     startX = ev.clientX;
     startY = ev.clientY;
     window.addEventListener("mousemove", onMove);
@@ -528,9 +550,8 @@ function attachDrag(panel, handle) {
     const dy = ev.clientY - startY;
     let nl = originLeft + dx;
     let nt = originTop + dy;
-    const rect = panel.getBoundingClientRect();
-    const maxL = window.innerWidth - rect.width;
-    const maxT = window.innerHeight - rect.height;
+    const maxL = window.innerWidth - dragW;
+    const maxT = window.innerHeight - dragH;
     if (nl < 0) nl = 0;
     if (nt < 0) nt = 0;
     if (nl > maxL) nl = maxL;
@@ -1041,6 +1062,10 @@ export function mountBar({ client, root, slots: slotsOpt }) {
   let dragStartY = 0;
   let dragOriginLeft = 0;
   let dragOriginTop = 0;
+  let dragBarW = 0;
+  let dragBarH = 0;
+  let lastDragLeft = 0;
+  let lastDragTop = 0;
 
   function onBarMouseDown(ev) {
     if (ev.button !== 0) return;
@@ -1051,6 +1076,10 @@ export function mountBar({ client, root, slots: slotsOpt }) {
     // Convert current (possibly bottom/transform-anchored) position into explicit left/top.
     dragOriginLeft = rect.left;
     dragOriginTop = rect.top;
+    dragBarW = rect.width || cachedBounds.width;
+    dragBarH = rect.height || cachedBounds.height;
+    lastDragLeft = dragOriginLeft;
+    lastDragTop = dragOriginTop;
     bar.style.transform = "none";
     bar.style.bottom = "auto";
     bar.style.left = `${dragOriginLeft}px`;
@@ -1070,13 +1099,14 @@ export function mountBar({ client, root, slots: slotsOpt }) {
     const dx = ev.clientX - dragStartX;
     const dy = ev.clientY - dragStartY;
     if (!barDragMoved && Math.hypot(dx, dy) > 2) barDragMoved = true;
-    const rect = bar.getBoundingClientRect();
     const c = clampToViewport(
       dragOriginLeft + dx,
       dragOriginTop + dy,
-      rect.width,
-      rect.height,
+      dragBarW,
+      dragBarH,
     );
+    lastDragLeft = c.left;
+    lastDragTop = c.top;
     bar.style.left = `${c.left}px`;
     bar.style.top = `${c.top}px`;
   }
@@ -1088,9 +1118,8 @@ export function mountBar({ client, root, slots: slotsOpt }) {
     window.removeEventListener("mousemove", onBarMouseMove);
     window.removeEventListener("mouseup", onBarMouseUp);
     if (barDragMoved) {
-      const rect = bar.getBoundingClientRect();
-      state.left = Math.round(rect.left);
-      state.top = Math.round(rect.top);
+      state.left = Math.round(lastDragLeft);
+      state.top = Math.round(lastDragTop);
       persist();
     }
   }

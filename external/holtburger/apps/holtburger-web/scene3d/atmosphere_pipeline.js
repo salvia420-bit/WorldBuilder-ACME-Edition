@@ -879,7 +879,12 @@ function punchPhaseOpaqueSort(a, b) {
   if (a.groupOrder !== b.groupOrder) return a.groupOrder - b.groupOrder;
   if (a.renderOrder !== b.renderOrder) return a.renderOrder - b.renderOrder;
   if (depthBandsLive && a.__hbBand !== b.__hbBand) return a.__hbBand - b.__hbBand;
-  if (a.material.id !== b.material.id) return a.material.id - b.material.id;
+  if (a.material.id !== b.material.id) {
+    const progA = a.program !== undefined ? a.program.id : Number.MAX_SAFE_INTEGER;
+    const progB = b.program !== undefined ? b.program.id : Number.MAX_SAFE_INTEGER;
+    if (progA !== progB) return progA - progB;
+    return a.material.id - b.material.id;
+  }
   if (a.materialVariant !== b.materialVariant) return a.materialVariant - b.materialVariant;
   if (a.z !== b.z) return a.z - b.z;
   return a.id - b.id;
@@ -1302,29 +1307,25 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
   // renderer.getDrawingBufferSize above); a CSS-sized depth texture mismatches
   // whenever pixelRatio ≠ 1 (HiDPI or an explicit ?renderScale at boot) → an
   // incomplete FBO. See the setSize() note for the full failure mode.
-  // `?stableDepthShare=on` (2026-08-01, ship-OFF pending the P6 fog
-  // adjudication): skip the bespoke attachment below and hand the depth
-  // consumers (cloud overlay, ground fog) the composer's OWN
-  // "EffectComposer.StableDepth" texture instead. pmndrs allocates that
-  // stable full-res target ANYWAY the moment any pass needsDepthTexture
-  // (postprocessing build/index.js:1047 createDepthTexture, :1201 addPass —
-  // AerialPerspective needs depth, so it always exists here) and blits depth
-  // into it each frame — so the bespoke texture is a SECOND full-res depth
-  // allocation (~8 MB at 1080p×DPR) holding the same bits. Sharing also moves
-  // the ground-fog read onto the stable COPY instead of the LIVE attachment
-  // of the FBO being rendered — removing the sample-while-attached feedback
-  // hazard the P6 swamp-fog adjudication (HANDOFF-1070-vistest §D) judges;
-  // run that adjudication with this flag in both positions. Off =
-  // byte-identical legacy. Stencil composes: createDepthTexture clones the
-  // packed DepthStencil format from inputBuffer.stencilBuffer (the ctor opt
-  // above), and composer.setSize resizes depthRenderTarget itself (:1325).
+  // `?stableDepthShare` (DEFAULT ON, `=off` escape): skip the bespoke
+  // attachment below and hand the depth consumers (cloud overlay, ground fog)
+  // the composer's OWN "EffectComposer.StableDepth" texture instead. pmndrs
+  // allocates that stable full-res target ANYWAY the moment any pass
+  // needsDepthTexture (AerialPerspective needs depth, so it always exists here)
+  // and blits depth into it each frame — so the bespoke texture was a SECOND
+  // full-res depth allocation (~8 MB at 1080p×DPR) holding the same bits.
+  // Sharing also moves the ground-fog read onto the stable COPY instead of the
+  // LIVE attachment of the FBO being rendered. `?stableDepthShare=off` restores
+  // the bespoke DepthTexture. Stencil composes: createDepthTexture clones the
+  // packed DepthStencil format from inputBuffer.stencilBuffer, and
+  // composer.setSize resizes depthRenderTarget itself.
   const stableDepthShare = (() => {
     try {
-      if (typeof globalThis !== "undefined" && globalThis.location && globalThis.location.search) {
-        return new URLSearchParams(globalThis.location.search).get("stableDepthShare") === "on";
-      }
-    } catch (_) {}
-    return false;
+      const v = (new URLSearchParams(globalThis.location?.search || "").get("stableDepthShare") || "").toLowerCase();
+      return !(v === "off" || v === "0" || v === "false" || v === "no");
+    } catch (_) {
+      return true;
+    }
   })();
   let sceneDepthTexture = null;
   if (!stableDepthShare) {
@@ -1537,8 +1538,19 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
         stencil: _punchStencil,
       });
       composer.addPass(portalPunchPass);
+      setDrawSortPhase(renderer, _phaseOf, punchPhaseOpaqueSort);
     }
+  } else {
+    setDrawSortPhase(renderer, _phaseOf, punchPhaseOpaqueSort);
   }
+  // Compose coarse front-to-back octave depth bands (`depthBandSort`) with
+  // `punchPhase` + `program.id` + `material.id` under reversed-Z when no
+  // explicit `?depthBandSort` URL parameter was supplied.
+  try {
+    if (new URLSearchParams(globalThis.location?.search || "").get("depthBandSort") == null) {
+      globalThis.window?.__depthBandSort?.set?.(1);
+    }
+  } catch (_) {}
 
   // ?indoorDepthSplit (2026-08-04). Published once per tick by cells.js
   // `tickCellVisibility3D` via `setIndoorSplitArmed`; read by
@@ -1749,13 +1761,18 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
   // bloomed into an orange wash over the whole lower frame at dusk and dawn
   // (live A/B at 21:20 game time: 0.55 / 1.1 keeps a crisp disc + glow, the
   // ground and cloud detail, and still lets fires / lanterns / spells bloom).
+  // Pre-exposure HDR Bloom calibration (exposure = 5.0, Neutral tone curve):
+  // threshold 1.65 + smoothing 0.28 + intensity 0.35 prevents sunlit white
+  // stone/sand (Yaraq, Sanamar) from blooming hazily while genuine HDR sources
+  // (portals, lifestones, spell projectiles, braziers, specular sun glints,
+  // FX_GLOW_LAYER weapons) retain a clean ethereal halo.
   const bloom = bloomOpt
     ? new BloomEffect({
-        intensity: 0.55,
-        luminanceThreshold: 1.1,
-        luminanceSmoothing: 0.1,
+        intensity: 0.35,
+        luminanceThreshold: 1.65,
+        luminanceSmoothing: 0.28,
         mipmapBlur: true,
-        radius: 0.85,
+        radius: 0.82,
       })
     : null;
   if (bloom) {
@@ -1814,10 +1831,26 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
   // (vfx/fx_glow_effect.js): each additive FX bucket's own `glow` share, drawn
   // half-res, mip-blurred and ADDED ahead of lens flare / bloom / tone mapping.
   // It occludes against the composer's scene depth (sampled, never attached).
+  const fxGlowMidEnable = (() => {
+    if (typeof opts?.fxGlow === "boolean") return undefined;
+    try {
+      const sp = new URLSearchParams(globalThis.location?.search || "");
+      const fg = (sp.get("fxGlow") || "").toLowerCase();
+      if (fg === "off" || fg === "0" || fg === "false" || fg === "no") return false;
+      const q = (sp.get("quality") || "").toLowerCase();
+      const preset = q || (globalThis.window?.liveScene3d?.quality?.preset || "");
+      if (preset === "mid") return true;
+    } catch (_) {}
+    return undefined;
+  })();
   const fxGlow = createFxGlowEffect({
     camera,
     depthSource: () => composer.depthTexture,
-    ...(typeof opts?.fxGlow === "boolean" ? { enabled: opts.fxGlow } : {}),
+    ...(typeof opts?.fxGlow === "boolean"
+      ? { enabled: opts.fxGlow }
+      : typeof fxGlowMidEnable === "boolean"
+        ? { enabled: fxGlowMidEnable }
+        : {}),
   });
   // Tier-2 `?fxDecals` (2026-10-10) — ground marks (scorch, frost, acid, the
   // portal / lifestone light rings) projected onto the scene from its depth
@@ -2409,9 +2442,9 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
       // the sky's sun (it was (0,0,0); see aerialSunEnabled). Two vec3 compares.
       if (aerialSunOn && atmosphereSky) syncAerialSun(aerialPerspective, atmosphereSky);
       if (mainCamera?.position) {
-        const cx = mainCamera.position.x, cz = mainCamera.position.z;
+        const cx = mainCamera.position.x, cy = mainCamera.position.y, cz = mainCamera.position.z;
         if (atmosphereSky?.syncWorldECEF) {
-          atmosphereSky.syncWorldECEF(cx, cz);
+          atmosphereSky.syncWorldECEF(cx, cz, cy);
         }
         if (aerialPerspective?.worldToECEFMatrix && atmosphereSky?.skyMaterial?.worldToECEFMatrix) {
           aerialPerspective.worldToECEFMatrix.copy(atmosphereSky.skyMaterial.worldToECEFMatrix);
@@ -2449,6 +2482,22 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
 
       const skyVisible = !!skyDome && !skyBlocked;
       if (skyCapturePass) skyCapturePass.enabled = skyVisible;
+      // Disable AerialPerspective sky-haze injection on sealed underground
+      // layer-1 indoor cells (`isIndoor && skyDome._lastSkyBlocked`) so dungeon
+      // floors/walls never pick up daytime blue sky inscatter. Open-doorway
+      // interiors (`_lastSkyBlocked === false`) keep aerial perspective intact.
+      const sealedUnderground = isIndoor && !!(skyDome?._lastSkyBlocked ?? false);
+      if (aerialPerspective?.blendMode?.opacity) {
+        if (sealedUnderground) {
+          if (aerialPerspective.__savedDungeonOpacity === undefined) {
+            aerialPerspective.__savedDungeonOpacity = aerialPerspective.blendMode.opacity.value;
+          }
+          aerialPerspective.blendMode.opacity.value = 0;
+        } else if (aerialPerspective.__savedDungeonOpacity !== undefined) {
+          aerialPerspective.blendMode.opacity.value = aerialPerspective.__savedDungeonOpacity;
+          aerialPerspective.__savedDungeonOpacity = undefined;
+        }
+      }
       // DEPTH-CONSUMER GUARD. The armed split deliberately leaves TERRAIN at
       // far depth (its depth is wiped and only layer-1 geometry rewrites it),
       // and the horizon dissolve blends any pixel past HORIZON_DISSOLVE_END_M

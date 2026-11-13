@@ -606,6 +606,36 @@ export class AdaptiveRenderScaleController {
     }
     if (this._settle) this._noteChangeForSettle(scale, t, dir);
     this._lastChange = { dir, from: before, to: scale, t };
+    this._syncCloudResolutionScale(scale);
+  }
+
+  /**
+   * Couple volumetric cloud internal resolutionScale to sustained GPU-bound
+   * render-scale changes when `?cloudResScale` was not explicitly pinned and
+   * high-altitude full-march (`_hbFull`) is not owning resolutionScale.
+   * Under heavy GPU pressure (`scale < 0.82 * maxScale`) steps cloud march
+   * resolution to 0.75 (~44% fewer cloud march/upsample pixels), restoring 1.0
+   * with hysteresis once renderScale recovers (`>= 0.88 * maxScale`).
+   */
+  _syncCloudResolutionScale(scale) {
+    try {
+      if (typeof window === "undefined") return;
+      const ps = window.location?.search ? new URLSearchParams(window.location.search) : null;
+      if (ps && ps.get("cloudResScale") != null) return;
+      const vol = window.liveScene3d?.cloudOverlay?.volume;
+      const eff = vol?.effect;
+      if (!eff || vol._hbFull) return;
+      const ratio = this._maxScale > 0 ? scale / this._maxScale : 1;
+      if (ratio < 0.82 && eff.resolutionScale > 0.75) {
+        this._cloudBaseResScale = eff.resolutionScale;
+        eff.resolutionScale = 0.75;
+      } else if (ratio >= 0.88 && this._cloudBaseResScale != null) {
+        eff.resolutionScale = this._cloudBaseResScale;
+        this._cloudBaseResScale = null;
+      }
+    } catch (_) {
+      /* never let cloud coupling interfere with render-scale adjustments */
+    }
   }
 
   /** A DOWN right after an UP means that raise was not sustainable: cap

@@ -478,6 +478,7 @@ export class AnimationCache {
         // setupId → string[] (computed on first bake; reused for every
         // future stance/command on the same setup).
         this.partNames = new Map();
+        this.maxPartNames = Math.max(512, this.maxEntries * 2);
         // F.40 (2026-05-14) — set of setupIds whose wasm-side `shards`
         // cache has been pre-warmed via `getBatch`. The batched
         // wasm call walks Setup → MotionTable → default Animations
@@ -492,12 +493,33 @@ export class AnimationCache {
         // `(setupId, mt, motion, stance)` tuples have those, and
         // those land via `get(...)` after motion arrives on the wire.
         this.prewarmedSetupIds = new Set();
+        this.maxPrewarmedSetups = Math.max(1024, this.maxEntries * 4);
         // In-flight batch promise dedup. Concurrent `getBatch` calls
         // for overlapping setup sets share a single
         // `fetchEntityAnimationKeyframesBatch` round-trip via a small
         // request-coalescing window keyed on the sorted union of
         // requested setupIds.
         this._batchInFlight = new Map();
+    }
+
+    _setPartNamesLru(setupId, names) {
+        if (this.partNames.has(setupId)) this.partNames.delete(setupId);
+        this.partNames.set(setupId, names);
+        while (this.partNames.size > this.maxPartNames) {
+            const oldest = this.partNames.keys().next().value;
+            if (oldest === undefined) break;
+            this.partNames.delete(oldest);
+        }
+    }
+
+    _addPrewarmedSetupLru(id) {
+        if (this.prewarmedSetupIds.has(id)) this.prewarmedSetupIds.delete(id);
+        this.prewarmedSetupIds.add(id);
+        while (this.prewarmedSetupIds.size > this.maxPrewarmedSetups) {
+            const oldest = this.prewarmedSetupIds.values().next().value;
+            if (oldest === undefined) break;
+            this.prewarmedSetupIds.delete(oldest);
+        }
     }
 
     /**
@@ -670,8 +692,8 @@ export class AnimationCache {
             let partNames = this.partNames.get(setupId);
             if (!partNames || partNames.length !== partCount) {
                 partNames = Array.from({ length: partCount }, (_, i) => `part_${i}`);
-                this.partNames.set(setupId, partNames);
             }
+            this._setPartNamesLru(setupId, partNames);
 
             // Drain the rest-pose meshes here so the wasm-side
             // EntityAnimationData can be GC'd. JS holds the Float32
@@ -1078,8 +1100,8 @@ export class AnimationCache {
             let partNames = this.partNames.get(setupId);
             if (!partNames || partNames.length !== partCount) {
                 partNames = Array.from({ length: partCount }, (_, i) => `part_${i}`);
-                this.partNames.set(setupId, partNames);
             }
+            this._setPartNamesLru(setupId, partNames);
             const motionFields =
                 AnimationCache._motionFields(animData, partCount, numFrames, framerate, partNames, key);
             // Everything above is a copy (the getters clone, the hooks are
@@ -1262,7 +1284,7 @@ export class AnimationCache {
                 // for the same setupIds skip rather than re-fire.
                 // On the (rare) error path we rollback below.
                 for (const id of fresh) {
-                    this.prewarmedSetupIds.add(id);
+                    this._addPrewarmedSetupLru(id);
                 }
                 let batch;
                 try {

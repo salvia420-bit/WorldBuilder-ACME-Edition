@@ -51,3 +51,17 @@ export function atmosphereLutPlan({ mode = atmosphereLutMode(), low = undefined 
   return { preferLoad: true, timeoutMs: ATMOSPHERE_LOAD_TIMEOUT_MS, reason: 'bandwidth:high' };
 }
 
+/**
+ * Startup convergence plan: in `auto` mode, boot immediately with GPU-baked
+ * LUTs (zero 7.4 MB EXR network wait before Frame-1 sky + composer) and upgrade
+ * to high-precision EXR LUTs asynchronously in the background on high-bandwidth
+ * links. Explicit `?atmosphereLut=load` or `?atmosphereLut=bake` keeps single-path.
+ */
+export function atmosphereLutStartupPlan({ mode = atmosphereLutMode(), low = undefined } = {}) {
+  if (mode === 'load') return { useBakedInitial: false, upgradeExrInBackground: false, mode: 'load' };
+  if (mode === 'bake') return { useBakedInitial: true, upgradeExrInBackground: false, mode: 'bake' };
+  const isLow = low === undefined ? lowBandwidth() : !!low;
+  return { useBakedInitial: true, upgradeExrInBackground: !isLow, mode: 'auto' };
+}
+
+

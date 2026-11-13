@@ -538,6 +538,21 @@ export function sessionPinProblems({ url, pins, dayGroup = null, inner = null, p
  * Pure: every file access goes through `io` = {realpath, lstat -> {isSymlink, isDir} | null, readText,
  * readdir -> names}. Returns {ok, problems[], found[{flag, file}]}.
  */
+/**
+ * Compile a `b0Snapshot.requiredReaders` pattern. A reader pinned at R3-0 as
+ * `rustFlag("<name>", false)` still proves the reader is present after the flag
+ * flips to default-ON (`rustFlag("<name>", true)`), while still failing on any
+ * pre-reader tree.
+ */
+export function readerPatternRegExp(p) {
+  return new RegExp(
+    String(p).replace(
+      /rustFlag\\\(\s*"([A-Za-z0-9_]+)",\s*false\s*\\\)/g,
+      'rustFlag\\("$1", (?:true|false)\\)',
+    ),
+  );
+}
+
 export function snapshotReaderProblems(root, spec, io, { liveRoot = null } = {}) {
   const problems = [], found = [];
   const reqs = (spec && Array.isArray(spec.requiredReaders)) ? spec.requiredReaders : [];
@@ -562,7 +577,7 @@ export function snapshotReaderProblems(root, spec, io, { liveRoot = null } = {})
     }
     return null;
   };
-  const matches = (text, pats) => pats.every((p) => new RegExp(p).test(text));
+  const matches = (text, pats) => pats.every((p) => readerPatternRegExp(p).test(text));
   const walk = (rel, out, depth = 0) => {
     if (depth > 8) return;
     for (const name of io.readdir(`${base}/${rel}`).sort()) {

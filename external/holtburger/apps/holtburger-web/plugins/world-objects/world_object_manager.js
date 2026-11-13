@@ -99,7 +99,9 @@ export class WorldObjectManager extends EventTarget {
   attachClient(client) {
     this.client = client;
     if (client) {
-      client.worldObjects = this;
+      if (Object.isExtensible(client) || 'worldObjects' in client) {
+        client.worldObjects = this;
+      }
       this._wireClientEvents(client);
     }
   }

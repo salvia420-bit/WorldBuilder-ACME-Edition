@@ -272,25 +272,10 @@ export class CloudOverlay {
     this.overlayMaterial = new THREE.ShaderMaterial({
       uniforms: {
         cloudTex: { value: null },
-        // 2026-05-16 cloud z-order fix — when present, the fragment
-        // shader samples this DepthTexture (the composer's world
-        // depth) and discards cloud fragments where world geometry
-        // beats the sky-distance threshold. Set via
-        // `setSceneDepthTexture(...)`; null leaves the shader on the
-        // legacy "no-depth-test" path (used in the direct-render path
-        // pre-atmosphere-K.2).
         sceneDepthTex: { value: null },
-        // Threshold sentinel. 0.0 = "no depth provided, render
-        // unconditionally" (matches `setSceneDepthTexture(null)`).
-        // setSceneDepthTexture(validTexture) upgrades this to 0.9999
-        // for depth-aware discard. Starting at 0.0 is load-bearing:
-        // a default of 0.9999 with sceneDepthTex=null causes the
-        // shader to sample an unbound texture (returns 0 in WebGL2),
-        // compare 0 < 0.9999, and discard every fragment — clouds
-        // vanish entirely until setSceneDepthTexture() lands. The
-        // 2026-05-18 cloud loop-fix: visible-over-everything is the
-        // SAFE failure mode for the depth wire, not invisible.
         sceneDepthThreshold: { value: 0.0 },
+        uSceneTexelSize: { value: new THREE.Vector2(1 / 1280, 1 / 720) },
+        uCloudTexelSize: { value: new THREE.Vector2(1 / 640, 1 / 360) },
       },
       vertexShader: /* glsl */ `
         varying vec2 vUv;
@@ -305,32 +290,64 @@ export class CloudOverlay {
         uniform sampler2D cloudTex;
         uniform sampler2D sceneDepthTex;
         uniform float sceneDepthThreshold;
+        uniform vec2 uSceneTexelSize;
+        uniform vec2 uCloudTexelSize;
+
+        float skyDepthWeight(float sd) {
+          #ifdef USE_REVERSED_DEPTH_BUFFER
+          return sd > 0.0 ? 0.0 : 1.0;
+          #else
+          return smoothstep(sceneDepthThreshold - 0.00025, sceneDepthThreshold, sd);
+          #endif
+        }
+
         void main() {
-          // 2026-05-16 -- depth-aware discard. Sample the composer's
-          // world depth at this fragment's screen pos. Depth ~1.0 means
-          // far plane (sky); depth less than threshold means world
-          // geometry was drawn here, so the cloud must NOT paint over it.
-          // When sceneDepthTex is null (legacy direct-render path), the
-          // shader skips the discard via the sentinel-value branch:
-          // a texture sample of an unbound sampler returns 0.0 in WebGL2
-          // which would always trip the threshold check, so we
-          // explicitly fall back to "always pass" when the threshold
-          // is 0 (set by the JS side when no depth texture is wired).
+          vec4 c;
           if (sceneDepthThreshold > 0.0) {
             float d = texture2D(sceneDepthTex, vUv).r;
             #ifdef USE_REVERSED_DEPTH_BUFFER
-            // ?reversedZ=on: cleared (sky) is 0, any geometry is > 0.
             if (d > 0.0) discard;
             #else
             if (d < sceneDepthThreshold) discard;
             #endif
+
+            // Bilateral horizon-aware 2x2 cloud upsample + neighborhood clamp:
+            // weights low-res cloud texels by whether their corresponding scene
+            // depth is also sky, eliminating half/quarter-res checkerboard blocks
+            // along distant desert/mountain ridges.
+            vec2 hc = uCloudTexelSize * 0.5;
+            vec2 o0 = vUv + vec2(-hc.x, -hc.y);
+            vec2 o1 = vUv + vec2( hc.x, -hc.y);
+            vec2 o2 = vUv + vec2(-hc.x,  hc.y);
+            vec2 o3 = vUv + vec2( hc.x,  hc.y);
+            vec4 c0 = texture2D(cloudTex, o0);
+            vec4 c1 = texture2D(cloudTex, o1);
+            vec4 c2 = texture2D(cloudTex, o2);
+            vec4 c3 = texture2D(cloudTex, o3);
+            float w0 = 0.05 + 0.95 * skyDepthWeight(texture2D(sceneDepthTex, o0).r);
+            float w1 = 0.05 + 0.95 * skyDepthWeight(texture2D(sceneDepthTex, o1).r);
+            float w2 = 0.05 + 0.95 * skyDepthWeight(texture2D(sceneDepthTex, o2).r);
+            float w3 = 0.05 + 0.95 * skyDepthWeight(texture2D(sceneDepthTex, o3).r);
+            float wSum = w0 + w1 + w2 + w3;
+            vec4 cBilateral = (c0 * w0 + c1 * w1 + c2 * w2 + c3 * w3) / max(wSum, 1e-4);
+            vec4 cLinear = texture2D(cloudTex, vUv);
+            vec4 cMin = min(min(c0, c1), min(c2, c3));
+            vec4 cMax = max(max(c0, c1), max(c2, c3));
+            float edgeContrast = 1.0 - min(min(w0, w1), min(w2, w3));
+            c = clamp(mix(cLinear, cBilateral, edgeContrast), cMin, cMax);
+          } else {
+            // Even without sceneDepthTex discard active, clamp bilinear sample to
+            // its 2x2 neighborhood to suppress sub-texel horizon ringing.
+            vec2 hc = uCloudTexelSize * 0.5;
+            vec4 c0 = texture2D(cloudTex, vUv + vec2(-hc.x, -hc.y));
+            vec4 c1 = texture2D(cloudTex, vUv + vec2( hc.x, -hc.y));
+            vec4 c2 = texture2D(cloudTex, vUv + vec2(-hc.x,  hc.y));
+            vec4 c3 = texture2D(cloudTex, vUv + vec2( hc.x,  hc.y));
+            vec4 cMin = min(min(c0, c1), min(c2, c3));
+            vec4 cMax = max(max(c0, c1), max(c2, c3));
+            c = clamp(texture2D(cloudTex, vUv), cMin, cMax);
           }
-          vec4 c = texture2D(cloudTex, vUv);
-          // Discard pixels that aren't a real cloud contribution. The
-          // takram raymarch's haze pass fills the RT with uniform near-
-          // zero RGB at full alpha when no rays hit cloud volume —
-          // which would tint the sky uniformly black/dark. A real
-          // cloud pixel has both reasonable alpha AND non-trivial RGB.
+
           float lum = max(c.r, max(c.g, c.b));
           if (c.a < 0.05 || lum < 0.02) discard;
           gl_FragColor = c;
@@ -811,6 +828,15 @@ export class CloudOverlay {
    * 60 Hz position precision.
    */
   tick(stateOverride) {
+    // Skip cloud state updates in sealed underground interiors (_lastSkyBlocked === true),
+    // while keeping clouds live inside open-doorway taverns/buildings (!_lastSkyBlocked).
+    const sd = typeof window !== 'undefined' ? window.liveScene3d?.skyDome : null;
+    if (sd && (sd._lastSkyBlocked ?? false)) {
+      this._mainPassArmed = false;
+      if (this.overlayMesh && this.overlayMesh.visible !== false) this.overlayMesh.visible = false;
+      return;
+    }
+    if (this.overlayMesh && this.overlayMesh.visible !== true) this.overlayMesh.visible = true;
     // Wave 3 / O1 fix (2026-05-28) — `handle.getSkyState()` returns a
     // wasm-bindgen handle that owns Rust-side memory; without an explicit
     // `.free()` every rAF leaks ~100 B of wasm linear memory (~22 MB/min
@@ -837,35 +863,23 @@ export class CloudOverlay {
     }
   }
 
-  /**
-   * Run the cloud effect's raymarch into its internal render targets.
-   * MUST be called before `renderOverlay()` so the overlay samples a
-   * fresh cloud buffer. Called from SkyDome.renderSkyPass (direct
-   * path) and from scene3d/index.js's tick (atmosphere path).
-   *
-   * Saves + restores the renderer's render-target binding so the
-   * caller doesn't get surprised by side-effects.
-   *
-   * @param {THREE.WebGLRenderer} renderer
-   * @param {number} [dt=0] Wall-clock seconds since last frame,
-   *   threaded from `scene3d.frameTime.dt` (capped at 100ms). Drives
-   *   the cloud effect's TAA temporal jitter. Default 0 for callers
-   *   that lack a dt (TAA simply doesn't advance that frame, which is
-   *   harmless).
-   * @param {THREE.Camera|null} [activeCam=null] The camera the world
-   *   is being rendered with this frame. In follow/orbit modes this
-   *   is the same persp passed at construction; in topDown it's the
-   *   ortho camera. The cloud raymarch's view-rays + cameraHeight
-   *   must match the world render's POV or the cloud texture is
-   *   composited at the wrong screen positions. Passing null falls
-   *   back to the constructor-time camera.
-   */
   preRender(renderer, dt = 0, activeCam = null) {
     if (!renderer) return;
     // 2026-10-07 — ?cloudNight night floor is solved in DISPLAY terms
     // (exposure × AgX); hand the volume the live exposure (`?exposure`,
     // `__setExposure`). A number compare per frame; re-solves only on change.
     this.volume?.setDisplayExposure?.(renderer.toneMappingExposure);
+    // Gate indoor cloud skip on `skyDome._lastSkyBlocked` (sealed underground cells)
+    // rather than `_lastIsIndoor`, so clouds remain live through open tavern/Nanto
+    // doorways and windows while skipping completely underground.
+    const sd = typeof window !== 'undefined' ? window.liveScene3d?.skyDome : null;
+    if (sd && (sd._lastSkyBlocked ?? false)) {
+      this._mainPassArmed = false;
+      if (this.overlayMesh && this.overlayMesh.visible !== false) this.overlayMesh.visible = false;
+      try { this.volume?._pushCloudShadowsToTerrain?.(); } catch (_) {}
+      return;
+    }
+    if (this.overlayMesh && this.overlayMesh.visible !== true) this.overlayMesh.visible = true;
     this.volume?.syncWorldECEF?.(activeCam ?? this.camera);
     if (this._mainPass) {
       // `?cloudsMainPass=on`: the main composer's fxPass runs the raymarch
@@ -991,6 +1005,11 @@ export class CloudOverlay {
       if (tex !== this.overlayMaterial.uniforms.cloudTex.value) {
         this.overlayMaterial.uniforms.cloudTex.value = tex;
       }
+      const tw = tex?.image?.width;
+      const th = tex?.image?.height;
+      if (tw > 0 && th > 0 && this.overlayMaterial.uniforms.uCloudTexelSize?.value) {
+        this.overlayMaterial.uniforms.uCloudTexelSize.value.set(1 / tw, 1 / th);
+      }
       this.frameCount++;
     } catch (err) {
       this.lastError = String(err);
@@ -1010,6 +1029,8 @@ export class CloudOverlay {
    */
   renderOverlay(renderer) {
     if (!renderer) return;
+    const sd = typeof window !== 'undefined' ? window.liveScene3d?.skyDome : null;
+    if (sd && (sd._lastSkyBlocked ?? false)) return;
     if (this._mainPass) {
       // Runs after the main composer: same post-bake cameraHeight patch the
       // legacy preRender applies after its private composer.render.
@@ -1050,6 +1071,9 @@ export class CloudOverlay {
    */
   setSize(width, height) {
     try {
+      if (width > 0 && height > 0 && this.overlayMaterial?.uniforms?.uSceneTexelSize?.value) {
+        this.overlayMaterial.uniforms.uSceneTexelSize.value.set(1 / width, 1 / height);
+      }
       this.volume.effect.setSize(width, height);
       if (this.composer) {
         this.composer.setSize(width, height);
@@ -1355,7 +1379,8 @@ function _hbCloudCameraHeight(cam, camWorldY) {
   const w = globalThis.__hbCloudRadialW;
   if (!(w > 0) || !cam?.position) return base;
   const x = cam.position.x, z = cam.position.z;
-  const { anchorY, anchorZ } = ecefAnchorForWorld(x, z);
+  const { anchorY: rawAnchorY, anchorZ } = ecefAnchorForWorld(x, z);
+  const anchorY = Number.isFinite(camWorldY) ? Math.min(rawAnchorY, Math.max(0, camWorldY - 50)) : rawAnchorY;
   const yEcef = camWorldY - anchorY;
   const zEcef = z - anchorZ;
   const radial = Math.max(0, yEcef + (x * x + zEcef * zEcef) / (2 * 6360000));

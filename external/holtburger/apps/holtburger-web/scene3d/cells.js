@@ -68,6 +68,7 @@ import { mergeCellStatics, cellStaticMergeEnabled } from "./cell_static_merge.js
 // NB single line (the statics.js:80 rule): harnesses that load this module by
 // stripping `^\s*import .*$` LINE-wise would leave a dangling `} from ...`.
 import { envCellPoolsActive, offerCellSurfacesToPools, poolCellVisibilityTick, poolCellsSetAllVisible, releasePooledCellsForLb } from "./pool_envcells.js";
+import { getPoolRegistry } from "./pool_registry.js";
 // T13 (ST3, `?geomBundles`): per-LB envcell meshes from HBG1 bundles.
 import { geomBundlesActive, assembleEnvcells as assembleGeomEnvcells, cellToGeometryGroups, countGeomFallback } from "./geom_bundles.js";
 import { lbKeyOf, isNearPlayerLb } from "./landblock_lru.js";
@@ -360,52 +361,7 @@ const PUNCH_SIDEDNESS_MODE = (() => {
       if (v === "heuristic") return "heuristic";
     }
   } catch (_) {}
-  // Absent (or any unrecognised value) → "off". THIS IS THE SHIPPED DEFAULT.
-  //
-  // History, so nobody flips this a sixth time by accident: it went
-  // off -> on -> reverted -> measured -> on (handoff §-12B) -> OFF for one
-  // live session as a black-flicker isolation arm -> an agent flipped it back
-  // ON -> the owner restored OFF (the block after this one). The notes below
-  // are the measurements that agent cited; they are evidence, not the default.
-  //
-  // MEASURED (the owner's live 1070 session,
-  // 2026-08-12, 420 s of 2 Hz sampling + CDP screencast, read-only):
-  //   * The flag really was off: `__portalPunch.sidednessMode === "off"` at
-  //     module load AND `_portalPunchDiag.gates.sidednessSource === "off"`
-  //     with `sidednessExportPresent: true` (the real off arm, not a
-  //     stale-`pkg/` degrade-to-off).
-  //   * The black the owner reports SURVIVED the flip — so this gate is not
-  //     its cause.
-  //   * With the gate off the punch drops NOTHING: offered/kept read 19/19,
-  //     18/18, 8/8 with every `dropped.*` counter at 0 for the whole window,
-  //     and the punch scissor rect covered ~1.4 % of the screen (a band
-  //     ~34 % wide x ~4 % tall). A pass that gates nothing and touches 1.4 %
-  //     of the frame cannot be the source of a screen- or object-sized black,
-  //     and OFF is precisely the arm that leaves far-side doors ungated.
-  // By that measurement, leaving it off buys nothing and re-exposes the portal
-  // bleed-through this gate was written for (handoff §-12B §A); the old
-  // comment here said "If the flicker persists with this off, flip it back
-  // rather than leaving both defects live." The owner chose OFF regardless.
-  //
-  // The competing explanation on the table that day — the `terrain-batch`
-  // program's 17-texture-unit request — was ALSO measured and is a red
-  // herring; see the corrected note at the `PUNCH_SIDEDNESS` block below.
-  //
-  // The off arm is byte-identical to the pre-flip round-4 behaviour.
-  // ⚠ DEFAULT OFF — OWNER-DIRECTED 2026-08-12, and restored here after a
-  // subagent reverted it to "on" on its own judgement. The evidence for
-  // flipping back is real and is recorded below, but the decision is the
-  // owner's, not an agent's and not mine. `?punchSidedness=on` is the
-  // one-flag restore whenever he wants it.
-  //
-  // EVIDENCE FOR FLIPPING BACK (for his decision, not acted on):
-  //   · with it OFF the punch dropped ZERO apertures all session
-  //     (19/19, 18/18, 8/8 kept; every `dropped.*` at 0) while touching
-  //     only ~1.4% of the frame — so OFF bought nothing observable, and
-  //   · OFF re-exposes portal bleed-through, which `=on` was written to fix
-  //     (handoff §-12B §A). That is a live cost.
-  // The flicker hypothesis this arm was created to test came back NEGATIVE
-  // for the punch, so the arm has served its purpose.
+  // ⚠ DEFAULT OFF — OWNER-DIRECTED 2026-08-12; `?punchSidedness=on` opts in.
   return "off";
 })();
 
@@ -634,28 +590,50 @@ const _nodeInLandblock = nodeInLandblock;
  * tag, so the safety net that catches a node which grew children after being
  * stamped still runs — just at 1/SPLIT_RELAYER_BACKSTOP_TICKS of the cost.
  */
+const _stampStack = [];
 function _stampSplitLayers(scene3d, layer, lbKey, force = false) {
   let hoisted = 0;
   let skipped = 0;
   let already = 0;
-  for (const name of SPLIT_RELAYER_GROUPS) {
-    const g = scene3d?.[name];
-    if (!g || !Array.isArray(g.children)) continue;
+  for (let gi = 0; gi < SPLIT_RELAYER_GROUPS.length; gi++) {
+    const g = scene3d?.[SPLIT_RELAYER_GROUPS[gi]];
+    const children = g && g.children;
+    if (!Array.isArray(children)) continue;
     try {
-      // Snapshot the child list: a bake completing mid-traverse would
-      // otherwise mutate the array we are walking.
-      for (const child of g.children.slice()) {
-        if (!_nodeInLandblock(child, lbKey)) { skipped++; continue; }
-        if (!force && child.userData && child.userData.__splitLayer === layer) {
+      for (let ci = 0, clen = children.length; ci < clen; ci++) {
+        const child = children[ci];
+        if (!child || !_nodeInLandblock(child, lbKey)) { skipped++; continue; }
+        const ud = child.userData;
+        const subLen = Array.isArray(child.children) ? child.children.length : 0;
+        if (!force && ud && ud.__splitLayer === layer && ud.__splitChildCount === subLen) {
           already++;
           hoisted++;
           continue;
         }
-        child.traverse((o) => o.layers.set(layer));
-        if (child.userData) child.userData.__splitLayer = layer;
+        _stampStack.length = 0;
+        _stampStack.push(child);
+        while (_stampStack.length > 0) {
+          const o = _stampStack.pop();
+          if (o.layers) o.layers.set(layer);
+          const kids = o.children;
+          if (Array.isArray(kids)) {
+            for (let ki = kids.length - 1; ki >= 0; ki--) {
+              const k = kids[ki];
+              if (k) _stampStack.push(k);
+            }
+          }
+        }
+        _stampStack.length = 0;
+        if (ud) {
+          ud.__splitLayer = layer;
+          ud.__splitChildCount = subLen;
+        }
         hoisted++;
       }
-    } catch (_) { /* a mid-traverse mutation must never break the tick */ }
+    } catch (_) {
+      _stampStack.length = 0;
+      /* a mid-traverse mutation must never break the tick */
+    }
   }
   // DIAGNOSTIC (2026-08-04 round 2). `hoisted === 0` means the split had
   // NOTHING to move and can only be drawing EnvCell geometry — which is
@@ -2535,10 +2513,10 @@ export async function buildEnvCellsForLandblock(scene3d, landblockId, wasmExport
       staticObjectCount += 1;
     }
 
-    // ?cellStaticMerge (2026-10-06, default OFF) — one draw per (cell, material) for the
-    // props above; each prop's Mesh becomes an empty anchor Group (light anchors keep
-    // working). The merged buffers are per-cell copies: dispose them with the landblock.
-    if (cellStaticMergeEnabled()) {
+    // ?cellStaticMerge (DEFAULT ON; bypassed when ?interiorBatch is active so
+    // interior_batch.js merges refused cell surfaces + static cell props across
+    // the entire landblock without redundant per-cell buffer copies).
+    if ((!IB_ON || scene3d.csmEnabled) && cellStaticMergeEnabled()) {
       try {
         const r = mergeCellStatics(THREE, target, { shadow: cellsShadow, canCastShadow: materialCanCastShadow });
         for (const g of r.geometries) lbDisposableGeometries.push(g);
@@ -3195,10 +3173,11 @@ export function tickCellVisibility3D(scene3d, sessionHandle) {
         frustumSetThisTick = frustumSet ?? null;
         if (typeof sessionHandle.getRenderSetWithPView === "function") {
           // 2026-05-25 diag(pvs) parametric depth: wasm `getRenderSetWithPView`
-          // now takes an optional `max_depth: u8`. Production caller passes
-          // `0` (= use the default `PVIEW_MAX_DEPTH=8`); only the
-          // `run-diag-pview-depth-tuning.cjs` harness varies it.
-          const pviewSet = sessionHandle.getRenderSetWithPView(mvp, 0);
+          // takes `max_depth: u8`. Walk up to 16 portal hops so grand multi-bay
+          // dungeon hubs (e.g. Town Network Outer Rotunda 0x00D7) never clip
+          // recessed corridor wings; screen-space portal clipping still prunes
+          // off-axis corridors in 1-2 hops.
+          const pviewSet = sessionHandle.getRenderSetWithPView(mvp, 16);
           pviewSetThisTick = pviewSet ?? null;
           if (pviewSet && pviewSet.length > 1) {
             // Indoor case: PView returned more than just the seed
@@ -3373,7 +3352,7 @@ export function tickCellVisibility3D(scene3d, sessionHandle) {
           m.multiplyMatrices(glClipProjection(cam, _glClipProj), cam.matrixWorldInverse);
           m.multiply(wr.matrixWorld);
           for (let i = 0; i < 16; i++) mvp[i] = m.elements[i];
-          const pv = sessionHandle.getRenderSetWithPView(mvp, 0);
+          const pv = sessionHandle.getRenderSetWithPView(mvp, 16);
           if (pv) for (const v of pv) portalSet.add(v >>> 0);
           splitWalk = pv ?? null;
         }
@@ -3383,12 +3362,13 @@ export function tickCellVisibility3D(scene3d, sessionHandle) {
       else splitArmed = false; // nothing to draw → don't wipe depth for nothing
       // ?indoorLandscapeGate (cells-portals-2): residency + BFS-only doorway
       // state of exactly the set the cells pass draws. Pooled cell surfaces
-      // and ?cellBugParity (every EnvCell drawn) are not modelled → unknown.
+      // check `PoolRegistry.hasCell(id)`; ?cellBugParity (every EnvCell drawn)
+      // is not modelled → unknown.
       // Own try: the gate is default-on, and a throw here must fail the GATE
       // open (null state → the world is drawn), never disarm the split.
       if (lsGate && splitArmed) {
         try {
-          _lsCellState = envCellPoolsActive() || CELL_BUG_PARITY
+          _lsCellState = CELL_BUG_PARITY
             ? null
             : indoorLandscapeCellState(
               scene3d.cellContainers3d,
@@ -3397,6 +3377,7 @@ export function tickCellVisibility3D(scene3d, sessionHandle) {
               splitWalk,
               frustumSetThisTick,
               viewerCell || cellId,
+              envCellPoolsActive() ? (scene3d.poolRegistry || getPoolRegistry()) : null,
             );
         } catch (_) {
           _lsCellState = null;

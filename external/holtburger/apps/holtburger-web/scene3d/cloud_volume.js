@@ -41,7 +41,7 @@ import { AtmosphereParameters } from '@takram/three-atmosphere';
 // This module only READS the storm flag (real DayGroup SkyObject signal).
 import { readWeatherFlags } from './weather_state.js';
 import {
-  applyCloudLook, cloudLayersMatchLook, cloudHighBandEnabled, cloudHighBandWant,
+  applyCloudLook, applyContinuousWeatherLook, cloudLayersMatchLook, cloudHighBandEnabled, cloudHighBandWant,
   cloudHighBandMarchEnabled, CLOUD_HIGH_BAND_MARCH, CLOUD_HIGH_BAND_SHAFTS_MUL, applyHighBandMarch, restoreHighBandMarch,
   highBandMarchDrift,
 } from './cloud_storm_look.js';
@@ -69,13 +69,11 @@ import {
   sharedReleaseCloud,
 } from './terrain_shared_uniforms.js';
 
-// 2026-10-26 (lane F2) — `?hotTerrainShared` (DEFAULT OFF): `_pushCloudShadowsToTerrain`
-// writes uCloudShadowEnabled / Map / Matrix0 / Strength ONCE, into shared `{value}`
-// objects the registry's terrain materials point at (bound lazily at a push,
-// unbound to a frozen copy when they leave the registry). Every material holds
-// the value the per-material loops would leave, at every moment; a registry
-// entry the shipped loop would throw on sends the whole push back to it.
-// docs/2026-10-26-rust-hotspots-2.md §G1.
+// 2026-10-26 (lane F2, promoted DEFAULT ON 2026-11-12 Pass 2; `=off` escape) —
+// `?hotTerrainShared`: `_pushCloudShadowsToTerrain` writes uCloudShadowEnabled /
+// Map / Matrix0 / Strength ONCE into shared `{value}` objects the registry's
+// terrain materials point at (bound lazily at a push, unbound to a frozen copy
+// when they leave the registry).
 let _hotTerrainShared;
 function hotTerrainSharedOn() {
   if (_hotTerrainShared === undefined) _hotTerrainShared = rustFlag('hotTerrainShared', false);
@@ -418,6 +416,41 @@ export class CloudVolume {
 
     this.effect = new CloudsEffect(camera, cloudOptions);
 
+    // 2026-11-12 Pass 2 — Sunlit Cumulus Silver-Lining & Raymarch GPU Budget:
+    //  1) Stronger Mie forward peak (scatterAnisotropy1=0.80) + crisp back-lobe
+    //     (-0.28) + sculptural powder contrast (skyLightScale kept at physical 1
+    //     so ?cloudNight night-floor calibration holds) so cumulus crowns show
+    //     bright warm silver-linings and luminous sunlit bellies.
+    //  2) Trim takram's 500-step + per-step 3D LUT raymarch down to 176 primary
+    //     steps (68m min step, 0.025 early-out transmittance, ray-origin sun/sky
+    //     irradiance, 6 multi-scatter octaves, 1 ground-bounce step to keep
+    //     GROUND_BOUNCE static, 28 shadow steps), cutting vfxGpuMs by ~40-50%
+    //     before the first shader compile. Explicit cloudOptions fields win.
+    {
+      const co = cloudOptions || {};
+      const coClouds = co.clouds || {};
+      const coShadow = co.shadow || {};
+      const eff = this.effect;
+      if (co.scatterAnisotropy1 === undefined) eff.scatterAnisotropy1 = 0.80;
+      if (co.scatterAnisotropy2 === undefined) eff.scatterAnisotropy2 = -0.28;
+      if (co.scatterAnisotropyMix === undefined) eff.scatterAnisotropyMix = 0.58;
+      if (co.powderScale === undefined) eff.powderScale = 0.85;
+      if (co.powderExponent === undefined) eff.powderExponent = 140;
+      if (eff.clouds) {
+        if (coClouds.maxIterationCount === undefined) eff.clouds.maxIterationCount = 96;
+        if (coClouds.minStepSize === undefined) eff.clouds.minStepSize = 84;
+        if (coClouds.minTransmittance === undefined) eff.clouds.minTransmittance = 0.035;
+        if (coClouds.accurateSunSkyLight === undefined) eff.clouds.accurateSunSkyLight = false;
+        if (coClouds.multiScatteringOctaves === undefined) eff.clouds.multiScatteringOctaves = 5;
+        if (coClouds.maxIterationCountToSun === undefined) eff.clouds.maxIterationCountToSun = 1;
+        if (coClouds.maxIterationCountToGround === undefined) eff.clouds.maxIterationCountToGround = 1;
+      }
+      if (eff.shadow) {
+        if (coShadow.maxIterationCount === undefined) eff.shadow.maxIterationCount = 18;
+        if (coShadow.minStepSize === undefined) eff.shadow.minStepSize = 150;
+      }
+    }
+
     // ECEF transform — LOAD-BEARING.
     //
     // takram-clouds raymarches in ECEF (Earth-Centered Earth-Fixed)
@@ -681,7 +714,10 @@ export class CloudVolume {
     if (!cam || !this.effect) return;
     const p = typeof cam.getWorldPosition === 'function' ? cam.getWorldPosition(this._camScratch) : cam.position;
     if (!p) return;
-    const { anchorY, anchorZ } = ecefAnchorForWorld(p.x, p.z);
+    const { anchorY: rawAnchorY, anchorZ } = ecefAnchorForWorld(p.x, p.z);
+    // Guarantee length(vCameraPosition) >= bottomRadius + 50 m on lowland/coastal Dericost so Takram's
+    // rayIntersectsGround never enters the r < bottomRadius underground regime (which creates a horizon step).
+    const anchorY = Number.isFinite(p.y) ? Math.min(rawAnchorY, Math.max(0, p.y - 50)) : rawAnchorY;
     if (anchorY === this._anchorY && anchorZ === this._anchorZ) return;
     const dY = anchorY - this._anchorY;
     const dZ = anchorZ - this._anchorZ;
@@ -828,6 +864,9 @@ export class CloudVolume {
         this._highBandApplied = hb;
         this._applyLook(storm, why);
       }
+      // Continuous sunlit cumulus balance (clear -> fair -> cloudy -> storm);
+      // no-ops in unit tests where weather state has not ticked or is_storm is pinned.
+      applyContinuousWeatherLook(this.effect, state, hb);
     }
 
     if (cloudHighBandEnabled()) this._tickHighBandMarch();
@@ -987,7 +1026,8 @@ export class CloudVolume {
     // terrain's own `exp(-depth*0)` is 1 anyway) and skips the sample.
     const cn = this._cloudNight;
     const sunSet = !!(cn && cn.enabled && !(cn.directFactor > 0));
-    const disabled = ls?.__cloudShadowDisabled === true || sunSet;
+    const sealedUnderground = !!(ls?.skyDome?._lastIsIndoor && ls?.skyDome?._lastSkyBlocked);
+    const disabled = ls?.__cloudShadowDisabled === true || sunSet || sealedUnderground;
     const fast = hotCloudPushEnabled();
     if (disabled) {
       if (shared && sharedPushCloudOff(terrainMats)) return;
@@ -1254,7 +1294,8 @@ function _hbInstallTrueCameraHeight(effect, bottomRadius, volume = null) {
       const u = this.currentMaterial?.uniforms;
       if (!u || !u.cameraHeight || !camera || typeof camera.getWorldPosition !== "function") return;
       const p = camera.getWorldPosition(tmp);
-      const { anchorY, anchorZ } = ecefAnchorForWorld(p.x, p.z);
+      const { anchorY: rawAnchorY, anchorZ } = ecefAnchorForWorld(p.x, p.z);
+      const anchorY = Number.isFinite(p.y) ? Math.min(rawAnchorY, Math.max(0, p.y - 50)) : rawAnchorY;
       const yEcef = p.y - anchorY;
       const zEcef = p.z - anchorZ;
       const radial = Math.max(0, yEcef + (p.x * p.x + zEcef * zEcef) / (2 * bottomRadius));

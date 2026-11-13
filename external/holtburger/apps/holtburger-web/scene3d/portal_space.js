@@ -103,6 +103,7 @@ import { meshToGeometryGroups, surfacePixelsToTexture } from "./adapter.js";
 import { withLogDepth } from "./shader_logdepth.js";
 import { playUiSound, rollProbability, retailVolume } from "./audio/retail_sound_rules.js";
 import { hookFiresInDirection } from "./hook_windows.js";
+import { getPoolRegistry } from "./pool_registry.js";
 import { wireframeFlagOn } from "./wireframe_flag.js";
 import { getWarmTarget, compileWithTarget, programsOf, programPending, prunePending, warmSceneMaterials } from "./shader_prewarm.js";
 // 2026-10-20 `?lateFxWarm` (streaming-hitch-1) — dependency-free registry (no
@@ -613,6 +614,15 @@ export function destinationCellsReady(scene3d, cellId) {
   const id = cellId >>> 0;
   if (!id) return false;
   if ((id & 0x7fff) >= 0x100) {
+    const lbKey = (id & 0xffff0000) >>> 0;
+    const lbCells = scene3d?._poolEnvCells?.cellsByLb?.get?.(lbKey);
+    if (lbCells && lbCells.has(id)) {
+      const reg = getPoolRegistry();
+      if (reg && !reg.hasCell(id)) {
+        try { scene3d?._unparkPoolEnvCellsForLb?.(lbKey); } catch (_) {}
+        if (!reg.hasCell(id)) return false;
+      }
+    }
     const m = scene3d?.cellContainers3d;
     return m && typeof m.has === "function" ? m.has(id) : true;
   }

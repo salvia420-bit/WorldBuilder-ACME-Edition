@@ -174,6 +174,7 @@ t("C5 interior_batch.js executed: no import-time state, global, listener or hook
   assert.deepEqual(Object.keys(scene3d), [], "no LRU hook installed");
   assert.deepEqual(Object.keys(container.userData), [], "no stamp");
   assert.equal(IB.interiorBatchMode(""), "off", "DEFAULT OFF");
+  assert.equal(IB.interiorBatchMode("?interiorBatch=on"), "on", "OPT-IN ON");
   // Source: column-0 bindings may hold constant tables only.
   const top = IBSRC.split("\n").filter((l) => /^(const|let|var) /.test(l));
   for (const l of top) {

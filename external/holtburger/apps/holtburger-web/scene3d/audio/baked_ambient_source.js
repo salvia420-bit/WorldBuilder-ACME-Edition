@@ -134,6 +134,10 @@ export class BakedAmbientSource {
     this._lastKey = -1;
     /** @type {Set<number>} lbKey16 currently fetching. */
     this._inflight = new Set();
+    /** @type {Uint8Array|null|false} Optional 8 KiB presence bitmap for default dist/events/ */
+    this._indexBitmap = null;
+    this._indexPromise = null;
+    this._useIndexBitmap = !opts.fetchImpl && !opts.baseUrl && !!this._fetch;
 
     // Diagnostics (read by capture scripts / __ambientBaked.stats()).
     this.fetchCount = 0;
@@ -189,7 +193,32 @@ export class BakedAmbientSource {
       this.lbEmpty += 1;
       return;
     }
+    if (this._useIndexBitmap && this._indexBitmap instanceof Uint8Array && this._indexBitmap.length >= 8192) {
+      if ((this._indexBitmap[key >>> 3] & (1 << (key & 7))) === 0) {
+        this._store(key, []);
+        this.lbEmpty += 1;
+        return;
+      }
+    }
     this._inflight.add(key);
+    if (this._useIndexBitmap && this._indexBitmap === null) {
+      if (!this._indexPromise) {
+        this._indexPromise = Promise.resolve(this._fetch(`${this._baseUrl}index.bin`))
+          .then((r) => (r && r.ok && typeof r.arrayBuffer === "function" ? r.arrayBuffer() : null))
+          .then((ab) => {
+            this._indexBitmap = ab && ab.byteLength >= 8192 ? new Uint8Array(ab) : false;
+          })
+          .catch(() => {
+            this._indexBitmap = false;
+          });
+      }
+      this._indexPromise.then(() => {
+        this._inflight.delete(key);
+        if (this._cache.has(key)) return;
+        this._beginFetch(key);
+      });
+      return;
+    }
     this.fetchCount += 1;
     const url = `${this._baseUrl}0x${hex}.events.jsonl`;
     Promise.resolve(this._fetch(url))

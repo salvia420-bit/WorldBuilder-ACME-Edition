@@ -77,6 +77,7 @@ import { rustFlag } from "./rust/scene_core.js";
 // allocates) until an instance registers with the flag on.
 import {
   noteAnimSceneryBatchInstance, syncAnimSceneryBatches, disposeAnimSceneryBatches, animSceneryBatchDiag,
+  __animSceneryBatchGroupsForTest,
 } from "./gpu_batch/anim_scenery_batch.js";
 
 const METERS_PER_LANDBLOCK = 192.0;
@@ -689,7 +690,7 @@ export function __setAnimSceneryGateForTest(v) { _gateFlag = v === undefined ? n
 // nothing else changes. See scene3d/gpu_batch/anim_scenery_batch.js.
 let _batchFlag = null;
 export function animSceneryBatchEnabled() {
-  if (_batchFlag === null) _batchFlag = rustFlag("animSceneryBatch", false);
+  if (_batchFlag === null) _batchFlag = rustFlag("animSceneryBatch", true);
   return _batchFlag;
 }
 /** Test seam: true/false forces, undefined re-reads the URL. */
@@ -1286,6 +1287,23 @@ function _getOrCreateBucket(scene3d, setupId, partIdx, gIdx, geometry, surfaceDi
         drawMat = v;
       }
     }
+    let partPadRadius = 8.0;
+    try {
+      if (geo && !geo.boundingSphere && typeof geo.computeBoundingSphere === "function") {
+        geo.computeBoundingSphere();
+      }
+      const gr = geo?.boundingSphere?.radius;
+      let hingeOff = 0;
+      if (hingeMat?.elements) {
+        const he = hingeMat.elements;
+        hingeOff = Math.hypot(he[12] || 0, he[13] || 0, he[14] || 0);
+      }
+      const grp = _didGroups.get(animId);
+      const orbitPad = grp?.omega ? 36.0 : 4.0;
+      if (Number.isFinite(gr) && gr > 0) {
+        partPadRadius = gr + hingeOff + orbitPad;
+      }
+    } catch (_) {}
     const mesh = new THREE.InstancedMesh(geo, drawMat, 128);
     mesh.count = 0;
     mesh.name = `anim-inst-0x${setupId.toString(16)}-p${partIdx}-g${gIdx}`;
@@ -1297,7 +1315,7 @@ function _getOrCreateBucket(scene3d, setupId, partIdx, gIdx, geometry, surfaceDi
     mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     scene3d.staticsGroup.add(mesh);
     // `active`: members not collapsed (?animSceneryBucketVis shows the bucket iff > 0).
-    const bucket = { mesh, members: [], capacity: 128, gpu: gpuRow >= 0, active: 0 };
+    const bucket = { mesh, members: [], capacity: 128, gpu: gpuRow >= 0, active: 0, partPadRadius, boundsDirty: false };
     _bucketList.push(bucket);
     return bucket;
   })();
@@ -1313,7 +1331,8 @@ function _registerSlot(bucket, inst) {
     const nm = new THREE.InstancedMesh(old.geometry, old.material, cap);
     nm.name = old.name;
     nm.userData = old.userData;
-    nm.frustumCulled = false;
+    nm.boundingSphere = old.boundingSphere ? old.boundingSphere.clone() : null;
+    nm.frustumCulled = old.frustumCulled;
     nm.matrixAutoUpdate = false;
     nm.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     nm.instanceMatrix.array.set(old.instanceMatrix.array);
@@ -1329,6 +1348,7 @@ function _registerSlot(bucket, inst) {
   bucket.members.push(inst);
   bucket.mesh.count = bucket.members.length;
   bucket.active += 1; // a new slot is live (registered instances start un-collapsed)
+  bucket.boundsDirty = true;
   return index;
 }
 
@@ -1523,18 +1543,122 @@ function _reclaimInstancedSlots(inst) {
     }
     m.pop();
     b.mesh.count = m.length;
+    b.boundsDirty = true;
     _markDirty(b, s.index);
   }
   inst.slots.length = 0;
 }
 
-/** ?animSceneryBucketVis: each bucket draws iff it has a live instance. */
+function _recomputeBucketBounds(b) {
+  b.boundsDirty = false;
+  const members = b.members;
+  const n = members.length;
+  if (n === 0) {
+    b.mesh.frustumCulled = false;
+    return;
+  }
+  let minX = Infinity, minY = Infinity, minZ = Infinity;
+  let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+  for (let i = 0; i < n; i++) {
+    const pos = members[i]?.node?.position;
+    if (!pos) continue;
+    const x = pos.x, y = pos.y, z = pos.z;
+    if (x < minX) minX = x;
+    if (y < minY) minY = y;
+    if (z < minZ) minZ = z;
+    if (x > maxX) maxX = x;
+    if (y > maxY) maxY = y;
+    if (z > maxZ) maxZ = z;
+  }
+  if (!Number.isFinite(minX)) {
+    b.mesh.frustumCulled = false;
+    return;
+  }
+  const cx = 0.5 * (minX + maxX);
+  const cy = 0.5 * (minY + maxY);
+  const cz = 0.5 * (minZ + maxZ);
+  let maxR2 = 0;
+  for (let i = 0; i < n; i++) {
+    const pos = members[i]?.node?.position;
+    if (!pos) continue;
+    const dx = pos.x - cx;
+    const dy = pos.y - cy;
+    const dz = pos.z - cz;
+    const d2 = dx * dx + dy * dy + dz * dz;
+    if (d2 > maxR2) maxR2 = d2;
+  }
+  const pad = Number.isFinite(b.partPadRadius) ? b.partPadRadius : 8.0;
+  const radius = Math.sqrt(maxR2) + pad;
+  if (!b.mesh.boundingSphere) {
+    if (typeof THREE.Sphere === "function") {
+      b.mesh.boundingSphere = new THREE.Sphere(new THREE.Vector3(cx, cy, cz), radius);
+    } else {
+      return;
+    }
+  } else {
+    b.mesh.boundingSphere.center.set(cx, cy, cz);
+    b.mesh.boundingSphere.radius = radius;
+  }
+  // Keep THREE's broken single-instance InstancedMesh frustum test OFF (`statics.js`
+  // FCULL rule) and publish the aggregate AC-world sphere to `userData._cullSphere`
+  // (plus any `animSceneryBatch` draw meshes sharing this bucket's instanceMatrix)
+  // so `cullStaticsGroup` frustum-culls every bucket and batch draw accurately!
+  b.mesh.frustumCulled = false;
+  if (b.mesh.userData) {
+    if (b.mesh.userData._cullSphere) {
+      b.mesh.userData._cullSphere.copy(b.mesh.boundingSphere);
+    } else {
+      b.mesh.userData._cullSphere = b.mesh.boundingSphere.clone();
+    }
+  }
+  if (_batchArmed && b.mesh.parent?.children) {
+    const siblings = b.mesh.parent.children;
+    for (let i = 0; i < siblings.length; i++) {
+      const s = siblings[i];
+      if (s && s.userData?.animSceneryBatch && s.instanceMatrix === b.mesh.instanceMatrix) {
+        if (!s.boundingSphere) s.boundingSphere = b.mesh.boundingSphere.clone();
+        else s.boundingSphere.copy(b.mesh.boundingSphere);
+        if (s.userData._cullSphere) s.userData._cullSphere.copy(b.mesh.boundingSphere);
+        else s.userData._cullSphere = b.mesh.boundingSphere.clone();
+      }
+    }
+  }
+}
+
+/** ?animSceneryBucketVis: each bucket draws iff it has a live instance and intersects the AC frustum. */
 function _applyBucketVisibility() {
   if (!animSceneryBucketVisEnabled()) return;
+  const liveCuller = typeof window !== "undefined" ? window.liveScene3d?._frustumCuller : null;
+  const cullValid = Boolean(liveCuller && liveCuller.valid && typeof liveCuller.isSphereInFrustum === "function");
   for (let i = 0; i < _bucketList.length; i++) {
     const b = _bucketList[i];
-    const want = b.active > 0;
+    if (b.boundsDirty) _recomputeBucketBounds(b);
+    let want = b.active > 0;
+    if (want && cullValid && b.mesh.boundingSphere) {
+      want = liveCuller.isSphereInFrustum(b.mesh.boundingSphere);
+    }
     if (b.mesh.visible !== want) b.mesh.visible = want;
+  }
+}
+
+/** Per-bucket world boundingSphere frustum cull for active ?animSceneryBatch draw meshes. */
+function _cullActiveBatchDraws() {
+  if (!animSceneryBucketVisEnabled()) return;
+  const liveCuller = typeof window !== "undefined" ? window.liveScene3d?._frustumCuller : null;
+  if (!liveCuller || !liveCuller.valid || typeof liveCuller.isSphereInFrustum !== "function") return;
+  const groups = __animSceneryBatchGroupsForTest();
+  for (let i = 0; i < groups.length; i++) {
+    const g = groups[i];
+    if (g.status !== "active") continue;
+    const rep = g.rep;
+    if (rep?.boundsDirty) _recomputeBucketBounds(rep);
+    const sphere = rep?.mesh?.boundingSphere;
+    if (!sphere || liveCuller.isSphereInFrustum(sphere)) continue;
+    const draws = g.draws;
+    for (let k = 0; k < draws.length; k++) {
+      const dm = draws[k].mesh;
+      if (dm && dm.visible) dm.visible = false;
+    }
   }
 }
 
@@ -1560,7 +1684,9 @@ function _applyBucketVisibility() {
 function _onInstanceMatrixUploaded() { this.__hbAsUnsent = false; }
 
 function _flushDirtyBuckets() {
+  const recomputeBounds = animSceneryBucketVisEnabled();
   for (const b of _dirtyBuckets) {
+    if (b.boundsDirty && recomputeBounds) _recomputeBucketBounds(b);
     const attr = b.mesh.instanceMatrix;
     const span = _dirtySpan.get(b);
     // One contiguous range per bucket (16 floats per matrix). three uploads
@@ -2038,7 +2164,10 @@ function _ensureRaf() {
     _applyBucketVisibility();
     // ?animSceneryBatch: after the buckets' own visibility (the batch hides
     // the buckets it draws for); `rafTs` keys the kit's per-frame budget.
-    if (_batchArmed) syncAnimSceneryBatches(rafTs);
+    if (_batchArmed) {
+      syncAnimSceneryBatches(rafTs);
+      _cullActiveBatchDraws();
+    }
     syncAnimInstMaterials();
     _rafId = window.requestAnimationFrame(loop);
   };
@@ -2064,7 +2193,10 @@ export function tickAnimatedScenery(dt) {
   }
   _flushDirtyBuckets();
   _applyBucketVisibility();
-  if (_batchArmed) syncAnimSceneryBatches();
+  if (_batchArmed) {
+    syncAnimSceneryBatches();
+    _cullActiveBatchDraws();
+  }
   syncAnimInstMaterials();
 }
 

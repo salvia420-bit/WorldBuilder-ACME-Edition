@@ -90,9 +90,22 @@ import { ClassMaterialRegistry, normalizeForPool, REFUSE } from "./pool_material
 import { axisRecordOf, classKeyOf, sectorKeyOfLb } from "./pool_class_key.js";
 import { buildTilePlan } from "./tile_plan.js";
 import { PoolStreamController } from "./pool_stream.js";
+import { UploadStager } from "./upload_stage.js";
+import { getPoolPrewarm } from "./pool_prewarm.js";
 import { tileOfLb, tileLbKeys } from "./residency_grid.js";
 import { frameWorkEnabled, getFrameWorkScheduler } from "./frame_work.js";
-import { registerAtlasRefeed, texRefPageInfo, materialRsId } from "./bc7_textures.js";
+import {
+  registerAtlasRefeed,
+  texRefPageInfo,
+  materialRsId,
+  bc7AlphaFloor,
+  clipAlphaCutOf,
+  bc7ClipAlphaGuardEnabled,
+  bc7Source,
+  makeBc7Texture,
+  texCompressedOnlyActive,
+} from "./bc7_textures.js";
+import { getAdapterMaxAnisotropy } from "./adapter.js";
 import { isBc7AtlasTexture } from "./static_atlas.js";
 import { _atlasRefeedImpl as atlasSideRefeed } from "./static_atlas.js";
 // ?poolRuns (2026-10-22, handoff F1): the registry takes the batchedRuns marker
@@ -100,6 +113,32 @@ import { _atlasRefeedImpl as atlasSideRefeed } from "./static_atlas.js";
 // live constructor, so it is the one that hands it over. batched_runs.js is
 // already in the boot graph (index.js installs it), so this adds no module.
 import { markBatchedRuns } from "./batched_runs.js";
+
+function _holdoutHasCutout(mat) {
+  if (!bc7ClipAlphaGuardEnabled() || !mat || !mat.map) return false;
+  const cut = clipAlphaCutOf(mat);
+  if (!(cut > 0)) return false;
+  const tex = mat.map;
+  if (tex.isCompressedTexture && Array.isArray(tex.mipmaps) && tex.mipmaps[0]?.data) {
+    const floor = bc7AlphaFloor({ width: tex.mipmaps[0].width, height: tex.mipmaps[0].height, levels: tex.mipmaps }, cut);
+    return floor >= 0 && floor < cut;
+  }
+  const d = tex.image && tex.image.data;
+  if (d && typeof d.length === "number") {
+    for (let i = 3; i < d.length; i += 4) if (d[i] < cut) return true;
+  }
+  return false;
+}
+
+function _holdoutLostCutout(mat) {
+  if (!bc7ClipAlphaGuardEnabled() || !mat || !mat.map || !mat.map.isCompressedTexture) return false;
+  const cut = clipAlphaCutOf(mat);
+  if (!(cut > 0)) return false;
+  const mips = mat.map.mipmaps;
+  if (!Array.isArray(mips) || !mips[0]?.data) return false;
+  const floor = bc7AlphaFloor({ width: mips[0].width, height: mips[0].height, levels: mips }, cut);
+  return floor >= cut;
+}
 
 // ---------------------------------------------------------------------------
 // the pool world singleton
@@ -115,9 +154,14 @@ let _initTried = false;
  * @param {object} deps
  * @param {object} deps.THREE
  * @param {object} [deps.group]   scene group pools attach to (staticsGroup)
+ * @param {object|Function} [deps.groups]
+ * @param {object} [deps.layers]
+ * @param {object} [deps.renderer]
+ * @param {boolean} [deps.nullRender]
+ * @param {object} [deps.csmState]
  * @param {string} [deps.search]
  */
-export function initPoolWorld({ THREE, group, search } = {}) {
+export function initPoolWorld({ THREE, group, groups, layers, renderer = null, nullRender = false, csmState, search } = {}) {
   if (_world) return _world;
   if (_initTried) return null;
   _initTried = true;
@@ -128,21 +172,34 @@ export function initPoolWorld({ THREE, group, search } = {}) {
     initDrawPools({ THREE, search, materialFactory: () => null });
     return null;
   }
-  const classMats = new ClassMaterialRegistry({});
+  const useStager = !!(renderer && chk.frameWork && frameWorkEnabled(search));
+  const uploads = useStager ? new UploadStager({ renderer, nullRender: !!nullRender }) : null;
+  const classMats = new ClassMaterialRegistry({
+    stager: uploads,
+    preSizeBc7Nra: true,
+    csmState,
+  });
   const registry = initDrawPools({
     THREE,
     search,
     group,
+    groups,
+    layers,
     materialFactory: (classKey) => classMats.materialFactory(classKey),
     // Opaque, draw-order-free pools draw their repeated ranges as instanced
     // runs (pool_registry.js header); `?poolRuns=off` makes this inert.
     markRuns: markBatchedRuns,
+    onClassCreated: (entry) => {
+      if (entry && entry.postBoot) {
+        try { getPoolPrewarm()?.enqueueClass?.(entry); } catch (_) { /* fail-soft */ }
+      }
+    },
   });
   if (!registry) return null;
   let controller = null;
   if (chk.frameWork && frameWorkEnabled(search)) {
     try {
-      controller = new PoolStreamController({ registry, scheduler: getFrameWorkScheduler() });
+      controller = new PoolStreamController({ registry, scheduler: getFrameWorkScheduler(), uploads });
     } catch (e) {
       // Stage A pools (feeds on the caller's cadence) stay legal without it.
       try { console.warn("[drawPools] stream controller unavailable; feeding inline", e); } catch (_) { /* fail-soft */ }
@@ -153,6 +210,7 @@ export function initPoolWorld({ THREE, group, search } = {}) {
     registry,
     classMats,
     controller,
+    uploads,
     /** Content-keyed dedup (header): true unless `?poolRuns=off`. */
     contentKeys: poolRunsEnabled(search),
     /** contentKey -> source geometry (the pool's dedup identity; with
@@ -235,6 +293,7 @@ export function addSingletonsToPools(nodes, scene3d, opts = {}) {
   const passthrough = [];
   const placements = [];
   const recBySurface = new Map(); // material uuid -> axis record (memo)
+  const allowPotPages = !!(scene3d && (scene3d.materialCache || scene3d.renderer || scene3d.staticsGroup || scene3d.cellsGroup));
 
   for (const n of nodes) {
     w.stats.nodesIn += 1;
@@ -251,12 +310,12 @@ export function addSingletonsToPools(nodes, scene3d, opts = {}) {
       continue;
     }
     const mat = n.material;
-    const cast = n.castShadow === true;
+    const cast = n.castShadow === true || n.__hbWantCastShadow === true;
     const recv = n.receiveShadow === true;
     const surfaceKey = mat.uuid;
     let rec = recBySurface.get(surfaceKey);
     if (rec === undefined) {
-      rec = _axisRecordFor(mat, domain, cast, recv, w.stats);
+      rec = _axisRecordFor(mat, domain, cast, recv, w.stats, allowPotPages);
       recBySurface.set(surfaceKey, rec);
     }
     // The class key `buildTilePlan` will build, from the SAME record composed
@@ -419,22 +478,23 @@ export function addSingletonsToPools(nodes, scene3d, opts = {}) {
  * class key while needing different `texStorage3D` internal formats — the one
  * thing D-07.2 says a class must never do.
  */
-function _axisRecordFor(mat, domain, cast, recv, stats) {
+function _axisRecordFor(mat, domain, cast, recv, stats, allowPotPages = false) {
   const rsId = _rsIdOf(mat);
   const info = rsId ? texRefPageInfo(rsId) : null;
   const tex = mat && mat.map;
   if (!info) {
     stats.texRefAbsent += 1; // no TEXREF row ⇒ live dims, `texApprox: true`
-    return axisRecordOf(mat, { domain, castShadow: cast, receiveShadow: recv });
+    return axisRecordOf(mat, { domain, castShadow: cast, receiveShadow: recv, allowPotPages });
   }
   if (!info.onPage) {
     // The bit is the authority and it says NO — so the declared dims are not
-    // trusted for anything, neither to key with nor to compare against.
+    // trusted for square-tier page clamping; live POT dims (`512x256`, `128x128`,
+    // etc.) admit directly onto exact POT pages when `texCompressed || allowPotPages`.
     stats.texRefBitClear += 1;
-    return axisRecordOf(mat, { domain, castShadow: cast, receiveShadow: recv });
+    return axisRecordOf(mat, { domain, castShadow: cast, receiveShadow: recv, allowPotPages });
   }
   const rec = axisRecordOf(mat, {
-    domain, castShadow: cast, receiveShadow: recv,
+    domain, castShadow: cast, receiveShadow: recv, allowPotPages,
     texRef: { w: info.w, h: info.h, compressed: isBc7AtlasTexture(tex) },
   });
   stats.texRefPageKeyed += 1;
@@ -448,9 +508,9 @@ function _axisRecordFor(mat, domain, cast, recv, stats) {
 }
 
 /** Test hook — the axis record exactly as the feed builds it. */
-export function _poolAxisRecordForTest(mat, { domain = "st", castShadow = false, receiveShadow = false } = {}) {
+export function _poolAxisRecordForTest(mat, { domain = "st", castShadow = false, receiveShadow = false, allowPotPages = false } = {}) {
   const stats = { texRefPageKeyed: 0, texRefBitClear: 0, texRefAbsent: 0, texRefDimsWillMove: 0 };
-  return { rec: _axisRecordFor(mat, domain, castShadow, receiveShadow, stats), stats };
+  return { rec: _axisRecordFor(mat, domain, castShadow, receiveShadow, stats, allowPotPages), stats };
 }
 
 /** RSID-MARKER: ONE reader (`bc7_textures.js#materialRsId`) so the key a
@@ -464,42 +524,27 @@ function _rsIdOf(mat) {
 
 /** A member whose texture tier is still in flight is held out (its page dims
  *  would be the PREVIEW's, i.e. the wrong class) and re-offered when
- *  `atlasRefeed(rsId)` fires — the F-11.17 "nothing can stick" rule.
- *
- *  UNRECOVERABLE-BY-DESIGN is still COUNTED: a member with no rsId marker
- *  cannot be filed under any key, so it would sit on the legacy producer for
- *  the session. That population is `heldOutNoRsId`, and the whole point of the
- *  stamp is that it reads 0 — a nonzero value names a material class the
- *  texture lane builds without going through either stamp site. */
+ *  `atlasRefeed(rsId)` fires — the F-11.17 "nothing can stick" rule. */
 function _holdOut(node, scene3d, opts, mat, reason) {
   const rs = _rsIdOf(mat);
   if (!rs) { _world.stats.heldOutNoRsId += 1; return; }
-  // DRAIN BY CONSTRUCTION (leg 8). The ledger is re-armed by the BC7 verdict
-  // SETTLING (`upgradeMaterialToBc7` fires `atlasRefeed(rsId)` on landed,
-  // absent AND failed — RSID-MARKER leg 1), so a refusal is only worth filing
-  // while a settle is still coming. A member refused `offPage` DURING a
-  // re-offer has just had its settle: its `map` is final, so its dims can
-  // never stop differing from the declared page and no further event will
-  // ever change the answer. Re-filing it would be a ledger entry that retains
-  // a node for the session and never drains — the exact leak RSID-MARKER's D2
-  // declined to create. It is RETIRED instead: it renders on the legacy
-  // producer, once, and is counted.
   if (opts && opts.__poolReoffer === true && reason !== REFUSE.BC7_PENDING) {
     _world.stats.heldOutRetired += 1;
     return;
   }
-  // A held-out node is ALSO returned as passthrough and rendered by the legacy
-  // producer, so the same node can be offered again on a later feed while its
-  // verdict is still pending. Filing it twice would re-offer it twice, and the
-  // second re-offer would add a SECOND pool instance for a node the first one
-  // already pooled — a double-drawn prop. The mark is cleared when the
-  // hold-out is consumed.
   const ud = (node.userData = node.userData || {});
   if (ud.__poolHeldRs === rs) { _world.stats.heldOutDupes += 1; return; }
   ud.__poolHeldRs = rs;
   let list = _world.holdouts.get(rs);
   if (!list) { list = []; _world.holdouts.set(rs, list); }
-  list.push({ node, scene3d, opts, reason });
+  list.push({
+    node,
+    scene3d,
+    opts,
+    reason,
+    pvwMap: mat?.map || null,
+    hadCutout: _holdoutHasCutout(mat),
+  });
   _world.stats.heldOut += 1;
   _world.stats.heldOutByReason[reason] = (_world.stats.heldOutByReason[reason] || 0) + 1;
 }
@@ -917,6 +962,36 @@ export function poolAtlasRefeed(rsId) {
       if (h.node && h.node.userData) delete h.node.userData.__poolHeldRs;
       continue;
     }
+    // Guard BC7 full-tier (`tex-xu7`) promotion on held-out cutout/transparent
+    // singletons: if PVW had cutout alpha (`bc7AlphaFloor < cut`) and `tex-xu7`
+    // lost it (`>= cut`), revert to PVW and try `hbc7Fallback(rs)` so pooled
+    // wildflowers/reeds never turn into solid squares!
+    const hMat = h.node && h.node.material;
+    if (h.hadCutout && h.pvwMap && hMat && _holdoutLostCutout(hMat)) {
+      hMat.map = h.pvwMap;
+      try {
+        const src = bc7Source();
+        if (src && typeof src.hbc7Fallback === "function" && !hMat.userData?.__poolHbc7RescueTried) {
+          hMat.userData = hMat.userData || {};
+          hMat.userData.__poolHbc7RescueTried = true;
+          Promise.resolve(src.hbc7Fallback(rs)).then((twin) => {
+            if (!twin || twin.texDropped || !Array.isArray(twin.levels)) return;
+            const cut = clipAlphaCutOf(hMat);
+            const floor = bc7AlphaFloor(twin, cut);
+            if (cut > 0 && floor >= 0 && floor >= cut) return;
+            const rescued = makeBc7Texture(
+              twin,
+              texCompressedOnlyActive() ? { mipChain: true, anisotropy: getAdapterMaxAnisotropy() } : {},
+            );
+            if (!rescued) return;
+            rescued.wrapS = h.pvwMap?.wrapS ?? 1000;
+            rescued.wrapT = h.pvwMap?.wrapT ?? 1000;
+            hMat.map = rescued;
+            poolAtlasRefeed(rs);
+          }).catch(() => {});
+        }
+      } catch (_) { /* fail-soft */ }
+    }
     const k = `${(h.opts.lbKey >>> 0)}|${h.opts.domain || "st"}`;
     let g = groups.get(k);
     if (!g) {
@@ -944,7 +1019,15 @@ export function poolAtlasRefeed(rsId) {
       // must then be RE-FILED by `_holdOut` rather than silently dropped from
       // the ledger — that would strand it exactly the way the missing marker
       // did. "Nothing can stick" (F-11.17) means the loop re-arms itself.
-      for (const n of g.nodes) { if (n.userData) delete n.userData.__poolHeldRs; }
+      const isEcGroup = g.opts && g.opts.domain === "ec";
+      for (const n of g.nodes) {
+        if (n.userData) delete n.userData.__poolHeldRs;
+        if (isEcGroup && n.userData && n.userData.__poolCellPos) {
+          n.position.copy(n.userData.__poolCellPos);
+          if (n.userData.__poolCellQuat) n.quaternion.copy(n.userData.__poolCellQuat);
+          if (n.userData.__poolCellScl) n.scale.copy(n.userData.__poolCellScl);
+        }
+      }
       const { passthrough } = addSingletonsToPools(g.nodes, g.scene3d, g.opts);
       const after = w.classMats.stats.refused;
       for (const k of Object.keys(after)) {
@@ -953,7 +1036,15 @@ export function poolAtlasRefeed(rsId) {
       }
       const pt = new Set(passthrough);
       for (const n of g.nodes) {
-        if (pt.has(n)) continue;
+        if (pt.has(n)) {
+          if (isEcGroup && n.parent && n.userData && n.userData.__poolCellPos) {
+            n.position.set(0, 0, 0);
+            n.quaternion.identity();
+            n.scale.set(1, 1, 1);
+            n.updateMatrix();
+          }
+          continue;
+        }
         rehomed += 1;
         // The held-out node WAS scene-resident (it rendered as passthrough);
         // now that a pool owns its geometry it must leave the graph.

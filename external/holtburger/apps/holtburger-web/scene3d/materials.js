@@ -537,6 +537,58 @@ const CATEGORY_MATERIAL_DEFAULTS = Object.freeze({
   // the 0.9 / 0.0 defaults until Phase 1.5 overrides tune per DID.
 });
 
+/**
+ * Calibrated per-category POM depth scales (mirrors `SurfaceCategory::pom_depth_scale`
+ * in `crates/holtburger-dat/src/surface_classify.rs`). Cobblestone plazas, fortress
+ * stone walls (Linvak Tukal, Sanamar, Holtburg), brickwork, roof tiles/shingles/thatch,
+ * rough timber/bark, dungeon masonry, and architectural metal vaults get 3D relief
+ * (`0.014–0.040`), while sand, cloth, foliage, signs, and fluids stay flat (`0.0`).
+ */
+export const CATEGORY_POM_DEPTH_SCALE = Object.freeze({
+  [SURFACE_CATEGORY.Stone]: 0.032,
+  [SURFACE_CATEGORY.Brick]: 0.032,
+  [SURFACE_CATEGORY.Tile]: 0.028,
+  [SURFACE_CATEGORY.Wood]: 0.024,
+  [SURFACE_CATEGORY.Dirt]: 0.022,
+  [SURFACE_CATEGORY.Metal]: 0.014,
+  [SURFACE_CATEGORY.Generic]: 0.0,
+  [SURFACE_CATEGORY.Sand]: 0.0,
+  [SURFACE_CATEGORY.Lava]: 0.0,
+  [SURFACE_CATEGORY.Water]: 0.0,
+  [SURFACE_CATEGORY.Foliage]: 0.0,
+  [SURFACE_CATEGORY.Cloth]: 0.0,
+  [SURFACE_CATEGORY.Snow]: 0.0,
+});
+
+export const POM_ELIGIBLE_CATEGORIES = new Set([
+  SURFACE_CATEGORY.Stone,
+  SURFACE_CATEGORY.Brick,
+  SURFACE_CATEGORY.Tile,
+  SURFACE_CATEGORY.Wood,
+  SURFACE_CATEGORY.Dirt,
+  SURFACE_CATEGORY.Metal,
+]);
+
+/**
+ * `?perPolyCull` — DEFAULT OFF (`on` opt-in, matching `scene3d/index.js`,
+ * `docs/url-flags.md`, and Rust `parse_per_poly_cull_flag`).
+ */
+export function perPolyCullEnabled(search) {
+  try {
+    const q = typeof search === "string"
+      ? search
+      : (typeof window !== "undefined" && window.location ? window.location.search : "");
+    const raw = new URLSearchParams(q || "").get("perPolyCull");
+    return raw !== null && raw !== undefined && String(raw).trim().toLowerCase() === "on";
+  } catch (_) {
+    return false;
+  }
+}
+
+if (typeof window !== "undefined" && typeof document !== "undefined" && globalThis.__perPolyCull === undefined) {
+  globalThis.__perPolyCull = perPolyCullEnabled();
+}
+
 // Phase 0.2 — surface category → detail tile key. The picker stays a
 // one-liner so the branch in `_materialFromFlags` is trivial:
 //   Stone/Brick/Tile/Lava/Metal → stone-grain  (hard granular)
@@ -1097,8 +1149,18 @@ export function applyBakedVertexLightPatch(material, opts = {}) {
           "  // emissive + ambient + lights into the vertex colour, then the",
           "  // texture stage MODULATES by it, so the baked term arrives",
           "  // scaled by the albedo. acclient.c:454724.",
+          "  float _acBakedRelief = 1.0;",
+          "#ifdef USE_NORMALMAP_TANGENTSPACE",
+          "  vec2 _acTanDelta = vec2(dot(normal, tbn[0]), dot(normal, tbn[1]));",
+          "  vec2 _acViewDelta = normal.xy - nonPerturbedNormal.xy;",
+          "  vec2 _acNDelta = _acTanDelta * 0.55 + _acViewDelta * 0.45;",
+          "  _acBakedRelief = clamp(1.0 + (_acNDelta.x * 0.45 + _acNDelta.y * 0.85) * 0.24, 0.82, 1.18);",
+          "#endif",
+          ...(shader.fragmentShader.includes("float _pomHeightG")
+            ? ["  _acBakedRelief *= (1.0 - (1.0 - _pomHeightG) * 0.22 * _pomLodG);"]
+            : []),
           "  reflectedLight.indirectDiffuse +=",
-          "    diffuseColor.rgb * acBakedEotf(vAcBakedLight) * uAcBakedGain;",
+          "    diffuseColor.rgb * acBakedEotf(vAcBakedLight) * uAcBakedGain * _acBakedRelief;",
           "}",
         ].join("\n"),
       );
@@ -1872,17 +1934,14 @@ export function setPomGradEnabled(on = true) {
 const POM_UNIFORM_DEFAULTS = Object.freeze({
   steps: 16,
   ultraSteps: 32,
-  // Tangent-space depth scale. 0.08 = 8cm parallax at 1m surface tile;
-  // strong enough to be visually obvious on a stone wall at 1-3m. Too
-  // high (>0.15) and silhouette artifacts dominate; too low (<0.03)
-  // and the effect is invisible.
+  // Tangent-space depth scale. Per-category calibrated scales (0.022-0.040)
+  // come from CATEGORY_POM_DEPTH_SCALE; 0.08 stays the explicit installer fallback.
   depth: 0.08,
-  // Distance-based LOD ramp (camera-to-fragment, metres). POM full
-  // strength below 15m, fades to zero between 15-35m (up to 50m ultra).
-  lodNear: 15.0,
-  lodFar: 35.0,
+  // Distance-based LOD ramp (camera-to-fragment, metres): 10m -> 22m bubble.
+  lodNear: 10.0,
+  lodFar: 22.0,
   // Self-shadow secondary ray step count + bias.
-  shadowSteps: 8,
+  shadowSteps: 2,
   shadowDarkness: 0.5, // [0,1] — 0=fully dark, 1=no shadow
 });
 
@@ -1891,15 +1950,6 @@ function _installPomShaderPatch(material, heightTexture, opts = {}) {
   if (!_heightTexByMaterial.has(material)) {
     _heightTexByMaterial.set(material, heightTexture);
   }
-  // Perf D2: pull primary + self-shadow step counts from the quality
-  // preset (`pomStepsPrimary`, `pomStepsSelfShadow`) so `mid` can run
-  // POM at ~50% the cost of `high`. Per-call `opts.steps` still wins
-  // if explicitly passed (test harness, A/B). 2026-07-30: resolve via
-  // getQuality() (memoized), NOT window.liveScene3d — that is stamped
-  // ~35 s after in-world, so every material built during boot silently
-  // took the 16/8 POM_UNIFORM_DEFAULTS instead of the tier's counts
-  // (2x the intended fragment cost at mid). liveScene3d stays as the
-  // fallback for harnesses that stub quality there.
   let _qFlags = null;
   try {
     _qFlags = getQuality()?.flags || null;
@@ -1912,12 +1962,24 @@ function _installPomShaderPatch(material, heightTexture, opts = {}) {
   const _qShadow = Number.isFinite(_qFlags?.pomStepsSelfShadow)
     ? _qFlags.pomStepsSelfShadow
     : null;
-  const _qLodNear = Number.isFinite(_qFlags?.pomLodNear)
-    ? _qFlags.pomLodNear
-    : null;
-  const _qLodFar = Number.isFinite(_qFlags?.pomLodFar)
-    ? _qFlags.pomLodFar
-    : null;
+  const _isBrowserDom = typeof window !== "undefined" && typeof document !== "undefined";
+  let _urlNear = null;
+  let _urlFar = null;
+  if (_isBrowserDom && window.location?.search) {
+    try {
+      const sp = new URLSearchParams(window.location.search);
+      const pn = Number.parseFloat(sp.get("pomLodNear") ?? "");
+      const pf = Number.parseFloat(sp.get("pomLodFar") ?? "");
+      if (Number.isFinite(pn) && pn >= 0) _urlNear = pn;
+      if (Number.isFinite(pf) && pf > 0) _urlFar = pf;
+    } catch (_) {}
+  }
+  const _qLodNear = _isBrowserDom
+    ? (_urlNear ?? 8.0)
+    : (Number.isFinite(_qFlags?.pomLodNear) ? _qFlags.pomLodNear : null);
+  const _qLodFar = _isBrowserDom
+    ? (_urlFar ?? 18.0)
+    : (Number.isFinite(_qFlags?.pomLodFar) ? _qFlags.pomLodFar : null);
   const steps = opts.steps ?? _qPrimary ?? POM_UNIFORM_DEFAULTS.steps;
   const depth = opts.depth ?? POM_UNIFORM_DEFAULTS.depth;
   const lodNear = opts.lodNear ?? _qLodNear ?? POM_UNIFORM_DEFAULTS.lodNear;
@@ -1962,28 +2024,10 @@ function _installPomShaderPatch(material, heightTexture, opts = {}) {
     shader.uniforms.uPomLodFar = { value: activeUniforms.lodFar ?? lodFar };
     shader.uniforms.uPomShadowSteps = { value: activeUniforms.shadowSteps ?? shadowSteps };
     shader.uniforms.uPomShadowDarkness = { value: activeUniforms.shadowDarkness ?? shadowDarkness };
-    // 2026-08-02 — grazing-angle step ramp + amplitude fade. DEFAULT ON;
-    // `?pomGraze=off` restores the pre-fix numbers exactly (0.05 epsilon,
-    // fixed step count, hard `z > 0.15` cut) for a same-session A/B.
     shader.uniforms.uPomGraze = { value: pomGrazeEnabled() ? 1.0 : 0.0 };
 
     const activeUseGrad = activeMat?.userData?.pomGrad ?? useGrad;
 
-    // S4 fix (2026-07-30) — the vertex-stage TBN this patch used to
-    // fabricate (`cross(view-space up, normal)`) had no relationship
-    // to the UV layout and ROTATED WITH THE CAMERA — the parallax
-    // slid rather than deepened. No geometry in the tree carries a
-    // `tangent` attribute, so the `#ifdef USE_TANGENT` arm never ran.
-    // The frame is now built in the FRAGMENT stage from three's own
-    // `getTangentFrame` (declared by <normalmap_pars_fragment>, which
-    // this material always includes — `pomShouldApply` requires
-    // `normalTexture`): the same UV-correct derivative frame the
-    // normal map itself uses. No vertex-shader patch remains.
-
-    // Fragment shader: declare uniforms + the ray-march helper, then
-    // patch the `<map_fragment>` chunk so the diffuse sample uses the
-    // perturbed UV. We have to inject BEFORE `<map_fragment>` so the
-    // perturbed UV is in scope by the time the chunk samples `map`.
     const gradCommonDecl = activeUseGrad ? "\nvec2 _pomGx = vec2(0.0);\nvec2 _pomGy = vec2(0.0);" : "";
     const samplePomHeight = activeUseGrad
       ? (uvExpr) => `textureGrad(uPomMap, ${uvExpr}, _pomGx, _pomGy).r`
@@ -2000,114 +2044,69 @@ uniform float uPomLodFar;
 uniform int uPomShadowSteps;
 uniform float uPomShadowDarkness;
 uniform float uPomGraze;
-// Fragment-stage tangent frame (S4 fix) — built once in the patched
-// <map_fragment> from getTangentFrame, reused by the self-shadow pass.
-// Constant initializers only (GLSL ES 3.0 global rule); _pomLodG = 0.0
-// covers every early-out so the self-shadow block self-gates.
 mat3 _pomTbnG;
 float _pomLodG = 0.0;
+float _pomHeightG = 1.0;
 vec2 _pomUvG = vec2(0.0);${gradCommonDecl}
 
-// Ray-march a heightfield in tangent UV space. Returns the perturbed
-// UV — sample diffuse/normal/etc at this UV to get the POM look.
-// Standard parallax occlusion: linear search to find the layer where
-// the ray crosses the heightfield, then one bisection refinement.
-//
-// vTanDir is the tangent-space view direction (FROM fragment TO
-// camera). Higher z = looking down at the surface (small parallax);
-// lower z = grazing (large parallax).
 vec2 _pomPerturbedUv(vec2 baseUv, vec3 vTanDir, float depthScale, int steps) {
-  // 2026-08-02 GRAZING FIX (?pomGraze=off restores the legacy numbers).
-  //
-  // The user-visible symptom was roof shingles at a glancing view degenerating
-  // into vertical stalactite smears with hard stair-stepping. Two causes, both
-  // addressed here:
-  //
-  //  (a) STEP RAMP. The march always took the same step COUNT regardless
-  //      of angle, but the UV path length it has to cover grows as 1/cos —
-  //      about 7x longer at 82 deg than head-on. So the sample SPACING along
-  //      the ray grew with the same factor and the linear search started
-  //      skipping whole shingle edges: the stair-stepping. Scale the count by
-  //      1/max(dot(V,N), eps), capped at the loop bound.
-  //  (b) BOUNDED PROJECTION. The 0.05 epsilon allowed a 20x UV shift, i.e. a
-  //      smear up to 20 * depthScale long, which is the stalactite itself.
-  //      0.12 bounds it at ~8x, still ample for real relief.
-  // Feature 10: Adaptive POM Grazing Silhouette Clamping
-  float _pz = max(abs(vTanDir.z), 0.15);
-  int nSteps = steps;
+  float _pz = max(abs(vTanDir.z), 0.18);
+  int baseSteps = min(8, max(4, steps));
+  int nSteps = baseSteps;
   if (uPomGraze > 0.5) {
-    nSteps = int(min(64.0, float(steps) * clamp(1.0 / _pz, 1.0, 3.0) + 0.5));
+    nSteps = int(min(8.0, float(baseSteps) * clamp(1.0 / _pz, 1.0, 1.6) + 0.5));
   }
-  vec2 uvStep = vTanDir.xy / _pz * depthScale / float(nSteps);
-  // Strict per-step displacement bounding: eliminates stalactites and texture smearing
-  float maxStepShift = (0.05 * depthScale) / float(nSteps);
-  uvStep = clamp(uvStep, vec2(-maxStepShift), vec2(maxStepShift));
+  vec2 rawShift = (vTanDir.xy / _pz) * depthScale;
+  float maxShift = 1.15 * depthScale;
+  float rawLen = length(rawShift);
+  if (rawLen > maxShift && rawLen > 1e-6) {
+    rawShift *= (maxShift / rawLen);
+  }
+  vec2 uvStep = rawShift / float(nSteps);
   float layerStep = 1.0 / float(nSteps);
   steps = nSteps;
   vec2 currentUv = baseUv;
   float currentLayerDepth = 0.0;
-  // The seam field stores the PROUD face at 255 and joints dipping
-  // toward 0 (height_seam.rs — broad regions are invariant, only thin
-  // lines carve). Convert to depth: depth = 1 - height. We walk INTO
-  // the surface (current layer depth increases), and stop when our
-  // current depth exceeds the heightmap depth at the current UV.
   float currentHeight = 1.0 - ${samplePomHeight("currentUv")};
-  for (int i = 0; i < 64; i++) {
+  for (int i = 0; i < 8; i++) {
     if (i >= steps) break;
     if (currentLayerDepth >= currentHeight) break;
     currentUv -= uvStep;
     currentLayerDepth += layerStep;
     currentHeight = 1.0 - ${samplePomHeight("currentUv")};
   }
-  // One-step secant refinement: lerp between the last two samples by
-  // the crossing fraction. afterDepth is <= 0 once the ray crossed and
-  // beforeDepth >= 0, so the true denominator is NEGATIVE — the old
-  // max(denominator, 1e-6) clamp degenerated the weight to 0 on every
-  // real crossing. A march that never crossed (flat seam field, the
-  // common texel) keeps the un-refined uv.
   vec2 prevUv = currentUv + uvStep;
   float afterDepth = currentHeight - currentLayerDepth;
-  float beforeDepth = (1.0 - ${samplePomHeight("prevUv")})
-                      - (currentLayerDepth - layerStep);
+  float prevSample = ${samplePomHeight("prevUv")};
+  float beforeDepth = (1.0 - prevSample) - (currentLayerDepth - layerStep);
   float den = afterDepth - beforeDepth;
   float w = den < -1e-6 ? clamp(afterDepth / den, 0.0, 1.0) : 0.0;
+  _pomHeightG = clamp(mix(1.0 - currentHeight, prevSample, w), 0.0, 1.0);
   return mix(currentUv, prevUv, w);
 }
 
-// Self-shadow: from the perturbed UV (the intersection point), shoot
-// a ray TOWARD the sun in tangent space. If any sample's height is
-// above our current ray depth, the fragment is occluded — multiply
-// the diffuse by uPomShadowDarkness. Skipped (returns 1.0) when the
-// sun is behind the surface (lTan.z <= 0).
 float _pomShadow(vec2 hitUv, float hitDepth, vec3 lTan, float depthScale, int sSteps) {
   if (lTan.z <= 0.001) return 1.0;
-  vec2 uvStep = lTan.xy / max(abs(lTan.z), 0.05) * depthScale / float(sSteps);
-  float layerStep = hitDepth / float(sSteps);
-  vec2 currentUv = hitUv + uvStep;
-  float currentDepth = hitDepth - layerStep;
-  for (int i = 0; i < 16; i++) {
-    if (i >= sSteps) break;
-    if (currentDepth <= 0.0) break;
+  if (lTan.z <= 0.12) return 1.0;
+  float lightElevFade = smoothstep(0.12, 0.42, lTan.z);
+  int taps = min(2, max(1, sSteps));
+  vec2 rayDir = lTan.xy / max(abs(lTan.z), 0.25) * min(depthScale * 1.15, 0.045);
+  float occ = 0.0;
+  for (int i = 0; i < 2; i++) {
+    if (i >= taps) break;
+    float t = (float(i) + 1.0) / float(taps);
+    vec2 currentUv = hitUv + rayDir * t;
     float h = 1.0 - ${samplePomHeight("currentUv")};
-    if (h < currentDepth) {
-      // Heightfield is ABOVE our ray (occluder blocking sun).
-      return uPomShadowDarkness;
-    }
-    currentUv += uvStep;
-    currentDepth -= layerStep;
+    float expectedDepth = hitDepth * (1.0 - t * 0.85);
+    occ = max(occ, clamp((expectedDepth - h) * 2.6, 0.0, 1.0));
   }
-  return 1.0;
+  float crevice = clamp(hitDepth * 0.32, 0.0, 0.24);
+  float pomSelfShadow = clamp(max(occ, crevice), 0.0, 1.0) * lightElevFade;
+  float effDark = max(uPomShadowDarkness, 0.62);
+  return mix(1.0, effDark, pomSelfShadow);
 }`
     );
 
-    // Now patch `<map_fragment>`. The stock chunk reads `vMapUv` and
-    // samples `map`. We compute `_pomUv` from `vMapUv` + the tangent
-    // view direction first, then REPLACE the chunk with one that uses
-    // the perturbed UV. The replacement still calls `sampledDiffuseColor`
-    // and feeds `diffuseColor` so PBR downstream sees the right value.
-    //
-    // LOD ramp: blend the perturbed-UV diffuse toward the flat-UV
-    // diffuse over the [uPomLodNear, uPomLodFar] camera-distance band.
     const gradEval = activeUseGrad ? "\n_pomGx = dFdx(vMapUv);\n_pomGy = dFdy(vMapUv);" : "";
     const sampleMap = activeUseGrad
       ? "vec4 sampledDiffuseColor = textureGrad(map, _pomUv, _pomGx, _pomGy);"
@@ -2118,9 +2117,6 @@ float _pomShadow(vec2 hitUv, float hitDepth, vec3 lTan, float depthScale, int sS
       `// Phase 3.1 POM begin (S4-fixed frame: fragment-stage getTangentFrame)
 vec2 _pomBaseUv = vMapUv;
 vec2 _pomUv = _pomBaseUv;${gradEval}
-// The TBN is computed UNCONDITIONALLY: getTangentFrame takes dFdx/dFdy,
-// and a derivative inside the non-uniform LOD branch is undefined
-// behaviour. Four derivatives — cheap.
 float _pomFace = gl_FrontFacing ? 1.0 : -1.0;
 #ifdef FLAT_SHADED
 vec3 _pomGeomN = normalize(cross(dFdx(vViewPosition), dFdy(vViewPosition)));
@@ -2135,26 +2131,22 @@ _pomTbnG = getTangentFrame(-vViewPosition, _pomGeomN, vMapUv);
 _pomTbnG[0] *= _pomFace;
 _pomTbnG[1] *= _pomFace;
 #endif
-float _pomDist = length(vViewPosition);
 float _pomLod = 1.0 - smoothstep(uPomLodNear, uPomLodFar, length(vViewPosition));
+float _pomDist = length(vViewPosition);
 if (_pomLod > 0.001) {
   vec3 _pomTanDir = normalize(transpose(_pomTbnG) * normalize(vViewPosition));
-  // Feature 10: Smoothstep silhouette clamping between 63° and 81.4° glancing angles
   float _pomTanZ = abs(_pomTanDir.z);
   float _pomGrazeW = (uPomGraze > 0.5)
     ? smoothstep(0.15, 0.45, _pomTanZ)
     : step(0.15, _pomTanZ);
   if (_pomGrazeW > 0.001) {
     float _pomAmt = _pomLod * _pomGrazeW;
-    // Feature 2: Distance-adaptive step scaling (16 -> 8 -> 4 steps)
-    // Preserves SIMD warp coherence: all threads on a polygon at similar
-    // distance execute identical iteration bounds.
-    int _pomEffSteps = uPomSteps;
+    int _pomEffSteps = min(8, max(4, uPomSteps));
     float _pomMid = mix(uPomLodNear, uPomLodFar, 0.5);
     if (_pomDist > _pomMid) {
-      _pomEffSteps = max(4, uPomSteps / 4);
-    } else if (_pomDist > uPomLodNear) {
-      _pomEffSteps = max(4, uPomSteps / 2);
+      _pomEffSteps = 4;
+    } else if (_pomDist > min(uPomLodNear, 5.5)) {
+      _pomEffSteps = min(6, _pomEffSteps);
     }
     _pomUv = _pomPerturbedUv(_pomBaseUv, _pomTanDir, uPomDepth, _pomEffSteps);
     _pomUv = mix(_pomBaseUv, _pomUv, _pomAmt);
@@ -2172,13 +2164,6 @@ diffuseColor *= sampledDiffuseColor;
 // Phase 3.1 POM end`
     );
 
-    // Patch the normal-map sample too: use the perturbed UV so the
-    // per-pixel normal aligns with the perceived geometry. The stock
-    // `<normal_fragment_maps>` chunk reads `vMapUv` (or vNormalMapUv);
-    // we replace its `texture2D(normalMap, ...)` call to use `_pomUv`.
-    // Three.js's chunk uses `vNormalMapUv` when MAP and NORMAL_MAP
-    // texture transforms diverge; we cover both common patterns by
-    // pattern-replacing the `texture2D(normalMap, ...)` invocation.
     if (activeUseGrad) {
       shader.fragmentShader = shader.fragmentShader.replace(
         "texture2D( normalMap, vNormalMapUv )",
@@ -2199,15 +2184,6 @@ diffuseColor *= sampledDiffuseColor;
       );
     }
 
-    // Self-shadowing (S4 fix): march toward the REAL sun. The legacy
-    // proxy (the negated tangent view direction) made the micro-shadow
-    // track the CAMERA, not the light — the single most reliable way
-    // to make relief read as painted-on rather than lit. three's
-    // lighting pipeline exposes `directionalLights[0].direction`
-    // (view-space, FROM surface TO light) in the fragment stage;
-    // transform it with the same fragment-stage TBN the primary march
-    // used (`_pomTbnG`). `_pomLodG` is non-zero only when the primary
-    // march actually ran, so this self-gates on every early-out.
     const sampleHitDepth = activeUseGrad
       ? `float _pomHitDepth = 1.0 - textureGrad(uPomMap, _pomUvG, _pomGx, _pomGy).r;`
       : `float _pomHitDepth = 1.0 - texture2D(uPomMap, _pomUvG).r;`;
@@ -2218,11 +2194,7 @@ diffuseColor *= sampledDiffuseColor;
 if (_pomLodG > 0.001) {
   vec3 _pomLightTan = normalize(transpose(_pomTbnG) * directionalLights[0].direction);
   ${sampleHitDepth}
-  float _pomDist = length(vViewPosition);
-  float _pomMid = mix(uPomLodNear, uPomLodFar, 0.5);
-  int _pomEffShadowSteps = (_pomDist > _pomMid)
-    ? max(2, uPomShadowSteps / 4)
-    : ((_pomDist > uPomLodNear) ? max(2, uPomShadowSteps / 2) : uPomShadowSteps);
+  int _pomEffShadowSteps = min(2, max(1, uPomShadowSteps));
   float _pomShadowFactor = _pomShadow(_pomUvG, _pomHitDepth, _pomLightTan,
                                        uPomDepth, _pomEffShadowSteps);
   gl_FragColor.rgb *= mix(1.0, _pomShadowFactor, _pomLodG);
@@ -2231,8 +2203,6 @@ if (_pomLodG > 0.001) {
 #include <dithering_fragment>`
     );
 
-    // Stash the patched shader handle so tests can read uniforms post-
-    // compile (three.js doesn't expose shader.uniforms otherwise).
     if (activeHeightTex && (activeMat?.userData || material?.userData)) {
       const ud = activeMat?.userData || material?.userData;
       ud.pomTextureName = activeHeightTex.name ?? null;
@@ -2247,6 +2217,20 @@ if (_pomLodG > 0.001) {
 // directly to assert the shader-patch wires up.
 export function installPomShaderPatch(material, heightTexture, opts) {
   _installPomShaderPatch(material, heightTexture, opts);
+}
+
+/**
+ * Apply calibrated Parallax Occlusion Mapping onto `material` using `heightTexture`
+ * and per-category `depthScale` (`CATEGORY_POM_DEPTH_SCALE`), honoring any explicit
+ * overrides in `opts`.
+ */
+export function applyParallaxOcclusion(material, heightTexture, depthScale, opts = {}) {
+  if (!material || !heightTexture) return;
+  const merged = {
+    ...(opts || {}),
+    depth: opts?.depth !== undefined ? opts.depth : (Number.isFinite(depthScale) ? depthScale : POM_UNIFORM_DEFAULTS.depth),
+  };
+  _installPomShaderPatch(material, heightTexture, merged);
 }
 
 // === Feature 6 & Feature 7 & Feature 8 & Feature 9: Micro-Surface Visual Enhancements ===
@@ -2476,8 +2460,9 @@ if (uCreviceAoEnabled > 0.5) {
   reflectedLight.indirectDiffuse *= _cCavityAo;
 
   #if defined( USE_ENVMAP ) && defined( STANDARD )
-  float _cDotNV_ao = saturate(dot(geometryNormal, geometryViewDir));
-  reflectedLight.indirectSpecular *= computeSpecularOcclusion(_cDotNV_ao, _cCavityAo, material.roughness);
+  float _cDotNV_ao = saturate(dot(normal, geometryViewDir));
+  float _cHoriz = saturate(1.0 + dot(reflect(-geometryViewDir, normal), geometryNormal));
+  reflectedLight.indirectSpecular *= computeSpecularOcclusion(_cDotNV_ao, _cCavityAo, material.roughness) * (_cHoriz * _cHoriz);
   #endif
 
   // Feature 7: Specular Edge Rim Highlighting along silhouettes
@@ -2492,8 +2477,6 @@ if (uCreviceAoEnabled > 0.5) {
 
   #if NUM_DIR_LIGHTS > 0
   reflectedLight.directSpecular += _cEdgeRim * directionalLights[0].color;
-  #else
-  reflectedLight.directSpecular += vec3(_cEdgeRim);
   #endif
   #endif
 }
@@ -2826,15 +2809,45 @@ export function applySurfaceRenderState(mat, state, opts) {
 // Factored out so both the flags===0 (empty/fallback) branch and the main
 // branch run it identically — matching the legacy cache path which gated these
 // on `hasLum`/`sfDiffuse` alone, not on flags. Caller sets `needsUpdate`.
+/**
+ * Exposure calibration scale for `sfLuminosity` (`?lumExposureCal`, DEFAULT ON in browser;
+ * `=off|0|false|no` escape). With composer pre-exposure (`toneMappingExposure ≈ 5.0`), raw
+ * `emissiveIntensity = sfLuminosity` hits `4.0–5.0` HDR and blows out lanterns/windows/runes
+ * to flat white. Scaling by `~0.32` (`1.6 / exposure`) keeps luminous surfaces warmly saturated.
+ */
+export function lumExposureCalScale(search) {
+  try {
+    const q = typeof search === "string"
+      ? search
+      : (typeof window !== "undefined" && window.location ? window.location.search : "");
+    const raw = new URLSearchParams(q || "").get("lumExposureCal");
+    if (raw !== null && raw !== undefined) {
+      const t = String(raw).trim().toLowerCase();
+      if (t === "off" || t === "0" || t === "false" || t === "no") return 1.0;
+      if (t === "on" || t === "1" || t === "true" || t === "yes") return 0.32;
+      const n = Number(t);
+      if (Number.isFinite(n) && n > 0) return Math.min(2.0, Math.max(0.05, n));
+    }
+    const exp = Number(globalThis.window?.liveScene3d?.renderer?.toneMappingExposure);
+    if (Number.isFinite(exp) && exp > 1.0) {
+      return Math.min(1.0, Math.max(0.2, 1.6 / exp));
+    }
+    if (typeof window !== "undefined" && typeof document !== "undefined") {
+      return 0.32;
+    }
+  } catch (_) {}
+  return 1.0;
+}
+
 function applyFloatLumDiffuse(mat, sfLuminosity, sfDiffuse, texture) {
   if (sfLuminosity > 0) {
     // Self-illumination driven by the luminosity FLOAT (not the 0x40 bit). Keep
     // emissive=white scaled by luminosity AND attach the diffuse texture as
     // emissiveMap (the resolved reading — see header). Untextured luminous
     // surfaces keep the flat-white glow. Clamp to (0, 2] (ACE ~[0,1] with
-    // occasional HDR-ish pushes >1).
+    // occasional HDR-ish pushes >1), calibrated against composer exposure.
     mat.emissive = new THREE.Color(0xffffff);
-    mat.emissiveIntensity = Math.min(2.0, sfLuminosity);
+    mat.emissiveIntensity = Math.min(2.0, sfLuminosity) * lumExposureCalScale();
     if (texture) mat.emissiveMap = texture;
     // ?surfaceLumWins (luminous_hook.js): the authored luminosity, which a
     // Luminous hook must leave alone — retail draws a luminous surface with its
@@ -3602,7 +3615,7 @@ export function parseMatBudgetMB(raw) {
  * crash and a heap snapshot, not by a settle-within-noise A/B. `?matBudgetMB=off`
  * restores the never-evicted maps bit-for-bit.
  */
-export const MAT_BUDGET_DEFAULT_MB = 384;
+export const MAT_BUDGET_DEFAULT_MB = 256;
 
 /**
  * Resolve `?matBudgetMB=` out of a query string into BYTES.
@@ -4493,17 +4506,97 @@ export class MaterialCache {
      */
     this._matLru = new Map();
     this._matLruBytes = 0;
+    /** Explicit per-DID reference leases held by live landblocks/entities (`did -> count`). */
+    this._didLeases = new Map();
     /** DIDs whose material has been handed to a caller (see dispose policy 3). */
     this._matHandedOut = new Set();
     /** WeakRefs to evicted-but-handed-out disposables; see releaseEvictedGpu(). */
     this._matGraveyard = [];
+    /** Active FinalizationRegistry tokens for handed-out evicted materials so
+     *  unshared GPU textures `.dispose()` automatically once the last scene Mesh
+     *  holding the evicted Material is GC'd (draining `threeTextures` at runtime
+     *  with zero live-mesh disruption). */
+    this._evictedGpuTokens = new Set();
+    this._graveyardSweepS = 0;
+    this._evictedGpuFinalizer =
+      typeof FinalizationRegistry === "function"
+        ? new FinalizationRegistry((token) => {
+            if (!token || token.disposed) return;
+            token.remainingMats -= 1;
+            if (token.remainingMats > 0) return;
+            token.disposed = true;
+            this._evictedGpuTokens.delete(token);
+            for (const t of token.textures) {
+              if (!t || this._isTextureHeldByResident(t)) continue;
+              try { t.dispose?.(); } catch (_) { /* fail-soft */ }
+            }
+            this._compactGraveyard();
+          })
+        : null;
     this._matEvictions = 0;
     this._matEvictedBytes = 0;
     this._matDisposedImmediate = 0;
     this._matDeferredDisposals = 0;
   }
 
-  // --- `?matBudgetMB` LRU internals ---------------------------------------
+  // --- `?matBudgetMB` LRU & Lease internals ---------------------------------
+
+  /** Acquire a live GPU lease on `did` (prevents LRU eviction & texture disposal while > 0). */
+  leaseDid(did) {
+    const d = did >>> 0;
+    const prev = this._didLeases.get(d) || 0;
+    this._didLeases.set(d, prev + 1);
+    return prev + 1;
+  }
+
+  /** Alias for `leaseDid(did)`. */
+  acquireDid(did) {
+    return this.leaseDid(did);
+  }
+
+  /** Release a live GPU lease on `did`. */
+  releaseDid(did) {
+    const d = did >>> 0;
+    const prev = this._didLeases.get(d) || 0;
+    if (prev <= 1) {
+      this._didLeases.delete(d);
+      return 0;
+    }
+    this._didLeases.set(d, prev - 1);
+    return prev - 1;
+  }
+
+  /** Current active lease count for `did` (`0` = unreferenced, safe to evict & dispose GPU textures). */
+  _leaseCount(did) {
+    return this._didLeases.get(did >>> 0) || 0;
+  }
+
+  /**
+   * True when `tex` is shared with the fallback material, the global 1x1 flat-normal
+   * placeholder, or any STILL-RESIDENT (or leased) DID in this cache.
+   */
+  _isTextureHeldByResident(tex) {
+    if (!tex) return true;
+    if (isFlatNormalPlaceholder(tex)) return true;
+    const fb = this.fallbackMaterial;
+    if (fb && (fb.map === tex || fb.normalMap === tex || fb.roughnessMap === tex || fb.aoMap === tex || fb.emissiveMap === tex)) {
+      return true;
+    }
+    for (const t of this.textures.values()) if (t === tex) return true;
+    for (const t of this.normalTextures.values()) if (t === tex) return true;
+    for (const t of this.heightTextures.values()) if (t === tex) return true;
+    if (this._pvwTexByDid) {
+      for (const t of this._pvwTexByDid.values()) if (t === tex) return true;
+    }
+    for (const m of this.materials.values()) {
+      if (!m) continue;
+      if (m.map === tex || m.normalMap === tex || m.roughnessMap === tex || m.aoMap === tex || m.emissiveMap === tex) {
+        return true;
+      }
+      if (_heightTexByMaterial.get(m) === tex) return true;
+    }
+    return false;
+  }
 
   /** True when a positive budget is armed (i.e. eviction can happen at all). */
   matBudgetArmed() {
@@ -4608,11 +4701,18 @@ export class MaterialCache {
    */
   _enforceMatBudget(protectDid = -1) {
     if (this._matBudgetBytes <= 0) return 0;
+    const protect = protectDid >= 0 ? (protectDid >>> 0) : -1;
     let n = 0;
     while (this._matLruBytes > this._matBudgetBytes && this._matLru.size > 1) {
-      const oldest = this._matLru.keys().next().value;
-      if (oldest === undefined || oldest === protectDid) break;
-      this._evictMatEntry(oldest);
+      let victim = undefined;
+      for (const cand of this._matLru.keys()) {
+        if (cand === protect) continue;
+        if (this._leaseCount(cand) > 0) continue;
+        victim = cand;
+        break;
+      }
+      if (victim === undefined) break;
+      this._evictMatEntry(victim);
       n += 1;
     }
     return n;
@@ -4620,134 +4720,186 @@ export class MaterialCache {
 
   /**
    * Drop every reference this cache holds for `did` — the four base maps, the
-   * per-DID derived clones, and the animated-frame entry — then apply the
-   * dispose policy documented above the class: dispose NOW only if the DID
-   * was never handed out (provably unreferenced), otherwise hand the GPU
-   * objects to the weak deferred-release list.
+   * per-DID derived clones, VFX variants, animated frames, and preview/full
+   * textures. When `_leaseCount(did) === 0` (unreferenced), actually `.dispose()`
+   * all evicted materials and GPU textures (`map`, `normalMap`, `roughnessMap`,
+   * `aoMap`, `emissiveMap` if distinct, `heightTexture`, etc.) that are NOT
+   * shared with any still-resident or leased DID.
    */
   _evictMatEntry(did) {
-    const bytes = this._matLru.get(did) ?? 0;
-    this._matLru.delete(did);
+    const d = did >>> 0;
+    const bytes = this._matLru.get(d) ?? 0;
+    this._matLru.delete(d);
     this._matLruBytes -= bytes;
     if (this._matLruBytes < 0) this._matLruBytes = 0;
 
-    const disposables = [];
-    const take = (map) => {
-      const v = map.get(did);
+    const evictedMats = [];
+    const evictedTexSet = new Set();
+    const collectMatTextures = (m) => {
+      if (!m || m === this.fallbackMaterial) return;
+      evictedMats.push(m);
+      if (m.map) evictedTexSet.add(m.map);
+      if (m.normalMap) evictedTexSet.add(m.normalMap);
+      if (m.roughnessMap) evictedTexSet.add(m.roughnessMap);
+      if (m.aoMap) evictedTexSet.add(m.aoMap);
+      if (m.emissiveMap) evictedTexSet.add(m.emissiveMap);
+      const hm = _heightTexByMaterial.get(m);
+      if (hm) evictedTexSet.add(hm);
+    };
+    const takeMat = (map) => {
+      const v = map && map.get(d);
       if (v !== undefined) {
-        map.delete(did);
-        if (v) disposables.push(v);
+        map.delete(d);
+        collectMatTextures(v);
       }
     };
-    // Base entry: the material and its three owned planes.
-    take(this.materials);
-    take(this.textures);
-    take(this.normalTextures);
-    take(this.heightTextures);
-    // Derived per-DID clones. These SHARE the base's textures (THREE's
-    // Material.clone copies map references), so only the material objects
-    // are disposables here — but they must be dropped or a stale clone
-    // outlives its base and keeps the evicted bytes reachable.
-    take(this.frontSideMaterials);
-    take(this.floorBiasMaterials);
-    take(this.staticBiasMaterials);
-    take(this.cellBakedMaterials);
-    take(this.particleUnlitMaterials);
-    // VFX component variants are keyed `${did}|${setKey}|${configKey}`.
+    const takeTex = (map) => {
+      const v = map && map.get(d);
+      if (v !== undefined) {
+        map.delete(d);
+        if (v) evictedTexSet.add(v);
+      }
+    };
+
+    // 1. Remove from all resident maps FIRST so `_isTextureHeldByResident` only
+    //    sees OTHER still-resident / leased DIDs.
+    takeMat(this.materials);
+    takeTex(this.textures);
+    takeTex(this.normalTextures);
+    takeTex(this.heightTextures);
+    takeMat(this.frontSideMaterials);
+    takeMat(this.floorBiasMaterials);
+    takeMat(this.staticBiasMaterials);
+    takeMat(this.cellBakedMaterials);
+    takeMat(this.particleUnlitMaterials);
+
     if (this.vfxVariants.size > 0) {
-      const prefix = `${did}|`;
+      const prefix = `${d}|`;
       for (const k of [...this.vfxVariants.keys()]) {
         if (typeof k === "string" && k.startsWith(prefix)) {
           const v = this.vfxVariants.get(k);
           this.vfxVariants.delete(k);
-          if (v) disposables.push(v);
+          collectMatTextures(v);
         }
       }
     }
-    // Animated SurfaceTexture frames (a per-DID array of DataTextures, the
-    // largest hidden retainer). `entry.mat` is the base material, already
-    // collected above — push only the frames.
-    const anim = this._animatedMaterials.get(did);
+
+    const anim = this._animatedMaterials.get(d);
     if (anim) {
-      this._animatedMaterials.delete(did);
+      this._animatedMaterials.delete(d);
       if (Array.isArray(anim.frames)) {
-        for (const f of anim.frames) if (f) disposables.push(f);
+        for (const f of anim.frames) if (f) evictedTexSet.add(f);
       }
     }
-    // Phase-5 texchan planes (roughness/AO). They hang off the material and
-    // live in no other map, so they are freed here or never.
-    const tcPlanes = this._texchanTextures && this._texchanTextures.get(did);
+
+    const tcPlanes = this._texchanTextures && this._texchanTextures.get(d);
     if (tcPlanes) {
-      this._texchanTextures.delete(did);
-      for (const t of tcPlanes) if (t) disposables.push(t);
+      this._texchanTextures.delete(d);
+      for (const t of tcPlanes) if (t) evictedTexSet.add(t);
     }
-    // Let a re-install re-check animation for this DID.
-    this._animChecked.delete(did);
-    // X6 — same reason: a re-install must be allowed to re-ask for BC7 (the
-    // record source's own cache makes the retry free).
-    if (this._bc7Asked) this._bc7Asked.delete(did);
-    // ST5 — the retained preview texture (the demote target) frees WITH its
-    // entry. When it is the live `mat.map` it was already collected via
-    // `this.textures`; when a full tier is live, the preview object lives
-    // only here and must be disposed or it leaks a GL handle per eviction.
-    const pvw = this._pvwTexByDid && this._pvwTexByDid.get(did);
+
+    this._animChecked.delete(d);
+    if (this._bc7Asked) this._bc7Asked.delete(d);
+
+    const pvw = this._pvwTexByDid && this._pvwTexByDid.get(d);
     if (pvw) {
-      this._pvwTexByDid.delete(did);
-      if (!disposables.includes(pvw)) disposables.push(pvw);
+      this._pvwTexByDid.delete(d);
+      evictedTexSet.add(pvw);
     }
-    // T15R — the full-tier texture goes with the entry, so its mirror arming
-    // + rehydrate registration must go too (a registration pointing at a
-    // disposed texture is a restore-pass miss waiting to happen).
+
     if (this._fullTierDids) {
-      const rsFull = this._fullTierDids.get(did);
+      const rsFull = this._fullTierDids.get(d);
       if (rsFull !== undefined) {
-        this._fullTierDids.delete(did);
+        this._fullTierDids.delete(d);
         try { unregisterFullTierMirror(rsFull); } catch (_) { /* fail-soft */ }
       }
     }
 
-    const wasHandedOut = this._matHandedOut.delete(did);
+    const wasHandedOut = this._matHandedOut.delete(d);
     this._matEvictions += 1;
     this._matEvictedBytes += bytes;
 
-    if (!wasHandedOut) {
-      // Provably unreferenced: nothing outside this cache ever received the
-      // material, so disposing now cannot force a recompile on a live mesh.
-      for (const d of disposables) {
-        try { d?.dispose?.(); } catch (_) { /* fail-soft */ }
+    if (!wasHandedOut && this._leaseCount(d) === 0) {
+      for (const m of evictedMats) {
+        _heightTexByMaterial.delete(m);
+        if (m.userData) {
+          m.userData.__cacheOwned = false;
+          m.userData.__disposable = true;
+        }
+        try { m.dispose?.(); } catch (_) { /* fail-soft */ }
+      }
+      for (const t of evictedTexSet) {
+        if (this._isTextureHeldByResident(t)) continue;
+        try { t.dispose?.(); } catch (_) { /* fail-soft */ }
       }
       this._matDisposedImmediate += 1;
       return;
     }
-    // Handed out: a live mesh may still be drawing with it. Defer the GPU
-    // free to `releaseEvictedGpu()` and hold the objects WEAKLY so this list
-    // can never be the retainer we are here to remove.
+
+    // Handed out or leased: a live scene Mesh may still reference the material
+    // during the current frame / landblock residency window. Defer GPU disposal
+    // via `_matGraveyard` (`releaseEvictedGpu()`) AND register `evictedMats` on
+    // `_evictedGpuFinalizer` so unshared GPU textures automatically `.dispose()`
+    // the moment V8 collects the last referencing Mesh/Material!
     this._matDeferredDisposals += 1;
+    const unsharedTex = [];
+    for (const t of evictedTexSet) {
+      if (!this._isTextureHeldByResident(t)) unsharedTex.push(t);
+    }
+    if (this._evictedGpuFinalizer && evictedMats.length > 0 && unsharedTex.length > 0) {
+      const token = { remainingMats: evictedMats.length, textures: unsharedTex, disposed: false };
+      this._evictedGpuTokens.add(token);
+      for (const m of evictedMats) {
+        try { this._evictedGpuFinalizer.register(m, token, token); } catch (_) { /* fail-soft */ }
+      }
+    }
     if (typeof WeakRef !== "function") return;
-    for (const d of disposables) {
-      try { this._matGraveyard.push(new WeakRef(d)); } catch (_) { /* fail-soft */ }
+    for (const m of evictedMats) {
+      try { this._matGraveyard.push(new WeakRef(m)); } catch (_) { /* fail-soft */ }
+    }
+    for (const t of unsharedTex) {
+      try { this._matGraveyard.push(new WeakRef(t)); } catch (_) { /* fail-soft */ }
     }
     if (this._matGraveyard.length > MAT_GRAVEYARD_CAP) {
-      // Oldest-first drop. Dropping a WeakRef only forfeits the chance to
-      // free that object's GPU handle later — the same position the
-      // unbounded pre-flag cache is in for every entry, forever.
       this._matGraveyard.splice(0, this._matGraveyard.length - MAT_GRAVEYARD_CAP);
     }
   }
 
+  _compactGraveyard() {
+    if (this._matGraveyard.length === 0) return;
+    let write = 0;
+    for (let i = 0; i < this._matGraveyard.length; i += 1) {
+      const ref = this._matGraveyard[i];
+      let alive = false;
+      try { alive = !!(ref && ref.deref && ref.deref()); } catch (_) { alive = false; }
+      if (alive) {
+        this._matGraveyard[write] = ref;
+        write += 1;
+      }
+    }
+    this._matGraveyard.length = write;
+  }
+
   /**
    * Deferred-release hook for the GPU objects of evicted entries that HAD
-   * been handed out (dispose policy 4). No default caller: the caller must
-   * be able to promise the scene no longer references them — e.g. after a
-   * full scene rebuild. Entries already collected by GC are skipped.
+   * been handed out (dispose policy 4). Also cancels pending FinalizationRegistry
+   * tokens so textures are never double-disposed.
    * @returns {number} objects disposed
    */
   releaseEvictedGpu() {
+    if (this._evictedGpuFinalizer && this._evictedGpuTokens.size > 0) {
+      for (const token of this._evictedGpuTokens) {
+        token.disposed = true;
+        try { this._evictedGpuFinalizer.unregister(token); } catch (_) { /* fail-soft */ }
+      }
+      this._evictedGpuTokens.clear();
+    }
     let n = 0;
     for (const ref of this._matGraveyard) {
       let obj = null;
       try { obj = ref?.deref?.() ?? null; } catch (_) { obj = null; }
       if (!obj) continue;
+      _heightTexByMaterial.delete(obj);
       try { obj.dispose?.(); n += 1; } catch (_) { /* fail-soft */ }
     }
     this._matGraveyard.length = 0;
@@ -5168,6 +5320,14 @@ export class MaterialCache {
       const v = map && map.get(key);
       if (!v || v === base) continue;
       try { _reseatSurfaceState(v, base); } catch (_) { /* fail-soft */ }
+    }
+    if (this.vfxVariants && this.vfxVariants.size > 0) {
+      const prefix = `${key}|`;
+      for (const [k, v] of this.vfxVariants.entries()) {
+        if (typeof k === "string" && k.startsWith(prefix) && v && v !== base) {
+          try { _reseatSurfaceState(v, base); } catch (_) { /* fail-soft */ }
+        }
+      }
     }
   }
 
@@ -5999,7 +6159,7 @@ export class MaterialCache {
       // surfaces keep the flat-white glow. Clamp to (0, 2] (ACE ~[0,1] with
       // occasional HDR-ish pushes >1). 762 retail surfaces have lum>0.
       opts.emissive = new THREE.Color(0xffffff);
-      opts.emissiveIntensity = Math.min(2.0, sfLuminosity);
+      opts.emissiveIntensity = Math.min(2.0, sfLuminosity) * lumExposureCalScale();
       if (texture) opts.emissiveMap = texture;
     }
     // Diffuse reflectance, driven by the per-surface diffuse FLOAT (not the
@@ -6142,14 +6302,11 @@ export class MaterialCache {
     //   - not Additive / Translucent (same reasoning as CSM)
     //   - texture present (POM samples the diffuse via perturbed UV)
     // Force-POM bypasses the category gate for visual-smoke testing.
-    const stoneish =
-      category === SURFACE_CATEGORY.Stone ||
-      category === SURFACE_CATEGORY.Brick ||
-      category === SURFACE_CATEGORY.Tile ||
-      category === SURFACE_CATEGORY.Wood ||
-      category === SURFACE_CATEGORY.Metal ||
-      category === SURFACE_CATEGORY.Dirt ||
-      category === SURFACE_CATEGORY.Generic;
+    const catPomDepth =
+      typeof category === "number" && Object.prototype.hasOwnProperty.call(CATEGORY_POM_DEPTH_SCALE, category)
+        ? CATEGORY_POM_DEPTH_SCALE[category]
+        : CATEGORY_POM_DEPTH_SCALE[SURFACE_CATEGORY.Generic];
+    const stoneish = catPomDepth > 0;
     const pomShouldApply =
       this.pomEnabled &&
       heightTexture &&
@@ -6160,7 +6317,7 @@ export class MaterialCache {
       !isAlpha &&
       (stoneish || this.forcePom);
     if (pomShouldApply) {
-      _installPomShaderPatch(mat, heightTexture, this.pomOpts || {});
+      applyParallaxOcclusion(mat, heightTexture, catPomDepth || 0.028, this.pomOpts || {});
       mat.userData = {
         ...(mat.userData || {}),
         pomForced: !stoneish && this.forcePom,
@@ -7556,11 +7713,40 @@ export class MaterialCache {
     // Evicted/replaced while in flight: drop the result (the new material
     // has its own ask).
     if (this.materials.get(d) !== mat) return false;
-    try {
-      bc7Source()?.adoptParsed(rs, out.parsed);
-    } catch (_) { /* budget adoption is best-effort */ }
+
     const old = mat.map;
-    const tex = makeBc7Texture(out.parsed, {
+    let chosenParsed = out.parsed;
+    let usedTwin = false;
+    const admittedFn = bc7ClipAlphaGateFor && bc7ClipAlphaGateFor.compressedUpgradeAdmitted;
+    const droppedToken = bc7ClipAlphaGateFor && bc7ClipAlphaGateFor.TEX_DROPPED;
+    if (typeof admittedFn === "function" && !admittedFn(old, chosenParsed, mat)) {
+      let twin = null;
+      try {
+        twin = await bc7Source()?.hbc7Fallback?.(rs);
+      } catch (_) {
+        twin = null;
+      }
+      if (this.materials.get(d) !== mat) return false;
+      if (twin && twin !== droppedToken && admittedFn(old, twin, mat)) {
+        chosenParsed = twin;
+        usedTwin = true;
+        _bumpBc7Stat("clipRescuedByBc7");
+      } else {
+        // Keep the cutout-preserving PVW texture rather than replacing a
+        // wildflower/foliage ClipMap cutout with an opaque xu7 quad.
+        try {
+          atlasRefeed(rs);
+        } catch (_) { /* producer seam is fail-soft */ }
+        return false;
+      }
+    }
+
+    if (!usedTwin) {
+      try {
+        bc7Source()?.adoptParsed(rs, chosenParsed);
+      } catch (_) { /* budget adoption is best-effort */ }
+    }
+    const tex = makeBc7Texture(chosenParsed, {
       wrapS: old ? old.wrapS : undefined,
       wrapT: old ? old.wrapT : undefined,
       colorSpace: old && old.colorSpace ? old.colorSpace : undefined,
@@ -7595,53 +7781,175 @@ export class MaterialCache {
 
   /**
    * Attach a worker-derived NRA plane (packed R/G = biased normal XY,
-   * B = roughness, A = AO — the terrain channel convention) as the
-   * material's normal map: unpack to RGB8 (z reconstructed), wrap via the
-   * adapter helper, re-point the per-DID variant clones. Half-res planes
-   * are standard practice (D-05.5) — the parity eye-check is E3.
+   * B = roughness, A = calibrated 8-bit POM height) onto `mat`:
+   * unpack normalMap to RGB8, and when `nra.hasRelief !== false` and the
+   * surface is POM-eligible, unpack `plane[p+3]` into a mipmapped R8 height
+   * DataTexture, apply `applyParallaxOcclusion` with `CATEGORY_POM_DEPTH_SCALE`,
+   * and re-seat all per-DID variants (`frontSide`, `floorBias`, `staticBias`,
+   * `cellBaked`, `vfxVariants`) so `buildings.js` merged meshes get full 3D POM!
    */
   _attachWorkerNra(did, mat, nra) {
     const d = did >>> 0;
     try {
-      const { width: w, height: h, plane } = nra;
+      const { width: w, height: h } = nra;
+      const plane = nra.plane || nra.data;
       if (!w || !h || !plane || plane.length < w * h * 4) return false;
-      const px = new Uint8Array(w * h * 3);
-      for (let i = 0, p = 0; i < w * h; i += 1, p += 4) {
-        const nx = plane[p] / 127.5 - 1;
-        const ny = plane[p + 1] / 127.5 - 1;
-        const nz = Math.sqrt(Math.max(0, 1 - nx * nx - ny * ny));
-        px[i * 3] = plane[p];
-        px[i * 3 + 1] = plane[p + 1];
-        px[i * 3 + 2] = Math.round((nz * 0.5 + 0.5) * 255);
+      let ntex = null;
+      let hBytes = null;
+      let minH = 255;
+      let maxH = 0;
+      if (nra.normalRgba && nra.normalRgba.length >= w * h * 4) {
+        ntex = surfacePixelsToNormalTexture(nra.normalRgba, w, h);
+        if (nra.heightR8 && nra.heightR8.length >= w * h) {
+          hBytes = nra.heightR8;
+        }
+      } else {
+        const px = new Uint8Array(w * h * 3);
+        hBytes = new Uint8Array(w * h);
+        for (let i = 0, p = 0; i < w * h; i += 1, p += 4) {
+          const nx = plane[p] / 127.5 - 1;
+          const ny = plane[p + 1] / 127.5 - 1;
+          const nz = Math.sqrt(Math.max(0, 1 - nx * nx - ny * ny));
+          px[i * 3] = plane[p];
+          px[i * 3 + 1] = plane[p + 1];
+          px[i * 3 + 2] = Math.round((nz * 0.5 + 0.5) * 255);
+          const hv = plane[p + 3];
+          hBytes[i] = hv;
+          if (hv < minH) minH = hv;
+          if (hv > maxH) maxH = hv;
+        }
+        ntex = surfacePixelsToNormalTexture(px, w, h);
       }
-      const ntex = surfacePixelsToNormalTexture(px, w, h);
       if (!ntex) return false;
+      const wrapMode = mat.map ? mat.map.wrapS : THREE.RepeatWrapping;
+      ntex.wrapS = wrapMode;
+      ntex.wrapT = mat.map ? mat.map.wrapT : wrapMode;
       if (this.materials.get(d) !== mat) {
         try { ntex.dispose(); } catch (_) { /* fail-soft */ }
         return false;
       }
-      // Replacing the born-with placeholder is a texture swap: the program
-      // already has USE_NORMALMAP. Only a material born WITHOUT one recompiles.
-      const hadPlaceholder = isFlatNormalPlaceholder(mat.normalMap);
+      const oldNormal = mat.normalMap;
+      const hadPlaceholder = isFlatNormalPlaceholder(oldNormal);
       mat.normalMap = ntex;
-      const ns = mat.userData && mat.userData.surfaceNormalScaleOverride;
-      if (Number.isFinite(ns) && mat.normalScale) mat.normalScale.set(ns, ns);
-      if (!hadPlaceholder) mat.needsUpdate = true; // USE_NORMALMAP recompile — once per DID
-      for (const m of [
-        this.frontSideMaterials,
-        this.floorBiasMaterials,
-        this.staticBiasMaterials,
-        this.cellBakedMaterials,
-      ]) {
-        const clone = m && m.get(d);
-        if (clone && (!clone.normalMap || isFlatNormalPlaceholder(clone.normalMap))) {
-          const clonePlaceholder = isFlatNormalPlaceholder(clone.normalMap);
-          clone.normalMap = ntex;
-          if (!clonePlaceholder) clone.needsUpdate = true;
+      const ud = mat.userData || {};
+      const ns = ud.surfaceNormalScaleOverride;
+      if (Number.isFinite(ns) && mat.normalScale) {
+        mat.normalScale.set(ns, ns);
+      } else if (typeof ud.surfaceCategory === "number" && mat.normalScale) {
+        const catScale = CATEGORY_NORMAL_SCALE_DEFAULTS[ud.surfaceCategory];
+        if (typeof catScale === "number") {
+          mat.normalScale.setScalar(catScale);
+          ud.normalScaleEffective = catScale;
         }
       }
+      if (!hadPlaceholder) mat.needsUpdate = true;
+
+      const flags = (ud.surfaceTypeFlags >>> 0) || 0;
+      const isTranslucent = (flags & SURFACE_TYPE.Translucent) !== 0 || mat.transparent === true;
+      const isAdditive = (flags & SURFACE_TYPE.Additive) !== 0 || mat.blending === THREE.AdditiveBlending;
+      const isAlpha = (flags & SURFACE_TYPE.Alpha) !== 0;
+      const isLuminous = (flags & SURFACE_TYPE.Luminous) !== 0 || (ud.__surfaceLuminosity > 0);
+      const cutFn = bc7ClipAlphaGateFor && bc7ClipAlphaGateFor.clipAlphaCutOf;
+      const hasCutout =
+        (typeof cutFn === "function" ? cutFn(mat) > 0 : (mat.alphaTest || 0) > 0) ||
+        (flags & SURFACE_TYPE.Base1ClipMap) !== 0;
+      const category = ud.surfaceCategory;
+      const catPomDepth =
+        typeof category === "number" && Object.prototype.hasOwnProperty.call(CATEGORY_POM_DEPTH_SCALE, category)
+          ? CATEGORY_POM_DEPTH_SCALE[category]
+          : CATEGORY_POM_DEPTH_SCALE[SURFACE_CATEGORY.Generic];
+      const hasRelief = nra.hasRelief !== undefined ? !!nra.hasRelief : (maxH - minH >= 6);
+      const reliefEligible =
+        hasRelief &&
+        !isTranslucent &&
+        !isAdditive &&
+        !isAlpha &&
+        !isLuminous &&
+        !hasCutout &&
+        (catPomDepth > 0 || this.forcePom);
+
+      let htex = null;
+      if (reliefEligible) {
+        if (!hBytes) {
+          hBytes = new Uint8Array(w * h);
+          for (let i = 0, p = 3; i < w * h; i += 1, p += 4) hBytes[i] = plane[p];
+        }
+        htex = surfacePixelsToHeightTexture(hBytes, w, h);
+        if (htex) {
+          htex.wrapS = ntex.wrapS;
+          htex.wrapT = ntex.wrapT;
+          this.heightTextures.set(d, htex);
+          _heightTexByMaterial.set(mat, htex);
+          try { armCpuRelease(htex, PLANE.HEIGHT, d); } catch (_) {}
+          this._addMatEntryBytes(d, estimateTextureBytes(htex));
+        }
+      }
+
+      if (htex && this.pomEnabled) {
+        if (!ud.pomEnabled) {
+          const workerPomOpts = {
+            ...(this.pomOpts || {}),
+            steps: Math.min(this.pomOpts?.steps ?? 10, 10),
+            shadowSteps: Math.min(this.pomOpts?.shadowSteps ?? 1, 1),
+            lodNear: this.pomOpts?.lodNear ?? 7.5,
+            lodFar: this.pomOpts?.lodFar ?? 15.0,
+          };
+          applyParallaxOcclusion(mat, htex, catPomDepth || 0.028, workerPomOpts);
+          if (!(catPomDepth > 0) && this.forcePom) {
+            mat.userData.pomForced = true;
+          }
+        } else if (mat.userData?.pomShaderUniforms?.uPomMap) {
+          mat.userData.pomShaderUniforms.uPomMap.value = htex;
+        }
+        if (this.creviceAoEnabled && !ud.__creviceAo) {
+          applyMicroSurfaceEnhancement(mat, htex, {
+            ...(this.creviceAoOpts || {}),
+            rimGamma: this.creviceAoOpts?.rimGamma ?? 0.12,
+            microCreviceAo: true,
+            microContactShadow: (this.microShadowEnabled ?? false),
+          });
+        }
+        this._reseatVariantsForDid(d);
+      } else {
+        for (const m of [
+          this.frontSideMaterials,
+          this.floorBiasMaterials,
+          this.staticBiasMaterials,
+          this.cellBakedMaterials,
+        ]) {
+          const clone = m && m.get(d);
+          if (clone) {
+            if (!clone.normalMap || isFlatNormalPlaceholder(clone.normalMap) || clone.normalMap === oldNormal) {
+              const clonePlaceholder = isFlatNormalPlaceholder(clone.normalMap) || clone.normalMap === oldNormal;
+              clone.normalMap = ntex;
+              if (clone.normalScale && mat.normalScale) clone.normalScale.copy(mat.normalScale);
+              if (!clonePlaceholder) clone.needsUpdate = true;
+            }
+            if (htex) _inheritHeightTex(mat, clone);
+          }
+        }
+        if (this.vfxVariants && this.vfxVariants.size > 0) {
+          const prefix = `${d}|`;
+          for (const [k, clone] of this.vfxVariants.entries()) {
+            if (typeof k === "string" && k.startsWith(prefix) && clone) {
+              if (!clone.normalMap || isFlatNormalPlaceholder(clone.normalMap) || clone.normalMap === oldNormal) {
+                const clonePlaceholder = isFlatNormalPlaceholder(clone.normalMap) || clone.normalMap === oldNormal;
+                clone.normalMap = ntex;
+                if (clone.normalScale && mat.normalScale) clone.normalScale.copy(mat.normalScale);
+                if (!clonePlaceholder) clone.needsUpdate = true;
+              }
+              if (htex) _inheritHeightTex(mat, clone);
+            }
+          }
+        }
+      }
+
       this.normalTextures.set(d, ntex);
+      try { armCpuRelease(ntex, PLANE.NORMAL, d); } catch (_) {}
       this._addMatEntryBytes(d, estimateTextureBytes(ntex));
+      if (oldNormal && oldNormal !== ntex && !isFlatNormalPlaceholder(oldNormal) && !this._isTextureHeldByResident(oldNormal)) {
+        try { oldNormal.dispose?.(); } catch (_) {}
+      }
       _bumpBc7Stat("nraAttached");
       return true;
     } catch (_) {
@@ -7803,10 +8111,17 @@ export class MaterialCache {
    * is the one tunable knob.
    */
   tickAnimatedSurfaces(dt) {
+    const d = typeof dt === "number" && dt > 0 ? dt : 0;
+    if (this._matGraveyard.length > 0 && d > 0) {
+      this._graveyardSweepS += d;
+      if (this._graveyardSweepS >= 5.0) {
+        this._graveyardSweepS = 0;
+        this._compactGraveyard();
+      }
+    }
     if (this._animatedMaterials.size === 0) return;
     const ANIM_SURFACE_FPS = 4;
     const step = 1 / ANIM_SURFACE_FPS;
-    const d = typeof dt === "number" && dt > 0 ? dt : 0;
     for (const entry of this._animatedMaterials.values()) {
       entry.accumS += d;
       if (entry.accumS < step) continue;

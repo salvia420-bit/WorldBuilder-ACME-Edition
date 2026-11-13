@@ -211,7 +211,7 @@ export function selectionLit(mat) {
  * on the first write; RESTORE puts them back. Bumps `needsUpdate` only when the
  * emissiveMap appears or disappears. Returns true when `mat` took the level.
  */
-export function applySelectionLighting(mat, mode) {
+export function applySelectionLighting(mat, mode, opts) {
   if (mode === LIGHTING_MODE.RESTORE) return restoreSelectionLighting(mat);
   if (!selectionLightable(mat)) return false;
   let a = _authored.get(mat);
@@ -224,26 +224,69 @@ export function applySelectionLighting(mat, mode) {
     };
     _authored.set(mat, a);
   }
+  let rawExp = NaN;
+  try {
+    rawExp = Number(opts?.exposure ?? globalThis.window?.liveScene3d?.renderer?.toneMappingExposure);
+  } catch (_) {
+    rawExp = NaN;
+  }
+  const calibrated = Number.isFinite(rawExp) && rawExp > 1.001;
   if (mode === LIGHTING_MODE.HIGH) {
     const lum = LIGHT_HIGH.luminosity;
-    mat.color.setRGB(0, 0, 0);
-    if (mat.map) {
-      // 0.99 × texel: the part's own texture modulates the emissive.
-      mat.emissive.setRGB(lum, lum, lum);
-      if (mat.emissiveMap !== mat.map) {
-        const had = !!mat.emissiveMap;
-        mat.emissiveMap = mat.map;
-        if (!had) mat.needsUpdate = true;
+    if (calibrated) {
+      // Exposure-calibrated warm golden-brass highlight: divide emissive gain
+      // by toneMappingExposure (~1/5) and retain subtle diffuse shading so
+      // clicking an NPC/chest preserves normal & shadow contours instead of
+      // blowing the model out to solid white.
+      const invExp = 1 / rawExp;
+      mat.color.setRGB(a.cr * 0.38, a.cg * 0.34, a.cb * 0.26);
+      if (mat.map) {
+        mat.emissive.setRGB(lum * 1.04, lum * 0.82, lum * 0.44);
+        if (mat.emissiveMap !== mat.map) {
+          const had = !!mat.emissiveMap;
+          mat.emissiveMap = mat.map;
+          if (!had) mat.needsUpdate = true;
+        }
+      } else {
+        mat.emissive.setRGB(a.cr * lum * 1.04, a.cg * lum * 0.82, a.cb * lum * 0.44);
       }
+      mat.emissiveIntensity = invExp;
     } else {
-      // An untextured surface: its colour IS the texel.
-      mat.emissive.setRGB(a.cr * lum, a.cg * lum, a.cb * lum);
+      mat.color.setRGB(0, 0, 0);
+      if (mat.map) {
+        // 0.99 × texel: the part's own texture modulates the emissive.
+        mat.emissive.setRGB(lum, lum, lum);
+        if (mat.emissiveMap !== mat.map) {
+          const had = !!mat.emissiveMap;
+          mat.emissiveMap = mat.map;
+          if (!had) mat.needsUpdate = true;
+        }
+      } else {
+        // An untextured surface: its colour IS the texel.
+        mat.emissive.setRGB(a.cr * lum, a.cg * lum, a.cb * lum);
+      }
+      mat.emissiveIntensity = 1;
     }
-    mat.emissiveIntensity = 1;
   } else {
     const d = LIGHT_LOW.diffuse;
-    mat.color.setRGB(a.cr * d, a.cg * d, a.cb * d);
-    mat.emissive.setRGB(0, 0, 0);
+    if (calibrated) {
+      const invExp = 1 / rawExp;
+      mat.color.setRGB(a.cr * d, a.cg * d * 0.96, a.cb * d * 0.88);
+      if (mat.map) {
+        mat.emissive.setRGB(0.32, 0.24, 0.12);
+        if (mat.emissiveMap !== mat.map) {
+          const had = !!mat.emissiveMap;
+          mat.emissiveMap = mat.map;
+          if (!had) mat.needsUpdate = true;
+        }
+      } else {
+        mat.emissive.setRGB(a.cr * 0.32, a.cg * 0.24, a.cb * 0.12);
+      }
+      mat.emissiveIntensity = invExp * 0.45;
+    } else {
+      mat.color.setRGB(a.cr * d, a.cg * d, a.cb * d);
+      mat.emissive.setRGB(0, 0, 0);
+    }
   }
   return true;
 }

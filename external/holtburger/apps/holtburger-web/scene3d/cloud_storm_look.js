@@ -27,7 +27,14 @@
 // Pure module — no three.js / takram imports — so node test suites can
 // drive it directly (test_cloud_storm_look.mjs).
 
-export const FAIR_COVERAGE = 0.5;   // cloud_overlay's tuned default
+import { getWeatherState } from './weather_state.js';
+
+export const FAIR_COVERAGE = 0.5;   // cloud_overlay's legacy test baseline
+// Live Dereth sunlit cumulus targets (2026-11-12 Pass 2): crisp sculptural
+// cumulus puffs against deep Dereth blue sky instead of 0.50 grey overcast soup.
+export const CLEAR_CUMULUS_COVERAGE = 0.23;
+export const FAIR_CUMULUS_COVERAGE = 0.30;
+export const CLOUDY_COVERAGE = 0.44;
 // 0.7 → 0.62 (2026-08-01 live 1070 session) → 0.55 (2026-08-02, owner
 // verdict on the 7-town tour: "a big layer of stratocumulus everywhere,
 // very bland"): the coverageFilterWidth flood turns high coverage into a
@@ -196,6 +203,7 @@ export function cloudCoverageOwnedByKnob(effect) {
 export function applyCloudLook(effect, isStorm, highBand = 0) {
   const layers = effect?.cloudLayers;
   if (!layers || layers.length < 4) return false;
+  _continuousSnap.delete(effect);
   const src = lookLayers(isStorm, highBand);
   for (let i = 0; i < 4; i++) {
     for (const key of LAYER_KEYS) layers[i][key] = src[i][key];
@@ -229,13 +237,213 @@ export function applyCloudLook(effect, isStorm, highBand = 0) {
   return true;
 }
 
+// ---------------------------------------------------------------------------
+// Continuous WeatherState -> Sunlit Cumulus Balance (2026-11-12 Pass 2)
+// ---------------------------------------------------------------------------
+// Smoothly drives coverage, cumulus filter width, wispy cirrus, and alto/stratus
+// across clear -> fair -> cloudy -> storm from live WeatherState + SkyState,
+// lowering fair-weather coverage from 0.50 -> ~0.30 (0.23 in dry desert clear)
+// with near-zero stratus unless overcast/rainy so Dereth skies show crisp sunlit
+// cumulus puffs against deep blue sky. Dormant in synthetic unit tests where
+// WeatherState has never been ticked (`updatedAt === 0`) or where `is_storm` is
+// explicitly pinned via `setWeatherOverride`.
+const _continuousSmooth = new WeakMap();
+const _continuousSnap = new WeakMap();
+
+function _lerp(a, b, t) {
+  return a + (b - a) * t;
+}
+
+function _clamp01(x) {
+  return x < 0 ? 0 : x > 1 ? 1 : x;
+}
+
 /**
- * True when the effect's four cloud layers carry exactly the look's values —
+ * Derive continuous weather regime `w` in [0, 1]:
+ *   0.00 = dry clear sky (e.g. Yaraq desert, coverage ~0.23)
+ *   0.30 = Dereth fair blue-sky cumulus baseline (coverage ~0.30)
+ *   0.68 = cloudy / overcast / light rain (coverage ~0.44, stratus filling in)
+ *   1.00 = active storm / heavy rain (coverage 0.55, Cb tower)
+ */
+export function weatherCloudinessFactor(wx, skyState = null) {
+  if (!wx) return 0.30;
+  if (wx.is_storm) return 1.0;
+  let rh = Number.isFinite(wx.rh_pct) ? wx.rh_pct : NaN;
+  if (!Number.isFinite(rh) && Number.isFinite(wx.temperature_C) && Number.isFinite(wx.dewpoint_C)) {
+    const T = wx.temperature_C;
+    const Td = Math.min(T, wx.dewpoint_C);
+    // Magnus saturation vapor pressure ratio -> relative humidity [0..100]
+    rh = 100 * Math.exp((17.625 * Td) / (243.04 + Td) - (17.625 * T) / (243.04 + T));
+  }
+  if (!Number.isFinite(rh)) rh = 65;
+  const precip = Number.isFinite(wx.precip_mm_hr) ? Math.max(0, wx.precip_mm_hr) : 0;
+  // Magnus RH ~72% at temperate Holtburg (T=15C, Td=10C) -> w ~ 0.30 (sunlit cumulus ~0.30);
+  // dry desert RH <= 35% -> w = 0.0 (clear cumulus ~0.23); humid RH >= 95% -> w ~ 0.68 (overcast ~0.44).
+  let w = _clamp01((rh - 35) / 88);
+  if (skyState && Number.isFinite(skyState.fogMax) && skyState.fogMax > 0) {
+    // Tighter authored daytime fog (< 1400m) signals hazy/overcast DayGroups;
+    // wide clear DayGroups (>= 3200m) pull slightly clearer.
+    const fogCloudy = _clamp01((2400 - skyState.fogMax) / 1800);
+    w = _clamp01(w * 0.72 + fogCloudy * 0.34);
+  }
+  if (precip > 0) {
+    const rainBoost = _clamp01(precip / 8.0);
+    w = Math.max(w, 0.62 + 0.38 * rainBoost);
+  }
+  return _clamp01(w);
+}
+
+/**
+ * Continuously update `effect` cloud layers, coverage, and haze from live
+ * `WeatherState` (`clear -> fair -> cloudy -> storm`). Active in live sessions
+ * (`window.__sessionHandle` / `liveScene3d.sessionHandle` present, or `force=true`),
+ * leaving `applyCloudLook` deterministic for synthetic unit-test harnesses.
+ */
+export function applyContinuousWeatherLook(effect, skyState = null, highBand = 0, force = false) {
+  const layers = effect?.cloudLayers;
+  if (!layers || layers.length < 4) return false;
+  const liveSession = force || !!(
+    typeof globalThis !== 'undefined' &&
+    (globalThis.window?.__sessionHandle || globalThis.window?.liveScene3d?.sessionHandle)
+  );
+  if (!liveSession) return false;
+  const wx = getWeatherState();
+  if (!wx) return false;
+
+  const nowMs = typeof performance !== 'undefined' && typeof performance.now === 'function'
+    ? performance.now()
+    : Date.now();
+  const targetW = weatherCloudinessFactor(wx, skyState);
+  let state = _continuousSmooth.get(effect);
+  if (!state) {
+    state = { w: targetW, tMs: nowMs };
+    _continuousSmooth.set(effect, state);
+  } else {
+    const dtSec = Math.max(0, Math.min(0.5, (nowMs - state.tMs) * 0.001));
+    state.tMs = nowMs;
+    const alpha = dtSec > 0 ? (1 - Math.exp(-dtSec / 2.2)) : 0.15;
+    state.w = Math.abs(targetW - state.w) < 1e-4 ? targetW : _lerp(state.w, targetW, alpha);
+  }
+
+  const w = Math.round(state.w * 50) / 50;
+  const b = _clamp01(Math.round((Number(highBand) || 0) * 100) / 100);
+  const prevSnap = _continuousSnap.get(effect);
+  if (prevSnap && prevSnap.__wQ === w && prevSnap.__bQ === b) {
+    return true;
+  }
+  // Piecewise smooth segments:
+  //   [0.00 .. 0.30]: clear -> sunlit fair cumulus
+  //   [0.30 .. 0.68]: sunlit fair cumulus -> cloudy/overcast
+  //   [0.68 .. 1.00]: cloudy/overcast -> full storm Cb
+  let coverage;
+  let haze;
+  let rAlt, rH, rDens, rCfw;
+  let gAlt, gH, gDens, gCfw;
+  let bDens, bCfw;
+  let aAlt, aH, aDens, aShape, aDetail, aExp, aBias, aCfw, aShadow, stormBlend;
+
+  if (w <= 0.30) {
+    const t = w / 0.30;
+    coverage = _lerp(CLEAR_CUMULUS_COVERAGE, FAIR_CUMULUS_COVERAGE, t);
+    haze = _lerp(1.5e-5, 2.2e-5, t);
+    rAlt = _lerp(840, 780, t); rH = _lerp(600, 650, t); rDens = _lerp(0.16, 0.185, t); rCfw = _lerp(0.36, 0.42, t);
+    gAlt = _lerp(1100, 1040, t); gH = _lerp(980, 1120, t); gDens = _lerp(0.08, 0.125, t); gCfw = _lerp(0.34, 0.40, t);
+    bDens = _lerp(0.0011, 0.0016, t); bCfw = _lerp(0.40, 0.45, t);
+    aAlt = 3500; aH = 550; aDens = _lerp(0.0001, 0.00035, t);
+    aShape = 0.45; aDetail = 0; aExp = 1; aBias = 0.35; aCfw = 0.45; aShadow = false; stormBlend = 0;
+  } else if (w <= 0.68) {
+    const t = (w - 0.30) / 0.38;
+    coverage = _lerp(FAIR_CUMULUS_COVERAGE, CLOUDY_COVERAGE, t);
+    haze = _lerp(2.2e-5, 1.1e-4, t);
+    rAlt = _lerp(780, 690, t); rH = 650; rDens = _lerp(0.185, 0.20, t); rCfw = _lerp(0.42, 0.46, t);
+    gAlt = _lerp(1040, 940, t); gH = _lerp(1120, 1200, t); gDens = _lerp(0.125, 0.19, t); gCfw = _lerp(0.40, 0.44, t);
+    bDens = _lerp(0.0016, 0.0026, t); bCfw = _lerp(0.45, 0.50, t);
+    // Stratus / alto stays near-zero in fair weather and only builds under overcast/rain.
+    aAlt = _lerp(3500, 2400, t); aH = _lerp(550, 900, t); aDens = _lerp(0.00035, 0.0065, t * t);
+    aShape = _lerp(0.45, 0.7, t); aDetail = _lerp(0, 0.35, t); aExp = 1; aBias = 0.35;
+    aCfw = _lerp(0.45, 0.38, t); aShadow = t > 0.65; stormBlend = 0;
+  } else {
+    const t = (w - 0.68) / 0.32;
+    coverage = _lerp(CLOUDY_COVERAGE, STORM_COVERAGE, t);
+    haze = _lerp(1.1e-4, STORM_HAZE_DENSITY, t);
+    rAlt = _lerp(690, 600, t); rH = 650; rDens = 0.20; rCfw = _lerp(0.46, 0.35, t);
+    gAlt = _lerp(940, 850, t); gH = 1200; gDens = _lerp(0.19, 0.20, t); gCfw = _lerp(0.44, 0.35, t);
+    bDens = _lerp(0.0026, 0.003, t); bCfw = 0.50;
+    aAlt = _lerp(2400, 600, t);
+    const cbTargetH = _lerp(STORM_TOWER_HEIGHT_LOW, STORM_TOWER_HEIGHT_HIGH, b);
+    aH = _lerp(900, cbTargetH, t);
+    const cbTargetDens = 0.05 * (1 + (STORM_TOWER_DENSITY_HIGH_SCALE - 1) * b);
+    aDens = _lerp(0.0065, cbTargetDens, t);
+    aShape = _lerp(0.7, 1.0, t); aDetail = _lerp(0.35, 1.0, t);
+    aExp = _lerp(1.0, 1.2, t); aBias = _lerp(0.35, 0.40, t);
+    aCfw = _lerp(0.38, 0.20, t); aShadow = true; stormBlend = t;
+  }
+
+  if (stormBlend === 0 && b > 0) {
+    aDens *= (1 + (FAIR_ALTO_DENSITY_HIGH_SCALE - 1) * b);
+  }
+  const rgBias = Math.round((_lerp(0.35, STORM_DECK_SHAPE_BIAS_HIGH, b)) * 1000) / 1000;
+
+  const spec = [
+    {
+      channel: 'r', altitude: Math.round(rAlt), height: Math.round(rH),
+      densityScale: rDens, shapeAmount: 1, shapeDetailAmount: 1, weatherExponent: 1,
+      shapeAlteringBias: rgBias, coverageFilterWidth: rCfw, shadow: true,
+      densityProfile: DEFAULT_DENSITY_PROFILE,
+    },
+    {
+      channel: 'g', altitude: Math.round(gAlt), height: Math.round(gH),
+      densityScale: gDens, shapeAmount: 1, shapeDetailAmount: 1, weatherExponent: 1,
+      shapeAlteringBias: rgBias, coverageFilterWidth: gCfw, shadow: true,
+      densityProfile: DEFAULT_DENSITY_PROFILE,
+    },
+    {
+      channel: 'b', altitude: 7500, height: 500,
+      densityScale: bDens, shapeAmount: 0.4, shapeDetailAmount: 0, weatherExponent: 1,
+      shapeAlteringBias: 0.35, coverageFilterWidth: bCfw, shadow: false,
+      densityProfile: DEFAULT_DENSITY_PROFILE,
+    },
+    {
+      channel: 'a', altitude: Math.round(aAlt), height: Math.round(aH),
+      densityScale: aDens, shapeAmount: aShape, shapeDetailAmount: aDetail, weatherExponent: aExp,
+      shapeAlteringBias: aBias, coverageFilterWidth: aCfw, shadow: aShadow,
+      densityProfile: {
+        expTerm: 0,
+        exponent: 0,
+        linearTerm: _lerp(0.75, -0.55, stormBlend),
+        constantTerm: _lerp(0.25, 1.0, stormBlend),
+      },
+    },
+  ];
+
+  for (let i = 0; i < 4; i++) {
+    for (const key of LAYER_KEYS) layers[i][key] = spec[i][key];
+    const dp = layers[i].densityProfile;
+    if (dp) {
+      const p = spec[i].densityProfile;
+      dp.expTerm = p.expTerm; dp.exponent = p.exponent;
+      dp.linearTerm = p.linearTerm; dp.constantTerm = p.constantTerm;
+    }
+  }
+  if (typeof effect.coverage === 'number' && !_knobCoverage.has(effect)) {
+    effect.coverage = coverage;
+  }
+  if (effect.clouds && 'hazeDensityScale' in effect.clouds) {
+    effect.clouds.hazeDensityScale = haze;
+  }
+  spec.__wQ = w;
+  spec.__bQ = b;
+  _continuousSnap.set(effect, spec);
+  return true;
+}
+
+/**
+ * True when the effect's four cloud layers carry the active look's values —
  * every layer key plus the density profile. Coverage and haze are deliberately
  * NOT compared: `?cloudCoverage` / `__setCloudCoverage` tune them live, and the
- * look must not fight a knob. Nothing but applyCloudLook writes the layers in
- * production, so a mismatch while the flag says this look means something
- * reset them after the look was applied (cloud_volume.js re-applies it then).
+ * look must not fight a knob. Nothing but applyCloudLook / applyContinuousWeatherLook
+ * writes the layers in production, so a mismatch means something external reset
+ * them (cloud_volume.js re-applies it then).
  *
  * @param {Object} effect — takram CloudsEffect (or a test double)
  * @param {boolean} isStorm
@@ -244,7 +452,8 @@ export function applyCloudLook(effect, isStorm, highBand = 0) {
 export function cloudLayersMatchLook(effect, isStorm, highBand = 0) {
   const layers = effect?.cloudLayers;
   if (!layers || layers.length < 4) return true;
-  const src = lookLayers(isStorm, highBand);
+  const cont = _continuousSnap.get(effect);
+  const src = cont || lookLayers(isStorm, highBand);
   for (let i = 0; i < 4; i++) {
     const l = layers[i];
     for (const key of LAYER_KEYS) if (l[key] !== src[i][key]) return false;

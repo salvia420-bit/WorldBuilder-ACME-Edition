@@ -276,6 +276,7 @@ export class PoolStreamController {
     const job = this.registry.beginFeed(tilePlan, geometrySource, {
       onLayer: (rsId) => { if (this.uploads) this._noteLayer(rsId, job); },
     });
+    job.tilePlan = tilePlan;
     job._cls = urgent ? "W1" : "W3";
     job._needsMore = false;
     let jobs = this._feeds.get(tileKey);
@@ -288,10 +289,12 @@ export class PoolStreamController {
 
   _noteLayer(rsId, job) {
     // The producer registers the actual texture; this is the accounting hook
-    // that lets a feed know which rsIds its flip waits on.
-    if (!job) return;
+    // that lets a feed know which rsIds its flip waits on. Ignore rsId === 0
+    // (synthetic/unmarked fallback surfaces carry no stager rsId).
+    const r = rsId >>> 0;
+    if (!job || r === 0) return;
     if (!job._rsIds) job._rsIds = new Set();
-    job._rsIds.add(rsId >>> 0);
+    job._rsIds.add(r);
   }
 
   _enqueueFeedStep(tileKey, job, cls) {
@@ -382,7 +385,10 @@ export class PoolStreamController {
       fn: () => {
         this._uploadItemPending = false;
         this.uploads.drain();
-        if (this.uploads.hasPending()) this.requestUploadDrain();
+        // NEVER self-re-enqueue into W2 while draining W2: if `drain()` stopped
+        // on its per-frame U-TEX/U-NRA budget, `hasPending()` stays true and
+        // re-enqueueing here spins W2 until the entire P4 ms budget expires!
+        // `tickP4()` re-arms `requestUploadDrain()` once next frame after `beginFrame()`.
       },
     });
     return true;

@@ -243,6 +243,7 @@ export class AudioManager {
     this.skipCount = 0;
     this.lastError = null;
     this._userGestureNotified = false;
+    this._ctxInitFailed = false;
   }
 
   /**
@@ -253,6 +254,7 @@ export class AudioManager {
   notifyUserGesture() {
     if (this._userGestureNotified) return;
     this._userGestureNotified = true;
+    this._ctxInitFailed = false;
     this._initContext();
   }
 
@@ -385,7 +387,7 @@ export class AudioManager {
   }
 
   _initContext() {
-    if (this._ctx) return;
+    if (this._ctx || this._ctxInitFailed) return;
     if (typeof window === "undefined" || typeof window.AudioContext !== "function") {
       // Server-side / test env. Don't construct; play() will no-op.
       return;
@@ -417,6 +419,7 @@ export class AudioManager {
       // eslint-disable-next-line no-console
       console.warn("[H3/audio] AudioContext init failed:", e);
       this._ctx = null;
+      this._ctxInitFailed = true;
     }
   }
 

@@ -129,8 +129,33 @@ export class UploadStager {
    * @param {()=>void} [opts.onStaged]
    */
   enqueueTexture({ texture, rsId = 0, cls = "U-TEX", bytes = 0, tileKey, mark, onStaged }) {
+    const r = rsId >>> 0;
+    if (texture && !mark && !onStaged) {
+      for (let i = 0; i < this._queue.length; i += 1) {
+        const cur = this._queue[i];
+        if (
+          cur.kind === "texture"
+          && cur.texture === texture
+          && cur.cls === cls
+          && cur.tileKey === tileKey
+          && !cur.mark
+          && !cur.onStaged
+        ) {
+          if (r) {
+            if (!cur.rsIds) {
+              cur.rsIds = new Set();
+              if (cur.rsId) cur.rsIds.add(cur.rsId);
+            }
+            cur.rsIds.add(r);
+          }
+          const bCap = (this.budgets[cls] || this.budgets["U-TEX"]).bytes;
+          cur.bytes = Math.min(bCap, (cur.bytes | 0) + Math.max(0, bytes | 0));
+          return this;
+        }
+      }
+    }
     this._queue.push({
-      kind: "texture", texture, rsId: rsId >>> 0, cls, bytes: bytes | 0,
+      kind: "texture", texture, rsId: r, rsIds: null, cls, bytes: bytes | 0,
       tileKey, mark, onStaged, frameEnqueued: this._frame,
     });
     return this;
@@ -217,28 +242,48 @@ export class UploadStager {
   }
 
   _stageTexture(it) {
-    // F-11.10: marks in BOTH arms; `initTexture` in the render arm only.
-    try {
-      if (it.texture && it.texture.isTexture !== false) it.texture.needsUpdate = true;
-      if (typeof it.mark === "function") it.mark();
-    } catch (e) {
-      this.stats.lastError = String(e && e.message || e);
-    }
-    if (this.nullRender) {
-      this.stats.marksOnly += 1;
-    } else if (this.renderer && typeof this.renderer.initTexture === "function") {
+    const tex = it.texture;
+    // Per-surface DataTexture whose CPU bytes were already uploaded during an
+    // earlier render pass and freed by `texture_release.js` (`image.data == null`):
+    // already GPU-resident, so re-marking `needsUpdate` would upload `null`.
+    const cpuReleasedAfterUpload = !!(
+      tex &&
+      tex.isDataTexture &&
+      !tex.isCompressedTexture &&
+      !tex.isDataArrayTexture &&
+      !tex.isData3DTexture &&
+      tex.image &&
+      tex.image.data == null
+    );
+    if (!cpuReleasedAfterUpload) {
+      // F-11.10: marks in BOTH arms; `initTexture` in the render arm only.
       try {
-        this.renderer.initTexture(it.texture);
-        this.stats.initTextureCalls += 1;
+        if (tex && tex.isTexture !== false) tex.needsUpdate = true;
+        if (typeof it.mark === "function") it.mark();
       } catch (e) {
         this.stats.lastError = String(e && e.message || e);
       }
-    } else {
-      // No renderer surface: the driver will upload at next bind, which is
-      // exactly the behaviour stage C exists to replace. Counted, not hidden.
-      this.stats.noRenderer += 1;
+      if (this.nullRender) {
+        this.stats.marksOnly += 1;
+      } else if (this.renderer && typeof this.renderer.initTexture === "function") {
+        try {
+          this.renderer.initTexture(tex);
+          this.stats.initTextureCalls += 1;
+        } catch (e) {
+          this.stats.lastError = String(e && e.message || e);
+        }
+      } else {
+        // No renderer surface: the driver will upload at next bind, which is
+        // exactly the behaviour stage C exists to replace. Counted, not hidden.
+        this.stats.noRenderer += 1;
+      }
     }
     if (it.rsId) this._staged.add(it.rsId);
+    if (it.rsIds) {
+      for (const r of it.rsIds) {
+        if (r) this._staged.add(r);
+      }
+    }
     if (typeof it.onStaged === "function") {
       try { it.onStaged(); } catch (e) { this.stats.lastError = String(e && e.message || e); }
     }
@@ -317,6 +362,12 @@ export class UploadStager {
 
   _publishDepth() {
     this.stats.queueDepth = this._queue.length + this._exclusive.length + this._repoints.length;
+  }
+
+  /** Record an aliased rsId whose shared class-page layer is already staged. */
+  markStaged(rsId) {
+    const r = rsId >>> 0;
+    if (r) this._staged.add(r);
   }
 
   /** Has rsId's texture been staged? (the ordering predicate the pool feed

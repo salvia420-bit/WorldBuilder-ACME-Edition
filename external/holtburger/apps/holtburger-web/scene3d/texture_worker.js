@@ -264,7 +264,14 @@ export function transcodeXu7Payload(module, bytes, want) {
         throw new Error(`transcodeImage(RGBA32) failed at level ${li}`);
       }
       const plane = deriveNraPlane(rgba, nw, nh);
-      nra = { width: nw, height: nh, plane };
+      nra = {
+        width: nw,
+        height: nh,
+        plane,
+        hasRelief: plane.hasRelief !== false,
+        normalRgba: plane.normalRgba || null,
+        heightR8: plane.heightR8 || null,
+      };
     }
 
     return { width, height, levelBytes, bc7: out, nra };
@@ -515,26 +522,285 @@ export function aoFromLuminance(rgba, w, h, strength = 1.0) {
   return out;
 }
 
+/** Separable wrap-around box blur of radius `r` (`(2r+1)x(2r+1)`). */
+function _boxBlurWrap(src, w, h, radius) {
+  const n = w * h;
+  const r = Math.max(0, radius | 0);
+  if (r === 0 || n <= 1) return new Float32Array(src);
+  const inv = F(1.0 / (2 * r + 1));
+  const tmp = new Float32Array(n);
+  const out = new Float32Array(n);
+  for (let y = 0; y < h; y += 1) {
+    const row = y * w;
+    for (let x = 0; x < w; x += 1) {
+      let acc = 0.0;
+      for (let dx = -r; dx <= r; dx += 1) {
+        const sx = ((x + dx) % w + w) % w;
+        acc += src[row + sx];
+      }
+      tmp[row + x] = F(acc * inv);
+    }
+  }
+  for (let y = 0; y < h; y += 1) {
+    for (let x = 0; x < w; x += 1) {
+      let acc = 0.0;
+      for (let dy = -r; dy <= r; dy += 1) {
+        const sy = ((y + dy) % h + h) % h;
+        acc += tmp[sy * w + x];
+      }
+      out[y * w + x] = F(acc * inv);
+    }
+  }
+  return out;
+}
+
 /**
- * The packed NRA plane (pass-05 S3 result shape): RGBA8, R/G = tangent normal
- * XY, B = roughness, A = AO — the terrain-nra channel convention. `Uint8Array
- * (w*h*4)`; a malformed input yields flat/neutral texels only if partial
- * derivations fail (empty normal ⇒ flat (128,128); empty roughness ⇒ 0; empty
- * AO ⇒ 255), and an empty plane when dims are bad.
+ * Multi-scale polarity-safe 8-bit height synthesis from RGBA albedo (`0..255`,
+ * `255` = proud outer surface / neutral flat, `0` = recessed joint/crevice).
+ *
+ * Combines:
+ *  - macro & mid wrap-around box blurs (`9x9` / `5x5`) for stone/brick pillows,
+ *  - dark mortar/crevice joint recessing `max(0, L_macro - L)`,
+ *  - gradient-gated narrow bright-grout recessing so dark stone blocks with
+ *    pale lime mortar recess the narrow grout lines instead of inverting them,
+ *  - fine grain `L - L_fine` on block faces,
+ *  - flatness & alpha-cutout (`alpha < 200`) rejection (`hasRelief: false`,
+ *    neutral flat `255`) so uniform trim, banners, foliage cards, wildflowers,
+ *    and fences never receive POM distortion.
+ */
+export function heightFromLuminance(rgba, w, h, strength = 1.0) {
+  const width = w | 0;
+  const height = h | 0;
+  const pixelCount = width * height;
+  if (pixelCount <= 0 || !rgba || rgba.length < pixelCount * 4) {
+    return { height: new Uint8Array(0), hasRelief: false };
+  }
+  const lum = new Float32Array(pixelCount);
+  let sumL = 0.0;
+  let minL = 1.0;
+  let maxL = 0.0;
+  let cutoutCount = 0;
+  for (let i = 0; i < pixelCount; i += 1) {
+    const o = i * 4;
+    const l = F(
+      (0.299 * rgba[o] + 0.587 * rgba[o + 1] + 0.114 * rgba[o + 2]) * (1.0 / 255.0)
+    );
+    lum[i] = l;
+    sumL += l;
+    if (l < minL) minL = l;
+    if (l > maxL) maxL = l;
+    if (rgba[o + 3] < 200) cutoutCount += 1;
+  }
+
+  // Pre-filter <=64px tiles with 3x3 Gaussian (matching normal_gen.rs) so 1px
+  // paletted Bayer dithering is rejected instead of turning into POM spikes.
+  const baseLum =
+    width <= LOW_RES_THRESHOLD || height <= LOW_RES_THRESHOLD
+      ? _gaussianBlur3x3(lum, width, height)
+      : lum;
+
+  // Measure variance/range excluding the 1px clamped border when dims >= 4 so
+  // _gaussianBlur3x3 border clamping on 1px Nyquist dithers cannot masquerade
+  // as real surface relief.
+  const x0 = width >= 4 ? 1 : 0;
+  const x1 = width >= 4 ? width - 1 : width;
+  const y0 = height >= 4 ? 1 : 0;
+  const y1 = height >= 4 ? height - 1 : height;
+  const sampleCount = Math.max(1, (x1 - x0) * (y1 - y0));
+  let sumB = 0.0;
+  let minB = 1.0;
+  let maxB = 0.0;
+  for (let y = y0; y < y1; y += 1) {
+    const row = y * width;
+    for (let x = x0; x < x1; x += 1) {
+      const b = baseLum[row + x];
+      sumB += b;
+      if (b < minB) minB = b;
+      if (b > maxB) maxB = b;
+    }
+  }
+  const meanL = sumB / sampleCount;
+  let varAcc = 0.0;
+  for (let y = y0; y < y1; y += 1) {
+    const row = y * width;
+    for (let x = x0; x < x1; x += 1) {
+      const d = baseLum[row + x] - meanL;
+      varAcc += d * d;
+    }
+  }
+  const varL = varAcc / sampleCount;
+  const rangeL = maxB - minB;
+  const cutoutFrac = cutoutCount / pixelCount;
+
+  // Reject heavily alpha-cutout surfaces (foliage, wildflowers, grates, fences):
+  // emit neutral flat 255 height and mark hasRelief: false.
+  if (cutoutFrac > 0.05) {
+    const flat = new Uint8Array(pixelCount);
+    flat.fill(255);
+    return { height: flat, hasRelief: false };
+  }
+
+  // Reject near-uniform/flat or pure-1px-dither tiles (plaster, solid trim,
+  // banners, Nyquist checkerboards): mark hasRelief: false and emit neutral
+  // micro-AO (~255 on uniform tiles) so POM stays off.
+  if (varL < 0.0006 || rangeL < 0.055) {
+    return { height: aoFromLuminance(rgba, width, height, strength), hasRelief: false };
+  }
+
+  const lumFine = _boxBlurWrap(baseLum, width, height, 1);   // 3x3 fine grain ref
+  const lumMacroRaw = _boxBlurWrap(lum, width, height, 4);   // 9x9 raw macro baseline
+
+  // Separable 9x9 wrap-around min/max matching `lumMacroRaw` (radius = 4) so
+  // `brightExcursion` and `darkExcursion` are measured over the exact same
+  // 9x9 window (preventing stone block centers 4px from a dark mortar line from
+  // missing the dark trench).
+  const minH = new Float32Array(pixelCount);
+  const maxH = new Float32Array(pixelCount);
+  for (let y = 0; y < height; y += 1) {
+    const row = y * width;
+    for (let x = 0; x < width; x += 1) {
+      let lo = 1.0;
+      let hi = 0.0;
+      for (let dx = -4; dx <= 4; dx += 1) {
+        const v = lum[row + (((x + dx) % width + width) % width)];
+        if (v < lo) lo = v;
+        if (v > hi) hi = v;
+      }
+      minH[row + x] = lo;
+      maxH[row + x] = hi;
+    }
+  }
+  const paleSeam = new Float32Array(pixelCount);
+  const clampedLum = new Float32Array(pixelCount);
+  for (let y = 0; y < height; y += 1) {
+    const row = y * width;
+    for (let x = 0; x < width; x += 1) {
+      const i = row + x;
+      let lo = 1.0;
+      let hi = 0.0;
+      for (let dy = -4; dy <= 4; dy += 1) {
+        const idx = (((y + dy) % height + height) % height) * width + x;
+        if (minH[idx] < lo) lo = minH[idx];
+        if (maxH[idx] > hi) hi = maxH[idx];
+      }
+      const lMr = lumMacroRaw[i];
+      const brightExcursion = Math.max(0.0, hi - lMr);
+      const darkExcursion = Math.max(0.0, lMr - lo);
+      if (brightExcursion > darkExcursion * 1.15 + 0.03) {
+        const ridge = Math.max(0.0, Math.max(lum[i], baseLum[i]) - lMr - 0.015);
+        paleSeam[i] = ridge * 1.45;
+        clampedLum[i] = Math.min(baseLum[i], lMr);
+      } else {
+        paleSeam[i] = 0.0;
+        clampedLum[i] = baseLum[i];
+      }
+    }
+  }
+
+  const paleShoulder = _boxBlurWrap(paleSeam, width, height, 1);
+  const lumMid = _boxBlurWrap(clampedLum, width, height, 2);   // 5x5 shoulder ref
+  const lumMacro = _boxBlurWrap(clampedLum, width, height, 4); // 9x9 block pillow ref
+
+  const rawH = new Float32Array(pixelCount);
+  let rawMin = Infinity;
+  let rawMax = -Infinity;
+  for (let i = 0; i < pixelCount; i += 1) {
+    const lc = clampedLum[i];
+    const lf = lumFine[i];
+    const lm = lumMid[i];
+    const lM = lumMacro[i];
+
+    const darkSeam = Math.max(0.0, lM - lc) + 0.55 * Math.max(0.0, lm - lc);
+    const lightSeam = Math.max(paleSeam[i], paleShoulder[i] * 0.65);
+    const seam = darkSeam + lightSeam;
+    const jointMask = Math.max(0.0, 1.0 - seam * 3.0);
+    const grain = (lum[i] - lf) * 0.25 * jointMask;
+    const hVal = 1.0 - seam * 1.25 + grain;
+    rawH[i] = hVal;
+    if (hVal < rawMin) rawMin = hVal;
+    if (hVal > rawMax) rawMax = hVal;
+  }
+
+  const rawRange = rawMax - rawMin;
+  if (!(rawRange > 1e-5)) {
+    const flat = new Uint8Array(pixelCount);
+    flat.fill(255);
+    return { height: flat, hasRelief: false };
+  }
+
+  // O(N) 256-bin percentile calibration: p96 -> 255 (proud block face),
+  // p03 -> deepest joint floor, scaled by relief contrast + strength.
+  const hist = new Uint32Array(256);
+  const invRange = 255.0 / rawRange;
+  for (let i = 0; i < pixelCount; i += 1) {
+    const b = Math.min(255, Math.max(0, ((rawH[i] - rawMin) * invRange) | 0));
+    hist[b] += 1;
+  }
+  const loTarget = Math.max(1, Math.floor(pixelCount * 0.03));
+  const hiTarget = Math.max(loTarget, Math.ceil(pixelCount * 0.96));
+  let acc = 0;
+  let loBin = 0;
+  let hiBin = 255;
+  let foundLo = false;
+  for (let b = 0; b < 256; b += 1) {
+    acc += hist[b];
+    if (!foundLo && acc >= loTarget) {
+      loBin = b;
+      foundLo = true;
+    }
+    if (acc >= hiTarget) {
+      hiBin = b;
+      break;
+    }
+  }
+  const p03 = rawMin + (loBin / 255.0) * rawRange;
+  const p96 = rawMin + (Math.min(255, hiBin + 1) / 255.0) * rawRange;
+  const span = Math.max(1e-5, hiBin > loBin ? p96 - p03 : rawRange);
+  const baseLo = hiBin > loBin ? p03 : rawMin;
+  const fs = Math.max(0.25, Number.isFinite(strength) ? strength : 1.0);
+  const depthGain = Math.min(1.0, Math.max(0.35, span * 3.2 * fs));
+
+  const out = new Uint8Array(pixelCount);
+  for (let i = 0; i < pixelCount; i += 1) {
+    const t = Math.min(1.0, Math.max(0.0, (rawH[i] - baseLo) / span));
+    const hNorm = 1.0 - (1.0 - t) * depthGain;
+    out[i] = Math.min(255, Math.max(0, Math.round(hNorm * 255.0)));
+  }
+  return { height: out, hasRelief: true };
+}
+
+/**
+ * The packed NRA plane: RGBA8, R/G = tangent normal XY, B = roughness,
+ * A = calibrated 8-bit POM height (`255` = proud/flat, `0` = deep joint).
+ * `Uint8Array(w*h*4)` with `.hasRelief` boolean attached for worker/main-thread
+ * POM gating; an empty plane is returned when dims are malformed.
  */
 export function deriveNraPlane(rgba, w, h, { strength = 1.0 } = {}) {
   const pixelCount = (w | 0) * (h | 0);
   if (pixelCount <= 0 || !rgba || rgba.length < pixelCount * 4) return new Uint8Array(0);
   const normal = normalFromLuminance(rgba, w, h, strength);
   const rough = roughnessFromLuminance(rgba, w, h, strength);
-  const ao = aoFromLuminance(rgba, w, h, strength);
+  const { height: hgt, hasRelief } = heightFromLuminance(rgba, w, h, strength);
   const out = new Uint8Array(pixelCount * 4);
+  const normalRgba = new Uint8Array(pixelCount * 4);
   for (let i = 0; i < pixelCount; i += 1) {
-    out[i * 4] = normal.length ? normal[i * 3] : 128;
-    out[i * 4 + 1] = normal.length ? normal[i * 3 + 1] : 128;
-    out[i * 4 + 2] = rough.length ? rough[i] : 0;
-    out[i * 4 + 3] = ao.length ? ao[i] : 255;
+    const p4 = i * 4;
+    const p3 = i * 3;
+    const nx = normal.length ? normal[p3] : 128;
+    const ny = normal.length ? normal[p3 + 1] : 128;
+    const nz = normal.length ? normal[p3 + 2] : 255;
+    out[p4] = nx;
+    out[p4 + 1] = ny;
+    out[p4 + 2] = rough.length ? rough[i] : 0;
+    out[p4 + 3] = hgt.length ? hgt[i] : 255;
+    normalRgba[p4] = nx;
+    normalRgba[p4 + 1] = ny;
+    normalRgba[p4 + 2] = nz;
+    normalRgba[p4 + 3] = 255;
   }
+  out.hasRelief = hasRelief;
+  Object.defineProperty(out, "normalRgba", { value: normalRgba, enumerable: false });
+  Object.defineProperty(out, "heightR8", { value: hgt.length ? hgt : null, enumerable: false });
   return out;
 }
 
@@ -590,8 +856,21 @@ export async function handleTextureWorkerMessage(data, post) {
       };
       const transfers = [r.bc7.buffer];
       if (r.nra) {
-        reply.nra = { width: r.nra.width, height: r.nra.height, plane: r.nra.plane.buffer };
+        reply.nra = {
+          width: r.nra.width,
+          height: r.nra.height,
+          plane: r.nra.plane.buffer,
+          hasRelief: r.nra.hasRelief !== false,
+        };
         transfers.push(r.nra.plane.buffer);
+        if (r.nra.normalRgba && r.nra.normalRgba.buffer) {
+          reply.nra.normalRgba = r.nra.normalRgba.buffer;
+          transfers.push(r.nra.normalRgba.buffer);
+        }
+        if (r.nra.heightR8 && r.nra.heightR8.buffer) {
+          reply.nra.heightR8 = r.nra.heightR8.buffer;
+          transfers.push(r.nra.heightR8.buffer);
+        }
       }
       post(reply, transfers);
       return;
@@ -622,7 +901,16 @@ export async function handleTextureWorkerMessage(data, post) {
       const plane = deriveNraPlane(rgba, data.width, data.height, { strength: data.strength ?? 1.0 });
       if (plane.length === 0) throw new Error(`nra-derive: malformed input ${data.width}x${data.height}`);
       post(
-        { type: "result", seq, ok: true, kind, width: data.width, height: data.height, plane: plane.buffer },
+        {
+          type: "result",
+          seq,
+          ok: true,
+          kind,
+          width: data.width,
+          height: data.height,
+          plane: plane.buffer,
+          hasRelief: plane.hasRelief !== false,
+        },
         [plane.buffer],
       );
       return;

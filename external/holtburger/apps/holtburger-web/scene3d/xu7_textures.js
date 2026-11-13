@@ -736,36 +736,37 @@ export function xu7TranscoderUp() {
   return !!ensureXu7Transcoder();
 }
 
-/** The requested worker count (0 = off). v1 constructs at most 1. */
-// DEFAULT ON since 2026-10-06 (the GATE-TEXWORKER measurement): 1070, cold
-// Holtburg→Shoushi→Holtburg teleport tour, fresh profiles, 2 reps/arm against a
-// frozen snapshot — tour jank 5.5/5.8 s → 4.2/5.1 s, tour 1% low 7.1/6.6 →
-// 9.2/8.2 fps, 0.1% low 3.6/3.2 → 5.2/4.3 fps, steady fps unchanged, 0 page
-// errors. The main-thread arm it removes was the basis transcoder: 190-416 ms
-// frames, one ~32-48 ms 1024² decode per item regardless of `?xu7Budget`.
-// Explicit off-forms (`off`/`0`/`false`/`no`) keep the budgeted main-thread FIFO.
+/** Default worker pool size: 2 workers to parallelize XU7 transcodes without bursting main-thread message drains. */
+function _defaultWorkerPoolCount() {
+  const hc =
+    typeof navigator !== "undefined" && Number.isFinite(navigator.hardwareConcurrency) && navigator.hardwareConcurrency > 0
+      ? navigator.hardwareConcurrency
+      : 4;
+  return hc >= 4 ? 2 : 1;
+}
+
+/** The requested worker count (0 = off; default 2..4 pool in browser). */
 function _texWorkersRequested(search) {
   try {
     const s = search !== undefined ? search : typeof window !== "undefined" && window.location ? window.location.search : "";
     const v = new URLSearchParams(s).get("texWorkers");
-    // The DEFAULT needs Web Workers: where there are none (node test harness,
-    // exotic embeds) default-on would only build a dead worker and pay its
-    // fallback (incl. a second payload fetch). An explicit `on` still asks.
-    const canWorker = typeof Worker !== "undefined";
-    if (v == null) return canWorker ? 1 : 0;
+    const canWorker = typeof Worker !== "undefined" || _twFactory !== null;
+    const defCount = _twFactory !== null ? 1 : _defaultWorkerPoolCount();
+    if (v == null) return typeof Worker !== "undefined" ? defCount : 0;
     const t = String(v).toLowerCase();
-    if (t === "off" || t === "false" || t === "no" || t === "") return t === "" && canWorker ? 1 : 0;
-    if (t === "on" || t === "true" || t === "yes") return 1;
+    if (t === "off" || t === "false" || t === "no") return 0;
+    if (t === "") return canWorker ? defCount : 0;
+    if (t === "on" || t === "true" || t === "yes") return defCount;
     const n = Number.parseInt(t, 10);
-    return Number.isFinite(n) ? (n >= 1 ? n : 0) : (canWorker ? 1 : 0);
+    return Number.isFinite(n) ? (n >= 1 ? Math.min(8, n) : 0) : (canWorker ? defCount : 0);
   } catch (_) {
-    return typeof Worker !== "undefined" ? 1 : 0;
+    return typeof Worker !== "undefined" ? _defaultWorkerPoolCount() : 0;
   }
 }
 
-// Client FIFO depth cap [A]: an xu7 ask beyond it rides the budgeted FIFO
-// instead (counted). Terrain jobs (2/session) are never the ones over cap.
-const TEX_WORKER_QUEUE_CAP = 64;
+// Client FIFO depth cap: raised from 64 -> 512 so town teleports with hundreds
+// of concurrent xu7 surface upgrades never spill basis_transcoder onto the main thread.
+export const TEX_WORKER_QUEUE_CAP = 512;
 // How long the ONE-SHOT terrain assembly will wait for the worker to come up
 // before falling back to the synchronous main-thread build [A]. The worker
 // script is same-origin and `ready` does not wait on the transcoder, so this
@@ -780,16 +781,18 @@ export const TW_JOB_TIMEOUT_MS = 15_000;
 
 const _TW_UNROUTED = Symbol("texWorker-unrouted");
 
-let _twWorker = null;
+/** @type {Array<{worker:any, ready:boolean, busySeq:number}>} */
+const _twPool = [];
+let _twNextCursor = 0;
 let _twState = "off"; // off | loading | ready | dead
 let _twSeq = 0;
 let _twReadyPromise = null;
 let _twReadyResolve = null;
 let _twFactory = null; // test hook
 let _twLoadStartMs = 0; // D3-b: when the current load began (bounded eager wait)
-/** @type {Array<{msg:any, transfers:any[], resolve:(v:any)=>void}>} */
+/** @type {Array<{msg:any, transfers:any[], resolve:(v:any)=>void, slot?:any, timeoutId?:any}>} */
 const _twQueue = [];
-/** @type {Map<number, {msg:any, transfers:any[], resolve:(v:any)=>void}>} */
+/** @type {Map<number, {msg:any, transfers:any[], resolve:(v:any)=>void, slot?:any, timeoutId?:any}>} */
 const _twPending = new Map();
 
 const _twStats = {
@@ -817,10 +820,17 @@ const _twStats = {
  *  this module loads with the scene3d import graph at boot). Folds into
  *  `__texStats().worker` at ST5 (same-name-successor; see the diag registry). */
 export function texWorkerStats() {
+  let readyWorkers = 0;
+  for (let i = 0; i < _twPool.length; i += 1) {
+    if (_twPool[i].ready) readyWorkers += 1;
+  }
   return {
     ..._twStats,
     enabled: texWorkersEnabled(),
     requested: _texWorkersRequested(),
+    poolSize: _twPool.length,
+    readyWorkers,
+    queueCap: TEX_WORKER_QUEUE_CAP,
     state: _twState,
     queueDepth: _twQueue.length + _twPending.size,
     inflight: _twPending.size,
@@ -861,21 +871,25 @@ function _twDie(reason) {
   for (const [, job] of _twPending) drop(job);
   _twPending.clear();
   while (_twQueue.length) drop(_twQueue.shift());
-  if (_twWorker) {
-    try {
-      _twWorker.terminate();
-    } catch (_) {
-      /* fail-soft */
+  while (_twPool.length) {
+    const slot = _twPool.pop();
+    if (slot && slot.worker) {
+      try {
+        slot.worker.terminate();
+      } catch (_) {
+        /* fail-soft */
+      }
     }
-    _twWorker = null;
   }
+  _twNextCursor = 0;
 }
 
-/** Kick construction if needed; true only when the worker is READY NOW.
+/** Kick construction if needed; true when at least one worker in the pool is READY NOW.
  *  Never awaits — the xu7 hot path asks, it does not wait. */
 function _twEnsure() {
   if (_twState === "ready") return true;
   if (_twState === "dead" || _twState === "loading") return false;
+  const count = Math.max(1, _texWorkersRequested() || 1);
   _twState = "loading";
   _twLoadStartMs = _now();
   _twReadyPromise = new Promise((res) => {
@@ -885,26 +899,30 @@ function _twEnsure() {
     const make =
       _twFactory ||
       (() => new Worker(new URL("./texture_worker.js", import.meta.url), { type: "module" }));
-    _twWorker = make();
-    _twWorker.onmessage = (ev) => _twOnMessage(ev && ev.data);
-    _twWorker.onerror = (ev) =>
-      _twDie(`worker error: ${(ev && (ev.message || ev.type)) || "unknown"}`);
-    try {
-      _twWorker.onmessageerror = () => _twDie("worker messageerror");
-    } catch (_) {
-      /* optional handler */
-    }
     let base = null;
     try {
       base = new URL("./transcoder/", import.meta.url).href;
     } catch (_) {
       base = null;
     }
-    _twWorker.postMessage({ type: "init", transcoderBaseUrl: base });
+    for (let i = 0; i < count; i += 1) {
+      const w = make();
+      const slot = { worker: w, ready: false, busySeq: 0 };
+      _twPool.push(slot);
+      w.onmessage = (ev) => _twOnMessage(slot, ev && ev.data);
+      w.onerror = (ev) =>
+        _twDie(`worker error: ${(ev && (ev.message || ev.type)) || "unknown"}`);
+      try {
+        w.onmessageerror = () => _twDie("worker messageerror");
+      } catch (_) {
+        /* optional handler */
+      }
+      w.postMessage({ type: "init", transcoderBaseUrl: base });
+    }
   } catch (e) {
     _twDie(`construct: ${String(e && e.message ? e.message : e)}`);
   }
-  return false;
+  return _twState === "ready";
 }
 
 /** Await readiness with a bound. `timeoutMs <= 0` = ask-only (no wait). */
@@ -926,17 +944,18 @@ async function _twReady(timeoutMs) {
   return winner === true;
 }
 
-function _twOnMessage(msg) {
-  if (!msg || typeof msg !== "object") return;
+function _twOnMessage(slot, msg) {
+  if (!msg || typeof msg !== "object" || _twState === "dead") return;
   if (msg.type === "ready") {
+    slot.ready = true;
     if (_twState === "loading") {
       _twState = "ready";
       if (_twReadyResolve) {
         _twReadyResolve(true);
         _twReadyResolve = null;
       }
-      _twPump();
     }
+    _twPump();
     return;
   }
   if (msg.type === "error") {
@@ -944,8 +963,12 @@ function _twOnMessage(msg) {
     return;
   }
   if (msg.type !== "result") return;
+  if (slot.busySeq === msg.seq) slot.busySeq = 0;
   const job = _twPending.get(msg.seq);
-  if (!job) return;
+  if (!job) {
+    _twPump();
+    return;
+  }
   if (job.timeoutId) {
     clearTimeout(job.timeoutId);
     job.timeoutId = null;
@@ -971,28 +994,50 @@ function _twSubmit(msg, transfers) {
   });
 }
 
-/** ONE job in flight (pass-08 backpressure); FIFO within the client queue. */
-function _twPump() {
-  if (_twState !== "ready" || _twPending.size > 0) return;
-  const job = _twQueue.shift();
-  if (!job) return;
-  if (TW_JOB_TIMEOUT_MS > 0) {
-    job.timeoutId = setTimeout(() => {
-      if (_twPending.has(job.msg.seq)) {
-        _twDie(`texture worker job timed out / wedged after ${TW_JOB_TIMEOUT_MS}ms (seq=${job.msg.seq})`);
-      }
-    }, TW_JOB_TIMEOUT_MS);
-    if (typeof job.timeoutId?.unref === "function") job.timeoutId.unref();
-  }
-  _twPending.set(job.msg.seq, job);
-  try {
-    _twWorker.postMessage(job.msg, job.transfers);
-  } catch (e) {
-    if (job.timeoutId) {
-      clearTimeout(job.timeoutId);
-      job.timeoutId = null;
+/** Round-robin dispatch across idle ready workers in `_twPool` (1 in-flight job per worker). */
+function _twFindIdleSlot() {
+  const n = _twPool.length;
+  if (n === 0) return null;
+  for (let k = 0; k < n; k += 1) {
+    const idx = (_twNextCursor + k) % n;
+    const slot = _twPool[idx];
+    if (slot.ready && slot.busySeq === 0) {
+      _twNextCursor = (idx + 1) % n;
+      return slot;
     }
-    _twDie(`postMessage: ${String(e && e.message ? e.message : e)}`);
+  }
+  return null;
+}
+
+function _twPump() {
+  if (_twState !== "ready") return;
+  while (_twQueue.length > 0) {
+    const slot = _twFindIdleSlot();
+    if (!slot) return;
+    const job = _twQueue.shift();
+    if (!job) return;
+    slot.busySeq = job.msg.seq;
+    job.slot = slot;
+    if (TW_JOB_TIMEOUT_MS > 0) {
+      job.timeoutId = setTimeout(() => {
+        if (_twPending.has(job.msg.seq)) {
+          _twDie(`texture worker job timed out / wedged after ${TW_JOB_TIMEOUT_MS}ms (seq=${job.msg.seq})`);
+        }
+      }, TW_JOB_TIMEOUT_MS);
+      if (typeof job.timeoutId?.unref === "function") job.timeoutId.unref();
+    }
+    _twPending.set(job.msg.seq, job);
+    try {
+      slot.worker.postMessage(job.msg, job.transfers);
+    } catch (e) {
+      slot.busySeq = 0;
+      if (job.timeoutId) {
+        clearTimeout(job.timeoutId);
+        job.timeoutId = null;
+      }
+      _twDie(`postMessage: ${String(e && e.message ? e.message : e)}`);
+      return;
+    }
   }
 }
 
@@ -1001,7 +1046,6 @@ function _twPump() {
  * still in the client queue resolves null immediately; one already posted is
  * cancelled worker-side only if the worker has not reached it (its reply then
  * reads `ok:false, err:"cancelled"`). Returns whether the seq was known.
- * No caller evicts pre-run today — this is the ST5 eviction seam.
  */
 export function cancelTextureWorkerJob(seq) {
   for (let i = 0; i < _twQueue.length; i += 1) {
@@ -1016,17 +1060,20 @@ export function cancelTextureWorkerJob(seq) {
       return true;
     }
   }
-  if (_twPending.has(seq) && _twWorker) {
+  if (_twPending.has(seq)) {
     const job = _twPending.get(seq);
     if (job && job.timeoutId) {
       clearTimeout(job.timeoutId);
       job.timeoutId = null;
     }
     _twStats.cancels += 1;
-    try {
-      _twWorker.postMessage({ type: "cancel", seq });
-    } catch (_) {
-      /* fail-soft */
+    const targetWorker = job && job.slot ? job.slot.worker : (_twPool[0] && _twPool[0].worker);
+    if (targetWorker) {
+      try {
+        targetWorker.postMessage({ type: "cancel", seq });
+      } catch (_) {
+        /* fail-soft */
+      }
     }
     return true;
   }
@@ -1089,7 +1136,14 @@ async function _workerTranscodeXu7(bytes, wantNra = null) {
   if (wantNra === null) return parsed;
   // Rich form (ST5): the caller asked for the NRA rider.
   const nra = res.nra && res.nra.plane
-    ? { width: res.nra.width, height: res.nra.height, plane: new Uint8Array(res.nra.plane) }
+    ? {
+        width: res.nra.width,
+        height: res.nra.height,
+        plane: new Uint8Array(res.nra.plane),
+        hasRelief: res.nra.hasRelief !== false,
+        normalRgba: res.nra.normalRgba ? new Uint8Array(res.nra.normalRgba) : null,
+        heightR8: res.nra.heightR8 ? new Uint8Array(res.nra.heightR8) : null,
+      }
     : null;
   if (nra) _twStats.nraDerives += 1;
   return { parsed, nra };
@@ -1180,7 +1234,12 @@ export async function workerDeriveNra({ width, height, rgba, strength }) {
   );
   if (!res || !res.ok) return null;
   _twStats.nraDerives += 1;
-  return { width: res.width, height: res.height, plane: new Uint8Array(res.plane) };
+  return {
+    width: res.width,
+    height: res.height,
+    plane: new Uint8Array(res.plane),
+    hasRelief: res.hasRelief !== false,
+  };
 }
 
 /** Test hook: inject a Worker-shaped factory (node has no Worker). */
@@ -1191,14 +1250,17 @@ export function _setTexWorkerFactoryForTest(factory) {
 /** Test hook: tear down the client — terminate, null-resolve everything,
  *  zero the stats (same discipline as `_resetXu7ForTest`). */
 export function _resetTexWorkerForTest() {
-  if (_twWorker) {
-    try {
-      _twWorker.terminate();
-    } catch (_) {
-      /* fail-soft */
+  while (_twPool.length) {
+    const slot = _twPool.pop();
+    if (slot && slot.worker) {
+      try {
+        slot.worker.terminate();
+      } catch (_) {
+        /* fail-soft */
+      }
     }
   }
-  _twWorker = null;
+  _twNextCursor = 0;
   _twState = "off";
   _twSeq = 0;
   _twReadyPromise = null;

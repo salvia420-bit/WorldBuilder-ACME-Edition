@@ -346,14 +346,14 @@ export const PRESETS = {
         gfxRelief: true,
         gfxSubdivLevel: 0,
         gfxReliefScale: 1.0,
-        // pom ON at mid (2026-07-30, second pass): EnvCell interiors and
-        // non-atlased singletons — i.e. EVERY dungeon wall — are not atlas
-        // members, so with `pom` off at mid they were the one surface class
-        // left flat while the outdoor world got `statPom`. Same 8/4 mid step
-        // counts, same 5-10 m fade; `?pom=off` escapes.
+        // pom ON at mid (2026-07-30, second pass; tuned 2026-11-12 to 5/3 steps):
+        // EnvCell interiors and non-atlased singletons — i.e. EVERY dungeon wall —
+        // are not atlas members, so with `pom` off at mid they were the one surface
+        // class left flat while the outdoor world got `statPom`. 5/3 mid step counts,
+        // same 5-10 m fade; `?pom=off` escapes.
         pom: true,
-        pomStepsPrimary: 8,
-        pomStepsSelfShadow: 4,
+        pomStepsPrimary: 5,
+        pomStepsSelfShadow: 3,
         microCreviceAo: true,
         creviceAo: true,
         microContactShadow: false,

@@ -118,7 +118,7 @@ import { decodeSplatterId } from "./splatter_decode.js";
 // splatter_decode.js, so the node stub suites are unaffected.
 import { noteSplatterHit } from "./kill_impulse.js";
 // 2026-10-07 `?particlesOverClouds` — dependency-free registry (no three).
-import { registerLateFxSource } from "./particles_over_clouds.js";
+import { registerLateFxSource, registerFxGlowExtras } from "./particles_over_clouds.js";
 // Tier 1 (2026-10-10): every cue lights the world around it (and the forceful
 // ones throw a shockwave) — scene3d/vfx/fx_cues.js.
 import { fireFxCue, fxCueDecalAhead, FX_CUES } from "./vfx/fx_cues.js";
@@ -677,6 +677,13 @@ registerLateFxSource((out) => { for (const m of _liveBursts) out.push(m); });
  * `side` differs per shape (sphere/cube = FrontSide, ring = DoubleSide),
  * so it's passed explicitly to keep the reset complete.
  */
+export const FX_GLOW_LAYER = 3;
+
+function _resolveFxGlowLayer() {
+  const g = globalThis.__FX_GLOW_LAYER;
+  return Number.isInteger(g) && g >= 0 && g < 31 ? g : FX_GLOW_LAYER;
+}
+
 function _acquireBurstMesh(shape, parent, position, scaleFrom, color, side) {
   const pool = _burstPool[shape];
   let mesh = pool.pop() || null;
@@ -689,17 +696,6 @@ function _acquireBurstMesh(shape, parent, position, scaleFrom, color, side) {
     mat.blending = THREE.AdditiveBlending;
     mat.depthWrite = false;
     mat.side = side;
-    // RP6 (2026-06-08): do NOT set `mat.needsUpdate = true` here. For a
-    // MeshBasicMaterial, color/opacity are plain uniforms that update
-    // without a recompile, and transparent/blending/depthWrite are
-    // render-state (not program-cache keys). `side` is constant per shape
-    // pool (sphere/cube=FrontSide, ring=DoubleSide) and each shape has its
-    // OWN pool, so the program-cache key never changes across reuses.
-    // Setting needsUpdate would bump material.version and force the
-    // renderer to re-run getProgram()/uniform re-eval on the next render —
-    // per-reuse churn the pre-pool (fresh-material) path never paid. If a
-    // future change makes `side` vary within a pool, set needsUpdate only
-    // on that specific transition.
     mesh.scale.setScalar(scaleFrom);
     mesh.position.copy(position);
     mesh.rotation.set(0, 0, 0);
@@ -718,6 +714,23 @@ function _acquireBurstMesh(shape, parent, position, scaleFrom, color, side) {
     mesh.position.copy(position);
     mesh.scale.setScalar(scaleFrom);
   }
+  let rawExp = NaN;
+  try {
+    rawExp = Number(globalThis.window?.liveScene3d?.renderer?.toneMappingExposure);
+  } catch (_) {
+    rawExp = NaN;
+  }
+  if (Number.isFinite(rawExp) && rawExp > 1.001 && mesh.material?.color?.multiplyScalar) {
+    // Calibrate HDR emissive burst gain against toneMappingExposure (~5) so
+    // spell, lifestone, portal, and level-up bursts glow with rich colour on
+    // FX_GLOW_LAYER / FxGlowEffect instead of clipping all channels to white.
+    mesh.material.color.multiplyScalar(Math.min(1.0, 2.15 / rawExp));
+  }
+  if (mesh.layers && typeof mesh.layers.enable === "function") {
+    mesh.layers.enable(0);
+    mesh.layers.enable(1);
+    mesh.layers.enable(_resolveFxGlowLayer());
+  }
   mesh.renderOrder = 950;
   // `?burstFx`: patch once per pooled material (constant per shape → one
   // program per shape), then set this burst's look + seed (uniforms only).
@@ -731,8 +744,28 @@ function _acquireBurstMesh(shape, parent, position, scaleFrom, color, side) {
   // without re-deriving it from geometry identity.
   mesh.userData.__rp6Shape = shape;
   if (parent) parent.add(mesh);
+  _ensureBurstGlowRegistered();
   _liveBursts.add(mesh);
   return mesh;
+}
+
+let _burstGlowRegistered = false;
+function _ensureBurstGlowRegistered() {
+  if (_burstGlowRegistered) return;
+  _burstGlowRegistered = true;
+  if (typeof registerFxGlowExtras !== "function") return;
+  try {
+    registerFxGlowExtras({
+      collect(out, opts) {
+        if (opts && opts.all) return;
+        for (const m of _liveBursts) {
+          if (m && m.visible && m.parent && m.material) {
+            out.push({ object: m, material: m.material });
+          }
+        }
+      },
+    });
+  } catch (_) {}
 }
 
 /**

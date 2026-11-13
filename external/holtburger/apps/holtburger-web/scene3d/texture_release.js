@@ -71,13 +71,25 @@ export function isLandscapeCpuReleaseEnabled() {
   return _landscapeCpuReleaseEnabled || (typeof globalThis !== "undefined" && !!globalThis.__enableLandscapeCpuRelease);
 }
 
-/** Strict `=on` opt-in. See the preconditions above — this one is not a taste
- *  knob, it is gated on other work being finished. */
-export function texFreeCpuEnabled(search = (typeof location !== "undefined" ? location.search : "")) {
+/** `?texFreeCpu` — DEFAULT ON; `off`/`0`/`false`/`no` escape. Drops CPU-side
+ *  `image.data` mirrors after GPU upload once rehydration hooks are armed. */
+let _cachedTexFreeSearch = null;
+let _cachedTexFreeVal = true;
+export function texFreeCpuEnabled(
+  search = (typeof location !== "undefined" && location
+    ? location.search
+    : (typeof window !== "undefined" && window.location ? window.location.search : ""))
+) {
+  const s = search || "";
+  if (s === _cachedTexFreeSearch) return _cachedTexFreeVal;
   try {
-    return new URLSearchParams(search || "").get("texFreeCpu") === "on";
+    const v = new URLSearchParams(s).get("texFreeCpu");
+    const out = v == null ? true : !(["off", "0", "false", "no"].includes(String(v).toLowerCase()));
+    _cachedTexFreeSearch = s;
+    _cachedTexFreeVal = out;
+    return out;
   } catch (_) {
-    return false;
+    return true;
   }
 }
 
@@ -154,6 +166,7 @@ export function releaseNow(tex, plane, surfaceDid) {
       const p = planeFor({ map: t, normalMap: t, roughnessMap: t, aoMap: t }, plane, surfaceDid);
       if (!p || !p.data?.byteLength) return false;
       if (t.image) t.image.data = p.data;
+      if (t.source) t.source.dataReady = true;
       _stats.refilled += 1;
       return true;
     },
@@ -161,6 +174,7 @@ export function releaseNow(tex, plane, surfaceDid) {
   );
 
   if (tex.image) tex.image.data = null;
+  if (tex.source) tex.source.dataReady = false;
   if (Array.isArray(tex.mipmaps)) {
     for (let i = 0; i < tex.mipmaps.length; i++) {
       if (tex.mipmaps[i] && tex.mipmaps[i].data) tex.mipmaps[i].data = null;

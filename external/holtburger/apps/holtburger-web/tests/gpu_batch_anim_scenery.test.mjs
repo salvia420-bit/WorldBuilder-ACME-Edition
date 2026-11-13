@@ -406,7 +406,8 @@ test("1. flag off: no kit, one draw per bucket, as before", async () => {
   assert.deepEqual([kit.budget, kit.pages, kit.stateRows], [null, null, null], "the kit allocated nothing");
   assert.equal(AS.animSceneryBatchEnabled(), false);
   AS.__setAnimSceneryBatchForTest(undefined);
-  assert.equal(AS.animSceneryBatchEnabled(), false, "DEFAULT OFF with no URL");
+  assert.equal(AS.animSceneryBatchEnabled(), true, "DEFAULT ON with no URL");
+  AS.__setAnimSceneryBatchForTest(false);
 });
 
 // A frame of the app: the anim loop, then the render (the batch shows next

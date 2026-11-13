@@ -159,19 +159,19 @@ export const SWAMP_TUNING = Object.freeze({
   midgeAnchorRadiusM: 1.1,
   gasAnchorRadiusM: 0.7,
   // Wisp ignition cadence. RARE (plan §3.5 item 2: "rare ignition on a long
-  // timer"); each ignition lasts ~2 s, so this is a ~1.5 % duty cycle over the
-  // whole resident swamp ring.
-  wispPeriodSec: 140,
+  // timer"); each ignition lasts ~2 s, so this stays sparse across the swamp ring.
+  wispPeriodSec: 85,
   wispHandleSlots: 4,
 });
 
 /** The SWAMP palette handed to the shared `ground_fog.js`. Marsh green-grey and
- *  DIM: it is an alpha pass over the near field, so its cost is fill-bound. */
+ *  calibrated for pre-exposure HDR (`INV_PI` scale under `exposure = 5.0` so
+ *  ground-hugging marsh mist ribbons never blow out white). */
 export const SWAMP_FOG_PALETTE = Object.freeze({
-  colour: [0.56, 0.62, 0.54],
-  opacity: 0.17,
-  cardWidthM: 26,
-  cardHeightM: 5.0,
+  colour: [0.125, 0.148, 0.120],
+  opacity: 0.21,
+  cardWidthM: 28,
+  cardHeightM: 3.4,
   liftMinM: 0.2,        // plan §3.5: z = height + 0.2..1.5
   liftMaxM: 1.5,
   nearFadeM: 3.5,
@@ -690,6 +690,26 @@ function _emitterProvider(effect, cfg) {
   };
 }
 
+/** Calibrate marsh fog colour against live dusk/night & HDR exposure so cards
+ *  darken cohesively at twilight/night and never blow out white. */
+function _syncFogShade(fog) {
+  const uc = fog && fog.uniforms && fog.uniforms.uColour ? fog.uniforms.uColour.value : null;
+  if (!uc) return;
+  const env = _envSnapshot();
+  const night = env && Number.isFinite(env.nightFactor) ? Math.min(1, Math.max(0, env.nightFactor)) : 0;
+  const exp = Number(_swamp && _swamp.scene3d && _swamp.scene3d.renderer
+    ? _swamp.scene3d.renderer.toneMappingExposure : NaN);
+  const expScale = Number.isFinite(exp) && exp > 0.5 ? Math.min(2.5, 5.0 / Math.min(20, exp)) : 1.0;
+  // Day: earthy marsh mist; dusk/night: dims to 0.22x with subtle cool-emerald marsh tone.
+  const dayShade = 1.0 - 0.78 * night;
+  const bioG = night * 0.018;
+  const r = (SWAMP_FOG_PALETTE.colour[0] * dayShade) * expScale;
+  const g = (SWAMP_FOG_PALETTE.colour[1] * dayShade + bioG) * expScale;
+  const b = (SWAMP_FOG_PALETTE.colour[2] * dayShade + bioG * 0.45) * expScale;
+  if (typeof uc.setRGB === "function") uc.setRGB(r, g, b);
+  else { uc.r = r; uc.g = g; uc.b = b; }
+}
+
 /** The camera-scoped ground fog. Immune to evict/park/rebake by construction
  *  (plan §2.2: a camera-scope provider owns one pool that follows the player). */
 function _fogProvider() {
@@ -738,6 +758,7 @@ function _fogProvider() {
         _swamp.fogCameraNear = cam.near;
         _swamp.fog.setCameraFar(cam.far, cam.near);
       }
+      _syncFogShade(_swamp.fog);
       const p = frameCtx.playerPos;
       _swamp.fog.update(dt, frameCtx.tSec, p.x, p.y, p.z);
     },

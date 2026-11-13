@@ -1611,7 +1611,8 @@ vec2 getHazeRayNearFar(const IntersectionResult intersections) {
 #endif // HAZE
 
 float getRayDistanceToScene(const vec3 rayDirection, out float viewZ) {
-  float depth = readDepthValue(depthBuffer, vUv * targetUvScale + temporalJitter);
+  vec2 depthUv = clamp((vUv + temporalJitter) * targetUvScale, vec2(0.0), targetUvScale);
+  float depth = readDepthValue(depthBuffer, depthUv);
   if (depth < 1.0 - 1e-7) {
     depth = reverseLogDepth(depth, cameraNear, cameraFar);
     viewZ = getViewZ(depth);
@@ -1979,7 +1980,7 @@ var CloudsMaterial = class extends AtmosphereMaterialBase {
     const prevGroundIrradiance = this.defines.GROUND_BOUNCE != null;
     const nextGroundIrradiance = this.uniforms.groundBounceScale.value > 0 && this.uniforms.maxIterationCountToGround.value > 0;
     if (nextGroundIrradiance !== prevGroundIrradiance) {
-      if (nextPowder) {
+      if (nextGroundIrradiance) {
         this.defines.GROUND_BOUNCE = "1";
       } else {
         delete this.defines.GROUND_BOUNCE;
@@ -2333,20 +2334,68 @@ void temporalUpscale(
   vec4 depthVelocity = getClosestFragment(lowResCoord);
   vec2 velocity = depthVelocity.gb;
   vec2 prevUv = vUv - velocity;
+
+  // Bilateral 3x3 low-res neighborhood bounds (RGB + alpha) and horizon depth
+  // discontinuity detector. Prevents 4x4 Bayer checkerboard stamps along sharp
+  // distant terrain/mountain silhouettes where varianceClipping left .a unclipped.
+  ivec2 lowSize = textureSize(colorBuffer, 0);
+  float centerFrontDepth = texelFetch(depthVelocityBuffer, lowResCoord, 0).r;
+  vec4 minNeighbor = currentColor;
+  vec4 maxNeighbor = currentColor;
+  vec4 bilateralSum = vec4(0.0);
+  float bilateralW = 0.0;
+  bool anySky = (centerFrontDepth <= 0.0);
+  bool anyScene = (centerFrontDepth > 0.0);
+  float minSceneDepth = anyScene ? centerFrontDepth : 1e20;
+  float maxSceneDepth = anyScene ? centerFrontDepth : 0.0;
+  for (int dy = -1; dy <= 1; ++dy) {
+    for (int dx = -1; dx <= 1; ++dx) {
+      ivec2 nc = clamp(lowResCoord + ivec2(dx, dy), ivec2(0), lowSize - ivec2(1));
+      vec4 ncCol = texelFetch(colorBuffer, nc, 0);
+      float ncDepth = texelFetch(depthVelocityBuffer, nc, 0).r;
+      minNeighbor = min(minNeighbor, ncCol);
+      maxNeighbor = max(maxNeighbor, ncCol);
+      bool nSky = (ncDepth <= 0.0);
+      anySky = anySky || nSky;
+      anyScene = anyScene || !nSky;
+      if (!nSky) {
+        minSceneDepth = min(minSceneDepth, ncDepth);
+        maxSceneDepth = max(maxSceneDepth, ncDepth);
+      }
+      float depthDiff = abs(ncDepth - centerFrontDepth);
+      float depthScale = max(48.0, 0.12 * max(ncDepth, centerFrontDepth));
+      float wSpatial = (dx == 0 && dy == 0) ? 1.0 : ((dx == 0 || dy == 0) ? 0.65 : 0.4);
+      float wDepth = (nSky == (centerFrontDepth <= 0.0)) ? exp(-depthDiff / depthScale) : 0.05;
+      float w = wSpatial * wDepth;
+      bilateralSum += ncCol * w;
+      bilateralW += w;
+    }
+  }
+  vec4 bilateralColor = bilateralW > 1e-5 ? (bilateralSum / bilateralW) : currentColor;
+  float silhouetteEdge = (anySky && anyScene) ? 1.0 : 0.0;
+  float ridgeJump = (anyScene && maxSceneDepth > minSceneDepth)
+    ? clamp((maxSceneDepth - minSceneDepth) / max(120.0, 0.30 * maxSceneDepth), 0.0, 1.0)
+    : 0.0;
+  float horizonEdge = max(silhouetteEdge, ridgeJump);
+
   if (prevUv.x < 0.0 || prevUv.x > 1.0 || prevUv.y < 0.0 || prevUv.y > 1.0) {
-    outputColor = currentColor;
+    outputColor = mix(currentColor, bilateralColor, 0.65 * horizonEdge);
     #ifdef SHADOW_LENGTH
     outputShadowLength = currentShadowLength.r;
     #endif // SHADOW_LENGTH
     return; // Rejection
   }
 
-  // Variance clipping with a large variance gamma seems to work fine for
-  // upsampling. This increases ghosting, of course, but it's hard to notice on
-  // clouds.
-  // vec4 historyColor = textureCatmullRom(colorHistoryBuffer, prevUv);
+  // Variance clipping with bilateral horizon tightening + 4-channel alpha AABB
+  // clamp so sky cloud history never bleeds 4x4 checkerboard blocks over ridges.
   vec4 historyColor = texture(colorHistoryBuffer, prevUv);
-  vec4 clippedColor = varianceClipping(colorBuffer, vUv, currentColor, historyColor, varianceGamma);
+  float localGamma = mix(varianceGamma, 0.85, horizonEdge);
+  vec4 refColor = mix(currentColor, bilateralColor, 0.75 * horizonEdge);
+  vec4 clippedColor = varianceClipping(colorBuffer, vUv, refColor, historyColor, localGamma);
+  clippedColor.a = clamp(historyColor.a, minNeighbor.a, maxNeighbor.a);
+  if (horizonEdge > 0.0) {
+    clippedColor = mix(clippedColor, clamp(clippedColor, minNeighbor, maxNeighbor), 0.85 * horizonEdge);
+  }
   outputColor = clippedColor;
 
   #ifdef SHADOW_LENGTH

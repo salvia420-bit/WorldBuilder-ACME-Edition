@@ -141,7 +141,7 @@ function ensureStyles() {
   const st = document.createElement("style");
   st.id = STYLE_ID;
   st.textContent = `
-  #${ROOT_ID} { right: 12px; top: 96px; width: 340px; z-index: 60; background: transparent; isolation: isolate; }
+  #${ROOT_ID} { right: 12px; top: 176px; width: 340px; z-index: 60; background: transparent; isolation: isolate; contain: layout style; font-variant-numeric: tabular-nums; }
   #${ROOT_ID}[data-open="0"] { display: none; }
   #${ROOT_ID}::before {
     content: ""; position: absolute; inset: 0; z-index: -1; pointer-events: none;
@@ -437,6 +437,7 @@ function buildWindow() {
       dragHandle: bar,
       lockButton: lockBtn,
       ignoreSelector: "button, input, select, .hbk-close",
+      defaultPos: { right: "12px", top: "176px", left: "auto", bottom: "auto" },
       onLockChange: (locked) => {
         setText(lockBtn, locked ? "Unlk" : "Lock");
         setTitle(lockBtn, locked ? "Unlock the window" : "Lock the window in place");
@@ -1164,14 +1165,27 @@ function launcherTick() {
   } catch { state = "off"; }
   if (b.dataset.state !== state) b.dataset.state = state;
   // Flip to the toolbar's left side when its right edge is at the screen edge.
+  // Dirty-gated so steady-state 1 Hz ticks skip `getBoundingClientRect()`.
   try {
     const slot = b.parentNode;
     const hb = slot?.parentNode;
     if (slot && hb && hb.id === "hb-hotbar" && typeof hb.getBoundingClientRect === "function") {
-      const r = hb.getBoundingClientRect();
-      const z = Number(hb.currentCSSZoom) > 0 ? Number(hb.currentCSSZoom) : 1;
-      const flip = r.right + 36 * z > (window.innerWidth || 0);
-      if (slot.classList.contains("flip") !== flip) slot.classList.toggle("flip", flip);
+      if (S.launcherObservedHb !== hb) {
+        if (S.launcherHbRo) { try { S.launcherHbRo.disconnect(); } catch {} S.launcherHbRo = null; }
+        S.launcherObservedHb = hb;
+        S.launcherFlipDirty = true;
+        if (typeof ResizeObserver === "function") {
+          S.launcherHbRo = new ResizeObserver(() => { S.launcherFlipDirty = true; });
+          S.launcherHbRo.observe(hb);
+        }
+      }
+      if (S.launcherFlipDirty !== false) {
+        S.launcherFlipDirty = false;
+        const r = hb.getBoundingClientRect();
+        const z = Number(hb.currentCSSZoom) > 0 ? Number(hb.currentCSSZoom) : 1;
+        const flip = r.right + 36 * z > (window.innerWidth || 0);
+        if (slot.classList.contains("flip") !== flip) slot.classList.toggle("flip", flip);
+      }
     }
   } catch { /* layout read failed — leave as is */ }
 }
@@ -1252,9 +1266,13 @@ export function mount() {
   try { S.urlPersona = new URLSearchParams(globalThis.location?.search ?? "").get("botPersona"); } catch { S.urlPersona = null; }
   S.bridge = createHudBridge({ win: window });
   S.launcher = buildLauncher();
+  S.launcherFlipDirty = true;
   attachLauncher();
-  S.onHotbarMounted = () => attachLauncher();
+  S.onHotbarMounted = () => { S.launcherFlipDirty = true; attachLauncher(); };
+  S.onLauncherInvalidate = () => { S.launcherFlipDirty = true; };
   document.addEventListener("hb-hotbar-mounted", S.onHotbarMounted);
+  window.addEventListener("resize", S.onLauncherInvalidate);
+  window.addEventListener("pointerup", S.onLauncherInvalidate);
   S.launcherTimer = setInterval(launcherTick, LAUNCHER_MS);
   launcherTick();
   window.__toggleRynthHud = () => toggleHud();
@@ -1271,7 +1289,11 @@ export function mount() {
     stopTimer();
     clearInterval(S.launcherTimer);
     clearTimeout(S.msgTimer);
+    if (S.launcherHbRo) { try { S.launcherHbRo.disconnect(); } catch {} S.launcherHbRo = null; }
+    S.launcherObservedHb = null;
     document.removeEventListener("hb-hotbar-mounted", S.onHotbarMounted);
+    window.removeEventListener("resize", S.onLauncherInvalidate);
+    window.removeEventListener("pointerup", S.onLauncherInvalidate);
     destroyAiPanel();
     disposeVtPanelIfLoaded();
     try { S.vtDisplay?.dispose?.(); } catch { /* ignore */ }

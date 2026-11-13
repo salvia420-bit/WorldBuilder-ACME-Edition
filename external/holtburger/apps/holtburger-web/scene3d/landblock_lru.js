@@ -2223,6 +2223,12 @@ export class LandblockLRU {
     if (typeof s._evictTerrainBatchForLb === "function") {
       try { s._evictTerrainBatchForLb(lbKey); } catch (_) { /* fail-soft */ }
     }
+    if (typeof s._evictPoolEnvCellsForLb === "function") {
+      try { s._evictPoolEnvCellsForLb(lbKey); } catch (_) { /* fail-soft */ }
+    }
+    if (typeof s._evictSetupLightCarriersForLb === "function") {
+      try { s._evictSetupLightCarriersForLb(lbKey); } catch (_) { /* fail-soft */ }
+    }
 
     // 6b. C3 #7 — if a cross-LB InstancedMesh node survived step 5c (it
     //    still covers other resident LBs), this LB's statics are STILL on
@@ -2663,6 +2669,9 @@ export class LandblockLRU {
     }
     if (typeof s._unparkStaticBatchXForLb === "function") {
       try { s._unparkStaticBatchXForLb(lbKey); } catch (_) {}
+    }
+    if (typeof s._unparkPoolEnvCellsForLb === "function") {
+      try { s._unparkPoolEnvCellsForLb(lbKey); } catch (_) {}
     }
     // ?objRadius (perf T7): a landblock outside the object near radius must
     // stay hidden after the re-attach above. No-op when the flag is off.

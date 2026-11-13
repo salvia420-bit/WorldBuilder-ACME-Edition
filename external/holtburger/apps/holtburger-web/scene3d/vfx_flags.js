@@ -34,10 +34,17 @@ import { visualEnabled } from "./vfx_catalog.js";
 // Leaf module (imports nothing) — keeps the no-back-edge property above.
 import { lowBandwidth } from "./bandwidth_tier.js";
 
+let _vfxCachedSearch;
+let _vfxCachedParams;
 function _strFlag(name) {
   try {
     if (typeof window !== "undefined" && window.location) {
-      return new URLSearchParams(window.location.search).get(name);
+      const s = window.location.search || "";
+      if (s !== _vfxCachedSearch) {
+        _vfxCachedSearch = s;
+        _vfxCachedParams = new URLSearchParams(s);
+      }
+      return _vfxCachedParams.get(name);
     }
   } catch (_) { /* default */ }
   return null;

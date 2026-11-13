@@ -185,7 +185,21 @@ function _fragMat(base, materialCache, surfaceDid, fragPlan) {
   if (!_vfxFragDeps) {
     _vfxFragDeps = { globals: VFX_GLOBALS, installComponentPatch: installVfxComponentPatch, sharedPrelude: VFX_HASH_PRELUDE };
   }
-  return buildFragVariant(materialCache, surfaceDid, fragPlan.entries, _vfxFragDeps) || base;
+  const v = buildFragVariant(materialCache, surfaceDid, fragPlan.entries, _vfxFragDeps);
+  if (!v) return base;
+  if (v !== base) {
+    v.userData = v.userData || {};
+    v.userData.__vfxPoolAdmit = true;
+    if (Array.isArray(fragPlan.entries)) {
+      for (let i = 0; i < fragPlan.entries.length; i += 1) {
+        const e = fragPlan.entries[i];
+        if (e && e.comp && e.comp.id === "deformation.windSwayGpu") {
+          v.userData.__vfxWindCfg = e.config || null;
+        }
+      }
+    }
+  }
+  return v;
 }
 
 const METERS_PER_LANDBLOCK = 192.0;
@@ -2484,20 +2498,39 @@ let _walkInInstanceFlag;
 // net-review/multidraw-truth-probe.mjs + renderCPU, NOT with info.calls:
 // collapsing ranges into instanced draws makes info.calls go UP (183 -> ~375)
 // while the frame gets faster. That inversion is the whole trap.
-function walkInInstanceEnabled() {
-  if (_walkInInstanceFlag !== undefined) return _walkInInstanceFlag;
-  let on = false; // opt-IN only: === "on"/"1"/"true"/"yes" enables.
+let _walkInArmed = false;
+function _walkInInstanceExplicitOn() {
+  if (_walkInInstanceFlag === true && !_walkInArmed) return true;
   try {
     if (typeof globalThis !== "undefined" && globalThis.location?.search) {
       const v = (new URLSearchParams(globalThis.location.search).get("walkInInstance") || "").toLowerCase();
-      on = v === "on" || v === "1" || v === "true" || v === "yes";
+      return v === "on" || v === "1" || v === "true" || v === "yes";
     }
-  } catch (_) { on = false; }
+  } catch (_) {}
+  return false;
+}
+export function armWalkInInstanceDefault(on = true) {
+  _walkInArmed = !!on;
+  _walkInInstanceFlag = undefined;
+}
+function walkInInstanceEnabled() {
+  if (_walkInInstanceFlag !== undefined) return _walkInInstanceFlag;
+  let on = _walkInArmed;
+  try {
+    if (typeof globalThis !== "undefined" && globalThis.location?.search) {
+      const v = (new URLSearchParams(globalThis.location.search).get("walkInInstance") || "").toLowerCase();
+      if (v) {
+        if (v === "on" || v === "1" || v === "true" || v === "yes") on = true;
+        else if (v === "off" || v === "0" || v === "false" || v === "no") on = false;
+        else if (!_walkInArmed) on = false;
+      }
+    }
+  } catch (_) { on = _walkInArmed; }
   _walkInInstanceFlag = on;
   return on;
 }
 // Test seam.
-export function __setWalkInInstanceForTest(v) { _walkInInstanceFlag = v; }
+export function __setWalkInInstanceForTest(v) { _walkInInstanceFlag = v; if (v !== undefined) _walkInArmed = false; }
 
 // === ?skipDeadBatch (2026-08-06, DEFAULT-ON) ================================
 // "Can this batch bucket ever put a pixel on screen?", composed once here from
@@ -2650,7 +2683,7 @@ export function consolidateStaticSingletons(nodes, outBatches) {
     // addGeometry/addInstance'd ONCE — silently collapsing N placements to one
     // and deleting scenery. Harmless before ?walkInInstance (this path had never
     // been handed an InstancedMesh); load-bearing now.
-    if (n && n.isMesh && !n.isInstancedMesh && !n.isLOD && n.geometry && n.material && n.userData) {
+    if (n && n.isMesh && !n.isInstancedMesh && !n.isLOD && n.geometry && n.material && n.userData && n.userData.__poolHeldRs == null) {
       // P1.14 (kit §7 EDIT F): key by the MATERIAL OBJECT, not the surfaceDid.
       // With ?visual on, two DIDs sharing a surfaceDid but carrying different frag
       // SETs resolve to different (surfaceDid|setKey|configKey) variant clones —
@@ -3103,7 +3136,8 @@ export async function bakeStaticsForLandblock(
   // grouped models are SKIPPED by the per-placement loop below and emitted in
   // pass 2, which keeps the singleton loop's iteration order — and therefore
   // flag-off — byte-identical.
-  const _walkInInstance = walkInInstanceEnabled();
+  const _walkInInstance = walkInInstanceEnabled()
+    && !(typeof poolWorldActive === "function" && poolWorldActive() && !_walkInInstanceExplicitOn());
   const _instanceable = new Set();
   const _placementsByModel = new Map();
   if (_walkInInstance) {
@@ -3289,21 +3323,79 @@ export async function bakeStaticsForLandblock(
       disposables: { geometries: [], materials: [], textures: [] },
     };
   }
-  // Problem-B — consolidate this LB's plain-Mesh singletons into per-surface
-  // BatchedMeshes (no-op unless ?staticBatch=on). Fail-soft: on any error fall
-  // back to the unbatched nodes so the LB still renders.
+  // Register lightweight per-LB SetupModel (`0x02`) light-carrier anchors under
+  // `scene3d._setupLightCarrierRoot` when `scene3d.worldRoot` is live, so pooled,
+  // cross-LB batched, and instanced lanterns/braziers/streetlights retain their
+  // dynamic point lights AND `_rescanSetupLights` runs in O(LB) instead of O(Scene).
+  if (scene3d && scene3d.worldRoot) {
+    if (!scene3d._setupLightCarrierRoot) {
+      const root = new THREE.Group();
+      root.name = "setup-light-carriers";
+      scene3d.worldRoot.add(root);
+      scene3d._setupLightCarrierRoot = root;
+    }
+    if (!(scene3d._setupLightCarriersByLb instanceof Map)) {
+      scene3d._setupLightCarriersByLb = new Map();
+    }
+    if (typeof scene3d._evictSetupLightCarriersForLb !== "function") {
+      scene3d._evictSetupLightCarriersForLb = (evictLbKey) => {
+        const k = ((evictLbKey >>> 0) & 0xffff0000) >>> 0;
+        const b = scene3d._setupLightCarriersByLb?.get(k);
+        if (!b) return;
+        scene3d._setupLightCarriersByLb.delete(k);
+        const r = scene3d._setupLightCarrierRoot;
+        if (r) {
+          for (const o of b.buildings) { try { r.remove(o); } catch (_) {} }
+          for (const o of b.statics) { try { r.remove(o); } catch (_) {} }
+        }
+      };
+    }
+    const axisZ = new THREE.Vector3(0, 0, 1);
+    const noLightSet = globalThis.__hbNoLightSetups;
+    const lbBucket0 = ((lbKey >>> 0) & 0xffff0000) >>> 0;
+    if (!scene3d._setupLightCarriersByLb.has(lbBucket0)) {
+      scene3d._setupLightCarriersByLb.set(lbBucket0, { buildings: [], statics: [] });
+    }
+    for (const p of statics) {
+      const mid = (p?.modelId >>> 0) || 0;
+      if ((mid >>> 24) !== 0x02) continue;
+      if (!primary.groupsByModel.has(mid)) continue;
+      const pLbId = (p.landblockId >>> 0) || lbKey;
+      const pLbKey = (pLbId & 0xffff0000) >>> 0;
+      let bucket = scene3d._setupLightCarriersByLb.get(pLbKey);
+      if (!bucket) {
+        bucket = { buildings: [], statics: [] };
+        scene3d._setupLightCarriersByLb.set(pLbKey, bucket);
+      }
+      if (noLightSet?.has?.(mid)) continue;
+      const pLbX = (pLbId >>> 24) & 0xff;
+      const pLbY = (pLbId >>> 16) & 0xff;
+      const carrier = new THREE.Object3D();
+      carrier.position.set(pLbX * METERS_PER_LANDBLOCK + (p.x || 0), pLbY * METERS_PER_LANDBLOCK + (p.y || 0), p.z || 0);
+      applyPlacementOrientation(carrier.quaternion, p, axisZ);
+      const sc = Number.isFinite(p.scale) && p.scale > 0 ? p.scale : 1;
+      carrier.scale.set(sc, sc, sc);
+      carrier.matrixAutoUpdate = false;
+      carrier.updateMatrix();
+      carrier.updateMatrixWorld(true);
+      carrier.userData = { modelId: mid, landblockId: pLbId, isSetupLightCarrier: true };
+      bucket.statics.push(carrier);
+    }
+    for (const n of addedNodes) {
+      if (n && n.userData && ((n.userData.modelId >>> 24) === 0x02)) {
+        n.userData.__setupLightScanned = true;
+      }
+    }
+  }
+
   let nodesToAdd = addedNodes;
   let staticBatchCount = 0;
-  if (readStaticBatchFlag() && addedNodes.length > 1) {
-    // ?statBatchChunk (default ON since 2026-07-03; `off` opts out) — feed the SAME
-    // >=2-per-material groups into REGION-CHUNKED (3x3-LB) per-material
-    // BatchedMeshes (static_batch_x.js v2) instead of per-(LB, surface) ones.
-    // consolidateStaticSingletonsCrossLb NEVER throws; it returns null when
-    // nothing was consumed, in which case the unchanged per-LB path below
-    // runs (no double-render window). Flag-off short-circuits to null →
-    // byte-identical legacy behavior.
+  // Problem-B — consolidate plain-Mesh singletons into region-chunked
+  // (`StaticBatchX`) or per-surface BatchedMeshes FIRST so repeated materials
+  // batch immediately without creating thousands of temporary BC7-pending holdouts.
+  if (readStaticBatchFlag() && nodesToAdd.length > 1) {
     const crossRes = statBatchChunkEnabled()
-      ? consolidateStaticSingletonsCrossLb(addedNodes, scene3d, lbKey)
+      ? consolidateStaticSingletonsCrossLb(nodesToAdd, scene3d, lbKey)
       : null;
     if (crossRes) {
       nodesToAdd = crossRes.out;
@@ -3311,27 +3403,17 @@ export async function bakeStaticsForLandblock(
     } else {
       try {
         const batches = [];
-        nodesToAdd = consolidateStaticSingletons(addedNodes, batches);
+        nodesToAdd = consolidateStaticSingletons(nodesToAdd, batches);
         staticBatchCount = batches.length;
       } catch (e) {
-        nodesToAdd = addedNodes;
         // eslint-disable-next-line no-console
         console.warn("[scene3d.statics/staticBatch] consolidation failed, using unbatched:", e);
       }
     }
   }
-  // ST9 (`?drawPools`, T22-PRODUCER — SPEC §1.5 / pass-07 S1) — THE PRODUCER
-  // SWAP, consumer 1 of 3. The pooled producer sits AHEAD of the atlas at the
-  // atlas's own seam (SPEC §1.5: "Atlas: subsumed wholesale") and takes every
-  // singleton it can place in a (sector × class) BatchedMesh pool. What it
-  // CANNOT take comes back in `passthrough` and continues into the unchanged
-  // atlas/singleton path below — that is the D2 route: a member whose texture
-  // is not at its class's page dims has no legal layer until the bake/transcode
-  // resample lands, so it renders through TODAY'S producer and is COUNTED
-  // (`__diag.pools().classPages.refused.needsResample`), never dropped.
-  // `poolWorldActive()` is false unless the full F-11.3 chain is armed ⇒ the
-  // OFF arm never reaches `addSingletonsToPools` and is byte-identical.
-  if (poolWorldActive() && nodesToAdd.length > 0) {
+  // ST9 (`?drawPools`, T22-PRODUCER — SPEC §1.5 / pass-07 S1) — route remaining
+  // unique-material singletons to `PoolRegistry`, with `statAtlas` catching passthroughs.
+  if (typeof poolWorldActive === "function" && poolWorldActive() && nodesToAdd.length > 0 && !scene3d.wireframeMode) {
     try {
       const { passthrough } = addSingletonsToPools(nodesToAdd, scene3d, {
         domain: "st",
@@ -3379,7 +3461,7 @@ export async function bakeStaticsForLandblock(
         const canPixels =
           (img && img.data) || isBc7AtlasTexture(t) ||
           canSupplyPlanes(node?.material, node?.material?.userData?.surfaceDid);
-        if (node && node.isMesh && !node.isInstancedMesh && !node.isBatchedMesh && !node.isLOD && node.geometry && node.geometry.attributes?.uv && t && img && canPixels && !node.userData?.__staticBatch) {
+        if (node && node.isMesh && !node.isInstancedMesh && !node.isBatchedMesh && !node.isLOD && node.geometry && node.geometry.attributes?.uv && t && img && canPixels && !node.userData?.__staticBatch && node.userData?.__poolHeldRs == null) {
           atlasable.push(node);
         } else {
           rest.push(node);
@@ -4038,7 +4120,7 @@ export async function bakeStaticsRing(
           staticsMatCastsShadow,
           staticsReceiveShadow,
         });
-        if (statAtlasEnabled()) ringSingletons.push(node); // batched after the loop (perf, default-on; ?statAtlas=off escapes)
+        if (statAtlasEnabled() || (typeof poolWorldActive === "function" && poolWorldActive())) ringSingletons.push(node); // batched/pooled after the loop
         else _attachStaticNode(scene3d, node);
         singletonCount += 1;
         if (isLod) lodCount += 1;
@@ -4107,24 +4189,81 @@ export async function bakeStaticsRing(
       console.warn("[scene3d.statics/wireRingBatch] failed, adding singletons unbatched:", String(e?.message ?? e));
       for (const n of ringSingletons) { if (!n.parent) _attachStaticNode(scene3d, n); }
     }
-  } else if (statAtlasEnabled() && ringSingletons.length > 0) {
-    // ?statAtlas (default-ON; ?statAtlas=off escapes): collapse the ring's unique-material
-    // singletons into GLOBAL (cross-LB) size-bucket BatchedMeshes — ~5,400 lone draws
-    // -> ~20-30 multidraw calls. The bucket BatchedMeshes self-add to staticsGroup;
-    // each LB's per-LB eviction is handled by scene3d._evictStaticAtlasForLb (installed
-    // by addSingletonsToCrossLbAtlas). Fail-soft: on error add the singletons unbatched.
-    try {
-      const { passthrough } = addSingletonsToCrossLbAtlas(ringSingletons, scene3d);
-      for (const n of passthrough) _attachStaticNode(scene3d, n);
-      mark(`stage3: statAtlas ${ringSingletons.length} singletons -> cross-LB buckets + ${passthrough.length} passthrough`);
-    } catch (e) {
-      // eslint-disable-next-line no-console
-      console.warn("[scene3d.statics/statAtlas] failed, adding singletons unbatched:", String(e?.message ?? e));
+  } else if (ringSingletons.length > 0) {
+    if (statAtlasEnabled()) {
+      // ?statAtlas (default-ON; ?statAtlas=off escapes): collapse the ring's unique-material
+      // singletons into GLOBAL (cross-LB) size-bucket BatchedMeshes — ~5,400 lone draws
+      // -> ~20-30 multidraw calls without temporary holdout draw spikes during boot.
+      try {
+        const { passthrough } = addSingletonsToCrossLbAtlas(ringSingletons, scene3d);
+        for (const n of passthrough) _attachStaticNode(scene3d, n);
+        mark(`stage3: statAtlas ${ringSingletons.length} singletons -> cross-LB buckets + ${passthrough.length} passthrough`);
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.warn("[scene3d.statics/statAtlas] failed, adding singletons unbatched:", String(e?.message ?? e));
+        for (const n of ringSingletons) _attachStaticNode(scene3d, n);
+      }
+    } else if (typeof poolWorldActive === "function" && poolWorldActive()) {
+      try {
+        const byLb = new Map();
+        for (const n of ringSingletons) {
+          const k = ((n.userData?.landblockId ?? 0) & 0xffff0000) >>> 0;
+          let list = byLb.get(k);
+          if (!list) { list = []; byLb.set(k, list); }
+          list.push(n);
+        }
+        for (const [k, list] of byLb) {
+          const { passthrough } = addSingletonsToPools(list, scene3d, { domain: "st", lbKey: k });
+          for (const n of passthrough) _attachStaticNode(scene3d, n);
+        }
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.warn("[scene3d.statics/drawPools ring] failed, keeping legacy path:", String(e?.message ?? e));
+        for (const n of ringSingletons) _attachStaticNode(scene3d, n);
+      }
+    } else {
       for (const n of ringSingletons) _attachStaticNode(scene3d, n);
     }
   }
   // (statAtlas off, non-wire: ringSingletons is never populated — line ~2738
   //  adds those nodes inline during the build loop — so no trailing branch.)
+  if (scene3d && scene3d.worldRoot) {
+    if (!scene3d._setupLightCarrierRoot) {
+      const root = new THREE.Group();
+      root.name = "setup-light-carriers";
+      scene3d.worldRoot.add(root);
+      scene3d._setupLightCarrierRoot = root;
+    }
+    if (!(scene3d._setupLightCarriersByLb instanceof Map)) {
+      scene3d._setupLightCarriersByLb = new Map();
+    }
+    const axisZ = new THREE.Vector3(0, 0, 1);
+    const noLightSet = globalThis.__hbNoLightSetups;
+    for (const p of statics) {
+      const mid = (p?.modelId >>> 0) || 0;
+      if ((mid >>> 24) !== 0x02 || !primary.groupsByModel.has(mid)) continue;
+      const pLbId = (p.landblockId >>> 0) || 0;
+      const pLbKey = (pLbId & 0xffff0000) >>> 0;
+      let bucket = scene3d._setupLightCarriersByLb.get(pLbKey);
+      if (!bucket) { bucket = { buildings: [], statics: [] }; scene3d._setupLightCarriersByLb.set(pLbKey, bucket); }
+      if (noLightSet?.has?.(mid)) continue;
+      const pLbX = (pLbId >>> 24) & 0xff;
+      const pLbY = (pLbId >>> 16) & 0xff;
+      const carrier = new THREE.Object3D();
+      carrier.position.set(pLbX * METERS_PER_LANDBLOCK + (p.x || 0), pLbY * METERS_PER_LANDBLOCK + (p.y || 0), p.z || 0);
+      applyPlacementOrientation(carrier.quaternion, p, axisZ);
+      const sc = Number.isFinite(p.scale) && p.scale > 0 ? p.scale : 1;
+      carrier.scale.set(sc, sc, sc);
+      carrier.matrixAutoUpdate = false;
+      carrier.updateMatrix();
+      carrier.updateMatrixWorld(true);
+      carrier.userData = { modelId: mid, landblockId: pLbId, isSetupLightCarrier: true };
+      bucket.statics.push(carrier);
+    }
+    for (const n of ringSingletons) {
+      if (n && n.userData && ((n.userData.modelId >>> 24) === 0x02)) n.userData.__setupLightScanned = true;
+    }
+  }
   mark(`stage3: build+add ${placementsByModel.size} groups (inst=${instancedGroupCount}, single=${singletonCount})`);
 
   // V1 (2026-05-29) — run each scenery placement's `default_script`

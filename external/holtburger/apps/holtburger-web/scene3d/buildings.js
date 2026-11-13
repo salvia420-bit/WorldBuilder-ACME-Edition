@@ -185,6 +185,7 @@ const BUILDING_BATCH = (() => {
 // statics buckets do).
 // See `consolidateBuildingSurfaces` for the exact admission rules.
 let _matBatchFlag;
+let _matBatchForced;
 export function buildingMatBatchEnabled() {
   if (_matBatchFlag !== undefined) return _matBatchFlag;
   let on = true;
@@ -200,7 +201,23 @@ export function buildingMatBatchEnabled() {
   return (_matBatchFlag = on);
 }
 /** Test seam: true/false forces the arm, undefined re-reads the URL. */
-export function __setBuildingMatBatchForTest(v) { _matBatchFlag = v; }
+export function __setBuildingMatBatchForTest(v) {
+  _matBatchFlag = v;
+  _matBatchForced = v;
+}
+
+function _buildingMatBatchExplicitOn() {
+  if (_matBatchForced === true) return true;
+  if (_matBatchForced === false) return false;
+  try {
+    const v = new URLSearchParams(window.location.search).get("buildingMatBatch");
+    if (v == null) return false;
+    const s = String(v).toLowerCase();
+    return s === "on" || s === "1" || s === "true" || s === "yes";
+  } catch (_) {
+    return false;
+  }
+}
 
 /** The per-material building batch runs for this bake (wireframe keeps its own
  *  shared MeshBasic buckets + fill companions, so it stays on the legacy path). */
@@ -281,6 +298,7 @@ function _batchEligible(n) {
   if (!m || Array.isArray(m) || m.isMaterial !== true || m.isShaderMaterial) return false;
   if (!g || g.isBufferGeometry !== true || !g.attributes || !g.attributes.position) return false;
   if (n.userData == null || n.userData.landblockId == null) return false;
+  if (n.userData.__poolHeldRs != null) return false;
   if (n.visible === false || m.visible === false) return false;
   if (m.transparent === true || m.depthWrite === false || m.depthTest === false) return false;
   if ((n.renderOrder | 0) !== 0 || n.frustumCulled === false) return false;
@@ -480,6 +498,79 @@ function _attachFlatBuildingNode(scene3d, n) {
   if (n && n.parent && typeof freezeStaticNodeMatrices === "function") freezeStaticNodeMatrices(n);
 }
 
+function _ensureSetupLightCarrierBucket(scene3d, lbKey) {
+  if (!scene3d || !scene3d.worldRoot) return null;
+  if (!scene3d._setupLightCarrierRoot) {
+    const root = new THREE.Group();
+    root.name = "setup-light-carriers";
+    scene3d.worldRoot.add(root);
+    scene3d._setupLightCarrierRoot = root;
+  }
+  if (!(scene3d._setupLightCarriersByLb instanceof Map)) {
+    scene3d._setupLightCarriersByLb = new Map();
+  }
+  if (typeof scene3d._evictSetupLightCarriersForLb !== "function") {
+    scene3d._evictSetupLightCarriersForLb = (evictLbKey) => {
+      const k = ((evictLbKey >>> 0) & 0xffff0000) >>> 0;
+      const b = scene3d._setupLightCarriersByLb?.get(k);
+      if (!b) return;
+      scene3d._setupLightCarriersByLb.delete(k);
+      const r = scene3d._setupLightCarrierRoot;
+      if (r) {
+        for (const o of b.buildings) { try { r.remove(o); } catch (_) {} }
+        for (const o of b.statics) { try { r.remove(o); } catch (_) {} }
+      }
+    };
+  }
+  const key = ((lbKey >>> 0) & 0xffff0000) >>> 0;
+  let bucket = scene3d._setupLightCarriersByLb.get(key);
+  if (!bucket) {
+    bucket = { buildings: [], statics: [] };
+    scene3d._setupLightCarriersByLb.set(key, bucket);
+  }
+  return bucket;
+}
+
+function _registerBuildingLightCarrier(scene3d, g) {
+  if (!scene3d || !scene3d.worldRoot || !g || !g.userData) return;
+  const modelId = (g.userData.modelId >>> 0) || 0;
+  if ((modelId >>> 24) !== 0x02) return;
+  if (globalThis.__hbNoLightSetups?.has?.(modelId)) return;
+  const lbId = (g.userData.landblockId ?? 0) >>> 0;
+  const bucket = _ensureSetupLightCarrierBucket(scene3d, lbId);
+  if (!bucket) return;
+  const carrier = new THREE.Group();
+  carrier.position.copy(g.position);
+  carrier.quaternion.copy(g.quaternion);
+  carrier.scale.copy(g.scale);
+  carrier.matrixAutoUpdate = false;
+  carrier.updateMatrix();
+  const srcParts = Array.isArray(g.userData.partGroups) ? g.userData.partGroups : [];
+  const partGroups = [];
+  for (let i = 0; i < srcParts.length; i += 1) {
+    const sp = srcParts[i];
+    if (!sp) continue;
+    const pg = new THREE.Group();
+    pg.name = sp.name || `part-${i}`;
+    pg.position.copy(sp.position);
+    pg.quaternion.copy(sp.quaternion);
+    pg.scale.copy(sp.scale);
+    pg.matrixAutoUpdate = false;
+    pg.updateMatrix();
+    pg.userData = { partIndex: sp.userData?.partIndex ?? i };
+    carrier.add(pg);
+    partGroups.push(pg);
+  }
+  carrier.userData = {
+    modelId,
+    landblockId: lbId,
+    partGroups,
+    isSetupLightCarrier: true,
+  };
+  carrier.updateMatrixWorld(true);
+  bucket.buildings.push(carrier);
+}
+
 // `opts.deferAttach` (?buildingMatBatch per-LB path): return the top-level
 // nodes instead of adding them, so the caller can prewarm the BATCHED programs
 // before attach. Without it every node is attached here, as before.
@@ -491,6 +582,7 @@ function _feedBuildingGroupsToAtlas(groups, scene3d, opts = null) {
   };
   let singletons = [];
   for (const g of groups) {
+    _registerBuildingLightCarrier(scene3d, g);
     g.updateMatrixWorld(true); // detached → subtree matrixWorld == staticsGroup-relative
     const lbId = (g.userData?.landblockId ?? 0) >>> 0;
     g.traverse((o) => {
@@ -522,6 +614,9 @@ function _feedBuildingGroupsToAtlas(groups, scene3d, opts = null) {
   // by owning LB, since a pool's residency is tile-granular), and the residue
   // continues into the unchanged atlas / buildingsGroup path. Inert unless the
   // full F-11.3 chain armed the pooled world ⇒ OFF arm byte-identical.
+  // When `poolWorldActive()` is armed, offer buildings to `PoolRegistry` FIRST
+  // (unless `?buildingMatBatch=on` was explicitly forced in URL), and route only
+  // the unpooled passthrough residue to `consolidateBuildingSurfaces`.
   const matBatch = _matBatchActive(scene3d);
   let toAtlas = singletons;
   if (!matBatch && poolWorldActive() && singletons.length > 0) {
@@ -568,6 +663,26 @@ function _feedBuildingGroupsToAtlas(groups, scene3d, opts = null) {
 // module-local Set to preserve the concurrent-call dedup the permanent add
 // previously provided.
 const _buildingsInFlight = new Set();
+const BUILDING_BAKE_CACHE_MAX = 96;
+
+function _bakeCacheGet(cache, id) {
+  const hit = cache.get(id);
+  if (hit !== undefined) {
+    cache.delete(id);
+    cache.set(id, hit);
+  }
+  return hit;
+}
+
+function _bakeCachePut(cache, id, bake) {
+  if (cache.has(id)) cache.delete(id);
+  cache.set(id, bake);
+  while (cache.size > BUILDING_BAKE_CACHE_MAX) {
+    const oldest = cache.keys().next().value;
+    if (oldest === undefined) break;
+    cache.delete(oldest);
+  }
+}
 
 // B3 (busted-world load fix 2026-06-20) — frame-budget the boot buildings ring
 // emitter so a building-dense ring doesn't build all per-LB placement Groups in
@@ -1269,7 +1384,7 @@ export async function bakeBuildingsForLandblock(
           localBakes.set(toBake[i], bake);
           continue;
         }
-        opts.bakeCache.set(toBake[i], bake);
+        _bakeCachePut(opts.bakeCache, toBake[i], bake);
       }
       if (starved > 0) {
         const attempts = (_buildingsStarvedRetries.get(lbKey) || 0) + 1;
@@ -1302,7 +1417,7 @@ export async function bakeBuildingsForLandblock(
     for (const id of uniqueModelIds) {
       // streamFix (2026-07-02): fall back to the this-call-only bake for a
       // cap-exhausted incomplete model (never cached cross-LB).
-      const bake = opts.bakeCache.get(id) || localBakes.get(id);
+      const bake = _bakeCacheGet(opts.bakeCache, id) || localBakes.get(id);
       if (!bake) continue;
       for (const did of bake.surfaceDids) lbSurfaceDids.add(did);
     }
@@ -1341,7 +1456,7 @@ export async function bakeBuildingsForLandblock(
         x: placementLbX * METERS_PER_LANDBLOCK,
         y: placementLbY * METERS_PER_LANDBLOCK,
       };
-      const bake = opts.bakeCache.get(placement.modelId) || localBakes.get(placement.modelId);
+      const bake = _bakeCacheGet(opts.bakeCache, placement.modelId) || localBakes.get(placement.modelId);
       if (!bake) {
         // No bake for this modelId — the bake call failed earlier;
         // skip with a warning rather than crash. The 2D path falls
@@ -1625,7 +1740,7 @@ export async function bakeBuildingsRing(
         // an incomplete model just skip this pass (the per-LB streaming
         // path retries under its bounded budget).
         if (bake.incomplete) continue;
-        opts.bakeCache.set(toBake[i], bake);
+        _bakeCachePut(opts.bakeCache, toBake[i], bake);
       }
     }
 

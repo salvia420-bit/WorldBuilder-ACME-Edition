@@ -86,7 +86,29 @@ async function load(arm, on, pools = false, pom = false, maps = false) {
   const mods = { M, adapter, cells: on ? cellsOn : cellsOff, IB, KIT, PP };
   const l = console.warn;
   console.warn = () => {};
-  try { return await LIB.runArm(THREE, renderer(), mods, arm, { ticks: 6, pools, pom, maps }); } finally { console.warn = l; }
+  // Under `<256` POT pool admission, 32x32 / 64x64 POT shell surfaces in R.SURF
+  // would also be pooled; use 48x48 non-POT shell surfaces in `+pools` arms
+  // (matching `tests/interior_batch_rig.mjs:makeWorld`) so `SURF_POOLED` (4
+  // surfaces) goes to PoolRegistry while `R.SURF` stays unpooled for IB.
+  const savedSurf = [];
+  if (pools) {
+    for (const [k, v] of Object.entries(R.SURF)) {
+      if (Number(k) < 0x08000110) {
+        savedSurf.push([k, v.w, v.h]);
+        v.w = 48;
+        v.h = 48;
+      }
+    }
+  }
+  try {
+    return await LIB.runArm(THREE, renderer(), mods, arm, { ticks: 6, pools, pom, maps });
+  } finally {
+    for (const [k, w, h] of savedSurf) {
+      R.SURF[k].w = w;
+      R.SURF[k].h = h;
+    }
+    console.warn = l;
+  }
 }
 
 await t("D1 every arm, flag off and on: shape, batching, bits, fewer calls, same visible set; punch fed, shadow map read", async () => {

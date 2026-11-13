@@ -116,7 +116,9 @@ console.log("\nPartDegrade.tick");
 console.log("\nflag");
 {
   globalThis.window = { location: { search: "" } };
-  check("default OFF (pending the 1070 look check)", partDegradeEnabled() === false);
+  check("default ON", partDegradeEnabled() === true);
+  window.location.search = "?partDegrade=off";
+  check("?partDegrade=off", partDegradeEnabled() === false);
   window.location.search = "?partDegrade=on";
   check("?partDegrade=on", partDegradeEnabled() === true);
   delete globalThis.window;

@@ -155,6 +155,7 @@ export const DEFAULT_CSM_SPLITS = Object.freeze([30, 100, 300]);
 // half-width). Far at 1024^2 for budget — at 300 m we want to see
 // shadows exist, not pixel-perfect edges (29.3 cm / texel).
 export const DEFAULT_CSM_MAP_SIZES = Object.freeze([2048, 2048, 1024]);
+export const MID_CSM_MAP_SIZES = Object.freeze([1024, 1024, 512]);
 
 // Blend zone width as a fraction of each cascade range. 0.1 = the last
 // 10% of cascade N also samples cascade N+1 and lerps. Keeps the seam
@@ -406,6 +407,9 @@ export function setupCsm(scene, opts = {}) {
   const biasTexels = Number.isFinite(opts.biasTexels)
     ? Math.min(CSM_BIAS_TEXELS_MAX, Math.max(CSM_BIAS_TEXELS_MIN, opts.biasTexels))
     : DEFAULT_CSM_BIAS_TEXELS;
+  const farCascadeEvery = Number.isFinite(opts.farCascadeEvery)
+    ? Math.max(1, opts.farCascadeEvery | 0)
+    : 1;
 
   const csmGroup = new THREE.Group();
   csmGroup.name = "csm-cascades";
@@ -506,6 +510,7 @@ export function setupCsm(scene, opts = {}) {
     // bias that frame).
     depthFit,
     biasTexels,
+    farCascadeEvery,
     bias: {
       ground: [0, 0, 0],
       caster: [0, 0, 0],
@@ -554,24 +559,39 @@ export function setupCsm(scene, opts = {}) {
     // and because a batched variant shares its member's userData, it only
     // ever refreshed the LAST program compiled for a surface — the member's
     // or the variant's — leaving the other's shadow uniforms frozen.
-    uniforms: {
-      uCsmShadowMap0: { value: null },
-      uCsmShadowMap1: { value: null },
-      uCsmShadowMap2: { value: null },
-      uCsmMatrix0: { value: new THREE.Matrix4() },
-      uCsmMatrix1: { value: new THREE.Matrix4() },
-      uCsmMatrix2: { value: new THREE.Matrix4() },
-      uCsmSplits: { value: new THREE.Vector2(splits[0], splits[1]) },
-      uCsmFar: { value: splits[2] },
-      uCsmBlend: { value: blendFrac },
-      // shadows-restore-1 — receivers pick the cascade by distance from the
-      // camera (1, stable cascades) or by view depth (0, the view-slice fit).
-      uCsmSelDist: { value: stable ? 1 : 0 },
-      // shadows-restore-5 — time-of-day strength (lighting.js) and full-shadow
-      // darkness; the receivers shade by mix(1 - shade * strength, 1, s).
-      uCsmStrength: { value: 1 },
-      uCsmShade: { value: shade },
-    },
+    uniforms: (() => {
+      let dummyDepth = null;
+      if (typeof THREE.DepthTexture === "function") {
+        try {
+          dummyDepth = new THREE.DepthTexture(1, 1);
+          dummyDepth.compareFunction = THREE.LessEqualCompare;
+          dummyDepth.minFilter = THREE.LinearFilter;
+          dummyDepth.magFilter = THREE.LinearFilter;
+          dummyDepth.generateMipmaps = false;
+          dummyDepth.needsUpdate = true;
+        } catch (_) {
+          dummyDepth = null;
+        }
+      }
+      return {
+        uCsmShadowMap0: { value: dummyDepth },
+        uCsmShadowMap1: { value: dummyDepth },
+        uCsmShadowMap2: { value: dummyDepth },
+        uCsmMatrix0: { value: new THREE.Matrix4() },
+        uCsmMatrix1: { value: new THREE.Matrix4() },
+        uCsmMatrix2: { value: new THREE.Matrix4() },
+        uCsmSplits: { value: new THREE.Vector2(splits[0], splits[1]) },
+        uCsmFar: { value: splits[2] },
+        uCsmBlend: { value: blendFrac },
+        // shadows-restore-1 — receivers pick the cascade by distance from the
+        // camera (1, stable cascades) or by view depth (0, the view-slice fit).
+        uCsmSelDist: { value: stable ? 1 : 0 },
+        // shadows-restore-5 — time-of-day strength (lighting.js) and full-shadow
+        // darkness; the receivers shade by mix(1 - shade * strength, 1, s).
+        uCsmStrength: { value: 1 },
+        uCsmShade: { value: shade },
+      };
+    })(),
     _uniformRefs: null,
     // Perf C4 — skip-rebuild cache. `updateCsm` compares the camera
     // position + sun direction against these and bails out of the
@@ -799,20 +819,28 @@ export function updateCsm(csmState, camera, sunDir) {
   }
 
   const cameraNear = camera.near;
+  const isInitialFit = Number.isNaN(csmState._lastCamX);
+  const skipFarCascade =
+    !isInitialFit &&
+    csmState.farCascadeEvery > 1 &&
+    (csmState._tick % csmState.farCascadeEvery) !== 0;
+  const sliceMask = skipFarCascade ? 0b011 : 0b111;
   // For each cascade, the visible sub-frustum is between previous split
   // and this split (cascade 0: near…split[0]; cascade 1: split[0]…split[1]; etc).
   let prevSplit = cameraNear;
   for (let i = 0; i < 3; i += 1) {
     const splitFar = csmState.splits[i];
-    _fitCascade(
-      csmState.lights[i],
-      camera,
-      prevSplit,
-      splitFar,
-      lx, ly, lz,
-      csmState.mapSizes[i],
-      csmState.depthFit === true
-    );
+    if (sliceMask & (1 << i)) {
+      _fitCascade(
+        csmState.lights[i],
+        camera,
+        prevSplit,
+        splitFar,
+        lx, ly, lz,
+        csmState.mapSizes[i],
+        csmState.depthFit === true
+      );
+    }
     prevSplit = splitFar;
   }
 
@@ -838,11 +866,13 @@ export function updateCsm(csmState, camera, sunDir) {
   // RP5 — cascades were refit this tick (camera and/or sun moved). The
   // static-scene shadow-raster gate treats this as "shadows changed →
   // re-raster this frame".
-  csmState.didRefitThisTick = true;
-  csmState.refitMask = 0b111;
+  csmState.didRefitThisTick = sliceMask !== 0;
+  csmState.refitMask = sliceMask;
   if (stats) {
     stats.refitTicks += 1;
-    for (let i = 0; i < 3; i += 1) stats.refits[i] += 1;
+    for (let i = 0; i < 3; i += 1) {
+      if (sliceMask & (1 << i)) stats.refits[i] += 1;
+    }
   }
 }
 
@@ -912,6 +942,15 @@ function _updateStableCsm(csmState, camera, lx, ly, lz, stats) {
     if (jump) sunTaken = sunMask;
     else if (mask === 0) sunTaken = 1 << sunPick;
     mask |= sunTaken;
+  }
+  if (
+    csmState.farCascadeEvery > 1 &&
+    !(forcedMask & 4) &&
+    !jump &&
+    (csmState._tick % csmState.farCascadeEvery) !== 0
+  ) {
+    mask &= ~4;
+    sunTaken &= ~4;
   }
   for (let i = 0; i < 3; i += 1) {
     if (!(mask & (1 << i))) continue;

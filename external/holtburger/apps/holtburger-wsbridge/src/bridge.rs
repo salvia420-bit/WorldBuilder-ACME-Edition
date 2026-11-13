@@ -496,6 +496,7 @@ async fn handle_connection(
         Arc::clone(&link),
         tap,
         cfg.ws_ping_interval,
+        cfg.udp_batch_max(),
     );
     let watchdog = liveness_watchdog(Arc::clone(&link), peer);
     let monitor = link_monitor(Arc::clone(&link), probe.clone(), peer);
@@ -763,10 +764,12 @@ async fn forward_udp_to_ws<S>(
     link: Arc<LinkState>,
     tap: Option<CaptureTap>,
     ping_every: Option<Duration>,
+    udp_batch_max: usize,
 ) -> Result<()>
 where
     S: SinkExt<Message, Error = tokio_tungstenite::tungstenite::Error> + Unpin,
 {
+    let batch_max = udp_batch_max.max(1);
     let mut buf = vec![0u8; frame::MAX_PACKET_BYTES + frame::PORT_PREFIX_LEN];
     // net-health: this pump owns the sink, so it also sends the pings whose
     // Pongs time the link (`--ws-ping-ms`; the first one interval in).
@@ -778,13 +781,13 @@ where
     loop {
         // Both arms are cancel-safe: a recv_from that loses the race has
         // received nothing.
-        let (len, src) = tokio::select! {
+        let (first_len, first_src) = tokio::select! {
             res = udp.recv_from(&mut buf) => {
                 res.with_context(|| format!("[{peer}] udp recv_from"))?
             }
             _ = next_ping(&mut ping) => {
                 let payload = link_health::ping_payload(link.now_us());
-                tokio::time::timeout(WS_SEND_TIMEOUT, ws_sink.send(Message::Ping(payload.to_vec())))
+                tokio::time::timeout(WS_SEND_TIMEOUT, ws_sink.send(Message::Ping(payload.to_vec().into())))
                     .await
                     .map_err(|_| anyhow!("[{peer}] ws ping stalled for {WS_SEND_TIMEOUT:?} — client reader wedged"))?
                     .with_context(|| format!("[{peer}] ws ping"))?;
@@ -793,43 +796,223 @@ where
             }
         };
 
-        if src.ip() != target.ip {
-            log::warn!(
-                "[{peer}] dropping datagram from unexpected source ip {}: expected {}",
-                src.ip(),
-                target.ip
-            );
-            continue;
-        }
-        if !target.is_ace_port(src.port()) {
-            log::warn!(
-                "[{peer}] dropping datagram from {src}: source port not on allowlist \
-                 (login={}, world={})",
-                target.login_port,
-                target.world_port
-            );
-            continue;
+        // Facet 7 datagram batching: after waking on the first UDP datagram,
+        // opportunistically drain up to `batch_max - 1` additional datagrams
+        // already sitting in the kernel socket receive queue via non-blocking
+        // `try_recv_from`, queueing each accepted WS frame with `SinkExt::feed`
+        // and issuing ONE `SinkExt::flush` per batch. Cuts kernel/WebSocket
+        // write syscalls by up to 32x during town spawn bursts while adding
+        // 0 us artificial delay when only a single packet arrived.
+        let mut cur = Some((first_len, first_src));
+        let mut drained_in_batch = 0usize;
+        let mut fed_frames = 0usize;
+
+        while let Some((len, src)) = cur.take() {
+            drained_in_batch += 1;
+
+            if src.ip() != target.ip {
+                log::warn!(
+                    "[{peer}] dropping datagram from unexpected source ip {}: expected {}",
+                    src.ip(),
+                    target.ip
+                );
+            } else if !target.is_ace_port(src.port()) {
+                log::warn!(
+                    "[{peer}] dropping datagram from {src}: source port not on allowlist \
+                     (login={}, world={})",
+                    target.login_port,
+                    target.world_port
+                );
+            } else {
+                // Datagram accepted from ACE — the flow is alive.
+                link.stamp(&link.last_udp_in_ms);
+
+                let payload = &buf[..len];
+                // net-transport-2: a ConnectRequest names the session to end at teardown.
+                link.session.observe_s2c(payload);
+                if let Some(tap) = &tap {
+                    tap.capture.record(Direction::ToClient, src, tap.local, payload);
+                }
+                let frame = frame::encode_frame(src.port(), payload)
+                    .with_context(|| format!("[{peer}] encode ws frame from {src}"))?;
+                tokio::time::timeout(WS_SEND_TIMEOUT, ws_sink.feed(Message::Binary(frame.into())))
+                    .await
+                    .map_err(|_| {
+                        anyhow!(
+                            "[{peer}] ws feed stalled for {WS_SEND_TIMEOUT:?} — client reader wedged"
+                        )
+                    })?
+                    .with_context(|| format!("[{peer}] ws feed"))?;
+                fed_frames += 1;
+                link.to_ws.record(len);
+                log::trace!("[{peer}] udp→ws {len} bytes ← {src} (batch #{fed_frames})");
+            }
+
+            if drained_in_batch >= batch_max {
+                break;
+            }
+            match udp.try_recv_from(&mut buf) {
+                Ok(next_pkt) => cur = Some(next_pkt),
+                Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => break,
+                Err(err) => return Err(err).with_context(|| format!("[{peer}] udp try_recv_from")),
+            }
         }
 
-        // Datagram accepted from ACE — the flow is alive.
-        link.stamp(&link.last_udp_in_ms);
-
-        let payload = &buf[..len];
-        // net-transport-2: a ConnectRequest names the session to end at teardown.
-        link.session.observe_s2c(payload);
-        if let Some(tap) = &tap {
-            tap.capture.record(Direction::ToClient, src, tap.local, payload);
+        if fed_frames > 0 {
+            // conn-fix (2026-07-18): bound the flush. A stalled browser
+            // reader used to park this pump on a full TCP window forever,
+            // silently dropping ACE→client datagrams in the kernel.
+            tokio::time::timeout(WS_SEND_TIMEOUT, ws_sink.flush())
+                .await
+                .map_err(|_| {
+                    anyhow!(
+                        "[{peer}] ws flush stalled for {WS_SEND_TIMEOUT:?} — client reader wedged"
+                    )
+                })?
+                .with_context(|| format!("[{peer}] ws flush"))?;
         }
-        let frame = frame::encode_frame(src.port(), payload)
-            .with_context(|| format!("[{peer}] encode ws frame from {src}"))?;
-        // conn-fix (2026-07-18): bound the send. A stalled browser
-        // reader used to park this pump on a full TCP window forever,
-        // silently dropping ACE→client datagrams in the kernel.
-        tokio::time::timeout(WS_SEND_TIMEOUT, ws_sink.send(Message::Binary(frame.into())))
+    }
+}
+
+#[cfg(test)]
+mod batch_tests {
+    use super::*;
+    use std::pin::Pin;
+    use std::task::{Context as TaskContext, Poll};
+
+    struct CountingSink {
+        fed: Vec<Message>,
+        flushes: usize,
+        notify_flush: Arc<tokio::sync::Notify>,
+    }
+
+    impl futures_util::Sink<Message> for CountingSink {
+        type Error = tokio_tungstenite::tungstenite::Error;
+
+        fn poll_ready(
+            self: Pin<&mut Self>,
+            _cx: &mut TaskContext<'_>,
+        ) -> Poll<std::result::Result<(), Self::Error>> {
+            Poll::Ready(Ok(()))
+        }
+
+        fn start_send(
+            mut self: Pin<&mut Self>,
+            item: Message,
+        ) -> std::result::Result<(), Self::Error> {
+            self.fed.push(item);
+            Ok(())
+        }
+
+        fn poll_flush(
+            mut self: Pin<&mut Self>,
+            _cx: &mut TaskContext<'_>,
+        ) -> Poll<std::result::Result<(), Self::Error>> {
+            self.flushes += 1;
+            self.notify_flush.notify_waiters();
+            Poll::Ready(Ok(()))
+        }
+
+        fn poll_close(
+            self: Pin<&mut Self>,
+            _cx: &mut TaskContext<'_>,
+        ) -> Poll<std::result::Result<(), Self::Error>> {
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    #[tokio::test]
+    async fn udp_burst_coalesces_into_bounded_ws_flush() {
+        let ace_udp = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let ace_addr = ace_udp.local_addr().unwrap();
+        let bridge_udp = Arc::new(UdpSocket::bind("127.0.0.1:0").await.unwrap());
+        let bridge_addr = bridge_udp.local_addr().unwrap();
+
+        // Pre-fill the bridge UDP receive buffer with 24 back-to-back S2C
+        // datagrams BEFORE starting `forward_udp_to_ws`, simulating an ACE
+        // town spawn burst ready in the kernel socket buffer.
+        const BURST: usize = 24;
+        for seq in 0..BURST {
+            let payload = [0xACu8, seq as u8, 0x42];
+            ace_udp.send_to(&payload, bridge_addr).await.unwrap();
+        }
+
+        let target = Arc::new(ConnTarget {
+            host: "127.0.0.1".to_string(),
+            ip: ace_addr.ip(),
+            login_port: ace_addr.port(),
+            world_port: ace_addr.port().wrapping_add(1),
+        });
+        let link = Arc::new(LinkState::new());
+        let flushed = Arc::new(tokio::sync::Notify::new());
+        let sink = CountingSink {
+            fed: Vec::new(),
+            flushes: 0,
+            notify_flush: Arc::clone(&flushed),
+        };
+        let sink_state = Arc::new(Mutex::new(Some(sink)));
+
+        // Wrap CountingSink so we can inspect its counts once the first flush lands.
+        struct SharedSink(Arc<Mutex<Option<CountingSink>>>);
+        impl futures_util::Sink<Message> for SharedSink {
+            type Error = tokio_tungstenite::tungstenite::Error;
+            fn poll_ready(
+                self: Pin<&mut Self>,
+                cx: &mut TaskContext<'_>,
+            ) -> Poll<std::result::Result<(), Self::Error>> {
+                Pin::new(self.0.lock().unwrap().as_mut().unwrap()).poll_ready(cx)
+            }
+            fn start_send(
+                self: Pin<&mut Self>,
+                item: Message,
+            ) -> std::result::Result<(), Self::Error> {
+                Pin::new(self.0.lock().unwrap().as_mut().unwrap()).start_send(item)
+            }
+            fn poll_flush(
+                self: Pin<&mut Self>,
+                cx: &mut TaskContext<'_>,
+            ) -> Poll<std::result::Result<(), Self::Error>> {
+                Pin::new(self.0.lock().unwrap().as_mut().unwrap()).poll_flush(cx)
+            }
+            fn poll_close(
+                self: Pin<&mut Self>,
+                cx: &mut TaskContext<'_>,
+            ) -> Poll<std::result::Result<(), Self::Error>> {
+                Pin::new(self.0.lock().unwrap().as_mut().unwrap()).poll_close(cx)
+            }
+        }
+
+        let notified = flushed.notified();
+        let pump = tokio::spawn(forward_udp_to_ws(
+            target,
+            bridge_udp,
+            SharedSink(Arc::clone(&sink_state)),
+            "127.0.0.1:55555".parse().unwrap(),
+            Arc::clone(&link),
+            None,
+            None,
+            32,
+        ));
+
+        tokio::time::timeout(Duration::from_secs(2), notified)
             .await
-            .map_err(|_| anyhow!("[{peer}] ws send stalled for {WS_SEND_TIMEOUT:?} — client reader wedged"))?
-            .with_context(|| format!("[{peer}] ws send"))?;
-        link.to_ws.record(len);
-        log::trace!("[{peer}] udp→ws {len} bytes ← {src}");
+            .expect("first batched flush should complete promptly");
+        pump.abort();
+
+        let inner = sink_state.lock().unwrap().take().unwrap();
+        assert_eq!(inner.fed.len(), BURST, "all 24 datagrams delivered");
+        assert_eq!(
+            inner.flushes, 1,
+            "entire 24-datagram burst should flush once (got {})",
+            inner.flushes
+        );
+        for (seq, msg) in inner.fed.iter().enumerate() {
+            let Message::Binary(bytes) = msg else {
+                panic!("expected binary ws message");
+            };
+            let (port, payload) = frame::decode_frame(bytes).unwrap();
+            assert_eq!(port, ace_addr.port());
+            assert_eq!(payload, &[0xACu8, seq as u8, 0x42]);
+        }
     }
 }

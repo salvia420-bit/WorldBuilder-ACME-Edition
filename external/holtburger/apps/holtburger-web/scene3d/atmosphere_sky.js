@@ -338,8 +338,9 @@ export class AtmosphereSky {
    * Keep the sky and star ECEF frame aligned with CloudVolume and AerialPerspective
    * when flying north across the Ocean corridor and Dericost.
    */
-  syncWorldECEF(x3, z3) {
-    const { anchorY, anchorZ } = ecefAnchorForWorld(x3, z3);
+  syncWorldECEF(x3, z3, y3 = undefined) {
+    const { anchorY: rawAnchorY, anchorZ } = ecefAnchorForWorld(x3, z3);
+    const anchorY = Number.isFinite(y3) ? Math.min(rawAnchorY, Math.max(0, y3 - 50)) : rawAnchorY;
     const y = (this._bottomRadius || 6360000) - anchorY;
     const z = -anchorZ;
     if (this.skyMaterial?.worldToECEFMatrix) {

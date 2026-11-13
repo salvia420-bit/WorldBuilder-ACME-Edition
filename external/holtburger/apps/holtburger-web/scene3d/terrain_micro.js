@@ -574,7 +574,8 @@ export const TERRAIN_MICRO_APPLY_GLSL = `
         microSlope += microDet * (uMicroAmt.z * (1.0 - microRoad));
       }
       float microFade = 1.0 - smoothstep(uMicroFade.x, uMicroFade.y, vViewDepth);
-      acShadeN = terrainMicroPerturb(acShadeN, microSlope * (uMicroAmt.x * microFade * (1.0 - waterW)));
+      float microWaterGate = 1.0 - smoothstep(0.05, 0.35, waterW);
+      acShadeN = terrainMicroPerturb(acShadeN, microSlope * (microWaterGate * uMicroAmt.x * microFade * (1.0 - waterW)));
     }`;
 
 /** Height-blend uniforms + helpers (global scope, after the sampling helpers). */

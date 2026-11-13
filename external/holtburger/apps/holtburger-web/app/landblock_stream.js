@@ -337,6 +337,10 @@ export function createLandblockStream(D) {
   // (capture probe walks the map). Phase D's culling toggles
   // `.visible` per cell, not membership.
   const cellContainerRegistry = new Map();
+  // PORTAL-P0 leg 2 (2026-08-10): per-LB backoff for the MESH-half re-fire
+  // in the cell-residency watchdog (`Map<lbKey, {n, nextMs}>`). Hoisted above
+  // `__onLandblockEvicted` so evicted landblocks prune stale retry state too.
+  const cellWatchdogMeshRetries = new Map();
   // Phase 6 re-entry fix (2026-06-30): scene3d's LandblockLRU evicts an LB
   // (purging the wasm collision via enqueueClearLandblockCollision, removing
   // the 3D meshes, and clearing its OWN bake-dedup in landblock_lru.js). But
@@ -359,7 +363,34 @@ export function createLandblockStream(D) {
     buildingAabbsPopulateInFlight.delete(lb);
     cellContainersPopulatedLbs.delete(lb);
     cellContainersPopulateInFlight.delete(lb);
-    landblockEvictGen.set(lb, evictGenOf(lb) + 1);
+    cellWatchdogMeshRetries.delete(lb);
+    objectsRenderAddedLbs.delete(lb);
+    objectsRenderAddInFlight.delete(lb);
+    terrainMeshAddedLbs.delete(lb);
+    if (cellContainerRegistry.size > 0) {
+      for (const k of cellContainerRegistry.keys()) {
+        if ((((k >>> 0) & 0xffff0000) >>> 0) === lb) {
+          cellContainerRegistry.delete(k);
+        }
+      }
+    }
+    const nextGen = evictGenOf(lb) + 1;
+    landblockEvictGen.delete(lb);
+    landblockEvictGen.set(lb, nextGen);
+    if (landblockEvictGen.size > 256) {
+      for (const k of landblockEvictGen.keys()) {
+        if (landblockEvictGen.size <= 256) break;
+        if (!buildingAabbsPopulateInFlight.has(k) && !cellContainersPopulateInFlight.has(k)) {
+          landblockEvictGen.delete(k);
+        }
+      }
+    }
+    if (colourResolveAttempted.size > 4096) {
+      for (const k of colourResolveAttempted) {
+        if (colourResolveAttempted.size <= 4096) break;
+        colourResolveAttempted.delete(k);
+      }
+    }
     // DAT-01 phase 2e: the scenery colliders were purged wasm-side by
     // `enqueueClearLandblockCollision` -> `clear_landblocks_collision`
     // (the scenery family is wired into that batched clear), so the
@@ -496,9 +527,6 @@ export function createLandblockStream(D) {
   // ordinary outdoor-entry path keeps sole ownership of cold-LB
   // fetches (no re-introduction of the s13 double-decode).
   //
-  // PORTAL-P0 leg 2 (2026-08-10): per-LB backoff for the MESH-half re-fire
-  // added below — `Map<lbKey, {n, nextMs}>`.
-  const cellWatchdogMeshRetries = new Map();
   setInterval(() => {
     try {
       const h = window.__sessionHandle;

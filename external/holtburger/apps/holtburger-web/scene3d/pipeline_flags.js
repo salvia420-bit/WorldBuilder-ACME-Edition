@@ -92,6 +92,16 @@ function _searchOf(search) {
   return null; // no page
 }
 
+let _cachedSearchStr = null;
+let _cachedSearchParams = null;
+function _paramsOf(s) {
+  if (s === _cachedSearchStr && _cachedSearchParams !== null) return _cachedSearchParams;
+  const ps = new URLSearchParams(s);
+  _cachedSearchStr = s;
+  _cachedSearchParams = ps;
+  return ps;
+}
+
 /** A stage's OWN flag under the shared default: default-on reads ON unless an off spelling,
  *  default-off (DEV) reads ON only for an on spelling. */
 function _ownOn(v, defaultOn) {
@@ -109,7 +119,7 @@ export function pipelineOwnFlagOn(stage, search, defaultOn = PIPELINE_DEFAULT_ON
   const s = _searchOf(search);
   if (s == null) return false;
   try {
-    return _ownOn(new URLSearchParams(s).get(stage), defaultOn);
+    return _ownOn(_paramsOf(s).get(stage), defaultOn);
   } catch (_) {
     return false;
   }
@@ -131,7 +141,7 @@ export function pipelineStageEnabled(stage, search, defaultOn = PIPELINE_DEFAULT
   if (s == null) return false;
   let ps;
   try {
-    ps = new URLSearchParams(s);
+    ps = _paramsOf(s);
   } catch (_) {
     return false;
   }
@@ -161,7 +171,7 @@ export function pipelinePrereqConflicts(stage, search, defaultOn = PIPELINE_DEFA
   if (s == null) return [];
   let ps;
   try {
-    ps = new URLSearchParams(s);
+    ps = _paramsOf(s);
   } catch (_) {
     return [];
   }

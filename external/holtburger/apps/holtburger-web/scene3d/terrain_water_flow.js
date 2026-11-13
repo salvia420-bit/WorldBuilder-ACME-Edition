@@ -304,6 +304,110 @@ export function writeWaterColumns(bytes, cols, entry, bankWeights) {
   return true;
 }
 
+/**
+ * Pack per-vertex water shore-distance / depression bathymetry (bits 0..3,
+ * 0..14) and Shoushi swamp/marsh adjacency flag (bit 4, 16) into the unused
+ * lower 5 bits (0..30) of uVertexTypes.G (columns 0..8 ONLY).
+ *
+ * INVARIANTS:
+ *   - Road bits live in bits 6..7 (roadCode * 64 = 0, 64, 128, 192 -> & 0xC0)
+ *     and are 100% preserved.
+ *   - vertexRoadAt tests .g > 0.125 (31.875 / 255). Max aux5 = 14 | 16 = 30
+ *     (30 / 255 = 0.1176 < 0.125), so non-road vertices stay strictly <= 0.1176
+ *     and road vertices stay >= 64 / 255 = 0.251.
+ *   - B and A channels of uVertexTypes are NEVER touched.
+ *   - Seam-invariant across shared LB edges/corners (same discipline as
+ *     computeWaterBankWeights): corners read only themselves, X/Y edges read
+ *     only along the shared 9-vertex edge, interior vertices read the 9x9 LB.
+ */
+export function stampVertexWaterAuxBytes(bytes, cols, codes, heights, waterSurfaceMask = 0x005f0000) {
+  if (!bytes || !codes || !(cols >= 9)) return false;
+  const mask = (waterSurfaceMask != null ? waterSurfaceMask : 0x005f0000) >>> 0;
+  const isWater = (c) => c >= 0 && c < 32 && ((mask >>> c) & 1) === 1;
+  const isMarsh = (c) => c === 4 || c === 23 || c === 29;
+  const baseDepthFor = (c) => (
+    c === 20 ? 14 : (c === 18 || c === 19) ? 9 : c === 17 ? 7 : c === 23 ? 4 : 5
+  );
+
+  for (let y = 0; y <= 8; y += 1) {
+    for (let x = 0; x <= 8; x += 1) {
+      const i = x * 9 + y;
+      const dst = (y * cols + x) * 4;
+      const c = codes[i] | 0;
+      let aux5 = 0;
+      if (!isWater(c)) {
+        aux5 = isMarsh(c) ? 16 : 0;
+      } else {
+        const baseD = baseDepthFor(c);
+        const h = heights ? heights[i] : NaN;
+        const onX = x === 0 || x === 8;
+        const onY = y === 0 || y === 8;
+        let depth = baseD;
+        let marsh = c === 23 ? 1 : 0;
+        if (onX && onY) {
+          // Shared by 4 LBs: self only.
+        } else if (onX) {
+          let minD = 99;
+          let shoreH = NaN;
+          for (let yy = 0; yy <= 8; yy += 1) {
+            const nc = codes[x * 9 + yy] | 0;
+            const dy = Math.abs(yy - y);
+            if (dy <= 3 && isMarsh(nc)) marsh = 1;
+            if (!isWater(nc) && dy < minD) {
+              minD = dy;
+              shoreH = heights ? heights[x * 9 + yy] : NaN;
+            }
+          }
+          if (minD <= 8) {
+            const drop = Number.isFinite(h) && Number.isFinite(shoreH) ? Math.max(0, shoreH - h) : 0;
+            depth = Math.min(baseD, Math.max(1, Math.round(minD * 1.65 + drop * 0.45)));
+          }
+        } else if (onY) {
+          let minD = 99;
+          let shoreH = NaN;
+          for (let xx = 0; xx <= 8; xx += 1) {
+            const nc = codes[xx * 9 + y] | 0;
+            const dx = Math.abs(xx - x);
+            if (dx <= 3 && isMarsh(nc)) marsh = 1;
+            if (!isWater(nc) && dx < minD) {
+              minD = dx;
+              shoreH = heights ? heights[xx * 9 + y] : NaN;
+            }
+          }
+          if (minD <= 8) {
+            const drop = Number.isFinite(h) && Number.isFinite(shoreH) ? Math.max(0, shoreH - h) : 0;
+            depth = Math.min(baseD, Math.max(1, Math.round(minD * 1.65 + drop * 0.45)));
+          }
+        } else {
+          let minD = 99;
+          let shoreH = NaN;
+          for (let xx = 0; xx <= 8; xx += 1) {
+            for (let yy = 0; yy <= 8; yy += 1) {
+              const nc = codes[xx * 9 + yy] | 0;
+              if (Math.max(Math.abs(xx - x), Math.abs(yy - y)) <= 3 && isMarsh(nc)) marsh = 1;
+              if (!isWater(nc)) {
+                const d = Math.hypot(xx - x, yy - y);
+                if (d < minD) {
+                  minD = d;
+                  shoreH = heights ? heights[xx * 9 + yy] : NaN;
+                }
+              }
+            }
+          }
+          if (minD < 16) {
+            const drop = Number.isFinite(h) && Number.isFinite(shoreH) ? Math.max(0, shoreH - h) : 0;
+            depth = Math.min(baseD, Math.max(1, Math.round(minD * 1.65 + drop * 0.45)));
+          }
+        }
+        depth = Math.max(1, Math.min(14, depth | 0));
+        aux5 = (depth & 0x0f) | (marsh ? 16 : 0);
+      }
+      bytes[dst + 1] = (bytes[dst + 1] & 0xc0) | (aux5 & 0x1f);
+    }
+  }
+  return true;
+}
+
 /** The shader's decode of one flow byte pair -> [east, north] in table units. */
 export function decodeFlowBytes(e, n, fullScaleUnits) {
   const k = fullScaleUnits / 127;
@@ -608,6 +712,23 @@ export const WATER_FOAM_APPLY_GLSL = `
       float cover = smoothstep(lo, lo + 0.3, fn);
       vec3 foamCol = vec3(0.78, 0.84, 0.86) * (0.88 + 0.35 * fn);
       result = mix(result, foamCol, cover * foamAmt * 0.9 * waterW);
+    }
+    // Dual-phase animated shoreline lapping foam where waterW crosses 0.15..0.55.
+    if (uWaterScrollEnabled > 0.5 && waterW > 0.12 && waterW < 0.60 && vViewDepth < 240.0) {
+      float shoreBandW = smoothstep(0.15, 0.27, waterW) * (1.0 - smoothstep(0.36, 0.55, waterW));
+      float shoreDistFade = 1.0 - smoothstep(50.0, 220.0, vViewDepth);
+      vec2 gpLap = vec2(vWorldPos.x, -vWorldPos.z);
+      float lapWarpA = fragValueNoise2D(gpLap * 0.19 + vec2(uTime * 0.04, -uTime * 0.03));
+      float lapWarpB = fragValueNoise2D(gpLap * 0.53 - vec2(uTime * 0.06, uTime * 0.05));
+      float lapCrest1 = pow(0.5 + 0.5 * sin(waterW * 24.0 + uTime * 1.75 + lapWarpA * 3.6), 4.0);
+      float lapCrest2 = pow(0.5 + 0.5 * sin(waterW * 39.0 + uTime * 2.35 - lapWarpB * 3.1 + 2.1), 5.0);
+      float laceN = 0.5 + fragValueNoise2D(gpLap * 1.35 + waterOffA * 0.35)
+                  + 0.5 * fragValueNoise2D(gpLap * 3.6 - waterOffB * 0.35);
+      float laceMask = smoothstep(0.30, 0.72, laceN);
+      float lapFoam = clamp((0.68 * lapCrest1 + 0.48 * lapCrest2) * laceMask
+                            * shoreBandW * shoreDistFade * min(uWaterFoam.x, 1.25), 0.0, 0.85);
+      vec3 lapCol = vec3(0.82, 0.87, 0.89) * (0.90 + 0.18 * laceN);
+      result = mix(result, lapCol, lapFoam * 0.68);
     }
   }`;
 

@@ -150,8 +150,10 @@ function ensureStyles() {
       color: var(--hbk-text, #e8dfc8);
       font-family: var(--hbk-font, var(--hb-font-serif));
       font-size: 11px;
+      font-variant-numeric: tabular-nums;
       user-select: none;
       box-shadow: 0 4px 14px rgba(0, 0, 0, 0.6);
+      contain: layout style;
     }
     #${OVERLAY_ID}[data-open="1"] { display: block; }
     ${floatyFrameCss(`#${OVERLAY_ID}`)}
@@ -197,7 +199,17 @@ function ensureStyles() {
       background: url("${SP}/0x06001200.png") left center / 60px 14px repeat-x;
       pointer-events: none;
     }
+    @keyframes hch-swing-refill-a {
+      0% { width: 0%; }
+      100% { width: var(--hch-target-w, 100%); }
+    }
+    @keyframes hch-swing-refill-b {
+      0% { width: 0%; }
+      100% { width: var(--hch-target-w, 100%); }
+    }
     #${OVERLAY_ID} .hch-fill.is-charging { filter: brightness(0.85) saturate(0.8); }
+    #${OVERLAY_ID} .hch-fill.is-charging-a { animation: hch-swing-refill-a 600ms linear 1 forwards; }
+    #${OVERLAY_ID} .hch-fill.is-charging-b { animation: hch-swing-refill-b 600ms linear 1 forwards; }
     #${OVERLAY_ID} .hch-fill.is-building { filter: brightness(1.2) saturate(1.1); }
     #${OVERLAY_ID} .hch-thumb {
       position: absolute; top: 0;
@@ -519,24 +531,28 @@ function refreshTraining({ force = false } = {}) {
 // The meter empties when a swing commences and refills to the requested power
 // over the swing, mirroring the combat-bar panel meter's cadence (detail
 // swingDurationMs when picking.js resolved the clip, else ~0.6 s…1.8 s).
+let swingRefillAlt = false;
 function onCommenceAttack(ev) {
   const fill = state.refs?.fill;
   if (!fill || !state.visible) return;
   const swingMs = Number(ev?.detail?.swingDurationMs);
   const dur = Number.isFinite(swingMs) && swingMs > 0 ? swingMs : 600 + state.power * 1200;
+  const targetPct = `${Math.round(state.power * 100)}%`;
   state.charging = true;
-  fill.classList.add("is-charging");
+  swingRefillAlt = !swingRefillAlt;
   fill.style.transition = "none";
-  fill.style.width = "0%";
-  void fill.offsetWidth;
-  fill.style.transition = `width ${Math.round(dur)}ms linear`;
-  fill.style.width = `${Math.round(state.power * 100)}%`;
+  fill.style.setProperty("--hch-target-w", targetPct);
+  fill.style.width = targetPct;
+  fill.style.animationDuration = `${Math.round(dur)}ms`;
+  fill.classList.remove("is-charging-a", "is-charging-b");
+  fill.classList.add("is-charging", swingRefillAlt ? "is-charging-a" : "is-charging-b");
 }
 function onAttackDone() {
   const fill = state.refs?.fill;
   state.charging = false;
   if (!fill) return;
-  fill.classList.remove("is-charging");
+  fill.classList.remove("is-charging", "is-charging-a", "is-charging-b");
+  fill.style.animationDuration = "";
   fill.style.transition = "width 80ms linear";
   fill.style.width = `${Math.round(state.power * 100)}%`;
 }
@@ -766,13 +782,21 @@ function userPlaced() {
   return !!st && st.x != null && st.y != null;
 }
 
+let dockDirty = true;
+let lastDockBottom = "";
+
 function dock() {
   const ov = state.overlayEl;
   if (!ov || !state.visible || userPlaced()) return;
+  dockDirty = false;
   ov.style.left = "0px";
   ov.style.right = "0px";
   ov.style.top = "auto";
-  ov.style.bottom = `${computeDockBottom(ov)}px`;
+  const nextBottom = `${computeDockBottom(ov)}px`;
+  if (lastDockBottom !== nextBottom || ov.style.bottom !== nextBottom) {
+    ov.style.bottom = nextBottom;
+    lastDockBottom = nextBottom;
+  }
 }
 
 function show() {
@@ -920,8 +944,6 @@ function clearDeathSequence() {
 //   t=0 "You died." · t=1.5 "Entering portal space…" · t=4.0 "Resurrecting…" · t=5.5 fade
 function setDeathMessage(ov, message) {
   setAcText(ov, message || "You died.");
-  ov.dataset.open = "0";
-  void ov.offsetWidth;
   ov.dataset.open = "1";
 }
 
@@ -990,7 +1012,7 @@ export function mount(_ctx) {
     syncPowerFill();
     if (state.visible) {
       syncHeightHighlight();
-      dock();   // the toolbar / target bar below may have grown or shrunk
+      if (dockDirty) dock();
     }
   };
   const t = setInterval(recomputeVisible, 1000);
@@ -1042,15 +1064,66 @@ export function mount(_ctx) {
     unmountSneak = m.mountSneakCue(state.refs.sneak, { feed: "attack" });
   }).catch(() => { /* module missing: the row stays dark, the HUD runs on */ });
 
-  // Re-dock on viewport / HUD-scale changes (user-placed windows are
-  // re-clamped by attachWindowPosition itself).
+  // Re-dock on viewport / HUD-scale / bottom-HUD changes (user-placed windows
+  // are re-clamped by attachWindowPosition itself).
   let dockRaf = 0;
+  let hotbarRo = null;
+  let observedHotbar = null;
+  let bodyMo = null;
+  const syncHotbarRo = () => {
+    try {
+      const hb = document.getElementById("hb-hotbar");
+      if (hb === observedHotbar) return;
+      if (hotbarRo) { hotbarRo.disconnect(); hotbarRo = null; }
+      observedHotbar = hb;
+      if (hb && typeof ResizeObserver === "function") {
+        hotbarRo = new ResizeObserver(() => {
+          dockDirty = true;
+          if (state.visible) scheduleDock();
+        });
+        hotbarRo.observe(hb);
+      }
+    } catch (_) {}
+  };
   const scheduleDock = () => {
+    dockDirty = true;
     cancelAnimationFrame(dockRaf);
     dockRaf = requestAnimationFrame(dock);
   };
+  const onHotbarMounted = () => {
+    dockDirty = true;
+    syncHotbarRo();
+    if (state.visible) scheduleDock();
+  };
   window.addEventListener("resize", scheduleDock);
   document.addEventListener("hb-hud-scale-changed", scheduleDock);
+  document.addEventListener("hb-hotbar-mounted", onHotbarMounted);
+  try {
+    if (typeof MutationObserver === "function" && document.body) {
+      bodyMo = new MutationObserver((records) => {
+        for (let i = 0; i < records.length; i++) {
+          const rec = records[i];
+          const touchesHud = (list) => {
+            for (let j = 0; j < list.length; j++) {
+              const id = list[j]?.id || "";
+              if (id && id.startsWith("hb-") && !DOCK_SKIP.has(id) && !DOCK_SKIP_RE.test(id)) {
+                return true;
+              }
+            }
+            return false;
+          };
+          if (touchesHud(rec.addedNodes) || touchesHud(rec.removedNodes)) {
+            dockDirty = true;
+            syncHotbarRo();
+            if (state.visible) scheduleDock();
+            break;
+          }
+        }
+      });
+      bodyMo.observe(document.body, { childList: true });
+    }
+    syncHotbarRo();
+  } catch (_) {}
 
   return () => {
     clearInterval(t);
@@ -1061,8 +1134,11 @@ export function mount(_ctx) {
     try { unmountSneak?.(); } catch (_) {}
     unmountSneak = null;
     cancelAnimationFrame(dockRaf);
+    if (hotbarRo) { hotbarRo.disconnect(); hotbarRo = null; }
+    if (bodyMo) { bodyMo.disconnect(); bodyMo = null; }
     window.removeEventListener("resize", scheduleDock);
     document.removeEventListener("hb-hud-scale-changed", scheduleDock);
+    document.removeEventListener("hb-hotbar-mounted", onHotbarMounted);
     if (state.overlayEl) {
       state.overlayEl.remove();
       state.overlayEl = null;

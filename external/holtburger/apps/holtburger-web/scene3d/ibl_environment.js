@@ -285,6 +285,13 @@ export class IblEnvironment {
 
     this._lastRefreshMs = -Infinity;
     this.refreshCount = 0;
+    this._inSealedCave = false;
+    this._caveScene = null;
+    this._slicePhase = 0;
+    this._lastRefreshSunDir = new THREE.Vector3(0, 0, 0);
+    this._hasLastRefreshSun = false;
+    this._lastRefreshStorm = null;
+    this._forceOutdoorRefresh = false;
 
     // ?pmremPrecompile — see readPmremPrecompileFlag.
     this.pmremPrecompile = readPmremPrecompileFlag();
@@ -631,8 +638,179 @@ export class IblEnvironment {
     // Raw mipmapped cube for the terrain shader (+ the clouds, ?waterClouds).
     this._renderTerrainCube(nowMs);
 
+    this._recordOutdoorEnvState();
     this._lastRefreshMs = nowMs;
     this.refreshCount += 1;
+  }
+
+  _recordOutdoorEnvState() {
+    // Read `skyProbe.sunDirection` first: `atmosphere_lights.js` clamps
+    // `sun.sunDirection` to `>= +0.25°` for the transmittance LUT, whereas
+    // `skyProbe.sunDirection` tracks `artPitch` all the way down to `-14°` night!
+    const sunDir = this.atmosphereLights?.skyProbe?.sunDirection || this.atmosphereLights?.sun?.sunDirection;
+    if (sunDir && Number.isFinite(sunDir.x + sunDir.y + sunDir.z) && sunDir.lengthSq() > 1e-8) {
+      this._lastRefreshSunDir.copy(sunDir).normalize();
+      this._hasLastRefreshSun = true;
+    }
+    const st = this.atmosphereLights?._lastState ?? null;
+    if (st && "isStorm" in st) {
+      this._lastRefreshStorm = !!st.isStorm;
+    }
+    this._lastRefreshDirPitch = st && Number.isFinite(st.dirPitch) ? +st.dirPitch : null;
+    this._lastRefreshNightMul = this._nightEnvMul();
+    this._forceOutdoorRefresh = false;
+  }
+
+  /**
+   * Outdoor periodic refresh gate: when live `atmosphereLights` is driving the
+   * sun, skip redundant sky PMREM rebuilds unless sky sun angle moved >= 1.5°,
+   * diurnal/nightRamp intensity shifted, storm/weather state shifted, or an
+   * indoor->outdoor transition requested it.
+   */
+  _outdoorSkyChangedEnough() {
+    if (!this.atmosphereLights) return true;
+    if (this._forceOutdoorRefresh || !this._hasLastRefreshSun) return true;
+    const st = this.atmosphereLights._lastState ?? null;
+    if (st && "isStorm" in st && this._lastRefreshStorm !== null && !!st.isStorm !== this._lastRefreshStorm) {
+      return true;
+    }
+    if (typeof this._lastRefreshNightMul === "number" && Math.abs(this._nightEnvMul() - this._lastRefreshNightMul) >= 0.04) {
+      return true;
+    }
+    if (st && Number.isFinite(st.dirPitch) && typeof this._lastRefreshDirPitch === "number" && Math.abs(+st.dirPitch - this._lastRefreshDirPitch) >= 1.0) {
+      return true;
+    }
+    const sunDir = this.atmosphereLights.skyProbe?.sunDirection || this.atmosphereLights.sun?.sunDirection;
+    if (!sunDir || !Number.isFinite(sunDir.x + sunDir.y + sunDir.z) || sunDir.lengthSq() <= 1e-8) {
+      return true;
+    }
+    const len = Math.sqrt(sunDir.x * sunDir.x + sunDir.y * sunDir.y + sunDir.z * sunDir.z);
+    const dot = (
+      (sunDir.x / len) * this._lastRefreshSunDir.x +
+      (sunDir.y / len) * this._lastRefreshSunDir.y +
+      (sunDir.z / len) * this._lastRefreshSunDir.z
+    );
+    // cos(1.5°) ≈ 0.99965732
+    return dot <= 0.99965732;
+  }
+
+  /**
+   * Render a slice of `_cubeCam` faces (`[startFace, endFace)`) into `_cubeRT`
+   * so outdoor sky IBL refreshes spread across 3 frames with zero hitches.
+   */
+  _renderCubeFaceRange(startFace, endFace, nowMs) {
+    const r = this.renderer;
+    const faces = this._cubeCam?.children;
+    if (!r || !faces || faces.length < 6) {
+      this._renderTerrainCube(nowMs);
+      return;
+    }
+    const hidden = this._hideClipSpace();
+    const prevTarget = r.getRenderTarget();
+    const prevFace = r.getActiveCubeFace();
+    const prevMip = r.getActiveMipmapLevel();
+    const prevAutoClear = r.autoClear;
+    const tex = this._cubeRT.texture;
+    const genMips = tex.generateMipmaps;
+    r.autoClear = true;
+    try {
+      if (startFace === 0) {
+        this._cubeCam.position.copy(this._viewPos);
+        this._cubeCam.updateMatrixWorld(true);
+      }
+      const coordSys = r.coordinateSystem;
+      if (this._cubeCam.coordinateSystem !== coordSys && typeof this._cubeCam.updateCoordinateSystem === "function") {
+        this._cubeCam.updateCoordinateSystem();
+      }
+      for (let f = startFace; f < endFace && f < 6; f += 1) {
+        const fc = faces[f];
+        if (!fc) continue;
+        tex.generateMipmaps = f === 5 ? genMips : false;
+        r.setRenderTarget(this._cubeRT, f);
+        r.render(this.skyScene, fc);
+      }
+    } finally {
+      tex.generateMipmaps = genMips;
+      r.autoClear = prevAutoClear;
+      r.setRenderTarget(prevTarget, prevFace, prevMip);
+      for (let i = 0; i < hidden.length; i += 1) hidden[i].visible = true;
+    }
+    if (endFace >= 6) {
+      const clouds = this._cloudsBuffer();
+      if (clouds) {
+        try { this._compositeClouds(clouds); } catch (_) { /* clear-sky cube stands */ }
+      }
+      this._lastCubeMs = nowMs;
+    }
+  }
+
+  _stepSlicedOutdoorRefresh(nowMs) {
+    if (this._slicePhase === 1) {
+      this._updateViewPos();
+      this._renderCubeFaceRange(0, 3, nowMs);
+      this._slicePhase = 2;
+    } else if (this._slicePhase === 2) {
+      this._renderCubeFaceRange(3, 6, nowMs);
+      this._slicePhase = 3;
+    } else if (this._slicePhase === 3) {
+      this._slicePhase = 0;
+      const rt = this._pmrem.fromCubemap(this._cubeRT.texture);
+      if (!this._copyIntoStableEnv(rt)) {
+        const old = this._pmremRT;
+        this.scene.environment = rt.texture;
+        this._pmremRT = rt;
+        if (old) old.dispose();
+      }
+      this._recordOutdoorEnvState();
+      this._lastRefreshMs = nowMs;
+      this.refreshCount += 1;
+    }
+  }
+
+  /**
+   * Warm dark cave/torch-bounce environment scene for sealed underground
+   * dungeons (`!SeenOutside` indoor EnvCells) so floors/walls never pick up
+   * daytime blue sky reflections or irradiance.
+   */
+  _ensureCaveScene() {
+    if (this._caveScene) return this._caveScene;
+    const geo = new THREE.SphereGeometry(10, 8, 6);
+    const pos = geo.attributes.position;
+    const colors = new Float32Array(pos.count * 3);
+    for (let i = 0; i < pos.count; i += 1) {
+      const ny = pos.getY(i) / 10;
+      // Upper dome: dark warm slate-stone (zero blue); lower hemisphere: warm torch bounce.
+      const t = Math.max(0, Math.min(1, 0.5 - ny * 0.5));
+      colors[i * 3 + 0] = 0.028 + 0.068 * t;
+      colors[i * 3 + 1] = 0.020 + 0.038 * t;
+      colors[i * 3 + 2] = 0.013 + 0.015 * t;
+    }
+    geo.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+    const mat = new THREE.MeshBasicMaterial({
+      name: "cave-ibl-dome",
+      vertexColors: true,
+      side: THREE.BackSide,
+      depthWrite: false,
+      depthTest: false,
+      toneMapped: false,
+    });
+    const mesh = new THREE.Mesh(geo, mat);
+    const sc = new THREE.Scene();
+    sc.add(mesh);
+    sc.userData.__caveMesh = mesh;
+    this._caveScene = sc;
+    return sc;
+  }
+
+  _applyCaveEnvironment() {
+    const caveScene = this._ensureCaveScene();
+    const rt = this._pmrem.fromScene(caveScene, 0.04, 0.1, 50);
+    if (!this._copyIntoStableEnv(rt)) {
+      const old = this._pmremRT;
+      this.scene.environment = rt.texture;
+      this._pmremRT = rt;
+      if (old) old.dispose();
+    }
   }
 
   /**
@@ -662,12 +840,60 @@ export class IblEnvironment {
   }
 
   tick(nowMs, terrainMaterials) {
-    if (nowMs - this._lastRefreshMs >= this.refreshMs) {
+    const sd = globalThis.window?.liveScene3d?.skyDome ?? null;
+    const sealedUnderground = !!(sd && sd._lastIsIndoor && sd._lastSkyBlocked);
+    if (sealedUnderground) {
+      if (!this._inSealedCave) {
+        this._slicePhase = 0;
+        try { this._applyCaveEnvironment(); } catch (_) {}
+        this._inSealedCave = true;
+      }
+      const pCave = this.atmosphereLights?.lastProbeIntensity;
+      this.scene.environmentIntensity = Number.isFinite(pCave) ? Math.min(pCave, 0.18) : 0.16;
+      if (Array.isArray(terrainMaterials)) {
+        for (const mat of terrainMaterials) {
+          const u = mat?.uniforms;
+          if (!u || !u.uIblEnabled) continue;
+          u.uIblEnabled.value = 0.0;
+        }
+      }
+      return;
+    }
+    if (this._inSealedCave) {
+      this._inSealedCave = false;
+      this._slicePhase = 0;
+      this._forceOutdoorRefresh = true;
+      this._lastRefreshMs = -Infinity;
+    }
+
+    const nightDelta = (
+      this.atmosphereLights &&
+      this.refreshCount > 0 &&
+      typeof this._lastRefreshNightMul === "number"
+    ) ? Math.abs(this._nightEnvMul() - this._lastRefreshNightMul) : 0;
+    const effRefreshMs = nightDelta >= 0.25
+      ? Math.min(this.refreshMs, 250)
+      : nightDelta >= 0.08
+        ? Math.min(this.refreshMs, 2500)
+        : this.refreshMs;
+
+    if (this._slicePhase > 0) {
+      this._stepSlicedOutdoorRefresh(nowMs);
+    } else if (nowMs - this._lastRefreshMs >= effRefreshMs) {
       // ?pmremPrecompile: a due refresh waits (bounded) for still-linking programs.
       if (this._firstDueMs < 0 && this.refreshCount === 0) this._firstDueMs = nowMs;
       if (!this._skyMustWait(nowMs)) {
         if (this.refreshCount === 0 && this._firstDueMs >= 0) this.warmStats.firstWaitMs = Math.round(nowMs - this._firstDueMs);
-        this.refresh(nowMs);
+        if (this.atmosphereLights && this.refreshCount > 0 && !this._forceOutdoorRefresh) {
+          if (this._outdoorSkyChangedEnough()) {
+            this._slicePhase = 1;
+            this._stepSlicedOutdoorRefresh(nowMs);
+          } else {
+            this._lastRefreshMs = nowMs;
+          }
+        } else {
+          this.refresh(nowMs);
+        }
       }
     } else if (nowMs - this._lastCubeMs >= CLOUD_CUBE_REFRESH_MS && this._cloudsBuffer()) {
       // Clouds drift; the terrain cube follows them at 1 Hz (the PMREM for
@@ -733,6 +959,14 @@ export class IblEnvironment {
       try { this._warmMeshes?.get(this._bgProxy)?.geometry?.dispose(); } catch (_) {}
       this._bgProxy.dispose();
       this._bgProxy = null;
+    }
+    if (this._caveScene) {
+      const cm = this._caveScene.userData?.__caveMesh;
+      if (cm) {
+        try { cm.geometry?.dispose(); } catch (_) {}
+        try { cm.material?.dispose(); } catch (_) {}
+      }
+      this._caveScene = null;
     }
     this._warmPending.clear();
   }

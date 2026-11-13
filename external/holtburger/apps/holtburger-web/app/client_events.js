@@ -46,6 +46,21 @@ import { maybeStartMacroOnLogin } from "../rynth/boot.js";
  *  pumpNetFrame (kind 4 Disconnected): stop draining this batch. */
 export const STOP_PUMP = Symbol("stopPump");
 
+const EMPTY_PAYLOAD = Object.freeze({});
+const COMBAT_COMMENCE_PAYLOAD = Object.freeze({ type: "combatCommenceAttack" });
+const COMBAT_ATTACK_DONE_NONE_PAYLOAD = Object.freeze({ type: "attackDone", error: "None" });
+
+let _cachedSearchStr = null;
+let _cachedSearchParams = null;
+function cachedUrlSearchParams(search) {
+  const s = typeof search === "string" ? search : "";
+  if (s !== _cachedSearchStr || !_cachedSearchParams) {
+    _cachedSearchStr = s;
+    _cachedSearchParams = new URLSearchParams(s);
+  }
+  return _cachedSearchParams;
+}
+
 /**
  * latency (2026-10-05): flush the panel renders a drain batch coalesced
  * (see the kind 8 / kind 11 arms). Called by pumpNetFrame after the batch —
@@ -60,11 +75,11 @@ export function flushPanelBatch(batch, D) {
   batch.inventory = false;
   if (stats) {
     try { D.renderVitalsPanel(D.handle); } catch (e) { console.warn("[panelBatch] vitals:", e); }
-    try { window.__pluginClient?.events?.emit?.("playerStatsUpdated", {}); } catch (e) { console.warn("[panelBatch] stats emit:", e); }
+    try { window.__pluginClient?.events?.emit?.("playerStatsUpdated", EMPTY_PAYLOAD); } catch (e) { console.warn("[panelBatch] stats emit:", e); }
   }
   if (inventory) {
     try { D.renderInventoryPanel(D.handle); } catch (e) { console.warn("[panelBatch] inventory:", e); }
-    try { window.__pluginClient?.events?.emit?.("playerInventoryChanged", {}); } catch (e) { console.warn("[panelBatch] inventory emit:", e); }
+    try { window.__pluginClient?.events?.emit?.("playerInventoryChanged", EMPTY_PAYLOAD); } catch (e) { console.warn("[panelBatch] inventory emit:", e); }
   }
 }
 
@@ -294,7 +309,7 @@ export function dispatchClientEvent(evt, D) {
     // login, never on a ?bot=1 or ?botVt=off page; rynth/boot.js
     // maybeStartMacroOnLogin), after a takeover rebind settles.
     try {
-      const botParams = new URLSearchParams(location.search);
+      const botParams = cachedUrlSearchParams(location.search);
       const botTargetHandle = window.__sessionHandle ?? handle;
       const botRebind = maybeAutoBootBot(botTargetHandle, {
         bot: botParams.get("bot"), botAi: botParams.get("botAi"),
@@ -312,7 +327,7 @@ export function dispatchClientEvent(evt, D) {
     // Idempotent across kind=7 refires; never touches the panel
     // once a viewer (or the bot's own UI actions) navigated it.
     try {
-      if (new URLSearchParams(location.search).get("streamHud") === "1") {
+      if (cachedUrlSearchParams(location.search).get("streamHud") === "1") {
         if (!document.getElementById("stream-hud-style")) {
           const shs = document.createElement("style");
           shs.id = "stream-hud-style";
@@ -578,7 +593,7 @@ export function dispatchClientEvent(evt, D) {
     // a bad password, wrong client or closed world, and would undo an
     // admin's boot (retail stays on the disconnected screen).
     try {
-      const rp = new URLSearchParams(location.search);
+      const rp = cachedUrlSearchParams(location.search);
       const unattended = rp.get("bot") === "1" || rp.get("agent") === "1";
       if (unattended && booted) {
         console.warn(`[auto-reload] kind=4 disconnect is an account boot — not reloading (${evt.stringPayload || ""})`);
@@ -823,7 +838,7 @@ export function dispatchClientEvent(evt, D) {
     // post-break). The allegiance-panel plugin subscribes
     // and renders the hierarchy.
     if (window.__pluginClient?.events) {
-      window.__pluginClient.events.emit("allegianceUpdated", {});
+      window.__pluginClient.events.emit("allegianceUpdated", EMPTY_PAYLOAD);
     }
   } else if (evt.kind === ClientEventKind.FRIENDS_UPDATED) {
     // Wave-H1 (2026-05-26): FriendsUpdated. ACE pushed
@@ -971,7 +986,7 @@ export function dispatchClientEvent(evt, D) {
     // and same-landblock hops. DEFAULT-ON; `?portalSpace=off` disables (a
     // legacy numeric `?portalSpace=<scale>` just means on).
     try {
-      const sp = new URLSearchParams(window.location.search);
+      const sp = cachedUrlSearchParams(window.location.search);
       const ps = sp.get('portalSpace');
       const enabled = ps !== 'off' && ps !== '0' && ps !== 'false';
       if (enabled && window.liveScene3d) {
@@ -1075,7 +1090,7 @@ export function dispatchClientEvent(evt, D) {
       // should refresh — easiest path is to re-emit the
       // generic allegianceUpdated event the F2 panel
       // already listens to.
-      window.__pluginClient.events.emit("allegianceUpdated", {});
+      window.__pluginClient.events.emit("allegianceUpdated", EMPTY_PAYLOAD);
     }
   } else if (evt.kind === ClientEventKind.ALLEGIANCE_INFO /* AllegianceInfo */) {
     // Wave F.3 (2026-05-27): server replied to an
@@ -1156,8 +1171,9 @@ export function dispatchClientEvent(evt, D) {
     // treats either as "active when > 0". The state name
     // is forwarded so a future wave can swap to per-state
     // sprites without a new event kind.
+    const rawStormState = evt.stringPayload;
     if (window.__pluginClient?.events) {
-      const state = evt.stringPayload || "subsided";
+      const state = rawStormState || "subsided";
       const level = (evt.u32Payload ?? 0) >>> 0;
       const extent = Number(evt.f32Payload ?? 0);
       window.__pluginClient.events.emit("portalStormChanged", {
@@ -1172,7 +1188,7 @@ export function dispatchClientEvent(evt, D) {
     // Handle_Misc__PortalStorm*, acclient.c:402264-402367). See
     // app/portal_storm_notice.js. The raw state: a missing one prints
     // nothing (the emit above still falls back to "subsided").
-    showPortalStormNotice(evt.stringPayload);
+    showPortalStormNotice(rawStormState);
   } else if (evt.kind === ClientEventKind.ENTITY_ENCHANTMENTS_UPDATED /* Wave 4.B EntityEnchantmentsUpdated */) {
     // === Wave 4.B — remote-entity enchantments dispatch (2026-05-28) ===
     //
@@ -1360,11 +1376,13 @@ export function dispatchClientEvent(evt, D) {
     // F10-1: a tracked entity's health fraction changed
     // (QueryHealth reply / damage UpdateHealthFraction). Forward
     // to the target-bar via the plugin bus, keyed by guid.
-    try {
-      const guid = (evt.u32Payload ?? 0) >>> 0;
-      const fraction = Number.isFinite(evt.f32Payload) ? evt.f32Payload : null;
-      window.__pluginClient?.events?.emit?.("entityHealthUpdated", { guid, fraction });
-    } catch (_) {}
+    if (window.__pluginClient?.events?.emit) {
+      try {
+        const guid = (evt.u32Payload ?? 0) >>> 0;
+        const fraction = Number.isFinite(evt.f32Payload) ? evt.f32Payload : null;
+        window.__pluginClient.events.emit("entityHealthUpdated", { guid, fraction });
+      } catch (_) {}
+    }
   } else if (evt.kind === ClientEventKind.OBJECT_APPRAISED /* ObjectAppraised */) {
     // ACPlugin PR-2 (2026-05-27): an entity's appraisal
     // data was just refreshed in the entity store (the
@@ -1376,14 +1394,16 @@ export function dispatchClientEvent(evt, D) {
     // updated props via the existing entity-store API +
     // (in WorldState) via the typed WorldObject reflecting
     // PR 1's setters.
-    const entityName = evt.stringPayload || "";
-    const entityGuidU32 = (evt.u32Payload ?? 0) >>> 0;
-    try {
-      window.__pluginClient?.events?.emit?.("objectAppraised", {
-        stringPayload: entityName,
-        u32Payload: entityGuidU32,
-      });
-    } catch (_) {}
+    if (window.__pluginClient?.events?.emit) {
+      const entityName = evt.stringPayload || "";
+      const entityGuidU32 = (evt.u32Payload ?? 0) >>> 0;
+      try {
+        window.__pluginClient.events.emit("objectAppraised", {
+          stringPayload: entityName,
+          u32Payload: entityGuidU32,
+        });
+      } catch (_) {}
+    }
   } else if (evt.kind === ClientEventKind.USE_FAILED) {
     // Phase 4 step 5: UseFailed (WeenieError /
     // WeenieErrorWithString). Already mirrored as a
@@ -1408,7 +1428,7 @@ export function dispatchClientEvent(evt, D) {
     // (`?castFizzle=off` escape).
     if (errCode === 0x0402) {
       try {
-        if (new URLSearchParams(window.location.search).get("castFizzle") !== "off") {
+        if (cachedUrlSearchParams(window.location.search).get("castFizzle") !== "off") {
           const em = window.liveScene3d?.entityManager;
           const lg = (getLocalPlayerGuid?.() ?? 0) >>> 0;
           // WS16 diag: fizzle (WeenieError 0x0402) landed.
@@ -1433,7 +1453,7 @@ export function dispatchClientEvent(evt, D) {
     // eye-test (E1-E4) is still owed.
     else if (isTerminalCastReject(errCode)) {
       try {
-        const flagOn = new URLSearchParams(window.location.search).get("castRejectClears")?.toLowerCase() !== "off";
+        const flagOn = cachedUrlSearchParams(window.location.search).get("castRejectClears")?.toLowerCase() !== "off";
         const em = window.liveScene3d?.entityManager;
         const lg = (getLocalPlayerGuid?.() ?? 0) >>> 0;
         const inst = em?.entityMap?.get?.(lg);
@@ -2205,10 +2225,23 @@ export function dispatchClientEvent(evt, D) {
     // JSON payload with discrete fields so a plugin can
     // subscribe via client.events.on("damageDealt", ...).
     try {
-      const payload = JSON.parse(evt.stringPayload || "{}");
+      const raw = evt.stringPayload;
+      if (!raw) return;
+      let swingGuessOn = false;
+      try {
+        swingGuessOn = cachedUrlSearchParams(window.location.search).get("swingGuess")?.toLowerCase() === "on";
+      } catch (_) {}
+      const pluginClient = window.__pluginClient;
+      if (!pluginClient && !swingGuessOn && raw.charCodeAt(0) === 0x7b) return;
+      const payload =
+        raw === '{"type":"combatCommenceAttack"}'
+          ? COMBAT_COMMENCE_PAYLOAD
+          : raw === '{"type":"attackDone","error":"None"}'
+            ? COMBAT_ATTACK_DONE_NONE_PAYLOAD
+            : JSON.parse(raw);
       const eventName = payload.type;
-      if (eventName && window.__pluginClient) {
-        window.__pluginClient.events.emit(eventName, payload);
+      if (eventName && pluginClient) {
+        pluginClient.events.emit(eventName, payload);
       }
       // Phase D — visual response: when an attacker hits
       // us (damageTaken) play their swing on the attacker's
@@ -2241,10 +2274,6 @@ export function dispatchClientEvent(evt, D) {
       // monster `findGuidByName` returned — the "unreliable" first swings.
       // Motions for rigs still spawning are now stashed instead of dropped
       // (entities.js `_stashSpawnMotion`), which is what the guess papered over.
-      let swingGuessOn = false;
-      try {
-        swingGuessOn = new URLSearchParams(window.location.search).get("swingGuess")?.toLowerCase() === "on";
-      } catch (_) {}
       if (swingGuessOn && em && typeof em.findGuidByName === "function") {
         const dispatchRemoteSwing = (attackerName) => {
           const g = em.findGuidByName(attackerName);

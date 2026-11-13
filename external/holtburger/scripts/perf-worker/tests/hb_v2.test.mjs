@@ -1491,7 +1491,8 @@ await check(`B0: every real requiredReaders entry FAILS on a HEAD-${HEAD_REV}-sh
     assert.match(prob, /reader not found|no reader under/, prob);
     for (const p of pats) {
       patternsChecked++;
-      assert.ok(texts.every((t) => !new RegExp(p).test(t)), `${q.flag}: pattern ${p} already matches the ${HEAD_REV} tree`);
+      const re = V2.readerPatternRegExp(p);
+      assert.ok(texts.every((t) => !re.test(t)), `${q.flag}: pattern ${p} already matches the ${HEAD_REV} tree`);
     }
   }
   assert.ok(patternsChecked >= 6, `patterns checked against ${HEAD_REV}: ${patternsChecked}`);
@@ -1499,7 +1500,8 @@ await check(`B0: every real requiredReaders entry FAILS on a HEAD-${HEAD_REV}-sh
   for (const q of reqs.filter((x) => x.file && (x.patterns || []).length)) {
     const lines = readFileSync(join(PW, "../..", q.file), "utf8").split("\n");
     for (const p of q.patterns) {
-      const hits = lines.filter((l) => new RegExp(p).test(l));
+      const re = V2.readerPatternRegExp(p);
+      const hits = lines.filter((l) => re.test(l));
       assert.ok(hits.length >= 1, `${q.flag}: ${p} matches no single line of ${q.file}`);
       assert.ok(hits.every((l) => !/^\s*(\/\/|\/\*|\*)/.test(l)), `${q.flag}: ${p} matches a comment line of ${q.file}: ${hits.find((l) => /^\s*(\/\/|\/\*|\*)/.test(l))}`);
     }

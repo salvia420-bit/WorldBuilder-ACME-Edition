@@ -87,9 +87,9 @@ console.log("-- E1 flag reader -------------------------------------------------
     __setRustFlagForTest("skipEmptyPasses", undefined);
     return on;
   };
-  check("absent ⇒ off", read("") === false && read("?x=1") === false);
+  check("absent ⇒ on (default-ON)", read("") === true && read("?x=1") === true);
   check("=on / =1 / =true ⇒ on", read("?skipEmptyPasses=on") && read("?skipEmptyPasses=1") && read("?skipEmptyPasses=true"));
-  check("=off / garbage ⇒ off", !read("?skipEmptyPasses=off") && !read("?skipEmptyPasses=banana"));
+  check("=off / =0 / =false / =no ⇒ off", !read("?skipEmptyPasses=off") && !read("?skipEmptyPasses=0") && !read("?skipEmptyPasses=false") && !read("?skipEmptyPasses=no"));
   window.location.search = "";
 }
 
@@ -359,7 +359,7 @@ console.log("-- E6 wiring ------------------------------------------------------
     /if \(skipEmptyPassesEnabled\(\)\) installSkipEmptyRenderPass\(worldRenderPass\);/.test(PIPE));
   check("the world RenderPass is never disabled (indoor_landscape_gate L8)", !/worldRenderPass\.enabled\s*=/.test(PIPE));
   const MOD = readFileSync(path.join(APP, "scene3d", "skip_empty_passes.js"), "utf8");
-  check("module reads the flag through rustFlag, default off", /rustFlag\("skipEmptyPasses", false\)/.test(MOD));
+  check("module reads the flag through rustFlag, default on", /rustFlag\("skipEmptyPasses", true\)/.test(MOD));
   check("no top-level THREE construction in the module",
     !/^(const|let|var)\s+\w+\s*=\s*new THREE\./m.test(MOD));
 }

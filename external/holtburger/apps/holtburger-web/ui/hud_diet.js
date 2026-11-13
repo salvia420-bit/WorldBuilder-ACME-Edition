@@ -27,9 +27,11 @@
 //   Off-forms: off / 0 / false / no / none (any case, trimmed). Anything else,
 //   including absent, keeps today's HUD.
 //
-// DIET (default OFF): `?hudDiet=on` turns on every lever below; `?hudDiet=` a
-// comma list of lever names turns on only those (unknown names are ignored);
-// off / 0 / false / no / none, absent or a list with no known name: none.
+// DIET (default ON): absent, empty (`?hudDiet` / `?hudDiet=`), or `?hudDiet=on`
+// (`1` / `true` / `yes` / `all`) turns on every lever below; `?hudDiet=` a
+// comma/space list of lever names turns on only those (unknown names are
+// ignored; a non-empty list with no known name turns on none);
+// `?hudDiet=off` (`0` / `false` / `no` / `none`) disables all levers.
 //   orbSync   plugins/vitals-orbs.js: the orb loops are sampled on the cadence
 //             tick from a cached animation list, so a tick no longer calls
 //             getAnimations() (a forced style flush) or reads playState; the
@@ -66,13 +68,14 @@ const LEVER_BY_LOWER = new Map(HUD_DIET_LEVERS.map((n) => [n.toLowerCase(), n]))
 const NONE = Object.freeze([]);
 
 /**
- * `?hudDiet` grammar. Returns a frozen array of lever names in canonical order.
+ * `?hudDiet` grammar (default ON). Returns a frozen array of lever names in canonical order.
  * @param {string|null|undefined} raw
  */
 export function parseHudDiet(raw) {
-  if (raw == null) return NONE;
+  if (raw == null) return HUD_DIET_LEVERS;
   const tokens = String(raw).split(/[\s,]+/).map((t) => t.trim().toLowerCase()).filter(Boolean);
-  if (tokens.length === 0) return NONE;
+  if (tokens.length === 0) return HUD_DIET_LEVERS;
+  if (tokens.some((t) => OFF_FORMS.has(t))) return NONE;
   if (tokens.some((t) => ON_FORMS.has(t))) return HUD_DIET_LEVERS;
   const want = new Set();
   for (const t of tokens) {

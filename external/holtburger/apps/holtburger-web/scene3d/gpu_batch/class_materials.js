@@ -291,7 +291,7 @@ export function classFragmentHeader(withNormal, maps = null) {
  * their includes, header "EXTRA-MAP MEMBERS"). A replacement is null when
  * its chunk lost an anchor (applyClassPatch counts it missing).
  */
-export function fragmentReplacements(withNormal, withPom = false, maps = null) {
+export function fragmentReplacements(withNormal, withPom = false, maps = null, useGrad = false) {
   const ms = maps || MAP_SET_NONE;
   const r = [
     // diffuse + opacity uniforms -> slot texel 0 (same f32 values)
@@ -311,9 +311,14 @@ export function fragmentReplacements(withNormal, withPom = false, maps = null) {
     ["#include <metalnessmap_fragment>", "float metalnessFactor = vHbS1.y;"],
   ];
   if (withNormal) {
+    const nrmSample = withPom
+      ? (useGrad
+          ? "\tvec3 mapN = textureGrad( hbBatchNrmArr, vec3( _pomUv, vHbS3.x ), _pomGx, _pomGy ).xyz * 2.0 - 1.0;"
+          : "\tvec3 mapN = texture( hbBatchNrmArr, vec3( _pomUv, vHbS3.x ) ).xyz * 2.0 - 1.0;")
+      : "\tvec3 mapN = texture( hbBatchNrmArr, vec3( vNormalMapUv, vHbS3.x ) ).xyz * 2.0 - 1.0;";
     r.push(["#include <normal_fragment_maps>", [
       "#ifdef USE_NORMALMAP_TANGENTSPACE",
-      "\tvec3 mapN = texture( hbBatchNrmArr, vec3( vNormalMapUv, vHbS3.x ) ).xyz * 2.0 - 1.0;",
+      nrmSample,
       "\tmapN.xy *= vHbS1.zw;",
       "\tnormal = normalize( tbn * mapN );",
       "#endif",
@@ -341,13 +346,14 @@ export function applyClassPatch(shader, withNormal, withPom = false, maps = null
   let fs = shader.fragmentShader;
   let missing = 0;
   if (fs.indexOf(LAYERS_MARKER) === -1) {
+    const useGrad = withPom && fs.indexOf("vec2 _pomGx") !== -1;
     if (withPom) {
       if (!withNormal) missing += 1;
       const p = { fragmentShader: fs };
       missing += applyPomFragmentPatch(p);
       fs = p.fragmentShader;
     }
-    for (const [from, to] of fragmentReplacements(withNormal, withPom, ms)) {
+    for (const [from, to] of fragmentReplacements(withNormal, withPom, ms, useGrad)) {
       if (to === null || fs.indexOf(from) === -1) { missing += 1; continue; }
       fs = fs.replace(from, () => to);
     }
@@ -403,9 +409,12 @@ export const POM_FRAG_HEADER = [
 ].join("\n");
 /** P3: one height sample of the POM text (its uv argument is a plain identifier in every call). */
 export const POM_SAMPLE_RE = /texture2D\(uPomMap, ([A-Za-z_][A-Za-z0-9_]*)\)/g;
+export const POM_GRAD_SAMPLE_RE = /textureGrad\(uPomMap, ([A-Za-z_][A-Za-z0-9_]*), _pomGx, _pomGy\)/g;
 /** P4: the POM block's diffuse sample, and its class redirect. */
 export const POM_MAP_SAMPLE = "texture2D(map, _pomUv)";
 export const POM_MAP_SAMPLE_BATCH = "texture( hbBatchMapArr, vec3( _pomUv, vHbS2.y ) )";
+export const POM_MAP_GRAD_SAMPLE = "textureGrad(map, _pomUv, _pomGx, _pomGy)";
+export const POM_MAP_GRAD_SAMPLE_BATCH = "textureGrad( hbBatchMapArr, vec3( _pomUv, vHbS2.y ), _pomGx, _pomGy )";
 
 function _occurrences(s, sub) {
   let n = 0;
@@ -424,6 +433,8 @@ export function pomDeclarationSubstitutions() {
  * complete): every declaration exactly once, at least one height sample and
  * every one of them redirected (no `uPomMap` left, no other `uPom` uniform
  * declared), the diffuse sample exactly once and no stock map_fragment left.
+ * Supports both legacy `texture2D(uPomMap, ...)` and browser `pomGrad`
+ * `textureGrad(uPomMap, ..., _pomGx, _pomGy)`.
  */
 export function applyPomFragmentPatch(shader) {
   let fs = shader.fragmentShader;
@@ -432,13 +443,27 @@ export function applyPomFragmentPatch(shader) {
     if (_occurrences(fs, from) !== 1) { missing += 1; continue; }
     fs = fs.replace(from, to);
   }
-  const want = _occurrences(fs, "texture2D(uPomMap,");
-  let hits = 0;
-  fs = fs.replace(POM_SAMPLE_RE, (_, uv) => { hits += 1; return "texture( " + POM_PAGE_SAMPLER + ", vec3( " + uv + ", vHbP0.x ) )"; });
-  if (hits === 0 || hits !== want) missing += 1;
-  if (/\buPomMap\b/.test(fs) || /\buniform\s+\w+\s+uPom\w*/.test(fs)) missing += 1;
-  if (_occurrences(fs, POM_MAP_SAMPLE) !== 1) missing += 1;
-  else fs = fs.replace(POM_MAP_SAMPLE, POM_MAP_SAMPLE_BATCH);
+  const useGrad = fs.indexOf("textureGrad(uPomMap,") !== -1;
+  if (useGrad) {
+    const want = _occurrences(fs, "textureGrad(uPomMap,");
+    let hits = 0;
+    fs = fs.replace(POM_GRAD_SAMPLE_RE, (_, uv) => {
+      hits += 1;
+      return "textureGrad( " + POM_PAGE_SAMPLER + ", vec3( " + uv + ", vHbP0.x ), _pomGx, _pomGy )";
+    });
+    if (hits === 0 || hits !== want) missing += 1;
+    if (/\buPomMap\b/.test(fs) || /\buniform\s+\w+\s+uPom\w*/.test(fs)) missing += 1;
+    if (_occurrences(fs, POM_MAP_GRAD_SAMPLE) !== 1) missing += 1;
+    else fs = fs.replace(POM_MAP_GRAD_SAMPLE, POM_MAP_GRAD_SAMPLE_BATCH);
+  } else {
+    const want = _occurrences(fs, "texture2D(uPomMap,");
+    let hits = 0;
+    fs = fs.replace(POM_SAMPLE_RE, (_, uv) => { hits += 1; return "texture( " + POM_PAGE_SAMPLER + ", vec3( " + uv + ", vHbP0.x ) )"; });
+    if (hits === 0 || hits !== want) missing += 1;
+    if (/\buPomMap\b/.test(fs) || /\buniform\s+\w+\s+uPom\w*/.test(fs)) missing += 1;
+    if (_occurrences(fs, POM_MAP_SAMPLE) !== 1) missing += 1;
+    else fs = fs.replace(POM_MAP_SAMPLE, POM_MAP_SAMPLE_BATCH);
+  }
   if (fs.indexOf("#include <map_fragment>") !== -1) missing += 1;
   shader.fragmentShader = fs;
   return missing;

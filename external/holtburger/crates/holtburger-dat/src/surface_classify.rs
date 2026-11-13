@@ -88,6 +88,27 @@ impl SurfaceCategory {
             _ => None,
         }
     }
+
+    /// Calibrated Parallax Occlusion Mapping (POM) UV depth scale for this
+    /// surface category (`0.0` = flat / POM disabled). Mirrors
+    /// `CATEGORY_POM_DEPTH_SCALE` in `apps/holtburger-web/scene3d/materials.js`.
+    pub const fn pom_depth_scale(self) -> f32 {
+        match self {
+            Self::Stone => 0.038,
+            Self::Brick => 0.040,
+            Self::Tile => 0.034,
+            Self::Wood => 0.028,
+            Self::Dirt => 0.026,
+            Self::Sand => 0.022,
+            Self::Generic => 0.026,
+            Self::Metal
+            | Self::Lava
+            | Self::Water
+            | Self::Foliage
+            | Self::Cloth
+            | Self::Snow => 0.0,
+        }
+    }
 }
 
 /// Per-surface statistics used by the rule set. All values are in
@@ -260,9 +281,9 @@ pub fn classify(stats: &SurfaceStats, surface_type_flags: u32) -> SurfaceCategor
         return SurfaceCategory::Water;
     }
 
-    // Rule 3: Base1ClipMap + green-dominant → Foliage. (Clip-map is
-    // AC's binary-alpha mask, used by every cutout tree/bush.)
-    if (flags & BASE1_CLIP_MAP) != 0 && g > r && g > b && sat > 0.15 {
+    // Rule 3: Base1ClipMap cutout cards (foliage, wildflowers, vines) → Foliage
+    // so alpha-cutout flora never receives masonry POM distortion.
+    if (flags & BASE1_CLIP_MAP) != 0 && ((g > r && g > b && sat > 0.15) || sat > 0.22) {
         return SurfaceCategory::Foliage;
     }
 
@@ -278,20 +299,41 @@ pub fn classify(stats: &SurfaceStats, surface_type_flags: u32) -> SurfaceCategor
         return SurfaceCategory::Snow;
     }
 
-    // Rule 6: Tan/beige (hue 30–60, sat 0.2–0.4, lum ≥ 0.55) + low
-    // variance → Sand. The luminance gate matters: real sand is pale
-    // and warm, separating it from low-lum browns that should hit
-    // Wood/Dirt below.
-    if (30.0..=60.0).contains(&hue) && sat >= 0.2 && sat <= 0.5 && lum >= 0.55 && var < 0.06 {
+    // Rule 6: Tan/beige (hue 30–60, sat 0.2–0.5, lum ≥ 0.55) + low
+    // variance → Sand.
+    if (30.0..=60.0).contains(&hue) && sat >= 0.2 && sat <= 0.5 && lum >= 0.55 && var < 0.055 {
         return SurfaceCategory::Sand;
     }
 
-    // Rule 7: Red-dominant (R > 1.5 × G and 1.5 × B) in the orange/
-    // brown hue band (5–45°) → Wood (dark) or Dirt (light). Tuned to
-    // catch real wood/dirt where saturation is often 0.5–0.8 (the
-    // hand-off "low sat" wording reads as "lower than pure red", not
-    // a literal sat < 0.45 cap). The hue band excludes pure-red
-    // banners / dyed cloth which sit around 0° or 350°.
+    // Rule 6b: High-variance warm red/terracotta masonry with mortar contrast → Brick.
+    if var >= 0.042
+        && r > g * 1.22
+        && r > b * 1.35
+        && (!(28.0..345.0).contains(&hue))
+        && (0.20..=0.80).contains(&sat)
+        && (0.12..=0.68).contains(&lum)
+    {
+        return SurfaceCategory::Brick;
+    }
+
+    // Rule 6c: Patterned slate / terracotta / thatch roof shingles & tiles → Tile.
+    if (185.0..=255.0).contains(&hue)
+        && (0.12..=0.55).contains(&sat)
+        && (0.12..=0.65).contains(&lum)
+        && var >= 0.028
+    {
+        return SurfaceCategory::Tile;
+    }
+    if (22.0..=55.0).contains(&hue)
+        && (0.18..=0.65).contains(&sat)
+        && (0.35..=0.68).contains(&lum)
+        && var >= 0.055
+    {
+        return SurfaceCategory::Tile;
+    }
+
+    // Rule 7: Red-dominant (R > 1.4 × G and 1.4 × B) in the orange/
+    // brown hue band (5–50°) → Wood (dark) or Dirt (light).
     if r > g * 1.4 && r > b * 1.4 && (5.0..=50.0).contains(&hue) {
         if lum < 0.35 {
             return SurfaceCategory::Wood;
@@ -300,38 +342,36 @@ pub fn classify(stats: &SurfaceStats, surface_type_flags: u32) -> SurfaceCategor
         }
     }
 
-    // Rule 8: Brown wood / dirt without strict R>1.4G threshold —
-    // catches the more muted oak / pine tones where green's been
-    // boosted by AC's palette. Hue band 15–55 (orange/brown), modest
-    // saturation, generous variance (cottage walls have rough texture
-    // detail — variance up to ~0.12 is normal).
+    // Rule 8: Brown wood / dirt / rough bark & timber without strict R>1.4G.
     if (15.0..=55.0).contains(&hue) && sat >= 0.1 && sat <= 0.65 && var < 0.13 {
         if lum < 0.35 {
             return SurfaceCategory::Wood;
         } else if lum < 0.55 {
             return SurfaceCategory::Dirt;
         }
-        // higher-luminance brown→tan band already hit Sand above.
     }
 
     // Rule 9: Gray + low variance + high luminance → Metal.
-    // Polished iron / steel surfaces are bright but desaturated and
-    // smooth. The variance threshold separates them from stone.
-    if sat < 0.12 && lum > 0.45 && var < 0.025 {
+    if sat < 0.12 && lum > 0.45 && var < 0.022 {
         return SurfaceCategory::Metal;
     }
 
-    // Rule 10: Gray-ish + low variance + low-to-mid luminance → Stone.
-    // Includes polished marble, smooth flagstone, and dark stone
-    // (lum >= 0.10 floor; below that is silhouette/shadow surfaces).
-    if sat < 0.2 && lum >= 0.10 && lum <= 0.65 && var < 0.04 {
+    // Rule 9b: Smooth saturated dyed banners / tapestries → Cloth.
+    if sat >= 0.45
+        && var < 0.015
+        && (!(15.0..325.0).contains(&hue) || (195.0..=265.0).contains(&hue))
+    {
+        return SurfaceCategory::Cloth;
+    }
+
+    // Rule 10: Gray/warm-gray smooth flagstone & fortress blocks → Stone.
+    if sat < 0.22 && (0.08..=0.70).contains(&lum) && var < 0.04 {
         return SurfaceCategory::Stone;
     }
 
-    // Rule 11: Gray + high variance → Stone (rough). Brick patterns
-    // fall here per hand-off note (lump brick into Stone for now,
-    // Phase 1.5 will override known brick DIDs).
-    if sat < 0.25 && lum >= 0.10 && var >= 0.025 {
+    // Rule 11: Patterned / high-variance masonry, cobblestones, dungeon stone,
+    // Linvak Tukal dark granite, and Sanamar warm sandstone → Stone.
+    if sat < 0.32 && (0.08..=0.76).contains(&lum) && var >= 0.018 {
         return SurfaceCategory::Stone;
     }
 
@@ -525,6 +565,24 @@ mod tests {
         let s = stats([0.5, 0.3, 0.5], [0.05; 3], 0.02, 300.0, 0.4);
         let c = classify(&s, 0);
         assert_eq!(c, SurfaceCategory::Generic);
+    }
+
+    #[test]
+    fn classify_brick_and_tile_and_cloth() {
+        // Warm red brickwork with bright/dark mortar contrast.
+        let brick = stats([0.52, 0.25, 0.18], [0.14; 3], 0.065, 12.0, 0.65);
+        assert_eq!(classify(&brick, 0), SurfaceCategory::Brick);
+        assert!(SurfaceCategory::Brick.pom_depth_scale() >= 0.035);
+
+        // Blue-slate roof shingles with mortar/course shadow lines.
+        let slate = stats([0.28, 0.32, 0.40], [0.10; 3], 0.045, 220.0, 0.30);
+        assert_eq!(classify(&slate, 0), SurfaceCategory::Tile);
+        assert!(SurfaceCategory::Tile.pom_depth_scale() >= 0.030);
+
+        // Smooth crimson banner cloth -> flat (0.0 POM depth).
+        let banner = stats([0.65, 0.12, 0.14], [0.02; 3], 0.008, 358.0, 0.81);
+        assert_eq!(classify(&banner, 0), SurfaceCategory::Cloth);
+        assert_eq!(SurfaceCategory::Cloth.pom_depth_scale(), 0.0);
     }
 
     #[test]

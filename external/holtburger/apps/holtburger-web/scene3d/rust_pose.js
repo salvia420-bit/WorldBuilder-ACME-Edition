@@ -80,9 +80,10 @@ export function rustPoseWorldFromPose(pose) {
     typeof pose.heading === "number" && Number.isFinite(pose.heading)
       ? pose.heading
       : 0.0;
+  const dericostY = (lbId & 0x8000) !== 0 ? 68928.0 : 0.0;
   return {
     x: ((lbId >>> 24) & 0xff) * 192.0 + lx,
-    y: ((lbId >>> 16) & 0xff) * 192.0 + ly,
+    y: dericostY + ((lbId >>> 16) & 0xff) * 192.0 + ly,
     z: lz,
     qw: Math.cos(heading * 0.5),
     qz: Math.sin(heading * 0.5),

@@ -162,18 +162,18 @@ await check("PartDegrade: default degMul 0 hides the wide part at 150 m; RETAIL_
 });
 
 console.log("\n5. EntityManager construction site");
-await check("?partDegrade=on builds PartDegrade with degMul RETAIL_DEG_MUL; absent builds none", async () => {
+await check("default ON builds PartDegrade with degMul RETAIL_DEG_MUL; ?partDegrade=off builds none", async () => {
   const THREE = await import("three");
   const { EntityManager } = await import("../scene3d/entities.js");
   const prevWindow = globalThis.window;
   try {
-    globalThis.window = { location: { search: "?partDegrade=on" } };
-    const em = new EntityManager({ entitiesGroup: new THREE.Group(), materialCache: null }, {});
-    assert(em._partDegrade instanceof PartDegrade, "PartDegrade built");
-    assert(em._partDegrade.degMul === RETAIL_DEG_MUL, `degMul ${em._partDegrade.degMul}`);
     globalThis.window = { location: { search: "" } };
+    const em = new EntityManager({ entitiesGroup: new THREE.Group(), materialCache: null }, {});
+    assert(em._partDegrade instanceof PartDegrade, "PartDegrade built by default");
+    assert(em._partDegrade.degMul === RETAIL_DEG_MUL, `degMul ${em._partDegrade.degMul}`);
+    globalThis.window = { location: { search: "?partDegrade=off" } };
     const em2 = new EntityManager({ entitiesGroup: new THREE.Group(), materialCache: null }, {});
-    assert(em2._partDegrade === null, "default OFF: no PartDegrade");
+    assert(em2._partDegrade === null, "?partDegrade=off: no PartDegrade");
   } finally {
     if (prevWindow === undefined) delete globalThis.window; else globalThis.window = prevWindow;
   }

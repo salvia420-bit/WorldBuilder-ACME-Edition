@@ -224,7 +224,7 @@ import { registerBatchClassPrewarm, prewarmBatchClasses, programsOf, programPend
 // ===========================================================================
 
 let _flag = null;
-/** `?entityBatch` (DEFAULT OFF): read once through rustFlag. */
+/** `?entityBatch` (DEFAULT OFF; `=on|1|true|yes` enables): read once through rustFlag. */
 export function entityBatchEnabled() {
   if (_flag === null) _flag = rustFlag("entityBatch", false);
   return _flag;
@@ -240,7 +240,7 @@ export function __setEntityBatchForTest(v) { _flag = v === undefined ? null : !!
  * The program keys a POM member may carry (header "POM PARTS"): the kit's
  * array pattern (anim_scenery_batch.js ARRAY_CHAIN_KEY) with `p1`.
  */
-export const ENTITY_POM_CHAIN_KEY = /^hb\|d0\|c0\|p1\|l[01]\|a0\|b0\|f0\|s0\|k0(?:\|mc[01]\|ms[01])?\|v$/;
+export const ENTITY_POM_CHAIN_KEY = /^(?:hb\|d0\|c0\|p1\|l[01]\|a0\|b0\|f0\|s0\|k0(?:\|mc[01]\|ms[01])?\|v(?:\|palPbr1)?|hb\|d0\|c0\|p0\|l[01]\|a0\|b0\|f0\|s0\|k0(?:\|mc[01]\|ms[01])?\|v\|palPbr1|\|palPbr1)$/;
 /** The layer a batched leaf is parked on: no camera and no raycaster enables it. */
 export const ENTITY_PARK_LAYER = 31;
 /** `Layers.set(31)`'s mask, as three r184 stores it (`(1 << layer | 0) >>> 0`: unsigned). */
@@ -556,7 +556,7 @@ function _arrayView(member) {
   let v = _arrayViews.get(member);
   if (!v) {
     v = Object.create(member);
-    const p0Key = function hbEntityP0Key() { return String(member.customProgramCacheKey()).replace("|p1|", "|p0|"); };
+    const p0Key = function hbEntityP0Key() { return String(member.customProgramCacheKey()).replace("|p1|", "|p0|").replace(/\|palPbr1$/, ""); };
     Object.defineProperty(v, "customProgramCacheKey", {
       get() { return member.customProgramCacheKey === _PROTO_KEY ? _PROTO_KEY : p0Key; },
       configurable: true, enumerable: false,

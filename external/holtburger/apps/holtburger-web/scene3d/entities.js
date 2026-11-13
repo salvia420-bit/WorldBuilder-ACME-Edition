@@ -581,11 +581,13 @@ function readLinkOnlyBakeFlag() {
 // `readDeadReckonFlag` / `readEntityLightsFlag`.
 function readSortCenterFlag() {
   try {
-    if (typeof window === "undefined" || !window.location) return false;
-    const v = new URLSearchParams(window.location.search).get("sortCenter");
-    return typeof v === "string" && v.toLowerCase() === "on";
+    if (typeof window === "undefined" || !window.location) return true;
+    const raw = new URLSearchParams(window.location.search).get("sortCenter");
+    if (raw == null || raw === "") return true;
+    const v = raw.trim().toLowerCase();
+    return !(v === "off" || v === "0" || v === "false" || v === "no");
   } catch (_) {
-    return false;
+    return true;
   }
 }
 
@@ -1209,6 +1211,7 @@ import { rustFlag } from "./rust/scene_core.js";
 // `this._entityBatch` / `inst._hbBatch` test on a property that stays null /
 // undefined, and nothing of the kit runs or allocates.
 import { EntityBatch, entityBatchEnabled } from "./gpu_batch/entity_batch.js";
+import { WeenieContactShadows, weenieContactShadowsEnabled } from "./weenie_contact_shadows.js";
 // J5 (PARITY-D, 2026-08-13) — retail's `MotionTableManager::pending_animations`
 // (acclient.h:31103). One playhead (`inst._unifiedSeq`), an ORDERED queue
 // behind it. See scene3d/motion_queue.js for the decomp transcription.
@@ -2032,13 +2035,110 @@ const CAST_SYNTHETIC_CASTER_VFX = (() => {
 const CYCLE_OMEGA_ON = (() => {
   try {
     if (typeof window === "undefined" || !window.location) return true;
-    return (
-      new URLSearchParams(window.location.search).get("cycleOmega")?.toLowerCase() !== "off"
-    );
+    const raw = new URLSearchParams(window.location.search).get("cycleOmega");
+    if (raw == null || raw === "") return true;
+    const v = raw.trim().toLowerCase();
+    return !(v === "off" || v === "0" || v === "false" || v === "no");
   } catch (_) {
     return true;
   }
 })();
+
+// Pass 2 — deterministic per-guid initial Ready/idle phase desync (`?idleDesync=off` escape).
+// Active by default on live Scene3D boots (`scene3d.quality` present) or explicit `=on`.
+function _readIdleDesyncMode() {
+  try {
+    if (typeof window === "undefined" || !window.location) return "auto";
+    const raw = new URLSearchParams(window.location.search).get("idleDesync");
+    if (raw == null || raw === "") return "auto";
+    const v = raw.trim().toLowerCase();
+    if (v === "off" || v === "0" || v === "false" || v === "no") return "off";
+    if (v === "on" || v === "1" || v === "true" || v === "yes") return "on";
+    return "auto";
+  } catch (_) {
+    return "auto";
+  }
+}
+
+// Pass 2 — paletted clothing/armor/creature PBR shading (`?palettedPbr=off` escape):
+// cloth/leather/metal roughness differentiation + CSM reception + wrapped half-Lambert
+// shadow softening + soft grazing rim sheen + anti-aliased UV micro-weave normal detail
+// under a single shared cache-key suffix (`|palPbr1`, zero shader-key explosion).
+function _readPalettedPbrMode() {
+  try {
+    if (typeof window === "undefined" || !window.location) return "auto";
+    const raw = new URLSearchParams(window.location.search).get("palettedPbr");
+    if (raw == null || raw === "") return "auto";
+    const v = raw.trim().toLowerCase();
+    if (v === "off" || v === "0" || v === "false" || v === "no") return "off";
+    if (v === "on" || v === "1" || v === "true" || v === "yes") return "on";
+    return "auto";
+  } catch (_) {
+    return "auto";
+  }
+}
+
+function _palettedSurfaceMaterialProps(did) {
+  const u = (did >>> 0);
+  if (u === 0) return { roughness: 0.80, metalness: 0.02 };
+  const h = (Math.imul(u ^ (u >>> 13), 0x9e3779b1)) >>> 0;
+  const bucket = h & 7;
+  if (bucket === 0) return { roughness: 0.42, metalness: 0.30 }; // metallic armor / trim
+  if (bucket <= 2) return { roughness: 0.64, metalness: 0.04 };  // leather / hide / chitin
+  return { roughness: 0.82, metalness: 0.0 };                    // woven cloth / skin / fur
+}
+
+function _installPalettedWeeniePbrPatch(mat) {
+  if (!mat || (mat.userData && mat.userData.__palPbrPatched)) return;
+  mat.userData = { ...(mat.userData || {}), __palPbrPatched: true };
+  const prevCompile = typeof mat.onBeforeCompile === "function" ? mat.onBeforeCompile : null;
+  const prevKey = typeof mat.customProgramCacheKey === "function" ? mat.customProgramCacheKey : null;
+  mat.onBeforeCompile = (shader, renderer) => {
+    if (prevCompile) prevCompile(shader, renderer);
+    if (!shader || typeof shader.fragmentShader !== "string") return;
+    let fs = shader.fragmentShader;
+    const hasLightClamp = Boolean(mat.userData && (mat.userData.__lightClampPatched || mat.userData.__lightClampRetailPatched));
+    // Procedural anti-aliased UV micro-weave / hide grain normal detail (0 extra texture binds).
+    if (fs.includes("#include <normal_fragment_maps>")) {
+      fs = fs.replace(
+        "#include <normal_fragment_maps>",
+        `#include <normal_fragment_maps>
+#ifdef USE_MAP
+{
+  vec2 _pwUv = vMapUv * 96.0;
+  vec2 _pwFw = fwidth(_pwUv);
+  float _pwAtten = 1.0 - smoothstep(0.22, 0.85, max(_pwFw.x, _pwFw.y));
+  if (_pwAtten > 0.001) {
+    float _pwW = sin(_pwUv.x * 6.2831853) * cos(_pwUv.y * 6.2831853);
+    vec2 _pwGrad = vec2(
+      cos(_pwUv.x * 6.2831853) * cos(_pwUv.y * 6.2831853),
+      -sin(_pwUv.x * 6.2831853) * sin(_pwUv.y * 6.2831853)
+    ) * (0.026 * _pwAtten * roughnessFactor);
+    normal = normalize(normal + vec3(_pwGrad.x, _pwGrad.y, 0.0) + vec3(0.0, 0.0, _pwW * 0.004));
+  }
+}
+#endif`
+      );
+    }
+    // Wrapped shadow lift + soft grazing cloth/hide rim sheen after lighting accumulation.
+    if (fs.includes("#include <lights_fragment_end>")) {
+      const wrapBoost = hasLightClamp ? "0.045" : "0.085";
+      fs = fs.replace(
+        "#include <lights_fragment_end>",
+        `#include <lights_fragment_end>
+{
+  float _pwNdotV = clamp(abs(dot(geometryNormal, geometryViewDir)), 0.0, 1.0);
+  float _pwRim = pow(1.0 - _pwNdotV, 3.1);
+  float _pwLit = clamp(dot(reflectedLight.directDiffuse + reflectedLight.indirectDiffuse, vec3(0.3333)), 0.0, 1.5);
+  reflectedLight.indirectDiffuse += diffuseColor.rgb * (${wrapBoost} * roughnessFactor + _pwRim * 0.055 * roughnessFactor * clamp(_pwLit + 0.25, 0.0, 1.0));
+}`
+      );
+    }
+    shader.fragmentShader = fs;
+  };
+  mat.customProgramCacheKey = () => (prevKey ? prevKey.call(mat) : "") + "|palPbr1";
+  mat.needsUpdate = true;
+}
 
 // MT_CLASS_FALLBACK (motion-dispatch audit §5, 2026-06-09) — `?mtClassFallback=on`
 // gates the Stage-1 generic class-mask fallback in `classifyMotionCommand`: when
@@ -4308,6 +4408,9 @@ export class EntityManager {
     // `?etherealGhost=on` (else `_ethereal` is state only and must not hold a
     // rig legacy).
     this._entityBatch = (typeof entityBatchEnabled === "function" && entityBatchEnabled()) ? new EntityBatch(this, { etherealGhost: ETHEREAL_GHOST }) : null;
+    this._contactShadows = (typeof weenieContactShadowsEnabled === "function" && weenieContactShadowsEnabled())
+      ? new WeenieContactShadows(scene3d)
+      : null;
     // A5-P2 (`?tweenClock`, default on) — accumulated-dt tween clock (ms).
     // Advanced at the top of `tick(dt)` by the same dt the mixers consume;
     // read via `_tweenNowMs()` by the pose-tween tickers + their stamp sites.
@@ -5448,7 +5551,7 @@ export class EntityManager {
               // tag userData.surfaceTypeFlags, mirroring the plain path's
               // `_materialFromFlags`. Without this, recolored luminous/translucent/
               // clipmap gear rendered flat-opaque. Fail-soft on surfaceType=0.
-              this._applyPalettedSurfaceRenderState(mat, palSurfaceState);
+              this._applyPalettedSurfaceRenderState(mat, palSurfaceState, did);
               mat.name = `paletted-${did.toString(16)}-${paletteId.toString(16)}`;
               // 2026-05-28 — install into the paletted-material cache
               // so the next entity with the same (DID, paletteId,
@@ -5864,6 +5967,34 @@ export class EntityManager {
         _spawnOnPlayhead = this._installUnifiedLoco(
           inst, animEntry.sequenceDescriptor, cacheKey0, animEntry, initialMotion,
         );
+        // Pass 2 — deterministic per-guid Ready/idle phase desync so towns full of
+        // guards, shopkeepers, and monsters breathe organically out of phase instead
+        // of bobbing in robotic lockstep.
+        if (
+          _spawnOnPlayhead &&
+          _cls0 === "idle" &&
+          !isDoorStateMotion(initialMotion) &&
+          !this._isLocalPlayerGuid(guid >>> 0)
+        ) {
+          const idleMode = _readIdleDesyncMode();
+          if (idleMode === "on" || (idleMode !== "off" && Boolean(this.scene3d?.quality))) {
+            const lo0 = inst._unifiedLoco;
+            if (lo0?.seq && typeof lo0.seq.seekPhase === "function") {
+              const phase0 = ((Math.imul(guid >>> 0, 2654435761)) >>> 0) / 4294967296;
+              try {
+                lo0.seq.seekPhase(phase0);
+                if (this._hookFrameExitOn && typeof unifiedHookTime === "function") {
+                  lo0.lastHookTime = unifiedHookTime(
+                    lo0.seq.globalFrameIndex,
+                    lo0.desc.frameTimes,
+                    +lo0.desc.framerate || 0
+                  );
+                }
+                poseRigAt(lo0.seq.globalFrameIndex, lo0.desc, inst.parts, true);
+              } catch (_) {}
+            }
+          }
+        }
         // Seed the motion-state memory with the spawn state so the FIRST server
         // Motion broadcast (e.g. Use → On) resolves its MotionTable LINK
         // (Off→On = the authored opening swing; On→Off = the same anim at
@@ -6849,7 +6980,7 @@ export class EntityManager {
           side: THREE.DoubleSide,
           transparent: false,
         });
-        this._applyPalettedSurfaceRenderState(mat, palSurfaceState);
+        this._applyPalettedSurfaceRenderState(mat, palSurfaceState, did);
         mat.name = `paletted-${did.toString(16)}-${paletteId.toString(16)}`;
         if (cache) {
           cache.installPaletted(did, paletteId, subPalettes, mat, tex);
@@ -6941,12 +7072,52 @@ export class EntityManager {
    * Retail mapping: blend states D3DPolyRender::SetSurface acclient.c:454470
    * (Alpha → SRCALPHA/INVSRCALPHA), :454513 (Translucent), emissive @454688.
    */
-  _applyPalettedSurfaceRenderState(mat, state) {
+  _applyPalettedWeeniePbrAndCsm(mat, flags, did = 0) {
+    if (!mat) return;
+    const pbrMode = _readPalettedPbrMode();
+    if (pbrMode === "off") return;
+    const csmState = this.materialCache?.csmState ?? this.scene3d?.csmState ?? null;
+    const active = pbrMode === "on" || Boolean(this.scene3d?.quality || csmState);
+    if (!active) return;
+
+    const isAdditive = (flags & SURFACE_TYPE.Additive) !== 0;
+    const isTranslucent = (flags & SURFACE_TYPE.Translucent) !== 0;
+    const isAlpha = (flags & SURFACE_TYPE.Alpha) !== 0;
+    const isInvAlpha = (flags & SURFACE_TYPE.InvAlpha) !== 0;
+    if (isAdditive || isTranslucent || isAlpha || isInvAlpha) return;
+    if (mat.transparent && !(mat.alphaTest > 0)) return;
+
+    const props = _palettedSurfaceMaterialProps(did);
+    mat.roughness = props.roughness;
+    mat.metalness = props.metalness;
+
+    // Default (`auto`): apply cloth/leather/metal PBR roughness & metalness
+    // directly on Three's shared MeshStandardMaterial program (zero extra shader
+    // compiles or synchronous link stalls in NPC-dense towns). Explicit
+    // `?palettedPbr=on` opts into the custom |palPbr1 micro-weave + CSM chain.
+    if (pbrMode === "on") {
+      if (csmState && typeof installCsmShaderPatch === "function" &&
+          (!this._entityBatch || this._entityBatch.inert || this.scene3d?.csmEnabled)) {
+        installCsmShaderPatch(mat, csmState);
+      }
+      if (typeof installLightClampShaderPatch === "function") {
+        installLightClampShaderPatch(mat);
+      }
+      _installPalettedWeeniePbrPatch(mat);
+    }
+  }
+
+  _applyPalettedSurfaceRenderState(mat, state, did = 0) {
     if (!mat || !state) return;
     const flags = (state.surfaceType ?? 0) >>> 0;
     // Persist the bitfield regardless — AnimationHook material ramps read it.
     mat.userData = { ...(mat.userData || {}), surfaceTypeFlags: flags };
-    if (flags === 0) return; // fail-soft: empty/fallback surface stays opaque
+    if (flags === 0) {
+      if (typeof this?._applyPalettedWeeniePbrAndCsm === "function") {
+        this._applyPalettedWeeniePbrAndCsm(mat, 0, did);
+      }
+      return; // fail-soft: empty/fallback surface stays opaque
+    }
     const sfTranslucency = +(state.translucency ?? 0.0);
     const sfLuminosity = +(state.luminosity ?? 0.0);
     const sfDiffuse = +(state.diffuse ?? 0.0);
@@ -6975,6 +7146,9 @@ export class EntityManager {
         },
         { texture: mat.map ?? null },
       );
+      if (typeof this?._applyPalettedWeeniePbrAndCsm === "function") {
+        this._applyPalettedWeeniePbrAndCsm(mat, flags, did);
+      }
       return;
     }
     const isTranslucent = (flags & SURFACE_TYPE.Translucent) !== 0;
@@ -7084,6 +7258,9 @@ export class EntityManager {
     // stays so the escape keeps single-pass parity. A no-op unless the ladder above
     // actually made this material transparent.
     applyRetailSinglePass(mat);
+    if (typeof this?._applyPalettedWeeniePbrAndCsm === "function") {
+      this._applyPalettedWeeniePbrAndCsm(mat, flags, did);
+    }
     mat.needsUpdate = true;
   }
 
@@ -12010,6 +12187,10 @@ export class EntityManager {
         bs = 0;
       }
       if (!Number.isFinite(bs) || bs < 0) bs = 0;
+      if (this._cycleBaseSpeedCache.size >= 512) {
+        const oldest = this._cycleBaseSpeedCache.keys().next().value;
+        if (oldest !== undefined) this._cycleBaseSpeedCache.delete(oldest);
+      }
       this._cycleBaseSpeedCache.set(cacheKey, bs);
     }
     if (inst._locoCycleKey === cacheKey) inst._locoBaseSpeed = bs;
@@ -12037,6 +12218,10 @@ export class EntityManager {
             : null;
       } catch (_) {
         o = null;
+      }
+      if (this._cycleOmegaCache.size >= 512) {
+        const oldest = this._cycleOmegaCache.keys().next().value;
+        if (oldest !== undefined) this._cycleOmegaCache.delete(oldest);
       }
       this._cycleOmegaCache.set(cacheKey, o);
     }
@@ -13897,7 +14082,7 @@ export class EntityManager {
           mat.userData = { ...(mat.userData || {}), __disposable: true };
           // C1 — apply palette-path Surface Tier-1 render-state + tag
           // surfaceTypeFlags (mirrors the plain `_materialFromFlags` path).
-          this._applyPalettedSurfaceRenderState(mat, palSurfaceState);
+          this._applyPalettedSurfaceRenderState(mat, palSurfaceState, did);
           newOwnedMaterials.push(mat);
           newOwnedTextures.push(tex);
           entityMaterials.set(did, mat);
@@ -15509,6 +15694,7 @@ export class EntityManager {
     const hadCsm = !!(source.userData && (source.userData.csmEnabled || source.userData.__csmShaderPatched));
     const hadClamp = !!(source.userData && (source.userData.lightClampRetail || source.userData.__lightClampPatched || source.userData.__lightClampRetailPatched));
     const hadPom = !!(source.userData && (source.userData.pomEnabled || source.userData.__pomPatched));
+    const hadPalPbr = !!(source.userData && source.userData.__palPbrPatched);
     const csmState = materialCache?.csmState ?? scene3d?.csmState ?? null;
     const pomOpts = materialCache?.pomOpts ?? null;
     if (hadCsm && csmState) {
@@ -15519,6 +15705,9 @@ export class EntityManager {
     }
     if (hadPom) {
       _reinstallClonePom(clone, source, pomOpts);
+    }
+    if (hadPalPbr) {
+      _installPalettedWeeniePbrPatch(clone);
     }
     if (!clone.onBeforeCompile && source.onBeforeCompile) {
       clone.onBeforeCompile = source.onBeforeCompile;
@@ -17215,6 +17404,18 @@ export class EntityManager {
         inst._lodOriginalSetup = 0;
         continue;
       }
+      // Pass 2 — zero-blink per-part LOD: when PartDegrade is active on a built
+      // part-rig, PartDegrade swaps degrade meshes smoothly in-place without
+      // despawn-and-rebuild (`remove()+spawn()`) blink.
+      if (
+        this._partDegrade &&
+        !this._partDegrade.off &&
+        Array.isArray(inst.parts) &&
+        inst.parts.length > 0 &&
+        (inst.parts.length > 1 || ((inst.parts[0]?.userData?.didDegrade ?? 0) >>> 0) !== 0)
+      ) {
+        continue;
+      }
       // Bug 6 (2026-10-07): never LOD-respawn (remove()+spawn()) a dying
       // creature or a corpse mid-handoff — it wiped the ragdoll and the
       // `_deathAt` stamp the corpse claim needs, so the corpse came up in the
@@ -17884,6 +18085,34 @@ export class EntityManager {
     const _sortCenterCamera = this._sortCenterOn
       ? (this.scene3d?.cameraSwitcher?.activeCamera ?? this.scene3d?.camera ?? null)
       : null;
+    // Pass 2 — resolve active camera, frustum, local player, and selected target
+    // ONCE per tick for distant (>80m) / off-screen `poseRigAt` throttling.
+    const _rigThrottleCamera =
+      this.scene3d?.cameraSwitcher?.activeCamera ?? this.scene3d?.camera ?? null;
+    const _rigLocalGuid = this._localPlayerGuid();
+    const _rigSelGuid = (this._selectedGuid >>> 0) || 0;
+    let _rigFrustum = null;
+    let _rigSphere = null;
+    if (
+      _rigThrottleCamera?.projectionMatrix &&
+      _rigThrottleCamera?.matrixWorldInverse &&
+      typeof THREE?.Frustum === "function" &&
+      typeof THREE?.Matrix4 === "function" &&
+      typeof THREE?.Sphere === "function"
+    ) {
+      if (!this._rigFrustumScratch) {
+        this._rigFrustumScratch = new THREE.Frustum();
+        this._rigProjScreenScratch = new THREE.Matrix4();
+        this._rigSphereScratch = new THREE.Sphere();
+      }
+      this._rigProjScreenScratch.multiplyMatrices(
+        _rigThrottleCamera.projectionMatrix,
+        _rigThrottleCamera.matrixWorldInverse
+      );
+      this._rigFrustumScratch.setFromProjectionMatrix(this._rigProjScreenScratch);
+      _rigFrustum = this._rigFrustumScratch;
+      _rigSphere = this._rigSphereScratch;
+    }
     // RP2 (2026-06-08) — monotonic per-tick frame counter for the far-band
     // smoothing stride. Only incremented when a stride is configured, so the
     // default (stride==1) path never even touches it. Bounded growth is fine
@@ -18337,12 +18566,62 @@ export class EntityManager {
           // playhead faster/slower. Rust phase carry makes swaps seamless.
           const lo = inst._unifiedLoco;
           const step = dt * this._unifiedLocoGaitScale(inst, this._cycleBaseSpeedCache.get(lo.cacheKey) ?? 0);
+          // Pass 2 — skip `poseRigAt` skeletal matrix updates on hidden, off-screen,
+          // or distant (>80m) non-targeted entities (throttling distant/off-screen
+          // rigs to ~6.25 Hz while keeping sequence clock & hooks exact).
+          let shouldPoseRig = true;
+          if (inst.root && inst.root.visible === false) {
+            shouldPoseRig = false;
+            inst._rigPoseDeferred = true;
+          } else if (
+            _rigThrottleCamera?.position &&
+            inst.root?.position &&
+            inst._attachedParentGuid == null
+          ) {
+            const gU = inst.guid >>> 0;
+            const isFocus = (_rigLocalGuid !== null && gU === _rigLocalGuid) || (gU !== 0 && gU === _rigSelGuid);
+            if (!isFocus) {
+              const cp = _rigThrottleCamera.position;
+              const rp = inst.root.position;
+              const rdx = cp.x - rp.x;
+              const rdy = cp.y - rp.z;
+              const rdz = cp.z + rp.y;
+              const rDistSq = rdx * rdx + rdy * rdy + rdz * rdz;
+              let throttleRig = rDistSq > 6400; // > 80m
+              if (!throttleRig && rDistSq > 400 && _rigFrustum && _rigSphere) {
+                _rigSphere.center.set(rp.x, rp.z, -rp.y);
+                _rigSphere.radius = 3.5;
+                if (!_rigFrustum.intersectsSphere(_rigSphere)) throttleRig = true;
+              }
+              if (throttleRig) {
+                if (typeof inst._rigThrottleAccum !== "number") {
+                  inst._rigThrottleAccum = (gU & 15) * 0.01;
+                }
+                inst._rigThrottleAccum += dt;
+                if (inst._rigThrottleAccum >= 0.16) {
+                  inst._rigThrottleAccum = 0;
+                  inst._rigPoseDeferred = false;
+                } else {
+                  shouldPoseRig = false;
+                  inst._rigPoseDeferred = true;
+                }
+              } else {
+                inst._rigThrottleAccum = 0;
+                inst._rigPoseDeferred = false;
+              }
+            } else {
+              inst._rigThrottleAccum = 0;
+              inst._rigPoseDeferred = false;
+            }
+          }
           if (step >= 0) {
             lo.seq.advance(step);
             // A held door/chest state cycle is a static pose, so it is posed
             // raw. In place is for locomotion strides only (see
             // _playStateHoldLink).
-            poseRigAt(lo.seq.globalFrameIndex, lo.desc, inst.parts, lo.hold !== true);
+            if (shouldPoseRig) {
+              poseRigAt(lo.seq.globalFrameIndex, lo.desc, inst.parts, lo.hold !== true);
+            }
             // Footfalls (wrap-aware). A step of a whole loop or more wrapped
             // even when the clock landed past where it started.
             this._drainUnifiedHooks(inst, lo, step >= (+lo.desc.duration || Infinity));
@@ -18360,7 +18639,9 @@ export class EntityManager {
               p -= Math.floor(p);
               lo.seq.seekPhase(p);
             }
-            poseRigAt(lo.seq.globalFrameIndex, lo.desc, inst.parts, true);
+            if (shouldPoseRig) {
+              poseRigAt(lo.seq.globalFrameIndex, lo.desc, inst.parts, true);
+            }
             if (this._hookFrameExitOn) this._drainUnifiedHooksBackward(inst, lo, prevGf, wrapped);
             else lo.lastHookTime = -1; // legacy: no reverse footfalls
           }
@@ -18655,6 +18936,11 @@ export class EntityManager {
     // tick's mutations (its part rows are composed later, at the frame's first
     // batch draw, after every pose writer).
     if (this._entityBatch) this._entityBatch.sync();
+    if (this._contactShadows) {
+      try {
+        this._contactShadows.update(this);
+      } catch (_) {}
+    }
   }
 
   /** A11-S3: retail manager phase — ParticleManager::UpdateParticles then
@@ -20770,6 +21056,16 @@ export class EntityManager {
           try { this.remove(guid); } catch (_) {}
         }
       }
+      if (typeof ownerRegistry !== "undefined" && typeof ownerRegistry?.pruneStaleOwners === "function") {
+        try {
+          ownerRegistry.pruneStaleOwners(
+            (ownerKey) =>
+              typeof ownerKey !== "number" ||
+              this.entityMap.has(ownerKey >>> 0) ||
+              this.spawnInFlight.has(ownerKey >>> 0)
+          );
+        } catch (_) {}
+      }
     }
   }
 
@@ -20802,8 +21098,19 @@ export class EntityManager {
     // Batch 9 #2 (2026-06-07): drop all spawn-generation tokens.
     this._spawnGen.clear();
     this._lastAttach.clear();
+    this._cycleBaseSpeedCache.clear();
+    this._cycleOmegaCache.clear();
+    if (typeof ownerRegistry !== "undefined" && typeof ownerRegistry?.pruneStaleOwners === "function") {
+      try {
+        ownerRegistry.pruneStaleOwners((ownerKey) => typeof ownerKey !== "number");
+      } catch (_) {}
+    }
     this.animationCache.dispose();
     if (this._entityBatch) { try { this._entityBatch.dispose(); } catch (_) {} }
+    if (this._contactShadows) {
+      try { this._contactShadows.dispose(); } catch (_) {}
+      this._contactShadows = null;
+    }
     if (this._sharedFallback) {
       try {
         this._sharedFallback.dispose();

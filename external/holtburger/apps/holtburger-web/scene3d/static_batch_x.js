@@ -141,23 +141,25 @@ export function __resetStatBatchXForTest() {
 // short-circuits on an absent property) and eviction takes the identical
 // legacy branch.
 let _dedupFlag;
+let _dedupArmed = false;
 /** `?statGeomDedup=on` — content-key geometry dedup inside a chunk bucket.
  *  EXACT-match opt-in (url-flags.md header rule: never `!== "off"` for an
- *  opt-in). DEFAULT-OFF pending the 1070 re-base. */
+ *  opt-in); armed default-ON by live boot via `armStaticBatchXDefaults(true)`. */
 export function statGeomDedupEnabled() {
   if (_dedupFlag !== undefined) return _dedupFlag;
   let on = false;
+  if (_dedupArmed) on = true;
   try {
     if (typeof globalThis !== "undefined" && globalThis.location?.search) {
       const v = (new URLSearchParams(globalThis.location.search).get("statGeomDedup") || "").toLowerCase();
-      on = v === "on";
+      if (v) on = v === "on" || (_dedupArmed && !(v === "off" || v === "0" || v === "false" || v === "no"));
     }
   } catch (_) { on = false; }
   _dedupFlag = on;
   return on;
 }
 // Test seam.
-export function __setStatGeomDedupForTest(v) { _dedupFlag = v; }
+export function __setStatGeomDedupForTest(v) { _dedupFlag = v; if (v !== undefined) _dedupArmed = false; }
 
 const _dedupStats = { hits: 0, adds: 0, keyed: 0 };
 
@@ -471,23 +473,25 @@ const _MEMO_TRANS_DEFAULT_M = 8;    // world metres of camera translation slack
 const _MEMO_ROT_DEFAULT_DEG = 3;    // degrees of camera rotation slack
 
 let _noSortFlag;
+let _noSortArmed = false;
 /** `?statBatchNoSort=on` — drop the per-bucket instance depth sort for buckets
  *  whose material's blend is order-independent. EXACT-match opt-in (url-flags.md
- *  header rule: never `!== "off"` for an opt-in). */
+ *  header rule: never `!== "off"` for an opt-in); armed default-ON by live boot. */
 export function statBatchNoSortEnabled() {
   if (_noSortFlag !== undefined) return _noSortFlag;
   let on = false;
+  if (_noSortArmed) on = true;
   try {
     if (typeof globalThis !== "undefined" && globalThis.location?.search) {
       const v = (new URLSearchParams(globalThis.location.search).get("statBatchNoSort") || "").toLowerCase();
-      on = v === "on";
+      if (v) on = v === "on" || (_noSortArmed && !(v === "off" || v === "0" || v === "false" || v === "no"));
     }
   } catch (_) { on = false; }
   _noSortFlag = on;
   return on;
 }
 /** Test seam. */
-export function __setStatBatchNoSortForTest(v) { _noSortFlag = v; }
+export function __setStatBatchNoSortForTest(v) { _noSortFlag = v; if (v !== undefined) _noSortArmed = false; }
 
 let _memoMode;                                  // "off" | "exact" | "slack"
 let _memoTransM = _MEMO_TRANS_DEFAULT_M;
@@ -703,23 +707,36 @@ export function __setStatBatchMemoSlotsForTest(n) { _memoSlotsN = n; }
 //    the bad case.
 // ---------------------------------------------------------------------------
 let _sphereMode;
+let _sphereArmed = false;
 /** `?statBatchSphere=on` (cache) or `=verify` (cache + per-instance recompute
- *  and compare). Anything else, including absent, reads "off". */
+ *  and compare); armed default-ON (`=off` escapes) by live boot. */
 export function statBatchSphereMode() {
   if (_sphereMode !== undefined) return _sphereMode;
-  let mode = "off";
+  let mode = _sphereArmed ? "on" : "off";
   try {
     if (typeof globalThis !== "undefined" && globalThis.location?.search) {
       const v = (new URLSearchParams(globalThis.location.search).get("statBatchSphere") || "").toLowerCase();
       if (v === "on") mode = "on";
       else if (v === "verify") mode = "verify";
+      else if (v === "off" || v === "0" || v === "false" || v === "no") mode = "off";
     }
-  } catch (_) { mode = "off"; }
+  } catch (_) { mode = _sphereArmed ? "on" : "off"; }
   _sphereMode = mode;
   return mode;
 }
 /** Test seam. */
-export function __setStatBatchSphereForTest(mode) { _sphereMode = mode; }
+export function __setStatBatchSphereForTest(mode) { _sphereMode = mode; if (mode !== undefined) _sphereArmed = false; }
+
+/** Arm live-world defaults (`statGeomDedup`, `statBatchNoSort`, `statBatchSphere`) with `=off` URL escapes. */
+export function armStaticBatchXDefaults(on = true) {
+  const flag = !!on;
+  _dedupArmed = flag;
+  _noSortArmed = flag;
+  _sphereArmed = flag;
+  _dedupFlag = undefined;
+  _noSortFlag = undefined;
+  _sphereMode = undefined;
+}
 
 const _sphereStats = {
   calls: 0,          // onBeforeRender invocations that reached the cached path
@@ -782,7 +799,8 @@ function _shouldSortBucket(mat) {
     if (mat.blending === THREE.AdditiveBlending) return false;
     // A depth-writing alpha-MASK (ClipMap: alphaTest 0.784, opacity 1) is
     // resolved by the z-buffer, so range order cannot change the image.
-    if (mat.depthWrite === true) return false;
+    // Never skip sort on true alpha-blended translucent surfaces (opacity < 1 without alphaTest).
+    if (mat.depthWrite === true && (mat.alphaTest > 0 || !(mat.opacity < 1))) return false;
   } catch (_) { return true; /* fail-soft: keep the sort */ }
   return true;
 }
@@ -3133,7 +3151,7 @@ export function consolidateStaticSingletonsCrossLb(nodes, scene3d, lbId) {
       // per-instance matrices are never read), silently deleting every
       // placement but one. This path had never seen an InstancedMesh before
       // that flag, which is exactly why the guard did not exist.
-      if (n && n.isMesh && !n.isInstancedMesh && !n.isLOD && n.geometry && n.material && n.userData) {
+      if (n && n.isMesh && !n.isInstancedMesh && !n.isLOD && n.geometry && n.material && n.userData && n.userData.__poolHeldRs == null) {
         const key = n.material;
         let arr = byMat.get(key);
         if (!arr) { arr = []; byMat.set(key, arr); }

@@ -506,40 +506,58 @@ export function matchesEnvironment(manifest, environment) {
  *
  * Returns an unsubscribe function from `.on()`.
  */
+class EatableBusEvent {
+  constructor(type) {
+    this.type = type;
+    this.eaten = false;
+  }
+  eat() {
+    this.eaten = true;
+  }
+}
+
 export function createEatableBus() {
-  /** @type {Map<string, Set<Function>>} */
+  /** @type {Map<string, { set: Set<Function>, snap: Function[] | null }>} */
   const handlers = new Map();
 
   function on(name, handler) {
     if (typeof handler !== 'function') return () => {};
-    let set = handlers.get(name);
-    if (!set) {
-      set = new Set();
-      handlers.set(name, set);
+    let rec = handlers.get(name);
+    if (!rec) {
+      rec = { set: new Set(), snap: null };
+      handlers.set(name, rec);
     }
-    set.add(handler);
-    return () => set.delete(handler);
+    const prevSize = rec.set.size;
+    rec.set.add(handler);
+    if (rec.set.size !== prevSize) rec.snap = null;
+    return () => {
+      if (rec.set.delete(handler)) rec.snap = null;
+    };
   }
 
   function off(name, handler) {
-    const set = handlers.get(name);
-    if (set) set.delete(handler);
+    const rec = handlers.get(name);
+    if (rec && rec.set.delete(handler)) rec.snap = null;
   }
 
   function emit(name, payload) {
-    const set = handlers.get(name);
-    if (!set || set.size === 0) return { eaten: false, payload };
-    const event = Object.assign(
-      {
-        type: name,
-        eaten: false,
-        eat() { this.eaten = true; },
-      },
-      payload || {},
-    );
-    for (const h of [...set]) {
+    const rec = handlers.get(name);
+    if (!rec || rec.set.size === 0) return { eaten: false, payload };
+    const event = new EatableBusEvent(name);
+    if (payload != null && typeof payload === 'object') {
+      Object.assign(event, payload);
+    }
+    // Copy-on-write snapshot: zero per-emit array allocation while listeners
+    // are stationary, yet still safe against re-entrant `on`/`off` inside a
+    // handler because `on`/`off` null `rec.snap` rather than mutating `list`.
+    let list = rec.snap;
+    if (!list) {
+      list = Array.from(rec.set);
+      rec.snap = list;
+    }
+    for (let i = 0; i < list.length; i++) {
       try {
-        h(event);
+        list[i](event);
       } catch (e) {
         // eslint-disable-next-line no-console
         console.warn(`[bus] handler for "${name}" threw:`, e);
@@ -932,24 +950,28 @@ export async function fetchManifestIndex(opts) {
       return { skip: { reason: `index descriptor missing manifestPath: ${JSON.stringify(desc)}` } };
     }
     const manifestUrl = new URL(desc.manifestPath, base).href;
+    const devPromise = (probeDev && typeof desc.devPath === 'string')
+      ? (async () => {
+          const devUrl = new URL(desc.devPath, base).href;
+          try {
+            const res = await fetchImpl(devUrl);
+            return res.ok ? await res.json() : null;
+          } catch {
+            // 404 / network fail = no dev sidecar; intentional.
+            return null;
+          }
+        })()
+      : Promise.resolve(null);
     let manifest;
     try {
       const res = await fetchImpl(manifestUrl);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       manifest = await res.json();
     } catch (e) {
+      await devPromise;
       return { skip: { reason: `failed to fetch ${manifestUrl}: ${e.message}` } };
     }
-    let dev = null;
-    if (probeDev && typeof desc.devPath === 'string') {
-      const devUrl = new URL(desc.devPath, base).href;
-      try {
-        const res = await fetchImpl(devUrl);
-        if (res.ok) dev = await res.json();
-      } catch {
-        // 404 / network fail = no dev sidecar; intentional.
-      }
-    }
+    const dev = await devPromise;
     const modulePath = desc.entry
       ? new URL(desc.entry, base).href
       : (manifest.entry ? new URL(manifest.entry, new URL(manifestUrl)).href : '');

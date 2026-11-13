@@ -22,14 +22,18 @@
 // per-landblock disposables. `?cellStaticMerge=on` opts in (default OFF until a 1070 look
 // check: interiors through doorways at Holtburg, a dungeon room, a lantern's light).
 
-/** `?cellStaticMerge=on|1|true|yes` opts in. DEFAULT OFF. */
-export function cellStaticMergeEnabled() {
+/** `?cellStaticMerge=off|0|false|no` opts out. DEFAULT ON. */
+export function cellStaticMergeEnabled(search) {
   try {
-    if (typeof window === "undefined" || !window.location) return false;
-    const v = (new URLSearchParams(window.location.search).get("cellStaticMerge") || "").toLowerCase();
-    return v === "on" || v === "1" || v === "true" || v === "yes";
+    const s = typeof search === "string"
+      ? search
+      : (typeof window !== "undefined" && window && window.location && typeof window.location.search === "string"
+        ? window.location.search
+        : (typeof globalThis !== "undefined" && globalThis.location ? globalThis.location.search || "" : ""));
+    const v = (new URLSearchParams(s).get("cellStaticMerge") || "").trim().toLowerCase();
+    return !(v === "off" || v === "0" || v === "false" || v === "no");
   } catch (_) {
-    return false;
+    return true;
   }
 }
 

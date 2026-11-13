@@ -217,7 +217,7 @@ export const GRASS_DEFAULTS = Object.freeze({
   windWave: 0.06,         // radians of phase per metre downwind — rolling gusts
   bowAmount: 0.12,        // static forward bow, fraction of blade height
   lean: 0.35,             // how far a blade leans downhill with the ground normal
-  aoBase: 0.55,           // base-of-blade darkening (a free contact shadow)
+  aoBase: 0.42,           // root-of-blade earthy soil/humus AO (0.42x at vBladeT = 0)
   stompBend: 0.88,        // fraction of height removed at full stomp
   stompSplay: 0.55,       // lateral splay away from the stamp, x blade height
   stampRadiusM: 0.75,     // the player's footprint blob
@@ -267,17 +267,17 @@ export const GRASS_VARIANTS = Object.freeze({
   // now sit on the ground's own hue, a touch greener, and every blade is ~1.6x
   // wider so a field reads as grass rather than scattered wires.
   // Grassland — the medium reference blade.
-  1: Object.freeze({ h: 0.34, w: 0.050, tint: [0.15, 0.24, 0.035], keep: 0.88, bare: 0.0, mat: 0.35 }),
+  1: Object.freeze({ h: 0.35, w: 0.052, tint: [0.13, 0.22, 0.032], keep: 0.90, bare: 0.0, mat: 0.30 }),
   // LushGrass — tall and saturated.
-  3: Object.freeze({ h: 0.54, w: 0.055, tint: [0.11, 0.26, 0.030], keep: 1.0, bare: 0.0, mat: 0.0 }),
+  3: Object.freeze({ h: 0.54, w: 0.055, tint: [0.095, 0.24, 0.028], keep: 1.0, bare: 0.0, mat: 0.0 }),
   // PatchyGrassland — sparse, with real bare gaps rather than uniform thinning.
-  9: Object.freeze({ h: 0.26, w: 0.045, tint: [0.19, 0.21, 0.040], keep: 0.55, bare: 0.35, mat: 0.5 }),
-  // forestfloor — short, leaf-litter tint (browner, less saturated).
-  21: Object.freeze({ h: 0.16, w: 0.050, tint: [0.17, 0.16, 0.060], keep: 0.72, bare: 0.12, mat: 0.7 }),
+  9: Object.freeze({ h: 0.27, w: 0.046, tint: [0.16, 0.20, 0.036], keep: 0.62, bare: 0.35, mat: 0.45 }),
+  // forestfloor — supple woodland undergrowth with natural clearing tufts.
+  21: Object.freeze({ h: 0.25, w: 0.056, tint: [0.10, 0.17, 0.038], keep: 0.90, bare: 0.18, mat: 0.30 }),
   // Moss — very short, near-mat, wide.
-  28: Object.freeze({ h: 0.075, w: 0.060, tint: [0.09, 0.19, 0.050], keep: 1.0, bare: 0.0, mat: 1.0 }),
+  28: Object.freeze({ h: 0.075, w: 0.060, tint: [0.08, 0.18, 0.042], keep: 1.0, bare: 0.0, mat: 1.0 }),
   // DarkMoss — the same mat, darker and cooler.
-  29: Object.freeze({ h: 0.065, w: 0.060, tint: [0.06, 0.13, 0.050], keep: 1.0, bare: 0.0, mat: 1.0 }),
+  29: Object.freeze({ h: 0.065, w: 0.060, tint: [0.055, 0.125, 0.042], keep: 1.0, bare: 0.0, mat: 1.0 }),
 });
 
 /** The codes this family plants on, ascending. Derived from the table. */
@@ -379,6 +379,12 @@ const GRASS_VERTEX_DECLS = [
   "uniform vec4 uGrassLodBand;",
   "uniform vec2 uGrassLodScale;",
   "uniform float uGrassLodSoft;",
+  "uniform float uGrassEnvLive;",
+  "uniform float uGrassWaterLevel;",
+  "uniform float uGrassCamCull;",
+  "uniform vec3 uGrassCamPos;",
+  "uniform vec3 uGrassCamFwd;",
+  "uniform float uGrassCamCosMin;",
   "attribute vec2 aScale;",
   "attribute vec3 aNormal;",
   "attribute float aRot;",
@@ -386,11 +392,146 @@ const GRASS_VERTEX_DECLS = [
   "attribute float aFamilyParam;",
   "attribute float aRank;",
   "varying vec3 vGrassTint;",
+  "varying float vGrassBladeT;",
+  "varying vec3 vGrassWorldPos;",
+  "varying float vGrassViewDepth;",
+  "varying vec3 vGrassAcNrm;",
 ];
 
-const GRASS_FRAGMENT_DECLS = ["varying vec3 vGrassTint;", "uniform float uSsaoGrassMarker;"];
+const GRASS_FRAGMENT_DECLS = [
+  "varying vec3 vGrassTint;",
+  "varying float vGrassBladeT;",
+  "varying vec3 vGrassWorldPos;",
+  "varying float vGrassViewDepth;",
+  "varying vec3 vGrassAcNrm;",
+  "uniform float uSsaoGrassMarker;",
+  "uniform float uGrassSkySync;",
+  "uniform vec3 uGrassSunVec;",
+  "uniform vec3 uGrassSunColor;",
+  "uniform vec3 uGrassAmbColor;",
+  "uniform float uGrassAmbLevel;",
+  "uniform vec3 uGrassSunDirWorld;",
+  "uniform float uGrassCloudOn;",
+  "uniform mat4 uGrassCloudMat0;",
+  "uniform float uGrassCloudStrength;",
+  "uniform float uGrassCsmOn;",
+  "uniform mat4 uGrassCsmMat0;",
+  "uniform mat4 uGrassCsmMat1;",
+  "uniform mat4 uGrassCsmMat2;",
+  "uniform vec2 uGrassCsmSplits;",
+  "uniform float uGrassCsmFar;",
+  "uniform float uGrassCsmBlend;",
+  "uniform float uGrassCsmSelDist;",
+  "uniform float uGrassCsmStrength;",
+  "uniform float uGrassCsmShade;",
+];
 // The AO composite's grass marker (ssao_marker.js) is written at the very end.
 export const GRASS_OUTPUT_SEAM = "#include <dithering_fragment>";
+const GRASS_LIGHT_SYNC_SEAM = "#include <opaque_fragment>";
+
+const GRASS_CLUMP_GLSL = [
+  "float hbGrassHash21(vec2 p) {",
+  "  vec3 p3 = fract(vec3(p.xyx) * 0.1031);",
+  "  p3 += dot(p3, p3.yzx + 33.33);",
+  "  return fract((p3.x + p3.y) * p3.z);",
+  "}",
+  "float hbGrassNoise2(vec2 p) {",
+  "  vec2 i = floor(p);",
+  "  vec2 f = fract(p);",
+  "  vec2 u = f * f * (3.0 - 2.0 * f);",
+  "  float a = hbGrassHash21(i);",
+  "  float b = hbGrassHash21(i + vec2(1.0, 0.0));",
+  "  float c = hbGrassHash21(i + vec2(0.0, 1.0));",
+  "  float d = hbGrassHash21(i + vec2(1.0, 1.0));",
+  "  return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);",
+  "}",
+  "float hbGrassClump(vec2 w) {",
+  "  float macro = hbGrassNoise2(w * 0.088);",
+  "  float tuft = hbGrassNoise2(w * 0.32 + vec2(17.3, 9.1));",
+  "  return clamp(macro * 0.62 + tuft * 0.38, 0.0, 1.0);",
+  "}",
+  "vec2 hbGrassTuftDir(vec2 w) {",
+  "  float ang = hbGrassNoise2(w * 0.14 + vec2(4.7, 13.2)) * 6.2831853;",
+  "  return vec2(cos(ang), sin(ang));",
+  "}",
+].join("\n");
+
+const GRASS_GPU_LIVE_KEEP_GLSL = [
+  "bool hbGrassIsWaterCode(int c) {",
+  "  return (c >= 16 && c <= 20) || c == 22;",
+  "}",
+  "bool hbGrassIsBarrenNorth(int c) {",
+  "  return c == 0 || c == 2 || c == 6 || c == 15 || c == 25 || c == 26 || c == 27 || c == 30 || c == 31;",
+  "}",
+  "float hbGrassGpuLiveKeep(vec2 w, float gz, float matParam) {",
+  "  float fh;",
+  "  vec3 fn;",
+  "  ivec4 fcc;",
+  "  float froad;",
+  "  if (!hbFieldSample(w, fh, fn, fcc, froad)) return 1.0;",
+  "  vec2 cf = fract(w / 24.0);",
+  "  float wSW = (1.0 - cf.x) * (1.0 - cf.y);",
+  "  float wSE = cf.x * (1.0 - cf.y);",
+  "  float wNW = (1.0 - cf.x) * cf.y;",
+  "  float wNE = cf.x * cf.y;",
+  "  float waterW = (hbGrassIsWaterCode(fcc.x) ? wSW : 0.0)",
+  "               + (hbGrassIsWaterCode(fcc.y) ? wSE : 0.0)",
+  "               + (hbGrassIsWaterCode(fcc.z) ? wNW : 0.0)",
+  "               + (hbGrassIsWaterCode(fcc.w) ? wNE : 0.0);",
+  "  float keep = 1.0 - smoothstep(0.04, 0.085, waterW);",
+  "  if (waterW > 0.001 || gz <= uGrassWaterLevel + 0.25) {",
+  "    if (waterW > 0.001) {",
+  "      keep *= smoothstep(uGrassWaterLevel + 0.12, uGrassWaterLevel + 0.30, gz);",
+  "    } else if (uGrassWaterLevel > -1e6 && (w.x < 1600.0 || w.y < 1600.0 || w.x > 47552.0 || (w.y > 47552.0 && w.y < 68928.0))) {",
+  "      keep *= smoothstep(uGrassWaterLevel + 0.12, uGrassWaterLevel + 0.30, gz);",
+  "    }",
+  "  }",
+  "  if (uGpOffRoad > 0.5 && froad < 2.0) {",
+  "    keep *= smoothstep(0.15, 2.0, froad);",
+  "  }",
+  "  if (w.y >= 68928.0 && matParam < 0.85) {",
+  "    bool marshAdj = (fcc.x == 4 || fcc.y == 4 || fcc.z == 4 || fcc.w == 4 || fcc.x == 23 || fcc.y == 23 || fcc.z == 23 || fcc.w == 23);",
+  "    if (!marshAdj) {",
+  "      float barrenW = (hbGrassIsBarrenNorth(fcc.x) ? wSW : 0.0)",
+  "                    + (hbGrassIsBarrenNorth(fcc.y) ? wSE : 0.0)",
+  "                    + (hbGrassIsBarrenNorth(fcc.z) ? wNW : 0.0)",
+  "                    + (hbGrassIsBarrenNorth(fcc.w) ? wNE : 0.0);",
+  "      keep *= 1.0 - smoothstep(0.08, 0.35, barrenW);",
+  "    }",
+  "  }",
+  "  return keep;",
+  "}",
+].join("\n");
+
+const GRASS_FRAGMENT_HELPERS_GLSL = [
+  "#ifdef HB_GRASS_CLOUD",
+  "uniform highp sampler2DArray uGrassCloudMap;",
+  "#endif",
+  "#ifdef HB_GRASS_CSM",
+  "uniform highp sampler2DShadow uGrassCsmMap0;",
+  "uniform highp sampler2DShadow uGrassCsmMap1;",
+  "uniform highp sampler2DShadow uGrassCsmMap2;",
+  "float hbGrassCsmTap(highp sampler2DShadow sm, mat4 m, vec3 worldPos) {",
+  "  vec4 sc = m * vec4(worldPos, 1.0);",
+  "  sc.xyz /= max(sc.w, 1e-6);",
+  "  #ifdef USE_REVERSED_DEPTH_BUFFER",
+  "    if (sc.x < 0.0 || sc.x > 1.0 || sc.y < 0.0 || sc.y > 1.0 || sc.z < 0.0) return 1.0;",
+  "    float refZ = sc.z + 0.0007;",
+  "  #else",
+  "    if (sc.x < 0.0 || sc.x > 1.0 || sc.y < 0.0 || sc.y > 1.0 || sc.z > 1.0) return 1.0;",
+  "    float refZ = sc.z - 0.0007;",
+  "  #endif",
+  "  return textureLod(sm, vec3(sc.xy, refZ), 0.0);",
+  "}",
+  "float hbGrassCsmFactor(vec3 worldPos, float viewDepth) {",
+  "  if (uGrassCsmSelDist > 0.5) viewDepth = length(worldPos - cameraPosition);",
+  "  if (viewDepth > uGrassCsmFar) return 1.0;",
+  "  if (viewDepth < uGrassCsmSplits.x) return hbGrassCsmTap(uGrassCsmMap0, uGrassCsmMat0, worldPos);",
+  "  if (viewDepth < uGrassCsmSplits.y) return hbGrassCsmTap(uGrassCsmMap1, uGrassCsmMat1, worldPos);",
+  "  return hbGrassCsmTap(uGrassCsmMap2, uGrassCsmMat2, worldPos);",
+  "}",
+  "#endif",
+].join("\n");
 
 // 2026-10-23 — the distance blend and the GRASS LOD dissolve as GLSL text,
 // written ONCE: the vertex snippet below and the GPU early-out
@@ -425,7 +566,12 @@ function _grassVertexSnippet(gpu = false) {
     "    // aScale = (heightM, widthM), times the ring's (height, width) gain",
     "    // (GRASS LOD: an outer ring's blades are wider). Width also scales the",
     "    // (zero) y so a future ribbon blade needs no snippet change.",
+    "    float hbClump = hbGrassClump(hbWorld);",
     "    vec2 hbS = aScale * uGrassLodScale;",
+    "    if (uGrassEnvLive > 0.5) {",
+    "      hbS.x *= mix(0.65, 1.45, hbClump);",
+    "      hbS.y *= mix(0.88, 1.18, hbClump);",
+    "    }",
     "    vec3 hbP = vec3(transformed.x * hbS.y, transformed.y * hbS.y, transformed.z * hbS.x);",
     "    // Static forward bow, per-blade via the procedural instance hash, so no",
     "    // two blades are identical even before the wind moves them.",
@@ -435,6 +581,10 @@ function _grassVertexSnippet(gpu = false) {
     "    float hbCos = cos(aRot);",
     "    float hbSin = sin(aRot);",
     "    hbP.xy = vec2(hbP.x * hbCos - hbP.y * hbSin, hbP.x * hbSin + hbP.y * hbCos);",
+    "    if (uGrassEnvLive > 0.5) {",
+    "      vec2 hbTuft = hbGrassTuftDir(hbWorld);",
+    "      hbP.xy += hbTuft * (uGrassBow * 1.65 * hbS.x * hbH * hbH * (0.35 + 0.65 * hbClump));",
+    "    }",
     "    // WIND — windSwayGpu's gust function verbatim (primary sine + a 3.7x",
     "    // flutter band at a decorrelated phase), off the same shared clock, so",
     "    // trees and grass gust together. The extra term is a spatial phase",
@@ -443,8 +593,10 @@ function _grassVertexSnippet(gpu = false) {
     "    // planted; uFamilyParam stiffens moss almost solid.",
     "    float hbPhase = vVfxHash * 6.2831853 + dot(hbWorld, uGrassWindDir) * uGrassWindWave;",
     "    float hbT = uTime * 6.2831853 * uGrassWindFreq;",
-    "    float hbOsc = sin(hbT + hbPhase)",
-    "                + uGrassWindFlutter * sin(hbT * 3.7 + hbPhase * 1.7 + 1.3);",
+    "    float hbGustFront = dot(hbWorld, uGrassWindDir) * 0.045 - uTime * 1.15;",
+    "    float hbGustEnv = mix(1.0, 0.68 + 0.52 * (0.5 + 0.5 * sin(hbGustFront + 0.6 * sin(hbGustFront * 0.43 + hbWorld.x * 0.017))), uGrassEnvLive);",
+    "    float hbOsc = (sin(hbT + hbPhase)",
+    "                + uGrassWindFlutter * sin(hbT * 3.7 + hbPhase * 1.7 + 1.3)) * hbGustEnv;",
     "    float hbStiff = mix(1.0, 0.25, aFamilyParam);",
     "    hbP.xy += uGrassWindDir * (uGrassWindAmp * hbS.x * hbStiff * hbH * hbH * hbH * hbOsc);",
     "    // Lean downhill with the ground normal (its xy points downslope).",
@@ -471,6 +623,27 @@ function _grassVertexSnippet(gpu = false) {
     "        }",
     "      }",
     "    }",
+    "    float hbEnvKeep = 1.0;",
+    "    if (uGrassEnvLive > 0.5) {",
+    "      float hbSlopeKeep = smoothstep(0.68, 0.80, aNormal.z);",
+    "      float hbHollowCut = 0.22 * (1.0 - hbClump) * (1.0 - aFamilyParam);",
+    "      float hbTuftKeep = smoothstep(hbHollowCut, hbHollowCut + 0.14, aRank + 0.08);",
+    "      hbEnvKeep *= hbSlopeKeep * hbTuftKeep;",
+    ...(gpu ? [
+      "      hbEnvKeep *= hbGrassGpuLiveKeep(hbWorld, hbGpOrigin.z, aFamilyParam);",
+    ] : []),
+    "    }",
+    "    if (uGrassCamCull > 0.5) {",
+    "      vec3 hbToB = vec3(hbWorld, hbGroundZ) - uGrassCamPos;",
+    "      float hbDist2 = dot(hbToB, hbToB);",
+    "      if (hbDist2 > 3.2) {",
+    "        float hbFwdP = dot(hbToB, uGrassCamFwd);",
+    "        if (hbFwdP < -1.5 || hbFwdP < uGrassCamCosMin * sqrt(hbDist2)) {",
+    "          hbEnvKeep = 0.0;",
+    "        }",
+    "      }",
+    "    }",
+    "    hbP *= hbEnvKeep;",
     "    // DISTANCE BLEND — shrink to nothing over the last fadeFraction of R,",
     "    // matching terrain_scatter.js::fadeFor exactly (LINEAR, same uniforms).",
     "    hbP *= " + _grassFadeFactor("hbWorld") + ";",
@@ -490,6 +663,7 @@ function _grassVertexSnippet(gpu = false) {
       "    // the blade origin hbGrassPlace returned at the top of main IS this",
       "    // blade AC world position, and the object frame is the world frame.",
       "    vec2 hbWorld = hbGpOrigin.xy;",
+      "    float hbGroundZ = hbGpOrigin.z;",
     ] : [
       "    // The instance matrix carries ONLY a translation (+ a 0/1 scale for",
       "    // degenerate instances), written by terrain_scatter.js — so its",
@@ -497,8 +671,10 @@ function _grassVertexSnippet(gpu = false) {
       "    // frame is the world frame (see the wind DIVERGENCE note in the header).",
       "    #ifdef USE_INSTANCING",
       "      vec2 hbWorld = instanceMatrix[3].xy;",
+      "      float hbGroundZ = instanceMatrix[3].z;",
       "    #else",
       "      vec2 hbWorld = modelMatrix[3].xy;",
+      "      float hbGroundZ = modelMatrix[3].z;",
       "    #endif",
     ]),
     "    // Authored blade height runs 0..1, so position.z IS the normalised",
@@ -518,8 +694,25 @@ function _grassVertexSnippet(gpu = false) {
       ...look,
       "    transformed = hbP;",
     ]),
-    "    // Per-blade colour + a free contact shadow: darken toward the base.",
-    "    vGrassTint = aTint * mix(uGrassAoBase, 1.0, hbH);",
+    "    // Per-blade colour + root-to-tip earthy humus AO to warm sunlit olive-emerald tips.",
+    "    float hbRootClump = hbGrassClump(hbWorld);",
+    "    vec3 hbRootCol = aTint * vec3(0.46, 0.40, 0.34);",
+    "    vec3 hbTipCol = aTint * vec3(1.18, 1.10, 0.86);",
+    "    vec3 hbRichTint = mix(hbRootCol, mix(aTint, hbTipCol, hbH * hbH), smoothstep(0.0, 0.85, hbH)) * mix(0.90, 1.08, hbRootClump);",
+    "    vGrassTint = mix(aTint * mix(uGrassAoBase, 1.0, hbH), hbRichTint, uGrassEnvLive);",
+    "    vGrassBladeT = hbH;",
+    "    vGrassAcNrm = dot(aNormal, aNormal) > 1e-6 ? normalize(aNormal) : vec3(0.0, 0.0, 1.0);",
+    ...(gpu ? [
+      "    vec4 hbWPos4 = modelMatrix * vec4(transformed, 1.0);",
+    ] : [
+      "    #ifdef USE_INSTANCING",
+      "      vec4 hbWPos4 = modelMatrix * instanceMatrix * vec4(transformed, 1.0);",
+      "    #else",
+      "      vec4 hbWPos4 = modelMatrix * vec4(transformed, 1.0);",
+      "    #endif",
+    ]),
+    "    vGrassWorldPos = hbWPos4.xyz;",
+    "    vGrassViewDepth = -(viewMatrix * hbWPos4).z;",
     "  }",
     "  // ---- " + GRASS_END + " ----",
   ].join("\n");
@@ -571,6 +764,47 @@ function _grassFragmentSnippet() {
     "  // ---- " + GRASS_MARKER + " (terrain_grass.js, fragment) ----",
     "  diffuseColor.rgb *= vGrassTint;",
     "  // ---- " + GRASS_END + " ----",
+  ].join("\n");
+}
+
+function _grassLightSyncSnippet() {
+  return [
+    "  if (uGrassSkySync > 0.5) {",
+    "    float hbCloudSh = 1.0;",
+    "    #ifdef HB_GRASS_CLOUD",
+    "      if (uGrassCloudOn > 0.5) {",
+    "        vec4 hbCsClip = uGrassCloudMat0 * vec4(vGrassWorldPos, 1.0);",
+    "        hbCsClip /= max(abs(hbCsClip.w), 1e-6);",
+    "        vec2 hbCsUv = hbCsClip.xy * 0.5 + 0.5;",
+    "        if (hbCsUv.x >= 0.0 && hbCsUv.x <= 1.0 && hbCsUv.y >= 0.0 && hbCsUv.y <= 1.0) {",
+    "          vec4 hbCsTap = texture(uGrassCloudMap, vec3(hbCsUv, 0.0));",
+    "          float hbCsOd = max(0.0, hbCsTap.b + hbCsTap.a);",
+    "          hbCloudSh = clamp(exp(-hbCsOd * uGrassCloudStrength), 0.3, 1.0);",
+    "        }",
+    "      }",
+    "    #endif",
+    "    float hbCsmRaw = 1.0;",
+    "    #ifdef HB_GRASS_CSM",
+    "      if (uGrassCsmOn > 0.5 && uGrassCsmStrength > 0.0) {",
+    "        hbCsmRaw = hbGrassCsmFactor(vGrassWorldPos, vGrassViewDepth);",
+    "      }",
+    "    #endif",
+    "    float hbCsmSh = mix(1.0 - uGrassCsmShade * uGrassCsmStrength, 1.0, hbCsmRaw);",
+    "    float hbCsmDir = mix(1.0 - 0.85 * uGrassCsmStrength, 1.0, hbCsmRaw);",
+    "    vec3 hbNrmAc = normalize(vGrassAcNrm);",
+    "    float hbSunMag = length(uGrassSunVec);",
+    "    vec3 hbSunDirAc = hbSunMag > 1e-4 ? (uGrassSunVec / hbSunMag) : vec3(0.0, 0.0, 1.0);",
+    "    float hbNdotl = mix(0.65, 1.0, clamp(dot(hbNrmAc, hbSunDirAc), 0.0, 1.0));",
+    "    float hbAcL = max(0.0, dot(hbNrmAc, uGrassSunVec));",
+    "    vec3 hbAcC = min(vec3(1.0), uGrassSunColor * (hbAcL * hbCsmDir) + uGrassAmbColor * uGrassAmbLevel);",
+    "    vec3 hbBaseLit = diffuseColor.rgb * 0.34 * hbAcC * hbNdotl * hbCloudSh * hbCsmSh;",
+    "    float hbSunElevGate = smoothstep(0.06, 0.22, hbSunDirAc.z) * clamp(hbSunMag * 1.25, 0.0, 1.0);",
+    "    float hbUnocc = clamp((hbCloudSh - 0.3) / 0.7, 0.0, 1.0) * hbCsmRaw;",
+    "    vec3 hbViewDir = normalize(vGrassWorldPos - cameraPosition);",
+    "    float hbFwd = pow(clamp(dot(hbViewDir, uGrassSunDirWorld), 0.0, 1.0), 3.0);",
+    "    vec3 hbTrans = diffuseColor.rgb * vec3(0.30, 0.34, 0.09) * uGrassSunColor * (hbFwd * hbSunElevGate * hbUnocc * smoothstep(0.25, 1.0, vGrassBladeT));",
+    "    outgoingLight = hbBaseLit + hbTrans;",
+    "  }",
   ].join("\n");
 }
 
@@ -700,7 +934,7 @@ function _injectGrass(shader, gpu) {
   // The scatter fade helper carries its own four uniforms; copied in rather
   // than re-derived so grass and sand fade identically (terrain_scatter.js).
   if (vs.indexOf("hbScatterFade") === -1) {
-    vs = vs.replace("void main() {", SCATTER_FADE_GLSL + "\nvoid main() {");
+    vs = vs.replace("void main() {", SCATTER_FADE_GLSL + "\n" + GRASS_CLUMP_GLSL + "\nvoid main() {");
   }
   if (gpu) {
     // 2026-10-23 — the placement chain, once, in grass_gpu_place.js's order;
@@ -709,6 +943,7 @@ function _injectGrass(shader, gpu) {
     if (vs.indexOf(GRASS_GPU_PLACE_FN) === -1) {
       const chain = [
         GRASS_GPU_HASH_GLSL, TERRAIN_FIELD_GLSL, INTERIOR_MASK_GLSL, buildGrassPlaceGlsl(),
+        GRASS_GPU_LIVE_KEEP_GLSL,
         ...GRASS_GPU_GLOBALS,
       ].join("\n");
       vs = vs.replace("void main() {", () => chain + "\nvoid main() {");
@@ -719,6 +954,9 @@ function _injectGrass(shader, gpu) {
 
   let fs = shader.fragmentShader;
   for (const decl of GRASS_FRAGMENT_DECLS) fs = _ensureDecl(fs, decl, "void main() {");
+  if (fs.indexOf("hbGrassCsmTap") === -1 && fs.indexOf("HB_GRASS_CLOUD") === -1) {
+    fs = fs.replace("void main() {", GRASS_FRAGMENT_HELPERS_GLSL + "\nvoid main() {");
+  }
   shader.fragmentShader = fs;
 
   // 2) The per-instance hash varying + its assignment (shared infra; adds no
@@ -755,6 +993,10 @@ function _injectGrass(shader, gpu) {
   shader.fragmentShader = shader.fragmentShader.replace(
     GRASS_NORMAL_SEAM,
     GRASS_NORMAL_SEAM + "\n" + _grassNormalSnippet(),
+  );
+  shader.fragmentShader = shader.fragmentShader.replace(
+    GRASS_LIGHT_SYNC_SEAM,
+    _grassLightSyncSnippet() + "\n" + GRASS_LIGHT_SYNC_SEAM,
   );
   shader.fragmentShader = shader.fragmentShader.replace(
     GRASS_OUTPUT_SEAM,
@@ -1086,6 +1328,36 @@ export function createTerrainGrassProvider(opts = {}) {
     uGrassLodBand: { value: { x: LOD_NO_BAND[0], y: LOD_NO_BAND[1], z: LOD_NO_BAND[2], w: LOD_NO_BAND[3] } },
     uGrassLodScale: { value: { x: 1, y: 1 } },
     uGrassLodSoft: { value: GRASS_DEFAULTS.lodSoft },
+    // Live environmental exclusions, camera frustum-cone discard, terrain sky/dusk sync, cloud + CSM shadows.
+    uGrassEnvLive: { value: 0 },
+    uGrassWaterLevel: { value: -1e9 },
+    uGrassCamCull: { value: 0 },
+    uGrassCamPos: { value: THREE && typeof THREE.Vector3 === "function" ? new THREE.Vector3(0, 0, 0) : { x: 0, y: 0, z: 0 } },
+    uGrassCamFwd: { value: THREE && typeof THREE.Vector3 === "function" ? new THREE.Vector3(1, 0, 0) : { x: 1, y: 0, z: 0 } },
+    uGrassCamCosMin: { value: -0.25 },
+    uGrassSkySync: { value: 0 },
+    uGrassSunVec: { value: THREE && typeof THREE.Vector3 === "function" ? new THREE.Vector3(0, 0, 0.75) : { x: 0, y: 0, z: 0.75 } },
+    uGrassSunColor: { value: THREE && typeof THREE.Vector3 === "function" ? new THREE.Vector3(1, 1, 1) : { x: 1, y: 1, z: 1 } },
+    uGrassAmbColor: { value: THREE && typeof THREE.Vector3 === "function" ? new THREE.Vector3(0.5, 0.5, 0.55) : { x: 0.5, y: 0.5, z: 0.55 } },
+    uGrassAmbLevel: { value: 0.25 },
+    uGrassSunDirWorld: { value: THREE && typeof THREE.Vector3 === "function" ? new THREE.Vector3(0, 1, 0) : { x: 0, y: 1, z: 0 } },
+    uGrassCloudOn: { value: 0 },
+    uGrassCloudMap: { value: null },
+    uGrassCloudMat0: { value: THREE && typeof THREE.Matrix4 === "function" ? new THREE.Matrix4() : { elements: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1] } },
+    uGrassCloudStrength: { value: 1 },
+    uGrassCsmOn: { value: 0 },
+    uGrassCsmMap0: { value: null },
+    uGrassCsmMap1: { value: null },
+    uGrassCsmMap2: { value: null },
+    uGrassCsmMat0: { value: THREE && typeof THREE.Matrix4 === "function" ? new THREE.Matrix4() : { elements: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1] } },
+    uGrassCsmMat1: { value: THREE && typeof THREE.Matrix4 === "function" ? new THREE.Matrix4() : { elements: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1] } },
+    uGrassCsmMat2: { value: THREE && typeof THREE.Matrix4 === "function" ? new THREE.Matrix4() : { elements: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1] } },
+    uGrassCsmSplits: { value: THREE && typeof THREE.Vector2 === "function" ? new THREE.Vector2(30, 90) : { x: 30, y: 90 } },
+    uGrassCsmFar: { value: 300 },
+    uGrassCsmBlend: { value: 0.15 },
+    uGrassCsmSelDist: { value: 0 },
+    uGrassCsmStrength: { value: 0 },
+    uGrassCsmShade: { value: 0.55 },
   };
   // Uniforms each ring owns (everything else is shared by reference).
   const RING_UNIFORMS = ["uGrassLodBand", "uGrassLodScale", "uGrassLodSoft"];
@@ -1292,8 +1564,172 @@ export function createTerrainGrassProvider(opts = {}) {
     }
     lk.stomp = stomp;
     grassGpuBladeReach(lk, reachOut);
-    r.cull.xyMarginM = Math.max(GRASS_GPU_CULL_XY_MARGIN_M, reachOut.lateralM);
-    r.cull.zAboveM = Math.max(GRASS_GPU_CULL_ABOVE_M, reachOut.aboveM);
+    const clumpGain = uniforms.uGrassEnvLive.value > 0.5 ? 1.45 : 1.0;
+    r.cull.xyMarginM = Math.max(GRASS_GPU_CULL_XY_MARGIN_M, reachOut.lateralM * clumpGain);
+    r.cull.zAboveM = Math.max(GRASS_GPU_CULL_ABOVE_M, reachOut.aboveM * clumpGain);
+  }
+
+  function _copyVec3Like(dst, src) {
+    if (!dst || !src) return;
+    if ("x" in src) { dst.x = src.x; dst.y = src.y; dst.z = src.z; }
+    else if ("r" in src) { dst.x = src.r; dst.y = src.g; dst.z = src.b; }
+  }
+
+  function _copyMat4Like(dst, src) {
+    if (!dst || !src || !dst.elements || !src.elements) return;
+    const de = dst.elements, se = src.elements;
+    for (let i = 0; i < 16; i += 1) de[i] = se[i];
+  }
+
+  function _ensureRingDefine(defName, wantOn) {
+    for (let k = 0; k < rings.length; k += 1) {
+      const mat = rings[k].material;
+      if (!mat || mat === opts.material) continue;
+      const defs = mat.defines || (mat.defines = {});
+      const has = Object.prototype.hasOwnProperty.call(defs, defName);
+      if (wantOn && !has) {
+        defs[defName] = "";
+        mat.needsUpdate = true;
+      } else if (!wantOn && has) {
+        delete defs[defName];
+        mat.needsUpdate = true;
+      }
+    }
+  }
+
+  function _updateCameraCone(camera, meshMatWorldInv) {
+    if (!hotGrassCullEnabled() || uniforms.uGrassEnvLive.value < 0.5 || !camera || !camera.matrixWorld || !meshMatWorldInv) {
+      uniforms.uGrassCamCull.value = 0;
+      return;
+    }
+    const ce = camera.matrixWorld.elements;
+    const ie = meshMatWorldInv.elements;
+    if (!ce || !ie) { uniforms.uGrassCamCull.value = 0; return; }
+    const wx = ce[12], wy = ce[13], wz = ce[14];
+    uniforms.uGrassCamPos.value.x = ie[0] * wx + ie[4] * wy + ie[8] * wz + ie[12];
+    uniforms.uGrassCamPos.value.y = ie[1] * wx + ie[5] * wy + ie[9] * wz + ie[13];
+    uniforms.uGrassCamPos.value.z = ie[2] * wx + ie[6] * wy + ie[10] * wz + ie[14];
+    // Camera forward in Three world is -Z column: (-ce[8], -ce[9], -ce[10]).
+    const fwx = -ce[8], fwy = -ce[9], fwz = -ce[10];
+    let flx = ie[0] * fwx + ie[4] * fwy + ie[8] * fwz;
+    let fly = ie[1] * fwx + ie[5] * fwy + ie[9] * fwz;
+    let flz = ie[2] * fwx + ie[6] * fwy + ie[10] * fwz;
+    const fl = Math.hypot(flx, fly, flz);
+    if (fl > 1e-5) { flx /= fl; fly /= fl; flz /= fl; } else { flx = 1; fly = 0; flz = 0; }
+    uniforms.uGrassCamFwd.value.x = flx;
+    uniforms.uGrassCamFwd.value.y = fly;
+    uniforms.uGrassCamFwd.value.z = flz;
+    if (camera.isPerspectiveCamera && Number.isFinite(camera.fov) && camera.fov > 1) {
+      const fovRad = Math.min(160, camera.fov) * (Math.PI / 180);
+      const aspect = Number.isFinite(camera.aspect) && camera.aspect > 0 ? camera.aspect : 1.78;
+      const halfDiag = Math.min(Math.PI * 0.88, Math.atan(Math.tan(fovRad * 0.5) * Math.hypot(1, aspect)) + 0.28);
+      uniforms.uGrassCamCosMin.value = Math.cos(halfDiag);
+    } else {
+      uniforms.uGrassCamCosMin.value = -0.35;
+    }
+    uniforms.uGrassCamCull.value = 1;
+  }
+
+  function syncLiveScene(ctx) {
+    const sc = (ctx && ctx.scene3d) || opts.scene3d || null;
+    if (!sc) {
+      uniforms.uGrassEnvLive.value = 0;
+      uniforms.uGrassSkySync.value = 0;
+      uniforms.uGrassCamCull.value = 0;
+      return;
+    }
+    const kids = sc.terrainGroup && Array.isArray(sc.terrainGroup.children) ? sc.terrainGroup.children : null;
+    const hasLiveEnv = !!(sc.skyState || (kids && kids.length > 0) || sc.csmState);
+    uniforms.uGrassEnvLive.value = hasLiveEnv ? 1 : 0;
+    if (hasLiveEnv) {
+      uniforms.uGrassWaterLevel.value = Number.isFinite(sc.waterLevel) ? sc.waterLevel : 0;
+    }
+    let tu = null;
+    let fallbackTu = null;
+    if (kids) {
+      for (let i = 0; i < kids.length; i += 1) {
+        const m = kids[i] && kids[i].material;
+        const u = m && m.uniforms;
+        if (!(u && u.uAcSunVec && u.uAcSunColor && u.uAcAmbColor && u.uAcAmbLevel)) continue;
+        if (!m.userData || m.userData.__acLightEpoch !== undefined) { tu = u; break; }
+        if (!fallbackTu) fallbackTu = u;
+      }
+    }
+    if (!tu) tu = fallbackTu;
+    if (tu && tu.uAcSunVec?.value && tu.uAcSunColor?.value && tu.uAcAmbColor?.value) {
+      _copyVec3Like(uniforms.uGrassSunVec.value, tu.uAcSunVec.value);
+      _copyVec3Like(uniforms.uGrassSunColor.value, tu.uAcSunColor.value);
+      _copyVec3Like(uniforms.uGrassAmbColor.value, tu.uAcAmbColor.value);
+      uniforms.uGrassAmbLevel.value = Number.isFinite(tu.uAcAmbLevel?.value) ? tu.uAcAmbLevel.value : 0.2;
+      const sv = uniforms.uGrassSunVec.value;
+      const sm = Math.hypot(sv.x, sv.y, sv.z);
+      const sx = sm > 1e-5 ? sv.x / sm : 0;
+      const sy = sm > 1e-5 ? sv.y / sm : 0;
+      const sz = sm > 1e-5 ? sv.z / sm : 1;
+      const re = sc.worldRoot?.matrixWorld?.elements;
+      if (re && re.length === 16) {
+        let wx = re[0] * sx + re[4] * sy + re[8] * sz;
+        let wy = re[1] * sx + re[5] * sy + re[9] * sz;
+        let wz = re[2] * sx + re[6] * sy + re[10] * sz;
+        const wl = Math.hypot(wx, wy, wz);
+        if (wl > 1e-5) { wx /= wl; wy /= wl; wz /= wl; }
+        uniforms.uGrassSunDirWorld.value.x = wx;
+        uniforms.uGrassSunDirWorld.value.y = wy;
+        uniforms.uGrassSunDirWorld.value.z = wz;
+      } else {
+        uniforms.uGrassSunDirWorld.value.x = sx;
+        uniforms.uGrassSunDirWorld.value.y = sz;
+        uniforms.uGrassSunDirWorld.value.z = -sy;
+      }
+      uniforms.uGrassSkySync.value = 1;
+
+      const csTex = tu.uCloudShadowEnabled?.value > 0.5 ? (tu.uCloudShadowMap?.value || null) : null;
+      if (csTex && tu.uCloudShadowMatrix0?.value) {
+        uniforms.uGrassCloudMap.value = csTex;
+        _copyMat4Like(uniforms.uGrassCloudMat0.value, tu.uCloudShadowMatrix0.value);
+        uniforms.uGrassCloudStrength.value = Number.isFinite(tu.uCloudShadowStrength?.value) ? tu.uCloudShadowStrength.value : 1;
+        uniforms.uGrassCloudOn.value = 1;
+        _ensureRingDefine("HB_GRASS_CLOUD", true);
+      } else {
+        uniforms.uGrassCloudOn.value = 0;
+      }
+    } else {
+      uniforms.uGrassSkySync.value = 0;
+      uniforms.uGrassCloudOn.value = 0;
+    }
+
+    const csm = sc.csmState || null;
+    const dt0 = tu?.uCsmShadowMap0?.value || csm?.lights?.[0]?.shadow?.map?.depthTexture || null;
+    const dt1 = tu?.uCsmShadowMap1?.value || csm?.lights?.[1]?.shadow?.map?.depthTexture || null;
+    const dt2 = tu?.uCsmShadowMap2?.value || csm?.lights?.[2]?.shadow?.map?.depthTexture || null;
+    const csmActive = !!(dt0 && dt1 && dt2 && (tu ? tu.uCsmEnabled?.value > 0.5 : !!csm));
+    if (csmActive) {
+      uniforms.uGrassCsmMap0.value = dt0;
+      uniforms.uGrassCsmMap1.value = dt1;
+      uniforms.uGrassCsmMap2.value = dt2;
+      const m0 = tu?.uCsmMatrix0?.value || csm?.lights?.[0]?.shadow?.matrix;
+      const m1 = tu?.uCsmMatrix1?.value || csm?.lights?.[1]?.shadow?.matrix;
+      const m2 = tu?.uCsmMatrix2?.value || csm?.lights?.[2]?.shadow?.matrix;
+      if (m0) _copyMat4Like(uniforms.uGrassCsmMat0.value, m0);
+      if (m1) _copyMat4Like(uniforms.uGrassCsmMat1.value, m1);
+      if (m2) _copyMat4Like(uniforms.uGrassCsmMat2.value, m2);
+      if (tu?.uCsmSplits?.value) {
+        uniforms.uGrassCsmSplits.value.x = tu.uCsmSplits.value.x;
+        uniforms.uGrassCsmSplits.value.y = tu.uCsmSplits.value.y;
+      } else if (Array.isArray(csm?.splits)) {
+        uniforms.uGrassCsmSplits.value.x = csm.splits[0] ?? 30;
+        uniforms.uGrassCsmSplits.value.y = csm.splits[1] ?? 90;
+      }
+      uniforms.uGrassCsmFar.value = Number.isFinite(tu?.uCsmFar?.value) ? tu.uCsmFar.value : (csm?.far ?? 300);
+      uniforms.uGrassCsmBlend.value = Number.isFinite(tu?.uCsmBlend?.value) ? tu.uCsmBlend.value : 0.15;
+      uniforms.uGrassCsmSelDist.value = Number.isFinite(tu?.uCsmSelDist?.value) ? tu.uCsmSelDist.value : 0;
+      uniforms.uGrassCsmStrength.value = Number.isFinite(tu?.uCsmStrength?.value) ? tu.uCsmStrength.value : 1;
+      uniforms.uGrassCsmShade.value = Number.isFinite(tu?.uCsmShade?.value) ? tu.uCsmShade.value : 0.55;
+      uniforms.uGrassCsmOn.value = 1;
+      _ensureRingDefine("HB_GRASS_CSM", true);
+    } else {
+      uniforms.uGrassCsmOn.value = 0;
+    }
   }
 
   /**
@@ -1329,6 +1765,7 @@ export function createTerrainGrassProvider(opts = {}) {
           r.camPos[1] = s.cam.y;
           r.camPos[2] = s.cam.z;
           p.camPos = r.camPos;
+          _updateCameraCone(camera, s.inv);
         }
       }
       if (hotGrassCullEnabled()) {
@@ -1352,6 +1789,7 @@ export function createTerrainGrassProvider(opts = {}) {
    */
   function updateGpu(ctx) {
     uniforms.uTime.value = ctx.tSec;
+    syncLiveScene(ctx);
     const p = ctx.playerPos;
     if (p) tickStomp(ctx, p);
     const placed = !!p && Number.isFinite(p.x) && Number.isFinite(p.y);
@@ -1534,7 +1972,7 @@ export function createTerrainGrassProvider(opts = {}) {
     });
     return {
       id: provider.id,
-      enabled: terrainGrassEnabled(),
+      enabled: _grassMasterEnabled(opts.search),
       built,
       mode: "gpu",
       config: cfg,
@@ -1567,7 +2005,7 @@ export function createTerrainGrassProvider(opts = {}) {
     id: "terrain.grass",
     scope: "camera",
     families: [FAM_GRASS],
-    enabled: terrainGrassEnabled,
+    enabled: () => _grassMasterEnabled(opts.search),
 
     /** null ⇒ disabled at this tier (`low` — plan §5.8). */
     quality() {
@@ -1603,16 +2041,12 @@ export function createTerrainGrassProvider(opts = {}) {
     update(dt, ctx) {
       lastCtx = ctx;
       if (!cfg) return;
-      if (gpuMode && ctx && ctx.playerPos && Number.isFinite(ctx.playerPos.y) && ctx.playerPos.y >= 68928 && ctx.playerPos.y <= 117888) {
-        if (built) provider.dispose();
-        gpuMode = false;
-        lastCtx = ctx;
-      }
       if (!built) build(ctx);
       if (!rings.length) return;
       if (!ctx || ctx.hasPlayer !== true) return;
       // 2026-10-23 — `?terrainGrassGpu`: no pools, nothing placed here.
       if (gpuMode) { updateGpu(ctx); return; }
+      syncLiveScene(ctx);
       // The loaded interior cells changed (a building's interior baked or was
       // evicted). 2026-10-08: re-examine only the blades near the boxes that
       // changed — clipped to the pool window, one merged region — not the whole
@@ -1704,7 +2138,7 @@ export function createTerrainGrassProvider(opts = {}) {
       });
       return {
         id: provider.id,
-        enabled: terrainGrassEnabled(),
+        enabled: _grassMasterEnabled(opts.search),
         built,
         mode: "cpu",
         config: cfg,
@@ -1775,9 +2209,29 @@ let _handle = null;
  *
  * @returns {object|null} `window.__terrainGrass`
  */
+function _flagOffSpelling(v) {
+  if (v == null) return false;
+  const t = String(v).toLowerCase();
+  return t === "off" || t === "0" || t === "false" || t === "no";
+}
+
+function _grassMasterEnabled(search) {
+  if (terrainGrassEnabled() === true) return true;
+  try {
+    const s = search ?? (typeof window !== "undefined" ? window.location?.search : "") ?? "";
+    const params = new URLSearchParams(s);
+    if (params.get("terrainGrass") !== null) return false;
+    if (_flagOffSpelling(params.get("visual")) || _flagOffSpelling(params.get("terrainVfx"))) return false;
+    const blades = typeof window !== "undefined" ? window.liveScene3d?.quality?.flags?.terrainGrassBlades : 0;
+    return Number.isFinite(blades) && blades > 0;
+  } catch (_) {
+    return false;
+  }
+}
+
 export function initTerrainGrass(opts = {}) {
   if (_handle) return _handle;
-  if (terrainGrassEnabled() !== true) return null;
+  if (!_grassMasterEnabled(opts.search)) return null;
   if (wireframeActive(opts.search)) return null;   // plan §8 risk 8
 
   const provider = createTerrainGrassProvider(opts);

@@ -1000,7 +1000,7 @@ export function cullGrassTiles(p, out) {
   return n;
 }
 
-// 2026-10-26 (lane F2) — `?hotGrassCull` (DEFAULT OFF). The same cull, with two
+// 2026-10-26 (lane F2) — `?hotGrassCull` (DEFAULT ON; `=off` escape). The same cull, with two
 // exact trims:
 //  - `p.zMemo` (createGrassZMemo, one per ring) + `p.zGen` (the field's
 //    `generation()` stamp): each tile's `zRange` answer is kept until the stamp,
@@ -1016,7 +1016,7 @@ export function cullGrassTiles(p, out) {
 // Same survivors, same order, same `out` (tests/hot_grass_cull.test.mjs).
 let _hotGrassCull;
 export function hotGrassCullEnabled() {
-  if (_hotGrassCull === undefined) _hotGrassCull = rustFlag("hotGrassCull", false);
+  if (_hotGrassCull === undefined) _hotGrassCull = rustFlag("hotGrassCull", true);
   return _hotGrassCull;
 }
 /** Test seam (`undefined` re-reads the URL flag). */

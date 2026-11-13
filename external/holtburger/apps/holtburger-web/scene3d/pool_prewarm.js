@@ -117,14 +117,39 @@ export class PoolPrewarm {
     /** PARKED for the session — never disposed (program refcount). */
     this.colorScene = null;
     this.depthScene = null;
+    this._asyncDepthScene = null;
     this._warmedClasses = new Set();
     this._cascadesWarmed = 0;
+    this._queuedClasses = new Map();
+    this._flushScheduled = false;
 
     this.stats = {
       classes: 0, colorPrograms: 0, depthPrograms: 0,
-      msColor: 0, msDepth: 0, runs: 0, rewarms: 0,
+      msColor: 0, msDepth: 0, runs: 0, rewarms: 0, postBootEnqueued: 0,
       cascades: 0, skipped: 0, lastError: null, complete: false,
     };
+  }
+
+  /**
+   * Enqueue a newly minted class (including classes created after `sealClassSet()`)
+   * for non-blocking background prewarm before its first visible draw.
+   */
+  enqueueClass(entry) {
+    if (!entry || !entry.classKey || this._warmedClasses.has(entry.classKey)) return false;
+    this._queuedClasses.set(entry.classKey, entry);
+    this.stats.postBootEnqueued += 1;
+    if (!this._flushScheduled) {
+      this._flushScheduled = true;
+      const sched = typeof queueMicrotask === "function" ? queueMicrotask : (fn) => Promise.resolve().then(fn);
+      sched(() => {
+        this._flushScheduled = false;
+        if (this._queuedClasses.size === 0) return;
+        const batch = [...this._queuedClasses.values()];
+        this._queuedClasses.clear();
+        this.run(batch).catch(() => {});
+      });
+    }
+    return true;
   }
 
   /**
@@ -165,7 +190,7 @@ export class PoolPrewarm {
     }
     this.stats.msColor += this.now() - t0;
 
-    // ── scene B: CSM depth variants (a RENDER, not a compile) ───────────
+    // ── scene B: CSM depth variants (async compile on WebGLRenderer; sync render only on stubs lacking compileAsync) ──
     const casters = list.filter((c) => c.castShadow);
     const cascades = Math.max(1, this.cascades() | 0);
     if (casters.length > 0) {
@@ -189,13 +214,31 @@ export class PoolPrewarm {
       }
       const t1 = this.now();
       try {
-        // ONE render forces WebGLShadowMap through getDepthMaterial per
-        // (object, material, light-type) and links every depth program off
-        // the critical path. withWarmTarget keeps the composer variant key.
-        withWarmTarget(this.renderer, () => {
+        if (typeof this.renderer.compileAsync === "function") {
+          // Non-blocking async depth-variant compile via KHR_parallel_shader_compile:
+          // avoids synchronous `renderer.render(depthScene)` stalling on LINK_STATUS.
+          if (!this._asyncDepthScene) this._asyncDepthScene = new THREE.Scene();
+          for (const c of casters) {
+            const mat = c.material || {};
+            const depthMat = new THREE.MeshDepthMaterial({
+              depthPacking: THREE.RGBADepthPacking,
+              alphaTest: +(mat.alphaTest || 0),
+              side: mat.side ?? THREE.DoubleSide,
+            });
+            if (+(mat.alphaTest || 0) > 0 && mat.map) depthMat.map = mat.map;
+            const dProxy = _makeProxy(depthMat);
+            dProxy.name = `prewarm-asyncdepth-${c.classKey.slice(0, 24)}`;
+            this._asyncDepthScene.add(dProxy);
+          }
           if (this.renderer.shadowMap) this.renderer.shadowMap.needsUpdate = true;
-          this.renderer.render(this.depthScene, this.camera);
-        });
+          await guardedCompileAsync(this.renderer, this._asyncDepthScene, this.camera, this.targetScene);
+        } else {
+          // Stub renderer fallback (Node unit tests without compileAsync).
+          withWarmTarget(this.renderer, () => {
+            if (this.renderer.shadowMap) this.renderer.shadowMap.needsUpdate = true;
+            this.renderer.render(this.depthScene, this.camera);
+          });
+        }
         this.stats.depthPrograms += casters.length;
       } catch (e) {
         this.stats.lastError = String(e && e.message || e);
@@ -244,6 +287,9 @@ export function getPoolPrewarm() {
  */
 export function initPoolPrewarm(deps = {}) {
   _prewarm = new PoolPrewarm(deps);
+  if (deps.registry && typeof deps.registry.setOnClassCreated === "function") {
+    deps.registry.setOnClassCreated((entry) => _prewarm?.enqueueClass(entry));
+  }
   if (typeof window !== "undefined") {
     try {
       window.__prewarmStats = () => (_prewarm ? _prewarm.statsSnapshot() : { complete: false });

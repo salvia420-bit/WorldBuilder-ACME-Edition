@@ -355,7 +355,7 @@ globalThis.location = { search: "" };
 
 const O = await import("../plugins/vitals-orbs.js");
 const D = await import("../ui/hud_diet.js");
-D.__setHudDietSearchForTest?.("");
+D.__setHudDietSearchForTest?.("?hudDiet=off");
 
 // ── harness ─────────────────────────────────────────────────────────────────
 let passed = 0, failed = 0;

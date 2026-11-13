@@ -263,7 +263,33 @@ export function newLinkState() {
     // ?asyncLinkKeySig: fingerprint at the guard's last compile (null = unknown
     // → no check), the one computed for the current decision, and the burst cap.
     sig: null, sigAtQueue: null, curSig: null, sigDefers: 0, sigDeferAt: -Infinity, sideAtQueue: 0, twoPassAtQueue: false,
+    // Shadow-depth hold: objects whose `castShadow` was suppressed (`__hbWantCastShadow = true`)
+    // until both their color program and optional `customDepthMaterial` program finish linking.
+    shadowHold: null, depthMatAtQueue: null,
   };
+}
+
+function _holdObjectShadow(st, object) {
+  if (!object) return;
+  if (object.castShadow === true) {
+    object.__hbWantCastShadow = true;
+    object.castShadow = false;
+  }
+  if (object.__hbWantCastShadow === true && st) {
+    if (!st.shadowHold) st.shadowHold = new Set();
+    st.shadowHold.add(object);
+  }
+}
+
+function _releaseShadowHold(st) {
+  if (!st || !st.shadowHold) return;
+  for (const o of st.shadowHold) {
+    if (o && o.__hbWantCastShadow === true) {
+      o.castShadow = true;
+      o.__hbWantCastShadow = false;
+    }
+  }
+  st.shadowHold.clear();
 }
 
 // ?asyncLinkKeySig: a version move whose key fingerprint changed since our last
@@ -406,11 +432,20 @@ export function installAsyncLinkGuard(renderer, getMainScene) {
       try { prog = propsOf(m).currentProgram; } catch (_) { /* disposed */ }
       let ready = true;
       try { ready = !prog || typeof prog.isReady !== "function" || prog.isReady() === true; } catch (_) { ready = true; }
+      const st0 = slow.get(m);
+      if (ready && st0 && st0.depthMatAtQueue) {
+        try {
+          const dprog = propsOf(st0.depthMatAtQueue)?.currentProgram;
+          if (dprog && typeof dprog.isReady === "function" && dprog.isReady() !== true) ready = false;
+        } catch (_) { /* disposed */ }
+      }
       if (ready) {
         pollPending.delete(m);
         const st = stateOf(m);
         st.pending = false;
         st.ver = st.verAtQueue;
+        st.depthMatAtQueue = null;
+        _releaseShadowHold(st);
         if (KEY_SIG) {
           st.sig = st.sigAtQueue;
           // compile() builds a transparent DoubleSide material as its Back and
@@ -459,7 +494,23 @@ export function installAsyncLinkGuard(renderer, getMainScene) {
       const qmp = propsOf(qm);
       st.verMoveAtQueue = !!qmp.currentProgram;
       st.progsAtQueue = qmp.programs?.size ?? 0;
-      objs.push(ctx.object);
+      // Shadow-map CSM pass draws `qm` (`depthMaterial`) while `ctx.object.material`
+      // is the color material — wrap in a prototype proxy so `renderer.compile`
+      // actually compiles `qm` rather than `ctx.object.material`!
+      const obj = ctx.object;
+      objs.push(
+        obj && obj.material !== qm
+          ? Object.create(obj, { material: { value: qm, enumerable: true, configurable: true } })
+          : obj
+      );
+      if (obj && obj.__hbWantCastShadow === true) {
+        _holdObjectShadow(st, obj);
+        const dm = obj.customDepthMaterial;
+        if (dm && dm !== qm && asyncLinkEligible(dm)) {
+          st.depthMatAtQueue = dm;
+          objs.push(Object.create(obj, { material: { value: dm, enumerable: true, configurable: true } }));
+        }
+      }
       mats.push(qm);
       camera = camera || ctx.camera;
       scene = scene || ctx.scene;
@@ -511,6 +562,28 @@ export function installAsyncLinkGuard(renderer, getMainScene) {
     try { canvas.addEventListener("webglcontextrestored", onContextRestored, false); } catch (_) {}
   }
   const ctl = { off: false }; // live A/B seam: window.__asyncLink.off = true
+  const maybeRestoreShadow = (object, camera, scene) => {
+    const dm = object.customDepthMaterial;
+    if (!dm || !asyncLinkEligible(dm)) {
+      object.castShadow = true;
+      object.__hbWantCastShadow = false;
+      return;
+    }
+    let dprog = null;
+    try { dprog = propsOf(dm)?.currentProgram; } catch (_) { /* disposed */ }
+    if (dprog && (typeof dprog.isReady !== "function" || dprog.isReady() === true)) {
+      object.castShadow = true;
+      object.__hbWantCastShadow = false;
+      return;
+    }
+    const dst = stateOf(dm);
+    _holdObjectShadow(dst, object);
+    if (!dst.pending && !queue.has(dm)) {
+      queue.set(dm, { object, camera, scene, combo: objectCombo(object, dm) });
+      stats.queued += 1;
+      arm();
+    }
+  };
   const wrapper = function (camera, scene, geometry, material, object, group) {
     if (ctl.off) return orig.call(this, camera, scene, geometry, material, object, group);
     if (material && (material.__hbLinkOk !== material.version || material.__hbLinkOkOwner !== material || material.__hbLinkOkCombo !== (objectCombo(object, material) | comboEpoch)) && scene !== null && object) {
@@ -528,19 +601,21 @@ export function installAsyncLinkGuard(renderer, getMainScene) {
           if (d === 3 && s0 !== undefined && readySigs.has(s0.curSig + "#" + combo + "#" + material.side)) { d = 0; stats.sigKnown += 1; }
           if (d !== 0) {
             stats.deferred += 1;
+            const holdSt = stateOf(material);
+            _holdObjectShadow(holdSt, object);
             if ((d === 1 || d === 3) && !queue.has(material)) {
               if (d === 3) {
                 // ?asyncLinkKeySig: its own burst cap (SIG_DEFER_MAX per window).
-                const st = stateOf(material), now = _now();
-                if (now - st.sigDeferAt >= VERSION_DEFER_WINDOW_MS) st.sigDefers = 0;
-                st.sigDefers += 1;
-                st.sigDeferAt = now;
+                const now = _now();
+                if (now - holdSt.sigDeferAt >= VERSION_DEFER_WINDOW_MS) holdSt.sigDefers = 0;
+                holdSt.sigDefers += 1;
+                holdSt.sigDeferAt = now;
                 stats.sigDeferred += 1;
               } else if (material.version !== mp.__version && mp.currentProgram) {
-                const st = stateOf(material), now = _now();
-                if (now - st.verDeferAt >= VERSION_DEFER_WINDOW_MS) st.verDefers = 0;
-                st.verDefers += 1;
-                st.verDeferAt = now;
+                const now = _now();
+                if (now - holdSt.verDeferAt >= VERSION_DEFER_WINDOW_MS) holdSt.verDefers = 0;
+                holdSt.verDefers += 1;
+                holdSt.verDeferAt = now;
               }
               queue.set(material, { object, camera, scene, combo });
               stats.queued += 1;
@@ -555,6 +630,7 @@ export function installAsyncLinkGuard(renderer, getMainScene) {
           }
           const st = stateOf(material);
           st.combos.add(combo);
+          if (object.__hbWantCastShadow === true) maybeRestoreShadow(object, camera, scene);
           // A version move drawn without our compile (trust / rate cap): three
           // now holds a program for this fingerprint — remember it, or every
           // later move would compare against a stale one.
@@ -570,6 +646,9 @@ export function installAsyncLinkGuard(renderer, getMainScene) {
           }
         }
       }
+    } else if (object && object.__hbWantCastShadow === true && scene !== null) {
+      if (mainScene === null) mainScene = getMainScene() || null;
+      if (scene === mainScene) maybeRestoreShadow(object, camera, scene);
     }
     return orig.call(this, camera, scene, geometry, material, object, group);
   };

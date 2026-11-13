@@ -67,6 +67,7 @@ export const HUD_KIT_CSS = `
       0 10px 28px rgba(0, 0, 0, 0.7);
     pointer-events: auto;
     user-select: none;
+    contain: layout style;
   }
   .hbk-window.hbk-stone { background: url("${SP}/0x0600128A.png") center / cover, var(--hbk-ink); }
   .hbk-titlebar {
@@ -278,7 +279,7 @@ export const HUD_KIT_CSS = `
   .hbk-gold { color: var(--hbk-gold-bright); }
   .hbk-kv { display: flex; justify-content: space-between; gap: 8px; padding: 1px 0; }
   .hbk-kv > :first-child { color: var(--hbk-text-dim); }
-  .hbk-kv > :last-child { color: var(--hbk-value); text-align: right; }
+  .hbk-kv > :last-child { color: var(--hbk-value); text-align: right; font-variant-numeric: tabular-nums; }
 
   /* Scroll container with the retail rope scrollbar. */
   /* NOTE: Chrome 121+ ignores every ::-webkit-scrollbar rule on an element
@@ -350,6 +351,7 @@ export const HUD_KIT_CSS = `
   .hbk-slot .hbk-stack {
     position: absolute; right: 1px; bottom: 0;
     font-size: 9px; line-height: 1; color: #fff;
+    font-variant-numeric: tabular-nums;
     text-shadow: 0 0 2px #000, 1px 1px 0 #000; pointer-events: none;
   }
 
@@ -370,6 +372,7 @@ export const HUD_KIT_CSS = `
     position: absolute; inset: 0;
     display: flex; align-items: center; justify-content: center;
     font-size: 10px; color: #fff; text-shadow: 0 0 2px #000, 1px 1px 0 #000;
+    font-variant-numeric: tabular-nums;
   }
 
   /* Tooltips (retail ToolTip_ObjectName field 0x06004CC2). */
@@ -378,7 +381,7 @@ export const HUD_KIT_CSS = `
     max-width: 280px; padding: 4px 7px;
     background: url("${SP}/0x06004CC2.png") repeat, #0b0c10;
     border: 1px solid var(--hbk-gold-dim);
-    box-shadow: 0 3px 10px rgba(0, 0, 0, 0.8);
+    box-shadow: inset 0 1px 0 rgba(243, 210, 122, 0.14), 0 0 0 1px #000, 0 4px 12px rgba(0, 0, 0, 0.85);
     color: var(--hbk-text); font-family: var(--hbk-font); font-size: 12px;
     pointer-events: none;
   }

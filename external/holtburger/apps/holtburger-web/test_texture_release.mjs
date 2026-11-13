@@ -4,9 +4,8 @@
 // This is the most dangerous change in the residency plan, so the suite is
 // mostly about what it must REFUSE to do:
 //
-//   PART 1 — default OFF, strict `=on`. Turning this on before the atlas reads
-//            through the seam unbatches every static; it must not be reachable
-//            by a typo.
+//   PART 1 — default ON (`?texFreeCpu=off`/`0`/`false`/`no` escape) since
+//            `surface_planes.js` supplies atlas staging + context-loss refill.
 //   PART 2 — the excluded classes are excluded BY CONSTRUCTION, not by luck:
 //            atlas arrays (their CPU buffer is what `addLayerUpdate` re-uploads
 //            from), pooled per-LB planes, canvas-backed textures, and anything
@@ -56,15 +55,24 @@ function reset() {
   __resetSurfacePlanesForTests();
 }
 
-console.log("PART 1 — default OFF, strict opt-in");
+console.log("PART 1 — default ON, explicit off/0/false/no escape");
 {
-  check("absent is OFF", texFreeCpuEnabled("") === false);
-  for (const s of ["?texFreeCpu=1", "?texFreeCpu=true", "?texFreeCpu", "?texFreeCpu=yes", "?texFreeCpu=off"]) {
+  check("absent is ON", texFreeCpuEnabled("") === true);
+  for (const s of ["?texFreeCpu=on", "?texFreeCpu=1", "?texFreeCpu=true", "?texFreeCpu", "?texFreeCpu=yes"]) {
+    check(`"${s}" is ON`, texFreeCpuEnabled(s) === true);
+  }
+  for (const s of ["?texFreeCpu=off", "?texFreeCpu=OFF", "?texFreeCpu=0", "?texFreeCpu=false", "?texFreeCpu=no"]) {
     check(`"${s}" is OFF`, texFreeCpuEnabled(s) === false);
   }
-  check("only =on arms", texFreeCpuEnabled("?texFreeCpu=on") === true);
   reset();
-  check("arming is a no-op while the flag is off", armCpuRelease(mkTex(), "albedo", DID) === false);
+  const prevWin = globalThis.window;
+  globalThis.window = { location: { search: "?texFreeCpu=off" } };
+  try {
+    check("arming is a no-op while ?texFreeCpu=off", armCpuRelease(mkTex(), "albedo", DID) === false);
+  } finally {
+    if (prevWin === undefined) delete globalThis.window;
+    else globalThis.window = prevWin;
+  }
 }
 
 console.log("PART 2 — the excluded classes");

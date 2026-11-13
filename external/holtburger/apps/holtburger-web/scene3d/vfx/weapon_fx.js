@@ -225,11 +225,39 @@ function _uniformBundle() {
   };
 }
 
+export const FX_GLOW_LAYER = 3;
+
+function _resolveFxGlowLayer() {
+  const g = globalThis.__FX_GLOW_LAYER;
+  return Number.isInteger(g) && g >= 0 && g < 31 ? g : FX_GLOW_LAYER;
+}
+
+function _syncAuraGlowLayer(st) {
+  const parts = st?.inst?.parts;
+  if (!Array.isArray(parts)) return;
+  const glowLayer = _resolveFxGlowLayer();
+  const want = Boolean(st && !st.disposed && st.aura);
+  for (let p = 0; p < parts.length; p++) {
+    const kids = parts[p]?.children;
+    if (!kids) continue;
+    for (let i = 0; i < kids.length; i++) {
+      const mesh = kids[i];
+      if (!mesh || !mesh.isMesh || _isAttachedChildNode(mesh) || !mesh.layers) continue;
+      if (want) {
+        if (typeof mesh.layers.enable === "function") mesh.layers.enable(glowLayer);
+      } else if (typeof mesh.layers.disable === "function") {
+        mesh.layers.disable(glowLayer);
+      }
+    }
+  }
+}
+
 function _applyAura(st, aura) {
   st.aura = aura || null;
   st.u.uWfxAuraKind.value = aura ? aura.kind : WFX_KIND.none;
   if (aura) st.u.uWfxAuraColor.value.set(aura.color[0], aura.color[1], aura.color[2]);
   else st.u.uWfxAuraColor.value.set(0, 0, 0);
+  _syncAuraGlowLayer(st);
 }
 
 /**
@@ -344,6 +372,7 @@ export function weaponFxMaterial(st, did, base) {
 export function weaponFxCommit(st) {
   if (!st || st.disposed) return;
   if (st.mats.size === 0) return; // nothing was built (wireframe / every surface fell through)
+  _syncAuraGlowLayer(st);
   _live.add(st);
 }
 
@@ -359,6 +388,7 @@ export function weaponFxOwnedMaterial(inst, did) {
 export function weaponFxForget(st) {
   if (!st || st.disposed) return;
   st.disposed = true;
+  _syncAuraGlowLayer(st);
   _live.delete(st);
   for (const rec of st.mats.values()) {
     try { rec.mat.dispose(); } catch (_) { /* already freed */ }
@@ -496,6 +526,9 @@ function _syncMaterials(st) {
         rec = _makeMat(st, did, m);
         if (!rec) continue;
         mesh.material = rec.mat;
+        if (st.aura && mesh.layers && typeof mesh.layers.enable === "function") {
+          mesh.layers.enable(_resolveFxGlowLayer());
+        }
         if (old) (retired || (retired = [])).push(old);
         if (inst._entityMaterials && inst._entityMaterials.get(did) === old) inst._entityMaterials.set(did, rec.mat);
       }

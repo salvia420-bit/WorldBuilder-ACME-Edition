@@ -48,8 +48,11 @@ check("canvasMsaa reader is an exact-match opt-in",
   indexJs.includes('get("canvasMsaa") === "on"'));
 
 // ── 3. stableDepthShare ────────────────────────────────────────────────────
-check("stableDepthShare reader is an exact-match opt-in",
-  atmoJs.includes('get("stableDepthShare") === "on"'));
+// Promoted default-ON (2026-11-12 Pass 2); `=off` / `0` / `false` / `no` escapes
+// back to the bespoke DepthTexture attachments below.
+check("stableDepthShare reader defaults ON with off/0/false/no escape",
+  atmoJs.includes('get("stableDepthShare")') &&
+  /return !\(v === "off" \|\| v === "0" \|\| v === "false" \|\| v === "no"\);/.test(atmoJs));
 check("bespoke depth creation is guarded by the flag",
   /if \(!stableDepthShare\) \{\s*\n\s*const _depthBufSize/.test(atmoJs));
 check("flag-off arm keeps the bespoke attachments (byte-identical legacy)",

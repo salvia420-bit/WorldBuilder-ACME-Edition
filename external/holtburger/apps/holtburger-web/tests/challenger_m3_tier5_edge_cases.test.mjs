@@ -618,11 +618,17 @@ export function runTests() {
     checkEqual(PRESETS.low.creviceAo, false, "low preset has creviceAo: false");
     checkEqual(PRESETS.low.microContactShadow, false, "low preset has microContactShadow: false");
 
-    // Mid: POM on, 8 steps
+    // Mid: POM on, 5 lightweight steps (tuned 2026-11-12 Pass 2)
     checkEqual(PRESETS.mid.pom, true, "mid preset has pom: true");
-    checkEqual(PRESETS.mid.pomStepsPrimary, 8, "mid preset has 8 primary steps");
+    checkEqual(PRESETS.mid.pomStepsPrimary, 5, "mid preset has 5 primary steps");
     checkEqual(PRESETS.mid.creviceAo, true, "mid preset has creviceAo: true");
     checkEqual(PRESETS.mid.microContactShadow, false, "mid preset has microContactShadow: false");
+    check(
+      PRESETS.low.pomStepsPrimary < PRESETS.mid.pomStepsPrimary &&
+      PRESETS.mid.pomStepsPrimary < PRESETS.high.pomStepsPrimary &&
+      PRESETS.high.pomStepsPrimary < PRESETS.ultra.pomStepsPrimary,
+      "pomStepsPrimary strictly monotonic across low < mid < high < ultra"
+    );
 
     // High: POM on, 16 steps, micro shadow on
     checkEqual(PRESETS.high.pom, true, "high preset has pom: true");

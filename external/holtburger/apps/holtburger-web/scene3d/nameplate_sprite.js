@@ -202,17 +202,27 @@ function _capCacheFifo(cache, max) {
 function _sweepPendingDispose(entityMap) {
   if (_pendingDispose.length === 0) return 0;
   const inUse = new Set();
+  const inUseTex = new Set();
   for (const inst of entityMap.values()) {
     const np = inst && inst._nameplateSprite;
-    if (np?.material) inUse.add(np.material);
+    if (np?.material) {
+      inUse.add(np.material);
+      if (np.material.map) inUseTex.add(np.material.map);
+    }
     const bb = inst && inst._buffBadgeSprite;
-    if (bb?.material) inUse.add(bb.material);
+    if (bb?.material) {
+      inUse.add(bb.material);
+      if (bb.material.map) inUseTex.add(bb.material.map);
+    }
   }
   let freed = 0;
   let keep = 0;
   for (let i = 0; i < _pendingDispose.length; i++) {
     const entry = _pendingDispose[i];
-    if (entry?.material && inUse.has(entry.material)) {
+    if (
+      (entry?.material && inUse.has(entry.material)) ||
+      (entry?.texture && inUseTex.has(entry.texture))
+    ) {
       // Still on screen — hold it for the next sweep.
       _pendingDispose[keep++] = entry;
       continue;
@@ -384,6 +394,10 @@ const ITEM_TYPE_CLOTHING = 0x00000004;
  * `categoryForItemType` (`index.html:4553`). Used by
  * `nameplateColorForCategory` to pick text fill.
  */
+const ITEM_TYPE_VENDOR_NP = 0x00100000;
+const _NPC_TITLE_RE = /\b(shopkeeper|merchant|barkeep|innkeeper|healer|scribe|archmage|blacksmith|grocer|jeweler|tailor|bowyer|fletcher|alchemist|collector|guard|sentinel|warden|townsperson|citizen|greeter|agent|emissary|translator|scholar|sage|patron|vassal|peddler|armorer|weaponsmith)\b/i;
+const _SIGN_NAME_RE = /\b(sign|signpost|plaque|statue|monument|pedestal|shrine|obelisk|direction)\b/i;
+
 export function categoryForItemType(itemType) {
   const t = (itemType >>> 0);
   if (!t) return "unknown";
@@ -398,21 +412,53 @@ export function categoryForItemType(itemType) {
 }
 
 /**
+ * Richer category resolver factoring in player GUID subspace, NPC/vendor flags,
+ * synthetic spawn category, and sign/pedestal labels.
+ */
+export function resolveNameplateCategory(meta, guid = 0, name = "") {
+  if (!meta) return categoryForItemType(0);
+  const t = (meta.itemType >>> 0);
+  if (t & ITEM_TYPE_PORTAL) return "portal";
+  if (t & ITEM_TYPE_LIFE_STONE) return "lifestone";
+  const g = guid >>> 0;
+  if (meta.isPlayer === true || (((g >>> 28) & 0xf) === 0x5 && (t & ITEM_TYPE_CREATURE) !== 0)) {
+    return "player";
+  }
+  if (
+    meta.isNpc === true ||
+    meta.isVendor === true ||
+    meta.weenieType === 12 ||
+    meta.__category === "NPC" ||
+    ((t & ITEM_TYPE_CREATURE) !== 0 && _NPC_TITLE_RE.test(name))
+  ) {
+    return "npc";
+  }
+  if (!(t & ITEM_TYPE_CREATURE) && _SIGN_NAME_RE.test(name)) return "sign";
+  return categoryForItemType(t);
+}
+
+/**
  * Map a category string to a CSS-style colour for the nameplate's text
- * fill. Mirrors `nameplateColorForCategory` (`index.html:3558`) but
- * returns a `#rrggbb` string instead of a u24 — Canvas 2D API wants
- * CSS strings.
+ * fill. Tuned for crisp legibility over dark obsidian pills:
+ *   - warm gold for NPCs / shopkeepers
+ *   - cyan-violet for portals
+ *   - emerald for players
+ *   - warm parchment for signs / pedestals
  */
 export function nameplateColorForCategory(category) {
   switch (category) {
-    case "creature":  return "#e07070";
-    case "portal":    return "#6ec8e0";
+    case "player":    return "#58e898";
+    case "npc":
+    case "vendor":    return "#ffd66b";
+    case "creature":  return "#ee7670";
+    case "portal":    return "#8e9eff";
     case "lifestone": return "#4da0e8";
-    case "container": return "#cda060";
+    case "sign":      return "#f2dfc0";
     case "writable":  return "#e09a3f";
+    case "container": return "#dfba78";
     case "weapon":
-    case "armor":     return "#c8c8b0";
-    default:          return "#ffffff";
+    case "armor":     return "#d2d4c2";
+    default:          return "#f4f6fa";
   }
 }
 
@@ -461,19 +507,55 @@ function _bakeWithCanvasText(cacheKey, textCanvas) {
   if (!ctx) return null;
   ctx.imageSmoothingEnabled = false;
 
-  ctx.fillStyle = "rgba(0, 0, 0, 0.55)";
+  ctx.fillStyle = "rgba(8, 9, 14, 0.64)";
   if (typeof ctx.roundRect === "function") {
     ctx.beginPath();
     ctx.roundRect(padding, padding, canvasWidth - padding * 2, CANVAS_HEIGHT - padding * 2, 8);
     ctx.fill();
+    if (typeof ctx.stroke === "function") {
+      ctx.lineWidth = 1;
+      ctx.strokeStyle = "rgba(255, 255, 255, 0.09)";
+      ctx.stroke();
+    }
   } else {
     ctx.fillRect(padding, padding, canvasWidth - padding * 2, CANVAS_HEIGHT - padding * 2);
   }
 
-  // Centre the rendered text canvas inside the rounded rect. If the
-  // glyphs are taller than the background, clip rather than upscale.
+  // Centre the rendered text canvas inside the rounded rect with a crisp 1.5px
+  // dark obsidian outline + subtle drop shadow so glyphs read razor-sharp over
+  // bright snow, sky, stone, and spell flashes.
   const dx = Math.floor((canvasWidth - textCanvas.width) / 2);
   const dy = Math.floor((CANVAS_HEIGHT - textCanvas.height) / 2);
+  try {
+    const sil = document.createElement("canvas");
+    sil.width = textCanvas.width;
+    sil.height = textCanvas.height;
+    const sctx = sil.getContext("2d");
+    if (sctx && sil.width > 0 && sil.height > 0) {
+      sctx.imageSmoothingEnabled = false;
+      sctx.drawImage(textCanvas, 0, 0);
+      sctx.globalCompositeOperation = "source-in";
+      sctx.fillStyle = "#08090e";
+      sctx.fillRect(0, 0, sil.width, sil.height);
+      ctx.save();
+      ctx.shadowColor = "rgba(0, 0, 0, 0.78)";
+      ctx.shadowBlur = 2;
+      ctx.shadowOffsetX = 0;
+      ctx.shadowOffsetY = 2;
+      ctx.drawImage(sil, dx, dy);
+      ctx.restore();
+      const r = 1.5;
+      const d = 1.0;
+      ctx.drawImage(sil, dx - r, dy);
+      ctx.drawImage(sil, dx + r, dy);
+      ctx.drawImage(sil, dx, dy - r);
+      ctx.drawImage(sil, dx, dy + r);
+      ctx.drawImage(sil, dx - d, dy - d);
+      ctx.drawImage(sil, dx + d, dy - d);
+      ctx.drawImage(sil, dx - d, dy + d);
+      ctx.drawImage(sil, dx + d, dy + d);
+    }
+  } catch (_) {}
   ctx.drawImage(textCanvas, dx, dy);
 
   const texture = new THREE.CanvasTexture(canvas);
@@ -587,36 +669,58 @@ function getOrBakeNameplateMaterial(name, colorHex) {
   // Background. Rounded rectangle filling the canvas with 8 px corner
   // radius. Drawn first so text composites on top.
   const padding = 4;
-  ctx.fillStyle = "rgba(0, 0, 0, 0.55)";
+  ctx.fillStyle = "rgba(8, 9, 14, 0.64)";
   // roundRect is r166+ on canvas2d; three.js 0.184 implies a modern
   // browser, but feature-detect anyway in case of an unusual host.
   if (typeof ctx.roundRect === "function") {
     ctx.beginPath();
     ctx.roundRect(padding, padding, canvasWidth - padding * 2, CANVAS_HEIGHT - padding * 2, 8);
     ctx.fill();
+    if (typeof ctx.stroke === "function") {
+      ctx.lineWidth = 1;
+      ctx.strokeStyle = "rgba(255, 255, 255, 0.09)";
+      ctx.stroke();
+    }
   } else {
     ctx.fillRect(padding, padding, canvasWidth - padding * 2, CANVAS_HEIGHT - padding * 2);
   }
 
   // Text. Bold N px monospace (N = 32 by default; smaller when the
-  // shrink-to-fit branch fired), centre-aligned with a black outline so
-  // it stays legible on bright backgrounds (sky, snow, lit interiors).
-  // Re-set the font AFTER canvas.width is assigned — Chrome resets
-  // canvas2d state on width-change so the earlier `ctx.font = ...` is
-  // wiped. The pre-resize measureText call still gives valid metrics
-  // because the font was set at that time.
+  // shrink-to-fit branch fired), centre-aligned with a crisp 1.5px dark
+  // obsidian outline + subtle drop shadow so it stays legible on bright
+  // backgrounds (sky, snow, lit interiors).
   ctx.font = `bold ${fontPx}px monospace`;
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
-  ctx.lineWidth = Math.max(2, Math.round(fontPx / 8));
-  ctx.strokeStyle = "#000000";
-  ctx.lineJoin = "round";
-  // Outline first, fill second — that's the standard "knockout"
-  // pattern that gets you a clean stroke without the half-pixel
-  // antialiasing of a fill-then-stroke order.
-  ctx.strokeText(name, canvasWidth / 2, CANVAS_HEIGHT / 2);
+  const tx = canvasWidth / 2;
+  const ty = CANVAS_HEIGHT / 2;
+  const strokePx = Math.max(3, Math.round(fontPx * 0.095)); // 3px centered stroke = 1.5px outer outline
+  if (typeof ctx.strokeText === "function") {
+    if (typeof ctx.save === "function") ctx.save();
+    ctx.shadowColor = "rgba(0, 0, 0, 0.78)";
+    ctx.shadowBlur = 2.5;
+    ctx.shadowOffsetX = 0;
+    ctx.shadowOffsetY = 2;
+    ctx.lineWidth = strokePx;
+    ctx.strokeStyle = "#08090e";
+    ctx.lineJoin = "round";
+    ctx.miterLimit = 2;
+    ctx.strokeText(name, tx, ty);
+    if (typeof ctx.restore === "function") {
+      ctx.restore();
+    } else {
+      ctx.shadowColor = "transparent";
+      ctx.shadowBlur = 0;
+      ctx.shadowOffsetY = 0;
+    }
+    ctx.lineWidth = strokePx;
+    ctx.strokeStyle = "#08090e";
+    ctx.lineJoin = "round";
+    ctx.miterLimit = 2;
+    ctx.strokeText(name, tx, ty);
+  }
   ctx.fillStyle = colorHex;
-  ctx.fillText(name, canvasWidth / 2, CANVAS_HEIGHT / 2);
+  ctx.fillText(name, tx, ty);
 
   const texture = new THREE.CanvasTexture(canvas);
   texture.needsUpdate = true;
@@ -691,11 +795,22 @@ export function createNameplateSprite(name, options = {}) {
   if (!name || typeof name !== "string" || name.length === 0) return null;
   const category = options.color
     ? null
-    : categoryForItemType((options.itemType >>> 0) | 0);
+    : (options.category || categoryForItemType((options.itemType >>> 0) | 0));
   const colorHex = options.color || nameplateColorForCategory(category);
   const baked = getOrBakeNameplateMaterial(name, colorHex);
   if (!baked) return null;
-  const sprite = new THREE.Sprite(baked.material);
+  // Clone a lightweight per-sprite SpriteMaterial sharing `baked.texture` so
+  // distance/hover/target focus opacity scales per entity without clobbering
+  // same-named neighbours, while sharing one CanvasTexture + WebGLProgram.
+  let spriteMat = baked.material;
+  if (baked.material && typeof baked.material.clone === "function") {
+    spriteMat = baked.material.clone();
+    spriteMat.map = baked.texture;
+    spriteMat.depthTest = _nameplateDepthTest;
+    spriteMat.opacity = 1.0;
+    spriteMat.userData = { ...(spriteMat.userData || {}), __sharedNameplateTex: true };
+  }
+  const sprite = new THREE.Sprite(spriteMat);
   sprite.name = `nameplate_${name}`;
   // World-space size. Width is derived from the baked canvas width so
   // long names stay readable at the same px/m density as short names
@@ -718,7 +833,7 @@ export function createNameplateSprite(name, options = {}) {
   // Stash the source name on userData so capture scripts can read it
   // back without parsing canvas pixels. The capture asserts
   // `sprite.userData.nameplateText === entity.meta.name`.
-  sprite.userData = { nameplateText: name, color: colorHex, canvasWidth };
+  sprite.userData = { nameplateText: name, color: colorHex, category, canvasWidth };
   return sprite;
 }
 
@@ -788,18 +903,23 @@ export function ensureNameplateForEntity(inst, _scene3d) {
   //      up here too. This is "dedupe-at-registration-time" keyed on
   //      the inst.guid: there is at most ONE nameplate sprite per
   //      EntityInstance after this function returns.
+  const resolvedCategory = resolveNameplateCategory(meta, inst.guid, name);
+  const expectedColor = nameplateColorForCategory(resolvedCategory);
   const existing = inst._nameplateSprite || null;
   if (existing) {
     const prevText = existing.userData && existing.userData.nameplateText;
-    if (prevText === name) {
-      // Same name as before — keep the existing sprite, no work.
+    const prevColor = existing.userData && existing.userData.color;
+    if (prevText === name && (!prevColor || prevColor === expectedColor)) {
+      // Same name + category colour as before — keep the existing sprite, no work.
       return existing;
     }
-    // Name changed (kind=3 MetaRefresh path). Remove the old sprite
-    // before attaching a fresh one — the material is shared via the
-    // per-name cache so we don't dispose it; just detach.
+    // Name or category changed (kind=3 MetaRefresh path). Remove the old sprite
+    // and dispose its per-sprite material wrapper (leaving the cached CanvasTexture intact).
     try {
       existing.parent && existing.parent.remove(existing);
+    } catch (_) {}
+    try {
+      if (existing.material?.userData?.__sharedNameplateTex) existing.material.dispose();
     } catch (_) {}
     inst._nameplateSprite = null;
   }
@@ -839,7 +959,10 @@ export function ensureNameplateForEntity(inst, _scene3d) {
     }
   }
 
-  const sprite = createNameplateSprite(name, { itemType: meta.itemType >>> 0 });
+  const sprite = createNameplateSprite(name, {
+    itemType: meta.itemType >>> 0,
+    category: resolvedCategory,
+  });
   if (!sprite) return null;
   // Position is in the entity's LOCAL frame. The entity root carries a
   // yaw quaternion (rotation about AC +Z), but +Z in entity-local is
@@ -1196,35 +1319,37 @@ export function tickNameplateLod(scene3d) {
     }
   } catch (_) {}
 
+  const em = scene3d.entityManager;
+  const selectedGuid = ((em?._selectedGuid ?? (typeof window !== "undefined" ? window.__selectedGuid : 0)) || 0) >>> 0;
+  const hoveredGuid = ((em?._hoveredGuid ?? (typeof window !== "undefined" ? window.__hoveredGuid : 0)) || 0) >>> 0;
+
   _lodScratch.length = 0;
   const rangeSq = NAMEPLATE_VISIBLE_RANGE_M * NAMEPLATE_VISIBLE_RANGE_M;
+  const focusRangeSq = (NAMEPLATE_VISIBLE_RANGE_M * 1.35) * (NAMEPLATE_VISIBLE_RANGE_M * 1.35);
   for (const inst of entityMap.values()) {
     const sprite = inst && inst._nameplateSprite;
     // F5/F8 — the badge comes from its OWN tracked slot, not a per-frame
     // `root.children.find(...)` scan (one closure + an O(children) walk per
-    // entity per frame). The slot is also the only way to reach a badge on an
-    // entity that has NO nameplate — deferred font bake, or a name filtered by
-    // the local-player / inventory skips. `refreshBuffBadgeForEntity` attaches
-    // to those, and the old `if (!sprite) continue` left them stranded visible
-    // at any distance, past both the range cull and the count cap.
+    // entity per frame).
     const badge = inst && inst._buffBadgeSprite;
     if (!sprite) {
       if (badge) badge.visible = false;
       continue;
     }
-    // Local-player sprite: always visible. (Note: ensureNameplateForEntity
-    // already skips the local player, but if a future path attaches one
-    // anyway — e.g. third-person showing your own name — keep it on.)
-    if (localGuid !== null && (inst.guid >>> 0) === localGuid) {
+    const g = (inst.guid >>> 0);
+    // Local-player sprite: always visible at full crispness.
+    if (localGuid !== null && g === localGuid) {
       sprite.visible = true;
-      if (badge) badge.visible = true;
+      if (sprite.material) {
+        sprite.material.opacity = 1.0;
+        sprite.material.depthTest = _nameplateDepthTest;
+      }
+      if (badge) {
+        badge.visible = true;
+        if (badge.material) badge.material.depthTest = _nameplateDepthTest;
+      }
       continue;
     }
-    // World position of the sprite. Sprite is parented to inst.root,
-    // whose matrixWorld already incorporates the worldRoot rotation.
-    // sprite.matrixWorld is updated by the standard render walk; here
-    // we read the parent root's world position as a stable proxy
-    // (avoids an updateWorldMatrix call per-entity per-frame).
     const root = inst.root;
     if (!root) continue;
     const m = root.matrixWorld.elements;
@@ -1232,11 +1357,9 @@ export function tickNameplateLod(scene3d) {
     const dy = m[13] - _lodCamWorld.y;
     const dz = m[14] - _lodCamWorld.z;
     const d2 = dx * dx + dy * dy + dz * dz;
-    if (d2 > rangeSq) {
+    const focused = g !== 0 && (g === selectedGuid || g === hoveredGuid);
+    if (d2 > (focused ? focusRangeSq : rangeSq)) {
       sprite.visible = false;
-      // Wave 4.B (#19) — hide the sibling buff badge too, or it stays visible
-      // after the nameplate LODs out (stranded "+N" chip floating with no
-      // name). Mirrors the in-range visibility sync below.
       if (badge) badge.visible = false;
       continue;
     }
@@ -1244,29 +1367,41 @@ export function tickNameplateLod(scene3d) {
     e.sprite = sprite;
     e.badge = badge || null;
     e.d2 = d2;
+    e.focused = focused ? 1 : 0;
     _lodScratch.push(e);
   }
 
-  // Count cap: partial-sort by distance² and keep the N nearest. Plain
-  // O(n log n) sort is fine here — n typically ≤ 200; the in-range
-  // subset is usually << that. The scratch entries themselves are pooled
-  // (`_lodEntry`), so the sort shuffles references and allocates nothing.
-  _lodScratch.sort((a, b) => a.d2 - b.d2);
+  // Focused (hovered/selected) targets take top priority, then nearest by distance².
+  _lodScratch.sort((a, b) => ((b.focused | 0) - (a.focused | 0)) || (a.d2 - b.d2));
+  const nearFullM = 14.0;
+  const nearFullSq = nearFullM * nearFullM;
+  const fadeSpan = Math.max(1.0, NAMEPLATE_VISIBLE_RANGE_M - nearFullM);
   let visible = 0;
   for (let i = 0; i < _lodScratch.length; i++) {
     const e = _lodScratch[i];
     const want = i < MAX_VISIBLE_NAMEPLATES;
     e.sprite.visible = want;
-    if (want) visible++;
+    if (want) {
+      visible++;
+      let op = 1.0;
+      if (!e.focused && e.d2 > nearFullSq) {
+        const t = Math.min(1, Math.max(0, (Math.sqrt(e.d2) - nearFullM) / fadeSpan));
+        op = 1.0 - 0.52 * (t * t * (3 - 2 * t));
+      }
+      if (e.sprite.material) {
+        e.sprite.material.opacity = op;
+        e.sprite.material.depthTest = _nameplateDepthTest;
+      }
+      if (e.badge && e.badge.material) {
+        e.badge.material.depthTest = _nameplateDepthTest;
+      }
+    }
     // === Wave 4.B — sync buff badge visibility with nameplate (2026-05-28) ===
-    // The badge is parented to the same entity root, but the LOD path toggles
-    // `.visible` per-sprite, so the badge has to be mirrored explicitly (same
-    // range + count cap). Carried on the pooled scratch entry from its tracked
-    // slot — no children scan (F5).
     if (e.badge) e.badge.visible = want;
     // Drop the refs so a pooled entry can't pin a despawned sprite alive.
     e.sprite = null;
     e.badge = null;
+    e.focused = 0;
   }
   const considered = _lodScratch.length;
   _lodScratch.length = 0;

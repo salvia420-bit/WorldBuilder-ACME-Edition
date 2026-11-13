@@ -185,6 +185,7 @@ import {
   waterFlowTable,
   waterFlowEntry,
   writeWaterColumns,
+  stampVertexWaterAuxBytes,
   loadWaterFlowTable,
   waterFlowUniforms,
   installWaterFlowDiag,
@@ -534,13 +535,17 @@ function _installPoolDispose(tex, freeList) {
  * G=roadCode*64, B=0, A=255) — the warm-path fill below mirrors it exactly so
  * a re-baked LB is byte-identical to a cold-baked one.
  */
-function acquireVertexTypesTex(terrainCodes, roadCodes, roundNormals, water) {
-  if (VERTEX_TYPES_COLS !== 9) return acquireWideVertexTypesTex(terrainCodes, roadCodes, roundNormals, water);
+function acquireVertexTypesTex(terrainCodes, roadCodes, roundNormals, water, heights, waterSurfaceMask) {
+  if (VERTEX_TYPES_COLS !== 9) {
+    return acquireWideVertexTypesTex(terrainCodes, roadCodes, roundNormals, water, heights, waterSurfaceMask);
+  }
   const tex = _vertexTypesTexFreeList.pop();
   if (!tex) {
     // Cold miss — build via the shared adapter helper (correct dims, filters,
     // NoColorSpace, needsUpdate) then make it pool-managed.
     const fresh = buildVertexTypesDataTexture(terrainCodes, roadCodes);
+    stampVertexWaterAuxBytes(fresh.image.data, 9, terrainCodes, heights, waterSurfaceMask);
+    fresh.needsUpdate = true;
     return _installPoolDispose(fresh, _vertexTypesTexFreeList);
   }
   // Warm hit — overwrite EVERY byte (full reset; no stale codes bleed in).
@@ -555,6 +560,7 @@ function acquireVertexTypesTex(terrainCodes, roadCodes, roundNormals, water) {
       bytes[dst + 3] = 255;
     }
   }
+  stampVertexWaterAuxBytes(bytes, 9, terrainCodes, heights, waterSurfaceMask);
   tex.userData.__parked = false; // checked back out
   tex.needsUpdate = true; // re-upload the rewritten bytes to the same texture
   return tex;
@@ -572,7 +578,7 @@ function acquireVertexTypesTex(terrainCodes, roadCodes, roundNormals, water) {
  * 18..35 carry this LB's flow, swell weights and whitewater (`water` =
  * { entry, bank } from bakeTerrainForLandblock; scene3d/terrain_water_flow.js).
  */
-function acquireWideVertexTypesTex(terrainCodes, roadCodes, roundNormals, water) {
+function acquireWideVertexTypesTex(terrainCodes, roadCodes, roundNormals, water, heights, waterSurfaceMask) {
   const cols = VERTEX_TYPES_COLS;
   let tex = _vertexTypesTexFreeList.pop();
   if (!tex) {
@@ -594,6 +600,7 @@ function acquireWideVertexTypesTex(terrainCodes, roadCodes, roundNormals, water)
       bytes[dst + 3] = 255;
     }
   }
+  stampVertexWaterAuxBytes(bytes, cols, terrainCodes, heights, waterSurfaceMask);
   const f = roundNormals && roundNormals.factor ? roundNormals.factor : 0;
   writeTerrainRoundNormals(bytes, cols, roundNormals ? roundNormals.acLight : null, f * 8 + 1, f);
   writeWaterColumns(bytes, cols, water ? water.entry : null, water ? water.bank : null);
@@ -2608,6 +2615,63 @@ float distToSegment(vec2 p, vec2 a, vec2 b) {
 }
 ${terrainDetailFragGlsl().replace(/\n$/, "")}${TERRAIN_FS_ON ? TERRAIN_FAR_SIMPLIFY_FRAG_GLSL.replace(/\n$/, "") : ""}
 
+int vertexAuxByteAt(int iu, int iv) {
+  return int(texelFetch(uVertexTypes, ivec2(iu, iv), 0).g * 255.0 + 0.5) & 31;
+}
+
+// Relief height for POM across terrain layers + RoadType layer 32.
+// Uses baked uAtlas.a when curated (< 0.995). For uncurated RoadType (32) and
+// Rock/Cliff codes (0, 13, 14), synthesizes cobble/rock relief from albedo
+// luminance alone (zero extra texture fetch inside the march loop), while
+// keeping flat grass/forest/sand layers at 1.0 for 1-tap iteration-0 exit.
+float terrainLayerReliefH(int code, vec2 uv) {
+  int c = clamp(code, 0, 32);
+  vec4 a = terrainAtlasTex(c, uv);
+  if (a.a < 0.995) return a.a;
+  if (c == 32 || c == 0 || c == 13 || c == 14) {
+    float luma = dot(a.rgb, vec3(0.299, 0.587, 0.114));
+    return clamp(0.32 + 0.62 * sqrt(max(luma, 0.0)), 0.0, 1.0);
+  }
+  return a.a;
+}
+
+// Analytic road coverage mask for POM (evaluated pre-TexMerge from uVertexTypes).
+float terrainPomRoadLane(int iu, int iv, vec2 cellUv, float pw00, float pw10, float pw01, float pw11) {
+  if (uRoadEnabled < 0.5) return 0.0;
+  float r00 = vertexRoadAt(iu, iv);
+  float r10 = vertexRoadAt(iu + 1, iv);
+  float r01 = vertexRoadAt(iu, iv + 1);
+  float r11 = vertexRoadAt(iu + 1, iv + 1);
+  if (r00 + r10 + r01 + r11 < 0.5) return 0.0;
+  if (uRoadPaintLegacy > 0.5) {
+    return smoothstep(0.85, 0.95, r00 * pw00 + r10 * pw10 + r01 * pw01 + r11 * pw11);
+  }
+  vec2 rp = cellUv * 24.0;
+  vec2 c00p = vec2(0.0, 0.0);
+  vec2 c10p = vec2(24.0, 0.0);
+  vec2 c01p = vec2(0.0, 24.0);
+  vec2 c11p = vec2(24.0, 24.0);
+  float rd = 1.0e9;
+  if (r00 > 0.5 && r10 > 0.5) rd = min(rd, distToSegment(rp, c00p, c10p));
+  if (r01 > 0.5 && r11 > 0.5) rd = min(rd, distToSegment(rp, c01p, c11p));
+  if (r00 > 0.5 && r01 > 0.5) rd = min(rd, distToSegment(rp, c00p, c01p));
+  if (r10 > 0.5 && r11 > 0.5) rd = min(rd, distToSegment(rp, c10p, c11p));
+  if (r00 > 0.5 && r11 > 0.5) rd = min(rd, distToSegment(rp, c00p, c11p));
+  if (r10 > 0.5 && r01 > 0.5) rd = min(rd, distToSegment(rp, c10p, c01p));
+  if (r00 > 0.5) rd = min(rd, length(rp - c00p));
+  if (r10 > 0.5) rd = min(rd, length(rp - c10p));
+  if (r01 > 0.5) rd = min(rd, length(rp - c01p));
+  if (r11 > 0.5) rd = min(rd, length(rp - c11p));
+  return 1.0 - smoothstep(1.9, 3.1, rd);
+}
+
+// Forest floor (21, 28, 29) and grassland (1, 3, 9) humus/moss/litter weight.
+float terrainForestGrassW(int c) {
+  if (c == 21 || c == 28 || c == 29) return 1.0;
+  if (c == 1 || c == 3 || c == 9) return 0.62;
+  return 0.0;
+}
+
 // 2026-10-08 — the water sheen's ripple field: two value-noise octaves (1.1 m
 // and 0.47 m) drifting different ways, sampled in the AC ground plane (east,
 // north); returns the surface slope. 2026-10-19 — a function so ?waterFlow can
@@ -2806,6 +2870,9 @@ void main() {
   // WOULD have marched and made the flow swim. Bypassing on any
   // water-touching cell keeps both arms identical here and is a strict
   // no-op wherever water is absent.
+  float pomSelfShadow = 1.0;
+  vec2 pomCliffOffYz = vec2(0.0);
+  vec2 pomCliffOffXz = vec2(0.0);
   if (uPomEnabled > 0.5 && vViewDepth < uPomFadeEnd && !cellTouchesWater) {
     float pw00 = (1.0 - fu) * (1.0 - fv);
     float pw10 = fu * (1.0 - fv);
@@ -2816,29 +2883,96 @@ void main() {
     if (pw01 > pnw) { pnw = pw01; pomCode = t01; }
     if (pw11 > pnw) { pnw = pw11; pomCode = t11; }
     pomCode = clamp(pomCode, 0, 32);
-    // world view -> AC tangent frame: world(x,y,z) = ac(x,z,-y), so
-    // ac = (w.x, -w.z, w.y). Only march when looking meaningfully down
-    // at the surface (grazing rays explode the offset).
+    float pomRoadW = terrainPomRoadLane(iu, iv, cellUv, pw00, pw10, pw01, pw11);
+    vec3 pomN = normalize(vAcNormal);
+    float pomSlope = 1.0 - clamp(pomN.z, 0.0, 1.0);
+    float pomCliffW = smoothstep(0.32, 0.62, pomSlope) * (1.0 - pomRoadW * 0.85);
+    float pomSedW = (isSandCode(t00) ? pw00 : 0.0) + (isSandCode(t10) ? pw10 : 0.0)
+                  + (isSandCode(t01) ? pw01 : 0.0) + (isSandCode(t11) ? pw11 : 0.0)
+                  + (isDirtCode(t00) ? pw00 * 0.5 : 0.0) + (isDirtCode(t10) ? pw10 * 0.5 : 0.0)
+                  + (isDirtCode(t01) ? pw01 * 0.5 : 0.0) + (isDirtCode(t11) ? pw11 * 0.5 : 0.0);
+    int pomCliffCode = (pomSedW > 0.25 || pomCode == 13) ? 13 : 0;
+    vec3 pomT = vec3(1.0, 0.0, 0.0) - pomN * pomN.x;
+    pomT = dot(pomT, pomT) > 1.0e-4 ? normalize(pomT) : vec3(0.0, 1.0, 0.0);
+    vec3 pomB = normalize(cross(pomN, pomT));
+    // world view -> AC tangent frame, projected into the local slope-tangent
+    // frame on steep cliffs so coastal/mountain rock faces self-displace cleanly.
     vec3 vw = normalize(vWorldPos - cameraPosition);
-    vec3 vt = vec3(vw.x, -vw.z, vw.y);
+    vec3 vtAc = vec3(vw.x, -vw.z, vw.y);
+    vec3 vtSlope = vec3(dot(vtAc, pomT), dot(vtAc, pomB), dot(vtAc, pomN));
+    vec3 vt = mix(vtAc, vtSlope, pomCliffW);
     if (vt.z < -0.15) {
       float pomFade = 1.0 - clamp(
         (vViewDepth - uPomFadeStart) / max(uPomFadeEnd - uPomFadeStart, 1e-3),
         0.0, 1.0);
-      vec2 stepUv = (vt.xy / max(-vt.z, 0.3)) * (uPomScale * pomFade) * 0.125;
+      float invVz = 1.0 / max(-vt.z, 0.3);
+      int pomSteps = vViewDepth > mix(uPomFadeStart, uPomFadeEnd, 0.45) ? 4 : 6;
+      float pomLayerStep = 1.0 / float(pomSteps);
+      vec2 stepUv = vt.xy * invVz * (uPomScale * pomFade) * pomLayerStep;
+      vec2 cliffUvYz = vec2(-vWorldPos.z, vWorldPos.y) * (1.0 / 24.0);
+      vec2 cliffUvXz = vec2(vWorldPos.x, vWorldPos.y) * (1.0 / 24.0);
+      vec2 stepYz = vtAc.yz * invVz * (uPomScale * pomFade) * pomLayerStep;
+      vec2 stepXz = vtAc.xz * invVz * (uPomScale * pomFade) * pomLayerStep;
+      vec2 cliffAxisW = abs(pomN.xy);
+      cliffAxisW /= max(cliffAxisW.x + cliffAxisW.y, 1.0e-4);
+      bool domYz = cliffAxisW.x >= cliffAxisW.y;
       vec2 uvOff = vec2(0.0);
+      vec2 offYz = vec2(0.0);
+      vec2 offXz = vec2(0.0);
       float layerH = 1.0;
-      for (int i = 0; i < 8; i++) {
+      float hitMapH = 1.0;
+      for (int i = 0; i < 6; i++) {
+        if (i >= pomSteps) break;
         // 2026-10-07 — through terrainAtlasTex (== the old
         // fract((cellUv + uvOff) * tiling) address): with ?terrainGradUv the
         // march samples with the continuous-UV gradient, so neither the tile
         // wrap nor the march's own step jumps reach the mip selection.
-        float mapH = terrainAtlasTex(pomCode, cellUv + uvOff).a;
+        float mapH = pomCliffW > 0.85 ? 1.0 : terrainLayerReliefH(pomCode, cellUv + uvOff);
+        if (pomCliffW > 0.02) {
+          float cH = domYz
+            ? terrainLayerReliefH(pomCliffCode, cliffUvYz + offYz)
+            : terrainLayerReliefH(pomCliffCode, cliffUvXz + offXz);
+          mapH = pomCliffW > 0.85 ? cH : mix(mapH, cH, pomCliffW);
+        }
+        if (pomRoadW > 0.05) {
+          mapH = mix(mapH, terrainLayerReliefH(32, cellUv + uvOff), pomRoadW);
+        }
+        hitMapH = mapH;
         if (mapH >= layerH) break;
-        layerH -= 0.125;
+        layerH -= pomLayerStep;
         uvOff += stepUv;
+        offYz += stepYz;
+        offXz += stepXz;
       }
       cellUv += uvOff;
+      pomCliffOffYz = offYz;
+      pomCliffOffXz = offXz;
+      // 1-tap sun-direction POM crevice self-shadow on roads, cliffs, and rock.
+      bool pomShadowSurface = pomRoadW > 0.05 || pomCliffW > 0.05
+                           || pomCode == 0 || pomCode == 13 || pomCode == 14;
+      if (pomShadowSurface) {
+        vec3 sunAcP = normalize(uSunDir);
+        vec3 sunLoc = mix(sunAcP, vec3(dot(sunAcP, pomT), dot(sunAcP, pomB), dot(sunAcP, pomN)), pomCliffW);
+        if (sunLoc.z > 0.08) {
+          float sunInvZ = 1.0 / max(sunLoc.z, 0.25);
+          vec2 sunStepUv = sunLoc.xy * sunInvZ * uPomScale * 0.42;
+          float hSun = pomCliffW > 0.85 ? hitMapH : terrainLayerReliefH(pomCode, cellUv + sunStepUv);
+          if (pomCliffW > 0.02) {
+            vec2 sunStepYz = sunAcP.yz * sunInvZ * uPomScale * 0.42;
+            vec2 sunStepXz = sunAcP.xz * sunInvZ * uPomScale * 0.42;
+            float sH = domYz
+              ? terrainLayerReliefH(pomCliffCode, cliffUvYz + offYz + sunStepYz)
+              : terrainLayerReliefH(pomCliffCode, cliffUvXz + offXz + sunStepXz);
+            hSun = pomCliffW > 0.85 ? sH : mix(hSun, sH, pomCliffW);
+          }
+          if (pomRoadW > 0.05) {
+            hSun = mix(hSun, terrainLayerReliefH(32, cellUv + sunStepUv), pomRoadW);
+          }
+          float sunGateP = smoothstep(0.05, 0.25, sunAcP.z) * min(length(uAcSunVec) * 1.25, 1.0);
+          float pomOcc = clamp((hSun - (hitMapH + 0.07)) * 2.4, 0.0, 0.40);
+          pomSelfShadow = 1.0 - pomOcc * pomFade * sunGateP;
+        }
+      }
     }
   }
 
@@ -3066,6 +3200,7 @@ ${TERRAIN_MICRO.micro ? TERRAIN_MICRO_DECL_GLSL : ""}${TERRAIN_MICRO.heightBlend
   // FAR HARMONIZE (below) needs the composite's MEAN-colour twin; -1 = unset
   // (the bilinear path, where the plain corner blend is the twin).
   vec3 harmSharpMean = vec3(-1.0);
+  float roadCovW = 0.0;
   // T1 — retail TexMerge composite (opt-in, overrides the bilinear blend
   // above). Per-cell merge data lives in uMergeData (48×8: 8 EW cells × 6
   // slots, row = NS cell iv). Slot 0 is the base terrain tile; slots 1..3
@@ -3091,6 +3226,7 @@ ${TERRAIN_MICRO.micro ? TERRAIN_MICRO_DECL_GLSL : ""}${TERRAIN_MICRO.heightBlend
     vec3 merged = terrainAtlasTex(clamp(baseLayer, 0, 32),
       isWaterCode(baseLayer) ? waterCellUv : cellUv).rgb;
     vec3 mergedMean = terrainTypeMean(baseLayer);${WATER_FLOW_ON ? WATER_FLOW_MERGE_BASE_GLSL : ""}${TERRAIN_MICRO.micro ? TERRAIN_MICRO_MERGE_BASE_GLSL : ""}
+    if (baseLayer == 32) roadCovW = 1.0;
     // R4.a 2026-05-28 — explicit all-road corner case. Per
     // terrain_merge.rs::road_code (mask == 0xF -> all_road = true) +
     // texture_merge_info, an all-road cell is packed with base layer
@@ -3177,14 +3313,20 @@ ${TERRAIN_MICRO.micro ? TERRAIN_MICRO_DECL_GLSL : ""}${TERRAIN_MICRO.heightBlend
         // the mask is the cell's authored coverage shape and must not drift,
         // only the water texels inside it do.
         vec3 overlayCol = terrainAtlasTex(clamp(layer, 0, 32),
-          isWaterCode(layer) ? waterCellUv : cellUv).rgb;${WATER_FLOW_ON ? WATER_FLOW_MERGE_SLOT_GLSL : ""}${TERRAIN_MICRO.heightBlend ? TERRAIN_HEIGHT_BLEND_MERGE_SLOT_GLSL : ""}${TERRAIN_MICRO.micro ? TERRAIN_MICRO_MERGE_SLOT_GLSL : ""}
+          isWaterCode(layer) ? waterCellUv : cellUv).rgb;${WATER_FLOW_ON ? WATER_FLOW_MERGE_SLOT_GLSL : ""}
+        if (s >= 4) {
+          float cobbleLuma = dot(overlayCol, vec3(0.299, 0.587, 0.114)) - 0.30;
+          float rEdgeBand = smoothstep(0.05, 0.35, 1.0 - baseW) * (1.0 - smoothstep(0.60, 0.88, 1.0 - baseW));
+          baseW = clamp(baseW - cobbleLuma * 0.34 * rEdgeBand, 0.0, 1.0);
+          roadCovW = mix(1.0, roadCovW, baseW);
+        }${TERRAIN_MICRO.heightBlend ? TERRAIN_HEIGHT_BLEND_MERGE_SLOT_GLSL : ""}${TERRAIN_MICRO.micro ? TERRAIN_MICRO_MERGE_SLOT_GLSL : ""}
         merged = mix(overlayCol, merged, baseW);
         mergedMean = mix(terrainTypeMean(layer), mergedMean, baseW);
       }
     }
     result = merged;
     harmSharpMean = mergedMean;${TERRAIN_FS_ON ? TERRAIN_FAR_SIMPLIFY_MERGE_CLOSE_GLSL : ""}
-  }${TERRAIN_FS_ON ? terrainFarSimplifyBilinearGlsl(TERRAIN_BILINEAR_TAPS_GLSL, terrainBilinearBlendGlsl("fsBilin")) : ""}
+  }${TERRAIN_FS_ON ? terrainFarSimplifyBilinearGlsl(TERRAIN_BILINEAR_TAPS_GLSL, terrainBilinearBlendGlsl("fsBilin")) : ""}${TERRAIN_FS_ON ? "\n  if (fsMergeGate && fsMergeMix < 1.0) roadCovW = mix(fsRoadW, roadCovW, fsMergeMix);" : ""}
 
   // =====================================================================
   // FAR HARMONIZE (2026-10-08, ?farHarmonize, DEFAULT strength 1.0)
@@ -3266,6 +3408,38 @@ ${TERRAIN_MICRO.micro ? TERRAIN_MICRO_DECL_GLSL : ""}${TERRAIN_MICRO.heightBlend
   // rides uWaterScrollEnabled with the rest of the SURFACE animation, which
   // also gives ?waterScroll=off its documented meaning: one flag, fully
   // static water. waterW is the hoisted bilinear water fraction.
+  // Beer-Lambert bathymetry & Shoushi marsh peat-olive absorption (from zero-sampler
+  // uVertexTypes.G bits 0..4). Runs BEFORE foam and BEFORE uBakeAlbedo so whitewater
+  // and shoreline lapping foam stay crisp white on top and farRing composites bake
+  // matching deep-water / swamp colour seamlessly.
+  float waterDepthProxy = 0.0;
+  float swampWaterW = 0.0;
+  if (waterW > 0.0) {
+    int aux00 = vertexAuxByteAt(iu, iv);
+    int aux10 = vertexAuxByteAt(iu + 1, iv);
+    int aux01 = vertexAuxByteAt(iu, iv + 1);
+    int aux11 = vertexAuxByteAt(iu + 1, iv + 1);
+    waterDepthProxy = float(aux00 & 15) * w00 + float(aux10 & 15) * w10
+                    + float(aux01 & 15) * w01 + float(aux11 & 15) * w11;
+    swampWaterW = clamp(
+      float((aux00 >> 4) & 1) * w00 + float((aux10 >> 4) & 1) * w10 +
+      float((aux01 >> 4) & 1) * w01 + float((aux11 >> 4) & 1) * w11, 0.0, 1.0);
+    float optDepth = max(waterW * 0.45, waterDepthProxy * 0.48) * waterW;
+    vec3 sigmaClean = vec3(0.52, 0.17, 0.075);
+    vec3 sigmaSwamp = vec3(0.62, 0.38, 0.50);
+    vec3 sigma = mix(sigmaClean, sigmaSwamp, swampWaterW);
+    vec3 waterTrans = exp(-optDepth * sigma);
+    float wLuma = dot(result, vec3(0.2126, 0.7152, 0.0722));
+    float wPattern = clamp(0.76 + 0.85 * (wLuma - 0.14), 0.62, 1.38);
+    vec3 shallowBed = result * mix(vec3(1.10, 1.04, 0.90), vec3(0.88, 0.94, 0.72), swampWaterW);
+    float pelagicMix = smoothstep(1.4, 5.4, optDepth);
+    vec3 cleanBody = mix(vec3(0.044, 0.168, 0.230), vec3(0.018, 0.062, 0.145), pelagicMix) * wPattern;
+    vec3 swampBody = mix(vec3(0.068, 0.105, 0.052), vec3(0.036, 0.062, 0.030), pelagicMix) * wPattern;
+    vec3 inScatter = mix(cleanBody, swampBody, swampWaterW);
+    vec3 absorbedWater = shallowBed * waterTrans + inScatter * (vec3(1.0) - waterTrans);
+    result = mix(result, absorbedWater, smoothstep(0.02, 0.88, waterW));
+  }
+
   if (uWaterScrollEnabled > 0.5 && waterW > 0.0) {
     vec3 tint = mix(vec3(0.9, 0.95, 1.05), vec3(1.0, 1.0, 1.0),
                     0.5 + 0.5 * vWaveModulation.x);
@@ -3333,6 +3507,7 @@ ${TERRAIN_MICRO.micro ? TERRAIN_MICRO_DECL_GLSL : ""}${TERRAIN_MICRO.heightBlend
       float tiling = float(uDetailTexTiling[dcode]);
       vec2 dUv = vGridUv * (tiling * uDetailTexBaseScale);
       vec4 detail = texture(uTerrainDetailTex, vec3(dUv, float(dslice)));
+      float detailWaterGate = 1.0 - smoothstep(0.05, 0.35, waterW);
       if (uDetailTexCrossfade > 0.5) {
         // 2026-07-02 RETAIL OP (default "global" mode). The landscape detail
         // pass is an ALPHA CROSSFADE toward the detail tile, NOT a modulate:
@@ -3350,7 +3525,7 @@ ${TERRAIN_MICRO.micro ? TERRAIN_MICRO_DECL_GLSL : ""}${TERRAIN_MICRO.heightBlend
           1.0 - (vViewDepth - uDetailTexFadeStart)
                 / max(uDetailTexFadeEnd - uDetailTexFadeStart, 1e-3),
           0.0, 1.0);
-        float amtA = detail.a * fadeA * clamp(uDetailTexStrength, 0.0, 1.0);
+        float amtA = detail.a * fadeA * clamp(uDetailTexStrength, 0.0, 1.0) * detailWaterGate;
         // 2026-10-07 (?terrainDetailGamma, default on) — retail blended this in
         // the GAMMA-encoded framebuffer; a linear-space mix toward the grey
         // tile lifted dark ground near the camera (see terrain_micro.js).
@@ -3358,7 +3533,7 @@ ${TERRAIN_MICRO.micro ? TERRAIN_MICRO_DECL_GLSL : ""}${TERRAIN_MICRO.heightBlend
       } else {
         // "percode" A/B mode keeps the modern per-type MODULATE2X grain.
         float fade = 1.0 - smoothstep(uDetailTexFadeStart, uDetailTexFadeEnd, vViewDepth);
-        float amt = clamp(uDetailTexStrength, 0.0, 1.0) * fade;
+        float amt = clamp(uDetailTexStrength, 0.0, 1.0) * fade * detailWaterGate;
         vec3 mod2x = clamp(detail.rgb * 2.0, 0.0, 2.0);
         result *= mix(vec3(1.0), mod2x, amt);
       }
@@ -3424,8 +3599,85 @@ ${TERRAIN_MICRO.micro ? TERRAIN_MICRO_DECL_GLSL : ""}${TERRAIN_MICRO.heightBlend
     }
     if (roadWeight > 0.0) {
       vec3 roadColor = texture(uRoadTexture, vGridUv * uRoadTileScale).rgb;
+      float rCobble = dot(roadColor, vec3(0.299, 0.587, 0.114)) - 0.30;
+      float rVerge = smoothstep(0.05, 0.35, roadWeight) * (1.0 - smoothstep(0.60, 0.88, roadWeight));
+      roadWeight = clamp(roadWeight + rCobble * 0.34 * rVerge, 0.0, 1.0);
       result = mix(result, roadColor, roadWeight);
+      roadCovW = max(roadCovW, roadWeight);
     }
+  }
+
+  // Road verge contact AO (12-16% darkening) + pebble roughness/relief transition
+  // along road edges (roadCovW 0.05..0.85) so roads sit naturally into the earth.
+  float roadVergeBand = smoothstep(0.05, 0.26, roadCovW)
+                      * (1.0 - smoothstep(0.48, 0.85, roadCovW)) * (1.0 - waterW);
+  if (roadVergeBand > 0.001) {
+    vec2 vergeGp = vec2(vWorldPos.x, -vWorldPos.z);
+    float pebbleN = 0.5 + fragValueNoise2D(vergeGp * 2.4) + 0.5 * fragValueNoise2D(vergeGp * 6.7);
+    float vergeAo = mix(0.12, 0.16, clamp(pebbleN, 0.0, 1.0));
+    result *= 1.0 - vergeAo * roadVergeBand;
+    ${TERRAIN_MICRO.micro ? "if (microNear) { vec2 vergePebble = vec2(fragValueNoise2D(vergeGp * 5.2), fragValueNoise2D(vergeGp * 5.2 + vec2(11.3, 7.1))) * 0.45; microMerged = mix(microMerged, microMerged + vergePebble, roadVergeBand * 0.65); }" : ""}
+  }
+
+  // Steep cliff 2-axis triplanar rock projection (BarrenRock 0 or SedimentaryRock 13)
+  // with horizontal geological strata modulation from AC elevation (vWorldPos.y).
+  vec3 cliffGeomN = normalize(vAcNormal);
+  float cliffSlope = 1.0 - clamp(cliffGeomN.z, 0.0, 1.0);
+  float cliffBiomeSuppress = clamp(volcW + obsidianW + iceW * 0.85 + snowW * 0.45, 0.0, 1.0);
+  float cliffTriW = smoothstep(0.32, 0.62, cliffSlope) * (1.0 - waterW)
+                  * (1.0 - roadCovW * 0.85) * (1.0 - cliffBiomeSuppress);
+  vec4 cliffNraSample = vec4(0.5, 0.5, 0.85, 1.0);
+  if (cliffTriW > 0.005) {
+    int cliffRockCode = (sandW + dirtW * 0.5 > 0.25 || nearCode == 13) ? 13 : 0;
+    vec2 cUvYz = vec2(-vWorldPos.z, vWorldPos.y) * (1.0 / 24.0) + pomCliffOffYz;
+    vec2 cUvXz = vec2(vWorldPos.x, vWorldPos.y) * (1.0 / 24.0) + pomCliffOffXz;
+    vec2 cAxisW = pow(abs(cliffGeomN.xy), vec2(4.0));
+    cAxisW /= max(cAxisW.x + cAxisW.y, 1.0e-4);
+    vec3 rockYz = terrainAtlasTex(cliffRockCode, cUvYz).rgb;
+    vec3 rockXz = terrainAtlasTex(cliffRockCode, cUvXz).rgb;
+    vec3 cliffRockCol = rockYz * cAxisW.x + rockXz * cAxisW.y;
+    cliffNraSample = terrainNraTex(cliffRockCode, cUvYz) * cAxisW.x
+                   + terrainNraTex(cliffRockCode, cUvXz) * cAxisW.y;
+    vec2 cliffWp = vec2(vWorldPos.x, -vWorldPos.z);
+    float strataWarp = fragValueNoise2D(cliffWp * 0.022) * 3.2;
+    float elevZ = vWorldPos.y + strataWarp;
+    float strataBand = 0.5 + 0.5 * sin(elevZ * 0.85)
+                     * (0.65 + 0.35 * sin(elevZ * 2.35 + 1.1));
+    vec3 strataTint = mix(vec3(0.84, 0.81, 0.77), vec3(1.13, 1.10, 1.05), strataBand);
+    cliffRockCol *= strataTint * mix(0.78, 1.04, cliffNraSample.a);
+    result = mix(result, cliffRockCol, cliffTriW);
+    ${TERRAIN_MICRO.micro ? "if (microNear) { microMerged = mix(microMerged, cliffNraSample.rg * 2.0 - 1.0, cliffTriW); }" : ""}
+  }
+
+  // Forest floor & grassland dual-frequency micro-variation (sun-dappled moss,
+  // damp humus, and warm leaf-litter) so large clearings never tile uniformly.
+  float forestFloorW = (terrainForestGrassW(t00) * w00 + terrainForestGrassW(t10) * w10
+                      + terrainForestGrassW(t01) * w01 + terrainForestGrassW(t11) * w11)
+                     * (1.0 - waterW) * (1.0 - roadCovW) * (1.0 - cliffTriW)
+                     * (1.0 - clamp(snowW + sandW * 0.8 + volcW + obsidianW, 0.0, 1.0));
+  float forestRoughDelta = 0.0;
+  if (forestFloorW > 0.02) {
+    vec2 fWp = vec2(vWorldPos.x, -vWorldPos.z);
+    vec2 fWr = vec2(fWp.x * 0.83867057 - fWp.y * 0.54463904,
+                    fWp.x * 0.54463904 + fWp.y * 0.83867057);
+    float fPatchA = 0.5 + fragValueNoise2D(fWp * 0.058);
+    float fPatchB = 0.5 + fragValueNoise2D(fWr * 0.165 + vec2(19.7, -8.3));
+    if (uMacroEnabled > 0.5 && uMacroSliceCount > 0) {
+      vec3 fm1 = texture(uMacroTex, vec3(fWp * (1.0 / 21.0), 0.0)).rgb;
+      vec3 fm2 = texture(uMacroTex, vec3(fWr * (1.0 / 9.5), 0.0)).rgb;
+      fPatchA = clamp(dot(fm1, vec3(0.3333)) * 1.35 - 0.175, 0.0, 1.0);
+      fPatchB = clamp(dot(fm2, vec3(0.3333)) * 1.35 - 0.175, 0.0, 1.0);
+    }
+    float humusMask = smoothstep(0.52, 0.16, fPatchA * 0.65 + fPatchB * 0.35);
+    float mossMask = smoothstep(0.48, 0.84, fPatchA) * smoothstep(0.35, 0.78, fPatchB);
+    float litterMask = smoothstep(0.54, 0.86, fPatchB) * (1.0 - mossMask * 0.75);
+    vec3 forestTint = vec3(1.0);
+    forestTint = mix(forestTint, vec3(0.79, 0.81, 0.75), humusMask * 0.72);
+    forestTint = mix(forestTint, vec3(0.92, 1.09, 0.84), mossMask * 0.68);
+    forestTint = mix(forestTint, vec3(1.10, 0.99, 0.84), litterMask * 0.55);
+    float forestDistW = mix(1.0, 0.35, smoothstep(45.0, 110.0, vViewDepth));
+    result *= mix(vec3(1.0), forestTint, forestFloorW * forestDistW);
+    forestRoughDelta = (litterMask * 0.09 + mossMask * 0.05 - humusMask * 0.12) * forestFloorW;
   }
 
   // =====================================================================
@@ -3629,6 +3881,9 @@ ${TERRAIN_FS_ON ? TERRAIN_FAR_SIMPLIFY_DETAIL_NORMAL_FADE_GLSL : ""}      // RNM
     float slopeNdotL = terrainSunNdotl(geomN, sunDir);
     ndotl = mix(ndotl, ndotl * slopeNdotL, 1.0);
   }
+  if (!acGouraud && pomSelfShadow < 0.999) {
+    ndotl *= mix(0.62, 1.0, pomSelfShadow);
+  }
 
   // T2 (?pbrTerrain=on) -- per-pixel material relief from the CC0 set:
   // one uAtlasNormalAo sample at the nearest-corner code (same single-sample
@@ -3647,11 +3902,12 @@ ${TERRAIN_FS_ON ? TERRAIN_FAR_SIMPLIFY_DETAIL_NORMAL_FADE_GLSL : ""}      // RNM
   if (uPbrEnabled > 0.5 && !acGouraud) {
     int pbrCode = clamp(nearCode, 0, 32);
     vec4 pbrTexel = terrainNraTex(pbrCode, cellUv);
+    if (cliffTriW > 0.005) pbrTexel = mix(pbrTexel, cliffNraSample, cliffTriW);
     // nra pack: xy = tangent normal, z reconstructed (unit hemisphere),
     // b = material roughness, a = AO.
     vec2 pbrNxy = pbrTexel.rg * 2.0 - 1.0;
     vec3 pbrN = normalize(vec3(pbrNxy, sqrt(max(1.0 - dot(pbrNxy, pbrNxy), 0.04))));
-    float pbrRough = pbrTexel.b;
+    float pbrRough = clamp(mix(pbrTexel.b, pbrTexel.b + 0.14, roadVergeBand) + forestRoughDelta, 0.04, 1.0);
     // terrainplan s4 water sheen USED TO LIVE HERE, inside the
     // uPbrEnabled && !acGouraud block. 2026-07-31 (water-fix): retail
     // Gouraud (?terrainGouraud) is DEFAULT-ON and wins over PBR, so this
@@ -3667,6 +3923,9 @@ ${TERRAIN_FS_ON ? TERRAIN_FAR_SIMPLIFY_DETAIL_NORMAL_FADE_GLSL : ""}      // RNM
     float pbrNdotl = mix(0.65, 1.0, clamp(dot(pbrN, sunDir), 0.0, 1.0));
     if (slopeShading) {
       pbrNdotl *= mix(0.65, 1.0, clamp(dot(geomN, sunDir), 0.0, 1.0));
+    }
+    if (pomSelfShadow < 0.999) {
+      pbrNdotl *= mix(0.62, 1.0, pomSelfShadow);
     }
     // 2026-07-31 (water-fix) — fade the material NdotL + AO back out over
     // water by the bilinear waterW. Strict no-op off water (waterW == 0).
@@ -3798,8 +4057,45 @@ ${TERRAIN_MICRO.gradUv
       vec3 envSample = textureLod(uEnvCube, reflW, mix(2.5, 0.6, sheenFade)).rgb;
       float fresW = 0.02 + 0.98 * pow(1.0 - clamp(dot(-viewW, nWorldW), 0.0, 1.0), 5.0);
       waterSpec += envSample * fresW * uWaterReflect;
+    } else {
+      vec3 nWorldW = normalize(vec3(wN.x, wN.z, -wN.y));
+      float fresSky = 0.02 + 0.98 * pow(1.0 - clamp(dot(-viewW, nWorldW), 0.0, 1.0), 5.0);
+      vec3 skyFallback = uAcAmbColor * max(uAcAmbLevel, 0.22) * vec3(0.85, 0.98, 1.25);
+      waterSpec += skyFallback * fresSky * uWaterReflect;
     }
     iblSpec += waterSpec * waterW;
+  }
+
+  // Shoreline wet-sand / wet-rock darkening + low-roughness wet-film sheen
+  // just above the waterline (0 < shoreBandM < 1.2 m). Smoothly reaches 0 at
+  // waterW -> 0 so dry land cells never see a boundary step.
+  if (uWaterEnvEnabled > 0.5 && cellTouchesWater && waterW > 0.005 && waterW < 0.42) {
+    float tanShoreSlope = clamp(length(geomN.xy) / max(geomN.z, 0.25), 0.18, 1.0);
+    float shoreBandM = max(0.0, (0.34 - waterW) * 18.0) * tanShoreSlope;
+    if (shoreBandM > 0.0 && shoreBandM < 1.2) {
+      float wetBand = (1.0 - smoothstep(0.15, 1.2, shoreBandM))
+                    * smoothstep(0.42, 0.24, waterW)
+                    * smoothstep(0.005, 0.045, waterW)
+                    * (1.0 - snowW * 0.75);
+      vec3 wetTint = mix(vec3(0.68, 0.67, 0.65), vec3(0.62, 0.60, 0.57), sandW);
+      result *= mix(vec3(1.0), wetTint, wetBand);
+      if (uBakeAlbedo < 0.5) {
+        vec3 viewWetW = normalize(vWorldPos - cameraPosition);
+        vec3 nWetW = normalize(vec3(geomN.x, geomN.z, -geomN.y));
+        float fresWet = 0.028 + 0.972 * pow(1.0 - clamp(dot(-viewWetW, nWetW), 0.0, 1.0), 5.0);
+        vec3 wetSky = uAcAmbColor * max(uAcAmbLevel, 0.22) * vec3(0.85, 0.98, 1.22);
+        if (uIblEnabled > 0.5) {
+          vec3 reflWetW = reflect(viewWetW, nWetW);
+          reflWetW.y = abs(reflWetW.y);
+          wetSky = textureLod(uEnvCube, reflWetW, 1.3).rgb;
+        }
+        iblSpec += wetSky * fresWet * (wetBand * 0.45 * uWaterReflect);
+        vec3 viewWetAc = vec3(viewWetW.x, -viewWetW.z, viewWetW.y);
+        vec3 halfWetAc = normalize(sunDir - viewWetAc);
+        float wetGlint = pow(clamp(dot(geomN, halfWetAc), 0.0, 1.0), 96.0);
+        waterGlint += uAcSunColor * wetGlint * 0.55 * sheenFade * uSunGlint * wetBand;
+      }
+    }
   }
 
   // === Wave 2B - LAVA CRACK GLOW (2026-10-23: the texture's own cracks) ===
@@ -3970,6 +4266,11 @@ ${TERRAIN_MICRO.gradUv
                                  uAcSunColor,
 #endif
                                  uAcAmbColor, uAcAmbLevel);
+    if (pomSelfShadow < 0.999) {
+      float pomSunDot = max(dot(acShadeN, uAcSunVec), 0.0);
+      float pomSunFrac = clamp(pomSunDot / max(pomSunDot + uAcAmbLevel, 1.0e-3), 0.0, 0.85);
+      modulated *= 1.0 - (1.0 - pomSelfShadow) * pomSunFrac;
+    }
   }
 
   // === Wave 2A -- SNOW EXPOSURE (2026-10-23 look pass) =====================
@@ -5148,7 +5449,7 @@ export async function resolveTerrainRingOpts(
         const s0 = codeToSlice[0];
         const t0 = codeTiling[0];
         for (let i = 0; i < codeToSlice.length; i++) {
-          codeToSlice[i] = s0;
+          codeToSlice[i] = TERRAIN_WATER_SURFACE_CODES.has(i) ? 255 : s0;
           codeTiling[i] = t0;
         }
         detailBaseScale = 1.0;
@@ -6762,6 +7063,8 @@ export async function bakeTerrainForLandblock(
           bank: computeWaterBankWeights(terrainCodesCopy, wasmMesh.heights, opts.waterCodeMask),
         }
         : null,
+      wasmMesh.heights,
+      opts.waterSurfaceCodeMask,
     );
 
     // T1 — per-LB TexMerge data texture (48×8 RGBA8, NearestFilter). Built
@@ -7270,13 +7573,13 @@ export async function bakeTerrainForLandblock(
         value: scene3d?.csmState ? 1.0 : 0.0,
       },
       uCsmShadowMap0: {
-        value: scene3d?.csmState?.lights?.[0]?.shadow?.map?.depthTexture ?? null,
+        value: scene3d?.csmState?.lights?.[0]?.shadow?.map?.depthTexture ?? scene3d?.csmState?.uniforms?.uCsmShadowMap0?.value ?? null,
       },
       uCsmShadowMap1: {
-        value: scene3d?.csmState?.lights?.[1]?.shadow?.map?.depthTexture ?? null,
+        value: scene3d?.csmState?.lights?.[1]?.shadow?.map?.depthTexture ?? scene3d?.csmState?.uniforms?.uCsmShadowMap1?.value ?? null,
       },
       uCsmShadowMap2: {
-        value: scene3d?.csmState?.lights?.[2]?.shadow?.map?.depthTexture ?? null,
+        value: scene3d?.csmState?.lights?.[2]?.shadow?.map?.depthTexture ?? scene3d?.csmState?.uniforms?.uCsmShadowMap2?.value ?? null,
       },
       uCsmMatrix0: {
         value: scene3d?.csmState?.lights?.[0]?.shadow?.matrix?.clone() ?? new THREE.Matrix4(),

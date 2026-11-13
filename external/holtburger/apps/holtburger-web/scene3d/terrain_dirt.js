@@ -798,6 +798,9 @@ export function createDustLight(THREE) {
     uSunVec: { value: v3(0, 0, 0.75) },
     uSunCol: { value: v3(1, 1, 1) },
     uAmbCol: { value: v3(0.3, 0.3, 0.3) },
+    // Pre-exposure Lambertian calibration (INV_PI * 0.85 ~= 0.27056 under exposure = 5.0)
+    // so toneMapped: false dust puffs and haze never blow out to paper-white in HDR.
+    uHdrScale: { value: 0.2705634 },
     fromTerrain: false,
   };
 }
@@ -888,6 +891,7 @@ export const DIRT_PUFF_FRAGMENT_GLSL = `
 precision highp float;
 
 uniform float uOpacity;
+uniform float uHdrScale;
 
 varying vec2 vQuadUv;
 varying float vAlpha;
@@ -911,7 +915,7 @@ void main() {
   float core = mix(0.75, 1.0, smoothstep(0.0, 0.55, r));
   float a = disc * core * vAlpha * uOpacity;
   if (a <= 0.0) discard;
-  gl_FragColor = vec4(vColour, a);
+  gl_FragColor = vec4(vColour * uHdrScale, a);
 }
 `;
 
@@ -1081,6 +1085,7 @@ export const DIRT_HAZE_FRAGMENT_GLSL = `
 precision highp float;
 
 uniform float uOpacity;
+uniform float uHdrScale;
 uniform highp float uSinkM; // the foot's depth under the soil; highp in both stages
 
 varying vec2 vQuadUv;
@@ -1109,7 +1114,7 @@ void main() {
   float n1 = dirtNoise2D(vec2(vWisp.x * 0.35, vWisp.y * 1.6));
   float n2 = dirtNoise2D(vec2(vWisp.x * 0.9 + 7.0, vWisp.y * 3.1 + 3.0));
   float wisp = mix(0.4, 1.0, smoothstep(0.25, 0.75, 0.65 * n1 + 0.35 * n2));
-  gl_FragColor = vec4(vColour, base * wisp);
+  gl_FragColor = vec4(vColour * uHdrScale, base * wisp);
 }
 `;
 
@@ -1206,6 +1211,7 @@ export function createPuffField(opts = {}) {
     uSunVec: light.uSunVec,
     uSunCol: light.uSunCol,
     uAmbCol: light.uAmbCol,
+    uHdrScale: light.uHdrScale,
   };
 
   let geometry = null;
@@ -1483,6 +1489,7 @@ export function createDustHazeField(opts = {}) {
     uSunVec: light.uSunVec,
     uSunCol: light.uSunCol,
     uAmbCol: light.uAmbCol,
+    uHdrScale: light.uHdrScale,
     // Adopted + populated by the pool below (never placeholders to re-point).
     uScatterCenter: { value: null },
     uScatterRadius: { value: radiusM },
@@ -2123,6 +2130,10 @@ function _stateProvider() {
       // into the shared light record both dirt materials hold by reference.
       // 9 floats; the scan stops at the first terrain material.
       if (copyTerrainLight(_terrainMaterials(), _dirt.light)) _stats.lightCopies += 1;
+      const exp = _dirt.scene3d?.renderer?.toneMappingExposure;
+      _dirt.light.uHdrScale.value = (Number.isFinite(exp) && exp > 0.5)
+        ? 0.2705634 * Math.min(2.5, 5.0 / Math.min(20, exp))
+        : 0.2705634;
       _dirt.lastTSec = Number.isFinite(frameCtx.tSec) ? frameCtx.tSec : _dirt.lastTSec;
       _dirt.hasPlayer = !!frameCtx.hasPlayer;
       if (frameCtx.hasPlayer) {

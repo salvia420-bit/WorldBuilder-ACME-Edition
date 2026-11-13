@@ -147,6 +147,8 @@ const _providers = new Map();
 
 /** lbKey → {lbX, lbY, parked, codes, heights, coverage, groups:Map<id,Group>} */
 const _tracked = new Map();
+/** lbKey → parked Dereth snapshot shadowed while a Dericost LB (lbY > 255) shares the 16-bit lbKey. */
+const _parkedDerethShadow = new Map();
 
 let _spine = null;
 let _oracle = null;
@@ -282,6 +284,7 @@ export function unregisterTerrainVfx(id) {
 export function _resetTerrainVfx() {
   for (const id of [..._providers.keys()]) unregisterTerrainVfx(id);
   _tracked.clear();
+  _parkedDerethShadow.clear();
   if (_trail) { try { _trail.dispose(); } catch (_) {} _trail = null; }
   _liveTickPrevSec = null;
   _spine = null;
@@ -445,7 +448,20 @@ export function terrainVfxNoteLandblockMesh(scene3d, lbMesh) {
   const lbY = ud.lbY | 0;
   const lbKey = lbKeyFromXY(lbX, lbY);
 
+  if (lbY <= 255) _parkedDerethShadow.delete(lbKey);
+
   if (_tracked.has(lbKey)) {
+    const prev = _tracked.get(lbKey);
+    if (prev && prev.parked && prev.lbY <= 255 && lbY > 255) {
+      _parkedDerethShadow.set(lbKey, {
+        lbX: prev.lbX,
+        lbY: prev.lbY,
+        codes: prev.codes,
+        heights: prev.heights,
+        roads: prev.roads,
+        coverage: prev.coverage,
+      });
+    }
     // Rebake (`terrain.js::drainOneTerrainLodRebake` destroys then re-enters
     // the loader). Tear the old one down first so providers never see two
     // "ready" for one LB.
@@ -504,9 +520,41 @@ export function terrainVfxLandblockPark(lbKey) {
 }
 
 /** UNPARK. Restore visibility; NEVER re-scatter (hash-stable placement, §5.4/§5.5). */
-export function terrainVfxLandblockUnpark(lbKey) {
+export function terrainVfxLandblockUnpark(lbKey, meshes) {
   const key = lbKeyOf(lbKey);
-  const entry = _tracked.get(key);
+  let entry = _tracked.get(key);
+  const shadow = _parkedDerethShadow.get(key);
+  const unparkingDereth = shadow && (
+    !entry
+    || (entry.lbY > 255 && (
+      !Array.isArray(meshes)
+      || meshes.length === 0
+      || meshes.some((m) => m?.userData && (m.userData.lbY | 0) <= 255)
+    ))
+  );
+  if (unparkingDereth) {
+    if (entry) terrainVfxLandblockGone(key, "rebake");
+    _parkedDerethShadow.delete(key);
+    entry = {
+      lbX: shadow.lbX,
+      lbY: shadow.lbY,
+      parked: false,
+      codes: shadow.codes,
+      heights: shadow.heights,
+      roads: shadow.roads,
+      coverage: shadow.coverage,
+      groups: new Map(),
+    };
+    _tracked.set(key, entry);
+    if (_oracle && typeof _oracle.noteLandblock === "function") {
+      try {
+        _oracle.noteLandblock(key, {
+          codes: entry.codes, heights: entry.heights, roads: entry.roads,
+          lbX: entry.lbX, lbY: entry.lbY,
+        });
+      } catch (_) { /* fail-soft */ }
+    }
+  }
   if (!entry) return;
   entry.parked = false;
   _stats.unparks += 1;
@@ -539,6 +587,15 @@ export function terrainVfxLandblockGone(lbKey, reason) {
   if (_oracle && typeof _oracle.invalidate === "function") {
     try { _oracle.invalidate(key); } catch (_) { /* fail-soft */ }
   }
+  const shadow = reason !== "rebake" && entry.lbY > 255 ? _parkedDerethShadow.get(key) : null;
+  if (shadow && _oracle && typeof _oracle.noteLandblock === "function") {
+    try {
+      _oracle.noteLandblock(key, {
+        codes: shadow.codes, heights: shadow.heights, roads: shadow.roads,
+        lbX: shadow.lbX, lbY: shadow.lbY,
+      });
+    } catch (_) { /* fail-soft */ }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -548,7 +605,7 @@ export function terrainVfxLandblockGone(lbKey, reason) {
 const HOOK_SPECS = [
   ["_evictTerrainBatchForLb", (lbKey) => terrainVfxLandblockGone(lbKey, "evict")],
   ["_parkTerrainBatchForLb", (lbKey) => terrainVfxLandblockPark(lbKey)],
-  ["_unparkTerrainBatchForLb", (lbKey) => terrainVfxLandblockUnpark(lbKey)],
+  ["_unparkTerrainBatchForLb", (lbKey, meshes) => terrainVfxLandblockUnpark(lbKey, meshes)],
 ];
 
 function _wrap(prop, mine, inner) {

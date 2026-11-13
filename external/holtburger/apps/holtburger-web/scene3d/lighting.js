@@ -55,7 +55,7 @@
 // produce, this is sub-microsecond.
 
 import * as THREE from "three";
-import { setupCsm, updateCsm, refreshCsmUniforms } from "./csm.js";
+import { setupCsm, updateCsm, refreshCsmUniforms, MID_CSM_MAP_SIZES } from "./csm.js";
 import { lbKeyOf } from "./landblock_lru.js";
 
 // Default sun direction in three.js world space (Y-up). 45° down +
@@ -211,7 +211,34 @@ export function setupSceneLighting(scene, opts = {}) {
   // single-shadow path are mutually exclusive — picking CSM here means
   // we do NOT run the Phase 0.1 single-shadow setup, regardless of
   // `castShadow` opt-in.
-  const csmEnabled = !!csm;
+  // On `mid` quality under the atmosphere pipeline, `lighting.sun` has
+  // intensity=0 (atmosphere owns direct sun), so the single-shadow pass
+  // rasterised an invisible shadow map. Promote `mid` + `castShadow` to
+  // lightweight 3-cascade CSM ([1024, 1024, 512], far cascade every 2nd frame)
+  // unless `?csm=off` or `?atmosphere=off` explicitly opts out.
+  const isMidTier = (() => {
+    try {
+      const ps = _rp5ReadParams();
+      const q = (ps?.get("quality") || "").toLowerCase();
+      if (q) return q === "mid";
+      return globalThis.window?.liveScene3d?.quality?.preset === "mid";
+    } catch (_) {
+      return false;
+    }
+  })();
+  const midPromoteCsm = !csm && castShadow && isMidTier && (() => {
+    try {
+      const ps = _rp5ReadParams();
+      const c = (ps?.get("csm") || "").toLowerCase();
+      const a = (ps?.get("atmosphere") || "").toLowerCase();
+      const cOff = c === "off" || c === "0" || c === "false" || c === "no";
+      const aOff = a === "off" || a === "0" || a === "false" || a === "no";
+      return !cOff && !aOff;
+    } catch (_) {
+      return false;
+    }
+  })();
+  const csmEnabled = !!csm || midPromoteCsm;
   if (castShadow && !csmEnabled) {
     sun.castShadow = true;
     // Visual-fidelity Phase 0.1 — shadow camera frustum sized so its
@@ -293,6 +320,10 @@ export function setupSceneLighting(scene, opts = {}) {
     // no-op on the default URL.
     const rp5 = getRp5Config();
     const csmOpts = { sunDir: { x: sunPos.x, y: sunPos.y, z: sunPos.z } };
+    if (isMidTier && !opts.mapSizes) {
+      csmOpts.mapSizes = MID_CSM_MAP_SIZES;
+      csmOpts.farCascadeEvery = 2;
+    }
     if (rp5.csmCamEps !== null) csmOpts.camDeltaSqEps = rp5.csmCamEps;
     if (rp5.csmSunEps !== null) csmOpts.sunDeltaSqEps = rp5.csmSunEps;
     // 2026-10-20 (improvement hunt shadows-restore-1) — `?csmStable`, default
@@ -1385,8 +1416,23 @@ export function writePoolSlot(dst, src, tmp, guard) {
       Math.min(LIGHT_COLOR_MAX, Math.max(0, sc.b))
     );
   }
-  if (guard && rawI > LIGHT_INTENSITY_CLAMP) guard.clampedIntensity += 1;
-  dst.intensity = sanitizeLightIntensity(rawI);
+  let effI = rawI;
+  if (src.userData && src.userData.__cellWeenieTorch === true && effI > 0) {
+    let nowSec = 0;
+    try {
+      nowSec = typeof performance !== "undefined" && performance.now
+        ? performance.now() * 0.001
+        : 0;
+    } catch (_) {}
+    const phase = (((src.id | 0) * 1.61803398875) % 6.2831853);
+    const flicker =
+      1.0 +
+      0.05 * Math.sin(nowSec * 7.1 + phase) +
+      0.03 * Math.sin(nowSec * 13.3 + phase * 1.7);
+    effI = rawI * flicker;
+  }
+  if (guard && effI > LIGHT_INTENSITY_CLAMP) guard.clampedIntensity += 1;
+  dst.intensity = sanitizeLightIntensity(effI);
   const rawD = src.distance == null ? 0 : +src.distance;
   if (guard && !Number.isFinite(rawD)) guard.nonFiniteDistance += 1;
   else if (guard && rawD > LIGHT_DISTANCE_MAX) guard.clampedDistance += 1;
@@ -1857,6 +1903,20 @@ export function tickLightingForCellState(scene3d, sessionHandle) {
     }
   }
 
+  // Prevent wasted single-shadow rasterisation when CSM is active OR when
+  // AtmosphereLights owns direct sun (`lighting.sun.intensity === 0`).
+  if (
+    lighting &&
+    lighting.sun?.castShadow &&
+    (lighting.csmState || (scene3d.atmosphereLights && lighting.sun.intensity === 0))
+  ) {
+    lighting.sun.castShadow = false;
+    if (lighting.sun.shadow?.map && typeof lighting.sun.shadow.map.dispose === "function") {
+      lighting.sun.shadow.map.dispose();
+      lighting.sun.shadow.map = null;
+    }
+  }
+
   // Visual-fidelity Phase 0.1 — recentre the sun's shadow frustum on
   // the player each frame so casters near the player are always
   // covered. Reads the local player world pos from the entity manager
@@ -1883,6 +1943,13 @@ export function tickLightingForCellState(scene3d, sessionHandle) {
   // same player-position resolver (they're mutually exclusive in
   // practice — `setupSceneLighting` only attaches one or the other).
   if (lighting && lighting.csmState) {
+    // Sealed underground dungeon (`!SeenOutside` indoor cell): direct sun is
+    // muted, so skip CSM frustum refits and zero `cs5.strength` so receivers
+    // skip PCF shadow taps and `applyStaticShadowGate` rasters 0 cascades.
+    const inSealedDungeon =
+      scene3d._poolSunIndoor === true ||
+      (scene3d.atmosphereLights?._indoorMute === true) ||
+      (!lighting.lightPool?.enabled && lighting.sun?.visible === false);
     // 2026-10-20 (improvement hunt shadows-restore-5, `?csmSunFade`, default on
     // under ?csm) — the cascades follow the RAW authored sun, which sits 0.9 deg
     // up for the whole night block, so every caster threw a ~200 m streak at
@@ -1897,48 +1964,56 @@ export function tickLightingForCellState(scene3d, sessionHandle) {
       const cfg5 = getRp5Config();
       const prev = Number.isFinite(cs5.strength) ? cs5.strength : 1;
       let next = 1;
-      if (cfg5.csmSunFade) {
+      if (inSealedDungeon) {
+        next = 0;
+      } else if (cfg5.csmSunFade) {
         const pitch = _csmSunPitchDeg(scene3d);
         if (Number.isFinite(pitch)) next = csmSunStrength(pitch, cfg5.csmFadeDeg);
       }
       cs5.strength = next;
       if (prev === 0 && next > 0) shadowDirty = true;
     }
-    const cam = scene3d?.cameraSwitcher?.activeCamera ?? scene3d?.camera ?? null;
-    if (cam) {
-      try {
-        // Feed the LIVE sun direction so cascade shadows track the sun across
-        // the AC day. Without the 3rd arg, updateCsm falls back to csmState.sunDir
-        // — seeded once from DEFAULT_SUN_POS at setup and never rewritten — so
-        // shadows stayed frozen at the boot heading while the visible sun disc
-        // (atmosphere_lights.js, driven by SkyState.dirHeading/Pitch) moved.
-        // The atmosphere sun already holds that live direction; reuse it. Falls
-        // back to the seeded sunDir on the non-atmosphere / low-quality path.
-        const liveSunDir = scene3d?.atmosphereLights?.sun?.sunDirection ?? undefined;
-        updateCsm(lighting.csmState, cam, liveSunDir);
-        refreshCsmUniforms(lighting.csmState);
-        // RP5 — updateCsm set `didRefitThisTick` true iff it actually
-        // refit the cascades (camera/sun moved past threshold). That IS
-        // the CSM-path "shadows changed → re-raster" signal. Skipped
-        // refits leave the previous frame's shadow maps valid, so we can
-        // skip the raster (subject to the staleness bound below).
-        // shadows-restore-1: stable cascades say WHICH cascades refit; only
-        // those re-raster their statics (a refit with no mask errs to all).
-        const cs = lighting.csmState;
-        if (cs.didRefitThisTick) {
-          const rm = cs.stable === true ? cs.refitMask & 0b111 : 0;
-          if (rm) csmRefitMask |= rm;
-          else shadowDirty = true;
+    if (inSealedDungeon) {
+      lighting.csmState.didRefitThisTick = false;
+      lighting.csmState.refitMask = 0;
+      refreshCsmUniforms(lighting.csmState);
+    } else {
+      const cam = scene3d?.cameraSwitcher?.activeCamera ?? scene3d?.camera ?? null;
+      if (cam) {
+        try {
+          // Feed the LIVE sun direction so cascade shadows track the sun across
+          // the AC day. Without the 3rd arg, updateCsm falls back to csmState.sunDir
+          // — seeded once from DEFAULT_SUN_POS at setup and never rewritten — so
+          // shadows stayed frozen at the boot heading while the visible sun disc
+          // (atmosphere_lights.js, driven by SkyState.dirHeading/Pitch) moved.
+          // The atmosphere sun already holds that live direction; reuse it. Falls
+          // back to the seeded sunDir on the non-atmosphere / low-quality path.
+          const liveSunDir = scene3d?.atmosphereLights?.sun?.sunDirection ?? undefined;
+          updateCsm(lighting.csmState, cam, liveSunDir);
+          refreshCsmUniforms(lighting.csmState);
+          // RP5 — updateCsm set `didRefitThisTick` true iff it actually
+          // refit the cascades (camera/sun moved past threshold). That IS
+          // the CSM-path "shadows changed → re-raster" signal. Skipped
+          // refits leave the previous frame's shadow maps valid, so we can
+          // skip the raster (subject to the staleness bound below).
+          // shadows-restore-1: stable cascades say WHICH cascades refit; only
+          // those re-raster their statics (a refit with no mask errs to all).
+          const cs = lighting.csmState;
+          if (cs.didRefitThisTick) {
+            const rm = cs.stable === true ? cs.refitMask & 0b111 : 0;
+            if (rm) csmRefitMask |= rm;
+            else shadowDirty = true;
+          }
+        } catch (e) {
+          if (!scene3d._csmTickWarned) {
+            scene3d._csmTickWarned = true;
+            // eslint-disable-next-line no-console
+            console.warn("[visfid-p33] CSM tick failed:", e);
+          }
+          // RP5 — a thrown CSM tick leaves the cascade fit ambiguous; err
+          // toward correctness and re-raster this frame.
+          shadowDirty = true;
         }
-      } catch (e) {
-        if (!scene3d._csmTickWarned) {
-          scene3d._csmTickWarned = true;
-          // eslint-disable-next-line no-console
-          console.warn("[visfid-p33] CSM tick failed:", e);
-        }
-        // RP5 — a thrown CSM tick leaves the cascade fit ambiguous; err
-        // toward correctness and re-raster this frame.
-        shadowDirty = true;
       }
     }
   }
@@ -2999,6 +3074,22 @@ function selectCellScopedSources(scene3d, pool, lights, renderSetArr, viewerSrc)
     scratch.push({ light, distSq });
   }
   scratch.sort(sortByDistSq);
+  // Retain at most the nearest 4–6 baked-room weenie torches (`__cellWeenieTorch`)
+  // within 28 m so players, NPCs, signs, and portals inside Town Network & taverns
+  // receive warm flickering torchlight without crowding out dynamic entity lights.
+  const maxWeenieTorches = Math.min(6, Math.max(4, (pool.point.length - 2) | 0));
+  let weenieTorchesKept = 0;
+  let writeIdx = 0;
+  for (let i = 0; i < scratch.length; i += 1) {
+    const item = scratch[i];
+    if (item.light.userData && item.light.userData.__cellWeenieTorch === true) {
+      if (weenieTorchesKept >= maxWeenieTorches || item.distSq > 784) continue;
+      weenieTorchesKept += 1;
+    }
+    scratch[writeIdx] = item;
+    writeIdx += 1;
+  }
+  scratch.length = writeIdx;
   pickSelectedSources(pool, scratch);
   const stats = scene3d._cellLightsStats;
   if (stats) {
@@ -3404,6 +3495,7 @@ export function objectFrameScaled(parent) {
 /** Setup ids whose LightInfo table is empty (the entity spawn hook skips them). */
 const _noLightSetups = new Set();
 const _NO_LIGHT_SETUPS_CAP = 8192;
+globalThis.__hbNoLightSetups = _noLightSetups;
 
 /**
  * `opts.entities` (2026-10-16): attach the lights of just these entity
@@ -3612,6 +3704,7 @@ export async function attachSetupModelLights(scene3d, wasmExports, opts = undefi
     const dropBaked =
       getVertexBakePoolConfig().dropCellStatics &&
       scene3d._acVertexBakeActive === true;
+    const retainWeenieTorches = dropBaked && getLightPoolConfig().enabled;
     for (const cellContainer of cellsGroup.children) {
       if (!cellContainer || !Array.isArray(cellContainer.children)) continue;
       for (const mesh of cellContainer.children) {
@@ -3623,7 +3716,10 @@ export async function attachSetupModelLights(scene3d, wasmExports, opts = undefi
         ud.__setupLightScanned = true;
         if (dropBaked) {
           summary.cellStaticsBaked += 1;
-          continue;
+          if (!retainWeenieTorches) continue;
+          // Only 0x02 Setups can carry LightInfo; skip raw 0x01 GfxObjs and
+          // known no-light Setups immediately when retaining weenie torches.
+          if ((modelId >>> 24) !== 0x02 || _noLightSetups.has(modelId)) continue;
         }
         // C3 #6 — resolve the cell static's lb-key from its cellId
         // (cellId & 0xffff_0000 === lbKey) so eviction can splice this
@@ -3637,7 +3733,13 @@ export async function attachSetupModelLights(scene3d, wasmExports, opts = undefi
         // RND-05/03 — carry the OWNING EnvCell id so the attach loop can
         // stamp `userData.__cellId` on every light instance; the cell-scoped
         // selection keys on it (own room + visible rooms only).
-        entry.push({ partIndex: 0, object3D: mesh, lbKey, cellId: ud.cellId >>> 0 });
+        entry.push({
+          partIndex: 0,
+          object3D: mesh,
+          lbKey,
+          cellId: ud.cellId >>> 0,
+          weenieTorch: retainWeenieTorches,
+        });
       }
     }
   }
@@ -3683,8 +3785,27 @@ export async function attachSetupModelLights(scene3d, wasmExports, opts = undefi
     }
     const lightCount = bundle.partCount | 0;
     if (lightCount === 0) {
+      const sidU = setupId >>> 0;
       if (_noLightSetups.size >= _NO_LIGHT_SETUPS_CAP) _noLightSetups.clear();
-      _noLightSetups.add(setupId >>> 0);
+      _noLightSetups.add(sidU);
+      const carriersByLb = scene3d._setupLightCarriersByLb;
+      if (carriersByLb instanceof Map) {
+        const carrierRoot = scene3d._setupLightCarrierRoot || null;
+        for (const bucket of carriersByLb.values()) {
+          for (const list of [bucket.buildings, bucket.statics]) {
+            if (!Array.isArray(list) || list.length === 0) continue;
+            for (let ci = list.length - 1; ci >= 0; ci -= 1) {
+              const c = list[ci];
+              if ((c?.userData?.modelId >>> 0) === sidU) {
+                if (carrierRoot && c.parent === carrierRoot) {
+                  try { carrierRoot.remove(c); } catch (_) {}
+                }
+                list.splice(ci, 1);
+              }
+            }
+          }
+        }
+      }
       summary.noLightModels += 1;
       if (typeof bundle.free === "function") {
         try { bundle.free(); } catch (_) {}
@@ -3716,7 +3837,7 @@ export async function attachSetupModelLights(scene3d, wasmExports, opts = undefi
       // placement setups never pay the template cost.
       /** @type {ReturnType<typeof getOrBuildLightTemplate>|null} */
       let template = null;
-      for (const { partIndex, object3D, lbKey, cellId, ownerInst, ownerGuid, objectFrame } of partEntries) {
+      for (const { partIndex, object3D, lbKey, cellId, ownerInst, ownerGuid, objectFrame, weenieTorch } of partEntries) {
         if (partIndex !== targetPartIndex && partIndex !== -1) continue;
         // LIGHT-GUARD — the entity despawned (or was LOD-respawned under the
         // same guid) while `fetchSetupModelLights` was awaited: attaching
@@ -3751,6 +3872,14 @@ export async function attachSetupModelLights(scene3d, wasmExports, opts = undefi
           placeLightInObjectFrame(inst, object3D);
         }
         object3D.add(inst);
+        if (scene3d._setupLightCarrierRoot) {
+          let top = object3D;
+          while (top.parent && top.parent !== scene3d._setupLightCarrierRoot) top = top.parent;
+          if (top?.userData?.isSetupLightCarrier && top.parent !== scene3d._setupLightCarrierRoot) {
+            scene3d._setupLightCarrierRoot.add(top);
+            top.updateMatrixWorld(true);
+          }
+        }
         // B10b (likely:spotlight-target): an oriented SpotLight aims at
         // its `.target`; parent the target as a sibling under the SAME
         // part Object3D so it tracks the rig. `releaseLight`/evict
@@ -3791,6 +3920,12 @@ export async function attachSetupModelLights(scene3d, wasmExports, opts = undefi
         if (cellId != null) {
           if (!inst.userData) inst.userData = {};
           inst.userData.__cellId = cellId >>> 0;
+          if (inst.layers && typeof inst.layers.enable === "function") {
+            inst.layers.enable(1); // RENDER_LAYER_INDOOR
+          }
+          if (weenieTorch) {
+            inst.userData.__cellWeenieTorch = true;
+          }
         }
         // LIGHT-GUARD — provenance stamps for window.__diag.lights.
         if (!inst.userData) inst.userData = {};

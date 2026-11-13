@@ -281,6 +281,37 @@ export function initHudPanels(D) {
   // hooks defined in `#vitals-panel .vital-bar.{health,stamina,mana}`.
   const VITAL_CSS_CLASS = { 1: "health", 3: "stamina", 5: "mana" };
 
+  // In live gameplay (`html.agent-mode` / `html.no-hud`), `#post-spawn`
+  // (`#vitals-panel` and `#inventory-panel`) is `display: none !important`
+  // while modern HUD plugins render vitals/inventory. Skip WASM snapshot
+  // boxing and multi-table `innerHTML` rebuilds while hidden, marking dirty
+  // so they render once if unhidden.
+  let vitalsDirtyHandle = null;
+  let inventoryDirtyHandle = null;
+  function isLegacyPanelHidden(panel) {
+    const rootCls = document.documentElement?.classList;
+    if (rootCls?.contains?.("agent-mode") || rootCls?.contains?.("no-hud")) return true;
+    if (panel?.style?.display === "none") return true;
+    return false;
+  }
+  if (typeof MutationObserver === "function" && document.documentElement) {
+    const rootMo = new MutationObserver(() => {
+      if (vitalsDirtyHandle && !isLegacyPanelHidden(vitalsPanel)) {
+        const h = vitalsDirtyHandle;
+        vitalsDirtyHandle = null;
+        renderVitalsPanel(h);
+      }
+      if (inventoryDirtyHandle && !isLegacyPanelHidden(inventoryPanel)) {
+        const h = inventoryDirtyHandle;
+        inventoryDirtyHandle = null;
+        renderInventoryPanel(h);
+      }
+    });
+    try {
+      rootMo.observe(document.documentElement, { attributes: true, attributeFilter: ["class"] });
+    } catch (_) {}
+  }
+
   // Phase 4 step 4 follow-on: re-render the vitals panel from
   // the wasm bundle's PlayerStatsSnapshot. Called from the
   // drainEvents tick on every kind=8 event. The snapshot getter
@@ -288,6 +319,11 @@ export function initHudPanels(D) {
   // so this is bounded work.
   function renderVitalsPanel(handle) {
     if (!handle) return;
+    if (isLegacyPanelHidden(vitalsPanel)) {
+      vitalsDirtyHandle = handle;
+      return;
+    }
+    vitalsDirtyHandle = null;
     // Copy-then-free: playerStats() hands back a wasm-bindgen
     // PlayerStatsSnapshot box. This runs on EVERY kind=8 — i.e. every
     // vital regen tick — so the box must be released deterministically
@@ -416,6 +452,11 @@ export function initHudPanels(D) {
   // partition into the two sub-sections.
   function renderInventoryPanel(handle) {
     if (!handle) return;
+    if (isLegacyPanelHidden(inventoryPanel)) {
+      inventoryDirtyHandle = handle;
+      return;
+    }
+    inventoryDirtyHandle = null;
     // Copy-then-free: playerInventory() hands back an ARRAY of
     // wasm-bindgen InventoryItem boxes (one per owned item) — freed
     // element-wise, unlike the single-box snapshot above. Runs on every

@@ -304,6 +304,21 @@ vec3 hbAtlas(uint t, vec2 cellUv, vec2 gx, vec2 gy) {
   return textureGrad(uAtlas, vec3(fract(cellUv * tiling), float(code)), gx * tiling, gy * tiling).rgb;
 }
 
+vec3 hbCornerSample(uint t, vec2 cellUv, vec2 gx, vec2 gy) {
+  uint c = t & 31u;
+  if (c >= 16u && c <= 20u) {
+    vec2 wUvA = cellUv + vec2(uTime * 0.042, uTime * 0.019);
+    vec3 colA = hbAtlas(t, wUvA, gx, gy);
+    if (vViewDepth < 950.0) {
+      vec2 wUvB = cellUv * 1.37 + vec2(-uTime * 0.027, uTime * 0.034) + vec2(0.37, 0.61);
+      vec3 colB = hbAtlas(t, wUvB, gx * 1.37, gy * 1.37);
+      return mix(colA, 0.52 * (colA + colB), 1.0 - smoothstep(350.0, 950.0, vViewDepth));
+    }
+    return colA;
+  }
+  return hbAtlas(t, cellUv, gx, gy);
+}
+
 vec3 hbCellHash3(vec2 cell, uint salt) {
   uvec3 v = uvec3(ivec2(floor(cell)), int(salt)) * 1664525u + 1013904223u;
   v.x += v.y * v.z; v.y += v.z * v.x; v.z += v.x * v.y;
@@ -340,7 +355,7 @@ void main() {
   ivec2 i0 = ivec2(c0);
   uint t00 = hbType(i0), t10 = hbType(i0 + ivec2(1, 0)), t01 = hbType(i0 + ivec2(0, 1)), t11 = hbType(i0 + ivec2(1, 1));
   vec2 gx = dFdx(cell), gy = dFdy(cell);
-  vec3 a00 = hbAtlas(t00, f, gx, gy), a10 = hbAtlas(t10, f, gx, gy), a01 = hbAtlas(t01, f, gx, gy), a11 = hbAtlas(t11, f, gx, gy);
+  vec3 a00 = hbCornerSample(t00, f, gx, gy), a10 = hbCornerSample(t10, f, gx, gy), a01 = hbCornerSample(t01, f, gx, gy), a11 = hbCornerSample(t11, f, gx, gy);
   vec3 albedo = mix(mix(a00, a10, f.x), mix(a01, a11, f.x), f.y);
   // roads: blend toward the road layer (code 32) by the corners that carry one
   float r00 = float((t00 >> 5u) & 3u) > 0.0 ? 1.0 : 0.0, r10 = float((t10 >> 5u) & 3u) > 0.0 ? 1.0 : 0.0;
@@ -353,6 +368,30 @@ void main() {
   float w00 = float((t00 & 31u) >= 16u && (t00 & 31u) <= 20u), w10 = float((t10 & 31u) >= 16u && (t10 & 31u) <= 20u);
   float w01 = float((t01 & 31u) >= 16u && (t01 & 31u) <= 20u), w11 = float((t11 & 31u) >= 16u && (t11 & 31u) <= 20u);
   float water = mix(mix(w00, w10, f.x), mix(w01, w11, f.x), f.y);
+  // Beer-Lambert shallow-to-pelagic depth absorption + wet shoreline darkening
+  if (water > 0.01) {
+    float ds00 = float((t00 & 31u) == 20u), ds10 = float((t10 & 31u) == 20u);
+    float ds01 = float((t01 & 31u) == 20u), ds11 = float((t11 & 31u) == 20u);
+    float deepSeaW = mix(mix(ds00, ds10, f.x), mix(ds01, ds11, f.x), f.y);
+    float sw00 = float((t00 & 31u) == 4u || (t00 & 31u) == 23u || (t00 & 31u) == 29u);
+    float sw10 = float((t10 & 31u) == 4u || (t10 & 31u) == 23u || (t10 & 31u) == 29u);
+    float sw01 = float((t01 & 31u) == 4u || (t01 & 31u) == 23u || (t01 & 31u) == 29u);
+    float sw11 = float((t11 & 31u) == 4u || (t11 & 31u) == 23u || (t11 & 31u) == 29u);
+    float swampAdj = clamp(max(max(sw00, sw10), max(sw01, sw11)), 0.0, 1.0);
+    float depthM = pow(clamp(water, 0.0, 1.0), 1.35) * (2.6 + 3.8 * deepSeaW);
+    vec3 sigma = mix(vec3(0.46, 0.16, 0.075), vec3(0.55, 0.34, 0.42), swampAdj);
+    vec3 trans = exp(-depthM * sigma);
+    vec3 deepScatter = mix(
+      mix(vec3(0.038, 0.145, 0.205), vec3(0.020, 0.068, 0.148), deepSeaW),
+      vec3(0.048, 0.078, 0.042),
+      swampAdj
+    );
+    float waveLuma = clamp(dot(albedo, vec3(0.299, 0.587, 0.114)) * 2.1, 0.68, 1.35);
+    vec3 waterBody = mix(deepScatter * waveLuma, albedo * vec3(0.95, 1.02, 0.98), trans);
+    albedo = mix(albedo, waterBody, smoothstep(0.08, 0.65, water));
+    float wetBand = smoothstep(0.02, 0.22, water) * (1.0 - smoothstep(0.28, 0.52, water));
+    albedo *= 1.0 - 0.22 * wetBand;
+  }
   // canopy: retail forests read as a darker, greener ground from the air (per-landblock density, bilinear)
   float trees = 0.0;
   if (vWorldXy.y <= 48960.0) {
@@ -373,10 +412,27 @@ void main() {
   vec3 sunDir = normalize(uSunDir);
   vec2 dWorldDx = dFdx(vWorldXy);
   vec2 dWorldDy = dFdy(vWorldXy);
+  float dZdx = dFdx(vWorldZ);
+  float dZdy = dFdy(vWorldZ);
   float wFoot = max(length(dWorldDx), length(dWorldDy));
   vec3 iblSpec = vec3(0.0);
   vec3 sandSparkle = vec3(0.0);
   float powderW = 0.0;
+  if (vWorldXy.y <= 48960.0 && water < 0.5) {
+    float dSlope = clamp(1.0 - n.z, 0.0, 1.0);
+    float dCliffW = smoothstep(0.28, 0.58, dSlope) * (1.0 - road);
+    if (dCliffW > 0.005) {
+      uint dCode0 = t00 & 31u;
+      uint dCliffCode = (dCode0 >= 10u && dCode0 <= 13u) ? 13u : 0u;
+      vec2 triAxis = abs(n.xy);
+      triAxis /= max(triAxis.x + triAxis.y, 1e-4);
+      vec3 cYz = hbAtlas(dCliffCode, vec2(vWorldXy.y, vWorldZ) / 24.0, vec2(dWorldDx.y, dZdx) / 24.0, vec2(dWorldDy.y, dZdy) / 24.0);
+      vec3 cXz = hbAtlas(dCliffCode, vec2(vWorldXy.x, vWorldZ) / 24.0, vec2(dWorldDx.x, dZdx) / 24.0, vec2(dWorldDy.x, dZdy) / 24.0);
+      vec3 cTri = cYz * triAxis.x + cXz * triAxis.y;
+      float dStrata = 0.78 + 0.15 * sin(vWorldZ * 0.42 + vWorldXy.x * 0.010) + 0.10 * cos(vWorldZ * 1.55 - vWorldXy.y * 0.014);
+      albedo = mix(albedo, cTri * dStrata, dCliffW * 0.65);
+    }
+  }
   if (vWorldXy.y >= 68928.0 && vWorldXy.y <= 117888.0 && water < 0.5) {
     uint c00 = t00 & 31u, c10 = t10 & 31u, c01 = t01 & 31u, c11 = t11 & 31u;
     float s00 = float(c00 >= 10u && c00 <= 12u), s10 = float(c10 >= 10u && c10 <= 12u);
@@ -410,13 +466,21 @@ void main() {
     vec2 microGrad = vec2(cos(ripPhase) * 0.28, sin(ripPhase) * 0.20) * rippleFade;
     n = normalize(vec3(n.xy - microGrad * 0.22, n.z));
 
-    // Geological cliff stratification & exposed rock on slopes
+    // Geological cliff stratification & 2-axis triplanar exposed rock on slopes
     float slopeSteep = clamp(1.0 - n.z, 0.0, 1.0);
     float cliffWeight = smoothstep(0.035, 0.22, slopeSteep);
     uint cliffCode = (vWorldXy.y < 88000.0 && vWorldXy.x >= 24000.0) ? 13u : 0u;
-    vec3 cliffTex = hbAtlas(cliffCode, f, gx, gy);
-    float strata = 0.72 + 0.22 * sin(vWorldZ * 0.45 + vWorldXy.x * 0.012) + 0.14 * cos(vWorldZ * 1.45 - vWorldXy.y * 0.015);
-    albedo = mix(albedo, mix(albedo, cliffTex, 0.55) * strata, cliffWeight);
+    vec2 triAxis = abs(n.xy);
+    triAxis /= max(triAxis.x + triAxis.y, 1e-4);
+    vec3 cliffYz = hbAtlas(cliffCode, vec2(vWorldXy.y, vWorldZ) / 24.0, vec2(dWorldDx.y, dZdx) / 24.0, vec2(dWorldDy.y, dZdy) / 24.0);
+    vec3 cliffXz = hbAtlas(cliffCode, vec2(vWorldXy.x, vWorldZ) / 24.0, vec2(dWorldDx.x, dZdx) / 24.0, vec2(dWorldDy.x, dZdy) / 24.0);
+    vec3 cliffTex = cliffYz * triAxis.x + cliffXz * triAxis.y;
+    float strataFine = sin(vWorldZ * 1.65 + hbValueNoise2D(vWorldXy * 0.035) * 2.1);
+    float strataCoarse = sin(vWorldZ * 0.45 + vWorldXy.x * 0.012) + 0.65 * cos(vWorldZ * 1.15 - vWorldXy.y * 0.015);
+    float strataLedge = smoothstep(0.74, 0.96, abs(strataFine));
+    float strata = (0.74 + 0.16 * strataCoarse + 0.11 * strataFine) * (1.0 - 0.18 * strataLedge);
+    albedo = mix(albedo, mix(albedo, cliffTex, 0.72) * strata, cliffWeight);
+    n = normalize(vec3(n.xy, max(0.05, n.z + strataFine * 0.11 * cliffWeight * rippleFade)));
 
     // Crisp 3D directional sun-slope relief contrast (warm sunlit windward slopes vs cool shaded leeward slip-faces)
     float slopeLight = dot(n, sunDir) - sunDir.z;
@@ -579,19 +643,44 @@ void main() {
   }
   vec3 lit = terrainApplyLight(albedo, ndotl, cloudShadow, 1.0);
   lit += iblSpec + sandSparkle * cloudShadow;
-  // water seen from the air: Fresnel (little reflection looking straight down, more toward the horizon), a sky
-  // sheen from the fog colour (the horizon radiance) and a tight sun glint that is strongest at grazing angles
+  // water seen from the air and on Dericost: animated dual-swell wave normals, Schlick Fresnel sky reflection,
+  // shoreline lapping foam, and sun specular glint
   if (water > 0.0 && uWaterGlint > 0.0) {
-    vec3 hbP = vec3(vWorldXy, 0.0);
+    vec3 hbP = vec3(vWorldXy, vWorldZ);
     vec3 v = normalize(uCamAc - hbP);
-    float fres = 0.02 + 0.98 * pow(1.0 - clamp(v.z, 0.0, 1.0), 5.0);
+    float waveFade = 1.0 - smoothstep(18.0, 140.0, wFoot);
+    vec2 wp1 = vWorldXy * 0.16 + vec2(uTime * 0.55, uTime * 0.23);
+    vec2 wp2 = vWorldXy * 0.43 + vec2(-uTime * 0.38, uTime * 0.61);
+    float wnx = sin(wp1.x + 0.7 * sin(wp1.y * 0.8)) * 0.055 + hbValueNoise2D(wp2) * 0.065;
+    float wny = cos(wp1.y + 0.7 * cos(wp1.x * 0.8)) * 0.055 + hbValueNoise2D(wp2 + vec2(5.2, 1.3)) * 0.065;
+    vec3 waterN = normalize(vec3(wnx * waveFade, wny * waveFade, 1.0));
+    float cosTheta = clamp(dot(v, waterN), 0.0, 1.0);
+    float fres = 0.02 + 0.98 * pow(1.0 - cosTheta, 5.0);
+    vec3 skyZenith = uAcAmbColor * max(uAcAmbLevel, 0.30) * vec3(0.68, 0.86, 1.18);
 #ifdef USE_FOG
-    lit = mix(lit, fogColor * 0.92, water * fres * 0.65);
+    vec3 skyReflect = mix(skyZenith, fogColor * 0.93, smoothstep(0.15, 0.88, 1.0 - cosTheta));
+#else
+    vec3 skyReflect = skyZenith;
 #endif
-    vec3 r = reflect(-sunDir, vec3(0.0, 0.0, 1.0));
+    lit = mix(lit, skyReflect, water * fres * 0.68);
+    vec3 r = reflect(-sunDir, waterN);
     float s = max(dot(r, v), 0.0);
-    float glint = (0.08 * pow(s, 64.0) + 2.2 * pow(s, 900.0)) * (0.15 + fres);
-    lit += water * uWaterGlint * glint * uAcSunColor * max(sunDir.z, 0.0);
+    float glint = (0.10 * pow(s, 48.0) + 2.35 * pow(s, 720.0)) * (0.18 + fres);
+    lit += water * uWaterGlint * glint * uAcSunColor * max(sunDir.z, 0.0) * cloudShadow;
+    if (water > 0.12 && water < 0.58 && vViewDepth < 650.0) {
+      float foamFade = 1.0 - smoothstep(220.0, 650.0, vViewDepth);
+      float coastWarp = hbValueNoise2D(vWorldXy * 0.11 + vec2(uTime * 0.04, -uTime * 0.03)) * 0.10;
+      float lapA = fract(uTime * 0.24);
+      float lapB = fract(uTime * 0.24 + 0.5);
+      float targetA = mix(0.50, 0.16, lapA) + coastWarp;
+      float targetB = mix(0.50, 0.16, lapB) + coastWarp;
+      float bandA = (1.0 - smoothstep(0.0, 0.085, abs(water - targetA))) * sin(lapA * 3.14159265);
+      float bandB = (1.0 - smoothstep(0.0, 0.085, abs(water - targetB))) * sin(lapB * 3.14159265);
+      float lace = 0.55 + 0.45 * (hbValueNoise2D(vWorldXy * 0.65 + vec2(uTime * 0.18, -uTime * 0.12)) + 0.5);
+      float foamW = clamp((bandA + bandB * 0.85) * lace, 0.0, 1.0) * foamFade;
+      vec3 foamLit = (uAcAmbColor * max(uAcAmbLevel, 0.28) + uAcSunColor * max(sunDir.z, 0.0) * cloudShadow) * vec3(0.94, 0.97, 1.0);
+      lit = mix(lit, max(lit, foamLit), foamW * 0.70);
+    }
   }
   fragColor = vec4(terrainApplyFog(lit, vViewDepth), 1.0);
 #if defined( USE_LOGARITHMIC_DEPTH_BUFFER ) || defined( USE_LOGDEPTHBUF )
@@ -611,11 +700,18 @@ let _loadPromise = null;
 const _diag = { enabled: false, loaded: false, loadMs: null, error: null, nodes: 0, levels: null, active: false, frames: 0, culled: 0 };
 
 const WORLD_BASE_URL = "../../dist/world/";
+const DERICOST_BASE_URL = "../../dist/dericost/";
 
 async function _fetchBytes(url) {
   const r = await fetch(url);
   if (!r.ok) throw new Error(`${url}: HTTP ${r.status}`);
   return new Uint8Array(await r.arrayBuffer());
+}
+
+function _fetchDericostGrid(base, fileName) {
+  const primary = base === WORLD_BASE_URL ? `${DERICOST_BASE_URL}${fileName}` : `${base}${fileName}`;
+  const fallback = base === WORLD_BASE_URL ? `${base}${fileName}` : `${DERICOST_BASE_URL}${fileName}`;
+  return _fetchBytes(primary).catch(() => _fetchBytes(fallback)).catch(() => null);
 }
 
 /** Load the baked grids once (lazy). Resolves to the data record or throws. */
@@ -630,9 +726,9 @@ export function loadWorldData(base = WORLD_BASE_URL) {
       _fetchBytes(`${base}world_trees.u8`).catch(() => new Uint8Array(255 * 255)),
     ]);
     const [hIdxDericost, typesDericost, treesDericost] = await Promise.all([
-      _fetchBytes(`${base}dericost_height.u8`).catch(() => _fetchBytes(`../../dist/dericost/dericost_height.u8`)).catch(() => null),
-      _fetchBytes(`${base}dericost_types.u8`).catch(() => _fetchBytes(`../../dist/dericost/dericost_types.u8`)).catch(() => null),
-      _fetchBytes(`${base}dericost_trees.u8`).catch(() => _fetchBytes(`../../dist/dericost/dericost_trees.u8`)).catch(() => null),
+      _fetchDericostGrid(base, "dericost_height.u8"),
+      _fetchDericostGrid(base, "dericost_types.u8"),
+      _fetchDericostGrid(base, "dericost_trees.u8"),
     ]);
     if (hIdx.length !== WORLD_VERTS * WORLD_VERTS || types.length !== WORLD_VERTS * WORLD_VERTS) {
       throw new Error(`world grids: unexpected sizes ${hIdx.length} / ${types.length}`);
@@ -1006,6 +1102,7 @@ export function disposeWorldTerrain() {
     st.geo?.dispose();
     st.mats?.mat?.dispose();
     st.mats?.hTex?.dispose(); st.mats?.tTex?.dispose(); st.mats?.treeTex?.dispose();
+    st.mats?.hDericostTex?.dispose(); st.mats?.tDericostTex?.dispose(); st.mats?.treeDericostTex?.dispose();
   } catch (_) { /* best effort */ }
   _st = null;
 }

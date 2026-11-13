@@ -97,6 +97,10 @@ const GRID_CELLS = VERTEX_GRID - 1;                     // 8
 const LB_M = METERS_PER_LANDBLOCK;                      // 192
 const VERT_M = VERTEX_SPACING_M;                        // 24
 const WORLD_M = 256 * METERS_PER_LANDBLOCK;             // 49152
+const DERICOST_MIN_LB_Y = 359;                          // northern continent south edge
+const MAX_LB_Y = 65535;                                 // full 16-bit LB coordinate range
+const NORTH_MIN_M = DERICOST_MIN_LB_Y * METERS_PER_LANDBLOCK; // 68928
+const NORTH_MAX_M = (MAX_LB_Y + 1) * METERS_PER_LANDBLOCK;    // 12582912
 const SLOT_COUNT = FIELD_SLOTS * FIELD_SLOTS;           // 256
 const VERTEX_COUNT = VERTEX_GRID * VERTEX_GRID;         // 81
 
@@ -126,6 +130,8 @@ const float HB_ROAD_CORNER_R = ${glslFloat(ROAD_PAINT.cornerRadiusM)};
 const float HB_ROAD_SQRT1_2 = ${glslFloat(Math.SQRT1_2)};
 const float HB_FIELD_VERT_M = ${glslFloat(VERT_M)};
 const float HB_FIELD_WORLD_M = ${glslFloat(WORLD_M)};
+const float HB_FIELD_NORTH_MIN_M = ${glslFloat(NORTH_MIN_M)};
+const float HB_FIELD_NORTH_MAX_M = ${glslFloat(NORTH_MAX_M)};
 
 // Retail per cell split diagonal (CLandBlockStruct ConstructPolygons), the
 // exact u32 form of terrain_oracle cellSwToNeCut: uint multiply wraps mod 2^32.
@@ -184,8 +190,9 @@ bool hbFieldSample(vec2 p, out float height, out vec3 normal, out ivec4 cornerCo
   normal = vec3(0.0, 0.0, 1.0);
   cornerCodes = ivec4(0);
   roadEdgeM = HB_ROAD_NONE;
-  // Off world (the oracle 0..255 guard); every compare is false for NaN.
-  if (!(p.x >= 0.0 && p.y >= 0.0 && p.x < HB_FIELD_WORLD_M && p.y < HB_FIELD_WORLD_M)) return false;
+  // Off world (Dereth 0..255 plus northern 16 bit continent 359..65535); every compare is false for NaN.
+  bool hbInY = (p.y >= 0.0 && p.y < HB_FIELD_WORLD_M) || (p.y >= HB_FIELD_NORTH_MIN_M && p.y < HB_FIELD_NORTH_MAX_M);
+  if (!(p.x >= 0.0 && p.x < HB_FIELD_WORLD_M && hbInY)) return false;
   // Integer landblock index: exact, no float division at landblock edges.
   ivec2 lb = ivec2(floor(p)) / 192;
   ivec2 slot = lb & 15;
@@ -321,7 +328,8 @@ function sampleFieldArrays(field, key, x, y, out) {
   // vec2 p — the shader sees f32 coordinates.
   const px = F(x);
   const py = F(y);
-  if (!(px >= 0 && py >= 0 && px < WORLD_M && py < WORLD_M)) return null;
+  const inY = (py >= 0 && py < WORLD_M) || (py >= NORTH_MIN_M && py < NORTH_MAX_M);
+  if (!(px >= 0 && px < WORLD_M && inY)) return null;
   // ivec2 lb = ivec2(floor(p)) / 192;  (non-negative: integer division truncates)
   const lbx = toInt(toInt(Math.floor(px)) / 192);
   const lby = toInt(toInt(Math.floor(py)) / 192);
@@ -567,7 +575,7 @@ export function createTerrainFieldGpu(opts = {}) {
     let keyDirty = false;
     for (let dy = -radius; dy <= radius; dy += 1) {
       const lbY = cy + dy;
-      if (lbY < 0 || lbY > 255) continue;
+      if (lbY < 0 || (lbY > 255 && lbY < DERICOST_MIN_LB_Y) || lbY > MAX_LB_Y) continue;
       for (let dx = -radius; dx <= radius; dx += 1) {
         const lbX = cx + dx;
         if (lbX < 0 || lbX > 255) continue;
@@ -577,7 +585,10 @@ export function createTerrainFieldGpu(opts = {}) {
         if (canLookup) {
           try { e = o.lookup(lbKeyFromXY(lbX, lbY)); } catch (_) { e = null; }
         }
-        if (e && e.codes && e.codes.length >= VERTEX_COUNT) {
+        if (e
+          && (e.lbX === undefined || e.lbX === lbX)
+          && (e.lbY === undefined || e.lbY === lbY)
+          && e.codes && e.codes.length >= VERTEX_COUNT) {
           if (slotEntry[slot] === e && slotLbX[slot] === lbX && slotLbY[slot] === lbY) {
             // Same entry already in the tile: at most the key needs re-validating
             // (the LB left the window and came back with nothing written over it).
@@ -647,7 +658,7 @@ export function createTerrainFieldGpu(opts = {}) {
     lx0 = Math.max(lx0, centerX - radius, 0);
     lx1 = Math.min(lx1, centerX + radius, 255);
     ly0 = Math.max(ly0, centerY - radius, 0);
-    ly1 = Math.min(ly1, centerY + radius, 255);
+    ly1 = Math.min(ly1, centerY + radius, MAX_LB_Y);
     let mn = Infinity;
     let mx = -Infinity;
     for (let ly = ly0; ly <= ly1; ly += 1) {

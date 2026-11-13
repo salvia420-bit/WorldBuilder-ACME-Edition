@@ -77,18 +77,20 @@ function ensureStyles() {
   style.textContent = `
     #${OVERLAY_ID} {
       position: fixed;
-      top: 80px;
-      left: calc(50% - ${FLOATY_WIDTH / 2}px);
+      top: 78px;
+      left: 16px;
       z-index: 60;
       width: ${FLOATY_WIDTH}px;
       height: ${FLOATY_HEIGHT}px;
-      max-height: calc(100 * var(--hb-hud-vh, 1vh) - 16px);
+      max-height: min(${FLOATY_HEIGHT}px, calc(100 * var(--hb-hud-vh, 1vh) - 180px));
       box-sizing: border-box;
       pointer-events: auto;
       font-family: var(--hbk-font);
+      font-variant-numeric: tabular-nums;
       background: url("./data/ui-sprites/0x0600128A.png") 0 0 / 220px 77px repeat, #1d1912;
       color: var(--hbk-text);
-      box-shadow: 0 10px 28px rgba(0, 0, 0, 0.7);
+      box-shadow: inset 0 0 0 1px rgba(243, 210, 122, 0.12), 0 10px 28px rgba(0, 0, 0, 0.75);
+      contain: layout style paint;
       display: none;
     }
     #${OVERLAY_ID}[data-open="1"] { display: block; }
@@ -281,8 +283,8 @@ function buildOverlay() {
     dragHandle: titleEl,
     ignoreSelector: ".hb-exa-floaty-close,button,input,select,textarea,[data-drag-ignore]",
     defaultPos: {
-      left: `calc(50% - ${FLOATY_WIDTH / 2}px)`,
-      top: `max(8px, calc(50% - ${FLOATY_HEIGHT / 2}px))`,
+      left: "16px",
+      top: "78px",
     },
   });
 

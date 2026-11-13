@@ -135,7 +135,11 @@ export class FrustumCuller {
     // Camera origin pulled back into AC space (for the distance test).
     this._camAc = new THREE.Vector3();
     // Scratch for pulling the camera world position into AC space.
+    // Cached against `worldRoot.matrixWorld` elements so we don't recompute
+    // a 4x4 matrix inverse when `worldRoot.matrixWorld` hasn't changed.
     this._invWorldRoot = new THREE.Matrix4();
+    this._invWorldRootSrc = null;
+    this._invWorldRootSnap = new Float64Array(16).fill(NaN);
     this._camWorld = new THREE.Vector3();
     // What the frustum was built with (setFromProjectionMatrix's last two
     // arguments; three's default for an absent coordinateSystem is WebGL), so
@@ -188,7 +192,22 @@ export class FrustumCuller {
     } else {
       this._camWorld.set(0, 0, 0);
     }
-    this._invWorldRoot.copy(worldRoot.matrixWorld).invert();
+    const wm = worldRoot.matrixWorld;
+    const we = wm.elements;
+    const snap = this._invWorldRootSnap;
+    let wmSame = this._invWorldRootSrc === wm && we && we.length === 16;
+    if (wmSame) {
+      for (let i = 0; i < 16; i += 1) {
+        if (we[i] !== snap[i]) { wmSame = false; break; }
+      }
+    }
+    if (!wmSame) {
+      this._invWorldRoot.copy(wm).invert();
+      this._invWorldRootSrc = wm;
+      if (we && we.length === 16) {
+        for (let i = 0; i < 16; i += 1) snap[i] = we[i];
+      }
+    }
     this._camAc.copy(this._camWorld).applyMatrix4(this._invWorldRoot);
 
     this.valid = true;

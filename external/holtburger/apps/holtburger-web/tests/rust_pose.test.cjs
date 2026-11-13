@@ -106,6 +106,16 @@ async function main() {
     assert.equal(w.z, 63.2); // z is already world — passes through untouched
   });
 
+  check('Dericost continent bit 15 (0x8000) adds +68928.0 world-Y offset', () => {
+    const w = m.rustPoseWorldFromPose({
+      x: 112.0, y: 122.0, z: 24.5, heading: 0, landblockId: 0x937B8026,
+    });
+    assert.ok(w);
+    assert.equal(w.x, 0x93 * 192.0 + 112.0);
+    assert.equal(w.y, 68928.0 + 0x7B * 192.0 + 122.0);
+    assert.equal(w.z, 24.5);
+  });
+
   check('missing landblockId coerces >>>0 → block (0,0), matching _integratorWorldPose', () => {
     const w = m.rustPoseWorldFromPose({ x: 5, y: 6, z: 7 });
     assert.ok(w);

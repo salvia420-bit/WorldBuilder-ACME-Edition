@@ -300,7 +300,20 @@ export function computeMaximizedRect({ top, height }, viewportHeight) {
 
 export function initChatLog(D) {
   const { chatLog, chatTabs } = D;
-  const CHAT_LOG_LIMIT = 400;
+  const CHAT_LOG_LIMIT = 200;
+  let scrollRaf = 0;
+  let emptyCleared = false;
+  function scheduleChatLogScroll() {
+    if (typeof requestAnimationFrame !== "function") {
+      chatLog.scrollTop = chatLog.scrollHeight;
+      return;
+    }
+    if (scrollRaf) return;
+    scrollRaf = requestAnimationFrame(() => {
+      scrollRaf = 0;
+      chatLog.scrollTop = chatLog.scrollHeight;
+    });
+  }
   // chat-errors-6: `?chatErrors=1` / `=0` sets the per-viewer "Errors" option.
   applyChatErrorsParam();
   // Phase 4 step 4: append a chat line keyed by the wasm-bundle's
@@ -325,9 +338,28 @@ export function initChatLog(D) {
         if (!chatErrorsEnabled()) return;
       }
     }
+    const nowTs = Date.now();
+    const isAgentMode = !!document.documentElement?.classList?.contains?.("agent-mode");
+    const directSink = typeof window !== "undefined" ? window.__hbChatLogDirectSink : null;
+    // In agent-mode, the dev-page #chat-panel is display:none !important and
+    // plugins/chat-panel.js owns the live HUD chat log. Route straight to the
+    // HUD sink so we avoid duplicate #chat-log <li> allocations and double
+    // MutationObserver churn on every incoming line.
+    if (isAgentMode && typeof directSink === "function") {
+      directSink({
+        text: String(text ?? ""),
+        cat: typeof category === "number" ? category : null,
+        isEcho: typeof category !== "number",
+        ts: nowTs,
+      });
+      return;
+    }
     // Drop the empty-state placeholder on first real message.
-    const empty = chatLog.querySelector("li.empty");
-    if (empty) empty.remove();
+    if (!emptyCleared) {
+      const empty = chatLog.querySelector("li.empty");
+      if (empty) empty.remove();
+      emptyCleared = true;
+    }
     const li = document.createElement("li");
     if (typeof category === "number") {
       li.className = `cat-${category}`;
@@ -338,19 +370,29 @@ export function initChatLog(D) {
     // HUD overhaul 2026-10-05 — arrival time, so the HUD chat window's
     // DisplayTimestamps prefix shows when the line came in rather than when
     // the window happened to mirror it.
-    li.dataset.ts = String(Date.now());
+    li.dataset.ts = String(nowTs);
     li.textContent = text;
+    if (typeof directSink === "function") {
+      li._hbDirectMirrored = true;
+      directSink({
+        text: String(text ?? ""),
+        cat: typeof category === "number" ? category : null,
+        isEcho: typeof category !== "number",
+        ts: nowTs,
+      });
+    }
     // Trim to prevent unbounded DOM growth in long sessions.
     chatLog.appendChild(li);
     while (chatLog.childElementCount > CHAT_LOG_LIMIT) {
       chatLog.firstElementChild.remove();
     }
+    if (isAgentMode) return;
     // Auto-scroll only if the user was already pinned to the
     // bottom — don't yank scroll position when they're reading
     // backscroll.
     const nearBottom =
       chatLog.scrollHeight - chatLog.scrollTop - chatLog.clientHeight < 40;
-    if (nearBottom) chatLog.scrollTop = chatLog.scrollHeight;
+    if (nearBottom) scheduleChatLogScroll();
   }
   // P6.1 (2026-07-27): expose for client.ui.writeToChat — the retail
   // IAsheronsCall::WriteToChat analogue (display echo only; local

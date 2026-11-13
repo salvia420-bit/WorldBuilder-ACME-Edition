@@ -50,31 +50,49 @@
 // THREE-ONLY LEAF (no imports): the headless test loads it as-is.
 
 let _mode;
+let _armedDefault = false;
 let _budgetMb = 64;
 
-/** `?statGeomCache=on[:<MB>]`. Anything else (absent, `1`, `true`) is OFF. */
+/** Arm `?statGeomCache` default-ON (64 MiB unowned LRU, `=off|0|false|no` escape) for live sessions. */
+export function armStaticGeomCacheDefault(on = true) {
+  _armedDefault = !!on;
+  _mode = undefined;
+}
+
+/** `?statGeomCache=on[:<MB>]` (or `=off|0|false|no` escape when armed at boot). */
 export function statGeomCacheEnabled() {
   if (_mode !== undefined) return _mode;
-  let on = false;
+  let on = _armedDefault;
   try {
     if (typeof globalThis !== "undefined" && globalThis.location?.search) {
       const raw = (new URLSearchParams(globalThis.location.search).get("statGeomCache") || "").toLowerCase();
-      const parts = raw.split(":");
-      if (parts[0] === "on") {
-        on = true;
-        if (parts.length > 1) {
-          const mb = Number(parts[1]);
-          if (Number.isFinite(mb) && mb >= 1 && mb <= 1024) _budgetMb = mb;
+      if (raw) {
+        const parts = raw.split(":");
+        if (parts[0] === "on") {
+          on = true;
+          if (parts.length > 1) {
+            const mb = Number(parts[1]);
+            if (Number.isFinite(mb) && mb >= 1 && mb <= 1024) _budgetMb = mb;
+          }
+        } else if (_armedDefault && (parts[0] === "off" || parts[0] === "0" || parts[0] === "false" || parts[0] === "no")) {
+          on = false;
+        } else if (_armedDefault) {
+          const mb = Number(parts[0]);
+          if (Number.isFinite(mb) && mb >= 1 && mb <= 1024) {
+            on = true;
+            _budgetMb = mb;
+          }
         }
       }
     }
-  } catch (_) { on = false; }
+  } catch (_) { on = _armedDefault; }
   _mode = on;
   return on;
 }
 /** Test seam. `undefined` re-reads the URL. */
 export function __setStatGeomCacheForTest(on, budgetMb) {
   _mode = on;
+  if (on === undefined && Number.isFinite(budgetMb)) _armedDefault = false;
   if (Number.isFinite(budgetMb)) _budgetMb = budgetMb;
 }
 export function statGeomCacheBudgetMb() { return _budgetMb; }

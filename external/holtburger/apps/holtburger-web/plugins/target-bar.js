@@ -191,6 +191,7 @@ function ensureStyles() {
       --sp: ${sprite("0x06001126")};
       overflow: hidden;
       cursor: pointer;
+      font-variant-numeric: tabular-nums;
     }
     .htb-target.is-empty { cursor: default; }
     .htb-target:not(.is-empty):hover { filter: brightness(1.12); }
@@ -201,7 +202,12 @@ function ensureStyles() {
       opacity: 0;
     }
     .htb-target.is-blinking .htb-target-blink { animation: htb-select-blink 560ms ease-out 1; }
+    .htb-target.is-blinking.is-blinking-alt .htb-target-blink { animation-name: htb-select-blink-alt; }
     @keyframes htb-select-blink {
+      0% { opacity: 0; } 20% { opacity: 0.85; } 45% { opacity: 0.2; }
+      70% { opacity: 0.7; } 100% { opacity: 0; }
+    }
+    @keyframes htb-select-blink-alt {
       0% { opacity: 0; } 20% { opacity: 0.85; } 45% { opacity: 0.2; }
       70% { opacity: 0.7; } 100% { opacity: 0; }
     }
@@ -658,6 +664,7 @@ export function mountToolbarControls(field, opts = {}) {
     setAcText(nameEl, state.selectedName || "Unknown object", { color: "#ffffff", fit: true });
   }
 
+  let blinkAlt = false;
   function updateSelection(nextOverride) {
     const next = (nextOverride != null) ? (nextOverride >>> 0) : getSelectedTargetGuid();
     if (next !== state.selectedGuid) {
@@ -684,10 +691,13 @@ export function mountToolbarControls(field, opts = {}) {
           `[target-health] sel 0x${next.toString(16)} meter=${state.healthQueried} ` +
           `cached=${state.selectedHealth == null ? "none" : state.selectedHealth.toFixed(2)}`,
         );
-        // SelectionBlinkField (0x100001A0) ObjectSelected state.
-        target.classList.remove("is-blinking");
-        void target.offsetWidth;
+        // SelectionBlinkField (0x100001A0) ObjectSelected state — alternate
+        // keyframe names so consecutive selections restart without forcing
+        // synchronous layout (`offsetWidth`).
+        blinkAlt = !blinkAlt;
+        target.classList.remove("is-blinking", "is-blinking-alt");
         target.classList.add("is-blinking");
+        if (blinkAlt) target.classList.add("is-blinking-alt");
       }
       renderTarget();
     } else if (next) {

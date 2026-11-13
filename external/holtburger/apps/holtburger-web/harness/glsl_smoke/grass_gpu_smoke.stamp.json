@@ -1,15 +1,15 @@
 {
- "fingerprint": "db36690355100fb75bbacc01c829b80309fb76e497805ad0663b707b5baf93ab",
+ "fingerprint": "3c17089bc7f3f277728209a6e736a38ff82806e1d99d2a7304dd388cdd65fcb9",
  "fingerprintVersion": 1,
  "parts": {
   "hash": "0c333ece4301ba2b413b93fe4f8069c5ef07bdfb69afc139e8798b383e3ed0cc",
-  "field": "666235f76a4ba392656b6f3bf7fd8ccc2aaa6638fc71b12e09e7ea59cce5a9c3",
+  "field": "2991f0b780af391990615ad9b816017c40c0a894eca2963f08eb3870cb118143",
   "mask": "696d6b71f160b0cad1bd5dfe1c09f5e506d4108983801350f6fd81cfa127730a",
   "place": "5e37e571567ed396a2f78f583cbe5fcbbea38d0153af199df4d0b543901737b2",
-  "vertex": "5217d3f4d72591a04adf899ed70ec3f0dcdc232e3ce61e401dac83791222f5d8",
-  "fragment": "6d3209e58f9ebd26557097fea7f75fef32bd0164240c6c4b6affba9b96e2f12b"
+  "vertex": "4c5c5dcb329b5bd41dd28f54e29a05290f330667702b5b3690d2076c24ce2a20",
+  "fragment": "dc7ef99c4c1bfc0a742d6849cbffd1a11ca28216e149dc8abfa45cb1d2863a15"
  },
- "passedAt": "2026-10-23T20:12:41.155Z",
+ "passedAt": "2026-11-13T10:33:43.812Z",
  "renderer": "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)",
  "summary": {
   "readback": [
@@ -17,17 +17,17 @@
     "spot": "Holtburg centre (0xA9B4)",
     "config": "20000 blades / 24 m / reach 5 (4 rings)",
     "stage": "fragment",
-    "cpuLive": 8298,
+    "cpuLive": 8367,
     "rate": 0.00024,
-    "worstRingRate": 0.00043
+    "worstRingRate": 0.00042
    },
    {
     "spot": "Holtburg centre (0xA9B4)",
     "config": "20000 blades / 24 m / reach 5 (4 rings)",
     "stage": "vertex",
-    "cpuLive": 8298,
+    "cpuLive": 8367,
     "rate": 0.00024,
-    "worstRingRate": 0.00043
+    "worstRingRate": 0.00042
    },
    {
     "spot": "Holtburg centre (0xA9B4)",
@@ -49,65 +49,65 @@
     "spot": "road screenshot 42.0N 33.6E",
     "config": "20000 blades / 24 m / reach 5 (4 rings)",
     "stage": "fragment",
-    "cpuLive": 13065,
-    "rate": 0.00046,
-    "worstRingRate": 0.00065
-   },
-   {
-    "spot": "road screenshot 42.0N 33.6E",
-    "config": "20000 blades / 24 m / reach 5 (4 rings)",
-    "stage": "vertex",
-    "cpuLive": 13065,
-    "rate": 0.00046,
-    "worstRingRate": 0.00065
-   },
-   {
-    "spot": "road screenshot 42.0N 33.6E",
-    "config": "10000 blades / 24 m single field (reach 1)",
-    "stage": "fragment",
-    "cpuLive": 6730,
+    "cpuLive": 13264,
     "rate": 0.00045,
-    "worstRingRate": 0.00045
+    "worstRingRate": 0.00064
+   },
+   {
+    "spot": "road screenshot 42.0N 33.6E",
+    "config": "20000 blades / 24 m / reach 5 (4 rings)",
+    "stage": "vertex",
+    "cpuLive": 13264,
+    "rate": 0.00045,
+    "worstRingRate": 0.00064
+   },
+   {
+    "spot": "road screenshot 42.0N 33.6E",
+    "config": "10000 blades / 24 m single field (reach 1)",
+    "stage": "fragment",
+    "cpuLive": 6829,
+    "rate": 0.00044,
+    "worstRingRate": 0.00044
    },
    {
     "spot": "road screenshot 42.0N 33.6E",
     "config": "10000 blades / 24 m single field (reach 1)",
     "stage": "vertex",
-    "cpuLive": 6730,
-    "rate": 0.00045,
-    "worstRingRate": 0.00045
+    "cpuLive": 6829,
+    "rate": 0.00044,
+    "worstRingRate": 0.00044
    },
    {
     "spot": "dense housing 0x4993",
     "config": "20000 blades / 24 m / reach 5 (4 rings)",
     "stage": "fragment",
-    "cpuLive": 3175,
-    "rate": 0.00094,
-    "worstRingRate": 0.00229
+    "cpuLive": 3532,
+    "rate": 0.00085,
+    "worstRingRate": 0.00206
    },
    {
     "spot": "dense housing 0x4993",
     "config": "20000 blades / 24 m / reach 5 (4 rings)",
     "stage": "vertex",
-    "cpuLive": 3175,
-    "rate": 0.00094,
-    "worstRingRate": 0.00229
+    "cpuLive": 3532,
+    "rate": 0.00085,
+    "worstRingRate": 0.00206
    },
    {
     "spot": "dense housing 0x4993",
     "config": "10000 blades / 24 m single field (reach 1)",
     "stage": "fragment",
-    "cpuLive": 1778,
-    "rate": 0.00112,
-    "worstRingRate": 0.00112
+    "cpuLive": 1995,
+    "rate": 0.001,
+    "worstRingRate": 0.001
    },
    {
     "spot": "dense housing 0x4993",
     "config": "10000 blades / 24 m single field (reach 1)",
     "stage": "vertex",
-    "cpuLive": 1778,
-    "rate": 0.00112,
-    "worstRingRate": 0.00112
+    "cpuLive": 1995,
+    "rate": 0.001,
+    "worstRingRate": 0.001
    }
   ],
   "interior": [
@@ -151,37 +151,37 @@
     "spot": "dense housing 0x4993",
     "config": "20000 blades / 24 m / reach 5 (4 rings)",
     "stage": "fragment",
-    "gpuKills": 2515,
-    "mirKills": 2517,
+    "gpuKills": 2839,
+    "mirKills": 2841,
     "killMism": 2,
-    "deep": 181
+    "deep": 208
    },
    {
     "spot": "dense housing 0x4993",
     "config": "20000 blades / 24 m / reach 5 (4 rings)",
     "stage": "vertex",
-    "gpuKills": 2515,
-    "mirKills": 2517,
+    "gpuKills": 2839,
+    "mirKills": 2841,
     "killMism": 2,
-    "deep": 181
+    "deep": 208
    },
    {
     "spot": "dense housing 0x4993",
     "config": "10000 blades / 24 m single field (reach 1)",
     "stage": "fragment",
-    "gpuKills": 1829,
-    "mirKills": 1829,
+    "gpuKills": 2062,
+    "mirKills": 2062,
     "killMism": 0,
-    "deep": 156
+    "deep": 172
    },
    {
     "spot": "dense housing 0x4993",
     "config": "10000 blades / 24 m single field (reach 1)",
     "stage": "vertex",
-    "gpuKills": 1829,
-    "mirKills": 1829,
+    "gpuKills": 2062,
+    "mirKills": 2062,
     "killMism": 0,
-    "deep": 156
+    "deep": 172
    }
   ],
   "indoor": [
@@ -202,9 +202,9 @@
    }
   ],
   "frame": {
-   "fracOver8": 0.00182,
-   "fracOver8Tolerant": 0.0005,
-   "maxDiff": 78
+   "fracOver8": 0.00197,
+   "fracOver8Tolerant": 0.00046,
+   "maxDiff": 79
   }
  }
 }

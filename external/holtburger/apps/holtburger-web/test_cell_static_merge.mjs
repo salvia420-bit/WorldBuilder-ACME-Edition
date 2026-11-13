@@ -135,7 +135,9 @@ console.log("\nunsupported props are left alone");
 console.log("\nflag");
 {
   globalThis.window = { location: { search: "" } };
-  check("default OFF", cellStaticMergeEnabled() === false);
+  check("default ON", cellStaticMergeEnabled() === true);
+  window.location.search = "?cellStaticMerge=off";
+  check("?cellStaticMerge=off", cellStaticMergeEnabled() === false);
   window.location.search = "?cellStaticMerge=on";
   check("?cellStaticMerge=on", cellStaticMergeEnabled() === true);
   delete globalThis.window;

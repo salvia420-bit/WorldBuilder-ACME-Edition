@@ -163,6 +163,7 @@ function nowSeconds() {
 // server re-sends a new `startTime` for the same slot (recast /
 // refreshed buff) we treat it as a fresh arrival and re-stamp `receivedAt`.
 const receivedAtSelf = new Map();          // layeredId -> {startTime, receivedAt}
+const receivedAtCooldowns = new Map();     // layeredId -> {startTime, receivedAt}
 const receivedAtByEntity = new Map();      // guid -> Map(layeredId -> {startTime, receivedAt})
 
 // `playerEnchantments()` / `entityEnchantments()` hand back a fresh array
@@ -487,10 +488,11 @@ function ensureStyles() {
   s.textContent = `
     #${OVERLAY_ID} {
       position: fixed;
-      top: 40px;
-      left: 32px;
+      top: 84px;
+      left: 8px;
       z-index: 51;
       display: none;
+      contain: layout style;
       flex-direction: column;
       box-sizing: border-box;
       padding: 5px;
@@ -502,7 +504,7 @@ function ensureStyles() {
       font-size: 11px;
       user-select: none;
       pointer-events: auto;
-      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.6);
+      box-shadow: inset 0 1px 0 rgba(243, 210, 122, 0.14), 0 0 0 1px #000, 0 6px 18px rgba(0, 0, 0, 0.72);
       background:
         ${u("0x06006129")} left top / 5px 5px no-repeat,
         ${u("0x06006129")} right top / 5px 5px no-repeat,
@@ -513,7 +515,7 @@ function ensureStyles() {
         ${u("0x0600612B")} left top / 5px 10px repeat-y,
         ${u("0x0600612D")} right top / 5px 10px repeat-y,
         ${u("0x06004CC2")} left top / 48px 48px repeat,
-        #0b0c10;
+        #0c0d12;
       image-rendering: pixelated;
     }
     #${OVERLAY_ID}[data-open="1"] { display: flex; }
@@ -704,13 +706,16 @@ function refreshFromCharacter(character) {
   }
   for (const cd of character.sharedCooldowns.values()) {
     if (!cd) continue;
-    state.cooldowns.set(cd.layeredId >>> 0, {
+    const rec = {
       ...cd,
       // Mark as cooldown for the classifier.
       type: (cd.type ?? 0) | ETF.COOLDOWN,
-    });
+    };
+    stampReceivedAt(rec, receivedAtCooldowns);
+    state.cooldowns.set(cd.layeredId >>> 0, rec);
   }
   pruneReceivedAtCache(receivedAtSelf, state.enchantments);
+  pruneReceivedAtCache(receivedAtCooldowns, state.cooldowns);
 }
 
 function refreshFromSnapshot(snapshot) {
@@ -724,6 +729,7 @@ function refreshFromSnapshot(snapshot) {
     const n = normalizeEnchantment(raw);
     if (!n) continue;
     if ((n.type & ETF.COOLDOWN) !== 0) {
+      stampReceivedAt(n, receivedAtCooldowns);
       state.cooldowns.set(n.layeredId, n);
     } else {
       stampReceivedAt(n, receivedAtSelf);
@@ -737,6 +743,7 @@ function refreshFromSnapshot(snapshot) {
     }
   }
   pruneReceivedAtCache(receivedAtSelf, state.enchantments);
+  pruneReceivedAtCache(receivedAtCooldowns, state.cooldowns);
 }
 
 // === Wave 4.B — per-entity enchantment ingestion (2026-05-28) ===
@@ -753,6 +760,7 @@ function refreshEntityFromSnapshot(guid, snapshot) {
     receivedAtByEntity.delete(g);
   } else {
     const bucket = new Map();
+    const byCategory = new Map();
     let cache = receivedAtByEntity.get(g);
     if (!cache) {
       cache = new Map();
@@ -767,14 +775,12 @@ function refreshEntityFromSnapshot(guid, snapshot) {
       // we route them into the same bucket so the consumer can choose
       // to display or hide them. The nameplate badge skips cooldowns
       // (only renders buff + debuff counts).
-      const prev = [...bucket.values()].find(
-        (p) => p.spellCategory === n.spellCategory
-              && p.layer === n.layer
-              && p.spellCategory !== 0,
-      );
+      const catKey = n.spellCategory !== 0 ? `${n.spellCategory}:${n.layer}` : null;
+      const prev = catKey !== null ? byCategory.get(catKey) : undefined;
       if (prev && prev.power >= n.power) continue;
       if (prev) bucket.delete(prev.layeredId);
       bucket.set(n.layeredId, n);
+      if (catKey !== null) byCategory.set(catKey, n);
     }
     if (bucket.size === 0) {
       state.entityEnchantments.delete(g);
@@ -1134,7 +1140,45 @@ function placeNearAnchor(anchor) {
 
 function setFilter(which) {
   state.filter = which || null;
-  renderAll();
+  if (state.overlayEl?.dataset?.open === "1") renderAll();
+}
+
+function pruneExpiredEnchantments() {
+  let selfPruned = false;
+  for (const [k, e] of state.enchantments) {
+    if (remainingSeconds(e) <= 0) {
+      state.enchantments.delete(k);
+      receivedAtSelf.delete(k);
+      selfPruned = true;
+    }
+  }
+  for (const [k, cd] of state.cooldowns) {
+    if (remainingSeconds(cd) <= 0) {
+      state.cooldowns.delete(k);
+      receivedAtCooldowns.delete(k);
+    }
+  }
+  if (selfPruned) syncIndicators();
+  for (const [guid, bucket] of state.entityEnchantments) {
+    let entityPruned = false;
+    const cache = receivedAtByEntity.get(guid);
+    for (const [k, e] of bucket) {
+      if (remainingSeconds(e) <= 0) {
+        bucket.delete(k);
+        cache?.delete(k);
+        entityPruned = true;
+      }
+    }
+    if (bucket.size === 0) {
+      state.entityEnchantments.delete(guid);
+      receivedAtByEntity.delete(guid);
+    }
+    if (entityPruned) {
+      for (const fn of state.entityChangeListeners) {
+        try { fn(guid); } catch (_) {}
+      }
+    }
+  }
 }
 
 function openStrip(which, opts = {}) {
@@ -1415,8 +1459,13 @@ export function mount(ctx) {
     let tick = 0;
     tickTimer = setInterval(() => {
       tick += 1;
-      if (tick % 2 === 0) refresh();
-      else if (overlay.dataset.open === "1") renderAll();
+      if (tick % 2 === 0) {
+        refresh();
+        pruneExpiredEnchantments();
+      } else {
+        pruneExpiredEnchantments();
+        if (overlay.dataset.open === "1") renderAll();
+      }
     }, 1000);
     return true;
   }
@@ -1443,6 +1492,7 @@ export function mount(ctx) {
     const cur = window.__sessionHandle ?? null;
     if (!cur || cur === boundHandle) return;
     receivedAtSelf.clear();
+    receivedAtCooldowns.clear();
     clearEntityEnchantments();
     tryHook();
   }, 1000);
@@ -1468,6 +1518,7 @@ export function mount(ctx) {
     state.enchantments.clear();
     state.cooldowns.clear();
     receivedAtSelf.clear();
+    receivedAtCooldowns.clear();
   };
 }
 

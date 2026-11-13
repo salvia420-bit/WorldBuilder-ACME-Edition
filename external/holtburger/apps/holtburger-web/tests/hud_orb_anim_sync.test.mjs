@@ -35,6 +35,7 @@ const APP = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 // Minimal DOM shim so the real plugin module imports.
 globalThis.window = globalThis;
+globalThis.location = { search: "?hudDiet=off" };
 globalThis.addEventListener = () => {};
 globalThis.removeEventListener = () => {};
 globalThis.document = {

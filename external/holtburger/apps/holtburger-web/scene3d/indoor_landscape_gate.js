@@ -161,10 +161,11 @@ export function indoorLandscapeSkip(s) {
   return true;
 }
 
-/** An EnvCell id proper (`0x0100..0xFFFD`), not a landcell or the outdoor sentinel. */
+/** An EnvCell id proper (`0x0100..0xFFFD`, masking Dericost continent bit 15), not a landcell or the outdoor sentinel. */
 export function isDrawnEnvCellId(id) {
-  const low = (id >>> 0) & 0xffff;
-  return low >= 0x0100 && low < 0xfffe;
+  const low16 = (id >>> 0) & 0xffff;
+  const low15 = low16 & 0x7fff;
+  return low15 >= 0x0100 && low16 < 0xfffe;
 }
 
 /**
@@ -201,7 +202,7 @@ function _toIdSet(ids) {
  * @param {number} anchor              the viewer cell (always walk-reached)
  * @returns {{allResident: boolean, bfsOutdoor: boolean|null, drawnCells: number}}
  */
-export function indoorLandscapeCellState(registry, drawn, bfs, walk, frustum, anchor) {
+export function indoorLandscapeCellState(registry, drawn, bfs, walk, frustum, anchor, poolReg = null) {
   const out = { allResident: false, bfsOutdoor: null, drawnCells: 0 };
   if (!(registry instanceof Map) || !drawn) return out;
   let all = true;
@@ -211,8 +212,13 @@ export function indoorLandscapeCellState(registry, drawn, bfs, walk, frustum, an
     out.drawnCells++;
     const c = registry.get(id);
     // Unregistered (not built yet / evicted) or detached (parked): the cells
-    // pass would draw nothing for it.
-    if (!c || !c.parent) all = false;
+    // pass would draw nothing for it. When EnvCell pools are active, also
+    // verify either the pool registry has committed the cell or the container
+    // retains legacy shell/prop children.
+    const poolReady = !poolReg ||
+      (typeof poolReg.hasCell === "function" && poolReg.hasCell(id)) ||
+      (Array.isArray(c?.children) && c.children.length > 0);
+    if (!c || !c.parent || !poolReady) all = false;
   }
   out.allResident = all && out.drawnCells > 0;
   const walkSet = _toIdSet(walk);

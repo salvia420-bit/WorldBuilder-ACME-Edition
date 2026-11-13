@@ -101,6 +101,25 @@ function hash01(n) {
 }
 
 /**
+ * Pure deterministic wind-gust wave (`primary swell + 3.7x harmonic flutter`),
+ * synced with grass and `fx_fields` gust cadence so canopy leaves and ambient
+ * foliage breathe coherently on wind swells without `Math.random`.
+ *
+ * @param {number} windStrength  derived weather wind scalar (default 1.0)
+ * @param {number} phaseSec      client clock phase in seconds (default 0)
+ * @param {number} [seedPhase=0] deterministic [0, 1) placement phase
+ * @returns {number} effective gust multiplier >= 0.25
+ */
+export function foliageWindGust(windStrength, phaseSec, seedPhase = 0) {
+  const ws = Number.isFinite(windStrength) ? Math.max(0, windStrength) : 1.0;
+  const t = Number.isFinite(phaseSec) ? phaseSec : 0;
+  const ph = Number.isFinite(seedPhase) ? seedPhase : 0;
+  const swell = Math.sin(t * 0.85 + ph * 6.2831853);
+  const flutter = Math.sin(t * (0.85 * 3.7) + ph * 14.137167);
+  return Math.max(0.25, ws * (0.82 + 0.24 * swell + 0.09 * flutter));
+}
+
+/**
  * Build ONE synthesized ambient emitter spec for the foliage family.
  * Returns the `{emitterInfo, partIndex, parentOffset}` shape the attach layer
  * forwards to ParticleManager.addEmitter (handoff §2).
@@ -197,6 +216,28 @@ function emitFor(self, ctx) {
   if (hwGfxObjId === 0) return [];                      // no sprite resolved → invisible-guard
   const anchor = (ctx && ctx.anchor) || { partIndex: -1, center: { x: 0, y: 0, z: 0 }, radius: cfg.maxOffset || 1.0 };
   const seed = (ctx && ctx.seed) >>> 0;
+  if (self.id === "particle.foliageLeaves") {
+    const env = (ctx && ctx.env) || null;
+    const userCfg = (ctx && ctx.config) || null;
+    const seedPhase = hash01(seed ^ 0x27d4eb2f);
+    const clockSec = Number.isFinite(ctx && ctx.clock) ? ctx.clock : (Number.isFinite(env && env.timeSec) ? env.timeSec : 0);
+    const gust = foliageWindGust(env && env.windStrength, clockSec, seedPhase);
+    let dirX = 0.70710678, dirZ = 0.70710678;
+    if (env && Number.isFinite(env.windX) && Number.isFinite(env.windZ) && (env.windX !== 0 || env.windZ !== 0)) {
+      const wl = Math.hypot(env.windX, env.windZ);
+      dirX = env.windX / wl;
+      dirZ = env.windZ / wl;
+    } else if (env && Number.isFinite(env.windDirDeg)) {
+      const rad = (env.windDirDeg * Math.PI) / 180;
+      dirX = Math.cos(rad);
+      dirZ = -Math.sin(rad);
+    }
+    if (!userCfg || userCfg.aX === undefined) cfg.aX = dirX * 0.24 * gust;
+    if (!userCfg || userCfg.aZ === undefined) cfg.aZ = dirZ * 0.24 * gust;
+    const flutter = 0.85 + 0.28 * Math.abs(Math.sin(clockSec * (0.85 * 3.7) + seedPhase * 14.137167));
+    if (!userCfg || userCfg.cX === undefined) cfg.cX = cfg.cX * flutter;
+    if (!userCfg || userCfg.cZ === undefined) cfg.cZ = cfg.cZ * flutter;
+  }
   return [buildEmitter(cfg, anchor, hwGfxObjId, seed, g)];
 }
 

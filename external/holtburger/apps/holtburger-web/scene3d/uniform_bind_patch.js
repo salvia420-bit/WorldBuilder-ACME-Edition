@@ -381,10 +381,28 @@ function _uboEnsure(st, ub, glp, count, size) {
   const names = [];
   for (let i = 0; i < count; i++) for (const [f] of def.fields) names.push(`${def.name}[${i}].${f}`);
   const idx = gl.getUniformIndices(glp, names);
-  const offs = gl.getActiveUniforms(glp, idx, gl.UNIFORM_OFFSET);
+  const validIndices = [];
+  const validSlots = [];
+  if (idx) {
+    for (let k = 0; k < idx.length; k++) {
+      const u = idx[k];
+      if (u !== INVALID_INDEX && u !== -1 && u >= 0) {
+        validIndices.push(u);
+        validSlots.push(k);
+      }
+    }
+  }
+  const validOffs =
+    validIndices.length > 0 ? gl.getActiveUniforms(glp, validIndices, gl.UNIFORM_OFFSET) : null;
+  const offs = new Int32Array(names.length).fill(-1);
+  if (validOffs) {
+    for (let j = 0; j < validSlots.length; j++) {
+      offs[validSlots[j]] = validOffs[j];
+    }
+  }
   const layout = { count, nf, offs: new Int32Array(count * nf), comps: def.fields.map((f) => f[1]), keys: def.fields.map((f) => f[0]), floats: 0 };
   for (let k = 0; k < names.length; k++) {
-    const ok = idx[k] !== INVALID_INDEX && idx[k] !== -1 && offs[k] >= 0;
+    const ok = offs[k] >= 0;
     layout.offs[k] = ok ? offs[k] >> 2 : -1;
     if (ok) layout.floats = Math.max(layout.floats, (offs[k] >> 2) + layout.comps[k % nf]);
   }

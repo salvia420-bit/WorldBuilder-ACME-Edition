@@ -228,6 +228,7 @@
         border-radius: 0 0 6px 6px;
         user-select: none; -webkit-user-select: none;
         touch-action: manipulation;
+        contain: layout style paint;
       }
       #virtual-keypad .pad-section { display: grid; gap: 0.35rem; }
       #virtual-keypad .pad-wasd { grid-template-columns: repeat(3, 3rem); grid-template-rows: repeat(2, 3rem); }
@@ -265,7 +266,7 @@
       /* Phase 4 step 4: chat panel. Fixed-height scrolling log + an
          input row underneath. Lives under the Teleport button inside
          #post-spawn so it only appears after EnteredWorld. */
-      #chat-panel { margin-top: 0.75rem; max-width: 36rem; border: 1px solid #ccc; border-radius: 4px; background: #fafafa; }
+      #chat-panel { margin-top: 0.75rem; max-width: 36rem; border: 1px solid #ccc; border-radius: 4px; background: #fafafa; contain: layout style paint; }
       /* Chat tabs — "All" filter plus one tab per category cluster.
          The active tab toggles a `data-tab` attribute on #chat-log;
          CSS hides any <li> whose `data-cat` doesn't match. */
@@ -358,7 +359,7 @@
       #panels-row { display: flex; flex-wrap: wrap; gap: 0.75rem; margin-top: 0.75rem; }
       #panels-row > * { flex: 1 1 22rem; min-width: 18rem; }
       #panels-row #chat-panel { margin-top: 0; max-width: none; flex: 2 1 28rem; }
-      #vitals-panel, #inventory-panel { border: 1px solid #ccc; border-radius: 4px; background: #fafafa; }
+      #vitals-panel, #inventory-panel { border: 1px solid #ccc; border-radius: 4px; background: #fafafa; contain: layout style paint; }
       /* Phase J.3 — Selected Item Box at top of inventory panel. */
       #selected-item-box {
         padding: 6px 8px;
@@ -562,11 +563,12 @@
         align-items: center;
         gap: 3px;
         padding: 4px 8px;
-        background: rgba(0, 0, 0, 0.55);
-        border: 1px solid rgba(255, 255, 255, 0.15);
+        background: rgba(11, 12, 16, 0.88);
+        border: 1px solid rgba(138, 117, 68, 0.72);
         border-radius: 4px;
         pointer-events: none;
         font-family: var(--hb-font-serif, system-ui, sans-serif);
+        contain: layout style paint;
       }
       #hb-jump-charge.hb-jc-active { display: flex; }
       #hb-jump-charge .hb-jc-label {
@@ -1388,6 +1390,7 @@
     <link rel="modulepreload" href="./scene3d/trail_map.js">
     <link rel="modulepreload" href="./scene3d/tree_wind.js">
     <link rel="modulepreload" href="./scene3d/uniform_bind_patch.js">
+    <link rel="modulepreload" href="./scene3d/upload_stage.js">
     <link rel="modulepreload" href="./scene3d/vfx/components/brazierEmbers.js">
     <link rel="modulepreload" href="./scene3d/vfx/components/breathFog.js">
     <link rel="modulepreload" href="./scene3d/vfx/components/enchantShimmer.js">
@@ -1449,6 +1452,7 @@
     <link rel="modulepreload" href="./scene3d/wasm_manifest_version.js">
     <link rel="modulepreload" href="./scene3d/weather_state.js">
     <link rel="modulepreload" href="./scene3d/webgl_context_recovery.js">
+    <link rel="modulepreload" href="./scene3d/weenie_contact_shadows.js">
     <link rel="modulepreload" href="./scene3d/wind_rig.js">
     <link rel="modulepreload" href="./scene3d/wireframe_flag.js">
     <link rel="modulepreload" href="./scene3d/world_stream.js">
@@ -3924,7 +3928,21 @@
       // one place dead-session updates still survived that reset — up to
       // 6000 of them under the safety valve — and the next pump would splice
       // them into the FRESH session's dispatcher under guids it never issued.
+      function __resetClientEventDrainPending(reason) {
+        const pend = window.__clientEventDrainPending;
+        if (!pend || pend.length === 0) return 0;
+        const n = pend.length;
+        for (const ev of pend) {
+          try { ev?.free?.(); } catch (_) { /* already-dead box; keep draining */ }
+        }
+        pend.length = 0;
+        console.log(`[evtDrain] dropped ${n} pending client event(s) on ${reason}`);
+        return n;
+      }
+      window.__resetClientEventDrainPending = __resetClientEventDrainPending;
+
       function __resetEntDrainPending(reason) {
+        __resetClientEventDrainPending(reason);
         const pend = window.__entDrainPending;
         if (!pend || pend.length === 0) return 0;
         const n = pend.length;
@@ -6659,7 +6677,46 @@
             const __lat = window.__latencyDiag;
             __lat?.onPumpStart?.();
             const __latTrack = !!(__lat && __lat._pending.length !== 0);
-            const events = handle.poll_events();
+            const __evtBudget = Number.isFinite(window.__hbClientEventDrainBudget)
+              ? (window.__hbClientEventDrainBudget | 0)
+              : 64;
+            let events;
+            const __pendEvts = window.__clientEventDrainPending;
+            if (
+              __evtBudget > 0
+              && typeof handle.pollEventsBudgeted === "function"
+              && (!__pendEvts || __pendEvts.length === 0)
+            ) {
+              events = handle.pollEventsBudgeted(__evtBudget);
+            } else {
+              const __freshEvts = handle.poll_events();
+              if (
+                __evtBudget <= 0
+                || ((!__pendEvts || __pendEvts.length === 0) && __freshEvts.length <= __evtBudget)
+              ) {
+                events = __freshEvts;
+              } else {
+                const __q = (window.__clientEventDrainPending ||= []);
+                for (let __i = 0; __i < __freshEvts.length; __i++) __q.push(__freshEvts[__i]);
+                let __take = __evtBudget;
+                if (__q.length > 2048) {
+                  __take = __q.length;
+                } else {
+                  for (let __i = __q.length - 1; __i >= __evtBudget; __i--) {
+                    const __ek = __q[__i]?.kind;
+                    if (
+                      __ek === 0 || __ek === 1 || __ek === 4 || __ek === 5 || __ek === 6 ||
+                      __ek === 7 || __ek === 20 || __ek === 29 || __ek === 33 || __ek === 60 ||
+                      __ek === 61 || __ek === 66 || __ek === 70 || __ek === 71
+                    ) {
+                      __take = __i + 1;
+                      break;
+                    }
+                  }
+                }
+                events = __q.splice(0, __take);
+              }
+            }
             __clientEventDeps.panelBatch = __panelBatch;
             try {
               for (let i = 0; i < events.length; i++) {
@@ -6669,6 +6726,7 @@
                   for (let j = i + 1; j < events.length; j++) {
                     events[j]?.free?.();
                   }
+                  __resetClientEventDrainPending("STOP_PUMP");
                   return;
                 }
                 if (__latTrack) __lat.onEvent(__k);

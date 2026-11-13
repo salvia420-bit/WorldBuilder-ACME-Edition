@@ -238,11 +238,14 @@ export function tickAltitudePolicy(scene3d, camera, { nowMs, groundAt = null, su
   if (subject && _st.inWorldMs == null) _st.inWorldMs = nowMs;
   if (!_st.wanted && _st.inWorldMs != null && nowMs - _st.inWorldMs > 2000 && flightPrewarmOn()) {
     prefetchWorldTier(scene3d, camera);
-    prefetchFarForest(scene3d, { nowMs, frameMs: dt * 1000 });
+    if (ay <= 55000.0) prefetchFarForest(scene3d, { nowMs, frameMs: dt * 1000 });
   }
   setWorldTierWanted(scene3d, _st.wanted);
   tickWorldTerrain(scene3d, camera);
-  setFarForestWanted(scene3d, _st.wanted, { rangeM: farForestRangeM(_st.agl) });
+  // far_forest only covers Dereth (rx/ry = 0..31, AC Y <= 48,960 m); keep it inactive over the northern Ocean & Dericost
+  // so Dericost never triggers synchronous 64-model impostor atlas baking.
+  const farForestWanted = (_st.flying || _st.high) && ay <= 55000.0;
+  setFarForestWanted(scene3d, farForestWanted, { rangeM: farForestRangeM(_st.agl) });
   tickFarForest(scene3d, camera);
   tickDericostWorld(scene3d, camera, nowMs);
   // the weight opens only once the world tier is actually on screen

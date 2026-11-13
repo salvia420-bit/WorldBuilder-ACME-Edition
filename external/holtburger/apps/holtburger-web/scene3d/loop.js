@@ -1248,16 +1248,16 @@ export function __setHotTerrainTimeForTest(on) {
   _hotTerrainTime = on === undefined ? undefined : !!on;
 }
 
-// 2026-10-26 (lane F2) — `?hotTerrainShared` (DEFAULT OFF). tickTerrainUTime and
-// tickTerrainSunDir write their frame-constant uniforms (uTime, uCrackGlowBreath,
-// uSunDir) into ONE shared `{value}` per uniform that the registry's materials
-// point at (bound lazily at a push, unbound to a frozen copy when they leave),
-// and skip the Gouraud epoch walk when it would write nothing. Same value in
-// every material at every moment as the per-material loops; design + audit:
-// scene3d/terrain_shared_uniforms.js, docs/2026-10-26-rust-hotspots-2.md §G1.
+// 2026-10-26 (lane F2) — `?hotTerrainShared` (DEFAULT ON, `=off` escape).
+// tickTerrainUTime and tickTerrainSunDir write their frame-constant uniforms
+// (uTime, uCrackGlowBreath, uSunDir) into ONE shared `{value}` per uniform that
+// the registry's materials point at (bound lazily at a push, unbound to a
+// frozen copy when they leave), and skip the Gouraud epoch walk when it would
+// write nothing. Same value in every material at every moment as the
+// per-material loops; design + audit: scene3d/terrain_shared_uniforms.js.
 let _hotTerrainShared;
 function _hotTerrainSharedOn() {
-  if (_hotTerrainShared === undefined) _hotTerrainShared = rustFlag("hotTerrainShared", false);
+  if (_hotTerrainShared === undefined) _hotTerrainShared = rustFlag("hotTerrainShared", true);
   return _hotTerrainShared;
 }
 /** Test seam (tests/hot_terrain_shared.test.mjs). */
@@ -1523,10 +1523,22 @@ export function tickTerrainSunDir(scene3d, lightTick = retailLightTick, env = en
     return;
   }
   const DEG = Math.PI / 180;
-  const cp = Math.cos(pitch * DEG);
+  const rampOn = nightRampEnabled();
+  const artPitch = (rampOn && Number.isFinite(pitch)) ? artSunPitchDeg(pitch) : pitch;
+  // Smoothly fade direct sun vector & brightness across twilight (+3° -> -4°)
+  // in lockstep with AtmosphereLights.tick so terrain has zero abrupt dusk step.
+  const twilightFade = (() => {
+    if (!rampOn || !Number.isFinite(artPitch)) return 1.0;
+    if (artPitch >= 3.0) return 1.0;
+    if (artPitch <= -4.0) return 0.0;
+    const t = (artPitch - -4.0) / 7.0;
+    return t * t * (3.0 - 2.0 * t);
+  })();
+  const effPitch = (rampOn && Number.isFinite(artPitch)) ? Math.max(0.25, artPitch) : pitch;
+  const cp = Math.cos(effPitch * DEG);
   const sx = cp * Math.sin(heading * DEG);
   const sy = cp * Math.cos(heading * DEG);
-  const sz = Math.sin(pitch * DEG);
+  const sz = Math.sin(effPitch * DEG);
 
   // RND-20/21 — retail terrain Gouraud inputs. `LScape::UseTime`
   // (acclient.c:307257) only re-lights the landscape when the light tick
@@ -1552,7 +1564,8 @@ export function tickTerrainSunDir(scene3d, lightTick = retailLightTick, env = en
     g.epoch = epoch;
     // sunlight_vec carries dirBright as its MAGNITUDE
     // (SkyDesc::GetLighting, acclient.c:301548-301560).
-    const db = Number.isFinite(+state.dirBright) ? Math.max(0, +state.dirBright) : 0;
+    const rawDb = Number.isFinite(+state.dirBright) ? Math.max(0, +state.dirBright) : 0;
+    const db = rawDb * twilightFade;
     g.sun[0] = sx * db;
     g.sun[1] = sy * db;
     g.sun[2] = sz * db;
@@ -1873,6 +1886,87 @@ function _fogProbeSucceeded(out) {
   return out;
 }
 
+const _analyticFogOut = { r: 0, g: 0, b: 0, elevDeg: 0, at: 0 };
+
+/**
+ * Zero-stall CPU analytic Bruneton horizon sky radiance estimator.
+ *
+ * Chrome's WebGL2 `gl.getBufferSubData` always triggers a synchronous
+ * `GLES2Implementation::WaitForCmd() -> Finish()` IPC round-trip to the GPU
+ * process (15-40 ms spike under load) even after `fenceSync` signals.
+ *
+ * Meanwhile `AtmosphereLights.skyProbe.update()` ALREADY samples Bruneton's
+ * precomputed `irradianceTexture` on the CPU every frame (in exact pre-exposure
+ * `skyRadianceToRelativeLuminance` linear units: `sh[0] = E_sky / sqrt(pi)`),
+ * and `AtmosphereLights._sunBaseColor` holds the exact CPU `transmittanceTexture`
+ * sun radiance! Evaluating horizon optical-depth brightening + `avoidSunAzimuth`-
+ * guarded Mie/Rayleigh forward-scatter directly on the CPU matches the rendered
+ * horizon sky radiance in <0.001 ms with ZERO GPU renders and ZERO `Finish()` stalls.
+ */
+function _analyticHorizonSkyRadiance(scene3d) {
+  if (scene3d?.skyDome?._lastIsIndoor || scene3d?.nullRender) return null;
+  const cam = scene3d?.camera;
+  const atmLights = scene3d?.atmosphereLights;
+  const skySun = scene3d?.atmosphereSky?.skyMaterial?.sunDirection
+    ?? atmLights?.sun?.sunDirection ?? null;
+  const sh0 = atmLights?.skyProbe?.sh?.coefficients?.[0] ?? null;
+  if (!cam || !skySun || !sh0) return null;
+  if (!(Number.isFinite(sh0.x) && Number.isFinite(sh0.y) && Number.isFinite(sh0.z))) return null;
+  if (sh0.x + sh0.y + sh0.z <= 1e-9) return null;
+
+  cam.getWorldDirection(_fogProbeFwd);
+  _fogProbeFwd.y = 0;
+  if (_fogProbeFwd.lengthSq() < 1e-8) _fogProbeFwd.set(0, 0, -1);
+  _fogProbeFwd.normalize();
+  const elevDeg = farFogSkyElevDeg();
+  const elev = elevDeg * Math.PI / 180;
+  avoidSunAzimuth(_fogProbeFwd.x, _fogProbeFwd.z, elev, skySun, farFogSunAvoidDeg(), _fogProbeAvoid);
+  const ce = Math.cos(elev);
+  _fogProbeDir.set(_fogProbeAvoid.x * ce, Math.sin(elev), _fogProbeAvoid.z * ce).normalize();
+
+  // `sh0 = E_sky / sqrt(pi)` and hemisphere average sky radiance `L_avg = E_sky / pi = sh0 / sqrt(pi)`.
+  // At ~2 deg above horizon (~12 airmasses), multiple Rayleigh + aerosol scattering
+  // raises horizon radiance ~1.62x over hemisphere-mean and mildly desaturates zenith blue.
+  const INV_SQRT_PI = 0.5641895835477563;
+  const avgR = sh0.x * INV_SQRT_PI;
+  const avgG = sh0.y * INV_SQRT_PI;
+  const avgB = sh0.z * INV_SQRT_PI;
+  const horizonGain = 1.62;
+  const baseLuma = 0.2126 * avgR + 0.7152 * avgG + 0.0722 * avgB;
+  let hr = (avgR * 0.70 + baseLuma * 0.30) * horizonGain;
+  let hg = (avgG * 0.76 + baseLuma * 0.24) * horizonGain;
+  let hb = (avgB * 0.82 + baseLuma * 0.18) * horizonGain;
+
+  // Azimuthal Mie + Rayleigh forward-scattering phase (outside the avoided sun cone),
+  // tinted by the CPU-sampled Bruneton transmittance LUT (`_sunBaseColor`).
+  const sLen = Math.hypot(skySun.x, skySun.y, skySun.z) || 1;
+  const mu = (_fogProbeDir.x * skySun.x + _fogProbeDir.y * skySun.y + _fogProbeDir.z * skySun.z) / sLen;
+  const sunSinElev = skySun.y / sLen;
+  if (sunSinElev > -0.12) {
+    const g = 0.68;
+    const g2 = g * g;
+    const denom = Math.pow(Math.max(0.05, 1 + g2 - 2 * g * mu), 1.5);
+    // Clamp forward-scatter aureole (avoidSunAzimuth already steered away from disc)
+    const miePhase = Math.min(2.2, ((1 - g2) / (12.5663706 * denom)));
+    const twilightVis = Math.max(0, Math.min(1, (sunSinElev + 0.10) / 0.22));
+    const sunCol = atmLights._sunBaseColor;
+    if (sunCol && Number.isFinite(sunCol.r + sunCol.g + sunCol.b)) {
+      const kMie = 0.045 * miePhase * twilightVis;
+      hr += sunCol.r * kMie;
+      hg += sunCol.g * kMie;
+      hb += sunCol.b * kMie;
+    }
+  }
+
+  const now = (typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now();
+  _analyticFogOut.r = Math.max(0, hr);
+  _analyticFogOut.g = Math.max(0, hg);
+  _analyticFogOut.b = Math.max(0, hb);
+  _analyticFogOut.elevDeg = elevDeg;
+  _analyticFogOut.at = now;
+  return _fogProbeSucceeded(_analyticFogOut);
+}
+
 function _fogProbeFailed(err) {
   _fogProbeFails += 1;
   if (_fogProbeFails >= _FOG_PROBE_MAX_FAILS && !_fogProbeDead) {
@@ -2039,7 +2133,16 @@ function _harvestFogFence(now) {
   const gl = f.gl;
   f.polls += 1;
   let status = null;
-  try { status = gl.getSyncParameter(f.sync, gl.SYNC_STATUS); } catch (_) { status = null; }
+  try {
+    if (typeof gl.clientWaitSync === "function" && gl.ALREADY_SIGNALED !== undefined) {
+      const cw = gl.clientWaitSync(f.sync, 0, 0);
+      if (cw === gl.ALREADY_SIGNALED || cw === gl.CONDITION_SATISFIED) status = gl.SIGNALED;
+      else if (cw === gl.TIMEOUT_EXPIRED) status = gl.UNSIGNALED;
+    }
+    if (status === null && typeof gl.getSyncParameter === "function") {
+      status = gl.getSyncParameter(f.sync, gl.SYNC_STATUS);
+    }
+  } catch (_) { status = null; }
   if (status !== gl.SIGNALED) {
     if (status === null || now - f.issuedAt > FOG_FENCE_TIMEOUT_MS) {
       _fogFenceStats.timeouts += 1;
@@ -2537,7 +2640,12 @@ function _tickDistanceFogDay(scene3d) {
   // `sampleHorizonSkyRadiance` above for the full rationale + measurements.
   let skyRad = null;
   if (farFogSkyProbeEnabled()) {
-    skyRad = sampleHorizonSkyRadiance(scene3d) ?? _fogProbeLast;
+    // Prefer zero-stall CPU analytic Bruneton horizon radiance (driven by
+    // SkyLightProbe's CPU irradiance LUT + SunDirectionalLight's transmittance LUT)
+    // so live frames NEVER stall on Chrome's `gl.getBufferSubData -> Finish()`.
+    skyRad = (farFogFenceEnabled() ? _analyticHorizonSkyRadiance(scene3d) : null)
+      ?? sampleHorizonSkyRadiance(scene3d)
+      ?? _fogProbeLast;
   }
   if (skyRad) applyFogRadiance(fog, skyRad, rgb, farFogTint());
   else fog.color.setHex(rgb);

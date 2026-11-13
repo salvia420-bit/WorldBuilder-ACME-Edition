@@ -352,7 +352,7 @@ export class PoolRegistry {
    * @param {string} [deps.search]        query string for `?poolRuns`
    *   (defaults to window.location.search)
    */
-  constructor({ THREE, materialFactory, group = null, groups = null, layers = null, warn, now, initInstances, initVerts, markRuns, search } = {}) {
+  constructor({ THREE, materialFactory, group = null, groups = null, layers = null, warn, now, initInstances, initVerts, markRuns, onClassCreated = null, search } = {}) {
     if (!THREE || typeof THREE.BatchedMesh !== "function") {
       throw new Error("pool_registry: THREE with BatchedMesh required");
     }
@@ -372,6 +372,7 @@ export class PoolRegistry {
     // construction and never flips under it.
     this.runsEnabled = poolRunsEnabled(search);
     this.markRuns = this.runsEnabled && typeof markRuns === "function" ? markRuns : null;
+    this.onClassCreated = typeof onClassCreated === "function" ? onClassCreated : null;
     // ?poolSizeToContent (S1c, default ON): resolved ONCE, like ?poolRuns.
     this.sizeToContent = poolSizeToContentEnabled(search);
 
@@ -516,6 +517,10 @@ export class PoolRegistry {
     return ok;
   }
 
+  setOnClassCreated(fn) {
+    this.onClassCreated = typeof fn === "function" ? fn : null;
+  }
+
   _classOf(classKey, member) {
     let c = this.classes.get(classKey);
     if (c) return c;
@@ -529,12 +534,24 @@ export class PoolRegistry {
     };
     this.classes.set(classKey, c);
     this._stats.classesCreated += 1;
-    if (this._sealed) {
-      // D-07.9 / S5.3: a class minted after the boot ring settles is a bug —
-      // it means the key depends on something that streams. Counted, never
-      // hidden; the CI gate is `classesCreatedPostBoot === 0`.
+    const postBoot = this._sealed === true;
+    if (postBoot) {
+      // D-07.9 / S5.3: a class minted after the boot ring settles is counted
+      // and asynchronously prewarmed via `onClassCreated` before first draw.
       this._stats.classesCreatedPostBoot += 1;
       this.warn(`[drawPools] class minted POST-BOOT (D-07.9 violation): ${classKey}`);
+    }
+    if (this.onClassCreated) {
+      try {
+        const shadow = String(classKey).slice(String(classKey).lastIndexOf("|") + 1);
+        this.onClassCreated({
+          classKey,
+          material,
+          castShadow: shadow.startsWith("c1"),
+          passClass: c.passClass,
+          postBoot,
+        });
+      } catch (_) { /* fail-soft */ }
     }
     return c;
   }

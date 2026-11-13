@@ -90,6 +90,20 @@ const _spawnsInjectInFlight = new Set();
 // elapses rather than never.
 const _spawnsFailUntil = new Map();
 const _SPAWNS_FAIL_COOLDOWN_MS = 2500;
+const _SPAWNS_FAIL_MAX_COOLDOWN_MS = 60000;
+const _SPAWNS_COOLDOWN_CAP = 512;
+// Bounded per-setup cooldown so missing/broken spawn setups do not spin
+// pre-warm retries on every adjacent landblock entry.
+const _failedSetupCooldownUntil = new Map();
+const _SETUP_FAIL_COOLDOWN_MS = 15000;
+
+function _capCooldownMap(map, max) {
+  while (map.size > max) {
+    const oldest = map.keys().next().value;
+    if (oldest === undefined) break;
+    map.delete(oldest);
+  }
+}
 // The scene3d facade the evict hook was installed on. `_evictSpawnsInjectedLb`
 // is invoked by landblock_lru as `s._evictSpawnsInjectedLb(lbKey)` (so `this`
 // happens to be that facade today), but this module owns per-scene state that
@@ -564,13 +578,13 @@ export async function ensureSpawnsForLandblock(lbX, lbY, scene3d, wasmExports) {
   // Skip until it elapses so we don't hammer the failing fetch every
   // position update, but DO retry once the window passes (unlike the old
   // permanent-poison behaviour).
-  const failUntil = _spawnsFailUntil.get(lbKey);
-  if (failUntil !== undefined) {
+  const failRec = _spawnsFailUntil.get(lbKey);
+  if (failRec !== undefined) {
     const nowMs = typeof performance !== "undefined" ? performance.now() : Date.now();
-    if (nowMs < failUntil) {
+    const until = typeof failRec === "number" ? failRec : failRec.until;
+    if (nowMs < until) {
       return { lbKey, failCooldown: true };
     }
-    _spawnsFailUntil.delete(lbKey);
   }
   _spawnsInjectInFlight.add(lbKey);
 
@@ -656,30 +670,45 @@ export async function ensureSpawnsForLandblock(lbX, lbY, scene3d, wasmExports) {
       typeof fetchBatch === "function" &&
       pendingDispatches.length > 0
     ) {
+      const nowPreMs = typeof performance !== "undefined" ? performance.now() : Date.now();
       const uniqueSetupIds = [
         ...new Set(pendingDispatches.map((d) => d.setupDid >>> 0)),
-      ];
+      ].filter((sid) => {
+        const coolUntil = _failedSetupCooldownUntil.get(sid);
+        if (coolUntil === undefined) return true;
+        if (nowPreMs < coolUntil) return false;
+        _failedSetupCooldownUntil.delete(sid);
+        return true;
+      });
       const tPrewarmStart =
         typeof performance !== "undefined" ? performance.now() : 0;
-      try {
-        const summary = await animCache.getBatch(uniqueSetupIds, fetchBatch);
-        const tPrewarmMs =
-          (typeof performance !== "undefined" ? performance.now() : 0) -
-          tPrewarmStart;
-        if (summary && summary.prewarmedCount > 0) {
+      if (uniqueSetupIds.length > 0) {
+        try {
+          const summary = await animCache.getBatch(uniqueSetupIds, fetchBatch);
+          const tPrewarmMs =
+            (typeof performance !== "undefined" ? performance.now() : 0) -
+            tPrewarmStart;
+          if (summary && summary.prewarmedCount > 0) {
+            // eslint-disable-next-line no-console
+            console.log(
+              `[scene3d.spawns] LB 0x${((lbKey >>> 16) & 0xffff).toString(16).toUpperCase().padStart(4, "0")}: ` +
+                `F.40 pre-warm ${summary.prewarmedCount} setups ` +
+                `(${summary.skippedCount} already warm) in ${tPrewarmMs.toFixed(1)}ms`
+            );
+          }
+        } catch (e) {
+          const coolUntil = (typeof performance !== "undefined" ? performance.now() : Date.now()) + _SETUP_FAIL_COOLDOWN_MS;
+          for (const sid of uniqueSetupIds) {
+            _failedSetupCooldownUntil.delete(sid);
+            _failedSetupCooldownUntil.set(sid, coolUntil);
+          }
+          _capCooldownMap(_failedSetupCooldownUntil, _SPAWNS_COOLDOWN_CAP);
           // eslint-disable-next-line no-console
-          console.log(
-            `[scene3d.spawns] LB 0x${((lbKey >>> 16) & 0xffff).toString(16).toUpperCase().padStart(4, "0")}: ` +
-              `F.40 pre-warm ${summary.prewarmedCount} setups ` +
-              `(${summary.skippedCount} already warm) in ${tPrewarmMs.toFixed(1)}ms`
+          console.warn(
+            `[scene3d.spawns] F.40 pre-warm threw (${String(e).slice(0, 200)}); ` +
+              `continuing with per-spawn lazy fetch`
           );
         }
-      } catch (e) {
-        // eslint-disable-next-line no-console
-        console.warn(
-          `[scene3d.spawns] F.40 pre-warm threw (${String(e).slice(0, 200)}); ` +
-            `continuing with per-spawn lazy fetch`
-        );
       }
     }
 
@@ -876,6 +905,7 @@ export async function ensureSpawnsForLandblock(lbX, lbY, scene3d, wasmExports) {
     }
 
     _spawnsInjectedLbs.add(lbKey);
+    _spawnsFailUntil.delete(lbKey);
     // Stash per-LB diag on scene3d so capture scripts can probe the
     // last-injected-set without re-reading the JSONL.
     if (!scene3d.spawnsByLb) scene3d.spawnsByLb = new Map();
@@ -928,7 +958,15 @@ export async function ensureSpawnsForLandblock(lbX, lbY, scene3d, wasmExports) {
     // for the whole session (the old `_spawnsInjectedLbs.add` did exactly
     // that). The success-path add (above) is the only permanent mark.
     const nowMs = typeof performance !== "undefined" ? performance.now() : Date.now();
-    _spawnsFailUntil.set(lbKey, nowMs + _SPAWNS_FAIL_COOLDOWN_MS);
+    const prev = _spawnsFailUntil.get(lbKey);
+    const attempts = (typeof prev === "object" && prev ? (prev.attempts | 0) : 0) + 1;
+    const backoffMs = Math.min(
+      _SPAWNS_FAIL_MAX_COOLDOWN_MS,
+      _SPAWNS_FAIL_COOLDOWN_MS * Math.pow(2, Math.min(5, attempts - 1)),
+    );
+    _spawnsFailUntil.delete(lbKey);
+    _spawnsFailUntil.set(lbKey, { until: nowMs + backoffMs, attempts });
+    _capCooldownMap(_spawnsFailUntil, _SPAWNS_COOLDOWN_CAP);
     return { lbKey, error: String(e) };
   } finally {
     _spawnsInjectInFlight.delete(lbKey);
@@ -948,6 +986,7 @@ export function _resetSpawnsInjectorState() {
   _spawnsInjectedLbs.clear();
   _spawnsInjectInFlight.clear();
   _spawnsFailUntil.clear();
+  _failedSetupCooldownUntil.clear();
 }
 
 /**

@@ -112,6 +112,8 @@
 
 /** Metres the box grows sideways — the interior faces sit inside the walls. */
 export const INDOOR_CULL_WALL_MARGIN_M = 0.25;
+/** Expanded exterior footprint padding (+0.65 m) around walls, wells, bridges, plazas, and foundations. */
+export const EXTERIOR_CULL_WALL_MARGIN_M = 0.65;
 /** The ground may lie this far below a cell's floor and still count as under it. */
 export const INDOOR_CULL_BELOW_FLOOR_M = 1.0;
 /** ...and must lie at least this far under the cell's ceiling (cellars). */
@@ -341,7 +343,178 @@ export function cellBoxFor(container, rootInv) {
     if (p[1] < wy0) wy0 = p[1]; if (p[1] > wy1) wy1 = p[1];
     if (p[2] < wz0) wz0 = p[2]; if (p[2] > wz1) wz1 = p[2];
   }
-  return { inv, min: [x0, y0, z0], max: [x1, y1, z1], x0: wx0, y0: wy0, x1: wx1, y1: wy1, z0: wz0, z1: wz1 };
+  return { inv, min: [x0, y0, z0], max: [x1, y1, z1], x0: wx0, y0: wy0, x1: wx1, y1: wy1, z0: wz0, z1: wz1, indoor: true };
+}
+
+function meshHasCutoutOrAlpha(mesh) {
+  const mat = mesh && mesh.material;
+  if (!mat) return false;
+  if (Array.isArray(mat)) {
+    for (let i = 0; i < mat.length; i += 1) {
+      const m = mat[i];
+      if (m && (m.alphaTest > 0 || m.transparent === true)) return true;
+    }
+    return false;
+  }
+  return mat.alphaTest > 0 || mat.transparent === true;
+}
+
+function uprightYawFrame(toRoot) {
+  let ux = toRoot[0], uy = toRoot[1];
+  const len = Math.hypot(ux, uy);
+  if (len > 1e-4) { ux /= len; uy /= len; } else { ux = 1; uy = 0; }
+  const tx = toRoot[12], ty = toRoot[13], tz = toRoot[14];
+  const frame = [
+    ux, uy, 0, 0,
+    -uy, ux, 0, 0,
+    0, 0, 1, 0,
+    tx, ty, tz, 1,
+  ];
+  const inv = mat4AffineInverse(frame);
+  return inv ? { frame, inv } : null;
+}
+
+function buildUprightBoxFromMeshes(meshes, frameInfo, rootInv, indoorFlag, bldgFlag) {
+  const { frame, inv } = frameInfo;
+  let x0 = Infinity, y0 = Infinity, z0 = Infinity;
+  let x1 = -Infinity, y1 = -Infinity, z1 = -Infinity;
+  const rw = [0, 0, 0];
+  const lp = [0, 0, 0];
+  for (let mi = 0; mi < meshes.length; mi += 1) {
+    const mesh = meshes[mi];
+    const g = mesh.geometry;
+    if (!g) continue;
+    if (!g.boundingBox && typeof g.computeBoundingBox === "function") {
+      try { g.computeBoundingBox(); } catch (_) { continue; }
+    }
+    const bb = g.boundingBox;
+    const mw = elementsOf(mesh);
+    if (!bb || !mw || !Number.isFinite(bb.min.x) || !Number.isFinite(bb.max.x)) continue;
+    const toRoot = rootInv ? mat4Mul(rootInv, mw) : mw;
+    for (let c = 0; c < 8; c += 1) {
+      apply(toRoot, c & 1 ? bb.max.x : bb.min.x, c & 2 ? bb.max.y : bb.min.y, c & 4 ? bb.max.z : bb.min.z, rw);
+      apply(inv, rw[0], rw[1], rw[2], lp);
+      if (lp[0] < x0) x0 = lp[0]; if (lp[0] > x1) x1 = lp[0];
+      if (lp[1] < y0) y0 = lp[1]; if (lp[1] > y1) y1 = lp[1];
+      if (lp[2] < z0) z0 = lp[2]; if (lp[2] > z1) z1 = lp[2];
+    }
+  }
+  if (!(x1 > x0) || !(y1 > y0) || !(z1 >= z0)) return null;
+  const m = INDOOR_CULL_WALL_MARGIN_M;
+  const extra = EXTERIOR_CULL_WALL_MARGIN_M - m;
+  const ex0 = x0 - extra, ex1 = x1 + extra;
+  const ey0 = y0 - extra, ey1 = y1 + extra;
+  // Pad exterior floor/deck interval so thin bridge/plaza slabs and raised porches reject grass cleanly.
+  const minZ = z0 - 1.2;
+  const maxZ = z1 + INDOOR_CULL_UNDER_CEILING_M + 0.35;
+  let wx0 = Infinity, wy0 = Infinity, wx1 = -Infinity, wy1 = -Infinity, wz0 = Infinity, wz1 = -Infinity;
+  for (let c = 0; c < 8; c += 1) {
+    apply(frame, c & 1 ? ex1 + m : ex0 - m, c & 2 ? ey1 + m : ey0 - m, c & 4 ? maxZ : minZ, rw);
+    if (rw[0] < wx0) wx0 = rw[0]; if (rw[0] > wx1) wx1 = rw[0];
+    if (rw[1] < wy0) wy0 = rw[1]; if (rw[1] > wy1) wy1 = rw[1];
+    if (rw[2] < wz0) wz0 = rw[2]; if (rw[2] > wz1) wz1 = rw[2];
+  }
+  return {
+    inv,
+    min: [ex0, ey0, minZ],
+    max: [ex1, ey1, maxZ],
+    x0: wx0, y0: wy0, x1: wx1, y1: wy1, z0: wz0, z1: wz1,
+    indoor: indoorFlag,
+    bldg: bldgFlag,
+  };
+}
+
+function collectExteriorBoxes(scene3d, rootInv, outBoxes, extCache, rootKey) {
+  const bKids = scene3d?.buildingsGroup?.children;
+  if (Array.isArray(bKids) && bKids.length > 0) {
+    for (let i = 0; i < bKids.length; i += 1) {
+      const obj = bKids[i];
+      if (!obj || obj.isBatchedMesh || obj.isInstancedMesh) continue;
+      const childCount = Array.isArray(obj.children) ? obj.children.length : 0;
+      const hit = extCache ? extCache.get(obj) : null;
+      if (hit && hit.rootKey === rootKey && hit.childCount === childCount) {
+        for (let hi = 0; hi < hit.items.length; hi += 1) outBoxes.push(hit.items[hi]);
+        continue;
+      }
+      if (typeof obj.updateWorldMatrix === "function") {
+        try { obj.updateWorldMatrix(true, true); } catch (_) {}
+      }
+      const ow = elementsOf(obj);
+      if (!ow) continue;
+      const fInfo = uprightYawFrame(rootInv ? mat4Mul(rootInv, ow) : ow);
+      if (!fInfo) continue;
+      const opaqueMeshes = [];
+      walkMeshes(obj, (m) => {
+        if (m.isBatchedMesh || m.isInstancedMesh) return;
+        if (m.material && !Array.isArray(m.material) && m.material.transparent && m.material.opacity < 0.85) return;
+        opaqueMeshes.push(m);
+      });
+      const items = [];
+      if (opaqueMeshes.length > 0) {
+        const whole = buildUprightBoxFromMeshes(opaqueMeshes, fInfo, rootInv, false, true);
+        if (whole) {
+          const spanX = whole.max[0] - whole.min[0];
+          const spanY = whole.max[1] - whole.min[1];
+          if (spanX <= 14 && spanY <= 14) {
+            items.push({ key: `b:${obj.id ?? i}`, box: whole });
+          } else {
+            for (let mi = 0; mi < opaqueMeshes.length; mi += 1) {
+              const m = opaqueMeshes[mi];
+              const mw = elementsOf(m);
+              const mf = mw ? uprightYawFrame(rootInv ? mat4Mul(rootInv, mw) : mw) : fInfo;
+              const sb = mf ? buildUprightBoxFromMeshes([m], mf, rootInv, false, true) : null;
+              if (!sb) continue;
+              if (sb.max[0] - sb.min[0] > 48 && sb.max[1] - sb.min[1] > 48) continue;
+              items.push({ key: `bm:${obj.id ?? i}:${m.id ?? mi}`, box: sb });
+            }
+          }
+        }
+      }
+      if (extCache) extCache.set(obj, { rootKey, childCount, items });
+      for (let hi = 0; hi < items.length; hi += 1) outBoxes.push(items[hi]);
+    }
+  }
+  const sKids = scene3d?.staticsGroup?.children;
+  if (Array.isArray(sKids) && sKids.length > 0) {
+    for (let i = 0; i < sKids.length; i += 1) {
+      const obj = sKids[i];
+      if (!obj || obj.isBatchedMesh || obj.isInstancedMesh) continue;
+      const childCount = Array.isArray(obj.children) ? obj.children.length : 0;
+      const hit = extCache ? extCache.get(obj) : null;
+      if (hit && hit.rootKey === rootKey && hit.childCount === childCount) {
+        for (let hi = 0; hi < hit.items.length; hi += 1) outBoxes.push(hit.items[hi]);
+        continue;
+      }
+      let hasFoliage = false;
+      const solidMeshes = [];
+      walkMeshes(obj, (m) => {
+        if (m.isBatchedMesh || m.isInstancedMesh) return;
+        if (meshHasCutoutOrAlpha(m)) { hasFoliage = true; return; }
+        solidMeshes.push(m);
+      });
+      // Skip trees, bushes, shrubs, flowers, banners (any cutout/alpha submesh).
+      const items = [];
+      if (!hasFoliage && solidMeshes.length > 0) {
+        if (typeof obj.updateWorldMatrix === "function") {
+          try { obj.updateWorldMatrix(true, true); } catch (_) {}
+        }
+        const ow = elementsOf(obj);
+        const fInfo = ow ? uprightYawFrame(rootInv ? mat4Mul(rootInv, ow) : ow) : null;
+        const box = fInfo ? buildUprightBoxFromMeshes(solidMeshes, fInfo, rootInv, false, false) : null;
+        if (box) {
+          const extra2 = 2 * (EXTERIOR_CULL_WALL_MARGIN_M - INDOOR_CULL_WALL_MARGIN_M);
+          const dx = (box.max[0] - box.min[0]) - extra2;
+          const dy = (box.max[1] - box.min[1]) - extra2;
+          const rawDz = (box.max[2] - INDOOR_CULL_UNDER_CEILING_M - 0.35) - (box.min[2] + 1.2);
+          if (dx >= 0.45 && dy >= 0.45 && dx <= 18 && dy <= 18 && rawDz >= 0.30) {
+            items.push({ key: `s:${obj.id ?? i}`, box });
+          }
+        }
+      }
+      if (extCache) extCache.set(obj, { rootKey, childCount, items });
+      for (let hi = 0; hi < items.length; hi += 1) outBoxes.push(items[hi]);
+    }
+  }
 }
 
 const bucketKey = (bx, by) => ((bx & 0xffff) << 16 | (by & 0xffff)) >>> 0;
@@ -590,40 +763,124 @@ export function createInteriorMask(opts = {}) {
     return due;
   }
 
-  function signatureOf(map) {
-    let sum = 0, meshes = 0;
-    for (const [id, c] of map) {
-      sum = (sum + (id >>> 0)) >>> 0;
-      walkMeshes(structureGroupOf(c), () => { meshes += 1; });
+  function exteriorSigPart(scene3d) {
+    const bKids = scene3d?.buildingsGroup?.children;
+    const sKids = scene3d?.staticsGroup?.children;
+    const bn = Array.isArray(bKids) ? bKids.length : 0;
+    const sn = Array.isArray(sKids) ? sKids.length : 0;
+    if (bn === 0 && sn === 0) return "";
+    let bSum = 0, sSum = 0;
+    if (bn > 0) {
+      for (let i = 0; i < bn; i += 1) {
+        const o = bKids[i];
+        bSum = (bSum + ((o && o.id) ? (o.id >>> 0) : (i + 1))) >>> 0;
+      }
     }
-    return `${map.size}:${sum}:${meshes}`;
+    if (sn > 0) {
+      for (let i = 0; i < sn; i += 1) {
+        const o = sKids[i];
+        sSum = (sSum + ((o && o.id) ? (o.id >>> 0) : (i + 1))) >>> 0;
+      }
+    }
+    return `|b:${bn}:${bSum}|s:${sn}:${sSum}`;
   }
 
-  function rebuild(map, root) {
+  const cellBoxCache = new WeakMap();
+  const extBoxCache = new WeakMap();
+  let lastCellOnlySig = "";
+  let cachedExtSig = "";
+  let lastExtSigFrame = -1000;
+
+  function rootInvKeyOf(rootInv) {
+    if (!rootInv) return "null";
+    return `${rootInv[0].toFixed(4)},${rootInv[5].toFixed(4)},${rootInv[10].toFixed(4)},${rootInv[12].toFixed(2)},${rootInv[13].toFixed(2)},${rootInv[14].toFixed(2)}`;
+  }
+
+  function countCellMeshesCached(c) {
+    const sg = structureGroupOf(c);
+    const childLen = sg && Array.isArray(sg.children) ? sg.children.length : -1;
+    const hit = c && typeof c === "object" ? cellBoxCache.get(c) : null;
+    if (hit && hit.box && hit.childLen === childLen && childLen >= 0) {
+      return hit.meshes;
+    }
+    let m = 0;
+    walkMeshes(sg, () => { m += 1; });
+    return m;
+  }
+
+  function signatureOf(map, scene3d) {
+    let sum = 0, meshes = 0;
+    if (map instanceof Map) {
+      for (const [id, c] of map) {
+        sum = (sum + (id >>> 0)) >>> 0;
+        meshes += countCellMeshesCached(c);
+      }
+    }
+    const sz = map instanceof Map ? map.size : 0;
+    const cellOnly = `${sz}:${sum}:${meshes}`;
+    // During world streaming (sz > 32 resident EnvCells), coalesce background
+    // statics/buildings signature checks to ~0.8s (48 frames) unless EnvCells changed.
+    if (sz <= 32 || cellOnly !== lastCellOnlySig || frame - lastExtSigFrame >= 48) {
+      lastCellOnlySig = cellOnly;
+      cachedExtSig = exteriorSigPart(scene3d);
+      lastExtSigFrame = frame;
+    }
+    return `${cellOnly}${cachedExtSig}`;
+  }
+
+  function addBoxBuckets(box, nextBuckets) {
+    const bx0 = Math.floor(box.x0 / BUCKET_M), bx1 = Math.floor(box.x1 / BUCKET_M);
+    const by0 = Math.floor(box.y0 / BUCKET_M), by1 = Math.floor(box.y1 / BUCKET_M);
+    for (let bx = bx0; bx <= bx1; bx += 1) {
+      for (let by = by0; by <= by1; by += 1) {
+        const k = bucketKey(bx, by);
+        let list = nextBuckets.get(k);
+        if (!list) { list = []; nextBuckets.set(k, list); }
+        list.push(box);
+      }
+    }
+  }
+
+  function rebuild(map, root, scene3d) {
     if (root && typeof root.updateWorldMatrix === "function") {
       try { root.updateWorldMatrix(true, false); } catch (_) { /* read what is there */ }
     }
     const rootW = elementsOf(root);
     const rootInv = rootW ? mat4AffineInverse(rootW) : null;
+    const rKey = rootInvKeyOf(rootInv);
     const nextEntries = [];
     const nextBuckets = new Map();
     const nextById = new Map();
     let pending = 0;
-    for (const [id, c] of map) {
-      const box = cellBoxFor(c, rootInv);
-      if (!box) { pending += 1; continue; }
-      nextEntries.push(box);
-      nextById.set(id, box);
-      const bx0 = Math.floor(box.x0 / BUCKET_M), bx1 = Math.floor(box.x1 / BUCKET_M);
-      const by0 = Math.floor(box.y0 / BUCKET_M), by1 = Math.floor(box.y1 / BUCKET_M);
-      for (let bx = bx0; bx <= bx1; bx += 1) {
-        for (let by = by0; by <= by1; by += 1) {
-          const k = bucketKey(bx, by);
-          let list = nextBuckets.get(k);
-          if (!list) { list = []; nextBuckets.set(k, list); }
-          list.push(box);
+    if (map instanceof Map) {
+      for (const [id, c] of map) {
+        const sg = structureGroupOf(c);
+        const childLen = sg && Array.isArray(sg.children) ? sg.children.length : -1;
+        const hit = c && typeof c === "object" ? cellBoxCache.get(c) : null;
+        let box = null;
+        if (hit && hit.box && hit.rootKey === rKey && hit.childLen === childLen && childLen >= 0) {
+          box = hit.box;
+        } else {
+          box = cellBoxFor(c, rootInv);
+          if (box && c && typeof c === "object" && childLen >= 0) {
+            let m = 0;
+            walkMeshes(sg, () => { m += 1; });
+            cellBoxCache.set(c, { rootKey: rKey, childLen, meshes: m, box });
+          }
         }
+        if (!box) { pending += 1; continue; }
+        nextEntries.push(box);
+        nextById.set(id, box);
+        addBoxBuckets(box, nextBuckets);
       }
+    }
+    const extBoxes = [];
+    if (scene3d) collectExteriorBoxes(scene3d, rootInv, extBoxes, extBoxCache, rKey);
+    for (let i = 0; i < extBoxes.length; i += 1) {
+      const { key, box } = extBoxes[i];
+      nextEntries.push(box);
+      nextById.set(key, box);
+      addBoxBuckets(box, nextBuckets);
     }
     // The boxes that appeared or disappeared since the last build (the first
     // build reports all of its boxes as added).
@@ -634,7 +891,7 @@ export function createInteriorMask(opts = {}) {
     entries = nextEntries;
     buckets = nextBuckets;
     st.rebuilds += 1;
-    st.cells = map.size;
+    st.cells = map instanceof Map ? map.size : 0;
     st.boxes = nextEntries.length;
     st.pending = pending;
     writeGpu(nextEntries);
@@ -662,7 +919,12 @@ export function createInteriorMask(opts = {}) {
   /** The cell-set check of every checkFrames-th sync() (the old sync() body). */
   function checkCells(scene3d) {
     const map = scene3d && scene3d.cellContainers3d;
-    if (!(map instanceof Map) || map.size === 0) {
+    const hasMap = map instanceof Map && map.size > 0;
+    const hasExt = !!(
+      (Array.isArray(scene3d?.buildingsGroup?.children) && scene3d.buildingsGroup.children.length > 0)
+      || (Array.isArray(scene3d?.staticsGroup?.children) && scene3d.staticsGroup.children.length > 0)
+    );
+    if (!hasMap && !hasExt) {
       if (entries.length === 0 && signature === "") return false;
       changed = [...boxById.values()].map((b) => [b.x0, b.y0, b.x1, b.y1]);
       entries = []; buckets = new Map(); signature = ""; st.cells = 0; st.boxes = 0;
@@ -670,10 +932,10 @@ export function createInteriorMask(opts = {}) {
       writeGpu(entries);
       return true;
     }
-    const sig = signatureOf(map);
+    const sig = signatureOf(map, scene3d);
     if (sig === signature) return false;
     signature = sig;
-    rebuild(map, scene3d.worldRoot || null);
+    rebuild(map, scene3d ? (scene3d.worldRoot || null) : null, scene3d);
     return true;
   }
 
@@ -689,6 +951,7 @@ export function createInteriorMask(opts = {}) {
     let n = 0;
     for (let i = 0; i < entries.length; i += 1) {
       const e = entries[i];
+      if (!e.indoor && !e.bldg) continue;
       const dx = x < e.x0 ? e.x0 - x : x > e.x1 ? x - e.x1 : 0;
       const dy = y < e.y0 ? e.y0 - y : y > e.y1 ? y - e.y1 : 0;
       if (dx * dx + dy * dy <= r2) n += 1;

@@ -399,19 +399,38 @@ export function statPomConfig() {
   // same knob buys visibly bulging stones rather than deeper hairlines.
   // Genuinely flat surfaces still get ZERO offset (empty field ⇒ no height).
   let depth = 0.07;
+  const isBrowserDom = typeof window !== "undefined" && typeof document !== "undefined";
+  if (isBrowserDom) {
+    steps = Math.min(8, steps);
+    shadowSteps = Math.min(2, shadowSteps);
+    depth = 0.048;
+  }
   try {
     if (typeof window !== "undefined" && window.location?.search) {
-      const v = Number.parseFloat(new URLSearchParams(window.location.search).get("statPomDepth") ?? "");
+      const sp = new URLSearchParams(window.location.search);
+      const v = Number.parseFloat(sp.get("statPomDepth") ?? "");
       if (Number.isFinite(v)) depth = Math.min(0.15, Math.max(0, v));
+      const spSteps = Number.parseInt(sp.get("pomStepsPrimary") ?? "", 10);
+      if (Number.isFinite(spSteps) && spSteps > 0) steps = spSteps;
+      const spSh = Number.parseInt(sp.get("pomStepsSelfShadow") ?? "", 10);
+      if (Number.isFinite(spSh) && spSh > 0) shadowSteps = spSh;
     }
   } catch (_) { /* keep default */ }
-  let near = 15.0;
-  let far = 35.0;
+  let near = isBrowserDom ? 8.0 : 15.0;
+  let far = isBrowserDom ? 18.0 : 35.0;
   try {
-    const f = getQuality()?.flags || {};
-    if (Number.isFinite(f.pomLodNear)) near = f.pomLodNear;
-    if (Number.isFinite(f.pomLodFar)) far = f.pomLodFar;
-    else if (getQuality()?.preset === "ultra") far = 50.0;
+    if (!isBrowserDom) {
+      const f = getQuality()?.flags || {};
+      if (Number.isFinite(f.pomLodNear)) near = f.pomLodNear;
+      if (Number.isFinite(f.pomLodFar)) far = f.pomLodFar;
+      else if (getQuality()?.preset === "ultra") far = 50.0;
+    } else if (window.location?.search) {
+      const sp = new URLSearchParams(window.location.search);
+      const sn = Number.parseFloat(sp.get("statPomNear") ?? "");
+      const sf = Number.parseFloat(sp.get("statPomFar") ?? "");
+      if (Number.isFinite(sn) && sn >= 0) near = sn;
+      if (Number.isFinite(sf) && sf > 0) far = sf;
+    }
   } catch (_) {}
   _statPomCfg = {
     enabled,
@@ -670,7 +689,7 @@ export function packNraLayer(nraArray, layer, mat, w, h, stats) {
     if ((nR && nR.resampled) || (rgh && rgh.resampled) || (ao && ao.resampled) || (hgt && hgt.resampled)) stats.nraResampled++;
     if ((mat.metalness || 0) > 0.01) stats.nraMetalDropped++;
   }
-  return !!(nR || rgh || ao);
+  return !!(nR || rgh || ao || hgt);
 }
 
 // === RND-08/33 (2026-07-27) — buckets must carry the EXACT source render state.
@@ -812,7 +831,7 @@ export function makeArrayMaterial(diffArray, stateKey, nraArray, arrays, csmStat
       // Micro-surface enhancement uniforms
       shader.uniforms.uStatCreviceAo = { value: 1.0 };
       shader.uniforms.uStatMicroShadow = { value: 1.0 };
-      shader.uniforms.uStatEdgeRim = { value: 0.3 };
+      shader.uniforms.uStatEdgeRim = { value: 0.08 };
       m.userData._statPomUniforms = shader.uniforms;
     }
     shader.vertexShader = shader.vertexShader
@@ -904,20 +923,22 @@ export function makeArrayMaterial(diffArray, stateKey, nraArray, arrays, csmStat
                 "\t\t\t} else if ( _pomVd > uStatPomNear ) {",
                 "\t\t\t\t_statEffSteps = max( 4, uStatPomSteps / 2 );",
                 "\t\t\t}",
-                "\t\t\tvec2 _pomStep = ( _pomV.xy / _pomV.z ) * ( uStatPomDepth * _statPomFade ) / float( _statEffSteps );",
+                "\t\t\t_statEffSteps = min( 8, max( 4, _statEffSteps ) );",
+                "\t\t\tvec2 _rawShift = ( _pomV.xy / max( _pomV.z, 0.18 ) ) * ( uStatPomDepth * _statPomFade );",
+                "\t\t\tfloat _maxShift = 1.5 * uStatPomDepth * _statPomFade;",
+                "\t\t\tfloat _rawLen = length( _rawShift );",
+                "\t\t\tif ( _rawLen > _maxShift && _rawLen > 1e-6 ) _rawShift *= ( _maxShift / _rawLen );",
+                "\t\t\tvec2 _pomStep = _rawShift / float( _statEffSteps );",
                 "\t\t\tfloat _pomLayerStep = 1.0 / float( _statEffSteps );",
                 "\t\t\tvec2 _pomUv = vMapUv;",
                 "\t\t\tfloat _pomLd = 0.0;",
                 "\t\t\tfloat _pomHd = 1.0 - _statPomHeightAt( _pomUv );",
-                "\t\t\tfor ( int i = 0; i < 24; i ++ ) {",
+                "\t\t\tfor ( int i = 0; i < 8; i ++ ) {",
                 "\t\t\t\tif ( i >= _statEffSteps || _pomLd >= _pomHd ) break;",
                 "\t\t\t\t_pomUv -= _pomStep;",
                 "\t\t\t\t_pomLd += _pomLayerStep;",
                 "\t\t\t\t_pomHd = 1.0 - _statPomHeightAt( _pomUv );",
                 "\t\t\t}",
-                // One secant refinement between the last two samples. Guarded
-                // denominator: a march that never crossed (flat seam field —
-                // the overwhelmingly common texel) keeps the base uv exactly.
                 "\t\t\tvec2 _pomPrev = _pomUv + _pomStep;",
                 "\t\t\tfloat _pomAfter = _pomHd - _pomLd;",
                 "\t\t\tfloat _pomBefore = ( 1.0 - _statPomHeightAt( _pomPrev ) ) - ( _pomLd - _pomLayerStep );",
@@ -1007,31 +1028,37 @@ export function makeArrayMaterial(diffArray, stateKey, nraArray, arrays, csmStat
             "\tambientOcclusion *= _statCavity;",
             "\treflectedLight.indirectDiffuse *= ambientOcclusion;",
             "\t#if defined( USE_ENVMAP ) && defined( STANDARD )",
-            "\t\tfloat dotNV = saturate( dot( geometryNormal, geometryViewDir ) );",
-            "\t\treflectedLight.indirectSpecular *= computeSpecularOcclusion( dotNV, ambientOcclusion, material.roughness );",
+            "\t\tfloat dotNV = saturate( dot( normal, geometryViewDir ) );",
+            "\t\tfloat _statHoriz = saturate( 1.0 + dot( reflect( - geometryViewDir, normal ), geometryNormal ) );",
+            "\t\treflectedLight.indirectSpecular *= computeSpecularOcclusion( dotNV, ambientOcclusion, material.roughness ) * ( _statHoriz * _statHoriz );",
             "\t#endif",
             // Protruding masonry specular rim highlight
             "\t#if NUM_DIR_LIGHTS > 0",
             "\tif ( uStatEdgeRim > 0.001 ) {",
-            "\t\tfloat _statRim = max( 0.0, _statNraTexel.a - 0.7 ) * ( 1.0 - abs( dot( geometryNormal, geometryViewDir ) ) );",
+            "\t\tfloat _statSil = 1.0 - abs( dot( geometryNormal, geometryViewDir ) );",
+            "\t\tfloat _statRim = max( 0.0, _statNraTexel.a - 0.7 ) * ( _statSil * _statSil * _statSil );",
             "\t\treflectedLight.directSpecular += _statRim * uStatEdgeRim * directionalLights[ 0 ].color;",
             "\t}",
-            // POM secondary ray march toward real sun (active only when POM enabled and within LOD distance)
+            // POM 2-tap horizon + crevice self-shadow toward dominant sun direction
             "\tif ( uStatPomOn > 0.5 && _statPomFade > 0.001 ) {",
             "\t\tvec3 _pomL = directionalLights[ 0 ].direction;",
             "\t\tfloat _pomSun = 1.0;",
             "\t\tvec3 _pomLt = normalize( transpose( _statPomTbn ) * _pomL );",
-            "\t\tif ( _pomLt.z > 0.05 && _statPomHitDepth > 0.001 ) {",
-            "\t\t\tvec2 _sunStep = ( _pomLt.xy / max( _pomLt.z, 0.05 ) ) * uStatPomDepth / float( uStatPomShadowSteps );",
-            "\t\t\tfloat _sunLayerStep = _statPomHitDepth / float( uStatPomShadowSteps );",
-            "\t\t\tvec2 _sunUv = _statPomUv + _sunStep;",
-            "\t\t\tfloat _sunD = _statPomHitDepth - _sunLayerStep;",
-            "\t\t\tfor ( int i = 0; i < 12; i ++ ) {",
-            "\t\t\t\tif ( i >= uStatPomShadowSteps || _sunD <= 0.0 ) break;",
-            "\t\t\t\tif ( 1.0 - _statPomHeightAt( _sunUv ) < _sunD ) { _pomSun = uStatPomShadowDark; break; }",
-            "\t\t\t\t_sunUv += _sunStep;",
-            "\t\t\t\t_sunD -= _sunLayerStep;",
+            "\t\tif ( _pomLt.z > 0.01 && _statPomHitDepth > 0.001 ) {",
+            "\t\t\tint _sunTaps = min( 2, max( 1, uStatPomShadowSteps ) );",
+            "\t\t\tvec2 _sunRay = ( _pomLt.xy / max( _pomLt.z, 0.2 ) ) * min( uStatPomDepth * 1.35, 0.06 );",
+            "\t\t\tfloat _sunOcc = 0.0;",
+            "\t\t\tfor ( int i = 0; i < 2; i ++ ) {",
+            "\t\t\t\tif ( i >= _sunTaps ) break;",
+            "\t\t\t\tfloat _st = ( float( i ) + 1.0 ) / float( _sunTaps );",
+            "\t\t\t\tvec2 _sunUv = _statPomUv + _sunRay * _st;",
+            "\t\t\t\tfloat _sh = 1.0 - _statPomHeightAt( _sunUv );",
+            "\t\t\t\tfloat _expD = _statPomHitDepth * ( 1.0 - _st * 0.85 );",
+            "\t\t\t\t_sunOcc = max( _sunOcc, clamp( ( _expD - _sh ) * 3.2, 0.0, 1.0 ) );",
             "\t\t\t}",
+            "\t\t\tfloat _crev = clamp( _statPomHitDepth * 0.45, 0.0, 0.35 );",
+            "\t\t\tfloat pomSelfShadow = clamp( max( _sunOcc, _crev ), 0.0, 1.0 );",
+            "\t\t\t_pomSun = mix( 1.0, uStatPomShadowDark, pomSelfShadow );",
             "\t\t}",
             "\t\tfloat _pomDirect = mix( 1.0, _pomSun, _statPomFade );",
             "\t\treflectedLight.directDiffuse *= _pomDirect;",
@@ -2294,7 +2321,7 @@ export function addSingletonsToCrossLbAtlas(nodes, scene3d) {
           // there yet, queue a re-pack rather than lose the relief for the session.
           // S3: with a seam-height field in hand the alpha channel never wants
           // the texchan AO, so only the roughness bake is worth waiting for.
-          if (!mat.roughnessMap || (!heightTexForMaterial(mat) && !mat.aoMap)) {
+          if (!mat.roughnessMap || (!heightTexForMaterial(mat) && !mat.aoMap) || mat.userData?.__texFullPending) {
             // w/h here are the NRA layer dims — the only thing the drain packs.
             _nraPending.push({ ud, layer: entry.layer, mat, w: nw, h: nh, texUuid: uuid, tries: 0, full });
           }
@@ -2684,25 +2711,22 @@ function _drainNraPending() {
     const p = _nraPending[i];
     const cur = p.ud?.layerOf?.get(p.texUuid);
     if (!p.ud?.nraArray || !cur || cur.layer !== p.layer) { _nraPending.splice(i, 1); continue; }
-    // S3 — with a seam-height field the alpha channel never takes the texchan
-    // AO, so only the roughness bake is worth waiting for on those entries.
-    const both = !!(p.mat?.roughnessMap && (heightTexForMaterial(p.mat) || p.mat?.aoMap));
+    const stillPendingFull = !!p.mat?.userData?.__texFullPending;
+    const hTex = heightTexForMaterial(p.mat);
+    const hasRealNormal = !!(p.mat?.normalMap && (p.mat.normalMap.image?.width | 0) > 1);
+    const both = !stillPendingFull && !!(p.mat?.roughnessMap && (hTex || p.mat?.aoMap));
+    const readyCompressed = !stillPendingFull && !!(hTex || hasRealNormal) && !p.full;
     const expired = ++p.tries > _NRA_PENDING_TRIES;
-    if (!both && !expired) continue;
-    const any = !!(p.mat?.roughnessMap || p.mat?.aoMap);
+    if (!both && !readyCompressed && !expired) continue;
+    const any = !!(p.mat?.roughnessMap || p.mat?.aoMap || hTex || hasRealNormal);
     if (any) {
-      // Scratch tally: the layer's normal was already counted at first pack;
-      // only the newly-arrived rough/AO channels are added to the census.
-      const s = { nraLayersPacked: 0, nraWithNormal: 0, nraWithRough: 0, nraWithAo: 0, nraResampled: 0, nraMetalDropped: 0 };
-      // memory-1 — the bucket's nra layer size (the feed queued the same
-      // dims in p.w/p.h; the bucket record is the authority).
+      const s = { nraLayersPacked: 0, nraWithNormal: 0, nraWithRough: 0, nraWithAo: 0, nraWithHeight: 0, nraResampled: 0, nraMetalDropped: 0 };
       packNraLayer(p.ud.nraArray, p.layer, p.mat, p.ud.nraW ?? p.w, p.ud.nraH ?? p.h, s);
       packed += 1;
-      // Single-layer dirty mark — see the feed path; keeps the ~10 Hz repack
-      // from re-uploading the whole nra array per drained entry.
       if (typeof p.ud.nraArray.addLayerUpdate === "function") p.ud.nraArray.addLayerUpdate(p.layer);
       _atlasStats.nraWithRough += s.nraWithRough;
       _atlasStats.nraWithAo += s.nraWithAo;
+      _atlasStats.nraWithHeight = (_atlasStats.nraWithHeight || 0) + (s.nraWithHeight || 0);
       _atlasStats.nraResampled += s.nraResampled;
       _atlasStats.nraRepacked++;
       touched.add(p.ud.nraArray);

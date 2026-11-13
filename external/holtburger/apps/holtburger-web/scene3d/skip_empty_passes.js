@@ -1,5 +1,5 @@
-// scene3d/skip_empty_passes.js — `?skipEmptyPasses` (round 3 R3-2, 2026-10-30,
-// DEFAULT OFF, `=on` opt-in; read once through rustFlag).
+// scene3d/skip_empty_passes.js — `?skipEmptyPasses` (round 3 R3-2, 2026-10-30;
+// DEFAULT ON since 2026-11-12, `=off` escape; read once through rustFlag).
 //
 // THE WASTE. Every `renderer.render(scene, camera)` re-runs three's whole-graph
 // work whatever it ends up drawing: `scene.updateMatrixWorld()`, then
@@ -58,9 +58,9 @@
 import * as THREE from "three";
 import { rustFlag } from "./rust/scene_core.js";
 
-/** `?skipEmptyPasses=on` (DEFAULT OFF). */
+/** `?skipEmptyPasses` (DEFAULT ON; `=off`/`0`/`false`/`no` escape). */
 export function skipEmptyPassesEnabled() {
-  return rustFlag("skipEmptyPasses", false);
+  return rustFlag("skipEmptyPasses", true);
 }
 
 export const SKIP_EMPTY_PASSES_STATS = {

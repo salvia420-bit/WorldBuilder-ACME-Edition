@@ -188,14 +188,14 @@ const HS = await import("../ui/hud_scale.js");
 // ═════════════════════════════════════════════════════════════════════════
 console.log("── [1] readers ──");
 
-check("[1] parseHudDiet: absent / empty / off-forms → no lever", () => {
-  for (const v of [null, undefined, "", " ", ",", "off", "OFF", "0", "false", "no", "none", " None "]) {
+check("[1] parseHudDiet: off-forms (escape) → no lever", () => {
+  for (const v of ["off", "OFF", "0", "false", "no", "none", " None ", "radar,off"]) {
     assertEq(D.parseHudDiet(v), [], `=${JSON.stringify(v)}`);
   }
 });
-check("[1] parseHudDiet: on-forms (any case, trimmed) → every lever, canonical order", () => {
-  for (const v of ["on", "ON", "1", "true", "yes", "all", " All ", "radar,on"]) {
-    assertEq(D.parseHudDiet(v), [...D.HUD_DIET_LEVERS], `=${v}`);
+check("[1] parseHudDiet: absent / empty / on-forms (any case, trimmed) → every lever, canonical order", () => {
+  for (const v of [null, undefined, "", " ", ",", "on", "ON", "1", "true", "yes", "all", " All ", "radar,on"]) {
+    assertEq(D.parseHudDiet(v), [...D.HUD_DIET_LEVERS], `=${JSON.stringify(v)}`);
   }
   assertEq([...D.HUD_DIET_LEVERS], ["orbSync", "orbLayer", "radar", "overlays", "fontWrf"], "lever list");
 });
@@ -211,20 +211,22 @@ check("[1] parseHudOff: off / 0 / false / no / none (any case, trimmed) remove; 
   for (const v of ["off", "Off", "0", "false", "FALSE", "no", "none", " off "]) assertEq(D.parseHudOff(v), true, `=${v}`);
   for (const v of [null, undefined, "", "on", "1", "true", "yes", "garbage"]) assertEq(D.parseHudOff(v), false, `=${v}`);
 });
-check("[1] page readers read the URL once (seam resets) and default off", () => {
+check("[1] page readers read the URL once (seam resets) and default ON", () => {
   D.__setHudDietSearchForTest("");
-  assertEq([D.hudDietLevers(), D.hudPanelsOff(), D.hudOrbsOff(), D.hudCanvasesOff()], [[], false, false, false], "absent");
+  assertEq([D.hudDietLevers(), D.hudPanelsOff(), D.hudOrbsOff(), D.hudCanvasesOff()], [[...D.HUD_DIET_LEVERS], false, false, false], "absent");
+  D.__setHudDietSearchForTest("?hudDiet=off");
+  assertEq([D.hudDietLevers(), D.hudPanelsOff(), D.hudOrbsOff(), D.hudCanvasesOff()], [[], false, false, false], "escape =off");
   D.__setHudDietSearchForTest("?hudDiet=radar,overlays&hudPanels=off&hudOrbs=0&hudCanvases=no");
   assertEq([D.hudDietLevers(), D.hudPanelsOff(), D.hudOrbsOff(), D.hudCanvasesOff()],
     [["radar", "overlays"], true, true, true], "all set");
   assertEq([D.hudDietOn("radar"), D.hudDietOn("orbSync"), D.hudDietOn("nope")], [true, false, false], "hudDietOn");
-  globalThis.location = { search: "?hudDiet=on" };
+  globalThis.location = { search: "?hudDiet=off" };
   D.__setHudDietSearchForTest(undefined);
-  assertEq(D.hudDietLevers().length, 5, "window.location read");
+  assertEq(D.hudDietLevers().length, 0, "window.location read (=off)");
   globalThis.location = { search: "" };
-  assertEq(D.hudDietLevers().length, 5, "memoized: a later URL change is not re-read");
+  assertEq(D.hudDietLevers().length, 0, "memoized: a later URL change is not re-read");
   D.__setHudDietSearchForTest(undefined);
-  assertEq(D.hudDietLevers(), [], "re-read after the seam reset");
+  assertEq(D.hudDietLevers(), [...D.HUD_DIET_LEVERS], "re-read after the seam reset (default ON)");
   delete globalThis.location;
   D.__setHudDietSearchForTest("");
 });
@@ -339,8 +341,8 @@ function radarScript() {
   return log;
 }
 
-check("[3] flags off: every 25 ms tick runs update(); a moving blip repaints every tick (40 Hz)", () => {
-  withRadar("", ({ canvas }) => {
+check("[3] flags off (?hudDiet=off): every 25 ms tick runs update(); a moving blip repaints every tick (40 Hz)", () => {
+  withRadar("?hudDiet=off", ({ canvas }) => {
     radarTick(30);
     const s0 = stats();
     let paints = 0;
@@ -351,17 +353,17 @@ check("[3] flags off: every 25 ms tick runs update(); a moving blip repaints eve
     assertEq(canvas.style.display, undefined, "canvas display untouched");
   });
 });
-check("[3] flags off: hudDiet=off / unknown lever / other levers / hudCanvases=on → identical canvas call log", () => {
-  const ref = withRadar("", () => radarScript());
+check("[3] flags off: hudDiet=off / 0 / false / unknown lever / other levers → identical canvas call log", () => {
+  const ref = withRadar("?hudDiet=off", () => radarScript());
   assert(ref.flat().length > 20, "the script paints");
-  for (const s of ["?hudDiet=off", "?hudDiet=bogus", "?hudDiet=orbSync,orbLayer,overlays,fontWrf", "?hudCanvases=on", "?hudPanels=off&hudOrbs=off"]) {
+  for (const s of ["?hudDiet=0", "?hudDiet=false", "?hudDiet=bogus", "?hudDiet=orbSync,orbLayer,overlays,fontWrf", "?hudDiet=off&hudCanvases=on", "?hudDiet=off&hudPanels=off&hudOrbs=off"]) {
     const got = withRadar(s, () => radarScript());
     assertEq(got, ref, s);
   }
 });
 
 check("[4] hudCanvases=off: canvas display:none, no 2D call, update() still runs", () => {
-  withRadar("?hudCanvases=off", ({ canvas }) => {
+  withRadar("?hudDiet=off&hudCanvases=off", ({ canvas }) => {
     assertEq(canvas.style.display, "none", "hidden");
     const s0 = stats();
     const log = radarScript();
@@ -372,21 +374,23 @@ check("[4] hudCanvases=off: canvas display:none, no 2D call, update() still runs
   });
 });
 
-check("[5] hudDiet=radar: a translating blip repaints at <= 10 Hz, never staler than 100 ms + 1 tick", () => {
-  withRadar("?hudDiet=radar", () => {
-    radarTick(30); // first: forced
-    const s0 = stats();
-    const paintAt = [];
-    for (let i = 0; i < 40; i++) { moveMob(); if (clears(radarTick(30)) > 0) paintAt.push(now); }
-    const s1 = stats();
-    assert(paintAt.length >= 9 && paintAt.length <= 11, `~10 paints in 1.2 s (got ${paintAt.length})`);
-    for (let i = 1; i < paintAt.length; i++) {
-      const gap = paintAt[i] - paintAt[i - 1];
-      assert(gap >= R.RADAR_DIET_MIN_MS && gap <= R.RADAR_DIET_MIN_MS + 30, `gap ${gap}`);
-    }
-    assert(s1.deferred - s0.deferred >= 25, `ticks deferred (${s1.deferred - s0.deferred})`);
-    assertEq(s1.updates - s0.updates, paintAt.length, "a deferred tick runs no update()");
-  });
+check("[5] default ON (and ?hudDiet=radar): a translating blip repaints at <= 10 Hz, never staler than 100 ms + 1 tick", () => {
+  for (const search of ["", "?hudDiet=radar"]) {
+    withRadar(search, () => {
+      radarTick(30); // first: forced
+      const s0 = stats();
+      const paintAt = [];
+      for (let i = 0; i < 40; i++) { moveMob(); if (clears(radarTick(30)) > 0) paintAt.push(now); }
+      const s1 = stats();
+      assert(paintAt.length >= 9 && paintAt.length <= 11, `${search || "(default)"}: ~10 paints in 1.2 s (got ${paintAt.length})`);
+      for (let i = 1; i < paintAt.length; i++) {
+        const gap = paintAt[i] - paintAt[i - 1];
+        assert(gap >= R.RADAR_DIET_MIN_MS && gap <= R.RADAR_DIET_MIN_MS + 30, `gap ${gap}`);
+      }
+      assert(s1.deferred - s0.deferred >= 25, `ticks deferred (${s1.deferred - s0.deferred})`);
+      assertEq(s1.updates - s0.updates, paintAt.length, "a deferred tick runs no update()");
+    });
+  }
 });
 check("[5] hudDiet=radar: turning repaints on every tick (tokens + blips at 40 Hz)", () => {
   withRadar("?hudDiet=radar", () => {
@@ -428,10 +432,11 @@ check("[5] hudDiet=radar: at rest the last paint equals the flag-off paint, call
     for (let i = 0; i < 6; i++) all.push(...radarTick(30)); // 180 ms of rest
     return lastPaint(all);
   });
-  const off = run("");
-  const on = run("?hudDiet=radar");
+  const off = run("?hudDiet=off");
+  const on = run("");
   assert(off && off.length > 3, "flag-off painted");
   assertEq(on, off, "same final pixels");
+  assertEq(run("?hudDiet=radar"), off, "explicit lever too");
 });
 
 // ═════════════════════════════════════════════════════════════════════════
@@ -559,21 +564,22 @@ function runOrbScript(W, sync, { announce = true } = {}) {
   return { snaps, fullAt, late, end: W.snap() };
 }
 
-check("[6] flag off: call log equals the pre-diet step, call for call; invalidate() is inert", () => {
-  D.__setHudDietSearchForTest("");
+check("[6] flag off (?hudDiet=off): call log equals the pre-diet step, call for call; invalidate() is inert", () => {
+  D.__setHudDietSearchForTest("?hudDiet=off");
   const Wr = makeWorld();
   const Wo = makeWorld();
   const ref = runOrbScript(Wr, Object.assign(makeReferenceSync(Wr.roots), { invalidate: undefined }));
-  const off = runOrbScript(Wo, O.makeOrbAnimSync(Wo.roots)); // default = no lever; invalidate() called at 8 and 55
+  const off = runOrbScript(Wo, O.makeOrbAnimSync(Wo.roots)); // =off = no lever; invalidate() called at 8 and 55
   assertEq(Wo.log, Wr.log, "identical call log");
   assertEq(off.end, ref.end, "identical end state");
-  assertEq(off.fullAt.length, STEPS, "a full step every tick (today)");
+  assertEq(off.fullAt.length, STEPS, "a full step every tick (=off)");
   const Wx = makeWorld();
   runOrbScript(Wx, O.makeOrbAnimSync(Wx.roots, { cached: false }));
   assertEq(Wx.log, Wr.log, "explicit cached:false too");
+  D.__setHudDietSearchForTest("");
 });
-check("[6] hudDiet=orbSync: same currentTime for every loop at every step; light steps flush nothing", () => {
-  D.__setHudDietSearchForTest("?hudDiet=orbSync");
+check("[6] default ON / hudDiet=orbSync: same currentTime for every loop at every step; light steps flush nothing", () => {
+  D.__setHudDietSearchForTest("");
   const Wr = makeWorld();
   const Wc = makeWorld();
   const ref = runOrbScript(Wr, Object.assign(makeReferenceSync(Wr.roots), { invalidate() {} }));
@@ -689,8 +695,8 @@ function makeBrackets(search) {
 const elState = (l) => [l._tl, l._tr, l._bl, l._br, l._arrow].map((e) => [e._store.display, e._store.transform ?? ""]);
 const at = (x, y, z) => { rig.position.set(x, y, z); rig.updateMatrixWorld(true); };
 
-check("[8] flags off: today's per-tick pattern (5 hides / 2 layout reads + 5 writes)", () => {
-  const { layer, dom } = makeBrackets("");
+check("[8] flags off (?hudDiet=off): pre-diet per-tick pattern (5 hides / 2 layout reads + 5 writes)", () => {
+  const { layer, dom } = makeBrackets("?hudDiet=off");
   dom.writes.length = 0;
   layer.tick(cam);
   assertEq(dom.writes.map((w) => w[1] + "=" + w[2]), Array(5).fill("display=none"), "no target: 5 same-value hides");
@@ -704,9 +710,9 @@ check("[8] flags off: today's per-tick pattern (5 hides / 2 layout reads + 5 wri
   assertEq(dom.writes.map((w) => w[1]), ["transform", "transform", "transform", "transform", "display"], "4 transforms + arrow hide");
   assertEq(layer._size, null, "no size cache");
 });
-check("[8] hudDiet=overlays: still frame = 0 writes, 0 layout reads; same state as flag-off every tick", () => {
-  const off = makeBrackets("");
-  const on = makeBrackets("?hudDiet=overlays");
+check("[8] default ON / hudDiet=overlays: still frame = 0 writes, 0 layout reads; same state as flag-off every tick", () => {
+  const off = makeBrackets("?hudDiet=off");
+  const on = makeBrackets("");
   const ro = ROs[ROs.length - 1];
   assert(ro && ro.el === on.dom.canvas, "ResizeObserver on the scene canvas");
   const script = [
@@ -738,7 +744,7 @@ check("[8] hudDiet=overlays: still frame = 0 writes, 0 layout reads; same state 
   assertEq(perTick[2].r, 2, "first on-screen tick reads the size once");
   assertEq(perTick[7].r, 2, "after the ResizeObserver callback: one size read");
   assertEq(perTick[8].r, 0, "then cached again");
-  assertEq([perTick[10].w, perTick[11].w], [1, 1], "off-screen / behind again: only the arrow transform");
+  assertEq([perTick[10].w, perTick[11].w], [0, 1], "still off-screen = 0 writes; moved behind = only the arrow transform");
   assertEq(perTick[14].w, 4, "deselect: the four corners hidden once");
   assertEq(perTick[15].w, 0, "deselected and hidden: nothing written");
   on.layer.dispose();
@@ -765,15 +771,14 @@ check("[8] makeCanvasCssSize: live without ResizeObserver; window resize invalid
 // ═════════════════════════════════════════════════════════════════════════
 console.log("── [9] AC font atlas ──");
 
-check("[9] atlas: off = getContext('2d'); fontWrf = willReadFrequently; same pixels", () => {
+check("[9] atlas: ?hudDiet=off = getContext('2d'); default ON / fontWrf = willReadFrequently; same pixels", () => {
   const px = new Uint8ClampedArray([10, 10, 10, 255, 200, 200, 200, 255, 0, 0, 0, 255, 77, 77, 77, 255]);
-  D.__setHudDietSearchForTest("");
+  D.__setHudDietSearchForTest("?hudDiet=off");
   const a = F.__atlasToCanvasForTest(px, 2, 2);
-  D.__setHudDietSearchForTest("?hudDiet=fontWrf");
-  const b = F.__atlasToCanvasForTest(px, 2, 2);
   D.__setHudDietSearchForTest("");
+  const b = F.__atlasToCanvasForTest(px, 2, 2);
   assertEq(a._ctxArgs, ["2d"], "off: no options argument");
-  assertEq(b._ctxArgs, ["2d", { willReadFrequently: true }], "fontWrf");
+  assertEq(b._ctxArgs, ["2d", { willReadFrequently: true }], "default ON: fontWrf");
   assertEq(b._pixels, a._pixels, "identical atlas pixels");
   assertEq(a._pixels.slice(0, 8), [255, 255, 255, 10, 255, 255, 255, 200], "mask in alpha");
 });

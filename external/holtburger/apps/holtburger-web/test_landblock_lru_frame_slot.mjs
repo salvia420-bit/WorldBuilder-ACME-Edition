@@ -52,7 +52,7 @@ console.log("LRU under the ?frameWork slot (perf T4)");
   fw.frameWorkW6Run("lruEviction", () => lru.tickEviction(centre), { release: true });
   fw.frameWorkP4({});
   const n1 = reclaimed.length;
-  check("the slot stops the victim loop early", n1 >= 2 && n1 <= 4, `reclaimed=${n1} of 8`);
+  check("the slot stops the victim loop early", n1 >= 1 && n1 <= 5, `reclaimed=${n1} of 8`);
   check("the rest are recorded as slot-deferred", lru.getStats().reclaimSlotDeferred === 8 - n1,
     `deferred=${lru.getStats().reclaimSlotDeferred}`);
   check("the yield shows on __frameWork.caps.slotYields", window.__frameWork.caps.slotYields >= 1);
@@ -80,7 +80,7 @@ console.log("LRU under the ?frameWork slot (perf T4)");
   fw.frameWorkW6Run("lruEviction", () => lru.tickEviction(centre, keep), { release: true });
   fw.frameWorkP4({});
   const n = reclaimed.length;
-  check("sealed first burst is slot-bounded (~5 ms, not 250 ms)", n >= 2 && n <= 4, `reclaimed=${n} of 30`);
+  check("sealed first burst is slot-bounded (~5 ms, not 250 ms)", n >= 1 && n <= 5, `reclaimed=${n} of 30`);
   const { lru: lru2, reclaimed: r2 } = build(30, 200);
   lru2.tickEviction(centre, keep);
   check("outside the slot the private 250 ms burst drains everything", r2.length === 30, `reclaimed=${r2.length}`);

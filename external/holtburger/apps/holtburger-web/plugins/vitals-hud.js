@@ -96,6 +96,7 @@ function ensureStyles() {
          border-image chrome. */
       box-sizing: content-box;
       padding: 0;
+      contain: layout style paint;
       background: linear-gradient(180deg, var(--hb-bg-stone-top) 0%, var(--hb-bg-stone-bottom) 100%);
       border: 6px solid transparent;
       border-image: url("./sprites/acsprites/panel.png") 6 / 6px / 0 stretch;
@@ -171,14 +172,20 @@ function ensureStyles() {
       min-width: 0;
       font-size: 10px;
       font-family: var(--hb-font-serif);
+      font-variant-numeric: tabular-nums;
       color: var(--hb-text-cream-bright);
       text-shadow: 0 1px 2px rgba(0, 0, 0, 0.95), 0 0 2px rgba(0, 0, 0, 0.85);
       pointer-events: none;
     }
     /* HUD rec #202 — vital-delta flash. Damage = red flash, heal/regen
-       = green flash. Quick 400ms keyframe; box-shadow overlay so the
-       bar's existing background-image isn't disturbed. */
+       = green flash. Quick 400ms keyframe; alternating keyframe pairs
+       restart CSS animations cleanly without a synchronous offsetWidth
+       layout reflow. */
     @keyframes hb-vital-flash-down {
+      0%   { box-shadow: inset 0 0 0 9999px rgba(224, 64, 64, 0.55); }
+      100% { box-shadow: inset 0 0 0 9999px rgba(224, 64, 64, 0);    }
+    }
+    @keyframes hb-vital-flash-down-alt {
       0%   { box-shadow: inset 0 0 0 9999px rgba(224, 64, 64, 0.55); }
       100% { box-shadow: inset 0 0 0 9999px rgba(224, 64, 64, 0);    }
     }
@@ -186,8 +193,14 @@ function ensureStyles() {
       0%   { box-shadow: inset 0 0 0 9999px rgba(96, 224, 96, 0.55); }
       100% { box-shadow: inset 0 0 0 9999px rgba(96, 224, 96, 0);    }
     }
-    .hud-vital-flash-down { animation: hb-vital-flash-down 400ms ease-out 1; }
-    .hud-vital-flash-up   { animation: hb-vital-flash-up   400ms ease-out 1; }
+    @keyframes hb-vital-flash-up-alt {
+      0%   { box-shadow: inset 0 0 0 9999px rgba(96, 224, 96, 0.55); }
+      100% { box-shadow: inset 0 0 0 9999px rgba(96, 224, 96, 0);    }
+    }
+    .hud-vital-flash-down     { animation: hb-vital-flash-down     400ms ease-out 1; }
+    .hud-vital-flash-down-alt { animation: hb-vital-flash-down-alt 400ms ease-out 1; }
+    .hud-vital-flash-up       { animation: hb-vital-flash-up       400ms ease-out 1; }
+    .hud-vital-flash-up-alt   { animation: hb-vital-flash-up-alt   400ms ease-out 1; }
   `;
   document.head.appendChild(style);
 }
@@ -270,14 +283,22 @@ function applyVitalDelta(overlay, type, current, buffedMax, oldValue) {
   // HUD rec #202 — flash the row when current diverges from oldValue
   // so a heal/hit/regen tick is visually obvious. Wave-6 (2026-05-28)
   // started shipping `oldValue` on the per-vital bus events; consume
-  // it here. Damage flashes red, heal/regen flashes green; flash
-  // clears after ~400ms via CSS animationend. Safe degraded mode:
-  // when oldValue is missing (old packet path) we skip the flash.
+  // it here. Damage flashes red, heal/regen flashes green; alternating
+  // keyframe names restart the 400ms animation without a synchronous
+  // `void fill.offsetWidth` layout reflow.
   if (Number.isFinite(oldValue) && oldValue !== current) {
     const fill = entry.fillEl;
-    fill.classList.remove("hud-vital-flash-up", "hud-vital-flash-down");
-    void fill.offsetWidth; // restart CSS animation
-    fill.classList.add(current < oldValue ? "hud-vital-flash-down" : "hud-vital-flash-up");
+    entry.flashAlt = !entry.flashAlt;
+    fill.classList.remove(
+      "hud-vital-flash-up", "hud-vital-flash-up-alt",
+      "hud-vital-flash-down", "hud-vital-flash-down-alt",
+    );
+    const down = current < oldValue;
+    fill.classList.add(
+      down
+        ? (entry.flashAlt ? "hud-vital-flash-down-alt" : "hud-vital-flash-down")
+        : (entry.flashAlt ? "hud-vital-flash-up-alt" : "hud-vital-flash-up"),
+    );
   }
 
   // The overlay may still be hidden if the first snapshot hasn't
@@ -439,6 +460,27 @@ export function mount(ctx) {
   // at this point. Poll for it briefly, then subscribe.
   let pollTimer = null;
   let unsubscribe = null;
+  let dirtyWhileSuppressed = false;
+  let flushFn = null;
+
+  function isOverlaySuppressed() {
+    if (overlay.style?.display === "none") return true;
+    if (document.documentElement?.classList?.contains?.("no-hud")) return true;
+    return false;
+  }
+  let visMo = null;
+  if (typeof MutationObserver === "function" && document.documentElement) {
+    visMo = new MutationObserver(() => {
+      if (dirtyWhileSuppressed && !isOverlaySuppressed() && flushFn) {
+        dirtyWhileSuppressed = false;
+        flushFn();
+      }
+    });
+    try {
+      visMo.observe(document.documentElement, { attributes: true, attributeFilter: ["class"] });
+      visMo.observe(overlay, { attributes: true, attributeFilter: ["style"] });
+    } catch (_) {}
+  }
 
   function tryHook() {
     const client = ctx?.client ?? window.__pluginClient ?? null;
@@ -446,6 +488,11 @@ export function mount(ctx) {
       return false;
     }
     const render = () => {
+      if (isOverlaySuppressed()) {
+        dirtyWhileSuppressed = true;
+        return;
+      }
+      dirtyWhileSuppressed = false;
       try {
         const stats = client.player.stats;
         renderVitals(overlay, stats?.vitals);
@@ -455,6 +502,7 @@ export function mount(ctx) {
         overlay.hidden = true;
       }
     };
+    flushFn = render;
     client.events.on("playerStatsUpdated", render);
 
     // === Wave 3.C — per-vital granular subscriptions (2026-05-28) ===
@@ -463,12 +511,15 @@ export function mount(ctx) {
     // Each handler paints exactly one bar — full `render()` only fires
     // on the coalesced kind=8 fallback.
     const onHealth = (e) => {
+      if (isOverlaySuppressed()) { dirtyWhileSuppressed = true; return; }
       applyVitalDelta(overlay, 1, e.detail?.current ?? 0, e.detail?.buffedMax ?? 0, e.detail?.oldValue);
     };
     const onStamina = (e) => {
+      if (isOverlaySuppressed()) { dirtyWhileSuppressed = true; return; }
       applyVitalDelta(overlay, 3, e.detail?.current ?? 0, e.detail?.buffedMax ?? 0, e.detail?.oldValue);
     };
     const onMana = (e) => {
+      if (isOverlaySuppressed()) { dirtyWhileSuppressed = true; return; }
       applyVitalDelta(overlay, 5, e.detail?.current ?? 0, e.detail?.buffedMax ?? 0, e.detail?.oldValue);
     };
     client.events.on("vitalChangedHealth", onHealth);
@@ -520,6 +571,7 @@ export function mount(ctx) {
 
   return () => {
     if (pollTimer) clearInterval(pollTimer);
+    if (visMo) { try { visMo.disconnect(); } catch (_) {} visMo = null; }
     if (unsubscribe) unsubscribe();
     overlay.remove();
   };
