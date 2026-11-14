@@ -1,0 +1,1556 @@
+{
+  "gpu": {
+    "gpuRenderer": "ANGLE (NVIDIA Corporation, NVIDIA GeForce GTX 1070 Ti/PCIe/SSE2, OpenGL ES 3.2)",
+    "gpuVendor": "Google Inc. (NVIDIA Corporation)",
+    "atmosphereReady": true
+  },
+  "shots": [
+    {
+      "id": "bug1_clouds_occlusion",
+      "filename": "shot_01_clouds_terrain_occlusion.png",
+      "path": "/root/.gemini/antigravity-cli/brain/790ca2a6-e02d-4855-bb83-6223af1ea8c2/shot_01_clouds_terrain_occlusion.png",
+      "perf": {
+        "fpsMean": 70.5,
+        "fpsP50": 105.3,
+        "frameMsP50": 9.5,
+        "frameMsP95": 35.3,
+        "glError": 0,
+        "terrainMeshes": 16,
+        "entities": 0
+      },
+      "groundZ": 87,
+      "cloudsEnabled": true
+    },
+    {
+      "id": "bug2_shoushi_grass",
+      "filename": "shot_02_shoushi_portal_grass.png",
+      "path": "/root/.gemini/antigravity-cli/brain/790ca2a6-e02d-4855-bb83-6223af1ea8c2/shot_02_shoushi_portal_grass.png",
+      "perf": {
+        "fpsMean": 65.3,
+        "fpsP50": 66.7,
+        "frameMsP50": 15,
+        "frameMsP95": 27.7,
+        "glError": 0,
+        "terrainMeshes": 40,
+        "entities": 444
+      },
+      "grass": null
+    },
+    {
+      "id": "item3_grass_variety",
+      "filename": "shot_03_grass_meadow_variety.png",
+      "path": "/root/.gemini/antigravity-cli/brain/790ca2a6-e02d-4855-bb83-6223af1ea8c2/shot_03_grass_meadow_variety.png",
+      "perf": {
+        "fpsMean": 89.1,
+        "fpsP50": 91.7,
+        "frameMsP50": 10.9,
+        "frameMsP95": 13.6,
+        "glError": 0,
+        "terrainMeshes": 50,
+        "entities": 559
+      },
+      "grass": null
+    },
+    {
+      "id": "item4a_nanto_falls",
+      "filename": "shot_04a_nanto_falls.png",
+      "path": "/root/.gemini/antigravity-cli/brain/790ca2a6-e02d-4855-bb83-6223af1ea8c2/shot_04a_nanto_falls.png",
+      "perf": {
+        "fpsMean": 100.4,
+        "fpsP50": 102,
+        "frameMsP50": 9.8,
+        "frameMsP95": 11.4,
+        "glError": 0,
+        "terrainMeshes": 65,
+        "entities": 731
+      },
+      "waterfalls": {
+        "enabled": true,
+        "inited": true,
+        "sitesLoaded": true,
+        "catalogCount": 31,
+        "waterfallSiteCount": 21,
+        "activeCount": 1,
+        "activeSites": [
+          {
+            "id": 20,
+            "lb": "0XE43D",
+            "name": "Blue Ghost Falls (Nanto)",
+            "archetype": "cliff-gap",
+            "dropM": 66.41099548339844,
+            "widthM": 24.968624805236786
+          }
+        ],
+        "engageM": 1800,
+        "dropM": 1980,
+        "loadError": null,
+        "counters": {
+          "inits": 1,
+          "loads": 1,
+          "ticks": 1993,
+          "builds": 2,
+          "releases": 1
+        }
+      }
+    },
+    {
+      "id": "item4b_cragstone_falls",
+      "filename": "shot_04b_cragstone_falls.png",
+      "path": "/root/.gemini/antigravity-cli/brain/790ca2a6-e02d-4855-bb83-6223af1ea8c2/shot_04b_cragstone_falls.png",
+      "perf": {
+        "fpsMean": 74.2,
+        "fpsP50": 76.9,
+        "frameMsP50": 13,
+        "frameMsP95": 16.4,
+        "glError": 0,
+        "terrainMeshes": 80,
+        "entities": 853
+      },
+      "waterfalls": {
+        "enabled": true,
+        "inited": true,
+        "sitesLoaded": true,
+        "catalogCount": 31,
+        "waterfallSiteCount": 21,
+        "activeCount": 1,
+        "activeSites": [
+          {
+            "id": 12,
+            "lb": "0XB6A3",
+            "name": "Cragstone Falls",
+            "archetype": "cataract",
+            "dropM": 20.58329963684082,
+            "widthM": 66
+          }
+        ],
+        "engageM": 1800,
+        "dropM": 1980,
+        "loadError": null,
+        "counters": {
+          "inits": 1,
+          "loads": 1,
+          "ticks": 2294,
+          "builds": 4,
+          "releases": 3
+        }
+      }
+    },
+    {
+      "id": "item4c_marae_falls",
+      "filename": "shot_04c_marae_falls.png",
+      "path": "/root/.gemini/antigravity-cli/brain/790ca2a6-e02d-4855-bb83-6223af1ea8c2/shot_04c_marae_falls.png",
+      "perf": {
+        "fpsMean": 130.9,
+        "fpsP50": 137,
+        "frameMsP50": 7.3,
+        "frameMsP95": 9.4,
+        "glError": 0,
+        "terrainMeshes": 95,
+        "entities": 1071
+      },
+      "waterfalls": {
+        "enabled": true,
+        "inited": true,
+        "sitesLoaded": true,
+        "catalogCount": 31,
+        "waterfallSiteCount": 21,
+        "activeCount": 5,
+        "activeSites": [
+          {
+            "id": 2,
+            "lb": "0X1FBC",
+            "name": "Marae Lassel pool cascade (east)",
+            "archetype": "marae-cascade",
+            "dropM": 27.650000000000006,
+            "widthM": 47.61386352733833
+          },
+          {
+            "id": 0,
+            "lb": "0X1CBC",
+            "name": "Marae Lassel pool cascade (west)",
+            "archetype": "marae-cascade",
+            "dropM": 27.65,
+            "widthM": 46.84954642256422
+          },
+          {
+            "id": 3,
+            "lb": "0X1FBF",
+            "name": "Marae Lassel pool cascade (north)",
+            "archetype": "marae-cascade",
+            "dropM": 27.65,
+            "widthM": 33.988233257996804
+          },
+          {
+            "id": 6,
+            "lb": "0X24BC",
+            "name": "Marae Lassel spring",
+            "archetype": "spring",
+            "dropM": 1.5600000000000023,
+            "widthM": 3.6
+          },
+          {
+            "id": 1,
+            "lb": "0X1DB4",
+            "name": "Marae Lassel river fall",
+            "archetype": "cataract",
+            "dropM": 28.06,
+            "widthM": 15.6
+          }
+        ],
+        "engageM": 1800,
+        "dropM": 1980,
+        "loadError": null,
+        "counters": {
+          "inits": 1,
+          "loads": 1,
+          "ticks": 2721,
+          "builds": 9,
+          "releases": 4
+        }
+      }
+    },
+    {
+      "id": "item5_holtburg_night",
+      "filename": "shot_05_holtburg_night.png",
+      "path": "/root/.gemini/antigravity-cli/brain/790ca2a6-e02d-4855-bb83-6223af1ea8c2/shot_05_holtburg_night.png",
+      "perf": {
+        "fpsMean": 84.8,
+        "fpsP50": 89.3,
+        "frameMsP50": 11.2,
+        "frameMsP95": 14.6,
+        "glError": 0,
+        "terrainMeshes": 101,
+        "entities": 1071
+      },
+      "lifestoneFramed": true,
+      "lifestonePos": [
+        32529.33039855957,
+        34571.79740047455,
+        94.00499725341797
+      ],
+      "activeLightsCount": 237,
+      "suppressedTestLightsPresent": 0
+    },
+    {
+      "id": "item6a_ocean_coast_palms",
+      "filename": "shot_06a_ocean_coast_palms.png",
+      "path": "/root/.gemini/antigravity-cli/brain/790ca2a6-e02d-4855-bb83-6223af1ea8c2/shot_06a_ocean_coast_palms.png",
+      "perf": {
+        "fpsMean": 154.4,
+        "fpsP50": 156.2,
+        "frameMsP50": 6.4,
+        "frameMsP95": 8.3,
+        "glError": 0,
+        "terrainMeshes": 43,
+        "entities": 0
+      },
+      "beachSpot": {
+        "acX": 21575.12109375,
+        "acY": 1894.9664306640625,
+        "acZ": -0.004000000189989805,
+        "scale": 0.20261527597904205,
+        "dPalm": 22.115172485720453,
+        "neighbors": 13.5,
+        "score": 56.822431167834196
+      },
+      "shore": {
+        "enabled": true,
+        "inited": true,
+        "visibleStarfish": 240,
+        "visibleShells": 598,
+        "visibleDriftwood": 0,
+        "starfishField": {
+          "name": "terrain-shore-starfish",
+          "count": 1600,
+          "gridSize": 40,
+          "radiusM": 56,
+          "cellSizeM": 2.8,
+          "shape": "square",
+          "sliceSize": 384,
+          "scanBudget": 1536,
+          "fadeFraction": 0.22,
+          "seed": 1510138118,
+          "randSalt": 11,
+          "adoptedUniforms": true,
+          "hasMesh": true,
+          "centered": true,
+          "centerX": 21574.571723670688,
+          "centerY": 1896.3083295112026,
+          "cursor": 847,
+          "frames": 2763,
+          "scans": 3081679,
+          "rescatters": 391424,
+          "lastScanned": 1536,
+          "lastRescattered": 0,
+          "fullRescatters": 3,
+          "teleports": 2,
+          "live": 240,
+          "degenerate": 1360,
+          "nullSamples": 382656,
+          "familyRejects": 7709,
+          "offRoad": true,
+          "offRoadVergeM": 1.5,
+          "roadRejects": 384,
+          "excludeRejects": 0,
+          "edgeRescatters": 490,
+          "edgeBudget": 1152,
+          "edgePending": 0,
+          "outOfRange": 0,
+          "noHeight": 0,
+          "fillRejects": 0,
+          "fillErrors": 0,
+          "allocations": 5,
+          "lastError": null,
+          "scanPlanner": {
+            "failed": false,
+            "lastWritten": 0,
+            "lastScanned": 1536,
+            "cursor": 847,
+            "desync": 0,
+            "stops": 1,
+            "queuedLines": 0
+          },
+          "lightCommits": 8
+        },
+        "shellField": {
+          "name": "terrain-shore-shells",
+          "count": 2500,
+          "gridSize": 50,
+          "radiusM": 56,
+          "cellSizeM": 2.24,
+          "shape": "square",
+          "sliceSize": 384,
+          "scanBudget": 1536,
+          "fadeFraction": 0.22,
+          "seed": 1510138118,
+          "randSalt": 23,
+          "adoptedUniforms": true,
+          "hasMesh": true,
+          "centered": true,
+          "centerX": 21574.571723670688,
+          "centerY": 1896.3083295112026,
+          "cursor": 971,
+          "frames": 2763,
+          "scans": 3069795,
+          "rescatters": 398428,
+          "lastScanned": 1536,
+          "lastRescattered": 0,
+          "fullRescatters": 3,
+          "teleports": 2,
+          "live": 598,
+          "degenerate": 1902,
+          "nullSamples": 385356,
+          "familyRejects": 10872,
+          "offRoad": true,
+          "offRoadVergeM": 1.5,
+          "roadRejects": 612,
+          "excludeRejects": 0,
+          "edgeRescatters": 714,
+          "edgeBudget": 1152,
+          "edgePending": 0,
+          "outOfRange": 0,
+          "noHeight": 0,
+          "fillRejects": 0,
+          "fillErrors": 0,
+          "allocations": 5,
+          "lastError": null,
+          "scanPlanner": {
+            "failed": false,
+            "lastWritten": 0,
+            "lastScanned": 1536,
+            "cursor": 971,
+            "desync": 0,
+            "stops": 1,
+            "queuedLines": 0
+          },
+          "lightCommits": 8
+        },
+        "driftwoodField": {
+          "name": "terrain-shore-driftwood",
+          "count": 1600,
+          "gridSize": 40,
+          "radiusM": 56,
+          "cellSizeM": 2.8,
+          "shape": "square",
+          "sliceSize": 384,
+          "scanBudget": 1536,
+          "fadeFraction": 0.22,
+          "seed": 1510138118,
+          "randSalt": 37,
+          "adoptedUniforms": true,
+          "hasMesh": true,
+          "centered": true,
+          "centerX": 21574.571723670688,
+          "centerY": 1896.3083295112026,
+          "cursor": 847,
+          "frames": 2763,
+          "scans": 3081679,
+          "rescatters": 391424,
+          "lastScanned": 1536,
+          "lastRescattered": 0,
+          "fullRescatters": 3,
+          "teleports": 2,
+          "live": 0,
+          "degenerate": 1600,
+          "nullSamples": 382656,
+          "familyRejects": 8386,
+          "offRoad": true,
+          "offRoadVergeM": 1.5,
+          "roadRejects": 382,
+          "excludeRejects": 0,
+          "edgeRescatters": 490,
+          "edgeBudget": 1152,
+          "edgePending": 0,
+          "outOfRange": 0,
+          "noHeight": 0,
+          "fillRejects": 0,
+          "fillErrors": 0,
+          "allocations": 5,
+          "lastError": null,
+          "scanPlanner": {
+            "failed": false,
+            "lastWritten": 0,
+            "lastScanned": 1536,
+            "cursor": 847,
+            "desync": 0,
+            "stops": 1,
+            "queuedLines": 0
+          },
+          "lightCommits": 8
+        },
+        "counters": {
+          "inits": 1,
+          "starfishBuilds": 1,
+          "shellBuilds": 1,
+          "driftwoodBuilds": 1,
+          "noSkyState": 6
+        }
+      }
+    },
+    {
+      "id": "item6b_river_shore_driftwood",
+      "filename": "shot_06b_river_shore_driftwood.png",
+      "path": "/root/.gemini/antigravity-cli/brain/790ca2a6-e02d-4855-bb83-6223af1ea8c2/shot_06b_river_shore_driftwood.png",
+      "perf": {
+        "fpsMean": 130.4,
+        "fpsP50": 131.6,
+        "frameMsP50": 7.6,
+        "frameMsP95": 8.4,
+        "glError": 0,
+        "terrainMeshes": 68,
+        "entities": 0
+      },
+      "riverSpot": {
+        "acX": 35060.39453125,
+        "acY": 31538.4765625,
+        "acZ": 27.96500015258789,
+        "len": 1.0702340602874756,
+        "cluster": 16,
+        "score": 92.2809362411499,
+        "tx": 0.370220866946996,
+        "ty": -0.9289437602336402
+      },
+      "liveLogsSampled": 83,
+      "shore": {
+        "enabled": true,
+        "inited": true,
+        "visibleStarfish": 0,
+        "visibleShells": 0,
+        "visibleDriftwood": 146,
+        "starfishField": {
+          "name": "terrain-shore-starfish",
+          "count": 1600,
+          "gridSize": 40,
+          "radiusM": 56,
+          "cellSizeM": 2.8,
+          "shape": "square",
+          "sliceSize": 384,
+          "scanBudget": 1536,
+          "fadeFraction": 0.22,
+          "seed": 1510138118,
+          "randSalt": 11,
+          "adoptedUniforms": true,
+          "hasMesh": true,
+          "centered": true,
+          "centerX": 35059.61706742941,
+          "centerY": 31540.427344396492,
+          "cursor": 1032,
+          "frames": 4267,
+          "scans": 5371159,
+          "rescatters": 400896,
+          "lastScanned": 1536,
+          "lastRescattered": 0,
+          "fullRescatters": 4,
+          "teleports": 3,
+          "live": 0,
+          "degenerate": 1600,
+          "nullSamples": 386944,
+          "familyRejects": 12886,
+          "offRoad": true,
+          "offRoadVergeM": 1.5,
+          "roadRejects": 384,
+          "excludeRejects": 0,
+          "edgeRescatters": 2614,
+          "edgeBudget": 1152,
+          "edgePending": 0,
+          "outOfRange": 0,
+          "noHeight": 0,
+          "fillRejects": 0,
+          "fillErrors": 0,
+          "allocations": 5,
+          "lastError": null,
+          "scanPlanner": {
+            "failed": false,
+            "lastWritten": 0,
+            "lastScanned": 1536,
+            "cursor": 1032,
+            "desync": 0,
+            "stops": 4,
+            "queuedLines": 0
+          },
+          "lightCommits": 12
+        },
+        "shellField": {
+          "name": "terrain-shore-shells",
+          "count": 2500,
+          "gridSize": 50,
+          "radiusM": 56,
+          "cellSizeM": 2.24,
+          "shape": "square",
+          "sliceSize": 384,
+          "scanBudget": 1536,
+          "fadeFraction": 0.22,
+          "seed": 1510138118,
+          "randSalt": 23,
+          "adoptedUniforms": true,
+          "hasMesh": true,
+          "centered": true,
+          "centerX": 35059.61706742941,
+          "centerY": 31540.427344396492,
+          "cursor": 1710,
+          "frames": 4267,
+          "scans": 5354553,
+          "rescatters": 411500,
+          "lastScanned": 1536,
+          "lastRescattered": 0,
+          "fullRescatters": 4,
+          "teleports": 3,
+          "live": 0,
+          "degenerate": 2500,
+          "nullSamples": 390544,
+          "familyRejects": 18742,
+          "offRoad": true,
+          "offRoadVergeM": 1.5,
+          "roadRejects": 612,
+          "excludeRejects": 0,
+          "edgeRescatters": 3959,
+          "edgeBudget": 1152,
+          "edgePending": 0,
+          "outOfRange": 0,
+          "noHeight": 0,
+          "fillRejects": 0,
+          "fillErrors": 0,
+          "allocations": 5,
+          "lastError": null,
+          "scanPlanner": {
+            "failed": false,
+            "lastWritten": 0,
+            "lastScanned": 1536,
+            "cursor": 1710,
+            "desync": 0,
+            "stops": 3,
+            "queuedLines": 0
+          },
+          "lightCommits": 12
+        },
+        "driftwoodField": {
+          "name": "terrain-shore-driftwood",
+          "count": 1600,
+          "gridSize": 40,
+          "radiusM": 56,
+          "cellSizeM": 2.8,
+          "shape": "square",
+          "sliceSize": 384,
+          "scanBudget": 1536,
+          "fadeFraction": 0.22,
+          "seed": 1510138118,
+          "randSalt": 37,
+          "adoptedUniforms": true,
+          "hasMesh": true,
+          "centered": true,
+          "centerX": 35059.61706742941,
+          "centerY": 31540.427344396492,
+          "cursor": 1032,
+          "frames": 4267,
+          "scans": 5371159,
+          "rescatters": 400896,
+          "lastScanned": 1536,
+          "lastRescattered": 0,
+          "fullRescatters": 4,
+          "teleports": 3,
+          "live": 146,
+          "degenerate": 1454,
+          "nullSamples": 386944,
+          "familyRejects": 13183,
+          "offRoad": true,
+          "offRoadVergeM": 1.5,
+          "roadRejects": 382,
+          "excludeRejects": 0,
+          "edgeRescatters": 2614,
+          "edgeBudget": 1152,
+          "edgePending": 0,
+          "outOfRange": 0,
+          "noHeight": 0,
+          "fillRejects": 0,
+          "fillErrors": 0,
+          "allocations": 5,
+          "lastError": null,
+          "scanPlanner": {
+            "failed": false,
+            "lastWritten": 0,
+            "lastScanned": 1536,
+            "cursor": 1032,
+            "desync": 0,
+            "stops": 4,
+            "queuedLines": 0
+          },
+          "lightCommits": 12
+        },
+        "counters": {
+          "inits": 1,
+          "starfishBuilds": 1,
+          "shellBuilds": 1,
+          "driftwoodBuilds": 1,
+          "noSkyState": 6
+        }
+      }
+    },
+    {
+      "id": "item7a_obsidian_spires",
+      "filename": "shot_07a_obsidian_spires.png",
+      "path": "/root/.gemini/antigravity-cli/brain/790ca2a6-e02d-4855-bb83-6223af1ea8c2/shot_07a_obsidian_spires.png",
+      "perf": {
+        "fpsMean": 78.3,
+        "fpsP50": 92.6,
+        "frameMsP50": 10.8,
+        "frameMsP95": 29.8,
+        "glError": 0,
+        "terrainMeshes": 22,
+        "entities": 0
+      },
+      "spires": {
+        "enabled": true,
+        "inited": true,
+        "detectedSiteCount": 4,
+        "activeSiteCount": 4,
+        "activeSites": [
+          {
+            "key": "472c:13680:8544",
+            "x": 13680,
+            "y": 8544,
+            "z": 2,
+            "setupId": 0,
+            "lbCode": "0x472C",
+            "source": "landblock"
+          },
+          {
+            "key": "472c:13728:8544",
+            "x": 13728,
+            "y": 8544,
+            "z": 6,
+            "setupId": 0,
+            "lbCode": "0x472C",
+            "source": "terrain-group"
+          },
+          {
+            "key": "482c:13920:8544",
+            "x": 13920,
+            "y": 8544,
+            "z": 68,
+            "setupId": 0,
+            "lbCode": "0x482C",
+            "source": "terrain-group"
+          },
+          {
+            "key": "482c:13968:8496",
+            "x": 13968,
+            "y": 8496,
+            "z": 12,
+            "setupId": 0,
+            "lbCode": "0x482C",
+            "source": "landblock"
+          }
+        ],
+        "miasmaInstances": 168,
+        "wispInstances": 224,
+        "screenDistortCount": 0,
+        "lightCount": 0,
+        "counters": {
+          "inits": 1,
+          "ticks": 1256,
+          "rebuilds": 3,
+          "lbReady": 2,
+          "lbParked": 0,
+          "lbUnparked": 0,
+          "lbGone": 0
+        }
+      },
+      "fxDistort": {
+        "added": 164,
+        "shockwaves": 0,
+        "live": 134,
+        "onScreen": 16,
+        "sources": 164
+      },
+      "volcano": {
+        "enabled": true,
+        "haze": false,
+        "embers": true,
+        "crackGlow": true,
+        "inited": true,
+        "volcanoCodes": [
+          25
+        ],
+        "volcanoCodeMask": 33554432,
+        "ventLandblocks": 5,
+        "ventsActive": 5,
+        "ventRange": {
+          "engageM": 480,
+          "dropFactor": 1.15,
+          "evalHz": 2
+        },
+        "ventOwners": [
+          {
+            "ownerKey": "static:1177288704:volcano",
+            "slots": 1,
+            "ids": 2,
+            "parked": false,
+            "active": true,
+            "live": 2
+          },
+          {
+            "ownerKey": "static:1194065920:volcano",
+            "slots": 2,
+            "ids": 4,
+            "parked": false,
+            "active": true,
+            "live": 4
+          },
+          {
+            "ownerKey": "static:1210843136:volcano",
+            "slots": 2,
+            "ids": 4,
+            "parked": false,
+            "active": true,
+            "live": 4
+          },
+          {
+            "ownerKey": "static:1194131456:volcano",
+            "slots": 1,
+            "ids": 2,
+            "parked": false,
+            "active": true,
+            "live": 2
+          },
+          {
+            "ownerKey": "static:1210908672:volcano",
+            "slots": 1,
+            "ids": 2,
+            "parked": false,
+            "active": true,
+            "live": 2
+          }
+        ],
+        "hazeLandblocks": 0,
+        "haze3State": {
+          "enabled": 0,
+          "centerX": 0,
+          "centerY": 0,
+          "centerZ": 0,
+          "radiusM": 0,
+          "screenU": 0.5,
+          "screenV": 0.5,
+          "screenRadiusUv": 0,
+          "nearM": 0,
+          "farM": 0,
+          "featherM": 1,
+          "strength": 0,
+          "lbKey": 0,
+          "residentLbs": 0,
+          "insideFactor": 0,
+          "frames": 0,
+          "groundStrength": 0,
+          "groundNearM": 25,
+          "groundFullM": 450,
+          "groundFarM": 2600,
+          "mirage": 0,
+          "mirageStartM": 160,
+          "mirageFeatherM": 420,
+          "desertWeight": 0,
+          "desertHeat": 1,
+          "townFactor": 0.0197658416551362
+        },
+        "oscillator": {
+          "name": "terrain.volcanoCrackGlow",
+          "value": 0.46355628669550175
+        },
+        "crackOverrides": {},
+        "counters": {
+          "inits": 1,
+          "hazeFrames": 0,
+          "hazeClears": 0,
+          "oscillatorRegistrations": 1,
+          "ventLandblocks": 5,
+          "ventsRequested": 7,
+          "ventsCreated": 14,
+          "ventCreateFailures": 0,
+          "parks": 0,
+          "unparks": 0,
+          "gones": 0,
+          "destroyAllCalls": 0,
+          "noManager": 15,
+          "ventEvals": 26,
+          "rangeSpawns": 5,
+          "rangeDrops": 0,
+          "rangeDeferred": 0,
+          "crackOverridePushes": 0,
+          "crackOverrideWrites": 0
+        }
+      }
+    },
+    {
+      "id": "item7b_magma_convection",
+      "filename": "shot_07b_magma_convection.png",
+      "path": "/root/.gemini/antigravity-cli/brain/790ca2a6-e02d-4855-bb83-6223af1ea8c2/shot_07b_magma_convection.png",
+      "perf": {
+        "fpsMean": 64,
+        "fpsP50": 68.5,
+        "frameMsP50": 14.6,
+        "frameMsP95": 31.7,
+        "glError": 0,
+        "terrainMeshes": 174,
+        "entities": 2005
+      },
+      "lavaSpotFound": false,
+      "volcano": {
+        "enabled": true,
+        "haze": false,
+        "embers": true,
+        "crackGlow": true,
+        "inited": true,
+        "volcanoCodes": [
+          25
+        ],
+        "volcanoCodeMask": 33554432,
+        "ventLandblocks": 16,
+        "ventsActive": 8,
+        "ventRange": {
+          "engageM": 480,
+          "dropFactor": 1.15,
+          "evalHz": 2
+        },
+        "ventOwners": [
+          {
+            "ownerKey": "static:1896480768:volcano",
+            "slots": 1,
+            "ids": 0,
+            "parked": false,
+            "active": false,
+            "live": 0
+          },
+          {
+            "ownerKey": "static:1896415232:volcano",
+            "slots": 1,
+            "ids": 0,
+            "parked": false,
+            "active": false,
+            "live": 0
+          },
+          {
+            "ownerKey": "static:1210908672:volcano",
+            "slots": 1,
+            "ids": 0,
+            "parked": false,
+            "active": false,
+            "live": 0
+          },
+          {
+            "ownerKey": "static:1210843136:volcano",
+            "slots": 2,
+            "ids": 0,
+            "parked": false,
+            "active": false,
+            "live": 0
+          },
+          {
+            "ownerKey": "static:1177288704:volcano",
+            "slots": 1,
+            "ids": 0,
+            "parked": false,
+            "active": false,
+            "live": 0
+          },
+          {
+            "ownerKey": "static:1194065920:volcano",
+            "slots": 2,
+            "ids": 0,
+            "parked": false,
+            "active": false,
+            "live": 0
+          },
+          {
+            "ownerKey": "static:1194131456:volcano",
+            "slots": 1,
+            "ids": 0,
+            "parked": false,
+            "active": false,
+            "live": 0
+          },
+          {
+            "ownerKey": "static:3102539776:volcano",
+            "slots": 2,
+            "ids": 4,
+            "parked": false,
+            "active": true,
+            "live": 4
+          },
+          {
+            "ownerKey": "static:3119316992:volcano",
+            "slots": 2,
+            "ids": 4,
+            "parked": false,
+            "active": true,
+            "live": 4
+          },
+          {
+            "ownerKey": "static:3119382528:volcano",
+            "slots": 2,
+            "ids": 4,
+            "parked": false,
+            "active": true,
+            "live": 4
+          },
+          {
+            "ownerKey": "static:3102670848:volcano",
+            "slots": 2,
+            "ids": 4,
+            "parked": false,
+            "active": true,
+            "live": 4
+          },
+          {
+            "ownerKey": "static:3119448064:volcano",
+            "slots": 2,
+            "ids": 4,
+            "parked": false,
+            "active": true,
+            "live": 4
+          },
+          {
+            "ownerKey": "static:3102605312:volcano",
+            "slots": 2,
+            "ids": 4,
+            "parked": false,
+            "active": true,
+            "live": 4
+          },
+          {
+            "ownerKey": "static:3136225280:volcano",
+            "slots": 2,
+            "ids": 4,
+            "parked": false,
+            "active": true,
+            "live": 4
+          },
+          {
+            "ownerKey": "static:3085762560:volcano",
+            "slots": 2,
+            "ids": 4,
+            "parked": false,
+            "active": true,
+            "live": 4
+          },
+          {
+            "ownerKey": "static:3152936960:volcano",
+            "slots": 2,
+            "ids": 0,
+            "parked": false,
+            "active": false,
+            "live": 0
+          }
+        ],
+        "hazeLandblocks": 0,
+        "haze3State": {
+          "enabled": 0,
+          "centerX": 0,
+          "centerY": 0,
+          "centerZ": 0,
+          "radiusM": 0,
+          "screenU": 0.5,
+          "screenV": 0.5,
+          "screenRadiusUv": 0,
+          "nearM": 0,
+          "farM": 0,
+          "featherM": 1,
+          "strength": 0,
+          "lbKey": 0,
+          "residentLbs": 0,
+          "insideFactor": 0,
+          "frames": 0,
+          "groundStrength": 0,
+          "groundNearM": 25,
+          "groundFullM": 450,
+          "groundFarM": 2600,
+          "mirage": 0,
+          "mirageStartM": 160,
+          "mirageFeatherM": 420,
+          "desertWeight": 0,
+          "desertHeat": 1,
+          "townFactor": 0.9944092964536193
+        },
+        "oscillator": {
+          "name": "terrain.volcanoCrackGlow",
+          "value": 0.7639858294837426
+        },
+        "crackOverrides": {},
+        "counters": {
+          "inits": 1,
+          "hazeFrames": 0,
+          "hazeClears": 0,
+          "oscillatorRegistrations": 1,
+          "ventLandblocks": 16,
+          "ventsRequested": 25,
+          "ventsCreated": 50,
+          "ventCreateFailures": 0,
+          "parks": 0,
+          "unparks": 0,
+          "gones": 0,
+          "destroyAllCalls": 7,
+          "noManager": 0,
+          "ventEvals": 175,
+          "rangeSpawns": 15,
+          "rangeDrops": 7,
+          "rangeDeferred": 1,
+          "crackOverridePushes": 0,
+          "crackOverrideWrites": 0
+        }
+      },
+      "fxDistort": {
+        "added": 657,
+        "shockwaves": 0,
+        "live": 272,
+        "onScreen": 4,
+        "sources": 656
+      }
+    },
+    {
+      "id": "item7c_desert_haze_intact",
+      "filename": "shot_07c_desert_haze_intact.png",
+      "path": "/root/.gemini/antigravity-cli/brain/790ca2a6-e02d-4855-bb83-6223af1ea8c2/shot_07c_desert_haze_intact.png",
+      "perf": {
+        "fpsMean": 88.5,
+        "fpsP50": 92.6,
+        "frameMsP50": 10.8,
+        "frameMsP95": 14.8,
+        "glError": 0,
+        "terrainMeshes": 195,
+        "entities": 2072
+      },
+      "desertHazeFlagOn": true,
+      "heatHazeState": {
+        "enabled": 0,
+        "centerX": 0,
+        "centerY": 0,
+        "centerZ": 0,
+        "radiusM": 0,
+        "screenU": 0.5,
+        "screenV": 0.5,
+        "screenRadiusUv": 0,
+        "nearM": 0,
+        "farM": 0,
+        "featherM": 1,
+        "strength": 0,
+        "lbKey": 0,
+        "residentLbs": 0,
+        "insideFactor": 0,
+        "frames": 0,
+        "groundStrength": 0.983318270939778,
+        "groundNearM": 25,
+        "groundFullM": 450,
+        "groundFarM": 2600,
+        "mirage": 0.983318270939778,
+        "mirageStartM": 160,
+        "mirageFeatherM": 420,
+        "desertWeight": 0.9854129326064752,
+        "desertHeat": 1,
+        "townFactor": 0.9999413183493302
+      }
+    },
+    {
+      "id": "item8_weather_snow",
+      "filename": "shot_08_weather_snow.png",
+      "path": "/root/.gemini/antigravity-cli/brain/790ca2a6-e02d-4855-bb83-6223af1ea8c2/shot_08_weather_snow.png",
+      "perf": {
+        "fpsMean": 61.9,
+        "fpsP50": 67.6,
+        "frameMsP50": 14.8,
+        "frameMsP95": 31.7,
+        "glError": 0,
+        "terrainMeshes": 195,
+        "entities": 2072
+      },
+      "hudPillText": "",
+      "weatherStats": {
+        "enabled": true,
+        "mode": "snow",
+        "preset": "high",
+        "weather": {
+          "latitude_deg": 45.09375,
+          "longitude_deg": 32.08284023668639,
+          "temperature_C": -3,
+          "dewpoint_C": 11,
+          "surface_pressure_hPa": 1008,
+          "is_storm": false,
+          "season": 1,
+          "lcl_m": 243.84,
+          "etage_m": {
+            "low": {
+              "min": 0,
+              "max": 1981.2
+            },
+            "middle": {
+              "min": 1981.2,
+              "max": 7010.400000000001
+            },
+            "high": {
+              "min": 5029.2,
+              "max": 13716
+            }
+          },
+          "rh_pct": 91.41928409237065,
+          "precip_mm_hr": 3.168958755621349,
+          "weather_kind": "snow",
+          "precip_intensity": 0.5432500723922312,
+          "cloud_coupling": {
+            "overheadCloudFactor": 0.6223292145133146,
+            "denseCloudAzimuth": 5.497787143782138,
+            "coverageBoost": 0.1234600057913785,
+            "baseDropM": 70.62250941099006,
+            "darkening": 0.28865001447844624,
+            "cloudSheetFlash": 0,
+            "strikeWorldPos": {
+              "x": 0,
+              "y": 750,
+              "z": 0
+            }
+          },
+          "lightning_flash": 0,
+          "cloud_sheet_flash": 0,
+          "weather_mode": "snow",
+          "biome_temp_offset_C": 0
+        },
+        "biome": {
+          "snowIceFrac": 0,
+          "waterFrac": 0,
+          "elevationM": 81.86666666666666,
+          "samples": 122
+        },
+        "totalDrawCalls": 1,
+        "snow": {
+          "preset": "high",
+          "maxInstances": 3800,
+          "drawCalls": 1,
+          "visible": true,
+          "density": 0.5378441083660443,
+          "indoorFade": 1
+        },
+        "rain": {
+          "preset": "high",
+          "maxStreaks": 4800,
+          "maxSplashes": 600,
+          "drawCalls": 0,
+          "streaksVisible": false,
+          "splashesVisible": false,
+          "density": 0,
+          "indoorFade": 1,
+          "splashGridUpdates": 0
+        },
+        "lightning": {
+          "active": false,
+          "boltVisible": false,
+          "drawCalls": 0,
+          "sceneFlash": 0,
+          "cloudSheetFlash": 0,
+          "strikeWorldPos": {
+            "x": 0,
+            "y": 750,
+            "z": 0
+          },
+          "pendingThunder": 0,
+          "strikeCount": 0,
+          "thunderCount": 0,
+          "lastBranchCount": 0,
+          "lastSegmentCount": 0,
+          "thunderDid": 167772229
+        }
+      }
+    },
+    {
+      "id": "item9_weather_rain",
+      "filename": "shot_09_weather_rain.png",
+      "path": "/root/.gemini/antigravity-cli/brain/790ca2a6-e02d-4855-bb83-6223af1ea8c2/shot_09_weather_rain.png",
+      "perf": {
+        "fpsMean": 138.4,
+        "fpsP50": 137,
+        "frameMsP50": 7.3,
+        "frameMsP95": 8.1,
+        "glError": 0,
+        "terrainMeshes": 77,
+        "entities": 0
+      },
+      "weatherStats": {
+        "enabled": true,
+        "mode": "rain",
+        "preset": "high",
+        "weather": {
+          "latitude_deg": 40.609375,
+          "longitude_deg": 34.54635108481262,
+          "temperature_C": 18,
+          "dewpoint_C": 11,
+          "surface_pressure_hPa": 1014,
+          "is_storm": false,
+          "season": 1,
+          "lcl_m": 853.44,
+          "etage_m": {
+            "low": {
+              "min": 0,
+              "max": 1981.2
+            },
+            "middle": {
+              "min": 1981.2,
+              "max": 7010.400000000001
+            },
+            "high": {
+              "min": 5029.2,
+              "max": 13716
+            }
+          },
+          "rh_pct": 88,
+          "precip_mm_hr": 5.6552676235206665,
+          "weather_kind": "rain",
+          "precip_intensity": 0.5127442645325404,
+          "cloud_coupling": {
+            "overheadCloudFactor": 0.6215933586709059,
+            "denseCloudAzimuth": 5.497787143782138,
+            "coverageBoost": 0.12101954116260324,
+            "baseDropM": 66.65675438923026,
+            "darkening": 0.2825488529065081,
+            "cloudSheetFlash": 0,
+            "strikeWorldPos": {
+              "x": 32795.93852067061,
+              "y": 610.2,
+              "z": -35157.84810819687
+            }
+          },
+          "lightning_flash": 0,
+          "cloud_sheet_flash": 0,
+          "weather_mode": "rain",
+          "biome_temp_offset_C": 0
+        },
+        "biome": {
+          "snowIceFrac": 0,
+          "waterFrac": 0.8,
+          "elevationM": 2,
+          "samples": 38
+        },
+        "totalDrawCalls": 2,
+        "snow": {
+          "preset": "high",
+          "maxInstances": 3800,
+          "drawCalls": 0,
+          "visible": false,
+          "density": 0,
+          "indoorFade": 1
+        },
+        "rain": {
+          "preset": "high",
+          "maxStreaks": 4800,
+          "maxSplashes": 600,
+          "drawCalls": 2,
+          "streaksVisible": true,
+          "splashesVisible": true,
+          "density": 0.4427230001755553,
+          "indoorFade": 1,
+          "splashGridUpdates": 3
+        },
+        "lightning": {
+          "active": false,
+          "boltVisible": false,
+          "drawCalls": 0,
+          "sceneFlash": 0,
+          "cloudSheetFlash": 0,
+          "strikeWorldPos": {
+            "x": 32795.93852067061,
+            "y": 610.2,
+            "z": -35157.84810819687
+          },
+          "pendingThunder": 0,
+          "strikeCount": 1,
+          "thunderCount": 0,
+          "lastBranchCount": 3,
+          "lastSegmentCount": 64,
+          "thunderDid": 167772229
+        }
+      }
+    },
+    {
+      "id": "item10_weather_lightning",
+      "filename": "shot_10_weather_lightning.png",
+      "path": "/root/.gemini/antigravity-cli/brain/790ca2a6-e02d-4855-bb83-6223af1ea8c2/shot_10_weather_lightning.png",
+      "perf": {
+        "fpsMean": 123.2,
+        "fpsP50": 137,
+        "frameMsP50": 7.3,
+        "frameMsP95": 13.7,
+        "glError": 0,
+        "terrainMeshes": 22,
+        "entities": 0
+      },
+      "weatherStats": {
+        "enabled": true,
+        "mode": "storm",
+        "preset": "high",
+        "weather": {
+          "latitude_deg": 45.080729166666664,
+          "longitude_deg": 32.07692307692307,
+          "temperature_C": 18,
+          "dewpoint_C": 11,
+          "surface_pressure_hPa": 1014,
+          "is_storm": true,
+          "season": 1,
+          "lcl_m": 853.44,
+          "etage_m": {
+            "low": {
+              "min": 0,
+              "max": 1981.2
+            },
+            "middle": {
+              "min": 1981.2,
+              "max": 7010.400000000001
+            },
+            "high": {
+              "min": 5029.2,
+              "max": 13716
+            }
+          },
+          "rh_pct": 92,
+          "precip_mm_hr": 14.224895870734507,
+          "weather_kind": "storm",
+          "precip_intensity": 0.7428556732494687,
+          "cloud_coupling": {
+            "overheadCloudFactor": 0.6773415274132059,
+            "denseCloudAzimuth": 5.497787143782138,
+            "coverageBoost": 0.21428556732494689,
+            "baseDropM": 163.4282481148831,
+            "darkening": 0.5728567019748405,
+            "cloudSheetFlash": 0.35348927910035616,
+            "strikeWorldPos": {
+              "x": 32795.93852067061,
+              "y": 610.2,
+              "z": -35157.84810819687
+            }
+          },
+          "lightning_flash": 0.34203762449403935,
+          "cloud_sheet_flash": 0.35348927910035616,
+          "weather_mode": "storm",
+          "biome_temp_offset_C": 0
+        },
+        "biome": {
+          "snowIceFrac": 0,
+          "waterFrac": 0,
+          "elevationM": 83.79333333333332,
+          "samples": 7
+        },
+        "totalDrawCalls": 3,
+        "snow": {
+          "preset": "high",
+          "maxInstances": 3800,
+          "drawCalls": 0,
+          "visible": false,
+          "density": 0,
+          "indoorFade": 1
+        },
+        "rain": {
+          "preset": "high",
+          "maxStreaks": 4800,
+          "maxSplashes": 600,
+          "drawCalls": 2,
+          "streaksVisible": true,
+          "splashesVisible": true,
+          "density": 0.7169629165231989,
+          "indoorFade": 1,
+          "splashGridUpdates": 1
+        },
+        "lightning": {
+          "active": true,
+          "boltVisible": true,
+          "drawCalls": 1,
+          "sceneFlash": 0.34203762449403935,
+          "cloudSheetFlash": 0.35348927910035616,
+          "strikeWorldPos": {
+            "x": 32795.93852067061,
+            "y": 610.2,
+            "z": -35157.84810819687
+          },
+          "pendingThunder": 1,
+          "strikeCount": 1,
+          "thunderCount": 0,
+          "lastBranchCount": 3,
+          "lastSegmentCount": 64,
+          "thunderDid": 167772229
+        }
+      }
+    },
+    {
+      "id": "item11_hud_weather_toggle_off",
+      "filename": "shot_11_hud_weather_off.png",
+      "path": "/root/.gemini/antigravity-cli/brain/790ca2a6-e02d-4855-bb83-6223af1ea8c2/shot_11_hud_weather_off.png",
+      "perf": {
+        "fpsMean": 107.6,
+        "fpsP50": 114.9,
+        "frameMsP50": 8.7,
+        "frameMsP95": 13.3,
+        "glError": 0,
+        "terrainMeshes": 130,
+        "entities": 822
+      },
+      "hudPillAfterOffClick": "Toggle Weather Effects",
+      "weatherEnabledAfterOffClick": false,
+      "totalWeatherDrawCallsWhenOff": 0
+    },
+    {
+      "id": "item12_underwater_monsters",
+      "filename": "shot_12_underwater_monsters.png",
+      "path": "/root/.gemini/antigravity-cli/brain/790ca2a6-e02d-4855-bb83-6223af1ea8c2/shot_12_underwater_monsters.png",
+      "perf": {
+        "fpsMean": 100.4,
+        "fpsP50": 178.6,
+        "frameMsP50": 5.6,
+        "frameMsP95": 13.1,
+        "glError": 0,
+        "terrainMeshes": 22,
+        "entities": 87
+      },
+      "creature": {
+        "guid": 4221069599,
+        "name": "Shallows Shark",
+        "wcid": 2577,
+        "posAc": [
+          23329.378303527832,
+          19133.879997253418,
+          -0.8989999890327454
+        ],
+        "waterZ": 0,
+        "depthBelowSurface": 0.899
+      },
+      "underwaterStats": {
+        "frames": 1144,
+        "earlyOutFrames": 1144,
+        "drawnFrames": 0,
+        "visibleEntities": 0,
+        "drawCalls": 0,
+        "lastCpuMs": 0
+      }
+    }
+  ],
+  "consoleErrors": [],
+  "pageErrors": [],
+  "httpErrors": [
+    {
+      "status": 404,
+      "url": "http://127.0.0.1:8765/apps/holtburger-web/scene3d/assets/terrain_bc7/t1024/manifest.json"
+    },
+    {
+      "status": 404,
+      "url": "http://127.0.0.1:8765/apps/holtburger-web/scene3d/assets/terrain_bc7/t512/manifest.json"
+    },
+    {
+      "status": 404,
+      "url": "http://127.0.0.1:8765/apps/holtburger-web/scene3d/assets/pbr_terrain/manifest.json"
+    },
+    {
+      "status": 404,
+      "url": "http://127.0.0.1:8765/dist/spawns/0x20BD.spawns.jsonl"
+    },
+    {
+      "status": 404,
+      "url": "http://127.0.0.1:8765/dist/spawns/0x6F08.spawns.jsonl"
+    },
+    {
+      "status": 404,
+      "url": "http://127.0.0.1:8765/dist/spawns/0x7008.spawns.jsonl"
+    },
+    {
+      "status": 404,
+      "url": "http://127.0.0.1:8765/dist/spawns/0x7108.spawns.jsonl"
+    },
+    {
+      "status": 404,
+      "url": "http://127.0.0.1:8765/dist/spawns/0x6F09.spawns.jsonl"
+    },
+    {
+      "status": 404,
+      "url": "http://127.0.0.1:8765/dist/spawns/0x6F0A.spawns.jsonl"
+    },
+    {
+      "status": 404,
+      "url": "http://127.0.0.1:8765/dist/spawns/0xB7A1.spawns.jsonl"
+    }
+  ],
+  "hudReEnableCheck": {
+    "reEnabledViaHudClick": true,
+    "hudPillAfterReOnClick": "Toggle Weather Effects"
+  },
+  "polishConsoleErrors": [],
+  "polishPageErrors": [],
+  "polishHttpErrors": [
+    {
+      "status": 404,
+      "url": "http://127.0.0.1:8765/apps/holtburger-web/scene3d/assets/terrain_bc7/t1024/manifest.json"
+    },
+    {
+      "status": 404,
+      "url": "http://127.0.0.1:8765/apps/holtburger-web/scene3d/assets/terrain_bc7/t512/manifest.json"
+    },
+    {
+      "status": 404,
+      "url": "http://127.0.0.1:8765/apps/holtburger-web/scene3d/assets/pbr_terrain/manifest.json"
+    },
+    {
+      "status": 404,
+      "url": "http://127.0.0.1:8765/dist/spawns/0x6F08.spawns.jsonl"
+    },
+    {
+      "status": 404,
+      "url": "http://127.0.0.1:8765/dist/spawns/0x7008.spawns.jsonl"
+    },
+    {
+      "status": 404,
+      "url": "http://127.0.0.1:8765/dist/spawns/0x7108.spawns.jsonl"
+    },
+    {
+      "status": 404,
+      "url": "http://127.0.0.1:8765/dist/spawns/0x6F09.spawns.jsonl"
+    },
+    {
+      "status": 404,
+      "url": "http://127.0.0.1:8765/dist/spawns/0x6F0A.spawns.jsonl"
+    },
+    {
+      "status": 404,
+      "url": "http://127.0.0.1:8765/dist/spawns/0xB7A1.spawns.jsonl"
+    }
+  ],
+  "finalConsoleErrors": [],
+  "finalPageErrors": []
+}
