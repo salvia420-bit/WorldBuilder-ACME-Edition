@@ -30,17 +30,25 @@ export function runTests() {
       equal(GFX_SUBDIV_MAX, 5, "GFX_SUBDIV_MAX must be 5");
     });
 
-    test("F13-3: Non-relief materials (vegetation, translucent, alpha-test) safely bypass POM", () => {
-      function shouldApplyRelief(matProps) {
-        if (matProps.isTranslucent || matProps.isAdditive || matProps.isAlpha || matProps.isFoliage) {
+    test("F13-3: Non-relief materials safely bypass POM while foliage is supported when foliage relief is enabled", () => {
+      function shouldApplyRelief(matProps, foliageReliefEnabled = true) {
+        if (matProps.isTranslucent || matProps.isAdditive) {
           return false;
         }
-        return matProps.isStoneOrBrick;
+        if (matProps.isFoliage) {
+          const reliefActive = matProps.foliageRelief !== undefined ? matProps.foliageRelief : foliageReliefEnabled;
+          return reliefActive;
+        }
+        if (matProps.isAlpha) {
+          return false;
+        }
+        return !!matProps.isStoneOrBrick;
       }
 
       equal(shouldApplyRelief({ isStoneOrBrick: true, isTranslucent: true }), false, "Translucent material bypasses POM");
       equal(shouldApplyRelief({ isStoneOrBrick: true, isAdditive: true }), false, "Additive material bypasses POM");
-      equal(shouldApplyRelief({ isStoneOrBrick: true, isFoliage: true }), false, "Foliage material bypasses POM");
+      equal(shouldApplyRelief({ isStoneOrBrick: true, isFoliage: true }, true), true, "Foliage material receives POM when foliage relief is enabled");
+      equal(shouldApplyRelief({ isStoneOrBrick: true, isFoliage: true, foliageRelief: false }), false, "Foliage material bypasses POM when foliage relief is disabled");
       equal(shouldApplyRelief({ isStoneOrBrick: true }), true, "Opaque stone/brick receives POM");
     });
 

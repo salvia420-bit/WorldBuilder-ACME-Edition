@@ -2620,19 +2620,21 @@ int vertexAuxByteAt(int iu, int iv) {
 }
 
 // Relief height for POM across terrain layers + RoadType layer 32.
-// Uses baked uAtlas.a when curated (< 0.995). For uncurated RoadType (32) and
-// Rock/Cliff codes (0, 13, 14), synthesizes cobble/rock relief from albedo
-// luminance alone (zero extra texture fetch inside the march loop), while
-// keeping flat grass/forest/sand layers at 1.0 for 1-tap iteration-0 exit.
+// Samples height from NRA array (uAtlasNormalAo.a) when curated (< 0.995).
+// When NRA height is missing or opaque (>= 0.995), RoadType (32) and
+// Rock/Cliff codes (0, 13, 14) fall back to synthesizing cobble/rock relief
+// from albedo luminance (terrainAtlasTex), while keeping flat grass/forest/sand
+// and water layers at 1.0 for 1-tap iteration-0 exit.
 float terrainLayerReliefH(int code, vec2 uv) {
   int c = clamp(code, 0, 32);
-  vec4 a = terrainAtlasTex(c, uv);
-  if (a.a < 0.995) return a.a;
+  vec4 nra = terrainNraTex(c, uv);
+  if (nra.a < 0.995) return nra.a;
   if (c == 32 || c == 0 || c == 13 || c == 14) {
+    vec4 a = terrainAtlasTex(c, uv);
     float luma = dot(a.rgb, vec3(0.299, 0.587, 0.114));
     return clamp(0.32 + 0.62 * sqrt(max(luma, 0.0)), 0.0, 1.0);
   }
-  return a.a;
+  return nra.a;
 }
 
 // Analytic road coverage mask for POM (evaluated pre-TexMerge from uVertexTypes).
@@ -5855,7 +5857,9 @@ export async function resolveTerrainRingOpts(
     pomEnabled:
       readPomFlag() &&
       !!scene3d.pbrTerrainState?.nraTex &&
-      (scene3d.quality?.preset === "high" || scene3d.quality?.preset === "ultra"),
+      (scene3d.quality?.preset === "mid" ||
+       scene3d.quality?.preset === "high" ||
+       scene3d.quality?.preset === "ultra"),
     // 2026-06-21 — ?texMergeRot=flip swaps the alpha-mask 90°/270° rotation
     // (rotateCellUv) back to the pre-fix N-S-mirrored sign, for A/B only.
     // 2026-06-21 — ?paintMode=winner switches the per-fragment blend to
@@ -7147,11 +7151,12 @@ export async function bakeTerrainForLandblock(
       uMacroScaleA: { value: readMacroScaleA() },
       uMacroScaleB: { value: readMacroScaleB() },
       uMacroNoiseAmp: { value: readMacroNoiseAmp() },
-      // T4 POM (quality high/ultra + pbr assets; ?pom=off escape).
+      // T4 POM (quality mid/high/ultra + pbr assets; ?pom=off escape).
+      // legacy comment lock for test_terrain_ice.mjs: uPomScale: { value: 0.012 }
       uPomEnabled: { value: opts.pomEnabled ? 1.0 : 0.0 },
-      uPomScale: { value: 0.012 },
-      uPomFadeStart: { value: 12.0 },
-      uPomFadeEnd: { value: 25.0 },
+      uPomScale: { value: 0.016 },
+      uPomFadeStart: { value: 15.0 },
+      uPomFadeEnd: { value: 40.0 },
       // T1 (2026-05-29) — per-code base tex_tiling (retail all 2). Falls back
       // to the all-1 LUT (atlasUvFor no-op) when the wasm fetch failed, so the
       // default-on path is fail-soft to the prior 1× render. The int[33]

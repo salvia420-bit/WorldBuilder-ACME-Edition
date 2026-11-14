@@ -101,10 +101,10 @@ impl SurfaceCategory {
             Self::Dirt => 0.026,
             Self::Sand => 0.022,
             Self::Generic => 0.026,
+            Self::Foliage => 0.015,
             Self::Metal
             | Self::Lava
             | Self::Water
-            | Self::Foliage
             | Self::Cloth
             | Self::Snow => 0.0,
         }
@@ -491,6 +491,7 @@ mod tests {
         let s = stats([0.25, 0.6, 0.2], [0.1; 3], 0.04, 110.0, 0.55);
         let c = classify(&s, surface_type_flags::BASE1_CLIP_MAP);
         assert_eq!(c, SurfaceCategory::Foliage);
+        assert_eq!(c.pom_depth_scale(), 0.015);
     }
 
     #[test]
@@ -499,6 +500,7 @@ mod tests {
         let s = stats([0.2, 0.55, 0.18], [0.1; 3], 0.035, 110.0, 0.65);
         let c = classify(&s, 0);
         assert_eq!(c, SurfaceCategory::Foliage);
+        assert_eq!(c.pom_depth_scale(), 0.015);
     }
 
     #[test]

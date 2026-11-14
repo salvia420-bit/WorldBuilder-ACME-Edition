@@ -528,12 +528,14 @@ const CATEGORY_NORMAL_SCALE_DEFAULTS = Object.freeze({
 
 const CATEGORY_MATERIAL_DEFAULTS = Object.freeze({
   [SURFACE_CATEGORY.Stone]: { roughness: 0.85, metalness: 0.0 },
+  [SURFACE_CATEGORY.Brick]: { roughness: 0.92, metalness: 0.0 },
+  [SURFACE_CATEGORY.Tile]: { roughness: 0.90, metalness: 0.0 },
   [SURFACE_CATEGORY.Wood]: { roughness: 0.8, metalness: 0.0 },
   [SURFACE_CATEGORY.Metal]: { roughness: 0.3, metalness: 0.9 },
   [SURFACE_CATEGORY.Sand]: { roughness: 0.95, metalness: 0.0 },
   [SURFACE_CATEGORY.Lava]: { roughness: 0.4, metalness: 0.0 },
   [SURFACE_CATEGORY.Foliage]: { roughness: 0.85, metalness: 0.0 },
-  // Water, Cloth, Dirt, Snow, Brick, Tile, Generic — fall through to
+  // Water, Cloth, Dirt, Snow, Generic — fall through to
   // the 0.9 / 0.0 defaults until Phase 1.5 overrides tune per DID.
 });
 
@@ -545,8 +547,8 @@ const CATEGORY_MATERIAL_DEFAULTS = Object.freeze({
  * (`0.014–0.040`), while sand, cloth, foliage, signs, and fluids stay flat (`0.0`).
  */
 export const CATEGORY_POM_DEPTH_SCALE = Object.freeze({
-  [SURFACE_CATEGORY.Stone]: 0.032,
-  [SURFACE_CATEGORY.Brick]: 0.032,
+  [SURFACE_CATEGORY.Stone]: 0.038,
+  [SURFACE_CATEGORY.Brick]: 0.040,
   [SURFACE_CATEGORY.Tile]: 0.028,
   [SURFACE_CATEGORY.Wood]: 0.024,
   [SURFACE_CATEGORY.Dirt]: 0.022,
@@ -555,7 +557,7 @@ export const CATEGORY_POM_DEPTH_SCALE = Object.freeze({
   [SURFACE_CATEGORY.Sand]: 0.0,
   [SURFACE_CATEGORY.Lava]: 0.0,
   [SURFACE_CATEGORY.Water]: 0.0,
-  [SURFACE_CATEGORY.Foliage]: 0.0,
+  [SURFACE_CATEGORY.Foliage]: 0.015,
   [SURFACE_CATEGORY.Cloth]: 0.0,
   [SURFACE_CATEGORY.Snow]: 0.0,
 });
@@ -567,6 +569,7 @@ export const POM_ELIGIBLE_CATEGORIES = new Set([
   SURFACE_CATEGORY.Wood,
   SURFACE_CATEGORY.Dirt,
   SURFACE_CATEGORY.Metal,
+  SURFACE_CATEGORY.Foliage,
 ]);
 
 /**
@@ -1936,7 +1939,7 @@ const POM_UNIFORM_DEFAULTS = Object.freeze({
   ultraSteps: 32,
   // Tangent-space depth scale. Per-category calibrated scales (0.022-0.040)
   // come from CATEGORY_POM_DEPTH_SCALE; 0.08 stays the explicit installer fallback.
-  depth: 0.08,
+  depth: 0.040,
   // Distance-based LOD ramp (camera-to-fragment, metres): 10m -> 22m bubble.
   lodNear: 10.0,
   lodFar: 22.0,
@@ -2051,10 +2054,10 @@ vec2 _pomUvG = vec2(0.0);${gradCommonDecl}
 
 vec2 _pomPerturbedUv(vec2 baseUv, vec3 vTanDir, float depthScale, int steps) {
   float _pz = max(abs(vTanDir.z), 0.18);
-  int baseSteps = min(8, max(4, steps));
+  int baseSteps = min(16, max(4, steps));
   int nSteps = baseSteps;
   if (uPomGraze > 0.5) {
-    nSteps = int(min(8.0, float(baseSteps) * clamp(1.0 / _pz, 1.0, 1.6) + 0.5));
+    nSteps = int(min(16.0, float(baseSteps) * clamp(1.0 / _pz, 1.0, 1.6) + 0.5));
   }
   vec2 rawShift = (vTanDir.xy / _pz) * depthScale;
   float maxShift = 1.15 * depthScale;
@@ -2068,7 +2071,7 @@ vec2 _pomPerturbedUv(vec2 baseUv, vec3 vTanDir, float depthScale, int steps) {
   vec2 currentUv = baseUv;
   float currentLayerDepth = 0.0;
   float currentHeight = 1.0 - ${samplePomHeight("currentUv")};
-  for (int i = 0; i < 8; i++) {
+  for (int i = 0; i < 16; i++) {
     if (i >= steps) break;
     if (currentLayerDepth >= currentHeight) break;
     currentUv -= uvStep;
@@ -2141,7 +2144,7 @@ if (_pomLod > 0.001) {
     : step(0.15, _pomTanZ);
   if (_pomGrazeW > 0.001) {
     float _pomAmt = _pomLod * _pomGrazeW;
-    int _pomEffSteps = min(8, max(4, uPomSteps));
+    int _pomEffSteps = min(16, max(4, uPomSteps));
     float _pomMid = mix(uPomLodNear, uPomLodFar, 0.5);
     if (_pomDist > _pomMid) {
       _pomEffSteps = 4;
@@ -2445,6 +2448,9 @@ if (uCreviceAoEnabled > 0.5) {
   #else
   vec2 _cBaseUv = vec2(0.0);
   #endif
+  if (_pomLodG > 0.001) {
+    _cBaseUv = _pomUvG;
+  }
 
   vec2 _cStep = max(fwidth(_cBaseUv), uCreviceAoTexelSize);
   float _cH0 = texture2D(uPomMap, _cBaseUv).r;
@@ -2467,16 +2473,20 @@ if (uCreviceAoEnabled > 0.5) {
 
   // Feature 7: Specular Edge Rim Highlighting along silhouettes
   #if !defined( FLAT_SHADED )
-  vec3 _cNorm = normalize(vNormal);
-  #ifdef DOUBLE_SIDED
-  _cNorm *= (gl_FrontFacing ? 1.0 : -1.0);
-  #endif
-  vec3 _cView = normalize(vViewPosition);
-  float _cDotNV = saturate(abs(dot(_cNorm, _cView)));
-  float _cEdgeRim = uRimGamma * max(0.0, _cDeltaH) * (1.0 - _cDotNV);
+  #if defined( STANDARD )
+  if (material.roughness < 0.85 || material.metalness >= 0.1) {
+    vec3 _cNorm = normalize(vNormal);
+    #ifdef DOUBLE_SIDED
+    _cNorm *= (gl_FrontFacing ? 1.0 : -1.0);
+    #endif
+    vec3 _cView = normalize(vViewPosition);
+    float _cDotNV = saturate(abs(dot(_cNorm, _cView)));
+    float _cEdgeRim = uRimGamma * max(0.0, _cDeltaH) * (1.0 - _cDotNV) * saturate(1.0 - material.roughness);
 
-  #if NUM_DIR_LIGHTS > 0
-  reflectedLight.directSpecular += _cEdgeRim * directionalLights[0].color;
+    #if NUM_DIR_LIGHTS > 0
+    reflectedLight.directSpecular += _cEdgeRim * directionalLights[0].color;
+    #endif
+  }
   #endif
   #endif
 }
@@ -7859,13 +7869,15 @@ export class MaterialCache {
           ? CATEGORY_POM_DEPTH_SCALE[category]
           : CATEGORY_POM_DEPTH_SCALE[SURFACE_CATEGORY.Generic];
       const hasRelief = nra.hasRelief !== undefined ? !!nra.hasRelief : (maxH - minH >= 6);
+      const isFoliage = category === SURFACE_CATEGORY.Foliage;
+      const hasCutoutBlocked = hasCutout && !isFoliage;
       const reliefEligible =
         hasRelief &&
         !isTranslucent &&
         !isAdditive &&
         !isAlpha &&
         !isLuminous &&
-        !hasCutout &&
+        !hasCutoutBlocked &&
         (catPomDepth > 0 || this.forcePom);
 
       let htex = null;

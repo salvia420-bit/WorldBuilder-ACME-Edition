@@ -401,9 +401,9 @@ export function statPomConfig() {
   let depth = 0.07;
   const isBrowserDom = typeof window !== "undefined" && typeof document !== "undefined";
   if (isBrowserDom) {
-    steps = Math.min(8, steps);
+    steps = Math.min(16, steps);
     shadowSteps = Math.min(2, shadowSteps);
-    depth = 0.048;
+    depth = 0.040;
   }
   try {
     if (typeof window !== "undefined" && window.location?.search) {
@@ -923,7 +923,7 @@ export function makeArrayMaterial(diffArray, stateKey, nraArray, arrays, csmStat
                 "\t\t\t} else if ( _pomVd > uStatPomNear ) {",
                 "\t\t\t\t_statEffSteps = max( 4, uStatPomSteps / 2 );",
                 "\t\t\t}",
-                "\t\t\t_statEffSteps = min( 8, max( 4, _statEffSteps ) );",
+                "\t\t\t_statEffSteps = min( 16, max( 4, _statEffSteps ) );",
                 "\t\t\tvec2 _rawShift = ( _pomV.xy / max( _pomV.z, 0.18 ) ) * ( uStatPomDepth * _statPomFade );",
                 "\t\t\tfloat _maxShift = 1.5 * uStatPomDepth * _statPomFade;",
                 "\t\t\tfloat _rawLen = length( _rawShift );",
@@ -933,7 +933,7 @@ export function makeArrayMaterial(diffArray, stateKey, nraArray, arrays, csmStat
                 "\t\t\tvec2 _pomUv = vMapUv;",
                 "\t\t\tfloat _pomLd = 0.0;",
                 "\t\t\tfloat _pomHd = 1.0 - _statPomHeightAt( _pomUv );",
-                "\t\t\tfor ( int i = 0; i < 8; i ++ ) {",
+                "\t\t\tfor ( int i = 0; i < 16; i ++ ) {",
                 "\t\t\t\tif ( i >= _statEffSteps || _pomLd >= _pomHd ) break;",
                 "\t\t\t\t_pomUv -= _pomStep;",
                 "\t\t\t\t_pomLd += _pomLayerStep;",
@@ -1023,9 +1023,8 @@ export function makeArrayMaterial(diffArray, stateKey, nraArray, arrays, csmStat
           "#include <aomap_fragment>",
           [
             // Micro-crevice cavity AO: operates at all distances independent of POM raymarching
-            "\tfloat _statCavity = clamp( 1.0 - uStatCreviceAo * 1.5 * ( 1.0 - _statNraTexel.a ), 0.0, 1.0 );",
-            `\tfloat ambientOcclusion = ( _statNraTexel.a - 1.0 ) * ${aoMapIntensityValue().toFixed(3)} + 1.0;`,
-            "\tambientOcclusion *= _statCavity;",
+            "\tfloat _statCavity = clamp( 1.0 - uStatCreviceAo * 2.0 * smoothstep( 0.4, 0.0, _statNraTexel.a ), 0.0, 1.0 );",
+            "\tfloat ambientOcclusion = _statCavity;",
             "\treflectedLight.indirectDiffuse *= ambientOcclusion;",
             "\t#if defined( USE_ENVMAP ) && defined( STANDARD )",
             "\t\tfloat dotNV = saturate( dot( normal, geometryViewDir ) );",
@@ -1036,7 +1035,8 @@ export function makeArrayMaterial(diffArray, stateKey, nraArray, arrays, csmStat
             "\t#if NUM_DIR_LIGHTS > 0",
             "\tif ( uStatEdgeRim > 0.001 ) {",
             "\t\tfloat _statSil = 1.0 - abs( dot( geometryNormal, geometryViewDir ) );",
-            "\t\tfloat _statRim = max( 0.0, _statNraTexel.a - 0.7 ) * ( _statSil * _statSil * _statSil );",
+            "\t\tfloat _statRoughMod = clamp( 1.0 - _statNraTexel.b, 0.0, 1.0 );",
+            "\t\tfloat _statRim = max( 0.0, _statNraTexel.a - 0.7 ) * ( _statSil * _statSil * _statSil ) * _statRoughMod;",
             "\t\treflectedLight.directSpecular += _statRim * uStatEdgeRim * directionalLights[ 0 ].color;",
             "\t}",
             // POM 2-tap horizon + crevice self-shadow toward dominant sun direction

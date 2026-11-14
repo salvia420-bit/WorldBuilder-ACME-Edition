@@ -569,6 +569,11 @@ fn chamfer_dt_wrapped(dist: &mut [f32], wu: usize, hu: usize) {
 ///
 /// Empty-return semantics are identical to [`seam_height`].
 pub fn relief_height(rgba: &[u8], w: u32, h: u32) -> Vec<f32> {
+    relief_height_with_pillow(rgba, w, h, PILLOW_FRAC)
+}
+
+/// Relief height with an explicit pillow fraction (`PILLOW_FRAC`).
+pub fn relief_height_with_pillow(rgba: &[u8], w: u32, h: u32, pillow_frac: f32) -> Vec<f32> {
     let Some((mut t, alpha)) = seam_t(rgba, w, h) else {
         return Vec::new();
     };
@@ -598,7 +603,7 @@ pub fn relief_height(rgba: &[u8], w: u32, h: u32) -> Vec<f32> {
         t.iter().map(|&ti| 1.0 - ti).collect()
     } else {
         chamfer_dt_wrapped(&mut dist, wu, hu);
-        let r = (PILLOW_FRAC * wu.min(hu) as f32).max(2.0);
+        let r = (pillow_frac * wu.min(hu) as f32).max(2.0);
         (0..n)
             .map(|i| {
                 // Cutout texels stay EXACTLY flat (never carve an alpha card),
@@ -751,7 +756,10 @@ pub fn micro_height(class: ReliefClass, w: u32, h: u32, seed: u32, dir_u: bool) 
     };
     let (field, amp): (Vec<f32>, f32) = match class {
         // rough-cut granular stone/brick face
-        ReliefClass::Stone | ReliefClass::Brick | ReliefClass::Shingle => {
+        ReliefClass::Stone | ReliefClass::Brick => {
+            (mix2(octave(16, 16, seed), 0.6, octave(32, 32, seed ^ 0x51), 0.4), 0.05)
+        }
+        ReliefClass::Shingle => {
             (mix2(octave(16, 16, seed), 0.6, octave(32, 32, seed ^ 0x51), 0.4), 0.12)
         }
         // wood fiber: long cells along the grain, short across it
@@ -795,7 +803,8 @@ pub const MICRO_DETAIL_MIX: f32 = 0.65;
 /// Per-class micro amplitude (the `amp` inside [`micro_height`]'s match).
 fn micro_amp(class: ReliefClass) -> f32 {
     match class {
-        ReliefClass::Stone | ReliefClass::Brick | ReliefClass::Shingle => 0.12,
+        ReliefClass::Stone | ReliefClass::Brick => 0.05,
+        ReliefClass::Shingle => 0.12,
         ReliefClass::Timber | ReliefClass::Plank => 0.10,
         ReliefClass::Cloth => 0.05,
         ReliefClass::Flush => 0.06,
@@ -869,7 +878,7 @@ pub fn grain_dir_u(rgba: &[u8], w: u32, h: u32) -> bool {
 
 /// The 100%-coverage entry point: MACRO (seam + pillow, class-gated) composed
 /// with MICRO (class-keyed synthesized grain). Returns empty ONLY for classes
-/// that must stay flat (Foliage alpha cards) or malformed input — every other
+/// that must stay flat (solid Foliage without cutouts) or malformed input — every other
 /// surface now carries relief.
 pub fn relief_height_classed(
     rgba: &[u8],
@@ -894,10 +903,18 @@ pub fn relief_height_classed(
         return relief_height(rgba, w, h);
     };
     if cls == ReliefClass::Foliage {
-        return Vec::new();
+        return foliage_relief_height(rgba, w, h);
     }
     // Classified painted flats suppress the macro; architectural classes keep it.
-    let macro_field = if cls.allows_macro() { relief_height(rgba, w, h) } else { Vec::new() };
+    let macro_field = if cls.allows_macro() {
+        let pillow_frac = match cls {
+            ReliefClass::Brick => 0.045,
+            _ => PILLOW_FRAC,
+        };
+        relief_height_with_pillow(rgba, w, h, pillow_frac)
+    } else {
+        Vec::new()
+    };
     let dir_u = match cls {
         ReliefClass::Timber | ReliefClass::Plank => grain_dir_u(rgba, w, h),
         _ => true,
@@ -933,6 +950,82 @@ pub fn relief_height_classed(
             .map(|(m, u)| (m - (1.0 - u)).clamp(0.0, 1.0))
             .collect(),
     }
+}
+
+/// Derives 3D depth for foliage alpha cards (leaves, needles, fronds, branches)
+/// from the alpha cutout boundary.
+///
+/// 1. Seeds distance at 0.0 for cutout texels (`alpha < ALPHA_CUT`), INF for opaque texels.
+/// 2. Propagates distances into the interior using [`chamfer_dt_wrapped`].
+/// 3. Normalizes interior distance to `[0.0, 1.0]` against `max_d`.
+/// 4. Modulates the pillow dome with the texture's fine dark-detail luminance
+///    using [`MICRO_DETAIL_MIX`] (0.65) to carve leaf veins, ribs, and palm striations:
+///    `height = pillow * (1.0 - MICRO_DETAIL_MIX) + vein_luma * MICRO_DETAIL_MIX`.
+/// 5. Cutout texels strictly evaluate to 0.0.
+/// 6. Fully opaque textures (no cutout) or fully transparent textures return empty (flat).
+pub fn foliage_relief_height(rgba: &[u8], w: u32, h: u32) -> Vec<f32> {
+    let wu = w as usize;
+    let hu = h as usize;
+    let n = wu.saturating_mul(hu);
+    if n == 0 || rgba.len() < n.saturating_mul(4) || wu < 2 || hu < 2 {
+        return Vec::new();
+    }
+
+    const INF: f32 = 1e9;
+    let mut dist = vec![INF; n];
+    let mut cutout_count = 0usize;
+    let mut opaque_count = 0usize;
+
+    for i in 0..n {
+        let a = rgba[i * 4 + 3] as f32 / 255.0;
+        if a < ALPHA_CUT {
+            dist[i] = 0.0;
+            cutout_count += 1;
+        } else {
+            opaque_count += 1;
+        }
+    }
+
+    // A texture with no alpha cutout (solid opaque) or entirely transparent
+    // has no cutout boundary to pillow from; leave it flat.
+    if cutout_count == 0 || opaque_count == 0 {
+        return Vec::new();
+    }
+
+    chamfer_dt_wrapped(&mut dist, wu, hu);
+
+    let mut max_d = 0.0f32;
+    for i in 0..n {
+        let a = rgba[i * 4 + 3] as f32 / 255.0;
+        if a >= ALPHA_CUT && dist[i] > max_d && dist[i] < INF {
+            max_d = dist[i];
+        }
+    }
+
+    if max_d <= 0.0 {
+        return Vec::new();
+    }
+
+    let mut out = vec![0.0f32; n];
+    for i in 0..n {
+        let a = rgba[i * 4 + 3] as f32 / 255.0;
+        if a < ALPHA_CUT {
+            out[i] = 0.0;
+        } else {
+            let p = if dist[i] < INF {
+                (dist[i] / max_d).clamp(0.0, 1.0)
+            } else {
+                1.0
+            };
+            let r = rgba[i * 4] as f32 / 255.0;
+            let g = rgba[i * 4 + 1] as f32 / 255.0;
+            let b = rgba[i * 4 + 2] as f32 / 255.0;
+            let vein_luma = (0.299 * r + 0.587 * g + 0.114 * b).clamp(0.0, 1.0);
+            out[i] = (p * (1.0 - MICRO_DETAIL_MIX) + vein_luma * MICRO_DETAIL_MIX).clamp(0.0, 1.0);
+        }
+    }
+
+    out
 }
 
 /// Tangent-space normal map derived from a seam height field, as RGB8 with the
@@ -1500,6 +1593,57 @@ mod tests {
             assert_eq!(ReliefClass::from_code(c), Some(want));
         }
         assert_eq!(ReliefClass::from_code(b'Z'), None);
+    }
+
+    #[test]
+    fn classed_foliage_alpha_cutout_pillows_and_carves_veins() {
+        // 32x32 texture with an alpha cutout card (outer 4 pixels border is transparent)
+        let w = 32u32;
+        let h = 32u32;
+        let mut rgba = vec![0u8; (w * h * 4) as usize];
+        for y in 0..h {
+            for x in 0..w {
+                let idx = ((y * w + x) * 4) as usize;
+                if x < 4 || x >= 28 || y < 4 || y >= 28 {
+                    // Transparent cutout margin
+                    rgba[idx + 3] = 0;
+                } else {
+                    // Opaque leaf interior
+                    rgba[idx + 3] = 255;
+                    if x == 16 {
+                        // Central dark leaf vein (luma ~0.15)
+                        rgba[idx] = 38;
+                        rgba[idx + 1] = 38;
+                        rgba[idx + 2] = 38;
+                    } else {
+                        // Bright green leaf blade (luma ~0.85)
+                        rgba[idx] = 217;
+                        rgba[idx + 1] = 217;
+                        rgba[idx + 2] = 217;
+                    }
+                }
+            }
+        }
+
+        let hf = relief_height_classed(&rgba, w, h, Some(ReliefClass::Foliage), 42);
+        assert!(!hf.is_empty(), "foliage cutout must produce relief heightfield");
+
+        // Transparent cutout pixels must strictly be 0.0
+        assert_eq!(hf[0], 0.0, "corner cutout must be 0.0");
+        assert_eq!(hf[(2 * w + 2) as usize], 0.0, "border cutout must be 0.0");
+
+        // Central vein vs adjacent leaf blade
+        let center_vein = hf[(16 * w + 16) as usize];
+        let blade_beside = hf[(16 * w + 15) as usize];
+
+        assert!((0.40..=0.50).contains(&center_vein), "vein height ~0.4475: got {center_vein}");
+        assert!(blade_beside > 0.85, "leaf blade high relief: got {blade_beside}");
+        assert!(blade_beside - center_vein > 0.35, "vein carving contrast");
+
+        // Inner edge just inside cutout boundary
+        let inner_edge = hf[(16 * w + 4) as usize];
+        assert!(inner_edge > 0.0, "inner edge positive height");
+        assert!(inner_edge < blade_beside, "height rises from boundary to center");
     }
 
     #[test]

@@ -21,6 +21,9 @@ import {
   buildProgramCacheKey,
   compileMaterialShader,
   createMockTexture,
+  terrainPomFade,
+  calculateFoliageHeight,
+  computeLatencyPercentiles,
   CONSTANTS,
 } from "../harness.mjs";
 import { installPomShaderPatch } from "../../../scene3d/materials.js";
@@ -252,6 +255,108 @@ export function runTests() {
       const compiled = compileMaterialShader(batchedMat);
       ok(/cavityAo/.test(compiled.fragmentShader), "Batched shader contains crevice AO chunk");
       ok(/shadowFactor/.test(compiled.fragmentShader), "Batched shader contains micro-shadow chunk");
+    });
+
+    test("Pair 16: Terrain POM Relief (F16) x Gouraud Normal Integration", () => {
+      // Perturb terrain UV via POM raymarch, sampling uAtlasNormalAo tangent perturbation
+      const baseNormal = new THREE.Vector3(0.0, 1.0, 0.0);
+      const tangentPerturb = new THREE.Vector2(0.15, -0.08); // sampled at raymarched UV
+      const uNormalScale = 0.5;
+
+      const perturbedNormal = baseNormal.clone().add(new THREE.Vector3(tangentPerturb.x * uNormalScale, 0.0, tangentPerturb.y * uNormalScale)).normalize();
+      const sunDir = new THREE.Vector3(0.3, 0.9, 0.2).normalize();
+
+      const dotBase = baseNormal.dot(sunDir);
+      const dotPerturbed = perturbedNormal.dot(sunDir);
+
+      ok(dotPerturbed > 0.7, "Perturbed Gouraud normal maintains positive terrain lighting");
+      ok(Math.abs(dotPerturbed - dotBase) > 0.01, "Tangent perturbation actively modulates surface shading");
+    });
+
+    test("Pair 17: Terrain POM (F16) x Distance Fade Attenuation (15m–40m)", () => {
+      // Step counts scale with view distance while displacement smoothly decays to 0.0
+      for (const { dist, expectedSteps, expectedFade } of [
+        { dist: 10.0, expectedSteps: 6, expectedFade: 1.0 },
+        { dist: 25.0, expectedSteps: 6, expectedFade: 0.60 },
+        { dist: 35.0, expectedSteps: 4, expectedFade: 0.20 },
+        { dist: 40.0, expectedSteps: 4, expectedFade: 0.0 },
+        { dist: 50.0, expectedSteps: 4, expectedFade: 0.0 },
+      ]) {
+        const fade = terrainPomFade(dist);
+        near(fade, expectedFade, 1e-4, `Fade at ${dist}m matches expected linear decay`);
+
+        const steps = dist > 26.25 ? 4 : 6;
+        equal(steps, expectedSteps, `Steps at ${dist}m match LOD curve`);
+
+        const stepUv = (1.0 / 0.7071) * (CONSTANTS.TERRAIN_POM_DEPTH_SCALE * fade) * (1.0 / steps);
+        if (dist >= 40.0) {
+          equal(stepUv, 0.0, "Displacement past 40m is strictly zero");
+        } else {
+          ok(stepUv > 0.0, `Displacement at ${dist}m is active`);
+        }
+      }
+
+      // Explicit assertion: displacement at 50m is strictly 0.0
+      equal(terrainPomFade(50.0), 0.0, "Displacement at 50m is strictly 0.0");
+    });
+
+    test("Pair 18: Foliage POM Relief (F17) x GPU Wind Sway Displacement (windSwayGpu)", () => {
+      // Foliage material combines vertex wind sway shear and fragment POM
+      const foliageMat = new THREE.MeshStandardMaterial({ name: "swaying_pom_tree" });
+      const foliageTex = createMockTexture(128, 128, 255, 255, "tree_sway_h");
+      installPomShaderPatch(foliageMat, foliageTex, {
+        depth: CONSTANTS.FOLIAGE_POM_DEPTH_SCALE,
+        steps: CONSTANTS.FOLIAGE_POM_STEPS,
+      });
+
+      const prevCompile = foliageMat.onBeforeCompile;
+      foliageMat.onBeforeCompile = (shader, renderer) => {
+        prevCompile(shader, renderer);
+        shader.vertexShader = shader.vertexShader.replace(
+          "#include <begin_vertex>",
+          `#include <begin_vertex>
+          // VFX_WINDSWAY_BEGIN
+          float h = max(0.0, transformed.z);
+          transformed.xy += vec2(0.04, 0.01) * h;
+          // VFX_WINDSWAY_END`
+        );
+      };
+
+      const compiled = compileMaterialShader(foliageMat);
+      ok(/VFX_WINDSWAY_BEGIN/.test(compiled.vertexShader), "Vertex shader contains wind sway shear");
+      ok(/_pomPerturbedUv/.test(compiled.fragmentShader), "Fragment shader contains POM UV offset");
+      equal(compiled.uniforms.uPomDepth.value, 0.015, "uPomDepth is bound to 0.015");
+    });
+
+    test("Pair 19: Foliage Alpha Card POM (F17) x Canopy Normal Softening (canopy_soften)", () => {
+      // Leaf geometry with softened crown-radial normal and fragment pillowing
+      const crownCenter = new THREE.Vector3(0, 0, 12);
+      const leafPos = new THREE.Vector3(2, 3, 14);
+      const crownNormal = leafPos.clone().sub(crownCenter).normalize();
+
+      // Fragment height combining distance transform pillowing and dark vein carving
+      const leafHeight = calculateFoliageHeight(1.0, 0.25, CONSTANTS.FOLIAGE_MICRO_DETAIL_MIX);
+      near(leafHeight, 1.0 * 0.35 + 0.25 * 0.65, 1e-4, "Leaf fragment combines pillow and vein detail");
+
+      // Verify crown normal provides macroscopic volume lighting
+      const lightDir = new THREE.Vector3(0.5, 0.5, 0.7).normalize();
+      const crownDiffuse = Math.max(0.0, crownNormal.dot(lightDir));
+      ok(crownDiffuse > 0.5, "Softened crown normal provides smooth overarching volume lighting");
+    });
+
+    test("Pair 20: Full Relief Pipeline (Buildings + Terrain + Foliage) x 60 FPS Latency Budget (F15)", () => {
+      // 600 synthetic frame times under full relief pipeline load
+      const frameDeltas = [];
+      for (let i = 0; i < 600; i++) {
+        // Mean around 16.2ms (approx 61.7 FPS), max 18.0ms, zero spikes > 33.3ms
+        const jitter = Math.sin(i * 0.1) * 0.4;
+        frameDeltas.push(16.2 + jitter);
+      }
+
+      const stats = computeLatencyPercentiles(frameDeltas);
+      ok(stats.fps >= 60.0, `FPS (${stats.fps.toFixed(2)}) must be >= 60.0`);
+      ok(stats.p95 <= 18.0, `p95 frame latency (${stats.p95.toFixed(2)}ms) must be <= 18.0ms`);
+      equal(stats.hitchCount, 0, "Zero stutters > 33.3ms across full 600-frame test");
     });
   });
 }

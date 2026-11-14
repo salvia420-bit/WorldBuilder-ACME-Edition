@@ -41,6 +41,18 @@ export const CONSTANTS = {
   // Specular Rim Highlighting
   EDGE_RIM_DEFAULT_GAMMA: 0.5,
 
+  // Terrain POM & Lighting (R3)
+  TERRAIN_POM_DEPTH_SCALE: 0.016,
+  TERRAIN_LOD_NEAR: 15.0,
+  TERRAIN_LOD_FAR: 40.0,
+  TERRAIN_POM_STEPS_NEAR: 6,
+  TERRAIN_POM_STEPS_FAR: 4,
+
+  // Foliage & Arbory 3D Depth (R4)
+  FOLIAGE_POM_DEPTH_SCALE: 0.015,
+  FOLIAGE_POM_STEPS: 16,
+  FOLIAGE_MICRO_DETAIL_MIX: 0.65,
+
   // ModelGate Remodel Thresholds
   MODELGATE_LEGACY: Object.freeze({
     min_bbox_extent_m: 4.0,
@@ -81,6 +93,49 @@ export function pomLodAtDistance(dist, lodNear = CONSTANTS.POM_LOD_NEAR_EXTENDED
   if (dist <= lodNear) return 1.0;
   if (dist >= lodFar) return 0.0;
   return 1.0 - smoothstep(lodNear, lodFar, dist);
+}
+
+/**
+ * Terrain POM linear distance fade factor.
+ * Returns 1.0 at and below lodNear (15.0m), linearly fading to 0.0 at lodFar (40.0m).
+ */
+export function terrainPomFade(dist, near = CONSTANTS.TERRAIN_LOD_NEAR, far = CONSTANTS.TERRAIN_LOD_FAR) {
+  if (dist <= near) return 1.0;
+  if (dist >= far) return 0.0;
+  return 1.0 - Math.max(0.0, Math.min(1.0, (dist - near) / Math.max(far - near, 1e-3)));
+}
+
+/**
+ * Foliage composite heightfield oracle:
+ * Combines distance-transform pillowing with vein dark-detail carving.
+ * Cutout transparent margins (pillowH <= 0.0) strictly evaluate to 0.0.
+ */
+export function calculateFoliageHeight(pillowH, veinLuma, microMix = CONSTANTS.FOLIAGE_MICRO_DETAIL_MIX) {
+  if (pillowH <= 0.0) return 0.0;
+  const p = Math.max(0.0, Math.min(1.0, pillowH));
+  const v = Math.max(0.0, Math.min(1.0, veinLuma));
+  return Math.max(0.0, Math.min(1.0, p * (1.0 - microMix) + v * microMix));
+}
+
+/**
+ * Terrain layer relief height oracle:
+ * Evaluates height channel from NRA array, falling back to albedo luma on curated codes.
+ */
+export function terrainLayerReliefH(code, uv = [0, 0], nraSampler = null, atlasSampler = null) {
+  const c = Math.max(0, Math.min(32, Math.floor(code)));
+  const nra = typeof nraSampler === "function" ? nraSampler(c, uv) : null;
+  const hasNraA = nra && typeof nra.a === "number" && !Number.isNaN(nra.a);
+  const nraA = hasNraA ? Math.max(0.0, Math.min(1.0, nra.a)) : null;
+
+  if (hasNraA && nraA < 0.995) {
+    return nraA;
+  }
+  if (c === 32 || c === 0 || c === 13 || c === 14) {
+    const a = typeof atlasSampler === "function" ? atlasSampler(c, uv) : { r: 0.5, g: 0.5, b: 0.5, a: 1.0 };
+    const luma = a.r * 0.299 + a.g * 0.587 + a.b * 0.114;
+    return Math.max(0.0, Math.min(1.0, 0.32 + 0.62 * Math.sqrt(Math.max(luma, 0.0))));
+  }
+  return hasNraA ? nraA : 1.0;
 }
 
 /**
@@ -126,6 +181,41 @@ export function passesModelGate(modelProps, gate = CONSTANTS.MODELGATE_RELAXED) 
     modelProps.median_edge_m >= gate.min_median_edge_m &&
     modelProps.total_area_m2 >= gate.min_area_m2 &&
     modelProps.double_sided_frac <= gate.max_double_sided_frac
+  );
+}
+
+/**
+ * Compute terrain POM raymarching step count based on camera view depth.
+ */
+export function computeTerrainPomSteps(viewDepth, fadeStart = CONSTANTS.TERRAIN_LOD_NEAR, fadeEnd = CONSTANTS.TERRAIN_LOD_FAR) {
+  const midThreshold = fadeStart + (fadeEnd - fadeStart) * 0.45; // 26.25m
+  return viewDepth > midThreshold ? CONSTANTS.TERRAIN_POM_STEPS_FAR : CONSTANTS.TERRAIN_POM_STEPS_NEAR;
+}
+
+/**
+ * Evaluate whether material properties qualify for POM relief.
+ */
+export function evaluateReliefEligible(props, opts = { foliageRelief: true }) {
+  const isTranslucent = !!props.isTranslucent;
+  const isAdditive = !!props.isAdditive;
+  const isAlpha = !!props.isAlpha;
+  const isLuminous = !!props.isLuminous;
+  const isClipMap = !!props.isClipMap;
+  const isFoliage = props.category === "Foliage";
+  const hasRelief = props.hasRelief !== undefined ? props.hasRelief : true;
+
+  // Base1ClipMap is unblocked specifically for foliage under foliageRelief
+  const hasCutout = isClipMap && !(opts.foliageRelief && isFoliage);
+  const catPomDepth = isFoliage ? CONSTANTS.FOLIAGE_POM_DEPTH_SCALE : (props.depthScale || 0.0);
+
+  return (
+    hasRelief &&
+    !isTranslucent &&
+    !isAdditive &&
+    !isAlpha &&
+    !isLuminous &&
+    !hasCutout &&
+    catPomDepth > 0
   );
 }
 
