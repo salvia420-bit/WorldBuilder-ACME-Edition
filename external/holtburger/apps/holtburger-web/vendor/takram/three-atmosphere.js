@@ -1963,21 +1963,23 @@ void mainImage(const vec4 inputColor, const vec2 uv, out vec4 outputColor) {
   shadowLength = texture(shadowLengthBuffer, uv).r;
   #endif // HAS_SHADOW_LENGTH
 
-  #ifdef HAS_OVERLAY
-  vec4 overlay = texture(overlayBuffer, uv);
-  if (overlay.a == 1.0) {
-    outputColor = overlay;
-    return;
-  }
-  #endif // HAS_OVERLAY
-
   vec3 rayDirection = normalize(vRayDirection);
   vec3 dRDdx = dFdx(rayDirection);
   vec3 dRDdy = dFdy(rayDirection);
   float fragmentAngle = length(dRDdx + dRDdy) / length(rayDirection);
 
   float depth = readDepthValue(depthBuffer, uv);
-  if (depth >= 1.0 - 1e-8) {
+  bool isSkyDepth = depth >= 1.0 - 1e-8;
+
+  #ifdef HAS_OVERLAY
+  vec4 overlay = texture(overlayBuffer, uv);
+  if (isSkyDepth && overlay.a == 1.0) {
+    outputColor = overlay;
+    return;
+  }
+  #endif // HAS_OVERLAY
+
+  if (isSkyDepth) {
     #ifdef SKY
     outputColor.rgb = getSkyRadiance(
       vCameraPosition,
@@ -2012,6 +2014,17 @@ void mainImage(const vec4 inputColor, const vec2 uv, out vec4 outputColor) {
   vec3 worldPosition = (inverseViewMatrix * vec4(viewPosition, 1.0)).xyz;
   vec3 positionECEF = (worldToECEFMatrix * vec4(worldPosition, 1.0)).xyz;
   positionECEF = positionECEF * METER_TO_LENGTH_UNIT + vGeometryAltitudeCorrection;
+
+  #ifdef HAS_OVERLAY
+  // Sub-cloud terrain silhouette guard: when both camera and surface sit below the
+  // lowest cloud base (~600 m storm / 750 m fair), sphere convexity guarantees no
+  // cloud can lie on the camera-to-surface segment; suppress bilinear upsample bleed.
+  float hbCameraHeightM = (length(vCameraPosition) - ATMOSPHERE.bottom_radius) / METER_TO_LENGTH_UNIT;
+  float hbSurfaceHeightM = (length(positionECEF) - ATMOSPHERE.bottom_radius) / METER_TO_LENGTH_UNIT;
+  if (max(hbCameraHeightM, hbSurfaceHeightM) < 550.0) {
+    overlay = vec4(0.0);
+  }
+  #endif // HAS_OVERLAY
 
   vec3 viewNormal;
   bool degenerateNormal = false;

@@ -39,7 +39,7 @@ import { AtmosphereParameters } from '@takram/three-atmosphere';
 // W3 (2026-05-29): the weather-state UPDATE (updateFromDayGroup /
 // weatherForState) lives in loop.js::tickWeatherState (clouds-independent).
 // This module only READS the storm flag (real DayGroup SkyObject signal).
-import { readWeatherFlags } from './weather_state.js';
+import { readWeatherFlags, readWeatherCloudCoupling, setCloudOverheadFactor } from './weather_state.js';
 import {
   applyCloudLook, applyContinuousWeatherLook, cloudLayersMatchLook, cloudHighBandEnabled, cloudHighBandWant,
   cloudHighBandMarchEnabled, CLOUD_HIGH_BAND_MARCH, CLOUD_HIGH_BAND_SHAFTS_MUL, applyHighBandMarch, restoreHighBandMarch,
@@ -54,11 +54,13 @@ import {
   cloudNightColor,
   cloudNightLevel,
   cloudNightAmbientRadiance,
+  cloudLightningSheetRadiance,
   CLOUD_SHADOW_STRENGTH_DEFAULT,
   DISPLAY_EXPOSURE_DEFAULT,
 } from './cloud_night.js';
 import { rustFlag } from './rust/scene_core.js';
 import { ecefAnchorForWorld } from './altitude_policy.js';
+import { cloudEdgeResolveEnabled, cloudEdgeGamma, installCloudEdgeResolve } from './cloud_edge_resolve.js';
 // Lane F2 (2026-10-26) — `?hotTerrainShared` (DEFAULT OFF): the terrain cloud
 // shadow uniforms as one shared `{value}` each (scene3d/terrain_shared_uniforms.js).
 import {
@@ -538,25 +540,14 @@ export class CloudVolume {
     // graph / modulepreload block); the resolve material recompiles once if it
     // had already been compiled. Grammar = cloud_edge_resolve.js.
     this._edgeResolve = null;
-    let edgeOn = false;
-    try {
-      const v = (new URLSearchParams(window.location.search).get('cloudEdgeResolve') || '').trim().toLowerCase();
-      edgeOn = !(v === 'off' || v === '0' || v === 'false' || v === 'no');
-    } catch (_) { edgeOn = true; }
-    if (edgeOn) {
-      import('./cloud_edge_resolve.js').then((m) => {
-        if (!m.cloudEdgeResolveEnabled()) return;
-        this._edgeResolve = m.installCloudEdgeResolve(this.effect, THREE, { gamma: m.cloudEdgeGamma() });
-        if (this._edgeResolve) {
-          try { window.__cloudEdgeResolve = this._edgeResolve; } catch (_) {}
-          // eslint-disable-next-line no-console
-          console.log('[clouds] cloudEdgeResolve ON — depth-aware resolve, edge gamma=' +
-            this._edgeResolve.stats().gamma);
-        }
-      }).catch((e) => {
+    if (cloudEdgeResolveEnabled()) {
+      this._edgeResolve = installCloudEdgeResolve(this.effect, THREE, { gamma: cloudEdgeGamma() });
+      if (this._edgeResolve) {
+        try { window.__cloudEdgeResolve = this._edgeResolve; } catch (_) {}
         // eslint-disable-next-line no-console
-        console.warn('[clouds] cloudEdgeResolve: module load failed — NOT installed', e);
-      });
+        console.log('[clouds] cloudEdgeResolve ON — depth-aware resolve, edge gamma=' +
+          this._edgeResolve.stats().gamma);
+      }
     }
 
     // Weather drift (2026-08-01, owner: "the pattern shouldn't be frozen in
@@ -662,6 +653,18 @@ export class CloudVolume {
     // ally (covers a session that boots mid-storm).
     this._stormLookApplied = undefined;
     this._wxFlags = { is_storm: false, temperature_C: NaN };
+    this._wxCoupling = {
+      cloud_sheet_flash: 0,
+      strike_x: 0,
+      strike_y: 800,
+      strike_z: 0,
+    };
+    this._lightningRadScratch = [0, 0, 0];
+    this._cpuWxTex = null;
+    this._cpuWxGrid = null;
+    this._cpuWxSize = 64;
+    this._lastOverheadFactor = 1.0;
+    this._lastDenseAzimuth = 0.0;
     // Look bookkeeping for `window.__cloudStateDiag().look` (2026-10-17): how
     // often and why the look was (re)applied, last few applies.
     this._lookApplies = 0;
@@ -871,6 +874,11 @@ export class CloudVolume {
 
     if (cloudHighBandEnabled()) this._tickHighBandMarch();
 
+    // Bidirectional cloud <-> weather coupling:
+    //  1) Drive internal volumetric cloud-sheet lightning illumination when a strike flashes.
+    //  2) Sample overhead cloud density at camera XZ and publish to weather_state.
+    this._syncLightningAndOverheadWeather(u);
+
     // Cloud-shadow push to terrain moved to CloudOverlay.preRender so
     // it runs AFTER composer.render fills the cascade matrices for
     // THIS frame. Pushing here would copy last-frame's matrix into
@@ -973,11 +981,206 @@ export class CloudVolume {
       return false;
     }
     m.fragmentShader = fs
-      .replace(UNI, UNI + '\nuniform vec3 cloudNightAmbient; // 2026-10-07 cloudNight art night floor')
-      .replace(SKY, SKY + '\n      radiance += cloudNightAmbient * skyGradient;');
+      .replace(
+        UNI,
+        UNI +
+          '\nuniform vec3 cloudNightAmbient; // 2026-10-07 cloudNight art night floor' +
+          '\nuniform vec3 cloudLightningRadiance;' +
+          '\nuniform vec4 cloudLightningOffset;'
+      )
+      .replace(
+        SKY,
+        SKY +
+          '\n      radiance += cloudNightAmbient * skyGradient;' +
+          '\n      if (cloudLightningOffset.w > 0.0) {' +
+          '\n        vec3 dl = (rayDistance + rayNearFar.x) * rayDirection - cloudLightningOffset.xyz;' +
+          '\n        float lAtten = 1.0 / (1.0 + dot(dl, dl) * cloudLightningOffset.w);' +
+          '\n        lAtten *= lAtten;' +
+          '\n        float lCore = mix(1.25, 0.45, skyGradient) * (0.30 + 0.70 * exp(-media.extinction * 18.0));' +
+          '\n        radiance += cloudLightningRadiance * (lAtten * lCore);' +
+          '\n      }'
+      );
     m.uniforms.cloudNightAmbient = new THREE.Uniform(new THREE.Vector3());
+    m.uniforms.cloudLightningRadiance = new THREE.Uniform(new THREE.Vector3());
+    m.uniforms.cloudLightningOffset = new THREE.Uniform(new THREE.Vector4(0, 0, 0, 0));
     m.needsUpdate = true;
     return true;
+  }
+
+  /**
+   * Lazily build a compact 64x64 RGBA CPU weather-map grid from `effect.localWeatherTexture`
+   * (zero GPU readbacks; rasterized once when the weather image/data arrives).
+   */
+  _ensureCpuWeatherGrid() {
+    const tex = this.effect?.localWeatherTexture ?? null;
+    if (!tex) return null;
+    if (tex === this._cpuWxTex && this._cpuWxGrid) return this._cpuWxGrid;
+    const img = tex.image;
+    if (!img) return null;
+    const N = this._cpuWxSize;
+    // Case A: DataTexture / typed-array image (unit tests or procedural data)
+    if (img.data && ArrayBuffer.isView(img.data) && img.width > 0 && img.height > 0) {
+      const grid = new Uint8Array(N * N * 4);
+      const sw = img.width | 0, sh = img.height | 0;
+      const stride = img.data.length >= sw * sh * 4 ? 4 : Math.max(1, Math.floor(img.data.length / (sw * sh)));
+      for (let y = 0; y < N; y++) {
+        const sy = Math.min(sh - 1, Math.floor(((y + 0.5) / N) * sh));
+        for (let x = 0; x < N; x++) {
+          const sx = Math.min(sw - 1, Math.floor(((x + 0.5) / N) * sw));
+          const si = (sy * sw + sx) * stride;
+          const di = (y * N + x) * 4;
+          grid[di] = img.data[si] ?? 180;
+          grid[di + 1] = stride > 1 ? (img.data[si + 1] ?? grid[di]) : grid[di];
+          grid[di + 2] = stride > 2 ? (img.data[si + 2] ?? 0) : 0;
+          grid[di + 3] = stride > 3 ? (img.data[si + 3] ?? grid[di]) : grid[di];
+        }
+      }
+      this._cpuWxTex = tex;
+      this._cpuWxGrid = grid;
+      return grid;
+    }
+    // Case B: HTMLImageElement / ImageBitmap / HTMLCanvasElement in browser
+    if (typeof document !== 'undefined' && typeof document.createElement === 'function') {
+      const w = img.naturalWidth || img.width || 0;
+      const h = img.naturalHeight || img.height || 0;
+      if (w > 0 && h > 0 && (img.complete !== false)) {
+        try {
+          const cv = document.createElement('canvas');
+          cv.width = N;
+          cv.height = N;
+          const ctx2d = cv.getContext('2d', { willReadFrequently: true });
+          if (ctx2d) {
+            ctx2d.drawImage(img, 0, 0, N, N);
+            const id = ctx2d.getImageData(0, 0, N, N);
+            this._cpuWxTex = tex;
+            this._cpuWxGrid = new Uint8Array(id.data.buffer.slice(0));
+            return this._cpuWxGrid;
+          }
+        } catch (_) {
+          // Tainted or unsupported image stub — fall through cleanly.
+        }
+      }
+    }
+    return null;
+  }
+
+  _sampleWeatherGridAtWorld(worldX, worldZ) {
+    const grid = this._ensureCpuWeatherGrid();
+    const eff = this.effect;
+    const cov = typeof eff?.coverage === 'number' ? eff.coverage : 0.5;
+    if (!grid) return -1;
+    const N = this._cpuWxSize;
+    const offX = eff?.localWeatherOffset?.x ?? 0;
+    const offY = eff?.localWeatherOffset?.y ?? 0;
+    const repX = eff?.localWeatherRepeat?.x ?? 1;
+    const repY = eff?.localWeatherRepeat?.y ?? 1;
+    // Matches takram local_weather tile scale (~90 km per tile, north = -worldZ)
+    let u = ((worldX / 90000) * repX + offX) % 1;
+    let v = (((-worldZ) / 90000) * repY + offY) % 1;
+    if (u < 0) u += 1;
+    if (v < 0) v += 1;
+    const gx = u * N - 0.5;
+    const gy = v * N - 0.5;
+    const x0 = ((Math.floor(gx) % N) + N) % N;
+    const y0 = ((Math.floor(gy) % N) + N) % N;
+    const x1 = (x0 + 1) % N;
+    const y1 = (y0 + 1) % N;
+    const fx = gx - Math.floor(gx);
+    const fy = gy - Math.floor(gy);
+    const layers = eff?.cloudLayers;
+    const wR = layers?.[0]?.densityScale > 0 ? 0.40 : 0.25;
+    const wG = layers?.[1]?.densityScale > 0 ? 0.35 : 0.25;
+    const wA = layers?.[3]?.densityScale > 0.01 ? 0.55 : 0.15;
+    const cellVal = (ix, iy) => {
+      const idx = (iy * N + ix) * 4;
+      const r = grid[idx] / 255;
+      const g = grid[idx + 1] / 255;
+      const a = grid[idx + 3] / 255;
+      return Math.max(r * wR + g * wG, a * wA + 0.5 * (r + g) * 0.5);
+    };
+    const c00 = cellVal(x0, y0), c10 = cellVal(x1, y0);
+    const c01 = cellVal(x0, y1), c11 = cellVal(x1, y1);
+    const raw = (c00 * (1 - fx) + c10 * fx) * (1 - fy) + (c01 * (1 - fx) + c11 * fx) * fy;
+    // Remap by active cloud coverage so higher coverage yields denser overhead factor
+    return Math.min(1, Math.max(0, (raw * 1.15 + (cov - 0.30) * 0.85)));
+  }
+
+  /**
+   * Overhead cloud density / transmittance factor [0..1] at `(worldX, worldZ)`
+   * (defaults to camera XZ, and returns `1.0` when volumetric clouds are disabled
+   * or weather map is not yet resident).
+   */
+  getOverheadCloudFactor(worldX, worldZ) {
+    const eff = this.effect;
+    if (!eff) return 1.0;
+    const cam = eff.camera;
+    const wx = Number.isFinite(worldX) ? worldX : (cam?.position?.x ?? 0);
+    const wz = Number.isFinite(worldZ) ? worldZ : (cam?.position?.z ?? 0);
+    const sampled = this._sampleWeatherGridAtWorld(wx, wz);
+    if (sampled >= 0) {
+      this._lastOverheadFactor = sampled;
+      return sampled;
+    }
+    this._lastOverheadFactor = 1.0;
+    return 1.0;
+  }
+
+  /**
+   * Scan 8 azimuths at `radiusM` around `(worldX, worldZ)` on the cloud weather map
+   * and return the azimuth (radians in Three.js XZ plane) of the densest storm cell.
+   */
+  sampleDenseCloudAzimuth(worldX, worldZ, radiusM = 950) {
+    const grid = this._ensureCpuWeatherGrid();
+    if (!grid) return this._lastDenseAzimuth;
+    let bestAz = this._lastDenseAzimuth;
+    let bestVal = -1;
+    for (let i = 0; i < 8; i++) {
+      const az = (i * Math.PI) / 4;
+      const sx = worldX + Math.cos(az) * radiusM;
+      const sz = worldZ + Math.sin(az) * radiusM;
+      const v = this._sampleWeatherGridAtWorld(sx, sz);
+      if (v > bestVal) {
+        bestVal = v;
+        bestAz = az;
+      }
+    }
+    this._lastDenseAzimuth = bestAz;
+    return bestAz;
+  }
+
+  _syncLightningAndOverheadWeather(u) {
+    const cc = readWeatherCloudCoupling(this._wxCoupling);
+    if (u?.cloudLightningRadiance && u?.cloudLightningOffset) {
+      const flash = cc.cloud_sheet_flash;
+      if (flash > 0.001) {
+        cloudLightningSheetRadiance(flash, this._displayExposure, this._lightningRadScratch);
+        u.cloudLightningRadiance.value.set(
+          this._lightningRadScratch[0] * 0.34,
+          this._lightningRadScratch[1] * 0.36,
+          this._lightningRadScratch[2] * 0.44
+        );
+        const cam = this.effect?.camera;
+        const cx = cam?.position?.x ?? 0;
+        const cy = cam?.position?.y ?? 0;
+        const cz = cam?.position?.z ?? 0;
+        // 1 / (460m)^2 localized storm-cell anvil glow around strike core
+        u.cloudLightningOffset.value.set(
+          cc.strike_x - cx,
+          cc.strike_y - cy,
+          cc.strike_z - cz,
+          1.0 / (460 * 460)
+        );
+      } else if (u.cloudLightningOffset.value.w !== 0) {
+        u.cloudLightningRadiance.value.set(0, 0, 0);
+        u.cloudLightningOffset.value.set(0, 0, 0, 0);
+      }
+    }
+    const cam = this.effect?.camera;
+    const wx = cam?.position?.x ?? 0;
+    const wz = cam?.position?.z ?? 0;
+    const factor = this.getOverheadCloudFactor(wx, wz);
+    const az = this.sampleDenseCloudAzimuth(wx, wz, 950);
+    setCloudOverheadFactor(factor, az);
   }
 
   /**

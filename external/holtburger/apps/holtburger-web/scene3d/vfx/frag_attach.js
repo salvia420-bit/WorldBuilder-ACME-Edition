@@ -23,7 +23,7 @@
 // graph) + registry.js (the component contract). frag_install.js is imported by
 // statics.js at the seam, NOT here, so this module + its test stand alone.
 
-import { vfxDescriptorFor, windResponds } from "../vfx_catalog.js";
+import { vfxDescriptorFor, windRespondsGpu } from "../vfx_catalog.js";
 import { getComponent, FAMILY_ORDER } from "./registry.js";
 import { splitConfig as _splitConfig, mergeComponentConfig } from "./config_merge.js";
 // GPU instanced tree sway (?treeWindGpu, default-ON). tree_wind imports nothing
@@ -57,39 +57,40 @@ export { mergeComponentConfig };
  * @param {object|null} descriptor  vfxDescriptorFor(did) result
  * @returns {Array<{comp:object, config:object}>}  sorted; [] when none
  */
-export function fragEntriesForDescriptor(descriptor) {
+export function fragEntriesForDescriptor(descriptor, did = 0) {
   const ids = descriptor && descriptor.componentIds;
-  if (!ids || typeof ids.forEach !== "function") return [];
-  const split = _splitConfig(descriptor.config);
+  const hasIds = !!(ids && typeof ids.forEach === "function");
+  if (!descriptor && !(did >>> 0)) return [];
+  const split = _splitConfig(descriptor ? descriptor.config : null);
   const out = [];
-  ids.forEach((id) => {
-    const comp = getComponent(id);
-    // P2 — admit BOTH the fragment seam ("frag") AND the MECH-B vertex seam ("B")
-    // so a single descriptor SET (e.g. [deformation.tipFlex (B), emissive.glint
-    // (frag)]) resolves as ONE plan -> ONE getCachedVariant -> ONE __vfxSetKey.
-    // installVfxComponentPatch dispatches each entry to its own shader seam by
-    // comp.mech; the comp.enabled gate below still drops a component when its
-    // per-effect flag is off (tipFlex -> ?tipFlex), so widening membership never
-    // forces an effect on. FAMILY_ORDER puts deformation(0) before emissive(3) ->
-    // the vertex patch is installed before the frag patch on the shared chain.
-    if (!comp || (comp.mech !== "frag" && comp.mech !== "B")) return; // not a patchable comp
-    if (typeof comp.enabled === "function" && !comp.enabled()) return; // per-effect flag (slice 14)
-    out.push({ comp, config: mergeComponentConfig(comp, split) });
-  });
-  // GPU instanced tree sway (?treeWindGpu, default-ON, MECH-B). The baked catalog
-  // tags wind-responsive foliage with the MECH-A deformation.windBend (the keyframe
-  // peel, which de-instances → 1 fps); we add the MECH-B windSwayGpu component at
-  // RUNTIME (no re-bake) so the SAME windResponds() DIDs the old default-on peel
-  // animated now bend in the vertex shader on the frozen INSTANCED material. The
-  // component's enabled gate stands down under the CPU peel paths / ?treeWindGpu=off,
-  // so this never double-bends. It's a "B" mech → the install path patches the
-  // vertex shader, and FAMILY_ORDER (deformation=0) sorts it first below.
-  if (windSwayGpuEnabled() && windResponds(descriptor)) {
+  if (hasIds) {
+    ids.forEach((id) => {
+      const comp = getComponent(id);
+      // P2 — admit BOTH the fragment seam ("frag") AND the MECH-B vertex seam ("B")
+      // so a single descriptor SET (e.g. [deformation.tipFlex (B), emissive.glint
+      // (frag)]) resolves as ONE plan -> ONE getCachedVariant -> ONE __vfxSetKey.
+      // installVfxComponentPatch dispatches each entry to its own shader seam by
+      // comp.mech; the comp.enabled gate below still drops a component when its
+      // per-effect flag is off (tipFlex -> ?tipFlex), so widening membership never
+      // forces an effect on. FAMILY_ORDER puts deformation(0) before emissive(3) ->
+      // the vertex patch is installed before the frag patch on the shared chain.
+      if (!comp || (comp.mech !== "frag" && comp.mech !== "B")) return; // not a patchable comp
+      if (typeof comp.enabled === "function" && !comp.enabled()) return; // per-effect flag (slice 14)
+      out.push({ comp, config: mergeComponentConfig(comp, split) });
+    });
+  }
+  // GPU instanced tree/palm/coastal sway (?treeWindGpu, default-ON, MECH-B).
+  // Uses `windRespondsGpu(descriptor, did)` so single-part `foliage-pollen` trees,
+  // coastal shrubs (`partCount >= 1`, `maxDimension >= 0.8m`), and allowlisted
+  // unclassified/stolen palms (e.g. `0x02000325`, `0x02001065`) all receive
+  // GPU vertex sway without altering legacy CPU `hasWindBend`.
+  if (windSwayGpuEnabled() && windRespondsGpu(descriptor, did)) {
     const ws = getComponent("deformation.windSwayGpu");
-    if (ws && !out.some((e) => e.comp === ws)) {
+    if (ws && (typeof ws.enabled !== "function" || ws.enabled()) && !out.some((e) => e.comp === ws)) {
       out.push({ comp: ws, config: mergeComponentConfig(ws, split) });
     }
   }
+  if (out.length === 0) return out;
   // FAMILY_ORDER-major, id-minor — stable + matches the chain composition order.
   out.sort((a, b) => {
     const d = _orderKey(a.comp) - _orderKey(b.comp);
@@ -110,7 +111,7 @@ export function fragEntriesForDescriptor(descriptor) {
  * @returns {{entries:Array<{comp,config}>, ids:string[]}|null}
  */
 export function fragPlanForDid(did) {
-  const entries = fragEntriesForDescriptor(vfxDescriptorFor(did));
+  const entries = fragEntriesForDescriptor(vfxDescriptorFor(did), did);
   if (entries.length === 0) return null;
   return { entries, ids: entries.map((e) => e.comp.id) };
 }
@@ -118,5 +119,5 @@ export function fragPlanForDid(did) {
 /** True if a DID's descriptor carries ≥1 registered FRAG component (diagnostics
  *  parity with vfx_catalog.hasWindBend; e.g. for the gauge / stats). */
 export function isFragDid(did) {
-  return fragEntriesForDescriptor(vfxDescriptorFor(did)).length > 0;
+  return fragEntriesForDescriptor(vfxDescriptorFor(did), did).length > 0;
 }

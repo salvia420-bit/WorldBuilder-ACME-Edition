@@ -9,6 +9,11 @@
 
 import { mountFullscreenControl } from "./fullscreen_toggle.js";
 import { bandwidthSetting, setBandwidthSetting, bandwidthTier } from "../scene3d/bandwidth_tier.js";
+import {
+  isWeatherEnabled,
+  setWeatherEnabled,
+  onWeatherEnabledChange,
+} from "../scene3d/visual_options.js";
 
 const LS_KEY = "holtburger_graphics_v1";
 const QUALITY_EVENT = "hb-quality-changed";
@@ -69,6 +74,8 @@ const EXTRA_DEFAULTS = Object.freeze({
   vitalsOrbs: true,
   orbScale: 0.72,
   chatFade: false,
+  // Live cloud-associated weather effects toggle (snow, rain, lightning)
+  weatherEffects: true,
 });
 
 export function loadGraphicsState() {
@@ -174,6 +181,14 @@ function applyRenderScaleLive(scale) {
 export function reapplyLiveGraphics() {
   const s = loadGraphicsState();
   applyRenderScaleLive(Number(s.extras.renderScale) || 1);
+  try {
+    if (typeof localStorage !== "undefined" && localStorage) {
+      const rawW = localStorage.getItem("holtburger_weather_enabled_v1");
+      if (rawW === "true" || rawW === "1" || rawW === "false" || rawW === "0") {
+        setWeatherEnabled(rawW === "true" || rawW === "1", { syncServer: false, persist: false });
+      }
+    }
+  } catch (_) {}
   if (typeof document !== "undefined") {
     const orbsRoot = document.getElementById("hb-vitals-orbs");
     if (orbsRoot && s.extras.orbScale) {
@@ -339,6 +354,17 @@ export function renderGraphicsTab(containerEl, { onAnyChange } = {}) {
   containerEl.appendChild(boolRow("Volumetric clouds", effective.clouds, (v) => {
     setQualityFlag(state, "clouds", v); markDirty();
   }, { hint: "Enables volumetric cloud raymarching (required for light shafts)." }));
+  const weatherRow = boolRow("Weather effects", isWeatherEnabled(), (v) => {
+    setExtra(state, "weatherEffects", v);
+    setWeatherEnabled(v);
+  }, { hint: "Snow, rain, lightning, and storm effects (applies immediately)." });
+  const weatherCb = typeof weatherRow.querySelector === "function"
+    ? weatherRow.querySelector('input[type="checkbox"]')
+    : (weatherRow.children || []).find((c) => c && c.tagName === "INPUT");
+  const unsubWeather = onWeatherEnabledChange((enabled) => {
+    if (weatherCb) weatherCb.checked = !!enabled;
+  });
+  containerEl.appendChild(weatherRow);
 
   // --- Post-processing -----------------------------------------------------
   containerEl.appendChild(makeSectionHeader("Post-processing"));
@@ -455,6 +481,7 @@ export function renderGraphicsTab(containerEl, { onAnyChange } = {}) {
   resetBtn.addEventListener("click", () => {
     clearOverrides(state);
     applyRenderScaleLive(EXTRA_DEFAULTS.renderScale);
+    setWeatherEnabled(EXTRA_DEFAULTS.weatherEffects);
     renderGraphicsTab(containerEl, { onAnyChange });
     containerEl.__hbGraphicsMarkDirty?.();
   });
@@ -467,6 +494,7 @@ export function renderGraphicsTab(containerEl, { onAnyChange } = {}) {
     // or removed. The fullscreen control attaches a document-level
     // `fullscreenchange` listener that outlives containerEl, so it needs
     // an explicit dispose to avoid stacking listeners on every re-render.
+    unsubWeather();
     disposeFullscreen();
     if (containerEl.__hbGraphicsDispose === dispose) containerEl.__hbGraphicsDispose = null;
   }

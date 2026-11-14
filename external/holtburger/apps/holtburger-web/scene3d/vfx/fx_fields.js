@@ -50,11 +50,27 @@ import { nightFactorFromAuthoredPitch } from "../night_ramp.js";
 import { viewerIndoorOr } from "../viewer_cell.js";
 import { treeWindDir, treeWindStrength } from "../tree_wind.js";
 import { registerLateFxSource, registerFxGlowExtras } from "../particles_over_clouds.js";
+import { isWeatherEnabled, readVisualOptions } from "../visual_options.js";
 
 /** Terrain codes that read as woodland floor (leaves): forestfloor, Moss, DarkMoss. */
 export const FX_FOREST_CODES = Object.freeze([21, 28, 29]);
+/** Minimum camera-box fraction of FAM_VOLCANO (lava, code 25) required to emit embers/volcanic ash (Item 7). */
+export const VOLCANO_BOX_MIN_FRAC = 0.16;
 const GRID = 9;
 const GRID_SPAN_M = 40;
+
+let _weatherSystemDelegated = false;
+/** Mark whether the revamped multi-layer `weather_system.js` owns snowfall. */
+export function setFxFieldsSnowDelegated(delegated) {
+  _weatherSystemDelegated = !!delegated;
+}
+export function isFxFieldsSnowDelegated() {
+  if (_weatherSystemDelegated) return true;
+  try {
+    if (typeof window !== "undefined" && window.__weatherSystem && !window.__weatherSystem._disposed) return true;
+  } catch (_) { /* fail-soft */ }
+  return false;
+}
 
 /**
  * The fields. `box` is the camera-centred volume (AC metres: x, y, z); a
@@ -82,7 +98,7 @@ export const FX_FIELDS = Object.freeze([
  * @param {number} night 0 day .. 1 night
  * @param {boolean} indoor
  */
-export function fxFieldDensities(cov, night, indoor) {
+export function fxFieldDensities(cov, night, indoor, opts) {
   const c = (k) => Math.min(1, Math.max(0, +cov?.[k] || 0));
   const n = Math.min(1, Math.max(0, Number.isFinite(night) ? night : 0));
   const out = { fireflies: 0, dust: 0, pollen: 0, leaves: 0, snow: 0, ash: 0, embers: 0 };
@@ -90,7 +106,11 @@ export function fxFieldDensities(cov, night, indoor) {
   const nightOn = Math.min(1, Math.max(0, (n - 0.38) / 0.34));
   const dayOn = 1 - Math.min(1, Math.max(0, (n - 0.2) / 0.4));
   const forestEff = Math.min(1, c("forest") + c("lush") * 0.45 + c("canopy") * 0.65);
-  const volcTotal = c("volcano") + c("ash");
+  const volcRaw = c("volcano");
+  const volcEff = volcRaw >= VOLCANO_BOX_MIN_FRAC
+    ? (volcRaw - VOLCANO_BOX_MIN_FRAC) / (1 - VOLCANO_BOX_MIN_FRAC)
+    : 0;
+  const volcTotal = volcEff + c("ash");
   const coastal = c("water") > 0.08 && c("swamp") < 0.15 && volcTotal === 0
     ? Math.min(1, Math.min(c("grass") * 1.4, c("water") * 2.2))
     : 0;
@@ -98,7 +118,8 @@ export function fxFieldDensities(cov, night, indoor) {
   out.fireflies = nightOn * Math.min(1, (c("grass") + 1.6 * c("swamp") + 0.85 * forestEff + 0.6 * c("water")) * 1.4);
   out.pollen = dayOn * Math.min(1, c("grass") * 0.9 + forestEff * 0.55);
   out.leaves = Math.min(1, Math.max(forestEff * 1.2 + c("grass") * 0.12, coastal * 0.82));
-  out.snow = Math.min(1, c("snow") * 1.1 + ridge * 0.78);
+  const suppressSnow = opts?.suppressSnow !== undefined ? !!opts.suppressSnow : isFxFieldsSnowDelegated();
+  out.snow = suppressSnow ? 0 : Math.min(1, c("snow") * 1.1 + ridge * 0.78);
   const volcAsh = volcTotal * 1.2;
   const marshMist = volcAsh > 0 ? 0 : Math.min(1, Math.max(0, (c("swamp") - 0.06) * 1.35));
   const surfSpray = volcAsh > 0 || marshMist > 0.15 ? 0 : Math.min(0.85, coastal * 0.85);
@@ -106,7 +127,7 @@ export function fxFieldDensities(cov, night, indoor) {
     ? 0
     : Math.min(0.9, Math.max(0, (c("sand") - 0.08) * 1.25));
   out.ash = Math.min(1, Math.max(volcAsh, marshMist, surfSpray, sandWisp));
-  out.embers = Math.min(1, c("volcano") * 1.2);
+  out.embers = Math.min(1, volcEff * 1.2);
   return out;
 }
 
@@ -578,7 +599,11 @@ function _syncFieldBiomeUniforms(fields, cov, night, ease) {
   const sand = Math.min(1, Math.max(0, +cov?.sand || 0));
   const ridge = Math.min(1, Math.max(0, +cov?.ridge || 0));
   const snow = Math.min(1, Math.max(0, +cov?.snow || 0));
-  const volc = Math.min(1, (+cov?.volcano || 0) + (+cov?.ash || 0));
+  const volcRaw = Math.min(1, Math.max(0, +cov?.volcano || 0));
+  const volcEff = volcRaw >= VOLCANO_BOX_MIN_FRAC
+    ? (volcRaw - VOLCANO_BOX_MIN_FRAC) / (1 - VOLCANO_BOX_MIN_FRAC)
+    : 0;
+  const volc = Math.min(1, volcEff + (+cov?.ash || 0));
   const coastal = water > 0.08 && swamp < 0.15 && volc === 0
     ? Math.min(1, Math.min(grass * 1.4, water * 2.2))
     : 0;
@@ -713,7 +738,10 @@ export function createFxFieldsProvider() {
       const canopyShade = (!indoor && night > 0.14 && (+_coverage.canopy || 0) > 0.25)
         ? Math.min(1, night + (+_coverage.canopy || 0) * 0.18)
         : night;
-      const dens = fxFieldDensities(_coverage, canopyShade, indoor);
+      const handle = ctx?.scene3d?.sessionHandle ?? (typeof window !== "undefined" ? window.__sessionHandle : null);
+      const weatherOff = !isWeatherEnabled(handle) || readVisualOptions(handle, tSec * 1000).weatherOff;
+      const suppressSnow = weatherOff || isFxFieldsSnowDelegated() || Boolean(ctx?.scene3d?.weatherSystem);
+      const dens = fxFieldDensities(_coverage, canopyShade, indoor, { suppressSnow });
       _shared.uLight.value = indoor ? 0.55 : Math.max(0.16, 1 - 0.78 * night);
       const rdr = ctx.scene3d?.renderer;
       if (rdr && typeof rdr.getDrawingBufferSize === "function") {
@@ -729,6 +757,12 @@ export function createFxFieldsProvider() {
       _syncFieldBiomeUniforms(_fields, _coverage, night, Math.min(1, stepDt * 1.6));
       for (const f of _fields) {
         const d = dens[f.def.id] || 0;
+        if (f.def.id === "snow" && suppressSnow) {
+          f.density = 0;
+          f.own.uDensity.value = 0;
+          f.mesh.visible = false;
+          continue;
+        }
         // ease towards the target so a field never pops (~1.5 s)
         f.density += (d - f.density) * ease;
         if (f.density < 0.002 && d === 0) f.density = 0;
@@ -824,6 +858,7 @@ export function initFxFields(opts = {}) {
 
 /** Test seam. */
 export function _resetFxFieldsForTest() {
+  _weatherSystemDelegated = false;
   if (_handle) { try { _handle.unregister(); } catch (_) {} }
   _handle = null;
   if (_group && _group.parent) _group.parent.remove(_group);

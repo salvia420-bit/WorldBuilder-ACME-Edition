@@ -138,6 +138,14 @@ export function hudPanelsOff() { return state().panels; }
 export function hudOrbsOff() { return state().orbs; }
 /** `?hudCanvases=off`: the radar blip canvas not displayed and not drawn. */
 export function hudCanvasesOff() { return state().canvases; }
+/** True when HUD chrome controls (such as the HUD weather toggle) should be shown. */
+export function hudWeatherControlVisible(doc = (typeof document !== "undefined" ? document : null)) {
+  if (state().panels) return false;
+  try {
+    if (doc?.documentElement?.classList?.contains?.("no-hud")) return false;
+  } catch (_) {}
+  return true;
+}
 
 // ── the bisect stylesheet ─────────────────────────────────────────────────
 

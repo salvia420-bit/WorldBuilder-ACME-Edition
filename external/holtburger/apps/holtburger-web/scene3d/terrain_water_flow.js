@@ -637,7 +637,7 @@ export const WATER_FLOW_MAIN_GLSL = `
   float waterPhaseW = 1.0;
   float waterFoam = 0.0;
   float waterFlowSpeed = 0.0;
-  if (uWaterFlow.x > 0.5 && uWaterScrollEnabled > 0.5 && cellTouchesWater) {
+  if (uWaterFlow.x > 0.5 && uWaterScrollEnabled > 0.5 && (cellTouchesWater || slimeCascadeCell)) {
     float qw00 = (1.0 - fu) * (1.0 - fv);
     float qw10 = fu * (1.0 - fv);
     float qw01 = (1.0 - fu) * fv;
@@ -646,7 +646,11 @@ export const WATER_FLOW_MAIN_GLSL = `
                  + waterFlowAt(iu, iv + 1) * qw01 + waterFlowAt(iu + 1, iv + 1) * qw11) * uWaterFlow.y;
     waterFoam = waterFoamAt(iu, iv) * qw00 + waterFoamAt(iu + 1, iv) * qw10
               + waterFoamAt(iu, iv + 1) * qw01 + waterFoamAt(iu + 1, iv + 1) * qw11;
-    vec2 gpFlow = vec2(vWorldPos.x, -vWorldPos.z);
+    vec2 fallDir = length(waterGeomN.xy) > 1e-4 ? normalize(waterGeomN.xy) : vec2(0.0, -1.0);
+    float steepCascade = max(waterfallSlope, float(slimeCascadeCell) * smoothstep(0.18, 0.45, 1.0 - clamp(waterGeomN.z, 0.0, 1.0)));
+    vec2 waterfallVertShift = fallDir * (vWorldPos.y * steepCascade);
+    vec2 gpFlow = vec2(vWorldPos.x, -vWorldPos.z) - waterfallVertShift;
+    flowMs += fallDir * (steepCascade * 6.5);
     float bakedSpeed = length(flowMs);
     if (uWaterFlow.w > 0.0 && bakedSpeed < 0.25) {
       // Two independent mean-zero noises: an eddy with no preferred heading,
@@ -660,8 +664,8 @@ export const WATER_FLOW_MAIN_GLSL = `
     float period = uWaterFlow.z;
     float ph0 = fract(uTime / period + fragValueNoise2D(gpFlow * 0.03));
     float ph1 = fract(ph0 + 0.5);
-    waterOffA = flowMs * (period * ph0);
-    waterOffB = flowMs * (period * ph1);
+    waterOffA = flowMs * (period * ph0) + waterfallVertShift;
+    waterOffB = flowMs * (period * ph1) + waterfallVertShift;
     // No fixed offset between the two taps: where the flow is ~0 they sample
     // the same texel and the cross-fade cannot pulse (still water stays still).
     waterCellUv = fract(cellUv - waterOffA * (1.0 / 24.0));
@@ -696,8 +700,11 @@ export const WATER_FOAM_APPLY_GLSL = `
   // ?waterFlow — whitewater: the baked foam (fall faces, the water at a fall's
   // foot, rapids) plus anything running fast, as soft white patches carried by
   // the same two phases as the texture, so they ride the flow downstream.
-  if (uWaterFoam.x > 0.0 && waterW > 0.0) {
-    float foamAmt = clamp((waterFoam + smoothstep(uWaterFoam.y, uWaterFoam.z, waterFlowSpeed))
+  float effFoamWaterW = clamp(waterW + slimeCascadeW, 0.0, 1.0);
+  if (uWaterFoam.x > 0.0 && effFoamWaterW > 0.0) {
+    float cascadeSlopeBoost = max(waterfallSlope, slimeCascadeW);
+    float foamAmt = clamp((waterFoam + smoothstep(uWaterFoam.y, uWaterFoam.z, waterFlowSpeed)
+                          + cascadeSlopeBoost * 0.68)
                           * uWaterFoam.x, 0.0, 1.0);
     if (foamAmt > 0.004) {
       vec2 gpFoam = vec2(vWorldPos.x, -vWorldPos.z);
@@ -706,12 +713,26 @@ export const WATER_FOAM_APPLY_GLSL = `
       float fnA = fragValueNoise2D(fpA) + 0.5 * fragValueNoise2D(fpA * 3.1);
       float fnB = fragValueNoise2D(fpB) + 0.5 * fragValueNoise2D(fpB * 3.1);
       float fn = mix(fnB, fnA, waterPhaseW);
+      if (cascadeSlopeBoost > 0.01) {
+        vec2 fAxis = length(waterGeomN.xy) > 1e-4 ? normalize(waterGeomN.xy) : vec2(0.0, -1.0);
+        vec2 fPerp = vec2(-fAxis.y, fAxis.x);
+        vec2 sUvA = vec2(dot(gpFoam - waterOffA, fPerp) * 1.85,
+                         (dot(gpFoam, fAxis) - vWorldPos.y - length(waterOffA)) * 0.24);
+        vec2 sUvB = vec2(dot(gpFoam - waterOffB, fPerp) * 1.85,
+                         (dot(gpFoam, fAxis) - vWorldPos.y - length(waterOffB)) * 0.24);
+        float ribA = fragValueNoise2D(sUvA) + 0.55 * fragValueNoise2D(sUvA * vec2(2.7, 1.4));
+        float ribB = fragValueNoise2D(sUvB) + 0.55 * fragValueNoise2D(sUvB * vec2(2.7, 1.4));
+        float rib = mix(ribB, ribA, waterPhaseW);
+        fn = mix(fn, 0.36 + 0.85 * rib, cascadeSlopeBoost * 0.84);
+      }
       // Coverage grows with the amount (peaks only -> nearly all); the colour
       // keeps the noise's light and shade so full whitewater is not a flat sheet.
       float lo = 0.3 - 0.8 * foamAmt;
       float cover = smoothstep(lo, lo + 0.3, fn);
-      vec3 foamCol = vec3(0.78, 0.84, 0.86) * (0.88 + 0.35 * fn);
-      result = mix(result, foamCol, cover * foamAmt * 0.9 * waterW);
+      vec3 flatFoamCol = vec3(0.78, 0.84, 0.86) * (0.88 + 0.35 * fn);
+      vec3 cascadeFoamCol = vec3(0.84, 0.95, 0.99) * (0.94 + 0.32 * fn);
+      vec3 foamCol = mix(flatFoamCol, cascadeFoamCol, cascadeSlopeBoost);
+      result = mix(result, foamCol, cover * foamAmt * 0.92 * effFoamWaterW);
     }
     // Dual-phase animated shoreline lapping foam where waterW crosses 0.15..0.55.
     if (uWaterScrollEnabled > 0.5 && waterW > 0.12 && waterW < 0.60 && vViewDepth < 240.0) {

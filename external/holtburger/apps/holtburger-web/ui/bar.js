@@ -2,12 +2,19 @@ import { renderGraphicsTab } from "./graphics_settings.js";
 import { renderCameraTab } from "./camera_settings.js";
 import { resolveLocalBinding, matchesBinding, LOCAL_ACTION_IDS } from "./keymap.js";
 import { escapeHtml } from "./ac_html.js";
+import { hudWeatherControlVisible } from "./hud_diet.js";
+import {
+  isWeatherEnabled,
+  toggleWeatherEnabled,
+  onWeatherEnabledChange,
+} from "../scene3d/visual_options.js";
 
 const STYLE_ID = "hb-bar-style";
 const BAR_CLASS = "hb-bar";
 const PANEL_CLASS = "hb-panel";
 const SETTINGS_CLASS = "hb-settings";
 const PILL_CLASS = "hb-pill";
+const WEATHER_PILL_ID = "hb-weather-pill";
 
 // localStorage key — versioned (_v1) so future schema changes can reset cleanly.
 const LS_KEY = "holtburger_ui_bar_v1";
@@ -385,7 +392,32 @@ const CSS = `
     opacity: 1;
     filter: brightness(1.2);
   }
+  .hb-bar-weather svg,
+  .hb-weather-pill svg {
+    width: 66%;
+    height: 66%;
+    display: block;
+    pointer-events: none;
+  }
+  .hb-bar-weather.is-weather-off,
+  .hb-weather-pill.is-weather-off {
+    opacity: 0.52;
+    filter: grayscale(0.45);
+  }
+  .hb-weather-pill.active {
+    opacity: 0.86;
+  }
+  .hb-bar-weather .hb-weather-slash,
+  .hb-weather-pill .hb-weather-slash {
+    display: none;
+  }
+  .hb-bar-weather.is-weather-off .hb-weather-slash,
+  .hb-weather-pill.is-weather-off .hb-weather-slash {
+    display: inline;
+  }
 `;
+
+const WEATHER_ICON_SVG = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7.5 16.5h9.2a3.8 3.8 0 0 0 .5-7.56A5.2 5.2 0 0 0 7.1 7.6 4.1 4.1 0 0 0 7.5 16.5Z"/><line x1="9" y1="19" x2="8" y2="21.2"/><line x1="13" y1="19" x2="12" y2="21.2"/><line x1="17" y1="19" x2="16" y2="21.2"/><line class="hb-weather-slash" x1="4" y1="4" x2="20" y2="20" stroke="#f09070" stroke-width="2.3"/></svg>`;
 
 function ensureStyle() {
   if (document.getElementById(STYLE_ID)) return;
@@ -585,6 +617,8 @@ export function mountBar({ client, root, slots: slotsOpt }) {
   if (existingSettings) existingSettings.remove();
   const existingPill = root.querySelector(`.${PILL_CLASS}`);
   if (existingPill) existingPill.remove();
+  const existingWeatherPill = root.querySelector(`#${WEATHER_PILL_ID}`);
+  if (existingWeatherPill) existingWeatherPill.remove();
 
   const state = loadState();
   const save = makeSaver();
@@ -648,12 +682,32 @@ export function mountBar({ client, root, slots: slotsOpt }) {
   sep.setAttribute("aria-hidden", "true");
   bar.appendChild(sep);
 
-  for (let i = 0; i < 2; i++) {
-    const placeholder = document.createElement("div");
-    placeholder.className = "hb-bar-slot-empty";
-    placeholder.setAttribute("aria-hidden", "true");
-    bar.appendChild(placeholder);
+  const placeholder = document.createElement("div");
+  placeholder.className = "hb-bar-slot-empty";
+  placeholder.setAttribute("aria-hidden", "true");
+  bar.appendChild(placeholder);
+
+  // Weather toggle icon on HUD bar — toggles snow, rain, and lightning effects live.
+  const weatherBtn = document.createElement("button");
+  weatherBtn.type = "button";
+  weatherBtn.id = "hb-bar-weather";
+  weatherBtn.className = "hb-bar-icon hb-bar-weather";
+  weatherBtn.dataset.action = "toggle-weather";
+  weatherBtn.title = "Toggle Weather Effects";
+  weatherBtn.setAttribute("aria-label", "Toggle Weather Effects");
+  const weatherGlyph = document.createElement("span");
+  weatherGlyph.className = "hb-bar-weather-glyph";
+  weatherGlyph.style.cssText = "display:flex;align-items:center;justify-content:center;width:100%;height:100%;pointer-events:none;";
+  weatherGlyph.innerHTML = WEATHER_ICON_SVG;
+  weatherBtn.appendChild(weatherGlyph);
+  const weatherTip = document.createElement("span");
+  weatherTip.className = "hb-bar-tooltip";
+  weatherTip.textContent = "Toggle Weather Effects";
+  weatherBtn.appendChild(weatherTip);
+  if (!hudWeatherControlVisible()) {
+    weatherBtn.style.display = "none";
   }
+  bar.appendChild(weatherBtn);
 
   // Gear icon at end of bar — opens settings popover.
   const gearBtn = document.createElement("button");
@@ -1011,6 +1065,36 @@ export function mountBar({ client, root, slots: slotsOpt }) {
     openSettings();
   });
 
+  // Weather toggle (bar button + minimized HUD status pill) ----------------
+
+  let weatherPill = null;
+
+  function syncWeatherButtonVisuals(enabled) {
+    const on = !!enabled;
+    const label = on ? "Toggle Weather Effects (On)" : "Toggle Weather Effects (Off)";
+    weatherBtn.classList.toggle("active", on);
+    weatherBtn.classList.toggle("is-weather-off", !on);
+    weatherBtn.setAttribute("aria-pressed", on ? "true" : "false");
+    weatherTip.textContent = label;
+    if (weatherPill) {
+      weatherPill.classList.toggle("active", on);
+      weatherPill.classList.toggle("is-weather-off", !on);
+      weatherPill.setAttribute("aria-pressed", on ? "true" : "false");
+      weatherPill.title = label;
+    }
+  }
+
+  function onToggleWeatherClick(ev) {
+    ev?.stopPropagation?.();
+    toggleWeatherEnabled();
+  }
+
+  weatherBtn.addEventListener("click", onToggleWeatherClick);
+  syncWeatherButtonVisuals(isWeatherEnabled());
+  const unsubWeather = onWeatherEnabledChange((enabled) => {
+    syncWeatherButtonVisuals(enabled);
+  });
+
   // Minimize / restore -----------------------------------------------------
 
   function minimize() {
@@ -1028,6 +1112,19 @@ export function mountBar({ client, root, slots: slotsOpt }) {
       pill.addEventListener("click", restore);
       root.appendChild(pill);
     }
+    if (!weatherPill && hudWeatherControlVisible()) {
+      weatherPill = document.createElement("button");
+      weatherPill.type = "button";
+      weatherPill.id = WEATHER_PILL_ID;
+      weatherPill.className = `${PILL_CLASS} hb-weather-pill`;
+      weatherPill.dataset.action = "toggle-weather";
+      weatherPill.title = "Toggle Weather Effects";
+      weatherPill.setAttribute("aria-label", "Toggle Weather Effects");
+      weatherPill.innerHTML = WEATHER_ICON_SVG;
+      weatherPill.addEventListener("click", onToggleWeatherClick);
+      root.appendChild(weatherPill);
+      syncWeatherButtonVisuals(isWeatherEnabled());
+    }
     // Pin pill near the bar's last known corner, or top-left by default —
     // joins the retail status-icon cluster (peace/combat indicator etc.)
     // since holtburger's plugin bar has no retail equivalent and the pill
@@ -1037,19 +1134,35 @@ export function mountBar({ client, root, slots: slotsOpt }) {
       pill.style.top = `${state.top}px`;
       pill.style.bottom = "auto";
       pill.style.right = "auto";
+      if (weatherPill) {
+        weatherPill.style.left = `${state.left + 24}px`;
+        weatherPill.style.top = `${state.top}px`;
+        weatherPill.style.bottom = "auto";
+        weatherPill.style.right = "auto";
+      }
     } else {
       pill.style.left = "4px";
       pill.style.top = "4px";
       pill.style.right = "auto";
       pill.style.bottom = "auto";
+      if (weatherPill) {
+        weatherPill.style.left = "28px";
+        weatherPill.style.top = "4px";
+        weatherPill.style.right = "auto";
+        weatherPill.style.bottom = "auto";
+      }
     }
     pill.style.display = "";
+    if (weatherPill) {
+      weatherPill.style.display = hudWeatherControlVisible() ? "" : "none";
+    }
     persist();
   }
 
   function restore() {
     state.minimized = false;
     if (pill) pill.style.display = "none";
+    if (weatherPill) weatherPill.style.display = "none";
     bar.style.display = "";
     persist();
   }
@@ -1244,14 +1357,22 @@ export function mountBar({ client, root, slots: slotsOpt }) {
     openPanelId() {
       return openState ? openState.slot.id : null;
     },
+    toggleWeather() {
+      return toggleWeatherEnabled();
+    },
+    isWeatherEnabled() {
+      return isWeatherEnabled();
+    },
     destroy() {
       closePanel();
       closeSettings();
+      unsubWeather();
       barResizeObserver.disconnect();
       window.removeEventListener("mousemove", onBarMouseMove);
       window.removeEventListener("mouseup", onBarMouseUp);
       bar.removeEventListener("mousedown", onBarMouseDown);
       if (pill) pill.remove();
+      if (weatherPill) weatherPill.remove();
       bar.remove();
     },
   };

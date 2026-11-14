@@ -1802,6 +1802,12 @@ function terrainBilinearBlendGlsl(out) {
   }`;
 }
 
+const WATERFALL_SCROLL_FALLBACK_GLSL = `
+  if (uWaterScrollEnabled > 0.5 && waterfallSlope > 0.001) {
+    vec2 legacyFallDir = length(waterGeomN.xy) > 1e-4 ? normalize(waterGeomN.xy) : vec2(0.0, -1.0);
+    waterCellUv = fract(waterCellUv - legacyFallDir * ((vWorldPos.y * waterfallSlope + uTime * 5.0 * waterfallSlope) * (1.0 / 24.0)));
+  }`;
+
 // Fragment shader: ported verbatim from `index.html:1006-1082` minus
 // the PIXI-specific `vColor` varying + uColor/uWorldColorAlpha
 // modulation. The bilinear-blend body is byte-identical to the 2D
@@ -3106,10 +3112,14 @@ void main() {
   // unconditionally makes the flow bilinear-continuous across the seam.
   // 2026-07-31 (water-fix) — moved here (post-POM) so it rides the same
   // parallax-adjusted cellUv every other sampler uses.
+  vec3 waterGeomN = normalize(vAcNormal);
+  float waterfallSlope = smoothstep(0.12, 0.45, 1.0 - clamp(waterGeomN.z, 0.0, 1.0));
+  bool cellTouchesSlime = (t00 == 23) || (t10 == 23) || (t01 == 23) || (t11 == 23);
+  bool slimeCascadeCell = cellTouchesSlime && (1.0 - clamp(waterGeomN.z, 0.0, 1.0) > 0.18);
   vec2 waterCellUv = cellUv;
   if (uWaterScrollEnabled > 0.5) {
     waterCellUv = fract(cellUv + vec2(uTime * 0.05, uTime * 0.02));
-  }${WATER_FLOW_ON ? WATER_FLOW_MAIN_GLSL : ""}
+  }${WATER_FLOW_ON ? WATER_FLOW_MAIN_GLSL : WATERFALL_SCROLL_FALLBACK_GLSL}
 
   // Per-corner cellUv: water-typed corners get the scrolled UV, others
   // stay on the static path. This keeps the blend across the water /
@@ -3140,6 +3150,15 @@ ${TERRAIN_FS_ON ? "" : TERRAIN_BILINEAR_TAPS_GLSL}
   float waterW = clamp(
     (wc00 ? w00 : 0.0) + (wc10 ? w10 : 0.0) +
     (wc01 ? w01 : 0.0) + (wc11 ? w11 : 0.0), 0.0, 1.0);
+  float slimeW = clamp(
+    ((t00 == 23) ? w00 : 0.0) + ((t10 == 23) ? w10 : 0.0) +
+    ((t01 == 23) ? w01 : 0.0) + ((t11 == 23) ? w11 : 0.0), 0.0, 1.0);
+  vec2 slimeAcXy = vec2(vWorldPos.x, -vWorldPos.z);
+  float maraeRegionW = smoothstep(4200.0, 4800.0, slimeAcXy.x) * (1.0 - smoothstep(7300.0, 7900.0, slimeAcXy.x))
+                     * smoothstep(33700.0, 34300.0, slimeAcXy.y) * (1.0 - smoothstep(38000.0, 38600.0, slimeAcXy.y));
+  float slimeSlopeW = smoothstep(0.18, 0.40, 1.0 - clamp(waterGeomN.z, 0.0, 1.0));
+  float slimeFlowGate = clamp(maraeRegionW + ${WATER_FLOW_ON ? "smoothstep(0.15, 0.85, waterFlowSpeed + waterFoam * 2.5)" : "0.0"}, 0.0, 1.0);
+  float slimeCascadeW = slimeW * slimeSlopeW * slimeFlowGate * (1.0 - waterW);
 
   // Wave 1B — bilinear SAND FRACTION, computed with the SAME four corner
   // weights for the same reason the water fraction is: the grain sparkle then
@@ -3426,7 +3445,7 @@ ${TERRAIN_MICRO.micro ? TERRAIN_MICRO_DECL_GLSL : ""}${TERRAIN_MICRO.heightBlend
     swampWaterW = clamp(
       float((aux00 >> 4) & 1) * w00 + float((aux10 >> 4) & 1) * w10 +
       float((aux01 >> 4) & 1) * w01 + float((aux11 >> 4) & 1) * w11, 0.0, 1.0);
-    float optDepth = max(waterW * 0.45, waterDepthProxy * 0.48) * waterW;
+    float optDepth = max(waterW * 0.45, waterDepthProxy * 0.48) * waterW * (1.0 - 0.85 * waterfallSlope);
     vec3 sigmaClean = vec3(0.52, 0.17, 0.075);
     vec3 sigmaSwamp = vec3(0.62, 0.38, 0.50);
     vec3 sigma = mix(sigmaClean, sigmaSwamp, swampWaterW);
@@ -3439,7 +3458,22 @@ ${TERRAIN_MICRO.micro ? TERRAIN_MICRO_DECL_GLSL : ""}${TERRAIN_MICRO.heightBlend
     vec3 swampBody = mix(vec3(0.068, 0.105, 0.052), vec3(0.036, 0.062, 0.030), pelagicMix) * wPattern;
     vec3 inScatter = mix(cleanBody, swampBody, swampWaterW);
     vec3 absorbedWater = shallowBed * waterTrans + inScatter * (vec3(1.0) - waterTrans);
-    result = mix(result, absorbedWater, smoothstep(0.02, 0.88, waterW));
+    float depthFactor = smoothstep(0.02, 0.88, waterW) * (1.0 - 0.85 * waterfallSlope);
+    result = mix(result, absorbedWater, depthFactor);
+    if (waterfallSlope > 0.01) {
+      vec3 aeratedCascade = mix(result, vec3(0.34, 0.68, 0.76), 0.58);
+      result = mix(result, aeratedCascade, waterfallSlope * waterW * 0.75);
+    }
+  }
+  if (slimeCascadeW > 0.004) {
+    vec2 scAxis = length(waterGeomN.xy) > 1e-4 ? normalize(waterGeomN.xy) : vec2(0.0, -1.0);
+    vec2 scPerp = vec2(-scAxis.y, scAxis.x);
+    float scScroll = uWaterScrollEnabled > 0.5 ? uTime * 5.4 : 0.0;
+    vec2 scUv = vec2(dot(slimeAcXy, scPerp) * 1.65,
+                     (dot(slimeAcXy, scAxis) - vWorldPos.y - scScroll) * 0.22);
+    float scRib = clamp(0.5 + fragValueNoise2D(scUv) + 0.5 * fragValueNoise2D(scUv * vec2(2.6, 1.5)), 0.0, 1.35);
+    vec3 scCol = mix(vec3(0.24, 0.56, 0.66), vec3(0.86, 0.96, 0.99), smoothstep(0.28, 0.92, scRib));
+    result = mix(result, scCol, slimeCascadeW * 0.90);
   }
 
   if (uWaterScrollEnabled > 0.5 && waterW > 0.0) {
@@ -3626,7 +3660,7 @@ ${TERRAIN_MICRO.micro ? TERRAIN_MICRO_DECL_GLSL : ""}${TERRAIN_MICRO.heightBlend
   vec3 cliffGeomN = normalize(vAcNormal);
   float cliffSlope = 1.0 - clamp(cliffGeomN.z, 0.0, 1.0);
   float cliffBiomeSuppress = clamp(volcW + obsidianW + iceW * 0.85 + snowW * 0.45, 0.0, 1.0);
-  float cliffTriW = smoothstep(0.32, 0.62, cliffSlope) * (1.0 - waterW)
+  float cliffTriW = smoothstep(0.32, 0.62, cliffSlope) * (1.0 - waterW) * (1.0 - slimeCascadeW)
                   * (1.0 - roadCovW * 0.85) * (1.0 - cliffBiomeSuppress);
   vec4 cliffNraSample = vec4(0.5, 0.5, 0.85, 1.0);
   if (cliffTriW > 0.005) {
@@ -4042,6 +4076,7 @@ ${TERRAIN_MICRO.gradUv
       // surface relaxes to flat with distance instead of shimmering.
       wN = normalize(vec3(slope * sheenFade, 1.0));
     }
+    wN = normalize(mix(wN, geomN, waterfallSlope));
     // Sun glint (Blinn half-vector), near-camera only. sunDir is the AC-z-up
     // direction TO the sun; -viewAc is the direction to the eye.
     vec3 halfAc = normalize(sunDir - viewAc);
@@ -4058,14 +4093,24 @@ ${TERRAIN_MICRO.gradUv
       // ripples the flat normal no longer resolves.
       vec3 envSample = textureLod(uEnvCube, reflW, mix(2.5, 0.6, sheenFade)).rgb;
       float fresW = 0.02 + 0.98 * pow(1.0 - clamp(dot(-viewW, nWorldW), 0.0, 1.0), 5.0);
+      fresW *= 1.0 - 0.72 * waterfallSlope;
       waterSpec += envSample * fresW * uWaterReflect;
     } else {
       vec3 nWorldW = normalize(vec3(wN.x, wN.z, -wN.y));
       float fresSky = 0.02 + 0.98 * pow(1.0 - clamp(dot(-viewW, nWorldW), 0.0, 1.0), 5.0);
+      fresSky *= 1.0 - 0.72 * waterfallSlope;
       vec3 skyFallback = uAcAmbColor * max(uAcAmbLevel, 0.22) * vec3(0.85, 0.98, 1.25);
       waterSpec += skyFallback * fresSky * uWaterReflect;
     }
+    vec3 cascadeLight = uAcSunColor * max(dot(geomN, sunDir), 0.25) * uSunGlint
+                      + uAcAmbColor * max(uAcAmbLevel, 0.28);
+    waterSpec += cascadeLight * vec3(0.42, 0.56, 0.62) * waterfallSlope;
     iblSpec += waterSpec * waterW;
+  }
+  if (uWaterEnvEnabled > 0.5 && slimeCascadeW > 0.004) {
+    vec3 slimeCascadeLight = uAcSunColor * max(dot(geomN, sunDir), 0.25) * uSunGlint
+                           + uAcAmbColor * max(uAcAmbLevel, 0.28);
+    iblSpec += slimeCascadeLight * vec3(0.44, 0.58, 0.64) * slimeCascadeW;
   }
 
   // Shoreline wet-sand / wet-rock darkening + low-roughness wet-film sheen
@@ -4123,10 +4168,14 @@ ${TERRAIN_MICRO.gradUv
   // The mid-tier degrade is coherent by construction: nothing here needs POM.
   if (uCrackGlowEnabled > 0.5 && !cellTouchesWater && volcW > 0.0) {
     float crackFade = 1.0 - smoothstep(uCrackGlowFadeStart, uCrackGlowFadeEnd, vViewDepth);
+    float crackChroma = result.r - max(0.55 * result.g, result.b);
     float crackHeat = smoothstep(uCrackGlowHeat.x, uCrackGlowHeat.y,
                                  result.r - max(0.55 * result.g, result.b));
     float crackW = crackHeat * volcW * crackFade;
-    if (crackW > 0.001) {
+    float basaltRimW = smoothstep(0.006, uCrackGlowHeat.x + 0.015, crackChroma)
+                     * (1.0 - smoothstep(uCrackGlowHeat.x + 0.01, uCrackGlowHeat.y * 0.72, crackChroma))
+                     * volcW * crackFade;
+    if (crackW > 0.001 || basaltRimW > 0.001) {
       // POM-corrected AC ground position (world(x,y,z) = ac(x,z,-y)).
       vec2 pomShiftV = (cellUv - vec2(fu, fv)) * 24.0;
       vec2 groundXy = vec2(vWorldPos.x, -vWorldPos.z) + pomShiftV;
@@ -4135,6 +4184,10 @@ ${TERRAIN_MICRO.gradUv
       // 0.13 Hz, inside the 1 Hz bound the shared clock's 3600 s wrap needs.
       float crackPhase = 6.2831853 * fragValueNoise2D(groundXy * 0.05) + uTime * 0.8;
       float crackPulse = 1.0 - uCrackGlowPulse * (0.5 + 0.5 * sin(crackPhase));
+      // Slow world-space convective molten-magma drift (zero screen UV warp).
+      float magmaConvA = 0.5 + fragValueNoise2D(groundXy * 0.34 + vec2(uTime * 0.045, -uTime * 0.032));
+      float magmaConvB = 0.5 + fragValueNoise2D(groundXy * 0.78 - vec2(uTime * 0.028, uTime * 0.051) + vec2(19.4, 7.3));
+      float magmaSurge = clamp(0.62 * magmaConvA + 0.38 * magmaConvB, 0.0, 1.0);
       // Daylight: the flat-ground retail light level (the snow exposure's
       // measure). At noon the sunlit paint already reads orange, so only
       // uCrackGlowDay of the night gain is added on top of it.
@@ -4143,6 +4196,10 @@ ${TERRAIN_MICRO.gradUv
       float crackGain = uCrackGlowStrength * mix(1.0, uCrackGlowDay, crackDay);
       iblSpec += result * uCrackGlowColor
                * (crackGain * crackW * uCrackGlowBreath * crackPulse);
+      iblSpec += uCrackGlowColor * vec3(1.16, 0.52, 0.12)
+               * (crackGain * crackW * uCrackGlowBreath * smoothstep(0.38, 0.88, magmaSurge) * 0.34);
+      iblSpec += uCrackGlowColor * vec3(0.46, 0.09, 0.02)
+               * (crackGain * basaltRimW * uCrackGlowBreath * (0.65 + 0.35 * magmaSurge) * 0.28);
     }
   }
 

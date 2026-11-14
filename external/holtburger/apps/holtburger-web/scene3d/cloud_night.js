@@ -328,6 +328,25 @@ export function cloudNightAmbientRadiance(colorRgb, level, exposure, out = [0, 0
 }
 
 /**
+ * Exposure-calibrated electric blue-white radiance for internal storm cloud-sheet
+ * lightning illumination (`0xdceaff` silver-lining glow). Zero when `flash <= 0`.
+ */
+export function cloudLightningSheetRadiance(flash, exposure, out = [0, 0, 0]) {
+  const f = Number.isFinite(flash) ? Math.min(1, Math.max(0, flash)) : 0;
+  if (!(f > 0)) {
+    out[0] = 0; out[1] = 0; out[2] = 0;
+    return out;
+  }
+  // Solve luminous electric blue-white display target and boost into HDR highlight range.
+  sceneRadianceForDisplay([0.82, 0.90, 0.99], exposure > 0 ? exposure : DISPLAY_EXPOSURE_DEFAULT, out);
+  const gain = (2.8 * f) / CLOUD_NIGHT_GRADIENT_REF;
+  out[0] *= gain;
+  out[1] *= gain;
+  out[2] *= gain;
+  return out;
+}
+
+/**
  * The elevation the cloud raymarch is lit with: the sky's art elevation
  * (identity above the ramp knee, and everywhere when `?nightRamp=off`), or the
  * raw authored pitch when `?cloudNight=off`.

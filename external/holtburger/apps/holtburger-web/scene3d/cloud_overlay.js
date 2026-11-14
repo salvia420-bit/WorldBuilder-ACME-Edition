@@ -1044,10 +1044,25 @@ export class CloudOverlay {
       return; // AerialPerspective already composited the clouds.
     }
     // 2026-05-18 — if the overlay quad is attached to the sky scene
-    // (cf. attachToSkyScene), the sky pass renders it; calling
-    // renderOverlay here would double-paint. No-op cleanly.
+    // (cf. attachToSkyScene), the sky pass renders it BEFORE the world pass
+    // (so world geometry overdraws it cleanly); calling renderOverlay here
+    // would double-paint. No-op cleanly.
     if (this._attachedToSkyScene) return;
     if (!this.overlayMaterial.uniforms.cloudTex.value) return;
+    // Safety guard: never paint an un-occluded fullscreen cloud quad over an
+    // already-rendered world buffer unless sceneDepthTex discard is active or
+    // we are explicitly in the pre-world sky pass.
+    const revZ = renderer.state?.buffers?.depth?.getReversed?.() === true;
+    const hadRevZ = Boolean(this.overlayMaterial.defines?.USE_REVERSED_DEPTH_BUFFER);
+    if (revZ !== hadRevZ) {
+      this.overlayMaterial.defines = this.overlayMaterial.defines || {};
+      if (revZ) this.overlayMaterial.defines.USE_REVERSED_DEPTH_BUFFER = '1';
+      else delete this.overlayMaterial.defines.USE_REVERSED_DEPTH_BUFFER;
+      this.overlayMaterial.needsUpdate = true;
+    }
+    if (this.overlayMaterial.uniforms.sceneDepthTex.value && this.overlayMaterial.uniforms.sceneDepthThreshold.value <= 0.0) {
+      this.overlayMaterial.uniforms.sceneDepthThreshold.value = 0.9999;
+    }
     try {
       const prevAutoClear = renderer.autoClear;
       const prevTarget = renderer.getRenderTarget();

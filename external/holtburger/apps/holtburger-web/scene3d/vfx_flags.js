@@ -986,24 +986,40 @@ export function terrainVolcanoEnabled() {
 
 let _terrainHaze;
 const _terrainHazeWarn = { hit: false };
-/** `?terrainHaze=on` — the heat-shimmer / mirage postprocessing `Effect` (a pure
- *  `mainUv` warp inserted into the EXISTING `EffectPass`, never a new pass).
- *  Absent ⇒ the tier's `terrainHaze` (false low/mid, true high/ultra).
- *  2026-10-23 (owner, on the 1070: the mirage must be on): its OWN master — read
- *  it through `heatHazeEnabled()`, which no longer needs `?terrainVolcano`; both
- *  the volcano disc and the desert ground/mirage arm hang off it. */
+/** `?terrainHaze=on` — the desert heat-shimmer / mirage postprocessing `Effect`
+ *  (a pure `mainUv` warp inserted into the EXISTING `EffectPass`, never a new pass).
+ *  Absent ⇒ the tier's `terrainHaze` (false low/mid, true high/ultra). */
 export function terrainHazeEnabled() {
   if (_terrainHaze !== undefined) return _terrainHaze;
   const r = _terrainStrictFlag("terrainHaze", "terrainHaze", false, _terrainHazeWarn);
   return r.memo ? (_terrainHaze = r.value) : r.value;
 }
 
-/** 2026-10-23 — THE heat-shimmer gate: `?visual=off` and `?terrainVfx=off` kill
- *  it, then `?terrainHaze` (strict on/off, absent ⇒ the tier). Used by
- *  `vfx/heat_haze_effect.js::createHeatHazeEffect`, the volcano haze provider
+let _terrainVolcanoHaze;
+const _terrainVolcanoHazeWarn = { hit: false };
+/** `?terrainVolcanoHaze=on` — explicit STRICT opt-in for the legacy volcano
+ *  heat-shimmer screen disc (`terrain.volcanoHaze`), decoupled from `?terrainHaze`
+ *  so Desert Haze (`terrain.desertHaze`) stays ON at high/ultra while the
+ *  obnoxious 1.5 km full-screen volcano/magma wobble defaults OFF across ALL
+ *  quality presets (`low`, `mid`, `high`, `ultra`). */
+export function terrainVolcanoHazeEnabled() {
+  if (_terrainVolcanoHaze !== undefined) return _terrainVolcanoHaze;
+  const r = _terrainStrictFlag("terrainVolcanoHaze", "terrainVolcanoHaze", false, _terrainVolcanoHazeWarn);
+  return r.memo ? (_terrainVolcanoHaze = r.value) : r.value;
+}
+
+/** Volcano-disc shimmer gate (explicit `?terrainVolcanoHaze=on` opt-in, killed by
+ *  `?visual=off` and `?terrainVfx=off`). */
+export function volcanoHazeEnabled() {
+  return visualEnabled() && terrainVfxEnabled() && terrainVolcanoHazeEnabled();
+}
+
+/** 2026-10-23 — THE heat-shimmer Effect gate: `?visual=off` and `?terrainVfx=off`
+ *  kill it, then `?terrainHaze` (desert mirage, true at high/ultra) OR explicit
+ *  `?terrainVolcanoHaze=on`. Used by `vfx/heat_haze_effect.js::createHeatHazeEffect`
  *  and `terrain_desert_haze.js`. */
 export function heatHazeEnabled() {
-  return visualEnabled() && terrainVfxEnabled() && terrainHazeEnabled();
+  return visualEnabled() && terrainVfxEnabled() && (terrainHazeEnabled() || terrainVolcanoHazeEnabled());
 }
 
 let _terrainEmbers;
@@ -1570,6 +1586,68 @@ export function terrainRockDensity() {
   return _numFlag("terrainRockDensity", 1, 0, 2);
 }
 
+// ---------------------------------------------------------------------------
+// TERRAIN WATERFALLS (`scene3d/terrain_waterfalls.js`) & SHADOW SPIRES
+// (`scene3d/terrain_spires_vfx.js`). Default ON at mid / high / ultra via
+// `PRESETS.*.terrainWaterfalls` / `PRESETS.*.terrainSpires` (`=off` / 0 / false / no
+// escapes; `=on` forces on; pre-init with no preset bag returns false and is not
+// memoized so `test_vfx_flags.mjs` bare-Node suite count stays unchanged).
+// ---------------------------------------------------------------------------
+
+let _terrainWaterfalls;
+const _terrainWaterfallsWarn = { hit: false };
+/** `?terrainWaterfalls` — site-driven 3D waterfall curtains, lip foam & plunge
+ *  mist/boil (`scene3d/terrain_waterfalls.js`). Absent ⇒ preset `terrainWaterfalls`
+ *  (false low, true mid/high/ultra). */
+export function terrainWaterfallsEnabled(qualityOpt) {
+  if (qualityOpt === undefined && _terrainWaterfalls !== undefined) return _terrainWaterfalls;
+  const raw = _strFlag("terrainWaterfalls");
+  const s = raw === null ? null : raw.trim().toLowerCase();
+  if (s === "off" || s === "0" || s === "false" || s === "no") return (_terrainWaterfalls = false);
+  if (s === "on") return (_terrainWaterfalls = true);
+  if (raw !== null && !_terrainWaterfallsWarn.hit) {
+    _terrainWaterfallsWarn.hit = true;
+    // eslint-disable-next-line no-console
+    console.warn(
+      `[terrainWaterfalls] ignoring ?terrainWaterfalls=${JSON.stringify(raw)} — use =off (or 0/false/no) to disable or =on to force on.`,
+    );
+  }
+  const explicitFlags = qualityOpt && typeof qualityOpt === "object"
+    ? (qualityOpt.flags && typeof qualityOpt.flags === "object" ? qualityOpt.flags : qualityOpt)
+    : null;
+  if (explicitFlags) return explicitFlags.terrainWaterfalls === true;
+  const flags = _presetFlags();
+  if (!flags) return false;
+  return (_terrainWaterfalls = flags.terrainWaterfalls === true);
+}
+
+let _terrainSpires;
+const _terrainSpiresWarn = { hit: false };
+/** `?terrainSpires` — grounded world-space dark-violet Shadow Spire miasma &
+ *  obsidian void-shard wisps (`scene3d/terrain_spires_vfx.js`). Absent ⇒ preset
+ *  `terrainSpires` (false low, true mid/high/ultra). */
+export function terrainSpiresEnabled(qualityOpt) {
+  if (qualityOpt === undefined && _terrainSpires !== undefined) return _terrainSpires;
+  const raw = _strFlag("terrainSpires");
+  const s = raw === null ? null : raw.trim().toLowerCase();
+  if (s === "off" || s === "0" || s === "false" || s === "no") return (_terrainSpires = false);
+  if (s === "on") return (_terrainSpires = true);
+  if (raw !== null && !_terrainSpiresWarn.hit) {
+    _terrainSpiresWarn.hit = true;
+    // eslint-disable-next-line no-console
+    console.warn(
+      `[terrainSpires] ignoring ?terrainSpires=${JSON.stringify(raw)} — use =off (or 0/false/no) to disable or =on to force on.`,
+    );
+  }
+  const explicitFlags = qualityOpt && typeof qualityOpt === "object"
+    ? (qualityOpt.flags && typeof qualityOpt.flags === "object" ? qualityOpt.flags : qualityOpt)
+    : null;
+  if (explicitFlags) return explicitFlags.terrainSpires === true;
+  const flags = _presetFlags();
+  if (!flags) return false;
+  return (_terrainSpires = flags.terrainSpires === true);
+}
+
 let _budget;
 /** `?visualBudget` — governor STUB (Phase 1). A soft cap on concurrently-active
  *  VFX component-SETs / per-frame VFX cost units the future bloom/light governor
@@ -1641,9 +1719,9 @@ export const VFX_EFFECT_FLAGS = Object.freeze({
   // `vfx/components/terrainVolcanoEmbers.js`, which is what makes
   // `vfxEffectEnabled(component.id)` resolve for it.
   "terrain.volcano": terrainVolcanoEnabled,
-  // 2026-10-23: the heat shimmer is its own master (no ?terrainVolcano), and the
-  // desert arm shares it.
-  "terrain.volcanoHaze": () => terrainVfxEnabled() && terrainHazeEnabled(),
+  // Volcano haze decoupled from ?terrainHaze: defaults OFF on every tier unless
+  // ?terrainVolcanoHaze=on, while Desert Haze stays ON at high/ultra via ?terrainHaze.
+  "terrain.volcanoHaze": () => terrainVfxEnabled() && terrainVolcanoHazeEnabled(),
   "terrain.desertHaze": () => terrainVfxEnabled() && terrainHazeEnabled(),
   "terrain.volcanoEmbers": () => terrainVolcanoEnabled() && terrainEmbersEnabled(),
   "terrain.volcanoCrackGlow": () => terrainVolcanoEnabled() && terrainCrackGlowEnabled(),
@@ -1692,6 +1770,8 @@ export const VFX_EFFECT_FLAGS = Object.freeze({
   "terrain.rock": terrainRockEnabled,
   "terrain.rockPebbles": () => terrainRockEnabled() && terrainRockPebblesEnabled(),
   "terrain.rockGrit": () => terrainRockEnabled() && terrainRockGritEnabled(),
+  "terrain.waterfalls": () => terrainVfxEnabled() && terrainWaterfallsEnabled(),
+  "terrain.spires": () => terrainVfxEnabled() && terrainSpiresEnabled(),
 });
 
 /**
@@ -1736,9 +1816,10 @@ export function _resetVfxFlags() {
   _terrainSnowPrintsWarn.hit = false;
   _terrainIceWarn.hit = false;
   _terrainIceRefractionWarn.hit = false;
-  _terrainVolcano = _terrainHaze = _terrainEmbers = _terrainCrackGlow = undefined;
+  _terrainVolcano = _terrainHaze = _terrainVolcanoHaze = _terrainEmbers = _terrainCrackGlow = undefined;
   _terrainVolcanoWarn.hit = false;
   _terrainHazeWarn.hit = false;
+  _terrainVolcanoHazeWarn.hit = false;
   _terrainEmbersWarn.hit = false;
   _terrainCrackGlowWarn.hit = false;
   _terrainObsidian = undefined;
@@ -1762,4 +1843,7 @@ export function _resetVfxFlags() {
   _terrainRockWarn.hit = false;
   _terrainRockPebblesWarn.hit = false;
   _terrainRockGritWarn.hit = false;
+  _terrainWaterfalls = _terrainSpires = undefined;
+  _terrainWaterfallsWarn.hit = false;
+  _terrainSpiresWarn.hit = false;
 }

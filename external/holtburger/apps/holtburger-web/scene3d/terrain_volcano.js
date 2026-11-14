@@ -90,6 +90,8 @@ import { registerTerrainVfx, unregisterTerrainVfx, lbKeyFromXY } from "./terrain
 import {
   terrainVolcanoEnabled,
   heatHazeEnabled,
+  terrainVolcanoHazeEnabled,
+  volcanoHazeEnabled,
   terrainEmbersEnabled,
   terrainCrackGlowEnabled,
   terrainVolcanoEmberCount,
@@ -377,10 +379,12 @@ export function projectAcPointToUv(camera, ax, ay, az, out) {
  *   crackGlow:boolean}|null}
  */
 export function resolveVolcanoQuality(flags) {
+  if (!flags || typeof flags !== "object") return null;
   const num = (v, def) => (Number.isFinite(Number(v)) ? Number(v) : def);
   const emberCount = Math.max(0, Math.round(num(flags?.terrainVolcanoEmberCount, 0)));
-  const hazeStrength = Math.max(0, Math.min(4, num(flags?.terrainHazeStrength, 0)));
-  const hazeRadiusM = Math.max(0, Math.min(1024, num(flags?.terrainVolcanoRadius, 0)));
+  const volcanoHazeOn = flags?.terrainVolcanoHaze === true || terrainVolcanoHazeEnabled();
+  const hazeStrength = volcanoHazeOn ? Math.max(0, Math.min(4, num(flags?.terrainHazeStrength, 0))) : 0;
+  const hazeRadiusM = volcanoHazeOn ? Math.max(0, Math.min(1024, num(flags?.terrainVolcanoRadius, 0))) : 0;
   const crackGlow = flags?.terrainCrackGlow === true;
   if (emberCount === 0 && !crackGlow && (hazeStrength === 0 || hazeRadiusM === 0)) return null;
   return { emberCount, hazeStrength, hazeRadiusM, crackGlow };
@@ -744,8 +748,8 @@ function _hazeProvider() {
     id: HAZE_PROVIDER_ID,
     families: [FAM_VOLCANO],
     scope: "landblock",
-    // 2026-10-23: its own master (no longer gated on ?terrainVolcano).
-    enabled() { return heatHazeEnabled(); },
+    // Decoupled from ?terrainHaze: defaults OFF on every tier unless ?terrainVolcanoHaze=on.
+    enabled() { return volcanoHazeEnabled(); },
     quality(flags) {
       const q = resolveVolcanoQuality(flags);
       return q && q.hazeStrength > 0 && q.hazeRadiusM > 0 ? q : null;
@@ -1008,7 +1012,7 @@ export function initTerrainVolcano(opts = {}) {
   // shimmer is its OWN master since 2026-10-23 (owner: the mirage must be on):
   // it registers at high/ultra whatever ?terrainVolcano says.
   const master = terrainVolcanoEnabled();
-  const hazeOn = heatHazeEnabled();
+  const hazeOn = volcanoHazeEnabled();
   const embersOn = master && terrainEmbersEnabled();
   const crackOn = master && terrainCrackGlowEnabled();
   // Crack glow is `terrain.js`'s fragment work: it needs the shared breathing
@@ -1057,7 +1061,7 @@ export function initTerrainVolcano(opts = {}) {
 export function terrainVolcanoStats() {
   return {
     enabled: terrainVolcanoEnabled(),
-    haze: heatHazeEnabled(),
+    haze: volcanoHazeEnabled(),
     embers: terrainVolcanoEnabled() && terrainEmbersEnabled(),
     crackGlow: terrainVolcanoEnabled() && terrainCrackGlowEnabled(),
     inited: !!_volc,

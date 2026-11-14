@@ -1013,6 +1013,127 @@ function hashCellSet(arr) {
   return (h ^ (arr.length + 1)) | 0;
 }
 
+// Item 5 — Holtburg night-lighting test-area & indoor-bleed constants:
+//   - Fix 5.1: 0x02000364 is Turbine's 100%-translucent 3-vertex dummy test-light
+//     marker floating 2.51 m in mid-air above the Holtburg Lifestone.
+//   - Fix 5.2: 0x020005D8 / 0x020005D9 / 0x02000706 are early hearth/campfire/bonfire
+//     Setups whose DAT LightInfo is displaced to (-2.0, -2.0, +2.0) while the fire
+//     sits at (0, 0, +1.8..+2.15), pushing 12 m orange lights 2.83 m outside solid
+//     cottage chimney walls onto empty grass.
+//   - Fix 5.5: cap indoor SeenOutside light bleed radius to <= 8 m when the player
+//     is outdoors (`playerCell < 0x0100`), and require indoor EnvCell containers in
+//     `scene3d.cellContainers3d` to actually be drawn (`container.visible === true`).
+export const SUPPRESSED_SETUP_LIGHT_MODELS = new Set([0x02000364]);
+export const RECENTERED_HEARTH_SETUP_IDS = new Set([0x020005d8, 0x020005d9, 0x02000706]);
+export const HEARTH_ENCLOSED_MAX_RANGE_M = 5.5;
+export const OUTDOOR_SEEN_OUTSIDE_BLEED_MAX_M = 8.0;
+
+/**
+ * Fix 5.5: When `scene3d.cellContainers3d` is populated, an indoor `EnvCell`
+ * (`(cellId & 0xffff) >= 0x0100`) is eligible to contribute lights ONLY if its
+ * rendered cell container is actually visible (`container.visible === true`),
+ * rather than relying solely on `getRenderSet(1)`'s unclipped multi-room PVS closure.
+ */
+export function isIndoorCellDrawn(scene3d, cellId) {
+  if (cellId == null) return true;
+  const cid = cellId >>> 0;
+  if ((cid & 0xffff) < 0x0100) return true;
+  const containers = scene3d?.cellContainers3d;
+  if (containers instanceof Map && containers.size > 0) {
+    const c = containers.get(cid);
+    return Boolean(c && c.visible === true && c.parent !== null);
+  }
+  return true;
+}
+
+/**
+ * Fix 5.5: True when the local player/viewer is outdoors (`playerCell < 0x0100`).
+ */
+export function isPlayerOutdoorsForLights(scene3d, sessionHandle = null) {
+  if (sessionHandle) {
+    if (typeof sessionHandle.currentCellId === "function") {
+      try {
+        const pc = sessionHandle.currentCellId() >>> 0;
+        if (pc !== 0) return (pc & 0xffff) < 0x0100;
+      } catch (_) {}
+    }
+    if (typeof sessionHandle.isCurrentCellIndoor === "function") {
+      try {
+        return !sessionHandle.isCurrentCellIndoor();
+      } catch (_) {}
+    }
+  }
+  if (typeof scene3d?._playerCellId === "number" && (scene3d._playerCellId >>> 0) !== 0) {
+    return ((scene3d._playerCellId >>> 0) & 0xffff) < 0x0100;
+  }
+  if (typeof scene3d?._playerCellIndoorRaw === "boolean") {
+    return !scene3d._playerCellIndoorRaw;
+  }
+  if (typeof scene3d?._currentCellIndoor === "boolean") {
+    return !scene3d._currentCellIndoor;
+  }
+  return false;
+}
+
+/**
+ * Fix 5.3: Dynamically synchronize an entity-owned light's indoor `__cellId`
+ * (leaving outdoor entities `userData.__cellId === undefined`) and check
+ * whether its owning entity / ancestor chain is hidden or cell-culled.
+ */
+export function syncAndCheckLightOwnerHidden(light, scene3d = null) {
+  if (!light) return true;
+  if (light.emitter && light.emitter._emitterCellHidden === true) return true;
+  const ud = light.userData;
+  const ownerInst = (ud && ud.__ownerInst) || light._ownerInst || null;
+  if (ownerInst) {
+    const rawCid = ((ownerInst._wireCellId ?? ownerInst._spawnCellId ?? ownerInst.meta?.landblockId ?? 0) >>> 0);
+    if (ud) {
+      if ((rawCid & 0xffff) >= 0x0100) {
+        ud.__cellId = rawCid;
+      } else if (ud.__cellId !== undefined) {
+        delete ud.__cellId;
+      }
+    }
+    if (
+      ownerInst._disposed === true ||
+      ownerInst._stateVisible === false ||
+      ownerInst._culledByCell === true ||
+      ownerInst._noDrawWeenie === true ||
+      (ownerInst.root &&
+        ownerInst.root.visible === false &&
+        ownerInst._renderCullHidden !== true &&
+        ownerInst._filmHidden !== true)
+    ) {
+      return true;
+    }
+  }
+  for (let o = light.parent; o; o = o.parent) {
+    if (ownerInst && o === ownerInst.root) continue;
+    if (o.visible === false) return true;
+  }
+  if (scene3d && ud && ud.__cellId != null && ((ud.__cellId >>> 0) & 0xffff) >= 0x0100) {
+    if (!isIndoorCellDrawn(scene3d, ud.__cellId >>> 0)) return true;
+  }
+  return false;
+}
+
+function hashCellSetAndVisibility(arr, scene3d, playerOutdoors) {
+  let h = hashCellSet(arr);
+  const containers = scene3d?.cellContainers3d;
+  if (containers instanceof Map && containers.size > 0) {
+    for (let i = 0; i < arr.length; i += 1) {
+      const cid = arr[i] >>> 0;
+      if ((cid & 0xffff) < 0x0100) continue;
+      const c = containers.get(cid);
+      const drawn = c && c.visible === true && c.parent !== null ? 1 : 0;
+      h = (h ^ ((i + 1) * 131 + drawn)) | 0;
+      h = Math.imul(h, 0x01000193) | 0;
+    }
+  }
+  h = (h ^ (playerOutdoors ? 0x5a5a : 0x1111)) | 0;
+  return h;
+}
+
 // Monotone per-light identity stamp. `activeLights` is spliced from THREE
 // places (releaseLight here, entities.js remove(), landblock_lru evict()), so
 // the cell-scoped selection cannot key on a mutation counter it owns.
@@ -1201,18 +1322,18 @@ function pickSelectedSources(pool, scratch) {
 // chain then smears that NaN over the whole frame (the near-full-screen
 // black). Returns true when a SELECTED source was rejected this frame (the
 // cell-scoped path uses it to force a re-selection so the slot isn't wasted).
-function feedSelectedIntoPool(pool) {
+function feedSelectedIntoPool(pool, scene3d = null, playerOutdoors = false) {
   const tmp = pool._tmp;
   let rejected = false;
   for (let i = 0; i < pool.point.length; i += 1) {
     const src = i < pool.selPoint.length ? pool.selPoint[i] : null;
-    const st = writePoolSlot(pool.point[i], src, tmp, pool.guard);
+    const st = writePoolSlot(pool.point[i], src, tmp, pool.guard, scene3d, playerOutdoors);
     if (pool.pointStatus) pool.pointStatus[i] = st;
     if (src && st !== "ok") rejected = true;
   }
   for (let i = 0; i < pool.spot.length; i += 1) {
     const src = i < pool.selSpot.length ? pool.selSpot[i] : null;
-    const st = writePoolSlot(pool.spot[i], src, tmp, pool.guard);
+    const st = writePoolSlot(pool.spot[i], src, tmp, pool.guard, scene3d, playerOutdoors);
     if (pool.spotStatus) pool.spotStatus[i] = st;
     if (src && st !== "ok") rejected = true;
   }
@@ -1319,8 +1440,9 @@ function resolveSourcePosition(src, out) {
  * reference point, or +Infinity for an unusable source (non-finite / absurd
  * position, detached rig) so pickSelectedSources skips it.
  */
-function candidateDistSq(light, tmp, refX, refY, refZ) {
+function candidateDistSq(light, tmp, refX, refY, refZ, scene3d = null) {
   if (isLightSourceDetached(light)) return Infinity;
+  if (syncAndCheckLightOwnerHidden(light, scene3d)) return Infinity;
   if (resolveSourcePosition(light, tmp)) return Infinity;
   const dx = tmp.x - refX;
   const dy = tmp.y - refY;
@@ -1379,12 +1501,12 @@ function _guardReject(guard, reason, src) {
  * "idle" (no source; slot parked) or the reject reason (slot parked).
  * Exported for the headless tests.
  */
-export function writePoolSlot(dst, src, tmp, guard) {
+export function writePoolSlot(dst, src, tmp, guard, scene3d = null, playerOutdoors = false) {
   if (!src) {
     parkPoolSlot(dst);
     return "idle";
   }
-  if (isLightSourceDetached(src)) {
+  if (isLightSourceDetached(src) || syncAndCheckLightOwnerHidden(src, scene3d)) {
     parkPoolSlot(dst);
     _guardReject(guard, "detached", src);
     return "detached";
@@ -1436,7 +1558,17 @@ export function writePoolSlot(dst, src, tmp, guard) {
   const rawD = src.distance == null ? 0 : +src.distance;
   if (guard && !Number.isFinite(rawD)) guard.nonFiniteDistance += 1;
   else if (guard && rawD > LIGHT_DISTANCE_MAX) guard.clampedDistance += 1;
-  dst.distance = sanitizeLightDistance(rawD);
+  let effDist = sanitizeLightDistance(rawD);
+  // Fix 5.5: when the player is outdoors (`playerCell < 0x0100`), cap indoor
+  // `SeenOutside` light bleed radius (`<= 8 m`) so open cottage doorways glow
+  // warmly inside without blasting 30 m across Holtburg streets.
+  const srcCid = src.userData && src.userData.__cellId != null ? (src.userData.__cellId >>> 0) : 0;
+  if (playerOutdoors && (srcCid & 0xffff) >= 0x0100) {
+    effDist = effDist > 0
+      ? Math.min(effDist, OUTDOOR_SEEN_OUTSIDE_BLEED_MAX_M)
+      : OUTDOOR_SEEN_OUTSIDE_BLEED_MAX_M;
+  }
+  dst.distance = effDist;
   if (src.decay != null) {
     const dk = +src.decay;
     if (Number.isFinite(dk) && dk >= 0 && dk <= 8) dst.decay = dk;
@@ -1778,6 +1910,7 @@ export function tickLightingForCellState(scene3d, sessionHandle) {
         // per-light cap still needs to run.
       }
       if (isIndoor !== null) {
+        scene3d._playerCellIndoorRaw = isIndoor;
         // 2026-07-05 — interior lighting must MATCH the outdoor view: an
         // open-door building is lit by the same sun/sky whether the camera is
         // inside or outside it, so stepping through a big doorway isn't a
@@ -3043,10 +3176,14 @@ function selectCellScopedSources(scene3d, pool, lights, renderSetArr, viewerSrc)
   let rejected = 0;
   for (let i = 0; i < lights.length; i += 1) {
     const light = lights[i];
+    if (syncAndCheckLightOwnerHidden(light, scene3d)) {
+      rejected += 1;
+      continue;
+    }
     const ud = light.userData;
     const cellId = ud && ud.__cellId != null ? ud.__cellId >>> 0 : null;
     if (cellId != null) {
-      if (!cellSet.has(cellId)) continue; // out-of-scope room
+      if (!cellSet.has(cellId) || !isIndoorCellDrawn(scene3d, cellId)) continue; // out-of-scope or undrawn room
     } else if (ud && ud.__lbKey != null) {
       if (enclosed) continue; // outdoor lamp can't reach an enclosed cell
     }
@@ -3054,7 +3191,7 @@ function selectCellScopedSources(scene3d, pool, lights, renderSetArr, viewerSrc)
     // LIGHT-GUARD — unusable sources (non-finite / absurd position, detached
     // rig) are counted and dropped here so they can neither be selected nor
     // scramble the sort (a NaN key made Array.sort order arbitrary).
-    let distSq = candidateDistSq(light, tmp, refX, refY, refZ);
+    let distSq = candidateDistSq(light, tmp, refX, refY, refZ, scene3d);
     if (!(distSq < Infinity)) {
       rejected += 1;
       continue;
@@ -3139,6 +3276,7 @@ function capActiveLightsByDistance(scene3d, sessionHandle) {
     cellMode && renderSetArr && clCfg.viewerLight
       ? ensureViewerLightSource(scene3d, clCfg)
       : null;
+  const playerOutdoors = isPlayerOutdoorsForLights(scene3d, sessionHandle);
   if (!Array.isArray(lights) || lights.length === 0) {
     // Pool mode: no source lights → drive every pool slot dark (intensity 0),
     // which is NOT a count change (the slots stay visible). Legacy: nothing.
@@ -3148,7 +3286,7 @@ function capActiveLightsByDistance(scene3d, sessionHandle) {
       if (viewerSrc) {
         refreshCellLightRef(scene3d);
         selectCellScopedSources(scene3d, lightPool, [], renderSetArr, viewerSrc);
-        feedSelectedIntoPool(lightPool);
+        feedSelectedIntoPool(lightPool, scene3d, playerOutdoors);
       } else {
         zeroLightPool(lightPool);
       }
@@ -3171,7 +3309,7 @@ function capActiveLightsByDistance(scene3d, sessionHandle) {
   // still FED every frame so lights riding moving rigs track exactly.
   if (cellMode && renderSetArr) {
     refreshCellLightRef(scene3d, camera);
-    const key = hashCellSet(renderSetArr);
+    const key = hashCellSetAndVisibility(renderSetArr, scene3d, playerOutdoors);
     // Identity key, not just the count — see hashLightIdentities. A
     // same-count add/remove pair MUST invalidate or the pool keeps feeding
     // released lights (ghost glow) and starves the fresh ones.
@@ -3200,12 +3338,12 @@ function capActiveLightsByDistance(scene3d, sessionHandle) {
       stats.built && !stats.dirty && !recheck &&
       key === stats.key && stats.srcKey === srcKey
     ) {
-      if (feedSelectedIntoPool(lightPool)) stats.dirty = true;
+      if (feedSelectedIntoPool(lightPool, scene3d, playerOutdoors)) stats.dirty = true;
       return;
     }
     selectCellScopedSources(scene3d, lightPool, lights, renderSetArr, viewerSrc);
     stats.dirty = false;
-    if (feedSelectedIntoPool(lightPool)) stats.dirty = true;
+    if (feedSelectedIntoPool(lightPool, scene3d, playerOutdoors)) stats.dirty = true;
     stats.rebuilds += 1;
     stats.key = key;
     stats.count = lights.length;
@@ -3244,7 +3382,7 @@ function capActiveLightsByDistance(scene3d, sessionHandle) {
     // Sort throttled this tick. Legacy: nothing to do — stale `.visible` flags
     // survive (the perf win). Pool: still re-feed every frame so a light riding
     // a moving creature tracks exactly, then return without re-picking sources.
-    if (lightPool && lightPool.enabled) feedSelectedIntoPool(lightPool);
+    if (lightPool && lightPool.enabled) feedSelectedIntoPool(lightPool, scene3d, playerOutdoors);
     return;
   }
 
@@ -3306,7 +3444,7 @@ function capActiveLightsByDistance(scene3d, sessionHandle) {
     // LIGHT-GUARD — unusable sources (non-finite / absurd position, detached
     // rig) key as +Infinity: they sort last, are never picked into a pool
     // slot, and can't scramble the sort the way a NaN key did.
-    let distSq = candidateDistSq(light, tmp, refX, refY, refZ);
+    let distSq = candidateDistSq(light, tmp, refX, refY, refZ, scene3d);
     // Stick band: a source that held a pool slot last cycle sorts as if it
     // were `√hysteresis` nearer, so it isn't kicked out by a barely-closer
     // rival. Inert when hysteresis === 1 or the source was unselected.
@@ -3330,7 +3468,7 @@ function capActiveLightsByDistance(scene3d, sessionHandle) {
     // carriers), so the renderer's per-type light count NEVER changes → no
     // shader relink → no freeze. Same nearest-N selection as legacy below.
     pickSelectedSources(lightPool, scratch);
-    feedSelectedIntoPool(lightPool);
+    feedSelectedIntoPool(lightPool, scene3d, playerOutdoors);
   } else {
     // Legacy: the top MAX_ACTIVE_LIGHTS slots get .visible = true; the rest
     // .visible = false. Single-comparison gate so we don't dirty already-
@@ -3583,6 +3721,8 @@ export async function attachSetupModelLights(scene3d, wasmExports, opts = undefi
       // light to every existing placement and pile up duplicates.
       if (ud.__setupLightScanned) continue;
       ud.__setupLightScanned = true;
+      // Fix 5.1: Suppress Turbine's invisible floating point-light test marker (0x02000364).
+      if (SUPPRESSED_SETUP_LIGHT_MODELS.has(modelId)) continue;
       // C3 #6 — resolve the placement's lb-key off its userData
       // landblockId (full 32-bit; mask via lbKeyOf) so eviction can
       // splice this placement's lights.
@@ -3621,6 +3761,7 @@ export async function attachSetupModelLights(scene3d, wasmExports, opts = undefi
       // Idempotency tag (GAP 2) — see recordBuildingTree.
       if (ud.__setupLightScanned) continue;
       ud.__setupLightScanned = true;
+      if (SUPPRESSED_SETUP_LIGHT_MODELS.has(modelId)) continue;
       // C3 #6 — resolve the static's lb-key (walk-up off userData
       // landblockId) so eviction can splice this static's lights.
       const lbKey = ud.landblockId != null ? lbKeyOf(ud.landblockId >>> 0) : null;
@@ -3648,6 +3789,8 @@ export async function attachSetupModelLights(scene3d, wasmExports, opts = undefi
       // spawn after a rescan are caught by the next per-LB rescan.
       if (inst._setupLightScanned) return;
       inst._setupLightScanned = true;
+      if (SUPPRESSED_SETUP_LIGHT_MODELS.has(setupId)) return;
+      if (inst._noDrawWeenie === true) return;
       if (only && _noLightSetups.has(setupId)) return; // known: no lights
       const parts = inst.parts || [];
       let entry = partsBySetupId.get(setupId);
@@ -3714,6 +3857,7 @@ export async function attachSetupModelLights(scene3d, wasmExports, opts = undefi
         if (!modelId) continue;
         if (ud.__setupLightScanned) continue;
         ud.__setupLightScanned = true;
+        if (SUPPRESSED_SETUP_LIGHT_MODELS.has(modelId)) continue;
         if (dropBaked) {
           summary.cellStaticsBaked += 1;
           if (!retainWeenieTorches) continue;
@@ -3820,7 +3964,7 @@ export async function attachSetupModelLights(scene3d, wasmExports, opts = undefi
     const partEntries = partsBySetupId.get(setupId) || [];
 
     for (const sl of setupLights) {
-      const lightObj = makeThreeLightForSetupLight(sl);
+      const lightObj = makeThreeLightForSetupLight(sl, setupId);
       if (lightObj === null) {
         if (typeof sl.free === "function") {
           try { sl.free(); } catch (_) {}
@@ -3831,6 +3975,7 @@ export async function attachSetupModelLights(scene3d, wasmExports, opts = undefi
       // placement of the building/static gets its own light copy so
       // two instances of the same building light independently.
       const targetPartIndex = sl.partIndex >>> 0;
+      const isHearthSetup = RECENTERED_HEARTH_SETUP_IDS.has(setupId >>> 0);
       let attachedAny = false;
       // Perf C7 — template is built lazily on the first 2nd-placement
       // (i.e. when we'd otherwise call `lightObj.clone()`). One-
@@ -3847,7 +3992,7 @@ export async function attachSetupModelLights(scene3d, wasmExports, opts = undefi
         if (ownerInst) {
           const em = scene3d.entityManager;
           const map = em && em.entityMap;
-          if (ownerInst._disposed) continue;
+          if (ownerInst._disposed || ownerInst._noDrawWeenie === true) continue;
           if (map && typeof map.get === "function" && map.get(ownerGuid) !== ownerInst) continue;
         }
         // Per-placement instance. First placement reuses the source
@@ -3870,6 +4015,21 @@ export async function attachSetupModelLights(scene3d, wasmExports, opts = undefi
           // build the template from the UNSCALED source before it is moved
           if (template === null && inst === lightObj) template = getOrBuildLightTemplate(lightObj);
           placeLightInObjectFrame(inst, object3D);
+        }
+        // Fix 5.2: When an early hearth/campfire/bonfire Setup (0x020005D8 / 0x020005D9 /
+        // 0x02000706) sits inside a cottage/building footprint or indoor EnvCell, clamp
+        // its reach so chimney hearths don't illuminate exterior backyards through solid
+        // windowless stone walls. Capture `template` BEFORE mutating `lightObj` so open-air
+        // campfires sharing the setup retain their full authored range.
+        if (isHearthSetup && isEnclosedInBuildingFootprint(scene3d, object3D, cellId)) {
+          if (template === null && inst === lightObj) template = getOrBuildLightTemplate(lightObj);
+          inst.distance =
+            inst.distance > 0
+              ? Math.min(inst.distance, HEARTH_ENCLOSED_MAX_RANGE_M)
+              : HEARTH_ENCLOSED_MAX_RANGE_M;
+          if (!inst.userData) inst.userData = {};
+          inst.userData.hearthEnclosedClamped = true;
+          inst.userData.falloff = inst.distance;
         }
         object3D.add(inst);
         if (scene3d._setupLightCarrierRoot) {
@@ -3916,7 +4076,7 @@ export async function attachSetupModelLights(scene3d, wasmExports, opts = undefi
         }
         // RND-05/03 — interior (EnvCell) prop lights carry their owning cell
         // id; the ?cellLights selection scopes on it. Non-cell entries
-        // (buildings / outdoor statics / entity rigs) leave it undefined.
+        // (buildings / outdoor statics / outdoor entity rigs) leave it undefined.
         if (cellId != null) {
           if (!inst.userData) inst.userData = {};
           inst.userData.__cellId = cellId >>> 0;
@@ -3930,7 +4090,26 @@ export async function attachSetupModelLights(scene3d, wasmExports, opts = undefi
         // LIGHT-GUARD — provenance stamps for window.__diag.lights.
         if (!inst.userData) inst.userData = {};
         inst.userData.__setupId = setupId >>> 0;
-        if (ownerInst) inst.userData.__ownerGuid = ownerGuid >>> 0;
+        if (ownerInst) {
+          inst.userData.__ownerGuid = ownerGuid >>> 0;
+          Object.defineProperty(inst.userData, "__ownerInst", {
+            value: ownerInst,
+            configurable: true,
+            writable: true,
+          });
+          // Fix 5.3: Stamp indoor/dungeon entity cellId (`>= 0x0100`) so underground
+          // and closed-room portals/entities (Mannikin Foundry Portal 0xA9B40176,
+          // Meeting Hall Portal 0xA9B4017A, Underground Passage 0xAAB30101) cannot
+          // bleed outdoors; leave outdoor entities (`< 0x0100`) with `__cellId === undefined`.
+          const rawEntityCell =
+            (ownerInst._wireCellId ?? ownerInst._spawnCellId ?? ownerInst.meta?.landblockId ?? 0) >>> 0;
+          if ((rawEntityCell & 0xffff) >= 0x0100) {
+            inst.userData.__cellId = rawEntityCell;
+            if (inst.layers && typeof inst.layers.enable === "function") {
+              inst.layers.enable(1);
+            }
+          }
+        }
       }
       if (!attachedAny) {
         // No matching part for this light's partIndex — possible
@@ -4126,8 +4305,93 @@ function createLightFromTemplate(template, transform) {
  * lands. `falloff` maps to three.js `distance` (max reach), which IS a
  * faithful proxy for AC's `range` cutoff.
  */
-function makeThreeLightForSetupLight(sl) {
+const _hearthEnclosurePos = new THREE.Vector3();
+
+/**
+ * Fix 5.2: True when a hearth/campfire placement (`object3D`) is inside an
+ * `EnvCell` (`cellId >= 0x0100`), carries an explicit `enclosedInBuilding`
+ * marker, or falls horizontally/vertically inside a building placement's
+ * world bounding box in `scene3d.buildingsGroup` (such as Holtburg cottage
+ * chimneys). Open-air campfires on grass return `false` and keep full range.
+ */
+export function isEnclosedInBuildingFootprint(scene3d, object3D, cellId = null) {
+  if (cellId != null && ((cellId >>> 0) & 0xffff) >= 0x0100) return true;
+  if (!object3D) return false;
+  let cur = object3D;
+  while (cur) {
+    if (cur.userData?.enclosedInBuilding === true) return true;
+    if (cur.userData?.enclosedInBuilding === false) return false;
+    cur = cur.parent;
+  }
+  const bGroup = scene3d?.buildingsGroup;
+  if (!bGroup || !Array.isArray(bGroup.children) || bGroup.children.length === 0) {
+    return false;
+  }
+  try {
+    if (typeof object3D.updateWorldMatrix === "function") {
+      object3D.updateWorldMatrix(true, false);
+    } else if (typeof object3D.updateMatrixWorld === "function") {
+      object3D.updateMatrixWorld(true);
+    }
+    object3D.getWorldPosition(_hearthEnclosurePos);
+  } catch (_) {
+    return false;
+  }
+  const wx = _hearthEnclosurePos.x;
+  const wy = _hearthEnclosurePos.y;
+  const wz = _hearthEnclosurePos.z;
+  if (!Number.isFinite(wx) || !Number.isFinite(wy) || !Number.isFinite(wz)) return false;
+
+  for (const bldg of bGroup.children) {
+    if (!bldg || bldg === object3D) continue;
+    const bUd = bldg.userData || {};
+    const bSid = (bUd.modelId ?? 0) >>> 0;
+    if (RECENTERED_HEARTH_SETUP_IDS.has(bSid)) continue;
+    // Skip if `bldg` is an ancestor of `object3D` AND itself has no geometry other than the hearth.
+    let box = bUd.worldBounds || bUd.__footprintBox3 || null;
+    if (!box) {
+      try {
+        if (typeof bldg.updateMatrixWorld === "function") bldg.updateMatrixWorld(true);
+        const computed = new THREE.Box3().setFromObject(bldg);
+        if (!bldg.userData) bldg.userData = {};
+        Object.defineProperty(bldg.userData, "__footprintBox3", {
+          value: computed,
+          configurable: true,
+          writable: true,
+        });
+        box = computed;
+      } catch (_) {
+        box = null;
+      }
+    }
+    if (!box || !box.min || !box.max) continue;
+    if (typeof box.isEmpty === "function" && box.isEmpty()) continue;
+    // Require a real structure footprint (> 3 m across) so small decorative props never match.
+    const spanX = box.max.x - box.min.x;
+    const spanY = box.max.y - box.min.y;
+    const spanZ = box.max.z - box.min.z;
+    if (Math.max(spanX, spanZ) < 3.0 && Math.max(spanX, spanY) < 3.0) continue;
+    if (
+      wx >= box.min.x - 0.35 &&
+      wx <= box.max.x + 0.35 &&
+      wy >= box.min.y - 0.75 &&
+      wy <= box.max.y + 1.5 &&
+      wz >= box.min.z - 0.35 &&
+      wz <= box.max.z + 0.35
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function makeThreeLightForSetupLight(sl, setupId = 0) {
   if (!sl) return null;
+  const sid = ((setupId || sl?.setupId || 0) >>> 0);
+  // Fix 5.1: Never instantiate a THREE.Light for Turbine's dummy point-light test marker.
+  if (sid !== 0 && SUPPRESSED_SETUP_LIGHT_MODELS.has(sid)) {
+    return null;
+  }
   // Read defensively — wasm-bindgen getters can throw if the handle
   // has been freed, and tests pass plain objects with identical shape.
   let x, y, z, r, g, b, intensity, falloff, coneAngle;
@@ -4157,6 +4421,19 @@ function makeThreeLightForSetupLight(sl) {
   }
   if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) {
     return null;
+  }
+  // Fix 5.2: Early hearth / campfire / bonfire Setups (0x020005D8, 0x020005D9,
+  // 0x02000706 — 32 placements across Holtburg) carry a hardcoded DAT LightInfo
+  // offset at (-2.0, -2.0, +2.0) while the fire mesh & particle emitter sit at
+  // (0, 0, +1.8..+2.15), pushing 12 m orange lights 2.83 m outside solid cottage
+  // chimney walls onto empty grass. Recenter horizontal XY (x, y) to (0, 0) while
+  // preserving vertical z.
+  const rawX = x;
+  const rawY = y;
+  const hearthRecentered = sid !== 0 && RECENTERED_HEARTH_SETUP_IDS.has(sid);
+  if (hearthRecentered) {
+    x = 0;
+    y = 0;
   }
   // LG1 (waves-3): floor at 0 (negative/non-finite = malformed; AC's
   // LightInfo.intensity is unsigned-physical) and cap at LIGHT_INTENSITY_CLAMP
@@ -4282,6 +4559,10 @@ function makeThreeLightForSetupLight(sl) {
     // Object3D, and `releaseLight` detaches it on eviction.
     spotTargetLocal,
   };
+  if (hearthRecentered) {
+    lightObj.userData.hearthRecentered = true;
+    lightObj.userData.rawSetupLightOrigin = { x: rawX, y: rawY, z };
+  }
   // RENDER_LAYER_INDOOR (1) so setup-model accent lights survive the
   // ?portalPunch / indoor cells-pass camera mask (see createLightFromTemplate);
   // layer 0 stays on → default + world pass unchanged.
@@ -4296,8 +4577,8 @@ function makeThreeLightForSetupLight(sl) {
 // when `> 0`; the LIGHT_INTENSITY_CLAMP, SPOTLIGHT_PENUMBRA, and LIGHT_DECAY
 // constants apply uniformly). Additive — the private helper is unchanged and
 // still drives `attachSetupModelLights`. Returns `null` on malformed input.
-export function buildLightForSetupLight(sl) {
-  return makeThreeLightForSetupLight(sl);
+export function buildLightForSetupLight(sl, setupId = 0) {
+  return makeThreeLightForSetupLight(sl, setupId);
 }
 
 // Expose canonical intensities + the per-light cap so capture

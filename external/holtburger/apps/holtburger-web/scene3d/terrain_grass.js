@@ -445,6 +445,19 @@ const GRASS_CLUMP_GLSL = [
   "  float d = hbGrassHash21(i + vec2(1.0, 1.0));",
   "  return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);",
   "}",
+  "// Domain-rotated ~96 m and ~36 m macro meadow waves break 11.4 m blotch repetition across plains.",
+  "float hbGrassMacroLush(vec2 w) {",
+  "  vec2 w96 = vec2(w.x * 0.80 - w.y * 0.60, w.x * 0.60 + w.y * 0.80) * 0.0104167 + vec2(31.7, 11.9);",
+  "  vec2 w36 = vec2(w.x * 0.5547 + w.y * 0.8321, -w.x * 0.8321 + w.y * 0.5547) * 0.0277778 + vec2(7.3, 43.1);",
+  "  return clamp(hbGrassNoise2(w96) * 0.58 + hbGrassNoise2(w36) * 0.42, 0.0, 1.0);",
+  "}",
+  "float hbGrassMacroHeight(float lush) {",
+  "  return mix(0.84, 1.24, lush);",
+  "}",
+  "float hbGrassSeedDrift(vec2 w) {",
+  "  vec2 wr = vec2(w.x * 0.8944 - w.y * 0.4472, w.x * 0.4472 + w.y * 0.8944) * 0.045 + vec2(53.1, 19.7);",
+  "  return smoothstep(0.26, 0.74, hbGrassNoise2(wr));",
+  "}",
   "float hbGrassClump(vec2 w) {",
   "  float macro = hbGrassNoise2(w * 0.088);",
   "  float tuft = hbGrassNoise2(w * 0.32 + vec2(17.3, 9.1));",
@@ -453,6 +466,46 @@ const GRASS_CLUMP_GLSL = [
   "vec2 hbGrassTuftDir(vec2 w) {",
   "  float ang = hbGrassNoise2(w * 0.14 + vec2(4.7, 13.2)) * 6.2831853;",
   "  return vec2(cos(ang), sin(ang));",
+  "}",
+  "// Botanical sub-species & slope/sun-aspect meadow colouration (0 textures, pure ALU).",
+  "vec3 hbGrassVarietyTint(vec2 w, float h, vec3 baseTint, vec3 nrm, float famParam, float vHash, float rotRad) {",
+  "  float clump = hbGrassClump(w);",
+  "  float lush = hbGrassMacroLush(w);",
+  "  float drift = hbGrassSeedDrift(w);",
+  "  float specH = fract(vHash * 19.173 + rotRad * 2.269549);",
+  "  float subVar = fract(vHash * 43.913 + rotRad * 0.841471);",
+  "  // 1. Macro meadow moisture/lushness tint: damp emerald/sage swales vs sun-cured olive/straw rises.",
+  "  vec3 swaleMul = vec3(0.86, 1.09, 1.12);",
+  "  vec3 riseMul = vec3(1.18, 0.99, 0.74);",
+  "  vec3 envTint = baseTint * mix(riseMul, swaleMul, smoothstep(0.20, 0.82, lush));",
+  "  // 2. Topographic slope & sun-aspect micro-climate (aNormal.z < 0.92 south/west vs > 0.98 north hollow).",
+  "  vec3 unitN = dot(nrm, nrm) > 1e-6 ? normalize(nrm) : vec3(0.0, 0.0, 1.0);",
+  "  float sunAspect = clamp((-unitN.y * 0.78 - unitN.x * 0.62) * 1.65, -1.0, 1.0);",
+  "  float drySlope = (1.0 - smoothstep(0.84, 0.93, unitN.z)) * (0.52 + 0.48 * max(0.0, sunAspect));",
+  "  float coolHollow = smoothstep(0.96, 0.996, unitN.z) * (0.52 + 0.48 * max(0.0, -sunAspect));",
+  "  envTint *= mix(vec3(1.0), vec3(1.26, 1.01, 0.66), clamp(drySlope, 0.0, 1.0));",
+  "  envTint *= mix(vec3(1.0), vec3(0.84, 1.10, 1.08), clamp(coolHollow * lush, 0.0, 1.0));",
+  "  vec3 rootCol = envTint * vec3(0.46, 0.40, 0.34);",
+  "  vec3 tipCol = envTint * vec3(1.18, 1.10, 0.86);",
+  "  vec3 rich = mix(rootCol, mix(envTint, tipCol, h * h), smoothstep(0.0, 0.85, h)) * mix(0.90, 1.08, clump);",
+  "  // 3a. Tall golden seed culms / rye stalks (~8% in meadow zones): warm wheat/straw upper stalk.",
+  "  float ryeGate = step(famParam, 0.55);",
+  "  float ryeProb = (0.03 + 0.10 * drift) * ryeGate;",
+  "  if (specH < ryeProb) {",
+  "    vec3 wheatCol = mix(envTint * vec3(1.52, 1.22, 0.72), vec3(0.28, 0.23, 0.085), 0.48);",
+  "    rich = mix(rich, wheatCol, smoothstep(0.32, 0.92, h));",
+  "  } else {",
+  "    // 3b. Clover / wildflower-tipped accent tufts (~4% in lush LushGrass / Flora pockets).",
+  "    float cloverGate = step(famParam, 0.35) * smoothstep(0.38, 0.78, lush);",
+  "    float cloverProb = 0.085 * cloverGate;",
+  "    if (specH > 1.0 - cloverProb) {",
+  "      vec3 petal = subVar < 0.42",
+  "        ? vec3(0.34, 0.27, 0.065)",
+  "        : (subVar < 0.76 ? vec3(0.28, 0.29, 0.23) : vec3(0.21, 0.16, 0.27));",
+  "      rich = mix(rich, petal, smoothstep(0.60, 0.95, h) * 0.78);",
+  "    }",
+  "  }",
+  "  return rich;",
   "}",
 ].join("\n");
 
@@ -568,14 +621,33 @@ function _grassVertexSnippet(gpu = false) {
     "    // (zero) y so a future ribbon blade needs no snippet change.",
     "    float hbClump = hbGrassClump(hbWorld);",
     "    vec2 hbS = aScale * uGrassLodScale;",
+    "    float hbPostureH = fract(vVfxHash * 11.317 + aRot * 1.414213);",
+    "    float hbSpeciesSway = 1.0;",
     "    if (uGrassEnvLive > 0.5) {",
-    "      hbS.x *= mix(0.65, 1.45, hbClump);",
-    "      hbS.y *= mix(0.88, 1.18, hbClump);",
+    "      float hbMacroLush = hbGrassMacroLush(hbWorld);",
+    "      float hbMacroH = hbGrassMacroHeight(hbMacroLush);",
+    "      float hbDrift = hbGrassSeedDrift(hbWorld);",
+    "      float hbSpecH = fract(vVfxHash * 19.173 + aRot * 2.269549);",
+    "      float hbSubVar = fract(vVfxHash * 43.913 + aRot * 0.841471);",
+    "      float hbSlopeDry = (1.0 - smoothstep(0.84, 0.93, aNormal.z));",
+    "      hbS.x *= mix(0.68, 1.32, hbClump) * hbMacroH * mix(1.0, 0.90, hbSlopeDry);",
+    "      hbS.y *= mix(0.88, 1.16, hbClump);",
+    "      float hbRyeProb = (0.03 + 0.10 * hbDrift) * step(aFamilyParam, 0.55);",
+    "      float hbCloverProb = 0.085 * step(aFamilyParam, 0.35) * smoothstep(0.38, 0.78, hbMacroLush);",
+    "      if (hbSpecH < hbRyeProb) {",
+    "        hbS.x *= mix(1.45, 1.68, hbSubVar);",
+    "        hbS.y *= 0.62;",
+    "        hbSpeciesSway = 1.30;",
+    "      } else if (hbSpecH > 1.0 - hbCloverProb) {",
+    "        hbS.x *= 0.75;",
+    "        hbS.y *= 1.28;",
+    "      }",
+    "      hbS.x = min(hbS.x, aScale.x * uGrassLodScale.x * 2.25);",
     "    }",
     "    vec3 hbP = vec3(transformed.x * hbS.y, transformed.y * hbS.y, transformed.z * hbS.x);",
-    "    // Static forward bow, per-blade via the procedural instance hash, so no",
-    "    // two blades are identical even before the wind moves them.",
-    "    hbP.y += uGrassBow * hbS.x * hbH * hbH * (0.5 + vVfxHash);",
+    "    // Static forward bow & per-blade posture/arch curve (stiff shoots + graceful arches).",
+    "    float hbArch = mix(hbH * hbH, hbH * (mix(0.22, 0.54, hbPostureH) + mix(0.78, 0.46, hbPostureH) * hbH) * mix(0.82, 1.24, hbPostureH), uGrassEnvLive);",
+    "    hbP.y += uGrassBow * hbS.x * hbArch * (0.5 + vVfxHash);",
     "    // Yaw. Per-blade, from our own attribute — this is what makes an",
     "    // object-space wind direction a WORLD-space one for grass.",
     "    float hbCos = cos(aRot);",
@@ -583,7 +655,7 @@ function _grassVertexSnippet(gpu = false) {
     "    hbP.xy = vec2(hbP.x * hbCos - hbP.y * hbSin, hbP.x * hbSin + hbP.y * hbCos);",
     "    if (uGrassEnvLive > 0.5) {",
     "      vec2 hbTuft = hbGrassTuftDir(hbWorld);",
-    "      hbP.xy += hbTuft * (uGrassBow * 1.65 * hbS.x * hbH * hbH * (0.35 + 0.65 * hbClump));",
+    "      hbP.xy += hbTuft * (uGrassBow * 1.65 * hbS.x * hbArch * (0.35 + 0.65 * hbClump));",
     "    }",
     "    // WIND — windSwayGpu's gust function verbatim (primary sine + a 3.7x",
     "    // flutter band at a decorrelated phase), off the same shared clock, so",
@@ -597,7 +669,7 @@ function _grassVertexSnippet(gpu = false) {
     "    float hbGustEnv = mix(1.0, 0.68 + 0.52 * (0.5 + 0.5 * sin(hbGustFront + 0.6 * sin(hbGustFront * 0.43 + hbWorld.x * 0.017))), uGrassEnvLive);",
     "    float hbOsc = (sin(hbT + hbPhase)",
     "                + uGrassWindFlutter * sin(hbT * 3.7 + hbPhase * 1.7 + 1.3)) * hbGustEnv;",
-    "    float hbStiff = mix(1.0, 0.25, aFamilyParam);",
+    "    float hbStiff = mix(1.0, 0.25, aFamilyParam) * hbSpeciesSway;",
     "    hbP.xy += uGrassWindDir * (uGrassWindAmp * hbS.x * hbStiff * hbH * hbH * hbH * hbOsc);",
     "    // Lean downhill with the ground normal (its xy points downslope).",
     "    hbP.xy += aNormal.xy * (hbP.z * uGrassLean);",
@@ -694,12 +766,18 @@ function _grassVertexSnippet(gpu = false) {
       ...look,
       "    transformed = hbP;",
     ]),
-    "    // Per-blade colour + root-to-tip earthy humus AO to warm sunlit olive-emerald tips.",
-    "    float hbRootClump = hbGrassClump(hbWorld);",
-    "    vec3 hbRootCol = aTint * vec3(0.46, 0.40, 0.34);",
-    "    vec3 hbTipCol = aTint * vec3(1.18, 1.10, 0.86);",
-    "    vec3 hbRichTint = mix(hbRootCol, mix(aTint, hbTipCol, hbH * hbH), smoothstep(0.0, 0.85, hbH)) * mix(0.90, 1.08, hbRootClump);",
-    "    vGrassTint = mix(aTint * mix(uGrassAoBase, 1.0, hbH), hbRichTint, uGrassEnvLive);",
+    "    // Per-blade colour: macro meadow waves, slope/sun-aspect micro-climate, and rye/clover botanical accents.",
+    "    vec3 hbBaseTint = aTint * mix(uGrassAoBase, 1.0, hbH);",
+    ...(gpu ? [
+      "    if (uGrassEnvLive > 0.5 && hbGpLive > 0.5) {",
+      "      hbBaseTint = hbGrassVarietyTint(hbWorld, hbH, aTint, aNormal, aFamilyParam, vVfxHash, aRot);",
+      "    }",
+    ] : [
+      "    if (uGrassEnvLive > 0.5) {",
+      "      hbBaseTint = hbGrassVarietyTint(hbWorld, hbH, aTint, aNormal, aFamilyParam, vVfxHash, aRot);",
+      "    }",
+    ]),
+    "    vGrassTint = hbBaseTint;",
     "    vGrassBladeT = hbH;",
     "    vGrassAcNrm = dot(aNormal, aNormal) > 1e-6 ? normalize(aNormal) : vec3(0.0, 0.0, 1.0);",
     ...(gpu ? [
@@ -1564,7 +1642,7 @@ export function createTerrainGrassProvider(opts = {}) {
     }
     lk.stomp = stomp;
     grassGpuBladeReach(lk, reachOut);
-    const clumpGain = uniforms.uGrassEnvLive.value > 0.5 ? 1.45 : 1.0;
+    const clumpGain = uniforms.uGrassEnvLive.value > 0.5 ? 2.25 : 1.0;
     r.cull.xyMarginM = Math.max(GRASS_GPU_CULL_XY_MARGIN_M, reachOut.lateralM * clumpGain);
     r.cull.zAboveM = Math.max(GRASS_GPU_CULL_ABOVE_M, reachOut.aboveM * clumpGain);
   }
@@ -2276,4 +2354,101 @@ export function terrainGrassHandle() { return _handle; }
 export function _resetTerrainGrass() {
   if (_handle) { try { _handle.unregister(); } catch (_) {} }
   _handle = null;
+}
+
+// ---------------------------------------------------------------------------
+// Item 3 JS variety mirrors (exact numeric mirrors of GRASS_CLUMP_GLSL +
+// _grassVertexSnippet for unit tests and offline meadow inspection).
+// ---------------------------------------------------------------------------
+
+function _fract(v) {
+  return v - Math.floor(v);
+}
+
+function _smoothstep(e0, e1, x) {
+  const t = Math.max(0, Math.min(1, (x - e0) / Math.max(e1 - e0, 1e-12)));
+  return t * t * (3 - 2 * t);
+}
+
+export function grassHash21Mirror(px, py) {
+  let x = _fract(px * 0.1031);
+  let y = _fract(py * 0.1031);
+  let z = _fract(px * 0.1031);
+  const d = x * (y + 33.33) + y * (z + 33.33) + z * (x + 33.33);
+  x += d; y += d; z += d;
+  return _fract((x + y) * z);
+}
+
+export function grassNoise2Mirror(px, py) {
+  const ix = Math.floor(px), iy = Math.floor(py);
+  const fx = px - ix, fy = py - iy;
+  const ux = fx * fx * (3 - 2 * fx);
+  const uy = fy * fy * (3 - 2 * fy);
+  const a = grassHash21Mirror(ix, iy);
+  const b = grassHash21Mirror(ix + 1, iy);
+  const c = grassHash21Mirror(ix, iy + 1);
+  const d = grassHash21Mirror(ix + 1, iy + 1);
+  const ab = a + (b - a) * ux;
+  const cd = c + (d - c) * ux;
+  return ab + (cd - ab) * uy;
+}
+
+export function evalGrassMacroLush(wx, wy) {
+  const x96 = (wx * 0.80 - wy * 0.60) * 0.0104167 + 31.7;
+  const y96 = (wx * 0.60 + wy * 0.80) * 0.0104167 + 11.9;
+  const x36 = (wx * 0.5547 + wy * 0.8321) * 0.0277778 + 7.3;
+  const y36 = (-wx * 0.8321 + wy * 0.5547) * 0.0277778 + 43.1;
+  return Math.max(0, Math.min(1, grassNoise2Mirror(x96, y96) * 0.58 + grassNoise2Mirror(x36, y36) * 0.42));
+}
+
+export function evalGrassMacroHeight(lush) {
+  return 0.84 + (1.24 - 0.84) * lush;
+}
+
+export function evalGrassSeedDrift(wx, wy) {
+  const xr = (wx * 0.8944 - wy * 0.4472) * 0.045 + 53.1;
+  const yr = (wx * 0.4472 + wy * 0.8944) * 0.045 + 19.7;
+  return _smoothstep(0.26, 0.74, grassNoise2Mirror(xr, yr));
+}
+
+export function evalGrassBladeArch(h, h3) {
+  const hc = Math.max(0, Math.min(1, h));
+  const t = Math.max(0, Math.min(1, h3));
+  const c1 = 0.22 + (0.54 - 0.22) * t;
+  const c2 = 0.78 + (0.46 - 0.78) * t;
+  return hc * (c1 + c2 * hc);
+}
+
+export function evalGrassBotanicalProfile(vHash, rotRad, famParam, macroLush, seedDrift) {
+  const specH = _fract(vHash * 19.173 + rotRad * 2.269549);
+  const subVar = _fract(vHash * 43.913 + rotRad * 0.841471);
+  const ryeGate = famParam <= 0.55 ? 1 : 0;
+  const ryeProb = (0.03 + 0.10 * seedDrift) * ryeGate;
+  if (specH < ryeProb) {
+    return {
+      species: "rye-culm",
+      heightMul: 1.45 + (1.68 - 1.45) * subVar,
+      widthMul: 0.62,
+      swayMul: 1.30,
+      accent: "wheat",
+    };
+  }
+  const cloverGate = (famParam <= 0.35 ? 1 : 0) * _smoothstep(0.38, 0.78, macroLush);
+  const cloverProb = 0.085 * cloverGate;
+  if (specH > 1.0 - cloverProb) {
+    return {
+      species: "clover-accent",
+      heightMul: 0.75,
+      widthMul: 1.28,
+      swayMul: 1.0,
+      accent: subVar < 0.42 ? "buttercup" : (subVar < 0.76 ? "ivory" : "violet"),
+    };
+  }
+  return {
+    species: "meadow-blade",
+    heightMul: 1.0,
+    widthMul: 1.0,
+    swayMul: 1.0,
+    accent: "none",
+  };
 }

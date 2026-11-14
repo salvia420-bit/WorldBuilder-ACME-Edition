@@ -808,18 +808,20 @@ export function createScatterPool(opts = {}) {
       commitDegenerate(i, x, y, 0);
       return;
     }
+    if (s.hasHeight !== true || !Number.isFinite(s.height)) {
+      // The oracle cached codes (or a partial entry) before the heightmap
+      // finished streaming in. Mark UNRESOLVED (0) so stationary ticks (d === 0)
+      // after a portal/teleport continue healing these cells once heights land.
+      resolvedFlags[i] = 0;
+      state.noHeight += 1;
+      commitDegenerate(i, x, y, 0);
+      return;
+    }
     resolvedFlags[i] = 1;
 
     if (familyGated && !familyMask[s.family & 63]) {
       state.familyRejects += 1;
-      commitDegenerate(i, x, y, s.hasHeight ? s.height : 0);
-      return;
-    }
-    if (s.hasHeight !== true || !Number.isFinite(s.height)) {
-      // The oracle cached codes but no heights (a mesh baked before Wave 0A
-      // added `heights` to userData). Grounding is impossible; do not guess.
-      state.noHeight += 1;
-      commitDegenerate(i, x, y, 0);
+      commitDegenerate(i, x, y, s.height);
       return;
     }
 

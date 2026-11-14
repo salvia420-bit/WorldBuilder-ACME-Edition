@@ -23,6 +23,7 @@
 
 import * as THREE from "three";
 import { viewerState } from "./viewer_cell.js";
+import { ownerRegistry as defaultOwnerRegistry } from "./particles/owner_registry.js";
 // 2026-10-07 `?skyGlow` (DEFAULT ON) — the "birds" this host attaches are the
 // moon SkyObject's nebula glow sheets; sky_glow.js renders them retail-style
 // (behind the world and the clouds, unfogged, edge-windowed). See its header.
@@ -549,6 +550,38 @@ export class SkyDome {
    */
   updateSkyParticleChains(skyObjects, wasmExports) {
     if (!this._skyBirdsEnabled) return;
+    // Reap and immediately hide any previously attached sky/weather particle chains
+    // (e.g. storm lightning/rain chains 0x33000453 / 0x33000428) that are no longer
+    // present & visible in `skyObjects` (such as when HUD `weatherOff` turns true!).
+    if (this._skyBirdChainsAttached && this._skyBirdChainsAttached.size > 0) {
+      const livePes = new Set();
+      if (Array.isArray(skyObjects)) {
+        for (const s of skyObjects) {
+          if (!s) continue;
+          try {
+            const p = (s.pesObjectId >>> 0);
+            const v = (typeof s.visible === "boolean") ? s.visible : true;
+            if (p !== 0 && v) livePes.add(p);
+          } catch (_) { /* skip unreadable wrapper */ }
+        }
+      }
+      const staleKeys = [];
+      for (const attachedPes of [...this._skyBirdChainsAttached]) {
+        if (!livePes.has(attachedPes)) {
+          this._skyBirdChainsAttached.delete(attachedPes);
+          staleKeys.push(`sky:${attachedPes}`);
+        }
+      }
+      if (staleKeys.length > 0) {
+        if (this._skyBirdAnchor && this._skyBirdChainsAttached.size === 0) {
+          this._skyBirdAnchor.visible = false;
+        }
+        const reg = this._ownerRegistry ?? this.liveScene3dRef?.ownerRegistry ?? defaultOwnerRegistry;
+        for (const k of staleKeys) {
+          try { reg?.destroyAllForOwner?.(k); } catch (_) { /* fail-soft */ }
+        }
+      }
+    }
     if (!Array.isArray(skyObjects) || skyObjects.length === 0 || !wasmExports) return;
     const scene3d = this.liveScene3dRef;
     if (!scene3d) return;
@@ -677,7 +710,8 @@ export class SkyDome {
     // scene, which parked the swarm 40 m SOUTH at exact eye height instead of
     // overhead — the whole default-ON feature never reached the sky.
     if (this._skyBirdAnchor) {
-      if (camera && camera.position && !isIndoor) {
+      const hasActiveChains = !!(this._skyBirdChainsAttached && this._skyBirdChainsAttached.size > 0);
+      if (camera && camera.position && !isIndoor && hasActiveChains) {
         this._skyBirdAnchor.visible = true;
         _skyBirdPosScratch.copy(camera.position);
         _skyBirdPosScratch.y += this._skyBirdAltitude;

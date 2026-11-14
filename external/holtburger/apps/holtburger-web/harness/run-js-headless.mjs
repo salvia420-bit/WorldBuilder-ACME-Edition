@@ -1613,6 +1613,12 @@ const TIER5 = [
   { tier: 5, flag: "webglContextRestoreTargets", file: "tests/webgl_context_restore_targets.test.mjs" },
   { tier: 5, flag: "workerPanicStallRecovery", file: "tests/worker_panic_and_stall_recovery.test.mjs" },
   { tier: 5, flag: "worldObjectLiveUpdates", file: "tests/world_object_live_updates.test.mjs" },
+  // 2026-11-14 visual bugs & enhancements campaign (12 items across WS-1..WS-5)
+  { tier: 5, flag: "cloudsTerrainOcclusion", file: "tests/clouds_terrain_occlusion.test.mjs" },
+  { tier: 5, flag: "weather_revamp", file: "tests/weather_revamp.test.mjs" },
+  { tier: 5, flag: "shoushiGrassAndShores", file: "tests/shoushi_grass_and_shores.test.mjs" },
+  { tier: 5, flag: "waterfalls_and_spires", file: "tests/waterfalls_and_spires.test.mjs" },
+  { tier: 5, flag: "holtburgNightAndUnderwater", file: "tests/holtburg_night_and_underwater.test.mjs" },
 ];
 
 // Registered but KNOWN-FAILING because the APP is wrong (a real bug, named

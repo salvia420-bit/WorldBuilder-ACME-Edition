@@ -157,6 +157,43 @@ export function treeWindDids() {
   return TREE_WIND_DIDS;
 }
 
+// Item 6B — Explicit palm & coastal flora GPU wind-sway allowlist covering
+// unclassified single-part/GfxObj palms and coastal palms whose catalog slot was
+// claimed by another archetype (e.g. 0x02001065 -> creature-breath). Kept separate
+// from `TREE_WIND_DIDS` so legacy CPU `hasWindBend` / `isTreeDid` peel behavior is
+// 100% unchanged while `windRespondsGpu` animates every coastal palm on the GPU.
+export const PALM_COASTAL_WIND_DIDS = new Set([
+  0x02000325,
+  0x0200032b,
+  0x02001c31,
+  0x0200058e,
+  0x02001065,
+  0x02000e71,
+  0x02000e72,
+  0x020007da,
+  0x0200032c,
+  0x02000247,
+  0x020004b1,
+  0x020004b2,
+  0x020002d7,
+  0x02000251,
+  0x020002dc,
+  0x02000a35,
+  0x02000ab6,
+  0x010036ad,
+  0x010036e6,
+]);
+
+/** True if this SetupModel or GfxObj DID is on the palm / coastal flora wind allowlist. */
+export function isPalmOrCoastalWindDid(id) {
+  return PALM_COASTAL_WIND_DIDS.has((id >>> 0));
+}
+
+/** The raw palm / coastal flora allowlist Set (diag / tests). */
+export function palmCoastalWindDids() {
+  return PALM_COASTAL_WIND_DIDS;
+}
+
 /** Reset memoized flag readers (tests only). */
 export function _resetTreeWindFlags() {
   _flag = undefined; _strength = undefined; _dirDeg = undefined; _windBake = undefined;

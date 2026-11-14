@@ -53,10 +53,13 @@ if (patched) {
   const iTA = patched.indexOf("void temporalAntialiasing(");
   const iCall = patched.indexOf("if (hbEdgeResolve(lowResCoord, depthVelocity, hbColor))");
   const iClosest = patched.indexOf(ANCHOR_CLOSEST);
+  const iCurrentFrame = patched.indexOf("if (currentFrame)");
   const iGetClosest = patched.indexOf("vec4 getClosestFragment(");
   check("uniforms right after jitterOffset", iUni > patched.indexOf(ANCHOR_UNIFORM) && iUni < iGetClosest);
   check("helpers after getClosestFragment, before temporalUpscale", iFn > iGetClosest && iFn < iTU);
   check("call sits in temporalUpscale right after the closest fragment", iCall > iClosest && iCall > iTU && iCall < iTA);
+  check("call runs BEFORE if (currentFrame) so non-divisible-by-4 Bayer sky taps never copy onto hills",
+    iCurrentFrame > iCall && iCall > iClosest);
   check("idempotent (second patch refused)", patchCloudsResolveSource(patched) === null);
   check("missing anchor -> null", patchCloudsResolveSource(src.replace(ANCHOR_CLOSEST, "")) === null && patchCloudsResolveSource(null) === null);
   // Every identifier the injection relies on is takram's.
@@ -107,7 +110,28 @@ console.log("-- E3 install wiring (mock THREE + mock takram pass) --------------
   check("takram update runs first, then the class pass", log.length === 2 && log[0][0] === "takram" && log[1][0] === "class");
   check("render target restored after the class pass", renderer._rt === "PREV");
   check("class target sized to the clouds pass", log[1][1].width === 1280 && log[1][1].height === 720);
-  check("reversed-Z mirrored from the renderer", u.hbReversedDepth.value === 1);
+  check("reversed-Z mirrored from the renderer", u.hbReversedDepth.value === 1 && u.hbLogDepth.value === 0);
+  check("scene-ray occlusion uniforms wired (logDepth, near/far, projScale, targetUvScale)",
+    u.hbCameraNear.value > 0 && u.hbCameraFar.value > u.hbCameraNear.value &&
+    u.hbProjScale.value.x > 0 && u.hbTargetUvScale.value.x >= 1);
+  // Non-multiple-of-4 resize + logarithmic depth sync
+  cp.width = 1366; cp.height = 765;
+  const logRenderer = {
+    _rt: "PREV", getRenderTarget() { return this._rt; }, setRenderTarget(t) { this._rt = t; },
+    capabilities: { logarithmicDepthBuffer: true },
+    state: { buffers: { depth: { getReversed: () => false } } },
+  };
+  cp.update(logRenderer, 11);
+  check("logDepth mirrored when reversed-Z is off + non-multiple-of-4 targetUvScale synced",
+    u.hbReversedDepth.value === 0 && u.hbLogDepth.value === 1 &&
+    Math.abs(u.hbTargetUvScale.value.x - 1368 / 1366) < 1e-6 &&
+    Math.abs(u.hbTargetUvScale.value.y - 768 / 765) < 1e-6);
+  cp.width = 1280; cp.height = 720;
+  depthUniform.value = null;
+  log.length = 0;
+  cp.update(renderer, 12);
+  check("null depth texture: resolve patch disabled safely", log.length === 1 && u.hbEdgeEnable.value === 0 && h.stats().nullDepthSkips === 1);
+  depthUniform.value = "DEPTH";
   h.set(false);
   log.length = 0;
   cp.update(renderer, 8);
@@ -301,8 +325,8 @@ console.log("-- E4 CPU model: takram resolve vs patched, moving balloon over noi
 console.log("-- E5 wiring + docs -------------------------------------------------------");
 {
   const cv = readFileSync(path.join(APP, "scene3d/cloud_volume.js"), "utf8");
-  check("cloud_volume.js installs only when the flag is on, by dynamic import",
-    cv.includes("import('./cloud_edge_resolve.js')") && !/^import .*cloud_edge_resolve/m.test(cv));
+  check("cloud_volume.js installs cloud_edge_resolve gated by cloudEdgeResolve flag",
+    cv.includes("cloudEdgeResolveEnabled") && (cv.includes("import('./cloud_edge_resolve.js')") || /^import .*cloud_edge_resolve/m.test(cv)));
   const flags = readFileSync(path.join(APP, "docs/url-flags.md"), "utf8");
   check("url-flags.md has a `cloudEdgeResolve` row", /^\| `cloudEdgeResolve` \|/m.test(flags));
 }

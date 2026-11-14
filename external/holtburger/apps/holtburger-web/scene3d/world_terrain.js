@@ -551,7 +551,7 @@ void main() {
       float obsFres = min(0.045 + 0.955 * pow(1.0 - obsCos, 5.0), 0.6);
       float obsSheenFade = 1.0 - 0.6 * smoothstep(80.0, 260.0, vViewDepth);
       iblSpec += (uAcAmbColor * max(uAcAmbLevel, 0.35)) * vec3(0.45, 0.26, 0.62)
-               * (0.95 * obsFres * obsGlassy * obsSheenFade * obsidianW);
+               * (0.30 * obsFres * obsGlassy * obsSheenFade * obsidianW);
       float obsFade = (1.0 - smoothstep(40.0, 130.0, vViewDepth)) * sunGate;
       float obsFoot = wFoot * 8.0;
       obsFade *= 1.0 - smoothstep(0.4, 0.9, obsFoot);

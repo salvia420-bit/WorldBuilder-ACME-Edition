@@ -204,8 +204,15 @@ const FLASH_MAX = 10;
 const REGISTER_RADIUS = 48;
 const REGISTER_RADIUS_OUT = 56;
 const DEDUPE_STATIC_M = 1.5;
+const DEDUPE_HEARTH_STATIC_M = 3.5;
 const DEDUPE_FX_M = 1.2;
 const DEDUPE_INTERVAL_MS = 500;
+
+export const HEARTH_SETUP_IDS = new Set([0x020005d8, 0x020005d9, 0x02000706]);
+export const HEARTH_EMITTER_ID = 0x3200002f;
+export const SPIRE_EDDY_LIGHT_SKIP_IDS = new Set([
+  0x32000490, 0x32000491, 0x32000492, 0x32000493, 0x32000494, 0x32000495,
+]);
 
 function _now() {
   return fxNowMs(); // the film clock during a stepped take (fx_clock.js), else performance.now()
@@ -323,6 +330,8 @@ export function spawnFxFlash(o) {
 export function bindEmitterFxLight(o) {
   if (!fxTier1Enabled("fxLights") || !o || !o.emitter || typeof o.resolvePosition !== "function") return null;
   if (!(o.intensity > 0) || !(o.range > 0)) return null;
+  const resolvedEmitterDid = (o.emitterDid >>> 0) || (o.emitter?.emitterInfoId >>> 0) || (o.emitter?.info?.id >>> 0) || 0;
+  if (resolvedEmitterDid !== 0 && SPIRE_EDDY_LIGHT_SKIP_IDS.has(resolvedEmitterDid)) return null;
   const s = new FxLightSource("emitter");
   s.emitter = o.emitter;
   s.resolvePosition = o.resolvePosition;
@@ -337,17 +346,24 @@ export function bindEmitterFxLight(o) {
   s._activity = 0;
   s._peak = 1;
   if (o.transient) s.userData.__dynamicPriority = true;
+  if (o.ownerInst) s._ownerInst = o.ownerInst;
+  s._anchorSetupId = (o.anchorSetupId >>> 0) || 0;
+  s._emitterDid = (o.emitterDid >>> 0) || (o.emitter?.info?.id >>> 0) || 0;
   // An OUTDOOR static chain's light carries a (non-null) `__lbKey` like the
   // setup lamps it sits beside, so the pool's cell scoping drops it while the
   // player is in a sealed dungeon (lighting.js selectCellScopedSources) — a
   // surface brazier must not light the crypt below. An INTERIOR chain's light
-  // carries its anchor's EnvCell (`__cellId`) like the prop's own Setup lamps,
-  // so it drops out while that room is outside the render set — a hidden
-  // room's fire must not light through the wall or take a visible room's slot
-  // (RND-05). Entity emitters stay dynamic (always candidates), as entity
-  // Setup lights are.
-  if (o.cellId != null) s.userData.__cellId = o.cellId >>> 0;
-  else if (o.outdoor) s.userData.__lbKey = 0;
+  // (or an INDOOR entity emitter, `(cellId & 0xffff) >= 0x0100`) carries its
+  // EnvCell (`__cellId`) like the prop's own Setup lamps, so it drops out while
+  // that room is hidden / undrawn — a hidden room's fire or underground portal
+  // must not light through the wall/ceiling or take a visible room's slot.
+  // Outdoor entity emitters (`!cellId || (cellId & 0xffff) < 0x0100`) leave
+  // `userData.__cellId === undefined` (VFXAUDIO-3 contract).
+  if (o.cellId != null && ((o.cellId >>> 0) & 0xffff) >= 0x0100) {
+    s.userData.__cellId = o.cellId >>> 0;
+  } else if (o.outdoor) {
+    s.userData.__lbKey = 0;
+  }
   _emitterLights.add(s);
   _stats.emitterLights++;
   return s;
@@ -376,6 +392,82 @@ const _pendingRemoval = new Set();
 let _lastDedupe = -Infinity;
 const _tmp = new THREE.Vector3();
 let _staticPos = new Float32Array(0);
+let _hearthStaticPos = new Float32Array(0);
+
+function _syncAndCheckEmitterVisibility(s, scene3d) {
+  const e = s.emitter;
+  if (!e) return true;
+  if (e._emitterCellHidden === true) return true;
+  let ownerInst = s._ownerInst || e._ownerInst || null;
+  if (!ownerInst && e.parent) {
+    for (let o = e.parent, d = 0; o && d < 5; o = o.parent, d++) {
+      if (o.userData && o.userData.__entityInst) {
+        ownerInst = o.userData.__entityInst;
+        s._ownerInst = ownerInst;
+        break;
+      }
+    }
+  }
+  if (ownerInst) {
+    const rawCid = ((ownerInst._wireCellId ?? ownerInst._spawnCellId ?? ownerInst.meta?.landblockId ?? 0) >>> 0);
+    if ((rawCid & 0xffff) >= 0x0100) {
+      s.userData.__cellId = rawCid;
+    } else if (s.userData.__cellId !== undefined) {
+      delete s.userData.__cellId;
+    }
+    if (
+      ownerInst._disposed === true ||
+      ownerInst._stateVisible === false ||
+      ownerInst._culledByCell === true ||
+      ownerInst._noDrawWeenie === true ||
+      (ownerInst.root &&
+        ownerInst.root.visible === false &&
+        ownerInst._renderCullHidden !== true &&
+        ownerInst._filmHidden !== true)
+    ) {
+      return true;
+    }
+  }
+  for (let o = e.parent; o; o = o.parent) {
+    if (ownerInst && o === ownerInst.root) continue;
+    if (o.visible === false) return true;
+  }
+  const cid = s.userData.__cellId;
+  if (cid != null && ((cid >>> 0) & 0xffff) >= 0x0100) {
+    const cellU = cid >>> 0;
+    const containers = scene3d?.cellContainers3d;
+    if (containers instanceof Map && containers.size > 0) {
+      const c = containers.get(cellU);
+      if (c && (c.visible !== true || !c.parent)) return true;
+      if (!c && scene3d?._cellLightsSet instanceof Set && scene3d._cellLightsSet.size > 0 && !scene3d._cellLightsSet.has(cellU)) {
+        return true;
+      }
+    } else if (scene3d?._cellLightsSet instanceof Set && scene3d._cellLightsSet.size > 0) {
+      if (!scene3d._cellLightsSet.has(cellU)) return true;
+    }
+  }
+  return false;
+}
+
+function _terrainZAtWorldXY(scene3d, wx, wy) {
+  const oracle = scene3d?._terrainOracle;
+  if (oracle && typeof oracle.heightAt === "function") {
+    try {
+      const gz = oracle.heightAt(wx, wy);
+      if (typeof gz === "number" && Number.isFinite(gz)) return gz;
+    } catch (_) {}
+  }
+  const sh =
+    scene3d?.sessionHandle ??
+    (typeof globalThis !== "undefined" ? globalThis.window?.__sessionHandle : null);
+  if (sh && typeof sh.terrainHeightAt === "function") {
+    try {
+      const gz = sh.terrainHeightAt(wx, wy);
+      if (typeof gz === "number" && Number.isFinite(gz)) return gz;
+    } catch (_) {}
+  }
+  return null;
+}
 
 function _refPos(scene3d) {
   const r = scene3d?._lightRefPos;
@@ -397,7 +489,9 @@ function _dedupeAndRegister(scene3d, ref) {
   const lights = Array.isArray(scene3d?.activeLights) ? scene3d.activeLights : [];
   const reach2 = (REGISTER_RADIUS_OUT + 4) * (REGISTER_RADIUS_OUT + 4);
   let n = 0;
+  let nh = 0;
   if (_staticPos.length < lights.length * 3) _staticPos = new Float32Array(Math.max(64, lights.length * 3 * 2));
+  if (_hearthStaticPos.length < lights.length * 3) _hearthStaticPos = new Float32Array(Math.max(32, lights.length * 3 * 2));
   for (let i = 0; i < lights.length; i++) {
     const l = lights[i];
     if (!l || l.isFxLightSource || l.isViewerLightSource) continue;
@@ -412,14 +506,29 @@ function _dedupeAndRegister(scene3d, ref) {
     }
     _staticPos[n * 3] = _tmp.x; _staticPos[n * 3 + 1] = _tmp.y; _staticPos[n * 3 + 2] = _tmp.z;
     n++;
+    const lud = l.userData;
+    const lSid = ((lud && lud.__setupId) ?? l.parent?.userData?.modelId ?? 0) >>> 0;
+    if ((lud && lud.hearthRecentered === true) || HEARTH_SETUP_IDS.has(lSid)) {
+      _hearthStaticPos[nh * 3] = _tmp.x;
+      _hearthStaticPos[nh * 3 + 1] = _tmp.y;
+      _hearthStaticPos[nh * 3 + 2] = _tmp.z;
+      nh++;
+    }
   }
   const sorted = [..._emitterLights].sort((a, b) => b.baseIntensity - a.baseIntensity);
   const kept = [];
   const st2 = DEDUPE_STATIC_M * DEDUPE_STATIC_M;
+  const hst2 = DEDUPE_HEARTH_STATIC_M * DEDUPE_HEARTH_STATIC_M;
   const fx2 = DEDUPE_FX_M * DEDUPE_FX_M;
   let suppressed = 0;
   let heldSkipped = 0;
   for (const s of sorted) {
+    if (_syncAndCheckEmitterVisibility(s, scene3d)) {
+      s.suppressed = true;
+      s.registered = false;
+      suppressed++;
+      continue;
+    }
     if (!s.resolvePosition(s.position)) { s.suppressed = true; s.registered = false; continue; }
     // `?heldFxLightSkip`: a wielded weapon lights nothing (retail weapons carry
     // no light) — and it must not suppress a neighbour either, so it is never
@@ -441,6 +550,17 @@ function _dedupeAndRegister(scene3d, ref) {
     for (let i = 0; i < n && !sup; i++) {
       const dx = _staticPos[i * 3] - s.position.x, dy = _staticPos[i * 3 + 1] - s.position.y, dz = _staticPos[i * 3 + 2] - s.position.z;
       if (dx * dx + dy * dy + dz * dz < st2) sup = true;
+    }
+    // Fix 5.2: prevent double-lighting between hearth/campfire Setup LightInfo
+    // (recentered at `(0, 0, +2.0)`) and campfire flame emitter `0x3200002F`
+    // (whose script anchor sits at `(0, 0, 0)` or `(0, 0, +1.8..+2.15)`).
+    if (!sup && nh > 0 && (s._emitterDid === HEARTH_EMITTER_ID || HEARTH_SETUP_IDS.has(s._anchorSetupId))) {
+      for (let i = 0; i < nh && !sup; i++) {
+        const dx = _hearthStaticPos[i * 3] - s.position.x;
+        const dy = _hearthStaticPos[i * 3 + 1] - s.position.y;
+        const dz = _hearthStaticPos[i * 3 + 2] - s.position.z;
+        if (dx * dx + dy * dy + dz * dz < hst2) sup = true;
+      }
     }
     for (let i = 0; i < kept.length && !sup; i++) {
       if (kept[i].position.distanceToSquared(s.position) < fx2) sup = true;
@@ -501,16 +621,17 @@ export function tickFxLights(scene3d, nowMs) {
   for (const s of _emitterLights) {
     const e = s.emitter;
     if (!e || s.released) continue;
+    const hidden = _syncAndCheckEmitterVisibility(s, scene3d);
     const parts = e.numParticles | 0;
     // activity: 1 while particles live, eased; transient lights follow the
     // live count against its own peak so a burst fades with its particles
     if (parts > s._peak) s._peak = parts;
-    const target = parts > 0 ? (s.userData.__dynamicPriority ? Math.min(1, parts / Math.max(1, s._peak)) : 1) : 0;
+    const target = !hidden && parts > 0 ? (s.userData.__dynamicPriority ? Math.min(1, parts / Math.max(1, s._peak)) : 1) : 0;
     s._activity += (target - s._activity) * 0.15;
     let k = s._activity;
     if (s._flicker > 0) k *= 1 - s._flicker + 2 * s._flicker * fxLightFlicker(tSec, s._flickerHz, s._seed);
     if (s._pulse > 0) k *= 1 + s._pulse * Math.sin(((tSec * s._pulseHz + s._seed) % 1) * Math.PI * 2);
-    const want = s.registered && !s.suppressed && k > 0.002;
+    const want = !hidden && s.registered && !s.suppressed && k > 0.002;
     if (want) {
       s.resolvePosition(s.position);
       s.intensity = s.baseIntensity * k;
@@ -571,8 +692,25 @@ export function feedTerrainFxLights(scene3d, night = 0, indoor = false) {
       const src = pool.selPoint ? pool.selPoint[i] : null;
       if (!pl || !(pl.intensity > 0) || !(pl.distance > 0)) continue;
       if (src && src.isViewerLightSource) continue; // the player lantern is an object light only
+      // Fix 5.4: NEVER feed indoor/dungeon lights (`(cellId & 0xffff) >= 0x0100`)
+      // into outdoor terrain uniforms — e.g. Mannikin Foundry Portal (`0xA9B40176`),
+      // Meeting Hall Portal (`0xA9B4017A`), or indoor cottage chandeliers must
+      // never paint circles on exterior Holtburg grass!
+      const srcUd = src && src.userData ? src.userData : null;
+      const srcCid = srcUd && srcUd.__cellId != null ? (srcUd.__cellId >>> 0) : 0;
+      if ((srcCid & 0xffff) >= 0x0100) continue;
+      const ownerInst = (srcUd && srcUd.__ownerInst) || (src && src._ownerInst) || null;
+      if (ownerInst) {
+        const liveCid = ((ownerInst._wireCellId ?? ownerInst._spawnCellId ?? ownerInst.meta?.landblockId ?? 0) >>> 0);
+        if ((liveCid & 0xffff) >= 0x0100) continue;
+      }
       const p = pl.position;
       if (!Number.isFinite(p.x) || p.y < -1e4) continue;
+      // Fix 5.4: NEVER feed underground lights (`lightWorldZ < terrainZ - 0.5`)
+      // into outdoor terrain uniforms (Three Y-up: `p.y` is AC Z, `p.x` is AC X,
+      // `-p.z` is AC Y — e.g. Mannikin Foundry Portal at z=63.12 beneath z=66.0 grass).
+      const terrainZ = _terrainZAtWorldXY(scene3d, p.x, -p.z);
+      if (terrainZ !== null && p.y < terrainZ - 0.5) continue;
       const d = cp ? Math.sqrt((p.x - cp.x) ** 2 + (p.y - cp.y) ** 2 + (p.z - cp.z) ** 2) : 0;
       _cand.push({ pl, score: d - pl.distance });
     }

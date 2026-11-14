@@ -1,15 +1,15 @@
 {
- "fingerprint": "3c17089bc7f3f277728209a6e736a38ff82806e1d99d2a7304dd388cdd65fcb9",
+ "fingerprint": "9dc824ba5c1ce8bab342d626dcdaa722cdfe7ca30cd0a2bc68b4d12972b70821",
  "fingerprintVersion": 1,
  "parts": {
   "hash": "0c333ece4301ba2b413b93fe4f8069c5ef07bdfb69afc139e8798b383e3ed0cc",
   "field": "2991f0b780af391990615ad9b816017c40c0a894eca2963f08eb3870cb118143",
   "mask": "696d6b71f160b0cad1bd5dfe1c09f5e506d4108983801350f6fd81cfa127730a",
   "place": "5e37e571567ed396a2f78f583cbe5fcbbea38d0153af199df4d0b543901737b2",
-  "vertex": "4c5c5dcb329b5bd41dd28f54e29a05290f330667702b5b3690d2076c24ce2a20",
+  "vertex": "0c484993ca7b4f083b4cd49a822c3bb6adca809d2eccd929234d780a475208c9",
   "fragment": "dc7ef99c4c1bfc0a742d6849cbffd1a11ca28216e149dc8abfa45cb1d2863a15"
  },
- "passedAt": "2026-11-13T10:33:43.812Z",
+ "passedAt": "2026-11-14T19:01:07.034Z",
  "renderer": "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)",
  "summary": {
   "readback": [

@@ -183,15 +183,14 @@ check(
     `pomEnabled=${matTile.userData?.pomEnabled}`
 );
 
-// ---- Stage 4: the category gate (widened 2026-07-30) ----
-// Solid architectural materials (incl. Wood/Metal — dungeon themes) APPLY;
-// Cloth (painted banners must not emboss), Foliage (alpha cards) and
-// fluid/organic categories still refuse.
+// ---- Stage 4: the category gate (widened 2026-07-30 + R4 2026-11-14) ----
+// Solid architectural + arbory/foliage materials APPLY;
+// Cloth (painted banners must not emboss) and fluid/granular categories still refuse.
 for (const [name, cat, applies] of [
     ["Wood", SURFACE_CATEGORY.Wood, true],
     ["Metal", SURFACE_CATEGORY.Metal, true],
     ["Sand", SURFACE_CATEGORY.Sand, false],
-    ["Foliage", SURFACE_CATEGORY.Foliage, false],
+    ["Foliage", SURFACE_CATEGORY.Foliage, true],
     ["Cloth", SURFACE_CATEGORY.Cloth, false],
 ]) {
     const m = cachePom._materialFromFlags(

@@ -327,7 +327,19 @@ export function createWorldStreamer(deps) {
         // streams terrain/buildings/statics/spawns until the player crosses an
         // LB boundary. Reproduced headless: 1 pre-init3D packet + 20 after it
         // ⇒ shiftSkippedRingEvals=20 and zero loader calls.
-        if (getLiveScene3d()) {
+        const liveS3d = getLiveScene3d();
+        if (liveS3d) {
+          // Bug 2B: Sealed-dungeon exit race (e.g. Town Network -> Shoushi).
+          // A position packet in the outdoor arrival cell (< 0x0100) can drain
+          // before the render-loop frame clears `_sealedEvictLbKey`, which made
+          // `loadTerrainRing` set `_fixedGridSealedFrozen = true` and return early
+          // while `lastRingLb` latched `lbId` and shift-skipped every subsequent packet.
+          if (!indoors && ((liveS3d._sealedEvictLbKey || 0) !== 0 || liveS3d._fixedGridSealedFrozen)) {
+            if (liveS3d._fixedGrid) liveS3d._fixedGrid.center = null;
+            liveS3d._sealedEvictLbKey = 0;
+            liveS3d._fixedGridSealedFrozen = false;
+            gateStats.sealedUnfreezes = (gateStats.sealedUnfreezes || 0) + 1;
+          }
           gateStats.ringEvals += 1;
           lastRingLb = lbId;
         } else {
@@ -454,6 +466,10 @@ export function createWorldStreamer(deps) {
         ensureLandblockObjectsForLandblock(lbId);
       }
       // A15-Q4-SYNC: end streaming sequence.
+      if (streamOutdoor && !indoors && s3d?._fixedGridSealedFrozen) {
+        if (lastRingLb === lbId) lastRingLb = 0;
+        gateStats.sealedFreezeRetries = (gateStats.sealedFreezeRetries || 0) + 1;
+      }
     },
     _debugState() {
       return { lastLb, lastRingLb, ...gateStats };

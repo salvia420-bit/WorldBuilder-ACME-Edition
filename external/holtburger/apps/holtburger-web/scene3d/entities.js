@@ -35,19 +35,112 @@ const GROUND_CLAMP_ON = (() => {
 const GROUND_CLAMP_EPS = 0.1;        // ignore objects within 10 cm of the surface
 const GROUND_CLAMP_MAX_LIFT = 10.0;  // bound: never lift more than 10 m (structure floors)
 
+// Fix 5.6: Leftover retail admin / live-event / test / luminous placeholder weenies
+// that must never materialize visible meshes, lights, luminous hooks, or scripts.
+export const SUPPRESSED_ADMIN_WEENIE_WCIDS = new Set([
+  3666,  // Place Holder Object
+  23631, // April 2003 Raining Mad Cows Gen
+  19457, // Fireworks Generator
+  8359,  // Anniversary Effect
+  32205, // Pumpkin Buffer
+  39748, // Exploration Marker
+]);
+export const MAD_COW_WEENIE_WCID = 23623;
+const MAD_COW_SKY_DZ_THRESHOLD_M = 20.0;
+const ODF_HIDDEN_ADMIN_BIT = 0x00000040;
+const PS_NO_DRAW_BIT = 0x00000020;
+
+function _resolveOutdoorGroundZ(wx, wy, scene3d = null) {
+  const sh = typeof window !== "undefined" ? window.__sessionHandle : null;
+  if (sh && typeof sh.terrainHeightAt === "function") {
+    try {
+      const gz = sh.terrainHeightAt(wx, wy);
+      if (typeof gz === "number" && Number.isFinite(gz)) return gz;
+    } catch (_) {}
+  }
+  const s3d = scene3d || (typeof window !== "undefined" ? window.liveScene3d : null);
+  if (s3d?._terrainOracle && typeof s3d._terrainOracle.heightAt === "function") {
+    try {
+      const gz = s3d._terrainOracle.heightAt(wx, wy);
+      if (typeof gz === "number" && Number.isFinite(gz)) return gz;
+    } catch (_) {}
+  }
+  if (s3d && typeof s3d.terrainHeightAt === "function") {
+    try {
+      const gz = s3d.terrainHeightAt(wx, wy);
+      if (typeof gz === "number" && Number.isFinite(gz)) return gz;
+    } catch (_) {}
+  }
+  return null;
+}
+
+export function shouldSuppressAdminOrPlaceholderWeenie(meta, scene3d = null) {
+  if (!meta) return false;
+  const wcid = (meta.wcid ?? 0) >>> 0;
+  if (SUPPRESSED_ADMIN_WEENIE_WCIDS.has(wcid)) return true;
+  const nm = typeof meta.name === "string" ? meta.name.trim() : "";
+  if (nm === "Place Holder Object") return true;
+  if (wcid === MAD_COW_WEENIE_WCID) {
+    const lbId = (meta.landblockId ?? 0) >>> 0;
+    if ((lbId & 0xffff) < 0x0100) {
+      if (typeof meta.dz === "number" && Number.isFinite(meta.dz) && meta.dz > MAD_COW_SKY_DZ_THRESHOLD_M) {
+        return true;
+      }
+      const lbX = (lbId >>> 24) & 0xff;
+      const lbY = (lbId >>> 16) & 0xff;
+      const wx = lbX * 192.0 + (+meta.x || 0);
+      const wy = lbY * 192.0 + (+meta.y || 0);
+      const z = +meta.z || 0;
+      const gz = _resolveOutdoorGroundZ(wx, wy, scene3d);
+      if (gz !== null) {
+        if (z - gz > MAD_COW_SKY_DZ_THRESHOLD_M) return true;
+      } else if (z > 250.0) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+export function isNoDrawOrUiHiddenWeenie(meta, isProjectile = false) {
+  if (!meta) return false;
+  if (meta.noDraw === true || meta.uiHidden === true) return true;
+  if (((meta.objDescFlags >>> 0) & ODF_HIDDEN_ADMIN_BIT) !== 0) return true;
+  if (!isProjectile && (((meta.physicsState ?? 0) >>> 0) & PS_NO_DRAW_BIT) !== 0) {
+    return true;
+  }
+  return false;
+}
+
 // Lift a buried OUTDOOR object onto the terrain surface; return the corrected
 // Z (or the original `z` when no clamp applies). `cellIdx` is the low 16 bits
-// of the landcell (>= 0x0100 ⇒ EnvCell interior ⇒ skip). Returns `z` unchanged
-// when the flag is off, the cell is indoor, terrain isn't resolvable yet
-// (`terrainHeightAt` → undefined), the object is at/above the surface, or the
-// bury depth exceeds the bound.
-function _groundClampZ(wx, wy, z, cellIdx) {
-  if (!GROUND_CLAMP_ON) return z;
+// of the landcell (>= 0x0100 ⇒ EnvCell interior ⇒ skip).
+// Fix 12A: When `(wx, wy)` is on a water cell (`EntirelyWater` or wet portion of
+// `PartiallyWater`), NEVER lift a submerged entity (`z < waterZ`) up to `waterZ`,
+// and sink non-flying creatures spawning ON water (`z >= waterZ - 0.15` or sticking
+// above deep `EntirelyWater`) below `waterZ` so water monsters appear underwater!
+export function _groundClampZ(wx, wy, z, cellIdx, scene3d = null, inst = null, meta = null) {
   if ((cellIdx & 0x7fff) >= 0x0100) return z; // indoor EnvCell — no terrain
-  const sh = (typeof window !== "undefined") ? window.__sessionHandle : null;
-  if (!sh || typeof sh.terrainHeightAt !== "function") return z;
-  const groundZ = sh.terrainHeightAt(wx, wy);
-  if (typeof groundZ !== "number" || !Number.isFinite(groundZ)) return z;
+  const s3d = scene3d || (typeof window !== "undefined" ? window.liveScene3d : null);
+  const wInfo =
+    typeof waterSubmersionAt === "function" ? waterSubmersionAt(s3d, wx, wy) : null;
+  if (wInfo && wInfo.overWater) {
+    if (typeof computeSubmergedCreatureZ === "function") {
+      const isCreature =
+        typeof isWaterSubmergibleCreature === "function"
+          ? isWaterSubmergibleCreature(meta || inst?.meta, inst)
+          : false;
+      const modelHeight =
+        inst && typeof estimateEntityHeightM === "function"
+          ? estimateEntityHeightM(inst)
+          : undefined;
+      return computeSubmergedCreatureZ(z, wInfo, { isCreature, modelHeight });
+    }
+    return z;
+  }
+  if (!GROUND_CLAMP_ON) return z;
+  const groundZ = _resolveOutdoorGroundZ(wx, wy, s3d);
+  if (groundZ === null) return z;
   const buryDepth = groundZ - z;
   if (buryDepth > GROUND_CLAMP_EPS && buryDepth <= GROUND_CLAMP_MAX_LIFT) {
     return groundZ;
@@ -1494,7 +1587,21 @@ import {
 // === Wave R2.A (2026-05-28) — reuse the static-light constructor so
 // entity-attached SetLight lights share identical color/intensity/falloff/
 // cone math. Only imported; constructs nothing at module load.
-import { buildLightForSetupLight, attachSetupModelLights, _lightObjectFrameOn, placeLightInObjectFrame } from "./lighting.js";
+import {
+  buildLightForSetupLight,
+  attachSetupModelLights,
+  _lightObjectFrameOn,
+  placeLightInObjectFrame,
+  SUPPRESSED_SETUP_LIGHT_MODELS,
+} from "./lighting.js";
+import {
+  waterSubmersionAt,
+  isWaterSubmergibleCreature,
+  estimateEntityHeightM,
+  computeSubmergedCreatureZ,
+  syncEntityWaterSubmersion,
+  unregisterSubmergedEntity,
+} from "./underwater_submersion.js";
 // A9-Stage2 (unification survey 2026-06-11): the single JS owner of
 // part-array → Object3D transform semantics. `?rigModule=off` reverts to
 // the inline legacy paths below (byte-identical-transform acceptance bar).
@@ -3513,9 +3620,20 @@ export function tickEntityRenderVisibility(scene3d, culler) {
       }
       continue;
     }
-    // Light-bearing rig — never cull (hiding it would extinguish the
+    // Light-bearing rig — never frustum-cull (hiding it would extinguish the
     // attached SetLight and pop on-screen illumination). See _entityOwnsLight.
+    // Fix 5.3 & 5.5: DO track indoor EnvCell portal/container culling on
+    // `inst._culledByCell` so underground / closed-room light-bearing entities
+    // (Mannikin Foundry Portal, Meeting Hall Portal, Underground Passage) stop
+    // bleeding lights and fx_lights outdoors when their cell is not drawn!
     if (_entityOwnsLight(inst)) {
+      inst._culledByCell = _isLightRigCellHidden(
+        scene3d,
+        inst,
+        rigGateArmed,
+        rigGateBoxes,
+        rigGateOutside,
+      );
       if (inst._renderCullHidden) {
         inst._renderCullHidden = false;
         _applyEntityVisible(inst);
@@ -3546,6 +3664,18 @@ export function tickEntityRenderVisibility(scene3d, culler) {
     }
     // ?rigCellGate — the rig's cell is not drawn this frame (and its cull
     // sphere reaches no drawn cell). Fails open on any unknown.
+    let cellCulledThisTick = false;
+    const rawRigCell = (inst._wireCellId ?? inst._spawnCellId ?? 0) >>> 0;
+    if (
+      (rawRigCell & 0xffff) >= 0x0100 &&
+      scene3d.cellContainers3d instanceof Map &&
+      scene3d.cellContainers3d.size > 0
+    ) {
+      const c = scene3d.cellContainers3d.get(rawRigCell);
+      if (!c || c.visible !== true) {
+        cellCulledThisTick = true;
+      }
+    }
     if (
       want &&
       rigGateArmed &&
@@ -3559,8 +3689,10 @@ export function tickEntityRenderVisibility(scene3d, culler) {
       )
     ) {
       cellGated += 1;
+      cellCulledThisTick = true;
       want = false;
     }
+    inst._culledByCell = cellCulledThisTick;
     // ?occlusionCull (occlusion_cull.js) — a frustum-visible rig whose padded
     // bounds put no sample on screen (behind a building, inside a shop seen
     // from the street) is not submitted: ~40 part draws per humanoid.
@@ -3619,6 +3751,28 @@ function _occEntityBox(inst, frameNo) {
   _occEntOut[0] = mw[12] + c.lo[0]; _occEntOut[1] = mw[13] + c.lo[1]; _occEntOut[2] = mw[14] + c.lo[2];
   _occEntOut[3] = mw[12] + c.hi[0]; _occEntOut[4] = mw[13] + c.hi[1]; _occEntOut[5] = mw[14] + c.hi[2];
   return _occEntOut;
+}
+
+function _isLightRigCellHidden(scene3d, inst, rigGateArmed, rigGateBoxes, rigGateOutside) {
+  const rawCid = (inst._wireCellId ?? inst._spawnCellId ?? 0) >>> 0;
+  if ((rawCid & 0xffff) < 0x0100) return false;
+  const conts = scene3d.cellContainers3d;
+  const hiddenByContainer =
+    conts instanceof Map &&
+    conts.size > 0 &&
+    (!conts.get(rawCid) || conts.get(rawCid).visible !== true);
+  const hiddenByGate =
+    rigGateArmed &&
+    inst.root.position &&
+    rigCellHidden(
+      rawCid,
+      conts,
+      rigGateBoxes,
+      inst.root.position,
+      ENTITY_CULL_RADIUS,
+      rigGateOutside,
+    );
+  return Boolean(hiddenByContainer || hiddenByGate);
 }
 
 // Wave 1.7 (2026-05-26, post-Joe-Trevis-quote restoration) — arms-up jump
@@ -4855,6 +5009,8 @@ export class EntityManager {
     if (!meta) return null;
     const guid = (meta.guid >>> 0) || 0;
     if (!guid) return null;
+    // Fix 5.6: Suppress leftover retail test/admin/live-event/placeholder spawns.
+    if (shouldSuppressAdminOrPlaceholderWeenie(meta, this.scene3d)) return null;
     if (this.spawnInFlight.has(guid)) {
       return this.spawnInFlight.get(guid);
     }
@@ -4930,6 +5086,9 @@ export class EntityManager {
   }
 
   async _spawnImpl(meta, gen = 0) {
+    if (shouldSuppressAdminOrPlaceholderWeenie(meta, this.scene3d)) {
+      return null;
+    }
     const guid = meta.guid >>> 0;
     let setupId = (meta.modelId ?? meta.setupId ?? 0) >>> 0;
     if (!setupId) {
@@ -5273,6 +5432,17 @@ export class EntityManager {
     }
 
     const inst = new EntityInstance(guid, root, parts, meta);
+    if (!root.userData) root.userData = {};
+    Object.defineProperty(root.userData, "__entityInst", {
+      value: inst,
+      configurable: true,
+      writable: true,
+    });
+    const _spawnNoDrawWeenie = isNoDrawOrUiHiddenWeenie(meta, this.isProjectile(guid));
+    if (_spawnNoDrawWeenie) {
+      inst._noDrawWeenie = true;
+      _setEntityStateVisible(inst, false);
+    }
     // T9 — dynamic-LOD bookkeeping: the full-detail setup this entity spawned
     // from + the degrade band it currently renders (0 = full detail). The
     // tick recheck re-queries the band at the live distance and respawns when
@@ -5552,6 +5722,9 @@ export class EntityManager {
               // `_materialFromFlags`. Without this, recolored luminous/translucent/
               // clipmap gear rendered flat-opaque. Fail-soft on surfaceType=0.
               this._applyPalettedSurfaceRenderState(mat, palSurfaceState, did);
+              if (_spawnNoDrawWeenie && typeof releaseLuminousMaterial === "function") {
+                releaseLuminousMaterial(mat);
+              }
               mat.name = `paletted-${did.toString(16)}-${paletteId.toString(16)}`;
               // 2026-05-28 — install into the paletted-material cache
               // so the next entity with the same (DID, paletteId,
@@ -5913,7 +6086,7 @@ export class EntityManager {
     // (leaving `?groundClamp` intact for all other entities).
     const wz = (PROJECTILE_GROUND_CLAMP_SKIP_ON && this.isProjectile(guid))
       ? (meta.z ?? 0)
-      : _groundClampZ(wx, wy, meta.z ?? 0, inst._outdoorCellIdx);
+      : _groundClampZ(wx, wy, meta.z ?? 0, inst._outdoorCellIdx, this.scene3d, inst, meta);
     inst.setPose(wx, wy, wz, meta.qw ?? 1, meta.qx ?? 0, meta.qy ?? 0, meta.qz ?? 0);
     // IMMOVABLE-ENTITIES (2026-08-04, `?immovableEntities=on`): stash the
     // CREATE pose as the authoritative anchor. `_wirePos` is stashed only by
@@ -6089,15 +6262,28 @@ export class EntityManager {
       root.traverse((o) => o.layers.set(1));
     }
     this.entityMap.set(guid, inst);
+    // Fix 12A & 12B: Register outdoor water-submerged creatures in the fast
+    // `scene3d._submergedWaterEntities` / `_submergedWaterMeshes` sets so
+    // `underwater_submersion.js` draws them underwater and `0` draw calls run
+    // whenever no water-submerged monster is nearby.
+    if (
+      !inst._noDrawWeenie &&
+      !this.isProjectile(guid) &&
+      typeof syncEntityWaterSubmersion === "function"
+    ) {
+      syncEntityWaterSubmersion(this.scene3d, inst, wx, wy, wz);
+    }
     // ?lightObjectFrame (2026-10-16): light THIS entity's Setup lights now.
     // They were attached only by the per-landblock rescan, so an entity that
     // (re)spawned into an already-baked area — a portal ACE re-sent, a summoned
     // Gateway — stayed unlit until the next bake. Idempotent with the rescan
     // (`_setupLightScanned`); projectiles keep their own pool lights.
     if (
+      !inst._noDrawWeenie &&
       _lightObjectFrameOn() &&
       !inst._isProjectile &&
       (setupId >>> 24) === 0x02 &&
+      !(typeof SUPPRESSED_SETUP_LIGHT_MODELS !== "undefined" && SUPPRESSED_SETUP_LIGHT_MODELS.has(setupId >>> 0)) &&
       this.scene3d &&
       typeof this.wasmExports?.fetchSetupModelLights === "function"
     ) {
@@ -6429,6 +6615,7 @@ export class EntityManager {
       inst._isProjectile === true &&
       !!this.scene3d?.lighting?.lightPool?.enabled;
     if (
+      !inst._noDrawWeenie &&
       (this._entityLightsOn || projLights) &&
       this.wasmExports &&
       typeof this.wasmExports.fetchSetupModelLights === "function"
@@ -6482,6 +6669,7 @@ export class EntityManager {
     // runtime + Sky-J P3 wasm exports.
     const pesId = (meta.physicsScriptDid >>> 0);
     if (
+      !inst._noDrawWeenie &&
       pesId !== 0 &&
       !this._particleChainsAttached.has(guid) &&
       this.wasmExports &&
@@ -6536,7 +6724,8 @@ export class EntityManager {
       this.wasmExports &&
       typeof this.wasmExports.fetchPhysicsScript === "function" &&
       typeof this.wasmExports.fetchParticleEmitter === "function" &&
-      typeof this.wasmExports.fetchBuildingPlacement === "function"
+      typeof this.wasmExports.fetchBuildingPlacement === "function" &&
+      !inst._noDrawWeenie
     ) {
       this._resolveDefaultScriptDid(guid)
         .then((did) => {
@@ -6578,7 +6767,8 @@ export class EntityManager {
       typeof this.wasmExports.fetchSetupDefaultScript === "function" &&
       typeof this.wasmExports.fetchPhysicsScript === "function" &&
       typeof this.wasmExports.fetchParticleEmitter === "function" &&
-      typeof this.wasmExports.fetchBuildingPlacement === "function"
+      typeof this.wasmExports.fetchBuildingPlacement === "function" &&
+      !inst._noDrawWeenie
     ) {
       const sId = (setupId >>> 0);
       Promise.resolve(this.wasmExports.fetchSetupDefaultScript(sId))
@@ -6613,6 +6803,7 @@ export class EntityManager {
     // byte-identical. Uses `lodOriginalSetup` (canonical SetupModel key) for the
     // descriptor lookup and `setupId` for the default_script coexistence probe.
     if (
+      !inst._noDrawWeenie &&
       visualEnabled() && gemSparkleEnabled() &&
       (setupId >>> 0) !== 0 && this.wasmExports
     ) {
@@ -6650,6 +6841,7 @@ export class EntityManager {
     // the 2D path does; pre-spawn the function returns null/undefined,
     // matching the 2D ensureNameplate skip on guid mismatch.
     if (
+      !inst._noDrawWeenie &&
       this.scene3d?.nameplateLayer &&
       meta &&
       typeof meta.name === "string" &&
@@ -6685,13 +6877,15 @@ export class EntityManager {
     // against world geometry). The sprite module handles its own
     // local-player + inventory-item skip + category-coloured text bake,
     // so callers here pass through without further filtering.
-    try {
-      ensureNameplateForEntity(inst, this.scene3d);
-    } catch (e) {
-      // eslint-disable-next-line no-console
-      if (!this._nameplateSpriteWarned) {
-        this._nameplateSpriteWarned = true;
-        console.warn("[task-13] ensureNameplateForEntity threw:", e);
+    if (!inst._noDrawWeenie) {
+      try {
+        ensureNameplateForEntity(inst, this.scene3d);
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        if (!this._nameplateSpriteWarned) {
+          this._nameplateSpriteWarned = true;
+          console.warn("[task-13] ensureNameplateForEntity threw:", e);
+        }
       }
     }
     // Render-audit critic missedFeatures #1 (2026-06-09): whole-OBJECT
@@ -7300,6 +7494,47 @@ export class EntityManager {
    * every frame (acclient.c:388593-388600), so it's applied directly and
    * the ease stash is re-anchored to it (no yank-back on release).
    */
+  /**
+   * Fix 12A & 12B: Keep outdoor non-flying water monsters submerged below `waterZ`
+   * across server `setPose` and `applyManagedPose` updates, and dynamically sync
+   * their registration in `scene3d._submergedWaterEntities` / `_submergedWaterMeshes`
+   * (unregistering automatically if a creature walks out of water onto dry land).
+   */
+  _resolvePoseWaterZ(inst, x, y, z) {
+    if (
+      !inst ||
+      inst._noDrawWeenie ||
+      inst._isProjectile ||
+      inst._ballistic ||
+      inst._isAirborne ||
+      ((inst._outdoorCellIdx ?? 0) & 0x7fff) >= 0x0100
+    ) {
+      return z;
+    }
+    const wInfo =
+      typeof waterSubmersionAt === "function" ? waterSubmersionAt(this.scene3d, x, y) : null;
+    if (wInfo && wInfo.overWater) {
+      let zEff = z;
+      if (typeof computeSubmergedCreatureZ === "function") {
+        const isCreature =
+          typeof isWaterSubmergibleCreature === "function"
+            ? isWaterSubmergibleCreature(inst.meta, inst)
+            : false;
+        const modelHeight =
+          typeof estimateEntityHeightM === "function" ? estimateEntityHeightM(inst) : undefined;
+        zEff = computeSubmergedCreatureZ(z, wInfo, { isCreature, modelHeight });
+      }
+      if (typeof syncEntityWaterSubmersion === "function") {
+        syncEntityWaterSubmersion(this.scene3d, inst, x, y, zEff);
+      }
+      return zEff;
+    }
+    if (inst._isWaterSubmerged && typeof syncEntityWaterSubmersion === "function") {
+      syncEntityWaterSubmersion(this.scene3d, inst, x, y, z);
+    }
+    return z;
+  }
+
   applyManagedPose(guid, x, y, z, qw, qx, qy, qz) {
     if (!this._remoteInterpOn) return;
     const g = guid >>> 0;
@@ -7326,6 +7561,7 @@ export class EntityManager {
     // `if (!this->parent)`; `update_object` :323099). Writing the wire world
     // pose here would fling the weapon out of the hand.
     if (WIELD_PERSIST_ON && inst._attachedParentGuid != null) return;
+    z = this._resolvePoseWaterZ(inst, x, y, z);
     inst._wasmDriven = REMOTE_INTERP_OWNERSHIP_FRAMES;
     inst.root.position.set(x, y, z);
     let tgt = inst._serverTargetPos;
@@ -7530,6 +7766,9 @@ export class EntityManager {
     // clear-on-resumed-position point for both KIND_POSITION drain paths
     // (EntityManager.setPose is only reached from a KIND_POSITION event).
     if (inst._stickyTarget) inst._stickyTarget = null;
+    if (isRemote) {
+      z = this._resolvePoseWaterZ(inst, x, y, z);
+    }
     // CREATURE-SEPARATION (2026-07-28): stash the AUTHORITATIVE wire pose
     // before any of the branches below decide to ease, snap or defer it.
     // `setPose` is reached ONLY from a KIND_POSITION drain (see the comment
@@ -7753,6 +7992,7 @@ export class EntityManager {
     // and blank the in-hand weapon. Skip — the parent hierarchy decides.
     // held-4: a left-world item stays hidden until its next ParentEvent.
     if (inst._attachedParentGuid != null || inst._leftWorld) return;
+    if (visible && inst._noDrawWeenie) inst._noDrawWeenie = false;
     // FCULL (2026-06-08) — route through the composite so a concurrent
     // frustum/distance cull (`_renderCullHidden`) and this STATE-authoritative
     // visibility don't fight: the rendered flag is `stateVisible &&
@@ -14576,6 +14816,9 @@ export class EntityManager {
     // `_pendingAttach` behavior. No-op when the buffer is empty.
     this._preCreate.purgeGuid(g);
     const inst = this.entityMap.get(g);
+    if (typeof unregisterSubmergedEntity === "function") {
+      unregisterSubmergedEntity(this.scene3d, g, inst || null);
+    }
     if (!inst) return;
     this.releaseSelectionOnServerDelete(g);
     // Render-completeness audit (2026-05-29) — wielded-item lifecycle.
@@ -14753,11 +14996,19 @@ export class EntityManager {
     // `opts.startOn` lights them immediately (PhysicsState LIGHTING_ON).
     const projectile = !!(opts && opts.projectile);
     if (!inst || !inst.root || !Array.isArray(inst.parts)) return summary;
+    if (inst._noDrawWeenie) return summary;
     const sid = setupId >>> 0;
     // Raw 0x01 GfxObjs (setup_id >> 24 != 0x02) carry no Setup → no lights.
     // The wasm helper returns empty for these too, but short-circuiting here
     // saves a boundary round-trip on the common case (most entities).
     if ((sid >>> 24) !== 0x02) return summary;
+    // Fix 5.1: Suppress Turbine's floating dummy point-light test marker (0x02000364).
+    if (
+      typeof SUPPRESSED_SETUP_LIGHT_MODELS !== "undefined" &&
+      SUPPRESSED_SETUP_LIGHT_MODELS.has(sid)
+    ) {
+      return summary;
+    }
     // Already at the cap before we even fetch — nothing to do.
     if ((this._entityLightCount | 0) >= (this._entityLightCap | 0)) {
       this._maybeLogEntityLightCap();
@@ -14825,7 +15076,7 @@ export class EntityManager {
       }
       // Reuse the static-light constructor for identical color/intensity/
       // falloff/cone math (PointLight vs SpotLight selection included).
-      const light = buildLightForSetupLight(sl);
+      const light = buildLightForSetupLight(sl, sid);
       if (typeof sl.free === "function") { try { sl.free(); } catch (_) {} }
       if (light === null) continue;
       // Start OFF. Remember the authored intensity so the SetLight hook can
@@ -14834,6 +15085,18 @@ export class EntityManager {
       light.userData = light.userData || {};
       light.userData.__setupIntensity = light.intensity;
       light.userData.__entityLight = true;
+      light.userData.__setupId = sid;
+      light.userData.__ownerGuid = inst.guid >>> 0;
+      Object.defineProperty(light.userData, "__ownerInst", {
+        value: inst,
+        configurable: true,
+        writable: true,
+      });
+      const rawEntityCell =
+        (inst._wireCellId ?? inst._spawnCellId ?? inst.meta?.landblockId ?? 0) >>> 0;
+      if ((rawEntityCell & 0xffff) >= 0x0100) {
+        light.userData.__cellId = rawEntityCell;
+      }
       light.intensity = 0;
       light.visible = false;
       if (projectile) {
@@ -20954,6 +21217,12 @@ export class EntityManager {
       try { this.remove(g); } catch (_) {}
     }
     this.entityMap.clear();
+    if (this.scene3d?._submergedWaterEntities instanceof Map) {
+      this.scene3d._submergedWaterEntities.clear();
+    }
+    if (this.scene3d?._submergedWaterMeshes instanceof Set) {
+      this.scene3d._submergedWaterMeshes.clear();
+    }
     this._nameToGuid.clear();
     this.spawnInFlight.clear();
     this._spawnGen.clear();
@@ -21090,6 +21359,12 @@ export class EntityManager {
       try { this.remove(g); } catch (_) {}
     }
     this.entityMap.clear();
+    if (this.scene3d?._submergedWaterEntities instanceof Map) {
+      this.scene3d._submergedWaterEntities.clear();
+    }
+    if (this.scene3d?._submergedWaterMeshes instanceof Set) {
+      this.scene3d._submergedWaterMeshes.clear();
+    }
     // B4 (2026-05-18): drop the name→guid index in lockstep with
     // entityMap so a re-init starts from a clean state. (remove() prunes
     // entries as it goes; clear() is a belt-and-suspenders no-op if empty.)

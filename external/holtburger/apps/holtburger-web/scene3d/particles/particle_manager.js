@@ -444,9 +444,35 @@ export function setParticleCellGateFlag(on) { _CELL_GATE_ON = on == null ? null 
  * Anything unresolvable answers false (draw).
  */
 export function _emitterCellHidden(emitter, lookup) {
-  const ud = emitter.parent ? emitter.parent.userData : null;
-  const cid = ud ? ud.cellId : undefined;
+  if (!emitter) return false;
+  const parent = emitter.parent;
+  const ud = parent ? parent.userData : null;
+  let ownerInst = (ud && ud.__entityInst) || emitter._ownerInst || null;
+  if (!ownerInst && parent) {
+    for (let o = parent.parent, d = 0; o && d < 4; o = o.parent, d++) {
+      if (o.userData && o.userData.__entityInst) {
+        ownerInst = o.userData.__entityInst;
+        break;
+      }
+    }
+  }
+  if (ownerInst) {
+    if (
+      ownerInst._disposed === true ||
+      ownerInst._stateVisible === false ||
+      ownerInst._culledByCell === true ||
+      ownerInst._noDrawWeenie === true
+    ) {
+      return true;
+    }
+  }
+  let cid = ud ? ud.cellId : undefined;
+  if ((cid === undefined || cid === null) && ownerInst) {
+    const ec = ((ownerInst._wireCellId ?? ownerInst._spawnCellId ?? ownerInst.meta?.landblockId ?? 0) >>> 0);
+    if ((ec & 0xffff) >= 0x0100) cid = ec;
+  }
   if (cid === undefined || cid === null) return false;
+  if (typeof lookup !== "function") return false;
   let c;
   try { c = lookup(cid >>> 0); } catch (_) { return false; }
   if (!c) return false;
@@ -2231,20 +2257,49 @@ export class ParticleManager {
       return Number.isFinite(out.x) && Number.isFinite(out.y) && Number.isFinite(out.z);
     };
     if (t1.light > 0 && fxTier1Enabled("fxLights")) {
-      // an interior static chain's anchor carries its EnvCell (statics.js
-      // attachStaticDefaultScriptsWorld); entity rigs carry none
+      // Interior static chains carry their EnvCell (`isCellStaticScriptAnchor`).
+      // Indoor/dungeon entity emitters (`(cellId & 0xffff) >= 0x0100`) also stamp
+      // their indoor cellId + ownerInst so underground/closed-room portals never
+      // bleed outdoors, while OUTDOOR entities (`!cellId || (cellId & 0xffff) < 0x0100`)
+      // leave `userData.__cellId === undefined`.
       const pud = emitter.parent ? emitter.parent.userData : null;
+      let ownerInst = (pud && pud.__entityInst) || null;
+      let anchorSetupId = (pud && pud.modelId) ? (pud.modelId >>> 0) : 0;
+      for (let o = emitter.parent ? emitter.parent.parent : null, d = 0; o && d < 4; o = o.parent, d++) {
+        const oud = o.userData;
+        if (!ownerInst && oud && oud.__entityInst) ownerInst = oud.__entityInst;
+        if (!anchorSetupId && oud && oud.modelId) anchorSetupId = oud.modelId >>> 0;
+      }
+      if (!anchorSetupId && ownerInst && ownerInst.meta) {
+        anchorSetupId = ((ownerInst.meta.modelId ?? ownerInst.meta.setupId ?? 0) >>> 0);
+      }
+      if (ownerInst) emitter._ownerInst = ownerInst;
+      let resolvedCellId = null;
+      if (pud && pud.isCellStaticScriptAnchor && pud.cellId != null) {
+        resolvedCellId = pud.cellId >>> 0;
+      } else if (ownerInst) {
+        const ec = ((ownerInst._wireCellId ?? ownerInst._spawnCellId ?? ownerInst.meta?.landblockId ?? 0) >>> 0);
+        if ((ec & 0xffff) >= 0x0100) resolvedCellId = ec;
+      }
       emitter._fxLight = bindEmitterFxLight({
         emitter, resolvePosition: resolve, intensity: t1.light, range: t1.lightRange, color: t1.lightColor,
         flicker: t1.flicker, flickerHz: t1.flickerHz, pulse: t1.pulse, pulseHz: t1.pulseHz, transient: finite,
         // layer 0 = an outdoor static chain (entities and interiors ride layer 1)
         outdoor: (emitter.renderLayer | 0) === 0,
-        cellId: pud && pud.isCellStaticScriptAnchor && pud.cellId != null ? pud.cellId >>> 0 : null,
+        cellId: resolvedCellId,
+        ownerInst,
+        anchorSetupId,
+        emitterDid: ((row && row.id) ?? emitter.emitterInfoId ?? 0) >>> 0,
       });
     }
     if (t1.distort > 0 && fxTier1Enabled("fxDistort")) {
       emitter._fxDistort = addFxDistortSource({
-        emitter, resolvePosition: resolve, kind: t1.distortKind, strength: t1.distort, radius: t1.distortRadius,
+        emitter,
+        resolvePosition: resolve,
+        kind: t1.distortKind,
+        strength: t1.distort,
+        radius: t1.distortRadius,
+        emitterDid: ((row && row.id) ?? emitter.emitterInfoId ?? 0) >>> 0,
       });
     }
   }
@@ -3229,6 +3284,7 @@ export class ParticleManager {
         if (!drained && !(leanCulled && emitter._instKey !== null && emitter._instKey !== undefined)) {
           _setPartsVisible(emitter, false);
         }
+        emitter._emitterCellHidden = cellGate ? _emitterCellHidden(emitter, cellLookup) : false;
         continue;
       }
 
@@ -3252,6 +3308,7 @@ export class ParticleManager {
       }
 
       if (!alive) {
+        emitter._emitterCellHidden = false;
         removeIds.push(id);
       } else if (emitter.filmHidden === true) {
         // Film mode (2026-10-13, ?filmMode=on, DEFAULT OFF): render-only lens
@@ -3261,6 +3318,7 @@ export class ParticleManager {
         // per-mesh = occupied slots hidden, re-asserted every tick. Clearing
         // the flag restores both next tick (the append resumes; updateParticles
         // re-shows live slots). Only the film runtime sets the flag.
+        emitter._emitterCellHidden = false;
         if (emitter._instKey === null || emitter._instKey === undefined) {
           _setPartsVisible(emitter, false);
         }
@@ -3271,6 +3329,7 @@ export class ParticleManager {
         // its instances vanish with this tick's bucket reset. Per-mesh: hide
         // the occupied slots, re-asserted every tick like the RP6 cull. The
         // billboard pass only orients the draw frame, so it is skipped too.
+        emitter._emitterCellHidden = true;
         if (emitter._instKey === null || emitter._instKey === undefined) {
           _setPartsVisible(emitter, false);
         }
@@ -3280,8 +3339,10 @@ export class ParticleManager {
       } else if (gpOn && emitter._gp === true) {
         // ?gpuParticles: the shader faces and places the particles; the CPU
         // appends record indices (same membership and order as below).
+        emitter._emitterCellHidden = false;
         this._gpAppend(emitter);
       } else {
+        emitter._emitterCellHidden = false;
         if (bbCamera && emitter.info) {
           if (emitter.info.billboard) {
             // On-screen, still live, opted-in: face its flat sprite quads at

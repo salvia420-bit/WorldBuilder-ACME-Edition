@@ -3430,6 +3430,15 @@ function _tickPerFrameBody(scene3d, sessionHandle, dt) {
       console.warn("[terrainVfx] terrainVfxTick threw:", e);
     }
   }
+  try {
+    scene3d?.weatherSystem?.tick?.(scene3d?.frameTime?.dt ?? 0, scene3d, sessionHandle);
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    if (!scene3d._weatherSystemTickWarned) {
+      scene3d._weatherSystemTickWarned = true;
+      console.warn("[weather] weatherSystem.tick threw:", e);
+    }
+  }
   // ── DEFERRABLE group SKY decision (#4 + #7-#12). ─────────────────────
   // Evaluated ONCE per frame here (it mutates the skip counter + throttle
   // stamp, so it must not be re-called for the same group). The SKY group

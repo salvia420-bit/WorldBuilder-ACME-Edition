@@ -543,6 +543,13 @@ void main() {
   vec4 compSample = texture(uComposite, vTileUv);
   vec3 albedo = compSample.rgb;
   float waterW = clamp(1.0 - compSample.a, 0.0, 1.0);
+  vec3 farGeomN = normalize(vAcNormal);
+  float farWaterfallSlope = smoothstep(0.12, 0.45, 1.0 - clamp(farGeomN.z, 0.0, 1.0));
+  if (waterW > 0.005 && farWaterfallSlope > 0.01) {
+    float farRib = 0.5 + 0.5 * sin(dot(vWorldXy, vec2(-farGeomN.y, farGeomN.x)) * 0.55);
+    vec3 farFoamCol = mix(vec3(0.58, 0.78, 0.84), vec3(0.86, 0.95, 0.98), farRib);
+    albedo = mix(albedo, farFoamCol, farWaterfallSlope * waterW * 0.86);
+  }
 
   // --- live lighting, through the SHARED tail ------------------------------
   vec3 sunDir = normalize(uSunDir);
@@ -572,16 +579,19 @@ void main() {
   vec3 lit = terrainApplyLight(albedo, ndotl, 1.0, 1.0);
   if (waterW > 0.005) {
     vec3 viewAc = normalize(vec3(vWorldXy, 0.0) - uCamAc);
-    float cosT = clamp(-viewAc.z, 0.0, 1.0);
-    float fresW = 0.02 + 0.98 * pow(1.0 - cosT, 5.0);
+    vec3 farWN = normalize(mix(vec3(0.0, 0.0, 1.0), farGeomN, farWaterfallSlope));
+    float cosT = clamp(dot(-viewAc, farWN), 0.0, 1.0);
+    float fresW = (0.02 + 0.98 * pow(1.0 - cosT, 5.0)) * (1.0 - 0.72 * farWaterfallSlope);
     vec3 skyCol = uAcAmbColor * max(uAcAmbLevel, 0.22) * vec3(0.85, 0.98, 1.25);
 #ifdef USE_FOG
     skyCol = mix(skyCol, fogColor, 0.60);
 #endif
     vec3 halfAc = normalize(sunDir - viewAc);
-    float farGlint = pow(clamp(halfAc.z, 0.0, 1.0), 96.0) * uSunGlint
+    float farGlint = pow(clamp(dot(farWN, halfAc), 0.0, 1.0), 96.0) * uSunGlint
                    * smoothstep(0.05, 0.25, sunDir.z) * min(length(uAcSunVec) * 1.25, 1.0);
-    lit += (skyCol * fresW * uWaterReflect + uAcSunColor * farGlint * 0.45) * waterW;
+    vec3 farCascade = (uAcSunColor * max(dot(farGeomN, sunDir), 0.25)
+                     + uAcAmbColor * max(uAcAmbLevel, 0.28)) * vec3(0.38, 0.52, 0.58) * farWaterfallSlope;
+    lit += (skyCol * fresW * uWaterReflect + uAcSunColor * farGlint * 0.45 + farCascade) * waterW;
   }
 
   fragColor = vec4(terrainApplyFog(lit, vViewDepth), 1.0);

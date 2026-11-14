@@ -232,7 +232,7 @@ export function scanWeatherSkyObjects(skyObjects, mode = STORM_SCAN_MODE) {
  *           surface_pressure_hPa:number, is_storm:boolean,
  *           _weather?:{is_storm:boolean,has_droplets:boolean,streak_gfx_id:number}}}
  */
-export function weatherForState(state, dayGroupIndex, skyObjects) {
+export function weatherForState(state, dayGroupIndex, skyObjects, biome) {
   const base =
     Number.isFinite(dayGroupIndex) &&
     dayGroupIndex >= 0 &&
@@ -243,13 +243,81 @@ export function weatherForState(state, dayGroupIndex, skyObjects) {
   // No SkyObject array → preserve legacy table/heuristic behavior
   // (fail-soft; W4 only refines when the real signal is available).
   if (!Array.isArray(skyObjects) || skyObjects.length === 0) {
-    return base;
+    return biome ? applyBiomeToProfile(base, biome) : base;
   }
 
   const scan = scanWeatherSkyObjects(skyObjects);
   // Clone so we don't mutate the shared PROFILES table; drive is_storm
   // from the real SkyObject presence, keep the T/Td/P heuristic.
-  return { ...base, is_storm: scan.is_storm, _weather: scan };
+  const out = { ...base, is_storm: scan.is_storm, _weather: scan };
+  return biome ? applyBiomeToProfile(out, biome) : out;
+}
+
+/**
+ * Scan visible weather SkyObject details (PES chain IDs + Setup IDs) without
+ * altering `scanWeatherSkyObjects`'s 3-key contract.
+ */
+export function scanWeatherSkyDetails(skyObjects, mode = STORM_SCAN_MODE) {
+  const retail = mode === STORM_SCAN_RETAIL;
+  const weatherPesIds = [];
+  const setupGfxIds = [];
+  let hasCloudBand = false;
+  if (Array.isArray(skyObjects)) {
+    for (const o of skyObjects) {
+      if (!o) continue;
+      let visible = false, props = 0, gfxId = 0, pesId = 0;
+      try {
+        visible = !!o.visible;
+        props = (o.properties >>> 0) || 0;
+        gfxId = (o.gfxObjectId >>> 0) || 0;
+        pesId = (o.pesObjectId >>> 0) || 0;
+      } catch (_) {
+        continue;
+      }
+      if (!visible) continue;
+      if ((props & SKY_PROP_CLOUD_BAND) !== 0) hasCloudBand = true;
+      const isWeather = retail
+        ? (props & SKY_PROP_WEATHER_STREAK) !== 0
+        : ((props & SKY_PROP_WEATHER_STREAK) !== 0 || (((gfxId & 0xff000000) === 0x02000000) && (pesId !== 0 || (props & SKY_PROP_PHYSICS_SCRIPT) !== 0)));
+      if (isWeather) {
+        if (pesId !== 0 && !weatherPesIds.includes(pesId)) weatherPesIds.push(pesId);
+        if ((gfxId & 0xff000000) === 0x02000000 && !setupGfxIds.includes(gfxId)) setupGfxIds.push(gfxId);
+      }
+    }
+  }
+  return { weatherPesIds, setupGfxIds, hasCloudBand };
+}
+
+/**
+ * Cool a DayGroup meteorological profile for snowy terrain (`FAM_SNOWICE`),
+ * high mountain elevation, or high northern latitude so storms/clouds produce
+ * snow in snowy/alpine/polar regions and rain + lightning in temperate/tropical ones.
+ */
+export function applyBiomeToProfile(profile, biome) {
+  if (!profile || !biome) return profile;
+  const snowIce = Math.min(1, Math.max(0, Number(biome.snowIceFrac) || 0));
+  const elevM = Number.isFinite(biome.elevationM) ? biome.elevationM : 0;
+  const latDeg = Number.isFinite(biome.latitudeDeg) ? Math.abs(biome.latitudeDeg) : 45;
+
+  let offsetC = 0;
+  // Tropospheric lapse above 120 m (~6.5 °C / km, steeper above alpine timberline 350 m).
+  if (elevM > 120) offsetC -= (elevM - 120) * 0.0085;
+  // Sub-polar / northern cooling above 52°N.
+  if (latDeg > 52) offsetC -= (latDeg - 52) * 1.15;
+  // Direct FAM_SNOWICE terrain cooling (glaciers, Qalaba'r alpine peaks, Frore).
+  if (snowIce >= 0.12) offsetC -= 10 + 18 * snowIce;
+
+  if (offsetC === 0) return profile;
+  const spread = Math.max(0.5, profile.temperature_C - profile.dewpoint_C);
+  let nextT = profile.temperature_C + offsetC;
+  if (snowIce >= 0.15) {
+    nextT = Math.min(nextT, -2.5 - 6.0 * snowIce);
+  }
+  return {
+    ...profile,
+    temperature_C: nextT,
+    dewpoint_C: nextT - Math.min(spread, snowIce >= 0.15 ? 2.0 : spread),
+  };
 }
 
 /** Live-tuning hook for per-DayGroup tweaking via devtools. */

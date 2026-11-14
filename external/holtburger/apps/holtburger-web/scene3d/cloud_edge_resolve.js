@@ -87,17 +87,49 @@ const GLSL_UNIFORMS = `
 uniform sampler2D hbSceneDepth;
 uniform sampler2D hbPrevSky;
 uniform float hbReversedDepth;
+uniform float hbLogDepth;
+uniform float hbCameraNear;
+uniform float hbCameraFar;
+uniform vec2 hbProjScale;
+uniform vec2 hbTargetUvScale;
 uniform float hbEdgeGamma;
 uniform float hbEdgeEnable;`;
 
 const GLSL_FUNCS = `// holtburger ?cloudEdgeResolve (scene3d/cloud_edge_resolve.js): the same
-// sky/scene test the march uses (clouds.frag getRayDistanceToScene).
+// sky/scene test the march uses (clouds.frag getRayDistanceToScene), plus
+// linear scene ray-distance occlusion so clouds behind hills/trees never paint
+// over foreground terrain silhouettes, sub-4px crests, or non-divisible-by-4
+// Bayer currentFrame slots.
 bool hbIsSky(const vec2 uv) {
   float d = texture(hbSceneDepth, uv).r;
   if (hbReversedDepth > 0.5) {
     d = 1.0 - d;
   }
   return d >= 1.0 - 1e-7;
+}
+
+float hbSceneRayDist(const vec2 uv) {
+  float d = texture(hbSceneDepth, uv).r;
+  if (hbReversedDepth > 0.5) {
+    d = 1.0 - d;
+  }
+  if (d >= 1.0 - 1e-7) {
+    return max(hbCameraFar, 1.0);
+  }
+  float nearZ = max(hbCameraNear, 1e-3);
+  float farZ = max(hbCameraFar, nearZ + 1.0);
+  if (hbProjScale.x > 0.0) {
+    float viewDist;
+    if (hbLogDepth > 0.5) {
+      viewDist = pow(2.0, d * log2(farZ + 1.0)) - 1.0;
+    } else {
+      float ndc = d * 2.0 - 1.0;
+      viewDist = (2.0 * nearZ * farZ) / max(1e-6, farZ + nearZ - ndc * (farZ - nearZ));
+    }
+    vec2 ndcXY = uv * 2.0 - 1.0;
+    return viewDist * length(vec3(ndcXY * hbProjScale, -1.0));
+  }
+  return nearZ + d * (farZ - nearZ);
 }
 
 bool hbWasSky(const vec2 uv) {
@@ -119,19 +151,64 @@ bool hbEdgeResolve(const ivec2 lowResCoord, const vec4 closest, out vec4 color) 
     return false;
   }
   bool selfSky = hbIsSky(vUv);
-  ivec2 lowMax = textureSize(colorBuffer, 0) - 1;
+  float selfRayDist = selfSky ? 1e7 : hbSceneRayDist(vUv);
+  ivec2 lowSize = textureSize(colorBuffer, 0);
+  ivec2 lowMax = lowSize - 1;
+  vec2 uvScale = max(hbTargetUvScale, vec2(1.0));
+  vec2 lowUv = clamp(vUv / uvScale, vec2(0.0), vec2(1.0));
+  vec2 minUv = 0.5 * texelSize;
+  vec2 maxUv = max(minUv, vec2(1.0) - 0.5 * texelSize);
+  ivec2 hbFrag = ivec2(gl_FragCoord.xy);
+  bool hbCurrent = (bayerIndices[hbFrag.x % 4][hbFrag.y % 4] == (frame % 16));
+
   bool nSky[9];
   float other = 0.0;
+  bool centerRaySky = false;
   for (int i = 0; i < 9; ++i) {
     ivec2 nc = clamp(lowResCoord + neighborOffsets[i], ivec2(0), lowMax);
-    // Where this low-res texel was marched this frame: block centre + jitter.
-    vec2 marchUv = (vec2(nc) * 4.0 + 2.0 + jitterOffset) * texelSize;
+    // Where this low-res texel sampled scene depth this frame, accounting for targetUvScale.
+    vec2 lowMarchUv = (vec2(nc) + 0.5 + jitterOffset * 0.25) / vec2(lowSize);
+    vec2 marchUv = clamp(lowMarchUv * uvScale, minUv, maxUv);
     nSky[i] = hbIsSky(marchUv);
+    if (i == 4) {
+      centerRaySky = nSky[4];
+      if (!centerRaySky && (uvScale.x > 1.0001 || uvScale.y > 1.0001)) {
+        centerRaySky = hbIsSky(clamp(lowMarchUv, minUv, maxUv));
+      }
+    }
     if (nSky[i] != selfSky) {
       other += 1.0;
     }
   }
-  if (other < 0.5) {
+
+  // Runs BEFORE the currentFrame fast-return in cloudsResolve.frag:
+  // Allow takram's exact currentFrame sample ONLY when the marched center sample
+  // belongs to the same sky/scene class as vUv (and on !selfSky is not behind the hill).
+  if (hbCurrent) {
+    if (selfSky) {
+      vec2 centerLowMarchUv = clamp((vec2(lowResCoord) + 0.5 + jitterOffset * 0.25) / vec2(lowSize), minUv, maxUv);
+      bool rayAlsoSky = (uvScale.x <= 1.0001 && uvScale.y <= 1.0001) || hbIsSky(centerLowMarchUv);
+      if (nSky[4] && rayAlsoSky) {
+        return false;
+      }
+    } else {
+      vec4 curCol = texelFetch(colorBuffer, lowResCoord, 0);
+      float curFront = texelFetch(depthVelocityBuffer, lowResCoord, 0).r;
+      if (!nSky[4] && !centerRaySky && (curCol.a <= 1e-4 || curFront <= selfRayDist + 8.0)) {
+        return false;
+      }
+    }
+  }
+
+  if (other < 0.5 && !hbCurrent) {
+    if (!selfSky) {
+      vec4 centerCol = texelFetch(colorBuffer, lowResCoord, 0);
+      float centerFront = texelFetch(depthVelocityBuffer, lowResCoord, 0).r;
+      if (centerCol.a > 1e-4 && centerFront > selfRayDist + 8.0) {
+        color = vec4(0.0);
+        return true;
+      }
+    }
     // Uniform neighbourhood: takram's closest fragment is this side's.
     vec2 prevUv = vUv - closest.gb;
     if (any(lessThan(prevUv, vec2(0.0))) || any(greaterThan(prevUv, vec2(1.0)))) {
@@ -140,7 +217,10 @@ bool hbEdgeResolve(const ivec2 lowResCoord, const vec4 closest, out vec4 color) 
     if (hbWasSky(prevUv) == selfSky) {
       return false; // coherent history: takram's result stands
     }
-    color = texture(colorBuffer, vUv); // disoccluded: this frame's samples only
+    color = texture(colorBuffer, lowUv); // disoccluded: this frame's samples only
+    if (!selfSky && color.a > 1e-4 && closest.r > selfRayDist + 8.0) {
+      color = vec4(0.0);
+    }
     return true;
   }
   // Silhouette: velocity and variance box from this side's texels only.
@@ -154,15 +234,38 @@ bool hbEdgeResolve(const ivec2 lowResCoord, const vec4 closest, out vec4 color) 
     }
     ivec2 nc = clamp(lowResCoord + neighborOffsets[i], ivec2(0), lowMax);
     vec4 c = texelFetch(colorBuffer, nc, 0);
+    vec4 dv = texelFetch(depthVelocityBuffer, nc, 0);
+    if (!selfSky && c.a > 1e-4 && dv.r > selfRayDist + 8.0) {
+      // Cloud marched in front of distant terrain, but BEHIND this closer hill -> occluded!
+      c = vec4(0.0);
+    }
     m1 += c;
     m2 += c * c;
     n += 1.0;
-    vec4 dv = texelFetch(depthVelocityBuffer, nc, 0);
     if (dv.r < best.r) {
       best = dv;
     }
   }
   if (n < 0.5) {
+    if (!selfSky) {
+      // Narrow hilltop / ridge crest / spire / tree-top (< 4 px wide) where all 9
+      // low-res Bayer samples landed on sky: compare scene ray distance against
+      // neighbor cloud frontDepth. Only blend clouds genuinely in front of distant
+      // terrain (dv.r + 4.0 < selfRayDist); occlude all clouds behind this hill!
+      vec4 fgSum = vec4(0.0);
+      float fgCount = 0.0;
+      for (int i = 0; i < 9; ++i) {
+        ivec2 nc = clamp(lowResCoord + neighborOffsets[i], ivec2(0), lowMax);
+        vec4 c = texelFetch(colorBuffer, nc, 0);
+        vec4 dv = texelFetch(depthVelocityBuffer, nc, 0);
+        if (c.a > 1e-4 && dv.r + 4.0 < selfRayDist) {
+          fgSum += c;
+          fgCount += 1.0;
+        }
+      }
+      color = fgCount > 0.5 ? (fgSum / fgCount) : vec4(0.0);
+      return true;
+    }
     return false;
   }
   vec4 mean = m1 / n;
@@ -257,7 +360,15 @@ export function installCloudEdgeResolve(effect, THREE, opts = {}) {
   }
   const gamma = Number.isFinite(opts.gamma) && opts.gamma > 0 ? opts.gamma : CLOUD_EDGE_GAMMA_DEFAULT;
   const depthUniform = cm.uniforms.depthBuffer; // SHARED: setDepthTexture updates both
+  const makeVec2 = (x, y) => (typeof THREE.Vector2 === "function"
+    ? new THREE.Vector2(x, y)
+    : { x, y, set(nx, ny) { this.x = nx; this.y = ny; return this; } });
   const reversed = new THREE.Uniform(0);
+  const logDepthU = new THREE.Uniform(0);
+  const cameraNearU = new THREE.Uniform(0.1);
+  const cameraFarU = new THREE.Uniform(5000);
+  const projScaleU = new THREE.Uniform(makeVec2(1, 1));
+  const targetUvScaleU = new THREE.Uniform(makeVec2(1, 1));
   const enable = new THREE.Uniform(1);
   const gammaU = new THREE.Uniform(gamma);
   const classRT = new THREE.WebGLRenderTarget(1, 1, {
@@ -284,6 +395,11 @@ export function installCloudEdgeResolve(effect, THREE, opts = {}) {
   rm.uniforms.hbSceneDepth = depthUniform;
   rm.uniforms.hbPrevSky = new THREE.Uniform(classRT.texture);
   rm.uniforms.hbReversedDepth = reversed;
+  rm.uniforms.hbLogDepth = logDepthU;
+  rm.uniforms.hbCameraNear = cameraNearU;
+  rm.uniforms.hbCameraFar = cameraFarU;
+  rm.uniforms.hbProjScale = projScaleU;
+  rm.uniforms.hbTargetUvScale = targetUvScaleU;
   rm.uniforms.hbEdgeGamma = gammaU;
   rm.uniforms.hbEdgeEnable = enable;
   rm.needsUpdate = true;
@@ -291,7 +407,7 @@ export function installCloudEdgeResolve(effect, THREE, opts = {}) {
   const state = { user: true };
   const stats = {
     installed: true, gamma, frames: 0, classPasses: 0, width: 0, height: 0,
-    reversedDepth: false, packedDepthSkips: 0, lastError: null,
+    reversedDepth: false, logDepth: false, packedDepthSkips: 0, nullDepthSkips: 0, lastError: null,
   };
   const RGBA_PACKING = THREE.RGBADepthPacking ?? 3201;
   const origUpdate = cp.update;
@@ -303,11 +419,60 @@ export function installCloudEdgeResolve(effect, THREE, opts = {}) {
     if (cm.depthPacking === RGBA_PACKING) {
       on = false; // packed depth: our raw .r read would be wrong
       stats.packedDepthSkips += 1;
+    } else if (depthUniform.value == null) {
+      on = false; // unbound depth texture: avoid treating raw 0.0 as foreground scene
+      stats.nullDepthSkips += 1;
     }
     let rev = false;
     try { rev = renderer?.state?.buffers?.depth?.getReversed?.() === true; } catch (_) { rev = false; }
+    let logD = false;
+    try {
+      logD = !rev && (
+        renderer?.capabilities?.logarithmicDepthBuffer === true ||
+        cm.defines?.USE_LOGARITHMIC_DEPTH_BUFFER != null
+      );
+    } catch (_) { logD = false; }
     reversed.value = rev ? 1 : 0;
+    logDepthU.value = logD ? 1 : 0;
     stats.reversedDepth = rev;
+    stats.logDepth = logD;
+
+    const cam = this?.mainCamera || effect?.mainCamera || null;
+    const nearVal = (cam && Number.isFinite(cam.near) && cam.near > 0)
+      ? cam.near
+      : ((cm.uniforms?.cameraNear?.value > 0) ? cm.uniforms.cameraNear.value : 0.1);
+    const farVal = (cam && Number.isFinite(cam.far) && cam.far > nearVal)
+      ? cam.far
+      : ((cm.uniforms?.cameraFar?.value > nearVal) ? cm.uniforms.cameraFar.value : 5000);
+    cameraNearU.value = nearVal;
+    cameraFarU.value = farVal;
+
+    const pm = cam?.projectionMatrix?.elements;
+    if (cam?.isOrthographicCamera === true) {
+      projScaleU.value.set(0, 0);
+    } else if (pm && Math.abs(pm[0]) > 1e-8 && Math.abs(pm[5]) > 1e-8) {
+      projScaleU.value.set(1 / Math.abs(pm[0]), 1 / Math.abs(pm[5]));
+    } else {
+      const ipm = cm.uniforms?.inverseProjectionMatrix?.value?.elements;
+      if (ipm && (Math.abs(ipm[0]) > 1e-8 || Math.abs(ipm[5]) > 1e-8)) {
+        projScaleU.value.set(Math.abs(ipm[0]), Math.abs(ipm[5]));
+      } else {
+        projScaleU.value.set(1, 1);
+      }
+    }
+
+    const tus = cm.uniforms?.targetUvScale?.value;
+    if (tus && Number.isFinite(tus.x) && Number.isFinite(tus.y) && tus.x > 0 && tus.y > 0) {
+      targetUvScaleU.value.set(tus.x, tus.y);
+    } else if (this.width > 0 && this.height > 0 && this.temporalUpscale !== false) {
+      targetUvScaleU.value.set(
+        (Math.ceil(this.width / 4) * 4) / this.width,
+        (Math.ceil(this.height / 4) * 4) / this.height,
+      );
+    } else {
+      targetUvScaleU.value.set(1, 1);
+    }
+
     enable.value = on ? 1 : 0;
     const out = origUpdate.call(this, renderer, frame, deltaTime);
     if (!on) return out;

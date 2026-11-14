@@ -45,7 +45,7 @@ export const PORTAL_SETUPS = new Map([
   [0x020015A3, Object.freeze({ kind: "dark", quadPart: 0, centre: Object.freeze([0, 0, 1.415]), radius: 1.5, color: Object.freeze([1, 0.0667, 0.0667]), swirl: 0 })],
   [0x020015A4, Object.freeze({ kind: "dark", quadPart: 0, centre: Object.freeze([0, 0, 1.415]), radius: 1.5, color: Object.freeze([1, 0.0667, 0.0667]), swirl: 0 })],
   [0x020015A5, Object.freeze({ kind: "dark", quadPart: 0, centre: Object.freeze([0, 0, 1.415]), radius: 2.4589, color: Object.freeze([1, 0.0667, 0.0667]), swirl: 0 })],
-  [0x020015B9, Object.freeze({ kind: "disc", quadPart: 0, centre: Object.freeze([0, 0, 0.415]), radius: 3.5, color: Object.freeze([1, 0.1233, 0.3679]), swirl: 0x32000893 })],
+  [0x020015B9, Object.freeze({ kind: "dark", quadPart: 0, centre: Object.freeze([0, 0, 0.415]), radius: 3.5, color: Object.freeze([1, 0.1233, 0.3679]), swirl: 0x32000893 })],
   [0x0200167E, Object.freeze({ kind: "disc", quadPart: 0, centre: Object.freeze([0, 0, 1.915]), radius: 3.4713, color: Object.freeze([0.8335, 0.0611, 1]), swirl: 0x320008F9 })],
   [0x02001698, Object.freeze({ kind: "pillar", quadPart: 8, centre: Object.freeze([0, 0, 1.6457]), radius: 1.0125, color: Object.freeze([1, 0.143, 0.3675]), swirl: 0x3200090A })],
   [0x02001699, Object.freeze({ kind: "pillar", quadPart: 8, centre: Object.freeze([0, 0, 1.6457]), radius: 1.0125, color: Object.freeze([0.8335, 0.0611, 1]), swirl: 0x3200090D })],

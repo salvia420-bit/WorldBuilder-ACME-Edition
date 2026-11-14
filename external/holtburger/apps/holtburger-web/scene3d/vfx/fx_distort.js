@@ -23,7 +23,40 @@ import { fxTier1Enabled } from "./fx_tier1.js";
 import { fxNowMs } from "../fx_clock.js";
 
 export const FX_DISTORT_MAX = 16;
+export const MAX_SCREEN_RADIUS = 0.16;
 export const FX_DISTORT_KINDS = Object.freeze({ heat: 1, swirl: 2, ring: 3, ripple: 4 });
+
+/** Shadow Spire ground vortex eddies — stripped of obnoxious screen-warp & yellow light. */
+export const SPIRE_EDDY_DIDS = Object.freeze([
+  0x32000490,
+  0x32000491,
+  0x32000492,
+  0x32000493,
+  0x32000494,
+  0x32000495,
+]);
+
+/** Giant static Spire, Magma, volcano, and crater emitters — never screen-warp. */
+export const STATIC_NO_DISTORT_DIDS = Object.freeze([
+  0x320007c1,
+  0x320007bf,
+  0x32000a66,
+  0x32000a67,
+  0x32000a72,
+  0x32000a79,
+  0x32000a7a,
+  0x320005b8,
+  0x32000733,
+  0x320007c2,
+  0x320007c7,
+  0x320006fe,
+  0x3200010d,
+]);
+
+const _NO_DISTORT_EMITTER_DIDS = new Set([
+  ...SPIRE_EDDY_DIDS,
+  ...STATIC_NO_DISTORT_DIDS,
+]);
 
 const _sources = new Set();
 const _stats = { added: 0, shockwaves: 0, live: 0, onScreen: 0 };
@@ -47,6 +80,8 @@ function _now() {
 export function addFxDistortSource(o) {
   if (!fxTier1Enabled("fxDistort") || !o || typeof o.resolvePosition !== "function") return null;
   if (!(o.strength > 0) || !(o.radius > 0) || !(o.kind >= 1 && o.kind <= 4)) return null;
+  const emitDid = ((o.emitterDid ?? o.emitter?.emitterInfoId ?? o.emitter?.info?.id ?? 0) >>> 0);
+  if (emitDid !== 0 && _NO_DISTORT_EMITTER_DIDS.has(emitDid)) return null;
   const s = {
     kind: o.kind | 0,
     strength: Math.min(1, o.strength),
@@ -156,14 +191,14 @@ export function collectFxDistortSources(camera, out, nowMs) {
     _cand.push({
       x: _v.x * 0.5 + 0.5,
       y: _v.y * 0.5 + 0.5,
-      r: Math.min(0.6, r),
+      r: Math.min(MAX_SCREEN_RADIUS, r),
       radiusM: s.radius,
       depth,
       kind: s.kind,
       strength: s.strength * k,
       phase,
       seed: s.seed,
-      score: s.strength * k * Math.min(0.3, r),
+      score: s.strength * k * Math.min(MAX_SCREEN_RADIUS, r),
     });
   }
   _cand.sort((a, b) => b.score - a.score);

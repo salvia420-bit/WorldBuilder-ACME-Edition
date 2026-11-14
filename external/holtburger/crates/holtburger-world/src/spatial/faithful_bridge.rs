@@ -1548,7 +1548,46 @@ pub(super) fn faithful_terrain_floor(
     }
     // Plane equation `normal·p + d = 0` (holtburger-dat `make_plane`) → solve z.
     let z = -(n.x * local.x + n.y * local.y + poly.plane.d) / n.z;
-    Some((z, n))
+    // Item 12 (Fix 12A): subtract retail water floor depth (`0.90` on EntirelyWater
+    // cells where all 4 corners are water codes `16..=20`, `0.45` on PartiallyWater
+    // cells when the active quadrant corner is water, matching `types.rs:786` and
+    // retail `OBJECTINFO::validate_walkable`, acclient.c:314223-314227) so remote
+    // water monsters settled via `?remoteSettle` / `remote_ground_at` rest below the
+    // water surface instead of being lifted back onto `z = water_z`.
+    let water_depth = match scene.terrain_cell_water_codes(cell_id) {
+        Some(codes) => {
+            let cx = cell_x as usize;
+            let cy = cell_y as usize;
+            let (water_type, corner_is_water) = classify_cell_water([
+                codes[cx * 9 + cy],
+                codes[(cx + 1) * 9 + cy],
+                codes[cx * 9 + cy + 1],
+                codes[(cx + 1) * 9 + cy + 1],
+            ]);
+            match water_type {
+                WaterType::NotWater => 0.0,
+                WaterType::EntirelyWater => 0.90,
+                WaterType::PartiallyWater => {
+                    let (east, north) = if retail_water_quadrant_enabled() {
+                        let half = CELL_SIZE * 0.5;
+                        (
+                            local.x > (2.0 * cell_x as f32 + 1.0) * half,
+                            local.y > (2.0 * cell_y as f32 + 1.0) * half,
+                        )
+                    } else {
+                        (
+                            local.x.rem_euclid(CELL_SIZE) >= CELL_SIZE * 0.5,
+                            local.y.rem_euclid(CELL_SIZE) >= CELL_SIZE * 0.5,
+                        )
+                    };
+                    let idx = east as usize + 2 * north as usize;
+                    if corner_is_water[idx] { 0.45 } else { 0.0 }
+                }
+            }
+        }
+        None => 0.0,
+    };
+    Some((z - water_depth, n))
 }
 
 pub fn faithful_find_transitional_position(
@@ -8186,6 +8225,84 @@ mod cell_cache_tests {
         assert!(
             Arc::strong_count(&stored) > base,
             "built cell must hold an Arc to the scene's BSP (share, not copy)"
+        );
+    }
+}
+
+#[cfg(test)]
+mod water_terrain_floor_tests {
+    use super::*;
+
+    const WATER_LB: u32 = 0x1234_0000;
+    const SURFACE_Z: f32 = 12.0;
+
+    fn pose_in_lb(local_x: f32, local_y: f32, z: f32) -> WorldPosition {
+        let cell_x = (local_x / CELL_SIZE).floor().clamp(0.0, 7.0) as u32;
+        let cell_y = (local_y / CELL_SIZE).floor().clamp(0.0, 7.0) as u32;
+        let cell_low = cell_x * 8 + cell_y + 1;
+        WorldPosition {
+            landblock_id: holtburger_common::Guid(WATER_LB | cell_low),
+            coords: Vector3::new(local_x, local_y, z),
+            rotation: Quaternion::identity(),
+        }
+    }
+
+    #[test]
+    fn faithful_terrain_floor_subtracts_water_depth_on_entirely_and_partially_water_cells() {
+        let mut scene = SpatialScene::new();
+        scene.populate_terrain_heights(WATER_LB, [SURFACE_Z; 81]);
+
+        // 1. No water codes cached -> surface Z unchanged.
+        let p_center = pose_in_lb(36.0, 36.0, SURFACE_Z);
+        let (z_dry_uncached, _) = faithful_terrain_floor(&scene, &p_center).expect("floor");
+        assert!((z_dry_uncached - SURFACE_Z).abs() < 1e-4);
+
+        // 2. EntirelyWater on cell (1, 1) (corners (1,1), (2,1), (1,2), (2,2) = code 17).
+        let mut codes = [2u8; 81]; // dry grass = 2
+        codes[1 * 9 + 1] = 17;
+        codes[2 * 9 + 1] = 18;
+        codes[1 * 9 + 2] = 19;
+        codes[2 * 9 + 2] = 20;
+        // PartiallyWater on cell (4, 4): only NE corner (5, 5) is water (code 16).
+        codes[5 * 9 + 5] = 16;
+        // FauxWater (22/23) on cell (6, 6): solid in retail, must NOT submerge.
+        codes[6 * 9 + 6] = 22;
+        codes[7 * 9 + 6] = 23;
+        codes[6 * 9 + 7] = 22;
+        codes[7 * 9 + 7] = 23;
+        scene.populate_terrain_water_codes(WATER_LB, codes);
+
+        let (z_entire, _) = faithful_terrain_floor(&scene, &p_center).expect("entire water floor");
+        assert!(
+            (z_entire - (SURFACE_Z - 0.90)).abs() < 1e-4,
+            "EntirelyWater must lower floor by 0.90 m, got {z_entire}"
+        );
+
+        // PartiallyWater cell (4, 4) spans [96..120, 96..120], centre (108, 108).
+        // NE quadrant (114, 114) hits water corner (5,5) -> SURFACE_Z - 0.45.
+        let p_partial_wet = pose_in_lb(114.0, 114.0, SURFACE_Z);
+        let (z_partial_wet, _) =
+            faithful_terrain_floor(&scene, &p_partial_wet).expect("partial wet floor");
+        assert!(
+            (z_partial_wet - (SURFACE_Z - 0.45)).abs() < 1e-4,
+            "PartiallyWater wet quadrant must lower floor by 0.45 m, got {z_partial_wet}"
+        );
+
+        // SW quadrant (100, 100) hits dry corner (4,4) -> SURFACE_Z unchanged.
+        let p_partial_dry = pose_in_lb(100.0, 100.0, SURFACE_Z);
+        let (z_partial_dry, _) =
+            faithful_terrain_floor(&scene, &p_partial_dry).expect("partial dry floor");
+        assert!(
+            (z_partial_dry - SURFACE_Z).abs() < 1e-4,
+            "PartiallyWater dry quadrant must stay at surface Z, got {z_partial_dry}"
+        );
+
+        // FauxWater cell (6, 6) at (156, 156) -> solid -> SURFACE_Z unchanged.
+        let p_faux = pose_in_lb(156.0, 156.0, SURFACE_Z);
+        let (z_faux, _) = faithful_terrain_floor(&scene, &p_faux).expect("faux water floor");
+        assert!(
+            (z_faux - SURFACE_Z).abs() < 1e-4,
+            "FauxWater (22/23) must remain solid at surface Z, got {z_faux}"
         );
     }
 }

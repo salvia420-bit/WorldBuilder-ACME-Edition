@@ -10,7 +10,7 @@
 // player if EITHER selects it).
 //
 // Import-cycle-safe: imports nothing from the scene3d graph.
-import { isTreeDid } from "./tree_wind.js";
+import { isTreeDid, isPalmOrCoastalWindDid } from "./tree_wind.js";
 
 function _strFlag(name) {
   try {
@@ -74,6 +74,46 @@ function _didToNum(d) {
 }
 
 /**
+ * Normalize `signals` from `visual_descriptors.jsonl` (`Array<{name, value, weight}>`)
+ * or a pre-parsed plain object into a clean `{ [name]: number | string | boolean }` map.
+ * Finite numeric strings (e.g. `"14.20"`, `"1"`) are parsed to `Number` so callers can
+ * read `descriptor.signals.partCount` / `descriptor.signals.maxDimension` directly.
+ */
+export function parseDescriptorSignals(rawSignals) {
+  const out = {};
+  if (Array.isArray(rawSignals)) {
+    for (let i = 0; i < rawSignals.length; i += 1) {
+      const s = rawSignals[i];
+      if (!s || typeof s !== "object" || typeof s.name !== "string" || !s.name) continue;
+      const v = s.value;
+      if (typeof v === "number" && Number.isFinite(v)) {
+        out[s.name] = v;
+      } else if (typeof v === "string") {
+        const trimmed = v.trim();
+        const num = trimmed !== "" ? Number(trimmed) : NaN;
+        out[s.name] = Number.isFinite(num) ? num : v;
+      } else if (typeof v === "boolean") {
+        out[s.name] = v;
+      }
+    }
+    return out;
+  }
+  if (rawSignals && typeof rawSignals === "object") {
+    for (const k of Object.keys(rawSignals)) {
+      const v = rawSignals[k];
+      if (typeof v === "string") {
+        const trimmed = v.trim();
+        const num = trimmed !== "" ? Number(trimmed) : NaN;
+        out[k] = Number.isFinite(num) ? num : v;
+      } else {
+        out[k] = v;
+      }
+    }
+  }
+  return out;
+}
+
+/**
  * Parse a visual_descriptors.jsonl text into a Map(didNum -> descriptor). Pure.
  * Tolerant — a strict superset of every shape we have ever emitted:
  *   • `did` — hex string ("0x02001063") or number.
@@ -115,9 +155,11 @@ export function parseDescriptorsJsonl(text) {
     }
     if (o.config && typeof o.config === "object") config = { ...config, ...o.config }; // top-level canonical wins
     map.set(did, {
+      did,
       archetype: o.archetype || "",
       componentIds,
       config,
+      signals: parseDescriptorSignals(o.signals),
       sidecars: (o.sidecars && typeof o.sidecars === "object") ? o.sidecars : {},
       schemaVersion: (typeof o.schemaVersion === "number") ? o.schemaVersion : 0,
       raw: o,
@@ -213,8 +255,39 @@ export function hasWindBend(descriptor) {
 export function windResponds(descriptor) {
   if (hasWindBend(descriptor)) return true;
   if (descriptor?.archetype !== "foliage-pollen") return false;
-  const sig = descriptor.raw?.signals;
-  if (!Array.isArray(sig)) return false;
-  const pc = sig.find((s) => s && s.name === "partCount");
-  return !!pc && parseInt(pc.value, 10) >= 2;
+  const sig = descriptor.signals && typeof descriptor.signals === "object" && !Array.isArray(descriptor.signals)
+    ? descriptor.signals
+    : parseDescriptorSignals(descriptor.raw?.signals ?? descriptor.signals);
+  return Number(sig.partCount) >= 2;
+}
+
+/**
+ * GPU vertex-shader wind-sway selector (`deformation.windSwayGpu`, Item 6B).
+ * Unlike the legacy CPU MECH-A `hasWindBend` / `windResponds` peel (which needs >=2
+ * articulable SetupModel parts and stays unchanged), GPU vertex shear + frond-tip
+ * flutter works on single-part (`partCount >= 1`) AND multi-part flora alike:
+ *   • explicit palm / coastal flora allowlist (`isPalmOrCoastalWindDid`, including
+ *     unclassified palms and `0x02001065` claimed by `creature-breath`) + `isTreeDid`
+ *   • any descriptor carrying `deformation.windBend` or `deformation.windSwayGpu`
+ *   • all `foliage-pollen` Scenery flora with `partCount >= 1` and `maxDimension >= 0.8m`
+ */
+export function windRespondsGpu(descriptor, did = 0) {
+  const id = (did >>> 0) || _didToNum(descriptor?.did ?? descriptor?.raw?.did);
+  if (id && (isPalmOrCoastalWindDid(id) || isTreeDid(id))) return true;
+  if (!descriptor) return false;
+  if (hasWindBend(descriptor) || windResponds(descriptor)) return true;
+  const ids = descriptor.componentIds;
+  if (ids && typeof ids.has === "function" && ids.has("deformation.windSwayGpu")) return true;
+  if (Array.isArray(ids) && ids.indexOf("deformation.windSwayGpu") !== -1) return true;
+  if (descriptor.archetype !== "foliage-pollen") return false;
+  const sig = descriptor.signals && typeof descriptor.signals === "object" && !Array.isArray(descriptor.signals)
+    ? descriptor.signals
+    : parseDescriptorSignals(descriptor.raw?.signals ?? descriptor.signals);
+  const cat = sig.category;
+  if (typeof cat === "string" && cat && cat !== "Scenery") return false;
+  const pc = sig.partCount !== undefined ? Number(sig.partCount) : 1;
+  if (!(pc >= 1)) return false;
+  const maxDim = sig.maxDimension !== undefined ? Number(sig.maxDimension) : NaN;
+  if (Number.isFinite(maxDim) && maxDim < 0.8) return false;
+  return true;
 }

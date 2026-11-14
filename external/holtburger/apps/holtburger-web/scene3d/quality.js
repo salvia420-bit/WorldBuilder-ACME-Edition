@@ -267,6 +267,9 @@ export const PRESETS = {
         // `vfx_flags.js`'s volcano block for the SnowSystem assessment).
         terrainVolcano: terrainMaster("volcano", "low"),
         terrainHaze: false,
+        terrainVolcanoHaze: false,
+        terrainWaterfalls: false,
+        terrainSpires: false,
         terrainCrackGlow: false,
         terrainVolcanoEmberCount: 0,
         terrainHazeStrength: 0,
@@ -414,6 +417,9 @@ export const PRESETS = {
         // correction term is then exactly zero (plan §2.7.3 point 4).
         terrainVolcano: terrainMaster("volcano", "mid"),
         terrainHaze: false,
+        terrainVolcanoHaze: false,
+        terrainWaterfalls: true,
+        terrainSpires: true,
         terrainCrackGlow: true,
         terrainVolcanoEmberCount: 0,
         terrainHazeStrength: 0,
@@ -532,6 +538,9 @@ export const PRESETS = {
         // at 25 % render scale (plan §5.8).
         terrainVolcano: terrainMaster("volcano", "high"),
         terrainHaze: true,
+        terrainVolcanoHaze: false,
+        terrainWaterfalls: true,
+        terrainSpires: true,
         terrainCrackGlow: true,
         // 2026-10-23: 1 -> 2. Vents now stand on LAVA only (code 25, 54
         // landblocks, was every obsidian/ash LB too) and are range-gated
@@ -644,6 +653,9 @@ export const PRESETS = {
         // deferred (plan §8 risk 9) and therefore carries no key at all.
         terrainVolcano: terrainMaster("volcano", "ultra"),
         terrainHaze: true,
+        terrainVolcanoHaze: false,
+        terrainWaterfalls: true,
+        terrainSpires: true,
         terrainCrackGlow: true,
         terrainVolcanoEmberCount: 4,   // 2026-10-23: 3 -> 4 (see high)
         terrainHazeStrength: 1.25,

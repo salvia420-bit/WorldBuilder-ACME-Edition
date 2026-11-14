@@ -70,6 +70,13 @@ import {
 } from "../ui/hud_scale.js";
 import * as windowPosition from "../ui/ac_window_position.js";
 import { CHARACTER_OPTION_LOCK_UI, setGlobalLock, onGlobalLockChange } from "../ui/ui_lock.js";
+import {
+  CHARACTER_OPTION_DISABLE_WEATHER,
+  LS_WEATHER_ENABLED_KEY,
+  isWeatherEnabled,
+  setWeatherEnabled,
+  onWeatherEnabledChange,
+} from "../scene3d/visual_options.js";
 import { modalConfirmCallback } from "./modal-dialog.js";
 import { logOffAvailable, requestEndCharacterSession } from "../ui/end_character_session.js";
 
@@ -436,6 +443,7 @@ const SNAPSHOT_KEYS = Object.freeze([
   "holtburger_graphics_v1",
   "holtburger_camera_v1",
   LS_AUDIO_KEY,
+  LS_WEATHER_ENABLED_KEY,
 ]);
 
 function safeStorage() {
@@ -495,6 +503,7 @@ function revertSession(session) {
 // (ui/ui_lock.js). The setCharacterOption call already made is the only send.
 function noteCharacterOptionSent(idx, value) {
   if ((idx >>> 0) === CHARACTER_OPTION_LOCK_UI) setGlobalLock(value, { send: false });
+  if ((idx >>> 0) === CHARACTER_OPTION_DISABLE_WEATHER) setWeatherEnabled(!value, { syncServer: false });
 }
 
 // ---------------------------------------------------------------------
@@ -981,6 +990,9 @@ function readCharacterOption(idx, handle, localCache) {
     try { return !!handle.isCharacterOptionEnabled(idx >>> 0); }
     catch (_) { /* unknown index — fall back to local cache */ }
   }
+  if ((idx >>> 0) === CHARACTER_OPTION_DISABLE_WEATHER) {
+    return !isWeatherEnabled(null);
+  }
   return !!localCache[String(idx)];
 }
 
@@ -1049,7 +1061,7 @@ function buildCharacterOptionRow(opt, ctx, env) {
       }
       noteCharacterOptionSent(opt.idx, value);
     },
-    { disabled: offline },
+    { disabled: offline && (opt.idx >>> 0) !== CHARACTER_OPTION_DISABLE_WEATHER },
   );
   env?.charBoxes?.set(opt.idx, cb);
   return row;
@@ -1568,6 +1580,10 @@ export const view = {
       const cb = env.charBoxes.get(CHARACTER_OPTION_LOCK_UI);
       if (cb) cb.checked = !!locked;
     });
+    const unsubWeather = onWeatherEnabledChange((enabled) => {
+      const cb = env.charBoxes.get(CHARACTER_OPTION_DISABLE_WEATHER);
+      if (cb) cb.checked = !enabled;
+    });
 
     return () => {
       endCapture();
@@ -1576,6 +1592,7 @@ export const view = {
       clearTimeout(statusTimer);
       try { unsubStats?.(); } catch (_) {}
       unsubLockUi();
+      unsubWeather();
       root.remove();
     };
   },

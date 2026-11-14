@@ -1611,7 +1611,7 @@ vec2 getHazeRayNearFar(const IntersectionResult intersections) {
 #endif // HAZE
 
 float getRayDistanceToScene(const vec3 rayDirection, out float viewZ) {
-  vec2 depthUv = clamp((vUv + temporalJitter) * targetUvScale, vec2(0.0), targetUvScale);
+  vec2 depthUv = clamp((vUv + temporalJitter) * targetUvScale, vec2(0.0), min(targetUvScale, vec2(1.0)));
   float depth = readDepthValue(depthBuffer, depthUv);
   if (depth < 1.0 - 1e-7) {
     depth = reverseLogDepth(depth, cameraNear, cameraFar);
@@ -1786,15 +1786,17 @@ void main() {
   #endif // DEBUG_SHOW_FRONT_DEPTH
 
   #ifdef HAZE
-  vec4 haze = approximateHaze(
-    cameraNear * rayDirection + cameraPosition,
-    rayDirection,
-    hazeRayNearFar.y - hazeRayNearFar.x,
-    cosTheta,
-    shadowLength
-  );
-  color.rgb = mix(color.rgb, haze.rgb, haze.a);
-  color.a = color.a * (1.0 - haze.a) + haze.a;
+  if (hitClouds || (!intersectsScene && rayDistanceToScene <= 0.0)) {
+    vec4 haze = approximateHaze(
+      cameraNear * rayDirection + cameraPosition,
+      rayDirection,
+      hazeRayNearFar.y - hazeRayNearFar.x,
+      cosTheta,
+      shadowLength
+    );
+    color.rgb = mix(color.rgb, haze.rgb, haze.a);
+    color.a = color.a * (1.0 - haze.a) + haze.a;
+  }
   #endif // HAZE
 
   outputColor = color;
@@ -1953,8 +1955,10 @@ var CloudsMaterial = class extends AtmosphereMaterialBase {
     if (nextLogarithmicDepthBuffer !== prevLogarithmicDepthBuffer) {
       if (nextLogarithmicDepthBuffer) {
         this.defines.USE_LOGARITHMIC_DEPTH_BUFFER = "1";
+        this.needsUpdate = true;
       } else {
         delete this.defines.USE_LOGARITHMIC_DEPTH_BUFFER;
+        this.needsUpdate = true;
       }
     }
     const prevReversedDepthBuffer = this.defines.USE_REVERSED_DEPTH_BUFFER != null;
@@ -2268,6 +2272,8 @@ uniform vec2 texelSize;
 uniform int frame;
 uniform float varianceGamma;
 uniform float temporalAlpha;
+uniform float cameraFar;
+uniform vec2 targetUvScale;
 uniform vec2 jitterOffset;
 
 in vec2 vUv;
@@ -2322,6 +2328,9 @@ void temporalUpscale(
   vec4 currentShadowLength = vec4(texelFetch(shadowLengthBuffer, lowResCoord, 0).rgb, 1.0);
   #endif // SHADOW_LENGTH
 
+  vec4 depthVelocity = getClosestFragment(lowResCoord);
+  vec2 velocity = depthVelocity.gb;
+
   if (currentFrame) {
     // Use the texel just rendered without any accumulation.
     outputColor = currentColor;
@@ -2331,41 +2340,52 @@ void temporalUpscale(
     return;
   }
 
-  vec4 depthVelocity = getClosestFragment(lowResCoord);
-  vec2 velocity = depthVelocity.gb;
   vec2 prevUv = vUv - velocity;
 
   // Bilateral 3x3 low-res neighborhood bounds (RGB + alpha) and horizon depth
-  // discontinuity detector. Prevents 4x4 Bayer checkerboard stamps along sharp
-  // distant terrain/mountain silhouettes where varianceClipping left .a unclipped.
+  // discontinuity detector. Note depthVelocityBuffer.r (frontDepth) is ALWAYS > 0
+  // (marched cloud frontDepth on cloud hits, cameraFar on clear sky, -sceneViewZ on
+  // bare foreground terrain). Classify bare foreground terrain (alpha ~ 0 and
+  // frontDepth < cameraFar) separately from sky/cloud so behind-hill clouds NEVER
+  // smear downward onto terrain silhouettes or expand maxNeighbor.a > 0 on hills.
   ivec2 lowSize = textureSize(colorBuffer, 0);
+  vec2 uvScale = max(targetUvScale, vec2(1.0));
+  vec2 lowUv = clamp(vUv / uvScale, vec2(0.0), vec2(1.0));
+  float farSkyThreshold = max(cameraFar * 0.995, 1.0);
   float centerFrontDepth = texelFetch(depthVelocityBuffer, lowResCoord, 0).r;
+  bool centerSkyOrCloud = (centerFrontDepth >= farSkyThreshold) || (currentColor.a > 1e-4);
+  bool centerBareTerrain = !centerSkyOrCloud;
   vec4 minNeighbor = currentColor;
   vec4 maxNeighbor = currentColor;
   vec4 bilateralSum = vec4(0.0);
   float bilateralW = 0.0;
-  bool anySky = (centerFrontDepth <= 0.0);
-  bool anyScene = (centerFrontDepth > 0.0);
-  float minSceneDepth = anyScene ? centerFrontDepth : 1e20;
-  float maxSceneDepth = anyScene ? centerFrontDepth : 0.0;
+  bool anySky = centerSkyOrCloud;
+  bool anyScene = centerBareTerrain;
+  float minSceneDepth = centerBareTerrain ? centerFrontDepth : 1e20;
+  float maxSceneDepth = centerBareTerrain ? centerFrontDepth : 0.0;
   for (int dy = -1; dy <= 1; ++dy) {
     for (int dx = -1; dx <= 1; ++dx) {
       ivec2 nc = clamp(lowResCoord + ivec2(dx, dy), ivec2(0), lowSize - ivec2(1));
       vec4 ncCol = texelFetch(colorBuffer, nc, 0);
       float ncDepth = texelFetch(depthVelocityBuffer, nc, 0).r;
-      minNeighbor = min(minNeighbor, ncCol);
-      maxNeighbor = max(maxNeighbor, ncCol);
-      bool nSky = (ncDepth <= 0.0);
+      bool nSky = (ncDepth >= farSkyThreshold) || (ncCol.a > 1e-4);
       anySky = anySky || nSky;
       anyScene = anyScene || !nSky;
       if (!nSky) {
         minSceneDepth = min(minSceneDepth, ncDepth);
         maxSceneDepth = max(maxSceneDepth, ncDepth);
       }
+      bool occludedBehindCenter = centerBareTerrain && (ncDepth > centerFrontDepth * 1.08 + 16.0);
+      if (!occludedBehindCenter) {
+        minNeighbor = min(minNeighbor, ncCol);
+        maxNeighbor = max(maxNeighbor, ncCol);
+      }
       float depthDiff = abs(ncDepth - centerFrontDepth);
       float depthScale = max(48.0, 0.12 * max(ncDepth, centerFrontDepth));
       float wSpatial = (dx == 0 && dy == 0) ? 1.0 : ((dx == 0 || dy == 0) ? 0.65 : 0.4);
-      float wDepth = (nSky == (centerFrontDepth <= 0.0)) ? exp(-depthDiff / depthScale) : 0.05;
+      float wDepth = (!occludedBehindCenter && (nSky == centerSkyOrCloud))
+        ? exp(-depthDiff / depthScale)
+        : 0.0;
       float w = wSpatial * wDepth;
       bilateralSum += ncCol * w;
       bilateralW += w;
@@ -2379,7 +2399,9 @@ void temporalUpscale(
   float horizonEdge = max(silhouetteEdge, ridgeJump);
 
   if (prevUv.x < 0.0 || prevUv.x > 1.0 || prevUv.y < 0.0 || prevUv.y > 1.0) {
-    outputColor = mix(currentColor, bilateralColor, 0.65 * horizonEdge);
+    outputColor = centerBareTerrain
+      ? clamp(currentColor, minNeighbor, maxNeighbor)
+      : mix(currentColor, bilateralColor, 0.65 * horizonEdge);
     #ifdef SHADOW_LENGTH
     outputShadowLength = currentShadowLength.r;
     #endif // SHADOW_LENGTH
@@ -2391,9 +2413,11 @@ void temporalUpscale(
   vec4 historyColor = texture(colorHistoryBuffer, prevUv);
   float localGamma = mix(varianceGamma, 0.85, horizonEdge);
   vec4 refColor = mix(currentColor, bilateralColor, 0.75 * horizonEdge);
-  vec4 clippedColor = varianceClipping(colorBuffer, vUv, refColor, historyColor, localGamma);
+  vec4 clippedColor = varianceClipping(colorBuffer, lowUv, refColor, historyColor, localGamma);
   clippedColor.a = clamp(historyColor.a, minNeighbor.a, maxNeighbor.a);
-  if (horizonEdge > 0.0) {
+  if (centerBareTerrain) {
+    clippedColor = clamp(clippedColor, minNeighbor, maxNeighbor);
+  } else if (horizonEdge > 0.0) {
     clippedColor = mix(clippedColor, clamp(clippedColor, minNeighbor, maxNeighbor), 0.85 * horizonEdge);
   }
   outputColor = clippedColor;
@@ -2511,7 +2535,9 @@ var CloudsResolveMaterial = class extends RawShaderMaterial {
         frame: new Uniform2(0),
         jitterOffset: new Uniform2(new Vector25()),
         varianceGamma: new Uniform2(2),
-        temporalAlpha: new Uniform2(0.1)
+        temporalAlpha: new Uniform2(0.1),
+        cameraFar: new Uniform2(5e3),
+        targetUvScale: new Uniform2(new Vector25(1, 1))
       }
     });
     this.temporalUpscale = true;
@@ -2666,6 +2692,8 @@ var CloudsPass = class extends PassBase {
     this.currentMaterial.uniforms.frame.value = frame;
     this.resolveMaterial.uniforms.frame.value = frame;
     this.copyCameraSettings(this.mainCamera);
+    this.resolveMaterial.uniforms.cameraFar.value = this.currentMaterial.uniforms.cameraFar.value;
+    this.resolveMaterial.uniforms.targetUvScale.value.copy(this.currentMaterial.uniforms.targetUvScale.value);
     this.copyShadow();
     this.currentPass.render(renderer, null, this.currentRenderTarget);
     this.resolvePass.render(renderer, null, this.resolveRenderTarget);
@@ -2691,6 +2719,7 @@ var CloudsPass = class extends PassBase {
     }
     this.resolveRenderTarget.setSize(width, height);
     this.resolveMaterial.setSize(width, height);
+    this.resolveMaterial.uniforms.targetUvScale.value.copy(this.currentMaterial.uniforms.targetUvScale.value);
     this.historyRenderTarget.setSize(width, height);
   }
   setShadowSize(width, height, depth2) {

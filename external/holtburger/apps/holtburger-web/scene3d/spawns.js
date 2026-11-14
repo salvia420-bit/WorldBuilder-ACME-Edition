@@ -44,6 +44,31 @@ import {
   lodPrewarmHas,
   lodPrewarmSet,
 } from "./lod_prewarm.js";
+import {
+  waterSubmersionAt,
+  isWaterSubmergibleCreature,
+  computeSubmergedCreatureZ,
+} from "./underwater_submersion.js";
+
+// Fix 5.6: Leftover retail test / live-event / admin / luminous placeholder WCIDs
+// present in staged Holtburg / Dereth spawn tables that must NEVER render, attach
+// lights/luminous hooks, or spawn particle scripts in normal play:
+//   - 3666:  Place Holder Object (also matched by exact name)
+//   - 23631: April 2003 Raining Mad Cows Gen
+//   - 19457: Fireworks Generator
+//   - 8359:  Anniversary Effect
+//   - 32205: Pumpkin Buffer
+//   - 39748: Exploration Marker
+export const SUPPRESSED_RETAIL_SPAWN_WCIDS = new Set([
+  3666,
+  23631,
+  19457,
+  8359,
+  32205,
+  39748,
+]);
+export const MAD_COW_WCID = 23623;
+export const MAD_COW_SKY_HEIGHT_THRESHOLD_M = 20.0;
 
 // Phase D.1 — base URL for the staged ACE spawn JSONL files. Mirrors
 // `scene3d/statics.js`'s SCENERY_BASE_URL. The dev server's
@@ -407,6 +432,136 @@ function deriveItemType(category, weenieType) {
  *   - All velocity / motion / sub-palette fields are zeroed — spawns
  *     arrive idle; ACE pushes the moving state separately via kind=5.
  */
+function _resolveTerrainZForSpawn(scene3d, wx, wy, fallbackTerrainZ = null) {
+  if (typeof fallbackTerrainZ === "number" && Number.isFinite(fallbackTerrainZ)) {
+    return fallbackTerrainZ;
+  }
+  try {
+    if (scene3d?._terrainOracle && typeof scene3d._terrainOracle.heightAt === "function") {
+      const h = scene3d._terrainOracle.heightAt(wx, wy);
+      if (typeof h === "number" && Number.isFinite(h)) return h;
+    }
+  } catch (_) {}
+  try {
+    if (typeof scene3d?.terrainHeightAt === "function") {
+      const h = scene3d.terrainHeightAt(wx, wy);
+      if (typeof h === "number" && Number.isFinite(h)) return h;
+    }
+  } catch (_) {}
+  try {
+    const sh =
+      scene3d?.sessionHandle ||
+      (typeof globalThis !== "undefined" ? globalThis.window?.__sessionHandle : null);
+    if (sh && typeof sh.terrainHeightAt === "function") {
+      const h = sh.terrainHeightAt(wx, wy);
+      if (typeof h === "number" && Number.isFinite(h)) return h;
+    }
+  } catch (_) {}
+  return null;
+}
+
+/**
+ * Fix 5.6: Returns true when a staged retail spawn record is an admin/test/live-event
+ * generator, luminous `Place Holder Object`, `NoDraw`/`UiHidden` marker, or a sky-parked
+ * `Mad Cow` (`WCID 23623` floating `dz > 20 m` above terrain).
+ */
+export function shouldSuppressRetailTestSpawn(record, scene3d = null) {
+  if (!record) return false;
+  if (record.noDraw === true || record.uiHidden === true) return true;
+  const wcid = (record.wcid ?? 0) >>> 0;
+  if (SUPPRESSED_RETAIL_SPAWN_WCIDS.has(wcid)) return true;
+  const trimmedName = typeof record.name === "string" ? record.name.trim() : "";
+  if (trimmedName === "Place Holder Object") return true;
+  if (wcid === MAD_COW_WCID) {
+    const cell = (record.cell ?? ((record.landblockId ?? 0) & 0xffff)) >>> 0;
+    if (cell < 0x0100) {
+      if (typeof record.dz === "number" && Number.isFinite(record.dz)) {
+        if (record.dz > MAD_COW_SKY_HEIGHT_THRESHOLD_M) return true;
+      }
+      const lbId = (record.landblockId ?? 0) >>> 0;
+      const lbX = (lbId >>> 24) & 0xff;
+      const lbY = (lbId >>> 16) & 0xff;
+      const wx = lbX * 192.0 + (+record.x || 0);
+      const wy = lbY * 192.0 + (+record.y || 0);
+      const z = +record.z || 0;
+      const tz = _resolveTerrainZForSpawn(scene3d, wx, wy, record.terrainZ);
+      if (tz !== null) {
+        if (z - tz > MAD_COW_SKY_HEIGHT_THRESHOLD_M) return true;
+      } else if (z > 250.0) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+/**
+ * Fix 12A: Sink outdoor non-flying water creature spawns (`EntirelyWater` or wet
+ * `PartiallyWater`) whose authored Z sits on/near the water surface (`z >= waterZ - 0.15`)
+ * or whose top sticks above deep water so water monsters spawn underwater instead of
+ * standing on top of the water plane.
+ */
+export function applyWaterSpawnSubmersion(upd, scene3d) {
+  if (!upd || !scene3d) return false;
+  const lbId = (upd.landblockId ?? 0) >>> 0;
+  if ((lbId & 0xffff) >= 0x0100) return false; // indoor EnvCell
+  if (typeof isWaterSubmergibleCreature === "function" && !isWaterSubmergibleCreature(upd)) {
+    return false;
+  }
+  const lbX = (lbId >>> 24) & 0xff;
+  const lbY = (lbId >>> 16) & 0xff;
+  const wx = lbX * 192.0 + (+upd.x || 0);
+  const wy = lbY * 192.0 + (+upd.y || 0);
+  const wInfo = typeof waterSubmersionAt === "function" ? waterSubmersionAt(scene3d, wx, wy) : null;
+  if (!wInfo || !wInfo.overWater) return false;
+  const rawZ = +upd.z || 0;
+  const nextZ =
+    typeof computeSubmergedCreatureZ === "function"
+      ? computeSubmergedCreatureZ(rawZ, wInfo, { isCreature: true })
+      : rawZ;
+  upd.z = nextZ;
+  if (nextZ < wInfo.waterZ - 0.05) {
+    upd.__waterSubmerged = true;
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Shared bake helper for staged landblock spawn records: filters Fix 5.6 leftover
+ * retail test/event/placeholder spawns and applies Fix 12A water-creature submersion.
+ */
+export function bakeLandblockSpawns(records, wcidToSetup, scene3d = null) {
+  const pendingDispatches = [];
+  let placeholdersCount = 0;
+  let suppressedCount = 0;
+  let submergedCount = 0;
+  for (const rec of records || []) {
+    if (shouldSuppressRetailTestSpawn(rec, scene3d)) {
+      suppressedCount += 1;
+      if (rec && typeof rec.free === "function") {
+        try { rec.free(); } catch (_) { /* ignore */ }
+      }
+      continue;
+    }
+    const wcid = rec.wcid >>> 0;
+    const resolved = resolveSetup(wcidToSetup, wcid);
+    if (resolved.placeholder) placeholdersCount += 1;
+    const upd = buildUpd(rec, resolved.setupDid, resolved.placeholder);
+    // Free the wasm EntitySpawnJs handle now that `upd` has captured
+    // every field `buildUpd` reads. `buildUpd` is pure read; `upd`
+    // holds its own scalars + freshly-allocated Uint32Arrays.
+    if (typeof rec.free === "function") {
+      try { rec.free(); } catch (_) { /* ignore */ }
+    }
+    if (applyWaterSpawnSubmersion(upd, scene3d)) {
+      submergedCount += 1;
+    }
+    pendingDispatches.push({ upd, setupDid: resolved.setupDid });
+  }
+  return { pendingDispatches, placeholdersCount, suppressedCount, submergedCount };
+}
+
 function buildUpd(record, setupDid, isPlaceholder) {
   const wcid = record.wcid >>> 0;
   // The wasm-side `EntitySpawnJs.landblockId` getter (lib.rs:1768
@@ -640,20 +795,9 @@ export async function ensureSpawnsForLandblock(lbX, lbY, scene3d, wasmExports) {
     // before `rec.free()` is safe. `setupDid` is kept as a sibling field
     // on the pending entry so the F.40/F.41 pre-warm loops below stay
     // O(1) lookups instead of fishing `upd.modelId` back out per pass.
-    const pendingDispatches = [];
-    for (const rec of records || []) {
-      const wcid = rec.wcid >>> 0;
-      const resolved = resolveSetup(wcidToSetup, wcid);
-      if (resolved.placeholder) placeholdersCount += 1;
-      const upd = buildUpd(rec, resolved.setupDid, resolved.placeholder);
-      // Free the wasm EntitySpawnJs handle now that `upd` has captured
-      // every field `buildUpd` reads. `buildUpd` is pure read; `upd`
-      // holds its own scalars + freshly-allocated Uint32Arrays.
-      if (typeof rec.free === "function") {
-        try { rec.free(); } catch (_) { /* ignore */ }
-      }
-      pendingDispatches.push({ upd, setupDid: resolved.setupDid });
-    }
+    const baked = bakeLandblockSpawns(records, wcidToSetup, scene3d);
+    const pendingDispatches = baked.pendingDispatches;
+    placeholdersCount += baked.placeholdersCount;
 
     // F.40 pre-warm: collect unique setupDids and call the batched
     // wasm fetcher through the AnimationCache. Idempotent across
@@ -1023,6 +1167,9 @@ export const _internals = {
   deriveSyntheticGuid,
   buildUpd,
   resolveSetup,
+  shouldSuppressRetailTestSpawn,
+  applyWaterSpawnSubmersion,
+  bakeLandblockSpawns,
   PLACEHOLDER_SETUP_DID,
   SPAWNS_BASE_URL,
 };

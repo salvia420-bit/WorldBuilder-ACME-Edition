@@ -17,6 +17,7 @@
 //     is partially stubbed.
 
 import * as THREE from "three";
+import { waterSubmersionAt } from "./underwater_submersion.js";
 
 export const WEENIE_CONTACT_SHADOW_MAX = 256;
 export const WEENIE_CONTACT_SHADOW_RANGE_M = 55.0;
@@ -111,14 +112,21 @@ function _canConstructThreeInstanced() {
   );
 }
 
-function _terrainZAt(sh, wx, wy) {
-  if (!sh || typeof sh.terrainHeightAt !== "function") return null;
-  try {
-    const gz = sh.terrainHeightAt(wx, wy);
-    return typeof gz === "number" && Number.isFinite(gz) ? gz : null;
-  } catch (_) {
-    return null;
+function _terrainZAt(sh, wx, wy, s3d = null) {
+  if (sh && typeof sh.terrainHeightAt === "function") {
+    try {
+      const gz = sh.terrainHeightAt(wx, wy);
+      if (typeof gz === "number" && Number.isFinite(gz)) return gz;
+    } catch (_) {}
   }
+  const oracle = s3d?._terrainOracle;
+  if (oracle && typeof oracle.heightAt === "function") {
+    try {
+      const gz = oracle.heightAt(wx, wy);
+      if (typeof gz === "number" && Number.isFinite(gz)) return gz;
+    } catch (_) {}
+  }
+  return null;
 }
 
 export class WeenieContactShadows {
@@ -369,6 +377,7 @@ export class WeenieContactShadows {
       let terrainZ = null;
       let cachedSlopeValid = false;
       if (!isIndoor) {
+        if (inst._isWaterSubmerged === true) continue;
         if (
           typeof inst._csSampleX === "number" &&
           Math.abs(p.x - inst._csSampleX) < 0.08 &&
@@ -378,12 +387,17 @@ export class WeenieContactShadows {
           terrainZ = inst._csTerrainZ;
           cachedSlopeValid = typeof inst._csNz === "number";
         } else {
-          terrainZ = _terrainZAt(sh, p.x, p.y);
+          terrainZ = _terrainZAt(sh, p.x, p.y, s3d);
           inst._csSampleX = p.x;
           inst._csSampleY = p.y;
           inst._csTerrainZ = terrainZ;
           inst._csNz = undefined;
+          inst._csOverWater = Boolean(waterSubmersionAt(s3d, p.x, p.y)?.overWater);
         }
+        // Fix 12A: never stamp a dry ground contact shadow disc onto a water
+        // surface or for a submerged entity (`rawZ < groundZ - 0.12`).
+        if (inst._csOverWater === true) continue;
+        if (terrainZ !== null && p.z < terrainZ - 0.12) continue;
       }
 
       // Track last grounded Z so jumping/falling indoors or outdoors keeps the

@@ -1565,6 +1565,7 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
   // `setIndoorLandscapeSkip`; honoured only on an armed indoor frame. Stays
   // `false` forever under `=off`.
   let indoorLandscapeSkip = false;
+  let _unsealedIndoorWipeThisFrame = false;
 
   // Phase 5 PView render-order fix (2026-05-25) — indoor depth-clear +
   // cells pass. Both are `enabled=false` by default (outdoor steady state);
@@ -1604,6 +1605,7 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
   if (portalSealPass) {
     sealRemainderPass = new SealRemainderPass(portalSealPass);
     sealRemainderPass.enabled = false;
+    sealRemainderPass.needsDepthBlit = true;
     composer.addPass(sealRemainderPass);
     sealDepthSavePass = new SealDepthSavePass(portalSealPass);
     sealDepthSavePass.enabled = false;
@@ -2053,6 +2055,20 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
     const scrub = makeNanScrub();
     composer.addPass(new EffectPass(camera, scrub));
   }
+  // Item 12 (Fix 12B) — underwater monster submersion pass: runs after opaque
+  // world + water surface depth are resolved in `composer.depthTexture` (zero
+  // feedback loop) and before `ssaoPass` / `fxPass`. Costs 0.000 ms / 0 draw
+  // calls whenever no submerged water monster is < 180 m.
+  const underwaterSubmersionPass = opts?.underwaterSubmersion
+    ? opts.underwaterSubmersion.createPass(camera, {
+        depthSource: () => (
+          stableDepthShare
+            ? (composer.depthRenderTarget ? composer.depthRenderTarget.depthTexture : null)
+            : composer.inputBuffer.depthTexture
+        ),
+      })
+    : null;
+  if (underwaterSubmersionPass) composer.addPass(underwaterSubmersionPass);
   // AO reads the composer's stable depth copy (needsDepthTexture), so it must
   // run after the world pass and before the pass that composites it.
   if (ssaoPass) composer.addPass(ssaoPass);
@@ -2086,15 +2102,21 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
   if (cloudsMainAdopted && typeof fxPass.getDepthTexture === "function" && fxPass.getDepthTexture()) {
     fxPass.setDepthTexture(fxPass.getDepthTexture(), fxPass.fullscreenMaterial?.depthPacking);
   }
-  // `?reversedZ=on`: the takram CloudsMaterial is a RawShaderMaterial, so three
-  // never injects USE_REVERSED_DEPTH_BUFFER; the vendored onBeforeRender mirrors
-  // it from the renderer (a program swap on the first draw). The renderer is
-  // known here, so set it at adoption: the material's first program already
-  // reads reversed depth, whatever compiles it first. Log buffer: untouched.
+  // `?reversedZ=on` / `?reversedZ=off` (log depth): takram CloudsMaterial is a
+  // RawShaderMaterial, so three never injects depth defines automatically;
+  // onBeforeRender mirrors them from the renderer. Pre-populate whichever depth
+  // mode is active here at adoption so the very first compiled program already
+  // decodes scene depth with the right curve.
   if (cloudsMainAdopted && renderer.state?.buffers?.depth?.getReversed?.() === true) {
     const cm = cloudsMain.cloudsPass?.currentMaterial;
     if (cm && cm.defines && cm.defines.USE_REVERSED_DEPTH_BUFFER == null) {
       cm.defines.USE_REVERSED_DEPTH_BUFFER = "1";
+      cm.needsUpdate = true;
+    }
+  } else if (cloudsMainAdopted && renderer.capabilities?.logarithmicDepthBuffer === true) {
+    const cm = cloudsMain.cloudsPass?.currentMaterial;
+    if (cm && cm.defines && cm.defines.USE_LOGARITHMIC_DEPTH_BUFFER == null) {
+      cm.defines.USE_LOGARITHMIC_DEPTH_BUFFER = "1";
       cm.needsUpdate = true;
     }
   }
@@ -2273,6 +2295,7 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
     worldMaskPass.setCamera(cam);
     cellsMaskPass.setCamera(cam);
     cellsPostMaskPass.setCamera(cam);
+    if (underwaterSubmersionPass) underwaterSubmersionPass.camera = cam;
     retargetFxPass(cam);
     activeCamera = cam;
   }
@@ -2597,6 +2620,7 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
         depthClearPass.enabled = false;
         if (portalSealPass) portalSealPass.enabled = false;
         _setSealSlots(false);
+        _unsealedIndoorWipeThisFrame = false;
         // (3) cells pass → interior EnvCells + entities (layer 1) with the world
         //     depth + punches intact (clear=false/clearDepth=false). Interior
         //     wins inside the punched doorways, loses behind the facade.
@@ -2651,11 +2675,15 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
         //      protect, and the walk that feeds it reached no outside portal.)
         if (portalSealPass) portalSealPass.enabled = !landscapeSkip && portalSealPass.hasApertures;
         _setSealSlots(!!portalSealPass && portalSealPass.enabled);
+        _unsealedIndoorWipeThisFrame =
+          !landscapeSkip &&
+          !(portalSealPass && portalSealPass.enabled && portalSealPass.wantsDepthRestore);
         cellsMaskPass.enabled = true;
         cellsRenderPass.enabled = true;
       } else {
         if (portalSealPass) portalSealPass.enabled = false;
         _setSealSlots(false);
+        _unsealedIndoorWipeThisFrame = false;
         worldMaskPass.mask = CAM_LAYER_MASK_BOTH;
         depthClearPass.enabled = false;
         cellsMaskPass.enabled = false;
@@ -2717,6 +2745,9 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
         latePass.camera = activeCamera;
         lateOpen = latePass.beginFrame(CAM_LAYER_MASK_BOTH);
       }
+      if (_unsealedIndoorWipeThisFrame && cloudsMainAdopted && cloudOverlayForMain) {
+        cloudOverlayForMain._mainPassArmed = false;
+      }
       try {
         composer.render(dt);
       } finally {
@@ -2746,6 +2777,9 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
       const pmDepth = composer.depthTexture;
       if (pmDepth) {
         try { pmDepth.dispose(); } catch (_) { /* re-created on next attach */ }
+      }
+      if (cloudsMainAdopted && typeof fxPass.getDepthTexture === "function" && fxPass.getDepthTexture()) {
+        fxPass.setDepthTexture(fxPass.getDepthTexture(), fxPass.fullscreenMaterial?.depthPacking);
       }
       _logResize(w, h);
       // Rebuild the shared depth texture at the new size — Three.js

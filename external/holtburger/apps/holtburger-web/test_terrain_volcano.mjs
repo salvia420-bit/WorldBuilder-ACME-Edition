@@ -80,6 +80,7 @@ function check(label, cond, extra = "") {
 const HIGH_FLAGS = {
   terrainVolcano: false,
   terrainHaze: true,
+  terrainVolcanoHaze: false,
   terrainCrackGlow: true,
   terrainVolcanoEmberCount: 1,
   terrainHazeStrength: 1,
@@ -94,7 +95,7 @@ function setUrl(search, qualityFlags = HIGH_FLAGS) {
 function clearUrl() { delete globalThis.window; }
 
 const { _resetVfxFlags, terrainVolcanoEnabled, terrainHazeEnabled,
-  terrainEmbersEnabled, terrainCrackGlowEnabled, vfxEffectEnabled,
+  terrainVolcanoHazeEnabled, terrainEmbersEnabled, terrainCrackGlowEnabled, vfxEffectEnabled,
   VFX_EFFECT_FLAGS } = await import("./scene3d/vfx_flags.js");
 
 const volc = await import("./scene3d/terrain_volcano.js");
@@ -147,21 +148,31 @@ check("quality mid ⇒ crack glow ONLY (no haze, no embers)",
   qMid && qMid.crackGlow === true && qMid.emberCount === 0
   && (qMid.hazeStrength === 0 || qMid.hazeRadiusM === 0), JSON.stringify(qMid));
 const qHigh = volc.resolveVolcanoQuality(PRESETS.high);
-// 2026-10-23: 2 vents per LAVA landblock at high (was 1 per volcanic LB, i.e.
-// over 2700 obsidian/ash LBs too); the range gate bounds what is live.
-check("quality high ⇒ {crackGlow, haze, embers:2}",
+// Volcano haze defaults OFF across all quality presets (eliminating the 1.5 km
+// full-screen foreground wobble); explicit terrainVolcanoHaze opt-in lights it.
+check("quality high ⇒ {crackGlow, haze OFF by default, embers:2}",
   qHigh && qHigh.crackGlow === true && qHigh.emberCount === 2
-  && qHigh.hazeStrength > 0 && qHigh.hazeRadiusM > 0, JSON.stringify(qHigh));
+  && qHigh.hazeStrength === 0 && qHigh.hazeRadiusM === 0, JSON.stringify(qHigh));
+const qHighOptIn = volc.resolveVolcanoQuality({ ...PRESETS.high, terrainVolcanoHaze: true });
+check("quality high + terrainVolcanoHaze opt-in ⇒ {crackGlow, haze, embers:2}",
+  qHighOptIn && qHighOptIn.crackGlow === true && qHighOptIn.emberCount === 2
+  && qHighOptIn.hazeStrength > 0 && qHighOptIn.hazeRadiusM > 0, JSON.stringify(qHighOptIn));
 const qUltra = volc.resolveVolcanoQuality(PRESETS.ultra);
-check("quality ultra ⇒ {crackGlow, haze, embers:4}",
+check("quality ultra ⇒ {crackGlow, haze OFF by default, embers:4}",
   qUltra && qUltra.crackGlow === true && qUltra.emberCount === 4
-  && qUltra.hazeStrength > 0 && qUltra.hazeRadiusM > 0, JSON.stringify(qUltra));
+  && qUltra.hazeStrength === 0 && qUltra.hazeRadiusM === 0, JSON.stringify(qUltra));
+const qUltraOptIn = volc.resolveVolcanoQuality({ ...PRESETS.ultra, terrainVolcanoHaze: true });
+check("quality ultra + terrainVolcanoHaze opt-in ⇒ {crackGlow, haze, embers:4}",
+  qUltraOptIn && qUltraOptIn.crackGlow === true && qUltraOptIn.emberCount === 4
+  && qUltraOptIn.hazeStrength > 0 && qUltraOptIn.hazeRadiusM > 0, JSON.stringify(qUltraOptIn));
 check("a missing flag bag ⇒ null (never a silent default-on)",
   volc.resolveVolcanoQuality(null) === null && volc.resolveVolcanoQuality({}) === null);
 for (const tier of ["low", "mid", "high", "ultra"]) {
   check(`PRESETS.${tier} carries every volcano key`,
-    ["terrainVolcano", "terrainHaze", "terrainCrackGlow", "terrainVolcanoEmberCount",
+    ["terrainVolcano", "terrainHaze", "terrainVolcanoHaze", "terrainCrackGlow", "terrainVolcanoEmberCount",
       "terrainHazeStrength", "terrainVolcanoRadius"].every((k) => k in PRESETS[tier]));
+  check(`PRESETS.${tier}.terrainVolcanoHaze defaults FALSE on every tier`,
+    PRESETS[tier].terrainVolcanoHaze === false);
   // PROMOTED 2026-10-24 (the owner's vistest tour): {high, ultra}, low / mid off.
   check(`PRESETS.${tier}.terrainVolcano follows the {high, ultra} ladder (promoted 2026-10-24)`,
     PRESETS[tier].terrainVolcano === (tier === "high" || tier === "ultra"));
@@ -176,27 +187,38 @@ console.log("\n-- F1 ship-OFF -------------------------------------------------"
 clearUrl(); _resetVfxFlags();
 check("no window: every volcano flag reads false",
   terrainVolcanoEnabled() === false && terrainHazeEnabled() === false
+  && terrainVolcanoHazeEnabled() === false
   && terrainEmbersEnabled() === false && terrainCrackGlowEnabled() === false);
 setUrl(""); _resetVfxFlags();
 check("no flags + a high-tier preset: the MASTER is still off (ship-OFF, §5.9)",
   terrainVolcanoEnabled() === false);
-// 2026-10-23: the heat shimmer / mirage is its OWN master (owner, on the
-// 1070) — at a high-tier preset with no URL flags it registers; embers and
-// crack glow still need ?terrainVolcano.
+// Volcano haze is decoupled from ?terrainHaze and defaults OFF across all tiers;
+// Desert Haze keeps createHeatHazeEffect() live at high/ultra via ?terrainHaze.
 {
   const surf = volc.initTerrainVolcano({ scene3d: {} });
   const ids = vfx.terrainVfxStats().providers.map((p) => p.id || p);
-  check("no flags + high tier: initTerrainVolcano registers ONLY the haze provider (its own master since 2026-10-23)",
-    !!surf && ids.length === 1 && String(ids[0]).includes("volcanoHaze"), JSON.stringify(ids));
+  check("no flags + high tier: initTerrainVolcano returns null (volcanoHaze defaults OFF)",
+    surf === null && ids.length === 0, JSON.stringify(ids));
   volc._resetTerrainVolcano();
   vfx._resetTerrainVfx();
 }
-check("no flags + high tier: createHeatHazeEffect() constructs the Effect (shipped at high/ultra)",
+check("no flags + high tier: createHeatHazeEffect() constructs the Effect for Desert Haze (shipped at high/ultra)",
   !!haze.createHeatHazeEffect());
 setUrl("?terrainHaze=off"); _resetVfxFlags();
 check("?terrainHaze=off: createHeatHazeEffect() returns null and nothing registers",
   haze.createHeatHazeEffect() === null && volc.initTerrainVolcano({ scene3d: {} }) === null
   && vfx.terrainVfxStats().providers.length === 0);
+setUrl("?terrainHaze=off&terrainVolcanoHaze=on"); _resetVfxFlags();
+{
+  const surf = volc.initTerrainVolcano({ scene3d: {} });
+  const ids = vfx.terrainVfxStats().providers.map((p) => p.id || p);
+  check("?terrainHaze=off&terrainVolcanoHaze=on: explicit opt-in lights ONLY volcanoHaze while desertHaze stays off",
+    !!haze.createHeatHazeEffect() && !!surf && ids.length === 1 && String(ids[0]).includes("volcanoHaze")
+    && vfxEffectEnabled("terrain.volcanoHaze") === true && vfxEffectEnabled("terrain.desertHaze") === false,
+    JSON.stringify(ids));
+  volc._resetTerrainVolcano();
+  vfx._resetTerrainVfx();
+}
 {
   const { _resetVfxCatalog } = await import("./scene3d/vfx_catalog.js");
   setUrl("?visual=off"); _resetVfxCatalog(); _resetVfxFlags();
@@ -218,9 +240,9 @@ const VOLCANO_ROWS = ["terrain.volcano", "terrain.volcanoHaze",
 check("all four volcano rows are registered in VFX_EFFECT_FLAGS",
   VOLCANO_ROWS.every((id) => typeof VFX_EFFECT_FLAGS[id] === "function"),
   Object.keys(VFX_EFFECT_FLAGS).join());
-check("no flags + high tier: the family rows resolve FALSE, the haze row TRUE (its own master since 2026-10-23)",
-  VOLCANO_ROWS.filter((id) => id !== "terrain.volcanoHaze").every((id) => vfxEffectEnabled(id) === false)
-  && vfxEffectEnabled("terrain.volcanoHaze") === true && vfxEffectEnabled("terrain.desertHaze") === true);
+check("no flags + high tier: ALL volcano rows (including terrain.volcanoHaze) resolve FALSE while terrain.desertHaze stays TRUE",
+  VOLCANO_ROWS.every((id) => vfxEffectEnabled(id) === false)
+  && vfxEffectEnabled("terrain.desertHaze") === true);
 check("the DEFAULT-ON effect count is unchanged at 16 (volcano ids are ship-OFF; 14 + the 2026-10-10 per-weapon rows)",
   Object.keys(VFX_EFFECT_FLAGS).filter((id) => !id.startsWith("terrain.")).length === 16);
 check("the ember DESCRIPTOR id is also its VFX_EFFECT_FLAGS row "
@@ -233,24 +255,26 @@ for (const bad of ["1", "true", "yes", "ON"]) {
   setUrl(`?terrainVolcano=${bad}`); _resetVfxFlags();
   check(`?terrainVolcano=${bad} does NOT enable (strict === "on", plan §2.4)`,
     terrainVolcanoEnabled() === false);
+  setUrl(`?terrainVolcanoHaze=${bad}`); _resetVfxFlags();
+  check(`?terrainVolcanoHaze=${bad} does NOT enable (strict === "on")`,
+    terrainVolcanoHazeEnabled() === false);
 }
 setUrl("?terrainVolcano=on"); _resetVfxFlags();
 check("?terrainVolcano=on enables the master", terrainVolcanoEnabled() === true);
-check("… and the tier lights haze + crack glow, but the count-driven embers "
-  + "follow terrainVolcanoEmberCount (1 at high)",
-  terrainHazeEnabled() === true && terrainCrackGlowEnabled() === true
-  && terrainEmbersEnabled() === true);
+check("… and the tier lights desertHaze + crack glow + embers, while volcanoHaze stays OFF without ?terrainVolcanoHaze=on",
+  terrainHazeEnabled() === true && terrainVolcanoHazeEnabled() === false
+  && terrainCrackGlowEnabled() === true && terrainEmbersEnabled() === true);
 setUrl("?terrainVolcano=on&terrainVolcano=on", { ...HIGH_FLAGS, terrainVolcanoEmberCount: 0 });
 _resetVfxFlags();
 check("a zero ember count at the tier leaves ?terrainEmbers off",
   terrainEmbersEnabled() === false);
-setUrl("?terrainVolcano=off&terrainHaze=on&terrainEmbers=on&terrainCrackGlow=on"); _resetVfxFlags();
+setUrl("?terrainVolcano=off&terrainHaze=on&terrainVolcanoHaze=on&terrainEmbers=on&terrainCrackGlow=on"); _resetVfxFlags();
 check("?terrainVolcano=off kills the family's embers + crack glow even with their sub-flags on",
   vfxEffectEnabled("terrain.volcanoEmbers") === false && vfxEffectEnabled("terrain.volcanoCrackGlow") === false);
-check("... but not the heat shimmer, its own master since 2026-10-23",
+check("... but not explicit ?terrainVolcanoHaze=on, its own opt-in gate",
   vfxEffectEnabled("terrain.volcanoHaze") === true);
 setUrl("?terrainHaze=off"); _resetVfxFlags();
-check("?terrainHaze=off kills both shimmer rows (volcano disc + desert arm)",
+check("?terrainHaze=off kills desert shimmer and volcanoHaze remains off",
   vfxEffectEnabled("terrain.volcanoHaze") === false && vfxEffectEnabled("terrain.desertHaze") === false);
 
 // ===========================================================================
@@ -398,7 +422,7 @@ const fakeCam = {
   matrixWorldInverse: { elements: new THREE.Matrix4().elements },
 };
 // Nothing resident yet.
-volc.updateHeatHazeState(qHigh, { x: 0, y: 0, z: 0 }, fakeCam);
+volc.updateHeatHazeState(qHighOptIn, { x: 0, y: 0, z: 0 }, fakeCam);
 effect.update(null, null, 0);
 check("H5: no resident volcanic LB ⇒ HEAT_HAZE_STATE.radiusM === 0",
   volc.HEAT_HAZE_STATE.radiusM === 0 && volc.HEAT_HAZE_STATE.enabled === 0);
@@ -413,7 +437,7 @@ function volcanoGrids(code = 25) {
   return { codes, heights };
 }
 const g = volcanoGrids();
-setUrl("?terrainVolcano=on&terrainEmbers=off"); _resetVfxFlags();
+setUrl("?terrainVolcano=on&terrainVolcanoHaze=on&terrainEmbers=off"); _resetVfxFlags();
 vfx._resetTerrainVfx();
 volc._resetTerrainVolcano();
 const hazeScene = {
@@ -425,7 +449,7 @@ const hazeScene = {
 };
 vfx.initTerrainVfx({ scene3d: hazeScene });
 const hazeSurface = volc.initTerrainVolcano({ scene3d: hazeScene, readEnv: () => null });
-check("?terrainVolcano=on ⇒ the haze provider is registered",
+check("?terrainVolcano=on&terrainVolcanoHaze=on ⇒ the haze provider is registered",
   !!hazeSurface && vfx.terrainVfxStats().providers.some((p) => p.id === "terrain.volcanoHaze"));
 check("?terrainEmbers=off ⇒ the ember provider is NOT registered",
   !vfx.terrainVfxStats().providers.every((p) => p.id === "terrain.volcanoEmbers")
@@ -479,7 +503,7 @@ vfx.terrainVfxNoteLandblockMesh(hazeScene, {
 });
 vfx.terrainVfxTick(0.016, hazeScene);
 check("H6: near player ⇒ engaged", volc.HEAT_HAZE_STATE.enabled === 1);
-volc.updateHeatHazeState(qHigh,
+volc.updateHeatHazeState(qHighOptIn,
   { x: 0x02 * 192 + 96 + volc.VOLCANO_TUNING.hazeMaxEngageM + 1, y: 0x03 * 192 + 96, z: 14 },
   fakeCam);
 effect.update(null, null, 0);
@@ -488,7 +512,7 @@ check("H6: player beyond hazeMaxEngageM ⇒ CLEARED even with the LB resident",
   && effect.uniforms.get("uHeatRadius").value === 0);
 check("H6: back inside the ceiling ⇒ re-engages",
   (() => {
-    volc.updateHeatHazeState(qHigh,
+    volc.updateHeatHazeState(qHighOptIn,
       { x: 0x02 * 192 + 96 + 500, y: 0x03 * 192 + 96, z: 14 }, fakeCam);
     return volc.HEAT_HAZE_STATE.enabled === 1;
   })());
@@ -846,7 +870,7 @@ console.log("\n-- S1/R1 lava only + the vent range gate (2026-10-23) -----------
     camera: fakeCam,
     cameraSwitcher: { _safePlayerPos: () => ({ x: player.x, y: player.y, z: player.z }) },
   };
-  setUrl("?terrainVolcano=on&terrainHaze=on&terrainEmbers=on"); _resetVfxFlags();
+  setUrl("?terrainVolcano=on&terrainVolcanoHaze=on&terrainEmbers=on"); _resetVfxFlags();
   vfx._resetTerrainVfx();
   volc._resetTerrainVolcano();
   vfx.initTerrainVfx({ scene3d });

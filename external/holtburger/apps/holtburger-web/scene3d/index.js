@@ -342,6 +342,8 @@ import { FixedSlotGrid, EdgeParkScheduler, FIXED_GRID_TERRAIN_RADIUS } from "./f
 // (the module imports no three), and it installs its own park/unpark/evict
 // hooks by CHAINING onto terrain_batch.js's — never clobbering them.
 import { initTerrainVfx, terrainVfxNoteLandblockMesh } from "./terrain_vfx.js";
+import { createWeatherSystem } from "./weather/weather_system.js";
+import { createUnderwaterSubmersionRenderer } from "./underwater_submersion.js";
 import { wireframeFlagOn } from "./wireframe_flag.js";
 // Terrain-VFX family §3.1 GRASS (Wave 1A). Registers a camera-scoped provider
 // with the spine above — but ONLY under `?terrainGrass=on`: with the flag off
@@ -375,6 +377,8 @@ import { initTerrainVolcano } from "./terrain_volcano.js";
 // live-knob provider and `window.__terrainObsidian` under `?terrainObsidian=on`.
 import { initTerrainObsidian } from "./terrain_obsidian.js";
 import { initDesertHaze } from "./terrain_desert_haze.js";
+import { initWaterfallsVfx } from "./terrain_waterfalls.js";
+import { initSpiresVfx } from "./terrain_spires_vfx.js";
 // Terrain DIRT/MUD family (Wave 3B, plan §3.7) — footfall dust puffs + mud
 // prints + the dry dust haze. The mud dent/darkening and the wet-mud sheen are
 // terrain fragment-shader terms and need no import here; the puff trigger is the
@@ -399,6 +403,7 @@ import { initTerrainSwamp } from "./terrain_swamp.js";
 // or under `?terrainRock=off`, `initTerrainRock` returns null (registering
 // nothing).
 import { initTerrainRock } from "./terrain_rock.js";
+import { initShoreScatter } from "./terrain_shore.js";
 import { VFX_GLOBALS } from "./materials.js";
 import { readParticleEnv } from "./vfx/particle_env.js";
 import { pipelineStageEnabled, pipelinePrereqConflicts, pipelineFlagIsOn } from "./pipeline_flags.js";
@@ -2290,6 +2295,9 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
       if (liveScene3d?.cloudOverlay) {
         liveScene3d.cloudOverlay.setSize(newW, newH);
       }
+      if (!atmospherePipeline && liveScene3d?.underwaterSubmersion) {
+        liveScene3d.underwaterSubmersion.setSize(newW, newH);
+      }
     }, 150);
   };
   window.addEventListener("resize", handleResize);
@@ -3642,6 +3650,15 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
         // color + depth from the clear color in a single shared-depth pass.
         renderer.render(scene, activeCam);
       }
+      if (liveScene3dRef?.underwaterSubmersion) {
+        liveScene3dRef.underwaterSubmersion.render(
+          renderer,
+          directTarget || null,
+          directTarget?.depthTexture || null,
+          activeCam,
+          (typeof performance !== "undefined" ? performance.now() : 0) * 0.001,
+        );
+      }
       if (directTarget) presentScreenTarget(renderer, directTarget);
       // WORLD_FADEIN: one black reveal frame under the default ?portalFovFade
       // zoom (DEFAULT ON 2026-10-19), the black fade with ?portalFovFade=off;
@@ -4538,6 +4555,8 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
     // null unless the URL flag is set; see CloudOverlay construction
     // block after SkyDome init below.
     cloudOverlay: null,
+    weatherSystem: null,
+    underwaterSubmersion: null,
     // Workstream Sky-E — resolved SkyObject bakes (Map<id, bake>).
     // Populated by `resolveSkyAssets` kicked off below once Sky-B's
     // populateSkyDescFromRegion lands. Sky-D reads through this when
@@ -5260,6 +5279,18 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
     // eslint-disable-next-line no-console
     console.warn("[terrainVfx] initTerrainVfx threw (terrain VFX disabled):", e);
   }
+  // Item 12 (Fix 12B) — Underwater monster submersion renderer (DEFAULT ON;
+  // `?underwaterSubmersion=off` escape).
+  try {
+    liveScene3d.underwaterSubmersion = createUnderwaterSubmersionRenderer({
+      renderer,
+      scene3d: liveScene3d,
+    });
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.warn("[underwaterSubmersion] init failed:", e);
+    liveScene3d.underwaterSubmersion = null;
+  }
   // ── FAR COMPOSITE RING (2026-08-02) ───────────────────────────────────
   // Same parenting rationale as the VFX spine: a SIBLING of terrainGroup under
   // worldRoot, so it inherits the AC-space transform while the terrain LRU's
@@ -5404,6 +5435,24 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
     // eslint-disable-next-line no-console
     console.warn("[desertHaze] initDesertHaze threw (desert mirage disabled):", e);
   }
+  // Site-driven 1,800 m 3D waterfall curtains, Marae Lassel reservoir cascades,
+  // lip foam & plunge-pool mist/boil (`?terrainWaterfalls`, ON at mid/high/ultra).
+  try {
+    const waterfallsSurface = initWaterfallsVfx({ THREE, scene3d: liveScene3d });
+    if (waterfallsSurface && typeof window !== "undefined") window.__terrainWaterfalls = waterfallsSurface;
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.warn("[terrainWaterfalls] initWaterfallsVfx threw (waterfalls VFX disabled):", e);
+  }
+  // Grounded world-space Shadow Spire dark-violet miasma & obsidian void-shard wisps
+  // (`?terrainSpires`, ON at mid/high/ultra; zero screen-space distortion).
+  try {
+    const spiresSurface = initSpiresVfx({ THREE, scene3d: liveScene3d });
+    if (spiresSurface && typeof window !== "undefined") window.__terrainSpires = spiresSurface;
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.warn("[terrainSpires] initSpiresVfx threw (spires VFX disabled):", e);
+  }
   // ── Terrain DIRT/MUD family (Wave 3B, plan §3.7) ──────────────────────
   // Registers up to four camera-scoped providers (the shared per-frame state
   // read; the footfall puff ring buffer; the mud-print stamp + the per-frame
@@ -5474,6 +5523,18 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
   } catch (e) {
     // eslint-disable-next-line no-console
     console.warn("[terrainRock] initTerrainRock threw (rock VFX disabled):", e);
+  }
+  try {
+    const shoreSurface = initShoreScatter({
+      THREE,
+      scene3d: liveScene3d,
+      parent: worldRoot,
+      globals: VFX_GLOBALS,
+    });
+    if (shoreSurface && typeof window !== "undefined") window.__terrainShore = shoreSurface;
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.warn("[terrainShore] initShoreScatter threw (shore scatter disabled):", e);
   }
   // Patch the forward-declared ref now that liveScene3d exists. The
   // tick loop reads through this so the per-frame call always sees
@@ -6604,6 +6665,24 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
       console.warn("[clouds-d] CloudOverlay init failed:", e);
     }
 
+    try {
+      liveScene3d.weatherSystem = createWeatherSystem({
+        scene,
+        scene3d: liveScene3d,
+        camera,
+        qualityPreset: quality?.preset ?? "high",
+        audioManager: liveScene3d.audioManager ?? null,
+        sessionHandleAccessor: () =>
+          // eslint-disable-next-line no-undef
+          (typeof window !== "undefined" ? window.__sessionHandle : null) ??
+          liveScene3d.sessionHandle ??
+          null,
+      });
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn("[weather] createWeatherSystem failed:", e);
+    }
+
     // Sky-K.1 + K.2 — opt-in atmosphere stack via `?atmosphere=on`.
     //
     // K.1: bake the Bruneton precomputed-scattering lookup tables.
@@ -6709,6 +6788,7 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
               // ?cloudsMainPass: hand the overlay over directly instead of
               // relying on the window.liveScene3d lookup.
               cloudOverlay: liveScene3d?.cloudOverlay ?? null,
+              underwaterSubmersion: liveScene3d?.underwaterSubmersion ?? null,
               skyScene: skyDome?.skyScene,
               skyCamera: skyDome?.skyCamera,
               atmosphereRuntime,

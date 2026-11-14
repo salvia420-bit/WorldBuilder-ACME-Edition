@@ -25,7 +25,8 @@
 // tick (slice 01), gated by the same ?visual flag. O(1), zero per-frame alloc.
 
 import { VFX_GLOBALS } from "../materials.js";
-import { readWeatherVfxInputs } from "../weather_state.js";
+import { readWeatherVfxInputs, readWeatherCloudCoupling } from "../weather_state.js";
+import { isWeatherEnabled } from "../visual_options.js";
 
 const TAU = Math.PI * 2;
 const DEG2RAD = Math.PI / 180;
@@ -58,6 +59,7 @@ const MAX_DT = 0.25;               // clamp tab-resume / first-frame spikes
 const _st = { lastT: null, wetness: 0, frost: 0, stormness: 0 };
 // Reused scratch for the zero-alloc weather read (no per-frame allocation).
 const _scratch = { is_storm: false, temperature_C: 15, season: 1 };
+const _couplingScratch = { weather_kind: "clear", precip_intensity: 0 };
 
 // --- Pure mapping functions (testable, deterministic) -----------------------
 
@@ -162,9 +164,29 @@ export function tickWeatherInputs(nowSec, flagsOverride) {
   const tempC = Number.isFinite(w.temperature_C) ? w.temperature_C : 15;
   const season = Number.isFinite(w.season) ? w.season : 1;
 
-  const fTarget = frostTarget(tempC, season);
-  const wTarget = wetnessTarget(isStorm, fTarget);
-  const sTarget = isStorm ? 1 : 0;   // gust scales with storm presence
+  let fTarget = frostTarget(tempC, season);
+  let wTarget = wetnessTarget(isStorm, fTarget);
+  let sTarget = isStorm ? 1 : 0;   // gust scales with storm presence
+
+  if (!flagsOverride) {
+    if (!isWeatherEnabled()) {
+      wTarget = 0;
+      sTarget = 0;
+    } else {
+      const cc = readWeatherCloudCoupling(_couplingScratch);
+      if (cc.weather_kind === "off" || cc.weather_kind === "clear") {
+        wTarget = 0;
+        sTarget = 0;
+      } else if (cc.weather_kind === "rain") {
+        wTarget = Math.max(wTarget, _clamp01(cc.precip_intensity) * (1 - fTarget));
+        sTarget = Math.max(sTarget, 0.45 * _clamp01(cc.precip_intensity));
+      } else if (cc.weather_kind === "snow" || cc.weather_kind === "blizzard") {
+        fTarget = Math.max(fTarget, _clamp01(0.4 + 0.6 * cc.precip_intensity));
+        wTarget = 0;
+        sTarget = Math.max(sTarget, cc.weather_kind === "blizzard" ? 1 : 0.4 * _clamp01(cc.precip_intensity));
+      }
+    }
+  }
 
   _st.frost = _approach(_st.frost, fTarget, dt, FROST_TAU);
   _st.wetness = _approach(_st.wetness, wTarget, dt, WET_TAU);

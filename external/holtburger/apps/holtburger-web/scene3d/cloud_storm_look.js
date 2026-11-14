@@ -267,7 +267,8 @@ function _clamp01(x) {
  */
 export function weatherCloudinessFactor(wx, skyState = null) {
   if (!wx) return 0.30;
-  if (wx.is_storm) return 1.0;
+  const kind = typeof wx.weather_kind === 'string' ? wx.weather_kind : '';
+  if (wx.is_storm || kind === 'storm' || kind === 'blizzard') return 1.0;
   let rh = Number.isFinite(wx.rh_pct) ? wx.rh_pct : NaN;
   if (!Number.isFinite(rh) && Number.isFinite(wx.temperature_C) && Number.isFinite(wx.dewpoint_C)) {
     const T = wx.temperature_C;
@@ -277,6 +278,10 @@ export function weatherCloudinessFactor(wx, skyState = null) {
   }
   if (!Number.isFinite(rh)) rh = 65;
   const precip = Number.isFinite(wx.precip_mm_hr) ? Math.max(0, wx.precip_mm_hr) : 0;
+  const pInt = Number.isFinite(wx.precip_intensity) ? _clamp01(wx.precip_intensity) : 0;
+  if (kind === 'clear') {
+    return Math.min(0.12, _clamp01((rh - 35) / 88));
+  }
   // Magnus RH ~72% at temperate Holtburg (T=15C, Td=10C) -> w ~ 0.30 (sunlit cumulus ~0.30);
   // dry desert RH <= 35% -> w = 0.0 (clear cumulus ~0.23); humid RH >= 95% -> w ~ 0.68 (overcast ~0.44).
   let w = _clamp01((rh - 35) / 88);
@@ -286,7 +291,11 @@ export function weatherCloudinessFactor(wx, skyState = null) {
     const fogCloudy = _clamp01((2400 - skyState.fogMax) / 1800);
     w = _clamp01(w * 0.72 + fogCloudy * 0.34);
   }
-  if (precip > 0) {
+  if (kind === 'cloudy') {
+    w = Math.max(w, 0.58);
+  } else if (kind === 'rain' || kind === 'snow') {
+    w = Math.max(w, 0.68 + 0.28 * Math.max(pInt, _clamp01(precip / 8.0)));
+  } else if (precip > 0) {
     const rainBoost = _clamp01(precip / 8.0);
     w = Math.max(w, 0.62 + 0.38 * rainBoost);
   }
@@ -302,13 +311,14 @@ export function weatherCloudinessFactor(wx, skyState = null) {
 export function applyContinuousWeatherLook(effect, skyState = null, highBand = 0, force = false) {
   const layers = effect?.cloudLayers;
   if (!layers || layers.length < 4) return false;
-  const liveSession = force || !!(
-    typeof globalThis !== 'undefined' &&
-    (globalThis.window?.__sessionHandle || globalThis.window?.liveScene3d?.sessionHandle)
-  );
-  if (!liveSession) return false;
   const wx = getWeatherState();
   if (!wx) return false;
+  const hasExplicitWeatherMode = typeof wx.weather_mode === 'string' && wx.weather_mode !== 'auto';
+  const liveSession = force || hasExplicitWeatherMode || !!(
+    typeof globalThis !== 'undefined' &&
+    (globalThis.window?.__sessionHandle || globalThis.window?.liveScene3d?.sessionHandle || globalThis.window?.__weatherSystem)
+  );
+  if (!liveSession) return false;
 
   const nowMs = typeof performance !== 'undefined' && typeof performance.now === 'function'
     ? performance.now()
@@ -327,8 +337,13 @@ export function applyContinuousWeatherLook(effect, skyState = null, highBand = 0
 
   const w = Math.round(state.w * 50) / 50;
   const b = _clamp01(Math.round((Number(highBand) || 0) * 100) / 100);
+  const cc = wx.cloud_coupling || null;
+  const baseDropQ = cc && Number.isFinite(cc.baseDropM) ? Math.round(cc.baseDropM / 10) * 10 : 0;
+  const covBoostQ = cc && Number.isFinite(cc.coverageBoost) ? Math.round(cc.coverageBoost * 50) / 50 : 0;
+  const darkQ = cc && Number.isFinite(cc.darkening) ? Math.round(cc.darkening * 50) / 50 : 0;
   const prevSnap = _continuousSnap.get(effect);
-  if (prevSnap && prevSnap.__wQ === w && prevSnap.__bQ === b) {
+  if (prevSnap && prevSnap.__wQ === w && prevSnap.__bQ === b &&
+      prevSnap.__dropQ === baseDropQ && prevSnap.__covQ === covBoostQ && prevSnap.__darkQ === darkQ) {
     return true;
   }
   // Piecewise smooth segments:
@@ -382,6 +397,25 @@ export function applyContinuousWeatherLook(effect, skyState = null, highBand = 0
   if (stormBlend === 0 && b > 0) {
     aDens *= (1 + (FAIR_ALTO_DENSITY_HIGH_SCALE - 1) * b);
   }
+  // Bidirectional weather -> cloud coupling: active rain/snow/storm thickens
+  // coverage, lowers cloud bases toward the landscape, and deepens storm-base density/powder.
+  if (baseDropQ > 0) {
+    rAlt = Math.max(400, rAlt - baseDropQ);
+    gAlt = Math.max(620, gAlt - baseDropQ * 0.8);
+    aAlt = Math.max(460, aAlt - baseDropQ * 0.7);
+  }
+  if (covBoostQ > 0) {
+    coverage = Math.min(0.68, coverage + covBoostQ * 0.45);
+  }
+  if (darkQ > 0) {
+    rDens = Math.min(0.28, rDens * (1 + 0.25 * darkQ));
+    gDens = Math.min(0.28, gDens * (1 + 0.22 * darkQ));
+    if (typeof effect.powderScale === 'number') {
+      effect.powderScale = _lerp(0.85, 0.96, _clamp01(darkQ));
+    }
+  } else if (typeof effect.powderScale === 'number') {
+    effect.powderScale = 0.85;
+  }
   const rgBias = Math.round((_lerp(0.35, STORM_DECK_SHAPE_BIAS_HIGH, b)) * 1000) / 1000;
 
   const spec = [
@@ -433,6 +467,9 @@ export function applyContinuousWeatherLook(effect, skyState = null, highBand = 0
   }
   spec.__wQ = w;
   spec.__bQ = b;
+  spec.__dropQ = baseDropQ;
+  spec.__covQ = covBoostQ;
+  spec.__darkQ = darkQ;
   _continuousSnap.set(effect, spec);
   return true;
 }

@@ -71,18 +71,17 @@ function _ensureVertexDecl(vertexShader, decl) {
 function _windSwaySnippet() {
   return [
     "  // ---- " + WINDSWAY_MARKER + " (deformation.windSwayGpu, MECH-B vertex) ----",
-    "  // Height-weighted horizontal shear of tree/foliage geometry. OBJECT SPACE,",
-    "  // AC Z-up (transformed.z = height; bend in the XY plane). Base-anchored ->",
-    "  // model-invariant: no per-model height uniform, so ONE shared clone is",
-    "  // correct for foliage of any height. Config-INVARIANT (all knobs ride",
-    "  // uniforms) -> ONE program.",
+    "  // Progressive cantilever bend + radial frond-tip breeze flutter. OBJECT SPACE,",
+    "  // AC Z-up (transformed.z = height; bend in the XY plane, frond flutter in XYZ).",
+    "  // Base-anchored -> model-invariant: no per-model height uniform, so ONE shared",
+    "  // clone animates 1 m coastal shrubs and 27 m tall palm crowns smoothly up to 30 m.",
     "  {",
     "    // Height above the model base; clamped so anything at/below the pivot",
     "    // plane stays planted (trunk base never drifts).",
     "    float _wsHeight = max(0.0, transformed.z - uWindBaseZ);",
     "    // Per-instance phase from the per-object hash VARYING (decorrelates a",
     "    // stand of trees). vVfxHash is slice-03 infra (procedural, rides the",
-    "    // per-instance matrix) — NO per-instance program key.",
+    "    // per-instance matrix) - NO per-instance program key.",
     "    float _wsPhase = vVfxHash * 6.2831853;",
     "    // uTime is the single shared VFX clock (bound by-ref from VFX_GLOBALS,",
     "    // advanced once/frame by the oscillator tick). Two bands: a slow primary",
@@ -90,18 +89,79 @@ function _windSwaySnippet() {
     "    float _wsT = uTime * 6.2831853 * uWindFreq;",
     "    float _wsOsc = sin(_wsT + _wsPhase)",
     "                 + uWindFlutter * sin(_wsT * 3.7 + _wsPhase * 1.7 + 1.3);",
-    "    // Displacement grows linearly with height -> the canopy leans, the base",
-    "    // is planted. uWindAmp already folds in ?treeWindStrength.",
-    "    vec2 _wsDisp = uWindDir2 * (uWindAmp * _wsHeight * _wsOsc);",
-    "    // PURELY ADDITIVE to transformed; weight 0 at the base means zero drift",
-    "    // there regardless of pivot precision. Normal left untouched: the sway is",
-    "    // a few degrees, so lighting drift on (often alpha-tested, double-sided)",
-    "    // foliage is imperceptible — keeps the snippet branchless + one program.",
+    "    // Progressive cantilever curve up to 30 m (no hard 12 m ceiling freeze):",
+    "    // stiff lower trunk near z = 0, smooth continuous bend through 17-30 m crowns.",
+    "    float _wsSpan = clamp(_wsHeight, 0.0, 32.0) / 8.0;",
+    "    float _wsCantilever = 8.0 * (_wsSpan * (0.65 + 0.35 * _wsSpan)) / (1.0 + 0.32 * _wsSpan);",
+    "    vec2 _wsDisp = uWindDir2 * (uWindAmp * _wsCantilever * _wsOsc);",
+    "    // Radial frond-tip breeze flutter above z > 2.5 m: outer palm fronds and",
+    "    // boughs (length(transformed.xy)) dance with gentle tangential sway + bob",
+    "    // while central trunks (small radial xy) and roots (z = 0) stay steady.",
+    "    float _wsRadDist = length(transformed.xy);",
+    "    float _wsFrondGate = smoothstep(2.5, 5.5, _wsHeight) * clamp((_wsRadDist - 0.35) / 3.8, 0.0, 1.35);",
+    "    float _wsAzim = dot(transformed.xy, vec2(1.73, -1.19));",
+    "    vec2 _wsTang = vec2(-uWindDir2.y, uWindDir2.x);",
+    "    float _wsFrondTang = sin(_wsT * 2.35 + _wsPhase * 2.1 + _wsAzim)",
+    "                       + 0.45 * sin(_wsT * 5.1 + _wsPhase * 1.3 - _wsAzim * 1.6);",
+    "    float _wsFrondBob = sin(_wsT * 3.1 + _wsPhase * 1.9 + _wsAzim * 1.35 + 0.8)",
+    "                      + 0.40 * cos(_wsT * 5.8 + _wsPhase * 2.7 - _wsAzim);",
+    "    float _wsFrondAmp = uWindAmp * (0.45 + 0.85 * uWindFlutter) * _wsFrondGate * (1.2 + 0.14 * min(_wsHeight, 30.0));",
     "    transformed.x += _wsDisp.x;",
     "    transformed.y += _wsDisp.y;",
+    "    transformed.x += _wsTang.x * (_wsFrondAmp * _wsFrondTang);",
+    "    transformed.y += _wsTang.y * (_wsFrondAmp * _wsFrondTang);",
+    "    transformed.z += _wsFrondAmp * 0.72 * _wsFrondBob;",
     "  }",
     "  // ---- " + WINDSWAY_END + " ----",
   ].join("\n");
+}
+
+function _smoothstep(e0, e1, x) {
+  const t = Math.max(0, Math.min(1, (x - e0) / (e1 - e0)));
+  return t * t * (3 - 2 * t);
+}
+
+/**
+ * Exact JS mirror of `_windSwaySnippet` for deterministic unit tests.
+ * Evaluates displaced `(x, y, z)` for object-space vertex `pos` (`{x, y, z}`).
+ */
+export function evalWindSwayGpuVertex(pos, params = {}, vfxHash = 0) {
+  const uTime = Number.isFinite(params.uTime) ? params.uTime : 0;
+  const uWindAmp = Number.isFinite(params.uWindAmp) ? params.uWindAmp : 0.03;
+  const uWindFreq = Number.isFinite(params.uWindFreq) ? params.uWindFreq : 0.15;
+  const uWindBaseZ = Number.isFinite(params.uWindBaseZ) ? params.uWindBaseZ : 0;
+  const uWindFlutter = Number.isFinite(params.uWindFlutter) ? params.uWindFlutter : 0.3;
+  const dirX = params.uWindDir2 && Number.isFinite(params.uWindDir2.x) ? params.uWindDir2.x : Math.cos((135 * Math.PI) / 180);
+  const dirY = params.uWindDir2 && Number.isFinite(params.uWindDir2.y) ? params.uWindDir2.y : Math.sin((135 * Math.PI) / 180);
+
+  const wsHeight = Math.max(0, pos.z - uWindBaseZ);
+  const wsPhase = vfxHash * 6.2831853;
+  const wsT = uTime * 6.2831853 * uWindFreq;
+  const wsOsc = Math.sin(wsT + wsPhase) + uWindFlutter * Math.sin(wsT * 3.7 + wsPhase * 1.7 + 1.3);
+
+  const wsSpan = Math.max(0, Math.min(32, wsHeight)) / 8.0;
+  const wsCantilever = 8.0 * (wsSpan * (0.65 + 0.35 * wsSpan)) / (1.0 + 0.32 * wsSpan);
+  const dispX = dirX * (uWindAmp * wsCantilever * wsOsc);
+  const dispY = dirY * (uWindAmp * wsCantilever * wsOsc);
+
+  const wsRadDist = Math.hypot(pos.x, pos.y);
+  const wsFrondGate = _smoothstep(2.5, 5.5, wsHeight) * Math.max(0, Math.min(1.35, (wsRadDist - 0.35) / 3.8));
+  const wsAzim = pos.x * 1.73 - pos.y * 1.19;
+  const tangX = -dirY;
+  const tangY = dirX;
+  const wsFrondTang = Math.sin(wsT * 2.35 + wsPhase * 2.1 + wsAzim)
+                    + 0.45 * Math.sin(wsT * 5.1 + wsPhase * 1.3 - wsAzim * 1.6);
+  const wsFrondBob = Math.sin(wsT * 3.1 + wsPhase * 1.9 + wsAzim * 1.35 + 0.8)
+                   + 0.40 * Math.cos(wsT * 5.8 + wsPhase * 2.7 - wsAzim);
+  const wsFrondAmp = uWindAmp * (0.45 + 0.85 * uWindFlutter) * wsFrondGate * (1.2 + 0.14 * Math.min(wsHeight, 30.0));
+
+  return {
+    x: pos.x + dispX + tangX * (wsFrondAmp * wsFrondTang),
+    y: pos.y + dispY + tangY * (wsFrondAmp * wsFrondTang),
+    z: pos.z + wsFrondAmp * 0.72 * wsFrondBob,
+    cantilever: wsCantilever,
+    frondGate: wsFrondGate,
+  };
 }
 
 export const windSwayGpu = {

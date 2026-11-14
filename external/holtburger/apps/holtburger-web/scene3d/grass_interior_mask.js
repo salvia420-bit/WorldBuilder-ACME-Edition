@@ -112,8 +112,20 @@
 
 /** Metres the box grows sideways — the interior faces sit inside the walls. */
 export const INDOOR_CULL_WALL_MARGIN_M = 0.25;
-/** Expanded exterior footprint padding (+0.65 m) around walls, wells, bridges, plazas, and foundations. */
+/** Expanded exterior footprint padding (+0.65 m) around solid foundations, bridges, and plazas. */
 export const EXTERIOR_CULL_WALL_MARGIN_M = 0.65;
+/** Tight exterior wall-arm padding (+0.30 m) on decomposed courtyard / perimeter walls. */
+export const EXTERIOR_ARM_WALL_MARGIN_M = 0.30;
+/** Tight ground-footprint padding (+0.15 m) around ground-level statics / portal pads. */
+export const STATIC_CULL_WALL_MARGIN_M = 0.15;
+/** Ground-near local Z slice (m) inspected for building footprints (ignores roofs/overhangs). */
+export const BUILDING_FOOTPRINT_MAX_Z = 3.0;
+/** Ground-level local Z slice (m) inspected for static props / LOD portal pads (ignores arches/canopies). */
+export const STATIC_FOOTPRINT_MAX_Z = 0.8;
+/** 8x8 occupancy threshold below which a large (> 4 m) mesh is decomposed into wall-arm sub-boxes. */
+export const HOLLOW_FOOTPRINT_FILL_MAX = 0.55;
+/** Minimum XY span (m) before hollow / L-wall footprint decomposition applies. */
+export const HOLLOW_FOOTPRINT_MIN_SPAN_M = 4.0;
 /** The ground may lie this far below a cell's floor and still count as under it. */
 export const INDOOR_CULL_BELOW_FLOOR_M = 1.0;
 /** ...and must lie at least this far under the cell's ceiling (cellars). */
@@ -278,6 +290,10 @@ function elementsOf(obj) {
 
 function walkMeshes(o, fn) {
   if (!o) return;
+  if (o.isLOD && Array.isArray(o.levels) && o.levels.length > 0 && o.levels[0]?.object) {
+    walkMeshes(o.levels[0].object, fn);
+    return;
+  }
   if (o.isMesh) fn(o);
   const kids = o.children;
   if (kids) for (let i = 0; i < kids.length; i += 1) walkMeshes(kids[i], fn);
@@ -374,36 +390,406 @@ function uprightYawFrame(toRoot) {
   return inv ? { frame, inv } : null;
 }
 
-function buildUprightBoxFromMeshes(meshes, frameInfo, rootInv, indoorFlag, bldgFlag) {
+const _FOOTPRINT_GRID = 8;
+const _FOOTPRINT_CELLS = _FOOTPRINT_GRID * _FOOTPRINT_GRID;
+const _zInX = new Float64Array(4);
+const _zInY = new Float64Array(4);
+const _zInZ = new Float64Array(4);
+const _zOutX = new Float64Array(6);
+const _zOutY = new Float64Array(6);
+const _zOutZ = new Float64Array(6);
+const _c2aX = new Float64Array(12);
+const _c2aY = new Float64Array(12);
+const _c2bX = new Float64Array(12);
+const _c2bY = new Float64Array(12);
+const _occ = new Uint8Array(_FOOTPRINT_CELLS);
+const _cov = new Uint8Array(_FOOTPRINT_CELLS);
+const _cMinX = new Float64Array(_FOOTPRINT_CELLS);
+const _cMaxX = new Float64Array(_FOOTPRINT_CELLS);
+const _cMinY = new Float64Array(_FOOTPRINT_CELLS);
+const _cMaxY = new Float64Array(_FOOTPRINT_CELLS);
+
+function _clipTriZMax(ax, ay, az, bx, by, bz, cx, cy, cz, zMax) {
+  if (az > zMax && bz > zMax && cz > zMax) return 0;
+  _zInX[0] = ax; _zInY[0] = ay; _zInZ[0] = az;
+  _zInX[1] = bx; _zInY[1] = by; _zInZ[1] = bz;
+  _zInX[2] = cx; _zInY[2] = cy; _zInZ[2] = cz;
+  if (az <= zMax && bz <= zMax && cz <= zMax) {
+    _zOutX[0] = ax; _zOutY[0] = ay; _zOutZ[0] = az;
+    _zOutX[1] = bx; _zOutY[1] = by; _zOutZ[1] = bz;
+    _zOutX[2] = cx; _zOutY[2] = cy; _zOutZ[2] = cz;
+    return 3;
+  }
+  let outN = 0;
+  for (let i = 0; i < 3; i += 1) {
+    const j = (i + 1) % 3;
+    const x1 = _zInX[i], y1 = _zInY[i], z1 = _zInZ[i];
+    const x2 = _zInX[j], y2 = _zInY[j], z2 = _zInZ[j];
+    const in1 = z1 <= zMax;
+    const in2 = z2 <= zMax;
+    if (in1) {
+      _zOutX[outN] = x1; _zOutY[outN] = y1; _zOutZ[outN] = z1;
+      outN += 1;
+    }
+    if (in1 !== in2) {
+      const dz = z2 - z1;
+      const t = Math.abs(dz) > 1e-12 ? (zMax - z1) / dz : 0;
+      _zOutX[outN] = x1 + (x2 - x1) * t;
+      _zOutY[outN] = y1 + (y2 - y1) * t;
+      _zOutZ[outN] = zMax;
+      outN += 1;
+    }
+  }
+  return outN;
+}
+
+function _clip2DBox(x0, y0, x1, y1, x2, y2, bx0, by0, bx1, by1) {
+  _c2aX[0] = x0; _c2aY[0] = y0;
+  _c2aX[1] = x1; _c2aY[1] = y1;
+  _c2aX[2] = x2; _c2aY[2] = y2;
+  let n = 3;
+  // x >= bx0
+  let m = 0;
+  for (let i = 0; i < n; i += 1) {
+    const j = (i + 1) % n;
+    const px = _c2aX[i], py = _c2aY[i], qx = _c2aX[j], qy = _c2aY[j];
+    const pIn = px >= bx0 - 1e-9, qIn = qx >= bx0 - 1e-9;
+    if (pIn) { _c2bX[m] = px; _c2bY[m] = py; m += 1; }
+    if (pIn !== qIn) {
+      const t = (bx0 - px) / (qx - px);
+      _c2bX[m] = bx0; _c2bY[m] = py + (qy - py) * t; m += 1;
+    }
+  }
+  if (m === 0) return 0;
+  // x <= bx1
+  n = 0;
+  for (let i = 0; i < m; i += 1) {
+    const j = (i + 1) % m;
+    const px = _c2bX[i], py = _c2bY[i], qx = _c2bX[j], qy = _c2bY[j];
+    const pIn = px <= bx1 + 1e-9, qIn = qx <= bx1 + 1e-9;
+    if (pIn) { _c2aX[n] = px; _c2aY[n] = py; n += 1; }
+    if (pIn !== qIn) {
+      const t = (bx1 - px) / (qx - px);
+      _c2aX[n] = bx1; _c2aY[n] = py + (qy - py) * t; n += 1;
+    }
+  }
+  if (n === 0) return 0;
+  // y >= by0
+  m = 0;
+  for (let i = 0; i < n; i += 1) {
+    const j = (i + 1) % n;
+    const px = _c2aX[i], py = _c2aY[i], qx = _c2aX[j], qy = _c2aY[j];
+    const pIn = py >= by0 - 1e-9, qIn = qy >= by0 - 1e-9;
+    if (pIn) { _c2bX[m] = px; _c2bY[m] = py; m += 1; }
+    if (pIn !== qIn) {
+      const t = (by0 - py) / (qy - py);
+      _c2bX[m] = px + (qx - px) * t; _c2bY[m] = by0; m += 1;
+    }
+  }
+  if (m === 0) return 0;
+  // y <= by1
+  n = 0;
+  for (let i = 0; i < m; i += 1) {
+    const j = (i + 1) % m;
+    const px = _c2bX[i], py = _c2bY[i], qx = _c2bX[j], qy = _c2bY[j];
+    const pIn = py <= by1 + 1e-9, qIn = qy <= by1 + 1e-9;
+    if (pIn) { _c2aX[n] = px; _c2aY[n] = py; n += 1; }
+    if (pIn !== qIn) {
+      const t = (by1 - py) / (qy - py);
+      _c2aX[n] = px + (qx - px) * t; _c2aY[n] = by1; n += 1;
+    }
+  }
+  return n;
+}
+
+function _attachFootprintMeta(boxes, fillFraction, occupiedCells, dx, dy, fullDz, maxLocalZ) {
+  boxes.fillFraction = fillFraction;
+  boxes.occupiedCells = occupiedCells;
+  boxes.gridN = _FOOTPRINT_GRID;
+  boxes.dx = dx;
+  boxes.dy = dy;
+  boxes.fullDz = fullDz;
+  boxes._maxLocalZ = maxLocalZ;
+  return boxes;
+}
+
+/**
+ * Inspect ground-near geometry (`localZ <= maxLocalZ`) on an 8x8 local 2D grid,
+ * memoized once per BufferGeometry in `geometry.userData.__grassFootprintBoxes`.
+ * Hollow / L-shaped / perimeter courtyard walls (`fillFraction < 0.55` and
+ * `max(dx, dy) > 4.0 m`, such as Shoushi's `0x01000E62` and `0x01000E77`) are
+ * decomposed into 1-4 tight wall-arm sub-boxes instead of one giant yard-killing AABB.
+ */
+export function analyzeGeometryFootprint(geometry, maxLocalZ = BUILDING_FOOTPRINT_MAX_Z) {
+  if (!geometry || typeof geometry !== "object") {
+    return _attachFootprintMeta([], 0, 0, 0, 0, 0, maxLocalZ);
+  }
+  const ud = geometry.userData || (geometry.userData = {});
+  const cachedMain = ud.__grassFootprintBoxes;
+  if (Array.isArray(cachedMain) && cachedMain._maxLocalZ === maxLocalZ) return cachedMain;
+  if (maxLocalZ !== BUILDING_FOOTPRINT_MAX_Z && Array.isArray(ud.__grassStaticFootprint)
+    && ud.__grassStaticFootprint._maxLocalZ === maxLocalZ) {
+    return ud.__grassStaticFootprint;
+  }
+
+  const pos = geometry.attributes && geometry.attributes.position;
+  const vCount = pos && typeof pos.count === "number" ? pos.count : 0;
+  if (vCount <= 0) {
+    if (!geometry.boundingBox && typeof geometry.computeBoundingBox === "function") {
+      try { geometry.computeBoundingBox(); } catch (_) { /* ignore */ }
+    }
+    const bb = geometry.boundingBox;
+    if (!bb || !Number.isFinite(bb.min.x) || !Number.isFinite(bb.max.x) || bb.min.z > maxLocalZ) {
+      const empty = _attachFootprintMeta([], 0, 0, 0, 0, 0, maxLocalZ);
+      if (!Array.isArray(ud.__grassFootprintBoxes) || maxLocalZ === BUILDING_FOOTPRINT_MAX_Z) ud.__grassFootprintBoxes = empty;
+      if (maxLocalZ !== BUILDING_FOOTPRINT_MAX_Z) ud.__grassStaticFootprint = empty;
+      return empty;
+    }
+    const dx = Math.max(0, bb.max.x - bb.min.x);
+    const dy = Math.max(0, bb.max.y - bb.min.y);
+    const fullDz = Math.max(0, bb.max.z - bb.min.z);
+    const single = _attachFootprintMeta([
+      { x0: bb.min.x, y0: bb.min.y, x1: bb.max.x, y1: bb.max.y, z0: bb.min.z, z1: Math.min(bb.max.z, maxLocalZ), hollowArm: false },
+    ], 1, _FOOTPRINT_CELLS, dx, dy, fullDz, maxLocalZ);
+    if (!Array.isArray(ud.__grassFootprintBoxes) || maxLocalZ === BUILDING_FOOTPRINT_MAX_Z) ud.__grassFootprintBoxes = single;
+    if (maxLocalZ !== BUILDING_FOOTPRINT_MAX_Z) ud.__grassStaticFootprint = single;
+    return single;
+  }
+
+  const getX = typeof pos.getX === "function" ? (k) => pos.getX(k) : (k) => pos.array[k * (pos.itemSize || 3)];
+  const getY = typeof pos.getY === "function" ? (k) => pos.getY(k) : (k) => pos.array[k * (pos.itemSize || 3) + 1];
+  const getZ = typeof pos.getZ === "function" ? (k) => pos.getZ(k) : (k) => pos.array[k * (pos.itemSize || 3) + 2];
+
+  const idxAttr = geometry.index;
+  const idxCount = idxAttr && typeof idxAttr.count === "number" ? idxAttr.count : 0;
+  const getIdx = idxCount > 0
+    ? (typeof idxAttr.getX === "function" ? (k) => idxAttr.getX(k) : (k) => idxAttr.array[k])
+    : null;
+  const triCount = idxCount >= 3 ? Math.floor(idxCount / 3) : Math.floor(vCount / 3);
+
+  let fullMinZ = Infinity, fullMaxZ = -Infinity;
+  let gx0 = Infinity, gy0 = Infinity, gz0 = Infinity;
+  let gx1 = -Infinity, gy1 = -Infinity, gz1 = -Infinity;
+
+  for (let v = 0; v < vCount; v += 1) {
+    const vx = getX(v), vy = getY(v), vz = getZ(v);
+    if (!Number.isFinite(vx) || !Number.isFinite(vy) || !Number.isFinite(vz)) continue;
+    if (vz < fullMinZ) fullMinZ = vz;
+    if (vz > fullMaxZ) fullMaxZ = vz;
+    if (vz <= maxLocalZ) {
+      if (vx < gx0) gx0 = vx; if (vx > gx1) gx1 = vx;
+      if (vy < gy0) gy0 = vy; if (vy > gy1) gy1 = vy;
+      if (vz < gz0) gz0 = vz; if (vz > gz1) gz1 = vz;
+    }
+  }
+  for (let t = 0; t < triCount; t += 1) {
+    const i0 = getIdx ? getIdx(t * 3) : t * 3;
+    const i1 = getIdx ? getIdx(t * 3 + 1) : t * 3 + 1;
+    const i2 = getIdx ? getIdx(t * 3 + 2) : t * 3 + 2;
+    if (i0 >= vCount || i1 >= vCount || i2 >= vCount) continue;
+    const cn = _clipTriZMax(
+      getX(i0), getY(i0), getZ(i0),
+      getX(i1), getY(i1), getZ(i1),
+      getX(i2), getY(i2), getZ(i2),
+      maxLocalZ,
+    );
+    for (let k = 0; k < cn; k += 1) {
+      const px = _zOutX[k], py = _zOutY[k], pz = _zOutZ[k];
+      if (px < gx0) gx0 = px; if (px > gx1) gx1 = px;
+      if (py < gy0) gy0 = py; if (py > gy1) gy1 = py;
+      if (pz < gz0) gz0 = pz; if (pz > gz1) gz1 = pz;
+    }
+  }
+
+  const fullDz = fullMaxZ >= fullMinZ ? fullMaxZ - fullMinZ : 0;
+  if (!(gx1 > gx0) && !(gy1 > gy0)) {
+    const empty = _attachFootprintMeta([], 0, 0, 0, 0, fullDz, maxLocalZ);
+    if (!Array.isArray(ud.__grassFootprintBoxes) || maxLocalZ === BUILDING_FOOTPRINT_MAX_Z) ud.__grassFootprintBoxes = empty;
+    if (maxLocalZ !== BUILDING_FOOTPRINT_MAX_Z) ud.__grassStaticFootprint = empty;
+    return empty;
+  }
+
+  const dx = Math.max(0, gx1 - gx0);
+  const dy = Math.max(0, gy1 - gy0);
+  const cw = Math.max(dx, 1e-3) / _FOOTPRINT_GRID;
+  const ch = Math.max(dy, 1e-3) / _FOOTPRINT_GRID;
+  _occ.fill(0);
+  _cMinX.fill(Infinity); _cMaxX.fill(-Infinity);
+  _cMinY.fill(Infinity); _cMaxY.fill(-Infinity);
+
+  for (let v = 0; v < vCount; v += 1) {
+    const vz = getZ(v);
+    if (!(vz <= maxLocalZ)) continue;
+    const vx = getX(v), vy = getY(v);
+    if (!Number.isFinite(vx) || !Number.isFinite(vy)) continue;
+    const ix = Math.max(0, Math.min(_FOOTPRINT_GRID - 1, Math.floor((vx - gx0) / cw)));
+    const iy = Math.max(0, Math.min(_FOOTPRINT_GRID - 1, Math.floor((vy - gy0) / ch)));
+    const ci = iy * _FOOTPRINT_GRID + ix;
+    _occ[ci] = 1;
+    if (vx < _cMinX[ci]) _cMinX[ci] = vx;
+    if (vx > _cMaxX[ci]) _cMaxX[ci] = vx;
+    if (vy < _cMinY[ci]) _cMinY[ci] = vy;
+    if (vy > _cMaxY[ci]) _cMaxY[ci] = vy;
+  }
+
+  for (let t = 0; t < triCount; t += 1) {
+    const i0 = getIdx ? getIdx(t * 3) : t * 3;
+    const i1 = getIdx ? getIdx(t * 3 + 1) : t * 3 + 1;
+    const i2 = getIdx ? getIdx(t * 3 + 2) : t * 3 + 2;
+    if (i0 >= vCount || i1 >= vCount || i2 >= vCount) continue;
+    const cn = _clipTriZMax(
+      getX(i0), getY(i0), getZ(i0),
+      getX(i1), getY(i1), getZ(i1),
+      getX(i2), getY(i2), getZ(i2),
+      maxLocalZ,
+    );
+    if (cn < 3) continue;
+    for (let sub = 0; sub < cn - 2; sub += 1) {
+      const x0 = _zOutX[0], y0 = _zOutY[0];
+      const x1 = _zOutX[sub + 1], y1 = _zOutY[sub + 1];
+      const x2 = _zOutX[sub + 2], y2 = _zOutY[sub + 2];
+      const tx0 = Math.min(x0, x1, x2), tx1 = Math.max(x0, x1, x2);
+      const ty0 = Math.min(y0, y1, y2), ty1 = Math.max(y0, y1, y2);
+      const ix0 = Math.max(0, Math.min(_FOOTPRINT_GRID - 1, Math.floor((tx0 - gx0) / cw)));
+      const ix1 = Math.max(0, Math.min(_FOOTPRINT_GRID - 1, Math.floor((tx1 - gx0) / cw)));
+      const iy0 = Math.max(0, Math.min(_FOOTPRINT_GRID - 1, Math.floor((ty0 - gy0) / ch)));
+      const iy1 = Math.max(0, Math.min(_FOOTPRINT_GRID - 1, Math.floor((ty1 - gy0) / ch)));
+      for (let iy = iy0; iy <= iy1; iy += 1) {
+        const by0 = gy0 + iy * ch;
+        const by1 = iy === _FOOTPRINT_GRID - 1 ? gy1 : by0 + ch;
+        for (let ix = ix0; ix <= ix1; ix += 1) {
+          const bx0 = gx0 + ix * cw;
+          const bx1 = ix === _FOOTPRINT_GRID - 1 ? gx1 : bx0 + cw;
+          const pn = _clip2DBox(x0, y0, x1, y1, x2, y2, bx0, by0, bx1, by1);
+          if (pn > 0) {
+            const ci = iy * _FOOTPRINT_GRID + ix;
+            _occ[ci] = 1;
+            for (let k = 0; k < pn; k += 1) {
+              const cxp = _c2aX[k], cyp = _c2aY[k];
+              if (cxp < _cMinX[ci]) _cMinX[ci] = cxp;
+              if (cxp > _cMaxX[ci]) _cMaxX[ci] = cxp;
+              if (cyp < _cMinY[ci]) _cMinY[ci] = cyp;
+              if (cyp > _cMaxY[ci]) _cMaxY[ci] = cyp;
+            }
+          }
+        }
+      }
+    }
+  }
+
+  let occupiedCells = 0;
+  for (let ci = 0; ci < _FOOTPRINT_CELLS; ci += 1) occupiedCells += _occ[ci];
+  const fillFraction = occupiedCells / _FOOTPRINT_CELLS;
+  const boxes = [];
+
+  if (occupiedCells > 0 && fillFraction < HOLLOW_FOOTPRINT_FILL_MAX && Math.max(dx, dy) > HOLLOW_FOOTPRINT_MIN_SPAN_M) {
+    _cov.fill(0);
+    for (let arm = 0; arm < 4; arm += 1) {
+      let bestScore = -1;
+      let bIx0 = -1, bIx1 = -1, bIy0 = -1, bIy1 = -1;
+      for (let iy0 = 0; iy0 < _FOOTPRINT_GRID; iy0 += 1) {
+        for (let iy1 = iy0; iy1 < _FOOTPRINT_GRID; iy1 += 1) {
+          const hCells = iy1 - iy0 + 1;
+          for (let ix0 = 0; ix0 < _FOOTPRINT_GRID; ix0 += 1) {
+            for (let ix1 = ix0; ix1 < _FOOTPRINT_GRID; ix1 += 1) {
+              const wCells = ix1 - ix0 + 1;
+              const area = wCells * hCells;
+              let occIn = 0, newCov = 0;
+              for (let y = iy0; y <= iy1; y += 1) {
+                const row = y * _FOOTPRINT_GRID;
+                for (let x = ix0; x <= ix1; x += 1) {
+                  const o = _occ[row + x];
+                  occIn += o;
+                  if (o && !_cov[row + x]) newCov += 1;
+                }
+              }
+              if (newCov === 0) continue;
+              const valid = occIn === area
+                || (Math.min(wCells, hCells) <= 2 && occIn * 4 >= area * 3)
+                || (occIn * 10 >= area * 9);
+              if (!valid) continue;
+              const score = newCov * 64 + occIn;
+              if (score > bestScore) {
+                bestScore = score;
+                bIx0 = ix0; bIx1 = ix1; bIy0 = iy0; bIy1 = iy1;
+              }
+            }
+          }
+        }
+      }
+      if (bestScore < 0) break;
+      let sx0 = Infinity, sy0 = Infinity, sx1 = -Infinity, sy1 = -Infinity;
+      for (let y = bIy0; y <= bIy1; y += 1) {
+        const row = y * _FOOTPRINT_GRID;
+        for (let x = bIx0; x <= bIx1; x += 1) {
+          const ci = row + x;
+          if (!_occ[ci]) continue;
+          _cov[ci] = 1;
+          if (_cMinX[ci] < sx0) sx0 = _cMinX[ci];
+          if (_cMaxX[ci] > sx1) sx1 = _cMaxX[ci];
+          if (_cMinY[ci] < sy0) sy0 = _cMinY[ci];
+          if (_cMaxY[ci] > sy1) sy1 = _cMaxY[ci];
+        }
+      }
+      if (sx1 >= sx0 && sy1 >= sy0) {
+        boxes.push({ x0: sx0, y0: sy0, x1: sx1, y1: sy1, z0: gz0, z1: gz1, hollowArm: true });
+      }
+    }
+    // Fold any leftover occupied cell into the nearest arm only when the expanded arm stays compact.
+    const yardAreaCap = 0.28 * Math.max(dx * dy, 1e-3);
+    for (let ci = 0; ci < _FOOTPRINT_CELLS; ci += 1) {
+      if (!_occ[ci] || _cov[ci] || boxes.length === 0) continue;
+      let bestK = -1, bestGrow = Infinity;
+      for (let k = 0; k < boxes.length; k += 1) {
+        const b = boxes[k];
+        const nx0 = Math.min(b.x0, _cMinX[ci]), nx1 = Math.max(b.x1, _cMaxX[ci]);
+        const ny0 = Math.min(b.y0, _cMinY[ci]), ny1 = Math.max(b.y1, _cMaxY[ci]);
+        const nArea = (nx1 - nx0) * (ny1 - ny0);
+        if (nArea > yardAreaCap) continue;
+        const grow = nArea - (b.x1 - b.x0) * (b.y1 - b.y0);
+        if (grow < bestGrow) { bestGrow = grow; bestK = k; }
+      }
+      if (bestK >= 0) {
+        const b = boxes[bestK];
+        b.x0 = Math.min(b.x0, _cMinX[ci]); b.x1 = Math.max(b.x1, _cMaxX[ci]);
+        b.y0 = Math.min(b.y0, _cMinY[ci]); b.y1 = Math.max(b.y1, _cMaxY[ci]);
+      }
+    }
+  } else if (occupiedCells > 0) {
+    boxes.push({ x0: gx0, y0: gy0, x1: gx1, y1: gy1, z0: gz0, z1: gz1, hollowArm: false });
+  }
+
+  _attachFootprintMeta(boxes, fillFraction, occupiedCells, dx, dy, fullDz, maxLocalZ);
+  if (!Array.isArray(ud.__grassFootprintBoxes) || maxLocalZ === BUILDING_FOOTPRINT_MAX_Z) ud.__grassFootprintBoxes = boxes;
+  if (maxLocalZ !== BUILDING_FOOTPRINT_MAX_Z) ud.__grassStaticFootprint = boxes;
+  return boxes;
+}
+
+function buildUprightBoxFromLocalSubBoxes(subBoxes, frameInfo, rootInv, indoorFlag, bldgFlag, wallMarginM = EXTERIOR_CULL_WALL_MARGIN_M) {
   const { frame, inv } = frameInfo;
   let x0 = Infinity, y0 = Infinity, z0 = Infinity;
   let x1 = -Infinity, y1 = -Infinity, z1 = -Infinity;
   const rw = [0, 0, 0];
   const lp = [0, 0, 0];
-  for (let mi = 0; mi < meshes.length; mi += 1) {
-    const mesh = meshes[mi];
-    const g = mesh.geometry;
-    if (!g) continue;
-    if (!g.boundingBox && typeof g.computeBoundingBox === "function") {
-      try { g.computeBoundingBox(); } catch (_) { continue; }
-    }
-    const bb = g.boundingBox;
-    const mw = elementsOf(mesh);
-    if (!bb || !mw || !Number.isFinite(bb.min.x) || !Number.isFinite(bb.max.x)) continue;
+  for (let bi = 0; bi < subBoxes.length; bi += 1) {
+    const { mw, sub } = subBoxes[bi];
+    if (!mw || !sub) continue;
     const toRoot = rootInv ? mat4Mul(rootInv, mw) : mw;
     for (let c = 0; c < 8; c += 1) {
-      apply(toRoot, c & 1 ? bb.max.x : bb.min.x, c & 2 ? bb.max.y : bb.min.y, c & 4 ? bb.max.z : bb.min.z, rw);
+      apply(toRoot, c & 1 ? sub.x1 : sub.x0, c & 2 ? sub.y1 : sub.y0, c & 4 ? sub.z1 : sub.z0, rw);
       apply(inv, rw[0], rw[1], rw[2], lp);
       if (lp[0] < x0) x0 = lp[0]; if (lp[0] > x1) x1 = lp[0];
       if (lp[1] < y0) y0 = lp[1]; if (lp[1] > y1) y1 = lp[1];
       if (lp[2] < z0) z0 = lp[2]; if (lp[2] > z1) z1 = lp[2];
     }
   }
-  if (!(x1 > x0) || !(y1 > y0) || !(z1 >= z0)) return null;
+  if (!(x1 >= x0) || !(y1 >= y0) || !(z1 >= z0) || (!(x1 > x0) && !(y1 > y0))) return null;
   const m = INDOOR_CULL_WALL_MARGIN_M;
-  const extra = EXTERIOR_CULL_WALL_MARGIN_M - m;
-  const ex0 = x0 - extra, ex1 = x1 + extra;
-  const ey0 = y0 - extra, ey1 = y1 + extra;
+  const extra = wallMarginM - m;
+  let ex0 = x0 - extra, ex1 = x1 + extra;
+  let ey0 = y0 - extra, ey1 = y1 + extra;
+  if (ex1 < ex0) { const mid = 0.5 * (x0 + x1); ex0 = mid; ex1 = mid; }
+  if (ey1 < ey0) { const mid = 0.5 * (y0 + y1); ey0 = mid; ey1 = mid; }
   // Pad exterior floor/deck interval so thin bridge/plaza slabs and raised porches reject grass cleanly.
   const minZ = z0 - 1.2;
   const maxZ = z1 + INDOOR_CULL_UNDER_CEILING_M + 0.35;
@@ -419,9 +805,22 @@ function buildUprightBoxFromMeshes(meshes, frameInfo, rootInv, indoorFlag, bldgF
     min: [ex0, ey0, minZ],
     max: [ex1, ey1, maxZ],
     x0: wx0, y0: wy0, x1: wx1, y1: wy1, z0: wz0, z1: wz1,
+    rawDx: x1 - x0,
+    rawDy: y1 - y0,
+    rawDz: z1 - z0,
     indoor: indoorFlag,
     bldg: bldgFlag,
   };
+}
+
+const _FENCE_FOLIAGE_NAME_RE = /(tree|palm|bush|shrub|flora|plant|fern|reed|grass|flower|hedge|fence|rail|post|sign|banner|lamp|torch)/i;
+
+function isFoliageOrFenceObject(obj) {
+  const n = obj && typeof obj.name === "string" ? obj.name : "";
+  if (n && _FENCE_FOLIAGE_NAME_RE.test(n)) return true;
+  const ud = obj && obj.userData;
+  if (ud && (ud.isFoliage || ud.isTree || ud.isFence)) return true;
+  return false;
 }
 
 function collectExteriorBoxes(scene3d, rootInv, outBoxes, extCache, rootKey) {
@@ -451,21 +850,62 @@ function collectExteriorBoxes(scene3d, rootInv, outBoxes, extCache, rootKey) {
       });
       const items = [];
       if (opaqueMeshes.length > 0) {
-        const whole = buildUprightBoxFromMeshes(opaqueMeshes, fInfo, rootInv, false, true);
-        if (whole) {
-          const spanX = whole.max[0] - whole.min[0];
-          const spanY = whole.max[1] - whole.min[1];
-          if (spanX <= 14 && spanY <= 14) {
+        const solidParts = [];
+        let solidAreaSum = 0;
+        for (let mi = 0; mi < opaqueMeshes.length; mi += 1) {
+          const m = opaqueMeshes[mi];
+          const mw = elementsOf(m);
+          if (!mw) continue;
+          const fp = analyzeGeometryFootprint(m.geometry, BUILDING_FOOTPRINT_MAX_Z);
+          if (fp.length === 0) continue;
+          const mf = uprightYawFrame(rootInv ? mat4Mul(rootInv, mw) : mw) || fInfo;
+          if (fp[0].hollowArm) {
+            for (let ai = 0; ai < fp.length; ai += 1) {
+              const sb = buildUprightBoxFromLocalSubBoxes(
+                [{ mw, sub: fp[ai] }],
+                mf,
+                rootInv,
+                false,
+                true,
+                EXTERIOR_ARM_WALL_MARGIN_M,
+              );
+              if (!sb) continue;
+              if (sb.rawDx > 48 && sb.rawDy > 48) continue;
+              items.push({ key: `bm:${obj.id ?? i}:${m.id ?? mi}:${ai}`, box: sb });
+            }
+          } else {
+            const sub = fp[0];
+            solidParts.push({ m, mi, mw, mf, sub });
+            solidAreaSum += Math.max(0, sub.x1 - sub.x0) * Math.max(0, sub.y1 - sub.y0);
+          }
+        }
+        if (solidParts.length > 0) {
+          const whole = buildUprightBoxFromLocalSubBoxes(
+            solidParts,
+            fInfo,
+            rootInv,
+            false,
+            true,
+            EXTERIOR_CULL_WALL_MARGIN_M,
+          );
+          const unionArea = whole ? Math.max(1e-4, whole.rawDx * whole.rawDy) : Infinity;
+          if (whole && whole.rawDx <= 14 && whole.rawDy <= 14
+            && (solidParts.length === 1 || solidAreaSum >= 0.45 * unionArea)) {
             items.push({ key: `b:${obj.id ?? i}`, box: whole });
           } else {
-            for (let mi = 0; mi < opaqueMeshes.length; mi += 1) {
-              const m = opaqueMeshes[mi];
-              const mw = elementsOf(m);
-              const mf = mw ? uprightYawFrame(rootInv ? mat4Mul(rootInv, mw) : mw) : fInfo;
-              const sb = mf ? buildUprightBoxFromMeshes([m], mf, rootInv, false, true) : null;
+            for (let pi = 0; pi < solidParts.length; pi += 1) {
+              const sp = solidParts[pi];
+              const sb = buildUprightBoxFromLocalSubBoxes(
+                [sp],
+                sp.mf,
+                rootInv,
+                false,
+                true,
+                EXTERIOR_CULL_WALL_MARGIN_M,
+              );
               if (!sb) continue;
-              if (sb.max[0] - sb.min[0] > 48 && sb.max[1] - sb.min[1] > 48) continue;
-              items.push({ key: `bm:${obj.id ?? i}:${m.id ?? mi}`, box: sb });
+              if (sb.rawDx > 48 && sb.rawDy > 48) continue;
+              items.push({ key: `bm:${obj.id ?? i}:${sp.m.id ?? sp.mi}`, box: sb });
             }
           }
         }
@@ -485,14 +925,18 @@ function collectExteriorBoxes(scene3d, rootInv, outBoxes, extCache, rootKey) {
         for (let hi = 0; hi < hit.items.length; hi += 1) outBoxes.push(hit.items[hi]);
         continue;
       }
+      if (isFoliageOrFenceObject(obj)) {
+        if (extCache) extCache.set(obj, { rootKey, childCount, items: [] });
+        continue;
+      }
       let hasFoliage = false;
       const solidMeshes = [];
       walkMeshes(obj, (m) => {
         if (m.isBatchedMesh || m.isInstancedMesh) return;
-        if (meshHasCutoutOrAlpha(m)) { hasFoliage = true; return; }
+        if (meshHasCutoutOrAlpha(m) || isFoliageOrFenceObject(m)) { hasFoliage = true; return; }
         solidMeshes.push(m);
       });
-      // Skip trees, bushes, shrubs, flowers, banners (any cutout/alpha submesh).
+      // Skip trees, bushes, shrubs, flowers, banners, fences (any cutout/alpha or flora submesh).
       const items = [];
       if (!hasFoliage && solidMeshes.length > 0) {
         if (typeof obj.updateWorldMatrix === "function") {
@@ -500,14 +944,57 @@ function collectExteriorBoxes(scene3d, rootInv, outBoxes, extCache, rootKey) {
         }
         const ow = elementsOf(obj);
         const fInfo = ow ? uprightYawFrame(rootInv ? mat4Mul(rootInv, ow) : ow) : null;
-        const box = fInfo ? buildUprightBoxFromMeshes(solidMeshes, fInfo, rootInv, false, false) : null;
-        if (box) {
-          const extra2 = 2 * (EXTERIOR_CULL_WALL_MARGIN_M - INDOOR_CULL_WALL_MARGIN_M);
-          const dx = (box.max[0] - box.min[0]) - extra2;
-          const dy = (box.max[1] - box.min[1]) - extra2;
-          const rawDz = (box.max[2] - INDOOR_CULL_UNDER_CEILING_M - 0.35) - (box.min[2] + 1.2);
-          if (dx >= 0.45 && dy >= 0.45 && dx <= 18 && dy <= 18 && rawDz >= 0.30) {
-            items.push({ key: `s:${obj.id ?? i}`, box });
+        if (fInfo) {
+          const groundSubs = [];
+          let maxFullDz = 0;
+          let subAreaSum = 0;
+          for (let mi = 0; mi < solidMeshes.length; mi += 1) {
+            const m = solidMeshes[mi];
+            const mw = elementsOf(m);
+            if (!mw) continue;
+            const fp = analyzeGeometryFootprint(m.geometry, STATIC_FOOTPRINT_MAX_Z);
+            if (fp.fullDz > maxFullDz) maxFullDz = fp.fullDz;
+            if (fp.length === 0) continue;
+            // Skip hollow static fences/arches/gates whose ground occupancy is sparse.
+            if (fp[0].hollowArm && fp.fillFraction < 0.40) continue;
+            for (let ai = 0; ai < fp.length; ai += 1) {
+              const sub = fp[ai];
+              const sdx = sub.x1 - sub.x0, sdy = sub.y1 - sub.y0;
+              // Skip narrow linear fence rails / thin posts (< 0.45 m wide).
+              if (sdx < 0.45 || sdy < 0.45) continue;
+              groundSubs.push({ mw, sub });
+              subAreaSum += sdx * sdy;
+            }
+          }
+          if (groundSubs.length > 0 && maxFullDz >= 0.20) {
+            const unionBox = buildUprightBoxFromLocalSubBoxes(
+              groundSubs,
+              fInfo,
+              rootInv,
+              false,
+              false,
+              STATIC_CULL_WALL_MARGIN_M,
+            );
+            const unionArea = unionBox ? Math.max(1e-4, unionBox.rawDx * unionBox.rawDy) : Infinity;
+            if (unionBox && unionBox.rawDx >= 0.45 && unionBox.rawDy >= 0.45
+              && unionBox.rawDx <= 18 && unionBox.rawDy <= 18
+              && (groundSubs.length === 1 || subAreaSum >= 0.45 * unionArea)) {
+              items.push({ key: `s:${obj.id ?? i}`, box: unionBox });
+            } else {
+              for (let gi = 0; gi < groundSubs.length; gi += 1) {
+                const sb = buildUprightBoxFromLocalSubBoxes(
+                  [groundSubs[gi]],
+                  fInfo,
+                  rootInv,
+                  false,
+                  false,
+                  STATIC_CULL_WALL_MARGIN_M,
+                );
+                if (sb && sb.rawDx >= 0.45 && sb.rawDy >= 0.45 && sb.rawDx <= 18 && sb.rawDy <= 18) {
+                  items.push({ key: `s:${obj.id ?? i}:${gi}`, box: sb });
+                }
+              }
+            }
           }
         }
       }
@@ -522,12 +1009,12 @@ const bucketKey = (bx, by) => ((bx & 0xffff) << 16 | (by & 0xffff)) >>> 0;
 /**
  * 2026-10-23 — can box `e` ever hold a ground point? contains() is only asked
  * at the terrain height, so a cell whose z range misses every terrain height
- * under its AABB (a dungeon inside a hill) never culls a blade. Terrain from
- * `oracle.lookup(lbKey).heights` (column-major 9 x 9, 24 m apart): the
- * terrain over the AABB lies between the min and max of the vertices of the
- * terrain cells it overlaps. Returns 0 (never), or 1 (it may, or unknown: a
- * landblock not resident, no lookup, off-world). Conservative: the tilt and
- * the under-ceiling margin are not used, plus 0.5 m of slack.
+ * under its AABB (a dungeon inside a hill, an upper-storey room, or a deep
+ * basement) never culls a blade. Terrain from `oracle.lookup(lbKey).heights`
+ * (column-major 9 x 9, 24 m apart): the terrain over the AABB lies between
+ * the min and max of the vertices of the terrain cells it overlaps. Returns 0
+ * (never), or 1 (it may, or unknown: a landblock not resident, no lookup,
+ * off-world).
  */
 function groundClassOf(oracle, e) {
   if (!oracle || typeof oracle.lookup !== "function" || !Number.isFinite(e.z0) || !Number.isFinite(e.z1)) return 1;
@@ -554,7 +1041,9 @@ function groundClassOf(oracle, e) {
       if (h > hi) hi = h;
     }
   }
-  return hi >= e.z0 - INDOOR_CULL_BELOW_FLOOR_M - 0.5 && lo <= e.z1 + 0.5 ? 1 : 0;
+  const upright = e.inv && Math.abs(e.inv[2]) < 1e-4 && Math.abs(e.inv[6]) < 1e-4 && Math.abs(e.inv[10] - 1) < 1e-3;
+  const maxGroundZ = upright ? (e.z1 - INDOOR_CULL_UNDER_CEILING_M + 0.4) : (e.z1 + 0.4);
+  return hi >= e.z0 - INDOOR_CULL_BELOW_FLOOR_M - 0.4 && lo <= maxGroundZ ? 1 : 0;
 }
 
 /**
@@ -773,13 +1262,15 @@ export function createInteriorMask(opts = {}) {
     if (bn > 0) {
       for (let i = 0; i < bn; i += 1) {
         const o = bKids[i];
-        bSum = (bSum + ((o && o.id) ? (o.id >>> 0) : (i + 1))) >>> 0;
+        const kc = o && Array.isArray(o.children) ? o.children.length : 0;
+        bSum = (bSum + ((o && o.id) ? (o.id >>> 0) : (i + 1)) + ((kc * 2654435761) >>> 0)) >>> 0;
       }
     }
     if (sn > 0) {
       for (let i = 0; i < sn; i += 1) {
         const o = sKids[i];
-        sSum = (sSum + ((o && o.id) ? (o.id >>> 0) : (i + 1))) >>> 0;
+        const kc = o && Array.isArray(o.children) ? o.children.length : 0;
+        sSum = (sSum + ((o && o.id) ? (o.id >>> 0) : (i + 1)) + ((kc * 2654435761) >>> 0)) >>> 0;
       }
     }
     return `|b:${bn}:${bSum}|s:${sn}:${sSum}`;

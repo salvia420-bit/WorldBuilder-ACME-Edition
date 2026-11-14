@@ -50,8 +50,10 @@ import { lbKeyFromXY, lbKeyOf } from "./landblock_lru.js";
 import {
   TERRAIN_CODE_TO_FAMILY,
   FAM_COUNT,
+  FAM_WATER,
   familyForCode,
 } from "./terrain_families.js";
+import { waterFlowTable, waterFlowEntry } from "./terrain_water_flow.js";
 
 // ----- constants (verbatim from ambient_runtime.js / the wasm side) --
 export const VERTEX_GRID = 9;
@@ -59,6 +61,74 @@ export const VERTEX_SPACING_M = 24.0;
 export const METERS_PER_LANDBLOCK = 192.0;
 const GRID_CELLS = VERTEX_GRID - 1;          // 8
 const VERTEX_COUNT = VERTEX_GRID * VERTEX_GRID; // 81
+
+// ----- shore classification constants (Item 6A) ----------------------
+export const SEA_WATER_CODES = Object.freeze([18, 19, 20]);
+export const OCEAN_SHORE_MIN_Z = -0.06;
+export const OCEAN_SHORE_MAX_Z = 2.30;
+export const OCEAN_SHORE_MIN_NZ = 0.80;
+export const RIVER_SHORE_MIN_ABOVE_WATER_M = -0.06;
+export const RIVER_SHORE_MAX_ABOVE_WATER_M = 2.20;
+export const RIVER_SHORE_MIN_NZ = 0.76;
+export const SHORE_ROAD_CLEARANCE_M = 0.5;
+export const RIVER_STANDING_FLOW_MIN = 0.03;
+
+/** True for ocean water codes: WaterShallowSea (18), WaterShallowStillSea (19), WaterDeepSea (20). */
+export function isSeaWaterCode(code) {
+  return code === 18 || code === 19 || code === 20;
+}
+
+/** True for any terrain code that paints water (codes 16..20, FauxWaterRunning 22, or FAM_WATER). */
+function isAnyWaterCode(code) {
+  return (code >= 16 && code <= 20) || code === 22 || familyForCode(code) === FAM_WATER;
+}
+
+/**
+ * Sample baked water flow velocity `(vx, vy, speed)` at world `(wx, wy)` from
+ * `data/water_flow.bin` (or an explicit parsed flow table). Returns null when no
+ * flow table or entry exists for the landblock.
+ */
+export function sampleWaterFlowTableAt(wx, wy, out, tableOverride) {
+  if (!Number.isFinite(wx) || !Number.isFinite(wy)) return null;
+  const tbl = tableOverride !== undefined ? tableOverride : waterFlowTable();
+  if (!tbl) return null;
+  const lbX = Math.floor(wx / METERS_PER_LANDBLOCK);
+  const lbY = Math.floor(wy / METERS_PER_LANDBLOCK);
+  if (lbX < 0 || lbX > 255 || lbY < 0 || lbY > 255) return null;
+  const entry = waterFlowEntry(tbl, ((lbX & 0xff) << 8) | (lbY & 0xff));
+  if (!entry) return null;
+  const localX = wx - lbX * METERS_PER_LANDBLOCK;
+  const localY = wy - lbY * METERS_PER_LANDBLOCK;
+  const cellXf = Math.min(Math.max(localX / VERTEX_SPACING_M, 0), GRID_CELLS);
+  const cellYf = Math.min(Math.max(localY / VERTEX_SPACING_M, 0), GRID_CELLS);
+  const cx0 = Math.floor(cellXf);
+  const cy0 = Math.floor(cellYf);
+  const cx1 = Math.min(cx0 + 1, GRID_CELLS);
+  const cy1 = Math.min(cy0 + 1, GRID_CELLS);
+  const fx = cellXf - cx0;
+  const fy = cellYf - cy0;
+  const scale = tbl.fullScaleUnits / 127.0;
+  const i00 = (cx0 * VERTEX_GRID + cy0) * 3;
+  const i10 = (cx1 * VERTEX_GRID + cy0) * 3;
+  const i01 = (cx0 * VERTEX_GRID + cy1) * 3;
+  const i11 = (cx1 * VERTEX_GRID + cy1) * 3;
+  const e00 = (entry[i00] - 128) * scale;
+  const n00 = (entry[i00 + 1] - 128) * scale;
+  const e10 = (entry[i10] - 128) * scale;
+  const n10 = (entry[i10 + 1] - 128) * scale;
+  const e01 = (entry[i01] - 128) * scale;
+  const n01 = (entry[i01 + 1] - 128) * scale;
+  const e11 = (entry[i11] - 128) * scale;
+  const n11 = (entry[i11 + 1] - 128) * scale;
+  const vx = (e00 * (1 - fx) + e10 * fx) * (1 - fy) + (e01 * (1 - fx) + e11 * fx) * fy;
+  const vy = (n00 * (1 - fx) + n10 * fx) * (1 - fy) + (n01 * (1 - fx) + n11 * fx) * fy;
+  const speed = Math.hypot(vx, vy);
+  const r = out || {};
+  r.vx = vx;
+  r.vy = vy;
+  r.speed = speed;
+  return r;
+}
 
 // How many cache hits between refreshes of the "which LBs are still attached
 // to terrainGroup" set that backs `stats().parkedHits`. Deliberately a HIT
@@ -292,6 +362,341 @@ function copyRoads(src) {
   return out;
 }
 
+function normalizeFlowSample(raw, out) {
+  if (!raw) return null;
+  let vx = NaN;
+  let vy = NaN;
+  if (Array.isArray(raw) || ArrayBuffer.isView(raw)) {
+    vx = +raw[0];
+    vy = +raw[1];
+  } else if (typeof raw === "object") {
+    vx = Number.isFinite(+raw.vx) ? +raw.vx : +raw.x;
+    vy = Number.isFinite(+raw.vy) ? +raw.vy : +raw.y;
+  }
+  if (!Number.isFinite(vx) || !Number.isFinite(vy)) return null;
+  const r = out || {};
+  r.vx = vx;
+  r.vy = vy;
+  r.speed = Math.hypot(vx, vy);
+  return r;
+}
+
+function lookupLatticeVertex(lookupFn, gx, gy, out) {
+  if (gx < 0 || gx > 2048 || gy < 0 || gy > 4912) return null;
+  const lbX0 = Math.min(gx >> 3, 255);
+  const col0 = gx - (lbX0 << 3);
+  const lbY0 = Math.min(gy >> 3, 614);
+  const row0 = gy - (lbY0 << 3);
+  let e = lookupFn(lbKeyFromXY(lbX0, lbY0));
+  let col = col0;
+  let row = row0;
+  if ((!e || (typeof e.lbY === "number" && e.lbY !== lbY0)) && col0 === 0 && lbX0 > 0) {
+    const eWest = lookupFn(lbKeyFromXY(lbX0 - 1, lbY0));
+    if (eWest && (typeof eWest.lbY !== "number" || eWest.lbY === lbY0)) {
+      e = eWest;
+      col = 8;
+    }
+  }
+  if ((!e || (typeof e.lbY === "number" && e.lbY !== lbY0)) && row0 === 0 && lbY0 > 0) {
+    const eSouth = lookupFn(lbKeyFromXY(lbX0, lbY0 - 1));
+    if (eSouth && (typeof eSouth.lbY !== "number" || eSouth.lbY === lbY0 - 1)) {
+      e = eSouth;
+      row = 8;
+    }
+  }
+  if ((!e || (typeof e.lbY === "number" && e.lbY !== lbY0 && e.lbY !== lbY0 - 1)) && col0 === 0 && row0 === 0 && lbX0 > 0 && lbY0 > 0) {
+    const eSW = lookupFn(lbKeyFromXY(lbX0 - 1, lbY0 - 1));
+    if (eSW && (typeof eSW.lbY !== "number" || eSW.lbY === lbY0 - 1)) {
+      e = eSW;
+      col = 8;
+      row = 8;
+    }
+  }
+  if (!e || !e.codes) return null;
+  const idx = col * VERTEX_GRID + row;
+  out.code = e.codes[idx] & 0x1f;
+  out.hasHeight = !!(e.heights && idx < e.heights.length);
+  out.height = out.hasHeight ? e.heights[idx] : NaN;
+  return out;
+}
+
+function evalOceanShoreInternal(sampleFn, lookupFn, flowFn, wx, wy, sampleScratch, vertScratch, flowScratch, out) {
+  const s = sampleFn(wx, wy, sampleScratch);
+  if (!s || !s.hasHeight || !s.normal) return null;
+  if (isAnyWaterCode(s.code)) return null;
+  if (!(s.height >= OCEAN_SHORE_MIN_Z && s.height <= OCEAN_SHORE_MAX_Z)) return null;
+  if (!(s.normal.z >= OCEAN_SHORE_MIN_NZ)) return null;
+  if (s.roadEdgeM <= SHORE_ROAD_CLEARANCE_M) return null;
+
+  const localX = wx - s.lbX * METERS_PER_LANDBLOCK;
+  const localY = wy - s.lbY * METERS_PER_LANDBLOCK;
+  const cellXf = Math.min(Math.max(localX / VERTEX_SPACING_M, 0), GRID_CELLS);
+  const cellYf = Math.min(Math.max(localY / VERTEX_SPACING_M, 0), GRID_CELLS);
+  const cx0 = Math.min(Math.floor(cellXf), GRID_CELLS - 1);
+  const cy0 = Math.min(Math.floor(cellYf), GRID_CELLS - 1);
+  const fx = cellXf - cx0;
+  const fy = cellYf - cy0;
+  const cc = s.cornerCodes;
+  const wc00 = cc && isAnyWaterCode(cc[0]) ? 1 : 0;
+  const wc10 = cc && isAnyWaterCode(cc[1]) ? 1 : 0;
+  const wc01 = cc && isAnyWaterCode(cc[2]) ? 1 : 0;
+  const wc11 = cc && isAnyWaterCode(cc[3]) ? 1 : 0;
+  const waterW = (wc00 * (1 - fx) + wc10 * fx) * (1 - fy) + (wc01 * (1 - fx) + wc11 * fx) * fy;
+  if (waterW > 0.48) return null;
+
+  const gx0 = s.lbX * GRID_CELLS + cx0;
+  const gy0 = s.lbY * GRID_CELLS + cy0;
+  let seaCount = 0;
+  let runningFreshCount = 0;
+  let toSeaX = 0;
+  let toSeaY = 0;
+  for (let gx = gx0 - 1; gx <= gx0 + 2; gx += 1) {
+    for (let gy = gy0 - 1; gy <= gy0 + 2; gy += 1) {
+      const v = lookupLatticeVertex(lookupFn, gx, gy, vertScratch);
+      if (!v) continue;
+      if (v.code === 16) {
+        runningFreshCount += 1;
+        continue;
+      }
+      const vx = gx * VERTEX_SPACING_M;
+      const vy = gy * VERTEX_SPACING_M;
+      let isCoastalSea = isSeaWaterCode(v.code);
+      if (!isCoastalSea && v.code === 17 && v.hasHeight && v.height <= 0.08) {
+        const fv = flowFn ? flowFn(vx, vy, flowScratch) : null;
+        if (!(fv && fv.speed >= RIVER_STANDING_FLOW_MIN)) {
+          isCoastalSea = true;
+        } else {
+          runningFreshCount += 1;
+        }
+      }
+      if (!isCoastalSea) continue;
+      seaCount += 1;
+      const dx = vx - wx;
+      const dy = vy - wy;
+      const w = 1.0 / Math.max(9.0, dx * dx + dy * dy);
+      toSeaX += dx * w;
+      toSeaY += dy * w;
+    }
+  }
+  if (seaCount === 0 || (runningFreshCount > 0 && seaCount <= runningFreshCount)) return null;
+
+  toSeaX += -s.normal.x * 0.05;
+  toSeaY += -s.normal.y * 0.05;
+  const seaLen = Math.hypot(toSeaX, toSeaY);
+  let tx = 1.0;
+  let ty = 0.0;
+  if (seaLen > 1e-6) {
+    tx = -toSeaY / seaLen;
+    ty = toSeaX / seaLen;
+  }
+  // Swash & wrack proximity bands (0..1): higher near the high-tide swash line.
+  const hNorm = (s.height - OCEAN_SHORE_MIN_Z) / (OCEAN_SHORE_MAX_Z - OCEAN_SHORE_MIN_Z);
+  const swash = Math.max(0, Math.min(1, 1.0 - Math.abs(hNorm - 0.22) * 2.1));
+  const wrack = Math.max(0, Math.min(1, 1.0 - Math.abs(hNorm - 0.36) * 1.8));
+
+  const r = out || {};
+  r.isOceanShore = true;
+  r.height = s.height;
+  r.code = s.code;
+  r.nx = s.normal.x;
+  r.ny = s.normal.y;
+  r.nz = s.normal.z;
+  r.tx = tx;
+  r.ty = ty;
+  r.waterW = waterW;
+  r.swash = swash;
+  r.wrack = wrack;
+  return r;
+}
+
+function evalRiverShoreInternal(
+  sampleFn,
+  lookupFn,
+  flowFn,
+  wx,
+  wy,
+  sampleScratch,
+  vertScratch,
+  oceanScratch,
+  flowScratch,
+  out,
+) {
+  const s = sampleFn(wx, wy, sampleScratch);
+  if (!s || !s.hasHeight || !s.normal) return null;
+  if (isAnyWaterCode(s.code)) return null;
+  if (!(s.normal.z >= RIVER_SHORE_MIN_NZ)) return null;
+  if (s.roadEdgeM <= SHORE_ROAD_CLEARANCE_M) return null;
+  const cc = s.cornerCodes;
+  if (cc && (isSeaWaterCode(cc[0]) || isSeaWaterCode(cc[1]) || isSeaWaterCode(cc[2]) || isSeaWaterCode(cc[3]))) {
+    return null;
+  }
+  if (evalOceanShoreInternal(sampleFn, lookupFn, flowFn, wx, wy, sampleScratch, vertScratch, flowScratch, oceanScratch) !== null) {
+    return null;
+  }
+
+  const localX = wx - s.lbX * METERS_PER_LANDBLOCK;
+  const localY = wy - s.lbY * METERS_PER_LANDBLOCK;
+  const cellXf = Math.min(Math.max(localX / VERTEX_SPACING_M, 0), GRID_CELLS);
+  const cellYf = Math.min(Math.max(localY / VERTEX_SPACING_M, 0), GRID_CELLS);
+  const cx0 = Math.min(Math.floor(cellXf), GRID_CELLS - 1);
+  const cy0 = Math.min(Math.floor(cellYf), GRID_CELLS - 1);
+  const fx = cellXf - cx0;
+  const fy = cellYf - cy0;
+  const wc00 = cc && isAnyWaterCode(cc[0]) ? 1 : 0;
+  const wc10 = cc && isAnyWaterCode(cc[1]) ? 1 : 0;
+  const wc01 = cc && isAnyWaterCode(cc[2]) ? 1 : 0;
+  const wc11 = cc && isAnyWaterCode(cc[3]) ? 1 : 0;
+  const waterW = (wc00 * (1 - fx) + wc10 * fx) * (1 - fy) + (wc01 * (1 - fx) + wc11 * fx) * fy;
+  if (waterW > 0.48) return null;
+
+  const gx0 = s.lbX * GRID_CELLS + cx0;
+  const gy0 = s.lbY * GRID_CELLS + cy0;
+  let riverCount = 0;
+  let nearestLowD2 = Infinity;
+  let nearestLowZ = NaN;
+  let nearestAnyD2 = Infinity;
+  let nearestAnyZ = NaN;
+  let toRiverX = 0;
+  let toRiverY = 0;
+  let flowSumX = 0;
+  let flowSumY = 0;
+  let flowWeightSum = 0;
+
+  // Pass 1: find adjacent river vertices, shoreline normal, flow sum, and nearest water Z.
+  for (let gx = gx0 - 1; gx <= gx0 + 2; gx += 1) {
+    for (let gy = gy0 - 1; gy <= gy0 + 2; gy += 1) {
+      const v = lookupLatticeVertex(lookupFn, gx, gy, vertScratch);
+      if (!v) continue;
+      const vx = gx * VERTEX_SPACING_M;
+      const vy = gy * VERTEX_SPACING_M;
+      let isRiver = v.code === 16;
+      let fv = null;
+      if (isRiver || v.code === 17) {
+        fv = flowFn ? flowFn(vx, vy, flowScratch) : null;
+        if (!isRiver && fv && fv.speed >= RIVER_STANDING_FLOW_MIN) {
+          isRiver = true;
+        }
+      }
+      if (!isRiver || !v.hasHeight || !Number.isFinite(v.height)) continue;
+
+      riverCount += 1;
+      const dx = vx - wx;
+      const dy = vy - wy;
+      const d2 = dx * dx + dy * dy;
+      const w = 1.0 / Math.max(9.0, d2);
+      toRiverX += dx * w;
+      toRiverY += dy * w;
+
+      if (d2 < nearestAnyD2) {
+        nearestAnyD2 = d2;
+        nearestAnyZ = v.height;
+      }
+      if (v.height <= s.height + 0.25 && d2 < nearestLowD2) {
+        nearestLowD2 = d2;
+        nearestLowZ = v.height;
+      }
+      if (fv && fv.speed > 1e-4) {
+        flowSumX += fv.vx * w;
+        flowSumY += fv.vy * w;
+        flowWeightSum += w;
+      }
+    }
+  }
+  if (riverCount === 0) return null;
+
+  const refWaterZ = Number.isFinite(nearestLowZ) ? nearestLowZ : nearestAnyZ;
+  if (!Number.isFinite(refWaterZ)) return null;
+
+  // Pass 2: inverse-distance weighted localWaterZ among river vertices on the same terrace.
+  let zWeighted = 0;
+  let zWeightSum = 0;
+  for (let gx = gx0 - 1; gx <= gx0 + 2; gx += 1) {
+    for (let gy = gy0 - 1; gy <= gy0 + 2; gy += 1) {
+      const v = lookupLatticeVertex(lookupFn, gx, gy, vertScratch);
+      if (!v || !v.hasHeight || !Number.isFinite(v.height)) continue;
+      let isRiver = v.code === 16;
+      if (!isRiver && v.code === 17 && flowFn) {
+        const fv = flowFn(gx * VERTEX_SPACING_M, gy * VERTEX_SPACING_M, flowScratch);
+        if (fv && fv.speed >= RIVER_STANDING_FLOW_MIN) isRiver = true;
+      }
+      if (!isRiver) continue;
+      if (Math.abs(v.height - refWaterZ) > 2.5) continue;
+      const dx = gx * VERTEX_SPACING_M - wx;
+      const dy = gy * VERTEX_SPACING_M - wy;
+      const w = 1.0 / Math.max(9.0, dx * dx + dy * dy);
+      zWeighted += v.height * w;
+      zWeightSum += w;
+    }
+  }
+  const localWaterZ = zWeightSum > 0 ? zWeighted / zWeightSum : refWaterZ;
+  const bankHeight = s.height - localWaterZ;
+  if (!(bankHeight >= RIVER_SHORE_MIN_ABOVE_WATER_M && bankHeight <= RIVER_SHORE_MAX_ABOVE_WATER_M)) {
+    return null;
+  }
+
+  // Also fold local point flow if available.
+  if (flowFn) {
+    const localFv = flowFn(wx, wy, flowScratch);
+    if (localFv && localFv.speed > 1e-4) {
+      const lw = 1.0 / 16.0;
+      flowSumX += localFv.vx * lw;
+      flowSumY += localFv.vy * lw;
+      flowWeightSum += lw;
+    }
+  }
+
+  toRiverX += -s.normal.x * 0.05;
+  toRiverY += -s.normal.y * 0.05;
+  const rLen = Math.hypot(toRiverX, toRiverY);
+  let stx = 1.0;
+  let sty = 0.0;
+  if (rLen > 1e-6) {
+    stx = -toRiverY / rLen;
+    sty = toRiverX / rLen;
+  }
+
+  let tx = stx;
+  let ty = sty;
+  const flowMag = Math.hypot(flowSumX, flowSumY);
+  const flowSpeed = flowWeightSum > 0 ? flowMag / flowWeightSum : 0;
+  if (flowMag > 1e-5) {
+    const fdx = flowSumX / flowMag;
+    const fdy = flowSumY / flowMag;
+    if (stx * fdx + sty * fdy < 0) {
+      stx = -stx;
+      sty = -sty;
+    }
+    const bx = fdx * 0.78 + stx * 0.22;
+    const by = fdy * 0.78 + sty * 0.22;
+    const bLen = Math.hypot(bx, by);
+    if (bLen > 1e-6) {
+      tx = bx / bLen;
+      ty = by / bLen;
+    } else {
+      tx = fdx;
+      ty = fdy;
+    }
+  } else if (-s.normal.x * stx - s.normal.y * sty < 0) {
+    tx = -stx;
+    ty = -sty;
+  }
+
+  const r = out || {};
+  r.isRiverShore = true;
+  r.height = s.height;
+  r.localWaterZ = localWaterZ;
+  r.bankHeight = bankHeight;
+  r.code = s.code;
+  r.nx = s.normal.x;
+  r.ny = s.normal.y;
+  r.nz = s.normal.z;
+  r.tx = tx;
+  r.ty = ty;
+  r.waterW = waterW;
+  r.flowSpeed = flowSpeed;
+  return r;
+}
+
 /**
  * Create a terrain oracle.
  *
@@ -303,9 +708,14 @@ function copyRoads(src) {
  *   `() => terrainGroup.children`, exactly as `scene3d/index.js:5355` wires
  *   `ambient_runtime`.
  * @param {number} [opts.parkRescanEveryHits] see PARK_RESCAN_EVERY_HITS.
+ * @param {(wx:number, wy:number, out?:object) => (object|null)} [opts.waterFlowAt]
+ *   optional override for water-flow queries in `riverShoreAt`.
+ * @param {object|null} [opts.waterFlowTable] optional explicit parsed water-flow table.
  */
 export function createTerrainOracle(opts = {}) {
   const getTerrainMeshes = opts.getTerrainMeshes || null;
+  const customWaterFlowAt = typeof opts.waterFlowAt === "function" ? opts.waterFlowAt : null;
+  const explicitFlowTable = opts.waterFlowTable;
   const parkRescanEveryHits = Number.isFinite(opts.parkRescanEveryHits)
     ? Math.max(1, opts.parkRescanEveryHits | 0)
     : PARK_RESCAN_EVERY_HITS;
@@ -759,6 +1169,61 @@ export function createTerrainOracle(opts = {}) {
     };
   }
 
+  const _shoreSampleScratch = {};
+  const _shoreVertScratch = { code: 0, hasHeight: false, height: 0 };
+  const _oceanCheckScratch = {};
+  const _flowScratch = { vx: 0, vy: 0, speed: 0 };
+
+  function oracleWaterFlowAt(wx, wy, out) {
+    if (customWaterFlowAt) {
+      return normalizeFlowSample(customWaterFlowAt(wx, wy, out), out);
+    }
+    return sampleWaterFlowTableAt(wx, wy, out, explicitFlowTable);
+  }
+
+  /**
+   * Ocean coastline classification at world `(wx, wy)` (AC frame, metres):
+   * dry shore (`0.02m <= height <= 2.30m`, `nz >= 0.80`, off-road) whose
+   * containing 24 m cell or 1-ring lattice neighbour carries sea water code
+   * `18` (`WaterShallowSea`), `19` (`WaterShallowStillSea`), or `20` (`WaterDeepSea`).
+   * Returns `null` on miss.
+   */
+  function oracleOceanShoreAt(wx, wy, out) {
+    return evalOceanShoreInternal(
+      sample,
+      lookup,
+      oracleWaterFlowAt,
+      wx,
+      wy,
+      _shoreSampleScratch,
+      _shoreVertScratch,
+      _flowScratch,
+      out,
+    );
+  }
+
+  /**
+   * River bank classification at world `(wx, wy)` (AC frame, metres):
+   * dry bank (`0.02m <= height - localWaterZ <= 1.20m`, `nz >= 0.76`, off-road,
+   * `!isOceanShore`) adjacent to `WaterRunning (16)` or flowing `WaterStandingFresh (17)`
+   * via `waterFlowAt`, returning normalized shoreline/current tangent `(tx, ty)`.
+   * Returns `null` on miss.
+   */
+  function oracleRiverShoreAt(wx, wy, out) {
+    return evalRiverShoreInternal(
+      sample,
+      lookup,
+      oracleWaterFlowAt,
+      wx,
+      wy,
+      _shoreSampleScratch,
+      _shoreVertScratch,
+      _oceanCheckScratch,
+      _flowScratch,
+      out,
+    );
+  }
+
   return {
     noteLandblock,
     invalidate,
@@ -766,6 +1231,9 @@ export function createTerrainOracle(opts = {}) {
     sample,
     sampleCode,
     heightAt,
+    waterFlowAt: oracleWaterFlowAt,
+    oceanShoreAt: oracleOceanShoreAt,
+    riverShoreAt: oracleRiverShoreAt,
     familyCoverage,
     hasLandblock,
     version,
@@ -774,4 +1242,80 @@ export function createTerrainOracle(opts = {}) {
     // Diagnostics — the live `oracleSelfTest()` in `terrain_vfx.js` walks these.
     keys: () => Array.from(cache.keys()),
   };
+}
+
+const _standaloneSampleScratch = {};
+const _standaloneVertScratch = { code: 0, hasHeight: false, height: 0 };
+const _standaloneOceanScratch = {};
+const _standaloneFlowScratch = { vx: 0, vy: 0, speed: 0 };
+
+/**
+ * Query water flow at `(wx, wy)` either through an `oracle` (if passed first)
+ * or directly from `waterFlowTable()`.
+ */
+export function waterFlowAt(oracleOrWx, wxOrWy, wyOrOut, maybeOut) {
+  if (oracleOrWx && typeof oracleOrWx === "object") {
+    if (typeof oracleOrWx.waterFlowAt === "function") {
+      return oracleOrWx.waterFlowAt(wxOrWy, wyOrOut, maybeOut);
+    }
+    return sampleWaterFlowTableAt(wxOrWy, wyOrOut, maybeOut);
+  }
+  return sampleWaterFlowTableAt(oracleOrWx, wxOrWy, wyOrOut);
+}
+
+/**
+ * Top-level helper forwarding `oceanShoreAt(oracle, wx, wy, out)` (works on both
+ * full `createTerrainOracle()` instances and `{ sample, lookup }` test stubs).
+ */
+export function oceanShoreAt(oracle, wx, wy, out) {
+  if (!oracle) return null;
+  if (typeof oracle.oceanShoreAt === "function") {
+    return oracle.oceanShoreAt(wx, wy, out);
+  }
+  if (typeof oracle.sample !== "function" || typeof oracle.lookup !== "function") {
+    return null;
+  }
+  const flowFn = typeof oracle.waterFlowAt === "function"
+    ? (x, y, o) => normalizeFlowSample(oracle.waterFlowAt(x, y, o), o)
+    : (x, y, o) => sampleWaterFlowTableAt(x, y, o);
+  return evalOceanShoreInternal(
+    (x, y, o) => oracle.sample(x, y, o),
+    (k) => oracle.lookup(k),
+    flowFn,
+    wx,
+    wy,
+    _standaloneSampleScratch,
+    _standaloneVertScratch,
+    _standaloneFlowScratch,
+    out,
+  );
+}
+
+/**
+ * Top-level helper forwarding `riverShoreAt(oracle, wx, wy, out)` (works on both
+ * full `createTerrainOracle()` instances and `{ sample, lookup, waterFlowAt? }` stubs).
+ */
+export function riverShoreAt(oracle, wx, wy, out) {
+  if (!oracle) return null;
+  if (typeof oracle.riverShoreAt === "function") {
+    return oracle.riverShoreAt(wx, wy, out);
+  }
+  if (typeof oracle.sample !== "function" || typeof oracle.lookup !== "function") {
+    return null;
+  }
+  const flowFn = typeof oracle.waterFlowAt === "function"
+    ? (x, y, o) => normalizeFlowSample(oracle.waterFlowAt(x, y, o), o)
+    : (x, y, o) => sampleWaterFlowTableAt(x, y, o);
+  return evalRiverShoreInternal(
+    (x, y, o) => oracle.sample(x, y, o),
+    (k) => oracle.lookup(k),
+    flowFn,
+    wx,
+    wy,
+    _standaloneSampleScratch,
+    _standaloneVertScratch,
+    _standaloneOceanScratch,
+    _standaloneFlowScratch,
+    out,
+  );
 }
