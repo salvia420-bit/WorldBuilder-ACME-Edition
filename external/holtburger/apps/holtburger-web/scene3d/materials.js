@@ -66,6 +66,20 @@ import { bc7Available, bc7TextureBytes, upgradeMaterialToBc7, bc7ClipAlphaGateFo
 // (xu7 / BC7 / pre, ~109 MB on a Holtburg ring) are not fetched: surfaces keep
 // the retail-resolution albedo they already decoded from the DAT record.
 import { lowBandwidth } from "./bandwidth_tier.js";
+export const LAGARDE_SPECULAR_OCCLUSION_GLSL = /* glsl */ `
+float lagardeSpecularOcclusion(float ndotv, float ao, float roughness) {
+  float clampedNdotV = clamp(ndotv, 0.0, 1.0);
+  float clampedAo = clamp(ao, 0.0, 1.0);
+  float r = clamp(roughness, 0.0, 1.0);
+  float base = max(0.0, clampedNdotV + clampedAo);
+  float exponent = exp2(-16.0 * r - 1.0);
+  return clamp(pow(base, exponent) - 1.0 + clampedAo, 0.0, 1.0);
+}
+`;
+
+// Milestone 1 — Near RVT fallback texture
+const _defaultRvtTexture = new THREE.DataTexture(new Uint8Array([80, 110, 50, 128]), 1, 1);
+_defaultRvtTexture.needsUpdate = true;
 // ST5 (`?texCompressedOnly`, SPEC §3 T15; pass 5 D-05.5) — materials BORN
 // compressed from the resident PVW preview; scalars-only surface decode;
 // lane-T full-tier upgrade + worker NRA; demote-to-preview primitive. Every
@@ -1584,6 +1598,39 @@ function _installCsmShaderPatch(material, csmState) {
       shader.uniforms.uCsmShade = { value: csmShade };
     }
 
+    // Milestone 1 — Near RVT (Runtime Virtual Texture) uniforms
+    if (csmState) {
+      if (!csmState.nearRvtTexture) csmState.nearRvtTexture = { value: _defaultRvtTexture };
+      if (!csmState.nearRvtParams) csmState.nearRvtParams = { value: new THREE.Vector4(0, 0, 128, 1 / 128) };
+      if (!csmState.nearRvtEnabled) csmState.nearRvtEnabled = { value: 1.0 };
+      shader.uniforms.tNearRvt = csmState.nearRvtTexture;
+      shader.uniforms.uNearRvtParams = csmState.nearRvtParams;
+      shader.uniforms.uNearRvtEnabled = csmState.nearRvtEnabled;
+    } else {
+      shader.uniforms.tNearRvt = { value: _defaultRvtTexture };
+      shader.uniforms.uNearRvtParams = { value: new THREE.Vector4(0, 0, 128, 1 / 128) };
+      shader.uniforms.uNearRvtEnabled = { value: 0.0 };
+    }
+    shader.uniforms.uWetness = VFX_GLOBALS.uWetness;
+    const isChitinOrResin = Boolean(
+      material.userData?.chitinClearcoat > 0 ||
+      material.userData?.clearcoat > 0 ||
+      material.userData?.isChitin ||
+      material.userData?.isBroodEgg ||
+      material.userData?.chitinResin ||
+      (material.name && /(chitin|olthoi|resin|egg)/i.test(material.name))
+    );
+    shader.uniforms.uClearcoat = material.userData?.uClearcoat || {
+      value: Number.isFinite(material.userData?.clearcoat)
+        ? material.userData.clearcoat
+        : (Number.isFinite(material.userData?.chitinClearcoat)
+          ? material.userData.chitinClearcoat
+          : (isChitinOrResin ? 1.0 : 0.0))
+    };
+    shader.uniforms.uClearcoatRoughness = material.userData?.uClearcoatRoughness || {
+      value: Number.isFinite(material.userData?.clearcoatRoughness) ? material.userData.clearcoatRoughness : 0.22
+    };
+
     // shadows-restore-5 (?csmDirectOnly, csm.js header): the sun-term hook
     // needs three's directional-light declarations (lights_pars_begin, still an
     // #include or already expanded by the light clamp) ahead of main(), where
@@ -1615,6 +1662,14 @@ uniform float uCsmBlend;
 uniform float uCsmSelDist;
 uniform float uCsmStrength;
 uniform float uCsmShade;
+uniform sampler2D tNearRvt;
+uniform vec4 uNearRvtParams;
+uniform float uNearRvtEnabled;
+uniform float uWetness;
+uniform float uClearcoat;
+uniform float uClearcoatRoughness;
+
+${LAGARDE_SPECULAR_OCCLUSION_GLSL}
 
 // Sample one cascade's shadow map at worldPos. Returns 1.0 for fully
 // lit, 0.0 for fully shadowed. Standard PCF-1-tap (3-tap unrolled for
@@ -1740,7 +1795,8 @@ void main() {`
       "#include <common>",
       `#include <common>
 varying vec3 vCsmWorldPos;
-varying float vCsmViewDepth;`
+varying float vCsmViewDepth;
+varying float vSkirtHeight;`
     );
     shader.vertexShader = shader.vertexShader.replace(
       "#include <project_vertex>",
@@ -1758,6 +1814,7 @@ varying float vCsmViewDepth;`
   // mvPosition is in view space (camera-relative). View-space depth
   // is -mvPosition.z (z is negative in front of camera).
   vCsmViewDepth = -mvPosition.z;
+  vSkirtHeight = transformed.z;
 }`
     );
 
@@ -1781,7 +1838,8 @@ varying float vCsmViewDepth;`
       "#include <common>",
       `#include <common>
 varying vec3 vCsmWorldPos;
-varying float vCsmViewDepth;`
+varying float vCsmViewDepth;
+varying float vSkirtHeight;`
     );
     // Inject the CSM shadow term right before final output composition.
     // `<dithering_fragment>` is the very last chunk in MeshStandard's
@@ -1800,6 +1858,120 @@ varying float vCsmViewDepth;`
     // shade 0.55 and strength 1 give 1.0 - 0.55 * 1.0 = 0.45 exactly in float32
     // (Sterbenz: 0.55f and 1 are within 2x, so the subtraction is exact), i.e.
     // the old `mix(0.45, 1.0, s)`. Strength 0 skips the taps (same output: 1).
+    // Milestone 1 — Near RVT Ground Skirt Blending for static models (bottom 0.0m - 0.55m)
+    if (!directOnly && shader.fragmentShader.includes("#include <map_fragment>")) {
+      shader.fragmentShader = shader.fragmentShader.replace(
+        "#include <map_fragment>",
+        `#include <map_fragment>
+{
+  if (uNearRvtEnabled > 0.5) {
+    vec2 _rvtUv = fract((vCsmWorldPos.xz - uNearRvtParams.xy) * uNearRvtParams.w);
+    vec4 _rvtSample = texture2D(tNearRvt, _rvtUv);
+    float _h = vSkirtHeight;
+    float _skirt = 1.0 - smoothstep(0.0, 0.55, max(0.0, _h));
+    diffuseColor.rgb = mix(diffuseColor.rgb, _rvtSample.rgb, _skirt * 0.7);
+  }
+  if (uWetness > 0.0) {
+    float _wetFactor = uWetness * smoothstep(0.2, 0.7, vNormal.y);
+    diffuseColor.rgb *= (1.0 - 0.25 * _wetFactor);
+  }
+}`
+      );
+    }
+
+    // Milestone 2 Feature 17: Analytic rain wetness roughness reduction
+    if (!directOnly && shader.fragmentShader.includes("#include <roughnessmap_fragment>")) {
+      shader.fragmentShader = shader.fragmentShader.replace(
+        "#include <roughnessmap_fragment>",
+        `#include <roughnessmap_fragment>
+{
+  if (uWetness > 0.0) {
+    float _wetFactor = uWetness * smoothstep(0.2, 0.7, vNormal.y);
+    roughnessFactor = mix(roughnessFactor, min(roughnessFactor, 0.18), _wetFactor);
+  }
+}`
+      );
+    }
+
+    // Milestone 3 Feature 25: Lagarde Frostbite Specular Occlusion for Standard Materials
+    if (!directOnly && !shader.fragmentShader.includes("_LAGARDE_SPEC_OCC_APPLIED") &&
+        shader.fragmentShader.includes("#include <aomap_fragment>")) {
+      shader.fragmentShader = shader.fragmentShader.replace(
+        "#include <aomap_fragment>",
+        `#include <aomap_fragment>
+#if defined( USE_ENVMAP ) && defined( STANDARD )
+#ifndef _LAGARDE_SPEC_OCC_APPLIED
+#define _LAGARDE_SPEC_OCC_APPLIED
+  float _lDotNV = saturate(dot(geometryNormal, geometryViewDir));
+  float _lAo = 1.0;
+  #ifdef USE_AOMAP
+    _lAo = (texture2D(aoMap, vAoMapUv).r - 1.0) * aoMapIntensity + 1.0;
+  #endif
+  reflectedLight.indirectSpecular *= lagardeSpecularOcclusion(_lDotNV, _lAo, material.roughness);
+#endif
+#endif`
+      );
+    }
+
+    // Milestone 2 Feature 17: Chitin / Resin Clearcoat BRDF Lobe (F0 = 0.04, coatRoughness = 0.22)
+    if (!directOnly && !shader.fragmentShader.includes("Feature 17: Chitin / Resin Clearcoat BRDF Lobe") &&
+        shader.fragmentShader.includes("#include <opaque_fragment>")) {
+      shader.fragmentShader = shader.fragmentShader.replace(
+        "#include <opaque_fragment>",
+        `{
+  if (uClearcoat > 0.0) {
+    // Feature 17: Chitin / Resin Clearcoat BRDF Lobe (F0 = 0.04, coatRoughness = 0.22)
+    float _ccCosTheta = saturate(dot(geometryNormal, geometryViewDir));
+    float _ccF = 0.04 + (1.0 - 0.04) * pow(1.0 - _ccCosTheta, 5.0);
+    vec3 _ccSpecular = vec3(0.0);
+
+    #if NUM_DIR_LIGHTS > 0
+    for (int i = 0; i < NUM_DIR_LIGHTS; i++) {
+      if (i >= 2) break;
+      vec3 _ccL = directionalLights[i].direction;
+      vec3 _ccH = normalize(_ccL + geometryViewDir);
+      float _ccNdotL = saturate(dot(geometryNormal, _ccL));
+      float _ccNdotH = saturate(dot(geometryNormal, _ccH));
+      float _ccVdotH = saturate(dot(geometryViewDir, _ccH));
+      float _ccF_spec = 0.04 + (1.0 - 0.04) * pow(1.0 - _ccVdotH, 5.0);
+      float _ccAlpha = uClearcoatRoughness * uClearcoatRoughness;
+      float _ccAlpha2 = _ccAlpha * _ccAlpha;
+      float _ccDenom = _ccNdotH * _ccNdotH * (_ccAlpha2 - 1.0) + 1.0;
+      float _ccD = _ccAlpha2 / (3.14159265 * _ccDenom * _ccDenom);
+      float _ccV = 0.25 / max(0.001, _ccVdotH * _ccVdotH);
+      _ccSpecular += directionalLights[i].color * _ccNdotL * (_ccF_spec * _ccD * _ccV);
+    }
+    #endif
+
+    #if NUM_POINT_LIGHTS > 0
+    for (int i = 0; i < NUM_POINT_LIGHTS; i++) {
+      if (i >= 4) break;
+      vec3 _ccPL = normalize(pointLights[i].position - geometryPosition);
+      vec3 _ccPH = normalize(_ccPL + geometryViewDir);
+      float _ccPNdotL = saturate(dot(geometryNormal, _ccPL));
+      float _ccPNdotH = saturate(dot(geometryNormal, _ccPH));
+      float _ccPVdotH = saturate(dot(geometryViewDir, _ccPH));
+      float _ccPF_spec = 0.04 + (1.0 - 0.04) * pow(1.0 - _ccPVdotH, 5.0);
+      float _ccPAlpha = uClearcoatRoughness * uClearcoatRoughness;
+      float _ccPAlpha2 = _ccPAlpha * _ccPAlpha;
+      float _ccPDenom = _ccPNdotH * _ccPNdotH * (_ccPAlpha2 - 1.0) + 1.0;
+      float _ccPD = _ccPAlpha2 / (3.14159265 * _ccPDenom * _ccPDenom);
+      float _ccPV = 0.25 / max(0.001, _ccPVdotH * _ccPVdotH);
+      _ccSpecular += pointLights[i].color * _ccPNdotL * (_ccPF_spec * _ccPD * _ccPV);
+    }
+    #endif
+
+    // Ambient / indirect bounce clearcoat rim
+    vec3 _ccRim = totalDiffuse * _ccF * (1.0 - uClearcoatRoughness);
+    _ccSpecular += _ccRim;
+
+    outgoingLight = outgoingLight * (1.0 - uClearcoat * _ccF) + _ccSpecular * uClearcoat;
+  }
+}
+#include <opaque_fragment>`
+      );
+    }
+
     if (!sunHook) {
       shader.fragmentShader = shader.fragmentShader.replace(
         "#include <dithering_fragment>",
@@ -1837,6 +2009,107 @@ varying float vCsmViewDepth;`
 export function installCsmShaderPatch(material, csmState) {
   _installCsmShaderPatch(material, csmState);
 }
+
+export const CLEARCOAT_DEFAULTS = Object.freeze({
+  f0: 0.04,
+  roughness: 0.22,
+  clearcoat: 1.0,
+});
+
+export function evalWetnessRoughness(roughness, wetFactor) {
+  const r = Math.max(0.0, Math.min(1.0, roughness));
+  const w = Math.max(0.0, Math.min(1.0, wetFactor));
+  return r * (1.0 - w) + Math.min(r, 0.18) * w;
+}
+
+export function evalClearcoatFresnel(cosTheta, f0 = 0.04) {
+  const c = Math.max(0.0, Math.min(1.0, cosTheta));
+  return f0 + (1.0 - f0) * Math.pow(1.0 - c, 5.0);
+}
+
+export function installClearcoatShaderPatch(material, opts = {}) {
+  if (!material) return;
+  const ccVal = Number.isFinite(opts.clearcoat) ? opts.clearcoat : 1.0;
+  const ccRough = Number.isFinite(opts.roughness) ? opts.roughness : 0.22;
+  material.userData = {
+    ...(material.userData || {}),
+    chitinClearcoat: ccVal,
+    clearcoatRoughness: ccRough,
+    clearcoatEnabled: true,
+  };
+  _chainBeforeCompile(material, (shader) => {
+    shader.uniforms.uClearcoat = { value: ccVal };
+    shader.uniforms.uClearcoatRoughness = { value: ccRough };
+
+    if (!shader.fragmentShader.includes("uniform float uClearcoat;")) {
+      shader.fragmentShader = shader.fragmentShader.replace(
+        "void main() {",
+        `uniform float uClearcoat;\nuniform float uClearcoatRoughness;\nvoid main() {`
+      );
+    }
+
+    if (!shader.fragmentShader.includes("Feature 17: Chitin / Resin Clearcoat BRDF Lobe") &&
+        shader.fragmentShader.includes("#include <opaque_fragment>")) {
+      shader.fragmentShader = shader.fragmentShader.replace(
+        "#include <opaque_fragment>",
+        `{
+  if (uClearcoat > 0.0) {
+    // Feature 17: Chitin / Resin Clearcoat BRDF Lobe (F0 = 0.04, coatRoughness = 0.22)
+    float _ccCosTheta = saturate(dot(geometryNormal, geometryViewDir));
+    float _ccF = 0.04 + (1.0 - 0.04) * pow(1.0 - _ccCosTheta, 5.0);
+    vec3 _ccSpecular = vec3(0.0);
+
+    #if NUM_DIR_LIGHTS > 0
+    for (int i = 0; i < NUM_DIR_LIGHTS; i++) {
+      if (i >= 2) break;
+      vec3 _ccL = directionalLights[i].direction;
+      vec3 _ccH = normalize(_ccL + geometryViewDir);
+      float _ccNdotL = saturate(dot(geometryNormal, _ccL));
+      float _ccNdotH = saturate(dot(geometryNormal, _ccH));
+      float _ccVdotH = saturate(dot(geometryViewDir, _ccH));
+      float _ccF_spec = 0.04 + (1.0 - 0.04) * pow(1.0 - _ccVdotH, 5.0);
+      float _ccAlpha = uClearcoatRoughness * uClearcoatRoughness;
+      float _ccAlpha2 = _ccAlpha * _ccAlpha;
+      float _ccDenom = _ccNdotH * _ccNdotH * (_ccAlpha2 - 1.0) + 1.0;
+      float _ccD = _ccAlpha2 / (3.14159265 * _ccDenom * _ccDenom);
+      float _ccV = 0.25 / max(0.001, _ccVdotH * _ccVdotH);
+      _ccSpecular += directionalLights[i].color * _ccNdotL * (_ccF_spec * _ccD * _ccV);
+    }
+    #endif
+
+    #if NUM_POINT_LIGHTS > 0
+    for (int i = 0; i < NUM_POINT_LIGHTS; i++) {
+      if (i >= 4) break;
+      vec3 _ccPL = normalize(pointLights[i].position - geometryPosition);
+      vec3 _ccPH = normalize(_ccPL + geometryViewDir);
+      float _ccPNdotL = saturate(dot(geometryNormal, _ccPL));
+      float _ccPNdotH = saturate(dot(geometryNormal, _ccPH));
+      float _ccPVdotH = saturate(dot(geometryViewDir, _ccPH));
+      float _ccPF_spec = 0.04 + (1.0 - 0.04) * pow(1.0 - _ccPVdotH, 5.0);
+      float _ccPAlpha = uClearcoatRoughness * uClearcoatRoughness;
+      float _ccPAlpha2 = _ccPAlpha * _ccPAlpha;
+      float _ccPDenom = _ccPNdotH * _ccPNdotH * (_ccPAlpha2 - 1.0) + 1.0;
+      float _ccPD = _ccPAlpha2 / (3.14159265 * _ccPDenom * _ccPDenom);
+      float _ccPV = 0.25 / max(0.001, _ccPVdotH * _ccPVdotH);
+      _ccSpecular += pointLights[i].color * _ccPNdotL * (_ccPF_spec * _ccPD * _ccPV);
+    }
+    #endif
+
+    // Ambient / indirect bounce clearcoat rim
+    vec3 _ccRim = totalDiffuse * _ccF * (1.0 - uClearcoatRoughness);
+    _ccSpecular += _ccRim;
+
+    outgoingLight = outgoingLight * (1.0 - uClearcoat * _ccF) + _ccSpecular * uClearcoat;
+  }
+}
+#include <opaque_fragment>`
+      );
+    }
+  });
+  _installPatchSetCacheKey(material);
+  material.needsUpdate = true;
+}
+export const applyChitinClearcoat = installClearcoatShaderPatch;
 
 // Visual-fidelity Phase 3.1 — Parallax Occlusion Mapping (POM).
 //
@@ -2053,7 +2326,12 @@ float _pomHeightG = 1.0;
 vec2 _pomUvG = vec2(0.0);${gradCommonDecl}
 
 vec2 _pomPerturbedUv(vec2 baseUv, vec3 vTanDir, float depthScale, int steps) {
-  float _pz = max(abs(vTanDir.z), 0.18);
+  float _rawZ = abs(vTanDir.z);
+  // Milestone 2 Feature 16: Grazing angle height attenuation evaluated on raw un-clamped VdotN
+  float _grazeAtten = smoothstep(0.08, 0.32, _rawZ);
+  depthScale *= _grazeAtten;
+  float _pz = max(_rawZ, 0.18);
+
   int baseSteps = min(16, max(4, steps));
   int nSteps = baseSteps;
   if (uPomGraze > 0.5) {
@@ -2082,6 +2360,25 @@ vec2 _pomPerturbedUv(vec2 baseUv, vec3 vTanDir, float depthScale, int steps) {
   float afterDepth = currentHeight - currentLayerDepth;
   float prevSample = ${samplePomHeight("prevUv")};
   float beforeDepth = (1.0 - prevSample) - (currentLayerDepth - layerStep);
+
+  // Milestone 2 Feature 16: Secant binary-search refinement (3 iterations for 8x precision)
+  for (int sec = 0; sec < 3; sec++) {
+    float denSec = afterDepth - beforeDepth;
+    float wSec = denSec < -1e-6 ? clamp(afterDepth / denSec, 0.0, 1.0) : 0.5;
+    vec2 midUv = mix(currentUv, prevUv, wSec);
+    float midLayerDepth = mix(currentLayerDepth, currentLayerDepth - layerStep, wSec);
+    float midHeight = 1.0 - ${samplePomHeight("midUv")};
+    if (midLayerDepth >= midHeight) {
+      currentUv = midUv;
+      currentLayerDepth = midLayerDepth;
+      afterDepth = midHeight - midLayerDepth;
+    } else {
+      prevUv = midUv;
+      beforeDepth = midHeight - midLayerDepth;
+      prevSample = 1.0 - midHeight;
+    }
+  }
+
   float den = afterDepth - beforeDepth;
   float w = den < -1e-6 ? clamp(afterDepth / den, 0.0, 1.0) : 0.0;
   _pomHeightG = clamp(mix(1.0 - currentHeight, prevSample, w), 0.0, 1.0);
@@ -2242,6 +2539,30 @@ export const CREVICE_AO_DEFAULTS = Object.freeze({
   gamma: 0.5,          // EDGE_RIM_DEFAULT_GAMMA from harness.mjs
   texelSize: [1.0 / 512.0, 1.0 / 512.0],
 });
+
+// Milestone 3 (Features 24 & 25) — Jimenez multi-bounce and Lagarde specular occlusion
+export function lagardeSpecularOcclusion(ndotv, ao, roughness) {
+  const clampedNdotV = Math.max(0.0, Math.min(1.0, ndotv));
+  const clampedAo = Math.max(0.0, Math.min(1.0, ao));
+  const r = Math.max(0.0, Math.min(1.0, roughness));
+  const base = Math.max(0.0, clampedNdotV + clampedAo);
+  const exponent = Math.pow(2.0, -16.0 * r - 1.0);
+  return Math.max(0.0, Math.min(1.0, Math.pow(base, exponent) - 1.0 + clampedAo));
+}
+
+export function jimenezMultiBounce(visibility, albedo) {
+  const v = Math.max(0.0, Math.min(1.0, visibility));
+  const evalChannel = (alb) => {
+    const a = 2.0404 * alb - 0.3324;
+    const b = -4.7951 * alb + 0.6417;
+    const c = 2.7552 * alb + 0.6903;
+    const poly = ((v * a + b) * v + c) * v;
+    return Math.max(v, Math.min(1.0, poly));
+  };
+  if (typeof albedo === "number") return evalChannel(albedo);
+  if (Array.isArray(albedo)) return [evalChannel(albedo[0]), evalChannel(albedo[1]), evalChannel(albedo[2])];
+  return evalChannel(0.5);
+}
 
 /**
  * Installs Micro-Surface Crevice Ambient Occlusion (Feature 6), Specular Edge Rim
@@ -2494,6 +2815,18 @@ if (uCreviceAoEnabled > 0.5) {
       shader.fragmentShader = shader.fragmentShader.replace(
         "#include <aomap_fragment>",
         creviceAoCode
+      );
+    }
+
+    // Feature 13: Toksvig normal-variance roughness expansion
+    if (shader.fragmentShader.includes("#include <normal_fragment_maps>")) {
+      shader.fragmentShader = shader.fragmentShader.replace(
+        "#include <normal_fragment_maps>",
+        `#include <normal_fragment_maps>
+{
+  float _toksvigSigma2 = dot(dFdx(normal), dFdx(normal)) + dot(dFdy(normal), dFdy(normal));
+  roughnessFactor = sqrt(clamp(roughnessFactor * roughnessFactor + min(0.35, 2.0 * _toksvigSigma2), 0.0, 1.0));
+}`
       );
     }
 
@@ -3259,6 +3592,26 @@ export function applyClipMapRenderState(target, hasPalette) {
     // would be dead state that misleads the next reader.
     target.transparent = false;
     target.depthWrite = true;
+    // Milestone 2 Feature 11: Alpha-to-Coverage (A2C) on Base1ClipMap with fwidth cutout scaling
+    if (!target.isMaterial && !target.map) {
+      target.alphaToCoverage = true;
+      const a2cClipMapHook = function a2cClipMapHook(shader) {
+        if (shader.fragmentShader.includes("#include <alphatest_fragment>")) {
+          shader.fragmentShader = shader.fragmentShader.replace(
+            "#include <alphatest_fragment>",
+            `#ifdef USE_ALPHATEST
+  diffuseColor.a = clamp((diffuseColor.a - alphaTest) / max(fwidth(diffuseColor.a), 1e-4) + 0.5, 0.0, 1.0);
+  if (diffuseColor.a < 0.001) discard;
+#endif`
+          );
+        }
+      };
+      if (typeof target.onBeforeCompile === "function") {
+        _chainBeforeCompile(target, a2cClipMapHook);
+      } else {
+        target.onBeforeCompile = a2cClipMapHook;
+      }
+    }
     return;
   }
   target.blending = THREE.CustomBlending;
@@ -3267,6 +3620,47 @@ export function applyClipMapRenderState(target, hasPalette) {
   target.blendEquation = THREE.AddEquation;       // BLENDOP_ADD
   target.transparent = true;
   target.depthWrite = true; // retail keeps z-writes on for the alpha-tested arm
+  target.alphaToCoverage = true;
+}
+
+/**
+ * Edge-dilated coverage-preserving texture filter (Survey R2 Feature 12).
+ * Bleeds valid RGB colors into neighboring zero-alpha/boundary pixels before mipmapping,
+ * eliminating white leaf fringe halos on foliage cutout cards.
+ */
+export function dilateRgbaTexture(data, width, height, alphaThreshold = 128) {
+  if (!data || width <= 0 || height <= 0) return data;
+  const out = new Uint8Array(data.length);
+  out.set(data);
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const idx = (y * width + x) * 4;
+      if (data[idx + 3] < alphaThreshold) {
+        let rAcc = 0, gAcc = 0, bAcc = 0, count = 0;
+        for (let dy = -1; dy <= 1; dy++) {
+          const ny = y + dy;
+          if (ny < 0 || ny >= height) continue;
+          for (let dx = -1; dx <= 1; dx++) {
+            const nx = x + dx;
+            if (nx < 0 || nx >= width) continue;
+            const nidx = (ny * width + nx) * 4;
+            if (data[nidx + 3] >= alphaThreshold) {
+              rAcc += data[nidx];
+              gAcc += data[nidx + 1];
+              bAcc += data[nidx + 2];
+              count++;
+            }
+          }
+        }
+        if (count > 0) {
+          out[idx] = Math.round(rAcc / count);
+          out[idx + 1] = Math.round(gAcc / count);
+          out[idx + 2] = Math.round(bAcc / count);
+        }
+      }
+    }
+  }
+  return out;
 }
 
 // === 2026-06-20 — `?particleUnlit` (DEFAULT ON) ============================
@@ -5998,6 +6392,17 @@ export class MaterialCache {
 
   _materialFromFlags(surfaceTypeFlags, texture, category, normalTexture, overrides, heightTexture, surfaceFloats) {
     const flags = surfaceTypeFlags >>> 0;
+    if (((flags & SURFACE_TYPE.Base1ClipMap) !== 0) && texture && texture.image && texture.image.data && !texture.userData?.__dilated) {
+      texture.image.data = dilateRgbaTexture(
+        texture.image.data,
+        texture.image.width,
+        texture.image.height,
+        surfaceFloats?.hasPalette ? 100 : 128
+      );
+      texture.userData = texture.userData || {};
+      texture.userData.__dilated = true;
+      texture.needsUpdate = true;
+    }
     // Wave 8 (2026-05-28) — Surface (0x08) trailing T/L/D triplet.
     // Pre-Wave-8 these were silently dropped; the bit flags drove
     // hardcoded effect strengths. Now each effect uses the actual
@@ -6499,11 +6904,17 @@ export class MaterialCache {
         }
         return this.fallbackMaterial;
       }
-      const tex = surfacePixelsToTexture(sp.pixels, sp.width, sp.height);
-      // Phase 7 follow-on #7+8: the wasm `SurfacePixels` exposes the
-      // raw `Surface.surface_type` bitfield via `surfaceType`. Older
-      // wasm builds without the getter fall through to `0` (opaque).
       const surfaceTypeFlags = (sp.surfaceType ?? 0) >>> 0;
+      const isClipMap = (surfaceTypeFlags & SURFACE_TYPE.Base1ClipMap) !== 0;
+      let rawPixels = sp.pixels;
+      if (isClipMap && rawPixels && rawPixels.length >= sp.width * sp.height * 4) {
+        rawPixels = dilateRgbaTexture(rawPixels, sp.width, sp.height, sp.hasPalette ? 100 : 128);
+      }
+      const tex = surfacePixelsToTexture(rawPixels, sp.width, sp.height);
+      if (isClipMap) {
+        tex.userData = tex.userData || {};
+        tex.userData.__dilated = true;
+      }
       // Phase 1.4: wasm classifier emits a u8 category on
       // SurfacePixels.category — undefined on older builds, in
       // which case `_materialFromFlags` falls through to generic
@@ -7059,7 +7470,16 @@ export class MaterialCache {
     } catch (_) {
       return null;
     }
-    const tex = surfacePixelsToTexture(pixels, w, h);
+    const isClipMap = ((surfaceType >>> 0) & SURFACE_TYPE.Base1ClipMap) !== 0;
+    let rawPixels = pixels;
+    if (isClipMap && rawPixels && rawPixels.length >= w * h * 4) {
+      rawPixels = dilateRgbaTexture(rawPixels, w, h, sfHasPalette ? 100 : 128);
+    }
+    const tex = surfacePixelsToTexture(rawPixels, w, h);
+    if (isClipMap) {
+      tex.userData = tex.userData || {};
+      tex.userData.__dilated = true;
+    }
     try { if (typeof sp.free === "function") sp.free(); } catch (_) {}
     // Entity-owned material starts as a plain opaque MeshStandardMaterial —
     // mirrors entities.js line 594-600's existing entity-recolour
@@ -7233,7 +7653,17 @@ export class MaterialCache {
     } catch (_) {
       return this.fallbackMaterial;
     }
-    const tex = surfacePixelsToTexture(pixels, w, h);
+    const surfaceTypeFlags = surfaceType >>> 0;
+    const isClipMap = (surfaceTypeFlags & SURFACE_TYPE.Base1ClipMap) !== 0;
+    let rawPixels = pixels;
+    if (isClipMap && rawPixels && rawPixels.length >= w * h * 4) {
+      rawPixels = dilateRgbaTexture(rawPixels, w, h, hasPaletteB ? 100 : 128);
+    }
+    const tex = surfacePixelsToTexture(rawPixels, w, h);
+    if (isClipMap) {
+      tex.userData = tex.userData || {};
+      tex.userData.__dilated = true;
+    }
     // === Wave 2.B — procedural normals (2026-05-28) ===
     // Gate normal-pixel → GPU texture conversion on the preset flag, same
     // as the main `get()` path above. Saves the DataTexture alloc + GL
@@ -7242,8 +7672,7 @@ export class MaterialCache {
       ? surfacePixelsToNormalTexture(normalPixels, w, h)
       : null;
     const heightTex = heightPixels ? surfacePixelsToHeightTexture(heightPixels, w, h) : null;
-    // Phase 7 follow-on #7+8: surface_type bitfield from the wasm side.
-    const surfaceTypeFlags = surfaceType >>> 0;
+    // Phase 7 follow-on #7+8: surface_type bitfield from the wasm side (surfaceTypeFlags captured above).
     try { if (typeof sp.free === "function") sp.free(); } catch (_) {}
     const overrides = { roughness: roughnessOverride, normalScale: normalScaleOverride };
     const surfaceFloats = {

@@ -236,7 +236,7 @@ export function unitArrayReason(member) {
   if (!member.map) return "no-map";
   const em = member.emissive;
   if (em && (em.r !== 0 || em.g !== 0 || em.b !== 0)) return "luminous";
-  if (member.vertexColors || member.flatShading || member.wireframe || member.alphaHash || member.alphaToCoverage || member.premultipliedAlpha) return "feature";
+  if (member.vertexColors || member.flatShading || member.wireframe || member.alphaHash || member.premultipliedAlpha) return "feature";
   if (member.clippingPlanes && member.clippingPlanes.length > 0) return "clipping";
   if (member.polygonOffset || member.stencilWrite) return "raster-state";
   if (member.side !== THREE.DoubleSide && member.side !== THREE.FrontSide) return "side";

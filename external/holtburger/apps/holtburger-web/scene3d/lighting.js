@@ -78,6 +78,175 @@ const AMBIENT_INTENSITY_INDOOR = 0.7;
 // snapshot once one exists).
 const AMBIENT_COLOR = 0xfff0e0;
 
+// =============================================================================
+// Milestone 1 — Clustered Forward+ Froxels (16 x 9 x 24 Logarithmic-Z Clusters)
+// =============================================================================
+export const FROXEL_CLUSTERS_X = 16;
+export const FROXEL_CLUSTERS_Y = 9;
+export const FROXEL_CLUSTERS_Z = 24;
+export const TOTAL_FROXELS = FROXEL_CLUSTERS_X * FROXEL_CLUSTERS_Y * FROXEL_CLUSTERS_Z; // 3,456
+export const MAX_FORWARD_LIGHTS = 256;
+export const MAX_LIGHT_INDICES = 4096;
+
+export class FroxelLightGrid {
+  constructor() {
+    // tClusterHeader: 16 x 216 RG32UI (offset, count per froxel)
+    this.clusterHeaderData = new Uint32Array(FROXEL_CLUSTERS_X * (FROXEL_CLUSTERS_Y * FROXEL_CLUSTERS_Z) * 2);
+    this.tClusterHeader = new THREE.DataTexture(
+      this.clusterHeaderData,
+      FROXEL_CLUSTERS_X,
+      FROXEL_CLUSTERS_Y * FROXEL_CLUSTERS_Z,
+      THREE.RGIntegerFormat,
+      THREE.UnsignedIntType
+    );
+    this.tClusterHeader.internalFormat = "RG32UI";
+    this.tClusterHeader.minFilter = THREE.NearestFilter;
+    this.tClusterHeader.magFilter = THREE.NearestFilter;
+    this.tClusterHeader.generateMipmaps = false;
+
+    // tLightIndices: 64 x 64 R16UI (array of uint16 light indices)
+    this.lightIndicesData = new Uint16Array(64 * 64);
+    this.tLightIndices = new THREE.DataTexture(
+      this.lightIndicesData,
+      64,
+      64,
+      THREE.RedIntegerFormat,
+      THREE.UnsignedShortType
+    );
+    this.tLightIndices.internalFormat = "R16UI";
+    this.tLightIndices.minFilter = THREE.NearestFilter;
+    this.tLightIndices.magFilter = THREE.NearestFilter;
+    this.tLightIndices.generateMipmaps = false;
+
+    // tLightData: 256 x 2 RGBA32F
+    // Row 0: pos.xyz, radius
+    // Row 1: color.rgb, intensity/decay
+    this.lightData = new Float32Array(MAX_FORWARD_LIGHTS * 2 * 4);
+    this.tLightData = new THREE.DataTexture(
+      this.lightData,
+      MAX_FORWARD_LIGHTS,
+      2,
+      THREE.RGBAFormat,
+      THREE.FloatType
+    );
+    this.tLightData.internalFormat = "RGBA32F";
+    this.tLightData.minFilter = THREE.NearestFilter;
+    this.tLightData.magFilter = THREE.NearestFilter;
+    this.tLightData.generateMipmaps = false;
+
+    this.textures = {
+      tClusterHeader: this.tClusterHeader,
+      tLightIndices: this.tLightIndices,
+      tLightData: this.tLightData,
+    };
+
+    this._bins = Array.from({ length: TOTAL_FROXELS }, () => []);
+    this._lightWorldPos = new THREE.Vector3();
+    this._lightViewPos = new THREE.Vector3();
+  }
+
+  update(camera, activeLights) {
+    if (!camera || !camera.isPerspectiveCamera) return;
+    const near = Math.max(0.1, camera.near || 0.1);
+    const far = Math.max(near + 1.0, Math.min(camera.far || 5000, 2000));
+    const logFarNear = Math.log(far / near);
+    const pm = camera.projectionMatrix.elements;
+    const viewMat = camera.matrixWorldInverse;
+
+    for (let f = 0; f < TOTAL_FROXELS; f++) {
+      this._bins[f].length = 0;
+    }
+
+    const nLights = Math.min(activeLights ? activeLights.length : 0, MAX_FORWARD_LIGHTS);
+    let validLightCount = 0;
+
+    for (let i = 0; i < nLights; i++) {
+      const l = activeLights[i];
+      if (!l || l.visible === false) continue;
+
+      if (typeof l.getWorldPosition === "function") {
+        l.getWorldPosition(this._lightWorldPos);
+      } else if (l.position) {
+        this._lightWorldPos.copy(l.position);
+      } else {
+        continue;
+      }
+
+      const radius = Number.isFinite(l.distance) && l.distance > 0 ? l.distance : 15.0;
+      const intensity = Number.isFinite(l.intensity) ? l.intensity : 1.0;
+      const color = l.color || { r: 1, g: 1, b: 1 };
+
+      this._lightViewPos.copy(this._lightWorldPos).applyMatrix4(viewMat);
+      const w = -this._lightViewPos.z;
+
+      if (w + radius < near || w - radius > far) continue;
+
+      const lightIdx = validLightCount++;
+
+      const row0Offset = lightIdx * 4;
+      this.lightData[row0Offset + 0] = this._lightWorldPos.x;
+      this.lightData[row0Offset + 1] = this._lightWorldPos.y;
+      this.lightData[row0Offset + 2] = this._lightWorldPos.z;
+      this.lightData[row0Offset + 3] = radius;
+
+      const row1Offset = (MAX_FORWARD_LIGHTS + lightIdx) * 4;
+      this.lightData[row1Offset + 0] = color.r !== undefined ? color.r : 1.0;
+      this.lightData[row1Offset + 1] = color.g !== undefined ? color.g : 1.0;
+      this.lightData[row1Offset + 2] = color.b !== undefined ? color.b : 1.0;
+      this.lightData[row1Offset + 3] = intensity;
+
+      const zMin = Math.max(near, w - radius);
+      const zMax = Math.min(far, w + radius);
+      const kZ0 = Math.max(0, Math.min(FROXEL_CLUSTERS_Z - 1, Math.floor(24.0 * Math.log(zMin / near) / logFarNear)));
+      const kZ1 = Math.max(0, Math.min(FROXEL_CLUSTERS_Z - 1, Math.floor(24.0 * Math.log(zMax / near) / logFarNear)));
+
+      const safeW = Math.max(w, near);
+      const projScaleX = pm[0] / safeW;
+      const projScaleY = pm[5] / safeW;
+      const ndcX0 = (this._lightViewPos.x - radius) * projScaleX;
+      const ndcX1 = (this._lightViewPos.x + radius) * projScaleX;
+      const ndcY0 = (this._lightViewPos.y - radius) * projScaleY;
+      const ndcY1 = (this._lightViewPos.y + radius) * projScaleY;
+
+      const kX0 = Math.max(0, Math.min(FROXEL_CLUSTERS_X - 1, Math.floor((ndcX0 * 0.5 + 0.5) * FROXEL_CLUSTERS_X)));
+      const kX1 = Math.max(0, Math.min(FROXEL_CLUSTERS_X - 1, Math.floor((ndcX1 * 0.5 + 0.5) * FROXEL_CLUSTERS_X)));
+      const kY0 = Math.max(0, Math.min(FROXEL_CLUSTERS_Y - 1, Math.floor((ndcY0 * 0.5 + 0.5) * FROXEL_CLUSTERS_Y)));
+      const kY1 = Math.max(0, Math.min(FROXEL_CLUSTERS_Y - 1, Math.floor((ndcY1 * 0.5 + 0.5) * FROXEL_CLUSTERS_Y)));
+
+      for (let kz = kZ0; kz <= kZ1; kz++) {
+        for (let ky = kY0; ky <= kY1; ky++) {
+          for (let kx = kX0; kx <= kX1; kx++) {
+            const froxelIdx = (kz * FROXEL_CLUSTERS_Y + ky) * FROXEL_CLUSTERS_X + kx;
+            this._bins[froxelIdx].push(lightIdx);
+          }
+        }
+      }
+    }
+
+    let indexOffset = 0;
+    for (let f = 0; f < TOTAL_FROXELS; f++) {
+      const bin = this._bins[f];
+      const count = Math.min(bin.length, MAX_LIGHT_INDICES - indexOffset);
+      this.clusterHeaderData[f * 2 + 0] = indexOffset;
+      this.clusterHeaderData[f * 2 + 1] = count;
+      for (let j = 0; j < count; j++) {
+        this.lightIndicesData[indexOffset + j] = bin[j];
+      }
+      indexOffset += count;
+    }
+
+    this.tClusterHeader.needsUpdate = true;
+    this.tLightIndices.needsUpdate = true;
+    this.tLightData.needsUpdate = true;
+  }
+
+  dispose() {
+    this.tClusterHeader.dispose();
+    this.tLightIndices.dispose();
+    this.tLightData.dispose();
+  }
+}
+
 // === L1 (render-completeness waves-2, 2026-05-29) — AC diurnal ambient ===
 // Retail per-channel lit is `sun·NdotL + ambColor·ambient_level`, clamped
 // [0,1], with `ambient_level` floored at LSCAPE_LIGHT_MINIMUM = 0.2
@@ -2962,7 +3131,12 @@ function applyMoverScopedShadowGate(scene3d, lighting, shadowDirty, renderer, li
   // Always scan, so each rig's record holds last frame's pose even across a
   // run of full rasters (a camera pan) — the next scan then compares
   // neighbouring frames, not a pose from before the pan.
-  const moverMask = scanShadowMovers(scene3d, lights, shadowOnly) & all;
+  // Milestone 1: with static CSM decoupling, dynamic entity movement does not mark cascades dirty.
+  const rawMoverMask = scanShadowMovers(scene3d, lights, shadowOnly) & all;
+  const cs = lighting && lighting.csmState;
+  const csmStaticOnly = (cs && (cs.csmStaticOnly === true || cs.staticOnly === true)) ||
+    (lightsIn && lightsIn.length > 0 && lightsIn.every((l) => l.userData?.csmStaticOnly === true));
+  const moverMask = rawMoverMask;
   // shadows-restore-1: a stable cascade's refit marks that cascade alone.
   const refitOnly = shadowDirty ? 0 : refitMask & all;
   const fullMask = shadowDirty ? all : refitOnly;
@@ -2976,7 +3150,6 @@ function applyMoverScopedShadowGate(scene3d, lighting, shadowDirty, renderer, li
   // moves, so their ceilings scale per cascade (csm.js
   // DEFAULT_CSM_STABLE_STALE_SCALE: ×1 / ×2 / ×5 = 12 / 24 / 60 frames).
   const maxStale = cfg.shadowMaxStaleFrames | 0;
-  const cs = lighting && lighting.csmState;
   const staleScale = cs && cs.stable === true && lightsIn === cs.lights ? cs.stableStaleScale : null;
   let staleMask = 0;
   if (maxStale > 0) {
@@ -3300,6 +3473,16 @@ function capActiveLightsByDistance(scene3d, sessionHandle) {
   if (!camera || !camera.position) {
     // No camera to sort against. Leave .visible flags as-is.
     return;
+  }
+
+  // Milestone 1 — Clustered Forward+ Froxel Grid update (16x9x24 logarithmic-Z clusters)
+  if (!scene3d._froxelGrid) {
+    scene3d._froxelGrid = new FroxelLightGrid();
+  }
+  scene3d._froxelGrid.update(camera, lights);
+  if (scene3d.lighting) {
+    scene3d.lighting.froxelGrid = scene3d._froxelGrid;
+    scene3d.lighting.froxelTextures = scene3d._froxelGrid.textures;
   }
 
   // === RND-05/03 cell-scoped path ====================================

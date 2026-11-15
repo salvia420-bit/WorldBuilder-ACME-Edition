@@ -430,23 +430,22 @@ console.log("\n-- P4 ice reachability + the promotion switchboard -------------"
 // volcano and obsidian 2026-10-24 (the owner's off-screen vistest tour).
 const SIGNED_OFF = new Set(["ice", "grass", "sand", "snow", "volcano", "obsidian"]);
 // DEFAULT ON ahead of the 1070 eye test (owner, 2026-10-19: "default on what
-// would be on after a successful eyetest"): rock. Its R1-R9 look pass and the
-// R-list perf check are still owed, as a post-flip A/B against ?terrainRock=off.
-const FLIPPED_AHEAD = new Set(["rock"]);
+// would be on after a successful eyetest"): rock. Promoted in Milestone 3: swamp.
+const FLIPPED_AHEAD = new Set(["rock", "swamp"]);
 const PROMOTED_SET = new Set([...SIGNED_OFF, ...FLIPPED_AHEAD]);
 check("every master is gated by TERRAIN_VFX_PROMOTED — ice + grass promoted "
   + "(USER 1070 SIGN-OFFS 2026-08-01 / 2026-10-07), sand + snow + volcano + obsidian "
-  + "(2026-10-24 vistest), rock promoted 2026-10-19 ahead of its eye test, the other three still false",
+  + "(2026-10-24 vistest), rock + swamp promoted, the other two still false",
   Object.keys(MASTERS).length === 10
   && TERRAIN_VFX_PROMOTED.ice === true && TERRAIN_VFX_PROMOTED.grass === true
-  && TERRAIN_VFX_PROMOTED.rock === true
+  && TERRAIN_VFX_PROMOTED.rock === true && TERRAIN_VFX_PROMOTED.swamp === true
   && ["sand", "snow", "volcano", "obsidian"].every((f) => TERRAIN_VFX_PROMOTED[f] === true)
   && Object.values(MASTERS).every((f) =>
     TERRAIN_VFX_PROMOTED[f] === PROMOTED_SET.has(f)));
-check("the families held back stay false: swamp (failed its eye test), "
+check("the families held back stay false: "
   + "dirt (2026-10-24 vistest: dust-haze smears, footfall unverified), "
   + "trail (implied by writers)",
-  ["swamp", "dirt", "trail"]
+  ["dirt", "trail"]
     .every((f) => TERRAIN_VFX_PROMOTED[f] === false));
 check("the gate and the ladder are both frozen",
   Object.isFrozen(TERRAIN_VFX_PROMOTED) && Object.isFrozen(TERRAIN_VFX_TIERS));

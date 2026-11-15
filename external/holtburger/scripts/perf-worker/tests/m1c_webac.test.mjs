@@ -383,7 +383,11 @@ await check("recipe start commands come from the queue item verbatim (npm, dat l
 // A whole rep against a fake box + fake Chrome (real loopback CDP WebSockets)
 // ------------------------------------------------------------------------------------------
 const require = createRequire(import.meta.url);
-const PWC = process.env.PLAYWRIGHT_CORE || "/home/wbterminal/.npm/_npx/e41f203b7505f1fb/node_modules/playwright-core";
+const PWC = [
+  process.env.PLAYWRIGHT_CORE,
+  "/workspace/wb/mnt1/ac-refs/webac/node_modules/playwright-core",
+  "/home/wbterminal/.npm/_npx/e41f203b7505f1fb/node_modules/playwright-core",
+].find((p) => p && existsSync(p)) || "/home/wbterminal/.npm/_npx/e41f203b7505f1fb/node_modules/playwright-core";
 const { wsServer: WSS } = require(`${PWC}/lib/utilsBundle.js`);
 const GOOD = "ANGLE (NVIDIA, NVIDIA GeForce GTX 1070 (0x00001B81) Direct3D11 vs_5_0 ps_5_0, D3D11)";
 const tagOf = (e) => (/^\/\*m1c:(\w+)\*\//.exec(String(e)) || [])[1] || (/innerWidth/.test(e) ? "size" : "fn");

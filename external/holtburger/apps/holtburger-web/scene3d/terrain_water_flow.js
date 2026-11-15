@@ -756,3 +756,69 @@ export const WATER_FOAM_APPLY_GLSL = `
 /** The sheen's ripple slope, evaluated at both flow-advected positions. */
 export const WATER_FLOW_RIPPLE_SLOPE_GLSL =
   "mix(waterRippleSlope(gp - waterOffB), waterRippleSlope(gp - waterOffA), waterPhaseW)";
+
+// ---------------------------------------------------------------------------
+// Dedicated Post-Opaque Water Pass Math & Helpers (Milestone 3 — Features 19–22)
+// (WaterPass class itself lives in scene3d/water_pass.js to decouple postprocessing)
+// ---------------------------------------------------------------------------
+
+import * as THREE from "three";
+import { LAGARDE_SPECULAR_OCCLUSION_GLSL } from "./ibl_environment.js";
+
+export function waterPassEnabled(qualityFlags, search) {
+  try {
+    const s = search ?? (typeof window !== "undefined" ? window.location?.search : "") ?? "";
+    const v = new URLSearchParams(s).get("waterPass");
+    if (v != null) {
+      const lv = String(v).toLowerCase();
+      if (lv === "off" || lv === "0" || lv === "false" || lv === "no") return false;
+      if (lv === "on" || lv === "1" || lv === "true" || lv === "yes") return true;
+    }
+  } catch (_) {}
+  return !!qualityFlags?.waterPass;
+}
+
+export function evalBeerLambertTransmittance(depth, sigma = [0.22, 0.10, 0.04]) {
+  const d = Math.max(0.0, depth);
+  return [
+    Math.exp(-sigma[0] * d),
+    Math.exp(-sigma[1] * d),
+    Math.exp(-sigma[2] * d),
+  ];
+}
+
+export function evalDepthFoam(waterThickness, thresholdM = 0.35) {
+  return Math.max(0.0, Math.min(1.0, 1.0 - waterThickness / thresholdM));
+}
+
+export function resolveSsrReflection(rayResult, screenColor, cubeMapColor) {
+  const confidence = rayResult?.hit ? Math.max(0.0, Math.min(1.0, rayResult.confidence ?? 1.0)) : 0.0;
+  return [
+    cubeMapColor[0] * (1.0 - confidence) + screenColor[0] * confidence,
+    cubeMapColor[1] * (1.0 - confidence) + screenColor[1] * confidence,
+    cubeMapColor[2] * (1.0 - confidence) + screenColor[2] * confidence,
+  ];
+}
+
+/**
+ * Evaluates whether a camera or altitude is submerged beneath the water plane.
+ * Mirrors the GLSL geometric test: `camWorld.y < uWaterLevel`.
+ */
+export function evalWaterSubmersion(cameraOrAltitude, waterLevel = 0.0) {
+  const y = typeof cameraOrAltitude === "number"
+    ? cameraOrAltitude
+    : (cameraOrAltitude?.position?.y ?? 0.0);
+  return y < waterLevel;
+}
+
+/**
+ * Evaluates the geometric water column depth delta at a seabed world position.
+ * Mirrors the GLSL water depth delta calculation in WATER_PASS_FRAG.
+ */
+export function evalWaterColumnDelta(seabedY, waterLevel = 0.0, camY = 0.0) {
+  if (camY <= waterLevel) {
+    return seabedY <= waterLevel ? Math.max(0.0, waterLevel - seabedY) : 0.0;
+  }
+  return seabedY < waterLevel + 0.05 ? Math.max(0.0, waterLevel - seabedY) : 0.0;
+}
+

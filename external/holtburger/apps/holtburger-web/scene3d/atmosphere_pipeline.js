@@ -86,6 +86,8 @@ import { MsaaWorldComposer, msaaWorldOnlyEnabled, msaaWorldSnapshot } from "./ms
 // 2026-10-30 (round 3 R3-2) — `?skipEmptyPasses` (DEFAULT OFF): the world pass's
 // mask-0 render on an `?indoorLandscapeGate` skip frame draws an empty scene.
 import { skipEmptyPassesEnabled, installSkipEmptyRenderPass } from "./skip_empty_passes.js";
+// Milestone 3 (Features 19–22) — Dedicated post-opaque water pass
+import { WaterPass, waterPassEnabled } from "./water_pass.js";
 
 // Phase 5 PView render-order fix (2026-05-25) — layer-mask constants.
 // Mirrors `scene3d/index.js` (RENDER_LAYER_WORLD/RENDER_LAYER_INDOOR).
@@ -1113,6 +1115,7 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
     bloom: bloomOpt = true,
     vignette: vignetteOpt = false,
     ssao: ssaoOpt = false,
+    waterPass: waterPassOpt,
     lensFlare: lensFlareOpt = false,
     portalStencil = false,
     portalPunch = false,
@@ -2069,6 +2072,26 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
       })
     : null;
   if (underwaterSubmersionPass) composer.addPass(underwaterSubmersionPass);
+  // Milestone 3 (Features 19–22) — dedicated post-opaque water pass: runs
+  // right after opaque world render into W and before ssaoPass, reading
+  // composer.depthTexture and resolved opaque scene color.
+  const isWaterPassOn = waterPassOpt !== undefined ? !!waterPassOpt : waterPassEnabled(opts?.qualityFlags);
+  const waterPass = isWaterPassOn
+    ? new WaterPass(camera, {
+        depthSource: () => (
+          stableDepthShare
+            ? (composer.depthRenderTarget ? composer.depthRenderTarget.depthTexture : null)
+            : composer.inputBuffer.depthTexture
+        ),
+        depthTexture: stableDepthShare
+          ? (composer.depthRenderTarget ? composer.depthRenderTarget.depthTexture : null)
+          : composer.inputBuffer.depthTexture,
+        envCubeTexture: opts?.envCubeTexture || scene.environment || null,
+        envCubeSource: () => opts?.envCubeSource?.() || scene.environment || null,
+        waterLevelSource: () => opts?.atmosphereRuntime?.waterLevel ?? 0.0,
+      })
+    : null;
+  if (waterPass) composer.addPass(waterPass);
   // AO reads the composer's stable depth copy (needsDepthTexture), so it must
   // run after the world pass and before the pass that composites it.
   if (ssaoPass) composer.addPass(ssaoPass);
@@ -2296,6 +2319,7 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
     cellsMaskPass.setCamera(cam);
     cellsPostMaskPass.setCamera(cam);
     if (underwaterSubmersionPass) underwaterSubmersionPass.camera = cam;
+    if (waterPass) waterPass.camera = cam;
     retargetFxPass(cam);
     activeCamera = cam;
   }
@@ -2828,6 +2852,10 @@ export function createAtmospherePipeline(renderer, scene, camera, opts) {
         return composer.depthRenderTarget ? composer.depthRenderTarget.depthTexture : null;
       }
       return composer.inputBuffer.depthTexture;
+    },
+
+    get waterPass() {
+      return waterPass;
     },
 
     setCamera(cam) {

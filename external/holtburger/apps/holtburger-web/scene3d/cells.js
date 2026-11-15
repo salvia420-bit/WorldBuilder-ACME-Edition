@@ -1693,6 +1693,83 @@ function buildFusedMultiSurfaceStatic(groups, materialCache) {
   return { geometry: fused, materials };
 }
 
+// =============================================================================
+// Milestone 1 — EnvCell 9-coefficient L2 Spherical Harmonics (108 bytes / cell)
+// Precomputes 1-bounce indirect bounce lighting probe per EnvCell from ambient,
+// emissive meshes and interior lights. Evaluated via Ramamoorthi polynomials.
+// =============================================================================
+export function computeEnvCellL2Sh(snap) {
+  const sh = new Float32Array(27);
+  // Base ambient: outdoor portal connected gets daylight tint, enclosed dungeon gets warm stone ambient.
+  const hasExteriorPortal = Array.isArray(snap.portalCellIds) && snap.portalCellIds.length > 0;
+  const baseR = hasExteriorPortal ? 0.22 : 0.12;
+  const baseG = hasExteriorPortal ? 0.24 : 0.10;
+  const baseB = hasExteriorPortal ? 0.28 : 0.08;
+  const Y0 = 0.282095;
+  sh[0] = baseR / Y0;
+  sh[1] = baseG / Y0;
+  sh[2] = baseB / Y0;
+
+  // Static snapshot lights and emissives
+  const statics = snap.staticSnaps;
+  if (Array.isArray(statics)) {
+    const cx = snap.cellOriginX || 0;
+    const cy = snap.cellOriginY || 0;
+    const cz = snap.cellOriginZ || 0;
+    for (let i = 0; i < statics.length; i++) {
+      const so = statics[i];
+      if (!so) continue;
+      // Lights / braziers / crystals
+      const dx = (so.x || 0) - cx;
+      const dy = (so.y || 0) - cy;
+      const dz = (so.z || 0) - cz;
+      const distSq = dx * dx + dy * dy + dz * dz;
+      const dist = Math.sqrt(distSq) || 1.0;
+      const nx = dx / dist, ny = dy / dist, nz = dz / dist;
+      // Light flux contribution
+      const flux = 0.08 / Math.max(1.0, distSq * 0.05);
+      const lr = 1.0 * flux, lg = 0.85 * flux, lb = 0.6 * flux; // warm torch tint
+      const Y1 = 0.488603 * ny;
+      const Y2 = 0.488603 * nz;
+      const Y3 = 0.488603 * nx;
+      const Y4 = 1.092548 * nx * ny;
+      const Y5 = 1.092548 * ny * nz;
+      const Y6 = 0.315392 * (3.0 * nz * nz - 1.0);
+      const Y7 = 1.092548 * nx * nz;
+      const Y8 = 0.546274 * (nx * nx - ny * ny);
+
+      sh[3] += lr * Y1;  sh[4] += lg * Y1;  sh[5] += lb * Y1;
+      sh[6] += lr * Y2;  sh[7] += lg * Y2;  sh[8] += lb * Y2;
+      sh[9] += lr * Y3;  sh[10] += lg * Y3; sh[11] += lb * Y3;
+      sh[12] += lr * Y4; sh[13] += lg * Y4; sh[14] += lb * Y4;
+      sh[15] += lr * Y5; sh[16] += lg * Y5; sh[17] += lb * Y5;
+      sh[18] += lr * Y6; sh[19] += lg * Y6; sh[20] += lb * Y6;
+      sh[21] += lr * Y7; sh[22] += lg * Y7; sh[23] += lb * Y7;
+      sh[24] += lr * Y8; sh[25] += lg * Y8; sh[26] += lb * Y8;
+    }
+  }
+  return sh;
+}
+
+/** Evaluate Ramamoorthi & Hanrahan 2001 irradiance polynomials for an L2 SH probe. */
+export function evaluateRamamoorthiSh(sh, normal) {
+  const x = normal.x, y = normal.y, z = normal.z;
+  const c1 = 0.429043, c2 = 0.511664, c3 = 0.743125, c4 = 0.886227, c5 = 0.247708;
+  const out = { r: 0, g: 0, b: 0 };
+  const channels = ["r", "g", "b"];
+  for (let c = 0; c < 3; c++) {
+    const val =
+      c1 * sh[24 + c] * (x * x - y * y) +
+      c3 * sh[18 + c] * z * z +
+      c4 * sh[0 + c] -
+      c5 * sh[18 + c] +
+      2.0 * c1 * (sh[12 + c] * x * y + sh[21 + c] * x * z + sh[15 + c] * y * z) +
+      2.0 * c2 * (sh[9 + c] * x + sh[3 + c] * y + sh[6 + c] * z);
+    out[channels[c]] = Math.max(0, val);
+  }
+  return out;
+}
+
 export async function buildEnvCellsForLandblock(scene3d, landblockId, wasmExports) {
   if (!scene3d || !scene3d.cellsGroup) {
     throw new Error("buildEnvCellsForLandblock: scene3d.cellsGroup missing");
@@ -2232,6 +2309,7 @@ export async function buildEnvCellsForLandblock(scene3d, landblockId, wasmExport
   // Task #9 — interior props with a default_animation (0x03); peeled out of the
   // frozen per-cell mesh path (when ?animScenery is on) and handed to the
   // world-frame animated builder so banners/flags wave indoors too.
+
   const animatedInteriorStatics = [];
   const animSceneryOn = animSceneryEnabled();
   // `?interiorWallsFirst`: one statics closure per cell, parallel to newCells.
@@ -2240,21 +2318,18 @@ export async function buildEnvCellsForLandblock(scene3d, landblockId, wasmExport
   for (const snap of snapshots) {
     const cellContainer = new THREE.Group();
     cellContainer.name = `envcell-${snap.cellId.toString(16).padStart(8, "0")}`;
+    const l2sh = computeEnvCellL2Sh(snap);
     cellContainer.userData = {
       cellId: snap.cellId,
       environmentId: snap.environmentId,
       portalCellIds: snap.portalCellIds,
       isEnvCell: true,
-      // geom-audit: expected vs attached stab accounting for
-      // __diag.geometry.audit(). `expectedStatics` = the EnvCell's
-      // authored stab count; `peeledAnimated` counts stabs routed to
-      // the animated-scenery builder (attached under this container a
-      // beat later); `missingStaticDids` lists stabs dropped for lack
-      // of geometry (each already console-warned with a reason).
       expectedStatics: snap.staticSnaps.length,
       peeledAnimated: 0,
       missingStaticDids: [],
     };
+    Object.defineProperty(cellContainer.userData, "l2sh", { value: l2sh, enumerable: false, writable: true, configurable: true });
+    Object.defineProperty(cellContainer.userData, "envCellSh", { value: l2sh, enumerable: false, writable: true, configurable: true });
 
     const meshGroup = new THREE.Group();
     meshGroup.name = `mesh-${snap.cellId.toString(16).padStart(8, "0")}`;

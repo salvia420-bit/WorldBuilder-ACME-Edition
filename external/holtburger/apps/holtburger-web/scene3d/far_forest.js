@@ -33,9 +33,11 @@ import { prewarmSubtree } from "./bake_prewarm.js";
 import { geomBundlesActive, assembleModels as assembleGeomBundles, bundleToPartGroups } from "./geom_bundles.js";
 
 const BASE_URL = "../../dist/farforest/";
-const VIEWS = 8;
+export const VIEWS = 8;
+export const OCTAHEDRAL_VIEWS = 16;
+export const OCTAHEDRAL_GRID = 4;
 const CELL_PX = 128;
-const ATLAS_COLS = 16;              // 2 models x 8 views per atlas row
+const ATLAS_COLS = 16;              // 2 models x 8 views per atlas row, or 1 model x 16 octahedral views
 const MAX_MODELS = 96;
 const ATLAS_ROWS = Math.ceil((MAX_MODELS * VIEWS) / ATLAS_COLS);
 const MAX_INSTANCES = 262144;
@@ -97,10 +99,33 @@ export function decodeRegion(buf) {
   }
   return { n, pos, sy, model, lbCount };
 }
+/** Upper-hemisphere octahedral direction to UV in [0, 1]. */
+export function dirToHemiOctahedral(dir) {
+  const z = Math.max(0, dir.z ?? 0);
+  const l1 = Math.abs(dir.x) + Math.abs(dir.y) + z;
+  const inv = l1 > 1e-6 ? 1.0 / l1 : 1.0;
+  const px = dir.x * inv;
+  const py = dir.y * inv;
+  const u = (px + py + 1.0) * 0.5;
+  const v = (px - py + 1.0) * 0.5;
+  return [Math.max(0, Math.min(1, u)), Math.max(0, Math.min(1, v))];
+}
+
+/** UV in [0, 1] to upper-hemisphere direction vector. */
+export function hemiOctahedralToDir(u, v) {
+  const up = u * 2.0 - 1.0;
+  const vp = v * 2.0 - 1.0;
+  const px = (up + vp) * 0.5;
+  const py = (up - vp) * 0.5;
+  const pz = Math.max(0, 1.0 - (Math.abs(px) + Math.abs(py)));
+  const len = Math.hypot(px, py, pz) || 1.0;
+  return new THREE.Vector3(px / len, py / len, pz / len);
+}
+
 /** The atlas cell (column, row) of model m, view k. */
-export function atlasCell(m, k) { const c = m * VIEWS + k; return [c % ATLAS_COLS, Math.floor(c / ATLAS_COLS)]; }
+export function atlasCell(m, k, views = VIEWS) { const c = m * views + k; return [c % ATLAS_COLS, Math.floor(c / ATLAS_COLS)]; }
 /** The bake camera's azimuth for view k (radians, counter-clockwise from +x, the model's own frame). */
-export function viewAzimuth(k) { return (k / VIEWS) * Math.PI * 2; }
+export function viewAzimuth(k, views = VIEWS) { return (k / views) * Math.PI * 2; }
 /** Distance-based instance decimation stride for distant far-forest regions. */
 export function farForestRegionStride(distM) {
   if (!(distM > 3800)) return 1;
@@ -123,9 +148,12 @@ uniform vec3 uCamForward;             // AC camera forward unit vector (zero = c
 uniform float uCamConeCos;            // cos(halfDiagFov + guardMargin)
 uniform vec2 uRange;                  // (fade start, end) metres
 uniform vec2 uAtlasGrid;              // (columns, rows)
+uniform float uOctahedral;            // 1.0 = 4x4 upper-hemisphere octahedral barycentric, 0.0 = 8-azimuth
 out vec2 vUv;
 out vec2 vUv1;        // the next view's cell (the two nearest azimuth views, cross-dithered in the fragment stage)
+out vec2 vUv2;        // third view for 4x4 octahedral barycentric triangle
 flat out float vViewF; // 0 = all view vUv, 1 = all view vUv1
+out vec3 vBaryWeights;// barycentric weights for octahedral 3-view blend
 out float vDist;
 out float vFogDist;
 flat out vec2 vLb;
@@ -167,6 +195,46 @@ void main() {
   float cell1 = float(m) * ${VIEWS}.0 + k1;
   vec2 cxy1 = vec2(mod(cell1, uAtlasGrid.x), floor(cell1 / uAtlasGrid.x));
   vUv1 = (cxy1 + corner) / uAtlasGrid;
+  vUv2 = vUv;
+  vBaryWeights = vec3(1.0 - vViewF, vViewF, 0.0);
+
+  if (uOctahedral > 0.5) {
+    // 4x4 upper-hemisphere octahedral mapping in tree local yaw space
+    vec3 camRel = uCamAc - iPos;
+    float cYaw = cos(-iScaleYaw.y);
+    float sYaw = sin(-iScaleYaw.y);
+    vec3 localCam = vec3(camRel.x * cYaw - camRel.y * sYaw, camRel.x * sYaw + camRel.y * cYaw, max(1.0, camRel.z));
+    vec3 vDir = normalize(localCam);
+    float l1 = abs(vDir.x) + abs(vDir.y) + vDir.z;
+    vec2 octP = vDir.xy / max(l1, 1e-4);
+    vec2 octUv = clamp(vec2((octP.x + octP.y + 1.0) * 0.5, (octP.x - octP.y + 1.0) * 0.5), 0.0, 1.0);
+    vec2 gridP = octUv * 3.0;
+    vec2 iG = clamp(floor(gridP), vec2(0.0), vec2(2.0));
+    vec2 fG = gridP - iG;
+    vec2 v0, v1, v2;
+    vec3 bary;
+    if (fG.x + fG.y < 1.0) {
+      v0 = iG;
+      v1 = iG + vec2(1.0, 0.0);
+      v2 = iG + vec2(0.0, 1.0);
+      bary = vec3(1.0 - fG.x - fG.y, fG.x, fG.y);
+    } else {
+      v0 = iG + vec2(1.0, 1.0);
+      v1 = iG + vec2(1.0, 0.0);
+      v2 = iG + vec2(0.0, 1.0);
+      bary = vec3(fG.x + fG.y - 1.0, 1.0 - fG.y, 1.0 - fG.x);
+    }
+    float idx0 = v0.y * 4.0 + v0.x;
+    float idx1 = v1.y * 4.0 + v1.x;
+    float idx2 = v2.y * 4.0 + v2.x;
+    float c0 = float(m) * 16.0 + idx0;
+    float c1 = float(m) * 16.0 + idx1;
+    float c2 = float(m) * 16.0 + idx2;
+    vUv = (vec2(mod(c0, uAtlasGrid.x), floor(c0 / uAtlasGrid.x)) + corner) / uAtlasGrid;
+    vUv1 = (vec2(mod(c1, uAtlasGrid.x), floor(c1 / uAtlasGrid.x)) + corner) / uAtlasGrid;
+    vUv2 = (vec2(mod(c2, uAtlasGrid.x), floor(c2 / uAtlasGrid.x)) + corner) / uAtlasGrid;
+    vBaryWeights = bary;
+  }
   vDist = dist;
   vLb = floor(iPos.xy / 192.0);
   vec4 mv = modelViewMatrix * vec4(p, 1.0);
@@ -180,7 +248,9 @@ precision highp float;
 precision highp sampler2D;
 in vec2 vUv;
 in vec2 vUv1;
+in vec2 vUv2;
 flat in float vViewF;
+in vec3 vBaryWeights;
 in float vDist;
 in float vFogDist;
 flat in vec2 vLb;
@@ -192,6 +262,7 @@ uniform vec3 uAcSunColor;
 uniform vec3 uAcAmbColor;
 uniform float uAcAmbLevel;
 uniform float uGain;
+uniform float uOctahedral;
 #ifdef HB_FF_PRESENCE
 uniform highp sampler2D hbLbPresence;
 uniform vec2 hbLbPresenceOrigin;
@@ -207,8 +278,11 @@ void main() {
   // ordered dither offset from the presence dither below (no correlated pattern between the two)
   vec4 tA = texture(uAtlas, vUv);
   vec4 tB = texture(uAtlas, vUv1);
+  vec4 tC = texture(uAtlas, vUv2);
   ivec2 hbV = (ivec2(gl_FragCoord.xy) + ivec2(2, 1)) & 3;
-  vec4 t = ((hbBayer[hbV.y * 4 + hbV.x] + 0.5) / 16.0 < vViewF) ? tB : tA;
+  vec4 tDither = ((hbBayer[hbV.y * 4 + hbV.x] + 0.5) / 16.0 < vViewF) ? tB : tA;
+  vec4 tBary = vBaryWeights.x * tA + vBaryWeights.y * tB + vBaryWeights.z * tC;
+  vec4 t = mix(tDither, tBary, clamp(uOctahedral, 0.0, 1.0));
   if (t.a < 0.35) discard;
   // one dither: the near tier's complement (presence R) times the range-end fade
   float keep = 1.0 - smoothstep(uRange.x, uRange.y, vDist);
@@ -252,7 +326,7 @@ export function initFarForest(scene3d, { parent = null, renderer = null } = {}) 
     scene3d, group, renderer: renderer ?? scene3d.renderer ?? null,
     index: null, models: null, regions: new Map(), loading: new Set(), wanted: false,
     mesh: null, geo: null, mat: null, atlas: null, bakeQueue: [], baking: false, modelData: new Float32Array(MAX_MODELS * 4),
-    sig: null, rangeM: 4500,
+    sig: null, rangeM: 4500, octahedral: true,
   };
   if (typeof window !== "undefined") window.__farForest = () => farForestDiag();
   rlogSetFarForestProbe((k) => _ffDrawsLb(k));
@@ -318,7 +392,8 @@ export function setFarForestWanted(scene3d, wanted, { rangeM = null } = {}) {
 // ---------------------------------------------------------------------------
 function _ensureAtlas(st) {
   if (st.atlas) return st.atlas;
-  const rows = ATLAS_ROWS;
+  const viewCount = st.octahedral ? OCTAHEDRAL_VIEWS : VIEWS;
+  const rows = Math.ceil((MAX_MODELS * viewCount) / ATLAS_COLS);
   const rt = new THREE.WebGLRenderTarget(ATLAS_COLS * CELL_PX, rows * CELL_PX, {
     type: THREE.UnsignedByteType, format: THREE.RGBAFormat, depthBuffer: true, stencilBuffer: false,
     generateMipmaps: true, minFilter: THREE.LinearMipmapLinearFilter, magFilter: THREE.LinearFilter,
@@ -451,14 +526,25 @@ function _bakeViews(st, m, built) {
   renderer.autoClear = false;
   renderer.setScissorTest(true);
   renderer.setClearColor(0x000000, 0);
-  for (let k = 0; k < VIEWS; k += 1) {
-    const a = viewAzimuth(k);
+  const viewCount = st.octahedral ? OCTAHEDRAL_VIEWS : VIEWS;
+  for (let k = 0; k < viewCount; k += 1) {
     const dist = halfW * 4 + 5;
-    cam.position.set(c.x + Math.cos(a) * dist, c.y + Math.sin(a) * dist, zMin);
-    cam.lookAt(c.x, c.y, zMin);
+    if (st.octahedral) {
+      const gx = k % OCTAHEDRAL_GRID;
+      const gy = Math.floor(k / OCTAHEDRAL_GRID);
+      const u = gx / (OCTAHEDRAL_GRID - 1);
+      const v = gy / (OCTAHEDRAL_GRID - 1);
+      const dir = hemiOctahedralToDir(u, v);
+      cam.position.set(c.x + dir.x * dist, c.y + dir.y * dist, zMin + dir.z * dist);
+      cam.lookAt(c.x, c.y, zMin + h * 0.4);
+    } else {
+      const a = viewAzimuth(k);
+      cam.position.set(c.x + Math.cos(a) * dist, c.y + Math.sin(a) * dist, zMin);
+      cam.lookAt(c.x, c.y, zMin);
+    }
     cam.updateMatrixWorld(true);
-    const [col, row] = atlasCell(m, k);
-    rt.texture.generateMipmaps = (k === VIEWS - 1) && (st.bakeQueue.length === 0 || ((_diag.baked + 1) % 8 === 0));
+    const [col, row] = atlasCell(m, k, viewCount);
+    rt.texture.generateMipmaps = (k === viewCount - 1) && (st.bakeQueue.length === 0 || ((_diag.baked + 1) % 8 === 0));
     renderer.setViewport(col * CELL_PX, row * CELL_PX, CELL_PX, CELL_PX);
     renderer.setScissor(col * CELL_PX, row * CELL_PX, CELL_PX, CELL_PX);
     renderer.clear(true, true, false);
@@ -614,6 +700,7 @@ function _ensureMesh(st) {
       uAcAmbColor: { value: new THREE.Color(1, 1, 1) },
       uAcAmbLevel: { value: 0.35 },
       uGain: { value: 1.0 },
+      uOctahedral: { value: st.octahedral ? 1.0 : 0.0 },
       fogColor: { value: new THREE.Color(0xc3c8dc) },
       fogNear: { value: 150 },
       fogFar: { value: 2400 },

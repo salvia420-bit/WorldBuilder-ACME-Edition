@@ -1,4 +1,5 @@
 // scene3d/xu7_textures.js — P2: XUBC7 (supercompressed BC7) payload decode.
+export { dilateRgbaTexture } from "./materials.js";
 //
 // Wire tier: `holtburger/tex-xu7` ships basisu KTX2 containers (unregistered
 // scheme-6 supercompression — opaque to everything but the transcoder wasm).

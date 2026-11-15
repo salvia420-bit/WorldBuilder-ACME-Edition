@@ -23,6 +23,16 @@
 
 import * as THREE from "three";
 import { prewarmSubtree } from "./bake_prewarm.js";
+const LAGARDE_SPECULAR_OCCLUSION_GLSL = /* glsl */ `
+float lagardeSpecularOcclusion(float ndotv, float ao, float roughness) {
+  float clampedNdotV = clamp(ndotv, 0.0, 1.0);
+  float clampedAo = clamp(ao, 0.0, 1.0);
+  float r = clamp(roughness, 0.0, 1.0);
+  float base = max(0.0, clampedNdotV + clampedAo);
+  float exponent = exp2(-16.0 * r - 1.0);
+  return clamp(pow(base, exponent) - 1.0 + clampedAo, 0.0, 1.0);
+}
+`;
 // Far-terrain wave (2026-08-02) — the SHARED lighting + fog tail. Interpolated
 // character-identically into this monolith and into the Far Composite Ring's
 // far-patch shader (scene3d/far_terrain.js), so the near/far seam cannot drift
@@ -169,7 +179,11 @@ import {
   terrainRoundTypesCols,
   terrainRoundUniforms,
   writeTerrainRoundNormals,
+  noteTerrainRoundNormals,
+  stitchTerrainRoundNormals,
+  writeTerrainHorizonElevation,
   installTerrainRoundDiag,
+  untrackTerrainRoundLandblock,
 } from "./terrain_round.js";
 // 2026-10-19 — terrain water that flows downstream (owner: "a system which
 // understands which way the water needs to flow") and a swell that stays off
@@ -520,6 +534,9 @@ function _installPoolDispose(tex, freeList) {
     // Re-entrancy / double-free guard: only park once per checkout.
     if (tex.userData.__parked) return;
     tex.userData.__parked = true;
+    if (tex.userData?.lbX != null && tex.userData?.lbY != null) {
+      untrackTerrainRoundLandblock(tex.userData.lbX, tex.userData.lbY);
+    }
     freeList.push(tex);
   };
   return tex;
@@ -535,9 +552,9 @@ function _installPoolDispose(tex, freeList) {
  * G=roadCode*64, B=0, A=255) — the warm-path fill below mirrors it exactly so
  * a re-baked LB is byte-identical to a cold-baked one.
  */
-function acquireVertexTypesTex(terrainCodes, roadCodes, roundNormals, water, heights, waterSurfaceMask) {
+function acquireVertexTypesTex(terrainCodes, roadCodes, roundNormals, water, heights, waterSurfaceMask, lbX, lbY) {
   if (VERTEX_TYPES_COLS !== 9) {
-    return acquireWideVertexTypesTex(terrainCodes, roadCodes, roundNormals, water, heights, waterSurfaceMask);
+    return acquireWideVertexTypesTex(terrainCodes, roadCodes, roundNormals, water, heights, waterSurfaceMask, lbX, lbY);
   }
   const tex = _vertexTypesTexFreeList.pop();
   if (!tex) {
@@ -577,8 +594,10 @@ function acquireVertexTypesTex(terrainCodes, roadCodes, roundNormals, water, hei
  * 2026-10-19 — with ?waterFlow / ?waterBank the texture is 36 wide: columns
  * 18..35 carry this LB's flow, swell weights and whitewater (`water` =
  * { entry, bank } from bakeTerrainForLandblock; scene3d/terrain_water_flow.js).
+ * Milestone 2: columns 36..44 carry 4-azimuth horizon elevation angles for
+ * zero-draw macro terrain self-shadowing (cols = 45).
  */
-function acquireWideVertexTypesTex(terrainCodes, roadCodes, roundNormals, water, heights, waterSurfaceMask) {
+function acquireWideVertexTypesTex(terrainCodes, roadCodes, roundNormals, water, heights, waterSurfaceMask, lbX, lbY) {
   const cols = VERTEX_TYPES_COLS;
   let tex = _vertexTypesTexFreeList.pop();
   if (!tex) {
@@ -603,7 +622,14 @@ function acquireWideVertexTypesTex(terrainCodes, roadCodes, roundNormals, water,
   stampVertexWaterAuxBytes(bytes, cols, terrainCodes, heights, waterSurfaceMask);
   const f = roundNormals && roundNormals.factor ? roundNormals.factor : 0;
   writeTerrainRoundNormals(bytes, cols, roundNormals ? roundNormals.acLight : null, f * 8 + 1, f);
+  if (lbX != null && lbY != null && roundNormals && roundNormals.acLight) {
+    noteTerrainRoundNormals(lbX, lbY, roundNormals.acLight, f * 8 + 1, f);
+    stitchTerrainRoundNormals(lbX, lbY, bytes, cols, tex);
+  }
   writeWaterColumns(bytes, cols, water ? water.entry : null, water ? water.bank : null);
+  writeTerrainHorizonElevation(bytes, cols, heights);
+  tex.userData.lbX = lbX;
+  tex.userData.lbY = lbY;
   tex.userData.__parked = false; // checked out
   tex.needsUpdate = true;
   return tex;
@@ -1819,6 +1845,14 @@ precision highp float;
 precision highp int;
 precision highp sampler2DArray;
 
+// ── WebGL2 Sampler Discipline Audit (Milestone 4 / Feature 30) ──────────────
+// Strict preservation of the <= 15 out of 16 MAX_TEXTURE_IMAGE_UNITS budget.
+// EXACTLY 0 new fragment samplers added: all terrain visual improvements
+// (HexTile, Biome ALU-noise, Packed Horizon Shadows) use mathematical ALU
+// operations or reuse uVertexTypes.
+// Allocated active texture units fit strictly within 0..14 (CSM on: 15 active units;
+// CSM off: 12 active units), leaving unit 15 unallocated as hardware headroom.
+
 uniform sampler2DArray uAtlas;        // 33 layers of 256×256 retail terrain tiles, one per code (0..32). ClampToEdge per layer eliminates the cross-tile bleed that the prior 6×6 packed atlas produced at mip levels ≥3 (the "not flush with vertices" artefact: gutter-less neighbours bled into each other along cell vertex lines).
 // T1 (2026-05-29) — per-code base texture tiling (retail TerrainTex.tex_tiling
 // == 2 for all 33). Retail's TexMerge::CopyAndTile→TileCSI replicates the
@@ -2400,6 +2434,7 @@ float csmShadowFactor(vec3 worldPos, float viewDepth) {
 
 ${TERRAIN_SHARED_TAIL_GLSL}
 ${TERRAIN_FX_LIGHTS_ON ? TERRAIN_FX_LIGHT_GLSL : ""}
+${LAGARDE_SPECULAR_OCCLUSION_GLSL}
 // === FAR COMPOSITE RING — albedo bake gate (2026-08-02) ==================
 // 0.0 in every shipped frame. The Far Composite Ring clones this material once,
 // sets this to 1.0, and renders each far landblock through it with a top-down
@@ -2620,6 +2655,57 @@ float distToSegment(vec2 p, vec2 a, vec2 b) {
   return length(p - (a + ab * t));
 }
 ${terrainDetailFragGlsl().replace(/\n$/, "")}${TERRAIN_FS_ON ? TERRAIN_FAR_SIMPLIFY_FRAG_GLSL.replace(/\n$/, "") : ""}
+
+// Milestone 2 Feature 8: Simplex Triangle Hex-Tiling (HexTile)
+vec4 terrainHexTileAtlas(int code, vec2 uv) {
+  vec2 st = vec2(uv.x - uv.y * 0.57735027, uv.y * 1.15470054);
+  vec2 p = floor(st);
+  vec2 f = fract(st);
+
+  vec2 v0, v1, v2;
+  float w0, w1, w2;
+  if (f.x + f.y < 1.0) {
+    v0 = p;
+    v1 = p + vec2(1.0, 0.0);
+    v2 = p + vec2(0.0, 1.0);
+    w0 = 1.0 - f.x - f.y;
+    w1 = f.x;
+    w2 = f.y;
+  } else {
+    v0 = p + vec2(1.0, 1.0);
+    v1 = p + vec2(1.0, 0.0);
+    v2 = p + vec2(0.0, 1.0);
+    w0 = f.x + f.y - 1.0;
+    w1 = 1.0 - f.y;
+    w2 = 1.0 - f.x;
+  }
+
+  w0 = w0 * w0 * w0 * w0;
+  w1 = w1 * w1 * w1 * w1;
+  w2 = w2 * w2 * w2 * w2;
+  float sumW = max(w0 + w1 + w2, 1e-4);
+  w0 /= sumW;
+  w1 /= sumW;
+  w2 /= sumW;
+
+  float h0 = fract(sin(dot(v0, vec2(127.1, 311.7))) * 43758.5453);
+  float a0 = floor(h0 * 6.0) * (3.14159265359 / 3.0);
+  vec2 uv0 = mat2(cos(a0), -sin(a0), sin(a0), cos(a0)) * uv + vec2(fract(h0 * 17.1), fract(h0 * 31.7));
+
+  float h1 = fract(sin(dot(v1, vec2(127.1, 311.7))) * 43758.5453);
+  float a1 = floor(h1 * 6.0) * (3.14159265359 / 3.0);
+  vec2 uv1 = mat2(cos(a1), -sin(a1), sin(a1), cos(a1)) * uv + vec2(fract(h1 * 17.1), fract(h1 * 31.7));
+
+  float h2 = fract(sin(dot(v2, vec2(127.1, 311.7))) * 43758.5453);
+  float a2 = floor(h2 * 6.0) * (3.14159265359 / 3.0);
+  vec2 uv2 = mat2(cos(a2), -sin(a2), sin(a2), cos(a2)) * uv + vec2(fract(h2 * 17.1), fract(h2 * 31.7));
+
+  vec4 c0 = terrainAtlasTex(code, uv0);
+  vec4 c1 = terrainAtlasTex(code, uv1);
+  vec4 c2 = terrainAtlasTex(code, uv2);
+
+  return c0 * w0 + c1 * w1 + c2 * w2;
+}
 
 int vertexAuxByteAt(int iu, int iv) {
   return int(texelFetch(uVertexTypes, ivec2(iu, iv), 0).g * 255.0 + 0.5) & 31;
@@ -3319,8 +3405,14 @@ ${TERRAIN_MICRO.micro ? TERRAIN_MICRO_DECL_GLSL : ""}${TERRAIN_MICRO.heightBlend
         // under ?terrainGradUv it carries the continuous-UV gradient (the
         // cellUv reset at every cell edge was a 1x1-mip line of ~25% overlay
         // on transition cells since ?maskMips).
+        // Milestone 2 Feature 9: Organic 2-octave ALU-noise perturbed splat coordinates
+        vec2 splatNoisePerturb = vec2(
+          fragValueNoise2D(vec2(vWorldPos.x, -vWorldPos.z) * 0.15),
+          fragValueNoise2D(vec2(vWorldPos.x, -vWorldPos.z) * 0.15 + vec2(17.3, 31.7))
+        ) * (1.6 / 24.0);
+        vec2 perturbedCellUv = clamp(cellUv + splatNoisePerturb, 0.0, 1.0);
         float baseW = roundMergeAlpha(
-          terrainMaskTex(cellUv, rot, maskIdx).r,
+          terrainMaskTex(perturbedCellUv, rot, maskIdx).r,
           uTexMergeAlphaRound
         );
         // T1 splat-noise: shift the base/overlay balance inside the
@@ -3669,8 +3761,8 @@ ${TERRAIN_MICRO.micro ? TERRAIN_MICRO_DECL_GLSL : ""}${TERRAIN_MICRO.heightBlend
     vec2 cUvXz = vec2(vWorldPos.x, vWorldPos.y) * (1.0 / 24.0) + pomCliffOffXz;
     vec2 cAxisW = pow(abs(cliffGeomN.xy), vec2(4.0));
     cAxisW /= max(cAxisW.x + cAxisW.y, 1.0e-4);
-    vec3 rockYz = terrainAtlasTex(cliffRockCode, cUvYz).rgb;
-    vec3 rockXz = terrainAtlasTex(cliffRockCode, cUvXz).rgb;
+    vec3 rockYz = terrainHexTileAtlas(cliffRockCode, cUvYz).rgb;
+    vec3 rockXz = terrainHexTileAtlas(cliffRockCode, cUvXz).rgb;
     vec3 cliffRockCol = rockYz * cAxisW.x + rockXz * cAxisW.y;
     cliffNraSample = terrainNraTex(cliffRockCode, cUvYz) * cAxisW.x
                    + terrainNraTex(cliffRockCode, cUvXz) * cAxisW.y;
@@ -3921,6 +4013,35 @@ ${TERRAIN_FS_ON ? TERRAIN_FAR_SIMPLIFY_DETAIL_NORMAL_FADE_GLSL : ""}      // RNM
     ndotl *= mix(0.62, 1.0, pomSelfShadow);
   }
 
+  // Milestone 2 Feature 18: Zero-Draw Macro Terrain Self-Shadowing from packed uVertexTypes cols 36..44
+  vec4 horiz00 = texelFetch(uVertexTypes, ivec2(36 + iu, iv), 0);
+  vec4 horiz10 = texelFetch(uVertexTypes, ivec2(36 + iu + 1, iv), 0);
+  vec4 horiz01 = texelFetch(uVertexTypes, ivec2(36 + iu, iv + 1), 0);
+  vec4 horiz11 = texelFetch(uVertexTypes, ivec2(36 + iu + 1, iv + 1), 0);
+  vec4 horizPacked = mix(mix(horiz00, horiz10, fu), mix(horiz01, horiz11, fu), fv);
+
+  vec2 sunXy = normalize(sunDir.xy + vec2(1e-5, 0.0));
+  float horizElev = 0.0;
+  if (sunXy.x >= 0.0) {
+    if (sunXy.y <= 0.0) {
+      float t = clamp(-sunXy.y / max(sunXy.x - sunXy.y, 1e-4), 0.0, 1.0);
+      horizElev = mix(horizPacked.r, horizPacked.g, t);
+    } else {
+      horizElev = horizPacked.r;
+    }
+  } else {
+    if (sunXy.y <= 0.0) {
+      float t = clamp(-sunXy.x / max(-sunXy.x - sunXy.y, 1e-4), 0.0, 1.0);
+      horizElev = mix(horizPacked.b, horizPacked.a, t);
+    } else {
+      horizElev = horizPacked.a;
+    }
+  }
+  horizElev *= (3.14159265359 * 0.5);
+  float sunElev = asin(clamp(sunDir.z, 0.0, 1.0));
+  float macroShadow = smoothstep(horizElev - 0.04, horizElev + 0.04, sunElev);
+  ndotl *= mix(0.42, 1.0, macroShadow);
+
   // T2 (?pbrTerrain=on) -- per-pixel material relief from the CC0 set:
   // one uAtlasNormalAo sample at the nearest-corner code (same single-sample
   // convention as the detail layers -- the switch tracks the colour blend at
@@ -3944,6 +4065,11 @@ ${TERRAIN_FS_ON ? TERRAIN_FAR_SIMPLIFY_DETAIL_NORMAL_FADE_GLSL : ""}      // RNM
     vec2 pbrNxy = pbrTexel.rg * 2.0 - 1.0;
     vec3 pbrN = normalize(vec3(pbrNxy, sqrt(max(1.0 - dot(pbrNxy, pbrNxy), 0.04))));
     float pbrRough = clamp(mix(pbrTexel.b, pbrTexel.b + 0.14, roadVergeBand) + forestRoughDelta, 0.04, 1.0);
+    // Milestone 2 Feature 13: Toksvig normal-variance roughness expansion for terrain
+    vec3 dNdx = dFdx(pbrN);
+    vec3 dNdy = dFdy(pbrN);
+    float _terrainSigma2 = dot(dNdx, dNdx) + dot(dNdy, dNdy);
+    pbrRough = sqrt(clamp(pbrRough * pbrRough + min(0.35, 2.0 * _terrainSigma2), 0.0, 1.0));
     // terrainplan s4 water sheen USED TO LIVE HERE, inside the
     // uPbrEnabled && !acGouraud block. 2026-07-31 (water-fix): retail
     // Gouraud (?terrainGouraud) is DEFAULT-ON and wins over PBR, so this
@@ -3963,6 +4089,7 @@ ${TERRAIN_FS_ON ? TERRAIN_FAR_SIMPLIFY_DETAIL_NORMAL_FADE_GLSL : ""}      // RNM
     if (pomSelfShadow < 0.999) {
       pbrNdotl *= mix(0.62, 1.0, pomSelfShadow);
     }
+    pbrNdotl *= mix(0.42, 1.0, macroShadow);
     // 2026-07-31 (water-fix) — fade the material NdotL + AO back out over
     // water by the bilinear waterW. Strict no-op off water (waterW == 0).
     ndotl = mix(pbrNdotl, ndotl, waterW);
@@ -3987,11 +4114,13 @@ ${TERRAIN_FS_ON ? TERRAIN_FAR_SIMPLIFY_DETAIL_NORMAL_FADE_GLSL : ""}      // RNM
         vec3 reflW = reflect(viewW, nWorld);
         vec3 envSample = textureLod(uEnvCube, reflW, pbrRough * 5.0).rgb;
         float fres = 0.04 + 0.96 * pow(1.0 - clamp(dot(-viewW, nWorld), 0.0, 1.0), 5.0);
+        float ndotv = clamp(dot(-viewW, nWorld), 0.0, 1.0);
+        float specOcc = lagardeSpecularOcclusion(ndotv, pbrTexel.a, pbrRough);
         // 2026-07-31 (water-fix) — (1 - waterW): the dedicated water sheen
         // below owns the water reflection, so the generic material term
         // stands down over water instead of adding a second, flat one.
         iblSpec = envSample * fres * envGloss * envGloss * uEnvIntensity
-                * (1.0 - waterW);
+                * (1.0 - waterW) * specOcc;
       }
     }
   }
@@ -7126,6 +7255,8 @@ export async function bakeTerrainForLandblock(
         : null,
       wasmMesh.heights,
       opts.waterSurfaceCodeMask,
+      lbX,
+      lbY,
     );
 
     // T1 — per-LB TexMerge data texture (48×8 RGBA8, NearestFilter). Built

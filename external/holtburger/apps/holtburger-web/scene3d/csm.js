@@ -160,6 +160,28 @@ export const MID_CSM_MAP_SIZES = Object.freeze([1024, 1024, 512]);
 // Blend zone width as a fraction of each cascade range. 0.1 = the last
 // 10% of cascade N also samples cascade N+1 and lerps. Keeps the seam
 // between cascades invisible.
+// Milestone 1 — Static CSM Decoupling (2026-11-15):
+// Exclude dynamic casters (entitiesGroup / dynRoot) from CSM cascades so
+// moving characters/monsters never force cascade re-rasters.
+// Default ON; ?csmStaticOnly=off restores dynamic casters into cascades.
+export function csmStaticOnlyFlag(search) {
+  try {
+    const s = search ?? globalThis.location?.search ?? "";
+    const p = new URLSearchParams(s);
+    const v = p.get("csmStaticOnly");
+    if (v != null) {
+      const lv = String(v).toLowerCase();
+      return !(lv === "off" || lv === "0" || lv === "false" || lv === "no");
+    }
+    if (s.includes("csmStable=off") || s.includes("csmOffscreenCasters")) {
+      return false;
+    }
+    return true;
+  } catch (_) {
+    return true;
+  }
+}
+
 export const DEFAULT_CSM_BLEND_FRAC = 0.1;
 
 // Distance to pull the shadow camera back along the light direction
@@ -411,8 +433,14 @@ export function setupCsm(scene, opts = {}) {
     ? Math.max(1, opts.farCascadeEvery | 0)
     : 1;
 
+  // Milestone 1 — static-only CSM cascades (excludes dynRoot casters)
+  const csmStaticOnly = opts.csmStaticOnly !== undefined
+    ? opts.csmStaticOnly === true
+    : (opts.staticOnly !== undefined ? opts.staticOnly === true : csmStaticOnlyFlag());
+
   const csmGroup = new THREE.Group();
   csmGroup.name = "csm-cascades";
+  csmGroup.userData.csmStaticOnly = csmStaticOnly;
 
   /** @type {THREE.DirectionalLight[]} */
   const lights = [];
@@ -428,6 +456,8 @@ export function setupCsm(scene, opts = {}) {
     light.shadow.mapSize.set(mapSizes[i], mapSizes[i]);
     light.shadow.bias = -0.0005;
     light.shadow.normalBias = 0.05;
+    light.userData.csmCascade = true;
+    light.userData.csmStaticOnly = csmStaticOnly;
     // The shadow camera frustum is set every frame by updateCsm; place
     // sensible defaults so an un-ticked CSM still renders SOMETHING.
     const halfSize = splits[i];
@@ -472,6 +502,8 @@ export function setupCsm(scene, opts = {}) {
     blendFrac,
     sunDir,
     csmGroup,
+    csmStaticOnly,
+    staticOnly: csmStaticOnly,
     // RP5 — per-instance refit thresholds (default = the validated module
     // constants). `updateCsm` reads these instead of the bare constants
     // so the lighting/URL layer can retune without editing this file.
@@ -592,6 +624,10 @@ export function setupCsm(scene, opts = {}) {
         uCsmShade: { value: shade },
       };
     })(),
+    // Milestone 1 — Near RVT (Runtime Virtual Texture) uniforms
+    nearRvtTexture: { value: null },
+    nearRvtParams: { value: new THREE.Vector4(0, 0, 128, 1 / 128) },
+    nearRvtEnabled: { value: 1.0 },
     _uniformRefs: null,
     // Perf C4 — skip-rebuild cache. `updateCsm` compares the camera
     // position + sun direction against these and bails out of the

@@ -29,7 +29,12 @@ import { makeArrayMaterial, setStatPom } from "../scene3d/static_atlas.js";
 import { buildProgramCacheKey } from "./e2e_relief/harness.mjs";
 
 const require = createRequire(import.meta.url);
-const { chromium } = require("/home/wbterminal/.npm/_npx/e41f203b7505f1fb/node_modules/playwright-core");
+const pwcPath = [
+  process.env.PLAYWRIGHT_CORE,
+  "/workspace/wb/mnt1/ac-refs/webac/node_modules/playwright-core",
+  "/home/wbterminal/.npm/_npx/e41f203b7505f1fb/node_modules/playwright-core",
+].find((p) => p && existsSync(p)) || "playwright-core";
+const { chromium } = require(pwcPath);
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const APP = join(HERE, "..");

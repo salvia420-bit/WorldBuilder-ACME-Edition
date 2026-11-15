@@ -1,4 +1,5 @@
 // scene3d/bc7_textures.js — BC7 (BPTC) direct-to-GPU texture path.
+export { dilateRgbaTexture } from "./materials.js";
 //
 // WHAT THIS IS
 // The client half of the BC7 texture track: instead of decoding a

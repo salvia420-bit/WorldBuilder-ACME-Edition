@@ -94,7 +94,7 @@ export const GROUND_FOG_DEFAULTS = Object.freeze({
   widthJitter: 0.35,     // +/- fraction, hash-stable per world cell
   colour: [0.72, 0.74, 0.72],
   opacity: 0.15,
-  softnessM: 0,          // 0 ⇒ the depth soft-particle term is OFF (see header)
+  softnessM: 0,          // depth-read soft fade in metres; 0 = disabled (ships 0)
   nearFadeM: 3.0,        // fade out inside this many metres of the eye
   driftHz: 0.013,        // slow breathing of the bank opacity
   driftAmount: 0.35,     // fraction of opacity the breath modulates

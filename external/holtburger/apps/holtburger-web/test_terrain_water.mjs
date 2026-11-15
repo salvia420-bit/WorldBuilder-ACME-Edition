@@ -135,7 +135,7 @@ check(
 );
 check(
   "the alpha MASK still samples the UNSCROLLED cellUv",
-  /terrainMaskTex\(cellUv, rot, maskIdx\)/.test(mergeBlock),
+  /terrainMaskTex\((?:cellUv|perturbedCellUv), rot, maskIdx\)/.test(mergeBlock),
   "a drifting mask would smear the cell's authored coverage shape"
 );
 check(

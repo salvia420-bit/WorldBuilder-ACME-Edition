@@ -291,8 +291,21 @@ export function classFragmentHeader(withNormal, maps = null) {
  * their includes, header "EXTRA-MAP MEMBERS"). A replacement is null when
  * its chunk lost an anchor (applyClassPatch counts it missing).
  */
-export function fragmentReplacements(withNormal, withPom = false, maps = null, useGrad = false) {
+export function fragmentReplacements(withNormal, withPom = false, maps = null, useGrad = false, fs = "") {
   const ms = maps || MAP_SET_NONE;
+  const a2cPattern = `#ifdef USE_ALPHATEST\n  diffuseColor.a = clamp((diffuseColor.a - alphaTest) / max(fwidth(diffuseColor.a), 1e-4) + 0.5, 0.0, 1.0);\n  if (diffuseColor.a < 0.001) discard;\n#endif`;
+  const alphaTestInclude = fs && fs.includes(a2cPattern)
+    ? [a2cPattern, [
+        "#ifdef USE_ALPHATEST",
+        "\tdiffuseColor.a = clamp((diffuseColor.a - vHbS2.x) / max(fwidth(diffuseColor.a), 1e-4) + 0.5, 0.0, 1.0);",
+        "\tif ( diffuseColor.a < 0.001 ) discard;",
+        "#endif",
+      ].join("\n")]
+    : ["#include <alphatest_fragment>", [
+        "#ifdef USE_ALPHATEST",
+        "\tif ( diffuseColor.a < vHbS2.x ) discard;",
+        "#endif",
+      ].join("\n")];
   const r = [
     // diffuse + opacity uniforms -> slot texel 0 (same f32 values)
     ["vec4 diffuseColor = vec4( diffuse, opacity );", "vec4 diffuseColor = vHbS0;"],
@@ -302,11 +315,7 @@ export function fragmentReplacements(withNormal, withPom = false, maps = null, u
       "\tdiffuseColor *= sampledDiffuseColor;",
       "#endif",
     ].join("\n")]]),
-    ["#include <alphatest_fragment>", [
-      "#ifdef USE_ALPHATEST",
-      "\tif ( diffuseColor.a < vHbS2.x ) discard;",
-      "#endif",
-    ].join("\n")],
+    alphaTestInclude,
     ["#include <roughnessmap_fragment>", ms.rough ? batchMapChunk("roughnessmap_fragment") : "float roughnessFactor = vHbS1.x;"],
     ["#include <metalnessmap_fragment>", "float metalnessFactor = vHbS1.y;"],
   ];
@@ -353,7 +362,7 @@ export function applyClassPatch(shader, withNormal, withPom = false, maps = null
       missing += applyPomFragmentPatch(p);
       fs = p.fragmentShader;
     }
-    for (const [from, to] of fragmentReplacements(withNormal, withPom, ms, useGrad)) {
+    for (const [from, to] of fragmentReplacements(withNormal, withPom, ms, useGrad, fs)) {
       if (to === null || fs.indexOf(from) === -1) { missing += 1; continue; }
       fs = fs.replace(from, () => to);
     }

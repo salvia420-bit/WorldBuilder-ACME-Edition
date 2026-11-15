@@ -66,7 +66,8 @@ export const TERRAIN_VFX_PROMOTED = Object.freeze({
     // obsidian glass is its own family with its own master. Promoted 2026-10-24
     // with sand / snow / volcano (above).
     obsidian: true,
-    swamp: false,
+    // Milestone 3 (Feature 28) — swamp ground mist, marsh gas, midges, and fireflies
+    swamp: true,
     // HELD BACK at the 2026-10-24 vistest: the dust haze's upright sheets read as
     // pale smears from the chase camera (still streaky at 0.12 opacity), and the
     // footfall puffs never fired in the muted bot walk, so they are unverified.
@@ -196,6 +197,16 @@ export const PRESETS = {
         // contact darkening where walls meet the ground, eaves, recesses.
         // Half-res + depth-aware blur, ~0.5-1 ms on the 1070; high/ultra only.
         ssao: false,
+        gtao: false,
+        sscs: false,
+        waterPass: false,
+        ssr: false,
+        farRing: false,
+        farRadius: 6,
+        impostors: false,
+        farForest: false,
+        swampMist: false,
+        nearRvt: false,
         clouds: false,
         // Tier-1 particle upgrade (2026-10-10, scene3d/vfx/fx_tier1.js): low preset.
         ...FX_TIER1_PRESETS.low,
@@ -373,6 +384,16 @@ export const PRESETS = {
         lensFlare: false,
         lightShafts: false,
         ssao: false,
+        gtao: false,
+        sscs: false,
+        waterPass: false,
+        ssr: false,
+        farRing: false,
+        farRadius: 8,
+        impostors: false,
+        farForest: false,
+        swampMist: false,
+        nearRvt: false,
         clouds: false,
         // Tier-1 particle upgrade (2026-10-10, scene3d/vfx/fx_tier1.js): mid preset.
         ...FX_TIER1_PRESETS.mid,
@@ -479,10 +500,9 @@ export const PRESETS = {
         microContactShadow: true,
         microShadow: true,
         statPom: true,
-        // OFF 2026-10-17 (owner, outdoor-fps measurement on the 1070): any moving entity in
-        // range re-rendered all three cascades (~12 ms main thread, +7 fps idle / +13 fps moving
-        // with it off). Retail AC had no real-time sun shadows. `?csm=on` restores them.
-        csm: false,
+        // Promoted default ON for Milestone 1 with Static CSM decoupling (dynamic casters excluded).
+        // ?csm=off restores unshadowed mode.
+        csm: true,
         bloom: true,
         vignette: true,
         lensFlare: false,
@@ -492,6 +512,16 @@ export const PRESETS = {
         // Kept true so shafts light up the moment clouds are promoted.
         lightShafts: true,
         ssao: true,
+        gtao: true,
+        sscs: true,
+        waterPass: true,
+        ssr: true,
+        farRing: true,
+        farRadius: 11,
+        impostors: true,
+        farForest: true,
+        swampMist: true,
+        nearRvt: true,
         clouds: true,
         // Tier-1 particle upgrade (2026-10-10, scene3d/vfx/fx_tier1.js): high preset.
         ...FX_TIER1_PRESETS.high,
@@ -599,10 +629,9 @@ export const PRESETS = {
         microContactShadow: true,
         microShadow: true,
         statPom: true,
-        // OFF 2026-10-17 (owner, outdoor-fps measurement on the 1070): any moving entity in
-        // range re-rendered all three cascades (~12 ms main thread, +7 fps idle / +13 fps moving
-        // with it off). Retail AC had no real-time sun shadows. `?csm=on` restores them.
-        csm: false,
+        // Promoted default ON for Milestone 1 with Static CSM decoupling (dynamic casters excluded).
+        // ?csm=off restores unshadowed mode.
+        csm: true,
         bloom: true,
         vignette: true,
         lensFlare: false,
@@ -612,6 +641,16 @@ export const PRESETS = {
         // Kept true so shafts light up the moment clouds are promoted.
         lightShafts: true,
         ssao: true,
+        gtao: true,
+        sscs: true,
+        waterPass: true,
+        ssr: true,
+        farRing: true,
+        farRadius: 11,
+        impostors: true,
+        farForest: true,
+        swampMist: true,
+        nearRvt: true,
         clouds: true,
         // Tier-1 particle upgrade (2026-10-10, scene3d/vfx/fx_tier1.js): ultra preset.
         ...FX_TIER1_PRESETS.ultra,
@@ -730,7 +769,17 @@ export const BOOL_FLAGS = new Set([
     "lensFlare",
     "lightShafts",
     "ssao",
+    "gtao",
+    "waterPass",
     "clouds",
+    // 2026-11-15 — Milestone 4 (Quality Presets Integration & Sampler Audit)
+    "sscs",
+    "farRing",
+    "farForest",
+    "impostors",
+    "swampMist",
+    "nearRvt",
+    "ssr",
     // Tier-1 particle upgrade (2026-10-10, scene3d/vfx/fx_tier1.js) — plain
     // on/off switches, so parseBool's 1/true/yes widening is harmless.
     "fxLights",
@@ -770,6 +819,7 @@ export const INT_FLAGS = new Set([
     "pomStepsSelfShadow",
     "triplanarSlopeThresholdPct",
     "maxParticlesPerEmitter",
+    "farRadius",
     // Terrain-VFX grass (Wave 1A). `terrainGrass` / `terrainGrassStomp` are
     // absent for the same reason `gfxRelief` is — see the PRESETS comment.
     "terrainGrassBlades",
@@ -904,6 +954,29 @@ function parseOverrides(params) {
         if (v !== null) {
             overrides.microShadow = v;
             overrides.microContactShadow = v;
+        }
+    }
+    // Synchronize impostors <-> farForest URL aliases
+    if (params.has("impostors")) {
+        const v = parseBool(params.get("impostors"));
+        if (v !== null) {
+            overrides.impostors = v;
+            overrides.farForest = v;
+        }
+    }
+    if (params.has("farForest")) {
+        const v = parseBool(params.get("farForest"));
+        if (v !== null) {
+            overrides.impostors = v;
+            overrides.farForest = v;
+        }
+    }
+    // Synchronize swampMist <-> terrainSwamp URL aliases
+    if (params.has("swampMist")) {
+        const v = parseBool(params.get("swampMist"));
+        if (v !== null) {
+            overrides.swampMist = v;
+            overrides.terrainSwamp = v;
         }
     }
     for (const flag of INT_FLAGS) {
@@ -1182,5 +1255,24 @@ export function getQuality(url, userAgent) {
 export function installQualityOnWindow(quality) {
     if (typeof window === "undefined") return quality;
     window.__quality = quality;
+    return quality;
+}
+
+/**
+ * Apply a quality preset to a scene3d instance, with optional flag overrides.
+ *
+ * @param {Object} scene - Live scene3d or stub object.
+ * @param {string} [presetName="high"] - One of "low", "mid", "high", "ultra".
+ * @param {Object} [overrides={}] - Optional map of flag overrides.
+ * @returns {Object} The resolved quality object { preset, flags, source }.
+ */
+export function applyQualityPreset(scene, presetName = "high", overrides = {}) {
+    const tier = PRESET_NAMES.includes(presetName) ? presetName : "mid";
+    const base = PRESETS[tier] || PRESETS.mid;
+    const flags = { ...base, ...overrides };
+    const quality = { preset: tier, flags, source: "preset-apply" };
+    if (scene && typeof scene === "object") {
+        scene.quality = quality;
+    }
     return quality;
 }

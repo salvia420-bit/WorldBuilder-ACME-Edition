@@ -66,6 +66,9 @@ const SRGBColorSpace = "srgb";
 const LinearSRGBColorSpace = "srgb-linear";
 const NoColorSpace = "";
 const AdditiveBlending = 2;
+const NoBlending = 0;
+const AlwaysDepth = 1;
+class Uniform { constructor(v) { this.value = v; } }
 const FrontSide = 0;
 const DoubleSide = 2;
 const GLSL3 = "300 es";
@@ -80,6 +83,6 @@ export {
   NearestFilter, LinearFilter, LinearMipmapLinearFilter,
   ClampToEdgeWrapping, RepeatWrapping,
   SRGBColorSpace, LinearSRGBColorSpace, NoColorSpace,
-  AdditiveBlending, FrontSide, DoubleSide,
+  AdditiveBlending, NoBlending, AlwaysDepth, Uniform, FrontSide, DoubleSide,
   GLSL3,
 };

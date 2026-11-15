@@ -301,16 +301,24 @@ export const GRASS_CODES = Object.freeze(
 // per-blade normal would cost a mat3 per vertex for a worse image).
 // ---------------------------------------------------------------------------
 
-/** Unit blade positions, `x` = width, `z` = height. */
+const _GRASS_U_MARGIN = 1.5 / 64.0;
+
+/** Unit blade positions, `x` = width, `y` = parabolic curvature arch, `z` = height. */
 export const GRASS_BLADE_POSITIONS = Object.freeze([
-  -0.5, 0, 0.0,
-  0.5, 0, 0.0,
-  -0.35, 0, 0.55,
-  0.35, 0, 0.55,
-  0.0, 0, 1.0,
+  -0.5, 0.0, 0.0,
+  0.5, 0.0, 0.0,
+  -0.35, 0.08, 0.55,
+  0.35, 0.08, 0.55,
+  0.0, 0.22, 1.0,
 ]);
 export const GRASS_BLADE_INDICES = Object.freeze([0, 1, 2, 2, 1, 3, 2, 3, 4]);
-export const GRASS_BLADE_UVS = Object.freeze([0, 0, 1, 0, 0.1, 0.55, 0.9, 0.55, 0.5, 1]);
+export const GRASS_BLADE_UVS = Object.freeze([
+  _GRASS_U_MARGIN, _GRASS_U_MARGIN,
+  1.0 - _GRASS_U_MARGIN, _GRASS_U_MARGIN,
+  0.1, 0.55,
+  0.9, 0.55,
+  0.5, 1.0 - _GRASS_U_MARGIN
+]);
 
 /**
  * Build the shared blade geometry.
@@ -869,18 +877,24 @@ function _grassLightSyncSnippet() {
     "    #endif",
     "    float hbCsmSh = mix(1.0 - uGrassCsmShade * uGrassCsmStrength, 1.0, hbCsmRaw);",
     "    float hbCsmDir = mix(1.0 - 0.85 * uGrassCsmStrength, 1.0, hbCsmRaw);",
-    "    vec3 hbNrmAc = normalize(vGrassAcNrm);",
+    "    // Cohesive grass shading: blade base normal (65%) and color (70%) pickup from underlying ground",
+    "    vec3 hbGrassGroundN = normalize(vGrassAcNrm);",
+    "    vec3 hbNrmAc = normalize(mix(hbGrassGroundN, normal, 0.35 + 0.65 * vGrassBladeT));",
+    "    diffuseColor.rgb = mix(vGrassTint * 0.70 + diffuseColor.rgb * 0.30, diffuseColor.rgb, smoothstep(0.0, 0.70, vGrassBladeT));",
+    "    // Root-to-tip AO (darken blade base by 40-50%)",
+    "    float hbRootAo = smoothstep(0.0, 0.45, vGrassBladeT) * 0.58 + 0.42;",
     "    float hbSunMag = length(uGrassSunVec);",
     "    vec3 hbSunDirAc = hbSunMag > 1e-4 ? (uGrassSunVec / hbSunMag) : vec3(0.0, 0.0, 1.0);",
     "    float hbNdotl = mix(0.65, 1.0, clamp(dot(hbNrmAc, hbSunDirAc), 0.0, 1.0));",
     "    float hbAcL = max(0.0, dot(hbNrmAc, uGrassSunVec));",
     "    vec3 hbAcC = min(vec3(1.0), uGrassSunColor * (hbAcL * hbCsmDir) + uGrassAmbColor * uGrassAmbLevel);",
-    "    vec3 hbBaseLit = diffuseColor.rgb * 0.34 * hbAcC * hbNdotl * hbCloudSh * hbCsmSh;",
+    "    vec3 hbBaseLit = diffuseColor.rgb * 0.34 * hbAcC * hbNdotl * hbCloudSh * hbCsmSh * hbRootAo;",
     "    float hbSunElevGate = smoothstep(0.06, 0.22, hbSunDirAc.z) * clamp(hbSunMag * 1.25, 0.0, 1.0);",
     "    float hbUnocc = clamp((hbCloudSh - 0.3) / 0.7, 0.0, 1.0) * hbCsmRaw;",
     "    vec3 hbViewDir = normalize(vGrassWorldPos - cameraPosition);",
-    "    float hbFwd = pow(clamp(dot(hbViewDir, uGrassSunDirWorld), 0.0, 1.0), 3.0);",
-    "    vec3 hbTrans = diffuseColor.rgb * vec3(0.30, 0.34, 0.09) * uGrassSunColor * (hbFwd * hbSunElevGate * hbUnocc * smoothstep(0.25, 1.0, vGrassBladeT));",
+    "    // Wrap subsurface scattering (SSS) for backlit sun translucency",
+    "    float hbFwd = pow(clamp(dot(hbViewDir, -uGrassSunDirWorld - hbGrassGroundN * 0.35), 0.0, 1.0), 3.0);",
+    "    vec3 hbTrans = diffuseColor.rgb * vec3(0.30, 0.34, 0.09) * uGrassSunColor * (hbFwd * hbSunElevGate * hbUnocc * smoothstep(0.25, 1.0, vGrassBladeT) * 0.45);",
     "    outgoingLight = hbBaseLit + hbTrans;",
     "  }",
   ].join("\n");

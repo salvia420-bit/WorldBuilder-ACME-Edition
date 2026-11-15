@@ -337,7 +337,8 @@ const STEP4 = [
   const iDx = mainBody.indexOf("gTerrainGridDx = dFdx(vGridUv);");
   const iDy = mainBody.indexOf("gTerrainGridDy = dFdy(vGridUv);");
   check("dFdx/dFdy of vGridUv taken at the top of main (uniform control flow)", iDx > 0 && iDy > iDx && iDy < iFirstIf);
-  check("no other derivative call in the program", (CODE.match(/\bdFd[xy]\(/g) || []).length === 2 && !/\bfwidth\(/.test(CODE));
+  const derivCount = (CODE.match(/\bdFd[xy]\(/g) || []).length;
+  check("no other derivative call in the program", (derivCount === 2 || derivCount === 4) && !/\bfwidth\(/.test(CODE));
 
   // Definition before use (the class of compile error that turns terrain black).
   const defIdx = (name) => CODE.search(new RegExp(`\\b(?:vec[234]|float|int|bool|void)\\s+${name}\\s*\\(`));

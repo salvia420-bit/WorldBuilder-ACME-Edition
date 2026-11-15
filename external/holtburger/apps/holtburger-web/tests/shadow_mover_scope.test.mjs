@@ -37,7 +37,7 @@ import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 
 globalThis.window = globalThis.window || {};
-// ?csmStable=off (2026-10-20, shadows-restore-1): A (12-frame ceilings on every
+// ?csmStable=off&csmStaticOnly=off (2026-10-20, shadows-restore-1): A (12-frame ceilings on every
 // cascade) and I (a camera move refits all three) are the view-slice cascade
 // fit's behaviour; the stable cascades' partial refits and 12/24/60 ceilings are
 // pinned in tests/csm_stable.test.mjs. The L flag cases restore this search.

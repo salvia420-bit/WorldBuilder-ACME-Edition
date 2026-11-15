@@ -198,6 +198,10 @@ const TIER4 = [
   { flag: "stanceRoutingLoco", file: "tests/stance_routing_and_loco_transitions.test.mjs" },
   { flag: "projectileAlignPath", file: "tests/projectile_align_path.test.mjs" },
   { flag: "projectileOmega+particleRotAce", file: "tests/projectile_spin.test.mjs" },
+  { flag: "visualImprovementsTier1", file: "tests/visual_improvements_tier1.test.mjs" },
+  { flag: "visualImprovementsTier2", file: "tests/visual_improvements_tier2.test.mjs" },
+  { flag: "visualImprovementsTier3", file: "tests/visual_improvements_tier3.test.mjs" },
+  { flag: "visualImprovementsTier4", file: "tests/visual_improvements_tier4.test.mjs" },
 ].map((t) => ({ ...t, tier: 4 }));
 
 
@@ -1579,6 +1583,8 @@ const TIER5 = [
   { tier: 5, flag: "challenger_m3_tier5_lifecycle_stress", file: "tests/challenger_m3_tier5_lifecycle_stress.test.mjs" },
   { tier: 5, flag: "challenger_m4_2_stress", file: "tests/challenger_m4_2_stress.test.mjs" },
   { tier: 5, flag: "challenger_static_atlas_raymarch", file: "tests/challenger_static_atlas_raymarch.test.mjs" },
+  { tier: 5, flag: "challenger_m5_tier5_landscape", file: "tests/challenger_m5_tier5_landscape.test.mjs" },
+  { tier: 5, flag: "challenger_m5_tier5_geometry", file: "tests/challenger_m5_tier5_geometry.test.mjs" },
   { tier: 5, flag: "clone_pom_persistence", file: "tests/clone_pom_persistence.test.mjs" },
   { tier: 5, flag: "m4_stress_bake_worker", file: "tests/m4_stress_bake_worker.test.mjs" },
   { tier: 5, flag: "m4_stress_framework", file: "tests/m4_stress_framework.test.mjs" },

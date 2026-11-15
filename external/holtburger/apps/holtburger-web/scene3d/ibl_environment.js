@@ -971,3 +971,32 @@ export class IblEnvironment {
     this._warmPending.clear();
   }
 }
+
+// ---------------------------------------------------------------------------
+// Milestone 3 (Feature 25) — Lagarde Frostbite Specular Occlusion Formula
+// ---------------------------------------------------------------------------
+
+/**
+ * Lagarde 2014 Frostbite directional PMREM specular suppression based on AO and roughness.
+ * Prevents unoccluded sky reflection highlights in crevices and under dense canopies.
+ */
+export function lagardeSpecularOcclusion(ndotv, ao, roughness) {
+  const clampedNdotV = Math.max(0.0, Math.min(1.0, ndotv));
+  const clampedAo = Math.max(0.0, Math.min(1.0, ao));
+  const r = Math.max(0.0, Math.min(1.0, roughness));
+  const base = Math.max(0.0, clampedNdotV + clampedAo);
+  const exponent = Math.pow(2.0, -16.0 * r - 1.0);
+  return Math.max(0.0, Math.min(1.0, Math.pow(base, exponent) - 1.0 + clampedAo));
+}
+
+export const LAGARDE_SPECULAR_OCCLUSION_GLSL = /* glsl */ `
+float lagardeSpecularOcclusion(float ndotv, float ao, float roughness) {
+  float clampedNdotV = clamp(ndotv, 0.0, 1.0);
+  float clampedAo = clamp(ao, 0.0, 1.0);
+  float r = clamp(roughness, 0.0, 1.0);
+  float base = max(0.0, clampedNdotV + clampedAo);
+  float exponent = exp2(-16.0 * r - 1.0);
+  return clamp(pow(base, exponent) - 1.0 + clampedAo, 0.0, 1.0);
+}
+`;
+

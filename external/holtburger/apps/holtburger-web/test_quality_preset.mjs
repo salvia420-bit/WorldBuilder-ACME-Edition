@@ -13,7 +13,7 @@ import { dirname, resolve as resolvePath } from "node:path";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const qualityUrl =
     "file://" + resolvePath(__dirname, "scene3d/quality.js");
-const { PRESETS, PRESET_NAMES, getQuality, isMobileUA } = await import(qualityUrl);
+const { PRESETS, PRESET_NAMES, getQuality, isMobileUA, TERRAIN_VFX_PROMOTED, applyQualityPreset } = await import(qualityUrl);
 
 let failed = 0;
 let passed = 0;
@@ -73,17 +73,17 @@ console.log("\nGroup 1: preset table integrity");
             PRESETS.mid.csm === false
     );
     check(
-        "high preset: all features on except csm (off 2026-10-17), subdivLevel=4",
+        "high preset: all features on including csm (promoted M1 static CSM), subdivLevel=4",
         !("shadows" in PRESETS.high) &&
             PRESETS.high.pom === true &&
-            PRESETS.high.csm === false &&
+            PRESETS.high.csm === true &&
             PRESETS.high.subdivLevel === 4
     );
     check(
-        "ultra preset: all features on except csm (off 2026-10-17), subdivLevel=8",
+        "ultra preset: all features on including csm (promoted M1 static CSM), subdivLevel=8",
         !("shadows" in PRESETS.ultra) &&
             PRESETS.ultra.pom === true &&
-            PRESETS.ultra.csm === false &&
+            PRESETS.ultra.csm === true &&
             PRESETS.ultra.subdivLevel === 8
     );
     // Per spec § Phase X.1 acceptance criterion #1: `?quality=low`
@@ -108,10 +108,10 @@ console.log("\nGroup 2: URL parsing");
 
     const q2 = getQuality("https://example.com/?quality=high", DESKTOP_UA);
     check(
-        "?quality=high → preset=high, heavy on except csm",
+        "?quality=high → preset=high, heavy on including csm",
         q2.preset === "high" &&
             q2.flags.pom === true &&
-            q2.flags.csm === false &&
+            q2.flags.csm === true &&
             q2.flags.subdivLevel === 4
     );
 
@@ -271,6 +271,114 @@ console.log("\nGroup 5: edge cases");
     check(
         "PRESETS not mutated by caller's flag mutation",
         q6.flags.triplanar === true
+    );
+}
+
+// ---- Feature 29: Quality Tier Promotion & Overrides (Milestone 4) ---
+console.log("\nGroup 6: Milestone 4 — Feature 29 quality promotions & URL overrides");
+{
+    // Promotion defaults on high and ultra
+    check(
+        "high preset has all 12 visual improvements promoted",
+        PRESETS.high.csm === true &&
+        PRESETS.high.waterPass === true &&
+        PRESETS.high.gtao === true &&
+        PRESETS.high.sscs === true &&
+        PRESETS.high.farRing === true &&
+        PRESETS.high.farRadius === 11 &&
+        PRESETS.high.impostors === true &&
+        PRESETS.high.farForest === true &&
+        PRESETS.high.swampMist === true &&
+        PRESETS.high.nearRvt === true &&
+        PRESETS.high.ssr === true &&
+        TERRAIN_VFX_PROMOTED.swamp === true
+    );
+
+    check(
+        "ultra preset has all 12 visual improvements promoted",
+        PRESETS.ultra.csm === true &&
+        PRESETS.ultra.waterPass === true &&
+        PRESETS.ultra.gtao === true &&
+        PRESETS.ultra.sscs === true &&
+        PRESETS.ultra.farRing === true &&
+        PRESETS.ultra.farRadius === 11 &&
+        PRESETS.ultra.impostors === true &&
+        PRESETS.ultra.farForest === true &&
+        PRESETS.ultra.swampMist === true &&
+        PRESETS.ultra.nearRvt === true &&
+        PRESETS.ultra.ssr === true &&
+        TERRAIN_VFX_PROMOTED.swamp === true
+    );
+
+    // Scaling back on low and mid
+    check(
+        "low preset scales back expensive passes",
+        PRESETS.low.csm === false &&
+        PRESETS.low.waterPass === false &&
+        PRESETS.low.gtao === false &&
+        PRESETS.low.sscs === false &&
+        PRESETS.low.farRing === false &&
+        PRESETS.low.impostors === false &&
+        PRESETS.low.swampMist === false
+    );
+
+    check(
+        "mid preset scales back expensive passes",
+        PRESETS.mid.csm === false &&
+        PRESETS.mid.waterPass === false &&
+        PRESETS.mid.gtao === false &&
+        PRESETS.mid.sscs === false &&
+        PRESETS.mid.farRing === false &&
+        PRESETS.mid.impostors === false &&
+        PRESETS.mid.swampMist === false
+    );
+
+    // URL flag overrides for all promoted passes
+    const qOverrideOff = getQuality(
+        "https://example.com/?quality=high&csm=off&waterPass=off&gtao=off&sscs=off&farRing=off&impostors=off&swampMist=off&ssr=off&nearRvt=off",
+        DESKTOP_UA
+    );
+    check(
+        "URL query flag overrides disable features on high tier",
+        qOverrideOff.flags.csm === false &&
+        qOverrideOff.flags.waterPass === false &&
+        qOverrideOff.flags.gtao === false &&
+        qOverrideOff.flags.sscs === false &&
+        qOverrideOff.flags.farRing === false &&
+        qOverrideOff.flags.impostors === false &&
+        qOverrideOff.flags.farForest === false &&
+        qOverrideOff.flags.swampMist === false &&
+        qOverrideOff.flags.ssr === false &&
+        qOverrideOff.flags.nearRvt === false
+    );
+
+    const qOverrideOn = getQuality(
+        "https://example.com/?quality=low&csm=on&waterPass=on&gtao=on&sscs=on&farRing=on&farRadius=14&impostors=on&swampMist=on",
+        DESKTOP_UA
+    );
+    check(
+        "URL query flag overrides enable features on low tier with numeric farRadius",
+        qOverrideOn.flags.csm === true &&
+        qOverrideOn.flags.waterPass === true &&
+        qOverrideOn.flags.gtao === true &&
+        qOverrideOn.flags.sscs === true &&
+        qOverrideOn.flags.farRing === true &&
+        qOverrideOn.flags.farRadius === 14 &&
+        qOverrideOn.flags.impostors === true &&
+        qOverrideOn.flags.farForest === true &&
+        qOverrideOn.flags.swampMist === true
+    );
+
+    // applyQualityPreset helper verification
+    const mockScene = {};
+    const applied = applyQualityPreset(mockScene, "ultra", { csm: false });
+    check(
+        "applyQualityPreset sets scene.quality and applies overrides",
+        mockScene.quality !== undefined &&
+        mockScene.quality.preset === "ultra" &&
+        mockScene.quality.flags.csm === false &&
+        mockScene.quality.flags.waterPass === true &&
+        applied.flags.csm === false
     );
 }
 

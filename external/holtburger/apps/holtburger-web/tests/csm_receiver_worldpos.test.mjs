@@ -354,10 +354,13 @@ console.log("\n-- D default path untouched -------------------------------------
 {
   for (const tier of PRESET_NAMES) {
     const q = getQuality(`http://127.0.0.1:8765/?quality=${tier}`, "Mozilla/5.0");
-    check(`preset ${tier}: CSM off by default`, q?.flags?.csm === false, String(q?.flags?.csm));
+    const wantCsm = (tier === "high" || tier === "ultra");
+    check(`preset ${tier}: CSM default parity (expected ${wantCsm})`, q?.flags?.csm === wantCsm, String(q?.flags?.csm));
   }
-  const qOn = getQuality("http://127.0.0.1:8765/?quality=ultra&csm=on", "Mozilla/5.0");
-  check("?csm=on still opts in (the only path these changes reach)", qOn?.flags?.csm === true);
+  const qOffHigh = getQuality("http://127.0.0.1:8765/?quality=high&csm=off", "Mozilla/5.0");
+  check("?csm=off escapes high preset CSM", qOffHigh?.flags?.csm === false);
+  const qOn = getQuality("http://127.0.0.1:8765/?quality=mid&csm=on", "Mozilla/5.0");
+  check("?csm=on still opts in on mid", qOn?.flags?.csm === true);
 
   const cache = new MaterialCache({});
   const tex = new THREE.DataTexture(new Uint8Array([255, 255, 255, 255]), 1, 1);

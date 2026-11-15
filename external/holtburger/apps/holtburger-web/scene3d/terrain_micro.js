@@ -368,6 +368,8 @@ export function terrainSamplingGlsl(gradUv) {
 // 2026-10-07 (terrain step 4) — atlas / nra / mask taps through one helper
 // each (scene3d/terrain_micro.js). ?terrainGradUv=off: implicit derivatives,
 // identical to the pre-wave samples.
+vec2 gTerrainGridDx = vec2(0.0);
+vec2 gTerrainGridDy = vec2(0.0);
 vec4 terrainAtlasTex(int code, vec2 cellUv) {
   return texture(uAtlas, atlasUvFor(code, cellUv));
 }

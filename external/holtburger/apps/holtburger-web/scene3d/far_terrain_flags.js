@@ -81,9 +81,9 @@ export function farRingEnabled() {
   return farTerrainEnabled() && _boolOn("farRing", true);
 }
 
-/** Far ring Chebyshev radius in landblocks. `?farRadius=N`, default 8 (1536 m). */
+/** Far ring Chebyshev radius in landblocks. `?farRadius=N`, default 11 (2.1 km). */
 export function farRadiusLb() {
-  return Math.round(_num("farRadius", 8, 1, 16));
+  return Math.round(_num("farRadius", 11, 1, 16));
 }
 
 /** Composite texels per landblock edge. `?farTexels=64|128|256`, default 128. */

@@ -9,6 +9,7 @@
 import { readFileSync } from "node:fs";
 import {
   farForestEnabled, regionOf, regionsInRange, decodeRegion, atlasCell, viewAzimuth, farForestRegionStride, FF_VERTEX_GLSL, FF_FRAGMENT_GLSL,
+  OCTAHEDRAL_VIEWS, OCTAHEDRAL_GRID, dirToHemiOctahedral, hemiOctahedralToDir,
 } from "../scene3d/far_forest.js";
 import { farForestRangeM } from "../scene3d/altitude_policy.js";
 
@@ -75,6 +76,24 @@ check("two nearest views cross-dithered (no 45-degree card flips in a turn): bot
       && !/mc\.get\(sid, surfacePixelsFetcher\)/.test(src));
   check("FF-SRC a part whose surface fell back to the grey material is left out of the bake (no grey cards)",
     /src === mc\.fallbackMaterial\) \{ fallbackParts \+= 1; continue; \}/.test(src));
+}
+
+console.log("-- F6 hemi-octahedral impostors --------------------------------------");
+{
+  check("OCTAHEDRAL_VIEWS = 16 (4x4 upper-hemisphere grid)", OCTAHEDRAL_VIEWS === 16 && OCTAHEDRAL_GRID === 4);
+  const up = { x: 0, y: 0, z: 1 };
+  const [uUp, vUp] = dirToHemiOctahedral(up);
+  check("straight up maps to center (0.5, 0.5)", Math.abs(uUp - 0.5) < 1e-4 && Math.abs(vUp - 0.5) < 1e-4);
+  const dirRound = hemiOctahedralToDir(uUp, vUp);
+  check("center round-trip produces straight up vector", Math.abs(dirRound.z - 1) < 1e-4 && Math.hypot(dirRound.x, dirRound.y) < 1e-4);
+
+  check("16 views per model atlas cell", JSON.stringify(atlasCell(0, 0, 16)) === "[0,0]" && JSON.stringify(atlasCell(1, 15, 16)) === "[15,1]");
+
+  check("vertex: 4x4 octahedral barycentric calculations present",
+    /uOctahedral/.test(FF_VERTEX_GLSL) && /vBaryWeights/.test(FF_VERTEX_GLSL) && /vUv2/.test(FF_VERTEX_GLSL));
+  check("fragment: 3-view barycentric mix present",
+    /vBaryWeights\.x \* tA \+ vBaryWeights\.y \* tB \+ vBaryWeights\.z \* tC/.test(FF_FRAGMENT_GLSL)
+    && /mix\(tDither, tBary/.test(FF_FRAGMENT_GLSL));
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

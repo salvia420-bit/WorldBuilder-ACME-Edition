@@ -404,7 +404,25 @@ function _recomputeDerivedWeather() {
 
   _derived.rh_pct = rh;
   _derived.weather_kind = kind;
-  _derived.precip_intensity = Math.min(1, Math.max(0, intensity));
+
+  // Milestone 3 (Feature 27): Weather-Cloud coupling gating rain/snow particle emissions on effective cloud coverage >= 0.62
+  const cloudWeatherDecoupled = (function() {
+    try {
+      const s = typeof window !== 'undefined' && window.location ? String(window.location.search || '') : '';
+      const v = new URLSearchParams(s).get('cloudWeather');
+      return v === 'off' || v === '0' || v === 'false' || v === 'no';
+    } catch (_) {
+      return false;
+    }
+  })();
+
+  let effectiveIntensity = Math.min(1, Math.max(0, intensity));
+  if (!cloudWeatherDecoupled && cloudFactor < 0.62 && (kind === 'rain' || kind === 'snow' || kind === 'storm' || kind === 'blizzard')) {
+    effectiveIntensity = 0.0;
+    precipMmHr = 0.0;
+  }
+
+  _derived.precip_intensity = effectiveIntensity;
   _derived.precip_mm_hr = Math.max(0, precipMmHr);
 
   // Bidirectional cloud thickening, base lowering, and storm-base darkening
@@ -758,6 +776,11 @@ export function _resetWeatherStateForTest() {
   state.season = 1;
   _weatherMode = parseWeatherUrlMode();
   recompute();
+}
+
+/** Milestone 3 (Feature 27) — Precipitation gate cloud coverage threshold (>= 0.62) */
+export function isRainPermitted(cloudFactor) {
+  return (Number(cloudFactor) || 0) >= 0.62;
 }
 
 // Initialise derived fields on module load.

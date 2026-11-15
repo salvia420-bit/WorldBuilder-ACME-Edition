@@ -525,6 +525,13 @@ function _buildBatchedGlsl(vertexGlsl, fragmentGlsl, noDrawId = null) {
     f = _replaceOnce(f, WATER_FOAM_FETCH_ANCHOR, WATER_FOAM_FETCH_BATCHED, "frag water foam fetch");
     if (f == null) return null;
   }
+  // 11. 2026-11-15 — Horizon elevation shadows: packed columns 36..44
+  if (f.includes("texelFetch(uVertexTypes, ivec2(36 + iu, iv), 0)")) {
+    f = f.replace(/texelFetch\(uVertexTypes,\s*ivec2\(36\s*\+\s*iu,\s*iv\),\s*0\)/g, "texelFetch(uVertexTypes, ivec3(36 + iu, iv, int(vLbSlot + 0.5)), 0)");
+    f = f.replace(/texelFetch\(uVertexTypes,\s*ivec2\(36\s*\+\s*iu\s*\+\s*1,\s*iv\),\s*0\)/g, "texelFetch(uVertexTypes, ivec3(36 + iu + 1, iv, int(vLbSlot + 0.5)), 0)");
+    f = f.replace(/texelFetch\(uVertexTypes,\s*ivec2\(36\s*\+\s*iu,\s*iv\s*\+\s*1\),\s*0\)/g, "texelFetch(uVertexTypes, ivec3(36 + iu, iv + 1, int(vLbSlot + 0.5)), 0)");
+    f = f.replace(/texelFetch\(uVertexTypes,\s*ivec2\(36\s*\+\s*iu\s*\+\s*1,\s*iv\s*\+\s*1\),\s*0\)/g, "texelFetch(uVertexTypes, ivec3(36 + iu + 1, iv + 1, int(vLbSlot + 0.5)), 0)");
+  }
 
   return { vertexShader: v, fragmentShader: f };
 }

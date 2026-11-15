@@ -1261,6 +1261,10 @@ function assertRadiusPolicy(scene3d) {
   const st = _state;
   const plb = playerLb(scene3d);
   if (!plb) return;
+
+  if (st.horizonSkirt) {
+    st.horizonSkirt.position.set(plb.x * METERS_PER_LANDBLOCK, plb.y * METERS_PER_LANDBLOCK, 0);
+  }
   // ⚠ THE FAR RING HAS NO INNER HOLE — it is baked and drawn across the whole
   // radius INCLUDING under the player (that is what saves you when the geometry
   // governor collapses the near ring), and a per-fragment discard hides it
@@ -1404,8 +1408,24 @@ export function initFarTerrain(scene3d, { parent, renderer } = {}) {
   group.userData.__punchPhase = 0;
   (parent ?? scene3d.terrainGroup.parent ?? scene3d.terrainGroup).add(group);
 
+  // Milestone 1 — low-poly sea-level horizon skirt (2km - 12km) writing depth for continuous fog
+  const skirtGeom = new THREE.RingGeometry(2000, 12000, 48, 2);
+  const skirtMat = new THREE.MeshBasicMaterial({
+    color: 0x182c3c,
+    depthWrite: true,
+    fog: true,
+    side: THREE.DoubleSide,
+  });
+  const skirtMesh = new THREE.Mesh(skirtGeom, skirtMat);
+  skirtMesh.name = "far-horizon-sea-skirt";
+  skirtMesh.position.set(0, 0, 0); // Sea level Z=0 in AC coordinates
+  skirtMesh.frustumCulled = false;
+  skirtMesh.renderOrder = -2;
+  group.add(skirtMesh);
+
   _state = {
     group,
+    horizonSkirt: skirtMesh,
     renderer: renderer ?? scene3d.renderer ?? null,
     radius: farRadiusLb(),
     texels: farTexelsPerLb(),
@@ -1485,6 +1505,10 @@ export function tickFarTerrain(scene3d, sessionHandle, renderer) {
 
   const plb = playerLb(scene3d);
   if (!plb) return;
+
+  if (st.horizonSkirt) {
+    st.horizonSkirt.position.set(plb.x * METERS_PER_LANDBLOCK, plb.y * METERS_PER_LANDBLOCK, 0);
+  }
 
   // --- 2. retirement ------------------------------------------------------
   const keepR = st.radius + PATCH_LB; // hysteresis: one patch of slack
@@ -1976,4 +2000,128 @@ export function disposeFarTerrain() {
   try { _state.vtTex?.dispose(); _state.mergeTex?.dispose(); } catch (_) { /* nothing */ }
   try { _state.material?.dispose(); } catch (_) { /* nothing */ }
   _state = null;
+}
+
+// ===========================================================================
+// Milestone 1 — Near RVT (Runtime Virtual Texture) Baker & Toroidal Scroller
+// 1024x1024 RGBA8 render target covering 128m extent with 16m toroidal scrolling
+// ===========================================================================
+
+export const NEAR_RVT_EXTENT_M = 128.0;
+export const NEAR_RVT_SIZE = 1024;
+export const NEAR_RVT_GRID_SNAP_M = 16.0;
+
+export function nearRvtEnabled(search) {
+  try {
+    const s = search ?? globalThis.location?.search ?? "";
+    const v = (new URLSearchParams(s).get("nearRvt") || "").toLowerCase();
+    return !(v === "off" || v === "0" || v === "false" || v === "no");
+  } catch (_) {
+    return true;
+  }
+}
+
+let _nearRvtState = null;
+
+export function getNearRvtState(scene3d) {
+  if (_nearRvtState) return _nearRvtState;
+  const target = new THREE.WebGLRenderTarget(NEAR_RVT_SIZE, NEAR_RVT_SIZE, {
+    type: THREE.UnsignedByteType,
+    format: THREE.RGBAFormat,
+    minFilter: THREE.LinearFilter,
+    magFilter: THREE.LinearFilter,
+    generateMipmaps: false,
+    depthBuffer: true,
+  });
+  target.texture.name = "near-rvt-albedo";
+  target.texture.wrapS = THREE.RepeatWrapping;
+  target.texture.wrapT = THREE.RepeatWrapping;
+
+  const cam = new THREE.OrthographicCamera(
+    -NEAR_RVT_EXTENT_M / 2, NEAR_RVT_EXTENT_M / 2,
+    NEAR_RVT_EXTENT_M / 2, -NEAR_RVT_EXTENT_M / 2,
+    1, 2500
+  );
+  cam.up.set(0, 0, -1);
+
+  _nearRvtState = {
+    target,
+    cam,
+    params: new THREE.Vector4(0, 0, NEAR_RVT_EXTENT_M, 1.0 / NEAR_RVT_EXTENT_M),
+    gridX: -999999,
+    gridZ: -999999,
+    baked: false,
+  };
+  return _nearRvtState;
+}
+
+export function tickNearRvt(scene3d, renderer) {
+  if (!nearRvtEnabled() || !scene3d) return;
+  const rend = renderer || scene3d.renderer;
+  if (!rend) return;
+  const st = getNearRvtState(scene3d);
+  if (!scene3d.nearRvt) {
+    scene3d.nearRvt = {
+      target: st.target,
+      texture: st.target.texture,
+      params: st.params,
+    };
+  }
+  const csm = scene3d.csmState || scene3d.lighting?.csmState;
+  if (csm) {
+    if (!csm.nearRvtTexture) csm.nearRvtTexture = { value: st.target.texture };
+    else csm.nearRvtTexture.value = st.target.texture;
+    if (!csm.nearRvtParams) csm.nearRvtParams = { value: st.params };
+    else csm.nearRvtParams.value = st.params;
+    if (!csm.nearRvtEnabled) csm.nearRvtEnabled = { value: nearRvtEnabled() ? 1.0 : 0.0 };
+    else csm.nearRvtEnabled.value = nearRvtEnabled() ? 1.0 : 0.0;
+  }
+
+  const cam = scene3d?.cameraSwitcher?.activeCamera ?? scene3d?.camera ?? null;
+  if (!cam) return;
+  const px = cam.position.x || 0;
+  const pz = cam.position.z || 0;
+
+  const gridX = Math.floor(px / NEAR_RVT_GRID_SNAP_M) * NEAR_RVT_GRID_SNAP_M;
+  const gridZ = Math.floor(pz / NEAR_RVT_GRID_SNAP_M) * NEAR_RVT_GRID_SNAP_M;
+
+  if (gridX === st.gridX && gridZ === st.gridZ && st.baked) return;
+
+  st.gridX = gridX;
+  st.gridZ = gridZ;
+  const originX = gridX - NEAR_RVT_EXTENT_M * 0.5;
+  const originZ = gridZ - NEAR_RVT_EXTENT_M * 0.5;
+  st.params.set(originX, originZ, NEAR_RVT_EXTENT_M, 1.0 / NEAR_RVT_EXTENT_M);
+
+  const rig = ensureBakeRig(scene3d);
+  if (!rig || !rig.scene || !rig.mat) {
+    st.baked = true;
+    return;
+  }
+
+  st.cam.position.set(gridX, 1000, gridZ);
+  st.cam.lookAt(gridX, 0, gridZ);
+  st.cam.up.set(0, 0, -1);
+  st.cam.updateMatrixWorld(true);
+
+  if (typeof rend.getRenderTarget === "function") {
+    const prevTarget = rend.getRenderTarget();
+    const prevAutoClear = rend.autoClear;
+    rend.setRenderTarget(st.target);
+    rend.autoClear = false;
+    if (typeof rend.clear === "function") rend.clear(true, true, false);
+
+    if (scene3d.terrainGroup && typeof rend.render === "function") {
+      const origOverride = rig.scene.overrideMaterial;
+      rig.scene.overrideMaterial = rig.mat;
+      try {
+        rend.render(scene3d.terrainGroup, st.cam);
+      } catch (_) {}
+      rig.scene.overrideMaterial = origOverride;
+    }
+
+    rend.setRenderTarget(prevTarget);
+    rend.autoClear = prevAutoClear;
+  }
+  st.baked = true;
 }

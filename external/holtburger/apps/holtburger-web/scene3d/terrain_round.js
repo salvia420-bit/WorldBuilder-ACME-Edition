@@ -205,8 +205,9 @@ export function readTerrainRoundConfig(search) {
 
 /** The session config (module load, like every sibling terrain flag). */
 export const TERRAIN_ROUND = readTerrainRoundConfig();
+export const HORIZON_TYPES_COLS = 45;
 
-/** Width of the per-LB `uVertexTypes` texture this session (9 or 18). */
+/** Width of the per-LB `uVertexTypes` texture this session (9 cols without bevel, 18 with bevel). */
 export function terrainRoundTypesCols(cfg = TERRAIN_ROUND) {
   return cfg && cfg.enabled && cfg.bevel ? TYPES_COLS_BASE * 2 : TYPES_COLS_BASE;
 }
@@ -264,6 +265,276 @@ export function writeTerrainRoundNormals(bytes, cols, acLight, gridSize, factor)
     }
   }
   return ok;
+}
+
+// Map from landblock key to normal cache: ((lbX & 0xff) << 8) | (lbY & 0xff) -> Float32Array(81 * 3)
+const _borderNormals = new Map();
+
+// Map from landblock key to resident buffer metadata: ((lbX & 0xff) << 8) | (lbY & 0xff) -> { bytes, cols, texture }
+const _residentLandblocks = new Map();
+
+/**
+ * Milestone 2 Feature 10: Seamless Cross-Landblock Normal Stitching.
+ * Caches border vertex normals and stitches shared 9x9 edge normals across adjacent 192m landblocks.
+ * Supports two-way retroactive stitching: when landblock B bakes, previously baked neighbour A's
+ * shared border bytes and GPU uVertexTypes texture are retroactively updated.
+ */
+export function noteTerrainRoundNormals(lbX, lbY, acLight, gridSize, factor) {
+  if (lbX == null || lbY == null || !acLight) return;
+  const key = ((lbX & 0xff) << 8) | (lbY & 0xff);
+  const n = gridSize | 0;
+  const f = factor | 0;
+  const ok = f >= 1 && n === 8 * f + 1 && acLight.length >= 3 * n * n;
+  if (!ok) return;
+  let copy = _borderNormals.get(key);
+  if (!copy) {
+    if (_borderNormals.size >= 4096) _borderNormals.delete(_borderNormals.keys().next().value);
+    copy = new Float32Array(81 * 3);
+    _borderNormals.set(key, copy);
+  }
+  for (let y = 0; y <= 8; y++) {
+    for (let x = 0; x <= 8; x++) {
+      const src = ((x * f) * n + y * f) * 3;
+      const dst = (y * 9 + x) * 3;
+      copy[dst + 0] = acLight[src + 0];
+      copy[dst + 1] = acLight[src + 1];
+      copy[dst + 2] = acLight[src + 2];
+    }
+  }
+}
+
+/**
+ * Uploads a sub-region of a resident uVertexTypes texture directly via gl.texSubImage2D
+ * if a direct WebGL2 context and texture handle are available.
+ */
+export function updateVertexTypesSubImage(gl, webglTexture, x, y, width, height, data, strideCols) {
+  if (!gl || !webglTexture || !data) return false;
+  gl.bindTexture(gl.TEXTURE_2D, webglTexture);
+  gl.pixelStorei(gl.UNPACK_ROW_LENGTH, strideCols);
+  gl.pixelStorei(gl.UNPACK_SKIP_PIXELS, x);
+  gl.pixelStorei(gl.UNPACK_SKIP_ROWS, y);
+  gl.pixelStorei(gl.UNPACK_ALIGNMENT, 4);
+  gl.texSubImage2D(
+    gl.TEXTURE_2D,
+    0,
+    x,
+    y,
+    width,
+    height,
+    gl.RGBA,
+    gl.UNSIGNED_BYTE,
+    data
+  );
+  gl.pixelStorei(gl.UNPACK_ROW_LENGTH, 0);
+  gl.pixelStorei(gl.UNPACK_SKIP_PIXELS, 0);
+  gl.pixelStorei(gl.UNPACK_SKIP_ROWS, 0);
+  return true;
+}
+
+export function stitchTerrainRoundNormals(lbX, lbY, bytes, cols, texture = null) {
+  if (lbX == null || lbY == null || !bytes || cols < 18) return false;
+  const keySelf = ((lbX & 0xff) << 8) | (lbY & 0xff);
+  const selfN = _borderNormals.get(keySelf);
+  if (!selfN) return false;
+
+  // Register self in the resident landblock cache
+  if (_residentLandblocks.size >= 4096) {
+    _residentLandblocks.delete(_residentLandblocks.keys().next().value);
+  }
+  _residentLandblocks.set(keySelf, { bytes, cols, texture });
+
+  // 1. East edge of self (x=8) meets West edge of east neighbour (x=0)
+  const keyEast = (((lbX + 1) & 0xff) << 8) | (lbY & 0xff);
+  const eastN = _borderNormals.get(keyEast);
+  const eastRes = _residentLandblocks.get(keyEast);
+  if (eastN) {
+    for (let y = 0; y <= 8; y++) {
+      const iSelf = (y * 9 + 8) * 3;
+      const iEast = (y * 9 + 0) * 3;
+      const nx = selfN[iSelf] + eastN[iEast];
+      const ny = selfN[iSelf + 1] + eastN[iEast + 1];
+      const nz = selfN[iSelf + 2] + eastN[iEast + 2];
+      const len = Math.hypot(nx, ny, nz) || 1.0;
+      const bx = encodeNormalByte(nx / len);
+      const by = encodeNormalByte(ny / len);
+
+      // Write into Self
+      const dstSelf = (y * cols + TYPES_COLS_BASE + 8) * 4;
+      bytes[dstSelf + 0] = bx;
+      bytes[dstSelf + 1] = by;
+
+      // Retroactively update East neighbour
+      if (eastRes && eastRes.bytes) {
+        const dstEast = (y * eastRes.cols + TYPES_COLS_BASE + 0) * 4;
+        eastRes.bytes[dstEast + 0] = bx;
+        eastRes.bytes[dstEast + 1] = by;
+      }
+    }
+    if (eastRes && eastRes.texture) {
+      eastRes.texture.needsUpdate = true;
+    }
+  }
+
+  // 2. West edge of self (x=0) meets East edge of west neighbour (x=8)
+  const keyWest = (((lbX - 1) & 0xff) << 8) | (lbY & 0xff);
+  const westN = _borderNormals.get(keyWest);
+  const westRes = _residentLandblocks.get(keyWest);
+  if (westN) {
+    for (let y = 0; y <= 8; y++) {
+      const iSelf = (y * 9 + 0) * 3;
+      const iWest = (y * 9 + 8) * 3;
+      const nx = selfN[iSelf] + westN[iWest];
+      const ny = selfN[iSelf + 1] + westN[iWest + 1];
+      const nz = selfN[iSelf + 2] + westN[iWest + 2];
+      const len = Math.hypot(nx, ny, nz) || 1.0;
+      const bx = encodeNormalByte(nx / len);
+      const by = encodeNormalByte(ny / len);
+
+      // Write into Self
+      const dstSelf = (y * cols + TYPES_COLS_BASE + 0) * 4;
+      bytes[dstSelf + 0] = bx;
+      bytes[dstSelf + 1] = by;
+
+      // Retroactively update West neighbour
+      if (westRes && westRes.bytes) {
+        const dstWest = (y * westRes.cols + TYPES_COLS_BASE + 8) * 4;
+        westRes.bytes[dstWest + 0] = bx;
+        westRes.bytes[dstWest + 1] = by;
+      }
+    }
+    if (westRes && westRes.texture) {
+      westRes.texture.needsUpdate = true;
+    }
+  }
+
+  // 3. North edge of self (y=8) meets South edge of north neighbour (y=0)
+  const keyNorth = ((lbX & 0xff) << 8) | (((lbY + 1) & 0xff));
+  const northN = _borderNormals.get(keyNorth);
+  const northRes = _residentLandblocks.get(keyNorth);
+  if (northN) {
+    for (let x = 0; x <= 8; x++) {
+      const iSelf = (8 * 9 + x) * 3;
+      const iNorth = (0 * 9 + x) * 3;
+      const nx = selfN[iSelf] + northN[iNorth];
+      const ny = selfN[iSelf + 1] + northN[iNorth + 1];
+      const nz = selfN[iSelf + 2] + northN[iNorth + 2];
+      const len = Math.hypot(nx, ny, nz) || 1.0;
+      const bx = encodeNormalByte(nx / len);
+      const by = encodeNormalByte(ny / len);
+
+      // Write into Self
+      const dstSelf = (8 * cols + TYPES_COLS_BASE + x) * 4;
+      bytes[dstSelf + 0] = bx;
+      bytes[dstSelf + 1] = by;
+
+      // Retroactively update North neighbour
+      if (northRes && northRes.bytes) {
+        const dstNorth = (0 * northRes.cols + TYPES_COLS_BASE + x) * 4;
+        northRes.bytes[dstNorth + 0] = bx;
+        northRes.bytes[dstNorth + 1] = by;
+      }
+    }
+    if (northRes && northRes.texture) {
+      northRes.texture.needsUpdate = true;
+    }
+  }
+
+  // 4. South edge of self (y=0) meets North edge of south neighbour (y=8)
+  const keySouth = ((lbX & 0xff) << 8) | (((lbY - 1) & 0xff));
+  const southN = _borderNormals.get(keySouth);
+  const southRes = _residentLandblocks.get(keySouth);
+  if (southN) {
+    for (let x = 0; x <= 8; x++) {
+      const iSelf = (0 * 9 + x) * 3;
+      const iSouth = (8 * 9 + x) * 3;
+      const nx = selfN[iSelf] + southN[iSouth];
+      const ny = selfN[iSelf + 1] + southN[iSouth + 1];
+      const nz = selfN[iSelf + 2] + southN[iSouth + 2];
+      const len = Math.hypot(nx, ny, nz) || 1.0;
+      const bx = encodeNormalByte(nx / len);
+      const by = encodeNormalByte(ny / len);
+
+      // Write into Self
+      const dstSelf = (0 * cols + TYPES_COLS_BASE + x) * 4;
+      bytes[dstSelf + 0] = bx;
+      bytes[dstSelf + 1] = by;
+
+      // Retroactively update South neighbour
+      if (southRes && southRes.bytes) {
+        const dstSouth = (8 * southRes.cols + TYPES_COLS_BASE + x) * 4;
+        southRes.bytes[dstSouth + 0] = bx;
+        southRes.bytes[dstSouth + 1] = by;
+      }
+    }
+    if (southRes && southRes.texture) {
+      southRes.texture.needsUpdate = true;
+    }
+  }
+  return true;
+}
+
+/** Untracks an evicted landblock from normal cache and resident tables. */
+export function untrackTerrainRoundLandblock(lbX, lbY) {
+  if (lbX == null || lbY == null) return;
+  const key = ((lbX & 0xff) << 8) | (lbY & 0xff);
+  _borderNormals.delete(key);
+  _residentLandblocks.delete(key);
+}
+
+/** Test reset helper. */
+export function _resetTerrainRoundNormalsForTest() {
+  _borderNormals.clear();
+  _residentLandblocks.clear();
+}
+
+/**
+ * Milestone 2 Feature 18: Macro Terrain Self-Shadowing.
+ * Precomputes and packs 4-azimuth horizon elevation angles (East, South-East, South-West, West)
+ * into columns 36..44 of uVertexTypes.
+ * Each vertex (x, y) stores RGBA = (thetaE, thetaSE, thetaSW, thetaW) scaled to 0..255 (0..pi/2).
+ */
+export function writeTerrainHorizonElevation(bytes, cols, heights81) {
+  if (!bytes || cols < 45 || !heights81 || heights81.length < 81) return false;
+  const HALF_PI = Math.PI * 0.5;
+  for (let y = 0; y <= 8; y++) {
+    for (let x = 0; x <= 8; x++) {
+      const h0 = heights81[x * 9 + y];
+      let maxE = 0, maxSE = 0, maxSW = 0, maxW = 0;
+      for (let step = 1; step <= 8; step++) {
+        const distM = step * 24.0;
+        // East: x + step
+        if (x + step <= 8) {
+          const h = heights81[(x + step) * 9 + y];
+          const ang = Math.atan2(Math.max(0, h - h0), distM);
+          if (ang > maxE) maxE = ang;
+        }
+        // West: x - step
+        if (x - step >= 0) {
+          const h = heights81[(x - step) * 9 + y];
+          const ang = Math.atan2(Math.max(0, h - h0), distM);
+          if (ang > maxW) maxW = ang;
+        }
+        // South-East: x + step, y - step
+        if (x + step <= 8 && y - step >= 0) {
+          const h = heights81[(x + step) * 9 + (y - step)];
+          const ang = Math.atan2(Math.max(0, h - h0), distM * Math.SQRT2);
+          if (ang > maxSE) maxSE = ang;
+        }
+        // South-West: x - step, y - step
+        if (x - step >= 0 && y - step >= 0) {
+          const h = heights81[(x - step) * 9 + (y - step)];
+          const ang = Math.atan2(Math.max(0, h - h0), distM * Math.SQRT2);
+          if (ang > maxSW) maxSW = ang;
+        }
+      }
+      const dst = (y * cols + 36 + x) * 4;
+      bytes[dst + 0] = Math.min(255, Math.max(0, Math.round((maxE / HALF_PI) * 255)));
+      bytes[dst + 1] = Math.min(255, Math.max(0, Math.round((maxSE / HALF_PI) * 255)));
+      bytes[dst + 2] = Math.min(255, Math.max(0, Math.round((maxSW / HALF_PI) * 255)));
+      bytes[dst + 3] = Math.min(255, Math.max(0, Math.round((maxW / HALF_PI) * 255)));
+    }
+  }
+  return true;
 }
 
 // ---------------------------------------------------------------------------

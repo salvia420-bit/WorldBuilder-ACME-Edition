@@ -494,7 +494,8 @@ console.log("\n== L7  the quality ladder matches plan §3.5");
   };
   for (const tier of ["low", "mid", "high", "ultra"]) {
     const p = PRESETS[tier];
-    check(`${tier}: terrainSwamp ships false (§5.9)`, p.terrainSwamp === false);
+    check(`${tier}: terrainSwamp follows the promoted {high, ultra} ladder`,
+      p.terrainSwamp === (tier === "high" || tier === "ultra"));
     for (const [k, v] of Object.entries(want[tier])) {
       check(`${tier}: ${k} === ${v}`, p[k] === v, `${p[k]}`);
     }
@@ -532,7 +533,7 @@ console.log("\n== L7  the quality ladder matches plan §3.5");
   setUrl("?terrainGroundFogSoftness=2.5", PRESETS.high);
   _resetVfxFlags();
   check("?terrainGroundFogSoftness arms the depth read", terrainGroundFogSoftnessM() === 2.5);
-  setUrl("?terrainGroundFogCount=40", PRESETS.high);
+  setUrl("?terrainGroundFogCount=40", PRESETS.mid);
   _resetVfxFlags();
   check("a URL numeric beats the preset", terrainGroundFogCount() === 40);
   check("a numeric alone CANNOT turn the family on", terrainSwampEnabled() === false);

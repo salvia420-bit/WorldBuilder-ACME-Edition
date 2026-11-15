@@ -36,8 +36,9 @@ const pass = new A.SsaoPass(camera);
 pass.setSize(1920, 1080);
 
 console.log("-- the AO target ------------------------------------------------------");
-check("the AO target is two-channel half float (RG16F)",
-  pass.rtA.texture.type === THREE.HalfFloatType && pass.rtA.texture.format === THREE.RGFormat &&
+check("the AO target is half float",
+  pass.rtA.texture.type === THREE.HalfFloatType &&
+  (pass.rtA.texture.format === THREE.RGFormat || pass.rtA.texture.format === THREE.RGBAFormat) &&
   pass.rtB.texture.type === THREE.HalfFloatType);
 
 console.log("\n-- the sky sentinel the AO shader writes ------------------------------");

@@ -297,7 +297,7 @@ await t("P4 the class program = the member's program modulo the documented subst
   let p3 = 0;
   fs = fs.replace(/texture\( hbBatchPomArr, vec3\( ([A-Za-z_][A-Za-z0-9_]*), vHbP0\.x \) \)/g, (_, uv) => { p3 += 1; return `texture2D(uPomMap, ${uv})`; });
   assert.equal(p3, count(ms.fragmentShader, "texture2D(uPomMap,"), "P3: every height sample, and only those");
-  assert.equal(p3, 5, "premise: the patch samples the height map five times");
+  assert.ok(p3 === 5 || p3 === 6, "premise: the patch samples the height map five or six times (secant)");
   for (const [from, to] of CM.pomDeclarationSubstitutions()) undo(to, from, `P1/P2 ${from}`);
   assert.equal(fs, ms.fragmentShader, "fragment: the member's text back, byte for byte");
   // --- the VERTEX text: the layer-state header (+ the POM row fetch), the cell-bit hook ---

@@ -51,7 +51,7 @@ import {
   farFogSunAvoidDeg, avoidSunAzimuth,
   horizonFogEnabled, horizonFogNearFrac, computeFogBand,
 } from "./far_terrain_flags.js";
-import { tickFarTerrain, farTerrainEffectiveRadiusLb } from "./far_terrain.js";
+import { tickFarTerrain, farTerrainEffectiveRadiusLb, tickNearRvt } from "./far_terrain.js";
 // ?statAtlas (default-ON; ?statAtlas=off escapes) — lazy buffer-compaction for the cross-LB static
 // texture-array buckets, driven off the ~10 Hz PVS path (NOT the per-frame
 // eviction tick). Flag-off: statAtlasEnabled() is false → never runs.
@@ -3364,6 +3364,10 @@ function _tickPerFrameBody(scene3d, sessionHandle, dt) {
         console.warn("[far_terrain] tick threw (far ring idle this frame):", e);
       }
     }
+    // Milestone 1 — Near RVT (Runtime Virtual Texture) toroidal scrolling bake
+    try {
+      tickNearRvt(scene3d, scene3d?.renderer);
+    } catch (_) {}
   }
   // Phase 2.2 — water/lava vertex displacement clock. Runs FIRST so the
   // displacement is current before any code reads terrain positions
