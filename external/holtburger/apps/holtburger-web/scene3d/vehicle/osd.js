@@ -21,6 +21,12 @@ const STYLE_ID = "hb-vehicle-osd-style";
 
 export const HIT_DECAY_SEC = 0.35;
 export const KEYBIND_BAR_TEXT = "Click mouse-aim · C freelook · Space guns · G rockets · V bomb · Shift WEP · Tab view · H hud · X exit/bail";
+export const GROUND_DRIVER_KEYBIND_TEXT = "W/S Drive/Brake · A/D Steer · Space Handbrake · Shift 4WD Low · L Lights · V Horn · G Windscreen · 1-4 Seat · Tab View · H HUD · X Exit";
+export const GROUND_PAX_KEYBIND_TEXT = "1-4 Switch Seat · Tab View · C/RMB Freelook · H HUD · X Exit";
+
+export const SURFACE_NAMES = Object.freeze([
+  "ROAD", "GRASS", "DIRT", "SAND", "SNOW", "FORD", "ROCK", "SWAMP", "FOREST", "OBSIDIAN", "VOLCANO",
+]);
 
 const PITCH_RUNGS_DEG = [-20, -10, 10, 20];
 const PX_PER_PITCH_DEG = 3.8;
@@ -32,6 +38,38 @@ const CSS = `
   font:600 12px/1.35 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:#ccf7c4;
   text-shadow:0 1px 2px rgba(0,0,0,.92),0 0 6px rgba(40,180,80,.22)}
 #${OSD_ID}.warn .hb-hud-bottom{border-color:rgba(255,190,90,.65)}
+.hb-ground-dashboard{position:fixed;inset:0;pointer-events:none;display:none}
+.hb-ground-left{position:fixed;left:32px;bottom:36px;display:flex;flex-direction:column;gap:8px;pointer-events:none}
+.hb-ground-speed-box{background:rgba(6,16,11,.75);border:1.5px solid rgba(150,235,155,.45);border-radius:8px;padding:10px 16px;min-width:170px;box-shadow:0 4px 12px rgba(0,0,0,.5)}
+.hb-ground-speed-num{font-size:28px;font-weight:800;color:#f0fff0;line-height:1}
+.hb-ground-speed-unit{font-size:13px;font-weight:700;color:#a2f0a8;margin-left:4px}
+.hb-ground-speed-sub{font-size:12px;color:rgba(195,240,195,.82);margin-top:4px}
+.hb-ground-speed-bar{position:relative;width:100%;height:6px;background:rgba(10,24,15,.8);border-radius:3px;overflow:hidden;margin-top:6px}
+.hb-ground-speed-fill{height:100%;width:0%;background:linear-gradient(90deg,#42b868,#9ef7a4)}
+.hb-ground-gear-box{display:flex;align-items:center;gap:10px;margin-top:6px}
+.hb-ground-gear-badge{padding:3px 10px;background:rgba(16,40,24,.85);border:1.5px solid #85e08c;border-radius:4px;font-size:16px;font-weight:800;color:#eaffea}
+.hb-ground-4wd-badge{padding:3px 8px;background:rgba(80,50,10,.85);border:1.5px solid #ffbe55;border-radius:4px;font-size:11px;font-weight:800;color:#ffd878;display:none}
+.hb-ground-right{position:fixed;right:32px;bottom:36px;display:flex;flex-direction:column;gap:8px;align-items:flex-end;pointer-events:none}
+.hb-ground-drivetrain-box{background:rgba(6,16,11,.75);border:1.5px solid rgba(150,235,155,.45);border-radius:8px;padding:10px 16px;min-width:170px;box-shadow:0 4px 12px rgba(0,0,0,.5)}
+.hb-ground-rpm-title{font-size:12px;color:rgba(195,240,195,.85)}
+.hb-ground-rpm-val{font-size:16px;font-weight:700;color:#f0fff0;margin-left:6px}
+.hb-ground-rpm-bar{position:relative;width:100%;height:6px;background:rgba(10,24,15,.8);border-radius:3px;overflow:hidden;margin:4px 0 8px 0}
+.hb-ground-rpm-fill{height:100%;width:0%;background:linear-gradient(90deg,#42b868,#ffd878)}
+.hb-ground-surface-badge{display:inline-block;padding:3px 8px;background:rgba(18,36,24,.75);border:1px solid rgba(150,235,155,.5);border-radius:4px;font-size:11px;font-weight:700;color:#ccf7c4;letter-spacing:0.05em}
+.hb-ground-crew-box{background:rgba(6,16,11,.75);border:1.5px solid rgba(150,235,155,.45);border-radius:8px;padding:8px 12px;box-shadow:0 4px 12px rgba(0,0,0,.5)}
+.hb-ground-crew-title{font-size:11px;font-weight:700;color:#a2f0a8;margin-bottom:6px;text-transform:uppercase;letter-spacing:.08em}
+.hb-ground-crew-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px;width:220px}
+.hb-ground-seat-card{padding:4px 6px;border-radius:4px;font-size:10.5px;border:1px solid rgba(150,235,155,.25);background:rgba(10,24,15,.6);cursor:pointer;pointer-events:auto;text-align:center}
+.hb-ground-seat-card.you{background:rgba(28,80,38,.85);border-color:#52e668;color:#eaffea;font-weight:800;box-shadow:0 0 6px rgba(82,230,104,.4)}
+.hb-ground-seat-card.teammate{background:rgba(30,60,70,.85);border-color:#5edfe0;color:#d6faff;font-weight:700}
+.hb-ground-seat-card.empty{background:rgba(10,18,12,.4);border-color:rgba(150,235,155,.15);color:rgba(180,210,180,.4)}
+.hb-ground-center{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);display:flex;flex-direction:column;align-items:center;gap:6px;pointer-events:none}
+.hb-ground-status-bar{display:flex;gap:8px;align-items:center}
+.hb-ground-status-item{padding:2px 8px;border-radius:3px;font-size:11px;font-weight:800;background:rgba(12,28,18,.72);border:1px solid rgba(150,235,155,.3);color:rgba(180,220,180,.4)}
+.hb-ground-status-item.active-lights{background:rgba(30,90,40,.85);border-color:#52e668;color:#f0fff0;box-shadow:0 0 8px rgba(82,230,104,.5)}
+.hb-ground-status-item.active-brake{background:rgba(140,30,20,.85);border-color:#ff5545;color:#fff0ed;box-shadow:0 0 8px rgba(255,85,69,.5)}
+.hb-ground-status-item.active-horn{background:rgba(135,100,10,.85);border-color:#ffd878;color:#fffde0;box-shadow:0 0 8px rgba(255,216,120,.5)}
+.hb-ground-keybind-bar{background:rgba(6,14,10,.7);border:1px solid rgba(160,230,150,.36);border-radius:6px;padding:5px 14px;font-size:11px;color:rgba(200,240,200,.85);white-space:nowrap;text-align:center}
 .hb-hud-top{position:fixed;left:50%;top:11%;transform:translateX(-50%);display:flex;flex-direction:column;align-items:center;gap:4px}
 .hb-hud-hdg-box{padding:2px 10px;background:rgba(6,16,11,.62);border:1px solid rgba(150,240,155,.45);border-radius:4px;
   font-size:13px;letter-spacing:.06em;color:#e6ffe0}
@@ -181,6 +219,30 @@ export function createVehicleOsd(deps = {}) {
   let hitDmgEl = null;
   let vignetteEl = null;
 
+  // Aircraft wrapper nodes
+  let topWrap = null;
+  let attWrap = null;
+  let leftWrap = null;
+  let rightWrap = null;
+  let botWrap = null;
+
+  // Ground dashboard nodes (locomotion === 2)
+  let groundWrap = null;
+  let gSpeedNumEl = null;
+  let gSpeedUnitEl = null;
+  let gSpeedSubEl = null;
+  let gSpeedFillEl = null;
+  let gGearBadgeEl = null;
+  let g4wdBadgeEl = null;
+  let gRpmValEl = null;
+  let gRpmFillEl = null;
+  let gSurfaceBadgeEl = null;
+  let gSeatCards = [];
+  let gLightsEl = null;
+  let gBrakeEl = null;
+  let gHornEl = null;
+  let gKeybindEl = null;
+
   // Structured child sub-nodes inside #hb-vehicle-osd
   let hdgBoxEl = null;
   let hdgStripEl = null;
@@ -263,7 +325,7 @@ export function createVehicleOsd(deps = {}) {
     append(hitEl, hitDmgEl);
 
     // 1. Center-top Heading Ribbon & Bank Angle Pointer
-    const topWrap = append(el, mkEl(doc, "div", "hb-hud-top"));
+    topWrap = append(el, mkEl(doc, "div", "hb-hud-top"));
     hdgBoxEl = append(topWrap, mkEl(doc, "div", "hb-hud-hdg-box"));
     const hdgWin = append(topWrap, mkEl(doc, "div", "hb-hud-hdg-window"));
     hdgStripEl = append(hdgWin, mkEl(doc, "div", "hb-hud-hdg-strip"));
@@ -273,7 +335,7 @@ export function createVehicleOsd(deps = {}) {
     bankPtrEl.textContent = "▲";
 
     // 2. Center Attitude Pitch Ladder & Artificial Horizon
-    const attWrap = append(el, mkEl(doc, "div", "hb-hud-att"));
+    attWrap = append(el, mkEl(doc, "div", "hb-hud-att"));
     attRotEl = append(attWrap, mkEl(doc, "div", "hb-hud-att-rot"));
     attPitchEl = append(attRotEl, mkEl(doc, "div", "hb-hud-att-pitch"));
     const horizon = append(attPitchEl, mkEl(doc, "div", "hb-hud-horizon"));
@@ -289,7 +351,7 @@ export function createVehicleOsd(deps = {}) {
     }
 
     // 3. Left Airspeed Gauge + Throttle / WEP Bar
-    const leftWrap = append(el, mkEl(doc, "div", "hb-hud-left"));
+    leftWrap = append(el, mkEl(doc, "div", "hb-hud-left"));
     const barsWrap = append(leftWrap, mkEl(doc, "div", "hb-hud-bars"));
     const thrBar = append(barsWrap, mkEl(doc, "div", "hb-hud-vbar"));
     thrFillEl = append(thrBar, mkEl(doc, "div", "hb-hud-vbar-fill"));
@@ -302,7 +364,7 @@ export function createVehicleOsd(deps = {}) {
     thrTextEl = append(leftBox, mkEl(doc, "div", "hb-hud-sub"));
 
     // 4. Right Altitude (AGL + MSL), VSI, Live G-Meter & Status Pills
-    const rightWrap = append(el, mkEl(doc, "div", "hb-hud-right"));
+    rightWrap = append(el, mkEl(doc, "div", "hb-hud-right"));
     const rightBox = append(rightWrap, mkEl(doc, "div", "hb-hud-box"));
     altTextEl = append(rightBox, mkEl(doc, "div", "hb-hud-primary"));
     vsiTextEl = append(rightBox, mkEl(doc, "div", "hb-hud-sub"));
@@ -316,11 +378,75 @@ export function createVehicleOsd(deps = {}) {
     }
 
     // 5. Bottom Armament, Debug Telemetry & Compact Keybind Bar
-    const botWrap = append(el, mkEl(doc, "div", "hb-hud-bottom"));
+    botWrap = append(el, mkEl(doc, "div", "hb-hud-bottom"));
     headerTextEl = append(botWrap, mkEl(doc, "div", "hb-hud-sub"));
     armsTextEl = append(botWrap, mkEl(doc, "div", ""));
     debugTextEl = append(botWrap, mkEl(doc, "div", "hb-hud-sub"));
     keysTextEl = append(botWrap, mkEl(doc, "div", "hb-hud-keys"));
+
+    // 6. Dedicated WWII Ground Vehicle Dashboard (locomotion === 2)
+    groundWrap = append(el, mkEl(doc, "div", "hb-ground-dashboard", "hb-ground-dashboard"));
+
+    // Left Speedometer & Gear/4WD
+    const gLeft = append(groundWrap, mkEl(doc, "div", "hb-ground-left"));
+    const gSpeedBox = append(gLeft, mkEl(doc, "div", "hb-ground-speed-box"));
+    const gSpeedLine = append(gSpeedBox, mkEl(doc, "div", ""));
+    gSpeedNumEl = append(gSpeedLine, mkEl(doc, "span", "hb-ground-speed-num"));
+    gSpeedNumEl.textContent = "0";
+    gSpeedUnitEl = append(gSpeedLine, mkEl(doc, "span", "hb-ground-speed-unit"));
+    gSpeedUnitEl.textContent = "MPH";
+    gSpeedSubEl = append(gSpeedBox, mkEl(doc, "div", "hb-ground-speed-sub"));
+    gSpeedSubEl.textContent = "0 km/h";
+    const gSpeedBar = append(gSpeedBox, mkEl(doc, "div", "hb-ground-speed-bar"));
+    gSpeedFillEl = append(gSpeedBar, mkEl(doc, "div", "hb-ground-speed-fill"));
+
+    const gGearBox = append(gSpeedBox, mkEl(doc, "div", "hb-ground-gear-box"));
+    gGearBadgeEl = append(gGearBox, mkEl(doc, "div", "hb-ground-gear-badge"));
+    gGearBadgeEl.textContent = "N";
+    g4wdBadgeEl = append(gGearBox, mkEl(doc, "div", "hb-ground-4wd-badge"));
+    g4wdBadgeEl.textContent = "4WD LOW";
+
+    // Center Status Bar & Keybinds
+    const gCenter = append(groundWrap, mkEl(doc, "div", "hb-ground-center"));
+    const gStatusBar = append(gCenter, mkEl(doc, "div", "hb-ground-status-bar"));
+    gLightsEl = append(gStatusBar, mkEl(doc, "span", "hb-ground-status-item"));
+    gLightsEl.textContent = "LIGHTS";
+    gBrakeEl = append(gStatusBar, mkEl(doc, "span", "hb-ground-status-item"));
+    gBrakeEl.textContent = "BRAKE";
+    gHornEl = append(gStatusBar, mkEl(doc, "span", "hb-ground-status-item"));
+    gHornEl.textContent = "HORN";
+    gKeybindEl = append(gCenter, mkEl(doc, "div", "hb-ground-keybind-bar"));
+    gKeybindEl.textContent = GROUND_DRIVER_KEYBIND_TEXT;
+
+    // Right Drivetrain & 2x2 Crew Diagram
+    const gRight = append(groundWrap, mkEl(doc, "div", "hb-ground-right"));
+    const gDrivetrainBox = append(gRight, mkEl(doc, "div", "hb-ground-drivetrain-box"));
+    const gRpmLine = append(gDrivetrainBox, mkEl(doc, "div", ""));
+    const gRpmTitle = append(gRpmLine, mkEl(doc, "span", "hb-ground-rpm-title"));
+    gRpmTitle.textContent = "ENGINE RPM";
+    gRpmValEl = append(gRpmLine, mkEl(doc, "span", "hb-ground-rpm-val"));
+    gRpmValEl.textContent = "600";
+    const gRpmBar = append(gDrivetrainBox, mkEl(doc, "div", "hb-ground-rpm-bar"));
+    gRpmFillEl = append(gRpmBar, mkEl(doc, "div", "hb-ground-rpm-fill"));
+    gSurfaceBadgeEl = append(gDrivetrainBox, mkEl(doc, "div", "hb-ground-surface-badge"));
+    gSurfaceBadgeEl.textContent = "TRACTION: ROAD";
+
+    const gCrewBox = append(gRight, mkEl(doc, "div", "hb-ground-crew-box"));
+    const gCrewTitle = append(gCrewBox, mkEl(doc, "div", "hb-ground-crew-title"));
+    gCrewTitle.textContent = "CREW (1-4)";
+    const gCrewGrid = append(gCrewBox, mkEl(doc, "div", "hb-ground-crew-grid"));
+    gSeatCards = [];
+    const seatLabels = ["1 Driver", "2 Front Pax", "3 Rear L", "4 Rear R"];
+    for (let i = 0; i < 4; i++) {
+      const card = append(gCrewGrid, mkEl(doc, "div", "hb-ground-seat-card empty"));
+      card.textContent = seatLabels[i];
+      if (typeof card.addEventListener === "function") {
+        card.addEventListener("click", () => {
+          if (typeof deps.onSeatClick === "function") deps.onSeatClick(i);
+        });
+      }
+      gSeatCards.push(card);
+    }
   }
 
   function show(node, key, on) {
@@ -452,6 +578,129 @@ export function createVehicleOsd(deps = {}) {
       }
 
       const speed = Number.isFinite(s.speed) ? s.speed : 0;
+      if (s.locomotion === 2) {
+        if (topWrap) topWrap.style.display = "none";
+        if (attWrap) attWrap.style.display = "none";
+        if (leftWrap) leftWrap.style.display = "none";
+        if (rightWrap) rightWrap.style.display = "none";
+        if (botWrap) botWrap.style.display = "none";
+        hideAllSights();
+
+        if (groundWrap) groundWrap.style.display = "block";
+
+        const absSpeed = Math.abs(speed);
+        const mph = Math.round(absSpeed * 2.23694);
+        const kmh = Math.round(absSpeed * 3.6);
+
+        setTxt(gSpeedNumEl, "gSpdNum", String(mph));
+        setTxt(gSpeedSubEl, "gSpdSub", `${kmh} km/h`);
+        const spdPct = clamp(Math.round((absSpeed / 29.0) * 100), 0, 100);
+        setStyle(gSpeedFillEl, "width", "gSpdFill", `${spdPct}%`);
+
+        let gear = "N";
+        if (s.gear !== undefined && s.gear !== null) {
+          gear = String(s.gear).toUpperCase();
+        } else {
+          if (speed < -0.2 || (s.throttle < 0 && speed <= 0.2)) gear = "R";
+          else if (absSpeed <= 0.2 && (!s.throttle || Math.abs(s.throttle) < 0.05)) gear = "N";
+          else if (absSpeed < 9.0) gear = "1";
+          else if (absSpeed < 18.0) gear = "2";
+          else gear = "3";
+        }
+        setTxt(gGearBadgeEl, "gGear", gear);
+
+        const boost = !!(s.boost || (s.groundFlags & 0x04) || s.fourWheelLow);
+        if (g4wdBadgeEl) {
+          setStyle(g4wdBadgeEl, "display", "g4wd", boost ? "inline-block" : "none");
+        }
+
+        let rpm = 600;
+        if (Number.isFinite(s.rpm)) {
+          rpm = Math.round(s.rpm);
+        } else {
+          if (gear === "R") rpm = Math.round(800 + (absSpeed / 9.0) * 2600);
+          else if (gear === "N") rpm = Math.round(600 + Math.abs(s.throttle || 0) * 1200);
+          else if (gear === "1") rpm = Math.round(800 + (absSpeed / 9.0) * 2800);
+          else if (gear === "2") rpm = Math.round(1200 + ((absSpeed - 9.0) / 9.0) * 2400);
+          else rpm = Math.round(1600 + ((absSpeed - 18.0) / 11.0) * 2200);
+        }
+        rpm = clamp(rpm, 600, 3800);
+        setTxt(gRpmValEl, "gRpmVal", String(rpm));
+        const rpmPct = clamp(Math.round((rpm / 3800) * 100), 0, 100);
+        setStyle(gRpmFillEl, "width", "gRpmFill", `${rpmPct}%`);
+
+        let surfName = "ROAD";
+        if (typeof s.surface === "string") surfName = s.surface.toUpperCase();
+        else if (Number.isFinite(s.surfaceFamily)) surfName = SURFACE_NAMES[s.surfaceFamily] || "ROAD";
+        else if (Number.isFinite(s.surface)) surfName = SURFACE_NAMES[s.surface] || "ROAD";
+        setTxt(gSurfaceBadgeEl, "gSurf", `TRACTION: ${surfName}`);
+
+        const lights = !!(s.headlights || (s.groundFlags & 0x10));
+        const brake = !!(s.handbrake || s.brake || (s.groundFlags & 0x02));
+        const horn = !!(s.horn || (s.groundFlags & 0x20));
+        if (gLightsEl) gLightsEl.className = lights ? "hb-ground-status-item active-lights" : "hb-ground-status-item";
+        if (gBrakeEl) gBrakeEl.className = brake ? "hb-ground-status-item active-brake" : "hb-ground-status-item";
+        if (gHornEl) gHornEl.className = horn ? "hb-ground-status-item active-horn" : "hb-ground-status-item";
+
+        const localSeat = clamp(Math.round(s.seatIndex ?? 0), 0, 3);
+        const seats = Array.isArray(s.seats) ? s.seats : [1, 0, 0, 0];
+        const baseLabels = ["1 Driver", "2 Front Pax", "3 Rear L", "4 Rear R"];
+        for (let i = 0; i < 4; i++) {
+          const card = gSeatCards[i];
+          if (!card) continue;
+          const isYou = (i === localSeat);
+          const occ = seats[i] >>> 0;
+          const isOccupied = !isYou && occ !== 0;
+          if (isYou) {
+            card.className = "hb-ground-seat-card you";
+            card.textContent = `${baseLabels[i]} (You)`;
+          } else if (isOccupied) {
+            card.className = "hb-ground-seat-card teammate";
+            card.textContent = baseLabels[i];
+          } else {
+            card.className = "hb-ground-seat-card empty";
+            card.textContent = `${baseLabels[i]}`;
+          }
+        }
+
+        const isPassenger = localSeat > 0;
+        const keybindStr = isPassenger ? GROUND_PAX_KEYBIND_TEXT : GROUND_DRIVER_KEYBIND_TEXT;
+        setTxt(gKeybindEl, "gKeys", keybindStr);
+
+        // Mirror summary to el.textContent for fake-DOM test harness
+        if (!el.nodeType) {
+          const crewSummary = baseLabels.map((lbl, i) => {
+            if (i === localSeat) return `[${lbl}: You]`;
+            if (seats[i] && (seats[i] >>> 0)) return `[${lbl}: Teammate]`;
+            return `[${lbl}: Empty]`;
+          }).join(" ");
+          const statusSummary = `${lights ? "[LIGHTS]" : "LIGHTS"} ${brake ? "[BRAKE]" : "BRAKE"} ${horn ? "[HORN]" : "HORN"}`;
+          const fourWdStr = boost ? "  [4WD LOW]" : "";
+          const summaryLines = [
+            `${s.name || "Willys MB"}  ${gear}${fourWdStr}`,
+            `SPEED: ${mph} MPH (${kmh} km/h)   GEAR: ${gear}${fourWdStr}   RPM: ${rpm}`,
+            `TRACTION: [${surfName}]   STATUS: ${statusSummary}`,
+            `CREW: ${crewSummary}`,
+            keybindStr,
+          ];
+          const summary = summaryLines.join("\n");
+          if (summary !== last.text) {
+            last.text = summary;
+            el.textContent = summary;
+          }
+        }
+
+        show(el, "shown", true);
+        return;
+      }
+
+      if (groundWrap) groundWrap.style.display = "none";
+      if (topWrap) topWrap.style.display = "flex";
+      if (attWrap) attWrap.style.display = "block";
+      if (leftWrap) leftWrap.style.display = "flex";
+      if (rightWrap) rightWrap.style.display = "flex";
+      if (botWrap) botWrap.style.display = "block";
+
       const kmh = Math.round(speed * 3.6);
       const kt = Math.round(speed * 1.94384);
       const vCapMs = Number.isFinite(s.vCap) && s.vCap > 0 ? s.vCap : 97;
@@ -682,6 +931,7 @@ export function createVehicleOsd(deps = {}) {
         fallLineEl?.remove?.();
         hitEl?.remove?.();
         vignetteEl?.remove?.();
+        groundWrap?.remove?.();
       } catch (_) { /* gone */ }
       el = null;
       promptEl = null;
@@ -694,6 +944,26 @@ export function createVehicleOsd(deps = {}) {
       hitDmgEl = null;
       vignetteEl = null;
       pillNodes = [];
+      topWrap = null;
+      attWrap = null;
+      leftWrap = null;
+      rightWrap = null;
+      botWrap = null;
+      groundWrap = null;
+      gSpeedNumEl = null;
+      gSpeedUnitEl = null;
+      gSpeedSubEl = null;
+      gSpeedFillEl = null;
+      gGearBadgeEl = null;
+      g4wdBadgeEl = null;
+      gRpmValEl = null;
+      gRpmFillEl = null;
+      gSurfaceBadgeEl = null;
+      gSeatCards = [];
+      gLightsEl = null;
+      gBrakeEl = null;
+      gHornEl = null;
+      gKeybindEl = null;
     },
   };
 }

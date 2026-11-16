@@ -2313,215 +2313,1080 @@ export function createVehicleAudio(opts = {}) {
 }
 
 // ===========================================================================
-// Ground Vehicle Audio — Willys MB (Go Devil L134), Sparton Horn, Radar CRT/Ping
-// (Milestone 5 Feature 42)
+// Ground Vehicle Audio — Willys MB (Go-Devil L134), T-84 Manual, Sparton Horn
+// (Milestone 5 Hellcat-Caliber Parity)
 // ===========================================================================
 
+const GROUND_NOISE_SEED = "vehicle-willys-jeep-audio";
+
+/** @type {WeakMap<object, object>} ctx → PeriodicWave */
+const _l134PeriodicWaves = new WeakMap();
+
+/**
+ * Multi-harmonic PeriodicWave for the Willys Go-Devil L134 2.2L flathead inline-4:
+ *   1: crankshaft rotational fundamental & mechanical imbalance
+ *   2: dominant 4-stroke firing pulse (2 power strokes per revolution)
+ *   3: sub-harmonic firing & mechanical lope
+ *   4: secondary piston acceleration pulse (4x crankHz)
+ *   5: valvetrain mechanical tick
+ *   6: intake runner resonance (3x crankHz = 1.5x firing)
+ *   8: exhaust port gas pulsation
+ * @param {object} ctx
+ * @returns {object|null}
+ */
+export function getL134PeriodicWave(ctx) {
+  if (!ctx || typeof ctx.createPeriodicWave !== "function") return null;
+  let wave = _l134PeriodicWaves.get(ctx);
+  if (wave) return wave;
+  const n = 10;
+  const real = new Float32Array(n);
+  const imag = new Float32Array(n);
+  imag[1] = 0.35;
+  imag[2] = 1.00;
+  imag[3] = 0.22;
+  imag[4] = 0.68;
+  imag[5] = 0.16;
+  imag[6] = 0.32;
+  imag[8] = 0.28;
+  wave = ctx.createPeriodicWave(real, imag, { disableNormalization: false });
+  if (wave) _l134PeriodicWaves.set(ctx, wave);
+  return wave;
+}
+
+/**
+ * Filter shapes and acoustic resonance profiles for all 11 terrain surface families.
+ * @type {Readonly<Record<number, {name: string, type: BiquadFilterType, freq: number, q: number, gainMul: number}>>}
+ */
+export const SURFACE_AUDIO_SHAPES = Object.freeze({
+  0: Object.freeze({ name: "Road", type: "lowpass", freq: 320, q: 0.8, gainMul: 0.12 }),
+  1: Object.freeze({ name: "Dirt", type: "bandpass", freq: 650, q: 1.4, gainMul: 0.18 }),
+  2: Object.freeze({ name: "Grass", type: "bandpass", freq: 1400, q: 1.2, gainMul: 0.15 }),
+  3: Object.freeze({ name: "Forest", type: "bandpass", freq: 950, q: 1.3, gainMul: 0.16 }),
+  4: Object.freeze({ name: "SnowIce", type: "lowpass", freq: 240, q: 0.7, gainMul: 0.11 }),
+  5: Object.freeze({ name: "Sand", type: "bandpass", freq: 800, q: 1.6, gainMul: 0.14 }),
+  6: Object.freeze({ name: "Swamp", type: "lowpass", freq: 420, q: 1.0, gainMul: 0.17 }),
+  7: Object.freeze({ name: "ShallowFord", type: "bandpass", freq: 480, q: 2.2, gainMul: 0.24 }),
+  8: Object.freeze({ name: "Rock", type: "bandpass", freq: 540, q: 1.5, gainMul: 0.17 }),
+  9: Object.freeze({ name: "Obsidian", type: "bandpass", freq: 720, q: 1.7, gainMul: 0.18 }),
+  10: Object.freeze({ name: "AshVolcano", type: "bandpass", freq: 760, q: 1.6, gainMul: 0.16 }),
+});
+
+/**
+ * Frozen acoustic tuning constants for the Willys MB Go-Devil L134 soundscape.
+ * @type {Readonly<Record<string, number>>}
+ */
 export const L134_AUDIO_TUNING = Object.freeze({
+  // Go-Devil L134 2.2L Flathead Engine
   rpmIdle: 650,
   rpmCruise: 2400,
   rpmMax: 4000,
-  crankIdleHz: 10.83,
-  firingIdleHz: 21.67,
-  cutoffIdleHz: 280,
-  cutoffMaxHz: 2200,
-  gearWhineBaseHz: 120,
-  gearWhineSlope: 32,
+  crankIdleHz: 650 / 60.0, // 10.833 Hz
+  firingIdleHz: (650 / 60.0) * 2.0, // 21.667 Hz
+  cutoffIdleHz: 300,
+  cutoffMaxHz: 2400,
+
+  // Borg-Warner T-84 3-Speed Manual Transmission & Spicer 18 Transfer Case
+  gear1MaxSpeed: 9.0,   // 0–9 m/s (1st gear)
+  gear2MaxSpeed: 18.0,  // 9–18 m/s (2nd gear)
+  gear3MaxSpeed: 29.0,  // 18–29 m/s (3rd gear)
+  clutchDipDurationSec: 0.14, // 140ms clutch dip
+  gearWhineBaseHz: 130,
+  gearWhineSlope: 34,
+  tCaseBaseHz: 420,
+  tCaseSlope: 52,
+
+  // WWII Sparton Model R-2-A 'Meep-Meep' Dual-Reed Horn
   spartonFreq1: 325,
   spartonFreq2: 333,
   spartonFilterHz: 1850,
   spartonFilterQ: 2.2,
-  crtHumHz: 60,
-  radarPingFriendlyHz: 1200,
-  radarPingNeutralHz: 800,
-  radarPingHostileHz: 440,
+  spartonMaxGain: 0.35,
+
+  // Chassis Foley & Leaf-Spring Suspension
+  leafSqueakFreq: 1650,
+  leafThumpFreq: 85,
+  joltCooldownSec: 0.06,
+
+  // Perspective tone shaping
+  cockpitCutoffHz: 3200,
+  cockpitLowShelfHz: 160,
+  cockpitLowShelfDb: 3.5,
+  externalCutoffHz: 7500,
+  paramTau: 0.045,
+
+  // 3D Atmosphere & Doppler
+  speedOfSound: 343,
+  dopplerMaxRelVel: 150,
+  dopplerMin: 0.55,
+  dopplerMax: 1.75,
+  dopplerTau: 0.05,
+  pilotRefDistance: 10,
+  pilotRolloffFactor: 1.2,
+  pilotMaxDistance: 1200,
+  observerRefDistance: 12,
+  observerRolloffFactor: 1.2,
+  observerMaxDistance: 1200,
+  observerRangeM: 1200,
+  maxObserverVoices: 4,
+  flybyWhooshRangeM: 40,
+
+  // Shared noise duration
+  noiseSec: 2.0,
 });
 
-export function computeL134EngineParams({ speed = 0, throttle = 0, boost = false, handbrake = false } = {}) {
-  const absSpeed = Math.abs(speed);
-  let rpm = L134_AUDIO_TUNING.rpmIdle + (absSpeed / 29.0) * 2750 + throttle * 600;
-  if (boost) rpm = Math.min(L134_AUDIO_TUNING.rpmMax, rpm * 1.15);
-  if (handbrake) rpm = Math.max(L134_AUDIO_TUNING.rpmIdle, rpm * 0.7);
+/**
+ * Pure, deterministic computation of Go-Devil L134 engine & gearbox kinematics:
+ *   - Borg-Warner T-84 3-speed manual gearbox cadence across speed ranges:
+ *       * 1st gear: 0–9 m/s
+ *       * 2nd gear: 9–18 m/s
+ *       * 3rd gear: 18–29 m/s
+ *       * Reverse: straight-cut spur gear whine
+ *   - Spicer 18 dual-stick transfer case reduction on `boost` (4WD Low-Range)
+ *   - Mechanical handbrake drag
+ *
+ * @param {{ speed?: number, throttle?: number, boost?: boolean, handbrake?: boolean }} [params]
+ * @returns {{ rpm: number, crankHz: number, firingHz: number, cutoffHz: number, gearHz: number, tCaseHz: number, gear: number }}
+ */
+export function computeL134EngineParams(params = {}) {
+  const T = L134_AUDIO_TUNING;
+  const p = params && typeof params === "object" ? params : {};
+  const rawSpd = fin(p.speed) ? p.speed : 0;
+  const absSpeed = Math.abs(rawSpd);
+  const thr = clamp(fin(p.throttle) ? p.throttle : 0, 0, 1);
+  const boost = Boolean(p.boost);
+  const handbrake = Boolean(p.handbrake);
+  let gear = 1;
+  let rpm = T.rpmIdle;
 
-  const crankHz = rpm / 60.0;
-  const firingHz = crankHz * 2.0; // 2 firing events per rev on 4-cyl 4-stroke
-  const cutoffHz = L134_AUDIO_TUNING.cutoffIdleHz + throttle * 1600 + (absSpeed / 29.0) * 320;
-  const gearHz = L134_AUDIO_TUNING.gearWhineBaseHz + absSpeed * L134_AUDIO_TUNING.gearWhineSlope;
-
-  return { rpm, crankHz, firingHz, cutoffHz, gearHz };
-}
-
-export function createGroundVehicleAudio(opts = {}) {
-  const audioManager = opts.audioManager || null;
-  const search = opts.search || "";
-  if (!vehicleAudioEnabled(search)) {
-    return {
-      start() {},
-      stop() {},
-      update() {},
-      horn() {},
-      radarPing() {},
-      dispose() {},
-      get active() { return false; },
-    };
-  }
-
-  let ctx = null;
-  let bus = null;
-  let masterGain = null;
-  let engineGain = null;
-  let crankOsc = null;
-  let firingOsc = null;
-  let gearOsc = null;
-  let filter = null;
-  let hornGain = null;
-  let hornOsc1 = null;
-  let hornOsc2 = null;
-  let hornFilter = null;
-  let crtGain = null;
-  let crtOsc = null;
-  let started = false;
-  let disposed = false;
-
-  function initNodes() {
-    if (disposed || started) return;
-    try {
-      bus = audioManager && typeof audioManager.getEffectBus === "function" ? audioManager.getEffectBus() : null;
-      ctx = (bus && bus.ctx) || (typeof window !== "undefined" && window.AudioContext ? new window.AudioContext() : null);
-      if (!ctx) return;
-
-      masterGain = ctx.createGain ? ctx.createGain() : { gain: { value: 1 }, connect() {} };
-      if (bus && bus.node && masterGain.connect) {
-        masterGain.connect(bus.node);
-      }
-
-      // Engine graph
-      engineGain = ctx.createGain ? ctx.createGain() : { gain: { value: 0 }, connect() {} };
-      filter = ctx.createBiquadFilter ? ctx.createBiquadFilter() : { frequency: { value: 280 }, connect() {} };
-      filter.type = "lowpass";
-
-      crankOsc = ctx.createOscillator ? ctx.createOscillator() : { frequency: { value: 10.83 }, start() {}, stop() {}, connect() {} };
-      crankOsc.type = "sine";
-      crankOsc.frequency.value = L134_AUDIO_TUNING.crankIdleHz;
-
-      firingOsc = ctx.createOscillator ? ctx.createOscillator() : { frequency: { value: 21.67 }, start() {}, stop() {}, connect() {} };
-      firingOsc.type = "sawtooth";
-      firingOsc.frequency.value = L134_AUDIO_TUNING.firingIdleHz;
-
-      gearOsc = ctx.createOscillator ? ctx.createOscillator() : { frequency: { value: 120 }, start() {}, stop() {}, connect() {} };
-      gearOsc.type = "triangle";
-      gearOsc.frequency.value = L134_AUDIO_TUNING.gearWhineBaseHz;
-
-      if (crankOsc.connect) crankOsc.connect(filter);
-      if (firingOsc.connect) firingOsc.connect(filter);
-      if (gearOsc.connect) gearOsc.connect(filter);
-      if (filter.connect) filter.connect(engineGain);
-      if (engineGain.connect) engineGain.connect(masterGain);
-
-      // Horn graph
-      hornGain = ctx.createGain ? ctx.createGain() : { gain: { value: 0 }, connect() {} };
-      hornFilter = ctx.createBiquadFilter ? ctx.createBiquadFilter() : { frequency: { value: 1850 }, Q: { value: 2.2 }, connect() {} };
-      hornFilter.type = "bandpass";
-      hornFilter.frequency.value = L134_AUDIO_TUNING.spartonFilterHz;
-      if (hornFilter.Q) hornFilter.Q.value = L134_AUDIO_TUNING.spartonFilterQ;
-
-      hornOsc1 = ctx.createOscillator ? ctx.createOscillator() : { frequency: { value: 325 }, start() {}, stop() {}, connect() {} };
-      hornOsc1.type = "sawtooth";
-      hornOsc1.frequency.value = L134_AUDIO_TUNING.spartonFreq1;
-
-      hornOsc2 = ctx.createOscillator ? ctx.createOscillator() : { frequency: { value: 333 }, start() {}, stop() {}, connect() {} };
-      hornOsc2.type = "square";
-      hornOsc2.frequency.value = L134_AUDIO_TUNING.spartonFreq2;
-
-      if (hornOsc1.connect) hornOsc1.connect(hornFilter);
-      if (hornOsc2.connect) hornOsc2.connect(hornFilter);
-      if (hornFilter.connect) hornFilter.connect(hornGain);
-      if (hornGain.connect) hornGain.connect(masterGain);
-
-      // Radar CRT hum graph
-      crtGain = ctx.createGain ? ctx.createGain() : { gain: { value: 0.03 }, connect() {} };
-      crtOsc = ctx.createOscillator ? ctx.createOscillator() : { frequency: { value: 60 }, start() {}, stop() {}, connect() {} };
-      crtOsc.type = "sine";
-      crtOsc.frequency.value = L134_AUDIO_TUNING.crtHumHz;
-      if (crtOsc.connect) crtOsc.connect(crtGain);
-      if (crtGain.connect) crtGain.connect(masterGain);
-
-      if (crankOsc.start) crankOsc.start(0);
-      if (firingOsc.start) firingOsc.start(0);
-      if (gearOsc.start) gearOsc.start(0);
-      if (hornOsc1.start) hornOsc1.start(0);
-      if (hornOsc2.start) hornOsc2.start(0);
-      if (crtOsc.start) crtOsc.start(0);
-
-      started = true;
-    } catch (_) {
-      // AudioContext unavailable or error
+  if (rawSpd < -0.1) {
+    gear = -1; // Reverse gear
+    const revNorm = clamp(absSpeed / 10.0, 0, 1);
+    rpm = T.rpmIdle + revNorm * (3400 - T.rpmIdle) + thr * 400;
+  } else if (absSpeed <= 0.25 && thr <= 0.05) {
+    gear = 0; // Neutral / Parked idle
+    rpm = T.rpmIdle;
+  } else if (absSpeed <= 0.3 && thr > 0.05) {
+    gear = 1; // Stationary revving
+    rpm = T.rpmIdle + thr * 2400;
+  } else {
+    // 3-speed manual cadence:
+    // 1st gear: 0–9 m/s
+    // 2nd gear: 9–18 m/s
+    // 3rd gear: 18–29 m/s
+    if (absSpeed < T.gear1MaxSpeed) {
+      gear = 1;
+      const gNorm = clamp(absSpeed / T.gear1MaxSpeed, 0, 1);
+      rpm = T.rpmIdle + gNorm * (3500 - T.rpmIdle) + thr * 450;
+    } else if (absSpeed < T.gear2MaxSpeed) {
+      gear = 2;
+      const gNorm = clamp((absSpeed - T.gear1MaxSpeed) / (T.gear2MaxSpeed - T.gear1MaxSpeed), 0, 1);
+      rpm = 1800 + gNorm * (3650 - 1800) + thr * 400;
+    } else {
+      gear = 3;
+      const gNorm = clamp((absSpeed - T.gear2MaxSpeed) / (T.gear3MaxSpeed - T.gear2MaxSpeed), 0, 1);
+      rpm = 1950 + gNorm * (T.rpmMax - 1950) + thr * 350;
     }
   }
 
+  // 4WD Low-Range (boost flag): transfer case reduction 1.97:1 increases engine RPM per ground speed
+  if (boost && gear > 0) {
+    rpm = Math.min(T.rpmMax, rpm * 1.25);
+  }
+  // Handbrake drag bogs engine down
+  if (handbrake && absSpeed > 0.5) {
+    rpm = Math.max(T.rpmIdle, rpm * 0.75);
+  }
+  rpm = clamp(rpm, T.rpmIdle * 0.7, T.rpmMax);
+
+  const crankHz = rpm / 60.0;
+  const firingHz = crankHz * 2.0; // 4-cylinder 4-stroke: 2 firing events per crankshaft revolution
+  const rpmSpan = Math.max(1, T.rpmMax - T.rpmIdle);
+  const cutoffHz = clamp(
+    T.cutoffIdleHz + thr * 1650 + (absSpeed / 29.0) * 350 + (clamp((rpm - T.rpmIdle) / rpmSpan, 0, 1)) * 200,
+    T.cutoffIdleHz,
+    T.cutoffMaxHz,
+  );
+
+  // Transmission gear whine
+  let gearHz = T.gearWhineBaseHz + absSpeed * T.gearWhineSlope;
+  if (gear === -1) {
+    gearHz = 160 + absSpeed * 48; // Reverse straight-cut spur whine
+  } else if (gear === 1) {
+    gearHz = 140 + absSpeed * 42; // 1st gear straight-cut spur whine
+  } else if (gear === 2) {
+    gearHz = 220 + absSpeed * 32; // 2nd gear helical whine
+  } else if (gear === 3) {
+    gearHz = 300 + absSpeed * 24; // 3rd gear direct drive
+  }
+
+  // Spicer 18 transfer case whine (when boost / 4WD Low is engaged)
+  const tCaseHz = T.tCaseBaseHz + absSpeed * T.tCaseSlope;
+
+  return { rpm, crankHz, firingHz, cutoffHz, gearHz, tCaseHz, gear };
+}
+
+/**
+ * Create the Hellcat-caliber Willys MB Go-Devil L134 WebAudio soundscape coordinator:
+ *   * Go-Devil L134 2.2L flathead inline-4 multi-harmonic PeriodicWave + 2x firing pulse
+ *   * Soft-tanh cast-iron manifold saturation waveshaper + intake roar + overrun burble
+ *   * Borg-Warner T-84 3-speed manual transmission & Spicer 18 transfer case whine
+ *   * 140ms clutch-dip & mechanical shift clunk one-shot on gear changes
+ *   * Surface-aware tire roll & skid synthesis shaped by surfaceFamily + handbrake screech
+ *   * Leaf-spring suspension foley (groan/squeak + chassis thump)
+ *   * WWII dual-reed Sparton 'meep-meep' horn (325 + 333 Hz beating at 8 Hz -> 1850 Hz formant)
+ *   * 3D observer Doppler pass-by spatialization pool (up to maxObserverVoices)
+ *   * Zero legacy cargo/radar CRT coupling
+ *   * 100% leak-free dispose()
+ *
+ * @param {{
+ *   bus?: ({ctx: object, node: object, sliderGain?: () => number, isActive?: () => boolean}|(() => object|null)|null),
+ *   audioManager?: {getEffectBus?: () => object|null, isActive?: () => boolean, getListenerAc?: () => object|null}|null,
+ *   liveScene3d?: {audioManager?: object}|null,
+ *   isActive?: () => boolean,
+ *   enabled?: boolean,
+ *   volume?: () => number,
+ *   maxObserverVoices?: number,
+ *   rng?: () => number,
+ *   clock?: () => number,
+ *   search?: string,
+ * }} [opts]
+ */
+export function createGroundVehicleAudio(opts = {}) {
+  const d = opts && typeof opts === "object" ? opts : {};
+  const search = d.search || "";
+  const enabled = d.enabled !== false && vehicleAudioEnabled(search);
+  const T = L134_AUDIO_TUNING;
+  const maxObserverVoices = fin(d.maxObserverVoices) && d.maxObserverVoices >= 0
+    ? Math.trunc(d.maxObserverVoices)
+    : T.maxObserverVoices;
+
+  const clock = typeof d.clock === "function"
+    ? d.clock
+    : () => (typeof performance !== "undefined" && typeof performance.now === "function" ? performance.now() / 1000 : 0);
+
+  const rng = typeof d.rng === "function" ? d.rng : mulberry32(hashString(GROUND_NOISE_SEED));
+
+  let disposed = false;
+  let started = false;
+  let pilotGraph = null;
+  const observerVoices = new Map();
+  let lastJoltTime = -10;
+  let lastClunkTime = -10;
+  let lastGear = null;
+  let clutchDipUntil = -1;
+  const activeOneShots = new Set();
+
+  function rawResolveBus() {
+    if (typeof d.bus === "function") {
+      try {
+        const b = d.bus();
+        if (b && typeof b === "object" && b.ctx && b.node) return b;
+      } catch (_) { return null; }
+    }
+    if (d.bus && typeof d.bus === "object" && d.bus.ctx && d.bus.node) return d.bus;
+    const am = d.audioManager ?? d.liveScene3d?.audioManager ?? null;
+    if (am && typeof am.getEffectBus === "function") {
+      try {
+        const b = am.getEffectBus();
+        if (b && typeof b === "object" && b.ctx && b.node) return b;
+      } catch (_) { return null; }
+    }
+    if (typeof window !== "undefined" && window.AudioContext) {
+      try {
+        const ctx = new window.AudioContext();
+        const node = ctx.createGain ? ctx.createGain() : null;
+        if (node && ctx.destination) node.connect(ctx.destination);
+        return { ctx, node, sliderGain: () => 1, isActive: () => true };
+      } catch (_) { return null; }
+    }
+    return null;
+  }
+
+  function readVolume() {
+    if (typeof d.volume !== "function") return 1;
+    let v;
+    try { v = Number(d.volume()); } catch (_) { return 0; }
+    return fin(v) ? clamp(v, 0, 1) : 0;
+  }
+
+  function readSlider(bus) {
+    if (!bus || typeof bus.sliderGain !== "function") return 1;
+    let v;
+    try { v = Number(bus.sliderGain()); } catch (_) { return 1; }
+    return fin(v) ? clamp(v, 0, 1) : 1;
+  }
+
+  function isClientActive(bus) {
+    if (typeof d.isActive === "function") {
+      try { if (!d.isActive()) return false; } catch (_) {}
+    }
+    const am = d.audioManager ?? d.liveScene3d?.audioManager ?? null;
+    if (am && typeof am.isActive === "function") {
+      try { if (!am.isActive()) return false; } catch (_) {}
+    }
+    if (bus && typeof bus.isActive === "function") {
+      try { if (!bus.isActive()) return false; } catch (_) {}
+    }
+    return true;
+  }
+
+  function masterGainScale(bus) {
+    if (!isClientActive(bus)) return 0;
+    return readVolume() * readSlider(bus);
+  }
+
+  function makeLoopNoise(ctx, nodes, sources, sec = T.noiseSec) {
+    if (!ctx || typeof ctx.createBufferSource !== "function" || typeof ctx.createBuffer !== "function") return null;
+    const sr = fin(ctx.sampleRate) && ctx.sampleRate > 0 ? Math.round(ctx.sampleRate) : 48000;
+    const len = Math.max(1, Math.round(sr * sec));
+    const samples = buildNoiseSamples(len, rng);
+    const buf = ctx.createBuffer(1, len, sr);
+    try { buf.getChannelData(0).set(samples); } catch (_) {}
+    const src = ctx.createBufferSource();
+    nodes.push(src);
+    sources.push(src);
+    src.buffer = buf;
+    src.loop = true;
+    return src;
+  }
+
+  function teardownVoice(g) {
+    if (!g || g.dead) return;
+    g.dead = true;
+    if (g.sources) {
+      for (const src of g.sources) {
+        try { src.onended = null; } catch (_) {}
+        try { src.stop(); } catch (_) {}
+      }
+    }
+    if (g.nodes) {
+      for (const n of g.nodes) {
+        try { n.disconnect(); } catch (_) {}
+      }
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Pilot Continuous Synthesis Graph
+  // -------------------------------------------------------------------------
+
+  function buildPilotGraph(bus) {
+    if (disposed || !enabled) return false;
+    const ctx = bus.ctx;
+    if (typeof ctx.createGain !== "function" || typeof ctx.createOscillator !== "function") {
+      return false;
+    }
+    const nodes = [];
+    const sources = [];
+
+    try {
+      const now = fin(ctx.currentTime) ? ctx.currentTime : 0;
+      const P = computeL134EngineParams({ speed: 0, throttle: 0, boost: false, handbrake: false });
+
+      const makeGain = (v = 1) => {
+        const gn = ctx.createGain();
+        nodes.push(gn);
+        setParam(gn.gain, v);
+        return gn;
+      };
+      const makeOsc = (type, hz) => {
+        const o = ctx.createOscillator();
+        nodes.push(o);
+        sources.push(o);
+        try { o.type = type; } catch (_) {}
+        setParam(o.frequency, hz);
+        return o;
+      };
+
+      const masterGain = makeGain(0);
+      connectSafe(masterGain, bus.node);
+
+      const vehicleMix = makeGain(1);
+
+      // A. Willys Go-Devil L134 Engine Synthesis
+      const crankOsc = makeOsc("sawtooth", P.crankHz);
+      const pWave = getL134PeriodicWave(ctx);
+      if (pWave && typeof crankOsc.setPeriodicWave === "function") {
+        try { crankOsc.setPeriodicWave(pWave); } catch (_) { crankOsc.type = "sawtooth"; }
+      }
+
+      const firingOsc = makeOsc("sawtooth", P.firingHz);
+      const subOsc = makeOsc("triangle", 0.5 * P.crankHz);
+
+      const crankGain = makeGain(0.70);
+      const firingGain = makeGain(0.85);
+      const subGain = makeGain(0.35);
+      connectSafe(crankOsc, crankGain);
+      connectSafe(firingOsc, firingGain);
+      connectSafe(subOsc, subGain);
+
+      const driveGain = makeGain(1.2);
+      connectSafe(crankGain, driveGain);
+      connectSafe(firingGain, driveGain);
+      connectSafe(subGain, driveGain);
+
+      let manifoldShaper = null;
+      if (typeof ctx.createWaveShaper === "function") {
+        try {
+          manifoldShaper = ctx.createWaveShaper();
+          nodes.push(manifoldShaper);
+          manifoldShaper.curve = getSoftTanhCurve();
+          manifoldShaper.oversample = "2x";
+        } catch (_) { manifoldShaper = null; }
+      }
+
+      const manifoldLowpass = makeFilter(ctx, nodes, "lowpass", P.cutoffHz, 1.1);
+      const engineGain = makeGain(0.25);
+      if (manifoldShaper) {
+        connectChain([driveGain, manifoldShaper, manifoldLowpass, engineGain, vehicleMix]);
+      } else {
+        connectChain([driveGain, manifoldLowpass, engineGain, vehicleMix]);
+      }
+
+      // Carter WO Carburetor Intake Roar
+      const intakeNoise = makeLoopNoise(ctx, nodes, sources, T.noiseSec);
+      const intakeFilter = makeFilter(ctx, nodes, "bandpass", 480, 1.8);
+      const intakeGain = makeGain(0);
+      if (intakeNoise) connectChain([intakeNoise, intakeFilter, intakeGain, vehicleMix]);
+
+      // Overrun burble on throttle lift
+      const burbleNoise = makeLoopNoise(ctx, nodes, sources, T.noiseSec);
+      const burbleFilter = makeFilter(ctx, nodes, "lowpass", 110, 2.2);
+      const burbleGain = makeGain(0);
+      if (burbleNoise) connectChain([burbleNoise, burbleFilter, burbleGain, vehicleMix]);
+
+      // B. Borg-Warner T-84 Gearbox & Spicer 18 Transfer Case
+      const gearOsc = makeOsc("triangle", P.gearHz);
+      const gearFilter = makeFilter(ctx, nodes, "bandpass", 1400, 2.0);
+      const gearGain = makeGain(0);
+      connectChain([gearOsc, gearFilter, gearGain, vehicleMix]);
+
+      const tCaseOsc = makeOsc("sine", P.tCaseHz);
+      const tCaseFilter = makeFilter(ctx, nodes, "bandpass", 880, 1.5);
+      const tCaseGain = makeGain(0);
+      connectChain([tCaseOsc, tCaseFilter, tCaseGain, vehicleMix]);
+
+      // C. Surface Tire Roll & Skid Synthesis
+      const tireRollNoise = makeLoopNoise(ctx, nodes, sources, T.noiseSec);
+      const tireRollFilter = makeFilter(ctx, nodes, "lowpass", 320, 0.8);
+      const tireRollGain = makeGain(0);
+      if (tireRollNoise) connectChain([tireRollNoise, tireRollFilter, tireRollGain, vehicleMix]);
+
+      const tireScrubNoise = makeLoopNoise(ctx, nodes, sources, T.noiseSec);
+      const tireScrubFilter = makeFilter(ctx, nodes, "bandpass", 1350, 4.0);
+      const tireScrubGain = makeGain(0);
+      if (tireScrubNoise) connectChain([tireScrubNoise, tireScrubFilter, tireScrubGain, vehicleMix]);
+
+      // D. WWII Sparton Model R-2-A Dual-Reed Horn
+      const hornOsc1 = makeOsc("sawtooth", T.spartonFreq1);
+      const hornOsc2 = makeOsc("square", T.spartonFreq2);
+      const hornFilter = makeFilter(ctx, nodes, "bandpass", T.spartonFilterHz, T.spartonFilterQ);
+      const hornGain = makeGain(0);
+      connectSafe(hornOsc1, hornFilter);
+      connectSafe(hornOsc2, hornFilter);
+      connectChain([hornFilter, hornGain, vehicleMix]);
+
+      // E. Perspective Routing (Cockpit FPV vs Chase/Hood HRTF)
+      const earOut = makeGain(1);
+      const earShelf = makeFilter(ctx, nodes, "lowshelf", T.cockpitLowShelfHz, 0.7, T.cockpitLowShelfDb);
+      const earLowpass = makeFilter(ctx, nodes, "lowpass", T.cockpitCutoffHz, 0.65);
+      const earGain = makeGain(0);
+      connectChain([vehicleMix, earShelf, earLowpass, earGain, earOut, masterGain]);
+
+      const panLowpass = makeFilter(ctx, nodes, "lowpass", T.externalCutoffHz, 0.65);
+      const panGain = makeGain(1);
+      let panner = null;
+      if (typeof ctx.createPanner === "function") {
+        try {
+          panner = ctx.createPanner();
+          nodes.push(panner);
+          configureHrtfPanner(panner, T.pilotRefDistance, T.pilotRolloffFactor, T.pilotMaxDistance);
+          connectChain([vehicleMix, panLowpass, panGain, panner, masterGain]);
+        } catch (_) { panner = null; }
+      }
+      if (!panner) {
+        connectChain([vehicleMix, panLowpass, panGain, masterGain]);
+      }
+
+      for (const src of sources) src.start(now);
+
+      pilotGraph = {
+        ctx,
+        bus,
+        nodes,
+        sources,
+        masterGain,
+        vehicleMix,
+        crankOsc,
+        firingOsc,
+        subOsc,
+        driveGain,
+        manifoldShaper,
+        manifoldLowpass,
+        engineGain,
+        intakeGain,
+        burbleGain,
+        gearOsc,
+        gearGain,
+        tCaseOsc,
+        tCaseGain,
+        tireRollFilter,
+        tireRollGain,
+        tireScrubFilter,
+        tireScrubGain,
+        hornOsc1,
+        hornOsc2,
+        hornFilter,
+        hornGain,
+        earGain,
+        panGain,
+        panner,
+        dead: false,
+      };
+
+      started = true;
+      return true;
+    } catch (_) {
+      teardownVoice({ nodes, sources, dead: false });
+      pilotGraph = null;
+      return false;
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Mechanical One-Shots (Shift Clunk & Leaf-Spring Suspension Jolt)
+  // -------------------------------------------------------------------------
+
+  function playShiftClunk(t) {
+    if (!pilotGraph || disposed) return;
+    const ctx = pilotGraph.ctx;
+    if (!ctx || typeof ctx.createOscillator !== "function" || typeof ctx.createGain !== "function") return;
+    const now = fin(t) ? t : (fin(ctx.currentTime) ? ctx.currentTime : clock());
+    if (now - lastClunkTime < 0.08) return;
+    lastClunkTime = now;
+
+    try {
+      const o = ctx.createOscillator();
+      const g = ctx.createGain();
+      const shot = { nodes: [o, g], sources: [o] };
+      activeOneShots.add(shot);
+      o.type = "sine";
+      setParamAt(o.frequency, 160, now);
+      if (typeof o.frequency.exponentialRampToValueAtTime === "function") {
+        try { o.frequency.exponentialRampToValueAtTime(55, now + 0.09); } catch (_) {}
+      }
+      setParamAt(g.gain, 0.22, now);
+      if (typeof g.gain.exponentialRampToValueAtTime === "function") {
+        try { g.gain.exponentialRampToValueAtTime(0.001, now + 0.10); } catch (_) {}
+      }
+      o.connect(g);
+      g.connect(pilotGraph.vehicleMix);
+      o.start(now);
+      o.stop(now + 0.11);
+      o.onended = () => {
+        activeOneShots.delete(shot);
+        try { o.disconnect(); } catch (_) {}
+        try { g.disconnect(); } catch (_) {}
+      };
+    } catch (_) {}
+  }
+
+  function suspensionJolt({ intensity = 1.0, impact = false } = {}) {
+    if (disposed || !enabled) return false;
+    if (!started) {
+      const bus = rawResolveBus();
+      if (bus) buildPilotGraph(bus);
+    }
+    if (!pilotGraph || disposed) return false;
+    const ctx = pilotGraph.ctx;
+    if (!ctx || typeof ctx.createOscillator !== "function" || typeof ctx.createGain !== "function") return false;
+    const now = fin(ctx.currentTime) ? ctx.currentTime : clock();
+    if (now - lastJoltTime < T.joltCooldownSec) return false;
+    lastJoltTime = now;
+
+    try {
+      const scale = clamp(intensity, 0.1, 2.5);
+
+      // Chassis Frame Thump
+      const thumpOsc = ctx.createOscillator();
+      const thumpGain = ctx.createGain();
+      thumpOsc.type = "triangle";
+      setParamAt(thumpOsc.frequency, T.leafThumpFreq * (impact ? 1.25 : 1.0), now);
+      if (typeof thumpOsc.frequency.exponentialRampToValueAtTime === "function") {
+        try { thumpOsc.frequency.exponentialRampToValueAtTime(45, now + 0.09); } catch (_) {}
+      }
+      setParamAt(thumpGain.gain, clamp(0.28 * scale, 0.05, 0.45), now);
+      if (typeof thumpGain.gain.exponentialRampToValueAtTime === "function") {
+        try { thumpGain.gain.exponentialRampToValueAtTime(0.001, now + 0.10); } catch (_) {}
+      }
+      thumpOsc.connect(thumpGain);
+      thumpGain.connect(pilotGraph.vehicleMix);
+
+      // Leaf-Spring Metal Squeak / Scrub
+      const squeakOsc = ctx.createOscillator();
+      const squeakFilter = makeFilter(ctx, [], "bandpass", T.leafSqueakFreq, 3.0);
+      const squeakGain = ctx.createGain();
+      squeakOsc.type = "sawtooth";
+      setParamAt(squeakOsc.frequency, T.leafSqueakFreq, now);
+      if (typeof squeakOsc.frequency.linearRampToValueAtTime === "function") {
+        try { squeakOsc.frequency.linearRampToValueAtTime(1200, now + 0.07); } catch (_) {}
+      }
+      setParamAt(squeakGain.gain, clamp(0.14 * scale, 0.02, 0.25), now);
+      if (typeof squeakGain.gain.exponentialRampToValueAtTime === "function") {
+        try { squeakGain.gain.exponentialRampToValueAtTime(0.001, now + 0.08); } catch (_) {}
+      }
+      squeakOsc.connect(squeakFilter);
+      squeakFilter.connect(squeakGain);
+      squeakGain.connect(pilotGraph.vehicleMix);
+
+      const shot = { nodes: [thumpOsc, thumpGain, squeakOsc, squeakFilter, squeakGain], sources: [thumpOsc, squeakOsc] };
+      activeOneShots.add(shot);
+
+      let remainingSources = 2;
+      const onEnded = (isThump) => {
+        if (isThump) {
+          try { thumpOsc.disconnect(); } catch (_) {}
+          try { thumpGain.disconnect(); } catch (_) {}
+        } else {
+          try { squeakOsc.disconnect(); } catch (_) {}
+          try { squeakFilter.disconnect(); } catch (_) {}
+          try { squeakGain.disconnect(); } catch (_) {}
+        }
+        remainingSources--;
+        if (remainingSources <= 0) {
+          activeOneShots.delete(shot);
+        }
+      };
+
+      thumpOsc.start(now);
+      thumpOsc.stop(now + 0.11);
+      thumpOsc.onended = () => onEnded(true);
+
+      squeakOsc.start(now);
+      squeakOsc.stop(now + 0.09);
+      squeakOsc.onended = () => onEnded(false);
+
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // 3D Observer Doppler Flyby Pool
+  // -------------------------------------------------------------------------
+
+  function buildGroundObserverVoice(bus, tx, ty, tz) {
+    const ctx = bus.ctx;
+    if (typeof ctx.createGain !== "function" || typeof ctx.createOscillator !== "function" || typeof ctx.createPanner !== "function") {
+      return null;
+    }
+    const nodes = [];
+    const sources = [];
+    try {
+      const now = fin(ctx.currentTime) ? ctx.currentTime : 0;
+      const makeGain = (v = 1) => {
+        const gn = ctx.createGain();
+        nodes.push(gn);
+        setParam(gn.gain, v);
+        return gn;
+      };
+      const makeOsc = (type, hz) => {
+        const o = ctx.createOscillator();
+        nodes.push(o);
+        sources.push(o);
+        try { o.type = type; } catch (_) {}
+        setParam(o.frequency, hz);
+        return o;
+      };
+
+      const panner = ctx.createPanner();
+      nodes.push(panner);
+      configureHrtfPanner(panner, T.observerRefDistance, T.observerRolloffFactor, T.observerMaxDistance);
+      writePannerThree(panner, tx, ty, tz);
+
+      const voiceGain = makeGain(0);
+      const atmoLowpass = makeFilter(ctx, nodes, "lowpass", 4200, 0.7);
+
+      const radialOsc = makeOsc("sawtooth", T.crankIdleHz);
+      const radialGain = makeGain(0.25);
+      connectChain([radialOsc, radialGain, atmoLowpass]);
+
+      const gearOsc = makeOsc("triangle", T.gearWhineBaseHz);
+      const gearGain = makeGain(0.08);
+      connectChain([gearOsc, gearGain, atmoLowpass]);
+
+      const whooshNoise = makeLoopNoise(ctx, nodes, sources, T.noiseSec);
+      const whooshFilter = makeFilter(ctx, nodes, "bandpass", 420, 1.2);
+      const whooshGain = makeGain(0);
+      if (whooshNoise) connectChain([whooshNoise, whooshFilter, whooshGain, atmoLowpass]);
+
+      connectChain([atmoLowpass, voiceGain, panner, bus.node]);
+
+      for (const src of sources) src.start(now);
+
+      return {
+        ctx,
+        bus,
+        nodes,
+        sources,
+        radialOsc,
+        radialGain,
+        gearOsc,
+        gearGain,
+        whooshFilter,
+        whooshGain,
+        atmoLowpass,
+        voiceGain,
+        panner,
+        doppler: null,
+        prevAcPos: null,
+        dead: false,
+        last: { crankHz: NaN, gearHz: NaN, atmoHz: NaN, whooshGain: NaN, outGain: NaN },
+      };
+    } catch (_) {
+      teardownVoice({ nodes, sources, dead: false });
+      return null;
+    }
+  }
+
+  function releaseAllObservers() {
+    for (const v of observerVoices.values()) teardownVoice(v);
+    observerVoices.clear();
+  }
+
+  function extractCandidate(item, idx, lp) {
+    if (!item || typeof item !== "object") return null;
+    if (item.piloted === true || item.isPilot === true || item.skip === true) return null;
+    const pose = item.drawPose ?? item.pose ?? item.state ?? item.last ?? null;
+    const pos = readVec3(item.pos) ?? readVec3(pose) ?? readVec3(item);
+    if (!pos) return null;
+
+    const dist = Math.hypot(pos[0] - lp[0], pos[1] - lp[1], pos[2] - lp[2]);
+    if (!(dist <= T.observerRangeM)) return null;
+
+    const rawSpeed = item.speed ?? pose?.speed ?? item.last?.speed;
+    const speed = fin(rawSpeed) ? rawSpeed : 0;
+    const rawThr = item.throttle ?? pose?.throttle;
+    const throttle = fin(rawThr) ? clamp(rawThr, 0, 1) : (Math.abs(speed) > 0.5 ? 0.6 : 0);
+    const boost = Boolean(item.boost ?? pose?.boost);
+    const id = item.guid ?? item.id ?? item.key ?? idx;
+
+    const explicitVel = readVec3(item.vel ?? item.velocity);
+    let vel = explicitVel;
+    if (!vel && fin(item.heading ?? pose?.heading) && speed !== 0) {
+      const hdg = item.heading ?? pose?.heading;
+      vel = [speed * Math.sin(hdg), speed * Math.cos(hdg), 0];
+    }
+    return { id, pos, vel, dist, speed, throttle, boost };
+  }
+
+  function updateObservers(vehicles, listenerPos, listenerVel = null, dt = 1 / 60) {
+    if (disposed || !enabled || maxObserverVoices <= 0) {
+      if (observerVoices.size) releaseAllObservers();
+      return;
+    }
+    const lp = readVec3(listenerPos);
+    if (!lp || !vehicles || typeof vehicles[Symbol.iterator] !== "function") {
+      if (observerVoices.size) releaseAllObservers();
+      return;
+    }
+
+    const bus = rawResolveBus();
+    if (!bus) {
+      if (observerVoices.size) releaseAllObservers();
+      return;
+    }
+
+    const candidates = [];
+    const iterable = vehicles instanceof Map ? vehicles.values() : vehicles;
+    let idx = 0;
+    for (const item of iterable) {
+      const c = extractCandidate(item, idx++, lp);
+      if (c) candidates.push(c);
+    }
+    candidates.sort((a, b) => a.dist - b.dist);
+    const chosen = candidates.length > maxObserverVoices ? candidates.slice(0, maxObserverVoices) : candidates;
+
+    const keepIds = new Set(chosen.map((c) => c.id));
+    for (const [id, voice] of observerVoices) {
+      if (!keepIds.has(id) || voice.ctx !== bus.ctx) {
+        teardownVoice(voice);
+        observerVoices.delete(id);
+      }
+    }
+
+    if (!chosen.length) return;
+
+    const lv = readVec3(listenerVel) || [0, 0, 0];
+    const effDt = fin(dt) && dt > 0 ? Math.min(dt, 1) : 1 / 60;
+    const scale = masterGainScale(bus);
+    const now = fin(bus.ctx.currentTime) ? bus.ctx.currentTime : 0;
+
+    for (const c of chosen) {
+      const three = acToThreePos(c.pos);
+      if (!three) continue;
+      let voice = observerVoices.get(c.id);
+      if (!voice) {
+        voice = buildGroundObserverVoice(bus, three[0], three[1], three[2]);
+        if (!voice) continue;
+        observerVoices.set(c.id, voice);
+      }
+
+      let vel = c.vel;
+      if (!vel && voice.prevAcPos && effDt > 1e-4) {
+        vel = [
+          (c.pos[0] - voice.prevAcPos[0]) / effDt,
+          (c.pos[1] - voice.prevAcPos[1]) / effDt,
+          (c.pos[2] - voice.prevAcPos[2]) / effDt,
+        ];
+      }
+      voice.prevAcPos = c.pos;
+
+      const rawD = computeDoppler(c.pos, vel, lp, lv);
+      if (voice.doppler === null) {
+        voice.doppler = rawD;
+      } else {
+        voice.doppler += (rawD - voice.doppler) * (1 - Math.exp(-effDt / T.dopplerTau));
+      }
+      const D = voice.doppler;
+
+      const obsParams = computeL134EngineParams({
+        speed: c.speed,
+        throttle: c.throttle,
+        boost: c.boost,
+        handbrake: false,
+      });
+
+      const crankHz = obsParams.crankHz * D;
+      const gearHz = obsParams.gearHz * D;
+
+      const distFactor = 1 / (1 + c.dist / 220);
+      const aspectMul = D >= 1 ? 1 + 0.45 * (D - 1) : Math.max(0.40, 1 - 0.75 * (1 - D));
+      const atmoHz = clamp((800 + 4600 * distFactor) * aspectMul, 320, 6800);
+
+      let whooshLevel = 0;
+      if (c.dist < T.flybyWhooshRangeM) {
+        const prox = 1 - c.dist / T.flybyWhooshRangeM;
+        const spdFactor = clamp(Math.abs(c.speed) / 20.0, 0.2, 1.2);
+        whooshLevel = 0.26 * prox * prox * spdFactor;
+      }
+
+      const rangeEdge = 1 - Math.pow(c.dist / T.observerRangeM, 2);
+      const outGain = scale * clamp((0.32 + Math.abs(c.speed) / 40.0) * rangeEdge, 0, 0.90);
+
+      writePannerThree(voice.panner, three[0], three[1], three[2]);
+
+      const L = voice.last;
+      if (!(Math.abs(crankHz - L.crankHz) <= EPS_HZ)) {
+        L.crankHz = crankHz;
+        targetParam(voice.radialOsc.frequency, crankHz, now, T.paramTau);
+      }
+      if (!(Math.abs(gearHz - L.gearHz) <= EPS_HZ)) {
+        L.gearHz = gearHz;
+        targetParam(voice.gearOsc.frequency, gearHz, now, T.paramTau);
+      }
+      if (!(Math.abs(atmoHz - L.atmoHz) <= EPS_HZ)) {
+        L.atmoHz = atmoHz;
+        targetParam(voice.atmoLowpass.frequency, atmoHz, now, T.paramTau);
+      }
+      if (!(Math.abs(whooshLevel - L.whooshGain) <= EPS_GAIN)) {
+        L.whooshGain = whooshLevel;
+        targetParam(voice.whooshGain.gain, whooshLevel, now, T.paramTau);
+      }
+      if (!(Math.abs(outGain - L.outGain) <= EPS_GAIN)) {
+        L.outGain = outGain;
+        targetParam(voice.voiceGain.gain, outGain, now, T.paramTau);
+      }
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Public Interface
+  // -------------------------------------------------------------------------
+
   function start() {
-    if (!started) initNodes();
+    if (disposed || !enabled) return false;
+    if (started && pilotGraph) return true;
+    const bus = rawResolveBus();
+    if (!bus) return false;
+    return buildPilotGraph(bus);
   }
 
   function stop() {
-    if (engineGain && engineGain.gain) engineGain.gain.value = 0;
+    if (!pilotGraph || disposed) return;
+    try {
+      setParam(pilotGraph.masterGain.gain, 0);
+      setParam(pilotGraph.engineGain.gain, 0);
+      setParam(pilotGraph.gearGain.gain, 0);
+      setParam(pilotGraph.tireRollGain.gain, 0);
+      setParam(pilotGraph.hornGain.gain, 0);
+    } catch (_) {}
   }
 
   function update(state = {}) {
-    if (!started) initNodes();
-    if (!ctx) return;
-    const { speed = 0, throttle = 0, boost = false, handbrake = false } = state;
-    const params = computeL134EngineParams({ speed, throttle, boost, handbrake });
+    if (disposed || !enabled) return;
+    const s = (state && typeof state === "object") ? state : {};
+    if (!started || !pilotGraph) {
+      const bus = rawResolveBus();
+      if (!bus) return;
+      if (!buildPilotGraph(bus)) return;
+    }
 
-    if (crankOsc && crankOsc.frequency) crankOsc.frequency.value = params.crankHz;
-    if (firingOsc && firingOsc.frequency) firingOsc.frequency.value = params.firingHz;
-    if (gearOsc && gearOsc.frequency) gearOsc.frequency.value = params.gearHz;
-    if (filter && filter.frequency) filter.frequency.value = params.cutoffHz;
-    if (engineGain && engineGain.gain) engineGain.gain.value = 0.25 + (Math.abs(speed) / 29.0) * 0.45;
-  }
+    const g = pilotGraph;
+    const ctx = g.ctx;
+    const now = fin(ctx.currentTime) ? ctx.currentTime : clock();
+    const bus = g.bus;
 
-  function horn(active) {
-    if (!started) initNodes();
-    if (hornGain && hornGain.gain) {
-      hornGain.gain.value = active ? 0.35 : 0.0;
+    // Focus mute & master scale
+    const scale = masterGainScale(bus);
+    setParam(g.masterGain.gain, scale);
+
+    // Perspective crossfade
+    const fpv = Boolean(s.fpv);
+    targetParam(g.earGain.gain, fpv ? 1.0 : 0.0, now, T.paramTau);
+    targetParam(g.panGain.gain, fpv ? 0.0 : 1.0, now, T.paramTau);
+
+    // 3D Panner location
+    if (g.panner && s.pos) {
+      const three = acToThreePos(s.pos);
+      if (three) writePannerThree(g.panner, three[0], three[1], three[2]);
+    }
+
+    // Engine & Gearbox Kinematics
+    const rawSpd = fin(s.speed) ? s.speed : 0;
+    const absSpeed = Math.abs(rawSpd);
+    const thr = clamp(fin(s.throttle) ? s.throttle : 0, 0, 1);
+    const boost = Boolean(s.boost);
+    const handbrake = Boolean(s.handbrake);
+
+    const params = computeL134EngineParams({
+      speed: rawSpd,
+      throttle: thr,
+      boost,
+      handbrake,
+    });
+
+    // Detect Gear Changes & Trigger 140ms Clutch-Dip & Mechanical Shift Clunk
+    if (lastGear !== null && params.gear !== lastGear && params.gear !== 0) {
+      clutchDipUntil = now + T.clutchDipDurationSec;
+      playShiftClunk(now);
+    }
+    lastGear = params.gear;
+
+    const inClutchDip = now < clutchDipUntil;
+    const dipMul = inClutchDip ? 0.60 : 1.0;
+
+    // Engine frequencies & saturation drive
+    targetParam(g.crankOsc.frequency, params.crankHz, now, T.paramTau);
+    targetParam(g.firingOsc.frequency, params.firingHz, now, T.paramTau);
+    targetParam(g.subOsc.frequency, 0.5 * params.crankHz, now, T.paramTau);
+    targetParam(g.manifoldLowpass.frequency, params.cutoffHz, now, T.paramTau);
+
+    const drive = (1.2 + 1.8 * thr + 0.4 * (params.rpm / T.rpmMax)) * dipMul;
+    targetParam(g.driveGain.gain, drive, now, T.paramTau);
+
+    const baseEngGain = (0.24 + (absSpeed / 29.0) * 0.42 + thr * 0.18) * dipMul;
+    targetParam(g.engineGain.gain, baseEngGain, now, T.paramTau);
+
+    // Throttle-sensitive intake roar (Carter WO carburetor induction)
+    const intakeLevel = thr * (0.12 + 0.16 * (params.rpm / T.rpmMax)) * dipMul;
+    targetParam(g.intakeGain.gain, intakeLevel, now, T.paramTau);
+
+    // Overrun burble on throttle lift
+    const isOverrun = thr < 0.12 && params.rpm > 1200 && absSpeed > 3.0;
+    const burbleLevel = isOverrun ? clamp((params.rpm - 1200) / 2000, 0, 0.28) : 0;
+    targetParam(g.burbleGain.gain, burbleLevel, now, 0.08);
+
+    // Gearbox whine & Transfer case whine
+    targetParam(g.gearOsc.frequency, params.gearHz, now, T.paramTau);
+    try {
+      g.gearOsc.type = params.gear === -1 ? "sawtooth" : (params.gear === 1 ? "sawtooth" : "triangle");
+    } catch (_) {}
+    const gearLevel = (absSpeed > 0.5) ? clamp(0.04 + (absSpeed / 29.0) * 0.12, 0, 0.16) : 0;
+    targetParam(g.gearGain.gain, gearLevel, now, T.paramTau);
+
+    if (boost && absSpeed > 0.5) {
+      targetParam(g.tCaseOsc.frequency, params.tCaseHz, now, T.paramTau);
+      targetParam(g.tCaseGain.gain, 0.09, now, T.paramTau);
+    } else {
+      targetParam(g.tCaseGain.gain, 0, now, T.paramTau);
+    }
+
+    // Surface Tire Roll & Skid Synthesis
+    const sFamily = fin(s.surfaceFamily) ? Math.trunc(s.surfaceFamily) : 0;
+    const shape = SURFACE_AUDIO_SHAPES[sFamily] || SURFACE_AUDIO_SHAPES[0];
+    try { g.tireRollFilter.type = shape.type; } catch (_) {}
+    targetParam(g.tireRollFilter.frequency, shape.freq + (absSpeed / 29.0) * 200, now, T.paramTau);
+    targetParam(g.tireRollFilter.Q, shape.q, now, T.paramTau);
+    const rollLevel = shape.gainMul * clamp(absSpeed / 22.0, 0, 1.3);
+    targetParam(g.tireRollGain.gain, rollLevel, now, T.paramTau);
+
+    // Lateral scrub / handbrake screech
+    const lateralSlip = finOr(s.lateralSlip, 0);
+    const isHard = sFamily === 0 || sFamily === 8 || sFamily === 9;
+    const isSkid = handbrake || lateralSlip > 0.15;
+    if (isSkid && absSpeed > 1.0) {
+      try { g.tireScrubFilter.type = "bandpass"; } catch (_) {}
+      targetParam(g.tireScrubFilter.frequency, isHard ? 1350 : 750, now, T.paramTau);
+      targetParam(g.tireScrubFilter.Q, isHard ? 4.0 : 1.8, now, T.paramTau);
+      const scrubLevel = isHard
+        ? clamp((handbrake ? 0.32 : lateralSlip * 0.38) * (absSpeed / 15.0), 0, 0.38)
+        : clamp((handbrake ? 0.26 : lateralSlip * 0.32) * (absSpeed / 15.0), 0, 0.32);
+      targetParam(g.tireScrubGain.gain, scrubLevel, now, 0.03);
+    } else {
+      targetParam(g.tireScrubGain.gain, 0, now, 0.06);
+    }
+
+    // Chassis Bumps / Jolts
+    if ((s.roughness && s.roughness > 0.35) || (s.jolt && s.jolt > 0.25)) {
+      suspensionJolt({ intensity: Math.max(s.roughness || 0, s.jolt || 0) });
+    }
+
+    // Horn state
+    if (typeof s.horn === "boolean") {
+      horn(s.horn);
     }
   }
 
-  function radarPing(standing = 1) {
-    if (!started) initNodes();
-    if (!ctx || !ctx.createOscillator || !ctx.createGain) return;
-    try {
-      const pingOsc = ctx.createOscillator();
-      const pingGain = ctx.createGain();
-      let freq = L134_AUDIO_TUNING.radarPingFriendlyHz;
-      if (standing === 2) freq = L134_AUDIO_TUNING.radarPingNeutralHz;
-      else if (standing === 3) freq = L134_AUDIO_TUNING.radarPingHostileHz;
-
-      pingOsc.frequency.value = freq;
-      pingOsc.type = "sine";
-      const now = ctx.currentTime || 0;
-      pingGain.gain.setValueAtTime ? pingGain.gain.setValueAtTime(0.3, now) : (pingGain.gain.value = 0.3);
-      if (pingGain.gain.exponentialRampToValueAtTime) {
-        pingGain.gain.exponentialRampToValueAtTime(0.001, now + 0.15);
-      }
-      pingOsc.connect(pingGain);
-      if (masterGain) pingGain.connect(masterGain);
-      pingOsc.start(now);
-      pingOsc.stop(now + 0.16);
-    } catch (_) {}
+  function horn(active) {
+    if (disposed || !enabled) return;
+    if (!started) {
+      const bus = rawResolveBus();
+      if (bus) buildPilotGraph(bus);
+    }
+    if (!pilotGraph || disposed) return;
+    const ctx = pilotGraph.ctx;
+    const now = fin(ctx?.currentTime) ? ctx.currentTime : clock();
+    if (active) {
+      rampLinParam(pilotGraph.hornGain.gain, T.spartonMaxGain, now + 0.015, now);
+    } else {
+      rampLinParam(pilotGraph.hornGain.gain, 0.0, now + 0.030, now);
+    }
   }
 
   function dispose() {
     disposed = true;
     started = false;
-    try {
-      if (crankOsc && crankOsc.stop) crankOsc.stop();
-      if (firingOsc && firingOsc.stop) firingOsc.stop();
-      if (gearOsc && gearOsc.stop) gearOsc.stop();
-      if (hornOsc1 && hornOsc1.stop) hornOsc1.stop();
-      if (hornOsc2 && hornOsc2.stop) hornOsc2.stop();
-      if (crtOsc && crtOsc.stop) crtOsc.stop();
-    } catch (_) {}
+    if (pilotGraph) {
+      teardownVoice(pilotGraph);
+      pilotGraph = null;
+    }
+    releaseAllObservers();
+    for (const shot of activeOneShots) {
+      if (shot.sources) {
+        for (const src of shot.sources) {
+          try { src.onended = null; } catch (_) {}
+          try { src.stop(); } catch (_) {}
+        }
+      }
+      if (shot.nodes) {
+        for (const n of shot.nodes) {
+          try { n.disconnect(); } catch (_) {}
+        }
+      }
+    }
+    activeOneShots.clear();
   }
 
   return {
@@ -2529,9 +3394,23 @@ export function createGroundVehicleAudio(opts = {}) {
     stop,
     update,
     horn,
-    radarPing,
+    suspensionJolt,
+    shiftClunk: () => playShiftClunk(clock()),
+    updateObservers,
+    radarPing: () => false,
     dispose,
+    isStarted: () => started && !disposed,
+    isLive: () => started && !disposed && Boolean(pilotGraph),
     get active() { return started && !disposed; },
+    get stats() {
+      return {
+        started,
+        disposed,
+        pilotActive: Boolean(pilotGraph && !pilotGraph.dead),
+        observerCount: observerVoices.size,
+      };
+    },
   };
 }
+
 

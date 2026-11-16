@@ -27,6 +27,24 @@ export const DEFAULT_CHASE = Object.freeze({
 });
 
 /**
+ * Dedicated WWII 4x4 Ground Vehicle chase camera configuration:
+ * tight framing (5.4m back, 1.95m up, 7.5m lookAhead, 62° base FOV).
+ */
+export const DEFAULT_GROUND_CHASE = Object.freeze({
+  back: 5.4,
+  up: 1.95,
+  lookAhead: 7.5,
+  pitch: -0.06,
+  fov: 62,
+  headingTau: 0.18,
+  pitchTau: 0.12,
+  rollTau: 0.12,
+  groundClear: 0.6,
+  groundAttackTau: 0.05,
+  groundReleaseTau: 0.22,
+});
+
+/**
  * Seated eye offset in the F6F Hellcat cockpit:
  * seat z (2.34 m) + up (1.24 m) = 3.58 m — aligns eye directly through the armored windscreen
  * and Mk 8 Reflector Gunsight (z ≈ 3.56..3.58 m).
@@ -34,9 +52,27 @@ export const DEFAULT_CHASE = Object.freeze({
 export const COCKPIT_EYE = Object.freeze({ right: 0, forward: 0.16, up: 1.24, fov: 76 });
 
 /**
+ * Calibrated per-seat eye anchors for 1943 Willys MB 1/4-ton 4x4 Jeep (relative to vehicle center):
+ * Seat 0 (Driver Front-Left):  [-0.38, -0.18, 0.62 + 0.68] = [-0.38, -0.18, 1.30] behind 3-spoke wheel over gauges & windscreen
+ * Seat 1 (Shotgun Front-Right): [+0.38, -0.18, 0.62 + 0.68] = [+0.38, -0.18, 1.30] behind dash grab-bar
+ * Seats 2 & 3 (Rear Bench):    [±0.36, -0.96, 0.68 + 0.68] = [±0.36, -0.96, 1.36] looking forward past front seats
+ */
+export const GROUND_CAB_EYES = Object.freeze([
+  Object.freeze({ right: -0.38, forward: -0.18, up: 1.30, fov: 70 }),
+  Object.freeze({ right:  0.38, forward: -0.18, up: 1.30, fov: 70 }),
+  Object.freeze({ right: -0.36, forward: -0.96, up: 1.36, fov: 70 }),
+  Object.freeze({ right:  0.36, forward: -0.96, up: 1.36, fov: 70 }),
+]);
+
+/**
  * Over-the-cowling / gun-camera view: Sea-Blue radial nose, spinning prop disc, and wing gunfire in periphery.
  */
 export const HOOD_EYE = Object.freeze({ right: 0, forward: 1.28, up: 1.10, fov: 74 });
+
+/**
+ * Hood-star rally camera for Willys MB ground vehicle: [0, +0.55, +1.18], FOV 66°.
+ */
+export const GROUND_HOOD_EYE = Object.freeze({ right: 0, forward: 0.55, up: 1.18, fov: 66 });
 
 const TWO_PI = 2 * Math.PI;
 const G_MIN = -2.5;
@@ -132,6 +168,7 @@ export function createPilotCameraRig(opts = {}) {
   const cfg = { ...DEFAULT_CHASE, ...(opts.chaseCfg || {}) };
 
   let view = VIEW_MODES.includes(opts.initialView) ? opts.initialView : "chase";
+  let seatIndex = opts.seatIndex ?? 0;
   let camHeading = null;
   let camPitch = null;
   let camRoll = null;
@@ -143,11 +180,24 @@ export function createPilotCameraRig(opts = {}) {
   let headPitchLag = 0;
   let headRollLag = 0;
   let prevPose = null;
+  let bumpOffset = 0;
+  let bumpVel = 0;
+  let prevVertSpeed = 0;
+  let joltEnv = 0;
+  let joltPitch = 0;
+  let joltRoll = 0;
 
   // Deterministic coherent shake state
   let shakePhase = 0;
   let gunEnv = 0;
   let wepEnv = 0;
+
+  function triggerJolt(impulse = 1.0) {
+    const val = Number.isFinite(impulse) ? impulse : 1.0;
+    joltEnv = clamp(joltEnv + val, 0, 3.0);
+    joltPitch += (Math.sin(shakePhase * 17) * 0.08 + 0.05) * val;
+    joltRoll += Math.cos(shakePhase * 13) * 0.06 * val;
+  }
 
   function reset(heading = null) {
     camHeading = Number.isFinite(heading) ? FM.wrapHeading(heading) : null;
@@ -161,6 +211,12 @@ export function createPilotCameraRig(opts = {}) {
     headPitchLag = 0;
     headRollLag = 0;
     prevPose = null;
+    bumpOffset = 0;
+    bumpVel = 0;
+    prevVertSpeed = 0;
+    joltEnv = 0;
+    joltPitch = 0;
+    joltRoll = 0;
     gunEnv = 0;
     wepEnv = 0;
   }
@@ -182,7 +238,7 @@ export function createPilotCameraRig(opts = {}) {
 
   /**
    * Advance camera rig one render frame.
-   * @param {{seat: object, pose: object, params?: object, controlsStatus?: object, dt?: number, firing?: boolean, explosionShake?: number, camTweak?: object|null}} arg
+   * @param {{seat: object, pose: object, params?: object, controlsStatus?: object, dt?: number, firing?: boolean, explosionShake?: number, camTweak?: object|null, seatIndex?: number|null, collisionJolt?: number, jolt?: number}} arg
    */
   function step({
     seat,
@@ -193,8 +249,16 @@ export function createPilotCameraRig(opts = {}) {
     firing = false,
     explosionShake = 0,
     camTweak = null,
+    seatIndex: stepSeatIndex = null,
+    collisionJolt = 0,
+    jolt = 0,
   }) {
     const stepDt = Number.isFinite(dt) ? clamp(dt, 0, 0.25) : 0;
+    const isGround = (params?.locomotion === 2) || (opts.locomotion === 2);
+    const curSeat = clamp(Math.round(stepSeatIndex ?? (controlsStatus?.seatIndex ?? seatIndex)), 0, 3);
+    const joltIn = Number(collisionJolt) || Number(jolt) || 0;
+    if (joltIn > 0) triggerJolt(joltIn);
+
     const p = pose || { x: 0, y: 0, z: 0, heading: 0, pitch: 0, bank: 0, speed: 0, mode: FM.MODE.PARKED };
     const sx = Number.isFinite(seat?.x) ? seat.x : (p.x || 0);
     const sy = Number.isFinite(seat?.y) ? seat.y : (p.y || 0);
@@ -221,15 +285,49 @@ export function createPilotCameraRig(opts = {}) {
     const flYaw = Number.isFinite(controlsStatus?.freelook?.yaw) ? controlsStatus.freelook.yaw : 0;
     const flPitch = Number.isFinite(controlsStatus?.freelook?.pitch) ? controlsStatus.freelook.pitch : 0;
 
-    // 2. Speed-scaled FOV (+0°..+7.5° above cruise into WEP / dives; boost adds +2° punch)
+    // Suspension bump spring filter
+    if (isGround && stepDt > 0) {
+      const kSpring = 240;
+      const kDamp = 18;
+      let bumpImpulse = 0;
+      if (prevPose && stepDt > 1e-4) {
+        const vertSpeed = (sz - (prevPose.sz ?? sz)) / stepDt;
+        const dVert = vertSpeed - prevVertSpeed;
+        bumpImpulse = clamp(dVert * 0.012, -0.25, 0.25);
+        prevVertSpeed = vertSpeed;
+      }
+      bumpVel += (-kSpring * bumpOffset - kDamp * bumpVel + (bumpImpulse / stepDt)) * stepDt;
+      bumpOffset += bumpVel * stepDt;
+      bumpOffset = clamp(bumpOffset, -0.15, 0.15);
+    } else {
+      bumpOffset = 0;
+      bumpVel = 0;
+      prevVertSpeed = 0;
+    }
+
+    if (stepDt > 0) {
+      joltEnv *= Math.exp(-stepDt / 0.15);
+      joltPitch *= Math.exp(-stepDt / 0.12);
+      joltRoll *= Math.exp(-stepDt / 0.12);
+    }
+
+    // 2. Speed-scaled FOV
+    const speed = Number.isFinite(p.speed) ? p.speed : 0;
     const vMin = Number.isFinite(params?.vMin) && params.vMin > 0 ? params.vMin : 30;
     const vCruise = Number.isFinite(params?.vCruise) && params.vCruise > 0 ? params.vCruise : 83;
-    const vMax = Number.isFinite(params?.vMax) && params.vMax > vCruise ? params.vMax : Math.max(vCruise + 14, 97);
-    const speed = Number.isFinite(p.speed) ? p.speed : 0;
-    const overCruise = speed > vCruise ? clamp((speed - vCruise) / Math.max(5, vMax - vCruise), 0, 1.1) : 0;
-    const wantFovBoost = clamp(overCruise * 5.5 + (boost && speed > 5 ? 2.0 : 0), 0, 7.5);
-    const aFov = stepDt > 0 ? 1 - Math.exp(-stepDt / 0.16) : 1;
-    fovBoost += (wantFovBoost - fovBoost) * aFov;
+    if (isGround) {
+      const groundSpeed = Math.abs(speed);
+      const speedFrac = clamp(groundSpeed / 29.0, 0, 1);
+      const wantFovBoost = speedFrac * 6.0;
+      const aFov = stepDt > 0 ? 1 - Math.exp(-stepDt / 0.16) : 1;
+      fovBoost += (wantFovBoost - fovBoost) * aFov;
+    } else {
+      const vMax = Number.isFinite(params?.vMax) && params.vMax > vCruise ? params.vMax : Math.max(vCruise + 14, 97);
+      const overCruise = speed > vCruise ? clamp((speed - vCruise) / Math.max(5, vMax - vCruise), 0, 1.1) : 0;
+      const wantFovBoost = clamp(overCruise * 5.5 + (boost && speed > 5 ? 2.0 : 0), 0, 7.5);
+      const aFov = stepDt > 0 ? 1 - Math.exp(-stepDt / 0.16) : 1;
+      fovBoost += (wantFovBoost - fovBoost) * aFov;
+    }
 
     // 3. Mode-specific camera framing
     let camPos;
@@ -239,55 +337,85 @@ export function createPilotCameraRig(opts = {}) {
     let baseFov;
 
     if (view === "cockpit") {
-      // Damped pilot head G-sink (-0.018 m per excess +G) + subtle roll/pitch inertia + 1st-person head freelook
       const wantSink = clamp(-0.018 * (gLoad - 1.0), -0.09, 0.03);
       const aHead = stepDt > 0 ? 1 - Math.exp(-stepDt / 0.10) : 1;
       headSink += (wantSink - headSink) * aHead;
       headPitchLag += (clamp(-pitchRate * 0.03, -0.045, 0.045) - headPitchLag) * aHead;
       headRollLag += (clamp(-rollRateActual * 0.035, -0.06, 0.06) - headRollLag) * aHead;
 
-      const eye = FM.rotate(qSeat, [COCKPIT_EYE.right, COCKPIT_EYE.forward, COCKPIT_EYE.up + headSink]);
-      camPos = [sx + eye[0], sy + eye[1], sz + eye[2]];
-      const qPose = FM.orientation(p.heading || 0, p.pitch || 0, p.bank || 0);
-      const qHead = FM.orientation(flYaw, flPitch + headPitchLag, headRollLag);
-      const hpr = hprFromQuat(qMul(qPose, qHead), (p.heading || 0) + flYaw, p.bank || 0);
-      camH = hpr.h;
-      camP = hpr.p;
-      camR = hpr.r;
-      baseFov = COCKPIT_EYE.fov;
+      if (isGround) {
+        const cabEye = GROUND_CAB_EYES[curSeat] || GROUND_CAB_EYES[0];
+        // Seats 2 & 3: rear bench looking forward past front seats with unconstrained head-turn (±155° yaw, ±65° pitch)
+        const maxYaw = (curSeat === 2 || curSeat === 3) ? (155 * Math.PI / 180) : (155 * Math.PI / 180);
+        const maxPitch = (curSeat === 2 || curSeat === 3) ? (65 * Math.PI / 180) : (65 * Math.PI / 180);
+        const boundedFlYaw = clamp(flYaw, -maxYaw, maxYaw);
+        const boundedFlPitch = clamp(flPitch, -maxPitch, maxPitch);
+
+        const qPose = FM.orientation(p.heading || 0, p.pitch || 0, p.bank || 0);
+        const eye = FM.rotate(qPose, [cabEye.right, cabEye.forward, cabEye.up + headSink + bumpOffset]);
+        camPos = [p.x + eye[0], p.y + eye[1], p.z + eye[2] + joltEnv * 0.06];
+        const qHead = FM.orientation(boundedFlYaw, boundedFlPitch + headPitchLag + joltPitch, headRollLag + joltRoll);
+        const hpr = hprFromQuat(qMul(qPose, qHead), (p.heading || 0) + boundedFlYaw, p.bank || 0);
+        camH = hpr.h;
+        camP = hpr.p;
+        camR = hpr.r;
+        baseFov = cabEye.fov;
+      } else {
+        const eye = FM.rotate(qSeat, [COCKPIT_EYE.right, COCKPIT_EYE.forward, COCKPIT_EYE.up + headSink]);
+        camPos = [sx + eye[0], sy + eye[1], sz + eye[2]];
+        const qPose = FM.orientation(p.heading || 0, p.pitch || 0, p.bank || 0);
+        const qHead = FM.orientation(flYaw, flPitch + headPitchLag, headRollLag);
+        const hpr = hprFromQuat(qMul(qPose, qHead), (p.heading || 0) + flYaw, p.bank || 0);
+        camH = hpr.h;
+        camP = hpr.p;
+        camR = hpr.r;
+        baseFov = COCKPIT_EYE.fov;
+      }
     } else if (view === "hood") {
-      // Action gun-camera / over-the-cowling view
-      const eye = FM.rotate(qSeat, [HOOD_EYE.right, HOOD_EYE.forward, HOOD_EYE.up]);
-      camPos = [sx + eye[0], sy + eye[1], sz + eye[2]];
-      const qPose = FM.orientation(p.heading || 0, p.pitch || 0, p.bank || 0);
-      const qHead = FM.orientation(flYaw, flPitch, 0);
-      const hpr = hprFromQuat(qMul(qPose, qHead), (p.heading || 0) + flYaw, p.bank || 0);
-      camH = hpr.h;
-      camP = hpr.p;
-      camR = hpr.r;
-      baseFov = HOOD_EYE.fov;
+      if (isGround) {
+        const qPose = FM.orientation(p.heading || 0, p.pitch || 0, p.bank || 0);
+        const eye = FM.rotate(qPose, [GROUND_HOOD_EYE.right, GROUND_HOOD_EYE.forward, GROUND_HOOD_EYE.up + bumpOffset]);
+        camPos = [p.x + eye[0], p.y + eye[1], p.z + eye[2] + joltEnv * 0.06];
+        const qHead = FM.orientation(flYaw, flPitch + joltPitch, joltRoll);
+        const hpr = hprFromQuat(qMul(qPose, qHead), (p.heading || 0) + flYaw, p.bank || 0);
+        camH = hpr.h;
+        camP = hpr.p;
+        camR = hpr.r;
+        baseFov = GROUND_HOOD_EYE.fov;
+      } else {
+        const eye = FM.rotate(qSeat, [HOOD_EYE.right, HOOD_EYE.forward, HOOD_EYE.up]);
+        camPos = [sx + eye[0], sy + eye[1], sz + eye[2]];
+        const qPose = FM.orientation(p.heading || 0, p.pitch || 0, p.bank || 0);
+        const qHead = FM.orientation(flYaw, flPitch, 0);
+        const hpr = hprFromQuat(qMul(qPose, qHead), (p.heading || 0) + flYaw, p.bank || 0);
+        camH = hpr.h;
+        camP = hpr.p;
+        camR = hpr.r;
+        baseFov = HOOD_EYE.fov;
+      }
     } else {
       // Dynamic "chase" mode
+      const activeCfg = isGround ? { ...DEFAULT_GROUND_CHASE, ...(opts.chaseCfg || {}) } : cfg;
       const hdg = p.heading || 0;
       if (camHeading === null || !Number.isFinite(camHeading)) {
         camHeading = FM.wrapHeading(hdg);
       } else if (stepDt > 0) {
-        camHeading = FM.wrapHeading(camHeading + angleDiff(hdg, camHeading) * (1 - Math.exp(-stepDt / cfg.headingTau)));
+        camHeading = FM.wrapHeading(camHeading + angleDiff(hdg, camHeading) * (1 - Math.exp(-stepDt / activeCfg.headingTau)));
       }
 
-      // Longitudinal spring lag: +1.6..+2.6 m pullback on acceleration / WEP, -1.0 m closer on deceleration
-      const accelRef = Math.max(1, params?.accel ?? 8);
-      const decelRef = Math.max(1, params?.decel ?? 12);
+      // Longitudinal spring lag
+      const accelRef = Math.max(1, params?.accel ?? (isGround ? 5 : 8));
+      const decelRef = Math.max(1, params?.decel ?? (isGround ? 8 : 12));
       const accelTerm = accel >= 0
-        ? clamp(accel / accelRef, 0, 1) * 1.6
-        : clamp(accel / decelRef, -1, 0) * 1.0;
-      const boostTerm = boost ? 1.85 : 0;
-      const wantLag = clamp(accelTerm + boostTerm, -1.0, 2.6);
+        ? clamp(accel / accelRef, 0, 1) * (isGround ? 0.8 : 1.6)
+        : clamp(accel / decelRef, -1, 0) * (isGround ? 0.5 : 1.0);
+      const boostTerm = boost ? (isGround ? 0.6 : 1.85) : 0;
+      const wantLag = clamp(accelTerm + boostTerm, isGround ? -0.6 : -1.0, isGround ? 1.2 : 2.6);
       const aLag = stepDt > 0 ? 1 - Math.exp(-stepDt / 0.18) : 1;
       longLag += (wantLag - longLag) * aLag;
 
-      const rawBack = (camTweak?.back ?? cfg.back) + (camTweak ? 0 : longLag);
-      const rawUp = camTweak?.up ?? cfg.up;
+      const rawBack = (camTweak?.back ?? activeCfg.back) + (camTweak ? 0 : longLag);
+      const rawUp = camTweak?.up ?? activeCfg.up;
       const orbitAz = camHeading + (camTweak?.yaw ?? 0) + flYaw;
 
       let horizBack = rawBack;
@@ -295,8 +423,8 @@ export function createPilotCameraRig(opts = {}) {
       if (Math.abs(flPitch) > 1e-5 && !camTweak) {
         const radius = Math.hypot(rawBack, rawUp);
         const baseElev = Math.atan2(rawUp, rawBack);
-        const elev = clamp(baseElev - flPitch * 0.65, -0.35, 1.35);
-        horizBack = Math.max(2.0, Math.cos(elev) * radius);
+        const elev = clamp(baseElev - flPitch * (isGround ? 0.8 : 0.65), isGround ? -0.85 : -0.35, isGround ? 1.45 : 1.35);
+        horizBack = Math.max(isGround ? 1.2 : 2.0, Math.cos(elev) * radius);
         vertUp = Math.sin(elev) * radius;
       }
 
@@ -304,19 +432,19 @@ export function createPilotCameraRig(opts = {}) {
       const ey = sy - Math.cos(orbitAz) * horizBack;
       let ez = sz + vertUp;
 
-      // Smooth terrain ground clearance (strictly >= g + groundClear)
+      // Smooth terrain ground clearance
       const g = ground(ex, ey);
-      const wantLift = Number.isFinite(g) ? Math.max(0, (g + cfg.groundClear) - ez) : 0;
-      const tauLift = wantLift > camLift ? cfg.groundAttackTau : cfg.groundReleaseTau;
+      const wantLift = Number.isFinite(g) ? Math.max(0, (g + activeCfg.groundClear) - ez) : 0;
+      const tauLift = wantLift > camLift ? activeCfg.groundAttackTau : activeCfg.groundReleaseTau;
       const aLift = stepDt > 0 ? 1 - Math.exp(-stepDt / tauLift) : 1;
       camLift += (wantLift - camLift) * aLift;
       ez += camLift;
-      if (Number.isFinite(g) && ez < g + cfg.groundClear) ez = g + cfg.groundClear;
+      if (Number.isFinite(g) && ez < g + activeCfg.groundClear) ez = g + activeCfg.groundClear;
 
       const rawPitch = Number.isFinite(p.pitch) ? p.pitch : 0;
       const rawBank = Number.isFinite(p.bank) ? p.bank : 0;
-      const aPitch = stepDt > 0 ? 1 - Math.exp(-stepDt / cfg.pitchTau) : 1;
-      const aRoll = stepDt > 0 ? 1 - Math.exp(-stepDt / cfg.rollTau) : 1;
+      const aPitch = stepDt > 0 ? 1 - Math.exp(-stepDt / activeCfg.pitchTau) : 1;
+      const aRoll = stepDt > 0 ? 1 - Math.exp(-stepDt / activeCfg.rollTau) : 1;
       camPitch = Number.isFinite(camPitch) ? camPitch + (rawPitch - camPitch) * aPitch : rawPitch;
       camRoll = Number.isFinite(camRoll) ? camRoll + (rawBank - camRoll) * aRoll : rawBank;
 
@@ -325,18 +453,22 @@ export function createPilotCameraRig(opts = {}) {
         camH = FM.wrapHeading(orbitAz);
         camP = camTweak.pitch ?? -Math.atan2(ez - sz, Math.max(0.1, horizBack));
         camR = camTweak.roll ?? 0;
-        baseFov = camTweak.fov ?? cfg.fov;
+        baseFov = camTweak.fov ?? (isGround ? 62 : activeCfg.fov);
       } else {
-        // Active Velocity / Turn Look-Ahead: shifts aim target ahead along aircraft nose/turn curve
         const flMag = Math.hypot(flYaw, flPitch);
         const flBlend = clamp(flMag / 0.55, 0, 1);
-        const airborneScale = p.mode === FM.MODE.PARKED ? 0.25 : clamp(0.4 + (speed / Math.max(20, vCruise)) * 0.6, 0.4, 1.2);
-        const leadDist = Math.max(0, cfg.lookAhead) * airborneScale * (1 - flBlend);
+        const speedScale = isGround
+          ? (p.mode === FM.MODE.PARKED ? 0.35 : clamp(0.5 + (speed / 29.0) * 0.5, 0.5, 1.0))
+          : (p.mode === FM.MODE.PARKED ? 0.25 : clamp(0.4 + (speed / Math.max(20, vCruise)) * 0.6, 0.4, 1.2));
+        const leadDist = Math.max(0, activeCfg.lookAhead) * speedScale * (1 - flBlend);
 
-        const turnRate = speed > 5 ? (FM.GRAVITY * Math.tan(rawBank)) / Math.max(speed, FM.MIN_TURN_SPEED) : 0;
-        const turnYawLead = clamp(turnRate * 0.65 + rawBank * 0.22, -0.55, 0.55);
+        const steerInput = Number.isFinite(p.steer) ? p.steer : (Number.isFinite(controlsStatus?.steer) ? controlsStatus.steer : (p.bank || 0));
+        const turnRate = speed > (isGround ? 0.5 : 5) ? (FM.GRAVITY * Math.tan(rawBank)) / Math.max(speed, FM.MIN_TURN_SPEED) : 0;
+        const turnYawLead = isGround
+          ? clamp(steerInput * 0.38 + rawBank * 0.25, -0.55, 0.55)
+          : clamp(turnRate * 0.65 + rawBank * 0.22, -0.55, 0.55);
         const leadH = hdg + turnYawLead;
-        const leadP = camPitch * 0.85;
+        const leadP = isGround ? camPitch : camPitch * 0.85;
 
         const tx = sx + Math.sin(leadH) * Math.cos(leadP) * leadDist;
         const ty = sy + Math.cos(leadH) * Math.cos(leadP) * leadDist;
@@ -347,16 +479,18 @@ export function createPilotCameraRig(opts = {}) {
         const dz = tz - ez;
         const dhHoriz = Math.hypot(dx, dy);
 
-        camPos = [ex, ey, ez];
+        camPos = [ex, ey, ez + bumpOffset + joltEnv * 0.08];
         camH = dhHoriz > 1e-4 ? FM.wrapHeading(Math.atan2(dx, dy)) : FM.wrapHeading(orbitAz);
-        const geomPitch = dhHoriz > 1e-4 ? Math.atan2(dz, dhHoriz) : cfg.pitch;
-        const steadyPitch = cfg.pitch + camPitch * 0.48;
-        camP = flBlend > 0
-          ? geomPitch * flBlend + (geomPitch * 0.55 + steadyPitch * 0.45) * (1 - flBlend)
-          : geomPitch * 0.55 + steadyPitch * 0.45;
-        // Stronger fighter bank coupling (0.48 * bank smoothed with rollTau)
-        camR = camRoll * 0.48 * (1 - flBlend);
-        baseFov = cfg.fov;
+        const geomPitch = dhHoriz > 1e-4 ? Math.atan2(dz, dhHoriz) : activeCfg.pitch;
+        const steadyPitch = isGround ? (activeCfg.pitch + camPitch * 0.95) : (activeCfg.pitch + camPitch * 0.48);
+        const pitchBlend = isGround
+          ? (geomPitch * 0.25 + steadyPitch * 0.75)
+          : (geomPitch * 0.55 + steadyPitch * 0.45);
+        camP = (flBlend > 0
+          ? geomPitch * flBlend + pitchBlend * (1 - flBlend)
+          : pitchBlend) + joltPitch;
+        camR = (isGround ? (camRoll * 0.25 * (1 - flBlend)) : (camRoll * 0.48 * (1 - flBlend))) + joltRoll;
+        baseFov = isGround ? 62 : activeCfg.fov;
       }
     }
 
@@ -436,12 +570,15 @@ export function createPilotCameraRig(opts = {}) {
         + aeroEnv * 0.0075 * Math.sin(TWO_PI * 8.5 * ph + 2.2);
     }
 
-    const finalFov = camTweak && Number.isFinite(camTweak.fov) ? camTweak.fov : baseFov + fovBoost;
+    const finalFov = camTweak && Number.isFinite(camTweak.fov)
+      ? camTweak.fov
+      : (isGround ? (view === "cockpit" ? baseFov : (view === "hood" ? 66 : (62 + 6.0 * clamp(Math.abs(speed) / 29.0, 0, 1)))) : baseFov + fovBoost);
 
     prevPose = {
       x: p.x || 0,
       y: p.y || 0,
       z: p.z || 0,
+      sz,
       heading: p.heading || 0,
       pitch: p.pitch || 0,
       bank: p.bank || 0,
@@ -468,5 +605,8 @@ export function createPilotCameraRig(opts = {}) {
     cycleView,
     reset,
     step,
+    triggerJolt,
+    setSeatIndex(idx) { seatIndex = clamp(Math.round(idx || 0), 0, 3); },
+    getSeatIndex: () => seatIndex,
   };
 }

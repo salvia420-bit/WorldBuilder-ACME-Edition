@@ -95,6 +95,8 @@ export function createVehicleControls(deps = {}) {
   const doc = deps.document ?? (win ? win.document : null);
   const nav = deps.navigator ?? (win ? win.navigator : null);
   const ySign = deps.invertMouseY === true ? 1 : -1;
+  let locomotion = deps.locomotion ?? 1;
+  let seatIndex = deps.seatIndex ?? 0;
 
   const down = Object.create(null);
   for (const c of VEHICLE_KEY_CODES) down[c] = false;
@@ -310,10 +312,19 @@ export function createVehicleControls(deps = {}) {
         }
       }
       if (code === "KeyG") {
-        emit({ type: "cargo", action: "toggle" }, "keyboard");
+        if (locomotion === 2) {
+          if (seatIndex === 0) {
+            emit({ type: "windscreen", action: "toggle" }, "keyboard");
+          }
+        } else {
+          emit({ type: "cargo", action: "toggle" }, "keyboard");
+        }
       }
-      if (code === "KeyH") {
-        headlights = !headlights;
+      if (code === "KeyL") {
+        if (locomotion === 2 && seatIndex === 0) {
+          headlights = !headlights;
+          emit({ type: "headlights", value: headlights }, "keyboard");
+        }
       }
       if (VEHICLE_KEY_ACTIONS[code]) emit(VEHICLE_KEY_ACTIONS[code], "keyboard");
     }
@@ -575,11 +586,82 @@ export function createVehicleControls(deps = {}) {
       };
     }
 
-    if (params?.locomotion === 2) {
-      let targetThr = (down.KeyW ? 1.0 : 0.0) - (down.KeyS ? 1.0 : 0.0);
-      let targetSteer = (down.KeyD ? 1.0 : 0.0) - (down.KeyA ? 1.0 : 0.0);
+    if (params?.locomotion === 2 || locomotion === 2) {
+      locomotion = 2;
+      const currentSeat = (params?.seatIndex !== undefined) ? clamp(Math.round(params.seatIndex), 0, 3) : seatIndex;
+      seatIndex = currentSeat;
+
+      // Passenger session (Seats 1..3): completely lock driving controls
+      if (currentSeat > 0) {
+        throttle = 0;
+        sticks.pitch = 0;
+        sticks.roll = 0;
+        sticks.yaw = 0;
+        return {
+          throttle: 0,
+          pitch: 0,
+          roll: 0,
+          yaw: 0,
+          steer: 0,
+          boost: false,
+          handbrake: false,
+          horn: false,
+          headlights,
+          fire: false,
+          land: false,
+          missile: false,
+          bomb: false,
+          seatIndex: currentSeat,
+          passenger: true,
+        };
+      }
+
+      // Driver session (Seat 0):
+      const speed = Number.isFinite(flightState?.speed) ? flightState.speed : 0;
+      let targetThr = 0;
+      let brakeActive = false;
+
+      const w = !!down.KeyW;
+      const s = !!down.KeyS;
+
+      if (speed > 0.5) {
+        // Moving forward: S engages progressive brake
+        if (s) {
+          targetThr = 0;
+          brakeActive = true;
+        } else if (w) {
+          targetThr = 1.0;
+        }
+      } else if (speed < -0.5) {
+        // Moving in reverse: W engages brake before going forward
+        if (w) {
+          targetThr = 0;
+          brakeActive = true;
+        } else if (s) {
+          targetThr = -1.0;
+        }
+      } else {
+        // Stopped or crawling (|speed| <= 0.5):
+        // W = forward throttle, S = auto-reverse
+        if (w) {
+          targetThr = 1.0;
+        } else if (s) {
+          targetThr = -1.0;
+        }
+      }
+
+      // Speed-tapered steer with self-centering
+      const speedFrac = clamp(Math.abs(speed) / 29.0, 0, 1);
+      const steerTaper = 1.0 - speedFrac * 0.70; // 1.0 -> 0.30
+      const rawSteer = (down.KeyD ? 1.0 : 0.0) - (down.KeyA ? 1.0 : 0.0);
+      let targetSteer = rawSteer * steerTaper;
+
+      // Slew rate & rack centering return rate
+      const slewRate = 5.2 - speedFrac * (5.2 - 2.6);
+      const returnRate = (rawSteer === 0) ? Math.max(slewRate, 6.0) : slewRate;
+
       let boost = !!(down.ShiftLeft || down.ShiftRight);
-      let handbrake = !!down.Space;
+      let handbrake = !!down.Space || brakeActive;
       let horn = !!down.KeyV;
 
       const pad = readPad();
@@ -587,9 +669,12 @@ export function createVehicleControls(deps = {}) {
         const ax = pad.axes || [];
         const b = (i) => !!(pad.buttons && pad.buttons[i] && pad.buttons[i].pressed);
         const lx = padAxis(ax[0] || 0);
-        if (lx) targetSteer = lx;
-        if (b(7)) targetThr = 1.0;
-        else if (b(6)) targetThr = -1.0;
+        if (Math.abs(lx) > 1e-4) targetSteer = lx * steerTaper;
+        if (b(7)) { targetThr = 1.0; brakeActive = false; }
+        else if (b(6)) {
+          if (speed > 0.5) { targetThr = 0; brakeActive = true; }
+          else targetThr = -1.0;
+        }
         if (b(1)) boost = true;
         if (b(2)) handbrake = true;
         if (b(0)) horn = true;
@@ -605,7 +690,7 @@ export function createVehicleControls(deps = {}) {
       throttle += clamp(dThr, -mThr, mThr);
 
       const dSteer = targetSteer - sticks.yaw;
-      const mSteer = STICK_RATE * t;
+      const mSteer = returnRate * t;
       sticks.yaw += clamp(dSteer, -mSteer, mSteer);
       sticks.roll = sticks.yaw;
       sticks.pitch = 0;
@@ -624,6 +709,8 @@ export function createVehicleControls(deps = {}) {
         land: false,
         missile: false,
         bomb: false,
+        seatIndex: 0,
+        passenger: false,
       };
     }
 
@@ -722,11 +809,13 @@ export function createVehicleControls(deps = {}) {
     const pad = readPad();
     const b = (i) => !!(pad && pad.buttons && pad.buttons[i] && pad.buttons[i].pressed);
     const ptrLocked = isPointerLocked();
-    const liveBoost = ov ? !!ov.axes.boost : !!(down.ShiftLeft || down.ShiftRight || b(1));
-    const liveLand = ov ? !!ov.axes.land : !!(down.KeyL || b(2));
-    const liveFire = ov ? !!ov.axes.fire : !!(down.Space || (ptrLocked && mouseFire) || b(7));
-    const liveHandbrake = ov ? !!ov.axes.handbrake : !!down.Space;
-    const liveHorn = ov ? !!ov.axes.horn : !!down.KeyV;
+    const isGround = locomotion === 2;
+    const isPassenger = isGround && seatIndex > 0;
+    const liveBoost = ov ? !!ov.axes.boost : (isPassenger ? false : !!(down.ShiftLeft || down.ShiftRight || b(1)));
+    const liveLand = ov ? !!ov.axes.land : (isGround ? false : !!(down.KeyL || b(2)));
+    const liveFire = ov ? !!ov.axes.fire : (isPassenger ? false : !!(down.Space || (ptrLocked && mouseFire) || b(7)));
+    const liveHandbrake = ov ? !!ov.axes.handbrake : (isPassenger ? false : !!down.Space);
+    const liveHorn = ov ? !!ov.axes.horn : (isPassenger ? false : !!down.KeyV);
     const liveHeadlights = ov ? (ov.axes.headlights !== undefined ? !!ov.axes.headlights : headlights) : headlights;
     const freelookActive = !!(locked && (down.KeyC || rmbDown));
     const aimYaw = hasFlightState ? angleDiff(aimHeading, lastFlightHeading) : aimHeading;
@@ -748,6 +837,10 @@ export function createVehicleControls(deps = {}) {
       freelook: { active: freelookActive, yaw: freelookYaw, pitch: freelookPitch },
       blocked,
       override: ov ? { ...ov.axes } : null,
+      seatIndex,
+      passenger: isPassenger,
+      steer: sticks.yaw,
+      locomotion,
     };
   }
 
@@ -759,19 +852,24 @@ export function createVehicleControls(deps = {}) {
     onAction(fn) { actionFns.add(fn); return () => actionFns.delete(fn); },
     get locked() { return locked; },
     get throttle() { return throttle; },
-    set throttle(v) { if (Number.isFinite(v)) throttle = Math.max(0, Math.min(1, v)); },
+    set throttle(v) { if (Number.isFinite(v)) throttle = (locomotion === 2 ? Math.max(-1, Math.min(1, v)) : Math.max(0, Math.min(1, v))); },
     get pitchTrim() { return pitchTrim; },
     set pitchTrim(v) { if (Number.isFinite(v)) pitchTrim = clamp(v, -PITCH_TRIM_MAX, PITCH_TRIM_MAX); },
     get mouseAim() { return mouseAim; },
     setMouseAim,
     requestPointerLock: (target) => requestCanvasPointerLock(target),
-    /** Bench / debug: drive the analog input for `ms` (axes: throttle, pitch, roll, yaw, boost, fire, land, missile, bomb). */
     setOverride(axes, ms = 1e9) {
       const now = performance?.now?.() ?? 0;
       override = { axes: { ...(axes || {}) }, until: now + ms };
     },
     clearOverride() { override = null; },
     status,
+    setSeatIndex(idx) { seatIndex = clamp(Math.round(idx || 0), 0, 3); },
+    getSeatIndex() { return seatIndex; },
+    setLocomotion(loc) { locomotion = Number(loc) || 1; },
+    getLocomotion() { return locomotion; },
+    setHeadlights(val) { headlights = !!val; },
+    getHeadlights() { return headlights; },
     dispose() {
       const r = restore();
       actionFns.clear();

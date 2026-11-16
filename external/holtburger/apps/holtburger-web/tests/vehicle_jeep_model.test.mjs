@@ -1,5 +1,5 @@
 // tests/vehicle_jeep_model.test.mjs — 4-Tier E2E test suite for the Willys MB 1/4-ton 4x4 Jeep (`jeep-mb`)
-// 3D procedural model, sub-mesh articulation, palette, draw call budget (<= 16), and zero light churn.
+// 3D procedural model, sub-mesh articulation, PBR material stack, draw call budget (<= 16), and zero light churn.
 //
 // Run: node external/holtburger/apps/holtburger-web/tests/vehicle_jeep_model.test.mjs
 
@@ -30,14 +30,21 @@ const near = (a, b, eps = 1e-4, m = "near") => {
 // Authoritative Specifications & Constants (from ORIGINAL_REQUEST.md & PROJECT.md)
 // ---------------------------------------------------------------------------
 export const JEEP_PALETTE = Object.freeze({
-  oliveDrab: 0x4a5234,      // Authentic WWII US Army Olive Drab [~0.29, 0.32, 0.20]
-  starWhite: 0xf2f5f8,      // US Army hood star stencil [~0.95, 0.96, 0.97]
-  canvasKhaki: 0x827b60,    // Canvas seat cushions
-  tireRubber: 0x1d1f23,     // NDT non-directional tire rubber
-  toolSteel: 0x5c5d60,      // Shovel & axe metal blades
-  woodShaft: 0x6e4726,      // Axe / shovel wood handles
+  oliveDrab: 0x464f30,      // Authentic WWII US Army Lustreless Olive Drab [~0.27, 0.31, 0.19]
+  oliveDrabDark: 0x323a22,  // Shaded olive drab underbody
+  starWhite: 0xf2f5f8,      // US Army White Invasion Star stencil [~0.95, 0.96, 0.97]
+  canvasKhaki: 0x787154,    // #8 Olive Khaki duck-canvas cushions
+  tireRubber: 0x1c1e22,     // 6.00-16 NDT non-directional tire rubber
+  treadLug: 0x141619,       // Combat shoulder tread lugs
+  toolSteel: 0x3a3d40,      // Gunmetal / tool steel blades
+  metalBright: 0x8a929a,    // Combat rim lug nuts & gauge bezels
+  woodShaft: 0x6e4726,      // Pioneer axe/shovel wood handles
+  glassClear: 0xa8c4c7,     // Dual windscreen panes
   glassAmber: 0xb58a22,     // Marker lenses
-  glassClear: 0xa8c4c7,     // Windscreen glass
+  rubyTail: 0xa81818,       // Ruby brake/tail lamps
+  blackoutBlue: 0x1c2b3d,   // Fender blackout marker lamp
+  radiatorCore: 0x181818,   // Recessed radiator cooling fins
+  exhaustRust: 0x4a3b32,    // Muffler & tailpipe
 });
 
 export const JEEP_DIMENSIONS = Object.freeze({
@@ -67,10 +74,10 @@ export function makeJeepProfile(overrides = {}) {
     climbLimitCos: 0.71934,
     fordDepthMax: 0.8,
     seats: [
-      { id: 0, role: "Driver", offset: [-0.38, -0.22, 0.58] },
-      { id: 1, role: "Shotgun", offset: [0.38, -0.22, 0.58] },
-      { id: 2, role: "RearLeft", offset: [-0.36, -0.88, 0.64] },
-      { id: 3, role: "RearRight", offset: [0.36, -0.88, 0.64] },
+      { id: 0, role: "Driver", offset: [-0.38, -0.18, 0.62] },
+      { id: 1, role: "Shotgun", offset: [0.38, -0.18, 0.62] },
+      { id: 2, role: "RearLeft", offset: [-0.36, -0.96, 0.68] },
+      { id: 3, role: "RearRight", offset: [0.36, -0.96, 0.68] },
     ],
     ...overrides,
   };
@@ -83,246 +90,7 @@ let JM;
 try {
   JM = await import("../scene3d/vehicle/jeep_model.js");
 } catch (_) {
-  // Authoritative reference implementation directly satisfying PROJECT.md § M1/M2/M4 ↔ M5
-  JM = {
-    JEEP_PALETTE,
-    JEEP_DIMENSIONS,
-    buildProceduralJeep(three, profile, options = {}) {
-      const liveScene3d = options.liveScene3d || { activeLights: [] };
-      const root = new three.Group();
-      root.name = "jeep-mb-root";
-
-      // Reusable materials (<= 16 draw calls)
-      const matBody = new three.MeshBasicMaterial({ vertexColors: true, side: three.DoubleSide });
-      const matCushions = new three.MeshBasicMaterial({ color: JEEP_PALETTE.canvasKhaki });
-      const matTools = new three.MeshBasicMaterial({ vertexColors: true });
-      const matRubber = new three.MeshBasicMaterial({ color: JEEP_PALETTE.tireRubber });
-      const matGlass = new three.MeshBasicMaterial({ color: JEEP_PALETTE.glassClear, transparent: true, opacity: 0.6 });
-      const matAdditive = new three.MeshBasicMaterial({
-        color: 0xffffea,
-        transparent: true,
-        opacity: 0.0,
-        blending: three.AdditiveBlending,
-        depthWrite: false,
-      });
-
-      // 1. Tub, fenders, 9-slot grille, hood with star stencil (non-indexed for clean vertex inspection)
-      const rawTub = new three.BoxGeometry(1.48, 3.20, 0.65).toNonIndexed();
-      const posAttr = rawTub.getAttribute("position");
-      const colAttr = new three.BufferAttribute(new Float32Array(posAttr.count * 3), 3);
-      const cOlive = new three.Color(JEEP_PALETTE.oliveDrab);
-      const cStar = new three.Color(JEEP_PALETTE.starWhite);
-      for (let i = 0; i < posAttr.count; i++) {
-        const y = posAttr.getY(i);
-        const z = posAttr.getZ(i);
-        if (y > 0.4 && z > 0.2) {
-          colAttr.setXYZ(i, cStar.r, cStar.g, cStar.b);
-        } else {
-          colAttr.setXYZ(i, cOlive.r, cOlive.g, cOlive.b);
-        }
-      }
-      rawTub.setAttribute("color", colAttr);
-      const tubMesh = new three.Mesh(rawTub, matBody);
-      tubMesh.name = "tub-chassis";
-      tubMesh.position.set(0, 0, 0.55);
-      root.add(tubMesh);
-
-      // 2. Interior cushions (batched buffer) & dash grab-bar
-      const cushionGeom = new three.BoxGeometry(0.95, 1.20, 0.12);
-      const cushionMesh = new three.Mesh(cushionGeom, matCushions);
-      cushionMesh.name = "interior-cushions";
-      cushionMesh.position.set(0, -0.45, 0.45);
-      root.add(cushionMesh);
-
-      // Dash grab-bar
-      const grabBar = new three.Mesh(new three.CylinderGeometry(0.015, 0.015, 0.28), matTools);
-      grabBar.name = "dash-grabbar";
-      grabBar.position.set(0.38, 0.62, 0.88);
-      grabBar.rotation.z = Math.PI / 2;
-      root.add(grabBar);
-
-      // 3. Pioneer tools (shovel & axe batched, spare tire, jerrycan)
-      const toolsMesh = new three.Mesh(new three.CylinderGeometry(0.02, 0.02, 0.9), matTools);
-      toolsMesh.name = "pioneer-tools";
-      toolsMesh.position.set(-0.75, 0.0, 0.45);
-
-      const spareTire = new three.Mesh(new three.CylinderGeometry(0.38, 0.38, 0.22, 12), matRubber);
-      spareTire.name = "spare-tire";
-      spareTire.position.set(0, -1.65, 0.65);
-      spareTire.rotation.x = Math.PI / 2;
-
-      const jerrycan = new three.Mesh(new three.BoxGeometry(0.18, 0.35, 0.45), matBody);
-      jerrycan.name = "jerrycan";
-      jerrycan.position.set(-0.55, -1.62, 0.65);
-
-      root.add(toolsMesh, spareTire, jerrycan);
-
-      // 4. Folding windscreen
-      const windscreenPivot = new three.Group();
-      windscreenPivot.name = "windscreenPivot";
-      windscreenPivot.position.set(0, 0.48, 0.88);
-      const glassMesh = new three.Mesh(new three.BoxGeometry(1.36, 0.04, 0.45), matGlass);
-      glassMesh.position.set(0, 0, 0.25);
-      windscreenPivot.add(glassMesh);
-      root.add(windscreenPivot);
-
-      // 5. Tailgate
-      const tailgatePivot = new three.Group();
-      tailgatePivot.name = "tailgatePivot";
-      tailgatePivot.position.set(0, -1.58, 0.35);
-      const tailgateMesh = new three.Mesh(new three.BoxGeometry(1.20, 0.05, 0.35), matBody);
-      tailgateMesh.position.set(0, 0, 0.18);
-      tailgatePivot.add(tailgateMesh);
-      root.add(tailgatePivot);
-
-      // 6. Steering Wheel Pivot (2.5x ratio)
-      const steeringWheelPivot = new three.Group();
-      steeringWheelPivot.name = "steeringWheelPivot";
-      steeringWheelPivot.position.set(-0.38, 0.35, 0.88);
-      steeringWheelPivot.rotation.x = 30 * (Math.PI / 180); // 30 deg column rake
-      const wheelRim = new three.Mesh(new three.TorusGeometry(0.18, 0.018, 8, 16), matRubber);
-      steeringWheelPivot.add(wheelRim);
-      root.add(steeringWheelPivot);
-
-      // 7. Steer Pivots FL & FR + 4 Rolling Wheels
-      const steerPivotFL = new three.Group();
-      steerPivotFL.name = "steerPivotFL";
-      steerPivotFL.position.set(-0.74, 1.02, 0.38);
-      const wheelFL = new three.Mesh(new three.CylinderGeometry(0.38, 0.38, 0.22, 12), matRubber);
-      wheelFL.name = "wheelFL";
-      wheelFL.rotation.z = Math.PI / 2;
-      steerPivotFL.add(wheelFL);
-
-      const steerPivotFR = new three.Group();
-      steerPivotFR.name = "steerPivotFR";
-      steerPivotFR.position.set(0.74, 1.02, 0.38);
-      const wheelFR = new three.Mesh(new three.CylinderGeometry(0.38, 0.38, 0.22, 12), matRubber);
-      wheelFR.name = "wheelFR";
-      wheelFR.rotation.z = Math.PI / 2;
-      steerPivotFR.add(wheelFR);
-
-      const wheelRL = new three.Mesh(new three.CylinderGeometry(0.38, 0.38, 0.22, 12), matRubber);
-      wheelRL.name = "wheelRL";
-      wheelRL.position.set(-0.74, -1.02, 0.38);
-      wheelRL.rotation.z = Math.PI / 2;
-
-      const wheelRR = new three.Mesh(new three.CylinderGeometry(0.38, 0.38, 0.22, 12), matRubber);
-      wheelRR.name = "wheelRR";
-      wheelRR.position.set(0.74, -1.02, 0.38);
-      wheelRR.rotation.z = Math.PI / 2;
-
-      root.add(steerPivotFL, steerPivotFR, wheelRL, wheelRR);
-
-      // 8. Stowed Cargo Crate (SCR-602 radar crate)
-      const cargoCrateGroup = new three.Group();
-      cargoCrateGroup.name = "cargoCrateGroup";
-      cargoCrateGroup.position.set(0, -1.15, 0.72);
-      const crateMesh = new three.Mesh(new three.BoxGeometry(0.85, 0.70, 0.55), matBody);
-      cargoCrateGroup.add(crateMesh);
-      cargoCrateGroup.visible = true;
-      root.add(cargoCrateGroup);
-
-      // 9. Headlight additive beams & pooled FxLightSource
-      const headlightBeams = new three.Mesh(new three.ConeGeometry(0.45, 4.0, 12), matAdditive);
-      headlightBeams.name = "headlightBeams";
-      headlightBeams.position.set(0, 3.2, 0.65);
-      headlightBeams.rotation.x = Math.PI / 2;
-      headlightBeams.visible = false;
-      root.add(headlightBeams);
-
-      // Pooled FxLightSource (duck-typed carrier, zero lightCountDelta)
-      const pooledLight = new FxLightSource("emitter");
-      pooledLight.color.setHex(0xffffea);
-      pooledLight.distance = 25;
-      pooledLight.intensity = 0;
-      liveScene3d.activeLights.push(pooledLight);
-
-      let wheelRollAngle = 0;
-
-      return {
-        root,
-        steerPivotFL,
-        steerPivotFR,
-        steeringWheelPivot,
-        windscreenPivot,
-        tailgatePivot,
-        wheels: [wheelFL, wheelFR, wheelRL, wheelRR],
-        cargoCrateGroup,
-        headlightBeams,
-        pooledLight,
-        get wheelRollAngle() { return wheelRollAngle; },
-        update(state = {}) {
-          const dt = state.dt || 0.0333;
-          const speed = state.speed || 0;
-
-          // Steer angle & speed scheduling
-          let maxSteer = JEEP_DIMENSIONS.maxSteerLowSpeedRad;
-          if (Math.abs(speed) > 12.0) {
-            const frac = Math.min(1.0, (Math.abs(speed) - 12.0) / (29.0 - 12.0));
-            maxSteer = JEEP_DIMENSIONS.maxSteerLowSpeedRad +
-              (JEEP_DIMENSIONS.maxSteerHighSpeedRad - JEEP_DIMENSIONS.maxSteerLowSpeedRad) * frac;
-          }
-          const steerInput = state.steerAngle || 0;
-          const clampedSteer = Math.max(-maxSteer, Math.min(maxSteer, steerInput));
-
-          steerPivotFL.rotation.z = clampedSteer;
-          steerPivotFR.rotation.z = clampedSteer;
-
-          // Steering wheel 2.5x ratio clamped to ±100° (1.745 rad)
-          const swAngle = Math.max(-1.745, Math.min(1.745, clampedSteer * JEEP_DIMENSIONS.steeringGearRatio));
-          steeringWheelPivot.rotation.z = swAngle;
-
-          // Wheel rolling
-          if (dt > 0 && Math.abs(speed) > 1e-6) {
-            const dRoll = (speed * dt) / JEEP_DIMENSIONS.wheelRadius;
-            wheelRollAngle = (wheelRollAngle + dRoll) % (2 * Math.PI);
-            for (const w of this.wheels) {
-              w.rotation.x = wheelRollAngle;
-            }
-          }
-
-          // Cargo crate toggle
-          if (state.cargoLoaded !== undefined) {
-            cargoCrateGroup.visible = Boolean(state.cargoLoaded);
-          }
-
-          // Windscreen folding
-          if (state.windscreenFolded !== undefined) {
-            windscreenPivot.rotation.x = state.windscreenFolded ? Math.PI / 2 : 0;
-          }
-
-          // Headlights (pooled FxLightSource + matAdditive, ZERO THREE.Light churn)
-          if (state.headlights !== undefined) {
-            const on = Boolean(state.headlights);
-            headlightBeams.visible = on;
-            matAdditive.opacity = on ? 0.35 : 0.0;
-            pooledLight.intensity = on ? 2.5 : 0.0;
-            pooledLight.position.copy(root.position).add(new THREE.Vector3(0, 1.6, 0.65));
-          }
-        },
-        dispose() {
-          root.traverse((obj) => {
-            if (obj.geometry) obj.geometry.dispose();
-            if (obj.material) {
-              if (Array.isArray(obj.material)) obj.material.forEach((m) => m.dispose());
-              else obj.material.dispose();
-            }
-          });
-          const idx = liveScene3d.activeLights.indexOf(pooledLight);
-          if (idx !== -1) liveScene3d.activeLights.splice(idx, 1);
-        },
-      };
-    },
-    manifest: {
-      id: "vfx-jeep-mb-model",
-      channel: "vehicleModel",
-      deterministic: true,
-      lightCountDelta: 0,
-      cacheKeyScope: "set",
-      reads: ["geometry", "serverPose", "clock"],
-      writes: ["renderTransform", "partTransform", "lightIntensity"],
-    },
-  };
+  throw new Error("Failed to load jeep_model.js: " + _);
 }
 
 // ---------------------------------------------------------------------------
@@ -339,7 +107,7 @@ await check("T1.1 Willys MB 3D Model: tub, 9-slot grille, flat fenders, hood sta
   const col = tub.geometry.getAttribute("color");
   assert(col && col.count > 0, "tub has vertex colors");
 
-  // Check for presence of Olive Drab and Star Stencil White
+  // Check for presence of Lustreless Olive Drab and Star Stencil White
   let hasOlive = false;
   let hasWhite = false;
   const sampleColor = new THREE.Color();
@@ -349,7 +117,7 @@ await check("T1.1 Willys MB 3D Model: tub, 9-slot grille, flat fenders, hood sta
     if (hex === JEEP_PALETTE.oliveDrab) hasOlive = true;
     if (hex === JEEP_PALETTE.starWhite) hasWhite = true;
   }
-  assert(hasOlive, "contains Olive Drab base color");
+  assert(hasOlive, "contains Lustreless Olive Drab base color");
   assert(hasWhite, "contains White star stencil color");
   jeep.dispose();
 });
@@ -380,7 +148,7 @@ await check("T1.4 Articulated Windscreen & Tailgate Pivots", () => {
   assert(jeep.windscreenPivot, "windscreenPivot exists");
   assert(jeep.tailgatePivot, "tailgatePivot exists");
 
-  // Fold windscreen
+  // Fold windscreen flat onto hood
   jeep.update({ windscreenFolded: true });
   near(jeep.windscreenPivot.rotation.x, Math.PI / 2, 1e-4, "windscreen folded flat");
   jeep.update({ windscreenFolded: false });
@@ -388,16 +156,38 @@ await check("T1.4 Articulated Windscreen & Tailgate Pivots", () => {
   jeep.dispose();
 });
 
-await check("T1.5 Stowed Radar Crate Toggle (CargoLoaded)", () => {
+await check("T1.5 Open 4-Seat Tub & Rear Passenger Bench Geometry (Cargo Decoupled)", () => {
   const prof = makeJeepProfile();
   const jeep = JM.buildProceduralJeep(THREE, prof);
-  assert(jeep.cargoCrateGroup, "cargoCrateGroup exists");
 
-  jeep.update({ cargoLoaded: true });
-  assert(jeep.cargoCrateGroup.visible === true, "cargo crate visible when loaded");
+  // Interior cushions mesh must be present with substantial geometry
+  const cushions = jeep.root.getObjectByName("interior-cushions");
+  assert(cushions && cushions.isMesh, "interior cushions mesh exists");
+  const pos = cushions.geometry.getAttribute("position");
+  assert(pos && pos.count > 0, "cushions have vertex geometry");
 
-  jeep.update({ cargoLoaded: false });
-  assert(jeep.cargoCrateGroup.visible === false, "cargo crate hidden when unloaded");
+  // Verify cushion tops cover Seat 0 Driver (z ~ 0.62), Seat 1 Shotgun (z ~ 0.62),
+  // and Seats 2 & 3 Rear Bench (z ~ 0.68)
+  let hasDriverCushion = false;
+  let hasShotgunCushion = false;
+  let hasRearBenchCushion = false;
+
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
+    if (x <= -0.18 && x >= -0.58 && y >= -0.38 && y <= 0.02 && z >= 0.50 && z <= 0.65) hasDriverCushion = true;
+    if (x >= 0.18 && x <= 0.58 && y >= -0.38 && y <= 0.02 && z >= 0.50 && z <= 0.65) hasShotgunCushion = true;
+    if (Math.abs(x) <= 0.52 && y <= -0.78 && y >= -1.15 && z >= 0.58 && z <= 0.72) hasRearBenchCushion = true;
+  }
+  assert(hasDriverCushion, "driver bucket seat cushion (Seat 0) present at z=0.62");
+  assert(hasShotgunCushion, "shotgun bucket seat cushion (Seat 1) present at z=0.62");
+  assert(hasRearBenchCushion, "2-passenger rear bench cushion (Seats 2 & 3) present at z=0.68");
+
+  // Backward compatibility: dummy empty cargoCrateGroup exists without occupying bed
+  assert(jeep.cargoCrateGroup, "cargoCrateGroup exists for e2e backward compat");
+  assert(jeep.cargoCrateGroup.children.length === 0, "cargo crate decoupled: 0 children in crate group");
+  near(jeep.cargoCrateGroup.position.x, 0.0, 1e-4);
+  near(jeep.cargoCrateGroup.position.y, -1.15, 1e-4);
+  near(jeep.cargoCrateGroup.position.z, 0.72, 1e-4);
   jeep.dispose();
 });
 
@@ -418,9 +208,12 @@ await check("T1.7 Steering Wheel 2.5x Gear Ratio Kinematics", () => {
   jeep.dispose();
 });
 
-await check("T1.8 4 Wheels Rolling Kinematics (Forward & Reverse)", () => {
+await check("T1.8 5 Military Combat Wheels Rolling Kinematics (Forward & Reverse)", () => {
   const prof = makeJeepProfile();
   const jeep = JM.buildProceduralJeep(THREE, prof);
+  assert(Array.isArray(jeep.wheels), "jeep.wheels is an array");
+  assert(jeep.wheels.length === 5, "exactly 5 military combat wheels (FL, FR, RL, RR, Spare)");
+
   const dt = 0.1;
   const speed = 10.0;
   jeep.update({ speed, dt });
@@ -476,6 +269,87 @@ await check("T1.11 lint_caps Manifest & Source Compliance", () => {
   assert(manifestErrs.length === 0, `lintManifest passed without errors: ${manifestErrs.join(", ")}`);
   assert(JM.manifest.lightCountDelta === 0, "manifest lightCountDelta === 0");
   assert(JM.manifest.deterministic === true, "manifest deterministic === true");
+});
+
+await check("T1.12 PBR Material Stack & AGX HDR Calibration", () => {
+  const prof = makeJeepProfile();
+  const jeep = JM.buildProceduralJeep(THREE, prof);
+  const mats = jeep.materials;
+  assert(mats, "materials object returned");
+
+  // matBody: Lustreless Olive Drab (roughness: 0.62, metalness: 0.18, vertexColors: true)
+  assert(mats.matBody && mats.matBody.isMeshStandardMaterial, "matBody is MeshStandardMaterial");
+  near(mats.matBody.roughness, 0.62, 1e-4, "matBody roughness");
+  near(mats.matBody.metalness, 0.18, 1e-4, "matBody metalness");
+  assert(mats.matBody.vertexColors === true, "matBody vertexColors: true");
+  assert(mats.matBody.castShadow === true, "matBody castShadow");
+  assert(mats.matBody.receiveShadow === true, "matBody receiveShadow");
+
+  // matMetal: gunmetal/steel (roughness: 0.36, metalness: 0.68)
+  assert(mats.matMetal && mats.matMetal.isMeshStandardMaterial, "matMetal is MeshStandardMaterial");
+  near(mats.matMetal.roughness, 0.36, 1e-4, "matMetal roughness");
+  near(mats.matMetal.metalness, 0.68, 1e-4, "matMetal metalness");
+
+  // matRubberCanvas: tires + duck-canvas cushions (roughness: 0.84, metalness: 0.04)
+  assert(mats.matRubberCanvas && mats.matRubberCanvas.isMeshStandardMaterial, "matRubberCanvas is MeshStandardMaterial");
+  near(mats.matRubberCanvas.roughness, 0.84, 1e-4, "matRubberCanvas roughness");
+  near(mats.matRubberCanvas.metalness, 0.04, 1e-4, "matRubberCanvas metalness");
+
+  // matGlass: dual windscreen panes (roughness: 0.12, metalness: 0.10, opacity: 0.34, transparent: true)
+  assert(mats.matGlass && mats.matGlass.isMeshStandardMaterial, "matGlass is MeshStandardMaterial");
+  near(mats.matGlass.roughness, 0.12, 1e-4, "matGlass roughness");
+  near(mats.matGlass.metalness, 0.10, 1e-4, "matGlass metalness");
+  near(mats.matGlass.opacity, 0.34, 1e-4, "matGlass opacity");
+  assert(mats.matGlass.transparent === true, "matGlass transparent");
+
+  // Meshes cast and receive shadows
+  const tub = jeep.root.getObjectByName("tub-chassis");
+  assert(tub.castShadow === true, "tub casts shadows");
+  assert(tub.receiveShadow === true, "tub receives shadows");
+
+  jeep.dispose();
+});
+
+await check("T1.13 Animated Cockpit & Suspension Pivots (Speedo, Shifter, 4WD Low, 4-Corner Susp)", () => {
+  const prof = makeJeepProfile();
+  const jeep = JM.buildProceduralJeep(THREE, prof);
+
+  // Speedometer needle animation (0..45 m/s mapped across 240 deg dial)
+  assert(jeep.speedoNeedlePivot, "speedoNeedlePivot exists");
+  jeep.update({ speed: 0.0 });
+  const needleAngle0 = jeep.speedoNeedlePivot.rotation.z;
+  jeep.update({ speed: 22.5 });
+  const needleAngleMid = jeep.speedoNeedlePivot.rotation.z;
+  jeep.update({ speed: 45.0 });
+  const needleAngleMax = jeep.speedoNeedlePivot.rotation.z;
+  assert(needleAngleMid !== needleAngle0, "speedo needle moves with speed");
+  assert(needleAngleMax !== needleAngleMid, "speedo needle continues sweeping to max");
+
+  // T-84 Shifter cane tilts according to gear
+  assert(jeep.shifterPivot, "shifterPivot exists");
+  jeep.update({ gear: 1 });
+  near(jeep.shifterPivot.rotation.x, 0.18, 1e-4, "shifter tilts forward in 1st");
+  jeep.update({ gear: 2 });
+  near(jeep.shifterPivot.rotation.x, -0.15, 1e-4, "shifter tilts back in 2nd");
+  jeep.update({ gear: 0 });
+  near(jeep.shifterPivot.rotation.x, 0.0, 1e-4, "shifter upright in neutral");
+
+  // Transfer case lever shifts on 4WD Low
+  assert(jeep.transferCasePivot, "transferCasePivot exists");
+  jeep.update({ boost: false });
+  near(jeep.transferCasePivot.rotation.x, 0.0, 1e-4, "transfer case neutral in 2WD");
+  jeep.update({ boost: true });
+  near(jeep.transferCasePivot.rotation.x, 0.22, 1e-4, "transfer case lever engaged in 4WD Low");
+
+  // 4 Corner suspension groups & chassisBodyGroup
+  assert(jeep.suspFL && jeep.suspFR && jeep.suspRL && jeep.suspRR, "4 corner suspension groups exist");
+  assert(jeep.chassisBodyGroup, "chassisBodyGroup exists for squat/dive/roll");
+
+  jeep.update({ suspensionFL: -0.04, accel: 15.0 });
+  near(jeep.suspFL.position.z, 0.38 - 0.04, 1e-4, "suspFL compressed");
+  assert(jeep.chassisBodyGroup.rotation.x < 0, "chassis squats back under acceleration");
+
+  jeep.dispose();
 });
 
 // ---------------------------------------------------------------------------
@@ -625,12 +499,24 @@ await check("T3.1 Headlights ON + Full Steering Lock", () => {
   jeep.dispose();
 });
 
-await check("T3.2 Stowed Cargo Crate Toggle + Rolling Wheels at 20 m/s", () => {
+await check("T3.2 Cockpit Controls & 4-Corner Suspension Articulation at 20 m/s", () => {
   const prof = makeJeepProfile();
   const jeep = JM.buildProceduralJeep(THREE, prof);
+  jeep.update({ speed: 0.0 });
+  const needleAtZero = jeep.speedoNeedlePivot.rotation.z;
+
   for (let i = 0; i < 20; i++) {
-    jeep.update({ speed: 20.0, dt: 0.05, cargoLoaded: i % 2 === 0 });
-    assert(jeep.cargoCrateGroup.visible === (i % 2 === 0), `cargo toggle ${i}`);
+    jeep.update({
+      speed: 20.0,
+      dt: 0.05,
+      accel: i % 2 === 0 ? 5.0 : -8.0,
+      gear: 3,
+      boost: i > 10,
+      suspensionFL: Math.sin(i * 0.5) * 0.03,
+      suspensionFR: Math.cos(i * 0.5) * 0.03,
+    });
+    assert(Math.abs(jeep.speedoNeedlePivot.rotation.z - needleAtZero) > 1.0, "speedo needle deflected at 20 m/s");
+    assert(jeep.shifterPivot.rotation.x !== 0, "shifter engaged in gear 3");
   }
   assert(jeep.wheelRollAngle > 0, "wheels continued rolling smoothly");
   jeep.dispose();
@@ -669,9 +555,9 @@ await check("T4.1 Nighttime Recon Patrol Scenario", () => {
     jeep.update({ speed, steerAngle: steer, dt: 0.0333 });
   }
 
-  // Phase 3: Arrive at outpost, park, deploy cargo
-  jeep.update({ speed: 0.0, steerAngle: 0.0, dt: 0.0333, cargoLoaded: false });
-  assert(jeep.cargoCrateGroup.visible === false, "cargo unloaded at outpost");
+  // Phase 3: Arrive at outpost, park, verify instruments return to idle
+  jeep.update({ speed: 0.0, steerAngle: 0.0, dt: 0.0333, gear: 0 });
+  near(jeep.shifterPivot.rotation.x, 0.0, 1e-4, "shifter neutral when parked");
 
   // Invariant verification
   let drawCalls = 0, lightsInTree = 0;
@@ -738,6 +624,209 @@ await check("T5.1 Zero Heap Allocation in jeep.update() Headlight Loop", () => {
   assert(vector3Allocs === 0, `zero Vector3 allocations during update: got ${vector3Allocs}`);
   near(jeep.pooledLight.position.y, jeep.root.position.y + 1.6, 1e-4, "light position offset Y verified");
   near(jeep.pooledLight.position.z, jeep.root.position.z + 0.65, 1e-4, "light position offset Z verified");
+  jeep.dispose();
+});
+
+await check("T5.2 State & Input Hardening (null/undefined safety & dual-signature dt)", () => {
+  const prof = makeJeepProfile();
+  const jeep = JM.buildProceduralJeep(THREE, prof);
+
+  // 1. null state does not throw
+  jeep.update(null);
+  assert(Number.isFinite(jeep.wheelRollAngle), "wheelRollAngle finite after update(null)");
+
+  // 2. undefined state does not throw
+  jeep.update(undefined);
+  assert(Number.isFinite(jeep.wheelRollAngle), "wheelRollAngle finite after update(undefined)");
+
+  // 3. dual-signature support: update(state, dt)
+  const prevRoll = jeep.wheelRollAngle;
+  jeep.update({ speed: 10.0 }, 0.05);
+  const expectedRollDelta = (10.0 * 0.05) / JEEP_DIMENSIONS.wheelRadius;
+  near(jeep.wheelRollAngle - prevRoll, expectedRollDelta, 1e-4, "dual-signature argDt advances wheelRollAngle");
+
+  // 4. state.dt takes precedence when both are provided
+  const rollBeforeBoth = jeep.wheelRollAngle;
+  jeep.update({ speed: 10.0, dt: 0.1 }, 0.02);
+  const expectedPrecedenceDelta = (10.0 * 0.1) / JEEP_DIMENSIONS.wheelRadius;
+  near(jeep.wheelRollAngle - rollBeforeBoth, expectedPrecedenceDelta, 1e-4, "state.dt takes precedence over argDt");
+
+  jeep.dispose();
+});
+
+await check("T5.3 Non-Finite Kinematics & NaN Poisoning Immunity", () => {
+  const prof = makeJeepProfile();
+  const jeep = JM.buildProceduralJeep(THREE, prof);
+
+  // 1. Extreme non-finite speed values
+  jeep.update({ speed: Infinity });
+  assert(Number.isFinite(jeep.wheelRollAngle), "wheelRollAngle finite after speed: Infinity");
+  jeep.update({ speed: -Infinity });
+  assert(Number.isFinite(jeep.wheelRollAngle), "wheelRollAngle finite after speed: -Infinity");
+  jeep.update({ speed: NaN });
+  assert(Number.isFinite(jeep.wheelRollAngle), "wheelRollAngle finite after speed: NaN");
+
+  // 2. Non-finite dt values
+  jeep.update({ speed: 10.0, dt: Infinity });
+  assert(Number.isFinite(jeep.wheelRollAngle), "wheelRollAngle finite after dt: Infinity");
+  jeep.update({ speed: 10.0, dt: NaN });
+  assert(Number.isFinite(jeep.wheelRollAngle), "wheelRollAngle finite after dt: NaN");
+
+  // 3. Non-finite steer & accel
+  jeep.update({ steerAngle: Infinity, accel: NaN, speed: 10.0 });
+  assert(Number.isFinite(jeep.steerPivotFL.rotation.z), "steerPivotFL finite after steerAngle: Infinity");
+  assert(Number.isFinite(jeep.steeringWheelPivot.rotation.z), "steeringWheelPivot finite");
+  assert(Number.isFinite(jeep.chassisBodyGroup.rotation.x), "chassis squat finite after accel: NaN");
+  assert(Number.isFinite(jeep.chassisBodyGroup.rotation.y), "chassis roll finite");
+
+  // 4. Non-finite suspension
+  const baseSuspZ = 0.38;
+  jeep.update({ suspensionFL: NaN, suspensionFR: Infinity, suspensionRL: -Infinity });
+  near(jeep.suspFL.position.z, baseSuspZ, 1e-4, "suspFL position guarded against NaN");
+  near(jeep.suspFR.position.z, baseSuspZ, 1e-4, "suspFR position guarded against Infinity");
+  near(jeep.suspRL.position.z, baseSuspZ, 1e-4, "suspRL position guarded against -Infinity");
+
+  // 5. Subsequent valid update recovers and advances kinematics normally
+  const rollBeforeRecovery = jeep.wheelRollAngle;
+  jeep.update({ speed: 12.0, dt: 0.05 });
+  assert(Number.isFinite(jeep.wheelRollAngle), "wheel roll remains finite after recovery");
+  assert(jeep.wheelRollAngle !== rollBeforeRecovery, "wheel roll successfully advances after recovery");
+
+  jeep.dispose();
+});
+
+await check("T5.4 Options Null-Safety & Exposed Pivots/maxDrawCalls", () => {
+  // 1. buildProceduralJeep handles null/undefined profile and options without crashing
+  const jeepNull = JM.buildProceduralJeep(THREE, null, null);
+  assert(jeepNull && jeepNull.root, "buildProceduralJeep(THREE, null, null) succeeds");
+  jeepNull.dispose();
+
+  const jeep = JM.buildProceduralJeep(THREE);
+
+  // 2. maxDrawCalls exposed as 16
+  assert(jeep.maxDrawCalls === 16, `maxDrawCalls is 16, got ${jeep.maxDrawCalls}`);
+  assert(jeep.maxDrawCalls === JEEP_DIMENSIONS.maxDrawCalls, "maxDrawCalls matches JEEP_DIMENSIONS");
+
+  // 3. pivots object exposed with all essential articulation pivots
+  assert(jeep.pivots && typeof jeep.pivots === "object", "pivots object exposed");
+  assert(jeep.pivots.steerPivotFL && jeep.pivots.steerPivotFR, "steer pivots in pivots");
+  assert(jeep.pivots.steeringWheelPivot, "steeringWheelPivot in pivots");
+  assert(jeep.pivots.speedoNeedlePivot, "speedoNeedlePivot in pivots");
+  assert(jeep.pivots.shifterPivot, "shifterPivot in pivots");
+  assert(jeep.pivots.transferCasePivot, "transferCasePivot in pivots");
+  assert(jeep.pivots.windscreenPivot, "windscreenPivot in pivots");
+  assert(jeep.pivots.tailgatePivot, "tailgatePivot in pivots");
+  assert(jeep.pivots.suspFL && jeep.pivots.suspFR, "front suspension in pivots");
+  assert(jeep.pivots.suspRL && jeep.pivots.suspRR, "rear suspension in pivots");
+
+  jeep.dispose();
+});
+
+await check("T5.5 Deduplicated Geometry & Material Disposal Lifecycle", () => {
+  const activeLights = [];
+  const prof = makeJeepProfile();
+  const jeep = JM.buildProceduralJeep(THREE, prof, { liveScene3d: { activeLights } });
+
+  const geomDisposeCounts = new Map();
+  const matDisposeCounts = new Map();
+
+  jeep.root.traverse((obj) => {
+    if (obj.geometry && !geomDisposeCounts.has(obj.geometry)) {
+      geomDisposeCounts.set(obj.geometry, 0);
+      const origGeomDispose = obj.geometry.dispose.bind(obj.geometry);
+      obj.geometry.dispose = () => {
+        geomDisposeCounts.set(obj.geometry, (geomDisposeCounts.get(obj.geometry) || 0) + 1);
+        origGeomDispose();
+      };
+    }
+    if (obj.material) {
+      const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+      for (const m of mats) {
+        if (m && !matDisposeCounts.has(m)) {
+          matDisposeCounts.set(m, 0);
+          const origMatDispose = m.dispose.bind(m);
+          m.dispose = () => {
+            matDisposeCounts.set(m, (matDisposeCounts.get(m) || 0) + 1);
+            origMatDispose();
+          };
+        }
+      }
+    }
+  });
+
+  // Execute disposal
+  jeep.dispose();
+
+  // Assert every unique geometry was disposed exactly once (no redundant calls from shared combat wheel geometry)
+  assert(geomDisposeCounts.size > 0, "unique geometries recorded");
+  for (const [geom, count] of geomDisposeCounts.entries()) {
+    assert(count === 1, `geometry ${geom.uuid || "unknown"} disposed exactly once (got ${count})`);
+  }
+
+  // Assert every unique material was disposed exactly once
+  assert(matDisposeCounts.size > 0, "unique materials recorded");
+  for (const [mat, count] of matDisposeCounts.entries()) {
+    assert(count === 1, `material ${mat.uuid || "unknown"} disposed exactly once (got ${count})`);
+  }
+
+  // Assert pooled light removed
+  assert(activeLights.length === 0, "activeLights emptied on disposal");
+});
+
+await check("T5.6 3D White Invasion Star Decal Exact 3.5mm Hood Plane Offset", () => {
+  const prof = makeJeepProfile();
+  const jeep = JM.buildProceduralJeep(THREE, prof);
+
+  const tub = jeep.root.getObjectByName("tub-chassis");
+  assert(tub && tub.geometry, "tub-chassis geometry found");
+
+  const pos = tub.geometry.getAttribute("position");
+  const col = tub.geometry.getAttribute("color");
+  assert(pos && col, "tub-chassis has position and color attributes");
+
+  const cTmp = new THREE.Color();
+  let starVertCount = 0;
+  let minDiffMm = Infinity;
+  let maxDiffMm = -Infinity;
+  let minPerpMm = Infinity;
+  let maxPerpMm = -Infinity;
+
+  // Hood slopes from cowl (y=0.48, z=0.88) to grille (y=1.38, z=0.84)
+  const dy = 0.90, dz = -0.04;
+  const L = Math.hypot(dy, dz);
+  // Outward normal: [0, -dz/L, dy/L] = [0, 0.04/L, 0.90/L]
+  const ny = -dz / L;
+  const nz = dy / L;
+
+  for (let i = 0; i < pos.count; i++) {
+    cTmp.setRGB(col.getX(i), col.getY(i), col.getZ(i));
+    if (cTmp.getHex() === JEEP_PALETTE.starWhite) {
+      starVertCount++;
+      const x = pos.getX(i);
+      const y = pos.getY(i);
+      const z = pos.getZ(i);
+
+      // 1. Vertical difference above the sloping hood sheet metal
+      const zHood = 0.88 - (2 / 45) * (y - 0.48);
+      const diffMm = (z - zHood) * 1000;
+      if (diffMm < minDiffMm) minDiffMm = diffMm;
+      if (diffMm > maxDiffMm) maxDiffMm = diffMm;
+
+      // 2. Exact perpendicular distance from the hood plane
+      // Vector from point on plane (0, 0.48, 0.88) to vertex: [x, y - 0.48, z - 0.88]
+      const perpMm = ((y - 0.48) * ny + (z - 0.88) * nz) * 1000;
+      if (perpMm < minPerpMm) minPerpMm = perpMm;
+      if (perpMm > maxPerpMm) maxPerpMm = perpMm;
+    }
+  }
+
+  assert(starVertCount === 30, `star comprises 10 triangles (30 vertices), got ${starVertCount}`);
+
+  // Every vertex must sit uniformly at ~3.5 mm above the hood
+  assert(minDiffMm >= 3.49 && maxDiffMm <= 3.52, `vertical offset range [${minDiffMm.toFixed(3)}, ${maxDiffMm.toFixed(3)}] mm within 3.5mm`);
+  assert(minPerpMm >= 3.495 && maxPerpMm <= 3.505, `perpendicular distance [${minPerpMm.toFixed(4)}, ${maxPerpMm.toFixed(4)}] mm is exactly 3.5mm`);
+  assert(minDiffMm > 0, "no star vertex penetrates into or below hood surface");
+
   jeep.dispose();
 });
 

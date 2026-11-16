@@ -1563,6 +1563,10 @@ const TIER5 = [
   // 2026-11-16 Modular Full/Half Pallet Deployable Ecosystem E2E opaque-box test suite
   { tier: 5, flag: "e2eDeployablesOpaque", file: "tests/e2e_deployables_opaque.test.mjs" },
   { tier: 5, flag: "vehicleDeployableModels", file: "tests/vehicle_deployable_models.test.mjs" },
+  { tier: 5, flag: "vehicleCameraControlsOsd", file: "tests/vehicle_camera_controls_osd.test.mjs" },
+  { tier: 5, flag: "vehicleDeployableAudioVfx", file: "tests/vehicle_deployable_audio_vfx.test.mjs" },
+  // 2026-11-16 WWII Willys MB Jeep Hellcat-Parity & 4-Seat Production Experience 4-Tier E2E Suite
+  { tier: 5, flag: "e2eJeepExperience", file: "tests/e2e_jeep_experience.test.mjs" },
   // 2026-11-01 flight experience (docs/flight-experience-2026-11-01): the Phase 0
   // residency sampler (?residencyLog) — flips, holes, lead times on a mock scene.
   { tier: 5, flag: "residencyLog", file: "tests/residency_log.test.mjs" },

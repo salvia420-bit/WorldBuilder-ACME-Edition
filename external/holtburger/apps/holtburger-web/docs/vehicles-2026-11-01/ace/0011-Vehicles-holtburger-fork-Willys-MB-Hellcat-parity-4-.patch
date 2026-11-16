@@ -1,0 +1,864 @@
+From 2c48986083fab2869d01740bc2e59204279a7d95 Mon Sep 17 00:00:00 2001
+From: salvia420-bit <salvia420@gmail.com>
+Date: Mon, 16 Nov 2026 16:52:32 +0000
+Subject: [PATCH 11/11] Vehicles (holtburger fork): Willys MB Hellcat-parity
+ 4-seat crew overhaul & deployable cargo decoupling
+
+---
+ .../Vehicles/AirDefenseRadarTests.cs          |  28 ++-
+ .../Vehicles/DeployableEcosystemTests.cs      |  28 ++-
+ .../Vehicles/VehicleMultiSeatTests.cs         | 189 +++++++++++++++++-
+ Source/ACE.Server/Vehicles/GroundModel.cs     |   4 +-
+ Source/ACE.Server/Vehicles/Vehicle.cs         |  49 ++++-
+ Source/ACE.Server/Vehicles/VehicleCommands.cs |  88 +++-----
+ Source/ACE.Server/Vehicles/VehicleManager.cs  |  36 +++-
+ Source/ACE.Server/Vehicles/VehicleProfile.cs  |  13 +-
+ 8 files changed, 332 insertions(+), 103 deletions(-)
+
+diff --git a/Source/ACE.Server.Tests/Vehicles/AirDefenseRadarTests.cs b/Source/ACE.Server.Tests/Vehicles/AirDefenseRadarTests.cs
+index 3ec06af..e8f7220 100644
+--- a/Source/ACE.Server.Tests/Vehicles/AirDefenseRadarTests.cs
++++ b/Source/ACE.Server.Tests/Vehicles/AirDefenseRadarTests.cs
+@@ -79,6 +79,22 @@ private static Vehicle CreateTestJeep(uint guid, double x = 1000.0, double y = 2
+             return v;
+         }
+ 
++        private static Vehicle CreateTestCargoVehicle(uint guid, double x = 1000.0, double y = 2000.0, double z = 100.0)
++        {
++            var p = VehicleProfile.JeepMb();
++            p.CargoWcid = 4_000_002;
++            p.Parts.Add(new VehiclePartDef { Offset = new Vector3(0.0f, -1.05f, 0.90f) });
++            p.PartRoles.Add(VehiclePartRole.Cargo);
++            var w = Vehicle.BuildWeenie(p);
++            var v = new Vehicle(w, new ObjectGuid(guid), p);
++            v.Location = Vehicle.ToPosition(x, y, z, Quaternion.Identity);
++            v.State.X = x;
++            v.State.Y = y;
++            v.State.Z = z;
++            v.CargoLoaded = true;
++            return v;
++        }
++
+         private static Vehicle CreateTestAircraft(uint guid, double x = 1000.0, double y = 2000.0, double z = 100.0)
+         {
+             var p = VehicleProfile.HellcatDemo();
+@@ -573,7 +589,7 @@ public void TurretSensorBus_RegistryFindNearestHostile_CrossSensor()
+         public void CargoDeploy_ValidOnFootNearTailgate_SpawnsStation()
+         {
+             VehicleManager.EnabledOverride = true;
+-            var jeep = CreateTestJeep(0x70000050, 1000.0, 2000.0, 100.0);
++            var jeep = CreateTestCargoVehicle(0x70000050, 1000.0, 2000.0, 100.0);
+             VehicleManager.RegisterForTesting(jeep);
+ 
+             try
+@@ -610,7 +626,7 @@ public void CargoDeploy_ValidOnFootNearTailgate_SpawnsStation()
+         public void CargoDeploy_RefusesWhenPlayerSeated()
+         {
+             VehicleManager.EnabledOverride = true;
+-            var jeep = CreateTestJeep(0x70000051, 1000.0, 2000.0, 100.0);
++            var jeep = CreateTestCargoVehicle(0x70000051, 1000.0, 2000.0, 100.0);
+             VehicleManager.RegisterForTesting(jeep);
+ 
+             try
+@@ -635,7 +651,7 @@ public void CargoDeploy_RefusesWhenPlayerSeated()
+         public void CargoDeploy_RefusesWhenVehicleMoving()
+         {
+             VehicleManager.EnabledOverride = true;
+-            var jeep = CreateTestJeep(0x70000052, 1000.0, 2000.0, 100.0);
++            var jeep = CreateTestCargoVehicle(0x70000052, 1000.0, 2000.0, 100.0);
+             VehicleManager.RegisterForTesting(jeep);
+ 
+             try
+@@ -664,7 +680,7 @@ public void CargoDeploy_RefusesWhenVehicleMoving()
+         public void CargoDeploy_DistanceBoundaries()
+         {
+             VehicleManager.EnabledOverride = true;
+-            var jeep = CreateTestJeep(0x70000053, 1000.0, 2000.0, 100.0);
++            var jeep = CreateTestCargoVehicle(0x70000053, 1000.0, 2000.0, 100.0);
+             VehicleManager.RegisterForTesting(jeep);
+ 
+             try
+@@ -700,7 +716,7 @@ public void CargoDeploy_DistanceBoundaries()
+         public void CargoPack_ValidOnFootNearStation_PacksStation()
+         {
+             VehicleManager.EnabledOverride = true;
+-            var jeep = CreateTestJeep(0x70000054, 1000.0, 2000.0, 100.0);
++            var jeep = CreateTestCargoVehicle(0x70000054, 1000.0, 2000.0, 100.0);
+             VehicleManager.RegisterForTesting(jeep);
+ 
+             try
+@@ -745,7 +761,7 @@ public void Station_NonPersistence_ShardExcluded()
+         public void VehicleDespawn_CleansUpTetheredStation()
+         {
+             VehicleManager.EnabledOverride = true;
+-            var jeep = CreateTestJeep(0x70000056, 1000.0, 2000.0, 100.0);
++            var jeep = CreateTestCargoVehicle(0x70000056, 1000.0, 2000.0, 100.0);
+             VehicleManager.RegisterForTesting(jeep);
+ 
+             var player = CreateTestPlayer(0x10000001, 1000.0, 1997.0, 100.75);
+diff --git a/Source/ACE.Server.Tests/Vehicles/DeployableEcosystemTests.cs b/Source/ACE.Server.Tests/Vehicles/DeployableEcosystemTests.cs
+index bf019bc..0b60ea1 100644
+--- a/Source/ACE.Server.Tests/Vehicles/DeployableEcosystemTests.cs
++++ b/Source/ACE.Server.Tests/Vehicles/DeployableEcosystemTests.cs
+@@ -92,6 +92,22 @@ private static Vehicle CreateTestJeep(uint guid, double x = 1000.0, double y = 2
+             return v;
+         }
+ 
++        private static Vehicle CreateTestCargoVehicle(uint guid, double x = 1000.0, double y = 2000.0, double z = 100.0)
++        {
++            var p = VehicleProfile.JeepMb();
++            p.CargoWcid = 4_000_002;
++            p.Parts.Add(new VehiclePartDef { Offset = new Vector3(0.0f, -1.05f, 0.90f) });
++            p.PartRoles.Add(VehiclePartRole.Cargo);
++            var w = Vehicle.BuildWeenie(p);
++            var v = new Vehicle(w, new ObjectGuid(guid), p);
++            v.Location = Vehicle.ToPosition(x, y, z, Quaternion.Identity);
++            v.State.X = x;
++            v.State.Y = y;
++            v.State.Z = z;
++            v.CargoLoaded = true;
++            return v;
++        }
++
+         private static Vehicle CreateTestAircraft(uint guid, double x = 1000.0, double y = 2000.0, double z = 100.0)
+         {
+             var p = VehicleProfile.HellcatDemo();
+@@ -1332,7 +1348,7 @@ public void T1_12_RS_03_InsideFluxPodGridCoexistence()
+         [TestMethod]
+         public void T1_12_RS_04_JeepCargoDeployAndPack()
+         {
+-            var jeep = CreateTestJeep(0x70000207, 1000.0, 2000.0, 100.0);
++            var jeep = CreateTestCargoVehicle(0x70000207, 1000.0, 2000.0, 100.0);
+             VehicleManager.RegisterForTesting(jeep);
+             try
+             {
+@@ -1645,7 +1661,7 @@ public void T2_6_PLT_05_PartialUnloadPreservesSiblingSlot()
+         [TestMethod]
+         public void T2_7_GATE_01_StoppedDeploy_0_0mps_Allowed()
+         {
+-            var jeep = CreateTestJeep(0x70000301, 1000.0, 2000.0, 100.0);
++            var jeep = CreateTestCargoVehicle(0x70000301, 1000.0, 2000.0, 100.0);
+             jeep.State.Speed = 0.0;
+             VehicleManager.RegisterForTesting(jeep);
+             try
+@@ -1660,7 +1676,7 @@ public void T2_7_GATE_01_StoppedDeploy_0_0mps_Allowed()
+         [TestMethod]
+         public void T2_7_GATE_02_MaxAllowedSpeedDeploy_0_25mps_Allowed()
+         {
+-            var jeep = CreateTestJeep(0x70000302, 1000.0, 2000.0, 100.0);
++            var jeep = CreateTestCargoVehicle(0x70000302, 1000.0, 2000.0, 100.0);
+             jeep.State.Speed = 0.25;
+             VehicleManager.RegisterForTesting(jeep);
+             try
+@@ -1675,7 +1691,7 @@ public void T2_7_GATE_02_MaxAllowedSpeedDeploy_0_25mps_Allowed()
+         [TestMethod]
+         public void T2_7_GATE_03_OverspeedReject_0_26mps()
+         {
+-            var jeep = CreateTestJeep(0x70000303, 1000.0, 2000.0, 100.0);
++            var jeep = CreateTestCargoVehicle(0x70000303, 1000.0, 2000.0, 100.0);
+             jeep.State.Speed = 0.26;
+             VehicleManager.RegisterForTesting(jeep);
+             try
+@@ -1690,7 +1706,7 @@ public void T2_7_GATE_03_OverspeedReject_0_26mps()
+         [TestMethod]
+         public void T2_7_GATE_04_MaxTailgateDistance_3_80m_Allowed()
+         {
+-            var jeep = CreateTestJeep(0x70000304, 1000.0, 2000.0, 100.0);
++            var jeep = CreateTestCargoVehicle(0x70000304, 1000.0, 2000.0, 100.0);
+             jeep.State.Speed = 0.0;
+             VehicleManager.RegisterForTesting(jeep);
+             try
+@@ -1709,7 +1725,7 @@ public void T2_7_GATE_04_MaxTailgateDistance_3_80m_Allowed()
+         [TestMethod]
+         public void T2_7_GATE_05_ExcessiveDistanceReject_3_85m()
+         {
+-            var jeep = CreateTestJeep(0x70000305, 1000.0, 2000.0, 100.0);
++            var jeep = CreateTestCargoVehicle(0x70000305, 1000.0, 2000.0, 100.0);
+             jeep.State.Speed = 0.0;
+             VehicleManager.RegisterForTesting(jeep);
+             try
+diff --git a/Source/ACE.Server.Tests/Vehicles/VehicleMultiSeatTests.cs b/Source/ACE.Server.Tests/Vehicles/VehicleMultiSeatTests.cs
+index efbafdd..4fcbb9c 100644
+--- a/Source/ACE.Server.Tests/Vehicles/VehicleMultiSeatTests.cs
++++ b/Source/ACE.Server.Tests/Vehicles/VehicleMultiSeatTests.cs
+@@ -53,6 +53,8 @@ private static Player CreateTestPlayer(uint guid, double x, double y, double z)
+             vitals[PropertyAttribute2nd.MaxHealth] = hp;
+             typeof(Creature).GetField("Vitals", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
+                 ?.SetValue(player, vitals);
++            typeof(Creature).GetProperty("CombatMode", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
++                ?.SetValue(player, CombatMode.NonCombat);
+             player.Location = Vehicle.ToPosition(x, y, z, Quaternion.Identity);
+             return player;
+         }
+@@ -62,6 +64,24 @@ private static Vehicle CreateTestJeep(uint guid, double x = 1000.0, double y = 2
+             var p = VehicleProfile.JeepMb();
+             var w = Vehicle.BuildWeenie(p);
+             var v = new Vehicle(w, new ObjectGuid(guid), p);
++            v.Location = Vehicle.ToPosition(x, y, z, Quaternion.Identity);
++            v.State.X = x;
++            v.State.Y = y;
++            v.State.Z = z;
++            v.State.Heading = 0f;
++            v.State.Speed = 0f;
++            return v;
++        }
++
++        private static Vehicle CreateTestCargoVehicle(uint guid, double x = 1000.0, double y = 2000.0, double z = 100.0)
++        {
++            var p = VehicleProfile.JeepMb();
++            p.CargoWcid = 4_000_002;
++            p.Parts.Add(new VehiclePartDef { Offset = new Vector3(0.0f, -1.05f, 0.90f) });
++            p.PartRoles.Add(VehiclePartRole.Cargo);
++            var w = Vehicle.BuildWeenie(p);
++            var v = new Vehicle(w, new ObjectGuid(guid), p);
++            v.Location = Vehicle.ToPosition(x, y, z, Quaternion.Identity);
+             v.State.X = x;
+             v.State.Y = y;
+             v.State.Z = z;
+@@ -97,19 +117,28 @@ public void JeepMbProfileResolutionAndProperties()
+                 Assert.AreEqual(2.04f, p.Wheelbase, 0.001f);
+                 Assert.AreEqual(1.48f, p.TrackWidth, 0.001f);
+                 Assert.AreEqual(0.38f, p.WheelRadius, 0.001f);
+-                Assert.AreEqual(4_000_002u, p.CargoWcid);
++                Assert.AreEqual(0u, p.CargoWcid, "CargoWcid must be 0 for decoupled Jeep MB");
+                 Assert.AreEqual(0.71934f, p.ClimbLimitCos, 0.001f);
+                 Assert.AreEqual(0.8f, p.FordDepthMax, 0.001f);
+ 
+-                // Part roles
++                // Seat offsets calibrated to sculpted cushions
++                Assert.AreEqual(new Vector3(-0.38f, -0.18f, +0.62f), p.Seats[0].Offset);
++                Assert.AreEqual(new Vector3(+0.38f, -0.18f, +0.62f), p.Seats[1].Offset);
++                Assert.AreEqual(new Vector3(-0.36f, -0.96f, +0.68f), p.Seats[2].Offset);
++                Assert.AreEqual(new Vector3(+0.36f, -0.96f, +0.68f), p.Seats[3].Offset);
++
++                // Part roles (Cargo part removed, exactly 9 composite parts)
++                Assert.AreEqual(9, p.PartRoles.Count, "Jeep MB must have exactly 9 composite part roles");
+                 Assert.AreEqual(VehiclePartRole.WheelFL, p.PartRoles[0]);
+                 Assert.AreEqual(VehiclePartRole.WheelFR, p.PartRoles[1]);
+                 Assert.AreEqual(VehiclePartRole.WheelRL, p.PartRoles[2]);
+                 Assert.AreEqual(VehiclePartRole.WheelRR, p.PartRoles[3]);
+                 Assert.AreEqual(VehiclePartRole.SteeringWheel, p.PartRoles[4]);
+                 Assert.AreEqual(VehiclePartRole.Tailgate, p.PartRoles[5]);
+-                Assert.AreEqual(VehiclePartRole.Cargo, p.PartRoles[6]);
+-                Assert.AreEqual(VehiclePartRole.Windscreen, p.PartRoles[7]);
++                Assert.AreEqual(VehiclePartRole.Windscreen, p.PartRoles[6]);
++                Assert.AreEqual(VehiclePartRole.Static, p.PartRoles[7]);
++                Assert.AreEqual(VehiclePartRole.Static, p.PartRoles[8]);
++                Assert.IsFalse(p.PartRoles.Contains(VehiclePartRole.Cargo), "Cargo part role must not exist");
+             }
+         }
+ 
+@@ -121,7 +150,7 @@ public void VehicleMultiSeatInstantiationAndState()
+             var v = new Vehicle(w, new ObjectGuid(0x70000001), p);
+ 
+             Assert.AreEqual(4, v.SeatOccupants.Length, "SeatOccupants array length matches seat count");
+-            Assert.IsTrue(v.CargoLoaded, "CargoLoaded is true by default for ground cargo vehicle");
++            Assert.IsFalse(v.CargoLoaded, "CargoLoaded is false by default for jeep-mb");
+             Assert.AreEqual(VehicleMode.Parked, v.State.Mode);
+ 
+             // Verify SeatPosition translates relative offsets
+@@ -154,7 +183,7 @@ public void ToMsgGroundDynamicsRoundTrip()
+             Assert.AreEqual(2.04f, msg.Wheelbase, 0.001f);
+             Assert.AreEqual(1.48f, msg.TrackWidth, 0.001f);
+             Assert.AreEqual(0.38f, msg.WheelRadius, 0.001f);
+-            Assert.AreEqual(4_000_002u, msg.CargoWcid);
++            Assert.AreEqual(0u, msg.CargoWcid);
+ 
+             // Round trip through wire pack and unpack
+             var bytes = VehicleWire.Pack(msg);
+@@ -173,7 +202,7 @@ public void ToMsgGroundDynamicsRoundTrip()
+         public void HandleCargo_ValidDeployAndPackToggles()
+         {
+             VehicleManager.EnabledOverride = true;
+-            var v = CreateTestJeep(0x70000010, 1000.0, 2000.0, 100.0);
++            var v = CreateTestCargoVehicle(0x70000010, 1000.0, 2000.0, 100.0);
+             VehicleManager.RegisterForTesting(v);
+ 
+             try
+@@ -217,7 +246,7 @@ public void HandleCargo_ValidDeployAndPackToggles()
+         public void HandleCargo_RefusesWhenPlayerSeated()
+         {
+             VehicleManager.EnabledOverride = true;
+-            var v = CreateTestJeep(0x70000011, 1000.0, 2000.0, 100.0);
++            var v = CreateTestCargoVehicle(0x70000011, 1000.0, 2000.0, 100.0);
+             VehicleManager.RegisterForTesting(v);
+ 
+             try
+@@ -259,7 +288,7 @@ public void HandleCargo_RefusesWhenPlayerSeated()
+         public void HandleCargo_RefusesWhenVehicleMoving()
+         {
+             VehicleManager.EnabledOverride = true;
+-            var v = CreateTestJeep(0x70000012, 1000.0, 2000.0, 100.0);
++            var v = CreateTestCargoVehicle(0x70000012, 1000.0, 2000.0, 100.0);
+             VehicleManager.RegisterForTesting(v);
+ 
+             try
+@@ -302,7 +331,7 @@ public void HandleCargo_RefusesWhenVehicleMoving()
+         public void HandleCargo_RefusesWhenPlayerTooFarFromTailgate()
+         {
+             VehicleManager.EnabledOverride = true;
+-            var v = CreateTestJeep(0x70000013, 1000.0, 2000.0, 100.0);
++            var v = CreateTestCargoVehicle(0x70000013, 1000.0, 2000.0, 100.0);
+             VehicleManager.RegisterForTesting(v);
+ 
+             try
+@@ -356,7 +385,7 @@ public void HandleCargo_RefusesWhenPlayerTooFarFromTailgate()
+         public void HandleCargo_RefusesInvalidActionOrDuplicateToggle()
+         {
+             VehicleManager.EnabledOverride = true;
+-            var v = CreateTestJeep(0x70000014, 1000.0, 2000.0, 100.0);
++            var v = CreateTestCargoVehicle(0x70000014, 1000.0, 2000.0, 100.0);
+             VehicleManager.RegisterForTesting(v);
+ 
+             try
+@@ -443,5 +472,143 @@ public void Unseat_WithNullNetworkSession_DoesNotThrowNullReferenceException()
+                 VehicleManager.UnregisterForTesting(v.Guid.Full);
+             }
+         }
++
++        [TestMethod]
++        public void HandleCargo_JeepMbRejectsCargoDeployAndPack()
++        {
++            VehicleManager.EnabledOverride = true;
++            var v = CreateTestJeep(0x70000017, 1000.0, 2000.0, 100.0);
++            VehicleManager.RegisterForTesting(v);
++
++            try
++            {
++                var player = CreateTestPlayer(0x10000009, 1000.0, 1996.95, 100.75);
++                VehicleManager.ClearSeatedForTesting(player);
++
++                // Jeep MB has CargoWcid == 0, HandleCargo must strictly reject deploy and pack
++                var deployMsg = new VehicleCargo { Vehicle = v.Guid.Full, Action = 1, Target = 0 };
++                var deployOk = VehicleManager.HandleCargo(player, deployMsg);
++                Assert.IsFalse(deployOk, "HandleCargo Deploy must return false for jeep-mb (CargoWcid == 0)");
++
++                var packMsg = new VehicleCargo { Vehicle = v.Guid.Full, Action = 2, Target = 0 };
++                var packOk = VehicleManager.HandleCargo(player, packMsg);
++                Assert.IsFalse(packOk, "HandleCargo Pack must return false for jeep-mb (CargoWcid == 0)");
++                Assert.IsFalse(v.CargoLoaded, "Jeep MB CargoLoaded must remain false");
++            }
++            finally
++            {
++                VehicleManager.UnregisterForTesting(v.Guid.Full);
++            }
++        }
++
++        [TestMethod]
++        public void FirstOpenSeat_ScansAndPrioritizesDriverSeat()
++        {
++            var v = CreateTestJeep(0x70000018, 1000.0, 2000.0, 100.0);
++            var playerDriverSide = CreateTestPlayer(0x10000010, 999.0, 2000.0, 100.0);
++            var playerShotgunSide = CreateTestPlayer(0x10000011, 1001.0, 2000.0, 100.0);
++            var playerRearLeft = CreateTestPlayer(0x10000012, 999.0, 1999.0, 100.0);
++            var playerRearRight = CreateTestPlayer(0x10000013, 1001.0, 1999.0, 100.0);
++
++            // 1. When empty, Seat 0 is always prioritized
++            Assert.AreEqual(0, v.FirstOpenSeat(playerShotgunSide.Location), "Empty vehicle prioritizes Seat 0 (driver)");
++            Assert.AreEqual(0, v.FirstOpenSeat(null), "Null player location prioritizes Seat 0");
++
++            // 2. Seat 0 occupied -> scans nearest unoccupied seat
++            v.SeatOccupants[0] = 0x10000010;
++
++            Assert.AreEqual(1, v.FirstOpenSeat(playerShotgunSide.Location), "Player on shotgun side chooses Seat 1");
++            Assert.AreEqual(2, v.FirstOpenSeat(playerRearLeft.Location), "Player at rear left chooses Seat 2");
++            Assert.AreEqual(3, v.FirstOpenSeat(playerRearRight.Location), "Player at rear right chooses Seat 3");
++
++            // 3. Seats 0 and 1 occupied -> selects nearest open rear seat
++            v.SeatOccupants[1] = 0x10000011;
++            Assert.AreEqual(2, v.FirstOpenSeat(playerRearLeft.Location));
++            Assert.AreEqual(3, v.FirstOpenSeat(playerRearRight.Location));
++
++            // 4. Seats 0, 1, 2 occupied -> selects seat 3
++            v.SeatOccupants[2] = 0x10000012;
++            Assert.AreEqual(3, v.FirstOpenSeat(playerDriverSide.Location));
++
++            // 5. All seats occupied -> returns -1
++            v.SeatOccupants[3] = 0x10000013;
++            Assert.AreEqual(-1, v.FirstOpenSeat(playerDriverSide.Location), "All seats occupied returns -1");
++        }
++
++        [TestMethod]
++        public void VehicleBoardCommand_SeatsPlayerInTargetSeatOrFallback()
++        {
++            VehicleManager.EnabledOverride = true;
++            var v = CreateTestJeep(0x70000019, 1000.0, 2000.0, 100.0);
++            VehicleManager.RegisterForTesting(v);
++
++            try
++            {
++                var player1 = CreateTestPlayer(0x10000021, 1000.0, 2000.0, 100.0);
++                var player2 = CreateTestPlayer(0x10000022, 1000.0, 2000.0, 100.0);
++
++                var session1 = (Session)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof(Session));
++                session1.SetPlayer(player1);
++                session1.VehicleCapabilities = VehicleWire.CapObserve | VehicleWire.CapPilot;
++
++                var session2 = (Session)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof(Session));
++                session2.SetPlayer(player2);
++                session2.VehicleCapabilities = VehicleWire.CapObserve | VehicleWire.CapPilot;
++
++                // Board passenger seat directly (Seat 1)
++                VehicleCommands.HandleVehicle(session1, "board", "1");
++                Assert.AreEqual(player1.Guid.Full, v.SeatOccupants[1], "Player 1 boards Seat 1");
++
++                // Board with fallback (Seat 0 is empty -> boards Seat 0)
++                VehicleCommands.HandleVehicle(session2, "board");
++                Assert.AreEqual(player2.Guid.Full, v.SeatOccupants[0], "Player 2 boards Seat 0 (first open seat)");
++            }
++            finally
++            {
++                VehicleManager.UnregisterForTesting(v.Guid.Full);
++            }
++        }
++
++        [TestMethod]
++        public void DriverExit_AutoBrakes_KeepsPassengersSeated()
++        {
++            VehicleManager.EnabledOverride = true;
++            var v = CreateTestJeep(0x7000001A, 1000.0, 2000.0, 100.0);
++            VehicleManager.RegisterForTesting(v);
++
++            try
++            {
++                var pilot = CreateTestPlayer(0x10000031, 1000.0, 2000.0, 100.0);
++                var passenger = CreateTestPlayer(0x10000032, 1000.0, 2000.0, 100.0);
++
++                VehicleManager.SetSeatedForTesting(pilot, v, 0);
++                VehicleManager.SetSeatedForTesting(passenger, v, 1);
++
++                v.State.Mode = VehicleMode.Driving;
++                v.State.Speed = 15.0f;
++                v.GroundState.Speed = 15.0;
++                v.GroundState.Mode = VehicleMode.Driving;
++
++                Assert.AreEqual(pilot.Guid.Full, v.SeatOccupants[0]);
++                Assert.AreEqual(passenger.Guid.Full, v.SeatOccupants[1]);
++
++                // Pilot exits moving vehicle
++                VehicleManager.Unseat(v, pilot, placeOnGround: false);
++
++                // Driver vacated, but passenger remains seated
++                Assert.AreEqual(0u, v.SeatOccupants[0], "Driver seat must be vacated");
++                Assert.AreEqual(passenger.Guid.Full, v.SeatOccupants[1], "Passenger must stay seated in Seat 1");
++                Assert.IsTrue(VehicleManager.IsSeated(passenger), "Passenger is still seated in VehicleManager");
++
++                // Step vehicle once with pilot == null: auto-handbrake decelerates
++                VehicleManager.StepVehicleForTesting(v, null);
++                Assert.IsTrue(v.GroundState.Speed < 15.0, "Vehicle should decelerate under auto-handbrake");
++                Assert.AreEqual(passenger.Guid.Full, v.SeatOccupants[1], "Passenger remains seated during auto-braking");
++            }
++            finally
++            {
++                VehicleManager.UnregisterForTesting(v.Guid.Full);
++            }
++        }
+     }
+ }
+diff --git a/Source/ACE.Server/Vehicles/GroundModel.cs b/Source/ACE.Server/Vehicles/GroundModel.cs
+index 46e90e4..55935c8 100644
+--- a/Source/ACE.Server/Vehicles/GroundModel.cs
++++ b/Source/ACE.Server/Vehicles/GroundModel.cs
+@@ -345,9 +345,11 @@ public static void Step(ref GroundState s, in GroundInput u, GroundParams p, Gro
+             // 7. State flags & mode
+             s.SurfaceFamily = surf.Id;
+             s.GroundFlags = 0x01; // onGround
+-            if (u.Handbrake) s.GroundFlags |= 0x02;
++            if (u.Handbrake || (u.Throttle < 0.0 && s.Speed > 0.05)) s.GroundFlags |= 0x02;
+             if (u.Boost) s.GroundFlags |= 0x04;
+             if (surf.Id == 4) s.GroundFlags |= 0x08; // slipping
++            if (u.Headlights) s.GroundFlags |= 0x10;
++            if (u.Horn) s.GroundFlags |= 0x20;
+ 
+             if (Math.Abs(s.Speed) < 0.001 && u.Throttle == 0.0)
+                 s.Mode = VehicleMode.Parked;
+diff --git a/Source/ACE.Server/Vehicles/Vehicle.cs b/Source/ACE.Server/Vehicles/Vehicle.cs
+index b4695da..5db08e2 100644
+--- a/Source/ACE.Server/Vehicles/Vehicle.cs
++++ b/Source/ACE.Server/Vehicles/Vehicle.cs
+@@ -426,7 +426,7 @@ public Vehicle(Weenie weenie, ObjectGuid guid, VehicleProfile profile) : base(we
+             BombOrder = Enumerable.Range(0, BombIdx.Length)
+                 .OrderByDescending(i => profile.ExtOf(BombIdx[i]).MassKg).ThenBy(i => profile.Weapons[BombIdx[i]].Muzzle.X).ToArray();
+             Rearm();
+-            CargoLoaded = profile.CargoWcid != 0 || profile.Locomotion == 2;
++            CargoLoaded = profile.CargoWcid != 0;
+             State.Mode = VehicleMode.Parked;
+             GroundState.Mode = VehicleMode.Parked;
+         }
+@@ -551,6 +551,32 @@ public Position SeatPosition(int seat)
+             return ToPosition(x, y, z, YawOnly(State.Heading));
+         }
+ 
++        public int FirstOpenSeat(Position playerPos = null)
++        {
++            if (SeatOccupants == null || SeatOccupants.Length == 0) return -1;
++            if (SeatOccupants[0] == 0) return 0;
++
++            int bestSeat = -1;
++            float bestDistSq = float.MaxValue;
++            for (var i = 1; i < SeatOccupants.Length; i++)
++            {
++                if (SeatOccupants[i] == 0)
++                {
++                    if (playerPos == null)
++                        return i;
++
++                    var seatPos = SeatPosition(i);
++                    var distSq = playerPos.SquaredDistanceTo(seatPos);
++                    if (distSq < bestDistSq)
++                    {
++                        bestDistSq = distSq;
++                        bestSeat = i;
++                    }
++                }
++            }
++            return bestSeat;
++        }
++
+         public Position VehiclePosition() => ToPosition(State.X, State.Y, State.Z, CurrentOrientation);
+ 
+         public Position TailgatePosition()
+@@ -614,11 +640,22 @@ public VehicleStateMsg BuildStateMsg(bool pilotCopy)
+                 msg.SurfaceFamily = GroundState.SurfaceFamily;
+                 msg.WheelSpinQ16 = GroundState.WheelSpinQ16;
+             }
+-            msg.CargoMask = CargoMask;
+-            msg.PalletSize0 = (byte)PalletSize0;
+-            msg.PalletSize1 = (byte)PalletSize1;
+-            msg.CargoSlot0Wcid = CargoSlot0Wcid;
+-            msg.CargoSlot1Wcid = CargoSlot1Wcid;
++            if (!CargoLoaded || Profile?.CargoWcid == 0)
++            {
++                msg.CargoMask = 0;
++                msg.PalletSize0 = 0;
++                msg.PalletSize1 = 0;
++                msg.CargoSlot0Wcid = 0;
++                msg.CargoSlot1Wcid = 0;
++            }
++            else
++            {
++                msg.CargoMask = CargoMask;
++                msg.PalletSize0 = (byte)PalletSize0;
++                msg.PalletSize1 = (byte)PalletSize1;
++                msg.CargoSlot0Wcid = CargoSlot0Wcid;
++                msg.CargoSlot1Wcid = CargoSlot1Wcid;
++            }
+             return msg;
+         }
+ 
+diff --git a/Source/ACE.Server/Vehicles/VehicleCommands.cs b/Source/ACE.Server/Vehicles/VehicleCommands.cs
+index e8ff02f..3e6fd79 100644
+--- a/Source/ACE.Server/Vehicles/VehicleCommands.cs
++++ b/Source/ACE.Server/Vehicles/VehicleCommands.cs
+@@ -17,11 +17,11 @@ public static class VehicleCommands
+     {
+         [CommandHandler("vehicle", AccessLevel.Developer, CommandHandlerFlag.RequiresWorld, 1,
+             "holtburger vehicles demo.",
+-            "spawn [profile]   - park a vehicle (default hellcat-demo) on open ground 6 m in front of you\n" +
++            "spawn [profile]   - park a vehicle (default hellcat-demo, jeep-mb) on open ground 6 m in front of you\n" +
+             "despawn [all]     - remove the nearest vehicle (or all)\n" +
+             "list              - list vehicles\n" +
+             "terrain           - the vehicle terrain sampler's height under you (parity check vs the client)\n" +
+-            "board             - (debug) seat yourself in the nearest vehicle regardless of capability\n" +
++            "board [seat]      - (debug) seat yourself in the nearest vehicle (seat 0..3 or first open seat)\n" +
+             "rearm [all]       - fill the guns, lightning rails and bomb stations of the nearest vehicle (or all) now\n" +
+             "infammo [on|off]  - infinite vehicle ammo cheat (server-wide; no argument = show the current state)")]
+         public static void HandleVehicle(Session session, params string[] parameters)
+@@ -35,7 +35,7 @@ public static void HandleVehicle(Session session, params string[] parameters)
+                     var profile = VehicleProfile.ByKey(key);
+                     if (profile == null)
+                     {
+-                        CommandHandlerHelper.WriteOutputInfo(session, $"unknown vehicle profile '{key}' (known: hellcat-demo)");
++                        CommandHandlerHelper.WriteOutputInfo(session, $"unknown vehicle profile '{key}' (known: hellcat-demo, jeep-mb, willys-mb)");
+                         return;
+                     }
+                     var v = VehicleManager.Spawn(player, profile, out var error);
+@@ -54,7 +54,7 @@ public static void HandleVehicle(Session session, params string[] parameters)
+                         CommandHandlerHelper.WriteOutputInfo(session, $"despawned {all.Count} vehicle(s)");
+                         return;
+                     }
+-                    var nearest = VehicleManager.All.OrderBy(v => v.Location.DistanceTo(player.Location)).FirstOrDefault();
++                    var nearest = VehicleManager.All.Where(v => v.Location != null).OrderBy(v => v.Location.DistanceTo(player.Location)).FirstOrDefault();
+                     if (nearest == null)
+                     {
+                         CommandHandlerHelper.WriteOutputInfo(session, "no vehicles");
+@@ -77,15 +77,38 @@ public static void HandleVehicle(Session session, params string[] parameters)
+                 }
+                 case "board":
+                 {
+-                    var nearest = VehicleManager.All.OrderBy(v => v.Location.DistanceTo(player.Location)).FirstOrDefault();
++                    var nearest = VehicleManager.All.Where(v => v.Location != null).OrderBy(v => v.Location.DistanceTo(player.Location)).FirstOrDefault();
+                     if (nearest == null)
+                     {
+                         CommandHandlerHelper.WriteOutputInfo(session, "no vehicles");
+                         return;
+                     }
++                    int seat = -1;
++                    if (parameters.Length > 1 && int.TryParse(parameters[1], out var requestedSeat))
++                    {
++                        if (requestedSeat >= 0 && requestedSeat < nearest.SeatOccupants.Length && nearest.SeatOccupants[requestedSeat] == 0)
++                        {
++                            seat = requestedSeat;
++                        }
++                        else
++                        {
++                            seat = nearest.FirstOpenSeat(player.Location);
++                        }
++                    }
++                    else
++                    {
++                        seat = nearest.FirstOpenSeat(player.Location);
++                    }
++
++                    if (seat < 0)
++                    {
++                        CommandHandlerHelper.WriteOutputInfo(session, "vehicle is full");
++                        return;
++                    }
++
+                     var caps = session.VehicleCapabilities;
+                     session.VehicleCapabilities |= VehicleWire.CapPilot;
+-                    VehicleManager.HandleBoard(session, new VehicleBoard { Vehicle = nearest.Guid.Full, Seat = 0 });
++                    VehicleManager.HandleBoard(session, new VehicleBoard { Vehicle = nearest.Guid.Full, Seat = (uint)seat });
+                     session.VehicleCapabilities = caps | (VehicleManager.IsSeated(player) ? VehicleWire.CapPilot : 0);
+                     return;
+                 }
+@@ -114,7 +137,7 @@ public static void HandleVehicle(Session session, params string[] parameters)
+                     return;
+                 }
+                 default:
+-                    CommandHandlerHelper.WriteOutputInfo(session, "usage: @vehicle spawn [profile] | despawn [all] | list | terrain | board | rearm [all] | infammo [on|off]");
++                    CommandHandlerHelper.WriteOutputInfo(session, "usage: @vehicle spawn [profile] | despawn [all] | list | terrain | board [seat] | rearm [all] | infammo [on|off]");
+                     return;
+             }
+         }
+@@ -159,7 +182,6 @@ public static void HandleCreateBench(Session session, params string[] parameters
+         [CommandHandler("deployable", AccessLevel.Developer, CommandHandlerFlag.RequiresWorld, 1,
+             "8-unit modular deployable ecosystem commands.",
+             "spawn <wcid> [x y z]              - spawn deployable\n" +
+-            "load <vehicleGuid> <slot> <wcid>  - load deployable into vehicle cargo bed\n" +
+             "preset base                       - deploy Forward Operating Base (8 units)\n" +
+             "fuel <guid> <amount>              - refuel power generator with scarabs\n" +
+             "monsters <radarGuid> <on|off>     - toggle monster tracking on ground radar\n" +
+@@ -170,7 +192,7 @@ public static void HandleDeployable(Session session, params string[] parameters)
+             var player = session.Player;
+             if (parameters.Length == 0)
+             {
+-                CommandHandlerHelper.WriteOutputInfo(session, "usage: @deployable spawn <wcid> [x y z] | load <vGuid> <slot> <wcid> | preset base | fuel <guid> <amount> | monsters <guid> <on|off> | list | despawn <guid|all>");
++                CommandHandlerHelper.WriteOutputInfo(session, "usage: @deployable spawn <wcid> [x y z] | preset base | fuel <guid> <amount> | monsters <guid> <on|off> | list | despawn <guid|all>");
+                 return;
+             }
+ 
+@@ -210,52 +232,6 @@ public static void HandleDeployable(Session session, params string[] parameters)
+                         CommandHandlerHelper.WriteOutputInfo(session, $"failed to spawn deployable wcid {wcid}");
+                     return;
+                 }
+-                case "load":
+-                {
+-                    if (parameters.Length < 4)
+-                    {
+-                        CommandHandlerHelper.WriteOutputInfo(session, "usage: @deployable load <vehicleGuid> <slot> <wcid>");
+-                        return;
+-                    }
+-
+-                    uint vGuid;
+-                    if (parameters[1].StartsWith("0x", StringComparison.OrdinalIgnoreCase))
+-                        uint.TryParse(parameters[1].Substring(2), System.Globalization.NumberStyles.HexNumber, null, out vGuid);
+-                    else
+-                        uint.TryParse(parameters[1], out vGuid);
+-
+-                    if (!int.TryParse(parameters[2], out var slot) || (slot != 0 && slot != 1))
+-                    {
+-                        CommandHandlerHelper.WriteOutputInfo(session, "slot must be 0 or 1");
+-                        return;
+-                    }
+-
+-                    if (!uint.TryParse(parameters[3], out var wcid))
+-                    {
+-                        CommandHandlerHelper.WriteOutputInfo(session, "invalid wcid");
+-                        return;
+-                    }
+-
+-                    var v = VehicleManager.Get(vGuid);
+-                    if (v == null)
+-                    {
+-                        CommandHandlerHelper.WriteOutputInfo(session, $"vehicle 0x{vGuid:X8} not found");
+-                        return;
+-                    }
+-
+-                    bool isFull = wcid is 4000010 or 4000011 or 4000012 or 4000014 or 4000002;
+-                    bool loaded;
+-                    if (isFull)
+-                        loaded = v.LoadFullPallet(wcid);
+-                    else
+-                        loaded = v.LoadHalfPallet(slot, wcid);
+-
+-                    if (loaded)
+-                        CommandHandlerHelper.WriteOutputInfo(session, $"loaded wcid {wcid} onto vehicle 0x{vGuid:X8} (slot {slot}, mask 0x{v.CargoMask:X2})");
+-                    else
+-                        CommandHandlerHelper.WriteOutputInfo(session, $"failed to load wcid {wcid} onto vehicle 0x{vGuid:X8} (bed occupied or incompatible)");
+-                    return;
+-                }
+                 case "preset":
+                 {
+                     if (parameters.Length > 1 && parameters[1].Equals("base", StringComparison.OrdinalIgnoreCase))
+@@ -396,7 +372,7 @@ public static void HandleDeployable(Session session, params string[] parameters)
+                     return;
+                 }
+                 default:
+-                    CommandHandlerHelper.WriteOutputInfo(session, "usage: @deployable spawn <wcid> [x y z] | load <vGuid> <slot> <wcid> | preset base | fuel <guid> <amount> | monsters <guid> <on|off> | list | despawn <guid|all>");
++                    CommandHandlerHelper.WriteOutputInfo(session, "usage: @deployable spawn <wcid> [x y z] | preset base | fuel <guid> <amount> | monsters <guid> <on|off> | list | despawn <guid|all>");
+                     return;
+             }
+         }
+diff --git a/Source/ACE.Server/Vehicles/VehicleManager.cs b/Source/ACE.Server/Vehicles/VehicleManager.cs
+index 5c34074..a4f9042 100644
+--- a/Source/ACE.Server/Vehicles/VehicleManager.cs
++++ b/Source/ACE.Server/Vehicles/VehicleManager.cs
+@@ -110,7 +110,11 @@ public static void UnregisterForTesting(uint guid)
+         public static void SetSeatedForTesting(Player player, Vehicle v, int seat)
+         {
+             if (player != null && v != null)
++            {
+                 seated[player.Guid.Full] = (v.Guid.Full, seat);
++                if (seat >= 0 && seat < v.SeatOccupants.Length)
++                    v.SeatOccupants[seat] = player.Guid.Full;
++            }
+         }
+ 
+         public static void ClearSeatedForTesting(Player player)
+@@ -119,6 +123,8 @@ public static void ClearSeatedForTesting(Player player)
+                 seated.TryRemove(player.Guid.Full, out _);
+         }
+ 
++        public static void StepVehicleForTesting(Vehicle v, Player pilot) => StepVehicle(v, pilot);
++
+         public static bool IsSeated(Player player) => player != null && seated.ContainsKey(player.Guid.Full);
+ 
+         public static Vehicle VehicleOf(Player player) =>
+@@ -602,14 +608,17 @@ static void MoveOccupant(Vehicle v, Player occ, Position seatPos)
+             var high = InHighBand(v);
+             var agl = Agl(v);
+             var sight3d = high || (!double.IsNaN(agl) && agl > 200.0);
+-            if (occ.PhysicsObj.ObjMaint.Sight3D != sight3d)
+-                occ.PhysicsObj.ObjMaint.Sight3D = sight3d;
++            if (occ.PhysicsObj != null)
++            {
++                if (occ.PhysicsObj.ObjMaint != null && occ.PhysicsObj.ObjMaint.Sight3D != sight3d)
++                    occ.PhysicsObj.ObjMaint.Sight3D = sight3d;
++                occ.PhysicsObj.set_current_pos(new Physics.Common.Position(seatPos));
++            }
+             occ.Location = seatPos;
+-            occ.PhysicsObj.set_current_pos(new Physics.Common.Position(seatPos));
+             var tc = Stopwatch.GetTimestamp();
+             if (seatPos.Landblock != prevLb)
+                 Relocate(occ, v);
+-            if (v.SimStep % 6 == 0 && !high)
++            if (v.SimStep % 6 == 0 && !high && occ.PhysicsObj != null)
+                 occ.CheckMonsters();
+             v.Costs.PhasePilotRelocMonstersMs = (Stopwatch.GetTimestamp() - tc) * 1000.0 / Stopwatch.Frequency;
+         }
+@@ -744,7 +753,7 @@ public static void SendTo(Vehicle v, Session session, VehicleS2C msg)
+                 v.Costs.BytesSent += ev.Data.Length;
+                 v.Costs.MessagesSent++;
+             }
+-            session.Network.EnqueueSend(ev);
++            session?.Network?.EnqueueSend(ev);
+         }
+ 
+         static readonly List<Player> broadcastBuffer = new List<Player>();
+@@ -820,8 +829,13 @@ static void SendIntro(Player player, Vehicle v)
+                 return;
+             SendTo(v, session, v.Profile.ToMsg(v.Guid.Full, v.VCap > 0 ? v.VCap : SpeedCap, SimHz));
+             for (var i = 0; i < v.SeatOccupants.Length; i++)
+-                if (v.SeatOccupants[i] != 0)
+-                    SendTo(v, session, new VehicleSeatMsg { Vehicle = v.Guid.Full, Seat = (uint)i, Occupant = v.SeatOccupants[i], State = VehicleSeatMsg.StateOccupied });
++                SendTo(v, session, new VehicleSeatMsg
++                {
++                    Vehicle = v.Guid.Full,
++                    Seat = (uint)i,
++                    Occupant = v.SeatOccupants[i],
++                    State = v.SeatOccupants[i] != 0 ? VehicleSeatMsg.StateOccupied : VehicleSeatMsg.StateEmpty
++                });
+             SendTo(v, session, v.BuildStateMsg(v.Pilot == player.Guid.Full));
+         }
+ 
+@@ -990,7 +1004,7 @@ public static void HandleCapabilities(Session session, VehicleClientCapabilities
+ 
+         static void Refuse(Session session, uint vehicle, uint seat, VehicleRefusal reason)
+         {
+-            session.Network.EnqueueSend(new GameEventVehicle(session, new VehicleSeatMsg
++            session?.Network?.EnqueueSend(new GameEventVehicle(session, new VehicleSeatMsg
+             {
+                 Vehicle = vehicle, Seat = seat, Occupant = 0, State = VehicleSeatMsg.StateRefused, Reason = (uint)reason,
+             }));
+@@ -1063,7 +1077,7 @@ public static void HandleBoard(Session session, VehicleBoard msg)
+             seated[player.Guid.Full] = (v.Guid.Full, targetSeat);
+             v.PlacedIdle = false;
+             MarkAirborne(player, true);
+-            player.PhysicsObj.ObjMaint.SetSightRadius(SightRadius);
++            player.PhysicsObj?.ObjMaint?.SetSightRadius(SightRadius);
+ 
+             if (targetSeat == 0)
+             {
+@@ -1077,7 +1091,8 @@ public static void HandleBoard(Session session, VehicleBoard msg)
+             }
+ 
+             // the body: no gravity while seated (retail observers would otherwise drop it between updates), seated motion
+-            player.PhysicsObj.State &= ~PhysicsState.Gravity;
++            if (player.PhysicsObj != null)
++                player.PhysicsObj.State &= ~PhysicsState.Gravity;
+             player.EnqueueBroadcastPhysicsState();
+             var sit = new Motion(MotionStance.NonCombat, MotionCommand.Sitting);
+             player.CurrentMotionState = sit;
+@@ -1139,6 +1154,7 @@ public static bool HandleCargo(Player player, VehicleCargo msg)
+             if (player == null || player.Location == null || msg == null) return false;
+             var v = Get(msg.Vehicle);
+             if (v == null || v.IsDestroyed) return false;
++            if (v.Profile == null || v.Profile.CargoWcid == 0) return false;
+ 
+             // Requesting player must be on foot outside vehicle (not currently seated)
+             if (IsSeated(player)) return false;
+diff --git a/Source/ACE.Server/Vehicles/VehicleProfile.cs b/Source/ACE.Server/Vehicles/VehicleProfile.cs
+index ac50d55..d4a2962 100644
+--- a/Source/ACE.Server/Vehicles/VehicleProfile.cs
++++ b/Source/ACE.Server/Vehicles/VehicleProfile.cs
+@@ -426,7 +426,7 @@ public static VehicleProfile JeepMb()
+                 ReverseMax = -10.0f,
+                 ClimbLimitCos = 0.71934f, // 44 deg
+                 FordDepthMax = 0.8f,
+-                CargoWcid = 4_000_002,
++                CargoWcid = 0,
+                 LeadSeconds = 6f,
+                 ObjectRadius = 4,
+                 SightRadius = 112.5f,
+@@ -435,10 +435,10 @@ public static VehicleProfile JeepMb()
+             };
+ 
+             // 4 Seats
+-            p.Seats.Add(new VehicleSeatDef { Role = 0, Motion = MotionSitting, Offset = new Vector3(-0.38f, -0.20f, 0.85f) }); // Seat 0 Driver (Front Left)
+-            p.Seats.Add(new VehicleSeatDef { Role = 1, Motion = MotionSitting, Offset = new Vector3(0.38f, -0.20f, 0.85f) });  // Seat 1 Shotgun (Front Right)
+-            p.Seats.Add(new VehicleSeatDef { Role = 1, Motion = MotionSitting, Offset = new Vector3(-0.38f, -0.85f, 0.95f) }); // Seat 2 Rear Bench Left
+-            p.Seats.Add(new VehicleSeatDef { Role = 1, Motion = MotionSitting, Offset = new Vector3(0.38f, -0.85f, 0.95f) });  // Seat 3 Rear Bench Right
++            p.Seats.Add(new VehicleSeatDef { Role = 0, Motion = MotionSitting, Offset = new Vector3(-0.38f, -0.18f, +0.62f) }); // Seat 0 Driver (Front Left)
++            p.Seats.Add(new VehicleSeatDef { Role = 1, Motion = MotionSitting, Offset = new Vector3(+0.38f, -0.18f, +0.62f) }); // Seat 1 Shotgun (Front Right)
++            p.Seats.Add(new VehicleSeatDef { Role = 1, Motion = MotionSitting, Offset = new Vector3(-0.36f, -0.96f, +0.68f) }); // Seat 2 Rear Bench Left
++            p.Seats.Add(new VehicleSeatDef { Role = 1, Motion = MotionSitting, Offset = new Vector3(+0.36f, -0.96f, +0.68f) }); // Seat 3 Rear Bench Right
+ 
+             // Composite retail parts & roles
+             // Wheels: WheelFL=5, WheelFR=6, WheelRL=7, WheelRR=8
+@@ -446,10 +446,9 @@ public static VehicleProfile JeepMb()
+             Part(p, 0x02000162, 0.74f, 1.02f, 0.38f, 0.707107f, 0f, -0.707107f, 0f, 1.15f, VehiclePartRole.WheelFR);
+             Part(p, 0x02000162, -0.74f, -1.02f, 0.38f, 0.707107f, 0f, 0.707107f, 0f, 1.15f, VehiclePartRole.WheelRL);
+             Part(p, 0x02000162, 0.74f, -1.02f, 0.38f, 0.707107f, 0f, -0.707107f, 0f, 1.15f, VehiclePartRole.WheelRR);
+-            // Controls & Accessories: SteeringWheel=9, Tailgate=10, Cargo=11, Windscreen=12
++            // Controls & Accessories: SteeringWheel=9, Tailgate=10, Windscreen=12
+             Part(p, 0x020018C8, -0.38f, 0.15f, 0.95f, 0.92388f, 0.38268f, 0f, 0f, 0.65f, VehiclePartRole.SteeringWheel);
+             Part(p, 0x02001523, 0.0f, -1.55f, 0.75f, 0.707107f, 0f, 0f, 0.707107f, 1.45f, VehiclePartRole.Tailgate);
+-            Part(p, 0x0200188D, 0.0f, -1.05f, 0.90f, 1f, 0f, 0f, 0f, 0.95f, VehiclePartRole.Cargo);
+             Part(p, 0x0200013D, 0.0f, 0.40f, 1.10f, 0.9659f, 0.2588f, 0f, 0f, 1.40f, VehiclePartRole.Windscreen);
+             // Body Tub, Chassis & Front Grille (Static=0)
+             Part(p, 0x0200043C, 0.0f, -0.20f, 0.65f, 1f, 0f, 0f, 0f, 1.35f, VehiclePartRole.Static);
+-- 
+2.43.0
+

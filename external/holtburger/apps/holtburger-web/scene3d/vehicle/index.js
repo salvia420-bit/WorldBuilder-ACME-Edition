@@ -18,6 +18,7 @@
 // Debug / bench surface: `window.__vehicles` (status, board, exit, setSticks, spawn, despawn, ...).
 
 import * as FM from "./flight_model.js";
+import * as GM from "./ground_model.js";
 import { createObserverTrack, createPilotPredictor, stateFromMsg, OBSERVER_DELAY_S } from "./predictor.js";
 import { createVehicleControls } from "./controls.js";
 import { createVehicleOsd } from "./osd.js";
@@ -25,7 +26,7 @@ import { createWeaponsFx, predictImpact } from "./weapons.js";
 import { airframeEnabled, createAirframes, hasComposite, kindOrdinal } from "./airframe.js";
 import { aeroFxEnabled, createAeroFx } from "./aero_fx.js";
 import { createPilotCameraRig, VIEW_MODES, COCKPIT_EYE, HOOD_EYE } from "./camera_rig.js";
-import { createVehicleAudio, vehicleAudioEnabled, threeToAcPos } from "./audio.js";
+import { createVehicleAudio, createGroundVehicleAudio, vehicleAudioEnabled, threeToAcPos } from "./audio.js";
 import { stepFall } from "./fall_model.js";
 import { boardAnimEnabled, headingOfQuat, hopDuration, hopHeading, hopPoint, HOP } from "./board_hop.js";
 import { chuteEnabled, createChutes } from "./chute.js";
@@ -38,6 +39,8 @@ import { flightResidencyEnabled, setFlightHint, clearFlightHint } from "../resid
 import { buildDeployable, DEPLOYABLE_WCID, DEPLOYABLE_KINDS } from "./deployable_models.js";
 import { buildDeployedRadar } from "./radar_model.js";
 import { buildProceduralJeep } from "./jeep_model.js";
+import { createGroundFx } from "./ground_fx.js";
+import { applySeatPoseToEntity, getSeatOffset, interpolateSeatHotSwap } from "./seat_poses.js";
 import { createDeployableCombatVfx } from "./deployable_vfx.js";
 import { DeployableAudioManager } from "./deployable_audio.js";
 import { RadarScopeHud } from "./radar_scope.js";
@@ -172,10 +175,24 @@ export function installVehicles(deps = {}) {
       volume: () => 0.85,
     })
     : null;
+  const groundAudio = audioOn
+    ? createGroundVehicleAudio({
+      bus: () => live.audioManager?.getEffectBus?.() ?? null,
+      audioManager: live.audioManager,
+      liveScene3d: live,
+      search,
+      volume: () => 0.85,
+    })
+    : null;
   function listenerAcPos() {
     if (pilot && pilot.predictor) {
       const s = pilot.predictor.state;
       return [s.x, s.y, s.z];
+    }
+    if (passenger && passenger.vehicle) {
+      const v = passenger.vehicle;
+      const s = v.last ? stateFromMsg(v.last) : null;
+      if (s) return [s.x, s.y, s.z];
     }
     if (fall) return [fall.rx, fall.ry, fall.rz];
     if (live.camera?.position) return threeToAcPos(live.camera.position);
@@ -185,6 +202,13 @@ export function installVehicles(deps = {}) {
   }
   function listenerAcVel() {
     if (pilot && pilot.predictor && pilot.vehicle?.params) return FM.velocity(pilot.predictor.state, pilot.vehicle.params);
+    if (passenger && passenger.vehicle) {
+      const v = passenger.vehicle;
+      if (v.last && Number.isFinite(v.last.speed) && Number.isFinite(v.last.heading)) {
+        const spd = v.last.speed, h = v.last.heading;
+        return [spd * Math.sin(h), spd * Math.cos(h), 0];
+      }
+    }
     if (fall) return [fall.vx, fall.vy, fall.vz];
     return [0, 0, 0];
   }
@@ -197,7 +221,21 @@ export function installVehicles(deps = {}) {
   const deployableAudio = audioOn ? new DeployableAudioManager(live.audioManager?.getEffectBus?.() ?? null, { enabled: true }) : null;
   const radarScope = new RadarScopeHud({ width: 236, height: 236, mode: "combined" });
   const deployables = new Map(); // guid -> { guid, kind, wcid, model, last, lastSeenAt, standInHidden }
-  const jeepModels = new Map();  // guid -> procedural jeep instance
+  const groundModels = new Map(); // guid -> procedural jeep instance
+  const jeepModels = groundModels; // backward compatibility alias
+  const groundFx = THREE ? createGroundFx({ THREE, root: live.worldRoot, liveScene3d: live }) : null;
+
+  function ensureGroundModel(v) {
+    if (!THREE || !live?.worldRoot) return null;
+    const g = v.guid >>> 0;
+    let model = groundModels.get(g);
+    if (!model) {
+      model = buildProceduralJeep(THREE, v.profile || {}, { liveScene3d: live });
+      live.worldRoot.add(model.root);
+      groundModels.set(g, model);
+    }
+    return model;
+  }
   let latestAirContacts = [];
   let latestGroundContacts = [];
   let scopeMounted = false;
@@ -313,6 +351,7 @@ export function installVehicles(deps = {}) {
     })
     : null;
   let pilot = null; // active piloting session
+  let passenger = null; // active passenger riding session (Seats 1..3)
   let fall = null; // bail-out freefall of the local player (server-owned body, predicted here)
   let pendingBoard = null;
   let disposed = false;
@@ -339,12 +378,15 @@ export function installVehicles(deps = {}) {
 
   function teardownSession(why) {
     if (pilot) stopPiloting(why);
+    if (passenger) stopRiding(why);
     endHandoff(why);
     if (fall) { chutes?.close(localGuid()); stopFall(why); }
     releaseLandingCam();
     try {
       vehicleAudio?.stop({ fadeSec: 0 });
       vehicleAudio?.dispose();
+      groundAudio?.stop({ fadeSec: 0 });
+      groundAudio?.dispose();
     } catch (_) {}
     try {
       sh()?.clearVehicleSeat?.();
@@ -423,10 +465,33 @@ export function installVehicles(deps = {}) {
 
   /** A vehicle leaves this client (despawn, prune, dispose): its airframe goes, its stand-in guid is no longer hidden
    *  (ACE recycles dynamic guids: a later object with the same guid must not come back hidden). */
+  function groundParamsFromProfile(p) {
+    if (typeof GM.paramsFromProfile === "function") return GM.paramsFromProfile(p);
+    return {
+      ...GM.PARAMS,
+      locomotion: 2,
+      vMax: p?.vMax || GM.PARAMS.vMaxRoad,
+      vCruise: p?.vCruise || GM.PARAMS.vMaxRoad * 0.75,
+      vMin: p?.vMin || 0,
+      accel: p?.accel || GM.PARAMS.launchAccel,
+      decel: p?.decel || GM.PARAMS.normalBrake,
+      leadSeconds: p?.leadSeconds || 4,
+      ...(p || {}),
+    };
+  }
+
   function forgetVehicle(v) {
     if (!v) return;
     try { airframes?.remove(v.guid); } catch (_) { /* gone */ }
     try { aeroFx?.forgetVehicle(v.guid); } catch (_) { /* gone */ }
+    const gm = groundModels.get(v.guid >>> 0);
+    if (gm) {
+      try {
+        if (gm.root?.parent) gm.root.parent.remove(gm.root);
+        gm.dispose?.();
+      } catch (_) {}
+      groundModels.delete(v.guid >>> 0);
+    }
     if (v.standInHidden) {
       v.standInHidden = false;
       try { em()?.setFilmHidden?.(v.guid, false); } catch (_) { /* gone */ }
@@ -439,6 +504,56 @@ export function installVehicles(deps = {}) {
    */
   function drawVehicle(v, pose, q, opts = {}) {
     writeEntity(v.guid, pose.x, pose.y, pose.z, q, true);
+    const isGround = v.locomotion === 2 || v.profile?.locomotion === 2 || v.profile?.profileKey === "jeep-mb" || v.params?.locomotion === 2;
+    if (isGround) {
+      const inEm = em()?.entityMap?.get(v.guid);
+      if (!v.standInHidden || (inEm && inEm._filmHidden !== true)) {
+        try { if (em()?.setFilmHidden?.(v.guid, true)) v.standInHidden = true; } catch (_) {}
+      }
+      const model = ensureGroundModel(v);
+      if (model) {
+        model.root.position.set(pose.x, pose.y, pose.z);
+        model.root.quaternion.set(q[1], q[2], q[3], q[0]);
+        const speed = opts.speed ?? pose.speed ?? 0;
+        const steer = opts.steerAngle ?? pose.steerAngle ?? opts.yaw ?? 0;
+        const gFlags = opts.groundFlags ?? pose.groundFlags ?? v.last?.ground_flags ?? 0;
+        const lights = opts.headlights !== undefined ? opts.headlights : Boolean(gFlags & 0x10);
+        const braking = opts.braking !== undefined ? opts.braking : (opts.handbrake !== undefined ? opts.handbrake : Boolean(gFlags & 0x02));
+        const boost = opts.boost !== undefined ? opts.boost : Boolean(gFlags & 0x04);
+        const windscreen = opts.windscreenFolded !== undefined ? opts.windscreenFolded : (v.windscreenFolded ?? false);
+        const accel = opts.accel !== undefined ? opts.accel : ((opts.throttle ?? 0) * 11.2 - (braking ? 14.0 : 0));
+
+        model.update({
+          dt: opts.dt ?? 1 / 60,
+          speed,
+          steerAngle: steer,
+          accel,
+          headlights: lights,
+          braking,
+          boost,
+          windscreenFolded: windscreen,
+          suspensionFL: opts.suspensionFL,
+          suspensionFR: opts.suspensionFR,
+          suspensionRL: opts.suspensionRL,
+          suspensionRR: opts.suspensionRR,
+        }, opts.dt ?? 1 / 60);
+      }
+      try {
+        groundFx?.update(v.guid, pose, {
+          speed: opts.speed ?? pose.speed ?? 0,
+          steerAngle: opts.steerAngle ?? pose.steerAngle ?? 0,
+          handbrake: opts.braking ?? opts.handbrake ?? Boolean((opts.groundFlags ?? pose.groundFlags ?? v.last?.ground_flags ?? 0) & 0x02),
+          throttle: opts.throttle ?? (pose.mode === 0 ? 0 : 0.72),
+          boost: opts.boost ?? Boolean((opts.groundFlags ?? pose.groundFlags ?? v.last?.ground_flags ?? 0) & 0x04),
+          groundFlags: opts.groundFlags ?? pose.groundFlags ?? v.last?.ground_flags ?? 0,
+          surfaceFamily: opts.surfaceFamily ?? pose.surfaceFamily ?? v.last?.surface_family ?? 0,
+          isBridge: !!opts.isBridge,
+          dt: opts.dt ?? 1 / 60,
+        }, opts.dt ?? 1 / 60);
+      } catch (_) {}
+      return true;
+    }
+
     const g = ground(pose.x, pose.y);
     const agl = Number.isNaN(g) ? undefined : pose.z - g;
     try {
@@ -484,15 +599,19 @@ export function installVehicles(deps = {}) {
       case "profile": {
         const v = vehicleOf(m.vehicle);
         v.profile = m;
-        v.params = FM.paramsFromProfile(m);
+        if (m.locomotion === 2 || m.profileKey === "jeep-mb") {
+          v.locomotion = 2;
+          v.params = groundParamsFromProfile(m);
+          if (THREE) ensureGroundModel(v);
+        } else {
+          v.locomotion = 1;
+          v.params = FM.paramsFromProfile(m);
+          if (airframes && hasComposite(m)) { try { airframes.ensure(v); } catch (_) { /* stand-in */ } }
+        }
         stats.profiles++;
-        // start decoding the composite airframe now (the stand-in stays until it is ready)
-        if (airframes && hasComposite(m)) { try { airframes.ensure(v); } catch (_) { /* stand-in */ } }
         if (live?.renderer) {
           try { if (m.weapons?.length) fx.warm?.(); chutes?.warm?.(); aeroFx?.warm?.(); } catch (_) { /* best effort */ }
         }
-        // The pilot's model is the stand-in object itself in v1 (profile.parts = [the stand-in]); it stays visible
-        // and is posed by afterTick. A composite airframe would hide the stand-in here (setFilmHidden).
         break;
       }
       case "seat": {
@@ -504,12 +623,32 @@ export function installVehicles(deps = {}) {
           stats.boardRefusals++;
           stats.lastRefusal = REFUSAL[m.reason] ?? `reason ${m.reason}`;
           pendingBoard = null;
+          v.hotSwapTarget = null;
+          v.hotSwapFrom = null;
           flashPrompt(`Cannot board: ${stats.lastRefusal}`, 2500);
         } else if (m.state === 1 && (m.occupant >>> 0) === localGuid()) {
           pendingBoard = null;
-          startPiloting(v, m.seat);
-        } else if (m.state === 0 && pilot && pilot.vehicle === v) {
-          stopPiloting("seat released");
+          const fromSeat = (v.hotSwapTarget === m.seat && v.hotSwapFrom !== undefined && v.hotSwapFrom !== null)
+            ? v.hotSwapFrom
+            : (pilot ? pilot.seat : (passenger ? passenger.seat : null));
+          v.hotSwapTarget = null;
+          v.hotSwapFrom = null;
+
+          if (m.seat === 0) {
+            startPiloting(v, 0, fromSeat);
+          } else {
+            startRiding(v, m.seat, fromSeat);
+          }
+        } else if (m.state === 0) {
+          const activeSeat = pilot ? pilot.seat : (passenger ? passenger.seat : null);
+          const isMyVehicle = (pilot && pilot.vehicle === v) || (passenger && passenger.vehicle === v);
+          const isMySeat = isMyVehicle && activeSeat === m.seat;
+          const isHotSwapping = (v.hotSwapTarget !== null && v.hotSwapTarget !== undefined && (nowSec() - (v.hotSwapRequestedAt || 0) < 2.0));
+
+          if (isMySeat && !isHotSwapping) {
+            if (pilot) stopPiloting("seat released");
+            if (passenger) stopRiding("seat released");
+          }
         }
         break;
       }
@@ -769,47 +908,130 @@ export function installVehicles(deps = {}) {
   }
 
   function makePredictor(v, m) {
-    return createPilotPredictor({ params: v.params, ground, initial: stateFromMsg(m), vCap: m.vCap, startSeq: 1 });
+    const isGround = v.locomotion === 2 || v.profile?.locomotion === 2 || m?.locomotion === 2;
+    return createPilotPredictor({
+      params: v.params,
+      ground,
+      initial: stateFromMsg(m),
+      vCap: m.vCap,
+      startSeq: 1,
+      locomotion: isGround ? 2 : 1,
+    });
   }
 
-  function startPiloting(v, seat) {
-    if (pilot) stopPiloting("re-seat");
+  function requestSeatHotSwap(v, newSeat) {
+    const curSeat = pilot ? pilot.seat : (passenger ? passenger.seat : -1);
+    if (curSeat === newSeat) return;
+    v.hotSwapTarget = newSeat;
+    v.hotSwapFrom = curSeat;
+    v.hotSwapRequestedAt = nowSec();
+    try { sh().vehicleBoard(v.guid, newSeat); } catch (_) {}
+  }
+
+  function requestPassengerExit(mode = 0) {
+    if (!passenger) return;
+    try { sh().vehicleExit(passenger.vehicle.guid, mode); } catch (_) {}
+  }
+
+  function startPiloting(v, seat, hotSwapFrom = null) {
+    let camera = null;
+    let camRig = null;
+    if (passenger) {
+      camera = passenger.camera;
+      camRig = passenger.camRig;
+      stopRiding("pilot transition", true /* keepCamera */);
+    } else if (pilot) {
+      camera = pilot.camera;
+      camRig = pilot.camRig;
+      stopPiloting("re-seat", true /* keepCamera */);
+    }
     endHandoff("re-seat");
     releaseLandingCam();
     if (!v.params) return;
-    const controls = createVehicleControls({ window: win, canvas: live.renderer?.domElement ?? null });
+
+    const isGround = v.locomotion === 2 || v.profile?.locomotion === 2 || v.profile?.profileKey === "jeep-mb";
+    const controls = createVehicleControls({
+      window: win,
+      canvas: live.renderer?.domElement ?? null,
+      locomotion: isGround ? 2 : 1,
+      seatIndex: 0,
+    });
     controls.lock();
     controls.throttle = 0;
-    let camera = null;
-    try {
-      camera = createCameraOwner({ liveScene3d: live, THREE, window: win, get sessionHandle() { return sh(); } });
-      camera.own();
-      unfadeAvatar();
-    } catch (e) {
-      camera = null;
-      console.warn("[vehicles] camera owner unavailable:", e && e.message ? e.message : e);
+
+    if (!camera) {
+      try {
+        camera = createCameraOwner({ liveScene3d: live, THREE, window: win, get sessionHandle() { return sh(); } });
+        camera.own();
+        unfadeAvatar();
+      } catch (e) {
+        camera = null;
+        console.warn("[vehicles] camera owner unavailable:", e && e.message ? e.message : e);
+      }
     }
-    // M5: the rig sits (retail Sitting, held) and the R-2800 radial starts on the effects bus
+    if (!camRig) {
+      camRig = createPilotCameraRig({
+        ground,
+        chaseCfg: CHASE,
+        initialView: "chase",
+        locomotion: isGround ? 2 : 1,
+        seatIndex: 0,
+      });
+    } else {
+      camRig.setSeatIndex?.(0);
+    }
+
     try { em()?.setMotion?.(localGuid(), MOTION.SITTING, MOTION.NONCOMBAT, 1.0); } catch (_) { /* never fatal */ }
-    try {
-      vehicleAudio?.start();
-      vehicleAudio?.canopy({ open: false, pos: v.last ? stateFromMsg(v.last) : null, mine: true, fpv: false });
-    } catch (_) {}
-    // M5 boarding hop: from where the rig stands now up to the seat (local presentation; board_hop.js)
+    if (isGround) {
+      try { groundAudio?.start(); } catch (_) {}
+    } else {
+      try {
+        vehicleAudio?.start();
+        vehicleAudio?.canopy({ open: false, pos: v.last ? stateFromMsg(v.last) : null, mine: true, fpv: false });
+      } catch (_) {}
+    }
+
     let hop = null;
     exitHop = null;
     const rig = em()?.entityMap?.get(localGuid());
-    if (hopsOn && rig?.root) {
+    if (hopsOn && rig?.root && (hotSwapFrom === null || hotSwapFrom === undefined)) {
       const r = rig.root;
       hop = { from: { x: r.position.x, y: r.position.y, z: r.position.z }, h0: headingOfQuat([r.quaternion.w, r.quaternion.x, r.quaternion.y, r.quaternion.z]), t: 0, dur: 0 };
     }
-    const camRig = createPilotCameraRig({ ground, chaseCfg: CHASE, initialView: "chase" });
+
+    let hotSwap = null;
+    if (hotSwapFrom !== null && hotSwapFrom !== undefined && hotSwapFrom !== seat) {
+      hotSwap = { fromSeat: hotSwapFrom, toSeat: seat, startTime: nowSec(), duration: 0.35 };
+    }
+
     pilot = {
-      audio: vehicleAudio, hop, camRig,
-      vehicle: v, seat, controls, camera, acc: 0, predictor: v.last ? makePredictor(v, v.last) : null,
-      startedAt: nowSec(), view: "chase", camHeading: null, camPitch: null, camRoll: null, camLift: 0, lastServer: v.last, leadLb: 0, sent: 0,
-      unsub: null, lastSeat: null, trail: [], gLoad: 1.0, lastGearDown: true, lastFireAt: -10,
+      audio: isGround ? groundAudio : vehicleAudio,
+      hop,
+      camRig,
+      hotSwap,
+      vehicle: v,
+      seat,
+      controls,
+      camera,
+      acc: 0,
+      predictor: v.last ? makePredictor(v, v.last) : null,
+      startedAt: nowSec(),
+      view: "chase",
+      camHeading: null,
+      camPitch: null,
+      camRoll: null,
+      camLift: 0,
+      lastServer: v.last,
+      leadLb: 0,
+      sent: 0,
+      unsub: null,
+      lastSeat: null,
+      trail: [],
+      gLoad: 1.0,
+      lastGearDown: true,
+      lastFireAt: -10,
     };
+
     pilot.unsub = controls.onAction((a) => {
       if (a.type === "camera") {
         pilot.view = pilot.camRig.cycleView();
@@ -817,11 +1039,20 @@ export function installVehicles(deps = {}) {
         pilot.camPitch = null;
         pilot.camRoll = null;
         pilot.camLift = 0;
-        try { vehicleAudio?.canopy({ open: pilot.view === "chase", mine: true, fpv: pilot.view === "cockpit" }); } catch (_) {}
+        try {
+          if (!isGround) vehicleAudio?.canopy({ open: pilot.view === "chase", mine: true, fpv: pilot.view === "cockpit" });
+        } catch (_) {}
       } else if (a.type === "mouseAim") {
         const nextAim = !controls.mouseAim;
         controls.setMouseAim(nextAim, pilot.predictor?.state ?? null);
         flashPrompt(nextAim ? "Mouse-Aim Instructor ON" : "Mouse-Aim OFF", 1200);
+      } else if (a.type === "seat") {
+        if (Number.isFinite(a.seatIndex) && a.seatIndex >= 0 && a.seatIndex <= 3) {
+          requestSeatHotSwap(v, a.seatIndex);
+        }
+      } else if (a.type === "windscreen") {
+        v.windscreenFolded = !v.windscreenFolded;
+        flashPrompt(v.windscreenFolded ? "Windscreen folded" : "Windscreen raised", 1200);
       } else if (a.type === "hideHud") osd.toggleHidden();
       else if (a.type === "exit") requestExit();
     });
@@ -829,7 +1060,120 @@ export function installVehicles(deps = {}) {
     console.log(`[vehicles] piloting 0x${v.guid.toString(16)} seat ${seat}`);
   }
 
-  function stopPiloting(why) {
+  function startRiding(v, seat, hotSwapFrom = null) {
+    let camera = null;
+    let camRig = null;
+    if (pilot) {
+      camera = pilot.camera;
+      camRig = pilot.camRig;
+      stopPiloting("passenger transition", true /* keepCamera */);
+    } else if (passenger) {
+      camera = passenger.camera;
+      camRig = passenger.camRig;
+      stopRiding("re-seat", true /* keepCamera */);
+    }
+    endHandoff("re-seat");
+    releaseLandingCam();
+
+    const controls = createVehicleControls({
+      window: win,
+      canvas: live.renderer?.domElement ?? null,
+      locomotion: 2,
+      seatIndex: seat,
+    });
+    controls.lock();
+
+    if (!camera) {
+      try {
+        camera = createCameraOwner({ liveScene3d: live, THREE, window: win, get sessionHandle() { return sh(); } });
+        camera.own();
+        unfadeAvatar();
+      } catch (e) {
+        camera = null;
+        console.warn("[vehicles] camera owner unavailable:", e && e.message ? e.message : e);
+      }
+    }
+    if (!camRig) {
+      camRig = createPilotCameraRig({
+        ground,
+        chaseCfg: CHASE,
+        initialView: "chase",
+        locomotion: 2,
+        seatIndex: seat,
+      });
+    } else {
+      camRig.setSeatIndex?.(seat);
+    }
+
+    try { em()?.setMotion?.(localGuid(), MOTION.SITTING, MOTION.NONCOMBAT, 1.0); } catch (_) {}
+    try { groundAudio?.start(); } catch (_) {}
+
+    let hotSwap = null;
+    if (hotSwapFrom !== null && hotSwapFrom !== undefined && hotSwapFrom !== seat) {
+      hotSwap = { fromSeat: hotSwapFrom, toSeat: seat, startTime: nowSec(), duration: 0.35 };
+    }
+
+    passenger = {
+      audio: groundAudio,
+      camRig,
+      hotSwap,
+      vehicle: v,
+      seat,
+      controls,
+      camera,
+      startedAt: nowSec(),
+      view: "chase",
+      unsub: null,
+      lastSeat: null,
+      trail: [],
+    };
+
+    passenger.unsub = controls.onAction((a) => {
+      if (a.type === "camera") {
+        passenger.view = passenger.camRig.cycleView();
+      } else if (a.type === "seat") {
+        if (Number.isFinite(a.seatIndex) && a.seatIndex >= 0 && a.seatIndex <= 3) {
+          requestSeatHotSwap(v, a.seatIndex);
+        }
+      } else if (a.type === "windscreen") {
+        v.windscreenFolded = !v.windscreenFolded;
+        flashPrompt(v.windscreenFolded ? "Windscreen folded" : "Windscreen raised", 1200);
+      } else if (a.type === "hideHud") {
+        osd.toggleHidden();
+      } else if (a.type === "exit") {
+        requestPassengerExit();
+      }
+    });
+
+    osd.prompt(null);
+    console.log(`[vehicles] riding 0x${v.guid.toString(16)} seat ${seat}`);
+  }
+
+  function stopRiding(why, keepCamera = false) {
+    if (!passenger) return;
+    const p = passenger;
+    passenger = null;
+    try { p.unsub?.(); } catch (_) {}
+    try { p.controls?.dispose(); } catch (_) {}
+    if (!keepCamera) {
+      try { p.camera?.release(); p.camera?.dispose(); } catch (_) {}
+      try { sh()?.clearVehicleSeat?.(); } catch (_) {}
+      try { em()?.setMotion?.(localGuid(), MOTION.READY, MOTION.NONCOMBAT, 1.0); } catch (_) {}
+      try { groundAudio?.stop({ fadeSec: 0.25 }); } catch (_) {}
+    }
+    try {
+      if (win?.__inputFunnel && typeof win.__inputFunnel.unpoison === "function") {
+        win.__inputFunnel.unpoison();
+      }
+      if (win?.__inputFunnel && typeof win.__inputFunnel.releaseHeld === "function") {
+        win.__inputFunnel.releaseHeld("vehicle");
+      }
+    } catch (_) {}
+    osd.update(null);
+    console.log(`[vehicles] stopped riding (${why})`);
+  }
+
+  function stopPiloting(why, keepCamera = false) {
     if (!pilot) return;
     const p = pilot;
     pilot = null; if (FLIGHT_RESIDENCY) clearFlightHint();
@@ -837,9 +1181,6 @@ export function installVehicles(deps = {}) {
       lastPilotKin = p.predictor && p.vehicle?.params
         ? { vehicle: p.vehicle.guid >>> 0, vel: FM.velocity(p.predictor.state, p.vehicle.params), at: nowSec() } : null;
     } catch (_) { lastPilotKin = null; }
-    // a seat released in the air = the bail's first half (BAIL_HANDOFF): keep the camera, the aircraft and the body
-    // where they were drawn until the Bail event arrives — unless a teleport released it (ACE OnPlayerTeleport: no Bail
-    // follows, and the hand-off's seat lock would hold the body at the old site over the teleport's destination)
     const mode = p.predictor?.state?.mode;
     const v = p.vehicle;
     const flying = !disposed && p.predictor && v?.params && vehicles.get(v.guid) === v && mode !== FM.MODE.PARKED && mode !== FM.MODE.CRASHED;
@@ -853,6 +1194,8 @@ export function installVehicles(deps = {}) {
       vehicleAudio?.stop({ fadeSec: (inAir && !isTeardown) ? 0.25 : 0 });
       if (!inAir && why === "seat released") vehicleAudio?.canopy({ open: true, mine: true, fpv: false });
       if (isTeardown) vehicleAudio?.dispose();
+      groundAudio?.stop({ fadeSec: 0.25 });
+      if (isTeardown) groundAudio?.dispose();
     } catch (_) {}
     try {
       if (win?.__inputFunnel && typeof win.__inputFunnel.unpoison === "function") {
@@ -863,12 +1206,7 @@ export function installVehicles(deps = {}) {
       }
     } catch (_) {}
     if (!inAir) { try { em()?.setMotion?.(localGuid(), MOTION.READY, MOTION.NONCOMBAT, 1.0); } catch (_) {} }
-    // (the stand-in stays hidden under a composite airframe: un-hiding it flashed the retail stand-in for a frame)
     if (p.rigHidden) { try { em()?.setFilmHidden?.(localGuid(), false); if (!p.rigComposite) em()?.setFilmHidden?.(p.vehicle.guid, false); } catch (_) { /* */ } }
-    // the aircraft got no observer samples while piloted (its states came as pilot copies): drop the stale ones from
-    // before boarding — drawn for 1-3 frames at the old parked spot after a landing + exit, km away after a bail. In
-    // the air it is dead-reckoned from the predictor (neutral input) while the FRESH track fills; parked it stays
-    // where the pilot path drew it until its first observer state.
     if (v && vehicles.get(v.guid) === v) {
       v.track = createObserverTrack();
       v.blend = null;
@@ -1320,9 +1658,30 @@ export function installVehicles(deps = {}) {
    * Seat world position + orientation for a vehicle pose. With a composite airframe the parked aircraft sits tail-down
    * on its wheels (airframe.js GEAR_PITCH about the main wheels' contact line): the seat rides that tilt too.
    */
+  function currentHotSwapSeat(v, pose, hs) {
+    const wallNow = nowSec();
+    const u = Math.min(1.0, Math.max(0.0, (wallNow - hs.startTime) / (hs.duration || 0.35)));
+    const hotSwapOffset = interpolateSeatHotSwap(hs.fromSeat, hs.toSeat, u);
+    let q = FM.orientation(pose.heading, pose.pitch, pose.bank);
+    const r = FM.rotate(q, hotSwapOffset);
+    if (u >= 1.0) {
+      if (pilot && pilot.hotSwap === hs) pilot.hotSwap = null;
+      if (passenger && passenger.hotSwap === hs) passenger.hotSwap = null;
+    }
+    return { x: pose.x + r[0], y: pose.y + r[1], z: pose.z + r[2], q };
+  }
+
+  /**
+   * Seat world position + orientation for a vehicle pose. With a composite airframe the parked aircraft sits tail-down
+   * on its wheels (airframe.js GEAR_PITCH about the main wheels' contact line): the seat rides that tilt too.
+   */
   function seatOf(v, pose, seat) {
     let q = FM.orientation(pose.heading, pose.pitch, pose.bank);
-    let off = v.profile?.seats?.[seat]?.offset ?? [0, 0, 0];
+    let off = v.profile?.seats?.[seat]?.offset;
+    if ((!off || (off[0] === 0 && off[1] === 0 && off[2] === 0)) && (v.locomotion === 2 || v.profile?.locomotion === 2 || v.profile?.profileKey === "jeep-mb")) {
+      try { off = getSeatOffset(seat); } catch (_) {}
+    }
+    if (!off) off = [0, 0, 0];
     const tilt = airframes ? airframes.tiltOf(v.guid) : 0;
     if (tilt) {
       const inst = airframes.get(v.guid);
@@ -1394,7 +1753,7 @@ export function installVehicles(deps = {}) {
     const h = sh();
 
     // the local body rides the seat (wasm: no local physics while locked)
-    const seat = seatOf(v, pose, p.seat);
+    const seat = p.hotSwap ? currentHotSwapSeat(v, pose, p.hotSwap) : seatOf(v, pose, p.seat);
     const cl = FM.toCellLocal(seat.x, seat.y, seat.z);
     try { h.setVehicleSeat(v.guid, cl.cell, cl.x, cl.y, cl.z, pose.heading); } catch (_) {}
 
@@ -1438,6 +1797,36 @@ export function installVehicles(deps = {}) {
       }
     } else {
       writeEntity(localGuid(), seat.x, seat.y, seat.z, seat.q);
+    }
+
+    // Pose ALL 4 seated avatars (0..3) with 34-part IK
+    const isGround = v.locomotion === 2 || v.profile?.locomotion === 2 || v.profile?.profileKey === "jeep-mb";
+    const driverSteer = ctrl.steer ? ctrl.steer : (pose.steerAngle || 0);
+    const driverAccelLong = isGround ? ((ctrl.throttle ?? 0) * 11.2 - (ctrl.handbrake ? 22.0 : 0)) : 0;
+    const driverAccelLat = isGround ? (driverSteer * (pose.speed || 0)) : 0;
+    const kin = {
+      steerAngle: driverSteer,
+      speed: pose.speed || 0,
+      accelLong: driverAccelLong,
+      accelLat: driverAccelLat,
+      yawRate: 0,
+    };
+
+    for (let s = 0; s < 4; s++) {
+      const occ = v.seats[s] >>> 0;
+      if (occ && v.profile) {
+        const isLocal = occ === localGuid();
+        const sPos = isLocal && p.hotSwap ? currentHotSwapSeat(v, pose, p.hotSwap) : seatOf(v, pose, s);
+        if (!isLocal) {
+          writeEntity(occ, sPos.x, sPos.y, sPos.z, sPos.q, true);
+        } else if (!p.hop) {
+          writeEntity(localGuid(), sPos.x, sPos.y, sPos.z, sPos.q);
+        }
+        const entityInst = em()?.entityMap?.get(occ);
+        if (entityInst && isGround) {
+          try { applySeatPoseToEntity(entityInst, s, pose, kin, dt); } catch (_) {}
+        }
+      }
     }
 
     // cockpit/hood view: the eye sits where the seated pilot's head is (or on the cowling), and the retail stand-in has
@@ -1520,46 +1909,184 @@ export function installVehicles(deps = {}) {
       }
     } catch (_) { /* streaming hint only */ }
 
-    // R-2800 Double Wasp radial, 3-blade prop chop/tip buzz, supercharger, slipstream, dive howl, buffet & gear cues
-    try {
-      const gearDown = pose.mode === FM.MODE.PARKED || pose.mode === FM.MODE.TAKEOFF || pose.mode === FM.MODE.LANDING;
-      if (gearDown !== p.lastGearDown) {
-        p.lastGearDown = gearDown;
-        p.audio?.gear({ deploying: gearDown, pos: [pose.x, pose.y, pose.z], mine: true, fpv: p.view === "cockpit" });
-      }
-      p.audio?.update({
-        throttle: ctrl.throttle,
+    if (isGround) {
+      try {
+        groundAudio?.update({
+          speed: pose.speed,
+          throttle: ctrl.throttle,
+          steer: driverSteer,
+          handbrake: !!ctrl.handbrake,
+          horn: !!ctrl.horn,
+          boost: !!ctrl.boost,
+          surfaceFamily: pose.surfaceFamily ?? v.last?.surface_family ?? 0,
+          pos: [pose.x, pose.y, pose.z],
+          fpv: p.view === "cockpit",
+          dt,
+        });
+        if (ctrl.horn !== undefined) groundAudio?.horn?.(!!ctrl.horn);
+      } catch (_) {}
+
+      osd.update({
+        locomotion: 2,
         speed: pose.speed,
-        mode: pose.mode,
-        boost: ctrl.boost,
-        pitch: pose.pitch,
-        bank: pose.bank,
-        gLoad: p.gLoad,
-        vMin: v.params?.vMin ?? 30,
-        backPressure: !!(p.lastServer && (p.lastServer.flags & 0x04)),
-        level: pose.mode === FM.MODE.PARKED && ctrl.throttle < 0.05 ? 0.45 : 1,
-        fpv: p.view === "cockpit",
+        seatIndex: 0,
+        seats: v.seats,
+        groundFlags: v.last?.ground_flags ?? v.last?.groundFlags ?? 0,
+        surfaceFamily: pose.surfaceFamily ?? v.last?.surface_family ?? 0,
+        boost: !!ctrl.boost,
+        headlights: !!ctrl.headlights,
+        handbrake: !!ctrl.handbrake,
+        horn: !!ctrl.horn,
+        passenger: false,
+        throttle: ctrl.throttle,
+        steerAngle: driverSteer,
+      });
+      osd.sights(null, null, "");
+    } else {
+      // R-2800 Double Wasp radial, 3-blade prop chop/tip buzz, supercharger, slipstream, dive howl, buffet & gear cues
+      try {
+        const gearDown = pose.mode === FM.MODE.PARKED || pose.mode === FM.MODE.TAKEOFF || pose.mode === FM.MODE.LANDING;
+        if (gearDown !== p.lastGearDown) {
+          p.lastGearDown = gearDown;
+          p.audio?.gear({ deploying: gearDown, pos: [pose.x, pose.y, pose.z], mine: true, fpv: p.view === "cockpit" });
+        }
+        p.audio?.update({
+          throttle: ctrl.throttle,
+          speed: pose.speed,
+          mode: pose.mode,
+          boost: ctrl.boost,
+          pitch: pose.pitch,
+          bank: pose.bank,
+          gLoad: p.gLoad,
+          vMin: v.params?.vMin ?? 30,
+          backPressure: !!(p.lastServer && (p.lastServer.flags & 0x04)),
+          level: pose.mode === FM.MODE.PARKED && ctrl.throttle < 0.05 ? 0.45 : 1,
+          fpv: p.view === "cockpit",
+          pos: [pose.x, pose.y, pose.z],
+          dt,
+        });
+      } catch (_) { /* audio never breaks flight */ }
+
+      // Fighter HUD + sights
+      const g0 = ground(pose.x, pose.y);
+      const st = p.predictor.stats();
+      const velNow = v.params ? FM.velocity(pose, v.params) : [0, 0, 0];
+      osd.update({
+        name: v.profile?.displayName, speed: pose.speed,
+        agl: Number.isNaN(g0) ? 0 : pose.z - g0, msl: pose.z, vsi: velNow[2],
+        heading: pose.heading, pitch: pose.pitch, bank: pose.bank, gLoad: p.gLoad,
+        throttle: ctrl.throttle, mode: pose.mode, vCap: p.predictor.vCap,
+        vMin: v.params?.vMin, vMax: v.params?.vMax, ceilingAgl: v.params?.ceilingAgl,
+        boost: !!ctrl.boost, land: !!ctrl.land, mouseAim: !!ctrl.mouseAim, pitchTrim: ctrl.pitchTrim ?? 0,
+        corr: `corr ${st.corrections} (last ${st.lastCorrectionM.toFixed(2)} m)`,
+        warn: p.lastServer && (p.lastServer.flags & 0x04),
+        arms: armament(v, p.lastServer),
+      });
+      tickSights(p, v, pose, q, wallNow, ctrl, velNow);
+    }
+  }
+
+  function tickPassenger(dt) {
+    const p = passenger;
+    if (!p) return;
+    const v = p.vehicle;
+    const wallNow = nowSec();
+    let pose = observedPose(v, wallNow);
+    if (!pose && v.last) pose = stateFromMsg(v.last);
+    if (!pose) return;
+
+    const seat = p.hotSwap ? currentHotSwapSeat(v, pose, p.hotSwap) : seatOf(v, pose, p.seat);
+    const cl = FM.toCellLocal(seat.x, seat.y, seat.z);
+    try { sh().setVehicleSeat(v.guid, cl.cell, cl.x, cl.y, cl.z, pose.heading); } catch (_) {}
+    p.lastSeat = { x: seat.x, y: seat.y, z: seat.z, heading: pose.heading, t: wallNow };
+    pushTrail(p.trail, seat, wallNow);
+
+    const raw = p.controls.poll(dt, pose, v.params);
+    const ctrl = p.controls.status();
+
+    const camStep = p.camRig.step({
+      seat,
+      pose,
+      params: v.params,
+      controlsStatus: ctrl,
+      dt,
+      seatIndex: p.seat,
+      firing: false,
+      camTweak,
+    });
+    p.view = camStep.view;
+    if (p.camera && p.camera.owned) {
+      p.camera.write(camStep.cam);
+    }
+
+    const q = FM.orientation(pose.heading, pose.pitch, pose.bank);
+    drawVehicle(v, pose, q, {
+      dt,
+      speed: pose.speed,
+      steerAngle: pose.steerAngle,
+      groundFlags: v.last?.ground_flags ?? v.last?.groundFlags,
+      surfaceFamily: pose.surfaceFamily ?? v.last?.surface_family,
+      throttle: 0,
+      headlights: Boolean((v.last?.ground_flags ?? 0) & 0x10),
+      braking: Boolean((v.last?.ground_flags ?? 0) & 0x02),
+      boost: Boolean((v.last?.ground_flags ?? 0) & 0x04),
+      windscreenFolded: v.windscreenFolded ?? false,
+    });
+
+    const isGround = v.locomotion === 2 || v.profile?.locomotion === 2 || v.profile?.profileKey === "jeep-mb";
+    const kin = {
+      steerAngle: pose.steerAngle || 0,
+      speed: pose.speed || 0,
+      accelLong: 0,
+      accelLat: (pose.steerAngle || 0) * (pose.speed || 0),
+      yawRate: 0,
+    };
+
+    for (let s = 0; s < 4; s++) {
+      const occ = v.seats[s] >>> 0;
+      if (occ && v.profile) {
+        const isLocal = occ === localGuid();
+        const sPos = isLocal && p.hotSwap ? currentHotSwapSeat(v, pose, p.hotSwap) : seatOf(v, pose, s);
+        if (!isLocal) {
+          writeEntity(occ, sPos.x, sPos.y, sPos.z, sPos.q, true);
+        } else {
+          writeEntity(localGuid(), sPos.x, sPos.y, sPos.z, sPos.q);
+        }
+        const entityInst = em()?.entityMap?.get(occ);
+        if (entityInst && isGround) {
+          try { applySeatPoseToEntity(entityInst, s, pose, kin, dt); } catch (_) {}
+        }
+      }
+    }
+
+    osd.update({
+      locomotion: 2,
+      speed: pose.speed,
+      seatIndex: p.seat,
+      seats: v.seats,
+      groundFlags: v.last?.ground_flags ?? v.last?.groundFlags ?? 0,
+      surfaceFamily: pose.surfaceFamily ?? v.last?.surface_family ?? 0,
+      boost: Boolean((v.last?.ground_flags ?? 0) & 0x04),
+      headlights: Boolean((v.last?.ground_flags ?? 0) & 0x10),
+      handbrake: Boolean((v.last?.ground_flags ?? 0) & 0x02),
+      horn: Boolean((v.last?.ground_flags ?? 0) & 0x20),
+      passenger: true,
+    });
+
+    try {
+      groundAudio?.update({
+        speed: pose.speed,
+        throttle: 0,
+        steer: 0,
+        handbrake: Boolean((v.last?.ground_flags ?? 0) & 0x02),
+        horn: Boolean((v.last?.ground_flags ?? 0) & 0x20),
+        boost: Boolean((v.last?.ground_flags ?? 0) & 0x04),
+        surfaceFamily: pose.surfaceFamily ?? v.last?.surface_family ?? 0,
         pos: [pose.x, pose.y, pose.z],
+        fpv: p.view === "cockpit",
         dt,
       });
-    } catch (_) { /* audio never breaks flight */ }
-
-    // Fighter HUD + sights
-    const g0 = ground(pose.x, pose.y);
-    const st = p.predictor.stats();
-    const velNow = v.params ? FM.velocity(pose, v.params) : [0, 0, 0];
-    osd.update({
-      name: v.profile?.displayName, speed: pose.speed,
-      agl: Number.isNaN(g0) ? 0 : pose.z - g0, msl: pose.z, vsi: velNow[2],
-      heading: pose.heading, pitch: pose.pitch, bank: pose.bank, gLoad: p.gLoad,
-      throttle: ctrl.throttle, mode: pose.mode, vCap: p.predictor.vCap,
-      vMin: v.params?.vMin, vMax: v.params?.vMax, ceilingAgl: v.params?.ceilingAgl,
-      boost: !!ctrl.boost, land: !!ctrl.land, mouseAim: !!ctrl.mouseAim, pitchTrim: ctrl.pitchTrim ?? 0,
-      corr: `corr ${st.corrections} (last ${st.lastCorrectionM.toFixed(2)} m)`,
-      warn: p.lastServer && (p.lastServer.flags & 0x04),
-      arms: armament(v, p.lastServer),
-    });
-    tickSights(p, v, pose, q, wallNow, ctrl, velNow);
+    } catch (_) {}
   }
 
   /** The OSD's armament block from the profile and the last pilot state. */
@@ -1688,34 +2215,76 @@ export function installVehicles(deps = {}) {
 
   let frameDt = 1 / 60;
   const _obsAudioList = [];
+  const _groundObsAudioList = [];
   function tickObservers() {
     const t = nowSec();
     _obsAudioList.length = 0;
+    _groundObsAudioList.length = 0;
     for (const v of vehicles.values()) {
-      if (pilot && pilot.vehicle === v) continue;
+      if ((pilot && pilot.vehicle === v) || (passenger && passenger.vehicle === v)) continue;
       if (!v.track.count && !v.reckon) continue;
       const pose = observedPose(v, t);
       if (!pose) continue;
+      const isGround = (v.locomotion === 2) || (v.profile?.locomotion === 2) || (v.profile?.profileKey === "jeep-mb");
       const q = FM.orientation(pose.heading, pose.pitch, pose.bank);
       drawVehicle(v, pose, q, { dt: frameDt, throttle: pose.mode === FM.MODE.PARKED ? 0 : undefined });
-      if (vehicleAudio) {
-        _obsAudioList.push({
-          id: v.guid,
-          pos: [pose.x, pose.y, pose.z],
-          vel: v.params ? FM.velocity(pose, v.params) : [0, 0, 0],
-          speed: pose.speed,
-          mode: pose.mode,
-          throttle: pose.mode === FM.MODE.PARKED ? 0 : 0.72,
-        });
+      if (isGround) {
+        if (groundAudio) {
+          _groundObsAudioList.push({
+            id: v.guid,
+            pos: [pose.x, pose.y, pose.z],
+            vel: v.params ? FM.velocity(pose, v.params) : [0, 0, 0],
+            speed: pose.speed ?? 0,
+            mode: pose.mode,
+            throttle: pose.mode === FM.MODE.PARKED ? 0 : 0.72,
+            rpm: pose.rpm ?? (pose.mode === FM.MODE.PARKED ? 600 : 1800),
+            gear: pose.gear ?? 1,
+            surface: pose.surface ?? 0,
+          });
+        }
+      } else {
+        if (vehicleAudio) {
+          _obsAudioList.push({
+            id: v.guid,
+            pos: [pose.x, pose.y, pose.z],
+            vel: v.params ? FM.velocity(pose, v.params) : [0, 0, 0],
+            speed: pose.speed,
+            mode: pose.mode,
+            throttle: pose.mode === FM.MODE.PARKED ? 0 : 0.72,
+          });
+        }
       }
-      const occ = v.seats[0] >>> 0;
-      if (occ && occ !== localGuid() && v.profile) {
-        const seat = seatOf(v, pose, 0);
-        writeEntity(occ, seat.x, seat.y, seat.z, seat.q, true);
+      const maxSeats = isGround ? 4 : (v.profile?.seats?.length || 1);
+      const obsGroundFlags = v.last?.ground_flags ?? v.last?.groundFlags ?? 0;
+      const obsSteer = pose.steerAngle ?? 0;
+      const obsSpeed = pose.speed ?? 0;
+      const kin = {
+        speed: obsSpeed,
+        steerAngle: obsSteer,
+        lateralG: pose.lateralG ?? 0,
+        accelLat: pose.accelLat ?? (obsSteer * obsSpeed),
+        accelLong: pose.accelLong ?? ((obsGroundFlags & 0x02) && obsSpeed > 1.0 ? -8.5 : 0),
+        bumpZ: pose.suspensionCompression ? (pose.suspensionCompression[0] || 0) : 0,
+      };
+      for (let s = 0; s < maxSeats; s++) {
+        const occ = v.seats[s] >>> 0;
+        if (occ && occ !== localGuid() && v.profile) {
+          const seat = seatOf(v, pose, s);
+          writeEntity(occ, seat.x, seat.y, seat.z, seat.q, true);
+          if (isGround) {
+            const inst = em()?.entityMap?.get(occ);
+            if (inst) {
+              try { applySeatPoseToEntity(inst, s, pose, kin, frameDt); } catch (_) {}
+            }
+          }
+        }
       }
     }
     try {
       vehicleAudio?.updateObservers(_obsAudioList, listenerAcPos(), listenerAcVel(), frameDt);
+    } catch (_) { /* observer audio never breaks world tick */ }
+    try {
+      groundAudio?.updateObservers(_groundObsAudioList, listenerAcPos(), listenerAcVel(), frameDt);
     } catch (_) { /* observer audio never breaks world tick */ }
   }
 
@@ -1731,11 +2300,35 @@ export function installVehicles(deps = {}) {
     if (!map) return;
     for (const [guid, v] of vehicles) {
       if (pilot && pilot.vehicle === v) continue;
+      if (passenger && passenger.vehicle === v) continue;
       if (map.has(guid) || t - (v.lastMsgAt ?? 0) < 5) continue;
       forgetVehicle(v);
       vehicles.delete(guid);
       stats.pruned++;
     }
+  }
+
+  const SEAT_LABELS = Object.freeze(["Driver", "Front Passenger", "Rear Left", "Rear Right"]);
+
+  function firstOpenSeat(v) {
+    if (!v || !v.seats) return -1;
+    const isGround = (v.locomotion === 2) || (v.profile?.locomotion === 2) || (v.profile?.profileKey === "jeep-mb");
+    const max = isGround ? 4 : (v.profile?.seats?.length || 1);
+    for (let s = 0; s < max; s++) {
+      if (!(v.seats[s] >>> 0)) return s;
+    }
+    return -1;
+  }
+
+  function seatOccupancyCount(v) {
+    if (!v || !v.seats) return 0;
+    const isGround = (v.locomotion === 2) || (v.profile?.locomotion === 2) || (v.profile?.profileKey === "jeep-mb");
+    const max = isGround ? 4 : (v.profile?.seats?.length || 1);
+    let count = 0;
+    for (let s = 0; s < max; s++) {
+      if (v.seats[s] >>> 0) count++;
+    }
+    return count;
   }
 
   function nearestBoardable() {
@@ -1746,7 +2339,16 @@ export function installVehicles(deps = {}) {
     let best = null;
     let bestD = BOARD_RANGE_M;
     for (const v of vehicles.values()) {
-      if (!v.profile || !v.last || v.last.mode !== FM.MODE.PARKED || (v.seats[0] >>> 0)) continue;
+      if (!v.profile || !v.last) continue;
+      const isGround = (v.locomotion === 2) || (v.profile?.locomotion === 2) || (v.profile?.profileKey === "jeep-mb");
+      if (isGround) {
+        const speed = v.last.speed ?? 0;
+        const validMovement = (v.last.mode === FM.MODE.PARKED) || (speed <= 1.5);
+        if (!validMovement) continue;
+        if (firstOpenSeat(v) < 0) continue;
+      } else {
+        if (v.last.mode !== FM.MODE.PARKED || (v.seats[0] >>> 0)) continue;
+      }
       const s = stateFromMsg(v.last);
       const d = Math.hypot(s.x - px, s.y - py, s.z - pz);
       if (d < bestD) { bestD = d; best = v; }
@@ -1754,17 +2356,38 @@ export function installVehicles(deps = {}) {
     return best;
   }
 
+  let promptText = null;
   function tickPrompt() {
     if (promptTimer) return; // a transient prompt is showing
     // never while falling / in the bail hand-off: ACE would seat a body it is still dropping (it now refuses too)
-    if (pilot || fall || handoff || caps.granted === null || !(caps.granted & CAP_PILOT)) {
-      if (promptVehicle) { promptVehicle = null; osd.prompt(null); }
+    if (pilot || passenger || fall || handoff || caps.granted === null || !(caps.granted & CAP_PILOT)) {
+      if (promptVehicle || promptText) { promptVehicle = null; promptText = null; osd.prompt(null); }
       return;
     }
     const v = nearestBoardable();
-    if (v !== promptVehicle) {
+    if (!v) {
+      if (promptVehicle || promptText) {
+        promptVehicle = null;
+        promptText = null;
+        osd.prompt(null);
+      }
+      return;
+    }
+    const isGround = (v.locomotion === 2) || (v.profile?.locomotion === 2) || (v.profile?.profileKey === "jeep-mb");
+    let text;
+    if (isGround) {
+      const s = firstOpenSeat(v);
+      const seatLabel = SEAT_LABELS[s] ?? `Seat ${s}`;
+      const occ = seatOccupancyCount(v);
+      const maxSeats = 4;
+      text = `Press B to board ${v.profile.displayName} — ${seatLabel} (${occ}/${maxSeats} occupied)`;
+    } else {
+      text = `Press B to board the ${v.profile.displayName}`;
+    }
+    if (v !== promptVehicle || text !== promptText) {
       promptVehicle = v;
-      osd.prompt(v ? `Press B to board the ${v.profile.displayName}` : null);
+      promptText = text;
+      osd.prompt(text);
     }
   }
 
@@ -1772,9 +2395,13 @@ export function installVehicles(deps = {}) {
     if (ev.code !== "KeyB" || ev.repeat || ev.ctrlKey || ev.altKey || ev.metaKey) return;
     const el = win.document?.activeElement;
     if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)) return;
-    if (!promptVehicle || pilot || fall || handoff) return;
+    if (!promptVehicle || pilot || passenger || fall || handoff) return;
     try { live.audioManager?.notifyUserGesture?.(); } catch (_) {}
-    api.board(promptVehicle.guid);
+    const isGround = (promptVehicle.locomotion === 2) || (promptVehicle.profile?.locomotion === 2) || (promptVehicle.profile?.profileKey === "jeep-mb");
+    const targetSeat = isGround ? firstOpenSeat(promptVehicle) : 0;
+    if (targetSeat >= 0) {
+      api.board(promptVehicle.guid, targetSeat);
+    }
   };
   win.addEventListener("keydown", onKeyB, true);
 
@@ -1792,6 +2419,7 @@ export function installVehicles(deps = {}) {
     handshake();
     drainInbox();
     if (pilot) tickPilot(dt);
+    else if (passenger) tickPassenger(dt);
     else if (fall) tickFall();
     else if (handoff) tickHandoff(dt);
     else if (exitHop) tickExitHop(dt);
@@ -1802,7 +2430,7 @@ export function installVehicles(deps = {}) {
     fx.tick(dt);
     tickDeployables(dt);
     aeroFx?.tick(dt);
-    if (!pilot) osd.sights(null, null, "");
+    if (!pilot && !passenger) osd.sights(null, null, "");
     chutes?.tick(dt, chutePose);
   }
 
@@ -1850,10 +2478,17 @@ export function installVehicles(deps = {}) {
           predictor: pilot.predictor?.stats() ?? null, controls: pilot.controls.status(),
           server: pilot.lastServer ? { step: pilot.lastServer.step, ack: pilot.lastServer.ack, mode: pilot.lastServer.mode, speed: pilot.lastServer.speed } : null,
         } : null,
+        passenger: passenger ? {
+          vehicle: passenger.vehicle.guid, seat: passenger.seat, view: passenger.view,
+          controls: passenger.controls?.status?.() ?? null,
+        } : null,
         wire,
         weapons: fx.stats(),
         tracers: (() => { const w = fx.stats(); return { live: w.liveQuarrels, added: w.quarrels }; })(),
         airframes: airframes ? airframes.stats() : { enabled: false },
+        groundFx: groundFx ? (typeof groundFx.stats === "function" ? groundFx.stats() : { enabled: true, activeParticles: groundFx.getActiveCount?.() ?? 0 }) : { enabled: false },
+        groundAudio: groundAudio ? groundAudio.stats : { enabled: false },
+        groundModels: groundModels.size,
         aeroFx: aeroFx ? aeroFx.stats() : { enabled: false },
         audio: vehicleAudio ? vehicleAudio.stats() : { enabled: false },
         chutes: chutes ? chutes.stats() : null,
@@ -1864,26 +2499,40 @@ export function installVehicles(deps = {}) {
     isVehicle: (guid) => vehicles.has(guid >>> 0),
     events: () => events.slice(),
     nearest: () => nearestBoardable()?.guid ?? null,
-    board(guid) {
-      if (pilot || fall || handoff) return { ok: false, reason: "busy" };
-      const g = (guid ?? nearestBoardable()?.guid ?? [...vehicles.keys()][0]) >>> 0;
+    board(guid, seatIndex) {
+      if (pilot || passenger || fall || handoff) return { ok: false, reason: "busy" };
+      const v = guid ? vehicles.get(guid >>> 0) : nearestBoardable();
+      const g = (v?.guid ?? (guid >>> 0) ?? [...vehicles.keys()][0]) >>> 0;
       if (!g) return { ok: false, reason: "no vehicle" };
-      pendingBoard = { guid: g, t: nowSec() };
-      try { sh().vehicleBoard(g, 0); } catch (e) { return { ok: false, reason: String(e) }; }
-      return { ok: true, guid: g };
+      const veh = vehicles.get(g);
+      const isGround = (veh?.locomotion === 2) || (veh?.profile?.locomotion === 2) || (veh?.profile?.profileKey === "jeep-mb");
+      const s = Number.isInteger(seatIndex) && seatIndex >= 0
+        ? seatIndex
+        : (isGround && veh ? Math.max(0, firstOpenSeat(veh)) : 0);
+      pendingBoard = { guid: g, seat: s, t: nowSec() };
+      try { sh().vehicleBoard(g, s); } catch (e) { return { ok: false, reason: String(e) }; }
+      return { ok: true, guid: g, seat: s };
     },
-    exit(mode) { requestExit(mode); return { ok: !!pilot }; },
+    exit(mode) {
+      if (passenger) {
+        requestPassengerExit(mode);
+        return { ok: true, role: "passenger" };
+      }
+      requestExit(mode);
+      return { ok: !!pilot, role: "pilot" };
+    },
     /** Bench: drive the analog input (throttle, pitch, roll, yaw, boost, fire, land) for `ms`. */
     setSticks(axes, ms) { if (!pilot) return false; pilot.controls.setOverride(axes, ms); return true; },
     clearSticks() { pilot?.controls.clearOverride(); },
     setView(view) {
-      if (pilot) {
+      const s = pilot || passenger;
+      if (s) {
         const next = VIEW_MODES.includes(view) ? view : "chase";
-        pilot.view = pilot.camRig ? pilot.camRig.setView(next) : next;
-        pilot.camHeading = null;
-        pilot.camPitch = null;
-        pilot.camRoll = null;
-        pilot.camLift = 0;
+        s.view = s.camRig ? s.camRig.setView(next) : next;
+        s.camHeading = null;
+        s.camPitch = null;
+        s.camRoll = null;
+        s.camLift = 0;
       }
     },
     setMouseAim(on) {
@@ -1901,7 +2550,12 @@ export function installVehicles(deps = {}) {
     spawn(profile) { try { sh().sendChat(`@vehicle spawn ${profile ?? ""}`.trim()); return true; } catch (_) { return false; } },
     despawn(all) { try { sh().sendChat(all ? "@vehicle despawn all" : "@vehicle despawn"); return true; } catch (_) { return false; } },
     get piloting() { return !!pilot; },
+    get riding() { return !!passenger; },
+    get passenger() { return !!passenger; },
     get falling() { return !!fall; },
+    get groundModels() { return groundModels; },
+    get groundFx() { return groundFx; },
+    get groundAudio() { return groundAudio; },
     openChute() { if (fall) { try { sh().vehicleExit(fall.vehicle, 2); } catch (_) {} return true; } return false; },
     deployables: {
       list: () => [...deployables.values()].map((d) => ({
@@ -1928,33 +2582,6 @@ export function installVehicles(deps = {}) {
         j.root.position.set(worldPos[0], worldPos[1], worldPos[2]);
         j.root.rotation.z = -heading;
         j.update(cargoState);
-        // Attach scaled Full Pallet or Dual Half-Pallet visual loads into Jeep cargo bed mount points!
-        while (j.cargoSlotFull.children.length) j.cargoSlotFull.remove(j.cargoSlotFull.children[0]);
-        while (j.cargoSlot0.children.length) j.cargoSlot0.remove(j.cargoSlot0.children[0]);
-        while (j.cargoSlot1.children.length) j.cargoSlot1.remove(j.cargoSlot1.children[0]);
-        if (cargoState.fullWcid) {
-          const u = buildDeployable(THREE, cargoState.fullWcid);
-          u.root.scale.setScalar(0.55);
-          j.cargoSlotFull.add(u.root);
-          j.cargoSlotFull.visible = true;
-          j.cargoCrateGroup.visible = false;
-        } else if (cargoState.half0Wcid || cargoState.half1Wcid) {
-          j.cargoCrateGroup.visible = false;
-          if (cargoState.half0Wcid) {
-            const u0 = buildDeployable(THREE, cargoState.half0Wcid);
-            u0.root.scale.setScalar(0.52);
-            u0.root.position.set(0.26, 0, 0);
-            j.cargoSlot0.add(u0.root);
-            j.cargoSlot0.visible = true;
-          }
-          if (cargoState.half1Wcid) {
-            const u1 = buildDeployable(THREE, cargoState.half1Wcid);
-            u1.root.scale.setScalar(0.52);
-            u1.root.position.set(-0.26, 0, 0);
-            j.cargoSlot1.add(u1.root);
-            j.cargoSlot1.visible = true;
-          }
-        }
         return j;
       },
       fireLocal(weaponKind, muzzle, targetPos, velocity) {
@@ -1984,6 +2611,12 @@ export function installVehicles(deps = {}) {
         try { if (j.root.parent) j.root.parent.remove(j.root); j.dispose(); } catch (_) {}
       }
       jeepModels.clear();
+      for (const j of groundModels.values()) {
+        try { if (j.root.parent) j.root.parent.remove(j.root); j.dispose?.(); } catch (_) {}
+      }
+      groundModels.clear();
+      groundFx?.dispose?.();
+      groundAudio?.dispose?.();
       deployableVfx?.dispose();
       deployableAudio?.dispose();
       radarScope.dispose();

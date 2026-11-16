@@ -15,6 +15,9 @@
 
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import * as THREE from "three";
+import { installVehicles } from "../scene3d/vehicle/index.js";
+import { toCellLocal, MODE as FM_MODE } from "../scene3d/vehicle/flight_model.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -1093,6 +1096,591 @@ check("Case B-Adv03: Driver Moving Exit Decelerates Smoothly to Parked with 3 Pa
   near(v.speed, 0.0, 1e-4, "vehicle decelerated to 0 m/s");
   assert(v.mode === VEHICLE_MODE.PARKED, "vehicle parked");
   assert(v.seatOccupants[1] === 3002 && v.seatOccupants[2] === 3003 && v.seatOccupants[3] === 3004, "all 3 passengers still seated");
+});
+
+// =============================================================================
+// TIER 5: Client-Side Live Session Wiring & Multi-Seat Sync (M6 Integration)
+// =============================================================================
+
+console.log(`\n=== TIER 5: Client-Side Live Session Wiring & Multi-Seat Sync (M6 Integration) ===`);
+
+function makeLiveMockEnv({ localGuid = 1001, vehGuid = 0x80099001 } = {}) {
+  const byId = new Map();
+  const mkNode = (tag) => {
+    let txt = "";
+    let cls = "";
+    let id = "";
+    const n = {
+      tag,
+      children: [],
+      attrs: {},
+      style: new Proxy({}, { set(t, p, v) { t[p] = v; return true; } }),
+      get id() { return id; },
+      set id(v) { id = v; if (v) byId.set(v, n); },
+      get className() { return cls; },
+      set className(v) { cls = v; },
+      get textContent() { return txt; },
+      set textContent(v) { txt = String(v); },
+      setAttribute(k, v) { this.attrs[k] = String(v); },
+      appendChild(child) { this.children.push(child); if (child.id) byId.set(child.id, child); return child; },
+      remove() { if (id) byId.delete(id); },
+    };
+    return n;
+  };
+  const docListeners = new Map();
+  const canvas = {
+    tagName: "CANVAS",
+    requestPointerLock() {},
+  };
+  const doc = {
+    head: mkNode("head"),
+    body: mkNode("body"),
+    activeElement: null,
+    pointerLockElement: null,
+    getElementById: (id) => byId.get(id) ?? null,
+    createElement: (tag) => mkNode(tag),
+    querySelector: (sel) => (sel === "canvas" ? canvas : null),
+    addEventListener(t, fn) { docListeners.set(t, fn); },
+    removeEventListener(t) { docListeners.delete(t); },
+  };
+
+  const winListeners = new Map();
+  let localGuidVal = localGuid;
+  const fakeWinObj = {
+    location: { search: "?vehicles=on" },
+    document: doc,
+    navigator: { getGamepads: () => [] },
+    innerWidth: 1280,
+    innerHeight: 720,
+    getLocalPlayerGuid: () => localGuidVal,
+    setLocalGuid: (g) => { localGuidVal = g; },
+    addEventListener(t, fn) { if (!winListeners.has(t)) winListeners.set(t, new Set()); winListeners.get(t).add(fn); },
+    removeEventListener(t, fn) { winListeners.get(t)?.delete(fn); },
+    dispatch(type, props = {}) {
+      const fns = winListeners.get(type);
+      if (fns) {
+        const ev = {
+          type,
+          stopImmediatePropagation() {},
+          preventDefault() {},
+          ...props,
+        };
+        for (const fn of [...fns]) fn(ev);
+      }
+    },
+  };
+
+  const worldRoot = new THREE.Group();
+  const entityMap = new Map();
+  const mkEnt = (setupId = 0x02000001) => {
+    const root = new THREE.Group();
+    const parts = [];
+    for (let i = 0; i < 34; i++) {
+      const p = new THREE.Group();
+      root.add(p);
+      parts.push(p);
+    }
+    return { root, parts, setupId, _filmHidden: false };
+  };
+
+  entityMap.set(vehGuid, mkEnt());
+  entityMap.set(localGuid, mkEnt());
+
+  const inbox = [];
+  const calls = {
+    vehicleBoard: [],
+    vehicleExit: [],
+    vehicleInput: [],
+    setVehicleSeat: [],
+  };
+
+  const mkAudioNode = () => ({ connect() { return this; }, disconnect() {} });
+  const fakeParam = (v = 0) => ({ value: v, setTargetAtTime() {}, setValueAtTime() {}, linearRampToValueAtTime() {}, exponentialRampToValueAtTime() {}, cancelScheduledValues() {} });
+  const fakeCtx = {
+    state: "running",
+    currentTime: 1.0,
+    sampleRate: 8000,
+    createGain: () => ({ ...mkAudioNode(), gain: fakeParam(1) }),
+    createOscillator: () => ({ ...mkAudioNode(), type: "sine", frequency: fakeParam(110), detune: fakeParam(0), setPeriodicWave() {}, start() {}, stop() {}, onended: null }),
+    createBiquadFilter: () => ({ ...mkAudioNode(), type: "lowpass", frequency: fakeParam(800), Q: fakeParam(1), gain: fakeParam(0) }),
+    createWaveShaper: () => ({ ...mkAudioNode(), curve: null, oversample: "none" }),
+    createPeriodicWave: (r, im) => ({ r, im }),
+    createPanner: () => ({ ...mkAudioNode(), panningModel: "HRTF", distanceModel: "inverse", refDistance: 18, maxDistance: 1800, rolloffFactor: 1, positionX: fakeParam(0), positionY: fakeParam(0), positionZ: fakeParam(0) }),
+    createBuffer: (_ch, len, sr) => ({ sampleRate: sr, length: len, getChannelData: () => new Float32Array(len) }),
+    createBufferSource: () => ({ ...mkAudioNode(), buffer: null, loop: false, playbackRate: fakeParam(1), start() {}, stop() {}, onended: null }),
+  };
+  const masterBusNode = fakeCtx.createGain();
+
+  const live = {
+    worldRoot,
+    scene: worldRoot,
+    camera: new THREE.PerspectiveCamera(70, 16 / 9, 0.5, 10000),
+    audioManager: {
+      getEffectBus: () => ({ ctx: fakeCtx, node: masterBusNode, sliderGain: () => 1.0 }),
+      isActive: () => true,
+      notifyUserGesture() {},
+    },
+    entityManager: {
+      entityMap,
+      setFilmHidden(guid, h) {
+        const e = entityMap.get(guid);
+        if (!e) return false;
+        e._filmHidden = h;
+        return true;
+      },
+      setMotion() {},
+    },
+    sessionHandle: {
+      vehicleCapabilities() {},
+      drainVehicleMessages: () => { const out = JSON.stringify(inbox); inbox.length = 0; return out; },
+      terrainHeightAt: () => 10,
+      setVehicleSeat(guid, cell, x, y, z, h) { calls.setVehicleSeat.push({ guid, cell, x, y, z, h }); },
+      clearVehicleSeat() {},
+      vehicleInput(guid, input) { calls.vehicleInput.push({ guid, input }); },
+      vehicleBoard(guid, seat) { calls.vehicleBoard.push({ guid, seat }); },
+      vehicleExit(guid, mode) { calls.vehicleExit.push({ guid, mode }); },
+    },
+  };
+
+  const api = installVehicles({ liveScene3d: live, THREE, window: fakeWinObj });
+
+  return {
+    doc,
+    byId,
+    fakeWinObj,
+    worldRoot,
+    entityMap,
+    mkEnt,
+    inbox,
+    calls,
+    live,
+    api,
+  };
+}
+
+check("Case B-Live01: Procedural Jeep Live Rendering in drawVehicle() & Stand-In Decoupled", () => {
+  const env = makeLiveMockEnv();
+  const VEH = 0x80099001;
+  const cl = toCellLocal(1000, 2000, 15);
+
+  env.inbox.push(
+    { type: "ack", granted: 3 },
+    {
+      type: "profile",
+      vehicle: VEH,
+      profileKey: "jeep-mb",
+      displayName: "Willys MB",
+      locomotion: 2,
+      vMax: 29.0,
+      accel: 8.5,
+      decel: 14.0,
+      seats: [
+        { offset: [-0.38, 0.12, 0.62] },
+        { offset: [0.38, 0.12, 0.62] },
+        { offset: [-0.38, -0.74, 0.70] },
+        { offset: [0.38, -0.74, 0.70] },
+      ],
+    },
+    {
+      type: "state",
+      vehicle: VEH,
+      flags: 1,
+      step: 10,
+      ack: 0,
+      mode: 6, // DRIVING
+      cell: cl.cell,
+      x: cl.x,
+      y: cl.y,
+      z: cl.z,
+      heading: 0.5,
+      pitch: 0.05,
+      bank: -0.02,
+      speed: 12.0,
+      steer_angle: 0.28,
+      ground_flags: 0x14, // 4WD low + headlights
+    }
+  );
+
+  env.live.vehicles.afterTick(16, 16);
+
+  // Stand-in retail entity MUST be hidden
+  const standIn = env.entityMap.get(VEH);
+  assert(standIn._filmHidden === true, "retail stand-in entity is hidden when locomotion === 2");
+
+  // Procedural jeep model must be in groundModels
+  assert(env.api.groundModels.has(VEH), "groundModels has entry for jeep guid");
+  const jModel = env.api.groundModels.get(VEH);
+  assert(jModel && jModel.root, "procedural jeep model instantiated");
+  assert(jModel.root.parent === env.worldRoot, "procedural jeep root attached to worldRoot");
+  near(jModel.root.position.x, 1000, 0.1, "jeep root X position");
+  near(jModel.root.position.y, 2000, 0.1, "jeep root Y position");
+
+  env.api.dispose();
+});
+
+check("Case B-Live02: Split Pilot (Seat 0) vs Passenger (Seats 1..3) Live Sessions", () => {
+  const env = makeLiveMockEnv({ localGuid: 1001 });
+  const VEH = 0x80099001;
+  const cl = toCellLocal(1000, 2000, 15);
+
+  env.inbox.push(
+    { type: "ack", granted: 3 },
+    {
+      type: "profile",
+      vehicle: VEH,
+      profileKey: "jeep-mb",
+      displayName: "Willys MB",
+      locomotion: 2,
+      seats: [
+        { offset: [-0.38, 0.12, 0.62] },
+        { offset: [0.38, 0.12, 0.62] },
+        { offset: [-0.38, -0.74, 0.70] },
+        { offset: [0.38, -0.74, 0.70] },
+      ],
+    },
+    {
+      type: "state",
+      vehicle: VEH,
+      flags: 1,
+      step: 10,
+      ack: 0,
+      mode: FM_MODE.PARKED,
+      cell: cl.cell,
+      x: cl.x,
+      y: cl.y,
+      z: cl.z,
+      heading: 0,
+      pitch: 0,
+      bank: 0,
+      speed: 0,
+    },
+    { type: "seat", vehicle: VEH, seat: 0, occupant: 1001, state: 1 }
+  );
+
+  env.live.vehicles.afterTick(16, 16);
+
+  // Seat 0 entered -> Piloting session
+  assert(env.api.piloting === true, "local player in Seat 0 enters pilot session");
+  assert(env.api.riding === false, "riding is false for driver");
+  assert(env.api.passenger === false, "passenger is false for driver");
+
+  // Clear Seat 0 and place local player into Seat 1 (Shotgun Passenger)
+  env.inbox.push(
+    { type: "seat", vehicle: VEH, seat: 0, occupant: 0, state: 0 },
+    { type: "seat", vehicle: VEH, seat: 1, occupant: 1001, state: 1 }
+  );
+  env.live.vehicles.afterTick(32, 16);
+
+  // Seat 1 entered -> Passenger session
+  assert(env.api.piloting === false, "piloting is false for passenger");
+  assert(env.api.riding === true, "local player in Seat 1 enters riding session");
+  assert(env.api.passenger === true, "passenger getter is true");
+
+  // Passenger control isolation: ensure no driver inputs emitted by passenger
+  env.calls.vehicleInput.length = 0;
+  env.live.vehicles.afterTick(48, 16);
+  assert(env.calls.vehicleInput.length === 0, "passenger session emits ZERO pilot driving inputs");
+
+  env.api.dispose();
+});
+
+check("Case B-Live03: Live Seat Hot-Swap Continuity & Bug Fix (No Teardown on m.state === 0)", () => {
+  const env = makeLiveMockEnv({ localGuid: 1001 });
+  const VEH = 0x80099001;
+  const cl = toCellLocal(1000, 2000, 15);
+
+  env.inbox.push(
+    { type: "ack", granted: 3 },
+    {
+      type: "profile",
+      vehicle: VEH,
+      profileKey: "jeep-mb",
+      displayName: "Willys MB",
+      locomotion: 2,
+      seats: [
+        { offset: [-0.38, 0.12, 0.62] },
+        { offset: [0.38, 0.12, 0.62] },
+        { offset: [-0.38, -0.74, 0.70] },
+        { offset: [0.38, -0.74, 0.70] },
+      ],
+    },
+    {
+      type: "state",
+      vehicle: VEH,
+      flags: 1,
+      step: 10,
+      ack: 0,
+      mode: FM_MODE.PARKED,
+      cell: cl.cell,
+      x: cl.x,
+      y: cl.y,
+      z: cl.z,
+      heading: 0,
+      pitch: 0,
+      bank: 0,
+      speed: 0.5,
+    },
+    { type: "seat", vehicle: VEH, seat: 1, occupant: 1001, state: 1 }
+  );
+
+  env.live.vehicles.afterTick(16, 16);
+  assert(env.api.riding === true, "passenger seated in Seat 1");
+
+  // Trigger hot-swap to Seat 2 via Key 3 (Digit3)
+  env.fakeWinObj.dispatch("keydown", { code: "Digit3" });
+  assert(env.calls.vehicleBoard.length > 0, "vehicleBoard was called");
+  const lastBoard = env.calls.vehicleBoard[env.calls.vehicleBoard.length - 1];
+  assert(lastBoard.seat === 2, "requested seat 2 (Digit3)");
+
+  // Server hot-swap protocol: m.state === 0 (unseating from seat 1) followed by m.state === 1 (seating in seat 2)
+  // CRITICAL BUG FIX TEST: m.state === 0 must NOT teardown session during hot-swap!
+  env.inbox.push(
+    { type: "seat", vehicle: VEH, seat: 1, occupant: 0, state: 0 },
+    { type: "seat", vehicle: VEH, seat: 2, occupant: 1001, state: 1 }
+  );
+  env.live.vehicles.afterTick(32, 16);
+
+  // Session must remain unbroken and active in Seat 2!
+  assert(env.api.riding === true, "passenger session remained continuous across hot-swap");
+  assert(env.api.status().passenger?.seat === 2, "active seat updated to 2");
+
+  env.api.dispose();
+});
+
+check("Case B-Live04: Pose ALL 4 Seated Avatars with 34-Part IK in Live Multi-Seat Session", () => {
+  const env = makeLiveMockEnv({ localGuid: 1001 });
+  const VEH = 0x80099001;
+  const cl = toCellLocal(1000, 2000, 15);
+
+  // Add 4 occupants to entityMap
+  const occupants = [1001, 1002, 1003, 1004];
+  for (const occ of occupants) {
+    if (!env.entityMap.has(occ)) env.entityMap.set(occ, env.mkEnt(0x02000001));
+  }
+
+  env.inbox.push(
+    { type: "ack", granted: 3 },
+    {
+      type: "profile",
+      vehicle: VEH,
+      profileKey: "jeep-mb",
+      displayName: "Willys MB",
+      locomotion: 2,
+      seats: [
+        { offset: [-0.38, 0.12, 0.62] },
+        { offset: [0.38, 0.12, 0.62] },
+        { offset: [-0.38, -0.74, 0.70] },
+        { offset: [0.38, -0.74, 0.70] },
+      ],
+    },
+    {
+      type: "state",
+      vehicle: VEH,
+      flags: 1,
+      step: 10,
+      ack: 0,
+      mode: 6, // DRIVING
+      cell: cl.cell,
+      x: cl.x,
+      y: cl.y,
+      z: cl.z,
+      heading: 0,
+      pitch: 0,
+      bank: 0,
+      speed: 10.0,
+      steer_angle: 0.35,
+    },
+    { type: "seat", vehicle: VEH, seat: 0, occupant: 1001, state: 1 },
+    { type: "seat", vehicle: VEH, seat: 1, occupant: 1002, state: 1 },
+    { type: "seat", vehicle: VEH, seat: 2, occupant: 1003, state: 1 },
+    { type: "seat", vehicle: VEH, seat: 3, occupant: 1004, state: 1 }
+  );
+
+  env.live.vehicles.afterTick(16, 16);
+
+  // Check that all 4 entities were positioned at their respective seat offsets
+  const e0 = env.entityMap.get(1001); // Driver
+  const e1 = env.entityMap.get(1002); // Shotgun
+  const e2 = env.entityMap.get(1003); // Rear Left
+  const e3 = env.entityMap.get(1004); // Rear Right
+
+  // Driver on left side (-X), Shotgun on right (+X)
+  assert(e0.root.position.x < e1.root.position.x, "driver is to the left of shotgun passenger");
+  assert(e2.root.position.y < e0.root.position.y, "rear left is behind driver");
+  assert(e3.root.position.y < e1.root.position.y, "rear right is behind shotgun");
+
+  // Check 34-part IK application:
+  // Driver Part 16 (Head) tracks steering angle: steerAngle * 0.45
+  const expectedHeadQy = Math.sin(0.35 * 0.45 * 0.5);
+  near(e0.parts[16].quaternion.y, expectedHeadQy, 0.02, "driver head tracks steering angle");
+
+  // Rear passengers Part 0 (Pelvis) and lower body 90° seated posture
+  near(e2.parts[0].position.z, 0.45, 0.01, "rear left avatar pelvis height applied");
+  near(e3.parts[0].position.z, 0.45, 0.01, "rear right avatar pelvis height applied");
+  assert(Math.abs(e2.parts[1].quaternion.x) > 0.5, "rear left thigh has 90 deg hip flexion");
+  assert(Math.abs(e2.parts[2].quaternion.x) > 0.5, "rear left shin has 90 deg knee flexion");
+
+  // Test observer perspective: local player unseats and observes full 4-crew Jeep from on-foot
+  env.inbox.push(
+    { type: "seat", vehicle: VEH, seat: 0, occupant: 0, state: 0 }
+  );
+  env.live.vehicles.afterTick(32, 16);
+  assert(env.api.piloting === false && env.api.riding === false, "local player is now on foot");
+
+  // Remote driver (guid 2001) boards Seat 0
+  if (!env.entityMap.has(2001)) env.entityMap.set(2001, env.mkEnt(0x02000001));
+  env.inbox.push(
+    { type: "seat", vehicle: VEH, seat: 0, occupant: 2001, state: 1 }
+  );
+  env.live.vehicles.afterTick(48, 16);
+  assert(env.api.piloting === false && env.api.riding === false, "local player remains external observer");
+  const eRemoteDriver = env.entityMap.get(2001);
+  assert(eRemoteDriver.root.position.x < e1.root.position.x, "observers see driver and shotgun correctly seated");
+
+  env.api.dispose();
+});
+
+check("Case B-Live05: Nearest-Boardable Multi-Seat Prompt & Key B Boarding", () => {
+  const env = makeLiveMockEnv({ localGuid: 1001 });
+  const VEH = 0x80099001;
+  const cl = toCellLocal(1000, 2000, 10);
+
+  // Position local player entity at (1000, 2000, 10)
+  const pEnt = env.entityMap.get(1001);
+  pEnt.root.position.set(1000, 2000, 10);
+
+  env.inbox.push(
+    { type: "ack", granted: 3 },
+    {
+      type: "profile",
+      vehicle: VEH,
+      profileKey: "jeep-mb",
+      displayName: "Willys MB",
+      locomotion: 2,
+      seats: [
+        { offset: [-0.38, 0.12, 0.62] },
+        { offset: [0.38, 0.12, 0.62] },
+        { offset: [-0.38, -0.74, 0.70] },
+        { offset: [0.38, -0.74, 0.70] },
+      ],
+    },
+    {
+      type: "state",
+      vehicle: VEH,
+      flags: 1,
+      step: 10,
+      ack: 0,
+      mode: FM_MODE.PARKED,
+      cell: cl.cell,
+      x: cl.x + 2.0, // 2m away (within 6m board range)
+      y: cl.y,
+      z: cl.z,
+      heading: 0,
+      pitch: 0,
+      bank: 0,
+      speed: 0.0,
+    }
+  );
+
+  env.live.vehicles.afterTick(16, 16);
+
+  // Case 1: 0/4 occupied -> prompt shows Driver (0/4 occupied)
+  const promptEl = env.byId.get("hb-vehicle-prompt");
+  assert(promptEl && promptEl.textContent.includes("Willys MB — Driver (0/4 occupied)"),
+    `prompt 0/4: ${promptEl?.textContent}`);
+
+  // Case 2: Seat 0 occupied -> prompt shows Front Passenger (1/4 occupied)
+  env.inbox.push({ type: "seat", vehicle: VEH, seat: 0, occupant: 2001, state: 1 });
+  env.live.vehicles.afterTick(32, 16);
+  assert(promptEl.textContent.includes("Willys MB — Front Passenger (1/4 occupied)"),
+    `prompt 1/4: ${promptEl?.textContent}`);
+
+  // Case 3: Seats 0 & 1 occupied -> prompt shows Rear Left (2/4 occupied)
+  env.inbox.push({ type: "seat", vehicle: VEH, seat: 1, occupant: 2002, state: 1 });
+  env.live.vehicles.afterTick(48, 16);
+  assert(promptEl.textContent.includes("Willys MB — Rear Left (2/4 occupied)"),
+    `prompt 2/4: ${promptEl?.textContent}`);
+
+  // Case 4: Seats 0, 1, 2 occupied -> prompt shows Rear Right (3/4 occupied)
+  env.inbox.push({ type: "seat", vehicle: VEH, seat: 2, occupant: 2003, state: 1 });
+  env.live.vehicles.afterTick(64, 16);
+  assert(promptEl.textContent.includes("Willys MB — Rear Right (3/4 occupied)"),
+    `prompt 3/4: ${promptEl?.textContent}`);
+
+  // Case 5: All 4 seats occupied -> prompt disappears
+  env.inbox.push({ type: "seat", vehicle: VEH, seat: 3, occupant: 2004, state: 1 });
+  env.live.vehicles.afterTick(80, 16);
+  assert(promptEl.style.display === "none" || !promptEl.textContent,
+    "prompt hidden when vehicle full");
+
+  // Case 6: Vacate Seat 1 while rolling at 1.2 m/s (<= 1.5 m/s) -> prompt shows Front Passenger
+  env.inbox.push(
+    { type: "seat", vehicle: VEH, seat: 1, occupant: 0, state: 0 },
+    {
+      type: "state",
+      vehicle: VEH,
+      flags: 1,
+      step: 20,
+      ack: 0,
+      mode: 6, // DRIVING
+      cell: cl.cell,
+      x: cl.x + 2.0,
+      y: cl.y,
+      z: cl.z,
+      speed: 1.2,
+    }
+  );
+  env.live.vehicles.afterTick(96, 16);
+  assert(promptEl.textContent.includes("Willys MB — Front Passenger (3/4 occupied)"),
+    `prompt rolling <=1.5: ${promptEl?.textContent}`);
+
+  // Dispatch Key B to board the open seat (Seat 1)
+  env.calls.vehicleBoard.length = 0;
+  env.fakeWinObj.dispatch("keydown", { code: "KeyB" });
+  assert(env.calls.vehicleBoard.length > 0, "Key B triggered board call");
+  assert(env.calls.vehicleBoard[0].seat === 1, "boarded seat 1 (the open seat)");
+
+  // Case 7: Vehicle accelerates to 2.5 m/s (> 1.5 m/s) -> prompt hidden
+  env.inbox.push({
+    type: "state",
+    vehicle: VEH,
+    flags: 1,
+    step: 25,
+    ack: 0,
+    mode: 6,
+    cell: cl.cell,
+    x: cl.x + 2.0,
+    y: cl.y,
+    z: cl.z,
+    speed: 2.5,
+  });
+  env.live.vehicles.afterTick(112, 16);
+  assert(promptEl.style.display === "none" || !promptEl.textContent,
+    "prompt hidden when rolling > 1.5 m/s");
+
+  env.api.dispose();
+});
+
+check("Case B-Live06: Decoupled Cargo in spawnJeepLocal", () => {
+  const env = makeLiveMockEnv();
+  const JEEP_GUID = 0x80099077;
+
+  const j = env.api.deployables.spawnJeepLocal(JEEP_GUID, [100, 200, 30], 0.25, {
+    fullWcid: 0x02001800,
+  });
+
+  assert(j && j.root, "procedural jeep created");
+  near(j.root.position.x, 100, 0.01, "jeep X position");
+  near(j.root.position.y, 200, 0.01, "jeep Y position");
+  near(j.root.position.z, 30, 0.01, "jeep Z position");
+
+  // Verify legacy pallet/cargo child attachment loops are completely removed:
+  // cargoSlotFull, cargoSlot0, cargoSlot1 must NOT contain attached deployable children!
+  assert(j.cargoSlotFull.children.length === 0, "cargoSlotFull has 0 attached legacy child nodes");
+  assert(j.cargoSlot0.children.length === 0, "cargoSlot0 has 0 attached legacy child nodes");
+  assert(j.cargoSlot1.children.length === 0, "cargoSlot1 has 0 attached legacy child nodes");
+
+  env.api.dispose();
 });
 
 console.log(`\n========================================`);

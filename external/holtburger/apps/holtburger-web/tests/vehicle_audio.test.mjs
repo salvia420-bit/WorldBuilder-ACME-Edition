@@ -848,6 +848,382 @@ check("6.2 Disabled / null-bus silent zero-node no-ops and deterministic source 
 });
 
 // ---------------------------------------------------------------------------
+// 7. Willys MB Go-Devil L134 Ground Vehicle Audio (Hellcat-Caliber Parity)
+// ---------------------------------------------------------------------------
+
+check("7.1 L134_AUDIO_TUNING is frozen; computeL134EngineParams is pure, deterministic, and finite on hostile inputs", async () => {
+  assert.ok(Object.isFrozen(V.L134_AUDIO_TUNING), "L134_AUDIO_TUNING is frozen");
+  assert.ok(Object.isFrozen(V.SURFACE_AUDIO_SHAPES), "SURFACE_AUDIO_SHAPES is frozen");
+
+  // Hostile inputs
+  for (const hostile of [
+    {},
+    null,
+    undefined,
+    { speed: NaN, throttle: NaN, boost: "yes", handbrake: 42 },
+    { speed: Infinity, throttle: -5 },
+    { speed: -Infinity, throttle: 100 },
+    { speed: -999, throttle: 0.5 },
+    { speed: 999, throttle: 1.0 },
+  ]) {
+    const p = V.computeL134EngineParams(hostile);
+    assert.ok(typeof p.rpm === "number" && Number.isFinite(p.rpm) && p.rpm >= 400 && p.rpm <= 4000, `finite rpm ${p.rpm}`);
+    assert.ok(typeof p.crankHz === "number" && Number.isFinite(p.crankHz) && p.crankHz > 0, `finite crankHz ${p.crankHz}`);
+    assert.ok(typeof p.firingHz === "number" && Number.isFinite(p.firingHz) && p.firingHz > 0, `finite firingHz ${p.firingHz}`);
+    assert.ok(typeof p.cutoffHz === "number" && Number.isFinite(p.cutoffHz) && p.cutoffHz >= 300, `finite cutoffHz ${p.cutoffHz}`);
+    assert.ok(typeof p.gearHz === "number" && Number.isFinite(p.gearHz) && p.gearHz > 0, `finite gearHz ${p.gearHz}`);
+    assert.ok(typeof p.tCaseHz === "number" && Number.isFinite(p.tCaseHz) && p.tCaseHz > 0, `finite tCaseHz ${p.tCaseHz}`);
+    assert.ok(typeof p.gear === "number" && Number.isFinite(p.gear), `finite gear ${p.gear}`);
+  }
+
+  // Pure idle check
+  const idle = V.computeL134EngineParams({ speed: 0, throttle: 0 });
+  assert.equal(idle.gear, 0, "idle gear is neutral (0)");
+  near(idle.rpm, 650, 1e-4, "idle RPM 650");
+  near(idle.crankHz, 650 / 60, 1e-4, "crankHz at idle ~10.83");
+  near(idle.firingHz, (650 / 60) * 2, 1e-4, "firingHz at idle ~21.67 (2 pulses per rev)");
+  near(idle.cutoffHz, 300, 1e-4, "idle cutoff 300 Hz");
+});
+
+check("7.2 Borg-Warner T-84 3-speed manual gearbox cadence across speed ranges & 4WD low-range", async () => {
+  // 1st gear: 0 to 9 m/s
+  const g1Low = V.computeL134EngineParams({ speed: 1.0, throttle: 0.2 });
+  assert.equal(g1Low.gear, 1, "1st gear at 1 m/s");
+  assert.ok(g1Low.rpm > 650 && g1Low.rpm < 2000, `1st gear low rpm ${g1Low.rpm}`);
+
+  const g1High = V.computeL134EngineParams({ speed: 8.5, throttle: 0.8 });
+  assert.equal(g1High.gear, 1, "1st gear at 8.5 m/s");
+  assert.ok(g1High.rpm >= 3200, `1st gear high rpm ${g1High.rpm}`);
+
+  // 2nd gear: 9 to 18 m/s (RPM drops at upshift!)
+  const g2Shift = V.computeL134EngineParams({ speed: 9.2, throttle: 0.5 });
+  assert.equal(g2Shift.gear, 2, "2nd gear at 9.2 m/s");
+  assert.ok(g2Shift.rpm < g1High.rpm, `RPM drops on 1->2 upshift (${g2Shift.rpm} < ${g1High.rpm})`);
+  assert.ok(g2Shift.rpm >= 1800 && g2Shift.rpm <= 2500, `2nd gear shift rpm ${g2Shift.rpm}`);
+
+  const g2High = V.computeL134EngineParams({ speed: 17.5, throttle: 0.8 });
+  assert.equal(g2High.gear, 2, "2nd gear at 17.5 m/s");
+  assert.ok(g2High.rpm >= 3400, `2nd gear high rpm ${g2High.rpm}`);
+
+  // 3rd gear: 18 to 29 m/s (RPM drops on upshift!)
+  const g3Shift = V.computeL134EngineParams({ speed: 18.2, throttle: 0.5 });
+  assert.equal(g3Shift.gear, 3, "3rd gear at 18.2 m/s");
+  assert.ok(g3Shift.rpm < g2High.rpm, `RPM drops on 2->3 upshift (${g3Shift.rpm} < ${g2High.rpm})`);
+
+  const g3Top = V.computeL134EngineParams({ speed: 29.0, throttle: 1.0 });
+  assert.equal(g3Top.gear, 3, "3rd gear top speed");
+  near(g3Top.rpm, 4000, 1e-3, "redline at max road speed (29 m/s)");
+
+  // Reverse gear: negative speed -> straight-cut spur whine
+  const rev = V.computeL134EngineParams({ speed: -5.0, throttle: 0.5 });
+  assert.equal(rev.gear, -1, "reverse gear (-1)");
+  assert.ok(rev.rpm >= 1800, `reverse RPM ${rev.rpm}`);
+  near(rev.gearHz, 160 + 5.0 * 48, 1e-4, "reverse straight-cut spur whine frequency");
+
+  // 4WD Low-Range (boost flag) increases RPM for high-torque crawling
+  const normCruise = V.computeL134EngineParams({ speed: 6.0, throttle: 0.4, boost: false });
+  const lowRange = V.computeL134EngineParams({ speed: 6.0, throttle: 0.4, boost: true });
+  assert.ok(lowRange.rpm > normCruise.rpm, `4WD low-range increases engine RPM (${lowRange.rpm} > ${normCruise.rpm})`);
+  assert.ok(lowRange.tCaseHz >= 420, `transfer case whine active at ${lowRange.tCaseHz} Hz`);
+
+  // Handbrake drag bogs engine down
+  const rolling = V.computeL134EngineParams({ speed: 12.0, throttle: 0.3, handbrake: false });
+  const bogged = V.computeL134EngineParams({ speed: 12.0, throttle: 0.3, handbrake: true });
+  assert.ok(bogged.rpm < rolling.rpm, `handbrake bogs RPM (${bogged.rpm} < ${rolling.rpm})`);
+});
+
+check("7.3 createGroundVehicleAudio start/update/stop lifecycle, minimal mock fallback, and deterministic RNG noise", async () => {
+  const bus = makeBus();
+  const au = V.createGroundVehicleAudio({ bus, volume: () => 0.85 });
+  assert.equal(au.isStarted(), false);
+  assert.equal(au.isLive(), false);
+  assert.equal(au.active, false);
+
+  assert.equal(au.start(), true);
+  assert.equal(au.isStarted(), true);
+  assert.equal(au.isLive(), true);
+  assert.equal(au.active, true);
+  assert.equal(au.stats.pilotActive, true);
+
+  au.update({ speed: 10, throttle: 0.5 });
+  assert.ok(bus.ctx.made.length > 5, "WebAudio graph nodes instantiated");
+
+  au.stop();
+  au.dispose();
+  assert.equal(au.isStarted(), false);
+  assert.equal(au.active, false);
+
+  // Minimal mock fallback (no createPeriodicWave or createWaveShaper)
+  const minBus = makeBus({ Ctx: MinimalFakeCtx });
+  const auMin = V.createGroundVehicleAudio({ bus: minBus });
+  assert.equal(auMin.start(), true);
+  auMin.update({ speed: 14, throttle: 0.7, boost: true });
+  assert.equal(auMin.isLive(), true);
+  auMin.dispose();
+
+  // Disabled via URL search (?vehicleAudio=off)
+  const disBus = makeBus();
+  const auDis = V.createGroundVehicleAudio({ bus: disBus, search: "?vehicleAudio=off" });
+  assert.equal(auDis.start(), false);
+  assert.equal(auDis.active, false);
+  auDis.update({ speed: 20 });
+  assert.equal(disBus.ctx.made.length, 0, "zero nodes when disabled");
+});
+
+check("7.4 Go-Devil L134 engine synthesis: PeriodicWave crank + 2x firing pulse, soft-tanh manifold saturation, intake roar, overrun burble, and 140ms clutch-dip clunk", async () => {
+  const bus = makeBus();
+  const au = V.createGroundVehicleAudio({ bus, volume: () => 1.0 });
+  au.start();
+
+  const nodes = bus.ctx.made;
+  // Verify PeriodicWave was created or requested
+  const pWave = V.getL134PeriodicWave(bus.ctx);
+  assert.ok(pWave, "L134 PeriodicWave generated");
+
+  // Verify WaveShaper
+  const shaper = nodes.find((n) => n.kind === "shaper");
+  assert.ok(shaper, "soft-tanh manifold WaveShaper node present");
+  assert.equal(shaper.curve.length, 257, "257-point soft-tanh saturation curve");
+  assert.equal(shaper.oversample, "2x", "2x oversampling enabled");
+
+  // Accelerating in 1st gear
+  au.update({ speed: 5.0, throttle: 1.0 });
+  const manifoldFilter = nodes.find((n) => n.kind === "biquad" && n.type === "lowpass" && n.frequency.value > 1000);
+  assert.ok(manifoldFilter, "manifold lowpass filter opens under full throttle");
+
+  // Gear change from 1st (5 m/s) to 2nd (11 m/s) triggers shift clunk
+  const beforeShiftCount = bus.ctx.made.length;
+  au.update({ speed: 11.0, throttle: 0.8 });
+  assert.ok(bus.ctx.made.length > beforeShiftCount, "shift clunk one-shot node instantiated on gear change");
+
+  // Overrun burble on throttle lift while moving fast in 2nd gear
+  au.update({ speed: 15.0, throttle: 0.0 });
+  const burbleFilter = nodes.find((n) => n.kind === "biquad" && n.type === "lowpass" && n.frequency.value <= 150);
+  assert.ok(burbleFilter, "overrun burble lowpass filter present");
+
+  au.dispose();
+});
+
+check("7.5 Surface tire roll & skid synthesis: 11 surface families shaping noise bands, and lateral scrub/handbrake screech", async () => {
+  const bus = makeBus();
+  const au = V.createGroundVehicleAudio({ bus });
+  au.start();
+
+  // Test across different surface families
+  // Road (0) -> lowpass 320 Hz
+  au.update({ speed: 12.0, surfaceFamily: 0 });
+  const roadFilter = bus.ctx.made.find((n) => n.kind === "biquad" && n.type === "lowpass" && n.frequency.value >= 320 && n.frequency.value <= 550);
+  assert.ok(roadFilter, "Road surface uses lowpass filter profile");
+
+  // Grass (2) -> bandpass 1400 Hz
+  au.update({ speed: 12.0, surfaceFamily: 2 });
+  const grassFilter = bus.ctx.made.find((n) => n.kind === "biquad" && n.type === "bandpass" && n.frequency.value >= 1400);
+  assert.ok(grassFilter, "Grass surface uses 1400 Hz bandpass filter");
+
+  // ShallowFord (7) -> water splash/slosh
+  au.update({ speed: 8.0, surfaceFamily: 7 });
+  const waterFilter = bus.ctx.made.find((n) => n.kind === "biquad" && n.type === "bandpass" && n.frequency.value >= 480 && n.frequency.value <= 700);
+  assert.ok(waterFilter, "ShallowFord uses water slosh resonant bandpass");
+
+  // Handbrake screech on road
+  au.update({ speed: 15.0, surfaceFamily: 0, handbrake: true });
+  const screechFilter = bus.ctx.made.find((n) => n.kind === "biquad" && n.type === "bandpass" && n.frequency.value === 1350);
+  assert.ok(screechFilter, "Hard-surface handbrake screech bandpass at 1350 Hz");
+
+  // Loose surface skid (Dirt)
+  au.update({ speed: 15.0, surfaceFamily: 1, handbrake: true });
+  const gravelFilter = bus.ctx.made.find((n) => n.kind === "biquad" && n.type === "bandpass" && n.frequency.value === 750);
+  assert.ok(gravelFilter, "Loose-surface skid bandpass at 750 Hz");
+
+  au.dispose();
+});
+
+check("7.6 Chassis foley & WWII Sparton 'meep-meep' horn: leaf-spring thump & squeak on suspension jolt; dual-oscillator 325 + 333 Hz beating at 8 Hz through 1850 Hz formant", async () => {
+  const bus = makeBus();
+  const au = V.createGroundVehicleAudio({ bus });
+  au.start();
+
+  // WWII Sparton Horn
+  const hornOscs = bus.ctx.made.filter((n) => n.kind === "osc" && (n.frequency.value === 325 || n.frequency.value === 333));
+  assert.equal(hornOscs.length, 2, "dual-reed Sparton oscillators (325 Hz + 333 Hz)");
+  const hornFilter = bus.ctx.made.find((n) => n.kind === "biquad" && n.type === "bandpass" && n.frequency.value === 1850);
+  assert.ok(hornFilter, "Sparton 1850 Hz horn bell formant filter present");
+
+  au.horn(true);
+  au.horn(false);
+
+  // Leaf-spring suspension foley on rough terrain
+  const initialNodesCount = bus.ctx.made.length;
+  assert.equal(au.suspensionJolt({ intensity: 1.5, impact: true }), true, "suspension jolt triggered");
+  assert.ok(bus.ctx.made.length > initialNodesCount, "chassis thump + leaf squeak one-shot nodes created");
+
+  // Cooldown prevents spam
+  assert.equal(au.suspensionJolt({ intensity: 1.0 }), false, "cooldown rejects rapid consecutive jolt");
+
+  au.dispose();
+});
+
+check("7.7 3D observer Doppler pass-by pool: spatializes nearby ground vehicles, shifts Doppler, close pass-by whoosh, and caps at maxObserverVoices", async () => {
+  const bus = makeBus();
+  const au = V.createGroundVehicleAudio({ bus, maxObserverVoices: 2 });
+  au.start();
+
+  const listenerPos = [0, 0, 0];
+  const listenerVel = [0, 0, 0];
+
+  // 3 vehicles nearby
+  const vehicles = [
+    { id: 101, pos: [0, 30, 0], vel: [0, -15, 0], speed: 15, throttle: 0.8 }, // 30m away, closing in fast, within 40m whoosh range
+    { id: 102, pos: [80, 0, 0], vel: [-10, 0, 0], speed: 10, throttle: 0.5 }, // 80m away
+    { id: 103, pos: [400, 0, 0], vel: [0, 0, 0], speed: 0, throttle: 0 },      // 400m away (exceeds cap of 2)
+  ];
+
+  au.updateObservers(vehicles, listenerPos, listenerVel, 1 / 60);
+  assert.equal(au.stats.observerCount, 2, "capped at maxObserverVoices (2)");
+
+  // Observer 101 Doppler closing velocity > 1
+  const obs101Panner = bus.ctx.made.find((n) => n.kind === "panner");
+  assert.ok(obs101Panner, "HRTF Panner instantiated for observer vehicle");
+
+  // Move 101 out of range (> 1200m)
+  au.updateObservers(
+    [{ id: 101, pos: [2000, 0, 0], speed: 10 }],
+    listenerPos,
+    listenerVel,
+    1 / 60,
+  );
+  assert.equal(au.stats.observerCount, 0, "out-of-range observers pruned");
+
+  au.dispose();
+});
+
+check("7.8 Master bus routing & lifecycle: routes to effect bus, scales by sliderGain(), mutes on focus blur, zero node leaks on create/update/dispose cycles", async () => {
+  const prevCtx = globalThis.window.AudioContext;
+  globalThis.window.AudioContext = VehicleFakeCtx;
+
+  try {
+    const am = new AudioManager({ fetchWave: fake.fetchWave, hrtf: true, savedGains: false });
+    am.notifyUserGesture();
+    am.setEffectGain(0.4);
+
+    const au = V.createGroundVehicleAudio({
+      bus: () => am.getEffectBus?.() ?? null,
+      audioManager: am,
+      volume: () => 0.75,
+    });
+
+    assert.equal(au.start(), true);
+    assert.equal(am.voicePool.activeCount(), 0, "takes 0 slots in the 16-slot retail voicePool");
+
+    au.update({ speed: 14, throttle: 0.6, fpv: true, pos: [0, 0, 2] });
+    au.update({ speed: 18, throttle: 0.8, fpv: false, pos: [10, 0, 2] });
+
+    // Focus mute via am.setActive(false)
+    am.setActive(false);
+    assert.equal(am._master.gain.value, 0, "AudioManager mutes master bus on blur");
+    am.setActive(true);
+    assert.equal(am._master.gain.value, 1, "master restored on focus");
+
+    // Comprehensive node teardown verification
+    const vehicleNodes = am._ctx.made.filter(
+      (n) => n !== am._master && n !== am._effectMaster && n !== am._ambientMaster,
+    );
+    assert.ok(vehicleNodes.length > 10, "vehicle nodes were created");
+
+    au.dispose();
+    assert.ok(vehicleNodes.every((n) => n.connections.length === 0), "100% leak-free teardown: all nodes disconnected");
+    assert.ok(am._effectMaster.connections.includes(am._master), "AudioManager master chain intact");
+
+    am.dispose();
+  } finally {
+    globalThis.window.AudioContext = prevCtx;
+  }
+});
+
+check("7.9 Suspension jolt lifecycle: mid-jolt dispose during 0.09s-0.11s window cleans up all nodes with 0 leaks", async () => {
+  const bus = makeBus();
+  let time = 100.0;
+  const au = V.createGroundVehicleAudio({ bus, clock: () => time });
+  au.start();
+
+  // Trigger suspension jolt at t = 100.0
+  bus.ctx.currentTime = 100.0;
+  const triggered = au.suspensionJolt({ intensity: 1.5, impact: true });
+  assert.equal(triggered, true, "suspension jolt triggered");
+
+  // Find the jolt nodes: thumpOsc (stopAt 100.11) and squeakOsc (stopAt 100.09)
+  const thumpOsc = bus.ctx.made.find((n) => n.kind === "osc" && n.stopAt === 100.11);
+  const squeakOsc = bus.ctx.made.find((n) => n.kind === "osc" && n.stopAt === 100.09);
+  assert.ok(thumpOsc, "thump oscillator scheduled to stop at 100.11");
+  assert.ok(squeakOsc, "squeak oscillator scheduled to stop at 100.09");
+
+  // Advance time to 100.095s (past squeak stop at 100.09s, but before thump stop at 100.11s)
+  bus.ctx.currentTime = 100.095;
+  time = 100.095;
+
+  // Squeak ends
+  assert.equal(typeof squeakOsc.onended, "function", "squeakOsc has onended callback");
+  squeakOsc.onended();
+
+  // Mid-jolt dispose while thumpOsc is still active in the 0.09s-0.11s window
+  au.dispose();
+
+  // Verify thumpOsc and all other jolt nodes were cleanly disconnected by dispose()
+  assert.equal(thumpOsc.connections.length, 0, "thumpOsc disconnected by dispose()");
+  assert.ok(bus.ctx.made.every((n) => n.connections.length === 0), "all nodes disconnected after mid-jolt dispose");
+});
+
+check("7.10 Post-dispose robustness & null guard: horn/jolt allocate 0 nodes, started remains false, update(null) safe", async () => {
+  const bus = makeBus();
+  const au = V.createGroundVehicleAudio({ bus });
+  au.start();
+  au.update({ speed: 10, throttle: 0.5 });
+  assert.equal(au.isStarted(), true);
+
+  au.dispose();
+  assert.equal(au.isStarted(), false);
+  assert.equal(au.stats.started, false);
+  assert.equal(au.stats.disposed, true);
+  assert.equal(au.stats.pilotActive, false);
+
+  const nodeCountAfterDispose = bus.ctx.made.length;
+
+  // Attempting horn post-dispose should not revive or allocate
+  au.horn(true);
+  au.horn(false);
+  assert.equal(bus.ctx.made.length, nodeCountAfterDispose, "zero nodes allocated by post-dispose horn()");
+  assert.equal(au.stats.started, false, "started not revived by horn()");
+  assert.equal(au.stats.pilotActive, false, "pilotActive remains false after horn()");
+
+  // Attempting suspensionJolt post-dispose should return false and not allocate
+  const joltRes = au.suspensionJolt({ intensity: 1.0 });
+  assert.equal(joltRes, false, "suspensionJolt returns false post-dispose");
+  assert.equal(bus.ctx.made.length, nodeCountAfterDispose, "zero nodes allocated by post-dispose suspensionJolt()");
+  assert.equal(au.stats.started, false, "started not revived by suspensionJolt()");
+
+  // Defensive null / non-object guard on update()
+  assert.doesNotThrow(() => {
+    au.update(null);
+    au.update(undefined);
+    au.update(0);
+    au.update("hostile-string");
+  }, "update() with null/primitives does not throw post-dispose");
+
+  // Also verify update(null) on an active instance
+  const bus2 = makeBus();
+  const au2 = V.createGroundVehicleAudio({ bus2 });
+  au2.start();
+  assert.doesNotThrow(() => {
+    au2.update(null);
+    au2.update(undefined);
+    au2.update(42);
+    au2.update(false);
+    au2.update("speeding");
+  }, "update() with null/primitives does not throw on live instance");
+  au2.dispose();
+});
+
+// ---------------------------------------------------------------------------
 
 for (const p of pending) await p();
 fake.uninstall();
