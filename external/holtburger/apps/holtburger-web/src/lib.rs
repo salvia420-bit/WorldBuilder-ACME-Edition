@@ -47367,12 +47367,24 @@ impl SessionHandle {
     }
 
     /// HBV1 VehicleCargo: `action` 1 = deploy, 2 = pack; `target` = cargo GUID on pack, 0 on deploy.
+    /// v4: optional slot and cargo_wcid.
     #[wasm_bindgen(js_name = vehicleCargo)]
-    pub fn vehicle_cargo(&self, vehicle: u32, action: u8, target: u32) -> Result<(), JsValue> {
+    pub fn vehicle_cargo(
+        &self,
+        vehicle: u32,
+        action: u8,
+        target: u32,
+        slot: Option<u8>,
+        cargo_wcid: Option<u32>,
+    ) -> Result<(), JsValue> {
         self.vehicle_send(holtburger_protocol::messages::vehicle::VehicleC2S::Cargo {
             vehicle,
             action,
             target,
+            slot: slot.unwrap_or(0),
+            reserved0: 0,
+            reserved1: 0,
+            cargo_wcid: cargo_wcid.unwrap_or(0),
         })
     }
 

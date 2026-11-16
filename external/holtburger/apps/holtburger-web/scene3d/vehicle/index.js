@@ -35,6 +35,12 @@ import { wireframeFlagOn } from "../wireframe_flag.js";
 import { createCameraOwner } from "../film/runtime/camera_owner.js";
 import { rlogEvent, RLOG } from "../residency_log.js";
 import { flightResidencyEnabled, setFlightHint, clearFlightHint } from "../residency.js";
+import { buildDeployable, DEPLOYABLE_WCID, DEPLOYABLE_KINDS } from "./deployable_models.js";
+import { buildDeployedRadar } from "./radar_model.js";
+import { buildProceduralJeep } from "./jeep_model.js";
+import { createDeployableCombatVfx } from "./deployable_vfx.js";
+import { DeployableAudioManager } from "./deployable_audio.js";
+import { RadarScopeHud } from "./radar_scope.js";
 
 export { vehicleAudioEnabled };
 export const CAP_OBSERVE = 0x1;
@@ -187,6 +193,111 @@ export function installVehicles(deps = {}) {
     liveScene3d: live, THREE, ground,
     onExplode: (at, lb) => { try { vehicleAudio?.explosion({ pos: at, lb, listenerPos: listenerAcPos() }); } catch (_) {} },
   });
+  const deployableVfx = THREE ? createDeployableCombatVfx({ liveScene3d: live, THREE, ground }) : null;
+  const deployableAudio = audioOn ? new DeployableAudioManager(live.audioManager?.getEffectBus?.() ?? null, { enabled: true }) : null;
+  const radarScope = new RadarScopeHud({ width: 236, height: 236, mode: "combined" });
+  const deployables = new Map(); // guid -> { guid, kind, wcid, model, last, lastSeenAt, standInHidden }
+  const jeepModels = new Map();  // guid -> procedural jeep instance
+  let latestAirContacts = [];
+  let latestGroundContacts = [];
+  let scopeMounted = false;
+
+  const KIND_TO_WCID = Object.freeze({
+    [DEPLOYABLE_KINDS.FluxPod]: DEPLOYABLE_WCID.FluxPod,
+    [DEPLOYABLE_KINDS.SolarPanels]: DEPLOYABLE_WCID.SolarPanels,
+    [DEPLOYABLE_KINDS.PowerGenerator]: DEPLOYABLE_WCID.PowerGenerator,
+    [DEPLOYABLE_KINDS.BatteryUnit]: DEPLOYABLE_WCID.BatteryUnit,
+    [DEPLOYABLE_KINDS.MissileTurret]: DEPLOYABLE_WCID.MissileTurret,
+    [DEPLOYABLE_KINDS.GroundRadar]: DEPLOYABLE_WCID.GroundRadar,
+    [DEPLOYABLE_KINDS.MortarTurret]: DEPLOYABLE_WCID.MortarTurret,
+    [DEPLOYABLE_KINDS.HeavyLaserTurret]: DEPLOYABLE_WCID.HeavyLaserTurret,
+  });
+
+  function ensureDeployableEntry(guid, kindOrWcid) {
+    if (!THREE || !live?.worldRoot) return null;
+    const g = guid >>> 0;
+    let entry = deployables.get(g);
+    const wcid = kindOrWcid >= 4000000 ? kindOrWcid : (KIND_TO_WCID[kindOrWcid] || (kindOrWcid === 1 ? 4000002 : 0));
+    if (!wcid) return null;
+    if (entry && entry.wcid !== wcid) {
+      try { if (entry.model?.root?.parent) entry.model.root.parent.remove(entry.model.root); entry.model?.dispose?.(); } catch (_) {}
+      deployables.delete(g);
+      entry = null;
+    }
+    if (!entry) {
+      const model = wcid === 4000002 ? buildDeployedRadar(THREE) : buildDeployable(THREE, wcid);
+      live.worldRoot.add(model.root);
+      entry = { guid: g, wcid, model, last: null, lastSeenAt: nowSec(), standInHidden: false };
+      deployables.set(g, entry);
+    }
+    return entry;
+  }
+
+  function removeDeployableEntry(guid) {
+    const g = guid >>> 0;
+    const entry = deployables.get(g);
+    if (!entry) return;
+    try { if (entry.model?.root?.parent) entry.model.root.parent.remove(entry.model.root); entry.model?.dispose?.(); } catch (_) {}
+    if (entry.standInHidden) {
+      try { em()?.setFilmHidden?.(g, false); } catch (_) {}
+    }
+    deployables.delete(g);
+  }
+
+  function tickDeployables(dt) {
+    const simT = nowSec();
+    const sky = live.skyLightingController?._lastState ?? null;
+    const sunPitchRad = sky && Number.isFinite(sky.dirPitch) ? (sky.dirPitch * Math.PI) / 180 : 0.78;
+    const sunHeadingRad = sky && Number.isFinite(sky.dirHeading) ? (sky.dirHeading * Math.PI) / 180 : 1.57;
+
+    let hasActiveRadar = false;
+    for (const entry of deployables.values()) {
+      const inEm = em()?.entityMap?.get(entry.guid);
+      if (inEm && (!entry.standInHidden || inEm._filmHidden !== true)) {
+        try { if (em()?.setFilmHidden?.(entry.guid, true)) entry.standInHidden = true; } catch (_) {}
+      }
+      if (entry.wcid === 4000002 || entry.wcid === DEPLOYABLE_WCID.GroundRadar) hasActiveRadar = true;
+      const st = entry.last || {};
+      try {
+        if (entry.wcid === 4000002) {
+          entry.model.update(simT);
+        } else {
+          entry.model.update({
+            dt,
+            simTimeSec: simT,
+            sunPitch: st.sunPitch !== undefined ? st.sunPitch : sunPitchRad,
+            sunHeading: st.sunHeading !== undefined ? st.sunHeading : sunHeadingRad,
+            fuelSecondsRemaining: st.fuelSec ?? st.fuelSecondsRemaining ?? 0,
+            online: st.onlineFlags ? Boolean(st.onlineFlags & 1) : Boolean(st.online),
+            capacitorJoules: st.energyJoules ?? st.capacitorJoules ?? 0,
+            deployElevation: st.elevation ?? st.deployElevation,
+            riseTimeSec: st.riseTimeSec,
+            yawRad: st.yaw ?? st.yawRad,
+            pitchRad: st.pitch ?? st.pitchRad,
+            rollRad: st.roll ?? st.rollRad,
+            ammoCount: st.ammo ?? st.ammoCount,
+            recoilSec: st.recoilSec ?? 0,
+          });
+        }
+      } catch (_) {}
+    }
+
+    deployableVfx?.update(dt);
+
+    const showScope = hasActiveRadar || latestAirContacts.length > 0 || latestGroundContacts.length > 0;
+    if (showScope && !scopeMounted && win?.document?.body) {
+      radarScope.mount(win.document.body);
+      scopeMounted = true;
+    }
+    if (scopeMounted) {
+      radarScope.update({
+        simTimeSec: simT,
+        airContacts: latestAirContacts,
+        groundContacts: latestGroundContacts,
+        visible: showScope,
+      });
+    }
+  }
   const airframes = airframeEnabled(search) ? createAirframes({ liveScene3d: live, THREE, search }) : null;
   const aeroFx = aeroFxEnabled(search) ? createAeroFx({ liveScene3d: live, THREE, ground }) : null;
   const wireframe = (() => { try { return wireframeFlagOn(search); } catch (_) { return false; } })();
@@ -549,6 +660,57 @@ export function installVehicles(deps = {}) {
           else if (m.kind === 6 && (!mine || fall)) fallPose.chute(m.subject, { local: mine });
           else if (m.kind === 7) fallPose.end(m.subject, m.cell ? "touchdown" : "teleport");
         }
+        if (m.kind === 15 && m.aux) { // CargoDeployed (Air Radar or Pallet unit)
+          const [wx, wy, wz] = m.cell ? FM.toGlobal(m.cell, m.x, m.y, m.z) : [m.x, m.y, m.z];
+          const entry = ensureDeployableEntry(m.aux >>> 0, 4000002);
+          if (entry) entry.model.root.position.set(wx, wy, wz);
+        } else if (m.kind === 16 && m.aux) { // CargoPacked
+          removeDeployableEntry(m.aux >>> 0);
+        }
+        break;
+      }
+      case "radar_contacts": {
+        latestAirContacts = Array.isArray(m.contacts) ? m.contacts : [];
+        if (m.radar && Array.isArray(m.radarPos) && m.radarPos.length >= 3) {
+          const entry = ensureDeployableEntry(m.radar >>> 0, 4000002);
+          if (entry) entry.model.root.position.set(m.radarPos[0], m.radarPos[1], m.radarPos[2]);
+        }
+        break;
+      }
+      case "ground_contacts": {
+        latestGroundContacts = Array.isArray(m.contacts) ? m.contacts : [];
+        break;
+      }
+      case "deployable_state": {
+        const entry = ensureDeployableEntry(m.deployable >>> 0, m.kind);
+        if (entry) {
+          const [wx, wy, wz] = m.cell ? FM.toGlobal(m.cell, m.x, m.y, m.z) : [m.x, m.y, m.z];
+          entry.model.root.position.set(wx, wy, wz);
+          if (Number.isFinite(m.heading)) entry.model.root.rotation.z = -m.heading;
+          entry.last = m;
+          entry.lastSeenAt = nowSec();
+          if (m.kind === DEPLOYABLE_KINDS.PowerGenerator && deployableAudio) {
+            try {
+              if ((m.fuelSec || 0) > 0 && (m.onlineFlags & 1)) {
+                deployableAudio.updateGeneratorHum(entry.guid, [wx, wy, wz], true);
+              } else {
+                deployableAudio.updateGeneratorHum(entry.guid, [wx, wy, wz], false);
+              }
+            } catch (_) {}
+          }
+        }
+        break;
+      }
+      case "deployable_fire": {
+        const mz = m.cell && Array.isArray(m.muzzle)
+          ? FM.toGlobal(m.cell, m.muzzle[0], m.muzzle[1], m.muzzle[2])
+          : m.muzzle;
+        deployableVfx?.handleFireEvent({ ...m, muzzle: mz });
+        try {
+          if (m.weaponKind === 1) deployableAudio?.playSamLaunch?.(mz);
+          else if (m.weaponKind === 2) deployableAudio?.playMortarLaunch?.(mz);
+          else if (m.weaponKind === 3) deployableAudio?.playLaserSnap?.(mz);
+        } catch (_) {}
         break;
       }
       default:
@@ -1638,6 +1800,7 @@ export function installVehicles(deps = {}) {
     pruneVehicles();
     tickPrompt();
     fx.tick(dt);
+    tickDeployables(dt);
     aeroFx?.tick(dt);
     if (!pilot) osd.sights(null, null, "");
     chutes?.tick(dt, chutePose);
@@ -1740,6 +1903,70 @@ export function installVehicles(deps = {}) {
     get piloting() { return !!pilot; },
     get falling() { return !!fall; },
     openChute() { if (fall) { try { sh().vehicleExit(fall.vehicle, 2); } catch (_) {} return true; } return false; },
+    deployables: {
+      list: () => [...deployables.values()].map((d) => ({
+        guid: d.guid, wcid: d.wcid,
+        pos: [d.model.root.position.x, d.model.root.position.y, d.model.root.position.z],
+        last: d.last,
+      })),
+      spawnLocal(guid, wcidOrKind, worldPos, heading = 0, state = {}) {
+        const entry = ensureDeployableEntry(guid, wcidOrKind);
+        if (!entry) return null;
+        entry.model.root.position.set(worldPos[0], worldPos[1], worldPos[2]);
+        entry.model.root.rotation.z = -heading;
+        entry.last = { ...state };
+        return entry;
+      },
+      spawnJeepLocal(guid, worldPos, heading = 0, cargoState = {}) {
+        if (!THREE || !live?.worldRoot) return null;
+        let j = jeepModels.get(guid >>> 0);
+        if (!j) {
+          j = buildProceduralJeep(THREE, {}, { liveScene3d: live });
+          live.worldRoot.add(j.root);
+          jeepModels.set(guid >>> 0, j);
+        }
+        j.root.position.set(worldPos[0], worldPos[1], worldPos[2]);
+        j.root.rotation.z = -heading;
+        j.update(cargoState);
+        // Attach scaled Full Pallet or Dual Half-Pallet visual loads into Jeep cargo bed mount points!
+        while (j.cargoSlotFull.children.length) j.cargoSlotFull.remove(j.cargoSlotFull.children[0]);
+        while (j.cargoSlot0.children.length) j.cargoSlot0.remove(j.cargoSlot0.children[0]);
+        while (j.cargoSlot1.children.length) j.cargoSlot1.remove(j.cargoSlot1.children[0]);
+        if (cargoState.fullWcid) {
+          const u = buildDeployable(THREE, cargoState.fullWcid);
+          u.root.scale.setScalar(0.55);
+          j.cargoSlotFull.add(u.root);
+          j.cargoSlotFull.visible = true;
+          j.cargoCrateGroup.visible = false;
+        } else if (cargoState.half0Wcid || cargoState.half1Wcid) {
+          j.cargoCrateGroup.visible = false;
+          if (cargoState.half0Wcid) {
+            const u0 = buildDeployable(THREE, cargoState.half0Wcid);
+            u0.root.scale.setScalar(0.52);
+            u0.root.position.set(0.26, 0, 0);
+            j.cargoSlot0.add(u0.root);
+            j.cargoSlot0.visible = true;
+          }
+          if (cargoState.half1Wcid) {
+            const u1 = buildDeployable(THREE, cargoState.half1Wcid);
+            u1.root.scale.setScalar(0.52);
+            u1.root.position.set(-0.26, 0, 0);
+            j.cargoSlot1.add(u1.root);
+            j.cargoSlot1.visible = true;
+          }
+        }
+        return j;
+      },
+      fireLocal(weaponKind, muzzle, targetPos, velocity) {
+        deployableVfx?.handleFireEvent({ weaponKind, muzzle, targetPos, velocity });
+      },
+      setContacts({ air = [], ground = [] } = {}) {
+        latestAirContacts = air;
+        latestGroundContacts = ground;
+      },
+      vfx: deployableVfx,
+      scope: radarScope,
+    },
     dispose() {
       disposed = true;
       teardownSession("dispose");
@@ -1752,6 +1979,14 @@ export function installVehicles(deps = {}) {
       try { clearTimeout(promptTimer); } catch (_) {}
       promptTimer = null;
       for (const v of vehicles.values()) forgetVehicle(v);
+      for (const g of [...deployables.keys()]) removeDeployableEntry(g);
+      for (const j of jeepModels.values()) {
+        try { if (j.root.parent) j.root.parent.remove(j.root); j.dispose(); } catch (_) {}
+      }
+      jeepModels.clear();
+      deployableVfx?.dispose();
+      deployableAudio?.dispose();
+      radarScope.dispose();
       osd.dispose();
       fx.dispose();
       aeroFx?.dispose();

@@ -25,11 +25,13 @@ mod tests;
 /// `"HBV1"` as a little-endian u32 (bytes `48 42 56 31`).
 pub const HBV1_TAG: u32 = 0x3156_4248;
 /// The protocol version this module writes (and the newest it parses fully).
-pub const HBV1_VERSION: u16 = 3;
+pub const HBV1_VERSION: u16 = 4;
 /// The first version carrying the v2 fields.
 const V2: u16 = 2;
 /// The first version carrying the v3 fields.
 const V3: u16 = 3;
+/// The first version carrying the v4 fields.
+const V4: u16 = 4;
 
 /// ClientCapabilities / CapabilitiesAck bits.
 pub mod caps {
@@ -61,6 +63,12 @@ pub mod s2c {
     pub const EVENT: u32 = 0x0908;
     /// v3: 1 Hz compact radar sweep broadcast.
     pub const RADAR_CONTACTS: u32 = 0x090A;
+    /// v4: Authoritative state of deployed units (84 bytes).
+    pub const DEPLOYABLE_STATE: u32 = 0x090B;
+    /// v4: Deployable weapon discharge event (68 bytes).
+    pub const DEPLOYABLE_FIRE: u32 = 0x090C;
+    /// v4: Ground radar 30 RPM surface sweep broadcast.
+    pub const GROUND_CONTACTS: u32 = 0x090D;
 }
 
 /// `VehicleProfile.locomotion`.
@@ -196,6 +204,43 @@ pub mod iff_standing {
     pub const FRIENDLY: u8 = 1;
     pub const NEUTRAL: u8 = 2;
     pub const HOSTILE: u8 = 3;
+}
+
+/// Deployable unit discriminator (WCID mapping).
+pub mod deployable_kind {
+    pub const NONE: u32 = 0;
+    pub const RADAR_STATION: u32 = 1;
+    pub const FLUX_POD: u32 = 2;
+    pub const SOLAR_PANELS: u32 = 3;
+    pub const POWER_GENERATOR: u32 = 4;
+    pub const BATTERY_UNIT: u32 = 5;
+    pub const MISSILE_TURRET: u32 = 6;
+    pub const GROUND_RADAR: u32 = 7;
+    pub const MORTAR_TURRET: u32 = 8;
+    pub const HEAVY_LASER_TURRET: u32 = 9;
+}
+
+/// Standardized industrial pallet footprint.
+pub mod pallet_size {
+    pub const NONE: u8 = 0;
+    pub const HALF: u8 = 1;
+    pub const FULL: u8 = 2;
+}
+
+/// Deployable weapon classification.
+pub mod deployable_weapon_kind {
+    pub const NONE: u32 = 0;
+    pub const SAM: u32 = 1;
+    pub const MORTAR: u32 = 2;
+    pub const LASER: u32 = 3;
+}
+
+/// Ground radar contact entity type.
+pub mod ground_contact_kind {
+    pub const UNKNOWN: u8 = 0;
+    pub const PLAYER: u8 = 1;
+    pub const VEHICLE: u8 = 2;
+    pub const MONSTER: u8 = 3;
 }
 
 // ---------------------------------------------------------------- primitives
@@ -431,6 +476,59 @@ impl RadarContactWire {
     }
 }
 
+/// 24 bytes packed surface radar contact record on the wire.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GroundContactWire {
+    pub target_guid: u32,
+    pub dx_m: f32,
+    pub dy_m: f32,
+    pub dz_m: f32,
+    pub kind: u8,
+    pub standing: u8,
+    pub heading_u8: u8,
+    pub speed_mps_u8: u8,
+    pub flags: u8,
+    pub reserved0: u8,
+    pub reserved1: u8,
+    pub reserved2: u8,
+}
+
+impl GroundContactWire {
+    pub const WIRE: usize = 24;
+
+    fn read(r: &mut Rd<'_>) -> Option<Self> {
+        Some(Self {
+            target_guid: r.u32()?,
+            dx_m: r.f32()?,
+            dy_m: r.f32()?,
+            dz_m: r.f32()?,
+            kind: r.u8()?,
+            standing: r.u8()?,
+            heading_u8: r.u8()?,
+            speed_mps_u8: r.u8()?,
+            flags: r.u8()?,
+            reserved0: r.u8()?,
+            reserved1: r.u8()?,
+            reserved2: r.u8()?,
+        })
+    }
+
+    fn write(&self, buf: &mut Vec<u8>) {
+        buf.write_u32::<LittleEndian>(self.target_guid).unwrap();
+        buf.write_f32::<LittleEndian>(self.dx_m).unwrap();
+        buf.write_f32::<LittleEndian>(self.dy_m).unwrap();
+        buf.write_f32::<LittleEndian>(self.dz_m).unwrap();
+        buf.push(self.kind);
+        buf.push(self.standing);
+        buf.push(self.heading_u8);
+        buf.push(self.speed_mps_u8);
+        buf.push(self.flags);
+        buf.push(self.reserved0);
+        buf.push(self.reserved1);
+        buf.push(self.reserved2);
+    }
+}
+
 // ---------------------------------------------------------------- C2S
 
 /// Client → server vehicle game actions.
@@ -441,8 +539,16 @@ pub enum VehicleC2S {
     Exit { vehicle: u32, mode: u32 },
     /// Newest frame first, then up to two older ones (redundancy).
     Input { vehicle: u32, frames: Vec<VehicleInputFrame> },
-    /// v3: cargo deployment or packing (1=Deploy, 2=Pack).
-    Cargo { vehicle: u32, action: u8, target: u32 },
+    /// v3: cargo deployment or packing (1=Deploy, 2=Pack); v4: slot, reserved, cargo_wcid.
+    Cargo {
+        vehicle: u32,
+        action: u8,
+        target: u32,
+        slot: u8,
+        reserved0: u8,
+        reserved1: u16,
+        cargo_wcid: u32,
+    },
 }
 
 impl VehicleC2S {
@@ -485,10 +591,23 @@ impl VehicleC2S {
                     f.write(buf);
                 }
             }
-            Self::Cargo { vehicle, action, target } => {
+            Self::Cargo {
+                vehicle,
+                action,
+                target,
+                slot,
+                reserved0,
+                reserved1,
+                cargo_wcid,
+            } => {
                 buf.write_u32::<LittleEndian>(*vehicle).unwrap();
                 buf.push(*action);
                 buf.write_u32::<LittleEndian>(*target).unwrap();
+                // v4
+                buf.push(*slot);
+                buf.push(*reserved0);
+                buf.write_u16::<LittleEndian>(*reserved1).unwrap();
+                buf.write_u32::<LittleEndian>(*cargo_wcid).unwrap();
             }
         }
     }
@@ -527,11 +646,25 @@ impl VehicleC2S {
                     }
                     Self::Input { vehicle, frames }
                 }
-                c2s::CARGO => Self::Cargo {
-                    vehicle: r.u32()?,
-                    action: r.u8()?,
-                    target: r.u32()?,
-                },
+                c2s::CARGO => {
+                    let vehicle = r.u32()?;
+                    let action = r.u8()?;
+                    let target = r.u32()?;
+                    let v4 = hdr.version >= V4;
+                    let slot = if v4 { r.u8()? } else { 0 };
+                    let reserved0 = if v4 { r.u8()? } else { 0 };
+                    let reserved1 = if v4 { r.u16()? } else { 0 };
+                    let cargo_wcid = if v4 { r.u32()? } else { 0 };
+                    Self::Cargo {
+                        vehicle,
+                        action,
+                        target,
+                        slot,
+                        reserved0,
+                        reserved1,
+                        cargo_wcid,
+                    }
+                }
                 _ => return None,
             }
         };
@@ -625,6 +758,18 @@ pub struct VehicleState {
     pub ground_flags: u8,
     pub surface_family: u8,
     pub wheel_spin_q16: i16,
+    /// v4: bitmask: 0x01=slot 0 loaded, 0x02=slot 1 loaded, 0x04=full pallet.
+    pub cargo_mask: u8,
+    /// v4: PalletSize.
+    pub pallet_size0: u8,
+    /// v4: PalletSize.
+    pub pallet_size1: u8,
+    /// v4.
+    pub reserved3: u8,
+    /// v4: WCID in slot 0 or full pallet.
+    pub cargo_slot0_wcid: u32,
+    /// v4: WCID in slot 1.
+    pub cargo_slot1_wcid: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -675,6 +820,58 @@ pub struct VehicleRadarContacts {
     pub contacts: Vec<RadarContactWire>,
 }
 
+/// v4: Authoritative state of deployed units (84 bytes payload).
+#[derive(Debug, Clone, PartialEq)]
+pub struct VehicleDeployableState {
+    pub deployable_guid: u32,
+    pub deployable_kind: u32,
+    pub pallet_size: u8,
+    pub online_flags: u8,
+    pub ammo_remaining: u16,
+    pub owner_guid: u32,
+    pub parent_vehicle: u32,
+    pub cell: u32,
+    pub position: [f32; 3],
+    pub heading: f32,
+    pub power_watts: f32,
+    pub energy_stored_joules: f32,
+    pub energy_capacity_joules: f32,
+    pub fuel_remaining: f32,
+    pub pitch_rad: f32,
+    pub yaw_rad: f32,
+    pub roll_rad: f32,
+    pub elevation_m: f32,
+}
+
+/// v4: Deployable weapon discharge event (68 bytes payload).
+#[derive(Debug, Clone, PartialEq)]
+pub struct VehicleDeployableFire {
+    pub deployable_guid: u32,
+    pub weapon_kind: u32,
+    pub step: u32,
+    pub target_guid: u32,
+    pub cell: u32,
+    pub muzzle: [f32; 3],
+    pub target_pos: [f32; 3],
+    pub velocity: [f32; 3],
+    pub energy_joules: f32,
+    pub burst_count: u16,
+    pub reserved: u16,
+}
+
+/// v4: Ground radar 30 RPM surface sweep broadcast.
+#[derive(Debug, Clone, PartialEq)]
+pub struct VehicleGroundContacts {
+    pub radar_guid: u32,
+    pub parent_vehicle: u32,
+    pub radar_x: f32,
+    pub radar_y: f32,
+    pub radar_z: f32,
+    pub range_m: f32,
+    pub sweep_angle_rad: f32,
+    pub contacts: Vec<GroundContactWire>,
+}
+
 /// Server → client vehicle game events.
 #[derive(Debug, Clone, PartialEq)]
 pub enum VehicleS2C {
@@ -689,6 +886,9 @@ pub enum VehicleS2C {
     Fire(VehicleFire),
     Event(VehicleEvent),
     RadarContacts(VehicleRadarContacts),
+    DeployableState(VehicleDeployableState),
+    DeployableFire(VehicleDeployableFire),
+    GroundContacts(VehicleGroundContacts),
 }
 
 impl VehicleS2C {
@@ -701,6 +901,9 @@ impl VehicleS2C {
             Self::Fire(_) => s2c::FIRE,
             Self::Event(_) => s2c::EVENT,
             Self::RadarContacts(_) => s2c::RADAR_CONTACTS,
+            Self::DeployableState(_) => s2c::DEPLOYABLE_STATE,
+            Self::DeployableFire(_) => s2c::DEPLOYABLE_FIRE,
+            Self::GroundContacts(_) => s2c::GROUND_CONTACTS,
         }
     }
 
@@ -714,6 +917,9 @@ impl VehicleS2C {
                 | s2c::FIRE
                 | s2c::EVENT
                 | s2c::RADAR_CONTACTS
+                | s2c::DEPLOYABLE_STATE
+                | s2c::DEPLOYABLE_FIRE
+                | s2c::GROUND_CONTACTS
         )
     }
 
@@ -838,6 +1044,13 @@ impl VehicleS2C {
                 buf.push(s.ground_flags);
                 buf.push(s.surface_family);
                 buf.write_i16::<LittleEndian>(s.wheel_spin_q16).unwrap();
+                // v4
+                buf.push(s.cargo_mask);
+                buf.push(s.pallet_size0);
+                buf.push(s.pallet_size1);
+                buf.push(s.reserved3);
+                buf.write_u32::<LittleEndian>(s.cargo_slot0_wcid).unwrap();
+                buf.write_u32::<LittleEndian>(s.cargo_slot1_wcid).unwrap();
             }
             Self::Fire(f) => {
                 buf.write_u32::<LittleEndian>(f.vehicle).unwrap();
@@ -879,6 +1092,56 @@ impl VehicleS2C {
                     c.write(buf);
                 }
             }
+            Self::DeployableState(ds) => {
+                buf.write_u32::<LittleEndian>(ds.deployable_guid).unwrap();
+                buf.write_u32::<LittleEndian>(ds.deployable_kind).unwrap();
+                buf.push(ds.pallet_size);
+                buf.push(ds.online_flags);
+                buf.write_u16::<LittleEndian>(ds.ammo_remaining).unwrap();
+                buf.write_u32::<LittleEndian>(ds.owner_guid).unwrap();
+                buf.write_u32::<LittleEndian>(ds.parent_vehicle).unwrap();
+                buf.write_u32::<LittleEndian>(ds.cell).unwrap();
+                w_vec3(buf, ds.position);
+                for v in [
+                    ds.heading,
+                    ds.power_watts,
+                    ds.energy_stored_joules,
+                    ds.energy_capacity_joules,
+                    ds.fuel_remaining,
+                    ds.pitch_rad,
+                    ds.yaw_rad,
+                    ds.roll_rad,
+                    ds.elevation_m,
+                ] {
+                    buf.write_f32::<LittleEndian>(v).unwrap();
+                }
+            }
+            Self::DeployableFire(df) => {
+                buf.write_u32::<LittleEndian>(df.deployable_guid).unwrap();
+                buf.write_u32::<LittleEndian>(df.weapon_kind).unwrap();
+                buf.write_u32::<LittleEndian>(df.step).unwrap();
+                buf.write_u32::<LittleEndian>(df.target_guid).unwrap();
+                buf.write_u32::<LittleEndian>(df.cell).unwrap();
+                w_vec3(buf, df.muzzle);
+                w_vec3(buf, df.target_pos);
+                w_vec3(buf, df.velocity);
+                buf.write_f32::<LittleEndian>(df.energy_joules).unwrap();
+                buf.write_u16::<LittleEndian>(df.burst_count).unwrap();
+                buf.write_u16::<LittleEndian>(df.reserved).unwrap();
+            }
+            Self::GroundContacts(gc) => {
+                buf.write_u32::<LittleEndian>(gc.radar_guid).unwrap();
+                buf.write_u32::<LittleEndian>(gc.parent_vehicle).unwrap();
+                buf.write_f32::<LittleEndian>(gc.radar_x).unwrap();
+                buf.write_f32::<LittleEndian>(gc.radar_y).unwrap();
+                buf.write_f32::<LittleEndian>(gc.radar_z).unwrap();
+                buf.write_f32::<LittleEndian>(gc.range_m).unwrap();
+                buf.write_f32::<LittleEndian>(gc.sweep_angle_rad).unwrap();
+                buf.write_u32::<LittleEndian>(gc.contacts.len() as u32).unwrap();
+                for c in &gc.contacts {
+                    c.write(buf);
+                }
+            }
         }
     }
 
@@ -900,6 +1163,7 @@ impl VehicleS2C {
             // v1 payloads end before the v2 fields: those keep their defaults
             let v2 = hdr.version >= V2;
             let v3 = hdr.version >= V3;
+            let v4 = hdr.version >= V4;
             match opcode {
                 s2c::CAPABILITIES_ACK => Self::CapabilitiesAck {
                     granted: r.u32()?,
@@ -1051,6 +1315,13 @@ impl VehicleS2C {
                     ground_flags: if v3 { r.u8()? } else { 0 },
                     surface_family: if v3 { r.u8()? } else { 0 },
                     wheel_spin_q16: if v3 { r.i16()? } else { 0 },
+                    // v4 tail
+                    cargo_mask: if v4 { r.u8()? } else { 0 },
+                    pallet_size0: if v4 { r.u8()? } else { 0 },
+                    pallet_size1: if v4 { r.u8()? } else { 0 },
+                    reserved3: if v4 { r.u8()? } else { 0 },
+                    cargo_slot0_wcid: if v4 { r.u32()? } else { 0 },
+                    cargo_slot1_wcid: if v4 { r.u32()? } else { 0 },
                 }),
                 s2c::FIRE => Self::Fire(VehicleFire {
                     vehicle: r.u32()?,
@@ -1098,6 +1369,96 @@ impl VehicleS2C {
                         radar_z,
                         range_m,
                         ceiling_m,
+                        contacts,
+                    })
+                }
+                s2c::DEPLOYABLE_STATE => {
+                    let deployable_guid = r.u32()?;
+                    let deployable_kind = r.u32()?;
+                    let pallet_size = r.u8()?;
+                    let online_flags = r.u8()?;
+                    let ammo_remaining = r.u16()?;
+                    let owner_guid = r.u32()?;
+                    let parent_vehicle = r.u32()?;
+                    let cell = r.u32()?;
+                    let position = r.vec3()?;
+                    let heading = r.f32()?;
+                    let power_watts = r.f32()?;
+                    let energy_stored_joules = r.f32()?;
+                    let energy_capacity_joules = r.f32()?;
+                    let fuel_remaining = r.f32()?;
+                    let pitch_rad = r.f32()?;
+                    let yaw_rad = r.f32()?;
+                    let roll_rad = r.f32()?;
+                    let elevation_m = r.f32()?;
+                    Self::DeployableState(VehicleDeployableState {
+                        deployable_guid,
+                        deployable_kind,
+                        pallet_size,
+                        online_flags,
+                        ammo_remaining,
+                        owner_guid,
+                        parent_vehicle,
+                        cell,
+                        position,
+                        heading,
+                        power_watts,
+                        energy_stored_joules,
+                        energy_capacity_joules,
+                        fuel_remaining,
+                        pitch_rad,
+                        yaw_rad,
+                        roll_rad,
+                        elevation_m,
+                    })
+                }
+                s2c::DEPLOYABLE_FIRE => {
+                    let deployable_guid = r.u32()?;
+                    let weapon_kind = r.u32()?;
+                    let step = r.u32()?;
+                    let target_guid = r.u32()?;
+                    let cell = r.u32()?;
+                    let muzzle = r.vec3()?;
+                    let target_pos = r.vec3()?;
+                    let velocity = r.vec3()?;
+                    let energy_joules = r.f32()?;
+                    let burst_count = r.u16()?;
+                    let reserved = r.u16()?;
+                    Self::DeployableFire(VehicleDeployableFire {
+                        deployable_guid,
+                        weapon_kind,
+                        step,
+                        target_guid,
+                        cell,
+                        muzzle,
+                        target_pos,
+                        velocity,
+                        energy_joules,
+                        burst_count,
+                        reserved,
+                    })
+                }
+                s2c::GROUND_CONTACTS => {
+                    let radar_guid = r.u32()?;
+                    let parent_vehicle = r.u32()?;
+                    let radar_x = r.f32()?;
+                    let radar_y = r.f32()?;
+                    let radar_z = r.f32()?;
+                    let range_m = r.f32()?;
+                    let sweep_angle_rad = r.f32()?;
+                    let n = r.count(GroundContactWire::WIRE)?;
+                    let mut contacts = Vec::with_capacity(n);
+                    for _ in 0..n {
+                        contacts.push(GroundContactWire::read(&mut r)?);
+                    }
+                    Self::GroundContacts(VehicleGroundContacts {
+                        radar_guid,
+                        parent_vehicle,
+                        radar_x,
+                        radar_y,
+                        radar_z,
+                        range_m,
+                        sweep_angle_rad,
                         contacts,
                     })
                 }

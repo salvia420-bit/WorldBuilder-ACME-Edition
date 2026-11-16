@@ -1083,6 +1083,12 @@ pub enum GameEventOpcode {
     VehicleEvent = 0x0908,
     /// S2C: HBV1 VehicleRadarContacts (1 Hz compact radar sweep broadcast).
     VehicleRadarContacts = 0x090A,
+    /// S2C: HBV1 VehicleDeployableState (palletized deployable state telemetry).
+    VehicleDeployableState = 0x090B,
+    /// S2C: HBV1 VehicleDeployableFire (autonomous turret weapon fire / beam event).
+    VehicleDeployableFire = 0x090C,
+    /// S2C: HBV1 VehicleGroundContacts (1 Hz ground radar contact broadcast).
+    VehicleGroundContacts = 0x090D,
     // /// S2C: Admin-only query for a specific plugin's status.
     // AdminQueryPlugin = 0x02B1,
     // /// S2C: Admin-only response to a plugin query.

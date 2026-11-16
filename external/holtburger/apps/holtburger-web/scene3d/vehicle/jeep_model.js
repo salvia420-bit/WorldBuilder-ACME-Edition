@@ -27,6 +27,16 @@ export const JEEP_DIMENSIONS = Object.freeze({
   maxDrawCalls: 16,         // GTX 1070 draw call ceiling
 });
 
+export const PALLET_MOUNT_OFFSETS = Object.freeze({
+  fullBed: Object.freeze([0.0, -1.15, 0.72]),
+  halfSlot0: Object.freeze([-0.60, -1.15, 0.72]),
+  halfSlot1: Object.freeze([0.60, -1.15, 0.72]),
+});
+
+export function bridgeCargoLoaded(state = {}) {
+  return Boolean((state.cargoMask || 0) !== 0 || (state.cargoSlot0Wcid || 0) !== 0);
+}
+
 export function buildProceduralJeep(three, profile = {}, options = {}) {
   const t = three || THREE_DEFAULT;
   const liveScene3d = options.liveScene3d || { activeLights: [] };
@@ -47,22 +57,29 @@ export function buildProceduralJeep(three, profile = {}, options = {}) {
     depthWrite: false,
   });
 
-  // 1. Tub, fenders, 9-slot grille, hood with star stencil (non-indexed for clean vertex inspection)
-  const rawTub = new t.BoxGeometry(1.48, 3.20, 0.65).toNonIndexed();
-  const posAttr = rawTub.getAttribute("position");
-  const colAttr = new t.BufferAttribute(new Float32Array(posAttr.count * 3), 3);
-  const cOlive = new t.Color(JEEP_PALETTE.oliveDrab);
-  const cStar = new t.Color(JEEP_PALETTE.starWhite);
-  for (let i = 0; i < posAttr.count; i++) {
-    const y = posAttr.getY(i);
-    const z = posAttr.getZ(i);
-    if (y > 0.4 && z > 0.2) {
-      colAttr.setXYZ(i, cStar.r, cStar.g, cStar.b);
-    } else {
-      colAttr.setXYZ(i, cOlive.r, cOlive.g, cOlive.b);
+  function shadedBox(dx, dy, dz, hex, hoodStar = false) {
+    const g = (hoodStar ? new t.BoxGeometry(dx, dy, dz, 6, 10, 1) : new t.BoxGeometry(dx, dy, dz)).toNonIndexed();
+    g.computeVertexNormals();
+    const pos = g.getAttribute("position");
+    const nrm = g.getAttribute("normal");
+    const col = new t.BufferAttribute(new Float32Array(pos.count * 3), 3);
+    const base = new t.Color(hex);
+    const star = new t.Color(JEEP_PALETTE.starWhite);
+    for (let i = 0; i < pos.count; i++) {
+      const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
+      const nx = nrm ? nrm.getX(i) : 0, ny = nrm ? nrm.getY(i) : 0, nz = nrm ? nrm.getZ(i) : 1;
+      const shade = 0.52 + 0.36 * Math.max(0, nx * 0.42 - ny * 0.52 + nz * 0.74) + 0.14 * (0.5 + 0.5 * nz);
+      const useStar = hoodStar && nz > 0.8 && y > 0.55 && y < 1.25 && Math.abs(x) < 0.36 && (Math.abs(x) + Math.abs(y - 0.90) < 0.42);
+      const c = useStar ? star : base;
+      const s = (useStar || (hoodStar && Math.abs(nz) > 0.8)) ? 1.0 : shade;
+      col.setXYZ(i, Math.min(1, c.r * s), Math.min(1, c.g * s), Math.min(1, c.b * s));
     }
+    g.setAttribute("color", col);
+    return g;
   }
-  rawTub.setAttribute("color", colAttr);
+
+  // 1. Tub, fenders, 9-slot grille, hood with star stencil (non-indexed for clean vertex inspection)
+  const rawTub = shadedBox(1.48, 3.20, 0.65, JEEP_PALETTE.oliveDrab, true);
   const tubMesh = new t.Mesh(rawTub, matBody);
   tubMesh.name = "tub-chassis";
   tubMesh.position.set(0, 0, 0.55);
@@ -91,7 +108,7 @@ export function buildProceduralJeep(three, profile = {}, options = {}) {
   spareTire.position.set(0, -1.65, 0.65);
   spareTire.rotation.x = Math.PI / 2;
 
-  const jerrycan = new t.Mesh(new t.BoxGeometry(0.18, 0.35, 0.45), matBody);
+  const jerrycan = new t.Mesh(shadedBox(0.18, 0.35, 0.45, 0x565f3c), matBody);
   jerrycan.name = "jerrycan";
   jerrycan.position.set(-0.55, -1.62, 0.65);
 
@@ -110,7 +127,7 @@ export function buildProceduralJeep(three, profile = {}, options = {}) {
   const tailgatePivot = new t.Group();
   tailgatePivot.name = "tailgatePivot";
   tailgatePivot.position.set(0, -1.58, 0.35);
-  const tailgateMesh = new t.Mesh(new t.BoxGeometry(1.20, 0.05, 0.35), matBody);
+  const tailgateMesh = new t.Mesh(shadedBox(1.20, 0.05, 0.35, JEEP_PALETTE.oliveDrab), matBody);
   tailgateMesh.position.set(0, 0, 0.18);
   tailgatePivot.add(tailgateMesh);
   root.add(tailgatePivot);
@@ -153,20 +170,34 @@ export function buildProceduralJeep(three, profile = {}, options = {}) {
 
   root.add(steerPivotFL, steerPivotFR, wheelRL, wheelRR);
 
-  // 8. Stowed Cargo Crate (SCR-602 radar crate)
+  // 8. Stowed Cargo Mount Points & Legacy Crate
+  const cargoSlotFull = new t.Group();
+  cargoSlotFull.name = "cargoSlotFull";
+  cargoSlotFull.position.set(0.0, -1.15, 0.72);
+
+  const cargoSlot0 = new t.Group();
+  cargoSlot0.name = "cargoSlot0";
+  cargoSlot0.position.set(-0.60, -1.15, 0.72);
+
+  const cargoSlot1 = new t.Group();
+  cargoSlot1.name = "cargoSlot1";
+  cargoSlot1.position.set(0.60, -1.15, 0.72);
+
   const cargoCrateGroup = new t.Group();
   cargoCrateGroup.name = "cargoCrateGroup";
   cargoCrateGroup.position.set(0, -1.15, 0.72);
-  const crateMesh = new t.Mesh(new t.BoxGeometry(0.85, 0.70, 0.55), matBody);
+  const crateMesh = new t.Mesh(shadedBox(0.85, 0.70, 0.55, 0x6b583e), matBody);
+  crateMesh.position.set(0, 0, 0.24);
   cargoCrateGroup.add(crateMesh);
   cargoCrateGroup.visible = true; // vfx-lint-allow: cargo visibility initial
-  root.add(cargoCrateGroup);
+
+  root.add(cargoCrateGroup, cargoSlotFull, cargoSlot0, cargoSlot1);
 
   // 9. Headlight additive beams & pooled FxLightSource
   const headlightBeams = new t.Mesh(new t.ConeGeometry(0.45, 4.0, 12), matAdditive);
   headlightBeams.name = "headlightBeams";
-  headlightBeams.position.set(0, 3.2, 0.65);
-  headlightBeams.rotation.x = Math.PI / 2;
+  headlightBeams.position.set(0, 3.6, 0.62);
+  headlightBeams.rotation.x = Math.PI;
   headlightBeams.visible = false; // vfx-lint-allow: headlight beam toggle initial
   root.add(headlightBeams);
 
@@ -191,6 +222,10 @@ export function buildProceduralJeep(three, profile = {}, options = {}) {
     tailgatePivot,
     wheels: [wheelFL, wheelFR, wheelRL, wheelRR],
     cargoCrateGroup,
+    cargoSlotFull,
+    cargoSlot0,
+    cargoSlot1,
+    cargoOffsets: PALLET_MOUNT_OFFSETS,
     headlightBeams,
     pooledLight,
     get wheelRollAngle() { return wheelRollAngle; },
@@ -225,9 +260,23 @@ export function buildProceduralJeep(three, profile = {}, options = {}) {
         }
       }
 
-      // Cargo crate toggle
+      // Cargo crate toggle with backward compatibility bridge
+      let cargoActive = undefined;
       if (state.cargoLoaded !== undefined) {
-        cargoCrateGroup.visible = Boolean(state.cargoLoaded); // vfx-lint-allow: cargo visibility toggle
+        cargoActive = Boolean(state.cargoLoaded);
+      } else if (state.cargoMask !== undefined || state.cargoSlot0Wcid !== undefined) {
+        cargoActive = bridgeCargoLoaded(state);
+      }
+      if (cargoActive !== undefined) {
+        cargoCrateGroup.visible = cargoActive; // vfx-lint-allow: cargo visibility toggle
+      }
+
+      // Slot visibility management if cargoMask is provided
+      if (state.cargoMask !== undefined) {
+        const mask = state.cargoMask || 0;
+        cargoSlotFull.visible = Boolean(mask & 0x04); // vfx-lint-allow: full pallet slot visibility
+        cargoSlot0.visible = Boolean(mask & 0x01); // vfx-lint-allow: slot 0 visibility
+        cargoSlot1.visible = Boolean(mask & 0x02); // vfx-lint-allow: slot 1 visibility
       }
 
       // Windscreen folding

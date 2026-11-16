@@ -43,12 +43,18 @@
                        Vehicle_Profile  Wheelbase, TrackWidth, WheelRadius, MaxSteerRad, ReverseMax,
                                         ClimbLimitCos, FordDepthMax, CargoWcid
                        Vehicle_State    SteerAngle, GroundFlags, SurfaceFamily, WheelSpinQ16
+  v4 additions (2026-11): DeployableKind, PalletSize, DeployableWeaponKind, GroundContactKind enums,
+                      GroundContactWire type, S2C Vehicle_DeployableState (0x090B),
+                      Vehicle_DeployableFire (0x090C), Vehicle_GroundContacts (0x090D).
+                      Appended fields (since="4"):
+                        Vehicle_Cargo    Slot, Reserved0, Reserved1, CargoWcid
+                        Vehicle_State    CargoMask, PalletSize0, PalletSize1, Reserved3, CargoSlot0Wcid, CargoSlot1Wcid
 
   Units: metres, seconds, radians. Positions are AC cell + landblock-local coordinates. Angles: heading is a
   COMPASS angle (0 = north/+y, pi/2 = east/+x, clockwise); pitch is nose-up positive; bank is right-wing-down
   positive. Stick values are signed bytes scaled by 1/127 (-128 clamps to -1). Throttle is u8 scaled by 1/255.
 -->
-<schema text="holtburger vehicles (HBV1) — additive, capability-gated vehicle messages" version="3">
+<schema text="holtburger vehicles (HBV1) — additive, capability-gated vehicle messages" version="4">
   <enums>
     <enum name="VehicleCapability" parent="uint" mask="true" text="ClientCapabilities.Flags / CapabilitiesAck.Granted">
       <value value="0x00000001" name="Observe" text="receive VehicleProfile / VehicleSeat / VehicleState / VehicleFire / VehicleEvent" />
@@ -154,6 +160,35 @@
       <value value="2" name="Neutral" />
       <value value="3" name="Hostile" />
     </enum>
+    <enum name="DeployableKind" parent="uint">
+      <value value="0" name="None" />
+      <value value="1" name="RadarStation" text="AN/TPS-1 Mobile Air-Search Radar (WCID 4000002)" />
+      <value value="2" name="FluxPod" text="Wireless power distribution hub ±75m (WCID 4000010)" />
+      <value value="3" name="SolarPanels" text="Sun-tracking photovoltaic array (WCID 4000011)" />
+      <value value="4" name="PowerGenerator" text="Arcane Platinum Scarab turbine generator 45 kW (WCID 4000012)" />
+      <value value="5" name="BatteryUnit" text="600 kJ capacitor bank with 5-bar display (WCID 4000013)" />
+      <value value="6" name="MissileTurret" text="Autonomous SAM air defense turret 4 missiles (WCID 4000014)" />
+      <value value="7" name="GroundRadar" text="600m 30 RPM surface surveillance radar (WCID 4000015)" />
+      <value value="8" name="MortarTurret" text="Ground mortar lobber 50/50 lead 2 bounces (WCID 4000016)" />
+      <value value="9" name="HeavyLaserTurret" text="Direct-energy hitscan red laser 850m LOS 120 kJ (WCID 4000017)" />
+    </enum>
+    <enum name="PalletSize" parent="byte">
+      <value value="0" name="None" />
+      <value value="1" name="Half" text="1.20m x 2.40m (1 cargo slot)" />
+      <value value="2" name="Full" text="2.40m x 2.40m (2 cargo slots)" />
+    </enum>
+    <enum name="DeployableWeaponKind" parent="uint">
+      <value value="0" name="None" />
+      <value value="1" name="SAM" text="Surface-to-air homing missile" />
+      <value value="2" name="Mortar" text="Lobbed compressed-air mortar shell" />
+      <value value="3" name="Laser" text="Hitscan red laser beam" />
+    </enum>
+    <enum name="GroundContactKind" parent="byte">
+      <value value="0" name="Unknown" />
+      <value value="1" name="Player" />
+      <value value="2" name="Vehicle" />
+      <value value="3" name="Monster" />
+    </enum>
   </enums>
   <types>
     <type name="sbyte" primitive="sbyte" />
@@ -211,6 +246,20 @@
       <field type="byte" name="SpeedMpsU8" />
       <field type="byte" name="Flags" />
     </type>
+    <type name="GroundContactWire" text="24 bytes packed surface radar contact record">
+      <field type="ObjectId" name="TargetGuid" />
+      <field type="float" name="DxM" />
+      <field type="float" name="DyM" />
+      <field type="float" name="DzM" />
+      <field type="GroundContactKind" name="Kind" />
+      <field type="IffStanding" name="Standing" />
+      <field type="byte" name="HeadingU8" />
+      <field type="byte" name="SpeedMpsU8" />
+      <field type="byte" name="Flags" />
+      <field type="byte" name="Reserved0" />
+      <field type="byte" name="Reserved1" />
+      <field type="byte" name="Reserved2" />
+    </type>
   </types>
   <gameactions>
     <type name="Vehicle_ClientCapabilities" queue="Weenie" type="0x0900" text="A capable client announces itself after entering the world (once per login)">
@@ -238,6 +287,10 @@
       <field type="ObjectId" name="Vehicle" />
       <field type="byte" name="Action" text="1=Deploy, 2=Pack" />
       <field type="ObjectId" name="Target" text="Target cargo world object ID (0 on deploy)" />
+      <field type="byte" name="Slot" since="4" default="0" text="Cargo slot index: 0=Left/Full bed, 1=Right half-pallet" />
+      <field type="byte" name="Reserved0" since="4" default="0" />
+      <field type="ushort" name="Reserved1" since="4" default="0" />
+      <field type="ObjectId" name="CargoWcid" since="4" default="0" text="Target deployable WCID" />
     </type>
   </gameactions>
   <gameevents>
@@ -324,6 +377,12 @@
       <field type="byte" name="GroundFlags" since="3" text="bitmask: 0x01 on-ground, 0x02 handbrake, 0x04 4wd low-range, 0x08 slipping" />
       <field type="byte" name="SurfaceFamily" since="3" text="surface family under wheels (0..10)" />
       <field type="short" name="WheelSpinQ16" since="3" text="wheel rotation velocity / spin in fixed-point or speed delta" />
+      <field type="byte" name="CargoMask" since="4" default="0" text="Bitmask: 0x01=slot 0 loaded, 0x02=slot 1 loaded, 0x04=full pallet" />
+      <field type="PalletSize" name="PalletSize0" since="4" default="0" text="Pallet size in slot 0" />
+      <field type="PalletSize" name="PalletSize1" since="4" default="0" text="Pallet size in slot 1" />
+      <field type="byte" name="Reserved3" since="4" default="0" />
+      <field type="ObjectId" name="CargoSlot0Wcid" since="4" default="0" text="WCID in slot 0 or full pallet" />
+      <field type="ObjectId" name="CargoSlot1Wcid" since="4" default="0" text="WCID in slot 1" />
     </type>
     <type name="Vehicle_Fire" queue="UIQueue" type="0x0907" text="Rounds fired this step (tracers); hits arrive through the standard damage messages">
       <field type="VehicleHeader" name="Header" />
@@ -365,6 +424,53 @@
       <field type="float" name="CeilingM" />
       <field type="uint" name="ContactCount" />
       <vector name="Contacts" length="ContactCount" type="RadarContactWire" />
+    </type>
+    <type name="Vehicle_DeployableState" queue="UIQueue" type="0x090B" text="Authoritative state of deployed units (84 bytes)">
+      <field type="VehicleHeader" name="Header" />
+      <field type="ObjectId" name="DeployableGuid" />
+      <field type="DeployableKind" name="DeployableKind" />
+      <field type="PalletSize" name="PalletSize" />
+      <field type="byte" name="OnlineFlags" text="0x01=Powered, 0x02=InFluxRange, 0x04=Active, 0x08=Elevated" />
+      <field type="ushort" name="AmmoRemaining" />
+      <field type="ObjectId" name="OwnerGuid" />
+      <field type="ObjectId" name="ParentVehicle" />
+      <field type="LandcellId" name="Cell" />
+      <field type="Vector3" name="Position" text="landblock-local" />
+      <field type="float" name="Heading" />
+      <field type="float" name="PowerWatts" text="Generation &gt; 0, consumption &lt; 0" />
+      <field type="float" name="EnergyStoredJoules" text="Capacitor stored energy (0..600 kJ)" />
+      <field type="float" name="EnergyCapacityJoules" text="Capacitor max energy (600 kJ)" />
+      <field type="float" name="FuelRemaining" text="Burn seconds of Scarabs remaining" />
+      <field type="float" name="PitchRad" text="Gimbal pitch angle" />
+      <field type="float" name="YawRad" text="Gimbal yaw angle" />
+      <field type="float" name="RollRad" text="SAM 3-axis gimbal roll" />
+      <field type="float" name="ElevationM" text="Pneumatic cylinder rise height (0..0.85m)" />
+    </type>
+    <type name="Vehicle_DeployableFire" queue="UIQueue" type="0x090C" text="Deployable weapon discharge event (68 bytes)">
+      <field type="VehicleHeader" name="Header" />
+      <field type="ObjectId" name="DeployableGuid" />
+      <field type="DeployableWeaponKind" name="WeaponKind" />
+      <field type="uint" name="Step" />
+      <field type="ObjectId" name="TargetGuid" />
+      <field type="LandcellId" name="Cell" />
+      <field type="Vector3" name="Muzzle" text="landblock-local" />
+      <field type="Vector3" name="TargetPos" text="landblock-local" />
+      <field type="Vector3" name="Velocity" text="m/s" />
+      <field type="float" name="EnergyJoules" text="e.g. 120,000 J for laser" />
+      <field type="ushort" name="BurstCount" />
+      <field type="ushort" name="Reserved" />
+    </type>
+    <type name="Vehicle_GroundContacts" queue="UIQueue" type="0x090D" text="Ground radar 30 RPM surface sweep broadcast">
+      <field type="VehicleHeader" name="Header" />
+      <field type="ObjectId" name="RadarGuid" />
+      <field type="ObjectId" name="ParentVehicle" />
+      <field type="float" name="RadarX" />
+      <field type="float" name="RadarY" />
+      <field type="float" name="RadarZ" />
+      <field type="float" name="RangeM" text="Default 600m" />
+      <field type="float" name="SweepAngleRad" text="Current beam sweep angle" />
+      <field type="uint" name="ContactCount" />
+      <vector name="Contacts" length="ContactCount" type="GroundContactWire" />
     </type>
   </gameevents>
 </schema>

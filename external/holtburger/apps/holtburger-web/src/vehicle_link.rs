@@ -131,6 +131,12 @@ pub(crate) fn to_json(msg: &VehicleS2C) -> Value {
             "missileMask": s.missile_mask, "bombMask": s.bomb_mask,
             "steerAngle": s.steer_angle, "groundFlags": s.ground_flags,
             "surfaceFamily": s.surface_family, "wheelSpinQ16": s.wheel_spin_q16,
+            "cargoMask": s.cargo_mask,
+            "palletSize0": s.pallet_size0,
+            "palletSize1": s.pallet_size1,
+            "cargoSlot0Wcid": s.cargo_slot0_wcid,
+            "cargoSlot1Wcid": s.cargo_slot1_wcid,
+            "cargoLoaded": (s.cargo_mask != 0) || (s.cargo_slot0_wcid != 0),
         }),
         VehicleS2C::Fire(f) => json!({
             "type": "fire", "vehicle": f.vehicle, "step": f.step, "mount": f.mount, "count": f.count, "cell": f.cell,
@@ -160,6 +166,61 @@ pub(crate) fn to_json(msg: &VehicleS2C) -> Value {
                 "heading": c.heading_u8 as f32 * (std::f32::consts::TAU / 256.0),
                 "headingU8": c.heading_u8,
                 "standing": c.standing,
+                "speedMps": c.speed_mps_u8,
+                "flags": c.flags,
+            })).collect::<Vec<_>>(),
+        }),
+        VehicleS2C::DeployableState(ds) => json!({
+            "type": "deployable_state",
+            "deployable": ds.deployable_guid,
+            "kind": ds.deployable_kind,
+            "palletSize": ds.pallet_size,
+            "onlineFlags": ds.online_flags,
+            "ammo": ds.ammo_remaining,
+            "owner": ds.owner_guid,
+            "parentVehicle": ds.parent_vehicle,
+            "cell": ds.cell,
+            "x": ds.position[0], "y": ds.position[1], "z": ds.position[2],
+            "heading": ds.heading,
+            "powerWatts": ds.power_watts,
+            "energyJoules": ds.energy_stored_joules,
+            "energyCapacity": ds.energy_capacity_joules,
+            "fuelSec": ds.fuel_remaining,
+            "pitch": ds.pitch_rad,
+            "yaw": ds.yaw_rad,
+            "roll": ds.roll_rad,
+            "elevation": ds.elevation_m,
+        }),
+        VehicleS2C::DeployableFire(df) => json!({
+            "type": "deployable_fire",
+            "deployable": df.deployable_guid,
+            "weaponKind": df.weapon_kind,
+            "step": df.step,
+            "target": df.target_guid,
+            "cell": df.cell,
+            "muzzle": [df.muzzle[0], df.muzzle[1], df.muzzle[2]],
+            "targetPos": [df.target_pos[0], df.target_pos[1], df.target_pos[2]],
+            "velocity": [df.velocity[0], df.velocity[1], df.velocity[2]],
+            "energyJoules": df.energy_joules,
+            "burstCount": df.burst_count,
+        }),
+        VehicleS2C::GroundContacts(gc) => json!({
+            "type": "ground_contacts",
+            "radar": gc.radar_guid,
+            "parentVehicle": gc.parent_vehicle,
+            "radarPos": [gc.radar_x, gc.radar_y, gc.radar_z],
+            "rangeM": gc.range_m,
+            "sweepAngleRad": gc.sweep_angle_rad,
+            "contactCount": gc.contacts.len(),
+            "contacts": gc.contacts.iter().map(|c| json!({
+                "targetGuid": c.target_guid,
+                "dxM": c.dx_m,
+                "dyM": c.dy_m,
+                "dzM": c.dz_m,
+                "kind": c.kind,
+                "standing": c.standing,
+                "heading": c.heading_u8 as f32 * (std::f32::consts::TAU / 256.0),
+                "headingU8": c.heading_u8,
                 "speedMps": c.speed_mps_u8,
                 "flags": c.flags,
             })).collect::<Vec<_>>(),
@@ -311,5 +372,8 @@ pub(crate) fn is_vehicle_event(opcode: u32) -> bool {
             | s2c::FIRE
             | s2c::EVENT
             | s2c::RADAR_CONTACTS
+            | s2c::DEPLOYABLE_STATE
+            | s2c::DEPLOYABLE_FIRE
+            | s2c::GROUND_CONTACTS
     )
 }

@@ -1560,6 +1560,9 @@ const TIER5 = [
   { tier: 5, flag: "vehicleSeatPoses", file: "tests/vehicle_seat_poses.test.mjs" },
   { tier: 5, flag: "vehicleRadarDeploy", file: "tests/vehicle_radar_deploy.test.mjs" },
   { tier: 5, flag: "vehicleRammingCombat", file: "tests/vehicle_ramming_combat.test.mjs" },
+  // 2026-11-16 Modular Full/Half Pallet Deployable Ecosystem E2E opaque-box test suite
+  { tier: 5, flag: "e2eDeployablesOpaque", file: "tests/e2e_deployables_opaque.test.mjs" },
+  { tier: 5, flag: "vehicleDeployableModels", file: "tests/vehicle_deployable_models.test.mjs" },
   // 2026-11-01 flight experience (docs/flight-experience-2026-11-01): the Phase 0
   // residency sampler (?residencyLog) — flips, holes, lead times on a mock scene.
   { tier: 5, flag: "residencyLog", file: "tests/residency_log.test.mjs" },

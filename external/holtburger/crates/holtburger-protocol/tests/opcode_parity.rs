@@ -326,6 +326,21 @@ const CATEGORIZATION_GATE_ALLOWLIST: &[(&str, u32, &str)] = &[
         0x090A,
         "HBV1 vehicles (holtburger custom, additive, capability-gated): the 0x0900-0x090F block is unused by retail, ACE and Chorizite (checked 2026-11-01). Spec: apps/holtburger-web/docs/vehicles-2026-11-01/protocol/vehicles.protocol.xml.",
     ),
+    (
+        "GameEventOpcode",
+        0x090B,
+        "HBV1 vehicles (holtburger custom, additive, capability-gated): the 0x0900-0x090F block is unused by retail, ACE and Chorizite (checked 2026-11-01). Spec: apps/holtburger-web/docs/vehicles-2026-11-01/protocol/vehicles.protocol.xml.",
+    ),
+    (
+        "GameEventOpcode",
+        0x090C,
+        "HBV1 vehicles (holtburger custom, additive, capability-gated): the 0x0900-0x090F block is unused by retail, ACE and Chorizite (checked 2026-11-01). Spec: apps/holtburger-web/docs/vehicles-2026-11-01/protocol/vehicles.protocol.xml.",
+    ),
+    (
+        "GameEventOpcode",
+        0x090D,
+        "HBV1 vehicles (holtburger custom, additive, capability-gated): the 0x0900-0x090F block is unused by retail, ACE and Chorizite (checked 2026-11-01). Spec: apps/holtburger-web/docs/vehicles-2026-11-01/protocol/vehicles.protocol.xml.",
+    ),
 ];
 
 /// True if `(label, value)` is on the allowlist.
