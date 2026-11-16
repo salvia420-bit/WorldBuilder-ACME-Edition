@@ -532,6 +532,8 @@ pub enum GameActionOpcode {
     VehicleExit = 0x0903,
     /// C2S: HBV1 VehicleInput (30 Hz while seated, redundant frames).
     VehicleInput = 0x0905,
+    /// C2S: HBV1 VehicleCargo (deploy / pack).
+    VehicleCargo = 0x0909,
     // /// C2S: Response to an admin plugin detail query.
     // QueryPluginResponse = 0x02B2,
     /// C2S: Finalize character changes in a barber session (retail
@@ -1079,6 +1081,8 @@ pub enum GameEventOpcode {
     VehicleFire = 0x0907,
     /// S2C: HBV1 VehicleEvent (takeoff, landed, crashed, despawn, bail, chute, ...).
     VehicleEvent = 0x0908,
+    /// S2C: HBV1 VehicleRadarContacts (1 Hz compact radar sweep broadcast).
+    VehicleRadarContacts = 0x090A,
     // /// S2C: Admin-only query for a specific plugin's status.
     // AdminQueryPlugin = 0x02B1,
     // /// S2C: Admin-only response to a plugin query.

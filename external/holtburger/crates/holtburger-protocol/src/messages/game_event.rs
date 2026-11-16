@@ -521,7 +521,8 @@ impl ProtocolUnpack for GameEventMessage {
                 | GameEventOpcode::VehicleSeat
                 | GameEventOpcode::VehicleState
                 | GameEventOpcode::VehicleFire
-                | GameEventOpcode::VehicleEvent => {
+                | GameEventOpcode::VehicleEvent
+                | GameEventOpcode::VehicleRadarContacts => {
                     match crate::messages::vehicle::VehicleS2C::unpack_payload(
                         event_type_raw,
                         data,

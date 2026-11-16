@@ -10,6 +10,7 @@
 import {
   DT, MODE, cloneState, inputFromFrame, quantizeInput, step, toGlobal, wrapHeading,
 } from "./flight_model.js";
+import * as GM from "./ground_model.js";
 
 export const HISTORY = 256; // 8.5 s of steps
 export const SMOOTH_TAU_S = 0.15;
@@ -32,21 +33,32 @@ function angleDiff(a, b) {
   return d;
 }
 
-/** A VehicleState message (inbox JSON) → a global-coordinate flight state. */
+/** A VehicleState message (inbox JSON) → a global-coordinate flight or ground state. */
 export function stateFromMsg(m) {
   const [x, y, z] = toGlobal(m.cell, m.x, m.y, m.z);
-  return { x, y, z, heading: m.heading, pitch: m.pitch, bank: m.bank, speed: m.speed, mode: m.mode };
+  return {
+    x, y, z,
+    heading: m.heading, pitch: m.pitch, bank: m.bank,
+    roll: m.roll ?? m.bank ?? 0,
+    speed: m.speed,
+    mode: m.mode,
+    steerAngle: m.steer_angle ?? m.steerAngle ?? 0,
+    groundFlags: m.ground_flags ?? m.groundFlags ?? 0,
+    surfaceFamily: m.surface_family ?? m.surfaceFamily ?? 0,
+    wheelSpin: m.wheel_spin ?? m.wheelSpin ?? 0,
+  };
 }
 
 /**
- * @param {{params: object, ground: (x:number,y:number)=>number, initial: object, vCap?: number, startSeq?: number}} o
+ * @param {{params: object, ground: (x:number,y:number)=>number, initial: object, vCap?: number, startSeq?: number, locomotion?: number}} o
  */
 export function createPilotPredictor(o) {
   const params = o.params;
   const ground = o.ground;
-  let vCap = Number.isFinite(o.vCap) ? o.vCap : params.vMax;
-  let state = cloneState(o.initial);
-  let prev = cloneState(state); // state before the latest step (render interpolation)
+  const isGround = (o.locomotion === 2) || (params?.locomotion === 2);
+  let vCap = Number.isFinite(o.vCap) ? o.vCap : (params?.vMax || 29.0);
+  let state = isGround ? GM.cloneState(o.initial) : cloneState(o.initial);
+  let prev = isGround ? GM.cloneState(state) : cloneState(state); // state before the latest step (render interpolation)
   let seq = (o.startSeq >>> 0) || 1;
   const hist = new Array(HISTORY); // ring: {seq, frame, state}
   let histCount = 0;
@@ -65,10 +77,14 @@ export function createPilotPredictor(o) {
 
   /** One local step with the raw (analog) controls. Returns the quantized frame to send. */
   function stepLocal(rawInput) {
-    const frame = { seq, ...quantizeInput(rawInput) };
-    prev = cloneState(state);
-    step(state, inputFromFrame(frame), params, vCap, ground, DT);
-    hist[seq % HISTORY] = { seq, frame, state: cloneState(state) };
+    const frame = { seq, ...(isGround ? GM.quantizeInput(rawInput) : quantizeInput(rawInput)) };
+    prev = isGround ? GM.cloneState(state) : cloneState(state);
+    if (isGround) {
+      GM.step(state, GM.inputFromFrame(frame), params, ground, DT);
+    } else {
+      step(state, inputFromFrame(frame), params, vCap, ground, DT);
+    }
+    hist[seq % HISTORY] = { seq, frame, state: isGround ? GM.cloneState(state) : cloneState(state) };
     histCount++;
     seq = (seq + 1) >>> 0;
     stats.steps++;
@@ -104,7 +120,7 @@ export function createPilotPredictor(o) {
       if (ack === 0 || stats.lastAckLagSteps < 0 || stats.lastAckLagSteps >= HISTORY) {
         const before = renderPoseRaw(1);
         state = server;
-        prev = cloneState(server);
+        prev = isGround ? GM.cloneState(server) : cloneState(server);
         foldOffset(before, renderPoseRaw(1));
         // the server consumed (substituted) past our newest frame while we were silent (a tab stall past ACE's 2.5 s
         // starvation): continue AFTER its ack — kept at the old seq, every frame up to the ack was dropped as late, the
@@ -123,14 +139,18 @@ export function createPilotPredictor(o) {
     }
     // reset to the server at `ack` and replay the newer frames
     const before = renderPoseRaw(1);
-    const s = cloneState(server);
-    e.state = cloneState(server);
+    const s = isGround ? GM.cloneState(server) : cloneState(server);
+    e.state = isGround ? GM.cloneState(server) : cloneState(server);
     let last = ack;
     for (let k = (ack + 1) >>> 0; k !== seq; k = (k + 1) >>> 0) {
       const he = entryFor(k);
       if (!he) break;
-      step(s, inputFromFrame(he.frame), params, vCap, ground, DT);
-      he.state = cloneState(s);
+      if (isGround) {
+        GM.step(s, GM.inputFromFrame(he.frame), params, ground, DT);
+      } else {
+        step(s, inputFromFrame(he.frame), params, vCap, ground, DT);
+      }
+      he.state = isGround ? GM.cloneState(s) : cloneState(s);
       last = k;
       stats.replayed++;
     }
@@ -138,7 +158,7 @@ export function createPilotPredictor(o) {
     // prev = state one step before the newest, for render interpolation
     const pe = entryFor(((seq - 2) >>> 0));
     state = s;
-    prev = pe ? cloneState(pe.state) : cloneState(s);
+    prev = pe ? (isGround ? GM.cloneState(pe.state) : cloneState(pe.state)) : (isGround ? GM.cloneState(s) : cloneState(s));
     void last; void lastE;
     stats.corrections++;
     stats.lastCorrectionM = err;
@@ -177,7 +197,7 @@ export function createPilotPredictor(o) {
   /** prev→state interpolation at alpha ∈ [0,1], WITHOUT the visual offset. */
   function renderPoseRaw(alpha) {
     const a = Math.max(0, Math.min(1, alpha));
-    return {
+    const r = {
       x: prev.x + (state.x - prev.x) * a,
       y: prev.y + (state.y - prev.y) * a,
       z: prev.z + (state.z - prev.z) * a,
@@ -187,6 +207,14 @@ export function createPilotPredictor(o) {
       speed: prev.speed + (state.speed - prev.speed) * a,
       mode: state.mode,
     };
+    if (isGround) {
+      r.steerAngle = (prev.steerAngle || 0) + ((state.steerAngle || 0) - (prev.steerAngle || 0)) * a;
+      r.surfaceFamily = state.surfaceFamily;
+      r.groundFlags = state.groundFlags;
+      r.wheelSpin = state.wheelSpin || 0;
+      r.roll = 0;
+    }
+    return r;
   }
 
   /** The pose to draw this frame. */
@@ -213,7 +241,7 @@ export function createPilotPredictor(o) {
     corrections: () => corrHist.slice(),
     adopt(msg) {
       state = stateFromMsg(msg);
-      prev = cloneState(state);
+      prev = isGround ? GM.cloneState(state) : cloneState(state);
       if (Number.isFinite(msg.vCap) && msg.vCap > 0) vCap = msg.vCap;
       zeroOffset();
     },
@@ -256,7 +284,7 @@ export function createObserverTrack() {
         const a = snaps[i - 1], b = snaps[i];
         if (t >= a.t && t <= b.t) {
           const k = (t - a.t) / Math.max(1e-6, b.t - a.t);
-          return {
+          const pose = {
             x: a.state.x + (b.state.x - a.state.x) * k,
             y: a.state.y + (b.state.y - a.state.y) * k,
             z: a.state.z + (b.state.z - a.state.z) * k,
@@ -266,11 +294,28 @@ export function createObserverTrack() {
             speed: b.state.speed,
             mode: b.state.mode,
           };
+          if (b.state.steerAngle !== undefined) {
+            pose.steerAngle = (a.state.steerAngle || 0) + ((b.state.steerAngle || 0) - (a.state.steerAngle || 0)) * k;
+            pose.surfaceFamily = b.state.surfaceFamily;
+            pose.groundFlags = b.state.groundFlags;
+            pose.wheelSpin = b.state.wheelSpin || 0;
+            pose.roll = 0;
+          }
+          return pose;
         }
       }
       // past the newest: extrapolate along the heading for at most 0.25 s
       const last = snaps[snaps.length - 1].state;
       const ex = Math.min(0.25, t - snaps[snaps.length - 1].t);
+      const isDriving = last.mode === (GM.MODE?.DRIVING ?? 6) || last.mode === MODE.DRIVING;
+      if (isDriving) {
+        return {
+          ...last,
+          x: last.x + last.speed * Math.sin(last.heading) * ex,
+          y: last.y + last.speed * Math.cos(last.heading) * ex,
+          z: last.z,
+        };
+      }
       if (last.mode !== MODE.FLIGHT && last.mode !== MODE.DERELICT) return { ...last };
       const h = last.speed * Math.cos(last.pitch);
       return {

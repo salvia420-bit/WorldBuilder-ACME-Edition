@@ -35,12 +35,20 @@
                        Vehicle_Fire     MountCount (default 1), Reserved2, Speed
                        Vehicle_Event    Aux, Velocity
                      C2S messages gain no fields (a v2 action differs from v1 only in the header version).
+    v3 (2026-11-15)  ground transports & radar: VehicleLocomotion Ground, VehicleMode Driving,
+                     VehicleButtons Handbrake / Horn / Headlights, VehicleEventKind Horn .. RadarAlert (12..18),
+                     VehiclePartRole WheelFL .. Windscreen (5..12), IffStanding enum, RadarContactWire type,
+                     C2S Vehicle_Cargo (0x0909), S2C Vehicle_RadarContacts (0x090A).
+                     Appended fields (since="3"):
+                       Vehicle_Profile  Wheelbase, TrackWidth, WheelRadius, MaxSteerRad, ReverseMax,
+                                        ClimbLimitCos, FordDepthMax, CargoWcid
+                       Vehicle_State    SteerAngle, GroundFlags, SurfaceFamily, WheelSpinQ16
 
   Units: metres, seconds, radians. Positions are AC cell + landblock-local coordinates. Angles: heading is a
   COMPASS angle (0 = north/+y, pi/2 = east/+x, clockwise); pitch is nose-up positive; bank is right-wing-down
   positive. Stick values are signed bytes scaled by 1/127 (-128 clamps to -1). Throttle is u8 scaled by 1/255.
 -->
-<schema text="holtburger vehicles (HBV1) — additive, capability-gated vehicle messages" version="2">
+<schema text="holtburger vehicles (HBV1) — additive, capability-gated vehicle messages" version="3">
   <enums>
     <enum name="VehicleCapability" parent="uint" mask="true" text="ClientCapabilities.Flags / CapabilitiesAck.Granted">
       <value value="0x00000001" name="Observe" text="receive VehicleProfile / VehicleSeat / VehicleState / VehicleFire / VehicleEvent" />
@@ -49,7 +57,7 @@
     </enum>
     <enum name="VehicleLocomotion" parent="uint">
       <value value="1" name="Air" />
-      <value value="2" name="Ground" text="reserved (jeeps, later)" />
+      <value value="2" name="Ground" />
     </enum>
     <enum name="VehicleMode" parent="byte" text="VehicleState.Mode">
       <value value="0" name="Parked" />
@@ -58,6 +66,7 @@
       <value value="3" name="Landing" />
       <value value="4" name="Crashed" />
       <value value="5" name="Derelict" text="no pilot after a bail-out: autopilot glide and descent" />
+      <value value="6" name="Driving" />
     </enum>
     <enum name="VehicleStateFlags" parent="byte" mask="true">
       <value value="0x01" name="PilotCopy" text="sent to the pilot: AckInputSeq is valid" />
@@ -70,6 +79,9 @@
       <value value="0x04" name="Land" text="held in Flight: slow to LandingSpeed, then Landing" />
       <value value="0x08" name="Missile" text="fire a lightning-bolt rail; held: the next rail every 0.3 s" />
       <value value="0x10" name="Bomb" text="rising edge: release the next bomb" />
+      <value value="0x20" name="Handbrake" />
+      <value value="0x40" name="Horn" />
+      <value value="0x80" name="Headlights" />
     </enum>
     <enum name="VehicleSeatRole" parent="uint">
       <value value="0" name="Pilot" />
@@ -113,6 +125,13 @@
       <value value="9" name="BombRelease" text="Subject = the pilot; Cell/Position = release point; Value = mass in lb; v2: Aux = the station's weapon index, Velocity = the bomb's initial velocity" />
       <value value="10" name="Explosion" text="Subject = the pilot; Cell/Position = the impact point; Value = mass in lb; Aux = the station's weapon index" />
       <value value="11" name="Rearmed" text="Subject = the pilot; the vehicle's guns, rails and bomb stations are full again" />
+      <value value="12" name="Horn" />
+      <value value="13" name="Headlights" />
+      <value value="14" name="Scrape" />
+      <value value="15" name="CargoDeployed" />
+      <value value="16" name="CargoPacked" />
+      <value value="17" name="RamHit" />
+      <value value="18" name="RadarAlert" />
     </enum>
     <enum name="VehiclePartRole" parent="uint" text="Vehicle_Profile.PartRoles: the role in the low 16 bits; Ordnance carries a weapon index in bits 16-23">
       <value value="0" name="Static" />
@@ -120,6 +139,20 @@
       <value value="2" name="Gear" text="drawn only while Parked / Takeoff / Landing" />
       <value value="3" name="Canopy" text="hidden in the cockpit view" />
       <value value="4" name="Ordnance" text="drawn while its weapon is loaded; the weapon index is in bits 16-23: role = 4 | (weaponIndex &lt;&lt; 16)" />
+      <value value="5" name="WheelFL" />
+      <value value="6" name="WheelFR" />
+      <value value="7" name="WheelRL" />
+      <value value="8" name="WheelRR" />
+      <value value="9" name="SteeringWheel" />
+      <value value="10" name="Tailgate" />
+      <value value="11" name="Cargo" />
+      <value value="12" name="Windscreen" />
+    </enum>
+    <enum name="IffStanding" parent="byte" text="Radar contact IFF classification">
+      <value value="0" name="Unknown" />
+      <value value="1" name="Friendly" />
+      <value value="2" name="Neutral" />
+      <value value="3" name="Hostile" />
     </enum>
   </enums>
   <types>
@@ -168,6 +201,16 @@
       <field type="byte" name="Reserved1" />
       <field type="byte" name="Reserved2" />
     </type>
+    <type name="RadarContactWire" text="18 bytes packed radar contact record">
+      <field type="ObjectId" name="VehicleGuid" />
+      <field type="float" name="DxM" />
+      <field type="float" name="DyM" />
+      <field type="ushort" name="AltAglM" />
+      <field type="byte" name="HeadingU8" />
+      <field type="byte" name="Standing" />
+      <field type="byte" name="SpeedMpsU8" />
+      <field type="byte" name="Flags" />
+    </type>
   </types>
   <gameactions>
     <type name="Vehicle_ClientCapabilities" queue="Weenie" type="0x0900" text="A capable client announces itself after entering the world (once per login)">
@@ -189,6 +232,12 @@
       <field type="ObjectId" name="Vehicle" />
       <field type="uint" name="Count" text="1..3" />
       <vector name="Frames" length="Count" type="VehicleInputFrame" />
+    </type>
+    <type name="Vehicle_Cargo" queue="Weenie" type="0x0909" text="Client request for vehicle cargo deployment or re-packing (1=Deploy, 2=Pack)">
+      <field type="VehicleHeader" name="Header" />
+      <field type="ObjectId" name="Vehicle" />
+      <field type="byte" name="Action" text="1=Deploy, 2=Pack" />
+      <field type="ObjectId" name="Target" text="Target cargo world object ID (0 on deploy)" />
     </type>
   </gameactions>
   <gameevents>
@@ -236,6 +285,14 @@
       <vector name="PartRoles" length="PartRoleCount" type="uint" since="2" text="a VehiclePartRole per part, in Parts order" />
       <field type="uint" name="WeaponExtCount" since="2" text="0 or WeaponCount" />
       <vector name="WeaponExt" length="WeaponExtCount" type="VehicleWeaponExt" since="2" text="one per weapon, in Weapons order" />
+      <field type="float" name="Wheelbase" since="3" text="distance between front and rear axle centres (m)" />
+      <field type="float" name="TrackWidth" since="3" text="distance between left and right wheel centres (m)" />
+      <field type="float" name="WheelRadius" since="3" text="effective rolling wheel radius (m)" />
+      <field type="float" name="MaxSteerRad" since="3" text="maximum steering lock angle in radians (~40 deg = 0.69813)" />
+      <field type="float" name="ReverseMax" since="3" text="maximum reverse speed (m/s, negative: -10.0)" />
+      <field type="float" name="ClimbLimitCos" since="3" text="maximum terrain slope normal cosine (~44 deg = 0.71934)" />
+      <field type="float" name="FordDepthMax" since="3" text="maximum water fording depth before flotation/stall (m: 0.8)" />
+      <field type="ObjectId" name="CargoWcid" since="3" text="WCID of stowed/deployable cargo item (e.g. radar station)" />
     </type>
     <type name="Vehicle_Seat" queue="UIQueue" type="0x0904" text="A seat changed (or a board was refused)">
       <field type="VehicleHeader" name="Header" />
@@ -263,6 +320,10 @@
       <field type="byte" name="MissileMask" since="2" text="bit i = the i-th Missile weapon in profile order is loaded" />
       <field type="byte" name="BombMask" since="2" text="bit i = the i-th Bomb weapon is loaded" />
       <field type="ushort" name="Reserved2" since="2" />
+      <field type="float" name="SteerAngle" since="3" text="current front wheel steer angle in radians (-max .. +max)" />
+      <field type="byte" name="GroundFlags" since="3" text="bitmask: 0x01 on-ground, 0x02 handbrake, 0x04 4wd low-range, 0x08 slipping" />
+      <field type="byte" name="SurfaceFamily" since="3" text="surface family under wheels (0..10)" />
+      <field type="short" name="WheelSpinQ16" since="3" text="wheel rotation velocity / spin in fixed-point or speed delta" />
     </type>
     <type name="Vehicle_Fire" queue="UIQueue" type="0x0907" text="Rounds fired this step (tracers); hits arrive through the standard damage messages">
       <field type="VehicleHeader" name="Header" />
@@ -292,6 +353,18 @@
       <field type="float" name="Value" />
       <field type="uint" name="Aux" since="2" text="per Kind (BombRelease / Explosion: the station's weapon index)" />
       <field type="Vector3" name="Velocity" since="2" text="per Kind (BombRelease: the bomb's initial velocity, m/s)" />
+    </type>
+    <type name="Vehicle_RadarContacts" queue="UIQueue" type="0x090A" text="Server 1 Hz compact radar sweep broadcast">
+      <field type="VehicleHeader" name="Header" />
+      <field type="ObjectId" name="RadarGuid" />
+      <field type="ObjectId" name="ParentVehicle" />
+      <field type="float" name="RadarX" />
+      <field type="float" name="RadarY" />
+      <field type="float" name="RadarZ" />
+      <field type="float" name="RangeM" />
+      <field type="float" name="CeilingM" />
+      <field type="uint" name="ContactCount" />
+      <vector name="Contacts" length="ContactCount" type="RadarContactWire" />
     </type>
   </gameevents>
 </schema>

@@ -13,8 +13,24 @@
 //   {throttle [0,1], pitch, roll, yaw [-1,1], boost, land, fire}
 // ground(x, y) → terrain height or NaN when unknown (then no clamps apply).
 
-export const MODE = Object.freeze({ PARKED: 0, TAKEOFF: 1, FLIGHT: 2, LANDING: 3, CRASHED: 4, DERELICT: 5 });
-export const MODE_NAMES = Object.freeze(["Parked", "Takeoff", "Flight", "Landing", "Crashed", "Derelict"]);
+export const MODE = Object.freeze({
+  PARKED: 0,
+  TAKEOFF: 1,
+  FLIGHT: 2,
+  LANDING: 3,
+  CRASHED: 4,
+  DERELICT: 5,
+  DRIVING: 6,
+});
+export const MODE_NAMES = Object.freeze([
+  "Parked",
+  "Takeoff",
+  "Flight",
+  "Landing",
+  "Crashed",
+  "Derelict",
+  "Driving",
+]);
 
 export const GRAVITY = 9.8;
 export const SIM_HZ = 30;

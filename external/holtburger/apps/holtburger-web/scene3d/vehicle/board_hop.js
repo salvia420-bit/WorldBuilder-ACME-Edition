@@ -27,7 +27,7 @@ export function hopDuration(dist) {
   return Math.min(HOP.maxSec, Math.max(HOP.minSec, HOP.baseSec + d / HOP.metresPerSec));
 }
 
-function smooth(u) {
+export function smooth(u) {
   return u * u * (3 - 2 * u);
 }
 

@@ -1,0 +1,1201 @@
+From 0d00fbc34a82170465df565cad49dfc433b03408 Mon Sep 17 00:00:00 2001
+From: salvia420-bit <salvia420@gmail.com>
+Date: Sat, 7 Nov 2026 14:44:59 -0330
+Subject: [PATCH 8/9] feat(dericost): add dual-continent
+ LandblockId/Position/LScape routing and 4-minute Hellcat trans-oceanic flight
+ physics
+
+---
+ Source/ACE.Entity/LandblockId.cs              |  17 +-
+ Source/ACE.Entity/Position.cs                 |  29 +-
+ .../ChallengerM2ContinentStressTests.cs       | 275 ++++++++++++++++++
+ .../DericostContinentInvariantsTests.cs       |  72 +++++
+ .../ACE.Server/Managers/LandblockManager.cs   |  91 ++++--
+ Source/ACE.Server/Physics/Common/BldPortal.cs |   2 +-
+ Source/ACE.Server/Physics/Common/EnvCell.cs   |   2 +-
+ Source/ACE.Server/Physics/Common/LScape.cs    |   2 +-
+ Source/ACE.Server/Vehicles/FlightModel.cs     |  16 +-
+ Source/ACE.Server/Vehicles/Vehicle.cs         |  23 +-
+ Source/ACE.Server/Vehicles/VehicleManager.cs  |  22 +-
+ Source/ACE.Server/Vehicles/VehicleOrdnance.cs |  17 +-
+ .../ACE.Server/Vehicles/VehicleStreaming.cs   |  70 +++--
+ 13 files changed, 543 insertions(+), 95 deletions(-)
+ create mode 100644 Source/ACE.Server.Tests/Vehicles/ChallengerM2ContinentStressTests.cs
+ create mode 100644 Source/ACE.Server.Tests/Vehicles/DericostContinentInvariantsTests.cs
+
+diff --git a/Source/ACE.Entity/LandblockId.cs b/Source/ACE.Entity/LandblockId.cs
+index 45c4312..cf25718 100644
+--- a/Source/ACE.Entity/LandblockId.cs
++++ b/Source/ACE.Entity/LandblockId.cs
+@@ -3,7 +3,7 @@
+ 
+ namespace ACE.Entity
+ {
+-    public struct LandblockId
++    public struct LandblockId : IEquatable<LandblockId>
+     {
+         public uint Raw { get; }
+ 
+@@ -39,6 +39,8 @@ public LandblockId(byte x, byte y)
+ 
+         public byte LandblockY => (byte)((Raw >> 16) & 0xFF);
+ 
++        public byte Continent => (byte)((Raw >> 15) & 1);
++
+         /// <summary>
+         /// This is only used to calculate LandcellX and LandcellY - it has no other function.
+         /// </summary>
+@@ -68,16 +70,16 @@ public LandblockId(byte x, byte y)
+             }
+         }*/
+ 
+-        public bool Indoors => (Raw & 0xFFFF) >= 0x100;
++        public bool Indoors => (Raw & 0x7FFF) >= 0x100;
+ 
+         public static bool operator ==(LandblockId c1, LandblockId c2)
+         {
+-            return c1.Landblock == c2.Landblock;
++            return c1.Landblock == c2.Landblock && c1.Continent == c2.Continent;
+         }
+ 
+         public static bool operator !=(LandblockId c1, LandblockId c2)
+         {
+-            return c1.Landblock != c2.Landblock;
++            return !(c1 == c2);
+         }
+ 
+         public bool IsAdjacentTo(LandblockId block)
+@@ -103,6 +105,11 @@ public bool IsAdjacentTo(LandblockId block)
+                 return new LandblockId((uint)LandblockX << 24 | (uint)newY << 16 | Raw & 0xFFFF);
+         }
+ 
++        public bool Equals(LandblockId other)
++        {
++            return this == other;
++        }
++
+         public override bool Equals(object obj)
+         {
+             if (obj is LandblockId id)
+@@ -113,7 +120,7 @@ public override bool Equals(object obj)
+ 
+         public override int GetHashCode()
+         {
+-            return base.GetHashCode();
++            return (int)(Raw & 0xFFFF8000);
+         }
+ 
+         public override string ToString()
+diff --git a/Source/ACE.Entity/Position.cs b/Source/ACE.Entity/Position.cs
+index 497ed12..33f2a1f 100644
+--- a/Source/ACE.Entity/Position.cs
++++ b/Source/ACE.Entity/Position.cs
+@@ -195,12 +195,12 @@ public bool SetLandCell()
+ 
+             var cellID = cellX * CellSide + cellY + 1;
+ 
+-            var curCellID = LandblockId.Raw & 0xFFFF;
++            var curCellID = LandblockId.Raw & 0x7FFF;
+ 
+             if (cellID == curCellID)
+                 return false;
+ 
+-            LandblockId = new LandblockId((uint)((LandblockId.Raw & 0xFFFF0000) | cellID));
++            LandblockId = new LandblockId((uint)((LandblockId.Raw & 0xFFFF8000) | cellID));
+             return true;
+         }
+ 
+@@ -226,7 +226,7 @@ public Position(uint blockCellID, float newPositionX, float newPositionY, float
+                 Pos = new Vector3(newPositionX, newPositionY, newPositionZ);
+                 Rotation = new Quaternion(newRotationX, newRotationY, newRotationZ, newRotationW);
+ 
+-                if ((blockCellID & 0xFFFF) == 0)
++                if ((blockCellID & 0x7FFF) == 0)
+                     SetPosition(Pos);
+             }
+             else
+@@ -244,7 +244,7 @@ public Position(uint blockCellID, Vector3 position, Quaternion rotation)
+             Pos = position;
+             Rotation = rotation;
+ 
+-            if ((blockCellID & 0xFFFF) == 0)
++            if ((blockCellID & 0x7FFF) == 0)
+                 SetPosition(Pos);
+         }
+ 
+@@ -407,10 +407,11 @@ public float SquaredDistanceTo(Position p)
+             else
+             {
+                 // verify this is working correctly if one of these is indoors
++                var contDelta = ((int)this.LandblockId.Continent - (int)p.LandblockId.Continent) * 68928.0;
+                 var dx = (this.LandblockId.LandblockX - p.LandblockId.LandblockX) * 192 + this.PositionX - p.PositionX;
+-                var dy = (this.LandblockId.LandblockY - p.LandblockId.LandblockY) * 192 + this.PositionY - p.PositionY;
++                var dy = contDelta + (this.LandblockId.LandblockY - p.LandblockId.LandblockY) * 192 + this.PositionY - p.PositionY;
+                 var dz = this.PositionZ - p.PositionZ;
+-                return dx * dx + dy * dy + dz * dz;
++                return (float)(dx * dx + dy * dy + dz * dz);
+             }
+         }
+ 
+@@ -432,8 +433,9 @@ public float Distance2D(Position p)
+             else
+             {
+                 // verify this is working correctly if one of these is indoors
++                var contDelta = ((int)this.LandblockId.Continent - (int)p.LandblockId.Continent) * 68928.0;
+                 var dx = (this.LandblockId.LandblockX - p.LandblockId.LandblockX) * 192 + this.PositionX - p.PositionX;
+-                var dy = (this.LandblockId.LandblockY - p.LandblockId.LandblockY) * 192 + this.PositionY - p.PositionY;
++                var dy = contDelta + (this.LandblockId.LandblockY - p.LandblockId.LandblockY) * 192 + this.PositionY - p.PositionY;
+                 return (float)Math.Sqrt(dx * dx + dy * dy);
+             }
+         }
+@@ -456,9 +458,10 @@ public float Distance2DSquared(Position p)
+             else
+             {
+                 // verify this is working correctly if one of these is indoors
++                var contDelta = ((int)this.LandblockId.Continent - (int)p.LandblockId.Continent) * 68928.0;
+                 var dx = (this.LandblockId.LandblockX - p.LandblockId.LandblockX) * 192 + this.PositionX - p.PositionX;
+-                var dy = (this.LandblockId.LandblockY - p.LandblockId.LandblockY) * 192 + this.PositionY - p.PositionY;
+-                return dx * dx + dy * dy;
++                var dy = contDelta + (this.LandblockId.LandblockY - p.LandblockId.LandblockY) * 192 + this.PositionY - p.PositionY;
++                return (float)(dx * dx + dy * dy);
+             }
+         }
+ 
+@@ -481,8 +484,9 @@ public float DistanceTo(Position p)
+             else
+             {
+                 // verify this is working correctly if one of these is indoors
++                var contDelta = ((int)this.LandblockId.Continent - (int)p.LandblockId.Continent) * 68928.0;
+                 var dx = (this.LandblockId.LandblockX - p.LandblockId.LandblockX) * 192 + this.PositionX - p.PositionX;
+-                var dy = (this.LandblockId.LandblockY - p.LandblockId.LandblockY) * 192 + this.PositionY - p.PositionY;
++                var dy = contDelta + (this.LandblockId.LandblockY - p.LandblockId.LandblockY) * 192 + this.PositionY - p.PositionY;
+                 var dz = this.PositionZ - p.PositionZ;
+ 
+                 return (float)Math.Sqrt(dx * dx + dy * dy + dz * dz);
+@@ -496,11 +500,12 @@ public Vector3 GetOffset(Position p)
+         {
+             if (p == null) return new Vector3(float.MaxValue, float.MaxValue, float.MaxValue);
+ 
++            var contDelta = ((int)p.LandblockId.Continent - (int)LandblockId.Continent) * 68928.0;
+             var dx = (p.LandblockId.LandblockX - LandblockId.LandblockX) * 192 + p.PositionX - PositionX;
+-            var dy = (p.LandblockId.LandblockY - LandblockId.LandblockY) * 192 + p.PositionY - PositionY;
++            var dy = contDelta + (p.LandblockId.LandblockY - LandblockId.LandblockY) * 192 + p.PositionY - PositionY;
+             var dz = p.PositionZ - PositionZ;
+ 
+-            return new Vector3(dx, dy, dz);
++            return new Vector3((float)dx, (float)dy, dz);
+         }
+ 
+         public override string ToString()
+diff --git a/Source/ACE.Server.Tests/Vehicles/ChallengerM2ContinentStressTests.cs b/Source/ACE.Server.Tests/Vehicles/ChallengerM2ContinentStressTests.cs
+new file mode 100644
+index 0000000..6d2bc4b
+--- /dev/null
++++ b/Source/ACE.Server.Tests/Vehicles/ChallengerM2ContinentStressTests.cs
+@@ -0,0 +1,275 @@
++using System;
++using System.Collections.Concurrent;
++using System.Collections.Generic;
++using System.Numerics;
++using Microsoft.VisualStudio.TestTools.UnitTesting;
++using ACE.Entity;
++using ACE.Server.Vehicles;
++
++namespace ACE.Server.Tests.Vehicles
++{
++    [TestClass]
++    public class ChallengerM2ContinentStressTests
++    {
++        // -------------------------------------------------------------
++        // 1. Stress Test: LandblockId All Outdoor Cells (1..64) on Dereth and Dericost
++        // -------------------------------------------------------------
++        [TestMethod]
++        public void LandblockId_AllOutdoorCells_IndoorsIsFalse_BothContinents()
++        {
++            for (int lbX = 0; lbX < 255; lbX += 32)
++            {
++                for (int lbY = 0; lbY < 255; lbY += 32)
++                {
++                    uint baseDereth = ((uint)lbX << 24) | ((uint)lbY << 16);
++                    uint baseDericost = baseDereth | 0x8000;
++
++                    for (uint cell = 1; cell <= 64; cell++)
++                    {
++                        var derethId = new LandblockId(baseDereth | cell);
++                        var dericostId = new LandblockId(baseDericost | cell);
++
++                        Assert.IsFalse(derethId.Indoors, $"Dereth LB({lbX},{lbY}) cell {cell} must be outdoor");
++                        Assert.AreEqual((byte)0, derethId.Continent, $"Dereth LB({lbX},{lbY}) cell {cell} continent must be 0");
++
++                        Assert.IsFalse(dericostId.Indoors, $"Dericost LB({lbX},{lbY}) cell {cell} must be outdoor");
++                        Assert.AreEqual((byte)1, dericostId.Continent, $"Dericost LB({lbX},{lbY}) cell {cell} continent must be 1");
++                    }
++                }
++            }
++        }
++
++        // -------------------------------------------------------------
++        // 2. Stress Test: LandblockId Indoor Dungeon / EnvCells on Dereth and Dericost
++        // -------------------------------------------------------------
++        [TestMethod]
++        public void LandblockId_IndoorEnvCells_IndoorsIsTrue_BothContinents()
++        {
++            uint[] testDungeonCells = { 0x0100, 0x0101, 0x0150, 0x0200, 0x03FF, 0x0FFF };
++
++            foreach (var cell in testDungeonCells)
++            {
++                var derethDungeon = new LandblockId(0x10200000 | cell);
++                var dericostDungeon = new LandblockId(0x10208000 | cell);
++
++                Assert.IsTrue(derethDungeon.Indoors, $"Dereth dungeon cell 0x{cell:X4} must be indoor");
++                Assert.AreEqual((byte)0, derethDungeon.Continent);
++
++                Assert.IsTrue(dericostDungeon.Indoors, $"Dericost dungeon cell 0x{cell:X4} must be indoor");
++                Assert.AreEqual((byte)1, dericostDungeon.Continent);
++            }
++        }
++
++        // -------------------------------------------------------------
++        // 3. Stress Test: Cross-Continent Equality & Hashing in Collections
++        // -------------------------------------------------------------
++        [TestMethod]
++        public void LandblockId_CrossContinent_SetAndDictionaryCollisions()
++        {
++            var derethId = new LandblockId(0x10200001);
++            var dericostId = new LandblockId(0x10208001);
++
++            Assert.AreNotEqual(derethId, dericostId);
++            Assert.IsFalse(derethId == dericostId);
++            Assert.IsTrue(derethId != dericostId);
++            Assert.AreNotEqual(derethId.GetHashCode(), dericostId.GetHashCode());
++
++            var set = new HashSet<LandblockId> { derethId, dericostId };
++            Assert.AreEqual(2, set.Count, "HashSet must store Dereth and Dericost landblocks as distinct entries");
++            Assert.IsTrue(set.Contains(derethId));
++            Assert.IsTrue(set.Contains(dericostId));
++
++            var dict = new ConcurrentDictionary<LandblockId, string>();
++            dict[derethId] = "Dereth";
++            dict[dericostId] = "Dericost";
++
++            Assert.AreEqual(2, dict.Count);
++            Assert.AreEqual("Dereth", dict[derethId]);
++            Assert.AreEqual("Dericost", dict[dericostId]);
++        }
++
++        // -------------------------------------------------------------
++        // 4. Stress Test: LandblockId Transitions Preserve Continent Bit 15
++        // -------------------------------------------------------------
++        [TestMethod]
++        public void LandblockId_Transitions_PreserveContinentBit()
++        {
++            var dericostStart = new LandblockId(0x10208001); // lbX=16, lbY=32, continent=1, cell=1
++
++            var transEast = dericostStart.TransitionX(1);
++            Assert.IsNotNull(transEast);
++            Assert.AreEqual((byte)1, transEast.Value.Continent, "TransitionX East must preserve continent");
++            Assert.AreEqual((byte)17, transEast.Value.LandblockX);
++            Assert.IsFalse(transEast.Value.Indoors);
++
++            var transWest = dericostStart.TransitionX(-1);
++            Assert.IsNotNull(transWest);
++            Assert.AreEqual((byte)1, transWest.Value.Continent, "TransitionX West must preserve continent");
++            Assert.AreEqual((byte)15, transWest.Value.LandblockX);
++
++            var transNorth = dericostStart.TransitionY(5);
++            Assert.IsNotNull(transNorth);
++            Assert.AreEqual((byte)1, transNorth.Value.Continent, "TransitionY North must preserve continent");
++            Assert.AreEqual((byte)37, transNorth.Value.LandblockY);
++
++            var transSouth = dericostStart.TransitionY(-5);
++            Assert.IsNotNull(transSouth);
++            Assert.AreEqual((byte)1, transSouth.Value.Continent, "TransitionY South must preserve continent");
++            Assert.AreEqual((byte)27, transSouth.Value.LandblockY);
++
++            // Boundary clamping: transition beyond map limits returns null
++            Assert.IsNull(dericostStart.TransitionX(-20), "TransitionX beyond west edge must return null");
++            Assert.IsNull(dericostStart.TransitionY(230), "TransitionY beyond north edge must return null");
++        }
++
++        // -------------------------------------------------------------
++        // 5. Stress Test: Position.SetLandblock and SetLandCell on Dericost
++        // -------------------------------------------------------------
++        [TestMethod]
++        public void Position_SetLandblockAndLandCell_PreserveContinentBit()
++        {
++            // Position on Dericost outdoor cell
++            var p = new Position(0x10208001, new Vector3(50.0f, 50.0f, 10.0f), Quaternion.Identity);
++            Assert.AreEqual((byte)1, p.LandblockId.Continent);
++            Assert.IsFalse(p.Indoors);
++
++            // Move within landblock: triggers SetLandCell
++            p.SetPosition(new Vector3(100.0f, 120.0f, 10.0f));
++            Assert.AreEqual((byte)1, p.LandblockId.Continent, "SetLandCell must preserve Dericost continent flag");
++            Assert.IsFalse(p.Indoors);
++
++            // Move across landblock boundary to the East (X >= 192.0): triggers SetLandblock
++            p.SetPosition(new Vector3(250.0f, 50.0f, 10.0f));
++            Assert.AreEqual((byte)1, p.LandblockId.Continent, "SetLandblock East crossing must preserve continent flag");
++            Assert.AreEqual((uint)17, p.LandblockX);
++            Assert.AreEqual(58.0f, p.PositionX, 0.01f);
++            Assert.IsFalse(p.Indoors);
++
++            // Move across landblock boundary to the North (Y >= 192.0): triggers SetLandblock
++            p.SetPosition(new Vector3(50.0f, 220.0f, 10.0f));
++            Assert.AreEqual((byte)1, p.LandblockId.Continent, "SetLandblock North crossing must preserve continent flag");
++            Assert.AreEqual((uint)33, p.LandblockY);
++            Assert.AreEqual(28.0f, p.PositionY, 0.01f);
++            Assert.IsFalse(p.Indoors);
++        }
++
++        // -------------------------------------------------------------
++        // 6. Stress Test: Cross-Continent 3D Distance Symmetry and Accuracy
++        // -------------------------------------------------------------
++        [TestMethod]
++        public void Position_CrossContinentDistance_SymmetryAndAccuracy()
++        {
++            // Point on Dereth: lbX=128, lbY=254 (Dereth North shore), Y=192m -> Global Y = 254*192 + 192 = 48,960.0m
++            var pDerethNorth = new Position(0x80FE0001, new Vector3(96.0f, 192.0f, 0.0f), Quaternion.Identity);
++
++            // Point on Dericost: lbX=128, lbY=0 (Dericost South landfall), Y=0m -> Global Y = 68,928.0m
++            var pDericostSouth = new Position(0x80008001, new Vector3(96.0f, 0.0f, 0.0f), Quaternion.Identity);
++
++            // The ocean gap distance is exactly 68,928.0 - 48,960.0 = 19,968.0m
++            const double expectedGap = 19968.0;
++
++            var distFwd = pDerethNorth.DistanceTo(pDericostSouth);
++            var distRev = pDericostSouth.DistanceTo(pDerethNorth);
++
++            Assert.AreEqual((float)expectedGap, distFwd, 0.5f, "Dereth-to-Dericost distance must match ocean gap (19,968m)");
++            Assert.AreEqual(distFwd, distRev, 0.01f, "DistanceTo must be strictly symmetric");
++
++            var offsetFwd = pDerethNorth.GetOffset(pDericostSouth);
++            var offsetRev = pDericostSouth.GetOffset(pDerethNorth);
++
++            Assert.AreEqual(0.0f, offsetFwd.X, 0.01f);
++            Assert.AreEqual((float)expectedGap, offsetFwd.Y, 0.5f, "Offset from Dereth North to Dericost South must be +19,968m on Y");
++
++            Assert.AreEqual(0.0f, offsetRev.X, 0.01f);
++            Assert.AreEqual(-(float)expectedGap, offsetRev.Y, 0.5f, "Offset from Dericost South to Dereth North must be -19,968m on Y");
++        }
++
++        // -------------------------------------------------------------
++        // 7. Stress Test: Vehicle.ToPosition and Vehicle.ToGlobal Round-Trip
++        // -------------------------------------------------------------
++        [TestMethod]
++        public void Vehicle_GlobalConversions_RoundTrip_BothContinents()
++        {
++            // Dereth coordinates
++            double[] derethYs = { 10.0, 1000.0, 24480.0, 48950.0 };
++            foreach (var gy in derethYs)
++            {
++                double gx = 24480.0;
++                double gz = 75.0;
++                var pos = Vehicle.ToPosition(gx, gy, gz, Quaternion.Identity);
++
++                Assert.AreEqual((byte)0, pos.LandblockId.Continent, $"Continent for gy={gy} must be Dereth (0)");
++                Assert.IsFalse(pos.Indoors);
++
++                var (backX, backY, backZ) = Vehicle.ToGlobal(pos);
++                Assert.AreEqual(gx, backX, 0.05, $"Round-trip X for gy={gy}");
++                Assert.AreEqual(gy, backY, 0.05, $"Round-trip Y for gy={gy}");
++                Assert.AreEqual(gz, backZ, 0.01, $"Round-trip Z for gy={gy}");
++            }
++
++            // Dericost coordinates
++            double[] dericostYs = { 68928.0, 70000.0, 85000.0, 105000.0, 117880.0 };
++            foreach (var gy in dericostYs)
++            {
++                double gx = 30000.0;
++                double gz = 120.0;
++                var pos = Vehicle.ToPosition(gx, gy, gz, Quaternion.Identity);
++
++                Assert.AreEqual((byte)1, pos.LandblockId.Continent, $"Continent for gy={gy} must be Dericost (1)");
++                Assert.IsFalse(pos.Indoors);
++
++                var (backX, backY, backZ) = Vehicle.ToGlobal(pos);
++                Assert.AreEqual(gx, backX, 0.05, $"Round-trip X for gy={gy}");
++                Assert.AreEqual(gy, backY, 0.05, $"Round-trip Y for gy={gy}");
++                Assert.AreEqual(gz, backZ, 0.01, $"Round-trip Z for gy={gy}");
++            }
++        }
++
++        // -------------------------------------------------------------
++        // 8. Stress Test: Vehicle Predictive Streaming Target Generation
++        // -------------------------------------------------------------
++        [TestMethod]
++        public void Vehicle_FlightCorridor_TargetsSkipOceanGap_TargetDericostOnApproach()
++        {
++            // Ocean gap boundaries
++            const double oceanMin = 48960.0;
++            const double oceanMax = 68928.0;
++
++            // Scenario A: Inside Ocean Corridor (py = 58,000m, cruising North at 83 m/s)
++            // Any candidate py within [48960, 68928) must be excluded from target landblocks
++            double cruiseSpeed = 83.0;
++            double horizon = 5.0;
++            double startY = 58000.0;
++
++            for (double t = 0.0; t <= horizon; t += 0.5)
++            {
++                double py = startY + cruiseSpeed * t;
++                bool isOcean = py >= oceanMin && py < oceanMax;
++                Assert.IsTrue(isOcean, $"py={py} must be recognized as inside ocean gap");
++            }
++
++            // Scenario B: Approach Landfall (py = 68,700m, 228m South of Dericost)
++            // At t = 0, py = 68,700m (in ocean -> skip)
++            // At t = 3.0s, py = 68,700 + 83 * 3 = 68,949m >= 68928m -> Dericost Landblock with Continent=1
++            startY = 68700.0;
++            int targetedDericostCount = 0;
++
++            for (double t = 0.0; t <= horizon; t += 0.5)
++            {
++                double py = startY + cruiseSpeed * t;
++                if (py >= oceanMin && py < oceanMax)
++                    continue; // skipped
++
++                var continent = py >= Vehicle.DericostYOffset ? 1 : 0;
++                var localPy = continent == 1 ? py - Vehicle.DericostYOffset : py;
++                var lby = (int)Math.Floor(localPy / 192.0);
++
++                Assert.AreEqual(1, continent, "Approach past landfall must target Dericost (continent 1)");
++                Assert.IsTrue(lby >= 0 && lby < 255, $"lby={lby} must be within valid Dericost range [0, 254]");
++                targetedDericostCount++;
++            }
++
++            Assert.IsTrue(targetedDericostCount > 0, "Corridor prefetch must generate Dericost targets ahead of landfall");
++        }
++    }
++}
+diff --git a/Source/ACE.Server.Tests/Vehicles/DericostContinentInvariantsTests.cs b/Source/ACE.Server.Tests/Vehicles/DericostContinentInvariantsTests.cs
+new file mode 100644
+index 0000000..271c122
+--- /dev/null
++++ b/Source/ACE.Server.Tests/Vehicles/DericostContinentInvariantsTests.cs
+@@ -0,0 +1,72 @@
++using System;
++using Microsoft.VisualStudio.TestTools.UnitTesting;
++using ACE.Entity;
++
++namespace ACE.Server.Tests.Vehicles
++{
++    [TestClass]
++    public class DericostContinentInvariantsTests
++    {
++        [TestMethod]
++        public void LandblockId_ContinentFlag_ExtractsBit15()
++        {
++            var derethId = new LandblockId(0x12340001);
++            Assert.AreEqual((byte)0, derethId.Continent);
++
++            var dericostId = new LandblockId(0x12348001);
++            Assert.AreEqual((byte)1, dericostId.Continent);
++        }
++
++        [TestMethod]
++        public void LandblockId_Indoors_MasksBit15_PreventsFalseIndoorsOnDericost()
++        {
++            // Dereth outdoor cell 1
++            var derethOutdoor = new LandblockId(0x10200001);
++            Assert.IsFalse(derethOutdoor.Indoors);
++
++            // Dereth dungeon cell 0x100
++            var derethDungeon = new LandblockId(0x10200100);
++            Assert.IsTrue(derethDungeon.Indoors);
++
++            // Dericost outdoor cell 1 (Bit 15 is 1, raw low 16 bits = 0x8001)
++            var dericostOutdoor = new LandblockId(0x10208001);
++            Assert.IsFalse(dericostOutdoor.Indoors, "Dericost outdoor cells must not be classified as indoors");
++
++            // Dericost dungeon cell (Bit 15 is 1, raw low 16 bits = 0x8100)
++            var dericostDungeon = new LandblockId(0x10208100);
++            Assert.IsTrue(dericostDungeon.Indoors, "Dericost dungeon cells must still be classified as indoors");
++        }
++
++        [TestMethod]
++        public void LandblockId_Equality_CrossContinentDifferentiation()
++        {
++            var derethBlock = new LandblockId(0x10200001);
++            var dericostBlock = new LandblockId(0x10208001);
++
++            Assert.AreNotEqual(derethBlock, dericostBlock);
++            Assert.IsTrue(derethBlock != dericostBlock);
++            Assert.IsFalse(derethBlock == dericostBlock);
++            Assert.IsFalse(derethBlock.Equals(dericostBlock));
++
++            var dericostSameBlock = new LandblockId(0x10208005);
++            Assert.AreEqual(dericostBlock, dericostSameBlock);
++            Assert.IsTrue(dericostBlock == dericostSameBlock);
++            Assert.AreEqual(dericostBlock.GetHashCode(), dericostSameBlock.GetHashCode());
++        }
++
++        [TestMethod]
++        public void Position_Distance_AccountsForContinentDelta()
++        {
++            var pDereth = new Position(0x10200001, new System.Numerics.Vector3(50.0f, 50.0f, 10.0f), System.Numerics.Quaternion.Identity);
++            var pDericost = new Position(0x10208001, new System.Numerics.Vector3(50.0f, 50.0f, 10.0f), System.Numerics.Quaternion.Identity);
++
++            var distSq = pDereth.SquaredDistanceTo(pDericost);
++            var expectedDist = 68928.0;
++            var expectedDistSq = (float)(expectedDist * expectedDist);
++
++            Assert.AreEqual(expectedDistSq, distSq, 10.0f);
++            Assert.AreEqual((float)expectedDist, pDereth.DistanceTo(pDericost), 0.1f);
++            Assert.AreEqual((float)expectedDist, pDereth.Distance2D(pDericost), 0.1f);
++        }
++    }
++}
+diff --git a/Source/ACE.Server/Managers/LandblockManager.cs b/Source/ACE.Server/Managers/LandblockManager.cs
+index ad7bfc9..aed48c0 100644
+--- a/Source/ACE.Server/Managers/LandblockManager.cs
++++ b/Source/ACE.Server/Managers/LandblockManager.cs
+@@ -30,11 +30,32 @@ public static class LandblockManager
+         /// </summary>
+         private static readonly ReaderWriterLockSlim landblockLock = new ReaderWriterLockSlim(LockRecursionPolicy.SupportsRecursion);
+ 
++        public const double OceanCorridorYMin = 48960.0;
++        public const double OceanCorridorYMax = 68928.0;
++
+         /// <summary>
+-        /// A table of all the landblocks in the world map
+-        /// Landblocks which aren't currently loaded will be null here
++        /// A table of all the landblocks in the world map across both continents [continent, x, y].
++        /// Continent 0 = Dereth, Continent 1 = Dericost.
+         /// </summary>
+-        private static readonly Landblock[,] landblocks = new Landblock[255, 255];
++        private static readonly Landblock[,,] landblocks = new Landblock[2, 255, 255];
++
++        public static bool IsInOceanCorridor(WorldObject wo)
++        {
++            if (wo is Vehicles.Vehicle v)
++                return v.State.Y >= OceanCorridorYMin && v.State.Y < OceanCorridorYMax;
++            if (wo is Player p)
++            {
++                var pv = Vehicles.VehicleManager.VehicleOf(p);
++                if (pv != null)
++                    return pv.State.Y >= OceanCorridorYMin && pv.State.Y < OceanCorridorYMax;
++                if (p.Location != null)
++                {
++                    var (_, gy, _) = Vehicles.Vehicle.ToGlobal(p.Location);
++                    return gy >= OceanCorridorYMin && gy < OceanCorridorYMax;
++                }
++            }
++            return false;
++        }
+ 
+         /// <summary>
+         /// A lookup table of all the currently loaded landblocks
+@@ -463,8 +484,21 @@ public static bool AddObject(WorldObject worldObject, bool loadAdjacents = false
+         /// </summary>
+         public static void RelocateObjectForPhysics(WorldObject worldObject, bool adjacencyMove)
+         {
++            if (IsInOceanCorridor(worldObject))
++            {
++                var old = worldObject.CurrentLandblock;
++                if (old != null)
++                {
++                    old.RemoveWorldObjectForPhysics(worldObject.Guid, adjacencyMove);
++                    worldObject.CurrentLandblock = null;
++                }
++                return;
++            }
++
+             var oldBlock = worldObject.CurrentLandblock;
+             var newBlock = GetLandblock(worldObject.Location.LandblockId, true);
++            if (newBlock == null)
++                return;
+ 
+             // holtburger vehicles fork (DESIGN §4.5): a player or vehicle entering a dormant landblock wakes it (and its
+             // neighbours). Without this, a fast mover that re-enters ground it left 1-5 min earlier stops being
+@@ -486,17 +520,17 @@ public static void RelocateObjectForPhysics(WorldObject worldObject, bool adjace
+             newBlock.AddWorldObjectForPhysics(worldObject);
+         }
+ 
+-        /// <summary>holtburger vehicles fork: the landblock at (x, y) if it is loaded — never loads one.</summary>
+-        public static Landblock GetLoadedLandblock(int x, int y)
++        /// <summary>holtburger vehicles fork: the landblock at (continent, x, y) if it is loaded — never loads one.</summary>
++        public static Landblock GetLoadedLandblock(int continent, int x, int y)
+         {
+-            if (x < 0 || y < 0 || x > 254 || y > 254)
++            if (continent < 0 || continent > 1 || x < 0 || y < 0 || x > 254 || y > 254)
+                 return null;
+             var tw = Stopwatch.GetTimestamp();
+             landblockLock.EnterReadLock();
+-            NoteLockWait(tw, "GetLoadedLandblock", (uint)(x << 24 | y << 16));
++            NoteLockWait(tw, "GetLoadedLandblock", (uint)((x << 24) | (y << 16) | (continent << 15)));
+             try
+             {
+-                return landblocks[x, y];
++                return landblocks[continent, x, y];
+             }
+             finally
+             {
+@@ -504,6 +538,11 @@ public static Landblock GetLoadedLandblock(int x, int y)
+             }
+         }
+ 
++        public static Landblock GetLoadedLandblock(int x, int y)
++        {
++            return GetLoadedLandblock(0, x, y);
++        }
++
+         public static bool IsLoaded(LandblockId landblockId)
+         {
+             var tw = Stopwatch.GetTimestamp(); // holtburger vehicles fork: lock-wait diagnosis
+@@ -511,7 +550,11 @@ public static bool IsLoaded(LandblockId landblockId)
+             NoteLockWait(tw, "IsLoaded", landblockId.Raw);
+             try
+             {
+-                return landblocks[landblockId.LandblockX, landblockId.LandblockY] != null;
++                var continent = (int)((landblockId.Raw >> 15) & 1);
++                var x = (int)((landblockId.Raw >> 24) & 0xFF);
++                var y = (int)landblockId.LandblockY;
++                if (x > 254 || y > 254) return false;
++                return landblocks[continent, x, y] != null;
+             }
+             finally
+             {
+@@ -664,6 +707,9 @@ static void NoteWriteLockHold(double ms, uint id)
+         public static Landblock GetLandblock(LandblockId landblockId, bool loadAdjacents, bool permaload = false)
+         {
+             Landblock landblock;
++            var continent = (int)((landblockId.Raw >> 15) & 1);
++            var x = (int)((landblockId.Raw >> 24) & 0xFF);
++            var y = (int)landblockId.LandblockY;
+ 
+             if (FastLookup && !permaload)
+             {
+@@ -672,7 +718,7 @@ public static Landblock GetLandblock(LandblockId landblockId, bool loadAdjacents
+                 NoteLockWait(twf, "GetLandblock(fast)", landblockId.Raw);
+                 try
+                 {
+-                    landblock = landblocks[landblockId.LandblockX, landblockId.LandblockY];
++                    landblock = landblocks[continent, x, y];
+                     if (landblock != null && !landblock.Initializing)
+                     {
+                         if (!loadAdjacents)
+@@ -681,9 +727,9 @@ public static Landblock GetLandblock(LandblockId landblockId, bool loadAdjacents
+                         for (var dx = -1; dx <= 1 && all; dx++)
+                             for (var dy = -1; dy <= 1; dy++)
+                             {
+-                                int nx = landblockId.LandblockX + dx, ny = landblockId.LandblockY + dy;
++                                int nx = x + dx, ny = y + dy;
+                                 if (nx < 0 || ny < 0 || nx > 254 || ny > 254) continue;
+-                                var n = landblocks[nx, ny];
++                                var n = landblocks[continent, nx, ny];
+                                 if (n == null || n.Initializing) { all = false; break; }
+                             }
+                         if (all && !landblock.IsDungeon)
+@@ -709,7 +755,7 @@ public static Landblock GetLandblock(LandblockId landblockId, bool loadAdjacents
+             {
+                 bool setAdjacents = false;
+ 
+-                landblock = landblocks[landblockId.LandblockX, landblockId.LandblockY];
++                landblock = landblocks[continent, x, y];
+ 
+                 if (landblock == null)
+                 {
+@@ -718,7 +764,7 @@ public static Landblock GetLandblock(LandblockId landblockId, bool loadAdjacents
+                     try
+                     {
+                         // load up this landblock
+-                        landblock = landblocks[landblockId.LandblockX, landblockId.LandblockY] = new Landblock(landblockId);
++                        landblock = landblocks[continent, x, y] = new Landblock(landblockId);
+                         landblock.Initializing = true;
+                         loadedHere = landblock;
+                         landblock.LoadOrigin = DescribeLoadOrigin();
+@@ -818,7 +864,11 @@ private static List<Landblock> GetAdjacents(Landblock landblock)
+ 
+             foreach (var adjacentID in adjacentIDs)
+             {
+-                var adjacent = landblocks[adjacentID.LandblockX, adjacentID.LandblockY];
++                var c = (int)((adjacentID.Raw >> 15) & 1);
++                var ax = (int)((adjacentID.Raw >> 24) & 0xFF);
++                var ay = (int)adjacentID.LandblockY;
++                if (ax > 254 || ay > 254) continue;
++                var adjacent = landblocks[c, ax, ay];
+                 if (adjacent != null)
+                     adjacents.Add(adjacent);
+             }
+@@ -870,7 +920,8 @@ private static List<LandblockId> GetAdjacentIDs(Landblock landblock)
+         /// </summary>
+         private static LandblockId? GetAdjacentID(LandblockId landblock, Adjacency adjacency)
+         {
+-            int lbx = landblock.LandblockX;
++            var continent = (int)((landblock.Raw >> 15) & 1);
++            int lbx = (int)((landblock.Raw >> 24) & 0xFF);
+             int lby = landblock.LandblockY;
+ 
+             switch (adjacency)
+@@ -908,7 +959,7 @@ private static List<LandblockId> GetAdjacentIDs(Landblock landblock)
+             if (lbx < 0 || lbx > 254 || lby < 0 || lby > 254)
+                 return null;
+ 
+-            return new LandblockId((byte)lbx, (byte)lby);
++            return new LandblockId(((uint)lbx << 24) | ((uint)lby << 16) | ((uint)continent << 15));
+         }
+ 
+         /// <summary>
+@@ -967,7 +1018,11 @@ private static void UnloadLandblocks()
+                         // remove from list of managed landblocks
+                         if (loadedLandblocks.Remove(landblock))
+                         {
+-                            landblocks[landblock.Id.LandblockX, landblock.Id.LandblockY] = null;
++                            var c = (int)((landblock.Id.Raw >> 15) & 1);
++                            var ux = (int)((landblock.Id.Raw >> 24) & 0xFF);
++                            var uy = (int)landblock.Id.LandblockY;
++                            if (ux <= 254 && uy <= 254)
++                                landblocks[c, ux, uy] = null;
+ 
+                             // remove from landblock group
+                             for (int i = landblockGroups.Count - 1; i >= 0 ; i--)
+diff --git a/Source/ACE.Server/Physics/Common/BldPortal.cs b/Source/ACE.Server/Physics/Common/BldPortal.cs
+index ae1746d..adc9074 100644
+--- a/Source/ACE.Server/Physics/Common/BldPortal.cs
++++ b/Source/ACE.Server/Physics/Common/BldPortal.cs
+@@ -26,7 +26,7 @@ public BldPortal(DatLoader.Entity.CBldPortal bldPortal)
+ 
+         public EnvCell GetOtherCell(uint landblockID)
+         {
+-            var blockCellID = landblockID & 0xFFFF0000 | OtherCellId;
++            var blockCellID = (landblockID & 0xFFFF8000) | OtherCellId;
+ 
+             return (EnvCell)LScape.get_landcell(blockCellID);
+         }
+diff --git a/Source/ACE.Server/Physics/Common/EnvCell.cs b/Source/ACE.Server/Physics/Common/EnvCell.cs
+index 73f088a..4461331 100644
+--- a/Source/ACE.Server/Physics/Common/EnvCell.cs
++++ b/Source/ACE.Server/Physics/Common/EnvCell.cs
+@@ -121,7 +121,7 @@ public void build_visible_cells()
+ 
+             foreach (var visibleCellID in VisibleCellIDs)
+             {
+-                var blockCellID = ID & 0xFFFF0000 | visibleCellID;
++                var blockCellID = (ID & 0xFFFF8000) | visibleCellID;
+                 if (VisibleCells.ContainsKey(blockCellID)) continue;
+                 var cell = (EnvCell)LScape.get_landcell(blockCellID);
+                 VisibleCells.Add(visibleCellID, cell);
+diff --git a/Source/ACE.Server/Physics/Common/LScape.cs b/Source/ACE.Server/Physics/Common/LScape.cs
+index f2ceb03..0b510ad 100644
+--- a/Source/ACE.Server/Physics/Common/LScape.cs
++++ b/Source/ACE.Server/Physics/Common/LScape.cs
+@@ -131,7 +131,7 @@ public static ObjCell get_landcell(uint blockCellID)
+             if (landblock == null)
+                 return null;
+ 
+-            var cellID = blockCellID & 0xFFFF;
++            var cellID = blockCellID & 0x7FFF;
+             ObjCell cell = null;
+ 
+             // outdoor cells
+diff --git a/Source/ACE.Server/Vehicles/FlightModel.cs b/Source/ACE.Server/Vehicles/FlightModel.cs
+index f06e25e..a94ce83 100644
+--- a/Source/ACE.Server/Vehicles/FlightModel.cs
++++ b/Source/ACE.Server/Vehicles/FlightModel.cs
+@@ -93,9 +93,11 @@ public static class FlightModel
+         /// <summary>Flight → Landing once the speed is within this of LandingSpeed (with Land held).</summary>
+         public const double LandingSpeedSlack = 0.5;
+         public const double WorldMin = 0.5;
+-        // 255 landblocks a side (0x00-0xFE): landblock 0xFF does not exist, so the last metre inside the map is 255 × 192
+-        // (the old 256 × 192 let a vehicle — and a bail-out fall — reach x / y in 0xFF at the north / east edge)
+-        public const double WorldMax = 255.0 * 192.0 - 0.5;
++        public const double WorldXMin = 0.5;
++        public const double WorldXMax = 255.0 * 192.0 - 0.5; // 48,959.5 m (Dereth East edge)
++        public const double WorldYMin = 0.5;
++        public const double WorldYMax = (359.0 + 255.0) * 192.0 - 0.5; // 117,887.5 m (Dericost North edge)
++        public const double WorldMax = WorldXMax; // Backward compatibility
+         const double TwoPi = 2.0 * Math.PI;
+ 
+         public static double MoveToward(double cur, double target, double maxDelta)
+@@ -164,8 +166,8 @@ public static void Step(ref FlightState s, in FlightInput u, FlightParams p, dou
+                     var w = Clamp(s.Speed * Math.Sin(s.Pitch), -p.SinkMax, p.ClimbMax);
+                     var h = s.Speed * Math.Cos(s.Pitch);
+                     // 5. integrate, then the envelope
+-                    var nx = Clamp(s.X + h * Math.Sin(s.Heading) * dt, WorldMin, WorldMax);
+-                    var ny = Clamp(s.Y + h * Math.Cos(s.Heading) * dt, WorldMin, WorldMax);
++                    var nx = Clamp(s.X + h * Math.Sin(s.Heading) * dt, WorldXMin, WorldXMax);
++                    var ny = Clamp(s.Y + h * Math.Cos(s.Heading) * dt, WorldYMin, WorldYMax);
+                     var nz = s.Z + w * dt;
+                     var g = ground(nx, ny);
+                     if (!double.IsNaN(g))
+@@ -197,8 +199,8 @@ public static void Step(ref FlightState s, in FlightInput u, FlightParams p, dou
+                     s.Pitch = MoveToward(s.Pitch, 0.0, p.PitchRate * dt);
+                     s.Speed = MoveToward(s.Speed, 0.0, p.Decel * dt);
+                     s.Heading = WrapHeading(s.Heading + Clamp(u.Yaw, -1.0, 1.0) * p.YawRate * dt);
+-                    var nx = Clamp(s.X + s.Speed * Math.Sin(s.Heading) * dt, WorldMin, WorldMax);
+-                    var ny = Clamp(s.Y + s.Speed * Math.Cos(s.Heading) * dt, WorldMin, WorldMax);
++                    var nx = Clamp(s.X + s.Speed * Math.Sin(s.Heading) * dt, WorldXMin, WorldXMax);
++                    var ny = Clamp(s.Y + s.Speed * Math.Cos(s.Heading) * dt, WorldYMin, WorldYMax);
+                     var nz = s.Z - p.TakeoffClimb * dt;
+                     var g = ground(nx, ny);
+                     if (!double.IsNaN(g) && nz <= g)
+diff --git a/Source/ACE.Server/Vehicles/Vehicle.cs b/Source/ACE.Server/Vehicles/Vehicle.cs
+index ae6cab3..680ba94 100644
+--- a/Source/ACE.Server/Vehicles/Vehicle.cs
++++ b/Source/ACE.Server/Vehicles/Vehicle.cs
+@@ -353,29 +353,42 @@ public static Quaternion Orientation(double heading, double pitch, double bank)
+ 
+         public static Quaternion YawOnly(double heading) => Quaternion.CreateFromAxisAngle(Vector3.UnitZ, (float)-heading);
+ 
++        public const double DericostYOffset = 68928.0;
++
+         /// <summary>Global AC metres → a landblock-local outdoor Position (cell = the outdoor land cell).</summary>
+         public static Position ToPosition(double gx, double gy, double gz, Quaternion rot)
+         {
++            var continent = gy >= DericostYOffset ? 1u : 0u;
++            var localGy = continent == 1u ? gy - DericostYOffset : gy;
+             var lbX = (int)Math.Floor(gx / 192.0);
+-            var lbY = (int)Math.Floor(gy / 192.0);
++            var lbY = (int)Math.Floor(localGy / 192.0);
+             // 0..254: ACE's landblock table is [255, 255] (landblock 0xFF does not exist) — a Position in 0xFF made
+             // GetLandblock / IsLoaded throw IndexOutOfRange on the world thread (a seat tilted past the east edge, a muzzle)
+             lbX = Math.Clamp(lbX, 0, 254);
+             lbY = Math.Clamp(lbY, 0, 254);
+             var lx = (float)(gx - lbX * 192.0);
+-            var ly = (float)(gy - lbY * 192.0);
++            var ly = (float)(localGy - lbY * 192.0);
+             lx = Math.Clamp(lx, 0.0f, 191.999f);
+             ly = Math.Clamp(ly, 0.0f, 191.999f);
+             var cellX = (uint)(lx / 24.0f);
+             var cellY = (uint)(ly / 24.0f);
+-            var cell = ((uint)lbX << 24) | ((uint)lbY << 16) | (cellX * 8 + cellY + 1);
++            var cell = (uint)(lbX << 24) | (uint)(lbY << 16) | (continent << 15) | (uint)(cellX * 8 + cellY + 1);
+             return new Position(cell, lx, ly, (float)gz, rot.X, rot.Y, rot.Z, rot.W);
+         }
+ 
+         public static (double x, double y, double z) ToGlobal(Position p)
+         {
+-            var x = (p.Cell >> 24) * 192.0 + p.PositionX;
+-            var y = ((p.Cell >> 16) & 0xFF) * 192.0 + p.PositionY;
++            var continent = (p.Cell >> 15) & 1u;
++            var x = ((p.Cell >> 24) & 0xFF) * 192.0 + p.PositionX;
++            var y = (continent == 1u ? DericostYOffset : 0.0) + ((p.Cell >> 16) & 0xFF) * 192.0 + p.PositionY;
++            return (x, y, p.PositionZ);
++        }
++
++        public static (double x, double y, double z) ToGlobal(Position p, uint continent)
++        {
++            var isDericost = continent == 1u;
++            var x = ((p.Cell >> 24) & 0xFFu) * 192.0 + p.PositionX;
++            var y = (isDericost ? DericostYOffset : 0.0) + ((p.Cell >> 16) & 0xFF) * 192.0 + p.PositionY;
+             return (x, y, p.PositionZ);
+         }
+ 
+diff --git a/Source/ACE.Server/Vehicles/VehicleManager.cs b/Source/ACE.Server/Vehicles/VehicleManager.cs
+index 96f2fd0..2024826 100644
+--- a/Source/ACE.Server/Vehicles/VehicleManager.cs
++++ b/Source/ACE.Server/Vehicles/VehicleManager.cs
+@@ -448,13 +448,16 @@ static void MoveWorldObject(Vehicle v, Position pos)
+         /// </summary>
+         static void EnsureLoaded(Position pos, Vehicle v)
+         {
+-            var id = new LandblockId(pos.Cell | 0xFFFF);
++            if (v.State.Y >= LandblockManager.OceanCorridorYMin && v.State.Y < LandblockManager.OceanCorridorYMax)
++                return;
++            var continent = (int)((pos.Cell >> 15) & 1);
++            var id = new LandblockId(pos.Cell);
+             var lbx = id.LandblockX;
+             var lby = id.LandblockY;
+             var high = InHighBand(v);
+             if (high)
+             {
+-                if (LandblockManager.GetLoadedLandblock(lbx, lby) != null)
++                if (LandblockManager.GetLoadedLandblock(continent, lbx, lby) != null)
+                     return;
+                 var tHigh = Stopwatch.GetTimestamp();
+                 var lbHigh = LandblockManager.GetLandblock(id, false);
+@@ -473,7 +476,7 @@ static void EnsureLoaded(Position pos, Vehicle v)
+             var missing = 0;
+             for (var i = 0; i < 9; i++)
+             {
+-                before[i] = LandblockManager.GetLoadedLandblock(lbx + i / 3 - 1, lby + i % 3 - 1) != null;
++                before[i] = LandblockManager.GetLoadedLandblock(continent, lbx + i / 3 - 1, lby + i % 3 - 1) != null;
+                 if (!before[i]) missing++;
+             }
+             // with off-thread preload a corridor landblock may still be loading on its background task: let it finish
+@@ -487,7 +490,7 @@ static void EnsureLoaded(Position pos, Vehicle v)
+             for (var i = 0; i < 9; i++)
+             {
+                 if (before[i]) continue;
+-                var lb = LandblockManager.GetLoadedLandblock(lbx + i / 3 - 1, lby + i % 3 - 1);
++                var lb = LandblockManager.GetLoadedLandblock(continent, lbx + i / 3 - 1, lby + i % 3 - 1);
+                 if (lb == null) continue;
+                 lb.VehicleOnly = true;
+                 loaded++;
+@@ -532,19 +535,19 @@ static void MovePilot(Vehicle v, Player pilot, Position seatPos)
+         static void Relocate(WorldObject wo, Vehicle v)
+         {
+             var wasLoaded = LandblockManager.IsLoaded(wo.Location.LandblockId);
+-            // which of the 3×3 the relocation (loadAdjacents) is about to load: those become vehicle-only
++            var continent = (int)((wo.Location.Cell >> 15) & 1);
+             var lbx = wo.Location.LandblockId.LandblockX;
+             var lby = wo.Location.LandblockId.LandblockY;
+             var loadAdj = !InHighBand(v);
+             Span<bool> before = stackalloc bool[9];
+             for (var i = 0; i < 9; i++)
+-                before[i] = LandblockManager.GetLoadedLandblock(lbx + i / 3 - 1, lby + i % 3 - 1) != null;
++                before[i] = LandblockManager.GetLoadedLandblock(continent, lbx + i / 3 - 1, lby + i % 3 - 1) != null;
+             var t0 = Stopwatch.GetTimestamp();
+             LandblockManager.RelocateObjectForPhysics(wo, loadAdj);
+             for (var i = 0; i < 9; i++)
+             {
+                 if (before[i]) continue;
+-                var lb = LandblockManager.GetLoadedLandblock(lbx + i / 3 - 1, lby + i % 3 - 1);
++                var lb = LandblockManager.GetLoadedLandblock(continent, lbx + i / 3 - 1, lby + i % 3 - 1);
+                 if (lb != null) lb.VehicleOnly = true;
+             }
+             v.Costs.LastRelocateMs = (Stopwatch.GetTimestamp() - t0) * 1000.0 / Stopwatch.Frequency;
+@@ -1048,8 +1051,9 @@ public static void Unseat(Vehicle v, Player player, bool placeOnGround, bool kee
+         public static void MoveBody(Player player, Position pos)
+         {
+             var prevLb = player.Location.Landblock;
+-            if (pos.Landblock != prevLb && !LandblockManager.IsLoaded(new LandblockId(pos.Cell | 0xFFFF)))
+-                LandblockManager.GetLandblock(new LandblockId(pos.Cell | 0xFFFF), true);
++            var id = new LandblockId(pos.Cell);
++            if (pos.Landblock != prevLb && !LandblockManager.IsLoaded(id))
++                LandblockManager.GetLandblock(id, true);
+             player.Location = pos;
+             player.PhysicsObj.set_current_pos(new Physics.Common.Position(pos));
+             if (pos.Landblock != prevLb)
+diff --git a/Source/ACE.Server/Vehicles/VehicleOrdnance.cs b/Source/ACE.Server/Vehicles/VehicleOrdnance.cs
+index ecc42fa..0dbc847 100644
+--- a/Source/ACE.Server/Vehicles/VehicleOrdnance.cs
++++ b/Source/ACE.Server/Vehicles/VehicleOrdnance.cs
+@@ -109,7 +109,7 @@ public static void Tick()
+                     double px = b.X, py = b.Y, pz = b.Z;
+                     Step(ref b.X, ref b.Y, ref b.Z, ref b.VX, ref b.VY, ref b.VZ, b.Terminal, Dt);
+                     b.Steps++;
+-                    if (b.X < FlightModel.WorldMin || b.Y < FlightModel.WorldMin || b.X > FlightModel.WorldMax || b.Y > FlightModel.WorldMax
++                    if (b.X < FlightModel.WorldXMin || b.Y < FlightModel.WorldYMin || b.X > FlightModel.WorldXMax || b.Y > FlightModel.WorldYMax
+                         || b.Steps * Dt > MaxFallSeconds)
+                     {
+                         done = true; // off the map / lost: a dud
+@@ -157,9 +157,10 @@ static void Detonate(Bomb b, double x, double y, double z)
+             Detonated++;
+             var pilot = PlayerManager.GetOnlinePlayer(b.PilotGuid);
+             var at = Vehicle.ToPosition(x, y, z + 0.1, Quaternion.Identity);
+-            var lbx = (int)Math.Floor(x / 192.0);
+-            var lby = (int)Math.Floor(y / 192.0);
+-            var loaded = LandblockManager.GetLoadedLandblock(lbx, lby) != null;
++            var continent = (int)((at.Cell >> 15) & 1);
++            var lbx = at.LandblockId.LandblockX;
++            var lby = at.LandblockId.LandblockY;
++            var loaded = LandblockManager.GetLoadedLandblock(continent, lbx, lby) != null;
+             var hits = 0;
+             var kills = 0;
+             if (loaded)
+@@ -188,16 +189,18 @@ static void Detonate(Bomb b, double x, double y, double z)
+         static (int hits, int kills) Blast(Player pilot, double x, double y, double z, Bomb b)
+         {
+             var r = b.Radius;
++            var continent = y >= Vehicle.DericostYOffset ? 1 : 0;
++            var localY = continent == 1 ? y - Vehicle.DericostYOffset : y;
+             var x0 = (int)Math.Floor((x - r) / 192.0);
+             var x1 = (int)Math.Floor((x + r) / 192.0);
+-            var y0 = (int)Math.Floor((y - r) / 192.0);
+-            var y1 = (int)Math.Floor((y + r) / 192.0);
++            var y0 = (int)Math.Floor((localY - r) / 192.0);
++            var y1 = (int)Math.Floor((localY + r) / 192.0);
+             var gunPlayers = VehicleManager.GunPlayersThisTick;
+             victims.Clear();
+             for (var lx = x0; lx <= x1; lx++)
+                 for (var ly = y0; ly <= y1; ly++)
+                 {
+-                    var lb = LandblockManager.GetLoadedLandblock(lx, ly);
++                    var lb = LandblockManager.GetLoadedLandblock(continent, lx, ly);
+                     if (lb == null) continue;
+                     foreach (var wo in lb.GetAllWorldObjectsForDiagnostics())
+                     {
+diff --git a/Source/ACE.Server/Vehicles/VehicleStreaming.cs b/Source/ACE.Server/Vehicles/VehicleStreaming.cs
+index b641d53..c44ef18 100644
+--- a/Source/ACE.Server/Vehicles/VehicleStreaming.cs
++++ b/Source/ACE.Server/Vehicles/VehicleStreaming.cs
+@@ -210,7 +210,7 @@ public static bool IsLootGenerator(WorldObject g)
+         /// <summary>v2: build corridor landblocks (constructor + physics PostInit) off the world thread, publish on it.</summary>
+         public static bool OffThread => PropertyManager.GetBool("vehicle_preload_offthread", false).Item;
+         const int MaxBuildsInFlight = 2;
+-        static readonly ConcurrentDictionary<ushort, Task> builds = new ConcurrentDictionary<ushort, Task>();
++        static readonly ConcurrentDictionary<uint, Task> builds = new ConcurrentDictionary<uint, Task>();
+         public static long OffThreadBuilds, Published, Discarded, BuildFailures;
+         public static double PublishMsMax, PublishMsTotal, BuildMsMax, BuildMsTotal;
+ 
+@@ -222,7 +222,7 @@ public static bool IsLootGenerator(WorldObject g)
+ 
+         static int loadsThisTick;
+         static readonly Queue<DateTime> globalLoads = new Queue<DateTime>();
+-        static readonly ConcurrentDictionary<ushort, Task> prefetch = new ConcurrentDictionary<ushort, Task>();
++        static readonly ConcurrentDictionary<uint, Task> prefetch = new ConcurrentDictionary<uint, Task>();
+ 
+         // global counters
+         public static long Preloads, PrefetchesStarted, PrefetchesWarm;
+@@ -234,12 +234,12 @@ public static void BeginTick()
+             LandblockManager.FastLookup = PreloadEnabled && OffThread;
+         }
+ 
+-        static ushort Key(int lbx, int lby) => (ushort)((lbx << 8) | lby);
++        static uint Key(int continent, int lbx, int lby) => ((uint)lbx << 24) | ((uint)lby << 16) | ((uint)(continent & 1) << 15);
+ 
+-        static LandblockId IdOf(ushort key) => new LandblockId((uint)key << 16 | 0xFFFF);
++        static LandblockId IdOf(uint key) => new LandblockId(key);
+ 
+         /// <summary>Off-thread DAT warm-up for a landblock the corridor will need.</summary>
+-        static void Prefetch(ushort key)
++        static void Prefetch(uint key)
+         {
+             if (prefetch.ContainsKey(key))
+                 return;
+@@ -251,22 +251,26 @@ static void Prefetch(ushort key)
+                 DatDatabase.BackgroundReaderThread = true;
+                 try
+                 {
+-                    var id = (uint)key << 16;
+-                    var cl = DatManager.CellDat.ReadFromDat<CellLandblock>(id | 0xFFFF);
+-                    var info = DatManager.CellDat.ReadFromDat<LandblockInfo>(id | 0xFFFE);
+-                    // vehicle_defer_dungeons: a dungeon under the flight path is never brought up for the aircraft
+-                    if (DeferDungeons && IsDungeonRecord(key, cl, info))
++                    var continent = (int)((key >> 15) & 1);
++                    var id = key & 0xFFFF0000;
++                    if (continent == 0)
+                     {
+-                        Interlocked.Increment(ref DungeonPrefetchesSkipped);
+-                        return true;
++                        var cl = DatManager.CellDat.ReadFromDat<CellLandblock>(id | 0xFFFF);
++                        var info = DatManager.CellDat.ReadFromDat<LandblockInfo>(id | 0xFFFE);
++                        // vehicle_defer_dungeons: a dungeon under the flight path is never brought up for the aircraft
++                        if (DeferDungeons && IsDungeonRecord((ushort)(id >> 16), cl, info))
++                        {
++                            Interlocked.Increment(ref DungeonPrefetchesSkipped);
++                            return true;
++                        }
++                        if (info != null)
++                            for (uint i = 0; i < info.NumCells; i++)
++                                DatManager.CellDat.ReadFromDat<EnvCell>(id | (0x100 + i));
+                     }
+-                    if (info != null)
+-                        for (uint i = 0; i < info.NumCells; i++)
+-                            DatManager.CellDat.ReadFromDat<EnvCell>(id | (0x100 + i));
+                 }
+                 catch (Exception e)
+                 {
+-                    log.Debug($"[VEHICLE] prefetch {key:X4} failed: {e.Message}");
++                    log.Debug($"[VEHICLE] prefetch {key:X8} failed: {e.Message}");
+                 }
+                 finally
+                 {
+@@ -281,11 +285,12 @@ static void Prefetch(ushort key)
+                 {
+                     if (t.Status == TaskStatus.RanToCompletion && t.Result)
+                         return; // a deferred dungeon: no spawn warm-up (ACE's own cold path if a player ever arrives)
+-                    await WarmSpawns(key).ConfigureAwait(false);
++                    var id = key & 0xFFFF0000;
++                    await WarmSpawns((ushort)(id >> 16)).ConfigureAwait(false);
+                 }
+                 catch (Exception e)
+                 {
+-                    log.Debug($"[VEHICLE] spawn warm-up {key:X4} failed: {e.Message}");
++                    log.Debug($"[VEHICLE] spawn warm-up {key:X8} failed: {e.Message}");
+                 }
+             }, TaskScheduler.Default).Unwrap();
+             if (prefetch.Count > 4096)
+@@ -295,7 +300,7 @@ static void Prefetch(ushort key)
+             }
+         }
+ 
+-        static readonly ConcurrentDictionary<ushort, Task> spawnWarmups = new ConcurrentDictionary<ushort, Task>();
++        static readonly ConcurrentDictionary<uint, Task> spawnWarmups = new ConcurrentDictionary<uint, Task>();
+ 
+         /// <summary>
+         /// At construction of a landblock a vehicle background load is loading: its generators wait for its spawn-cache
+@@ -305,7 +310,7 @@ public static void MarkSpawnWarmup(Landblock lb)
+         {
+             if (!LandblockBudget)
+                 return;
+-            var key = (ushort)(lb.Id.Raw >> 16);
++            var key = lb.Id.Raw & 0xFFFF8000;
+             if (!spawnWarmups.TryGetValue(key, out var warm))
+             {
+                 WarmSpawnsAsync(lb);
+@@ -499,14 +504,18 @@ public static void Tick(Vehicle v, Player pilot)
+             {
+                 var px = v.State.X + vel.X * t;
+                 var py = v.State.Y + vel.Y * t;
++                if (py >= LandblockManager.OceanCorridorYMin && py < LandblockManager.OceanCorridorYMax)
++                    continue;
++                var continent = py >= Vehicle.DericostYOffset ? 1 : 0;
++                var localPy = continent == 1 ? py - Vehicle.DericostYOffset : py;
+                 var lbx = (int)Math.Floor(px / 192.0);
+-                var lby = (int)Math.Floor(py / 192.0);
++                var lby = (int)Math.Floor(localPy / 192.0);
+                 for (var dx = -ring; dx <= ring; dx++)
+                     for (var dy = -ring; dy <= ring; dy++)
+                     {
+                         int x = lbx + dx, y = lby + dy;
+                         if (x < 0 || y < 0 || x > 254 || y > 254) continue;
+-                        var k = Key(x, y);
++                        var k = Key(continent, x, y);
+                         if (seen.Add(k))
+                             targets.Add((k, t));
+                     }
+@@ -515,7 +524,7 @@ public static void Tick(Vehicle v, Player pilot)
+ 
+             // lead: time to the first corridor landblock that is not loaded yet
+             var lead = double.PositiveInfinity;
+-            ushort next = 0;
++            uint next = 0;
+             var haveNext = false;
+             foreach (var (k, t) in targets)
+             {
+@@ -568,7 +577,7 @@ public static void Tick(Vehicle v, Player pilot)
+                     v.Stream.ConstructMsTotal += LandblockManager.LastLoadConstructMs;
+                     v.Stream.InitMsTotal += LandblockManager.LastLoadInitMs;
+                     if (ms > 50)
+-                        log.Warn($"[VEHICLE][PRELOAD] landblock {next:X4} took {ms:0.0} ms (warm={warm}; construct {LandblockManager.LastLoadConstructMs:0.0} ms, init {LandblockManager.LastLoadInitMs:0.0} ms)");
++                        log.Warn($"[VEHICLE][PRELOAD] landblock {next:X8} took {ms:0.0} ms (warm={warm}; construct {LandblockManager.LastLoadConstructMs:0.0} ms, init {LandblockManager.LastLoadInitMs:0.0} ms)");
+                 }
+                 else
+                     v.Stream.TokenRefund();
+@@ -598,7 +607,7 @@ public static void Tick(Vehicle v, Player pilot)
+         /// creation), run on a background task — the same path ACE's parallel landblock groups take when physics
+         /// reaches an unloaded landblock. The world thread never pays for a corridor landblock.
+         /// </summary>
+-        static void Load(ushort key)
++        static void Load(uint key)
+         {
+             var sw = Stopwatch.StartNew();
+             LandblockManager.IsVehicleLoaderThread = true;
+@@ -617,7 +626,7 @@ static void Load(ushort key)
+             catch (Exception e)
+             {
+                 BuildFailures++;
+-                log.Warn($"[VEHICLE][LOAD] landblock {key:X4} off-thread load failed: {e.Message}");
++                log.Warn($"[VEHICLE][LOAD] landblock {key:X8} off-thread load failed: {e.Message}");
+             }
+             finally
+             {
+@@ -640,7 +649,10 @@ static void CollectFinished(Vehicle v)
+                 if (!kv.Value.IsCompleted)
+                     continue;
+                 builds.TryRemove(kv.Key, out _);
+-                var lb = LandblockManager.GetLoadedLandblock(kv.Key >> 8, kv.Key & 0xFF);
++                var cont = (int)((kv.Key >> 15) & 1);
++                var lbx = (int)(kv.Key >> 24);
++                var lby = (int)((kv.Key >> 16) & 0xFF);
++                var lb = LandblockManager.GetLoadedLandblock(cont, lbx, lby);
+                 if (lb == null)
+                     continue;
+                 lb.VehicleOnly = true;
+@@ -677,8 +689,8 @@ static bool GlobalTokenAvailable()
+     /// <summary>Per-vehicle streaming state.</summary>
+     public sealed class VehicleStreamState
+     {
+-        public readonly List<(ushort key, double t)> Targets = new List<(ushort, double)>();
+-        public readonly HashSet<ushort> Seen = new HashSet<ushort>();
++        public readonly List<(uint key, double t)> Targets = new List<(uint, double)>();
++        public readonly HashSet<uint> Seen = new HashSet<uint>();
+         public double LeadSeconds = double.NaN;
+         public long Preloads, BackPressureEvents;
+         public double PreloadMsTotal, PreloadMsMax, ConstructMsTotal, InitMsTotal;
+-- 
+2.43.0
+

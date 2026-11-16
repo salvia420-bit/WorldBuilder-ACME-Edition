@@ -25,9 +25,11 @@ mod tests;
 /// `"HBV1"` as a little-endian u32 (bytes `48 42 56 31`).
 pub const HBV1_TAG: u32 = 0x3156_4248;
 /// The protocol version this module writes (and the newest it parses fully).
-pub const HBV1_VERSION: u16 = 2;
+pub const HBV1_VERSION: u16 = 3;
 /// The first version carrying the v2 fields.
 const V2: u16 = 2;
+/// The first version carrying the v3 fields.
+const V3: u16 = 3;
 
 /// ClientCapabilities / CapabilitiesAck bits.
 pub mod caps {
@@ -45,6 +47,8 @@ pub mod c2s {
     pub const BOARD: u32 = 0x0902;
     pub const EXIT: u32 = 0x0903;
     pub const INPUT: u32 = 0x0905;
+    /// v3: cargo deployment or packing (1=Deploy, 2=Pack).
+    pub const CARGO: u32 = 0x0909;
 }
 
 /// S2C game-event opcodes.
@@ -55,6 +59,14 @@ pub mod s2c {
     pub const STATE: u32 = 0x0906;
     pub const FIRE: u32 = 0x0907;
     pub const EVENT: u32 = 0x0908;
+    /// v3: 1 Hz compact radar sweep broadcast.
+    pub const RADAR_CONTACTS: u32 = 0x090A;
+}
+
+/// `VehicleProfile.locomotion`.
+pub mod locomotion {
+    pub const AIR: u32 = 1;
+    pub const GROUND: u32 = 2;
 }
 
 /// `VehicleState.mode`.
@@ -65,17 +77,27 @@ pub mod mode {
     pub const LANDING: u8 = 3;
     pub const CRASHED: u8 = 4;
     pub const DERELICT: u8 = 5;
+    /// v3: ground driving.
+    pub const DRIVING: u8 = 6;
 }
 
 /// `VehicleInputFrame.buttons`.
 pub mod buttons {
     pub const BOOST: u8 = 0x01;
+    /// Alias for BOOST on ground vehicles (4WD low-range).
+    pub const LOW_RANGE: u8 = 0x01;
     pub const FIRE: u8 = 0x02;
     pub const LAND: u8 = 0x04;
     /// v2: fire a lightning-bolt rail; held: the next rail every 0.3 s.
     pub const MISSILE: u8 = 0x08;
     /// v2: rising edge: release the next bomb.
     pub const BOMB: u8 = 0x10;
+    /// v3: ground handbrake.
+    pub const HANDBRAKE: u8 = 0x20;
+    /// v3: horn.
+    pub const HORN: u8 = 0x40;
+    /// v3: headlights toggle.
+    pub const HEADLIGHTS: u8 = 0x80;
 }
 
 /// `VehicleWeaponDef.kind`.
@@ -110,6 +132,20 @@ pub mod event_kind {
     pub const EXPLOSION: u32 = 10;
     /// Subject = the pilot; the vehicle's guns, rails and bomb stations are full again.
     pub const REARMED: u32 = 11;
+    /// v3: Horn honk.
+    pub const HORN: u32 = 12;
+    /// v3: Headlights toggle.
+    pub const HEADLIGHTS: u32 = 13;
+    /// v3: Body/undercarriage scraping ground.
+    pub const SCRAPE: u32 = 14;
+    /// v3: Cargo deployed to ground.
+    pub const CARGO_DEPLOYED: u32 = 15;
+    /// v3: Cargo packed back into vehicle.
+    pub const CARGO_PACKED: u32 = 16;
+    /// v3: Vehicle bumper ram impact with monster/object.
+    pub const RAM_HIT: u32 = 17;
+    /// v3: Radar threat alert.
+    pub const RADAR_ALERT: u32 = 18;
 }
 
 /// `VehicleProfile.part_roles`: the role in the low 16 bits; `ORDNANCE` carries a weapon index in bits 16–23.
@@ -123,6 +159,22 @@ pub mod part_role {
     pub const CANOPY: u32 = 3;
     /// Drawn while its weapon is loaded (`ORDNANCE | (weapon_index << 16)`).
     pub const ORDNANCE: u32 = 4;
+    /// v3: Wheel front left.
+    pub const WHEEL_FL: u32 = 5;
+    /// v3: Wheel front right.
+    pub const WHEEL_FR: u32 = 6;
+    /// v3: Wheel rear left.
+    pub const WHEEL_RL: u32 = 7;
+    /// v3: Wheel rear right.
+    pub const WHEEL_RR: u32 = 8;
+    /// v3: Steering wheel.
+    pub const STEERING_WHEEL: u32 = 9;
+    /// v3: Tailgate / rear access.
+    pub const TAILGATE: u32 = 10;
+    /// v3: Cargo stowage.
+    pub const CARGO: u32 = 11;
+    /// v3: Windscreen.
+    pub const WINDSCREEN: u32 = 12;
 
     /// The `ORDNANCE` role for weapon `index`.
     pub const fn ordnance(index: u8) -> u32 {
@@ -136,6 +188,14 @@ pub mod part_role {
     pub const fn weapon_index(value: u32) -> u8 {
         ((value >> 16) & 0xFF) as u8
     }
+}
+
+/// Radar contact IFF classification.
+pub mod iff_standing {
+    pub const UNKNOWN: u8 = 0;
+    pub const FRIENDLY: u8 = 1;
+    pub const NEUTRAL: u8 = 2;
+    pub const HOSTILE: u8 = 3;
 }
 
 // ---------------------------------------------------------------- primitives
@@ -330,6 +390,47 @@ impl VehicleInputFrame {
     }
 }
 
+/// 18 bytes packed radar contact record on the wire.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RadarContactWire {
+    pub vehicle_guid: u32,
+    pub dx_m: f32,
+    pub dy_m: f32,
+    pub alt_agl_m: u16,
+    pub heading_u8: u8,
+    pub standing: u8,
+    pub speed_mps_u8: u8,
+    pub flags: u8,
+}
+
+impl RadarContactWire {
+    pub const WIRE: usize = 18;
+
+    fn read(r: &mut Rd<'_>) -> Option<Self> {
+        Some(Self {
+            vehicle_guid: r.u32()?,
+            dx_m: r.f32()?,
+            dy_m: r.f32()?,
+            alt_agl_m: r.u16()?,
+            heading_u8: r.u8()?,
+            standing: r.u8()?,
+            speed_mps_u8: r.u8()?,
+            flags: r.u8()?,
+        })
+    }
+
+    fn write(&self, buf: &mut Vec<u8>) {
+        buf.write_u32::<LittleEndian>(self.vehicle_guid).unwrap();
+        buf.write_f32::<LittleEndian>(self.dx_m).unwrap();
+        buf.write_f32::<LittleEndian>(self.dy_m).unwrap();
+        buf.write_u16::<LittleEndian>(self.alt_agl_m).unwrap();
+        buf.push(self.heading_u8);
+        buf.push(self.standing);
+        buf.push(self.speed_mps_u8);
+        buf.push(self.flags);
+    }
+}
+
 // ---------------------------------------------------------------- C2S
 
 /// Client → server vehicle game actions.
@@ -340,6 +441,8 @@ pub enum VehicleC2S {
     Exit { vehicle: u32, mode: u32 },
     /// Newest frame first, then up to two older ones (redundancy).
     Input { vehicle: u32, frames: Vec<VehicleInputFrame> },
+    /// v3: cargo deployment or packing (1=Deploy, 2=Pack).
+    Cargo { vehicle: u32, action: u8, target: u32 },
 }
 
 impl VehicleC2S {
@@ -349,13 +452,14 @@ impl VehicleC2S {
             Self::Board { .. } => c2s::BOARD,
             Self::Exit { .. } => c2s::EXIT,
             Self::Input { .. } => c2s::INPUT,
+            Self::Cargo { .. } => c2s::CARGO,
         }
     }
 
     pub fn is_vehicle_opcode(opcode: u32) -> bool {
         matches!(
             opcode,
-            c2s::CLIENT_CAPABILITIES | c2s::BOARD | c2s::EXIT | c2s::INPUT
+            c2s::CLIENT_CAPABILITIES | c2s::BOARD | c2s::EXIT | c2s::INPUT | c2s::CARGO
         )
     }
 
@@ -380,6 +484,11 @@ impl VehicleC2S {
                 for f in frames {
                     f.write(buf);
                 }
+            }
+            Self::Cargo { vehicle, action, target } => {
+                buf.write_u32::<LittleEndian>(*vehicle).unwrap();
+                buf.push(*action);
+                buf.write_u32::<LittleEndian>(*target).unwrap();
             }
         }
     }
@@ -418,6 +527,11 @@ impl VehicleC2S {
                     }
                     Self::Input { vehicle, frames }
                 }
+                c2s::CARGO => Self::Cargo {
+                    vehicle: r.u32()?,
+                    action: r.u8()?,
+                    target: r.u32()?,
+                },
                 _ => return None,
             }
         };
@@ -463,6 +577,15 @@ pub struct VehicleProfile {
     pub part_roles: Vec<u32>,
     /// v2: one per weapon, in `weapons` order (empty, or `weapons.len()`).
     pub weapon_ext: Vec<VehicleWeaponExt>,
+    /// v3: ground dynamics (SI units, radians).
+    pub wheelbase: f32,
+    pub track_width: f32,
+    pub wheel_radius: f32,
+    pub max_steer_rad: f32,
+    pub reverse_max: f32,
+    pub climb_limit_cos: f32,
+    pub ford_depth_max: f32,
+    pub cargo_wcid: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -497,6 +620,11 @@ pub struct VehicleState {
     pub bomb_mask: u8,
     /// v2.
     pub reserved2: u16,
+    /// v3: ground telemetry.
+    pub steer_angle: f32,
+    pub ground_flags: u8,
+    pub surface_family: u8,
+    pub wheel_spin_q16: i16,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -534,6 +662,19 @@ pub struct VehicleEvent {
     pub velocity: [f32; 3],
 }
 
+/// v3: Server 1 Hz compact radar sweep broadcast.
+#[derive(Debug, Clone, PartialEq)]
+pub struct VehicleRadarContacts {
+    pub radar_guid: u32,
+    pub parent_vehicle: u32,
+    pub radar_x: f32,
+    pub radar_y: f32,
+    pub radar_z: f32,
+    pub range_m: f32,
+    pub ceiling_m: f32,
+    pub contacts: Vec<RadarContactWire>,
+}
+
 /// Server → client vehicle game events.
 #[derive(Debug, Clone, PartialEq)]
 pub enum VehicleS2C {
@@ -547,6 +688,7 @@ pub enum VehicleS2C {
     State(VehicleState),
     Fire(VehicleFire),
     Event(VehicleEvent),
+    RadarContacts(VehicleRadarContacts),
 }
 
 impl VehicleS2C {
@@ -558,13 +700,20 @@ impl VehicleS2C {
             Self::State(_) => s2c::STATE,
             Self::Fire(_) => s2c::FIRE,
             Self::Event(_) => s2c::EVENT,
+            Self::RadarContacts(_) => s2c::RADAR_CONTACTS,
         }
     }
 
     pub fn is_vehicle_opcode(opcode: u32) -> bool {
         matches!(
             opcode,
-            s2c::CAPABILITIES_ACK | s2c::PROFILE | s2c::SEAT | s2c::STATE | s2c::FIRE | s2c::EVENT
+            s2c::CAPABILITIES_ACK
+                | s2c::PROFILE
+                | s2c::SEAT
+                | s2c::STATE
+                | s2c::FIRE
+                | s2c::EVENT
+                | s2c::RADAR_CONTACTS
         )
     }
 
@@ -649,6 +798,19 @@ impl VehicleS2C {
                     }
                     buf.write_u32::<LittleEndian>(x.spell_id).unwrap();
                 }
+                // v3
+                for v in [
+                    p.wheelbase,
+                    p.track_width,
+                    p.wheel_radius,
+                    p.max_steer_rad,
+                    p.reverse_max,
+                    p.climb_limit_cos,
+                    p.ford_depth_max,
+                ] {
+                    buf.write_f32::<LittleEndian>(v).unwrap();
+                }
+                buf.write_u32::<LittleEndian>(p.cargo_wcid).unwrap();
             }
             Self::Seat(s) => {
                 for v in [s.vehicle, s.seat, s.occupant, s.state, s.reason] {
@@ -671,6 +833,11 @@ impl VehicleS2C {
                 buf.push(s.missile_mask);
                 buf.push(s.bomb_mask);
                 buf.write_u16::<LittleEndian>(s.reserved2).unwrap();
+                // v3
+                buf.write_f32::<LittleEndian>(s.steer_angle).unwrap();
+                buf.push(s.ground_flags);
+                buf.push(s.surface_family);
+                buf.write_i16::<LittleEndian>(s.wheel_spin_q16).unwrap();
             }
             Self::Fire(f) => {
                 buf.write_u32::<LittleEndian>(f.vehicle).unwrap();
@@ -699,6 +866,19 @@ impl VehicleS2C {
                 buf.write_u32::<LittleEndian>(e.aux).unwrap();
                 w_vec3(buf, e.velocity);
             }
+            Self::RadarContacts(rc) => {
+                buf.write_u32::<LittleEndian>(rc.radar_guid).unwrap();
+                buf.write_u32::<LittleEndian>(rc.parent_vehicle).unwrap();
+                buf.write_f32::<LittleEndian>(rc.radar_x).unwrap();
+                buf.write_f32::<LittleEndian>(rc.radar_y).unwrap();
+                buf.write_f32::<LittleEndian>(rc.radar_z).unwrap();
+                buf.write_f32::<LittleEndian>(rc.range_m).unwrap();
+                buf.write_f32::<LittleEndian>(rc.ceiling_m).unwrap();
+                buf.write_u32::<LittleEndian>(rc.contacts.len() as u32).unwrap();
+                for c in &rc.contacts {
+                    c.write(buf);
+                }
+            }
         }
     }
 
@@ -719,6 +899,7 @@ impl VehicleS2C {
             hdr = VehicleHeader::read(&mut r)?;
             // v1 payloads end before the v2 fields: those keep their defaults
             let v2 = hdr.version >= V2;
+            let v3 = hdr.version >= V3;
             match opcode {
                 s2c::CAPABILITIES_ACK => Self::CapabilitiesAck {
                     granted: r.u32()?,
@@ -790,6 +971,14 @@ impl VehicleS2C {
                             });
                         }
                     }
+                    let wheelbase = if v3 { r.f32()? } else { 0.0 };
+                    let track_width = if v3 { r.f32()? } else { 0.0 };
+                    let wheel_radius = if v3 { r.f32()? } else { 0.0 };
+                    let max_steer_rad = if v3 { r.f32()? } else { 0.0 };
+                    let reverse_max = if v3 { r.f32()? } else { 0.0 };
+                    let climb_limit_cos = if v3 { r.f32()? } else { 0.0 };
+                    let ford_depth_max = if v3 { r.f32()? } else { 0.0 };
+                    let cargo_wcid = if v3 { r.u32()? } else { 0 };
                     Self::Profile(Box::new(VehicleProfile {
                         vehicle,
                         profile_key,
@@ -822,6 +1011,14 @@ impl VehicleS2C {
                         parts,
                         part_roles,
                         weapon_ext,
+                        wheelbase,
+                        track_width,
+                        wheel_radius,
+                        max_steer_rad,
+                        reverse_max,
+                        climb_limit_cos,
+                        ford_depth_max,
+                        cargo_wcid,
                     }))
                 }
                 s2c::SEAT => Self::Seat(VehicleSeat {
@@ -849,6 +1046,11 @@ impl VehicleS2C {
                     missile_mask: if v2 { r.u8()? } else { 0 },
                     bomb_mask: if v2 { r.u8()? } else { 0 },
                     reserved2: if v2 { r.u16()? } else { 0 },
+                    // v3 tail
+                    steer_angle: if v3 { r.f32()? } else { 0.0 },
+                    ground_flags: if v3 { r.u8()? } else { 0 },
+                    surface_family: if v3 { r.u8()? } else { 0 },
+                    wheel_spin_q16: if v3 { r.i16()? } else { 0 },
                 }),
                 s2c::FIRE => Self::Fire(VehicleFire {
                     vehicle: r.u32()?,
@@ -875,6 +1077,30 @@ impl VehicleS2C {
                     aux: if v2 { r.u32()? } else { 0 },
                     velocity: if v2 { r.vec3()? } else { [0.0; 3] },
                 }),
+                s2c::RADAR_CONTACTS => {
+                    let radar_guid = r.u32()?;
+                    let parent_vehicle = r.u32()?;
+                    let radar_x = r.f32()?;
+                    let radar_y = r.f32()?;
+                    let radar_z = r.f32()?;
+                    let range_m = r.f32()?;
+                    let ceiling_m = r.f32()?;
+                    let n = r.count(RadarContactWire::WIRE)?;
+                    let mut contacts = Vec::with_capacity(n);
+                    for _ in 0..n {
+                        contacts.push(RadarContactWire::read(&mut r)?);
+                    }
+                    Self::RadarContacts(VehicleRadarContacts {
+                        radar_guid,
+                        parent_vehicle,
+                        radar_x,
+                        radar_y,
+                        radar_z,
+                        range_m,
+                        ceiling_m,
+                        contacts,
+                    })
+                }
                 _ => return None,
             }
         };

@@ -2305,7 +2305,233 @@ export function createVehicleAudio(opts = {}) {
     canopy,
     rearm,
     chuteOpen,
+    horn(active) {},
+    radarPing(standing = 1) {},
     stats,
     dispose,
   };
 }
+
+// ===========================================================================
+// Ground Vehicle Audio — Willys MB (Go Devil L134), Sparton Horn, Radar CRT/Ping
+// (Milestone 5 Feature 42)
+// ===========================================================================
+
+export const L134_AUDIO_TUNING = Object.freeze({
+  rpmIdle: 650,
+  rpmCruise: 2400,
+  rpmMax: 4000,
+  crankIdleHz: 10.83,
+  firingIdleHz: 21.67,
+  cutoffIdleHz: 280,
+  cutoffMaxHz: 2200,
+  gearWhineBaseHz: 120,
+  gearWhineSlope: 32,
+  spartonFreq1: 325,
+  spartonFreq2: 333,
+  spartonFilterHz: 1850,
+  spartonFilterQ: 2.2,
+  crtHumHz: 60,
+  radarPingFriendlyHz: 1200,
+  radarPingNeutralHz: 800,
+  radarPingHostileHz: 440,
+});
+
+export function computeL134EngineParams({ speed = 0, throttle = 0, boost = false, handbrake = false } = {}) {
+  const absSpeed = Math.abs(speed);
+  let rpm = L134_AUDIO_TUNING.rpmIdle + (absSpeed / 29.0) * 2750 + throttle * 600;
+  if (boost) rpm = Math.min(L134_AUDIO_TUNING.rpmMax, rpm * 1.15);
+  if (handbrake) rpm = Math.max(L134_AUDIO_TUNING.rpmIdle, rpm * 0.7);
+
+  const crankHz = rpm / 60.0;
+  const firingHz = crankHz * 2.0; // 2 firing events per rev on 4-cyl 4-stroke
+  const cutoffHz = L134_AUDIO_TUNING.cutoffIdleHz + throttle * 1600 + (absSpeed / 29.0) * 320;
+  const gearHz = L134_AUDIO_TUNING.gearWhineBaseHz + absSpeed * L134_AUDIO_TUNING.gearWhineSlope;
+
+  return { rpm, crankHz, firingHz, cutoffHz, gearHz };
+}
+
+export function createGroundVehicleAudio(opts = {}) {
+  const audioManager = opts.audioManager || null;
+  const search = opts.search || "";
+  if (!vehicleAudioEnabled(search)) {
+    return {
+      start() {},
+      stop() {},
+      update() {},
+      horn() {},
+      radarPing() {},
+      dispose() {},
+      get active() { return false; },
+    };
+  }
+
+  let ctx = null;
+  let bus = null;
+  let masterGain = null;
+  let engineGain = null;
+  let crankOsc = null;
+  let firingOsc = null;
+  let gearOsc = null;
+  let filter = null;
+  let hornGain = null;
+  let hornOsc1 = null;
+  let hornOsc2 = null;
+  let hornFilter = null;
+  let crtGain = null;
+  let crtOsc = null;
+  let started = false;
+  let disposed = false;
+
+  function initNodes() {
+    if (disposed || started) return;
+    try {
+      bus = audioManager && typeof audioManager.getEffectBus === "function" ? audioManager.getEffectBus() : null;
+      ctx = (bus && bus.ctx) || (typeof window !== "undefined" && window.AudioContext ? new window.AudioContext() : null);
+      if (!ctx) return;
+
+      masterGain = ctx.createGain ? ctx.createGain() : { gain: { value: 1 }, connect() {} };
+      if (bus && bus.node && masterGain.connect) {
+        masterGain.connect(bus.node);
+      }
+
+      // Engine graph
+      engineGain = ctx.createGain ? ctx.createGain() : { gain: { value: 0 }, connect() {} };
+      filter = ctx.createBiquadFilter ? ctx.createBiquadFilter() : { frequency: { value: 280 }, connect() {} };
+      filter.type = "lowpass";
+
+      crankOsc = ctx.createOscillator ? ctx.createOscillator() : { frequency: { value: 10.83 }, start() {}, stop() {}, connect() {} };
+      crankOsc.type = "sine";
+      crankOsc.frequency.value = L134_AUDIO_TUNING.crankIdleHz;
+
+      firingOsc = ctx.createOscillator ? ctx.createOscillator() : { frequency: { value: 21.67 }, start() {}, stop() {}, connect() {} };
+      firingOsc.type = "sawtooth";
+      firingOsc.frequency.value = L134_AUDIO_TUNING.firingIdleHz;
+
+      gearOsc = ctx.createOscillator ? ctx.createOscillator() : { frequency: { value: 120 }, start() {}, stop() {}, connect() {} };
+      gearOsc.type = "triangle";
+      gearOsc.frequency.value = L134_AUDIO_TUNING.gearWhineBaseHz;
+
+      if (crankOsc.connect) crankOsc.connect(filter);
+      if (firingOsc.connect) firingOsc.connect(filter);
+      if (gearOsc.connect) gearOsc.connect(filter);
+      if (filter.connect) filter.connect(engineGain);
+      if (engineGain.connect) engineGain.connect(masterGain);
+
+      // Horn graph
+      hornGain = ctx.createGain ? ctx.createGain() : { gain: { value: 0 }, connect() {} };
+      hornFilter = ctx.createBiquadFilter ? ctx.createBiquadFilter() : { frequency: { value: 1850 }, Q: { value: 2.2 }, connect() {} };
+      hornFilter.type = "bandpass";
+      hornFilter.frequency.value = L134_AUDIO_TUNING.spartonFilterHz;
+      if (hornFilter.Q) hornFilter.Q.value = L134_AUDIO_TUNING.spartonFilterQ;
+
+      hornOsc1 = ctx.createOscillator ? ctx.createOscillator() : { frequency: { value: 325 }, start() {}, stop() {}, connect() {} };
+      hornOsc1.type = "sawtooth";
+      hornOsc1.frequency.value = L134_AUDIO_TUNING.spartonFreq1;
+
+      hornOsc2 = ctx.createOscillator ? ctx.createOscillator() : { frequency: { value: 333 }, start() {}, stop() {}, connect() {} };
+      hornOsc2.type = "square";
+      hornOsc2.frequency.value = L134_AUDIO_TUNING.spartonFreq2;
+
+      if (hornOsc1.connect) hornOsc1.connect(hornFilter);
+      if (hornOsc2.connect) hornOsc2.connect(hornFilter);
+      if (hornFilter.connect) hornFilter.connect(hornGain);
+      if (hornGain.connect) hornGain.connect(masterGain);
+
+      // Radar CRT hum graph
+      crtGain = ctx.createGain ? ctx.createGain() : { gain: { value: 0.03 }, connect() {} };
+      crtOsc = ctx.createOscillator ? ctx.createOscillator() : { frequency: { value: 60 }, start() {}, stop() {}, connect() {} };
+      crtOsc.type = "sine";
+      crtOsc.frequency.value = L134_AUDIO_TUNING.crtHumHz;
+      if (crtOsc.connect) crtOsc.connect(crtGain);
+      if (crtGain.connect) crtGain.connect(masterGain);
+
+      if (crankOsc.start) crankOsc.start(0);
+      if (firingOsc.start) firingOsc.start(0);
+      if (gearOsc.start) gearOsc.start(0);
+      if (hornOsc1.start) hornOsc1.start(0);
+      if (hornOsc2.start) hornOsc2.start(0);
+      if (crtOsc.start) crtOsc.start(0);
+
+      started = true;
+    } catch (_) {
+      // AudioContext unavailable or error
+    }
+  }
+
+  function start() {
+    if (!started) initNodes();
+  }
+
+  function stop() {
+    if (engineGain && engineGain.gain) engineGain.gain.value = 0;
+  }
+
+  function update(state = {}) {
+    if (!started) initNodes();
+    if (!ctx) return;
+    const { speed = 0, throttle = 0, boost = false, handbrake = false } = state;
+    const params = computeL134EngineParams({ speed, throttle, boost, handbrake });
+
+    if (crankOsc && crankOsc.frequency) crankOsc.frequency.value = params.crankHz;
+    if (firingOsc && firingOsc.frequency) firingOsc.frequency.value = params.firingHz;
+    if (gearOsc && gearOsc.frequency) gearOsc.frequency.value = params.gearHz;
+    if (filter && filter.frequency) filter.frequency.value = params.cutoffHz;
+    if (engineGain && engineGain.gain) engineGain.gain.value = 0.25 + (Math.abs(speed) / 29.0) * 0.45;
+  }
+
+  function horn(active) {
+    if (!started) initNodes();
+    if (hornGain && hornGain.gain) {
+      hornGain.gain.value = active ? 0.35 : 0.0;
+    }
+  }
+
+  function radarPing(standing = 1) {
+    if (!started) initNodes();
+    if (!ctx || !ctx.createOscillator || !ctx.createGain) return;
+    try {
+      const pingOsc = ctx.createOscillator();
+      const pingGain = ctx.createGain();
+      let freq = L134_AUDIO_TUNING.radarPingFriendlyHz;
+      if (standing === 2) freq = L134_AUDIO_TUNING.radarPingNeutralHz;
+      else if (standing === 3) freq = L134_AUDIO_TUNING.radarPingHostileHz;
+
+      pingOsc.frequency.value = freq;
+      pingOsc.type = "sine";
+      const now = ctx.currentTime || 0;
+      pingGain.gain.setValueAtTime ? pingGain.gain.setValueAtTime(0.3, now) : (pingGain.gain.value = 0.3);
+      if (pingGain.gain.exponentialRampToValueAtTime) {
+        pingGain.gain.exponentialRampToValueAtTime(0.001, now + 0.15);
+      }
+      pingOsc.connect(pingGain);
+      if (masterGain) pingGain.connect(masterGain);
+      pingOsc.start(now);
+      pingOsc.stop(now + 0.16);
+    } catch (_) {}
+  }
+
+  function dispose() {
+    disposed = true;
+    started = false;
+    try {
+      if (crankOsc && crankOsc.stop) crankOsc.stop();
+      if (firingOsc && firingOsc.stop) firingOsc.stop();
+      if (gearOsc && gearOsc.stop) gearOsc.stop();
+      if (hornOsc1 && hornOsc1.stop) hornOsc1.stop();
+      if (hornOsc2 && hornOsc2.stop) hornOsc2.stop();
+      if (crtOsc && crtOsc.stop) crtOsc.stop();
+    } catch (_) {}
+  }
+
+  return {
+    start,
+    stop,
+    update,
+    horn,
+    radarPing,
+    dispose,
+    get active() { return started && !disposed; },
+  };
+}
+

@@ -32,6 +32,7 @@ export const VEHICLE_KEY_ACTIONS = Object.freeze({ Tab: "camera", KeyH: "hideHud
 export const VEHICLE_HOLD_CODES = Object.freeze([
   "KeyR", "KeyF", "ShiftLeft", "ShiftRight", "Space", "KeyL", "KeyG", "KeyV",
   "KeyC", "BracketLeft", "BracketRight", "Backslash",
+  "Digit1", "Digit2", "Digit3", "Digit4",
 ]);
 /** Hold codes whose press is latched until a step has seen it (a quick tap must not fall between two steps). */
 const LATCHED_CODES = Object.freeze(["KeyG", "KeyV"]);
@@ -127,6 +128,7 @@ export function createVehicleControls(deps = {}) {
   let lastFlightHeading = 0;
   let lastFlightPitch = 0;
   let lastMaxPitch = DEFAULT_MAX_PITCH;
+  let headlights = false;
 
   let freelookYaw = 0;
   let freelookPitch = 0;
@@ -181,7 +183,9 @@ export function createVehicleControls(deps = {}) {
 
   function emit(type, source) {
     for (const fn of actionFns) {
-      try { fn({ type, source }); } catch (_) { /* a listener never breaks input */ }
+      try {
+        fn(typeof type === "object" ? { ...type, source } : { type, source });
+      } catch (_) { /* a listener never breaks input */ }
     }
   }
 
@@ -298,6 +302,18 @@ export function createVehicleControls(deps = {}) {
         } else {
           exitPointerLockClean();
         }
+      }
+      if (code.startsWith("Digit")) {
+        const seatIdx = parseInt(code.slice(5), 10) - 1;
+        if (seatIdx >= 0 && seatIdx <= 3) {
+          emit({ type: "seat", seatIndex: seatIdx }, "keyboard");
+        }
+      }
+      if (code === "KeyG") {
+        emit({ type: "cargo", action: "toggle" }, "keyboard");
+      }
+      if (code === "KeyH") {
+        headlights = !headlights;
       }
       if (VEHICLE_KEY_ACTIONS[code]) emit(VEHICLE_KEY_ACTIONS[code], "keyboard");
     }
@@ -539,10 +555,75 @@ export function createVehicleControls(deps = {}) {
     const ov = activeOverride();
     if (ov) {
       const a = ov.axes;
-      if (Number.isFinite(a.throttle)) throttle = Math.max(0, Math.min(1, a.throttle));
+      if (Number.isFinite(a.throttle)) {
+        throttle = (params?.locomotion === 2 || a.throttle < 0) ? Math.max(-1, Math.min(1, a.throttle)) : Math.max(0, Math.min(1, a.throttle));
+      }
       return {
-        throttle, pitch: a.pitch ?? 0, roll: a.roll ?? 0, yaw: a.yaw ?? 0,
-        boost: !!a.boost, fire: !!a.fire, land: !!a.land, missile: !!a.missile, bomb: !!a.bomb,
+        throttle,
+        pitch: a.pitch ?? 0,
+        roll: a.roll ?? 0,
+        yaw: a.yaw ?? 0,
+        steer: a.steer !== undefined ? a.steer : (a.yaw ?? 0),
+        boost: !!a.boost,
+        handbrake: !!a.handbrake,
+        horn: !!a.horn,
+        headlights: a.headlights !== undefined ? !!a.headlights : headlights,
+        fire: !!a.fire,
+        land: !!a.land,
+        missile: !!a.missile,
+        bomb: !!a.bomb,
+      };
+    }
+
+    if (params?.locomotion === 2) {
+      let targetThr = (down.KeyW ? 1.0 : 0.0) - (down.KeyS ? 1.0 : 0.0);
+      let targetSteer = (down.KeyD ? 1.0 : 0.0) - (down.KeyA ? 1.0 : 0.0);
+      let boost = !!(down.ShiftLeft || down.ShiftRight);
+      let handbrake = !!down.Space;
+      let horn = !!down.KeyV;
+
+      const pad = readPad();
+      if (pad) {
+        const ax = pad.axes || [];
+        const b = (i) => !!(pad.buttons && pad.buttons[i] && pad.buttons[i].pressed);
+        const lx = padAxis(ax[0] || 0);
+        if (lx) targetSteer = lx;
+        if (b(7)) targetThr = 1.0;
+        else if (b(6)) targetThr = -1.0;
+        if (b(1)) boost = true;
+        if (b(2)) handbrake = true;
+        if (b(0)) horn = true;
+        const edges = { camera: b(3), exit: b(8) };
+        for (const [k, v] of Object.entries(edges)) {
+          if (v && !padPrev[k]) emit(k, "gamepad");
+        }
+        padPrev = edges;
+      }
+
+      const dThr = targetThr - throttle;
+      const mThr = STICK_RATE * t;
+      throttle += clamp(dThr, -mThr, mThr);
+
+      const dSteer = targetSteer - sticks.yaw;
+      const mSteer = STICK_RATE * t;
+      sticks.yaw += clamp(dSteer, -mSteer, mSteer);
+      sticks.roll = sticks.yaw;
+      sticks.pitch = 0;
+
+      return {
+        throttle,
+        pitch: 0,
+        roll: sticks.yaw,
+        yaw: sticks.yaw,
+        steer: sticks.yaw,
+        boost,
+        handbrake,
+        horn,
+        headlights,
+        fire: false,
+        land: false,
+        missile: false,
+        bomb: false,
       };
     }
 
@@ -644,6 +725,9 @@ export function createVehicleControls(deps = {}) {
     const liveBoost = ov ? !!ov.axes.boost : !!(down.ShiftLeft || down.ShiftRight || b(1));
     const liveLand = ov ? !!ov.axes.land : !!(down.KeyL || b(2));
     const liveFire = ov ? !!ov.axes.fire : !!(down.Space || (ptrLocked && mouseFire) || b(7));
+    const liveHandbrake = ov ? !!ov.axes.handbrake : !!down.Space;
+    const liveHorn = ov ? !!ov.axes.horn : !!down.KeyV;
+    const liveHeadlights = ov ? (ov.axes.headlights !== undefined ? !!ov.axes.headlights : headlights) : headlights;
     const freelookActive = !!(locked && (down.KeyC || rmbDown));
     const aimYaw = hasFlightState ? angleDiff(aimHeading, lastFlightHeading) : aimHeading;
     const aimPitch = hasFlightState ? aimTargetPitch - lastFlightPitch : aimTargetPitch;
@@ -654,6 +738,9 @@ export function createVehicleControls(deps = {}) {
       boost: liveBoost,
       land: liveLand,
       fire: liveFire,
+      handbrake: liveHandbrake,
+      horn: liveHorn,
+      headlights: liveHeadlights,
       pitchTrim,
       mouseAim,
       aimOffset: { yaw: aimYaw, pitch: aimPitch },

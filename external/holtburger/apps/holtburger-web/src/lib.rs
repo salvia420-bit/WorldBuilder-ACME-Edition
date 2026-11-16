@@ -47366,6 +47366,16 @@ impl SessionHandle {
         self.vehicle_send(VehicleC2S::Input { vehicle, frames })
     }
 
+    /// HBV1 VehicleCargo: `action` 1 = deploy, 2 = pack; `target` = cargo GUID on pack, 0 on deploy.
+    #[wasm_bindgen(js_name = vehicleCargo)]
+    pub fn vehicle_cargo(&self, vehicle: u32, action: u8, target: u32) -> Result<(), JsValue> {
+        self.vehicle_send(holtburger_protocol::messages::vehicle::VehicleC2S::Cargo {
+            vehicle,
+            action,
+            target,
+        })
+    }
+
     /// Every vehicle message received since the last call, as a JSON array
     /// (shapes: scene3d/vehicle/protocol.js).
     #[wasm_bindgen(js_name = drainVehicleMessages)]

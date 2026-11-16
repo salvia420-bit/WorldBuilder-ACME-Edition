@@ -1,7 +1,7 @@
 From a04bad628950226c1ebc2c2fe6c39e57790b0c63 Mon Sep 17 00:00:00 2001
 From: salvia420-bit <salvia420@gmail.com>
 Date: Mon, 2 Nov 2026 18:35:47 -0330
-Subject: [PATCH 6/7] Vehicles (holtburger fork): Hellcat from AC items,
+Subject: [PATCH 6/9] Vehicles (holtburger fork): Hellcat from AC items,
  armament, review fixes, GC + villa basements
 
 Session 3 (2026-11-02; holtburger-web docs/vehicles-2026-11-01 DESIGN decisions 62-73).
@@ -2788,7 +2788,7 @@ index 7c5234a..08cc9cb 100644
          {
              if (setup?.Parts == null)
                  return;
-@@ -620,7 +656,10 @@ public static string Report() =>
+@@ -620,7 +656,10 @@ static bool GlobalTokenAvailable()
              $"off-thread loads {OffThreadBuilds} (avg {(OffThreadBuilds > 0 ? BuildMsTotal / OffThreadBuilds : 0):0.0} ms, max {BuildMsMax:0.0} ms, on a background task) collected {Published} failed {BuildFailures}, " +
              $"landblock budget={LandblockBudget}: {BringUpChunks} object chunks deferred to later ticks, {PowerUpYields} generator power-ups continued next tick, loot generators deferred {LootGeneratorsDeferred} (restored {LootGeneratorsRestored}), loot profiles held {LootProfilesDeferred}; " +
              $"late spawn warm-ups (vehicle-only landblocks loaded outside the corridor) {LateWarmups}; indoor cells built off-thread {CellsPrewarmed} in {CellPrewarmLandblocks} landblocks (avg {(CellPrewarmLandblocks > 0 ? CellPrewarmMsTotal / CellPrewarmLandblocks : 0):0.0} ms, max {CellPrewarmMsMax:0.0} ms); " +
@@ -3934,5 +3934,5 @@ index 0000000..1f1dcc0
 +export DOTNET_GCGen0MaxBudget=0x1000000 DOTNET_GCGen1MaxBudget=0x1000000 DOTNET_GCDynamicAdaptationMode=0 DOTNET_GCHeapCount=2 DOTNET_GCNoAffinitize=1 DOTNET_GCHighMemPercent=0x61
 +exec setsid nohup /home/wbterminal/.local/bin/dotnet ACE.Server.dll < /home/wbterminal/ace_stdin.fifo > /dev/null 2>> /home/wbterminal/ace_stderr.log
 -- 
-2.47.3
+2.43.0
 

@@ -1,7 +1,7 @@
 From ce1a4ea6aac4c6d5c26aa8f9da61a2dfc44b0fdd Mon Sep 17 00:00:00 2001
 From: salvia420-bit <salvia420@gmail.com>
 Date: Sun, 1 Nov 2026 05:43:26 -0330
-Subject: [PATCH 2/7] Vehicles (holtburger fork): server-authoritative Hellcat
+Subject: [PATCH 2/9] Vehicles (holtburger fork): server-authoritative Hellcat
  demo, HBV1 protocol, fast-flight streaming
 
 Server side of the holtburger vehicles design (holtburger
@@ -1740,7 +1740,7 @@ index 70b7cbd..c631013 100644
  
              // These are all found in NetworkManager.DoSessionWork()
              DoSessionWork_TickOutbound,
-@@ -296,7 +297,7 @@ public static TimedEventHistory GetEventHistory24h(MonitorType monitorType)
+@@ -296,7 +297,7 @@ public new static string ToString()
              AddMonitorOutputToStringBuilder(monitors5m[(int)MonitorType.UpdateGameWorld_Entire].EventHistory, monitors1h[(int)MonitorType.UpdateGameWorld_Entire].EventHistory, monitors24h[(int)MonitorType.UpdateGameWorld_Entire].EventHistory, MonitorType.UpdateGameWorld_Entire.ToString(), sb);
  
              sb.Append($"Calls from WorldManager.UpdateGameWorld(){'\n'}");
@@ -6084,7 +6084,7 @@ diff --git a/Source/ACE.Server/WorldObjects/WorldObject.cs b/Source/ACE.Server/W
 index 0ac00a8..7593169 100644
 --- a/Source/ACE.Server/WorldObjects/WorldObject.cs
 +++ b/Source/ACE.Server/WorldObjects/WorldObject.cs
-@@ -103,16 +103,20 @@ public WorldObject() { }
+@@ -103,16 +103,20 @@ public abstract partial class WorldObject : IActor
          /// </summary>
          protected WorldObject(Weenie weenie, ObjectGuid guid)
          {
@@ -6159,5 +6159,5 @@ index 229cd12..4e1717c 100644
  
              //Console.WriteLine($"{Name}.NextGeneratorRegenerationTime({NextGeneratorRegenerationTime})");
 -- 
-2.47.3
+2.43.0
 

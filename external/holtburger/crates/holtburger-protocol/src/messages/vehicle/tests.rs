@@ -48,6 +48,9 @@ fn c2s_fields(m: &VehicleC2S) -> Value {
                 "Reserved1": fr.reserved[1], "Reserved2": fr.reserved[2],
             })).collect::<Vec<_>>(),
         }),
+        VehicleC2S::Cargo { vehicle, action, target } => json!({
+            "Vehicle": vehicle, "Action": action, "Target": target,
+        }),
     }
 }
 
@@ -84,6 +87,11 @@ fn c2s_from(opcode: u32, o: &Value) -> VehicleC2S {
                     ],
                 })
                 .collect(),
+        },
+        c2s::CARGO => VehicleC2S::Cargo {
+            vehicle: gu(o, "Vehicle"),
+            action: gu(o, "Action") as u8,
+            target: gu(o, "Target"),
         },
         _ => panic!("not a C2S vehicle opcode {opcode:#x}"),
     }
@@ -141,6 +149,15 @@ fn s2c_fields(m: &VehicleS2C) -> Value {
                         .collect(),
                 ),
             );
+            // v3
+            o.insert("Wheelbase".into(), f(p.wheelbase));
+            o.insert("TrackWidth".into(), f(p.track_width));
+            o.insert("WheelRadius".into(), f(p.wheel_radius));
+            o.insert("MaxSteerRad".into(), f(p.max_steer_rad));
+            o.insert("ReverseMax".into(), f(p.reverse_max));
+            o.insert("ClimbLimitCos".into(), f(p.climb_limit_cos));
+            o.insert("FordDepthMax".into(), f(p.ford_depth_max));
+            o.insert("CargoWcid".into(), json!(p.cargo_wcid));
             v
         }
         VehicleS2C::Seat(s) => json!({
@@ -151,6 +168,7 @@ fn s2c_fields(m: &VehicleS2C) -> Value {
             "Position": v3(s.position), "Heading": f(s.heading), "Pitch": f(s.pitch), "Bank": f(s.bank),
             "Speed": f(s.speed), "VCap": f(s.v_cap), "Ammo": s.ammo, "Mode": s.mode, "Flags": s.flags,
             "MissileMask": s.missile_mask, "BombMask": s.bomb_mask, "Reserved2": s.reserved2,
+            "SteerAngle": f(s.steer_angle), "GroundFlags": s.ground_flags, "SurfaceFamily": s.surface_family, "WheelSpinQ16": s.wheel_spin_q16,
         }),
         VehicleS2C::Fire(fi) => json!({
             "Vehicle": fi.vehicle, "Step": fi.step, "Mount": fi.mount, "Count": fi.count, "Cell": fi.cell,
@@ -162,6 +180,26 @@ fn s2c_fields(m: &VehicleS2C) -> Value {
             "Vehicle": e.vehicle, "Kind": e.kind, "Step": e.step, "Subject": e.subject, "Cell": e.cell,
             "Position": v3(e.position), "Value": f(e.value),
             "Aux": e.aux, "Velocity": v3(e.velocity),
+        }),
+        VehicleS2C::RadarContacts(rc) => json!({
+            "RadarGuid": rc.radar_guid,
+            "ParentVehicle": rc.parent_vehicle,
+            "RadarX": f(rc.radar_x),
+            "RadarY": f(rc.radar_y),
+            "RadarZ": f(rc.radar_z),
+            "RangeM": f(rc.range_m),
+            "CeilingM": f(rc.ceiling_m),
+            "ContactCount": rc.contacts.len(),
+            "Contacts": rc.contacts.iter().map(|c| json!({
+                "VehicleGuid": c.vehicle_guid,
+                "DxM": f(c.dx_m),
+                "DyM": f(c.dy_m),
+                "AltAglM": c.alt_agl_m,
+                "HeadingU8": c.heading_u8,
+                "Standing": c.standing,
+                "SpeedMpsU8": c.speed_mps_u8,
+                "Flags": c.flags,
+            })).collect::<Vec<_>>(),
         }),
     }
 }
@@ -258,6 +296,14 @@ fn s2c_from(opcode: u32, o: &Value) -> VehicleS2C {
                     spell_id: gu(x, "SpellId"),
                 })
                 .collect(),
+            wheelbase: gf(o, "Wheelbase"),
+            track_width: gf(o, "TrackWidth"),
+            wheel_radius: gf(o, "WheelRadius"),
+            max_steer_rad: gf(o, "MaxSteerRad"),
+            reverse_max: gf(o, "ReverseMax"),
+            climb_limit_cos: gf(o, "ClimbLimitCos"),
+            ford_depth_max: gf(o, "FordDepthMax"),
+            cargo_wcid: gu(o, "CargoWcid"),
         })),
         s2c::SEAT => VehicleS2C::Seat(VehicleSeat {
             vehicle: gu(o, "Vehicle"),
@@ -283,6 +329,10 @@ fn s2c_from(opcode: u32, o: &Value) -> VehicleS2C {
             missile_mask: gu(o, "MissileMask") as u8,
             bomb_mask: gu(o, "BombMask") as u8,
             reserved2: gu(o, "Reserved2") as u16,
+            steer_angle: gf(o, "SteerAngle"),
+            ground_flags: gu(o, "GroundFlags") as u8,
+            surface_family: gu(o, "SurfaceFamily") as u8,
+            wheel_spin_q16: gi(o, "WheelSpinQ16") as i16,
         }),
         s2c::FIRE => VehicleS2C::Fire(VehicleFire {
             vehicle: gu(o, "Vehicle"),
@@ -312,6 +362,30 @@ fn s2c_from(opcode: u32, o: &Value) -> VehicleS2C {
             value: gf(o, "Value"),
             aux: gu(o, "Aux"),
             velocity: gv3(o, "Velocity"),
+        }),
+        s2c::RADAR_CONTACTS => VehicleS2C::RadarContacts(VehicleRadarContacts {
+            radar_guid: gu(o, "RadarGuid"),
+            parent_vehicle: gu(o, "ParentVehicle"),
+            radar_x: gf(o, "RadarX"),
+            radar_y: gf(o, "RadarY"),
+            radar_z: gf(o, "RadarZ"),
+            range_m: gf(o, "RangeM"),
+            ceiling_m: gf(o, "CeilingM"),
+            contacts: o["Contacts"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|c| RadarContactWire {
+                    vehicle_guid: gu(c, "VehicleGuid"),
+                    dx_m: gf(c, "DxM"),
+                    dy_m: gf(c, "DyM"),
+                    alt_agl_m: gu(c, "AltAglM") as u16,
+                    heading_u8: gu(c, "HeadingU8") as u8,
+                    standing: gu(c, "Standing") as u8,
+                    speed_mps_u8: gu(c, "SpeedMpsU8") as u8,
+                    flags: gu(c, "Flags") as u8,
+                })
+                .collect(),
         }),
         _ => panic!("not an S2C vehicle opcode {opcode:#x}"),
     }
@@ -366,7 +440,7 @@ fn hbv1_fixtures_round_trip() {
     assert_eq!(doc["tag"].as_u64(), Some(HBV1_TAG as u64));
     assert_eq!(doc["version"].as_u64(), Some(HBV1_VERSION as u64), "fixtures are for this protocol version");
     let fixtures = doc["fixtures"].as_array().unwrap();
-    assert!(fixtures.len() >= 19, "fixture file shrank");
+    assert!(fixtures.len() >= 24, "fixture file shrank");
     let (mut checked, mut legacy, mut future) = (0, 0, 0);
     for fx in fixtures {
         let name = fx["name"].as_str().unwrap();
@@ -374,9 +448,9 @@ fn hbv1_fixtures_round_trip() {
         let version = fx["version"].as_u64().unwrap() as u16;
         let bytes = hex::decode(fx["hex"].as_str().unwrap()).unwrap();
         let reject = fx["expect"].as_str() == Some("reject");
-        // what this (v2) writer emits for the fixture's fields: the payload itself for a current-version
-        // fixture, else the generator's repack (v1 → v2 header + the v2 fields at their defaults; a future
-        // version → v2 header, its trailing bytes dropped)
+        // what this (v3) writer emits for the fixture's fields: the payload itself for a current-version
+        // fixture, else the generator's repack (v1/v2 → v3 header + the v3 fields at their defaults; a future
+        // version → v3 header, its trailing bytes dropped)
         let want = fx
             .get("repack_hex")
             .and_then(Value::as_str)
@@ -438,8 +512,66 @@ fn hbv1_fixtures_round_trip() {
         checked += 1;
     }
     assert_eq!(checked, fixtures.len() - 1, "every non-reject fixture checked");
-    assert!(legacy >= 5, "v1 Profile / State / Fire / Event / a C2S action still parse ({legacy})");
+    assert!(legacy >= 7, "legacy payloads parse ({legacy})");
     assert!(future >= 1, "a future-version payload");
+}
+
+#[test]
+fn hbv1_v1_and_v2_payloads_default_the_v3_fields() {
+    let VehicleS2C::Profile(p) = unpack_s2c(s2c::PROFILE, &fixture_bytes("vehicle_profile_hellcat_v2")) else {
+        panic!("profile v2")
+    };
+    assert_eq!(p.wheelbase, 0.0);
+    assert_eq!(p.cargo_wcid, 0);
+
+    let VehicleS2C::State(s) = unpack_s2c(s2c::STATE, &fixture_bytes("vehicle_state_pilot_v2")) else {
+        panic!("state v2")
+    };
+    assert_eq!(s.steer_angle, 0.0);
+    assert_eq!(s.ground_flags, 0);
+    assert_eq!(s.surface_family, 0);
+    assert_eq!(s.wheel_spin_q16, 0);
+}
+
+#[test]
+fn hbv1_v3_fields_and_enums() {
+    let VehicleS2C::Profile(p) = unpack_s2c(s2c::PROFILE, &fixture_bytes("vehicle_profile_jeep")) else {
+        panic!("profile jeep")
+    };
+    assert_eq!(p.locomotion, locomotion::GROUND);
+    assert_eq!(p.wheelbase, 2.04);
+    assert_eq!(p.track_width, 1.48);
+    assert_eq!(p.wheel_radius, 0.38);
+    assert_eq!(p.cargo_wcid, 4000002);
+    assert_eq!(p.seats.len(), 4);
+    assert_eq!(p.part_roles, vec![part_role::WHEEL_FL, part_role::WHEEL_FR, part_role::WHEEL_RL, part_role::WHEEL_RR]);
+
+    let VehicleS2C::State(s) = unpack_s2c(s2c::STATE, &fixture_bytes("vehicle_state_driving")) else {
+        panic!("state driving")
+    };
+    assert_eq!(s.mode, mode::DRIVING);
+    assert_eq!(s.steer_angle, 0.15);
+    assert_eq!(s.ground_flags, 5);
+    assert_eq!(s.surface_family, 2);
+    assert_eq!(s.wheel_spin_q16, 1200);
+
+    let VehicleS2C::RadarContacts(rc) = unpack_s2c(s2c::RADAR_CONTACTS, &fixture_bytes("vehicle_radar_contacts")) else {
+        panic!("radar contacts")
+    };
+    assert_eq!(rc.radar_guid, 1342177300);
+    assert_eq!(rc.contacts.len(), 2);
+    assert_eq!(rc.contacts[0].standing, iff_standing::FRIENDLY);
+    assert_eq!(rc.contacts[1].standing, iff_standing::HOSTILE);
+
+    let mut off = 0;
+    let Some(VehicleC2S::Cargo { vehicle, action, target }) =
+        VehicleC2S::unpack_payload(c2s::CARGO, &fixture_bytes("vehicle_cargo_deploy"), &mut off)
+    else {
+        panic!("cargo")
+    };
+    assert_eq!(vehicle, 2147486210);
+    assert_eq!(action, 1);
+    assert_eq!(target, 0);
 }
 
 #[test]
@@ -529,7 +661,9 @@ fn hbv1_truncated_v2_tail_and_hostile_v2_counts_rejected() {
     let roles = gu(&fx["fields"], "PartRoleCount") as usize;
     let exts = gu(&fx["fields"], "WeaponExtCount") as usize;
     let bytes = fixture_bytes("vehicle_profile_hellcat");
-    let ext_count_at = bytes.len() - (4 + VehicleWeaponExt::WIRE * exts);
+    // v3 ground tail follows weapon_ext
+    const V3_GROUND_TAIL: usize = 32;
+    let ext_count_at = bytes.len() - V3_GROUND_TAIL - (4 + VehicleWeaponExt::WIRE * exts);
     let role_count_at = ext_count_at - (4 + 4 * roles);
     for at in [role_count_at, ext_count_at] {
         let mut evil = bytes.clone();
@@ -538,6 +672,40 @@ fn hbv1_truncated_v2_tail_and_hostile_v2_counts_rejected() {
         assert!(VehicleS2C::unpack_payload(s2c::PROFILE, &evil, &mut off).is_none(), "hostile count at {at}");
         assert_eq!(off, 0);
     }
+}
+
+#[test]
+fn hbv1_truncated_v3_tail_and_hostile_v3_counts_rejected() {
+    // a v3 payload cut inside its v3 tail is truncated
+    for (name, opcode) in [
+        ("vehicle_state_driving", s2c::STATE),
+        ("vehicle_profile_jeep", s2c::PROFILE),
+        ("vehicle_radar_contacts", s2c::RADAR_CONTACTS),
+    ] {
+        let bytes = fixture_bytes(name);
+        for cut in [bytes.len() - 1, bytes.len() - 4] {
+            let mut off = 0;
+            assert!(VehicleS2C::unpack_payload(opcode, &bytes[..cut], &mut off).is_none(), "{name} cut {cut}");
+            assert_eq!(off, 0, "{name}: offset restored");
+        }
+    }
+    // C2S cargo
+    let bytes = fixture_bytes("vehicle_cargo_deploy");
+    for cut in [bytes.len() - 1, bytes.len() - 4] {
+        let mut off = 0;
+        assert!(VehicleC2S::unpack_payload(c2s::CARGO, &bytes[..cut], &mut off).is_none());
+        assert_eq!(off, 0);
+    }
+    // hostile ContactCount cannot allocate past the payload
+    let fx = fixture("vehicle_radar_contacts");
+    let contacts = gu(&fx["fields"], "ContactCount") as usize;
+    let bytes = fixture_bytes("vehicle_radar_contacts");
+    let contact_count_at = bytes.len() - (4 + RadarContactWire::WIRE * contacts);
+    let mut evil = bytes.clone();
+    evil[contact_count_at..contact_count_at + 4].copy_from_slice(&u32::MAX.to_le_bytes());
+    let mut off = 0;
+    assert!(VehicleS2C::unpack_payload(s2c::RADAR_CONTACTS, &evil, &mut off).is_none(), "hostile count at {contact_count_at}");
+    assert_eq!(off, 0);
 }
 
 #[test]

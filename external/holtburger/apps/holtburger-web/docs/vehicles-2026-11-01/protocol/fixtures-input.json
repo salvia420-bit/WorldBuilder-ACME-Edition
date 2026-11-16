@@ -57,7 +57,108 @@
      {"MuzzleVelocity": 180.0, "Convergence": 250.0, "MassKg": 0.0, "DragTerminal": 0.0, "SpellId": 0},
      {"MuzzleVelocity": 40.0, "Convergence": 0.0, "MassKg": 0.0, "DragTerminal": 0.0, "SpellId": 80},
      {"MuzzleVelocity": 0.0, "Convergence": 0.0, "MassKg": 226.796185, "DragTerminal": 120.0, "SpellId": 0}
+    ],
+    "Wheelbase": 0.0, "TrackWidth": 0.0, "WheelRadius": 0.0, "MaxSteerRad": 0.0,
+    "ReverseMax": 0.0, "ClimbLimitCos": 0.0, "FordDepthMax": 0.0, "CargoWcid": 0
+   }
+  },
+  {
+   "name": "vehicle_profile_hellcat_v2",
+   "message": "Vehicle_Profile",
+   "fields": {
+    "Header": {"Tag": 827736648, "Version": 2, "Reserved": 0},
+    "Vehicle": 2147486209,
+    "ProfileKey": "hellcat-demo",
+    "DisplayName": "Hellcat",
+    "Locomotion": 1,
+    "StandInSetup": 33554433,
+    "SimHz": 30,
+    "Reserved": 0,
+    "VMin": 30.0, "VCruise": 83.0, "VMax": 97.0, "SpeedCap": 69.0,
+    "Accel": 8.0, "Decel": 12.0,
+    "MaxBank": 1.0471975511965976, "RollRate": 1.5707963267948966,
+    "MaxPitch": 0.4363323129985824, "PitchRate": 0.7853981633974483,
+    "YawRate": 0.17453292519943295,
+    "ClimbMax": 20.0, "SinkMax": 25.0,
+    "FloorAgl": 30.0, "CeilingAgl": 450.0,
+    "TakeoffClimb": 8.0, "LandingSpeed": 25.0,
+    "LeadSeconds": 6.0, "ObjectRadius": 4,
+    "SeatCount": 1,
+    "Seats": [{"Role": 0, "Motion": 1090519059, "Offset": {"X": 0.0, "Y": -0.5, "Z": 0.75}}],
+    "WeaponCount": 3,
+    "Weapons": [
+     {"Kind": 1, "RoundsPerSecond": 8.0, "Spread": 0.02617993877991494, "Range": 120.0,
+      "Damage": 12.0, "Magazine": 200, "Muzzle": {"X": 0.0, "Y": 3.5, "Z": 0.25}},
+     {"Kind": 2, "RoundsPerSecond": 3.3333333333333335, "Spread": 0.0, "Range": 150.0,
+      "Damage": 40.0, "Magazine": 4, "Muzzle": {"X": -2.25, "Y": 1.0, "Z": -0.5}},
+     {"Kind": 3, "RoundsPerSecond": 1.0, "Spread": 0.0, "Range": 8.0,
+      "Damage": 120.0, "Magazine": 1, "Muzzle": {"X": 0.0, "Y": 0.5, "Z": -1.0}}
+    ],
+    "PartCount": 4,
+    "Parts": [
+     {"Did": 33554433, "Offset": {"X": 0.0, "Y": 0.0, "Z": 0.0}, "Rotation": {"W": 1.0, "X": 0.0, "Y": 0.0, "Z": 0.0}, "Scale": 1.0},
+     {"Did": 16777217, "Offset": {"X": 2.5, "Y": -1.0, "Z": 0.5}, "Rotation": {"W": 0.7071067811865476, "X": 0.0, "Y": 0.0, "Z": 0.7071067811865476}, "Scale": 0.5},
+     {"Did": 16777218, "Offset": {"X": 0.0, "Y": 1.5, "Z": -1.25}, "Rotation": {"W": 1.0, "X": 0.0, "Y": 0.0, "Z": 0.0}, "Scale": 1.0},
+     {"Did": 16777219, "Offset": {"X": 0.0, "Y": 0.5, "Z": -1.0}, "Rotation": {"W": 1.0, "X": 0.0, "Y": 0.0, "Z": 0.0}, "Scale": 0.75}
+    ],
+    "PartRoleCount": 4,
+    "PartRoles": [0, 1, 2, 131076],
+    "WeaponExtCount": 3,
+    "WeaponExt": [
+     {"MuzzleVelocity": 180.0, "Convergence": 250.0, "MassKg": 0.0, "DragTerminal": 0.0, "SpellId": 0},
+     {"MuzzleVelocity": 40.0, "Convergence": 0.0, "MassKg": 0.0, "DragTerminal": 0.0, "SpellId": 80},
+     {"MuzzleVelocity": 0.0, "Convergence": 0.0, "MassKg": 226.796185, "DragTerminal": 120.0, "SpellId": 0}
     ]
+   }
+  },
+  {
+   "name": "vehicle_profile_jeep",
+   "message": "Vehicle_Profile",
+   "fields": {
+    "Vehicle": 2147486210,
+    "ProfileKey": "jeep-mb",
+    "DisplayName": "Willys MB",
+    "Locomotion": 2,
+    "StandInSetup": 33555516,
+    "SimHz": 30,
+    "Reserved": 0,
+    "VMin": 0.0, "VCruise": 20.0, "VMax": 29.0, "SpeedCap": 29.0,
+    "Accel": 11.2, "Decel": 14.0,
+    "MaxBank": 0.0, "RollRate": 0.0,
+    "MaxPitch": 0.0, "PitchRate": 0.0,
+    "YawRate": 5.2,
+    "ClimbMax": 0.0, "SinkMax": 0.0,
+    "FloorAgl": 0.0, "CeilingAgl": 0.0,
+    "TakeoffClimb": 0.0, "LandingSpeed": 0.0,
+    "LeadSeconds": 6.0, "ObjectRadius": 4,
+    "SeatCount": 4,
+    "Seats": [
+     {"Role": 0, "Motion": 1090519059, "Offset": {"X": -0.38, "Y": -0.2, "Z": 0.85}},
+     {"Role": 1, "Motion": 1090519059, "Offset": {"X": 0.38, "Y": -0.2, "Z": 0.85}},
+     {"Role": 1, "Motion": 1090519059, "Offset": {"X": -0.38, "Y": -0.85, "Z": 0.95}},
+     {"Role": 1, "Motion": 1090519059, "Offset": {"X": 0.38, "Y": -0.85, "Z": 0.95}}
+    ],
+    "WeaponCount": 0,
+    "Weapons": [],
+    "PartCount": 4,
+    "Parts": [
+     {"Did": 33554786, "Offset": {"X": -0.74, "Y": 1.02, "Z": 0.38}, "Rotation": {"W": 0.70710678, "X": 0.0, "Y": 0.70710678, "Z": 0.0}, "Scale": 1.15},
+     {"Did": 33554786, "Offset": {"X": 0.74, "Y": 1.02, "Z": 0.38}, "Rotation": {"W": 0.70710678, "X": 0.0, "Y": -0.70710678, "Z": 0.0}, "Scale": 1.15},
+     {"Did": 33554786, "Offset": {"X": -0.74, "Y": -1.02, "Z": 0.38}, "Rotation": {"W": 0.70710678, "X": 0.0, "Y": 0.70710678, "Z": 0.0}, "Scale": 1.15},
+     {"Did": 33554786, "Offset": {"X": 0.74, "Y": -1.02, "Z": 0.38}, "Rotation": {"W": 0.70710678, "X": 0.0, "Y": -0.70710678, "Z": 0.0}, "Scale": 1.15}
+    ],
+    "PartRoleCount": 4,
+    "PartRoles": [5, 6, 7, 8],
+    "WeaponExtCount": 0,
+    "WeaponExt": [],
+    "Wheelbase": 2.04,
+    "TrackWidth": 1.48,
+    "WheelRadius": 0.38,
+    "MaxSteerRad": 0.69813,
+    "ReverseMax": -10.0,
+    "ClimbLimitCos": 0.71934,
+    "FordDepthMax": 0.8,
+    "CargoWcid": 4000002
    }
   },
   {
@@ -140,9 +241,34 @@
     "Position": {"X": 84.125, "Y": 7.5, "Z": 132.25},
     "Heading": 1.9373154697137058, "Pitch": -0.05, "Bank": 0.6,
     "Speed": 68.75, "VCap": 69.0, "Ammo": 187, "Mode": 2, "Flags": 1,
-    "MissileMask": 3, "BombMask": 1, "Reserved2": 0
+    "MissileMask": 3, "BombMask": 1, "Reserved2": 0,
+    "SteerAngle": 0.0, "GroundFlags": 0, "SurfaceFamily": 0, "WheelSpinQ16": 0
    },
    "frame": {"target": 1342177281, "sequence": 42}
+  },
+  {
+   "name": "vehicle_state_pilot_v2",
+   "message": "Vehicle_State",
+   "fields": {
+    "Header": {"Tag": 827736648, "Version": 2, "Reserved": 0},
+    "Vehicle": 2147486209, "Step": 123456, "AckInputSeq": 1002, "Cell": 2847146009,
+    "Position": {"X": 84.125, "Y": 7.5, "Z": 132.25},
+    "Heading": 1.9373154697137058, "Pitch": -0.05, "Bank": 0.6,
+    "Speed": 68.75, "VCap": 69.0, "Ammo": 187, "Mode": 2, "Flags": 1,
+    "MissileMask": 3, "BombMask": 1, "Reserved2": 0
+   }
+  },
+  {
+   "name": "vehicle_state_driving",
+   "message": "Vehicle_State",
+   "fields": {
+    "Vehicle": 2147486210, "Step": 500, "AckInputSeq": 499, "Cell": 2847146009,
+    "Position": {"X": 50.0, "Y": 25.0, "Z": 10.5},
+    "Heading": 1.570796, "Pitch": 0.02, "Bank": -0.01,
+    "Speed": 22.5, "VCap": 29.0, "Ammo": 0, "Mode": 6, "Flags": 1,
+    "MissileMask": 0, "BombMask": 0, "Reserved2": 0,
+    "SteerAngle": 0.15, "GroundFlags": 5, "SurfaceFamily": 2, "WheelSpinQ16": 1200
+   }
   },
   {
    "name": "vehicle_state_pilot_v1",
@@ -209,15 +335,62 @@
    "fields": {"Header": {"Tag": 827736649, "Version": 2, "Reserved": 0}, "Vehicle": 2147486209, "Seat": 0}
   },
   {
+   "name": "vehicle_cargo_deploy",
+   "message": "Vehicle_Cargo",
+   "fields": {"Vehicle": 2147486210, "Action": 1, "Target": 0}
+  },
+  {
+   "name": "vehicle_cargo_pack",
+   "message": "Vehicle_Cargo",
+   "fields": {"Vehicle": 2147486210, "Action": 2, "Target": 1342177300}
+  },
+  {
+   "name": "vehicle_radar_contacts",
+   "message": "Vehicle_RadarContacts",
+   "fields": {
+    "RadarGuid": 1342177300,
+    "ParentVehicle": 2147486210,
+    "RadarX": 100.0,
+    "RadarY": 200.0,
+    "RadarZ": 50.0,
+    "RangeM": 32187.0,
+    "CeilingM": 1550.0,
+    "ContactCount": 2,
+    "Contacts": [
+     {
+      "VehicleGuid": 2147486209,
+      "DxM": 1250.5,
+      "DyM": -450.25,
+      "AltAglM": 320,
+      "HeadingU8": 64,
+      "Standing": 1,
+      "SpeedMpsU8": 85,
+      "Flags": 0
+     },
+     {
+      "VehicleGuid": 2147486215,
+      "DxM": -3200.0,
+      "DyM": 5100.75,
+      "AltAglM": 850,
+      "HeadingU8": 192,
+      "Standing": 3,
+      "SpeedMpsU8": 90,
+      "Flags": 1
+     }
+    ]
+   }
+  },
+  {
    "name": "future_version_extra_bytes",
    "message": "Vehicle_State",
    "expect": "ok",
    "fields": {
-    "Header": {"Tag": 827736648, "Version": 3, "Reserved": 0},
+    "Header": {"Tag": 827736648, "Version": 4, "Reserved": 0},
     "Vehicle": 2147486209, "Step": 7, "AckInputSeq": 0, "Cell": 2847146009,
     "Position": {"X": 1.0, "Y": 2.0, "Z": 3.0},
     "Heading": 0.0, "Pitch": 0.0, "Bank": 0.0, "Speed": 0.0, "VCap": 69.0, "Ammo": 200, "Mode": 0, "Flags": 0,
-    "MissileMask": 1, "BombMask": 0, "Reserved2": 0
+    "MissileMask": 1, "BombMask": 0, "Reserved2": 0,
+    "SteerAngle": 0.0, "GroundFlags": 0, "SurfaceFamily": 0, "WheelSpinQ16": 0
    },
    "trailing_hex": "deadbeef"
   }

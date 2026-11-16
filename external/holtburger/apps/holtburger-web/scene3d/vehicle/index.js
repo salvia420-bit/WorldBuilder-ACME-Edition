@@ -93,8 +93,12 @@ function pushTrail(trail, seat, t) {
   trail.push({ x: seat.x, y: seat.y, z: seat.z, t });
   if (trail.length > BAIL_HANDOFF.trailLen) trail.shift();
 }
-export const EVENT_NAMES = Object.freeze({ 1: "takeoff", 2: "landed", 3: "crashed", 4: "despawn", 5: "bail", 6: "chute", 7: "touchdown", 8: "hit",
-  9: "bombRelease", 10: "explosion", 11: "rearmed" });
+export const EVENT_NAMES = Object.freeze({
+  1: "takeoff", 2: "landed", 3: "crashed", 4: "despawn", 5: "bail", 6: "chute", 7: "touchdown", 8: "hit",
+  9: "bombRelease", 10: "explosion", 11: "rearmed",
+  12: "horn", 13: "headlights", 14: "scrape", 15: "cargoDeployed", 16: "cargoPacked",
+  17: "ramHit", 18: "radarAlert",
+});
 /** Retail motion commands the pilot's rig holds (the server shows the same Sitting to every client). */
 export const MOTION = Object.freeze({ SITTING: 0x41000013, READY: 0x41000003, NONCOMBAT: 0x8000003d });
 const NEUTRAL_INPUT = Object.freeze({ throttle: 0, pitch: 0, roll: 0, yaw: 0, boost: false, fire: false, land: false });
@@ -470,6 +474,20 @@ export function installVehicles(deps = {}) {
             const dmg = Math.max(1, Math.round(m.value || 0));
             osd.hit({ damage: dmg });
             try { vehicleAudio?.hit({ damage: dmg }); } catch (_) {}
+          }
+        } else if (m.kind === 17) { // ramHit: bumper impact with creature (Monster Ramming Combat)
+          if (myVehicle) {
+            const spd = Math.abs(m.value || 0);
+            const dmg = m.aux || Math.round(18 + 0.42 * spd * spd);
+            try { vehicleAudio?.hit?.({ damage: dmg }); } catch (_) {}
+            if (pilot?.camRig) {
+              try {
+                const joltScale = Math.min(1.5, 0.4 + (spd / 29.0) * 0.8);
+                pilot.camRig.triggerJolt?.(joltScale);
+              } catch (_) {}
+            }
+            osd?.hit?.({ damage: dmg });
+            flashPrompt(`Ram hit! ${dmg} bludgeon (${spd.toFixed(1)} m/s)`, 1500);
           }
         } else if (m.kind === 9) { // a bomb left its station: fly it with the server's model (fall_model stepBomb)
           if (v) {

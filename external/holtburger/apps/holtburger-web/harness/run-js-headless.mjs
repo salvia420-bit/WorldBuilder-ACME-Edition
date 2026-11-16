@@ -1553,6 +1553,13 @@ const TIER5 = [
   { tier: 5, flag: "vehicleAudio", file: "tests/vehicle_audio.test.mjs" },
   { tier: 5, flag: "vehicleModel", file: "tests/vehicle_airframe_model.test.mjs" },
   { tier: 5, flag: "vehicles", file: "tests/vehicle_experience.test.mjs" },
+  // 2026-11-15 WWII Willys MB Jeep & Autonomous Mobile Air-Search Radar suites
+  { tier: 5, flag: "vehicleGroundPhysics", file: "tests/vehicle_ground_physics.test.mjs" },
+  { tier: 5, flag: "vehicleMultiSeat", file: "tests/vehicle_multiseat.test.mjs" },
+  { tier: 5, flag: "vehicleJeepModel", file: "tests/vehicle_jeep_model.test.mjs" },
+  { tier: 5, flag: "vehicleSeatPoses", file: "tests/vehicle_seat_poses.test.mjs" },
+  { tier: 5, flag: "vehicleRadarDeploy", file: "tests/vehicle_radar_deploy.test.mjs" },
+  { tier: 5, flag: "vehicleRammingCombat", file: "tests/vehicle_ramming_combat.test.mjs" },
   // 2026-11-01 flight experience (docs/flight-experience-2026-11-01): the Phase 0
   // residency sampler (?residencyLog) — flips, holes, lead times on a mock scene.
   { tier: 5, flag: "residencyLog", file: "tests/residency_log.test.mjs" },

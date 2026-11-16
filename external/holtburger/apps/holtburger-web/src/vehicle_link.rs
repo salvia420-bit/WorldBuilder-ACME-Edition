@@ -108,6 +108,15 @@ pub(crate) fn to_json(msg: &VehicleS2C) -> Value {
                             .collect(),
                     ),
                 );
+                // v3 ground dynamics
+                o.insert("wheelbase".into(), json!(p.wheelbase));
+                o.insert("trackWidth".into(), json!(p.track_width));
+                o.insert("wheelRadius".into(), json!(p.wheel_radius));
+                o.insert("maxSteerRad".into(), json!(p.max_steer_rad));
+                o.insert("reverseMax".into(), json!(p.reverse_max));
+                o.insert("climbLimitCos".into(), json!(p.climb_limit_cos));
+                o.insert("fordDepthMax".into(), json!(p.ford_depth_max));
+                o.insert("cargoWcid".into(), json!(p.cargo_wcid));
             }
             v
         }
@@ -120,6 +129,8 @@ pub(crate) fn to_json(msg: &VehicleS2C) -> Value {
             "heading": s.heading, "pitch": s.pitch, "bank": s.bank, "speed": s.speed, "vCap": s.v_cap,
             "ammo": s.ammo, "mode": s.mode, "flags": s.flags,
             "missileMask": s.missile_mask, "bombMask": s.bomb_mask,
+            "steerAngle": s.steer_angle, "groundFlags": s.ground_flags,
+            "surfaceFamily": s.surface_family, "wheelSpinQ16": s.wheel_spin_q16,
         }),
         VehicleS2C::Fire(f) => json!({
             "type": "fire", "vehicle": f.vehicle, "step": f.step, "mount": f.mount, "count": f.count, "cell": f.cell,
@@ -132,6 +143,26 @@ pub(crate) fn to_json(msg: &VehicleS2C) -> Value {
             "type": "event", "vehicle": e.vehicle, "kind": e.kind, "step": e.step, "subject": e.subject, "cell": e.cell,
             "x": e.position[0], "y": e.position[1], "z": e.position[2], "value": e.value,
             "aux": e.aux, "vel": v3(e.velocity),
+        }),
+        VehicleS2C::RadarContacts(rc) => json!({
+            "type": "radar_contacts",
+            "radar": rc.radar_guid,
+            "parentVehicle": rc.parent_vehicle,
+            "radarPos": [rc.radar_x, rc.radar_y, rc.radar_z],
+            "rangeM": rc.range_m,
+            "ceilingM": rc.ceiling_m,
+            "contactCount": rc.contacts.len(),
+            "contacts": rc.contacts.iter().map(|c| json!({
+                "vehicleGuid": c.vehicle_guid,
+                "dxM": c.dx_m,
+                "dyM": c.dy_m,
+                "altAglM": c.alt_agl_m,
+                "heading": c.heading_u8 as f32 * (std::f32::consts::TAU / 256.0),
+                "headingU8": c.heading_u8,
+                "standing": c.standing,
+                "speedMps": c.speed_mps_u8,
+                "flags": c.flags,
+            })).collect::<Vec<_>>(),
         }),
     }
 }
@@ -273,6 +304,12 @@ pub(crate) fn heading_quat(heading: f32) -> holtburger_common::math::Quaternion 
 pub(crate) fn is_vehicle_event(opcode: u32) -> bool {
     matches!(
         opcode,
-        s2c::CAPABILITIES_ACK | s2c::PROFILE | s2c::SEAT | s2c::STATE | s2c::FIRE | s2c::EVENT
+        s2c::CAPABILITIES_ACK
+            | s2c::PROFILE
+            | s2c::SEAT
+            | s2c::STATE
+            | s2c::FIRE
+            | s2c::EVENT
+            | s2c::RADAR_CONTACTS
     )
 }

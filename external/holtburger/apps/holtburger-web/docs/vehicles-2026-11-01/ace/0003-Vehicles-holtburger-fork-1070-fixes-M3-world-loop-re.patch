@@ -1,7 +1,7 @@
 From 6d8b0a5d87a9cd97c11c5f09f2061e88a8c078e1 Mon Sep 17 00:00:00 2001
 From: salvia420-bit <salvia420@gmail.com>
 Date: Sun, 1 Nov 2026 19:52:42 -0330
-Subject: [PATCH 3/7] Vehicles (holtburger fork): 1070 fixes + M3 world-loop
+Subject: [PATCH 3/9] Vehicles (holtburger fork): 1070 fixes + M3 world-loop
  residual
 
 Found on the first real-GPU look at the Hellcat demo (2026-11-01):
@@ -398,7 +398,7 @@ index d57c74c..7c5234a 100644
          /// <summary>Per piloted vehicle, after its steps this tick.</summary>
          public static void Tick(Vehicle v, Player pilot)
          {
-@@ -584,7 +620,7 @@ public static string Report() =>
+@@ -584,7 +620,7 @@ static bool GlobalTokenAvailable()
              $"off-thread loads {OffThreadBuilds} (avg {(OffThreadBuilds > 0 ? BuildMsTotal / OffThreadBuilds : 0):0.0} ms, max {BuildMsMax:0.0} ms, on a background task) collected {Published} failed {BuildFailures}, " +
              $"landblock budget={LandblockBudget}: {BringUpChunks} object chunks deferred to later ticks, {PowerUpYields} generator power-ups continued next tick, loot generators deferred {LootGeneratorsDeferred} (restored {LootGeneratorsRestored}), loot profiles held {LootProfilesDeferred}; " +
              $"late spawn warm-ups (vehicle-only landblocks loaded outside the corridor) {LateWarmups}; indoor cells built off-thread {CellsPrewarmed} in {CellPrewarmLandblocks} landblocks (avg {(CellPrewarmLandblocks > 0 ? CellPrewarmMsTotal / CellPrewarmLandblocks : 0):0.0} ms, max {CellPrewarmMsMax:0.0} ms); " +
@@ -653,5 +653,5 @@ index 467e237..2241a5f 100644
                  if (wo.PhysicsObj != null)
                      wo.PhysicsObj.Order = 0;
 -- 
-2.47.3
+2.43.0
 
