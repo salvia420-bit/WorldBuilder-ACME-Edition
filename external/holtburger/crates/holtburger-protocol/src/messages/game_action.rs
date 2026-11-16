@@ -500,7 +500,8 @@ impl ProtocolUnpack for GameActionMessage {
                 | GameActionOpcode::VehicleBoard
                 | GameActionOpcode::VehicleExit
                 | GameActionOpcode::VehicleInput
-                | GameActionOpcode::VehicleCargo => {
+                | GameActionOpcode::VehicleCargo
+                | GameActionOpcode::VehicleContainerAction => {
                     match crate::messages::vehicle::VehicleC2S::unpack_payload(
                         action_type_raw,
                         data,

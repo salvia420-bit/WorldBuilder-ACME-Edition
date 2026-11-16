@@ -43,8 +43,8 @@ export const JEEP_DIMENSIONS = Object.freeze({
 
 export const PALLET_MOUNT_OFFSETS = Object.freeze({
   fullBed: Object.freeze([0.0, -1.15, 0.72]),
-  halfSlot0: Object.freeze([-0.60, -1.15, 0.72]),
-  halfSlot1: Object.freeze([0.60, -1.15, 0.72]),
+  halfSlot0: Object.freeze([-0.3048, -1.15, 0.72]),
+  halfSlot1: Object.freeze([0.3048, -1.15, 0.72]),
 });
 
 export function bridgeCargoLoaded(state = {}) {

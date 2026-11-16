@@ -4,6 +4,8 @@
 // 20-mile range / 1,550m AGL envelope, Monarch/Guild IFF engine, S2C 0x090A telemetry packing.
 
 import * as THREE_DEFAULT from "three";
+import { buildPallet } from "./deployable_models.js";
+import { installCsmShaderPatch } from "../materials.js";
 
 export const RADAR_SPECS = Object.freeze({
   maxRangeM: 32187.0,          // 20 statute miles
@@ -93,14 +95,52 @@ export function handleVehicleCargoAction(action, { vehicle, player, cargoLoaded,
   }
 }
 
-// Deployed Radar 3D Model Constructor (<= 8 draw calls)
+// Deployed Radar 3D Model Constructor (<= 8 draw calls, mounted atop Full GMA Pallet)
 export function buildDeployedRadar(three, options = {}) {
   const t = three || THREE_DEFAULT;
   const root = new t.Group();
   root.name = "deployed-radar-station";
 
-  const matSteel = new t.MeshBasicMaterial({ color: 0x4a5234 });
-  const matCabinet = new t.MeshBasicMaterial({ color: 0x3b442b });
+  // Mount directly atop a Full GMA Pallet (1.2192 × 1.0160 × 0.1397 m)
+  const pallet = buildPallet(t, "full", options);
+  root.add(pallet.root);
+
+  const isStowed = Boolean(options.stowed);
+  const deckZ = 0.1397; // Full GMA pallet top deck elevation
+  // Telescoping mast: stowed collapses to <= 2.10 m (1.80 m, total height <= 2.04 m); deployed 3.10 m
+  const mastHeight = isStowed ? 1.80 : RADAR_SPECS.mastHeightM;
+
+  const matSteel = new t.MeshStandardMaterial({
+    color: 0x4a5234,
+    roughness: 0.55,
+    metalness: 0.45,
+  });
+  matSteel.castShadow = true;
+  matSteel.receiveShadow = true;
+
+  const matCabinet = new t.MeshStandardMaterial({
+    color: 0x3b442b,
+    roughness: 0.65,
+    metalness: 0.35,
+  });
+  matCabinet.castShadow = true;
+  matCabinet.receiveShadow = true;
+
+  const matDishWire = new t.MeshStandardMaterial({
+    color: 0x7c8567,
+    wireframe: true,
+    roughness: 0.40,
+    metalness: 0.60,
+  });
+  matDishWire.castShadow = true;
+  matDishWire.receiveShadow = true;
+
+  if (options.csmState) {
+    installCsmShaderPatch(matSteel, options.csmState);
+    installCsmShaderPatch(matCabinet, options.csmState);
+    installCsmShaderPatch(matDishWire, options.csmState);
+  }
+
   const matCrtGlow = new t.MeshBasicMaterial({
     color: 0x33ff66,
     transparent: true,
@@ -108,48 +148,50 @@ export function buildDeployedRadar(three, options = {}) {
     blending: t.AdditiveBlending,
     depthWrite: false,
   });
-  const matDishWire = new t.MeshBasicMaterial({
-    color: 0x7c8567,
-    wireframe: true,
-    transparent: true,
-    opacity: 0.8,
-  });
 
-  // 1. Heavy steel tripod base
-  const tripodGeom = new t.CylinderGeometry(0.1, 1.2, 1.2, 3).toNonIndexed();
+  // 1. Heavy steel tripod base (radius r = 0.46 m fits within Full GMA pallet r <= 0.48 m)
+  const tripodGeom = new t.CylinderGeometry(0.06, 0.46, 0.50, 3).toNonIndexed();
   const tripodMesh = new t.Mesh(tripodGeom, matSteel);
   tripodMesh.name = "radar-tripod";
-  tripodMesh.position.set(0, 0, 0.6);
+  tripodMesh.position.set(0, 0, deckZ + 0.25);
+  tripodMesh.castShadow = true;
+  tripodMesh.receiveShadow = true;
   root.add(tripodMesh);
 
-  // 2. 3.1 m antenna mast
-  const mastGeom = new t.CylinderGeometry(0.06, 0.08, RADAR_SPECS.mastHeightM, 8);
+  // 2. Telescoping antenna mast
+  const mastGeom = new t.CylinderGeometry(0.05, 0.07, mastHeight, 8);
   const mastMesh = new t.Mesh(mastGeom, matSteel);
   mastMesh.name = "radar-mast";
-  mastMesh.position.set(0, 0, RADAR_SPECS.mastHeightM / 2);
+  mastMesh.position.set(0, 0, deckZ + mastHeight / 2);
   mastMesh.rotation.x = Math.PI / 2;
+  mastMesh.castShadow = true;
+  mastMesh.receiveShadow = true;
   root.add(mastMesh);
 
   // 3. Transceiver generator cabinet
-  const cabinetMesh = new t.Mesh(new t.BoxGeometry(0.9, 0.7, 0.8), matCabinet);
+  const cabinetMesh = new t.Mesh(new t.BoxGeometry(0.60, 0.48, 0.46), matCabinet);
   cabinetMesh.name = "radar-cabinet";
-  cabinetMesh.position.set(0, 0.35, 0.6);
+  cabinetMesh.position.set(0, 0.22, deckZ + 0.23);
+  cabinetMesh.castShadow = true;
+  cabinetMesh.receiveShadow = true;
   root.add(cabinetMesh);
 
   // 4. CRT phosphor green scope window (matAdditive, ZERO THREE.Light churn)
-  const crtWindow = new t.Mesh(new t.CircleGeometry(0.18, 16), matCrtGlow);
+  const crtWindow = new t.Mesh(new t.CircleGeometry(0.12, 16), matCrtGlow);
   crtWindow.name = "crt-phosphor-scope";
-  crtWindow.position.set(0, 0.71, 0.7);
+  crtWindow.position.set(0, 0.47, deckZ + 0.28);
   root.add(crtWindow);
 
   // 5. Rotating parabolic reflector dish
   const dishPivot = new t.Group();
   dishPivot.name = "dishPivot";
-  dishPivot.position.set(0, 0, RADAR_SPECS.mastHeightM);
+  dishPivot.position.set(0, 0, deckZ + mastHeight);
 
-  const dishMesh = new t.Mesh(new t.SphereGeometry(1.2, 16, 8, 0, Math.PI), matDishWire);
+  const dishMesh = new t.Mesh(new t.SphereGeometry(isStowed ? 0.20 : 0.90, 16, 8, 0, Math.PI), matDishWire);
   dishMesh.name = "parabolic-dish-reflector";
-  dishMesh.rotation.x = Math.PI / 2;
+  dishMesh.rotation.x = isStowed ? Math.PI : Math.PI / 2;
+  dishMesh.castShadow = true;
+  dishMesh.receiveShadow = true;
   dishPivot.add(dishMesh);
   root.add(dishPivot);
 
@@ -159,8 +201,11 @@ export function buildDeployedRadar(three, options = {}) {
     root,
     dishPivot,
     crtWindow,
+    pallet,
+    palletSize: "full",
     get currentAzimuth() { return currentAzimuth; },
     update(simTimeSec = 0) {
+      if (isStowed) return;
       // 15 RPM deterministic from simTimeSec: (simTimeSec * 15 * 2 * PI / 60) % (2 * PI)
       const safeTime = Number.isFinite(simTimeSec) ? simTimeSec : 0;
       const omega = (RADAR_SPECS.dishRpm * 2 * Math.PI) / 60.0; // 0.5 * PI rad/s
@@ -170,9 +215,14 @@ export function buildDeployedRadar(three, options = {}) {
       dishPivot.rotation.z = currentAzimuth;
     },
     dispose() {
+      pallet.dispose();
       root.traverse((obj) => {
+        if (obj === pallet.mesh) return;
         if (obj.geometry) obj.geometry.dispose();
-        if (obj.material) obj.material.dispose();
+        if (obj.material) {
+          if (Array.isArray(obj.material)) obj.material.forEach((m) => m.dispose());
+          else obj.material.dispose();
+        }
       });
     },
   };

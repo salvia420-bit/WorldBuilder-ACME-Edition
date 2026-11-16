@@ -5,9 +5,9 @@
 # Executes the full 6-phase E2E verification suite specified in TEST_INFRA.md:
 #   Phase 1: Protocol fixtures validation (gen_fixtures.py --check)
 #   Phase 2: Rust protocol test suite (cargo test -p holtburger-protocol vehicle::tests)
-#   Phase 3: Client opaque-box test suite (node tests/e2e_deployables_opaque.test.mjs)
-#   Phase 4: Client headless harness verification (run-js-headless.mjs --only=e2eDeployablesOpaque)
-#   Phase 5: Server deployable ecosystem E2E test suite (dotnet test DeployableEcosystemTests)
+#   Phase 3: Client opaque-box test suite (node tests/e2e_deployables_opaque.test.mjs && node tests/vehicle_iso_containers.test.mjs)
+#   Phase 4: Client headless harness verification (run-js-headless.mjs --only=e2eDeployablesOpaque,vehicleIsoContainers)
+#   Phase 5: Server deployable & ISO container ecosystem E2E test suite (dotnet test DeployableEcosystemTests|IsoContainerTests)
 #   Phase 6: Server full vehicles test suite regression (dotnet test Vehicles)
 #
 # Exit status: 0 if and only if all phases succeed; non-zero immediately on failure.
@@ -35,7 +35,7 @@ log_ts() {
 SCRIPT_START_SEC=$(date +%s)
 
 echo -e "${BOLD}${CYAN}==============================================================================${RESET}"
-echo -e "${BOLD}${CYAN}  UNIFIED E2E TEST RUNNER — 8-UNIT MODULAR DEPLOYABLE ECOSYSTEM${RESET}"
+echo -e "${BOLD}${CYAN}  UNIFIED E2E TEST RUNNER — DEPLOYABLES & ISO CONTAINERS ECOSYSTEM${RESET}"
 echo -e "${BOLD}${CYAN}==============================================================================${RESET}"
 echo -e "  Repo Root    : ${REPO_ROOT}"
 echo -e "  Start Time   : $(log_ts)"
@@ -106,19 +106,19 @@ run_phase 2 "Rust Protocol Test Suite" \
 # Phase 3: Client opaque-box test suite
 # ------------------------------------------------------------------------------
 run_phase 3 "Client Opaque-Box Test Suite" \
-    node external/holtburger/apps/holtburger-web/tests/e2e_deployables_opaque.test.mjs
+    bash -c 'node external/holtburger/apps/holtburger-web/tests/e2e_deployables_opaque.test.mjs && node external/holtburger/apps/holtburger-web/tests/vehicle_iso_containers.test.mjs'
 
 # ------------------------------------------------------------------------------
 # Phase 4: Client headless harness verification
 # ------------------------------------------------------------------------------
 run_phase 4 "Client Headless Harness Verification" \
-    node external/holtburger/apps/holtburger-web/harness/run-js-headless.mjs --only=e2eDeployablesOpaque
+    node external/holtburger/apps/holtburger-web/harness/run-js-headless.mjs --only=e2eDeployablesOpaque,vehicleIsoContainers
 
 # ------------------------------------------------------------------------------
-# Phase 5: Server deployable ecosystem E2E test suite
+# Phase 5: Server deployable & ISO container ecosystem E2E test suite
 # ------------------------------------------------------------------------------
-run_phase 5 "Server Deployable Ecosystem E2E Suite" \
-    dotnet test /home/wbterminal/ace-server/Source/ACE.Server.Tests/ACE.Server.Tests.csproj -c Debug --filter FullyQualifiedName~DeployableEcosystemTests
+run_phase 5 "Server Deployable & ISO Container Ecosystem E2E Suite" \
+    dotnet test /home/wbterminal/ace-server/Source/ACE.Server.Tests/ACE.Server.Tests.csproj -c Debug --filter "FullyQualifiedName~DeployableEcosystemTests|FullyQualifiedName~IsoContainerTests"
 
 # ------------------------------------------------------------------------------
 # Phase 6: Server full vehicles test suite (regression verification)

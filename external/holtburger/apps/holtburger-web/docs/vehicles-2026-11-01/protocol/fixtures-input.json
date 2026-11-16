@@ -410,7 +410,7 @@
    "message": "Vehicle_State",
    "expect": "ok",
    "fields": {
-    "Header": {"Tag": 827736648, "Version": 5, "Reserved": 0},
+    "Header": {"Tag": 827736648, "Version": 6, "Reserved": 0},
     "Vehicle": 2147486209, "Step": 7, "AckInputSeq": 0, "Cell": 2847146009,
     "Position": {"X": 1.0, "Y": 2.0, "Z": 3.0},
     "Heading": 0.0, "Pitch": 0.0, "Bank": 0.0, "Speed": 0.0, "VCap": 69.0, "Ammo": 200, "Mode": 0, "Flags": 0,
@@ -501,6 +501,46 @@
       "Reserved0": 0,
       "Reserved1": 0,
       "Reserved2": 0
+     }
+    ]
+   }
+  },
+  {
+   "name": "vehicle_container_action",
+   "message": "Vehicle_ContainerAction",
+   "fields": {
+    "Container": 1342177400,
+    "Action": 3,
+    "SlotIndex": 2,
+    "SubSlot": 1,
+    "Reserved": 0,
+    "CargoWcid": 4000010
+   }
+  },
+  {
+   "name": "vehicle_container_state",
+   "message": "Vehicle_ContainerState",
+   "fields": {
+    "ContainerGuid": 1342177400,
+    "ContainerKind": 10,
+    "DoorState": 2,
+    "LiveryId": 1,
+    "MaxFullSlots": 10,
+    "Flags": 1,
+    "OwnerGuid": 1342177281,
+    "Cell": 2847146009,
+    "Position": {"X": 105.0, "Y": 55.0, "Z": 12.0},
+    "Heading": 1.570796,
+    "DoorProgress": 1.0,
+    "SerialNumber": 123456,
+    "SlotCount": 1,
+    "Slots": [
+     {
+      "SlotIndex": 0,
+      "PalletSize": 2,
+      "SubSlot": 0,
+      "Reserved": 0,
+      "CargoWcid": 4000010
      }
     ]
    }

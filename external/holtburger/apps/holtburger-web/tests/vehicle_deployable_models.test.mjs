@@ -66,10 +66,10 @@ await check("T_MOD_01 Full & Half Pallet Draw Calls & Dimensions", () => {
   assert.equal(countLights(full.root), 0, "full pallet has 0 lights");
   assert.equal(countLights(half.root), 0, "half pallet has 0 lights");
 
-  assert.equal(full.spec.width, 2.40);
-  assert.equal(full.spec.depth, 2.40);
-  assert.equal(half.spec.width, 1.20);
-  assert.equal(half.spec.depth, 2.40);
+  assert.equal(full.spec.width, 1.2192);
+  assert.equal(full.spec.depth, 1.0160);
+  assert.equal(half.spec.width, 0.6096);
+  assert.equal(half.spec.depth, 1.0160);
 
   full.dispose();
   half.dispose();

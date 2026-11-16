@@ -25,13 +25,16 @@ mod tests;
 /// `"HBV1"` as a little-endian u32 (bytes `48 42 56 31`).
 pub const HBV1_TAG: u32 = 0x3156_4248;
 /// The protocol version this module writes (and the newest it parses fully).
-pub const HBV1_VERSION: u16 = 4;
+pub const HBV1_VERSION: u16 = 5;
 /// The first version carrying the v2 fields.
 const V2: u16 = 2;
 /// The first version carrying the v3 fields.
 const V3: u16 = 3;
 /// The first version carrying the v4 fields.
 const V4: u16 = 4;
+/// The first version carrying the v5 fields.
+#[allow(dead_code)]
+const V5: u16 = 5;
 
 /// ClientCapabilities / CapabilitiesAck bits.
 pub mod caps {
@@ -51,6 +54,8 @@ pub mod c2s {
     pub const INPUT: u32 = 0x0905;
     /// v3: cargo deployment or packing (1=Deploy, 2=Pack).
     pub const CARGO: u32 = 0x0909;
+    /// v5: container action request (1=OpenDoors, 2=CloseDoors, 3=Load, 4=Pack, 5=Unpack, 6=UnpackAll).
+    pub const CONTAINER_ACTION: u32 = 0x090E;
 }
 
 /// S2C game-event opcodes.
@@ -69,6 +74,8 @@ pub mod s2c {
     pub const DEPLOYABLE_FIRE: u32 = 0x090C;
     /// v4: Ground radar 30 RPM surface sweep broadcast.
     pub const GROUND_CONTACTS: u32 = 0x090D;
+    /// v5: Authoritative container telemetry broadcast.
+    pub const CONTAINER_STATE: u32 = 0x090E;
 }
 
 /// `VehicleProfile.locomotion`.
@@ -218,6 +225,9 @@ pub mod deployable_kind {
     pub const GROUND_RADAR: u32 = 7;
     pub const MORTAR_TURRET: u32 = 8;
     pub const HEAVY_LASER_TURRET: u32 = 9;
+    pub const ISO_CONTAINER_20: u32 = 10;
+    pub const ISO_CONTAINER_40: u32 = 11;
+    pub const ISO_CONTAINER_40_HC: u32 = 12;
 }
 
 /// Standardized industrial pallet footprint.
@@ -529,6 +539,73 @@ impl GroundContactWire {
     }
 }
 
+/// 8-byte packed container slot wire record.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ContainerSlotWire {
+    pub slot_index: u8,
+    pub pallet_size: u8,
+    pub sub_slot: u8,
+    pub reserved: u8,
+    pub cargo_wcid: u32,
+}
+
+impl ContainerSlotWire {
+    pub const WIRE: usize = 8;
+
+    fn read(r: &mut Rd<'_>) -> Option<Self> {
+        Some(Self {
+            slot_index: r.u8()?,
+            pallet_size: r.u8()?,
+            sub_slot: r.u8()?,
+            reserved: r.u8()?,
+            cargo_wcid: r.u32()?,
+        })
+    }
+
+    pub fn write(&self, buf: &mut Vec<u8>) {
+        buf.push(self.slot_index);
+        buf.push(self.pallet_size);
+        buf.push(self.sub_slot);
+        buf.push(self.reserved);
+        buf.write_u32::<LittleEndian>(self.cargo_wcid).unwrap();
+    }
+}
+
+/// Client request for container actions (1=OpenDoors, 2=CloseDoors, 3=Load, 4=Pack, 5=Unpack, 6=UnpackAll).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VehicleContainerAction {
+    pub container: u32,
+    pub action: u8,
+    pub slot_index: u8,
+    pub sub_slot: u8,
+    pub reserved: u8,
+    pub cargo_wcid: u32,
+}
+
+impl VehicleContainerAction {
+    pub const WIRE: usize = 12;
+
+    fn read(r: &mut Rd<'_>) -> Option<Self> {
+        Some(Self {
+            container: r.u32()?,
+            action: r.u8()?,
+            slot_index: r.u8()?,
+            sub_slot: r.u8()?,
+            reserved: r.u8()?,
+            cargo_wcid: r.u32()?,
+        })
+    }
+
+    pub fn write(&self, buf: &mut Vec<u8>) {
+        buf.write_u32::<LittleEndian>(self.container).unwrap();
+        buf.push(self.action);
+        buf.push(self.slot_index);
+        buf.push(self.sub_slot);
+        buf.push(self.reserved);
+        buf.write_u32::<LittleEndian>(self.cargo_wcid).unwrap();
+    }
+}
+
 // ---------------------------------------------------------------- C2S
 
 /// Client → server vehicle game actions.
@@ -549,6 +626,8 @@ pub enum VehicleC2S {
         reserved1: u16,
         cargo_wcid: u32,
     },
+    /// v5: container action request (1=OpenDoors, 2=CloseDoors, 3=Load, 4=Pack, 5=Unpack, 6=UnpackAll).
+    ContainerAction(VehicleContainerAction),
 }
 
 impl VehicleC2S {
@@ -559,13 +638,19 @@ impl VehicleC2S {
             Self::Exit { .. } => c2s::EXIT,
             Self::Input { .. } => c2s::INPUT,
             Self::Cargo { .. } => c2s::CARGO,
+            Self::ContainerAction(_) => c2s::CONTAINER_ACTION,
         }
     }
 
     pub fn is_vehicle_opcode(opcode: u32) -> bool {
         matches!(
             opcode,
-            c2s::CLIENT_CAPABILITIES | c2s::BOARD | c2s::EXIT | c2s::INPUT | c2s::CARGO
+            c2s::CLIENT_CAPABILITIES
+                | c2s::BOARD
+                | c2s::EXIT
+                | c2s::INPUT
+                | c2s::CARGO
+                | c2s::CONTAINER_ACTION
         )
     }
 
@@ -608,6 +693,9 @@ impl VehicleC2S {
                 buf.push(*reserved0);
                 buf.write_u16::<LittleEndian>(*reserved1).unwrap();
                 buf.write_u32::<LittleEndian>(*cargo_wcid).unwrap();
+            }
+            Self::ContainerAction(ca) => {
+                ca.write(buf);
             }
         }
     }
@@ -664,6 +752,9 @@ impl VehicleC2S {
                         reserved1,
                         cargo_wcid,
                     }
+                }
+                c2s::CONTAINER_ACTION => {
+                    Self::ContainerAction(VehicleContainerAction::read(&mut r)?)
                 }
                 _ => return None,
             }
@@ -872,6 +963,80 @@ pub struct VehicleGroundContacts {
     pub contacts: Vec<GroundContactWire>,
 }
 
+/// v5: Authoritative state of ISO shipping containers (telemetry, doors, loaded slots).
+#[derive(Debug, Clone, PartialEq)]
+pub struct VehicleContainerState {
+    pub container_guid: u32,
+    pub container_kind: u32,
+    pub door_state: u8,
+    pub livery_id: u8,
+    pub max_full_slots: u8,
+    pub flags: u8,
+    pub owner_guid: u32,
+    pub cell: u32,
+    pub position: [f32; 3],
+    pub heading: f32,
+    pub door_progress: f32,
+    pub serial_number: u32,
+    pub slots: Vec<ContainerSlotWire>,
+}
+
+impl VehicleContainerState {
+    fn read(r: &mut Rd<'_>) -> Option<Self> {
+        let container_guid = r.u32()?;
+        let container_kind = r.u32()?;
+        let door_state = r.u8()?;
+        let livery_id = r.u8()?;
+        let max_full_slots = r.u8()?;
+        let flags = r.u8()?;
+        let owner_guid = r.u32()?;
+        let cell = r.u32()?;
+        let position = r.vec3()?;
+        let heading = r.f32()?;
+        let door_progress = r.f32()?;
+        let serial_number = r.u32()?;
+        let n = r.count(ContainerSlotWire::WIRE)?;
+        let mut slots = Vec::with_capacity(n);
+        for _ in 0..n {
+            slots.push(ContainerSlotWire::read(r)?);
+        }
+        Some(Self {
+            container_guid,
+            container_kind,
+            door_state,
+            livery_id,
+            max_full_slots,
+            flags,
+            owner_guid,
+            cell,
+            position,
+            heading,
+            door_progress,
+            serial_number,
+            slots,
+        })
+    }
+
+    pub fn write(&self, buf: &mut Vec<u8>) {
+        buf.write_u32::<LittleEndian>(self.container_guid).unwrap();
+        buf.write_u32::<LittleEndian>(self.container_kind).unwrap();
+        buf.push(self.door_state);
+        buf.push(self.livery_id);
+        buf.push(self.max_full_slots);
+        buf.push(self.flags);
+        buf.write_u32::<LittleEndian>(self.owner_guid).unwrap();
+        buf.write_u32::<LittleEndian>(self.cell).unwrap();
+        w_vec3(buf, self.position);
+        buf.write_f32::<LittleEndian>(self.heading).unwrap();
+        buf.write_f32::<LittleEndian>(self.door_progress).unwrap();
+        buf.write_u32::<LittleEndian>(self.serial_number).unwrap();
+        buf.write_u32::<LittleEndian>(self.slots.len() as u32).unwrap();
+        for s in &self.slots {
+            s.write(buf);
+        }
+    }
+}
+
 /// Server → client vehicle game events.
 #[derive(Debug, Clone, PartialEq)]
 pub enum VehicleS2C {
@@ -889,6 +1054,7 @@ pub enum VehicleS2C {
     DeployableState(VehicleDeployableState),
     DeployableFire(VehicleDeployableFire),
     GroundContacts(VehicleGroundContacts),
+    ContainerState(VehicleContainerState),
 }
 
 impl VehicleS2C {
@@ -904,6 +1070,7 @@ impl VehicleS2C {
             Self::DeployableState(_) => s2c::DEPLOYABLE_STATE,
             Self::DeployableFire(_) => s2c::DEPLOYABLE_FIRE,
             Self::GroundContacts(_) => s2c::GROUND_CONTACTS,
+            Self::ContainerState(_) => s2c::CONTAINER_STATE,
         }
     }
 
@@ -920,6 +1087,7 @@ impl VehicleS2C {
                 | s2c::DEPLOYABLE_STATE
                 | s2c::DEPLOYABLE_FIRE
                 | s2c::GROUND_CONTACTS
+                | s2c::CONTAINER_STATE
         )
     }
 
@@ -1141,6 +1309,9 @@ impl VehicleS2C {
                 for c in &gc.contacts {
                     c.write(buf);
                 }
+            }
+            Self::ContainerState(cs) => {
+                cs.write(buf);
             }
         }
     }
@@ -1461,6 +1632,9 @@ impl VehicleS2C {
                         sweep_angle_rad,
                         contacts,
                     })
+                }
+                s2c::CONTAINER_STATE => {
+                    Self::ContainerState(VehicleContainerState::read(&mut r)?)
                 }
                 _ => return None,
             }

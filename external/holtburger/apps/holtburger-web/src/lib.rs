@@ -47414,6 +47414,215 @@ impl SessionHandle {
         crate::vehicle_link::stats_json()
     }
 
+fn build_container_collider_bsp(
+    cell: u32,
+    x: f32,
+    y: f32,
+    z: f32,
+    heading: f32,
+    kind: u32,
+    door_open: bool,
+) -> (u32, holtburger_world::CellPhysicsBsp) {
+    let lb_x = ((cell >> 24) & 0xFF) as f32;
+    let lb_y = ((cell >> 16) & 0xFF) as f32;
+    let landblock_high = cell & 0xFFFF_0000;
+    let origin = holtburger_common::Vector3::new(lb_x * 192.0 + x, lb_y * 192.0 + y, z);
+    let orientation = holtburger_common::Quaternion::from_wire_heading(heading.to_degrees());
+
+    // Internal & external half-dimensions
+    // 10 = IsoContainer20, 11 = IsoContainer40, 12 = IsoContainer40HC
+    let is_40ft = kind == 11 || kind == 12;
+    let is_hc = kind == 12;
+
+    let hw: f32 = 1.176; // half internal width (2.352m / 2)
+    let hl: f32 = if is_40ft { 6.016 } else { 2.949 }; // half internal length (12.032m / 2 or 5.898m / 2)
+    let ext_hw: f32 = 1.219; // half external width (2.438m / 2)
+    let ext_hl: f32 = if is_40ft { 6.096 } else { 3.029 }; // half external length (12.192m / 2 or 6.058m / 2)
+
+    let floor_z: f32 = 0.162;
+    let roof_z: f32 = if is_hc { 2.896 } else { 2.591 };
+
+    let mut polys = std::collections::HashMap::new();
+
+    let make_poly = |verts: Vec<holtburger_common::Vector3>| -> holtburger_dat::physics::ResolvedPolygon {
+        let plane = holtburger_dat::physics::ResolvedPolygon::make_plane(&verts).expect("non-degenerate polygon");
+        holtburger_dat::physics::ResolvedPolygon {
+            num_points: verts.len(),
+            vertices: verts,
+            plane,
+        }
+    };
+
+    // 1. Interior floor (walkable, Normal.Z = 1.0)
+    polys.insert(
+        1u16,
+        make_poly(vec![
+            holtburger_common::Vector3::new(-hw, -hl, floor_z),
+            holtburger_common::Vector3::new(hw, -hl, floor_z),
+            holtburger_common::Vector3::new(hw, hl, floor_z),
+            holtburger_common::Vector3::new(-hw, hl, floor_z),
+        ]),
+    );
+
+    // 2. Exterior roof (walkable, Normal.Z = 1.0)
+    polys.insert(
+        2u16,
+        make_poly(vec![
+            holtburger_common::Vector3::new(-ext_hw, -ext_hl, roof_z),
+            holtburger_common::Vector3::new(ext_hw, -ext_hl, roof_z),
+            holtburger_common::Vector3::new(ext_hw, ext_hl, roof_z),
+            holtburger_common::Vector3::new(-ext_hw, ext_hl, roof_z),
+        ]),
+    );
+
+    // 3. Vertical side wall (-X, blocking, Normal = (+1, 0, 0))
+    polys.insert(
+        3u16,
+        make_poly(vec![
+            holtburger_common::Vector3::new(-hw, -hl, floor_z),
+            holtburger_common::Vector3::new(-hw, hl, floor_z),
+            holtburger_common::Vector3::new(-hw, hl, roof_z),
+            holtburger_common::Vector3::new(-hw, -hl, roof_z),
+        ]),
+    );
+
+    // 4. Vertical side wall (+X, blocking, Normal = (-1, 0, 0))
+    polys.insert(
+        4u16,
+        make_poly(vec![
+            holtburger_common::Vector3::new(hw, hl, floor_z),
+            holtburger_common::Vector3::new(hw, -hl, floor_z),
+            holtburger_common::Vector3::new(hw, -hl, roof_z),
+            holtburger_common::Vector3::new(hw, hl, roof_z),
+        ]),
+    );
+
+    // 5. Front end wall (+Y, blocking, Normal = (0, -1, 0))
+    polys.insert(
+        5u16,
+        make_poly(vec![
+            holtburger_common::Vector3::new(-hw, hl, floor_z),
+            holtburger_common::Vector3::new(hw, hl, floor_z),
+            holtburger_common::Vector3::new(hw, hl, roof_z),
+            holtburger_common::Vector3::new(-hw, hl, roof_z),
+        ]),
+    );
+
+    if door_open {
+        // 6. Fold-down loading ramp at rear (-Y):
+        // Spans from sill at y = -hl, z = floor_z (0.162m) down to ground at y = -hl - 0.825m, z = 0.0m.
+        let ramp_len: f32 = 0.825;
+        let y_sill = -hl;
+        let y_ground = -hl - ramp_len;
+        polys.insert(
+            6u16,
+            make_poly(vec![
+                holtburger_common::Vector3::new(-hw, y_ground, 0.0),
+                holtburger_common::Vector3::new(hw, y_ground, 0.0),
+                holtburger_common::Vector3::new(hw, y_sill, floor_z),
+                holtburger_common::Vector3::new(-hw, y_sill, floor_z),
+            ]),
+        );
+    } else {
+        // 6. Closed rear doors (blocking vertical wall, Normal = (0, 1, 0))
+        polys.insert(
+            6u16,
+            make_poly(vec![
+                holtburger_common::Vector3::new(hw, -hl, floor_z),
+                holtburger_common::Vector3::new(-hw, -hl, floor_z),
+                holtburger_common::Vector3::new(-hw, -hl, roof_z),
+                holtburger_common::Vector3::new(hw, -hl, roof_z),
+            ]),
+        );
+    }
+
+    let mut ids: Vec<u16> = polys.keys().copied().collect();
+    ids.sort_unstable();
+    let tree = holtburger_dat::physics::BspNode::Leaf(holtburger_dat::physics::BspLeaf {
+        index: 0,
+        solid: 0,
+        sphere: None,
+        poly_ids: ids,
+    });
+
+    let bsp = holtburger_world::CellPhysicsBsp {
+        tree,
+        polys,
+        origin,
+        orientation,
+        scale: 1.0,
+    };
+
+    (landblock_high, bsp)
+}
+
+    /// HBV1 Vehicle_ContainerAction (0x090E):
+    /// `container`: target container ObjectId
+    /// `action`: 1=OpenDoors, 2=CloseDoors, 3=Load, 4=Pack, 5=Unpack, 6=UnpackAll
+    /// `slot_index`: 0..MaxSlots-1
+    /// `sub_slot`: 0=Left/Full, 1=Right
+    /// `cargo_wcid`: deployable WCID
+    #[wasm_bindgen(js_name = vehicleContainerAction)]
+    pub fn vehicle_container_action(
+        &self,
+        container: u32,
+        action: u8,
+        slot_index: u8,
+        sub_slot: u8,
+        cargo_wcid: u32,
+    ) -> Result<(), JsValue> {
+        self.vehicle_send(holtburger_protocol::messages::vehicle::VehicleC2S::ContainerAction(
+            holtburger_protocol::messages::vehicle::VehicleContainerAction {
+                container,
+                action,
+                slot_index,
+                sub_slot,
+                reserved: 0,
+                cargo_wcid,
+            },
+        ))
+    }
+
+    /// Upsert dynamic container building collider into WASM physics (w.scene and collision_scene).
+    #[wasm_bindgen(js_name = upsertContainerCollider)]
+    pub fn upsert_container_collider(
+        &self,
+        guid: u32,
+        cell: u32,
+        x: f32,
+        y: f32,
+        z: f32,
+        heading: f32,
+        kind: u32,
+        door_open: bool,
+    ) {
+        let (lb_high, bsp) = Self::build_container_collider_bsp(cell, x, y, z, heading, kind, door_open);
+        self.collision_scene
+            .borrow_mut()
+            .upsert_dynamic_building_bsp(guid, lb_high, bsp.clone());
+        if let Ok(mut guard) = self.world.try_borrow_mut() {
+            if let Some(w) = guard.as_mut() {
+                w.scene.upsert_dynamic_building_bsp(guid, lb_high, bsp);
+            }
+        }
+    }
+
+    /// Remove dynamic container building collider from WASM physics (w.scene and collision_scene).
+    #[wasm_bindgen(js_name = removeContainerCollider)]
+    pub fn remove_container_collider(&self, guid: u32) -> bool {
+        let r1 = self
+            .collision_scene
+            .borrow_mut()
+            .remove_dynamic_building_bsp(guid);
+        let mut r2 = false;
+        if let Ok(mut guard) = self.world.try_borrow_mut() {
+            if let Some(w) = guard.as_mut() {
+                r2 = w.scene.remove_dynamic_building_bsp(guid);
+            }
+        }
+        r1 || r2
+    }
+
     #[wasm_bindgen(js_name = pendingConfirmations)]
     pub fn pending_confirmations(&self) -> JsValue {
         let drained: Vec<PendingConfirmation> =

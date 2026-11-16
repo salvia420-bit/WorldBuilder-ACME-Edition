@@ -145,3 +145,7 @@ mod academy_wedge_tests;
 /// the real portal/cell DATs; DAT-gated; skips when absent.
 #[cfg(test)]
 mod townnetwork_wedge_tests;
+
+/// M1: Dynamic building BSP colliders & walkability tests.
+#[cfg(test)]
+mod dynamic_building_bsp_tests;

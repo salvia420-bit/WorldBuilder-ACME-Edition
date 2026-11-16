@@ -65,6 +65,14 @@ fn c2s_fields(m: &VehicleC2S) -> Value {
             "Reserved1": reserved1,
             "CargoWcid": cargo_wcid,
         }),
+        VehicleC2S::ContainerAction(ca) => json!({
+            "Container": ca.container,
+            "Action": ca.action,
+            "SlotIndex": ca.slot_index,
+            "SubSlot": ca.sub_slot,
+            "Reserved": ca.reserved,
+            "CargoWcid": ca.cargo_wcid,
+        }),
     }
 }
 
@@ -111,6 +119,14 @@ fn c2s_from(opcode: u32, o: &Value) -> VehicleC2S {
             reserved1: o.get("Reserved1").and_then(|v| v.as_u64()).unwrap_or(0) as u16,
             cargo_wcid: o.get("CargoWcid").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
         },
+        c2s::CONTAINER_ACTION => VehicleC2S::ContainerAction(VehicleContainerAction {
+            container: gu(o, "Container"),
+            action: gu(o, "Action") as u8,
+            slot_index: gu(o, "SlotIndex") as u8,
+            sub_slot: gu(o, "SubSlot") as u8,
+            reserved: gu(o, "Reserved") as u8,
+            cargo_wcid: gu(o, "CargoWcid"),
+        }),
         _ => panic!("not a C2S vehicle opcode {opcode:#x}"),
     }
 }
@@ -276,6 +292,28 @@ fn s2c_fields(m: &VehicleS2C) -> Value {
                 "Reserved0": c.reserved0,
                 "Reserved1": c.reserved1,
                 "Reserved2": c.reserved2,
+            })).collect::<Vec<_>>(),
+        }),
+        VehicleS2C::ContainerState(cs) => json!({
+            "ContainerGuid": cs.container_guid,
+            "ContainerKind": cs.container_kind,
+            "DoorState": cs.door_state,
+            "LiveryId": cs.livery_id,
+            "MaxFullSlots": cs.max_full_slots,
+            "Flags": cs.flags,
+            "OwnerGuid": cs.owner_guid,
+            "Cell": cs.cell,
+            "Position": v3(cs.position),
+            "Heading": f(cs.heading),
+            "DoorProgress": f(cs.door_progress),
+            "SerialNumber": cs.serial_number,
+            "SlotCount": cs.slots.len(),
+            "Slots": cs.slots.iter().map(|s| json!({
+                "SlotIndex": s.slot_index,
+                "PalletSize": s.pallet_size,
+                "SubSlot": s.sub_slot,
+                "Reserved": s.reserved,
+                "CargoWcid": s.cargo_wcid,
             })).collect::<Vec<_>>(),
         }),
     }
@@ -528,6 +566,32 @@ fn s2c_from(opcode: u32, o: &Value) -> VehicleS2C {
                     reserved0: gu(c, "Reserved0") as u8,
                     reserved1: gu(c, "Reserved1") as u8,
                     reserved2: gu(c, "Reserved2") as u8,
+                })
+                .collect(),
+        }),
+        s2c::CONTAINER_STATE => VehicleS2C::ContainerState(VehicleContainerState {
+            container_guid: gu(o, "ContainerGuid"),
+            container_kind: gu(o, "ContainerKind"),
+            door_state: gu(o, "DoorState") as u8,
+            livery_id: gu(o, "LiveryId") as u8,
+            max_full_slots: gu(o, "MaxFullSlots") as u8,
+            flags: gu(o, "Flags") as u8,
+            owner_guid: gu(o, "OwnerGuid"),
+            cell: gu(o, "Cell"),
+            position: gv3(o, "Position"),
+            heading: gf(o, "Heading"),
+            door_progress: gf(o, "DoorProgress"),
+            serial_number: gu(o, "SerialNumber"),
+            slots: o["Slots"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|s| ContainerSlotWire {
+                    slot_index: gu(s, "SlotIndex") as u8,
+                    pallet_size: gu(s, "PalletSize") as u8,
+                    sub_slot: gu(s, "SubSlot") as u8,
+                    reserved: gu(s, "Reserved") as u8,
+                    cargo_wcid: gu(s, "CargoWcid"),
                 })
                 .collect(),
         }),

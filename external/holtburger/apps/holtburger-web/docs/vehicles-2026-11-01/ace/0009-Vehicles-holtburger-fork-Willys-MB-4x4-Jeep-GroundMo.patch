@@ -1,7 +1,7 @@
 From 17a11f157c427c2768a95c01f235741520009ac5 Mon Sep 17 00:00:00 2001
 From: salvia420-bit <salvia420@gmail.com>
 Date: Mon, 16 Nov 2026 02:22:00 +0000
-Subject: [PATCH 09/11] Vehicles (holtburger fork): Willys MB 4x4 Jeep,
+Subject: [PATCH 09/12] Vehicles (holtburger fork): Willys MB 4x4 Jeep,
  GroundModel, 4-seat sync, monster ramming combat, and 20mi autonomous
  air-search radar + IFF
 

@@ -225,6 +225,28 @@ pub(crate) fn to_json(msg: &VehicleS2C) -> Value {
                 "flags": c.flags,
             })).collect::<Vec<_>>(),
         }),
+        VehicleS2C::ContainerState(cs) => json!({
+            "type": "container_state",
+            "containerGuid": cs.container_guid,
+            "containerKind": cs.container_kind,
+            "doorState": cs.door_state,
+            "liveryId": cs.livery_id,
+            "maxFullSlots": cs.max_full_slots,
+            "flags": cs.flags,
+            "ownerGuid": cs.owner_guid,
+            "cell": cs.cell,
+            "position": v3(cs.position),
+            "heading": cs.heading as f64,
+            "doorProgress": cs.door_progress as f64,
+            "serialNumber": cs.serial_number,
+            "slots": cs.slots.iter().map(|s| json!({
+                "slotIndex": s.slot_index,
+                "palletSize": s.pallet_size,
+                "subSlot": s.sub_slot,
+                "reserved": s.reserved,
+                "cargoWcid": s.cargo_wcid,
+            })).collect::<Vec<_>>(),
+        }),
     }
 }
 
@@ -375,5 +397,6 @@ pub(crate) fn is_vehicle_event(opcode: u32) -> bool {
             | s2c::DEPLOYABLE_STATE
             | s2c::DEPLOYABLE_FIRE
             | s2c::GROUND_CONTACTS
+            | s2c::CONTAINER_STATE
     )
 }

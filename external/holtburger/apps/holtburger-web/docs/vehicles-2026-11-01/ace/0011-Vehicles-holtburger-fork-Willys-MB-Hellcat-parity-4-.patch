@@ -1,7 +1,7 @@
 From 2c48986083fab2869d01740bc2e59204279a7d95 Mon Sep 17 00:00:00 2001
 From: salvia420-bit <salvia420@gmail.com>
 Date: Mon, 16 Nov 2026 16:52:32 +0000
-Subject: [PATCH 11/11] Vehicles (holtburger fork): Willys MB Hellcat-parity
+Subject: [PATCH 11/12] Vehicles (holtburger fork): Willys MB Hellcat-parity
  4-seat crew overhaul & deployable cargo decoupling
 
 ---

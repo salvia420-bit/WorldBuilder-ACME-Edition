@@ -1,7 +1,7 @@
 From a7926561fcb351886475568e6a666fa3794fde1e Mon Sep 17 00:00:00 2001
 From: salvia420-bit <salvia420@gmail.com>
 Date: Mon, 16 Nov 2026 09:21:36 +0000
-Subject: [PATCH 10/11] Vehicles (holtburger fork): 8-unit modular
+Subject: [PATCH 10/12] Vehicles (holtburger fork): 8-unit modular
  Full/Half-Pallet deployable ecosystem, Flux Pod micro-grids, Dereth solar,
  scarab generator, ground radar & autonomous SAM/Mortar/Laser turrets (HBV1
  v4)

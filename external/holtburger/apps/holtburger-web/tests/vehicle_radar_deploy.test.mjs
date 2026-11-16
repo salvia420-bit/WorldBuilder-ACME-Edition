@@ -132,14 +132,29 @@ try {
       }
     },
 
-    // Deployed Radar 3D Model Constructor (<= 8 draw calls)
+    // Deployed Radar 3D Model Constructor (<= 8 draw calls, mounted atop Full GMA Pallet)
     buildDeployedRadar(three, options = {}) {
-      const liveScene3d = options.liveScene3d || { activeLights: [] };
       const root = new three.Group();
       root.name = "deployed-radar-station";
 
-      const matSteel = new three.MeshBasicMaterial({ color: 0x4a5234 });
-      const matCabinet = new three.MeshBasicMaterial({ color: 0x3b442b });
+      const palletGeom = new three.BoxGeometry(1.2192, 1.0160, 0.1397);
+      const palletMesh = new three.Mesh(palletGeom, new three.MeshStandardMaterial({ color: 0xffffff, vertexColors: false, roughness: 0.68, metalness: 0.16 }));
+      palletMesh.position.set(0, 0, 0.1397 / 2);
+      root.add(palletMesh);
+      const pallet = {
+        root: palletMesh,
+        mesh: palletMesh,
+        spec: { width: 1.2192, depth: 1.0160, height: 0.1397 },
+        size: "full",
+        dispose() { palletGeom.dispose(); palletMesh.material.dispose(); },
+      };
+
+      const isStowed = Boolean(options.stowed);
+      const deckZ = 0.1397;
+      const mastHeight = isStowed ? 1.80 : RADAR_SPECS.mastHeightM;
+
+      const matSteel = new three.MeshStandardMaterial({ color: 0x4a5234, roughness: 0.55, metalness: 0.45 });
+      const matCabinet = new three.MeshStandardMaterial({ color: 0x3b442b, roughness: 0.65, metalness: 0.35 });
       const matCrtGlow = new three.MeshBasicMaterial({
         color: 0x33ff66,
         transparent: true,
@@ -147,49 +162,49 @@ try {
         blending: three.AdditiveBlending,
         depthWrite: false,
       });
-      const matDishWire = new three.MeshBasicMaterial({
+      const matDishWire = new three.MeshStandardMaterial({
         color: 0x7c8567,
         wireframe: true,
-        transparent: true,
-        opacity: 0.8,
+        roughness: 0.40,
+        metalness: 0.60,
       });
 
       // 1. Heavy steel tripod base
-      const tripodGeom = new three.CylinderGeometry(0.1, 1.2, 1.2, 3).toNonIndexed();
+      const tripodGeom = new three.CylinderGeometry(0.06, 0.46, 0.50, 3).toNonIndexed();
       const tripodMesh = new three.Mesh(tripodGeom, matSteel);
       tripodMesh.name = "radar-tripod";
-      tripodMesh.position.set(0, 0, 0.6);
+      tripodMesh.position.set(0, 0, deckZ + 0.25);
       root.add(tripodMesh);
 
-      // 2. 3.1 m antenna mast
-      const mastGeom = new three.CylinderGeometry(0.06, 0.08, RADAR_SPECS.mastHeightM, 8);
+      // 2. Telescoping antenna mast
+      const mastGeom = new three.CylinderGeometry(0.05, 0.07, mastHeight, 8);
       const mastMesh = new three.Mesh(mastGeom, matSteel);
       mastMesh.name = "radar-mast";
-      mastMesh.position.set(0, 0, RADAR_SPECS.mastHeightM / 2);
+      mastMesh.position.set(0, 0, deckZ + mastHeight / 2);
       mastMesh.rotation.x = Math.PI / 2;
       root.add(mastMesh);
 
       // 3. Transceiver generator cabinet
-      const cabinetMesh = new three.Mesh(new three.BoxGeometry(0.9, 0.7, 0.8), matCabinet);
+      const cabinetMesh = new three.Mesh(new three.BoxGeometry(0.60, 0.48, 0.46), matCabinet);
       cabinetMesh.name = "radar-cabinet";
-      cabinetMesh.position.set(0, 0.35, 0.6);
+      cabinetMesh.position.set(0, 0.22, deckZ + 0.23);
       root.add(cabinetMesh);
 
       // 4. CRT phosphor green scope window (matAdditive, ZERO THREE.Light churn)
-      const crtWindow = new three.Mesh(new three.CircleGeometry(0.18, 16), matCrtGlow);
+      const crtWindow = new three.Mesh(new three.CircleGeometry(0.12, 16), matCrtGlow);
       crtWindow.name = "crt-phosphor-scope";
-      crtWindow.position.set(0, 0.71, 0.7);
+      crtWindow.position.set(0, 0.47, deckZ + 0.28);
       root.add(crtWindow);
 
       // 5. Rotating parabolic reflector dish
       const dishPivot = new three.Group();
       dishPivot.name = "dishPivot";
-      dishPivot.position.set(0, 0, RADAR_SPECS.mastHeightM);
+      dishPivot.position.set(0, 0, deckZ + mastHeight);
 
       // Parabolic curvature mesh
-      const dishMesh = new three.Mesh(new three.SphereGeometry(1.2, 16, 8, 0, Math.PI), matDishWire);
+      const dishMesh = new three.Mesh(new three.SphereGeometry(isStowed ? 0.20 : 0.90, 16, 8, 0, Math.PI), matDishWire);
       dishMesh.name = "parabolic-dish-reflector";
-      dishMesh.rotation.x = Math.PI / 2;
+      dishMesh.rotation.x = isStowed ? Math.PI : Math.PI / 2;
       dishPivot.add(dishMesh);
       root.add(dishPivot);
 
@@ -199,16 +214,21 @@ try {
         root,
         dishPivot,
         crtWindow,
+        pallet,
+        palletSize: "full",
         get currentAzimuth() { return currentAzimuth; },
         update(simTimeSec = 0) {
+          if (isStowed) return;
           // 15 RPM deterministic from simTimeSec: (simTimeSec * 15 * 2 * PI / 60) % (2 * PI)
           const omega = (RADAR_SPECS.dishRpm * 2 * Math.PI) / 60.0; // 0.5 * PI rad/s
-          currentAzimuth = (simTimeSec * omega) % (2 * Math.PI);
+          const safeTime = Number.isFinite(simTimeSec) ? simTimeSec : 0;
+          currentAzimuth = (safeTime * omega) % (2 * Math.PI);
           if (currentAzimuth < 0) currentAzimuth += 2 * Math.PI;
           if (Math.abs(currentAzimuth - 2 * Math.PI) < 1e-4) currentAzimuth = 0;
           dishPivot.rotation.z = currentAzimuth;
         },
         dispose() {
+          pallet.dispose();
           root.traverse((obj) => {
             if (obj.geometry) obj.geometry.dispose();
             if (obj.material) obj.material.dispose();
@@ -347,9 +367,11 @@ await check("T1.2 C2S 0x0909 VehicleCargo: Valid On-Foot Pack", () => {
   assert(res.eventKind === 14, "emits CargoPacked event");
 });
 
-await check("T1.3 Deployed Radar 3D Model: Draw Calls Budget (<= 8 draw calls)", () => {
+await check("T1.3 Deployed Radar 3D Model: Draw Calls Budget (<= 8 draw calls) & Full GMA Pallet Integration", () => {
   const radar = RD.buildDeployedRadar(THREE);
   assert(radar && radar.root, "radar root created");
+  assert(radar.pallet, "radar mounted directly atop pallet");
+  assert(radar.palletSize === "full", "radar palletSize is full");
   let drawCalls = 0;
   radar.root.traverse((obj) => {
     if (obj.isMesh || obj.isLine || obj.isPoints) drawCalls++;
@@ -357,6 +379,12 @@ await check("T1.3 Deployed Radar 3D Model: Draw Calls Budget (<= 8 draw calls)",
   assert(drawCalls <= RADAR_SPECS.maxDrawCalls, `draw calls ${drawCalls} <= 8`);
   assert(drawCalls >= 4, `draw calls ${drawCalls} >= 4 (substantive geometry)`);
   radar.dispose();
+
+  const stowed = RD.buildDeployedRadar(THREE, { stowed: true });
+  const box = new THREE.Box3().setFromObject(stowed.root);
+  const stowedH = box.max.z - box.min.z;
+  assert(stowedH <= 2.10, `radar stowed height ${stowedH} <= 2.10m`);
+  stowed.dispose();
 });
 
 await check("T1.4 Deployed Radar: CRT Glow Zero Light Churn", () => {

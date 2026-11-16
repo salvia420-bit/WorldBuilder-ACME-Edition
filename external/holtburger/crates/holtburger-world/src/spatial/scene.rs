@@ -1524,6 +1524,8 @@ pub struct SpatialScene {
     /// gate-off path, so this is a pure additive runtime switch.
     /// PERF (2026-07-23): `Arc` values — see [`Self::cell_physics_bsp`].
     statics_physics_bsp: Arc<HashMap<u32, Vec<Arc<CellPhysicsBsp>>>>,
+    /// Dynamic building physics colliders keyed by object GUID (M1: ISO containers).
+    dynamic_building_bsps: Arc<HashMap<u32, (u32, Arc<CellPhysicsBsp>, Vec<u32>)>>,
     /// DAT-01 phase 2a (2026-07-27): per-landblock BAKED PROCEDURAL SCENERY
     /// colliders — the trees/rocks/bushes `holtburger-scenery-bake` writes to
     /// `dist/scenery/*.jsonl`, which had NO collision representation at all
@@ -2019,6 +2021,7 @@ impl SpatialScene {
             setup_collision_shapes: Arc::new(HashMap::new()),
             statics_aabb_index: Arc::new(HashMap::new()),
             statics_physics_bsp: Arc::new(HashMap::new()),
+            dynamic_building_bsps: Arc::new(HashMap::new()),
             scenery_colliders: Arc::new(HashMap::new()),
             scenery_narrow_hits: DiagCounter::new(0),
             exit_bfs_overflows: DiagCounter::new(0),
@@ -3577,6 +3580,14 @@ impl SpatialScene {
             .unwrap_or(&[])
     }
 
+    /// Static physics BSPs registered for `landblock_high`.
+    pub fn statics_physics_bsp(&self, landblock_high: u32) -> &[Arc<CellPhysicsBsp>] {
+        self.statics_physics_bsp
+            .get(&landblock_high)
+            .map(|v| v.as_slice())
+            .unwrap_or(&[])
+    }
+
     /// Phase C: total registered per-cell static physics-BSP count. Diagnostic.
     pub fn cell_static_physics_bsp_count(&self) -> usize {
         self.cell_static_physics_bsp.values().map(|v| v.len()).sum()
@@ -4900,6 +4911,93 @@ impl SpatialScene {
             .push(bsp);
     }
 
+    /// Upsert a dynamic building physics collider (M1: ISO shipping containers).
+    /// If `guid` already exists, its previous BSP is removed before inserting the new BSP.
+    /// The BSP is registered in `building_bsps`, `statics_physics_bsp`, and computed
+    /// overlapping outdoor cells in `cell_static_physics_bsp` (even if terrain is not resident,
+    /// ensuring unit tests work).
+    pub fn upsert_dynamic_building_bsp(
+        &mut self,
+        guid: u32,
+        landblock_high: u32,
+        bsp: CellPhysicsBsp,
+    ) {
+        if self.dynamic_building_bsps.contains_key(&guid) {
+            self.remove_dynamic_building_bsp(guid);
+        }
+        self.bump_collision_rev();
+        let bsp = Arc::new(bsp);
+        let ptr_key = Arc::as_ptr(&bsp) as usize;
+        Arc::make_mut(&mut self.building_bsps).insert(ptr_key, Arc::downgrade(&bsp));
+        Arc::make_mut(&mut self.statics_physics_bsp)
+            .entry(landblock_high)
+            .or_default()
+            .push(bsp.clone());
+
+        let aabb = bsp.world_aabb();
+        let mut cell_ids = Vec::new();
+        if !aabb.is_empty() {
+            let min_gx = ((aabb.min.x / CELL_SIZE).floor() as i32).clamp(0, 2039);
+            let max_gx = ((aabb.max.x / CELL_SIZE).floor() as i32).clamp(0, 2039);
+            let min_gy = ((aabb.min.y / CELL_SIZE).floor() as i32).clamp(0, 2039);
+            let max_gy = ((aabb.max.y / CELL_SIZE).floor() as i32).clamp(0, 2039);
+
+            let mut gx = min_gx;
+            while gx <= max_gx {
+                let mut gy = min_gy;
+                while gy <= max_gy {
+                    let cell_id = lcoord_to_cellid(gx, gy);
+                    Arc::make_mut(&mut self.cell_static_physics_bsp)
+                        .entry(cell_id)
+                        .or_default()
+                        .push(bsp.clone());
+                    cell_ids.push(cell_id);
+                    gy += 1;
+                }
+                gx += 1;
+            }
+        }
+        if cell_ids.is_empty() {
+            let cell_id = landblock_high | 1;
+            Arc::make_mut(&mut self.cell_static_physics_bsp)
+                .entry(cell_id)
+                .or_default()
+                .push(bsp.clone());
+            cell_ids.push(cell_id);
+        }
+
+        Arc::make_mut(&mut self.dynamic_building_bsps).insert(guid, (landblock_high, bsp, cell_ids));
+    }
+
+    /// Remove a dynamic building physics collider by GUID.
+    /// Cleans up from `dynamic_building_bsps`, `building_bsps`, `statics_physics_bsp`,
+    /// and `cell_static_physics_bsp`, then calls `bump_collision_rev()`.
+    /// Returns `true` if the collider was present, `false` otherwise.
+    pub fn remove_dynamic_building_bsp(&mut self, guid: u32) -> bool {
+        let Some((lb_high, bsp, cell_ids)) =
+            Arc::make_mut(&mut self.dynamic_building_bsps).remove(&guid)
+        else {
+            return false;
+        };
+        self.bump_collision_rev();
+        let ptr_key = Arc::as_ptr(&bsp) as usize;
+        Arc::make_mut(&mut self.building_bsps).remove(&ptr_key);
+        if let Some(list) = Arc::make_mut(&mut self.statics_physics_bsp).get_mut(&lb_high) {
+            list.retain(|item| !Arc::ptr_eq(item, &bsp));
+        }
+        for cell_id in cell_ids {
+            if let Some(list) = Arc::make_mut(&mut self.cell_static_physics_bsp).get_mut(&cell_id) {
+                list.retain(|item| !Arc::ptr_eq(item, &bsp));
+            }
+        }
+        true
+    }
+
+    /// Number of active dynamic building colliders in the scene.
+    pub fn dynamic_building_bsp_count(&self) -> usize {
+        self.dynamic_building_bsps.len()
+    }
+
     /// Objects in the transition: register a SetupModel's collision
     /// primitives (setup-local, unscaled). Idempotent; replaces.
     pub fn register_setup_collision_shapes(
@@ -4937,6 +5035,9 @@ impl SpatialScene {
             None => 0,
         };
         self.prune_building_bsps();
+        if self.dynamic_building_bsps.values().any(|(lb, _, _)| *lb == landblock_high) {
+            Arc::make_mut(&mut self.dynamic_building_bsps).retain(|_, (lb, _, _)| *lb != landblock_high);
+        }
         removed
     }
 

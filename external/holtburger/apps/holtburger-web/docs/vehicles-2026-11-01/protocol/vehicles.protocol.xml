@@ -54,7 +54,7 @@
   COMPASS angle (0 = north/+y, pi/2 = east/+x, clockwise); pitch is nose-up positive; bank is right-wing-down
   positive. Stick values are signed bytes scaled by 1/127 (-128 clamps to -1). Throttle is u8 scaled by 1/255.
 -->
-<schema text="holtburger vehicles (HBV1) — additive, capability-gated vehicle messages" version="4">
+<schema text="holtburger vehicles (HBV1) — additive, capability-gated vehicle messages" version="5">
   <enums>
     <enum name="VehicleCapability" parent="uint" mask="true" text="ClientCapabilities.Flags / CapabilitiesAck.Granted">
       <value value="0x00000001" name="Observe" text="receive VehicleProfile / VehicleSeat / VehicleState / VehicleFire / VehicleEvent" />
@@ -171,11 +171,14 @@
       <value value="7" name="GroundRadar" text="600m 30 RPM surface surveillance radar (WCID 4000015)" />
       <value value="8" name="MortarTurret" text="Ground mortar lobber 50/50 lead 2 bounces (WCID 4000016)" />
       <value value="9" name="HeavyLaserTurret" text="Direct-energy hitscan red laser 850m LOS 120 kJ (WCID 4000017)" />
+      <value value="10" name="IsoContainer20" text="ISO 20ft Standard 1CC/22G1 intermodal container (WCID 4000020)" />
+      <value value="11" name="IsoContainer40" text="ISO 40ft Standard 1AA/42G1 intermodal container (WCID 4000021)" />
+      <value value="12" name="IsoContainer40HC" text="ISO 40ft High Cube 1AAA/45G1 intermodal container (WCID 4000022)" />
     </enum>
     <enum name="PalletSize" parent="byte">
       <value value="0" name="None" />
-      <value value="1" name="Half" text="1.20m x 2.40m (1 cargo slot)" />
-      <value value="2" name="Full" text="2.40m x 2.40m (2 cargo slots)" />
+      <value value="1" name="Half" text="Half = 0.6096m x 1.0160m [24x40 in] (1 cargo slot)" />
+      <value value="2" name="Full" text="Full = 1.2192m x 1.0160m [48x40 in] (2 cargo slots)" />
     </enum>
     <enum name="DeployableWeaponKind" parent="uint">
       <value value="0" name="None" />
@@ -260,6 +263,13 @@
       <field type="byte" name="Reserved1" />
       <field type="byte" name="Reserved2" />
     </type>
+    <type name="ContainerSlotWire" text="8 bytes packed container cargo slot manifest record">
+      <field type="byte" name="SlotIndex" />
+      <field type="PalletSize" name="PalletSize" />
+      <field type="byte" name="SubSlot" />
+      <field type="byte" name="Reserved" />
+      <field type="ObjectId" name="CargoWcid" />
+    </type>
   </types>
   <gameactions>
     <type name="Vehicle_ClientCapabilities" queue="Weenie" type="0x0900" text="A capable client announces itself after entering the world (once per login)">
@@ -291,6 +301,15 @@
       <field type="byte" name="Reserved0" since="4" default="0" />
       <field type="ushort" name="Reserved1" since="4" default="0" />
       <field type="ObjectId" name="CargoWcid" since="4" default="0" text="Target deployable WCID" />
+    </type>
+    <type name="Vehicle_ContainerAction" queue="Weenie" type="0x090E" text="Client container action request (1=OpenDoors, 2=CloseDoors, 3=Load, 4=Pack, 5=Unpack, 6=UnpackAll)">
+      <field type="VehicleHeader" name="Header" />
+      <field type="ObjectId" name="Container" />
+      <field type="byte" name="Action" />
+      <field type="byte" name="SlotIndex" />
+      <field type="byte" name="SubSlot" />
+      <field type="byte" name="Reserved" />
+      <field type="ObjectId" name="CargoWcid" />
     </type>
   </gameactions>
   <gameevents>
@@ -471,6 +490,23 @@
       <field type="float" name="SweepAngleRad" text="Current beam sweep angle" />
       <field type="uint" name="ContactCount" />
       <vector name="Contacts" length="ContactCount" type="GroundContactWire" />
+    </type>
+    <type name="Vehicle_ContainerState" queue="UIQueue" type="0x090E" text="Authoritative container telemetry broadcast">
+      <field type="VehicleHeader" name="Header" />
+      <field type="ObjectId" name="ContainerGuid" />
+      <field type="DeployableKind" name="ContainerKind" />
+      <field type="byte" name="DoorState" text="0=Closed, 1=Opening, 2=Open, 3=Closing" />
+      <field type="byte" name="LiveryId" />
+      <field type="byte" name="MaxFullSlots" text="10 for 20ft, 21 for 40ft/HC" />
+      <field type="byte" name="Flags" />
+      <field type="ObjectId" name="OwnerGuid" />
+      <field type="LandcellId" name="Cell" />
+      <field type="Vector3" name="Position" text="landblock-local" />
+      <field type="float" name="Heading" />
+      <field type="float" name="DoorProgress" text="0.0 to 1.0" />
+      <field type="uint" name="SerialNumber" text="ISO 6346 6-digit serial" />
+      <field type="uint" name="SlotCount" />
+      <vector name="Slots" length="SlotCount" type="ContainerSlotWire" />
     </type>
   </gameevents>
 </schema>

@@ -1,30 +1,33 @@
 // scene3d/vehicle/deployable_models.js — 8-Unit Modular Full/Half Pallet Deployable 3D Procedural Models
-// Conforms to HBV1 v4 wire protocol, PROJECT.md, and strict GPU invariants (lightCountDelta === 0, draw calls <= 10).
-// Built in AC Z-up coordinates (+x east/right, +y north/forward, +z up) with baked directional vertex shading.
+// Conforms to HBV1 v5 wire protocol, ANSI MH1 / ISO 6780 North American GMA pallets,
+// AGX HDR PBR MeshStandardMaterial with 3-cascade CSM PCF shadow reception,
+// and strict GPU invariants (lightCountDelta === 0, draw calls <= 10).
+// Built in AC Z-up coordinates (+x east/right, +y north/forward, +z up).
 
 import * as THREE_DEFAULT from "three";
+import { installCsmShaderPatch } from "../materials.js";
 
 export const PALLET_SPECS = Object.freeze({
   full: Object.freeze({
-    width: 2.40,
-    depth: 2.40,
-    height: 0.15,
+    width: 1.2192,
+    depth: 1.0160,
+    height: 0.1397,
     slots: 2,
-    bboxMin: Object.freeze([-1.20, -1.20, 0.0]),
-    bboxMax: Object.freeze([1.20, 1.20, 0.15]),
+    bboxMin: Object.freeze([-0.6096, -0.5080, 0.0]),
+    bboxMax: Object.freeze([0.6096, 0.5080, 0.1397]),
   }),
   half: Object.freeze({
-    width: 1.20,
-    depth: 2.40,
-    height: 0.15,
+    width: 0.6096,
+    depth: 1.0160,
+    height: 0.1397,
     slots: 1,
-    bboxMin: Object.freeze([-0.60, -1.20, 0.0]),
-    bboxMax: Object.freeze([0.60, 1.20, 0.15]),
+    bboxMin: Object.freeze([-0.3048, -0.5080, 0.0]),
+    bboxMax: Object.freeze([0.3048, 0.5080, 0.1397]),
   }),
   mountOffsets: Object.freeze({
     fullBed: Object.freeze([0.0, -1.15, 0.72]),
-    halfSlot0: Object.freeze([-0.60, -1.15, 0.72]),
-    halfSlot1: Object.freeze([0.60, -1.15, 0.72]),
+    halfSlot0: Object.freeze([-0.3048, -1.15, 0.72]),
+    halfSlot1: Object.freeze([0.3048, -1.15, 0.72]),
   }),
 });
 
@@ -61,10 +64,8 @@ export const GRID_SPECS = Object.freeze({
 });
 
 // ---------------------------------------------------------------------------
-// Vertex-Colored Z-Up Geometry Helpers (Zero Lights, Crisp 3D Facet Shading)
+// Linear Vertex-Colored Z-Up Geometry Helpers (PBR Ready, Direct Linear Albedo)
 // ---------------------------------------------------------------------------
-const SUN_DIR = [0.44, -0.52, 0.73]; // Normalized AC Z-up sun vector for baked facet contrast
-
 function shadePart(t, rawGeom, hexColor, { rx = 0, ry = 0, rz = 0, tx = 0, ty = 0, tz = 0 } = {}) {
   const g = rawGeom.index ? rawGeom.toNonIndexed() : rawGeom.clone();
   rawGeom.dispose();
@@ -74,26 +75,19 @@ function shadePart(t, rawGeom, hexColor, { rx = 0, ry = 0, rz = 0, tx = 0, ty = 
   if (tx || ty || tz) g.translate(tx, ty, tz);
   g.computeVertexNormals();
 
-  // Keep only position + normal + color so mergeGeometries always succeeds
+  // Keep only position + normal so mergeGeometries always succeeds
   for (const name of Object.keys(g.attributes)) {
     if (name !== "position" && name !== "normal") g.deleteAttribute(name);
   }
 
   const pos = g.getAttribute("position");
-  const nrm = g.getAttribute("normal");
   const col = new Float32Array(pos.count * 3);
   const base = new t.Color(hexColor);
 
   for (let i = 0; i < pos.count; i++) {
-    const nx = nrm ? nrm.getX(i) : 0;
-    const ny = nrm ? nrm.getY(i) : 0;
-    const nz = nrm ? nrm.getZ(i) : 1;
-    const ndotl = Math.max(0, nx * SUN_DIR[0] + ny * SUN_DIR[1] + nz * SUN_DIR[2]);
-    const upBias = 0.5 + 0.5 * nz;
-    const shade = 0.46 + 0.44 * ndotl + 0.14 * upBias;
-    col[i * 3 + 0] = Math.min(1, base.r * shade);
-    col[i * 3 + 1] = Math.min(1, base.g * shade);
-    col[i * 3 + 2] = Math.min(1, base.b * shade);
+    col[i * 3 + 0] = base.r;
+    col[i * 3 + 1] = base.g;
+    col[i * 3 + 2] = base.b;
   }
   g.setAttribute("color", new t.BufferAttribute(col, 3));
   return g;
@@ -157,10 +151,12 @@ function zBox(t, dx, dy, dz, hex, x = 0, y = 0, z = 0, rot = {}) {
 }
 
 // ---------------------------------------------------------------------------
-// Industrial Full Pallet (2.40 x 2.40 x 0.15m) & Half Pallet (1.20 x 2.40 x 0.15m)
-// Merged into a single 1-draw-call BufferGeometry with exact outer bounding box!
+// ANSI MH1 / ISO 6780 North American GMA Pallets:
+// Full Pallet (48 × 40 × 5.5 in = 1.2192 × 1.0160 × 0.1397 m)
+// Half Pallet (24 × 40 × 5.5 in = 0.6096 × 1.0160 × 0.1397 m)
+// 4-way notched hardwood stringers, 7 top / 5 bottom deckboards, merged into 1 BufferGeometry (1 draw call).
 // ---------------------------------------------------------------------------
-export function buildPallet(three, size = "full") {
+export function buildPallet(three, size = "full", options = {}) {
   const t = three || THREE_DEFAULT;
   const spec = size === "half" ? PALLET_SPECS.half : PALLET_SPECS.full;
   const root = new t.Group();
@@ -168,51 +164,95 @@ export function buildPallet(three, size = "full") {
 
   const W = spec.width;
   const D = spec.depth;
-  const H = spec.height; // 0.15m, local z in [-H/2, +H/2] because mesh sits at z = H/2
+  const H = spec.height;
   const halfW = W / 2;
   const halfD = D / 2;
   const halfH = H / 2;
 
   const parts = [];
-  // 1. Three bottom steel runner skids (flush with z = -halfH and y = ±halfD)
-  const skidW = size === "half" ? 0.12 : 0.16;
-  const skidPositionsX = size === "half"
-    ? [-halfW + skidW / 2, 0, halfW - skidW / 2]
-    : [-halfW + skidW / 2, 0, halfW - skidW / 2];
-  for (const sx of skidPositionsX) {
-    parts.push(zBox(t, skidW, D, 0.028, 0x34383d, sx, 0, -halfH + 0.014));
+  const tDeck = 0.015; // Deckboard thickness (approx 0.59")
+  const topZ = halfH - tDeck / 2;
+  const botZ = -halfH + tDeck / 2;
+
+  // 1. Top Deckboards (7 boards: 2 lead boards 5.5" [0.1397m] wide + 5 interior boards 3.5" [0.0889m] wide)
+  const topBoards = [
+    { y: -0.43815, w: 0.1397, col: 0x785e42 }, // South lead board (edge at -halfD = -0.5080)
+    { y: -0.2752,  w: 0.0889, col: 0x6e5238 },
+    { y: -0.1376,  w: 0.0889, col: 0x83674b },
+    { y:  0.0000,  w: 0.0889, col: 0x73573c }, // Center deckboard
+    { y:  0.1376,  w: 0.0889, col: 0x816549 },
+    { y:  0.2752,  w: 0.0889, col: 0x6e5238 },
+    { y:  0.43815, w: 0.1397, col: 0x785e42 }, // North lead board (edge at +halfD = +0.5080)
+  ];
+  for (const b of topBoards) {
+    parts.push(zBox(t, W, b.w, tDeck, b.col, 0, b.y, topZ));
   }
 
-  // 2. Longitudinal steel stringer blocks (leaving 2 forklift pocket gaps along Y!)
-  const blockY = [-halfD + 0.22, 0, halfD - 0.22];
-  for (const sx of skidPositionsX) {
-    for (const by of blockY) {
-      parts.push(zBox(t, skidW, 0.44, 0.084, 0x454b52, sx, by, -halfH + 0.028 + 0.042));
+  // 2. Bottom Deckboards (5 boards: 2 end boards 5.5" [0.1397m] wide + 3 interior boards 3.5" [0.0889m] wide)
+  const botBoards = [
+    { y: -0.43815, w: 0.1397, col: 0x654e36 }, // South end board
+    { y: -0.2752,  w: 0.0889, col: 0x5d4732 },
+    { y:  0.0000,  w: 0.0889, col: 0x654e36 }, // Center board
+    { y:  0.2752,  w: 0.0889, col: 0x5d4732 },
+    { y:  0.43815, w: 0.1397, col: 0x654e36 }, // North end board
+  ];
+  for (const b of botBoards) {
+    parts.push(zBox(t, W, b.w, tDeck, b.col, 0, b.y, botZ));
+  }
+
+  // 3. 4-Way Notched Hardwood Stringers
+  // Stringers run along X. Full: 3 stringers at y = [-0.4858, 0, +0.4858]. Half: 2 stringers at y = [-0.4858, +0.4858].
+  const stringerW = 0.0445; // 1.75" width along Y
+  const stringerH = H - 2 * tDeck; // 0.1097m
+  const notchH = 0.0381; // 1.5" notch depth
+  const beamH = stringerH - notchH; // 0.0716m top continuous beam
+  const beamZ = halfH - tDeck - beamH / 2; // 0.01905m
+  const footZ = -halfH + tDeck + notchH / 2; // -0.0358m
+
+  const stringerY = size === "half" ? [-0.48575, 0.48575] : [-0.48575, 0.0, 0.48575];
+
+  for (const sy of stringerY) {
+    // Top continuous stringer beam across full pallet width W
+    parts.push(zBox(t, W, stringerW, beamH, 0x54402d, 0, sy, beamZ));
+
+    if (size === "full") {
+      // Dual 9" × 1.5" (0.2286 × 0.0381 m) forklift notches centered at x = ±0.3048 m
+      // Leaving 3 bottom foot blocks: outer feet (0.1905m) and center foot (0.3810m)
+      const footOuterLen = 0.1905;
+      const footCenterLen = 0.3810;
+      parts.push(zBox(t, footOuterLen, stringerW, notchH, 0x4a3726, -halfW + footOuterLen / 2, sy, footZ));
+      parts.push(zBox(t, footCenterLen, stringerW, notchH, 0x4a3726, 0.0, sy, footZ));
+      parts.push(zBox(t, footOuterLen, stringerW, notchH, 0x4a3726, halfW - footOuterLen / 2, sy, footZ));
+    } else {
+      // Half Pallet (0.6096m wide): single 9" central notch centered at x = 0
+      const footHalfLen = 0.1905;
+      parts.push(zBox(t, footHalfLen, stringerW, notchH, 0x4a3726, -halfW + footHalfLen / 2, sy, footZ));
+      parts.push(zBox(t, footHalfLen, stringerW, notchH, 0x4a3726, halfW - footHalfLen / 2, sy, footZ));
     }
   }
 
-  // 3. Seven treated hardwood slatted deck planks across Y (outer planks flush with ±halfW, ±halfD, +halfH)
-  const nPlanks = 7;
-  const plankDepth = 0.27;
-  for (let i = 0; i < nPlanks; i++) {
-    const py = -halfD + plankDepth / 2 + (i / (nPlanks - 1)) * (D - plankDepth);
-    const woodTone = i % 2 === 0 ? 0x6b533b : 0x5d4732;
-    parts.push(zBox(t, W, plankDepth, 0.038, woodTone, 0, py, halfH - 0.019));
-  }
-
-  // 4. Steel perimeter rub-rail corners (inset 1mm so exact bbox stays W x D x H)
-  const cW = 0.14;
-  for (const cx of [-halfW + cW / 2, halfW - cW / 2]) {
-    for (const cy of [-halfD + cW / 2, halfD - cW / 2]) {
-      parts.push(zBox(t, cW, cW, H * 0.96, 0xd4881c, cx, cy, 0));
-    }
-  }
+  // 4. Stencil ISPM-15 HT Heat Treatment Mark on Center/Side Stringer
+  const htY = size === "full" ? -stringerW / 2 - 0.001 : -0.48575 + stringerW / 2 + 0.001;
+  parts.push(zBox(t, 0.09, 0.002, 0.035, 0x221810, 0.0, htY, beamZ));
 
   const geom = mergeParts(t, parts);
-  const mat = new t.MeshBasicMaterial({ vertexColors: true });
+  const mat = new t.MeshStandardMaterial({
+    color: 0xffffff,
+    vertexColors: true,
+    roughness: 0.68,
+    metalness: 0.16,
+  });
+  mat.castShadow = true;
+  mat.receiveShadow = true;
+  if (options.csmState) {
+    installCsmShaderPatch(mat, options.csmState);
+  }
+
   const mesh = new t.Mesh(geom, mat);
   mesh.name = `pallet-${size}-deck`;
   mesh.position.set(0, 0, spec.height / 2);
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
   root.add(mesh);
 
   return {
@@ -221,7 +261,8 @@ export function buildPallet(three, size = "full") {
     spec,
     size,
     alignToNormal(normal) {
-      if (!normal || normal.lengthSq() < 1e-6) return;
+      const lenSq = normal?.lengthSq?.();
+      if (!Number.isFinite(lenSq) || lenSq < 1e-6) return;
       const up = new t.Vector3(0, 0, 1);
       const n = normal.clone().normalize();
       const q = new t.Quaternion().setFromUnitVectors(up, n);
@@ -236,108 +277,122 @@ export function buildPallet(three, size = "full") {
 
 // ---------------------------------------------------------------------------
 // 1) Flux Pod (WCID 4000010, Full Pallet)
-//    - Square concrete base atop pallet
+//    - Concrete pad <= 1.18 × 0.98 m atop Full GMA Pallet
 //    - Squarish structure with 4 concrete corner pillars & plasma-yellow behind glass
-//    - Gray square roof deck abutted by bright orange 4-sided overhang
-//    - Flashing lights on all 4 sides of the overhang
-//    - Strange asymmetric antennas jutting out from 3 corners of the overhang
-//    - Dark-orange Incan stepped pyramidal "cone" at center of the gray square
+//    - Orange 4-sided overhang cornice (<= 1.18 × 0.98 m) abutting gray roof deck
+//    - Flashing beacon lights on all 4 sides of the overhang
+//    - 3 corner asymmetric antennas fold downward flush when stowed (H_stowed <= 2.14 m)
+//    - Dark-orange Incan stepped pyramidal capstone atop central deck
 // ---------------------------------------------------------------------------
 export function buildFluxPod(three, options = {}) {
   const t = three || THREE_DEFAULT;
   const root = new t.Group();
   root.name = "flux-pod-root";
-  const pallet = buildPallet(t, "full");
+  const pallet = buildPallet(t, "full", options);
   root.add(pallet.root);
 
   const staticParts = [];
+  const isStowed = Boolean(options.stowed);
 
-  // A. Square concrete base on top of the pallet (stepped chamfered concrete pad)
-  staticParts.push(zBox(t, 2.24, 2.24, 0.22, 0x7c807a, 0, 0, 0.26));
-  staticParts.push(zBox(t, 1.98, 1.98, 0.10, 0x8a8e88, 0, 0, 0.42));
+  // A. Concrete base atop Full GMA Pallet (pad <= 1.18 × 0.98 m, pallet deck at z = 0.1397 m)
+  staticParts.push(zBox(t, 1.16, 0.96, 0.12, 0x7c807a, 0, 0, 0.20));
+  staticParts.push(zBox(t, 1.04, 0.86, 0.08, 0x8a8e88, 0, 0, 0.30));
 
-  // B. 4 Concrete corner columns framing the squarish core structure under the overhang
-  for (const cx of [-0.76, 0.76]) {
-    for (const cy of [-0.76, 0.76]) {
-      staticParts.push(zBox(t, 0.30, 0.30, 1.44, 0x868a84, cx, cy, 1.19));
-      // Concrete column base & capital collars
-      staticParts.push(zBox(t, 0.36, 0.36, 0.10, 0x6e726c, cx, cy, 0.52));
-      staticParts.push(zBox(t, 0.36, 0.36, 0.10, 0x6e726c, cx, cy, 1.86));
+  // B. 4 Concrete corner columns framing core structure
+  const colCX = [-0.36, 0.36];
+  const colCY = [-0.34, 0.34];
+  for (const cx of colCX) {
+    for (const cy of colCY) {
+      staticParts.push(zBox(t, 0.16, 0.16, 0.82, 0x868a84, cx, cy, 0.73));
+      staticParts.push(zBox(t, 0.20, 0.20, 0.06, 0x6e726c, cx, cy, 0.35)); // Base collar
+      staticParts.push(zBox(t, 0.20, 0.20, 0.06, 0x6e726c, cx, cy, 1.11)); // Capital collar
     }
   }
-  // Dark window mullions framing the glass & plasma yellow on all 4 faces
-  for (const side of [-0.78, 0.78]) {
-    staticParts.push(zBox(t, 1.24, 0.05, 0.06, 0x35393c, 0, side, 1.19));
-    staticParts.push(zBox(t, 0.05, 1.24, 0.06, 0x35393c, side, 0, 1.19));
+  // Dark window mullions framing the glass
+  for (const side of [-0.35, 0.35]) {
+    staticParts.push(zBox(t, 0.64, 0.03, 0.04, 0x35393c, 0, side, 0.73));
+    staticParts.push(zBox(t, 0.03, 0.60, 0.04, 0x35393c, side, 0, 0.73));
   }
 
-  // C. Bright orange 4-sided overhang abutting the central gray square deck
-  //    4 outer overhang beams forming a crisp 2.38m bright-orange perimeter cornice around the 1.66m gray square!
-  const ohZ = 2.02;
-  const ohH = 0.20;
-  staticParts.push(zBox(t, 2.38, 0.38, ohH, 0xff6a00, 0, 1.00, ohZ));  // North overhang
-  staticParts.push(zBox(t, 2.38, 0.38, ohH, 0xff6a00, 0, -1.00, ohZ)); // South overhang
-  staticParts.push(zBox(t, 0.38, 1.62, ohH, 0xff6a00, 1.00, 0, ohZ));  // East overhang
-  staticParts.push(zBox(t, 0.38, 1.62, ohH, 0xff6a00, -1.00, 0, ohZ)); // West overhang
+  // C. Bright orange 4-sided overhang cornice (outer bounds: 1.16 × 0.96 m <= 1.18 × 0.98 m)
+  const ohZ = 1.18;
+  const ohH = 0.14;
+  staticParts.push(zBox(t, 1.16, 0.20, ohH, 0xff6a00, 0, 0.38, ohZ));  // North overhang
+  staticParts.push(zBox(t, 1.16, 0.20, ohH, 0xff6a00, 0, -0.38, ohZ)); // South overhang
+  staticParts.push(zBox(t, 0.20, 0.56, ohH, 0xff6a00, 0.48, 0, ohZ));  // East overhang
+  staticParts.push(zBox(t, 0.20, 0.56, ohH, 0xff6a00, -0.48, 0, ohZ)); // West overhang
 
-  // Central gray square roof deck abutted on all 4 sides by the bright orange overhang
-  staticParts.push(zBox(t, 1.66, 1.66, 0.22, 0x6c737a, 0, 0, 2.05));
-  staticParts.push(zBox(t, 1.42, 1.42, 0.06, 0x7c848c, 0, 0, 2.19));
+  // Central gray roof deck abutted by the bright orange overhang
+  staticParts.push(zBox(t, 0.76, 0.56, 0.14, 0x6c737a, 0, 0, 1.20));
+  staticParts.push(zBox(t, 0.66, 0.48, 0.04, 0x7c848c, 0, 0, 1.29));
 
-  // D. Strange asymmetric antennas jutting out from 3 corners of the overhang (NE, NW, SE; SW bare!)
+  // D. Corner antennas:
+  // In deployed state: 3 asymmetric corner antennas jut out obliquely (total height ~2.05 m <= 2.14 m)
+  // In stowed state (options.stowed): antennas fold downward flush along corner columns (H_stowed <= 2.14 m)
   const antennaCorners = [
-    { x: 1.08, y: 1.08, rx: -0.52, ry: 0.52, rz: 0.3 },   // NE corner
-    { x: -1.08, y: 1.08, rx: -0.56, ry: -0.48, rz: -0.2 }, // NW corner
-    { x: 1.08, y: -1.08, rx: 0.54, ry: 0.50, rz: 0.6 },   // SE corner
+    { x: 0.50, y: 0.40, dirX: 1, dirY: 1 },   // NE corner
+    { x: -0.50, y: 0.40, dirX: -1, dirY: 1 }, // NW corner
+    { x: 0.50, y: -0.40, dirX: 1, dirY: -1 }, // SE corner
   ];
   for (let ai = 0; ai < antennaCorners.length; ai++) {
     const c = antennaCorners[ai];
-    const dirX = Math.sign(c.x);
-    const dirY = Math.sign(c.y);
     // Corner mount bracket
-    staticParts.push(zBox(t, 0.18, 0.18, 0.14, 0x3b4046, c.x, c.y, 2.14));
-    // Jutting main oblique boom
-    staticParts.push(zBox(t, 0.045, 0.045, 0.92, 0x9aa4ad, c.x + dirX * 0.28, c.y + dirY * 0.28, 2.48, {
-      rx: -dirY * 0.58,
-      ry: dirX * 0.58,
-    }));
-    // Strange tuning forks / cross-dipoles / arcane induction rings along the boom
-    staticParts.push(zBox(t, 0.42, 0.03, 0.03, 0xd89b28, c.x + dirX * 0.36, c.y + dirY * 0.36, 2.58, {
-      rz: ai * 0.7 + 0.78,
-    }));
-    staticParts.push(zBox(t, 0.28, 0.025, 0.025, 0xc0cad4, c.x + dirX * 0.48, c.y + dirY * 0.48, 2.74, {
-      rz: -ai * 0.5 + 0.4,
-    }));
-    staticParts.push(zCyl(t, 0.06, 0.02, 0.16, 6, 0xff6a00, c.x + dirX * 0.54, c.y + dirY * 0.54, 2.84));
+    staticParts.push(zBox(t, 0.10, 0.10, 0.10, 0x3b4046, c.x, c.y, 1.25));
+
+    if (isStowed) {
+      // Fold downward flush along the corner column when stowed (stays below z = 1.30 m)
+      staticParts.push(zBox(t, 0.03, 0.03, 0.55, 0x9aa4ad, c.x, c.y, 0.95));
+      staticParts.push(zBox(t, 0.12, 0.02, 0.02, 0xd89b28, c.x, c.y, 0.85));
+    } else {
+      // Deployed: oblique jutting booms with tuning forks (total height ~2.05 m)
+      staticParts.push(zBox(t, 0.035, 0.035, 0.60, 0x9aa4ad, c.x + c.dirX * 0.14, c.y + c.dirY * 0.14, 1.50, {
+        rx: -c.dirY * 0.45,
+        ry: c.dirX * 0.45,
+      }));
+      staticParts.push(zBox(t, 0.24, 0.02, 0.02, 0xd89b28, c.x + c.dirX * 0.20, c.y + c.dirY * 0.20, 1.62, {
+        rz: ai * 0.7 + 0.78,
+      }));
+      staticParts.push(zCyl(t, 0.04, 0.015, 0.10, 6, 0xff6a00, c.x + c.dirX * 0.26, c.y + c.dirY * 0.26, 1.78));
+    }
   }
 
-  // E. Dark-orange "cone", Incan stepped pyramidal centerpiece atop the gray square!
+  // E. Dark-orange Incan stepped pyramidal centerpiece atop gray roof deck
   const incanTiers = [
-    { w: 1.12, h: 0.18, z: 2.31, col: 0xa83808 },
-    { w: 0.88, h: 0.18, z: 2.49, col: 0xb63f0a },
-    { w: 0.64, h: 0.18, z: 2.67, col: 0xc4470d },
-    { w: 0.42, h: 0.18, z: 2.85, col: 0xd15012 },
+    { w: 0.52, d: 0.40, h: 0.08, z: 1.35, col: 0xa83808 },
+    { w: 0.38, d: 0.30, h: 0.08, z: 1.43, col: 0xb63f0a },
+    { w: 0.26, d: 0.20, h: 0.08, z: 1.51, col: 0xc4470d },
   ];
   for (const tier of incanTiers) {
-    staticParts.push(zBox(t, tier.w, tier.w, tier.h, tier.col, 0, 0, tier.z));
+    staticParts.push(zBox(t, tier.w, tier.d, tier.h, tier.col, 0, 0, tier.z));
   }
-  // Stepped Incan pyramidal capstone cone (4-sided upright pyramid along +Z)
-  staticParts.push(shadePart(t, new t.ConeGeometry(0.24, 0.26, 4), 0xba410b, {
+  // Stepped Incan pyramidal capstone cone
+  staticParts.push(shadePart(t, new t.ConeGeometry(0.12, 0.14, 4), 0xba410b, {
     rx: Math.PI / 2,
     rz: Math.PI / 4,
-    tz: 3.07,
+    tz: 1.62,
   }));
 
-  const structureMesh = new t.Mesh(
-    mergeParts(t, staticParts),
-    new t.MeshBasicMaterial({ vertexColors: true })
-  );
-  structureMesh.name = "flux-pod-structure";
+  const matStructure = new t.MeshStandardMaterial({
+    color: 0xffffff,
+    vertexColors: true,
+    roughness: 0.68,
+    metalness: 0.16,
+  });
+  matStructure.castShadow = true;
+  matStructure.receiveShadow = true;
+  if (options.csmState) {
+    installCsmShaderPatch(matStructure, options.csmState);
+  }
 
-  // Glowing plasma-yellow core & corner-to-corner plasma conduits visible behind the glass!
+  const structureMesh = new t.Mesh(mergeParts(t, staticParts), matStructure);
+  structureMesh.name = "flux-pod-structure";
+  structureMesh.castShadow = true;
+  structureMesh.receiveShadow = true;
+
+  // Glowing plasma-yellow core & conduits visible behind glass
   const plasmaParts = [
-    zCyl(t, 0.42, 0.42, 1.32, 12, 0xffe838, 0, 0, 1.19),
-    zBox(t, 1.46, 1.46, 1.26, 0xffd000, 0, 0, 1.19),
+    zCyl(t, 0.20, 0.20, 0.74, 12, 0xffe838, 0, 0, 0.73),
+    zBox(t, 0.62, 0.54, 0.70, 0xffd000, 0, 0, 0.73),
   ];
   const matCore = new t.MeshBasicMaterial({
     color: 0xffe433,
@@ -350,29 +405,25 @@ export function buildFluxPod(three, options = {}) {
   const core = new t.Mesh(mergeParts(t, plasmaParts), matCore);
   core.name = "flux-pod-plasma-core";
 
-  // Containment glass panels between the concrete corners
+  // Containment glass panels
   const matGlass = new t.MeshBasicMaterial({
     color: 0x9ce2ff,
     transparent: true,
     opacity: 0.34,
     depthWrite: false,
   });
-  const glassBox = new t.Mesh(new t.BoxGeometry(1.58, 1.58, 1.38), matGlass);
+  const glassBox = new t.Mesh(new t.BoxGeometry(0.70, 0.62, 0.78), matGlass);
   glassBox.name = "flux-pod-glass";
-  glassBox.position.set(0, 0, 1.19);
+  glassBox.position.set(0, 0, 0.73);
 
-  // Flashing beacon lights on ALL FOUR SIDES of the bright orange overhang (2 alternating pairs = 2 draw calls)
+  // Flashing beacon lights on all 4 sides of the orange overhang
   const lightsNSGeom = mergeParts(t, [
-    zBox(t, 0.46, 0.06, 0.08, 0xffffff, 0, 1.20, ohZ),
-    zBox(t, 0.46, 0.06, 0.08, 0xffffff, 0, -1.20, ohZ),
-    zBox(t, 0.16, 0.06, 0.08, 0xffffff, -0.68, 1.20, ohZ),
-    zBox(t, 0.16, 0.06, 0.08, 0xffffff, 0.68, -1.20, ohZ),
+    zBox(t, 0.30, 0.04, 0.06, 0xffffff, 0, 0.49, ohZ),
+    zBox(t, 0.30, 0.04, 0.06, 0xffffff, 0, -0.49, ohZ),
   ]);
   const lightsEWGeom = mergeParts(t, [
-    zBox(t, 0.06, 0.46, 0.08, 0xffffff, 1.20, 0, ohZ),
-    zBox(t, 0.06, 0.46, 0.08, 0xffffff, -1.20, 0, ohZ),
-    zBox(t, 0.06, 0.16, 0.08, 0xffffff, 1.20, 0.68, ohZ),
-    zBox(t, 0.06, 0.16, 0.08, 0xffffff, -1.20, -0.68, ohZ),
+    zBox(t, 0.04, 0.24, 0.06, 0xffffff, 0.59, 0, ohZ),
+    zBox(t, 0.04, 0.24, 0.06, 0xffffff, -0.59, 0, ohZ),
   ]);
   const matFlashNS = new t.MeshBasicMaterial({
     color: 0xffee55,
@@ -426,62 +477,110 @@ export function buildFluxPod(three, options = {}) {
 
 // ---------------------------------------------------------------------------
 // 2) Solar Panels (WCID 4000011, Full Pallet)
+//    - Fits Full GMA pad (<= 1.18 × 0.98 m)
+//    - Wings fold flat horizontally atop pedestal when stowed (H_stowed <= 1.10 m, deployed ~1.95 m)
 // ---------------------------------------------------------------------------
 export function buildSolarPanels(three, options = {}) {
   const t = three || THREE_DEFAULT;
   const root = new t.Group();
   root.name = "solar-panels-root";
-  const pallet = buildPallet(t, "full");
+  const pallet = buildPallet(t, "full", options);
   root.add(pallet.root);
 
-  // Upright +Z steel pedestal, inverter cabinet & base collar
+  const isStowed = Boolean(options.stowed);
+
+  // Upright steel pedestal, inverter cabinet & base collar
   const pedGeom = mergeParts(t, [
-    zBox(t, 1.30, 1.30, 0.12, 0x4b5258, 0, 0, 0.21),
-    zCyl(t, 0.16, 0.24, 1.28, 12, 0x626a72, 0, 0, 0.88),
-    zBox(t, 0.52, 0.36, 0.48, 0x3b4248, 0, -0.45, 0.50), // Inverter box
-    zBox(t, 0.20, 0.04, 0.10, 0x2fd866, 0, -0.64, 0.58), // Status panel
+    zBox(t, 0.90, 0.80, 0.08, 0x4b5258, 0, 0, 0.18),
+    zCyl(t, 0.10, 0.14, 0.48, 12, 0x626a72, 0, 0, 0.46),
+    zBox(t, 0.36, 0.26, 0.32, 0x3b4248, 0, -0.25, 0.38), // Inverter box
+    zBox(t, 0.14, 0.03, 0.08, 0x2fd866, 0, -0.39, 0.42), // Status panel
   ]);
-  const pedestal = new t.Mesh(pedGeom, new t.MeshBasicMaterial({ vertexColors: true }));
+  const matPedestal = new t.MeshStandardMaterial({
+    color: 0xffffff,
+    vertexColors: true,
+    roughness: 0.45,
+    metalness: 0.55,
+  });
+  matPedestal.castShadow = true;
+  matPedestal.receiveShadow = true;
+  if (options.csmState) installCsmShaderPatch(matPedestal, options.csmState);
+
+  const pedestal = new t.Mesh(pedGeom, matPedestal);
   pedestal.name = "solar-pedestal";
+  pedestal.castShadow = true;
+  pedestal.receiveShadow = true;
 
   const turntable = new t.Group();
   turntable.name = "azimuth-turntable";
-  turntable.position.set(0, 0, 1.55);
+  turntable.position.set(0, 0, 0.72);
 
   const trunnion = new t.Group();
   trunnion.name = "elevation-trunnion";
+  trunnion.position.set(0, 0, 0.06);
 
   function makeSolarWingGeom(signX) {
-    const cx = signX * 0.62;
+    const cx = signX * 0.28;
     const parts = [
-      // Silver anodized aluminum outer frame
-      zBox(t, 1.08, 2.16, 0.048, 0xb8c2cc, cx, 0, 0),
-      // Rich monocrystalline silicon PV bed (visible on both top & tilted faces)
-      zBox(t, 1.00, 2.08, 0.060, 0x1b4f9c, cx, 0, 0),
+      // Silver anodized aluminum outer frame (0.48 × 0.92 m)
+      zBox(t, 0.48, 0.92, 0.036, 0xb8c2cc, cx, 0, 0),
+      // Rich monocrystalline silicon PV bed
+      zBox(t, 0.44, 0.88, 0.042, 0x1b4f9c, cx, 0, 0),
     ];
     // Silver busbars & cell grid ribbons
-    for (const bx of [-0.30, 0, 0.30]) {
-      parts.push(zBox(t, 0.020, 2.04, 0.068, 0x9ec0e6, cx + bx, 0, 0));
+    for (const bx of [-0.14, 0, 0.14]) {
+      parts.push(zBox(t, 0.010, 0.86, 0.046, 0x9ec0e6, cx + bx, 0, 0));
     }
-    for (let gy = -0.80; gy <= 0.81; gy += 0.40) {
-      parts.push(zBox(t, 0.98, 0.016, 0.068, 0x7ca2cc, cx, gy, 0));
+    for (let gy = -0.35; gy <= 0.36; gy += 0.18) {
+      parts.push(zBox(t, 0.42, 0.008, 0.046, 0x7ca2cc, cx, gy, 0));
     }
     return mergeParts(t, parts);
   }
 
-  const matWing = new t.MeshBasicMaterial({ vertexColors: true });
+  const matWing = new t.MeshStandardMaterial({
+    color: 0xffffff,
+    vertexColors: true,
+    roughness: 0.18,
+    metalness: 0.42,
+  });
+  matWing.castShadow = true;
+  matWing.receiveShadow = true;
+  if (options.csmState) installCsmShaderPatch(matWing, options.csmState);
+
   const leftWing = new t.Mesh(makeSolarWingGeom(-1), matWing);
-  const rightWing = new t.Mesh(makeSolarWingGeom(+1), matWing.clone());
+  const rightWing = new t.Mesh(makeSolarWingGeom(+1), matWing);
+  leftWing.castShadow = true;
+  leftWing.receiveShadow = true;
+  rightWing.castShadow = true;
+  rightWing.receiveShadow = true;
 
   const actGeom = mergeParts(t, [
-    zBox(t, 0.26, 0.30, 0.14, 0x555d65, 0, 0, -0.06),
-    zCyl(t, 0.045, 0.045, 0.62, 8, 0xc8d0d8, 0, -0.28, -0.26),
+    zBox(t, 0.18, 0.20, 0.10, 0x555d65, 0, 0, -0.04),
+    zCyl(t, 0.03, 0.03, 0.24, 8, 0xc8d0d8, 0, -0.16, -0.12),
   ]);
-  const actuators = new t.Mesh(actGeom, new t.MeshBasicMaterial({ vertexColors: true }));
+  const matActuators = new t.MeshStandardMaterial({
+    color: 0xffffff,
+    vertexColors: true,
+    roughness: 0.45,
+    metalness: 0.55,
+  });
+  matActuators.castShadow = true;
+  matActuators.receiveShadow = true;
+  if (options.csmState) installCsmShaderPatch(matActuators, options.csmState);
+
+  const actuators = new t.Mesh(actGeom, matActuators);
+  actuators.castShadow = true;
+  actuators.receiveShadow = true;
 
   trunnion.add(leftWing, rightWing, actuators);
   turntable.add(trunnion);
   root.add(pedestal, turntable);
+
+  // If stowed, trunnion pitch starts at 0 (flat horizontal atop pedestal, total stowed height ~0.84 m <= 1.10 m)
+  if (isStowed) {
+    turntable.rotation.z = 0;
+    trunnion.rotation.x = 0;
+  }
 
   return {
     root,
@@ -493,6 +592,7 @@ export function buildSolarPanels(three, options = {}) {
     wcid: DEPLOYABLE_WCID.SolarPanels,
     palletSize: "full",
     update(state = {}) {
+      if (isStowed) return;
       const hdg = state.sunHeading !== undefined ? state.sunHeading : state.sunAzimuthRad;
       const pit = state.sunPitch !== undefined ? state.sunPitch : state.sunPitchRad;
       if (Number.isFinite(hdg)) turntable.rotation.z = hdg;
@@ -516,46 +616,80 @@ export function buildSolarPanels(three, options = {}) {
 
 // ---------------------------------------------------------------------------
 // 3) Power Generator (WCID 4000012, Full Pallet) — Burns Platinum Scarabs
+//    - Housing <= 1.18 × 0.98 m atop Full GMA Pallet
+//    - Exhaust stack stowed height <= 1.45 m
 // ---------------------------------------------------------------------------
 export function buildPowerGenerator(three, options = {}) {
   const t = three || THREE_DEFAULT;
   const root = new t.Group();
   root.name = "power-generator-root";
-  const pallet = buildPallet(t, "full");
+  const pallet = buildPallet(t, "full", options);
   root.add(pallet.root);
 
-  const bodyParts = [
-    // Heavy steel generator skid & louvered engine block
-    zBox(t, 2.04, 1.96, 0.72, 0x3b4238, 0, 0, 0.51),
-    zBox(t, 1.72, 1.18, 0.62, 0x4f564b, -0.08, -0.10, 1.12),
-    // Horizontal turbine barrel along +Y
-    yCyl(t, 0.42, 0.42, 1.38, 14, 0x676e63, -0.15, 0.0, 1.24),
-    // Copper/brass arcane induction coils
-    yCyl(t, 0.46, 0.46, 0.14, 14, 0xc27a38, -0.15, -0.32, 1.24),
-    yCyl(t, 0.46, 0.46, 0.14, 14, 0xc27a38, -0.15, 0.32, 1.24),
-    // Platinum Scarab armored hopper & feed chute on starboard side
-    zBox(t, 0.62, 0.68, 0.74, 0x8d7f70, 0.64, 0.36, 1.16),
-    zBox(t, 0.68, 0.74, 0.10, 0xb87333, 0.64, 0.36, 1.56),
-    // Upright +Z exhaust stack + muffler cage
-    zCyl(t, 0.11, 0.13, 0.95, 10, 0x2c302c, -0.68, -0.62, 1.34),
-    zCyl(t, 0.08, 0.08, 0.48, 10, 0x444844, -0.68, -0.62, 1.98),
-  ];
-  const bodyMesh = new t.Mesh(mergeParts(t, bodyParts), new t.MeshBasicMaterial({ vertexColors: true }));
-  bodyMesh.name = "generator-chassis-turbine";
+  const isStowed = Boolean(options.stowed);
 
-  // Spinning flywheel at front of turbine (rotates about its axis via flywheel.rotation.z after rx=PI/2 group or yCyl)
+  const bodyParts = [
+    // Heavy steel generator skid & louvered engine block (1.14 × 0.94 m <= 1.18 × 0.98 m)
+    zBox(t, 1.14, 0.94, 0.50, 0x3b4238, 0, 0, 0.39),
+    zBox(t, 0.96, 0.68, 0.38, 0x4f564b, -0.05, -0.05, 0.83),
+    // Horizontal turbine barrel along +Y
+    yCyl(t, 0.24, 0.24, 0.80, 14, 0x676e63, -0.10, 0.0, 0.88),
+    // Copper/brass arcane induction coils
+    yCyl(t, 0.27, 0.27, 0.10, 14, 0xc27a38, -0.10, -0.20, 0.88),
+    yCyl(t, 0.27, 0.27, 0.10, 14, 0xc27a38, -0.10, 0.20, 0.88),
+    // Platinum Scarab armored hopper & feed chute on starboard side
+    zBox(t, 0.34, 0.38, 0.42, 0x8d7f70, 0.36, 0.20, 0.84),
+    zBox(t, 0.38, 0.42, 0.06, 0xb87333, 0.36, 0.20, 1.08),
+  ];
+
+  // Upright exhaust stack: stowed height <= 1.45 m (e.g. 1.25 m stowed, 1.40 m deployed)
+  if (isStowed) {
+    bodyParts.push(zCyl(t, 0.07, 0.08, 0.28, 10, 0x2c302c, -0.38, -0.30, 1.11));
+  } else {
+    bodyParts.push(zCyl(t, 0.07, 0.08, 0.46, 10, 0x2c302c, -0.38, -0.30, 1.17));
+    bodyParts.push(zCyl(t, 0.05, 0.05, 0.24, 10, 0x444844, -0.38, -0.30, 1.40));
+  }
+
+  const matBody = new t.MeshStandardMaterial({
+    color: 0xffffff,
+    vertexColors: true,
+    roughness: 0.58,
+    metalness: 0.38,
+  });
+  matBody.castShadow = true;
+  matBody.receiveShadow = true;
+  if (options.csmState) installCsmShaderPatch(matBody, options.csmState);
+
+  const bodyMesh = new t.Mesh(mergeParts(t, bodyParts), matBody);
+  bodyMesh.name = "generator-chassis-turbine";
+  bodyMesh.castShadow = true;
+  bodyMesh.receiveShadow = true;
+
+  // Spinning flywheel at front of turbine
   const fwGeom = mergeParts(t, [
-    zCyl(t, 0.38, 0.38, 0.10, 16, 0x282c28, 0, 0, 0),
-    zBox(t, 0.68, 0.08, 0.12, 0xd49b2a, 0, 0, 0),
-    zBox(t, 0.08, 0.68, 0.12, 0xd49b2a, 0, 0, 0),
+    zCyl(t, 0.22, 0.22, 0.06, 16, 0x282c28, 0, 0, 0),
+    zBox(t, 0.40, 0.05, 0.08, 0xd49b2a, 0, 0, 0),
+    zBox(t, 0.05, 0.40, 0.08, 0xd49b2a, 0, 0, 0),
   ]);
+  const matFlywheel = new t.MeshStandardMaterial({
+    color: 0xffffff,
+    vertexColors: true,
+    roughness: 0.35,
+    metalness: 0.65,
+  });
+  matFlywheel.castShadow = true;
+  matFlywheel.receiveShadow = true;
+  if (options.csmState) installCsmShaderPatch(matFlywheel, options.csmState);
+
   const flywheelPivot = new t.Group();
-  flywheelPivot.position.set(-0.15, 0.76, 1.24);
+  flywheelPivot.position.set(-0.10, 0.44, 0.88);
   flywheelPivot.rotation.x = Math.PI / 2;
-  const flywheel = new t.Mesh(fwGeom, new t.MeshBasicMaterial({ vertexColors: true }));
+  const flywheel = new t.Mesh(fwGeom, matFlywheel);
+  flywheel.castShadow = true;
+  flywheel.receiveShadow = true;
   flywheelPivot.add(flywheel);
 
-  // Platinum-cyan arcane scarab combustion chamber glow
+  // Platinum-cyan arcane scarab combustion chamber glow (additive, 0 dynamic lights)
   const matArcaneGlow = new t.MeshBasicMaterial({
     color: 0x66eeff,
     transparent: true,
@@ -564,8 +698,8 @@ export function buildPowerGenerator(three, options = {}) {
     depthWrite: false,
   });
   const glowGeom = mergeParts(t, [
-    zBox(t, 0.38, 0.42, 0.44, 0x77f0ff, 0.64, 0.36, 1.22),
-    yCyl(t, 0.26, 0.26, 0.90, 10, 0x55ddff, -0.15, 0, 1.24),
+    zBox(t, 0.24, 0.26, 0.28, 0x77f0ff, 0.36, 0.20, 0.88),
+    yCyl(t, 0.16, 0.16, 0.54, 10, 0x55ddff, -0.10, 0, 0.88),
   ]);
   const glowCore = new t.Mesh(glowGeom, matArcaneGlow);
   glowCore.name = "generator-scarab-glow";
@@ -609,43 +743,65 @@ export function buildPowerGenerator(three, options = {}) {
 
 // ---------------------------------------------------------------------------
 // 4) Battery Unit (WCID 4000013, Half Pallet) — 600 kJ Capacitor Bank
+//    - Fits Half GMA pad (rack <= 0.57 × 0.98 m, height <= 1.35 m)
 // ---------------------------------------------------------------------------
 export function buildBatteryUnit(three, options = {}) {
   const t = three || THREE_DEFAULT;
   const root = new t.Group();
   root.name = "battery-unit-root";
-  const pallet = buildPallet(t, "half");
+  const pallet = buildPallet(t, "half", options);
   root.add(pallet.root);
 
   const bankParts = [
-    // Ruggedized half-pallet steel cage & base plinth
-    zBox(t, 1.06, 2.18, 0.24, 0x2c3330, 0, 0, 0.27),
-    zBox(t, 1.02, 0.12, 1.16, 0x38403d, 0, -1.00, 0.85),
-    zBox(t, 1.02, 0.12, 1.16, 0x38403d, 0, 1.00, 0.85),
-    zBox(t, 1.04, 2.14, 0.08, 0x38403d, 0, 0, 1.44),
+    // Half-pallet steel cage & base plinth (0.55 × 0.94 m <= 0.57 × 0.98 m)
+    zBox(t, 0.55, 0.94, 0.16, 0x2c3330, 0, 0, 0.22),
+    zBox(t, 0.53, 0.08, 0.82, 0x38403d, 0, -0.42, 0.71),
+    zBox(t, 0.53, 0.08, 0.82, 0x38403d, 0, 0.42, 0.71),
+    zBox(t, 0.54, 0.92, 0.06, 0x38403d, 0, 0, 1.15),
     // Heavy gold-copper top busbars
-    zBox(t, 0.08, 1.84, 0.06, 0xd4a437, -0.26, 0, 1.36),
-    zBox(t, 0.08, 1.84, 0.06, 0xd4a437, 0.26, 0, 1.36),
-    // Dark bezel panel for the 5 SoC LED bars
-    zBox(t, 0.06, 0.48, 0.94, 0x161a18, 0.51, 0, 0.88),
+    zBox(t, 0.05, 0.78, 0.04, 0xd4a437, -0.14, 0, 1.10),
+    zBox(t, 0.05, 0.78, 0.04, 0xd4a437, 0.14, 0, 1.10),
+    // Bezel panel for the 5 SoC LED bars
+    zBox(t, 0.04, 0.34, 0.64, 0x161a18, 0.26, 0, 0.70),
   ];
   // 6 upright +Z high-density blue cylindrical capacitor cells (2x3)
-  for (const cx of [-0.26, 0.26]) {
-    for (const cy of [-0.62, 0, 0.62]) {
-      bankParts.push(zCyl(t, 0.19, 0.19, 0.96, 12, 0x1d5494, cx, cy, 0.86));
-      bankParts.push(zCyl(t, 0.07, 0.07, 0.08, 8, 0xd4a437, cx, cy, 1.36));
+  for (const cx of [-0.14, 0.14]) {
+    for (const cy of [-0.28, 0, 0.28]) {
+      bankParts.push(zCyl(t, 0.10, 0.10, 0.68, 12, 0x1d5494, cx, cy, 0.68));
+      bankParts.push(zCyl(t, 0.04, 0.04, 0.05, 8, 0xd4a437, cx, cy, 1.04));
     }
   }
-  const bankMesh = new t.Mesh(mergeParts(t, bankParts), new t.MeshBasicMaterial({ vertexColors: true }));
+
+  const matBank = new t.MeshStandardMaterial({
+    color: 0xffffff,
+    vertexColors: true,
+    roughness: 0.52,
+    metalness: 0.48,
+  });
+  matBank.castShadow = true;
+  matBank.receiveShadow = true;
+  if (options.csmState) installCsmShaderPatch(matBank, options.csmState);
+
+  const bankMesh = new t.Mesh(mergeParts(t, bankParts), matBank);
   bankMesh.name = "battery-capacitor-bank";
+  bankMesh.castShadow = true;
+  bankMesh.receiveShadow = true;
   root.add(bankMesh);
 
   const socBars = [];
-  const matOff = new t.MeshBasicMaterial({ color: 0x222222 });
-  const matOn = new t.MeshBasicMaterial({ color: 0x00ff66 });
+  const matOff = new t.MeshStandardMaterial({ color: 0x222222, roughness: 0.8, metalness: 0.1 });
+  const matOn = new t.MeshStandardMaterial({
+    color: 0x00ff66,
+    emissive: 0x00dd55,
+    emissiveIntensity: 0.85,
+    roughness: 0.2,
+    metalness: 0.2,
+  });
   for (let i = 0; i < 5; i++) {
-    const barMesh = new t.Mesh(new t.BoxGeometry(0.06, 0.36, 0.11), matOff);
-    barMesh.position.set(0.53, 0, 0.54 + i * 0.17);
+    const barMesh = new t.Mesh(new t.BoxGeometry(0.04, 0.24, 0.08), matOff);
+    barMesh.position.set(0.28, 0, 0.46 + i * 0.12);
+    barMesh.castShadow = true;
+    barMesh.receiveShadow = true;
     socBars.push(barMesh);
     root.add(barMesh);
   }
@@ -677,76 +833,126 @@ export function buildBatteryUnit(three, options = {}) {
 
 // ---------------------------------------------------------------------------
 // 5) Autonomous Missile Turret (WCID 4000014, Full Pallet)
-//    - Sudden 0.35s vertical rise on 4 pneumatic cylinders
-//    - Agile 3-axis (X, Y, Z) gimbal rotation beneath squarish 4-missile pod
+//    - Fits Full GMA pad (<= 1.18 × 0.98 m)
+//    - Dual missile pods fold down horizontally to 0° elevation when stowed (H_stowed <= 1.85 m)
+//    - Sudden 0.35s vertical rise on 4 pneumatic cylinders when deployed
 // ---------------------------------------------------------------------------
 export function buildMissileTurret(three, options = {}) {
   const t = three || THREE_DEFAULT;
   const root = new t.Group();
   root.name = "missile-turret-root";
-  const pallet = buildPallet(t, "full");
+  const pallet = buildPallet(t, "full", options);
   root.add(pallet.root);
 
-  // Armored full-pallet base housing & 4 corner pneumatic outer sleeves
+  const isStowed = Boolean(options.stowed);
+
+  // Armored full-pallet base housing & 4 corner pneumatic sleeves (1.14 × 0.94 m <= 1.18 × 0.98 m)
   const baseParts = [
-    zBox(t, 2.24, 2.24, 0.22, 0x3e4637, 0, 0, 0.26),
-    zBox(t, 1.64, 1.64, 0.36, 0x31382c, 0, 0, 0.46),
+    zBox(t, 1.14, 0.94, 0.16, 0x3e4637, 0, 0, 0.22),
+    zBox(t, 0.86, 0.76, 0.22, 0x31382c, 0, 0, 0.33),
   ];
-  for (const px of [-0.52, 0.52]) {
-    for (const py of [-0.52, 0.52]) {
-      baseParts.push(zCyl(t, 0.11, 0.12, 0.54, 10, 0x4b5344, px, py, 0.52));
+  for (const px of [-0.34, 0.34]) {
+    for (const py of [-0.28, 0.28]) {
+      baseParts.push(zCyl(t, 0.08, 0.09, 0.34, 10, 0x4b5344, px, py, 0.36));
     }
   }
-  const outriggers = new t.Mesh(mergeParts(t, baseParts), new t.MeshBasicMaterial({ vertexColors: true }));
-  outriggers.name = "sam-base-well";
+  const matOutriggers = new t.MeshStandardMaterial({
+    color: 0xffffff,
+    vertexColors: true,
+    roughness: 0.62,
+    metalness: 0.32,
+  });
+  matOutriggers.castShadow = true;
+  matOutriggers.receiveShadow = true;
+  if (options.csmState) installCsmShaderPatch(matOutriggers, options.csmState);
 
-  // Pneumatic riser group (suddenly rises +0.80m in 0.35s!)
+  const outriggers = new t.Mesh(mergeParts(t, baseParts), matOutriggers);
+  outriggers.name = "sam-base-well";
+  outriggers.castShadow = true;
+  outriggers.receiveShadow = true;
+
+  // Pneumatic riser group
   const riserGroup = new t.Group();
   riserGroup.name = "pneumatic-riser";
-  riserGroup.position.set(0, 0, 0.25);
+  riserGroup.position.set(0, 0, 0.20);
 
   const pistonParts = [
-    zBox(t, 1.32, 1.32, 0.12, 0x464f3f, 0, 0, 0.92), // Riser top plate
-    zCyl(t, 0.22, 0.26, 0.88, 12, 0x7b8288, 0, 0, 0.50), // Central hydraulic ram
+    zBox(t, 0.74, 0.68, 0.08, 0x464f3f, 0, 0, 0.60), // Riser top plate
+    zCyl(t, 0.14, 0.16, 0.56, 12, 0x7b8288, 0, 0, 0.32), // Central hydraulic ram
   ];
-  for (const px of [-0.52, 0.52]) {
-    for (const py of [-0.52, 0.52]) {
-      pistonParts.push(zCyl(t, 0.065, 0.065, 0.90, 10, 0xd8e0e8, px, py, 0.50)); // 4 bright chrome pneumatic rods
+  for (const px of [-0.34, 0.34]) {
+    for (const py of [-0.28, 0.28]) {
+      pistonParts.push(zCyl(t, 0.045, 0.045, 0.58, 10, 0xd8e0e8, px, py, 0.32)); // 4 bright chrome pneumatic rods
     }
   }
-  const piston = new t.Mesh(mergeParts(t, pistonParts), new t.MeshBasicMaterial({ vertexColors: true }));
+  const matPiston = new t.MeshStandardMaterial({
+    color: 0xffffff,
+    vertexColors: true,
+    roughness: 0.25,
+    metalness: 0.85,
+  });
+  matPiston.castShadow = true;
+  matPiston.receiveShadow = true;
+  if (options.csmState) installCsmShaderPatch(matPiston, options.csmState);
+
+  const piston = new t.Mesh(mergeParts(t, pistonParts), matPiston);
   piston.name = "pneumatic-cylinders";
+  piston.castShadow = true;
+  piston.receiveShadow = true;
 
   // Agile 3-axis gimbal (Z yaw -> X pitch -> Y roll)
   const turntable = new t.Group();
   turntable.name = "turret-yaw";
-  turntable.position.set(0, 0, 1.06);
+  turntable.position.set(0, 0, 0.68);
 
   const gimbal = new t.Group();
   gimbal.name = "turret-pitch";
 
   // Squarish 4-cell armored SAM pod + electro-optical tracking dome
   const podGeom = mergeParts(t, [
-    zCyl(t, 0.28, 0.32, 0.24, 12, 0x525a4b, 0, 0, -0.02), // Spherical/wrist gimbal hub
-    zBox(t, 1.18, 1.48, 0.78, 0x3b4434, 0, 0, 0.44),      // Squarish armored launcher box
-    zBox(t, 1.24, 0.16, 0.84, 0x56614c, 0, 0.66, 0.44),   // Front armored bezel
-    zBox(t, 0.34, 0.38, 0.24, 0x282d26, 0, 0.18, 0.92),   // Top EO/IR sensor housing
-    yCyl(t, 0.09, 0.09, 0.08, 10, 0xffaa22, 0, 0.38, 0.92), // Amber optics lens
+    zCyl(t, 0.18, 0.20, 0.16, 12, 0x525a4b, 0, 0, -0.02),
+    zBox(t, 0.74, 0.88, 0.50, 0x3b4434, 0, 0, 0.30),      // Armored launcher box
+    zBox(t, 0.78, 0.10, 0.54, 0x56614c, 0, 0.42, 0.30),   // Front armored bezel
+    zBox(t, 0.22, 0.26, 0.16, 0x282d26, 0, 0.12, 0.62),   // Top EO/IR sensor housing
+    yCyl(t, 0.06, 0.06, 0.06, 10, 0xffaa22, 0, 0.26, 0.62), // Amber optics lens
   ]);
-  const launcherPod = new t.Mesh(podGeom, new t.MeshBasicMaterial({ vertexColors: true }));
+  const matLauncherPod = new t.MeshStandardMaterial({
+    color: 0xffffff,
+    vertexColors: true,
+    roughness: 0.58,
+    metalness: 0.35,
+  });
+  matLauncherPod.castShadow = true;
+  matLauncherPod.receiveShadow = true;
+  if (options.csmState) installCsmShaderPatch(matLauncherPod, options.csmState);
+
+  const launcherPod = new t.Mesh(podGeom, matLauncherPod);
+  launcherPod.castShadow = true;
+  launcherPod.receiveShadow = true;
 
   // 4 Individually visible SAM missiles pointing forward (+Y) in 2x2 cells
   const singleMissileGeom = mergeParts(t, [
-    yCyl(t, 0.095, 0.095, 1.32, 10, 0xebeff2, 0, 0.10, 0), // White rocket body
-    shadePart(t, new t.ConeGeometry(0.095, 0.32, 10), 0xd42c20, { ty: 0.92 }), // Red seeker nosecone (+Y)
-    zBox(t, 0.28, 0.18, 0.02, 0x383e42, 0, -0.42, 0), // Cruciform tail fins
-    zBox(t, 0.02, 0.18, 0.28, 0x383e42, 0, -0.42, 0),
+    yCyl(t, 0.065, 0.065, 0.82, 10, 0xebeff2, 0, 0.05, 0), // White rocket body
+    shadePart(t, new t.ConeGeometry(0.065, 0.20, 10), 0xd42c20, { ty: 0.56 }), // Red seeker nosecone (+Y)
+    zBox(t, 0.18, 0.12, 0.015, 0x383e42, 0, -0.28, 0), // Cruciform tail fins
+    zBox(t, 0.015, 0.12, 0.18, 0x383e42, 0, -0.28, 0),
   ]);
-  const matMissile = new t.MeshBasicMaterial({ vertexColors: true });
+  const matMissile = new t.MeshStandardMaterial({
+    color: 0xffffff,
+    vertexColors: true,
+    roughness: 0.40,
+    metalness: 0.20,
+  });
+  matMissile.castShadow = true;
+  matMissile.receiveShadow = true;
+  if (options.csmState) installCsmShaderPatch(matMissile, options.csmState);
+
   const missiles = [];
   for (let i = 0; i < 4; i++) {
     const m = new t.Mesh(singleMissileGeom, matMissile);
-    m.position.set(-0.28 + (i % 2) * 0.56, 0.12, 0.26 + Math.floor(i / 2) * 0.36);
+    m.position.set(-0.18 + (i % 2) * 0.36, 0.08, 0.18 + Math.floor(i / 2) * 0.24);
+    m.castShadow = true;
+    m.receiveShadow = true;
     m.visible = true; // vfx-lint-allow: SAM cell initial visibility
     missiles.push(m);
     launcherPod.add(m);
@@ -756,6 +962,13 @@ export function buildMissileTurret(three, options = {}) {
   turntable.add(gimbal);
   riserGroup.add(piston, turntable);
   root.add(outriggers, riserGroup);
+
+  // If stowed, pods fold down horizontally to 0° elevation (total stowed height ~1.25 m <= 1.85 m)
+  if (isStowed) {
+    riserGroup.position.z = 0.20;
+    turntable.rotation.z = 0;
+    gimbal.rotation.x = 0;
+  }
 
   return {
     root,
@@ -767,13 +980,14 @@ export function buildMissileTurret(three, options = {}) {
     wcid: DEPLOYABLE_WCID.MissileTurret,
     palletSize: "full",
     update(state = {}) {
+      if (isStowed) return;
       let riseNorm = 0;
       if (Number.isFinite(state.deployElevation)) {
         riseNorm = Math.min(1.0, Math.max(0.0, state.deployElevation));
       } else if (Number.isFinite(state.riseTimeSec)) {
         riseNorm = Math.min(1.0, Math.max(0.0, state.riseTimeSec / 0.35));
       }
-      riserGroup.position.z = 0.25 + riseNorm * 0.8;
+      riserGroup.position.z = 0.20 + riseNorm * 0.65;
       if (Number.isFinite(state.yawRad)) turntable.rotation.z = state.yawRad;
       if (Number.isFinite(state.pitchRad)) gimbal.rotation.x = state.pitchRad;
       if (Number.isFinite(state.rollRad)) gimbal.rotation.y = state.rollRad;
@@ -800,24 +1014,46 @@ export function buildMissileTurret(three, options = {}) {
 
 // ---------------------------------------------------------------------------
 // 6) Ground Radar (WCID 4000015, Half Pallet) — 30 RPM Surface Surveillance
+//    - Fits Half GMA pad (<= 0.57 × 0.98 m)
+//    - Slotted array folds flat to 0° horizontal when stowed (H_stowed <= 1.05 m, deployed ~1.95 m)
 // ---------------------------------------------------------------------------
 export function buildGroundRadar(three, options = {}) {
   const t = three || THREE_DEFAULT;
   const root = new t.Group();
   root.name = "ground-radar-root";
-  const pallet = buildPallet(t, "half");
+  const pallet = buildPallet(t, "half", options);
   root.add(pallet.root);
 
-  const baseGeom = mergeParts(t, [
-    zBox(t, 0.98, 1.84, 0.82, 0x455241, 0, 0, 0.56),
-    zBox(t, 0.84, 0.44, 0.26, 0x353f32, 0, -0.58, 1.06), // Angled console hood
-    zCyl(t, 0.09, 0.13, 1.24, 10, 0x7c848a, 0, 0.18, 1.56), // Upright +Z mast!
-    zCyl(t, 0.18, 0.18, 0.14, 12, 0x555c60, 0, 0.18, 2.16), // Rotary slip-ring collar
-  ]);
-  const baseMesh = new t.Mesh(baseGeom, new t.MeshBasicMaterial({ vertexColors: true }));
-  baseMesh.name = "ground-radar-pedestal";
+  const isStowed = Boolean(options.stowed);
 
-  // Glowing amber tactical scope screen
+  const baseParts = [
+    // Half-pallet pedestal cabinet (0.54 × 0.92 m <= 0.57 × 0.98 m)
+    zBox(t, 0.54, 0.92, 0.46, 0x455241, 0, 0, 0.37),
+    zBox(t, 0.46, 0.24, 0.16, 0x353f32, 0, -0.28, 0.66), // Angled console hood
+  ];
+
+  if (!isStowed) {
+    // Upright mast deployed up to z = 1.30 m
+    baseParts.push(zCyl(t, 0.06, 0.09, 0.72, 10, 0x7c848a, 0, 0.10, 0.96));
+    baseParts.push(zCyl(t, 0.12, 0.12, 0.10, 12, 0x555c60, 0, 0.10, 1.35)); // Rotary collar
+  }
+
+  const matBase = new t.MeshStandardMaterial({
+    color: 0xffffff,
+    vertexColors: true,
+    roughness: 0.60,
+    metalness: 0.35,
+  });
+  matBase.castShadow = true;
+  matBase.receiveShadow = true;
+  if (options.csmState) installCsmShaderPatch(matBase, options.csmState);
+
+  const baseMesh = new t.Mesh(mergeParts(t, baseParts), matBase);
+  baseMesh.name = "ground-radar-pedestal";
+  baseMesh.castShadow = true;
+  baseMesh.receiveShadow = true;
+
+  // Glowing amber tactical scope screen (additive, 0 dynamic lights)
   const matScope = new t.MeshBasicMaterial({
     color: 0xffb833,
     transparent: true,
@@ -825,20 +1061,39 @@ export function buildGroundRadar(three, options = {}) {
     blending: t.AdditiveBlending,
     depthWrite: false,
   });
-  const scopeMesh = new t.Mesh(new t.BoxGeometry(0.46, 0.04, 0.18), matScope);
-  scopeMesh.position.set(0, -0.81, 1.06);
+  const scopeMesh = new t.Mesh(new t.BoxGeometry(0.28, 0.03, 0.12), matScope);
+  scopeMesh.position.set(0, -0.41, 0.66);
 
   const antennaGroup = new t.Group();
   antennaGroup.name = "slotted-array-antenna";
-  antennaGroup.position.set(0, 0.18, 2.28);
+
+  // Position antenna: when stowed, collapses flat horizontally at z = 0.66 m (H_stowed <= 1.05 m)
+  if (isStowed) {
+    antennaGroup.position.set(0, 0.08, 0.66);
+    antennaGroup.rotation.x = 0;
+  } else {
+    antennaGroup.position.set(0, 0.10, 1.42);
+  }
 
   const antGeom = mergeParts(t, [
-    zBox(t, 1.86, 0.18, 0.38, 0xd9822b, 0, 0, 0.06), // High-vis amber/orange slotted waveguide bar
-    zBox(t, 1.78, 0.21, 0.10, 0x2b3036, 0, 0, 0.06), // Dark waveguide slot strip
-    zBox(t, 0.26, 0.34, 0.22, 0x5e666c, 0, -0.10, -0.04), // Counterweight transceiver
-    shadePart(t, new t.ConeGeometry(0.09, 0.26, 6), 0x8d959c, { ty: 0.22, tz: 0.06 }), // Forward feedhorn
+    zBox(t, 0.52, 0.12, 0.22, 0xd9822b, 0, 0, 0.04), // Slotted waveguide bar
+    zBox(t, 0.50, 0.14, 0.06, 0x2b3036, 0, 0, 0.04), // Dark waveguide slot strip
+    zBox(t, 0.16, 0.22, 0.14, 0x5e666c, 0, -0.06, -0.02), // Counterweight transceiver
+    shadePart(t, new t.ConeGeometry(0.06, 0.16, 6), 0x8d959c, { ty: 0.14, tz: 0.04 }), // Forward feedhorn
   ]);
-  const antMesh = new t.Mesh(antGeom, new t.MeshBasicMaterial({ vertexColors: true }));
+  const matAntenna = new t.MeshStandardMaterial({
+    color: 0xffffff,
+    vertexColors: true,
+    roughness: 0.45,
+    metalness: 0.55,
+  });
+  matAntenna.castShadow = true;
+  matAntenna.receiveShadow = true;
+  if (options.csmState) installCsmShaderPatch(matAntenna, options.csmState);
+
+  const antMesh = new t.Mesh(antGeom, matAntenna);
+  antMesh.castShadow = true;
+  antMesh.receiveShadow = true;
   antennaGroup.add(antMesh);
 
   root.add(baseMesh, scopeMesh, antennaGroup);
@@ -850,16 +1105,17 @@ export function buildGroundRadar(three, options = {}) {
     wcid: DEPLOYABLE_WCID.GroundRadar,
     palletSize: "half",
     update(state = {}) {
+      if (isStowed) return;
       const time = Number.isFinite(state.simTimeSec) ? state.simTimeSec : 0;
       antennaGroup.rotation.z = (time * (30.0 * 2 * Math.PI / 60.0)) % (2 * Math.PI);
     },
     dispose() {
       pallet.dispose();
-      baseGeom.dispose();
+      baseMesh.geometry.dispose();
       baseMesh.material.dispose();
       scopeMesh.geometry.dispose();
       matScope.dispose();
-      antGeom.dispose();
+      antMesh.geometry.dispose();
       antMesh.material.dispose();
     },
   };
@@ -867,51 +1123,93 @@ export function buildGroundRadar(three, options = {}) {
 
 // ---------------------------------------------------------------------------
 // 7) Mortar Turret (WCID 4000016, Half Pallet)
-//    - Juts up & rotates; compressed-air accumulator tanks + heavy lob barrel
+//    - Fits Half GMA pad (<= 0.57 × 0.98 m)
+//    - Barrel retracts to 0° horizontal cradle when stowed (H_stowed <= 1.15 m, deployed ~2.10 m)
 // ---------------------------------------------------------------------------
 export function buildMortarTurret(three, options = {}) {
   const t = three || THREE_DEFAULT;
   const root = new t.Group();
   root.name = "mortar-turret-root";
-  const pallet = buildPallet(t, "half");
+  const pallet = buildPallet(t, "half", options);
   root.add(pallet.root);
 
-  // Heavy base plate & twin upright compressed-air pressure tanks at rear
+  const isStowed = Boolean(options.stowed);
+
+  // Heavy base plate & twin upright compressed-air pressure tanks (0.54 × 0.92 m <= 0.57 × 0.98 m)
   const baseGeom = mergeParts(t, [
-    zBox(t, 1.08, 2.20, 0.16, 0x363d35, 0, 0, 0.23),
-    zCyl(t, 0.50, 0.54, 0.18, 16, 0x454d43, 0, 0.22, 0.38), // Base recoil ring (+Z upright!)
-    // Twin high-pressure compressed-air tanks
-    zCyl(t, 0.19, 0.19, 0.98, 12, 0x3d6b5e, -0.30, -0.72, 0.78),
-    zCyl(t, 0.19, 0.19, 0.98, 12, 0x3d6b5e, 0.30, -0.72, 0.78),
-    zBox(t, 0.72, 0.14, 0.12, 0xb8862d, 0, -0.72, 1.30), // Brass high-pressure air manifold
+    zBox(t, 0.54, 0.92, 0.14, 0x363d35, 0, 0, 0.21),
+    zCyl(t, 0.24, 0.26, 0.12, 16, 0x454d43, 0, 0.12, 0.30), // Base recoil ring
+    // Twin compressed-air tanks
+    zCyl(t, 0.09, 0.09, 0.56, 12, 0x3d6b5e, -0.16, -0.32, 0.54),
+    zCyl(t, 0.09, 0.09, 0.56, 12, 0x3d6b5e, 0.16, -0.32, 0.54),
+    zBox(t, 0.38, 0.08, 0.08, 0xb8862d, 0, -0.32, 0.86), // Brass air manifold
   ]);
-  const recoilRing = new t.Mesh(baseGeom, new t.MeshBasicMaterial({ vertexColors: true }));
+  const matRecoilRing = new t.MeshStandardMaterial({
+    color: 0xffffff,
+    vertexColors: true,
+    roughness: 0.62,
+    metalness: 0.38,
+  });
+  matRecoilRing.castShadow = true;
+  matRecoilRing.receiveShadow = true;
+  if (options.csmState) installCsmShaderPatch(matRecoilRing, options.csmState);
+
+  const recoilRing = new t.Mesh(baseGeom, matRecoilRing);
+  recoilRing.castShadow = true;
+  recoilRing.receiveShadow = true;
 
   const carriage = new t.Group();
   carriage.name = "mortar-carriage";
-  carriage.position.set(0, 0.22, 0.46);
+  carriage.position.set(0, 0.12, 0.36);
 
   const cheekGeom = mergeParts(t, [
-    zCyl(t, 0.42, 0.44, 0.14, 14, 0x4e574c, 0, 0, 0.06),
-    zBox(t, 0.12, 0.52, 0.56, 0x556052, -0.28, 0, 0.34),
-    zBox(t, 0.12, 0.52, 0.56, 0x556052, 0.28, 0, 0.34),
-    zCyl(t, 0.12, 0.12, 0.36, 10, 0xc4ccd2, 0, -0.18, 0.28), // Pneumatic pop-up cylinder
+    zCyl(t, 0.20, 0.22, 0.10, 14, 0x4e574c, 0, 0, 0.04),
+    zBox(t, 0.07, 0.30, 0.36, 0x556052, -0.16, 0, 0.22),
+    zBox(t, 0.07, 0.30, 0.36, 0x556052, 0.16, 0, 0.22),
+    zCyl(t, 0.07, 0.07, 0.24, 10, 0xc4ccd2, 0, -0.10, 0.18), // Pneumatic pop-up cylinder
   ]);
-  const cheekMesh = new t.Mesh(cheekGeom, new t.MeshBasicMaterial({ vertexColors: true }));
+  const matCheek = new t.MeshStandardMaterial({
+    color: 0xffffff,
+    vertexColors: true,
+    roughness: 0.55,
+    metalness: 0.45,
+  });
+  matCheek.castShadow = true;
+  matCheek.receiveShadow = true;
+  if (options.csmState) installCsmShaderPatch(matCheek, options.csmState);
+
+  const cheekMesh = new t.Mesh(cheekGeom, matCheek);
+  cheekMesh.castShadow = true;
+  cheekMesh.receiveShadow = true;
 
   const cradle = new t.Group();
   cradle.name = "mortar-cradle";
-  cradle.position.set(0, 0, 0.48);
-  cradle.rotation.x = -0.52; // Default 60-deg high-angle mortar lob stance when idle!
+  cradle.position.set(0, 0, 0.32);
 
-  // Upright +Z heavy smoothbore pneumatic mortar tube + green-band collar + breech chamber
+  // When stowed, barrel retracts to 0° horizontal cradle (rx = -PI/2, total stowed height ~0.90 m <= 1.15 m)
+  // When deployed, idle stance is default 60-deg high-angle lob (-0.52 rad)
+  cradle.rotation.x = isStowed ? -Math.PI / 2 : -0.52;
+
+  // Smoothbore pneumatic mortar tube + green chemical band
   const barrelGeom = mergeParts(t, [
-    zCyl(t, 0.15, 0.19, 1.38, 14, 0x272b28, 0, 0, 0.0),
-    zCyl(t, 0.18, 0.18, 0.14, 14, 0x2ec85a, 0, 0, 0.54), // Green chemical/smoke mortar band!
-    zCyl(t, 0.22, 0.22, 0.28, 14, 0x4b534e, 0, 0, -0.58), // Compressed-air breech plenum
+    zCyl(t, 0.09, 0.11, 0.88, 14, 0x272b28, 0, 0, 0.0),
+    zCyl(t, 0.11, 0.11, 0.09, 14, 0x2ec85a, 0, 0, 0.34), // Green mortar band
+    zCyl(t, 0.13, 0.13, 0.18, 14, 0x4b534e, 0, 0, -0.37), // Breech plenum
   ]);
-  const barrel = new t.Mesh(barrelGeom, new t.MeshBasicMaterial({ vertexColors: true }));
-  barrel.position.set(0, 0, 0.65);
+  const matBarrel = new t.MeshStandardMaterial({
+    color: 0xffffff,
+    vertexColors: true,
+    roughness: 0.40,
+    metalness: 0.60,
+  });
+  matBarrel.castShadow = true;
+  matBarrel.receiveShadow = true;
+  if (options.csmState) installCsmShaderPatch(matBarrel, options.csmState);
+
+  const barrel = new t.Mesh(barrelGeom, matBarrel);
+  barrel.position.set(0, 0, 0.42);
+  barrel.castShadow = true;
+  barrel.receiveShadow = true;
 
   cradle.add(barrel);
   carriage.add(cheekMesh, cradle);
@@ -926,22 +1224,23 @@ export function buildMortarTurret(three, options = {}) {
     wcid: DEPLOYABLE_WCID.MortarTurret,
     palletSize: "half",
     update(state = {}) {
+      if (isStowed) return;
       if (Number.isFinite(state.deployElevation)) {
-        carriage.position.z = 0.46 + Math.min(1, Math.max(0, state.deployElevation)) * 0.32;
+        carriage.position.z = 0.36 + Math.min(1, Math.max(0, state.deployElevation)) * 0.24;
       }
       if (Number.isFinite(state.yawRad)) carriage.rotation.z = state.yawRad;
       if (Number.isFinite(state.pitchRad)) cradle.rotation.x = state.pitchRad;
       const safeRecoil = Number.isFinite(state.recoilSec) ? state.recoilSec : 0;
-      const recoilKick = Math.max(0, safeRecoil * 0.15);
-      barrel.position.z = 0.65 - recoilKick;
+      const recoilKick = Math.max(0, safeRecoil * 0.10);
+      barrel.position.z = 0.42 - recoilKick;
     },
     dispose() {
       pallet.dispose();
-      baseGeom.dispose();
+      recoilRing.geometry.dispose();
       recoilRing.material.dispose();
-      cheekGeom.dispose();
+      cheekMesh.geometry.dispose();
       cheekMesh.material.dispose();
-      barrelGeom.dispose();
+      barrel.geometry.dispose();
       barrel.material.dispose();
     },
   };
@@ -949,58 +1248,103 @@ export function buildMortarTurret(three, options = {}) {
 
 // ---------------------------------------------------------------------------
 // 8) Heavy Laser Turret (WCID 4000017, Half Pallet)
-//    - Air + Ground radar cued; twin heavy laser barrels & crimson capacitor core
+//    - Fits Half GMA pad (<= 0.57 × 0.98 m)
+//    - Emitters stow level at 0° when stowed (H_stowed <= 1.25 m)
 // ---------------------------------------------------------------------------
 export function buildHeavyLaserTurret(three, options = {}) {
   const t = three || THREE_DEFAULT;
   const root = new t.Group();
   root.name = "heavy-laser-turret-root";
-  const pallet = buildPallet(t, "half");
+  const pallet = buildPallet(t, "half", options);
   root.add(pallet.root);
 
-  // Upright +Z armored pedestal with copper thermal radiator fins
+  const isStowed = Boolean(options.stowed);
+
+  // Armored pedestal with copper thermal fins (0.54 × 0.92 m <= 0.57 × 0.98 m)
   const pedParts = [
-    zBox(t, 1.06, 2.08, 0.22, 0x282c2e, 0, 0, 0.26),
-    zCyl(t, 0.34, 0.44, 0.68, 12, 0x383e42, 0, 0, 0.68),
+    zBox(t, 0.54, 0.92, 0.14, 0x282c2e, 0, 0, 0.21),
+    zCyl(t, 0.18, 0.24, 0.44, 12, 0x383e42, 0, 0, 0.48),
   ];
   for (let i = -2; i <= 2; i++) {
-    pedParts.push(zBox(t, 0.88, 0.05, 0.42, 0xa84828, 0, -0.68 + i * 0.14, 0.56));
+    pedParts.push(zBox(t, 0.46, 0.03, 0.26, 0xa84828, 0, -0.32 + i * 0.08, 0.42));
   }
-  const pedestal = new t.Mesh(mergeParts(t, pedParts), new t.MeshBasicMaterial({ vertexColors: true }));
+  const matPedestal = new t.MeshStandardMaterial({
+    color: 0xffffff,
+    vertexColors: true,
+    roughness: 0.65,
+    metalness: 0.35,
+  });
+  matPedestal.castShadow = true;
+  matPedestal.receiveShadow = true;
+  if (options.csmState) installCsmShaderPatch(matPedestal, options.csmState);
+
+  const pedestal = new t.Mesh(mergeParts(t, pedParts), matPedestal);
+  pedestal.castShadow = true;
+  pedestal.receiveShadow = true;
 
   const turretHead = new t.Group();
   turretHead.name = "laser-head-yaw";
-  turretHead.position.set(0, 0, 1.08);
+  turretHead.position.set(0, 0, 0.72);
 
   const yokeGeom = mergeParts(t, [
-    zCyl(t, 0.36, 0.36, 0.16, 12, 0x4c545a, 0, 0, 0.0),
-    zBox(t, 0.14, 0.54, 0.52, 0x454c52, -0.36, 0, 0.28),
-    zBox(t, 0.14, 0.54, 0.52, 0x454c52, 0.36, 0, 0.28),
+    zCyl(t, 0.20, 0.20, 0.12, 12, 0x4c545a, 0, 0, 0.0),
+    zBox(t, 0.08, 0.36, 0.36, 0x454c52, -0.22, 0, 0.18),
+    zBox(t, 0.08, 0.36, 0.36, 0x454c52, 0.22, 0, 0.18),
   ]);
-  const yokeMesh = new t.Mesh(yokeGeom, new t.MeshBasicMaterial({ vertexColors: true }));
+  const matYoke = new t.MeshStandardMaterial({
+    color: 0xffffff,
+    vertexColors: true,
+    roughness: 0.50,
+    metalness: 0.50,
+  });
+  matYoke.castShadow = true;
+  matYoke.receiveShadow = true;
+  if (options.csmState) installCsmShaderPatch(matYoke, options.csmState);
+
+  const yokeMesh = new t.Mesh(yokeGeom, matYoke);
+  yokeMesh.castShadow = true;
+  yokeMesh.receiveShadow = true;
 
   const barrelGimbal = new t.Group();
   barrelGimbal.name = "laser-barrels-pitch";
-  barrelGimbal.position.set(0, 0, 0.34);
+  barrelGimbal.position.set(0, 0, 0.24);
+
+  // If stowed, emitters stow level at 0° (total stowed height ~1.05 m <= 1.25 m)
+  if (isStowed) {
+    turretHead.rotation.z = 0;
+    barrelGimbal.rotation.x = 0;
+  }
 
   // Faceted twin gunmetal laser emitter barrels pointing forward along +Y
   const barrelGeom = mergeParts(t, [
-    zBox(t, 0.58, 0.86, 0.44, 0x32373c, 0, -0.08, 0),
-    yCyl(t, 0.095, 0.115, 1.54, 10, 0x202428, -0.18, 0.68, 0.04),
-    yCyl(t, 0.095, 0.115, 1.54, 10, 0x202428, 0.18, 0.68, 0.04),
+    zBox(t, 0.38, 0.56, 0.30, 0x32373c, 0, -0.05, 0),
+    yCyl(t, 0.065, 0.075, 0.98, 10, 0x202428, -0.12, 0.44, 0.02),
+    yCyl(t, 0.065, 0.075, 0.98, 10, 0x202428, 0.12, 0.44, 0.02),
     // Focusing shroud rings
-    yCyl(t, 0.125, 0.125, 0.12, 10, 0x6c757d, -0.18, 1.36, 0.04),
-    yCyl(t, 0.125, 0.125, 0.12, 10, 0x6c757d, 0.18, 1.36, 0.04),
-    // Top dual-mode Air/Ground optical director pod
-    zBox(t, 0.28, 0.42, 0.18, 0x4f5860, 0, 0.08, 0.30),
+    yCyl(t, 0.085, 0.085, 0.08, 10, 0x6c757d, -0.12, 0.86, 0.02),
+    yCyl(t, 0.085, 0.085, 0.08, 10, 0x6c757d, 0.12, 0.86, 0.02),
+    // Top dual-mode optical director pod
+    zBox(t, 0.18, 0.28, 0.12, 0x4f5860, 0, 0.05, 0.20),
   ]);
-  const barrelMesh = new t.Mesh(barrelGeom, new t.MeshBasicMaterial({ vertexColors: true }));
+  const matBarrel = new t.MeshStandardMaterial({
+    color: 0xffffff,
+    vertexColors: true,
+    roughness: 0.35,
+    metalness: 0.65,
+  });
+  matBarrel.castShadow = true;
+  matBarrel.receiveShadow = true;
+  if (options.csmState) installCsmShaderPatch(matBarrel, options.csmState);
 
-  // Glowing crimson capacitor rails & twin ruby focusing lenses
+  const barrelMesh = new t.Mesh(barrelGeom, matBarrel);
+  barrelMesh.castShadow = true;
+  barrelMesh.receiveShadow = true;
+
+  // Glowing crimson capacitor rails & twin ruby focusing lenses (additive, 0 dynamic lights)
   const glowGeom = mergeParts(t, [
-    yCyl(t, 0.075, 0.075, 0.06, 10, 0xff2233, -0.18, 1.44, 0.04),
-    yCyl(t, 0.075, 0.075, 0.06, 10, 0xff2233, 0.18, 1.44, 0.04),
-    zBox(t, 0.62, 0.56, 0.10, 0xff1828, 0, -0.10, 0.04),
+    yCyl(t, 0.05, 0.05, 0.04, 10, 0xff2233, -0.12, 0.91, 0.02),
+    yCyl(t, 0.05, 0.05, 0.04, 10, 0xff2233, 0.12, 0.91, 0.02),
+    zBox(t, 0.40, 0.36, 0.06, 0xff1828, 0, -0.06, 0.02),
   ]);
   const matLaserGlow = new t.MeshBasicMaterial({
     color: 0xff2233,
@@ -1023,6 +1367,7 @@ export function buildHeavyLaserTurret(three, options = {}) {
     wcid: DEPLOYABLE_WCID.HeavyLaserTurret,
     palletSize: "half",
     update(state = {}) {
+      if (isStowed) return;
       if (Number.isFinite(state.yawRad)) turretHead.rotation.z = state.yawRad;
       if (Number.isFinite(state.pitchRad)) barrelGimbal.rotation.x = state.pitchRad;
     },
@@ -1030,11 +1375,11 @@ export function buildHeavyLaserTurret(three, options = {}) {
       pallet.dispose();
       pedestal.geometry.dispose();
       pedestal.material.dispose();
-      yokeGeom.dispose();
+      yokeMesh.geometry.dispose();
       yokeMesh.material.dispose();
-      barrelGeom.dispose();
+      barrelMesh.geometry.dispose();
       barrelMesh.material.dispose();
-      glowGeom.dispose();
+      glowMesh.geometry.dispose();
       matLaserGlow.dispose();
     },
   };

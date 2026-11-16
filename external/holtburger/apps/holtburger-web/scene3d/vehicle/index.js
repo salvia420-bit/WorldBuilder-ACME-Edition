@@ -39,6 +39,16 @@ import { flightResidencyEnabled, setFlightHint, clearFlightHint } from "../resid
 import { buildDeployable, DEPLOYABLE_WCID, DEPLOYABLE_KINDS } from "./deployable_models.js";
 import { buildDeployedRadar } from "./radar_model.js";
 import { buildProceduralJeep } from "./jeep_model.js";
+import {
+  buildIsoContainer,
+  buildContainer,
+  ISO_CONTAINER_SPECS,
+  CONTAINER_WCID,
+  DEPLOYABLE_KIND,
+  CONTAINER_KINDS,
+  CONTAINER_LIVERIES,
+} from "./container_models.js";
+import { requestShadowRaster } from "../interior_shadow_cull.js";
 import { createGroundFx } from "./ground_fx.js";
 import { applySeatPoseToEntity, getSeatOffset, interpolateSeatHotSwap } from "./seat_poses.js";
 import { createDeployableCombatVfx } from "./deployable_vfx.js";
@@ -221,6 +231,7 @@ export function installVehicles(deps = {}) {
   const deployableAudio = audioOn ? new DeployableAudioManager(live.audioManager?.getEffectBus?.() ?? null, { enabled: true }) : null;
   const radarScope = new RadarScopeHud({ width: 236, height: 236, mode: "combined" });
   const deployables = new Map(); // guid -> { guid, kind, wcid, model, last, lastSeenAt, standInHidden }
+  const containers = new Map(); // guid -> { guid, kind, wcid, model, last, cell, rawPos, heading, targetDoorProgress, currentDoorProgress, lastDoorOpen, lastSeenAt, standInHidden, liveryId, serialNumber, slots }
   const groundModels = new Map(); // guid -> procedural jeep instance
   const jeepModels = groundModels; // backward compatibility alias
   const groundFx = THREE ? createGroundFx({ THREE, root: live.worldRoot, liveScene3d: live }) : null;
@@ -280,6 +291,158 @@ export function installVehicles(deps = {}) {
       try { em()?.setFilmHidden?.(g, false); } catch (_) {}
     }
     deployables.delete(g);
+  }
+
+  const CONTAINER_KIND_TO_WCID = Object.freeze({
+    10: 4000020,
+    11: 4000021,
+    12: 4000022,
+    [CONTAINER_WCID?.IsoContainer20 ?? 4000020]: 4000020,
+    [CONTAINER_WCID?.IsoContainer40 ?? 4000021]: 4000021,
+    [CONTAINER_WCID?.IsoContainer40HC ?? 4000022]: 4000022,
+  });
+
+  const CONTAINER_WCID_TO_KIND = Object.freeze({
+    4000020: 10,
+    4000021: 11,
+    4000022: 12,
+    10: 10,
+    11: 11,
+    12: 12,
+  });
+
+  function ensureContainerEntry(guid, kindOrWcid, initialMsg = {}) {
+    if (!THREE || !live?.worldRoot) return null;
+    const g = guid >>> 0;
+    let entry = containers.get(g);
+    const kind = CONTAINER_WCID_TO_KIND[kindOrWcid] ?? 10;
+    const wcid = CONTAINER_KIND_TO_WCID[kindOrWcid] ?? 4000020;
+
+    if (entry && entry.kind !== kind) {
+      try {
+        if (entry.model?.root?.parent) entry.model.root.parent.remove(entry.model.root);
+        entry.model?.dispose?.();
+      } catch (_) {}
+      containers.delete(g);
+      entry = null;
+    }
+
+    if (!entry) {
+      const initProgress = Number.isFinite(initialMsg.doorProgress)
+        ? initialMsg.doorProgress
+        : (initialMsg.doorState === 2 ? 1.0 : 0.0);
+      const model = buildIsoContainer(THREE, wcid, {
+        csmState: live.csmState,
+        liveryId: initialMsg.liveryId ?? 0,
+        serialNumber: initialMsg.serialNumber ?? 0,
+        doorProgress: initProgress,
+      });
+      live.worldRoot.add(model.root);
+      const rawPos = Array.isArray(initialMsg.position)
+        ? initialMsg.position
+        : [initialMsg.x ?? 0, initialMsg.y ?? 0, initialMsg.z ?? 0];
+      const cell = initialMsg.cell ?? 0;
+      const heading = Number.isFinite(initialMsg.heading) ? initialMsg.heading : 0;
+      const isDoorOpen = initProgress >= 0.5;
+      entry = {
+        guid: g,
+        kind,
+        wcid,
+        model,
+        last: null,
+        cell,
+        rawPos,
+        heading,
+        targetDoorProgress: initProgress,
+        currentDoorProgress: initProgress,
+        lastDoorOpen: null,
+        lastSeenAt: nowSec(),
+        standInHidden: false,
+        liveryId: initialMsg.liveryId ?? 0,
+        serialNumber: initialMsg.serialNumber ?? 0,
+        slots: Array.isArray(initialMsg.slots) ? initialMsg.slots : [],
+      };
+      containers.set(g, entry);
+
+      // Immediately register dynamic physical building collider in WASM physics on initial spawn
+      try {
+        sh()?.upsertContainerCollider(g, cell, rawPos[0], rawPos[1], rawPos[2], heading, kind, isDoorOpen);
+      } catch (_) {}
+
+      // Invalidate static shadow cache on spawn so container casts dynamic sun shadows
+      try { requestShadowRaster(live.renderer, live); } catch (_) {}
+    }
+    return entry;
+  }
+
+  function removeContainerEntry(guid) {
+    const g = guid >>> 0;
+    const entry = containers.get(g);
+    if (!entry) return;
+    try {
+      if (entry.model?.root?.parent) entry.model.root.parent.remove(entry.model.root);
+      entry.model?.dispose?.();
+    } catch (_) {}
+    if (entry.standInHidden) {
+      try { em()?.setFilmHidden?.(g, false); } catch (_) {}
+    }
+    try { sh()?.removeContainerCollider(g); } catch (_) {}
+    try { requestShadowRaster(live.renderer, live); } catch (_) {}
+    containers.delete(g);
+  }
+
+  function tickContainers(dt) {
+    const DOOR_SPEED = 1.0 / 1.2;
+    const maxStep = (dt > 0 ? dt : 1 / 60) * DOOR_SPEED;
+
+    for (const entry of containers.values()) {
+      const inEm = em()?.entityMap?.get(entry.guid);
+      if (inEm && (!entry.standInHidden || inEm._filmHidden !== true)) {
+        try { if (em()?.setFilmHidden?.(entry.guid, true)) entry.standInHidden = true; } catch (_) {}
+      }
+
+      if (Math.abs(entry.currentDoorProgress - entry.targetDoorProgress) > 1e-4) {
+        if (entry.currentDoorProgress < entry.targetDoorProgress) {
+          entry.currentDoorProgress = Math.min(entry.targetDoorProgress, entry.currentDoorProgress + maxStep);
+        } else {
+          entry.currentDoorProgress = Math.max(entry.targetDoorProgress, entry.currentDoorProgress - maxStep);
+        }
+
+        // Static shadow cache invalidation during door motion so CSM shadow streams inside!
+        try { requestShadowRaster(live.renderer, live); } catch (_) {}
+
+        // Check doorOpen threshold crossing for dynamic collider update
+        const doorOpen = entry.currentDoorProgress >= 0.5;
+        if (doorOpen !== entry.lastDoorOpen) {
+          entry.lastDoorOpen = doorOpen;
+          if (entry.rawPos) {
+            try {
+              sh()?.upsertContainerCollider(
+                entry.guid,
+                entry.cell,
+                entry.rawPos[0],
+                entry.rawPos[1],
+                entry.rawPos[2],
+                entry.heading,
+                entry.kind,
+                doorOpen
+              );
+            } catch (_) {}
+          }
+        }
+      }
+
+      try {
+        if (typeof entry.model.update === "function") {
+          entry.model.update(dt, {
+            doorProgress: entry.currentDoorProgress,
+            liveryId: entry.liveryId,
+          });
+        } else if (typeof entry.model.setDoorProgress === "function") {
+          entry.model.setDoorProgress(entry.currentDoorProgress);
+        }
+      } catch (_) {}
+    }
   }
 
   function tickDeployables(dt) {
@@ -712,6 +875,8 @@ export function installVehicles(deps = {}) {
           if (handoff && handoff.v === v) endHandoff("despawned");
           forgetVehicle(v);
           vehicles.delete(m.vehicle >>> 0);
+          removeContainerEntry(m.vehicle >>> 0);
+          if (m.subject) removeContainerEntry(m.subject >>> 0);
         } else if (m.kind === 2) { // aircraft landed
           try {
             const p0 = Number.isFinite(m.cell) && m.cell ? FM.toGlobal(m.cell, m.x, m.y, m.z) : (v?.last ? stateFromMsg(v.last) : null);
@@ -805,6 +970,7 @@ export function installVehicles(deps = {}) {
           if (entry) entry.model.root.position.set(wx, wy, wz);
         } else if (m.kind === 16 && m.aux) { // CargoPacked
           removeDeployableEntry(m.aux >>> 0);
+          removeContainerEntry(m.aux >>> 0);
         }
         break;
       }
@@ -850,6 +1016,53 @@ export function installVehicles(deps = {}) {
           else if (m.weaponKind === 2) deployableAudio?.playMortarLaunch?.(mz);
           else if (m.weaponKind === 3) deployableAudio?.playLaserSnap?.(mz);
         } catch (_) {}
+        break;
+      }
+      case "container_state": {
+        const guid = (m.containerGuid ?? m.guid ?? m.container) >>> 0;
+        if (!guid) break;
+        const kind = (m.containerKind ?? m.kind ?? 10) >>> 0;
+        const pos = Array.isArray(m.position) ? m.position : [m.x ?? 0, m.y ?? 0, m.z ?? 0];
+        const cell = (m.cell ?? 0) >>> 0;
+        const heading = Number.isFinite(m.heading) ? m.heading : 0;
+        const doorProgress = Number.isFinite(m.doorProgress)
+          ? m.doorProgress
+          : (Number.isFinite(m.door_progress) ? m.door_progress : (m.doorState === 2 ? 1.0 : 0.0));
+        const doorState = m.doorState ?? 0;
+        const liveryId = m.liveryId ?? 0;
+        const serialNumber = m.serialNumber ?? 0;
+        const slots = Array.isArray(m.slots) ? m.slots : [];
+
+        const entry = ensureContainerEntry(guid, kind, m);
+        if (entry) {
+          const [wx, wy, wz] = cell ? FM.toGlobal(cell, pos[0], pos[1], pos[2]) : [pos[0], pos[1], pos[2]];
+          entry.model.root.position.set(wx, wy, wz);
+          entry.model.root.rotation.z = -heading;
+
+          entry.last = m;
+          entry.lastSeenAt = nowSec();
+          entry.targetDoorProgress = doorProgress;
+          const posChanged = !entry.rawPos || entry.rawPos[0] !== pos[0] || entry.rawPos[1] !== pos[1] || entry.rawPos[2] !== pos[2] || entry.cell !== cell || entry.heading !== heading;
+          const doorOpen = entry.currentDoorProgress >= 0.5 || doorState === 1 || doorState === 2;
+          if (doorOpen !== entry.lastDoorOpen || posChanged || entry.lastDoorOpen === null) {
+            entry.lastDoorOpen = doorOpen;
+            try {
+              sh()?.upsertContainerCollider(guid, cell, pos[0], pos[1], pos[2], heading, kind, doorOpen);
+            } catch (_) {}
+          }
+
+          entry.cell = cell;
+          entry.rawPos = pos;
+          entry.heading = heading;
+          entry.kind = kind;
+          entry.liveryId = liveryId;
+          entry.serialNumber = serialNumber;
+
+          if (Array.isArray(m.slots)) {
+            entry.slots = slots;
+            try { entry.model?.syncSlots?.(slots); } catch (_) {}
+          }
+        }
         break;
       }
       default:
@@ -2429,6 +2642,7 @@ export function installVehicles(deps = {}) {
     tickPrompt();
     fx.tick(dt);
     tickDeployables(dt);
+    tickContainers(dt);
     aeroFx?.tick(dt);
     if (!pilot && !passenger) osd.sights(null, null, "");
     chutes?.tick(dt, chutePose);
@@ -2594,6 +2808,46 @@ export function installVehicles(deps = {}) {
       vfx: deployableVfx,
       scope: radarScope,
     },
+    containers: {
+      list: () => [...containers.values()].map((c) => ({
+        guid: c.guid,
+        kind: c.kind,
+        pos: [c.model.root.position.x, c.model.root.position.y, c.model.root.position.z],
+        doorProgress: c.currentDoorProgress,
+        targetDoorProgress: c.targetDoorProgress,
+        doorOpen: c.currentDoorProgress >= 0.5,
+        last: c.last,
+      })),
+      get: (guid) => containers.get(guid >>> 0) ?? null,
+      spawnLocal(guid, kind, worldPos, heading = 0, state = {}) {
+        const entry = ensureContainerEntry(guid, kind, { ...state, cell: 0, position: worldPos, heading });
+        if (!entry) return null;
+        entry.model.root.position.set(worldPos[0], worldPos[1], worldPos[2]);
+        entry.model.root.rotation.z = -heading;
+        entry.rawPos = [worldPos[0], worldPos[1], worldPos[2]];
+        entry.heading = heading;
+        entry.currentDoorProgress = state.doorProgress ?? (state.doorState === 2 ? 1.0 : 0.0);
+        entry.targetDoorProgress = entry.currentDoorProgress;
+        entry.last = { ...state };
+        const doorOpen = entry.currentDoorProgress >= 0.5;
+        try {
+          sh()?.upsertContainerCollider(guid >>> 0, 0, worldPos[0], worldPos[1], worldPos[2], heading, kind, doorOpen);
+        } catch (_) {}
+        try { requestShadowRaster(live.renderer, live); } catch (_) {}
+        return entry;
+      },
+      removeLocal(guid) {
+        removeContainerEntry(guid);
+      },
+      action(containerGuid, action, slotIndex = 0, subSlot = 0, cargoWcid = 0) {
+        try {
+          sh()?.vehicleContainerAction?.(containerGuid >>> 0, action, slotIndex, subSlot, cargoWcid);
+          return true;
+        } catch (_) {
+          return false;
+        }
+      },
+    },
     dispose() {
       disposed = true;
       teardownSession("dispose");
@@ -2607,6 +2861,8 @@ export function installVehicles(deps = {}) {
       promptTimer = null;
       for (const v of vehicles.values()) forgetVehicle(v);
       for (const g of [...deployables.keys()]) removeDeployableEntry(g);
+      for (const g of [...containers.keys()]) removeContainerEntry(g);
+      containers.clear();
       for (const j of jeepModels.values()) {
         try { if (j.root.parent) j.root.parent.remove(j.root); j.dispose(); } catch (_) {}
       }
