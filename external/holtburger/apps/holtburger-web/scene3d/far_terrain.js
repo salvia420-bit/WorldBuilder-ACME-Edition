@@ -777,8 +777,21 @@ function ensureBakeRig(scene3d) {
   for (const u of Object.values(src.uniforms)) {
     if (u && u.value && u.value.isRenderTargetTexture) { savedRt.push([u, u.value]); u.value = null; }
   }
-  const mat = src.clone();
-  for (const [u, v] of savedRt) u.value = v;
+  // Material.copy deep-copies `userData` through JSON.parse(JSON.stringify(...)). The near-ring terrain
+  // material keeps texture objects (a DataArrayTexture atlas) in userData, so that stringify serialised the
+  // whole atlas image — seconds of main-thread work — and then threw `RangeError: Invalid array length`.
+  // st.bake was never set, so every frame retried the clone (0.25 fps at quality=ultra). Clone without
+  // userData and share it by reference: the bake rig only reads it.
+  const savedUserData = src.userData;
+  src.userData = {};
+  let mat;
+  try {
+    mat = src.clone();
+  } finally {
+    src.userData = savedUserData;
+    for (const [u, v] of savedRt) u.value = v;
+  }
+  mat.userData = savedUserData;
   mat.name = "far-terrain-bake";
   // `clone()` deep-copies the uniform objects, so writing the values below
   // cannot disturb the live near-ring material. It does NOT keep textures by
