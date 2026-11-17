@@ -73,6 +73,20 @@ fn c2s_fields(m: &VehicleC2S) -> Value {
             "Reserved": ca.reserved,
             "CargoWcid": ca.cargo_wcid,
         }),
+        VehicleC2S::PalletAction(pa) => {
+            let target_guid = pa.target_guid;
+            let action = pa.action;
+            let reserved = pa.reserved;
+            let aux = pa.aux;
+            json!({
+                "TargetGuid": target_guid,
+                "Action": action,
+                "Reserved0": reserved[0],
+                "Reserved1": reserved[1],
+                "Reserved2": reserved[2],
+                "Aux": aux,
+            })
+        },
     }
 }
 
@@ -126,6 +140,16 @@ fn c2s_from(opcode: u32, o: &Value) -> VehicleC2S {
             sub_slot: gu(o, "SubSlot") as u8,
             reserved: gu(o, "Reserved") as u8,
             cargo_wcid: gu(o, "CargoWcid"),
+        }),
+        c2s::PALLET_ACTION => VehicleC2S::PalletAction(VehiclePalletAction {
+            target_guid: gu(o, "TargetGuid"),
+            action: gu(o, "Action") as u8,
+            reserved: [
+                gu(o, "Reserved0") as u8,
+                gu(o, "Reserved1") as u8,
+                gu(o, "Reserved2") as u8,
+            ],
+            aux: gu(o, "Aux"),
         }),
         _ => panic!("not a C2S vehicle opcode {opcode:#x}"),
     }
@@ -316,6 +340,20 @@ fn s2c_fields(m: &VehicleS2C) -> Value {
                 "CargoWcid": s.cargo_wcid,
             })).collect::<Vec<_>>(),
         }),
+        VehicleS2C::PalletEvent(pe) => {
+            let target_guid = pe.target_guid;
+            let action = pe.action;
+            let reserved = pe.reserved;
+            let aux = pe.aux;
+            json!({
+                "TargetGuid": target_guid,
+                "Action": action,
+                "Reserved0": reserved[0],
+                "Reserved1": reserved[1],
+                "Reserved2": reserved[2],
+                "Aux": aux,
+            })
+        },
     }
 }
 
@@ -454,6 +492,13 @@ fn s2c_from(opcode: u32, o: &Value) -> VehicleS2C {
             reserved3: o.get("Reserved3").and_then(|v| v.as_u64()).unwrap_or(0) as u8,
             cargo_slot0_wcid: o.get("CargoSlot0Wcid").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
             cargo_slot1_wcid: o.get("CargoSlot1Wcid").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
+            lift_norm_u8: o.get("LiftNormU8").and_then(|v| v.as_u64()).unwrap_or(0) as u8,
+            pump_phase_u8: o.get("PumpPhaseU8").and_then(|v| v.as_u64()).unwrap_or(0) as u8,
+            fork_stress_u8: o.get("ForkStressU8").and_then(|v| v.as_u64()).unwrap_or(0) as u8,
+            jack_flags: o.get("JackFlags").and_then(|v| v.as_u64()).unwrap_or(0) as u8,
+            carried_pallet_guid: o.get("CarriedPalletGuid").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
+            fork_insert_m: o.get("ForkInsertM").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32,
+            carried_rel_yaw: o.get("CarriedRelYaw").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32,
         }),
         s2c::FIRE => VehicleS2C::Fire(VehicleFire {
             vehicle: gu(o, "Vehicle"),
@@ -594,6 +639,30 @@ fn s2c_from(opcode: u32, o: &Value) -> VehicleS2C {
                     cargo_wcid: gu(s, "CargoWcid"),
                 })
                 .collect(),
+            bay_pallets: o.get("BayPallets")
+                .map(|p| p.as_array().unwrap().iter().map(|p| ContainerBayPalletWire {
+                    pallet_guid: gu(p, "PalletGuid"),
+                    cargo_wcid: gu(p, "CargoWcid"),
+                    pallet_size: gu(p, "PalletSize") as u8,
+                    flags: gu(p, "Flags") as u8,
+                    health_u8: gu(p, "HealthU8") as u8,
+                    slot_hint: gu(p, "SlotHint") as u8,
+                    local_x: gf(p, "LocalX"),
+                    local_y: gf(p, "LocalY"),
+                    local_yaw: gf(p, "LocalYaw"),
+                    fuel_or_ammo: gu(p, "FuelOrAmmo"),
+                }).collect())
+                .unwrap_or_default(),
+        }),
+        s2c::PALLET_EVENT => VehicleS2C::PalletEvent(VehiclePalletEvent {
+            target_guid: gu(o, "TargetGuid"),
+            action: gu(o, "Action") as u8,
+            reserved: [
+                gu(o, "Reserved0") as u8,
+                gu(o, "Reserved1") as u8,
+                gu(o, "Reserved2") as u8,
+            ],
+            aux: gu(o, "Aux"),
         }),
         _ => panic!("not an S2C vehicle opcode {opcode:#x}"),
     }

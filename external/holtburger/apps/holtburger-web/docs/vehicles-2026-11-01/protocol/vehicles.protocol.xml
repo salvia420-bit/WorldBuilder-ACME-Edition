@@ -53,8 +53,9 @@
   Units: metres, seconds, radians. Positions are AC cell + landblock-local coordinates. Angles: heading is a
   COMPASS angle (0 = north/+y, pi/2 = east/+x, clockwise); pitch is nose-up positive; bank is right-wing-down
   positive. Stick values are signed bytes scaled by 1/127 (-128 clamps to -1). Throttle is u8 scaled by 1/255.
+  v6 additions (2026-11): PalletAction/Event (0x090F).
 -->
-<schema text="holtburger vehicles (HBV1) — additive, capability-gated vehicle messages" version="5">
+<schema text="holtburger vehicles (HBV1) — additive, capability-gated vehicle messages" version="6">
   <enums>
     <enum name="VehicleCapability" parent="uint" mask="true" text="ClientCapabilities.Flags / CapabilitiesAck.Granted">
       <value value="0x00000001" name="Observe" text="receive VehicleProfile / VehicleSeat / VehicleState / VehicleFire / VehicleEvent" />
@@ -64,6 +65,7 @@
     <enum name="VehicleLocomotion" parent="uint">
       <value value="1" name="Air" />
       <value value="2" name="Ground" />
+      <value value="3" name="PalletJack" />
     </enum>
     <enum name="VehicleMode" parent="byte" text="VehicleState.Mode">
       <value value="0" name="Parked" />
@@ -174,6 +176,8 @@
       <value value="10" name="IsoContainer20" text="ISO 20ft Standard 1CC/22G1 intermodal container (WCID 4000020)" />
       <value value="11" name="IsoContainer40" text="ISO 40ft Standard 1AA/42G1 intermodal container (WCID 4000021)" />
       <value value="12" name="IsoContainer40HC" text="ISO 40ft High Cube 1AAA/45G1 intermodal container (WCID 4000022)" />
+      <value value="13" name="GmaPalletFull" text="ANSI MH1 GMA Full Pallet 48x40 (WCID 4000028)" />
+      <value value="14" name="GmaPalletHalf" text="ANSI MH1 GMA Half Pallet 24x40 (WCID 4000029)" />
     </enum>
     <enum name="PalletSize" parent="byte">
       <value value="0" name="None" />
@@ -270,6 +274,18 @@
       <field type="byte" name="Reserved" />
       <field type="ObjectId" name="CargoWcid" />
     </type>
+    <type name="ContainerBayPalletWire" text="28 bytes continuous container floor pallet record">
+      <field type="ObjectId" name="PalletGuid" />
+      <field type="ObjectId" name="CargoWcid" />
+      <field type="PalletSize" name="PalletSize" />
+      <field type="byte" name="Flags" text="0x01=Stowed, 0x02=Broken, 0x04=BreakSideRight, 0x08=Engaged" />
+      <field type="byte" name="HealthU8" />
+      <field type="byte" name="SlotHint" text="0xFF if freeform, 0..20 if seeded from preset" />
+      <field type="float" name="LocalX" />
+      <field type="float" name="LocalY" />
+      <field type="float" name="LocalYaw" />
+      <field type="uint" name="FuelOrAmmo" text="preserved deployable state across container stowing" />
+    </type>
   </types>
   <gameactions>
     <type name="Vehicle_ClientCapabilities" queue="Weenie" type="0x0900" text="A capable client announces itself after entering the world (once per login)">
@@ -310,6 +326,15 @@
       <field type="byte" name="SubSlot" />
       <field type="byte" name="Reserved" />
       <field type="ObjectId" name="CargoWcid" />
+    </type>
+    <type name="Vehicle_PalletAction" queue="Weenie" type="0x090F" text="Client pallet action request">
+      <field type="VehicleHeader" name="Header" />
+      <field type="ObjectId" name="TargetGuid" />
+      <field type="byte" name="Action" />
+      <field type="byte" name="Reserved0" default="0" />
+      <field type="byte" name="Reserved1" default="0" />
+      <field type="byte" name="Reserved2" default="0" />
+      <field type="uint" name="Aux" />
     </type>
   </gameactions>
   <gameevents>
@@ -402,6 +427,13 @@
       <field type="byte" name="Reserved3" since="4" default="0" />
       <field type="ObjectId" name="CargoSlot0Wcid" since="4" default="0" text="WCID in slot 0 or full pallet" />
       <field type="ObjectId" name="CargoSlot1Wcid" since="4" default="0" text="WCID in slot 1" />
+      <field type="byte" name="LiftNormU8" since="6" default="0" text="0..255 -> 0.0..1.0, z_fork = 0.075 + 0.120 * liftNorm" />
+      <field type="byte" name="PumpPhaseU8" since="6" default="0" text="0..255 -> handle pump animation phase" />
+      <field type="byte" name="ForkStressU8" since="6" default="0" text="0..255 -> wood bind/slat stress warning telemetry" />
+      <field type="byte" name="JackFlags" since="6" default="0" text="0x01=ForksEngaged, 0x02=LoadLifted, 0x04=RollerOnSlat, 0x08=HighCentered, 0x10=LoadBroken, 0x20=ProngsPokedThrough" />
+      <field type="ObjectId" name="CarriedPalletGuid" since="6" default="0" text="0 when empty or forks sliding loose" />
+      <field type="float" name="ForkInsertM" since="6" default="0" text="0.0..1.2192 m insertion depth into engaged pallet" />
+      <field type="float" name="CarriedRelYaw" since="6" default="0" text="relative orientation of pallet on forks: 0, ±π/2, π + crooked bind offset" />
     </type>
     <type name="Vehicle_Fire" queue="UIQueue" type="0x0907" text="Rounds fired this step (tracers); hits arrive through the standard damage messages">
       <field type="VehicleHeader" name="Header" />
@@ -464,6 +496,10 @@
       <field type="float" name="YawRad" text="Gimbal yaw angle" />
       <field type="float" name="RollRad" text="SAM 3-axis gimbal roll" />
       <field type="float" name="ElevationM" text="Pneumatic cylinder rise height (0..0.85m)" />
+      <field type="byte" name="OnlineFlagsV6" since="6" default="0" text="0x10 = Stowed, 0x20 = PalletBroken, 0x40 = BreakSideRight" />
+      <field type="byte" name="PalletHealthU8" since="6" default="100" text="0..100, default 100" />
+      <field type="byte" name="ReservedV6_0" since="6" default="0" />
+      <field type="ushort" name="ReservedV6_1" since="6" default="0" />
     </type>
     <type name="Vehicle_DeployableFire" queue="UIQueue" type="0x090C" text="Deployable weapon discharge event (68 bytes)">
       <field type="VehicleHeader" name="Header" />
@@ -507,6 +543,17 @@
       <field type="uint" name="SerialNumber" text="ISO 6346 6-digit serial" />
       <field type="uint" name="SlotCount" />
       <vector name="Slots" length="SlotCount" type="ContainerSlotWire" />
+      <field type="uint" name="BayPalletCount" since="6" default="0" />
+      <vector name="BayPallets" length="BayPalletCount" type="ContainerBayPalletWire" since="6" />
+    </type>
+    <type name="Vehicle_PalletEvent" queue="UIQueue" type="0x090F" text="Authoritative pallet state broadcast">
+      <field type="VehicleHeader" name="Header" />
+      <field type="ObjectId" name="TargetGuid" />
+      <field type="byte" name="Action" />
+      <field type="byte" name="Reserved0" default="0" />
+      <field type="byte" name="Reserved1" default="0" />
+      <field type="byte" name="Reserved2" default="0" />
+      <field type="uint" name="Aux" />
     </type>
   </gameevents>
 </schema>
