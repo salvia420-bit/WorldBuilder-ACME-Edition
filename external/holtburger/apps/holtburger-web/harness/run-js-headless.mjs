@@ -202,6 +202,7 @@ const TIER4 = [
   { flag: "visualImprovementsTier2", file: "tests/visual_improvements_tier2.test.mjs" },
   { flag: "visualImprovementsTier3", file: "tests/visual_improvements_tier3.test.mjs" },
   { flag: "visualImprovementsTier4", file: "tests/visual_improvements_tier4.test.mjs" },
+  { flag: "trailer_integration", file: "tests/trailer_integration.test.mjs" },
 ].map((t) => ({ ...t, tier: 4 }));
 
 
