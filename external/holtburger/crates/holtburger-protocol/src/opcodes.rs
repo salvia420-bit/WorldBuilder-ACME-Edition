@@ -536,8 +536,6 @@ pub enum GameActionOpcode {
     VehicleCargo = 0x0909,
     /// C2S: HBV1 VehicleContainerAction (door toggle / load / pack / unpack).
     VehicleContainerAction = 0x090E,
-    /// C2S: HBV1 VehiclePalletAction (deploy / pack / aux).
-    VehiclePalletAction = 0x090F,
     // /// C2S: Response to an admin plugin detail query.
     // QueryPluginResponse = 0x02B2,
     /// C2S: Finalize character changes in a barber session (retail
@@ -1095,8 +1093,6 @@ pub enum GameEventOpcode {
     VehicleGroundContacts = 0x090D,
     /// S2C: HBV1 VehicleContainerState (authoritative container telemetry broadcast).
     VehicleContainerState = 0x090E,
-    /// S2C: HBV1 VehiclePalletEvent (authoritative pallet state broadcast).
-    VehiclePalletEvent = 0x090F,
     // /// S2C: Admin-only query for a specific plugin's status.
     // AdminQueryPlugin = 0x02B1,
     // /// S2C: Admin-only response to a plugin query.

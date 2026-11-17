@@ -243,7 +243,7 @@
     "Speed": 68.75, "VCap": 69.0, "Ammo": 187, "Mode": 2, "Flags": 1,
     "MissileMask": 3, "BombMask": 1, "Reserved2": 0,
     "SteerAngle": 0.0, "GroundFlags": 0, "SurfaceFamily": 0, "WheelSpinQ16": 0,
-    "CargoMask": 0, "PalletSize0": 0, "PalletSize1": 0, "Reserved3": 0, "CargoSlot0Wcid": 0, "CargoSlot1Wcid": 0, "LiftNormU8": 0, "PumpPhaseU8": 0, "ForkStressU8": 0, "JackFlags": 0, "CarriedPalletGuid": 0, "ForkInsertM": 0.0, "CarriedRelYaw": 0.0
+    "CargoMask": 0, "PalletSize0": 0, "PalletSize1": 0, "Reserved3": 0, "CargoSlot0Wcid": 0, "CargoSlot1Wcid": 0
    },
    "frame": {"target": 1342177281, "sequence": 42}
   },
@@ -282,7 +282,7 @@
     "Speed": 22.5, "VCap": 29.0, "Ammo": 0, "Mode": 6, "Flags": 1,
     "MissileMask": 0, "BombMask": 0, "Reserved2": 0,
     "SteerAngle": 0.15, "GroundFlags": 5, "SurfaceFamily": 2, "WheelSpinQ16": 1200,
-    "CargoMask": 4, "PalletSize0": 2, "PalletSize1": 0, "Reserved3": 0, "CargoSlot0Wcid": 4000010, "CargoSlot1Wcid": 0, "LiftNormU8": 0, "PumpPhaseU8": 0, "ForkStressU8": 0, "JackFlags": 0, "CarriedPalletGuid": 0, "ForkInsertM": 0.0, "CarriedRelYaw": 0.0
+    "CargoMask": 4, "PalletSize0": 2, "PalletSize1": 0, "Reserved3": 0, "CargoSlot0Wcid": 4000010, "CargoSlot1Wcid": 0
    }
   },
   {
@@ -416,7 +416,7 @@
     "Heading": 0.0, "Pitch": 0.0, "Bank": 0.0, "Speed": 0.0, "VCap": 69.0, "Ammo": 200, "Mode": 0, "Flags": 0,
     "MissileMask": 1, "BombMask": 0, "Reserved2": 0,
     "SteerAngle": 0.0, "GroundFlags": 0, "SurfaceFamily": 0, "WheelSpinQ16": 0,
-    "CargoMask": 1, "PalletSize0": 2, "PalletSize1": 0, "Reserved3": 0, "CargoSlot0Wcid": 4000010, "CargoSlot1Wcid": 0, "LiftNormU8": 0, "PumpPhaseU8": 0, "ForkStressU8": 0, "JackFlags": 0, "CarriedPalletGuid": 0, "ForkInsertM": 0.0, "CarriedRelYaw": 0.0
+    "CargoMask": 1, "PalletSize0": 2, "PalletSize1": 0, "Reserved3": 0, "CargoSlot0Wcid": 4000010, "CargoSlot1Wcid": 0
    },
    "trailing_hex": "deadbeef"
   },
@@ -441,7 +441,7 @@
     "PitchRad": 0.0,
     "YawRad": 0.0,
     "RollRad": 0.0,
-    "ElevationM": 0.0, "OnlineFlagsV6": 0, "PalletHealthU8": 100, "ReservedV6_0": 0, "ReservedV6_1": 0
+    "ElevationM": 0.0
    }
   },
   {
@@ -532,7 +532,7 @@
     "Position": {"X": 105.0, "Y": 55.0, "Z": 12.0},
     "Heading": 1.570796,
     "DoorProgress": 1.0,
-    "SerialNumber": 123456, "BayPalletCount": 0, "BayPallets": [],
+    "SerialNumber": 123456,
     "SlotCount": 1,
     "Slots": [
      {
@@ -541,74 +541,6 @@
       "SubSlot": 0,
       "Reserved": 0,
       "CargoWcid": 4000010
-     }
-    ]
-   }
-  },
-  {
-   "name": "vehicle_pallet_action",
-   "message": "Vehicle_PalletAction",
-   "fields": {
-    "TargetGuid": 1342177400,
-    "Action": 1,
-    "Reserved0": 0,
-    "Reserved1": 0,
-    "Reserved2": 0,
-    "Aux": 0
-   }
-  },
-  {
-   "name": "vehicle_pallet_event",
-   "message": "Vehicle_PalletEvent",
-   "fields": {
-    "TargetGuid": 1342177400,
-    "Action": 1,
-    "Reserved0": 0,
-    "Reserved1": 0,
-    "Reserved2": 0,
-    "Aux": 0
-   }
-  },
-  {
-   "name": "vehicle_container_state_v6",
-   "message": "Vehicle_ContainerState",
-   "fields": {
-    "Header": {"Tag": 827736648, "Version": 6, "Reserved": 0},
-    "ContainerGuid": 1342177400,
-    "ContainerKind": 10,
-    "DoorState": 2,
-    "LiveryId": 1,
-    "MaxFullSlots": 10,
-    "Flags": 1,
-    "OwnerGuid": 1342177281,
-    "Cell": 2847146009,
-    "Position": {"X": 105.0, "Y": 55.0, "Z": 12.0},
-    "Heading": 1.570796,
-    "DoorProgress": 1.0,
-    "SerialNumber": 123456, "BayPalletCount": 0, "BayPallets": [],
-    "SlotCount": 1,
-    "Slots": [
-     {
-      "SlotIndex": 0,
-      "PalletSize": 2,
-      "SubSlot": 0,
-      "Reserved": 0,
-      "CargoWcid": 4000010
-     }
-    ],
-    "BayPalletCount": 1,
-    "BayPallets": [
-     {
-      "PalletGuid": 1342177401,
-      "CargoWcid": 4000028,
-      "PalletSize": 2,
-      "Flags": 1,
-      "HealthU8": 100,
-      "SlotHint": 255,
-      "LocalX": 0.0,
-      "LocalY": 0.0,
-      "LocalYaw": 0.0,
-      "FuelOrAmmo": 0
      }
     ]
    }

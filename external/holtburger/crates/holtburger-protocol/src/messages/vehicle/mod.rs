@@ -25,7 +25,7 @@ mod tests;
 /// `"HBV1"` as a little-endian u32 (bytes `48 42 56 31`).
 pub const HBV1_TAG: u32 = 0x3156_4248;
 /// The protocol version this module writes (and the newest it parses fully).
-pub const HBV1_VERSION: u16 = 6;
+pub const HBV1_VERSION: u16 = 5;
 /// The first version carrying the v2 fields.
 const V2: u16 = 2;
 /// The first version carrying the v3 fields.
@@ -33,9 +33,8 @@ const V3: u16 = 3;
 /// The first version carrying the v4 fields.
 const V4: u16 = 4;
 /// The first version carrying the v5 fields.
+#[allow(dead_code)]
 const V5: u16 = 5;
-/// The first version carrying the v6 fields.
-const V6: u16 = 6;
 
 /// ClientCapabilities / CapabilitiesAck bits.
 pub mod caps {
@@ -57,8 +56,6 @@ pub mod c2s {
     pub const CARGO: u32 = 0x0909;
     /// v5: container action request (1=OpenDoors, 2=CloseDoors, 3=Load, 4=Pack, 5=Unpack, 6=UnpackAll).
     pub const CONTAINER_ACTION: u32 = 0x090E;
-    /// v6: pallet action request.
-    pub const PALLET_ACTION: u32 = 0x090F;
 }
 
 /// S2C game-event opcodes.
@@ -79,8 +76,6 @@ pub mod s2c {
     pub const GROUND_CONTACTS: u32 = 0x090D;
     /// v5: Authoritative container telemetry broadcast.
     pub const CONTAINER_STATE: u32 = 0x090E;
-    /// v6: Authoritative pallet state broadcast.
-    pub const PALLET_EVENT: u32 = 0x090F;
 }
 
 /// `VehicleProfile.locomotion`.
@@ -576,52 +571,6 @@ impl ContainerSlotWire {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct ContainerBayPalletWire {
-    pub pallet_guid: u32,
-    pub cargo_wcid: u32,
-    pub pallet_size: u8,
-    pub flags: u8,
-    pub health_u8: u8,
-    pub slot_hint: u8,
-    pub local_x: f32,
-    pub local_y: f32,
-    pub local_yaw: f32,
-    pub fuel_or_ammo: u32,
-}
-
-impl ContainerBayPalletWire {
-    pub const WIRE: usize = 28;
-
-    fn read(r: &mut Rd<'_>) -> Option<Self> {
-        Some(Self {
-            pallet_guid: r.u32()?,
-            cargo_wcid: r.u32()?,
-            pallet_size: r.u8()?,
-            flags: r.u8()?,
-            health_u8: r.u8()?,
-            slot_hint: r.u8()?,
-            local_x: r.f32()?,
-            local_y: r.f32()?,
-            local_yaw: r.f32()?,
-            fuel_or_ammo: r.u32()?,
-        })
-    }
-
-    pub fn write(&self, buf: &mut Vec<u8>) {
-        buf.write_u32::<LittleEndian>(self.pallet_guid).unwrap();
-        buf.write_u32::<LittleEndian>(self.cargo_wcid).unwrap();
-        buf.push(self.pallet_size);
-        buf.push(self.flags);
-        buf.push(self.health_u8);
-        buf.push(self.slot_hint);
-        buf.write_f32::<LittleEndian>(self.local_x).unwrap();
-        buf.write_f32::<LittleEndian>(self.local_y).unwrap();
-        buf.write_f32::<LittleEndian>(self.local_yaw).unwrap();
-        buf.write_u32::<LittleEndian>(self.fuel_or_ammo).unwrap();
-    }
-}
-
 /// Client request for container actions (1=OpenDoors, 2=CloseDoors, 3=Load, 4=Pack, 5=Unpack, 6=UnpackAll).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VehicleContainerAction {
@@ -657,66 +606,6 @@ impl VehicleContainerAction {
     }
 }
 
-/// Client pallet action request.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(C, packed)]
-pub struct VehiclePalletAction {
-    pub target_guid: u32,
-    pub action: u8,
-    pub reserved: [u8; 3],
-    pub aux: u32,
-}
-
-impl VehiclePalletAction {
-    pub const WIRE: usize = 12;
-
-    fn read(r: &mut Rd<'_>) -> Option<Self> {
-        Some(Self {
-            target_guid: r.u32()?,
-            action: r.u8()?,
-            reserved: [r.u8()?, r.u8()?, r.u8()?],
-            aux: r.u32()?,
-        })
-    }
-
-    pub fn write(&self, buf: &mut Vec<u8>) {
-        buf.write_u32::<LittleEndian>(self.target_guid).unwrap();
-        buf.push(self.action);
-        buf.extend_from_slice(&self.reserved);
-        buf.write_u32::<LittleEndian>(self.aux).unwrap();
-    }
-}
-
-/// Authoritative pallet state broadcast.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(C, packed)]
-pub struct VehiclePalletEvent {
-    pub target_guid: u32,
-    pub action: u8,
-    pub reserved: [u8; 3],
-    pub aux: u32,
-}
-
-impl VehiclePalletEvent {
-    pub const WIRE: usize = 12;
-
-    pub fn read(r: &mut Rd<'_>) -> Option<Self> {
-        Some(Self {
-            target_guid: r.u32()?,
-            action: r.u8()?,
-            reserved: [r.u8()?, r.u8()?, r.u8()?],
-            aux: r.u32()?,
-        })
-    }
-
-    pub fn write(&self, buf: &mut Vec<u8>) {
-        buf.write_u32::<LittleEndian>(self.target_guid).unwrap();
-        buf.push(self.action);
-        buf.extend_from_slice(&self.reserved);
-        buf.write_u32::<LittleEndian>(self.aux).unwrap();
-    }
-}
-
 // ---------------------------------------------------------------- C2S
 
 /// Client → server vehicle game actions.
@@ -739,8 +628,6 @@ pub enum VehicleC2S {
     },
     /// v5: container action request (1=OpenDoors, 2=CloseDoors, 3=Load, 4=Pack, 5=Unpack, 6=UnpackAll).
     ContainerAction(VehicleContainerAction),
-    /// v6: pallet action request.
-    PalletAction(VehiclePalletAction),
 }
 
 impl VehicleC2S {
@@ -752,7 +639,6 @@ impl VehicleC2S {
             Self::Input { .. } => c2s::INPUT,
             Self::Cargo { .. } => c2s::CARGO,
             Self::ContainerAction(_) => c2s::CONTAINER_ACTION,
-            Self::PalletAction(_) => c2s::PALLET_ACTION,
         }
     }
 
@@ -765,7 +651,6 @@ impl VehicleC2S {
                 | c2s::INPUT
                 | c2s::CARGO
                 | c2s::CONTAINER_ACTION
-                | c2s::PALLET_ACTION
         )
     }
 
@@ -811,9 +696,6 @@ impl VehicleC2S {
             }
             Self::ContainerAction(ca) => {
                 ca.write(buf);
-            }
-            Self::PalletAction(pa) => {
-                pa.write(buf);
             }
         }
     }
@@ -873,9 +755,6 @@ impl VehicleC2S {
                 }
                 c2s::CONTAINER_ACTION => {
                     Self::ContainerAction(VehicleContainerAction::read(&mut r)?)
-                }
-                c2s::PALLET_ACTION => {
-                    Self::PalletAction(VehiclePalletAction::read(&mut r)?)
                 }
                 _ => return None,
             }
@@ -982,20 +861,6 @@ pub struct VehicleState {
     pub cargo_slot0_wcid: u32,
     /// v4: WCID in slot 1.
     pub cargo_slot1_wcid: u32,
-    /// v6: 0..255 -> 0.0..1.0, z_fork = 0.075 + 0.120 * liftNorm.
-    pub lift_norm_u8: u8,
-    /// v6: 0..255 -> handle pump animation phase.
-    pub pump_phase_u8: u8,
-    /// v6: 0..255 -> wood bind/slat stress warning telemetry.
-    pub fork_stress_u8: u8,
-    /// v6: 0x01=ForksEngaged, 0x02=LoadLifted, 0x04=RollerOnSlat, 0x08=HighCentered, 0x10=LoadBroken, 0x20=ProngsPokedThrough.
-    pub jack_flags: u8,
-    /// v6: 0 when empty or forks sliding loose.
-    pub carried_pallet_guid: u32,
-    /// v6: 0.0..1.2192 m insertion depth into engaged pallet.
-    pub fork_insert_m: f32,
-    /// v6: relative orientation of pallet on forks: 0, ±π/2, π + crooked bind offset.
-    pub carried_rel_yaw: f32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -1114,11 +979,10 @@ pub struct VehicleContainerState {
     pub door_progress: f32,
     pub serial_number: u32,
     pub slots: Vec<ContainerSlotWire>,
-    pub bay_pallets: Vec<ContainerBayPalletWire>,
 }
 
 impl VehicleContainerState {
-    fn read(r: &mut Rd<'_>, hdr: &VehicleHeader) -> Option<Self> {
+    fn read(r: &mut Rd<'_>) -> Option<Self> {
         let container_guid = r.u32()?;
         let container_kind = r.u32()?;
         let door_state = r.u8()?;
@@ -1136,16 +1000,6 @@ impl VehicleContainerState {
         for _ in 0..n {
             slots.push(ContainerSlotWire::read(r)?);
         }
-        let bay_pallets = if hdr.version >= V6 {
-            let n = r.count(ContainerBayPalletWire::WIRE)?;
-            let mut pallets = Vec::with_capacity(n);
-            for _ in 0..n {
-                pallets.push(ContainerBayPalletWire::read(r)?);
-            }
-            pallets
-        } else {
-            Vec::new()
-        };
         Some(Self {
             container_guid,
             container_kind,
@@ -1160,7 +1014,6 @@ impl VehicleContainerState {
             door_progress,
             serial_number,
             slots,
-            bay_pallets,
         })
     }
 
@@ -1180,10 +1033,6 @@ impl VehicleContainerState {
         buf.write_u32::<LittleEndian>(self.slots.len() as u32).unwrap();
         for s in &self.slots {
             s.write(buf);
-        }
-        buf.write_u32::<LittleEndian>(self.bay_pallets.len() as u32).unwrap();
-        for p in &self.bay_pallets {
-            p.write(buf);
         }
     }
 }
@@ -1206,7 +1055,6 @@ pub enum VehicleS2C {
     DeployableFire(VehicleDeployableFire),
     GroundContacts(VehicleGroundContacts),
     ContainerState(VehicleContainerState),
-    PalletEvent(VehiclePalletEvent),
 }
 
 impl VehicleS2C {
@@ -1223,7 +1071,6 @@ impl VehicleS2C {
             Self::DeployableFire(_) => s2c::DEPLOYABLE_FIRE,
             Self::GroundContacts(_) => s2c::GROUND_CONTACTS,
             Self::ContainerState(_) => s2c::CONTAINER_STATE,
-            Self::PalletEvent(_) => s2c::PALLET_EVENT,
         }
     }
 
@@ -1241,7 +1088,6 @@ impl VehicleS2C {
                 | s2c::DEPLOYABLE_FIRE
                 | s2c::GROUND_CONTACTS
                 | s2c::CONTAINER_STATE
-                | s2c::PALLET_EVENT
         )
     }
 
@@ -1373,14 +1219,6 @@ impl VehicleS2C {
                 buf.push(s.reserved3);
                 buf.write_u32::<LittleEndian>(s.cargo_slot0_wcid).unwrap();
                 buf.write_u32::<LittleEndian>(s.cargo_slot1_wcid).unwrap();
-                // v6
-                buf.push(s.lift_norm_u8);
-                buf.push(s.pump_phase_u8);
-                buf.push(s.fork_stress_u8);
-                buf.push(s.jack_flags);
-                buf.write_u32::<LittleEndian>(s.carried_pallet_guid).unwrap();
-                buf.write_f32::<LittleEndian>(s.fork_insert_m).unwrap();
-                buf.write_f32::<LittleEndian>(s.carried_rel_yaw).unwrap();
             }
             Self::Fire(f) => {
                 buf.write_u32::<LittleEndian>(f.vehicle).unwrap();
@@ -1475,9 +1313,6 @@ impl VehicleS2C {
             Self::ContainerState(cs) => {
                 cs.write(buf);
             }
-            Self::PalletEvent(pe) => {
-                pe.write(buf);
-            }
         }
     }
 
@@ -1500,8 +1335,6 @@ impl VehicleS2C {
             let v2 = hdr.version >= V2;
             let v3 = hdr.version >= V3;
             let v4 = hdr.version >= V4;
-            let _v5 = hdr.version >= V5;
-            let v6 = hdr.version >= V6;
             match opcode {
                 s2c::CAPABILITIES_ACK => Self::CapabilitiesAck {
                     granted: r.u32()?,
@@ -1660,13 +1493,6 @@ impl VehicleS2C {
                     reserved3: if v4 { r.u8()? } else { 0 },
                     cargo_slot0_wcid: if v4 { r.u32()? } else { 0 },
                     cargo_slot1_wcid: if v4 { r.u32()? } else { 0 },
-                    lift_norm_u8: if v6 { r.u8()? } else { 0 },
-                    pump_phase_u8: if v6 { r.u8()? } else { 0 },
-                    fork_stress_u8: if v6 { r.u8()? } else { 0 },
-                    jack_flags: if v6 { r.u8()? } else { 0 },
-                    carried_pallet_guid: if v6 { r.u32()? } else { 0 },
-                    fork_insert_m: if v6 { r.f32()? } else { 0.0 },
-                    carried_rel_yaw: if v6 { r.f32()? } else { 0.0 },
                 }),
                 s2c::FIRE => Self::Fire(VehicleFire {
                     vehicle: r.u32()?,
@@ -1808,10 +1634,7 @@ impl VehicleS2C {
                     })
                 }
                 s2c::CONTAINER_STATE => {
-                    Self::ContainerState(VehicleContainerState::read(&mut r, &hdr)?)
-                }
-                s2c::PALLET_EVENT => {
-                    Self::PalletEvent(VehiclePalletEvent::read(&mut r)?)
+                    Self::ContainerState(VehicleContainerState::read(&mut r)?)
                 }
                 _ => return None,
             }
