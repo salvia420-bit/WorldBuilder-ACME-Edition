@@ -247,6 +247,12 @@ pub(crate) fn to_json(msg: &VehicleS2C) -> Value {
                 "cargoWcid": s.cargo_wcid,
             })).collect::<Vec<_>>(),
         }),
+        VehicleS2C::PalletEvent(pe) => json!({
+            "type": "pallet_event",
+            "target": pe.target_guid,
+            "action": pe.action,
+            "aux": pe.aux,
+        }),
     }
 }
 

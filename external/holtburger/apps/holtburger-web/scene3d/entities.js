@@ -45,6 +45,8 @@ export const SUPPRESSED_ADMIN_WEENIE_WCIDS = new Set([
   32205, // Pumpkin Buffer
   39748, // Exploration Marker
 ]);
+export const Chassis20ft = 4000020;
+export const Chassis40ft = 4000021;
 export const MAD_COW_WEENIE_WCID = 23623;
 const MAD_COW_SKY_DZ_THRESHOLD_M = 20.0;
 const ODF_HIDDEN_ADMIN_BIT = 0x00000040;
@@ -3467,6 +3469,20 @@ const ENTITY_CULL_RADIUS = 6;
 // meshes, and the client is CPU-bound on submission (HANDOFF "Q5 measured"). A 2 m figure at 450 m is ~4 px.
 // Vehicles (big, and what a pilot looks for), the local player and the exemptions below are never culled by it.
 export const FLIGHT_ENTITY_CULL_M = 450;
+
+export const TrailerRegistry = new Map();
+
+export function registerAnchor(trailerID, anchorPoint) {
+  if (!TrailerRegistry.has(trailerID)) {
+    TrailerRegistry.set(trailerID, { anchors: [] });
+  }
+  TrailerRegistry.get(trailerID).anchors.push(anchorPoint);
+}
+
+export const ChassisRegistry = {
+  [Chassis20ft]: "20ft Chassis",
+  [Chassis40ft]: "40ft Chassis"
+};
 // Reused scratch sphere for the per-entity frustum test — radius is fixed,
 // only the center is rewritten per entity. Zero per-frame allocation.
 const _entityCullSphere = new THREE.Sphere(new THREE.Vector3(), ENTITY_CULL_RADIUS);
@@ -4285,6 +4301,16 @@ const CAM_FADE_HIER_ON = camFadeHierEnabled();
  *   - meta: original spawn meta (modelId, paletteId, etc.) so motion
  *     switches re-fetch with the same substitutions.
  */
+class TrailerInstance extends EntityInstance {
+  constructor(guid, root, parts, meta) {
+    super(guid, root, parts, meta);
+    this.anchorPoints = [];
+  }
+  registerAnchor(point) {
+    this.anchorPoints.push(point);
+  }
+}
+
 class EntityInstance {
   constructor(guid, root, parts, meta) {
     this.guid = guid;
@@ -5431,7 +5457,8 @@ export class EntityManager {
       }
     }
 
-    const inst = new EntityInstance(guid, root, parts, meta);
+    const isTrailer = [Chassis20ft, Chassis40ft].includes((meta.wcid ?? 0) >>> 0);
+    const inst = isTrailer ? new TrailerInstance(guid, root, parts, meta) : new EntityInstance(guid, root, parts, meta);
     if (!root.userData) root.userData = {};
     Object.defineProperty(root.userData, "__entityInst", {
       value: inst,

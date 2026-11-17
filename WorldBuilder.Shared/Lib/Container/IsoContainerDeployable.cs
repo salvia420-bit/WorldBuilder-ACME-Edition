@@ -4,7 +4,14 @@ using WorldBuilder.Shared.Lib.Geometry;
 
 namespace WorldBuilder.Shared.Lib.Container;
 
+public class ContainerPlatform {
+    public string Name { get; set; } = "GenericPlatform";
+    public float WeightCapacity { get; set; }
+}
+
 public class IsoContainerDeployable {
+    public ContainerPlatform Platform { get; set; } = new();
+
     // Basic properties for a container bay/slot
     public struct ContainerBay {
         public OBB Bounds;
