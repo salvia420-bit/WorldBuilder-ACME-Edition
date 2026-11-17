@@ -1,0 +1,66 @@
+From d6007f2ca89b90b4b9b306fc60fd999ec16f92c7 Mon Sep 17 00:00:00 2001
+From: salvia420-bit <salvia420@gmail.com>
+Date: Tue, 17 Nov 2026 14:54:17 +0000
+Subject: [PATCH] Vehicles (holtburger fork): container wire position is
+ landblock-local; deployable stand-in setup exists in the r10 portal dat
+
+- IsoContainerDeployable.CreateContainerStateMsg sent the global Position property
+  (Vehicle.ToGlobal) in the Position field that vehicles.protocol.xml defines as
+  landblock-local next to Cell. The client then ran FM.toGlobal(cell, ...) again and
+  drew every container ~kilometres away. Send Location.Pos.
+- DeployableBase / RadarStation stand-in Setup 0x02000216 is not in the r10
+  client_portal.dat (iteration 2074): ACE logged "Unable to find object_id 02000216"
+  and AddWorldObjectInternal failed for every deployable and container. Use
+  0x0200026B (the invisible generator shell, present in every portal dat); the client
+  draws its own procedural model.
+
+Verified live 2026-11-17 on Vast: @container spawn 20|40|40hc lands at the requested
+coordinates in holtburger-web (quality=ultra).
+---
+ Source/ACE.Server/Vehicles/AirDefense/RadarStation.cs           | 2 +-
+ Source/ACE.Server/Vehicles/Deployables/DeployableBase.cs        | 2 +-
+ .../ACE.Server/Vehicles/Deployables/IsoContainerDeployable.cs   | 2 +-
+ 3 files changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/Source/ACE.Server/Vehicles/AirDefense/RadarStation.cs b/Source/ACE.Server/Vehicles/AirDefense/RadarStation.cs
+index 32265ef..6be18f5 100644
+--- a/Source/ACE.Server/Vehicles/AirDefense/RadarStation.cs
++++ b/Source/ACE.Server/Vehicles/AirDefense/RadarStation.cs
+@@ -74,7 +74,7 @@ public static Weenie BuildWeenie(Vehicle parentVehicle, Player deployer)
+                 },
+                 PropertiesDID = new Dictionary<PropertyDataId, uint>
+                 {
+-                    [PropertyDataId.Setup] = 0x02000216,
++                    [PropertyDataId.Setup] = 0x0200026B, // invisible generator shell; the r10 client_portal.dat (iteration 2074) has no 0x02000216, so the stand-in had no physics and AddWorldObject failed. The client draws its own model.
+                     [PropertyDataId.Icon] = 0x06003711,
+                 },
+                 PropertiesFloat = new Dictionary<PropertyFloat, double>
+diff --git a/Source/ACE.Server/Vehicles/Deployables/DeployableBase.cs b/Source/ACE.Server/Vehicles/Deployables/DeployableBase.cs
+index 1ea89fb..966e696 100644
+--- a/Source/ACE.Server/Vehicles/Deployables/DeployableBase.cs
++++ b/Source/ACE.Server/Vehicles/Deployables/DeployableBase.cs
+@@ -105,7 +105,7 @@ public static Weenie BuildDeployableWeenie(uint wcid, string className, string n
+                 },
+                 PropertiesDID = new Dictionary<PropertyDataId, uint>
+                 {
+-                    [PropertyDataId.Setup] = 0x02000216,
++                    [PropertyDataId.Setup] = 0x0200026B, // invisible generator shell; the r10 client_portal.dat (iteration 2074) has no 0x02000216, so the stand-in had no physics and AddWorldObject failed. The client draws its own model.
+                     [PropertyDataId.Icon] = 0x06003711,
+                 },
+                 PropertiesFloat = new Dictionary<PropertyFloat, double>
+diff --git a/Source/ACE.Server/Vehicles/Deployables/IsoContainerDeployable.cs b/Source/ACE.Server/Vehicles/Deployables/IsoContainerDeployable.cs
+index 683830b..c06c100 100644
+--- a/Source/ACE.Server/Vehicles/Deployables/IsoContainerDeployable.cs
++++ b/Source/ACE.Server/Vehicles/Deployables/IsoContainerDeployable.cs
+@@ -883,7 +883,7 @@ public VehicleContainerStateMsg CreateContainerStateMsg()
+                 Flags = 1,
+                 OwnerGuid = DeployerPlayerGuid,
+                 Cell = Location?.Cell ?? 0,
+-                Position = Position,
++                Position = Location != null ? Location.Pos : Position, // wire contract: landblock-local (vehicles.protocol.xml); the Position property is global
+                 Heading = HeadingRad,
+                 DoorProgress = DoorProgress,
+                 SerialNumber = SerialNumber,
+-- 
+2.43.0
+
