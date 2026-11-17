@@ -27,7 +27,23 @@ const browser = await chromium.launch({
     "--mute-audio", "--window-position=-32000,-32000", "--disable-renderer-backgrounding",
     "--disable-background-timer-throttling", "--disable-backgrounding-occluded-windows", `--window-size=${W},${H}`],
 });
-const page = await browser.newPage({ viewport: { width: W, height: H } });
+const context = await browser.newContext();
+await context.addInitScript(() => {
+  const check = setInterval(() => {
+    if (window.THREE && window.THREE.WebGLRenderer) {
+      const originalRenderer = window.THREE.WebGLRenderer;
+      window.THREE.WebGLRenderer = function(parameters) {
+        parameters = parameters || {};
+        parameters.preserveDrawingBuffer = true;
+        return new originalRenderer(parameters);
+      };
+      window.THREE.WebGLRenderer.prototype = originalRenderer.prototype;
+      clearInterval(check);
+    }
+  }, 100);
+});
+const page = await context.newPage();
+page.setViewportSize({ width: W, height: H });
 const clog = fs.createWriteStream(path.join(OUT, "driver-console.log"));
 page.on("console", (m) => clog.write(`[${m.type()}] ${m.text()}\n`));
 page.on("pageerror", (e) => clog.write(`[pageerror] ${e.stack || e}\n`));
