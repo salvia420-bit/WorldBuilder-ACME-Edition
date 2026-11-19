@@ -2392,7 +2392,7 @@ mod wire_integrity;
 
 // holtburger vehicles (HBV1, docs/vehicles-2026-11-01): the wasm side's shared vehicle
 // state — inbox drained by JS, the seat lock the movement tick honours, wire stats.
-#[cfg(target_arch = "wasm32")]
+#[cfg(any(target_arch = "wasm32", test))]
 mod vehicle_link;
 
 // RND-04 — retail static-light vertex bake (`SetStaticLightingVertexColors`
@@ -47579,6 +47579,33 @@ fn build_container_collider_bsp(
                 sub_slot,
                 reserved: 0,
                 cargo_wcid,
+            },
+        ))
+    }
+
+    /// HBV1 Vehicle_TrailerAction (0x090F):
+    /// `trailer_guid`: target trailer ObjectId (0 when auto-detecting nearby for Hitch)
+    /// `vehicle_guid`: tractor ObjectId
+    /// `container_guid`: ISO container ObjectId (0 for Hitch/Unhitch/ToggleTwistlock)
+    /// `action`: 1=Hitch, 2=Unhitch, 3=ToggleTwistlock, 4=MountContainer, 5=UnmountContainer
+    /// `slot`: 0=auto/center, 1=front, 2=rear
+    #[wasm_bindgen(js_name = vehicleTrailerAction)]
+    pub fn vehicle_trailer_action(
+        &self,
+        trailer_guid: u32,
+        vehicle_guid: u32,
+        container_guid: u32,
+        action: u8,
+        slot: u8,
+    ) -> Result<(), JsValue> {
+        self.vehicle_send(holtburger_protocol::messages::vehicle::VehicleC2S::TrailerAction(
+            holtburger_protocol::messages::vehicle::VehicleTrailerAction {
+                trailer_guid,
+                vehicle_guid,
+                container_guid,
+                action,
+                slot,
+                flags: 0,
             },
         ))
     }

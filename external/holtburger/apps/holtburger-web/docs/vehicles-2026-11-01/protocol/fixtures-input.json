@@ -59,7 +59,8 @@
      {"MuzzleVelocity": 0.0, "Convergence": 0.0, "MassKg": 226.796185, "DragTerminal": 120.0, "SpellId": 0}
     ],
     "Wheelbase": 0.0, "TrackWidth": 0.0, "WheelRadius": 0.0, "MaxSteerRad": 0.0,
-    "ReverseMax": 0.0, "ClimbLimitCos": 0.0, "FordDepthMax": 0.0, "CargoWcid": 0
+    "ReverseMax": 0.0, "ClimbLimitCos": 0.0, "FordDepthMax": 0.0, "CargoWcid": 0,
+    "FifthWheelOffsetY": 0.0, "FifthWheelOffsetZ": 0.0, "LiveryId": 0, "VehicleClass": 0, "Reserved4": 0
    }
   },
   {
@@ -158,7 +159,8 @@
     "ReverseMax": -10.0,
     "ClimbLimitCos": 0.71934,
     "FordDepthMax": 0.8,
-    "CargoWcid": 4000002
+    "CargoWcid": 4000002,
+    "FifthWheelOffsetY": 0.0, "FifthWheelOffsetZ": 0.0, "LiveryId": 0, "VehicleClass": 0, "Reserved4": 0
    }
   },
   {
@@ -243,7 +245,8 @@
     "Speed": 68.75, "VCap": 69.0, "Ammo": 187, "Mode": 2, "Flags": 1,
     "MissileMask": 3, "BombMask": 1, "Reserved2": 0,
     "SteerAngle": 0.0, "GroundFlags": 0, "SurfaceFamily": 0, "WheelSpinQ16": 0,
-    "CargoMask": 0, "PalletSize0": 0, "PalletSize1": 0, "Reserved3": 0, "CargoSlot0Wcid": 0, "CargoSlot1Wcid": 0
+    "CargoMask": 0, "PalletSize0": 0, "PalletSize1": 0, "Reserved3": 0, "CargoSlot0Wcid": 0, "CargoSlot1Wcid": 0,
+    "HitchedTrailerGuid": 0, "TrailerHeading": 0.0, "TrailerPitch": 0.0, "TrailerFlags": 0, "Reserved4": 0, "Reserved5": 0
    },
    "frame": {"target": 1342177281, "sequence": 42}
   },
@@ -282,7 +285,8 @@
     "Speed": 22.5, "VCap": 29.0, "Ammo": 0, "Mode": 6, "Flags": 1,
     "MissileMask": 0, "BombMask": 0, "Reserved2": 0,
     "SteerAngle": 0.15, "GroundFlags": 5, "SurfaceFamily": 2, "WheelSpinQ16": 1200,
-    "CargoMask": 4, "PalletSize0": 2, "PalletSize1": 0, "Reserved3": 0, "CargoSlot0Wcid": 4000010, "CargoSlot1Wcid": 0
+    "CargoMask": 4, "PalletSize0": 2, "PalletSize1": 0, "Reserved3": 0, "CargoSlot0Wcid": 4000010, "CargoSlot1Wcid": 0,
+    "HitchedTrailerGuid": 0, "TrailerHeading": 0.0, "TrailerPitch": 0.0, "TrailerFlags": 0, "Reserved4": 0, "Reserved5": 0
    }
   },
   {
@@ -410,13 +414,14 @@
    "message": "Vehicle_State",
    "expect": "ok",
    "fields": {
-    "Header": {"Tag": 827736648, "Version": 6, "Reserved": 0},
+    "Header": {"Tag": 827736648, "Version": 7, "Reserved": 0},
     "Vehicle": 2147486209, "Step": 7, "AckInputSeq": 0, "Cell": 2847146009,
     "Position": {"X": 1.0, "Y": 2.0, "Z": 3.0},
     "Heading": 0.0, "Pitch": 0.0, "Bank": 0.0, "Speed": 0.0, "VCap": 69.0, "Ammo": 200, "Mode": 0, "Flags": 0,
     "MissileMask": 1, "BombMask": 0, "Reserved2": 0,
     "SteerAngle": 0.0, "GroundFlags": 0, "SurfaceFamily": 0, "WheelSpinQ16": 0,
-    "CargoMask": 1, "PalletSize0": 2, "PalletSize1": 0, "Reserved3": 0, "CargoSlot0Wcid": 4000010, "CargoSlot1Wcid": 0
+    "CargoMask": 1, "PalletSize0": 2, "PalletSize1": 0, "Reserved3": 0, "CargoSlot0Wcid": 4000010, "CargoSlot1Wcid": 0,
+    "HitchedTrailerGuid": 0, "TrailerHeading": 0.0, "TrailerPitch": 0.0, "TrailerFlags": 0, "Reserved4": 0, "Reserved5": 0
    },
    "trailing_hex": "deadbeef"
   },
@@ -543,6 +548,164 @@
       "CargoWcid": 4000010
      }
     ]
+   }
+  },
+  {
+   "name": "vehicle_profile_semi",
+   "message": "Vehicle_Profile",
+   "fields": {
+    "Vehicle": 2147486211,
+    "ProfileKey": "semi-379",
+    "DisplayName": "Ironhorse 379",
+    "Locomotion": 2,
+    "StandInSetup": 33555051,
+    "SimHz": 30,
+    "Reserved": 0,
+    "VMin": 0.0, "VCruise": 22.0, "VMax": 27.0, "SpeedCap": 27.0,
+    "Accel": 4.8, "Decel": 9.5,
+    "MaxBank": 0.0, "RollRate": 0.0,
+    "MaxPitch": 0.0, "PitchRate": 0.0,
+    "YawRate": 4.0,
+    "ClimbMax": 0.0, "SinkMax": 0.0,
+    "FloorAgl": 0.0, "CeilingAgl": 0.0,
+    "TakeoffClimb": 0.0, "LandingSpeed": 0.0,
+    "LeadSeconds": 6.0, "ObjectRadius": 4,
+    "SeatCount": 2,
+    "Seats": [
+     {"Role": 0, "Motion": 1090519059, "Offset": {"X": -0.52, "Y": 0.28, "Z": 1.72}},
+     {"Role": 1, "Motion": 1090519059, "Offset": {"X": 0.52, "Y": 0.28, "Z": 1.72}}
+    ],
+    "WeaponCount": 0,
+    "Weapons": [],
+    "PartCount": 0,
+    "Parts": [],
+    "PartRoleCount": 0,
+    "PartRoles": [],
+    "WeaponExtCount": 0,
+    "WeaponExt": [],
+    "Wheelbase": 4.66,
+    "TrackWidth": 2.12,
+    "WheelRadius": 0.505,
+    "MaxSteerRad": 0.6632251,
+    "ReverseMax": -7.0,
+    "ClimbLimitCos": 0.788,
+    "FordDepthMax": 1.05,
+    "CargoWcid": 0,
+    "FifthWheelOffsetY": -2.01,
+    "FifthWheelOffsetZ": 0.96,
+    "LiveryId": 1,
+    "VehicleClass": 3,
+    "Reserved4": 0
+   }
+  },
+  {
+   "name": "vehicle_profile_jeep_v5",
+   "message": "Vehicle_Profile",
+   "fields": {
+    "Header": {"Tag": 827736648, "Version": 5, "Reserved": 0},
+    "Vehicle": 2147486210,
+    "ProfileKey": "jeep-mb",
+    "DisplayName": "Willys MB",
+    "Locomotion": 2,
+    "StandInSetup": 33555516,
+    "SimHz": 30,
+    "Reserved": 0,
+    "VMin": 0.0, "VCruise": 20.0, "VMax": 29.0, "SpeedCap": 29.0,
+    "Accel": 11.2, "Decel": 14.0,
+    "MaxBank": 0.0, "RollRate": 0.0,
+    "MaxPitch": 0.0, "PitchRate": 0.0,
+    "YawRate": 5.2,
+    "ClimbMax": 0.0, "SinkMax": 0.0,
+    "FloorAgl": 0.0, "CeilingAgl": 0.0,
+    "TakeoffClimb": 0.0, "LandingSpeed": 0.0,
+    "LeadSeconds": 6.0, "ObjectRadius": 4,
+    "SeatCount": 4,
+    "Seats": [
+     {"Role": 0, "Motion": 1090519059, "Offset": {"X": -0.38, "Y": -0.2, "Z": 0.85}},
+     {"Role": 1, "Motion": 1090519059, "Offset": {"X": 0.38, "Y": -0.2, "Z": 0.85}},
+     {"Role": 1, "Motion": 1090519059, "Offset": {"X": -0.38, "Y": -0.85, "Z": 0.95}},
+     {"Role": 1, "Motion": 1090519059, "Offset": {"X": 0.38, "Y": -0.85, "Z": 0.95}}
+    ],
+    "WeaponCount": 0,
+    "Weapons": [],
+    "PartCount": 4,
+    "Parts": [
+     {"Did": 33554786, "Offset": {"X": -0.74, "Y": 1.02, "Z": 0.38}, "Rotation": {"W": 0.70710678, "X": 0.0, "Y": 0.70710678, "Z": 0.0}, "Scale": 1.15},
+     {"Did": 33554786, "Offset": {"X": 0.74, "Y": 1.02, "Z": 0.38}, "Rotation": {"W": 0.70710678, "X": 0.0, "Y": -0.70710678, "Z": 0.0}, "Scale": 1.15},
+     {"Did": 33554786, "Offset": {"X": -0.74, "Y": -1.02, "Z": 0.38}, "Rotation": {"W": 0.70710678, "X": 0.0, "Y": 0.70710678, "Z": 0.0}, "Scale": 1.15},
+     {"Did": 33554786, "Offset": {"X": 0.74, "Y": -1.02, "Z": 0.38}, "Rotation": {"W": 0.70710678, "X": 0.0, "Y": -0.70710678, "Z": 0.0}, "Scale": 1.15}
+    ],
+    "PartRoleCount": 4,
+    "PartRoles": [5, 6, 7, 8],
+    "WeaponExtCount": 0,
+    "WeaponExt": [],
+    "Wheelbase": 2.04,
+    "TrackWidth": 1.48,
+    "WheelRadius": 0.38,
+    "MaxSteerRad": 0.69813,
+    "ReverseMax": -10.0,
+    "ClimbLimitCos": 0.71934,
+    "FordDepthMax": 0.8,
+    "CargoWcid": 4000002
+   }
+  },
+  {
+   "name": "vehicle_state_coupled",
+   "message": "Vehicle_State",
+   "fields": {
+    "Vehicle": 2147486211, "Step": 900, "AckInputSeq": 899, "Cell": 2847146009,
+    "Position": {"X": 84.5, "Y": 120.0, "Z": 12.0},
+    "Heading": 1.570796, "Pitch": 0.01, "Bank": -0.005,
+    "Speed": 18.5, "VCap": 27.0, "Ammo": 0, "Mode": 6, "Flags": 1,
+    "MissileMask": 0, "BombMask": 0, "Reserved2": 0,
+    "SteerAngle": -0.12, "GroundFlags": 1, "SurfaceFamily": 1, "WheelSpinQ16": 1098,
+    "CargoMask": 0, "PalletSize0": 0, "PalletSize1": 0, "Reserved3": 0, "CargoSlot0Wcid": 0, "CargoSlot1Wcid": 0,
+    "HitchedTrailerGuid": 1342177500, "TrailerHeading": 1.62, "TrailerPitch": 0.015, "TrailerFlags": 7, "Reserved4": 0, "Reserved5": 0
+   }
+  },
+  {
+   "name": "vehicle_state_driving_v5",
+   "message": "Vehicle_State",
+   "fields": {
+    "Header": {"Tag": 827736648, "Version": 5, "Reserved": 0},
+    "Vehicle": 2147486210, "Step": 500, "AckInputSeq": 499, "Cell": 2847146009,
+    "Position": {"X": 50.0, "Y": 25.0, "Z": 10.5},
+    "Heading": 1.570796, "Pitch": 0.02, "Bank": -0.01,
+    "Speed": 22.5, "VCap": 29.0, "Ammo": 0, "Mode": 6, "Flags": 1,
+    "MissileMask": 0, "BombMask": 0, "Reserved2": 0,
+    "SteerAngle": 0.15, "GroundFlags": 5, "SurfaceFamily": 2, "WheelSpinQ16": 1200,
+    "CargoMask": 4, "PalletSize0": 2, "PalletSize1": 0, "Reserved3": 0, "CargoSlot0Wcid": 4000010, "CargoSlot1Wcid": 0
+   }
+  },
+  {
+   "name": "vehicle_trailer_action",
+   "message": "Vehicle_TrailerAction",
+   "fields": {
+    "TrailerGuid": 1342177500,
+    "VehicleGuid": 2147486211,
+    "ContainerGuid": 1342177400,
+    "Action": 4,
+    "Slot": 1,
+    "Flags": 0
+   }
+  },
+  {
+   "name": "vehicle_trailer_state",
+   "message": "Vehicle_TrailerState",
+   "fields": {
+    "TrailerGuid": 1342177500,
+    "Kind": 14,
+    "Cell": 2847146009,
+    "Position": {"X": 84.5, "Y": 112.25, "Z": 12.0},
+    "Heading": 1.62,
+    "Pitch": 0.015,
+    "Bank": -0.005,
+    "CoupledTractorGuid": 2147486211,
+    "MountedContainerGuid": 1342177400,
+    "ContainerSlot": 1,
+    "TrailerFlags": 7,
+    "Reserved": 0,
+    "OwnerGuid": 1342177281
    }
   }
  ]

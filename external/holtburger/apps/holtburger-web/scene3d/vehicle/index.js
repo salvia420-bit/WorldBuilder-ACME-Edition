@@ -39,6 +39,9 @@ import { flightResidencyEnabled, setFlightHint, clearFlightHint } from "../resid
 import { buildDeployable, DEPLOYABLE_WCID, DEPLOYABLE_KINDS } from "./deployable_models.js";
 import { buildDeployedRadar } from "./radar_model.js";
 import { buildProceduralJeep } from "./jeep_model.js";
+import { buildSemiTruck } from "./semi_truck_model.js";
+import { buildSemiTrailer, resolveTrailerKind, TRAILER_WCID } from "./trailer_models.js";
+import * as TK from "./trailer_kinematics.js";
 import {
   buildIsoContainer,
   buildContainer,
@@ -117,7 +120,36 @@ export const EVENT_NAMES = Object.freeze({
   9: "bombRelease", 10: "explosion", 11: "rearmed",
   12: "horn", 13: "headlights", 14: "scrape", 15: "cargoDeployed", 16: "cargoPacked",
   17: "ramHit", 18: "radarAlert",
+  19: "trailerHitched", 20: "trailerUnhitched", 21: "twistlockToggled",
 });
+export const TRAILER_ACTION = Object.freeze({
+  None: 0,
+  Hitch: 1,
+  Unhitch: 2,
+  ToggleTwistlock: 3,
+  MountContainer: 4,
+  UnmountContainer: 5,
+});
+export const TRAILER_FLAG = Object.freeze({
+  COUPLED: 0x01,
+  TWISTLOCKS_LOCKED: 0x02,
+  GEAR_RETRACTED: 0x04,
+  BRAKE_LIGHTS: 0x08,
+});
+
+function isSemiProfile(p) {
+  return Boolean(p && (p.profileKey === "semi-379" || p.vehicleClass === 3));
+}
+function isSemiVehicle(v) {
+  return Boolean(v && (isSemiProfile(v.profile) || isSemiProfile(v.params)));
+}
+function isGroundVehicle(v) {
+  return Boolean(v && (v.locomotion === 2 || v.profile?.locomotion === 2 || v.profile?.profileKey === "jeep-mb" || isSemiVehicle(v) || v.params?.locomotion === 2));
+}
+function maxSeatsOf(v) {
+  if (Array.isArray(v?.profile?.seats) && v.profile.seats.length > 0) return v.profile.seats.length;
+  return isSemiVehicle(v) ? 2 : (isGroundVehicle(v) ? 4 : 1);
+}
 /** Retail motion commands the pilot's rig holds (the server shows the same Sitting to every client). */
 export const MOTION = Object.freeze({ SITTING: 0x41000013, READY: 0x41000003, NONCOMBAT: 0x8000003d });
 const NEUTRAL_INPUT = Object.freeze({ throttle: 0, pitch: 0, roll: 0, yaw: 0, boost: false, fire: false, land: false });
@@ -232,18 +264,43 @@ export function installVehicles(deps = {}) {
   const radarScope = new RadarScopeHud({ width: 236, height: 236, mode: "combined" });
   const deployables = new Map(); // guid -> { guid, kind, wcid, model, last, lastSeenAt, standInHidden }
   const containers = new Map(); // guid -> { guid, kind, wcid, model, last, cell, rawPos, heading, targetDoorProgress, currentDoorProgress, lastDoorOpen, lastSeenAt, standInHidden, liveryId, serialNumber, slots }
-  const groundModels = new Map(); // guid -> procedural jeep instance
+  const trailers = new Map(); // guid -> { guid, kind, specKind, wcid, model, last, cell, rawPos, worldPos, heading, pitch, bank, coupledTractorGuid, mountedContainerGuid, containerSlot, trailerFlags, ownerGuid, coupledKinState, renderedPose, lastSeenAt, standInHidden }
+  const groundModels = new Map(); // guid -> procedural jeep or semi-379 instance
   const jeepModels = groundModels; // backward compatibility alias
   const groundFx = THREE ? createGroundFx({ THREE, root: live.worldRoot, liveScene3d: live }) : null;
 
   function ensureGroundModel(v) {
     if (!THREE || !live?.worldRoot) return null;
     const g = v.guid >>> 0;
+    const wantSemi = isSemiVehicle(v);
+    const wantLivery = v.profile?.liveryId;
     let model = groundModels.get(g);
+    if (model) {
+      const isCurrentlySemi = model.root?.userData?.profileKey === "semi-379";
+      const liveryMismatch = wantSemi && wantLivery !== undefined && model.livery?.id !== (wantLivery | 0);
+      if (isCurrentlySemi !== wantSemi || liveryMismatch) {
+        try {
+          if (model.root?.parent) model.root.parent.remove(model.root);
+          model.dispose?.();
+        } catch (_) {}
+        groundModels.delete(g);
+        model = null;
+      }
+    }
     if (!model) {
-      model = buildProceduralJeep(THREE, v.profile || {}, { liveScene3d: live });
+      model = wantSemi
+        ? buildSemiTruck(THREE, v.profile || {}, {
+          liveScene3d: live,
+          csmState: live.csmState,
+          liveryId: wantLivery ?? 0,
+        })
+        : buildProceduralJeep(THREE, v.profile || {}, { liveScene3d: live });
       live.worldRoot.add(model.root);
       groundModels.set(g, model);
+      const inEm = em()?.entityMap?.get(g);
+      if (inEm && (!v.standInHidden || inEm._filmHidden !== true)) {
+        try { if (em()?.setFilmHidden?.(g, true)) v.standInHidden = true; } catch (_) {}
+      }
     }
     return model;
   }
@@ -364,10 +421,19 @@ export function installVehicles(deps = {}) {
       };
       containers.set(g, entry);
 
-      // Immediately register dynamic physical building collider in WASM physics on initial spawn
-      try {
-        sh()?.upsertContainerCollider(g, cell, rawPos[0], rawPos[1], rawPos[2], heading, kind, isDoorOpen);
-      } catch (_) {}
+      // Immediately register dynamic physical building collider in WASM physics on initial spawn (unless already claimed by a trailer)
+      let claimedByTrailer = false;
+      for (const tr of trailers.values()) {
+        if ((tr.mountedContainerGuid >>> 0) === g) { claimedByTrailer = true; break; }
+      }
+      if (!claimedByTrailer) {
+        try {
+          sh()?.upsertContainerCollider(g, cell, rawPos[0], rawPos[1], rawPos[2], heading, kind, isDoorOpen);
+          entry.colliderActive = true;
+        } catch (_) {}
+      } else {
+        entry.colliderActive = false;
+      }
 
       // Invalidate static shadow cache on spawn so container casts dynamic sun shadows
       try { requestShadowRaster(live.renderer, live); } catch (_) {}
@@ -379,6 +445,15 @@ export function installVehicles(deps = {}) {
     const g = guid >>> 0;
     const entry = containers.get(g);
     if (!entry) return;
+    if (entry.mountedOnTrailerGuid) {
+      const host = trailers.get(entry.mountedOnTrailerGuid >>> 0);
+      if (host) {
+        try { host.model?.detachContainer?.(); } catch (_) {}
+        if (host._attachedContainerGuid === g) host._attachedContainerGuid = 0;
+        if ((host.mountedContainerGuid >>> 0) === g) host.mountedContainerGuid = 0;
+      }
+      entry.mountedOnTrailerGuid = 0;
+    }
     try {
       if (entry.model?.root?.parent) entry.model.root.parent.remove(entry.model.root);
       entry.model?.dispose?.();
@@ -389,6 +464,402 @@ export function installVehicles(deps = {}) {
     try { sh()?.removeContainerCollider(g); } catch (_) {}
     try { requestShadowRaster(live.renderer, live); } catch (_) {}
     containers.delete(g);
+  }
+
+  function containerSlotToOpt(slot) {
+    if (slot === 1 || slot === "front") return "front";
+    if (slot === 2 || slot === "rear") return "rear";
+    return "auto";
+  }
+
+  function unmountContainerFromTrailer(entry, cGuid) {
+    const cg = cGuid >>> 0;
+    try { entry.model?.detachContainer?.(); } catch (_) {}
+    if (entry._attachedContainerGuid === cg) entry._attachedContainerGuid = 0;
+    if (!cg) return;
+    const cEntry = containers.get(cg);
+    if (!cEntry) return;
+    cEntry.mountedOnTrailerGuid = 0;
+    cEntry._lastColliderSig = null;
+    if (cEntry.model?.root) {
+      if (live?.worldRoot && cEntry.model.root.parent !== live.worldRoot) {
+        live.worldRoot.add(cEntry.model.root);
+      }
+      cEntry.model.root.quaternion.set(0, 0, 0, 1);
+      const rp = cEntry.rawPos || [0, 0, 0];
+      const [wx, wy, wz] = cEntry.cell ? FM.toGlobal(cEntry.cell, rp[0], rp[1], rp[2]) : [rp[0], rp[1], rp[2]];
+      cEntry.model.root.position.set(wx, wy, wz);
+      cEntry.model.root.rotation.z = -(cEntry.heading || 0);
+      const doorOpen = cEntry.currentDoorProgress >= 0.5;
+      try {
+        sh()?.upsertContainerCollider?.(cEntry.guid, cEntry.cell, rp[0], rp[1], rp[2], cEntry.heading || 0, cEntry.kind, doorOpen);
+        cEntry.colliderActive = true;
+      } catch (_) {}
+      try { requestShadowRaster(live.renderer, live); } catch (_) {}
+    }
+  }
+
+  function syncTrailerContainerMount(entry) {
+    if (!entry || !entry.model) return;
+    const cGuid = (entry.mountedContainerGuid ?? 0) >>> 0;
+    if (entry._attachedContainerGuid && entry._attachedContainerGuid !== cGuid) {
+      unmountContainerFromTrailer(entry, entry._attachedContainerGuid);
+    }
+    if (cGuid === 0) return;
+    const cEntry = containers.get(cGuid);
+    if (!cEntry || !cEntry.model) return;
+    const slotOpt = containerSlotToOpt(entry.containerSlot);
+    if (cEntry.mountedOnTrailerGuid !== entry.guid || entry.model.mountedContainer !== cEntry.model || entry._attachedContainerSlot !== slotOpt) {
+      if (cEntry.mountedOnTrailerGuid && cEntry.mountedOnTrailerGuid !== entry.guid) {
+        const prevHost = trailers.get(cEntry.mountedOnTrailerGuid >>> 0);
+        if (prevHost) unmountContainerFromTrailer(prevHost, cGuid);
+      }
+      entry.model.attachContainer(cEntry.model, { position: slotOpt });
+      cEntry.mountedOnTrailerGuid = entry.guid;
+      cEntry._lastColliderSig = null;
+      entry._attachedContainerGuid = cGuid;
+      entry._attachedContainerSlot = slotOpt;
+      try { requestShadowRaster(live.renderer, live); } catch (_) {}
+    }
+  }
+
+  function ensureTrailerEntry(guid, kindOrWcid, initialMsg = {}) {
+    if (!THREE || !live?.worldRoot) return null;
+    const g = guid >>> 0;
+    const specKind = resolveTrailerKind(kindOrWcid);
+    const wireKind = specKind === "40ft" ? 14 : 13;
+    const wcid = specKind === "40ft" ? (TRAILER_WCID?.Chassis40ft ?? 4000031) : (TRAILER_WCID?.Chassis20ft ?? 4000030);
+    let entry = trailers.get(g);
+    if (entry && entry.specKind !== specKind) {
+      if (entry._attachedContainerGuid) unmountContainerFromTrailer(entry, entry._attachedContainerGuid);
+      try {
+        if (entry.model?.root?.parent) entry.model.root.parent.remove(entry.model.root);
+        entry.model?.dispose?.();
+      } catch (_) {}
+      trailers.delete(g);
+      entry = null;
+    }
+    if (!entry) {
+      const flags = initialMsg.trailerFlags ?? 0;
+      const model = buildSemiTrailer(THREE, specKind, {
+        csmState: live.csmState,
+        twistlockState: (flags & TRAILER_FLAG.TWISTLOCKS_LOCKED) ? 1 : 0,
+        landingGearRetracted: Boolean((flags & TRAILER_FLAG.GEAR_RETRACTED) || (initialMsg.coupledTractorGuid >>> 0)),
+        brakeLights: Boolean(flags & TRAILER_FLAG.BRAKE_LIGHTS),
+      });
+      const rawPos = Array.isArray(initialMsg.position)
+        ? initialMsg.position
+        : [initialMsg.x ?? 0, initialMsg.y ?? 0, initialMsg.z ?? 0];
+      const cell = (initialMsg.cell ?? 0) >>> 0;
+      const worldPos = cell ? FM.toGlobal(cell, rawPos[0], rawPos[1], rawPos[2]) : [rawPos[0], rawPos[1], rawPos[2]];
+      const heading = Number.isFinite(initialMsg.heading) ? initialMsg.heading : 0;
+      const pitch = Number.isFinite(initialMsg.pitch) ? initialMsg.pitch : 0;
+      const bank = Number.isFinite(initialMsg.bank) ? initialMsg.bank : 0;
+      const qInit = FM.orientation(heading, pitch, bank);
+      model.root.position.set(worldPos[0], worldPos[1], worldPos[2]);
+      model.root.quaternion.set(qInit[1], qInit[2], qInit[3], qInit[0]);
+      live.worldRoot.add(model.root);
+      entry = {
+        guid: g,
+        kind: wireKind,
+        specKind,
+        wcid,
+        model,
+        last: null,
+        cell,
+        rawPos,
+        worldPos,
+        heading,
+        pitch,
+        bank,
+        coupledTractorGuid: (initialMsg.coupledTractorGuid ?? 0) >>> 0,
+        mountedContainerGuid: (initialMsg.mountedContainerGuid ?? 0) >>> 0,
+        containerSlot: initialMsg.containerSlot ?? 0,
+        trailerFlags: flags,
+        ownerGuid: (initialMsg.ownerGuid ?? 0) >>> 0,
+        coupledKinState: {
+          x: worldPos[0], y: worldPos[1], z: worldPos[2],
+          heading, pitch, bank, articulationRad: 0,
+        },
+        renderedPose: { x: worldPos[0], y: worldPos[1], z: worldPos[2], heading, pitch, bank },
+        lastSeenAt: nowSec(),
+        standInHidden: false,
+        _attachedContainerGuid: 0,
+        _attachedContainerSlot: "auto",
+        _wasCoupledTo: 0,
+        _posedFrame: -1,
+        _tractorSpeed: 0,
+        _tractorMode: FM.MODE.PARKED,
+      };
+      trailers.set(g, entry);
+      try { requestShadowRaster(live.renderer, live); } catch (_) {}
+    }
+    return entry;
+  }
+
+  function removeTrailerEntry(guid) {
+    const g = guid >>> 0;
+    const entry = trailers.get(g);
+    if (!entry) return;
+    if (entry._attachedContainerGuid || entry.mountedContainerGuid) {
+      unmountContainerFromTrailer(entry, entry._attachedContainerGuid || entry.mountedContainerGuid);
+    }
+    try {
+      if (entry.model?.root?.parent) entry.model.root.parent.remove(entry.model.root);
+      entry.model?.dispose?.();
+    } catch (_) {}
+    if (entry.standInHidden) {
+      try { em()?.setFilmHidden?.(g, false); } catch (_) {}
+    }
+    try { requestShadowRaster(live.renderer, live); } catch (_) {}
+    trailers.delete(g);
+    const coupledTractorGuid = (entry.coupledTractorGuid ?? 0) >>> 0;
+    for (const v of vehicles.values()) {
+      const hitched = (v.last?.hitchedTrailerGuid ?? 0) >>> 0;
+      if (hitched === g || (coupledTractorGuid !== 0 && (v.guid >>> 0) === coupledTractorGuid)) {
+        if (v.last && hitched === g) v.last.hitchedTrailerGuid = 0;
+        v._coupledTrailerKind = null;
+        v._coupledArticulationRad = 0;
+        v._coupledTrailerPitch = 0;
+        v._coupledTwistlocksLocked = false;
+        v._coupledTrailerFlags = 0;
+        if (v.params) {
+          const mul = computeTowMassMul(v);
+          v.params.towMassMul = mul;
+          if (pilot && pilot.vehicle === v && pilot.predictor?.state) {
+            pilot.predictor.state.towMassMul = mul;
+          }
+        }
+      }
+    }
+  }
+
+  function currentHitchedTrailerGuid(v) {
+    if (!v) return 0;
+    const fromState = (v.last?.hitchedTrailerGuid ?? 0) >>> 0;
+    if (fromState !== 0) return fromState;
+    for (const tr of trailers.values()) {
+      if ((tr.coupledTractorGuid >>> 0) === (v.guid >>> 0)) return tr.guid;
+    }
+    return 0;
+  }
+
+  function computeTowMassMul(v) {
+    const hGuid = currentHitchedTrailerGuid(v);
+    if (!hGuid) return TK.TOW_MASS_MUL.BOBTAIL;
+    const tr = trailers.get(hGuid);
+    if (tr && (tr.mountedContainerGuid >>> 0) !== 0) return TK.TOW_MASS_MUL.LOADED_40FT;
+    return TK.TOW_MASS_MUL.EMPTY_CHASSIS;
+  }
+
+  function findNearestUnhitchedTrailer(v, maxDistM = 3.5) {
+    if (!v) return null;
+    let pose = null;
+    if (pilot && pilot.vehicle === v && pilot.predictor) {
+      pose = pilot.predictor.state;
+    } else if (v.last) {
+      pose = stateFromMsg(v.last);
+    }
+    if (!pose) return null;
+    const hitchY = (Number.isFinite(v.profile?.fifthWheelOffsetY) && v.profile.fifthWheelOffsetY !== 0)
+      ? v.profile.fifthWheelOffsetY
+      : -2.01;
+    const hitchZ = (Number.isFinite(v.profile?.fifthWheelOffsetZ) && v.profile.fifthWheelOffsetZ !== 0)
+      ? v.profile.fifthWheelOffsetZ
+      : 0.96;
+    const fw = TK.computeFifthWheelPose(pose, hitchY, hitchZ);
+    let best = null;
+    let bestD = maxDistM;
+    for (const tr of trailers.values()) {
+      if ((tr.coupledTractorGuid >>> 0) !== 0) continue;
+      const spec = TK.resolveTrailerSpec(tr.specKind);
+      const qTr = FM.orientation(tr.heading || 0, tr.pitch || 0, tr.bank || 0);
+      const kpOff = FM.rotate(qTr, [0, spec.kpY, spec.kingpinZ]);
+      const kpX = tr.worldPos[0] + kpOff[0];
+      const kpY = tr.worldPos[1] + kpOff[1];
+      const d = Math.hypot(kpX - fw.x, kpY - fw.y);
+      if (d <= bestD) {
+        bestD = d;
+        best = tr;
+      }
+    }
+    return best;
+  }
+
+  function syncTractorCoupledTrailer(v, pose, dt, isLocalPilot, opts = {}) {
+    if (!v || !pose) return null;
+    const hGuid = currentHitchedTrailerGuid(v);
+    if (!hGuid) {
+      v._coupledTrailerPitch = 0;
+      v._coupledTrailerKind = null;
+      v._coupledArticulationRad = 0;
+      v._coupledTwistlocksLocked = false;
+      v._coupledTrailerFlags = 0;
+      return null;
+    }
+    const tr = trailers.get(hGuid);
+    if (!tr) {
+      v._coupledTrailerKind = null;
+      v._coupledArticulationRad = 0;
+      v._coupledTrailerPitch = (v.last?.trailerPitch ?? 0) - (pose.pitch || 0);
+      v._coupledTrailerFlags = v.last?.trailerFlags ?? 0;
+      v._coupledTwistlocksLocked = Boolean(v._coupledTrailerFlags & TRAILER_FLAG.TWISTLOCKS_LOCKED);
+      return null;
+    }
+
+    if (tr._wasCoupledTo !== v.guid) {
+      tr.coupledKinState.heading = (v.last?.hitchedTrailerGuid === hGuid && Number.isFinite(v.last?.trailerHeading))
+        ? v.last.trailerHeading
+        : (Number.isFinite(tr.heading) ? tr.heading : (pose.heading ?? 0));
+      tr._wasCoupledTo = v.guid;
+    }
+
+    const hitchY = (Number.isFinite(v.profile?.fifthWheelOffsetY) && v.profile.fifthWheelOffsetY !== 0)
+      ? v.profile.fifthWheelOffsetY
+      : -2.01;
+    const fifthWheelZ = (Number.isFinite(v.profile?.fifthWheelOffsetZ) && v.profile.fifthWheelOffsetZ !== 0)
+      ? v.profile.fifthWheelOffsetZ
+      : 0.96;
+    const tractorState = {
+      x: pose.x,
+      y: pose.y,
+      z: pose.z,
+      heading: pose.heading || 0,
+      pitch: pose.pitch || 0,
+      speed: pose.speed || 0,
+      steerAngle: pose.steerAngle || 0,
+      wheelbase: v.params?.wheelbase ?? v.profile?.wheelbase ?? 4.66,
+      fifthWheelOffsetZ: fifthWheelZ,
+      muLat: GM.SURFACE_FAMILIES[pose.surfaceFamily ?? 0]?.muLat ?? 1.0,
+    };
+
+    const stepDt = Number.isFinite(dt) && dt > 0 ? Math.min(dt, 0.1) : 0;
+    let trPose = TK.stepCoupledTrailer(tractorState, tr.coupledKinState, hitchY, tr.specKind, ground, stepDt);
+
+    const srvHeading = (v.last?.hitchedTrailerGuid === hGuid && Number.isFinite(v.last?.trailerHeading))
+      ? v.last.trailerHeading
+      : tr.heading;
+    if (Number.isFinite(srvHeading)) {
+      const diff = angleDiff(srvHeading, tr.coupledKinState.heading);
+      if (!isLocalPilot) {
+        if (Math.abs(diff) > 0.6 || stepDt <= 0) {
+          tr.coupledKinState.heading = srvHeading;
+        } else {
+          const alpha = 1 - Math.exp(-stepDt / 0.15);
+          tr.coupledKinState.heading = FM.wrapHeading(tr.coupledKinState.heading + diff * alpha);
+        }
+        trPose = TK.stepCoupledTrailer(tractorState, tr.coupledKinState, hitchY, tr.specKind, ground, 0);
+      } else if (Math.abs(pose.speed || 0) < 0.25 || Math.abs(diff) > 0.25) {
+        if (Math.abs(diff) > 0.7) {
+          tr.coupledKinState.heading = srvHeading;
+        } else if (stepDt > 0) {
+          const alpha = 1 - Math.exp(-stepDt / 0.35);
+          tr.coupledKinState.heading = FM.wrapHeading(tr.coupledKinState.heading + diff * alpha);
+        }
+        trPose = TK.stepCoupledTrailer(tractorState, tr.coupledKinState, hitchY, tr.specKind, ground, 0);
+      }
+    }
+
+    const qTr = FM.orientation(trPose.heading, trPose.pitch, trPose.bank);
+    tr.model.root.position.set(trPose.x, trPose.y, trPose.z);
+    tr.model.root.quaternion.set(qTr[1], qTr[2], qTr[3], qTr[0]);
+    writeEntity(tr.guid, trPose.x, trPose.y, trPose.z, qTr, true);
+
+    const tFlags = (v.last?.hitchedTrailerGuid === hGuid && v.last?.trailerFlags !== undefined)
+      ? v.last.trailerFlags
+      : tr.trailerFlags;
+    const twistlockState = (tFlags & TRAILER_FLAG.TWISTLOCKS_LOCKED) ? 1 : 0;
+    const brakeLights = Boolean((tFlags & TRAILER_FLAG.BRAKE_LIGHTS) || opts.braking);
+    const bogieSpeed = (pose.speed || 0) * Math.cos(trPose.articulationRad || 0);
+    try {
+      tr.model.update(stepDt, {
+        twistlockState,
+        landingGearRetracted: true,
+        brakeLights,
+        speed: bogieSpeed,
+      });
+    } catch (_) {}
+
+    tr._posedFrame = stats.frames;
+    tr._tractorSpeed = pose.speed || 0;
+    tr._tractorMode = pose.mode ?? FM.MODE.PARKED;
+    tr.renderedPose = trPose;
+
+    v._coupledTrailerPitch = trPose.pitch - (pose.pitch || 0);
+    v._coupledTrailerKind = tr.specKind;
+    v._coupledArticulationRad = trPose.articulationRad;
+    v._coupledTwistlocksLocked = Boolean(tFlags & TRAILER_FLAG.TWISTLOCKS_LOCKED);
+    v._coupledTrailerFlags = tFlags;
+    return trPose;
+  }
+
+  function tickTrailers(dt) {
+    for (const entry of trailers.values()) {
+      const inEm = em()?.entityMap?.get(entry.guid);
+      if (inEm && (!entry.standInHidden || inEm._filmHidden !== true)) {
+        try { if (em()?.setFilmHidden?.(entry.guid, true)) entry.standInHidden = true; } catch (_) {}
+      }
+
+      if (entry._posedFrame !== stats.frames) {
+        const coupled = (entry.coupledTractorGuid >>> 0) !== 0;
+        if (!coupled) {
+          entry._wasCoupledTo = 0;
+          entry._tractorSpeed = 0;
+          entry._tractorMode = FM.MODE.PARKED;
+        }
+        const [wx, wy, wz] = entry.worldPos;
+        const qTr = FM.orientation(entry.heading || 0, entry.pitch || 0, entry.bank || 0);
+        entry.model.root.position.set(wx, wy, wz);
+        entry.model.root.quaternion.set(qTr[1], qTr[2], qTr[3], qTr[0]);
+        writeEntity(entry.guid, wx, wy, wz, qTr, true);
+        entry.renderedPose = { x: wx, y: wy, z: wz, heading: entry.heading || 0, pitch: entry.pitch || 0, bank: entry.bank || 0 };
+        try {
+          entry.model.update(dt, {
+            twistlockState: (entry.trailerFlags & TRAILER_FLAG.TWISTLOCKS_LOCKED) ? 1 : 0,
+            landingGearRetracted: Boolean((entry.trailerFlags & TRAILER_FLAG.GEAR_RETRACTED) || coupled),
+            brakeLights: Boolean(entry.trailerFlags & TRAILER_FLAG.BRAKE_LIGHTS),
+            speed: 0,
+          });
+        } catch (_) {}
+      }
+
+      syncTrailerContainerMount(entry);
+
+      const cGuid = entry.mountedContainerGuid >>> 0;
+      if (cGuid !== 0) {
+        const cEntry = containers.get(cGuid);
+        if (cEntry) {
+          const isMoving = (entry.coupledTractorGuid >>> 0) !== 0 &&
+            (Math.abs(entry._tractorSpeed || 0) > 0.08 || entry._tractorMode === FM.MODE.DRIVING);
+          if (isMoving) {
+            if (cEntry.colliderActive !== false) {
+              try { sh()?.removeContainerCollider?.(cEntry.guid); } catch (_) {}
+              cEntry.colliderActive = false;
+              cEntry._lastColliderSig = null;
+            }
+          } else {
+            const trPose = entry.renderedPose ?? {
+              x: entry.worldPos[0], y: entry.worldPos[1], z: entry.worldPos[2],
+              heading: entry.heading || 0, pitch: entry.pitch || 0, bank: entry.bank || 0,
+            };
+            const cLen = cEntry.model?.spec?.external?.length ?? 6.058;
+            const slotOpt = containerSlotToOpt(entry.containerSlot);
+            const cPose = TK.computeMountedContainerPose(trPose, entry.specKind, cLen, slotOpt);
+            const cl = FM.toCellLocal(cPose.x, cPose.y, cPose.z);
+            const doorOpen = cEntry.currentDoorProgress >= 0.5;
+            const sig = `${cl.cell}:${Math.round(cl.x * 50)}:${Math.round(cl.y * 50)}:${Math.round(cl.z * 50)}:${Math.round(cPose.heading * 200)}:${doorOpen ? 1 : 0}`;
+            if (cEntry.colliderActive === false || cEntry._lastColliderSig !== sig) {
+              try {
+                sh()?.upsertContainerCollider?.(cEntry.guid, cl.cell, cl.x, cl.y, cl.z, cPose.heading, cEntry.kind, doorOpen);
+                cEntry.colliderActive = true;
+                cEntry._lastColliderSig = sig;
+              } catch (_) {}
+            }
+            writeEntity(cEntry.guid, cPose.x, cPose.y, cPose.z, FM.orientation(cPose.heading, cPose.pitch, cPose.bank), true);
+          }
+        }
+      }
+    }
   }
 
   function tickContainers(dt) {
@@ -411,11 +882,11 @@ export function installVehicles(deps = {}) {
         // Static shadow cache invalidation during door motion so CSM shadow streams inside!
         try { requestShadowRaster(live.renderer, live); } catch (_) {}
 
-        // Check doorOpen threshold crossing for dynamic collider update
+        // Check doorOpen threshold crossing for dynamic collider update (skip if mounted on trailer; tickTrailers manages it)
         const doorOpen = entry.currentDoorProgress >= 0.5;
         if (doorOpen !== entry.lastDoorOpen) {
           entry.lastDoorOpen = doorOpen;
-          if (entry.rawPos) {
+          if (entry.rawPos && !entry.mountedOnTrailerGuid) {
             try {
               sh()?.upsertContainerCollider(
                 entry.guid,
@@ -645,6 +1116,14 @@ export function installVehicles(deps = {}) {
 
   function forgetVehicle(v) {
     if (!v) return;
+    for (const tr of trailers.values()) {
+      if ((tr.coupledTractorGuid >>> 0) === (v.guid >>> 0)) {
+        tr.coupledTractorGuid = 0;
+        tr._wasCoupledTo = 0;
+        tr.trailerFlags &= ~(TRAILER_FLAG.COUPLED | TRAILER_FLAG.GEAR_RETRACTED | TRAILER_FLAG.BRAKE_LIGHTS);
+        try { tr.model?.setLandingGearRetracted?.(false); } catch (_) {}
+      }
+    }
     try { airframes?.remove(v.guid); } catch (_) { /* gone */ }
     try { aeroFx?.forgetVehicle(v.guid); } catch (_) { /* gone */ }
     const gm = groundModels.get(v.guid >>> 0);
@@ -667,24 +1146,28 @@ export function installVehicles(deps = {}) {
    */
   function drawVehicle(v, pose, q, opts = {}) {
     writeEntity(v.guid, pose.x, pose.y, pose.z, q, true);
-    const isGround = v.locomotion === 2 || v.profile?.locomotion === 2 || v.profile?.profileKey === "jeep-mb" || v.params?.locomotion === 2;
+    const isGround = isGroundVehicle(v);
     if (isGround) {
       const inEm = em()?.entityMap?.get(v.guid);
       if (!v.standInHidden || (inEm && inEm._filmHidden !== true)) {
         try { if (em()?.setFilmHidden?.(v.guid, true)) v.standInHidden = true; } catch (_) {}
       }
       const model = ensureGroundModel(v);
+      const gFlags = opts.groundFlags ?? pose.groundFlags ?? v.last?.groundFlags ?? v.last?.ground_flags ?? 0;
+      const surfFam = opts.surfaceFamily ?? pose.surfaceFamily ?? v.last?.surfaceFamily ?? v.last?.surface_family ?? 0;
+      const lights = opts.headlights !== undefined ? opts.headlights : Boolean(gFlags & 0x10);
+      const braking = opts.braking !== undefined ? opts.braking : (opts.handbrake !== undefined ? opts.handbrake : Boolean(gFlags & 0x02));
+      const boost = opts.boost !== undefined ? opts.boost : Boolean(gFlags & 0x04);
+      const hitchedGuid = opts.hitchedTrailerGuid ?? currentHitchedTrailerGuid(v);
+      const coupled = opts.coupled !== undefined ? opts.coupled : (hitchedGuid !== 0);
+      const trailerPitch = opts.trailerPitch ?? v._coupledTrailerPitch ?? (v.last?.trailerPitch ?? 0);
       if (model) {
         model.root.position.set(pose.x, pose.y, pose.z);
         model.root.quaternion.set(q[1], q[2], q[3], q[0]);
         const speed = opts.speed ?? pose.speed ?? 0;
         const steer = opts.steerAngle ?? pose.steerAngle ?? opts.yaw ?? 0;
-        const gFlags = opts.groundFlags ?? pose.groundFlags ?? v.last?.ground_flags ?? 0;
-        const lights = opts.headlights !== undefined ? opts.headlights : Boolean(gFlags & 0x10);
-        const braking = opts.braking !== undefined ? opts.braking : (opts.handbrake !== undefined ? opts.handbrake : Boolean(gFlags & 0x02));
-        const boost = opts.boost !== undefined ? opts.boost : Boolean(gFlags & 0x04);
         const windscreen = opts.windscreenFolded !== undefined ? opts.windscreenFolded : (v.windscreenFolded ?? false);
-        const accel = opts.accel !== undefined ? opts.accel : ((opts.throttle ?? 0) * 11.2 - (braking ? 14.0 : 0));
+        const accel = opts.accel !== undefined ? opts.accel : ((opts.throttle ?? 0) * (v.params?.launchAccel ?? 11.2) - (braking ? (v.params?.normalBrake ?? 14.0) : 0));
 
         model.update({
           dt: opts.dt ?? 1 / 60,
@@ -693,8 +1176,12 @@ export function installVehicles(deps = {}) {
           accel,
           headlights: lights,
           braking,
+          brakeLights: braking,
           boost,
           windscreenFolded: windscreen,
+          coupled,
+          hitchedTrailerGuid: hitchedGuid,
+          trailerPitch,
           suspensionFL: opts.suspensionFL,
           suspensionFR: opts.suspensionFR,
           suspensionRL: opts.suspensionRL,
@@ -705,12 +1192,14 @@ export function installVehicles(deps = {}) {
         groundFx?.update(v.guid, pose, {
           speed: opts.speed ?? pose.speed ?? 0,
           steerAngle: opts.steerAngle ?? pose.steerAngle ?? 0,
-          handbrake: opts.braking ?? opts.handbrake ?? Boolean((opts.groundFlags ?? pose.groundFlags ?? v.last?.ground_flags ?? 0) & 0x02),
+          handbrake: braking,
           throttle: opts.throttle ?? (pose.mode === 0 ? 0 : 0.72),
-          boost: opts.boost ?? Boolean((opts.groundFlags ?? pose.groundFlags ?? v.last?.ground_flags ?? 0) & 0x04),
-          groundFlags: opts.groundFlags ?? pose.groundFlags ?? v.last?.ground_flags ?? 0,
-          surfaceFamily: opts.surfaceFamily ?? pose.surfaceFamily ?? v.last?.surface_family ?? 0,
+          boost,
+          groundFlags: gFlags,
+          surfaceFamily: surfFam,
           isBridge: !!opts.isBridge,
+          profileKey: v.profile?.profileKey ?? v.params?.profileKey ?? "",
+          vehicleClass: v.profile?.vehicleClass ?? v.params?.vehicleClass ?? 0,
           dt: opts.dt ?? 1 / 60,
         }, opts.dt ?? 1 / 60);
       } catch (_) {}
@@ -752,6 +1241,18 @@ export function installVehicles(deps = {}) {
     return true;
   }
 
+  function syncRigVisibility(p, v, firstPerson, composite) {
+    const wantHidden = !!firstPerson;
+    if (wantHidden !== !!p.rigHidden || composite !== p.rigComposite) {
+      try {
+        em()?.setFilmHidden?.(localGuid(), wantHidden);
+        if (!composite) em()?.setFilmHidden?.(v.guid, wantHidden);
+        p.rigHidden = wantHidden;
+        p.rigComposite = composite;
+      } catch (_) { /* never fatal */ }
+    }
+  }
+
   function handleMsg(m) {
     stats.msgs++;
     switch (m.type) {
@@ -762,9 +1263,10 @@ export function installVehicles(deps = {}) {
       case "profile": {
         const v = vehicleOf(m.vehicle);
         v.profile = m;
-        if (m.locomotion === 2 || m.profileKey === "jeep-mb") {
+        if (m.locomotion === 2 || m.profileKey === "jeep-mb" || isSemiProfile(m)) {
           v.locomotion = 2;
           v.params = groundParamsFromProfile(m);
+          v.params.towMassMul = computeTowMassMul(v);
           if (THREE) ensureGroundModel(v);
         } else {
           v.locomotion = 1;
@@ -820,9 +1322,21 @@ export function installVehicles(deps = {}) {
         v.last = m;
         v.lastMsgAt = nowSec();
         stats.states++;
+        if (v.params && isGroundVehicle(v)) {
+          const mul = computeTowMassMul(v);
+          v.params.towMassMul = mul;
+          if (pilot && pilot.vehicle === v && pilot.predictor?.state) {
+            pilot.predictor.state.towMassMul = mul;
+          }
+        }
         if (pilot && pilot.vehicle === v && (m.flags & 0x01)) {
           if (!pilot.predictor) pilot.predictor = makePredictor(v, m);
-          else pilot.predictor.reconcile(m);
+          else {
+            pilot.predictor.reconcile(m);
+            if (v.params && isGroundVehicle(v) && pilot.predictor.state) {
+              pilot.predictor.state.towMassMul = v.params.towMassMul;
+            }
+          }
           pilot.lastServer = m;
         } else {
           v.track.push(m, nowSec());
@@ -872,11 +1386,28 @@ export function installVehicles(deps = {}) {
         const myVehicle = !!(pilot && pilot.vehicle === v);
         if (m.kind === 4) { // despawn
           if (pilot && pilot.vehicle === v) stopPiloting("despawned");
+          if (passenger && passenger.vehicle === v) stopRiding("despawned");
           if (handoff && handoff.v === v) endHandoff("despawned");
           forgetVehicle(v);
           vehicles.delete(m.vehicle >>> 0);
+          removeTrailerEntry(m.vehicle >>> 0);
+          if (m.subject) removeTrailerEntry(m.subject >>> 0);
           removeContainerEntry(m.vehicle >>> 0);
           if (m.subject) removeContainerEntry(m.subject >>> 0);
+        } else if (m.kind === 19) { // trailerHitched
+          if (myVehicle || (passenger && passenger.vehicle === v)) {
+            try { groundAudio?.airBrakeHiss?.({ kind: "hitch" }); } catch (_) {}
+            flashPrompt("Trailer coupled — air lines connected", 1600);
+          }
+        } else if (m.kind === 20) { // trailerUnhitched
+          if (myVehicle || (passenger && passenger.vehicle === v)) {
+            try { groundAudio?.airBrakeHiss?.({ kind: "unhitch" }); } catch (_) {}
+            flashPrompt("Trailer unhitched — landing gear lowered", 1600);
+          }
+        } else if (m.kind === 21) { // twistlockToggled
+          if (myVehicle || (passenger && passenger.vehicle === v)) {
+            flashPrompt(m.aux ? "Twistlocks LOCKED" : "Twistlocks UNLOCKED", 1400);
+          }
         } else if (m.kind === 2) { // aircraft landed
           try {
             const p0 = Number.isFinite(m.cell) && m.cell ? FM.toGlobal(m.cell, m.x, m.y, m.z) : (v?.last ? stateFromMsg(v.last) : null);
@@ -1035,22 +1566,19 @@ export function installVehicles(deps = {}) {
 
         const entry = ensureContainerEntry(guid, kind, m);
         if (entry) {
-          const [wx, wy, wz] = cell ? FM.toGlobal(cell, pos[0], pos[1], pos[2]) : [pos[0], pos[1], pos[2]];
-          entry.model.root.position.set(wx, wy, wz);
-          entry.model.root.rotation.z = -heading;
+          let hostTrailer = entry.mountedOnTrailerGuid ? trailers.get(entry.mountedOnTrailerGuid >>> 0) : null;
+          if (!hostTrailer) {
+            for (const tr of trailers.values()) {
+              if ((tr.mountedContainerGuid >>> 0) === guid) {
+                hostTrailer = tr;
+                break;
+              }
+            }
+          }
 
           entry.last = m;
           entry.lastSeenAt = nowSec();
           entry.targetDoorProgress = doorProgress;
-          const posChanged = !entry.rawPos || entry.rawPos[0] !== pos[0] || entry.rawPos[1] !== pos[1] || entry.rawPos[2] !== pos[2] || entry.cell !== cell || entry.heading !== heading;
-          const doorOpen = entry.currentDoorProgress >= 0.5 || doorState === 1 || doorState === 2;
-          if (doorOpen !== entry.lastDoorOpen || posChanged || entry.lastDoorOpen === null) {
-            entry.lastDoorOpen = doorOpen;
-            try {
-              sh()?.upsertContainerCollider(guid, cell, pos[0], pos[1], pos[2], heading, kind, doorOpen);
-            } catch (_) {}
-          }
-
           entry.cell = cell;
           entry.rawPos = pos;
           entry.heading = heading;
@@ -1058,10 +1586,100 @@ export function installVehicles(deps = {}) {
           entry.liveryId = liveryId;
           entry.serialNumber = serialNumber;
 
+          if (hostTrailer) {
+            syncTrailerContainerMount(hostTrailer);
+          } else {
+            const [wx, wy, wz] = cell ? FM.toGlobal(cell, pos[0], pos[1], pos[2]) : [pos[0], pos[1], pos[2]];
+            entry.model.root.position.set(wx, wy, wz);
+            entry.model.root.rotation.z = -heading;
+
+            const posChanged = !entry._lastUpsertPos || entry._lastUpsertPos[0] !== pos[0] || entry._lastUpsertPos[1] !== pos[1] || entry._lastUpsertPos[2] !== pos[2] || entry._lastUpsertCell !== cell || entry._lastUpsertHeading !== heading;
+            const doorOpen = entry.currentDoorProgress >= 0.5 || doorState === 1 || doorState === 2;
+            if (doorOpen !== entry.lastDoorOpen || posChanged || entry.lastDoorOpen === null) {
+              entry.lastDoorOpen = doorOpen;
+              entry._lastUpsertCell = cell;
+              entry._lastUpsertPos = [pos[0], pos[1], pos[2]];
+              entry._lastUpsertHeading = heading;
+              try {
+                sh()?.upsertContainerCollider(guid, cell, pos[0], pos[1], pos[2], heading, kind, doorOpen);
+                entry.colliderActive = true;
+              } catch (_) {}
+            }
+          }
+
           if (Array.isArray(m.slots)) {
             entry.slots = slots;
             try { entry.model?.syncSlots?.(slots); } catch (_) {}
           }
+        }
+        break;
+      }
+      case "trailer_state": {
+        const guid = (m.trailerGuid ?? m.guid) >>> 0;
+        if (!guid) break;
+        const pos = Array.isArray(m.position) ? m.position : [m.x ?? 0, m.y ?? 0, m.z ?? 0];
+        const cell = (m.cell ?? 0) >>> 0;
+        const [wx, wy, wz] = cell ? FM.toGlobal(cell, pos[0], pos[1], pos[2]) : [pos[0], pos[1], pos[2]];
+        const entry = ensureTrailerEntry(guid, m.kind ?? 14, m);
+        if (entry) {
+          entry.cell = cell;
+          entry.rawPos = pos;
+          entry.worldPos = [wx, wy, wz];
+          entry.heading = Number.isFinite(m.heading) ? m.heading : 0;
+          entry.pitch = Number.isFinite(m.pitch) ? m.pitch : 0;
+          entry.bank = Number.isFinite(m.bank) ? m.bank : 0;
+          entry.coupledTractorGuid = (m.coupledTractorGuid ?? 0) >>> 0;
+          entry.mountedContainerGuid = (m.mountedContainerGuid ?? 0) >>> 0;
+          entry.containerSlot = m.containerSlot ?? 0;
+          entry.trailerFlags = m.trailerFlags ?? 0;
+          entry.ownerGuid = (m.ownerGuid ?? 0) >>> 0;
+          entry.last = m;
+          entry.lastSeenAt = nowSec();
+
+          const inEm = em()?.entityMap?.get(guid);
+          if (inEm && (!entry.standInHidden || inEm._filmHidden !== true)) {
+            try { if (em()?.setFilmHidden?.(guid, true)) entry.standInHidden = true; } catch (_) {}
+          }
+
+          if (entry.coupledTractorGuid === 0) {
+            entry._wasCoupledTo = 0;
+            Object.assign(entry.coupledKinState, {
+              x: wx, y: wy, z: wz,
+              heading: entry.heading,
+              pitch: entry.pitch,
+              bank: entry.bank,
+              articulationRad: 0,
+            });
+            entry.renderedPose = {
+              x: wx, y: wy, z: wz,
+              heading: entry.heading,
+              pitch: entry.pitch,
+              bank: entry.bank,
+            };
+            const qTr = FM.orientation(entry.heading, entry.pitch, entry.bank);
+            entry.model.root.position.set(wx, wy, wz);
+            entry.model.root.quaternion.set(qTr[1], qTr[2], qTr[3], qTr[0]);
+            writeEntity(guid, wx, wy, wz, qTr, true);
+            try {
+              entry.model.update(0, {
+                twistlockState: (entry.trailerFlags & TRAILER_FLAG.TWISTLOCKS_LOCKED) ? 1 : 0,
+                landingGearRetracted: Boolean(entry.trailerFlags & TRAILER_FLAG.GEAR_RETRACTED),
+                brakeLights: Boolean(entry.trailerFlags & TRAILER_FLAG.BRAKE_LIGHTS),
+                speed: 0,
+              });
+            } catch (_) {}
+          } else {
+            const tractor = vehicles.get(entry.coupledTractorGuid);
+            if (tractor && tractor.params) {
+              const mul = computeTowMassMul(tractor);
+              tractor.params.towMassMul = mul;
+              if (pilot && pilot.vehicle === tractor && pilot.predictor?.state) {
+                pilot.predictor.state.towMassMul = mul;
+              }
+            }
+          }
+
+          syncTrailerContainerMount(entry);
         }
         break;
       }
@@ -1149,25 +1767,34 @@ export function installVehicles(deps = {}) {
   function startPiloting(v, seat, hotSwapFrom = null) {
     let camera = null;
     let camRig = null;
+    let prevRigHidden = false;
+    let prevRigComposite;
     if (passenger) {
       camera = passenger.camera;
       camRig = passenger.camRig;
+      prevRigHidden = !!passenger.rigHidden;
+      prevRigComposite = passenger.rigComposite;
       stopRiding("pilot transition", true /* keepCamera */);
     } else if (pilot) {
       camera = pilot.camera;
       camRig = pilot.camRig;
+      prevRigHidden = !!pilot.rigHidden;
+      prevRigComposite = pilot.rigComposite;
       stopPiloting("re-seat", true /* keepCamera */);
     }
     endHandoff("re-seat");
     releaseLandingCam();
     if (!v.params) return;
 
-    const isGround = v.locomotion === 2 || v.profile?.locomotion === 2 || v.profile?.profileKey === "jeep-mb";
+    const isGround = isGroundVehicle(v);
     const controls = createVehicleControls({
       window: win,
       canvas: live.renderer?.domElement ?? null,
       locomotion: isGround ? 2 : 1,
       seatIndex: 0,
+      vehicleClass: v.profile?.vehicleClass ?? 0,
+      profileKey: v.profile?.profileKey ?? "",
+      maxSeats: maxSeatsOf(v),
     });
     controls.lock();
     controls.throttle = 0;
@@ -1185,10 +1812,12 @@ export function installVehicles(deps = {}) {
     if (!camRig) {
       camRig = createPilotCameraRig({
         ground,
-        chaseCfg: CHASE,
+        chaseCfg: isGround ? undefined : CHASE,
         initialView: "chase",
         locomotion: isGround ? 2 : 1,
         seatIndex: 0,
+        vehicleClass: v.profile?.vehicleClass ?? 0,
+        profileKey: v.profile?.profileKey ?? "",
       });
     } else {
       camRig.setSeatIndex?.(0);
@@ -1229,7 +1858,9 @@ export function installVehicles(deps = {}) {
       acc: 0,
       predictor: v.last ? makePredictor(v, v.last) : null,
       startedAt: nowSec(),
-      view: "chase",
+      view: camRig?.getView ? camRig.getView() : "chase",
+      rigHidden: prevRigHidden,
+      rigComposite: prevRigComposite,
       camHeading: null,
       camPitch: null,
       camRoll: null,
@@ -1260,12 +1891,26 @@ export function installVehicles(deps = {}) {
         controls.setMouseAim(nextAim, pilot.predictor?.state ?? null);
         flashPrompt(nextAim ? "Mouse-Aim Instructor ON" : "Mouse-Aim OFF", 1200);
       } else if (a.type === "seat") {
-        if (Number.isFinite(a.seatIndex) && a.seatIndex >= 0 && a.seatIndex <= 3) {
+        if (Number.isFinite(a.seatIndex) && a.seatIndex >= 0 && a.seatIndex < maxSeatsOf(v)) {
           requestSeatHotSwap(v, a.seatIndex);
         }
+      } else if (a.type === "trailerHitch") {
+        const hitchedGuid = currentHitchedTrailerGuid(v);
+        if (hitchedGuid !== 0) {
+          try { sh()?.vehicleTrailerAction?.(hitchedGuid, v.guid, 0, TRAILER_ACTION.Unhitch, 0); } catch (_) {}
+        } else {
+          const best = findNearestUnhitchedTrailer(v, 3.5);
+          if (best) {
+            try { sh()?.vehicleTrailerAction?.(best.guid, v.guid, 0, TRAILER_ACTION.Hitch, 0); } catch (_) {}
+          } else {
+            flashPrompt("Move within 3.5 m of trailer kingpin to hitch", 1500);
+          }
+        }
       } else if (a.type === "windscreen") {
-        v.windscreenFolded = !v.windscreenFolded;
-        flashPrompt(v.windscreenFolded ? "Windscreen folded" : "Windscreen raised", 1200);
+        if (!isSemiVehicle(v)) {
+          v.windscreenFolded = !v.windscreenFolded;
+          flashPrompt(v.windscreenFolded ? "Windscreen folded" : "Windscreen raised", 1200);
+        }
       } else if (a.type === "hideHud") osd.toggleHidden();
       else if (a.type === "exit") requestExit();
     });
@@ -1276,13 +1921,19 @@ export function installVehicles(deps = {}) {
   function startRiding(v, seat, hotSwapFrom = null) {
     let camera = null;
     let camRig = null;
+    let prevRigHidden = false;
+    let prevRigComposite;
     if (pilot) {
       camera = pilot.camera;
       camRig = pilot.camRig;
+      prevRigHidden = !!pilot.rigHidden;
+      prevRigComposite = pilot.rigComposite;
       stopPiloting("passenger transition", true /* keepCamera */);
     } else if (passenger) {
       camera = passenger.camera;
       camRig = passenger.camRig;
+      prevRigHidden = !!passenger.rigHidden;
+      prevRigComposite = passenger.rigComposite;
       stopRiding("re-seat", true /* keepCamera */);
     }
     endHandoff("re-seat");
@@ -1293,6 +1944,9 @@ export function installVehicles(deps = {}) {
       canvas: live.renderer?.domElement ?? null,
       locomotion: 2,
       seatIndex: seat,
+      vehicleClass: v.profile?.vehicleClass ?? 0,
+      profileKey: v.profile?.profileKey ?? "",
+      maxSeats: maxSeatsOf(v),
     });
     controls.lock();
 
@@ -1309,10 +1963,12 @@ export function installVehicles(deps = {}) {
     if (!camRig) {
       camRig = createPilotCameraRig({
         ground,
-        chaseCfg: CHASE,
+        chaseCfg: undefined,
         initialView: "chase",
         locomotion: 2,
         seatIndex: seat,
+        vehicleClass: v.profile?.vehicleClass ?? 0,
+        profileKey: v.profile?.profileKey ?? "",
       });
     } else {
       camRig.setSeatIndex?.(seat);
@@ -1335,7 +1991,9 @@ export function installVehicles(deps = {}) {
       controls,
       camera,
       startedAt: nowSec(),
-      view: "chase",
+      view: camRig?.getView ? camRig.getView() : "chase",
+      rigHidden: prevRigHidden,
+      rigComposite: prevRigComposite,
       unsub: null,
       lastSeat: null,
       trail: [],
@@ -1345,12 +2003,14 @@ export function installVehicles(deps = {}) {
       if (a.type === "camera") {
         passenger.view = passenger.camRig.cycleView();
       } else if (a.type === "seat") {
-        if (Number.isFinite(a.seatIndex) && a.seatIndex >= 0 && a.seatIndex <= 3) {
+        if (Number.isFinite(a.seatIndex) && a.seatIndex >= 0 && a.seatIndex < maxSeatsOf(v)) {
           requestSeatHotSwap(v, a.seatIndex);
         }
       } else if (a.type === "windscreen") {
-        v.windscreenFolded = !v.windscreenFolded;
-        flashPrompt(v.windscreenFolded ? "Windscreen folded" : "Windscreen raised", 1200);
+        if (!isSemiVehicle(v)) {
+          v.windscreenFolded = !v.windscreenFolded;
+          flashPrompt(v.windscreenFolded ? "Windscreen folded" : "Windscreen raised", 1200);
+        }
       } else if (a.type === "hideHud") {
         osd.toggleHidden();
       } else if (a.type === "exit") {
@@ -1373,6 +2033,12 @@ export function installVehicles(deps = {}) {
       try { sh()?.clearVehicleSeat?.(); } catch (_) {}
       try { em()?.setMotion?.(localGuid(), MOTION.READY, MOTION.NONCOMBAT, 1.0); } catch (_) {}
       try { groundAudio?.stop({ fadeSec: 0.25 }); } catch (_) {}
+      if (p.rigHidden) {
+        try {
+          em()?.setFilmHidden?.(localGuid(), false);
+          if (p.rigComposite === false) em()?.setFilmHidden?.(p.vehicle.guid, false);
+        } catch (_) { /* */ }
+      }
     }
     try {
       if (win?.__inputFunnel && typeof win.__inputFunnel.unpoison === "function") {
@@ -1398,18 +2064,20 @@ export function installVehicles(deps = {}) {
     const v = p.vehicle;
     const flying = !disposed && p.predictor && v?.params && vehicles.get(v.guid) === v && mode !== FM.MODE.PARKED && mode !== FM.MODE.CRASHED;
     const isTeardown = why === "disconnect" || why === "context-loss" || why === "logout" || why === "dispose";
-    const inAir = !isTeardown && why === "seat released" && flying && !teleportUnderWay();
+    const inAir = !isTeardown && !keepCamera && why === "seat released" && flying && !teleportUnderWay();
     try { p.unsub?.(); } catch (_) {}
     try { p.controls.dispose(); } catch (_) {}
-    if (!inAir) { try { p.camera?.release(); p.camera?.dispose(); } catch (_) {} }
-    try { sh()?.clearVehicleSeat?.(); } catch (_) {}
-    try {
-      vehicleAudio?.stop({ fadeSec: (inAir && !isTeardown) ? 0.25 : 0 });
-      if (!inAir && why === "seat released") vehicleAudio?.canopy({ open: true, mine: true, fpv: false });
-      if (isTeardown) vehicleAudio?.dispose();
-      groundAudio?.stop({ fadeSec: 0.25 });
-      if (isTeardown) groundAudio?.dispose();
-    } catch (_) {}
+    if (!keepCamera) {
+      if (!inAir) { try { p.camera?.release(); p.camera?.dispose(); } catch (_) {} }
+      try { sh()?.clearVehicleSeat?.(); } catch (_) {}
+      try {
+        vehicleAudio?.stop({ fadeSec: (inAir && !isTeardown) ? 0.25 : 0 });
+        if (!inAir && why === "seat released") vehicleAudio?.canopy({ open: true, mine: true, fpv: false });
+        if (isTeardown) vehicleAudio?.dispose();
+        groundAudio?.stop({ fadeSec: 0.25 });
+        if (isTeardown) groundAudio?.dispose();
+      } catch (_) {}
+    }
     try {
       if (win?.__inputFunnel && typeof win.__inputFunnel.unpoison === "function") {
         win.__inputFunnel.unpoison();
@@ -1418,8 +2086,15 @@ export function installVehicles(deps = {}) {
         win.__inputFunnel.releaseHeld("vehicle");
       }
     } catch (_) {}
-    if (!inAir) { try { em()?.setMotion?.(localGuid(), MOTION.READY, MOTION.NONCOMBAT, 1.0); } catch (_) {} }
-    if (p.rigHidden) { try { em()?.setFilmHidden?.(localGuid(), false); if (!p.rigComposite) em()?.setFilmHidden?.(p.vehicle.guid, false); } catch (_) { /* */ } }
+    if (!keepCamera) {
+      if (!inAir) { try { em()?.setMotion?.(localGuid(), MOTION.READY, MOTION.NONCOMBAT, 1.0); } catch (_) {} }
+      if (p.rigHidden) {
+        try {
+          em()?.setFilmHidden?.(localGuid(), false);
+          if (p.rigComposite === false) em()?.setFilmHidden?.(p.vehicle.guid, false);
+        } catch (_) { /* */ }
+      }
+    }
     if (v && vehicles.get(v.guid) === v) {
       v.track = createObserverTrack();
       v.blend = null;
@@ -1470,6 +2145,7 @@ export function installVehicles(deps = {}) {
   function onTeleport() {
     teleportAt = nowSec();
     if (pilot) stopPiloting("teleport");
+    if (passenger) stopRiding("teleport");
     endHandoff("teleport");
     if (fall) { chutes?.close(localGuid()); stopFall("teleport"); }
   }
@@ -1874,7 +2550,7 @@ export function installVehicles(deps = {}) {
   function currentHotSwapSeat(v, pose, hs) {
     const wallNow = nowSec();
     const u = Math.min(1.0, Math.max(0.0, (wallNow - hs.startTime) / (hs.duration || 0.35)));
-    const hotSwapOffset = interpolateSeatHotSwap(hs.fromSeat, hs.toSeat, u);
+    const hotSwapOffset = interpolateSeatHotSwap(hs.fromSeat, hs.toSeat, u, v.profile);
     let q = FM.orientation(pose.heading, pose.pitch, pose.bank);
     const r = FM.rotate(q, hotSwapOffset);
     if (u >= 1.0) {
@@ -1891,8 +2567,8 @@ export function installVehicles(deps = {}) {
   function seatOf(v, pose, seat) {
     let q = FM.orientation(pose.heading, pose.pitch, pose.bank);
     let off = v.profile?.seats?.[seat]?.offset;
-    if ((!off || (off[0] === 0 && off[1] === 0 && off[2] === 0)) && (v.locomotion === 2 || v.profile?.locomotion === 2 || v.profile?.profileKey === "jeep-mb")) {
-      try { off = getSeatOffset(seat); } catch (_) {}
+    if ((!off || (off[0] === 0 && off[1] === 0 && off[2] === 0)) && isGroundVehicle(v)) {
+      try { off = getSeatOffset(seat, v.profile); } catch (_) {}
     }
     if (!off) off = [0, 0, 0];
     const tilt = airframes ? airframes.tiltOf(v.guid) : 0;
@@ -1949,6 +2625,12 @@ export function installVehicles(deps = {}) {
     p.lastWall = wallNow;
     if (!(wallDt >= 0)) wallDt = 0;
     if (wallDt > 1.0) wallDt = 1.0;
+    const isGround = isGroundVehicle(v);
+    if (v.params && isGround) {
+      const mul = computeTowMassMul(v);
+      v.params.towMassMul = mul;
+      if (p.predictor?.state) p.predictor.state.towMassMul = mul;
+    }
     p.acc += wallDt;
     let n = 0;
     const hopping = !!p.hop; // boarding hop in progress: the vehicle stays parked
@@ -1965,12 +2647,17 @@ export function installVehicles(deps = {}) {
     const pose = p.predictor.renderPose(p.acc / FM.DT);
     const h = sh();
 
+    const ctrl = p.controls.status();
+    const isBraking = Boolean(ctrl.handbrake || ((pose.groundFlags ?? 0) & 0x02));
+    if (isGround) {
+      syncTractorCoupledTrailer(v, pose, dt, true, { braking: isBraking });
+    }
+
     // the local body rides the seat (wasm: no local physics while locked)
     const seat = p.hotSwap ? currentHotSwapSeat(v, pose, p.hotSwap) : seatOf(v, pose, p.seat);
     const cl = FM.toCellLocal(seat.x, seat.y, seat.z);
     try { h.setVehicleSeat(v.guid, cl.cell, cl.x, cl.y, cl.z, pose.heading); } catch (_) {}
 
-    const ctrl = p.controls.status();
     const firingNow = !!(ctrl.fire || (wallNow - (p.lastFireAt ?? -10) < 0.22));
     const camStep = p.camRig.step({
       seat,
@@ -1981,6 +2668,9 @@ export function installVehicles(deps = {}) {
       firing: firingNow,
       explosionShake: fx.shakeAt([seat.x, seat.y, seat.z]),
       camTweak,
+      hitchedTrailerKind: v._coupledTrailerKind ?? null,
+      vehicleClass: v.profile?.vehicleClass,
+      profileKey: v.profile?.profileKey,
     });
     p.gLoad = camStep.gLoad;
     p.view = camStep.view;
@@ -1992,6 +2682,10 @@ export function installVehicles(deps = {}) {
       dt, throttle: ctrl.throttle, cockpit: firstPerson, hideWindscreen: p.view === "hood",
       pitch: ctrl.sticks.pitch, roll: ctrl.sticks.roll, yaw: ctrl.sticks.yaw,
       boost: ctrl.boost, land: ctrl.land, gLoad: p.gLoad,
+      braking: isBraking,
+      headlights: !!ctrl.headlights,
+      hitchedTrailerGuid: currentHitchedTrailerGuid(v),
+      trailerPitch: v._coupledTrailerPitch ?? 0,
     });
     p.lastSeat = { x: seat.x, y: seat.y, z: seat.z, heading: pose.heading, t: wallNow };
     pushTrail(p.trail, seat, wallNow);
@@ -2012,10 +2706,10 @@ export function installVehicles(deps = {}) {
       writeEntity(localGuid(), seat.x, seat.y, seat.z, seat.q);
     }
 
-    // Pose ALL 4 seated avatars (0..3) with 34-part IK
-    const isGround = v.locomotion === 2 || v.profile?.locomotion === 2 || v.profile?.profileKey === "jeep-mb";
+    // Pose seated avatars (0..maxSeats-1) with 34-part IK
+    const maxSeats = maxSeatsOf(v);
     const driverSteer = ctrl.steer ? ctrl.steer : (pose.steerAngle || 0);
-    const driverAccelLong = isGround ? ((ctrl.throttle ?? 0) * 11.2 - (ctrl.handbrake ? 22.0 : 0)) : 0;
+    const driverAccelLong = isGround ? ((ctrl.throttle ?? 0) * (v.params?.launchAccel ?? 11.2) - (ctrl.handbrake ? 22.0 : 0)) : 0;
     const driverAccelLat = isGround ? (driverSteer * (pose.speed || 0)) : 0;
     const kin = {
       steerAngle: driverSteer,
@@ -2023,9 +2717,10 @@ export function installVehicles(deps = {}) {
       accelLong: driverAccelLong,
       accelLat: driverAccelLat,
       yawRate: 0,
+      profile: v.profile,
     };
 
-    for (let s = 0; s < 4; s++) {
+    for (let s = 0; s < maxSeats; s++) {
       const occ = v.seats[s] >>> 0;
       if (occ && v.profile) {
         const isLocal = occ === localGuid();
@@ -2045,15 +2740,7 @@ export function installVehicles(deps = {}) {
     // cockpit/hood view: the eye sits where the seated pilot's head is (or on the cowling), and the retail stand-in has
     // no interior — hide our own rig AND our vehicle's stand-in model there (render-only, local: everyone else still sees
     // both); shown again in chase view and on leaving the seat. With the composite airframe, cockpit/hood keeps the aircraft.
-    const wantHidden = firstPerson;
-    if (wantHidden !== !!p.rigHidden || composite !== p.rigComposite) {
-      try {
-        em()?.setFilmHidden?.(localGuid(), wantHidden);
-        if (!composite) em()?.setFilmHidden?.(v.guid, wantHidden);
-        p.rigHidden = wantHidden;
-        p.rigComposite = composite;
-      } catch (_) { /* never fatal */ }
-    }
+    syncRigVisibility(p, v, firstPerson, composite);
 
     // camera (3-mode fighter rig: spring-lag chase, gunsight-aligned cockpit, nose hood-cam + speed FOV + harmonic shake)
     if (p.camera && p.camera.owned) {
@@ -2123,6 +2810,9 @@ export function installVehicles(deps = {}) {
     } catch (_) { /* streaming hint only */ }
 
     if (isGround) {
+      const hitchedGuid = currentHitchedTrailerGuid(v);
+      const gFlags = v.last?.groundFlags ?? v.last?.ground_flags ?? 0;
+      const surfFam = pose.surfaceFamily ?? v.last?.surfaceFamily ?? v.last?.surface_family ?? 0;
       try {
         groundAudio?.update({
           speed: pose.speed,
@@ -2131,9 +2821,12 @@ export function installVehicles(deps = {}) {
           handbrake: !!ctrl.handbrake,
           horn: !!ctrl.horn,
           boost: !!ctrl.boost,
-          surfaceFamily: pose.surfaceFamily ?? v.last?.surface_family ?? 0,
+          surfaceFamily: surfFam,
           pos: [pose.x, pose.y, pose.z],
           fpv: p.view === "cockpit",
+          vehicleClass: v.profile?.vehicleClass ?? 0,
+          profileKey: v.profile?.profileKey ?? "",
+          hitchedTrailerGuid: hitchedGuid,
           dt,
         });
         if (ctrl.horn !== undefined) groundAudio?.horn?.(!!ctrl.horn);
@@ -2141,11 +2834,16 @@ export function installVehicles(deps = {}) {
 
       osd.update({
         locomotion: 2,
+        name: v.profile?.displayName,
+        profileKey: v.profile?.profileKey,
+        vehicleClass: v.profile?.vehicleClass,
+        vMaxRoad: v.params?.vMaxRoad,
         speed: pose.speed,
+        heading: pose.heading,
         seatIndex: 0,
         seats: v.seats,
-        groundFlags: v.last?.ground_flags ?? v.last?.groundFlags ?? 0,
-        surfaceFamily: pose.surfaceFamily ?? v.last?.surface_family ?? 0,
+        groundFlags: gFlags,
+        surfaceFamily: surfFam,
         boost: !!ctrl.boost,
         headlights: !!ctrl.headlights,
         handbrake: !!ctrl.handbrake,
@@ -2153,6 +2851,11 @@ export function installVehicles(deps = {}) {
         passenger: false,
         throttle: ctrl.throttle,
         steerAngle: driverSteer,
+        hitchedTrailerGuid: hitchedGuid,
+        trailerKind: v._coupledTrailerKind,
+        trailerFlags: v._coupledTrailerFlags ?? v.last?.trailerFlags ?? 0,
+        twistlocksLocked: v._coupledTwistlocksLocked,
+        trailerArticulationRad: v._coupledArticulationRad ?? 0,
       });
       osd.sights(null, null, "");
     } else {
@@ -2208,6 +2911,13 @@ export function installVehicles(deps = {}) {
     if (!pose && v.last) pose = stateFromMsg(v.last);
     if (!pose) return;
 
+    const isGround = isGroundVehicle(v);
+    const paxGroundFlags = v.last?.groundFlags ?? v.last?.ground_flags ?? 0;
+    const paxSurfFam = pose.surfaceFamily ?? v.last?.surfaceFamily ?? v.last?.surface_family ?? 0;
+    if (isGround) {
+      syncTractorCoupledTrailer(v, pose, dt, false, { braking: Boolean(paxGroundFlags & 0x02) });
+    }
+
     const seat = p.hotSwap ? currentHotSwapSeat(v, pose, p.hotSwap) : seatOf(v, pose, p.seat);
     const cl = FM.toCellLocal(seat.x, seat.y, seat.z);
     try { sh().setVehicleSeat(v.guid, cl.cell, cl.x, cl.y, cl.z, pose.heading); } catch (_) {}
@@ -2226,36 +2936,47 @@ export function installVehicles(deps = {}) {
       seatIndex: p.seat,
       firing: false,
       camTweak,
+      hitchedTrailerKind: v._coupledTrailerKind ?? null,
+      vehicleClass: v.profile?.vehicleClass,
+      profileKey: v.profile?.profileKey,
     });
     p.view = camStep.view;
     if (p.camera && p.camera.owned) {
       p.camera.write(camStep.cam);
     }
 
+    const hitchedGuid = currentHitchedTrailerGuid(v);
     const q = FM.orientation(pose.heading, pose.pitch, pose.bank);
-    drawVehicle(v, pose, q, {
+    const firstPerson = p.view === "cockpit" || p.view === "hood";
+    const composite = drawVehicle(v, pose, q, {
       dt,
+      cockpit: firstPerson,
+      hideWindscreen: p.view === "hood",
       speed: pose.speed,
       steerAngle: pose.steerAngle,
-      groundFlags: v.last?.ground_flags ?? v.last?.groundFlags,
-      surfaceFamily: pose.surfaceFamily ?? v.last?.surface_family,
+      groundFlags: paxGroundFlags,
+      surfaceFamily: paxSurfFam,
       throttle: 0,
-      headlights: Boolean((v.last?.ground_flags ?? 0) & 0x10),
-      braking: Boolean((v.last?.ground_flags ?? 0) & 0x02),
-      boost: Boolean((v.last?.ground_flags ?? 0) & 0x04),
+      headlights: Boolean(paxGroundFlags & 0x10),
+      braking: Boolean(paxGroundFlags & 0x02),
+      boost: Boolean(paxGroundFlags & 0x04),
       windscreenFolded: v.windscreenFolded ?? false,
+      hitchedTrailerGuid: hitchedGuid,
+      trailerPitch: v._coupledTrailerPitch ?? 0,
     });
+    syncRigVisibility(p, v, firstPerson, composite);
 
-    const isGround = v.locomotion === 2 || v.profile?.locomotion === 2 || v.profile?.profileKey === "jeep-mb";
+    const maxSeats = maxSeatsOf(v);
     const kin = {
       steerAngle: pose.steerAngle || 0,
       speed: pose.speed || 0,
       accelLong: 0,
       accelLat: (pose.steerAngle || 0) * (pose.speed || 0),
       yawRate: 0,
+      profile: v.profile,
     };
 
-    for (let s = 0; s < 4; s++) {
+    for (let s = 0; s < maxSeats; s++) {
       const occ = v.seats[s] >>> 0;
       if (occ && v.profile) {
         const isLocal = occ === localGuid();
@@ -2274,16 +2995,26 @@ export function installVehicles(deps = {}) {
 
     osd.update({
       locomotion: 2,
+      name: v.profile?.displayName,
+      profileKey: v.profile?.profileKey,
+      vehicleClass: v.profile?.vehicleClass,
+      vMaxRoad: v.params?.vMaxRoad,
       speed: pose.speed,
+      heading: pose.heading,
       seatIndex: p.seat,
       seats: v.seats,
-      groundFlags: v.last?.ground_flags ?? v.last?.groundFlags ?? 0,
-      surfaceFamily: pose.surfaceFamily ?? v.last?.surface_family ?? 0,
-      boost: Boolean((v.last?.ground_flags ?? 0) & 0x04),
-      headlights: Boolean((v.last?.ground_flags ?? 0) & 0x10),
-      handbrake: Boolean((v.last?.ground_flags ?? 0) & 0x02),
-      horn: Boolean((v.last?.ground_flags ?? 0) & 0x20),
+      groundFlags: paxGroundFlags,
+      surfaceFamily: paxSurfFam,
+      boost: Boolean(paxGroundFlags & 0x04),
+      headlights: Boolean(paxGroundFlags & 0x10),
+      handbrake: Boolean(paxGroundFlags & 0x02),
+      horn: Boolean(paxGroundFlags & 0x20),
       passenger: true,
+      hitchedTrailerGuid: hitchedGuid,
+      trailerKind: v._coupledTrailerKind,
+      trailerFlags: v._coupledTrailerFlags ?? v.last?.trailerFlags ?? 0,
+      twistlocksLocked: v._coupledTwistlocksLocked,
+      trailerArticulationRad: v._coupledArticulationRad ?? 0,
     });
 
     try {
@@ -2291,12 +3022,15 @@ export function installVehicles(deps = {}) {
         speed: pose.speed,
         throttle: 0,
         steer: 0,
-        handbrake: Boolean((v.last?.ground_flags ?? 0) & 0x02),
-        horn: Boolean((v.last?.ground_flags ?? 0) & 0x20),
-        boost: Boolean((v.last?.ground_flags ?? 0) & 0x04),
-        surfaceFamily: pose.surfaceFamily ?? v.last?.surface_family ?? 0,
+        handbrake: Boolean(paxGroundFlags & 0x02),
+        horn: Boolean(paxGroundFlags & 0x20),
+        boost: Boolean(paxGroundFlags & 0x04),
+        surfaceFamily: paxSurfFam,
         pos: [pose.x, pose.y, pose.z],
         fpv: p.view === "cockpit",
+        vehicleClass: v.profile?.vehicleClass ?? 0,
+        profileKey: v.profile?.profileKey ?? "",
+        hitchedTrailerGuid: hitchedGuid,
         dt,
       });
     } catch (_) {}
@@ -2438,9 +3172,21 @@ export function installVehicles(deps = {}) {
       if (!v.track.count && !v.reckon) continue;
       const pose = observedPose(v, t);
       if (!pose) continue;
-      const isGround = (v.locomotion === 2) || (v.profile?.locomotion === 2) || (v.profile?.profileKey === "jeep-mb");
+      const isGround = isGroundVehicle(v);
+      const obsGroundFlags = v.last?.groundFlags ?? v.last?.ground_flags ?? 0;
+      const obsSurfFam = pose.surfaceFamily ?? v.last?.surfaceFamily ?? v.last?.surface_family ?? 0;
+      if (isGround) {
+        syncTractorCoupledTrailer(v, pose, frameDt, false, { braking: Boolean(obsGroundFlags & 0x02) });
+      }
       const q = FM.orientation(pose.heading, pose.pitch, pose.bank);
-      drawVehicle(v, pose, q, { dt: frameDt, throttle: pose.mode === FM.MODE.PARKED ? 0 : undefined });
+      drawVehicle(v, pose, q, {
+        dt: frameDt,
+        throttle: pose.mode === FM.MODE.PARKED ? 0 : undefined,
+        groundFlags: obsGroundFlags,
+        surfaceFamily: obsSurfFam,
+        hitchedTrailerGuid: currentHitchedTrailerGuid(v),
+        trailerPitch: v._coupledTrailerPitch ?? 0,
+      });
       if (isGround) {
         if (groundAudio) {
           _groundObsAudioList.push({
@@ -2452,7 +3198,9 @@ export function installVehicles(deps = {}) {
             throttle: pose.mode === FM.MODE.PARKED ? 0 : 0.72,
             rpm: pose.rpm ?? (pose.mode === FM.MODE.PARKED ? 600 : 1800),
             gear: pose.gear ?? 1,
-            surface: pose.surface ?? 0,
+            surface: obsSurfFam,
+            vehicleClass: v.profile?.vehicleClass ?? 0,
+            profileKey: v.profile?.profileKey ?? "",
           });
         }
       } else {
@@ -2467,8 +3215,7 @@ export function installVehicles(deps = {}) {
           });
         }
       }
-      const maxSeats = isGround ? 4 : (v.profile?.seats?.length || 1);
-      const obsGroundFlags = v.last?.ground_flags ?? v.last?.groundFlags ?? 0;
+      const maxSeats = maxSeatsOf(v);
       const obsSteer = pose.steerAngle ?? 0;
       const obsSpeed = pose.speed ?? 0;
       const kin = {
@@ -2478,6 +3225,7 @@ export function installVehicles(deps = {}) {
         accelLat: pose.accelLat ?? (obsSteer * obsSpeed),
         accelLong: pose.accelLong ?? ((obsGroundFlags & 0x02) && obsSpeed > 1.0 ? -8.5 : 0),
         bumpZ: pose.suspensionCompression ? (pose.suspensionCompression[0] || 0) : 0,
+        profile: v.profile,
       };
       for (let s = 0; s < maxSeats; s++) {
         const occ = v.seats[s] >>> 0;
@@ -2525,8 +3273,7 @@ export function installVehicles(deps = {}) {
 
   function firstOpenSeat(v) {
     if (!v || !v.seats) return -1;
-    const isGround = (v.locomotion === 2) || (v.profile?.locomotion === 2) || (v.profile?.profileKey === "jeep-mb");
-    const max = isGround ? 4 : (v.profile?.seats?.length || 1);
+    const max = maxSeatsOf(v);
     for (let s = 0; s < max; s++) {
       if (!(v.seats[s] >>> 0)) return s;
     }
@@ -2535,8 +3282,7 @@ export function installVehicles(deps = {}) {
 
   function seatOccupancyCount(v) {
     if (!v || !v.seats) return 0;
-    const isGround = (v.locomotion === 2) || (v.profile?.locomotion === 2) || (v.profile?.profileKey === "jeep-mb");
-    const max = isGround ? 4 : (v.profile?.seats?.length || 1);
+    const max = maxSeatsOf(v);
     let count = 0;
     for (let s = 0; s < max; s++) {
       if (v.seats[s] >>> 0) count++;
@@ -2553,7 +3299,7 @@ export function installVehicles(deps = {}) {
     let bestD = BOARD_RANGE_M;
     for (const v of vehicles.values()) {
       if (!v.profile || !v.last) continue;
-      const isGround = (v.locomotion === 2) || (v.profile?.locomotion === 2) || (v.profile?.profileKey === "jeep-mb");
+      const isGround = isGroundVehicle(v);
       if (isGround) {
         const speed = v.last.speed ?? 0;
         const validMovement = (v.last.mode === FM.MODE.PARKED) || (speed <= 1.5);
@@ -2586,13 +3332,13 @@ export function installVehicles(deps = {}) {
       }
       return;
     }
-    const isGround = (v.locomotion === 2) || (v.profile?.locomotion === 2) || (v.profile?.profileKey === "jeep-mb");
+    const isGround = isGroundVehicle(v);
     let text;
     if (isGround) {
       const s = firstOpenSeat(v);
-      const seatLabel = SEAT_LABELS[s] ?? `Seat ${s}`;
+      const seatLabel = isSemiVehicle(v) && s === 1 ? "Co-Driver" : (SEAT_LABELS[s] ?? `Seat ${s}`);
       const occ = seatOccupancyCount(v);
-      const maxSeats = 4;
+      const maxSeats = maxSeatsOf(v);
       text = `Press B to board ${v.profile.displayName} — ${seatLabel} (${occ}/${maxSeats} occupied)`;
     } else {
       text = `Press B to board the ${v.profile.displayName}`;
@@ -2610,7 +3356,7 @@ export function installVehicles(deps = {}) {
     if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)) return;
     if (!promptVehicle || pilot || passenger || fall || handoff) return;
     try { live.audioManager?.notifyUserGesture?.(); } catch (_) {}
-    const isGround = (promptVehicle.locomotion === 2) || (promptVehicle.profile?.locomotion === 2) || (promptVehicle.profile?.profileKey === "jeep-mb");
+    const isGround = isGroundVehicle(promptVehicle);
     const targetSeat = isGround ? firstOpenSeat(promptVehicle) : 0;
     if (targetSeat >= 0) {
       api.board(promptVehicle.guid, targetSeat);
@@ -2642,6 +3388,7 @@ export function installVehicles(deps = {}) {
     tickPrompt();
     fx.tick(dt);
     tickDeployables(dt);
+    tickTrailers(dt);
     tickContainers(dt);
     aeroFx?.tick(dt);
     if (!pilot && !passenger) osd.sights(null, null, "");
@@ -2719,7 +3466,7 @@ export function installVehicles(deps = {}) {
       const g = (v?.guid ?? (guid >>> 0) ?? [...vehicles.keys()][0]) >>> 0;
       if (!g) return { ok: false, reason: "no vehicle" };
       const veh = vehicles.get(g);
-      const isGround = (veh?.locomotion === 2) || (veh?.profile?.locomotion === 2) || (veh?.profile?.profileKey === "jeep-mb");
+      const isGround = isGroundVehicle(veh);
       const s = Number.isInteger(seatIndex) && seatIndex >= 0
         ? seatIndex
         : (isGround && veh ? Math.max(0, firstOpenSeat(veh)) : 0);
@@ -2848,6 +3595,161 @@ export function installVehicles(deps = {}) {
         }
       },
     },
+    trailers: {
+      list: () => [...trailers.values()].map((tr) => ({
+        guid: tr.guid,
+        kind: tr.specKind,
+        wireKind: tr.kind,
+        wcid: tr.wcid,
+        pos: tr.model?.root?.position
+          ? [tr.model.root.position.x, tr.model.root.position.y, tr.model.root.position.z]
+          : tr.worldPos.slice(),
+        heading: tr.renderedPose?.heading ?? tr.heading,
+        pitch: tr.renderedPose?.pitch ?? tr.pitch,
+        bank: tr.renderedPose?.bank ?? tr.bank,
+        coupledTractorGuid: tr.coupledTractorGuid,
+        mountedContainerGuid: tr.mountedContainerGuid,
+        containerSlot: tr.containerSlot,
+        twistlockLocked: Boolean(tr.trailerFlags & TRAILER_FLAG.TWISTLOCKS_LOCKED),
+        landingGearRetracted: Boolean(tr.model?.landingGearRetracted ?? (tr.trailerFlags & TRAILER_FLAG.GEAR_RETRACTED)),
+        brakeLights: Boolean(tr.model?.brakeLights ?? (tr.trailerFlags & TRAILER_FLAG.BRAKE_LIGHTS)),
+        trailerFlags: tr.trailerFlags,
+        last: tr.last,
+      })),
+      get: (guid) => trailers.get(guid >>> 0) ?? null,
+      hitch(trailerGuid = 0, vehicleGuid = 0) {
+        const vGuid = (vehicleGuid >>> 0) || (pilot?.vehicle?.guid ?? 0);
+        const v = vGuid ? vehicles.get(vGuid) : null;
+        let tGuid = trailerGuid >>> 0;
+        if (!tGuid && v) tGuid = findNearestUnhitchedTrailer(v, 3.5)?.guid ?? 0;
+        try {
+          sh()?.vehicleTrailerAction?.(tGuid, vGuid, 0, TRAILER_ACTION.Hitch, 0);
+          return true;
+        } catch (_) {
+          return false;
+        }
+      },
+      unhitch(trailerGuid = 0, vehicleGuid = 0) {
+        const vGuid = (vehicleGuid >>> 0) || (pilot?.vehicle?.guid ?? 0);
+        const v = vGuid ? vehicles.get(vGuid) : null;
+        const tGuid = (trailerGuid >>> 0) || (v ? currentHitchedTrailerGuid(v) : 0);
+        try {
+          sh()?.vehicleTrailerAction?.(tGuid, vGuid, 0, TRAILER_ACTION.Unhitch, 0);
+          return true;
+        } catch (_) {
+          return false;
+        }
+      },
+      toggleTwistlock(trailerGuid = 0, vehicleGuid = 0) {
+        const vGuid = (vehicleGuid >>> 0) || (pilot?.vehicle?.guid ?? 0);
+        try {
+          sh()?.vehicleTrailerAction?.(trailerGuid >>> 0, vGuid, 0, TRAILER_ACTION.ToggleTwistlock, 0);
+          return true;
+        } catch (_) {
+          return false;
+        }
+      },
+      mountContainer(trailerGuid, containerGuid, slot = 0) {
+        try {
+          sh()?.vehicleTrailerAction?.(trailerGuid >>> 0, 0, containerGuid >>> 0, TRAILER_ACTION.MountContainer, slot | 0);
+          return true;
+        } catch (_) {
+          return false;
+        }
+      },
+      unmountContainer(trailerGuid, containerGuid = 0) {
+        try {
+          sh()?.vehicleTrailerAction?.(trailerGuid >>> 0, 0, containerGuid >>> 0, TRAILER_ACTION.UnmountContainer, 0);
+          return true;
+        } catch (_) {
+          return false;
+        }
+      },
+      action(trailerGuid, action, vehicleGuid = 0, containerGuid = 0, slot = 0) {
+        try {
+          sh()?.vehicleTrailerAction?.(trailerGuid >>> 0, vehicleGuid >>> 0, containerGuid >>> 0, action | 0, slot | 0);
+          return true;
+        } catch (_) {
+          return false;
+        }
+      },
+      spawnLocal(guid, kind = "40ft", worldPos = [0, 0, 0], heading = 0, state = {}) {
+        const entry = ensureTrailerEntry(guid, kind, { ...state, cell: 0, position: worldPos, heading });
+        if (!entry) return null;
+        entry.worldPos = [worldPos[0], worldPos[1], worldPos[2]];
+        entry.heading = heading;
+        entry.model.root.position.set(worldPos[0], worldPos[1], worldPos[2]);
+        entry.model.root.rotation.z = -heading;
+        entry.model.update(0, state);
+        entry.last = { ...state };
+        return entry;
+      },
+      removeLocal(guid) {
+        removeTrailerEntry(guid);
+      },
+    },
+    semi: {
+      list: () => [...vehicles.values()].filter((v) => isSemiVehicle(v)).map((v) => {
+        const hGuid = currentHitchedTrailerGuid(v);
+        return {
+          guid: v.guid,
+          liveryId: v.profile?.liveryId ?? 0,
+          livery: groundModels.get(v.guid)?.livery?.key ?? null,
+          coupled: hGuid !== 0,
+          hitchedTrailerGuid: hGuid,
+          trailerPitch: v._coupledTrailerPitch ?? v.last?.trailerPitch ?? 0,
+          trailerHeading: v.last?.trailerHeading ?? null,
+          trailerFlags: v._coupledTrailerFlags ?? v.last?.trailerFlags ?? 0,
+          towMassMul: v.params?.towMassMul ?? computeTowMassMul(v),
+          pos: v.last ? stateFromMsg(v.last) : null,
+          model: groundModels.get(v.guid) ?? null,
+        };
+      }),
+      get: (guid) => {
+        const v = vehicles.get(guid >>> 0);
+        if (v && !isSemiVehicle(v)) return null;
+        const gm = groundModels.get(guid >>> 0) ?? null;
+        return gm && gm.root?.userData?.profileKey === "semi-379" ? gm : null;
+      },
+      spawnLocal(guid, worldPos = [0, 0, 0], heading = 0, opts = {}) {
+        if (!THREE || !live?.worldRoot) return null;
+        const g = guid >>> 0;
+        const existing = groundModels.get(g);
+        if (existing) {
+          try {
+            if (existing.root?.parent) existing.root.parent.remove(existing.root);
+            existing.dispose?.();
+          } catch (_) {}
+          groundModels.delete(g);
+        }
+        const m = buildSemiTruck(THREE, { profileKey: "semi-379", vehicleClass: 3, liveryId: opts.liveryId ?? 0 }, {
+          liveScene3d: live,
+          csmState: live.csmState,
+          liveryId: opts.liveryId ?? 0,
+        });
+        live.worldRoot.add(m.root);
+        m.root.position.set(worldPos[0], worldPos[1], worldPos[2]);
+        m.root.rotation.z = -heading;
+        m.update(opts, 0);
+        groundModels.set(g, m);
+        return m;
+      },
+      removeLocal(guid) {
+        const g = guid >>> 0;
+        const gm = groundModels.get(g);
+        if (!gm) return;
+        try {
+          if (gm.root?.parent) gm.root.parent.remove(gm.root);
+          gm.dispose?.();
+        } catch (_) {}
+        groundModels.delete(g);
+      },
+      active: () => {
+        if (pilot && isSemiVehicle(pilot.vehicle)) return pilot.vehicle.guid;
+        if (passenger && isSemiVehicle(passenger.vehicle)) return passenger.vehicle.guid;
+        return null;
+      },
+    },
     dispose() {
       disposed = true;
       teardownSession("dispose");
@@ -2860,6 +3762,8 @@ export function installVehicles(deps = {}) {
       try { clearTimeout(promptTimer); } catch (_) {}
       promptTimer = null;
       for (const v of vehicles.values()) forgetVehicle(v);
+      for (const g of [...trailers.keys()]) removeTrailerEntry(g);
+      trailers.clear();
       for (const g of [...deployables.keys()]) removeDeployableEntry(g);
       for (const g of [...containers.keys()]) removeContainerEntry(g);
       containers.clear();

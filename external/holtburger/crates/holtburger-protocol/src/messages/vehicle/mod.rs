@@ -25,7 +25,7 @@ mod tests;
 /// `"HBV1"` as a little-endian u32 (bytes `48 42 56 31`).
 pub const HBV1_TAG: u32 = 0x3156_4248;
 /// The protocol version this module writes (and the newest it parses fully).
-pub const HBV1_VERSION: u16 = 5;
+pub const HBV1_VERSION: u16 = 6;
 /// The first version carrying the v2 fields.
 const V2: u16 = 2;
 /// The first version carrying the v3 fields.
@@ -35,6 +35,8 @@ const V4: u16 = 4;
 /// The first version carrying the v5 fields.
 #[allow(dead_code)]
 const V5: u16 = 5;
+/// The first version carrying the v6 fields.
+const V6: u16 = 6;
 
 /// ClientCapabilities / CapabilitiesAck bits.
 pub mod caps {
@@ -56,6 +58,8 @@ pub mod c2s {
     pub const CARGO: u32 = 0x0909;
     /// v5: container action request (1=OpenDoors, 2=CloseDoors, 3=Load, 4=Pack, 5=Unpack, 6=UnpackAll).
     pub const CONTAINER_ACTION: u32 = 0x090E;
+    /// v6: semi-trailer action request (1=Hitch, 2=Unhitch, 3=ToggleTwistlock, 4=MountContainer, 5=UnmountContainer).
+    pub const TRAILER_ACTION: u32 = 0x090F;
 }
 
 /// S2C game-event opcodes.
@@ -76,6 +80,8 @@ pub mod s2c {
     pub const GROUND_CONTACTS: u32 = 0x090D;
     /// v5: Authoritative container telemetry broadcast.
     pub const CONTAINER_STATE: u32 = 0x090E;
+    /// v6: Authoritative semi-trailer telemetry broadcast.
+    pub const TRAILER_STATE: u32 = 0x090F;
 }
 
 /// `VehicleProfile.locomotion`.
@@ -161,6 +167,12 @@ pub mod event_kind {
     pub const RAM_HIT: u32 = 17;
     /// v3: Radar threat alert.
     pub const RADAR_ALERT: u32 = 18;
+    /// v6: Semi-trailer hitched to tractor fifth wheel.
+    pub const TRAILER_HITCHED: u32 = 19;
+    /// v6: Semi-trailer unhitched from tractor fifth wheel.
+    pub const TRAILER_UNHITCHED: u32 = 20;
+    /// v6: Semi-trailer container twistlocks toggled.
+    pub const TWISTLOCK_TOGGLED: u32 = 21;
 }
 
 /// `VehicleProfile.part_roles`: the role in the low 16 bits; `ORDNANCE` carries a weapon index in bits 16–23.
@@ -228,6 +240,8 @@ pub mod deployable_kind {
     pub const ISO_CONTAINER_20: u32 = 10;
     pub const ISO_CONTAINER_40: u32 = 11;
     pub const ISO_CONTAINER_40_HC: u32 = 12;
+    pub const TRAILER_CHASSIS_20: u32 = 13;
+    pub const TRAILER_CHASSIS_40: u32 = 14;
 }
 
 /// Standardized industrial pallet footprint.
@@ -251,6 +265,24 @@ pub mod ground_contact_kind {
     pub const PLAYER: u8 = 1;
     pub const VEHICLE: u8 = 2;
     pub const MONSTER: u8 = 3;
+}
+
+/// `VehicleTrailerAction.action` discriminator (`TrailerActionKind`).
+pub mod trailer_action_kind {
+    pub const NONE: u8 = 0;
+    pub const HITCH: u8 = 1;
+    pub const UNHITCH: u8 = 2;
+    pub const TOGGLE_TWISTLOCK: u8 = 3;
+    pub const MOUNT_CONTAINER: u8 = 4;
+    pub const UNMOUNT_CONTAINER: u8 = 5;
+}
+
+/// `VehicleState.trailer_flags` and `VehicleTrailerState.trailer_flags` bitmask.
+pub mod trailer_flags {
+    pub const COUPLED: u8 = 0x01;
+    pub const TWISTLOCKS_LOCKED: u8 = 0x02;
+    pub const GEAR_RETRACTED: u8 = 0x04;
+    pub const BRAKE_LIGHTS: u8 = 0x08;
 }
 
 // ---------------------------------------------------------------- primitives
@@ -606,6 +638,42 @@ impl VehicleContainerAction {
     }
 }
 
+/// v6: Client request for semi-trailer actions
+/// (1=Hitch, 2=Unhitch, 3=ToggleTwistlock, 4=MountContainer, 5=UnmountContainer).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VehicleTrailerAction {
+    pub trailer_guid: u32,
+    pub vehicle_guid: u32,
+    pub container_guid: u32,
+    pub action: u8,
+    pub slot: u8,
+    pub flags: u16,
+}
+
+impl VehicleTrailerAction {
+    pub const WIRE: usize = 16;
+
+    fn read(r: &mut Rd<'_>) -> Option<Self> {
+        Some(Self {
+            trailer_guid: r.u32()?,
+            vehicle_guid: r.u32()?,
+            container_guid: r.u32()?,
+            action: r.u8()?,
+            slot: r.u8()?,
+            flags: r.u16()?,
+        })
+    }
+
+    pub fn write(&self, buf: &mut Vec<u8>) {
+        buf.write_u32::<LittleEndian>(self.trailer_guid).unwrap();
+        buf.write_u32::<LittleEndian>(self.vehicle_guid).unwrap();
+        buf.write_u32::<LittleEndian>(self.container_guid).unwrap();
+        buf.push(self.action);
+        buf.push(self.slot);
+        buf.write_u16::<LittleEndian>(self.flags).unwrap();
+    }
+}
+
 // ---------------------------------------------------------------- C2S
 
 /// Client → server vehicle game actions.
@@ -628,6 +696,8 @@ pub enum VehicleC2S {
     },
     /// v5: container action request (1=OpenDoors, 2=CloseDoors, 3=Load, 4=Pack, 5=Unpack, 6=UnpackAll).
     ContainerAction(VehicleContainerAction),
+    /// v6: semi-trailer action request (0x090F).
+    TrailerAction(VehicleTrailerAction),
 }
 
 impl VehicleC2S {
@@ -639,6 +709,7 @@ impl VehicleC2S {
             Self::Input { .. } => c2s::INPUT,
             Self::Cargo { .. } => c2s::CARGO,
             Self::ContainerAction(_) => c2s::CONTAINER_ACTION,
+            Self::TrailerAction(_) => c2s::TRAILER_ACTION,
         }
     }
 
@@ -651,6 +722,7 @@ impl VehicleC2S {
                 | c2s::INPUT
                 | c2s::CARGO
                 | c2s::CONTAINER_ACTION
+                | c2s::TRAILER_ACTION
         )
     }
 
@@ -696,6 +768,9 @@ impl VehicleC2S {
             }
             Self::ContainerAction(ca) => {
                 ca.write(buf);
+            }
+            Self::TrailerAction(ta) => {
+                ta.write(buf);
             }
         }
     }
@@ -756,6 +831,9 @@ impl VehicleC2S {
                 c2s::CONTAINER_ACTION => {
                     Self::ContainerAction(VehicleContainerAction::read(&mut r)?)
                 }
+                c2s::TRAILER_ACTION => {
+                    Self::TrailerAction(VehicleTrailerAction::read(&mut r)?)
+                }
                 _ => return None,
             }
         };
@@ -810,6 +888,12 @@ pub struct VehicleProfile {
     pub climb_limit_cos: f32,
     pub ford_depth_max: f32,
     pub cargo_wcid: u32,
+    /// v6: fifth-wheel coupling & semi-truck metadata (+12 bytes).
+    pub fifth_wheel_offset_y: f32,
+    pub fifth_wheel_offset_z: f32,
+    pub livery_id: u8,
+    pub vehicle_class: u8,
+    pub reserved4: u16,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -861,6 +945,13 @@ pub struct VehicleState {
     pub cargo_slot0_wcid: u32,
     /// v4: WCID in slot 1.
     pub cargo_slot1_wcid: u32,
+    /// v6: articulated trailer telemetry (+16 bytes, total 100 bytes).
+    pub hitched_trailer_guid: u32,
+    pub trailer_heading: f32,
+    pub trailer_pitch: f32,
+    pub trailer_flags: u8,
+    pub reserved4: u8,
+    pub reserved5: u16,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -1037,6 +1128,63 @@ impl VehicleContainerState {
     }
 }
 
+/// v6: Authoritative state of semi-trailer chassis (telemetry, coupling, mounted container).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct VehicleTrailerState {
+    pub trailer_guid: u32,
+    pub kind: u32,
+    pub cell: u32,
+    /// Landblock-local.
+    pub position: [f32; 3],
+    pub heading: f32,
+    pub pitch: f32,
+    pub bank: f32,
+    pub coupled_tractor_guid: u32,
+    pub mounted_container_guid: u32,
+    pub container_slot: u8,
+    pub trailer_flags: u8,
+    pub reserved: u16,
+    pub owner_guid: u32,
+}
+
+impl VehicleTrailerState {
+    pub const WIRE: usize = 52;
+
+    fn read(r: &mut Rd<'_>) -> Option<Self> {
+        Some(Self {
+            trailer_guid: r.u32()?,
+            kind: r.u32()?,
+            cell: r.u32()?,
+            position: r.vec3()?,
+            heading: r.f32()?,
+            pitch: r.f32()?,
+            bank: r.f32()?,
+            coupled_tractor_guid: r.u32()?,
+            mounted_container_guid: r.u32()?,
+            container_slot: r.u8()?,
+            trailer_flags: r.u8()?,
+            reserved: r.u16()?,
+            owner_guid: r.u32()?,
+        })
+    }
+
+    pub fn write(&self, buf: &mut Vec<u8>) {
+        buf.write_u32::<LittleEndian>(self.trailer_guid).unwrap();
+        buf.write_u32::<LittleEndian>(self.kind).unwrap();
+        buf.write_u32::<LittleEndian>(self.cell).unwrap();
+        w_vec3(buf, self.position);
+        buf.write_f32::<LittleEndian>(self.heading).unwrap();
+        buf.write_f32::<LittleEndian>(self.pitch).unwrap();
+        buf.write_f32::<LittleEndian>(self.bank).unwrap();
+        buf.write_u32::<LittleEndian>(self.coupled_tractor_guid).unwrap();
+        buf.write_u32::<LittleEndian>(self.mounted_container_guid).unwrap();
+        buf.push(self.container_slot);
+        buf.push(self.trailer_flags);
+        buf.write_u16::<LittleEndian>(self.reserved).unwrap();
+        buf.write_u32::<LittleEndian>(self.owner_guid).unwrap();
+    }
+}
+
 /// Server → client vehicle game events.
 #[derive(Debug, Clone, PartialEq)]
 pub enum VehicleS2C {
@@ -1055,6 +1203,7 @@ pub enum VehicleS2C {
     DeployableFire(VehicleDeployableFire),
     GroundContacts(VehicleGroundContacts),
     ContainerState(VehicleContainerState),
+    TrailerState(VehicleTrailerState),
 }
 
 impl VehicleS2C {
@@ -1071,6 +1220,7 @@ impl VehicleS2C {
             Self::DeployableFire(_) => s2c::DEPLOYABLE_FIRE,
             Self::GroundContacts(_) => s2c::GROUND_CONTACTS,
             Self::ContainerState(_) => s2c::CONTAINER_STATE,
+            Self::TrailerState(_) => s2c::TRAILER_STATE,
         }
     }
 
@@ -1088,6 +1238,7 @@ impl VehicleS2C {
                 | s2c::DEPLOYABLE_FIRE
                 | s2c::GROUND_CONTACTS
                 | s2c::CONTAINER_STATE
+                | s2c::TRAILER_STATE
         )
     }
 
@@ -1185,6 +1336,12 @@ impl VehicleS2C {
                     buf.write_f32::<LittleEndian>(v).unwrap();
                 }
                 buf.write_u32::<LittleEndian>(p.cargo_wcid).unwrap();
+                // v6 (+12 bytes)
+                buf.write_f32::<LittleEndian>(p.fifth_wheel_offset_y).unwrap();
+                buf.write_f32::<LittleEndian>(p.fifth_wheel_offset_z).unwrap();
+                buf.push(p.livery_id);
+                buf.push(p.vehicle_class);
+                buf.write_u16::<LittleEndian>(p.reserved4).unwrap();
             }
             Self::Seat(s) => {
                 for v in [s.vehicle, s.seat, s.occupant, s.state, s.reason] {
@@ -1219,6 +1376,13 @@ impl VehicleS2C {
                 buf.push(s.reserved3);
                 buf.write_u32::<LittleEndian>(s.cargo_slot0_wcid).unwrap();
                 buf.write_u32::<LittleEndian>(s.cargo_slot1_wcid).unwrap();
+                // v6 (+16 bytes)
+                buf.write_u32::<LittleEndian>(s.hitched_trailer_guid).unwrap();
+                buf.write_f32::<LittleEndian>(s.trailer_heading).unwrap();
+                buf.write_f32::<LittleEndian>(s.trailer_pitch).unwrap();
+                buf.push(s.trailer_flags);
+                buf.push(s.reserved4);
+                buf.write_u16::<LittleEndian>(s.reserved5).unwrap();
             }
             Self::Fire(f) => {
                 buf.write_u32::<LittleEndian>(f.vehicle).unwrap();
@@ -1313,6 +1477,9 @@ impl VehicleS2C {
             Self::ContainerState(cs) => {
                 cs.write(buf);
             }
+            Self::TrailerState(ts) => {
+                ts.write(buf);
+            }
         }
     }
 
@@ -1335,6 +1502,7 @@ impl VehicleS2C {
             let v2 = hdr.version >= V2;
             let v3 = hdr.version >= V3;
             let v4 = hdr.version >= V4;
+            let v6 = hdr.version >= V6;
             match opcode {
                 s2c::CAPABILITIES_ACK => Self::CapabilitiesAck {
                     granted: r.u32()?,
@@ -1414,6 +1582,11 @@ impl VehicleS2C {
                     let climb_limit_cos = if v3 { r.f32()? } else { 0.0 };
                     let ford_depth_max = if v3 { r.f32()? } else { 0.0 };
                     let cargo_wcid = if v3 { r.u32()? } else { 0 };
+                    let fifth_wheel_offset_y = if v6 { r.f32()? } else { 0.0 };
+                    let fifth_wheel_offset_z = if v6 { r.f32()? } else { 0.0 };
+                    let livery_id = if v6 { r.u8()? } else { 0 };
+                    let vehicle_class = if v6 { r.u8()? } else { 0 };
+                    let reserved4 = if v6 { r.u16()? } else { 0 };
                     Self::Profile(Box::new(VehicleProfile {
                         vehicle,
                         profile_key,
@@ -1454,6 +1627,11 @@ impl VehicleS2C {
                         climb_limit_cos,
                         ford_depth_max,
                         cargo_wcid,
+                        fifth_wheel_offset_y,
+                        fifth_wheel_offset_z,
+                        livery_id,
+                        vehicle_class,
+                        reserved4,
                     }))
                 }
                 s2c::SEAT => Self::Seat(VehicleSeat {
@@ -1493,6 +1671,13 @@ impl VehicleS2C {
                     reserved3: if v4 { r.u8()? } else { 0 },
                     cargo_slot0_wcid: if v4 { r.u32()? } else { 0 },
                     cargo_slot1_wcid: if v4 { r.u32()? } else { 0 },
+                    // v6 tail
+                    hitched_trailer_guid: if v6 { r.u32()? } else { 0 },
+                    trailer_heading: if v6 { r.f32()? } else { 0.0 },
+                    trailer_pitch: if v6 { r.f32()? } else { 0.0 },
+                    trailer_flags: if v6 { r.u8()? } else { 0 },
+                    reserved4: if v6 { r.u8()? } else { 0 },
+                    reserved5: if v6 { r.u16()? } else { 0 },
                 }),
                 s2c::FIRE => Self::Fire(VehicleFire {
                     vehicle: r.u32()?,
@@ -1635,6 +1820,9 @@ impl VehicleS2C {
                 }
                 s2c::CONTAINER_STATE => {
                     Self::ContainerState(VehicleContainerState::read(&mut r)?)
+                }
+                s2c::TRAILER_STATE => {
+                    Self::TrailerState(VehicleTrailerState::read(&mut r)?)
                 }
                 _ => return None,
             }

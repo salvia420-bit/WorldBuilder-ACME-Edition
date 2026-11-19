@@ -54,6 +54,7 @@ thread_local! {
 const INBOX_CAP: usize = 4096;
 
 /// What the recv loop must do after a vehicle message.
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 pub(crate) enum LinkAction {
     None,
     /// Hard-snap the local body to (cell, x, y, z) — the server's exit / touchdown placement.
@@ -117,6 +118,11 @@ pub(crate) fn to_json(msg: &VehicleS2C) -> Value {
                 o.insert("climbLimitCos".into(), json!(p.climb_limit_cos));
                 o.insert("fordDepthMax".into(), json!(p.ford_depth_max));
                 o.insert("cargoWcid".into(), json!(p.cargo_wcid));
+                // v6 heavy tractor / fifth-wheel
+                o.insert("fifthWheelOffsetY".into(), json!(p.fifth_wheel_offset_y));
+                o.insert("fifthWheelOffsetZ".into(), json!(p.fifth_wheel_offset_z));
+                o.insert("liveryId".into(), json!(p.livery_id));
+                o.insert("vehicleClass".into(), json!(p.vehicle_class));
             }
             v
         }
@@ -137,6 +143,10 @@ pub(crate) fn to_json(msg: &VehicleS2C) -> Value {
             "cargoSlot0Wcid": s.cargo_slot0_wcid,
             "cargoSlot1Wcid": s.cargo_slot1_wcid,
             "cargoLoaded": (s.cargo_mask != 0) || (s.cargo_slot0_wcid != 0),
+            "hitchedTrailerGuid": s.hitched_trailer_guid,
+            "trailerHeading": s.trailer_heading,
+            "trailerPitch": s.trailer_pitch,
+            "trailerFlags": s.trailer_flags,
         }),
         VehicleS2C::Fire(f) => json!({
             "type": "fire", "vehicle": f.vehicle, "step": f.step, "mount": f.mount, "count": f.count, "cell": f.cell,
@@ -247,10 +257,26 @@ pub(crate) fn to_json(msg: &VehicleS2C) -> Value {
                 "cargoWcid": s.cargo_wcid,
             })).collect::<Vec<_>>(),
         }),
+        VehicleS2C::TrailerState(ts) => json!({
+            "type": "trailer_state",
+            "trailerGuid": ts.trailer_guid,
+            "kind": ts.kind,
+            "cell": ts.cell,
+            "position": v3(ts.position),
+            "heading": ts.heading as f64,
+            "pitch": ts.pitch as f64,
+            "bank": ts.bank as f64,
+            "coupledTractorGuid": ts.coupled_tractor_guid,
+            "mountedContainerGuid": ts.mounted_container_guid,
+            "containerSlot": ts.container_slot,
+            "trailerFlags": ts.trailer_flags,
+            "ownerGuid": ts.owner_guid,
+        }),
     }
 }
 
 /// Recv-loop hook for every inbound vehicle event.
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 pub(crate) fn on_s2c(msg: &VehicleS2C, local_player: u32) -> LinkAction {
     LINK.with(|l| {
         let mut l = l.borrow_mut();
@@ -299,6 +325,7 @@ pub(crate) fn on_s2c(msg: &VehicleS2C, local_player: u32) -> LinkAction {
     })
 }
 
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 pub(crate) fn drain_json() -> String {
     LINK.with(|l| {
         let drained: Vec<Value> = std::mem::take(&mut l.borrow_mut().inbox);
@@ -306,6 +333,7 @@ pub(crate) fn drain_json() -> String {
     })
 }
 
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 pub(crate) fn set_seat(pose: SeatPose) -> bool {
     LINK.with(|l| {
         let mut l = l.borrow_mut();
@@ -317,6 +345,7 @@ pub(crate) fn set_seat(pose: SeatPose) -> bool {
     })
 }
 
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 pub(crate) fn clear_seat() {
     LINK.with(|l| {
         let mut l = l.borrow_mut();
@@ -325,6 +354,7 @@ pub(crate) fn clear_seat() {
     })
 }
 
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 pub(crate) fn reset() {
     LINK.with(|l| {
         let mut l = l.borrow_mut();
@@ -334,14 +364,17 @@ pub(crate) fn reset() {
     })
 }
 
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 pub(crate) fn seat_pose() -> Option<SeatPose> {
     LINK.with(|l| l.borrow().seat)
 }
 
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 pub(crate) fn note_seat_tick() {
     LINK.with(|l| l.borrow_mut().stats.seat_ticks += 1)
 }
 
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 pub(crate) fn note_sent(is_input: bool) {
     LINK.with(|l| {
         let mut l = l.borrow_mut();
@@ -352,6 +385,7 @@ pub(crate) fn note_sent(is_input: bool) {
     })
 }
 
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 pub(crate) fn stats_json() -> String {
     LINK.with(|l| {
         let l = l.borrow();
@@ -371,6 +405,7 @@ pub(crate) fn stats_json() -> String {
 }
 
 /// Compass heading (0 = north/+y, clockwise) → the AC quaternion of an upright body facing it.
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 pub(crate) fn heading_quat(heading: f32) -> holtburger_common::math::Quaternion {
     // rotation about +z by -heading: (w, x, y, z) = (cos(-h/2), 0, 0, sin(-h/2))
     let half = -heading * 0.5;
@@ -398,5 +433,174 @@ pub(crate) fn is_vehicle_event(opcode: u32) -> bool {
             | s2c::DEPLOYABLE_FIRE
             | s2c::GROUND_CONTACTS
             | s2c::CONTAINER_STATE
+            | s2c::TRAILER_STATE
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use holtburger_protocol::messages::vehicle::{
+        VehicleProfile, VehicleState, VehicleTrailerState,
+    };
+
+    #[test]
+    fn is_vehicle_event_includes_trailer_state() {
+        assert!(is_vehicle_event(s2c::TRAILER_STATE));
+        assert!(is_vehicle_event(s2c::CONTAINER_STATE));
+        assert!(!is_vehicle_event(0x0910));
+    }
+
+    #[test]
+    fn to_json_serializes_v6_profile_state_and_trailer_state() {
+        let prof = VehicleProfile {
+            vehicle: 100,
+            profile_key: "semi-379".into(),
+            display_name: "Ironhorse 379".into(),
+            locomotion: 2,
+            stand_in_setup: 0x0200_026B,
+            sim_hz: 30,
+            reserved: 0,
+            v_min: 0.0,
+            v_cruise: 20.0,
+            v_max: 27.0,
+            speed_cap: 27.0,
+            accel: 4.8,
+            decel: 9.5,
+            max_bank: 0.0,
+            roll_rate: 0.0,
+            max_pitch: 0.0,
+            pitch_rate: 0.0,
+            yaw_rate: 0.0,
+            climb_max: 0.0,
+            sink_max: 0.0,
+            floor_agl: 0.0,
+            ceiling_agl: 0.0,
+            takeoff_climb: 0.0,
+            landing_speed: 0.0,
+            lead_seconds: 4.0,
+            object_radius: 1,
+            seats: vec![],
+            weapons: vec![],
+            parts: vec![],
+            part_roles: vec![],
+            weapon_ext: vec![],
+            wheelbase: 4.66,
+            track_width: 2.12,
+            wheel_radius: 0.505,
+            max_steer_rad: 0.663225,
+            reverse_max: -7.0,
+            climb_limit_cos: 0.788,
+            ford_depth_max: 1.05,
+            cargo_wcid: 0,
+            fifth_wheel_offset_y: -2.01,
+            fifth_wheel_offset_z: 0.96,
+            livery_id: 2,
+            vehicle_class: 3,
+            reserved4: 0,
+        };
+        let pj = to_json(&VehicleS2C::Profile(Box::new(prof)));
+        assert_eq!(pj["type"], "profile");
+        assert_eq!(pj["liveryId"], 2);
+        assert_eq!(pj["vehicleClass"], 3);
+        assert!((pj["fifthWheelOffsetY"].as_f64().unwrap() + 2.01).abs() < 1e-5);
+        assert!((pj["fifthWheelOffsetZ"].as_f64().unwrap() - 0.96).abs() < 1e-5);
+
+        let st = VehicleState {
+            vehicle: 100,
+            step: 42,
+            ack_input_seq: 41,
+            cell: 0x0102_0100,
+            position: [10.0, 20.0, 30.0],
+            heading: 1.25,
+            pitch: 0.0,
+            bank: 0.0,
+            speed: 12.0,
+            v_cap: 27.0,
+            ammo: 0,
+            mode: 6,
+            flags: 1,
+            missile_mask: 0,
+            bomb_mask: 0,
+            reserved2: 0,
+            steer_angle: 0.1,
+            ground_flags: 1,
+            surface_family: 0,
+            wheel_spin_q16: 0,
+            cargo_mask: 0,
+            pallet_size0: 0,
+            pallet_size1: 0,
+            reserved3: 0,
+            cargo_slot0_wcid: 0,
+            cargo_slot1_wcid: 0,
+            hitched_trailer_guid: 500,
+            trailer_heading: 1.20,
+            trailer_pitch: -0.05,
+            trailer_flags: 0x07,
+            reserved4: 0,
+            reserved5: 0,
+        };
+        let sj = to_json(&VehicleS2C::State(st));
+        assert_eq!(sj["type"], "state");
+        assert_eq!(sj["hitchedTrailerGuid"], 500);
+        assert_eq!(sj["trailerFlags"], 0x07);
+        assert!((sj["trailerHeading"].as_f64().unwrap() - 1.20).abs() < 1e-5);
+        assert!((sj["trailerPitch"].as_f64().unwrap() + 0.05).abs() < 1e-5);
+
+        let ts = VehicleTrailerState {
+            trailer_guid: 500,
+            kind: 14,
+            cell: 0x0102_0100,
+            position: [10.0, 14.0, 30.0],
+            heading: 1.20,
+            pitch: -0.05,
+            bank: 0.01,
+            coupled_tractor_guid: 100,
+            mounted_container_guid: 600,
+            container_slot: 0,
+            trailer_flags: 0x07,
+            reserved: 0,
+            owner_guid: 77,
+        };
+        let tj = to_json(&VehicleS2C::TrailerState(ts));
+        assert_eq!(tj["type"], "trailer_state");
+        assert_eq!(tj["trailerGuid"], 500);
+        assert_eq!(tj["kind"], 14);
+        assert_eq!(tj["cell"], 0x0102_0100);
+        assert_eq!(tj["position"].as_array().unwrap().len(), 3);
+        assert_eq!(tj["coupledTractorGuid"], 100);
+        assert_eq!(tj["mountedContainerGuid"], 600);
+        assert_eq!(tj["containerSlot"], 0);
+        assert_eq!(tj["trailerFlags"], 0x07);
+        assert_eq!(tj["ownerGuid"], 77);
+    }
+
+    #[test]
+    fn on_s2c_records_trailer_state_in_inbox_and_stats() {
+        reset();
+        let ts = VehicleTrailerState {
+            trailer_guid: 500,
+            kind: 14,
+            cell: 0x0102_0100,
+            position: [10.0, 14.0, 30.0],
+            heading: 1.20,
+            pitch: -0.05,
+            bank: 0.01,
+            coupled_tractor_guid: 100,
+            mounted_container_guid: 0,
+            container_slot: 0,
+            trailer_flags: 0x05,
+            reserved: 0,
+            owner_guid: 77,
+        };
+        let action = on_s2c(&VehicleS2C::TrailerState(ts), 77);
+        assert!(matches!(action, LinkAction::None));
+        let drained: Value = serde_json::from_str(&drain_json()).unwrap();
+        let arr = drained.as_array().unwrap();
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0]["type"], "trailer_state");
+        assert_eq!(arr[0]["trailerGuid"], 500);
+        let stats: Value = serde_json::from_str(&stats_json()).unwrap();
+        assert!(stats["received"][15].as_u64().unwrap() >= 1);
+    }
 }

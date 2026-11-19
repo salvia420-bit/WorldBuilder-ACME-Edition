@@ -15,6 +15,7 @@ Object.defineProperty(globalThis, "performance", {
 });
 
 const FM = await import("../scene3d/vehicle/flight_model.js");
+const GM = await import("../scene3d/vehicle/ground_model.js");
 const CAM = await import("../scene3d/vehicle/camera_rig.js");
 const CT = await import("../scene3d/vehicle/controls.js");
 const OSD = await import("../scene3d/vehicle/osd.js");
@@ -687,6 +688,265 @@ await check("T4.2 Scenario: Passenger Sightseeing View Cycle (Cab Seat 2 -> Chas
   assert(rig.getView() === "chase", "cycled to chase");
   const chaseOut = rig.step({ pose, params: { locomotion: 2 }, dt: 1 / 60 });
   assert(chaseOut.cam.pos[1] < -4.0, "chase distance back");
+});
+
+console.log("=== M3: Semi-379 Camera, Controls & OSD Coverage ===");
+
+await check("M3.1 Semi Camera Rig: DEFAULT_SEMI_CHASE (10.8m back, 3.8m up, 64° -> 70° FOV at 27 m/s)", () => {
+  near(CAM.DEFAULT_SEMI_CHASE.back, 10.8, 1e-4, "DEFAULT_SEMI_CHASE.back");
+  near(CAM.DEFAULT_SEMI_CHASE.up, 3.8, 1e-4, "DEFAULT_SEMI_CHASE.up");
+  near(CAM.DEFAULT_SEMI_CHASE.fov, 64, 1e-4, "DEFAULT_SEMI_CHASE.fov");
+
+  const rig = CAM.createPilotCameraRig({ locomotion: 2, vehicleClass: 3, profileKey: "semi-379", ground: () => 0 });
+  const restPose = { x: 0, y: 0, z: 0, heading: 0, pitch: 0, bank: 0, speed: 0, mode: FM.MODE.PARKED };
+  const restOut = rig.step({ pose: restPose, params: { locomotion: 2, vehicleClass: 3, vMaxRoad: 27.0 }, dt: 1 / 60 });
+  near(restOut.cam.pos[1], -10.8, 0.15, "bobtail semi chase back ~10.8m");
+  near(restOut.cam.pos[2], 3.8, 0.15, "bobtail semi chase up ~3.8m");
+  near(restOut.cam.fov, 64.0, 0.2, "bobtail semi rest FOV 64°");
+
+  const fastPose = { x: 0, y: 0, z: 0, heading: 0, pitch: 0, bank: 0, speed: 27.0, mode: FM.MODE.DRIVING };
+  let fastOut;
+  for (let i = 0; i < 40; i++) {
+    fastOut = rig.step({ pose: fastPose, params: { locomotion: 2, vehicleClass: 3, vMaxRoad: 27.0 }, dt: 1 / 60 });
+  }
+  near(fastOut.cam.fov, 70.0, 0.2, "semi top speed 27 m/s FOV = 70°");
+});
+
+await check("M3.2 Semi Camera Rig: Dynamic towed-trailer zoom (20ft -> 17.5m, 40ft -> 22.5m / 5.6m up) + smooth transition", () => {
+  const pose = { x: 0, y: 0, z: 0, heading: 0, pitch: 0, bank: 0, speed: 0, mode: FM.MODE.PARKED };
+  const params = { locomotion: 2, vehicleClass: 3, profileKey: "semi-379", vMaxRoad: 27.0 };
+
+  const rig20 = CAM.createPilotCameraRig({ locomotion: 2, vehicleClass: 3, ground: () => 0 });
+  const out20 = rig20.step({ pose, params, hitchedTrailerKind: "20ft", dt: 1 / 60 });
+  near(out20.cam.pos[1], -17.5, 0.15, "20ft trailer chase back ~17.5m");
+  near(out20.cam.pos[2], 3.8, 0.15, "20ft trailer chase up ~3.8m");
+
+  const rig40 = CAM.createPilotCameraRig({ locomotion: 2, vehicleClass: 3, ground: () => 0 });
+  const out40 = rig40.step({ pose, params, hitchedTrailerKind: 14, dt: 1 / 60 });
+  near(out40.cam.pos[1], -22.5, 0.15, "40ft trailer (kind 14) chase back ~22.5m");
+  near(out40.cam.pos[2], 5.6, 0.15, "40ft trailer chase up ~5.6m");
+
+  // Smooth transition from bobtail -> 40ft
+  const rigDyn = CAM.createPilotCameraRig({ locomotion: 2, vehicleClass: 3, ground: () => 0 });
+  const bob = rigDyn.step({ pose, params, hitchedTrailerKind: null, dt: 1 / 60 });
+  near(bob.cam.pos[1], -10.8, 0.15, "starts bobtail at 10.8m");
+  const mid = rigDyn.step({ pose, params, hitchedTrailerKind: 4000031, dt: 0.1 });
+  assert(mid.cam.pos[1] < -11.5 && mid.cam.pos[1] > -22.0, `smoothly zooms out (${mid.cam.pos[1].toFixed(2)}m)`);
+});
+
+await check("M3.3 Semi Camera Rig: SEMI_CAB_EYES (2 seats) & SEMI_HOOD_EYE", () => {
+  const rig = CAM.createPilotCameraRig({ locomotion: 2, initialView: "cockpit", vehicleClass: 3 });
+  const pose = { x: 10, y: 20, z: 5, heading: 0, pitch: 0, bank: 0, speed: 0, mode: 0 };
+  const params = { locomotion: 2, vehicleClass: 3, profileKey: "semi-379" };
+
+  rig.setSeatIndex(0);
+  const s0 = rig.step({ pose, params, dt: 1 / 60 });
+  near(s0.cam.pos[0] - pose.x, -0.52, 0.05, "Semi cab Seat 0 X -0.52");
+  near(s0.cam.pos[1] - pose.y, 0.28, 0.05, "Semi cab Seat 0 Y +0.28");
+  near(s0.cam.pos[2] - pose.z, 2.40, 0.05, "Semi cab Seat 0 Z +2.40");
+  near(s0.cam.fov, 70, 0.2, "Semi cab FOV 70");
+
+  rig.setSeatIndex(1);
+  const s1 = rig.step({ pose, params, dt: 1 / 60 });
+  near(s1.cam.pos[0] - pose.x, 0.52, 0.05, "Semi cab Seat 1 X +0.52");
+  near(s1.cam.pos[2] - pose.z, 2.40, 0.05, "Semi cab Seat 1 Z +2.40");
+
+  // Clamped to 2 seats
+  rig.setSeatIndex(3);
+  const sClamped = rig.step({ pose, params, dt: 1 / 60 });
+  near(sClamped.cam.pos[0] - pose.x, 0.52, 0.05, "Semi cab Seat 3 clamped to Seat 1");
+
+  rig.setView("hood");
+  const hood = rig.step({ pose, params, dt: 1 / 60 });
+  near(hood.cam.pos[0] - pose.x, 0, 0.02, "Semi hood X centered");
+  near(hood.cam.pos[1] - pose.y, 1.55, 0.05, "Semi hood Y +1.55");
+  near(hood.cam.pos[2] - pose.z, 2.18, 0.05, "Semi hood Z +2.18");
+  near(hood.cam.fov, 66, 0.2, "Semi hood FOV 66");
+});
+
+await check("M3.4 Semi Controls: KeyG emits trailerHitch (preserving Jeep windscreen), Digit3/4 clamped, vMaxRoad steer taper", () => {
+  const { win, doc, canvas } = makeTestEnv();
+  const c = CT.createVehicleControls({
+    window: win, document: doc, canvas,
+    locomotion: 2, seatIndex: 0, vehicleClass: 3, profileKey: "semi-379",
+  });
+  c.lock();
+
+  const actions = [];
+  c.onAction((a) => actions.push(a));
+
+  win.dispatch("keydown", { code: "KeyG" });
+  win.dispatch("keyup", { code: "KeyG" });
+  assert(actions.some((a) => a.type === "trailerHitch" && a.action === "toggle"), "Semi KeyG emits trailerHitch toggle");
+  assert(!actions.some((a) => a.type === "windscreen"), "Semi KeyG does NOT emit windscreen");
+
+  // Seat 1..2 allowed, 3..4 ignored for 2-seat semi
+  win.dispatch("keydown", { code: "Digit2" });
+  win.dispatch("keyup", { code: "Digit2" });
+  win.dispatch("keydown", { code: "Digit3" });
+  win.dispatch("keyup", { code: "Digit3" });
+  assert(actions.some((a) => a.type === "seat" && a.seatIndex === 1), "Digit2 emits seat 1");
+  assert(!actions.some((a) => a.type === "seat" && a.seatIndex === 2), "Digit3 suppressed on 2-seat semi");
+
+  // Profile-aware steer taper at vMaxRoad = 27.0 m/s
+  win.dispatch("keydown", { code: "KeyD" });
+  let uFast;
+  for (let i = 0; i < 30; i++) {
+    uFast = c.poll(1 / 30, { speed: 27.0 }, { locomotion: 2, vehicleClass: 3, profileKey: "semi-379", vMaxRoad: 27.0, steerSlewRateLow: 4.5 });
+  }
+  assert(uFast.steer <= 0.34 && uFast.steer >= 0.26, `Semi steer tapered to ~0.30 at 27.0 m/s (got ${uFast.steer.toFixed(3)})`);
+
+  // KeyV air horn
+  win.dispatch("keydown", { code: "KeyV" });
+  const uHorn = c.poll(1 / 30, { speed: 5.0 }, { locomotion: 2, vehicleClass: 3, vMaxRoad: 27.0 });
+  assert(uHorn.horn === true, "KeyV drives air horn");
+
+  // Passenger isolation (seat 1)
+  c.setSeatIndex(1);
+  const uPax = c.poll(1 / 30, { speed: 10.0 }, { locomotion: 2, seatIndex: 1, vehicleClass: 3 });
+  assert(uPax.passenger === true && uPax.throttle === 0 && uPax.steer === 0 && uPax.horn === false, "Semi co-driver isolated");
+
+  c.dispose();
+});
+
+await check("M3.4b Controls Hardening: dt=NaN guard, Semi->Jeep explicitMaxSeats reset, and Semi vMaxRoad=27.0 fallback", () => {
+  const { win, doc, canvas } = makeTestEnv();
+  const c = CT.createVehicleControls({
+    window: win, document: doc, canvas,
+    locomotion: 2, seatIndex: 0, vehicleClass: 3, profileKey: "semi-379",
+  });
+  c.lock();
+
+  // dt = NaN must not bypass STICK_RATE clamping or snap throttle/steer to 1
+  win.dispatch("keydown", { code: "KeyW" });
+  win.dispatch("keydown", { code: "KeyD" });
+  const uNan = c.poll(NaN, { speed: 0 }, { locomotion: 2, vehicleClass: 3, profileKey: "semi-379", maxSeats: 2 });
+  assert(uNan.throttle === 0 && uNan.steer === 0, `dt=NaN keeps throttle/steer clamped (got thr=${uNan.throttle}, steer=${uNan.steer})`);
+  assert(c.status().maxSeats === 2, "maxSeats = 2 while piloting semi");
+  win.dispatch("keyup", { code: "KeyW" });
+
+  // Semi with missing/NaN vMaxRoad & vMax falls back to 27.0 (not 29.0) -> steer ~0.30 at 27 m/s
+  let uFallback;
+  for (let i = 0; i < 40; i++) {
+    uFallback = c.poll(1 / 30, { speed: 27.0 }, { locomotion: 2, vehicleClass: 3, profileKey: "semi-379", vMaxRoad: NaN, vMax: -5 });
+  }
+  near(uFallback.steer, 0.30, 0.02, "Semi missing/invalid vMaxRoad falls back to 27.0 m/s");
+  win.dispatch("keyup", { code: "KeyD" });
+
+  // Switching Semi -> Jeep in poll() without maxSeats restores 4 seats
+  c.poll(1 / 30, { speed: 0 }, { locomotion: 2, vehicleClass: 0, profileKey: "jeep-mb" });
+  assert(c.status().maxSeats === 4, `Semi -> Jeep restores maxSeats=4 (got ${c.status().maxSeats})`);
+
+  // setVehicleClass(3) from seat 3 clamps seatIndex to 1 immediately pre-poll
+  c.setSeatIndex(3);
+  assert(c.status().seatIndex === 3, "Jeep allows seat 3");
+  c.setVehicleClass(3);
+  c.setProfileKey("semi-379");
+  assert(c.status().maxSeats === 2 && c.status().seatIndex === 1, "setVehicleClass(3) clamps seatIndex to 1 immediately");
+
+  // NaN seatIndex resilience in constructor, poll(), and setSeatIndex()
+  const cNan = CT.createVehicleControls({
+    window: win, document: doc, canvas,
+    locomotion: 2, seatIndex: NaN, vehicleClass: 3, profileKey: "semi-379",
+  });
+  assert(cNan.status().seatIndex === 0, `constructor seatIndex=NaN falls back to 0 (got ${cNan.status().seatIndex})`);
+  const uNanSeat = cNan.poll(1 / 30, { speed: 0 }, { locomotion: 2, seatIndex: NaN });
+  assert(uNanSeat.seatIndex === 0 && cNan.status().seatIndex === 0, "poll seatIndex=NaN stays finite 0");
+  cNan.setSeatIndex(1);
+  const uKeepPax = cNan.poll(1 / 30, { speed: 0 }, { locomotion: 2, seatIndex: NaN });
+  assert(uKeepPax.seatIndex === 1 && uKeepPax.passenger === true && cNan.status().seatIndex === 1, "poll seatIndex=NaN preserves existing seat 1");
+  cNan.setSeatIndex("bad");
+  assert(cNan.status().seatIndex === 0, `setSeatIndex('bad') clamps to finite 0 (got ${cNan.status().seatIndex})`);
+  cNan.dispose();
+
+  c.dispose();
+});
+
+await check("M3.5 Semi OSD: 2-seat crew, LOW RANGE, coupled trailer/twistlock/articulation & jackknife warnings", () => {
+  const { doc, byId } = makeFakeHudDom();
+  const osd = OSD.createVehicleOsd({ document: doc });
+
+  // Bobtail semi with LOW RANGE
+  osd.update({
+    locomotion: 2,
+    name: "Ironhorse 379",
+    vehicleClass: 3,
+    profileKey: "semi-379",
+    vMaxRoad: 27.0,
+    speed: 12.0,
+    boost: true,
+    seatIndex: 0,
+    seats: [101, 0],
+    hitchedTrailerGuid: 0,
+  });
+  let txt = byId.get(OSD.OSD_ID)?.textContent || "";
+  assert(txt.includes("LOW RANGE"), `LOW RANGE badge shown: ${txt}`);
+  assert(!txt.includes("4WD LOW"), "Semi does not show 4WD LOW");
+  assert(txt.includes("CREW (1-2)"), `2-seat crew shown: ${txt}`);
+  assert(txt.includes("[1 Driver: You]") && txt.includes("[2 Co-Driver: Empty]"), `2-seat labels: ${txt}`);
+  assert(!txt.includes("3 Rear L"), "No rear seats shown on semi");
+  assert(txt.includes("BOBTAIL"), `BOBTAIL shown: ${txt}`);
+  assert(txt.includes(OSD.SEMI_DRIVER_KEYBIND_TEXT), "SEMI_DRIVER_KEYBIND_TEXT shown");
+
+  // Coupled 40ft + locked twistlocks + caution articulation (60°)
+  osd.update({
+    locomotion: 2,
+    name: "Ironhorse 379",
+    vehicleClass: 3,
+    profileKey: "semi-379",
+    vMaxRoad: 27.0,
+    speed: 18.0,
+    seatIndex: 1,
+    seats: [101, 102],
+    hitchedTrailerGuid: 500,
+    trailerKind: "40ft",
+    trailerFlags: 0x03,
+    trailerArticulationRad: (60 * Math.PI) / 180,
+  });
+  txt = byId.get(OSD.OSD_ID)?.textContent || "";
+  assert(txt.includes("COUPLED 40FT"), `COUPLED 40FT shown: ${txt}`);
+  assert(txt.includes("TWISTLOCK: [LOCKED]"), `Twistlock LOCKED shown: ${txt}`);
+  assert(txt.includes("60°") && txt.includes("JACKKNIFE WARN"), `Caution warning at 60°: ${txt}`);
+  assert(txt.includes(OSD.SEMI_PAX_KEYBIND_TEXT), "SEMI_PAX_KEYBIND_TEXT shown");
+
+  // Critical jackknife warning (>= 68°)
+  osd.update({
+    locomotion: 2,
+    vehicleClass: 3,
+    profileKey: "semi-379",
+    hitchedTrailerGuid: 500,
+    trailerKind: 13,
+    trailerFlags: 0x01,
+    trailerArticulationRad: (-70 * Math.PI) / 180,
+  });
+  txt = byId.get(OSD.OSD_ID)?.textContent || "";
+  assert(txt.includes("COUPLED 20FT"), `COUPLED 20FT shown: ${txt}`);
+  assert(txt.includes("TWISTLOCK: [OPEN]"), `Twistlock OPEN shown: ${txt}`);
+  assert(txt.includes("JACKKNIFE CRIT"), `Crit warning at -70°: ${txt}`);
+
+  // NaN seatIndex falls back to seat 0 (Driver)
+  osd.update({
+    locomotion: 2,
+    vehicleClass: 3,
+    profileKey: "semi-379",
+    seatIndex: NaN,
+    seats: [101, 102],
+  });
+  txt = byId.get(OSD.OSD_ID)?.textContent || "";
+  assert(txt.includes("[1 Driver: You]"), `NaN seatIndex falls back to Driver (You): ${txt}`);
+  assert(txt.includes(OSD.SEMI_DRIVER_KEYBIND_TEXT), "NaN seatIndex shows SEMI_DRIVER_KEYBIND_TEXT");
+
+  osd.dispose();
+});
+
+await check("M3.6 OSD SURFACE_NAMES aligns 1-for-1 with ground_model.js SURFACE_FAMILIES", () => {
+  assert(OSD.SURFACE_NAMES.length === GM.SURFACE_FAMILIES.length, "same length (11)");
+  const expected = ["ROAD", "DIRT", "GRASS", "FOREST", "SNOW", "SAND", "SWAMP", "FORD", "ROCK", "OBSIDIAN", "VOLCANO"];
+  for (let i = 0; i < GM.SURFACE_FAMILIES.length; i++) {
+    const fam = GM.SURFACE_FAMILIES[i];
+    assert(fam.id === i, `SURFACE_FAMILIES[${i}].id === ${i}`);
+    assert(OSD.SURFACE_NAMES[i] === expected[i], `SURFACE_NAMES[${i}] === ${expected[i]} (got ${OSD.SURFACE_NAMES[i]}, ground_model=${fam.name})`);
+  }
 });
 
 console.log("========================================");

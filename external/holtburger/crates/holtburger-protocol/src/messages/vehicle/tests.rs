@@ -73,6 +73,14 @@ fn c2s_fields(m: &VehicleC2S) -> Value {
             "Reserved": ca.reserved,
             "CargoWcid": ca.cargo_wcid,
         }),
+        VehicleC2S::TrailerAction(ta) => json!({
+            "TrailerGuid": ta.trailer_guid,
+            "VehicleGuid": ta.vehicle_guid,
+            "ContainerGuid": ta.container_guid,
+            "Action": ta.action,
+            "Slot": ta.slot,
+            "Flags": ta.flags,
+        }),
     }
 }
 
@@ -126,6 +134,14 @@ fn c2s_from(opcode: u32, o: &Value) -> VehicleC2S {
             sub_slot: gu(o, "SubSlot") as u8,
             reserved: gu(o, "Reserved") as u8,
             cargo_wcid: gu(o, "CargoWcid"),
+        }),
+        c2s::TRAILER_ACTION => VehicleC2S::TrailerAction(VehicleTrailerAction {
+            trailer_guid: gu(o, "TrailerGuid"),
+            vehicle_guid: gu(o, "VehicleGuid"),
+            container_guid: gu(o, "ContainerGuid"),
+            action: gu(o, "Action") as u8,
+            slot: gu(o, "Slot") as u8,
+            flags: gu(o, "Flags") as u16,
         }),
         _ => panic!("not a C2S vehicle opcode {opcode:#x}"),
     }
@@ -192,20 +208,36 @@ fn s2c_fields(m: &VehicleS2C) -> Value {
             o.insert("ClimbLimitCos".into(), f(p.climb_limit_cos));
             o.insert("FordDepthMax".into(), f(p.ford_depth_max));
             o.insert("CargoWcid".into(), json!(p.cargo_wcid));
+            // v6
+            o.insert("FifthWheelOffsetY".into(), f(p.fifth_wheel_offset_y));
+            o.insert("FifthWheelOffsetZ".into(), f(p.fifth_wheel_offset_z));
+            o.insert("LiveryId".into(), json!(p.livery_id));
+            o.insert("VehicleClass".into(), json!(p.vehicle_class));
+            o.insert("Reserved4".into(), json!(p.reserved4));
             v
         }
         VehicleS2C::Seat(s) => json!({
             "Vehicle": s.vehicle, "Seat": s.seat, "Occupant": s.occupant, "State": s.state, "Reason": s.reason,
         }),
-        VehicleS2C::State(s) => json!({
-            "Vehicle": s.vehicle, "Step": s.step, "AckInputSeq": s.ack_input_seq, "Cell": s.cell,
-            "Position": v3(s.position), "Heading": f(s.heading), "Pitch": f(s.pitch), "Bank": f(s.bank),
-            "Speed": f(s.speed), "VCap": f(s.v_cap), "Ammo": s.ammo, "Mode": s.mode, "Flags": s.flags,
-            "MissileMask": s.missile_mask, "BombMask": s.bomb_mask, "Reserved2": s.reserved2,
-            "SteerAngle": f(s.steer_angle), "GroundFlags": s.ground_flags, "SurfaceFamily": s.surface_family, "WheelSpinQ16": s.wheel_spin_q16,
-            "CargoMask": s.cargo_mask, "PalletSize0": s.pallet_size0, "PalletSize1": s.pallet_size1, "Reserved3": s.reserved3,
-            "CargoSlot0Wcid": s.cargo_slot0_wcid, "CargoSlot1Wcid": s.cargo_slot1_wcid,
-        }),
+        VehicleS2C::State(s) => {
+            let mut v = json!({
+                "Vehicle": s.vehicle, "Step": s.step, "AckInputSeq": s.ack_input_seq, "Cell": s.cell,
+                "Position": v3(s.position), "Heading": f(s.heading), "Pitch": f(s.pitch), "Bank": f(s.bank),
+                "Speed": f(s.speed), "VCap": f(s.v_cap), "Ammo": s.ammo, "Mode": s.mode, "Flags": s.flags,
+                "MissileMask": s.missile_mask, "BombMask": s.bomb_mask, "Reserved2": s.reserved2,
+                "SteerAngle": f(s.steer_angle), "GroundFlags": s.ground_flags, "SurfaceFamily": s.surface_family, "WheelSpinQ16": s.wheel_spin_q16,
+                "CargoMask": s.cargo_mask, "PalletSize0": s.pallet_size0, "PalletSize1": s.pallet_size1, "Reserved3": s.reserved3,
+                "CargoSlot0Wcid": s.cargo_slot0_wcid, "CargoSlot1Wcid": s.cargo_slot1_wcid,
+            });
+            let o = v.as_object_mut().unwrap();
+            o.insert("HitchedTrailerGuid".into(), json!(s.hitched_trailer_guid));
+            o.insert("TrailerHeading".into(), f(s.trailer_heading));
+            o.insert("TrailerPitch".into(), f(s.trailer_pitch));
+            o.insert("TrailerFlags".into(), json!(s.trailer_flags));
+            o.insert("Reserved4".into(), json!(s.reserved4));
+            o.insert("Reserved5".into(), json!(s.reserved5));
+            v
+        }
         VehicleS2C::Fire(fi) => json!({
             "Vehicle": fi.vehicle, "Step": fi.step, "Mount": fi.mount, "Count": fi.count, "Cell": fi.cell,
             "Muzzle": v3(fi.muzzle), "DirX": fi.dir[0], "DirY": fi.dir[1], "DirZ": fi.dir[2],
@@ -316,6 +348,21 @@ fn s2c_fields(m: &VehicleS2C) -> Value {
                 "CargoWcid": s.cargo_wcid,
             })).collect::<Vec<_>>(),
         }),
+        VehicleS2C::TrailerState(ts) => json!({
+            "TrailerGuid": ts.trailer_guid,
+            "Kind": ts.kind,
+            "Cell": ts.cell,
+            "Position": v3(ts.position),
+            "Heading": f(ts.heading),
+            "Pitch": f(ts.pitch),
+            "Bank": f(ts.bank),
+            "CoupledTractorGuid": ts.coupled_tractor_guid,
+            "MountedContainerGuid": ts.mounted_container_guid,
+            "ContainerSlot": ts.container_slot,
+            "TrailerFlags": ts.trailer_flags,
+            "Reserved": ts.reserved,
+            "OwnerGuid": ts.owner_guid,
+        }),
     }
 }
 
@@ -419,6 +466,11 @@ fn s2c_from(opcode: u32, o: &Value) -> VehicleS2C {
             climb_limit_cos: gf(o, "ClimbLimitCos"),
             ford_depth_max: gf(o, "FordDepthMax"),
             cargo_wcid: gu(o, "CargoWcid"),
+            fifth_wheel_offset_y: o.get("FifthWheelOffsetY").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32,
+            fifth_wheel_offset_z: o.get("FifthWheelOffsetZ").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32,
+            livery_id: o.get("LiveryId").and_then(|v| v.as_u64()).unwrap_or(0) as u8,
+            vehicle_class: o.get("VehicleClass").and_then(|v| v.as_u64()).unwrap_or(0) as u8,
+            reserved4: o.get("Reserved4").and_then(|v| v.as_u64()).unwrap_or(0) as u16,
         })),
         s2c::SEAT => VehicleS2C::Seat(VehicleSeat {
             vehicle: gu(o, "Vehicle"),
@@ -454,6 +506,12 @@ fn s2c_from(opcode: u32, o: &Value) -> VehicleS2C {
             reserved3: o.get("Reserved3").and_then(|v| v.as_u64()).unwrap_or(0) as u8,
             cargo_slot0_wcid: o.get("CargoSlot0Wcid").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
             cargo_slot1_wcid: o.get("CargoSlot1Wcid").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
+            hitched_trailer_guid: o.get("HitchedTrailerGuid").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
+            trailer_heading: o.get("TrailerHeading").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32,
+            trailer_pitch: o.get("TrailerPitch").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32,
+            trailer_flags: o.get("TrailerFlags").and_then(|v| v.as_u64()).unwrap_or(0) as u8,
+            reserved4: o.get("Reserved4").and_then(|v| v.as_u64()).unwrap_or(0) as u8,
+            reserved5: o.get("Reserved5").and_then(|v| v.as_u64()).unwrap_or(0) as u16,
         }),
         s2c::FIRE => VehicleS2C::Fire(VehicleFire {
             vehicle: gu(o, "Vehicle"),
@@ -594,6 +652,21 @@ fn s2c_from(opcode: u32, o: &Value) -> VehicleS2C {
                     cargo_wcid: gu(s, "CargoWcid"),
                 })
                 .collect(),
+        }),
+        s2c::TRAILER_STATE => VehicleS2C::TrailerState(VehicleTrailerState {
+            trailer_guid: gu(o, "TrailerGuid"),
+            kind: gu(o, "Kind"),
+            cell: gu(o, "Cell"),
+            position: gv3(o, "Position"),
+            heading: gf(o, "Heading"),
+            pitch: gf(o, "Pitch"),
+            bank: gf(o, "Bank"),
+            coupled_tractor_guid: gu(o, "CoupledTractorGuid"),
+            mounted_container_guid: gu(o, "MountedContainerGuid"),
+            container_slot: gu(o, "ContainerSlot") as u8,
+            trailer_flags: gu(o, "TrailerFlags") as u8,
+            reserved: gu(o, "Reserved") as u16,
+            owner_guid: gu(o, "OwnerGuid"),
         }),
         _ => panic!("not an S2C vehicle opcode {opcode:#x}"),
     }
@@ -924,9 +997,10 @@ fn hbv1_truncated_v2_tail_and_hostile_v2_counts_rejected() {
     let roles = gu(&fx["fields"], "PartRoleCount") as usize;
     let exts = gu(&fx["fields"], "WeaponExtCount") as usize;
     let bytes = fixture_bytes("vehicle_profile_hellcat");
-    // v3 ground tail follows weapon_ext
+    // v3 ground tail (32B) + v6 trailer tail (12B) follow weapon_ext
     const V3_GROUND_TAIL: usize = 32;
-    let ext_count_at = bytes.len() - V3_GROUND_TAIL - (4 + VehicleWeaponExt::WIRE * exts);
+    const V6_TRAILER_TAIL: usize = 12;
+    let ext_count_at = bytes.len() - V3_GROUND_TAIL - V6_TRAILER_TAIL - (4 + VehicleWeaponExt::WIRE * exts);
     let role_count_at = ext_count_at - (4 + 4 * roles);
     for at in [role_count_at, ext_count_at] {
         let mut evil = bytes.clone();
@@ -1069,4 +1143,266 @@ fn hbv1_truncated_input_rejected() {
     evil[12..16].copy_from_slice(&u32::MAX.to_le_bytes());
     let mut off = 0;
     assert!(VehicleC2S::unpack_payload(c2s::INPUT, &evil, &mut off).is_none());
+}
+
+#[test]
+fn hbv1_v6_fields_and_enums() {
+    assert_eq!(HBV1_VERSION, 6);
+    assert_eq!(deployable_kind::TRAILER_CHASSIS_20, 13);
+    assert_eq!(deployable_kind::TRAILER_CHASSIS_40, 14);
+    assert_eq!(event_kind::TRAILER_HITCHED, 19);
+    assert_eq!(event_kind::TRAILER_UNHITCHED, 20);
+    assert_eq!(event_kind::TWISTLOCK_TOGGLED, 21);
+    assert_eq!(trailer_action_kind::NONE, 0);
+    assert_eq!(trailer_action_kind::HITCH, 1);
+    assert_eq!(trailer_action_kind::UNHITCH, 2);
+    assert_eq!(trailer_action_kind::TOGGLE_TWISTLOCK, 3);
+    assert_eq!(trailer_action_kind::MOUNT_CONTAINER, 4);
+    assert_eq!(trailer_action_kind::UNMOUNT_CONTAINER, 5);
+    assert_eq!(trailer_flags::COUPLED, 0x01);
+    assert_eq!(trailer_flags::TWISTLOCKS_LOCKED, 0x02);
+    assert_eq!(trailer_flags::GEAR_RETRACTED, 0x04);
+    assert_eq!(trailer_flags::BRAKE_LIGHTS, 0x08);
+
+    let VehicleS2C::Profile(p) = unpack_s2c(s2c::PROFILE, &fixture_bytes("vehicle_profile_semi")) else {
+        panic!("profile semi")
+    };
+    assert_eq!(p.profile_key, "semi-379");
+    assert_eq!(p.locomotion, locomotion::GROUND);
+    assert_eq!(p.fifth_wheel_offset_y, -2.01);
+    assert_eq!(p.fifth_wheel_offset_z, 0.96);
+    assert_eq!(p.livery_id, 1);
+    assert_eq!(p.vehicle_class, 3);
+    assert_eq!(p.reserved4, 0);
+
+    let state_bytes = fixture_bytes("vehicle_state_coupled");
+    assert_eq!(state_bytes.len(), 100);
+    let VehicleS2C::State(s) = unpack_s2c(s2c::STATE, &state_bytes) else {
+        panic!("state coupled")
+    };
+    assert_eq!(s.hitched_trailer_guid, 1342177500);
+    assert_eq!(s.trailer_heading, 1.62);
+    assert_eq!(s.trailer_pitch, 0.015);
+    assert_eq!(s.trailer_flags, 7);
+
+    let ta_bytes = fixture_bytes("vehicle_trailer_action");
+    assert_eq!(ta_bytes.len(), 24);
+    let mut off = 0;
+    let Some(VehicleC2S::TrailerAction(ta)) =
+        VehicleC2S::unpack_payload(c2s::TRAILER_ACTION, &ta_bytes, &mut off)
+    else {
+        panic!("trailer action")
+    };
+    assert_eq!(off, ta_bytes.len());
+    assert_eq!(ta.trailer_guid, 1342177500);
+    assert_eq!(ta.vehicle_guid, 2147486211);
+    assert_eq!(ta.container_guid, 1342177400);
+    assert_eq!(ta.action, trailer_action_kind::MOUNT_CONTAINER);
+    assert_eq!(ta.slot, 1);
+
+    let ts_bytes = fixture_bytes("vehicle_trailer_state");
+    assert_eq!(ts_bytes.len(), 60);
+    let VehicleS2C::TrailerState(ts) = unpack_s2c(s2c::TRAILER_STATE, &ts_bytes) else {
+        panic!("trailer state")
+    };
+    assert_eq!(ts.trailer_guid, 1342177500);
+    assert_eq!(ts.kind, deployable_kind::TRAILER_CHASSIS_40);
+    assert_eq!(ts.coupled_tractor_guid, 2147486211);
+    assert_eq!(ts.mounted_container_guid, 1342177400);
+    assert_eq!(ts.container_slot, 1);
+    assert_eq!(ts.trailer_flags, 7);
+    assert_eq!(ts.owner_guid, 1342177281);
+}
+
+#[test]
+fn hbv1_v5_payloads_default_v6_fields() {
+    let fx_p = fixture("vehicle_profile_jeep_v5");
+    let bytes_p = hex::decode(fx_p["hex"].as_str().unwrap()).unwrap();
+    let VehicleS2C::Profile(p) = unpack_s2c(s2c::PROFILE, &bytes_p) else {
+        panic!("profile jeep v5")
+    };
+    assert_eq!(p.fifth_wheel_offset_y, 0.0);
+    assert_eq!(p.fifth_wheel_offset_z, 0.0);
+    assert_eq!(p.livery_id, 0);
+    assert_eq!(p.vehicle_class, 0);
+    assert_eq!(p.reserved4, 0);
+    let mut repacked_p = Vec::new();
+    VehicleS2C::Profile(p).pack_payload(&mut repacked_p);
+    assert_eq!(repacked_p.len(), bytes_p.len() + 12);
+    assert_eq!(hex::encode(&repacked_p), fx_p["repack_hex"].as_str().unwrap());
+
+    let fx_s = fixture("vehicle_state_driving_v5");
+    let bytes_s = hex::decode(fx_s["hex"].as_str().unwrap()).unwrap();
+    assert_eq!(bytes_s.len(), 84);
+    let VehicleS2C::State(s) = unpack_s2c(s2c::STATE, &bytes_s) else {
+        panic!("state driving v5")
+    };
+    assert_eq!(s.hitched_trailer_guid, 0);
+    assert_eq!(s.trailer_heading, 0.0);
+    assert_eq!(s.trailer_pitch, 0.0);
+    assert_eq!(s.trailer_flags, 0);
+    assert_eq!(s.reserved4, 0);
+    assert_eq!(s.reserved5, 0);
+    let mut repacked_s = Vec::new();
+    VehicleS2C::State(s).pack_payload(&mut repacked_s);
+    assert_eq!(repacked_s.len(), 100);
+    assert_eq!(hex::encode(&repacked_s), fx_s["repack_hex"].as_str().unwrap());
+}
+
+#[test]
+fn hbv1_v7_future_version_extra_bytes() {
+    let fx = fixture("future_version_extra_bytes");
+    assert_eq!(fx["version"].as_u64(), Some(7));
+    let bytes = hex::decode(fx["hex"].as_str().unwrap()).unwrap();
+    assert_eq!(bytes.len(), 104);
+    let VehicleS2C::State(s) = unpack_s2c(s2c::STATE, &bytes) else {
+        panic!("future state")
+    };
+    let mut buf = Vec::new();
+    VehicleS2C::State(s).pack_payload(&mut buf);
+    assert_eq!(buf.len(), 100);
+    assert_eq!(hex::encode(&buf), fx["repack_hex"].as_str().unwrap());
+
+    // Synthetic v7 TrailerAction & TrailerState with trailing bytes skip cleanly
+    let mut ta_v7 = fixture_bytes("vehicle_trailer_action");
+    ta_v7[4..6].copy_from_slice(&7u16.to_le_bytes());
+    ta_v7.extend_from_slice(&[0xDE, 0xAD, 0xBE, 0xEF]);
+    let mut off = 0;
+    let ta = VehicleC2S::unpack_payload(c2s::TRAILER_ACTION, &ta_v7, &mut off).expect("v7 trailer action");
+    assert_eq!(off, ta_v7.len());
+    assert!(matches!(ta, VehicleC2S::TrailerAction(_)));
+
+    let mut ts_v7 = fixture_bytes("vehicle_trailer_state");
+    ts_v7[4..6].copy_from_slice(&7u16.to_le_bytes());
+    ts_v7.extend_from_slice(&[0xCA, 0xFE, 0xBA, 0xBE]);
+    let mut off = 0;
+    let ts = VehicleS2C::unpack_payload(s2c::TRAILER_STATE, &ts_v7, &mut off).expect("v7 trailer state");
+    assert_eq!(off, ts_v7.len());
+    assert!(matches!(ts, VehicleS2C::TrailerState(_)));
+}
+
+#[test]
+fn hbv1_truncated_v6_and_trailer_rejected() {
+    let prof = fixture_bytes("vehicle_profile_semi");
+    for cut in [prof.len() - 1, prof.len() - 4, prof.len() - 11] {
+        let mut off = 0;
+        assert!(VehicleS2C::unpack_payload(s2c::PROFILE, &prof[..cut], &mut off).is_none());
+        assert_eq!(off, 0);
+    }
+
+    let st = fixture_bytes("vehicle_state_coupled");
+    for cut in [st.len() - 1, st.len() - 4, st.len() - 15] {
+        let mut off = 0;
+        assert!(VehicleS2C::unpack_payload(s2c::STATE, &st[..cut], &mut off).is_none());
+        assert_eq!(off, 0);
+    }
+
+    let ta = fixture_bytes("vehicle_trailer_action");
+    for cut in [ta.len() - 1, ta.len() - 4, 8, 4, 0] {
+        let mut off = 0;
+        assert!(VehicleC2S::unpack_payload(c2s::TRAILER_ACTION, &ta[..cut], &mut off).is_none());
+        assert_eq!(off, 0);
+    }
+    let mut ta_bad_tag = ta.clone();
+    ta_bad_tag[0] ^= 0xFF;
+    let mut off = 0;
+    assert!(VehicleC2S::unpack_payload(c2s::TRAILER_ACTION, &ta_bad_tag, &mut off).is_none());
+    assert_eq!(off, 0);
+    let mut ta_v0 = ta.clone();
+    ta_v0[4..6].copy_from_slice(&0u16.to_le_bytes());
+    let mut off = 0;
+    assert!(VehicleC2S::unpack_payload(c2s::TRAILER_ACTION, &ta_v0, &mut off).is_none());
+    assert_eq!(off, 0);
+
+    let ts = fixture_bytes("vehicle_trailer_state");
+    for cut in [ts.len() - 1, ts.len() - 4, 12, 8, 0] {
+        let mut off = 0;
+        assert!(VehicleS2C::unpack_payload(s2c::TRAILER_STATE, &ts[..cut], &mut off).is_none());
+        assert_eq!(off, 0);
+    }
+    let mut ts_bad_tag = ts.clone();
+    ts_bad_tag[0] ^= 0xFF;
+    let mut off = 0;
+    assert!(VehicleS2C::unpack_payload(s2c::TRAILER_STATE, &ts_bad_tag, &mut off).is_none());
+    assert_eq!(off, 0);
+    let mut ts_v0 = ts.clone();
+    ts_v0[4..6].copy_from_slice(&0u16.to_le_bytes());
+    let mut off = 0;
+    assert!(VehicleS2C::unpack_payload(s2c::TRAILER_STATE, &ts_v0, &mut off).is_none());
+    assert_eq!(off, 0);
+}
+
+#[test]
+fn hbv1_trailer_0x090f_routes_through_game_message() {
+    use crate::messages::{GameActionMessage, GameEventMessage};
+    use holtburger_common::Guid;
+
+    let ta = VehicleTrailerAction {
+        trailer_guid: 1342177500,
+        vehicle_guid: 2147486211,
+        container_guid: 1342177400,
+        action: trailer_action_kind::MOUNT_CONTAINER,
+        slot: 1,
+        flags: 0,
+    };
+    let ga = GameMessage::GameAction(Box::new(GameActionMessage {
+        sequence: 77,
+        action: GameAction::Vehicle(Box::new(VehicleC2S::TrailerAction(ta))),
+    }));
+    let mut ga_buf = Vec::new();
+    ga.pack(&mut ga_buf);
+    // 0xF7B1 (4) + seq (4) + opcode 0x090F (4) + 24B HBV1 payload = 36B
+    assert_eq!(ga_buf.len(), 36);
+    let mut off = 0;
+    let ga_unpacked = GameMessage::unpack(&ga_buf, &mut off).expect("unpack 0x090F GameAction");
+    assert_eq!(off, ga_buf.len());
+    let GameMessage::GameAction(a) = ga_unpacked else {
+        panic!("expected GameAction")
+    };
+    assert_eq!(a.sequence, 77);
+    assert!(matches!(&a.action, GameAction::Vehicle(v) if **v == VehicleC2S::TrailerAction(ta)));
+
+    let ts = VehicleTrailerState {
+        trailer_guid: 1342177500,
+        kind: deployable_kind::TRAILER_CHASSIS_40,
+        cell: 2847146009,
+        position: [84.5, 112.25, 12.0],
+        heading: 1.62,
+        pitch: 0.015,
+        bank: -0.005,
+        coupled_tractor_guid: 2147486211,
+        mounted_container_guid: 1342177400,
+        container_slot: 1,
+        trailer_flags: 7,
+        reserved: 0,
+        owner_guid: 1342177281,
+    };
+    let ge = GameMessage::GameEvent(Box::new(GameEventMessage {
+        target: Guid(1342177281),
+        sequence: 88,
+        event: GameEvent::Vehicle(Box::new(VehicleS2C::TrailerState(ts))),
+    }));
+    let mut ge_buf = Vec::new();
+    ge.pack(&mut ge_buf);
+    // 0xF7B0 (4) + target (4) + seq (4) + opcode 0x090F (4) + 60B HBV1 payload = 76B
+    assert_eq!(ge_buf.len(), 76);
+    let mut off = 0;
+    let ge_unpacked = GameMessage::unpack(&ge_buf, &mut off).expect("unpack 0x090F GameEvent");
+    assert_eq!(off, ge_buf.len());
+    let GameMessage::GameEvent(e) = ge_unpacked else {
+        panic!("expected GameEvent")
+    };
+    assert_eq!(e.target, Guid(1342177281));
+    assert_eq!(e.sequence, 88);
+    assert!(matches!(&e.event, GameEvent::Vehicle(v) if **v == VehicleS2C::TrailerState(ts)));
+
+    // Bad-tag 0x090F event unpacks as GameEvent::Unknown(0x090F, _)
+    let mut bad = hex::decode("b0f7000001000050010000000f090000").unwrap();
+    bad.extend_from_slice(b"XXXXjunkjunk");
+    let mut off = 0;
+    let bad_msg = GameMessage::unpack(&bad, &mut off).expect("bad tag 0x090F frame still parses");
+    let GameMessage::GameEvent(e) = bad_msg else {
+        panic!("expected event")
+    };
+    assert!(matches!(e.event, GameEvent::Unknown(0x090F, _)), "{:?}", e.event);
 }

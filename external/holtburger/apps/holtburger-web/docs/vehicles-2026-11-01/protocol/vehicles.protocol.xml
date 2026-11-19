@@ -50,11 +50,17 @@
                         Vehicle_Cargo    Slot, Reserved0, Reserved1, CargoWcid
                         Vehicle_State    CargoMask, PalletSize0, PalletSize1, Reserved3, CargoSlot0Wcid, CargoSlot1Wcid
 
+  v6 additions (2026-11): TrailerActionKind enum, VehicleEventKind (19..21), DeployableKind (13..14),
+                      C2S Vehicle_TrailerAction (0x090F), S2C Vehicle_TrailerState (0x090F).
+                      Appended fields (since="6"):
+                        Vehicle_Profile  FifthWheelOffsetY, FifthWheelOffsetZ, LiveryId, VehicleClass, Reserved4
+                        Vehicle_State    HitchedTrailerGuid, TrailerHeading, TrailerPitch, TrailerFlags, Reserved4, Reserved5
+
   Units: metres, seconds, radians. Positions are AC cell + landblock-local coordinates. Angles: heading is a
   COMPASS angle (0 = north/+y, pi/2 = east/+x, clockwise); pitch is nose-up positive; bank is right-wing-down
   positive. Stick values are signed bytes scaled by 1/127 (-128 clamps to -1). Throttle is u8 scaled by 1/255.
 -->
-<schema text="holtburger vehicles (HBV1) — additive, capability-gated vehicle messages" version="5">
+<schema text="holtburger vehicles (HBV1) — additive, capability-gated vehicle messages" version="6">
   <enums>
     <enum name="VehicleCapability" parent="uint" mask="true" text="ClientCapabilities.Flags / CapabilitiesAck.Granted">
       <value value="0x00000001" name="Observe" text="receive VehicleProfile / VehicleSeat / VehicleState / VehicleFire / VehicleEvent" />
@@ -138,6 +144,9 @@
       <value value="16" name="CargoPacked" />
       <value value="17" name="RamHit" />
       <value value="18" name="RadarAlert" />
+      <value value="19" name="TrailerHitched" />
+      <value value="20" name="TrailerUnhitched" />
+      <value value="21" name="TwistlockToggled" />
     </enum>
     <enum name="VehiclePartRole" parent="uint" text="Vehicle_Profile.PartRoles: the role in the low 16 bits; Ordnance carries a weapon index in bits 16-23">
       <value value="0" name="Static" />
@@ -174,6 +183,8 @@
       <value value="10" name="IsoContainer20" text="ISO 20ft Standard 1CC/22G1 intermodal container (WCID 4000020)" />
       <value value="11" name="IsoContainer40" text="ISO 40ft Standard 1AA/42G1 intermodal container (WCID 4000021)" />
       <value value="12" name="IsoContainer40HC" text="ISO 40ft High Cube 1AAA/45G1 intermodal container (WCID 4000022)" />
+      <value value="13" name="TrailerChassis20" text="20ft skeletal ISO container chassis trailer (WCID 4000030)" />
+      <value value="14" name="TrailerChassis40" text="40ft gooseneck ISO container chassis trailer (WCID 4000031)" />
     </enum>
     <enum name="PalletSize" parent="byte">
       <value value="0" name="None" />
@@ -191,6 +202,14 @@
       <value value="1" name="Player" />
       <value value="2" name="Vehicle" />
       <value value="3" name="Monster" />
+    </enum>
+    <enum name="TrailerActionKind" parent="byte">
+      <value value="0" name="None" />
+      <value value="1" name="Hitch" />
+      <value value="2" name="Unhitch" />
+      <value value="3" name="ToggleTwistlock" />
+      <value value="4" name="MountContainer" />
+      <value value="5" name="UnmountContainer" />
     </enum>
   </enums>
   <types>
@@ -311,6 +330,15 @@
       <field type="byte" name="Reserved" />
       <field type="ObjectId" name="CargoWcid" />
     </type>
+    <type name="Vehicle_TrailerAction" queue="Weenie" type="0x090F" text="Client trailer hitch/unhitch/twistlock/mount/unmount action">
+      <field type="VehicleHeader" name="Header" />
+      <field type="ObjectId" name="TrailerGuid" />
+      <field type="ObjectId" name="VehicleGuid" />
+      <field type="ObjectId" name="ContainerGuid" />
+      <field type="TrailerActionKind" name="Action" />
+      <field type="byte" name="Slot" text="0=auto/center, 1=front, 2=rear" />
+      <field type="ushort" name="Flags" />
+    </type>
   </gameactions>
   <gameevents>
     <type name="Vehicle_CapabilitiesAck" queue="UIQueue" type="0x0900" text="Answers ClientCapabilities">
@@ -365,6 +393,11 @@
       <field type="float" name="ClimbLimitCos" since="3" text="maximum terrain slope normal cosine (~44 deg = 0.71934)" />
       <field type="float" name="FordDepthMax" since="3" text="maximum water fording depth before flotation/stall (m: 0.8)" />
       <field type="ObjectId" name="CargoWcid" since="3" text="WCID of stowed/deployable cargo item (e.g. radar station)" />
+      <field type="float" name="FifthWheelOffsetY" since="6" default="0" text="local Y of fifth-wheel pivot (m; 0 if none)" />
+      <field type="float" name="FifthWheelOffsetZ" since="6" default="0" text="local Z of fifth-wheel skid plate (m)" />
+      <field type="byte" name="LiveryId" since="6" default="0" />
+      <field type="byte" name="VehicleClass" since="6" default="0" text="0=legacy, 1=air, 2=light ground, 3=heavy tractor" />
+      <field type="ushort" name="Reserved4" since="6" default="0" />
     </type>
     <type name="Vehicle_Seat" queue="UIQueue" type="0x0904" text="A seat changed (or a board was refused)">
       <field type="VehicleHeader" name="Header" />
@@ -402,6 +435,12 @@
       <field type="byte" name="Reserved3" since="4" default="0" />
       <field type="ObjectId" name="CargoSlot0Wcid" since="4" default="0" text="WCID in slot 0 or full pallet" />
       <field type="ObjectId" name="CargoSlot1Wcid" since="4" default="0" text="WCID in slot 1" />
+      <field type="ObjectId" name="HitchedTrailerGuid" since="6" default="0" />
+      <field type="float" name="TrailerHeading" since="6" default="0" />
+      <field type="float" name="TrailerPitch" since="6" default="0" />
+      <field type="byte" name="TrailerFlags" since="6" default="0" text="0x01=coupled, 0x02=twistlocksLocked, 0x04=gearRetracted, 0x08=brakeLights" />
+      <field type="byte" name="Reserved4" since="6" default="0" />
+      <field type="ushort" name="Reserved5" since="6" default="0" />
     </type>
     <type name="Vehicle_Fire" queue="UIQueue" type="0x0907" text="Rounds fired this step (tracers); hits arrive through the standard damage messages">
       <field type="VehicleHeader" name="Header" />
@@ -507,6 +546,22 @@
       <field type="uint" name="SerialNumber" text="ISO 6346 6-digit serial" />
       <field type="uint" name="SlotCount" />
       <vector name="Slots" length="SlotCount" type="ContainerSlotWire" />
+    </type>
+    <type name="Vehicle_TrailerState" queue="UIQueue" type="0x090F" text="Authoritative trailer state broadcast">
+      <field type="VehicleHeader" name="Header" />
+      <field type="ObjectId" name="TrailerGuid" />
+      <field type="DeployableKind" name="Kind" />
+      <field type="LandcellId" name="Cell" />
+      <field type="Vector3" name="Position" text="landblock-local Location.Pos" />
+      <field type="float" name="Heading" />
+      <field type="float" name="Pitch" />
+      <field type="float" name="Bank" />
+      <field type="ObjectId" name="CoupledTractorGuid" />
+      <field type="ObjectId" name="MountedContainerGuid" />
+      <field type="byte" name="ContainerSlot" />
+      <field type="byte" name="TrailerFlags" text="0x01=coupled, 0x02=twistlocksLocked, 0x04=gearRetracted, 0x08=brakeLights" />
+      <field type="ushort" name="Reserved" />
+      <field type="ObjectId" name="OwnerGuid" />
     </type>
   </gameevents>
 </schema>

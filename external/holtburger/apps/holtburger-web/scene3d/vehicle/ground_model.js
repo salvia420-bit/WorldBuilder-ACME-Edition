@@ -59,6 +59,108 @@ export const PARAMS = {
   treeYawNudge: f32(0.05),
 };
 
+/**
+ * Derive GroundParams from a wire/profile object, matching C# GroundParams.FromProfile(VehicleProfile).
+ * Accepts both camelCase (WASM/JS) and PascalCase (C# fixture) keys, falling back to PARAMS defaults.
+ */
+export function paramsFromProfile(p) {
+  const src = p && typeof p === "object" ? p : {};
+  const num = (a, b, c) => {
+    for (const k of [a, b, c]) {
+      if (k && Number.isFinite(src[k]) && src[k] > 0) return src[k];
+    }
+    return NaN;
+  };
+  const negNum = (a, b, c) => {
+    for (const k of [a, b, c]) {
+      if (k && Number.isFinite(src[k]) && src[k] < 0) return src[k];
+    }
+    return NaN;
+  };
+
+  const wb = num("wheelbase", "Wheelbase");
+  const tw = num("trackWidth", "TrackWidth");
+  const wr = num("wheelRadius", "WheelRadius");
+  const maxSt = num("maxSteerRad", "MaxSteerRad");
+  const minSt = num("minSteerRad", "MinSteerRad");
+  const slewLo = num("steerSlewRateLow", "yawRate", "YawRate");
+  const slewHi = num("steerSlewRateHigh", "SteerSlewRateHigh");
+  const spdLo = num("steerSpeedLow", "SteerSpeedLow");
+  const spdHi = num("steerSpeedHigh", "SteerSpeedHigh");
+  const turnMin = num("turnRadiusMin", "TurnRadiusMin");
+  const vRoad = num("vMaxRoad", "vMax", "VMax");
+  const vRev = negNum("vReverseMax", "reverseMax", "ReverseMax");
+  const accel = num("launchAccel", "accel", "Accel");
+  const decel = num("normalBrake", "decel", "Decel");
+  const hbDecel = num("handbrakeDecel", "HandbrakeDecel");
+  const lrMul = num("lowRangeTorqueMul", "LowRangeTorqueMul");
+  const lrCap = num("lowRangeSpeedCap", "LowRangeSpeedCap");
+  const climbCos = num("climbLimitCos", "ClimbLimitCos");
+  const floorZ = num("floorZ", "FloorZ");
+  const fordMax = num("fordDepthMax", "FordDepthMax");
+  const coastLin = num("coastLinear", "CoastLinear");
+  const coastQ = num("coastQuad", "CoastQuad");
+  const treeThr = num("treeGlanceThreshold", "TreeGlanceThreshold");
+  const treeScrub = num("treeGlanceScrub", "TreeGlanceScrub");
+  const treeNudge = num("treeYawNudge", "TreeYawNudge");
+
+  const vMaxRoad = vRoad > 0 ? vRoad : PARAMS.vMaxRoad;
+  const vReverseMax = vRev < 0 ? vRev : PARAMS.vReverseMax;
+  const launchAccel = accel > 0 ? accel : PARAMS.launchAccel;
+  const normalBrake = decel > 0 ? decel : PARAMS.normalBrake;
+  const steerSlewRateLow = slewLo > 0 ? slewLo : PARAMS.steerSlewRateLow;
+
+  const out = {
+    wheelbase: wb > 0 ? wb : PARAMS.wheelbase,
+    trackWidth: tw > 0 ? tw : PARAMS.trackWidth,
+    wheelRadius: wr > 0 ? wr : PARAMS.wheelRadius,
+    maxSteerRad: maxSt > 0 ? maxSt : PARAMS.maxSteerRad,
+    minSteerRad: minSt > 0 ? minSt : PARAMS.minSteerRad,
+    steerSlewRateLow,
+    steerSlewRateHigh: slewHi > 0 ? slewHi : PARAMS.steerSlewRateHigh,
+    steerSpeedLow: spdLo > 0 ? spdLo : PARAMS.steerSpeedLow,
+    steerSpeedHigh: spdHi > 0 ? spdHi : PARAMS.steerSpeedHigh,
+    turnRadiusMin: turnMin > 0 ? turnMin : PARAMS.turnRadiusMin,
+    vMaxRoad,
+    vReverseMax,
+    launchAccel,
+    normalBrake,
+    handbrakeDecel: hbDecel > 0 ? hbDecel : PARAMS.handbrakeDecel,
+    lowRangeTorqueMul: lrMul > 0 ? lrMul : PARAMS.lowRangeTorqueMul,
+    lowRangeSpeedCap: lrCap > 0 ? lrCap : PARAMS.lowRangeSpeedCap,
+    climbLimitCos: climbCos > 0 ? climbCos : PARAMS.climbLimitCos,
+    floorZ: floorZ > 0 ? floorZ : PARAMS.floorZ,
+    fordDepthMax: fordMax > 0 ? fordMax : PARAMS.fordDepthMax,
+    coastLinear: coastLin > 0 ? coastLin : PARAMS.coastLinear,
+    coastQuad: coastQ > 0 ? coastQ : PARAMS.coastQuad,
+    treeGlanceThreshold: treeThr > 0 ? treeThr : PARAMS.treeGlanceThreshold,
+    treeGlanceScrub: treeScrub > 0 ? treeScrub : PARAMS.treeGlanceScrub,
+    treeYawNudge: treeNudge > 0 ? treeNudge : PARAMS.treeYawNudge,
+    // Compatibility fields consumed by predictor.js / vehicle/index.js
+    locomotion: src.locomotion ?? src.Locomotion ?? 2,
+    vMax: vMaxRoad,
+    vCruise: (Number.isFinite(src.vCruise) && src.vCruise > 0) ? src.vCruise : ((Number.isFinite(src.VCruise) && src.VCruise > 0) ? src.VCruise : vMaxRoad * 0.75),
+    vMin: Number.isFinite(src.vMin) ? src.vMin : (Number.isFinite(src.VMin) ? src.VMin : 0),
+    accel: launchAccel,
+    decel: normalBrake,
+    yawRate: steerSlewRateLow,
+    reverseMax: vReverseMax,
+    leadSeconds: Number.isFinite(src.leadSeconds) ? src.leadSeconds : (Number.isFinite(src.LeadSeconds) ? src.LeadSeconds : 4),
+    profileKey: src.profileKey ?? src.Key ?? "",
+    fifthWheelOffsetY: Number.isFinite(src.fifthWheelOffsetY) ? src.fifthWheelOffsetY : (Number.isFinite(src.FifthWheelOffsetY) ? src.FifthWheelOffsetY : 0),
+    fifthWheelOffsetZ: Number.isFinite(src.fifthWheelOffsetZ) ? src.fifthWheelOffsetZ : (Number.isFinite(src.FifthWheelOffsetZ) ? src.FifthWheelOffsetZ : 0),
+    liveryId: src.liveryId ?? src.LiveryId ?? 0,
+    vehicleClass: src.vehicleClass ?? src.VehicleClass ?? 0,
+  };
+  const towMul = Number.isFinite(src.towMassMul) && src.towMassMul > 0
+    ? src.towMassMul
+    : (Number.isFinite(src.TowMassMul) && src.TowMassMul > 0 ? src.TowMassMul : NaN);
+  if (Number.isFinite(towMul)) {
+    out.towMassMul = towMul;
+  }
+  return out;
+}
+
 export const SURFACE_FAMILIES = Object.freeze([
   { id: 0, name: "Road", vMax: 29.0, mu: 1.00, muLat: 1.30 },
   { id: 1, name: "Dirt", vMax: 24.4, mu: 0.88, muLat: 1.05 },
@@ -153,7 +255,7 @@ export function inputFromFrame(f) {
 }
 
 export function cloneState(s) {
-  return {
+  const out = {
     x: s.x, y: s.y, z: s.z,
     heading: s.heading, pitch: s.pitch, bank: s.bank || 0, roll: s.roll || 0,
     speed: s.speed, steerAngle: s.steerAngle || 0,
@@ -162,6 +264,8 @@ export function cloneState(s) {
     groundFlags: s.groundFlags !== undefined ? s.groundFlags : 1,
     wheelSpin: s.wheelSpin || 0,
   };
+  if (s.towMassMul !== undefined) out.towMassMul = s.towMassMul;
+  return out;
 }
 
 function resolveOracle(oracle, x, y, z, sf) {
@@ -233,7 +337,7 @@ export function step(state, input, params, oracle, dt = DT) {
 
   // 2. Terrain query
   const terr = resolveOracle(oracle, state.x, state.y, state.z, state.surfaceFamily);
-  const surf = terr.surface || SURFACE_FAMILIES[0];
+  const surf = (terr.surface && terr.surface.vMax > 0) ? terr.surface : SURFACE_FAMILIES[0];
   const normal = terr.normal || [0, 0, 1];
   const groundZ = terr.z !== undefined ? terr.z : 0.0;
   const waterDepth = terr.waterDepth || 0.0;
@@ -250,6 +354,16 @@ export function step(state, input, params, oracle, dt = DT) {
   }
 
   // 4. Longitudinal Drive / Brake / Coast
+  const roadScale = (p.vMaxRoad > 0 ? p.vMaxRoad : 29.0) / 29.0;
+  const posMul = (v) => Number.isFinite(v) && v > 0;
+  const towMassMul = posMul(state.towMassMul)
+    ? state.towMassMul
+    : (posMul(input?.towMassMul)
+      ? input.towMassMul
+      : (posMul(p.towMassMul) ? p.towMassMul : 1.0));
+  const effVMax = surf.vMax * roadScale * towMassMul;
+  const effAccel = p.launchAccel * towMassMul;
+
   let spd = state.speed;
   if (inp.handbrake) {
     const b = p.handbrakeDecel * surf.mu;
@@ -259,10 +373,10 @@ export function step(state, input, params, oracle, dt = DT) {
       spd -= Math.sign(spd) * b * dt;
     }
   } else if (inp.throttle > 0.0) {
-    const vTarget = Math.pow(inp.throttle, 1.0 / 1.8) * surf.vMax;
+    const vTarget = Math.pow(inp.throttle, 1.0 / 1.8) * effVMax;
     if (spd < vTarget) {
-      const taper = Math.sqrt(Math.max(0.0, inp.throttle - Math.pow(Math.max(0.0, spd) / surf.vMax, 1.8)));
-      let aDrive = p.launchAccel * surf.mu * taper;
+      const taper = Math.sqrt(Math.max(0.0, inp.throttle - Math.pow(Math.max(0.0, spd) / effVMax, 1.8)));
+      let aDrive = effAccel * surf.mu * taper;
       if (inp.boost && spd <= p.lowRangeSpeedCap) {
         aDrive *= p.lowRangeTorqueMul;
       }
@@ -272,14 +386,14 @@ export function step(state, input, params, oracle, dt = DT) {
       const drag = (p.coastLinear + p.coastQuad * Math.abs(spd)) * dt;
       spd = Math.max(vTarget, spd - drag + gParallel * dt);
     }
-    if (spd > surf.vMax * 1.15) spd = surf.vMax * 1.15;
+    if (spd > effVMax * 1.15) spd = effVMax * 1.15;
   } else if (inp.throttle < 0.0) {
     if (spd > 0.0) {
       const b = p.normalBrake * surf.mu * Math.abs(inp.throttle) + p.coastLinear;
       spd = Math.max(0.0, spd - b * dt);
     } else {
       const taper = Math.sqrt(Math.max(0.0, 1.0 - Math.pow(Math.abs(spd) / Math.abs(p.vReverseMax), 1.8)));
-      let aRev = p.launchAccel * surf.mu * taper * Math.abs(inp.throttle);
+      let aRev = effAccel * surf.mu * taper * Math.abs(inp.throttle);
       if (inp.boost && Math.abs(spd) <= p.lowRangeSpeedCap) {
         aRev *= p.lowRangeTorqueMul;
       }
@@ -294,7 +408,7 @@ export function step(state, input, params, oracle, dt = DT) {
       } else {
         spd -= Math.sign(spd) * drag;
         spd += gParallel * dt;
-        if (spd > surf.vMax * 1.15) spd = surf.vMax * 1.15;
+        if (spd > effVMax * 1.15) spd = effVMax * 1.15;
         if (spd < p.vReverseMax) spd = p.vReverseMax;
       }
     }
@@ -361,9 +475,11 @@ export function step(state, input, params, oracle, dt = DT) {
   // 7. State flags & mode
   state.surfaceFamily = surf.id !== undefined ? surf.id : 0;
   state.groundFlags = 0x01; // onGround
-  if (inp.handbrake) state.groundFlags |= 0x02;
+  if (inp.handbrake || (inp.throttle < 0.0 && state.speed > 0.05)) state.groundFlags |= 0x02;
   if (inp.boost) state.groundFlags |= 0x04;
   if (surf.id === 4) state.groundFlags |= 0x08; // slipping
+  if (inp.headlights) state.groundFlags |= 0x10;
+  if (inp.horn) state.groundFlags |= 0x20;
 
   if (Math.abs(state.speed) < 0.001 && inp.throttle === 0.0) {
     state.mode = MODE.PARKED;

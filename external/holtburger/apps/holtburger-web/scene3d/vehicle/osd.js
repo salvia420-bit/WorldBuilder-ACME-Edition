@@ -23,9 +23,11 @@ export const HIT_DECAY_SEC = 0.35;
 export const KEYBIND_BAR_TEXT = "Click mouse-aim · C freelook · Space guns · G rockets · V bomb · Shift WEP · Tab view · H hud · X exit/bail";
 export const GROUND_DRIVER_KEYBIND_TEXT = "W/S Drive/Brake · A/D Steer · Space Handbrake · Shift 4WD Low · L Lights · V Horn · G Windscreen · 1-4 Seat · Tab View · H HUD · X Exit";
 export const GROUND_PAX_KEYBIND_TEXT = "1-4 Switch Seat · Tab View · C/RMB Freelook · H HUD · X Exit";
+export const SEMI_DRIVER_KEYBIND_TEXT = "G Hitch/Unhitch · Shift Low Range · Space Air Brake · V Air Horn · L Lights · 1-2 Seat · Tab View · X Exit";
+export const SEMI_PAX_KEYBIND_TEXT = "1-2 Switch Seat · Tab View · C/RMB Freelook · H HUD · X Exit";
 
 export const SURFACE_NAMES = Object.freeze([
-  "ROAD", "GRASS", "DIRT", "SAND", "SNOW", "FORD", "ROCK", "SWAMP", "FOREST", "OBSIDIAN", "VOLCANO",
+  "ROAD", "DIRT", "GRASS", "FOREST", "SNOW", "SAND", "SWAMP", "FORD", "ROCK", "OBSIDIAN", "VOLCANO",
 ]);
 
 const PITCH_RUNGS_DEG = [-20, -10, 10, 20];
@@ -69,6 +71,8 @@ const CSS = `
 .hb-ground-status-item.active-lights{background:rgba(30,90,40,.85);border-color:#52e668;color:#f0fff0;box-shadow:0 0 8px rgba(82,230,104,.5)}
 .hb-ground-status-item.active-brake{background:rgba(140,30,20,.85);border-color:#ff5545;color:#fff0ed;box-shadow:0 0 8px rgba(255,85,69,.5)}
 .hb-ground-status-item.active-horn{background:rgba(135,100,10,.85);border-color:#ffd878;color:#fffde0;box-shadow:0 0 8px rgba(255,216,120,.5)}
+.hb-ground-status-item.caution{background:rgba(135,82,10,.85);border-color:#ffbe55;color:#ffe6b3}
+.hb-ground-status-item.crit{background:rgba(165,24,18,.88);border-color:#ff6b5b;color:#fff0ed;animation:hb-hud-blink .42s infinite}
 .hb-ground-keybind-bar{background:rgba(6,14,10,.7);border:1px solid rgba(160,230,150,.36);border-radius:6px;padding:5px 14px;font-size:11px;color:rgba(200,240,200,.85);white-space:nowrap;text-align:center}
 .hb-hud-top{position:fixed;left:50%;top:11%;transform:translateX(-50%);display:flex;flex-direction:column;align-items:center;gap:4px}
 .hb-hud-hdg-box{padding:2px 10px;background:rgba(6,16,11,.62);border:1px solid rgba(150,240,155,.45);border-radius:4px;
@@ -146,6 +150,24 @@ const CSS = `
 
 function clamp(v, lo, hi) {
   return v < lo ? lo : (v > hi ? hi : v);
+}
+
+function wrapPi(a) {
+  if (!Number.isFinite(a)) return 0;
+  let d = a % (2 * Math.PI);
+  if (d > Math.PI) d -= 2 * Math.PI;
+  else if (d < -Math.PI) d += 2 * Math.PI;
+  return d === 0 ? 0 : d;
+}
+
+function normalizeTrailerKind(k) {
+  if (k === "40ft" || k === 40 || k === 14 || k === 4000031 || k === "Chassis40ft" || k === "TrailerChassis40") {
+    return "40ft";
+  }
+  if (k === "20ft" || k === 20 || k === 13 || k === 4000030 || k === "Chassis20ft" || k === "TrailerChassis20") {
+    return "20ft";
+  }
+  return null;
 }
 
 function nowMs() {
@@ -238,6 +260,11 @@ export function createVehicleOsd(deps = {}) {
   let gRpmFillEl = null;
   let gSurfaceBadgeEl = null;
   let gSeatCards = [];
+  let gCrewTitleEl = null;
+  let gTrailerBarEl = null;
+  let gTrailerCoupledEl = null;
+  let gTwistlockEl = null;
+  let gArticulationEl = null;
   let gLightsEl = null;
   let gBrakeEl = null;
   let gHornEl = null;
@@ -408,6 +435,15 @@ export function createVehicleOsd(deps = {}) {
 
     // Center Status Bar & Keybinds
     const gCenter = append(groundWrap, mkEl(doc, "div", "hb-ground-center"));
+    gTrailerBarEl = append(gCenter, mkEl(doc, "div", "hb-ground-status-bar"));
+    gTrailerBarEl.style.display = "none";
+    gTrailerCoupledEl = append(gTrailerBarEl, mkEl(doc, "span", "hb-ground-status-item"));
+    gTrailerCoupledEl.textContent = "BOBTAIL";
+    gTwistlockEl = append(gTrailerBarEl, mkEl(doc, "span", "hb-ground-status-item"));
+    gTwistlockEl.textContent = "TWISTLOCK: OPEN";
+    gArticulationEl = append(gTrailerBarEl, mkEl(doc, "span", "hb-ground-status-item"));
+    gArticulationEl.textContent = "ARTIC: 0°";
+
     const gStatusBar = append(gCenter, mkEl(doc, "div", "hb-ground-status-bar"));
     gLightsEl = append(gStatusBar, mkEl(doc, "span", "hb-ground-status-item"));
     gLightsEl.textContent = "LIGHTS";
@@ -432,8 +468,8 @@ export function createVehicleOsd(deps = {}) {
     gSurfaceBadgeEl.textContent = "TRACTION: ROAD";
 
     const gCrewBox = append(gRight, mkEl(doc, "div", "hb-ground-crew-box"));
-    const gCrewTitle = append(gCrewBox, mkEl(doc, "div", "hb-ground-crew-title"));
-    gCrewTitle.textContent = "CREW (1-4)";
+    gCrewTitleEl = append(gCrewBox, mkEl(doc, "div", "hb-ground-crew-title"));
+    gCrewTitleEl.textContent = "CREW (1-4)";
     const gCrewGrid = append(gCrewBox, mkEl(doc, "div", "hb-ground-crew-grid"));
     gSeatCards = [];
     const seatLabels = ["1 Driver", "2 Front Pax", "3 Rear L", "4 Rear R"];
@@ -588,13 +624,15 @@ export function createVehicleOsd(deps = {}) {
 
         if (groundWrap) groundWrap.style.display = "block";
 
+        const isSemi = s.vehicleClass === 3 || s.profileKey === "semi-379";
+        const vMaxRoad = (Number.isFinite(s.vMaxRoad) && s.vMaxRoad > 0) ? s.vMaxRoad : (isSemi ? 27.0 : 29.0);
         const absSpeed = Math.abs(speed);
         const mph = Math.round(absSpeed * 2.23694);
         const kmh = Math.round(absSpeed * 3.6);
 
         setTxt(gSpeedNumEl, "gSpdNum", String(mph));
         setTxt(gSpeedSubEl, "gSpdSub", `${kmh} km/h`);
-        const spdPct = clamp(Math.round((absSpeed / 29.0) * 100), 0, 100);
+        const spdPct = clamp(Math.round((absSpeed / vMaxRoad) * 100), 0, 100);
         setStyle(gSpeedFillEl, "width", "gSpdFill", `${spdPct}%`);
 
         let gear = "N";
@@ -603,20 +641,34 @@ export function createVehicleOsd(deps = {}) {
         } else {
           if (speed < -0.2 || (s.throttle < 0 && speed <= 0.2)) gear = "R";
           else if (absSpeed <= 0.2 && (!s.throttle || Math.abs(s.throttle) < 0.05)) gear = "N";
-          else if (absSpeed < 9.0) gear = "1";
-          else if (absSpeed < 18.0) gear = "2";
-          else gear = "3";
+          else if (isSemi) {
+            if (absSpeed < 5.0) gear = "1";
+            else if (absSpeed < 10.0) gear = "2";
+            else if (absSpeed < 16.0) gear = "3";
+            else if (absSpeed < 22.0) gear = "4";
+            else gear = "5";
+          } else {
+            if (absSpeed < 9.0) gear = "1";
+            else if (absSpeed < 18.0) gear = "2";
+            else gear = "3";
+          }
         }
         setTxt(gGearBadgeEl, "gGear", gear);
 
         const boost = !!(s.boost || (s.groundFlags & 0x04) || s.fourWheelLow);
         if (g4wdBadgeEl) {
+          setTxt(g4wdBadgeEl, "g4wdTxt", isSemi ? "LOW RANGE" : "4WD LOW");
           setStyle(g4wdBadgeEl, "display", "g4wd", boost ? "inline-block" : "none");
         }
 
+        const rpmMax = Number.isFinite(s.rpmMax) && s.rpmMax > 600 ? s.rpmMax : (isSemi ? 2100 : 3800);
         let rpm = 600;
         if (Number.isFinite(s.rpm)) {
           rpm = Math.round(s.rpm);
+        } else if (isSemi) {
+          const thrAbs = Math.abs(s.throttle || 0);
+          if (gear === "N") rpm = Math.round(600 + thrAbs * 750);
+          else rpm = Math.round(900 + clamp(absSpeed / vMaxRoad, 0, 1) * 1000 + thrAbs * 200);
         } else {
           if (gear === "R") rpm = Math.round(800 + (absSpeed / 9.0) * 2600);
           else if (gear === "N") rpm = Math.round(600 + Math.abs(s.throttle || 0) * 1200);
@@ -624,9 +676,9 @@ export function createVehicleOsd(deps = {}) {
           else if (gear === "2") rpm = Math.round(1200 + ((absSpeed - 9.0) / 9.0) * 2400);
           else rpm = Math.round(1600 + ((absSpeed - 18.0) / 11.0) * 2200);
         }
-        rpm = clamp(rpm, 600, 3800);
+        rpm = clamp(rpm, 600, rpmMax);
         setTxt(gRpmValEl, "gRpmVal", String(rpm));
-        const rpmPct = clamp(Math.round((rpm / 3800) * 100), 0, 100);
+        const rpmPct = clamp(Math.round((rpm / rpmMax) * 100), 0, 100);
         setStyle(gRpmFillEl, "width", "gRpmFill", `${rpmPct}%`);
 
         let surfName = "ROAD";
@@ -642,12 +694,21 @@ export function createVehicleOsd(deps = {}) {
         if (gBrakeEl) gBrakeEl.className = brake ? "hb-ground-status-item active-brake" : "hb-ground-status-item";
         if (gHornEl) gHornEl.className = horn ? "hb-ground-status-item active-horn" : "hb-ground-status-item";
 
-        const localSeat = clamp(Math.round(s.seatIndex ?? 0), 0, 3);
-        const seats = Array.isArray(s.seats) ? s.seats : [1, 0, 0, 0];
-        const baseLabels = ["1 Driver", "2 Front Pax", "3 Rear L", "4 Rear R"];
+        const maxSeats = isSemi ? 2 : 4;
+        const localSeat = clamp(Number.isFinite(s.seatIndex) ? Math.round(s.seatIndex) : 0, 0, maxSeats - 1);
+        const seats = Array.isArray(s.seats) ? s.seats : (isSemi ? [1, 0] : [1, 0, 0, 0]);
+        const baseLabels = isSemi
+          ? ["1 Driver", "2 Co-Driver"]
+          : ["1 Driver", "2 Front Pax", "3 Rear L", "4 Rear R"];
+        if (gCrewTitleEl) setTxt(gCrewTitleEl, "gCrewTitle", isSemi ? "CREW (1-2)" : "CREW (1-4)");
         for (let i = 0; i < 4; i++) {
           const card = gSeatCards[i];
           if (!card) continue;
+          if (i >= maxSeats) {
+            card.style.display = "none";
+            continue;
+          }
+          card.style.display = "";
           const isYou = (i === localSeat);
           const occ = seats[i] >>> 0;
           const isOccupied = !isYou && occ !== 0;
@@ -663,8 +724,61 @@ export function createVehicleOsd(deps = {}) {
           }
         }
 
+        // Semi-tractor trailer telemetry bar
+        let coupledLabel = "BOBTAIL";
+        let twistLabel = "OPEN";
+        let artSignedDeg = 0;
+        let artAbsDeg = 0;
+        let artWarnTag = "";
+        if (isSemi) {
+          const tFlags = s.trailerFlags ?? 0;
+          const hGuid = Number.isFinite(s.hitchedTrailerGuid) ? (s.hitchedTrailerGuid >>> 0) : 0;
+          const coupled = Boolean(s.trailerCoupled || hGuid !== 0 || (tFlags & 0x01));
+          const kindNorm = normalizeTrailerKind(s.trailerKind ?? s.hitchedTrailerKind);
+          coupledLabel = coupled
+            ? (kindNorm === "40ft" ? "COUPLED 40FT" : (kindNorm === "20ft" ? "COUPLED 20FT" : "COUPLED"))
+            : "BOBTAIL";
+          const twistLocked = Boolean(s.twistlocksLocked !== undefined ? s.twistlocksLocked : (tFlags & 0x02));
+          twistLabel = twistLocked ? "LOCKED" : "OPEN";
+          const artRad = Number.isFinite(s.trailerArticulationRad)
+            ? s.trailerArticulationRad
+            : (Number.isFinite(s.articulationRad)
+              ? s.articulationRad
+              : (Number.isFinite(s.trailerHeading) && Number.isFinite(s.heading)
+                ? wrapPi(s.heading - s.trailerHeading)
+                : 0));
+          artAbsDeg = Math.round((Math.abs(artRad) * 180) / Math.PI);
+          artSignedDeg = Math.round((artRad * 180) / Math.PI);
+          const isCrit = coupled && artAbsDeg >= 68;
+          const isCaution = coupled && !isCrit && artAbsDeg >= 55;
+          artWarnTag = isCrit ? " [JACKKNIFE CRIT]" : (isCaution ? " [JACKKNIFE WARN]" : "");
+
+          if (gTrailerBarEl) setStyle(gTrailerBarEl, "display", "gTrBar", "flex");
+          if (gTrailerCoupledEl) {
+            setTxt(gTrailerCoupledEl, "gTrCpl", coupledLabel);
+            gTrailerCoupledEl.className = coupled ? "hb-ground-status-item active-lights" : "hb-ground-status-item";
+          }
+          if (gTwistlockEl) {
+            setTxt(gTwistlockEl, "gTrTw", `TWISTLOCK: ${twistLabel}`);
+            gTwistlockEl.className = twistLocked ? "hb-ground-status-item active-lights" : "hb-ground-status-item";
+          }
+          if (gArticulationEl) {
+            const artText = isCrit
+              ? `JACKKNIFE! ${artSignedDeg}°`
+              : (isCaution ? `JACKKNIFE WARN ${artSignedDeg}°` : `ARTIC: ${artSignedDeg}°`);
+            setTxt(gArticulationEl, "gTrArt", artText);
+            gArticulationEl.className = isCrit
+              ? "hb-ground-status-item crit"
+              : (isCaution ? "hb-ground-status-item caution" : "hb-ground-status-item");
+          }
+        } else if (gTrailerBarEl) {
+          setStyle(gTrailerBarEl, "display", "gTrBar", "none");
+        }
+
         const isPassenger = localSeat > 0;
-        const keybindStr = isPassenger ? GROUND_PAX_KEYBIND_TEXT : GROUND_DRIVER_KEYBIND_TEXT;
+        const keybindStr = isSemi
+          ? (isPassenger ? SEMI_PAX_KEYBIND_TEXT : SEMI_DRIVER_KEYBIND_TEXT)
+          : (isPassenger ? GROUND_PAX_KEYBIND_TEXT : GROUND_DRIVER_KEYBIND_TEXT);
         setTxt(gKeybindEl, "gKeys", keybindStr);
 
         // Mirror summary to el.textContent for fake-DOM test harness
@@ -675,14 +789,19 @@ export function createVehicleOsd(deps = {}) {
             return `[${lbl}: Empty]`;
           }).join(" ");
           const statusSummary = `${lights ? "[LIGHTS]" : "LIGHTS"} ${brake ? "[BRAKE]" : "BRAKE"} ${horn ? "[HORN]" : "HORN"}`;
-          const fourWdStr = boost ? "  [4WD LOW]" : "";
+          const fourWdStr = boost ? (isSemi ? "  [LOW RANGE]" : "  [4WD LOW]") : "";
           const summaryLines = [
-            `${s.name || "Willys MB"}  ${gear}${fourWdStr}`,
+            `${s.name || (isSemi ? "Ironhorse 379" : "Willys MB")}  ${gear}${fourWdStr}`,
             `SPEED: ${mph} MPH (${kmh} km/h)   GEAR: ${gear}${fourWdStr}   RPM: ${rpm}`,
             `TRACTION: [${surfName}]   STATUS: ${statusSummary}`,
-            `CREW: ${crewSummary}`,
-            keybindStr,
           ];
+          if (isSemi) {
+            summaryLines.push(`CREW (1-2): ${crewSummary}`);
+            summaryLines.push(`TRAILER: [${coupledLabel}]   TWISTLOCK: [${twistLabel}]   ARTIC: ${artSignedDeg}°${artWarnTag}`);
+          } else {
+            summaryLines.push(`CREW: ${crewSummary}`);
+          }
+          summaryLines.push(keybindStr);
           const summary = summaryLines.join("\n");
           if (summary !== last.text) {
             last.text = summary;
@@ -960,6 +1079,11 @@ export function createVehicleOsd(deps = {}) {
       gRpmFillEl = null;
       gSurfaceBadgeEl = null;
       gSeatCards = [];
+      gCrewTitleEl = null;
+      gTrailerBarEl = null;
+      gTrailerCoupledEl = null;
+      gTwistlockEl = null;
+      gArticulationEl = null;
       gLightsEl = null;
       gBrakeEl = null;
       gHornEl = null;

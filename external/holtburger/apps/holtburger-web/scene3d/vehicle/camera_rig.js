@@ -45,6 +45,29 @@ export const DEFAULT_GROUND_CHASE = Object.freeze({
 });
 
 /**
+ * Class 8 Conventional Semi-Tractor ("Ironhorse 379") chase camera configuration:
+ * elevated framing over sleeper/headache rack & fifth-wheel (10.8m back, 3.8m up, 12.0m lookAhead, 64° base FOV).
+ */
+export const DEFAULT_SEMI_CHASE = Object.freeze({
+  back: 10.8,
+  up: 3.8,
+  lookAhead: 12.0,
+  pitch: -0.08,
+  fov: 64,
+  headingTau: 0.20,
+  pitchTau: 0.14,
+  rollTau: 0.14,
+  groundClear: 0.9,
+  groundAttackTau: 0.05,
+  groundReleaseTau: 0.24,
+});
+
+export const SEMI_TRAILER_CHASE = Object.freeze({
+  "20ft": Object.freeze({ back: 17.5, up: 3.8 }),
+  "40ft": Object.freeze({ back: 22.5, up: 5.6 }),
+});
+
+/**
  * Seated eye offset in the F6F Hellcat cockpit:
  * seat z (2.34 m) + up (1.24 m) = 3.58 m — aligns eye directly through the armored windscreen
  * and Mk 8 Reflector Gunsight (z ≈ 3.56..3.58 m).
@@ -65,6 +88,14 @@ export const GROUND_CAB_EYES = Object.freeze([
 ]);
 
 /**
+ * Calibrated 2-seat Day-Cab eye anchors for semi-379 (seat cushion z=1.72 + 0.68 = 2.40 m).
+ */
+export const SEMI_CAB_EYES = Object.freeze([
+  Object.freeze({ right: -0.52, forward: 0.28, up: 2.40, fov: 70 }),
+  Object.freeze({ right:  0.52, forward: 0.28, up: 2.40, fov: 70 }),
+]);
+
+/**
  * Over-the-cowling / gun-camera view: Sea-Blue radial nose, spinning prop disc, and wing gunfire in periphery.
  */
 export const HOOD_EYE = Object.freeze({ right: 0, forward: 1.28, up: 1.10, fov: 74 });
@@ -73,6 +104,21 @@ export const HOOD_EYE = Object.freeze({ right: 0, forward: 1.28, up: 1.10, fov: 
  * Hood-star rally camera for Willys MB ground vehicle: [0, +0.55, +1.18], FOV 66°.
  */
 export const GROUND_HOOD_EYE = Object.freeze({ right: 0, forward: 0.55, up: 1.18, fov: 66 });
+
+/**
+ * Long-hood cowl camera for semi-379: [0, +1.55, +2.18], FOV 66°.
+ */
+export const SEMI_HOOD_EYE = Object.freeze({ right: 0, forward: 1.55, up: 2.18, fov: 66 });
+
+function normalizeTrailerKind(k) {
+  if (k === "40ft" || k === 40 || k === 14 || k === 4000031 || k === "Chassis40ft" || k === "TrailerChassis40") {
+    return "40ft";
+  }
+  if (k === "20ft" || k === 20 || k === 13 || k === 4000030 || k === "Chassis20ft" || k === "TrailerChassis20") {
+    return "20ft";
+  }
+  return null;
+}
 
 const TWO_PI = 2 * Math.PI;
 const G_MIN = -2.5;
@@ -169,6 +215,9 @@ export function createPilotCameraRig(opts = {}) {
 
   let view = VIEW_MODES.includes(opts.initialView) ? opts.initialView : "chase";
   let seatIndex = opts.seatIndex ?? 0;
+  let activeTrailerKind = normalizeTrailerKind(opts.hitchedTrailerKind ?? null);
+  let chaseBack = null;
+  let chaseUp = null;
   let camHeading = null;
   let camPitch = null;
   let camRoll = null;
@@ -204,6 +253,8 @@ export function createPilotCameraRig(opts = {}) {
     camPitch = null;
     camRoll = null;
     camLift = 0;
+    chaseBack = null;
+    chaseUp = null;
     longLag = 0;
     fovBoost = 0;
     gLoad = 1.0;
@@ -252,10 +303,24 @@ export function createPilotCameraRig(opts = {}) {
     seatIndex: stepSeatIndex = null,
     collisionJolt = 0,
     jolt = 0,
+    hitchedTrailerKind = undefined,
+    vehicleClass = undefined,
+    profileKey = undefined,
   }) {
     const stepDt = Number.isFinite(dt) ? clamp(dt, 0, 0.25) : 0;
     const isGround = (params?.locomotion === 2) || (opts.locomotion === 2);
-    const curSeat = clamp(Math.round(stepSeatIndex ?? (controlsStatus?.seatIndex ?? seatIndex)), 0, 3);
+    const effVehicleClass = vehicleClass ?? params?.vehicleClass ?? opts.vehicleClass ?? 0;
+    const effProfileKey = profileKey ?? params?.profileKey ?? opts.profileKey ?? "";
+    const isHeavySemi = effVehicleClass === 3 || effProfileKey === "semi-379";
+    const vMaxGround = (Number.isFinite(params?.vMaxRoad) && params.vMaxRoad > 0)
+      ? params.vMaxRoad
+      : ((Number.isFinite(params?.vMax) && params.vMax > 0) ? params.vMax : (isHeavySemi ? 27.0 : 29.0));
+    const trailerKind = normalizeTrailerKind(
+      hitchedTrailerKind !== undefined
+        ? hitchedTrailerKind
+        : (pose?.hitchedTrailerKind ?? params?.hitchedTrailerKind ?? activeTrailerKind ?? opts.hitchedTrailerKind),
+    );
+    const curSeat = clamp(Math.round(stepSeatIndex ?? (controlsStatus?.seatIndex ?? seatIndex)), 0, isHeavySemi ? 1 : 3);
     const joltIn = Number(collisionJolt) || Number(jolt) || 0;
     if (joltIn > 0) triggerJolt(joltIn);
 
@@ -317,7 +382,7 @@ export function createPilotCameraRig(opts = {}) {
     const vCruise = Number.isFinite(params?.vCruise) && params.vCruise > 0 ? params.vCruise : 83;
     if (isGround) {
       const groundSpeed = Math.abs(speed);
-      const speedFrac = clamp(groundSpeed / 29.0, 0, 1);
+      const speedFrac = clamp(groundSpeed / vMaxGround, 0, 1);
       const wantFovBoost = speedFrac * 6.0;
       const aFov = stepDt > 0 ? 1 - Math.exp(-stepDt / 0.16) : 1;
       fovBoost += (wantFovBoost - fovBoost) * aFov;
@@ -344,10 +409,11 @@ export function createPilotCameraRig(opts = {}) {
       headRollLag += (clamp(-rollRateActual * 0.035, -0.06, 0.06) - headRollLag) * aHead;
 
       if (isGround) {
-        const cabEye = GROUND_CAB_EYES[curSeat] || GROUND_CAB_EYES[0];
+        const cabEyes = isHeavySemi ? SEMI_CAB_EYES : GROUND_CAB_EYES;
+        const cabEye = cabEyes[curSeat] || cabEyes[0];
         // Seats 2 & 3: rear bench looking forward past front seats with unconstrained head-turn (±155° yaw, ±65° pitch)
-        const maxYaw = (curSeat === 2 || curSeat === 3) ? (155 * Math.PI / 180) : (155 * Math.PI / 180);
-        const maxPitch = (curSeat === 2 || curSeat === 3) ? (65 * Math.PI / 180) : (65 * Math.PI / 180);
+        const maxYaw = 155 * Math.PI / 180;
+        const maxPitch = 65 * Math.PI / 180;
         const boundedFlYaw = clamp(flYaw, -maxYaw, maxYaw);
         const boundedFlPitch = clamp(flPitch, -maxPitch, maxPitch);
 
@@ -373,15 +439,16 @@ export function createPilotCameraRig(opts = {}) {
       }
     } else if (view === "hood") {
       if (isGround) {
+        const hoodEye = isHeavySemi ? SEMI_HOOD_EYE : GROUND_HOOD_EYE;
         const qPose = FM.orientation(p.heading || 0, p.pitch || 0, p.bank || 0);
-        const eye = FM.rotate(qPose, [GROUND_HOOD_EYE.right, GROUND_HOOD_EYE.forward, GROUND_HOOD_EYE.up + bumpOffset]);
+        const eye = FM.rotate(qPose, [hoodEye.right, hoodEye.forward, hoodEye.up + bumpOffset]);
         camPos = [p.x + eye[0], p.y + eye[1], p.z + eye[2] + joltEnv * 0.06];
         const qHead = FM.orientation(flYaw, flPitch + joltPitch, joltRoll);
         const hpr = hprFromQuat(qMul(qPose, qHead), (p.heading || 0) + flYaw, p.bank || 0);
         camH = hpr.h;
         camP = hpr.p;
         camR = hpr.r;
-        baseFov = GROUND_HOOD_EYE.fov;
+        baseFov = hoodEye.fov;
       } else {
         const eye = FM.rotate(qSeat, [HOOD_EYE.right, HOOD_EYE.forward, HOOD_EYE.up]);
         camPos = [sx + eye[0], sy + eye[1], sz + eye[2]];
@@ -395,7 +462,23 @@ export function createPilotCameraRig(opts = {}) {
       }
     } else {
       // Dynamic "chase" mode
-      const activeCfg = isGround ? { ...DEFAULT_GROUND_CHASE, ...(opts.chaseCfg || {}) } : cfg;
+      const baseGroundCfg = isHeavySemi ? DEFAULT_SEMI_CHASE : DEFAULT_GROUND_CHASE;
+      const activeCfg = isGround ? { ...baseGroundCfg, ...(opts.chaseCfg || {}) } : cfg;
+      const trailerZoom = (isGround && isHeavySemi && trailerKind) ? SEMI_TRAILER_CHASE[trailerKind] : null;
+      const wantBack = trailerZoom ? trailerZoom.back : activeCfg.back;
+      const wantUp = trailerZoom ? trailerZoom.up : activeCfg.up;
+      if (chaseBack === null || chaseUp === null || !Number.isFinite(chaseBack) || !Number.isFinite(chaseUp)) {
+        chaseBack = wantBack;
+        chaseUp = wantUp;
+      } else if (stepDt > 0) {
+        const aZoom = 1 - Math.exp(-stepDt / 0.35);
+        chaseBack += (wantBack - chaseBack) * aZoom;
+        chaseUp += (wantUp - chaseUp) * aZoom;
+      } else {
+        chaseBack = wantBack;
+        chaseUp = wantUp;
+      }
+
       const hdg = p.heading || 0;
       if (camHeading === null || !Number.isFinite(camHeading)) {
         camHeading = FM.wrapHeading(hdg);
@@ -414,8 +497,8 @@ export function createPilotCameraRig(opts = {}) {
       const aLag = stepDt > 0 ? 1 - Math.exp(-stepDt / 0.18) : 1;
       longLag += (wantLag - longLag) * aLag;
 
-      const rawBack = (camTweak?.back ?? activeCfg.back) + (camTweak ? 0 : longLag);
-      const rawUp = camTweak?.up ?? activeCfg.up;
+      const rawBack = (camTweak?.back ?? (isGround ? chaseBack : activeCfg.back)) + (camTweak ? 0 : longLag);
+      const rawUp = camTweak?.up ?? (isGround ? chaseUp : activeCfg.up);
       const orbitAz = camHeading + (camTweak?.yaw ?? 0) + flYaw;
 
       let horizBack = rawBack;
@@ -453,12 +536,12 @@ export function createPilotCameraRig(opts = {}) {
         camH = FM.wrapHeading(orbitAz);
         camP = camTweak.pitch ?? -Math.atan2(ez - sz, Math.max(0.1, horizBack));
         camR = camTweak.roll ?? 0;
-        baseFov = camTweak.fov ?? (isGround ? 62 : activeCfg.fov);
+        baseFov = camTweak.fov ?? activeCfg.fov;
       } else {
         const flMag = Math.hypot(flYaw, flPitch);
         const flBlend = clamp(flMag / 0.55, 0, 1);
         const speedScale = isGround
-          ? (p.mode === FM.MODE.PARKED ? 0.35 : clamp(0.5 + (speed / 29.0) * 0.5, 0.5, 1.0))
+          ? (p.mode === FM.MODE.PARKED ? 0.35 : clamp(0.5 + (speed / vMaxGround) * 0.5, 0.5, 1.0))
           : (p.mode === FM.MODE.PARKED ? 0.25 : clamp(0.4 + (speed / Math.max(20, vCruise)) * 0.6, 0.4, 1.2));
         const leadDist = Math.max(0, activeCfg.lookAhead) * speedScale * (1 - flBlend);
 
@@ -490,7 +573,7 @@ export function createPilotCameraRig(opts = {}) {
           ? geomPitch * flBlend + pitchBlend * (1 - flBlend)
           : pitchBlend) + joltPitch;
         camR = (isGround ? (camRoll * 0.25 * (1 - flBlend)) : (camRoll * 0.48 * (1 - flBlend))) + joltRoll;
-        baseFov = isGround ? 62 : activeCfg.fov;
+        baseFov = activeCfg.fov;
       }
     }
 
@@ -572,7 +655,7 @@ export function createPilotCameraRig(opts = {}) {
 
     const finalFov = camTweak && Number.isFinite(camTweak.fov)
       ? camTweak.fov
-      : (isGround ? (view === "cockpit" ? baseFov : (view === "hood" ? 66 : (62 + 6.0 * clamp(Math.abs(speed) / 29.0, 0, 1)))) : baseFov + fovBoost);
+      : (isGround ? (view === "cockpit" ? baseFov : (view === "hood" ? baseFov : (baseFov + 6.0 * clamp(Math.abs(speed) / vMaxGround, 0, 1)))) : baseFov + fovBoost);
 
     prevPose = {
       x: p.x || 0,
@@ -608,5 +691,7 @@ export function createPilotCameraRig(opts = {}) {
     triggerJolt,
     setSeatIndex(idx) { seatIndex = clamp(Math.round(idx || 0), 0, 3); },
     getSeatIndex: () => seatIndex,
+    setHitchedTrailerKind(k) { activeTrailerKind = normalizeTrailerKind(k); },
+    getHitchedTrailerKind: () => activeTrailerKind,
   };
 }

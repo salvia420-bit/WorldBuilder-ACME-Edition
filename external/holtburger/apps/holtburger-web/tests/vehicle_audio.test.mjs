@@ -1224,6 +1224,401 @@ check("7.10 Post-dispose robustness & null guard: horn/jolt allocate 0 nodes, st
 });
 
 // ---------------------------------------------------------------------------
+// 8. 15L I6 Turbo-Diesel Semi-379 Soundscape (Jake Brake, Hadley Horn, Air Brake Hiss)
+// ---------------------------------------------------------------------------
+
+check("8.1 DIESEL_I6_AUDIO_TUNING is frozen; computeDieselI6EngineParams produces 24..78 Hz rumble, 1.4..3.2 kHz turbo, and 5-speed cadence", () => {
+  assert.ok(Object.isFrozen(V.DIESEL_I6_AUDIO_TUNING), "DIESEL_I6_AUDIO_TUNING is frozen");
+
+  for (const hostile of [
+    {},
+    null,
+    undefined,
+    { speed: NaN, throttle: NaN, boost: "yes", handbrake: 42 },
+    { speed: Infinity, throttle: -5 },
+    { speed: -Infinity, throttle: 100 },
+    { speed: -999, throttle: 0.5 },
+    { speed: 999, throttle: 1.0 },
+  ]) {
+    const p = V.computeDieselI6EngineParams(hostile);
+    assert.ok(Number.isFinite(p.rpm) && p.rpm >= 600 && p.rpm <= 2100, `diesel rpm in [600, 2100]: ${p.rpm}`);
+    assert.ok(Number.isFinite(p.rumbleHz) && p.rumbleHz >= 24 && p.rumbleHz <= 78, `rumbleHz in [24, 78]: ${p.rumbleHz}`);
+    assert.ok(Number.isFinite(p.turboHz) && p.turboHz >= 1400 && p.turboHz <= 3200, `turboHz in [1400, 3200]: ${p.turboHz}`);
+    assert.ok(Number.isFinite(p.jakeGain) && p.jakeGain >= 0, `finite jakeGain ${p.jakeGain}`);
+    assert.ok(Number.isFinite(p.gear) && p.gear >= -1 && p.gear <= 5, `gear in [-1, 5]: ${p.gear}`);
+  }
+
+  const idle = V.computeDieselI6EngineParams({ speed: 0, throttle: 0 });
+  assert.equal(idle.gear, 0);
+  near(idle.rumbleHz, 24, 1e-4, "idle rumble 24 Hz");
+  assert.equal(idle.jakeGain, 0);
+
+  const pull = V.computeDieselI6EngineParams({ speed: 26.5, throttle: 1.0 });
+  assert.equal(pull.gear, 5, "5th gear at 26.5 m/s");
+  assert.ok(pull.rumbleHz >= 70 && pull.rumbleHz <= 78, `high load rumble ${pull.rumbleHz}`);
+  assert.ok(pull.turboGain > 0.10 && pull.turboHz > 2600, `turbo spooling at ${pull.turboHz} Hz`);
+  assert.equal(pull.jakeGain, 0, "Jake brake off under throttle");
+
+  const lowRange = V.computeDieselI6EngineParams({ speed: 4.0, throttle: 0.5, boost: true });
+  const hiRange = V.computeDieselI6EngineParams({ speed: 4.0, throttle: 0.5, boost: false });
+  assert.ok(lowRange.rpm > hiRange.rpm, "low range splitter increases RPM");
+});
+
+check("8.2 Jake brake triggers strictly off-throttle (> 8 m/s && throttle < 0.08)", () => {
+  const slow = V.computeDieselI6EngineParams({ speed: 7.5, throttle: 0.0 });
+  assert.equal(slow.jakeGain, 0, "Jake brake inactive <= 8 m/s");
+
+  const onThrottle = V.computeDieselI6EngineParams({ speed: 18.0, throttle: 0.15 });
+  assert.equal(onThrottle.jakeGain, 0, "Jake brake inactive when throttle >= 0.08");
+
+  const jake = V.computeDieselI6EngineParams({ speed: 20.0, throttle: 0.0 });
+  assert.ok(jake.jakeGain > 0.14 && jake.jakeRateHz >= 12 && jake.jakeRateHz <= 30, `Jake brake active (${jake.jakeGain}, ${jake.jakeRateHz} Hz)`);
+});
+
+check("8.3 Semi-379 diesel graph: PeriodicWave, turbo high-Q bandpass, Jake LFO, Hadley 185+233 Hz horn, dynamic switching & MinimalFakeCtx safety", () => {
+  const bus = makeBus();
+  const au = V.createGroundVehicleAudio({ bus, vehicleClass: 0, profileKey: "jeep-mb" });
+  au.start();
+  assert.equal(au.getVehicleClass(), 0);
+
+  // Switch dynamically to semi-379 (vehicleClass: 3)
+  au.update({ vehicleClass: 3, profileKey: "semi-379", speed: 18, throttle: 0.9 });
+  assert.equal(au.getVehicleClass(), 3);
+  assert.equal(au.stats.vehicleClass, 3);
+
+  const hadleyOsc1 = bus.ctx.made.find((n) => n.kind === "osc" && n.frequency.value === 185);
+  const hadleyOsc2 = bus.ctx.made.find((n) => n.kind === "osc" && n.frequency.value === 233);
+  assert.ok(hadleyOsc1 && hadleyOsc2, "dual-tone Hadley air horn oscillators (185 + 233 Hz)");
+
+  const turboBp = bus.ctx.made.find((n) => n.kind === "biquad" && n.type === "bandpass" && n.Q.value === 9.0);
+  assert.ok(turboBp, "high-Q turbocharger bandpass filter present");
+
+  au.horn(true);
+  au.horn(false);
+  au.update({ vehicleClass: 3, speed: 22, throttle: 0.0 }); // Jake brake active
+  au.dispose();
+  assert.ok(bus.ctx.made.every((n) => n.connections.length === 0), "0 leaked nodes after semi audio dispose");
+
+  // MinimalFakeCtx compatibility (no createPeriodicWave / createWaveShaper / linearRampToValueAtTime)
+  const minBus = makeBus({ Ctx: MinimalFakeCtx });
+  const auMin = V.createGroundVehicleAudio({ bus: minBus, vehicleClass: 3, profileKey: "semi-379" });
+  assert.equal(auMin.start(), true);
+  auMin.update({ vehicleClass: 3, speed: 15, throttle: 0.8, horn: true, handbrake: true });
+  auMin.airBrakeHiss({ kind: "hitch" });
+  auMin.dispose();
+});
+
+check("8.4 Pneumatic air-brake exhaust hiss bursts on handbrake, stop edge, and hitch/unhitch events with 0 leaks", () => {
+  const bus = makeBus();
+  let t = 50.0;
+  const au = V.createGroundVehicleAudio({ bus, vehicleClass: 3, profileKey: "semi-379", clock: () => t });
+  au.start();
+
+  // Moving without handbrake
+  bus.ctx.currentTime = 50.0;
+  au.update({ vehicleClass: 3, speed: 10.0, throttle: 0.5, handbrake: false, hitchedTrailerGuid: 0 });
+  const beforeBrakeCount = bus.ctx.made.length;
+
+  // Handbrake engagement triggers hiss
+  t = 50.5;
+  bus.ctx.currentTime = 50.5;
+  au.update({ vehicleClass: 3, speed: 9.0, throttle: 0.0, handbrake: true, hitchedTrailerGuid: 0 });
+  assert.ok(bus.ctx.made.length > beforeBrakeCount, "handbrake engagement spawns air-brake hiss burst");
+
+  // Release handbrake and roll, then come to a stop -> stop-edge hiss
+  t = 51.0;
+  bus.ctx.currentTime = 51.0;
+  au.update({ vehicleClass: 3, speed: 5.0, throttle: 0.0, handbrake: false, hitchedTrailerGuid: 0 });
+  const beforeStopCount = bus.ctx.made.length;
+  t = 51.6;
+  bus.ctx.currentTime = 51.6;
+  au.update({ vehicleClass: 3, speed: 0.1, throttle: 0.0, handbrake: false, hitchedTrailerGuid: 0 });
+  assert.ok(bus.ctx.made.length > beforeStopCount, "stop edge spawns air-brake exhaust hiss");
+
+  // Explicit hitch & unhitch hiss
+  const beforeHitchCount = bus.ctx.made.length;
+  assert.equal(au.airBrakeHiss({ kind: "hitch" }), true);
+  assert.equal(au.airBrakeHiss({ kind: "unhitch" }), true);
+  assert.ok(bus.ctx.made.length > beforeHitchCount + 2, "hitch/unhitch hiss + metallic latch nodes created");
+
+  au.dispose();
+  assert.equal(au.stats.activeOneShots, 0, "all hiss one-shots cleaned on dispose");
+  assert.ok(bus.ctx.made.every((n) => n.connections.length === 0), "0 leaked nodes after hiss dispose");
+});
+
+check("8.5 3D observer Doppler pool supports semi-379 (vehicleClass: 3)", () => {
+  const bus = makeBus();
+  const au = V.createGroundVehicleAudio({ bus });
+  au.start();
+  const beforeObsCount = bus.ctx.made.length;
+
+  au.updateObservers(
+    [{ id: 777, pos: [0, 35, 0], vel: [0, -20, 0], speed: 20, throttle: 0.9, vehicleClass: 3, profileKey: "semi-379" }],
+    [0, 0, 0],
+    [0, 0, 0],
+    1 / 60,
+  );
+  assert.equal(au.stats.observerCount, 1, "semi observer voice created");
+  const obsOsc = bus.ctx.made.slice(beforeObsCount).find((n) => n.kind === "osc" && n.type === "sawtooth");
+  const staticRumble = V.computeDieselI6EngineParams({ speed: 20, throttle: 0.9 }).rumbleHz;
+  assert.ok(obsOsc && obsOsc.frequency.value > staticRumble, `semi observer rumble shifted with Doppler (${obsOsc?.frequency?.value} > ${staticRumble})`);
+
+  au.dispose();
+  assert.ok(bus.ctx.made.every((n) => n.connections.length === 0), "0 leaked observer nodes");
+});
+
+check("8.6 Minimal WebAudio context without createBiquadFilter, setVehicleClass hiss reset, and airBrakeHiss 0.15s cooldown", () => {
+  // Minimal context lacking createBiquadFilter (makeFilter returns null)
+  const made = [];
+  const bareCtx = {
+    currentTime: 10.0,
+    sampleRate: 48000,
+    destination: { kind: "dest" },
+    createGain() {
+      const n = {
+        kind: "gain",
+        gain: { value: 1, setValueAtTime() {}, linearRampToValueAtTime() {}, exponentialRampToValueAtTime() {}, setTargetAtTime() {}, cancelScheduledValues() {} },
+        connect() {},
+        disconnect() {},
+      };
+      made.push(n);
+      return n;
+    },
+    createOscillator() {
+      const n = {
+        kind: "osc",
+        type: "sine",
+        frequency: { value: 0, setValueAtTime() {}, linearRampToValueAtTime() {}, exponentialRampToValueAtTime() {}, setTargetAtTime() {}, cancelScheduledValues() {} },
+        connect() {},
+        disconnect() {},
+        start() {},
+        stop() {},
+      };
+      made.push(n);
+      return n;
+    },
+    createBuffer(ch, len) { return { getChannelData: () => new Float32Array(len) }; },
+    createBufferSource() {
+      const n = { kind: "bufsrc", buffer: null, loop: false, connect() {}, disconnect() {}, start() {}, stop() {} };
+      made.push(n);
+      return n;
+    },
+  };
+  const bareBus = { ctx: bareCtx, node: bareCtx.createGain(), sliderGain: () => 1, isActive: () => true };
+  const auBare = V.createGroundVehicleAudio({ bus: bareBus, vehicleClass: 0, profileKey: "jeep-mb" });
+  assert.doesNotThrow(() => {
+    auBare.start();
+    auBare.update({ vehicleClass: 0, speed: 12, throttle: 0.7, handbrake: true, lateralSlip: 0.4 });
+    auBare.update({ vehicleClass: 3, profileKey: "semi-379", speed: 18, throttle: 0.9, handbrake: true, lateralSlip: 0.4 });
+  }, "update() handles null biquad filters safely on both L134 and Diesel graphs");
+  auBare.dispose();
+
+  // setVehicleClass resets prevHitchedGuid/prevAbsSpeed/prevHandbrake + airBrakeHiss 0.15s cooldown
+  const bus = makeBus();
+  let now = 20.0;
+  bus.ctx.currentTime = 20.0;
+  const au = V.createGroundVehicleAudio({ bus, vehicleClass: 3, profileKey: "semi-379", clock: () => now });
+  au.start();
+
+  // Prime state on hitched moving semi with handbrake
+  au.update({ vehicleClass: 3, speed: 12, handbrake: true, hitchedTrailerGuid: 500 });
+  // Switch Semi -> Jeep -> bobtail Semi
+  au.setVehicleClass(0, "jeep-mb");
+  au.setVehicleClass(3, "semi-379");
+  const beforeSwitchUpdate = bus.ctx.made.length;
+  now = 20.5;
+  bus.ctx.currentTime = 20.5;
+  au.update({ vehicleClass: 3, speed: 0, handbrake: false, hitchedTrailerGuid: 0 });
+  assert.equal(bus.ctx.made.length, beforeSwitchUpdate, "setVehicleClass reset prevents spurious stop/unhitch airBrakeHiss");
+
+  // Same-tick Event 19 + hitchedTrailerGuid transition does not double-fire within 0.15s
+  now = 21.0;
+  bus.ctx.currentTime = 21.0;
+  assert.equal(au.airBrakeHiss({ kind: "hitch" }), true, "first hitch hiss fires");
+  assert.equal(au.airBrakeHiss({ kind: "hitch" }), false, "duplicate hitch hiss within 0.15s blocked");
+  const afterEventHiss = bus.ctx.made.length;
+  au.update({ vehicleClass: 3, speed: 0, handbrake: false, hitchedTrailerGuid: 600 });
+  assert.equal(bus.ctx.made.length, afterEventHiss, "update() hitchedTrailerGuid transition suppressed by 0.15s cooldown");
+
+  // After >= 0.15s cooldown expires, next hitch/unhitch fires again
+  now = 21.20;
+  bus.ctx.currentTime = 21.20;
+  assert.equal(au.airBrakeHiss({ kind: "hitch" }), true, "hitch hiss allowed again after >= 0.15s");
+
+  au.dispose();
+});
+
+check("8.7 BareCtx suspensionJolt/updateObservers 0-leak cleanup & Jeep -> already-hitched Semi prevHitchedGuid=null guard", () => {
+  // Connection-tracking bareCtx (has createPanner, lacks createBiquadFilter)
+  const trackedNodes = [];
+  const trackParam = (v = 0) => ({
+    value: v,
+    setValueAtTime(val) { this.value = val; },
+    linearRampToValueAtTime(val) { this.value = val; },
+    exponentialRampToValueAtTime(val) { this.value = val; },
+    setTargetAtTime(val) { this.value = val; },
+    cancelScheduledValues() {},
+  });
+  const makeTrackedNode = (kind, extra = {}) => {
+    const n = {
+      kind,
+      connections: [],
+      connect(to) {
+        this.connections.push(to);
+        return to;
+      },
+      disconnect() {
+        this.connections.length = 0;
+      },
+      ...extra,
+    };
+    trackedNodes.push(n);
+    return n;
+  };
+  const bareCtx = {
+    currentTime: 30.0,
+    sampleRate: 48000,
+    destination: { kind: "dest" },
+    createGain() {
+      return makeTrackedNode("gain", { gain: trackParam(1) });
+    },
+    createOscillator() {
+      return makeTrackedNode("osc", {
+        type: "sine",
+        frequency: trackParam(0),
+        onended: null,
+        start() {},
+        stop() {},
+      });
+    },
+    createBuffer(ch, len) { return { getChannelData: () => new Float32Array(len) }; },
+    createBufferSource() {
+      return makeTrackedNode("bufsrc", { buffer: null, loop: false, onended: null, start() {}, stop() {} });
+    },
+    createPanner() {
+      return makeTrackedNode("panner", {
+        panningModel: "equalpower",
+        distanceModel: "inverse",
+        refDistance: 1,
+        rolloffFactor: 1,
+        maxDistance: 10000,
+        positionX: trackParam(0),
+        positionY: trackParam(0),
+        positionZ: trackParam(0),
+      });
+    },
+  };
+  const bareBus = { ctx: bareCtx, node: bareCtx.createGain(), sliderGain: () => 1, isActive: () => true };
+  trackedNodes.length = 0;
+
+  let tBare = 30.0;
+  const auBare = V.createGroundVehicleAudio({ bus: bareBus, vehicleClass: 0, profileKey: "jeep-mb", clock: () => tBare });
+  assert.doesNotThrow(() => {
+    assert.equal(auBare.start(), true);
+    assert.equal(auBare.suspensionJolt({ intensity: 1.0 }), true, "suspensionJolt succeeds without createBiquadFilter");
+    auBare.update({ roughness: 0.9, speed: 12, throttle: 0.7, handbrake: true, lateralSlip: 0.4 });
+    auBare.updateObservers(
+      [{ id: 88, pos: [0, 30, 0], speed: 15, vehicleClass: 3 }],
+      [0, 0, 0],
+      [0, 0, 0],
+      1 / 60,
+    );
+  }, "suspensionJolt & updateObservers handle missing createBiquadFilter without throwing");
+  assert.equal(auBare.stats.observerCount, 1, "observer voice created without biquad filter");
+  auBare.dispose();
+  assert.equal(auBare.stats.activeOneShots, 0, "all one-shots cleaned on bareCtx dispose");
+  assert.ok(trackedNodes.every((n) => n.connections.length === 0), "0 leaked connections after bareCtx dispose");
+
+  // Jeep -> already-hitched Semi transition: prevHitchedGuid=null suppresses spurious hitch hiss on frame 1
+  const bus = makeBus();
+  let t = 40.0;
+  bus.ctx.currentTime = 40.0;
+  const au = V.createGroundVehicleAudio({ bus, vehicleClass: 0, profileKey: "jeep-mb", clock: () => t });
+  au.start();
+  au.update({ vehicleClass: 0, profileKey: "jeep-mb", speed: 5 });
+
+  // Switch dynamically to an already-hitched Semi
+  au.update({ vehicleClass: 3, profileKey: "semi-379", speed: 10, hitchedTrailerGuid: 9002 });
+  assert.equal(au.stats.activeOneShots, 0, "frame 1 after Jeep -> already-hitched Semi emits zero hitch one-shots");
+
+  // Frame 2: unhitch -> unhitch hiss fires normally
+  t = 40.5;
+  bus.ctx.currentTime = 40.5;
+  au.update({ vehicleClass: 3, profileKey: "semi-379", speed: 10, hitchedTrailerGuid: 0 });
+  assert.ok(au.stats.activeOneShots > 0, "frame 2 unhitch triggers airBrakeHiss");
+
+  au.dispose();
+  assert.ok(bus.ctx.made.every((n) => n.connections.length === 0), "0 leaked nodes after transition test");
+});
+
+check("8.8 stop() resets edge-detection state (0 spurious hiss on re-board) and airBrakeHiss/suspensionJolt throw cleanup leaves 0 leaks", async () => {
+  // 1) stop() -> re-board regression
+  const bus = makeBus();
+  let t = 60.0;
+  bus.ctx.currentTime = t;
+  const au = V.createGroundVehicleAudio({ bus, vehicleClass: 3, profileKey: "semi-379", clock: () => t });
+  au.start();
+
+  // Prime state on a moving hitched semi with handbrake released
+  au.update({ vehicleClass: 3, profileKey: "semi-379", speed: 15, handbrake: false, hitchedTrailerGuid: 0x80091002 });
+  au.stop();
+
+  t = 65.0;
+  bus.ctx.currentTime = t;
+  const bufSrcBefore = bus.ctx.made.filter((n) => n.kind === "bufsrc").length;
+  const oneShotsBefore = au.stats.activeOneShots;
+  // Re-board a parked, handbrake-set, bobtail semi
+  au.update({ vehicleClass: 3, profileKey: "semi-379", speed: 0, handbrake: true, hitchedTrailerGuid: 0 });
+  const bufSrcAfter = bus.ctx.made.filter((n) => n.kind === "bufsrc").length;
+  assert.equal(bufSrcAfter - bufSrcBefore, 0, "stop() prevents spurious stop/unhitch/handbrake airBrakeHiss on re-board");
+  assert.equal(au.stats.activeOneShots, oneShotsBefore, "0 spurious activeOneShots after re-board");
+  au.dispose();
+
+  // 2) airBrakeHiss throw cleanup (0 leaked activeOneShots / connected nodes)
+  const busThrow = makeBus();
+  let tThrow = 70.0;
+  busThrow.ctx.currentTime = tThrow;
+  const origCreateOsc = busThrow.ctx.createOscillator.bind(busThrow.ctx);
+  let throwOnNextOscStart = false;
+  busThrow.ctx.createOscillator = () => {
+    const osc = origCreateOsc();
+    const origStart = osc.start.bind(osc);
+    osc.start = (...args) => {
+      if (throwOnNextOscStart) {
+        throwOnNextOscStart = false;
+        throw new Error("injected osc start failure");
+      }
+      return origStart(...args);
+    };
+    return osc;
+  };
+
+  const auThrow = V.createGroundVehicleAudio({ bus: busThrow, vehicleClass: 3, profileKey: "semi-379", clock: () => tThrow });
+  auThrow.start();
+  const baseCount = busThrow.ctx.made.length;
+
+  throwOnNextOscStart = true;
+  assert.equal(auThrow.airBrakeHiss({ kind: "hitch" }), false, "airBrakeHiss returns false when osc.start throws");
+  assert.equal(auThrow.stats.activeOneShots, 0, "airBrakeHiss catch deletes shot from activeOneShots");
+  const hissNodes = busThrow.ctx.made.slice(baseCount);
+  assert.ok(hissNodes.length > 0, "airBrakeHiss created nodes before throwing");
+  assert.ok(hissNodes.every((n) => n.connections.length === 0), "airBrakeHiss catch disconnects all created nodes");
+
+  // 3) suspensionJolt throw cleanup (0 leaked activeOneShots / connected nodes)
+  tThrow = 72.0;
+  busThrow.ctx.currentTime = tThrow;
+  const joltBaseCount = busThrow.ctx.made.length;
+  throwOnNextOscStart = true;
+  assert.equal(auThrow.suspensionJolt({ intensity: 1.0 }), false, "suspensionJolt returns false when osc.start throws");
+  assert.equal(auThrow.stats.activeOneShots, 0, "suspensionJolt catch deletes shot from activeOneShots");
+  const joltNodes = busThrow.ctx.made.slice(joltBaseCount);
+  assert.ok(joltNodes.length > 0, "suspensionJolt created nodes before throwing");
+  assert.ok(joltNodes.every((n) => n.connections.length === 0), "suspensionJolt catch disconnects all created nodes");
+
+  auThrow.dispose();
+});
+
+// ---------------------------------------------------------------------------
 
 for (const p of pending) await p();
 fake.uninstall();

@@ -96,7 +96,15 @@ export function createVehicleControls(deps = {}) {
   const nav = deps.navigator ?? (win ? win.navigator : null);
   const ySign = deps.invertMouseY === true ? 1 : -1;
   let locomotion = deps.locomotion ?? 1;
-  let seatIndex = deps.seatIndex ?? 0;
+  let vehicleClass = deps.vehicleClass ?? 0;
+  let profileKey = deps.profileKey ?? "";
+  let explicitMaxSeats = Number.isFinite(deps.maxSeats) && deps.maxSeats > 0 ? Math.trunc(deps.maxSeats) : null;
+
+  const isHeavySemi = () => vehicleClass === 3 || profileKey === "semi-379";
+  const effectiveMaxSeats = () => explicitMaxSeats ?? (isHeavySemi() ? 2 : 4);
+  let seatIndex = Number.isFinite(deps.seatIndex)
+    ? clamp(Math.round(deps.seatIndex), 0, Math.max(0, effectiveMaxSeats() - 1))
+    : 0;
 
   const down = Object.create(null);
   for (const c of VEHICLE_KEY_CODES) down[c] = false;
@@ -307,14 +315,18 @@ export function createVehicleControls(deps = {}) {
       }
       if (code.startsWith("Digit")) {
         const seatIdx = parseInt(code.slice(5), 10) - 1;
-        if (seatIdx >= 0 && seatIdx <= 3) {
+        if (seatIdx >= 0 && seatIdx < effectiveMaxSeats()) {
           emit({ type: "seat", seatIndex: seatIdx }, "keyboard");
         }
       }
       if (code === "KeyG") {
         if (locomotion === 2) {
           if (seatIndex === 0) {
-            emit({ type: "windscreen", action: "toggle" }, "keyboard");
+            if (isHeavySemi()) {
+              emit({ type: "trailerHitch", action: "toggle" }, "keyboard");
+            } else {
+              emit({ type: "windscreen", action: "toggle" }, "keyboard");
+            }
           }
         } else {
           emit({ type: "cargo", action: "toggle" }, "keyboard");
@@ -538,7 +550,7 @@ export function createVehicleControls(deps = {}) {
    * @returns {{throttle:number, pitch:number, roll:number, yaw:number, boost:boolean, fire:boolean, land:boolean, missile:boolean, bomb:boolean}}
    */
   function poll(dt, flightState = null, params = null) {
-    const t = Math.max(0, Math.min(0.25, dt));
+    const t = Number.isFinite(dt) ? Math.max(0, Math.min(0.25, dt)) : 0;
     const maxBank = Number.isFinite(params?.maxBank) && params.maxBank > 0 ? params.maxBank : DEFAULT_MAX_BANK;
     const maxPitch = Number.isFinite(params?.maxPitch) && params.maxPitch > 0 ? params.maxPitch : DEFAULT_MAX_PITCH;
     const rollRate = Number.isFinite(params?.rollRate) && params.rollRate > 0 ? params.rollRate : DEFAULT_ROLL_RATE;
@@ -586,9 +598,21 @@ export function createVehicleControls(deps = {}) {
       };
     }
 
+    if (params?.vehicleClass !== undefined) vehicleClass = params.vehicleClass;
+    if (params?.profileKey !== undefined) profileKey = params.profileKey ?? "";
+    if (params?.maxSeats !== undefined) {
+      explicitMaxSeats = (Number.isFinite(params.maxSeats) && params.maxSeats > 0) ? Math.trunc(params.maxSeats) : null;
+    } else if (params?.vehicleClass !== undefined || params?.profileKey !== undefined) {
+      explicitMaxSeats = null;
+    }
+
     if (params?.locomotion === 2 || locomotion === 2) {
       locomotion = 2;
-      const currentSeat = (params?.seatIndex !== undefined) ? clamp(Math.round(params.seatIndex), 0, 3) : seatIndex;
+      const maxSeatIdx = Math.max(0, effectiveMaxSeats() - 1);
+      const fallbackSeat = Number.isFinite(seatIndex) ? clamp(Math.round(seatIndex), 0, maxSeatIdx) : 0;
+      const currentSeat = Number.isFinite(params?.seatIndex)
+        ? clamp(Math.round(params.seatIndex), 0, maxSeatIdx)
+        : fallbackSeat;
       seatIndex = currentSeat;
 
       // Passenger session (Seats 1..3): completely lock driving controls
@@ -597,6 +621,9 @@ export function createVehicleControls(deps = {}) {
         sticks.pitch = 0;
         sticks.roll = 0;
         sticks.yaw = 0;
+        latched.KeyG = false;
+        latched.KeyV = false;
+        latched.MouseMiddle = false;
         return {
           throttle: 0,
           pitch: 0,
@@ -650,14 +677,20 @@ export function createVehicleControls(deps = {}) {
         }
       }
 
-      // Speed-tapered steer with self-centering
-      const speedFrac = clamp(Math.abs(speed) / 29.0, 0, 1);
+      // Speed-tapered steer with self-centering (profile-aware)
+      const defaultVMax = isHeavySemi() ? 27.0 : 29.0;
+      const vMaxRoad = (Number.isFinite(params?.vMaxRoad) && params.vMaxRoad > 0)
+        ? params.vMaxRoad
+        : ((Number.isFinite(params?.vMax) && params.vMax > 0) ? params.vMax : defaultVMax);
+      const speedFrac = clamp(Math.abs(speed) / vMaxRoad, 0, 1);
       const steerTaper = 1.0 - speedFrac * 0.70; // 1.0 -> 0.30
       const rawSteer = (down.KeyD ? 1.0 : 0.0) - (down.KeyA ? 1.0 : 0.0);
       let targetSteer = rawSteer * steerTaper;
 
       // Slew rate & rack centering return rate
-      const slewRate = 5.2 - speedFrac * (5.2 - 2.6);
+      const slewLow = (Number.isFinite(params?.steerSlewRateLow) && params.steerSlewRateLow > 0) ? params.steerSlewRateLow : 5.2;
+      const slewHigh = (Number.isFinite(params?.steerSlewRateHigh) && params.steerSlewRateHigh > 0) ? params.steerSlewRateHigh : (slewLow * 0.5);
+      const slewRate = slewLow - speedFrac * (slewLow - slewHigh);
       const returnRate = (rawSteer === 0) ? Math.max(slewRate, 6.0) : slewRate;
 
       let boost = !!(down.ShiftLeft || down.ShiftRight);
@@ -694,6 +727,10 @@ export function createVehicleControls(deps = {}) {
       sticks.yaw += clamp(dSteer, -mSteer, mSteer);
       sticks.roll = sticks.yaw;
       sticks.pitch = 0;
+
+      latched.KeyG = false;
+      latched.KeyV = false;
+      latched.MouseMiddle = false;
 
       return {
         throttle,
@@ -841,6 +878,9 @@ export function createVehicleControls(deps = {}) {
       passenger: isPassenger,
       steer: sticks.yaw,
       locomotion,
+      maxSeats: effectiveMaxSeats(),
+      vehicleClass,
+      profileKey,
     };
   }
 
@@ -864,10 +904,27 @@ export function createVehicleControls(deps = {}) {
     },
     clearOverride() { override = null; },
     status,
-    setSeatIndex(idx) { seatIndex = clamp(Math.round(idx || 0), 0, 3); },
+    setSeatIndex(idx) {
+      const n = Number.isFinite(idx) ? Math.round(idx) : 0;
+      seatIndex = clamp(n, 0, Math.max(0, effectiveMaxSeats() - 1));
+    },
     getSeatIndex() { return seatIndex; },
     setLocomotion(loc) { locomotion = Number(loc) || 1; },
     getLocomotion() { return locomotion; },
+    setVehicleClass(vc) {
+      const next = Number(vc) || 0;
+      if (next !== vehicleClass) explicitMaxSeats = null;
+      vehicleClass = next;
+      seatIndex = clamp(seatIndex, 0, Math.max(0, effectiveMaxSeats() - 1));
+    },
+    getVehicleClass() { return vehicleClass; },
+    setProfileKey(pk) {
+      const next = pk ? String(pk) : "";
+      if (next !== profileKey) explicitMaxSeats = null;
+      profileKey = next;
+      seatIndex = clamp(seatIndex, 0, Math.max(0, effectiveMaxSeats() - 1));
+    },
+    getProfileKey() { return profileKey; },
     setHeadlights(val) { headlights = !!val; },
     getHeadlights() { return headlights; },
     dispose() {

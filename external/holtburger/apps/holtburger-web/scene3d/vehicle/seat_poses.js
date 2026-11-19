@@ -82,12 +82,46 @@ export const SEAT_CONSTANTS = Object.freeze({
   }),
 });
 
+export const SEMI_SEAT_CONSTANTS = Object.freeze({
+  seatOffsets: Object.freeze([
+    Object.freeze([-0.52, 0.28, 1.72]), // Seat 0 Driver
+    Object.freeze([ 0.52, 0.28, 1.72]), // Seat 1 Co-Driver
+  ]),
+  steeringWheelCenter: Object.freeze([-0.52, 0.76, 1.98]),
+  steeringWheelRadius: 0.24,
+  steeringWheelRakeRad: 30 * (Math.PI / 180),
+  dashGrabBarPos: Object.freeze([0.52, 0.90, 1.98]),
+});
+
+function isSemiProfile(src) {
+  return Boolean(src && (src.vehicleClass === 3 || src.profileKey === "semi-379" || src.Key === "semi-379"));
+}
+
 /**
- * Returns the local seat offset for a given seat index (0..3),
- * matching sculpted seat cushion heights.
+ * Returns the local seat offset for a given seat index,
+ * honoring profile-supplied seats/offsets or semi-379 cab dimensions, falling back to Jeep SEAT_CONSTANTS.
  */
-export function getSeatOffset(seatIndex) {
-  const idx = (typeof seatIndex === "number" && seatIndex >= 0 && seatIndex < 4) ? seatIndex : 0;
+export function getSeatOffset(seatIndex, profileOrOpts = null) {
+  const isSemi = isSemiProfile(profileOrOpts);
+  const maxSeats = Array.isArray(profileOrOpts?.seats) && profileOrOpts.seats.length > 0
+    ? profileOrOpts.seats.length
+    : (isSemi ? SEMI_SEAT_CONSTANTS.seatOffsets.length : SEAT_CONSTANTS.seatOffsets.length);
+  const idx = (typeof seatIndex === "number" && seatIndex >= 0 && seatIndex < maxSeats) ? Math.trunc(seatIndex) : 0;
+
+  if (profileOrOpts && typeof profileOrOpts === "object") {
+    const seatEntry = profileOrOpts.seats?.[idx];
+    const off = Array.isArray(seatEntry?.offset) ? seatEntry.offset : (Array.isArray(seatEntry) ? seatEntry : null);
+    if (off && off.length >= 3 && (off[0] !== 0 || off[1] !== 0 || off[2] !== 0)) {
+      return off;
+    }
+    const customOff = profileOrOpts.seatOffsets?.[idx];
+    if (Array.isArray(customOff) && customOff.length >= 3) {
+      return customOff;
+    }
+    if (isSemi) {
+      return SEMI_SEAT_CONSTANTS.seatOffsets[idx] || SEMI_SEAT_CONSTANTS.seatOffsets[0];
+    }
+  }
   return SEAT_CONSTANTS.seatOffsets[idx] || SEAT_CONSTANTS.seatOffsets[0];
 }
 
@@ -107,10 +141,15 @@ export function resolveSetupProfile(setupId) {
  * Handles Driver wheel tracking (Seat 0), Shotgun brace/lap (Seat 1), and Rear 90° sit (Seats 2/3).
  */
 export function computeSeatPose(seatIndex, setupId, vehicleState = {}) {
+  const vs = vehicleState && typeof vehicleState === "object" ? vehicleState : {};
+  const profCtx = vs.profile ?? vs;
+  const isSemi = isSemiProfile(profCtx);
   const prof = resolveSetupProfile(setupId);
   const isOlthoi = prof.kind === "no-hands";
   const scale = (prof.scale || 100) / 100;
-  const seatOffset = getSeatOffset(seatIndex);
+  const seatOffset = Array.isArray(vs.seatOffset) && vs.seatOffset.length >= 3
+    ? vs.seatOffset
+    : getSeatOffset(seatIndex, profCtx);
 
   if (isOlthoi) {
     return {
@@ -167,16 +206,22 @@ export function computeSeatPose(seatIndex, setupId, vehicleState = {}) {
 
   if (seatIndex === 0) {
     // Seat 0 Driver: Two-bone arm IK tracking steering wheel rim in seat-relative coordinates
-    const steerAngle = vehicleState.steerAngle || 0;
+    const steerAngle = vs.steerAngle || 0;
     const swAngle = Math.max(-1.745, Math.min(1.745, steerAngle * 2.5));
-    const swCenterVeh = SEAT_CONSTANTS.steeringWheelCenter;
+    const swCenterVeh = Array.isArray(vs.steeringWheelCenter) && vs.steeringWheelCenter.length >= 3
+      ? vs.steeringWheelCenter
+      : (isSemi ? SEMI_SEAT_CONSTANTS.steeringWheelCenter : SEAT_CONSTANTS.steeringWheelCenter);
     const swCenterSeat = [
       swCenterVeh[0] - seatOffset[0],
       swCenterVeh[1] - seatOffset[1],
       swCenterVeh[2] - seatOffset[2],
     ];
-    const R = SEAT_CONSTANTS.steeringWheelRadius;
-    const rake = SEAT_CONSTANTS.steeringWheelRakeRad;
+    const R = Number.isFinite(vs.steeringWheelRadius) && vs.steeringWheelRadius > 0
+      ? vs.steeringWheelRadius
+      : (isSemi ? SEMI_SEAT_CONSTANTS.steeringWheelRadius : SEAT_CONSTANTS.steeringWheelRadius);
+    const rake = Number.isFinite(vs.steeringWheelRakeRad)
+      ? vs.steeringWheelRakeRad
+      : (isSemi ? SEMI_SEAT_CONSTANTS.steeringWheelRakeRad : SEAT_CONSTANTS.steeringWheelRakeRad);
 
     // Rim grips at neutral 135° (left) and 45° (right)
     const angleL = (Math.PI * 0.75) + swAngle;
@@ -218,7 +263,9 @@ export function computeSeatPose(seatIndex, setupId, vehicleState = {}) {
     // Seat 1 Shotgun: Dynamic grab-bar brace in seat-relative coordinates
     let targetL;
     if (braceActive) {
-      const grabVeh = SEAT_CONSTANTS.dashGrabBarPos;
+      const grabVeh = Array.isArray(vs.dashGrabBarPos) && vs.dashGrabBarPos.length >= 3
+        ? vs.dashGrabBarPos
+        : (isSemi ? SEMI_SEAT_CONSTANTS.dashGrabBarPos : SEAT_CONSTANTS.dashGrabBarPos);
       targetL = [
         grabVeh[0] - seatOffset[0],
         grabVeh[1] - seatOffset[1],
@@ -311,13 +358,13 @@ export function computeSeatPose(seatIndex, setupId, vehicleState = {}) {
  * 0.35s smooth seat-to-seat slide interpolation for hot-swaps between seats 0..3.
  * Includes a subtle vertical clearance arc over the center transmission tunnel.
  */
-export function interpolateSeatHotSwap(fromSeat, toSeat, t) {
+export function interpolateSeatHotSwap(fromSeat, toSeat, t, profileOrOpts = null) {
   const u = Math.min(1.0, Math.max(0.0, typeof t === "number" ? t : 0.0));
   // Smoothstep easing: S(u) = 3u^2 - 2u^3
   const s = u * u * (3.0 - 2.0 * u);
 
-  const p0 = getSeatOffset(fromSeat);
-  const p1 = getSeatOffset(toSeat);
+  const p0 = getSeatOffset(fromSeat, profileOrOpts);
+  const p1 = getSeatOffset(toSeat, profileOrOpts);
 
   const x = p0[0] + (p1[0] - p0[0]) * s;
   const y = p0[1] + (p1[1] - p0[1]) * s;
@@ -338,22 +385,24 @@ export function interpolateSeatHotSwap(fromSeat, toSeat, t) {
  * Evaluates the boarding, exit, or hot-swap spline for an occupant.
  * Respects ?vehicleBoardAnim=off flag for instant snap.
  */
-export function evaluateBoardingSpline(seatIndex, action, progress, search = "") {
+export function evaluateBoardingSpline(seatIndex, action, progress, search = "", profileOrOpts = null) {
   if (!boardAnimEnabled(search)) {
     return { progress: 1.0, duration: 0.0, snapped: true };
   }
   const u = Math.min(1.0, Math.max(0.0, progress));
-  const seatPos = getSeatOffset(seatIndex);
+  const seatPos = getSeatOffset(seatIndex, profileOrOpts);
+  const isSemi = isSemiProfile(profileOrOpts);
   let duration = SEAT_CONSTANTS.splineDurations.frontIngressSec;
   let groundPos;
 
   if (action === "hotswap" || action === "hot-swap") {
-    return interpolateSeatHotSwap(seatIndex, 0, u);
+    return interpolateSeatHotSwap(seatIndex, 0, u, profileOrOpts);
   }
 
   if (action === "egress") {
     duration = SEAT_CONSTANTS.splineDurations.egressSec;
-    groundPos = [seatPos[0] < 0 ? -1.25 : 1.25, seatPos[1], 0.0];
+    const xOut = isSemi ? 1.35 : 1.25;
+    groundPos = [seatPos[0] < 0 ? -xOut : xOut, seatPos[1], 0.0];
     const pt = hopPoint(
       { x: seatPos[0], y: seatPos[1], z: seatPos[2] },
       { x: groundPos[0], y: groundPos[1], z: groundPos[2] },
@@ -364,12 +413,13 @@ export function evaluateBoardingSpline(seatIndex, action, progress, search = "")
   }
 
   // Ingress
-  if (seatIndex >= 2) {
+  const xIn = isSemi ? 1.35 : 1.15;
+  if (seatIndex >= 2 && !isSemi) {
     duration = SEAT_CONSTANTS.splineDurations.rearIngressSec;
-    groundPos = [seatPos[0] < 0 ? -1.15 : 1.15, -1.2, 0.0];
+    groundPos = [seatPos[0] < 0 ? -xIn : xIn, -1.2, 0.0];
   } else {
     duration = SEAT_CONSTANTS.splineDurations.frontIngressSec;
-    groundPos = [seatPos[0] < 0 ? -1.15 : 1.15, 0.0, 0.0];
+    groundPos = [seatPos[0] < 0 ? -xIn : xIn, isSemi ? seatPos[1] : 0.0, 0.0];
   }
 
   const pt = hopPoint(
@@ -449,10 +499,17 @@ function setPartEuler(part, pitchRad, yawRad, rollRad) {
 export function applySeatPoseToEntity(entityInst, seatIndex, vehiclePose = {}, vehicleKinematics = {}, dt = 0.016) {
   if (!entityInst) return null;
 
-  const sIdx = (typeof seatIndex === "number" && seatIndex >= 0 && seatIndex < 4) ? seatIndex : 0;
+  const kin = vehicleKinematics && typeof vehicleKinematics === "object" ? vehicleKinematics : {};
+  const vPose = vehiclePose && typeof vehiclePose === "object" ? vehiclePose : {};
+  const profCtx = kin.profile ?? vPose.profile ?? (isSemiProfile(kin) ? kin : (isSemiProfile(vPose) ? vPose : null));
+  const maxIdx = isSemiProfile(profCtx) ? 2 : 4;
+  const sIdx = (typeof seatIndex === "number" && seatIndex >= 0 && seatIndex < maxIdx) ? Math.trunc(seatIndex) : 0;
   const setupId = entityInst.setupId || entityInst._setupId || entityInst.meta?.setupId || entityInst.meta?.modelId || "0x02000001";
-  const seatOffset = getSeatOffset(sIdx);
-  const seatPose = computeSeatPose(sIdx, setupId, vehicleKinematics);
+  const seatOffset = Array.isArray(kin.seatOffset) && kin.seatOffset.length >= 3
+    ? kin.seatOffset
+    : getSeatOffset(sIdx, profCtx);
+  const kinWithProf = profCtx ? { ...kin, profile: profCtx, seatOffset } : kin;
+  const seatPose = computeSeatPose(sIdx, setupId, kinWithProf);
 
   const vx = vehiclePose.x ?? vehiclePose.pos?.[0] ?? 0;
   const vy = vehiclePose.y ?? vehiclePose.pos?.[1] ?? 0;
