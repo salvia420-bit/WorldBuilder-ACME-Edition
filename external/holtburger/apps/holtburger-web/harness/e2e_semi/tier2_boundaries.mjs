@@ -768,7 +768,8 @@ export async function runTier2(collector) {
         }, 10000, 250, "semi + 40ft trailer for >3.5m boundary");
         await live.evalInPage(`window.__vehicles.board(${ids.vGuid}, 0); return true;`);
         await liveWaitUntil(async () => await live.evalInPage(`return !!window.__vehicles?.piloting`), 6000, 150, "piloting semi");
-        await live.evalInPage(`window.__vehicles.setSticks({ throttle: 0.7 }, 1800); return true;`);
+        await new Promise((r) => setTimeout(r, 1100)); // allow board_hop.js cab hop (~0.95s) to finish before throttle
+        await live.evalInPage(`window.__vehicles.setSticks({ throttle: 0.85 }, 2400); return true;`);
         const dist = await liveWaitUntil(async () => {
           const d = await live.evalInPage(`
             const v = (window.__vehicles?.vehicles?.() || []).find((x) => x.guid === ${ids.vGuid});

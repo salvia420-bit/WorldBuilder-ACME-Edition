@@ -13,7 +13,7 @@
 
   Framing (standard AC, unchanged): client -> server messages are game actions inside 0xF7B1
   (u32 sequence, u32 action opcode, payload); server -> client messages are game events inside 0xF7B0
-  (u32 target guid, u32 event sequence, u32 event opcode, payload). Opcodes 0x0900-0x090F in both tables
+  (u32 target guid, u32 event sequence, u32 event opcode, payload). Opcodes 0x0900-0x091F in both tables
   (unused by ACE, Chorizite and holtburger as of 2026-11-01). All values little-endian.
 
   Every payload starts with VehicleHeader: the 4-byte tag "HBV1" and the protocol version. A receiver drops a
@@ -56,11 +56,19 @@
                         Vehicle_Profile  FifthWheelOffsetY, FifthWheelOffsetZ, LiveryId, VehicleClass, Reserved4
                         Vehicle_State    HitchedTrailerGuid, TrailerHeading, TrailerPitch, TrailerFlags, Reserved4, Reserved5
 
+  v7 additions (2026-11): SideliftPhase, PalletJackActionKind enums; DeployableKind (15..16);
+                      TrailerActionKind (6..14); VehicleEventKind (22..25); OnlineFlags 0x10=Stowed;
+                      C2S Vehicle_PalletJackAction (0x0910), S2C Vehicle_PalletJackState (0x0910).
+                      Appended fields (since="7"):
+                        Vehicle_TrailerState  SideliftPhase, SideliftSide, SideliftFlags, Reserved7,
+                                              SideliftProgress, OutriggerProgress, CraneSpanY,
+                                              StowedPalletJackGuid, TransferContainerGuid
+
   Units: metres, seconds, radians. Positions are AC cell + landblock-local coordinates. Angles: heading is a
   COMPASS angle (0 = north/+y, pi/2 = east/+x, clockwise); pitch is nose-up positive; bank is right-wing-down
   positive. Stick values are signed bytes scaled by 1/127 (-128 clamps to -1). Throttle is u8 scaled by 1/255.
 -->
-<schema text="holtburger vehicles (HBV1) — additive, capability-gated vehicle messages" version="6">
+<schema text="holtburger vehicles (HBV1) — additive, capability-gated vehicle messages" version="7">
   <enums>
     <enum name="VehicleCapability" parent="uint" mask="true" text="ClientCapabilities.Flags / CapabilitiesAck.Granted">
       <value value="0x00000001" name="Observe" text="receive VehicleProfile / VehicleSeat / VehicleState / VehicleFire / VehicleEvent" />
@@ -147,6 +155,10 @@
       <value value="19" name="TrailerHitched" />
       <value value="20" name="TrailerUnhitched" />
       <value value="21" name="TwistlockToggled" />
+      <value value="22" name="SideliftStarted" />
+      <value value="23" name="SideliftComplete" />
+      <value value="24" name="SideliftRefused" />
+      <value value="25" name="PalletJackEvent" />
     </enum>
     <enum name="VehiclePartRole" parent="uint" text="Vehicle_Profile.PartRoles: the role in the low 16 bits; Ordnance carries a weapon index in bits 16-23">
       <value value="0" name="Static" />
@@ -185,6 +197,8 @@
       <value value="12" name="IsoContainer40HC" text="ISO 40ft High Cube 1AAA/45G1 intermodal container (WCID 4000022)" />
       <value value="13" name="TrailerChassis20" text="20ft skeletal ISO container chassis trailer (WCID 4000030)" />
       <value value="14" name="TrailerChassis40" text="40ft gooseneck ISO container chassis trailer (WCID 4000031)" />
+      <value value="15" name="TrailerSidelifter40" text="ISO 3874 40ft gooseneck self-loading sidelifter semi-trailer (WCID 4000032)" />
+      <value value="16" name="PalletJack" text="ISO 3691-5 walk-behind pedestrian low-lift pallet jack (WCID 4000035)" />
     </enum>
     <enum name="PalletSize" parent="byte">
       <value value="0" name="None" />
@@ -210,6 +224,40 @@
       <value value="3" name="ToggleTwistlock" />
       <value value="4" name="MountContainer" />
       <value value="5" name="UnmountContainer" />
+      <value value="6" name="DeployOutriggers" />
+      <value value="7" name="RetractOutriggers" />
+      <value value="8" name="SideliftOffload" />
+      <value value="9" name="SideliftLoad" />
+      <value value="10" name="StowPalletJack" />
+      <value value="11" name="DeployPalletJack" />
+      <value value="12" name="CancelSidelift" />
+      <value value="13" name="AutoOffload" />
+      <value value="14" name="AutoLoad" />
+    </enum>
+    <enum name="SideliftPhase" parent="byte">
+      <value value="0" name="Idle" />
+      <value value="1" name="OutriggersDeploying" />
+      <value value="2" name="OutriggersPlanted" />
+      <value value="3" name="CranesPositioning" />
+      <value value="4" name="CranesLatched" />
+      <value value="5" name="Hoisting" />
+      <value value="6" name="Swinging" />
+      <value value="7" name="Lowering" />
+      <value value="8" name="Releasing" />
+      <value value="9" name="CranesStowing" />
+      <value value="10" name="OutriggersRetracting" />
+    </enum>
+    <enum name="PalletJackActionKind" parent="byte">
+      <value value="1" name="Grab" />
+      <value value="2" name="Release" />
+      <value value="3" name="UpdatePose" />
+      <value value="4" name="RaiseForks" />
+      <value value="5" name="LowerForks" />
+      <value value="6" name="PickGroundDeployable" />
+      <value value="7" name="DropToGround" />
+      <value value="8" name="PickContainerSlot" />
+      <value value="9" name="LoadContainerSlot" />
+      <value value="10" name="ToggleDeployableStow" />
     </enum>
   </enums>
   <types>
@@ -330,14 +378,27 @@
       <field type="byte" name="Reserved" />
       <field type="ObjectId" name="CargoWcid" />
     </type>
-    <type name="Vehicle_TrailerAction" queue="Weenie" type="0x090F" text="Client trailer hitch/unhitch/twistlock/mount/unmount action">
+    <type name="Vehicle_TrailerAction" queue="Weenie" type="0x090F" text="Client trailer hitch/unhitch/twistlock/mount/unmount/sidelift action">
       <field type="VehicleHeader" name="Header" />
       <field type="ObjectId" name="TrailerGuid" />
       <field type="ObjectId" name="VehicleGuid" />
       <field type="ObjectId" name="ContainerGuid" />
       <field type="TrailerActionKind" name="Action" />
       <field type="byte" name="Slot" text="0=auto/center, 1=front, 2=rear" />
-      <field type="ushort" name="Flags" />
+      <field type="ushort" name="Flags" text="0x01=left (-1), 0x00=right/curbside (+1)" />
+    </type>
+    <type name="Vehicle_PalletJackAction" queue="Weenie" type="0x0910" text="Client walk-behind pallet jack operator action">
+      <field type="VehicleHeader" name="Header" />
+      <field type="ObjectId" name="PalletJackGuid" />
+      <field type="PalletJackActionKind" name="Action" />
+      <field type="byte" name="SlotIndex" />
+      <field type="byte" name="SubSlot" />
+      <field type="byte" name="Flags" />
+      <field type="ObjectId" name="TargetGuid" text="Container or ground deployable GUID" />
+      <field type="LandcellId" name="Cell" />
+      <field type="Vector3" name="Position" text="landblock-local" />
+      <field type="float" name="Heading" />
+      <field type="float" name="TillerAngle" />
     </type>
   </gameactions>
   <gameevents>
@@ -488,7 +549,7 @@
       <field type="ObjectId" name="DeployableGuid" />
       <field type="DeployableKind" name="DeployableKind" />
       <field type="PalletSize" name="PalletSize" />
-      <field type="byte" name="OnlineFlags" text="0x01=Powered, 0x02=InFluxRange, 0x04=Active, 0x08=Elevated" />
+      <field type="byte" name="OnlineFlags" text="0x01=Powered, 0x02=InFluxRange, 0x04=Active, 0x08=Elevated, 0x10=Stowed" />
       <field type="ushort" name="AmmoRemaining" />
       <field type="ObjectId" name="OwnerGuid" />
       <field type="ObjectId" name="ParentVehicle" />
@@ -561,6 +622,32 @@
       <field type="byte" name="ContainerSlot" />
       <field type="byte" name="TrailerFlags" text="0x01=coupled, 0x02=twistlocksLocked, 0x04=gearRetracted, 0x08=brakeLights" />
       <field type="ushort" name="Reserved" />
+      <field type="ObjectId" name="OwnerGuid" />
+      <field type="SideliftPhase" name="SideliftPhase" since="7" default="0" />
+      <field type="sbyte" name="SideliftSide" since="7" default="1" text="+1 right/curbside, -1 left" />
+      <field type="byte" name="SideliftFlags" since="7" default="0" text="0x01=isSidelifter, 0x02=outriggersPlanted, 0x04=cranesActive, 0x08=hasStowedPalletJack, 0x10=isLoadDirection" />
+      <field type="byte" name="Reserved7" since="7" default="0" />
+      <field type="float" name="SideliftProgress" since="7" default="0" text="0..1 normalized progress of current phase" />
+      <field type="float" name="OutriggerProgress" since="7" default="0" text="0..1 leg extension" />
+      <field type="float" name="CraneSpanY" since="7" default="5.9925" text="half-span Y of front/rear cranes (2.9265m 20ft, 5.9925m 40ft)" />
+      <field type="ObjectId" name="StowedPalletJackGuid" since="7" default="0" />
+      <field type="ObjectId" name="TransferContainerGuid" since="7" default="0" />
+    </type>
+    <type name="Vehicle_PalletJackState" queue="UIQueue" type="0x0910" text="Authoritative walk-behind pallet jack state broadcast">
+      <field type="VehicleHeader" name="Header" />
+      <field type="ObjectId" name="PalletJackGuid" />
+      <field type="ObjectId" name="OperatorGuid" text="0 when unattended" />
+      <field type="ObjectId" name="StowedOnTrailerGuid" text="0 when deployed on ground" />
+      <field type="LandcellId" name="Cell" />
+      <field type="Vector3" name="Position" text="landblock-local" />
+      <field type="float" name="Heading" />
+      <field type="float" name="TillerAngle" />
+      <field type="float" name="ForkHeightM" text="0.085m lowered .. 0.200m raised" />
+      <field type="byte" name="ForkState" text="0=Lowered, 1=Raising, 2=Raised, 3=Lowering" />
+      <field type="PalletSize" name="CarriedPalletSize" />
+      <field type="byte" name="Flags" text="0x01=carrying, 0x02=onContainerRampOrFloor, 0x04=stowed" />
+      <field type="byte" name="Reserved" />
+      <field type="ObjectId" name="CarriedWcid" />
       <field type="ObjectId" name="OwnerGuid" />
     </type>
   </gameevents>

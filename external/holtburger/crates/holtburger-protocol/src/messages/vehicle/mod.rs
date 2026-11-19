@@ -25,7 +25,7 @@ mod tests;
 /// `"HBV1"` as a little-endian u32 (bytes `48 42 56 31`).
 pub const HBV1_TAG: u32 = 0x3156_4248;
 /// The protocol version this module writes (and the newest it parses fully).
-pub const HBV1_VERSION: u16 = 6;
+pub const HBV1_VERSION: u16 = 7;
 /// The first version carrying the v2 fields.
 const V2: u16 = 2;
 /// The first version carrying the v3 fields.
@@ -37,6 +37,8 @@ const V4: u16 = 4;
 const V5: u16 = 5;
 /// The first version carrying the v6 fields.
 const V6: u16 = 6;
+/// The first version carrying the v7 fields.
+const V7: u16 = 7;
 
 /// ClientCapabilities / CapabilitiesAck bits.
 pub mod caps {
@@ -58,8 +60,10 @@ pub mod c2s {
     pub const CARGO: u32 = 0x0909;
     /// v5: container action request (1=OpenDoors, 2=CloseDoors, 3=Load, 4=Pack, 5=Unpack, 6=UnpackAll).
     pub const CONTAINER_ACTION: u32 = 0x090E;
-    /// v6: semi-trailer action request (1=Hitch, 2=Unhitch, 3=ToggleTwistlock, 4=MountContainer, 5=UnmountContainer).
+    /// v6: semi-trailer action request (1=Hitch, 2=Unhitch, 3=ToggleTwistlock, 4=MountContainer, 5=UnmountContainer; v7: 6..14 sidelifter/pallet jack).
     pub const TRAILER_ACTION: u32 = 0x090F;
+    /// v7: walk-behind pedestrian pallet jack action request.
+    pub const PALLET_JACK_ACTION: u32 = 0x0910;
 }
 
 /// S2C game-event opcodes.
@@ -82,6 +86,8 @@ pub mod s2c {
     pub const CONTAINER_STATE: u32 = 0x090E;
     /// v6: Authoritative semi-trailer telemetry broadcast.
     pub const TRAILER_STATE: u32 = 0x090F;
+    /// v7: Authoritative walk-behind pallet jack telemetry broadcast.
+    pub const PALLET_JACK_STATE: u32 = 0x0910;
 }
 
 /// `VehicleProfile.locomotion`.
@@ -173,6 +179,14 @@ pub mod event_kind {
     pub const TRAILER_UNHITCHED: u32 = 20;
     /// v6: Semi-trailer container twistlocks toggled.
     pub const TWISTLOCK_TOGGLED: u32 = 21;
+    /// v7: Sidelifter crane transfer sequence started.
+    pub const SIDELIFT_STARTED: u32 = 22;
+    /// v7: Sidelifter crane transfer sequence completed.
+    pub const SIDELIFT_COMPLETE: u32 = 23;
+    /// v7: Sidelifter crane transfer or action refused by ISO 3874 interlock.
+    pub const SIDELIFT_REFUSED: u32 = 24;
+    /// v7: Walk-behind pallet jack event.
+    pub const PALLET_JACK_EVENT: u32 = 25;
 }
 
 /// `VehicleProfile.part_roles`: the role in the low 16 bits; `ORDNANCE` carries a weapon index in bits 16–23.
@@ -242,6 +256,8 @@ pub mod deployable_kind {
     pub const ISO_CONTAINER_40_HC: u32 = 12;
     pub const TRAILER_CHASSIS_20: u32 = 13;
     pub const TRAILER_CHASSIS_40: u32 = 14;
+    pub const TRAILER_SIDELIFTER_40: u32 = 15;
+    pub const PALLET_JACK: u32 = 16;
 }
 
 /// Standardized industrial pallet footprint.
@@ -275,6 +291,15 @@ pub mod trailer_action_kind {
     pub const TOGGLE_TWISTLOCK: u8 = 3;
     pub const MOUNT_CONTAINER: u8 = 4;
     pub const UNMOUNT_CONTAINER: u8 = 5;
+    pub const DEPLOY_OUTRIGGERS: u8 = 6;
+    pub const RETRACT_OUTRIGGERS: u8 = 7;
+    pub const SIDELIFT_OFFLOAD: u8 = 8;
+    pub const SIDELIFT_LOAD: u8 = 9;
+    pub const STOW_PALLET_JACK: u8 = 10;
+    pub const DEPLOY_PALLET_JACK: u8 = 11;
+    pub const CANCEL_SIDELIFT: u8 = 12;
+    pub const AUTO_OFFLOAD: u8 = 13;
+    pub const AUTO_LOAD: u8 = 14;
 }
 
 /// `VehicleState.trailer_flags` and `VehicleTrailerState.trailer_flags` bitmask.
@@ -283,6 +308,60 @@ pub mod trailer_flags {
     pub const TWISTLOCKS_LOCKED: u8 = 0x02;
     pub const GEAR_RETRACTED: u8 = 0x04;
     pub const BRAKE_LIGHTS: u8 = 0x08;
+}
+
+/// v7: `VehicleTrailerState.sidelift_phase` state machine discriminator.
+pub mod sidelift_phase {
+    pub const IDLE: u8 = 0;
+    pub const OUTRIGGERS_DEPLOYING: u8 = 1;
+    pub const OUTRIGGERS_PLANTED: u8 = 2;
+    pub const CRANES_POSITIONING: u8 = 3;
+    pub const CRANES_LATCHED: u8 = 4;
+    pub const HOISTING: u8 = 5;
+    pub const SWINGING: u8 = 6;
+    pub const LOWERING: u8 = 7;
+    pub const RELEASING: u8 = 8;
+    pub const CRANES_STOWING: u8 = 9;
+    pub const OUTRIGGERS_RETRACTING: u8 = 10;
+}
+
+/// v7: `VehicleTrailerState.sidelift_flags` bitmask.
+pub mod sidelift_flags {
+    pub const IS_SIDELIFTER: u8 = 0x01;
+    pub const OUTRIGGERS_PLANTED: u8 = 0x02;
+    pub const CRANES_ACTIVE: u8 = 0x04;
+    pub const HAS_STOWED_PALLET_JACK: u8 = 0x08;
+    pub const IS_LOAD_DIRECTION: u8 = 0x10;
+}
+
+/// v7: `VehiclePalletJackAction.action` discriminator.
+pub mod pallet_jack_action_kind {
+    pub const GRAB: u8 = 1;
+    pub const RELEASE: u8 = 2;
+    pub const UPDATE_POSE: u8 = 3;
+    pub const RAISE_FORKS: u8 = 4;
+    pub const LOWER_FORKS: u8 = 5;
+    pub const PICK_GROUND_DEPLOYABLE: u8 = 6;
+    pub const DROP_TO_GROUND: u8 = 7;
+    pub const PICK_CONTAINER_SLOT: u8 = 8;
+    pub const LOAD_CONTAINER_SLOT: u8 = 9;
+    pub const TOGGLE_DEPLOYABLE_STOW: u8 = 10;
+}
+
+/// v7: `VehiclePalletJackState.flags` bitmask.
+pub mod pallet_jack_flags {
+    pub const CARRYING: u8 = 0x01;
+    pub const ON_CONTAINER_RAMP_OR_FLOOR: u8 = 0x02;
+    pub const STOWED: u8 = 0x04;
+}
+
+/// `VehicleDeployableState.online_flags` bitmask.
+pub mod online_flags {
+    pub const POWERED: u8 = 0x01;
+    pub const IN_FLUX_RANGE: u8 = 0x02;
+    pub const ACTIVE: u8 = 0x04;
+    pub const ELEVATED: u8 = 0x08;
+    pub const STOWED: u8 = 0x10;
 }
 
 // ---------------------------------------------------------------- primitives
@@ -674,6 +753,54 @@ impl VehicleTrailerAction {
     }
 }
 
+/// v7: Client walk-behind pallet jack operator action (0x0910).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct VehiclePalletJackAction {
+    pub pallet_jack_guid: u32,
+    pub action: u8,
+    pub slot_index: u8,
+    pub sub_slot: u8,
+    pub flags: u8,
+    pub target_guid: u32,
+    pub cell: u32,
+    /// Landblock-local.
+    pub position: [f32; 3],
+    pub heading: f32,
+    pub tiller_angle: f32,
+}
+
+impl VehiclePalletJackAction {
+    pub const WIRE: usize = 36;
+
+    fn read(r: &mut Rd<'_>) -> Option<Self> {
+        Some(Self {
+            pallet_jack_guid: r.u32()?,
+            action: r.u8()?,
+            slot_index: r.u8()?,
+            sub_slot: r.u8()?,
+            flags: r.u8()?,
+            target_guid: r.u32()?,
+            cell: r.u32()?,
+            position: r.vec3()?,
+            heading: r.f32()?,
+            tiller_angle: r.f32()?,
+        })
+    }
+
+    pub fn write(&self, buf: &mut Vec<u8>) {
+        buf.write_u32::<LittleEndian>(self.pallet_jack_guid).unwrap();
+        buf.push(self.action);
+        buf.push(self.slot_index);
+        buf.push(self.sub_slot);
+        buf.push(self.flags);
+        buf.write_u32::<LittleEndian>(self.target_guid).unwrap();
+        buf.write_u32::<LittleEndian>(self.cell).unwrap();
+        w_vec3(buf, self.position);
+        buf.write_f32::<LittleEndian>(self.heading).unwrap();
+        buf.write_f32::<LittleEndian>(self.tiller_angle).unwrap();
+    }
+}
+
 // ---------------------------------------------------------------- C2S
 
 /// Client → server vehicle game actions.
@@ -698,6 +825,8 @@ pub enum VehicleC2S {
     ContainerAction(VehicleContainerAction),
     /// v6: semi-trailer action request (0x090F).
     TrailerAction(VehicleTrailerAction),
+    /// v7: walk-behind pallet jack operator action (0x0910).
+    PalletJackAction(VehiclePalletJackAction),
 }
 
 impl VehicleC2S {
@@ -710,6 +839,7 @@ impl VehicleC2S {
             Self::Cargo { .. } => c2s::CARGO,
             Self::ContainerAction(_) => c2s::CONTAINER_ACTION,
             Self::TrailerAction(_) => c2s::TRAILER_ACTION,
+            Self::PalletJackAction(_) => c2s::PALLET_JACK_ACTION,
         }
     }
 
@@ -723,6 +853,7 @@ impl VehicleC2S {
                 | c2s::CARGO
                 | c2s::CONTAINER_ACTION
                 | c2s::TRAILER_ACTION
+                | c2s::PALLET_JACK_ACTION
         )
     }
 
@@ -771,6 +902,9 @@ impl VehicleC2S {
             }
             Self::TrailerAction(ta) => {
                 ta.write(buf);
+            }
+            Self::PalletJackAction(pj) => {
+                pj.write(buf);
             }
         }
     }
@@ -833,6 +967,9 @@ impl VehicleC2S {
                 }
                 c2s::TRAILER_ACTION => {
                     Self::TrailerAction(VehicleTrailerAction::read(&mut r)?)
+                }
+                c2s::PALLET_JACK_ACTION => {
+                    Self::PalletJackAction(VehiclePalletJackAction::read(&mut r)?)
                 }
                 _ => return None,
             }
@@ -1128,7 +1265,7 @@ impl VehicleContainerState {
     }
 }
 
-/// v6: Authoritative state of semi-trailer chassis (telemetry, coupling, mounted container).
+/// v6/v7: Authoritative state of semi-trailer chassis (telemetry, coupling, mounted container, sidelifter).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct VehicleTrailerState {
     pub trailer_guid: u32,
@@ -1145,12 +1282,23 @@ pub struct VehicleTrailerState {
     pub trailer_flags: u8,
     pub reserved: u16,
     pub owner_guid: u32,
+    // v7 sidelifter additions
+    pub sidelift_phase: u8,
+    pub sidelift_side: i8,
+    pub sidelift_flags: u8,
+    pub reserved7: u8,
+    pub sidelift_progress: f32,
+    pub outrigger_progress: f32,
+    pub crane_span_y: f32,
+    pub stowed_pallet_jack_guid: u32,
+    pub transfer_container_guid: u32,
 }
 
 impl VehicleTrailerState {
-    pub const WIRE: usize = 52;
+    pub const WIRE_V6: usize = 52;
+    pub const WIRE: usize = 76;
 
-    fn read(r: &mut Rd<'_>) -> Option<Self> {
+    fn read(r: &mut Rd<'_>, v7: bool) -> Option<Self> {
         Some(Self {
             trailer_guid: r.u32()?,
             kind: r.u32()?,
@@ -1165,6 +1313,15 @@ impl VehicleTrailerState {
             trailer_flags: r.u8()?,
             reserved: r.u16()?,
             owner_guid: r.u32()?,
+            sidelift_phase: if v7 { r.u8()? } else { 0 },
+            sidelift_side: if v7 { r.i8()? } else { 1 },
+            sidelift_flags: if v7 { r.u8()? } else { 0 },
+            reserved7: if v7 { r.u8()? } else { 0 },
+            sidelift_progress: if v7 { r.f32()? } else { 0.0 },
+            outrigger_progress: if v7 { r.f32()? } else { 0.0 },
+            crane_span_y: if v7 { r.f32()? } else { 5.9925 },
+            stowed_pallet_jack_guid: if v7 { r.u32()? } else { 0 },
+            transfer_container_guid: if v7 { r.u32()? } else { 0 },
         })
     }
 
@@ -1181,6 +1338,76 @@ impl VehicleTrailerState {
         buf.push(self.container_slot);
         buf.push(self.trailer_flags);
         buf.write_u16::<LittleEndian>(self.reserved).unwrap();
+        buf.write_u32::<LittleEndian>(self.owner_guid).unwrap();
+        // v7
+        buf.push(self.sidelift_phase);
+        buf.push(self.sidelift_side as u8);
+        buf.push(self.sidelift_flags);
+        buf.push(self.reserved7);
+        buf.write_f32::<LittleEndian>(self.sidelift_progress).unwrap();
+        buf.write_f32::<LittleEndian>(self.outrigger_progress).unwrap();
+        buf.write_f32::<LittleEndian>(self.crane_span_y).unwrap();
+        buf.write_u32::<LittleEndian>(self.stowed_pallet_jack_guid).unwrap();
+        buf.write_u32::<LittleEndian>(self.transfer_container_guid).unwrap();
+    }
+}
+
+/// v7: Authoritative walk-behind pallet jack state broadcast (0x0910).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct VehiclePalletJackState {
+    pub pallet_jack_guid: u32,
+    pub operator_guid: u32,
+    pub stowed_on_trailer_guid: u32,
+    pub cell: u32,
+    /// Landblock-local.
+    pub position: [f32; 3],
+    pub heading: f32,
+    pub tiller_angle: f32,
+    pub fork_height_m: f32,
+    pub fork_state: u8,
+    pub carried_pallet_size: u8,
+    pub flags: u8,
+    pub reserved: u8,
+    pub carried_wcid: u32,
+    pub owner_guid: u32,
+}
+
+impl VehiclePalletJackState {
+    pub const WIRE: usize = 52;
+
+    fn read(r: &mut Rd<'_>) -> Option<Self> {
+        Some(Self {
+            pallet_jack_guid: r.u32()?,
+            operator_guid: r.u32()?,
+            stowed_on_trailer_guid: r.u32()?,
+            cell: r.u32()?,
+            position: r.vec3()?,
+            heading: r.f32()?,
+            tiller_angle: r.f32()?,
+            fork_height_m: r.f32()?,
+            fork_state: r.u8()?,
+            carried_pallet_size: r.u8()?,
+            flags: r.u8()?,
+            reserved: r.u8()?,
+            carried_wcid: r.u32()?,
+            owner_guid: r.u32()?,
+        })
+    }
+
+    pub fn write(&self, buf: &mut Vec<u8>) {
+        buf.write_u32::<LittleEndian>(self.pallet_jack_guid).unwrap();
+        buf.write_u32::<LittleEndian>(self.operator_guid).unwrap();
+        buf.write_u32::<LittleEndian>(self.stowed_on_trailer_guid).unwrap();
+        buf.write_u32::<LittleEndian>(self.cell).unwrap();
+        w_vec3(buf, self.position);
+        buf.write_f32::<LittleEndian>(self.heading).unwrap();
+        buf.write_f32::<LittleEndian>(self.tiller_angle).unwrap();
+        buf.write_f32::<LittleEndian>(self.fork_height_m).unwrap();
+        buf.push(self.fork_state);
+        buf.push(self.carried_pallet_size);
+        buf.push(self.flags);
+        buf.push(self.reserved);
+        buf.write_u32::<LittleEndian>(self.carried_wcid).unwrap();
         buf.write_u32::<LittleEndian>(self.owner_guid).unwrap();
     }
 }
@@ -1204,6 +1431,7 @@ pub enum VehicleS2C {
     GroundContacts(VehicleGroundContacts),
     ContainerState(VehicleContainerState),
     TrailerState(VehicleTrailerState),
+    PalletJackState(VehiclePalletJackState),
 }
 
 impl VehicleS2C {
@@ -1221,6 +1449,7 @@ impl VehicleS2C {
             Self::GroundContacts(_) => s2c::GROUND_CONTACTS,
             Self::ContainerState(_) => s2c::CONTAINER_STATE,
             Self::TrailerState(_) => s2c::TRAILER_STATE,
+            Self::PalletJackState(_) => s2c::PALLET_JACK_STATE,
         }
     }
 
@@ -1239,6 +1468,7 @@ impl VehicleS2C {
                 | s2c::GROUND_CONTACTS
                 | s2c::CONTAINER_STATE
                 | s2c::TRAILER_STATE
+                | s2c::PALLET_JACK_STATE
         )
     }
 
@@ -1480,6 +1710,9 @@ impl VehicleS2C {
             Self::TrailerState(ts) => {
                 ts.write(buf);
             }
+            Self::PalletJackState(pj) => {
+                pj.write(buf);
+            }
         }
     }
 
@@ -1503,6 +1736,7 @@ impl VehicleS2C {
             let v3 = hdr.version >= V3;
             let v4 = hdr.version >= V4;
             let v6 = hdr.version >= V6;
+            let v7 = hdr.version >= V7;
             match opcode {
                 s2c::CAPABILITIES_ACK => Self::CapabilitiesAck {
                     granted: r.u32()?,
@@ -1822,7 +2056,10 @@ impl VehicleS2C {
                     Self::ContainerState(VehicleContainerState::read(&mut r)?)
                 }
                 s2c::TRAILER_STATE => {
-                    Self::TrailerState(VehicleTrailerState::read(&mut r)?)
+                    Self::TrailerState(VehicleTrailerState::read(&mut r, v7)?)
+                }
+                s2c::PALLET_JACK_STATE => {
+                    Self::PalletJackState(VehiclePalletJackState::read(&mut r)?)
                 }
                 _ => return None,
             }

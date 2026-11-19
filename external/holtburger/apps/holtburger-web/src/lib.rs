@@ -47510,8 +47510,8 @@ fn build_container_collider_bsp(
 
     if door_open {
         // 6. Fold-down loading ramp at rear (-Y):
-        // Spans from sill at y = -hl, z = floor_z (0.162m) down to ground at y = -hl - 0.825m, z = 0.0m.
-        let ramp_len: f32 = 0.825;
+        // Spans from sill at y = -hl, z = floor_z (0.162m) down to ground at y = -hl - 0.85m, z = 0.0m.
+        let ramp_len: f32 = 0.85;
         let y_sill = -hl;
         let y_ground = -hl - ramp_len;
         polys.insert(
@@ -47587,8 +47587,10 @@ fn build_container_collider_bsp(
     /// `trailer_guid`: target trailer ObjectId (0 when auto-detecting nearby for Hitch)
     /// `vehicle_guid`: tractor ObjectId
     /// `container_guid`: ISO container ObjectId (0 for Hitch/Unhitch/ToggleTwistlock)
-    /// `action`: 1=Hitch, 2=Unhitch, 3=ToggleTwistlock, 4=MountContainer, 5=UnmountContainer
+    /// `action`: 1=Hitch, 2=Unhitch, 3=ToggleTwistlock, 4=MountContainer, 5=UnmountContainer,
+    ///           6..14=Sidelifter / PalletJack rack actions
     /// `slot`: 0=auto/center, 1=front, 2=rear
+    /// `flags`: optional bitmask (`0x01` = left side `-1`, `0x00` = right/curbside `+1`)
     #[wasm_bindgen(js_name = vehicleTrailerAction)]
     pub fn vehicle_trailer_action(
         &self,
@@ -47597,6 +47599,7 @@ fn build_container_collider_bsp(
         container_guid: u32,
         action: u8,
         slot: u8,
+        flags: Option<u8>,
     ) -> Result<(), JsValue> {
         self.vehicle_send(holtburger_protocol::messages::vehicle::VehicleC2S::TrailerAction(
             holtburger_protocol::messages::vehicle::VehicleTrailerAction {
@@ -47605,7 +47608,42 @@ fn build_container_collider_bsp(
                 container_guid,
                 action,
                 slot,
-                flags: 0,
+                flags: flags.unwrap_or(0) as u16,
+            },
+        ))
+    }
+
+    /// HBV1 Vehicle_PalletJackAction (0x0910):
+    /// Sends a walk-behind pedestrian pallet jack action/pose update to the server.
+    #[wasm_bindgen(js_name = vehiclePalletJackAction)]
+    #[allow(clippy::too_many_arguments)]
+    pub fn vehicle_pallet_jack_action(
+        &self,
+        pallet_jack_guid: u32,
+        action: u8,
+        slot_index: u8,
+        sub_slot: u8,
+        flags: u8,
+        target_guid: u32,
+        cell: u32,
+        x: f32,
+        y: f32,
+        z: f32,
+        heading: f32,
+        tiller_angle: f32,
+    ) -> Result<(), JsValue> {
+        self.vehicle_send(holtburger_protocol::messages::vehicle::VehicleC2S::PalletJackAction(
+            holtburger_protocol::messages::vehicle::VehiclePalletJackAction {
+                pallet_jack_guid,
+                action,
+                slot_index,
+                sub_slot,
+                flags,
+                target_guid,
+                cell,
+                position: [x, y, z],
+                heading,
+                tiller_angle,
             },
         ))
     }
@@ -47648,6 +47686,54 @@ fn build_container_collider_bsp(
             }
         }
         r1 || r2
+    }
+
+    /// Probe the highest walkable surface (`z <= ceiling_z + 1e-3`) across active dynamic container
+    /// BSPs at AC global world metres `(world_x, world_y)`. Returns `{ z, normalX, normalY, normalZ }`
+    /// or `null` when no container floor/ramp/roof covers `(world_x, world_y)`.
+    #[wasm_bindgen(js_name = probeContainerSurface)]
+    pub fn probe_container_surface(&self, world_x: f32, world_y: f32, ceiling_z: f32) -> JsValue {
+        let hit = self
+            .collision_scene
+            .borrow()
+            .probe_dynamic_building_surface(world_x, world_y, ceiling_z);
+        let Some((z, n)) = hit else {
+            return JsValue::NULL;
+        };
+        let obj = js_sys::Object::new();
+        let _ = js_sys::Reflect::set(&obj, &JsValue::from_str("z"), &JsValue::from_f64(z as f64));
+        let _ = js_sys::Reflect::set(&obj, &JsValue::from_str("normalX"), &JsValue::from_f64(n.x as f64));
+        let _ = js_sys::Reflect::set(&obj, &JsValue::from_str("normalY"), &JsValue::from_f64(n.y as f64));
+        let _ = js_sys::Reflect::set(&obj, &JsValue::from_str("normalZ"), &JsValue::from_f64(n.z as f64));
+        obj.into()
+    }
+
+    /// Resolve two-sided wall penetration against active dynamic container BSPs at AC global world
+    /// metres `(world_x, world_y, world_z)` with sphere `radius`. Returns `{ x, y, z }` pushout
+    /// delta in metres, or `null` if clear.
+    #[wasm_bindgen(js_name = resolveContainerPushout)]
+    pub fn resolve_container_pushout(
+        &self,
+        world_x: f32,
+        world_y: f32,
+        world_z: f32,
+        radius: f32,
+    ) -> JsValue {
+        let disp = self
+            .collision_scene
+            .borrow()
+            .resolve_dynamic_building_wall_pushout(
+                holtburger_common::Vector3::new(world_x, world_y, world_z),
+                radius,
+            );
+        let Some(d) = disp else {
+            return JsValue::NULL;
+        };
+        let obj = js_sys::Object::new();
+        let _ = js_sys::Reflect::set(&obj, &JsValue::from_str("x"), &JsValue::from_f64(d.x as f64));
+        let _ = js_sys::Reflect::set(&obj, &JsValue::from_str("y"), &JsValue::from_f64(d.y as f64));
+        let _ = js_sys::Reflect::set(&obj, &JsValue::from_str("z"), &JsValue::from_f64(d.z as f64));
+        obj.into()
     }
 
     #[wasm_bindgen(js_name = pendingConfirmations)]

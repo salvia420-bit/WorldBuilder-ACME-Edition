@@ -206,6 +206,11 @@ const TIER4 = [
   { flag: "vehicleSemiModel", file: "tests/vehicle_semi_model.test.mjs" },
   { flag: "vehicleTrailerKinematics", file: "tests/vehicle_trailer_kinematics.test.mjs" },
   { flag: "vehicleSemiIntegration", file: "tests/vehicle_semi_integration.test.mjs" },
+  { flag: "vehicleSidelifterKinematics", file: "tests/vehicle_sidelifter_kinematics.test.mjs" },
+  { flag: "vehicleContainerLogistics", file: "tests/vehicle_container_logistics.test.mjs" },
+  { flag: "vehicleSidelifterModel", file: "tests/vehicle_sidelifter_model.test.mjs" },
+  { flag: "vehiclePalletJackModel", file: "tests/vehicle_pallet_jack_model.test.mjs" },
+  { flag: "vehiclePalletJackIntegration", file: "tests/vehicle_pallet_jack_integration.test.mjs" },
 ].map((t) => ({ ...t, tier: 4 }));
 
 

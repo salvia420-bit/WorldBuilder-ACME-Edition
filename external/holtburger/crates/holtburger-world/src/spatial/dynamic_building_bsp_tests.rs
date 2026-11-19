@@ -115,8 +115,8 @@ fn make_container_bsp(origin: Vector3, door_open: bool) -> CellPhysicsBsp {
 
     if door_open {
         // 6. Fold-down loading ramp at rear (-Y):
-        // Spans from sill at y = -hl, z = floor_z (0.162m) down to ground at y = -hl - 0.825m, z = 0.0m.
-        let ramp_len = 0.825;
+        // Spans from sill at y = -hl, z = floor_z (0.162m) down to ground at y = -hl - 0.85m, z = 0.0m.
+        let ramp_len = 0.85;
         let y_sill = -hl;
         let y_ground = -hl - ramp_len;
         polys.insert(
@@ -227,11 +227,11 @@ fn test_dynamic_building_bsp_walkability() {
         ramp_poly.plane.normal.z,
         FLOOR_Z
     );
-    // Slope calculation: run = 0.825m, rise = 0.162m
-    // normal.z = 0.825 / sqrt(0.825^2 + 0.162^2) ≈ 0.9813
+    // Slope calculation: run = 0.85m, rise = 0.162m
+    // normal.z = 0.85 / sqrt(0.85^2 + 0.162^2) ≈ 0.9823
     assert!(
-        (ramp_poly.plane.normal.z - 0.9813).abs() < 0.01,
-        "Ramp normal.z must match expected ~0.9813, got {}",
+        (ramp_poly.plane.normal.z - 0.9823).abs() < 0.002,
+        "Ramp normal.z must match expected ~0.9823, got {}",
         ramp_poly.plane.normal.z
     );
 
@@ -263,4 +263,94 @@ fn test_dynamic_building_bsp_collision_view_cloning() {
     let view = scene.collision_view();
     assert_eq!(view.dynamic_building_bsp_count(), 1);
     assert_eq!(view.statics_physics_bsp(landblock_high).len(), 1);
+}
+
+#[test]
+fn test_probe_dynamic_building_surface_floor_ramp_roof() {
+    let mut scene = SpatialScene::new();
+    let guid = 0x1111_2222;
+    let landblock_high = 0x0203_0000;
+    let origin = Vector3::new(500.0, 680.0, 10.0);
+
+    // Outside / empty returns None
+    assert!(scene.probe_dynamic_building_surface(origin.x, origin.y, origin.z + 1.0).is_none());
+
+    scene.upsert_dynamic_building_bsp(guid, landblock_high, make_container_bsp(origin, true));
+
+    // Outside XY returns None
+    assert!(
+        scene
+            .probe_dynamic_building_surface(origin.x + 5.0, origin.y, origin.z + 1.0)
+            .is_none()
+    );
+
+    // Inside XY with ceiling below roof returns interior floor
+    let (floor_z, floor_n) = scene
+        .probe_dynamic_building_surface(origin.x, origin.y, origin.z + 1.0)
+        .expect("interior floor hit");
+    assert!((floor_z - (origin.z + 0.162)).abs() < 1e-4);
+    assert!((floor_n.z - 1.0).abs() < 1e-4);
+
+    // Inside XY with ceiling above roof returns roof
+    let (roof_z, roof_n) = scene
+        .probe_dynamic_building_surface(origin.x, origin.y, origin.z + 3.5)
+        .expect("roof hit");
+    assert!((roof_z - (origin.z + 2.591)).abs() < 1e-4);
+    assert!((roof_n.z - 1.0).abs() < 1e-4);
+
+    // Ramp midpoint (y = -2.949 - 0.425 = -3.374 -> z = 0.081)
+    let (ramp_z, ramp_n) = scene
+        .probe_dynamic_building_surface(origin.x, origin.y - 2.949 - 0.425, origin.z + 1.0)
+        .expect("ramp midpoint hit");
+    assert!((ramp_z - (origin.z + 0.081)).abs() < 1e-3, "got ramp_z={ramp_z}");
+    assert!((ramp_n.z - 0.9823).abs() < 0.002, "got ramp_n.z={}", ramp_n.z);
+
+    // Non-finite inputs return None
+    assert!(scene.probe_dynamic_building_surface(f32::NAN, origin.y, 12.0).is_none());
+
+    assert!(scene.remove_dynamic_building_bsp(guid));
+    assert!(scene.probe_dynamic_building_surface(origin.x, origin.y, origin.z + 1.0).is_none());
+}
+
+#[test]
+fn test_resolve_dynamic_building_wall_pushout() {
+    let mut scene = SpatialScene::new();
+    let guid = 0x3333_4444;
+    let landblock_high = 0x0203_0000;
+    let origin = Vector3::new(500.0, 680.0, 10.0);
+
+    // Open-door container
+    scene.upsert_dynamic_building_bsp(guid, landblock_high, make_container_bsp(origin, true));
+
+    // Penetrate -X wall from outside -> pushed outward (-X)
+    let out_pen = Vector3::new(origin.x - 1.176 - 0.15, origin.y, origin.z + 0.5);
+    let disp_out = scene
+        .resolve_dynamic_building_wall_pushout(out_pen, 0.35)
+        .expect("outside -X wall pushout");
+    assert!(disp_out.x < -0.1, "expected -X pushout, got {:?}", disp_out);
+    assert!(disp_out.z.abs() < 1e-4, "wall pushout must not alter Z: {:?}", disp_out);
+
+    // Penetrate -X wall from inside -> pushed inward (+X)
+    let in_pen = Vector3::new(origin.x - 1.176 + 0.15, origin.y, origin.z + 0.5);
+    let disp_in = scene
+        .resolve_dynamic_building_wall_pushout(in_pen, 0.35)
+        .expect("inside -X wall pushout");
+    assert!(disp_in.x > 0.1, "expected +X pushout, got {:?}", disp_in);
+
+    // Open rear doorway (-Y) allows passage -> None
+    let doorway = Vector3::new(origin.x, origin.y - 2.949, origin.z + 0.5);
+    assert!(
+        scene
+            .resolve_dynamic_building_wall_pushout(doorway, 0.35)
+            .is_none(),
+        "open rear doorway must not block"
+    );
+
+    // Closed rear doors block passage at -Y
+    scene.upsert_dynamic_building_bsp(guid, landblock_high, make_container_bsp(origin, false));
+    let closed_door = Vector3::new(origin.x, origin.y - 2.949 + 0.15, origin.z + 0.5);
+    let disp_door = scene
+        .resolve_dynamic_building_wall_pushout(closed_door, 0.35)
+        .expect("closed door pushout");
+    assert!(disp_door.y > 0.1, "expected +Y pushout from closed door, got {:?}", disp_door);
 }

@@ -292,7 +292,6 @@ export function buildFluxPod(three, options = {}) {
   root.add(pallet.root);
 
   const staticParts = [];
-  const isStowed = Boolean(options.stowed);
 
   // A. Concrete base atop Full GMA Pallet (pad <= 1.18 × 0.98 m, pallet deck at z = 0.1397 m)
   staticParts.push(zBox(t, 1.16, 0.96, 0.12, 0x7c807a, 0, 0, 0.20));
@@ -326,9 +325,7 @@ export function buildFluxPod(three, options = {}) {
   staticParts.push(zBox(t, 0.76, 0.56, 0.14, 0x6c737a, 0, 0, 1.20));
   staticParts.push(zBox(t, 0.66, 0.48, 0.04, 0x7c848c, 0, 0, 1.29));
 
-  // D. Corner antennas:
-  // In deployed state: 3 asymmetric corner antennas jut out obliquely (total height ~2.05 m <= 2.14 m)
-  // In stowed state (options.stowed): antennas fold downward flush along corner columns (H_stowed <= 2.14 m)
+  // D. Corner antenna mount brackets (animated folding booms added below as runtime-articulated pivots)
   const antennaCorners = [
     { x: 0.50, y: 0.40, dirX: 1, dirY: 1 },   // NE corner
     { x: -0.50, y: 0.40, dirX: -1, dirY: 1 }, // NW corner
@@ -336,24 +333,7 @@ export function buildFluxPod(three, options = {}) {
   ];
   for (let ai = 0; ai < antennaCorners.length; ai++) {
     const c = antennaCorners[ai];
-    // Corner mount bracket
     staticParts.push(zBox(t, 0.10, 0.10, 0.10, 0x3b4046, c.x, c.y, 1.25));
-
-    if (isStowed) {
-      // Fold downward flush along the corner column when stowed (stays below z = 1.30 m)
-      staticParts.push(zBox(t, 0.03, 0.03, 0.55, 0x9aa4ad, c.x, c.y, 0.95));
-      staticParts.push(zBox(t, 0.12, 0.02, 0.02, 0xd89b28, c.x, c.y, 0.85));
-    } else {
-      // Deployed: oblique jutting booms with tuning forks (total height ~2.05 m)
-      staticParts.push(zBox(t, 0.035, 0.035, 0.60, 0x9aa4ad, c.x + c.dirX * 0.14, c.y + c.dirY * 0.14, 1.50, {
-        rx: -c.dirY * 0.45,
-        ry: c.dirX * 0.45,
-      }));
-      staticParts.push(zBox(t, 0.24, 0.02, 0.02, 0xd89b28, c.x + c.dirX * 0.20, c.y + c.dirY * 0.20, 1.62, {
-        rz: ai * 0.7 + 0.78,
-      }));
-      staticParts.push(zCyl(t, 0.04, 0.015, 0.10, 6, 0xff6a00, c.x + c.dirX * 0.26, c.y + c.dirY * 0.26, 1.78));
-    }
   }
 
   // E. Dark-orange Incan stepped pyramidal centerpiece atop gray roof deck
@@ -444,7 +424,53 @@ export function buildFluxPod(three, options = {}) {
   lightsNS.name = "flux-overhang-lights-ns";
   lightsEW.name = "flux-overhang-lights-ew";
 
+  // 3 articulated corner antenna pivots (shared singleAntennaGeom + matStructure -> 9 total draw calls <= 10)
+  const singleAntennaGeom = mergeParts(t, [
+    zBox(t, 0.032, 0.032, 0.55, 0x9aa4ad, 0, 0, 0.275),
+    zBox(t, 0.20, 0.02, 0.02, 0xd89b28, 0, 0, 0.40),
+    zCyl(t, 0.035, 0.015, 0.08, 6, 0xff6a00, 0, 0, 0.57),
+  ]);
+  const antennaPivots = [];
+  for (let ai = 0; ai < antennaCorners.length; ai++) {
+    const c = antennaCorners[ai];
+    const piv = new t.Group();
+    piv.name = `flux-antenna-pivot-${ai}`;
+    piv.position.set(c.x, c.y, 1.25);
+    const antMesh = new t.Mesh(singleAntennaGeom, matStructure);
+    antMesh.castShadow = true;
+    antMesh.receiveShadow = true;
+    piv.add(antMesh);
+    antennaPivots.push({ piv, c });
+    root.add(piv);
+  }
+
   root.add(structureMesh, core, glassBox, lightsNS, lightsEW);
+
+  let isStowed = false;
+  function setStowed(stowed) {
+    isStowed = Boolean(stowed);
+    for (const { piv, c } of antennaPivots) {
+      if (isStowed) {
+        piv.rotation.set(Math.PI, 0, 0);
+      } else {
+        piv.rotation.set(-c.dirY * 0.45, c.dirX * 0.45, 0);
+      }
+    }
+    if (isStowed) {
+      matCore.opacity = 0.15;
+      matFlashNS.color.setHex(0xffaa22);
+      matFlashNS.opacity = 0.25;
+      matFlashEW.color.setHex(0xffaa22);
+      matFlashEW.opacity = 0.25;
+    } else {
+      matCore.opacity = 0.80;
+      matFlashNS.color.setHex(0xffee55);
+      matFlashNS.opacity = 0.95;
+      matFlashEW.color.setHex(0xffaa22);
+      matFlashEW.opacity = 0.35;
+    }
+  }
+  setStowed(Boolean(options.stowed));
 
   return {
     root,
@@ -454,8 +480,15 @@ export function buildFluxPod(three, options = {}) {
     pallet,
     wcid: DEPLOYABLE_WCID.FluxPod,
     palletSize: "full",
+    get stowed() { return isStowed; },
+    setStowed,
     update(state = {}) {
-      const time = Number.isFinite(state.simTimeSec) ? state.simTimeSec : 0;
+      const s = state && typeof state === "object" ? state : {};
+      if (s.stowed !== undefined) {
+        setStowed(s.stowed);
+      }
+      if (isStowed) return;
+      const time = Number.isFinite(s.simTimeSec) ? s.simTimeSec : 0;
       matCore.opacity = 0.7 + 0.3 * Math.sin(4.0 * time);
       const wave = 0.5 + 0.5 * Math.sin(7.5 * time);
       matFlashNS.opacity = 0.2 + 0.8 * wave;
@@ -463,12 +496,22 @@ export function buildFluxPod(three, options = {}) {
     },
     dispose() {
       pallet.dispose();
+      const geoms = new Set();
+      const mats = new Set();
       root.traverse((obj) => {
         if (obj === pallet.mesh) return;
-        if (obj.geometry) obj.geometry.dispose();
+        if (obj.geometry && !geoms.has(obj.geometry)) {
+          obj.geometry.dispose();
+          geoms.add(obj.geometry);
+        }
         if (obj.material) {
-          if (Array.isArray(obj.material)) obj.material.forEach((m) => m.dispose());
-          else obj.material.dispose();
+          const list = Array.isArray(obj.material) ? obj.material : [obj.material];
+          for (const m of list) {
+            if (m && !mats.has(m)) {
+              m.dispose();
+              mats.add(m);
+            }
+          }
         }
       });
     },
@@ -487,15 +530,25 @@ export function buildSolarPanels(three, options = {}) {
   const pallet = buildPallet(t, "full", options);
   root.add(pallet.root);
 
-  const isStowed = Boolean(options.stowed);
-
   // Upright steel pedestal, inverter cabinet & base collar
   const pedGeom = mergeParts(t, [
     zBox(t, 0.90, 0.80, 0.08, 0x4b5258, 0, 0, 0.18),
     zCyl(t, 0.10, 0.14, 0.48, 12, 0x626a72, 0, 0, 0.46),
     zBox(t, 0.36, 0.26, 0.32, 0x3b4248, 0, -0.25, 0.38), // Inverter box
-    zBox(t, 0.14, 0.03, 0.08, 0x2fd866, 0, -0.39, 0.42), // Status panel
   ]);
+  const matStatusLed = new t.MeshStandardMaterial({
+    color: 0x2fd866,
+    emissive: 0x1db84e,
+    emissiveIntensity: 0.85,
+    roughness: 0.25,
+    metalness: 0.2,
+  });
+  if (options.csmState) installCsmShaderPatch(matStatusLed, options.csmState);
+  const statusLedMesh = new t.Mesh(new t.BoxGeometry(0.14, 0.03, 0.08), matStatusLed);
+  statusLedMesh.name = "solar-status-led";
+  statusLedMesh.position.set(0, -0.39, 0.42);
+  statusLedMesh.castShadow = true;
+  statusLedMesh.receiveShadow = true;
   const matPedestal = new t.MeshStandardMaterial({
     color: 0xffffff,
     vertexColors: true,
@@ -574,13 +627,24 @@ export function buildSolarPanels(three, options = {}) {
 
   trunnion.add(leftWing, rightWing, actuators);
   turntable.add(trunnion);
-  root.add(pedestal, turntable);
+  root.add(pedestal, statusLedMesh, turntable);
 
-  // If stowed, trunnion pitch starts at 0 (flat horizontal atop pedestal, total stowed height ~0.84 m <= 1.10 m)
-  if (isStowed) {
-    turntable.rotation.z = 0;
-    trunnion.rotation.x = 0;
+  let isStowed = false;
+  function setStowed(stowed) {
+    isStowed = Boolean(stowed);
+    if (isStowed) {
+      turntable.rotation.z = 0;
+      trunnion.rotation.x = 0;
+      matStatusLed.color.setHex(0xffaa22);
+      matStatusLed.emissive.setHex(0xdd8800);
+      matStatusLed.emissiveIntensity = 0.25;
+    } else {
+      matStatusLed.color.setHex(0x2fd866);
+      matStatusLed.emissive.setHex(0x1db84e);
+      matStatusLed.emissiveIntensity = 0.85;
+    }
   }
+  setStowed(Boolean(options.stowed));
 
   return {
     root,
@@ -591,10 +655,16 @@ export function buildSolarPanels(three, options = {}) {
     pallet,
     wcid: DEPLOYABLE_WCID.SolarPanels,
     palletSize: "full",
+    get stowed() { return isStowed; },
+    setStowed,
     update(state = {}) {
+      const s = state && typeof state === "object" ? state : {};
+      if (s.stowed !== undefined) {
+        setStowed(s.stowed);
+      }
       if (isStowed) return;
-      const hdg = state.sunHeading !== undefined ? state.sunHeading : state.sunAzimuthRad;
-      const pit = state.sunPitch !== undefined ? state.sunPitch : state.sunPitchRad;
+      const hdg = s.sunHeading !== undefined ? s.sunHeading : s.sunAzimuthRad;
+      const pit = s.sunPitch !== undefined ? s.sunPitch : s.sunPitchRad;
       if (Number.isFinite(hdg)) turntable.rotation.z = hdg;
       if (Number.isFinite(pit)) {
         trunnion.rotation.x = pit > 0 ? Math.max(0, Math.min(Math.PI / 2, pit)) : 0;
@@ -602,12 +672,22 @@ export function buildSolarPanels(three, options = {}) {
     },
     dispose() {
       pallet.dispose();
+      const geoms = new Set();
+      const mats = new Set();
       root.traverse((obj) => {
         if (obj === pallet.mesh) return;
-        if (obj.geometry) obj.geometry.dispose();
+        if (obj.geometry && !geoms.has(obj.geometry)) {
+          obj.geometry.dispose();
+          geoms.add(obj.geometry);
+        }
         if (obj.material) {
-          if (Array.isArray(obj.material)) obj.material.forEach((m) => m.dispose());
-          else obj.material.dispose();
+          const list = Array.isArray(obj.material) ? obj.material : [obj.material];
+          for (const m of list) {
+            if (m && !mats.has(m)) {
+              m.dispose();
+              mats.add(m);
+            }
+          }
         }
       });
     },
@@ -626,8 +706,6 @@ export function buildPowerGenerator(three, options = {}) {
   const pallet = buildPallet(t, "full", options);
   root.add(pallet.root);
 
-  const isStowed = Boolean(options.stowed);
-
   const bodyParts = [
     // Heavy steel generator skid & louvered engine block (1.14 × 0.94 m <= 1.18 × 0.98 m)
     zBox(t, 1.14, 0.94, 0.50, 0x3b4238, 0, 0, 0.39),
@@ -640,15 +718,9 @@ export function buildPowerGenerator(three, options = {}) {
     // Platinum Scarab armored hopper & feed chute on starboard side
     zBox(t, 0.34, 0.38, 0.42, 0x8d7f70, 0.36, 0.20, 0.84),
     zBox(t, 0.38, 0.42, 0.06, 0xb87333, 0.36, 0.20, 1.08),
+    // Fixed lower exhaust sleeve (stowed height <= 1.25 m)
+    zCyl(t, 0.07, 0.08, 0.28, 10, 0x2c302c, -0.38, -0.30, 1.11),
   ];
-
-  // Upright exhaust stack: stowed height <= 1.45 m (e.g. 1.25 m stowed, 1.40 m deployed)
-  if (isStowed) {
-    bodyParts.push(zCyl(t, 0.07, 0.08, 0.28, 10, 0x2c302c, -0.38, -0.30, 1.11));
-  } else {
-    bodyParts.push(zCyl(t, 0.07, 0.08, 0.46, 10, 0x2c302c, -0.38, -0.30, 1.17));
-    bodyParts.push(zCyl(t, 0.05, 0.05, 0.24, 10, 0x444844, -0.38, -0.30, 1.40));
-  }
 
   const matBody = new t.MeshStandardMaterial({
     color: 0xffffff,
@@ -704,9 +776,33 @@ export function buildPowerGenerator(three, options = {}) {
   const glowCore = new t.Mesh(glowGeom, matArcaneGlow);
   glowCore.name = "generator-scarab-glow";
 
-  root.add(bodyMesh, flywheelPivot, glowCore);
+  const exhaustStackMesh = new t.Mesh(
+    zCyl(t, 0.05, 0.05, 0.28, 10, 0x444844, 0, 0, 0),
+    matBody,
+  );
+  exhaustStackMesh.name = "generator-exhaust-stack";
+  exhaustStackMesh.position.set(-0.38, -0.30, 1.38);
+  exhaustStackMesh.castShadow = true;
+  exhaustStackMesh.receiveShadow = true;
+
+  root.add(bodyMesh, exhaustStackMesh, flywheelPivot, glowCore);
 
   let flywheelAngle = 0;
+  let isStowed = false;
+  function setStowed(stowed) {
+    isStowed = Boolean(stowed);
+    if (isStowed) {
+      exhaustStackMesh.position.z = 1.11;
+      matArcaneGlow.color.setHex(0xffaa22);
+      matArcaneGlow.opacity = 0.18;
+    } else {
+      exhaustStackMesh.position.z = 1.38;
+      matArcaneGlow.color.setHex(0x66eeff);
+      matArcaneGlow.opacity = 0.82;
+    }
+  }
+  setStowed(Boolean(options.stowed));
+
   return {
     root,
     flywheel,
@@ -715,10 +811,17 @@ export function buildPowerGenerator(three, options = {}) {
     wcid: DEPLOYABLE_WCID.PowerGenerator,
     palletSize: "full",
     get flywheelAngle() { return flywheelAngle; },
+    get stowed() { return isStowed; },
+    setStowed,
     update(state = {}) {
-      const dt = Number.isFinite(state.dt) && state.dt >= 0 ? state.dt : 0.0333;
-      const fuel = state.fuelSecondsRemaining !== undefined ? state.fuelSecondsRemaining : state.fuelRemaining;
-      const isFueled = Boolean((Number.isFinite(fuel) && fuel > 0) || state.online);
+      const s = state && typeof state === "object" ? state : {};
+      if (s.stowed !== undefined) {
+        setStowed(s.stowed);
+      }
+      if (isStowed) return;
+      const dt = Number.isFinite(s.dt) && s.dt >= 0 ? s.dt : 0.0333;
+      const fuel = s.fuelSecondsRemaining !== undefined ? s.fuelSecondsRemaining : s.fuelRemaining;
+      const isFueled = Boolean((Number.isFinite(fuel) && fuel > 0) || s.online);
       if (isFueled) {
         flywheelAngle = (flywheelAngle + 25.0 * dt) % (2 * Math.PI);
         flywheel.rotation.z = flywheelAngle;
@@ -729,12 +832,22 @@ export function buildPowerGenerator(three, options = {}) {
     },
     dispose() {
       pallet.dispose();
+      const geoms = new Set();
+      const mats = new Set();
       root.traverse((obj) => {
         if (obj === pallet.mesh) return;
-        if (obj.geometry) obj.geometry.dispose();
+        if (obj.geometry && !geoms.has(obj.geometry)) {
+          obj.geometry.dispose();
+          geoms.add(obj.geometry);
+        }
         if (obj.material) {
-          if (Array.isArray(obj.material)) obj.material.forEach((m) => m.dispose());
-          else obj.material.dispose();
+          const list = Array.isArray(obj.material) ? obj.material : [obj.material];
+          for (const m of list) {
+            if (m && !mats.has(m)) {
+              m.dispose();
+              mats.add(m);
+            }
+          }
         }
       });
     },
@@ -797,6 +910,18 @@ export function buildBatteryUnit(three, options = {}) {
     roughness: 0.2,
     metalness: 0.2,
   });
+  const matStandby = new t.MeshStandardMaterial({
+    color: 0xffaa22,
+    emissive: 0xdd8800,
+    emissiveIntensity: 0.35,
+    roughness: 0.25,
+    metalness: 0.2,
+  });
+  if (options.csmState) {
+    installCsmShaderPatch(matOff, options.csmState);
+    installCsmShaderPatch(matOn, options.csmState);
+    installCsmShaderPatch(matStandby, options.csmState);
+  }
   for (let i = 0; i < 5; i++) {
     const barMesh = new t.Mesh(new t.BoxGeometry(0.04, 0.24, 0.08), matOff);
     barMesh.position.set(0.28, 0, 0.46 + i * 0.12);
@@ -806,19 +931,44 @@ export function buildBatteryUnit(three, options = {}) {
     root.add(barMesh);
   }
 
+  let isStowed = false;
+  let lastJoules = 0;
+
+  function applySocBars(safeJ) {
+    const activeBars = Math.max(0, Math.min(5, Math.floor(safeJ / 120000.0)));
+    for (let i = 0; i < 5; i++) {
+      socBars[i].material = i < activeBars ? matOn : matOff;
+    }
+  }
+
+  function setStowed(stowed) {
+    isStowed = Boolean(stowed);
+    if (isStowed) {
+      socBars[0].material = matStandby;
+      for (let i = 1; i < 5; i++) socBars[i].material = matOff;
+    } else {
+      applySocBars(lastJoules);
+    }
+  }
+  setStowed(Boolean(options.stowed));
+
   return {
     root,
     socBars,
     pallet,
     wcid: DEPLOYABLE_WCID.BatteryUnit,
     palletSize: "half",
+    get stowed() { return isStowed; },
+    setStowed,
     update(state = {}) {
-      const joules = state.capacitorJoules !== undefined ? state.capacitorJoules : state.energyJoules;
-      const safeJ = Number.isFinite(joules) ? joules : 0;
-      const activeBars = Math.max(0, Math.min(5, Math.floor(safeJ / 120000.0)));
-      for (let i = 0; i < 5; i++) {
-        socBars[i].material = i < activeBars ? matOn : matOff;
+      const s = state && typeof state === "object" ? state : {};
+      if (s.stowed !== undefined) {
+        setStowed(s.stowed);
       }
+      if (isStowed) return;
+      const joules = s.capacitorJoules !== undefined ? s.capacitorJoules : s.energyJoules;
+      lastJoules = Number.isFinite(joules) ? joules : 0;
+      applySocBars(lastJoules);
     },
     dispose() {
       pallet.dispose();
@@ -827,6 +977,7 @@ export function buildBatteryUnit(three, options = {}) {
       for (const b of socBars) b.geometry.dispose();
       matOff.dispose();
       matOn.dispose();
+      matStandby.dispose();
     },
   };
 }
@@ -843,8 +994,6 @@ export function buildMissileTurret(three, options = {}) {
   root.name = "missile-turret-root";
   const pallet = buildPallet(t, "full", options);
   root.add(pallet.root);
-
-  const isStowed = Boolean(options.stowed);
 
   // Armored full-pallet base housing & 4 corner pneumatic sleeves (1.14 × 0.94 m <= 1.18 × 0.98 m)
   const baseParts = [
@@ -958,17 +1107,43 @@ export function buildMissileTurret(three, options = {}) {
     launcherPod.add(m);
   }
 
+  const matStatusLed = new t.MeshStandardMaterial({
+    color: 0x22ff66,
+    emissive: 0x11cc44,
+    emissiveIntensity: 0.85,
+    roughness: 0.25,
+    metalness: 0.2,
+  });
+  if (options.csmState) installCsmShaderPatch(matStatusLed, options.csmState);
+  const statusLed = new t.Mesh(new t.BoxGeometry(0.12, 0.03, 0.05), matStatusLed);
+  statusLed.name = "sam-status-led";
+  statusLed.position.set(0, -0.39, 0.34);
+  statusLed.castShadow = true;
+  statusLed.receiveShadow = true;
+
   gimbal.add(launcherPod);
   turntable.add(gimbal);
   riserGroup.add(piston, turntable);
-  root.add(outriggers, riserGroup);
+  root.add(outriggers, statusLed, riserGroup);
 
-  // If stowed, pods fold down horizontally to 0° elevation (total stowed height ~1.25 m <= 1.85 m)
-  if (isStowed) {
-    riserGroup.position.z = 0.20;
-    turntable.rotation.z = 0;
-    gimbal.rotation.x = 0;
+  let isStowed = false;
+  function setStowed(stowed) {
+    isStowed = Boolean(stowed);
+    if (isStowed) {
+      riserGroup.position.z = 0.20;
+      turntable.rotation.z = 0;
+      gimbal.rotation.x = 0;
+      gimbal.rotation.y = 0;
+      matStatusLed.color.setHex(0xffaa22);
+      matStatusLed.emissive.setHex(0xdd8800);
+      matStatusLed.emissiveIntensity = 0.25;
+    } else {
+      matStatusLed.color.setHex(0x22ff66);
+      matStatusLed.emissive.setHex(0x11cc44);
+      matStatusLed.emissiveIntensity = 0.85;
+    }
   }
+  setStowed(Boolean(options.stowed));
 
   return {
     root,
@@ -979,19 +1154,25 @@ export function buildMissileTurret(three, options = {}) {
     pallet,
     wcid: DEPLOYABLE_WCID.MissileTurret,
     palletSize: "full",
+    get stowed() { return isStowed; },
+    setStowed,
     update(state = {}) {
+      const s = state && typeof state === "object" ? state : {};
+      if (s.stowed !== undefined) {
+        setStowed(s.stowed);
+      }
       if (isStowed) return;
       let riseNorm = 0;
-      if (Number.isFinite(state.deployElevation)) {
-        riseNorm = Math.min(1.0, Math.max(0.0, state.deployElevation));
-      } else if (Number.isFinite(state.riseTimeSec)) {
-        riseNorm = Math.min(1.0, Math.max(0.0, state.riseTimeSec / 0.35));
+      if (Number.isFinite(s.deployElevation)) {
+        riseNorm = Math.min(1.0, Math.max(0.0, s.deployElevation));
+      } else if (Number.isFinite(s.riseTimeSec)) {
+        riseNorm = Math.min(1.0, Math.max(0.0, s.riseTimeSec / 0.35));
       }
       riserGroup.position.z = 0.20 + riseNorm * 0.65;
-      if (Number.isFinite(state.yawRad)) turntable.rotation.z = state.yawRad;
-      if (Number.isFinite(state.pitchRad)) gimbal.rotation.x = state.pitchRad;
-      if (Number.isFinite(state.rollRad)) gimbal.rotation.y = state.rollRad;
-      const ammo = state.ammoCount !== undefined ? state.ammoCount : state.ammoRemaining;
+      if (Number.isFinite(s.yawRad)) turntable.rotation.z = s.yawRad;
+      if (Number.isFinite(s.pitchRad)) gimbal.rotation.x = s.pitchRad;
+      if (Number.isFinite(s.rollRad)) gimbal.rotation.y = s.rollRad;
+      const ammo = s.ammoCount !== undefined ? s.ammoCount : s.ammoRemaining;
       if (ammo !== undefined && Number.isFinite(ammo)) {
         for (let i = 0; i < 4; i++) {
           missiles[i].visible = i < ammo; // vfx-lint-allow: ammo visibility update
@@ -1002,6 +1183,8 @@ export function buildMissileTurret(three, options = {}) {
       pallet.dispose();
       outriggers.geometry.dispose();
       outriggers.material.dispose();
+      statusLed.geometry.dispose();
+      statusLed.material.dispose();
       piston.geometry.dispose();
       piston.material.dispose();
       launcherPod.geometry.dispose();
@@ -1024,19 +1207,11 @@ export function buildGroundRadar(three, options = {}) {
   const pallet = buildPallet(t, "half", options);
   root.add(pallet.root);
 
-  const isStowed = Boolean(options.stowed);
-
   const baseParts = [
     // Half-pallet pedestal cabinet (0.54 × 0.92 m <= 0.57 × 0.98 m)
     zBox(t, 0.54, 0.92, 0.46, 0x455241, 0, 0, 0.37),
     zBox(t, 0.46, 0.24, 0.16, 0x353f32, 0, -0.28, 0.66), // Angled console hood
   ];
-
-  if (!isStowed) {
-    // Upright mast deployed up to z = 1.30 m
-    baseParts.push(zCyl(t, 0.06, 0.09, 0.72, 10, 0x7c848a, 0, 0.10, 0.96));
-    baseParts.push(zCyl(t, 0.12, 0.12, 0.10, 12, 0x555c60, 0, 0.10, 1.35)); // Rotary collar
-  }
 
   const matBase = new t.MeshStandardMaterial({
     color: 0xffffff,
@@ -1053,6 +1228,17 @@ export function buildGroundRadar(three, options = {}) {
   baseMesh.castShadow = true;
   baseMesh.receiveShadow = true;
 
+  // Telescoping mast + rotary collar (built centered at local origin along Z so scale.z retracts cleanly)
+  const mastGeom = mergeParts(t, [
+    zCyl(t, 0.06, 0.09, 0.72, 10, 0x7c848a, 0, 0, 0),
+    zCyl(t, 0.12, 0.12, 0.10, 12, 0x555c60, 0, 0, 0.39),
+  ]);
+  const mastMesh = new t.Mesh(mastGeom, matBase);
+  mastMesh.name = "ground-radar-mast";
+  mastMesh.position.set(0, 0.10, 0.96);
+  mastMesh.castShadow = true;
+  mastMesh.receiveShadow = true;
+
   // Glowing amber tactical scope screen (additive, 0 dynamic lights)
   const matScope = new t.MeshBasicMaterial({
     color: 0xffb833,
@@ -1066,14 +1252,7 @@ export function buildGroundRadar(three, options = {}) {
 
   const antennaGroup = new t.Group();
   antennaGroup.name = "slotted-array-antenna";
-
-  // Position antenna: when stowed, collapses flat horizontally at z = 0.66 m (H_stowed <= 1.05 m)
-  if (isStowed) {
-    antennaGroup.position.set(0, 0.08, 0.66);
-    antennaGroup.rotation.x = 0;
-  } else {
-    antennaGroup.position.set(0, 0.10, 1.42);
-  }
+  antennaGroup.position.set(0, 0.10, 1.42);
 
   const antGeom = mergeParts(t, [
     zBox(t, 0.52, 0.12, 0.22, 0xd9822b, 0, 0, 0.04), // Slotted waveguide bar
@@ -1096,7 +1275,27 @@ export function buildGroundRadar(three, options = {}) {
   antMesh.receiveShadow = true;
   antennaGroup.add(antMesh);
 
-  root.add(baseMesh, scopeMesh, antennaGroup);
+  root.add(baseMesh, mastMesh, scopeMesh, antennaGroup);
+
+  let isStowed = false;
+  function setStowed(stowed) {
+    isStowed = Boolean(stowed);
+    if (isStowed) {
+      mastMesh.scale.set(1, 1, 0.25);
+      mastMesh.position.set(0, 0.10, 0.50);
+      antennaGroup.position.set(0, 0.08, 0.66);
+      antennaGroup.rotation.set(0, 0, 0);
+      matScope.color.setHex(0xffaa22);
+      matScope.opacity = 0.22;
+    } else {
+      mastMesh.scale.set(1, 1, 1);
+      mastMesh.position.set(0, 0.10, 0.96);
+      antennaGroup.position.set(0, 0.10, 1.42);
+      matScope.color.setHex(0xffb833);
+      matScope.opacity = 0.88;
+    }
+  }
+  setStowed(Boolean(options.stowed));
 
   return {
     root,
@@ -1104,14 +1303,21 @@ export function buildGroundRadar(three, options = {}) {
     pallet,
     wcid: DEPLOYABLE_WCID.GroundRadar,
     palletSize: "half",
+    get stowed() { return isStowed; },
+    setStowed,
     update(state = {}) {
+      const s = state && typeof state === "object" ? state : {};
+      if (s.stowed !== undefined) {
+        setStowed(s.stowed);
+      }
       if (isStowed) return;
-      const time = Number.isFinite(state.simTimeSec) ? state.simTimeSec : 0;
+      const time = Number.isFinite(s.simTimeSec) ? s.simTimeSec : 0;
       antennaGroup.rotation.z = (time * (30.0 * 2 * Math.PI / 60.0)) % (2 * Math.PI);
     },
     dispose() {
       pallet.dispose();
       baseMesh.geometry.dispose();
+      mastMesh.geometry.dispose();
       baseMesh.material.dispose();
       scopeMesh.geometry.dispose();
       matScope.dispose();
@@ -1132,8 +1338,6 @@ export function buildMortarTurret(three, options = {}) {
   root.name = "mortar-turret-root";
   const pallet = buildPallet(t, "half", options);
   root.add(pallet.root);
-
-  const isStowed = Boolean(options.stowed);
 
   // Heavy base plate & twin upright compressed-air pressure tanks (0.54 × 0.92 m <= 0.57 × 0.98 m)
   const baseGeom = mergeParts(t, [
@@ -1185,10 +1389,21 @@ export function buildMortarTurret(three, options = {}) {
   const cradle = new t.Group();
   cradle.name = "mortar-cradle";
   cradle.position.set(0, 0, 0.32);
+  cradle.rotation.x = -0.52;
 
-  // When stowed, barrel retracts to 0° horizontal cradle (rx = -PI/2, total stowed height ~0.90 m <= 1.15 m)
-  // When deployed, idle stance is default 60-deg high-angle lob (-0.52 rad)
-  cradle.rotation.x = isStowed ? -Math.PI / 2 : -0.52;
+  const matStatusLed = new t.MeshStandardMaterial({
+    color: 0x22ff66,
+    emissive: 0x11cc44,
+    emissiveIntensity: 0.85,
+    roughness: 0.25,
+    metalness: 0.2,
+  });
+  if (options.csmState) installCsmShaderPatch(matStatusLed, options.csmState);
+  const statusLed = new t.Mesh(new t.BoxGeometry(0.10, 0.03, 0.05), matStatusLed);
+  statusLed.name = "mortar-status-led";
+  statusLed.position.set(0, -0.45, 0.24);
+  statusLed.castShadow = true;
+  statusLed.receiveShadow = true;
 
   // Smoothbore pneumatic mortar tube + green chemical band
   const barrelGeom = mergeParts(t, [
@@ -1213,7 +1428,27 @@ export function buildMortarTurret(three, options = {}) {
 
   cradle.add(barrel);
   carriage.add(cheekMesh, cradle);
-  root.add(recoilRing, carriage);
+  root.add(recoilRing, statusLed, carriage);
+
+  let isStowed = false;
+  function setStowed(stowed) {
+    isStowed = Boolean(stowed);
+    if (isStowed) {
+      carriage.position.z = 0.36;
+      carriage.rotation.z = 0;
+      cradle.rotation.x = -Math.PI / 2;
+      barrel.position.z = 0.42;
+      matStatusLed.color.setHex(0xffaa22);
+      matStatusLed.emissive.setHex(0xdd8800);
+      matStatusLed.emissiveIntensity = 0.25;
+    } else {
+      cradle.rotation.x = -0.52;
+      matStatusLed.color.setHex(0x22ff66);
+      matStatusLed.emissive.setHex(0x11cc44);
+      matStatusLed.emissiveIntensity = 0.85;
+    }
+  }
+  setStowed(Boolean(options.stowed));
 
   return {
     root,
@@ -1223,14 +1458,20 @@ export function buildMortarTurret(three, options = {}) {
     pallet,
     wcid: DEPLOYABLE_WCID.MortarTurret,
     palletSize: "half",
+    get stowed() { return isStowed; },
+    setStowed,
     update(state = {}) {
-      if (isStowed) return;
-      if (Number.isFinite(state.deployElevation)) {
-        carriage.position.z = 0.36 + Math.min(1, Math.max(0, state.deployElevation)) * 0.24;
+      const s = state && typeof state === "object" ? state : {};
+      if (s.stowed !== undefined) {
+        setStowed(s.stowed);
       }
-      if (Number.isFinite(state.yawRad)) carriage.rotation.z = state.yawRad;
-      if (Number.isFinite(state.pitchRad)) cradle.rotation.x = state.pitchRad;
-      const safeRecoil = Number.isFinite(state.recoilSec) ? state.recoilSec : 0;
+      if (isStowed) return;
+      if (Number.isFinite(s.deployElevation)) {
+        carriage.position.z = 0.36 + Math.min(1, Math.max(0, s.deployElevation)) * 0.24;
+      }
+      if (Number.isFinite(s.yawRad)) carriage.rotation.z = s.yawRad;
+      if (Number.isFinite(s.pitchRad)) cradle.rotation.x = s.pitchRad;
+      const safeRecoil = Number.isFinite(s.recoilSec) ? s.recoilSec : 0;
       const recoilKick = Math.max(0, safeRecoil * 0.10);
       barrel.position.z = 0.42 - recoilKick;
     },
@@ -1238,6 +1479,8 @@ export function buildMortarTurret(three, options = {}) {
       pallet.dispose();
       recoilRing.geometry.dispose();
       recoilRing.material.dispose();
+      statusLed.geometry.dispose();
+      statusLed.material.dispose();
       cheekMesh.geometry.dispose();
       cheekMesh.material.dispose();
       barrel.geometry.dispose();
@@ -1257,8 +1500,6 @@ export function buildHeavyLaserTurret(three, options = {}) {
   root.name = "heavy-laser-turret-root";
   const pallet = buildPallet(t, "half", options);
   root.add(pallet.root);
-
-  const isStowed = Boolean(options.stowed);
 
   // Armored pedestal with copper thermal fins (0.54 × 0.92 m <= 0.57 × 0.98 m)
   const pedParts = [
@@ -1309,12 +1550,6 @@ export function buildHeavyLaserTurret(three, options = {}) {
   barrelGimbal.name = "laser-barrels-pitch";
   barrelGimbal.position.set(0, 0, 0.24);
 
-  // If stowed, emitters stow level at 0° (total stowed height ~1.05 m <= 1.25 m)
-  if (isStowed) {
-    turretHead.rotation.z = 0;
-    barrelGimbal.rotation.x = 0;
-  }
-
   // Faceted twin gunmetal laser emitter barrels pointing forward along +Y
   const barrelGeom = mergeParts(t, [
     zBox(t, 0.38, 0.56, 0.30, 0x32373c, 0, -0.05, 0),
@@ -1359,6 +1594,21 @@ export function buildHeavyLaserTurret(three, options = {}) {
   turretHead.add(yokeMesh, barrelGimbal);
   root.add(pedestal, turretHead);
 
+  let isStowed = false;
+  function setStowed(stowed) {
+    isStowed = Boolean(stowed);
+    if (isStowed) {
+      turretHead.rotation.z = 0;
+      barrelGimbal.rotation.x = 0;
+      matLaserGlow.color.setHex(0xffaa22);
+      matLaserGlow.opacity = 0.22;
+    } else {
+      matLaserGlow.color.setHex(0xff2233);
+      matLaserGlow.opacity = 0.90;
+    }
+  }
+  setStowed(Boolean(options.stowed));
+
   return {
     root,
     turretHead,
@@ -1366,10 +1616,16 @@ export function buildHeavyLaserTurret(three, options = {}) {
     pallet,
     wcid: DEPLOYABLE_WCID.HeavyLaserTurret,
     palletSize: "half",
+    get stowed() { return isStowed; },
+    setStowed,
     update(state = {}) {
+      const s = state && typeof state === "object" ? state : {};
+      if (s.stowed !== undefined) {
+        setStowed(s.stowed);
+      }
       if (isStowed) return;
-      if (Number.isFinite(state.yawRad)) turretHead.rotation.z = state.yawRad;
-      if (Number.isFinite(state.pitchRad)) barrelGimbal.rotation.x = state.pitchRad;
+      if (Number.isFinite(s.yawRad)) turretHead.rotation.z = s.yawRad;
+      if (Number.isFinite(s.pitchRad)) barrelGimbal.rotation.x = s.pitchRad;
     },
     dispose() {
       pallet.dispose();

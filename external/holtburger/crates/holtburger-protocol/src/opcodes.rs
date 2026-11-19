@@ -524,7 +524,7 @@ pub enum GameActionOpcode {
 
     // --- HBV1 vehicles (holtburger custom, additive; docs/vehicles-2026-11-01) ---
     /// C2S: HBV1 ClientCapabilities (observe / pilot / patch bits). Custom
-    /// opcode block 0x0900-0x090F, unused by retail, ACE and Chorizite.
+    /// opcode block 0x0900-0x091F, unused by retail, ACE and Chorizite.
     VehicleClientCapabilities = 0x0900,
     /// C2S: HBV1 VehicleBoard.
     VehicleBoard = 0x0902,
@@ -536,8 +536,10 @@ pub enum GameActionOpcode {
     VehicleCargo = 0x0909,
     /// C2S: HBV1 VehicleContainerAction (door toggle / load / pack / unpack).
     VehicleContainerAction = 0x090E,
-    /// C2S: HBV1 VehicleTrailerAction (hitch / unhitch / twistlock / mount / unmount).
+    /// C2S: HBV1 VehicleTrailerAction (hitch / unhitch / twistlock / mount / unmount / sidelift).
     VehicleTrailerAction = 0x090F,
+    /// C2S: HBV1 VehiclePalletJackAction (walk-behind pallet jack operator action).
+    VehiclePalletJackAction = 0x0910,
     // /// C2S: Response to an admin plugin detail query.
     // QueryPluginResponse = 0x02B2,
     /// C2S: Finalize character changes in a barber session (retail
@@ -1097,6 +1099,8 @@ pub enum GameEventOpcode {
     VehicleContainerState = 0x090E,
     /// S2C: HBV1 VehicleTrailerState (authoritative semi-trailer telemetry broadcast).
     VehicleTrailerState = 0x090F,
+    /// S2C: HBV1 VehiclePalletJackState (authoritative walk-behind pallet jack telemetry broadcast).
+    VehiclePalletJackState = 0x0910,
     // /// S2C: Admin-only query for a specific plugin's status.
     // AdminQueryPlugin = 0x02B1,
     // /// S2C: Admin-only response to a plugin query.

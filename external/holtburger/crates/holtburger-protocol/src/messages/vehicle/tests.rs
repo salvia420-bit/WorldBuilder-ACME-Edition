@@ -81,6 +81,18 @@ fn c2s_fields(m: &VehicleC2S) -> Value {
             "Slot": ta.slot,
             "Flags": ta.flags,
         }),
+        VehicleC2S::PalletJackAction(pj) => json!({
+            "PalletJackGuid": pj.pallet_jack_guid,
+            "Action": pj.action,
+            "SlotIndex": pj.slot_index,
+            "SubSlot": pj.sub_slot,
+            "Flags": pj.flags,
+            "TargetGuid": pj.target_guid,
+            "Cell": pj.cell,
+            "Position": v3(pj.position),
+            "Heading": f(pj.heading),
+            "TillerAngle": f(pj.tiller_angle),
+        }),
     }
 }
 
@@ -142,6 +154,18 @@ fn c2s_from(opcode: u32, o: &Value) -> VehicleC2S {
             action: gu(o, "Action") as u8,
             slot: gu(o, "Slot") as u8,
             flags: gu(o, "Flags") as u16,
+        }),
+        c2s::PALLET_JACK_ACTION => VehicleC2S::PalletJackAction(VehiclePalletJackAction {
+            pallet_jack_guid: gu(o, "PalletJackGuid"),
+            action: gu(o, "Action") as u8,
+            slot_index: gu(o, "SlotIndex") as u8,
+            sub_slot: gu(o, "SubSlot") as u8,
+            flags: gu(o, "Flags") as u8,
+            target_guid: gu(o, "TargetGuid"),
+            cell: gu(o, "Cell"),
+            position: gv3(o, "Position"),
+            heading: gf(o, "Heading"),
+            tiller_angle: gf(o, "TillerAngle"),
         }),
         _ => panic!("not a C2S vehicle opcode {opcode:#x}"),
     }
@@ -362,6 +386,31 @@ fn s2c_fields(m: &VehicleS2C) -> Value {
             "TrailerFlags": ts.trailer_flags,
             "Reserved": ts.reserved,
             "OwnerGuid": ts.owner_guid,
+            "SideliftPhase": ts.sidelift_phase,
+            "SideliftSide": ts.sidelift_side,
+            "SideliftFlags": ts.sidelift_flags,
+            "Reserved7": ts.reserved7,
+            "SideliftProgress": f(ts.sidelift_progress),
+            "OutriggerProgress": f(ts.outrigger_progress),
+            "CraneSpanY": f(ts.crane_span_y),
+            "StowedPalletJackGuid": ts.stowed_pallet_jack_guid,
+            "TransferContainerGuid": ts.transfer_container_guid,
+        }),
+        VehicleS2C::PalletJackState(pj) => json!({
+            "PalletJackGuid": pj.pallet_jack_guid,
+            "OperatorGuid": pj.operator_guid,
+            "StowedOnTrailerGuid": pj.stowed_on_trailer_guid,
+            "Cell": pj.cell,
+            "Position": v3(pj.position),
+            "Heading": f(pj.heading),
+            "TillerAngle": f(pj.tiller_angle),
+            "ForkHeightM": f(pj.fork_height_m),
+            "ForkState": pj.fork_state,
+            "CarriedPalletSize": pj.carried_pallet_size,
+            "Flags": pj.flags,
+            "Reserved": pj.reserved,
+            "CarriedWcid": pj.carried_wcid,
+            "OwnerGuid": pj.owner_guid,
         }),
     }
 }
@@ -666,6 +715,31 @@ fn s2c_from(opcode: u32, o: &Value) -> VehicleS2C {
             container_slot: gu(o, "ContainerSlot") as u8,
             trailer_flags: gu(o, "TrailerFlags") as u8,
             reserved: gu(o, "Reserved") as u16,
+            owner_guid: gu(o, "OwnerGuid"),
+            sidelift_phase: o.get("SideliftPhase").and_then(|v| v.as_u64()).unwrap_or(0) as u8,
+            sidelift_side: o.get("SideliftSide").and_then(|v| v.as_i64()).unwrap_or(1) as i8,
+            sidelift_flags: o.get("SideliftFlags").and_then(|v| v.as_u64()).unwrap_or(0) as u8,
+            reserved7: o.get("Reserved7").and_then(|v| v.as_u64()).unwrap_or(0) as u8,
+            sidelift_progress: o.get("SideliftProgress").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32,
+            outrigger_progress: o.get("OutriggerProgress").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32,
+            crane_span_y: o.get("CraneSpanY").and_then(|v| v.as_f64()).unwrap_or(5.9925) as f32,
+            stowed_pallet_jack_guid: o.get("StowedPalletJackGuid").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
+            transfer_container_guid: o.get("TransferContainerGuid").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
+        }),
+        s2c::PALLET_JACK_STATE => VehicleS2C::PalletJackState(VehiclePalletJackState {
+            pallet_jack_guid: gu(o, "PalletJackGuid"),
+            operator_guid: gu(o, "OperatorGuid"),
+            stowed_on_trailer_guid: gu(o, "StowedOnTrailerGuid"),
+            cell: gu(o, "Cell"),
+            position: gv3(o, "Position"),
+            heading: gf(o, "Heading"),
+            tiller_angle: gf(o, "TillerAngle"),
+            fork_height_m: gf(o, "ForkHeightM"),
+            fork_state: gu(o, "ForkState") as u8,
+            carried_pallet_size: gu(o, "CarriedPalletSize") as u8,
+            flags: gu(o, "Flags") as u8,
+            reserved: gu(o, "Reserved") as u8,
+            carried_wcid: gu(o, "CarriedWcid"),
             owner_guid: gu(o, "OwnerGuid"),
         }),
         _ => panic!("not an S2C vehicle opcode {opcode:#x}"),
@@ -1147,7 +1221,7 @@ fn hbv1_truncated_input_rejected() {
 
 #[test]
 fn hbv1_v6_fields_and_enums() {
-    assert_eq!(HBV1_VERSION, 6);
+    assert!(HBV1_VERSION >= 6);
     assert_eq!(deployable_kind::TRAILER_CHASSIS_20, 13);
     assert_eq!(deployable_kind::TRAILER_CHASSIS_40, 14);
     assert_eq!(event_kind::TRAILER_HITCHED, 19);
@@ -1201,7 +1275,7 @@ fn hbv1_v6_fields_and_enums() {
     assert_eq!(ta.slot, 1);
 
     let ts_bytes = fixture_bytes("vehicle_trailer_state");
-    assert_eq!(ts_bytes.len(), 60);
+    assert_eq!(ts_bytes.len(), 84);
     let VehicleS2C::TrailerState(ts) = unpack_s2c(s2c::TRAILER_STATE, &ts_bytes) else {
         panic!("trailer state")
     };
@@ -1250,9 +1324,9 @@ fn hbv1_v5_payloads_default_v6_fields() {
 }
 
 #[test]
-fn hbv1_v7_future_version_extra_bytes() {
+fn hbv1_v8_future_version_extra_bytes() {
     let fx = fixture("future_version_extra_bytes");
-    assert_eq!(fx["version"].as_u64(), Some(7));
+    assert_eq!(fx["version"].as_u64(), Some(8));
     let bytes = hex::decode(fx["hex"].as_str().unwrap()).unwrap();
     assert_eq!(bytes.len(), 104);
     let VehicleS2C::State(s) = unpack_s2c(s2c::STATE, &bytes) else {
@@ -1263,22 +1337,39 @@ fn hbv1_v7_future_version_extra_bytes() {
     assert_eq!(buf.len(), 100);
     assert_eq!(hex::encode(&buf), fx["repack_hex"].as_str().unwrap());
 
-    // Synthetic v7 TrailerAction & TrailerState with trailing bytes skip cleanly
-    let mut ta_v7 = fixture_bytes("vehicle_trailer_action");
-    ta_v7[4..6].copy_from_slice(&7u16.to_le_bytes());
-    ta_v7.extend_from_slice(&[0xDE, 0xAD, 0xBE, 0xEF]);
+    // Synthetic v8 TrailerAction & TrailerState with trailing bytes skip cleanly
+    let mut ta_v8 = fixture_bytes("vehicle_trailer_action");
+    ta_v8[4..6].copy_from_slice(&8u16.to_le_bytes());
+    ta_v8.extend_from_slice(&[0xDE, 0xAD, 0xBE, 0xEF]);
     let mut off = 0;
-    let ta = VehicleC2S::unpack_payload(c2s::TRAILER_ACTION, &ta_v7, &mut off).expect("v7 trailer action");
-    assert_eq!(off, ta_v7.len());
+    let ta = VehicleC2S::unpack_payload(c2s::TRAILER_ACTION, &ta_v8, &mut off).expect("v8 trailer action");
+    assert_eq!(off, ta_v8.len());
     assert!(matches!(ta, VehicleC2S::TrailerAction(_)));
 
-    let mut ts_v7 = fixture_bytes("vehicle_trailer_state");
-    ts_v7[4..6].copy_from_slice(&7u16.to_le_bytes());
-    ts_v7.extend_from_slice(&[0xCA, 0xFE, 0xBA, 0xBE]);
+    let mut ts_v8 = fixture_bytes("vehicle_trailer_state");
+    ts_v8[4..6].copy_from_slice(&8u16.to_le_bytes());
+    ts_v8.extend_from_slice(&[0xCA, 0xFE, 0xBA, 0xBE]);
     let mut off = 0;
-    let ts = VehicleS2C::unpack_payload(s2c::TRAILER_STATE, &ts_v7, &mut off).expect("v7 trailer state");
-    assert_eq!(off, ts_v7.len());
+    let ts = VehicleS2C::unpack_payload(s2c::TRAILER_STATE, &ts_v8, &mut off).expect("v8 trailer state");
+    assert_eq!(off, ts_v8.len());
     assert!(matches!(ts, VehicleS2C::TrailerState(_)));
+
+    // Synthetic v8 PalletJackAction & PalletJackState with trailing bytes skip cleanly
+    let mut pja_v8 = fixture_bytes("vehicle_pallet_jack_action");
+    pja_v8[4..6].copy_from_slice(&8u16.to_le_bytes());
+    pja_v8.extend_from_slice(&[0x12, 0x34, 0x56, 0x78]);
+    let mut off = 0;
+    let pja = VehicleC2S::unpack_payload(c2s::PALLET_JACK_ACTION, &pja_v8, &mut off).expect("v8 pallet jack action");
+    assert_eq!(off, pja_v8.len());
+    assert!(matches!(pja, VehicleC2S::PalletJackAction(_)));
+
+    let mut pjs_v8 = fixture_bytes("vehicle_pallet_jack_state");
+    pjs_v8[4..6].copy_from_slice(&8u16.to_le_bytes());
+    pjs_v8.extend_from_slice(&[0xAB, 0xCD, 0xEF, 0x01]);
+    let mut off = 0;
+    let pjs = VehicleS2C::unpack_payload(s2c::PALLET_JACK_STATE, &pjs_v8, &mut off).expect("v8 pallet jack state");
+    assert_eq!(off, pjs_v8.len());
+    assert!(matches!(pjs, VehicleS2C::PalletJackState(_)));
 }
 
 #[test]
@@ -1376,6 +1467,15 @@ fn hbv1_trailer_0x090f_routes_through_game_message() {
         trailer_flags: 7,
         reserved: 0,
         owner_guid: 1342177281,
+        sidelift_phase: 0,
+        sidelift_side: 1,
+        sidelift_flags: 0,
+        reserved7: 0,
+        sidelift_progress: 0.0,
+        outrigger_progress: 0.0,
+        crane_span_y: 5.9925,
+        stowed_pallet_jack_guid: 0,
+        transfer_container_guid: 0,
     };
     let ge = GameMessage::GameEvent(Box::new(GameEventMessage {
         target: Guid(1342177281),
@@ -1384,8 +1484,8 @@ fn hbv1_trailer_0x090f_routes_through_game_message() {
     }));
     let mut ge_buf = Vec::new();
     ge.pack(&mut ge_buf);
-    // 0xF7B0 (4) + target (4) + seq (4) + opcode 0x090F (4) + 60B HBV1 payload = 76B
-    assert_eq!(ge_buf.len(), 76);
+    // 0xF7B0 (4) + target (4) + seq (4) + opcode 0x090F (4) + 84B HBV1 payload = 100B
+    assert_eq!(ge_buf.len(), 100);
     let mut off = 0;
     let ge_unpacked = GameMessage::unpack(&ge_buf, &mut off).expect("unpack 0x090F GameEvent");
     assert_eq!(off, ge_buf.len());
@@ -1405,4 +1505,199 @@ fn hbv1_trailer_0x090f_routes_through_game_message() {
         panic!("expected event")
     };
     assert!(matches!(e.event, GameEvent::Unknown(0x090F, _)), "{:?}", e.event);
+}
+
+#[test]
+fn hbv1_v7_fields_and_enums() {
+    assert_eq!(HBV1_VERSION, 7);
+    assert_eq!(deployable_kind::TRAILER_SIDELIFTER_40, 15);
+    assert_eq!(deployable_kind::PALLET_JACK, 16);
+    assert_eq!(event_kind::SIDELIFT_STARTED, 22);
+    assert_eq!(event_kind::SIDELIFT_COMPLETE, 23);
+    assert_eq!(event_kind::SIDELIFT_REFUSED, 24);
+    assert_eq!(event_kind::PALLET_JACK_EVENT, 25);
+    assert_eq!(trailer_action_kind::DEPLOY_OUTRIGGERS, 6);
+    assert_eq!(trailer_action_kind::AUTO_LOAD, 14);
+    assert_eq!(sidelift_phase::IDLE, 0);
+    assert_eq!(sidelift_phase::SWINGING, 6);
+    assert_eq!(sidelift_phase::OUTRIGGERS_RETRACTING, 10);
+    assert_eq!(sidelift_flags::IS_SIDELIFTER, 0x01);
+    assert_eq!(sidelift_flags::IS_LOAD_DIRECTION, 0x10);
+    assert_eq!(pallet_jack_action_kind::GRAB, 1);
+    assert_eq!(pallet_jack_action_kind::TOGGLE_DEPLOYABLE_STOW, 10);
+    assert_eq!(pallet_jack_flags::CARRYING, 0x01);
+    assert_eq!(pallet_jack_flags::ON_CONTAINER_RAMP_OR_FLOOR, 0x02);
+    assert_eq!(pallet_jack_flags::STOWED, 0x04);
+    assert_eq!(online_flags::STOWED, 0x10);
+
+    let sl_bytes = fixture_bytes("vehicle_trailer_state_sidelifter");
+    assert_eq!(sl_bytes.len(), 84);
+    let VehicleS2C::TrailerState(sl) = unpack_s2c(s2c::TRAILER_STATE, &sl_bytes) else {
+        panic!("sidelifter trailer state")
+    };
+    assert_eq!(sl.kind, deployable_kind::TRAILER_SIDELIFTER_40);
+    assert_eq!(sl.sidelift_phase, sidelift_phase::SWINGING);
+    assert_eq!(sl.sidelift_side, -1);
+    assert_eq!(sl.sidelift_flags, 15);
+    assert_eq!(sl.sidelift_progress, 0.5);
+    assert_eq!(sl.outrigger_progress, 1.0);
+    assert_eq!(sl.crane_span_y, 2.9265);
+    assert_eq!(sl.stowed_pallet_jack_guid, 1342177600);
+    assert_eq!(sl.transfer_container_guid, 1342177400);
+
+    let pja_bytes = fixture_bytes("vehicle_pallet_jack_action");
+    assert_eq!(pja_bytes.len(), 44);
+    let mut off = 0;
+    let Some(VehicleC2S::PalletJackAction(pja)) =
+        VehicleC2S::unpack_payload(c2s::PALLET_JACK_ACTION, &pja_bytes, &mut off)
+    else {
+        panic!("pallet jack action")
+    };
+    assert_eq!(off, pja_bytes.len());
+    assert_eq!(pja.pallet_jack_guid, 1342177600);
+    assert_eq!(pja.action, pallet_jack_action_kind::UPDATE_POSE);
+    assert_eq!(pja.slot_index, 18);
+    assert_eq!(pja.sub_slot, 1);
+    assert_eq!(pja.tiller_angle, -0.35);
+
+    let pjs_bytes = fixture_bytes("vehicle_pallet_jack_state");
+    assert_eq!(pjs_bytes.len(), 60);
+    let VehicleS2C::PalletJackState(pjs) = unpack_s2c(s2c::PALLET_JACK_STATE, &pjs_bytes) else {
+        panic!("pallet jack state")
+    };
+    assert_eq!(pjs.pallet_jack_guid, 1342177600);
+    assert_eq!(pjs.operator_guid, 1342177281);
+    assert_eq!(pjs.fork_height_m, 0.2);
+    assert_eq!(pjs.fork_state, 2);
+    assert_eq!(pjs.carried_pallet_size, pallet_size::FULL);
+    assert_eq!(pjs.flags, 3);
+    assert_eq!(pjs.carried_wcid, 4000010);
+}
+
+#[test]
+fn hbv1_v6_payloads_default_v7_fields() {
+    let fx = fixture("vehicle_trailer_state_v6");
+    let bytes = hex::decode(fx["hex"].as_str().unwrap()).unwrap();
+    assert_eq!(bytes.len(), 60);
+    let VehicleS2C::TrailerState(ts) = unpack_s2c(s2c::TRAILER_STATE, &bytes) else {
+        panic!("trailer state v6")
+    };
+    assert_eq!(ts.sidelift_phase, 0);
+    assert_eq!(ts.sidelift_side, 1);
+    assert_eq!(ts.sidelift_flags, 0);
+    assert_eq!(ts.reserved7, 0);
+    assert_eq!(ts.sidelift_progress, 0.0);
+    assert_eq!(ts.outrigger_progress, 0.0);
+    assert_eq!(ts.crane_span_y, 5.9925);
+    assert_eq!(ts.stowed_pallet_jack_guid, 0);
+    assert_eq!(ts.transfer_container_guid, 0);
+
+    let mut repacked = Vec::new();
+    VehicleS2C::TrailerState(ts).pack_payload(&mut repacked);
+    assert_eq!(repacked.len(), 84);
+    assert_eq!(hex::encode(&repacked), fx["repack_hex"].as_str().unwrap());
+}
+
+#[test]
+fn hbv1_truncated_v7_and_pallet_jack_rejected() {
+    let sl = fixture_bytes("vehicle_trailer_state_sidelifter");
+    for cut in [sl.len() - 1, sl.len() - 12, sl.len() - 24, 60] {
+        let mut off = 0;
+        assert!(VehicleS2C::unpack_payload(s2c::TRAILER_STATE, &sl[..cut], &mut off).is_none());
+        assert_eq!(off, 0);
+    }
+
+    let pja = fixture_bytes("vehicle_pallet_jack_action");
+    for cut in [pja.len() - 1, pja.len() - 8, 8, 4, 0] {
+        let mut off = 0;
+        assert!(VehicleC2S::unpack_payload(c2s::PALLET_JACK_ACTION, &pja[..cut], &mut off).is_none());
+        assert_eq!(off, 0);
+    }
+    let mut pja_bad = pja.clone();
+    pja_bad[0] ^= 0xFF;
+    let mut off = 0;
+    assert!(VehicleC2S::unpack_payload(c2s::PALLET_JACK_ACTION, &pja_bad, &mut off).is_none());
+    assert_eq!(off, 0);
+
+    let pjs = fixture_bytes("vehicle_pallet_jack_state");
+    for cut in [pjs.len() - 1, pjs.len() - 8, 12, 8, 0] {
+        let mut off = 0;
+        assert!(VehicleS2C::unpack_payload(s2c::PALLET_JACK_STATE, &pjs[..cut], &mut off).is_none());
+        assert_eq!(off, 0);
+    }
+    let mut pjs_bad = pjs.clone();
+    pjs_bad[0] ^= 0xFF;
+    let mut off = 0;
+    assert!(VehicleS2C::unpack_payload(s2c::PALLET_JACK_STATE, &pjs_bad, &mut off).is_none());
+    assert_eq!(off, 0);
+}
+
+#[test]
+fn hbv1_pallet_jack_0x0910_routes_through_game_message() {
+    use crate::messages::{GameActionMessage, GameEventMessage};
+    use holtburger_common::Guid;
+
+    let pja = VehiclePalletJackAction {
+        pallet_jack_guid: 1342177600,
+        action: pallet_jack_action_kind::LOAD_CONTAINER_SLOT,
+        slot_index: 18,
+        sub_slot: 1,
+        flags: 0,
+        target_guid: 1342177400,
+        cell: 2847146009,
+        position: [94.25, 118.0, 12.162],
+        heading: 1.570796,
+        tiller_angle: -0.35,
+    };
+    let ga = GameMessage::GameAction(Box::new(GameActionMessage {
+        sequence: 91,
+        action: GameAction::Vehicle(Box::new(VehicleC2S::PalletJackAction(pja))),
+    }));
+    let mut ga_buf = Vec::new();
+    ga.pack(&mut ga_buf);
+    // 0xF7B1 (4) + seq (4) + opcode 0x0910 (4) + 44B HBV1 payload = 56B
+    assert_eq!(ga_buf.len(), 56);
+    let mut off = 0;
+    let ga_unpacked = GameMessage::unpack(&ga_buf, &mut off).expect("unpack 0x0910 GameAction");
+    assert_eq!(off, ga_buf.len());
+    let GameMessage::GameAction(a) = ga_unpacked else {
+        panic!("expected GameAction")
+    };
+    assert_eq!(a.sequence, 91);
+    assert!(matches!(&a.action, GameAction::Vehicle(v) if **v == VehicleC2S::PalletJackAction(pja)));
+
+    let pjs = VehiclePalletJackState {
+        pallet_jack_guid: 1342177600,
+        operator_guid: 1342177281,
+        stowed_on_trailer_guid: 0,
+        cell: 2847146009,
+        position: [94.25, 118.0, 12.162],
+        heading: 1.570796,
+        tiller_angle: -0.35,
+        fork_height_m: 0.2,
+        fork_state: 2,
+        carried_pallet_size: pallet_size::FULL,
+        flags: 3,
+        reserved: 0,
+        carried_wcid: 4000010,
+        owner_guid: 1342177281,
+    };
+    let ge = GameMessage::GameEvent(Box::new(GameEventMessage {
+        target: Guid(1342177281),
+        sequence: 92,
+        event: GameEvent::Vehicle(Box::new(VehicleS2C::PalletJackState(pjs))),
+    }));
+    let mut ge_buf = Vec::new();
+    ge.pack(&mut ge_buf);
+    // 0xF7B0 (4) + target (4) + seq (4) + opcode 0x0910 (4) + 60B HBV1 payload = 76B
+    assert_eq!(ge_buf.len(), 76);
+    let mut off = 0;
+    let ge_unpacked = GameMessage::unpack(&ge_buf, &mut off).expect("unpack 0x0910 GameEvent");
+    assert_eq!(off, ge_buf.len());
+    let GameMessage::GameEvent(e) = ge_unpacked else {
+        panic!("expected GameEvent")
+    };
+    assert_eq!(e.target, Guid(1342177281));
+    assert_eq!(e.sequence, 92);
+    assert!(matches!(&e.event, GameEvent::Vehicle(v) if **v == VehicleS2C::PalletJackState(pjs)));
 }

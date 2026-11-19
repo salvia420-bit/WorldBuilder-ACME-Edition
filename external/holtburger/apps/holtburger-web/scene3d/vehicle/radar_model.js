@@ -105,10 +105,9 @@ export function buildDeployedRadar(three, options = {}) {
   const pallet = buildPallet(t, "full", options);
   root.add(pallet.root);
 
-  const isStowed = Boolean(options.stowed);
   const deckZ = 0.1397; // Full GMA pallet top deck elevation
   // Telescoping mast: stowed collapses to <= 2.10 m (1.80 m, total height <= 2.04 m); deployed 3.10 m
-  const mastHeight = isStowed ? 1.80 : RADAR_SPECS.mastHeightM;
+  const fullMastH = RADAR_SPECS.mastHeightM;
 
   const matSteel = new t.MeshStandardMaterial({
     color: 0x4a5234,
@@ -158,11 +157,11 @@ export function buildDeployedRadar(three, options = {}) {
   tripodMesh.receiveShadow = true;
   root.add(tripodMesh);
 
-  // 2. Telescoping antenna mast
-  const mastGeom = new t.CylinderGeometry(0.05, 0.07, mastHeight, 8);
+  // 2. Telescoping antenna mast (cylinder axis is local +Y, rotated +PI/2 around X to point along +Z)
+  const mastGeom = new t.CylinderGeometry(0.05, 0.07, fullMastH, 8);
   const mastMesh = new t.Mesh(mastGeom, matSteel);
   mastMesh.name = "radar-mast";
-  mastMesh.position.set(0, 0, deckZ + mastHeight / 2);
+  mastMesh.position.set(0, 0, deckZ + fullMastH / 2);
   mastMesh.rotation.x = Math.PI / 2;
   mastMesh.castShadow = true;
   mastMesh.receiveShadow = true;
@@ -185,29 +184,60 @@ export function buildDeployedRadar(three, options = {}) {
   // 5. Rotating parabolic reflector dish
   const dishPivot = new t.Group();
   dishPivot.name = "dishPivot";
-  dishPivot.position.set(0, 0, deckZ + mastHeight);
+  dishPivot.position.set(0, 0, deckZ + fullMastH);
 
-  const dishMesh = new t.Mesh(new t.SphereGeometry(isStowed ? 0.20 : 0.90, 16, 8, 0, Math.PI), matDishWire);
+  const dishMesh = new t.Mesh(new t.SphereGeometry(0.90, 16, 8, 0, Math.PI), matDishWire);
   dishMesh.name = "parabolic-dish-reflector";
-  dishMesh.rotation.x = isStowed ? Math.PI : Math.PI / 2;
+  dishMesh.rotation.x = Math.PI / 2;
   dishMesh.castShadow = true;
   dishMesh.receiveShadow = true;
   dishPivot.add(dishMesh);
   root.add(dishPivot);
 
   let currentAzimuth = 0;
+  let isStowed = false;
+
+  function setStowed(stowed) {
+    isStowed = Boolean(stowed);
+    const mastH = isStowed ? 1.80 : fullMastH;
+    mastMesh.scale.set(1, mastH / fullMastH, 1);
+    mastMesh.position.set(0, 0, deckZ + mastH / 2);
+    dishPivot.position.set(0, 0, deckZ + mastH);
+    if (isStowed) {
+      dishPivot.rotation.z = 0;
+      currentAzimuth = 0;
+      dishMesh.scale.setScalar(0.20 / 0.90);
+      dishMesh.rotation.x = Math.PI;
+      matCrtGlow.color.setHex(0xffaa22);
+      matCrtGlow.opacity = 0.25;
+    } else {
+      dishMesh.scale.setScalar(1);
+      dishMesh.rotation.x = Math.PI / 2;
+      matCrtGlow.color.setHex(0x33ff66);
+      matCrtGlow.opacity = 0.85;
+    }
+  }
+  setStowed(Boolean(options.stowed));
 
   return {
     root,
     dishPivot,
     crtWindow,
     pallet,
+    wcid: 4000002,
     palletSize: "full",
     get currentAzimuth() { return currentAzimuth; },
+    get stowed() { return isStowed; },
+    setStowed,
     update(simTimeSec = 0) {
+      let tSec = simTimeSec;
+      if (simTimeSec && typeof simTimeSec === "object") {
+        if (simTimeSec.stowed !== undefined) setStowed(simTimeSec.stowed);
+        tSec = simTimeSec.simTimeSec ?? 0;
+      }
       if (isStowed) return;
       // 15 RPM deterministic from simTimeSec: (simTimeSec * 15 * 2 * PI / 60) % (2 * PI)
-      const safeTime = Number.isFinite(simTimeSec) ? simTimeSec : 0;
+      const safeTime = Number.isFinite(tSec) ? tSec : 0;
       const omega = (RADAR_SPECS.dishRpm * 2 * Math.PI) / 60.0; // 0.5 * PI rad/s
       currentAzimuth = (safeTime * omega) % (2 * Math.PI);
       if (currentAzimuth < 0) currentAzimuth += 2 * Math.PI;
@@ -216,12 +246,22 @@ export function buildDeployedRadar(three, options = {}) {
     },
     dispose() {
       pallet.dispose();
+      const geoms = new Set();
+      const mats = new Set();
       root.traverse((obj) => {
         if (obj === pallet.mesh) return;
-        if (obj.geometry) obj.geometry.dispose();
+        if (obj.geometry && !geoms.has(obj.geometry)) {
+          obj.geometry.dispose();
+          geoms.add(obj.geometry);
+        }
         if (obj.material) {
-          if (Array.isArray(obj.material)) obj.material.forEach((m) => m.dispose());
-          else obj.material.dispose();
+          const list = Array.isArray(obj.material) ? obj.material : [obj.material];
+          for (const m of list) {
+            if (m && !mats.has(m)) {
+              m.dispose();
+              mats.add(m);
+            }
+          }
         }
       });
     },

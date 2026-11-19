@@ -763,8 +763,45 @@ export function buildIsoContainer(three, typeOrWcid = CONTAINER_WCID.IsoContaine
   // =========================================================================
   const cargoBayGroup = new t.Group();
   cargoBayGroup.name = "cargoBayGroup";
-  cargoBayGroup.visible = false;
+  cargoBayGroup.visible = false; // vfx-lint-allow: interior bay culling when doors closed
   root.add(cargoBayGroup);
+
+  // Lazy diegetic floor highlight outline for pinwheel pallet bay slots (attached only while active)
+  function makeHighlightBorderGeom(w, d) {
+    const bw = 0.035;
+    const bh = 0.008;
+    const hw = w / 2;
+    const hd = d / 2;
+    return mergeParts(t, [
+      zBox(t, w, bw, bh, 0xffffff, 0, +hd - bw / 2, 0),
+      zBox(t, w, bw, bh, 0xffffff, 0, -hd + bw / 2, 0),
+      zBox(t, bw, Math.max(0.05, d - 2 * bw), bh, 0xffffff, -hw + bw / 2, 0, 0),
+      zBox(t, bw, Math.max(0.05, d - 2 * bw), bh, 0xffffff, +hw - bw / 2, 0, 0),
+    ]);
+  }
+  const fullSlotGeom = makeHighlightBorderGeom(1.2192, 1.0160);
+  const halfSlotGeom = makeHighlightBorderGeom(0.6096, 1.0160);
+  const highlightMat = new t.MeshStandardMaterial({
+    color: 0x000000,
+    emissive: 0x22dd66,
+    emissiveIntensity: 1.4,
+    roughness: 0.4,
+    metalness: 0.1,
+    transparent: true,
+    opacity: 0.78,
+    depthWrite: false,
+    side: t.DoubleSide,
+  });
+  if (options.csmState) installCsmShaderPatch(highlightMat, options.csmState);
+
+  const bayHighlightPivot = new t.Group();
+  bayHighlightPivot.name = "bay-slot-highlight-pivot";
+  const bayHighlightMesh = new t.Mesh(fullSlotGeom, highlightMat);
+  bayHighlightMesh.name = "bay-slot-highlight";
+  bayHighlightMesh.castShadow = false;
+  bayHighlightMesh.receiveShadow = false;
+  bayHighlightMesh.visible = false; // vfx-lint-allow: bay slot highlight visibility
+  bayHighlightPivot.add(bayHighlightMesh);
 
   const loadedSlots = new Map(); // slotKey ("${slotIndex}" or "${slotIndex}:${subSlot}") -> { slotIndex, subSlot, isHalf, slotKey, wcid, slotGroup, pallet, deployableModel }
   let currentDoorProgress = 0.0;
@@ -896,6 +933,49 @@ export function buildIsoContainer(three, typeOrWcid = CONTAINER_WCID.IsoContaine
     }
   }
 
+  const HIGHLIGHT_STATES = {
+    reachable: { hex: 0x22dd66, intensity: 1.4, opacity: 0.78 },
+    blocked: { hex: 0xff4422, intensity: 1.5, opacity: 0.82 },
+    target: { hex: 0x55ffbb, intensity: 2.6, opacity: 0.94 },
+  };
+
+  function setHighlightedSlot(slotIndex, subSlot = null, state = null) {
+    const style = state ? HIGHLIGHT_STATES[state] : null;
+    if (slotIndex === null || slotIndex === undefined || !style) {
+      bayHighlightMesh.visible = false; // vfx-lint-allow: bay slot highlight visibility
+      if (bayHighlightPivot.parent) {
+        bayHighlightPivot.parent.remove(bayHighlightPivot);
+      }
+      return false;
+    }
+    const slotsDef = spec.kind === 10 ? PINWHEEL_SLOTS_20 : PINWHEEL_SLOTS_40;
+    const idx = typeof slotIndex === "number" ? Math.trunc(slotIndex) : parseInt(String(slotIndex), 10);
+    const slotDef = Number.isFinite(idx) ? slotsDef[idx] : null;
+    if (!slotDef) {
+      bayHighlightMesh.visible = false; // vfx-lint-allow: bay slot highlight visibility
+      if (bayHighlightPivot.parent) {
+        bayHighlightPivot.parent.remove(bayHighlightPivot);
+      }
+      return false;
+    }
+    const isHalf = subSlot === 0 || subSlot === 1 || subSlot === "0" || subSlot === "1";
+    const xOffset = isHalf ? (Number(subSlot) === 1 ? +0.3048 : -0.3048) : 0;
+
+    bayHighlightMesh.geometry = isHalf ? halfSlotGeom : fullSlotGeom;
+    highlightMat.emissive.setHex(style.hex);
+    highlightMat.emissiveIntensity = style.intensity;
+    highlightMat.opacity = style.opacity;
+
+    bayHighlightPivot.position.set(slotDef.x, slotDef.y, spec.floorZ + 0.016);
+    bayHighlightPivot.rotation.z = slotDef.orient === "Y" ? Math.PI / 2 : 0;
+    bayHighlightMesh.position.set(xOffset, 0, 0);
+    bayHighlightMesh.visible = true; // vfx-lint-allow: bay slot highlight visibility
+    if (bayHighlightPivot.parent !== cargoBayGroup) {
+      cargoBayGroup.add(bayHighlightPivot);
+    }
+    return true;
+  }
+
   function setDoorProgress(p) {
     const prog = Number.isFinite(p) ? Math.max(0.0, Math.min(1.0, p)) : (p > 0 ? 1.0 : 0.0);
     currentDoorProgress = prog;
@@ -911,7 +991,7 @@ export function buildIsoContainer(three, typeOrWcid = CONTAINER_WCID.IsoContaine
     rampPivot.rotation.x = prog * 0.1918;
 
     // Cargo bay dynamically culled when doors are closed (prog <= 0.01)
-    cargoBayGroup.visible = prog > 0.01;
+    cargoBayGroup.visible = prog > 0.01; // vfx-lint-allow: interior bay culling when doors closed
   }
 
   // Initialize with initial door progress
@@ -937,6 +1017,9 @@ export function buildIsoContainer(three, typeOrWcid = CONTAINER_WCID.IsoContaine
     loadSlot,
     unloadSlot,
     syncSlots,
+    setHighlightedSlot,
+    bayHighlightPivot,
+    bayHighlightMesh,
     update(dt = 0.033, state = {}) {
       if (state.doorProgress !== undefined) {
         setDoorProgress(state.doorProgress);
@@ -946,6 +1029,10 @@ export function buildIsoContainer(three, typeOrWcid = CONTAINER_WCID.IsoContaine
       }
     },
     dispose() {
+      setHighlightedSlot(null, null, null);
+      fullSlotGeom.dispose();
+      halfSlotGeom.dispose();
+      highlightMat.dispose();
       for (const idx of [...loadedSlots.keys()]) {
         unloadSlot(idx);
       }

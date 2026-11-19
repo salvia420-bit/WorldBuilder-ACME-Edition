@@ -17,7 +17,27 @@ import { installCsmShaderPatch } from "../materials.js";
 export const TRAILER_KIND = Object.freeze({ Chassis20ft: "20ft", Chassis40ft: "40ft" });
 
 // Reserved WCIDs (distinct from CONTAINER_WCID 4000020..4000022 and the deployables 4000002/4000010..17).
-export const TRAILER_WCID = Object.freeze({ Chassis20ft: 4000030, Chassis40ft: 4000031 });
+export const TRAILER_WCID = Object.freeze({
+  Chassis20ft: 4000030,
+  Chassis40ft: 4000031,
+  Sidelifter40: 4000032,
+});
+
+export const TRAILER_DEPLOYABLE_KIND = Object.freeze({
+  Chassis20ft: 13,
+  Chassis40ft: 14,
+  Sidelifter40: 15,
+});
+
+export function isSidelifterKind(k) {
+  return (
+    k === 15 ||
+    k === TRAILER_WCID.Sidelifter40 ||
+    k === "sidelifter40" ||
+    k === "Sidelifter40" ||
+    k === "TrailerSidelifter40"
+  );
+}
 
 export const TWISTLOCK_STATE = Object.freeze({ Unlocked: 0, Locked: 1 });
 
@@ -60,8 +80,13 @@ export function resolveTrailerKind(k) {
     k === 40 ||
     k === "Chassis40ft" ||
     k === "TrailerChassis40" ||
+    k === "sidelifter40" ||
+    k === "Sidelifter40" ||
+    k === "TrailerSidelifter40" ||
     k === TRAILER_WCID.Chassis40ft ||
-    k === 14
+    k === TRAILER_WCID.Sidelifter40 ||
+    k === 14 ||
+    k === 15
   ) {
     return "40ft";
   }

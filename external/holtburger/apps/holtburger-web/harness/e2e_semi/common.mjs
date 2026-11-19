@@ -1770,6 +1770,8 @@ export class LiveSession {
         skytime: process.env.SKYTIME || "10",
         cloudCoverage: process.env.COVERAGE || "0.45",
         adaptiveRes: "off",
+        portalSpace: "off",
+        atmosphereLut: "load",
       });
       return `http://127.0.0.1:8765/apps/holtburger-web/index.html?${q}`;
     })();
@@ -1840,6 +1842,7 @@ export class LiveSession {
     });
 
     let inWorld = false;
+    let createdTestChar = false;
     for (let attempt = 1; attempt <= 4 && !inWorld; attempt++) {
       await this.page.goto(httpUrl, { waitUntil: "domcontentloaded", timeout: 120000 });
       const t0 = Date.now();
@@ -1848,6 +1851,7 @@ export class LiveSession {
           .evaluate(() => ({
             s: window.__bootState,
             w: (window.__bootStateHistory || []).some((x) => x.state === "in-world") &&
+              (window.__bootState === "ready" || !!window.__sceneReadyEverFired) &&
               !!window.liveScene3d &&
               window.__sessionHandle?.getLocalPlayerPose?.() !== undefined,
           }))
@@ -1855,6 +1859,29 @@ export class LiveSession {
         if (st.w) {
           inWorld = true;
           break;
+        }
+        if ((st.s === "char-list-ready" || st.s === "error") && !createdTestChar) {
+          const charInfo = await this.page
+            .evaluate(() => ({
+              len: window.__sessionHandle?.characterList?.()?.length ?? -1,
+              canCreate: !!window.__sessionHandle?.canCreateCharacter,
+            }))
+            .catch(() => ({}));
+          if (charInfo.len === 0 && charInfo.canCreate) {
+            createdTestChar = true;
+            await this.page
+              .evaluate(() => window.__sessionHandle?.createTestCharacter?.("TailnetOne"))
+              .catch(() => {});
+            const c0 = Date.now();
+            while (Date.now() - c0 < 10000) {
+              const n = await this.page
+                .evaluate(() => window.__sessionHandle?.characterList?.()?.length ?? 0)
+                .catch(() => 0);
+              if (n > 0) break;
+              await new Promise((r) => setTimeout(r, 250));
+            }
+            break;
+          }
         }
         if (st.s === "error") {
           await new Promise((r) => setTimeout(r, 8000));

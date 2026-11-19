@@ -26,7 +26,7 @@ import { createWeaponsFx, predictImpact } from "./weapons.js";
 import { airframeEnabled, createAirframes, hasComposite, kindOrdinal } from "./airframe.js";
 import { aeroFxEnabled, createAeroFx } from "./aero_fx.js";
 import { createPilotCameraRig, VIEW_MODES, COCKPIT_EYE, HOOD_EYE } from "./camera_rig.js";
-import { createVehicleAudio, createGroundVehicleAudio, vehicleAudioEnabled, threeToAcPos } from "./audio.js";
+import { createVehicleAudio, createGroundVehicleAudio, vehicleAudioEnabled, threeToAcPos, createLogisticsAudio } from "./audio.js";
 import { stepFall } from "./fall_model.js";
 import { boardAnimEnabled, headingOfQuat, hopDuration, hopHeading, hopPoint, HOP } from "./board_hop.js";
 import { chuteEnabled, createChutes } from "./chute.js";
@@ -40,7 +40,13 @@ import { buildDeployable, DEPLOYABLE_WCID, DEPLOYABLE_KINDS } from "./deployable
 import { buildDeployedRadar } from "./radar_model.js";
 import { buildProceduralJeep } from "./jeep_model.js";
 import { buildSemiTruck } from "./semi_truck_model.js";
-import { buildSemiTrailer, resolveTrailerKind, TRAILER_WCID } from "./trailer_models.js";
+import { buildSemiTrailer, resolveTrailerKind, TRAILER_WCID, isSidelifterKind } from "./trailer_models.js";
+import { buildSidelifterTrailer, SIDELIFTER_WCID } from "./sidelifter_model.js";
+import * as SK from "./sidelifter_kinematics.js";
+import { buildPalletJack, PALLET_JACK_WCID } from "./pallet_jack_model.js";
+import * as CL from "./container_logistics.js";
+import { createPalletJackController, PALLET_JACK_ACTION, inOpenModal } from "./pallet_jack_controller.js";
+import { isTypingTarget } from "../drone/controls.js";
 import * as TK from "./trailer_kinematics.js";
 import {
   buildIsoContainer,
@@ -121,6 +127,7 @@ export const EVENT_NAMES = Object.freeze({
   12: "horn", 13: "headlights", 14: "scrape", 15: "cargoDeployed", 16: "cargoPacked",
   17: "ramHit", 18: "radarAlert",
   19: "trailerHitched", 20: "trailerUnhitched", 21: "twistlockToggled",
+  22: "sideliftStarted", 23: "sideliftComplete", 24: "sideliftRefused", 25: "palletJackEvent",
 });
 export const TRAILER_ACTION = Object.freeze({
   None: 0,
@@ -129,6 +136,36 @@ export const TRAILER_ACTION = Object.freeze({
   ToggleTwistlock: 3,
   MountContainer: 4,
   UnmountContainer: 5,
+  DeployOutriggers: 6,
+  RetractOutriggers: 7,
+  SideliftOffload: 8,
+  SideliftLoad: 9,
+  StowPalletJack: 10,
+  DeployPalletJack: 11,
+  CancelSidelift: 12,
+  AutoOffload: 13,
+  AutoLoad: 14,
+});
+export { PALLET_JACK_ACTION };
+export const SIDELIFT_REFUSAL_REASONS = Object.freeze({
+  0: "ISO 3874: Sidelift refused",
+  1: "ISO 3874: Close container doors before sidelift",
+  2: "ISO 3874: Unlock container twistlocks before sidelift",
+  3: "ISO 3874: Terrain cross-slope exceeds 6° limit for outriggers",
+  4: "ISO 3874: Park tractor completely (speed 0) before operating sidelifter",
+  5: "ISO 3874: Deploy stabilizing outriggers before lifting",
+  6: "ISO 3874: Container or ground landing zone obstructed",
+  7: "ISO 3874: Sidelift sequence already in progress",
+});
+export const PALLET_JACK_EVENT_REASONS = Object.freeze({
+  0: "ISO 3691-5: Pallet jack action completed",
+  1: "ISO 3691-5: Pallet jack grabbed",
+  2: "ISO 3691-5: Pallet jack released",
+  3: "ISO 3691-5: Stow/unpower deployable before pallet pickup",
+  4: "ISO 6780 LIFO: Bay slot blocked by forward pallets",
+  5: "ISO 3691-5: Container doors must be open before pallet access",
+  6: "ISO 3691-5: Move within range and align forks with pallet",
+  7: "ISO 3691-5: Pallet jack already operated by another player",
 });
 export const TRAILER_FLAG = Object.freeze({
   COUPLED: 0x01,
@@ -261,10 +298,20 @@ export function installVehicles(deps = {}) {
   });
   const deployableVfx = THREE ? createDeployableCombatVfx({ liveScene3d: live, THREE, ground }) : null;
   const deployableAudio = audioOn ? new DeployableAudioManager(live.audioManager?.getEffectBus?.() ?? null, { enabled: true }) : null;
+  const logisticsAudio = audioOn
+    ? createLogisticsAudio({
+      bus: () => live.audioManager?.getEffectBus?.() ?? null,
+      audioManager: live.audioManager,
+      liveScene3d: live,
+      search,
+    })
+    : null;
   const radarScope = new RadarScopeHud({ width: 236, height: 236, mode: "combined" });
   const deployables = new Map(); // guid -> { guid, kind, wcid, model, last, lastSeenAt, standInHidden }
   const containers = new Map(); // guid -> { guid, kind, wcid, model, last, cell, rawPos, heading, targetDoorProgress, currentDoorProgress, lastDoorOpen, lastSeenAt, standInHidden, liveryId, serialNumber, slots }
-  const trailers = new Map(); // guid -> { guid, kind, specKind, wcid, model, last, cell, rawPos, worldPos, heading, pitch, bank, coupledTractorGuid, mountedContainerGuid, containerSlot, trailerFlags, ownerGuid, coupledKinState, renderedPose, lastSeenAt, standInHidden }
+  const trailers = new Map(); // guid -> { guid, kind, specKind, wcid, model, last, cell, rawPos, worldPos, heading, pitch, bank, coupledTractorGuid, mountedContainerGuid, containerSlot, trailerFlags, ownerGuid, coupledKinState, renderedPose, lastSeenAt, standInHidden, isSidelifter, ...v7 }
+  const palletJacks = new Map(); // guid -> { guid, model, operatorGuid, stowedOnTrailerGuid, cell, rawPos, worldPos, heading, tillerAngle, forkHeightM, forkState, carriedPalletSize, flags, carriedWcid, ownerGuid, last, lastSeenAt, standInHidden }
+  let palletJackController = null;
   const groundModels = new Map(); // guid -> procedural jeep or semi-379 instance
   const jeepModels = groundModels; // backward compatibility alias
   const groundFx = THREE ? createGroundFx({ THREE, root: live.worldRoot, liveScene3d: live }) : null;
@@ -319,7 +366,7 @@ export function installVehicles(deps = {}) {
     [DEPLOYABLE_KINDS.HeavyLaserTurret]: DEPLOYABLE_WCID.HeavyLaserTurret,
   });
 
-  function ensureDeployableEntry(guid, kindOrWcid) {
+  function ensureDeployableEntry(guid, kindOrWcid, initialFlags = 0) {
     if (!THREE || !live?.worldRoot) return null;
     const g = guid >>> 0;
     let entry = deployables.get(g);
@@ -331,7 +378,10 @@ export function installVehicles(deps = {}) {
       entry = null;
     }
     if (!entry) {
-      const model = wcid === 4000002 ? buildDeployedRadar(THREE) : buildDeployable(THREE, wcid);
+      const stowed = Boolean(initialFlags & 0x10);
+      const model = wcid === 4000002
+        ? buildDeployedRadar(THREE, { csmState: live.csmState, stowed })
+        : buildDeployable(THREE, wcid, { csmState: live.csmState, stowed });
       live.worldRoot.add(model.root);
       entry = { guid: g, wcid, model, last: null, lastSeenAt: nowSec(), standInHidden: false };
       deployables.set(g, entry);
@@ -367,6 +417,28 @@ export function installVehicles(deps = {}) {
     11: 11,
     12: 12,
   });
+
+  function isSideliftTransferActive(tr) {
+    const ph = tr?.sideliftPhase ?? 0;
+    return Boolean(tr && tr.isSidelifter && ph >= SK.SIDELIFT_PHASE.CranesPositioning && ph <= SK.SIDELIFT_PHASE.Releasing);
+  }
+
+  function isSideliftColliderSuppressed(tr) {
+    const ph = tr?.sideliftPhase ?? 0;
+    return Boolean(tr && tr.isSidelifter && ph >= SK.SIDELIFT_PHASE.CranesPositioning && ph <= SK.SIDELIFT_PHASE.CranesStowing);
+  }
+
+  function findClaimingTrailer(cGuid) {
+    const g = cGuid >>> 0;
+    if (!g) return null;
+    for (const tr of trailers.values()) {
+      if ((tr.mountedContainerGuid >>> 0) === g) return tr;
+      if (tr.isSidelifter && (tr.transferContainerGuid >>> 0) === g && isSideliftColliderSuppressed(tr)) {
+        return tr;
+      }
+    }
+    return null;
+  }
 
   function ensureContainerEntry(guid, kindOrWcid, initialMsg = {}) {
     if (!THREE || !live?.worldRoot) return null;
@@ -422,10 +494,7 @@ export function installVehicles(deps = {}) {
       containers.set(g, entry);
 
       // Immediately register dynamic physical building collider in WASM physics on initial spawn (unless already claimed by a trailer)
-      let claimedByTrailer = false;
-      for (const tr of trailers.values()) {
-        if ((tr.mountedContainerGuid >>> 0) === g) { claimedByTrailer = true; break; }
-      }
+      const claimedByTrailer = Boolean(findClaimingTrailer(g));
       if (!claimedByTrailer) {
         try {
           sh()?.upsertContainerCollider(g, cell, rawPos[0], rawPos[1], rawPos[2], heading, kind, isDoorOpen);
@@ -451,8 +520,12 @@ export function installVehicles(deps = {}) {
         try { host.model?.detachContainer?.(); } catch (_) {}
         if (host._attachedContainerGuid === g) host._attachedContainerGuid = 0;
         if ((host.mountedContainerGuid >>> 0) === g) host.mountedContainerGuid = 0;
+        if ((host.transferContainerGuid >>> 0) === g) host.transferContainerGuid = 0;
       }
       entry.mountedOnTrailerGuid = 0;
+    }
+    for (const tr of trailers.values()) {
+      if ((tr.transferContainerGuid >>> 0) === g) tr.transferContainerGuid = 0;
     }
     try {
       if (entry.model?.root?.parent) entry.model.root.parent.remove(entry.model.root);
@@ -501,11 +574,32 @@ export function installVehicles(deps = {}) {
 
   function syncTrailerContainerMount(entry) {
     if (!entry || !entry.model) return;
+    if (isSideliftTransferActive(entry)) {
+      if (entry._attachedContainerGuid) {
+        try { entry.model?.detachContainer?.(); } catch (_) {}
+        const detachedGuid = entry._attachedContainerGuid;
+        entry._attachedContainerGuid = 0;
+        const cDet = containers.get(detachedGuid);
+        if (cDet?.model?.root && live?.worldRoot && cDet.model.root.parent !== live.worldRoot) {
+          live.worldRoot.add(cDet.model.root);
+        }
+      }
+      return;
+    }
     const cGuid = (entry.mountedContainerGuid ?? 0) >>> 0;
     if (entry._attachedContainerGuid && entry._attachedContainerGuid !== cGuid) {
       unmountContainerFromTrailer(entry, entry._attachedContainerGuid);
     }
-    if (cGuid === 0) return;
+    if (cGuid === 0) {
+      if (!isSideliftColliderSuppressed(entry)) {
+        for (const cEntry of containers.values()) {
+          if (cEntry.mountedOnTrailerGuid === entry.guid) {
+            unmountContainerFromTrailer(entry, cEntry.guid);
+          }
+        }
+      }
+      return;
+    }
     const cEntry = containers.get(cGuid);
     if (!cEntry || !cEntry.model) return;
     const slotOpt = containerSlotToOpt(entry.containerSlot);
@@ -526,11 +620,14 @@ export function installVehicles(deps = {}) {
   function ensureTrailerEntry(guid, kindOrWcid, initialMsg = {}) {
     if (!THREE || !live?.worldRoot) return null;
     const g = guid >>> 0;
-    const specKind = resolveTrailerKind(kindOrWcid);
-    const wireKind = specKind === "40ft" ? 14 : 13;
-    const wcid = specKind === "40ft" ? (TRAILER_WCID?.Chassis40ft ?? 4000031) : (TRAILER_WCID?.Chassis20ft ?? 4000030);
+    const isSidelifter = isSidelifterKind(kindOrWcid) || Boolean((initialMsg.sideliftFlags ?? 0) & 0x01);
+    const specKind = resolveTrailerKind(isSidelifter ? 15 : kindOrWcid);
+    const wireKind = isSidelifter ? 15 : (specKind === "40ft" ? 14 : 13);
+    const wcid = isSidelifter
+      ? (SIDELIFTER_WCID ?? 4000032)
+      : (specKind === "40ft" ? (TRAILER_WCID?.Chassis40ft ?? 4000031) : (TRAILER_WCID?.Chassis20ft ?? 4000030));
     let entry = trailers.get(g);
-    if (entry && entry.specKind !== specKind) {
+    if (entry && (entry.specKind !== specKind || Boolean(entry.isSidelifter) !== isSidelifter)) {
       if (entry._attachedContainerGuid) unmountContainerFromTrailer(entry, entry._attachedContainerGuid);
       try {
         if (entry.model?.root?.parent) entry.model.root.parent.remove(entry.model.root);
@@ -541,12 +638,29 @@ export function installVehicles(deps = {}) {
     }
     if (!entry) {
       const flags = initialMsg.trailerFlags ?? 0;
-      const model = buildSemiTrailer(THREE, specKind, {
+      const slFlags = initialMsg.sideliftFlags ?? 0;
+      const slPhase = initialMsg.sideliftPhase ?? 0;
+      const slSide = initialMsg.sideliftSide ?? 1;
+      const outProg = initialMsg.outriggerProgress ?? 0;
+      const slProg = initialMsg.sideliftProgress ?? 0;
+      const spanY = initialMsg.craneSpanY || SK.CRANE_SPAN_Y_40FT;
+      const modelOpts = {
         csmState: live.csmState,
         twistlockState: (flags & TRAILER_FLAG.TWISTLOCKS_LOCKED) ? 1 : 0,
         landingGearRetracted: Boolean((flags & TRAILER_FLAG.GEAR_RETRACTED) || (initialMsg.coupledTractorGuid >>> 0)),
         brakeLights: Boolean(flags & TRAILER_FLAG.BRAKE_LIGHTS),
-      });
+      };
+      const model = isSidelifter
+        ? buildSidelifterTrailer(THREE, {
+          ...modelOpts,
+          hasStowedPalletJack: Boolean((slFlags & 0x08) || (initialMsg.stowedPalletJackGuid >>> 0)),
+          craneSpanY: spanY,
+          sideliftPhase: slPhase,
+          sideliftSide: slSide,
+          outriggerProgress: outProg,
+          sideliftProgress: slProg,
+        })
+        : buildSemiTrailer(THREE, specKind, modelOpts);
       const rawPos = Array.isArray(initialMsg.position)
         ? initialMsg.position
         : [initialMsg.x ?? 0, initialMsg.y ?? 0, initialMsg.z ?? 0];
@@ -563,6 +677,7 @@ export function installVehicles(deps = {}) {
         guid: g,
         kind: wireKind,
         specKind,
+        isSidelifter,
         wcid,
         model,
         last: null,
@@ -577,6 +692,18 @@ export function installVehicles(deps = {}) {
         containerSlot: initialMsg.containerSlot ?? 0,
         trailerFlags: flags,
         ownerGuid: (initialMsg.ownerGuid ?? 0) >>> 0,
+        sideliftPhase: slPhase,
+        sideliftSide: slSide,
+        sideliftFlags: slFlags,
+        sideliftProgress: slProg,
+        outriggerProgress: outProg,
+        craneSpanY: spanY,
+        stowedPalletJackGuid: (initialMsg.stowedPalletJackGuid ?? 0) >>> 0,
+        transferContainerGuid: (initialMsg.transferContainerGuid ?? 0) >>> 0,
+        _smoothSideliftProgress: slProg,
+        _smoothOutriggerProgress: outProg,
+        _lastSideliftPhase: slPhase,
+        _lastAudioPhase: slPhase,
         coupledKinState: {
           x: worldPos[0], y: worldPos[1], z: worldPos[2],
           heading, pitch, bank, articulationRad: 0,
@@ -601,6 +728,7 @@ export function installVehicles(deps = {}) {
     const g = guid >>> 0;
     const entry = trailers.get(g);
     if (!entry) return;
+    try { logisticsAudio?.stopSidelifter?.(g); } catch (_) {}
     if (entry._attachedContainerGuid || entry.mountedContainerGuid) {
       unmountContainerFromTrailer(entry, entry._attachedContainerGuid || entry.mountedContainerGuid);
     }
@@ -793,12 +921,198 @@ export function installVehicles(deps = {}) {
     return trPose;
   }
 
+  function ensurePalletJackEntry(guid, initialMsg = {}) {
+    if (!THREE || !live?.worldRoot) return null;
+    const g = guid >>> 0;
+    if (!g) return null;
+    let entry = palletJacks.get(g);
+    if (!entry) {
+      const stowed = Boolean((initialMsg.stowedOnTrailerGuid ?? 0) !== 0 || ((initialMsg.flags ?? 0) & 0x04));
+      const model = buildPalletJack(THREE, {
+        csmState: live.csmState,
+        forkHeightM: initialMsg.forkHeightM ?? 0.085,
+        tillerAngle: initialMsg.tillerAngle ?? 0,
+        carriedWcid: initialMsg.carriedWcid ?? 0,
+        stowed,
+      });
+      const rawPos = Array.isArray(initialMsg.position)
+        ? initialMsg.position
+        : [initialMsg.x ?? 0, initialMsg.y ?? 0, initialMsg.z ?? 0];
+      const cell = (initialMsg.cell ?? 0) >>> 0;
+      const worldPos = cell ? FM.toGlobal(cell, rawPos[0], rawPos[1], rawPos[2]) : [rawPos[0], rawPos[1], rawPos[2]];
+      const heading = Number.isFinite(initialMsg.heading) ? initialMsg.heading : 0;
+      const qInit = FM.orientation(heading, 0, 0);
+      model.root.position.set(worldPos[0], worldPos[1], worldPos[2]);
+      model.root.quaternion.set(qInit[1], qInit[2], qInit[3], qInit[0]);
+      if (!stowed) {
+        live.worldRoot.add(model.root);
+      }
+      entry = {
+        guid: g,
+        wcid: PALLET_JACK_WCID,
+        model,
+        operatorGuid: (initialMsg.operatorGuid ?? 0) >>> 0,
+        stowedOnTrailerGuid: (initialMsg.stowedOnTrailerGuid ?? 0) >>> 0,
+        cell,
+        rawPos,
+        worldPos,
+        heading,
+        tillerAngle: Number.isFinite(initialMsg.tillerAngle) ? initialMsg.tillerAngle : 0,
+        forkHeightM: Number.isFinite(initialMsg.forkHeightM) ? initialMsg.forkHeightM : 0.085,
+        forkState: initialMsg.forkState ?? 0,
+        carriedPalletSize: initialMsg.carriedPalletSize ?? 0,
+        flags: initialMsg.flags ?? 0,
+        carriedWcid: (initialMsg.carriedWcid ?? 0) >>> 0,
+        ownerGuid: (initialMsg.ownerGuid ?? 0) >>> 0,
+        last: null,
+        lastSeenAt: nowSec(),
+        standInHidden: false,
+      };
+      palletJacks.set(g, entry);
+      try { requestShadowRaster(live.renderer, live); } catch (_) {}
+    }
+    return entry;
+  }
+
+  function removePalletJackEntry(guid) {
+    const g = guid >>> 0;
+    const entry = palletJacks.get(g);
+    if (!entry) return;
+    if (palletJackController?.activeGuid === g) {
+      try { palletJackController.stop("despawn"); } catch (_) {}
+    }
+    try { logisticsAudio?.stopWheelRoll?.(g); } catch (_) {}
+    try {
+      if (entry.model?.root?.parent) entry.model.root.parent.remove(entry.model.root);
+      entry.model?.dispose?.();
+    } catch (_) {}
+    if (entry.standInHidden) {
+      try { em()?.setFilmHidden?.(g, false); } catch (_) {}
+    }
+    palletJacks.delete(g);
+  }
+
+  function tickPalletJacks(dt) {
+    for (const entry of palletJacks.values()) {
+      const inEm = em()?.entityMap?.get(entry.guid);
+      if (inEm && (!entry.standInHidden || inEm._filmHidden !== true)) {
+        try { if (em()?.setFilmHidden?.(entry.guid, true)) entry.standInHidden = true; } catch (_) {}
+      }
+      if (palletJackController?.activeGuid === entry.guid) continue;
+      const stowed = Boolean(entry.stowedOnTrailerGuid !== 0 || (entry.flags & 0x04));
+      if (stowed) {
+        if (entry.model?.root?.parent) entry.model.root.parent.remove(entry.model.root);
+        continue;
+      }
+      if (entry.model?.root && live?.worldRoot && entry.model.root.parent !== live.worldRoot) {
+        live.worldRoot.add(entry.model.root);
+      }
+      const [wx, wy, wz] = entry.worldPos;
+      const qPj = FM.orientation(entry.heading || 0, 0, 0);
+      entry.model?.root?.position?.set(wx, wy, wz);
+      entry.model?.root?.quaternion?.set(qPj[1], qPj[2], qPj[3], qPj[0]);
+      try {
+        entry.model?.update?.({
+          forkHeightM: entry.forkHeightM,
+          tillerAngle: entry.tillerAngle,
+          pumpStroke: 0,
+          carriedWcid: entry.carriedWcid,
+          stowed: false,
+        });
+      } catch (_) {}
+      writeEntity(entry.guid, wx, wy, wz, qPj, true);
+    }
+  }
+
+  function updateSidelifterKinematicsAndPose(entry, dt, stepDt) {
+    if (!entry || !entry.isSidelifter) return;
+    const ph = entry.sideliftPhase ?? 0;
+    if (entry._lastSideliftPhase !== ph) {
+      entry._lastSideliftPhase = ph;
+      entry._smoothSideliftProgress = entry.sideliftProgress ?? 0;
+    } else if (stepDt > 0) {
+      const dur = SK.getPhaseDuration(ph);
+      if (dur > 0) {
+        entry._smoothSideliftProgress = Math.min(1.0, (entry._smoothSideliftProgress ?? 0) + stepDt / dur);
+      } else {
+        entry._smoothSideliftProgress = entry.sideliftProgress ?? 0;
+      }
+      if (Number.isFinite(entry.sideliftProgress)) {
+        entry._smoothSideliftProgress = Math.max(entry._smoothSideliftProgress, entry.sideliftProgress);
+      }
+    }
+    if (ph === SK.SIDELIFT_PHASE.OutriggersDeploying) {
+      entry._smoothOutriggerProgress = entry._smoothSideliftProgress;
+    } else if (ph === SK.SIDELIFT_PHASE.OutriggersRetracting) {
+      entry._smoothOutriggerProgress = 1.0 - entry._smoothSideliftProgress;
+    } else if (ph >= SK.SIDELIFT_PHASE.OutriggersPlanted && ph <= SK.SIDELIFT_PHASE.CranesStowing) {
+      entry._smoothOutriggerProgress = 1.0;
+    } else {
+      entry._smoothOutriggerProgress = entry.outriggerProgress ?? 0;
+    }
+
+    if (entry._lastAudioPhase !== ph) {
+      entry._lastAudioPhase = ph;
+      if (ph === SK.SIDELIFT_PHASE.OutriggersPlanted) {
+        try { logisticsAudio?.outriggerThud?.({ pos: entry.worldPos }); } catch (_) {}
+      }
+    }
+    try {
+      logisticsAudio?.updateSidelifter?.(entry.guid, {
+        phase: ph,
+        sideliftPhase: ph,
+        pos: entry.worldPos,
+      });
+      logisticsAudio?.setSwingWarning?.(
+        entry.guid,
+        ph >= SK.SIDELIFT_PHASE.Hoisting && ph <= SK.SIDELIFT_PHASE.Lowering,
+        { pos: entry.worldPos }
+      );
+    } catch (_) {}
+
+    const prog = entry._smoothSideliftProgress ?? entry.sideliftProgress ?? 0;
+    const outProg = entry._smoothOutriggerProgress ?? entry.outriggerProgress ?? 0;
+    const side = entry.sideliftSide < 0 ? -1 : 1;
+    const slFlags = entry.sideliftFlags ?? 0;
+    const isLoad = Boolean(slFlags & 0x10);
+    const slotOpt = containerSlotToOpt(entry.containerSlot);
+    const xferGuid = (entry.transferContainerGuid || entry.mountedContainerGuid) >>> 0;
+    const xferC = xferGuid ? containers.get(xferGuid) : null;
+    const cLen = xferC?.model?.spec?.external?.length ?? 12.192;
+    const slotY = cLen < 7 ? (slotOpt === "front" ? 2.9295 : -2.9295) : 0.0;
+    const trPose = entry.renderedPose ?? {
+      x: entry.worldPos[0], y: entry.worldPos[1], z: entry.worldPos[2],
+      heading: entry.heading || 0,
+    };
+    const sideWorldX = trPose.x + Math.cos(trPose.heading || 0) * (side * SK.SIDELIFTER_OUTREACH_X);
+    const sideWorldY = trPose.y - Math.sin(trPose.heading || 0) * (side * SK.SIDELIFTER_OUTREACH_X);
+    const gZ = ground(sideWorldX, sideWorldY);
+    const groundLocalZ = Number.isFinite(gZ) ? (gZ - trPose.z) : 0.0;
+    const lp = SK.evaluateContainerLocalPose(ph, prog, side, isLoad ? "load" : "offload", SK.CHASSIS_DECK_Z, groundLocalZ, slotY);
+    entry._lastLocalPose = lp;
+
+    return {
+      sideliftPhase: ph,
+      sideliftSide: side,
+      sideliftFlags: slFlags,
+      sideliftProgress: prog,
+      outriggerProgress: outProg,
+      craneSpanY: entry.craneSpanY || SK.CRANE_SPAN_Y_40FT,
+      craneCenterY: slotY,
+      hasStowedPalletJack: Boolean((slFlags & 0x08) || entry.stowedPalletJackGuid),
+      isLoadDirection: isLoad,
+    };
+  }
+
   function tickTrailers(dt) {
+    const stepDt = Number.isFinite(dt) && dt > 0 ? Math.min(dt, 0.1) : 0;
     for (const entry of trailers.values()) {
       const inEm = em()?.entityMap?.get(entry.guid);
       if (inEm && (!entry.standInHidden || inEm._filmHidden !== true)) {
         try { if (em()?.setFilmHidden?.(entry.guid, true)) entry.standInHidden = true; } catch (_) {}
       }
+
+      const slPatch = entry.isSidelifter ? updateSidelifterKinematicsAndPose(entry, dt, stepDt) : null;
 
       if (entry._posedFrame !== stats.frames) {
         const coupled = (entry.coupledTractorGuid >>> 0) !== 0;
@@ -813,17 +1127,50 @@ export function installVehicles(deps = {}) {
         entry.model.root.quaternion.set(qTr[1], qTr[2], qTr[3], qTr[0]);
         writeEntity(entry.guid, wx, wy, wz, qTr, true);
         entry.renderedPose = { x: wx, y: wy, z: wz, heading: entry.heading || 0, pitch: entry.pitch || 0, bank: entry.bank || 0 };
-        try {
-          entry.model.update(dt, {
-            twistlockState: (entry.trailerFlags & TRAILER_FLAG.TWISTLOCKS_LOCKED) ? 1 : 0,
-            landingGearRetracted: Boolean((entry.trailerFlags & TRAILER_FLAG.GEAR_RETRACTED) || coupled),
-            brakeLights: Boolean(entry.trailerFlags & TRAILER_FLAG.BRAKE_LIGHTS),
-            speed: 0,
-          });
-        } catch (_) {}
+        const updState = {
+          twistlockState: (entry.trailerFlags & TRAILER_FLAG.TWISTLOCKS_LOCKED) ? 1 : 0,
+          landingGearRetracted: Boolean((entry.trailerFlags & TRAILER_FLAG.GEAR_RETRACTED) || coupled),
+          brakeLights: Boolean(entry.trailerFlags & TRAILER_FLAG.BRAKE_LIGHTS),
+          speed: 0,
+          ...(slPatch || {}),
+        };
+        try { entry.model.update(dt, updState); } catch (_) {}
+      } else if (slPatch) {
+        try { entry.model.update(0, slPatch); } catch (_) {}
       }
 
       syncTrailerContainerMount(entry);
+
+      const xferGuid = (entry.transferContainerGuid || entry.mountedContainerGuid) >>> 0;
+      if (entry.isSidelifter && isSideliftColliderSuppressed(entry) && xferGuid !== 0) {
+        const cEntry = containers.get(xferGuid);
+        if (cEntry) {
+          if (cEntry.colliderActive !== false) {
+            try { sh()?.removeContainerCollider?.(cEntry.guid); } catch (_) {}
+            cEntry.colliderActive = false;
+            cEntry._lastColliderSig = null;
+          }
+          if (isSideliftTransferActive(entry) && entry._lastLocalPose && cEntry.model?.root) {
+            const trPose = entry.renderedPose ?? {
+              x: entry.worldPos[0], y: entry.worldPos[1], z: entry.worldPos[2],
+              heading: entry.heading || 0, pitch: entry.pitch || 0, bank: entry.bank || 0,
+            };
+            const qTr = FM.orientation(trPose.heading || 0, trPose.pitch || 0, trPose.bank || 0);
+            const lp = entry._lastLocalPose;
+            const wOff = FM.rotate(qTr, [lp.x, lp.y, lp.z]);
+            const cx = trPose.x + wOff[0];
+            const cy = trPose.y + wOff[1];
+            const cz = trPose.z + wOff[2];
+            if (live?.worldRoot && cEntry.model.root.parent !== live.worldRoot) {
+              live.worldRoot.add(cEntry.model.root);
+            }
+            cEntry.model.root.position.set(cx, cy, cz);
+            cEntry.model.root.quaternion.set(qTr[1], qTr[2], qTr[3], qTr[0]);
+            writeEntity(cEntry.guid, cx, cy, cz, qTr, true);
+          }
+        }
+        continue;
+      }
 
       const cGuid = entry.mountedContainerGuid >>> 0;
       if (cGuid !== 0) {
@@ -886,7 +1233,7 @@ export function installVehicles(deps = {}) {
         const doorOpen = entry.currentDoorProgress >= 0.5;
         if (doorOpen !== entry.lastDoorOpen) {
           entry.lastDoorOpen = doorOpen;
-          if (entry.rawPos && !entry.mountedOnTrailerGuid) {
+          if (entry.rawPos && !entry.mountedOnTrailerGuid && !findClaimingTrailer(entry.guid)) {
             try {
               sh()?.upsertContainerCollider(
                 entry.guid,
@@ -898,9 +1245,40 @@ export function installVehicles(deps = {}) {
                 entry.kind,
                 doorOpen
               );
+              entry.colliderActive = true;
             } catch (_) {}
           }
         }
+      }
+
+      // Re-upsert grounded container collider if a sidelifter released claim (phase 9 -> 10/0) without a trailing container_state
+      if (!entry.mountedOnTrailerGuid && entry.colliderActive === false && entry.rawPos && !findClaimingTrailer(entry.guid)) {
+        const doorOpen = entry.currentDoorProgress >= 0.5;
+        if (entry.model?.root) {
+          if (live?.worldRoot && entry.model.root.parent !== live.worldRoot) {
+            live.worldRoot.add(entry.model.root);
+          }
+          const [wx, wy, wz] = entry.cell
+            ? FM.toGlobal(entry.cell, entry.rawPos[0], entry.rawPos[1], entry.rawPos[2])
+            : [entry.rawPos[0], entry.rawPos[1], entry.rawPos[2]];
+          entry.model.root.position.set(wx, wy, wz);
+          entry.model.root.quaternion.set(0, 0, 0, 1);
+          entry.model.root.rotation.z = -(entry.heading || 0);
+        }
+        try {
+          sh()?.upsertContainerCollider(
+            entry.guid,
+            entry.cell,
+            entry.rawPos[0],
+            entry.rawPos[1],
+            entry.rawPos[2],
+            entry.heading || 0,
+            entry.kind,
+            doorOpen
+          );
+          entry.colliderActive = true;
+          entry.lastDoorOpen = doorOpen;
+        } catch (_) {}
       }
 
       try {
@@ -930,13 +1308,15 @@ export function installVehicles(deps = {}) {
       }
       if (entry.wcid === 4000002 || entry.wcid === DEPLOYABLE_WCID.GroundRadar) hasActiveRadar = true;
       const st = entry.last || {};
+      const isStowed = Boolean((st.onlineFlags ?? 0) & 0x10);
       try {
         if (entry.wcid === 4000002) {
-          entry.model.update(simT);
+          entry.model.update({ simTimeSec: simT, stowed: isStowed });
         } else {
           entry.model.update({
             dt,
             simTimeSec: simT,
+            stowed: isStowed,
             sunPitch: st.sunPitch !== undefined ? st.sunPitch : sunPitchRad,
             sunHeading: st.sunHeading !== undefined ? st.sunHeading : sunHeadingRad,
             fuelSecondsRemaining: st.fuelSec ?? st.fuelSecondsRemaining ?? 0,
@@ -1013,6 +1393,9 @@ export function installVehicles(deps = {}) {
   function teardownSession(why) {
     if (pilot) stopPiloting(why);
     if (passenger) stopRiding(why);
+    if (palletJackController?.isActive?.()) {
+      try { palletJackController.stop(why); } catch (_) {}
+    }
     endHandoff(why);
     if (fall) { chutes?.close(localGuid()); stopFall(why); }
     releaseLandingCam();
@@ -1021,6 +1404,8 @@ export function installVehicles(deps = {}) {
       vehicleAudio?.dispose();
       groundAudio?.stop({ fadeSec: 0 });
       groundAudio?.dispose();
+      logisticsAudio?.stop?.();
+      if (why === "dispose") logisticsAudio?.dispose?.();
     } catch (_) {}
     try {
       sh()?.clearVehicleSeat?.();
@@ -1084,6 +1469,24 @@ export function installVehicles(deps = {}) {
       promptVehicle = null;
     }, ms);
   }
+
+  palletJackController = createPalletJackController({
+    liveScene3d: live,
+    THREE,
+    window: win,
+    sh,
+    em,
+    localGuid,
+    ground,
+    containers,
+    deployables,
+    palletJacks,
+    osd,
+    flashPrompt,
+    logisticsAudio,
+    writeEntity,
+    nowSec,
+  });
 
   // ---------------------------------------------------------------- inbox
 
@@ -1394,6 +1797,10 @@ export function installVehicles(deps = {}) {
           if (m.subject) removeTrailerEntry(m.subject >>> 0);
           removeContainerEntry(m.vehicle >>> 0);
           if (m.subject) removeContainerEntry(m.subject >>> 0);
+          removePalletJackEntry(m.vehicle >>> 0);
+          if (m.subject) removePalletJackEntry(m.subject >>> 0);
+          removeDeployableEntry(m.vehicle >>> 0);
+          if (m.subject) removeDeployableEntry(m.subject >>> 0);
         } else if (m.kind === 19) { // trailerHitched
           if (myVehicle || (passenger && passenger.vehicle === v)) {
             try { groundAudio?.airBrakeHiss?.({ kind: "hitch" }); } catch (_) {}
@@ -1405,9 +1812,26 @@ export function installVehicles(deps = {}) {
             flashPrompt("Trailer unhitched — landing gear lowered", 1600);
           }
         } else if (m.kind === 21) { // twistlockToggled
-          if (myVehicle || (passenger && passenger.vehicle === v)) {
+          const tr = trailers.get(m.vehicle >>> 0) ?? trailers.get(m.subject >>> 0);
+          try {
+            logisticsAudio?.twistlockClank?.({
+              pos: tr?.worldPos ?? (m.cell ? FM.toGlobal(m.cell, m.x, m.y, m.z) : null),
+              locked: Boolean(m.aux),
+            });
+          } catch (_) {}
+          if (myVehicle || (passenger && passenger.vehicle === v) || tr) {
             flashPrompt(m.aux ? "Twistlocks LOCKED" : "Twistlocks UNLOCKED", 1400);
           }
+        } else if (m.kind === 22) { // sideliftStarted
+          flashPrompt("ISO 3874: Sidelift sequence started", 1800);
+        } else if (m.kind === 23) { // sideliftComplete
+          flashPrompt("ISO 3874: Sidelift sequence complete", 1800);
+        } else if (m.kind === 24) { // sideliftRefused
+          const msg = m.reason || SIDELIFT_REFUSAL_REASONS[m.aux] || SIDELIFT_REFUSAL_REASONS[0];
+          flashPrompt(msg, 2600);
+        } else if (m.kind === 25) { // palletJackEvent
+          const msg = m.reason || PALLET_JACK_EVENT_REASONS[m.aux] || PALLET_JACK_EVENT_REASONS[0];
+          flashPrompt(msg, 2200);
         } else if (m.kind === 2) { // aircraft landed
           try {
             const p0 = Number.isFinite(m.cell) && m.cell ? FM.toGlobal(m.cell, m.x, m.y, m.z) : (v?.last ? stateFromMsg(v.last) : null);
@@ -1518,13 +1942,14 @@ export function installVehicles(deps = {}) {
         break;
       }
       case "deployable_state": {
-        const entry = ensureDeployableEntry(m.deployable >>> 0, m.kind);
+        const entry = ensureDeployableEntry(m.deployable >>> 0, m.kind, m.onlineFlags ?? 0);
         if (entry) {
           const [wx, wy, wz] = m.cell ? FM.toGlobal(m.cell, m.x, m.y, m.z) : [m.x, m.y, m.z];
           entry.model.root.position.set(wx, wy, wz);
           if (Number.isFinite(m.heading)) entry.model.root.rotation.z = -m.heading;
           entry.last = m;
           entry.lastSeenAt = nowSec();
+          try { entry.model?.setStowed?.(Boolean((m.onlineFlags ?? 0) & 0x10)); } catch (_) {}
           if (m.kind === DEPLOYABLE_KINDS.PowerGenerator && deployableAudio) {
             try {
               if ((m.fuelSec || 0) > 0 && (m.onlineFlags & 1)) {
@@ -1566,13 +1991,11 @@ export function installVehicles(deps = {}) {
 
         const entry = ensureContainerEntry(guid, kind, m);
         if (entry) {
-          let hostTrailer = entry.mountedOnTrailerGuid ? trailers.get(entry.mountedOnTrailerGuid >>> 0) : null;
-          if (!hostTrailer) {
-            for (const tr of trailers.values()) {
-              if ((tr.mountedContainerGuid >>> 0) === guid) {
-                hostTrailer = tr;
-                break;
-              }
+          let hostTrailer = findClaimingTrailer(guid);
+          if (!hostTrailer && entry.mountedOnTrailerGuid) {
+            const prevHost = trailers.get(entry.mountedOnTrailerGuid >>> 0);
+            if (prevHost && ((prevHost.mountedContainerGuid >>> 0) === guid || isSideliftColliderSuppressed(prevHost))) {
+              hostTrailer = prevHost;
             }
           }
 
@@ -1587,15 +2010,28 @@ export function installVehicles(deps = {}) {
           entry.serialNumber = serialNumber;
 
           if (hostTrailer) {
-            syncTrailerContainerMount(hostTrailer);
+            if (isSideliftColliderSuppressed(hostTrailer)) {
+              if (entry.colliderActive !== false) {
+                try { sh()?.removeContainerCollider?.(guid); } catch (_) {}
+                entry.colliderActive = false;
+                entry._lastColliderSig = null;
+              }
+            } else {
+              syncTrailerContainerMount(hostTrailer);
+            }
           } else {
+            entry.mountedOnTrailerGuid = 0;
+            if (live?.worldRoot && entry.model?.root && entry.model.root.parent !== live.worldRoot) {
+              live.worldRoot.add(entry.model.root);
+            }
             const [wx, wy, wz] = cell ? FM.toGlobal(cell, pos[0], pos[1], pos[2]) : [pos[0], pos[1], pos[2]];
             entry.model.root.position.set(wx, wy, wz);
+            entry.model.root.quaternion.set(0, 0, 0, 1);
             entry.model.root.rotation.z = -heading;
 
             const posChanged = !entry._lastUpsertPos || entry._lastUpsertPos[0] !== pos[0] || entry._lastUpsertPos[1] !== pos[1] || entry._lastUpsertPos[2] !== pos[2] || entry._lastUpsertCell !== cell || entry._lastUpsertHeading !== heading;
             const doorOpen = entry.currentDoorProgress >= 0.5 || doorState === 1 || doorState === 2;
-            if (doorOpen !== entry.lastDoorOpen || posChanged || entry.lastDoorOpen === null) {
+            if (doorOpen !== entry.lastDoorOpen || posChanged || entry.lastDoorOpen === null || entry.colliderActive === false) {
               entry.lastDoorOpen = doorOpen;
               entry._lastUpsertCell = cell;
               entry._lastUpsertPos = [pos[0], pos[1], pos[2]];
@@ -1633,6 +2069,27 @@ export function installVehicles(deps = {}) {
           entry.containerSlot = m.containerSlot ?? 0;
           entry.trailerFlags = m.trailerFlags ?? 0;
           entry.ownerGuid = (m.ownerGuid ?? 0) >>> 0;
+          if (m.sideliftPhase !== undefined) {
+            const nextPhase = m.sideliftPhase | 0;
+            if (nextPhase !== entry.sideliftPhase) {
+              entry._lastSideliftPhase = nextPhase;
+              entry._smoothSideliftProgress = Number.isFinite(m.sideliftProgress) ? m.sideliftProgress : 0;
+            }
+            entry.sideliftPhase = nextPhase;
+          }
+          if (m.sideliftSide !== undefined) entry.sideliftSide = m.sideliftSide;
+          if (m.sideliftFlags !== undefined) entry.sideliftFlags = m.sideliftFlags;
+          if (Number.isFinite(m.sideliftProgress)) {
+            entry.sideliftProgress = m.sideliftProgress;
+            entry._smoothSideliftProgress = Math.max(entry._smoothSideliftProgress ?? 0, m.sideliftProgress);
+          }
+          if (Number.isFinite(m.outriggerProgress)) {
+            entry.outriggerProgress = m.outriggerProgress;
+            entry._smoothOutriggerProgress = m.outriggerProgress;
+          }
+          if (Number.isFinite(m.craneSpanY) && m.craneSpanY > 0) entry.craneSpanY = m.craneSpanY;
+          if (m.stowedPalletJackGuid !== undefined) entry.stowedPalletJackGuid = m.stowedPalletJackGuid >>> 0;
+          if (m.transferContainerGuid !== undefined) entry.transferContainerGuid = m.transferContainerGuid >>> 0;
           entry.last = m;
           entry.lastSeenAt = nowSec();
 
@@ -1660,14 +2117,25 @@ export function installVehicles(deps = {}) {
             entry.model.root.position.set(wx, wy, wz);
             entry.model.root.quaternion.set(qTr[1], qTr[2], qTr[3], qTr[0]);
             writeEntity(guid, wx, wy, wz, qTr, true);
-            try {
-              entry.model.update(0, {
-                twistlockState: (entry.trailerFlags & TRAILER_FLAG.TWISTLOCKS_LOCKED) ? 1 : 0,
-                landingGearRetracted: Boolean(entry.trailerFlags & TRAILER_FLAG.GEAR_RETRACTED),
-                brakeLights: Boolean(entry.trailerFlags & TRAILER_FLAG.BRAKE_LIGHTS),
-                speed: 0,
+            const upd = {
+              twistlockState: (entry.trailerFlags & TRAILER_FLAG.TWISTLOCKS_LOCKED) ? 1 : 0,
+              landingGearRetracted: Boolean(entry.trailerFlags & TRAILER_FLAG.GEAR_RETRACTED),
+              brakeLights: Boolean(entry.trailerFlags & TRAILER_FLAG.BRAKE_LIGHTS),
+              speed: 0,
+            };
+            if (entry.isSidelifter) {
+              Object.assign(upd, {
+                sideliftPhase: entry.sideliftPhase,
+                sideliftSide: entry.sideliftSide,
+                sideliftFlags: entry.sideliftFlags,
+                sideliftProgress: entry.sideliftProgress,
+                outriggerProgress: entry.outriggerProgress,
+                craneSpanY: entry.craneSpanY,
+                hasStowedPalletJack: Boolean((entry.sideliftFlags & 0x08) || entry.stowedPalletJackGuid),
+                isLoadDirection: Boolean(entry.sideliftFlags & 0x10),
               });
-            } catch (_) {}
+            }
+            try { entry.model.update(0, upd); } catch (_) {}
           } else {
             const tractor = vehicles.get(entry.coupledTractorGuid);
             if (tractor && tractor.params) {
@@ -1680,6 +2148,57 @@ export function installVehicles(deps = {}) {
           }
 
           syncTrailerContainerMount(entry);
+        }
+        break;
+      }
+      case "pallet_jack_state": {
+        const guid = (m.palletJackGuid ?? m.guid) >>> 0;
+        if (!guid) break;
+        const pos = Array.isArray(m.position) ? m.position : [m.x ?? 0, m.y ?? 0, m.z ?? 0];
+        const cell = (m.cell ?? 0) >>> 0;
+        const [wx, wy, wz] = cell ? FM.toGlobal(cell, pos[0], pos[1], pos[2]) : [pos[0], pos[1], pos[2]];
+        const entry = ensurePalletJackEntry(guid, m);
+        if (entry) {
+          entry.operatorGuid = (m.operatorGuid ?? 0) >>> 0;
+          entry.stowedOnTrailerGuid = (m.stowedOnTrailerGuid ?? 0) >>> 0;
+          entry.cell = cell;
+          entry.rawPos = pos;
+          entry.worldPos = [wx, wy, wz];
+          entry.heading = Number.isFinite(m.heading) ? m.heading : 0;
+          entry.tillerAngle = Number.isFinite(m.tillerAngle) ? m.tillerAngle : 0;
+          entry.forkHeightM = Number.isFinite(m.forkHeightM) ? m.forkHeightM : 0.085;
+          entry.forkState = m.forkState ?? 0;
+          entry.carriedPalletSize = m.carriedPalletSize ?? 0;
+          entry.flags = m.flags ?? 0;
+          entry.carriedWcid = (m.carriedWcid ?? 0) >>> 0;
+          entry.ownerGuid = (m.ownerGuid ?? 0) >>> 0;
+          entry.last = m;
+          entry.lastSeenAt = nowSec();
+
+          const stowed = Boolean(entry.stowedOnTrailerGuid !== 0 || (entry.flags & 0x04));
+          if (stowed) {
+            if (entry.model?.root?.parent) entry.model.root.parent.remove(entry.model.root);
+          } else if (entry.model?.root && live?.worldRoot && entry.model.root.parent !== live.worldRoot) {
+            live.worldRoot.add(entry.model.root);
+          }
+
+          if (palletJackController?.activeGuid !== guid) {
+            const qPj = FM.orientation(entry.heading, 0, 0);
+            entry.model?.root?.position?.set(wx, wy, wz);
+            entry.model?.root?.quaternion?.set(qPj[1], qPj[2], qPj[3], qPj[0]);
+            try {
+              entry.model?.update?.({
+                forkHeightM: entry.forkHeightM,
+                tillerAngle: entry.tillerAngle,
+                pumpStroke: 0,
+                carriedWcid: entry.carriedWcid,
+                stowed,
+              });
+            } catch (_) {}
+            if (!stowed) writeEntity(guid, wx, wy, wz, qPj, true);
+          }
+
+          try { palletJackController?.onServerState?.(m, entry); } catch (_) {}
         }
         break;
       }
@@ -1765,6 +2284,13 @@ export function installVehicles(deps = {}) {
   }
 
   function startPiloting(v, seat, hotSwapFrom = null) {
+    if (palletJackController?.isActive?.()) {
+      const pjGuid = palletJackController.activeGuid;
+      if (pjGuid) {
+        try { sh()?.vehiclePalletJackAction?.(pjGuid, PALLET_JACK_ACTION.Release, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0); } catch (_) {}
+      }
+      palletJackController.stop("board-vehicle");
+    }
     let camera = null;
     let camRig = null;
     let prevRigHidden = false;
@@ -1919,6 +2445,13 @@ export function installVehicles(deps = {}) {
   }
 
   function startRiding(v, seat, hotSwapFrom = null) {
+    if (palletJackController?.isActive?.()) {
+      const pjGuid = palletJackController.activeGuid;
+      if (pjGuid) {
+        try { sh()?.vehiclePalletJackAction?.(pjGuid, PALLET_JACK_ACTION.Release, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0); } catch (_) {}
+      }
+      palletJackController.stop("board-vehicle");
+    }
     let camera = null;
     let camRig = null;
     let prevRigHidden = false;
@@ -2146,6 +2679,9 @@ export function installVehicles(deps = {}) {
     teleportAt = nowSec();
     if (pilot) stopPiloting("teleport");
     if (passenger) stopRiding("teleport");
+    if (palletJackController?.isActive?.()) {
+      try { palletJackController.onTeleport(); } catch (_) {}
+    }
     endHandoff("teleport");
     if (fall) { chutes?.close(localGuid()); stopFall("teleport"); }
   }
@@ -2631,12 +3167,23 @@ export function installVehicles(deps = {}) {
       v.params.towMassMul = mul;
       if (p.predictor?.state) p.predictor.state.towMassMul = mul;
     }
+    const coupledTr = isGround ? trailers.get(currentHitchedTrailerGuid(v)) : null;
+    const sideliftDriveLocked = Boolean(coupledTr && (coupledTr.sideliftPhase ?? 0) !== 0);
     p.acc += wallDt;
     let n = 0;
     const hopping = !!p.hop; // boarding hop in progress: the vehicle stays parked
     while (p.acc >= FM.DT && n < 30) {
       p.acc -= FM.DT;
       const raw = p.controls.poll(FM.DT, p.predictor.state, v.params); // polled while hopping too: the throttle lever keeps its travel
+      if (sideliftDriveLocked) {
+        if (Math.abs(raw.throttle || 0) > 0.05 && (wallNow - (p._lastSideliftWarnAt || 0) > 1.8)) {
+          p._lastSideliftWarnAt = wallNow;
+          flashPrompt("ISO 3874: Retract sidelifter outriggers and cranes before driving", 1800);
+        }
+        raw.throttle = 0;
+        raw.handbrake = true;
+        raw.boost = false;
+      }
       p.predictor.stepLocal(hopping ? NEUTRAL_INPUT : raw);
       sendInput(p);
       n++;
@@ -2856,6 +3403,7 @@ export function installVehicles(deps = {}) {
         trailerFlags: v._coupledTrailerFlags ?? v.last?.trailerFlags ?? 0,
         twistlocksLocked: v._coupledTwistlocksLocked,
         trailerArticulationRad: v._coupledArticulationRad ?? 0,
+        sideliftPhase: coupledTr?.sideliftPhase ?? 0,
       });
       osd.sights(null, null, "");
     } else {
@@ -3315,33 +3863,169 @@ export function installVehicles(deps = {}) {
     return best;
   }
 
+  function localPlayerPos() {
+    const me = localGuid();
+    const inst = em()?.entityMap?.get(me);
+    if (inst?.root?.position) {
+      return [inst.root.position.x, inst.root.position.y, inst.root.position.z];
+    }
+    try {
+      const pp = sh()?.getLocalPlayerPose?.();
+      if (pp) {
+        const g = FM.toGlobal(pp.landblockId >>> 0, pp.x, pp.y, pp.z);
+        try { pp.free?.(); } catch (_) {}
+        return g;
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  function nearestSidelifter(maxDistM = 12.0) {
+    const p = localPlayerPos();
+    if (!p) return null;
+    let best = null;
+    let bestD = maxDistM;
+    for (const tr of trailers.values()) {
+      if (!tr.isSidelifter) continue;
+      const tp = tr.renderedPose ?? {
+        x: tr.worldPos[0], y: tr.worldPos[1], z: tr.worldPos[2],
+        heading: tr.heading || 0,
+      };
+      const d = Math.hypot(tp.x - p[0], tp.y - p[1], tp.z - p[2]);
+      if (d <= bestD) {
+        bestD = d;
+        best = tr;
+      }
+    }
+    return best;
+  }
+
+  function nearestGroundedContainer(maxDistM = 4.0) {
+    const p = localPlayerPos();
+    if (!p) return null;
+    let best = null;
+    let bestObb = maxDistM;
+    let bestCenter = Infinity;
+    for (const cEntry of containers.values()) {
+      if (cEntry.mountedOnTrailerGuid) continue;
+      const rp = cEntry.model?.root?.position;
+      const cx = rp ? rp.x : (cEntry.rawPos?.[0] ?? 0);
+      const cy = rp ? rp.y : (cEntry.rawPos?.[1] ?? 0);
+      const cz = rp ? rp.z : (cEntry.rawPos?.[2] ?? 0);
+      const spec = CL.resolveContainerLogisticsSpec(cEntry.kind);
+      const halfW = spec?.interior?.halfW ?? 1.176;
+      const halfL = spec?.interior?.halfL ?? 2.949;
+      const rampLen = 0.85;
+      const h = cEntry.heading || 0;
+      const dx = p[0] - cx;
+      const dy = p[1] - cy;
+      const cosH = Math.cos(h);
+      const sinH = Math.sin(h);
+      const lx = dx * cosH - dy * sinH;
+      const ly = dx * sinH + dy * cosH;
+      const dxBox = Math.max(0, Math.abs(lx) - halfW);
+      const dyBox = ly < -(halfL + rampLen)
+        ? -(halfL + rampLen) - ly
+        : (ly > halfL ? ly - halfL : 0);
+      const dzBox = Math.max(0, Math.abs(cz - p[2]) - 1.5);
+      const dObb = Math.hypot(dxBox, dyBox, dzBox);
+      const dCenter = Math.hypot(cx - p[0], cy - p[1], cz - p[2]);
+      if (dObb < bestObb - 1e-6 || (Math.abs(dObb - bestObb) <= 1e-6 && dObb <= maxDistM && dCenter < bestCenter)) {
+        bestObb = dObb;
+        bestCenter = dCenter;
+        best = cEntry;
+      }
+    }
+    return best;
+  }
+
+  function nearestGroundDeployable(maxDistM = 3.5) {
+    const p = localPlayerPos();
+    if (!p) return null;
+    let best = null;
+    let bestD = maxDistM;
+    for (const dEntry of deployables.values()) {
+      const rp = dEntry?.model?.root?.position;
+      if (!rp) continue;
+      const d = Math.hypot(rp.x - p[0], rp.y - p[1], rp.z - p[2]);
+      if (d <= bestD) {
+        bestD = d;
+        best = dEntry;
+      }
+    }
+    return best;
+  }
+
+  function nearestPalletJack(maxDistM = 3.0) {
+    const p = localPlayerPos();
+    if (!p) return null;
+    let best = null;
+    let bestD = maxDistM;
+    for (const pj of palletJacks.values()) {
+      if (pj.stowedOnTrailerGuid !== 0 || (pj.flags & 0x04)) continue;
+      if (pj.operatorGuid !== 0) continue;
+      const wp = pj.worldPos || [0, 0, 0];
+      const d = Math.hypot(wp[0] - p[0], wp[1] - p[1], wp[2] - p[2]);
+      if (d <= bestD) {
+        bestD = d;
+        best = pj;
+      }
+    }
+    return best;
+  }
+
   let promptText = null;
   function tickPrompt() {
     if (promptTimer) return; // a transient prompt is showing
-    // never while falling / in the bail hand-off: ACE would seat a body it is still dropping (it now refuses too)
-    if (pilot || passenger || fall || handoff || caps.granted === null || !(caps.granted & CAP_PILOT)) {
+    // never while falling / in the bail hand-off / walking a pallet jack
+    if (pilot || passenger || fall || handoff || palletJackController?.isActive?.() || caps.granted === null || !(caps.granted & CAP_PILOT)) {
       if (promptVehicle || promptText) { promptVehicle = null; promptText = null; osd.prompt(null); }
       return;
     }
     const v = nearestBoardable();
-    if (!v) {
+    const pj = nearestPalletJack(3.0);
+    const sl = nearestSidelifter(12.0);
+    const cont = nearestGroundedContainer(4.0);
+    const dep = nearestGroundDeployable(3.5);
+
+    const parts = [];
+    if (pj) {
+      parts.push("[B] Grab Pallet Jack");
+    } else if (v) {
+      const isGround = isGroundVehicle(v);
+      if (isGround) {
+        const s = firstOpenSeat(v);
+        const seatLabel = isSemiVehicle(v) && s === 1 ? "Co-Driver" : (SEAT_LABELS[s] ?? `Seat ${s}`);
+        const occ = seatOccupancyCount(v);
+        const maxSeats = maxSeatsOf(v);
+        parts.push(`Press B to board ${v.profile.displayName} — ${seatLabel} (${occ}/${maxSeats} occupied)`);
+      } else {
+        parts.push(`Press B to board the ${v.profile.displayName}`);
+      }
+    }
+    if (sl) {
+      const outPlanted = Boolean((sl.sideliftFlags & 0x02) || sl.sideliftPhase >= 2);
+      const hasJack = Boolean((sl.sideliftFlags & 0x08) || sl.stowedPalletJackGuid);
+      const hasMounted = (sl.mountedContainerGuid >>> 0) !== 0;
+      parts.push(`[J] ${outPlanted ? "Retract" : "Deploy"} Outriggers · [K] Twistlocks · [L] ${hasMounted ? "Offload" : "Load"} · [Shift+L] Auto · [U] ${hasJack ? "Deploy" : "Stow"} Jack`);
+    }
+    if (cont) {
+      const isOpen = cont.currentDoorProgress >= 0.5;
+      parts.push(`[E] ${isOpen ? "Close" : "Open"} Container Doors`);
+    }
+    if (dep) {
+      const stowed = Boolean((dep.last?.onlineFlags ?? 0) & 0x10);
+      parts.push(`[R] ${stowed ? "Unstow" : "Stow"} Deployable`);
+    }
+
+    const text = parts.length > 0 ? parts.join(" | ") : null;
+    if (!text) {
       if (promptVehicle || promptText) {
         promptVehicle = null;
         promptText = null;
         osd.prompt(null);
       }
       return;
-    }
-    const isGround = isGroundVehicle(v);
-    let text;
-    if (isGround) {
-      const s = firstOpenSeat(v);
-      const seatLabel = isSemiVehicle(v) && s === 1 ? "Co-Driver" : (SEAT_LABELS[s] ?? `Seat ${s}`);
-      const occ = seatOccupancyCount(v);
-      const maxSeats = maxSeatsOf(v);
-      text = `Press B to board ${v.profile.displayName} — ${seatLabel} (${occ}/${maxSeats} occupied)`;
-    } else {
-      text = `Press B to board the ${v.profile.displayName}`;
     }
     if (v !== promptVehicle || text !== promptText) {
       promptVehicle = v;
@@ -3350,19 +4034,98 @@ export function installVehicles(deps = {}) {
     }
   }
 
-  const onKeyB = (ev) => {
-    if (ev.code !== "KeyB" || ev.repeat || ev.ctrlKey || ev.altKey || ev.metaKey) return;
-    const el = win.document?.activeElement;
-    if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)) return;
-    if (!promptVehicle || pilot || passenger || fall || handoff) return;
-    try { live.audioManager?.notifyUserGesture?.(); } catch (_) {}
-    const isGround = isGroundVehicle(promptVehicle);
-    const targetSeat = isGround ? firstOpenSeat(promptVehicle) : 0;
-    if (targetSeat >= 0) {
-      api.board(promptVehicle.guid, targetSeat);
+  const onLogisticsKeyDown = (ev) => {
+    if (!ev || ev.repeat || ev.ctrlKey || ev.altKey || ev.metaKey) return;
+    if (isTypingTarget(ev, win.document) || inOpenModal(ev, win.document)) return;
+    if (pilot || passenger || fall || handoff || palletJackController?.isActive?.()) return;
+    if (caps.granted !== null && !(caps.granted & CAP_PILOT)) return;
+
+    const code = ev.code;
+    const h = sh();
+
+    if (code === "KeyB") {
+      const pj = nearestPalletJack(3.0);
+      if (pj) {
+        ev.preventDefault?.();
+        ev.stopImmediatePropagation?.();
+        try { live.audioManager?.notifyUserGesture?.(); } catch (_) {}
+        const cl = FM.toCellLocal(pj.worldPos[0], pj.worldPos[1], pj.worldPos[2]);
+        try {
+          h?.vehiclePalletJackAction?.(
+            pj.guid, PALLET_JACK_ACTION.Grab, 0, 0, 0, 0,
+            cl.cell, cl.x, cl.y, cl.z, pj.heading || 0, pj.tillerAngle || 0
+          );
+        } catch (_) {}
+        return;
+      }
+      const v = nearestBoardable();
+      if (v) {
+        ev.preventDefault?.();
+        ev.stopImmediatePropagation?.();
+        try { live.audioManager?.notifyUserGesture?.(); } catch (_) {}
+        const isGround = isGroundVehicle(v);
+        const targetSeat = isGround ? firstOpenSeat(v) : 0;
+        if (targetSeat >= 0) api.board(v.guid, targetSeat);
+      }
+      return;
+    }
+
+    if (code === "KeyJ" || code === "KeyK" || code === "KeyL" || code === "KeyU") {
+      const sl = nearestSidelifter(12.0);
+      if (!sl) return;
+      ev.preventDefault?.();
+      ev.stopImmediatePropagation?.();
+      try { live.audioManager?.notifyUserGesture?.(); } catch (_) {}
+      const sideFlags = 0x00; // default curbside right (+1)
+      if (code === "KeyJ") {
+        const planted = Boolean((sl.sideliftFlags & 0x02) || (sl.sideliftPhase >= 2 && sl.sideliftPhase <= 9));
+        const act = planted ? TRAILER_ACTION.RetractOutriggers : TRAILER_ACTION.DeployOutriggers;
+        try { h?.vehicleTrailerAction?.(sl.guid, 0, 0, act, 0, sideFlags); } catch (_) {}
+      } else if (code === "KeyK") {
+        try { h?.vehicleTrailerAction?.(sl.guid, 0, 0, TRAILER_ACTION.ToggleTwistlock, 0, 0); } catch (_) {}
+      } else if (code === "KeyL") {
+        const hasMounted = (sl.mountedContainerGuid >>> 0) !== 0;
+        const act = ev.shiftKey
+          ? (hasMounted ? TRAILER_ACTION.AutoOffload : TRAILER_ACTION.AutoLoad)
+          : (hasMounted ? TRAILER_ACTION.SideliftOffload : TRAILER_ACTION.SideliftLoad);
+        try { h?.vehicleTrailerAction?.(sl.guid, 0, 0, act, 0, sideFlags); } catch (_) {}
+      } else if (code === "KeyU") {
+        const hasJack = Boolean((sl.sideliftFlags & 0x08) || sl.stowedPalletJackGuid);
+        const act = hasJack ? TRAILER_ACTION.DeployPalletJack : TRAILER_ACTION.StowPalletJack;
+        try { h?.vehicleTrailerAction?.(sl.guid, 0, sl.stowedPalletJackGuid || 0, act, 0, 0); } catch (_) {}
+      }
+      return;
+    }
+
+    if (code === "KeyE") {
+      const cont = nearestGroundedContainer(4.0);
+      if (!cont) return;
+      ev.preventDefault?.();
+      ev.stopImmediatePropagation?.();
+      try { live.audioManager?.notifyUserGesture?.(); } catch (_) {}
+      const isOpen = cont.currentDoorProgress >= 0.5 || cont.last?.doorState === 2;
+      const doorAction = isOpen ? 2 : 1; // 1 = OpenDoors, 2 = CloseDoors
+      try { h?.vehicleContainerAction?.(cont.guid, doorAction, 0, 0, 0); } catch (_) {}
+      return;
+    }
+
+    if (code === "KeyR") {
+      const dep = nearestGroundDeployable(3.5);
+      if (!dep) return;
+      ev.preventDefault?.();
+      ev.stopImmediatePropagation?.();
+      try { live.audioManager?.notifyUserGesture?.(); } catch (_) {}
+      const p = dep.model?.root?.position;
+      const cl = p ? FM.toCellLocal(p.x, p.y, p.z) : { cell: 0, x: 0, y: 0, z: 0 };
+      try {
+        h?.vehiclePalletJackAction?.(
+          0, PALLET_JACK_ACTION.ToggleDeployableStow, 0, 0, 0, dep.guid,
+          cl.cell, cl.x, cl.y, cl.z, 0, 0
+        );
+      } catch (_) {}
     }
   };
-  win.addEventListener("keydown", onKeyB, true);
+  win.addEventListener("keydown", onLogisticsKeyDown, true);
 
   // ---------------------------------------------------------------- frame hook
 
@@ -3379,6 +4142,7 @@ export function installVehicles(deps = {}) {
     drainInbox();
     if (pilot) tickPilot(dt);
     else if (passenger) tickPassenger(dt);
+    else if (palletJackController?.isActive?.()) palletJackController.tick(dt);
     else if (fall) tickFall();
     else if (handoff) tickHandoff(dt);
     else if (exitHop) tickExitHop(dt);
@@ -3390,6 +4154,7 @@ export function installVehicles(deps = {}) {
     tickDeployables(dt);
     tickTrailers(dt);
     tickContainers(dt);
+    tickPalletJacks(dt);
     aeroFx?.tick(dt);
     if (!pilot && !passenger) osd.sights(null, null, "");
     chutes?.tick(dt, chutePose);
@@ -3461,7 +4226,7 @@ export function installVehicles(deps = {}) {
     events: () => events.slice(),
     nearest: () => nearestBoardable()?.guid ?? null,
     board(guid, seatIndex) {
-      if (pilot || passenger || fall || handoff) return { ok: false, reason: "busy" };
+      if (pilot || passenger || fall || handoff || palletJackController?.isActive?.()) return { ok: false, reason: "busy" };
       const v = guid ? vehicles.get(guid >>> 0) : nearestBoardable();
       const g = (v?.guid ?? (guid >>> 0) ?? [...vehicles.keys()][0]) >>> 0;
       if (!g) return { ok: false, reason: "no vehicle" };
@@ -3601,6 +4366,7 @@ export function installVehicles(deps = {}) {
         kind: tr.specKind,
         wireKind: tr.kind,
         wcid: tr.wcid,
+        isSidelifter: Boolean(tr.isSidelifter),
         pos: tr.model?.root?.position
           ? [tr.model.root.position.x, tr.model.root.position.y, tr.model.root.position.z]
           : tr.worldPos.slice(),
@@ -3614,6 +4380,14 @@ export function installVehicles(deps = {}) {
         landingGearRetracted: Boolean(tr.model?.landingGearRetracted ?? (tr.trailerFlags & TRAILER_FLAG.GEAR_RETRACTED)),
         brakeLights: Boolean(tr.model?.brakeLights ?? (tr.trailerFlags & TRAILER_FLAG.BRAKE_LIGHTS)),
         trailerFlags: tr.trailerFlags,
+        sideliftPhase: tr.sideliftPhase ?? 0,
+        sideliftSide: tr.sideliftSide ?? 1,
+        sideliftFlags: tr.sideliftFlags ?? 0,
+        sideliftProgress: tr.sideliftProgress ?? 0,
+        outriggerProgress: tr.outriggerProgress ?? 0,
+        craneSpanY: tr.craneSpanY ?? SK.CRANE_SPAN_Y_40FT,
+        stowedPalletJackGuid: tr.stowedPalletJackGuid ?? 0,
+        transferContainerGuid: tr.transferContainerGuid ?? 0,
         last: tr.last,
       })),
       get: (guid) => trailers.get(guid >>> 0) ?? null,
@@ -3665,9 +4439,70 @@ export function installVehicles(deps = {}) {
           return false;
         }
       },
-      action(trailerGuid, action, vehicleGuid = 0, containerGuid = 0, slot = 0) {
+      action(trailerGuid, action, vehicleGuid = 0, containerGuid = 0, slot = 0, flags = 0) {
         try {
-          sh()?.vehicleTrailerAction?.(trailerGuid >>> 0, vehicleGuid >>> 0, containerGuid >>> 0, action | 0, slot | 0);
+          sh()?.vehicleTrailerAction?.(trailerGuid >>> 0, vehicleGuid >>> 0, containerGuid >>> 0, action | 0, slot | 0, flags | 0);
+          return true;
+        } catch (_) {
+          return false;
+        }
+      },
+      sidelift(trailerGuid, mode = "offload", side = "right") {
+        const tGuid = trailerGuid >>> 0;
+        const tr = trailers.get(tGuid);
+        const m = typeof mode === "string" ? mode.trim().toLowerCase() : "";
+        let act = TRAILER_ACTION.SideliftOffload;
+        if (m === "load") act = TRAILER_ACTION.SideliftLoad;
+        else if (m === "autooffload" || m === "auto_offload" || m === "auto-offload") act = TRAILER_ACTION.AutoOffload;
+        else if (m === "autoload" || m === "auto_load" || m === "auto-load") act = TRAILER_ACTION.AutoLoad;
+        else if (m === "auto") act = (tr && (tr.mountedContainerGuid >>> 0) !== 0) ? TRAILER_ACTION.AutoOffload : TRAILER_ACTION.AutoLoad;
+        else if (m === "cancel") act = TRAILER_ACTION.CancelSidelift;
+        const flags = (side === "left" || side === -1) ? 0x01 : 0x00;
+        try {
+          const h = sh();
+          if (!h || typeof h.vehicleTrailerAction !== "function") return false;
+          h.vehicleTrailerAction(tGuid, 0, 0, act, 0, flags);
+          return true;
+        } catch (_) {
+          return false;
+        }
+      },
+      deployOutriggers(trailerGuid, side = "right") {
+        const flags = (side === "left" || side === -1) ? 0x01 : 0x00;
+        try {
+          const h = sh();
+          if (!h || typeof h.vehicleTrailerAction !== "function") return false;
+          h.vehicleTrailerAction(trailerGuid >>> 0, 0, 0, TRAILER_ACTION.DeployOutriggers, 0, flags);
+          return true;
+        } catch (_) {
+          return false;
+        }
+      },
+      retractOutriggers(trailerGuid) {
+        try {
+          const h = sh();
+          if (!h || typeof h.vehicleTrailerAction !== "function") return false;
+          h.vehicleTrailerAction(trailerGuid >>> 0, 0, 0, TRAILER_ACTION.RetractOutriggers, 0, 0);
+          return true;
+        } catch (_) {
+          return false;
+        }
+      },
+      deployPalletJack(trailerGuid) {
+        try {
+          const h = sh();
+          if (!h || typeof h.vehicleTrailerAction !== "function") return false;
+          h.vehicleTrailerAction(trailerGuid >>> 0, 0, 0, TRAILER_ACTION.DeployPalletJack, 0, 0);
+          return true;
+        } catch (_) {
+          return false;
+        }
+      },
+      stowPalletJack(trailerGuid, jackGuid = 0) {
+        try {
+          const h = sh();
+          if (!h || typeof h.vehicleTrailerAction !== "function") return false;
+          h.vehicleTrailerAction(trailerGuid >>> 0, 0, jackGuid >>> 0, TRAILER_ACTION.StowPalletJack, 0, 0);
           return true;
         } catch (_) {
           return false;
@@ -3687,6 +4522,169 @@ export function installVehicles(deps = {}) {
       removeLocal(guid) {
         removeTrailerEntry(guid);
       },
+    },
+    palletJacks: {
+      list: () => [...palletJacks.values()].map((pj) => ({
+        guid: pj.guid,
+        palletJackGuid: pj.guid,
+        operatorGuid: pj.operatorGuid,
+        stowedOnTrailerGuid: pj.stowedOnTrailerGuid,
+        cell: pj.cell,
+        pos: pj.model?.root?.position
+          ? [pj.model.root.position.x, pj.model.root.position.y, pj.model.root.position.z]
+          : pj.worldPos.slice(),
+        rawPos: pj.rawPos ? pj.rawPos.slice() : [0, 0, 0],
+        heading: pj.heading,
+        tillerAngle: pj.tillerAngle,
+        forkHeightM: pj.forkHeightM,
+        forkState: pj.forkState,
+        carriedPalletSize: pj.carriedPalletSize,
+        flags: pj.flags,
+        carriedWcid: pj.carriedWcid,
+        ownerGuid: pj.ownerGuid,
+        last: pj.last,
+      })),
+      get: (guid) => {
+        const pj = palletJacks.get(guid >>> 0);
+        if (!pj) return null;
+        return {
+          guid: pj.guid,
+          palletJackGuid: pj.guid,
+          operatorGuid: pj.operatorGuid,
+          stowedOnTrailerGuid: pj.stowedOnTrailerGuid,
+          cell: pj.cell,
+          pos: pj.model?.root?.position
+            ? [pj.model.root.position.x, pj.model.root.position.y, pj.model.root.position.z]
+            : pj.worldPos.slice(),
+          rawPos: pj.rawPos ? pj.rawPos.slice() : [0, 0, 0],
+          heading: pj.heading,
+          tillerAngle: pj.tillerAngle,
+          forkHeightM: pj.forkHeightM,
+          forkState: pj.forkState,
+          carriedPalletSize: pj.carriedPalletSize,
+          flags: pj.flags,
+          carriedWcid: pj.carriedWcid,
+          ownerGuid: pj.ownerGuid,
+          last: pj.last,
+          model: pj.model,
+        };
+      },
+      grab(guid) {
+        const g = guid >>> 0;
+        const entry = palletJacks.get(g);
+        if (!entry) return false;
+        try {
+          const h = sh();
+          if (!h || typeof h.vehiclePalletJackAction !== "function") return false;
+          const cl = FM.toCellLocal(entry.worldPos[0], entry.worldPos[1], entry.worldPos[2]);
+          h.vehiclePalletJackAction(g, PALLET_JACK_ACTION.Grab, 0, 0, 0, 0, cl.cell, cl.x, cl.y, cl.z, entry.heading || 0, entry.tillerAngle || 0);
+          return true;
+        } catch (_) {
+          return false;
+        }
+      },
+      release(guid = 0) {
+        const g = (guid >>> 0) || (palletJackController?.activeGuid ?? 0);
+        if (!g) return false;
+        try {
+          const h = sh();
+          if (!h || typeof h.vehiclePalletJackAction !== "function") return false;
+          const st = palletJackController?.state;
+          const cl = st ? FM.toCellLocal(st.x, st.y, st.z) : { cell: 0, x: 0, y: 0, z: 0 };
+          h.vehiclePalletJackAction(g, PALLET_JACK_ACTION.Release, 0, 0, 0, 0, cl.cell, cl.x, cl.y, cl.z, st?.heading ?? 0, st?.tillerAngle ?? 0);
+          palletJackController?.stop?.("api-release");
+          return true;
+        } catch (_) {
+          return false;
+        }
+      },
+      raise(guid = 0) {
+        const g = (guid >>> 0) || (palletJackController?.activeGuid ?? 0);
+        if (!g || !palletJacks.has(g)) return false;
+        try {
+          const h = sh();
+          if (!h || typeof h.vehiclePalletJackAction !== "function") return false;
+          h.vehiclePalletJackAction(g, PALLET_JACK_ACTION.RaiseForks, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+          return true;
+        } catch (_) {
+          return false;
+        }
+      },
+      lower(guid = 0) {
+        const g = (guid >>> 0) || (palletJackController?.activeGuid ?? 0);
+        if (!g || !palletJacks.has(g)) return false;
+        try {
+          const h = sh();
+          if (!h || typeof h.vehiclePalletJackAction !== "function") return false;
+          h.vehiclePalletJackAction(g, PALLET_JACK_ACTION.LowerForks, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+          return true;
+        } catch (_) {
+          return false;
+        }
+      },
+      pickGround(deployableGuid, jackGuid = 0) {
+        const g = (jackGuid >>> 0) || (palletJackController?.activeGuid ?? 0);
+        if (!g || !palletJacks.has(g)) return false;
+        try {
+          const h = sh();
+          if (!h || typeof h.vehiclePalletJackAction !== "function") return false;
+          h.vehiclePalletJackAction(g, PALLET_JACK_ACTION.PickGroundDeployable, 0, 0, 0, deployableGuid >>> 0, 0, 0, 0, 0, 0, 0);
+          return true;
+        } catch (_) {
+          return false;
+        }
+      },
+      dropGround(jackGuid = 0) {
+        const g = (jackGuid >>> 0) || (palletJackController?.activeGuid ?? 0);
+        if (!g || !palletJacks.has(g)) return false;
+        try {
+          const h = sh();
+          if (!h || typeof h.vehiclePalletJackAction !== "function") return false;
+          const st = palletJackController?.state;
+          const cl = st ? FM.toCellLocal(st.x, st.y, st.z) : { cell: 0, x: 0, y: 0, z: 0 };
+          h.vehiclePalletJackAction(g, PALLET_JACK_ACTION.DropToGround, 0, 0, 0, 0, cl.cell, cl.x, cl.y, cl.z, st?.heading ?? 0, st?.tillerAngle ?? 0);
+          return true;
+        } catch (_) {
+          return false;
+        }
+      },
+      pickContainer(containerGuid, slotIndex = 0, subSlot = 0, jackGuid = 0) {
+        const g = (jackGuid >>> 0) || (palletJackController?.activeGuid ?? 0);
+        if (!g || !palletJacks.has(g)) return false;
+        try {
+          const h = sh();
+          if (!h || typeof h.vehiclePalletJackAction !== "function") return false;
+          h.vehiclePalletJackAction(g, PALLET_JACK_ACTION.PickContainerSlot, slotIndex | 0, subSlot | 0, 0, containerGuid >>> 0, 0, 0, 0, 0, 0, 0);
+          return true;
+        } catch (_) {
+          return false;
+        }
+      },
+      loadContainer(containerGuid, slotIndex = 0, subSlot = 0, jackGuid = 0) {
+        const g = (jackGuid >>> 0) || (palletJackController?.activeGuid ?? 0);
+        if (!g || !palletJacks.has(g)) return false;
+        try {
+          const h = sh();
+          if (!h || typeof h.vehiclePalletJackAction !== "function") return false;
+          h.vehiclePalletJackAction(g, PALLET_JACK_ACTION.LoadContainerSlot, slotIndex | 0, subSlot | 0, 0, containerGuid >>> 0, 0, 0, 0, 0, 0, 0);
+          return true;
+        } catch (_) {
+          return false;
+        }
+      },
+      toggleDeployableStow(deployableGuid) {
+        const dGuid = deployableGuid >>> 0;
+        if (!dGuid) return false;
+        try {
+          const h = sh();
+          if (!h || typeof h.vehiclePalletJackAction !== "function") return false;
+          h.vehiclePalletJackAction(palletJackController?.activeGuid ?? 0, PALLET_JACK_ACTION.ToggleDeployableStow, 0, 0, 0, dGuid, 0, 0, 0, 0, 0, 0);
+          return true;
+        } catch (_) {
+          return false;
+        }
+      },
+      get active() { return palletJackController?.isActive?.() ? palletJackController.activeGuid : null; },
     },
     semi: {
       list: () => [...vehicles.values()].filter((v) => isSemiVehicle(v)).map((v) => {
@@ -3758,12 +4756,15 @@ export function installVehicles(deps = {}) {
       try { win?.removeEventListener?.("beforeunload", onPageHide, false); } catch (_) {}
       try { win?.removeEventListener?.("hb-logged-out", onLogoutEvt, false); } catch (_) {}
       try { win?.removeEventListener?.("hb-disconnected", onPageHide, false); } catch (_) {}
-      try { win?.removeEventListener?.("keydown", onKeyB, true); } catch (_) {}
+      try { win?.removeEventListener?.("keydown", onLogisticsKeyDown, true); } catch (_) {}
       try { clearTimeout(promptTimer); } catch (_) {}
       promptTimer = null;
+      try { palletJackController?.dispose?.(); } catch (_) {}
       for (const v of vehicles.values()) forgetVehicle(v);
       for (const g of [...trailers.keys()]) removeTrailerEntry(g);
       trailers.clear();
+      for (const g of [...palletJacks.keys()]) removePalletJackEntry(g);
+      palletJacks.clear();
       for (const g of [...deployables.keys()]) removeDeployableEntry(g);
       for (const g of [...containers.keys()]) removeContainerEntry(g);
       containers.clear();
@@ -3777,6 +4778,7 @@ export function installVehicles(deps = {}) {
       groundModels.clear();
       groundFx?.dispose?.();
       groundAudio?.dispose?.();
+      logisticsAudio?.dispose?.();
       deployableVfx?.dispose();
       deployableAudio?.dispose();
       radarScope.dispose();

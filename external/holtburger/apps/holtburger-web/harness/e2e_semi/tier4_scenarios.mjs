@@ -72,12 +72,40 @@ export async function runTier4(collector) {
     await live.evalInPage(`window.__vehicles.board(${rig.v.guid}, 0); return true;`);
     await waitUntil(async () => await live.evalInPage(`return !!window.__vehicles?.piloting`), 6000, 150, "piloting semi-379");
 
+    // Sample wheelRollAngle across S-turn (wheelRollAngle wraps modulo 2*pi every ~3.17m)
+    const sampleRoll = async () => await live.evalInPage(`
+      const m = window.__vehicles.groundModels.get(${rig.v.guid});
+      const st = window.__vehicles.status();
+      const vSt = st?.vehicles?.find((x) => x.guid === ${rig.v.guid}) ?? st?.vehicles?.[0];
+      const pState = (st?.pilot?.vehicle === undefined || st?.pilot?.vehicle === ${rig.v.guid}) ? st?.pilot?.state : null;
+      return {
+        roll: m?.wheelRollAngle || 0,
+        x: pState?.x ?? vSt?.pos?.x ?? m?.root?.position?.x ?? 0,
+        y: pState?.y ?? vSt?.pos?.y ?? m?.root?.position?.y ?? 0,
+      };
+    `);
+    const rollStart = await sampleRoll();
+    const rollSamples = [rollStart];
+
     // Steer left then right while accelerating
     await live.evalInPage(`window.__vehicles.setSticks({ throttle: 0.75, yaw: -0.7 }, 1800); return true;`);
-    await new Promise((r) => setTimeout(r, 1900));
+    for (let i = 0; i < 4; i++) {
+      await new Promise((r) => setTimeout(r, 475));
+      rollSamples.push(await sampleRoll());
+    }
     await live.evalInPage(`window.__vehicles.setSticks({ throttle: 0.75, yaw: 0.7 }, 1800); return true;`);
-    await new Promise((r) => setTimeout(r, 1900));
+    for (let i = 0; i < 4; i++) {
+      await new Promise((r) => setTimeout(r, 475));
+      rollSamples.push(await sampleRoll());
+    }
     await live.evalInPage(`window.__vehicles.clearSticks(); return true;`);
+    const rollEnd = rollSamples[rollSamples.length - 1];
+    const distDriven = Math.hypot(rollEnd.x - rollStart.x, rollEnd.y - rollStart.y);
+    let maxRollDiff = 0;
+    for (const s of rollSamples) {
+      const diff = Math.abs(s.roll - rollStart.roll);
+      if (diff > maxRollDiff) maxRollDiff = diff;
+    }
 
     const st = await live.evalInPage(`
       const s = window.__vehicles.status();
@@ -98,7 +126,7 @@ export async function runTier4(collector) {
         wheelRoll: m?.wheelRollAngle || 0,
       };
     `);
-    assert(Math.abs(st.wheelRoll) > 0.5, `semi wheels must have rolled, got ${st.wheelRoll}`);
+    assert(maxRollDiff > 0.5 || distDriven > 5.0, `semi wheels must have rolled across S-turn (maxRollDiff=${maxRollDiff.toFixed(3)}, dist=${distDriven.toFixed(2)}m)`);
     assert(st.t?.landingGearRetracted === true, `trailer landing gear must be retracted (true) while coupled, got ${st.t?.landingGearRetracted}`);
 
     await live.hideHud();

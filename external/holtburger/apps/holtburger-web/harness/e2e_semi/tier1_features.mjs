@@ -136,8 +136,8 @@ export async function runTier1(collector) {
     () => {
       const xml = readXmlProtocol();
       if (!xml.exists) return { ok: false, reason: "vehicles.protocol.xml not found" };
-      if (!/version="6"/.test(xml.text)) {
-        return { ok: false, reason: "vehicles.protocol.xml is not yet bumped to version=\"6\" (M1)" };
+      if (!/version="(?:6|7)"/.test(xml.text)) {
+        return { ok: false, reason: "vehicles.protocol.xml is not yet bumped to version=\"6\" or \"7\" (M1)" };
       }
       return { ok: true, text: xml.text };
     },
@@ -178,14 +178,15 @@ export async function runTier1(collector) {
     () => {
       const fx = readProtocolFixtures();
       if (!fx.input || !fx.output) return { ok: false, reason: "protocol fixture JSON missing" };
-      if (fx.output.version !== 6) {
-        return { ok: false, reason: `vehicle-wire-fixtures.json version is ${fx.output.version}, awaiting v6 (M1)` };
+      if (fx.output.version !== 6 && fx.output.version !== 7) {
+        return { ok: false, reason: `vehicle-wire-fixtures.json version is ${fx.output.version}, awaiting v6/v7 (M1)` };
       }
       return { ok: true, ...fx };
     },
     ({ input, output }) => {
+      const schemaVer = output.version;
       const futureIn = input.fixtures.find((f) => f.name === "future_version_extra_bytes");
-      assert(futureIn && futureIn.fields?.Header?.Version === 7, "future_version_extra_bytes must use Header.Version === 7 in v6");
+      assert(futureIn && futureIn.fields?.Header?.Version === schemaVer + 1, `future_version_extra_bytes must use Header.Version === ${schemaVer + 1}`);
 
       const getFx = (name) => {
         const fx = output.fixtures.find((f) => f.name === name && f.expect === "ok");
@@ -195,25 +196,27 @@ export async function runTier1(collector) {
 
       // 1. vehicle_trailer_action (24B, 0x090F C2S)
       const ta = getFx("vehicle_trailer_action");
+      const taVer = ta.version ?? schemaVer;
       assert(ta.opcode === OPCODES.Vehicle_TrailerAction, "Vehicle_TrailerAction opcode 0x090F");
       const taDec = decodeTrailerAction(hexToBytes(ta.hex));
       assert(taDec && taDec._bytesConsumed === 24, `TrailerAction wire length must be 24B, got ${taDec?._bytesConsumed}`);
-      assert(taDec.Header.Version === 6, "TrailerAction Header.Version === 6");
+      assert(taDec.Header.Version === taVer, `TrailerAction Header.Version === ${taVer}`);
       assert(taDec.TrailerGuid === ta.fields.TrailerGuid && taDec.TrailerGuid !== 0xffffffff, "TrailerAction.TrailerGuid");
       assert(taDec.VehicleGuid === ta.fields.VehicleGuid, "TrailerAction.VehicleGuid");
       assert(taDec.ContainerGuid === ta.fields.ContainerGuid, "TrailerAction.ContainerGuid");
       assert(taDec.Action === ta.fields.Action && taDec.Action === TRAILER_ACTION_KIND.MountContainer, "TrailerAction.Action === 4");
       assert(taDec.Slot === ta.fields.Slot && taDec.Slot === 1, "TrailerAction.Slot === 1");
       assert(taDec.Flags === ta.fields.Flags, "TrailerAction.Flags");
-      assert(bytesToHex(encodeTrailerAction(taDec, 6)) === ta.hex, "TrailerAction decode->encode hex mismatch");
-      assert(bytesToHex(encodeTrailerAction(ta.fields, 6)) === ta.hex, "TrailerAction fields->hex mismatch");
+      assert(bytesToHex(encodeTrailerAction(taDec, taVer)) === ta.hex, "TrailerAction decode->encode hex mismatch");
+      assert(bytesToHex(encodeTrailerAction(ta.fields, taVer)) === ta.hex, "TrailerAction fields->hex mismatch");
 
-      // 2. vehicle_trailer_state (60B, 0x090F S2C)
-      const ts = getFx("vehicle_trailer_state");
+      // 2. vehicle_trailer_state v6 (60B, 0x090F S2C)
+      const ts = output.fixtures.find((f) => f.name === "vehicle_trailer_state_v6" && f.expect === "ok") || getFx("vehicle_trailer_state");
+      const tsVer = ts.version ?? 6;
       assert(ts.opcode === OPCODES.Vehicle_TrailerState, "Vehicle_TrailerState opcode 0x090F");
       const tsDec = decodeTrailerState(hexToBytes(ts.hex));
-      assert(tsDec && tsDec._bytesConsumed === 60, `TrailerState wire length must be 60B, got ${tsDec?._bytesConsumed}`);
-      assert(tsDec.Header.Version === 6, "TrailerState Header.Version === 6");
+      assert(tsDec && tsDec._bytesConsumed === (tsVer >= 7 ? 84 : 60), `TrailerState wire length mismatch, got ${tsDec?._bytesConsumed}`);
+      assert(tsDec.Header.Version === tsVer, `TrailerState Header.Version === ${tsVer}`);
       assert(tsDec.TrailerGuid === ts.fields.TrailerGuid, "TrailerState.TrailerGuid");
       assert(tsDec.Kind === ts.fields.Kind && tsDec.Kind === DEPLOYABLE_KIND.TrailerChassis40, "TrailerState.Kind === 14");
       assert(tsDec.Cell === ts.fields.Cell, "TrailerState.Cell");
@@ -228,11 +231,12 @@ export async function runTier1(collector) {
       assert(tsDec.ContainerSlot === ts.fields.ContainerSlot, "TrailerState.ContainerSlot");
       assert(tsDec.TrailerFlags === ts.fields.TrailerFlags, "TrailerState.TrailerFlags");
       assert(tsDec.OwnerGuid === ts.fields.OwnerGuid, "TrailerState.OwnerGuid");
-      assert(bytesToHex(encodeTrailerState(tsDec, 6)) === ts.hex, "TrailerState decode->encode hex mismatch");
-      assert(bytesToHex(encodeTrailerState(ts.fields, 6)) === ts.hex, "TrailerState fields->hex mismatch");
+      assert(bytesToHex(encodeTrailerState(tsDec, tsVer)) === ts.hex, "TrailerState decode->encode hex mismatch");
+      assert(bytesToHex(encodeTrailerState(ts.fields, tsVer)) === ts.hex, "TrailerState fields->hex mismatch");
 
-      // 3. vehicle_profile_semi (v6)
+      // 3. vehicle_profile_semi (v6/v7)
       const sp = getFx("vehicle_profile_semi");
+      const spVer = sp.version ?? schemaVer;
       const spBytes = hexToBytes(sp.hex);
       const spDec = decodeVehicleProfile(spBytes);
       assert(spDec && spDec._bytesConsumed === spBytes.length, `vehicle_profile_semi consumed ${spDec?._bytesConsumed} vs ${spBytes.length}`);
@@ -245,11 +249,12 @@ export async function runTier1(collector) {
       assert(spDec.LiveryId === sp.fields.LiveryId && spDec.LiveryId === 1, "semi LiveryId === 1");
       assert(spDec.VehicleClass === 3, "semi VehicleClass === 3");
       assert(spDec.Reserved4 === sp.fields.Reserved4, "semi Reserved4");
-      assert(bytesToHex(encodeVehicleProfile(spDec, 6)) === sp.hex, "vehicle_profile_semi decode->encode hex mismatch");
-      assert(bytesToHex(encodeVehicleProfile(sp.fields, 6)) === sp.hex, "vehicle_profile_semi fields->hex mismatch");
+      assert(bytesToHex(encodeVehicleProfile(spDec, spVer)) === sp.hex, "vehicle_profile_semi decode->encode hex mismatch");
+      assert(bytesToHex(encodeVehicleProfile(sp.fields, spVer)) === sp.hex, "vehicle_profile_semi fields->hex mismatch");
 
-      // 4. vehicle_state_coupled (100B v6)
+      // 4. vehicle_state_coupled (100B v6/v7)
       const sc = getFx("vehicle_state_coupled");
+      const scVer = sc.version ?? schemaVer;
       const scBytes = hexToBytes(sc.hex);
       assert(scBytes.length === 100, `vehicle_state_coupled must be 100B, got ${scBytes.length}`);
       const scDec = decodeVehicleState(scBytes);
@@ -259,18 +264,18 @@ export async function runTier1(collector) {
       near(scDec.TrailerHeading, sc.fields.TrailerHeading, 1e-5, "coupled state TrailerHeading");
       near(scDec.TrailerPitch, sc.fields.TrailerPitch, 1e-5, "coupled state TrailerPitch");
       assert(scDec.TrailerFlags === sc.fields.TrailerFlags && scDec.TrailerFlags === 7, "coupled state TrailerFlags === 7");
-      assert(bytesToHex(encodeVehicleState(scDec, 6)) === sc.hex, "vehicle_state_coupled decode->encode hex mismatch");
-      assert(bytesToHex(encodeVehicleState(sc.fields, 6)) === sc.hex, "vehicle_state_coupled fields->hex mismatch");
+      assert(bytesToHex(encodeVehicleState(scDec, scVer)) === sc.hex, "vehicle_state_coupled decode->encode hex mismatch");
+      assert(bytesToHex(encodeVehicleState(sc.fields, scVer)) === sc.hex, "vehicle_state_coupled fields->hex mismatch");
 
-      // 5. vehicle_profile_jeep_v5 (v5 -> v6 repack_hex)
+      // 5. vehicle_profile_jeep_v5 (v5 -> v6/v7 repack_hex)
       const jv5 = getFx("vehicle_profile_jeep_v5");
       const jv5Dec = decodeVehicleProfile(hexToBytes(jv5.hex));
       assert(jv5Dec && jv5Dec.Header.Version === 5 && jv5Dec._bytesConsumed === hexToBytes(jv5.hex).length, "jeep_v5 consumed");
       assert(jv5Dec.ProfileKey === "jeep-mb" && jv5Dec.FifthWheelOffsetY === 0 && jv5Dec.VehicleClass === 0, "jeep_v5 v6 defaults zero");
       assert(bytesToHex(encodeVehicleProfile(jv5Dec, 5)) === jv5.hex, "jeep_v5 decode->encode v5 hex mismatch");
-      assert(bytesToHex(encodeVehicleProfile(jv5Dec, 6)) === jv5.repack_hex, "jeep_v5 repack_hex v6 mismatch");
+      assert(bytesToHex(encodeVehicleProfile(jv5Dec, schemaVer)) === jv5.repack_hex, "jeep_v5 repack_hex mismatch");
 
-      // 6. vehicle_state_driving_v5 (84B v5 -> 100B v6 repack_hex)
+      // 6. vehicle_state_driving_v5 (84B v5 -> 100B v6/v7 repack_hex)
       const dv5 = getFx("vehicle_state_driving_v5");
       const dv5Bytes = hexToBytes(dv5.hex);
       assert(dv5Bytes.length === 84, `vehicle_state_driving_v5 must be 84B, got ${dv5Bytes.length}`);
@@ -278,7 +283,7 @@ export async function runTier1(collector) {
       assert(dv5Dec && dv5Dec.Header.Version === 5 && dv5Dec._bytesConsumed === 84, "driving_v5 consumed");
       assert(dv5Dec.HitchedTrailerGuid === 0 && dv5Dec.TrailerFlags === 0, "driving_v5 v6 defaults zero");
       assert(bytesToHex(encodeVehicleState(dv5Dec, 5)) === dv5.hex, "driving_v5 decode->encode v5 hex mismatch");
-      assert(bytesToHex(encodeVehicleState(dv5Dec, 6)) === dv5.repack_hex, "driving_v5 repack_hex v6 mismatch");
+      assert(bytesToHex(encodeVehicleState(dv5Dec, schemaVer)) === dv5.repack_hex, "driving_v5 repack_hex mismatch");
     }
   );
 
@@ -336,7 +341,9 @@ export async function runTier1(collector) {
     const semiFx = output?.fixtures?.find((f) => f.name === "vehicle_profile_semi" && f.expect === "ok");
     assert(semiFx, "vehicle_profile_semi fixture missing in vehicle-wire-fixtures.json");
     assert(v6Bytes.length === semiFx.hex.length / 2, `v6 semi length ${v6Bytes.length} vs fixture ${semiFx.hex.length / 2}`);
-    assert(bytesToHex(encodeVehicleProfile(semiFx.fields, 6)) === semiFx.hex, "encodeVehicleProfile(vehicle_profile_semi.fields, 6) must match fixture hex");
+    const fxVer = semiFx.version ?? 6;
+    assert(bytesToHex(encodeVehicleProfile(semiFx.fields, fxVer)) === semiFx.hex, `encodeVehicleProfile(vehicle_profile_semi.fields, ${fxVer}) must match fixture hex`);
+    assert(bytesToHex(encodeVehicleProfile(semiFx.fields, 6).slice(8)) === bytesToHex(hexToBytes(semiFx.hex).slice(8)), "v6 and v7 Vehicle_Profile payloads must be byte-identical");
   });
 
   await collector.runCheck("T1.F1.04", 1, "F1:HBV1_v6_Protocol", () => {
@@ -430,14 +437,14 @@ export async function runTier1(collector) {
       return { ok: true, ns: wasm.ns, fn };
     },
     ({ fn }) => {
-      assert(fn.length === 5, `vehicleTrailerAction arity expected 5 (trailer, vehicle, container, action, slot), got ${fn.length}`);
+      assert(fn.length === 5 || fn.length === 6, `vehicleTrailerAction arity expected 5 or 6 (trailer, vehicle, container, action, slot[, flags]), got ${fn.length}`);
       const dtsPath = path.join(APP_ROOT, "pkg", "holtburger_web.d.ts");
       const linkRsPath = path.join(APP_ROOT, "src", "vehicle_link.rs");
       assert(existsSync(dtsPath), "pkg/holtburger_web.d.ts missing");
       assert(existsSync(linkRsPath), "src/vehicle_link.rs missing");
       const dts = readFileSync(dtsPath, "utf8");
       const linkRs = readFileSync(linkRsPath, "utf8");
-      assert(/vehicleTrailerAction\s*\([^)]*trailer_guid:\s*number[^)]*slot:\s*number\s*\):\s*void/.test(dts), "pkg/holtburger_web.d.ts missing vehicleTrailerAction signature");
+      assert(/vehicleTrailerAction\s*\([^)]*trailer_guid:\s*number[^)]*slot:\s*number(?:\s*,\s*flags\?:\s*number\s*\|\s*null)?\s*\):\s*void/.test(dts), "pkg/holtburger_web.d.ts missing vehicleTrailerAction signature");
       assert(/VehicleS2C::TrailerState/.test(linkRs) && /"trailer_state"/.test(linkRs), "vehicle_link.rs missing VehicleS2C::TrailerState -> trailer_state");
       assert(/"position":\s*v3\(ts\.position\)/.test(linkRs), "vehicle_link.rs TrailerState must serialize position: v3(ts.position)");
       assert(/"fifthWheelOffsetY"/.test(linkRs) && /"hitchedTrailerGuid"/.test(linkRs), "vehicle_link.rs missing v6 JSON fields");
@@ -452,8 +459,8 @@ export async function runTier1(collector) {
       const modRs = path.join(HOLTBURGER_ROOT, "crates/holtburger-protocol/src/messages/vehicle/mod.rs");
       if (!existsSync(modRs)) return { ok: false, reason: "vehicle/mod.rs missing" };
       const txt = readFileSync(modRs, "utf8");
-      if (!/HBV1_VERSION\s*:\s*u16\s*=\s*6/.test(txt)) {
-        return { ok: false, reason: "holtburger-protocol HBV1_VERSION is not 6 yet (M1)" };
+      if (!/HBV1_VERSION\s*:\s*u16\s*=\s*(?:6|7)\b/.test(txt)) {
+        return { ok: false, reason: "holtburger-protocol HBV1_VERSION is not 6 or 7 yet (M1)" };
       }
       return { ok: true, txt };
     },

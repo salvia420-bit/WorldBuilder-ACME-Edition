@@ -414,7 +414,7 @@
    "message": "Vehicle_State",
    "expect": "ok",
    "fields": {
-    "Header": {"Tag": 827736648, "Version": 7, "Reserved": 0},
+    "Header": {"Tag": 827736648, "Version": 8, "Reserved": 0},
     "Vehicle": 2147486209, "Step": 7, "AckInputSeq": 0, "Cell": 2847146009,
     "Position": {"X": 1.0, "Y": 2.0, "Z": 3.0},
     "Heading": 0.0, "Pitch": 0.0, "Bank": 0.0, "Speed": 0.0, "VCap": 69.0, "Ammo": 200, "Mode": 0, "Flags": 0,
@@ -705,6 +705,99 @@
     "ContainerSlot": 1,
     "TrailerFlags": 7,
     "Reserved": 0,
+    "OwnerGuid": 1342177281,
+    "SideliftPhase": 0,
+    "SideliftSide": 1,
+    "SideliftFlags": 0,
+    "Reserved7": 0,
+    "SideliftProgress": 0.0,
+    "OutriggerProgress": 0.0,
+    "CraneSpanY": 5.9925,
+    "StowedPalletJackGuid": 0,
+    "TransferContainerGuid": 0
+   }
+  },
+  {
+   "name": "vehicle_trailer_state_v6",
+   "message": "Vehicle_TrailerState",
+   "fields": {
+    "Header": {"Tag": 827736648, "Version": 6, "Reserved": 0},
+    "TrailerGuid": 1342177500,
+    "Kind": 14,
+    "Cell": 2847146009,
+    "Position": {"X": 84.5, "Y": 112.25, "Z": 12.0},
+    "Heading": 1.62,
+    "Pitch": 0.015,
+    "Bank": -0.005,
+    "CoupledTractorGuid": 2147486211,
+    "MountedContainerGuid": 1342177400,
+    "ContainerSlot": 1,
+    "TrailerFlags": 7,
+    "Reserved": 0,
+    "OwnerGuid": 1342177281
+   }
+  },
+  {
+   "name": "vehicle_trailer_state_sidelifter",
+   "message": "Vehicle_TrailerState",
+   "fields": {
+    "TrailerGuid": 1342177501,
+    "Kind": 15,
+    "Cell": 2847146009,
+    "Position": {"X": 90.0, "Y": 118.5, "Z": 12.0},
+    "Heading": 0.785398,
+    "Pitch": 0.0,
+    "Bank": 0.0,
+    "CoupledTractorGuid": 2147486211,
+    "MountedContainerGuid": 0,
+    "ContainerSlot": 0,
+    "TrailerFlags": 1,
+    "Reserved": 0,
+    "OwnerGuid": 1342177281,
+    "SideliftPhase": 6,
+    "SideliftSide": -1,
+    "SideliftFlags": 15,
+    "Reserved7": 0,
+    "SideliftProgress": 0.5,
+    "OutriggerProgress": 1.0,
+    "CraneSpanY": 2.9265,
+    "StowedPalletJackGuid": 1342177600,
+    "TransferContainerGuid": 1342177400
+   }
+  },
+  {
+   "name": "vehicle_pallet_jack_action",
+   "message": "Vehicle_PalletJackAction",
+   "fields": {
+    "PalletJackGuid": 1342177600,
+    "Action": 3,
+    "SlotIndex": 18,
+    "SubSlot": 1,
+    "Flags": 1,
+    "TargetGuid": 1342177400,
+    "Cell": 2847146009,
+    "Position": {"X": 94.25, "Y": 118.0, "Z": 12.162},
+    "Heading": 1.570796,
+    "TillerAngle": -0.35
+   }
+  },
+  {
+   "name": "vehicle_pallet_jack_state",
+   "message": "Vehicle_PalletJackState",
+   "fields": {
+    "PalletJackGuid": 1342177600,
+    "OperatorGuid": 1342177281,
+    "StowedOnTrailerGuid": 0,
+    "Cell": 2847146009,
+    "Position": {"X": 94.25, "Y": 118.0, "Z": 12.162},
+    "Heading": 1.570796,
+    "TillerAngle": -0.35,
+    "ForkHeightM": 0.2,
+    "ForkState": 2,
+    "CarriedPalletSize": 2,
+    "Flags": 3,
+    "Reserved": 0,
+    "CarriedWcid": 4000010,
     "OwnerGuid": 1342177281
    }
   }

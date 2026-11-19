@@ -17,6 +17,7 @@ export const AIM_ID = "hb-vehicle-aim";
 export const FALLLINE_ID = "hb-vehicle-fallline";
 export const HIT_ID = "hb-vehicle-hit";
 export const VIGNETTE_ID = "hb-vehicle-gvignette";
+export const PALLETJACK_HUD_ID = "hb-palletjack-hud";
 const STYLE_ID = "hb-vehicle-osd-style";
 
 export const HIT_DECAY_SEC = 0.35;
@@ -25,6 +26,7 @@ export const GROUND_DRIVER_KEYBIND_TEXT = "W/S Drive/Brake · A/D Steer · Space
 export const GROUND_PAX_KEYBIND_TEXT = "1-4 Switch Seat · Tab View · C/RMB Freelook · H HUD · X Exit";
 export const SEMI_DRIVER_KEYBIND_TEXT = "G Hitch/Unhitch · Shift Low Range · Space Air Brake · V Air Horn · L Lights · 1-2 Seat · Tab View · X Exit";
 export const SEMI_PAX_KEYBIND_TEXT = "1-2 Switch Seat · Tab View · C/RMB Freelook · H HUD · X Exit";
+export const PALLET_JACK_KEYBIND_TEXT = "WASD Drive/Steer · Space Raise/Lower · F Engage/Drop/Load · R Stow Nearby · V View · X/Esc Release";
 
 export const SURFACE_NAMES = Object.freeze([
   "ROAD", "DIRT", "GRASS", "FOREST", "SNOW", "SAND", "SWAMP", "FORD", "ROCK", "OBSIDIAN", "VOLCANO",
@@ -116,6 +118,12 @@ const CSS = `
 #${PROMPT_ID}{position:fixed;left:50%;bottom:154px;transform:translateX(-50%);z-index:61;pointer-events:none;
   font:600 14px/1.3 system-ui,sans-serif;color:#fff;background:rgba(0,0,0,.65);border:1px solid rgba(255,255,255,.2);
   border-radius:6px;padding:6px 14px}
+#${PALLETJACK_HUD_ID}{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);z-index:60;pointer-events:none;
+  font:600 12px/1.35 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:#ccf7c4;
+  background:rgba(6,16,11,.78);border:1.5px solid rgba(150,235,155,.45);border-radius:8px;padding:8px 16px;
+  text-align:center;box-shadow:0 4px 12px rgba(0,0,0,.5)}
+#${PALLETJACK_HUD_ID} .hb-pj-top{font-size:13px;font-weight:800;color:#f0fff0;margin-bottom:4px}
+#${PALLETJACK_HUD_ID} .hb-pj-keys{font-size:11px;color:rgba(195,240,195,.85);white-space:nowrap}
 #${RETICLE_ID},#${PIPPER_ID},#${FPM_ID},#${AIM_ID},#${FALLLINE_ID},#${HIT_ID}{position:fixed;left:0;top:0;z-index:59;pointer-events:none;will-change:transform}
 #${RETICLE_ID}{width:36px;height:36px;margin:-18px 0 0 -18px;border:2px solid rgba(255,216,120,.88);border-radius:50%;
   box-shadow:0 0 3px rgba(0,0,0,.9),inset 0 0 4px rgba(255,210,100,.25)}
@@ -161,7 +169,19 @@ function wrapPi(a) {
 }
 
 function normalizeTrailerKind(k) {
-  if (k === "40ft" || k === 40 || k === 14 || k === 4000031 || k === "Chassis40ft" || k === "TrailerChassis40") {
+  if (
+    k === "40ft" ||
+    k === 40 ||
+    k === 14 ||
+    k === 15 ||
+    k === 4000031 ||
+    k === 4000032 ||
+    k === "Chassis40ft" ||
+    k === "TrailerChassis40" ||
+    k === "sidelifter40" ||
+    k === "Sidelifter40" ||
+    k === "TrailerSidelifter40"
+  ) {
     return "40ft";
   }
   if (k === "20ft" || k === 20 || k === 13 || k === 4000030 || k === "Chassis20ft" || k === "TrailerChassis20") {
@@ -265,6 +285,10 @@ export function createVehicleOsd(deps = {}) {
   let gTrailerCoupledEl = null;
   let gTwistlockEl = null;
   let gArticulationEl = null;
+  let gSideliftEl = null;
+  let palletJackEl = null;
+  let palletJackTopEl = null;
+  let palletJackKeysEl = null;
   let gLightsEl = null;
   let gBrakeEl = null;
   let gHornEl = null;
@@ -306,6 +330,7 @@ export function createVehicleOsd(deps = {}) {
     spdTxt: null, thrTxt: null, altTxt: null, vsiTxt: null, gTxt: null,
     pillsSig: null, headerTxt: null, armsTxt: null, dbgTxt: null, keysTxt: null,
     vigSig: null, hitDisp: null, hitOp: null, hitTx: null, hitDmg: null,
+    pjSig: null, pjShown: null,
   };
 
   function setTxt(node, key, val) {
@@ -338,6 +363,10 @@ export function createVehicleOsd(deps = {}) {
     vignetteEl = mkRoot(VIGNETTE_ID);
     el = mkRoot(OSD_ID);
     promptEl = mkRoot(PROMPT_ID);
+    palletJackEl = mkRoot(PALLETJACK_HUD_ID);
+    palletJackTopEl = append(palletJackEl, mkEl(doc, "div", "hb-pj-top"));
+    palletJackKeysEl = append(palletJackEl, mkEl(doc, "div", "hb-pj-keys"));
+    palletJackKeysEl.textContent = PALLET_JACK_KEYBIND_TEXT;
     fallLineEl = mkRoot(FALLLINE_ID);
     reticle = mkRoot(RETICLE_ID);
     fpmEl = mkRoot(FPM_ID);
@@ -443,6 +472,9 @@ export function createVehicleOsd(deps = {}) {
     gTwistlockEl.textContent = "TWISTLOCK: OPEN";
     gArticulationEl = append(gTrailerBarEl, mkEl(doc, "span", "hb-ground-status-item"));
     gArticulationEl.textContent = "ARTIC: 0°";
+    gSideliftEl = append(gTrailerBarEl, mkEl(doc, "span", "hb-ground-status-item", "hb-trailer-sidelift"));
+    gSideliftEl.textContent = "SIDELIFT ACTIVE — LOCKED";
+    gSideliftEl.style.display = "none";
 
     const gStatusBar = append(gCenter, mkEl(doc, "div", "hb-ground-status-bar"));
     gLightsEl = append(gStatusBar, mkEl(doc, "span", "hb-ground-status-item"));
@@ -771,8 +803,14 @@ export function createVehicleOsd(deps = {}) {
               ? "hb-ground-status-item crit"
               : (isCaution ? "hb-ground-status-item caution" : "hb-ground-status-item");
           }
+          if (gSideliftEl) {
+            const slActive = coupled && (s.sideliftPhase ?? 0) > 0;
+            setStyle(gSideliftEl, "display", "gTrSlDisp", slActive ? "inline-block" : "none");
+            gSideliftEl.className = slActive ? "hb-ground-status-item crit" : "hb-ground-status-item";
+          }
         } else if (gTrailerBarEl) {
           setStyle(gTrailerBarEl, "display", "gTrBar", "none");
+          if (gSideliftEl) setStyle(gSideliftEl, "display", "gTrSlDisp", "none");
         }
 
         const isPassenger = localSeat > 0;
@@ -797,7 +835,7 @@ export function createVehicleOsd(deps = {}) {
           ];
           if (isSemi) {
             summaryLines.push(`CREW (1-2): ${crewSummary}`);
-            summaryLines.push(`TRAILER: [${coupledLabel}]   TWISTLOCK: [${twistLabel}]   ARTIC: ${artSignedDeg}°${artWarnTag}`);
+            summaryLines.push(`TRAILER: [${coupledLabel}]   TWISTLOCK: [${twistLabel}]   ARTIC: ${artSignedDeg}°${artWarnTag}${(s.sideliftPhase ?? 0) > 0 ? "   [SIDELIFT ACTIVE — LOCKED]" : ""}`);
           } else {
             summaryLines.push(`CREW: ${crewSummary}`);
           }
@@ -1017,11 +1055,45 @@ export function createVehicleOsd(deps = {}) {
       return last.prompt;
     },
 
+    palletJack(s) {
+      if (disposed) return;
+      ensure();
+      if (!palletJackEl) return;
+      if (!s || hidden) {
+        if (last.pjShown !== false) {
+          last.pjShown = false;
+          palletJackEl.style.display = "none";
+        }
+        return;
+      }
+      const forkMm = Math.round((Number.isFinite(s.forkHeightM) ? s.forkHeightM : 0.085) * 1000);
+      const forkLbl = forkMm >= 180 ? "RAISED" : (forkMm <= 95 ? "LOWERED" : `${forkMm} mm`);
+      const cargoLbl = s.carriedWcid
+        ? `CARGO WCID ${s.carriedWcid} (${s.carriedPalletSize === 1 ? "HALF" : "FULL"})`
+        : "EMPTY FORKS";
+      const surfLbl = typeof s.surface === "string" ? s.surface.toUpperCase() : "TERRAIN";
+      const viewLbl = s.viewMode === "interior" ? "CLOSE" : "FOLLOW";
+      const topLine = `PALLET JACK · FORKS ${forkLbl} (${forkMm} mm) · ${cargoLbl} · ${surfLbl} · CAM ${viewLbl}`;
+      setTxt(palletJackTopEl, "pjSig", topLine);
+      if (!palletJackEl.nodeType) {
+        const fullTxt = `${topLine}\n${PALLET_JACK_KEYBIND_TEXT}`;
+        if (palletJackEl.textContent !== fullTxt) palletJackEl.textContent = fullTxt;
+      }
+      if (last.pjShown !== true) {
+        last.pjShown = true;
+        palletJackEl.style.display = "block";
+      }
+    },
+
     toggleHidden() {
       if (disposed) return hidden;
       hidden = !hidden;
       if (hidden && el) {
         show(el, "shown", false);
+        if (palletJackEl) {
+          last.pjShown = false;
+          palletJackEl.style.display = "none";
+        }
         hideAllSights();
       }
       return hidden;
@@ -1030,6 +1102,10 @@ export function createVehicleOsd(deps = {}) {
     hide() {
       if (disposed) return;
       if (el) show(el, "shown", false);
+      if (palletJackEl) {
+        last.pjShown = false;
+        palletJackEl.style.display = "none";
+      }
       if (promptEl) {
         promptEl.style.display = "none";
         last.prompt = null;
@@ -1043,6 +1119,7 @@ export function createVehicleOsd(deps = {}) {
       try {
         el?.remove?.();
         promptEl?.remove?.();
+        palletJackEl?.remove?.();
         reticle?.remove?.();
         pipper?.remove?.();
         fpmEl?.remove?.();
@@ -1084,6 +1161,10 @@ export function createVehicleOsd(deps = {}) {
       gTrailerCoupledEl = null;
       gTwistlockEl = null;
       gArticulationEl = null;
+      gSideliftEl = null;
+      palletJackEl = null;
+      palletJackTopEl = null;
+      palletJackKeysEl = null;
       gLightsEl = null;
       gBrakeEl = null;
       gHornEl = null;

@@ -679,12 +679,15 @@ fn higher_floor(a: Option<(f32, Vector3)>, b: Option<(f32, Vector3)>) -> Option<
 /// `origin + orientation · (v · scale)` (the inverse of
 /// `sweep_sphere_against_object_bsp`'s frame change). The BSP root sphere
 /// rejects objects whose footprint cannot cover (x, y).
-fn highest_static_floor(
-    bsps: &[Arc<CellPhysicsBsp>],
+fn highest_floor_in_bsps<'a, I>(
+    bsps: I,
     x: f32,
     y: f32,
     ceiling_z: f32,
-) -> Option<(f32, Vector3)> {
+) -> Option<(f32, Vector3)>
+where
+    I: Iterator<Item = &'a Arc<CellPhysicsBsp>>,
+{
     use holtburger_dat::physics::BspNode;
     let mut best: Option<(f32, Vector3)> = None;
     for bsp in bsps {
@@ -728,6 +731,15 @@ fn highest_static_floor(
         }
     }
     best
+}
+
+fn highest_static_floor(
+    bsps: &[Arc<CellPhysicsBsp>],
+    x: f32,
+    y: f32,
+    ceiling_z: f32,
+) -> Option<(f32, Vector3)> {
+    highest_floor_in_bsps(bsps.iter(), x, y, ceiling_z)
 }
 
 /// D7: one `CPhysicsObj::UpdatePhysicsInternal` slice (acclient.c:317701-
@@ -4996,6 +5008,89 @@ impl SpatialScene {
     /// Number of active dynamic building colliders in the scene.
     pub fn dynamic_building_bsp_count(&self) -> usize {
         self.dynamic_building_bsps.len()
+    }
+
+    /// Probe the highest walkable surface (`n.z >= FLOOR_Z`, `z <= ceiling_z + 1e-3`)
+    /// across all active dynamic building BSPs (e.g. ISO container interior floors,
+    /// roofs, and fold-down loading ramps) at AC global world metres `(world_x, world_y)`.
+    pub fn probe_dynamic_building_surface(
+        &self,
+        world_x: f32,
+        world_y: f32,
+        ceiling_z: f32,
+    ) -> Option<(f32, Vector3)> {
+        if !world_x.is_finite()
+            || !world_y.is_finite()
+            || !ceiling_z.is_finite()
+            || self.dynamic_building_bsps.is_empty()
+        {
+            return None;
+        }
+        highest_floor_in_bsps(
+            self.dynamic_building_bsps.values().map(|(_, bsp, _)| bsp),
+            world_x,
+            world_y,
+            ceiling_z,
+        )
+    }
+
+    /// Resolve two-sided wall penetration against all active dynamic building BSPs
+    /// (container side walls, front bulkhead, and closed rear doors), ignoring walkable
+    /// floor/ramp/roof polygons (`|normal.z| >= FLOOR_Z`). Returns the cumulative
+    /// world-metre pushout delta, or `None` when no wall is penetrated.
+    pub fn resolve_dynamic_building_wall_pushout(
+        &self,
+        world_center: Vector3,
+        radius: f32,
+    ) -> Option<Vector3> {
+        if !world_center.x.is_finite()
+            || !world_center.y.is_finite()
+            || !world_center.z.is_finite()
+            || !radius.is_finite()
+            || radius <= 0.0
+            || self.dynamic_building_bsps.is_empty()
+        {
+            return None;
+        }
+        let mut pos = world_center;
+        let mut total = Vector3::zero();
+        for (_, bsp, _) in self.dynamic_building_bsps.values() {
+            let scale = if bsp.scale > 1e-6 { bsp.scale } else { 1.0 };
+            let inv = 1.0 / scale;
+            let local_radius = radius * inv;
+            let mut sphere = holtburger_common::Sphere {
+                center: bsp.world_to_local(pos) * inv,
+                radius: local_radius,
+            };
+            let start_local = sphere.center;
+            for _ in 0..20 {
+                let mut hit = false;
+                for poly in bsp.polys.values() {
+                    if poly.plane.normal.z.abs() >= super::FLOOR_Z {
+                        continue;
+                    }
+                    if poly.hits_sphere(&sphere) {
+                        poly.adjust_to_placement_poly(&mut sphere, None, local_radius, false, true);
+                        hit = true;
+                        break;
+                    }
+                }
+                if !hit {
+                    break;
+                }
+            }
+            let local_disp = (sphere.center - start_local) * scale;
+            if local_disp.length_squared() > 1e-12 {
+                let world_disp = bsp.orientation.rotate_vector(local_disp);
+                total = total + world_disp;
+                pos = pos + world_disp;
+            }
+        }
+        if total.length_squared() < 1e-12 {
+            None
+        } else {
+            Some(total)
+        }
     }
 
     /// Objects in the transition: register a SetupModel's collision

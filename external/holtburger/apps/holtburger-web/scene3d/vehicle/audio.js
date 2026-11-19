@@ -452,6 +452,34 @@ function getSharedNoiseSamples(sr, len) {
   return arr;
 }
 
+function getCtxNoiseBuffer(ctx, sec = 2.0, customRng = null, localArrays = null, localBuffers = null) {
+  if (!ctx || typeof ctx.createBuffer !== "function") return null;
+  const sr = fin(ctx.sampleRate) && ctx.sampleRate > 0 ? Math.round(ctx.sampleRate) : 48000;
+  const len = Math.max(1, Math.round(sr * sec));
+  const bufStore = localBuffers || _sharedCtxBuffers;
+  let byLen = bufStore.get(ctx);
+  if (byLen && byLen.has(len)) return byLen.get(len);
+  let samples;
+  if (localArrays) {
+    const key = `${sr}:${len}`;
+    samples = localArrays.get(key);
+    if (!samples) {
+      samples = buildNoiseSamples(len, customRng);
+      localArrays.set(key, samples);
+    }
+  } else {
+    samples = getSharedNoiseSamples(sr, len);
+  }
+  const buf = ctx.createBuffer(1, len, sr);
+  try { buf.getChannelData(0).set(samples); } catch (_) {}
+  if (!byLen) {
+    byLen = new Map();
+    bufStore.set(ctx, byLen);
+  }
+  byLen.set(len, buf);
+  return buf;
+}
+
 function getSoftTanhCurve() {
   if (_softTanhCurve) return _softTanhCurve;
   const n = 257;
@@ -2603,6 +2631,81 @@ export const DIESEL_I6_AUDIO_TUNING = Object.freeze({
   hissStopSpeedTo: 0.25,
 });
 
+export const LOGISTICS_AUDIO_TUNING = Object.freeze({
+  noiseSec: 2.0,
+  paramTau: 0.045,
+  maxOneShots: 14,
+
+  // Sidelifter PTO hydraulic pump loop
+  ptoBaseHz: 92,
+  ptoLoadSpanHz: 26,
+  ptoLfoHz: 7.5,
+  ptoLfoDepthHz: 3.5,
+  ptoFlowBaseHz: 420,
+  ptoFlowSpanHz: 280,
+  ptoCutoffBaseHz: 680,
+  ptoCutoffSpanHz: 520,
+  ptoBaseGain: 0.14,
+  ptoLoadGain: 0.08,
+  ptoRefDistance: 8,
+  ptoMaxDistance: 120,
+
+  // Sidelifter crane swing safety chime (square LFO pulse)
+  swingBeepCarrierHz: 1280,
+  swingBeepOvertoneHz: 2560,
+  swingBeepRateHz: 1.25,
+  swingBeepGain: 0.12,
+  swingBeepRefDistance: 10,
+  swingBeepMaxDistance: 140,
+
+  // Outrigger foot thud & ISO 1161 twistlock clank
+  outriggerCooldownSec: 0.08,
+  twistlockCooldownSec: 0.06,
+
+  // Pallet jack pump ratchet & release hiss
+  pumpCooldownSec: 0.05,
+  releaseCooldownSec: 0.08,
+
+  // Pallet jack polyurethane wheel roll loop
+  rollMaxSpeed: 2.2,
+  rollMinSpeed: 0.05,
+  rollRefDistance: 4,
+  rollMaxDistance: 60,
+});
+
+export const PALLET_JACK_SURFACE_PROFILES = Object.freeze({
+  ramp: Object.freeze({
+    type: "bandpass",
+    freq: 380,
+    spanHz: 180,
+    q: 2.4,
+    gainMul: 0.28,
+    humHz: 140,
+    humSpanHz: 60,
+    humGain: 0.09,
+  }),
+  floor: Object.freeze({
+    type: "bandpass",
+    freq: 210,
+    spanHz: 110,
+    q: 1.8,
+    gainMul: 0.22,
+    humHz: 88,
+    humSpanHz: 25,
+    humGain: 0.07,
+  }),
+  terrain: Object.freeze({
+    type: "lowpass",
+    freq: 290,
+    spanHz: 260,
+    q: 0.95,
+    gainMul: 0.24,
+    humHz: 0,
+    humSpanHz: 0,
+    humGain: 0,
+  }),
+});
+
 function cleanZero(n) {
   return n === 0 ? 0 : n;
 }
@@ -4033,6 +4136,949 @@ export function createGroundVehicleAudio(opts = {}) {
         observerCount: observerVoices.size,
         activeOneShots: activeOneShots.size,
         vehicleClass: activeVehicleClass,
+      };
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Coordinator: createLogisticsAudio (Sidelifter Hydraulics & Pallet Jack)
+// ---------------------------------------------------------------------------
+
+const LOGISTICS_NOISE_SEED = "vehicle-logistics-audio";
+
+/**
+ * Create the procedural WebAudio coordinator for on-foot ISO logistics operations:
+ *   - Sidelifter PTO hydraulic pump loop (`updateSidelifter` / `stopSidelifter`)
+ *   - Sidelifter outrigger footpad thud (`outriggerThud`)
+ *   - ISO 1161 twistlock steel clank (`twistlockClank`)
+ *   - Sidelifter swing warning chime via 1.25 Hz square LFO (`setSwingWarning`)
+ *   - Pallet jack hydraulic pump ratchet (`pumpRatchet`) & release hiss (`releaseHiss`)
+ *   - Surface-modulated polyurethane wheel roll loop (`updateWheelRoll` / `stopWheelRoll`)
+ *
+ * Strictly gated behind `vehicleAudioEnabled(search)` and `!liveScene3d?.nullRender`,
+ * zero Math.random, zero timers, and 100% leak-free `stop()` / `dispose()`.
+ */
+export function createLogisticsAudio(opts = {}) {
+  const d = opts && typeof opts === "object" ? opts : {};
+  const search = d.search || "";
+  const enabled = d.enabled !== false && vehicleAudioEnabled(search) && !d.liveScene3d?.nullRender;
+  const T = LOGISTICS_AUDIO_TUNING;
+  const maxOneShots = fin(d.maxOneShots) && d.maxOneShots >= 1
+    ? Math.trunc(d.maxOneShots)
+    : T.maxOneShots;
+
+  const hasBusSource = typeof d.bus === "function"
+    || Boolean(d.bus && typeof d.bus === "object")
+    || Boolean(d.audioManager && typeof d.audioManager === "object")
+    || Boolean(d.liveScene3d && typeof d.liveScene3d === "object");
+
+  const clock = typeof d.clock === "function"
+    ? d.clock
+    : () => (typeof performance !== "undefined" && typeof performance.now === "function" ? performance.now() / 1000 : 0);
+
+  const rng = typeof d.rng === "function" ? d.rng : mulberry32(hashString(LOGISTICS_NOISE_SEED));
+  const localNoiseArrays = new Map();
+  const localCtxBuffers = new WeakMap();
+
+  let disposed = false;
+  let lastNullBusAt = -Infinity;
+  let lastOutriggerAt = -Infinity;
+  let lastTwistlockAt = -Infinity;
+  let lastPumpAt = -Infinity;
+  let lastReleaseAt = -Infinity;
+
+  /** @type {Map<string|number, object>} */
+  const ptoLoops = new Map();
+  /** @type {Map<string|number, object>} */
+  const swingLoops = new Map();
+  /** @type {Map<string|number, object>} */
+  const rollLoops = new Map();
+  /** @type {Set<object>} */
+  const activeOneShots = new Set();
+
+  function rawResolveBus() {
+    let b = null;
+    if (typeof d.bus === "function") {
+      try { b = d.bus(); } catch (_) { b = null; }
+    } else if (d.bus && typeof d.bus === "object") {
+      b = d.bus;
+    } else {
+      const am = d.audioManager ?? d.liveScene3d?.audioManager ?? null;
+      if (am && typeof am.getEffectBus === "function") {
+        try { b = am.getEffectBus(); } catch (_) { b = null; }
+      }
+    }
+    if (!b || typeof b !== "object" || !b.ctx || typeof b.ctx !== "object" || !b.node) return null;
+    return b;
+  }
+
+  function resolveBusLazy(forceNow = false) {
+    if (!hasBusSource || disposed || !enabled) return null;
+    if (!forceNow && lastNullBusAt > -Infinity) {
+      const now = clock();
+      if (now - lastNullBusAt < 1) return null;
+    }
+    const b = rawResolveBus();
+    if (!b) {
+      lastNullBusAt = clock();
+      return null;
+    }
+    lastNullBusAt = -Infinity;
+    return b;
+  }
+
+  function resolveBusEvent() {
+    if (!hasBusSource || disposed || !enabled) return null;
+    const b = rawResolveBus();
+    if (b) lastNullBusAt = -Infinity;
+    return b;
+  }
+
+  function resumeCtx(ctx) {
+    if (!ctx || ctx.state !== "suspended" || typeof ctx.resume !== "function") return;
+    try {
+      const p = ctx.resume();
+      if (p && typeof p.then === "function") p.then(undefined, () => {});
+    } catch (_) {}
+  }
+
+  function readVolume() {
+    if (typeof d.volume !== "function") return 1;
+    let v;
+    try { v = Number(d.volume()); } catch (_) { return 0; }
+    return fin(v) ? clamp(v, 0, 1) : 0;
+  }
+
+  function readSlider(bus) {
+    if (!bus || typeof bus.sliderGain !== "function") return 1;
+    let v;
+    try { v = Number(bus.sliderGain()); } catch (_) { return 1; }
+    return fin(v) ? clamp(v, 0, 1) : 1;
+  }
+
+  function isClientActive(bus) {
+    if (typeof d.isActive === "function") {
+      try { if (!d.isActive()) return false; } catch (_) {}
+    }
+    const am = d.audioManager ?? d.liveScene3d?.audioManager ?? null;
+    if (am && typeof am.isActive === "function") {
+      try { if (!am.isActive()) return false; } catch (_) {}
+    }
+    if (bus && typeof bus.isActive === "function") {
+      try { if (!bus.isActive()) return false; } catch (_) {}
+    }
+    return true;
+  }
+
+  function masterGainScale(bus) {
+    if (!isClientActive(bus)) return 0;
+    return readVolume() * readSlider(bus);
+  }
+
+  function attachSpatialOut(ctx, busNode, srcOut, pos, refDist, maxDist, addNode) {
+    const three = acToThreePos(pos);
+    if (three && typeof ctx.createPanner === "function") {
+      const panner = addNode(ctx.createPanner());
+      configureHrtfPanner(panner, refDist, 1.25, maxDist);
+      writePannerThree(panner, three[0], three[1], three[2]);
+      connectSafe(srcOut, panner);
+      connectSafe(panner, busNode);
+      return panner;
+    }
+    connectSafe(srcOut, busNode);
+    return null;
+  }
+
+  function makeLoopNoiseSource(ctx, nodes, sources, sec = T.noiseSec) {
+    if (typeof ctx.createBufferSource !== "function") return null;
+    const buf = getCtxNoiseBuffer(ctx, sec, rng, localNoiseArrays, localCtxBuffers);
+    if (!buf) return null;
+    const src = ctx.createBufferSource();
+    nodes.push(src);
+    sources.push(src);
+    src.buffer = buf;
+    src.loop = true;
+    return src;
+  }
+
+  function teardownLoopVoice(v) {
+    if (!v || v.dead) return;
+    v.dead = true;
+    for (const src of v.sources) {
+      try { src.onended = null; } catch (_) {}
+      try { src.stop(); } catch (_) {}
+    }
+    for (const n of v.nodes) {
+      try { n.disconnect(); } catch (_) {}
+    }
+  }
+
+  function teardownShot(shot, fromOnEnded = false) {
+    if (!shot || shot.dead) return;
+    shot.dead = true;
+    activeOneShots.delete(shot);
+    for (const entry of shot.sources) {
+      try { entry.src.onended = null; } catch (_) {}
+      if (!fromOnEnded && !entry.ended) {
+        try { entry.src.stop(); } catch (_) {}
+      }
+    }
+    for (const n of shot.nodes) {
+      try { n.disconnect(); } catch (_) {}
+    }
+  }
+
+  function makeSpaceForPriority(priority) {
+    if (activeOneShots.size < maxOneShots) return true;
+    let victim = null;
+    for (const s of activeOneShots) {
+      if (s.priority <= priority) {
+        victim = s;
+        break;
+      }
+    }
+    if (!victim) return false;
+    teardownShot(victim, false);
+    return activeOneShots.size < maxOneShots;
+  }
+
+  function makeOneShotNoise(ctx, addNode, addSrc, startAt, stopAt) {
+    if (typeof ctx.createBufferSource !== "function") return null;
+    const buf = getCtxNoiseBuffer(ctx, T.noiseSec, rng, localNoiseArrays, localCtxBuffers);
+    if (!buf) return null;
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    src.loop = true;
+    addNode(src);
+    addSrc(src, startAt, stopAt);
+    return src;
+  }
+
+  function makeOneShotOsc(ctx, type, hz, addNode, addSrc, startAt, stopAt) {
+    if (typeof ctx.createOscillator !== "function") return null;
+    const osc = ctx.createOscillator();
+    try { osc.type = type; } catch (_) {}
+    setParamAt(osc.frequency, hz, startAt);
+    addNode(osc);
+    addSrc(osc, startAt, stopAt);
+    return osc;
+  }
+
+  function playOneShot(cfg, builder) {
+    if (disposed || !enabled) return false;
+    const bus = resolveBusEvent();
+    if (!bus) return false;
+    const scale = masterGainScale(bus);
+    if (!(scale > 0)) return false;
+
+    const ctx = bus.ctx;
+    if (typeof ctx.createGain !== "function") return false;
+    const priority = cfg.priority ?? 2;
+    if (!makeSpaceForPriority(priority)) return false;
+    resumeCtx(ctx);
+
+    const nodes = [];
+    const sources = [];
+    const addNode = (n) => {
+      if (n) nodes.push(n);
+      return n;
+    };
+    const addSrc = (src, startAt, stopAt) => {
+      if (src) sources.push({ src, startAt, stopAt, ended: false });
+      return src;
+    };
+
+    let shot = null;
+    try {
+      const t0 = fin(ctx.currentTime) ? ctx.currentTime : 0;
+      const outGain = addNode(ctx.createGain());
+      setParam(outGain.gain, scale * (cfg.gain ?? 1));
+      attachSpatialOut(
+        ctx,
+        bus.node,
+        outGain,
+        cfg.pos,
+        cfg.refDistance ?? 8,
+        cfg.maxDistance ?? 120,
+        addNode,
+      );
+
+      const endTime = builder(ctx, outGain, t0, addNode, addSrc) ?? (t0 + 0.1);
+      if (!sources.length) {
+        for (const n of nodes) { try { n.disconnect(); } catch (_) {} }
+        return false;
+      }
+
+      shot = { nodes, sources, priority, endTime, dead: false };
+      activeOneShots.add(shot);
+
+      let anchor = sources[0];
+      for (const entry of sources) {
+        if (entry.stopAt >= anchor.stopAt) anchor = entry;
+      }
+
+      for (const entry of sources) {
+        entry.src.onended = () => {
+          entry.ended = true;
+          try { entry.src.disconnect(); } catch (_) {}
+          if (entry === anchor || sources.every((e) => e.ended)) {
+            teardownShot(shot, true);
+          }
+        };
+        entry.src.start(entry.startAt);
+        entry.src.stop(entry.stopAt);
+      }
+      return true;
+    } catch (_) {
+      if (shot) {
+        activeOneShots.delete(shot);
+        shot.dead = true;
+      }
+      for (const e of sources) {
+        try { e.src.onended = null; } catch (_e) {}
+        try { e.src.stop(); } catch (_e) {}
+      }
+      for (const n of nodes) { try { n.disconnect(); } catch (_e) {} }
+      return false;
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // 1. Sidelifter PTO Hydraulic Pump Loop & Swing Warning Chime
+  // -------------------------------------------------------------------------
+
+  function buildPtoVoice(id, bus, pos) {
+    const ctx = bus.ctx;
+    if (typeof ctx.createGain !== "function" || typeof ctx.createOscillator !== "function") return null;
+    const nodes = [];
+    const sources = [];
+    const addNode = (n) => { if (n) nodes.push(n); return n; };
+    const t0 = fin(ctx.currentTime) ? ctx.currentTime : 0;
+
+    try {
+      const masterGain = addNode(ctx.createGain());
+      setParam(masterGain.gain, 0);
+      const panner = attachSpatialOut(ctx, bus.node, masterGain, pos, T.ptoRefDistance, T.ptoMaxDistance, addNode);
+
+      const lpFilter = makeFilter(ctx, nodes, "lowpass", T.ptoCutoffBaseHz, 1.1);
+      connectChain([lpFilter, masterGain]);
+      const sumTarget = lpFilter || masterGain;
+
+      const pumpOsc = addNode(ctx.createOscillator());
+      sources.push(pumpOsc);
+      try { pumpOsc.type = "sawtooth"; } catch (_) {}
+      setParam(pumpOsc.frequency, T.ptoBaseHz);
+      const pumpGain = addNode(ctx.createGain());
+      setParam(pumpGain.gain, 0.55);
+      connectChain([pumpOsc, pumpGain, sumTarget]);
+
+      const harmonicOsc = addNode(ctx.createOscillator());
+      sources.push(harmonicOsc);
+      try { harmonicOsc.type = "triangle"; } catch (_) {}
+      setParam(harmonicOsc.frequency, T.ptoBaseHz * 2);
+      const harmonicGain = addNode(ctx.createGain());
+      setParam(harmonicGain.gain, 0.38);
+      connectChain([harmonicOsc, harmonicGain, sumTarget]);
+
+      const lfoOsc = addNode(ctx.createOscillator());
+      sources.push(lfoOsc);
+      try { lfoOsc.type = "sine"; } catch (_) {}
+      setParam(lfoOsc.frequency, T.ptoLfoHz);
+      const lfoGain = addNode(ctx.createGain());
+      setParam(lfoGain.gain, T.ptoLfoDepthHz);
+      connectChain([lfoOsc, lfoGain]);
+      if (pumpOsc.frequency) connectSafe(lfoGain, pumpOsc.frequency);
+
+      const flowNoise = makeLoopNoiseSource(ctx, nodes, sources, T.noiseSec);
+      const flowFilter = makeFilter(ctx, nodes, "bandpass", T.ptoFlowBaseHz, 2.2);
+      const flowGain = addNode(ctx.createGain());
+      setParam(flowGain.gain, 0.14);
+      if (flowNoise) connectChain([flowNoise, flowFilter, flowGain, sumTarget]);
+
+      for (const s of sources) s.start(t0);
+
+      const voice = {
+        id,
+        ctx,
+        nodes,
+        sources,
+        masterGain,
+        panner,
+        lpFilter,
+        pumpOsc,
+        harmonicOsc,
+        flowFilter,
+        dead: false,
+      };
+      ptoLoops.set(id, voice);
+      return voice;
+    } catch (_) {
+      for (const s of sources) { try { s.stop(); } catch (_e) {} }
+      for (const n of nodes) { try { n.disconnect(); } catch (_e) {} }
+      return null;
+    }
+  }
+
+  function buildSwingVoice(id, bus, pos) {
+    const ctx = bus.ctx;
+    if (typeof ctx.createGain !== "function" || typeof ctx.createOscillator !== "function") return null;
+    const nodes = [];
+    const sources = [];
+    const addNode = (n) => { if (n) nodes.push(n); return n; };
+    const t0 = fin(ctx.currentTime) ? ctx.currentTime : 0;
+
+    try {
+      const masterGain = addNode(ctx.createGain());
+      setParam(masterGain.gain, 0);
+      const panner = attachSpatialOut(
+        ctx,
+        bus.node,
+        masterGain,
+        pos,
+        T.swingBeepRefDistance,
+        T.swingBeepMaxDistance,
+        addNode,
+      );
+
+      const gateGain = addNode(ctx.createGain());
+      setParam(gateGain.gain, 0.5);
+      const bpFilter = makeFilter(ctx, nodes, "bandpass", 1400, 1.4);
+      connectChain([bpFilter, gateGain, masterGain]);
+      const filterIn = bpFilter || gateGain;
+
+      const toneOsc = addNode(ctx.createOscillator());
+      sources.push(toneOsc);
+      try { toneOsc.type = "sine"; } catch (_) {}
+      setParam(toneOsc.frequency, T.swingBeepCarrierHz);
+      connectSafe(toneOsc, filterIn);
+
+      const overtoneOsc = addNode(ctx.createOscillator());
+      sources.push(overtoneOsc);
+      try { overtoneOsc.type = "triangle"; } catch (_) {}
+      setParam(overtoneOsc.frequency, T.swingBeepOvertoneHz);
+      const overtoneGain = addNode(ctx.createGain());
+      setParam(overtoneGain.gain, 0.22);
+      connectChain([overtoneOsc, overtoneGain, filterIn]);
+
+      // 1.25 Hz square LFO modulates gateGain.gain between 0 and 1 without timers
+      const pulseLfo = addNode(ctx.createOscillator());
+      sources.push(pulseLfo);
+      try { pulseLfo.type = "square"; } catch (_) {}
+      setParam(pulseLfo.frequency, T.swingBeepRateHz);
+      const lfoDepth = addNode(ctx.createGain());
+      setParam(lfoDepth.gain, 0.5);
+      connectSafe(pulseLfo, lfoDepth);
+      if (gateGain.gain) connectSafe(lfoDepth, gateGain.gain);
+
+      for (const s of sources) s.start(t0);
+
+      const voice = {
+        id,
+        ctx,
+        nodes,
+        sources,
+        masterGain,
+        panner,
+        dead: false,
+      };
+      swingLoops.set(id, voice);
+      return voice;
+    } catch (_) {
+      for (const s of sources) { try { s.stop(); } catch (_e) {} }
+      for (const n of nodes) { try { n.disconnect(); } catch (_e) {} }
+      return null;
+    }
+  }
+
+  function setSwingWarning(id, active, wOpts = {}) {
+    if (disposed || !enabled) return false;
+    const key = id ?? "default";
+    const o = wOpts && typeof wOpts === "object" ? wOpts : {};
+    if (!active) {
+      const existing = swingLoops.get(key);
+      if (existing) {
+        teardownLoopVoice(existing);
+        swingLoops.delete(key);
+      }
+      return true;
+    }
+
+    const bus = resolveBusLazy(false);
+    if (!bus) return false;
+    const scale = masterGainScale(bus);
+    if (!(scale > 0)) {
+      const existing = swingLoops.get(key);
+      if (existing) {
+        const now = fin(existing.ctx?.currentTime) ? existing.ctx.currentTime : clock();
+        targetParam(existing.masterGain.gain, 0, now, T.paramTau);
+      }
+      return false;
+    }
+    resumeCtx(bus.ctx);
+
+    let voice = swingLoops.get(key);
+    if (voice && voice.ctx !== bus.ctx) {
+      teardownLoopVoice(voice);
+      swingLoops.delete(key);
+      voice = null;
+    }
+    if (!voice) {
+      voice = buildSwingVoice(key, bus, o.pos);
+      if (!voice) return false;
+    }
+    const now = fin(bus.ctx.currentTime) ? bus.ctx.currentTime : clock();
+    const three = acToThreePos(o.pos);
+    if (three && voice.panner) writePannerThree(voice.panner, three[0], three[1], three[2]);
+    targetParam(voice.masterGain.gain, scale * T.swingBeepGain, now, 0.02);
+    return true;
+  }
+
+  function updateSidelifter(id, state = {}) {
+    if (disposed || !enabled) return false;
+    const key = id ?? "default";
+    const s = state && typeof state === "object" ? state : {};
+    const phase = s.phase !== undefined ? s.phase : (s.sideliftPhase !== undefined ? s.sideliftPhase : (s.SideliftPhase ?? 0));
+    const ptoActive =
+      phase === 1 || phase === 3 || phase === 5 || phase === 6 || phase === 7 || phase === 9 || phase === 10;
+    const swingActive = phase === 6;
+
+    setSwingWarning(key, swingActive, s);
+
+    if (!ptoActive) {
+      const existing = ptoLoops.get(key);
+      if (existing) {
+        const now = fin(existing.ctx?.currentTime) ? existing.ctx.currentTime : clock();
+        targetParam(existing.masterGain.gain, 0, now, T.paramTau);
+      }
+      return true;
+    }
+
+    const bus = resolveBusLazy(false);
+    if (!bus) return false;
+    const scale = masterGainScale(bus);
+    if (!(scale > 0)) {
+      const existing = ptoLoops.get(key);
+      if (existing) {
+        const now = fin(existing.ctx?.currentTime) ? existing.ctx.currentTime : clock();
+        targetParam(existing.masterGain.gain, 0, now, T.paramTau);
+      }
+      return false;
+    }
+    resumeCtx(bus.ctx);
+
+    let voice = ptoLoops.get(key);
+    if (voice && voice.ctx !== bus.ctx) {
+      teardownLoopVoice(voice);
+      ptoLoops.delete(key);
+      voice = null;
+    }
+    if (!voice) {
+      voice = buildPtoVoice(key, bus, s.pos);
+      if (!voice) return false;
+    }
+
+    const load = clamp(fin(s.load) ? s.load : (phase >= 5 && phase <= 7 ? 1.0 : 0.35), 0, 1);
+    const pumpHz = T.ptoBaseHz + T.ptoLoadSpanHz * load;
+    const now = fin(bus.ctx.currentTime) ? bus.ctx.currentTime : clock();
+
+    targetParam(voice.pumpOsc.frequency, pumpHz, now, T.paramTau);
+    targetParam(voice.harmonicOsc.frequency, pumpHz * 2, now, T.paramTau);
+    if (voice.flowFilter) targetParam(voice.flowFilter.frequency, T.ptoFlowBaseHz + T.ptoFlowSpanHz * load, now, T.paramTau);
+    if (voice.lpFilter) targetParam(voice.lpFilter.frequency, T.ptoCutoffBaseHz + T.ptoCutoffSpanHz * load, now, T.paramTau);
+
+    const three = acToThreePos(s.pos);
+    if (three && voice.panner) writePannerThree(voice.panner, three[0], three[1], three[2]);
+    targetParam(voice.masterGain.gain, scale * (T.ptoBaseGain + T.ptoLoadGain * load), now, T.paramTau);
+    return true;
+  }
+
+  function stopSidelifter(id) {
+    const key = id ?? "default";
+    const pto = ptoLoops.get(key);
+    if (pto) {
+      teardownLoopVoice(pto);
+      ptoLoops.delete(key);
+    }
+    const swing = swingLoops.get(key);
+    if (swing) {
+      teardownLoopVoice(swing);
+      swingLoops.delete(key);
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // 2. Sidelifter One-Shots: Outrigger Foot Thud & Twistlock Steel Clank
+  // -------------------------------------------------------------------------
+
+  function outriggerThud(o = {}) {
+    const cfg = o && typeof o === "object" ? o : {};
+    const now = clock();
+    if (now - lastOutriggerAt < T.outriggerCooldownSec) return false;
+    const ok = playOneShot(
+      { pos: cfg.pos, priority: 2, gain: 0.72, refDistance: 10, maxDistance: 140 },
+      (ctx, out, t0, addNode, addSrc) => {
+        const subOsc = makeOneShotOsc(ctx, "sine", 110, addNode, addSrc, t0, t0 + 0.22);
+        const subGain = addNode(ctx.createGain());
+        if (subOsc) {
+          rampExpParam(subOsc.frequency, 36, t0 + 0.18, t0);
+          setParamAt(subGain.gain, 0.55, t0);
+          rampExpParam(subGain.gain, 0.001, t0 + 0.20, t0);
+          connectChain([subOsc, subGain, out]);
+        }
+
+        const dirtSrc = makeOneShotNoise(ctx, addNode, addSrc, t0, t0 + 0.16);
+        const dirtLp = makeFilter(ctx, [], "lowpass", 520, 1.0);
+        if (dirtLp) addNode(dirtLp);
+        const dirtGain = addNode(ctx.createGain());
+        if (dirtSrc) {
+          if (dirtLp) rampExpParam(dirtLp.frequency, 180, t0 + 0.14, t0);
+          setParamAt(dirtGain.gain, 0.32, t0);
+          rampExpParam(dirtGain.gain, 0.001, t0 + 0.14, t0);
+          connectChain([dirtSrc, dirtLp, dirtGain, out]);
+        }
+
+        const plateOsc = makeOneShotOsc(ctx, "triangle", 420, addNode, addSrc, t0 + 0.035, t0 + 0.14);
+        const plateGain = addNode(ctx.createGain());
+        if (plateOsc) {
+          rampExpParam(plateOsc.frequency, 165, t0 + 0.125, t0 + 0.035);
+          setParamAt(plateGain.gain, 0.22, t0 + 0.035);
+          rampExpParam(plateGain.gain, 0.001, t0 + 0.125, t0 + 0.035);
+          connectChain([plateOsc, plateGain, out]);
+        }
+
+        const clickSrc = makeOneShotNoise(ctx, addNode, addSrc, t0 + 0.035, t0 + 0.09);
+        const clickHp = makeFilter(ctx, [], "highpass", 1600, 1.2);
+        if (clickHp) addNode(clickHp);
+        const clickGain = addNode(ctx.createGain());
+        if (clickSrc) {
+          setParamAt(clickGain.gain, 0.20, t0 + 0.035);
+          rampExpParam(clickGain.gain, 0.001, t0 + 0.085, t0 + 0.035);
+          connectChain([clickSrc, clickHp, clickGain, out]);
+        }
+        return t0 + 0.28;
+      },
+    );
+    if (ok) lastOutriggerAt = now;
+    return ok;
+  }
+
+  function twistlockClank(o = {}) {
+    const cfg = o && typeof o === "object" ? o : {};
+    const now = clock();
+    if (now - lastTwistlockAt < T.twistlockCooldownSec) return false;
+    const locked = cfg.locked !== false;
+    const ok = playOneShot(
+      { pos: cfg.pos, priority: 2, gain: 0.65, refDistance: 8, maxDistance: 120 },
+      (ctx, out, t0, addNode, addSrc) => {
+        const bodyOsc = makeOneShotOsc(ctx, "triangle", locked ? 340 : 280, addNode, addSrc, t0, t0 + 0.09);
+        const bodyGain = addNode(ctx.createGain());
+        if (bodyOsc) {
+          rampExpParam(bodyOsc.frequency, 110, t0 + 0.065, t0);
+          setParamAt(bodyGain.gain, 0.45, t0);
+          rampExpParam(bodyGain.gain, 0.001, t0 + 0.075, t0);
+          connectChain([bodyOsc, bodyGain, out]);
+        }
+
+        const ring1 = makeOneShotOsc(ctx, "sine", locked ? 1180 : 980, addNode, addSrc, t0, t0 + 0.20);
+        const ring1Gain = addNode(ctx.createGain());
+        if (ring1) {
+          setParamAt(ring1Gain.gain, 0.24, t0);
+          rampExpParam(ring1Gain.gain, 0.001, t0 + 0.19, t0);
+          connectChain([ring1, ring1Gain, out]);
+        }
+
+        const ring2 = makeOneShotOsc(ctx, "sine", locked ? 1790 : 1490, addNode, addSrc, t0, t0 + 0.16);
+        const ring2Gain = addNode(ctx.createGain());
+        if (ring2) {
+          setParamAt(ring2Gain.gain, 0.16, t0);
+          rampExpParam(ring2Gain.gain, 0.001, t0 + 0.15, t0);
+          connectChain([ring2, ring2Gain, out]);
+        }
+
+        const snapSrc = makeOneShotNoise(ctx, addNode, addSrc, t0, t0 + 0.04);
+        const snapBp = makeFilter(ctx, [], "bandpass", 2400, 2.8);
+        if (snapBp) addNode(snapBp);
+        const snapGain = addNode(ctx.createGain());
+        if (snapSrc) {
+          setParamAt(snapGain.gain, 0.34, t0);
+          rampExpParam(snapGain.gain, 0.001, t0 + 0.035, t0);
+          connectChain([snapSrc, snapBp, snapGain, out]);
+        }
+        return t0 + 0.22;
+      },
+    );
+    if (ok) lastTwistlockAt = now;
+    return ok;
+  }
+
+  // -------------------------------------------------------------------------
+  // 3. Pallet Jack Cues: Pump Ratchet, Release Hiss, Surface Wheel Roll Loop
+  // -------------------------------------------------------------------------
+
+  function pumpRatchet(o = {}) {
+    const cfg = o && typeof o === "object" ? o : {};
+    const now = clock();
+    if (now - lastPumpAt < T.pumpCooldownSec) return false;
+    const ok = playOneShot(
+      { pos: cfg.pos, priority: 2, gain: 0.62, refDistance: 5, maxDistance: 60 },
+      (ctx, out, t0, addNode, addSrc) => {
+        const clicks = [
+          { dt: 0.0, bpHz: 2900 },
+          { dt: 0.055, bpHz: 3400 },
+        ];
+        for (const c of clicks) {
+          const ts = t0 + c.dt;
+          const nSrc = makeOneShotNoise(ctx, addNode, addSrc, ts, ts + 0.03);
+          const nBp = makeFilter(ctx, [], "bandpass", c.bpHz, 4.2);
+          if (nBp) addNode(nBp);
+          const nGain = addNode(ctx.createGain());
+          if (nSrc) {
+            setParamAt(nGain.gain, 0.38, ts);
+            rampExpParam(nGain.gain, 0.001, ts + 0.025, ts);
+            connectChain([nSrc, nBp, nGain, out]);
+          }
+
+          const pOsc = makeOneShotOsc(ctx, "triangle", 820, addNode, addSrc, ts, ts + 0.032);
+          const pGain = addNode(ctx.createGain());
+          if (pOsc) {
+            rampExpParam(pOsc.frequency, 260, ts + 0.028, ts);
+            setParamAt(pGain.gain, 0.26, ts);
+            rampExpParam(pGain.gain, 0.001, ts + 0.028, ts);
+            connectChain([pOsc, pGain, out]);
+          }
+        }
+
+        const hydOsc = makeOneShotOsc(ctx, "sine", 145, addNode, addSrc, t0 + 0.015, t0 + 0.12);
+        const hydGain = addNode(ctx.createGain());
+        if (hydOsc) {
+          rampExpParam(hydOsc.frequency, 85, t0 + 0.11, t0 + 0.015);
+          setParamAt(hydGain.gain, 0.18, t0 + 0.015);
+          rampExpParam(hydGain.gain, 0.001, t0 + 0.11, t0 + 0.015);
+          connectChain([hydOsc, hydGain, out]);
+        }
+        return t0 + 0.14;
+      },
+    );
+    if (ok) lastPumpAt = now;
+    return ok;
+  }
+
+  function releaseHiss(o = {}) {
+    const cfg = o && typeof o === "object" ? o : {};
+    const now = clock();
+    if (now - lastReleaseAt < T.releaseCooldownSec) return false;
+    const ok = playOneShot(
+      { pos: cfg.pos, priority: 2, gain: 0.60, refDistance: 5, maxDistance: 60 },
+      (ctx, out, t0, addNode, addSrc) => {
+        const popOsc = makeOneShotOsc(ctx, "triangle", 520, addNode, addSrc, t0, t0 + 0.035);
+        const popGain = addNode(ctx.createGain());
+        if (popOsc) {
+          rampExpParam(popOsc.frequency, 210, t0 + 0.03, t0);
+          setParamAt(popGain.gain, 0.16, t0);
+          rampExpParam(popGain.gain, 0.001, t0 + 0.03, t0);
+          connectChain([popOsc, popGain, out]);
+        }
+
+        const bleedSrc = makeOneShotNoise(ctx, addNode, addSrc, t0 + 0.008, t0 + 0.32);
+        const bleedBp = makeFilter(ctx, [], "bandpass", 3200, 1.6);
+        if (bleedBp) addNode(bleedBp);
+        const bleedGain = addNode(ctx.createGain());
+        if (bleedSrc) {
+          if (bleedBp) rampExpParam(bleedBp.frequency, 1150, t0 + 0.31, t0 + 0.008);
+          setParamAt(bleedGain.gain, 0.001, t0 + 0.008);
+          rampLinParam(bleedGain.gain, 0.28, t0 + 0.023, t0 + 0.008);
+          rampExpParam(bleedGain.gain, 0.001, t0 + 0.32, t0 + 0.023);
+          connectChain([bleedSrc, bleedBp, bleedGain, out]);
+        }
+        return t0 + 0.32;
+      },
+    );
+    if (ok) lastReleaseAt = now;
+    return ok;
+  }
+
+  function buildRollVoice(id, bus, pos, profile) {
+    const ctx = bus.ctx;
+    if (typeof ctx.createGain !== "function") return null;
+    const nodes = [];
+    const sources = [];
+    const addNode = (n) => { if (n) nodes.push(n); return n; };
+    const t0 = fin(ctx.currentTime) ? ctx.currentTime : 0;
+
+    try {
+      const masterGain = addNode(ctx.createGain());
+      setParam(masterGain.gain, 0);
+      const panner = attachSpatialOut(ctx, bus.node, masterGain, pos, T.rollRefDistance, T.rollMaxDistance, addNode);
+
+      const rollNoise = makeLoopNoiseSource(ctx, nodes, sources, T.noiseSec);
+      const rollFilter = makeFilter(ctx, nodes, profile.type, profile.freq, profile.q);
+      const rollGain = addNode(ctx.createGain());
+      setParam(rollGain.gain, profile.gainMul);
+      if (rollNoise) connectChain([rollNoise, rollFilter, rollGain, masterGain]);
+
+      let humOsc = null;
+      let humGain = null;
+      if (typeof ctx.createOscillator === "function") {
+        humOsc = addNode(ctx.createOscillator());
+        sources.push(humOsc);
+        try { humOsc.type = "triangle"; } catch (_) {}
+        setParam(humOsc.frequency, profile.humHz || 88);
+        humGain = addNode(ctx.createGain());
+        setParam(humGain.gain, profile.humGain || 0);
+        connectChain([humOsc, humGain, masterGain]);
+      }
+
+      if (!sources.length) {
+        for (const n of nodes) { try { n.disconnect(); } catch (_) {} }
+        return null;
+      }
+      for (const s of sources) s.start(t0);
+
+      const voice = {
+        id,
+        ctx,
+        nodes,
+        sources,
+        masterGain,
+        panner,
+        rollFilter,
+        rollGain,
+        humOsc,
+        humGain,
+        dead: false,
+      };
+      rollLoops.set(id, voice);
+      return voice;
+    } catch (_) {
+      for (const s of sources) { try { s.stop(); } catch (_e) {} }
+      for (const n of nodes) { try { n.disconnect(); } catch (_e) {} }
+      return null;
+    }
+  }
+
+  function updateWheelRoll(id, state = {}) {
+    if (disposed || !enabled) return false;
+    const key = id ?? "default";
+    const s = state && typeof state === "object" ? state : {};
+    const speed = Math.abs(fin(s.speed) ? s.speed : 0);
+    const stowed = Boolean(s.stowed);
+    const active = s.active !== false && !stowed && speed > T.rollMinSpeed;
+    const surfaceKey =
+      typeof s.surface === "string" && Object.hasOwn(PALLET_JACK_SURFACE_PROFILES, s.surface)
+        ? s.surface
+        : "terrain";
+    const profile = PALLET_JACK_SURFACE_PROFILES[surfaceKey];
+
+    if (!active) {
+      const existing = rollLoops.get(key);
+      if (existing) {
+        const now = fin(existing.ctx?.currentTime) ? existing.ctx.currentTime : clock();
+        targetParam(existing.masterGain.gain, 0, now, T.paramTau);
+      }
+      return true;
+    }
+
+    const bus = resolveBusLazy(false);
+    if (!bus) return false;
+    const scale = masterGainScale(bus);
+    if (!(scale > 0)) {
+      const existing = rollLoops.get(key);
+      if (existing) {
+        const now = fin(existing.ctx?.currentTime) ? existing.ctx.currentTime : clock();
+        targetParam(existing.masterGain.gain, 0, now, T.paramTau);
+      }
+      return false;
+    }
+    resumeCtx(bus.ctx);
+
+    let voice = rollLoops.get(key);
+    if (voice && voice.ctx !== bus.ctx) {
+      teardownLoopVoice(voice);
+      rollLoops.delete(key);
+      voice = null;
+    }
+    if (!voice) {
+      voice = buildRollVoice(key, bus, s.pos, profile);
+      if (!voice) return false;
+    }
+
+    const spdNorm = clamp(speed / T.rollMaxSpeed, 0, 1.2);
+    const now = fin(bus.ctx.currentTime) ? bus.ctx.currentTime : clock();
+    if (voice.rollFilter) {
+      try { voice.rollFilter.type = profile.type; } catch (_) {}
+      targetParam(voice.rollFilter.frequency, profile.freq + profile.spanHz * spdNorm, now, T.paramTau);
+      setParam(voice.rollFilter.Q, profile.q);
+    }
+    targetParam(voice.rollGain.gain, profile.gainMul, now, T.paramTau);
+    if (voice.humOsc && voice.humGain) {
+      if (profile.humHz > 0) {
+        targetParam(voice.humOsc.frequency, profile.humHz + profile.humSpanHz * spdNorm, now, T.paramTau);
+        targetParam(voice.humGain.gain, profile.humGain, now, T.paramTau);
+      } else {
+        targetParam(voice.humGain.gain, 0, now, T.paramTau);
+      }
+    }
+
+    const three = acToThreePos(s.pos);
+    if (three && voice.panner) writePannerThree(voice.panner, three[0], three[1], three[2]);
+    const loadedMul = s.loaded ? 1.2 : 1.0;
+    const speedGain = clamp(speed / T.rollMaxSpeed, 0.15, 1.2);
+    targetParam(voice.masterGain.gain, scale * speedGain * loadedMul, now, T.paramTau);
+    return true;
+  }
+
+  function stopWheelRoll(id) {
+    const key = id ?? "default";
+    const v = rollLoops.get(key);
+    if (v) {
+      teardownLoopVoice(v);
+      rollLoops.delete(key);
+    }
+  }
+
+  function stop() {
+    for (const v of ptoLoops.values()) teardownLoopVoice(v);
+    ptoLoops.clear();
+    for (const v of swingLoops.values()) teardownLoopVoice(v);
+    swingLoops.clear();
+    for (const v of rollLoops.values()) teardownLoopVoice(v);
+    rollLoops.clear();
+    for (const shot of [...activeOneShots]) teardownShot(shot, false);
+    activeOneShots.clear();
+  }
+
+  function dispose() {
+    disposed = true;
+    stop();
+  }
+
+  return {
+    updateSidelifter,
+    stopSidelifter,
+    outriggerThud,
+    twistlockClank,
+    setSwingWarning,
+    pumpRatchet,
+    releaseHiss,
+    updateWheelRoll,
+    stopWheelRoll,
+    stop,
+    dispose,
+    get stats() {
+      let totalNodes = 0;
+      for (const v of ptoLoops.values()) totalNodes += v.nodes.length;
+      for (const v of swingLoops.values()) totalNodes += v.nodes.length;
+      for (const v of rollLoops.values()) totalNodes += v.nodes.length;
+      for (const shot of activeOneShots) totalNodes += shot.nodes.length;
+      return {
+        disposed,
+        enabled,
+        ptoVoices: ptoLoops.size,
+        swingVoices: swingLoops.size,
+        rollVoices: rollLoops.size,
+        activeOneShots: activeOneShots.size,
+        totalNodes,
       };
     },
   };

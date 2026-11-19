@@ -25,10 +25,10 @@ pub(crate) struct SeatPose {
     pub heading: f32,
 }
 
-#[derive(Default, serde::Serialize)]
+#[derive(serde::Serialize)]
 pub(crate) struct VehicleWireStats {
-    /// Vehicle events received, by opcode low nibble (0x0900..=0x090F).
-    pub received: [u32; 16],
+    /// Vehicle events received, by opcode offset from 0x0900 (0x0900..=0x091F).
+    pub received: [u32; 32],
     pub received_total: u64,
     pub sent_total: u64,
     pub sent_inputs: u64,
@@ -36,6 +36,21 @@ pub(crate) struct VehicleWireStats {
     pub seat_ticks: u64,
     pub seat_releases_by_server: u64,
     pub snaps: u64,
+}
+
+impl Default for VehicleWireStats {
+    fn default() -> Self {
+        Self {
+            received: [0; 32],
+            received_total: 0,
+            sent_total: 0,
+            sent_inputs: 0,
+            inbox_overflow: 0,
+            seat_ticks: 0,
+            seat_releases_by_server: 0,
+            snaps: 0,
+        }
+    }
 }
 
 #[derive(Default)]
@@ -271,6 +286,30 @@ pub(crate) fn to_json(msg: &VehicleS2C) -> Value {
             "containerSlot": ts.container_slot,
             "trailerFlags": ts.trailer_flags,
             "ownerGuid": ts.owner_guid,
+            "sideliftPhase": ts.sidelift_phase,
+            "sideliftSide": ts.sidelift_side,
+            "sideliftFlags": ts.sidelift_flags,
+            "sideliftProgress": ts.sidelift_progress as f64,
+            "outriggerProgress": ts.outrigger_progress as f64,
+            "craneSpanY": ts.crane_span_y as f64,
+            "stowedPalletJackGuid": ts.stowed_pallet_jack_guid,
+            "transferContainerGuid": ts.transfer_container_guid,
+        }),
+        VehicleS2C::PalletJackState(pj) => json!({
+            "type": "pallet_jack_state",
+            "palletJackGuid": pj.pallet_jack_guid,
+            "operatorGuid": pj.operator_guid,
+            "stowedOnTrailerGuid": pj.stowed_on_trailer_guid,
+            "cell": pj.cell,
+            "position": v3(pj.position),
+            "heading": pj.heading as f64,
+            "tillerAngle": pj.tiller_angle as f64,
+            "forkHeightM": pj.fork_height_m as f64,
+            "forkState": pj.fork_state,
+            "carriedPalletSize": pj.carried_pallet_size,
+            "flags": pj.flags,
+            "carriedWcid": pj.carried_wcid,
+            "ownerGuid": pj.owner_guid,
         }),
     }
 }
@@ -280,7 +319,7 @@ pub(crate) fn to_json(msg: &VehicleS2C) -> Value {
 pub(crate) fn on_s2c(msg: &VehicleS2C, local_player: u32) -> LinkAction {
     LINK.with(|l| {
         let mut l = l.borrow_mut();
-        let idx = (msg.opcode() & 0xF) as usize;
+        let idx = (msg.opcode().wrapping_sub(0x0900) & 0x1F) as usize;
         l.stats.received[idx] = l.stats.received[idx].saturating_add(1);
         l.stats.received_total += 1;
         if l.inbox.len() >= INBOX_CAP {
@@ -298,11 +337,34 @@ pub(crate) fn on_s2c(msg: &VehicleS2C, local_player: u32) -> LinkAction {
                 }
                 LinkAction::None
             }
+            VehicleS2C::PalletJackState(pj) => {
+                if pj.operator_guid != local_player
+                    && l.seat.is_some_and(|p| p.vehicle == pj.pallet_jack_guid)
+                {
+                    l.seat = None;
+                    l.released_vehicle = Some(pj.pallet_jack_guid);
+                    l.stats.seat_releases_by_server += 1;
+                } else if local_player != 0
+                    && pj.operator_guid == local_player
+                    && l.released_vehicle == Some(pj.pallet_jack_guid)
+                {
+                    l.released_vehicle = None;
+                }
+                LinkAction::None
+            }
+            VehicleS2C::Event(e) if e.kind == 4 => {
+                if l.seat.is_some_and(|p| p.vehicle == e.vehicle) {
+                    l.seat = None;
+                    l.released_vehicle = Some(e.vehicle);
+                    l.stats.seat_releases_by_server += 1;
+                }
+                LinkAction::None
+            }
             VehicleS2C::Event(e) if e.subject == local_player && local_player != 0 => {
                 // 7 = Touchdown (back on foot at Cell/Position): releases ANY lock (the bail-out fall lock is keyed on
-                // the player); 4 = Despawn: the lock on that vehicle
-                if e.kind == 7 || e.kind == 4 {
-                    if l.seat.is_some_and(|p| e.kind == 7 || p.vehicle == e.vehicle) {
+                // the player)
+                if e.kind == 7 {
+                    if l.seat.is_some() {
                         l.seat = None;
                         l.released_vehicle = Some(e.vehicle);
                         l.stats.seat_releases_by_server += 1;
@@ -434,6 +496,7 @@ pub(crate) fn is_vehicle_event(opcode: u32) -> bool {
             | s2c::GROUND_CONTACTS
             | s2c::CONTAINER_STATE
             | s2c::TRAILER_STATE
+            | s2c::PALLET_JACK_STATE
     )
 }
 
@@ -441,14 +504,16 @@ pub(crate) fn is_vehicle_event(opcode: u32) -> bool {
 mod tests {
     use super::*;
     use holtburger_protocol::messages::vehicle::{
-        VehicleProfile, VehicleState, VehicleTrailerState,
+        VehicleEvent, VehiclePalletJackState, VehicleProfile, VehicleState, VehicleTrailerState,
     };
 
     #[test]
-    fn is_vehicle_event_includes_trailer_state() {
+    fn is_vehicle_event_includes_trailer_and_pallet_jack_state() {
         assert!(is_vehicle_event(s2c::TRAILER_STATE));
         assert!(is_vehicle_event(s2c::CONTAINER_STATE));
-        assert!(!is_vehicle_event(0x0910));
+        assert!(is_vehicle_event(s2c::PALLET_JACK_STATE));
+        assert!(!is_vehicle_event(0x0911));
+        assert!(!is_vehicle_event(0x0920));
     }
 
     #[test]
@@ -549,7 +614,7 @@ mod tests {
 
         let ts = VehicleTrailerState {
             trailer_guid: 500,
-            kind: 14,
+            kind: 15,
             cell: 0x0102_0100,
             position: [10.0, 14.0, 30.0],
             heading: 1.20,
@@ -561,11 +626,20 @@ mod tests {
             trailer_flags: 0x07,
             reserved: 0,
             owner_guid: 77,
+            sidelift_phase: 6,
+            sidelift_side: -1,
+            sidelift_flags: 0x05,
+            reserved7: 0,
+            sidelift_progress: 0.5,
+            outrigger_progress: 1.0,
+            crane_span_y: 2.9265,
+            stowed_pallet_jack_guid: 700,
+            transfer_container_guid: 600,
         };
         let tj = to_json(&VehicleS2C::TrailerState(ts));
         assert_eq!(tj["type"], "trailer_state");
         assert_eq!(tj["trailerGuid"], 500);
-        assert_eq!(tj["kind"], 14);
+        assert_eq!(tj["kind"], 15);
         assert_eq!(tj["cell"], 0x0102_0100);
         assert_eq!(tj["position"].as_array().unwrap().len(), 3);
         assert_eq!(tj["coupledTractorGuid"], 100);
@@ -573,6 +647,42 @@ mod tests {
         assert_eq!(tj["containerSlot"], 0);
         assert_eq!(tj["trailerFlags"], 0x07);
         assert_eq!(tj["ownerGuid"], 77);
+        assert_eq!(tj["sideliftPhase"], 6);
+        assert_eq!(tj["sideliftSide"], -1);
+        assert_eq!(tj["sideliftFlags"], 0x05);
+        assert!((tj["sideliftProgress"].as_f64().unwrap() - 0.5).abs() < 1e-5);
+        assert!((tj["outriggerProgress"].as_f64().unwrap() - 1.0).abs() < 1e-5);
+        assert!((tj["craneSpanY"].as_f64().unwrap() - 2.9265).abs() < 1e-4);
+        assert_eq!(tj["stowedPalletJackGuid"], 700);
+        assert_eq!(tj["transferContainerGuid"], 600);
+
+        let pjs = VehiclePalletJackState {
+            pallet_jack_guid: 700,
+            operator_guid: 77,
+            stowed_on_trailer_guid: 0,
+            cell: 0x0102_0100,
+            position: [12.0, 15.0, 30.162],
+            heading: 0.5,
+            tiller_angle: -0.25,
+            fork_height_m: 0.2,
+            fork_state: 2,
+            carried_pallet_size: 2,
+            flags: 3,
+            reserved: 0,
+            carried_wcid: 4000010,
+            owner_guid: 77,
+        };
+        let pjj = to_json(&VehicleS2C::PalletJackState(pjs));
+        assert_eq!(pjj["type"], "pallet_jack_state");
+        assert_eq!(pjj["palletJackGuid"], 700);
+        assert_eq!(pjj["operatorGuid"], 77);
+        assert_eq!(pjj["stowedOnTrailerGuid"], 0);
+        assert!((pjj["forkHeightM"].as_f64().unwrap() - 0.2).abs() < 1e-5);
+        assert_eq!(pjj["forkState"], 2);
+        assert_eq!(pjj["carriedPalletSize"], 2);
+        assert_eq!(pjj["flags"], 3);
+        assert_eq!(pjj["carriedWcid"], 4000010);
+        assert_eq!(pjj["ownerGuid"], 77);
     }
 
     #[test]
@@ -592,6 +702,15 @@ mod tests {
             trailer_flags: 0x05,
             reserved: 0,
             owner_guid: 77,
+            sidelift_phase: 0,
+            sidelift_side: 1,
+            sidelift_flags: 0,
+            reserved7: 0,
+            sidelift_progress: 0.0,
+            outrigger_progress: 0.0,
+            crane_span_y: 5.9925,
+            stowed_pallet_jack_guid: 0,
+            transfer_container_guid: 0,
         };
         let action = on_s2c(&VehicleS2C::TrailerState(ts), 77);
         assert!(matches!(action, LinkAction::None));
@@ -602,5 +721,105 @@ mod tests {
         assert_eq!(arr[0]["trailerGuid"], 500);
         let stats: Value = serde_json::from_str(&stats_json()).unwrap();
         assert!(stats["received"][15].as_u64().unwrap() >= 1);
+    }
+
+    #[test]
+    fn on_s2c_pallet_jack_state_stats_and_seat_autoclear() {
+        reset();
+        let jack_guid = 700;
+        let local_player = 77;
+        assert!(set_seat(SeatPose {
+            vehicle: jack_guid,
+            cell: 0x0102_0100,
+            x: 12.0,
+            y: 15.0,
+            z: 30.0,
+            heading: 0.0,
+        }));
+        assert!(seat_pose().is_some());
+
+        // Server clears operator -> seat lock releases automatically and rejects re-lock until cleared/confirmed
+        let cleared = VehiclePalletJackState {
+            pallet_jack_guid: jack_guid,
+            operator_guid: 0,
+            stowed_on_trailer_guid: 0,
+            cell: 0x0102_0100,
+            position: [12.0, 15.0, 30.0],
+            heading: 0.0,
+            tiller_angle: 0.0,
+            fork_height_m: 0.085,
+            fork_state: 0,
+            carried_pallet_size: 0,
+            flags: 0,
+            reserved: 0,
+            carried_wcid: 0,
+            owner_guid: local_player,
+        };
+        on_s2c(&VehicleS2C::PalletJackState(cleared), local_player);
+        assert!(seat_pose().is_none());
+        assert!(!set_seat(SeatPose {
+            vehicle: jack_guid,
+            cell: 0x0102_0100,
+            x: 12.0,
+            y: 15.0,
+            z: 30.0,
+            heading: 0.0,
+        }));
+
+        let stats: Value = serde_json::from_str(&stats_json()).unwrap();
+        assert!(stats["received"][16].as_u64().unwrap() >= 1);
+        assert!(stats["seat_releases_by_server"].as_u64().unwrap() >= 1);
+
+        // Server re-assigning operator_guid == local_player lifts released_vehicle gate
+        let regrabbed = VehiclePalletJackState {
+            operator_guid: local_player,
+            ..cleared
+        };
+        on_s2c(&VehicleS2C::PalletJackState(regrabbed), local_player);
+        assert!(set_seat(SeatPose {
+            vehicle: jack_guid,
+            cell: 0x0102_0100,
+            x: 12.0,
+            y: 15.0,
+            z: 30.0,
+            heading: 0.0,
+        }));
+        let drained: Value = serde_json::from_str(&drain_json()).unwrap();
+        assert_eq!(drained.as_array().unwrap().len(), 2);
+        assert_eq!(drained[0]["type"], "pallet_jack_state");
+    }
+
+    #[test]
+    fn on_s2c_vehicle_despawn_clears_seat_regardless_of_subject() {
+        reset();
+        let jack_guid = 777;
+        let local_player = 77;
+        assert!(set_seat(SeatPose {
+            vehicle: jack_guid,
+            cell: 0x0102_0100,
+            x: 12.0,
+            y: 15.0,
+            z: 30.0,
+            heading: 0.0,
+        }));
+        assert!(seat_pose().is_some());
+
+        let ev = VehicleEvent {
+            vehicle: jack_guid,
+            kind: 4, // Despawn
+            step: 0,
+            subject: jack_guid, // != local_player
+            cell: 0x0102_0100,
+            position: [12.0, 15.0, 30.0],
+            value: 0.0,
+            aux: 0,
+            velocity: [0.0, 0.0, 0.0],
+        };
+        let action = on_s2c(&VehicleS2C::Event(ev), local_player);
+        assert!(matches!(action, LinkAction::None));
+        assert!(seat_pose().is_none(), "Despawn must release l.seat even when subject != local_player");
+
+        let stats: Value = serde_json::from_str(&stats_json()).unwrap();
+        assert!(stats["seat_releases_by_server"].as_u64().unwrap() >= 1);
     }
 }

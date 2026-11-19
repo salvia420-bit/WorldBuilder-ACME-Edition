@@ -111,7 +111,19 @@ export const GROUND_HOOD_EYE = Object.freeze({ right: 0, forward: 0.55, up: 1.18
 export const SEMI_HOOD_EYE = Object.freeze({ right: 0, forward: 1.55, up: 2.18, fov: 66 });
 
 function normalizeTrailerKind(k) {
-  if (k === "40ft" || k === 40 || k === 14 || k === 4000031 || k === "Chassis40ft" || k === "TrailerChassis40") {
+  if (
+    k === "40ft" ||
+    k === 40 ||
+    k === 14 ||
+    k === 15 ||
+    k === 4000031 ||
+    k === 4000032 ||
+    k === "Chassis40ft" ||
+    k === "TrailerChassis40" ||
+    k === "sidelifter40" ||
+    k === "Sidelifter40" ||
+    k === "TrailerSidelifter40"
+  ) {
     return "40ft";
   }
   if (k === "20ft" || k === 20 || k === 13 || k === 4000030 || k === "Chassis20ft" || k === "TrailerChassis20") {

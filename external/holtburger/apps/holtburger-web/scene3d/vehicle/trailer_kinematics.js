@@ -73,7 +73,16 @@ export function resolveTrailerSpec(specOrKind) {
     Number.isFinite(specOrKind.wheelbase) &&
     specOrKind.wheelbase > 0
   ) {
-    const base = specOrKind.kind === "40ft" ? TRAILER_PHYSICS_SPECS["40ft"] : TRAILER_PHYSICS_SPECS["20ft"];
+    const is40 =
+      specOrKind.kind === "40ft" ||
+      specOrKind.kind === 15 ||
+      specOrKind.kind === 14 ||
+      specOrKind.kind === 4000031 ||
+      specOrKind.kind === 4000032 ||
+      specOrKind.kind === "sidelifter40" ||
+      specOrKind.kind === "Sidelifter40" ||
+      specOrKind.kind === "TrailerSidelifter40";
+    const base = is40 ? TRAILER_PHYSICS_SPECS["40ft"] : TRAILER_PHYSICS_SPECS["20ft"];
     return {
       ...base,
       ...specOrKind,
@@ -86,13 +95,21 @@ export function resolveTrailerSpec(specOrKind) {
         : base.slotOffsets,
     };
   }
+  const key = (specOrKind && typeof specOrKind === "object")
+    ? (specOrKind.kind ?? specOrKind.specKind ?? specOrKind.wcid)
+    : specOrKind;
   if (
-    specOrKind === "40ft" ||
-    specOrKind === 40 ||
-    specOrKind === "Chassis40ft" ||
-    specOrKind === "TrailerChassis40" ||
-    specOrKind === 4000031 ||
-    specOrKind === 14
+    key === "40ft" ||
+    key === 40 ||
+    key === "Chassis40ft" ||
+    key === "TrailerChassis40" ||
+    key === "sidelifter40" ||
+    key === "Sidelifter40" ||
+    key === "TrailerSidelifter40" ||
+    key === 4000031 ||
+    key === 4000032 ||
+    key === 14 ||
+    key === 15
   ) {
     return TRAILER_PHYSICS_SPECS["40ft"];
   }
