@@ -31,6 +31,9 @@ try {
   gmImportError = err;
 }
 
+const { createPilotPredictor } = await import("../scene3d/vehicle/predictor.js");
+const { toCellLocal } = await import("../scene3d/vehicle/flight_model.js");
+
 // Also import reference constants & tools from gen_golden.mjs
 let GoldenGen = null;
 try {
@@ -973,6 +976,57 @@ check("Adversarial: Reversing away from tree obstacle (dotN > 0) allows clean ex
   }
   assert(st.speed < -5.0, "vehicle reverses cleanly away from tree obstacle");
   assert(st.y < 99.0, "vehicle advances backward away from obstacle");
+});
+
+console.log("\n--- Adversarial Hardening: Uncached Terrain NaN / Null & Invalid dt Guards ---");
+
+check("Adversarial (Finding 1): GM.step preserves finite z on ground()=>NaN / {z:null}, clamps dt<=0/NaN, and predictor recovers cleanly", () => {
+  const gm = requireGM();
+  // 1a. ground() => NaN preserves last finite state.z (40)
+  const stNaN = { x: 10, y: 20, z: 40, heading: 0, pitch: 0, roll: 0, speed: 5, steerAngle: 0, mode: 6 };
+  gm.step(stNaN, { throttle: 1, steer: 0, buttons: 0 }, GoldenGen.PARAMS, () => NaN, 1 / 30);
+  assert(Number.isFinite(stNaN.z) && stNaN.z === 40, `expected finite z=40 on NaN ground, got ${stNaN.z}`);
+  assert(Number.isFinite(stNaN.pitch), `expected finite pitch, got ${stNaN.pitch}`);
+  assert(Number.isFinite(stNaN.x) && Number.isFinite(stNaN.y), "x/y remain finite");
+
+  // 1b. ground() => { z: null, normal: [0,0,1] } preserves finite z
+  const stNull = { x: 10, y: 20, z: 40, heading: 0, pitch: 0, roll: 0, speed: 5, steerAngle: 0, mode: 6 };
+  gm.step(stNull, { throttle: 1, steer: 0, buttons: 0 }, GoldenGen.PARAMS, () => ({ z: null, normal: [0, 0, 1] }), 1 / 30);
+  assert(Number.isFinite(stNull.z) && stNull.z === 40, `expected finite z=40 on {z:null}, got ${stNull.z}`);
+
+  // 1c. dt = -0.5 and dt = NaN do not advance negatively or produce NaN
+  for (const badDt of [-0.5, NaN, -Infinity]) {
+    const stDt = { x: 10, y: 20, z: 40, heading: 0.25, pitch: 0, roll: 0, speed: 5, steerAngle: 0.1, mode: 6 };
+    gm.step(stDt, { throttle: 1, steer: 1, buttons: 0 }, GoldenGen.PARAMS, () => 40, badDt);
+    assert(Number.isFinite(stDt.x) && Number.isFinite(stDt.y) && Number.isFinite(stDt.speed) && Number.isFinite(stDt.steerAngle),
+      `dt=${badDt} produced non-finite state`);
+    assert(Math.abs(stDt.steerAngle) <= GoldenGen.PARAMS.maxSteerRad, `steerAngle within lock on dt=${badDt}`);
+    near(stDt.x, 10, 1e-12, `dt=${badDt} x unchanged`);
+    near(stDt.y, 20, 1e-12, `dt=${badDt} y unchanged`);
+    near(stDt.speed, 5, 1e-12, `dt=${badDt} speed unchanged`);
+  }
+
+  // 1d. Pilot predictor stays finite across uncached ground(NaN) -> cached ground(40) + reconcile + decay
+  let cached = false;
+  const cl = toCellLocal(21700, 3190, 40);
+  const pred = createPilotPredictor({
+    locomotion: 2,
+    params: GoldenGen.PARAMS,
+    ground: () => (cached ? 40 : NaN),
+    initial: { x: 21700, y: 3190, z: 40, heading: 0, pitch: 0, bank: 0, roll: 0, speed: 0, steerAngle: 0, mode: 0 },
+  });
+  pred.stepLocal({ throttle: 1, steer: 0, buttons: 0 });
+  assert(Number.isFinite(pred.renderPose(1).z), "renderPose.z finite during uncached terrain step");
+  cached = true;
+  pred.reconcile({
+    cell: cl.cell, x: cl.x, y: cl.y, z: cl.z,
+    heading: 0, pitch: 0, bank: 0, speed: 0.5, mode: 6,
+    ack: 1, flags: 0x01,
+  });
+  pred.stepLocal({ throttle: 1, steer: 0, buttons: 0 });
+  pred.decay(0.016);
+  const pose = pred.renderPose(1);
+  assert(Number.isFinite(pose.z) && Number.isFinite(pred.offset.z), `pose.z (${pose.z}) & offset.z (${pred.offset.z}) remain finite`);
 });
 
 console.log(`\n========================================`);

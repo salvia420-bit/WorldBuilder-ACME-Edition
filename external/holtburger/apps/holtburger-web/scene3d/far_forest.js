@@ -29,7 +29,7 @@ import { lbFadeUniforms, lbFadeOn } from "./lb_presence.js";
 import { rlogSetFarForestProbe } from "./residency_log.js";
 import { flightViewFlag } from "./flight_view_flag.js";
 import { withLogDepth } from "./shader_logdepth.js";
-import { prewarmSubtree } from "./bake_prewarm.js";
+import { prewarmSubtree, guardedCompileAsync } from "./bake_prewarm.js";
 import { geomBundlesActive, assembleModels as assembleGeomBundles, bundleToPartGroups } from "./geom_bundles.js";
 
 const BASE_URL = "../../dist/farforest/";
@@ -749,7 +749,7 @@ function _compileAhead(st, mesh) {
   if (!r || typeof r.compile !== "function" || !cam) { finish(); return; }
   try {
     const p = Promise.race([
-      Promise.resolve(scene ? prewarmSubtree(st.scene3d, mesh) : r.compileAsync?.(mesh, cam, scene)),
+      Promise.resolve(scene ? prewarmSubtree(st.scene3d, mesh) : (typeof r.compileAsync === "function" ? guardedCompileAsync(r, mesh, cam, scene) : undefined)),
       new Promise((res) => setTimeout(res, 1500)),
     ]);
     p.then(finish, finish);

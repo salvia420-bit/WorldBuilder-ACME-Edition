@@ -70,6 +70,7 @@ import {
   sharedUnbindCloudStrength,
   sharedReleaseCloud,
 } from './terrain_shared_uniforms.js';
+import { guardedCompileAsync } from './bake_prewarm.js';
 
 // 2026-10-26 (lane F2, promoted DEFAULT ON 2026-11-12 Pass 2; `=off` escape) —
 // `?hotTerrainShared`: `_pushCloudShadowsToTerrain` writes uCloudShadowEnabled /
@@ -935,19 +936,23 @@ export class CloudVolume {
     let r = null;
     try { r = globalThis.window?.liveScene3d?.renderer ?? null; } catch (_) { r = null; }
     if (!r) return; // liveScene3d arrives ~35 s after the world: try again next tick
-    if (!rm || typeof r.compileAsync !== 'function' || !('temporalUpscale' in rm)) {
+    if (!rm || typeof r.compile !== 'function' || typeof r.compileAsync !== 'function' || !('temporalUpscale' in rm)) {
       _highBandStats.prewarm = 'none';
       return;
     }
     _highBandStats.prewarm = 'pending';
     const was = rm.temporalUpscale;
     let p = null;
+    let geo = null;
     try {
       rm.temporalUpscale = !was;
-      const mesh = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), rm);
+      geo = new THREE.PlaneGeometry(2, 2);
+      const mesh = new THREE.Mesh(geo, rm);
       mesh.frustumCulled = false;
-      p = r.compileAsync(mesh, new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1));
+      p = guardedCompileAsync(r, mesh, new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1))
+        .finally(() => geo.dispose());
     } catch (_) {
+      geo?.dispose();
       p = null;
     } finally {
       rm.temporalUpscale = was; // the live variant again before the next render

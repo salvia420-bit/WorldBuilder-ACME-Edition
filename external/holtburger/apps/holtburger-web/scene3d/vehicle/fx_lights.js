@@ -56,18 +56,29 @@ export function createVehicleHeadlights(three, root, options = {}) {
     liveScene3d.activeLights.push(pooledLight);
   }
 
+  const lightOffset = new t.Vector3(
+    HEADLIGHT_CONFIG.beamOffset[0],
+    HEADLIGHT_CONFIG.beamOffset[1],
+    HEADLIGHT_CONFIG.beamOffset[2]
+  );
+  const tmpLightVec = new t.Vector3();
+  let headlightsState = false;
+
   return {
     headlightBeams,
     pooledLight,
     update(state = {}) {
-      if (state.headlights !== undefined) {
-        const on = Boolean(state.headlights);
-        headlightBeams.visible = on; // vfx-lint-allow: additive beam mesh toggle
-        matAdditive.opacity = on ? 0.35 : 0.0;
-        pooledLight.intensity = on ? HEADLIGHT_CONFIG.intensity : 0.0;
-        pooledLight.position.copy(root.position).add(
-          new t.Vector3(HEADLIGHT_CONFIG.beamOffset[0], HEADLIGHT_CONFIG.beamOffset[1], HEADLIGHT_CONFIG.beamOffset[2])
-        );
+      const s = state || {};
+      const headlightsProvided = s.headlights !== undefined;
+      if (headlightsProvided) {
+        headlightsState = Boolean(s.headlights);
+        headlightBeams.visible = headlightsState; // vfx-lint-allow: additive beam mesh toggle
+        matAdditive.opacity = headlightsState ? 0.35 : 0.0;
+        pooledLight.intensity = headlightsState ? HEADLIGHT_CONFIG.intensity : 0.0;
+      }
+      if (headlightsState || headlightsProvided) {
+        tmpLightVec.copy(lightOffset).applyQuaternion(root.quaternion);
+        pooledLight.position.copy(root.position).add(tmpLightVec);
       }
     },
     dispose() {

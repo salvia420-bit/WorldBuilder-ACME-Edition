@@ -1,0 +1,880 @@
+From 47e6c37fc52e84666ab26ffaa7711f8fa248b088 Mon Sep 17 00:00:00 2001
+From: salvia420-bit <salvia420@gmail.com>
+Date: Fri, 20 Nov 2026 07:07:17 +0000
+Subject: [PATCH] Vehicles (holtburger fork): Dericost terrain grid, Physics
+ bit-15 cells, and null guards
+
+---
+ .../DericostContinentInvariantsTests.cs       |  80 +++++++-
+ Source/ACE.Server/Entity/Landblock.cs         |  28 ++-
+ Source/ACE.Server/Physics/Common/LScape.cs    |   4 +-
+ Source/ACE.Server/Physics/Common/LandCell.cs  |  40 ++--
+ Source/ACE.Server/Physics/Common/LandDefs.cs  |  16 +-
+ Source/ACE.Server/Physics/Common/Landblock.cs |   6 +-
+ .../Physics/Common/LandblockStruct.cs         |  10 +-
+ Source/ACE.Server/Physics/Common/ObjCell.cs   |  10 +-
+ Source/ACE.Server/Physics/Common/Position.cs  |   4 +-
+ Source/ACE.Server/Physics/ObjectInfo.cs       |   4 +-
+ Source/ACE.Server/Physics/PhysicsObj.cs       |  21 +-
+ Source/ACE.Server/Physics/SpherePath.cs       |   2 +-
+ Source/ACE.Server/Physics/Transition.cs       |   2 +-
+ Source/ACE.Server/Vehicles/VehicleTerrain.cs  | 187 +++++++++++++++++-
+ 14 files changed, 349 insertions(+), 65 deletions(-)
+
+diff --git a/Source/ACE.Server.Tests/Vehicles/DericostContinentInvariantsTests.cs b/Source/ACE.Server.Tests/Vehicles/DericostContinentInvariantsTests.cs
+index 271c122c..51b2b820 100644
+--- a/Source/ACE.Server.Tests/Vehicles/DericostContinentInvariantsTests.cs
++++ b/Source/ACE.Server.Tests/Vehicles/DericostContinentInvariantsTests.cs
+@@ -1,6 +1,9 @@
+ using System;
++using System.Numerics;
+ using Microsoft.VisualStudio.TestTools.UnitTesting;
+ using ACE.Entity;
++using ACE.Server.Physics.Common;
++using ACE.Server.Vehicles;
+ 
+ namespace ACE.Server.Tests.Vehicles
+ {
+@@ -57,8 +60,8 @@ public void LandblockId_Equality_CrossContinentDifferentiation()
+         [TestMethod]
+         public void Position_Distance_AccountsForContinentDelta()
+         {
+-            var pDereth = new Position(0x10200001, new System.Numerics.Vector3(50.0f, 50.0f, 10.0f), System.Numerics.Quaternion.Identity);
+-            var pDericost = new Position(0x10208001, new System.Numerics.Vector3(50.0f, 50.0f, 10.0f), System.Numerics.Quaternion.Identity);
++            var pDereth = new ACE.Entity.Position(0x10200001, new System.Numerics.Vector3(50.0f, 50.0f, 10.0f), System.Numerics.Quaternion.Identity);
++            var pDericost = new ACE.Entity.Position(0x10208001, new System.Numerics.Vector3(50.0f, 50.0f, 10.0f), System.Numerics.Quaternion.Identity);
+ 
+             var distSq = pDereth.SquaredDistanceTo(pDericost);
+             var expectedDist = 68928.0;
+@@ -68,5 +71,78 @@ public void Position_Distance_AccountsForContinentDelta()
+             Assert.AreEqual((float)expectedDist, pDereth.DistanceTo(pDericost), 0.1f);
+             Assert.AreEqual((float)expectedDist, pDereth.Distance2D(pDericost), 0.1f);
+         }
++
++        [TestMethod]
++        public void LandDefs_DericostOutdoorCell_ResolvesLCoordAndPreservesBit15()
++        {
++            uint dericostCell = 0xA6908025;
++            Assert.IsTrue(LandDefs.inbound_valid_cellid(dericostCell), "Dericost outdoor cell must be valid");
++            var lcoord = LandDefs.gid_to_lcoord(dericostCell);
++            Assert.IsNotNull(lcoord, "Dericost outdoor cell must resolve lcoord without envCheck rejection");
++            Assert.AreEqual(0xA6 * 8 + 4, (int)lcoord.Value.X);
++            Assert.AreEqual(0x90 * 8 + 4, (int)lcoord.Value.Y);
++
++            uint cell = 0xA6908001;
++            var loc = new Vector3(96.0f, 96.0f, 278.0f);
++            Assert.IsTrue(LandDefs.AdjustToOutside(ref cell, ref loc));
++            Assert.AreEqual(0xA6908025u, cell, "AdjustToOutside must preserve Dericost bit 15");
++            var physPos = new ACE.Server.Physics.Common.Position
++            {
++                ObjCellID = 0xA6908001,
++                Frame = new ACE.Server.Physics.Animation.AFrame(loc, Quaternion.Identity),
++            };
++            Assert.AreEqual(0xA6908025u, physPos.GetCell(0xA6908001));
++        }
++
++        [TestMethod]
++        public void VehicleTerrain_And_PhysicsLandblock_DericostGridSetsBit15AndHeight()
++        {
++            const int verts = 255 * 8 + 1;
++            var h = new byte[verts * verts];
++            var t = new byte[verts * verts];
++            var table = new float[256];
++            for (int i = 0; i < 256; i++) table[i] = i * 2.0f;
++
++            // Populate Dericost landblock (166, 144) = 0xA690 with height index 139 -> 278.0m
++            for (int col = 0; col <= 8; col++)
++                for (int row = 0; row <= 8; row++)
++                    h[(144 * 8 + row) * verts + (166 * 8 + col)] = 139;
++
++            var prevLandHeight = LandDefs.LandHeightTable;
++            var prevEng = ACE.Server.Physics.PhysicsEngine.Instance;
++            const uint dericostKey = 0xA690FFFFu;
++            bool hadKey = LScape.Landblocks.TryGetValue(dericostKey, out var prevLb);
++            try
++            {
++                ACE.Server.Physics.PhysicsEngine.Instance = null;
++                LandDefs.LandHeightTable = new System.Collections.Generic.List<float>(table);
++                VehicleTerrain.SetDericostGridsForTesting(h, t, table);
++
++                var grid = VehicleTerrain.GetGrid(166, 144, 1);
++                Assert.IsNotNull(grid);
++                Assert.AreEqual(278.0f, grid.Heights[0], 0.01f);
++
++                float gz = VehicleTerrain.HeightAt(166 * 192.0f + 96.0f, (float)Vehicle.DericostYOffset + 144 * 192.0f + 96.0f);
++                Assert.AreEqual(278.0f, gz, 0.01f);
++
++                Assert.IsTrue(VehicleTerrain.TryGetDericostCellLandblock(166, 144, out var cl));
++                var physLb = new ACE.Server.Physics.Common.Landblock(cl, isDericost: true);
++                physLb.init_landcell();
++                LScape.Landblocks[dericostKey] = physLb;
++                Assert.IsTrue(physLb.IsDericost);
++                var lc = physLb.get_landcell(0xA6908025);
++                Assert.IsNotNull(lc, "PhysicsLandblock.get_landcell must find Dericost cell 0xA6908025");
++                Assert.AreEqual(0xA6908025u, lc.ID);
++                Assert.AreEqual(278.0f, physLb.GetZ(new Vector3(96.0f, 96.0f, 278.0f)), 0.05f);
++            }
++            finally
++            {
++                if (hadKey) LScape.Landblocks[dericostKey] = prevLb;
++                else LScape.Landblocks.TryRemove(dericostKey, out _);
++                ACE.Server.Physics.PhysicsEngine.Instance = prevEng;
++                VehicleTerrain.SetDericostGridsForTesting(null, null, null);
++                LandDefs.LandHeightTable = prevLandHeight;
++            }
++        }
+     }
+ }
+diff --git a/Source/ACE.Server/Entity/Landblock.cs b/Source/ACE.Server/Entity/Landblock.cs
+index 00f942f7..faef8149 100644
+--- a/Source/ACE.Server/Entity/Landblock.cs
++++ b/Source/ACE.Server/Entity/Landblock.cs
+@@ -194,13 +194,24 @@ public Landblock(LandblockId id)
+ 
+             Id = id;
+ 
+-            CellLandblock = DatManager.CellDat.ReadFromDat<CellLandblock>(Id.Raw | 0xFFFF);
+-            LandblockInfo = DatManager.CellDat.ReadFromDat<LandblockInfo>((uint)Id.Landblock << 16 | 0xFFFE);
++            var isDericost = id.Continent == 1;
++            if (isDericost && Vehicles.VehicleTerrain.TryGetDericostCellLandblock(id.LandblockX, id.LandblockY, out var deriCl))
++            {
++                CellLandblock = deriCl;
++                LandblockInfo = null;
++                lastActiveTime = DateTime.UtcNow;
++                PhysicsLandblock = new Physics.Common.Landblock(deriCl, isDericost: true);
++            }
++            else
++            {
++                CellLandblock = DatManager.CellDat.ReadFromDat<CellLandblock>(Id.Raw | 0xFFFF);
++                LandblockInfo = isDericost ? null : DatManager.CellDat.ReadFromDat<LandblockInfo>((uint)Id.Landblock << 16 | 0xFFFE);
+ 
+-            lastActiveTime = DateTime.UtcNow;
++                lastActiveTime = DateTime.UtcNow;
+ 
+-            var cellLandblock = DBObj.GetCellLandblock(Id.Raw | 0xFFFF);
+-            PhysicsLandblock = new Physics.Common.Landblock(cellLandblock);
++                var cellLandblock = DBObj.GetCellLandblock(Id.Raw | 0xFFFF);
++                PhysicsLandblock = new Physics.Common.Landblock(cellLandblock, isDericost);
++            }
+         }
+ 
+         public void Init(bool reload = false)
+@@ -222,6 +233,13 @@ public void Init(bool reload = false)
+ 
+         private void BringUp()
+         {
++            if (Id.Continent == 1)
++            {
++                CreateWorldObjectsCompleted = true;
++                PhysicsLandblock.SortObjects();
++                return;
++            }
++
+             CreateWorldObjects();
+ 
+             SpawnDynamicShardObjects();
+diff --git a/Source/ACE.Server/Physics/Common/LScape.cs b/Source/ACE.Server/Physics/Common/LScape.cs
+index f36ca433..3b5b230b 100644
+--- a/Source/ACE.Server/Physics/Common/LScape.cs
++++ b/Source/ACE.Server/Physics/Common/LScape.cs
+@@ -53,7 +53,7 @@ public static bool SetMidRadius(int radius)
+         /// <param name="blockCellID">Any landblock + cell ID within the landblock</param>
+         public static Landblock get_landblock(uint blockCellID)
+         {
+-            if (PhysicsEngine.Instance.Server)
++            if (PhysicsEngine.Instance != null && PhysicsEngine.Instance.Server)
+             {
+                 var lbid = new LandblockId(blockCellID & 0xFFFF8000u);
+                 var lbmLandblock = LandblockManager.GetLandblock(lbid, false, false);
+@@ -104,7 +104,7 @@ public static Landblock get_landblock(uint blockCellID)
+ 
+         public static bool unload_landblock(uint landblockID)
+         {
+-            if (PhysicsEngine.Instance.Server)
++            if (PhysicsEngine.Instance != null && PhysicsEngine.Instance.Server)
+             {
+                 // todo: Instead of ACE.Server.Entity.Landblock.Unload() calling this function, it should be calling PhysicsLandblock.Unload()
+                 // todo: which would then call AdjustCell.AdjustCells.Remove()
+diff --git a/Source/ACE.Server/Physics/Common/LandCell.cs b/Source/ACE.Server/Physics/Common/LandCell.cs
+index 4f502378..cd023f14 100644
+--- a/Source/ACE.Server/Physics/Common/LandCell.cs
++++ b/Source/ACE.Server/Physics/Common/LandCell.cs
+@@ -83,6 +83,8 @@ public static void add_all_outside_cells(Position position, int numSphere, List<
+         {
+             if (cellArray.AddedOutside) return;
+ 
++            var continentBit = position.ObjCellID & 0x8000u;
++
+             if (numSphere != 0)
+             {
+                 foreach (var sphere in spheres)
+@@ -102,8 +104,8 @@ public static void add_all_outside_cells(Position position, int numSphere, List<
+                     var lcoord = LandDefs.gid_to_lcoord(cellPoint);
+                     if (lcoord != null)
+                     {
+-                        add_outside_cell(cellArray, lcoord.Value);
+-                        check_add_cell_boundary(cellArray, point, lcoord.Value, minRad, maxRad);
++                        add_outside_cell(cellArray, lcoord.Value, continentBit);
++                        check_add_cell_boundary(cellArray, point, lcoord.Value, minRad, maxRad, continentBit);
+                     }
+                 }
+             }
+@@ -113,7 +115,7 @@ public static void add_all_outside_cells(Position position, int numSphere, List<
+ 
+                 var lcoord = LandDefs.gid_to_lcoord(position.ObjCellID);
+                 if (lcoord != null)
+-                    add_outside_cell(cellArray, lcoord.Value);
++                    add_outside_cell(cellArray, lcoord.Value, continentBit);
+             }
+         }
+ 
+@@ -148,8 +150,8 @@ public static void add_all_outside_cells(int numParts, List<PhysicsPart> parts,
+ 
+                 var lcoord = _lcoord.Value;
+ 
+-                var lx = (int)(((loc.ObjCellID & 0xFFFF) - 1) / 8);
+-                var ly = (int)(((loc.ObjCellID & 0xFFFF) - 1) % 8);
++                var lx = (int)(((loc.ObjCellID & 0x7FFF) - 1) / 8);
++                var ly = (int)(((loc.ObjCellID & 0x7FFF) - 1) % 8);
+ 
+                 for (var j = 0; j < numParts; j++)
+                 {
+@@ -192,7 +194,7 @@ public static void add_cell_block(int min_x, int min_y, int max_x, int max_y, Ce
+                     var ui = (uint)i;
+                     var uj = (uint)j;
+ 
+-                    var cellID = (((uj >> 3) | 32 * (ui & 0xFFFFFFF8)) << 16) | ((uj & 7) + 8 * (ui & 7) + 1);
++                    var cellID = (((uj >> 3) | 32 * (ui & 0xFFFFFFF8)) << 16) | ((uj & 7) + 8 * (ui & 7) + 1) | (id & 0x8000u);
+ 
+                     // FIXME!
+                     if (id >> 16 != cellID >> 16)
+@@ -205,54 +207,54 @@ public static void add_cell_block(int min_x, int min_y, int max_x, int max_y, Ce
+             }
+         }
+ 
+-        public static void add_outside_cell(CellArray cellArray, float _x, float _y)
++        public static void add_outside_cell(CellArray cellArray, float _x, float _y, uint continentBit = 0)
+         {
+             var x = (uint)_x;
+             var y = (uint)_y;
+ 
+             if (x >= 0 && y >= 0 && x < 2040 && y < 2040)
+             {
+-                var cellID = (((y >> 3) | 32 * (x & 0xFFFFFFF8)) << 16) | ((y & 7) + 8 * (x & 7) + 1);
++                var cellID = (((y >> 3) | 32 * (x & 0xFFFFFFF8)) << 16) | ((y & 7) + 8 * (x & 7) + 1) | (continentBit & 0x8000u);
+                 var landCell = Get(cellID);
+                 if (landCell != null)
+                     cellArray.add_cell(cellID, landCell);
+             }
+         }
+ 
+-        public static void add_outside_cell(CellArray cellArray, Vector2 lcoord)
++        public static void add_outside_cell(CellArray cellArray, Vector2 lcoord, uint continentBit = 0)
+         {
+-            add_outside_cell(cellArray, lcoord.X, lcoord.Y);
++            add_outside_cell(cellArray, lcoord.X, lcoord.Y, continentBit);
+         }
+ 
+         /// <summary>
+         /// Checks if this sphere exceeds the boundaries of the cell
+         /// if it does, adds the neighboring cells to cellArray
+         /// </summary>
+-        public static void check_add_cell_boundary(CellArray cellArray, Vector2 point, Vector2 lcoord, float minRad, float maxRad)
++        public static void check_add_cell_boundary(CellArray cellArray, Vector2 point, Vector2 lcoord, float minRad, float maxRad, uint continentBit = 0)
+         {
+             float x = lcoord.X, y = lcoord.Y;
+ 
+             if (point.X > maxRad)
+             {
+-                add_outside_cell(cellArray, x + 1, y);
++                add_outside_cell(cellArray, x + 1, y, continentBit);
+                 if (point.Y > maxRad)
+-                    add_outside_cell(cellArray, x + 1, y + 1);
++                    add_outside_cell(cellArray, x + 1, y + 1, continentBit);
+                 if (point.Y < minRad)
+-                    add_outside_cell(cellArray, x + 1, y - 1);
++                    add_outside_cell(cellArray, x + 1, y - 1, continentBit);
+             }
+             if (point.X < minRad)
+             {
+-                add_outside_cell(cellArray, x - 1, y);
++                add_outside_cell(cellArray, x - 1, y, continentBit);
+                 if (point.Y > maxRad)
+-                    add_outside_cell(cellArray, x - 1, y + 1);
++                    add_outside_cell(cellArray, x - 1, y + 1, continentBit);
+                 if (point.Y < minRad)
+-                    add_outside_cell(cellArray, x - 1, y - 1);
++                    add_outside_cell(cellArray, x - 1, y - 1, continentBit);
+             }
+             if (point.Y > maxRad)
+-                add_outside_cell(cellArray, x, y + 1);
++                add_outside_cell(cellArray, x, y + 1, continentBit);
+ 
+             if (point.Y < minRad)
+-                add_outside_cell(cellArray, x, y - 1);
++                add_outside_cell(cellArray, x, y - 1, continentBit);
+         }
+ 
+         public bool find_terrain_poly(Vector3 origin, ref Polygon walkable)
+diff --git a/Source/ACE.Server/Physics/Common/LandDefs.cs b/Source/ACE.Server/Physics/Common/LandDefs.cs
+index 28392690..18dd3dfa 100644
+--- a/Source/ACE.Server/Physics/Common/LandDefs.cs
++++ b/Source/ACE.Server/Physics/Common/LandDefs.cs
+@@ -124,7 +124,8 @@ public static bool AdjustToOutside(Position pos)
+ 
+         public static bool AdjustToOutside(ref uint blockCellID, ref Vector3 loc)
+         {
+-            var cellID = (uint)(blockCellID & CellID_Mask);
++            var continentBit = blockCellID & 0x8000u;
++            var cellID = (uint)((blockCellID & 0xFFFF) == BlockCellID ? BlockCellID : (blockCellID & 0x7FFF));
+ 
+             if (cell_in_range(cellID))
+             {
+@@ -136,7 +137,7 @@ public static bool AdjustToOutside(ref uint blockCellID, ref Vector3 loc)
+                 var lcoord = get_outside_lcoord(blockCellID, loc.X, loc.Y);
+                 if (lcoord.HasValue)
+                 {
+-                    blockCellID = (uint)lcoord_to_gid(lcoord.Value.X, lcoord.Value.Y);
++                    blockCellID = (uint)lcoord_to_gid(lcoord.Value.X, lcoord.Value.Y) | continentBit;
+                     loc.X -= (float)Math.Floor(loc.X / BlockLength) * BlockLength;
+                     loc.Y -= (float)Math.Floor(loc.Y / BlockLength) * BlockLength;
+                     return true;
+@@ -182,14 +183,15 @@ public static bool InBlock(Vector3 pos, float radius)
+             if (!inbound_valid_cellid(cellID))
+                 return null;
+ 
+-            if (envCheck && (cellID & CellID_Mask) >= FirstEnvCellID)
++            var low = cellID & 0x7FFFu;
++            if (envCheck && low >= FirstEnvCellID)
+                 return null;
+ 
+             var x = (cellID >> BlockPartShift & BlockX_Mask) >> MaxBlockShift << LandblockShift;
+             var y = (cellID >> BlockPartShift & BlockY_Mask) << LandblockShift;
+ 
+-            x += (cellID & CellID_Mask) - FirstLandCellID >> LandblockShift;
+-            y += (cellID & CellID_Mask) - FirstLandCellID & LandblockMask;
++            x += low - FirstLandCellID >> LandblockShift;
++            y += low - FirstLandCellID & LandblockMask;
+ 
+             if (x < 0 || y < 0 || x >= LandLength || y >= LandLength)
+                 return null;
+@@ -199,7 +201,7 @@ public static bool InBlock(Vector3 pos, float radius)
+ 
+         public static Vector2? get_outside_lcoord(uint blockCellID, float _x, float _y)
+         {
+-            var cellID = (uint)(blockCellID & CellID_Mask);
++            var cellID = (uint)((blockCellID & 0xFFFF) == BlockCellID ? BlockCellID : (blockCellID & 0x7FFF));
+              
+             if (cell_in_range(cellID))
+             {
+@@ -240,7 +242,7 @@ public static int lcoord_to_gid(float _x, float _y)
+ 
+         public static bool inbound_valid_cellid(uint blockCellID)
+         {
+-            var cellID = (uint)(blockCellID & CellID_Mask);
++            var cellID = (uint)((blockCellID & 0xFFFF) == BlockCellID ? BlockCellID : (blockCellID & 0x7FFF));
+ 
+             if (cell_in_range(cellID))
+             {
+diff --git a/Source/ACE.Server/Physics/Common/Landblock.cs b/Source/ACE.Server/Physics/Common/Landblock.cs
+index 54f88c7d..d47a0a66 100644
+--- a/Source/ACE.Server/Physics/Common/Landblock.cs
++++ b/Source/ACE.Server/Physics/Common/Landblock.cs
+@@ -40,8 +40,8 @@ public Landblock() : base()
+             Init();
+         }
+ 
+-        public Landblock(CellLandblock landblock)
+-            : base(landblock)
++        public Landblock(CellLandblock landblock, bool isDericost = false)
++            : base(landblock, isDericost)
+         {
+             Init();
+ 
+@@ -144,7 +144,7 @@ public LandCell GetCell(Vector3 point)
+             var cellX = (int)point.X / 24;
+             var cellY = (int)point.Y / 24;
+ 
+-            var blockCellID = (ID & 0xFFFF0000) | (uint)(cellX * 8 + cellY) + 1;
++            var blockCellID = (ID & 0xFFFF0000) | (IsDericost ? 0x8000u : 0u) | (uint)(cellX * 8 + cellY) + 1;
+             return (LandCell)LScape.get_landcell((uint)blockCellID);
+         }
+ 
+diff --git a/Source/ACE.Server/Physics/Common/LandblockStruct.cs b/Source/ACE.Server/Physics/Common/LandblockStruct.cs
+index a8555170..36514caa 100644
+--- a/Source/ACE.Server/Physics/Common/LandblockStruct.cs
++++ b/Source/ACE.Server/Physics/Common/LandblockStruct.cs
+@@ -13,6 +13,7 @@ namespace ACE.Server.Physics.Common
+     public class LandblockStruct
+     {
+         public uint ID;
++        public bool IsDericost { get; protected set; }
+         //public Vector3 VertexLighting;    // RGBColor
+         public LandDefs.Direction TransDir;
+         public int SideVertexCount;
+@@ -78,9 +79,10 @@ public LandblockStruct()
+             Init();
+         }
+ 
+-        public LandblockStruct(CellLandblock landblock)
++        public LandblockStruct(CellLandblock landblock, bool isDericost = false)
+         {
+             Init();
++            IsDericost = isDericost;
+             Height = landblock.Height;
+             Terrain = landblock.Terrain;
+             // originally called from LScape.update_block()
+@@ -249,6 +251,8 @@ public void ConstructPolygons(uint landblockID)
+                     }
+ 
+                     var cellID = (uint)LandDefs.lcoord_to_gid(lcoordX, lcoordY);
++                    if (IsDericost)
++                        cellID |= 0x8000u;
+                     var landCell = LandCells[x * SideCellCount + y];
+                     landCell.ID = cellID;
+                     landCell.Pos.ObjCellID = cellID;
+@@ -400,7 +404,7 @@ public bool Generate(uint landblockID, int cellScale, LandDefs.Direction transAd
+             {
+                 ConstructPolygons(landblockID);
+ 
+-                if (!PhysicsEngine.Instance.Server)
++                if (PhysicsEngine.Instance != null && !PhysicsEngine.Instance.Server)
+                     ConstructUVs(landblockID);      // client mode only
+             }
+ 
+@@ -654,7 +658,7 @@ public void TransAdjust()
+ 
+         public float calc_water_depth(uint blockCellID, Vector3 point)
+         {
+-            var cellID = ((int)blockCellID & 0xFFFF) - 1;
++            var cellID = ((int)blockCellID & 0x7FFF) - 1;
+ 
+             var cellX = cellID / 8;
+             var cellY = cellID % 8;
+diff --git a/Source/ACE.Server/Physics/Common/ObjCell.cs b/Source/ACE.Server/Physics/Common/ObjCell.cs
+index d11ceb8a..e83f2582 100644
+--- a/Source/ACE.Server/Physics/Common/ObjCell.cs
++++ b/Source/ACE.Server/Physics/Common/ObjCell.cs
+@@ -339,7 +339,7 @@ public static void find_cell_list(Position position, int numSphere, List<Sphere>
+ 
+             var visibleCell = GetVisible(position.ObjCellID);
+ 
+-            if ((position.ObjCellID & 0xFFFF) >= 0x100)
++            if ((position.ObjCellID & 0x7FFF) >= 0x100)
+             {
+                 if (path != null)
+                     path.HitsInteriorCell = true;
+@@ -375,7 +375,7 @@ public static void find_cell_list(Position position, int numSphere, List<Sphere>
+                         if (cell.point_in_cell(localPoint))
+                         {
+                             currCell = cell;
+-                            if ((cell.ID & 0xFFFF) >= 0x100)
++                            if ((cell.ID & 0x7FFF) >= 0x100)
+                             {
+                                 if (path != null) path.HitsInteriorCell = true;
+                                 return;     // break?
+@@ -384,7 +384,7 @@ public static void find_cell_list(Position position, int numSphere, List<Sphere>
+                     }
+                 }
+             }
+-            if (!cellArray.LoadCells && (position.ObjCellID & 0xFFFF) >= 0x100)
++            if (!cellArray.LoadCells && (position.ObjCellID & 0x7FFF) >= 0x100)
+             {
+                 var cells = cellArray.Cells.Values.ToList();
+                 foreach (var cell in cells)
+@@ -583,7 +583,7 @@ public bool IsVisible(ObjCell cell)
+         {
+             if (ID == cell.ID) return true;
+ 
+-            if ((ID & 0xFFFF) >= 0x100)
++            if ((ID & 0x7FFF) >= 0x100)
+             {
+                 if (!(this is EnvCell envCell))
+                 {
+@@ -592,7 +592,7 @@ public bool IsVisible(ObjCell cell)
+                 }
+                 return envCell.IsVisibleIndoors(cell);
+             }
+-            else if ((cell.ID & 0xFFFF) >= 0x100)
++            else if ((cell.ID & 0x7FFF) >= 0x100)
+             {
+                 if (!(cell is EnvCell envCell))
+                 {
+diff --git a/Source/ACE.Server/Physics/Common/Position.cs b/Source/ACE.Server/Physics/Common/Position.cs
+index 6bf07a54..800e2bee 100644
+--- a/Source/ACE.Server/Physics/Common/Position.cs
++++ b/Source/ACE.Server/Physics/Common/Position.cs
+@@ -216,7 +216,7 @@ public float heading_diff(Position position)
+         public uint GetCell(uint blockCellID)
+         {
+             // is originating cell indoor or outdoor?
+-            if ((blockCellID & 0xFFFF) >= 0x100)
++            if ((blockCellID & 0x7FFF) >= 0x100)
+                 return GetIndoorCell(blockCellID);
+             else
+                 return GetOutdoorCell(blockCellID);
+@@ -229,7 +229,7 @@ public uint GetOutdoorCell(uint blockCellID)
+ 
+             var cellID = (uint)(cellX * LandDefs.BlockSide + cellY + 1);
+ 
+-            var newBlockCellID = blockCellID & 0xFFFF0000 | cellID;
++            var newBlockCellID = (blockCellID & 0xFFFF8000u) | cellID;
+ 
+             //return LScape.get_landcell(blockCellID);
+             return newBlockCellID;
+diff --git a/Source/ACE.Server/Physics/ObjectInfo.cs b/Source/ACE.Server/Physics/ObjectInfo.cs
+index aba39d33..6c3b7299 100644
+--- a/Source/ACE.Server/Physics/ObjectInfo.cs
++++ b/Source/ACE.Server/Physics/ObjectInfo.cs
+@@ -106,12 +106,12 @@ public TransitionState ValidateWalkable(Sphere checkPos, Plane contactPlane, boo
+             if (State.HasFlag(ObjectInfoState.IsViewer))
+             {
+                 var dist = Vector3.Dot(checkPos.Center, contactPlane.Normal) + contactPlane.D - checkPos.Radius;
+-                if (dist > -PhysicsGlobals.EPSILON && path.BeginPos != null && (path.BeginPos.ObjCellID & 0xFFFF) >= 0x100)
++                if (dist > -PhysicsGlobals.EPSILON && path.BeginPos != null && (path.BeginPos.ObjCellID & 0x7FFF) >= 0x100)
+                     return TransitionState.OK;
+ 
+                 var offset = checkPos.Center - path.GlobalCurrCenter[0].Center;
+                 var angle = dist / Vector3.Dot(offset, contactPlane.Normal);
+-                if ((angle <= 0.0f || angle > 1.0f) && path.BeginPos != null && (path.BeginPos.ObjCellID & 0xFFFF) >= 0x100)
++                if ((angle <= 0.0f || angle > 1.0f) && path.BeginPos != null && (path.BeginPos.ObjCellID & 0x7FFF) >= 0x100)
+                     return TransitionState.OK;
+ 
+                 path.AddOffsetToCheckPos(offset * -angle);
+diff --git a/Source/ACE.Server/Physics/PhysicsObj.cs b/Source/ACE.Server/Physics/PhysicsObj.cs
+index a3ca1532..b2f81272 100644
+--- a/Source/ACE.Server/Physics/PhysicsObj.cs
++++ b/Source/ACE.Server/Physics/PhysicsObj.cs
+@@ -231,9 +231,9 @@ public void AddPartToShadowCells(PhysicsPart part)
+ 
+         public ObjCell AdjustPosition(Position position, Vector3 low_pt, bool dontCreateCells, bool searchCells)
+         {
+-            var cellID = position.ObjCellID & 0xFFFF;
++            var cellID = position.ObjCellID & 0x7FFF;
+ 
+-            if ((cellID < 1 || cellID > 0x40) && (cellID < 0x100 || cellID > 0xFFFD) && cellID != 0xFFFF)
++            if ((cellID < 1 || cellID > 0x40) && (cellID < 0x100 || cellID > 0x7FFD) && (position.ObjCellID & 0xFFFF) != 0xFFFF)
+                 return null;
+ 
+             if (cellID < 0x100)
+@@ -544,7 +544,7 @@ public SetPositionError ForceIntoCell(ObjCell newCell, Position pos)
+ 
+         public double GetAutonomyBlipDistance()
+         {
+-            if ((Position.ObjCellID & 0xFFFF) < 0x100) return 100.0f;
++            if ((Position.ObjCellID & 0x7FFF) < 0x100) return 100.0f;
+ 
+             return IsPlayer ? 25.0f : 20.0f;
+         }
+@@ -569,7 +569,7 @@ public float GetHeight()
+ 
+         public double GetMaxConstraintDistance()
+         {
+-            return (Position.ObjCellID & 0xFFFF) < 0x100 ? 50.0f : 20.0f;
++            return (Position.ObjCellID & 0x7FFF) < 0x100 ? 50.0f : 20.0f;
+         }
+ 
+         public PhysicsObj GetObjectA(uint objectID)
+@@ -619,7 +619,7 @@ public uint GetSetupID()
+ 
+         public double GetStartConstraintDistance()
+         {
+-            return (Position.ObjCellID & 0xFFFF) < 0x100 ? 5.0f : 10.0f;
++            return (Position.ObjCellID & 0x7FFF) < 0x100 ? 5.0f : 10.0f;
+         }
+ 
+         public float GetStepDownHeight()
+@@ -1404,15 +1404,15 @@ public SetPositionError SetScatterPositionInternal(SetPosition setPos, Transitio
+                 newPos.Frame.Origin.Y += (float)ThreadSafeRandom.Next(-1.0f, 1.0f) * setPos.RadY;
+ 
+                 // customized
+-                if ((newPos.ObjCellID & 0xFFFF) < 0x100)
++                if ((newPos.ObjCellID & 0x7FFF) < 0x100)
+                 {
+                     newPos.Frame.Origin.X = Math.Clamp(newPos.Frame.Origin.X, 0.5f, 191.5f);
+                     newPos.Frame.Origin.Y = Math.Clamp(newPos.Frame.Origin.Y, 0.5f, 191.5f);
+                 }
+ 
+                 // get cell for this position
+-                var indoors = (newPos.ObjCellID & 0xFFFF) >= 0x100;
+-                if ((newPos.ObjCellID & 0xFFFF) < 0x100)
++                var indoors = (newPos.ObjCellID & 0x7FFF) >= 0x100;
++                if ((newPos.ObjCellID & 0x7FFF) < 0x100)
+                 {
+                     LandDefs.AdjustToOutside(newPos);
+ 
+@@ -1748,6 +1748,9 @@ public static int GetBlockDist(Position a, Position b)
+ 
+         public static int GetBlockDist(uint a, uint b)
+         {
++            if (((a >> 15) & 1u) != ((b >> 15) & 1u))
++                return 1000;
++
+             var lbx_a = a >> 24;
+             var lby_a = (a >> 16) & 0xFF;
+ 
+@@ -4035,7 +4038,7 @@ public bool stop_particle_emitter(int emitterID)
+         public void store_position(Position pos)
+         {
+             // position ref?
+-            if ((pos.ObjCellID & 0xFFFF) < 0x100)
++            if ((pos.ObjCellID & 0x7FFF) < 0x100)
+                 LandDefs.AdjustToOutside(pos);
+ 
+             if (PartArray != null && !State.HasFlag(PhysicsState.ParticleEmitter))
+diff --git a/Source/ACE.Server/Physics/SpherePath.cs b/Source/ACE.Server/Physics/SpherePath.cs
+index a15ddc76..85921c50 100644
+--- a/Source/ACE.Server/Physics/SpherePath.cs
++++ b/Source/ACE.Server/Physics/SpherePath.cs
+@@ -133,7 +133,7 @@ public void AddOffsetToCheckPos(Vector3 offset, float radius)
+ 
+         public void AdjustCheckPos(uint cellID)
+         {
+-            if ((cellID & 0xFFFF) < 0x100)
++            if ((cellID & 0x7FFF) < 0x100)
+             {
+                 var offset = LandDefs.GetBlockOffset(cellID, CheckPos.ObjCellID);
+                 CacheGlobalSphere(offset);
+diff --git a/Source/ACE.Server/Physics/Transition.cs b/Source/ACE.Server/Physics/Transition.cs
+index e577cbb0..624c24f5 100644
+--- a/Source/ACE.Server/Physics/Transition.cs
++++ b/Source/ACE.Server/Physics/Transition.cs
+@@ -188,7 +188,7 @@ public TransitionState CheckOtherCells(ObjCell currCell)
+                 return TransitionState.Collided;
+ 
+             var checkPos = new Position(SpherePath.CheckPos);
+-            if ((checkPos.ObjCellID & 0xFFFF) < 0x100)
++            if ((checkPos.ObjCellID & 0x7FFF) < 0x100)
+                 LandDefs.AdjustToOutside(checkPos);
+ 
+             if (checkPos.ObjCellID != 0)
+diff --git a/Source/ACE.Server/Vehicles/VehicleTerrain.cs b/Source/ACE.Server/Vehicles/VehicleTerrain.cs
+index 07dfd49c..1793b515 100644
+--- a/Source/ACE.Server/Vehicles/VehicleTerrain.cs
++++ b/Source/ACE.Server/Vehicles/VehicleTerrain.cs
+@@ -1,6 +1,8 @@
+ using System;
+ using System.Collections.Concurrent;
++using System.IO;
+ using System.Numerics;
++using System.Text.Json;
+ 
+ using ACE.DatLoader;
+ using ACE.DatLoader.FileTypes;
+@@ -28,9 +30,163 @@ public static class VehicleTerrain
+ 
+         static readonly ConcurrentDictionary<uint, LandblockGrid> grids = new ConcurrentDictionary<uint, LandblockGrid>();
+         static float[] landHeightTable;
++        static readonly object dericostLock = new object();
++        static bool dericostAttempted;
++        static byte[] dericostHeights;
++        static byte[] dericostTypes;
++        static float[] dericostHeightTable;
++        const int DericostVerts = 255 * 8 + 1; // 2041
+ 
+         public static int CachedLandblocks => grids.Count;
+ 
++        static string FindDericostDir()
++        {
++            var candidates = new[]
++            {
++                System.Environment.GetEnvironmentVariable("HB_DERICOST_DIR"),
++                System.Environment.GetEnvironmentVariable("HOLTBURGER_DIST") is string hd && !string.IsNullOrEmpty(hd) ? Path.Combine(hd, "dericost") : null,
++                "/workspace/wb/hb-serve/dist/current/dericost",
++            };
++            foreach (var c in candidates)
++            {
++                if (!string.IsNullOrEmpty(c) && File.Exists(Path.Combine(c, "dericost_height.u8")))
++                    return c;
++            }
++            var dir = AppContext.BaseDirectory;
++            for (int i = 0; i < 8 && !string.IsNullOrEmpty(dir); i++)
++            {
++                var p1 = Path.Combine(dir, "external", "holtburger", "dist", "dericost");
++                if (File.Exists(Path.Combine(p1, "dericost_height.u8"))) return p1;
++                var p2 = Path.Combine(dir, "hb-serve", "dist", "current", "dericost");
++                if (File.Exists(Path.Combine(p2, "dericost_height.u8"))) return p2;
++                dir = Directory.GetParent(dir)?.FullName;
++            }
++            return null;
++        }
++
++        static void EnsureDericostLoaded()
++        {
++            if (dericostAttempted) return;
++            lock (dericostLock)
++            {
++                if (dericostAttempted) return;
++                dericostAttempted = true;
++                try
++                {
++                    var dir = FindDericostDir();
++                    if (dir == null) return;
++                    var hPath = Path.Combine(dir, "dericost_height.u8");
++                    var hBytes = File.ReadAllBytes(hPath);
++                    if (hBytes.Length != DericostVerts * DericostVerts) return;
++
++                    byte[] tBytes = null;
++                    var tPath = Path.Combine(dir, "dericost_types.u8");
++                    if (File.Exists(tPath))
++                    {
++                        var tb = File.ReadAllBytes(tPath);
++                        if (tb.Length == DericostVerts * DericostVerts)
++                            tBytes = tb;
++                    }
++
++                    float[] table = null;
++                    var mPath = Path.Combine(dir, "dericost_meta.json");
++                    if (File.Exists(mPath))
++                    {
++                        using var doc = JsonDocument.Parse(File.ReadAllBytes(mPath));
++                        if (doc.RootElement.TryGetProperty("landHeightTable", out var arr) && arr.ValueKind == JsonValueKind.Array)
++                        {
++                            table = new float[256];
++                            int idx = 0;
++                            foreach (var el in arr.EnumerateArray())
++                            {
++                                if (idx < 256 && el.TryGetSingle(out var fv))
++                                    table[idx++] = fv;
++                            }
++                        }
++                    }
++
++                    dericostHeights = hBytes;
++                    dericostTypes = tBytes;
++                    dericostHeightTable = table;
++                }
++                catch (Exception)
++                {
++                    dericostHeights = null;
++                    dericostTypes = null;
++                }
++            }
++        }
++
++        public static void SetDericostGridsForTesting(byte[] heightU8, byte[] typesU8 = null, float[] heightTable = null)
++        {
++            lock (dericostLock)
++            {
++                dericostAttempted = true;
++                dericostHeights = heightU8;
++                dericostTypes = typesU8;
++                dericostHeightTable = heightTable;
++                grids.Clear();
++            }
++        }
++
++        public static void ClearCache()
++        {
++            grids.Clear();
++        }
++
++        public static bool TryGetDericostCellLandblock(int lbX, int lbY, out CellLandblock cellLandblock)
++        {
++            cellLandblock = null;
++            if (lbX < 0 || lbX >= 255 || lbY < 0 || lbY >= 255)
++                return false;
++            EnsureDericostLoaded();
++            var hBytes = dericostHeights;
++            if (hBytes == null || hBytes.Length != DericostVerts * DericostVerts)
++                return false;
++            var tBytes = dericostTypes;
++
++            var cl = new CellLandblock();
++            using (var ms = new MemoryStream(256))
++            using (var bw = new BinaryWriter(ms))
++            {
++                bw.Write(((uint)lbX << 24) | ((uint)lbY << 16) | 0xFFFFu);
++                bw.Write(0u); // HasObjects = false
++                for (var col = 0; col <= 8; col++)
++                {
++                    var cx = lbX * 8 + col;
++                    for (var row = 0; row <= 8; row++)
++                    {
++                        var cy = lbY * 8 + row;
++                        var gIdx = cy * DericostVerts + cx;
++                        ushort tVal = 0;
++                        if (tBytes != null && tBytes.Length == DericostVerts * DericostVerts)
++                        {
++                            var t = tBytes[gIdx];
++                            var code = t & 0x1F;
++                            var road = (t >> 5) & 0x03;
++                            tVal = (ushort)((code << 2) | road);
++                        }
++                        bw.Write(tVal);
++                    }
++                }
++                for (var col = 0; col <= 8; col++)
++                {
++                    var cx = lbX * 8 + col;
++                    for (var row = 0; row <= 8; row++)
++                    {
++                        var cy = lbY * 8 + row;
++                        bw.Write(hBytes[cy * DericostVerts + cx]);
++                    }
++                }
++                bw.Write((byte)0); // 4-byte align
++                ms.Position = 0;
++                using var br = new BinaryReader(ms);
++                cl.Unpack(br);
++            }
++            cellLandblock = cl;
++            return true;
++        }
++
+         public static readonly byte[] TerrainTypeToSurfaceFamily = new byte[32]
+         {
+             8,  // 0 BarrenRock -> Rock
+@@ -67,11 +223,13 @@ public static class VehicleTerrain
+             1,  // 31 DesolateLands -> Dirt
+         };
+ 
+-        static float[] HeightTable()
++        static float[] HeightTable(uint continent = 0)
+         {
+-            if (landHeightTable == null)
++            if (continent == 1 && dericostHeightTable != null)
++                return dericostHeightTable;
++            if (landHeightTable == null && DatManager.PortalDat?.RegionDesc?.LandDefs?.LandHeightTable != null)
+                 landHeightTable = DatManager.PortalDat.RegionDesc.LandDefs.LandHeightTable.ToArray();
+-            return landHeightTable;
++            return landHeightTable ?? dericostHeightTable;
+         }
+ 
+         public static LandblockGrid GetGrid(int lbX, int lbY) => GetGrid(lbX, lbY, 0);
+@@ -84,10 +242,31 @@ public static LandblockGrid GetGrid(int lbX, int lbY, uint continent)
+             LandblockGrid grid = null;
+             try
+             {
++                if (continent == 1)
++                {
++                    if (TryGetDericostCellLandblock(lbX, lbY, out var deriCl))
++                    {
++                        var table = HeightTable(1);
++                        if (table != null)
++                        {
++                            var heights = new float[81];
++                            var terrain = new ushort[81];
++                            for (var i = 0; i < 81; i++)
++                            {
++                                heights[i] = table[deriCl.Height[i]];
++                                terrain[i] = deriCl.Terrain[i];
++                            }
++                            grid = new LandblockGrid { Heights = heights, Terrain = terrain };
++                        }
++                    }
++                    grids[key] = grid;
++                    return grid;
++                }
++
+                 var cl = DatManager.CellDat.ReadFromDat<CellLandblock>(key | 0xFFFF);
+                 if (cl?.Height != null && cl.Height.Count >= 81)
+                 {
+-                    var table = HeightTable();
++                    var table = HeightTable(0);
+                     var heights = new float[81];
+                     for (var i = 0; i < 81; i++)
+                         heights[i] = table[cl.Height[i]];
+-- 
+2.43.0
+

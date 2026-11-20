@@ -2683,6 +2683,12 @@ export class LiveSession {
         }
         return true;
       `);
+      await this.waitUntil(
+        async () => await this.evalInPage(`const st = window.__vehicles?.status?.(); return !!(st?.caps && (st.caps.granted & 0x03) === 0x03);`),
+        15000,
+        150,
+        "driver window.__vehicles caps 0x03"
+      ).catch(() => {});
       return;
     }
 
@@ -2829,6 +2835,25 @@ export class LiveSession {
     if (!inWorld) {
       await this.close();
       throw new Error("LIVE_BOOT_TIMEOUT: failed to reach in-world state with liveScene3d");
+    }
+    if (/[?&]vehicles=on\b/i.test(httpUrl)) {
+      const vt0 = Date.now();
+      let vReady = false;
+      let lastStatus = null;
+      while (Date.now() - vt0 < 15000) {
+        lastStatus = await this.page
+          .evaluate(() => window.__vehicles?.status?.() || null)
+          .catch(() => null);
+        if (lastStatus && lastStatus.caps && (lastStatus.caps.granted & 0x03) === 0x03) {
+          vReady = true;
+          break;
+        }
+        await new Promise((r) => setTimeout(r, 150));
+      }
+      if (!vReady) {
+        await this.close();
+        throw new Error(`LIVE_VEHICLES_TIMEOUT: window.__vehicles.status().caps (0x03) unavailable after 15000ms (granted=${lastStatus?.caps?.granted ?? "none"})`);
+      }
     }
     await this.ensureOutdoorFlatSite();
   }

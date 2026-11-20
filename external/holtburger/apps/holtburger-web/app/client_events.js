@@ -380,7 +380,8 @@ export function dispatchClientEvent(evt, D) {
             ? handle.getCurrentCellId() >>> 0 : 0;
         } catch (_) { /* keep 0 — the cell-watchdog retries */ }
       }
-      const spawnLb = ((spawnCell >>> 16) << 16) >>> 0;
+      const spawnIsDericost = (spawnCell & 0x8000) !== 0 && (spawnCell & 0x7fff) < 0x0100 && (spawnCell & 0xffff) !== 0xffff;
+      const spawnLb = (spawnCell & (spawnIsDericost ? 0xffff8000 : 0xffff0000)) >>> 0;
       if (spawnLb !== 0) {
         ensureTerrainAroundLandblock(spawnLb);
         ensureBuildingAabbsAroundLandblock(spawnLb);

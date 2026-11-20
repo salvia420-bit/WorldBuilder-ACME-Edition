@@ -1564,43 +1564,50 @@ function loadDericostAssetIndex(st) {
         st.assetIndex = { loaded: false, fallbackDirectFetch: true };
         return st.assetIndex;
       }
-      const r = await fetch("../../dist/dericost/index.json");
-      if (!r || !r.ok) {
-        st.assetIndex = { loaded: false, fallbackDirectFetch: true };
-        return st.assetIndex;
+      // Baked dist ships towns/dericost_towns_index.json (41 towns × 3×3 = 369 building files)
+      // and all 65,025 scenery JSONLs, without a top-level index.json. Reading
+      // dericost_towns_index.json avoids 404 probes on wilderness landblocks.
+      const tr = await fetch("../../dist/dericost/towns/dericost_towns_index.json");
+      if (tr && tr.ok) {
+        const tj = await tr.json();
+        if (tj && Array.isArray(tj.towns)) {
+          const buildingsSet = new Set();
+          for (const t of tj.towns) {
+            const tx = Number(t?.lbX);
+            const ty = Number(t?.lbY);
+            if (!Number.isInteger(tx) || !Number.isInteger(ty)) continue;
+            for (let dx = -1; dx <= 1; dx++) {
+              for (let dy = -1; dy <= 1; dy++) {
+                const bx = tx + dx;
+                const by = ty + dy;
+                if (bx >= 0 && bx <= 254 && by >= 0 && by <= 254) {
+                  buildingsSet.add(_normHex4((((bx << 8) | by) >>> 0).toString(16)));
+                }
+              }
+            }
+          }
+          st.assetIndex = {
+            loaded: true,
+            fallbackDirectFetch: false,
+            buildingsSet,
+            allBuildingsSet: buildingsSet,
+            sceneryBits: null,
+            scenerySet: null,
+            spawnsBits: null,
+            spawnsSet: null,
+            counts: {
+              buildings: buildingsSet.size,
+              nonEmptyBuildings: buildingsSet.size,
+              scenery: 65025,
+              spawns: 65025,
+              pois: tj.towns.length,
+              towns: tj.towns.length,
+            },
+          };
+          return st.assetIndex;
+        }
       }
-      const j = await r.json();
-      if (!j || typeof j !== "object" || (!Array.isArray(j.buildings) && !Array.isArray(j.scenery))) {
-        st.assetIndex = { loaded: false, fallbackDirectFetch: true };
-        return st.assetIndex;
-      }
-
-      const bldArr = Array.isArray(j.nonEmptyBuildings) ? j.nonEmptyBuildings : (j.buildings || []);
-      const buildingsSet = new Set(bldArr.map(_normHex4));
-      const allBuildingsSet = new Set((j.buildings || []).map(_normHex4));
-      const sceneryBits = _decodeBase64Bits(j.nonEmptySceneryBits);
-      const scenerySet = sceneryBits ? null : new Set((j.scenery || []).map(_normHex4));
-      const spawnsBits = _decodeBase64Bits(j.nonEmptySpawnsBits);
-      const spawnsSet = spawnsBits ? null : new Set((j.spawns || []).map(_normHex4));
-
-      st.assetIndex = {
-        loaded: true,
-        fallbackDirectFetch: false,
-        buildingsSet,
-        allBuildingsSet,
-        sceneryBits,
-        scenerySet,
-        spawnsBits,
-        spawnsSet,
-        counts: {
-          buildings: allBuildingsSet.size,
-          nonEmptyBuildings: buildingsSet.size,
-          scenery: Array.isArray(j.scenery) ? j.scenery.length : 0,
-          spawns: Array.isArray(j.spawns) ? j.spawns.length : 0,
-          pois: Array.isArray(j.pois) ? j.pois.length : 0,
-          towns: Array.isArray(j.towns) ? j.towns.length : 0,
-        },
-      };
+      st.assetIndex = { loaded: false, fallbackDirectFetch: true };
       return st.assetIndex;
     } catch (_) {
       st.assetIndex = { loaded: false, fallbackDirectFetch: true };
@@ -2597,7 +2604,7 @@ export function tickDericostWorld(scene3d, camera, nowMs = 0) {
   }
 }
 
-export { buildLandblockGroup, disposeLandblockGroup };
+export { buildLandblockGroup, disposeLandblockGroup, loadDericostAssetIndex };
 
 export function __resetDericostWorldForTest() {
   if (_state) {

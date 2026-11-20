@@ -21249,7 +21249,10 @@ thread_local! {
     static CELL_MEMBERSHIP_PENDING:
         std::cell::RefCell<Vec<(u32, holtburger_world::CellMembership)>> =
             const { std::cell::RefCell::new(Vec::new()) };
+}
 
+#[cfg(any(target_arch = "wasm32", test))]
+thread_local! {
     /// Phase 6 collision-leak fix (2026-05-29): landblock-high keys queued by
     /// `enqueueClearLandblockCollision` (called from the JS LRU `evict`) and
     /// drained at the TOP of each `SessionCommand::TickMovement` — BEFORE the
@@ -21261,7 +21264,10 @@ thread_local! {
     static LANDBLOCK_CLEAR_PENDING:
         std::cell::RefCell<Vec<u32>> =
             const { std::cell::RefCell::new(Vec::new()) };
+}
 
+#[cfg(target_arch = "wasm32")]
+thread_local! {
     /// Workstream C (3D camera collision, 2026-05-11): pending
     /// building-interior physics-triangle inserts queued by the
     /// extended `populateBuildingAabbsForLandblock` and drained by
@@ -21325,7 +21331,10 @@ thread_local! {
     static SCENERY_COLLIDER_PENDING:
         std::cell::RefCell<Vec<(u32, holtburger_world::SceneryColliderBatch)>> =
             const { std::cell::RefCell::new(Vec::new()) };
+}
 
+#[cfg(any(target_arch = "wasm32", test))]
+thread_local! {
     /// Phase C (2026-06-28): pending PRECISE physics BSPs for INDOOR env-cell
     /// resident STATIC OBJECTS — the cell-keyed twin of `STATIC_BSP_PENDING`
     /// (which is outdoor/landblock-keyed). Queued per stab by
@@ -21339,6 +21348,22 @@ thread_local! {
         std::cell::RefCell<Vec<(u32, holtburger_world::CellPhysicsBsp)>> =
             const { std::cell::RefCell::new(Vec::new()) };
 
+    /// COL-27 (2026-07-28): landblocks queued for the INDOOR envcell-static
+    /// overlap bake (`SpatialScene::bake_envcell_static_overlap_for_landblock`).
+    /// Enqueued by `drain_pending_cell_static_bsps_into` for every landblock
+    /// whose ENVCELL statics just landed, and drained in the `TickMovement` arm
+    /// AFTER the cell-AABB drain so the bake sees this landblock's full set of
+    /// cell volumes. The bake is idempotent (clear + rebuild from
+    /// `envcell_statics_source`), so a landblock that loads its cells across
+    /// several ticks simply re-bakes and converges. HashSet for idempotent
+    /// enqueue (non-const init — `HashSet::new` isn't `const`).
+    static ENVCELL_OVERLAP_BAKE_PENDING:
+        std::cell::RefCell<std::collections::HashSet<u32>> =
+            std::cell::RefCell::new(std::collections::HashSet::new());
+}
+
+#[cfg(target_arch = "wasm32")]
+thread_local! {
     /// Phase D / WS8 (2026-06-28, Option C live feed): landblock-high words
     /// pending an OUTDOOR per-cell static-overlap bake. The OUTDOOR twin of
     /// `CELL_STATIC_BSP_PENDING` (indoor) — but the per-cell static entries are
@@ -21364,19 +21389,6 @@ thread_local! {
     /// `clear_outdoor_static_overlap_for_landblock`. HashSet for idempotent
     /// enqueue (non-const init — `HashSet::new` isn't `const`).
     static OUTDOOR_OVERLAP_BAKE_PENDING:
-        std::cell::RefCell<std::collections::HashSet<u32>> =
-            std::cell::RefCell::new(std::collections::HashSet::new());
-
-    /// COL-27 (2026-07-28): landblocks queued for the INDOOR envcell-static
-    /// overlap bake (`SpatialScene::bake_envcell_static_overlap_for_landblock`).
-    /// Enqueued by `drain_pending_cell_static_bsps_into` for every landblock
-    /// whose ENVCELL statics just landed, and drained in the `TickMovement` arm
-    /// AFTER the cell-AABB drain so the bake sees this landblock's full set of
-    /// cell volumes. The bake is idempotent (clear + rebuild from
-    /// `envcell_statics_source`), so a landblock that loads its cells across
-    /// several ticks simply re-bakes and converges. HashSet for idempotent
-    /// enqueue (non-const init — `HashSet::new` isn't `const`).
-    static ENVCELL_OVERLAP_BAKE_PENDING:
         std::cell::RefCell<std::collections::HashSet<u32>> =
             std::cell::RefCell::new(std::collections::HashSet::new());
 
@@ -22118,7 +22130,7 @@ fn drain_pending_cell_bsp_into(scene: &mut holtburger_world::SpatialScene) -> us
 /// `scene.cell_static_physics_bsp`. Same `TickMovement` cadence as the cell-env
 /// BSP drain so the faithful driver's `find_obj_collisions` sees a cell's static
 /// walls/doors the same tick the cell loads.
-#[cfg(target_arch = "wasm32")]
+#[cfg(any(target_arch = "wasm32", test))]
 fn drain_pending_cell_static_bsps_into(scene: &mut holtburger_world::SpatialScene) -> usize {
     CELL_STATIC_BSP_PENDING.with(|cell| {
         let mut buf = cell.borrow_mut();
@@ -22127,9 +22139,9 @@ fn drain_pending_cell_static_bsps_into(scene: &mut holtburger_world::SpatialScen
             // COL-27 (2026-07-28): queue this landblock for the envcell-static
             // overlap bake. Enqueued for ENVCELL ids only — outdoor cell ids
             // arriving on this feed belong to the WS7 outdoor bake.
-            if (cell_id & 0xFFFF) >= 0x100 {
+            if (cell_id & 0x7FFF) >= 0x100 && (cell_id & 0xFFFF) != 0xFFFF {
                 ENVCELL_OVERLAP_BAKE_PENDING.with(|c| {
-                    c.borrow_mut().insert(cell_id & 0xFFFF_0000);
+                    c.borrow_mut().insert(continent_lb_key(cell_id));
                 });
             }
             scene.insert_cell_static_physics_bsp(cell_id, bsp);
@@ -22177,13 +22189,25 @@ fn drain_pending_envcell_overlap_bakes_into(
 
 /// Phase D / WS8 (2026-06-28, Option C live feed): queue `landblock_high` for an
 /// OUTDOOR per-cell static-overlap bake. Idempotent (HashSet). Called from the
+#[cfg(any(target_arch = "wasm32", test))]
+#[inline]
+fn continent_lb_key(lb_id: u32) -> u32 {
+    if (lb_id & 0x8000) != 0 && (lb_id & 0x7FFF) < 0x100 {
+        lb_id & 0xFFFF_8000
+    } else {
+        lb_id & 0xFFFF_0000
+    }
+}
+
+/// Phase D / WS8 (2026-06-28, Option C live feed): enqueue `landblock_high` for
+/// outdoor static-overlap bake. Called from the
 /// outdoor static populate path (`populate_statics_aabbs_for_landblock_impl`, at
 /// the same sites that stage `STATIC_BSP_PENDING`) and from the `PopulateTerrain`
 /// arm; drained by `drain_pending_outdoor_overlap_bakes_into`.
 #[cfg(target_arch = "wasm32")]
 fn enqueue_outdoor_overlap_bake(landblock_high: u32) {
     OUTDOOR_OVERLAP_BAKE_PENDING.with(|c| {
-        c.borrow_mut().insert(landblock_high & 0xFFFF_0000);
+        c.borrow_mut().insert(continent_lb_key(landblock_high));
     });
 }
 
@@ -22252,12 +22276,14 @@ fn drain_pending_cell_membership_into(scene: &mut holtburger_world::SpatialScene
 /// latter also drops building origins + building-interior physics triangles.
 /// Keyed to landblock-high; cheap (just a queue push), fail-soft on the JS
 /// side if the export is missing on a stale wasm bundle.
-#[cfg(target_arch = "wasm32")]
-#[wasm_bindgen(js_name = enqueueClearLandblockCollision)]
+#[cfg(any(target_arch = "wasm32", test))]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen(js_name = enqueueClearLandblockCollision))]
 pub fn enqueue_clear_landblock_collision(lb_id: u32) {
-    let lb_high = lb_id & 0xFFFF_0000;
+    let lb_high = continent_lb_key(lb_id);
     bump_landblock_evict_epoch(lb_high);
+    #[cfg(target_arch = "wasm32")]
     purge_pending_env_cell_products(lb_high);
+    #[cfg(target_arch = "wasm32")]
     purge_pending_populate_products(lb_high);
     LANDBLOCK_CLEAR_PENDING.with(|c| c.borrow_mut().push(lb_high));
 }
@@ -22272,11 +22298,12 @@ pub fn enqueue_clear_landblock_collision(lb_id: u32) {
 /// the landblock. Fail-soft like the EnvCell purge.
 #[cfg(target_arch = "wasm32")]
 fn purge_pending_populate_products(lb_high: u32) {
+    let lb_high = continent_lb_key(lb_high);
     let _ = BUILDING_AABB_PENDING
         .with(|c| c.try_borrow_mut().map(|mut v| retain_off_landblock(&mut v, lb_high)));
     let _ = BUILDING_ORIGIN_PENDING.with(|c| {
         c.try_borrow_mut()
-            .map(|mut v| v.retain(|(id, _, _)| id.landblock_id & 0xFFFF_0000 != lb_high))
+            .map(|mut v| v.retain(|(id, _, _)| continent_lb_key(id.landblock_id) != lb_high))
     });
     let _ = BUILDING_BSP_PENDING
         .with(|c| c.try_borrow_mut().map(|mut v| retain_off_landblock(&mut v, lb_high)));
@@ -22293,16 +22320,16 @@ fn purge_pending_populate_products(lb_high: u32) {
     let _ = SCENERY_COLLIDER_PENDING
         .with(|c| c.try_borrow_mut().map(|mut v| retain_off_landblock(&mut v, lb_high)));
     let _ = OUTDOOR_OVERLAP_BAKE_PENDING
-        .with(|c| c.try_borrow_mut().map(|mut s| s.retain(|&k| (k & 0xFFFF_0000) != lb_high)));
+        .with(|c| c.try_borrow_mut().map(|mut s| s.retain(|&k| continent_lb_key(k) != lb_high)));
     let _ = LANDBLOCK_COLLISION_PARTS_PENDING.with(|c| {
-        c.try_borrow_mut().map(|mut v| v.retain(|(lb, _)| (*lb & 0xFFFF_0000) != lb_high))
+        c.try_borrow_mut().map(|mut v| v.retain(|(lb, _)| continent_lb_key(*lb) != lb_high))
     });
 }
 
 #[cfg(any(target_arch = "wasm32", test))]
 thread_local! {
     /// STREAM-TERRAIN-3 (2026-10-18): per-landblock eviction count (keyed
-    /// `0xXXYY0000`), bumped by `enqueueClearLandblockCollision`, and the
+    /// `0xXXYY0000` / `0xXXYY8000` for Dericost), bumped by `enqueueClearLandblockCollision`, and the
     /// number of `fetchEnvCellsInLandblock` builds in flight for it. A build
     /// compares the count with the value it started under and stops queueing
     /// collision once it moves. Follow-up (same day): an entry lives only
@@ -22314,6 +22341,7 @@ thread_local! {
 
 #[cfg(any(target_arch = "wasm32", test))]
 fn landblock_evict_epoch(lb_high: u32) -> u32 {
+    let lb_high = continent_lb_key(lb_high);
     LANDBLOCK_EVICT_EPOCH.with(|m| m.borrow().get(&lb_high).map_or(0, |e| e.0))
 }
 
@@ -22321,6 +22349,7 @@ fn landblock_evict_epoch(lb_high: u32) -> u32 {
 /// nothing to tell, and a later build starts under whatever count it finds.
 #[cfg(any(target_arch = "wasm32", test))]
 fn bump_landblock_evict_epoch(lb_high: u32) {
+    let lb_high = continent_lb_key(lb_high);
     LANDBLOCK_EVICT_EPOCH.with(|m| {
         if let Some(e) = m.borrow_mut().get_mut(&lb_high) {
             e.0 = e.0.wrapping_add(1);
@@ -22340,6 +22369,7 @@ struct LandblockBuildEpoch {
 #[cfg(any(target_arch = "wasm32", test))]
 impl LandblockBuildEpoch {
     fn begin(lb_high: u32) -> Self {
+        let lb_high = continent_lb_key(lb_high);
         let epoch0 = LANDBLOCK_EVICT_EPOCH.with(|m| {
             let mut m = m.borrow_mut();
             let e = m.entry(lb_high).or_insert((0, 0));
@@ -22372,7 +22402,8 @@ impl Drop for LandblockBuildEpoch {
 /// Drop the cell-keyed entries of landblock `lb_high` from one pending pile.
 #[cfg(any(target_arch = "wasm32", test))]
 fn retain_off_landblock<T>(pile: &mut Vec<(u32, T)>, lb_high: u32) {
-    pile.retain(|(cell_id, _)| cell_id & 0xFFFF_0000 != lb_high);
+    let lb_high = continent_lb_key(lb_high);
+    pile.retain(|(cell_id, _)| continent_lb_key(*cell_id) != lb_high);
 }
 
 /// STREAM-TERRAIN-3: at eviction, the EnvCell products still waiting for a
@@ -22383,6 +22414,7 @@ fn retain_off_landblock<T>(pile: &mut Vec<(u32, T)>, lb_high: u32) {
 /// a pile that is somehow borrowed is left alone (the old behaviour).
 #[cfg(target_arch = "wasm32")]
 fn purge_pending_env_cell_products(lb_high: u32) {
+    let lb_high = continent_lb_key(lb_high);
     let _ = CELL_GRAPH_PENDING.with(|c| {
         c.try_borrow_mut().map(|mut g| {
             retain_off_landblock(&mut g.aabbs, lb_high);
@@ -22452,6 +22484,31 @@ mod landblock_evict_epoch_tests {
         ];
         retain_off_landblock(&mut pile, 0x8602_0000);
         assert_eq!(pile, vec![(0xA9B4_0100, 'b'), (0x8603_0100, 'd')]);
+    }
+
+    #[test]
+    fn dericost_evict_preserves_bit15_and_isolates_dereth() {
+        let dereth_build = LandblockBuildEpoch::begin(0x0203_0000);
+        let dericost_build = LandblockBuildEpoch::begin(0x0203_8025);
+
+        let mut pile = vec![
+            (0x0203_0025u32, "dereth-outdoor"),
+            (0x0203_8025u32, "dericost-outdoor"),
+            (0x0203_0100u32, "dereth-indoor"),
+            (0x0203_8001u32, "dericost-cell1"),
+        ];
+        retain_off_landblock(&mut pile, 0x0203_8000);
+        assert_eq!(
+            pile,
+            vec![(0x0203_0025u32, "dereth-outdoor"), (0x0203_0100u32, "dereth-indoor")]
+        );
+
+        LANDBLOCK_CLEAR_PENDING.with(|c| c.borrow_mut().clear());
+        enqueue_clear_landblock_collision(0x0203_8000);
+        assert!(!dericost_build.live(), "Dericost 0x0203_8000 eviction must orphan Dericost build");
+        assert!(dereth_build.live(), "Dericost 0x0203_8000 eviction must NOT orphan Dereth 0x0203_0000");
+        let queued: Vec<u32> = LANDBLOCK_CLEAR_PENDING.with(|c| c.borrow_mut().drain(..).collect());
+        assert_eq!(queued, vec![0x0203_8000]);
     }
 }
 
@@ -23102,16 +23159,16 @@ pub async fn populate_building_aabbs_for_landblock(
 // Drained by the TickMovement arm AFTER every building / static drain
 // (`drain_pending_landblock_collision_parts_into`), so the scene marks a part
 // only once its floors are in — a remote settle waits for both parts.
-#[cfg(target_arch = "wasm32")]
+#[cfg(any(target_arch = "wasm32", test))]
 thread_local! {
     static LANDBLOCK_COLLISION_PARTS_PENDING: std::cell::RefCell<Vec<(u32, u8)>> =
         const { std::cell::RefCell::new(Vec::new()) };
 }
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(any(target_arch = "wasm32", test))]
 fn note_landblock_collision_part(landblock_id: u32, part: u8) {
     LANDBLOCK_COLLISION_PARTS_PENDING
-        .with(|c| c.borrow_mut().push((landblock_id & 0xFFFF_0000, part)));
+        .with(|c| c.borrow_mut().push((continent_lb_key(landblock_id), part)));
 }
 
 /// spawnz: drain the queued landblock collision parts into the scene
@@ -45022,15 +45079,18 @@ impl SessionHandle {
     pub fn terrain_height_at(&self, world_x: f32, world_y: f32) -> Option<f32> {
         const LB_M: f32 = 192.0;
         const VERT_M: f32 = 24.0;
+        const DERICOST_Y_OFFSET: f32 = 68928.0;
         if !world_x.is_finite() || !world_y.is_finite() {
             return None;
         }
+        let is_dericost = world_y >= DERICOST_Y_OFFSET;
+        let y_rel = if is_dericost { world_y - DERICOST_Y_OFFSET } else { world_y };
         let lb_x = (world_x / LB_M).floor() as i32;
-        let lb_y = (world_y / LB_M).floor() as i32;
+        let lb_y = (y_rel / LB_M).floor() as i32;
         if !(0..256).contains(&lb_x) || !(0..256).contains(&lb_y) {
             return None;
         }
-        let landblock_id = ((lb_x as u32) << 24) | ((lb_y as u32) << 16);
+        let landblock_id = ((lb_x as u32) << 24) | ((lb_y as u32) << 16) | if is_dericost { 0x8000 } else { 0 };
         // The `collision_scene` shadow already carries the 9x9 grids
         // (an `Arc` share — the faithful outdoor path reads the same store,
         // filled from the same `PopulateTerrain` arrays under the same key).
@@ -45044,7 +45104,7 @@ impl SessionHandle {
         let scene = self.collision_scene.borrow();
         let grid = scene.terrain_cell_heights(landblock_id)?;
         let local_x = world_x - lb_x as f32 * LB_M;
-        let local_y = world_y - lb_y as f32 * LB_M;
+        let local_y = y_rel - lb_y as f32 * LB_M;
         let cell_x = (local_x / VERT_M).clamp(0.0, 8.0);
         let cell_y = (local_y / VERT_M).clamp(0.0, 8.0);
         let cx0 = cell_x.floor() as usize;
@@ -47414,148 +47474,6 @@ impl SessionHandle {
         crate::vehicle_link::stats_json()
     }
 
-fn build_container_collider_bsp(
-    cell: u32,
-    x: f32,
-    y: f32,
-    z: f32,
-    heading: f32,
-    kind: u32,
-    door_open: bool,
-) -> (u32, holtburger_world::CellPhysicsBsp) {
-    let lb_x = ((cell >> 24) & 0xFF) as f32;
-    let lb_y = ((cell >> 16) & 0xFF) as f32;
-    let landblock_high = cell & 0xFFFF_0000;
-    let origin = holtburger_common::Vector3::new(lb_x * 192.0 + x, lb_y * 192.0 + y, z);
-    let orientation = holtburger_common::Quaternion::from_wire_heading(heading.to_degrees());
-
-    // Internal & external half-dimensions
-    // 10 = IsoContainer20, 11 = IsoContainer40, 12 = IsoContainer40HC
-    let is_40ft = kind == 11 || kind == 12;
-    let is_hc = kind == 12;
-
-    let hw: f32 = 1.176; // half internal width (2.352m / 2)
-    let hl: f32 = if is_40ft { 6.016 } else { 2.949 }; // half internal length (12.032m / 2 or 5.898m / 2)
-    let ext_hw: f32 = 1.219; // half external width (2.438m / 2)
-    let ext_hl: f32 = if is_40ft { 6.096 } else { 3.029 }; // half external length (12.192m / 2 or 6.058m / 2)
-
-    let floor_z: f32 = 0.162;
-    let roof_z: f32 = if is_hc { 2.896 } else { 2.591 };
-
-    let mut polys = std::collections::HashMap::new();
-
-    let make_poly = |verts: Vec<holtburger_common::Vector3>| -> holtburger_dat::physics::ResolvedPolygon {
-        let plane = holtburger_dat::physics::ResolvedPolygon::make_plane(&verts).expect("non-degenerate polygon");
-        holtburger_dat::physics::ResolvedPolygon {
-            num_points: verts.len(),
-            vertices: verts,
-            plane,
-        }
-    };
-
-    // 1. Interior floor (walkable, Normal.Z = 1.0)
-    polys.insert(
-        1u16,
-        make_poly(vec![
-            holtburger_common::Vector3::new(-hw, -hl, floor_z),
-            holtburger_common::Vector3::new(hw, -hl, floor_z),
-            holtburger_common::Vector3::new(hw, hl, floor_z),
-            holtburger_common::Vector3::new(-hw, hl, floor_z),
-        ]),
-    );
-
-    // 2. Exterior roof (walkable, Normal.Z = 1.0)
-    polys.insert(
-        2u16,
-        make_poly(vec![
-            holtburger_common::Vector3::new(-ext_hw, -ext_hl, roof_z),
-            holtburger_common::Vector3::new(ext_hw, -ext_hl, roof_z),
-            holtburger_common::Vector3::new(ext_hw, ext_hl, roof_z),
-            holtburger_common::Vector3::new(-ext_hw, ext_hl, roof_z),
-        ]),
-    );
-
-    // 3. Vertical side wall (-X, blocking, Normal = (+1, 0, 0))
-    polys.insert(
-        3u16,
-        make_poly(vec![
-            holtburger_common::Vector3::new(-hw, -hl, floor_z),
-            holtburger_common::Vector3::new(-hw, hl, floor_z),
-            holtburger_common::Vector3::new(-hw, hl, roof_z),
-            holtburger_common::Vector3::new(-hw, -hl, roof_z),
-        ]),
-    );
-
-    // 4. Vertical side wall (+X, blocking, Normal = (-1, 0, 0))
-    polys.insert(
-        4u16,
-        make_poly(vec![
-            holtburger_common::Vector3::new(hw, hl, floor_z),
-            holtburger_common::Vector3::new(hw, -hl, floor_z),
-            holtburger_common::Vector3::new(hw, -hl, roof_z),
-            holtburger_common::Vector3::new(hw, hl, roof_z),
-        ]),
-    );
-
-    // 5. Front end wall (+Y, blocking, Normal = (0, -1, 0))
-    polys.insert(
-        5u16,
-        make_poly(vec![
-            holtburger_common::Vector3::new(-hw, hl, floor_z),
-            holtburger_common::Vector3::new(hw, hl, floor_z),
-            holtburger_common::Vector3::new(hw, hl, roof_z),
-            holtburger_common::Vector3::new(-hw, hl, roof_z),
-        ]),
-    );
-
-    if door_open {
-        // 6. Fold-down loading ramp at rear (-Y):
-        // Spans from sill at y = -hl, z = floor_z (0.162m) down to ground at y = -hl - 0.85m, z = 0.0m.
-        let ramp_len: f32 = 0.85;
-        let y_sill = -hl;
-        let y_ground = -hl - ramp_len;
-        polys.insert(
-            6u16,
-            make_poly(vec![
-                holtburger_common::Vector3::new(-hw, y_ground, 0.0),
-                holtburger_common::Vector3::new(hw, y_ground, 0.0),
-                holtburger_common::Vector3::new(hw, y_sill, floor_z),
-                holtburger_common::Vector3::new(-hw, y_sill, floor_z),
-            ]),
-        );
-    } else {
-        // 6. Closed rear doors (blocking vertical wall, Normal = (0, 1, 0))
-        polys.insert(
-            6u16,
-            make_poly(vec![
-                holtburger_common::Vector3::new(hw, -hl, floor_z),
-                holtburger_common::Vector3::new(-hw, -hl, floor_z),
-                holtburger_common::Vector3::new(-hw, -hl, roof_z),
-                holtburger_common::Vector3::new(hw, -hl, roof_z),
-            ]),
-        );
-    }
-
-    let mut ids: Vec<u16> = polys.keys().copied().collect();
-    ids.sort_unstable();
-    let tree = holtburger_dat::physics::BspNode::Leaf(holtburger_dat::physics::BspLeaf {
-        index: 0,
-        solid: 0,
-        sphere: None,
-        poly_ids: ids,
-    });
-
-    let bsp = holtburger_world::CellPhysicsBsp {
-        tree,
-        polys,
-        origin,
-        orientation,
-        scale: 1.0,
-    };
-
-    (landblock_high, bsp)
-}
-
     /// HBV1 Vehicle_ContainerAction (0x090E):
     /// `container`: target container ObjectId
     /// `action`: 1=OpenDoors, 2=CloseDoors, 3=Load, 4=Pack, 5=Unpack, 6=UnpackAll
@@ -47590,7 +47508,7 @@ fn build_container_collider_bsp(
     /// `action`: 1=Hitch, 2=Unhitch, 3=ToggleTwistlock, 4=MountContainer, 5=UnmountContainer,
     ///           6..14=Sidelifter / PalletJack rack actions
     /// `slot`: 0=auto/center, 1=front, 2=rear
-    /// `flags`: optional bitmask (`0x01` = left side `-1`, `0x00` = right/curbside `+1`)
+    /// `flags`: optional bitmask (`0x00` = right/curbside `+1`, `0x01` = left side `-1`, `0x02` = auto-detect side)
     #[wasm_bindgen(js_name = vehicleTrailerAction)]
     pub fn vehicle_trailer_action(
         &self,
@@ -47599,17 +47517,17 @@ fn build_container_collider_bsp(
         container_guid: u32,
         action: u8,
         slot: u8,
-        flags: Option<u8>,
+        flags: Option<u16>,
     ) -> Result<(), JsValue> {
         self.vehicle_send(holtburger_protocol::messages::vehicle::VehicleC2S::TrailerAction(
-            holtburger_protocol::messages::vehicle::VehicleTrailerAction {
+            build_trailer_action(
                 trailer_guid,
                 vehicle_guid,
                 container_guid,
                 action,
                 slot,
-                flags: flags.unwrap_or(0) as u16,
-            },
+                flags,
+            ),
         ))
     }
 
@@ -47661,7 +47579,7 @@ fn build_container_collider_bsp(
         kind: u32,
         door_open: bool,
     ) {
-        let (lb_high, bsp) = Self::build_container_collider_bsp(cell, x, y, z, heading, kind, door_open);
+        let (lb_high, bsp) = build_container_collider_bsp(cell, x, y, z, heading, kind, door_open);
         self.collision_scene
             .borrow_mut()
             .upsert_dynamic_building_bsp(guid, lb_high, bsp.clone());
@@ -64499,5 +64417,388 @@ mod tests_object_create_local_player_rebase {
             None,
             "NULL guid must not take the local-player rebase path"
         );
+    }
+}
+
+/// Build an ISO shipping container physics BSP and its continent-preserving landblock key.
+///
+/// Preserves Dericost continent bit 15 (`0x8000`) in `landblock_high = cell & 0xFFFF_8000`
+/// and offsets `origin.y` by `+68928.0` metres when `(cell & 0x8000) != 0`.
+/// When `cell == 0` (used by `containers.spawnLocal` with global `worldPos`), `lb_x=0`, `lb_y=0`,
+/// and `is_dericost=false`, so `(x, y, z)` passes through verbatim in global AC world metres.
+#[cfg(any(target_arch = "wasm32", test))]
+fn build_container_collider_bsp(
+    cell: u32,
+    x: f32,
+    y: f32,
+    z: f32,
+    heading: f32,
+    kind: u32,
+    door_open: bool,
+) -> (u32, holtburger_world::CellPhysicsBsp) {
+    const DERICOST_Y_OFFSET: f32 = 68928.0;
+    let lb_x = ((cell >> 24) & 0xFF) as f32;
+    let lb_y = ((cell >> 16) & 0xFF) as f32;
+    let is_dericost = (cell & 0x8000) != 0 && (cell & 0x7FFF) < 0x0100;
+    let dericost_y = if is_dericost { DERICOST_Y_OFFSET } else { 0.0 };
+    let landblock_high = continent_lb_key(cell);
+    let origin = holtburger_common::Vector3::new(
+        lb_x * 192.0 + x,
+        dericost_y + lb_y * 192.0 + y,
+        z,
+    );
+    let orientation = holtburger_common::Quaternion::from_wire_heading(heading.to_degrees());
+
+    // Internal & external half-dimensions
+    // 10 = IsoContainer20, 11 = IsoContainer40, 12 = IsoContainer40HC
+    let is_40ft = kind == 11 || kind == 12;
+    let is_hc = kind == 12;
+
+    let hw: f32 = 1.176; // half internal width (2.352m / 2)
+    let hl: f32 = if is_40ft { 6.016 } else { 2.949 }; // half internal length (12.032m / 2 or 5.898m / 2)
+    let ext_hw: f32 = 1.219; // half external width (2.438m / 2)
+    let ext_hl: f32 = if is_40ft { 6.096 } else { 3.029 }; // half external length (12.192m / 2 or 6.058m / 2)
+
+    let floor_z: f32 = 0.162;
+    let roof_z: f32 = if is_hc { 2.896 } else { 2.591 };
+
+    let mut polys = std::collections::HashMap::new();
+
+    let make_poly = |verts: Vec<holtburger_common::Vector3>| -> holtburger_dat::physics::ResolvedPolygon {
+        let plane = holtburger_dat::physics::ResolvedPolygon::make_plane(&verts).expect("non-degenerate polygon");
+        holtburger_dat::physics::ResolvedPolygon {
+            num_points: verts.len(),
+            vertices: verts,
+            plane,
+        }
+    };
+
+    // 1. Interior floor (walkable, Normal.Z = 1.0)
+    polys.insert(
+        1u16,
+        make_poly(vec![
+            holtburger_common::Vector3::new(-hw, -hl, floor_z),
+            holtburger_common::Vector3::new(hw, -hl, floor_z),
+            holtburger_common::Vector3::new(hw, hl, floor_z),
+            holtburger_common::Vector3::new(-hw, hl, floor_z),
+        ]),
+    );
+
+    // 2. Exterior roof (walkable, Normal.Z = 1.0)
+    polys.insert(
+        2u16,
+        make_poly(vec![
+            holtburger_common::Vector3::new(-ext_hw, -ext_hl, roof_z),
+            holtburger_common::Vector3::new(ext_hw, -ext_hl, roof_z),
+            holtburger_common::Vector3::new(ext_hw, ext_hl, roof_z),
+            holtburger_common::Vector3::new(-ext_hw, ext_hl, roof_z),
+        ]),
+    );
+
+    // 3. Vertical side wall (-X, blocking, Normal = (+1, 0, 0))
+    polys.insert(
+        3u16,
+        make_poly(vec![
+            holtburger_common::Vector3::new(-hw, -hl, floor_z),
+            holtburger_common::Vector3::new(-hw, hl, floor_z),
+            holtburger_common::Vector3::new(-hw, hl, roof_z),
+            holtburger_common::Vector3::new(-hw, -hl, roof_z),
+        ]),
+    );
+
+    // 4. Vertical side wall (+X, blocking, Normal = (-1, 0, 0))
+    polys.insert(
+        4u16,
+        make_poly(vec![
+            holtburger_common::Vector3::new(hw, hl, floor_z),
+            holtburger_common::Vector3::new(hw, -hl, floor_z),
+            holtburger_common::Vector3::new(hw, -hl, roof_z),
+            holtburger_common::Vector3::new(hw, hl, roof_z),
+        ]),
+    );
+
+    // 5. Front end wall (+Y, blocking, Normal = (0, -1, 0))
+    polys.insert(
+        5u16,
+        make_poly(vec![
+            holtburger_common::Vector3::new(-hw, hl, floor_z),
+            holtburger_common::Vector3::new(hw, hl, floor_z),
+            holtburger_common::Vector3::new(hw, hl, roof_z),
+            holtburger_common::Vector3::new(-hw, hl, roof_z),
+        ]),
+    );
+
+    if door_open {
+        // 6. Fold-down loading ramp at rear (-Y):
+        // Spans from sill at y = -hl, z = floor_z (0.162m) down to ground at y = -hl - 0.85m, z = 0.0m.
+        let ramp_len: f32 = 0.85;
+        let y_sill = -hl;
+        let y_ground = -hl - ramp_len;
+        polys.insert(
+            6u16,
+            make_poly(vec![
+                holtburger_common::Vector3::new(-hw, y_ground, 0.0),
+                holtburger_common::Vector3::new(hw, y_ground, 0.0),
+                holtburger_common::Vector3::new(hw, y_sill, floor_z),
+                holtburger_common::Vector3::new(-hw, y_sill, floor_z),
+            ]),
+        );
+    } else {
+        // 6. Closed rear doors (blocking vertical wall, Normal = (0, 1, 0))
+        polys.insert(
+            6u16,
+            make_poly(vec![
+                holtburger_common::Vector3::new(hw, -hl, floor_z),
+                holtburger_common::Vector3::new(-hw, -hl, floor_z),
+                holtburger_common::Vector3::new(-hw, -hl, roof_z),
+                holtburger_common::Vector3::new(hw, -hl, roof_z),
+            ]),
+        );
+    }
+
+    let mut ids: Vec<u16> = polys.keys().copied().collect();
+    ids.sort_unstable();
+    let tree = holtburger_dat::physics::BspNode::Leaf(holtburger_dat::physics::BspLeaf {
+        index: 0,
+        solid: 0,
+        sphere: None,
+        poly_ids: ids,
+    });
+
+    let bsp = holtburger_world::CellPhysicsBsp {
+        tree,
+        polys,
+        origin,
+        orientation,
+        scale: 1.0,
+    };
+
+    (landblock_high, bsp)
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+fn build_trailer_action(
+    trailer_guid: u32,
+    vehicle_guid: u32,
+    container_guid: u32,
+    action: u8,
+    slot: u8,
+    flags: Option<u16>,
+) -> holtburger_protocol::messages::vehicle::VehicleTrailerAction {
+    holtburger_protocol::messages::vehicle::VehicleTrailerAction {
+        trailer_guid,
+        vehicle_guid,
+        container_guid,
+        action,
+        slot,
+        flags: flags.unwrap_or(0),
+    }
+}
+
+#[cfg(test)]
+mod tests_dericost_container_and_trailer {
+    use super::{build_container_collider_bsp, build_trailer_action};
+    use holtburger_common::Vector3;
+    use holtburger_protocol::messages::vehicle::{VehicleC2S, c2s};
+    use holtburger_world::spatial::{FLOOR_Z, SpatialScene};
+
+    #[test]
+    fn build_container_collider_bsp_dereth_vs_dericost() {
+        let (dereth_lb, dereth_bsp) =
+            build_container_collider_bsp(0x0203_0025, 50.0, 60.0, 10.0, 0.0, 10, true);
+        assert_eq!(dereth_lb, 0x0203_0000);
+        assert!((dereth_bsp.origin.x - (2.0 * 192.0 + 50.0)).abs() < 1e-4);
+        assert!((dereth_bsp.origin.y - (3.0 * 192.0 + 60.0)).abs() < 1e-4);
+        assert!((dereth_bsp.origin.z - 10.0).abs() < 1e-4);
+
+        let (dericost_lb, dericost_bsp) =
+            build_container_collider_bsp(0x0203_8025, 50.0, 60.0, 10.0, 0.0, 10, true);
+        assert_eq!(dericost_lb, 0x0203_8000);
+        assert!((dericost_bsp.origin.x - (2.0 * 192.0 + 50.0)).abs() < 1e-4);
+        assert!((dericost_bsp.origin.y - (68928.0 + 3.0 * 192.0 + 60.0)).abs() < 1e-4);
+        assert!((dericost_bsp.origin.z - 10.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn build_container_collider_bsp_spawn_local_global_coords() {
+        let world_x = 434.0;
+        let world_y = 68928.0 + 3.0 * 192.0 + 60.0;
+        let world_z = 10.0;
+        let (lb_high, bsp) =
+            build_container_collider_bsp(0, world_x, world_y, world_z, 0.0, 11, false);
+        assert_eq!(lb_high, 0);
+        assert!((bsp.origin.x - world_x).abs() < 1e-4);
+        assert!((bsp.origin.y - world_y).abs() < 1e-4);
+        assert!((bsp.origin.z - world_z).abs() < 1e-4);
+
+        // Even with cell == 0 (spawnLocal), SpatialScene must detect Dericost global Y and
+        // register into bit-15 cell 0x0203_8013 rather than clamping to row 2039.
+        let mut scene = SpatialScene::new();
+        scene.upsert_dynamic_building_bsp(0x7000_0001, lb_high, bsp);
+        assert!(
+            !scene.cell_static_physics_bsp(0x0203_8013).is_empty(),
+            "spawnLocal on Dericost must register into bit-15 cell 0x0203_8013"
+        );
+        assert!(scene.cell_static_physics_bsp(0x02FE_0008).is_empty());
+        assert!(
+            scene
+                .probe_dynamic_building_surface(world_x, world_y, world_z + 1.0)
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn dericost_container_collider_probe_and_pushout_roundtrip() {
+        let mut scene = SpatialScene::new();
+        let (lb_high, bsp) =
+            build_container_collider_bsp(0x0203_8025, 50.0, 60.0, 10.0, 0.0, 10, true);
+        assert_eq!(lb_high, 0x0203_8000);
+        let origin = bsp.origin;
+
+        scene.upsert_dynamic_building_bsp(0x7000_0002, lb_high, bsp);
+        assert_eq!(scene.dynamic_building_bsp_count(), 1);
+        assert!(!scene.cell_static_physics_bsp(0x0203_8013).is_empty());
+
+        let (floor_z, floor_n) = scene
+            .probe_dynamic_building_surface(origin.x, origin.y, origin.z + 1.0)
+            .expect("probe hits Dericost container floor");
+        assert!((floor_z - (origin.z + 0.162)).abs() < 1e-3);
+        assert!(floor_n.z >= FLOOR_Z);
+
+        let (ramp_z, ramp_n) = scene
+            .probe_dynamic_building_surface(origin.x, origin.y - 2.949 - 0.425, origin.z + 1.0)
+            .expect("probe hits Dericost container ramp");
+        assert!((ramp_z - (origin.z + 0.081)).abs() < 1e-2);
+        assert!(ramp_n.z >= FLOOR_Z);
+
+        let (roof_z, _) = scene
+            .probe_dynamic_building_surface(origin.x, origin.y, origin.z + 3.5)
+            .expect("probe hits Dericost container roof");
+        assert!((roof_z - (origin.z + 2.591)).abs() < 1e-3);
+
+        let push = scene
+            .resolve_dynamic_building_wall_pushout(
+                Vector3::new(origin.x - 1.15, origin.y, origin.z + 1.0),
+                0.35,
+            )
+            .expect("pushout resolves -X wall penetration on Dericost");
+        assert!(push.x > 0.05);
+    }
+
+    #[test]
+    fn trailer_action_flags_u16_parity_and_protocol_roundtrip() {
+        let a_none = build_trailer_action(10, 20, 30, 8, 1, None);
+        assert_eq!(a_none.flags, 0);
+
+        let a_auto = build_trailer_action(10, 20, 30, 8, 1, Some(0x0002));
+        assert_eq!(a_auto.flags, 0x0002);
+
+        let a_wide = build_trailer_action(0x1111_2222, 0x3333_4444, 0x5555_6666, 9, 2, Some(0x0102));
+        assert_eq!(a_wide.flags, 0x0102, "high byte must not be truncated to u8");
+
+        let msg = VehicleC2S::TrailerAction(a_wide);
+        let mut wire = Vec::new();
+        msg.pack_payload(&mut wire);
+
+        let mut offset = 0usize;
+        let decoded = VehicleC2S::unpack_payload(c2s::TRAILER_ACTION, &wire, &mut offset)
+            .expect("roundtrip decode of TrailerAction");
+        assert_eq!(offset, wire.len());
+        assert_eq!(decoded, msg);
+    }
+
+    #[test]
+    fn enqueue_clear_landblock_collision_dericost_does_not_clear_dereth() {
+        let mut scene = SpatialScene::new();
+        let (dereth_lb, dereth_bsp) =
+            build_container_collider_bsp(0x0203_0025, 50.0, 60.0, 12.5, 0.0, 10, true);
+        let dereth_origin = dereth_bsp.origin;
+        scene.upsert_dynamic_building_bsp(0x7005, dereth_lb, dereth_bsp);
+
+        let (dericost_lb, dericost_bsp) =
+            build_container_collider_bsp(0x0203_8025, 191.5, 60.0, 278.0, 0.0, 10, true);
+        let dericost_origin = dericost_bsp.origin;
+        scene.upsert_dynamic_building_bsp(0x7001, dericost_lb, dericost_bsp);
+
+        super::LANDBLOCK_CLEAR_PENDING.with(|c| c.borrow_mut().clear());
+        super::enqueue_clear_landblock_collision(0x0203_8000);
+        let lbs: Vec<u32> = super::LANDBLOCK_CLEAR_PENDING.with(|c| c.borrow_mut().drain(..).collect());
+        assert_eq!(lbs, vec![0x0203_8000]);
+        scene.clear_landblocks_collision(&lbs);
+
+        assert!(
+            scene
+                .probe_dynamic_building_surface(dericost_origin.x, dericost_origin.y, dericost_origin.z + 1.0)
+                .is_none(),
+            "Dericost 0x0203_8025 container collider must be cleared by 0x0203_8000 eviction"
+        );
+        assert!(
+            scene
+                .probe_dynamic_building_surface(dereth_origin.x, dereth_origin.y, dereth_origin.z + 1.0)
+                .is_some(),
+            "Dereth 0x0203_0025 container collider must NOT be cleared by Dericost 0x0203_8000 eviction"
+        );
+    }
+
+    #[test]
+    fn collision_part_and_envcell_bake_helpers_preserve_dericost_bit15() {
+        super::LANDBLOCK_COLLISION_PARTS_PENDING.with(|c| c.borrow_mut().clear());
+        super::note_landblock_collision_part(0x0203_8000, 0x01);
+        super::note_landblock_collision_part(0x0203_8025, 0x02);
+        super::note_landblock_collision_part(0x0203_0000, 0x01);
+        super::note_landblock_collision_part(0x0203_8100, 0x02);
+        super::note_landblock_collision_part(0x0203_FFFF, 0x01);
+
+        let queued_parts: Vec<(u32, u8)> =
+            super::LANDBLOCK_COLLISION_PARTS_PENDING.with(|c| c.borrow_mut().drain(..).collect());
+        assert_eq!(
+            queued_parts,
+            vec![
+                (0x0203_8000, 0x01),
+                (0x0203_8000, 0x02),
+                (0x0203_0000, 0x01),
+                (0x0203_0000, 0x02),
+                (0x0203_0000, 0x01),
+            ]
+        );
+
+        let mut scene = SpatialScene::new();
+        super::CELL_STATIC_BSP_PENDING.with(|c| c.borrow_mut().clear());
+        super::ENVCELL_OVERLAP_BAKE_PENDING.with(|c| c.borrow_mut().clear());
+
+        let (_, dummy_bsp) = build_container_collider_bsp(0x0203_8025, 50.0, 60.0, 10.0, 0.0, 10, false);
+        let (_, indoor_bsp) = build_container_collider_bsp(0x0203_0100, 50.0, 60.0, 10.0, 0.0, 10, false);
+        let (_, sentinel_bsp) = build_container_collider_bsp(0x0203_FFFF, 50.0, 60.0, 10.0, 0.0, 10, false);
+        super::CELL_STATIC_BSP_PENDING.with(|c| {
+            let mut v = c.borrow_mut();
+            v.push((0x0203_8025, dummy_bsp));
+            v.push((0x0203_0100, indoor_bsp));
+            v.push((0x0203_FFFF, sentinel_bsp));
+        });
+
+        let drained = super::drain_pending_cell_static_bsps_into(&mut scene);
+        assert_eq!(drained, 3);
+        let pending_env: Vec<u32> =
+            super::ENVCELL_OVERLAP_BAKE_PENDING.with(|c| c.borrow_mut().drain().collect());
+        assert_eq!(
+            pending_env,
+            vec![0x0203_0000],
+            "Only true indoor EnvCell (0x0203_0100) must queue into ENVCELL_OVERLAP_BAKE_PENDING, never Dericost outdoor 0x0203_8025 or 0xFFFF"
+        );
+    }
+
+    #[test]
+    fn build_container_collider_bsp_ignores_bit15_on_indoor_envcell_and_0xffff() {
+        let (lb_env, bsp_env) =
+            build_container_collider_bsp(0x0203_8100, 50.0, 60.0, 10.0, 0.0, 10, true);
+        assert_eq!(lb_env, 0x0203_0000);
+        assert!((bsp_env.origin.x - (2.0 * 192.0 + 50.0)).abs() < 1e-4);
+        assert!((bsp_env.origin.y - (3.0 * 192.0 + 60.0)).abs() < 1e-4);
+
+        let (lb_ffff, bsp_ffff) =
+            build_container_collider_bsp(0x0203_FFFF, 50.0, 60.0, 10.0, 0.0, 10, true);
+        assert_eq!(lb_ffff, 0x0203_0000);
+        assert!((bsp_ffff.origin.x - (2.0 * 192.0 + 50.0)).abs() < 1e-4);
+        assert!((bsp_ffff.origin.y - (3.0 * 192.0 + 60.0)).abs() < 1e-4);
     }
 }

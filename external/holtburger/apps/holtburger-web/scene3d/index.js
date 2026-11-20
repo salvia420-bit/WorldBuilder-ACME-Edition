@@ -207,6 +207,7 @@ import { CameraSwitcher, createOrthoCamera } from "./camera.js";
 import { retailFovEnabled, clampGameFovDeg, applyRetailFov, RETAIL_GAME_FOV_DEFAULT_DEG } from "./camera_math.js";
 import { setupSceneLighting, attachSetupModelLights } from "./lighting.js";
 import { withWarmTarget, installLinkProbe, SHADER_PREWARM_ON } from "./shader_prewarm.js";
+import { guardedCompileAsync } from "./bake_prewarm.js";
 import { installDrawSortProgram } from "./draw_sort_program.js";
 import { installAsyncLinkGuard } from "./async_link_guard.js";
 import { retainNewPrograms } from "./program_retention.js";
@@ -7186,13 +7187,13 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
                 // variant the world renders with (shader_prewarm.js). Use
                 // `compileAsync` so `KHR_parallel_shader_compile` links
                 // off-thread without blocking on `getProgramParameter(LINK_STATUS)`.
-                if (typeof renderer.compileAsync === "function") {
-                  const p = withWarmTarget(renderer, () => renderer.compileAsync(scene, camera));
+                if (typeof renderer.compileAsync === "function" && typeof renderer.compile === "function") {
+                  const p = guardedCompileAsync(renderer, scene, camera);
                   Promise.resolve(p)
                     .then(() => {
                       // eslint-disable-next-line no-console
                       console.log(
-                        `[sky-k.3] renderer.compileAsync ${label} ` +
+                        `[sky-k.3] guardedCompileAsync ${label} ` +
                           `${(performance.now() - t).toFixed(1)}ms ` +
                           `(programs=${renderer.info.programs?.length ?? "?"}, ` +
                           `textures=${renderer.info.memory.textures}, ` +
@@ -7201,7 +7202,7 @@ export async function init3D(canvas, sessionHandle, wasmExports, preInitHandle) 
                     })
                     .catch((eCompile) => {
                       // eslint-disable-next-line no-console
-                      console.warn(`[sky-k.3] renderer.compileAsync ${label} failed:`, eCompile);
+                      console.warn(`[sky-k.3] guardedCompileAsync ${label} failed:`, eCompile);
                     });
                 } else {
                   withWarmTarget(renderer, () => renderer.compile(scene, camera));

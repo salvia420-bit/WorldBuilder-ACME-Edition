@@ -53,6 +53,7 @@ function clamp(v, lo, hi) {
 
 /** Signed shortest angular difference wrapped to [-pi, pi]. */
 export function wrapPi(a) {
+  if (!Number.isFinite(a)) return 0.0;
   let d = a - TWO_PI * Math.floor((a + Math.PI) / TWO_PI);
   if (d > Math.PI) d -= TWO_PI;
   if (d < -Math.PI) d += TWO_PI;
@@ -133,10 +134,12 @@ export function computeFifthWheelPose(tractorState, hitchOffsetY = -2.01, fifthW
   const tx = Number.isFinite(ts.x) ? ts.x : 0.0;
   const ty = Number.isFinite(ts.y) ? ts.y : 0.0;
   const tz = Number.isFinite(ts.z) ? ts.z : 0.0;
+  const safeHitchY = Number.isFinite(hitchOffsetY) ? hitchOffsetY : -2.01;
+  const safeFwZ = Number.isFinite(fifthWheelOffsetZ) ? fifthWheelOffsetZ : 0.96;
   return {
-    x: tx + Math.sin(h) * hitchOffsetY,
-    y: ty + Math.cos(h) * hitchOffsetY,
-    z: tz + hitchOffsetY * Math.sin(p) + fifthWheelOffsetZ * Math.cos(p),
+    x: tx + Math.sin(h) * safeHitchY,
+    y: ty + Math.cos(h) * safeHitchY,
+    z: tz + safeHitchY * Math.sin(p) + safeFwZ * Math.cos(p),
   };
 }
 
@@ -175,11 +178,13 @@ export function stepCoupledTrailer(
   const sinHt = Math.sin(ht);
   const cosHt = Math.cos(ht);
 
+  const safeHitchY = Number.isFinite(hitchOffsetY) ? hitchOffsetY : -2.01;
+
   // World fifth-wheel hitch point & velocity (including lever arm from tractor yaw rate)
-  const hx = tx + sinHt * hitchOffsetY;
-  const hy = ty + cosHt * hitchOffsetY;
-  const vxH = vt * sinHt + omegaT * hitchOffsetY * cosHt;
-  const vyH = vt * cosHt - omegaT * hitchOffsetY * sinHt;
+  const hx = tx + sinHt * safeHitchY;
+  const hy = ty + cosHt * safeHitchY;
+  const vxH = vt * sinHt + omegaT * safeHitchY * cosHt;
+  const vyH = vt * cosHt - omegaT * safeHitchY * sinHt;
 
   const safeDt = (Number.isFinite(dt) && dt >= 0.0) ? dt : 0.0;
 
@@ -199,7 +204,7 @@ export function stepCoupledTrailer(
   const bySample = hy - cosTr * spec.wheelbase;
 
   // Vertical pitch & bank from hitch Z vs bogie terrain samples
-  const hitchWorldZ = tz + hitchOffsetY * Math.sin(trPitch) + fwZ * Math.cos(trPitch);
+  const hitchWorldZ = tz + safeHitchY * Math.sin(trPitch) + fwZ * Math.cos(trPitch);
   const kpGroundZ = hitchWorldZ - spec.kingpinZ;
   const rawBogieZ = sampleTerrainZ(terrainOracle, bxSample, bySample, kpGroundZ);
   const bogieZSample = Number.isFinite(rawBogieZ) ? rawBogieZ : kpGroundZ;

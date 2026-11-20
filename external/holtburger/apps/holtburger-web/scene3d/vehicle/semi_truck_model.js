@@ -1002,6 +1002,7 @@ export function buildSemiTruck(three, profile = {}, options = {}) {
   }
 
   const lightOffset = new t.Vector3(0.0, 3.60, 1.24);
+  const tmpLightVec = new t.Vector3();
   let wheelRollAngle = 0;
   let coupledState = false;
   let headlightsState = false;
@@ -1236,7 +1237,10 @@ export function buildSemiTruck(three, profile = {}, options = {}) {
         }
         matAdditive.opacity = headlightsState ? 0.05 : 0.0;
         pooledLight.intensity = headlightsState ? 3.2 : 0.0;
-        pooledLight.position.copy(root.position).add(lightOffset);
+      }
+      if (headlightsState || headlightsProvided) {
+        tmpLightVec.copy(lightOffset).applyQuaternion(root.quaternion);
+        pooledLight.position.copy(root.position).add(tmpLightVec);
       }
     },
     dispose() {
@@ -1258,6 +1262,8 @@ export function buildSemiTruck(three, profile = {}, options = {}) {
           }
         }
       });
+      pooledLight.released = true;
+      pooledLight.intensity = 0.0;
       if (Array.isArray(liveScene3d.activeLights)) {
         const idx = liveScene3d.activeLights.indexOf(pooledLight);
         if (idx !== -1) liveScene3d.activeLights.splice(idx, 1);

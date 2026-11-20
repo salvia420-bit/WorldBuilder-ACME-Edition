@@ -65,6 +65,10 @@ export function guardedCompileAsync(renderer, object, camera, targetScene) {
     const check = () => {
       try {
         materials.forEach((material) => {
+          if (typeof renderer.properties?.has === "function" && !renderer.properties.has(material)) {
+            materials.delete(material);
+            return;
+          }
           let program = null;
           try {
             program = renderer.properties.get(material).currentProgram;

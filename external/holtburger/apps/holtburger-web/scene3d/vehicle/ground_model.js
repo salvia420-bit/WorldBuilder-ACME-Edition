@@ -272,14 +272,21 @@ function resolveOracle(oracle, x, y, z, sf) {
   if (typeof oracle === "function") {
     const res = oracle(x, y, z);
     if (typeof res === "number") {
-      return { z: res, normal: [0, 0, 1], surface: SURFACE_FAMILIES[0], waterDepth: 0, isBridge: false };
+      return { z: Number.isFinite(res) ? res : NaN, normal: [0, 0, 1], surface: SURFACE_FAMILIES[0], waterDepth: 0, isBridge: false };
     }
-    return res || { z: 0.0, normal: [0, 0, 1], surface: SURFACE_FAMILIES[0], waterDepth: 0, isBridge: false };
+    if (res && typeof res === "object") {
+      return {
+        ...res,
+        z: Number.isFinite(res.z) ? res.z : NaN,
+      };
+    }
+    return { z: NaN, normal: [0, 0, 1], surface: SURFACE_FAMILIES[0], waterDepth: 0, isBridge: false };
   }
   return { z: 0.0, normal: [0, 0, 1], surface: SURFACE_FAMILIES[0], waterDepth: 0, isBridge: false };
 }
 
 export function step(state, input, params, oracle, dt = DT) {
+  const safeDt = (Number.isFinite(dt) && dt >= 0) ? dt : 0.0;
   let inp;
   if (Array.isArray(input)) {
     inp = inputFromFrame(input);
@@ -331,16 +338,21 @@ export function step(state, input, params, oracle, dt = DT) {
   }
 
   const targetSteer = clamp(inp.steer, -1.0, 1.0) * steerLock;
-  const maxSteerDelta = slewRate * dt;
+  const maxSteerDelta = slewRate * safeDt;
   const steerDiff = targetSteer - (state.steerAngle || 0);
   state.steerAngle = (state.steerAngle || 0) + clamp(steerDiff, -maxSteerDelta, maxSteerDelta);
 
   // 2. Terrain query
   const terr = resolveOracle(oracle, state.x, state.y, state.z, state.surfaceFamily);
   const surf = (terr.surface && terr.surface.vMax > 0) ? terr.surface : SURFACE_FAMILIES[0];
-  const normal = terr.normal || [0, 0, 1];
-  const groundZ = terr.z !== undefined ? terr.z : 0.0;
-  const waterDepth = terr.waterDepth || 0.0;
+  const normal = (Array.isArray(terr.normal) && terr.normal.length >= 3 &&
+    Number.isFinite(terr.normal[0]) && Number.isFinite(terr.normal[1]) && Number.isFinite(terr.normal[2]))
+    ? terr.normal
+    : [0, 0, 1];
+  const groundZ = Number.isFinite(terr.z)
+    ? terr.z
+    : (Number.isFinite(state.z) ? state.z : 0.0);
+  const waterDepth = Number.isFinite(terr.waterDepth) ? terr.waterDepth : 0.0;
   const isBridge = terr.isBridge || false;
 
   // 3. Slope gradient along heading
@@ -367,10 +379,10 @@ export function step(state, input, params, oracle, dt = DT) {
   let spd = state.speed;
   if (inp.handbrake) {
     const b = p.handbrakeDecel * surf.mu;
-    if (Math.abs(spd) <= 0.05 || Math.abs(spd) <= b * dt) {
+    if (Math.abs(spd) <= 0.05 || Math.abs(spd) <= b * safeDt) {
       spd = 0.0;
     } else {
-      spd -= Math.sign(spd) * b * dt;
+      spd -= Math.sign(spd) * b * safeDt;
     }
   } else if (inp.throttle > 0.0) {
     const vTarget = Math.pow(inp.throttle, 1.0 / 1.8) * effVMax;
@@ -380,34 +392,34 @@ export function step(state, input, params, oracle, dt = DT) {
       if (inp.boost && spd <= p.lowRangeSpeedCap) {
         aDrive *= p.lowRangeTorqueMul;
       }
-      spd += (aDrive + gParallel) * dt;
+      spd += (aDrive + gParallel) * safeDt;
       if (spd > vTarget && gParallel <= 0.0) spd = vTarget;
     } else {
-      const drag = (p.coastLinear + p.coastQuad * Math.abs(spd)) * dt;
-      spd = Math.max(vTarget, spd - drag + gParallel * dt);
+      const drag = (p.coastLinear + p.coastQuad * Math.abs(spd)) * safeDt;
+      spd = Math.max(vTarget, spd - drag + gParallel * safeDt);
     }
     if (spd > effVMax * 1.15) spd = effVMax * 1.15;
   } else if (inp.throttle < 0.0) {
     if (spd > 0.0) {
       const b = p.normalBrake * surf.mu * Math.abs(inp.throttle) + p.coastLinear;
-      spd = Math.max(0.0, spd - b * dt);
+      spd = Math.max(0.0, spd - b * safeDt);
     } else {
       const taper = Math.sqrt(Math.max(0.0, 1.0 - Math.pow(Math.abs(spd) / Math.abs(p.vReverseMax), 1.8)));
       let aRev = effAccel * surf.mu * taper * Math.abs(inp.throttle);
       if (inp.boost && Math.abs(spd) <= p.lowRangeSpeedCap) {
         aRev *= p.lowRangeTorqueMul;
       }
-      spd = Math.max(p.vReverseMax, spd - (aRev - gParallel) * dt);
+      spd = Math.max(p.vReverseMax, spd - (aRev - gParallel) * safeDt);
     }
   } else {
     // Coasting down (throttle === 0)
     if (Math.abs(spd) > 0.0) {
-      const drag = (p.coastLinear + p.coastQuad * Math.abs(spd)) * dt;
+      const drag = (p.coastLinear + p.coastQuad * Math.abs(spd)) * safeDt;
       if (Math.abs(spd) <= drag) {
         spd = 0.0;
       } else {
         spd -= Math.sign(spd) * drag;
-        spd += gParallel * dt;
+        spd += gParallel * safeDt;
         if (spd > effVMax * 1.15) spd = effVMax * 1.15;
         if (spd < p.vReverseMax) spd = p.vReverseMax;
       }
@@ -423,7 +435,7 @@ export function step(state, input, params, oracle, dt = DT) {
   // 5. Yaw integration (bicycle model)
   const muLat = surf.muLat || 1.0;
   const yawRate = (state.speed * Math.tan(state.steerAngle) / p.wheelbase) * muLat;
-  state.heading = wrapHeading(state.heading + yawRate * dt);
+  state.heading = wrapHeading(state.heading + yawRate * safeDt);
 
   // 6. Velocity vector & collision
   let vx = Math.sin(state.heading) * state.speed;
@@ -466,8 +478,8 @@ export function step(state, input, params, oracle, dt = DT) {
     }
   }
 
-  state.x += vx * dt;
-  state.y += vy * dt;
+  state.x += vx * safeDt;
+  state.y += vy * safeDt;
   state.z = groundZ;
   state.pitch = Math.asin(clamp(-slopeDot, -1.0, 1.0));
   state.roll = 0.0;

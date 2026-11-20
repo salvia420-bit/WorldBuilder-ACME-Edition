@@ -71,6 +71,7 @@ pub use physics::{
     RETAIL_EPSILON, RETAIL_EPSILON_SQ, is_walkable_normal, is_sledding_slope,
     slope_tangent_gravity, CreaseSlideResult, crease_slide_projection,
 };
+pub(crate) use scene::continent_landblock_key;
 pub use scene::{
     CellMembership, CellPhysicsBsp, LocalStickyStep, RemoteCorrectionCtx, SpatialScene,
     pview_clip_polygon_against_polygon, pview_project_polygon,

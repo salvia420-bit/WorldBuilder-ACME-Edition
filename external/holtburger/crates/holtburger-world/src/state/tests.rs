@@ -6860,6 +6860,31 @@ fn fallback_water_legacy_escape_keeps_f4_4_model() {
     assert!((state.water_floor_offset_at(12.0, 12.0) - 0.9).abs() < 1e-6, "legacy raise");
 }
 
+#[test]
+fn dericost_water_and_terrain_height_isolation() {
+    const DERICOST_Y_OFFSET: f32 = 68928.0;
+    let mut state = WorldState::synthetic();
+    state.set_fallback_water_retail(false);
+
+    // Populate Dereth 0x0203_0000 (dry, z=12.5) and Dericost 0x0203_8025 (water, z=278.0).
+    state.populate_terrain_heights(0x0203_0025, [12.5; 81]);
+    state.populate_terrain_heights(0x0203_8025, [278.0; 81]);
+    state.populate_terrain_water(0x0203_0025, &[0u8; 81]);
+    state.populate_terrain_water(0x0203_8025, &[19u8; 81]);
+
+    let wx = 2.0 * 192.0 + 50.0;
+    let wy_dereth = 3.0 * 192.0 + 60.0;
+    let wy_dericost = DERICOST_Y_OFFSET + wy_dereth;
+
+    assert_eq!(state.terrain_height_at(wx, wy_dereth), Some(12.5));
+    assert_eq!(state.terrain_height_at(wx, wy_dericost), Some(278.0));
+
+    assert!(!state.is_entirely_water_cell_at(wx, wy_dereth));
+    assert!(state.is_entirely_water_cell_at(wx, wy_dericost));
+    assert!((state.water_depth_at(wx, wy_dereth) - 0.0).abs() < 1e-6);
+    assert!((state.water_depth_at(wx, wy_dericost) - 0.9).abs() < 1e-6);
+}
+
 // ---------------------------------------------------------------------------
 // WP-2 (last-known-good cell + no-retire-on-transient-NULL). Combines
 // B3-WI1 + B4-item1 (§D3): a transient NULL-landblock pose for the LOCAL

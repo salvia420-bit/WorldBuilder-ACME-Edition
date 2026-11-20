@@ -8,7 +8,7 @@
 import * as THREE from "three";
 import { lintManifest, lintSource } from "../scene3d/vfx/lint_caps.js";
 import { FxLightSource } from "../scene3d/vfx/fx_lights.js";
-import { renderRadarScope } from "../scene3d/vehicle/radar_scope.js";
+import { renderRadarScope, renderCombinedRadarScope, RadarScopeHud } from "../scene3d/vehicle/radar_scope.js";
 
 let passed = 0;
 let failed = 0;
@@ -811,6 +811,71 @@ await check("T5.4 Radar PPI Scope HUD WASM Contact Property Fallback", () => {
   assert(blipArcs.length === 1, "exactly one blip arc drawn");
   near(blipArcs[0].x, 187, 1.0, "blip x correctly mapped from dxM");
   near(blipArcs[0].y, 128, 1.0, "blip y correctly mapped from dyM");
+});
+
+await check("T5.5 renderCombinedRadarScope Renders Altitude Label From Wire altAglM Field", () => {
+  const texts = [];
+  const mockCtx = {
+    save() {},
+    restore() {},
+    beginPath() {},
+    closePath() {},
+    stroke() {},
+    fill() {},
+    clip() {},
+    arc() {},
+    moveTo() {},
+    lineTo() {},
+    fillText(str, x, y) { texts.push({ str, x, y }); },
+    createRadialGradient() { return { addColorStop() {} }; },
+  };
+
+  renderCombinedRadarScope(mockCtx, 256, 256, {
+    simTimeSec: 1.0,
+    airContacts: [{ dxM: 5000, dyM: 5000, altAglM: 423, standing: 3, headingU8: 0, speedMpsU8: 60 }],
+    groundContacts: [],
+  });
+
+  assert(texts.some((t) => t.str === "423m"), `expected "423m" altitude label, got ${JSON.stringify(texts)}`);
+});
+
+await check("T5.6 RadarScopeHud.update() clears legacy this.contacts when airContacts is explicitly passed", () => {
+  let fillCount = 0;
+  const mockCtx = {
+    clearRect() {},
+    save() {},
+    restore() {},
+    beginPath() {},
+    closePath() {},
+    stroke() {},
+    fill() { fillCount++; },
+    clip() {},
+    arc() {},
+    moveTo() {},
+    lineTo() {},
+    fillText() {},
+    createRadialGradient() { return { addColorStop() {} }; },
+  };
+
+  const hud = new RadarScopeHud();
+  hud.ctx = mockCtx;
+
+  hud.update({ simTimeSec: 1, contacts: [{ dxM: 100, dyM: 100, standing: 3 }] });
+  assert(hud.contacts.length === 1, "legacy contacts populated");
+  assert(fillCount === 4, `expected 3 base/sweep fills + 1 contact blip = 4, got ${fillCount}`);
+
+  hud.update({ simTimeSec: 2, airContacts: [], groundContacts: [], visible: false });
+  assert(hud.contacts.length === 0, "airContacts: [] cleared legacy this.contacts");
+
+  fillCount = 0;
+  hud.update({ simTimeSec: 3, airContacts: [], groundContacts: [], visible: true });
+  assert(fillCount === 3, `expected only 3 base/sweep fills with empty airContacts, got ${fillCount}`);
+
+  fillCount = 0;
+  hud.update({ simTimeSec: 4, visible: true });
+  assert(fillCount === 3, `subsequent update omitting airContacts must not resurrect contacts, got ${fillCount}`);
+
+  hud.dispose();
 });
 
 // ---------------------------------------------------------------------------

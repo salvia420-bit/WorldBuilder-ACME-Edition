@@ -148,6 +148,7 @@ export function createGroundFx(arg1, arg2, arg3) {
   // Preallocated sprite pool
   const pool = [];
   let poolCursor = 0;
+  let disposed = false;
 
   for (let i = 0; i < POOL_SIZE; i++) {
     const mat = baseSpriteMat.clone();
@@ -224,33 +225,45 @@ export function createGroundFx(arg1, arg2, arg3) {
     pool,
 
     getActiveCount() {
+      if (disposed) return 0;
       let count = 0;
-      for (let i = 0; i < POOL_SIZE; i++) {
+      for (let i = 0; i < pool.length; i++) {
         if (pool[i].active) count++;
       }
       return count;
     },
 
     update(vehicleGuid, pose, kinematics, dt) {
-      let p, k, deltaT;
+      if (disposed) return;
+      let p, k, rawDt;
       if (typeof vehicleGuid === "object" && vehicleGuid !== null) {
         p = vehicleGuid;
         k = vehicleGuid;
-        deltaT = typeof pose === "number" ? pose : 1 / 60;
+        rawDt = pose;
       } else {
         p = pose || {};
         k = kinematics || {};
-        deltaT = typeof dt === "number" ? dt : 1 / 60;
+        rawDt = dt;
       }
+      const deltaT = typeof rawDt === "number"
+        ? (Number.isFinite(rawDt) && rawDt >= 0 ? Math.min(rawDt, 0.25) : 0)
+        : 1 / 60;
 
-      const px = p.x ?? p.pos?.[0] ?? 0;
-      const py = p.y ?? p.pos?.[1] ?? 0;
-      const pz = p.z ?? p.pos?.[2] ?? 0;
-      const heading = p.heading || 0;
-      const speed = k.speed ?? p.speed ?? 0;
-      const slip = k.slip ?? (k.wheelSpin != null ? Math.abs(k.wheelSpin - speed) : 0);
+      const rawPx = p.x ?? p.pos?.[0] ?? 0;
+      const rawPy = p.y ?? p.pos?.[1] ?? 0;
+      const rawPz = p.z ?? p.pos?.[2] ?? 0;
+      const rawHeading = p.heading ?? 0;
+      const px = Number.isFinite(rawPx) ? rawPx : 0;
+      const py = Number.isFinite(rawPy) ? rawPy : 0;
+      const pz = Number.isFinite(rawPz) ? rawPz : 0;
+      const heading = Number.isFinite(rawHeading) ? rawHeading : 0;
+      const rawSpeed = k.speed ?? p.speed ?? 0;
+      const speed = Number.isFinite(rawSpeed) ? rawSpeed : 0;
+      const rawSlip = k.slip ?? (k.wheelSpin != null ? Math.abs(k.wheelSpin - speed) : 0);
+      const slip = Number.isFinite(rawSlip) ? rawSlip : 0;
       const handbrake = !!(k.handbrake || (k.groundFlags && (k.groundFlags & 0x02)));
-      const throttle = k.throttle ?? (speed > 1.0 ? 0.75 : 0.0);
+      const rawThrottle = k.throttle ?? (speed > 1.0 ? 0.75 : 0.0);
+      const throttle = Number.isFinite(rawThrottle) ? rawThrottle : 0;
       const surface = k.surfaceType ?? k.surfaceFamily ?? p.surfaceFamily ?? 1;
       const isBridge = !!(k.isBridge ?? p.isBridge);
 
@@ -312,8 +325,8 @@ export function createGroundFx(arg1, arg2, arg3) {
 
           for (let w = 0; w < wheelCount; w++) {
             const [lx, ly] = dims.wheelOffsets[w];
-            const wx = px + lx * cosH - ly * sinH;
-            const wy = py + lx * sinH + ly * cosH;
+            const wx = px + lx * cosH + ly * sinH;
+            const wy = py - lx * sinH + ly * cosH;
             const wz = pz + 0.05;
 
             // Backward emission velocity countering vehicle travel direction
@@ -341,8 +354,8 @@ export function createGroundFx(arg1, arg2, arg3) {
           skidAccum = 0.0;
           for (let w = 2; w < wheelCount; w++) {
             const [lx, ly] = dims.wheelOffsets[w];
-            const wx = px + lx * cosH - ly * sinH;
-            const wy = py + lx * sinH + ly * cosH;
+            const wx = px + lx * cosH + ly * sinH;
+            const wy = py - lx * sinH + ly * cosH;
             const wz = pz + 0.06;
 
             const vx = -sinH * (speed * 0.25) + (Math.random() - 0.5) * 0.5;
@@ -377,8 +390,8 @@ export function createGroundFx(arg1, arg2, arg3) {
 
           for (let e = 0; e < SEMI_FX_DIMENSIONS.exhaustOffsets.length; e++) {
             const [txOff, tyOff, tzOff] = SEMI_FX_DIMENSIONS.exhaustOffsets[e];
-            const tx = px + txOff * cosH - tyOff * sinH;
-            const ty = py + txOff * sinH + tyOff * cosH;
+            const tx = px + txOff * cosH + tyOff * sinH;
+            const ty = py - txOff * sinH + tyOff * cosH;
             const tz = pz + tzOff;
 
             const vx = -sinH * backDrift + (Math.random() - 0.5) * 0.15;
@@ -396,8 +409,8 @@ export function createGroundFx(arg1, arg2, arg3) {
           }
         } else {
           const [txOff, tyOff, tzOff] = JEEP_DIMENSIONS.tailpipeOffset;
-          const tx = px + txOff * cosH - tyOff * sinH;
-          const ty = py + txOff * sinH + tyOff * cosH;
+          const tx = px + txOff * cosH + tyOff * sinH;
+          const ty = py - txOff * sinH + tyOff * cosH;
           const tz = pz + tzOff;
 
           const puffScale0 = isIdle ? 0.12 : (0.16 + throttle * 0.12);
@@ -429,8 +442,8 @@ export function createGroundFx(arg1, arg2, arg3) {
 
         for (let i = 0; i < wheelCount; i++) {
           const [lx, ly] = dims.wheelOffsets[i];
-          const wx = px + lx * cosH - ly * sinH;
-          const wy = py + lx * sinH + ly * cosH;
+          const wx = px + lx * cosH + ly * sinH;
+          const wy = py - lx * sinH + ly * cosH;
 
           const dist = Math.hypot(wx - lastStamped[i].x, wy - lastStamped[i].y);
           if (dist >= 0.40 || slip > 2.0) {
@@ -443,6 +456,8 @@ export function createGroundFx(arg1, arg2, arg3) {
     },
 
     dispose() {
+      if (disposed) return;
+      disposed = true;
       for (let i = 0; i < pool.length; i++) {
         const slot = pool[i];
         slot.active = false;
@@ -451,6 +466,7 @@ export function createGroundFx(arg1, arg2, arg3) {
         if (slot.mat) slot.mat.dispose();
       }
       pool.length = 0;
+      if (baseSpriteMat) baseSpriteMat.dispose();
       if (cloudTex) cloudTex.dispose();
     },
   };

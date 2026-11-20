@@ -178,9 +178,9 @@ const LAYER_KEYS = [
   const vol = readFileSync(new URL('./scene3d/cloud_volume.js', import.meta.url), 'utf8');
   check('the every-pixel march keys on the ABOVE-DECK blend (1.8 km), not the storm-tower fade (900 m)',
     vol.includes('__hbCloudAboveDeck') && !/cloudHighBandWant\(hb,/.test(vol));
-  check('cloud_volume switches temporalUpscale + resolutionScale only after the resolve variant is prewarmed (compileAsync)',
-    /_prewarmResolveVariant\(\)/.test(vol) && /compileAsync\(mesh/.test(vol) && /eff\.temporalUpscale = false/.test(vol)
-      && /eff\.resolutionScale = 0\.5/.test(vol) && /prewarm !== 'done'/.test(vol));
+  check('cloud_volume switches temporalUpscale + resolutionScale only after the resolve variant is prewarmed (guardedCompileAsync)',
+    /_prewarmResolveVariant\(\)/.test(vol) && /guardedCompileAsync\(r,\s*mesh/.test(vol) && /eff\.temporalUpscale = false/.test(vol)
+      && /eff\.resolutionScale = 0\.5/.test(vol) && /prewarm !== 'done'/.test(vol) && !/\br\.compileAsync\s*\(/.test(vol));
 }
 
 // --- ?cloudHighBandMarch (2026-11-02): the march from above without what it cannot show, uniforms only --------

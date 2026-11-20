@@ -77,9 +77,34 @@ const USE_PORTAL_GRAPH_SPLIT: bool = true;
 /// candidate cell, ask `cell_contains_point(lb|0xFFFF, …)` and get `false`
 /// from the absent-key arm — wasted work that reads as a real test, and one
 /// stray `insert_cell_aabb(lb|0xFFFF, …)` away from being a wrong answer.
+/// Y offset in global AC world metres for the Dericost continent (`359 * 192.0`).
+/// Matches ACE `Vehicle.DericostYOffset` and client `flight_model.js`.
+pub(crate) const DERICOST_Y_OFFSET: f32 = 68928.0;
+
 #[inline]
 pub(crate) fn is_envcell_id(cell_id: u32) -> bool {
-    (0x100..=0xFFFD).contains(&(cell_id & 0xFFFF))
+    // Mask Dericost continent bit 15 (0x8000): outdoor cells 0x0001..=0x0040 and
+    // 0x8001..=0x8040 both mask to 1..=64 (false); 0xFFFE/0xFFFF sentinels mask to
+    // 0x7FFE/0x7FFF (false); 0xFFFD masks to 0x7FFD (true).
+    (0x100..=0x7FFD).contains(&(cell_id & 0x7FFF))
+}
+
+/// True for Dericost outdoor/block-only IDs (`0xXXYY_8000..=0xXXYY_80FF`),
+/// excluding retail indoor EnvCells (`0x0100..=0xFFFD`) and sentinels (`0xFFFE`/`0xFFFF`).
+#[inline]
+fn is_dericost_outdoor_or_lb(id: u32) -> bool {
+    (id & 0x8000) != 0 && (id & 0x7FFF) < 0x0100
+}
+
+/// Normalize a cell or landblock ID to its landblock key (`0xXXYY_8000` on Dericost,
+/// `0xXXYY_0000` on Dereth).
+#[inline]
+pub(crate) fn continent_landblock_key(id: u32) -> u32 {
+    if is_dericost_outdoor_or_lb(id) {
+        id & 0xFFFF_8000
+    } else {
+        id & 0xFFFF_0000
+    }
 }
 
 /// The LANDBLOCK part of an ObjCellID — `0xXXYY0000`.
@@ -649,7 +674,7 @@ fn remote_ground_at(scene: &SpatialScene, pose: &WorldPosition, ceiling_z: f32) 
     // keep resident per landblock (wave 4: the critic's dock regression).
     let statics = scene
         .statics_physics_bsp
-        .get(&(pose.landblock_id.0 & 0xFFFF_0000))
+        .get(&continent_landblock_key(pose.landblock_id.0))
         .and_then(|list| highest_static_floor(list, g.x, g.y, ceiling_z));
     let terrain = super::faithful_bridge::faithful_terrain_floor(scene, pose);
     let building = super::highest_floor_z_under(
@@ -3255,9 +3280,42 @@ impl SpatialScene {
         // BSP collision (PASS 1): same lifetime as cell_physics_index.
         Arc::make_mut(&mut self.cell_physics_bsp)
             .retain(|cell_id, _| (*cell_id & 0xFFFF_0000) != lb_high);
-        // Phase C: per-cell static physics BSPs share the cell lifetime.
+        // Phase C: per-cell static physics BSPs share the cell lifetime (continent-isolated).
+        let lb_key = continent_landblock_key(landblock_id);
         Arc::make_mut(&mut self.cell_static_physics_bsp)
-            .retain(|cell_id, _| (*cell_id & 0xFFFF_0000) != lb_high);
+            .retain(|cell_id, _| continent_landblock_key(*cell_id) != lb_key);
+        let matching_dyn_guids: Vec<u32> = self
+            .dynamic_building_bsps
+            .iter()
+            .filter_map(|(&guid, (lb, _, _))| (*lb == lb_key).then_some(guid))
+            .collect();
+        if !matching_dyn_guids.is_empty() {
+            let dyn_map = Arc::make_mut(&mut self.dynamic_building_bsps);
+            let bldg_bsps = Arc::make_mut(&mut self.building_bsps);
+            let cell_statics = Arc::make_mut(&mut self.cell_static_physics_bsp);
+            let statics = Arc::make_mut(&mut self.statics_physics_bsp);
+            for guid in matching_dyn_guids {
+                if let Some((_, bsp, cell_ids)) = dyn_map.remove(&guid) {
+                    let ptr_key = Arc::as_ptr(&bsp) as usize;
+                    bldg_bsps.remove(&ptr_key);
+                    if let Some(list) = statics.get_mut(&lb_key) {
+                        list.retain(|item| !Arc::ptr_eq(item, &bsp));
+                        if list.is_empty() {
+                            statics.remove(&lb_key);
+                        }
+                    }
+                    for cell_id in cell_ids {
+                        if let Some(list) = cell_statics.get_mut(&cell_id) {
+                            list.retain(|item| !Arc::ptr_eq(item, &bsp));
+                            if list.is_empty() {
+                                cell_statics.remove(&cell_id);
+                            }
+                        }
+                    }
+                }
+            }
+            self.prune_building_bsps();
+        }
         // COL-27 (2026-07-28): the envcell-static SOURCE list is keyed by
         // landblock and shares that exact lifetime — drop it with the cells so
         // a re-entry rebuilds it from the fresh EnvCell load.
@@ -3658,7 +3716,7 @@ impl SpatialScene {
         overlap_enabled: bool,
     ) -> usize {
         self.bump_collision_rev();
-        let lb_high = landblock_high & 0xFFFF_0000;
+        let lb_high = continent_landblock_key(landblock_high);
         // Idempotency: drop this landblock's prior OUTDOOR per-cell entries so a
         // re-bake (the live STATIC_BSP_PENDING drain runs per landblock load)
         // never double-registers.
@@ -3679,6 +3737,10 @@ impl SpatialScene {
         if statics.is_empty() {
             return 0;
         }
+
+        let is_dericost = (lb_high & 0x8000) != 0;
+        let y_offset = if is_dericost { DERICOST_Y_OFFSET } else { 0.0 };
+        let continent_bit = if is_dericost { 0x8000 } else { 0 };
 
         // This landblock's GLOBAL land-cell range: blockX*8 ..= blockX*8+7
         // (BlockSide = 8 cells/landblock). The overlap rectangle is clamped to
@@ -3702,13 +3764,13 @@ impl SpatialScene {
                 (
                     (aabb.min.x / CELL_SIZE).floor() as i32,
                     (aabb.max.x / CELL_SIZE).floor() as i32,
-                    (aabb.min.y / CELL_SIZE).floor() as i32,
-                    (aabb.max.y / CELL_SIZE).floor() as i32,
+                    ((aabb.min.y - y_offset) / CELL_SIZE).floor() as i32,
+                    ((aabb.max.y - y_offset) / CELL_SIZE).floor() as i32,
                 )
             } else {
                 let c = aabb.center();
                 let gx = (c.x / CELL_SIZE).floor() as i32;
-                let gy = (c.y / CELL_SIZE).floor() as i32;
+                let gy = ((c.y - y_offset) / CELL_SIZE).floor() as i32;
                 (gx, gx, gy, gy)
             };
             // Clamp to this landblock's cell grid (loading-virus bound).
@@ -3721,7 +3783,7 @@ impl SpatialScene {
             while gx <= max_gx {
                 let mut gy = min_gy;
                 while gy <= max_gy {
-                    let cell_id = lcoord_to_cellid(gx, gy);
+                    let cell_id = lcoord_to_cellid(gx, gy) | continent_bit;
                     // Residency gate (always true after the home-landblock clamp,
                     // but kept as the explicit loading-virus guard the plan calls
                     // for so the rule survives any future clamp change).
@@ -3751,11 +3813,11 @@ impl SpatialScene {
     /// Returns the removed static count.
     pub fn clear_outdoor_static_overlap_for_landblock(&mut self, landblock_high: u32) -> usize {
         self.bump_collision_rev();
-        let lb_high = landblock_high & 0xFFFF_0000;
+        let lb_key = continent_landblock_key(landblock_high);
         let mut removed = 0usize;
         Arc::make_mut(&mut self.cell_static_physics_bsp).retain(|cell_id, v| {
-            let low = cell_id & 0xFFFF;
-            if (*cell_id & 0xFFFF_0000) == lb_high && (1..=64).contains(&low) {
+            let low = cell_id & 0x7FFF;
+            if continent_landblock_key(*cell_id) == lb_key && (1..=64).contains(&low) {
                 removed += v.len();
                 false
             } else {
@@ -3776,7 +3838,7 @@ impl SpatialScene {
     /// (fed by the wasm landblock-load path, WS8).
     pub fn populate_terrain_heights(&mut self, landblock_id: u32, heights: [f32; 81]) {
         self.bump_collision_rev();
-        Arc::make_mut(&mut self.terrain_heights).insert(landblock_id & 0xFFFF_0000, heights);
+        Arc::make_mut(&mut self.terrain_heights).insert(continent_landblock_key(landblock_id), heights);
     }
 
     /// Phase D / WS1: drop a landblock's terrain heights on unload (parallel to
@@ -3784,7 +3846,7 @@ impl SpatialScene {
     pub fn clear_terrain_heights_for_landblock(&mut self, landblock_id: u32) -> bool {
         self.bump_collision_rev();
         Arc::make_mut(&mut self.terrain_heights)
-            .remove(&(landblock_id & 0xFFFF_0000))
+            .remove(&continent_landblock_key(landblock_id))
             .is_some()
     }
 
@@ -3793,7 +3855,7 @@ impl SpatialScene {
     /// when its landblock is loaded; the faithful ring still adds a NULL entry on
     /// a non-resident lookup (`add_outside_cell`, objcell.rs:553).
     pub fn terrain_landblock_resident(&self, cell_id: u32) -> bool {
-        self.terrain_heights.contains_key(&(cell_id & 0xFFFF_0000))
+        self.terrain_heights.contains_key(&continent_landblock_key(cell_id))
     }
 
     /// spawnz (2026-10-18): record that one collision part
@@ -3801,7 +3863,7 @@ impl SpatialScene {
     /// `cell_id`'s landblock is in the scene. The wasm calls this after it has
     /// drained that part's queued geometry (buildings, statics), never before.
     pub fn mark_landblock_collision_part(&mut self, cell_id: u32, part: u8) {
-        *self.landblock_collision_parts.entry(cell_id & 0xFFFF_0000).or_insert(0) |= part;
+        *self.landblock_collision_parts.entry(continent_landblock_key(cell_id)).or_insert(0) |= part;
     }
 
     /// spawnz: are `cell_id`'s landblock's terrain heights, buildings and
@@ -3810,7 +3872,7 @@ impl SpatialScene {
         self.terrain_landblock_resident(cell_id)
             && self
                 .landblock_collision_parts
-                .get(&(cell_id & 0xFFFF_0000))
+                .get(&continent_landblock_key(cell_id))
                 .is_some_and(|parts| parts & LANDBLOCK_COLLISION_ALL == LANDBLOCK_COLLISION_ALL)
     }
 
@@ -3818,7 +3880,7 @@ impl SpatialScene {
     /// `None` when the landblock isn't resident. The corner source the
     /// terrain-triangle build (WS2/WS3) and the outdoor cell AABB read.
     pub fn terrain_cell_heights(&self, cell_id: u32) -> Option<&[f32; 81]> {
-        self.terrain_heights.get(&(cell_id & 0xFFFF_0000))
+        self.terrain_heights.get(&continent_landblock_key(cell_id))
     }
 
     /// Phase D / WS1: count of resident terrain landblocks. Diagnostic / tests.
@@ -3832,7 +3894,7 @@ impl SpatialScene {
     /// `terrain_codes` array it already computes for the render heightmap.
     pub fn populate_terrain_water_codes(&mut self, landblock_id: u32, codes: [u8; 81]) {
         self.bump_collision_rev();
-        Arc::make_mut(&mut self.terrain_water_codes).insert(landblock_id & 0xFFFF_0000, codes);
+        Arc::make_mut(&mut self.terrain_water_codes).insert(continent_landblock_key(landblock_id), codes);
     }
 
     /// Phase E3.6: drop a landblock's terrain water codes on unload (parallel to
@@ -3840,14 +3902,14 @@ impl SpatialScene {
     pub fn clear_terrain_water_codes_for_landblock(&mut self, landblock_id: u32) -> bool {
         self.bump_collision_rev();
         Arc::make_mut(&mut self.terrain_water_codes)
-            .remove(&(landblock_id & 0xFFFF_0000))
+            .remove(&continent_landblock_key(landblock_id))
             .is_some()
     }
 
     /// Phase E3.6: the 9×9 terrain-type-code grid for `cell_id`'s landblock, or
     /// `None` when the landblock isn't resident (⇒ the outdoor cell is NotWater).
     pub fn terrain_cell_water_codes(&self, cell_id: u32) -> Option<&[u8; 81]> {
-        self.terrain_water_codes.get(&(cell_id & 0xFFFF_0000))
+        self.terrain_water_codes.get(&continent_landblock_key(cell_id))
     }
 
     /// Terrain→EnvCell entry (2026-06-02): register a cell-membership
@@ -4899,7 +4961,7 @@ impl SpatialScene {
     pub fn insert_static_physics_bsp(&mut self, landblock_high: u32, bsp: CellPhysicsBsp) {
         self.bump_collision_rev();
         Arc::make_mut(&mut self.statics_physics_bsp)
-            .entry(landblock_high)
+            .entry(continent_landblock_key(landblock_high))
             .or_default()
             .push(Arc::new(bsp));
     }
@@ -4918,7 +4980,7 @@ impl SpatialScene {
         Arc::make_mut(&mut self.building_bsps)
             .insert(Arc::as_ptr(&bsp) as usize, Arc::downgrade(&bsp));
         Arc::make_mut(&mut self.statics_physics_bsp)
-            .entry(landblock_high)
+            .entry(continent_landblock_key(landblock_high))
             .or_default()
             .push(bsp);
     }
@@ -4938,27 +5000,34 @@ impl SpatialScene {
             self.remove_dynamic_building_bsp(guid);
         }
         self.bump_collision_rev();
+        let lb_key = continent_landblock_key(landblock_high);
         let bsp = Arc::new(bsp);
         let ptr_key = Arc::as_ptr(&bsp) as usize;
         Arc::make_mut(&mut self.building_bsps).insert(ptr_key, Arc::downgrade(&bsp));
         Arc::make_mut(&mut self.statics_physics_bsp)
-            .entry(landblock_high)
+            .entry(lb_key)
             .or_default()
             .push(bsp.clone());
 
         let aabb = bsp.world_aabb();
+        let is_dericost = (lb_key & 0x8000) != 0
+            || bsp.origin.y >= DERICOST_Y_OFFSET
+            || (!aabb.is_empty() && aabb.max.y >= DERICOST_Y_OFFSET);
+        let y_offset = if is_dericost { DERICOST_Y_OFFSET } else { 0.0 };
+        let continent_bit = if is_dericost { 0x8000 } else { 0 };
+
         let mut cell_ids = Vec::new();
         if !aabb.is_empty() {
             let min_gx = ((aabb.min.x / CELL_SIZE).floor() as i32).clamp(0, 2039);
             let max_gx = ((aabb.max.x / CELL_SIZE).floor() as i32).clamp(0, 2039);
-            let min_gy = ((aabb.min.y / CELL_SIZE).floor() as i32).clamp(0, 2039);
-            let max_gy = ((aabb.max.y / CELL_SIZE).floor() as i32).clamp(0, 2039);
+            let min_gy = (((aabb.min.y - y_offset) / CELL_SIZE).floor() as i32).clamp(0, 2039);
+            let max_gy = (((aabb.max.y - y_offset) / CELL_SIZE).floor() as i32).clamp(0, 2039);
 
             let mut gx = min_gx;
             while gx <= max_gx {
                 let mut gy = min_gy;
                 while gy <= max_gy {
-                    let cell_id = lcoord_to_cellid(gx, gy);
+                    let cell_id = lcoord_to_cellid(gx, gy) | continent_bit;
                     Arc::make_mut(&mut self.cell_static_physics_bsp)
                         .entry(cell_id)
                         .or_default()
@@ -4970,7 +5039,7 @@ impl SpatialScene {
             }
         }
         if cell_ids.is_empty() {
-            let cell_id = landblock_high | 1;
+            let cell_id = (lb_key | continent_bit) | 1;
             Arc::make_mut(&mut self.cell_static_physics_bsp)
                 .entry(cell_id)
                 .or_default()
@@ -4978,7 +5047,7 @@ impl SpatialScene {
             cell_ids.push(cell_id);
         }
 
-        Arc::make_mut(&mut self.dynamic_building_bsps).insert(guid, (landblock_high, bsp, cell_ids));
+        Arc::make_mut(&mut self.dynamic_building_bsps).insert(guid, (lb_key, bsp, cell_ids));
     }
 
     /// Remove a dynamic building physics collider by GUID.
@@ -4994,12 +5063,20 @@ impl SpatialScene {
         self.bump_collision_rev();
         let ptr_key = Arc::as_ptr(&bsp) as usize;
         Arc::make_mut(&mut self.building_bsps).remove(&ptr_key);
-        if let Some(list) = Arc::make_mut(&mut self.statics_physics_bsp).get_mut(&lb_high) {
+        let statics = Arc::make_mut(&mut self.statics_physics_bsp);
+        if let Some(list) = statics.get_mut(&lb_high) {
             list.retain(|item| !Arc::ptr_eq(item, &bsp));
+            if list.is_empty() {
+                statics.remove(&lb_high);
+            }
         }
+        let cell_statics = Arc::make_mut(&mut self.cell_static_physics_bsp);
         for cell_id in cell_ids {
-            if let Some(list) = Arc::make_mut(&mut self.cell_static_physics_bsp).get_mut(&cell_id) {
+            if let Some(list) = cell_statics.get_mut(&cell_id) {
                 list.retain(|item| !Arc::ptr_eq(item, &bsp));
+                if list.is_empty() {
+                    cell_statics.remove(&cell_id);
+                }
             }
         }
         true
@@ -5125,14 +5202,36 @@ impl SpatialScene {
     /// count for diagnostic logging.
     pub fn clear_static_physics_bsps_for_landblock(&mut self, landblock_high: u32) -> usize {
         self.bump_collision_rev();
-        let removed = match Arc::make_mut(&mut self.statics_physics_bsp).remove(&landblock_high) {
+        let lb_key = continent_landblock_key(landblock_high);
+        let removed = match Arc::make_mut(&mut self.statics_physics_bsp).remove(&lb_key) {
             Some(v) => v.len(),
             None => 0,
         };
-        self.prune_building_bsps();
-        if self.dynamic_building_bsps.values().any(|(lb, _, _)| *lb == landblock_high) {
-            Arc::make_mut(&mut self.dynamic_building_bsps).retain(|_, (lb, _, _)| *lb != landblock_high);
+        let matching_guids: Vec<u32> = self
+            .dynamic_building_bsps
+            .iter()
+            .filter_map(|(&guid, (lb, _, _))| (*lb == lb_key).then_some(guid))
+            .collect();
+        if !matching_guids.is_empty() {
+            let dyn_map = Arc::make_mut(&mut self.dynamic_building_bsps);
+            let bldg_bsps = Arc::make_mut(&mut self.building_bsps);
+            let cell_statics = Arc::make_mut(&mut self.cell_static_physics_bsp);
+            for guid in matching_guids {
+                if let Some((_, bsp, cell_ids)) = dyn_map.remove(&guid) {
+                    let ptr_key = Arc::as_ptr(&bsp) as usize;
+                    bldg_bsps.remove(&ptr_key);
+                    for cell_id in cell_ids {
+                        if let Some(list) = cell_statics.get_mut(&cell_id) {
+                            list.retain(|item| !Arc::ptr_eq(item, &bsp));
+                            if list.is_empty() {
+                                cell_statics.remove(&cell_id);
+                            }
+                        }
+                    }
+                }
+            }
         }
+        self.prune_building_bsps();
         removed
     }
 
@@ -5540,6 +5639,10 @@ impl SpatialScene {
         }
         self.bump_collision_rev();
         let lbs: HashSet<u32> = landblocks.iter().map(|lb| lb & 0xFFFF_0000).collect();
+        let dyn_lbs: HashSet<u32> = landblocks
+            .iter()
+            .map(|lb| continent_landblock_key(*lb))
+            .collect();
         let in_set = |id: u32| lbs.contains(&(id & 0xFFFF_0000));
 
         // Cells family (mirrors clear_cells_for_landblock).
@@ -5578,7 +5681,8 @@ impl SpatialScene {
         }
         Arc::make_mut(&mut self.cell_physics_index).retain(|cell_id, _| !in_set(*cell_id));
         Arc::make_mut(&mut self.cell_physics_bsp).retain(|cell_id, _| !in_set(*cell_id));
-        Arc::make_mut(&mut self.cell_static_physics_bsp).retain(|cell_id, _| !in_set(*cell_id));
+        Arc::make_mut(&mut self.cell_static_physics_bsp)
+            .retain(|cell_id, _| !dyn_lbs.contains(&continent_landblock_key(*cell_id)));
         // COL-27 (2026-07-28): same lifetime as the per-cell static table.
         Arc::make_mut(&mut self.envcell_statics_source).retain(|lb, _| !in_set(*lb));
         Arc::make_mut(&mut self.cell_membership).retain(|cell_id, _| !in_set(*cell_id));
@@ -5620,9 +5724,33 @@ impl SpatialScene {
         let mut static_bsps_removed = 0usize;
         {
             let idx = Arc::make_mut(&mut self.statics_physics_bsp);
-            for lb in &lbs {
+            for lb in &dyn_lbs {
                 if let Some(v) = idx.remove(lb) {
                     static_bsps_removed += v.len();
+                }
+            }
+        }
+        let matching_guids: Vec<u32> = self
+            .dynamic_building_bsps
+            .iter()
+            .filter_map(|(&guid, (lb, _, _))| dyn_lbs.contains(lb).then_some(guid))
+            .collect();
+        if !matching_guids.is_empty() {
+            let dyn_map = Arc::make_mut(&mut self.dynamic_building_bsps);
+            let bldg_bsps = Arc::make_mut(&mut self.building_bsps);
+            let cell_statics = Arc::make_mut(&mut self.cell_static_physics_bsp);
+            for guid in matching_guids {
+                if let Some((_, bsp, cell_ids)) = dyn_map.remove(&guid) {
+                    let ptr_key = Arc::as_ptr(&bsp) as usize;
+                    bldg_bsps.remove(&ptr_key);
+                    for cell_id in cell_ids {
+                        if let Some(list) = cell_statics.get_mut(&cell_id) {
+                            list.retain(|item| !Arc::ptr_eq(item, &bsp));
+                            if list.is_empty() {
+                                cell_statics.remove(&cell_id);
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -5644,7 +5772,7 @@ impl SpatialScene {
         }
         // spawnz: the buildings and statics just dropped are no longer floors a
         // remote settle may trust; the re-populate re-marks them.
-        self.landblock_collision_parts.retain(|lb, _| !in_set(*lb));
+        self.landblock_collision_parts.retain(|lb, _| !dyn_lbs.contains(lb));
 
         (
             edges_removed,
@@ -5684,9 +5812,10 @@ impl SpatialScene {
         radius: f32,
         num_sphere: u8,
     ) -> Option<Vector3> {
-        let lb_high = pose.landblock_id.0 & 0xFFFF_0000;
-        let lb_x = ((lb_high >> 24) & 0xFF) as i32;
-        let lb_y = ((lb_high >> 16) & 0xFF) as i32;
+        let lb_key = continent_landblock_key(pose.landblock_id.0);
+        let lb_x = ((lb_key >> 24) & 0xFF) as i32;
+        let lb_y = ((lb_key >> 16) & 0xFF) as i32;
+        let continent_bit = lb_key & 0x8000;
         let n = (num_sphere as usize).min(2).min(world_sphere_centers.len());
         if n == 0 {
             return None;
@@ -5702,7 +5831,7 @@ impl SpatialScene {
                 if !(0..256).contains(&nx) || !(0..256).contains(&ny) {
                     continue;
                 }
-                let key = ((nx as u32) << 24) | ((ny as u32) << 16);
+                let key = ((nx as u32) << 24) | ((ny as u32) << 16) | continent_bit;
                 let Some(bsps) = self.statics_physics_bsp.get(&key) else {
                     continue;
                 };
@@ -8643,4 +8772,404 @@ fn pview_line_intersect(
         p1[0] + t * (p2[0] - p1[0]),
         p1[1] + t * (p2[1] - p1[1]),
     ]
+}
+
+#[cfg(test)]
+mod dericost_dynamic_bsp_tests {
+    use super::*;
+    use crate::spatial::FLOOR_Z;
+    use holtburger_common::Quaternion;
+    use holtburger_dat::physics::{BspLeaf, BspNode, ResolvedPolygon};
+
+    fn make_poly(verts: Vec<Vector3>) -> ResolvedPolygon {
+        let plane =
+            ResolvedPolygon::make_plane(&verts).expect("non-degenerate polygon");
+        ResolvedPolygon {
+            num_points: verts.len(),
+            vertices: verts,
+            plane,
+        }
+    }
+
+    fn make_test_container_bsp(origin: Vector3, door_open: bool) -> CellPhysicsBsp {
+        let mut polys = HashMap::new();
+        let hw = 1.176;
+        let hl = 2.949;
+        let floor_z = 0.162;
+        let roof_z = 2.591;
+
+        polys.insert(
+            1u16,
+            make_poly(vec![
+                Vector3::new(-hw, -hl, floor_z),
+                Vector3::new(hw, -hl, floor_z),
+                Vector3::new(hw, hl, floor_z),
+                Vector3::new(-hw, hl, floor_z),
+            ]),
+        );
+        let ext_hw = 1.219;
+        let ext_hl = 3.029;
+        polys.insert(
+            2u16,
+            make_poly(vec![
+                Vector3::new(-ext_hw, -ext_hl, roof_z),
+                Vector3::new(ext_hw, -ext_hl, roof_z),
+                Vector3::new(ext_hw, ext_hl, roof_z),
+                Vector3::new(-ext_hw, ext_hl, roof_z),
+            ]),
+        );
+        polys.insert(
+            3u16,
+            make_poly(vec![
+                Vector3::new(-hw, -hl, floor_z),
+                Vector3::new(-hw, hl, floor_z),
+                Vector3::new(-hw, hl, roof_z),
+                Vector3::new(-hw, -hl, roof_z),
+            ]),
+        );
+        polys.insert(
+            4u16,
+            make_poly(vec![
+                Vector3::new(hw, hl, floor_z),
+                Vector3::new(hw, -hl, floor_z),
+                Vector3::new(hw, -hl, roof_z),
+                Vector3::new(hw, hl, roof_z),
+            ]),
+        );
+        polys.insert(
+            5u16,
+            make_poly(vec![
+                Vector3::new(-hw, hl, floor_z),
+                Vector3::new(hw, hl, floor_z),
+                Vector3::new(hw, hl, roof_z),
+                Vector3::new(-hw, hl, roof_z),
+            ]),
+        );
+        if door_open {
+            let y_sill = -hl;
+            let y_ground = -hl - 0.85;
+            polys.insert(
+                6u16,
+                make_poly(vec![
+                    Vector3::new(-hw, y_ground, 0.0),
+                    Vector3::new(hw, y_ground, 0.0),
+                    Vector3::new(hw, y_sill, floor_z),
+                    Vector3::new(-hw, y_sill, floor_z),
+                ]),
+            );
+        } else {
+            polys.insert(
+                6u16,
+                make_poly(vec![
+                    Vector3::new(hw, -hl, floor_z),
+                    Vector3::new(-hw, -hl, floor_z),
+                    Vector3::new(-hw, -hl, roof_z),
+                    Vector3::new(hw, -hl, roof_z),
+                ]),
+            );
+        }
+
+        let mut ids: Vec<u16> = polys.keys().copied().collect();
+        ids.sort_unstable();
+        CellPhysicsBsp {
+            tree: BspNode::Leaf(BspLeaf {
+                index: 0,
+                solid: 0,
+                sphere: None,
+                poly_ids: ids,
+            }),
+            polys,
+            origin,
+            orientation: Quaternion::identity(),
+            scale: 1.0,
+        }
+    }
+
+    #[test]
+    fn dericost_upsert_registers_bit15_cells_without_clamping_to_2039() {
+        let mut scene = SpatialScene::new();
+        let guid = 0x5500_0001;
+        let lb_high = 0x0203_8000;
+        let origin = Vector3::new(2.0 * 192.0 + 50.0, DERICOST_Y_OFFSET + 3.0 * 192.0 + 60.0, 10.0);
+
+        scene.upsert_dynamic_building_bsp(guid, lb_high, make_test_container_bsp(origin, true));
+
+        // gx = floor(434 / 24) = 18 (lb_x=2, cell_x=2)
+        // gy = floor(636 / 24) = 26 (lb_y=3, cell_y=2) -> 2*8 + 2 + 1 = 0x13
+        let expected_cell = 0x0203_8013;
+        assert!(
+            !scene.cell_static_physics_bsp(expected_cell).is_empty(),
+            "Dericost bit-15 cell {expected_cell:#010x} must be populated"
+        );
+        assert!(
+            scene.cell_static_physics_bsp(0x02FE_0008).is_empty()
+                && scene.cell_static_physics_bsp(0x02FE_8008).is_empty(),
+            "Dericost Y must not clamp into row 2039"
+        );
+        assert!(
+            scene.cell_static_physics_bsp(0x0203_0013).is_empty(),
+            "Dereth cell must remain empty when registering Dericost container"
+        );
+        assert_eq!(scene.statics_physics_bsp(0x0203_8000).len(), 1);
+        assert!(scene.statics_physics_bsp(0x0203_0000).is_empty());
+
+        let floor = scene
+            .probe_dynamic_building_surface(origin.x, origin.y, origin.z + 1.0)
+            .expect("probe hits Dericost container interior floor");
+        assert!((floor.0 - (origin.z + 0.162)).abs() < 1e-3);
+        assert!(floor.1.z >= FLOOR_Z);
+
+        let roof = scene
+            .probe_dynamic_building_surface(origin.x, origin.y, origin.z + 3.5)
+            .expect("probe hits Dericost container roof");
+        assert!((roof.0 - (origin.z + 2.591)).abs() < 1e-3);
+
+        let push = scene
+            .resolve_dynamic_building_wall_pushout(
+                Vector3::new(origin.x - 1.15, origin.y, origin.z + 1.0),
+                0.35,
+            )
+            .expect("wall pushout triggers at Dericost coords");
+        assert!(push.x > 0.05);
+
+        let pose = WorldPosition {
+            landblock_id: Guid(expected_cell),
+            coords: Vector3::new(50.0, 60.0, 10.0),
+            rotation: Quaternion::identity(),
+        };
+        let static_push = scene
+            .resolve_static_bsp_pushout(
+                &pose,
+                &[Vector3::new(origin.x - 1.15, origin.y, origin.z + 1.0)],
+                0.35,
+                1,
+            )
+            .expect("resolve_static_bsp_pushout must preserve bit 15 on Dericost");
+        assert!(static_push.x > 0.05);
+    }
+
+    #[test]
+    fn dericost_south_shore_boundary_straddle_negative_local_y_clamps_to_zero() {
+        let mut scene = SpatialScene::new();
+        let origin = Vector3::new(10.0, DERICOST_Y_OFFSET + 1.0, 0.0);
+        // Rear ramp extends to 68929.0 - 2.949 - 0.85 = 68925.201 (< 68928.0).
+        scene.upsert_dynamic_building_bsp(0x5500_0002, 0x0000_8000, make_test_container_bsp(origin, true));
+
+        assert!(
+            !scene.cell_static_physics_bsp(0x0000_8001).is_empty(),
+            "south-shore Dericost ramp straddling < 68928.0 must clamp to cell gy=0 (0x0000_8001)"
+        );
+        assert!(
+            scene.cell_static_physics_bsp(0x00FE_0008).is_empty()
+                && scene.cell_static_physics_bsp(0x00FE_8008).is_empty(),
+            "must not clamp into row 2039"
+        );
+    }
+
+    #[test]
+    fn is_envcell_id_masks_dericost_continent_bit() {
+        assert!(!is_envcell_id(0x0203_8000));
+        assert!(!is_envcell_id(0x0203_8001));
+        assert!(!is_envcell_id(0x0203_8040));
+        assert!(!is_envcell_id(0x0203_80FF));
+        assert!(is_envcell_id(0x0203_0100));
+        assert!(is_envcell_id(0x0203_8100));
+        assert!(is_envcell_id(0x0203_FFFD));
+        assert!(!is_envcell_id(0x0203_FFFE));
+        assert!(!is_envcell_id(0x0203_FFFF));
+    }
+
+    #[test]
+    fn straddling_dynamic_bsp_evicted_cleanly_by_clear_static_physics_bsps_and_batched_clear() {
+        let mut scene = SpatialScene::new();
+        let dericost_guid = 0x5500_0010;
+        let dereth_guid = 0x5500_0011;
+
+        // Straddles East boundary between 0x0203_8000 (x < 576) and 0x0303_8000 (x >= 576).
+        let dericost_origin = Vector3::new(3.0 * 192.0 - 0.5, DERICOST_Y_OFFSET + 3.0 * 192.0 + 60.0, 10.0);
+        let dereth_origin = Vector3::new(2.0 * 192.0 + 50.0, 3.0 * 192.0 + 60.0, 10.0);
+
+        scene.upsert_dynamic_building_bsp(
+            dericost_guid,
+            0x0203_8000,
+            make_test_container_bsp(dericost_origin, false),
+        );
+        scene.upsert_dynamic_building_bsp(
+            dereth_guid,
+            0x0203_0000,
+            make_test_container_bsp(dereth_origin, false),
+        );
+
+        let home_cell = lcoord_to_cellid(23, 26) | 0x8000; // 0x0203_803B
+        let neighbor_cell = lcoord_to_cellid(24, 26) | 0x8000; // 0x0303_8003
+        let dereth_cell = lcoord_to_cellid(18, 26); // 0x0203_0013
+
+        assert_eq!(scene.dynamic_building_bsp_count(), 2);
+        assert!(!scene.cell_static_physics_bsp(home_cell).is_empty());
+        assert!(!scene.cell_static_physics_bsp(neighbor_cell).is_empty());
+        assert!(!scene.cell_static_physics_bsp(dereth_cell).is_empty());
+        assert_eq!(scene.building_bsps.len(), 2);
+
+        // 1. Evict via clear_static_physics_bsps_for_landblock
+        let removed = scene.clear_static_physics_bsps_for_landblock(0x0203_8000);
+        assert_eq!(removed, 1);
+        assert_eq!(scene.dynamic_building_bsp_count(), 1);
+        assert!(!scene.statics_physics_bsp.contains_key(&0x0203_8000));
+        assert!(!scene.cell_static_physics_bsp.contains_key(&home_cell));
+        assert!(
+            !scene.cell_static_physics_bsp.contains_key(&neighbor_cell),
+            "straddled neighbor cell must be evicted too"
+        );
+        assert_eq!(scene.building_bsps.len(), 1, "building_bsps pruned");
+        assert!(
+            scene
+                .probe_dynamic_building_surface(dericost_origin.x, dericost_origin.y, 12.0)
+                .is_none()
+        );
+        assert!(
+            scene
+                .probe_dynamic_building_surface(dereth_origin.x, dereth_origin.y, 12.0)
+                .is_some(),
+            "opposite continent Dereth container must stay intact"
+        );
+        assert!(!scene.cell_static_physics_bsp(dereth_cell).is_empty());
+
+        // 2. Re-insert and evict via clear_landblocks_collision (batched path)
+        scene.upsert_dynamic_building_bsp(
+            dericost_guid,
+            0x0203_8000,
+            make_test_container_bsp(dericost_origin, false),
+        );
+        assert_eq!(scene.dynamic_building_bsp_count(), 2);
+        assert!(!scene.cell_static_physics_bsp(neighbor_cell).is_empty());
+
+        let (_, _, _, _, bsps_removed) = scene.clear_landblocks_collision(&[0x0203_8000]);
+        assert_eq!(bsps_removed, 1);
+        assert_eq!(scene.dynamic_building_bsp_count(), 1);
+        assert!(!scene.statics_physics_bsp.contains_key(&0x0203_8000));
+        assert!(!scene.cell_static_physics_bsp.contains_key(&home_cell));
+        assert!(
+            !scene.cell_static_physics_bsp.contains_key(&neighbor_cell),
+            "batched clear must evict straddled neighbor cells too"
+        );
+        assert_eq!(scene.building_bsps.len(), 1);
+        assert!(
+            scene
+                .probe_dynamic_building_surface(dericost_origin.x, dericost_origin.y, 12.0)
+                .is_none()
+        );
+        assert!(
+            !scene.cell_static_physics_bsp(dereth_cell).is_empty(),
+            "batched Dericost unload must not clear Dereth cells"
+        );
+        assert_eq!(scene.statics_physics_bsp(0x0203_0000).len(), 1);
+    }
+
+    #[test]
+    fn upsert_move_across_cells_and_landblocks_leaves_no_stale_entries() {
+        let mut scene = SpatialScene::new();
+        let guid = 0x5500_0020;
+
+        let origin_a = Vector3::new(2.0 * 192.0 + 50.0, DERICOST_Y_OFFSET + 3.0 * 192.0 + 60.0, 10.0);
+        let cell_a = 0x0203_8013;
+        scene.upsert_dynamic_building_bsp(guid, 0x0203_8000, make_test_container_bsp(origin_a, false));
+        assert!(!scene.cell_static_physics_bsp(cell_a).is_empty());
+
+        let origin_b = Vector3::new(4.0 * 192.0 + 50.0, DERICOST_Y_OFFSET + 5.0 * 192.0 + 60.0, 10.0);
+        let cell_b = 0x0405_8013;
+        scene.upsert_dynamic_building_bsp(guid, 0x0405_8000, make_test_container_bsp(origin_b, false));
+
+        assert_eq!(scene.dynamic_building_bsp_count(), 1);
+        assert!(!scene.statics_physics_bsp.contains_key(&0x0203_8000));
+        assert!(!scene.cell_static_physics_bsp.contains_key(&cell_a));
+        assert_eq!(scene.statics_physics_bsp(0x0405_8000).len(), 1);
+        assert!(!scene.cell_static_physics_bsp(cell_b).is_empty());
+
+        assert!(scene.remove_dynamic_building_bsp(guid));
+        assert!(scene.statics_physics_bsp.is_empty());
+        assert!(scene.cell_static_physics_bsp.is_empty());
+        assert!(scene.building_bsps.is_empty());
+    }
+
+    #[test]
+    fn bake_outdoor_static_overlap_preserves_dericost_bit15_without_clobbering_dereth() {
+        let mut scene = SpatialScene::new();
+        scene.populate_terrain_heights(0x0203_8000, [10.0; 81]);
+        scene.populate_terrain_heights(0x0203_0000, [10.0; 81]);
+
+        // Static BSP on Dericost (0x0203_8000) straddling cells (16,25)->0x800A and (17,25)->0x8012
+        // x in [16*24+20 .. 17*24+4], y in [DERICOST_Y_OFFSET + 25*24+5 .. +15] -> cell_x=0..1, cell_y=1 -> 0x02, 0x0A; wait:
+        // gx = 2*8 + 1 = 17, gy = 3*8 + 2 = 26 -> lcoord_to_cellid(17, 26) = 0x0203_000B!
+        // With boundary at x = 2*192 + 24.0 (between cell_x=0 and cell_x=1) and gy=26 (y = 636 -> cell_y=2 -> 1*8+2+1=0x0B):
+        let dericost_origin = Vector3::new(2.0 * 192.0 + 24.0, DERICOST_Y_OFFSET + 3.0 * 192.0 + 60.0, 10.0);
+        let dereth_origin = Vector3::new(2.0 * 192.0 + 24.0, 3.0 * 192.0 + 60.0, 10.0);
+
+        scene.insert_static_physics_bsp(0x0203_8000, make_test_container_bsp(dericost_origin, false));
+        scene.insert_static_physics_bsp(0x0203_0000, make_test_container_bsp(dereth_origin, false));
+
+        let dereth_regs = scene.bake_outdoor_static_overlap_for_landblock(0x0203_0000, true);
+        assert!(dereth_regs > 0);
+        let dereth_before = scene.cell_static_physics_bsp(0x0203_000B).len();
+        assert!(dereth_before > 0);
+
+        let dericost_regs = scene.bake_outdoor_static_overlap_for_landblock(0x0203_8000, true);
+        assert!(dericost_regs > 0, "Dericost outdoor static overlap bake must register > 0 cells");
+        assert!(
+            !scene.cell_static_physics_bsp(0x0203_800B).is_empty(),
+            "Dericost cell 0x0203_800B must receive static overlap entry"
+        );
+        assert_eq!(
+            scene.cell_static_physics_bsp(0x0203_000B).len(),
+            dereth_before,
+            "Baking Dericost 0x0203_8000 must NOT clobber Dereth 0x0203_000B"
+        );
+
+        // Re-baking Dericost must remain idempotent and keep Dereth intact
+        let dericost_regs2 = scene.bake_outdoor_static_overlap_for_landblock(0x0203_8000, true);
+        assert_eq!(dericost_regs2, dericost_regs);
+        assert_eq!(scene.cell_static_physics_bsp(0x0203_800B).len(), 1);
+        assert_eq!(scene.cell_static_physics_bsp(0x0203_000B).len(), dereth_before);
+    }
+
+    #[test]
+    fn clear_cells_for_landblock_removes_dynamic_building_bsps() {
+        let mut scene = SpatialScene::new();
+        let dericost_origin = Vector3::new(3.0 * 192.0 - 0.5, DERICOST_Y_OFFSET + 3.0 * 192.0 + 60.0, 10.0);
+        let dereth_origin = Vector3::new(2.0 * 192.0 + 50.0, 3.0 * 192.0 + 60.0, 10.0);
+
+        scene.upsert_dynamic_building_bsp(0x5500_0030, 0x0203_8000, make_test_container_bsp(dericost_origin, false));
+        scene.upsert_dynamic_building_bsp(0x5500_0031, 0x0203_0000, make_test_container_bsp(dereth_origin, false));
+        let neighbor_cell = lcoord_to_cellid(24, 26) | 0x8000;
+        assert!(!scene.cell_static_physics_bsp(neighbor_cell).is_empty());
+
+        scene.clear_cells_for_landblock(0x0203_8000);
+        assert_eq!(scene.dynamic_building_bsp_count(), 1);
+        assert!(scene.probe_dynamic_building_surface(dericost_origin.x, dericost_origin.y, 12.0).is_none());
+        assert!(scene.cell_static_physics_bsp(neighbor_cell).is_empty());
+        assert!(scene.statics_physics_bsp(0x0203_8000).is_empty());
+        assert!(scene.probe_dynamic_building_surface(dereth_origin.x, dereth_origin.y, 12.0).is_some());
+    }
+
+    #[test]
+    fn clear_landblocks_collision_preserves_dereth_collision_parts_when_evicting_dericost() {
+        let mut scene = SpatialScene::new();
+        scene.populate_terrain_heights(0x0203_0000, [10.0; 81]);
+        scene.populate_terrain_heights(0x0203_8000, [20.0; 81]);
+        scene.mark_landblock_collision_part(0x0203_0000, 0x03);
+        scene.mark_landblock_collision_part(0x0203_8000, 0x03);
+
+        assert!(scene.landblock_collision_ready(0x0203_0001));
+        assert!(scene.landblock_collision_ready(0x0203_8001));
+
+        scene.clear_landblocks_collision(&[0x0203_8000]);
+
+        assert!(
+            scene.landblock_collision_ready(0x0203_0001),
+            "Evicting Dericost 0x0203_8000 must preserve Dereth 0x0203_0000 landblock_collision_parts"
+        );
+        assert!(
+            !scene.landblock_collision_ready(0x0203_8001),
+            "Evicting Dericost 0x0203_8000 must clear Dericost 0x0203_8000 landblock_collision_parts"
+        );
+    }
 }

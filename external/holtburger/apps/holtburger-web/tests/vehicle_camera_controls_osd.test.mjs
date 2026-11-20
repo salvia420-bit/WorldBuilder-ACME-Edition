@@ -949,6 +949,41 @@ await check("M3.6 OSD SURFACE_NAMES aligns 1-for-1 with ground_model.js SURFACE_
   }
 });
 
+await check("M3.7 OSD createVehicleOsd({ onSeatClick }) invokes onSeatClick(seatIdx) on crew card click", () => {
+  const { doc, byId } = makeFakeHudDom();
+  const clicked = [];
+  const osd = OSD.createVehicleOsd({
+    document: doc,
+    onSeatClick: (idx) => clicked.push(idx),
+  });
+
+  osd.update({
+    locomotion: 2,
+    name: "Willys MB 4x4",
+    seatIndex: 0,
+    seats: [101, 0, 0, 0],
+  });
+
+  const root = byId.get(OSD.OSD_ID);
+  const cards = [];
+  const walk = (n) => {
+    if (!n) return;
+    if (typeof n.className === "string" && n.className.includes("hb-ground-seat-card")) {
+      cards.push(n);
+    }
+    if (Array.isArray(n.children)) {
+      for (const c of n.children) walk(c);
+    }
+  };
+  walk(root);
+  assert(cards.length === 4, `expected 4 seat cards, got ${cards.length}`);
+
+  cards[1].dispatch("click", {});
+  cards[3].dispatch("click", {});
+  assert(clicked.length === 2 && clicked[0] === 1 && clicked[1] === 3, `expected [1, 3], got ${JSON.stringify(clicked)}`);
+  osd.dispose();
+});
+
 console.log("========================================");
 console.log(`Summary: ${passed} passed, ${failed} failed`);
 console.log("========================================");

@@ -269,7 +269,14 @@ export function createWorldStreamer(deps) {
       const guid = upd.guid >>> 0;
       const lpg = getLocalPlayerGuid();
       if (lpg === null || lpg === undefined || guid !== (lpg >>> 0)) return;
-      const lbId = ((upd.landblockId >>> 16) << 16) >>> 0;
+      const rawCell = upd.landblockId >>> 0;
+      const isDericostOutdoor = (rawCell & 0x8000) !== 0 && (rawCell & 0x7fff) < 0x0100;
+      const lbId = isDericostOutdoor
+        ? ((rawCell & 0xffff8000) >>> 0)
+        : (((rawCell >>> 16) << 16) >>> 0);
+      const terrainLbId = isDericostOutdoor
+        ? ((rawCell & 0xffff8000) >>> 0)
+        : lbId;
       // Session 8: stamp the server-authoritative LB BEFORE the load hooks
       // fire — teleport-destination urgent lane (see landblock_lru.js
       // noteServerLb / isNearPlayerLb; lockstep with the legacy copy).
@@ -362,16 +369,21 @@ export function createWorldStreamer(deps) {
         lastLb = lbId;
         emitLandblockChanged(prevLb, lbId);
       }
-      if (lbId !== 0 && !oceanHeld && !terrainPrefetchedLbs.has(lbId)) {
+      if (terrainLbId !== 0 && !oceanHeld && !terrainPrefetchedLbs.has(terrainLbId)) {
         // Fire-and-forget; the integrator preserves pose Z on
         // cache miss until the prefetch lands.
-        ensureTerrainAroundLandblock(lbId);
+        ensureTerrainAroundLandblock(terrainLbId);
       }
       // Mirror the terrain prefetch for building AABBs. Same trigger
       // (every position update for the local player), same 3x3 ring,
       // same lazy gate. Until this lands collision, the player walks
       // through walls outside the spawn neighbourhood.
-      if (lbId !== 0 && !oceanHeld && !buildingAabbsPopulatedLbs.has(lbId)) {
+      if (
+        lbId !== 0
+        && !oceanHeld
+        && !buildingAabbsPopulatedLbs.has(lbId)
+        && (!isDericostOutdoor || !buildingAabbsPopulatedLbs.has((lbId & 0xffff0000) >>> 0))
+      ) {
         ensureBuildingAabbsAroundLandblock(lbId);
       }
       // Lazy-fetch + bake EnvCells when entering a landblock.

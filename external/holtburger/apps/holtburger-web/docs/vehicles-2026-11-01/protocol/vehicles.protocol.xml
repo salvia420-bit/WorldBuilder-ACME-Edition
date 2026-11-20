@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  HBV1 — holtburger vehicles wire spec, protocol version 2 (v1 2026-11-01, v2 2026-11-02). "HBV1" is the
+  HBV1 — holtburger vehicles wire spec, protocol version 7 (v1 2026-11-01 .. v7 2026-11). "HBV1" is the
   protocol's name and tag, not its version.
 
   THE single definition of the vehicle messages (DESIGN.md §5, §5.1 rule 1). Written in the style of Chorizite's
@@ -49,6 +49,9 @@
                       Appended fields (since="4"):
                         Vehicle_Cargo    Slot, Reserved0, Reserved1, CargoWcid
                         Vehicle_State    CargoMask, PalletSize0, PalletSize1, Reserved3, CargoSlot0Wcid, CargoSlot1Wcid
+
+  v5 additions (2026-11): DeployableKind (10..12) for IsoContainer20/40/40HC, ContainerSlotWire type,
+                      C2S Vehicle_ContainerAction (0x090E), S2C Vehicle_ContainerState (0x090E).
 
   v6 additions (2026-11): TrailerActionKind enum, VehicleEventKind (19..21), DeployableKind (13..14),
                       C2S Vehicle_TrailerAction (0x090F), S2C Vehicle_TrailerState (0x090F).
@@ -265,7 +268,7 @@
     <type name="short" primitive="short" />
     <type name="VehicleHeader" text="Starts every HBV1 payload">
       <field type="uint" name="Tag" text="0x31564248 = the bytes 'H' 'B' 'V' '1'" />
-      <field type="ushort" name="Version" text="the writer's protocol version: 2 (1 from v1 writers)" />
+      <field type="ushort" name="Version" text="the writer's protocol version: 7 (1..6 from older writers)" />
       <field type="ushort" name="Reserved" text="0" />
     </type>
     <type name="VehicleSeatDef">
@@ -385,7 +388,7 @@
       <field type="ObjectId" name="ContainerGuid" />
       <field type="TrailerActionKind" name="Action" />
       <field type="byte" name="Slot" text="0=auto/center, 1=front, 2=rear" />
-      <field type="ushort" name="Flags" text="0x01=left (-1), 0x00=right/curbside (+1)" />
+      <field type="ushort" name="Flags" text="0x00=right/curbside (+1), 0x01=left (-1), 0x02=auto-detect side (overrides 0x01; resolves side from target container on load)" />
     </type>
     <type name="Vehicle_PalletJackAction" queue="Weenie" type="0x0910" text="Client walk-behind pallet jack operator action">
       <field type="VehicleHeader" name="Header" />
@@ -420,7 +423,7 @@
       <field type="float" name="VMin" />
       <field type="float" name="VCruise" />
       <field type="float" name="VMax" />
-      <field type="float" name="SpeedCap" text="the server's current hard cap (69 m/s until M3)" />
+      <field type="float" name="SpeedCap" text="the server's current hard cap" />
       <field type="float" name="Accel" />
       <field type="float" name="Decel" />
       <field type="float" name="MaxBank" />
@@ -529,7 +532,7 @@
       <field type="LandcellId" name="Cell" />
       <field type="Vector3" name="Position" text="landblock-local" />
       <field type="float" name="Value" />
-      <field type="uint" name="Aux" since="2" text="per Kind (BombRelease / Explosion: the station's weapon index)" />
+      <field type="uint" name="Aux" since="2" text="per Kind (BombRelease / Explosion: weapon index; CargoDeployed [15]: target guid; CargoPacked [16]: 0; RamHit [17]: damage; TwistlockToggled [21]: trailer guid (locked 0/1 in Value); SideliftRefused [24] / PalletJackEvent [25]: reason code 0..7)" />
       <field type="Vector3" name="Velocity" since="2" text="per Kind (BombRelease: the bomb's initial velocity, m/s)" />
     </type>
     <type name="Vehicle_RadarContacts" queue="UIQueue" type="0x090A" text="Server 1 Hz compact radar sweep broadcast">
@@ -573,7 +576,7 @@
       <field type="ObjectId" name="TargetGuid" />
       <field type="LandcellId" name="Cell" />
       <field type="Vector3" name="Muzzle" text="landblock-local" />
-      <field type="Vector3" name="TargetPos" text="landblock-local" />
+      <field type="Vector3" name="TargetPos" text="global AC" />
       <field type="Vector3" name="Velocity" text="m/s" />
       <field type="float" name="EnergyJoules" text="e.g. 120,000 J for laser" />
       <field type="ushort" name="BurstCount" />

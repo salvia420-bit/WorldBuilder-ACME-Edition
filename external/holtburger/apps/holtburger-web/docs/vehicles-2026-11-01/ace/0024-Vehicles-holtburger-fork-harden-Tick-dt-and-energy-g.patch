@@ -1,0 +1,619 @@
+From 2662f188e9af7661f5a16f309d9376fe1ac0417c Mon Sep 17 00:00:00 2001
+From: salvia420-bit <salvia420@gmail.com>
+Date: Fri, 20 Nov 2026 14:47:05 +0000
+Subject: [PATCH] Vehicles (holtburger fork): harden Tick/dt and energy guards
+ across Deployables and AirDefense
+
+Hardens remaining sibling Tick/AdvanceRise/dt and energy mutation methods against non-positive, NaN, and infinite inputs:
+- MissileTurretDeployable.AdvanceRise / Tick, MortarTurretDeployable.Tick, LaserTurretDeployable.Tick, GroundRadarDeployable.Tick, DeployableManager.Tick, AirDefenseManager.Tick, VehicleManager.Tick(double): reject !double.IsFinite(...) || <= 0.0 (and !float.IsFinite(dt) || dt <= 0.0f).
+- IsoContainerDeployable.Tick: upgrade double.IsNaN to !double.IsFinite so +Infinity cannot snap DoorProgress in a single tick.
+- VehicleManager.TickInner: clamp !double.IsFinite(elapsed) || elapsed < 0.0 to 0.0 alongside the 5.0s ceiling.
+- BatteryDeployable.Charge / TryDischarge: reject non-finite and negative/zero joule inputs.
+- Added 8 regression tests in DeployableEcosystemTests covering all guards and post-invalid-tick progression.
+
+Verified with dotnet test ACE.Server.Tests (Vehicles|Landblock): 364/364 passed.
+---
+ .../Vehicles/DeployableEcosystemTests.cs      | 443 ++++++++++++++++++
+ .../Vehicles/AirDefense/AirDefenseManager.cs  |   2 +
+ .../Vehicles/Deployables/BatteryDeployable.cs |   2 +
+ .../Vehicles/Deployables/DeployableManager.cs |   2 +
+ .../Deployables/GroundRadarDeployable.cs      |   1 +
+ .../Deployables/IsoContainerDeployable.cs     |   2 +-
+ .../Deployables/LaserTurretDeployable.cs      |   1 +
+ .../Deployables/MissileTurretDeployable.cs    |   2 +
+ .../Deployables/MortarTurretDeployable.cs     |   1 +
+ Source/ACE.Server/Vehicles/VehicleManager.cs  |   4 +-
+ 10 files changed, 458 insertions(+), 2 deletions(-)
+
+diff --git a/Source/ACE.Server.Tests/Vehicles/DeployableEcosystemTests.cs b/Source/ACE.Server.Tests/Vehicles/DeployableEcosystemTests.cs
+index 493b6bf7..7018142e 100644
+--- a/Source/ACE.Server.Tests/Vehicles/DeployableEcosystemTests.cs
++++ b/Source/ACE.Server.Tests/Vehicles/DeployableEcosystemTests.cs
+@@ -2589,6 +2589,449 @@ public void PowerGenerator_Tick_IgnoresNonPositiveAndNonFiniteElapsedSeconds()
+             Assert.AreEqual(PowerGeneratorDeployable.OutputPowerWatts, pg.PowerWatts);
+         }
+ 
++        [TestMethod]
++        public void MissileTurret_Tick_And_AdvanceRise_IgnoreNonPositiveAndNonFiniteDt()
++        {
++            double x = 1000.0, y = 2000.0, z = 40.0;
++            var grid = new MicroGrid(new Vector3((float)x, (float)y, (float)z));
++            var sam = new MissileTurretDeployable(MissileTurretDeployable.BuildWeenie(), new ObjectGuid(0x7500E501u))
++            {
++                Location = Vehicle.ToPosition(x, y, z, Quaternion.Identity),
++                OnlineFlags = DeployableOnlineFlags.Active | DeployableOnlineFlags.Powered,
++            };
++            grid.Register(sam);
++
++            var sensor = new AirDefenseSensor(0x7500E500u, new Vector3((float)x, (float)y, (float)z));
++            sensor.ProcessSweep(new[]
++            {
++                new AirTrackCandidate
++                {
++                    VehicleGuid = 0x7500E599u,
++                    Standing = IffStanding.Hostile,
++                    WorldPos = new Vector3((float)x + 200f, (float)y, (float)z + 160f),
++                    WorldVel = Vector3.Zero,
++                    RangeM = 200f,
++                    BearingRad = 0f,
++                    AltitudeAglM = 160f,
++                }
++            }, DateTime.UtcNow);
++            AirDefenseRegistry.RegisterSensor(sensor);
++
++            try
++            {
++                foreach (float bad in new[] { 0.0f, -5.0f, float.NaN, float.PositiveInfinity, float.NegativeInfinity })
++                {
++                    sam.AdvanceRise(bad);
++                    Assert.AreEqual(0.0f, sam.ElevationM, 1e-6f, $"AdvanceRise({bad}) must not mutate ElevationM");
++                }
++
++                foreach (double bad in new[] { 0.0, -5.0, double.NaN, double.PositiveInfinity, double.NegativeInfinity })
++                {
++                    sam.Tick(bad);
++                    Assert.AreEqual(0.0f, sam.ElevationM, 1e-6f, $"Pre-fire Tick({bad}) must not raise turret");
++                    Assert.AreEqual(MissileTurretDeployable.MaxAmmo, sam.AmmoRemaining);
++                    Assert.AreEqual(0.0f, sam.ReloadTimerS, 1e-6f);
++                }
++
++                sam.Tick(0.4);
++                Assert.AreEqual(MissileTurretDeployable.TargetElevationM, sam.ElevationM, 1e-5f);
++                Assert.AreEqual((ushort)0, sam.AmmoRemaining);
++                Assert.AreEqual(MissileTurretDeployable.ReloadDurationS, sam.ReloadTimerS, 1e-5f);
++                Assert.IsTrue(sam.IsReloading);
++
++                foreach (double bad in new[] { 0.0, -5.0, double.NaN, double.PositiveInfinity, double.NegativeInfinity })
++                {
++                    sam.Tick(bad);
++                    Assert.AreEqual(MissileTurretDeployable.ReloadDurationS, sam.ReloadTimerS, 1e-5f, $"Reload Tick({bad}) must be ignored");
++                    Assert.AreEqual((ushort)0, sam.AmmoRemaining);
++                    Assert.IsTrue(sam.IsReloading);
++                }
++
++                sam.Tick(6.0);
++                Assert.AreEqual(6.0f, sam.ReloadTimerS, 1e-4f, "ReloadTimerS must still advance normally after invalid ticks");
++                AirDefenseRegistry.Clear();
++                sam.Tick(6.0);
++                Assert.AreEqual(0.0f, sam.ReloadTimerS, 1e-5f);
++                Assert.AreEqual(MissileTurretDeployable.MaxAmmo, sam.AmmoRemaining);
++                Assert.IsFalse(sam.IsReloading);
++            }
++            finally
++            {
++                AirDefenseRegistry.Clear();
++            }
++        }
++
++        [TestMethod]
++        public void LaserTurret_Tick_IgnoresNonPositiveAndNonFiniteElapsedSeconds()
++        {
++            double x = 1000.0, y = 2000.0, z = 40.0;
++            var grid = new MicroGrid(new Vector3((float)x, (float)y, (float)z));
++            var bat = new BatteryDeployable(BatteryDeployable.BuildWeenie(), new ObjectGuid(0x7500E511u))
++            {
++                Location = Vehicle.ToPosition(x, y, z, Quaternion.Identity),
++                CapacitorJoules = 600000.0f,
++            };
++            var laser = new LaserTurretDeployable(LaserTurretDeployable.BuildWeenie(), new ObjectGuid(0x7500E512u))
++            {
++                Location = Vehicle.ToPosition(x + 1.0, y, z, Quaternion.Identity),
++                OnlineFlags = DeployableOnlineFlags.Active | DeployableOnlineFlags.Powered,
++            };
++            grid.Register(bat);
++            grid.Register(laser);
++
++            var sensor = new AirDefenseSensor(0x7500E510u, new Vector3((float)x, (float)y, (float)z));
++            sensor.ProcessSweep(new[]
++            {
++                new AirTrackCandidate
++                {
++                    VehicleGuid = 0x7500E598u,
++                    Standing = IffStanding.Hostile,
++                    WorldPos = new Vector3((float)x + 200f, (float)y, (float)z + 60f),
++                    WorldVel = Vector3.Zero,
++                    RangeM = 200f,
++                    BearingRad = 0f,
++                    AltitudeAglM = 60f,
++                }
++            }, DateTime.UtcNow);
++            AirDefenseRegistry.RegisterSensor(sensor);
++
++            try
++            {
++                foreach (double bad in new[] { 0.0, -5.0, double.NaN, double.PositiveInfinity, double.NegativeInfinity })
++                {
++                    laser.Tick(bad);
++                    Assert.AreEqual(600000.0f, bat.CapacitorJoules, 1e-4f, $"LaserTurret Tick({bad}) must not fire");
++                }
++
++                laser.Tick(0.1);
++                Assert.AreEqual(480000.0f, bat.CapacitorJoules, 1e-4f, "First valid tick must fire 120 kJ shot");
++
++                foreach (double bad in new[] { 0.0, -5.0, double.NaN, double.PositiveInfinity, double.NegativeInfinity })
++                {
++                    laser.Tick(bad);
++                }
++                laser.Tick(0.5);
++                Assert.AreEqual(480000.0f, bat.CapacitorJoules, 1e-4f, "Invalid ticks must not bypass 2.0s laser cooldown");
++
++                laser.Tick(1.6); // clears remaining 1.5s cooldown and returns
++                laser.Tick(0.1); // fires second shot if cooldown wasn't extended/bricked by -5.0 / -Infinity
++                Assert.AreEqual(360000.0f, bat.CapacitorJoules, 1e-4f, "Cooldown must expire normally after valid elapsed time");
++            }
++            finally
++            {
++                AirDefenseRegistry.Clear();
++            }
++        }
++
++        [TestMethod]
++        public void MortarTurret_Tick_IgnoresNonPositiveAndNonFiniteElapsedSeconds()
++        {
++            double x = 3550.0, y = 4550.0, z = 40.0;
++            var prevOverride = DeployableManager.EnterWorldOverrideForTesting;
++            DeployableManager.Clear();
++            DeployableManager.EnterWorldOverrideForTesting = _ => true;
++
++            var deployer = CreateTestPlayer(0x5000E521u, x, y, z, monarchId: 100u);
++            var foreignPlayer = CreateTestPlayer(0x5000E522u, x + 100.0, y, z, monarchId: 200u);
++
++            var lockField = typeof(ACE.Server.Managers.PlayerManager).GetField("playersLock", BindingFlags.Static | BindingFlags.NonPublic);
++            var dictField = typeof(ACE.Server.Managers.PlayerManager).GetField("onlinePlayers", BindingFlags.Static | BindingFlags.NonPublic);
++            var rwLock = (System.Threading.ReaderWriterLockSlim)lockField?.GetValue(null);
++            var onlineDict = (Dictionary<uint, Player>)dictField?.GetValue(null);
++            void RegPlayer(Player p) { rwLock.EnterWriteLock(); try { onlineDict[p.Guid.Full] = p; } finally { rwLock.ExitWriteLock(); } }
++            void UnregPlayer(uint g) { rwLock.EnterWriteLock(); try { onlineDict.Remove(g); } finally { rwLock.ExitWriteLock(); } }
++
++            RegPlayer(deployer);
++            RegPlayer(foreignPlayer);
++
++            try
++            {
++                var flux = new FluxPodDeployable(FluxPodDeployable.BuildWeenie(), new ObjectGuid(0x7500E521u), null, deployer)
++                {
++                    Location = Vehicle.ToPosition(x, y, z, Quaternion.Identity),
++                };
++                flux.Grid.Center = flux.GlobalPosition;
++                DeployableManager.RegisterGrid(flux.Grid);
++                DeployableManager.Register(flux);
++
++                var gen = new PowerGeneratorDeployable(PowerGeneratorDeployable.BuildWeenie(), new ObjectGuid(0x7500E522u), null, deployer)
++                {
++                    Location = Vehicle.ToPosition(x + 1.0, y, z, Quaternion.Identity),
++                    FuelSecondsRemaining = 120.0,
++                };
++                flux.Grid.Register(gen);
++                DeployableManager.Register(gen);
++
++                var radar = new GroundRadarDeployable(GroundRadarDeployable.BuildWeenie(), new ObjectGuid(0x7500E523u), null, deployer)
++                {
++                    Location = Vehicle.ToPosition(x + 2.0, y, z, Quaternion.Identity),
++                    TargetMonsters = false,
++                };
++                flux.Grid.Register(radar);
++                DeployableManager.Register(radar);
++
++                DeployableManager.Tick(0.6);
++                Assert.IsTrue(radar.IsPowered);
++                Assert.AreEqual(1, radar.ContactCount);
++
++                var mortar = new MortarTurretDeployable(MortarTurretDeployable.BuildWeenie(), new ObjectGuid(0x7500E524u), null, deployer)
++                {
++                    Location = Vehicle.ToPosition(x + 3.0, y, z, Quaternion.Identity),
++                    OnlineFlags = DeployableOnlineFlags.Active | DeployableOnlineFlags.Powered,
++                };
++                flux.Grid.Register(mortar);
++
++                foreach (double bad in new[] { 0.0, -5.0, double.NaN, double.PositiveInfinity, double.NegativeInfinity })
++                {
++                    mortar.Tick(bad);
++                    Assert.AreEqual(0.0f, mortar.PitchRad, 1e-6f, $"MortarTurret Tick({bad}) must not fire");
++                }
++
++                mortar.Tick(0.1);
++                Assert.AreEqual((float)(Math.PI / 4.0), mortar.PitchRad, 1e-5f, "Valid tick must fire mortar");
++                mortar.PitchRad = 0.0f;
++
++                foreach (double bad in new[] { 0.0, -5.0, double.NaN, double.PositiveInfinity, double.NegativeInfinity })
++                {
++                    mortar.Tick(bad);
++                }
++                mortar.Tick(1.0);
++                Assert.AreEqual(0.0f, mortar.PitchRad, 1e-6f, "Invalid ticks must not bypass 6.0s mortar cooldown");
++
++                mortar.Tick(5.1); // clears remaining 5.0s cooldown and returns
++                mortar.Tick(0.1); // fires second mortar round
++                Assert.AreEqual((float)(Math.PI / 4.0), mortar.PitchRad, 1e-5f, "Mortar cooldown must expire normally after valid elapsed time");
++            }
++            finally
++            {
++                UnregPlayer(deployer.Guid.Full);
++                UnregPlayer(foreignPlayer.Guid.Full);
++                DeployableManager.Clear();
++                DeployableManager.EnterWorldOverrideForTesting = prevOverride;
++            }
++        }
++
++        [TestMethod]
++        public void GroundRadar_Tick_IgnoresNonPositiveAndNonFiniteElapsedSeconds()
++        {
++            double x = 3600.0, y = 4600.0, z = 40.0;
++            var deployer = CreateTestPlayer(0x5000E531u, x, y, z, monarchId: 100u);
++            var foreignPlayer = CreateTestPlayer(0x5000E532u, x + 100.0, y, z, monarchId: 200u);
++
++            var lockField = typeof(ACE.Server.Managers.PlayerManager).GetField("playersLock", BindingFlags.Static | BindingFlags.NonPublic);
++            var dictField = typeof(ACE.Server.Managers.PlayerManager).GetField("onlinePlayers", BindingFlags.Static | BindingFlags.NonPublic);
++            var rwLock = (System.Threading.ReaderWriterLockSlim)lockField?.GetValue(null);
++            var onlineDict = (Dictionary<uint, Player>)dictField?.GetValue(null);
++            void RegPlayer(Player p) { rwLock.EnterWriteLock(); try { onlineDict[p.Guid.Full] = p; } finally { rwLock.ExitWriteLock(); } }
++            void UnregPlayer(uint g) { rwLock.EnterWriteLock(); try { onlineDict.Remove(g); } finally { rwLock.ExitWriteLock(); } }
++
++            RegPlayer(deployer);
++            RegPlayer(foreignPlayer);
++
++            try
++            {
++                var grid = new MicroGrid(new Vector3((float)x, (float)y, (float)z));
++                var radar = new GroundRadarDeployable(GroundRadarDeployable.BuildWeenie(), new ObjectGuid(0x7500E533u), null, deployer)
++                {
++                    Location = Vehicle.ToPosition(x, y, z, Quaternion.Identity),
++                    OnlineFlags = DeployableOnlineFlags.Active | DeployableOnlineFlags.Powered,
++                };
++                grid.Register(radar);
++
++                foreach (double bad in new[] { 0.0, -5.0, double.NaN, double.PositiveInfinity, double.NegativeInfinity })
++                {
++                    radar.Tick(bad);
++                    Assert.AreEqual(0.0f, radar.SweepAngleDeg, 1e-6f, $"GroundRadar Tick({bad}) must not change SweepAngleDeg");
++                    Assert.AreEqual(0.0f, radar.YawRad, 1e-6f);
++                    Assert.AreEqual(0, radar.ContactCount, $"GroundRadar Tick({bad}) must not trigger scan");
++                }
++
++                radar.Tick(0.4);
++                Assert.AreEqual(72.0f, radar.SweepAngleDeg, 1e-3f);
++                Assert.AreEqual(0, radar.ContactCount);
++
++                foreach (double bad in new[] { 0.0, -5.0, double.NaN, double.PositiveInfinity, double.NegativeInfinity })
++                {
++                    radar.Tick(bad);
++                    Assert.AreEqual(72.0f, radar.SweepAngleDeg, 1e-3f, $"GroundRadar Tick({bad}) must preserve SweepAngleDeg");
++                    Assert.AreEqual(0, radar.ContactCount);
++                }
++
++                radar.Tick(0.15);
++                Assert.AreEqual(99.0f, radar.SweepAngleDeg, 1e-3f);
++                Assert.AreEqual(1, radar.ContactCount, "Scan timer must reach 0.5s normally after invalid ticks");
++            }
++            finally
++            {
++                UnregPlayer(deployer.Guid.Full);
++                UnregPlayer(foreignPlayer.Guid.Full);
++            }
++        }
++
++        [TestMethod]
++        public void DeployableManager_And_AirDefenseManager_Tick_IgnoreNonPositiveAndNonFiniteElapsedSeconds()
++        {
++            double x = 3650.0, y = 4650.0, z = 40.0;
++            var prevOverride = DeployableManager.EnterWorldOverrideForTesting;
++            DeployableManager.Clear();
++            AirDefenseManager.ClearStations();
++            DeployableManager.EnterWorldOverrideForTesting = _ => true;
++
++            try
++            {
++                var flux = new FluxPodDeployable(FluxPodDeployable.BuildWeenie(), new ObjectGuid(0x7500E541u))
++                {
++                    Location = Vehicle.ToPosition(x, y, z, Quaternion.Identity),
++                };
++                flux.Grid.Center = flux.GlobalPosition;
++                DeployableManager.RegisterGrid(flux.Grid);
++                DeployableManager.Register(flux);
++
++                var gen = new PowerGeneratorDeployable(PowerGeneratorDeployable.BuildWeenie(), new ObjectGuid(0x7500E542u))
++                {
++                    Location = Vehicle.ToPosition(x + 1.0, y, z, Quaternion.Identity),
++                    FuelSecondsRemaining = 100.0,
++                };
++                flux.Grid.Register(gen);
++                DeployableManager.Register(gen);
++
++                var radar = new GroundRadarDeployable(GroundRadarDeployable.BuildWeenie(), new ObjectGuid(0x7500E543u))
++                {
++                    Location = Vehicle.ToPosition(x + 2.0, y, z, Quaternion.Identity),
++                };
++                flux.Grid.Register(radar);
++                DeployableManager.Register(radar);
++
++                var station = new RadarStation(RadarStation.BuildWeenie(null, null), new ObjectGuid(0x7500E544u), null, null)
++                {
++                    Location = Vehicle.ToPosition(x + 3.0, y, z, Quaternion.Identity),
++                    IsActive = true,
++                };
++                AirDefenseManager.RegisterStation(station);
++
++                foreach (double bad in new[] { 0.0, -5.0, double.NaN, double.PositiveInfinity, double.NegativeInfinity })
++                {
++                    DeployableManager.Tick(bad);
++                    AirDefenseManager.Tick(bad);
++                    VehicleManager.Tick(bad);
++                    Assert.AreEqual(100.0, gen.FuelSecondsRemaining, 1e-9, $"Invalid dt ({bad}) must not alter generator fuel");
++                    Assert.AreEqual(0.0f, radar.SweepAngleDeg, 1e-6f, $"Invalid dt ({bad}) must not rotate GroundRadar");
++                    Assert.AreEqual(0.0, station.SweepTimer, 1e-9, $"Invalid dt ({bad}) must not alter RadarStation.SweepTimer");
++                    Assert.AreEqual(DateTime.MinValue, station.LastScanUtc);
++                }
++
++                VehicleManager.Tick(0.5);
++                Assert.AreEqual(99.5, gen.FuelSecondsRemaining, 1e-9);
++                Assert.AreEqual(90.0f, radar.SweepAngleDeg, 1e-3f);
++                Assert.AreEqual(0.5, station.SweepTimer, 1e-9);
++                Assert.AreEqual(DateTime.MinValue, station.LastScanUtc);
++
++                foreach (double bad in new[] { 0.0, -5.0, double.NaN, double.PositiveInfinity, double.NegativeInfinity })
++                {
++                    DeployableManager.Tick(bad);
++                    AirDefenseManager.Tick(bad);
++                    VehicleManager.Tick(bad);
++                    Assert.AreEqual(99.5, gen.FuelSecondsRemaining, 1e-9);
++                    Assert.AreEqual(90.0f, radar.SweepAngleDeg, 1e-3f);
++                    Assert.AreEqual(0.5, station.SweepTimer, 1e-9);
++                    Assert.AreEqual(DateTime.MinValue, station.LastScanUtc);
++                }
++
++                VehicleManager.Tick(0.6);
++                Assert.AreEqual(98.9, gen.FuelSecondsRemaining, 1e-9);
++                Assert.AreEqual(198.0f, radar.SweepAngleDeg, 1e-3f);
++                Assert.IsTrue(station.LastScanUtc > DateTime.MinValue, "RadarStation sweep must fire normally once SweepTimer >= 1.0s");
++            }
++            finally
++            {
++                AirDefenseManager.ClearStations();
++                DeployableManager.Clear();
++                DeployableManager.EnterWorldOverrideForTesting = prevOverride;
++            }
++        }
++
++        [TestMethod]
++        public void IsoContainerDeployable_Tick_IgnoresInfiniteElapsedSeconds()
++        {
++            var container = new IsoContainerDeployable(IsoContainerDeployable.Wcid20ft, new Vector3(1000f, 2000f, 40f));
++            container.ToggleDoors();
++            Assert.AreEqual(ACE.Server.Vehicles.Deployables.ContainerDoorState.Opening, container.DoorState);
++
++            container.Tick(0.6);
++            Assert.AreEqual(0.5f, container.DoorProgress, 1e-4f);
++            Assert.AreEqual(ACE.Server.Vehicles.Deployables.ContainerDoorState.Opening, container.DoorState);
++
++            foreach (double bad in new[] { 0.0, -5.0, double.NaN, double.PositiveInfinity, double.NegativeInfinity })
++            {
++                container.Tick(bad);
++                Assert.AreEqual(0.5f, container.DoorProgress, 1e-4f, $"IsoContainer Tick({bad}) must not snap or poison DoorProgress");
++                Assert.AreEqual(ACE.Server.Vehicles.Deployables.ContainerDoorState.Opening, container.DoorState);
++            }
++        }
++
++        [TestMethod]
++        public void SemiTrailerDeployable_Tick_IgnoresNonPositiveAndNonFiniteElapsedSeconds()
++        {
++            const int lbX = 14, lbY = 14;
++            uint gridKey = ((uint)lbX << 24) | ((uint)lbY << 16);
++            var gridsField = typeof(VehicleTerrain).GetField("grids", BindingFlags.Static | BindingFlags.NonPublic);
++            var grids = (System.Collections.Concurrent.ConcurrentDictionary<uint, LandblockGrid>)gridsField?.GetValue(null);
++            bool hadPrev = grids.TryGetValue(gridKey, out var prevGrid);
++
++            try
++            {
++                var flat40 = new float[81];
++                Array.Fill(flat40, 40.0f);
++                grids[gridKey] = new LandblockGrid { Heights = flat40 };
++
++                double gx = lbX * 192.0 + 60.0;
++                double gy = lbY * 192.0 + 60.0;
++                var sl = new SemiTrailerDeployable(SemiTrailerDeployable.WcidSidelifter40, new Vector3((float)gx, (float)gy, 40.0f));
++                Assert.IsTrue(sl.TryDeployOutriggers(1, out var reason, null), reason ?? "TryDeployOutriggers failed");
++                Assert.AreEqual(SideliftPhase.OutriggersDeploying, sl.SideliftPhase);
++                Assert.AreEqual(0.0f, sl.SideliftProgress, 1e-6f);
++
++                foreach (double bad in new[] { 0.0, -5.0, double.NaN, double.PositiveInfinity, double.NegativeInfinity })
++                {
++                    sl.Tick(bad);
++                    Assert.AreEqual(0.0f, sl.SideliftProgress, 1e-6f, $"SemiTrailer Tick({bad}) must not advance SideliftProgress");
++                    Assert.AreEqual(0.0f, sl.OutriggerProgress, 1e-6f);
++                    Assert.AreEqual(SideliftPhase.OutriggersDeploying, sl.SideliftPhase);
++                }
++            }
++            finally
++            {
++                if (hadPrev) grids[gridKey] = prevGrid;
++                else grids.TryRemove(gridKey, out _);
++            }
++        }
++
++        [TestMethod]
++        public void BatteryDeployable_Charge_And_TryDischarge_RejectNonFiniteAndNegative()
++        {
++            var bat = new BatteryDeployable(BatteryDeployable.BuildWeenie(), new ObjectGuid(0x7500E561u))
++            {
++                CapacitorJoules = 1000.0f,
++            };
++
++            foreach (float bad in new[] { 0.0f, -500.0f, float.NaN, float.PositiveInfinity, float.NegativeInfinity })
++            {
++                bat.Charge(bad);
++                Assert.AreEqual(1000.0f, bat.CapacitorJoules, 1e-4f, $"Charge({bad}) must be ignored");
++            }
++
++            foreach (float bad in new[] { -100.0f, float.NaN, float.PositiveInfinity, float.NegativeInfinity })
++            {
++                Assert.IsFalse(bat.TryDischarge(bad), $"TryDischarge({bad}) must return false");
++                Assert.AreEqual(1000.0f, bat.CapacitorJoules, 1e-4f, $"TryDischarge({bad}) must not mutate CapacitorJoules");
++            }
++
++            bat.Charge(500.0f);
++            Assert.AreEqual(1500.0f, bat.CapacitorJoules, 1e-4f);
++            Assert.IsTrue(bat.TryDischarge(250.0f));
++            Assert.AreEqual(1250.0f, bat.CapacitorJoules, 1e-4f);
++        }
++
+         #endregion
+     }
+ }
+diff --git a/Source/ACE.Server/Vehicles/AirDefense/AirDefenseManager.cs b/Source/ACE.Server/Vehicles/AirDefense/AirDefenseManager.cs
+index 394ade44..8bb9729b 100644
+--- a/Source/ACE.Server/Vehicles/AirDefense/AirDefenseManager.cs
++++ b/Source/ACE.Server/Vehicles/AirDefense/AirDefenseManager.cs
+@@ -144,6 +144,8 @@ public static void ClearStations()
+ 
+         public static void Tick(double elapsedSeconds)
+         {
++            if (!double.IsFinite(elapsedSeconds) || elapsedSeconds <= 0.0) return;
++
+             _stateBroadcastTimer += elapsedSeconds;
+             bool broadcastState = _stateBroadcastTimer >= 1.0;
+             if (broadcastState) _stateBroadcastTimer = 0.0;
+diff --git a/Source/ACE.Server/Vehicles/Deployables/BatteryDeployable.cs b/Source/ACE.Server/Vehicles/Deployables/BatteryDeployable.cs
+index 088570b1..cd8384d0 100644
+--- a/Source/ACE.Server/Vehicles/Deployables/BatteryDeployable.cs
++++ b/Source/ACE.Server/Vehicles/Deployables/BatteryDeployable.cs
+@@ -63,11 +63,13 @@ public static Weenie BuildWeenie(Vehicle parentVehicle = null, Player deployer =
+ 
+         public void Charge(float joules)
+         {
++            if (!float.IsFinite(joules) || joules <= 0.0f) return;
+             CapacitorJoules = Math.Clamp(CapacitorJoules + joules, 0.0f, MaxCapacityJoules);
+         }
+ 
+         public bool TryDischarge(float joules)
+         {
++            if (!float.IsFinite(joules) || joules < 0.0f) return false;
+             if (CapacitorJoules >= joules)
+             {
+                 CapacitorJoules -= joules;
+diff --git a/Source/ACE.Server/Vehicles/Deployables/DeployableManager.cs b/Source/ACE.Server/Vehicles/Deployables/DeployableManager.cs
+index 23ccc341..d8268a6f 100644
+--- a/Source/ACE.Server/Vehicles/Deployables/DeployableManager.cs
++++ b/Source/ACE.Server/Vehicles/Deployables/DeployableManager.cs
+@@ -246,6 +246,8 @@ public static DeployableBase SpawnDeployable(uint wcid, Position location, Playe
+ 
+         public static void Tick(double elapsedSeconds)
+         {
++            if (!double.IsFinite(elapsedSeconds) || elapsedSeconds <= 0.0) return;
++
+             // 1. Tick all MicroGrids
+             List<MicroGrid> activeGrids;
+             lock (_gridLock)
+diff --git a/Source/ACE.Server/Vehicles/Deployables/GroundRadarDeployable.cs b/Source/ACE.Server/Vehicles/Deployables/GroundRadarDeployable.cs
+index 913bedbb..35b66ad8 100644
+--- a/Source/ACE.Server/Vehicles/Deployables/GroundRadarDeployable.cs
++++ b/Source/ACE.Server/Vehicles/Deployables/GroundRadarDeployable.cs
+@@ -59,6 +59,7 @@ public static Weenie BuildWeenie(Vehicle parentVehicle = null, Player deployer =
+         public override void Tick(double elapsedSeconds)
+         {
+             base.Tick(elapsedSeconds);
++            if (!double.IsFinite(elapsedSeconds) || elapsedSeconds <= 0.0) return;
+             if (!IsPowered)
+             {
+                 lock (_contactsLock) { _latestContacts.Clear(); }
+diff --git a/Source/ACE.Server/Vehicles/Deployables/IsoContainerDeployable.cs b/Source/ACE.Server/Vehicles/Deployables/IsoContainerDeployable.cs
+index a0a71c3e..a0b680af 100644
+--- a/Source/ACE.Server/Vehicles/Deployables/IsoContainerDeployable.cs
++++ b/Source/ACE.Server/Vehicles/Deployables/IsoContainerDeployable.cs
+@@ -388,7 +388,7 @@ public override void Tick(double elapsedSeconds)
+             if (DoorState == ContainerDoorState.Closed || DoorState == ContainerDoorState.Open)
+                 return;
+ 
+-            if (double.IsNaN(elapsedSeconds) || elapsedSeconds <= 0.0)
++            if (!double.IsFinite(elapsedSeconds) || elapsedSeconds <= 0.0)
+                 return;
+ 
+             float delta = (float)(elapsedSeconds / (double)DoorAnimationDurationSec);
+diff --git a/Source/ACE.Server/Vehicles/Deployables/LaserTurretDeployable.cs b/Source/ACE.Server/Vehicles/Deployables/LaserTurretDeployable.cs
+index d9c2524e..151bfe04 100644
+--- a/Source/ACE.Server/Vehicles/Deployables/LaserTurretDeployable.cs
++++ b/Source/ACE.Server/Vehicles/Deployables/LaserTurretDeployable.cs
+@@ -84,6 +84,7 @@ public bool TryFire(uint targetGuid, Vector3 targetPos)
+         public override void Tick(double elapsedSeconds)
+         {
+             base.Tick(elapsedSeconds);
++            if (!double.IsFinite(elapsedSeconds) || elapsedSeconds <= 0.0) return;
+             if (!IsPowered) return;
+ 
+             if (_fireCooldownS > 0.0)
+diff --git a/Source/ACE.Server/Vehicles/Deployables/MissileTurretDeployable.cs b/Source/ACE.Server/Vehicles/Deployables/MissileTurretDeployable.cs
+index cee369cf..5416580a 100644
+--- a/Source/ACE.Server/Vehicles/Deployables/MissileTurretDeployable.cs
++++ b/Source/ACE.Server/Vehicles/Deployables/MissileTurretDeployable.cs
+@@ -75,6 +75,7 @@ public void CueTarget(Vector3 targetPos)
+ 
+         public void AdvanceRise(float dt)
+         {
++            if (!float.IsFinite(dt) || dt <= 0.0f) return;
+             ElevationM = Math.Min(TargetElevationM, ElevationM + (TargetElevationM / RiseDurationS) * dt);
+         }
+ 
+@@ -115,6 +116,7 @@ public bool FireSalvo(uint targetGuid, Vector3 targetPos)
+         public override void Tick(double elapsedSeconds)
+         {
+             base.Tick(elapsedSeconds);
++            if (!double.IsFinite(elapsedSeconds) || elapsedSeconds <= 0.0) return;
+             if (!IsPowered) return;
+ 
+             if (ReloadTimerS > 0.0f)
+diff --git a/Source/ACE.Server/Vehicles/Deployables/MortarTurretDeployable.cs b/Source/ACE.Server/Vehicles/Deployables/MortarTurretDeployable.cs
+index 4ecd5bc2..ab3332da 100644
+--- a/Source/ACE.Server/Vehicles/Deployables/MortarTurretDeployable.cs
++++ b/Source/ACE.Server/Vehicles/Deployables/MortarTurretDeployable.cs
+@@ -93,6 +93,7 @@ public bool FireMortar(uint targetGuid, Vector3 targetPos, Vector3 velocity)
+         public override void Tick(double elapsedSeconds)
+         {
+             base.Tick(elapsedSeconds);
++            if (!double.IsFinite(elapsedSeconds) || elapsedSeconds <= 0.0) return;
+             if (!IsPowered) return;
+ 
+             if (_fireCooldownS > 0.0)
+diff --git a/Source/ACE.Server/Vehicles/VehicleManager.cs b/Source/ACE.Server/Vehicles/VehicleManager.cs
+index 60f4aaea..b9d2737d 100644
+--- a/Source/ACE.Server/Vehicles/VehicleManager.cs
++++ b/Source/ACE.Server/Vehicles/VehicleManager.cs
+@@ -194,6 +194,7 @@ public static void Tick()
+ 
+         public static void Tick(double elapsed)
+         {
++            if (!double.IsFinite(elapsed) || elapsed <= 0.0) return;
+             AirDefense.AirDefenseManager.Tick(elapsed);
+             Deployables.DeployableManager.Tick(elapsed);
+         }
+@@ -206,7 +207,8 @@ static void TickInner()
+             var now = clock.Elapsed.TotalSeconds;
+             var elapsed = now - lastTickSeconds;
+             lastTickSeconds = now;
+-            if (elapsed > 5.0) elapsed = 5.0;
++            if (!double.IsFinite(elapsed) || elapsed < 0.0) elapsed = 0.0;
++            else if (elapsed > 5.0) elapsed = 5.0;
+ 
+             AirDefense.AirDefenseManager.Tick(elapsed);
+             Deployables.DeployableManager.Tick(elapsed);
+-- 
+2.43.0
+

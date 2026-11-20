@@ -525,5 +525,45 @@ check("rear window Raycaster sightline (0/187 opaque hits), ±72° rack/cab clea
   semi.dispose();
 });
 
+// 10. Rotated Headlight FxLightSource Tracking + Zero Allocations + Dispose Cleanup (BUG-6, ADV-4)
+check("rotated headlight FxLightSource aligns with heading = PI/2, tracks motion with 0 Vector3 allocs, and releases on dispose", () => {
+  let vector3Allocs = 0;
+  class MonitoredVector3 extends THREE.Vector3 {
+    constructor(...args) {
+      vector3Allocs++;
+      super(...args);
+    }
+  }
+  const customThree = Object.create(THREE);
+  customThree.Vector3 = MonitoredVector3;
+
+  const activeLights = [];
+  const semi = buildSemiTruck(customThree, {}, { liveScene3d: { activeLights } });
+  semi.root.position.set(100, 200, 10);
+  semi.root.rotation.z = -Math.PI / 2; // compass heading = +pi/2 (East = +X)
+  semi.root.updateMatrixWorld(true);
+
+  vector3Allocs = 0;
+  semi.update({ headlights: true, speed: 5.0 });
+  assert.equal(vector3Allocs, 0, "zero Vector3 allocations on headlight update");
+  near(semi.pooledLight.position.x, 100 + 3.60, 1e-3, "semi headlight X rotated East (+X)");
+  near(semi.pooledLight.position.y, 200, 1e-3, "semi headlight Y rotated East (0 offset)");
+  near(semi.pooledLight.position.z, 10 + 1.24, 1e-3, "semi headlight Z offset preserved");
+
+  // Subsequent update without s.headlights keeps tracking moved/turned root
+  semi.root.position.set(110, 220, 10);
+  semi.root.rotation.z = -Math.PI; // compass heading = pi (South = -Y)
+  semi.root.updateMatrixWorld(true);
+  semi.update({ speed: 6.0 });
+  assert.equal(vector3Allocs, 0, "zero Vector3 allocations on omitted-headlights tracking update");
+  near(semi.pooledLight.position.x, 110, 1e-3, "semi headlight X tracks South heading");
+  near(semi.pooledLight.position.y, 220 - 3.60, 1e-3, "semi headlight Y tracks South (-Y)");
+
+  semi.dispose();
+  assert.equal(semi.pooledLight.released, true, "semi pooledLight.released === true on dispose");
+  assert.equal(semi.pooledLight.intensity, 0, "semi pooledLight.intensity === 0 on dispose");
+  assert.equal(activeLights.length, 0, "semi pooledLight removed from activeLights");
+});
+
 console.log(`\nvehicle_semi_model: ${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

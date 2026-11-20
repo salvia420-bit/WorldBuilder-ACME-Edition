@@ -832,6 +832,60 @@ await check("T4.3 High-Speed 4x4 Off-Road Drift & Skid Test (1,000 Frames Zero H
   gvfx.dispose();
 });
 
+await check("T4.4 Ground VFX Jeep AC Compass Heading Rotation (PI/2 & PI)", () => {
+  const stamped = [];
+  const prevWin = globalThis.window;
+  globalThis.window = {
+    __terrainVfx: {
+      trail: {
+        stamp(wx, wy, radius, strength) {
+          stamped.push({ wx, wy, radius, strength });
+        },
+      },
+    },
+  };
+  try {
+    const tailOffset = [0.52, -1.62, 0.36];
+    const wheelOffsets = [
+      [-0.74, 1.02],
+      [0.74, 1.02],
+      [-0.74, -1.02],
+      [0.74, -1.02],
+    ];
+    for (const heading of [Math.PI / 2, Math.PI]) {
+      stamped.length = 0;
+      const gvfx = createGroundFx(THREE);
+      const px = 40;
+      const py = 60;
+      const pz = 2;
+      const cosH = Math.cos(heading);
+      const sinH = Math.sin(heading);
+
+      gvfx.update(1001, { x: px, y: py, z: pz, heading }, { speed: 12.0, handbrake: true, surfaceType: 1 }, 0.12);
+
+      assert(stamped.length === 4, `heading=${heading.toFixed(2)}: 4 jeep ruts stamped`);
+      for (let i = 0; i < 4; i++) {
+        const [lx, ly] = wheelOffsets[i];
+        const ex = px + lx * cosH + ly * sinH;
+        const ey = py - lx * sinH + ly * cosH;
+        near(stamped[i].wx, ex, 1e-4, `jeep rut[${i}] wx`);
+        near(stamped[i].wy, ey, 1e-4, `jeep rut[${i}] wy`);
+      }
+
+      const activeSlots = gvfx.pool.filter((s) => s.active);
+      const tx = px + tailOffset[0] * cosH + tailOffset[1] * sinH;
+      const ty = py - tailOffset[0] * sinH + tailOffset[1] * cosH;
+      const exhaust = activeSlots.find((s) => s.mat.color.getHex() === 0x555555 && Math.hypot(s.x - tx, s.y - ty) < 0.2);
+      assert(exhaust, `heading=${heading.toFixed(2)}: jeep tailpipe exhaust spawned at (${tx.toFixed(2)}, ${ty.toFixed(2)})`);
+
+      gvfx.dispose();
+    }
+  } finally {
+    if (prevWin === undefined) delete globalThis.window;
+    else globalThis.window = prevWin;
+  }
+});
+
 // ---------------------------------------------------------------------------
 // Summary
 // ---------------------------------------------------------------------------

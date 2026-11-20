@@ -595,5 +595,26 @@ check("extreme dt (NaN, Infinity, -0.1, 0, 2.0) & 3D bogieZ consistency on 15° 
   }
 });
 
+// 13. Adversarial (Finding 8): wrapPi(NaN/Infinity) and hitchOffsetY=NaN sanitization
+check("Adversarial (Finding 8): wrapPi(NaN/Infinity) returns finite 0 and hitchOffsetY=NaN falls back to -2.01", () => {
+  assert.ok(Number.isFinite(TK.wrapPi(NaN)) && TK.wrapPi(NaN) === 0.0, "wrapPi(NaN) === 0.0");
+  assert.ok(Number.isFinite(TK.wrapPi(Infinity)) && TK.wrapPi(Infinity) === 0.0, "wrapPi(Infinity) === 0.0");
+  assert.ok(Number.isFinite(TK.wrapPi(-Infinity)) && TK.wrapPi(-Infinity) === 0.0, "wrapPi(-Infinity) === 0.0");
+
+  const tractor = { x: 100, y: 100, z: 0, heading: 0.4, pitch: 0.05, speed: 10 };
+  const ref = TK.stepCoupledTrailer(tractor, { heading: 0.1 }, -2.01, "40ft", () => 0, 0.033);
+  const bad = TK.stepCoupledTrailer(tractor, { heading: 0.1 }, NaN, "40ft", () => 0, 0.033);
+  for (const k of ["x", "y", "z", "heading", "pitch", "bank", "roll", "articulationRad", "hitchX", "hitchY", "hitchZ", "bogieX", "bogieY", "bogieZ"]) {
+    assert.ok(Number.isFinite(bad[k]), `bad.${k} must be finite`);
+    near(bad[k], ref[k], 1e-12, `hitchOffsetY=NaN ${k} matches -2.01`);
+  }
+
+  const fwRef = TK.computeFifthWheelPose(tractor, -2.01, 0.96);
+  const fwBad = TK.computeFifthWheelPose(tractor, NaN, NaN);
+  near(fwBad.x, fwRef.x, 1e-12, "computeFifthWheelPose NaN hitchOffsetY x");
+  near(fwBad.y, fwRef.y, 1e-12, "computeFifthWheelPose NaN hitchOffsetY y");
+  near(fwBad.z, fwRef.z, 1e-12, "computeFifthWheelPose NaN fifthWheelOffsetZ z");
+});
+
 console.log(`\nvehicle_trailer_kinematics: ${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

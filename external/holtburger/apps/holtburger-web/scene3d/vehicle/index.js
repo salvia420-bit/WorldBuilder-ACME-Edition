@@ -43,6 +43,7 @@ import { buildSemiTruck } from "./semi_truck_model.js";
 import { buildSemiTrailer, resolveTrailerKind, TRAILER_WCID, isSidelifterKind } from "./trailer_models.js";
 import { buildSidelifterTrailer, SIDELIFTER_WCID } from "./sidelifter_model.js";
 import * as SK from "./sidelifter_kinematics.js";
+import { worldGroundHeight } from "../world_terrain.js";
 import { buildPalletJack, PALLET_JACK_WCID } from "./pallet_jack_model.js";
 import * as CL from "./container_logistics.js";
 import { createPalletJackController, PALLET_JACK_ACTION, inOpenModal } from "./pallet_jack_controller.js";
@@ -206,6 +207,13 @@ function angleDiff(a, b) {
   return d;
 }
 
+function cellToLandblockId(cell) {
+  const raw = cell >>> 0;
+  return ((raw & 0x8000) !== 0 && (raw & 0x7fff) < 0x0100)
+    ? ((raw & 0xffff8000) >>> 0)
+    : (((raw >>> 16) << 16) >>> 0);
+}
+
 export function initVehicles(liveOrDeps = {}, opts = {}) {
   if (liveOrDeps && liveOrDeps.liveScene3d) {
     return installVehicles(liveOrDeps);
@@ -232,9 +240,12 @@ export function installVehicles(deps = {}) {
   const em = () => live.entityManager ?? null;
   const ground = (x, y) => {
     const h = sh();
-    if (!h || typeof h.terrainHeightAt !== "function") return NaN;
-    const z = h.terrainHeightAt(x, y);
-    return z === undefined || z === null ? NaN : z;
+    if (h && typeof h.terrainHeightAt === "function") {
+      const z = h.terrainHeightAt(x, y);
+      if (z !== undefined && z !== null && Number.isFinite(z)) return z;
+    }
+    const wg = worldGroundHeight(x, y);
+    return wg !== null && wg !== undefined && Number.isFinite(wg) ? wg : NaN;
   };
 
   const vehicles = new Map(); // guid → {guid, profile, params, seats:[], last, track}
@@ -242,7 +253,16 @@ export function installVehicles(deps = {}) {
   const events = []; // recent vehicle events (bench)
   const stats = { frames: 0, msgs: 0, states: 0, profiles: 0, fires: 0, events: 0, parseErrors: 0, inputsSent: 0, sendErrors: 0, boardRefusals: 0, lastRefusal: null, pruned: 0,
     handoffs: 0, lastHandoff: null };
-  const osd = createVehicleOsd({ document: win.document });
+  const osd = createVehicleOsd({
+    document: win.document,
+    onSeatClick: (seatIdx) => {
+      const v = pilot ? pilot.vehicle : (passenger ? passenger.vehicle : null);
+      if (!v) return;
+      if (Number.isInteger(seatIdx) && seatIdx >= 0 && seatIdx < maxSeatsOf(v)) {
+        requestSeatHotSwap(v, seatIdx);
+      }
+    },
+  });
   const search = win.location?.search ?? "";
   const audioOn = vehicleAudioEnabled(search) && !live?.nullRender;
   const vehicleAudio = audioOn
@@ -301,11 +321,20 @@ export function installVehicles(deps = {}) {
     THREE,
     ground,
     getTargetPos: (guid) => {
-      const v = vehicles.get(guid >>> 0);
-      if (!v) return null;
-      const p = v.airframe?.root?.position || v.jeepModel?.root?.position || v.semiModel?.root?.position || v.standIn?.position;
-      if (p) return [p.x, p.y, p.z];
-      if (v.last && v.last.cell) return FM.toGlobal(v.last.cell, v.last.x, v.last.y, v.last.z);
+      const g = guid >>> 0;
+      if (!g) return null;
+      if (pilot && pilot.vehicle?.guid === g && pilot.predictor?.state) {
+        const s = pilot.predictor.state;
+        return [s.x, s.y, s.z];
+      }
+      const gmPos = groundModels.get(g)?.root?.position;
+      if (gmPos) return [gmPos.x, gmPos.y, gmPos.z];
+      const afPos = airframes?.get?.(g)?.root?.position;
+      if (afPos) return [afPos.x, afPos.y, afPos.z];
+      const emPos = em()?.entityMap?.get(g)?.root?.position;
+      if (emPos) return [emPos.x, emPos.y, emPos.z];
+      const v = vehicles.get(g);
+      if (v?.last && v.last.cell) return FM.toGlobal(v.last.cell, v.last.x, v.last.y, v.last.z);
       return null;
     },
   }) : null;
@@ -395,7 +424,18 @@ export function installVehicles(deps = {}) {
         ? buildDeployedRadar(THREE, { csmState: live.csmState, stowed })
         : buildDeployable(THREE, wcid, { csmState: live.csmState, stowed });
       live.worldRoot.add(model.root);
-      entry = { guid: g, wcid, model, last: null, lastSeenAt: nowSec(), standInHidden: false };
+      const now = nowSec();
+      entry = {
+        guid: g,
+        wcid,
+        model,
+        last: null,
+        lastSeenAt: now,
+        lastMsgAt: now,
+        standInHidden: false,
+        seenInEm: Boolean(em()?.entityMap?.get(g)),
+        localOnly: false,
+      };
       deployables.set(g, entry);
     }
     return entry;
@@ -404,6 +444,7 @@ export function installVehicles(deps = {}) {
   function removeDeployableEntry(guid) {
     const g = guid >>> 0;
     const entry = deployables.get(g);
+    try { deployableAudio?.stopGeneratorHum?.(g); } catch (_) {}
     if (!entry) return;
     try { if (entry.model?.root?.parent) entry.model.root.parent.remove(entry.model.root); entry.model?.dispose?.(); } catch (_) {}
     if (entry.standInHidden) {
@@ -498,7 +539,10 @@ export function installVehicles(deps = {}) {
         currentDoorProgress: initProgress,
         lastDoorOpen: null,
         lastSeenAt: nowSec(),
+        lastMsgAt: nowSec(),
         standInHidden: false,
+        seenInEm: Boolean(em()?.entityMap?.get(g)),
+        localOnly: false,
         liveryId: initialMsg.liveryId ?? 0,
         serialNumber: initialMsg.serialNumber ?? 0,
         slots: Array.isArray(initialMsg.slots) ? initialMsg.slots : [],
@@ -722,7 +766,10 @@ export function installVehicles(deps = {}) {
         },
         renderedPose: { x: worldPos[0], y: worldPos[1], z: worldPos[2], heading, pitch, bank },
         lastSeenAt: nowSec(),
+        lastMsgAt: nowSec(),
         standInHidden: false,
+        seenInEm: Boolean(em()?.entityMap?.get(g)),
+        localOnly: false,
         _attachedContainerGuid: 0,
         _attachedContainerSlot: "auto",
         _wasCoupledTo: 0,
@@ -978,7 +1025,10 @@ export function installVehicles(deps = {}) {
         ownerGuid: (initialMsg.ownerGuid ?? 0) >>> 0,
         last: null,
         lastSeenAt: nowSec(),
+        lastMsgAt: nowSec(),
         standInHidden: false,
+        seenInEm: Boolean(em()?.entityMap?.get(g)),
+        localOnly: false,
       };
       palletJacks.set(g, entry);
       try { requestShadowRaster(live.renderer, live); } catch (_) {}
@@ -1007,8 +1057,11 @@ export function installVehicles(deps = {}) {
   function tickPalletJacks(dt) {
     for (const entry of palletJacks.values()) {
       const inEm = em()?.entityMap?.get(entry.guid);
-      if (inEm && (!entry.standInHidden || inEm._filmHidden !== true)) {
-        try { if (em()?.setFilmHidden?.(entry.guid, true)) entry.standInHidden = true; } catch (_) {}
+      if (inEm) {
+        entry.seenInEm = true;
+        if (!entry.standInHidden || inEm._filmHidden !== true) {
+          try { if (em()?.setFilmHidden?.(entry.guid, true)) entry.standInHidden = true; } catch (_) {}
+        }
       }
       if (palletJackController?.activeGuid === entry.guid) continue;
       const stowed = Boolean(entry.stowedOnTrailerGuid !== 0 || (entry.flags & 0x04));
@@ -1096,8 +1149,12 @@ export function installVehicles(deps = {}) {
       x: entry.worldPos[0], y: entry.worldPos[1], z: entry.worldPos[2],
       heading: entry.heading || 0,
     };
-    const sideWorldX = trPose.x + Math.cos(trPose.heading || 0) * (side * SK.SIDELIFTER_OUTREACH_X);
-    const sideWorldY = trPose.y - Math.sin(trPose.heading || 0) * (side * SK.SIDELIFTER_OUTREACH_X);
+    const trH = trPose.heading || 0;
+    const cosH = Math.cos(trH);
+    const sinH = Math.sin(trH);
+    const sideX = side * SK.SIDELIFTER_OUTREACH_X;
+    const sideWorldX = trPose.x + sideX * cosH + slotY * sinH;
+    const sideWorldY = trPose.y - sideX * sinH + slotY * cosH;
     const gZ = ground(sideWorldX, sideWorldY);
     const groundLocalZ = Number.isFinite(gZ) ? (gZ - trPose.z) : 0.0;
     const lp = SK.evaluateContainerLocalPose(ph, prog, side, isLoad ? "load" : "offload", SK.CHASSIS_DECK_Z, groundLocalZ, slotY);
@@ -1120,8 +1177,11 @@ export function installVehicles(deps = {}) {
     const stepDt = Number.isFinite(dt) && dt > 0 ? Math.min(dt, 0.1) : 0;
     for (const entry of trailers.values()) {
       const inEm = em()?.entityMap?.get(entry.guid);
-      if (inEm && (!entry.standInHidden || inEm._filmHidden !== true)) {
-        try { if (em()?.setFilmHidden?.(entry.guid, true)) entry.standInHidden = true; } catch (_) {}
+      if (inEm) {
+        entry.seenInEm = true;
+        if (!entry.standInHidden || inEm._filmHidden !== true) {
+          try { if (em()?.setFilmHidden?.(entry.guid, true)) entry.standInHidden = true; } catch (_) {}
+        }
       }
 
       const slPatch = entry.isSidelifter ? updateSidelifterKinematicsAndPose(entry, dt, stepDt) : null;
@@ -1227,8 +1287,11 @@ export function installVehicles(deps = {}) {
 
     for (const entry of containers.values()) {
       const inEm = em()?.entityMap?.get(entry.guid);
-      if (inEm && (!entry.standInHidden || inEm._filmHidden !== true)) {
-        try { if (em()?.setFilmHidden?.(entry.guid, true)) entry.standInHidden = true; } catch (_) {}
+      if (inEm) {
+        entry.seenInEm = true;
+        if (!entry.standInHidden || inEm._filmHidden !== true) {
+          try { if (em()?.setFilmHidden?.(entry.guid, true)) entry.standInHidden = true; } catch (_) {}
+        }
       }
 
       if (Math.abs(entry.currentDoorProgress - entry.targetDoorProgress) > 1e-4) {
@@ -1312,15 +1375,24 @@ export function installVehicles(deps = {}) {
     const sunPitchRad = sky && Number.isFinite(sky.dirPitch) ? (sky.dirPitch * Math.PI) / 180 : 0.78;
     const sunHeadingRad = sky && Number.isFinite(sky.dirHeading) ? (sky.dirHeading * Math.PI) / 180 : 1.57;
 
-    let hasActiveRadar = false;
+    let hasActiveAirRadar = false;
+    let hasActiveGroundRadar = false;
     for (const entry of deployables.values()) {
       const inEm = em()?.entityMap?.get(entry.guid);
-      if (inEm && (!entry.standInHidden || inEm._filmHidden !== true)) {
-        try { if (em()?.setFilmHidden?.(entry.guid, true)) entry.standInHidden = true; } catch (_) {}
+      if (inEm) {
+        entry.seenInEm = true;
+        if (!entry.standInHidden || inEm._filmHidden !== true) {
+          try { if (em()?.setFilmHidden?.(entry.guid, true)) entry.standInHidden = true; } catch (_) {}
+        }
       }
-      if (entry.wcid === 4000002 || entry.wcid === DEPLOYABLE_WCID.GroundRadar) hasActiveRadar = true;
       const st = entry.last || {};
       const isStowed = Boolean((st.onlineFlags ?? 0) & 0x10);
+      if (entry.wcid === 4000002) {
+        if (!isStowed) hasActiveAirRadar = true;
+      } else if (entry.wcid === DEPLOYABLE_WCID.GroundRadar) {
+        const isOnline = st.onlineFlags !== undefined ? Boolean(st.onlineFlags & 1) : (st.online !== false);
+        if (!isStowed && isOnline) hasActiveGroundRadar = true;
+      }
       try {
         if (entry.wcid === 4000002) {
           entry.model.update({ simTimeSec: simT, stowed: isStowed });
@@ -1348,7 +1420,9 @@ export function installVehicles(deps = {}) {
 
     deployableVfx?.update(dt);
 
-    const showScope = hasActiveRadar || latestAirContacts.length > 0 || latestGroundContacts.length > 0;
+    if (!hasActiveAirRadar) latestAirContacts = [];
+    if (!hasActiveGroundRadar) latestGroundContacts = [];
+    const showScope = hasActiveAirRadar || hasActiveGroundRadar;
     if (showScope && !scopeMounted && win?.document?.body) {
       radarScope.mount(win.document.body);
       scopeMounted = true;
@@ -1402,6 +1476,12 @@ export function installVehicles(deps = {}) {
     try { h.camera.release(); h.camera.dispose(); } catch (_) {}
   }
 
+  // one tracked timer for every transient prompt (refusal, bail hints, bomb away, rearmed): cleared on dispose; when it
+  // expires the board prompt is re-evaluated (tickPrompt only rewrites on a change of the nearest vehicle)
+  let promptTimer = null;
+  let promptVehicle = null;
+  let promptText = null;
+
   function teardownSession(why) {
     if (pilot) stopPiloting(why);
     if (passenger) stopRiding(why);
@@ -1411,6 +1491,16 @@ export function installVehicles(deps = {}) {
     endHandoff(why);
     if (fall) { chutes?.close(localGuid()); stopFall(why); }
     releaseLandingCam();
+    try { clearTimeout(promptTimer); } catch (_) {}
+    promptTimer = null;
+    promptVehicle = null;
+    promptText = null;
+    try { osd.prompt(null); osd.hide(); } catch (_) {}
+    latestAirContacts = [];
+    latestGroundContacts = [];
+    try {
+      radarScope.update({ simTimeSec: nowSec(), airContacts: [], groundContacts: [], visible: false });
+    } catch (_) {}
     try {
       vehicleAudio?.stop({ fadeSec: 0 });
       vehicleAudio?.dispose();
@@ -1418,6 +1508,12 @@ export function installVehicles(deps = {}) {
       groundAudio?.dispose();
       logisticsAudio?.stop?.();
       if (why === "dispose") logisticsAudio?.dispose?.();
+      if (deployableAudio?.generators?.keys) {
+        for (const g of [...deployableAudio.generators.keys()]) {
+          deployableAudio.stopGeneratorHum(g);
+        }
+      }
+      if (why === "dispose") deployableAudio?.dispose?.();
     } catch (_) {}
     try {
       sh()?.clearVehicleSeat?.();
@@ -1467,10 +1563,6 @@ export function installVehicles(deps = {}) {
   } catch (_) {}
   const hopsOn = boardAnimEnabled(win.location?.search);
   let bailArmedAt = -1e9;
-  // one tracked timer for every transient prompt (refusal, bail hints, bomb away, rearmed): cleared on dispose; when it
-  // expires the board prompt is re-evaluated (tickPrompt only rewrites on a change of the nearest vehicle)
-  let promptTimer = null;
-  let promptVehicle = null;
   function flashPrompt(text, ms) {
     osd.prompt(text);
     try { clearTimeout(promptTimer); } catch (_) {}
@@ -1678,6 +1770,7 @@ export function installVehicles(deps = {}) {
       case "profile": {
         const v = vehicleOf(m.vehicle);
         v.profile = m;
+        v.lastMsgAt = nowSec();
         if (m.locomotion === 2 || m.profileKey === "jeep-mb" || isSemiProfile(m)) {
           v.locomotion = 2;
           v.params = groundParamsFromProfile(m);
@@ -1692,10 +1785,26 @@ export function installVehicles(deps = {}) {
         if (live?.renderer) {
           try { if (m.weapons?.length) fx.warm?.(); chutes?.warm?.(); aeroFx?.warm?.(); } catch (_) { /* best effort */ }
         }
+        if (!pilot && !passenger) {
+          const me = localGuid();
+          if (me) {
+            if ((v.seats[0] >>> 0) === me) {
+              startPiloting(v, 0);
+            } else {
+              for (let s = 1; s < v.seats.length; s++) {
+                if ((v.seats[s] >>> 0) === me) {
+                  startRiding(v, s);
+                  break;
+                }
+              }
+            }
+          }
+        }
         break;
       }
       case "seat": {
         const v = vehicleOf(m.vehicle);
+        v.lastMsgAt = nowSec();
         if (m.state === 1 && (m.occupant >>> 0)) fallPose?.end(m.occupant, "seated");
         if (m.state === 1) v.seats[m.seat] = m.occupant >>> 0;
         else if (m.state === 0) v.seats[m.seat] = 0;
@@ -1824,25 +1933,28 @@ export function installVehicles(deps = {}) {
             flashPrompt("Trailer unhitched — landing gear lowered", 1600);
           }
         } else if (m.kind === 21) { // twistlockToggled
-          const tr = trailers.get(m.vehicle >>> 0) ?? trailers.get(m.subject >>> 0);
+          const tr = trailers.get(m.vehicle >>> 0) ?? trailers.get(m.subject >>> 0) ?? (m.aux > 1 ? trailers.get(m.aux >>> 0) : undefined);
+          const locked = Number.isFinite(m.value) ? (m.value !== 0) : Boolean(m.aux);
           try {
             logisticsAudio?.twistlockClank?.({
               pos: tr?.worldPos ?? (m.cell ? FM.toGlobal(m.cell, m.x, m.y, m.z) : null),
-              locked: Boolean(m.aux),
+              locked,
             });
           } catch (_) {}
           if (myVehicle || (passenger && passenger.vehicle === v) || tr) {
-            flashPrompt(m.aux ? "Twistlocks LOCKED" : "Twistlocks UNLOCKED", 1400);
+            flashPrompt(locked ? "Twistlocks LOCKED" : "Twistlocks UNLOCKED", 1400);
           }
         } else if (m.kind === 22) { // sideliftStarted
           flashPrompt("ISO 3874: Sidelift sequence started", 1800);
         } else if (m.kind === 23) { // sideliftComplete
           flashPrompt("ISO 3874: Sidelift sequence complete", 1800);
         } else if (m.kind === 24) { // sideliftRefused
-          const msg = m.reason || SIDELIFT_REFUSAL_REASONS[m.aux] || SIDELIFT_REFUSAL_REASONS[0];
+          const code = Number.isFinite(m.aux) ? (m.aux >>> 0) : 0;
+          const msg = m.reason || SIDELIFT_REFUSAL_REASONS[code] || SIDELIFT_REFUSAL_REASONS[0];
           flashPrompt(msg, 2600);
         } else if (m.kind === 25) { // palletJackEvent
-          const msg = m.reason || PALLET_JACK_EVENT_REASONS[m.aux] || PALLET_JACK_EVENT_REASONS[0];
+          const code = Number.isFinite(m.aux) ? (m.aux >>> 0) : 0;
+          const msg = m.reason || PALLET_JACK_EVENT_REASONS[code] || PALLET_JACK_EVENT_REASONS[0];
           flashPrompt(msg, 2200);
         } else if (m.kind === 2) { // aircraft landed
           try {
@@ -1934,7 +2046,11 @@ export function installVehicles(deps = {}) {
         if (m.kind === 15 && m.aux) { // CargoDeployed (Air Radar or Pallet unit)
           const [wx, wy, wz] = m.cell ? FM.toGlobal(m.cell, m.x, m.y, m.z) : [m.x, m.y, m.z];
           const entry = ensureDeployableEntry(m.aux >>> 0, 4000002);
-          if (entry) entry.model.root.position.set(wx, wy, wz);
+          if (entry) {
+            entry.model.root.position.set(wx, wy, wz);
+            entry.lastMsgAt = nowSec();
+            if (em()?.entityMap?.get(entry.guid)) entry.seenInEm = true;
+          }
         } else if (m.kind === 16 && m.aux) { // CargoPacked
           removeDeployableEntry(m.aux >>> 0);
           removeContainerEntry(m.aux >>> 0);
@@ -1945,7 +2061,11 @@ export function installVehicles(deps = {}) {
         latestAirContacts = Array.isArray(m.contacts) ? m.contacts : [];
         if (m.radar && Array.isArray(m.radarPos) && m.radarPos.length >= 3) {
           const entry = ensureDeployableEntry(m.radar >>> 0, 4000002);
-          if (entry) entry.model.root.position.set(m.radarPos[0], m.radarPos[1], m.radarPos[2]);
+          if (entry) {
+            entry.model.root.position.set(m.radarPos[0], m.radarPos[1], m.radarPos[2]);
+            entry.lastMsgAt = nowSec();
+            if (em()?.entityMap?.get(entry.guid)) entry.seenInEm = true;
+          }
         }
         break;
       }
@@ -1960,14 +2080,21 @@ export function installVehicles(deps = {}) {
           entry.model.root.position.set(wx, wy, wz);
           if (Number.isFinite(m.heading)) entry.model.root.rotation.z = -m.heading;
           entry.last = m;
-          entry.lastSeenAt = nowSec();
+          const tNow = nowSec();
+          entry.lastSeenAt = tNow;
+          entry.lastMsgAt = tNow;
+          if (em()?.entityMap?.get(entry.guid)) entry.seenInEm = true;
           try { entry.model?.setStowed?.(Boolean((m.onlineFlags ?? 0) & 0x10)); } catch (_) {}
           if (m.kind === DEPLOYABLE_KINDS.PowerGenerator && deployableAudio) {
             try {
-              if ((m.fuelSec || 0) > 0 && (m.onlineFlags & 1)) {
-                deployableAudio.updateGeneratorHum(entry.guid, [wx, wy, wz], true);
+              const running = (m.fuelSec || 0) > 0 && Boolean((m.onlineFlags ?? 0) & 1) && !((m.onlineFlags ?? 0) & 0x10);
+              if (running) {
+                if (!deployableAudio.generators?.has?.(entry.guid)) {
+                  deployableAudio.createGeneratorHum(entry.guid, [wx, wy, wz]);
+                }
+                deployableAudio.updateGeneratorFuel(entry.guid, m.fuelSec || 0);
               } else {
-                deployableAudio.updateGeneratorHum(entry.guid, [wx, wy, wz], false);
+                deployableAudio.stopGeneratorHum(entry.guid);
               }
             } catch (_) {}
           }
@@ -1982,7 +2109,7 @@ export function installVehicles(deps = {}) {
         try {
           if (m.weaponKind === 1) deployableAudio?.playSamLaunch?.(mz);
           else if (m.weaponKind === 2) deployableAudio?.playMortarLaunch?.(mz);
-          else if (m.weaponKind === 3) deployableAudio?.playLaserSnap?.(mz);
+          else if (m.weaponKind === 3) deployableAudio?.playLaserDischarge?.(mz);
         } catch (_) {}
         break;
       }
@@ -2012,7 +2139,10 @@ export function installVehicles(deps = {}) {
           }
 
           entry.last = m;
-          entry.lastSeenAt = nowSec();
+          const tNow = nowSec();
+          entry.lastSeenAt = tNow;
+          entry.lastMsgAt = tNow;
+          if (em()?.entityMap?.get(guid)) entry.seenInEm = true;
           entry.targetDoorProgress = doorProgress;
           entry.cell = cell;
           entry.rawPos = pos;
@@ -2103,11 +2233,16 @@ export function installVehicles(deps = {}) {
           if (m.stowedPalletJackGuid !== undefined) entry.stowedPalletJackGuid = m.stowedPalletJackGuid >>> 0;
           if (m.transferContainerGuid !== undefined) entry.transferContainerGuid = m.transferContainerGuid >>> 0;
           entry.last = m;
-          entry.lastSeenAt = nowSec();
+          const tNow = nowSec();
+          entry.lastSeenAt = tNow;
+          entry.lastMsgAt = tNow;
 
           const inEm = em()?.entityMap?.get(guid);
-          if (inEm && (!entry.standInHidden || inEm._filmHidden !== true)) {
-            try { if (em()?.setFilmHidden?.(guid, true)) entry.standInHidden = true; } catch (_) {}
+          if (inEm) {
+            entry.seenInEm = true;
+            if (!entry.standInHidden || inEm._filmHidden !== true) {
+              try { if (em()?.setFilmHidden?.(guid, true)) entry.standInHidden = true; } catch (_) {}
+            }
           }
 
           if (entry.coupledTractorGuid === 0) {
@@ -2185,7 +2320,10 @@ export function installVehicles(deps = {}) {
           entry.carriedWcid = (m.carriedWcid ?? 0) >>> 0;
           entry.ownerGuid = (m.ownerGuid ?? 0) >>> 0;
           entry.last = m;
-          entry.lastSeenAt = nowSec();
+          const tNow = nowSec();
+          entry.lastSeenAt = tNow;
+          entry.lastMsgAt = tNow;
+          if (em()?.entityMap?.get(guid)) entry.seenInEm = true;
 
           const stowed = Boolean(entry.stowedOnTrailerGuid !== 0 || (entry.flags & 0x04));
           if (stowed) {
@@ -2287,11 +2425,17 @@ export function installVehicles(deps = {}) {
     v.hotSwapTarget = newSeat;
     v.hotSwapFrom = curSeat;
     v.hotSwapRequestedAt = nowSec();
-    try { sh().vehicleBoard(v.guid, newSeat); } catch (_) {}
+    try { sh()?.vehicleBoard?.(v.guid, newSeat); } catch (_) {}
   }
 
   function requestPassengerExit(mode = 0) {
     if (!passenger) return;
+    const vActive = passenger.vehicle;
+    if (vActive) {
+      vActive.hotSwapTarget = null;
+      vActive.hotSwapFrom = null;
+      vActive.hotSwapRequestedAt = 0;
+    }
     try { sh().vehicleExit(passenger.vehicle.guid, mode); } catch (_) {}
   }
 
@@ -2322,12 +2466,22 @@ export function installVehicles(deps = {}) {
     }
     endHandoff("re-seat");
     releaseLandingCam();
-    if (!v.params) return;
+    if (!v.params) {
+      try { camera?.release?.(); camera?.dispose?.(); } catch (_) {}
+      if (prevRigHidden) {
+        try { em()?.setFilmHidden?.(localGuid(), false); } catch (_) {}
+      }
+      try { sh()?.clearVehicleSeat?.(); } catch (_) {}
+      try { em()?.setMotion?.(localGuid(), MOTION.READY, MOTION.NONCOMBAT, 1.0); } catch (_) {}
+      try { groundAudio?.stop?.({ fadeSec: 0 }); vehicleAudio?.stop?.({ fadeSec: 0 }); } catch (_) {}
+      return;
+    }
 
     const isGround = isGroundVehicle(v);
     const controls = createVehicleControls({
       window: win,
       canvas: live.renderer?.domElement ?? null,
+      cameraSwitcher: live.cameraSwitcher ?? null,
       locomotion: isGround ? 2 : 1,
       seatIndex: 0,
       vehicleClass: v.profile?.vehicleClass ?? 0,
@@ -2404,7 +2558,8 @@ export function installVehicles(deps = {}) {
       camRoll: null,
       camLift: 0,
       lastServer: v.last,
-      leadLb: 0,
+      ownLb: -1,
+      leadLb: -1,
       sent: 0,
       unsub: null,
       lastSeat: null,
@@ -2483,10 +2638,21 @@ export function installVehicles(deps = {}) {
     }
     endHandoff("re-seat");
     releaseLandingCam();
+    if (!v.params) {
+      try { camera?.release?.(); camera?.dispose?.(); } catch (_) {}
+      if (prevRigHidden) {
+        try { em()?.setFilmHidden?.(localGuid(), false); } catch (_) {}
+      }
+      try { sh()?.clearVehicleSeat?.(); } catch (_) {}
+      try { em()?.setMotion?.(localGuid(), MOTION.READY, MOTION.NONCOMBAT, 1.0); } catch (_) {}
+      try { groundAudio?.stop?.({ fadeSec: 0 }); vehicleAudio?.stop?.({ fadeSec: 0 }); } catch (_) {}
+      return;
+    }
 
     const controls = createVehicleControls({
       window: win,
       canvas: live.renderer?.domElement ?? null,
+      cameraSwitcher: live.cameraSwitcher ?? null,
       locomotion: 2,
       seatIndex: seat,
       vehicleClass: v.profile?.vehicleClass ?? 0,
@@ -2696,6 +2862,10 @@ export function installVehicles(deps = {}) {
     }
     endHandoff("teleport");
     if (fall) { chutes?.close(localGuid()); stopFall("teleport"); }
+    const map = em()?.entityMap;
+    if (map) {
+      pruneLogisticsEntries(map, teleportAt, true);
+    }
   }
 
   /**
@@ -3066,6 +3236,12 @@ export function installVehicles(deps = {}) {
         m = 1;
       }
     }
+    const vActive = pilot.vehicle;
+    if (vActive) {
+      vActive.hotSwapTarget = null;
+      vActive.hotSwapFrom = null;
+      vActive.hotSwapRequestedAt = 0;
+    }
     try { h.vehicleExit(pilot.vehicle.guid, m); } catch (_) {}
   }
 
@@ -3196,7 +3372,7 @@ export function installVehicles(deps = {}) {
         raw.handbrake = true;
         raw.boost = false;
       }
-      p.predictor.stepLocal(hopping ? NEUTRAL_INPUT : raw);
+      p.predictor.stepLocal(hopping ? { ...NEUTRAL_INPUT, horn: !!raw.horn, headlights: !!raw.headlights } : raw);
       sendInput(p);
       n++;
     }
@@ -3317,7 +3493,7 @@ export function installVehicles(deps = {}) {
         setFlightHint({ x: pose.x, y: pose.y, z: pose.z, vx: vel[0], vy: vel[1], vz: vel[2], agl: Number.isNaN(gz) ? null : pose.z - gz });
         // ONE centre: the server never echoes the pilot's own position, so feed the world streamer the AIRCRAFT's
         // landblock on each crossing (noteServerLb / landblockChanged / the collision 3x3 then mean what they say)
-        const own = (cl.cell >>> 16) << 16;
+        const own = cellToLandblockId(cl.cell);
         const inOcean = pose.y >= 48960.0 && pose.y < 68928.0;
         if ((own !== p.ownLb || inOcean !== p.inOcean) && win.__worldStreamer && typeof win.__worldStreamer.onPositionUpdate === "function") {
           p.ownLb = own;
@@ -3336,7 +3512,7 @@ export function installVehicles(deps = {}) {
         // around the lead point only — no second residency centre
         const lead = Number.isFinite(v.profile.leadSeconds) ? v.profile.leadSeconds : 6;
         const lp = FM.toCellLocal(pose.x + vel[0] * lead, pose.y + vel[1] * lead, pose.z);
-        const lb = (lp.cell >>> 16) << 16;
+        const lb = cellToLandblockId(lp.cell);
         const leadGy = pose.y + vel[1] * lead;
         const leadInOcean = leadGy >= 48960.0 && leadGy < 68928.0;
         if (!leadInOcean && lb !== p.leadLb && typeof win.__ensureCollisionTerrain === "function") {
@@ -3349,7 +3525,7 @@ export function installVehicles(deps = {}) {
       const vel = FM.velocity(pose, v.params);
       const lead = Number.isFinite(v.profile.leadSeconds) ? v.profile.leadSeconds : 6;
       const lp = FM.toCellLocal(pose.x + vel[0] * lead, pose.y + vel[1] * lead, pose.z);
-      const lb = (lp.cell >>> 16) << 16;
+      const lb = cellToLandblockId(lp.cell);
       const leadGy = pose.y + vel[1] * lead;
       const inOcean = leadGy >= 48960.0 && leadGy < 68928.0;
       if ((lb !== p.leadLb || inOcean !== p.inOcean) && win.__worldStreamer && typeof win.__worldStreamer.onPositionUpdate === "function") {
@@ -3812,6 +3988,35 @@ export function installVehicles(deps = {}) {
   // A vehicle we stopped tracking (out of sight, or the server deleted it from our view) never gets its despawn event:
   // drop it once its entity is gone AND no state has arrived for 5 s (states come at 10 Hz while the server tracks it
   // for us; the entity alone is not enough — the client may cull a far entity the server still sends).
+  function pruneLogisticsEntries(map, t, immediate = false) {
+    if (!map) return;
+    for (const [g, entry] of [...trailers]) {
+      if (entry.localOnly || !entry.seenInEm || map.has(g)) continue;
+      const ct = entry.coupledTractorGuid >>> 0;
+      if (ct && ((pilot && (pilot.vehicle.guid >>> 0) === ct) || (passenger && (passenger.vehicle.guid >>> 0) === ct))) continue;
+      if (!immediate && t - (entry.lastMsgAt ?? entry.lastSeenAt ?? 0) < 5) continue;
+      removeTrailerEntry(g);
+    }
+    for (const [g, entry] of [...containers]) {
+      if (entry.localOnly || !entry.seenInEm || map.has(g)) continue;
+      if ((entry.mountedOnTrailerGuid && trailers.has(entry.mountedOnTrailerGuid >>> 0)) || findClaimingTrailer(g)) continue;
+      if (!immediate && t - (entry.lastMsgAt ?? entry.lastSeenAt ?? 0) < 5) continue;
+      removeContainerEntry(g);
+    }
+    for (const [g, entry] of [...deployables]) {
+      if (entry.localOnly || !entry.seenInEm || map.has(g)) continue;
+      if (!immediate && t - (entry.lastMsgAt ?? entry.lastSeenAt ?? 0) < 5) continue;
+      removeDeployableEntry(g);
+    }
+    for (const [g, entry] of [...palletJacks]) {
+      if (entry.localOnly || !entry.seenInEm || map.has(g)) continue;
+      if (palletJackController?.activeGuid === g) continue;
+      if (entry.stowedOnTrailerGuid && trailers.has(entry.stowedOnTrailerGuid >>> 0)) continue;
+      if (!immediate && t - (entry.lastMsgAt ?? entry.lastSeenAt ?? 0) < 5) continue;
+      removePalletJackEntry(g);
+    }
+  }
+
   let lastPrune = 0;
   function pruneVehicles() {
     const t = nowSec();
@@ -3819,14 +4024,18 @@ export function installVehicles(deps = {}) {
     lastPrune = t;
     const map = em()?.entityMap;
     if (!map) return;
+    const me = localGuid();
     for (const [guid, v] of vehicles) {
       if (pilot && pilot.vehicle === v) continue;
       if (passenger && passenger.vehicle === v) continue;
+      if (pendingBoard?.guid === guid) continue;
+      if (me && v.seats.some((occ) => (occ >>> 0) === me)) continue;
       if (map.has(guid) || t - (v.lastMsgAt ?? 0) < 5) continue;
       forgetVehicle(v);
       vehicles.delete(guid);
       stats.pruned++;
     }
+    pruneLogisticsEntries(map, t, false);
   }
 
   const SEAT_LABELS = Object.freeze(["Driver", "Front Passenger", "Rear Left", "Rear Right"]);
@@ -3876,19 +4085,20 @@ export function installVehicles(deps = {}) {
   }
 
   function localPlayerPos() {
+    try {
+      const pp = sh()?.getLocalPlayerPose?.();
+      if (pp && (pp.landblockId >>> 0) !== 0) {
+        const g = FM.toGlobal(pp.landblockId >>> 0, pp.x, pp.y, pp.z);
+        try { pp.free?.(); } catch (_) {}
+        return g;
+      }
+      try { pp?.free?.(); } catch (_) {}
+    } catch (_) {}
     const me = localGuid();
     const inst = em()?.entityMap?.get(me);
     if (inst?.root?.position) {
       return [inst.root.position.x, inst.root.position.y, inst.root.position.z];
     }
-    try {
-      const pp = sh()?.getLocalPlayerPose?.();
-      if (pp) {
-        const g = FM.toGlobal(pp.landblockId >>> 0, pp.x, pp.y, pp.z);
-        try { pp.free?.(); } catch (_) {}
-        return g;
-      }
-    } catch (_) {}
     return null;
   }
 
@@ -3986,7 +4196,6 @@ export function installVehicles(deps = {}) {
     return best;
   }
 
-  let promptText = null;
   function tickPrompt() {
     if (promptTimer) return; // a transient prompt is showing
     // never while falling / in the bail hand-off / walking a pallet jack
@@ -4048,7 +4257,7 @@ export function installVehicles(deps = {}) {
 
   const onLogisticsKeyDown = (ev) => {
     if (!ev || ev.repeat || ev.ctrlKey || ev.altKey || ev.metaKey) return;
-    if (isTypingTarget(ev, win.document) || inOpenModal(ev, win.document)) return;
+    if (isTypingTarget(ev, win.document) || inOpenModal(ev, win.document, win)) return;
     if (pilot || passenger || fall || handoff || palletJackController?.isActive?.()) return;
     if (caps.granted !== null && !(caps.granted & CAP_PILOT)) return;
 
@@ -4088,7 +4297,7 @@ export function installVehicles(deps = {}) {
       ev.preventDefault?.();
       ev.stopImmediatePropagation?.();
       try { live.audioManager?.notifyUserGesture?.(); } catch (_) {}
-      const sideFlags = 0x00; // default curbside right (+1)
+      const sideFlags = 0x02; // auto-detect side on load; server defaults/preserves active side on outriggers/offload
       if (code === "KeyJ") {
         const planted = Boolean((sl.sideliftFlags & 0x02) || (sl.sideliftPhase >= 2 && sl.sideliftPhase <= 9));
         const act = planted ? TRAILER_ACTION.RetractOutriggers : TRAILER_ACTION.DeployOutriggers;
@@ -4304,6 +4513,7 @@ export function installVehicles(deps = {}) {
       spawnLocal(guid, wcidOrKind, worldPos, heading = 0, state = {}) {
         const entry = ensureDeployableEntry(guid, wcidOrKind);
         if (!entry) return null;
+        entry.localOnly = true;
         entry.model.root.position.set(worldPos[0], worldPos[1], worldPos[2]);
         entry.model.root.rotation.z = -heading;
         entry.last = { ...state };
@@ -4346,6 +4556,7 @@ export function installVehicles(deps = {}) {
       spawnLocal(guid, kind, worldPos, heading = 0, state = {}) {
         const entry = ensureContainerEntry(guid, kind, { ...state, cell: 0, position: worldPos, heading });
         if (!entry) return null;
+        entry.localOnly = true;
         entry.model.root.position.set(worldPos[0], worldPos[1], worldPos[2]);
         entry.model.root.rotation.z = -heading;
         entry.rawPos = [worldPos[0], worldPos[1], worldPos[2]];
@@ -4469,7 +4680,9 @@ export function installVehicles(deps = {}) {
         else if (m === "autoload" || m === "auto_load" || m === "auto-load") act = TRAILER_ACTION.AutoLoad;
         else if (m === "auto") act = (tr && (tr.mountedContainerGuid >>> 0) !== 0) ? TRAILER_ACTION.AutoOffload : TRAILER_ACTION.AutoLoad;
         else if (m === "cancel") act = TRAILER_ACTION.CancelSidelift;
-        const flags = (side === "left" || side === -1) ? 0x01 : 0x00;
+        const flags = (side === "auto" || side === 0 || side === 2)
+          ? 0x02
+          : ((side === "left" || side === -1) ? 0x01 : 0x00);
         try {
           const h = sh();
           if (!h || typeof h.vehicleTrailerAction !== "function") return false;
@@ -4480,7 +4693,9 @@ export function installVehicles(deps = {}) {
         }
       },
       deployOutriggers(trailerGuid, side = "right") {
-        const flags = (side === "left" || side === -1) ? 0x01 : 0x00;
+        const flags = (side === "auto" || side === 0 || side === 2)
+          ? 0x02
+          : ((side === "left" || side === -1) ? 0x01 : 0x00);
         try {
           const h = sh();
           if (!h || typeof h.vehicleTrailerAction !== "function") return false;
@@ -4523,6 +4738,7 @@ export function installVehicles(deps = {}) {
       spawnLocal(guid, kind = "40ft", worldPos = [0, 0, 0], heading = 0, state = {}) {
         const entry = ensureTrailerEntry(guid, kind, { ...state, cell: 0, position: worldPos, heading });
         if (!entry) return null;
+        entry.localOnly = true;
         entry.worldPos = [worldPos[0], worldPos[1], worldPos[2]];
         entry.heading = heading;
         entry.model.root.position.set(worldPos[0], worldPos[1], worldPos[2]);

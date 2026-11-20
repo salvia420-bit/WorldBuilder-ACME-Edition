@@ -6,6 +6,7 @@
 import * as THREE from "three";
 import { lintManifest, lintSource } from "../scene3d/vfx/lint_caps.js";
 import { FxLightSource } from "../scene3d/vfx/fx_lights.js";
+import { createVehicleHeadlights } from "../scene3d/vehicle/fx_lights.js";
 
 let passed = 0;
 let failed = 0;
@@ -828,6 +829,56 @@ await check("T5.6 3D White Invasion Star Decal Exact 3.5mm Hood Plane Offset", (
   assert(minDiffMm > 0, "no star vertex penetrates into or below hood surface");
 
   jeep.dispose();
+});
+
+await check("T5.7 Rotated Headlight FxLightSource Tracking, Zero Alloc, and Dispose Release (BUG-6, ADV-4)", () => {
+  let vector3Allocs = 0;
+  class MonitoredVector3 extends THREE.Vector3 {
+    constructor(...args) {
+      vector3Allocs++;
+      super(...args);
+    }
+  }
+  const customThree = Object.create(THREE);
+  customThree.Vector3 = MonitoredVector3;
+
+  const activeLights = [];
+  const prof = makeJeepProfile();
+  const jeep = JM.buildProceduralJeep(customThree, prof, { liveScene3d: { activeLights } });
+  jeep.root.position.set(50, 80, 5);
+  jeep.root.rotation.z = -Math.PI / 2; // compass heading = +pi/2 (East = +X)
+  jeep.root.updateMatrixWorld(true);
+
+  vector3Allocs = 0;
+  jeep.update({ headlights: true, speed: 10.0 });
+  assert(vector3Allocs === 0, `zero Vector3 allocations on rotated headlight update: got ${vector3Allocs}`);
+  near(jeep.pooledLight.position.x, 50 + 1.6, 1e-3, "jeep headlight X rotated East (+X)");
+  near(jeep.pooledLight.position.y, 80, 1e-3, "jeep headlight Y rotated East (0 offset)");
+  near(jeep.pooledLight.position.z, 5 + 0.65, 1e-3, "jeep headlight Z offset preserved");
+
+  // Subsequent update omitting s.headlights must still track moved/rotated vehicle
+  jeep.root.position.set(60, 90, 5);
+  jeep.root.rotation.z = -Math.PI; // compass heading = pi (South = -Y)
+  jeep.root.updateMatrixWorld(true);
+  jeep.update({ speed: 12.0 });
+  assert(vector3Allocs === 0, `zero Vector3 allocations when s.headlights omitted: got ${vector3Allocs}`);
+  near(jeep.pooledLight.position.x, 60, 1e-3, "jeep headlight X tracks South");
+  near(jeep.pooledLight.position.y, 90 - 1.6, 1e-3, "jeep headlight Y tracks South (-Y)");
+
+  jeep.dispose();
+  assert(jeep.pooledLight.released === true, "jeep pooledLight.released === true on dispose");
+  assert(jeep.pooledLight.intensity === 0, "jeep pooledLight.intensity === 0 on dispose");
+  assert(activeLights.length === 0, "jeep pooledLight removed from activeLights");
+
+  const hlGroup = new THREE.Group();
+  hlGroup.position.set(10, 20, 1);
+  hlGroup.rotation.z = -Math.PI / 2;
+  hlGroup.updateMatrixWorld(true);
+  const hl = createVehicleHeadlights(THREE, hlGroup, { liveScene3d: { activeLights } });
+  hl.update({ headlights: true });
+  hl.update(null); // must not throw on null state and must preserve rotated position
+  near(hl.pooledLight.position.x, 10 + 1.6, 1e-3, "fx_lights update(null) preserves rotated headlight X");
+  hl.dispose();
 });
 
 // ---------------------------------------------------------------------------

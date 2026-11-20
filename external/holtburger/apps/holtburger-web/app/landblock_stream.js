@@ -16,6 +16,7 @@
 
 import { createWorldStreamer } from "../scene3d/world_stream.js";
 import { KIND as ENTITY_KIND, createEntityDispatcher } from "../scene3d/entity_dispatch.js";
+import { loadWorldData, extractDericostLandblockData } from "../scene3d/world_terrain.js";
 
 // `?interiorBuildShare` (2026-10-09, cold-load structural pass) — ONE in-flight
 // `fetchEnvCellsInLandblock` per landblock on the main wasm instance.
@@ -784,28 +785,51 @@ export function createLandblockStream(D) {
   }
 
   async function ensureTerrainAroundLandblock(centreLb) {
-    // centreLb is the high 16 bits of a cell id (e.g. 0xA9B40000).
-    // We prefetch the 3×3 ring around it (9 cells, ~580 m radius
-    // — enough headroom that the player can run for ~2 minutes
-    // before crossing into an unprefetched LB).
+    // centreLb is the high 16 bits of a cell id (e.g. 0xA9B40000), or
+    // 0xXXYY8000 on Dericost (bit 15 marks continent 1).
     const cx = (centreLb >>> 24) & 0xff;
     const cy = (centreLb >>> 16) & 0xff;
+    const isDericost = (centreLb & 0x8000) !== 0 && (centreLb & 0x7fff) < 0x0100;
     const fetchIds = [];
     for (let dy = -1; dy <= 1; dy += 1) {
       for (let dx = -1; dx <= 1; dx += 1) {
         const nx = cx + dx;
         const ny = cy + dy;
-        if (nx < 0 || nx > 0xff || ny < 0 || ny > 0xff) continue;
-        const lbId = ((nx << 24) | (ny << 16)) >>> 0;
+        const maxCoord = isDericost ? 254 : 0xff;
+        if (nx < 0 || nx > maxCoord || ny < 0 || ny > maxCoord) continue;
+        const lbId = (((nx << 24) | (ny << 16)) | (isDericost ? 0x8000 : 0)) >>> 0;
         if (terrainPrefetchedLbs.has(lbId) || terrainPrefetchInFlight.has(lbId)) {
           continue;
         }
         terrainPrefetchInFlight.add(lbId);
-        const cellId = (lbId | 0xffff) >>> 0;
-        fetchIds.push({ lbId, cellId });
+        const cellId = isDericost ? (lbId | 0x8001) >>> 0 : (lbId | 0xffff) >>> 0;
+        fetchIds.push({ lbId, cellId, nx, ny });
       }
     }
     if (fetchIds.length === 0) return;
+    if (isDericost) {
+      try {
+        const worldData = await loadWorldData();
+        const h = window.__sessionHandle;
+        for (const { lbId, nx, ny } of fetchIds) {
+          try {
+            const data = extractDericostLandblockData(nx, ny, worldData);
+            if (h && data) {
+              h.populateTerrain(lbId, data.heights, data.codes);
+              terrainPrefetchedLbs.add(lbId);
+            }
+          } catch (e) {
+            console.warn(`[terrain] Dericost populateTerrain failed for 0x${lbId.toString(16)}:`, e);
+          } finally {
+            terrainPrefetchInFlight.delete(lbId);
+          }
+        }
+      } catch (e) {
+        for (const { lbId } of fetchIds) terrainPrefetchInFlight.delete(lbId);
+        console.warn("[terrain] Dericost LB-change prefetch failed:", e);
+      }
+      return;
+    }
     try {
       // Session 8: URGENT lane (fetch-semaphore bypass). This is the
       // rig-blocking collision fetch — the integrator freezes pose Z
@@ -967,7 +991,14 @@ export function createLandblockStream(D) {
       } else {
       // A15-Q4-SYNC: begin streaming sequence (keep in lockstep with
       // scene3d/world_stream.js#onPositionUpdate).
-      const lbId = ((upd.landblockId >>> 16) << 16) >>> 0;
+      const rawCell = upd.landblockId >>> 0;
+      const isDericostOutdoor = (rawCell & 0x8000) !== 0 && (rawCell & 0x7fff) < 0x0100;
+      const lbId = isDericostOutdoor
+        ? ((rawCell & 0xffff8000) >>> 0)
+        : (((rawCell >>> 16) << 16) >>> 0);
+      const terrainLbId = isDericostOutdoor
+        ? ((rawCell & 0xffff8000) >>> 0)
+        : lbId;
       // Session 8: stamp the server-authoritative LB BEFORE the load
       // hooks fire so the destination 3×3 rides the urgent lane from
       // its first ask (the rig-derived urgency center can lag a
@@ -983,17 +1014,21 @@ export function createLandblockStream(D) {
           window.__pluginClient.events.emit("landblockChanged", { prevLb, lbId });
         }
       }
-      if (lbId !== 0 && !terrainPrefetchedLbs.has(lbId)) {
+      if (terrainLbId !== 0 && !terrainPrefetchedLbs.has(terrainLbId)) {
         // Fire-and-forget; the integrator preserves pose Z on
         // cache miss until the prefetch lands.
-        ensureTerrainAroundLandblock(lbId);
+        ensureTerrainAroundLandblock(terrainLbId);
       }
       // Phase 6 step B follow-up: mirror the terrain prefetch
       // for building AABBs. Same trigger (every position update
       // for the local player), same 3x3 ring, same lazy gate.
       // Until this lands collision, the player walks through
       // walls outside the spawn neighbourhood.
-      if (lbId !== 0 && !buildingAabbsPopulatedLbs.has(lbId)) {
+      if (
+        lbId !== 0
+        && !buildingAabbsPopulatedLbs.has(lbId)
+        && (!isDericostOutdoor || !buildingAabbsPopulatedLbs.has((lbId & 0xffff0000) >>> 0))
+      ) {
         ensureBuildingAabbsAroundLandblock(lbId);
       }
       // Phase 6 step C: lazy-fetch + bake EnvCells when entering

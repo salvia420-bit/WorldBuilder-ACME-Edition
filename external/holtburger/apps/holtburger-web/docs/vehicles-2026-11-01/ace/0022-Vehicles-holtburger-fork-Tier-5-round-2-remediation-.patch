@@ -1,0 +1,620 @@
+From fe2139689a19f9eb31c52cfee4e0461d5a161cf0 Mon Sep 17 00:00:00 2001
+From: salvia420-bit <salvia420@gmail.com>
+Date: Fri, 20 Nov 2026 12:20:18 +0000
+Subject: [PATCH] Vehicles (holtburger fork): Tier 5 round-2 remediation fixes
+ and regression tests
+
+Fixes 4 remaining bugs from Tier 5 Challenger 3 audit:
+- GroundRadarDeployable.ScanContacts Loop 3 excludes Player, Vendor, Pet, Cow, GamePiece, non-attackable, Tolerance.NoAttack, indoor, dead, destroyed, and teleporting creatures so owned turrets target only outdoor hostile monsters.
+- RadarStation.IsActive, AirDefenseManager.Tick, AirDefenseSensor, and VehicleManager.ToggleDeployableStow clear stale AirTracks and skip inactive sensors on stow/deactivation.
+- Vehicle.ToGlobal, VehicleManager.IsDericostCell (plus EnsureLoaded/Relocate), and LandblockId.Continent/GetHashCode guard Dericost bit 15 against indoor EnvCells (>= 0x100) and 0xFFFF BlockCellID sentinels.
+- MicroGrid.Tick returns early on deltaSeconds <= 0, NaN, or Infinity.
+- Added regression tests covering all 4 ACE fixes and updated ChallengerM2ContinentStressTests for high-bit Dereth indoor EnvCells (0x8100..0x8FFF).
+
+Verified with dotnet test ACE.Server.Tests (Vehicles|Landblock): 354/354 passed.
+---
+ Source/ACE.Entity/LandblockId.cs              |   4 +-
+ .../Vehicles/AirDefenseRadarTests.cs          |  33 ++++
+ .../ChallengerM2ContinentStressTests.cs       |   5 +-
+ .../Vehicles/DeployableEcosystemTests.cs      | 184 ++++++++++++++++++
+ .../DericostContinentInvariantsTests.cs       |  33 ++++
+ .../Vehicles/AirDefense/AirDefenseManager.cs  |  11 ++
+ .../Vehicles/AirDefense/AirDefenseSensor.cs   |  17 ++
+ .../Vehicles/AirDefense/RadarStation.cs       |  18 +-
+ .../Deployables/GroundRadarDeployable.cs      |  56 +++---
+ .../Vehicles/Deployables/MicroGrid.cs         |   3 +
+ Source/ACE.Server/Vehicles/Vehicle.cs         |   2 +-
+ Source/ACE.Server/Vehicles/VehicleManager.cs  |  11 +-
+ 12 files changed, 344 insertions(+), 33 deletions(-)
+
+diff --git a/Source/ACE.Entity/LandblockId.cs b/Source/ACE.Entity/LandblockId.cs
+index b40c8b5d..19345944 100644
+--- a/Source/ACE.Entity/LandblockId.cs
++++ b/Source/ACE.Entity/LandblockId.cs
+@@ -44,7 +44,7 @@ public LandblockId(byte x, byte y, byte continent)
+ 
+         public byte LandblockY => (byte)((Raw >> 16) & 0xFF);
+ 
+-        public byte Continent => (byte)((Raw >> 15) & 1);
++        public byte Continent => (Raw & 0xFFFFu) != 0xFFFFu && (Raw & 0x7FFFu) < 0x100u && (Raw & 0x8000u) != 0 ? (byte)1 : (byte)0;
+ 
+         /// <summary>
+         /// This is only used to calculate LandcellX and LandcellY - it has no other function.
+@@ -125,7 +125,7 @@ public override bool Equals(object obj)
+ 
+         public override int GetHashCode()
+         {
+-            return (int)(Raw & 0xFFFF8000);
++            return (int)((Raw & 0xFFFF0000u) | ((uint)Continent << 15));
+         }
+ 
+         public override string ToString()
+diff --git a/Source/ACE.Server.Tests/Vehicles/AirDefenseRadarTests.cs b/Source/ACE.Server.Tests/Vehicles/AirDefenseRadarTests.cs
+index e8f7220d..ff696f77 100644
+--- a/Source/ACE.Server.Tests/Vehicles/AirDefenseRadarTests.cs
++++ b/Source/ACE.Server.Tests/Vehicles/AirDefenseRadarTests.cs
+@@ -848,6 +848,39 @@ public void AirDefenseManager_Tick_InactiveStation_IsNotSwept()
+             Assert.AreEqual(DateTime.MinValue, station.LastScanUtc, "Inactive station must not perform sweep");
+         }
+ 
++        [TestMethod]
++        public void RadarStation_StowOrDeactivate_ClearsStaleTracksAndPreventsTurretCueing()
++        {
++            var jeep = CreateTestJeep(0x70000090, 1000.0, 2000.0, 100.0);
++            var player = CreateTestPlayer(0x10000003, 1000.0, 1998.5, 100.75);
++            var weenie = RadarStation.BuildWeenie(jeep, player);
++            var station = new RadarStation(weenie, new ObjectGuid(0x70000091), jeep, player)
++            {
++                Location = Vehicle.ToPosition(1000.0, 1998.45, 100.0, Quaternion.Identity),
++            };
++            station.UpdateSensorPosition();
++            AirDefenseManager.RegisterStation(station);
++
++            var targetPlane = CreateTestAircraft(0x70000092, 1000.0, 2500.0, 250.0);
++            var tracks = AirDefenseManager.PerformSweep(
++                station,
++                new[] { targetPlane },
++                terrainLookup: (x, y) => 100.0f,
++                nowUtc: DateTime.UtcNow);
++            Assert.AreEqual(1, tracks.Count);
++            Assert.IsNotNull(AirDefenseRegistry.FindNearestHostile(new Vector3(1000f, 2000f, 100f)));
++
++            // Stowing / deactivating RadarStation must clear stale tracks immediately and prevent AirDefenseRegistry acquisition
++            station.IsActive = false;
++            Assert.AreEqual(0, station.Sensor.ActiveTrackCount, "Deactivating RadarStation must clear Sensor tracks");
++            Assert.IsFalse(station.Sensor.IsActive, "Sensor.IsActive must mirror stowed RadarStation");
++            Assert.IsNull(AirDefenseRegistry.FindNearestHostile(new Vector3(1000f, 2000f, 100f)), "Stowed RadarStation must not cue turrets");
++
++            // Even after ticking past TrackTimeout, no stale track remains
++            AirDefenseManager.Tick(5.0);
++            Assert.IsNull(AirDefenseRegistry.FindNearestHostile(new Vector3(1000f, 2000f, 100f)));
++        }
++
+         #endregion
+     }
+ }
+diff --git a/Source/ACE.Server.Tests/Vehicles/ChallengerM2ContinentStressTests.cs b/Source/ACE.Server.Tests/Vehicles/ChallengerM2ContinentStressTests.cs
+index 6d2bc4b8..8b137325 100644
+--- a/Source/ACE.Server.Tests/Vehicles/ChallengerM2ContinentStressTests.cs
++++ b/Source/ACE.Server.Tests/Vehicles/ChallengerM2ContinentStressTests.cs
+@@ -55,8 +55,9 @@ public void LandblockId_IndoorEnvCells_IndoorsIsTrue_BothContinents()
+                 Assert.IsTrue(derethDungeon.Indoors, $"Dereth dungeon cell 0x{cell:X4} must be indoor");
+                 Assert.AreEqual((byte)0, derethDungeon.Continent);
+ 
+-                Assert.IsTrue(dericostDungeon.Indoors, $"Dericost dungeon cell 0x{cell:X4} must be indoor");
+-                Assert.AreEqual((byte)1, dericostDungeon.Continent);
++                // Bit-15 indoor EnvCells (0x8100..0xFFFE) are Dereth dungeon cells (Dericost has no dungeons; bit 15 is only continent on outdoor cells < 0x100).
++                Assert.IsTrue(dericostDungeon.Indoors, $"High-bit Dereth dungeon cell 0x{0x8000 | cell:X4} must be indoor");
++                Assert.AreEqual((byte)0, dericostDungeon.Continent);
+             }
+         }
+ 
+diff --git a/Source/ACE.Server.Tests/Vehicles/DeployableEcosystemTests.cs b/Source/ACE.Server.Tests/Vehicles/DeployableEcosystemTests.cs
+index f9aa50e3..f778b5a5 100644
+--- a/Source/ACE.Server.Tests/Vehicles/DeployableEcosystemTests.cs
++++ b/Source/ACE.Server.Tests/Vehicles/DeployableEcosystemTests.cs
+@@ -2369,6 +2369,190 @@ public void MicroGrid_PreservesBatteryChargeWhenInsufficientForConsumers()
+             Assert.AreEqual(400.0f, bat.CapacitorJoules, 1e-4f, "MicroGrid must NOT drain battery when insufficient to power consumers");
+         }
+ 
++        [TestMethod]
++        public void MicroGrid_Tick_IgnoresZeroNegativeAndNonFiniteDeltaSeconds()
++        {
++            double x = 3410.0, y = 4410.0, z = 40.0;
++            var grid = new MicroGrid(new Vector3((float)x, (float)y, (float)z));
++
++            var bat = new BatteryDeployable(BatteryDeployable.BuildWeenie(), new ObjectGuid(0x7500E211u))
++            {
++                Location = Vehicle.ToPosition(x, y, z, Quaternion.Identity),
++                CapacitorJoules = 5000.0f,
++            };
++            var laser = new LaserTurretDeployable(LaserTurretDeployable.BuildWeenie(), new ObjectGuid(0x7500E212u))
++            {
++                Location = Vehicle.ToPosition(x + 2.0, y, z, Quaternion.Identity),
++            };
++            grid.Register(bat);
++            grid.Register(laser);
++
++            grid.Tick(0.0f);
++            Assert.AreEqual(5000.0f, bat.CapacitorJoules, 1e-4f, "Zero dt must not change battery charge");
++
++            grid.Tick(-5.0f);
++            Assert.AreEqual(5000.0f, bat.CapacitorJoules, 1e-4f, "Negative dt must not charge battery from a power deficit");
++
++            grid.Tick(float.NaN);
++            Assert.AreEqual(5000.0f, bat.CapacitorJoules, 1e-4f, "NaN dt must be ignored");
++
++            grid.Tick(float.NegativeInfinity);
++            grid.Tick(float.PositiveInfinity);
++            Assert.AreEqual(5000.0f, bat.CapacitorJoules, 1e-4f, "Infinite dt must be ignored");
++        }
++
++        private static T CreateTestCreature<T>(uint guid, double x, double y, double z, bool attackable = true, bool alive = true, bool indoors = false) where T : Creature
++        {
++            var c = (T)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof(T));
++            typeof(WorldObject).GetField("<Guid>k__BackingField", BindingFlags.Instance | BindingFlags.NonPublic)
++                ?.SetValue(c, new ObjectGuid(guid));
++            var biota = new ACE.Entity.Models.Biota
++            {
++                Id = guid,
++                WeenieType = typeof(T) == typeof(Vendor) ? WeenieType.Vendor
++                    : typeof(T) == typeof(Pet) ? WeenieType.Pet
++                    : WeenieType.Creature,
++                PropertiesPosition = new Dictionary<PositionType, PropertiesPosition>(),
++                PropertiesBool = new Dictionary<PropertyBool, bool>(),
++                PropertiesAttribute2nd = new Dictionary<PropertyAttribute2nd, PropertiesAttribute2nd>
++                {
++                    [PropertyAttribute2nd.MaxHealth] = new PropertiesAttribute2nd { InitLevel = 100, CurrentLevel = 100 },
++                },
++            };
++            typeof(WorldObject).GetField("<Biota>k__BackingField", BindingFlags.Instance | BindingFlags.NonPublic)
++                ?.SetValue(c, biota);
++            typeof(WorldObject).GetField("ephemeralPositions", BindingFlags.Instance | BindingFlags.NonPublic)
++                ?.SetValue(c, new Dictionary<PositionType, Position>());
++            typeof(WorldObject).GetField("positionCache", BindingFlags.Instance | BindingFlags.NonPublic)
++                ?.SetValue(c, new Dictionary<PositionType, Position>());
++            typeof(WorldObject).GetField("BiotaDatabaseLock", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
++                ?.SetValue(c, new System.Threading.ReaderWriterLockSlim());
++
++            var vitals = new Dictionary<PropertyAttribute2nd, ACE.Server.WorldObjects.Entity.CreatureVital>
++            {
++                [PropertyAttribute2nd.MaxHealth] = new ACE.Server.WorldObjects.Entity.CreatureVital(c, PropertyAttribute2nd.MaxHealth) { Current = alive ? 100u : 0u },
++            };
++            typeof(Creature).GetField("Vitals", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)?.SetValue(c, vitals);
++            c.Attackable = attackable;
++            c.Location = indoors
++                ? new Position(0x1010_0100u, new Vector3(10f, 10f, 0f), Quaternion.Identity)
++                : Vehicle.ToPosition(x, y, z, Quaternion.Identity);
++            return c;
++        }
++
++        [TestMethod]
++        public void GroundRadar_TargetMonsters_IgnoresPlayersVendorsPetsAndNonAttackables_TargetsOnlyOutdoorHostileMonsters()
++        {
++            double x = 3500.0, y = 4500.0, z = 40.0;
++            var prevOverride = DeployableManager.EnterWorldOverrideForTesting;
++            DeployableManager.Clear();
++            DeployableManager.EnterWorldOverrideForTesting = _ => true;
++
++            var deployer = CreateTestPlayer(0x5000E301u, x + 5.0, y, z, monarchId: 100u);
++            var foreignPlayer = CreateTestPlayer(0x5000E302u, x + 40.0, y, z, monarchId: 200u);
++            var vendor = CreateTestCreature<Vendor>(0x7000E303u, x + 8.0, y, z, attackable: true);
++            var pet = CreateTestCreature<Pet>(0x7000E304u, x + 9.0, y, z, attackable: true);
++            var friendlyNpc = CreateTestCreature<Creature>(0x7000E305u, x + 10.0, y, z, attackable: false);
++            var indoorMonster = CreateTestCreature<Creature>(0x7000E306u, x + 11.0, y, z, attackable: true, indoors: true);
++            var deadMonster = CreateTestCreature<Creature>(0x7000E307u, x + 12.0, y, z, attackable: true, alive: false);
++            var monster = CreateTestCreature<Creature>(0x7000E308u, x + 15.0, y, z, attackable: true, alive: true);
++
++            // In-memory Landblock populated with deployer, vendor, pet, NPC, indoor/dead monsters, and 1 outdoor monster
++            var lb = (ACE.Server.Entity.Landblock)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof(ACE.Server.Entity.Landblock));
++            var worldObjs = new Dictionary<ObjectGuid, WorldObject>
++            {
++                [deployer.Guid] = deployer,
++                [vendor.Guid] = vendor,
++                [pet.Guid] = pet,
++                [friendlyNpc.Guid] = friendlyNpc,
++                [indoorMonster.Guid] = indoorMonster,
++                [deadMonster.Guid] = deadMonster,
++                [monster.Guid] = monster,
++            };
++            typeof(ACE.Server.Entity.Landblock).GetField("worldObjects", BindingFlags.Instance | BindingFlags.NonPublic)?.SetValue(lb, worldObjs);
++            typeof(ACE.Server.Entity.Landblock).GetField("pendingAdditions", BindingFlags.Instance | BindingFlags.NonPublic)?.SetValue(lb, new Dictionary<ObjectGuid, WorldObject>());
++            typeof(ACE.Server.Entity.Landblock).GetField("pendingRemovals", BindingFlags.Instance | BindingFlags.NonPublic)?.SetValue(lb, new List<ObjectGuid>());
++
++            var lockField = typeof(ACE.Server.Managers.PlayerManager).GetField("playersLock", BindingFlags.Static | BindingFlags.NonPublic);
++            var dictField = typeof(ACE.Server.Managers.PlayerManager).GetField("onlinePlayers", BindingFlags.Static | BindingFlags.NonPublic);
++            var rwLock = (System.Threading.ReaderWriterLockSlim)lockField?.GetValue(null);
++            var onlineDict = (Dictionary<uint, Player>)dictField?.GetValue(null);
++            void RegPlayer(Player p) { rwLock.EnterWriteLock(); try { onlineDict[p.Guid.Full] = p; } finally { rwLock.ExitWriteLock(); } }
++            void UnregPlayer(uint g) { rwLock.EnterWriteLock(); try { onlineDict.Remove(g); } finally { rwLock.ExitWriteLock(); } }
++
++            RegPlayer(deployer);
++            RegPlayer(foreignPlayer);
++
++            try
++            {
++                var flux = new FluxPodDeployable(FluxPodDeployable.BuildWeenie(), new ObjectGuid(0x7500E310u), null, deployer)
++                {
++                    Location = Vehicle.ToPosition(x, y, z, Quaternion.Identity),
++                };
++                flux.Grid.Center = flux.GlobalPosition;
++                DeployableManager.RegisterGrid(flux.Grid);
++                DeployableManager.Register(flux);
++
++                var gen = new PowerGeneratorDeployable(PowerGeneratorDeployable.BuildWeenie(), new ObjectGuid(0x7500E311u), null, deployer)
++                {
++                    Location = Vehicle.ToPosition(x + 1.0, y, z, Quaternion.Identity),
++                    FuelSecondsRemaining = 120.0,
++                };
++                flux.Grid.Register(gen);
++                DeployableManager.Register(gen);
++
++                var bat = new BatteryDeployable(BatteryDeployable.BuildWeenie(), new ObjectGuid(0x7500E312u), null, deployer)
++                {
++                    Location = Vehicle.ToPosition(x + 1.5, y, z, Quaternion.Identity),
++                    CapacitorJoules = 300000.0f,
++                };
++                flux.Grid.Register(bat);
++                DeployableManager.Register(bat);
++
++                var radar = new GroundRadarDeployable(GroundRadarDeployable.BuildWeenie(), new ObjectGuid(0x7500E313u), null, deployer)
++                {
++                    Location = Vehicle.ToPosition(x + 2.0, y, z, Quaternion.Identity),
++                    TargetMonsters = true,
++                };
++                typeof(WorldObject).GetProperty("CurrentLandblock", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
++                    ?.SetValue(radar, lb);
++                flux.Grid.Register(radar);
++                DeployableManager.Register(radar);
++
++                var laser = new LaserTurretDeployable(LaserTurretDeployable.BuildWeenie(), new ObjectGuid(0x7500E314u), null, deployer)
++                {
++                    Location = Vehicle.ToPosition(x + 2.5, y, z, Quaternion.Identity),
++                };
++                flux.Grid.Register(laser);
++                DeployableManager.Register(laser);
++
++                // 1. With monster present + foreignPlayer online: only monster + foreignPlayer are contacts (deployer, vendor, pet, NPC, indoor/dead monsters excluded)
++                DeployableManager.Tick(0.6);
++                Assert.AreEqual(2, radar.ContactCount, "Only the outdoor attackable monster and online foreign player should appear as contacts");
++                Assert.IsTrue(radar.FindNearestGroundContact(out var acquiredGuid, out _, out _));
++                Assert.AreEqual(monster.Guid.Full, acquiredGuid, "Nearest hostile must be the outdoor monster, never the deployer or vendor");
++
++                // 2. Remove both monster and foreignPlayer, shut off generator, and tick past 2s laser cooldown:
++                //    deployer, vendor, pet, friendlyNpc remain in landblock -> 0 contacts and laser must NOT discharge 120 kJ!
++                worldObjs.Remove(monster.Guid);
++                UnregPlayer(foreignPlayer.Guid.Full);
++                gen.FuelSecondsRemaining = 0.0;
++                DeployableManager.Tick(2.1); // expire laser cooldown + rescan
++                float joulesBefore = bat.CapacitorJoules;
++                DeployableManager.Tick(0.6);
++                Assert.AreEqual(0, radar.ContactCount, "Deployer, Vendor, Pet, non-attackable NPC, indoor/dead monsters must yield 0 contacts");
++                Assert.IsFalse(radar.FindNearestGroundContact(out _, out _, out _));
++                Assert.IsTrue(bat.CapacitorJoules >= joulesBefore - 2000.0f, "LaserTurret must not discharge 120 kJ on deployer/vendor/pet/NPC");
++            }
++            finally
++            {
++                UnregPlayer(deployer.Guid.Full);
++                UnregPlayer(foreignPlayer.Guid.Full);
++                DeployableManager.Clear();
++                DeployableManager.EnterWorldOverrideForTesting = prevOverride;
++            }
++        }
++
+         #endregion
+     }
+ }
+diff --git a/Source/ACE.Server.Tests/Vehicles/DericostContinentInvariantsTests.cs b/Source/ACE.Server.Tests/Vehicles/DericostContinentInvariantsTests.cs
+index 9d9318ec..7a32946c 100644
+--- a/Source/ACE.Server.Tests/Vehicles/DericostContinentInvariantsTests.cs
++++ b/Source/ACE.Server.Tests/Vehicles/DericostContinentInvariantsTests.cs
+@@ -297,5 +297,38 @@ public void LandblockId_DirectionalProperties_PreserveDericostContinentBit()
+             Assert.AreEqual((byte)0, dereth.East.Continent);
+             Assert.AreEqual(0u, dereth.East.Raw & 0x8000u);
+         }
++
++        [TestMethod]
++        public void VehicleToGlobal_IsDericostCell_And_LandblockIdContinent_ExcludeIndoorEnvCell8100AndFFFF()
++        {
++            // Dereth indoor EnvCell 0x10208100 and BlockCellID sentinel 0x1020FFFF must stay on Dereth (no +68928m Y offset)
++            var derethOutdoor = new ACE.Entity.Position(0x1020_0001u, new Vector3(10f, 10f, 10f), Quaternion.Identity);
++            var derethIndoorHi = new ACE.Entity.Position(0x1020_8100u, new Vector3(10f, 10f, 10f), Quaternion.Identity);
++            var derethSentinel = new ACE.Entity.Position(0x1020_FFFFu, new Vector3(10f, 10f, 10f), Quaternion.Identity);
++            var dericostOutdoor = new ACE.Entity.Position(0x1020_8001u, new Vector3(10f, 10f, 10f), Quaternion.Identity);
++
++            Assert.IsFalse(VehicleManager.IsDericostCell(0x1020_8100u));
++            Assert.IsFalse(VehicleManager.IsDericostCell(0x1020_FFFFu));
++            Assert.IsTrue(VehicleManager.IsDericostCell(0x1020_8001u));
++
++            var (_, yOut, _) = Vehicle.ToGlobal(derethOutdoor);
++            var (_, yEnv, _) = Vehicle.ToGlobal(derethIndoorHi);
++            var (_, yFf, _) = Vehicle.ToGlobal(derethSentinel);
++            var (_, yDeri, _) = Vehicle.ToGlobal(dericostOutdoor);
++
++            Assert.AreEqual(yOut, yEnv, 0.001, "Vehicle.ToGlobal(0x10208100) must not add DericostYOffset");
++            Assert.AreEqual(yOut, yFf, 0.001, "Vehicle.ToGlobal(0x1020FFFF) must not add DericostYOffset");
++            Assert.AreEqual(yOut + Vehicle.DericostYOffset, yDeri, 0.001);
++
++            var lbEnv = new LandblockId(0x1020_8100u);
++            var lbFf = new LandblockId(0x1020_FFFFu);
++            var lbOut = new LandblockId(0x1020_0001u);
++            Assert.AreEqual((byte)0, lbEnv.Continent);
++            Assert.AreEqual((byte)0, lbFf.Continent);
++            Assert.AreEqual(0x1120_0000u, lbEnv.East.Raw);
++            Assert.AreEqual(0x1120_0000u, lbFf.East.Raw);
++            Assert.AreEqual(lbOut.GetHashCode(), lbEnv.GetHashCode(), "Equal LandblockIds must produce identical hash codes");
++            Assert.AreEqual(lbOut.GetHashCode(), lbFf.GetHashCode(), "Equal LandblockIds must produce identical hash codes");
++        }
+     }
+ }
+diff --git a/Source/ACE.Server/Vehicles/AirDefense/AirDefenseManager.cs b/Source/ACE.Server/Vehicles/AirDefense/AirDefenseManager.cs
+index 08a3a815..394ade44 100644
+--- a/Source/ACE.Server/Vehicles/AirDefense/AirDefenseManager.cs
++++ b/Source/ACE.Server/Vehicles/AirDefense/AirDefenseManager.cs
+@@ -160,7 +160,18 @@ public static void Tick(double elapsedSeconds)
+                     station.BroadcastState();
+ 
+                 if (!station.IsActive)
++                {
++                    if (station.Sensor != null && (station.Sensor.IsActive || station.Sensor.ActiveTrackCount > 0))
++                    {
++                        station.Sensor.IsActive = false;
++                        station.Sensor.ClearTracks();
++                        station.BroadcastContacts(Array.Empty<AirTrack>());
++                    }
+                     continue;
++                }
++
++                if (station.Sensor != null && !station.Sensor.IsActive)
++                    station.Sensor.IsActive = true;
+ 
+                 station.SweepTimer += elapsedSeconds;
+                 if (station.SweepTimer >= SweepIntervalSeconds)
+diff --git a/Source/ACE.Server/Vehicles/AirDefense/AirDefenseSensor.cs b/Source/ACE.Server/Vehicles/AirDefense/AirDefenseSensor.cs
+index 7190743e..ba768152 100644
+--- a/Source/ACE.Server/Vehicles/AirDefense/AirDefenseSensor.cs
++++ b/Source/ACE.Server/Vehicles/AirDefense/AirDefenseSensor.cs
+@@ -73,6 +73,7 @@ public struct AirTrackCandidate
+     public interface IAirDefenseSensor
+     {
+         uint SensorGuid { get; }
++        bool IsActive { get; set; }
+         Vector3 SensorPosition { get; set; }
+         float MaxRangeM { get; }
+         float MaxCeilingM { get; }
+@@ -85,6 +86,7 @@ public interface IAirDefenseSensor
+         AirTrack? GetNearestHostile(Vector3 fromPosition);
+ 
+         void ProcessSweep(IReadOnlyList<AirTrackCandidate> candidates, DateTime nowUtc);
++        void ClearTracks();
+         VehicleRadarContactsMsg CreateRadarContactsMsg(uint parentVehicleGuid);
+ 
+         event Action<IAirDefenseSensor, AirTrack> TrackAcquired;
+@@ -101,6 +103,7 @@ public class AirDefenseSensor : IAirDefenseSensor
+         private readonly object lockObj = new object();
+ 
+         public uint SensorGuid { get; set; }
++        public bool IsActive { get; set; } = true;
+         public Vector3 SensorPosition { get; set; }
+         public float MaxRangeM { get; set; } = 32187.0f;
+         public float MaxCeilingM { get; set; } = 1550.0f;
+@@ -224,6 +227,7 @@ public bool TryGetTrack(uint vehicleGuid, out AirTrack track)
+ 
+         public AirTrack? GetNearestHostile(Vector3 fromPosition)
+         {
++            if (!IsActive) return null;
+             lock (lockObj)
+             {
+                 AirTrack? best = null;
+@@ -245,6 +249,18 @@ public bool TryGetTrack(uint vehicleGuid, out AirTrack track)
+             }
+         }
+ 
++        public void ClearTracks()
++        {
++            List<uint> lost;
++            lock (lockObj)
++            {
++                if (tracks.Count == 0) return;
++                lost = tracks.Keys.ToList();
++                tracks.Clear();
++            }
++            foreach (var g in lost) TrackLost?.Invoke(this, g);
++        }
++
+         public VehicleRadarContactsMsg CreateRadarContactsMsg(uint parentVehicleGuid)
+         {
+             var msg = new VehicleRadarContactsMsg
+@@ -303,6 +319,7 @@ public static void UnregisterSensor(uint sensorGuid)
+ 
+             foreach (var sensor in sensors.Values)
+             {
++                if (!sensor.IsActive) continue;
+                 var hostile = sensor.GetNearestHostile(fromPos);
+                 if (hostile.HasValue)
+                 {
+diff --git a/Source/ACE.Server/Vehicles/AirDefense/RadarStation.cs b/Source/ACE.Server/Vehicles/AirDefense/RadarStation.cs
+index f5556c67..cc74afa2 100644
+--- a/Source/ACE.Server/Vehicles/AirDefense/RadarStation.cs
++++ b/Source/ACE.Server/Vehicles/AirDefense/RadarStation.cs
+@@ -27,7 +27,23 @@ public class RadarStation : WorldObject
+         public uint DeployerFellowshipId { get; }
+         public string DeployerMonarchName { get; }
+ 
+-        public bool IsActive { get; set; } = true;
++        private bool _isActive = true;
++        public bool IsActive
++        {
++            get => _isActive;
++            set
++            {
++                _isActive = value;
++                if (Sensor != null)
++                {
++                    Sensor.IsActive = value;
++                    if (!value)
++                        Sensor.ClearTracks();
++                }
++                if (!value)
++                    SweepTimer = 0.0;
++            }
++        }
+         public DateTime DeployedUtc { get; } = DateTime.UtcNow;
+         public DateTime LastScanUtc { get; set; } = DateTime.MinValue;
+         public double SweepTimer { get; set; } = 0.0;
+diff --git a/Source/ACE.Server/Vehicles/Deployables/GroundRadarDeployable.cs b/Source/ACE.Server/Vehicles/Deployables/GroundRadarDeployable.cs
+index b2e482dc..913bedbb 100644
+--- a/Source/ACE.Server/Vehicles/Deployables/GroundRadarDeployable.cs
++++ b/Source/ACE.Server/Vehicles/Deployables/GroundRadarDeployable.cs
+@@ -142,14 +142,16 @@ private IffStanding ResolveVehicleStanding(Vehicle v)
+                 policy);
+         }
+ 
+-        private static bool IsPlayerDeadSafe(Player player)
++        private static bool IsPlayerDeadSafe(Player player) => IsCreatureDeadSafe(player);
++
++        private static bool IsCreatureDeadSafe(Creature creature)
+         {
+-            if (player == null) return true;
++            if (creature == null) return true;
+             try
+             {
+-                return player.Vitals != null
+-                    && player.Vitals.ContainsKey(PropertyAttribute2nd.MaxHealth)
+-                    && player.IsDead;
++                return creature.Vitals != null
++                    && creature.Vitals.ContainsKey(PropertyAttribute2nd.MaxHealth)
++                    && creature.IsDead;
+             }
+             catch { return false; }
+         }
+@@ -226,31 +228,37 @@ private void ScanContacts()
+                 }
+             }
+ 
+-            // 3. Scan monsters if enabled
++            // 3. Scan outdoor hostile monsters if enabled (exclude players, vendors, pets, passive/non-attackable NPCs)
+             if (TargetMonsters && CurrentLandblock != null)
+             {
+                 foreach (var wo in CurrentLandblock.GetWorldObjectsForPhysicsHandling())
+                 {
+-                    if (wo is Creature c && c.IsAlive && c.Location != null)
++                    if (wo is not Creature c) continue;
++                    if (c is Player || c is Vendor || c is Pet || c is Cow || c is GamePiece) continue;
++                    if (c.WeenieType == ACE.Entity.Enum.WeenieType.Vendor
++                        || c.WeenieType == ACE.Entity.Enum.WeenieType.Pet
++                        || c.WeenieType == ACE.Entity.Enum.WeenieType.CombatPet)
++                        continue;
++                    if (!c.Attackable || c.IsNPC || c.Tolerance.HasFlag(ACE.Entity.Enum.Tolerance.NoAttack)) continue;
++                    if (c.IsDestroyed || c.Teleporting || c.Location == null || c.Location.Indoors || IsCreatureDeadSafe(c)) continue;
++
++                    var (cx, cy, cz) = Vehicle.ToGlobal(c.Location);
++                    var cPos = new Vector3((float)cx, (float)cy, (float)cz);
++                    float dist = Vector3.Distance(center, cPos);
++                    if (dist <= MaxRangeM)
+                     {
+-                        var (cx, cy, cz) = Vehicle.ToGlobal(c.Location);
+-                        var cPos = new Vector3((float)cx, (float)cy, (float)cz);
+-                        float dist = Vector3.Distance(center, cPos);
+-                        if (dist <= MaxRangeM)
++                        contacts.Add(new GroundContactWire
+                         {
+-                            contacts.Add(new GroundContactWire
+-                            {
+-                                TargetGuid = c.Guid.Full,
+-                                DxM = cPos.X - center.X,
+-                                DyM = cPos.Y - center.Y,
+-                                DzM = cPos.Z - center.Z,
+-                                Kind = (byte)GroundContactKind.Monster,
+-                                Standing = (byte)IffStanding.Hostile,
+-                                HeadingU8 = 0,
+-                                SpeedMpsU8 = 0,
+-                                Flags = 0,
+-                            });
+-                        }
++                            TargetGuid = c.Guid.Full,
++                            DxM = cPos.X - center.X,
++                            DyM = cPos.Y - center.Y,
++                            DzM = cPos.Z - center.Z,
++                            Kind = (byte)GroundContactKind.Monster,
++                            Standing = (byte)IffStanding.Hostile,
++                            HeadingU8 = 0,
++                            SpeedMpsU8 = 0,
++                            Flags = 0,
++                        });
+                     }
+                 }
+             }
+diff --git a/Source/ACE.Server/Vehicles/Deployables/MicroGrid.cs b/Source/ACE.Server/Vehicles/Deployables/MicroGrid.cs
+index 7889bf3f..0b75d3cf 100644
+--- a/Source/ACE.Server/Vehicles/Deployables/MicroGrid.cs
++++ b/Source/ACE.Server/Vehicles/Deployables/MicroGrid.cs
+@@ -115,6 +115,9 @@ public float TotalConsumptionWatts()
+ 
+         public void Tick(float deltaSeconds)
+         {
++            if (deltaSeconds <= 0f || float.IsNaN(deltaSeconds) || float.IsInfinity(deltaSeconds))
++                return;
++
+             bool podActive = Pod == null || (!Pod.IsDestroyed && !Pod.IsPacked && Pod.IsActive && !Pod.IsStowed);
+             if (podActive && Pod != null && Pod.Location != null)
+                 Center = Pod.GlobalPosition;
+diff --git a/Source/ACE.Server/Vehicles/Vehicle.cs b/Source/ACE.Server/Vehicles/Vehicle.cs
+index 2c31c297..e51cf9a9 100644
+--- a/Source/ACE.Server/Vehicles/Vehicle.cs
++++ b/Source/ACE.Server/Vehicles/Vehicle.cs
+@@ -539,7 +539,7 @@ public static Position ToPosition(double gx, double gy, double gz, Quaternion ro
+ 
+         public static (double x, double y, double z) ToGlobal(Position p)
+         {
+-            var continent = (p.Cell >> 15) & 1u;
++            var continent = Physics.Common.LandDefs.IsDericostCell(p.Cell) ? 1u : 0u;
+             var x = ((p.Cell >> 24) & 0xFF) * 192.0 + p.PositionX;
+             var y = (continent == 1u ? DericostYOffset : 0.0) + ((p.Cell >> 16) & 0xFF) * 192.0 + p.PositionY;
+             return (x, y, p.PositionZ);
+diff --git a/Source/ACE.Server/Vehicles/VehicleManager.cs b/Source/ACE.Server/Vehicles/VehicleManager.cs
+index 1ec9d61e..60f4aaea 100644
+--- a/Source/ACE.Server/Vehicles/VehicleManager.cs
++++ b/Source/ACE.Server/Vehicles/VehicleManager.cs
+@@ -85,7 +85,7 @@ public static class VehicleManager
+         /// <summary>Body placement bounds: landblocks 1..253 (the edge rows cannot load their adjacents).</summary>
+         public const double BodyEdgeMin = 192.0 + 1.0, BodyEdgeMax = 254.0 * 192.0 - 1.0;
+ 
+-        public static bool IsDericostCell(uint cell) => ((cell >> 15) & 1u) != 0;
++        public static bool IsDericostCell(uint cell) => Physics.Common.LandDefs.IsDericostCell(cell);
+ 
+         public static double ClampBodyX(double gx) => Math.Clamp(gx, BodyEdgeMin, BodyEdgeMax);
+ 
+@@ -739,7 +739,7 @@ static void EnsureLoaded(Position pos, Vehicle v)
+         {
+             if (v.State.Y >= LandblockManager.OceanCorridorYMin && v.State.Y < LandblockManager.OceanCorridorYMax)
+                 return;
+-            var continent = (int)((pos.Cell >> 15) & 1);
++            var continent = IsDericostCell(pos.Cell) ? 1 : 0;
+             var id = new LandblockId(pos.Cell);
+             var lbx = id.LandblockX;
+             var lby = id.LandblockY;
+@@ -827,7 +827,7 @@ static void MoveOccupant(Vehicle v, Player occ, Position seatPos)
+         static void Relocate(WorldObject wo, Vehicle v)
+         {
+             var wasLoaded = LandblockManager.IsLoaded(wo.Location.LandblockId);
+-            var continent = (int)((wo.Location.Cell >> 15) & 1);
++            var continent = IsDericostCell(wo.Location.Cell) ? 1 : 0;
+             var lbx = wo.Location.LandblockId.LandblockX;
+             var lby = wo.Location.LandblockId.LandblockY;
+             var loadAdj = !InHighBand(v);
+@@ -2071,6 +2071,11 @@ public static bool HandlePalletJackAction(Player player, VehiclePalletJackAction
+                             return false;
+                         }
+                         radar.IsActive = !radar.IsActive;
++                        if (!radar.IsActive)
++                        {
++                            radar.Sensor?.ClearTracks();
++                            radar.BroadcastContacts(Array.Empty<AirDefense.AirTrack>());
++                        }
+                         radar.BroadcastState();
+                         return true;
+                     }
+-- 
+2.43.0
+

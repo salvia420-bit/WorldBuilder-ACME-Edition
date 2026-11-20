@@ -1,0 +1,149 @@
+From 7ab1eb3a34e6c23eab57b0eca1d3a4c19891a4d2 Mon Sep 17 00:00:00 2001
+From: salvia420-bit <salvia420@gmail.com>
+Date: Fri, 20 Nov 2026 09:00:28 +0000
+Subject: [PATCH] Vehicles (holtburger fork): guard bit-15 Dericost check
+ against BlockCellID 0xFFFF and indoor EnvCells
+
+---
+ .../DericostContinentInvariantsTests.cs       | 48 +++++++++++++++++++
+ Source/ACE.Server/Physics/Common/LScape.cs    | 10 ++--
+ Source/ACE.Server/Physics/Common/LandDefs.cs  |  9 +++-
+ Source/ACE.Server/Physics/PhysicsObj.cs       |  2 +-
+ 4 files changed, 64 insertions(+), 5 deletions(-)
+
+diff --git a/Source/ACE.Server.Tests/Vehicles/DericostContinentInvariantsTests.cs b/Source/ACE.Server.Tests/Vehicles/DericostContinentInvariantsTests.cs
+index 51b2b820..cd55fd6b 100644
+--- a/Source/ACE.Server.Tests/Vehicles/DericostContinentInvariantsTests.cs
++++ b/Source/ACE.Server.Tests/Vehicles/DericostContinentInvariantsTests.cs
+@@ -144,5 +144,53 @@ public void VehicleTerrain_And_PhysicsLandblock_DericostGridSetsBit15AndHeight()
+                 LandDefs.LandHeightTable = prevLandHeight;
+             }
+         }
++
++        [TestMethod]
++        public void LandDefs_And_GetBlockDist_ExcludeBlockCellSentinelAndIndoorEnvCells()
++        {
++            uint derethSentinel = 0x1020_FFFFu;
++            var loc = new Vector3(50.0f, 50.0f, 10.0f);
++            Assert.IsTrue(LandDefs.AdjustToOutside(ref derethSentinel, ref loc));
++            Assert.AreEqual(0x1020_0013u, derethSentinel, "0xFFFF BlockCellID sentinel must stay on Dereth (no bit 15)");
++            Assert.AreEqual(0, ACE.Server.Physics.PhysicsObj.GetBlockDist(0x1020_FFFFu, 0x1020_0001u));
++
++            uint dericostBorder = 0xA690_8025u;
++            var crossLoc = new Vector3(195.0f, 50.0f, 10.0f);
++            Assert.IsTrue(LandDefs.AdjustToOutside(ref dericostBorder, ref crossLoc));
++            Assert.AreEqual(0xA790_8003u, dericostBorder, "Dericost border transition must preserve bit 15");
++            Assert.AreEqual(1000, ACE.Server.Physics.PhysicsObj.GetBlockDist(0xA690_8025u, 0xA690_0025u));
++
++            // High-bit indoor EnvCell (>= 0x100 with bit 15 set) must also stay Dereth.
++            uint highEnvCell = 0x1020_8100u;
++            var envLoc = new Vector3(50.0f, 50.0f, 10.0f);
++            Assert.IsTrue(LandDefs.AdjustToOutside(ref highEnvCell, ref envLoc));
++            Assert.AreEqual(0x1020_0013u, highEnvCell, "Indoor EnvCell >= 0x100 must not be treated as Dericost");
++            Assert.AreEqual(0, ACE.Server.Physics.PhysicsObj.GetBlockDist(0x1020_8100u, 0x1020_0001u));
++        }
++
++        [TestMethod]
++        public void LScape_GetLandblock_NonServerFallback_UsesFFFFNot7FFF()
++        {
++            var prevEng = ACE.Server.Physics.PhysicsEngine.Instance;
++            const uint derethKey = 0x1020_FFFFu;
++            const uint bad7FffKey = 0x1020_7FFFu;
++            bool hadKey = LScape.Landblocks.TryGetValue(derethKey, out var prevLb);
++            try
++            {
++                ACE.Server.Physics.PhysicsEngine.Instance = null;
++                var physLb = new ACE.Server.Physics.Common.Landblock();
++                LScape.Landblocks[derethKey] = physLb;
++                LScape.Landblocks.TryRemove(bad7FffKey, out _);
++
++                var resolved = LScape.get_landblock(0x1020_FFFFu);
++                Assert.AreSame(physLb, resolved, "Non-server LScape.get_landblock must preserve 0xXXYY_FFFF without rewriting to 0xXXYY_7FFF");
++            }
++            finally
++            {
++                if (hadKey) LScape.Landblocks[derethKey] = prevLb;
++                else LScape.Landblocks.TryRemove(derethKey, out _);
++                ACE.Server.Physics.PhysicsEngine.Instance = prevEng;
++            }
++        }
+     }
+ }
+diff --git a/Source/ACE.Server/Physics/Common/LScape.cs b/Source/ACE.Server/Physics/Common/LScape.cs
+index 3b5b230b..5979437f 100644
+--- a/Source/ACE.Server/Physics/Common/LScape.cs
++++ b/Source/ACE.Server/Physics/Common/LScape.cs
+@@ -53,15 +53,19 @@ public static bool SetMidRadius(int radius)
+         /// <param name="blockCellID">Any landblock + cell ID within the landblock</param>
+         public static Landblock get_landblock(uint blockCellID)
+         {
++            var isDericost = LandDefs.IsDericostCell(blockCellID);
+             if (PhysicsEngine.Instance != null && PhysicsEngine.Instance.Server)
+             {
+-                var lbid = new LandblockId(blockCellID & 0xFFFF8000u);
++                var lbid = new LandblockId(blockCellID & (isDericost ? 0xFFFF8000u : 0xFFFF0000u));
+                 var lbmLandblock = LandblockManager.GetLandblock(lbid, false, false);
+ 
+                 return lbmLandblock.PhysicsLandblock;
+             }
+ 
+-            var landblockID = (blockCellID & 0xFFFF8000u) | 0x7FFFu;
++            var datLandblockID = (blockCellID & 0xFFFF0000u) | (uint)LandDefs.BlockCellID;
++            var landblockID = (blockCellID & 0xFFFFu) == (uint)LandDefs.BlockCellID
++                ? datLandblockID
++                : (blockCellID & 0xFFFF0000u) | (isDericost ? (uint)LandDefs.BlockCellID : 0x7FFFu);
+ 
+             // client implementation
+             /*if (Landblocks == null || Landblocks.Count == 0)
+@@ -92,7 +96,7 @@ public static Landblock get_landblock(uint blockCellID)
+                     return landblock;
+ 
+                 // if not, load into cache
+-                landblock = new Landblock(DBObj.GetCellLandblock(landblockID));
++                landblock = new Landblock(DBObj.GetCellLandblock(datLandblockID));
+                 if (Landblocks.TryAdd(landblockID, landblock))
+                     landblock.PostInit();
+                 else
+diff --git a/Source/ACE.Server/Physics/Common/LandDefs.cs b/Source/ACE.Server/Physics/Common/LandDefs.cs
+index 18dd3dfa..518fc806 100644
+--- a/Source/ACE.Server/Physics/Common/LandDefs.cs
++++ b/Source/ACE.Server/Physics/Common/LandDefs.cs
+@@ -117,6 +117,13 @@ static LandDefs()
+                 LandHeightTable = DatManager.PortalDat.RegionDesc.LandDefs.LandHeightTable;
+         }
+ 
++        public static bool IsDericostCell(uint blockCellID)
++        {
++            return (blockCellID & 0xFFFFu) != BlockCellID
++                && (blockCellID & 0x7FFFu) < FirstEnvCellID
++                && (blockCellID & 0x8000u) != 0;
++        }
++
+         public static bool AdjustToOutside(Position pos)
+         {
+             return AdjustToOutside(ref pos.ObjCellID, ref pos.Frame.Origin);
+@@ -124,7 +131,7 @@ public static bool AdjustToOutside(Position pos)
+ 
+         public static bool AdjustToOutside(ref uint blockCellID, ref Vector3 loc)
+         {
+-            var continentBit = blockCellID & 0x8000u;
++            var continentBit = IsDericostCell(blockCellID) ? 0x8000u : 0u;
+             var cellID = (uint)((blockCellID & 0xFFFF) == BlockCellID ? BlockCellID : (blockCellID & 0x7FFF));
+ 
+             if (cell_in_range(cellID))
+diff --git a/Source/ACE.Server/Physics/PhysicsObj.cs b/Source/ACE.Server/Physics/PhysicsObj.cs
+index b2f81272..0825d98e 100644
+--- a/Source/ACE.Server/Physics/PhysicsObj.cs
++++ b/Source/ACE.Server/Physics/PhysicsObj.cs
+@@ -1748,7 +1748,7 @@ public static int GetBlockDist(Position a, Position b)
+ 
+         public static int GetBlockDist(uint a, uint b)
+         {
+-            if (((a >> 15) & 1u) != ((b >> 15) & 1u))
++            if (LandDefs.IsDericostCell(a) != LandDefs.IsDericostCell(b))
+                 return 1000;
+ 
+             var lbx_a = a >> 24;
+-- 
+2.43.0
+

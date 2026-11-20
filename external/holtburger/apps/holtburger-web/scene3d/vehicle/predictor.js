@@ -161,12 +161,17 @@ export function createPilotPredictor(o) {
     prev = pe ? (isGround ? GM.cloneState(pe.state) : cloneState(pe.state)) : (isGround ? GM.cloneState(s) : cloneState(s));
     void last; void lastE;
     stats.corrections++;
-    stats.lastCorrectionM = err;
-    stats.sumCorrectionM += err;
-    if (err > stats.maxCorrectionM) stats.maxCorrectionM = err;
-    corrHist.push(err);
-    if (corrHist.length > 4096) corrHist.shift();
-    if (err > SNAP_DISTANCE_M) {
+    const finiteErr = Number.isFinite(err);
+    if (finiteErr) {
+      stats.lastCorrectionM = err;
+      stats.sumCorrectionM += err;
+      if (err > stats.maxCorrectionM) stats.maxCorrectionM = err;
+      corrHist.push(err);
+      if (corrHist.length > 4096) corrHist.shift();
+    } else {
+      stats.lastCorrectionM = 0;
+    }
+    if (!finiteErr || err > SNAP_DISTANCE_M) {
       stats.snaps++;
       zeroOffset();
     } else {
@@ -180,17 +185,24 @@ export function createPilotPredictor(o) {
   }
 
   function foldOffset(before, after) {
-    off.x += before.x - after.x;
-    off.y += before.y - after.y;
-    off.z += before.z - after.z;
-    off.heading += angleDiff(before.heading, after.heading);
-    off.pitch += before.pitch - after.pitch;
-    off.bank += before.bank - after.bank;
+    const dx = before.x - after.x;
+    const dy = before.y - after.y;
+    const dz = before.z - after.z;
+    const dh = angleDiff(before.heading, after.heading);
+    const dp = before.pitch - after.pitch;
+    const db = before.bank - after.bank;
+    if (Number.isFinite(dx)) off.x += dx;
+    if (Number.isFinite(dy)) off.y += dy;
+    if (Number.isFinite(dz)) off.z += dz;
+    if (Number.isFinite(dh)) off.heading += dh;
+    if (Number.isFinite(dp)) off.pitch += dp;
+    if (Number.isFinite(db)) off.bank += db;
   }
 
   /** Decay the visual offset (call once per rendered frame). */
   function decay(dtSec) {
-    const k = Math.exp(-Math.max(0, dtSec) / SMOOTH_TAU_S);
+    const safeDt = (Number.isFinite(dtSec) && dtSec >= 0) ? dtSec : 0;
+    const k = Math.exp(-safeDt / SMOOTH_TAU_S);
     off.x *= k; off.y *= k; off.z *= k; off.heading *= k; off.pitch *= k; off.bank *= k;
   }
 

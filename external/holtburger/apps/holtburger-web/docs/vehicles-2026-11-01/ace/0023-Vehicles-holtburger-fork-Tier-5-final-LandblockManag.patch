@@ -1,0 +1,238 @@
+From 04a54016218707c5d2d0fa4807008a5da4dd9d4b Mon Sep 17 00:00:00 2001
+From: salvia420-bit <salvia420@gmail.com>
+Date: Fri, 20 Nov 2026 14:00:45 +0000
+Subject: [PATCH] Vehicles (holtburger fork): Tier 5 final LandblockManager
+ continent and PowerGenerator dt fixes
+
+Fixes 2 remaining findings from Tier 5 Challenger 5 audit:
+- LandblockManager (IsLoaded, GetLandblock, GetAdjacents, GetAdjacentID, UnloadLandblocks): replace raw bit-15 ((Raw >> 15) & 1) continent indexing with LandblockId.Continent so 0xXXYYFFFF sentinels (including apartmentLandblocks) and indoor EnvCells (>= 0x100) stay on Dereth [0, x, y] instead of misrouting into Dericost [1, x, y].
+- PowerGeneratorDeployable.Tick: add !double.IsFinite(elapsedSeconds) || elapsedSeconds <= 0.0 early return so negative, NaN, or infinite dt cannot add free fuel or permanently NaN-poison FuelSecondsRemaining.
+- Added targeted regression tests in DericostContinentInvariantsTests and DeployableEcosystemTests.
+
+Verified with dotnet test ACE.Server.Tests (Vehicles|Landblock): 356/356 passed.
+---
+ .../Vehicles/DeployableEcosystemTests.cs      | 36 ++++++++
+ .../DericostContinentInvariantsTests.cs       | 88 +++++++++++++++++++
+ .../ACE.Server/Managers/LandblockManager.cs   | 10 +--
+ .../Deployables/PowerGeneratorDeployable.cs   |  3 +
+ 4 files changed, 132 insertions(+), 5 deletions(-)
+
+diff --git a/Source/ACE.Server.Tests/Vehicles/DeployableEcosystemTests.cs b/Source/ACE.Server.Tests/Vehicles/DeployableEcosystemTests.cs
+index f778b5a5..493b6bf7 100644
+--- a/Source/ACE.Server.Tests/Vehicles/DeployableEcosystemTests.cs
++++ b/Source/ACE.Server.Tests/Vehicles/DeployableEcosystemTests.cs
+@@ -2553,6 +2553,42 @@ public void GroundRadar_TargetMonsters_IgnoresPlayersVendorsPetsAndNonAttackable
+             }
+         }
+ 
++        [TestMethod]
++        public void PowerGenerator_Tick_IgnoresNonPositiveAndNonFiniteElapsedSeconds()
++        {
++            var pg = new PowerGeneratorDeployable(PowerGeneratorDeployable.BuildWeenie(), new ObjectGuid(0x7500E401u))
++            {
++                FuelSecondsRemaining = 100.0,
++                IsPacked = false,
++                IsActive = true,
++                IsStowed = false,
++            };
++
++            pg.Tick(0.0);
++            Assert.AreEqual(100.0, pg.FuelSecondsRemaining, 1e-9, "Zero dt must leave fuel unchanged");
++
++            pg.Tick(-5.0);
++            Assert.AreEqual(100.0, pg.FuelSecondsRemaining, 1e-9, "Negative dt must not add free fuel");
++
++            pg.Tick(double.NaN);
++            Assert.IsFalse(double.IsNaN(pg.FuelSecondsRemaining), "NaN dt must not poison FuelSecondsRemaining");
++            Assert.AreEqual(100.0, pg.FuelSecondsRemaining, 1e-9);
++
++            pg.Tick(double.PositiveInfinity);
++            Assert.AreEqual(100.0, pg.FuelSecondsRemaining, 1e-9, "PositiveInfinity dt must be ignored");
++
++            pg.Tick(double.NegativeInfinity);
++            Assert.AreEqual(100.0, pg.FuelSecondsRemaining, 1e-9, "NegativeInfinity dt must be ignored");
++            Assert.AreEqual(PowerGeneratorDeployable.OutputPowerWatts, pg.PowerWatts);
++
++            pg.AddFuel(1);
++            Assert.AreEqual(220.0, pg.FuelSecondsRemaining, 1e-9);
++
++            pg.Tick(20.0);
++            Assert.AreEqual(200.0, pg.FuelSecondsRemaining, 1e-9);
++            Assert.AreEqual(PowerGeneratorDeployable.OutputPowerWatts, pg.PowerWatts);
++        }
++
+         #endregion
+     }
+ }
+diff --git a/Source/ACE.Server.Tests/Vehicles/DericostContinentInvariantsTests.cs b/Source/ACE.Server.Tests/Vehicles/DericostContinentInvariantsTests.cs
+index 7a32946c..4d384497 100644
+--- a/Source/ACE.Server.Tests/Vehicles/DericostContinentInvariantsTests.cs
++++ b/Source/ACE.Server.Tests/Vehicles/DericostContinentInvariantsTests.cs
+@@ -1,7 +1,12 @@
+ using System;
++using System.Collections.Generic;
+ using System.Numerics;
++using System.Reflection;
++using System.Runtime.CompilerServices;
+ using Microsoft.VisualStudio.TestTools.UnitTesting;
+ using ACE.Entity;
++using ACE.Server.Entity;
++using ACE.Server.Managers;
+ using ACE.Server.Physics.Common;
+ using ACE.Server.Vehicles;
+ 
+@@ -330,5 +335,88 @@ public void VehicleToGlobal_IsDericostCell_And_LandblockIdContinent_ExcludeIndoo
+             Assert.AreEqual(lbOut.GetHashCode(), lbEnv.GetHashCode(), "Equal LandblockIds must produce identical hash codes");
+             Assert.AreEqual(lbOut.GetHashCode(), lbFf.GetHashCode(), "Equal LandblockIds must produce identical hash codes");
+         }
++
++        [TestMethod]
++        public void LandblockManager_UsesLandblockIdContinent_For0xFFFFSentinelAndIndoorEnvCell8100()
++        {
++            var landblocksField = typeof(LandblockManager).GetField("landblocks", BindingFlags.Static | BindingFlags.NonPublic);
++            Assert.IsNotNull(landblocksField);
++            var grid = (ACE.Server.Entity.Landblock[,,])landblocksField.GetValue(null);
++            Assert.IsNotNull(grid);
++
++            var getAdjacentIdMethod = typeof(LandblockManager).GetMethod("GetAdjacentID", BindingFlags.Static | BindingFlags.NonPublic);
++            Assert.IsNotNull(getAdjacentIdMethod);
++
++            var getAdjacentsMethod = typeof(LandblockManager).GetMethod("GetAdjacents", BindingFlags.Static | BindingFlags.NonPublic);
++            Assert.IsNotNull(getAdjacentsMethod);
++
++            var prevDereth7200 = grid[0, 0x72, 0x00];
++            var prevDericost7200 = grid[1, 0x72, 0x00];
++            var prevDereth7300 = grid[0, 0x73, 0x00];
++            var prevDericost7300 = grid[1, 0x73, 0x00];
++
++            var dereth7200 = (ACE.Server.Entity.Landblock)RuntimeHelpers.GetUninitializedObject(typeof(ACE.Server.Entity.Landblock));
++            typeof(ACE.Server.Entity.Landblock).GetField("<Id>k__BackingField", BindingFlags.Instance | BindingFlags.NonPublic)
++                ?.SetValue(dereth7200, new LandblockId(0x7200_FFFFu));
++            typeof(ACE.Server.Entity.Landblock).GetField("isDungeon", BindingFlags.Instance | BindingFlags.NonPublic)
++                ?.SetValue(dereth7200, false);
++
++            var dericost7200 = (ACE.Server.Entity.Landblock)RuntimeHelpers.GetUninitializedObject(typeof(ACE.Server.Entity.Landblock));
++            var eastDereth7300 = (ACE.Server.Entity.Landblock)RuntimeHelpers.GetUninitializedObject(typeof(ACE.Server.Entity.Landblock));
++            var eastDericost7300 = (ACE.Server.Entity.Landblock)RuntimeHelpers.GetUninitializedObject(typeof(ACE.Server.Entity.Landblock));
++
++            var idSentinel = new LandblockId(0x7200_FFFFu);
++            var idIndoor8100 = new LandblockId(0x7200_8100u);
++            var idDericost = new LandblockId(0x7200_8001u);
++
++            try
++            {
++                // 1. Only Dereth [0, 0x72, 0x00] populated
++                grid[0, 0x72, 0x00] = dereth7200;
++                grid[1, 0x72, 0x00] = null;
++
++                Assert.IsTrue(LandblockManager.IsLoaded(idSentinel), "0x7200FFFF must resolve to Dereth slot [0, 0x72, 0x00]");
++                Assert.IsTrue(LandblockManager.IsLoaded(idIndoor8100), "0x72008100 must resolve to Dereth slot [0, 0x72, 0x00]");
++                Assert.IsFalse(LandblockManager.IsLoaded(idDericost), "0x72008001 must resolve to Dericost slot [1, 0x72, 0x00]");
++
++                Assert.AreSame(dereth7200, LandblockManager.GetLandblock(idSentinel, false));
++                Assert.AreSame(dereth7200, LandblockManager.GetLandblock(idIndoor8100, false));
++
++                // 2. Only Dericost [1, 0x72, 0x00] populated
++                grid[0, 0x72, 0x00] = null;
++                grid[1, 0x72, 0x00] = dericost7200;
++
++                Assert.IsFalse(LandblockManager.IsLoaded(idSentinel), "0x7200FFFF must not match Dericost slot [1, 0x72, 0x00]");
++                Assert.IsFalse(LandblockManager.IsLoaded(idIndoor8100), "0x72008100 must not match Dericost slot [1, 0x72, 0x00]");
++                Assert.IsTrue(LandblockManager.IsLoaded(idDericost), "0x72008001 must match Dericost slot [1, 0x72, 0x00]");
++                Assert.AreSame(dericost7200, LandblockManager.GetLandblock(idDericost, false));
++
++                // 3. GetAdjacentID must route 0x7200FFFF / 0x72008100 East to Dereth 0x73000000, and 0x72008001 East to Dericost 0x73008000
++                var adjSentinel = (LandblockId?)getAdjacentIdMethod.Invoke(null, new object[] { idSentinel, Adjacency.East });
++                var adjIndoor8100 = (LandblockId?)getAdjacentIdMethod.Invoke(null, new object[] { idIndoor8100, Adjacency.East });
++                var adjDericost = (LandblockId?)getAdjacentIdMethod.Invoke(null, new object[] { idDericost, Adjacency.East });
++
++                Assert.IsTrue(adjSentinel.HasValue);
++                Assert.IsTrue(adjIndoor8100.HasValue);
++                Assert.IsTrue(adjDericost.HasValue);
++                Assert.AreEqual(0x7300_0000u, adjSentinel.Value.Raw, "East neighbor of 0x7200FFFF must be Dereth 0x73000000");
++                Assert.AreEqual(0x7300_0000u, adjIndoor8100.Value.Raw, "East neighbor of 0x72008100 must be Dereth 0x73000000");
++                Assert.AreEqual(0x7300_8000u, adjDericost.Value.Raw, "East neighbor of 0x72008001 must be Dericost 0x73008000");
++
++                // 4. GetAdjacents for a 0x7200FFFF Landblock must pick Dereth [0, 0x73, 0x00] and not Dericost [1, 0x73, 0x00]
++                grid[0, 0x73, 0x00] = eastDereth7300;
++                grid[1, 0x73, 0x00] = eastDericost7300;
++                var adjacents = (List<ACE.Server.Entity.Landblock>)getAdjacentsMethod.Invoke(null, new object[] { dereth7200 });
++                Assert.IsTrue(adjacents.Contains(eastDereth7300), "GetAdjacents for 0x7200FFFF must return Dereth east neighbor");
++                Assert.IsFalse(adjacents.Contains(eastDericost7300), "GetAdjacents for 0x7200FFFF must not return Dericost east neighbor");
++            }
++            finally
++            {
++                grid[0, 0x72, 0x00] = prevDereth7200;
++                grid[1, 0x72, 0x00] = prevDericost7200;
++                grid[0, 0x73, 0x00] = prevDereth7300;
++                grid[1, 0x73, 0x00] = prevDericost7300;
++            }
++        }
+     }
+ }
+diff --git a/Source/ACE.Server/Managers/LandblockManager.cs b/Source/ACE.Server/Managers/LandblockManager.cs
+index 4831c29d..b796c59b 100644
+--- a/Source/ACE.Server/Managers/LandblockManager.cs
++++ b/Source/ACE.Server/Managers/LandblockManager.cs
+@@ -550,7 +550,7 @@ public static bool IsLoaded(LandblockId landblockId)
+             NoteLockWait(tw, "IsLoaded", landblockId.Raw);
+             try
+             {
+-                var continent = (int)((landblockId.Raw >> 15) & 1);
++                var continent = (int)landblockId.Continent;
+                 var x = (int)((landblockId.Raw >> 24) & 0xFF);
+                 var y = (int)landblockId.LandblockY;
+                 if (x > 254 || y > 254) return false;
+@@ -707,7 +707,7 @@ static void NoteWriteLockHold(double ms, uint id)
+         public static Landblock GetLandblock(LandblockId landblockId, bool loadAdjacents, bool permaload = false)
+         {
+             Landblock landblock;
+-            var continent = (int)((landblockId.Raw >> 15) & 1);
++            var continent = (int)landblockId.Continent;
+             var x = (int)((landblockId.Raw >> 24) & 0xFF);
+             var y = (int)landblockId.LandblockY;
+ 
+@@ -864,7 +864,7 @@ private static List<Landblock> GetAdjacents(Landblock landblock)
+ 
+             foreach (var adjacentID in adjacentIDs)
+             {
+-                var c = (int)((adjacentID.Raw >> 15) & 1);
++                var c = (int)adjacentID.Continent;
+                 var ax = (int)((adjacentID.Raw >> 24) & 0xFF);
+                 var ay = (int)adjacentID.LandblockY;
+                 if (ax > 254 || ay > 254) continue;
+@@ -920,7 +920,7 @@ private static List<LandblockId> GetAdjacentIDs(Landblock landblock)
+         /// </summary>
+         private static LandblockId? GetAdjacentID(LandblockId landblock, Adjacency adjacency)
+         {
+-            var continent = (int)((landblock.Raw >> 15) & 1);
++            var continent = (int)landblock.Continent;
+             int lbx = (int)((landblock.Raw >> 24) & 0xFF);
+             int lby = landblock.LandblockY;
+ 
+@@ -1024,7 +1024,7 @@ private static void UnloadLandblocks()
+                         // remove from list of managed landblocks
+                         if (loadedLandblocks.Remove(landblock))
+                         {
+-                            var c = (int)((landblock.Id.Raw >> 15) & 1);
++                            var c = (int)landblock.Id.Continent;
+                             var ux = (int)((landblock.Id.Raw >> 24) & 0xFF);
+                             var uy = (int)landblock.Id.LandblockY;
+                             if (ux <= 254 && uy <= 254)
+diff --git a/Source/ACE.Server/Vehicles/Deployables/PowerGeneratorDeployable.cs b/Source/ACE.Server/Vehicles/Deployables/PowerGeneratorDeployable.cs
+index deebadd8..4437c49d 100644
+--- a/Source/ACE.Server/Vehicles/Deployables/PowerGeneratorDeployable.cs
++++ b/Source/ACE.Server/Vehicles/Deployables/PowerGeneratorDeployable.cs
+@@ -63,6 +63,9 @@ public void AddFuel(int scarabs)
+         public override void Tick(double elapsedSeconds)
+         {
+             base.Tick(elapsedSeconds);
++            if (!double.IsFinite(elapsedSeconds) || elapsedSeconds <= 0.0)
++                return;
++
+             if (FuelSecondsRemaining > 0.0 && !IsPacked && IsActive)
+             {
+                 FuelSecondsRemaining = Math.Max(0.0, FuelSecondsRemaining - elapsedSeconds);
+-- 
+2.43.0
+

@@ -731,7 +731,8 @@ impl WorldState {
     /// (e.g. `0xA9B40000` for Holtburg) — same convention as
     /// `WorldPosition::landblock_id` packs into.
     pub fn populate_terrain_heights(&mut self, landblock_id: u32, heights: [f32; 81]) {
-        self.terrain_heights.insert(landblock_id, heights);
+        self.terrain_heights
+            .insert(crate::spatial::continent_landblock_key(landblock_id), heights);
     }
 
     /// Seed terrain heights on BOTH the `WorldState` floor sampler (above) AND
@@ -768,7 +769,30 @@ impl WorldState {
         for (i, &c) in codes.iter().enumerate() {
             water[i] = is_water_terrain_code(c, retail);
         }
-        self.terrain_water.insert(landblock_id, water);
+        self.terrain_water
+            .insert(crate::spatial::continent_landblock_key(landblock_id), water);
+    }
+
+    #[inline]
+    fn world_xy_to_terrain_lb_local(world_x: f32, world_y: f32) -> Option<(u32, f32, f32)> {
+        const LB_M: f32 = 192.0;
+        const DERICOST_Y_OFFSET: f32 = 68928.0;
+        if !world_x.is_finite() || !world_y.is_finite() {
+            return None;
+        }
+        let is_dericost = world_y >= DERICOST_Y_OFFSET;
+        let y_rel = if is_dericost { world_y - DERICOST_Y_OFFSET } else { world_y };
+        let lb_x = (world_x / LB_M).floor() as i32;
+        let lb_y = (y_rel / LB_M).floor() as i32;
+        if !(0..256).contains(&lb_x) || !(0..256).contains(&lb_y) {
+            return None;
+        }
+        let landblock_id = ((lb_x as u32) << 24)
+            | ((lb_y as u32) << 16)
+            | if is_dericost { 0x8000 } else { 0 };
+        let local_x = world_x - lb_x as f32 * LB_M;
+        let local_y = y_rel - lb_y as f32 * LB_M;
+        Some((landblock_id, local_x, local_y))
     }
 
     /// landdefs-terrain-3: install `?fallbackWaterRetail` (see the field doc).
@@ -805,25 +829,16 @@ impl WorldState {
     /// player (never the viewer or a missile — the retail exemptions). The
     /// per-CELL wall below is the legacy (`=off`) model.
     pub fn is_entirely_water_cell_at(&self, world_x: f32, world_y: f32) -> bool {
-        const LB_M: f32 = 192.0;
         const VERT_M: f32 = 24.0;
-        if !world_x.is_finite() || !world_y.is_finite() {
+        let Some((landblock_id, local_x, local_y)) = Self::world_xy_to_terrain_lb_local(world_x, world_y) else {
             return false;
-        }
-        let lb_x = (world_x / LB_M).floor() as i32;
-        let lb_y = (world_y / LB_M).floor() as i32;
-        if !(0..256).contains(&lb_x) || !(0..256).contains(&lb_y) {
-            return false;
-        }
-        let landblock_id = ((lb_x as u32) << 24) | ((lb_y as u32) << 16);
+        };
         let Some(water) = self.terrain_water.get(&landblock_id) else {
             return false;
         };
         if self.fallback_water_retail {
             return self.scene.open_sea_wall_enabled() && water.iter().all(|&w| w);
         }
-        let local_x = world_x - lb_x as f32 * LB_M;
-        let local_y = world_y - lb_y as f32 * LB_M;
         let cx0 = (local_x / VERT_M).clamp(0.0, 8.0).floor() as usize;
         let cy0 = (local_y / VERT_M).clamp(0.0, 8.0).floor() as usize;
         let cx1 = (cx0 + 1).min(8);
@@ -851,22 +866,13 @@ impl WorldState {
     /// plane instead of strolling along the lakebed. Returns `0.0` when
     /// the landblock's water grid isn't cached (fail-soft, no raise).
     pub fn water_depth_at(&self, world_x: f32, world_y: f32) -> f32 {
-        const LB_M: f32 = 192.0;
         const VERT_M: f32 = 24.0;
-        if !world_x.is_finite() || !world_y.is_finite() {
+        let Some((landblock_id, local_x, local_y)) = Self::world_xy_to_terrain_lb_local(world_x, world_y) else {
             return 0.0;
-        }
-        let lb_x = (world_x / LB_M).floor() as i32;
-        let lb_y = (world_y / LB_M).floor() as i32;
-        if !(0..256).contains(&lb_x) || !(0..256).contains(&lb_y) {
-            return 0.0;
-        }
-        let landblock_id = ((lb_x as u32) << 24) | ((lb_y as u32) << 16);
+        };
         let Some(water) = self.terrain_water.get(&landblock_id) else {
             return 0.0;
         };
-        let local_x = world_x - lb_x as f32 * LB_M;
-        let local_y = world_y - lb_y as f32 * LB_M;
         let cx0 = (local_x / VERT_M).clamp(0.0, 8.0).floor() as usize;
         let cy0 = (local_y / VERT_M).clamp(0.0, 8.0).floor() as usize;
         let cx1 = (cx0 + 1).min(8);
@@ -1256,22 +1262,22 @@ impl WorldState {
     pub fn terrain_height_at(&self, world_x: f32, world_y: f32) -> Option<f32> {
         const LB_M: f32 = 192.0;
         const VERT_M: f32 = 24.0;
+        const DERICOST_Y_OFFSET: f32 = 68928.0;
         if !world_x.is_finite() || !world_y.is_finite() {
             return None;
         }
-        // Identify landblock + intra-LB coords. `floor_div` semantics
-        // so negative world coords (rare but possible at ocean/edge)
-        // still resolve correctly.
+        let is_dericost = world_y >= DERICOST_Y_OFFSET;
+        let y_rel = if is_dericost { world_y - DERICOST_Y_OFFSET } else { world_y };
         let lb_x = (world_x / LB_M).floor() as i32;
-        let lb_y = (world_y / LB_M).floor() as i32;
+        let lb_y = (y_rel / LB_M).floor() as i32;
         if !(0..256).contains(&lb_x) || !(0..256).contains(&lb_y) {
             return None;
         }
-        let landblock_id = ((lb_x as u32) << 24) | ((lb_y as u32) << 16);
+        let landblock_id = ((lb_x as u32) << 24) | ((lb_y as u32) << 16) | if is_dericost { 0x8000 } else { 0 };
         let grid = self.terrain_heights.get(&landblock_id)?;
 
         let local_x = world_x - lb_x as f32 * LB_M;
-        let local_y = world_y - lb_y as f32 * LB_M;
+        let local_y = y_rel - lb_y as f32 * LB_M;
         let cell_x = (local_x / VERT_M).clamp(0.0, 8.0);
         let cell_y = (local_y / VERT_M).clamp(0.0, 8.0);
         let cx0 = cell_x.floor() as usize;
@@ -1328,19 +1334,22 @@ impl WorldState {
     pub fn terrain_normal_at(&self, world_x: f32, world_y: f32) -> Option<holtburger_common::Vector3> {
         const LB_M: f32 = 192.0;
         const VERT_M: f32 = 24.0;
+        const DERICOST_Y_OFFSET: f32 = 68928.0;
         if !world_x.is_finite() || !world_y.is_finite() {
             return None;
         }
+        let is_dericost = world_y >= DERICOST_Y_OFFSET;
+        let y_rel = if is_dericost { world_y - DERICOST_Y_OFFSET } else { world_y };
         let lb_x = (world_x / LB_M).floor() as i32;
-        let lb_y = (world_y / LB_M).floor() as i32;
+        let lb_y = (y_rel / LB_M).floor() as i32;
         if !(0..256).contains(&lb_x) || !(0..256).contains(&lb_y) {
             return None;
         }
-        let landblock_id = ((lb_x as u32) << 24) | ((lb_y as u32) << 16);
+        let landblock_id = ((lb_x as u32) << 24) | ((lb_y as u32) << 16) | if is_dericost { 0x8000 } else { 0 };
         let grid = self.terrain_heights.get(&landblock_id)?;
 
         let local_x = world_x - lb_x as f32 * LB_M;
-        let local_y = world_y - lb_y as f32 * LB_M;
+        let local_y = y_rel - lb_y as f32 * LB_M;
         let cell_x = (local_x / VERT_M).clamp(0.0, 8.0);
         let cell_y = (local_y / VERT_M).clamp(0.0, 8.0);
         let cx0 = cell_x.floor() as usize;
@@ -1392,19 +1401,22 @@ impl WorldState {
     ) -> Option<[holtburger_common::Vector3; 4]> {
         const LB_M: f32 = 192.0;
         const VERT_M: f32 = 24.0;
+        const DERICOST_Y_OFFSET: f32 = 68928.0;
         if !world_x.is_finite() || !world_y.is_finite() {
             return None;
         }
+        let is_dericost = world_y >= DERICOST_Y_OFFSET;
+        let y_rel = if is_dericost { world_y - DERICOST_Y_OFFSET } else { world_y };
         let lb_x = (world_x / LB_M).floor() as i32;
-        let lb_y = (world_y / LB_M).floor() as i32;
+        let lb_y = (y_rel / LB_M).floor() as i32;
         if !(0..256).contains(&lb_x) || !(0..256).contains(&lb_y) {
             return None;
         }
-        let landblock_id = ((lb_x as u32) << 24) | ((lb_y as u32) << 16);
+        let landblock_id = ((lb_x as u32) << 24) | ((lb_y as u32) << 16) | if is_dericost { 0x8000 } else { 0 };
         let grid = self.terrain_heights.get(&landblock_id)?;
 
         let local_x = world_x - lb_x as f32 * LB_M;
-        let local_y = world_y - lb_y as f32 * LB_M;
+        let local_y = y_rel - lb_y as f32 * LB_M;
         // Clamp the CELL index to 0..=7 so the +1 corner stays in-grid
         // (a point exactly on the 192 m edge belongs to the last cell).
         let cx0 = ((local_x / VERT_M).floor() as i32).clamp(0, 7) as usize;
@@ -1412,7 +1424,7 @@ impl WorldState {
         let cx1 = cx0 + 1;
         let cy1 = cy0 + 1;
         let x0 = lb_x as f32 * LB_M + cx0 as f32 * VERT_M;
-        let y0 = lb_y as f32 * LB_M + cy0 as f32 * VERT_M;
+        let y0 = if is_dericost { DERICOST_Y_OFFSET } else { 0.0 } + lb_y as f32 * LB_M + cy0 as f32 * VERT_M;
         let x1 = x0 + VERT_M;
         let y1 = y0 + VERT_M;
         // Layout matches CellLandblock: idx = vx * 9 + vy.
@@ -1458,19 +1470,22 @@ impl WorldState {
     ) -> Option<[holtburger_common::Vector3; 3]> {
         const LB_M: f32 = 192.0;
         const VERT_M: f32 = 24.0;
+        const DERICOST_Y_OFFSET: f32 = 68928.0;
         if !world_x.is_finite() || !world_y.is_finite() {
             return None;
         }
+        let is_dericost = world_y >= DERICOST_Y_OFFSET;
+        let y_rel = if is_dericost { world_y - DERICOST_Y_OFFSET } else { world_y };
         let lb_x = (world_x / LB_M).floor() as i32;
-        let lb_y = (world_y / LB_M).floor() as i32;
+        let lb_y = (y_rel / LB_M).floor() as i32;
         if !(0..256).contains(&lb_x) || !(0..256).contains(&lb_y) {
             return None;
         }
-        let landblock_id = ((lb_x as u32) << 24) | ((lb_y as u32) << 16);
+        let landblock_id = ((lb_x as u32) << 24) | ((lb_y as u32) << 16) | if is_dericost { 0x8000 } else { 0 };
         let grid = self.terrain_heights.get(&landblock_id)?;
 
         let local_x = world_x - lb_x as f32 * LB_M;
-        let local_y = world_y - lb_y as f32 * LB_M;
+        let local_y = y_rel - lb_y as f32 * LB_M;
         // Clamp the CELL index to 0..=7 so the +1 corner stays in-grid
         // (a point exactly on the 192 m edge belongs to the last cell).
         let cx0 = ((local_x / VERT_M).floor() as i32).clamp(0, 7) as usize;
@@ -1480,7 +1495,7 @@ impl WorldState {
         let fx = (local_x / VERT_M - cx0 as f32).clamp(0.0, 1.0);
         let fy = (local_y / VERT_M - cy0 as f32).clamp(0.0, 1.0);
         let x0 = lb_x as f32 * LB_M + cx0 as f32 * VERT_M;
-        let y0 = lb_y as f32 * LB_M + cy0 as f32 * VERT_M;
+        let y0 = if is_dericost { DERICOST_Y_OFFSET } else { 0.0 } + lb_y as f32 * LB_M + cy0 as f32 * VERT_M;
         let x1 = x0 + VERT_M;
         let y1 = y0 + VERT_M;
         // Layout matches CellLandblock: idx = vx * 9 + vy.

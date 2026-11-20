@@ -1,0 +1,779 @@
+From dbab20886d10d297aa2836a925329270857cc936 Mon Sep 17 00:00:00 2001
+From: salvia420-bit <salvia420@gmail.com>
+Date: Fri, 20 Nov 2026 10:16:59 +0000
+Subject: [PATCH] Vehicles (holtburger fork): Tier 5 remediation fixes and
+ adversarial unit tests
+
+Fixes Major-1 (RadarStation duplication guard in VehicleManager.ActionPack and RadarStation.Destroy), Major-2 (IsoContainerDeployable.TryUnpackSlot full/half pallet and CargoState rollback on SpawnDeployable failure), Major-5 (LandCell.cs IsDericostCell guard and LandblockId directional Continent preservation), Major-6 (GroundRadarDeployable indoor/dead/logout player and airborne/destroyed vehicle filtering), Minor-7 (MicroGrid battery preservation on insufficient deficit), and Minor-8 (SemiTrailerDeployable OnTransferContainerDestroyed AutoCycleActive retraction to Idle). Adds 7 adversarial unit tests across PalletJackLogisticsTests, IsoContainerTests, DericostContinentInvariantsTests, DeployableEcosystemTests, and SidelifterTests (350/350 Vehicles|Landblock pass).
+---
+ Source/ACE.Entity/LandblockId.cs              |  21 ++--
+ .../Vehicles/DeployableEcosystemTests.cs      | 111 ++++++++++++++++++
+ .../DericostContinentInvariantsTests.cs       | 105 +++++++++++++++++
+ .../Vehicles/IsoContainerTests.cs             |  59 ++++++++++
+ .../Vehicles/PalletJackLogisticsTests.cs      |  70 +++++++++++
+ .../Vehicles/SidelifterTests.cs               |  51 ++++++++
+ Source/ACE.Server/Physics/Common/LandCell.cs  |   6 +-
+ .../Vehicles/AirDefense/RadarStation.cs       |   6 +
+ .../Deployables/GroundRadarDeployable.cs      |  24 ++++
+ .../Deployables/IsoContainerDeployable.cs     |  40 ++++++-
+ .../Vehicles/Deployables/MicroGrid.cs         |  16 +--
+ .../Deployables/SemiTrailerDeployable.cs      |  10 +-
+ Source/ACE.Server/Vehicles/VehicleManager.cs  |  21 ++--
+ 13 files changed, 508 insertions(+), 32 deletions(-)
+
+diff --git a/Source/ACE.Entity/LandblockId.cs b/Source/ACE.Entity/LandblockId.cs
+index cf25718c..b40c8b5d 100644
+--- a/Source/ACE.Entity/LandblockId.cs
++++ b/Source/ACE.Entity/LandblockId.cs
+@@ -17,21 +17,26 @@ public LandblockId(byte x, byte y)
+             Raw = (uint)x << 24 | (uint)y << 16;
+         }
+ 
+-        public LandblockId East => new LandblockId(Convert.ToByte(LandblockX + 1), LandblockY);
++        public LandblockId(byte x, byte y, byte continent)
++        {
++            Raw = (uint)x << 24 | (uint)y << 16 | ((uint)(continent & 1) << 15);
++        }
++
++        public LandblockId East => new LandblockId(Convert.ToByte(LandblockX + 1), LandblockY, Continent);
+ 
+-        public LandblockId West => new LandblockId(Convert.ToByte(LandblockX - 1), LandblockY);
++        public LandblockId West => new LandblockId(Convert.ToByte(LandblockX - 1), LandblockY, Continent);
+ 
+-        public LandblockId North => new LandblockId(LandblockX, Convert.ToByte(LandblockY + 1));
++        public LandblockId North => new LandblockId(LandblockX, Convert.ToByte(LandblockY + 1), Continent);
+ 
+-        public LandblockId South => new LandblockId(LandblockX, Convert.ToByte(LandblockY - 1));
++        public LandblockId South => new LandblockId(LandblockX, Convert.ToByte(LandblockY - 1), Continent);
+ 
+-        public LandblockId NorthEast => new LandblockId(Convert.ToByte(LandblockX + 1), Convert.ToByte(LandblockY + 1));
++        public LandblockId NorthEast => new LandblockId(Convert.ToByte(LandblockX + 1), Convert.ToByte(LandblockY + 1), Continent);
+ 
+-        public LandblockId NorthWest => new LandblockId(Convert.ToByte(LandblockX - 1), Convert.ToByte(LandblockY + 1));
++        public LandblockId NorthWest => new LandblockId(Convert.ToByte(LandblockX - 1), Convert.ToByte(LandblockY + 1), Continent);
+ 
+-        public LandblockId SouthEast => new LandblockId(Convert.ToByte(LandblockX + 1), Convert.ToByte(LandblockY - 1));
++        public LandblockId SouthEast => new LandblockId(Convert.ToByte(LandblockX + 1), Convert.ToByte(LandblockY - 1), Continent);
+ 
+-        public LandblockId SouthWest => new LandblockId(Convert.ToByte(LandblockX - 1), Convert.ToByte(LandblockY - 1));
++        public LandblockId SouthWest => new LandblockId(Convert.ToByte(LandblockX - 1), Convert.ToByte(LandblockY - 1), Continent);
+ 
+         public ushort Landblock => (ushort)((Raw >> 16) & 0xFFFF);
+ 
+diff --git a/Source/ACE.Server.Tests/Vehicles/DeployableEcosystemTests.cs b/Source/ACE.Server.Tests/Vehicles/DeployableEcosystemTests.cs
+index 37cde49f..f9aa50e3 100644
+--- a/Source/ACE.Server.Tests/Vehicles/DeployableEcosystemTests.cs
++++ b/Source/ACE.Server.Tests/Vehicles/DeployableEcosystemTests.cs
+@@ -2258,6 +2258,117 @@ public void T5_ADV_09_GroundModel_HeadlightsAndHornFlags_TransitionCleanly()
+             Assert.IsTrue((state.GroundFlags & 0x20) == 0, "Horn flag bit 0x20 must clear when released");
+         }
+ 
++        [TestMethod]
++        public void GroundRadar_IgnoresIndoorDeadPlayersAndAirborneDestroyedVehicles()
++        {
++            double x = 3350.0, y = 4350.0, z = 40.0;
++            var prevOverride = DeployableManager.EnterWorldOverrideForTesting;
++            DeployableManager.Clear();
++            DeployableManager.EnterWorldOverrideForTesting = _ => true;
++
++            var deployer = CreateTestPlayer(0x5000E101u, x, y, z, monarchId: 100u);
++            var indoorPlayer = CreateTestPlayer(0x5000E102u, x + 20.0, y, z, monarchId: 300u);
++            indoorPlayer.Location = new Position(0x1010_0100u, new Vector3(10f, 10f, 0f), Quaternion.Identity);
++
++            var deadPlayer = CreateTestPlayer(0x5000E103u, x + 30.0, y, z, monarchId: 300u);
++            deadPlayer.Biota.PropertiesAttribute2nd ??= new Dictionary<PropertyAttribute2nd, PropertiesAttribute2nd>();
++            deadPlayer.Biota.PropertiesAttribute2nd[PropertyAttribute2nd.MaxHealth] =
++                new PropertiesAttribute2nd { InitLevel = 100, CurrentLevel = 100 };
++            var deadVitals = new Dictionary<PropertyAttribute2nd, ACE.Server.WorldObjects.Entity.CreatureVital>
++            {
++                [PropertyAttribute2nd.MaxHealth] = new ACE.Server.WorldObjects.Entity.CreatureVital(deadPlayer, PropertyAttribute2nd.MaxHealth) { Current = 0 }
++            };
++            typeof(Creature).GetField("Vitals", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)?.SetValue(deadPlayer, deadVitals);
++
++            var loggingOutPlayer = CreateTestPlayer(0x5000E104u, x + 35.0, y, z, monarchId: 300u);
++            loggingOutPlayer.IsLoggingOut = true;
++
++            var lockField = typeof(ACE.Server.Managers.PlayerManager).GetField("playersLock", BindingFlags.Static | BindingFlags.NonPublic);
++            var dictField = typeof(ACE.Server.Managers.PlayerManager).GetField("onlinePlayers", BindingFlags.Static | BindingFlags.NonPublic);
++            var rwLock = (System.Threading.ReaderWriterLockSlim)lockField?.GetValue(null);
++            var onlineDict = (Dictionary<uint, Player>)dictField?.GetValue(null);
++            void RegPlayer(Player p) { rwLock.EnterWriteLock(); try { onlineDict[p.Guid.Full] = p; } finally { rwLock.ExitWriteLock(); } }
++            void UnregPlayer(uint g) { rwLock.EnterWriteLock(); try { onlineDict.Remove(g); } finally { rwLock.ExitWriteLock(); } }
++
++            RegPlayer(deployer);
++            RegPlayer(indoorPlayer);
++            RegPlayer(deadPlayer);
++            RegPlayer(loggingOutPlayer);
++
++            var hellcat = CreateTestAircraft(0x7500E110u, x + 40.0, y, z + 5.0);
++            var wreckedJeep = CreateTestJeep(0x7500E111u, x + 50.0, y, z);
++            typeof(WorldObject).GetProperty("IsDestroyed", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
++                ?.SetValue(wreckedJeep, true);
++            VehicleManager.RegisterForTesting(hellcat);
++            VehicleManager.RegisterForTesting(wreckedJeep);
++
++            try
++            {
++                var flux = new FluxPodDeployable(FluxPodDeployable.BuildWeenie(), new ObjectGuid(0x7500E101u), null, deployer)
++                {
++                    Location = Vehicle.ToPosition(x, y, z, Quaternion.Identity),
++                };
++                flux.Grid.Center = flux.GlobalPosition;
++                DeployableManager.RegisterGrid(flux.Grid);
++                DeployableManager.Register(flux);
++
++                var gen = new PowerGeneratorDeployable(PowerGeneratorDeployable.BuildWeenie(), new ObjectGuid(0x7500E102u), null, deployer)
++                {
++                    Location = Vehicle.ToPosition(x + 1.0, y, z, Quaternion.Identity),
++                    FuelSecondsRemaining = 120.0,
++                };
++                flux.Grid.Register(gen);
++                DeployableManager.Register(gen);
++
++                var radar = new GroundRadarDeployable(GroundRadarDeployable.BuildWeenie(), new ObjectGuid(0x7500E103u), null, deployer)
++                {
++                    Location = Vehicle.ToPosition(x + 2.0, y, z, Quaternion.Identity),
++                };
++                flux.Grid.Register(radar);
++                DeployableManager.Register(radar);
++
++                DeployableManager.Tick(0.6);
++                Assert.IsTrue(radar.IsPowered);
++                Assert.IsFalse(radar.FindNearestGroundContact(out _, out _, out _), "GroundRadar must not cue on indoor/dead/logging-out players or airborne/destroyed vehicles");
++                Assert.AreEqual(0, radar.ContactCount, "GroundRadar _latestContacts must be empty");
++            }
++            finally
++            {
++                VehicleManager.UnregisterForTesting(hellcat.Guid.Full);
++                VehicleManager.UnregisterForTesting(wreckedJeep.Guid.Full);
++                UnregPlayer(deployer.Guid.Full);
++                UnregPlayer(indoorPlayer.Guid.Full);
++                UnregPlayer(deadPlayer.Guid.Full);
++                UnregPlayer(loggingOutPlayer.Guid.Full);
++                DeployableManager.Clear();
++                DeployableManager.EnterWorldOverrideForTesting = prevOverride;
++            }
++        }
++
++        [TestMethod]
++        public void MicroGrid_PreservesBatteryChargeWhenInsufficientForConsumers()
++        {
++            double x = 3400.0, y = 4400.0, z = 40.0;
++            var grid = new MicroGrid(new Vector3((float)x, (float)y, (float)z));
++
++            var bat = new BatteryDeployable(BatteryDeployable.BuildWeenie(), new ObjectGuid(0x7500E201u))
++            {
++                Location = Vehicle.ToPosition(x, y, z, Quaternion.Identity),
++                CapacitorJoules = 400.0f,
++            };
++            // MissileTurret is 1500W -> 1500J/s deficit
++            var sam = new MissileTurretDeployable(MissileTurretDeployable.BuildWeenie(), new ObjectGuid(0x7500E202u))
++            {
++                Location = Vehicle.ToPosition(x + 2.0, y, z, Quaternion.Identity),
++            };
++            grid.Register(bat);
++            grid.Register(sam);
++
++            grid.Tick(1.0f);
++            Assert.IsFalse(sam.IsPowered, "Consumers must remain unpowered when battery energy < 1s deficit");
++            Assert.AreEqual(400.0f, bat.CapacitorJoules, 1e-4f, "MicroGrid must NOT drain battery when insufficient to power consumers");
++        }
++
+         #endregion
+     }
+ }
+diff --git a/Source/ACE.Server.Tests/Vehicles/DericostContinentInvariantsTests.cs b/Source/ACE.Server.Tests/Vehicles/DericostContinentInvariantsTests.cs
+index cd55fd6b..9d9318ec 100644
+--- a/Source/ACE.Server.Tests/Vehicles/DericostContinentInvariantsTests.cs
++++ b/Source/ACE.Server.Tests/Vehicles/DericostContinentInvariantsTests.cs
+@@ -192,5 +192,110 @@ public void LScape_GetLandblock_NonServerFallback_UsesFFFFNot7FFF()
+                 ACE.Server.Physics.PhysicsEngine.Instance = prevEng;
+             }
+         }
++
++        [TestMethod]
++        public void LandCell_AddAllOutsideCellsAndAddCellBlock_IndoorEnvCell8100AndFFFF_UseDerethCells()
++        {
++            var prevEng = ACE.Server.Physics.PhysicsEngine.Instance;
++            uint[] keys = { 0x1020_7FFFu, 0x0F20_7FFFu, 0x0F1F_7FFFu, 0x101F_7FFFu, 0x1020_FFFFu, 0x0F20_FFFFu, 0x0F1F_FFFFu, 0x101F_FFFFu };
++            var saved = new System.Collections.Generic.Dictionary<uint, (bool had, ACE.Server.Physics.Common.Landblock lb)>();
++            foreach (var k in keys)
++            {
++                bool had = LScape.Landblocks.TryGetValue(k, out var prevLb);
++                saved[k] = (had, prevLb);
++            }
++
++            try
++            {
++                ACE.Server.Physics.PhysicsEngine.Instance = null;
++                foreach (var k in keys)
++                {
++                    var lb = new ACE.Server.Physics.Common.Landblock { SideCellCount = 8 };
++                    for (int idx = 0; idx < 64; idx++)
++                        lb.LandCells[idx] = new LandCell((k & 0xFFFF_0000u) | (uint)(idx + 1));
++                    LScape.Landblocks[k] = lb;
++                }
++
++                // 1) add_cell_block with indoor EnvCell 0x1020_8100 and BlockCellID 0x1020_FFFF
++                var blockArr = new ACE.Server.Physics.Common.CellArray();
++                LandCell.add_cell_block(16 * 8, 32 * 8, 16 * 8 + 1, 32 * 8 + 1, blockArr, 0x1020_8100u);
++                Assert.IsTrue(blockArr.Cells.Count > 0);
++                foreach (var cellId in blockArr.Cells.Keys)
++                {
++                    Assert.IsFalse(LandDefs.IsDericostCell(cellId), $"add_cell_block(0x1020_8100) produced Dericost cell {cellId:X8}");
++                    Assert.AreEqual(0u, cellId & 0x8000u, $"Expected Dereth cell without bit 15, got {cellId:X8}");
++                }
++
++                var sentinelArr = new ACE.Server.Physics.Common.CellArray();
++                LandCell.add_cell_block(16 * 8, 32 * 8, 16 * 8 + 1, 32 * 8 + 1, sentinelArr, 0x1020_FFFFu);
++                Assert.IsTrue(sentinelArr.Cells.Count > 0);
++                foreach (var cellId in sentinelArr.Cells.Keys)
++                {
++                    Assert.IsFalse(LandDefs.IsDericostCell(cellId), $"add_cell_block(0x1020_FFFF) produced Dericost cell {cellId:X8}");
++                    Assert.AreEqual(0u, cellId & 0x8000u, $"Expected Dereth cell without bit 15, got {cellId:X8}");
++                }
++
++                // 2) add_all_outside_cells with spheres near (0,0) corner on 0x1020_8100 and 0x1020_FFFF
++                foreach (uint srcCell in new[] { 0x1020_8100u, 0x1020_FFFFu })
++                {
++                    var outsideArr = new ACE.Server.Physics.Common.CellArray();
++                    var pos = new ACE.Server.Physics.Common.Position
++                    {
++                        ObjCellID = srcCell,
++                        Frame = new ACE.Server.Physics.Animation.AFrame(new Vector3(1.0f, 1.0f, 10.0f), Quaternion.Identity),
++                    };
++                    var spheres = new System.Collections.Generic.List<ACE.Server.Physics.Sphere>
++                    {
++                        new ACE.Server.Physics.Sphere(new Vector3(1.0f, 1.0f, 10.0f), 2.0f)
++                    };
++                    LandCell.add_all_outside_cells(pos, spheres.Count, spheres, outsideArr);
++                    Assert.IsTrue(outsideArr.Cells.Count > 0, $"add_all_outside_cells({srcCell:X8}) must add outside cells");
++                    foreach (var cellId in outsideArr.Cells.Keys)
++                    {
++                        Assert.IsFalse(LandDefs.IsDericostCell(cellId), $"add_all_outside_cells({srcCell:X8}) produced Dericost cell {cellId:X8}");
++                        Assert.AreEqual(0u, cellId & 0x8000u, $"Expected Dereth cell without bit 15, got {cellId:X8}");
++                    }
++                }
++            }
++            finally
++            {
++                foreach (var kv in saved)
++                {
++                    if (kv.Value.had) LScape.Landblocks[kv.Key] = kv.Value.lb;
++                    else LScape.Landblocks.TryRemove(kv.Key, out _);
++                }
++                ACE.Server.Physics.PhysicsEngine.Instance = prevEng;
++            }
++        }
++
++        [TestMethod]
++        public void LandblockId_DirectionalProperties_PreserveDericostContinentBit()
++        {
++            var dericost = new LandblockId(0x1020_8000u);
++            Assert.AreEqual((byte)1, dericost.Continent);
++
++            var neighbors = new[]
++            {
++                (dericost.East, (byte)0x11, (byte)0x20),
++                (dericost.West, (byte)0x0F, (byte)0x20),
++                (dericost.North, (byte)0x10, (byte)0x21),
++                (dericost.South, (byte)0x10, (byte)0x1F),
++                (dericost.NorthEast, (byte)0x11, (byte)0x21),
++                (dericost.NorthWest, (byte)0x0F, (byte)0x21),
++                (dericost.SouthEast, (byte)0x11, (byte)0x1F),
++                (dericost.SouthWest, (byte)0x0F, (byte)0x1F),
++            };
++            foreach (var (n, ex, ey) in neighbors)
++            {
++                Assert.AreEqual(ex, n.LandblockX);
++                Assert.AreEqual(ey, n.LandblockY);
++                Assert.AreEqual((byte)1, n.Continent, $"Neighbor {n} must preserve Dericost Continent == 1");
++                Assert.AreNotEqual(0u, n.Raw & 0x8000u, $"Neighbor {n} must preserve bit 15");
++            }
++
++            var dereth = new LandblockId(0x1020_0000u);
++            Assert.AreEqual((byte)0, dereth.East.Continent);
++            Assert.AreEqual(0u, dereth.East.Raw & 0x8000u);
++        }
+     }
+ }
+diff --git a/Source/ACE.Server.Tests/Vehicles/IsoContainerTests.cs b/Source/ACE.Server.Tests/Vehicles/IsoContainerTests.cs
+index 9df4d3da..0c9ce62f 100644
+--- a/Source/ACE.Server.Tests/Vehicles/IsoContainerTests.cs
++++ b/Source/ACE.Server.Tests/Vehicles/IsoContainerTests.cs
+@@ -1663,6 +1663,65 @@ public void T5_1_VehicleColliderCache_GetBridgeSupport_WithoutCellDat_ReturnsCon
+             }
+         }
+ 
++        [TestMethod]
++        public void TryUnpackSlot_SpawnFailure_RollsBackNonRadarFullAndHalfPalletsWithCargoState()
++        {
++            var prevOverride = DeployableManager.EnterWorldOverrideForTesting;
++            var container = new IsoDeployable(IsoDeployable.BuildWeenie(IsoDeployable.Wcid20ft), new ObjectGuid(0x75004099u), null, null);
++            container.Location = Vehicle.ToPosition(13824.0, 20352.0, 10.0, Quaternion.Identity);
++            container.SetDoorProgress(1.0f);
++            DeployableManager.Register(container);
++
++            try
++            {
++                var fullState = new PalletCargoState { HasState = true, FuelRemaining = 123.5f };
++                Assert.IsTrue(container.TryLoadWcid(0, 4000012u, PalletSize.Full, 0, ignoreDoorState: true, fullState));
++
++                var halfState0 = new PalletCargoState { HasState = true, AmmoRemaining = 7 };
++                var halfState1 = new PalletCargoState { HasState = true, EnergyStoredJoules = 456789f };
++                Assert.IsTrue(container.TryLoadWcid(1, 4000016u, PalletSize.Half, 0, ignoreDoorState: true, halfState0));
++                Assert.IsTrue(container.TryLoadWcid(1, 4000013u, PalletSize.Half, 1, ignoreDoorState: true, halfState1));
++
++                Assert.IsTrue(container.TryLoadWcid(2, 4000002u, PalletSize.Full, 0, ignoreDoorState: true, null));
++
++                DeployableManager.EnterWorldOverrideForTesting = _ => false;
++
++                Assert.IsFalse(container.TryUnpackSlot(0, out ACE.Server.WorldObjects.WorldObject sp0));
++                Assert.IsNull(sp0);
++                Assert.IsTrue(container.Slots[0].Occupied);
++                Assert.AreEqual(PalletSize.Full, container.Slots[0].OccupiedPalletSize);
++                Assert.AreEqual(4000012u, container.Slots[0].OccupiedWcids[0]);
++                Assert.IsTrue(container.Slots[0].CargoStates[0].HasState);
++                Assert.AreEqual(123.5f, container.Slots[0].CargoStates[0].FuelRemaining, 1e-4f);
++
++                Assert.IsFalse(container.TryUnpackSlot(1, out ACE.Server.WorldObjects.WorldObject sp1, 1));
++                Assert.IsNull(sp1);
++                Assert.IsTrue(container.Slots[1].Occupied);
++                Assert.AreEqual((byte)0x03, container.Slots[1].OccupiedSubSlots);
++                Assert.AreEqual(PalletSize.Half, container.Slots[1].OccupiedPalletSize);
++                Assert.AreEqual(4000016u, container.Slots[1].OccupiedWcids[0]);
++                Assert.AreEqual(4000013u, container.Slots[1].OccupiedWcids[1]);
++                Assert.IsTrue(container.Slots[1].CargoStates[1].HasState);
++                Assert.AreEqual(456789f, container.Slots[1].CargoStates[1].EnergyStoredJoules, 1e-2f);
++
++                // Also verify half-pallet auto-select (subSlot = -1) rolls back into subSlot 0 with its state
++                Assert.IsFalse(container.TryUnpackSlot(1, out ACE.Server.WorldObjects.WorldObject sp1Auto, -1));
++                Assert.IsNull(sp1Auto);
++                Assert.AreEqual((byte)0x03, container.Slots[1].OccupiedSubSlots);
++                Assert.AreEqual(4000016u, container.Slots[1].OccupiedWcids[0]);
++                Assert.AreEqual((ushort)7, container.Slots[1].CargoStates[0].AmmoRemaining);
++
++                Assert.IsFalse(container.TryUnpackSlot(2, out ACE.Server.WorldObjects.WorldObject sp2));
++                Assert.IsNull(sp2);
++                Assert.AreEqual(4000002u, container.Slots[2].OccupiedWcids[0]);
++            }
++            finally
++            {
++                DeployableManager.EnterWorldOverrideForTesting = prevOverride;
++                DeployableManager.Unregister(container.Guid.Full);
++            }
++        }
++
+         #endregion
+     }
+ }
+diff --git a/Source/ACE.Server.Tests/Vehicles/PalletJackLogisticsTests.cs b/Source/ACE.Server.Tests/Vehicles/PalletJackLogisticsTests.cs
+index 8dff8f88..c4338ea9 100644
+--- a/Source/ACE.Server.Tests/Vehicles/PalletJackLogisticsTests.cs
++++ b/Source/ACE.Server.Tests/Vehicles/PalletJackLogisticsTests.cs
+@@ -888,5 +888,75 @@ public void GrabReleaseBurstLoopRespectsPersistentLeakyBucket()
+                 UnregisterOnlinePlayer(player.Guid.Full);
+             }
+         }
++
++        [TestMethod]
++        public void CargoPackRejectsAfterRadarPickedByPalletJackOrPackedByContainer_NoDuplication()
++        {
++            double x = 3680.0, y = 4680.0, z = 40.0;
++            var player = CreateTestPlayer(0x50007C01u, x, y - 1.6, z);
++            RegisterOnlinePlayer(player);
++            try
++            {
++                var p = VehicleProfile.JeepMb();
++                p.CargoWcid = RadarStation.RadarWeenieClassId;
++                p.Parts.Add(new VehiclePartDef { Offset = new Vector3(0.0f, -1.05f, 0.90f) });
++                p.PartRoles.Add(VehiclePartRole.Cargo);
++                var jeep = new Vehicle(Vehicle.BuildWeenie(p), new ObjectGuid(0x75007C01u), p)
++                {
++                    Location = Vehicle.ToPosition(x, y, z, Quaternion.Identity),
++                    CargoLoaded = true,
++                };
++                jeep.State.X = x;
++                jeep.State.Y = y;
++                jeep.State.Z = z;
++                VehicleManager.RegisterForTesting(jeep);
++                _registeredVehicles.Add(jeep.Guid.Full);
++                VehicleManager.ClearSeatedForTesting(player);
++
++                // 1) Deploy RadarStation from Jeep, then pick it up with a Pallet Jack
++                Assert.IsTrue(VehicleManager.HandleCargo(player, new VehicleCargo { Vehicle = jeep.Guid.Full, Action = VehicleCargo.ActionDeploy }));
++                Assert.IsFalse(jeep.CargoLoaded);
++                var radar1 = jeep.DeployedRadar;
++                Assert.IsNotNull(radar1);
++
++                var (rx, ry, rz) = Vehicle.ToGlobal(radar1.Location);
++                var jack = new PalletJackDeployable(new Vector3((float)rx, (float)ry, (float)rz), 0f, player);
++                DeployableManager.Register(jack);
++                radar1.IsActive = false;
++                Assert.IsTrue(jack.TryGrab(player, out var gErr), gErr);
++                Assert.IsTrue(jack.TryPickGroundDeployable(player, 0, out var pickErr), pickErr);
++                Assert.AreEqual(RadarStation.RadarWeenieClassId, jack.CarriedWcid);
++                Assert.IsTrue(radar1.IsDestroyed);
++                Assert.IsNull(jeep.DeployedRadar, "Picking up RadarStation via pallet jack must clear parent vehicle DeployedRadar");
++
++                Assert.IsFalse(VehicleManager.HandleCargo(player, new VehicleCargo { Vehicle = jeep.Guid.Full, Action = VehicleCargo.ActionPack }),
++                    "ActionPack must reject after RadarStation was picked up by pallet jack (no duplication)");
++                Assert.IsFalse(jeep.CargoLoaded);
++
++                // 2) Reload Jeep cargo, deploy a second RadarStation, pack it into an ISO Container
++                jeep.CargoLoaded = true;
++                Assert.IsTrue(VehicleManager.HandleCargo(player, new VehicleCargo { Vehicle = jeep.Guid.Full, Action = VehicleCargo.ActionDeploy }));
++                var radar2 = jeep.DeployedRadar;
++                Assert.IsNotNull(radar2);
++
++                var container = new IsoContainerDeployable(IsoContainerDeployable.BuildWeenie(IsoContainerDeployable.Wcid20ft), new ObjectGuid(0x75007C02u), null, player);
++                container.SetWorldPose(rx + 2.0, ry, rz, 0.0);
++                container.SetDoorProgress(1.0f);
++                DeployableManager.Register(container);
++
++                Assert.IsTrue(container.TryPackDeployable(radar2.Guid.Full), "ISO container must pack deployed RadarStation");
++                Assert.IsTrue(radar2.IsDestroyed);
++                Assert.IsNull(jeep.DeployedRadar, "Packing RadarStation into ISO container must clear parent vehicle DeployedRadar");
++                Assert.AreEqual(RadarStation.RadarWeenieClassId, container.Slots[0].OccupiedWcids[0]);
++
++                Assert.IsFalse(VehicleManager.HandleCargo(player, new VehicleCargo { Vehicle = jeep.Guid.Full, Action = VehicleCargo.ActionPack }),
++                    "ActionPack must reject after RadarStation was packed into ISO container (no duplication)");
++                Assert.IsFalse(jeep.CargoLoaded);
++            }
++            finally
++            {
++                UnregisterOnlinePlayer(player.Guid.Full);
++            }
++        }
+     }
+ }
+diff --git a/Source/ACE.Server.Tests/Vehicles/SidelifterTests.cs b/Source/ACE.Server.Tests/Vehicles/SidelifterTests.cs
+index a74c0e0f..39d41d36 100644
+--- a/Source/ACE.Server.Tests/Vehicles/SidelifterTests.cs
++++ b/Source/ACE.Server.Tests/Vehicles/SidelifterTests.cs
+@@ -1000,5 +1000,56 @@ public void UnhitchTrailerActionRejectedWhileMovingAndDuringOutriggersDeploying(
+                 else grids.TryRemove(gridKey, out _);
+             }
+         }
++
++        [TestMethod]
++        public void Sidelifter_OnTransferContainerDestroyedDuringAutoCycle_RetractsToIdle()
++        {
++            const int lbX = 16, lbY = 26;
++            uint gridKey = ((uint)lbX << 24) | ((uint)lbY << 16);
++            var gridsField = typeof(VehicleTerrain).GetField("grids", BindingFlags.Static | BindingFlags.NonPublic);
++            var grids = (ConcurrentDictionary<uint, LandblockGrid>)gridsField?.GetValue(null);
++            bool hadPrev = grids.TryGetValue(gridKey, out var prevGrid);
++
++            double x = lbX * 192.0 + 60.0, y = lbY * 192.0 + 60.0, z = 40.0;
++            var flat40 = new float[81];
++            Array.Fill(flat40, 40.0f);
++            grids[gridKey] = new LandblockGrid { Heights = flat40 };
++
++            var player = CreateTestPlayer(0x50006901u, x, y, z);
++            RegisterOnlinePlayer(player);
++            try
++            {
++                var tractor = CreateTestSemi(0x75006901u, x, y, z);
++                var fw = TrailerKinematics.ComputeFifthWheelPose(tractor.GroundState, tractor.Profile.FifthWheelOffsetY, tractor.Profile.FifthWheelOffsetZ);
++                var sl = RegisterSidelifter(0x75006902u, fw.x, fw.y - TrailerKinematics.Chassis40.KpY, z);
++                Assert.IsTrue(VehicleManager.TryHitchTrailer(tractor, sl, player, out _));
++
++                var (sx, sy, sz) = sl.GetGlobalPose();
++                var c40 = RegisterContainer(0x75006903u, IsoContainerDeployable.Wcid40ft, sx + 3.85, sy, sz);
++                Assert.IsTrue(sl.TryStartSideliftLoad(c40.Guid.Full, 1, autoCycle: true, out var startErr, player), startErr);
++                Assert.AreEqual(SideliftPhase.OutriggersDeploying, sl.SideliftPhase);
++                Assert.IsTrue(sl.AutoCycleActive);
++
++                // Advance through OutriggersDeploying + CranesPositioning + CranesLatched + Hoisting into Swinging
++                StepSidelifterSeconds(sl, 7.5);
++                Assert.AreEqual(SideliftPhase.Swinging, sl.SideliftPhase);
++                Assert.IsTrue(sl.AutoCycleActive);
++
++                // Destroy container mid-lift -> must stow cranes AND retract outriggers cleanly to Idle
++                c40.Destroy(true, false);
++                Assert.AreEqual(SideliftPhase.CranesStowing, sl.SideliftPhase);
++
++                StepSidelifterSeconds(sl, 15.0);
++                Assert.AreEqual(SideliftPhase.Idle, sl.SideliftPhase, "AutoCycle sidelifter must retract outriggers to Idle after container destruction");
++                Assert.IsFalse(sl.AutoCycleActive);
++                Assert.AreEqual(0.0f, sl.OutriggerProgress, 1e-4f);
++            }
++            finally
++            {
++                UnregisterOnlinePlayer(player.Guid.Full);
++                if (hadPrev) grids[gridKey] = prevGrid;
++                else grids.TryRemove(gridKey, out _);
++            }
++        }
+     }
+ }
+diff --git a/Source/ACE.Server/Physics/Common/LandCell.cs b/Source/ACE.Server/Physics/Common/LandCell.cs
+index cd023f14..b4a354b8 100644
+--- a/Source/ACE.Server/Physics/Common/LandCell.cs
++++ b/Source/ACE.Server/Physics/Common/LandCell.cs
+@@ -83,7 +83,7 @@ public static void add_all_outside_cells(Position position, int numSphere, List<
+         {
+             if (cellArray.AddedOutside) return;
+ 
+-            var continentBit = position.ObjCellID & 0x8000u;
++            var continentBit = LandDefs.IsDericostCell(position.ObjCellID) ? 0x8000u : 0u;
+ 
+             if (numSphere != 0)
+             {
+@@ -184,6 +184,8 @@ public static void add_all_outside_cells(int numParts, List<PhysicsPart> parts,
+ 
+         public static void add_cell_block(int min_x, int min_y, int max_x, int max_y, CellArray cellArray, uint id)
+         {
++            var continentBit = LandDefs.IsDericostCell(id) ? 0x8000u : 0u;
++
+             for (var i = min_x; i <= max_x; i++)
+             {
+                 for (var j = min_y; j <= max_y; j++)
+@@ -194,7 +196,7 @@ public static void add_cell_block(int min_x, int min_y, int max_x, int max_y, Ce
+                     var ui = (uint)i;
+                     var uj = (uint)j;
+ 
+-                    var cellID = (((uj >> 3) | 32 * (ui & 0xFFFFFFF8)) << 16) | ((uj & 7) + 8 * (ui & 7) + 1) | (id & 0x8000u);
++                    var cellID = (((uj >> 3) | 32 * (ui & 0xFFFFFFF8)) << 16) | ((uj & 7) + 8 * (ui & 7) + 1) | continentBit;
+ 
+                     // FIXME!
+                     if (id >> 16 != cellID >> 16)
+diff --git a/Source/ACE.Server/Vehicles/AirDefense/RadarStation.cs b/Source/ACE.Server/Vehicles/AirDefense/RadarStation.cs
+index f2a64159..f5556c67 100644
+--- a/Source/ACE.Server/Vehicles/AirDefense/RadarStation.cs
++++ b/Source/ACE.Server/Vehicles/AirDefense/RadarStation.cs
+@@ -162,6 +162,12 @@ public override void Destroy(bool raiseNotifyOfDestructionEvent = true, bool fro
+                 });
+             }
+             AirDefenseManager.UnregisterStation(Guid.Full);
++            if (ParentVehicleGuid != 0)
++            {
++                var pv = VehicleManager.Get(ParentVehicleGuid);
++                if (pv != null && pv.DeployedRadar == this)
++                    pv.DeployedRadar = null;
++            }
+             base.Destroy(raiseNotifyOfDestructionEvent, fromLandblockUnload);
+         }
+     }
+diff --git a/Source/ACE.Server/Vehicles/Deployables/GroundRadarDeployable.cs b/Source/ACE.Server/Vehicles/Deployables/GroundRadarDeployable.cs
+index dce0fe85..b2e482dc 100644
+--- a/Source/ACE.Server/Vehicles/Deployables/GroundRadarDeployable.cs
++++ b/Source/ACE.Server/Vehicles/Deployables/GroundRadarDeployable.cs
+@@ -2,6 +2,7 @@
+ using System.Collections.Generic;
+ using System.Numerics;
+ using ACE.Entity;
++using ACE.Entity.Enum.Properties;
+ using ACE.Entity.Models;
+ using ACE.Server.Managers;
+ using ACE.Server.Vehicles.AirDefense;
+@@ -141,6 +142,27 @@ private IffStanding ResolveVehicleStanding(Vehicle v)
+                 policy);
+         }
+ 
++        private static bool IsPlayerDeadSafe(Player player)
++        {
++            if (player == null) return true;
++            try
++            {
++                return player.Vitals != null
++                    && player.Vitals.ContainsKey(PropertyAttribute2nd.MaxHealth)
++                    && player.IsDead;
++            }
++            catch { return false; }
++        }
++
++        public int ContactCount
++        {
++            get
++            {
++                lock (_contactsLock)
++                    return _latestContacts.Count;
++            }
++        }
++
+         private void ScanContacts()
+         {
+             if (Location == null) return;
+@@ -151,6 +173,7 @@ private void ScanContacts()
+             foreach (var p in PlayerManager.GetAllOnline())
+             {
+                 if (p == null || p.Location == null || p.Guid.Full == DeployerPlayerGuid) continue;
++                if (p.Location.Indoors || IsPlayerDeadSafe(p) || p.IsLoggingOut) continue;
+                 var (px, py, pz) = Vehicle.ToGlobal(p.Location);
+                 var pPos = new Vector3((float)px, (float)py, (float)pz);
+                 float dist = Vector3.Distance(center, pPos);
+@@ -177,6 +200,7 @@ private void ScanContacts()
+             foreach (var v in VehicleManager.All)
+             {
+                 if (v == null || v.Location == null || v.Guid.Full == ParentVehicleGuid) continue;
++                if (v.IsDestroyed || v.Profile?.Locomotion != VehicleLocomotion.Ground) continue;
+                 var vLoc = v.VehiclePosition();
+                 var (vx, vy, vz) = Vehicle.ToGlobal(vLoc);
+                 var vPos = new Vector3((float)vx, (float)vy, (float)vz);
+diff --git a/Source/ACE.Server/Vehicles/Deployables/IsoContainerDeployable.cs b/Source/ACE.Server/Vehicles/Deployables/IsoContainerDeployable.cs
+index f608e8bb..a0a71c3e 100644
+--- a/Source/ACE.Server/Vehicles/Deployables/IsoContainerDeployable.cs
++++ b/Source/ACE.Server/Vehicles/Deployables/IsoContainerDeployable.cs
+@@ -764,6 +764,35 @@ public bool TryUnpackSlot(int slotIndex, out uint wcid, out PalletCargoState car
+         public bool TryUnpackSlot(int slotIndex, out WorldObject spawned, sbyte subSlot = -1)
+         {
+             spawned = null;
++            if (DoorProgress < 0.8f || slotIndex < 0 || slotIndex >= Slots.Count)
++                return false;
++
++            var slot = Slots[slotIndex];
++            if (!slot.Occupied && slot.OccupiedSubSlots == 0)
++                return false;
++
++            PalletSize palletSize = slot.OccupiedPalletSize;
++            byte resolvedSubSlot = 0;
++            if (palletSize == PalletSize.Half)
++            {
++                if (subSlot == 0 || subSlot == 1)
++                {
++                    if ((slot.OccupiedSubSlots & (1 << subSlot)) == 0)
++                        return false;
++                    resolvedSubSlot = (byte)subSlot;
++                }
++                else
++                {
++                    resolvedSubSlot = (slot.OccupiedSubSlots & 0x01) != 0 ? (byte)0 : (byte)1;
++                    if ((slot.OccupiedSubSlots & (1 << resolvedSubSlot)) == 0)
++                        return false;
++                }
++            }
++            else if (palletSize != PalletSize.Full)
++            {
++                return false;
++            }
++
+             if (!TryUnpackSlot(slotIndex, out uint wcid, out PalletCargoState cargoState, subSlot))
+                 return false;
+ 
+@@ -784,7 +813,7 @@ public bool TryUnpackSlot(int slotIndex, out WorldObject spawned, sbyte subSlot
+                 if (!DeployableManager.TryEnterWorld(station))
+                 {
+                     try { GuidManager.RecycleDynamicGuid(guid); } catch (NullReferenceException) { }
+-                    TryLoadWcid(slotIndex, wcid, PalletSize.Full, 0, ignoreDoorState: true, cargoState);
++                    TryLoadWcid(slotIndex, wcid, palletSize, resolvedSubSlot, ignoreDoorState: true, cargoState);
+                     return false;
+                 }
+                 AirDefenseManager.RegisterStation(station);
+@@ -795,13 +824,18 @@ public bool TryUnpackSlot(int slotIndex, out WorldObject spawned, sbyte subSlot
+             else
+             {
+                 var dep = DeployableManager.SpawnDeployable(wcid, spawnPos, player);
+-                if (dep != null && cargoState.HasState)
++                if (dep == null)
++                {
++                    TryLoadWcid(slotIndex, wcid, palletSize, resolvedSubSlot, ignoreDoorState: true, cargoState);
++                    return false;
++                }
++                if (cargoState.HasState)
+                 {
+                     dep.RestoreCargoState(cargoState);
+                     dep.BroadcastState();
+                 }
+                 spawned = dep;
+-                return dep != null;
++                return true;
+             }
+         }
+ 
+diff --git a/Source/ACE.Server/Vehicles/Deployables/MicroGrid.cs b/Source/ACE.Server/Vehicles/Deployables/MicroGrid.cs
+index 11e85cf0..7889bf3f 100644
+--- a/Source/ACE.Server/Vehicles/Deployables/MicroGrid.cs
++++ b/Source/ACE.Server/Vehicles/Deployables/MicroGrid.cs
+@@ -149,15 +149,17 @@ public void Tick(float deltaSeconds)
+                         float remainingDeficit = Math.Abs(netJoules);
+                         float totalAvailable = batteries.Sum(b => Math.Max(0f, b.CapacitorJoules));
+                         if (totalAvailable >= remainingDeficit && remainingDeficit > 0f)
+-                            hasPower = true;
+-                        foreach (var b in batteries)
+                         {
+-                            if (b.CapacitorJoules > 0)
++                            hasPower = true;
++                            foreach (var b in batteries)
+                             {
+-                                float toDraw = Math.Min(b.CapacitorJoules, remainingDeficit);
+-                                b.CapacitorJoules -= toDraw;
+-                                remainingDeficit -= toDraw;
+-                                if (remainingDeficit <= 0) break;
++                                if (b.CapacitorJoules > 0)
++                                {
++                                    float toDraw = Math.Min(b.CapacitorJoules, remainingDeficit);
++                                    b.CapacitorJoules -= toDraw;
++                                    remainingDeficit -= toDraw;
++                                    if (remainingDeficit <= 0) break;
++                                }
+                             }
+                         }
+                     }
+diff --git a/Source/ACE.Server/Vehicles/Deployables/SemiTrailerDeployable.cs b/Source/ACE.Server/Vehicles/Deployables/SemiTrailerDeployable.cs
+index 1c0a79f5..28f21218 100644
+--- a/Source/ACE.Server/Vehicles/Deployables/SemiTrailerDeployable.cs
++++ b/Source/ACE.Server/Vehicles/Deployables/SemiTrailerDeployable.cs
+@@ -830,13 +830,21 @@ public bool CancelSidelift(out string reason)
+         public void OnTransferContainerDestroyed(bool fromLandblockUnload = false)
+         {
+             TransferContainerGuid = 0;
+-            AutoCycleActive = false;
+             SideliftIsLoad = false;
+             if (SideliftPhase >= SideliftPhase.CranesPositioning && SideliftPhase <= SideliftPhase.Releasing)
+             {
+                 SideliftPhase = SideliftPhase.CranesStowing;
+                 SideliftProgress = 0f;
+             }
++            else if (AutoCycleActive && SideliftPhase == SideliftPhase.OutriggersDeploying)
++            {
++                SideliftPhase = SideliftPhase.OutriggersRetracting;
++                SideliftProgress = Math.Clamp(1.0f - OutriggerProgress, 0f, 1f);
++            }
++            else if (SideliftPhase != SideliftPhase.CranesStowing && SideliftPhase != SideliftPhase.OutriggersRetracting)
++            {
++                AutoCycleActive = false;
++            }
+             if (!fromLandblockUnload && !IsDestroyed)
+                 BroadcastState();
+         }
+diff --git a/Source/ACE.Server/Vehicles/VehicleManager.cs b/Source/ACE.Server/Vehicles/VehicleManager.cs
+index 92ebff45..1ec9d61e 100644
+--- a/Source/ACE.Server/Vehicles/VehicleManager.cs
++++ b/Source/ACE.Server/Vehicles/VehicleManager.cs
+@@ -1478,21 +1478,20 @@ public static bool HandleCargo(Player player, VehicleCargo msg)
+             {
+                 if (v.CargoLoaded) return false;
+ 
+-                // Player distance to radar station (fallback to tailgatePos if DeployedRadar is null in mock tests)
+-                var radarPos = (v.DeployedRadar != null && v.DeployedRadar.Location != null)
+-                    ? v.DeployedRadar.Location
+-                    : tailgatePos;
+-
+-                if (player.Location.DistanceTo(radarPos) > 3.8f) return false;
+-
+-                if (v.DeployedRadar != null)
++                if (v.DeployedRadar == null || v.DeployedRadar.IsDestroyed)
+                 {
+-                    AirDefense.AirDefenseManager.UnregisterStation(v.DeployedRadar.Guid.Full);
+-                    if (!v.DeployedRadar.IsDestroyed)
+-                        v.DeployedRadar.Destroy();
+                     v.DeployedRadar = null;
++                    return false;
+                 }
+ 
++                var radarPos = v.DeployedRadar.Location ?? tailgatePos;
++
++                if (player.Location.DistanceTo(radarPos) > 3.8f) return false;
++
++                AirDefense.AirDefenseManager.UnregisterStation(v.DeployedRadar.Guid.Full);
++                v.DeployedRadar.Destroy();
++                v.DeployedRadar = null;
++
+                 v.CargoLoaded = true;
+                 BroadcastEvent(v, VehicleEventKind.CargoPacked, player.Guid.Full, 0f, tailgatePos, player);
+                 return true;
+-- 
+2.43.0
+

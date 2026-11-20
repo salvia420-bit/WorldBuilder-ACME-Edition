@@ -1,9 +1,8 @@
 // scene3d/vehicle/trailer_models.js — Articulated fifth-wheel semi-trailer (skeletal container chassis) 3D models.
 //
-// Client model only (2026-11-17). There is no server object yet: an ACE patch must add the chassis as a
-// deployable with its own WCID (TRAILER_WCID below — NOT 4000020/21/22, which are the ISO containers) and a
-// wire kind before it can be spawned in-game. Until then harness/trailer-shots-stage.js attaches it under
-// server-spawned containers for screenshots. Procedural, Z-up, local origin at the ground under the chassis centre, +Y = front
+// Server-backed by ACE `SemiTrailerDeployable` (WCID 4000030 = 20ft chassis kind 13, 4000031 = 40ft chassis
+// kind 14, 4000032 = 40ft sidelifter kind 15) via `Vehicle_TrailerState` (0x090F) and `Vehicle_TrailerAction` (0x090F).
+// Procedural, Z-up, local origin at the ground under the chassis centre, +Y = front
 // (kingpin end), -Y = rear (bogie / ICC bumper) — the same frame as container_models.js, so an ISO
 // container built by buildIsoContainer() parented to `containerMount` sits with its doors at the rear.
 //

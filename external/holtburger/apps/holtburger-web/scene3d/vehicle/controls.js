@@ -18,6 +18,7 @@
 // Page module: dependencies injected ({window, document, navigator, funnel, canvas}); no timers.
 
 import { isTypingTarget } from "../drone/controls.js";
+import { cancelJumpCharge, jumpChargePending } from "../../ui/escape_action.js";
 import * as FM from "./flight_model.js";
 
 export const VEHICLE_KEY_AXES = Object.freeze({
@@ -59,6 +60,60 @@ const DEFAULT_MAX_BANK = Math.PI / 3;
 const DEFAULT_MAX_PITCH = (25 * Math.PI) / 180;
 const DEFAULT_ROLL_RATE = Math.PI / 2;
 const UI_INTERACTIVE_TAGS = new Set(["BUTTON", "A", "INPUT", "SELECT", "TEXTAREA", "LABEL", "SUMMARY"]);
+const MODAL_SELECTOR = '[aria-modal="true"]';
+
+function isVisibleConnectedModal(el, win) {
+  if (!el || el.isConnected === false) return false;
+  if (el.hidden === true) return false;
+  try {
+    if (typeof el.getAttribute === "function") {
+      if (el.getAttribute("aria-hidden") === "true") return false;
+      if (el.getAttribute("data-open") === "0") return false;
+    }
+  } catch (_) {}
+  if (el.dataset && el.dataset.open === "0") return false;
+  if (el.style && (el.style.display === "none" || el.style.visibility === "hidden")) return false;
+  try {
+    const w = win ?? el.ownerDocument?.defaultView ?? (typeof window !== "undefined" ? window : null);
+    if (w && typeof w.getComputedStyle === "function") {
+      const cs = w.getComputedStyle(el);
+      if (cs && (cs.display === "none" || cs.visibility === "hidden")) return false;
+    }
+  } catch (_) {}
+  return true;
+}
+
+function insideModal(el, win) {
+  try {
+    if (!el || typeof el.closest !== "function") return false;
+    const modal = el.closest(MODAL_SELECTOR);
+    return modal ? isVisibleConnectedModal(modal, win) : false;
+  } catch (_) {
+    return false;
+  }
+}
+
+function inOpenModal(ev, doc, win) {
+  const w = win ?? doc?.defaultView ?? null;
+  if (insideModal(ev ? ev.target : null, w)) return true;
+  try {
+    const el = doc ? doc.activeElement : null;
+    if (el && el.isConnected !== false && insideModal(el, w)) return true;
+    if (doc && typeof doc.querySelectorAll === "function") {
+      const list = doc.querySelectorAll(MODAL_SELECTOR);
+      if (list) {
+        for (let i = 0; i < list.length; i++) {
+          if (isVisibleConnectedModal(list[i], w)) return true;
+        }
+      }
+    } else if (doc && typeof doc.querySelector === "function") {
+      if (isVisibleConnectedModal(doc.querySelector(MODAL_SELECTOR), w)) return true;
+    }
+    return false;
+  } catch (_) {
+    return false;
+  }
+}
 
 function clamp(v, lo, hi) {
   return v < lo ? lo : (v > hi ? hi : v);
@@ -166,7 +221,8 @@ export function createVehicleControls(deps = {}) {
     const tag = typeof target.tagName === "string" ? target.tagName.toUpperCase() : "";
     if (UI_INTERACTIVE_TAGS.has(tag)) return true;
     try {
-      if (typeof target.closest === "function" && target.closest('button,a,input,select,textarea,[role="dialog"],[aria-modal="true"]')) {
+      if (target.classList?.contains?.("hb-ground-seat-card")) return true;
+      if (typeof target.closest === "function" && target.closest('button,a,input,select,textarea,[role="dialog"],[aria-modal="true"],.hb-ground-seat-card')) {
         return true;
       }
     } catch (_) { /* ignore */ }
@@ -290,7 +346,7 @@ export function createVehicleControls(deps = {}) {
   function onKey(ev) {
     const code = typeof ev.code === "string" ? ev.code : "";
     if (!CODE_SET.has(code)) return;
-    const typing = isTypingTarget(ev, doc);
+    const typing = isTypingTarget(ev, doc) || inOpenModal(ev, doc, win);
     if (ev.type === "keyup") {
       down[code] = false;
       if (!typing) block(ev);
@@ -432,8 +488,58 @@ export function createVehicleControls(deps = {}) {
     sticks.yaw = 0;
   }
 
+  function onVisibility() {
+    if (doc?.visibilityState === "hidden") onBlur();
+  }
+
+  const drainCodes = new Set();
+  let drainListening = false;
+
+  function onDrainKey(ev) {
+    if (!ev) return;
+    const code = typeof ev.code === "string" ? ev.code : "";
+    if (!drainCodes.has(code)) return;
+    if (ev.type === "keyup") {
+      drainCodes.delete(code);
+      block(ev);
+    } else if (ev.repeat === true) {
+      block(ev);
+    } else {
+      drainCodes.delete(code);
+    }
+    if (drainCodes.size === 0) dropDrain();
+  }
+
+  function onDrainBlur() {
+    dropDrain();
+  }
+
+  function startDrain() {
+    for (const c of VEHICLE_KEY_CODES) {
+      if (down[c]) drainCodes.add(c);
+    }
+    if (drainCodes.size === 0 || !win || typeof win.addEventListener !== "function") {
+      drainCodes.clear();
+      return;
+    }
+    win.addEventListener("keydown", onDrainKey, CAPTURE);
+    win.addEventListener("keyup", onDrainKey, CAPTURE);
+    win.addEventListener("blur", onDrainBlur);
+    drainListening = true;
+  }
+
+  function dropDrain() {
+    drainCodes.clear();
+    if (!drainListening || !win) return;
+    drainListening = false;
+    try { win.removeEventListener("keydown", onDrainKey, CAPTURE); } catch (_) {}
+    try { win.removeEventListener("keyup", onDrainKey, CAPTURE); } catch (_) {}
+    try { win.removeEventListener("blur", onDrainBlur); } catch (_) {}
+  }
+
   function lock() {
     if (locked) return { ok: true, already: true };
+    dropDrain();
     saved = { funnel: null };
     const f = deps.funnel ?? (win ? win.__inputFunnel : null);
     if (f && typeof f === "object") {
@@ -448,6 +554,19 @@ export function createVehicleControls(deps = {}) {
       }
       saved.funnel = { ref: f, didPoison };
     }
+    const h = win?.__sessionHandle ?? null;
+    try {
+      if (jumpChargePending(win, h)) cancelJumpCharge(win, h, doc);
+      if (typeof win?.cancelJumpCharge === "function") win.cancelJumpCharge();
+      if (typeof f?.cancelJumpCharge === "function") f.cancelJumpCharge();
+    } catch (_) { /* best effort */ }
+    const cs = deps.cameraSwitcher ?? win?.__cameraSwitcher ?? null;
+    if (cs) {
+      try { cs._endFollowDrag?.(); } catch (_) {}
+      if (cs.keys && typeof cs.keys === "object") {
+        for (const k of Object.keys(cs.keys)) cs.keys[k] = false;
+      }
+    }
     if (win && typeof win.addEventListener === "function") {
       for (const t of KEY_EVENTS) win.addEventListener(t, onKey, CAPTURE);
       win.addEventListener("mousedown", onMouseDown, CAPTURE);
@@ -460,6 +579,7 @@ export function createVehicleControls(deps = {}) {
     }
     if (doc && typeof doc.addEventListener === "function") {
       doc.addEventListener("pointerlockchange", onPointerLockChange);
+      doc.addEventListener("visibilitychange", onVisibility);
       docListening = true;
     }
     locked = true;
@@ -487,6 +607,7 @@ export function createVehicleControls(deps = {}) {
     }
     if (docListening && doc) {
       try { doc.removeEventListener("pointerlockchange", onPointerLockChange); } catch (_) {}
+      try { doc.removeEventListener("visibilitychange", onVisibility); } catch (_) {}
       docListening = false;
     }
     const s = saved && saved.funnel;
@@ -503,6 +624,7 @@ export function createVehicleControls(deps = {}) {
     if (gf && typeof gf.releaseHeld === "function") {
       try { gf.releaseHeld("vehicle"); } catch (_) {}
     }
+    startDrain();
     saved = null;
     locked = false;
     onBlur();
@@ -695,7 +817,7 @@ export function createVehicleControls(deps = {}) {
 
       let boost = !!(down.ShiftLeft || down.ShiftRight);
       let handbrake = !!down.Space || brakeActive;
-      let horn = !!down.KeyV;
+      let horn = !!(down.KeyV || latched.KeyV);
 
       const pad = readPad();
       if (pad) {
@@ -929,6 +1051,7 @@ export function createVehicleControls(deps = {}) {
     getHeadlights() { return headlights; },
     dispose() {
       const r = restore();
+      dropDrain();
       actionFns.clear();
       onBlur();
       exitPointerLockClean();

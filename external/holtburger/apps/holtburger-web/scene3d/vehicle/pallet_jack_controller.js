@@ -97,38 +97,52 @@ function angleDiff(a, b) {
   return d;
 }
 
-function insideModal(el) {
+function isVisibleConnectedModal(el, win) {
+  if (!el || el.isConnected === false) return false;
+  if (el.hidden === true) return false;
   try {
-    return !!(el && typeof el.closest === "function" && el.closest(MODAL_SELECTOR));
+    if (typeof el.getAttribute === "function") {
+      if (el.getAttribute("aria-hidden") === "true") return false;
+      if (el.getAttribute("data-open") === "0") return false;
+    }
+  } catch (_) {}
+  if (el.dataset && el.dataset.open === "0") return false;
+  if (el.style && (el.style.display === "none" || el.style.visibility === "hidden")) return false;
+  try {
+    const w = win ?? el.ownerDocument?.defaultView ?? (typeof window !== "undefined" ? window : null);
+    if (w && typeof w.getComputedStyle === "function") {
+      const cs = w.getComputedStyle(el);
+      if (cs && (cs.display === "none" || cs.visibility === "hidden")) return false;
+    }
+  } catch (_) {}
+  return true;
+}
+
+function insideModal(el, win) {
+  try {
+    if (!el || typeof el.closest !== "function") return false;
+    const modal = el.closest(MODAL_SELECTOR);
+    return modal ? isVisibleConnectedModal(modal, win) : false;
   } catch (_) {
     return false;
   }
 }
 
-function isVisibleConnectedModal(el) {
-  if (!el || el.isConnected === false) return false;
-  if (el.hidden === true) return false;
-  try {
-    if (typeof el.getAttribute === "function" && el.getAttribute("aria-hidden") === "true") return false;
-  } catch (_) {}
-  if (el.style && (el.style.display === "none" || el.style.visibility === "hidden")) return false;
-  return true;
-}
-
-export function inOpenModal(ev, doc) {
-  if (insideModal(ev ? ev.target : null)) return true;
+export function inOpenModal(ev, doc, win) {
+  const w = win ?? doc?.defaultView ?? null;
+  if (insideModal(ev ? ev.target : null, w)) return true;
   try {
     const el = doc ? doc.activeElement : null;
-    if (el && el.isConnected !== false && insideModal(el)) return true;
+    if (el && el.isConnected !== false && insideModal(el, w)) return true;
     if (doc && typeof doc.querySelectorAll === "function") {
       const list = doc.querySelectorAll(MODAL_SELECTOR);
       if (list) {
         for (let i = 0; i < list.length; i++) {
-          if (isVisibleConnectedModal(list[i])) return true;
+          if (isVisibleConnectedModal(list[i], w)) return true;
         }
       }
     } else if (doc && typeof doc.querySelector === "function") {
-      if (isVisibleConnectedModal(doc.querySelector(MODAL_SELECTOR))) return true;
+      if (isVisibleConnectedModal(doc.querySelector(MODAL_SELECTOR), w)) return true;
     }
     return false;
   } catch (_) {
@@ -553,7 +567,7 @@ export function createPalletJackControls(deps = {}) {
     if (ev.type === "keyup") {
       down[code] = false;
     }
-    if (isTypingTarget(ev, doc) || inOpenModal(ev, doc)) return;
+    if (isTypingTarget(ev, doc) || inOpenModal(ev, doc, win)) return;
     if (ev.ctrlKey || ev.altKey || ev.metaKey) return;
 
     if (code === "Escape") {
@@ -617,6 +631,7 @@ export function createPalletJackControls(deps = {}) {
       drainCodes.clear();
       return;
     }
+    if (drainListening) return;
     win.addEventListener("keydown", onDrainKey, CAPTURE);
     win.addEventListener("keyup", onDrainKey, CAPTURE);
     win.addEventListener("blur", onDrainBlur, BUBBLE);
@@ -723,6 +738,8 @@ export function createPalletJackControls(deps = {}) {
     dispose() {
       disposed = true;
       restore();
+      dropDrain();
+      clearDown();
       listeners.clear();
     },
   };
@@ -750,6 +767,7 @@ export function createPalletJackController(deps = {}) {
   const cameraOwnerFactory = deps.cameraOwnerFactory ?? createCameraOwner;
 
   let active = null; // { guid, entry, controls, camera, unsub, state, viewMode, camState, lastSentAt, lastMotionKey, pumpTimer, highlightedContainerGuid }
+  let lastControls = null;
   let disposed = false;
 
   function unfadeAvatar() {
@@ -1091,12 +1109,17 @@ export function createPalletJackController(deps = {}) {
     const g = entry.guid >>> 0;
     if (active && active.guid === g) return true;
     if (active) stop("switch");
+    if (lastControls) {
+      try { lastControls.dispose?.(); } catch (_) {}
+      lastControls = null;
+    }
 
     const controls = createPalletJackControls({
       window: win,
       document: win?.document ?? null,
       cameraSwitcher: live?.cameraSwitcher ?? null,
     });
+    lastControls = controls;
     controls.lock();
 
     let camera = null;
@@ -1162,7 +1185,15 @@ export function createPalletJackController(deps = {}) {
 
     try { logisticsAudio?.stopWheelRoll?.(act.guid); } catch (_) {}
     try { act.unsub?.(); } catch (_) {}
-    try { act.controls?.dispose?.(); } catch (_) {}
+    const hardTeardown = why === "dispose" || why === "death" || why === "teleport" || why === "despawn" || why === "switch";
+    try {
+      if (hardTeardown) {
+        act.controls?.dispose?.();
+        if (lastControls === act.controls) lastControls = null;
+      } else {
+        act.controls?.restore?.();
+      }
+    } catch (_) {}
     try { act.camera?.release?.(); act.camera?.dispose?.(); } catch (_) {}
     try { sh()?.clearVehicleSeat?.(); } catch (_) {}
     const me = localGuid();
@@ -1639,6 +1670,8 @@ export function createPalletJackController(deps = {}) {
     dispose() {
       disposed = true;
       stop("dispose");
+      try { lastControls?.dispose?.(); } catch (_) {}
+      lastControls = null;
     },
   };
 }

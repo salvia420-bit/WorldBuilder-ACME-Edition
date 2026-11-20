@@ -44,11 +44,18 @@ function makeFakeWindowDocCanvas() {
   const docListeners = new Map();
   const canvasListeners = new Map();
 
+  const byId = new Map();
   const makeEl = (tag = "div") => {
     const cls = new Set();
+    let idVal = "";
     const el = {
       tagName: tag.toUpperCase(),
-      id: "",
+      get id() { return idVal; },
+      set id(v) {
+        if (idVal && byId.get(idVal) === el) byId.delete(idVal);
+        idVal = String(v || "");
+        if (idVal) byId.set(idVal, el);
+      },
       style: {},
       textContent: "",
       innerHTML: "",
@@ -63,8 +70,14 @@ function makeFakeWindowDocCanvas() {
         },
         contains(x) { return cls.has(x); },
       },
-      appendChild(c) { this.children.push(c); return c; },
-      remove() {},
+      appendChild(c) {
+        this.children.push(c);
+        if (c && c.id) byId.set(c.id, c);
+        return c;
+      },
+      remove() {
+        if (idVal && byId.get(idVal) === el) byId.delete(idVal);
+      },
       querySelector() { return null; },
       setAttribute() {},
       addEventListener() {},
@@ -93,7 +106,7 @@ function makeFakeWindowDocCanvas() {
     activeElement: null,
     pointerLockElement: null,
     createElement(tag) { return makeEl(tag); },
-    getElementById() { return null; },
+    getElementById(id) { return byId.get(id) ?? null; },
     exitPointerLock() { doc.pointerLockElement = null; },
     addEventListener(type, fn) {
       if (!docListeners.has(type)) docListeners.set(type, new Set());
@@ -557,8 +570,13 @@ test("KeyG sends hitch within 3.5 m and unhitch when coupled; events 19/20/21 an
     heading: 0, coupledTractorGuid: semiGuid, mountedContainerGuid: 0, trailerFlags: 0x01,
   });
   rig.push({ type: "event", kind: 19, vehicle: semiGuid, subject: rig.localPlayerGuid, aux: trailerGuid });
-  rig.push({ type: "event", kind: 21, vehicle: semiGuid, subject: rig.localPlayerGuid, aux: 1 });
+  rig.push({ type: "event", kind: 21, vehicle: semiGuid, subject: rig.localPlayerGuid, value: 0, aux: trailerGuid });
   rig.tick(96, 36);
+  assert.equal(rig.doc.getElementById("hb-vehicle-prompt")?.textContent, "Twistlocks UNLOCKED", "kind 21 value=0 aux=trailerGuid displays UNLOCKED");
+
+  rig.push({ type: "event", kind: 21, vehicle: semiGuid, subject: rig.localPlayerGuid, value: 1, aux: trailerGuid });
+  rig.tick(112, 16);
+  assert.equal(rig.doc.getElementById("hb-vehicle-prompt")?.textContent, "Twistlocks LOCKED", "kind 21 value=1 aux=trailerGuid displays LOCKED");
 
   // Press KeyG while coupled -> action 2 (Unhitch)
   rig.calls.trailerActions.length = 0;
@@ -1142,6 +1160,216 @@ test("ground_fx.js spawns wheel dust plumes and handbrake skid smoke in reverse 
   const active = fx.getActiveCount();
   assert.ok(active > 10, `reverse dust plumes + handbrake skid smoke emitted (${active} active > 5 exhaust-only)`);
   fx.dispose();
+});
+
+test("ground_fx.js transforms semi wheel dust, skid smoke, dual exhaust, and terrain ruts by AC compass heading (PI/2 & PI)", () => {
+  const stamped = [];
+  const prevWin = globalThis.window;
+  globalThis.window = {
+    __terrainVfx: {
+      trail: {
+        stamp(wx, wy, radius, strength) {
+          stamped.push({ wx, wy, radius, strength });
+        },
+      },
+    },
+  };
+  try {
+    for (const heading of [Math.PI / 2, Math.PI]) {
+      stamped.length = 0;
+      const worldRoot = new THREE.Group();
+      const fx = createGroundFx({ root: worldRoot, THREE });
+      const px = 100;
+      const py = 200;
+      const pz = 5;
+      const cosH = Math.cos(heading);
+      const sinH = Math.sin(heading);
+
+      fx.update({
+        x: px, y: py, z: pz,
+        heading, pitch: 0, bank: 0,
+        speed: 14,
+        throttle: 0.8,
+        handbrake: true,
+        groundFlags: 0x03,
+        surfaceFamily: 1, // Dirt (deformable)
+        vehicleClass: 3,
+        profileKey: "semi-379",
+      }, 0.12);
+
+      // 1. Terrain ruts stamped for all 6 semi wheels at AC compass transform
+      assert.equal(stamped.length, 6, `heading=${heading.toFixed(2)}: 6 semi wheel ruts stamped`);
+      for (let i = 0; i < 6; i++) {
+        const [lx, ly] = SEMI_FX_DIMENSIONS.wheelOffsets[i];
+        const ex = px + lx * cosH + ly * sinH;
+        const ey = py - lx * sinH + ly * cosH;
+        assert.ok(Math.abs(stamped[i].wx - ex) < 1e-4, `rut[${i}] wx=${stamped[i].wx} vs ${ex}`);
+        assert.ok(Math.abs(stamped[i].wy - ey) < 1e-4, `rut[${i}] wy=${stamped[i].wy} vs ${ey}`);
+      }
+
+      // 2. Dual exhaust wisps emitted at rotated stack tops
+      const activeSlots = fx.pool.filter((s) => s.active);
+      for (let e = 0; e < 2; e++) {
+        const [txOff, tyOff, tzOff] = SEMI_FX_DIMENSIONS.exhaustOffsets[e];
+        const ex = px + txOff * cosH + tyOff * sinH;
+        const ey = py - txOff * sinH + tyOff * cosH;
+        const ez = pz + tzOff;
+        const hit = activeSlots.find((s) => Math.hypot(s.x - ex, s.y - ey) < 0.25 && Math.abs(s.z - ez) < 0.5);
+        assert.ok(hit, `heading=${heading.toFixed(2)}: exhaust stack ${e} spawned near (${ex.toFixed(2)}, ${ey.toFixed(2)})`);
+      }
+
+      // 3. Wheel dust (6 wheels) and rear skid smoke (4 tandem wheels) spawned near rotated wheel coords
+      const [flX, flY] = SEMI_FX_DIMENSIONS.wheelOffsets[0];
+      const flWx = px + flX * cosH + flY * sinH;
+      const flWy = py - flX * sinH + flY * cosH;
+      const flDust = activeSlots.find((s) => Math.hypot(s.x - flWx, s.y - flWy) < 0.25 && Math.abs(s.z - (pz + 0.05)) < 0.3);
+      assert.ok(flDust, `heading=${heading.toFixed(2)}: FL wheel dust spawned near (${flWx.toFixed(2)}, ${flWy.toFixed(2)})`);
+
+      const [rrX, rrY] = SEMI_FX_DIMENSIONS.wheelOffsets[5];
+      const rrWx = px + rrX * cosH + rrY * sinH;
+      const rrWy = py - rrX * sinH + rrY * cosH;
+      const rrSkid = activeSlots.find((s) => s.mat.color.getHex() === 0xdddddd && Math.hypot(s.x - rrWx, s.y - rrWy) < 0.25);
+      assert.ok(rrSkid, `heading=${heading.toFixed(2)}: RR skid smoke spawned near (${rrWx.toFixed(2)}, ${rrWy.toFixed(2)})`);
+
+      fx.dispose();
+    }
+  } finally {
+    if (prevWin === undefined) delete globalThis.window;
+    else globalThis.window = prevWin;
+  }
+});
+
+test("Adversarial (Finding 2): Digit2 hot-swap immediately followed by api.exit(0) clears hotSwapTarget so server state=0 releases seat", () => {
+  const rig = makeTestRig();
+  const semiGuid = 0x70000951;
+  rig.entityMap.set(semiGuid, rig.makeStandIn());
+  const semiCell = FM.toCellLocal(650, 750, 0);
+
+  rig.push({ type: "ack", granted: 3 });
+  rig.push(makeSemiProfile(semiGuid, 0));
+  rig.push({
+    type: "state",
+    vehicle: semiGuid,
+    cell: semiCell.cell, x: semiCell.x, y: semiCell.y, z: semiCell.z,
+    heading: 0, pitch: 0, bank: 0, speed: 0, flags: 0x01,
+  });
+  rig.push({ type: "seat", vehicle: semiGuid, seat: 0, state: 1, occupant: rig.localPlayerGuid });
+  rig.tick(16, 16);
+  assert.equal(rig.api.piloting, true, "pilot seated initially");
+
+  // Request hot-swap to seat 1 via Digit2, then immediately request exit before server answers seat 1
+  rig.win.dispatch("keydown", { code: "Digit2", key: "2", repeat: false });
+  rig.win.dispatch("keyup", { code: "Digit2", key: "2" });
+  rig.api.exit(0);
+
+  // Server releases seat 0 (state=0)
+  rig.push({ type: "seat", vehicle: semiGuid, occupant: rig.localPlayerGuid, seat: 0, state: 0 });
+  rig.tick(32, 16);
+  assert.equal(rig.api.piloting, false, "server state=0 releases pilot seat after Digit2 -> exit(0)");
+
+  // Same race from passenger seat 1: Digit1 hot-swap -> immediate api.exit(0) -> server state=0 on seat 1
+  rig.push({ type: "seat", vehicle: semiGuid, seat: 1, state: 1, occupant: rig.localPlayerGuid });
+  rig.tick(48, 16);
+  assert.equal(rig.api.riding, true, "passenger seated in seat 1");
+  rig.win.dispatch("keydown", { code: "Digit1", key: "1", repeat: false });
+  rig.win.dispatch("keyup", { code: "Digit1", key: "1" });
+  rig.api.exit(0);
+  rig.push({ type: "seat", vehicle: semiGuid, occupant: rig.localPlayerGuid, seat: 1, state: 0 });
+  rig.tick(64, 16);
+  assert.equal(rig.api.riding, false, "server state=0 releases passenger seat after Digit1 -> exit(0)");
+
+  rig.api.dispose();
+});
+
+test("Adversarial (Finding 7): ground_fx.js clamps dt<=0 / NaN, guards non-finite poses, and disposes baseSpriteMat (65/65)", () => {
+  let createdMats = 0;
+  let disposedMats = 0;
+  class TrackedSpriteMaterial extends THREE.SpriteMaterial {
+    constructor(params) {
+      super(params);
+      createdMats++;
+      this._trackedDisposed = false;
+    }
+    dispose() {
+      if (!this._trackedDisposed) {
+        this._trackedDisposed = true;
+        disposedMats++;
+      }
+      super.dispose();
+    }
+  }
+  const trackedTHREE = { ...THREE, SpriteMaterial: TrackedSpriteMaterial };
+  const worldRoot = new THREE.Group();
+  const fx = createGroundFx({ root: worldRoot, THREE: trackedTHREE });
+
+  // Prime active particles with valid step
+  fx.update({
+    x: 10, y: 20, z: 0,
+    heading: 0, speed: 12, throttle: 0.8,
+    handbrake: true, groundFlags: 0x03, surfaceFamily: 1,
+    vehicleClass: 3, profileKey: "semi-379",
+  }, 0.1);
+  assert.ok(fx.getActiveCount() > 0, "particles spawned before invalid dt");
+
+  // Negative and NaN dt + non-finite pose fields must not corrupt pool slots
+  fx.update({
+    x: NaN, y: Infinity, z: NaN,
+    heading: NaN, speed: NaN, throttle: NaN,
+    handbrake: false, groundFlags: 0x01, surfaceFamily: 1,
+    vehicleClass: 3, profileKey: "semi-379",
+  }, -0.5);
+  fx.update({
+    x: 10, y: 20, z: 0,
+    heading: 0, speed: 12, throttle: 0.8,
+    handbrake: false, groundFlags: 0x01, surfaceFamily: 1,
+    vehicleClass: 3, profileKey: "semi-379",
+  }, NaN);
+
+  for (const slot of fx.pool) {
+    assert.ok(slot.t >= 0 && Number.isFinite(slot.t), `slot.t must stay finite >= 0, got ${slot.t}`);
+    assert.ok(
+      Number.isFinite(slot.sprite.position.x) &&
+      Number.isFinite(slot.sprite.position.y) &&
+      Number.isFinite(slot.sprite.position.z),
+      "sprite position must stay finite"
+    );
+  }
+
+  fx.dispose();
+  assert.equal(createdMats, POOL_SIZE + 1, "created 64 cloned + 1 base SpriteMaterial");
+  assert.equal(disposedMats, createdMats, `all ${createdMats} SpriteMaterials disposed (no baseSpriteMat leak)`);
+});
+
+test("Tier-5 regression (Gap 2): ground_fx.js post-dispose update(), getActiveCount(), and dispose() are safe no-ops", () => {
+  let disposedMats = 0;
+  class TrackedMat extends THREE.SpriteMaterial {
+    dispose() {
+      disposedMats++;
+      super.dispose();
+    }
+  }
+  const trackedTHREE = { ...THREE, SpriteMaterial: TrackedMat };
+  const root = new THREE.Group();
+  const fx = createGroundFx(trackedTHREE, root);
+
+  fx.update(0x80001001, { x: 0, y: 0, z: 0, heading: 0 }, { speed: 10 }, 0.05);
+  assert.ok(fx.getActiveCount() > 0, "particles spawned before dispose");
+
+  fx.dispose();
+  const matsAfterFirstDispose = disposedMats;
+  assert.equal(matsAfterFirstDispose, POOL_SIZE + 1, "first dispose cleaned all SpriteMaterials");
+
+  assert.doesNotThrow(() => {
+    fx.update(0x80001001, { x: 0, y: 0, z: 0, heading: 0 }, { speed: 10 }, 0.05);
+    fx.update({ x: 1, y: 2, z: 0, heading: 0, speed: 5 }, 0.05);
+  }, "post-dispose update() must not throw TypeError");
+
+  assert.equal(fx.getActiveCount(), 0, "post-dispose getActiveCount() returns 0 without throwing");
+
+  assert.doesNotThrow(() => {
+    fx.dispose();
+  }, "second dispose() is idempotent");
+  assert.equal(disposedMats, matsAfterFirstDispose, "second dispose() does not double-dispose materials");
 });
 
 // ---------------------------------------------------------------------------

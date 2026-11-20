@@ -13,7 +13,13 @@ import { installFakeAudio } from "./helpers/fake_audio_context.mjs";
 
 installFakeAudio();
 
-const { initVehicles, TRAILER_ACTION, PALLET_JACK_ACTION } = await import("../scene3d/vehicle/index.js");
+const {
+  initVehicles,
+  TRAILER_ACTION,
+  PALLET_JACK_ACTION,
+  SIDELIFT_REFUSAL_REASONS,
+  PALLET_JACK_EVENT_REASONS,
+} = await import("../scene3d/vehicle/index.js");
 const FM = await import("../scene3d/vehicle/flight_model.js");
 const TK = await import("../scene3d/vehicle/trailer_kinematics.js");
 const TM = await import("../scene3d/vehicle/trailer_models.js");
@@ -49,6 +55,8 @@ function makeFakeWindowDocCanvas() {
 
   const makeEl = (tag = "div") => {
     const cls = new Set();
+    let clsRaw = "";
+    const elListeners = new Map();
     let idVal = "";
     const el = {
       tagName: tag.toUpperCase(),
@@ -57,6 +65,14 @@ function makeFakeWindowDocCanvas() {
         if (idVal && byId.get(idVal) === el) byId.delete(idVal);
         idVal = String(v || "");
         if (idVal) byId.set(idVal, el);
+      },
+      get className() { return clsRaw; },
+      set className(v) {
+        clsRaw = String(v || "");
+        cls.clear();
+        for (const part of clsRaw.split(/\s+/)) {
+          if (part) cls.add(part);
+        }
       },
       style: {},
       textContent: "",
@@ -92,15 +108,29 @@ function makeFakeWindowDocCanvas() {
       },
       closest(sel) {
         if (sel === '[aria-modal="true"]' && this._modal) return this;
-        return null;
+        return this.parentNode?.closest?.(sel) ?? null;
       },
       querySelector() { return null; },
+      _attrs: Object.create(null),
       setAttribute(k, v) {
-        if (k === "aria-modal" && v === "true") this._modal = true;
+        this._attrs[k] = String(v);
+        if (k === "aria-modal") this._modal = v === "true";
       },
-      getAttribute(k) { return this[k] ?? null; },
-      addEventListener() {},
-      removeEventListener() {},
+      getAttribute(k) { return k in this._attrs ? this._attrs[k] : (this[k] ?? null); },
+      addEventListener(type, fn) {
+        if (!elListeners.has(type)) elListeners.set(type, []);
+        elListeners.get(type).push(fn);
+      },
+      removeEventListener(type, fn) {
+        const arr = elListeners.get(type);
+        if (!arr) return;
+        const i = arr.indexOf(fn);
+        if (i >= 0) arr.splice(i, 1);
+      },
+      dispatch(type, ev = {}) {
+        const arr = [...(elListeners.get(type) || [])];
+        for (const fn of arr) fn(ev);
+      },
     };
     return el;
   };
@@ -340,6 +370,7 @@ function makeTestRig(opts = {}) {
     localPlayerGuid,
     csmState,
     nullRender: false,
+    ...(opts.audioManager ? { audioManager: opts.audioManager } : {}),
     entityManager: {
       entityMap,
       localPlayerGuid,
@@ -2117,6 +2148,432 @@ await test("12. Tier-5 Adversarial Regression Suite (T5_01..T5_07)", async () =>
       assert.equal(hits.length, 0, `${rel} lintSource hits: ${JSON.stringify(hits)}`);
     }
     env.api.dispose();
+  }
+});
+
+test("M3 regression: kind 24/25 aux 1..7 prompts, KeyJ/KeyL flags=0x02, rotated slotY ground probe, OSD seat click, RadarStation stow HUD, deployableAudio", () => {
+  // 1. kind === 24 (SideliftRefused) & kind === 25 (PalletJackEvent) aux 1..7 prompt lookup
+  {
+    const env = makeTestRig();
+    const semiGuid = 0x80010600;
+    env.push({ type: "ack", granted: 3 });
+    env.push(makeSemiProfile(semiGuid));
+    env.push(makeSemiState(semiGuid, 0, 0, 0, 0, { seats: [0, 0] }));
+    env.tick(16, 16);
+
+    for (let aux = 1; aux <= 7; aux++) {
+      env.push({ type: "event", vehicle: semiGuid, kind: 24, aux, step: aux, subject: env.localPlayerGuid, cell: 0, x: 0, y: 0, z: 0, value: 0 });
+      env.tick(16 + aux * 16, 16);
+      assert.equal(env.byId.get(OSD.PROMPT_ID)?.textContent, SIDELIFT_REFUSAL_REASONS[aux], `kind 24 aux=${aux} prompt`);
+
+      env.push({ type: "event", vehicle: semiGuid, kind: 25, aux, step: aux + 10, subject: env.localPlayerGuid, cell: 0, x: 0, y: 0, z: 0, value: 0 });
+      env.tick(24 + aux * 16, 16);
+      assert.equal(env.byId.get(OSD.PROMPT_ID)?.textContent, PALLET_JACK_EVENT_REASONS[aux], `kind 25 aux=${aux} prompt`);
+    }
+    env.api.dispose();
+  }
+
+  // 2. On-foot KeyJ / KeyL / Shift+KeyL send sideFlags === 0x02 (auto-detect) + __vehicles.trailers.sidelift/deployOutriggers "auto"
+  {
+    const env = makeTestRig();
+    const trGuid = 0x80040601;
+    env.push({ type: "ack", granted: 3 });
+    env.push({
+      type: "trailer_state",
+      trailerGuid: trGuid,
+      kind: 15,
+      cell: 0,
+      position: [0, 0, 0],
+      heading: 0,
+      pitch: 0,
+      bank: 0,
+      coupledTractorGuid: 0,
+      mountedContainerGuid: 0,
+      containerSlot: 0,
+      trailerFlags: 0,
+      ownerGuid: env.localPlayerGuid,
+      sideliftPhase: 0,
+      sideliftSide: 1,
+      sideliftFlags: 0,
+      sideliftProgress: 0,
+      outriggerProgress: 0,
+      craneSpanY: 2.9265,
+      stowedPalletJackGuid: 0,
+      transferContainerGuid: 0,
+    });
+    env.localEntity.root.position.set(2, 0, 0);
+    env.tick(16, 16);
+
+    env.win.dispatch("keydown", { code: "KeyJ" });
+    env.win.dispatch("keydown", { code: "KeyL" });
+    env.win.dispatch("keydown", { code: "KeyL", shiftKey: true });
+    assert.equal(env.calls.trailerActions.length, 3, "KeyJ/KeyL/Shift+KeyL dispatched 3 trailer actions");
+    for (const act of env.calls.trailerActions) {
+      assert.equal(act.flags, 0x02, `action ${act.action} sent flags === 0x02`);
+    }
+
+    env.api.trailers.sidelift(trGuid, "load", "auto");
+    env.api.trailers.deployOutriggers(trGuid, "auto");
+    assert.equal(env.calls.trailerActions[3].flags, 0x02, "trailers.sidelift('auto') sent flags === 0x02");
+    assert.equal(env.calls.trailerActions[4].flags, 0x02, "trailers.deployOutriggers('auto') sent flags === 0x02");
+    env.api.dispose();
+  }
+
+  // 3. Sidelifter ground probe includes rotated slotY (±2.9295 m) at heading = PI/2 for containerSlot 1 & 2
+  {
+    const probed = [];
+    const env = makeTestRig({
+      terrainOracle(x, y) {
+        probed.push([x, y]);
+        return 0;
+      },
+    });
+    const trGuid = 0x80040602;
+    const cGuid = 0x800c0602;
+    const heading = Math.PI / 2; // East: +localY maps to +worldX, +localX maps to -worldY
+    env.push({
+      type: "container_state",
+      containerGuid: cGuid,
+      containerKind: 10, // 20ft (< 7m)
+      cell: 0,
+      position: [100, 200, 1.32],
+      heading,
+      doorProgress: 0,
+      doorState: 0,
+      slots: [],
+    });
+
+    for (const [slot, expectedSlotY] of [[1, 2.9295], [2, -2.9295]]) {
+      probed.length = 0;
+      env.push({
+        type: "trailer_state",
+        trailerGuid: trGuid,
+        kind: 15,
+        cell: 0,
+        position: [100, 200, 0],
+        heading,
+        pitch: 0,
+        bank: 0,
+        coupledTractorGuid: 0,
+        mountedContainerGuid: cGuid,
+        containerSlot: slot,
+        trailerFlags: 0,
+        ownerGuid: env.localPlayerGuid,
+        sideliftPhase: 6,
+        sideliftSide: 1,
+        sideliftFlags: 0x05,
+        sideliftProgress: 0.5,
+        outriggerProgress: 1.0,
+        craneSpanY: 2.9265,
+        stowedPalletJackGuid: 0,
+        transferContainerGuid: cGuid,
+      });
+      env.tick(16 * slot, 16);
+      const expectedX = 100 + expectedSlotY; // cos(pi/2)=0, sin(pi/2)=1 -> trX + slotY
+      const expectedY = 200 - SK.SIDELIFTER_OUTREACH_X; // trY - sideX
+      const hit = probed.find(([px, py]) => Math.abs(px - expectedX) < 1e-3 && Math.abs(py - expectedY) < 1e-3);
+      assert(hit, `slot=${slot}: expected ground probe near (${expectedX.toFixed(4)}, ${expectedY.toFixed(4)}), got ${JSON.stringify(probed)}`);
+    }
+    env.api.dispose();
+  }
+
+  // 4. OSD onSeatClick dispatches requestSeatHotSwap -> vehicleBoard(guid, seatIdx)
+  {
+    const env = makeTestRig();
+    const semiGuid = 0x80010604;
+    env.push({ type: "ack", granted: 3 });
+    env.push(makeSemiProfile(semiGuid));
+    env.push(makeSemiState(semiGuid, 0, 0, 0, 0, { seats: [env.localPlayerGuid, 0] }));
+    env.push({ type: "seat", vehicle: semiGuid, seat: 0, occupant: env.localPlayerGuid, state: 1, reason: 0 });
+    env.tick(16, 16);
+
+    const osdRoot = env.byId.get(OSD.OSD_ID);
+    const cards = [];
+    const walk = (n) => {
+      if (!n) return;
+      if (typeof n.className === "string" && n.className.includes("hb-ground-seat-card")) cards.push(n);
+      if (Array.isArray(n.children)) for (const c of n.children) walk(c);
+    };
+    walk(osdRoot);
+    assert.equal(cards.length, 4, "OSD rendered 4 seat cards");
+    cards[1].dispatch("click", {});
+    assert.equal(env.calls.boards.length, 1, "clicking seat card 1 called vehicleBoard");
+    assert.equal(env.calls.boards[0].guid, semiGuid);
+    assert.equal(env.calls.boards[0].seat, 1);
+    env.api.dispose();
+  }
+
+  // 5. RadarStation stow (onlineFlags 0x10) clears contacts & hides RadarScopeHud
+  {
+    const env = makeTestRig();
+    const radarGuid = 0x80070605;
+    env.push({ type: "deployable_state", deployable: radarGuid, kind: 1, cell: 0, x: 10, y: 10, z: 0, onlineFlags: 0x05 });
+    env.push({ type: "radar_contacts", radar: radarGuid, contacts: [{ dxM: 500, dyM: 500, altAglM: 120, standing: 3 }] });
+    env.tick(16, 16);
+    assert.equal(env.api.deployables.scope.visible, true, "RadarScope visible when RadarStation active");
+    assert.equal(env.api.deployables.scope.airContacts.length, 1, "airContacts populated when RadarStation active");
+
+    // Stow RadarStation (onlineFlags = 0x10)
+    env.push({ type: "deployable_state", deployable: radarGuid, kind: 1, cell: 0, x: 10, y: 10, z: 0, onlineFlags: 0x10 });
+    env.tick(32, 16);
+    assert.equal(env.api.deployables.scope.visible, false, "RadarScope hidden when RadarStation stowed");
+    assert.equal(env.api.deployables.scope.airContacts.length, 0, "stale airContacts cleared when RadarStation stowed");
+    env.api.dispose();
+  }
+
+  // 6. deployableAudio PowerGenerator hum lifecycle & HeavyLaser playLaserDischarge
+  {
+    const param = (v = 0) => ({
+      value: v,
+      setValueAtTime(val) { this.value = val; },
+      linearRampToValueAtTime(val) { this.value = val; },
+      exponentialRampToValueAtTime(val) { this.value = val; },
+      cancelScheduledValues() {},
+    });
+    const oscCreated = [];
+    const oscStopped = [];
+    const mockNode = (extra = {}) => ({
+      connections: [],
+      connect(to) { this.connections.push(to); return to; },
+      disconnect() { this.connections = []; },
+      ...extra,
+    });
+    const mockCtx = {
+      state: "running",
+      currentTime: 5.0,
+      sampleRate: 44100,
+      destination: mockNode(),
+      createGain: () => mockNode({ gain: param(1) }),
+      createOscillator: () => {
+        const o = mockNode({
+          frequency: param(440),
+          type: "sine",
+          start() { oscCreated.push(o); },
+          stop() { oscStopped.push(o); },
+        });
+        return o;
+      },
+      createBiquadFilter: () => mockNode({ frequency: param(1000), Q: param(1), type: "lowpass" }),
+      createPanner: () => mockNode({ positionX: param(0), positionY: param(0), positionZ: param(0) }),
+    };
+    const env = makeTestRig({
+      audioManager: {
+        isActive: () => true,
+        getEffectBus: () => ({ ctx: mockCtx, node: mockCtx.destination }),
+      },
+    });
+    const genGuid = 0x80080606;
+    const laserGuid = 0x80080607;
+
+    // PowerGenerator online with fuel -> creates hum (3 oscillators: osc1, osc2, lfo)
+    env.push({ type: "deployable_state", deployable: genGuid, kind: 4, cell: 0, x: 5, y: 5, z: 0, onlineFlags: 0x01, fuelSec: 120 });
+    env.tick(16, 16);
+    assert.equal(oscCreated.length, 3, "PowerGenerator online started 3 generator hum oscillators");
+
+    // HeavyLaser deployable_fire (weaponKind === 3) -> invokes playLaserDischarge (1 oscillator)
+    env.push({ type: "deployable_fire", deployable: laserGuid, weaponKind: 3, muzzle: [0, 0, 2], targetPos: [10, 10, 2] });
+    env.tick(32, 16);
+    assert.equal(oscCreated.length, 4, "weaponKind === 3 triggered playLaserDischarge oscillator");
+
+    // PowerGenerator packed (event kind === 16 CargoPacked) -> stopGeneratorHum stops 3 hum oscillators
+    env.push({ type: "event", vehicle: 0, kind: 16, aux: genGuid, step: 1, subject: 0, cell: 0, x: 0, y: 0, z: 0, value: 0 });
+    env.tick(48, 16);
+    assert.equal(oscStopped.length >= 3, true, "CargoPacked stopped PowerGenerator hum oscillators");
+
+    env.api.dispose();
+  }
+});
+
+test("M3 Iter2 regression: closed [aria-modal='true'][data-open='0'] does NOT block logistics or pallet jack keys, data-open='1' DOES", () => {
+  const env = makeTestRig();
+  const cGuid = 0x80090701;
+  const pjGuid = 0x800b0701;
+
+  env.push({ type: "ack", granted: 3 });
+  env.push({
+    type: "container_state",
+    containerGuid: cGuid,
+    containerKind: 10,
+    cell: 0,
+    position: [0, 0, 0],
+    heading: 0,
+    doorProgress: 0,
+    doorState: 0,
+    slots: [],
+  });
+  env.push({
+    type: "pallet_jack_state",
+    palletJackGuid: pjGuid,
+    operatorGuid: 0,
+    stowedOnTrailerGuid: 0,
+    cell: 0,
+    position: [1.0, 0, 0],
+    heading: 0,
+    tillerAngle: 0,
+    forkHeightM: 0.085,
+    forkState: 0,
+    carriedPalletSize: 0,
+    flags: 0,
+    carriedWcid: 0,
+    ownerGuid: env.localPlayerGuid,
+  });
+  env.tick(16, 16);
+
+  // Append a real-style persistent modal (#hb-modal-dialog) with data-open="0"
+  const modal = env.makeEl("div");
+  modal.id = "hb-modal-dialog";
+  modal.setAttribute("aria-modal", "true");
+  modal.setAttribute("data-open", "0");
+  const modalChild = env.makeEl("button");
+  modal.appendChild(modalChild);
+  env.doc.body.appendChild(modal);
+
+  // 1. On-foot logistics keys work while modal has data-open="0" (even if ev.target is inside modal)
+  const closedE = env.win.dispatch("keydown", { code: "KeyE", target: modalChild });
+  assert.equal(closedE.defaultPrevented, true, "on-foot KeyE intercepted when modal data-open='0'");
+  assert.equal(env.calls.containerActions.length, 1, "on-foot KeyE emitted container action when data-open='0'");
+
+  // When data-open="1", on-foot logistics keys pass through
+  modal.setAttribute("data-open", "1");
+  const openE = env.win.dispatch("keydown", { code: "KeyE", target: modalChild });
+  assert.equal(openE.defaultPrevented, false, "on-foot KeyE passes through when modal data-open='1'");
+  assert.equal(env.calls.containerActions.length, 1, "no extra container action when data-open='1'");
+
+  // Re-close modal (data-open="0"), grab pallet jack, and verify walk-behind controls work
+  modal.setAttribute("data-open", "0");
+  env.push({
+    type: "pallet_jack_state",
+    palletJackGuid: pjGuid,
+    operatorGuid: env.localPlayerGuid,
+    stowedOnTrailerGuid: 0,
+    cell: 0,
+    position: [1.0, 0, 0],
+    heading: 0,
+    tillerAngle: 0,
+    forkHeightM: 0.085,
+    forkState: 0,
+    carriedPalletSize: 0,
+    flags: 0,
+    carriedWcid: 0,
+    ownerGuid: env.localPlayerGuid,
+  });
+  env.tick(32, 16);
+
+  const pjClosedSpace = env.win.dispatch("keydown", { code: "Space", target: modalChild });
+  assert.equal(pjClosedSpace.defaultPrevented, true, "pallet jack Space intercepted when modal data-open='0'");
+  const raisesWithClosedModal = env.calls.palletJackActions.filter((a) => a.action === PALLET_JACK_ACTION.RaiseForks).length;
+  assert.equal(raisesWithClosedModal, 1, "pallet jack RaiseForks emitted when data-open='0'");
+
+  // Open modal (data-open="1") while operating pallet jack -> Space passes through
+  modal.setAttribute("data-open", "1");
+  const pjOpenSpace = env.win.dispatch("keydown", { code: "Space", target: modalChild });
+  assert.equal(pjOpenSpace.defaultPrevented, false, "pallet jack Space passes through when modal data-open='1'");
+  assert.equal(
+    env.calls.palletJackActions.filter((a) => a.action === PALLET_JACK_ACTION.RaiseForks).length,
+    1,
+    "no extra RaiseForks emitted when modal data-open='1'"
+  );
+
+  env.api.dispose();
+});
+
+test("Adversarial (Finding 5): createPalletJackControls().dispose() calls dropDrain() and clearDown() leaving 0 window listeners", () => {
+  const { win, doc } = makeFakeWindowDocCanvas();
+  const controls = PJ.createPalletJackControls({ window: win, document: doc });
+  controls.lock();
+  win.dispatch("keydown", { code: "KeyW", key: "w", repeat: false });
+  assert.equal(controls.poll().throttle, 1, "KeyW held before dispose");
+
+  controls.dispose();
+  assert.equal(controls.poll().throttle, 0, "clearDown() cleared held KeyW on dispose");
+  assert.equal(win.listenerCount("keydown"), 0, "0 keydown drain listeners left after dispose");
+  assert.equal(win.listenerCount("keyup"), 0, "0 keyup drain listeners left after dispose");
+  assert.equal(win.listenerCount("blur"), 0, "0 blur drain listeners left after dispose");
+
+  // Also verify full session dispose after KeyX user-release clears pending KeyX drain listeners
+  const env = makeTestRig();
+  const pjGuid = 0x800b0901;
+  env.push({
+    type: "pallet_jack_state",
+    palletJackGuid: pjGuid,
+    operatorGuid: env.localPlayerGuid,
+    stowedOnTrailerGuid: 0,
+    cell: 0,
+    position: [0, 0, 0],
+    heading: 0,
+    tillerAngle: 0,
+    forkHeightM: 0.085,
+    forkState: 0,
+    carriedPalletSize: 0,
+    flags: 0,
+    carriedWcid: 0,
+    ownerGuid: env.localPlayerGuid,
+  });
+  env.tick(16, 16);
+  env.win.dispatch("keydown", { code: "KeyX" });
+  env.api.dispose();
+  assert.equal(env.win.listenerCount("keydown"), 0, "0 keydown listeners after KeyX + api.dispose()");
+  assert.equal(env.win.listenerCount("keyup"), 0, "0 keyup drain listeners after KeyX + api.dispose()");
+  assert.equal(env.win.listenerCount("blur"), 0, "0 blur drain listeners after KeyX + api.dispose()");
+});
+
+test("Tier-5 regression (Gap 1): createPalletJackController.start() disposes prior draining lastControls on re-grab", () => {
+  // Sequence A: exact start -> keydown KeyW -> stop("release") -> start -> keyup KeyW -> dispose
+  {
+    const { win } = makeFakeWindowDocCanvas();
+    const ctrl = PJ.createPalletJackController({ window: win });
+    const entry = { guid: 0x800b0902, worldPos: [0, 0, 0], heading: 0 };
+
+    assert.equal(ctrl.start(entry), true, "initial start succeeds");
+    win.dispatch("keydown", { code: "KeyW", key: "w", repeat: false });
+    assert.equal(ctrl.stop("release"), true, "soft stop('release') succeeds");
+    assert.equal(win.listenerCount("keydown"), 1, "drain keydown active after soft release");
+    assert.equal(win.listenerCount("keyup"), 1, "drain keyup active after soft release");
+    assert.equal(win.listenerCount("blur"), 1, "drain blur active after soft release");
+
+    // Re-grab while KeyW is still draining
+    assert.equal(ctrl.start(entry), true, "re-grab start succeeds");
+    assert.equal(win.listenerCount("keydown"), 1, "only new active keydown listener present (prior drain disposed)");
+    assert.equal(win.listenerCount("keyup"), 1, "only new active keyup listener present (prior drain disposed)");
+    assert.equal(win.listenerCount("keypress"), 1, "only new active keypress listener present");
+    assert.equal(win.listenerCount("blur"), 1, "only new active blur listener present (prior drain disposed)");
+
+    // Active session handles keyup KeyW cleanly, and dispose leaves 0 listeners
+    win.dispatch("keyup", { code: "KeyW", key: "w" });
+    ctrl.dispose();
+    assert.equal(win.listenerCount("keydown"), 0, "0 keydown listeners after dispose");
+    assert.equal(win.listenerCount("keyup"), 0, "0 keyup listeners after dispose");
+    assert.equal(win.listenerCount("keypress"), 0, "0 keypress listeners after dispose");
+    assert.equal(win.listenerCount("blur"), 0, "0 blur listeners after dispose");
+  }
+
+  // Sequence B: verify 0 stopImmediatePropagation() calls from orphaned drain listeners during re-grabbed active session
+  {
+    const { win, makeEl } = makeFakeWindowDocCanvas();
+    const ctrl = PJ.createPalletJackController({ window: win });
+    const entry = { guid: 0x800b0903, worldPos: [0, 0, 0], heading: 0 };
+
+    ctrl.start(entry);
+    win.dispatch("keydown", { code: "KeyW", key: "w", repeat: false });
+    ctrl.stop("release");
+    ctrl.start(entry);
+
+    // An orphaned onDrainKey listener ignores typing targets and calls stopImmediatePropagation() on keyup KeyW;
+    // the active onKey listener allows typing-target keyup through without stopImmediatePropagation().
+    let spySawKeyup = 0;
+    const onSpyKeyup = () => { spySawKeyup++; };
+    win.addEventListener("keyup", onSpyKeyup, true);
+
+    const inputEl = makeEl("input");
+    const res = win.dispatch("keyup", { code: "KeyW", key: "w", target: inputEl });
+    assert.equal(res.immediateStopped, false, "0 stopImmediatePropagation() calls from orphaned drain listener");
+    assert.equal(spySawKeyup, 1, "subsequent keyup listener reached unblocked");
+
+    win.removeEventListener("keyup", onSpyKeyup, true);
+    ctrl.dispose();
+    assert.equal(win.listenerCount("keydown"), 0, "0 keydown listeners left after Sequence B dispose");
+    assert.equal(win.listenerCount("keyup"), 0, "0 keyup listeners left after Sequence B dispose");
+    assert.equal(win.listenerCount("blur"), 0, "0 blur listeners left after Sequence B dispose");
   }
 });
 

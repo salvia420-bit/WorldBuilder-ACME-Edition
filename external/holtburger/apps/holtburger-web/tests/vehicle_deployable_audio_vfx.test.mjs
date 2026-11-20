@@ -9,6 +9,7 @@ import {
   SamSmokeTrailPool,
   MortarVfxSimulator,
   HeavyLaserBeamPool,
+  createDeployableCombatVfx,
   manifest as vfxManifest,
 } from "../scene3d/vehicle/deployable_vfx.js";
 import {
@@ -125,6 +126,106 @@ await check("T_VFX_05 HeavyLaserBeamPool capacity, fire & exponential decay", ()
 // 4. Module VFX manifest
 await check("T_VFX_06 Module level VFX manifest", () => {
   assert.equal(lintManifest(vfxManifest).length, 0);
+});
+
+await check("T_VFX_07 createDeployableCombatVfx handleFireEvent is a no-op after dispose()", () => {
+  const worldRoot = new THREE.Group();
+  const vfx = createDeployableCombatVfx({ root: worldRoot, THREE });
+  vfx.dispose();
+
+  vfx.handleFireEvent({
+    weaponKind: 1,
+    burstCount: 4,
+    muzzle: [0, 0, 2],
+    targetPos: [20, 20, 20],
+    velocity: [5, 5, 5],
+  });
+  vfx.handleFireEvent({
+    weaponKind: 3,
+    muzzle: [0, 0, 2],
+    targetPos: [50, 50, 10],
+  });
+  vfx.update(0.25);
+
+  const activeTrails = vfx.samTrails.trails.filter((t) => t.active).length;
+  const activeBeams = vfx.laserPool.beams.filter((b) => b.active).length;
+  assert.equal(activeTrails, 0, "no SAM trails spawned after dispose");
+  assert.equal(activeBeams, 0, "no laser beams spawned after dispose");
+});
+
+await check("T_VFX_08 Adversarial (Challenger 4 Finding 2): NaN/Infinity muzzle, targetPos, velocity & getTargetPos never poison Three.js transforms or SamSmokeTrailPool buffers", () => {
+  const trailPool = new SamSmokeTrailPool(THREE, 2);
+  assert.equal(trailPool.spawn([NaN, 0, 0]), null, "SamSmokeTrailPool.spawn rejects NaN origin");
+  assert.equal(trailPool.spawn([Infinity, 0, 0]), null, "SamSmokeTrailPool.spawn rejects Infinity origin");
+  const validTrail = trailPool.spawn([1, 2, 3]);
+  assert.ok(validTrail);
+  trailPool.pushPoint(validTrail, [NaN, 2, 3]);
+  const trailAttr = validTrail.geom.getAttribute("position");
+  for (let i = 0; i < trailAttr.array.length; i++) {
+    assert.ok(Number.isFinite(trailAttr.array[i]), `trail buffer index ${i} remains finite`);
+  }
+  trailPool.dispose();
+
+  const laserPool = new HeavyLaserBeamPool(THREE, 2);
+  assert.equal(laserPool.fire([0, 0, 0], [NaN, 0, 0]), null, "HeavyLaserBeamPool.fire rejects NaN endPos");
+  assert.equal(laserPool.fire([Infinity, 0, 0], [10, 0, 0]), null, "HeavyLaserBeamPool.fire rejects Infinity startPos");
+  laserPool.dispose();
+
+  const worldRoot = new THREE.Group();
+  let returnNanLive = false;
+  const vfx = createDeployableCombatVfx({
+    liveScene3d: { worldRoot },
+    THREE,
+    ground: () => 0,
+    getTargetPos: (guid) => {
+      if (guid === 0x9999) return [NaN, NaN, NaN];
+      if (guid === 0x8888) return returnNanLive ? [NaN, Infinity, -Infinity] : [120, 80, 40];
+      return null;
+    },
+  });
+
+  // Direct NaN/Infinity targetPos & muzzle payloads across fireSam, fireMortar, fireHeavyLaser, handleFireEvent
+  vfx.fireSam([10, 20, 5], [NaN, NaN, NaN], [0, 0, 20], 0);
+  vfx.fireSam([10, 20, 5], [Infinity, 0, 0], [0, 0, 20], 0x9999);
+  vfx.fireSam([NaN, 20, 5], [50, 50, 20], [0, 0, 20], 0);
+  vfx.fireSam([10, 20, 5], null, [NaN, 0, 0], 0);
+  vfx.fireMortar([10, 20, 5], null, [NaN, NaN, NaN]);
+  vfx.fireMortar([10, 20, 5], [Infinity, 0, 0], [50, 50, 0]);
+  vfx.fireMortar([NaN, 20, 5], null, [50, 50, 0]);
+  vfx.fireHeavyLaser([10, 20, 5], [NaN, NaN, NaN], 0);
+  vfx.fireHeavyLaser([10, 20, 5], [Infinity, 0, 0], 0x9999);
+  vfx.fireHeavyLaser([NaN, 20, 5], [50, 50, 0], 0);
+  vfx.handleFireEvent({ weaponKind: 1, burstCount: 4, muzzle: [NaN, 0, 2], targetPos: [NaN, NaN, NaN] });
+
+  // Valid SAM launch that later receives NaN from getTargetPos mid-flight
+  vfx.fireSam([10, 20, 5], [120, 80, 40], [0, 0, 20], 0x8888);
+  vfx.update(0.05);
+  returnNanLive = true;
+  for (let i = 0; i < 10; i++) vfx.update(0.05);
+
+  worldRoot.traverse((obj) => {
+    assert.ok(
+      Number.isFinite(obj.position.x) && Number.isFinite(obj.position.y) && Number.isFinite(obj.position.z),
+      `object ${obj.name || obj.type} position finite`
+    );
+    assert.ok(
+      Number.isFinite(obj.quaternion.x) && Number.isFinite(obj.quaternion.y)
+        && Number.isFinite(obj.quaternion.z) && Number.isFinite(obj.quaternion.w),
+      `object ${obj.name || obj.type} quaternion finite`
+    );
+    assert.ok(
+      Number.isFinite(obj.scale.x) && Number.isFinite(obj.scale.y) && Number.isFinite(obj.scale.z),
+      `object ${obj.name || obj.type} scale finite`
+    );
+    const posAttr = obj.geometry?.getAttribute?.("position");
+    if (posAttr?.array) {
+      for (let i = 0; i < posAttr.array.length; i++) {
+        assert.ok(Number.isFinite(posAttr.array[i]), `geometry position buffer finite at ${i}`);
+      }
+    }
+  });
+
+  vfx.dispose();
 });
 
 function createMockAudioContext() {

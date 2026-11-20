@@ -1,0 +1,183 @@
+From 77bce7e99c9b061317d7b6082d626686c4a156ea Mon Sep 17 00:00:00 2001
+From: salvia420-bit <salvia420@gmail.com>
+Date: Fri, 20 Nov 2026 06:28:33 +0000
+Subject: [PATCH] Vehicles (holtburger fork): RadarStation deployable
+ despawn/list and Headlights/Horn events
+
+Include AirDefenseManager.Stations (RadarStation 4000002) in [USER_0] list and despawn all/<guid>, and emit VehicleEventKind.Headlights (0x10 toggle) and VehicleEventKind.Horn (0x20 rising edge) from StepVehicle. Adds T5_ADV_07..09; verified 339/339 ACE.Server.Tests (Vehicles|Landblock).
+---
+ .../Vehicles/DeployableEcosystemTests.cs      | 51 +++++++++++++++++++
+ Source/ACE.Server/Vehicles/VehicleCommands.cs | 45 +++++++++++++---
+ Source/ACE.Server/Vehicles/VehicleManager.cs  |  7 +++
+ 3 files changed, 95 insertions(+), 8 deletions(-)
+
+diff --git a/Source/ACE.Server.Tests/Vehicles/DeployableEcosystemTests.cs b/Source/ACE.Server.Tests/Vehicles/DeployableEcosystemTests.cs
+index 4f8e82a0..37cde49f 100644
+--- a/Source/ACE.Server.Tests/Vehicles/DeployableEcosystemTests.cs
++++ b/Source/ACE.Server.Tests/Vehicles/DeployableEcosystemTests.cs
+@@ -2207,6 +2207,57 @@ public void T5_ADV_06_Vehicle_LoadHalfPallet_RejectsWcidZero()
+             Assert.AreEqual(0, v.CargoMask, "CargoMask must remain 0 when loading invalid WCID");
+         }
+ 
++        [TestMethod]
++        public void T5_ADV_07_DespawnAllDeployablesAndRadars_ClearsRadarStation()
++        {
++            DeployableManager.Clear();
++            AirDefenseManager.ClearStations();
++            var stationGuid = new ObjectGuid(0x7500A101);
++            var station = new RadarStation(RadarStation.BuildWeenie(null, null), stationGuid, null, null);
++            AirDefenseManager.RegisterStation(station);
++            Assert.AreEqual(1, AirDefenseManager.Stations.Count, "RadarStation should be registered before cleanup");
++
++            int removed = VehicleCommands.DespawnAllDeployablesAndRadars();
++            Assert.AreEqual(1, removed, "DespawnAllDeployablesAndRadars must count and destroy registered RadarStations");
++            Assert.AreEqual(0, AirDefenseManager.Stations.Count, "AirDefenseManager.Stations must be empty after @deployable despawn all");
++        }
++
++        [TestMethod]
++        public void T5_ADV_08_DespawnDeployableOrRadarByGuid_ClearsSingleRadarStation()
++        {
++            DeployableManager.Clear();
++            AirDefenseManager.ClearStations();
++            var stationGuid = new ObjectGuid(0x7500A102);
++            var station = new RadarStation(RadarStation.BuildWeenie(null, null), stationGuid, null, null);
++            AirDefenseManager.RegisterStation(station);
++
++            Assert.IsTrue(VehicleCommands.DespawnDeployableOrRadarByGuid(stationGuid.Full), "Must locate and destroy RadarStation by GUID");
++            Assert.AreEqual(0, AirDefenseManager.Stations.Count, "RadarStation must be unregistered after targeted despawn");
++            Assert.IsFalse(VehicleCommands.DespawnDeployableOrRadarByGuid(stationGuid.Full), "Second despawn of same GUID must return false");
++        }
++
++        [TestMethod]
++        public void T5_ADV_09_GroundModel_HeadlightsAndHornFlags_TransitionCleanly()
++        {
++            var profile = VehicleProfile.Semi379(0);
++            var gp = GroundParams.FromProfile(profile);
++            var state = new GroundState { X = 100, Y = 100, Z = 10, Heading = 0, Mode = VehicleMode.Parked };
++            TerrainSample flat(double x, double y, double z) => new TerrainSample
++            {
++                Z = 10, Nz = 1, Surface = new SurfaceFamily { Id = 1, Mu = 1.0, MuLat = 1.0 }
++            };
++
++            byte prev = state.GroundFlags;
++            GroundModel.Step(ref state, new GroundInput { Headlights = true, Horn = true }, gp, flat, 1.0 / 30.0);
++            Assert.AreNotEqual(prev & 0x10, state.GroundFlags & 0x10, "Headlights flag bit 0x10 must flip on toggle");
++            Assert.IsTrue((prev & 0x20) == 0 && (state.GroundFlags & 0x20) != 0, "Horn flag bit 0x20 must rise on Horn input");
++
++            prev = state.GroundFlags;
++            GroundModel.Step(ref state, new GroundInput { Headlights = false, Horn = false }, gp, flat, 1.0 / 30.0);
++            Assert.AreNotEqual(prev & 0x10, state.GroundFlags & 0x10, "Headlights flag bit 0x10 must flip off");
++            Assert.IsTrue((state.GroundFlags & 0x20) == 0, "Horn flag bit 0x20 must clear when released");
++        }
++
+         #endregion
+     }
+ }
+diff --git a/Source/ACE.Server/Vehicles/VehicleCommands.cs b/Source/ACE.Server/Vehicles/VehicleCommands.cs
+index d8e4b795..da996ec6 100644
+--- a/Source/ACE.Server/Vehicles/VehicleCommands.cs
++++ b/Source/ACE.Server/Vehicles/VehicleCommands.cs
+@@ -332,13 +332,18 @@ public static void HandleDeployable(Session session, params string[] parameters)
+                 case "list":
+                 {
+                     var all = Deployables.DeployableManager.GetAll().ToList();
++                    var stations = AirDefense.AirDefenseManager.Stations.ToList();
+                     var grids = Deployables.DeployableManager.GetAllGrids();
+                     var sb = new System.Text.StringBuilder();
+-                    sb.AppendLine($"Deployables: {all.Count} active, MicroGrids: {grids.Count}");
++                    sb.AppendLine($"Deployables: {all.Count + stations.Count} active ({stations.Count} radar station(s)), MicroGrids: {grids.Count}");
+                     foreach (var d in all)
+                     {
+                         sb.AppendLine($"  0x{d.Guid.Full:X8} | {d.Kind} (WCID {d.Wcid}) | Pallet: {d.Pallet} | Power: {d.PowerWatts:0}W | Stored: {d.EnergyStoredJoules:0}J | Fuel: {d.FuelRemaining:0}s | Ammo: {d.AmmoRemaining} | Grid: {(d.Grid != null ? "connected" : "none")}");
+                     }
++                    foreach (var rs in stations)
++                    {
++                        sb.AppendLine($"  0x{rs.Guid.Full:X8} | RadarStation (WCID {AirDefense.RadarStation.RadarWeenieClassId}) | Active: {rs.IsActive}");
++                    }
+                     CommandHandlerHelper.WriteOutputInfo(session, sb.ToString().TrimEnd());
+                     return;
+                 }
+@@ -346,10 +351,8 @@ public static void HandleDeployable(Session session, params string[] parameters)
+                 {
+                     if (parameters.Length > 1 && parameters[1].Equals("all", StringComparison.OrdinalIgnoreCase))
+                     {
+-                        var all = Deployables.DeployableManager.GetAll().ToList();
+-                        foreach (var d in all)
+-                            d.Destroy();
+-                        CommandHandlerHelper.WriteOutputInfo(session, $"despawned {all.Count} deployable(s)");
++                        int removed = DespawnAllDeployablesAndRadars();
++                        CommandHandlerHelper.WriteOutputInfo(session, $"despawned {removed} deployable(s)");
+                         return;
+                     }
+ 
+@@ -365,10 +368,8 @@ public static void HandleDeployable(Session session, params string[] parameters)
+                     else
+                         uint.TryParse(parameters[1], out dGuid);
+ 
+-                    var target = Deployables.DeployableManager.GetDeployable(dGuid);
+-                    if (target != null)
++                    if (DespawnDeployableOrRadarByGuid(dGuid))
+                     {
+-                        target.Destroy();
+                         CommandHandlerHelper.WriteOutputInfo(session, $"despawned deployable 0x{dGuid:X8}");
+                     }
+                     else
+@@ -383,6 +384,34 @@ public static void HandleDeployable(Session session, params string[] parameters)
+             }
+         }
+ 
++        public static int DespawnAllDeployablesAndRadars()
++        {
++            var all = Deployables.DeployableManager.GetAll().ToList();
++            foreach (var d in all)
++                d.Destroy();
++            var stations = AirDefense.AirDefenseManager.Stations.ToList();
++            foreach (var s in stations)
++                s.Destroy();
++            return all.Count + stations.Count;
++        }
++
++        public static bool DespawnDeployableOrRadarByGuid(uint guid)
++        {
++            var target = Deployables.DeployableManager.GetDeployable(guid);
++            if (target != null)
++            {
++                target.Destroy();
++                return true;
++            }
++            var station = AirDefense.AirDefenseManager.Stations.FirstOrDefault(s => s.Guid.Full == guid);
++            if (station != null)
++            {
++                station.Destroy();
++                return true;
++            }
++            return false;
++        }
++
+         [CommandHandler("container", AccessLevel.Developer, CommandHandlerFlag.RequiresWorld, 1,
+             "ISO Shipping Container ecosystem administration.",
+             "spawn <20|40|40hc|wcid> [x y z]   - spawn container (default 6m in front)\n" +
+diff --git a/Source/ACE.Server/Vehicles/VehicleManager.cs b/Source/ACE.Server/Vehicles/VehicleManager.cs
+index 8887ada7..92ebff45 100644
+--- a/Source/ACE.Server/Vehicles/VehicleManager.cs
++++ b/Source/ACE.Server/Vehicles/VehicleManager.cs
+@@ -487,9 +487,16 @@ static void StepVehicle(Vehicle v, Player pilot)
+                     gu.Handbrake = true;
+                 }
+ 
++                var prevGroundFlags = v.GroundState.GroundFlags;
+                 GroundModel.Step(ref v.GroundState, in gu, v.GroundParams, VehicleTerrain.Sample, Dt);
+                 v.State = v.GroundState.ToFlightState();
+ 
++                var curGroundFlags = v.GroundState.GroundFlags;
++                if ((curGroundFlags & 0x10) != (prevGroundFlags & 0x10))
++                    BroadcastEvent(v, VehicleEventKind.Headlights, v.Pilot, (curGroundFlags & 0x10) != 0 ? 1f : 0f, alsoTo: pilot);
++                if ((prevGroundFlags & 0x20) == 0 && (curGroundFlags & 0x20) != 0)
++                    BroadcastEvent(v, VehicleEventKind.Horn, v.Pilot, 1f, alsoTo: pilot);
++
+                 if (trailer != null)
+                 {
+                     trailer.BrakeLights = (v.GroundState.GroundFlags & 0x02) != 0;
+-- 
+2.43.0
+

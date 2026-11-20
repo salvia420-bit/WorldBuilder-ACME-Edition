@@ -41,7 +41,7 @@ export async function runTier4(collector) {
   await collector.checkLive("T4.S01", 4, "Scenario:Rig40HC_Preset_STurn_Articulation_Shot", async (live) => {
     await live.cleanupWorld();
     await live.evalInPage(`window.__sessionHandle?.setSkyTimeOverride?.(0.5); return true;`);
-    await live.sendChatAndWait("@tele 41.35N 33.33E", /teleport|41\.35/i, 10000).catch(() => {});
+    await live.sendChatAndWait("@tele 41.35N 33.33E", /Position:\s*\[Cell:/i, 10000).catch(() => {});
     await new Promise((r) => setTimeout(r, 1200));
 
     await live.sendChatAndWait("@trailer preset rig40hc", /rig40hc|Ironhorse|trailer|spawned/i, 10000);

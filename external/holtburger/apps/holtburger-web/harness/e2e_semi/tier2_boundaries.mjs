@@ -755,7 +755,7 @@ export async function runTier2(collector) {
       const live = ctx.liveSession;
       await live.cleanupWorld();
       try {
-        await live.sendChatAndWait("@tele 41.35N 33.33E", /teleport|41\.35/i, 10000).catch(() => {});
+        await live.sendChatAndWait("@tele 41.35N 33.33E", /Position:\s*\[Cell:/i, 10000).catch(() => {});
         await new Promise((r) => setTimeout(r, 800));
         await live.sendChatAndWait("@vehicle spawn semi", /Ironhorse 379|spawned/i, 10000);
         await live.sendChatAndWait("@trailer spawn 40", /trailer|4000031|spawned/i, 10000);
@@ -829,7 +829,7 @@ export async function runTier2(collector) {
       const live = ctx.liveSession;
       await live.cleanupWorld();
       try {
-        await live.sendChatAndWait("@tele 41.35N 33.33E", /teleport|41\.35/i, 10000).catch(() => {});
+        await live.sendChatAndWait("@tele 41.35N 33.33E", /Position:\s*\[Cell:/i, 10000).catch(() => {});
         await new Promise((r) => setTimeout(r, 800));
         await live.sendChatAndWait("@vehicle spawn semi", /Ironhorse 379|spawned/i, 10000);
         await live.sendChatAndWait("@trailer spawn 40", /trailer|4000031|spawned/i, 10000);

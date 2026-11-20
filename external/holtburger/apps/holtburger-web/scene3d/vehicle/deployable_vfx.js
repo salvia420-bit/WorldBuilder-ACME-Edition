@@ -5,6 +5,10 @@
 
 import * as THREE_DEFAULT from "three";
 
+function isVec3Finite(v) {
+  return Boolean(v && v.length >= 3 && Number.isFinite(v[0]) && Number.isFinite(v[1]) && Number.isFinite(v[2]));
+}
+
 export class SamSmokeTrailPool {
   constructor(three, capacity = 4) {
     const t = three || THREE_DEFAULT;
@@ -40,30 +44,30 @@ export class SamSmokeTrailPool {
   }
 
   spawn(origin) {
+    if (!isVec3Finite(origin)) return null;
     const t = this.trails.find((tr) => !tr.active);
     if (!t) return null;
     t.active = true;
     t.age = 0;
     t.count = 0;
     t.mat.opacity = 0.8;
-    if (origin && origin.length >= 3) {
-      t.mesh.position.set(origin[0], origin[1], origin[2]);
-      const posAttr = t.geom.getAttribute("position");
-      for (let i = 0; i < 60; i++) {
-        posAttr.setXYZ(i, 0, 0, 0);
-      }
-      posAttr.needsUpdate = true;
+    t.mesh.position.set(origin[0], origin[1], origin[2]);
+    const posAttr = t.geom.getAttribute("position");
+    for (let i = 0; i < 60; i++) {
+      posAttr.setXYZ(i, 0, 0, 0);
     }
+    posAttr.needsUpdate = true;
     t.mesh.visible = true; // vfx-lint-allow: pooled line activate
     return t;
   }
 
   pushPoint(trail, worldPos) {
-    if (!trail || !trail.active || !worldPos) return;
+    if (!trail || !trail.active || !isVec3Finite(worldPos)) return;
     const posAttr = trail.geom.getAttribute("position");
     const ox = trail.mesh.position.x;
     const oy = trail.mesh.position.y;
     const oz = trail.mesh.position.z;
+    if (!Number.isFinite(ox) || !Number.isFinite(oy) || !Number.isFinite(oz)) return;
     const lx = worldPos[0] - ox;
     const ly = worldPos[1] - oy;
     const lz = worldPos[2] - oz;
@@ -220,6 +224,15 @@ export class HeavyLaserBeamPool {
   }
 
   fire(startPos, endPos, opts = null) {
+    if (!isVec3Finite(startPos) || !isVec3Finite(endPos)) return null;
+    const dx = endPos[0] - startPos[0];
+    const dy = endPos[1] - startPos[1];
+    const dz = endPos[2] - startPos[2];
+    const len = Math.hypot(dx, dy, dz);
+    const midX = (startPos[0] + endPos[0]) / 2;
+    const midY = (startPos[1] + endPos[1]) / 2;
+    const midZ = (startPos[2] + endPos[2]) / 2;
+    if (!Number.isFinite(len) || !Number.isFinite(midX) || !Number.isFinite(midY) || !Number.isFinite(midZ)) return null;
     const b = this.beams.find((bm) => !bm.active);
     if (!b) return null;
     b.active = true;
@@ -228,20 +241,13 @@ export class HeavyLaserBeamPool {
     b.maxAge = (opts && Number.isFinite(opts.maxAge) && opts.maxAge > 0) ? opts.maxAge : 0.25;
     b.mat.opacity = 1.0;
     b.coreMat.opacity = 1.0;
-    if (startPos && endPos && startPos.length >= 3 && endPos.length >= 3) {
-      const dx = endPos[0] - startPos[0];
-      const dy = endPos[1] - startPos[1];
-      const dz = endPos[2] - startPos[2];
-      const len = Math.hypot(dx, dy, dz);
-      const midX = (startPos[0] + endPos[0]) / 2;
-      const midY = (startPos[1] + endPos[1]) / 2;
-      const midZ = (startPos[2] + endPos[2]) / 2;
-      b.mesh.position.set(midX, midY, midZ);
-      if (len > 1e-4) {
-        this._dir.set(dx / len, dy / len, dz / len);
-        b.mesh.quaternion.setFromUnitVectors(this._yAxis, this._dir);
-        b.mesh.scale.set(1, len, 1);
-      }
+    b.mesh.position.set(midX, midY, midZ);
+    if (len > 1e-4) {
+      this._dir.set(dx / len, dy / len, dz / len);
+      b.mesh.quaternion.setFromUnitVectors(this._yAxis, this._dir);
+      b.mesh.scale.set(1, len, 1);
+    } else {
+      b.mesh.scale.set(1, 0.001, 1);
     }
     b.mesh.visible = true; // vfx-lint-allow: pooled laser fire
     return b;
@@ -367,9 +373,12 @@ export function createDeployableCombatVfx(deps = {}) {
   }
 
   const yAxis = new THREE.Vector3(0, 1, 0);
+  const zAxis = new THREE.Vector3(0, 0, 1);
   const tmpDir = new THREE.Vector3();
+  let disposed = false;
 
   function spawnGreenPuff(x, y, z, scale = 1.0, colorHex = 0x26ee5c, maxAge = 2.2) {
+    if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) return;
     const p = greenPuffs.find((gp) => !gp.active);
     if (!p) return;
     p.active = true;
@@ -384,6 +393,7 @@ export function createDeployableCombatVfx(deps = {}) {
   }
 
   function spawnBurst(x, y, z, radius = 4.0, colorHex = 0xff5522, dur = 0.45) {
+    if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) return;
     const b = bursts.find((bs) => !bs.active);
     if (!b) return;
     b.active = true;
@@ -398,37 +408,61 @@ export function createDeployableCombatVfx(deps = {}) {
   }
 
   function spawnShockwave(x, y, z, dir = [0, 0, 1]) {
+    if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) return;
     const s = shockPool.find((sh) => !sh.active);
     if (!s) return;
+    const safeDir = isVec3Finite(dir) ? dir : [0, 0, 1];
+    const len = Math.hypot(safeDir[0], safeDir[1], safeDir[2]);
+    if (Number.isFinite(len) && len > 1e-8) {
+      tmpDir.set(safeDir[0] / len, safeDir[1] / len, safeDir[2] / len);
+    } else {
+      tmpDir.set(0, 0, 1);
+    }
     s.active = true;
     s.age = 0;
     s.mesh.position.set(x, y, z);
-    const len = Math.hypot(dir[0], dir[1], dir[2]) || 1;
-    tmpDir.set(dir[0] / len, dir[1] / len, dir[2] / len);
-    s.mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), tmpDir);
+    s.mesh.quaternion.setFromUnitVectors(zAxis, tmpDir);
     mortarSim.expandShockwave(s.mesh, s.mat, 0, s.dur);
   }
 
   function fireSam(muzzle, targetPos, velocity, targetGuid = 0) {
+    if (disposed || !isVec3Finite(muzzle)) return;
+    const guid = (targetGuid >>> 0) || 0;
+    const rawLivePos = guid && getTargetPos ? getTargetPos(guid) : null;
+    const liveOk = isVec3Finite(rawLivePos);
+    const hasTargetArg = targetPos !== undefined && targetPos !== null;
+    const targetOk = isVec3Finite(targetPos);
+    if ((hasTargetArg && !targetOk && !liveOk) || (rawLivePos != null && !liveOk && !targetOk)) return;
+    if (velocity !== undefined && velocity !== null && !isVec3Finite(velocity)) return;
     const slot = activeSams.find((s) => !s.active);
-    if (!slot || !muzzle) return;
+    if (!slot) return;
+    const tp = liveOk ? rawLivePos : (targetOk ? targetPos : null);
+    const tx = tp ? tp[0] : muzzle[0];
+    const ty = tp ? tp[1] : muzzle[1] + 150;
+    const tz = tp ? tp[2] : muzzle[2] + 90;
+    if (!Number.isFinite(tx) || !Number.isFinite(ty) || !Number.isFinite(tz)) return;
+    let vx;
+    let vy;
+    let vz;
+    if (isVec3Finite(velocity) && Math.hypot(velocity[0], velocity[1], velocity[2]) > 1) {
+      vx = velocity[0]; vy = velocity[1]; vz = velocity[2];
+    } else {
+      const dx = tx - muzzle[0], dy = ty - muzzle[1], dz = tz - muzzle[2];
+      const d = Math.hypot(dx, dy, dz);
+      if (Number.isFinite(d) && d > 1e-6) {
+        vx = (dx / d) * 140; vy = (dy / d) * 140; vz = (dz / d) * 140 + 35;
+      } else {
+        vx = 0; vy = 0; vz = 35;
+      }
+    }
+    if (!Number.isFinite(vx) || !Number.isFinite(vy) || !Number.isFinite(vz)) return;
     slot.active = true;
     slot.age = 0;
     slot.puffAcc = 0;
-    slot.targetGuid = (targetGuid >>> 0) || 0;
+    slot.targetGuid = guid;
     slot.x = muzzle[0]; slot.y = muzzle[1]; slot.z = muzzle[2];
-    const livePos = slot.targetGuid && getTargetPos ? getTargetPos(slot.targetGuid) : null;
-    const tp = livePos || targetPos;
-    slot.tx = tp ? tp[0] : muzzle[0];
-    slot.ty = tp ? tp[1] : muzzle[1] + 150;
-    slot.tz = tp ? tp[2] : muzzle[2] + 90;
-    if (velocity && Math.hypot(velocity[0], velocity[1], velocity[2]) > 1) {
-      slot.vx = velocity[0]; slot.vy = velocity[1]; slot.vz = velocity[2];
-    } else {
-      const dx = slot.tx - slot.x, dy = slot.ty - slot.y, dz = slot.tz - slot.z;
-      const d = Math.hypot(dx, dy, dz) || 1;
-      slot.vx = (dx / d) * 140; slot.vy = (dy / d) * 140; slot.vz = (dz / d) * 140 + 35;
-    }
+    slot.tx = tx; slot.ty = ty; slot.tz = tz;
+    slot.vx = vx; slot.vy = vy; slot.vz = vz;
     slot.trail = samTrails.spawn(muzzle);
     spawnBurst(muzzle[0], muzzle[1], muzzle[2], 1.4, 0xffaa33, 0.25);
     slot.mesh.position.set(slot.x, slot.y, slot.z);
@@ -436,13 +470,18 @@ export function createDeployableCombatVfx(deps = {}) {
   }
 
   function fireMortar(muzzle, velocity, targetPos) {
-    if (!muzzle) return;
-    const v = velocity && Math.hypot(velocity[0], velocity[1], velocity[2]) > 1
-      ? [...velocity]
+    if (disposed || !isVec3Finite(muzzle)) return;
+    if (velocity !== undefined && velocity !== null && !isVec3Finite(velocity)) return;
+    const hasTargetArg = targetPos !== undefined && targetPos !== null;
+    const targetOk = isVec3Finite(targetPos);
+    const velOk = isVec3Finite(velocity) && Math.hypot(velocity[0], velocity[1], velocity[2]) > 1;
+    if (!velOk && hasTargetArg && !targetOk) return;
+    const v = velOk
+      ? [velocity[0], velocity[1], velocity[2]]
       : (() => {
-          const tx = targetPos ? targetPos[0] : muzzle[0] + 45;
-          const ty = targetPos ? targetPos[1] : muzzle[1] + 45;
-          const tz = targetPos ? targetPos[2] : muzzle[2];
+          const tx = targetOk ? targetPos[0] : muzzle[0] + 45;
+          const ty = targetOk ? targetPos[1] : muzzle[1] + 45;
+          const tz = targetOk ? targetPos[2] : muzzle[2];
           const tFlight = 2.6;
           return [
             (tx - muzzle[0]) / tFlight,
@@ -450,6 +489,7 @@ export function createDeployableCombatVfx(deps = {}) {
             (tz - muzzle[2] + 0.5 * 9.81 * tFlight * tFlight) / tFlight,
           ];
         })();
+    if (!isVec3Finite(v)) return;
     // Compressed-air muzzle shockwave ring!
     spawnShockwave(muzzle[0], muzzle[1], muzzle[2], v);
     spawnGreenPuff(muzzle[0], muzzle[1], muzzle[2], 0.85, 0xc8f8ff, 0.35);
@@ -467,9 +507,10 @@ export function createDeployableCombatVfx(deps = {}) {
   }
 
   function fireHeavyLaser(muzzle, targetPos, targetGuid = 0) {
-    if (!muzzle) return;
-    const livePos = (targetGuid >>> 0) && getTargetPos ? getTargetPos(targetGuid >>> 0) : null;
-    const tp = livePos || targetPos;
+    if (disposed || !isVec3Finite(muzzle)) return;
+    const guid = (targetGuid >>> 0) || 0;
+    const rawLivePos = guid && getTargetPos ? getTargetPos(guid) : null;
+    const tp = isVec3Finite(rawLivePos) ? rawLivePos : (isVec3Finite(targetPos) ? targetPos : null);
     if (!tp) return;
     laserPool.fire(muzzle, tp, { decaySec: 0.16, maxAge: 0.48 });
     spawnBurst(muzzle[0], muzzle[1], muzzle[2], 1.2, 0xff2233, 0.30);
@@ -477,15 +518,16 @@ export function createDeployableCombatVfx(deps = {}) {
   }
 
   function handleFireEvent(msg) {
-    if (!msg) return;
+    if (disposed || !msg) return;
     const wk = msg.weaponKind | 0;
     const targetGuid = (msg.targetGuid ?? msg.target ?? 0) >>> 0;
     if (wk === 1) {
+      if (!isVec3Finite(msg.muzzle)) return;
       const count = Math.max(1, Math.min(4, (msg.burstCount | 0) || 1));
       const tubeOffsets = [[-0.22, 0, 0.18], [0.22, 0, 0.18], [-0.22, 0, -0.10], [0.22, 0, -0.10]];
       for (let i = 0; i < count; i++) {
         const off = tubeOffsets[i % tubeOffsets.length];
-        const mz = msg.muzzle ? [msg.muzzle[0] + off[0], msg.muzzle[1] + off[1], msg.muzzle[2] + off[2]] : null;
+        const mz = [msg.muzzle[0] + off[0], msg.muzzle[1] + off[1], msg.muzzle[2] + off[2]];
         if (i === 0) fireSam(mz, msg.targetPos, msg.velocity, targetGuid);
         else pendingSams.push({ delay: i * 0.18, muzzle: mz, targetPos: msg.targetPos, velocity: msg.velocity, targetGuid });
       }
@@ -495,6 +537,7 @@ export function createDeployableCombatVfx(deps = {}) {
   }
 
   function update(dt = 0.016) {
+    if (disposed) return;
     const step = Number.isFinite(dt) && dt > 0 ? Math.min(0.1, dt) : 0.016;
     samTrails.update(step);
     laserPool.update(step);
@@ -548,15 +591,22 @@ export function createDeployableCombatVfx(deps = {}) {
       sam.age += step;
       if (sam.targetGuid && getTargetPos) {
         const livePos = getTargetPos(sam.targetGuid);
-        if (livePos) {
+        if (isVec3Finite(livePos)) {
           sam.tx = livePos[0];
           sam.ty = livePos[1];
           sam.tz = livePos[2];
         }
       }
+      if (!Number.isFinite(sam.x) || !Number.isFinite(sam.y) || !Number.isFinite(sam.z)
+          || !Number.isFinite(sam.tx) || !Number.isFinite(sam.ty) || !Number.isFinite(sam.tz)
+          || !Number.isFinite(sam.vx) || !Number.isFinite(sam.vy) || !Number.isFinite(sam.vz)) {
+        sam.active = false;
+        sam.mesh.visible = false; // vfx-lint-allow: sam invalid retire
+        continue;
+      }
       const dx = sam.tx - sam.x, dy = sam.ty - sam.y, dz = sam.tz - sam.z;
       const dist = Math.hypot(dx, dy, dz);
-      if (dist < 5.5 || sam.age > 5.0) {
+      if (!Number.isFinite(dist) || dist < 5.5 || sam.age > 5.0) {
         spawnBurst(sam.x, sam.y, sam.z, 8.5, 0xff8822, 0.65);
         sam.active = false;
         sam.mesh.visible = false; // vfx-lint-allow: sam detonate
@@ -569,10 +619,17 @@ export function createDeployableCombatVfx(deps = {}) {
       sam.x += sam.vx * step;
       sam.y += sam.vy * step;
       sam.z += sam.vz * step;
+      if (!Number.isFinite(sam.x) || !Number.isFinite(sam.y) || !Number.isFinite(sam.z)) {
+        sam.active = false;
+        sam.mesh.visible = false; // vfx-lint-allow: sam nonfinite retire
+        continue;
+      }
       sam.mesh.position.set(sam.x, sam.y, sam.z);
-      const vLen = Math.hypot(sam.vx, sam.vy, sam.vz) || 1;
-      tmpDir.set(sam.vx / vLen, sam.vy / vLen, sam.vz / vLen);
-      sam.mesh.quaternion.setFromUnitVectors(yAxis, tmpDir);
+      const vLen = Math.hypot(sam.vx, sam.vy, sam.vz);
+      if (Number.isFinite(vLen) && vLen > 1e-8) {
+        tmpDir.set(sam.vx / vLen, sam.vy / vLen, sam.vz / vLen);
+        sam.mesh.quaternion.setFromUnitVectors(yAxis, tmpDir);
+      }
       samTrails.pushPoint(sam.trail, [sam.x, sam.y, sam.z]);
       sam.puffAcc += step;
       if (sam.puffAcc >= 0.06) {
@@ -584,6 +641,12 @@ export function createDeployableCombatVfx(deps = {}) {
     // Step in-flight Mortar shells (green smoke trail + 2 light bounces before detonation!)
     for (const sh of activeMortars) {
       if (!sh.active) continue;
+      if (!Number.isFinite(sh.x) || !Number.isFinite(sh.y) || !Number.isFinite(sh.z)
+          || !Number.isFinite(sh.vx) || !Number.isFinite(sh.vy) || !Number.isFinite(sh.vz)) {
+        sh.active = false;
+        sh.mesh.visible = false; // vfx-lint-allow: mortar invalid retire
+        continue;
+      }
       sh.age += step;
       sh.vz -= 9.81 * step;
       sh.x += sh.vx * step;
@@ -631,6 +694,8 @@ export function createDeployableCombatVfx(deps = {}) {
   }
 
   function dispose() {
+    disposed = true;
+    pendingSams.length = 0;
     if (root.parent) root.parent.remove(root);
     samTrails.dispose();
     laserPool.dispose();

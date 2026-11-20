@@ -1219,29 +1219,56 @@ export function extractCSharpMethods(src, methodName) {
   return { bodies, combined: bodies.join("\n") };
 }
 
+function stripCSharpCommentsAndStrings(src) {
+  let out = "";
+  let i = 0;
+  while (i < src.length) {
+    const adv = scanCSharpCommentOrString(src, i);
+    if (adv > i) {
+      out += " ";
+      i = adv;
+      continue;
+    }
+    out += src[i];
+    i++;
+  }
+  return out;
+}
+
 export function extractCSharpMethodScope(src, methodName, helperNameRe = null) {
   const { bodies, combined } = extractCSharpMethods(src, methodName);
   if (!combined) return { bodies: [], combined: "" };
   const extras = [];
-  const constRe = /\b(?:const|static\s+readonly)\s+[\w.<>?\[\]]+\s+(\w+)\s*=\s*([^;]+);/g;
-  let cm;
-  while ((cm = constRe.exec(src)) !== null) {
-    if (new RegExp(`\\b${cm[1]}\\b`).test(combined)) extras.push(cm[0]);
-  }
   if (helperNameRe) {
     const callRe = /\b([A-Za-z_]\w*)\s*\(/g;
     const seen = new Set([methodName]);
-    let hm;
-    while ((hm = callRe.exec(combined)) !== null) {
-      const fn = hm[1];
-      if (!seen.has(fn) && helperNameRe.test(fn)) {
-        seen.add(fn);
-        const h = extractCSharpMethods(src, fn);
-        if (h.combined) extras.push(h.combined);
+    const queue = [combined];
+    while (queue.length > 0) {
+      const chunk = stripCSharpCommentsAndStrings(queue.shift());
+      callRe.lastIndex = 0;
+      let hm;
+      while ((hm = callRe.exec(chunk)) !== null) {
+        const fn = hm[1];
+        if (!seen.has(fn) && helperNameRe.test(fn)) {
+          seen.add(fn);
+          const h = extractCSharpMethods(src, fn);
+          if (h.combined) {
+            extras.push(h.combined);
+            queue.push(h.combined);
+          }
+        }
       }
     }
   }
-  return { bodies, combined: [combined, ...extras].join("\n") };
+  const fullText = [combined, ...extras].join("\n");
+  const constRe = /\b(?:const|static\s+readonly)\s+[\w.<>?\[\]]+\s+(\w+)\s*=\s*([^;]+);/g;
+  const constSrc = stripCSharpComments(src);
+  let cm;
+  const constExtras = [];
+  while ((cm = constRe.exec(constSrc)) !== null) {
+    if (new RegExp(`\\b${cm[1]}\\b`).test(fullText)) constExtras.push(cm[0]);
+  }
+  return { bodies, combined: [fullText, ...constExtras].join("\n") };
 }
 
 export function makeFakeControlsWin() {
@@ -1749,6 +1776,12 @@ export class LiveSession {
         }
         return true;
       `);
+      await this.waitUntil(
+        async () => await this.evalInPage(`const st = window.__vehicles?.status?.(); return !!(st?.caps && (st.caps.granted & 0x03) === 0x03);`),
+        15000,
+        150,
+        "driver window.__vehicles caps 0x03"
+      ).catch(() => {});
       return;
     }
 
@@ -1767,7 +1800,7 @@ export class LiveSession {
         clouds: "on",
         camDebug: "on",
         vehicles: "on",
-        skytime: process.env.SKYTIME || "10",
+        skytime: process.env.SKYTIME || "0.5",
         cloudCoverage: process.env.COVERAGE || "0.45",
         adaptiveRes: "off",
         portalSpace: "off",
@@ -1812,18 +1845,13 @@ export class LiveSession {
     });
     this.context = await this.browser.newContext();
     await this.context.addInitScript(() => {
-      const check = setInterval(() => {
-        if (window.THREE && window.THREE.WebGLRenderer) {
-          const Orig = window.THREE.WebGLRenderer;
-          window.THREE.WebGLRenderer = function (params) {
-            params = params || {};
-            params.preserveDrawingBuffer = true;
-            return new Orig(params);
-          };
-          window.THREE.WebGLRenderer.prototype = Orig.prototype;
-          clearInterval(check);
+      const origGetContext = HTMLCanvasElement.prototype.getContext;
+      HTMLCanvasElement.prototype.getContext = function (type, attrs) {
+        if (type === "webgl" || type === "webgl2") {
+          attrs = { ...(attrs || {}), preserveDrawingBuffer: true };
         }
-      }, 100);
+        return origGetContext.call(this, type, attrs);
+      };
     });
     this.page = await this.context.newPage();
     await this.page.setViewportSize({ width: 1920, height: 1080 });
@@ -1894,6 +1922,93 @@ export class LiveSession {
       await this.close();
       throw new Error("LIVE_BOOT_TIMEOUT: failed to reach in-world state with liveScene3d");
     }
+    if (/[?&]vehicles=on\b/i.test(httpUrl)) {
+      const vt0 = Date.now();
+      let vReady = false;
+      let lastStatus = null;
+      while (Date.now() - vt0 < 15000) {
+        lastStatus = await this.page
+          .evaluate(() => window.__vehicles?.status?.() || null)
+          .catch(() => null);
+        if (lastStatus && lastStatus.caps && (lastStatus.caps.granted & 0x03) === 0x03) {
+          vReady = true;
+          break;
+        }
+        await new Promise((r) => setTimeout(r, 150));
+      }
+      if (!vReady) {
+        await this.close();
+        throw new Error(`LIVE_VEHICLES_TIMEOUT: window.__vehicles.status().caps (0x03) unavailable after 15000ms (granted=${lastStatus?.caps?.granted ?? "none"})`);
+      }
+    }
+    await this.ensureOutdoorFlatSite();
+  }
+
+  async waitUntil(fn, timeoutMs = 12000, intervalMs = 200, label = "condition") {
+    const t0 = Date.now();
+    let lastErr = null;
+    while (Date.now() - t0 < timeoutMs) {
+      try {
+        const r = await fn();
+        if (r) return r;
+      } catch (e) {
+        lastErr = e;
+      }
+      await new Promise((r) => setTimeout(r, intervalMs));
+    }
+    throw new Error(`Timed out after ${timeoutMs}ms waiting for ${label}${lastErr ? `: ${lastErr.message}` : ""}`);
+  }
+
+  async getPlayerGlobalPose() {
+    return await this.evalInPage(`
+      const p = window.__sessionHandle?.getLocalPlayerPose?.();
+      if (!p) return null;
+      const c = p.landblockId >>> 0;
+      const lbX = (c >>> 24) & 0xff;
+      const lbY = (c >>> 16) & 0xff;
+      const isD = ((c >>> 15) & 1) === 1;
+      return {
+        landblockId: c,
+        cellInLb: c & 0xffff,
+        lx: p.x,
+        ly: p.y,
+        gx: lbX * 192 + p.x,
+        gy: (isD ? 68928 : 0) + lbY * 192 + p.y,
+        z: p.z,
+        heading: p.heading,
+      };
+    `);
+  }
+
+  async ensureOutdoorFlatSite() {
+    if (this.driverUrl) return;
+    const p0 = await this.getPlayerGlobalPose().catch(() => null);
+    const needsTele =
+      !p0 ||
+      p0.cellInLb >= 0x0100 ||
+      ((p0.landblockId >>> 16) & 0xffff) !== 0xa9b3 ||
+      Math.hypot(p0.gx - 32467.2, p0.gy - 34392.0) > 4.0 ||
+      Math.abs(p0.heading || 0) > 0.35;
+    if (needsTele) {
+      if (!p0 || ((p0.landblockId >>> 16) & 0xffff) !== 0xa9b3) {
+        await this.sendChatAndWait("@tele 41.35N 33.33E", /Position:\s*\[Cell:/i, 12000);
+      }
+      await this.sendChat("@teleloc 0xA9B30002 19.20 24.00 94.00");
+    }
+    await this.waitUntil(async () => {
+      return await this.evalInPage(`
+        const sh = window.__sessionHandle;
+        const p = sh?.getLocalPlayerPose?.();
+        if (!p) return false;
+        const c = p.landblockId >>> 0;
+        if (((c >>> 16) & 0xffff) !== 0xa9b3) return false;
+        if ((c & 0xffff) >= 0x0100) return false;
+        const gx = ((c >>> 24) & 0xff) * 192 + p.x;
+        const gy = ((((c >>> 15) & 1) === 1) ? 68928 : 0) + ((c >>> 16) & 0xff) * 192 + p.y;
+        const tz = sh.terrainHeightAt?.(gx, gy);
+        return Number.isFinite(tz) && Math.hypot(gx - 32467.2, gy - 34392.0) <= 4.0 && Math.abs(p.heading || 0) <= 0.35;
+      `);
+    }, 15000, 200, "outdoor 0xA9B3 flat terrain ready");
   }
 
   async evalInPage(body) {
@@ -2006,10 +2121,23 @@ export class LiveSession {
   }
 
   async cleanupWorld() {
+    await this.evalInPage(`
+      try { window.__vehicles?.exit?.(0); } catch (_) {}
+      try { window.__vehicles?.palletJacks?.release?.(); } catch (_) {}
+      return true;
+    `).catch(() => {});
     await this.sendChat("@vehicle despawn all").catch(() => {});
     await this.sendChat("@trailer despawn all").catch(() => {});
     await this.sendChat("@container despawn all").catch(() => {});
-    await new Promise((r) => setTimeout(r, 350));
+    await this.sendChat("@deployable despawn all").catch(() => {});
+    await this.sendChatAndWait("@palletjack despawn all", /despawned/i, 3000).catch(() => {});
+    await this.waitUntil(() => this.evalInPage(`
+      const a = window.__vehicles;
+      if (!a) return true;
+      return a.vehicles().length === 0 &&
+        a.trailers.list().length === 0 &&
+        a.containers.list().length === 0;
+    `), 2500, 100, "world cleanup").catch(() => {});
   }
 
   async checkConsoleErrors() {

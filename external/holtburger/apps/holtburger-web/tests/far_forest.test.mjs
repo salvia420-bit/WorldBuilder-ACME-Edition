@@ -76,6 +76,8 @@ check("two nearest views cross-dithered (no 45-degree card flips in a turn): bot
       && !/mc\.get\(sid, surfacePixelsFetcher\)/.test(src));
   check("FF-SRC a part whose surface fell back to the grey material is left out of the bake (no grey cards)",
     /src === mc\.fallbackMaterial\) \{ fallbackParts \+= 1; continue; \}/.test(src));
+  check("FF-SRC _compileAhead routes fallback through guardedCompileAsync with no raw .compileAsync call",
+    /guardedCompileAsync\(r,\s*mesh,\s*cam,\s*scene\)/.test(src) && !/\.compileAsync(?:\?\.)?\s*\(/.test(src));
 }
 
 console.log("-- F6 hemi-octahedral impostors --------------------------------------");

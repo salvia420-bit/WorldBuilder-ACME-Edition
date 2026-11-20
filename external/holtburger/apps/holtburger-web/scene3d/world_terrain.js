@@ -780,8 +780,8 @@ export function sampleHeight(worldPos, yCoord) {
  * `(lbX, dLbY)` (`lbX = 0..254`, `dLbY = 0..254`, global `lbY = 359 + dLbY`) so `terrain_vfx.js`
  * and `terrain_oracle.js` can drive all terrain VFX providers on Dericost.
  */
-export function extractDericostLandblockData(lbX, dLbY) {
-  const d = _st?.data;
+export function extractDericostLandblockData(lbX, dLbY, worldData = null) {
+  const d = worldData ?? _st?.data;
   if (!d || !d.hIdxDericost || !d.typesDericost || !d.table) return null;
   if (lbX < 0 || lbX > 254 || dLbY < 0 || dLbY > 254) return null;
   const codes = new Uint8Array(81);

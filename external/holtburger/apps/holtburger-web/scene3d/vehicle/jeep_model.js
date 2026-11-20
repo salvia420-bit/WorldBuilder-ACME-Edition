@@ -859,6 +859,8 @@ export function buildProceduralJeep(three, profile = {}, options = {}) {
   }
 
   const lightOffset = new t.Vector3(0.0, 1.6, 0.65);
+  const tmpLightVec = new t.Vector3();
+  let headlightsState = false;
   let wheelRollAngle = 0;
 
   const rollingWheels = [wheelFL, wheelFR, wheelRL, wheelRR];
@@ -1015,12 +1017,16 @@ export function buildProceduralJeep(three, profile = {}, options = {}) {
       }
 
       // 9. Headlights (pooled carrier + HDR-calibrated subtle additive beam cone, zero light churn)
-      if (s.headlights !== undefined) {
-        const on = Boolean(s.headlights);
-        headlightBeams.visible = on; // vfx-lint-allow: additive beam mesh toggle
-        matAdditive.opacity = on ? 0.05 : 0.0;
-        pooledLight.intensity = on ? 2.5 : 0.0;
-        pooledLight.position.copy(root.position).add(lightOffset);
+      const headlightsProvided = s.headlights !== undefined;
+      if (headlightsProvided) {
+        headlightsState = Boolean(s.headlights);
+        headlightBeams.visible = headlightsState; // vfx-lint-allow: additive beam mesh toggle
+        matAdditive.opacity = headlightsState ? 0.05 : 0.0;
+        pooledLight.intensity = headlightsState ? 2.5 : 0.0;
+      }
+      if (headlightsState || headlightsProvided) {
+        tmpLightVec.copy(lightOffset).applyQuaternion(root.quaternion);
+        pooledLight.position.copy(root.position).add(tmpLightVec);
       }
     },
     dispose() {
@@ -1041,6 +1047,8 @@ export function buildProceduralJeep(three, profile = {}, options = {}) {
           }
         }
       });
+      pooledLight.released = true;
+      pooledLight.intensity = 0.0;
       if (Array.isArray(liveScene3d.activeLights)) {
         const idx = liveScene3d.activeLights.indexOf(pooledLight);
         if (idx !== -1) liveScene3d.activeLights.splice(idx, 1);

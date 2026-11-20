@@ -272,7 +272,7 @@ await t("P7 the eviction export drops the populate products already staged (sour
     "LANDBLOCK_RESTRICTIONS_PENDING", "BUILDING_PHYSICS_PENDING", "STATIC_AABB_PENDING", "STATIC_BSP_PENDING",
     "SCENERY_COLLIDER_PENDING",
   ]) assert.ok(fnBody.includes(`${pile}\n`) || fnBody.includes(`${pile}.with`), `${pile} purged`);
-  assert.match(fnBody, /id\.landblock_id & 0xFFFF_0000 != lb_high/, "origins keyed by BuildingId.landblock_id");
+  assert.match(fnBody, /continent_lb_key\(id\.landblock_id\) != lb_high/, "origins keyed by BuildingId.landblock_id");
 });
 
 console.log(`\ncollider_populate_evict: ${passed} passed, ${failed} failed`);

@@ -160,6 +160,71 @@ function mockRenderer() {
     resolved = true;
   });
   check("PART3: ready-poll resolves for a linked program", resolved);
+
+  // Mid-poll disposal (properties.has / delete): tick 1 not ready, disposed before tick 2.
+  // Must resolve cleanly and never call properties.get(mat) after deletion (avoids WeakMap `{}` re-insertion).
+  {
+    const matA = { id: "disposed-has" };
+    const map = new Map([[matA, { currentProgram: { isReady: () => { map.delete(matA); return false; } } }]]);
+    let getCallsAfterDelete = 0;
+    const rA = mockRenderer();
+    rA.compile = () => new Set([matA]);
+    rA.properties = {
+      has: (m) => map.has(m),
+      get: (m) => {
+        if (!map.has(m)) {
+          getCallsAfterDelete += 1;
+          map.set(m, {});
+        }
+        return map.get(m);
+      },
+    };
+    let resolvedA = false;
+    await bp.guardedCompileAsync(rA, {}, {}, {}).then(() => {
+      resolvedA = true;
+    });
+    check("PART3: disposed mid-poll (properties.has/delete) resolves without WeakMap re-insert", resolvedA && getCallsAfterDelete === 0);
+  }
+
+  // Mid-poll disposal (mock without .has): properties.get(mat).currentProgram becomes undefined on tick 2.
+  {
+    const matB = { id: "disposed-undef" };
+    let tickB = 0;
+    const rB = mockRenderer();
+    rB.compile = () => new Set([matB]);
+    rB.properties = {
+      get: () => {
+        tickB += 1;
+        if (tickB === 1) return { currentProgram: { isReady: () => false } };
+        return { currentProgram: undefined };
+      },
+    };
+    let resolvedB = false;
+    await bp.guardedCompileAsync(rB, {}, {}, {}).then(() => {
+      resolvedB = true;
+    });
+    check("PART3: disposed mid-poll (currentProgram undefined on tick 2) resolves cleanly", resolvedB && tickB === 2);
+  }
+
+  // Mid-poll disposal: properties.get(mat) throws on tick 2.
+  {
+    const matC = { id: "disposed-throw" };
+    let tickC = 0;
+    const rC = mockRenderer();
+    rC.compile = () => new Set([matC]);
+    rC.properties = {
+      get: () => {
+        tickC += 1;
+        if (tickC === 1) return { currentProgram: { isReady: () => false } };
+        throw new TypeError("disposed material");
+      },
+    };
+    let resolvedC = false;
+    await bp.guardedCompileAsync(rC, {}, {}, {}).then(() => {
+      resolvedC = true;
+    });
+    check("PART3: disposed mid-poll (properties.get throws on tick 2) resolves cleanly", resolvedC && tickC === 2);
+  }
 }
 
 {
@@ -202,7 +267,24 @@ function mockRenderer() {
     "PART5: index.js doCompile routes through withWarmTarget",
     indexJs.includes("withWarmTarget(renderer, () => renderer.compile(scene, camera))")
   );
+  check(
+    "PART5: index.js doCompile uses guardedCompileAsync with no raw renderer.compileAsync(",
+    indexJs.includes("guardedCompileAsync(renderer, scene, camera)") && !/\brenderer\.compileAsync\s*\(/.test(indexJs)
+  );
   check("PART5: index.js installs the link probe after renderer creation", indexJs.includes("installLinkProbe(renderer)"));
+
+  const cloudVolJs = readFileSync(joinPath(__dirname, "scene3d", "cloud_volume.js"), "utf8");
+  check(
+    "PART5: cloud_volume.js uses guardedCompileAsync with no raw r.compileAsync(",
+    /guardedCompileAsync\(r,\s*mesh/.test(cloudVolJs) && !/\br\.compileAsync\s*\(/.test(cloudVolJs)
+  );
+
+  const farForestJs = readFileSync(joinPath(__dirname, "scene3d", "far_forest.js"), "utf8");
+  check(
+    "PART5: far_forest.js uses guardedCompileAsync with no raw r.compileAsync(",
+    /guardedCompileAsync\(r,\s*mesh,\s*cam,\s*scene\)/.test(farForestJs)
+      && !/\br\.compileAsync(?:\?\.)?\s*\(/.test(farForestJs)
+  );
 
   const bpSrc = readFileSync(joinPath(__dirname, "scene3d", "bake_prewarm.js"), "utf8");
   check(

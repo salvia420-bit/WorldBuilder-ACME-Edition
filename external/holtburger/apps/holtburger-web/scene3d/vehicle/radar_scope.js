@@ -83,8 +83,9 @@ export function renderRadarScope(ctx, width, height, state = {}) {
   ctx.stroke();
 
   // 3. 15 RPM Rotating Sweep Line: (simTimeSec * 15 * 2 * PI / 60) % (2 * PI)
+  const safeSimTime = Number.isFinite(simTimeSec) ? simTimeSec : 0;
   const omega = (RADAR_SCOPE_SPECS.dishRpm * 2 * Math.PI) / 60.0;
-  const azimuth = (simTimeSec * omega) % (2 * Math.PI);
+  const azimuth = (safeSimTime * omega) % (2 * Math.PI);
 
   // Sweep phosphor trail (30 deg fading sector)
   const trailAngle = (30 * Math.PI) / 180;
@@ -140,8 +141,11 @@ export function renderRadarScope(ctx, width, height, state = {}) {
 
     // Heading velocity vector
     if (c.heading !== undefined || c.headingU8 !== undefined) {
-      const hdg = typeof c.heading === "number" ? c.heading : (c.headingU8 / 255) * 2 * Math.PI;
-      const speedVal = c.speed !== undefined ? c.speed : (c.speedMps !== undefined ? c.speedMps : (c.speedMpsU8 || 15));
+      const hdg = typeof c.heading === "number" && Number.isFinite(c.heading)
+        ? c.heading
+        : ((Number.isFinite(c.headingU8) ? c.headingU8 : 0) / 255) * 2 * Math.PI;
+      const rawSpeed = c.speed !== undefined ? c.speed : (c.speedMps !== undefined ? c.speedMps : (c.speedMpsU8 || 15));
+      const speedVal = Number.isFinite(rawSpeed) ? rawSpeed : 15;
       const vLen = Math.min(16, Math.max(5, speedVal * 0.15));
       ctx.strokeStyle = color;
       ctx.lineWidth = 1.2;
@@ -207,8 +211,9 @@ export function renderCombinedRadarScope(ctx, width, height, state = {}) {
 
   // 4. Dual Sweeps:
   // Air Sweep: 15 RPM (period 4.0s)
+  const safeSimTime = Number.isFinite(simTimeSec) ? simTimeSec : 0;
   const omegaAir = (COMBINED_RADAR_SPECS.airRpm * 2 * Math.PI) / 60.0;
-  const azAir = (simTimeSec * omegaAir) % (2 * Math.PI);
+  const azAir = (safeSimTime * omegaAir) % (2 * Math.PI);
 
   // Air Phosphor Trail (30 deg sector)
   const trailAngleAir = (30 * Math.PI) / 180;
@@ -232,7 +237,7 @@ export function renderCombinedRadarScope(ctx, width, height, state = {}) {
 
   // Ground Sweep: 30 RPM (period 2.0s) — exactly 2x angular velocity of Air sweep
   const omegaGround = (COMBINED_RADAR_SPECS.groundRpm * 2 * Math.PI) / 60.0;
-  const azGround = (simTimeSec * omegaGround) % (2 * Math.PI);
+  const azGround = (safeSimTime * omegaGround) % (2 * Math.PI);
 
   // Ground Phosphor Trail (30 deg amber sector within rGround)
   const trailAngleGround = (30 * Math.PI) / 180;
@@ -287,14 +292,18 @@ export function renderCombinedRadarScope(ctx, width, height, state = {}) {
     ctx.closePath();
     ctx.fill();
 
-    if (ac.altAgl !== undefined) {
+    const altAgl = ac.altAglM !== undefined ? ac.altAglM : ac.altAgl;
+    if (Number.isFinite(altAgl)) {
       ctx.font = "8px sans-serif";
-      ctx.fillText(`${Math.round(ac.altAgl)}m`, bx + 5, by);
+      ctx.fillText(`${Math.round(altAgl)}m`, bx + 5, by);
     }
 
     if (ac.heading !== undefined || ac.headingU8 !== undefined) {
-      const hdg = typeof ac.heading === "number" ? ac.heading : ((ac.headingU8 || 0) / 255) * 2 * Math.PI;
-      const speedVal = ac.speed !== undefined ? ac.speed : (ac.speedMps !== undefined ? ac.speedMps : (ac.speedMpsU8 || 15));
+      const hdg = typeof ac.heading === "number" && Number.isFinite(ac.heading)
+        ? ac.heading
+        : ((Number.isFinite(ac.headingU8) ? ac.headingU8 : 0) / 255) * 2 * Math.PI;
+      const rawSpeed = ac.speed !== undefined ? ac.speed : (ac.speedMps !== undefined ? ac.speedMps : (ac.speedMpsU8 || 15));
+      const speedVal = Number.isFinite(rawSpeed) ? rawSpeed : 15;
       const vLen = Math.min(16, Math.max(5, speedVal * 0.15));
       ctx.lineWidth = 1.2;
       ctx.beginPath();
@@ -353,8 +362,11 @@ export function renderCombinedRadarScope(ctx, width, height, state = {}) {
     }
 
     if (gc.heading !== undefined || gc.headingU8 !== undefined) {
-      const hdg = typeof gc.heading === "number" ? gc.heading : ((gc.headingU8 || 0) / 255) * 2 * Math.PI;
-      const speedVal = gc.speed !== undefined ? gc.speed : (gc.speedMps !== undefined ? gc.speedMps : (gc.speedMpsU8 || 5));
+      const hdg = typeof gc.heading === "number" && Number.isFinite(gc.heading)
+        ? gc.heading
+        : ((Number.isFinite(gc.headingU8) ? gc.headingU8 : 0) / 255) * 2 * Math.PI;
+      const rawSpeed = gc.speed !== undefined ? gc.speed : (gc.speedMps !== undefined ? gc.speedMps : (gc.speedMpsU8 || 5));
+      const speedVal = Number.isFinite(rawSpeed) ? rawSpeed : 5;
       const vLen = Math.min(12, Math.max(4, speedVal * 0.2));
       ctx.lineWidth = 1.0;
       ctx.beginPath();
@@ -398,13 +410,16 @@ export class RadarScopeHud {
     this.ctx = this.canvas.getContext("2d");
     parent.appendChild(this.container);
   }
-  update({ simTimeSec = 0, contacts = null, airContacts = null, groundContacts = null, visible = undefined }) {
+  update({ simTimeSec = 0, contacts = null, airContacts = null, groundContacts = null, visible = undefined } = {}) {
     if (visible !== undefined) {
       this.visible = Boolean(visible); // vfx-lint-allow: hud visibility toggle
       if (this.container) this.container.style.display = this.visible ? "block" : "none";
     }
     if (contacts) this.contacts = contacts;
-    if (airContacts) this.airContacts = airContacts;
+    if (airContacts) {
+      this.airContacts = airContacts;
+      this.contacts = [];
+    }
     if (groundContacts) this.groundContacts = groundContacts;
     if (this.ctx && this.visible) {
       this.ctx.clearRect(0, 0, this.width, this.height);
