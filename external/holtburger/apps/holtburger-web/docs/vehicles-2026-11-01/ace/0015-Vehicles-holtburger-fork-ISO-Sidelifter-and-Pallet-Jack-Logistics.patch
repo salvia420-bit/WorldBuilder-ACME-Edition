@@ -1,46 +1,46 @@
-From bb3e791f7e39015df5a5eb105466acb75357c790 Mon Sep 17 00:00:00 2001
+From eb905618628f49313c7956aaa010d552797134d0 Mon Sep 17 00:00:00 2001
 From: salvia420-bit <salvia420@gmail.com>
 Date: Thu, 19 Nov 2026 17:22:38 +0000
 Subject: [PATCH] Vehicles (holtburger fork): ISO Sidelifter and Pallet Jack
  Logistics
 
-Implements HBV1 v7 wire protocol (0x0910 VehiclePalletJackAction/State, since=7 sidelifter fields on VehicleTrailerState, DeployableOnlineFlags.Stowed 0x10), deterministic 30 Hz SidelifterKinematics (40ft self-loading sidelifter WCID 4000032, ISO 3874 interlocks, 4-corner <= 6 deg slope & drop OBB separation check, outrigger side lock, container transfer lock, under-frame pallet jack rack), walk-behind PalletJackDeployable (WCID 4000035, leaky-bucket 3.2 m/s speed cap, terrain+walkable support probing, ISO 3691-5 stow/fork/drop interlocks, destroy operator release), ContainerLogistics 1:1 pinwheel LIFO solver with PalletCargoState preservation (Ammo/Fuel/Energy/ReloadTimer) across deployables/RadarStation/containers, tractor throttle/handbrake/hitch/unhitch locks during sidelift or movement, @trailer sidelift / @palletjack admin commands, and Dericost bit-15 preservation in LScape/BuildingObj plus occupied-landblock unload guard.
+Implements HBV1 v7 wire protocol (0x0910 VehiclePalletJackAction/State, since=7 sidelifter fields on VehicleTrailerState, DeployableOnlineFlags.Stowed 0x10), deterministic 30 Hz SidelifterKinematics (40ft self-loading sidelifter WCID 4000032, ISO 3874 interlocks, 4-corner <= 6 deg slope & drop OBB separation check, outrigger side lock, container transfer lock, under-frame pallet jack rack), walk-behind PalletJackDeployable (WCID 4000035, persistent leaky-bucket 3.2 m/s speed cap across grab/release, terrain+walkable support probing, ISO 3691-5 stow/fork/drop interlocks, destroy operator release), ContainerLogistics 1:1 pinwheel LIFO solver with PalletCargoState preservation (Ammo/Fuel/Energy/ReloadTimer) across deployables/RadarStation/containers, tractor throttle/handbrake/hitch/unhitch/unmount locks during sidelift or movement, @trailer sidelift / @palletjack admin commands, and Dericost bit-15 preservation in LScape/BuildingObj plus occupied-landblock unload guard.
 
-Verified: sync-ace-fixtures.sh --check exits 0, dotnet test -c Debug --filter FullyQualifiedName~Vehicles passes 314/314, --filter FullyQualifiedName~Landblock passes 11/11, and Release build succeeds with 0 errors.
+Verified: sync-ace-fixtures.sh --check exits 0, dotnet test -c Debug --filter FullyQualifiedName~Vehicles passes 317/317, --filter FullyQualifiedName~Landblock passes 11/11, Release build succeeds with 0 errors, and live E2E passes (60/60 logistics, 92/92 semi-trailer).
 ---
- .../Vehicles/PalletJackLogisticsTests.cs      | 847 +++++++++++++++
- .../Vehicles/SidelifterTests.cs               | 878 ++++++++++++++++
- .../Vehicles/VehicleWireTests.cs              | 247 ++++-
- .../Vehicles/vehicle-wire-fixtures.json       | 289 ++++--
- Source/ACE.Server/Entity/Landblock.cs         |  12 +-
- .../ACE.Server/Managers/LandblockManager.cs   |   6 +
- .../GameAction/Actions/GameActionVehicle.cs   |   8 +
- .../Network/GameAction/GameActionType.cs      |   1 +
- .../GameEvent/Events/GameEventVehicle.cs      |   2 +-
- .../Network/GameEvent/GameEventType.cs        |   1 +
- .../ACE.Server/Physics/Common/BuildingObj.cs  |   2 +-
- Source/ACE.Server/Physics/Common/LScape.cs    |   6 +-
- .../Vehicles/Deployables/BatteryDeployable.cs |  15 +
- .../Deployables/ContainerLogistics.cs         | 713 +++++++++++++
- .../Vehicles/Deployables/DeployableBase.cs    | 113 +-
- .../Vehicles/Deployables/DeployableManager.cs |  63 +-
- .../Vehicles/Deployables/FluxPodDeployable.cs |   5 +
- .../Deployables/GroundRadarDeployable.cs      |   2 +-
- .../Deployables/IsoContainerDeployable.cs     |  80 +-
- .../Deployables/LaserTurretDeployable.cs      |   2 +-
- .../Vehicles/Deployables/MicroGrid.cs         |  99 +-
- .../Deployables/MissileTurretDeployable.cs    |  18 +-
- .../Deployables/MortarTurretDeployable.cs     |   2 +-
- .../Deployables/PalletJackDeployable.cs       | 890 ++++++++++++++++
- .../Deployables/PowerGeneratorDeployable.cs   |  17 +-
- .../Deployables/SemiTrailerDeployable.cs      | 968 +++++++++++++++++-
- .../Deployables/SolarPanelsDeployable.cs      |   2 +-
- .../Vehicles/SidelifterKinematics.cs          | 300 ++++++
- .../ACE.Server/Vehicles/TrailerKinematics.cs  |  15 +-
- Source/ACE.Server/Vehicles/VehicleCommands.cs | 284 ++++-
- Source/ACE.Server/Vehicles/VehicleManager.cs  | 335 +++++-
- Source/ACE.Server/Vehicles/VehicleWire.cs     | 235 ++++-
- 32 files changed, 6256 insertions(+), 201 deletions(-)
+ .../Vehicles/PalletJackLogisticsTests.cs      |  892 +++++++++++++++
+ .../Vehicles/SidelifterTests.cs               | 1004 +++++++++++++++++
+ .../Vehicles/VehicleWireTests.cs              |  247 +++-
+ .../Vehicles/vehicle-wire-fixtures.json       |  289 +++--
+ Source/ACE.Server/Entity/Landblock.cs         |   12 +-
+ .../ACE.Server/Managers/LandblockManager.cs   |    6 +
+ .../GameAction/Actions/GameActionVehicle.cs   |    8 +
+ .../Network/GameAction/GameActionType.cs      |    1 +
+ .../GameEvent/Events/GameEventVehicle.cs      |    2 +-
+ .../Network/GameEvent/GameEventType.cs        |    1 +
+ .../ACE.Server/Physics/Common/BuildingObj.cs  |    2 +-
+ Source/ACE.Server/Physics/Common/LScape.cs    |    6 +-
+ .../Vehicles/Deployables/BatteryDeployable.cs |   15 +
+ .../Deployables/ContainerLogistics.cs         |  713 ++++++++++++
+ .../Vehicles/Deployables/DeployableBase.cs    |  113 +-
+ .../Vehicles/Deployables/DeployableManager.cs |   63 +-
+ .../Vehicles/Deployables/FluxPodDeployable.cs |    5 +
+ .../Deployables/GroundRadarDeployable.cs      |    2 +-
+ .../Deployables/IsoContainerDeployable.cs     |   80 +-
+ .../Deployables/LaserTurretDeployable.cs      |    2 +-
+ .../Vehicles/Deployables/MicroGrid.cs         |   99 +-
+ .../Deployables/MissileTurretDeployable.cs    |   18 +-
+ .../Deployables/MortarTurretDeployable.cs     |    2 +-
+ .../Deployables/PalletJackDeployable.cs       |  897 +++++++++++++++
+ .../Deployables/PowerGeneratorDeployable.cs   |   17 +-
+ .../Deployables/SemiTrailerDeployable.cs      |  973 +++++++++++++++-
+ .../Deployables/SolarPanelsDeployable.cs      |    2 +-
+ .../Vehicles/SidelifterKinematics.cs          |  300 +++++
+ .../ACE.Server/Vehicles/TrailerKinematics.cs  |   15 +-
+ Source/ACE.Server/Vehicles/VehicleCommands.cs |  284 ++++-
+ Source/ACE.Server/Vehicles/VehicleManager.cs  |  338 +++++-
+ Source/ACE.Server/Vehicles/VehicleWire.cs     |  235 +++-
+ 32 files changed, 6442 insertions(+), 201 deletions(-)
  create mode 100644 Source/ACE.Server.Tests/Vehicles/PalletJackLogisticsTests.cs
  create mode 100644 Source/ACE.Server.Tests/Vehicles/SidelifterTests.cs
  create mode 100644 Source/ACE.Server/Vehicles/Deployables/ContainerLogistics.cs
@@ -49,10 +49,10 @@ Verified: sync-ace-fixtures.sh --check exits 0, dotnet test -c Debug --filter Fu
 
 diff --git a/Source/ACE.Server.Tests/Vehicles/PalletJackLogisticsTests.cs b/Source/ACE.Server.Tests/Vehicles/PalletJackLogisticsTests.cs
 new file mode 100644
-index 00000000..3937ad18
+index 00000000..8dff8f88
 --- /dev/null
 +++ b/Source/ACE.Server.Tests/Vehicles/PalletJackLogisticsTests.cs
-@@ -0,0 +1,847 @@
+@@ -0,0 +1,892 @@
 +using System;
 +using System.Collections.Concurrent;
 +using System.Collections.Generic;
@@ -898,14 +898,59 @@ index 00000000..3937ad18
 +                UnregisterOnlinePlayer(op.Guid.Full);
 +            }
 +        }
++
++        [TestMethod]
++        public void GrabReleaseBurstLoopRespectsPersistentLeakyBucket()
++        {
++            double x = 3650.0, y = 4650.0, z = 40.0;
++            VehicleColliderCache.BridgeSupportOverride = (_, _, _) => new BridgeSupport { Found = true, DeckZ = z, Nz = 1.0 };
++
++            var player = CreateTestPlayer(0x50007B01u, x, y, z);
++            RegisterOnlinePlayer(player);
++            try
++            {
++                var jack = new PalletJackDeployable(new Vector3((float)x, (float)y, (float)z), 0f, player);
++                DeployableManager.Register(jack);
++
++                var t = DateTime.UtcNow;
++                int accepted = 0;
++                double curX = x;
++                for (int i = 0; i < 50; i++)
++                {
++                    Assert.IsTrue(jack.TryGrab(player, out var gErr), gErr);
++                    t = t.AddMilliseconds(1);
++                    var nextPos = Vehicle.ToPosition(curX + 1.49, y, z, Quaternion.Identity);
++                    if (jack.ApplyPoseUpdate(player, nextPos.Cell, nextPos.Pos, 0f, 0f, out _, t))
++                    {
++                        accepted++;
++                        curX += 1.49;
++                        player.Location = Vehicle.ToPosition(curX - 0.62, y, z, Quaternion.Identity);
++                    }
++                    Assert.IsTrue(jack.Release(player, out var rErr), rErr);
++                }
++
++                Assert.AreEqual(1, accepted, $"Grab->Move(+1.49m)->Release loop must not bypass 3.2 m/s bucket (accepted={accepted})");
++                Assert.IsTrue(jack.GlobalPosition.X - x <= 1.55, $"Jack displacement must stay <= 1.55m, got {jack.GlobalPosition.X - x:0.00}m");
++
++                // After real wall-clock idle > 0.5s, re-grabbing refills bucket cleanly for normal operation
++                Thread.Sleep(550);
++                Assert.IsTrue(jack.TryGrab(player, out var gErr2), gErr2);
++                var afterIdle = Vehicle.ToPosition(curX + 1.20, y, z, Quaternion.Identity);
++                Assert.IsTrue(jack.ApplyPoseUpdate(player, afterIdle.Cell, afterIdle.Pos, 0f, 0f, out var idleErr), idleErr);
++            }
++            finally
++            {
++                UnregisterOnlinePlayer(player.Guid.Full);
++            }
++        }
 +    }
 +}
 diff --git a/Source/ACE.Server.Tests/Vehicles/SidelifterTests.cs b/Source/ACE.Server.Tests/Vehicles/SidelifterTests.cs
 new file mode 100644
-index 00000000..60499fce
+index 00000000..a74c0e0f
 --- /dev/null
 +++ b/Source/ACE.Server.Tests/Vehicles/SidelifterTests.cs
-@@ -0,0 +1,878 @@
+@@ -0,0 +1,1004 @@
 +using System;
 +using System.Collections.Concurrent;
 +using System.Collections.Generic;
@@ -1781,6 +1826,132 @@ index 00000000..60499fce
 +            pendingDict.Clear();
 +            playersList.Add(p);
 +            Assert.IsTrue(lb.HasPlayers, "Landblock with active Player must report HasPlayers = true");
++        }
++
++        [TestMethod]
++        public void UnmountContainerRejectedDuringSideliftHoisting()
++        {
++            const int lbX = 16, lbY = 25;
++            uint gridKey = ((uint)lbX << 24) | ((uint)lbY << 16);
++            var gridsField = typeof(VehicleTerrain).GetField("grids", BindingFlags.Static | BindingFlags.NonPublic);
++            var grids = (ConcurrentDictionary<uint, LandblockGrid>)gridsField?.GetValue(null);
++            bool hadPrev = grids.TryGetValue(gridKey, out var prevGrid);
++
++            double x = lbX * 192.0 + 60.0, y = lbY * 192.0 + 60.0, z = 40.0;
++            var flat40 = new float[81];
++            Array.Fill(flat40, 40.0f);
++            grids[gridKey] = new LandblockGrid { Heights = flat40 };
++
++            var player = CreateTestPlayer(0x50006701u, x, y, z);
++            RegisterOnlinePlayer(player);
++            try
++            {
++                var sl = RegisterSidelifter(0x75006701u, x, y, z);
++                var c40 = RegisterContainer(0x75006702u, IsoContainerDeployable.Wcid40ft, x, y, z + 1.32);
++                Assert.IsTrue(sl.TryMountContainer(c40, 0, out _));
++
++                Assert.IsTrue(sl.TryStartSideliftOffload(1, autoCycle: true, out var offErr, player), offErr);
++                StepSidelifterSeconds(sl, 4.5);
++                Assert.AreEqual(SideliftPhase.Hoisting, sl.SideliftPhase);
++
++                Assert.IsFalse(sl.UnmountContainer(out var unmountErr, snapToGround: true));
++                StringAssert.Contains(unmountErr, "active", StringComparison.OrdinalIgnoreCase);
++
++                Assert.IsFalse(VehicleManager.HandleTrailerAction(player, new VehicleTrailerAction
++                {
++                    TrailerGuid = sl.Guid.Full,
++                    Action = (byte)TrailerActionKind.UnmountContainer,
++                }, out var actErr));
++                StringAssert.Contains(actErr, "active", StringComparison.OrdinalIgnoreCase);
++
++                Assert.AreEqual(c40.Guid.Full, sl.MountedContainerGuid);
++                Assert.AreEqual(sl.Guid.Full, c40.MountedOnTrailerGuid);
++
++                sl.Destroy(true, false);
++            }
++            finally
++            {
++                UnregisterOnlinePlayer(player.Guid.Full);
++                if (hadPrev) grids[gridKey] = prevGrid;
++                else grids.TryRemove(gridKey, out _);
++            }
++        }
++
++        [TestMethod]
++        public void UnhitchTrailerActionRejectedWhileMovingAndDuringOutriggersDeploying()
++        {
++            const int lbX = 16, lbY = 26;
++            uint gridKey = ((uint)lbX << 24) | ((uint)lbY << 16);
++            var gridsField = typeof(VehicleTerrain).GetField("grids", BindingFlags.Static | BindingFlags.NonPublic);
++            var grids = (ConcurrentDictionary<uint, LandblockGrid>)gridsField?.GetValue(null);
++            bool hadPrev = grids.TryGetValue(gridKey, out var prevGrid);
++
++            double x = lbX * 192.0 + 60.0, y = lbY * 192.0 + 60.0, z = 40.0;
++            var flat40 = new float[81];
++            Array.Fill(flat40, 40.0f);
++            grids[gridKey] = new LandblockGrid { Heights = flat40 };
++
++            var player = CreateTestPlayer(0x50006801u, x, y, z);
++            RegisterOnlinePlayer(player);
++            try
++            {
++                var tractor = CreateTestSemi(0x75006801u, x, y, z);
++                var fw = TrailerKinematics.ComputeFifthWheelPose(tractor.GroundState, tractor.Profile.FifthWheelOffsetY, tractor.Profile.FifthWheelOffsetZ);
++                var sl = RegisterSidelifter(0x75006802u, fw.x, fw.y - TrailerKinematics.Chassis40.KpY, z);
++                var c40 = RegisterContainer(0x75006803u, IsoContainerDeployable.Wcid40ft, fw.x, fw.y - TrailerKinematics.Chassis40.KpY, z + 1.32);
++
++                Assert.IsTrue(VehicleManager.TryHitchTrailer(tractor, sl, player, out _));
++                Assert.IsTrue(sl.TryMountContainer(c40, 0, out _));
++
++                // [N3] Moving at 15 m/s must reject TrailerActionKind.Unhitch
++                tractor.GroundState.Mode = VehicleMode.Driving;
++                tractor.GroundState.Speed = 15.0;
++                tractor.State = tractor.GroundState.ToFlightState();
++                Assert.IsFalse(VehicleManager.HandleTrailerAction(player, new VehicleTrailerAction
++                {
++                    VehicleGuid = tractor.Guid.Full,
++                    TrailerGuid = sl.Guid.Full,
++                    Action = (byte)TrailerActionKind.Unhitch,
++                }, out var moveErr));
++                StringAssert.Contains(moveErr, "Stop", StringComparison.OrdinalIgnoreCase);
++                Assert.AreEqual(sl.Guid.Full, tractor.HitchedTrailerGuid);
++
++                // Restore parked state
++                tractor.GroundState.Mode = VehicleMode.Parked;
++                tractor.GroundState.Speed = 0.0;
++                tractor.State = tractor.GroundState.ToFlightState();
++
++                // [N3b] OutriggersDeploying must reject TrailerActionKind.Unhitch
++                Assert.IsTrue(sl.TryStartSideliftOffload(1, autoCycle: true, out var offErr, player), offErr);
++                Assert.AreEqual(SideliftPhase.OutriggersDeploying, sl.SideliftPhase);
++                Assert.IsFalse(VehicleManager.HandleTrailerAction(player, new VehicleTrailerAction
++                {
++                    VehicleGuid = tractor.Guid.Full,
++                    TrailerGuid = sl.Guid.Full,
++                    Action = (byte)TrailerActionKind.Unhitch,
++                }, out var phaseErr));
++                StringAssert.Contains(phaseErr, "sidelifter", StringComparison.OrdinalIgnoreCase);
++                Assert.AreEqual(sl.Guid.Full, tractor.HitchedTrailerGuid);
++
++                // Cancel and retract to Idle -> Unhitch succeeds
++                Assert.IsTrue(sl.CancelSidelift(out var cancelErr), cancelErr);
++                StepSidelifterSeconds(sl, 2.5);
++                Assert.AreEqual(SideliftPhase.Idle, sl.SideliftPhase);
++
++                Assert.IsTrue(VehicleManager.HandleTrailerAction(player, new VehicleTrailerAction
++                {
++                    VehicleGuid = tractor.Guid.Full,
++                    TrailerGuid = sl.Guid.Full,
++                    Action = (byte)TrailerActionKind.Unhitch,
++                }, out var okErr), okErr);
++                Assert.AreEqual(0u, tractor.HitchedTrailerGuid);
++            }
++            finally
++            {
++                UnregisterOnlinePlayer(player.Guid.Full);
++                if (hadPrev) grids[gridKey] = prevGrid;
++                else grids.TryRemove(gridKey, out _);
++            }
 +        }
 +    }
 +}
@@ -4497,10 +4668,10 @@ index 62df06a5..4e8c9ba6 100644
  
 diff --git a/Source/ACE.Server/Vehicles/Deployables/PalletJackDeployable.cs b/Source/ACE.Server/Vehicles/Deployables/PalletJackDeployable.cs
 new file mode 100644
-index 00000000..1e69366e
+index 00000000..ba55a884
 --- /dev/null
 +++ b/Source/ACE.Server/Vehicles/Deployables/PalletJackDeployable.cs
-@@ -0,0 +1,890 @@
+@@ -0,0 +1,897 @@
 +using System;
 +using System.Linq;
 +using System.Numerics;
@@ -4693,9 +4864,18 @@ index 00000000..1e69366e
 +                return false;
 +            }
 +
++            var now = DateTime.UtcNow;
++            if (LastPoseUtc == default)
++            {
++                _poseBudgetM = MaxPoseBudgetM;
++                LastPoseUtc = now;
++            }
++            else if (now > LastPoseUtc)
++            {
++                _poseBudgetM = Math.Min(MaxPoseBudgetM, _poseBudgetM + AntiTeleportSpeedMps * (now - LastPoseUtc).TotalSeconds);
++                LastPoseUtc = now;
++            }
 +            OperatorPlayerGuid = player.Guid.Full;
-+            LastPoseUtc = DateTime.UtcNow;
-+            _poseBudgetM = MaxPoseBudgetM;
 +            BroadcastState();
 +            return true;
 +        }
@@ -4721,8 +4901,6 @@ index 00000000..1e69366e
 +            var prevOp = OperatorPlayerGuid != 0 ? PlayerManager.GetOnlinePlayer(OperatorPlayerGuid) : null;
 +            OperatorPlayerGuid = 0;
 +            TillerAngle = 0f;
-+            LastPoseUtc = default;
-+            _poseBudgetM = MaxPoseBudgetM;
 +            if (Location != null)
 +            {
 +                var actor = prevOp ?? (DeployerPlayerGuid != 0 ? PlayerManager.GetOnlinePlayer(DeployerPlayerGuid) : null);
@@ -5420,7 +5598,7 @@ index de09bc27..deebadd8 100644
          public PowerGeneratorDeployable(Weenie weenie, ObjectGuid guid, Vehicle parentVehicle = null, Player deployer = null)
              : base(weenie, guid, parentVehicle, deployer)
 diff --git a/Source/ACE.Server/Vehicles/Deployables/SemiTrailerDeployable.cs b/Source/ACE.Server/Vehicles/Deployables/SemiTrailerDeployable.cs
-index 59aa13cd..3fab4691 100644
+index 59aa13cd..e66adf1d 100644
 --- a/Source/ACE.Server/Vehicles/Deployables/SemiTrailerDeployable.cs
 +++ b/Source/ACE.Server/Vehicles/Deployables/SemiTrailerDeployable.cs
 @@ -8,7 +8,8 @@
@@ -5590,7 +5768,19 @@ index 59aa13cd..3fab4691 100644
              var (tx, ty, tz) = GetGlobalPose();
              var spec = Spec;
              var pose = TrailerKinematics.ComputeMountedContainerPose(
-@@ -256,6 +326,834 @@ public bool UnmountContainer(out string error, bool snapToGround = true, Func<do
+@@ -224,6 +294,11 @@ public void SyncMountedContainerPose(IsoContainerDeployable container)
+ 
+         public bool UnmountContainer(out string error, bool snapToGround = true, Func<double, double, double> groundZLookup = null)
+         {
++            if (SideliftPhase != SideliftPhase.Idle || TransferContainerGuid != 0)
++            {
++                error = "Cannot unmount container while sidelifter is active.";
++                return false;
++            }
+             if (MountedContainerGuid == 0)
+             {
+                 error = "No container mounted on this trailer.";
+@@ -256,6 +331,834 @@ public bool UnmountContainer(out string error, bool snapToGround = true, Func<do
              return true;
          }
  
@@ -6425,7 +6615,7 @@ index 59aa13cd..3fab4691 100644
          public VehicleTrailerStateMsg CreateTrailerStateMsg()
          {
              return new VehicleTrailerStateMsg
-@@ -273,6 +1171,15 @@ public VehicleTrailerStateMsg CreateTrailerStateMsg()
+@@ -273,6 +1176,15 @@ public VehicleTrailerStateMsg CreateTrailerStateMsg()
                  TrailerFlags = ComputeTrailerFlags(),
                  Reserved = 0,
                  OwnerGuid = DeployerPlayerGuid,
@@ -6441,7 +6631,7 @@ index 59aa13cd..3fab4691 100644
              };
          }
  
-@@ -283,6 +1190,8 @@ public override void BroadcastState(float range = 600.0f)
+@@ -283,6 +1195,8 @@ public override void BroadcastState(float range = 600.0f)
              VehicleManager.BroadcastNear(Location, range, deployer, () => CreateTrailerStateMsg());
          }
  
@@ -6450,7 +6640,7 @@ index 59aa13cd..3fab4691 100644
          public override void Destroy(bool raiseNotifyOfDestructionEvent = true, bool fromLandblockUnload = false)
          {
              if (IsDestroyed) return;
-@@ -321,9 +1230,10 @@ public override void Destroy(bool raiseNotifyOfDestructionEvent = true, bool fro
+@@ -321,9 +1235,10 @@ public override void Destroy(bool raiseNotifyOfDestructionEvent = true, bool fro
                  });
              }
  
@@ -6463,7 +6653,7 @@ index 59aa13cd..3fab4691 100644
                  MountedContainerGuid = 0;
                  ContainerSlot = 0;
                  ContainerExplicitCenter = false;
-@@ -345,6 +1255,48 @@ public override void Destroy(bool raiseNotifyOfDestructionEvent = true, bool fro
+@@ -345,6 +1260,48 @@ public override void Destroy(bool raiseNotifyOfDestructionEvent = true, bool fro
                  }
              }
  
@@ -7239,7 +7429,7 @@ index d9640d95..f0be7754 100644
              }
          }
 diff --git a/Source/ACE.Server/Vehicles/VehicleManager.cs b/Source/ACE.Server/Vehicles/VehicleManager.cs
-index d4e4edff..054f7214 100644
+index d4e4edff..32b8960c 100644
 --- a/Source/ACE.Server/Vehicles/VehicleManager.cs
 +++ b/Source/ACE.Server/Vehicles/VehicleManager.cs
 @@ -72,10 +72,10 @@ public static class VehicleManager
@@ -7399,21 +7589,25 @@ index d4e4edff..054f7214 100644
          }
  
          public static bool HandleTrailerAction(Player player, VehicleTrailerAction msg) =>
-@@ -1572,6 +1624,13 @@ bool PlayerCanReach(Vehicle tractor, Deployables.SemiTrailerDeployable tr)
+@@ -1571,7 +1623,17 @@ bool PlayerCanReach(Vehicle tractor, Deployables.SemiTrailerDeployable tr)
+                         error = "Tractor is not hitched to a trailer.";
                          return false;
                      }
-                     trailer ??= Deployables.DeployableManager.GetDeployable(v.HitchedTrailerGuid) as Deployables.SemiTrailerDeployable;
-+                    if (trailer != null && trailer.IsSidelifter &&
-+                        trailer.SideliftPhase >= SideliftPhase.CranesPositioning &&
-+                        trailer.SideliftPhase <= SideliftPhase.CranesStowing)
++                    if (!v.IsParked && Math.Max(Math.Abs(v.State.Speed), Math.Abs(v.GroundState.Speed)) > 0.25)
 +                    {
-+                        error = "ISO 3874: Complete or cancel sidelifter crane operation before unhitching.";
++                        error = "Stop tractor before unhitching trailer.";
++                        return false;
++                    }
+                     trailer ??= Deployables.DeployableManager.GetDeployable(v.HitchedTrailerGuid) as Deployables.SemiTrailerDeployable;
++                    if (trailer != null && trailer.IsSidelifter && trailer.SideliftPhase != SideliftPhase.Idle)
++                    {
++                        error = "ISO 3874: Complete or retract sidelifter before unhitching.";
 +                        return false;
 +                    }
                      if (!PlayerCanReach(v, trailer))
                      {
                          error = "Too far from tractor/trailer.";
-@@ -1714,12 +1773,238 @@ bool PlayerCanReach(Vehicle tractor, Deployables.SemiTrailerDeployable tr)
+@@ -1714,12 +1776,238 @@ bool PlayerCanReach(Vehicle tractor, Deployables.SemiTrailerDeployable tr)
                      return true;
                  }
  
@@ -7652,7 +7846,7 @@ index d4e4edff..054f7214 100644
          public static bool TryHitchTrailer(Vehicle tractor, Deployables.SemiTrailerDeployable trailer, Player actor, out string error)
          {
              error = null;
-@@ -1734,6 +2019,11 @@ public static bool TryHitchTrailer(Vehicle tractor, Deployables.SemiTrailerDeplo
+@@ -1734,6 +2022,11 @@ public static bool TryHitchTrailer(Vehicle tractor, Deployables.SemiTrailerDeplo
                  error = "Tractor is already hitched.";
                  return false;
              }
@@ -7664,7 +7858,7 @@ index d4e4edff..054f7214 100644
              if (trailer == null || trailer.IsDestroyed || trailer.IsPacked || !trailer.IsActive)
              {
                  error = "Trailer unavailable.";
-@@ -2032,6 +2322,7 @@ public static void MoveBody(Player player, Position pos)
+@@ -2032,6 +2325,7 @@ public static void MoveBody(Player player, Position pos)
              player.PhysicsObj.set_current_pos(new Physics.Common.Position(pos));
              if (pos.Landblock != prevLb)
                  LandblockManager.RelocateObjectForPhysics(player, true);
@@ -7672,7 +7866,7 @@ index d4e4edff..054f7214 100644
          }
  
          /// <summary>A vehicle event for one capable player, when the vehicle object is already gone.</summary>
-@@ -2077,7 +2368,7 @@ public static Player PilotOf(Vehicle v)
+@@ -2077,7 +2371,7 @@ public static Player PilotOf(Vehicle v)
          /// </summary>
          public static void OnPlayerDeath(Player player)
          {
@@ -7681,7 +7875,7 @@ index d4e4edff..054f7214 100644
                  deaths.Enqueue(player);
          }
  
-@@ -2086,6 +2377,7 @@ static void ProcessDeaths()
+@@ -2086,6 +2380,7 @@ static void ProcessDeaths()
          {
              while (deaths.TryDequeue(out var dp))
              {
@@ -7689,7 +7883,7 @@ index d4e4edff..054f7214 100644
                  if (VehicleBailout.IsFalling(dp))
                      VehicleBailout.LandNow(dp);
                  var dv = VehicleOf(dp);
-@@ -2139,6 +2431,7 @@ public static void SanitizeLoginLocation(Player p)
+@@ -2139,6 +2434,7 @@ public static void SanitizeLoginLocation(Player p)
          /// <summary>Player.LogOut hook: never save a pilot in the air (DESIGN §4.3).</summary>
          public static void OnPlayerLogout(Player player)
          {
@@ -7697,7 +7891,7 @@ index d4e4edff..054f7214 100644
              if (VehicleBailout.IsFalling(player))
                  VehicleBailout.LandNow(player);
              var v = VehicleOf(player);
-@@ -2156,6 +2449,7 @@ public static void OnPlayerLogout(Player player)
+@@ -2156,6 +2452,7 @@ public static void OnPlayerLogout(Player player)
          /// </summary>
          public static void OnPlayerTeleport(Player player)
          {
@@ -7705,7 +7899,7 @@ index d4e4edff..054f7214 100644
              VehicleBailout.Cancel(player);
              var v = VehicleOf(player);
              if (v != null)
-@@ -2182,7 +2476,15 @@ public static Vehicle Spawn(Player by, VehicleProfile profile, out string error,
+@@ -2182,7 +2479,15 @@ public static Vehicle Spawn(Player by, VehicleProfile profile, out string error,
              if (double.IsNaN(gz)) { error = "no terrain there"; return null; }
  
              ApplyEnvelopeOverrides(profile);
@@ -7722,7 +7916,7 @@ index d4e4edff..054f7214 100644
              var v = new Vehicle(Vehicle.BuildWeenie(profile), guid, profile);
              if (profile.Locomotion == 2)
              {
-@@ -2200,9 +2502,9 @@ public static Vehicle Spawn(Player by, VehicleProfile profile, out string error,
+@@ -2200,9 +2505,9 @@ public static Vehicle Spawn(Player by, VehicleProfile profile, out string error,
              v.SpawnedBy = by.Guid.Full;
              v.EmptySinceUtc = DateTime.UtcNow;
              v.Location = v.VehiclePosition();
@@ -7734,7 +7928,7 @@ index d4e4edff..054f7214 100644
                  error = "EnterWorld failed (placement)";
                  return null;
              }
-@@ -2232,7 +2534,10 @@ public static void Despawn(Vehicle v, string why)
+@@ -2232,7 +2537,10 @@ public static void Despawn(Vehicle v, string why)
                  }
              }
              if (v.PhysicsObj != null)
