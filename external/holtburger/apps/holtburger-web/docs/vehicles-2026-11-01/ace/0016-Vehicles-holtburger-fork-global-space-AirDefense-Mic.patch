@@ -1,0 +1,378 @@
+From d20368ac3f3b76f9842abc2e1d099e4d89eeb5ef Mon Sep 17 00:00:00 2001
+From: salvia420-bit <salvia420@gmail.com>
+Date: Fri, 20 Nov 2026 01:38:39 +0000
+Subject: [PATCH] Vehicles (holtburger fork): global-space AirDefense,
+ MicroGrid and turret targeting
+
+---
+ .../Vehicles/AirDefense/RadarStation.cs       | 12 +++++++++---
+ .../Vehicles/Deployables/DeployableBase.cs    | 10 ++++++++++
+ .../Vehicles/Deployables/DeployableManager.cs |  8 ++++----
+ .../Vehicles/Deployables/FluxPodDeployable.cs |  4 ++--
+ .../Deployables/GroundRadarDeployable.cs      |  9 +++++----
+ .../Deployables/LaserTurretDeployable.cs      | 19 ++++++++++---------
+ .../Vehicles/Deployables/MicroGrid.cs         |  4 ++--
+ .../Deployables/MissileTurretDeployable.cs    | 13 +++++++------
+ .../Deployables/MortarTurretDeployable.cs     | 13 +++++++------
+ .../Deployables/PalletJackDeployable.cs       |  2 +-
+ 10 files changed, 57 insertions(+), 37 deletions(-)
+
+diff --git a/Source/ACE.Server/Vehicles/AirDefense/RadarStation.cs b/Source/ACE.Server/Vehicles/AirDefense/RadarStation.cs
+index 44fee19f..10cd98e2 100644
+--- a/Source/ACE.Server/Vehicles/AirDefense/RadarStation.cs
++++ b/Source/ACE.Server/Vehicles/AirDefense/RadarStation.cs
+@@ -35,9 +35,15 @@ public class RadarStation : WorldObject
+         public IAirDefenseSensor Sensor { get; set; }
+         public GuildRadarPolicy Policy { get; set; }
+ 
+-        public Vector3 Position => Location != null
+-            ? new Vector3((float)Location.Pos.X, (float)Location.Pos.Y, (float)Location.Pos.Z)
+-            : Vector3.Zero;
++        public Vector3 Position
++        {
++            get
++            {
++                if (Location == null) return Vector3.Zero;
++                var (gx, gy, gz) = Vehicle.ToGlobal(Location);
++                return new Vector3((float)gx, (float)gy, (float)gz);
++            }
++        }
+ 
+         public RadarStation(Weenie weenie, ObjectGuid guid, Vehicle parentVehicle, Player deployer)
+             : base(weenie, guid)
+diff --git a/Source/ACE.Server/Vehicles/Deployables/DeployableBase.cs b/Source/ACE.Server/Vehicles/Deployables/DeployableBase.cs
+index e26413e4..732b0c8a 100644
+--- a/Source/ACE.Server/Vehicles/Deployables/DeployableBase.cs
++++ b/Source/ACE.Server/Vehicles/Deployables/DeployableBase.cs
+@@ -46,6 +46,16 @@ public abstract class DeployableBase : WorldObject
+             ? new Vector3((float)Location.Pos.X, (float)Location.Pos.Y, (float)Location.Pos.Z)
+             : Vector3.Zero;
+ 
++        public virtual Vector3 GlobalPosition
++        {
++            get
++            {
++                if (Location == null) return Vector3.Zero;
++                var (gx, gy, gz) = Vehicle.ToGlobal(Location);
++                return new Vector3((float)gx, (float)gy, (float)gz);
++            }
++        }
++
+         public float Heading => Location != null
+             ? (float)VehicleManager.HeadingOf(Location.Rotation)
+             : 0.0f;
+diff --git a/Source/ACE.Server/Vehicles/Deployables/DeployableManager.cs b/Source/ACE.Server/Vehicles/Deployables/DeployableManager.cs
+index 5b0c5cc2..25afd08d 100644
+--- a/Source/ACE.Server/Vehicles/Deployables/DeployableManager.cs
++++ b/Source/ACE.Server/Vehicles/Deployables/DeployableManager.cs
+@@ -76,7 +76,7 @@ public static IReadOnlyList<MicroGrid> GetAllGrids()
+             foreach (var d in _deployables.Values.OfType<T>())
+             {
+                 if (d.IsPacked || !d.IsActive) continue;
+-                float distSq = Vector3.DistanceSquared(pos, d.Position);
++                float distSq = Vector3.DistanceSquared(pos, d.GlobalPosition);
+                 if (distSq < bestDistSq)
+                 {
+                     bestDistSq = distSq;
+@@ -230,7 +230,7 @@ public static DeployableBase SpawnDeployable(uint wcid, Position location, Playe
+                 {
+                     foreach (var g in _grids)
+                     {
+-                        if (g.Contains(deployable.Position))
++                        if (g.Contains(deployable.GlobalPosition))
+                         {
+                             g.Register(deployable);
+                             break;
+@@ -287,14 +287,14 @@ public static void Tick(double elapsedSeconds)
+                     deployable.Pallet != PalletSize.None &&
+                     !deployable.IsStowed)
+                 {
+-                    if (deployable.Grid == null || !deployable.Grid.Contains(deployable.Position))
++                    if (deployable.Grid == null || !deployable.Grid.Contains(deployable.GlobalPosition))
+                     {
+                         if (deployable.Grid != null)
+                             deployable.Grid.Unregister(deployable);
+ 
+                         foreach (var g in activeGrids)
+                         {
+-                            if (g.Contains(deployable.Position))
++                            if (g.Contains(deployable.GlobalPosition))
+                             {
+                                 g.Register(deployable);
+                                 break;
+diff --git a/Source/ACE.Server/Vehicles/Deployables/FluxPodDeployable.cs b/Source/ACE.Server/Vehicles/Deployables/FluxPodDeployable.cs
+index cc19904a..90692cee 100644
+--- a/Source/ACE.Server/Vehicles/Deployables/FluxPodDeployable.cs
++++ b/Source/ACE.Server/Vehicles/Deployables/FluxPodDeployable.cs
+@@ -36,7 +36,7 @@ public override bool EnterWorld()
+             var result = base.EnterWorld();
+             if (result && Grid != null)
+             {
+-                Grid.Center = Position;
++                Grid.Center = GlobalPosition;
+                 DeployableManager.RegisterGrid(Grid);
+             }
+             return result;
+@@ -61,7 +61,7 @@ public override void Tick(double elapsedSeconds)
+             }
+             if (Grid != null)
+             {
+-                Grid.Center = Position;
++                Grid.Center = GlobalPosition;
+                 PowerWatts = Grid.NetPowerBalanceWatts();
+             }
+         }
+diff --git a/Source/ACE.Server/Vehicles/Deployables/GroundRadarDeployable.cs b/Source/ACE.Server/Vehicles/Deployables/GroundRadarDeployable.cs
+index a4f41ffb..3bb30c0c 100644
+--- a/Source/ACE.Server/Vehicles/Deployables/GroundRadarDeployable.cs
++++ b/Source/ACE.Server/Vehicles/Deployables/GroundRadarDeployable.cs
+@@ -48,7 +48,7 @@ public static Weenie BuildWeenie(Vehicle parentVehicle = null, Player deployer =
+         public override void Tick(double elapsedSeconds)
+         {
+             base.Tick(elapsedSeconds);
+-            if (IsPacked || !IsActive) return;
++            if (IsPacked || !IsActive || IsStowed) return;
+ 
+             SweepAngleDeg = (SweepAngleDeg + DegreesPerSecond * (float)elapsedSeconds) % 360.0f;
+             YawRad = (float)(SweepAngleDeg * Math.PI / 180.0);
+@@ -65,13 +65,14 @@ private void ScanContacts()
+         {
+             if (Location == null) return;
+             var contacts = new List<GroundContactWire>();
+-            var center = Position;
++            var center = GlobalPosition;
+ 
+             // 1. Scan online outdoor players
+             foreach (var p in PlayerManager.GetAllOnline())
+             {
+                 if (p == null || p.Location == null || p.Guid.Full == DeployerPlayerGuid) continue;
+-                var pPos = new Vector3((float)p.Location.Pos.X, (float)p.Location.Pos.Y, (float)p.Location.Pos.Z);
++                var (px, py, pz) = Vehicle.ToGlobal(p.Location);
++                var pPos = new Vector3((float)px, (float)py, (float)pz);
+                 float dist = Vector3.Distance(center, pPos);
+                 if (dist <= MaxRangeM)
+                 {
+@@ -192,7 +193,7 @@ public bool FindNearestGroundContact(out uint targetGuid, out Vector3 targetPos,
+                     {
+                         bestDistSq = distSq;
+                         targetGuid = c.TargetGuid;
+-                        targetPos = Position + new Vector3(c.DxM, c.DyM, c.DzM);
++                        targetPos = GlobalPosition + new Vector3(c.DxM, c.DyM, c.DzM);
+                         float speed = c.SpeedMpsU8;
+                         float headingRad = (float)(c.HeadingU8 / 255.0 * 2.0 * Math.PI);
+                         targetVel = new Vector3((float)Math.Sin(headingRad) * speed, (float)Math.Cos(headingRad) * speed, 0f);
+diff --git a/Source/ACE.Server/Vehicles/Deployables/LaserTurretDeployable.cs b/Source/ACE.Server/Vehicles/Deployables/LaserTurretDeployable.cs
+index 6f4196b7..63bb36a3 100644
+--- a/Source/ACE.Server/Vehicles/Deployables/LaserTurretDeployable.cs
++++ b/Source/ACE.Server/Vehicles/Deployables/LaserTurretDeployable.cs
+@@ -45,15 +45,16 @@ public static Weenie BuildWeenie(Vehicle parentVehicle = null, Player deployer =
+         public bool TryFire(uint targetGuid, Vector3 targetPos)
+         {
+             if (Location == null) return false;
+-            float range = Vector3.Distance(Position, targetPos);
++            float range = Vector3.Distance(GlobalPosition, targetPos);
+             if (range > MaxRangeM) return false;
+ 
+             // Must have connected MicroGrid with at least 120 kJ stored energy
+             if (Grid == null || !Grid.TryDischargeEnergy(EnergyCostJoules))
+                 return false;
+ 
+-            var muzzlePos = Position + new Vector3(0f, 0f, 0.7f);
+-            var dir = targetPos - muzzlePos;
++            var muzzleLocal = Position + new Vector3(0f, 0f, 0.7f);
++            var muzzleGlobal = GlobalPosition + new Vector3(0f, 0f, 0.7f);
++            var dir = targetPos - muzzleGlobal;
+             var normDir = dir.LengthSquared() > 0.001f ? Vector3.Normalize(dir) : Vector3.UnitY;
+ 
+             YawRad = (float)Math.Atan2(normDir.X, normDir.Y);
+@@ -66,7 +67,7 @@ public bool TryFire(uint targetGuid, Vector3 targetPos)
+                 Step = 0,
+                 TargetGuid = targetGuid,
+                 Cell = Location != null ? Location.Cell : 0,
+-                Muzzle = muzzlePos,
++                Muzzle = muzzleLocal,
+                 TargetPos = targetPos,
+                 Velocity = normDir * 299792458.0f, // Instant hitscan
+                 EnergyJoules = EnergyCostJoules,
+@@ -74,7 +75,7 @@ public bool TryFire(uint targetGuid, Vector3 targetPos)
+             };
+ 
+             var deployer = DeployerPlayerGuid != 0 ? PlayerManager.GetOnlinePlayer(DeployerPlayerGuid) : null;
+-            VehicleManager.BroadcastNear(Location, 1500.0f, deployer, () => msg);
++            VehicleManager.BroadcastNear(Location, 2000.0f, deployer, () => msg);
+             BroadcastState();
+             return true;
+         }
+@@ -82,7 +83,7 @@ public bool TryFire(uint targetGuid, Vector3 targetPos)
+         public override void Tick(double elapsedSeconds)
+         {
+             base.Tick(elapsedSeconds);
+-            if (IsPacked || !IsActive) return;
++            if (IsPacked || !IsActive || IsStowed) return;
+ 
+             if (_fireCooldownS > 0.0)
+             {
+@@ -91,7 +92,7 @@ public override void Tick(double elapsedSeconds)
+             }
+ 
+             // Dual sensor cueing: Air radar first, then Ground radar
+-            var airHostile = AirDefenseRegistry.FindNearestHostile(Position, MaxRangeM);
++            var airHostile = AirDefenseRegistry.FindNearestHostile(GlobalPosition, MaxRangeM);
+             if (airHostile.HasValue)
+             {
+                 if (TryFire(airHostile.Value.VehicleGuid, airHostile.Value.WorldPos))
+@@ -105,11 +106,11 @@ public override void Tick(double elapsedSeconds)
+             GroundRadarDeployable groundRadar = null;
+             if (Grid != null)
+             {
+-                groundRadar = Grid.Units.OfType<GroundRadarDeployable>().FirstOrDefault(r => !r.IsPacked && r.IsActive);
++                groundRadar = Grid.Units.OfType<GroundRadarDeployable>().FirstOrDefault(r => !r.IsPacked && r.IsActive && !r.IsStowed);
+             }
+             if (groundRadar == null)
+             {
+-                groundRadar = DeployableManager.FindNearby<GroundRadarDeployable>(Position, MaxRangeM);
++                groundRadar = DeployableManager.FindNearby<GroundRadarDeployable>(GlobalPosition, MaxRangeM);
+             }
+ 
+             if (groundRadar != null && groundRadar.FindNearestGroundContact(out var targetGuid, out var targetPos, out _, MaxRangeM))
+diff --git a/Source/ACE.Server/Vehicles/Deployables/MicroGrid.cs b/Source/ACE.Server/Vehicles/Deployables/MicroGrid.cs
+index 2ae4472e..e6d0ba12 100644
+--- a/Source/ACE.Server/Vehicles/Deployables/MicroGrid.cs
++++ b/Source/ACE.Server/Vehicles/Deployables/MicroGrid.cs
+@@ -32,7 +32,7 @@ public IReadOnlyList<DeployableBase> Units
+         public MicroGrid(FluxPodDeployable pod)
+         {
+             Pod = pod;
+-            Center = pod != null ? pod.Position : Vector3.Zero;
++            Center = pod != null ? pod.GlobalPosition : Vector3.Zero;
+         }
+ 
+         public MicroGrid(Vector3 center)
+@@ -117,7 +117,7 @@ public void Tick(float deltaSeconds)
+         {
+             bool podActive = Pod == null || (!Pod.IsPacked && Pod.IsActive && !Pod.IsStowed);
+             if (podActive && Pod != null && Pod.Location != null)
+-                Center = Pod.Position;
++                Center = Pod.GlobalPosition;
+ 
+             float netWatts = NetPowerBalanceWatts();
+             float netJoules = netWatts * deltaSeconds;
+diff --git a/Source/ACE.Server/Vehicles/Deployables/MissileTurretDeployable.cs b/Source/ACE.Server/Vehicles/Deployables/MissileTurretDeployable.cs
+index 4028680a..ee152611 100644
+--- a/Source/ACE.Server/Vehicles/Deployables/MissileTurretDeployable.cs
++++ b/Source/ACE.Server/Vehicles/Deployables/MissileTurretDeployable.cs
+@@ -63,7 +63,7 @@ public static Weenie BuildWeenie(Vehicle parentVehicle = null, Player deployer =
+ 
+         public void CueTarget(Vector3 targetPos)
+         {
+-            var dir = targetPos - Position;
++            var dir = targetPos - GlobalPosition;
+             if (dir.LengthSquared() > 0.001f)
+             {
+                 dir = Vector3.Normalize(dir);
+@@ -86,8 +86,9 @@ public bool FireSalvo(uint targetGuid, Vector3 targetPos)
+             AmmoRemaining = 0;
+             ReloadTimerS = ReloadDurationS;
+ 
+-            var muzzlePos = Position + new Vector3(0f, 0f, ElevationM + 0.5f);
+-            var dir = targetPos - muzzlePos;
++            var muzzleLocal = Position + new Vector3(0f, 0f, ElevationM + 0.5f);
++            var muzzleGlobal = GlobalPosition + new Vector3(0f, 0f, ElevationM + 0.5f);
++            var dir = targetPos - muzzleGlobal;
+             var vel = dir.LengthSquared() > 0.001f ? Vector3.Normalize(dir) * 250.0f : Vector3.UnitY * 250.0f;
+ 
+             var msg = new VehicleDeployableFireMsg
+@@ -97,7 +98,7 @@ public bool FireSalvo(uint targetGuid, Vector3 targetPos)
+                 Step = 0,
+                 TargetGuid = targetGuid,
+                 Cell = Location != null ? Location.Cell : 0,
+-                Muzzle = muzzlePos,
++                Muzzle = muzzleLocal,
+                 TargetPos = targetPos,
+                 Velocity = vel,
+                 EnergyJoules = 0f,
+@@ -113,7 +114,7 @@ public bool FireSalvo(uint targetGuid, Vector3 targetPos)
+         public override void Tick(double elapsedSeconds)
+         {
+             base.Tick(elapsedSeconds);
+-            if (IsPacked || !IsActive) return;
++            if (IsPacked || !IsActive || IsStowed) return;
+ 
+             if (ReloadTimerS > 0.0f)
+             {
+@@ -126,7 +127,7 @@ public override void Tick(double elapsedSeconds)
+             }
+ 
+             // Autonomous cueing via AirDefenseRegistry
+-            var hostile = AirDefenseRegistry.FindNearestHostile(Position, 32187.0f);
++            var hostile = AirDefenseRegistry.FindNearestHostile(GlobalPosition, 32187.0f);
+             if (hostile.HasValue)
+             {
+                 AdvanceRise((float)elapsedSeconds);
+diff --git a/Source/ACE.Server/Vehicles/Deployables/MortarTurretDeployable.cs b/Source/ACE.Server/Vehicles/Deployables/MortarTurretDeployable.cs
+index 4e8c9ba6..115c9bb2 100644
+--- a/Source/ACE.Server/Vehicles/Deployables/MortarTurretDeployable.cs
++++ b/Source/ACE.Server/Vehicles/Deployables/MortarTurretDeployable.cs
+@@ -49,11 +49,12 @@ public Vector3 ComputeAimPoint(Vector3 currentPos, Vector3 velocity, float timeO
+         public bool FireMortar(uint targetGuid, Vector3 targetPos, Vector3 velocity)
+         {
+             if (Location == null) return false;
+-            var muzzlePos = Position + new Vector3(0f, 0f, 0.8f);
++            var muzzleLocal = Position + new Vector3(0f, 0f, 0.8f);
++            var muzzleGlobal = GlobalPosition + new Vector3(0f, 0f, 0.8f);
+             var tof = 3.0f; // nominal time of flight
+             var aimPoint = ComputeAimPoint(targetPos, velocity, tof);
+ 
+-            var dir = aimPoint - muzzlePos;
++            var dir = aimPoint - muzzleGlobal;
+             if (dir.LengthSquared() > 0.001f)
+             {
+                 var norm = Vector3.Normalize(dir);
+@@ -75,7 +76,7 @@ public bool FireMortar(uint targetGuid, Vector3 targetPos, Vector3 velocity)
+                 Step = 0,
+                 TargetGuid = targetGuid,
+                 Cell = Location != null ? Location.Cell : 0,
+-                Muzzle = muzzlePos,
++                Muzzle = muzzleLocal,
+                 TargetPos = aimPoint,
+                 Velocity = launchVel,
+                 EnergyJoules = 0f,
+@@ -91,7 +92,7 @@ public bool FireMortar(uint targetGuid, Vector3 targetPos, Vector3 velocity)
+         public override void Tick(double elapsedSeconds)
+         {
+             base.Tick(elapsedSeconds);
+-            if (IsPacked || !IsActive) return;
++            if (IsPacked || !IsActive || IsStowed) return;
+ 
+             if (_fireCooldownS > 0.0)
+             {
+@@ -103,11 +104,11 @@ public override void Tick(double elapsedSeconds)
+             GroundRadarDeployable radar = null;
+             if (Grid != null)
+             {
+-                radar = Grid.Units.OfType<GroundRadarDeployable>().FirstOrDefault(r => !r.IsPacked && r.IsActive);
++                radar = Grid.Units.OfType<GroundRadarDeployable>().FirstOrDefault(r => !r.IsPacked && r.IsActive && !r.IsStowed);
+             }
+             if (radar == null)
+             {
+-                radar = DeployableManager.FindNearby<GroundRadarDeployable>(Position, 600.0f);
++                radar = DeployableManager.FindNearby<GroundRadarDeployable>(GlobalPosition, 600.0f);
+             }
+ 
+             if (radar != null && radar.FindNearestGroundContact(out var targetGuid, out var targetPos, out var targetVel, 500.0f))
+diff --git a/Source/ACE.Server/Vehicles/Deployables/PalletJackDeployable.cs b/Source/ACE.Server/Vehicles/Deployables/PalletJackDeployable.cs
+index ba55a884..f043fdbb 100644
+--- a/Source/ACE.Server/Vehicles/Deployables/PalletJackDeployable.cs
++++ b/Source/ACE.Server/Vehicles/Deployables/PalletJackDeployable.cs
+@@ -47,7 +47,7 @@ public float HeadingRad
+             private set { _headingRad = GroundModel.WrapHeading(value); _hasPose = true; YawRad = (float)_headingRad; }
+         }
+ 
+-        public Vector3 GlobalPosition
++        public override Vector3 GlobalPosition
+         {
+             get
+             {
+-- 
+2.43.0
+

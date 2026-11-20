@@ -296,7 +296,19 @@ export function installVehicles(deps = {}) {
     liveScene3d: live, THREE, ground,
     onExplode: (at, lb) => { try { vehicleAudio?.explosion({ pos: at, lb, listenerPos: listenerAcPos() }); } catch (_) {} },
   });
-  const deployableVfx = THREE ? createDeployableCombatVfx({ liveScene3d: live, THREE, ground }) : null;
+  const deployableVfx = THREE ? createDeployableCombatVfx({
+    liveScene3d: live,
+    THREE,
+    ground,
+    getTargetPos: (guid) => {
+      const v = vehicles.get(guid >>> 0);
+      if (!v) return null;
+      const p = v.airframe?.root?.position || v.jeepModel?.root?.position || v.semiModel?.root?.position || v.standIn?.position;
+      if (p) return [p.x, p.y, p.z];
+      if (v.last && v.last.cell) return FM.toGlobal(v.last.cell, v.last.x, v.last.y, v.last.z);
+      return null;
+    },
+  }) : null;
   const deployableAudio = audioOn ? new DeployableAudioManager(live.audioManager?.getEffectBus?.() ?? null, { enabled: true }) : null;
   const logisticsAudio = audioOn
     ? createLogisticsAudio({
