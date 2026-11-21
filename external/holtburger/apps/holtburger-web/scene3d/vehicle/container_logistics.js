@@ -1,14 +1,21 @@
 /**
  * Pure deterministic ISO 668 / ISO 6780 / ISO 3691-5 container interior LIFO
- * pinwheel solver & GMA pallet-jack alignment assist.
+ * 2-wide grid solver & pallet-jack alignment assist.
  *
  * 1:1 parity twin of ACE `ContainerLogistics.cs`.
  * Zero external, DOM, Three.js, or `container_models.js` imports.
  */
 
+const UNIFIED_PALLET_DIMS = Object.freeze({ width: 1.100, depth: 1.100, height: 0.145 });
+
+export const PALLET_SPECS = Object.freeze({
+  standard: UNIFIED_PALLET_DIMS,
+  full: UNIFIED_PALLET_DIMS,
+});
+
 export const GMA_PALLET_SPECS = Object.freeze({
-  full: Object.freeze({ width: 1.2192, depth: 1.0160, height: 0.1397 }),
-  half: Object.freeze({ width: 0.6096, depth: 1.0160, height: 0.1397 }),
+  standard: UNIFIED_PALLET_DIMS,
+  full: UNIFIED_PALLET_DIMS,
 });
 
 export const PALLET_JACK_SPECS = Object.freeze({
@@ -24,7 +31,7 @@ export const PALLET_JACK_SPECS = Object.freeze({
   assistMaxYawRad: (28.0 * Math.PI) / 180.0,
 });
 
-export const HALF_PALLET_WCIDS = new Set([4000013, 4000015, 4000016, 4000017]);
+export const HALF_PALLET_WCIDS = Object.freeze(new Set());
 
 const SPEC_20FT = Object.freeze({
   kind: 10,
@@ -34,7 +41,7 @@ const SPEC_20FT = Object.freeze({
   halfL: 2.949,
   floorZ: 0.162,
   maxFull: 10,
-  maxHalf: 20,
+  maxHalf: 10,
 });
 
 const SPEC_40FT = Object.freeze({
@@ -44,8 +51,8 @@ const SPEC_40FT = Object.freeze({
   halfW: 1.176,
   halfL: 6.016,
   floorZ: 0.162,
-  maxFull: 21,
-  maxHalf: 42,
+  maxFull: 20,
+  maxHalf: 20,
 });
 
 const SPEC_40HC = Object.freeze({
@@ -55,8 +62,8 @@ const SPEC_40HC = Object.freeze({
   halfW: 1.176,
   halfL: 6.016,
   floorZ: 0.162,
-  maxFull: 21,
-  maxHalf: 42,
+  maxFull: 20,
+  maxHalf: 20,
 });
 
 export const CONTAINER_INTERIOR_SPECS = Object.freeze({
@@ -71,42 +78,34 @@ export const CONTAINER_INTERIOR_SPECS = Object.freeze({
   4000022: SPEC_40HC,
 });
 
-// Frozen copy of 20-ft Pinwheel Bay Floor Layout (10 Full GMA Slots)
-export const PINWHEEL_SLOTS_20 = Object.freeze([
-  Object.freeze({ slotIndex: 0, x: -0.5080, y: +2.3889, orient: "X", dx: 1.2192, dy: 1.0160 }),
-  Object.freeze({ slotIndex: 1, x: +0.6096, y: +2.2873, orient: "Y", dx: 1.0160, dy: 1.2192 }),
-  Object.freeze({ slotIndex: 2, x: +0.5080, y: +1.1697, orient: "X", dx: 1.2192, dy: 1.0160 }),
-  Object.freeze({ slotIndex: 3, x: -0.6096, y: +1.2713, orient: "Y", dx: 1.0160, dy: 1.2192 }),
-  Object.freeze({ slotIndex: 4, x: -0.5080, y: +0.1016, orient: "X", dx: 1.2192, dy: 1.0160 }),
-  Object.freeze({ slotIndex: 5, x: +0.6096, y: -0.0000, orient: "Y", dx: 1.0160, dy: 1.2192 }),
-  Object.freeze({ slotIndex: 6, x: +0.5080, y: -1.1176, orient: "X", dx: 1.2192, dy: 1.0160 }),
-  Object.freeze({ slotIndex: 7, x: -0.6096, y: -1.0160, orient: "Y", dx: 1.0160, dy: 1.2192 }),
-  Object.freeze({ slotIndex: 8, x: -0.5080, y: -2.2873, orient: "Y", dx: 1.0160, dy: 1.2192 }),
-  Object.freeze({ slotIndex: 9, x: +0.5080, y: -2.2873, orient: "Y", dx: 1.0160, dy: 1.2192 }),
-]);
-
-// Frozen copy of 40-ft / 40HC Pinwheel Bay Floor Layout (21 Full GMA Slots)
-export const PINWHEEL_SLOTS_40 = Object.freeze((() => {
+// 20-ft 2-Wide Grid Bay Floor Layout (2 x 5 = 10 Unified 1.100 x 1.100 m Slots)
+export const CONTAINER_SLOTS_20 = Object.freeze((() => {
+  const rows = [+2.320, +1.160, 0.000, -1.160, -2.320];
   const slots = [];
-  const quadCenters = [+4.8768, +2.6416, +0.4064, -1.8288];
-  for (let q = 0; q < quadCenters.length; q++) {
-    const yc = quadCenters[q];
+  for (let r = 0; r < rows.length; r++) {
     slots.push(
-      Object.freeze({ slotIndex: 4 * q + 0, x: -0.5080, y: yc + 0.6096, orient: "X", dx: 1.2192, dy: 1.0160 }),
-      Object.freeze({ slotIndex: 4 * q + 1, x: +0.6096, y: yc + 0.5080, orient: "Y", dx: 1.0160, dy: 1.2192 }),
-      Object.freeze({ slotIndex: 4 * q + 2, x: +0.5080, y: yc - 0.6096, orient: "X", dx: 1.2192, dy: 1.0160 }),
-      Object.freeze({ slotIndex: 4 * q + 3, x: -0.6096, y: yc - 0.5080, orient: "Y", dx: 1.0160, dy: 1.2192 })
+      Object.freeze({ slotIndex: r * 2 + 0, x: -0.575, y: rows[r], orient: "Y", dx: 1.100, dy: 1.100 }),
+      Object.freeze({ slotIndex: r * 2 + 1, x: +0.575, y: rows[r], orient: "Y", dx: 1.100, dy: 1.100 })
     );
   }
-  slots.push(
-    Object.freeze({ slotIndex: 16, x: -0.5368, y: -3.4544, orient: "X", dx: 1.2192, dy: 1.0160 }),
-    Object.freeze({ slotIndex: 17, x: -0.5368, y: -4.4704, orient: "X", dx: 1.2192, dy: 1.0160 }),
-    Object.freeze({ slotIndex: 18, x: -0.5368, y: -5.4864, orient: "X", dx: 1.2192, dy: 1.0160 }),
-    Object.freeze({ slotIndex: 19, x: +0.6384, y: -3.5560, orient: "Y", dx: 1.0160, dy: 1.2192 }),
-    Object.freeze({ slotIndex: 20, x: +0.6384, y: -4.7752, orient: "Y", dx: 1.0160, dy: 1.2192 })
-  );
-  return Object.freeze(slots);
+  return slots;
 })());
+
+// 40-ft / 40HC 2-Wide Grid Bay Floor Layout (2 x 10 = 20 Unified 1.100 x 1.100 m Slots)
+export const CONTAINER_SLOTS_40 = Object.freeze((() => {
+  const slots = [];
+  for (let r = 0; r < 10; r++) {
+    const y = (4.5 - r) * 1.180;
+    slots.push(
+      Object.freeze({ slotIndex: r * 2 + 0, x: -0.575, y, orient: "Y", dx: 1.100, dy: 1.100 }),
+      Object.freeze({ slotIndex: r * 2 + 1, x: +0.575, y, orient: "Y", dx: 1.100, dy: 1.100 })
+    );
+  }
+  return slots;
+})());
+
+export const PINWHEEL_SLOTS_20 = CONTAINER_SLOTS_20;
+export const PINWHEEL_SLOTS_40 = CONTAINER_SLOTS_40;
 
 const EPS = 1e-4;
 const TAU = Math.PI * 2.0;
@@ -164,73 +163,32 @@ export function resolveContainerLogisticsSpec(containerKind) {
   return null;
 }
 
-function isHalfPalletSize(palletSize, cargoWcid = 0) {
-  if (palletSize === "half" || palletSize === "Half" || palletSize === 1) {
-    return true;
-  }
-  if (palletSize === "full" || palletSize === "Full" || palletSize === 2) {
-    return false;
-  }
-  if (typeof cargoWcid === "number" && HALF_PALLET_WCIDS.has(Math.trunc(cargoWcid))) {
-    return true;
-  }
-  return false;
+function isUnifiedFullPalletSize(palletSize) {
+  return (
+    palletSize === "full" ||
+    palletSize === "Full" ||
+    palletSize === "standard" ||
+    palletSize === "Standard" ||
+    palletSize === 2
+  );
 }
 
-export function getSlotSubBox(slotDef, palletSize = "full", subSlot = 0) {
-  const half = isHalfPalletSize(palletSize, 0);
-  if (!half) {
-    const hx = slotDef.dx * 0.5;
-    const hy = slotDef.dy * 0.5;
-    return {
-      slotIndex: slotDef.slotIndex,
-      subSlot: 0,
-      palletSize: "full",
-      x: slotDef.x,
-      y: slotDef.y,
-      dx: slotDef.dx,
-      dy: slotDef.dy,
-      orient: slotDef.orient,
-      x0: slotDef.x - hx,
-      x1: slotDef.x + hx,
-      y0: slotDef.y - hy,
-      y1: slotDef.y + hy,
-    };
-  }
-
-  const sub = Math.trunc(subSlot) === 1 ? 1 : 0;
-  const off = sub === 1 ? 0.3048 : -0.3048;
-  let cx;
-  let cy;
-  let dx;
-  let dy;
-  if (slotDef.orient === "Y") {
-    // slotGroup.rotation.z = +pi/2 maps local (off, 0) -> (0, off)
-    cx = slotDef.x;
-    cy = slotDef.y + off;
-    dx = GMA_PALLET_SPECS.half.depth; // 1.0160
-    dy = GMA_PALLET_SPECS.half.width; // 0.6096
-  } else {
-    cx = slotDef.x + off;
-    cy = slotDef.y;
-    dx = GMA_PALLET_SPECS.half.width; // 0.6096
-    dy = GMA_PALLET_SPECS.half.depth; // 1.0160
-  }
-  const hx = dx * 0.5;
-  const hy = dy * 0.5;
+export function getSlotSubBox(slotDef, _palletSize = "full", _subSlot = 0) {
+  const hx = slotDef.dx * 0.5;
+  const hy = slotDef.dy * 0.5;
   return {
     slotIndex: slotDef.slotIndex,
-    subSlot: sub,
-    palletSize: "half",
-    x: cx,
-    y: cy,
-    dx,
-    dy,
+    subSlot: 0,
+    palletSize: "full",
+    x: slotDef.x,
+    y: slotDef.y,
+    dx: slotDef.dx,
+    dy: slotDef.dy,
     orient: slotDef.orient,
-    x0: cx - hx,
-    x1: cx + hx,
-    y0: cy - hy,
-    y1: cy + hy,
+    x0: slotDef.x - hx,
+    x1: slotDef.x + hx,
+    y0: slotDef.y - hy,
+    y1: slotDef.y + hy,
   };
 }
 
@@ -253,19 +211,16 @@ function normalizeOccupiedBoxes(slots, occupiedSlots) {
     if (slotIndex < 0 || slotIndex >= slots.length) {
       continue;
     }
-    const cargoWcid = raw.cargoWcid ?? raw.CargoWcid ?? raw.wcid ?? 0;
     const rawSize = raw.palletSize ?? raw.PalletSize;
     if (rawSize === 0 || rawSize === "none" || rawSize === "None") {
       continue;
     }
-    const half = isHalfPalletSize(rawSize, cargoWcid);
-    const subSlot = half ? ((Math.trunc(raw.subSlot ?? raw.SubSlot ?? 0) === 1) ? 1 : 0) : 0;
-    const key = `${slotIndex}:${half ? subSlot : "F"}`;
-    if (seen.has(key)) {
+    if (seen.has(slotIndex)) {
       continue;
     }
-    seen.add(key);
-    const box = getSlotSubBox(slots[slotIndex], half ? "half" : "full", subSlot);
+    seen.add(slotIndex);
+    const cargoWcid = raw.cargoWcid ?? raw.CargoWcid ?? raw.wcid ?? 0;
+    const box = getSlotSubBox(slots[slotIndex], "full", 0);
     box.cargoWcid = typeof cargoWcid === "number" && Number.isFinite(cargoWcid) ? Math.trunc(cargoWcid) : 0;
     boxes.push(box);
   }
@@ -395,54 +350,24 @@ export function computeReachableUnloadSlots(containerKind, occupiedSlots) {
   return { reachable, blocked, all };
 }
 
-function buildOccupancyIndex(occupied) {
-  const fullSet = new Set();
-  const halfMap = new Map();
-  for (let i = 0; i < occupied.length; i++) {
-    const o = occupied[i];
-    if (o.palletSize === "full") {
-      fullSet.add(o.slotIndex);
-    } else {
-      let subs = halfMap.get(o.slotIndex);
-      if (!subs) {
-        subs = new Set();
-        halfMap.set(o.slotIndex, subs);
-      }
-      subs.add(o.subSlot);
-    }
-  }
-  return { fullSet, halfMap };
-}
-
 export function computeReachableLoadSlots(containerKind, occupiedSlots, palletSize = "full") {
   const spec = resolveContainerLogisticsSpec(containerKind);
-  if (!spec) {
+  if (!spec || !isUnifiedFullPalletSize(palletSize)) {
     return { reachable: [], blocked: [], all: [] };
   }
   const occupied = normalizeOccupiedBoxes(spec.slots, occupiedSlots);
-  const { fullSet, halfMap } = buildOccupancyIndex(occupied);
-  const wantHalf = isHalfPalletSize(palletSize, 0);
+  const occupiedSet = new Set();
+  for (let i = 0; i < occupied.length; i++) {
+    occupiedSet.add(occupied[i].slotIndex);
+  }
 
   const candidates = [];
   for (let i = 0; i < spec.slots.length; i++) {
     const slotDef = spec.slots[i];
-    if (fullSet.has(slotDef.slotIndex)) {
+    if (occupiedSet.has(slotDef.slotIndex)) {
       continue;
     }
-    const subs = halfMap.get(slotDef.slotIndex);
-    if (!wantHalf) {
-      if (subs && subs.size > 0) {
-        continue;
-      }
-      candidates.push(getSlotSubBox(slotDef, "full", 0));
-    } else {
-      for (let sub = 0; sub <= 1; sub++) {
-        if (subs && subs.has(sub)) {
-          continue;
-        }
-        candidates.push(getSlotSubBox(slotDef, "half", sub));
-      }
-    }
+    candidates.push(getSlotSubBox(slotDef, "full", 0));
   }
 
   const all = [];
@@ -487,34 +412,18 @@ export function isSlotReachableForUnload(containerKind, occupiedSlots, slotIndex
   if (!spec) {
     return { reachable: false, blockedBySlotIndex: null, blockedBySubSlot: null, blockedBy: [], reason: "invalid_container" };
   }
-  if (typeof slotIndex !== "number" || !Number.isFinite(slotIndex)) {
+  if (!Number.isInteger(slotIndex)) {
     return { reachable: false, blockedBySlotIndex: null, blockedBySubSlot: null, blockedBy: [], reason: "invalid_slot" };
   }
-  const idx = Math.trunc(slotIndex);
+  const idx = slotIndex;
   if (idx < 0 || idx >= spec.slots.length) {
     return { reachable: false, blockedBySlotIndex: null, blockedBySubSlot: null, blockedBy: [], reason: "invalid_slot" };
   }
-  if (typeof subSlot !== "number" || !Number.isFinite(subSlot)) {
-    return { reachable: false, blockedBySlotIndex: null, blockedBySubSlot: null, blockedBy: [], reason: "invalid_subslot" };
-  }
-  const rawSub = Math.trunc(subSlot);
-  if (rawSub < 0 || rawSub > 1) {
+  if (!Number.isInteger(subSlot) || subSlot !== 0) {
     return { reachable: false, blockedBySlotIndex: null, blockedBySubSlot: null, blockedBy: [], reason: "invalid_subslot" };
   }
   const occupied = normalizeOccupiedBoxes(spec.slots, occupiedSlots);
-  const slotMatches = occupied.filter((o) => o.slotIndex === idx);
-  const fullTarget = slotMatches.find((o) => o.palletSize === "full");
-  if (fullTarget) {
-    if (rawSub !== 0) {
-      return { reachable: false, blockedBySlotIndex: null, blockedBySubSlot: null, blockedBy: [], reason: "invalid_subslot" };
-    }
-    const res = evaluateCorridorFromDoor(fullTarget, occupied, spec.interior.halfW);
-    return {
-      ...res,
-      reason: res.reachable ? null : "blocked",
-    };
-  }
-  const target = slotMatches.find((o) => o.subSlot === rawSub);
+  const target = occupied.find((o) => o.slotIndex === idx);
   if (!target) {
     return { reachable: false, blockedBySlotIndex: null, blockedBySubSlot: null, blockedBy: [], reason: "slot_empty" };
   }
@@ -536,49 +445,31 @@ export function isSlotReachableForLoad(
   if (!spec) {
     return { reachable: false, blockedBySlotIndex: null, blockedBySubSlot: null, blockedBy: [], reason: "invalid_container" };
   }
-  if (typeof slotIndex !== "number" || !Number.isFinite(slotIndex)) {
+  if (!Number.isInteger(slotIndex)) {
     return { reachable: false, blockedBySlotIndex: null, blockedBySubSlot: null, blockedBy: [], reason: "invalid_slot" };
   }
-  const idx = Math.trunc(slotIndex);
+  const idx = slotIndex;
   if (idx < 0 || idx >= spec.slots.length) {
     return { reachable: false, blockedBySlotIndex: null, blockedBySubSlot: null, blockedBy: [], reason: "invalid_slot" };
   }
-  if (typeof subSlot !== "number" || !Number.isFinite(subSlot)) {
+  if (!Number.isInteger(subSlot) || subSlot !== 0) {
     return { reachable: false, blockedBySlotIndex: null, blockedBySubSlot: null, blockedBy: [], reason: "invalid_subslot" };
   }
-  const rawSub = Math.trunc(subSlot);
-  if (rawSub < 0 || rawSub > 1) {
-    return { reachable: false, blockedBySlotIndex: null, blockedBySubSlot: null, blockedBy: [], reason: "invalid_subslot" };
-  }
-  const validPalletSize =
-    palletSize === "full" ||
-    palletSize === "Full" ||
-    palletSize === 2 ||
-    palletSize === "half" ||
-    palletSize === "Half" ||
-    palletSize === 1;
-  if (!validPalletSize) {
+  if (!isUnifiedFullPalletSize(palletSize)) {
     return { reachable: false, blockedBySlotIndex: null, blockedBySubSlot: null, blockedBy: [], reason: "invalid_pallet_size" };
   }
-  const wantHalf = isHalfPalletSize(palletSize, 0);
-  if (!wantHalf && rawSub !== 0) {
-    return { reachable: false, blockedBySlotIndex: null, blockedBySubSlot: null, blockedBy: [], reason: "invalid_subslot" };
-  }
-  const sub = wantHalf ? rawSub : 0;
   const occupied = normalizeOccupiedBoxes(spec.slots, occupiedSlots);
-  const { fullSet, halfMap } = buildOccupancyIndex(occupied);
-  if (fullSet.has(idx)) {
-    return { reachable: false, blockedBySlotIndex: idx, blockedBySubSlot: 0, blockedBy: [{ slotIndex: idx, subSlot: 0 }], reason: "slot_occupied" };
+  const existing = occupied.find((o) => o.slotIndex === idx);
+  if (existing) {
+    return {
+      reachable: false,
+      blockedBySlotIndex: idx,
+      blockedBySubSlot: 0,
+      blockedBy: [{ slotIndex: idx, subSlot: 0 }],
+      reason: "slot_occupied",
+    };
   }
-  const subs = halfMap.get(idx);
-  if (!wantHalf && subs && subs.size > 0) {
-    const firstSub = Array.from(subs).sort()[0];
-    return { reachable: false, blockedBySlotIndex: idx, blockedBySubSlot: firstSub, blockedBy: [{ slotIndex: idx, subSlot: firstSub }], reason: "slot_occupied" };
-  }
-  if (wantHalf && subs && subs.has(sub)) {
-    return { reachable: false, blockedBySlotIndex: idx, blockedBySubSlot: sub, blockedBy: [{ slotIndex: idx, subSlot: sub }], reason: "slot_occupied" };
-  }
-  const cand = getSlotSubBox(spec.slots[idx], wantHalf ? "half" : "full", sub);
+  const cand = getSlotSubBox(spec.slots[idx], "full", 0);
   const res = evaluateCorridorFromDoor(cand, occupied, spec.interior.halfW);
   return {
     ...res,

@@ -1,0 +1,2269 @@
+From 641714e5e897ac8c2fc1d371b4bccd93cfb628e9 Mon Sep 17 00:00:00 2001
+From: salvia420-bit <salvia420@gmail.com>
+Date: Fri, 20 Nov 2026 19:35:36 +0000
+Subject: [PATCH] Vehicles (holtburger fork): Unified ISO 6780 1100mm pallets &
+ 2-wide grid
+
+Unifies all 9 modular deployables (WCID 4000002, 4000010-4000017) onto a single ISO 6780 1.100 x 1.100 x 0.145 m pallet and replaces the asymmetric 10/21-slot pinwheel + half-pallet subslot layout with a clean 2-wide container grid (10 slots in 20ft [2x5], 20 slots in 40ft/40HC [2x10], x = +/-0.575m, orient = Y, independent Left/Right LIFO lanes).
+
+Retains HBV1 v7 wire compatibility (VehicleWire.Version = 7, deprecated PalletSize.Half = 1 enum retained, SubSlot normalized to 0). Updates BatteryDeployable, GroundRadarDeployable, MortarTurretDeployable, LaserTurretDeployable, ContainerLogistics, IsoContainerDeployable, PalletJackDeployable, VehicleCommands (@container preset fob20/fob40 and @trailer preset sidelifter*), and ACE.Server.Tests/Vehicles.
+
+Verified: dotnet test --filter FullyQualifiedName~Vehicles (364/364 passed).
+---
+ .../Vehicles/DeployableEcosystemTests.cs      | 119 +++---
+ .../Vehicles/IsoContainerTests.cs             | 397 +++++++-----------
+ .../Vehicles/M1QcRegressionTests.cs           |  10 +-
+ .../Vehicles/PalletJackLogisticsTests.cs      | 122 ++++--
+ .../Vehicles/SidelifterTests.cs               |   2 +-
+ .../Vehicles/Deployables/BatteryDeployable.cs |   4 +-
+ .../Deployables/ContainerLogistics.cs         | 301 +++++--------
+ .../Deployables/GroundRadarDeployable.cs      |   4 +-
+ .../Deployables/IsoContainerDeployable.cs     | 342 ++++-----------
+ .../Deployables/LaserTurretDeployable.cs      |   4 +-
+ .../Deployables/MortarTurretDeployable.cs     |   4 +-
+ .../Deployables/PalletJackDeployable.cs       |  28 +-
+ Source/ACE.Server/Vehicles/VehicleCommands.cs |  30 +-
+ Source/ACE.Server/Vehicles/VehicleWire.cs     |   1 +
+ 14 files changed, 521 insertions(+), 847 deletions(-)
+
+diff --git a/Source/ACE.Server.Tests/Vehicles/DeployableEcosystemTests.cs b/Source/ACE.Server.Tests/Vehicles/DeployableEcosystemTests.cs
+index 7018142e..b5c6779b 100644
+--- a/Source/ACE.Server.Tests/Vehicles/DeployableEcosystemTests.cs
++++ b/Source/ACE.Server.Tests/Vehicles/DeployableEcosystemTests.cs
+@@ -464,34 +464,34 @@ public bool UnloadSlot(int slot, out uint wcid)
+ 
+         public static class PalletGeometry
+         {
+-            public static readonly float FullWidthM = 1.2192f;
+-            public static readonly float FullLengthM = 1.0160f;
+-            public static readonly float FullHeightM = 0.1397f;
++            public static readonly float FullWidthM = 1.100f;
++            public static readonly float FullLengthM = 1.100f;
++            public static readonly float FullHeightM = 0.145f;
+             public static float FullDepthM => FullLengthM;
+ 
+-            public static readonly float HalfWidthM = 0.6096f;
+-            public static readonly float HalfLengthM = 1.0160f;
+-            public static readonly float HalfHeightM = 0.1397f;
++            // Half-pallet retired: unified ISO 6780 1100mm square standard
++            public static readonly float HalfWidthM = 1.100f;
++            public static readonly float HalfLengthM = 1.100f;
++            public static readonly float HalfHeightM = 0.145f;
+             public static float HalfDepthM => HalfLengthM;
+ 
+             public static readonly float HalfSlot0XOffsetM = -0.3048f;
+             public static readonly float HalfSlot1XOffsetM = +0.3048f;
+ 
+-            public static readonly float ForkPocketWidthM = 0.25f;
+-            public static readonly float ForkPocketHeightM = 0.10f;
++            public static readonly float ForkPocketWidthM = 0.300f;
++            public static readonly float ForkPocketHeightM = 0.105f;
+ 
+             public static Vector3 FullBoundingBoxMin => new Vector3(-FullWidthM / 2f, -FullLengthM / 2f, 0.0f);
+             public static Vector3 FullBoundingBoxMax => new Vector3(FullWidthM / 2f, FullLengthM / 2f, FullHeightM);
+ 
+-            public static Vector3 HalfBoundingBoxMin => new Vector3(-HalfWidthM / 2f, -HalfLengthM / 2f, 0.0f);
+-            public static Vector3 HalfBoundingBoxMax => new Vector3(HalfWidthM / 2f, HalfLengthM / 2f, HalfHeightM);
++            public static Vector3 HalfBoundingBoxMin => FullBoundingBoxMin;
++            public static Vector3 HalfBoundingBoxMax => FullBoundingBoxMax;
+ 
+             public static Vector3 ComputeSideBySideCombinedFootprint(Vector3 posSlot0, Vector3 posSlot1)
+             {
+-                float minX = Math.Min(posSlot0.X - HalfWidthM / 2f, posSlot1.X - HalfWidthM / 2f);
+-                float maxX = Math.Max(posSlot0.X + HalfWidthM / 2f, posSlot1.X + HalfWidthM / 2f);
+-                float length = Math.Max(HalfLengthM, HalfLengthM);
+-                return new Vector3(maxX - minX, length, FullHeightM);
++                float minX = Math.Min(posSlot0.X - FullWidthM / 2f, posSlot1.X - FullWidthM / 2f);
++                float maxX = Math.Max(posSlot0.X + FullWidthM / 2f, posSlot1.X + FullWidthM / 2f);
++                return new Vector3(maxX - minX, FullLengthM, FullHeightM);
+             }
+ 
+             public static Quaternion AlignToNormal(Vector3 normal)
+@@ -529,7 +529,7 @@ public void T1_1_FP_02_NetPositive_PowerDistribution()
+         {
+             var grid = new MockMicroGrid(new Vector3(1000, 2000, 100));
+             var gen = new MockDeployable(0x70000102, 4000012, DeployableKind.PowerGenerator, PalletSize.Full, new Vector3(1010, 2000, 100)) { PowerWatts = 45000f };
+-            var radar = new MockDeployable(0x70000103, 4000015, DeployableKind.GroundRadar, PalletSize.Half, new Vector3(1020, 2000, 100));
++            var radar = new MockDeployable(0x70000103, 4000015, DeployableKind.GroundRadar, PalletSize.Full, new Vector3(1020, 2000, 100));
+             grid.Units.Add(gen);
+             grid.Units.Add(radar);
+ 
+@@ -543,7 +543,7 @@ public void T1_1_FP_03_RoutingSurplusToBattery()
+         {
+             var grid = new MockMicroGrid(new Vector3(1000, 2000, 100));
+             var gen = new MockDeployable(0x70000102, 4000012, DeployableKind.PowerGenerator, PalletSize.Full, new Vector3(1005, 2000, 100)) { PowerWatts = 20000f };
+-            var bat = new MockDeployable(0x70000104, 4000013, DeployableKind.BatteryUnit, PalletSize.Half, new Vector3(1008, 2000, 100)) { CapacitorJoules = 0f };
++            var bat = new MockDeployable(0x70000104, 4000013, DeployableKind.BatteryUnit, PalletSize.Full, new Vector3(1008, 2000, 100)) { CapacitorJoules = 0f };
+             grid.Units.Add(gen);
+             grid.Units.Add(bat);
+ 
+@@ -569,7 +569,7 @@ public void T1_1_FP_05_MultipleDeployablesRegistration()
+             var grid = new MockMicroGrid(new Vector3(1000, 2000, 100));
+             for (uint i = 0; i < 5; i++)
+             {
+-                grid.Units.Add(new MockDeployable(0x70000110 + i, 4000013, DeployableKind.BatteryUnit, PalletSize.Half, new Vector3(1000 + i * 2, 2000, 100)));
++                grid.Units.Add(new MockDeployable(0x70000110 + i, 4000013, DeployableKind.BatteryUnit, PalletSize.Full, new Vector3(1000 + i * 2, 2000, 100)));
+             }
+             Assert.AreEqual(5, grid.Units.Count);
+         }
+@@ -976,55 +976,70 @@ public void T1_8_LT_05_AirAndGroundTargetEngagement()
+         }
+ 
+         // -------------------------------------------------------------------------------------------------
+-        // Feature 9: Standardized Pallets Geometry
++        // Feature 9: Standardized Pallets Geometry (Unified ISO 6780 1100mm x 1100mm x 145mm)
+         // -------------------------------------------------------------------------------------------------
+         [TestMethod]
+         public void T1_9_PA_01_FullPalletDimensions_2_40m()
+         {
+-            Assert.AreEqual(1.2192f, PalletGeometry.FullWidthM, 1e-4f);
+-            Assert.AreEqual(1.0160f, PalletGeometry.FullLengthM, 1e-4f);
+-            Assert.AreEqual(0.1397f, PalletGeometry.FullHeightM, 1e-4f);
++            Assert.AreEqual(1.100f, PalletGeometry.FullWidthM, 1e-4f);
++            Assert.AreEqual(1.100f, PalletGeometry.FullLengthM, 1e-4f);
++            Assert.AreEqual(0.145f, PalletGeometry.FullHeightM, 1e-4f);
+ 
+             var bboxSize = PalletGeometry.FullBoundingBoxMax - PalletGeometry.FullBoundingBoxMin;
+-            Assert.AreEqual(1.2192f, bboxSize.X, 1e-4f);
+-            Assert.AreEqual(1.0160f, bboxSize.Y, 1e-4f);
+-            Assert.AreEqual(0.1397f, bboxSize.Z, 1e-4f);
++            Assert.AreEqual(1.100f, bboxSize.X, 1e-4f);
++            Assert.AreEqual(1.100f, bboxSize.Y, 1e-4f);
++            Assert.AreEqual(0.145f, bboxSize.Z, 1e-4f);
+         }
+ 
+         [TestMethod]
+         public void T1_9_PA_02_HalfPalletDimensions_1_20m()
+         {
+-            Assert.AreEqual(0.6096f, PalletGeometry.HalfWidthM, 1e-4f);
+-            Assert.AreEqual(1.0160f, PalletGeometry.HalfLengthM, 1e-4f);
+-            Assert.AreEqual(0.1397f, PalletGeometry.HalfHeightM, 1e-4f);
+-
+-            var bboxSize = PalletGeometry.HalfBoundingBoxMax - PalletGeometry.HalfBoundingBoxMin;
+-            Assert.AreEqual(0.6096f, bboxSize.X, 1e-4f);
+-            Assert.AreEqual(1.0160f, bboxSize.Y, 1e-4f);
+-            Assert.AreEqual(0.1397f, bboxSize.Z, 1e-4f);
++            // Half-pallet retired: all 9 real deployables unify onto ISO 6780 Full pallets (1.100 x 1.100 x 0.145 m)
++            Assert.AreEqual(0, ContainerLogistics.HalfPalletWcids.Count);
++            Assert.AreEqual(1.100, ContainerLogistics.PalletWidth, 1e-4);
++            Assert.AreEqual(1.100, ContainerLogistics.PalletDepth, 1e-4);
++            Assert.AreEqual(0.145, ContainerLogistics.PalletHeight, 1e-4);
++
++            var flux = new FluxPodDeployable(FluxPodDeployable.BuildWeenie(), new ObjectGuid(0x75009010u));
++            var solar = new SolarPanelsDeployable(SolarPanelsDeployable.BuildWeenie(), new ObjectGuid(0x75009011u));
++            var gen = new PowerGeneratorDeployable(PowerGeneratorDeployable.BuildWeenie(), new ObjectGuid(0x75009012u));
++            var bat = new BatteryDeployable(BatteryDeployable.BuildWeenie(), new ObjectGuid(0x75009013u));
++            var sam = new MissileTurretDeployable(MissileTurretDeployable.BuildWeenie(), new ObjectGuid(0x75009014u));
++            var gradar = new GroundRadarDeployable(GroundRadarDeployable.BuildWeenie(), new ObjectGuid(0x75009015u));
++            var mortar = new MortarTurretDeployable(MortarTurretDeployable.BuildWeenie(), new ObjectGuid(0x75009016u));
++            var laser = new LaserTurretDeployable(LaserTurretDeployable.BuildWeenie(), new ObjectGuid(0x75009017u));
++
++            Assert.AreEqual(PalletSize.Full, flux.Pallet);
++            Assert.AreEqual(PalletSize.Full, solar.Pallet);
++            Assert.AreEqual(PalletSize.Full, gen.Pallet);
++            Assert.AreEqual(PalletSize.Full, bat.Pallet);
++            Assert.AreEqual(PalletSize.Full, sam.Pallet);
++            Assert.AreEqual(PalletSize.Full, gradar.Pallet);
++            Assert.AreEqual(PalletSize.Full, mortar.Pallet);
++            Assert.AreEqual(PalletSize.Full, laser.Pallet);
++            Assert.AreEqual(PalletSize.Full, IsoContainerDeployable.DeterminePalletSize(4000002u));
+         }
+ 
+         [TestMethod]
+         public void T1_9_PA_03_DualHalfPalletSideBySideFootprint()
+         {
+-            var slot0Pos = new Vector3(PalletGeometry.HalfSlot0XOffsetM, 0f, 0f);
+-            var slot1Pos = new Vector3(PalletGeometry.HalfSlot1XOffsetM, 0f, 0f);
+-            Assert.AreEqual(-0.3048f, slot0Pos.X, 1e-4f);
+-            Assert.AreEqual(+0.3048f, slot1Pos.X, 1e-4f);
+-
++            // Two unified 1.100m pallets side-by-side at x = +/-0.575m in a 2.352m container interior
++            var slot0Pos = new Vector3(-0.575f, 0f, 0f);
++            var slot1Pos = new Vector3(+0.575f, 0f, 0f);
+             var combined = PalletGeometry.ComputeSideBySideCombinedFootprint(slot0Pos, slot1Pos);
+-            Assert.AreEqual(PalletGeometry.FullWidthM, combined.X, 1e-4f, "Two Half Pallets side-by-side must equal one Full Pallet width");
+-            Assert.AreEqual(PalletGeometry.FullLengthM, combined.Y, 1e-4f);
+-            Assert.AreEqual(PalletGeometry.FullHeightM, combined.Z, 1e-4f);
++            Assert.AreEqual(2.250f, combined.X, 1e-4f, "Two 1.100m pallets at +/-0.575m span 2.250m (5cm center aisle, 5.1cm wall margin)");
++            Assert.AreEqual(1.100f, combined.Y, 1e-4f);
++            Assert.AreEqual(0.145f, combined.Z, 1e-4f);
++            Assert.IsTrue(combined.X < 2.352f, "Side-by-side footprint fits inside 2.352m ISO container width");
+         }
+ 
+         [TestMethod]
+         public void T1_9_PA_04_ForkPocketClearance()
+         {
+-            Assert.AreEqual(0.25f, PalletGeometry.ForkPocketWidthM, 1e-4f);
+-            Assert.AreEqual(0.10f, PalletGeometry.ForkPocketHeightM, 1e-4f);
+-            Assert.IsTrue(PalletGeometry.ForkPocketWidthM > 0.20f, "Pocket width exceeds minimum fork prong width");
+-            Assert.IsTrue(PalletGeometry.ForkPocketHeightM < PalletGeometry.FullHeightM, "Pocket height fits within 0.15m pallet profile");
++            Assert.AreEqual(0.300f, PalletGeometry.ForkPocketWidthM, 1e-4f);
++            Assert.AreEqual(0.105f, PalletGeometry.ForkPocketHeightM, 1e-4f);
++            Assert.IsTrue(PalletGeometry.ForkPocketWidthM > 0.20f, "4-way tunnel width exceeds 0.160m fork prong width");
++            Assert.IsTrue(PalletGeometry.ForkPocketHeightM < PalletGeometry.FullHeightM, "Tunnel height fits within 0.145m pallet profile");
+         }
+ 
+         [TestMethod]
+@@ -1924,9 +1939,9 @@ public void T3_5_INT_05_DualRadarInterop_AirAndGroundScopes()
+         public void T3_6_INT_06_GridDeficitBrownoutLoadShedding()
+         {
+             var grid = new MockMicroGrid(new Vector3(1000, 2000, 100));
+-            var laser = new MockDeployable(0x70000407, 4000017, DeployableKind.HeavyLaserTurret, PalletSize.Half, new Vector3(1010, 2000, 100));
+-            var radar = new MockDeployable(0x70000408, 4000015, DeployableKind.GroundRadar, PalletSize.Half, new Vector3(1020, 2000, 100));
+-            var bat = new MockDeployable(0x70000409, 4000013, DeployableKind.BatteryUnit, PalletSize.Half, new Vector3(1030, 2000, 100)) { CapacitorJoules = 0f };
++            var laser = new MockDeployable(0x70000407, 4000017, DeployableKind.HeavyLaserTurret, PalletSize.Full, new Vector3(1010, 2000, 100));
++            var radar = new MockDeployable(0x70000408, 4000015, DeployableKind.GroundRadar, PalletSize.Full, new Vector3(1020, 2000, 100));
++            var bat = new MockDeployable(0x70000409, 4000013, DeployableKind.BatteryUnit, PalletSize.Full, new Vector3(1030, 2000, 100)) { CapacitorJoules = 0f };
+ 
+             grid.Units.Add(laser);
+             grid.Units.Add(radar);
+@@ -1965,8 +1980,8 @@ public void T3_8_INT_08_LaserTurretDualSensorCueing()
+         public void T3_9_INT_09_MobileBasePackUpSequence()
+         {
+             var bed = new JeepCargoBedModel();
+-            var mortar = new MockDeployable(0x70000410, 4000016, DeployableKind.MortarTurret, PalletSize.Half, Vector3.Zero);
+-            var radar = new MockDeployable(0x70000411, 4000015, DeployableKind.GroundRadar, PalletSize.Half, Vector3.Zero);
++            var mortar = new MockDeployable(0x70000410, 4000016, DeployableKind.MortarTurret, PalletSize.Full, Vector3.Zero);
++            var radar = new MockDeployable(0x70000411, 4000015, DeployableKind.GroundRadar, PalletSize.Full, Vector3.Zero);
+ 
+             mortar.IsPacked = true;
+             radar.IsPacked = true;
+@@ -1983,7 +1998,7 @@ public void T3_10_INT_10_BatteryOverchargeSurplusProtection()
+             var solar1 = new MockDeployable(0x70000412, 4000011, DeployableKind.SolarPanels, PalletSize.Full, new Vector3(1010, 2000, 100)) { PowerWatts = 50000f };
+             var solar2 = new MockDeployable(0x70000413, 4000011, DeployableKind.SolarPanels, PalletSize.Full, new Vector3(1020, 2000, 100)) { PowerWatts = 50000f };
+             var gen = new MockDeployable(0x70000414, 4000012, DeployableKind.PowerGenerator, PalletSize.Full, new Vector3(1030, 2000, 100)) { PowerWatts = 45000f };
+-            var bat = new MockDeployable(0x70000415, 4000013, DeployableKind.BatteryUnit, PalletSize.Half, new Vector3(1040, 2000, 100)) { CapacitorJoules = 550000f };
++            var bat = new MockDeployable(0x70000415, 4000013, DeployableKind.BatteryUnit, PalletSize.Full, new Vector3(1040, 2000, 100)) { CapacitorJoules = 550000f };
+ 
+             grid.Units.Add(solar1);
+             grid.Units.Add(solar2);
+@@ -2026,7 +2041,7 @@ public void T4_1_SCEN_01_ForwardOperatingBaseDeployment()
+             grid.Units.Add(genUnit);
+ 
+             // Step 4: Deploy Battery Unit
+-            var batUnit = new MockDeployable(0x70000504, 4000013, DeployableKind.BatteryUnit, PalletSize.Half, baseCenter + new Vector3(0, 10, 0))
++            var batUnit = new MockDeployable(0x70000504, 4000013, DeployableKind.BatteryUnit, PalletSize.Full, baseCenter + new Vector3(0, 10, 0))
+             {
+                 CapacitorJoules = 100000f
+             };
+@@ -2034,7 +2049,7 @@ public void T4_1_SCEN_01_ForwardOperatingBaseDeployment()
+ 
+             // Step 5: Deploy Turrets
+             var samTurret = new MockDeployable(0x70000505, 4000014, DeployableKind.MissileTurret, PalletSize.Full, baseCenter + new Vector3(20, 20, 0));
+-            var radarUnit = new MockDeployable(0x70000506, 4000015, DeployableKind.GroundRadar, PalletSize.Half, baseCenter + new Vector3(-20, -20, 0));
++            var radarUnit = new MockDeployable(0x70000506, 4000015, DeployableKind.GroundRadar, PalletSize.Full, baseCenter + new Vector3(-20, -20, 0));
+             grid.Units.Add(samTurret);
+             grid.Units.Add(radarUnit);
+ 
+diff --git a/Source/ACE.Server.Tests/Vehicles/IsoContainerTests.cs b/Source/ACE.Server.Tests/Vehicles/IsoContainerTests.cs
+index 0c9ce62f..080dc667 100644
+--- a/Source/ACE.Server.Tests/Vehicles/IsoContainerTests.cs
++++ b/Source/ACE.Server.Tests/Vehicles/IsoContainerTests.cs
+@@ -219,7 +219,7 @@ public MockIsoContainer(uint wcid, Vector3? position = null, float heading = 0f)
+                     FloorZ = IsoContainerSpecifications.FloorElevationZ;
+                     RoofZ = IsoContainerSpecifications.StandardRoofElevationZ;
+                     MaxFullSlots = 10;
+-                    MaxHalfSlots = 20;
++                    MaxHalfSlots = 10;
+                     HasForkliftPockets = true;
+                     ForkliftPocketDimensions = new Vector3(0.356f, 0f, 0.115f);
+                     ForkliftPocketCenterDistance = 2.050f;
+@@ -239,8 +239,8 @@ public MockIsoContainer(uint wcid, Vector3? position = null, float heading = 0f)
+                     DoorOpeningDimensions = new Vector2(2.340f, 2.280f);
+                     FloorZ = IsoContainerSpecifications.FloorElevationZ;
+                     RoofZ = IsoContainerSpecifications.StandardRoofElevationZ;
+-                    MaxFullSlots = 21;
+-                    MaxHalfSlots = 42;
++                    MaxFullSlots = 20;
++                    MaxHalfSlots = 20;
+                     HasForkliftPockets = false; // Strictly prohibited per ISO 1496-1
+                     HasGooseneckTunnel = false;
+                     HasHazardChevrons = false;
+@@ -258,8 +258,8 @@ public MockIsoContainer(uint wcid, Vector3? position = null, float heading = 0f)
+                     DoorOpeningDimensions = new Vector2(2.340f, 2.585f);
+                     FloorZ = IsoContainerSpecifications.FloorElevationZ;
+                     RoofZ = IsoContainerSpecifications.HighCubeRoofElevationZ;
+-                    MaxFullSlots = 21;
+-                    MaxHalfSlots = 42;
++                    MaxFullSlots = 20;
++                    MaxHalfSlots = 20;
+                     HasForkliftPockets = false;
+                     HasGooseneckTunnel = true;
+                     GooseneckTunnelDimensions = new Vector3(1.020f, 3.150f, 0.120f);
+@@ -276,47 +276,35 @@ public MockIsoContainer(uint wcid, Vector3? position = null, float heading = 0f)
+         private void Initialize20ftSlots()
+         {
+             Slots.Clear();
+-            (float x, float y, char orient, float dx, float dy)[] rawSlots = new[]
++            foreach (var r in ContainerLogistics.PinwheelSlots20)
+             {
+-                (-0.5080f, +2.3889f, 'X', 1.2192f, 1.0160f),
+-                (+0.6096f, +2.2873f, 'Y', 1.0160f, 1.2192f),
+-                (+0.5080f, +1.1697f, 'X', 1.2192f, 1.0160f),
+-                (-0.6096f, +1.2713f, 'Y', 1.0160f, 1.2192f),
+-                (-0.5080f, +0.1016f, 'X', 1.2192f, 1.0160f),
+-                (+0.6096f, -0.0000f, 'Y', 1.0160f, 1.2192f),
+-                (+0.5080f, -1.1176f, 'X', 1.2192f, 1.0160f),
+-                (-0.6096f, -1.0160f, 'Y', 1.0160f, 1.2192f),
+-                (-0.5080f, -2.2873f, 'Y', 1.0160f, 1.2192f),
+-                (+0.5080f, -2.2873f, 'Y', 1.0160f, 1.2192f),
+-            };
+-
+-            for (int i = 0; i < rawSlots.Length; i++)
+-            {
+-                var r = rawSlots[i];
+-                Slots.Add(new PinwheelBaySlot { SlotIndex = i, X = r.x, Y = r.y, Orient = r.orient, Dx = r.dx, Dy = r.dy });
++                Slots.Add(new PinwheelBaySlot
++                {
++                    SlotIndex = r.SlotIndex,
++                    X = (float)r.X,
++                    Y = (float)r.Y,
++                    Orient = r.Orient,
++                    Dx = (float)r.Dx,
++                    Dy = (float)r.Dy,
++                });
+             }
+         }
+ 
+         private void Initialize40ftSlots()
+         {
+             Slots.Clear();
+-            float[] quadCenters = new[] { +4.8768f, +2.6416f, +0.4064f, -1.8288f };
+-            int idx = 0;
+-            for (int q = 0; q < quadCenters.Length; q++)
++            foreach (var r in ContainerLogistics.PinwheelSlots40)
+             {
+-                float yc = quadCenters[q];
+-                Slots.Add(new PinwheelBaySlot { SlotIndex = idx++, X = -0.5080f, Y = yc + 0.6096f, Orient = 'X', Dx = 1.2192f, Dy = 1.0160f });
+-                Slots.Add(new PinwheelBaySlot { SlotIndex = idx++, X = +0.6096f, Y = yc + 0.5080f, Orient = 'Y', Dx = 1.0160f, Dy = 1.2192f });
+-                Slots.Add(new PinwheelBaySlot { SlotIndex = idx++, X = +0.5080f, Y = yc - 0.6096f, Orient = 'X', Dx = 1.2192f, Dy = 1.0160f });
+-                Slots.Add(new PinwheelBaySlot { SlotIndex = idx++, X = -0.6096f, Y = yc - 0.5080f, Orient = 'Y', Dx = 1.0160f, Dy = 1.2192f });
++                Slots.Add(new PinwheelBaySlot
++                {
++                    SlotIndex = r.SlotIndex,
++                    X = (float)r.X,
++                    Y = (float)r.Y,
++                    Orient = r.Orient,
++                    Dx = (float)r.Dx,
++                    Dy = (float)r.Dy,
++                });
+             }
+-
+-            // Asymmetric rear tier (5 slots)
+-            Slots.Add(new PinwheelBaySlot { SlotIndex = idx++, X = -0.5368f, Y = -3.4544f, Orient = 'X', Dx = 1.2192f, Dy = 1.0160f });
+-            Slots.Add(new PinwheelBaySlot { SlotIndex = idx++, X = -0.5368f, Y = -4.4704f, Orient = 'X', Dx = 1.2192f, Dy = 1.0160f });
+-            Slots.Add(new PinwheelBaySlot { SlotIndex = idx++, X = -0.5368f, Y = -5.4864f, Orient = 'X', Dx = 1.2192f, Dy = 1.0160f });
+-            Slots.Add(new PinwheelBaySlot { SlotIndex = idx++, X = +0.6384f, Y = -3.5560f, Orient = 'Y', Dx = 1.0160f, Dy = 1.2192f });
+-            Slots.Add(new PinwheelBaySlot { SlotIndex = idx++, X = +0.6384f, Y = -4.7752f, Orient = 'Y', Dx = 1.0160f, Dy = 1.2192f });
+         }
+ 
+         public void SetDoorProgress(float progress)
+@@ -397,38 +385,19 @@ public bool TryLoadWcid(int slotIndex, uint wcid, PalletSize palletSize, byte su
+             if (slotIndex < 0 || slotIndex >= Slots.Count)
+                 return false;
+ 
+-            var slot = Slots[slotIndex];
++            if (palletSize != PalletSize.Full && palletSize != PalletSize.Half)
++                return false;
+ 
+-            if (palletSize == PalletSize.Full)
+-            {
+-                // Full pallet requires entire slot free
+-                if (slot.Occupied || slot.OccupiedSubSlots != 0)
+-                    return false;
+-
+-                slot.Occupied = true;
+-                slot.OccupiedWcids[0] = wcid;
+-                slot.OccupiedWcids[1] = 0;
+-                slot.OccupiedPalletSize = PalletSize.Full;
+-                slot.OccupiedSubSlots = 0x03; // both subslots
+-                return true;
+-            }
+-            else if (palletSize == PalletSize.Half)
+-            {
+-                // Half pallet occupies subslot 0 or 1
+-                int sub = subSlot & 1;
+-                byte mask = (byte)(1 << sub);
+-                if ((slot.OccupiedSubSlots & mask) != 0 || (slot.OccupiedPalletSize == PalletSize.Full))
+-                    return false;
+-
+-                slot.OccupiedSubSlots |= mask;
+-                slot.OccupiedWcids[sub] = wcid;
+-                slot.OccupiedPalletSize = PalletSize.Half;
+-                if (slot.OccupiedSubSlots == 0x03)
+-                    slot.Occupied = true;
+-                return true;
+-            }
++            var slot = Slots[slotIndex];
++            if (slot.Occupied || slot.OccupiedSubSlots != 0)
++                return false;
+ 
+-            return false;
++            slot.Occupied = true;
++            slot.OccupiedWcids[0] = wcid;
++            slot.OccupiedWcids[1] = 0;
++            slot.OccupiedPalletSize = PalletSize.Full;
++            slot.OccupiedSubSlots = 0x03;
++            return true;
+         }
+ 
+         public bool TryUnpackSlot(int slotIndex, out uint wcid, sbyte subSlot = -1)
+@@ -444,44 +413,16 @@ public bool TryUnpackSlot(int slotIndex, out uint wcid, sbyte subSlot = -1)
+             if (!slot.Occupied && slot.OccupiedSubSlots == 0)
+                 return false;
+ 
+-            if (slot.OccupiedPalletSize == PalletSize.Full)
+-            {
+-                wcid = slot.OccupiedWcids[0];
+-                slot.Occupied = false;
+-                slot.OccupiedWcids[0] = 0;
+-                slot.OccupiedWcids[1] = 0;
+-                slot.OccupiedPalletSize = PalletSize.None;
+-                slot.OccupiedSubSlots = 0;
+-                return true;
+-            }
+-            else if (slot.OccupiedPalletSize == PalletSize.Half)
+-            {
+-                int targetSub;
+-                if (subSlot == 0 || subSlot == 1)
+-                {
+-                    targetSub = subSlot;
+-                    if ((slot.OccupiedSubSlots & (1 << targetSub)) == 0)
+-                        return false;
+-                }
+-                else
+-                {
+-                    targetSub = (slot.OccupiedSubSlots & 0x01) != 0 ? 0 : 1;
+-                    if ((slot.OccupiedSubSlots & (1 << targetSub)) == 0)
+-                        return false;
+-                }
+-
+-                wcid = slot.OccupiedWcids[targetSub];
+-                slot.OccupiedWcids[targetSub] = 0;
+-                slot.OccupiedSubSlots &= (byte)~(1 << targetSub);
+-                slot.Occupied = false;
+-                if (slot.OccupiedSubSlots == 0)
+-                {
+-                    slot.OccupiedPalletSize = PalletSize.None;
+-                }
+-                return true;
+-            }
++            if (slot.OccupiedPalletSize == PalletSize.None)
++                return false;
+ 
+-            return false;
++            wcid = slot.OccupiedWcids[0] != 0 ? slot.OccupiedWcids[0] : slot.OccupiedWcids[1];
++            slot.Occupied = false;
++            slot.OccupiedWcids[0] = 0;
++            slot.OccupiedWcids[1] = 0;
++            slot.OccupiedPalletSize = PalletSize.None;
++            slot.OccupiedSubSlots = 0;
++            return true;
+         }
+ 
+         public int UnpackAll(out List<uint> unpackedWcids)
+@@ -494,32 +435,15 @@ public int UnpackAll(out List<uint> unpackedWcids)
+             {
+                 if (slot.Occupied || slot.OccupiedSubSlots != 0)
+                 {
+-                    if (slot.OccupiedPalletSize == PalletSize.Full)
+-                    {
+-                        if (slot.OccupiedWcids[0] != 0)
+-                            unpackedWcids.Add(slot.OccupiedWcids[0]);
+-
+-                        slot.Occupied = false;
+-                        slot.OccupiedWcids[0] = 0;
+-                        slot.OccupiedWcids[1] = 0;
+-                        slot.OccupiedPalletSize = PalletSize.None;
+-                        slot.OccupiedSubSlots = 0;
+-                    }
+-                    else if (slot.OccupiedPalletSize == PalletSize.Half)
+-                    {
+-                        for (int i = 0; i < 2; i++)
+-                        {
+-                            if ((slot.OccupiedSubSlots & (1 << i)) != 0 && slot.OccupiedWcids[i] != 0)
+-                            {
+-                                unpackedWcids.Add(slot.OccupiedWcids[i]);
+-                                slot.OccupiedWcids[i] = 0;
+-                            }
+-                        }
+-
+-                        slot.Occupied = false;
+-                        slot.OccupiedPalletSize = PalletSize.None;
+-                        slot.OccupiedSubSlots = 0;
+-                    }
++                    uint wcid = slot.OccupiedWcids[0] != 0 ? slot.OccupiedWcids[0] : slot.OccupiedWcids[1];
++                    if (wcid != 0)
++                        unpackedWcids.Add(wcid);
++
++                    slot.Occupied = false;
++                    slot.OccupiedWcids[0] = 0;
++                    slot.OccupiedWcids[1] = 0;
++                    slot.OccupiedPalletSize = PalletSize.None;
++                    slot.OccupiedSubSlots = 0;
+                 }
+             }
+ 
+@@ -782,17 +706,17 @@ public void T1_1_PalletCapacityRatings()
+             var c40 = new MockIsoContainer(IsoContainerSpecifications.Wcid40ft);
+             var c40hc = new MockIsoContainer(IsoContainerSpecifications.Wcid40ftHC);
+ 
+-            Assert.AreEqual(10, c20.MaxFullSlots, "20ft holds 10 Full GMA pallets");
+-            Assert.AreEqual(20, c20.MaxHalfSlots, "20ft holds 20 Half GMA pallets");
++            Assert.AreEqual(10, c20.MaxFullSlots, "20ft holds 10 unified ISO 6780 pallets");
++            Assert.AreEqual(10, c20.MaxHalfSlots, "20ft MaxHalfSlots mirrors unified 10 slots");
+             Assert.AreEqual(10, c20.Slots.Count, "20ft floor grid has 10 defined slot locations");
+ 
+-            Assert.AreEqual(21, c40.MaxFullSlots, "40ft holds 21 Full GMA pallets");
+-            Assert.AreEqual(42, c40.MaxHalfSlots, "40ft holds 42 Half GMA pallets");
+-            Assert.AreEqual(21, c40.Slots.Count, "40ft floor grid has 21 defined slot locations");
++            Assert.AreEqual(20, c40.MaxFullSlots, "40ft holds 20 unified ISO 6780 pallets");
++            Assert.AreEqual(20, c40.MaxHalfSlots, "40ft MaxHalfSlots mirrors unified 20 slots");
++            Assert.AreEqual(20, c40.Slots.Count, "40ft floor grid has 20 defined slot locations");
+ 
+-            Assert.AreEqual(21, c40hc.MaxFullSlots, "40HC holds 21 Full GMA pallets");
+-            Assert.AreEqual(42, c40hc.MaxHalfSlots, "40HC holds 42 Half GMA pallets");
+-            Assert.AreEqual(21, c40hc.Slots.Count, "40HC floor grid has 21 defined slot locations");
++            Assert.AreEqual(20, c40hc.MaxFullSlots, "40HC holds 20 unified ISO 6780 pallets");
++            Assert.AreEqual(20, c40hc.MaxHalfSlots, "40HC MaxHalfSlots mirrors unified 20 slots");
++            Assert.AreEqual(20, c40hc.Slots.Count, "40HC floor grid has 20 defined slot locations");
+         }
+ 
+         [TestMethod]
+@@ -1104,16 +1028,7 @@ public void T4_1_LoadAllNineDeployablesInto20ftBay()
+             var c20 = new MockIsoContainer(IsoContainerSpecifications.Wcid20ft);
+             c20.SetDoorProgress(1.0f); // Doors must be open
+ 
+-            // 9 Deployables from specification:
+-            // 4000002 AN/TPS-1 Mobile Radar (Full)
+-            // 4000010 Flux Pod (Full)
+-            // 4000011 Solar Panels (Full)
+-            // 4000012 Power Generator (Full)
+-            // 4000013 Battery Unit (Half)
+-            // 4000014 Missile Turret (Full)
+-            // 4000015 Ground Radar (Half)
+-            // 4000016 Mortar Turret (Half)
+-            // 4000017 Heavy Laser Turret (Half)
++            // 9 Deployables all unified on ISO 6780 Full pallets:
+             uint[] deployables = new uint[]
+             {
+                 4000002, // AN/TPS-1 Radar
+@@ -1130,10 +1045,8 @@ public void T4_1_LoadAllNineDeployablesInto20ftBay()
+             for (int i = 0; i < deployables.Length; i++)
+             {
+                 uint wcid = deployables[i];
+-                bool isFull = (wcid == 4000002 || wcid == 4000010 || wcid == 4000011 || wcid == 4000012 || wcid == 4000014);
+-                PalletSize pSize = isFull ? PalletSize.Full : PalletSize.Half;
+-
+-                bool loaded = c20.TryLoadWcid(i, wcid, pSize);
++                Assert.AreEqual(PalletSize.Full, IsoDeployable.DeterminePalletSize(wcid), $"WCID {wcid} must use unified PalletSize.Full");
++                bool loaded = c20.TryLoadWcid(i, wcid, PalletSize.Full);
+                 Assert.IsTrue(loaded, $"Deployable {wcid} must load successfully into slot {i}");
+             }
+ 
+@@ -1150,26 +1063,26 @@ public void T4_1_StowedHeightClearanceAllNineDeployables()
+         {
+             var c20 = new MockIsoContainer(IsoContainerSpecifications.Wcid20ft);
+             float doorHeight = c20.DoorOpeningDimensions.Y; // 2.280m
+-            float palletHeight = 0.1397f;                  // ANSI MH1 GMA pallet
++            float jackLiftM = 0.077f;                      // +7.7cm raised pallet jack clearance
+ 
+             (uint wcid, string name, float stowedH)[] catalog = new[]
+             {
+-                (4000002u, "AN/TPS-1 Mobile Radar", 2.10f),
+-                (4000010u, "Flux Pod", 1.45f),
+-                (4000011u, "Solar Panels", 1.10f),
+-                (4000012u, "Power Generator", 1.60f),
+-                (4000013u, "Battery Unit", 1.20f),
+-                (4000014u, "Missile Turret", 1.25f),
+-                (4000015u, "Ground Radar", 1.80f),
+-                (4000016u, "Mortar Turret", 1.15f),
+-                (4000017u, "Heavy Laser Turret", 1.05f),
++                (4000002u, "AN/TPS-1 Mobile Radar", 2.04f),
++                (4000010u, "Flux Pod", 1.72f),
++                (4000011u, "Solar Panels", 1.38f),
++                (4000012u, "Power Generator", 1.38f),
++                (4000013u, "Battery Unit", 1.24f),
++                (4000014u, "Missile Turret", 1.62f),
++                (4000015u, "Ground Radar", 1.18f),
++                (4000016u, "Mortar Turret", 1.22f),
++                (4000017u, "Heavy Laser Turret", 1.32f),
+             };
+ 
+             foreach (var item in catalog)
+             {
+-                Assert.IsTrue(item.stowedH <= 2.14f, $"{item.name} stowed height ({item.stowedH}m) must be <= 2.14m");
+-                float totalHeight = item.stowedH + palletHeight;
+-                Assert.IsTrue(totalHeight <= doorHeight, $"{item.name} total stack height ({totalHeight:F4}m) must clear door ({doorHeight}m)");
++                Assert.IsTrue(item.stowedH <= 2.05f, $"{item.name} total stowed height ({item.stowedH}m) must be <= 2.05m");
++                float raisedHeight = item.stowedH + jackLiftM;
++                Assert.IsTrue(raisedHeight <= doorHeight, $"{item.name} jack-lifted height ({raisedHeight:F4}m) must clear door ({doorHeight}m)");
+             }
+         }
+ 
+@@ -1198,14 +1111,14 @@ public void T4_1_FullBayCapacityExhaustion40ft()
+             var c40 = new MockIsoContainer(IsoContainerSpecifications.Wcid40ft);
+             c40.SetDoorProgress(1.0f);
+ 
+-            // Fill all 21 slots with Full pallets
+-            for (int i = 0; i < 21; i++)
++            // Fill all 20 slots with Full pallets (2x10 grid)
++            for (int i = 0; i < 20; i++)
+             {
+                 Assert.IsTrue(c40.TryLoadWcid(i, 4000010, PalletSize.Full));
+             }
+ 
+-            // Attempting to load a 22nd full pallet fails
+-            Assert.IsFalse(c40.TryLoadWcid(21, 4000010, PalletSize.Full));
++            // Attempting to load a 21st full pallet fails
++            Assert.IsFalse(c40.TryLoadWcid(20, 4000010, PalletSize.Full));
+         }
+ 
+         [TestMethod]
+@@ -1214,18 +1127,15 @@ public void T4_1_SubSlotCollisionResistance()
+             var c20 = new MockIsoContainer(IsoContainerSpecifications.Wcid20ft);
+             c20.SetDoorProgress(1.0f);
+ 
+-            // Load half pallet into SubSlot 0
++            // Legacy PalletSize.Half normalizes to unified Full occupancy on slot 0
+             Assert.IsTrue(c20.TryLoadWcid(0, 4000013, PalletSize.Half, subSlot: 0));
++            Assert.IsTrue(c20.Slots[0].Occupied);
++            Assert.AreEqual(PalletSize.Full, c20.Slots[0].OccupiedPalletSize);
+ 
+-            // Attempting to load a Full pallet into slot 0 must fail because SubSlot 0 is occupied
++            // Attempting any second load into slot 0 (Full or Half, subSlot 0 or 1) must fail
+             Assert.IsFalse(c20.TryLoadWcid(0, 4000010, PalletSize.Full));
+-
+-            // Loading a second half pallet into SubSlot 1 succeeds
+-            Assert.IsTrue(c20.TryLoadWcid(0, 4000015, PalletSize.Half, subSlot: 1));
+-
+-            // Slot is now completely full (both subslots occupied)
++            Assert.IsFalse(c20.TryLoadWcid(0, 4000015, PalletSize.Half, subSlot: 1));
+             Assert.IsFalse(c20.TryLoadWcid(0, 4000016, PalletSize.Half, subSlot: 0));
+-            Assert.IsFalse(c20.TryLoadWcid(0, 4000017, PalletSize.Half, subSlot: 1));
+         }
+ 
+         [TestMethod]
+@@ -1287,48 +1197,36 @@ public void T4_1_CoLocatedHalfPalletsRetainBothWcidsAndEmitDualWireRecords()
+             var container = new IsoDeployable(IsoDeployable.Wcid20ft);
+             container.SetDoorProgress(1.0f);
+ 
+-            // Load subslot 0: Battery Unit (4000013)
+-            bool loaded0 = container.TryLoadWcid(3, 4000013, PalletSize.Half, subSlot: 0);
+-            Assert.IsTrue(loaded0, "Battery Unit must load into slot 3 subslot 0");
++            // Legacy PalletSize.Half request normalizes to unified Full pallet on slot 3 (subSlot = 0)
++            bool loaded0 = container.TryLoadWcid(3, 4000013, PalletSize.Half, subSlot: 1);
++            Assert.IsTrue(loaded0, "Battery Unit must load into slot 3 normalized to Full");
+ 
+-            // Load subslot 1: Ground Radar (4000015)
++            // Attempting to co-locate another pallet in slot 3 must fail
+             bool loaded1 = container.TryLoadWcid(3, 4000015, PalletSize.Half, subSlot: 1);
+-            Assert.IsTrue(loaded1, "Ground Radar must load into slot 3 subslot 1");
++            Assert.IsFalse(loaded1, "Unified 1-pallet-per-slot bay must reject second unit in slot 3");
+ 
+-            // Verify both WCIDs are preserved simultaneously in slot 3
+             var slot3 = container.Slots[3];
+-            Assert.AreEqual(4000013u, slot3.OccupiedWcids[0], "Slot 3 subslot 0 must retain Battery Unit WCID 4000013");
+-            Assert.AreEqual(4000015u, slot3.OccupiedWcids[1], "Slot 3 subslot 1 must retain Ground Radar WCID 4000015");
+-            Assert.AreEqual(0x03, slot3.OccupiedSubSlots, "Both subslots 0 and 1 must be marked occupied (mask 0x03)");
+-            Assert.IsTrue(slot3.Occupied, "Slot 3 must be marked fully occupied");
+-            Assert.AreEqual(PalletSize.Half, slot3.OccupiedPalletSize);
++            Assert.AreEqual(4000013u, slot3.OccupiedWcids[0]);
++            Assert.AreEqual(0u, slot3.OccupiedWcids[1]);
++            Assert.AreEqual(0x03, slot3.OccupiedSubSlots);
++            Assert.IsTrue(slot3.Occupied);
++            Assert.AreEqual(PalletSize.Full, slot3.OccupiedPalletSize);
+ 
+-            // Verify CreateContainerStateMsg emits two distinct wire records for slot 3
++            // Verify CreateContainerStateMsg emits 1 unified Full wire record with SubSlot == 0
+             var stateMsg = container.CreateContainerStateMsg();
+             var slot3WireRecords = stateMsg.Slots.Where(s => s.SlotIndex == 3).ToList();
+-            Assert.AreEqual(2, slot3WireRecords.Count, "State wire message must contain exactly 2 records for co-located slot 3");
+-
+-            var rec0 = slot3WireRecords.First(s => s.SubSlot == 0);
+-            Assert.AreEqual((byte)PalletSize.Half, rec0.PalletSize);
+-            Assert.AreEqual(4000013u, rec0.CargoWcid);
+-
+-            var rec1 = slot3WireRecords.First(s => s.SubSlot == 1);
+-            Assert.AreEqual((byte)PalletSize.Half, rec1.PalletSize);
+-            Assert.AreEqual(4000015u, rec1.CargoWcid);
++            Assert.AreEqual(1, slot3WireRecords.Count, "Unified bay emits 1 wire record for slot 3");
++            Assert.AreEqual((byte)PalletSize.Full, slot3WireRecords[0].PalletSize);
++            Assert.AreEqual((byte)0, slot3WireRecords[0].SubSlot);
++            Assert.AreEqual(4000013u, slot3WireRecords[0].CargoWcid);
+ 
+-            // Verify individual subslot unpacking without data loss
++            // Verify unpacking clears slot completely
+             Assert.IsTrue(container.TryUnpackSlot(3, out uint unpacked0, subSlot: 0));
+             Assert.AreEqual(4000013u, unpacked0);
+-            Assert.AreEqual(0u, slot3.OccupiedWcids[0], "Subslot 0 must be cleared");
+-            Assert.AreEqual(4000015u, slot3.OccupiedWcids[1], "Subslot 1 must remain intact with WCID 4000015");
+-            Assert.AreEqual(0x02, slot3.OccupiedSubSlots, "Subslot 1 mask bit must remain active");
+-            Assert.IsFalse(slot3.Occupied, "Slot 3 is no longer fully occupied");
+-
+-            Assert.IsTrue(container.TryUnpackSlot(3, out uint unpacked1, subSlot: 1));
+-            Assert.AreEqual(4000015u, unpacked1);
+-            Assert.AreEqual(0u, slot3.OccupiedWcids[1], "Subslot 1 must now be cleared");
+-            Assert.AreEqual(0x00, slot3.OccupiedSubSlots, "Slot 3 subslots mask must be 0");
++            Assert.AreEqual(0u, slot3.OccupiedWcids[0]);
++            Assert.AreEqual(0x00, slot3.OccupiedSubSlots);
+             Assert.AreEqual(PalletSize.None, slot3.OccupiedPalletSize);
++            Assert.IsFalse(slot3.Occupied);
+         }
+ 
+         [TestMethod]
+@@ -1337,20 +1235,16 @@ public void T4_1_CoLocatedHalfPalletsUnpackAllCycle()
+             var container = new IsoDeployable(IsoDeployable.Wcid20ft);
+             container.SetDoorProgress(1.0f);
+ 
+-            // Bay 0: Flux Pod (Full)
++            // Load 5 deployables across slots 0..4 (all unified Full)
+             Assert.IsTrue(container.TryLoadWcid(0, 4000010, PalletSize.Full));
+-
+-            // Bay 3: Battery Unit (Half, subslot 0) & Ground Radar (Half, subslot 1)
+-            Assert.IsTrue(container.TryLoadWcid(3, 4000013, PalletSize.Half, subSlot: 0));
+-            Assert.IsTrue(container.TryLoadWcid(3, 4000015, PalletSize.Half, subSlot: 1));
+-
+-            // Bay 5: Mortar Turret (Half, subslot 0) & Laser Turret (Half, subslot 1)
+-            Assert.IsTrue(container.TryLoadWcid(5, 4000016, PalletSize.Half, subSlot: 0));
+-            Assert.IsTrue(container.TryLoadWcid(5, 4000017, PalletSize.Half, subSlot: 1));
++            Assert.IsTrue(container.TryLoadWcid(1, 4000013, PalletSize.Full));
++            Assert.IsTrue(container.TryLoadWcid(2, 4000015, PalletSize.Full));
++            Assert.IsTrue(container.TryLoadWcid(3, 4000016, PalletSize.Full));
++            Assert.IsTrue(container.TryLoadWcid(4, 4000017, PalletSize.Full));
+ 
+             // Unpack all 5 items
+             int count = container.UnpackAll(out List<uint> unpackedWcids);
+-            Assert.AreEqual(5, count, "UnpackAll must recover all 5 deployables across full and shared half-bays");
++            Assert.AreEqual(5, count, "UnpackAll must recover all 5 deployables across unified bays");
+             CollectionAssert.AreEquivalent(new uint[] { 4000010, 4000013, 4000015, 4000016, 4000017 }, unpackedWcids);
+ 
+             // Verify all bays completely reset
+@@ -1374,27 +1268,29 @@ public void T4_1_PresetFob20PopulatesAllNineDeployablesWithClosedDoors()
+             Assert.AreEqual(0.0f, container.DoorProgress);
+             Assert.AreEqual(ACE.Server.Vehicles.Deployables.ContainerDoorState.Closed, container.DoorState);
+ 
+-            // Load FOB20 preset with ignoreDoorState: true
+-            Assert.IsTrue(container.TryLoadWcid(0, 4000010, subSlot: 0, ignoreDoorState: true)); // Flux Pod (Full)
+-            Assert.IsTrue(container.TryLoadWcid(1, 4000011, subSlot: 0, ignoreDoorState: true)); // Solar Panels (Full)
+-            Assert.IsTrue(container.TryLoadWcid(2, 4000012, subSlot: 0, ignoreDoorState: true)); // Power Generator (Full)
+-            Assert.IsTrue(container.TryLoadWcid(3, 4000013, subSlot: 0, ignoreDoorState: true)); // Battery Unit (Half sub 0)
+-            Assert.IsTrue(container.TryLoadWcid(3, 4000015, subSlot: 1, ignoreDoorState: true)); // Ground Radar (Half sub 1)
+-            Assert.IsTrue(container.TryLoadWcid(4, 4000014, subSlot: 0, ignoreDoorState: true)); // Missile Turret (Full)
+-            Assert.IsTrue(container.TryLoadWcid(5, 4000016, subSlot: 0, ignoreDoorState: true)); // Mortar Turret (Half sub 0)
+-            Assert.IsTrue(container.TryLoadWcid(5, 4000017, subSlot: 1, ignoreDoorState: true)); // Laser Turret (Half sub 1)
+-            Assert.IsTrue(container.TryLoadWcid(6, 4000002, subSlot: 0, ignoreDoorState: true)); // AN/TPS-1 Radar (Full)
+-
+-            // Verify 7 full bays are occupied (out of 10)
+-            Assert.AreEqual(7, container.OccupiedFullBayCount, "FOB20 loadout must occupy exactly 7 full bays");
++            // Load FOB20 preset across slots 0..8 (subSlot: 0) with ignoreDoorState: true
++            Assert.IsTrue(container.TryLoadWcid(0, 4000010, subSlot: 0, ignoreDoorState: true)); // Flux Pod
++            Assert.IsTrue(container.TryLoadWcid(1, 4000011, subSlot: 0, ignoreDoorState: true)); // Solar Panels
++            Assert.IsTrue(container.TryLoadWcid(2, 4000012, subSlot: 0, ignoreDoorState: true)); // Power Generator
++            Assert.IsTrue(container.TryLoadWcid(3, 4000013, subSlot: 0, ignoreDoorState: true)); // Battery Unit
++            Assert.IsTrue(container.TryLoadWcid(4, 4000014, subSlot: 0, ignoreDoorState: true)); // Missile Turret
++            Assert.IsTrue(container.TryLoadWcid(5, 4000015, subSlot: 0, ignoreDoorState: true)); // Ground Radar
++            Assert.IsTrue(container.TryLoadWcid(6, 4000016, subSlot: 0, ignoreDoorState: true)); // Mortar Turret
++            Assert.IsTrue(container.TryLoadWcid(7, 4000017, subSlot: 0, ignoreDoorState: true)); // Laser Turret
++            Assert.IsTrue(container.TryLoadWcid(8, 4000002, subSlot: 0, ignoreDoorState: true)); // AN/TPS-1 Radar
++
++            // Verify 9 full bays are occupied (out of 10)
++            Assert.AreEqual(9, container.OccupiedFullBayCount, "FOB20 loadout must occupy 9 of 10 unified bays");
++            Assert.AreEqual(10, container.MaxFullSlots);
+ 
+             // Doors must have remained closed during preset loading
+             Assert.AreEqual(0.0f, container.DoorProgress);
+             Assert.AreEqual(ACE.Server.Vehicles.Deployables.ContainerDoorState.Closed, container.DoorState);
+ 
+-            // Verify network wire message contains all 9 distinct slot wire items
++            // Verify network wire message contains all 9 distinct slot wire items as Full / SubSlot=0
+             var wireMsg = container.CreateContainerStateMsg();
+             Assert.AreEqual(9, wireMsg.Slots.Count, "Wire message must serialize all 9 stowed cargo items");
++            Assert.IsTrue(wireMsg.Slots.All(s => s.PalletSize == (byte)PalletSize.Full && s.SubSlot == 0));
+ 
+             // Verify that opening doors and unpacking recovers all 9 deployables
+             container.SetDoorProgress(1.0f);
+@@ -1410,22 +1306,23 @@ public void T4_1_PresetFob40PopulatesAllNineDeployablesWithClosedDoors()
+ 
+             Assert.AreEqual(0.0f, container.DoorProgress);
+ 
+-            // Load FOB40 preset with ignoreDoorState: true
++            // Load FOB40 preset across slots 0..8 (subSlot: 0) with ignoreDoorState: true
+             Assert.IsTrue(container.TryLoadWcid(0, 4000010, subSlot: 0, ignoreDoorState: true));
+             Assert.IsTrue(container.TryLoadWcid(1, 4000011, subSlot: 0, ignoreDoorState: true));
+             Assert.IsTrue(container.TryLoadWcid(2, 4000012, subSlot: 0, ignoreDoorState: true));
+             Assert.IsTrue(container.TryLoadWcid(3, 4000013, subSlot: 0, ignoreDoorState: true));
+-            Assert.IsTrue(container.TryLoadWcid(3, 4000015, subSlot: 1, ignoreDoorState: true));
+             Assert.IsTrue(container.TryLoadWcid(4, 4000014, subSlot: 0, ignoreDoorState: true));
+-            Assert.IsTrue(container.TryLoadWcid(5, 4000016, subSlot: 0, ignoreDoorState: true));
+-            Assert.IsTrue(container.TryLoadWcid(5, 4000017, subSlot: 1, ignoreDoorState: true));
+-            Assert.IsTrue(container.TryLoadWcid(6, 4000002, subSlot: 0, ignoreDoorState: true));
++            Assert.IsTrue(container.TryLoadWcid(5, 4000015, subSlot: 0, ignoreDoorState: true));
++            Assert.IsTrue(container.TryLoadWcid(6, 4000016, subSlot: 0, ignoreDoorState: true));
++            Assert.IsTrue(container.TryLoadWcid(7, 4000017, subSlot: 0, ignoreDoorState: true));
++            Assert.IsTrue(container.TryLoadWcid(8, 4000002, subSlot: 0, ignoreDoorState: true));
+ 
+-            Assert.AreEqual(7, container.OccupiedFullBayCount, "FOB40 occupies 7 bays of 21");
+-            Assert.AreEqual(21, container.MaxFullSlots);
++            Assert.AreEqual(9, container.OccupiedFullBayCount, "FOB40 occupies 9 bays of 20");
++            Assert.AreEqual(20, container.MaxFullSlots);
+ 
+             var wireMsg = container.CreateContainerStateMsg();
+             Assert.AreEqual(9, wireMsg.Slots.Count);
++            Assert.IsTrue(wireMsg.Slots.All(s => s.PalletSize == (byte)PalletSize.Full && s.SubSlot == 0));
+ 
+             container.SetDoorProgress(1.0f);
+             int unpackedCount = container.UnpackAll(out List<uint> unpackedWcids);
+@@ -1677,10 +1574,9 @@ public void TryUnpackSlot_SpawnFailure_RollsBackNonRadarFullAndHalfPalletsWithCa
+                 var fullState = new PalletCargoState { HasState = true, FuelRemaining = 123.5f };
+                 Assert.IsTrue(container.TryLoadWcid(0, 4000012u, PalletSize.Full, 0, ignoreDoorState: true, fullState));
+ 
+-                var halfState0 = new PalletCargoState { HasState = true, AmmoRemaining = 7 };
+-                var halfState1 = new PalletCargoState { HasState = true, EnergyStoredJoules = 456789f };
+-                Assert.IsTrue(container.TryLoadWcid(1, 4000016u, PalletSize.Half, 0, ignoreDoorState: true, halfState0));
+-                Assert.IsTrue(container.TryLoadWcid(1, 4000013u, PalletSize.Half, 1, ignoreDoorState: true, halfState1));
++                // Passing legacy PalletSize.Half normalizes cleanly to PalletSize.Full with CargoState intact
++                var normalizedState = new PalletCargoState { HasState = true, AmmoRemaining = 7, EnergyStoredJoules = 456789f };
++                Assert.IsTrue(container.TryLoadWcid(1, 4000016u, PalletSize.Half, 1, ignoreDoorState: true, normalizedState));
+ 
+                 Assert.IsTrue(container.TryLoadWcid(2, 4000002u, PalletSize.Full, 0, ignoreDoorState: true, null));
+ 
+@@ -1694,22 +1590,15 @@ public void TryUnpackSlot_SpawnFailure_RollsBackNonRadarFullAndHalfPalletsWithCa
+                 Assert.IsTrue(container.Slots[0].CargoStates[0].HasState);
+                 Assert.AreEqual(123.5f, container.Slots[0].CargoStates[0].FuelRemaining, 1e-4f);
+ 
+-                Assert.IsFalse(container.TryUnpackSlot(1, out ACE.Server.WorldObjects.WorldObject sp1, 1));
++                Assert.IsFalse(container.TryUnpackSlot(1, out ACE.Server.WorldObjects.WorldObject sp1, 0));
+                 Assert.IsNull(sp1);
+                 Assert.IsTrue(container.Slots[1].Occupied);
+                 Assert.AreEqual((byte)0x03, container.Slots[1].OccupiedSubSlots);
+-                Assert.AreEqual(PalletSize.Half, container.Slots[1].OccupiedPalletSize);
+-                Assert.AreEqual(4000016u, container.Slots[1].OccupiedWcids[0]);
+-                Assert.AreEqual(4000013u, container.Slots[1].OccupiedWcids[1]);
+-                Assert.IsTrue(container.Slots[1].CargoStates[1].HasState);
+-                Assert.AreEqual(456789f, container.Slots[1].CargoStates[1].EnergyStoredJoules, 1e-2f);
+-
+-                // Also verify half-pallet auto-select (subSlot = -1) rolls back into subSlot 0 with its state
+-                Assert.IsFalse(container.TryUnpackSlot(1, out ACE.Server.WorldObjects.WorldObject sp1Auto, -1));
+-                Assert.IsNull(sp1Auto);
+-                Assert.AreEqual((byte)0x03, container.Slots[1].OccupiedSubSlots);
++                Assert.AreEqual(PalletSize.Full, container.Slots[1].OccupiedPalletSize);
+                 Assert.AreEqual(4000016u, container.Slots[1].OccupiedWcids[0]);
++                Assert.IsTrue(container.Slots[1].CargoStates[0].HasState);
+                 Assert.AreEqual((ushort)7, container.Slots[1].CargoStates[0].AmmoRemaining);
++                Assert.AreEqual(456789f, container.Slots[1].CargoStates[0].EnergyStoredJoules, 1e-2f);
+ 
+                 Assert.IsFalse(container.TryUnpackSlot(2, out ACE.Server.WorldObjects.WorldObject sp2));
+                 Assert.IsNull(sp2);
+diff --git a/Source/ACE.Server.Tests/Vehicles/M1QcRegressionTests.cs b/Source/ACE.Server.Tests/Vehicles/M1QcRegressionTests.cs
+index 5a165639..6702b2d8 100644
+--- a/Source/ACE.Server.Tests/Vehicles/M1QcRegressionTests.cs
++++ b/Source/ACE.Server.Tests/Vehicles/M1QcRegressionTests.cs
+@@ -582,19 +582,19 @@ VehicleEventMsg RunPj(Session sess, VehiclePalletJackAction act)
+                 // Container doors closed -> Aux 5 (ContainerDoorsClosed)
+                 var box = RegisterContainer(0x75010204u, IsoContainerDeployable.Wcid20ft, cx, cy, cz);
+                 box.TryLoadWcid(0, PowerGeneratorDeployable.PowerGeneratorWeenieClassId, ignoreDoorState: true);
+-                box.TryLoadWcid(3, PowerGeneratorDeployable.PowerGeneratorWeenieClassId, ignoreDoorState: true);
+-                jack.SetWorldPose(cx + box.Slots[3].X, cy + box.Slots[3].Y, cz + box.FloorZ, 0.0);
+-                p1.Location = Vehicle.ToPosition(cx + box.Slots[3].X, cy + box.Slots[3].Y - 0.62, cz + box.FloorZ, Quaternion.Identity);
++                box.TryLoadWcid(2, PowerGeneratorDeployable.PowerGeneratorWeenieClassId, ignoreDoorState: true);
++                jack.SetWorldPose(cx + box.Slots[2].X, cy + box.Slots[2].Y, cz + box.FloorZ, 0.0);
++                p1.Location = Vehicle.ToPosition(cx + box.Slots[2].X, cy + box.Slots[2].Y - 0.62, cz + box.FloorZ, Quaternion.Identity);
+ 
+                 Assert.AreEqual((uint)PalletJackEventReason.ContainerDoorsClosed, RunPj(s1, new VehiclePalletJackAction
+                 {
+                     PalletJackGuid = jack.Guid.Full,
+                     TargetGuid = box.Guid.Full,
+-                    SlotIndex = 3,
++                    SlotIndex = 2,
+                     Action = (byte)PalletJackActionKind.PickContainerSlot,
+                 }).Aux);
+ 
+-                // Open doors, pick deep slot 0 blocked by slot 3 -> Aux 4 (LifoBlocked)
++                // Open doors, pick deep slot 0 blocked by slot 2 in left lane -> Aux 4 (LifoBlocked)
+                 box.SetDoorProgress(1.0f);
+                 jack.SetWorldPose(cx + box.Slots[0].X, cy + box.Slots[0].Y, cz + box.FloorZ, 0.0);
+                 Assert.AreEqual((uint)PalletJackEventReason.LifoBlocked, RunPj(s1, new VehiclePalletJackAction
+diff --git a/Source/ACE.Server.Tests/Vehicles/PalletJackLogisticsTests.cs b/Source/ACE.Server.Tests/Vehicles/PalletJackLogisticsTests.cs
+index c4338ea9..f7f374f9 100644
+--- a/Source/ACE.Server.Tests/Vehicles/PalletJackLogisticsTests.cs
++++ b/Source/ACE.Server.Tests/Vehicles/PalletJackLogisticsTests.cs
+@@ -203,6 +203,8 @@ public void ContainerLogisticsPinwheelLifoHalfSubslotsPinchAndBounds()
+             var blk6 = ContainerLogistics.IsSlotReachableForUnload(c20, 6);
+             Assert.IsFalse(blk6.Reachable);
+             Assert.AreEqual(8, blk6.BlockedBySlotIndex);
++            // Independent right lane: unloading slot 9 unlocks slot 7 even while slot 8 remains occupied
++            Assert.IsTrue(ContainerLogistics.IsSlotReachableForUnload(c20, 7).Reachable);
+ 
+             int peel20 = 0;
+             while (c20.OccupiedFullBayCount > 0)
+@@ -215,14 +217,14 @@ public void ContainerLogisticsPinwheelLifoHalfSubslotsPinchAndBounds()
+             }
+             Assert.AreEqual(9, peel20);
+ 
+-            // 2) 40ft full-pallet peel (21 -> 0)
++            // 2) 40ft full-pallet peel (20 -> 0)
+             var c40 = new IsoContainerDeployable(IsoContainerDeployable.BuildWeenie(IsoContainerDeployable.Wcid40ftHC), new ObjectGuid(0x75007002u));
+             c40.SetDoorProgress(1.0f);
+-            for (int i = 0; i < 21; i++)
++            for (int i = 0; i < 20; i++)
+                 Assert.IsTrue(c40.TryLoadWcid(i, 4000011, PalletSize.Full, 0));
+ 
+             var init40 = ContainerLogistics.ComputeReachableUnloadSlots(c40);
+-            CollectionAssert.AreEqual(new[] { 18, 20 }, init40.Reachable.Select(r => r.SlotIndex).OrderBy(x => x).ToArray());
++            CollectionAssert.AreEqual(new[] { 18, 19 }, init40.Reachable.Select(r => r.SlotIndex).OrderBy(x => x).ToArray());
+ 
+             int peel40 = 0;
+             while (c40.OccupiedFullBayCount > 0)
+@@ -233,42 +235,70 @@ public void ContainerLogisticsPinwheelLifoHalfSubslotsPinchAndBounds()
+                 Assert.IsTrue(c40.TryUnpackSlot(pick.SlotIndex, out uint _, (sbyte)pick.SubSlot));
+                 peel40++;
+             }
+-            Assert.AreEqual(21, peel40);
+-
+-            // 3) 'Y' (+90 deg) subSlot 0 blocks subSlot 1; 0.685m pallet jack pinch blocks 16:1 between 18:0 and 20
+-            var slot8 = ContainerLogistics.PinwheelSlots20[8];
+-            var s8_0 = ContainerLogistics.GetSlotSubBox(in slot8, PalletSize.Half, 0);
+-            var s8_1 = ContainerLogistics.GetSlotSubBox(in slot8, PalletSize.Half, 1);
+-            Assert.IsTrue(s8_0.Y < s8_1.Y);
+-
+-            var occY = new[]
++            Assert.AreEqual(20, peel40);
++
++            // 3) Independent Left/Right LIFO lanes: filling entire Left lane keeps entire Right lane reachable
++            var c20Lane = new IsoContainerDeployable(IsoContainerDeployable.BuildWeenie(IsoContainerDeployable.Wcid20ft), new ObjectGuid(0x75007003u));
++            c20Lane.SetDoorProgress(1.0f);
++            for (int slot = 0; slot < 10; slot += 2) // Left lane: 0, 2, 4, 6, 8
++                Assert.IsTrue(c20Lane.TryLoadWcid(slot, 4000013, PalletSize.Full, 0));
++
++            var loadRight = ContainerLogistics.ComputeReachableLoadSlots(c20Lane, PalletSize.Full);
++            CollectionAssert.AreEquivalent(new[] { 1, 3, 5, 7, 9 }, loadRight.Reachable.Select(r => r.SlotIndex).ToArray());
++            var unloadLeft = ContainerLogistics.ComputeReachableUnloadSlots(c20Lane);
++            CollectionAssert.AreEqual(new[] { 8 }, unloadLeft.Reachable.Select(r => r.SlotIndex).ToArray());
++
++            var c40Lane = new IsoContainerDeployable(IsoContainerDeployable.BuildWeenie(IsoContainerDeployable.Wcid40ft), new ObjectGuid(0x75007004u));
++            c40Lane.SetDoorProgress(1.0f);
++            for (int slot = 0; slot < 20; slot += 2) // Left lane: 0, 2, ..., 18
++                Assert.IsTrue(c40Lane.TryLoadWcid(slot, 4000014, PalletSize.Full, 0));
++            var loadRight40 = ContainerLogistics.ComputeReachableLoadSlots(c40Lane, PalletSize.Full);
++            CollectionAssert.AreEquivalent(new[] { 1, 3, 5, 7, 9, 11, 13, 15, 17, 19 }, loadRight40.Reachable.Select(r => r.SlotIndex).ToArray());
++
++            // 4) Client-parity 2-wide grid geometry invariants
++            Assert.AreEqual(1.100, ContainerLogistics.PalletWidth, 1e-6);
++            Assert.AreEqual(1.100, ContainerLogistics.PalletDepth, 1e-6);
++            Assert.AreEqual(0.145, ContainerLogistics.PalletHeight, 1e-6);
++            Assert.AreEqual(0, ContainerLogistics.HalfPalletWcids.Count);
++            Assert.AreEqual(10, ContainerLogistics.PinwheelSlots20.Length);
++            Assert.AreEqual(20, ContainerLogistics.PinwheelSlots40.Length);
++
++            foreach (var s in ContainerLogistics.PinwheelSlots20)
+             {
+-                s8_0,
+-                s8_1,
+-            };
+-            Assert.IsTrue(ContainerLogistics.IsSlotReachableForUnload(DeployableKind.IsoContainer20, occY, 8, 0).Reachable);
+-            var yBlk = ContainerLogistics.IsSlotReachableForUnload(DeployableKind.IsoContainer20, occY, 8, 1);
+-            Assert.IsFalse(yBlk.Reachable);
+-            Assert.AreEqual(8, yBlk.BlockedBySlotIndex);
+-            Assert.AreEqual(0, yBlk.BlockedBySubSlot);
+-
+-            var pinchOcc = new[]
++                Assert.AreEqual('Y', s.Orient);
++                Assert.AreEqual(1.100, s.Dx, 1e-6);
++                Assert.AreEqual(1.100, s.Dy, 1e-6);
++                Assert.AreEqual(s.SlotIndex % 2 == 0 ? -0.575 : +0.575, s.X, 1e-6);
++                Assert.IsTrue(Math.Abs(s.X) + s.Dx * 0.5 <= ContainerLogistics.Spec20ft.HalfW - 0.050);
++                Assert.IsTrue(Math.Abs(s.Y) + s.Dy * 0.5 <= ContainerLogistics.Spec20ft.HalfL - 0.078);
++            }
++            for (int i = 0; i < ContainerLogistics.PinwheelSlots40.Length; i++)
+             {
+-                ContainerLogistics.GetSlotSubBox(in ContainerLogistics.PinwheelSlots40[18], PalletSize.Half, 0),
+-                ContainerLogistics.GetSlotSubBox(in ContainerLogistics.PinwheelSlots40[20], PalletSize.Full, 0),
+-                ContainerLogistics.GetSlotSubBox(in ContainerLogistics.PinwheelSlots40[16], PalletSize.Half, 1),
+-            };
+-            Assert.IsFalse(ContainerLogistics.IsSlotReachableForUnload(DeployableKind.IsoContainer40, pinchOcc, 16, 1).Reachable);
++                var s = ContainerLogistics.PinwheelSlots40[i];
++                int row = i / 2;
++                Assert.AreEqual('Y', s.Orient);
++                Assert.AreEqual(1.100, s.Dx, 1e-6);
++                Assert.AreEqual(1.100, s.Dy, 1e-6);
++                Assert.AreEqual(i % 2 == 0 ? -0.575 : +0.575, s.X, 1e-6);
++                Assert.AreEqual((4.5 - row) * 1.180, s.Y, 1e-6);
++                Assert.IsTrue(Math.Abs(s.X) + s.Dx * 0.5 <= ContainerLogistics.Spec40ft.HalfW - 0.050);
++                Assert.IsTrue(Math.Abs(s.Y) + s.Dy * 0.5 <= ContainerLogistics.Spec40ft.HalfL - 0.155);
++            }
+ 
+-            // 4) Deepest-first load (+Y -> -Y) and strict bounds checks (no subSlot & 1 aliasing)
++            // 5) Deepest-first load (+Y -> -Y) and strict bounds/size checks
+             var loadInit = ContainerLogistics.ComputeReachableLoadSlots(DeployableKind.IsoContainer20, Array.Empty<SlotBox>(), PalletSize.Full);
+             Assert.AreEqual(10, loadInit.Reachable.Count);
+             Assert.IsTrue(loadInit.Reachable[0].Y >= loadInit.Reachable[^1].Y);
++            Assert.AreEqual(0, ContainerLogistics.ComputeReachableLoadSlots(DeployableKind.IsoContainer20, Array.Empty<SlotBox>(), PalletSize.Half).Reachable.Count);
+ 
+             Assert.AreEqual("invalid_slot", ContainerLogistics.IsSlotReachableForLoad(c20, -1, 0, PalletSize.Full).Reason);
+             Assert.AreEqual("invalid_slot", ContainerLogistics.IsSlotReachableForLoad(c20, 10, 0, PalletSize.Full).Reason);
+-            Assert.AreEqual("invalid_subslot", ContainerLogistics.IsSlotReachableForLoad(c20, 0, 2, PalletSize.Half).Reason);
++            Assert.AreEqual("invalid_slot", ContainerLogistics.IsSlotReachableForLoad(c40, 20, 0, PalletSize.Full).Reason);
+             Assert.AreEqual("invalid_subslot", ContainerLogistics.IsSlotReachableForLoad(c20, 0, 1, PalletSize.Full).Reason);
++            Assert.AreEqual("invalid_subslot", ContainerLogistics.IsSlotReachableForLoad(c20, 0, 2, PalletSize.Half).Reason);
++            Assert.AreEqual("invalid_pallet_size", ContainerLogistics.IsSlotReachableForLoad(c20, 0, 0, PalletSize.Half).Reason);
++            Assert.AreEqual("invalid_pallet_size", ContainerLogistics.IsSlotReachableForLoad(c20, 0, 0, PalletSize.None).Reason);
++            Assert.AreEqual("invalid_subslot", ContainerLogistics.IsSlotReachableForUnload(c20, 0, 1).Reason);
+             Assert.AreEqual("invalid_subslot", ContainerLogistics.IsSlotReachableForUnload(c20, 0, 3).Reason);
+         }
+ 
+@@ -452,7 +482,7 @@ public void EndToEndContainerRoundTripPreservesCargoStateAndEnforcesRampAndLifo(
+                 bat.SetStowed(true);
+                 DeployableManager.Register(bat);
+ 
+-                // Move jack to ground units, pick & load SAM into deepest slot 0, Gen into slot 9 (blocks slot 6!), Battery into slot 8 sub 0
++                // Move jack to ground units, pick & load SAM into deepest slot 0, Gen into slot 9, Battery into slot 8 (blocks slot 0!)
+                 void MoveJack(double tx, double ty, double tz)
+                 {
+                     var p = Vehicle.ToPosition(tx, ty, tz, Quaternion.Identity);
+@@ -463,26 +493,30 @@ void MoveJack(double tx, double ty, double tz)
+ 
+                 MoveJack(cx, cy - 4.0, 40.0);
+                 Assert.IsTrue(jack.TryPickGroundDeployable(player, sam.Guid.Full, out var e1), e1);
+-                MoveJack(cx - 0.5080, cy + 2.3889, 40.162);
++                MoveJack(cx - 0.575, cy + 2.320, 40.162);
+                 Assert.IsTrue(jack.TryLoadContainerSlot(player, c20.Guid.Full, 0, 0, out var l1), l1);
+ 
+                 MoveJack(cx + 0.5, cy - 4.0, 40.0);
+                 Assert.IsTrue(jack.TryPickGroundDeployable(player, gen.Guid.Full, out var e2), e2);
+-                MoveJack(cx + 0.5080, cy - 2.2873, 40.162);
++                MoveJack(cx + 0.575, cy - 2.320, 40.162);
+                 Assert.IsTrue(jack.TryLoadContainerSlot(player, c20.Guid.Full, 9, 0, out var l2), l2);
+ 
+                 MoveJack(cx - 0.5, cy - 4.0, 40.0);
++                Assert.AreEqual(PalletSize.Full, bat.Pallet);
+                 Assert.IsTrue(jack.TryPickGroundDeployable(player, bat.Guid.Full, out var e3), e3);
+-                MoveJack(cx - 0.5080, cy - 2.2873 - 0.3048, 40.162);
++                Assert.AreEqual(PalletSize.Full, jack.CarriedPalletSize);
++                MoveJack(cx - 0.575, cy - 2.320, 40.162);
++                Assert.IsFalse(jack.TryLoadContainerSlot(player, c20.Guid.Full, 8, 1, out var subLoadErr), "subSlot != 0 must be rejected");
++                StringAssert.Contains(subLoadErr, "sub-slot", StringComparison.OrdinalIgnoreCase);
+                 Assert.IsTrue(jack.TryLoadContainerSlot(player, c20.Guid.Full, 8, 0, out var l3), l3);
+ 
+-                // Slot 0 is now LIFO-blocked by slot 9/8!
+-                MoveJack(cx - 0.5080, cy + 2.3889, 40.162);
++                // Slot 0 is now LIFO-blocked by slot 8 in the left lane!
++                MoveJack(cx - 0.575, cy + 2.320, 40.162);
+                 Assert.IsFalse(jack.TryPickContainerSlot(player, c20.Guid.Full, 0, 0, out var lifoErr));
+                 StringAssert.Contains(lifoErr, "LIFO");
+ 
+-                // Unload slot 9 (Gen), slot 8:0 (Bat), then slot 0 (SAM) and drop back onto ground -> state preserved!
+-                MoveJack(cx + 0.5080, cy - 2.2873, 40.162);
++                // Unload slot 9 (Gen), slot 8 (Bat), then slot 0 (SAM) and drop back onto ground -> state preserved!
++                MoveJack(cx + 0.575, cy - 2.320, 40.162);
+                 Assert.IsTrue(jack.TryPickContainerSlot(player, c20.Guid.Full, 9, 0, out var u1), u1);
+                 MoveJack(cx, cy - 5.0, 40.0);
+                 Assert.IsTrue(jack.TryDropToGround(player, out var genOutObj, out var d1, activateOnDrop: true), d1);
+@@ -490,7 +524,9 @@ void MoveJack(double tx, double ty, double tz)
+                 Assert.IsNotNull(genOut);
+                 Assert.AreEqual(42.5, genOut.FuelSecondsRemaining, 1e-4, "FuelSecondsRemaining must survive container round-trip");
+ 
+-                MoveJack(cx - 0.5080, cy - 2.2873 - 0.3048, 40.162);
++                MoveJack(cx - 0.575, cy - 2.320, 40.162);
++                Assert.IsFalse(jack.TryPickContainerSlot(player, c20.Guid.Full, 8, 1, out var subPickErr), "subSlot != 0 must be rejected");
++                StringAssert.Contains(subPickErr, "sub-slot", StringComparison.OrdinalIgnoreCase);
+                 Assert.IsTrue(jack.TryPickContainerSlot(player, c20.Guid.Full, 8, 0, out var u2), u2);
+                 MoveJack(cx - 1.5, cy - 5.0, 40.0);
+                 Assert.IsTrue(jack.TryDropToGround(player, out var batOutObj, out var d2, activateOnDrop: true), d2);
+@@ -498,7 +534,7 @@ void MoveJack(double tx, double ty, double tz)
+                 Assert.IsNotNull(batOut);
+                 Assert.AreEqual(250000.0f, batOut.CapacitorJoules, 1e-2f, "CapacitorJoules must survive container round-trip");
+ 
+-                MoveJack(cx - 0.5080, cy + 2.3889, 40.162);
++                MoveJack(cx - 0.575, cy + 2.320, 40.162);
+                 Assert.IsTrue(jack.TryPickContainerSlot(player, c20.Guid.Full, 0, 0, out var u3), u3);
+                 MoveJack(cx + 1.5, cy - 5.0, 40.0);
+                 Assert.IsTrue(jack.TryDropToGround(player, out var samOutObj, out var d3, activateOnDrop: true), d3);
+@@ -635,10 +671,10 @@ public void RotatedContainerSlot20AndProbeWalkableSupportMatchForwardAxis()
+             box.SetDoorProgress(1.0f);
+             DeployableManager.Register(box);
+ 
+-            // Slot 20 rear-left bay in container local coordinates: lx = -0.585, ly = -5.35
++            // Slot 19 rear-right bay in container local coordinates: lx = +0.575, ly = -5.310
+             Assert.IsTrue(ContainerLogistics.ResolveSpec(DeployableKind.IsoContainer40, out _, out var slotDefs));
+-            var slot20 = ContainerLogistics.GetSlotSubBox(in slotDefs[20], PalletSize.Full, 0);
+-            var (wxOff, wyOff, _) = TrailerKinematics.RotateByOrientation(heading, 0.0, 0.0, slot20.X, slot20.Y, 0.0);
++            var slot19 = ContainerLogistics.GetSlotSubBox(in slotDefs[19], PalletSize.Full, 0);
++            var (wxOff, wyOff, _) = TrailerKinematics.RotateByOrientation(heading, 0.0, 0.0, slot19.X, slot19.Y, 0.0);
+             double jx = cx + wxOff;
+             double jy = cy + wyOff;
+ 
+@@ -655,7 +691,7 @@ public void RotatedContainerSlot20AndProbeWalkableSupportMatchForwardAxis()
+                 Assert.IsTrue(pj.TryGrab(player, out var gErr), gErr);
+                 pj.CarriedWcid = 4000014;
+                 pj.CarriedPalletSize = PalletSize.Full;
+-                Assert.IsTrue(pj.TryLoadContainerSlot(player, box.Guid.Full, 20, 0, out var lErr), lErr);
++                Assert.IsTrue(pj.TryLoadContainerSlot(player, box.Guid.Full, 19, 0, out var lErr), lErr);
+             }
+             finally
+             {
+diff --git a/Source/ACE.Server.Tests/Vehicles/SidelifterTests.cs b/Source/ACE.Server.Tests/Vehicles/SidelifterTests.cs
+index 39d41d36..38350f54 100644
+--- a/Source/ACE.Server.Tests/Vehicles/SidelifterTests.cs
++++ b/Source/ACE.Server.Tests/Vehicles/SidelifterTests.cs
+@@ -574,7 +574,7 @@ public void UnderFramePalletJackRackPresetAndDestroyCleanup()
+ 
+             var spawnedContainer = DeployableManager.GetDeployable(spawnedTrailer.MountedContainerGuid) as IsoContainerDeployable;
+             Assert.IsNotNull(spawnedContainer);
+-            Assert.AreEqual(7, spawnedContainer.OccupiedFullBayCount, "sidelifter40 preset must preload 9 FOB units across 7 bays");
++            Assert.AreEqual(9, spawnedContainer.OccupiedFullBayCount, "sidelifter40 preset must preload 9 FOB units across 9 bays");
+ 
+             // Destroy trailer drops stowed jack safely to ground
+             uint jackGuid = spawnedTrailer.StowedPalletJackGuid;
+diff --git a/Source/ACE.Server/Vehicles/Deployables/BatteryDeployable.cs b/Source/ACE.Server/Vehicles/Deployables/BatteryDeployable.cs
+index cd8384d0..0aef2c39 100644
+--- a/Source/ACE.Server/Vehicles/Deployables/BatteryDeployable.cs
++++ b/Source/ACE.Server/Vehicles/Deployables/BatteryDeployable.cs
+@@ -6,7 +6,7 @@
+ namespace ACE.Server.Vehicles.Deployables
+ {
+     /// <summary>
+-    /// Battery Capacitor Unit (WCID 4000013, Half Pallet).
++    /// Battery Capacitor Unit (WCID 4000013, Unified ISO 6780 Full Pallet).
+     /// 600 kJ capacitor bank buffer with 5-bar state-of-charge display.
+     /// Stores excess microgrid power and buffers night/cloud deficits and weapon firing spikes.
+     /// </summary>
+@@ -48,7 +48,7 @@ public BatteryDeployable(Weenie weenie, ObjectGuid guid, Vehicle parentVehicle =
+             : base(weenie, guid, parentVehicle, deployer)
+         {
+             Kind = DeployableKind.BatteryUnit;
+-            Pallet = PalletSize.Half;
++            Pallet = PalletSize.Full;
+         }
+ 
+         public static Weenie BuildWeenie(Vehicle parentVehicle = null, Player deployer = null)
+diff --git a/Source/ACE.Server/Vehicles/Deployables/ContainerLogistics.cs b/Source/ACE.Server/Vehicles/Deployables/ContainerLogistics.cs
+index 8bdb3910..dd4ba48c 100644
+--- a/Source/ACE.Server/Vehicles/Deployables/ContainerLogistics.cs
++++ b/Source/ACE.Server/Vehicles/Deployables/ContainerLogistics.cs
+@@ -138,16 +138,21 @@ public sealed class ReachableSlotListResult
+     }
+ 
+     /// <summary>
+-    /// Pure deterministic ISO 668 / ISO 6780 / ISO 3691-5 container interior LIFO pinwheel solver.
++    /// Pure deterministic ISO 668 / ISO 6780 / ISO 3691-5 container interior LIFO solver.
+     /// 1:1 parity twin of holtburger-web scene3d/vehicle/container_logistics.js.
+     /// </summary>
+     public static class ContainerLogistics
+     {
+-        public const double GmaFullWidth = 1.2192;
+-        public const double GmaHalfWidth = 0.6096;
+-        public const double GmaDepth = 1.0160;
+-        public const double GmaHeight = 0.1397;
+-        public const double HalfOffsetM = 0.3048;
++        public const double PalletWidth = 1.100;
++        public const double PalletDepth = 1.100;
++        public const double PalletHeight = 0.145;
++
++        // Backward-compatible aliases pointing to unified ISO 6780 1100mm dimensions
++        public const double GmaFullWidth = PalletWidth;
++        public const double GmaHalfWidth = PalletWidth;
++        public const double GmaDepth = PalletDepth;
++        public const double GmaHeight = PalletHeight;
++        public const double HalfOffsetM = 0.0;
+ 
+         public const double PalletJackWidth = 0.685;
+         public const double PalletJackForkLength = 1.150;
+@@ -162,49 +167,42 @@ public static class ContainerLogistics
+ 
+         public const double Eps = 1e-4;
+ 
+-        public static readonly HashSet<uint> HalfPalletWcids = new HashSet<uint> { 4000013, 4000015, 4000016, 4000017 };
++        public static readonly HashSet<uint> HalfPalletWcids = new HashSet<uint>();
+ 
+         public static readonly ContainerInteriorSpec Spec20ft = new ContainerInteriorSpec(
+-            DeployableKind.IsoContainer20, 2.352, 5.898, 1.176, 2.949, 0.162, 10, 20);
++            DeployableKind.IsoContainer20, 2.352, 5.898, 1.176, 2.949, 0.162, 10, 10);
+         public static readonly ContainerInteriorSpec Spec40ft = new ContainerInteriorSpec(
+-            DeployableKind.IsoContainer40, 2.352, 12.032, 1.176, 6.016, 0.162, 21, 42);
++            DeployableKind.IsoContainer40, 2.352, 12.032, 1.176, 6.016, 0.162, 20, 20);
+         public static readonly ContainerInteriorSpec Spec40HC = new ContainerInteriorSpec(
+-            DeployableKind.IsoContainer40HC, 2.352, 12.032, 1.176, 6.016, 0.162, 21, 42);
+-
+-        public static readonly PinwheelSlotDef[] PinwheelSlots20 = new[]
+-        {
+-            new PinwheelSlotDef(0, -0.5080, +2.3889, 'X', 1.2192, 1.0160),
+-            new PinwheelSlotDef(1, +0.6096, +2.2873, 'Y', 1.0160, 1.2192),
+-            new PinwheelSlotDef(2, +0.5080, +1.1697, 'X', 1.2192, 1.0160),
+-            new PinwheelSlotDef(3, -0.6096, +1.2713, 'Y', 1.0160, 1.2192),
+-            new PinwheelSlotDef(4, -0.5080, +0.1016, 'X', 1.2192, 1.0160),
+-            new PinwheelSlotDef(5, +0.6096, -0.0000, 'Y', 1.0160, 1.2192),
+-            new PinwheelSlotDef(6, +0.5080, -1.1176, 'X', 1.2192, 1.0160),
+-            new PinwheelSlotDef(7, -0.6096, -1.0160, 'Y', 1.0160, 1.2192),
+-            new PinwheelSlotDef(8, -0.5080, -2.2873, 'Y', 1.0160, 1.2192),
+-            new PinwheelSlotDef(9, +0.5080, -2.2873, 'Y', 1.0160, 1.2192),
+-        };
++            DeployableKind.IsoContainer40HC, 2.352, 12.032, 1.176, 6.016, 0.162, 20, 20);
+ 
++        public static readonly PinwheelSlotDef[] PinwheelSlots20 = BuildSlots20();
+         public static readonly PinwheelSlotDef[] PinwheelSlots40 = BuildSlots40();
++        public static PinwheelSlotDef[] ContainerSlots20 => PinwheelSlots20;
++        public static PinwheelSlotDef[] ContainerSlots40 => PinwheelSlots40;
++
++        static PinwheelSlotDef[] BuildSlots20()
++        {
++            var rows = new[] { +2.320, +1.160, 0.000, -1.160, -2.320 };
++            var list = new PinwheelSlotDef[rows.Length * 2];
++            for (int r = 0; r < rows.Length; r++)
++            {
++                list[r * 2 + 0] = new PinwheelSlotDef(r * 2 + 0, -0.575, rows[r], 'Y', PalletWidth, PalletDepth);
++                list[r * 2 + 1] = new PinwheelSlotDef(r * 2 + 1, +0.575, rows[r], 'Y', PalletWidth, PalletDepth);
++            }
++            return list;
++        }
+ 
+         static PinwheelSlotDef[] BuildSlots40()
+         {
+-            var list = new List<PinwheelSlotDef>(21);
+-            var quadCenters = new[] { +4.8768, +2.6416, +0.4064, -1.8288 };
+-            for (int q = 0; q < quadCenters.Length; q++)
++            var list = new PinwheelSlotDef[20];
++            for (int r = 0; r < 10; r++)
+             {
+-                double yc = quadCenters[q];
+-                list.Add(new PinwheelSlotDef(4 * q + 0, -0.5080, yc + 0.6096, 'X', 1.2192, 1.0160));
+-                list.Add(new PinwheelSlotDef(4 * q + 1, +0.6096, yc + 0.5080, 'Y', 1.0160, 1.2192));
+-                list.Add(new PinwheelSlotDef(4 * q + 2, +0.5080, yc - 0.6096, 'X', 1.2192, 1.0160));
+-                list.Add(new PinwheelSlotDef(4 * q + 3, -0.6096, yc - 0.5080, 'Y', 1.0160, 1.2192));
++                double y = (4.5 - r) * 1.180;
++                list[r * 2 + 0] = new PinwheelSlotDef(r * 2 + 0, -0.575, y, 'Y', PalletWidth, PalletDepth);
++                list[r * 2 + 1] = new PinwheelSlotDef(r * 2 + 1, +0.575, y, 'Y', PalletWidth, PalletDepth);
+             }
+-            list.Add(new PinwheelSlotDef(16, -0.5368, -3.4544, 'X', 1.2192, 1.0160));
+-            list.Add(new PinwheelSlotDef(17, -0.5368, -4.4704, 'X', 1.2192, 1.0160));
+-            list.Add(new PinwheelSlotDef(18, -0.5368, -5.4864, 'X', 1.2192, 1.0160));
+-            list.Add(new PinwheelSlotDef(19, +0.6384, -3.5560, 'Y', 1.0160, 1.2192));
+-            list.Add(new PinwheelSlotDef(20, +0.6384, -4.7752, 'Y', 1.0160, 1.2192));
+-            return list.ToArray();
++            return list;
+         }
+ 
+         public static bool ResolveSpec(DeployableKind kind, out ContainerInteriorSpec interior, out PinwheelSlotDef[] slots) =>
+@@ -235,67 +233,24 @@ public static bool ResolveSpec(uint kindOrWcid, out ContainerInteriorSpec interi
+             return false;
+         }
+ 
+-        public static SlotBox GetSlotSubBox(in PinwheelSlotDef slotDef, PalletSize palletSize, int subSlot = 0)
++        public static SlotBox GetSlotSubBox(in PinwheelSlotDef slotDef, PalletSize palletSize = PalletSize.Full, int subSlot = 0)
+         {
+-            if (palletSize != PalletSize.Half)
+-            {
+-                double hxFull = slotDef.Dx * 0.5;
+-                double hyFull = slotDef.Dy * 0.5;
+-                return new SlotBox
+-                {
+-                    SlotIndex = slotDef.SlotIndex,
+-                    SubSlot = 0,
+-                    PalletSize = PalletSize.Full,
+-                    X = slotDef.X,
+-                    Y = slotDef.Y,
+-                    Dx = slotDef.Dx,
+-                    Dy = slotDef.Dy,
+-                    Orient = slotDef.Orient,
+-                    X0 = slotDef.X - hxFull,
+-                    X1 = slotDef.X + hxFull,
+-                    Y0 = slotDef.Y - hyFull,
+-                    Y1 = slotDef.Y + hyFull,
+-                };
+-            }
+-
+-            int sub = subSlot == 1 ? 1 : 0;
+-            double off = sub == 1 ? HalfOffsetM : -HalfOffsetM;
+-            double cx;
+-            double cy;
+-            double dx;
+-            double dy;
+-            if (slotDef.Orient == 'Y')
+-            {
+-                // +90 deg CCW rotation maps local (off, 0) -> (0, off)
+-                cx = slotDef.X;
+-                cy = slotDef.Y + off;
+-                dx = GmaDepth;     // 1.0160
+-                dy = GmaHalfWidth; // 0.6096
+-            }
+-            else
+-            {
+-                cx = slotDef.X + off;
+-                cy = slotDef.Y;
+-                dx = GmaHalfWidth; // 0.6096
+-                dy = GmaDepth;     // 1.0160
+-            }
+-
+-            double hx = dx * 0.5;
+-            double hy = dy * 0.5;
++            double hxFull = slotDef.Dx * 0.5;
++            double hyFull = slotDef.Dy * 0.5;
+             return new SlotBox
+             {
+                 SlotIndex = slotDef.SlotIndex,
+-                SubSlot = sub,
+-                PalletSize = PalletSize.Half,
+-                X = cx,
+-                Y = cy,
+-                Dx = dx,
+-                Dy = dy,
++                SubSlot = 0,
++                PalletSize = PalletSize.Full,
++                X = slotDef.X,
++                Y = slotDef.Y,
++                Dx = slotDef.Dx,
++                Dy = slotDef.Dy,
+                 Orient = slotDef.Orient,
+-                X0 = cx - hx,
+-                X1 = cx + hx,
+-                Y0 = cy - hy,
+-                Y1 = cy + hy,
++                X0 = slotDef.X - hxFull,
++                X1 = slotDef.X + hxFull,
++                Y0 = slotDef.Y - hyFull,
++                Y1 = slotDef.Y + hyFull,
+             };
+         }
+ 
+@@ -309,26 +264,12 @@ public static List<SlotBox> ExtractOccupiedBoxes(IsoContainerDeployable containe
+             {
+                 if (s.SlotIndex < 0 || s.SlotIndex >= slotDefs.Length) continue;
+                 if (!s.Occupied && s.OccupiedSubSlots == 0) continue;
++                if (s.OccupiedPalletSize == PalletSize.None) continue;
+ 
+                 var def = slotDefs[s.SlotIndex];
+-                if (s.OccupiedPalletSize == PalletSize.Full)
+-                {
+-                    var box = GetSlotSubBox(in def, PalletSize.Full, 0);
+-                    box.CargoWcid = s.OccupiedWcids[0];
+-                    boxes.Add(box);
+-                }
+-                else if (s.OccupiedPalletSize == PalletSize.Half)
+-                {
+-                    for (int sub = 0; sub <= 1; sub++)
+-                    {
+-                        if ((s.OccupiedSubSlots & (1 << sub)) != 0)
+-                        {
+-                            var box = GetSlotSubBox(in def, PalletSize.Half, sub);
+-                            box.CargoWcid = s.OccupiedWcids[sub];
+-                            boxes.Add(box);
+-                        }
+-                    }
+-                }
++                var box = GetSlotSubBox(in def, PalletSize.Full, 0);
++                box.CargoWcid = s.OccupiedWcid;
++                boxes.Add(box);
+             }
+             return boxes;
+         }
+@@ -503,61 +444,27 @@ public static ReachableSlotListResult ComputeReachableLoadSlots(DeployableKind c
+             var result = new ReachableSlotListResult();
+             if (!ResolveSpec(containerKind, out var interior, out var slotDefs))
+                 return result;
+-            if (palletSize != PalletSize.Full && palletSize != PalletSize.Half)
++            if (palletSize != PalletSize.Full)
+                 return result;
+ 
+-            var fullSet = new HashSet<int>();
+-            var halfMap = new Dictionary<int, HashSet<int>>();
+-            if (occupiedBoxes != null)
+-            {
+-                for (int i = 0; i < occupiedBoxes.Count; i++)
+-                {
+-                    var o = occupiedBoxes[i];
+-                    if (o.PalletSize == PalletSize.Full)
+-                    {
+-                        fullSet.Add(o.SlotIndex);
+-                    }
+-                    else if (o.PalletSize == PalletSize.Half)
+-                    {
+-                        if (!halfMap.TryGetValue(o.SlotIndex, out var set))
+-                        {
+-                            set = new HashSet<int>();
+-                            halfMap[o.SlotIndex] = set;
+-                        }
+-                        set.Add(o.SubSlot);
+-                    }
+-                }
+-            }
++            var normalizedOccupied = NormalizeOccupiedBoxes(slotDefs, occupiedBoxes);
++            var occupiedSet = new HashSet<int>();
++            for (int i = 0; i < normalizedOccupied.Count; i++)
++                occupiedSet.Add(normalizedOccupied[i].SlotIndex);
+ 
+-            bool wantHalf = palletSize == PalletSize.Half;
+             var candidates = new List<SlotBox>();
+             for (int i = 0; i < slotDefs.Length; i++)
+             {
+                 var def = slotDefs[i];
+-                if (fullSet.Contains(def.SlotIndex))
++                if (occupiedSet.Contains(def.SlotIndex))
+                     continue;
+-                halfMap.TryGetValue(def.SlotIndex, out var subs);
+-                if (!wantHalf)
+-                {
+-                    if (subs != null && subs.Count > 0)
+-                        continue;
+-                    candidates.Add(GetSlotSubBox(in def, PalletSize.Full, 0));
+-                }
+-                else
+-                {
+-                    for (int sub = 0; sub <= 1; sub++)
+-                    {
+-                        if (subs != null && subs.Contains(sub))
+-                            continue;
+-                        candidates.Add(GetSlotSubBox(in def, PalletSize.Half, sub));
+-                    }
+-                }
++                candidates.Add(GetSlotSubBox(in def, PalletSize.Full, 0));
+             }
+ 
+             for (int i = 0; i < candidates.Count; i++)
+             {
+                 var cand = candidates[i];
+-                var corr = EvaluateCorridorFromDoor(in cand, occupiedBoxes, interior.HalfW);
++                var corr = EvaluateCorridorFromDoor(in cand, normalizedOccupied, interior.HalfW);
+                 var entry = new ReachableSlotEntry
+                 {
+                     SlotIndex = cand.SlotIndex,
+@@ -593,6 +500,25 @@ static int ByDeepestFirst(ReachableSlotEntry a, ReachableSlotEntry b)
+             return result;
+         }
+ 
++        private static List<SlotBox> NormalizeOccupiedBoxes(PinwheelSlotDef[] slotDefs, IReadOnlyList<SlotBox> occupiedBoxes)
++        {
++            var list = new List<SlotBox>();
++            if (occupiedBoxes == null) return list;
++            var seen = new HashSet<int>();
++            for (int i = 0; i < occupiedBoxes.Count; i++)
++            {
++                var o = occupiedBoxes[i];
++                if (o.SlotIndex < 0 || o.SlotIndex >= slotDefs.Length) continue;
++                if (o.PalletSize == PalletSize.None) continue;
++                if (!seen.Add(o.SlotIndex)) continue;
++
++                var box = GetSlotSubBox(in slotDefs[o.SlotIndex], PalletSize.Full, 0);
++                box.CargoWcid = o.CargoWcid;
++                list.Add(box);
++            }
++            return list;
++        }
++
+         public static CorridorReachabilityResult IsSlotReachableForUnload(IsoContainerDeployable container, int slotIndex, int subSlot = 0)
+         {
+             if (container == null)
+@@ -610,38 +536,28 @@ public static CorridorReachabilityResult IsSlotReachableForUnload(IsoContainerDe
+                 return new CorridorReachabilityResult(false, null, null, null, "invalid_container");
+             if (slotIndex < 0 || slotIndex >= slotDefs.Length)
+                 return new CorridorReachabilityResult(false, null, null, null, "invalid_slot");
+-            if (subSlot < 0 || subSlot > 1)
++            if (subSlot != 0)
+                 return new CorridorReachabilityResult(false, null, null, null, "invalid_subslot");
+ 
+-            if (occupiedBoxes == null)
++            var normalized = NormalizeOccupiedBoxes(slotDefs, occupiedBoxes);
++            if (normalized.Count == 0)
+                 return new CorridorReachabilityResult(false, null, null, null, "slot_empty");
+ 
+-            bool foundSlot = false;
+             SlotBox? target = null;
+-            for (int i = 0; i < occupiedBoxes.Count; i++)
++            for (int i = 0; i < normalized.Count; i++)
+             {
+-                var o = occupiedBoxes[i];
+-                if (o.SlotIndex != slotIndex) continue;
+-                foundSlot = true;
+-                if (o.PalletSize == PalletSize.Full)
++                if (normalized[i].SlotIndex == slotIndex)
+                 {
+-                    if (subSlot != 0)
+-                        return new CorridorReachabilityResult(false, null, null, null, "invalid_subslot");
+-                    target = o;
+-                    break;
+-                }
+-                if (o.SubSlot == subSlot)
+-                {
+-                    target = o;
++                    target = normalized[i];
+                     break;
+                 }
+             }
+ 
+             if (!target.HasValue)
+-                return new CorridorReachabilityResult(false, null, null, null, foundSlot ? "slot_empty" : "slot_empty");
++                return new CorridorReachabilityResult(false, null, null, null, "slot_empty");
+ 
+             var t = target.Value;
+-            return EvaluateCorridorFromDoor(in t, occupiedBoxes, interior.HalfW);
++            return EvaluateCorridorFromDoor(in t, normalized, interior.HalfW);
+         }
+ 
+         public static CorridorReachabilityResult IsSlotReachableForLoad(
+@@ -666,48 +582,23 @@ public static CorridorReachabilityResult IsSlotReachableForUnload(IsoContainerDe
+                 return new CorridorReachabilityResult(false, null, null, null, "invalid_container");
+             if (slotIndex < 0 || slotIndex >= slotDefs.Length)
+                 return new CorridorReachabilityResult(false, null, null, null, "invalid_slot");
+-            if (subSlot < 0 || subSlot > 1)
++            if (subSlot != 0)
+                 return new CorridorReachabilityResult(false, null, null, null, "invalid_subslot");
+-            if (palletSize != PalletSize.Full && palletSize != PalletSize.Half)
++            if (palletSize != PalletSize.Full)
+                 return new CorridorReachabilityResult(false, null, null, null, "invalid_pallet_size");
+-            if (palletSize == PalletSize.Full && subSlot != 0)
+-                return new CorridorReachabilityResult(false, null, null, null, "invalid_subslot");
+ 
+-            if (occupiedBoxes != null)
++            var normalized = NormalizeOccupiedBoxes(slotDefs, occupiedBoxes);
++            for (int i = 0; i < normalized.Count; i++)
+             {
+-                int? firstHalfSub = null;
+-                for (int i = 0; i < occupiedBoxes.Count; i++)
+-                {
+-                    var o = occupiedBoxes[i];
+-                    if (o.SlotIndex != slotIndex) continue;
+-                    if (o.PalletSize == PalletSize.Full)
+-                    {
+-                        return new CorridorReachabilityResult(
+-                            false, slotIndex, 0, new[] { new SlotRef(slotIndex, 0) }, "slot_occupied");
+-                    }
+-                    if (o.PalletSize == PalletSize.Half)
+-                    {
+-                        if (palletSize == PalletSize.Full)
+-                        {
+-                            if (!firstHalfSub.HasValue || o.SubSlot < firstHalfSub.Value)
+-                                firstHalfSub = o.SubSlot;
+-                        }
+-                        else if (o.SubSlot == subSlot)
+-                        {
+-                            return new CorridorReachabilityResult(
+-                                false, slotIndex, subSlot, new[] { new SlotRef(slotIndex, subSlot) }, "slot_occupied");
+-                        }
+-                    }
+-                }
+-                if (firstHalfSub.HasValue)
++                if (normalized[i].SlotIndex == slotIndex)
+                 {
+                     return new CorridorReachabilityResult(
+-                        false, slotIndex, firstHalfSub.Value, new[] { new SlotRef(slotIndex, firstHalfSub.Value) }, "slot_occupied");
++                        false, slotIndex, 0, new[] { new SlotRef(slotIndex, 0) }, "slot_occupied");
+                 }
+             }
+ 
+-            var cand = GetSlotSubBox(in slotDefs[slotIndex], palletSize, palletSize == PalletSize.Half ? subSlot : 0);
+-            return EvaluateCorridorFromDoor(in cand, occupiedBoxes, interior.HalfW);
++            var cand = GetSlotSubBox(in slotDefs[slotIndex], PalletSize.Full, 0);
++            return EvaluateCorridorFromDoor(in cand, normalized, interior.HalfW);
+         }
+     }
+ }
+diff --git a/Source/ACE.Server/Vehicles/Deployables/GroundRadarDeployable.cs b/Source/ACE.Server/Vehicles/Deployables/GroundRadarDeployable.cs
+index 35b66ad8..8efbcfad 100644
+--- a/Source/ACE.Server/Vehicles/Deployables/GroundRadarDeployable.cs
++++ b/Source/ACE.Server/Vehicles/Deployables/GroundRadarDeployable.cs
+@@ -11,7 +11,7 @@
+ namespace ACE.Server.Vehicles.Deployables
+ {
+     /// <summary>
+-    /// Ground Radar (WCID 4000015, Half Pallet).
++    /// Ground Radar (WCID 4000015, Unified ISO 6780 Full Pallet).
+     /// 600m spinning surface radar (30 RPM = 180 deg/s) tracking outdoor players and ground vehicles via IFF,
+     /// with optional monster targeting. Broadcasts Vehicle_GroundContacts (0x090D).
+     /// </summary>
+@@ -39,7 +39,7 @@ public GroundRadarDeployable(Weenie weenie, ObjectGuid guid, Vehicle parentVehic
+             : base(weenie, guid, parentVehicle, deployer)
+         {
+             Kind = DeployableKind.GroundRadar;
+-            Pallet = PalletSize.Half;
++            Pallet = PalletSize.Full;
+             OnlineFlags = DeployableOnlineFlags.Active;
+             DeployerMonarchId = deployer?.MonarchId ?? deployer?.Allegiance?.MonarchId ?? 0;
+             DeployerFellowshipId = deployer?.Fellowship != null ? (uint)deployer.Fellowship.GetHashCode() : 0;
+diff --git a/Source/ACE.Server/Vehicles/Deployables/IsoContainerDeployable.cs b/Source/ACE.Server/Vehicles/Deployables/IsoContainerDeployable.cs
+index a0b680af..a63f8107 100644
+--- a/Source/ACE.Server/Vehicles/Deployables/IsoContainerDeployable.cs
++++ b/Source/ACE.Server/Vehicles/Deployables/IsoContainerDeployable.cs
+@@ -217,7 +217,7 @@ private void InitializeContainer(uint wcid)
+                     FloorZ = FloorElevationZ;
+                     RoofZ = StandardRoofElevationZ;
+                     MaxFullSlots = 10;
+-                    MaxHalfSlots = 20;
++                    MaxHalfSlots = 10;
+                     HasForkliftPockets = true;
+                     ForkliftPocketDimensions = new Vector3(0.356f, 0f, 0.115f);
+                     ForkliftPocketCenterDistance = 2.050f;
+@@ -236,8 +236,8 @@ private void InitializeContainer(uint wcid)
+                     DoorOpeningDimensions = new Vector2(2.340f, 2.280f);
+                     FloorZ = FloorElevationZ;
+                     RoofZ = StandardRoofElevationZ;
+-                    MaxFullSlots = 21;
+-                    MaxHalfSlots = 42;
++                    MaxFullSlots = 20;
++                    MaxHalfSlots = 20;
+                     HasForkliftPockets = false; // Prohibited per ISO 1496-1
+                     HasGooseneckTunnel = false;
+                     HasHazardChevrons = false;
+@@ -254,8 +254,8 @@ private void InitializeContainer(uint wcid)
+                     DoorOpeningDimensions = new Vector2(2.340f, 2.585f);
+                     FloorZ = FloorElevationZ;
+                     RoofZ = HighCubeRoofElevationZ;
+-                    MaxFullSlots = 21;
+-                    MaxHalfSlots = 42;
++                    MaxFullSlots = 20;
++                    MaxHalfSlots = 20;
+                     HasForkliftPockets = false;
+                     HasGooseneckTunnel = true;
+                     GooseneckTunnelDimensions = new Vector3(1.020f, 3.150f, 0.120f);
+@@ -272,47 +272,35 @@ private void InitializeContainer(uint wcid)
+         private void Initialize20ftSlots()
+         {
+             Slots.Clear();
+-            (float x, float y, char orient, float dx, float dy)[] rawSlots = new[]
++            foreach (var r in ContainerLogistics.PinwheelSlots20)
+             {
+-                (-0.5080f, +2.3889f, 'X', 1.2192f, 1.0160f),
+-                (+0.6096f, +2.2873f, 'Y', 1.0160f, 1.2192f),
+-                (+0.5080f, +1.1697f, 'X', 1.2192f, 1.0160f),
+-                (-0.6096f, +1.2713f, 'Y', 1.0160f, 1.2192f),
+-                (-0.5080f, +0.1016f, 'X', 1.2192f, 1.0160f),
+-                (+0.6096f, -0.0000f, 'Y', 1.0160f, 1.2192f),
+-                (+0.5080f, -1.1176f, 'X', 1.2192f, 1.0160f),
+-                (-0.6096f, -1.0160f, 'Y', 1.0160f, 1.2192f),
+-                (-0.5080f, -2.2873f, 'Y', 1.0160f, 1.2192f),
+-                (+0.5080f, -2.2873f, 'Y', 1.0160f, 1.2192f),
+-            };
+-
+-            for (int i = 0; i < rawSlots.Length; i++)
+-            {
+-                var r = rawSlots[i];
+-                Slots.Add(new PinwheelBaySlot { SlotIndex = i, X = r.x, Y = r.y, Orient = r.orient, Dx = r.dx, Dy = r.dy });
++                Slots.Add(new PinwheelBaySlot
++                {
++                    SlotIndex = r.SlotIndex,
++                    X = (float)r.X,
++                    Y = (float)r.Y,
++                    Orient = r.Orient,
++                    Dx = (float)r.Dx,
++                    Dy = (float)r.Dy,
++                });
+             }
+         }
+ 
+         private void Initialize40ftSlots()
+         {
+             Slots.Clear();
+-            float[] quadCenters = new[] { +4.8768f, +2.6416f, +0.4064f, -1.8288f };
+-            int idx = 0;
+-            for (int q = 0; q < quadCenters.Length; q++)
++            foreach (var r in ContainerLogistics.PinwheelSlots40)
+             {
+-                float yc = quadCenters[q];
+-                Slots.Add(new PinwheelBaySlot { SlotIndex = idx++, X = -0.5080f, Y = yc + 0.6096f, Orient = 'X', Dx = 1.2192f, Dy = 1.0160f });
+-                Slots.Add(new PinwheelBaySlot { SlotIndex = idx++, X = +0.6096f, Y = yc + 0.5080f, Orient = 'Y', Dx = 1.0160f, Dy = 1.2192f });
+-                Slots.Add(new PinwheelBaySlot { SlotIndex = idx++, X = +0.5080f, Y = yc - 0.6096f, Orient = 'X', Dx = 1.2192f, Dy = 1.0160f });
+-                Slots.Add(new PinwheelBaySlot { SlotIndex = idx++, X = -0.6096f, Y = yc - 0.5080f, Orient = 'Y', Dx = 1.0160f, Dy = 1.2192f });
++                Slots.Add(new PinwheelBaySlot
++                {
++                    SlotIndex = r.SlotIndex,
++                    X = (float)r.X,
++                    Y = (float)r.Y,
++                    Orient = r.Orient,
++                    Dx = (float)r.Dx,
++                    Dy = (float)r.Dy,
++                });
+             }
+-
+-            // Asymmetric rear tier (5 slots)
+-            Slots.Add(new PinwheelBaySlot { SlotIndex = idx++, X = -0.5368f, Y = -3.4544f, Orient = 'X', Dx = 1.2192f, Dy = 1.0160f });
+-            Slots.Add(new PinwheelBaySlot { SlotIndex = idx++, X = -0.5368f, Y = -4.4704f, Orient = 'X', Dx = 1.2192f, Dy = 1.0160f });
+-            Slots.Add(new PinwheelBaySlot { SlotIndex = idx++, X = -0.5368f, Y = -5.4864f, Orient = 'X', Dx = 1.2192f, Dy = 1.0160f });
+-            Slots.Add(new PinwheelBaySlot { SlotIndex = idx++, X = +0.6384f, Y = -3.5560f, Orient = 'Y', Dx = 1.0160f, Dy = 1.2192f });
+-            Slots.Add(new PinwheelBaySlot { SlotIndex = idx++, X = +0.6384f, Y = -4.7752f, Orient = 'Y', Dx = 1.0160f, Dy = 1.2192f });
+         }
+ 
+         public static Weenie BuildWeenie(uint wcid, Vehicle parentVehicle = null, Player deployer = null)
+@@ -530,11 +518,11 @@ public static int ComputeIso6346CheckDigit(string raw)
+             4000010 => PalletSize.Full, // FluxPod
+             4000011 => PalletSize.Full, // SolarPanels
+             4000012 => PalletSize.Full, // PowerGenerator
++            4000013 => PalletSize.Full, // BatteryUnit (unified ISO 6780)
+             4000014 => PalletSize.Full, // MissileTurret
+-            4000013 => PalletSize.Half, // BatteryUnit
+-            4000015 => PalletSize.Half, // GroundRadar
+-            4000016 => PalletSize.Half, // MortarTurret
+-            4000017 => PalletSize.Half, // LaserTurret
++            4000015 => PalletSize.Full, // GroundRadar (unified ISO 6780)
++            4000016 => PalletSize.Full, // MortarTurret (unified ISO 6780)
++            4000017 => PalletSize.Full, // LaserTurret (unified ISO 6780)
+             _ => PalletSize.None
+         };
+ 
+@@ -549,46 +537,29 @@ public bool TryLoadWcid(int slotIndex, uint wcid, PalletSize palletSize, byte su
+             if (slotIndex < 0 || slotIndex >= Slots.Count)
+                 return false;
+ 
+-            var slot = Slots[slotIndex];
+-
+-            if (palletSize == PalletSize.Full)
+-            {
+-                if (slot.Occupied || slot.OccupiedSubSlots != 0)
+-                    return false;
+-
+-                slot.Occupied = true;
+-                slot.OccupiedWcids[0] = wcid;
+-                slot.OccupiedWcids[1] = 0;
+-                slot.OccupiedPalletSize = PalletSize.Full;
+-                slot.OccupiedSubSlots = 0x03;
+-                slot.CargoStates[0] = cargoState ?? default;
+-                slot.CargoStates[1] = default;
+-                return true;
+-            }
+-            else if (palletSize == PalletSize.Half)
+-            {
+-                int sub = subSlot & 1;
+-                byte mask = (byte)(1 << sub);
+-                if ((slot.OccupiedSubSlots & mask) != 0 || (slot.OccupiedPalletSize == PalletSize.Full))
+-                    return false;
++            if (palletSize != PalletSize.Full && palletSize != PalletSize.Half)
++                return false;
+ 
+-                slot.OccupiedSubSlots |= mask;
+-                slot.OccupiedWcids[sub] = wcid;
+-                slot.CargoStates[sub] = cargoState ?? default;
+-                slot.OccupiedPalletSize = PalletSize.Half;
+-                if (slot.OccupiedSubSlots == 0x03)
+-                    slot.Occupied = true;
+-                return true;
+-            }
++            var slot = Slots[slotIndex];
++            if (slot.Occupied || slot.OccupiedSubSlots != 0)
++                return false;
+ 
+-            return false;
++            // Normalize any legacy Half pallet request onto unified Full slot (subSlot = 0)
++            slot.Occupied = true;
++            slot.OccupiedWcids[0] = wcid;
++            slot.OccupiedWcids[1] = 0;
++            slot.OccupiedPalletSize = PalletSize.Full;
++            slot.OccupiedSubSlots = 0x03;
++            slot.CargoStates[0] = cargoState ?? default;
++            slot.CargoStates[1] = default;
++            return true;
+         }
+ 
+         public bool TryLoadWcid(int slotIndex, uint wcid, byte subSlot = 0, bool ignoreDoorState = false)
+         {
+             var pallet = DeterminePalletSize(wcid);
+             if (pallet == PalletSize.None) return false;
+-            return TryLoadWcid(slotIndex, wcid, pallet, subSlot, ignoreDoorState);
++            return TryLoadWcid(slotIndex, wcid, pallet, 0, ignoreDoorState);
+         }
+ 
+         public bool TryPackDeployable(uint deployableGuid)
+@@ -630,68 +601,28 @@ public bool TryPackDeployable(uint deployableGuid)
+             var dep = DeployableManager.GetDeployable(deployableGuid);
+             if (dep != null)
+             {
+-                if (dep.IsDestroyed || dep.IsPacked)
++                if (dep.IsDestroyed || dep.IsPacked || dep.Pallet == PalletSize.None)
+                     return false;
+                 var (dx, dy, dz) = dep.Location != null ? Vehicle.ToGlobal(dep.Location) : (0.0, 0.0, 0.0);
+                 var dPos = new Vector3((float)dx, (float)dy, (float)dz);
+                 if (Vector3.Distance(Position, dPos) > 15.0f)
+                     return false;
+ 
+-                var pallet = dep.Pallet;
+-                if (pallet == PalletSize.Full)
+-                {
+-                    for (int i = 0; i < Slots.Count; i++)
+-                    {
+-                        var slot = Slots[i];
+-                        if (!slot.Occupied && slot.OccupiedSubSlots == 0)
+-                        {
+-                            slot.Occupied = true;
+-                            slot.OccupiedWcids[0] = dep.Wcid;
+-                            slot.OccupiedWcids[1] = 0;
+-                            slot.OccupiedPalletSize = PalletSize.Full;
+-                            slot.OccupiedSubSlots = 0x03;
+-                            slot.CargoStates[0] = dep.CaptureCargoState();
+-                            slot.CargoStates[1] = default;
+-
+-                            dep.Destroy();
+-                            return true;
+-                        }
+-                    }
+-                }
+-                else if (pallet == PalletSize.Half)
++                for (int i = 0; i < Slots.Count; i++)
+                 {
+-                    for (int i = 0; i < Slots.Count; i++)
++                    var slot = Slots[i];
++                    if (!slot.Occupied && slot.OccupiedSubSlots == 0)
+                     {
+-                        var slot = Slots[i];
+-                        if (slot.OccupiedPalletSize == PalletSize.Half && slot.OccupiedSubSlots != 0x03)
+-                        {
+-                            byte sub = (byte)((slot.OccupiedSubSlots & 0x01) == 0 ? 0 : 1);
+-                            slot.OccupiedSubSlots |= (byte)(1 << sub);
+-                            slot.OccupiedWcids[sub] = dep.Wcid;
+-                            slot.CargoStates[sub] = dep.CaptureCargoState();
+-                            if (slot.OccupiedSubSlots == 0x03)
+-                                slot.Occupied = true;
+-
+-                            dep.Destroy();
+-                            return true;
+-                        }
+-                    }
++                        slot.Occupied = true;
++                        slot.OccupiedWcids[0] = dep.Wcid;
++                        slot.OccupiedWcids[1] = 0;
++                        slot.OccupiedPalletSize = PalletSize.Full;
++                        slot.OccupiedSubSlots = 0x03;
++                        slot.CargoStates[0] = dep.CaptureCargoState();
++                        slot.CargoStates[1] = default;
+ 
+-                    for (int i = 0; i < Slots.Count; i++)
+-                    {
+-                        var slot = Slots[i];
+-                        if (!slot.Occupied && slot.OccupiedSubSlots == 0)
+-                        {
+-                            slot.OccupiedPalletSize = PalletSize.Half;
+-                            slot.OccupiedSubSlots = 0x01;
+-                            slot.OccupiedWcids[0] = dep.Wcid;
+-                            slot.OccupiedWcids[1] = 0;
+-                            slot.CargoStates[0] = dep.CaptureCargoState();
+-                            slot.CargoStates[1] = default;
+-
+-                            dep.Destroy();
+-                            return true;
+-                        }
++                        dep.Destroy();
++                        return true;
+                     }
+                 }
+             }
+@@ -715,50 +646,20 @@ public bool TryUnpackSlot(int slotIndex, out uint wcid, out PalletCargoState car
+             var slot = Slots[slotIndex];
+             if (!slot.Occupied && slot.OccupiedSubSlots == 0)
+                 return false;
++            if (slot.OccupiedPalletSize == PalletSize.None)
++                return false;
+ 
+-            if (slot.OccupiedPalletSize == PalletSize.Full)
+-            {
+-                wcid = slot.OccupiedWcids[0];
+-                cargoState = slot.CargoStates[0];
+-                slot.Occupied = false;
+-                slot.OccupiedWcids[0] = 0;
+-                slot.OccupiedWcids[1] = 0;
+-                slot.CargoStates[0] = default;
+-                slot.CargoStates[1] = default;
+-                slot.OccupiedPalletSize = PalletSize.None;
+-                slot.OccupiedSubSlots = 0;
+-                return true;
+-            }
+-            else if (slot.OccupiedPalletSize == PalletSize.Half)
+-            {
+-                int targetSub;
+-                if (subSlot == 0 || subSlot == 1)
+-                {
+-                    targetSub = subSlot;
+-                    if ((slot.OccupiedSubSlots & (1 << targetSub)) == 0)
+-                        return false;
+-                }
+-                else
+-                {
+-                    targetSub = (slot.OccupiedSubSlots & 0x01) != 0 ? 0 : 1;
+-                    if ((slot.OccupiedSubSlots & (1 << targetSub)) == 0)
+-                        return false;
+-                }
+-
+-                wcid = slot.OccupiedWcids[targetSub];
+-                cargoState = slot.CargoStates[targetSub];
+-                slot.OccupiedWcids[targetSub] = 0;
+-                slot.CargoStates[targetSub] = default;
+-                slot.OccupiedSubSlots &= (byte)~(1 << targetSub);
+-                slot.Occupied = false;
+-                if (slot.OccupiedSubSlots == 0)
+-                {
+-                    slot.OccupiedPalletSize = PalletSize.None;
+-                }
+-                return true;
+-            }
+-
+-            return false;
++            bool useZero = slot.OccupiedWcids[0] != 0;
++            wcid = useZero ? slot.OccupiedWcids[0] : slot.OccupiedWcids[1];
++            cargoState = useZero ? slot.CargoStates[0] : slot.CargoStates[1];
++            slot.Occupied = false;
++            slot.OccupiedWcids[0] = 0;
++            slot.OccupiedWcids[1] = 0;
++            slot.CargoStates[0] = default;
++            slot.CargoStates[1] = default;
++            slot.OccupiedPalletSize = PalletSize.None;
++            slot.OccupiedSubSlots = 0;
++            return true;
+         }
+ 
+         public bool TryUnpackSlot(int slotIndex, out WorldObject spawned, sbyte subSlot = -1)
+@@ -770,30 +671,10 @@ public bool TryUnpackSlot(int slotIndex, out WorldObject spawned, sbyte subSlot
+             var slot = Slots[slotIndex];
+             if (!slot.Occupied && slot.OccupiedSubSlots == 0)
+                 return false;
+-
+-            PalletSize palletSize = slot.OccupiedPalletSize;
+-            byte resolvedSubSlot = 0;
+-            if (palletSize == PalletSize.Half)
+-            {
+-                if (subSlot == 0 || subSlot == 1)
+-                {
+-                    if ((slot.OccupiedSubSlots & (1 << subSlot)) == 0)
+-                        return false;
+-                    resolvedSubSlot = (byte)subSlot;
+-                }
+-                else
+-                {
+-                    resolvedSubSlot = (slot.OccupiedSubSlots & 0x01) != 0 ? (byte)0 : (byte)1;
+-                    if ((slot.OccupiedSubSlots & (1 << resolvedSubSlot)) == 0)
+-                        return false;
+-                }
+-            }
+-            else if (palletSize != PalletSize.Full)
+-            {
++            if (slot.OccupiedPalletSize == PalletSize.None)
+                 return false;
+-            }
+ 
+-            if (!TryUnpackSlot(slotIndex, out uint wcid, out PalletCargoState cargoState, subSlot))
++            if (!TryUnpackSlot(slotIndex, out uint wcid, out PalletCargoState cargoState, 0))
+                 return false;
+ 
+             var (spawnPos, _) = ComputeUnpackSpawnLocation();
+@@ -813,7 +694,7 @@ public bool TryUnpackSlot(int slotIndex, out WorldObject spawned, sbyte subSlot
+                 if (!DeployableManager.TryEnterWorld(station))
+                 {
+                     try { GuidManager.RecycleDynamicGuid(guid); } catch (NullReferenceException) { }
+-                    TryLoadWcid(slotIndex, wcid, palletSize, resolvedSubSlot, ignoreDoorState: true, cargoState);
++                    TryLoadWcid(slotIndex, wcid, PalletSize.Full, 0, ignoreDoorState: true, cargoState);
+                     return false;
+                 }
+                 AirDefenseManager.RegisterStation(station);
+@@ -826,7 +707,7 @@ public bool TryUnpackSlot(int slotIndex, out WorldObject spawned, sbyte subSlot
+                 var dep = DeployableManager.SpawnDeployable(wcid, spawnPos, player);
+                 if (dep == null)
+                 {
+-                    TryLoadWcid(slotIndex, wcid, palletSize, resolvedSubSlot, ignoreDoorState: true, cargoState);
++                    TryLoadWcid(slotIndex, wcid, PalletSize.Full, 0, ignoreDoorState: true, cargoState);
+                     return false;
+                 }
+                 if (cargoState.HasState)
+@@ -849,35 +730,17 @@ public int UnpackAll(out List<uint> unpackedWcids)
+             {
+                 if (slot.Occupied || slot.OccupiedSubSlots != 0)
+                 {
+-                    if (slot.OccupiedPalletSize == PalletSize.Full)
+-                    {
+-                        if (slot.OccupiedWcids[0] != 0)
+-                            unpackedWcids.Add(slot.OccupiedWcids[0]);
+-
+-                        slot.Occupied = false;
+-                        slot.OccupiedWcids[0] = 0;
+-                        slot.OccupiedWcids[1] = 0;
+-                        slot.CargoStates[0] = default;
+-                        slot.CargoStates[1] = default;
+-                        slot.OccupiedPalletSize = PalletSize.None;
+-                        slot.OccupiedSubSlots = 0;
+-                    }
+-                    else if (slot.OccupiedPalletSize == PalletSize.Half)
+-                    {
+-                        for (int i = 0; i < 2; i++)
+-                        {
+-                            if ((slot.OccupiedSubSlots & (1 << i)) != 0 && slot.OccupiedWcids[i] != 0)
+-                            {
+-                                unpackedWcids.Add(slot.OccupiedWcids[i]);
+-                                slot.OccupiedWcids[i] = 0;
+-                                slot.CargoStates[i] = default;
+-                            }
+-                        }
+-
+-                        slot.Occupied = false;
+-                        slot.OccupiedPalletSize = PalletSize.None;
+-                        slot.OccupiedSubSlots = 0;
+-                    }
++                    uint wcid = slot.OccupiedWcids[0] != 0 ? slot.OccupiedWcids[0] : slot.OccupiedWcids[1];
++                    if (wcid != 0)
++                        unpackedWcids.Add(wcid);
++
++                    slot.Occupied = false;
++                    slot.OccupiedWcids[0] = 0;
++                    slot.OccupiedWcids[1] = 0;
++                    slot.CargoStates[0] = default;
++                    slot.CargoStates[1] = default;
++                    slot.OccupiedPalletSize = PalletSize.None;
++                    slot.OccupiedSubSlots = 0;
+                 }
+             }
+ 
+@@ -1035,34 +898,15 @@ public VehicleContainerStateMsg CreateContainerStateMsg()
+             {
+                 if (s.Occupied || s.OccupiedSubSlots != 0)
+                 {
+-                    if (s.OccupiedPalletSize == PalletSize.Full)
++                    if (s.OccupiedPalletSize == PalletSize.None) continue;
++                    msg.Slots.Add(new ContainerSlotWire
+                     {
+-                        msg.Slots.Add(new ContainerSlotWire
+-                        {
+-                            SlotIndex = (byte)s.SlotIndex,
+-                            PalletSize = (byte)PalletSize.Full,
+-                            SubSlot = 0,
+-                            Reserved = 0,
+-                            CargoWcid = s.OccupiedWcids[0],
+-                        });
+-                    }
+-                    else if (s.OccupiedPalletSize == PalletSize.Half)
+-                    {
+-                        for (int i = 0; i < 2; i++)
+-                        {
+-                            if ((s.OccupiedSubSlots & (1 << i)) != 0)
+-                            {
+-                                msg.Slots.Add(new ContainerSlotWire
+-                                {
+-                                    SlotIndex = (byte)s.SlotIndex,
+-                                    PalletSize = (byte)PalletSize.Half,
+-                                    SubSlot = (byte)i,
+-                                    Reserved = 0,
+-                                    CargoWcid = s.OccupiedWcids[i],
+-                                });
+-                            }
+-                        }
+-                    }
++                        SlotIndex = (byte)s.SlotIndex,
++                        PalletSize = (byte)PalletSize.Full,
++                        SubSlot = 0,
++                        Reserved = 0,
++                        CargoWcid = s.OccupiedWcid,
++                    });
+                 }
+             }
+ 
+diff --git a/Source/ACE.Server/Vehicles/Deployables/LaserTurretDeployable.cs b/Source/ACE.Server/Vehicles/Deployables/LaserTurretDeployable.cs
+index 151bfe04..399e81be 100644
+--- a/Source/ACE.Server/Vehicles/Deployables/LaserTurretDeployable.cs
++++ b/Source/ACE.Server/Vehicles/Deployables/LaserTurretDeployable.cs
+@@ -10,7 +10,7 @@
+ namespace ACE.Server.Vehicles.Deployables
+ {
+     /// <summary>
+-    /// Heavy Laser Turret (WCID 4000017, Half Pallet).
++    /// Heavy Laser Turret (WCID 4000017, Unified ISO 6780 Full Pallet).
+     /// Cued by Air Radar and Ground Radar (850m line of sight).
+     /// Fires instant hitscan burst of red laser light consuming 120 kJ grid energy per shot via Vehicle_DeployableFire (0x090C).
+     /// </summary>
+@@ -29,7 +29,7 @@ public LaserTurretDeployable(Weenie weenie, ObjectGuid guid, Vehicle parentVehic
+             : base(weenie, guid, parentVehicle, deployer)
+         {
+             Kind = DeployableKind.HeavyLaserTurret;
+-            Pallet = PalletSize.Half;
++            Pallet = PalletSize.Full;
+             OnlineFlags = DeployableOnlineFlags.Active;
+         }
+ 
+diff --git a/Source/ACE.Server/Vehicles/Deployables/MortarTurretDeployable.cs b/Source/ACE.Server/Vehicles/Deployables/MortarTurretDeployable.cs
+index ab3332da..eebaaa8e 100644
+--- a/Source/ACE.Server/Vehicles/Deployables/MortarTurretDeployable.cs
++++ b/Source/ACE.Server/Vehicles/Deployables/MortarTurretDeployable.cs
+@@ -9,7 +9,7 @@
+ namespace ACE.Server.Vehicles.Deployables
+ {
+     /// <summary>
+-    /// Mortar Turret (WCID 4000016, Half Pallet).
++    /// Mortar Turret (WCID 4000016, Unified ISO 6780 Full Pallet).
+     /// Cued by Ground Radar, traverses and juts up, lobbing heavy mortars along a 50% current / 50% linear-lead
+     /// parabolic trajectory with green smoke and 2 ground bounces before detonation.
+     /// </summary>
+@@ -27,7 +27,7 @@ public MortarTurretDeployable(Weenie weenie, ObjectGuid guid, Vehicle parentVehi
+             : base(weenie, guid, parentVehicle, deployer)
+         {
+             Kind = DeployableKind.MortarTurret;
+-            Pallet = PalletSize.Half;
++            Pallet = PalletSize.Full;
+             OnlineFlags = DeployableOnlineFlags.Active;
+         }
+ 
+diff --git a/Source/ACE.Server/Vehicles/Deployables/PalletJackDeployable.cs b/Source/ACE.Server/Vehicles/Deployables/PalletJackDeployable.cs
+index d80cf1dd..f4875083 100644
+--- a/Source/ACE.Server/Vehicles/Deployables/PalletJackDeployable.cs
++++ b/Source/ACE.Server/Vehicles/Deployables/PalletJackDeployable.cs
+@@ -86,7 +86,7 @@ public PalletJackDeployable(Vector3? globalPos = null, float heading = 0f, Playe
+                 WcidPalletJack,
+                 "hbpallet_jack",
+                 "ISO 3691-5 Walk-Behind Pallet Jack",
+-                "Pedestrian low-lift pallet jack. Grab tiller with [B] to move GMA pallets.");
++                "Pedestrian low-lift pallet jack. Grab tiller with [B] to move ISO 6780 pallets.");
+ 
+         public void SyncFromLocation()
+         {
+@@ -488,7 +488,7 @@ public bool TryPickGroundDeployable(Player player, uint deployableGuid, out stri
+ 
+             CarriedCargoState = target.CaptureCargoState();
+             CarriedWcid = target.Wcid;
+-            CarriedPalletSize = target.Pallet;
++            CarriedPalletSize = target.Pallet == PalletSize.Half ? PalletSize.Full : target.Pallet;
+ 
+             target.Destroy();
+ 
+@@ -672,7 +672,7 @@ private bool IsNearContainerSlot(IsoContainerDeployable container, int slotIndex
+                 return false;
+             }
+ 
+-            var box = ContainerLogistics.GetSlotSubBox(in slotDefs[slotIndex], palletSize, subSlot);
++            var box = ContainerLogistics.GetSlotSubBox(in slotDefs[slotIndex], PalletSize.Full, 0);
+             double distToSlot = Math.Sqrt((localX - box.X) * (localX - box.X) + (localY - box.Y) * (localY - box.Y));
+             if (distToSlot > MaxSlotEngageDistanceM)
+             {
+@@ -728,18 +728,16 @@ public bool TryPickContainerSlot(Player player, uint containerGuid, byte slotInd
+                 error = $"Invalid container bay slot {slotIndex}.";
+                 return false;
+             }
+-            if (subSlot > 1)
++            if (subSlot != 0)
+             {
+                 error = $"Invalid sub-slot {subSlot}.";
+                 return false;
+             }
+ 
+-            var slotObj = container.Slots[slotIndex];
+-            var slotSize = slotObj.OccupiedPalletSize != PalletSize.None ? slotObj.OccupiedPalletSize : PalletSize.Full;
+-            if (!IsNearContainerSlot(container, slotIndex, subSlot, slotSize, out error))
++            if (!IsNearContainerSlot(container, slotIndex, 0, PalletSize.Full, out error))
+                 return false;
+ 
+-            var lifo = ContainerLogistics.IsSlotReachableForUnload(container, slotIndex, subSlot);
++            var lifo = ContainerLogistics.IsSlotReachableForUnload(container, slotIndex, 0);
+             if (!lifo.Reachable)
+             {
+                 error = lifo.BlockedBySlotIndex.HasValue
+@@ -748,7 +746,7 @@ public bool TryPickContainerSlot(Player player, uint containerGuid, byte slotInd
+                 return false;
+             }
+ 
+-            if (!container.TryUnpackSlot(slotIndex, out uint wcid, out PalletCargoState cargoState, (sbyte)subSlot))
++            if (!container.TryUnpackSlot(slotIndex, out uint wcid, out PalletCargoState cargoState, 0))
+             {
+                 error = $"Slot {slotIndex} is empty or unavailable.";
+                 return false;
+@@ -802,23 +800,23 @@ public bool TryLoadContainerSlot(Player player, uint containerGuid, byte slotInd
+             }
+ 
+             var palletSize = CarriedPalletSize != PalletSize.None
+-                ? CarriedPalletSize
++                ? (CarriedPalletSize == PalletSize.Half ? PalletSize.Full : CarriedPalletSize)
+                 : IsoContainerDeployable.DeterminePalletSize(CarriedWcid);
+             if (palletSize == PalletSize.None)
+             {
+-                error = "Carried cargo has no valid GMA pallet size.";
++                error = "Carried cargo has no valid ISO 6780 pallet size.";
+                 return false;
+             }
+-            if (subSlot > 1 || (palletSize == PalletSize.Full && subSlot != 0))
++            if (subSlot != 0)
+             {
+                 error = $"Invalid sub-slot {subSlot} for {palletSize} pallet.";
+                 return false;
+             }
+ 
+-            if (!IsNearContainerSlot(container, slotIndex, subSlot, palletSize, out error))
++            if (!IsNearContainerSlot(container, slotIndex, 0, palletSize, out error))
+                 return false;
+ 
+-            var lifo = ContainerLogistics.IsSlotReachableForLoad(container, slotIndex, subSlot, palletSize);
++            var lifo = ContainerLogistics.IsSlotReachableForLoad(container, slotIndex, 0, palletSize);
+             if (!lifo.Reachable)
+             {
+                 if (lifo.Reason == "slot_occupied")
+@@ -830,7 +828,7 @@ public bool TryLoadContainerSlot(Player player, uint containerGuid, byte slotInd
+                 return false;
+             }
+ 
+-            if (!container.TryLoadWcid(slotIndex, CarriedWcid, palletSize, subSlot, ignoreDoorState: false, cargoState: CarriedCargoState))
++            if (!container.TryLoadWcid(slotIndex, CarriedWcid, palletSize, 0, ignoreDoorState: false, cargoState: CarriedCargoState))
+             {
+                 error = $"Failed to load pallet into bay {slotIndex}.";
+                 return false;
+diff --git a/Source/ACE.Server/Vehicles/VehicleCommands.cs b/Source/ACE.Server/Vehicles/VehicleCommands.cs
+index da996ec6..75465464 100644
+--- a/Source/ACE.Server/Vehicles/VehicleCommands.cs
++++ b/Source/ACE.Server/Vehicles/VehicleCommands.cs
+@@ -505,15 +505,15 @@ public static void HandleContainer(Session session, params string[] parameters)
+                         c.TryLoadWcid(0, 4000010, subSlot: 0, ignoreDoorState: true); // Flux Pod
+                         c.TryLoadWcid(1, 4000011, subSlot: 0, ignoreDoorState: true); // Solar Panels
+                         c.TryLoadWcid(2, 4000012, subSlot: 0, ignoreDoorState: true); // Power Generator
+-                        c.TryLoadWcid(3, 4000013, subSlot: 0, ignoreDoorState: true); // Battery Unit (subslot 0)
+-                        c.TryLoadWcid(3, 4000015, subSlot: 1, ignoreDoorState: true); // Ground Radar (subslot 1)
++                        c.TryLoadWcid(3, 4000013, subSlot: 0, ignoreDoorState: true); // Battery Unit
+                         c.TryLoadWcid(4, 4000014, subSlot: 0, ignoreDoorState: true); // Missile Turret
+-                        c.TryLoadWcid(5, 4000016, subSlot: 0, ignoreDoorState: true); // Mortar Turret (subslot 0)
+-                        c.TryLoadWcid(5, 4000017, subSlot: 1, ignoreDoorState: true); // Laser Turret (subslot 1)
+-                        c.TryLoadWcid(6, 4000002, subSlot: 0, ignoreDoorState: true); // AN/TPS-1 Radar Station
++                        c.TryLoadWcid(5, 4000015, subSlot: 0, ignoreDoorState: true); // Ground Radar
++                        c.TryLoadWcid(6, 4000016, subSlot: 0, ignoreDoorState: true); // Mortar Turret
++                        c.TryLoadWcid(7, 4000017, subSlot: 0, ignoreDoorState: true); // Laser Turret
++                        c.TryLoadWcid(8, 4000002, subSlot: 0, ignoreDoorState: true); // AN/TPS-1 Radar Station
+                         c.BroadcastState();
+ 
+-                        CommandHandlerHelper.WriteOutputInfo(session, $"spawned 20ft ISO container 0x{c.Guid.Full:X8} with FOB-in-a-Box preset (9 units stowed across 7/10 bays).");
++                        CommandHandlerHelper.WriteOutputInfo(session, $"spawned 20ft ISO container 0x{c.Guid.Full:X8} with FOB-in-a-Box preset (9 units stowed across 9/10 bays).");
+                         return;
+                     }
+                     if (parameters.Length > 1 && parameters[1].Equals("fob40", StringComparison.OrdinalIgnoreCase))
+@@ -537,14 +537,14 @@ public static void HandleContainer(Session session, params string[] parameters)
+                         c.TryLoadWcid(1, 4000011, subSlot: 0, ignoreDoorState: true);
+                         c.TryLoadWcid(2, 4000012, subSlot: 0, ignoreDoorState: true);
+                         c.TryLoadWcid(3, 4000013, subSlot: 0, ignoreDoorState: true);
+-                        c.TryLoadWcid(3, 4000015, subSlot: 1, ignoreDoorState: true);
+                         c.TryLoadWcid(4, 4000014, subSlot: 0, ignoreDoorState: true);
+-                        c.TryLoadWcid(5, 4000016, subSlot: 0, ignoreDoorState: true);
+-                        c.TryLoadWcid(5, 4000017, subSlot: 1, ignoreDoorState: true);
+-                        c.TryLoadWcid(6, 4000002, subSlot: 0, ignoreDoorState: true);
++                        c.TryLoadWcid(5, 4000015, subSlot: 0, ignoreDoorState: true);
++                        c.TryLoadWcid(6, 4000016, subSlot: 0, ignoreDoorState: true);
++                        c.TryLoadWcid(7, 4000017, subSlot: 0, ignoreDoorState: true);
++                        c.TryLoadWcid(8, 4000002, subSlot: 0, ignoreDoorState: true);
+                         c.BroadcastState();
+ 
+-                        CommandHandlerHelper.WriteOutputInfo(session, $"spawned 40ft ISO container 0x{c.Guid.Full:X8} with FOB loadout (9 units stowed across 7/21 bays).");
++                        CommandHandlerHelper.WriteOutputInfo(session, $"spawned 40ft ISO container 0x{c.Guid.Full:X8} with FOB loadout (9 units stowed across 9/20 bays).");
+                         return;
+                     }
+ 
+@@ -1250,11 +1250,11 @@ public static void HandleTrailer(Session session, params string[] parameters)
+                         container.TryLoadWcid(1, 4000011, subSlot: 0, ignoreDoorState: true); // Solar Panels
+                         container.TryLoadWcid(2, 4000012, subSlot: 0, ignoreDoorState: true); // Power Generator
+                         container.TryLoadWcid(3, 4000013, subSlot: 0, ignoreDoorState: true); // Battery Unit
+-                        container.TryLoadWcid(3, 4000015, subSlot: 1, ignoreDoorState: true); // Ground Radar
+                         container.TryLoadWcid(4, 4000014, subSlot: 0, ignoreDoorState: true); // Missile Turret
+-                        container.TryLoadWcid(5, 4000016, subSlot: 0, ignoreDoorState: true); // Mortar Turret
+-                        container.TryLoadWcid(5, 4000017, subSlot: 1, ignoreDoorState: true); // Laser Turret
+-                        container.TryLoadWcid(6, 4000002, subSlot: 0, ignoreDoorState: true); // Air Radar
++                        container.TryLoadWcid(5, 4000015, subSlot: 0, ignoreDoorState: true); // Ground Radar
++                        container.TryLoadWcid(6, 4000016, subSlot: 0, ignoreDoorState: true); // Mortar Turret
++                        container.TryLoadWcid(7, 4000017, subSlot: 0, ignoreDoorState: true); // Laser Turret
++                        container.TryLoadWcid(8, 4000002, subSlot: 0, ignoreDoorState: true); // Air Radar
+                     }
+ 
+                     trailer.TryMountContainer(container, 0, out _);
+diff --git a/Source/ACE.Server/Vehicles/VehicleWire.cs b/Source/ACE.Server/Vehicles/VehicleWire.cs
+index e78e2c55..2bae989f 100644
+--- a/Source/ACE.Server/Vehicles/VehicleWire.cs
++++ b/Source/ACE.Server/Vehicles/VehicleWire.cs
+@@ -1092,6 +1092,7 @@ public static class TrailerFlags
+     public enum PalletSize : byte
+     {
+         None = 0,
++        /// <summary>Deprecated on HBV1 v7: all deployables now use unified ISO 6780 Full pallets; retained for wire enum stability.</summary>
+         Half = 1,
+         Full = 2,
+     }
+-- 
+2.43.0
+

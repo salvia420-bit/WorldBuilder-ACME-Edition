@@ -327,7 +327,7 @@ check("T_SL_04 Twistlocks, landing gear, wheel roll, Semi coupling & non-disposa
   semi.dispose();
 });
 
-check("T_SL_05 container_models.js setHighlightedSlot (20ft/40ft, full/half, lazy attach, z > 0.176, dispose)", () => {
+check("T_SL_05 container_models.js setHighlightedSlot (20ft/40ft, 2-wide unified 1.100x1.100, lazy attach, z > 0.176, dispose)", () => {
   for (const [wcid, slots] of [
     [CONTAINER_WCID.IsoContainer20, PINWHEEL_SLOTS_20],
     [CONTAINER_WCID.IsoContainer40HC, PINWHEEL_SLOTS_40],
@@ -336,23 +336,32 @@ check("T_SL_05 container_models.js setHighlightedSlot (20ft/40ft, full/half, laz
     assert.equal(c.cargoBayGroup.children.length, 0, "no highlight child attached initially");
     assert.ok(countDrawCalls(c.root) <= 8, "base draw calls <= 8");
 
-    // Highlight slot 0 reachable (orient X)
+    // Highlight slot 0 reachable (2-wide grid, orient Y, rotation.z === 0)
     assert.equal(c.setHighlightedSlot(0, null, "reachable"), true);
     assert.equal(c.cargoBayGroup.children.length, 1, "highlight lazily attached");
     assert.ok(countDrawCalls(c.root) <= 8, "draw calls with highlight <= 8");
     assert.ok(c.bayHighlightPivot.position.z > c.spec.floorZ + 0.014, "highlight sits above wood floor top (0.176m)");
     near(c.bayHighlightPivot.position.z, 0.178, 1e-4, "highlight Z = 0.178m");
-    near(c.bayHighlightPivot.rotation.z, 0, 1e-6, "orient X rotation 0");
+    near(c.bayHighlightPivot.rotation.z, 0, 1e-6, "2-wide slot 0 orient Y rotation 0");
+    near(c.bayHighlightMesh.position.x, 0, 1e-6, "unified full slot has x offset 0");
+    near(c.bayHighlightMesh.position.y, 0, 1e-6, "unified full slot has y offset 0");
+    c.bayHighlightMesh.geometry.computeBoundingBox();
+    const hlBox = c.bayHighlightMesh.geometry.boundingBox;
+    near(hlBox.max.x - hlBox.min.x, 1.100, 1e-3, "highlight border width = 1.100m");
+    near(hlBox.max.y - hlBox.min.y, 1.100, 1e-3, "highlight border depth = 1.100m");
 
-    // Highlight Y-oriented half-pallet subSlot 1 ("target")
-    const ySlot = slots.find((s) => s.orient === "Y");
-    assert.equal(c.setHighlightedSlot(ySlot.slotIndex, 1, "target"), true);
-    near(c.bayHighlightPivot.rotation.z, Math.PI / 2, 1e-6, "orient Y rotation PI/2");
-    near(c.bayHighlightMesh.position.x, +0.3048, 1e-4, "half subSlot 1 offset +0.3048m");
+    // Highlight Y-oriented slot ("target") with subSlot 0 and subSlot null (no +/-0.3048 split)
+    const ySlot = slots.find((s) => s.orient === "Y" && s.slotIndex > 0) || slots[0];
+    assert.equal(c.setHighlightedSlot(ySlot.slotIndex, 0, "target"), true);
+    near(c.bayHighlightPivot.rotation.z, 0, 1e-6, "2-wide orient Y rotation 0");
+    near(c.bayHighlightPivot.position.x, ySlot.x, 1e-4, "highlight X matches slot.x");
+    near(c.bayHighlightPivot.position.y, ySlot.y, 1e-4, "highlight Y matches slot.y");
+    near(c.bayHighlightMesh.position.x, 0, 1e-6, "unified subSlot 0 has no half-pallet X offset");
 
     // Blocked state
-    assert.equal(c.setHighlightedSlot(ySlot.slotIndex, 0, "blocked"), true);
-    near(c.bayHighlightMesh.position.x, -0.3048, 1e-4, "half subSlot 0 offset -0.3048m");
+    assert.equal(c.setHighlightedSlot(ySlot.slotIndex, null, "blocked"), true);
+    near(c.bayHighlightPivot.rotation.z, 0, 1e-6, "blocked orient Y rotation 0");
+    near(c.bayHighlightMesh.position.x, 0, 1e-6, "unified subSlot null offset 0");
 
     // Clear restores cargoBayGroup.children.length === 0
     assert.equal(c.setHighlightedSlot(null, null, null), false);

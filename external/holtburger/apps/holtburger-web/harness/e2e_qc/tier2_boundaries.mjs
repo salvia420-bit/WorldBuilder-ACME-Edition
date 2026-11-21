@@ -442,8 +442,25 @@ export async function runTier2(collector) {
       await live.waitUntil(async () => await live.evalInPage(`return !!window.__vehicles.piloting;`), 6000, 150, "piloting");
       await live.dispatchKey("KeyG");
       await live.waitUntil(async () => (await live.getTrailer(ids.tGuid))?.coupledTractorGuid === 0, 5000, 150, "unhitched");
-      await live.evalInPage(`window.__vehicles.setSticks({ throttle: 0.7 }, 1400); return true;`);
-      await new Promise((r) => setTimeout(r, 1550));
+      const startPos = await live.evalInPage(`
+        const st = window.__vehicles.status()?.pilot?.state;
+        return st ? { x: st.x, y: st.y } : null;
+      `);
+      assert(startPos && Number.isFinite(startPos.x), "tractor start pose");
+      await live.evalInPage(`window.__vehicles.setSticks({ throttle: 0.85 }, 6000); return true;`);
+      const movedDist = await live.waitUntil(async () => await live.evalInPage(`
+        const st = window.__vehicles.status()?.pilot?.state;
+        if (!st) return null;
+        const d = Math.hypot(st.x - (${startPos.x}), st.y - (${startPos.y}));
+        return d > 4.5 ? d : null;
+      `), 10000, 150, "tractor drove > 4.5 m from trailer kingpin");
+      await live.evalInPage(`window.__vehicles.clearSticks(); window.__vehicles.setSticks({ throttle: 0, handbrake: true }, 5000); return true;`);
+      await live.waitUntil(async () => await live.evalInPage(`
+        const sp = window.__vehicles.status()?.pilot?.state?.speed ?? 1;
+        return Math.abs(sp) < 0.08 ? true : null;
+      `), 8000, 150, "tractor stopped before hitch attempt");
+      await live.evalInPage(`window.__vehicles.clearSticks(); return true;`);
+      assert(movedDist > 4.0, `tractor drove > 4.0 m (${movedDist.toFixed(2)} m)`);
       await live.evalInPage(`window.__vehicles.trailers.hitch(${ids.tGuid}, ${ids.vGuid}); return true;`);
       await new Promise((r) => setTimeout(r, 800));
       assert((await live.getTrailer(ids.tGuid))?.coupledTractorGuid === 0, ">3.5m hitch refused live");
@@ -751,11 +768,17 @@ export async function runTier2(collector) {
     async () => {
       const cl = await tryImportVehicle("container_logistics.js");
       assert(cl.ok, cl.reason);
+      // Legacy palletSize: 1 in occupiedSlots normalizes to unified occupied slot 0; adjacent Right slot 1 stays open.
       const slots = [{ slotIndex: 0, subSlot: 0, cargoWcid: 4000013, palletSize: 1 }];
       const rFull = cl.mod.computeReachableLoadSlots(10, slots, "full");
-      assert(!rFull.reachable.some((s) => s.slotIndex === 0), "Full pallet blocked from half-occupied slot 0");
+      assert(!rFull.reachable.some((s) => s.slotIndex === 0), "Occupied slot 0 (normalized from legacy palletSize=1) rejects new load");
+      assert(rFull.reachable.some((s) => s.slotIndex === 1 && s.subSlot === 0), "Adjacent Right slot 1 remains reachable for unified full pallet");
       const rHalf = cl.mod.computeReachableLoadSlots(10, slots, "half");
-      assert(rHalf.reachable.some((s) => s.slotIndex === 0 && s.subSlot === 1), "Half pallet allowed in subSlot 1 of slot 0");
+      assert(rHalf.reachable.length === 0, "Explicit legacy half pallet load rejected (0 reachable slots)");
+      const subErr = cl.mod.isSlotReachableForLoad(10, [], 1, 1, "full");
+      assert(!subErr.reachable && subErr.reason === "invalid_subslot", `subSlot=1 rejected with invalid_subslot, got ${subErr.reason}`);
+      const halfErr = cl.mod.isSlotReachableForLoad(10, [], 1, 0, "half");
+      assert(!halfErr.reachable && halfErr.reason === "invalid_pallet_size", `half rejected with invalid_pallet_size, got ${halfErr.reason}`);
     },
     async (live) => {
       await live.cleanupWorld();
@@ -764,13 +787,13 @@ export async function runTier2(collector) {
       const cGuid = await live.waitUntil(async () => await live.evalInPage(`return window.__vehicles.containers.list()[0]?.guid || 0;`), 8000, 200, "container");
       await live.sendChat(`@container doors 0x${(cGuid >>> 0).toString(16)} open`);
       await live.waitUntil(async () => ((await live.getContainer(cGuid))?.doorProgress ?? 0) >= 0.9, 6000, 150, "doors open");
-      await live.evalInPage(`window.__sessionHandle.vehicleContainerAction(${cGuid}, 3, 0, 0, 4000013); return true;`); // half pallet in slot 0:0
-      await live.waitUntil(async () => ((await live.getContainer(cGuid))?.slots?.length ?? 0) === 1, 5000, 150, "half loaded");
-      // Try loading full pallet 4000014 into slot 0 -> must be refused
+      await live.evalInPage(`window.__sessionHandle.vehicleContainerAction(${cGuid}, 3, 0, 0, 4000013); return true;`); // unified pallet in slot 0
+      await live.waitUntil(async () => ((await live.getContainer(cGuid))?.slots?.length ?? 0) === 1, 5000, 150, "slot 0 loaded");
+      // Try loading 4000014 into occupied slot 0 -> must be refused
       await live.evalInPage(`window.__sessionHandle.vehicleContainerAction(${cGuid}, 3, 0, 0, 4000014); return true;`);
       await new Promise((r) => setTimeout(r, 1000));
       const c = await live.getContainer(cGuid);
-      assert(c.slots.length === 1 && c.slots[0].cargoWcid === 4000013, "Full pallet rejected from half-occupied slot");
+      assert(c.slots.length === 1 && c.slots[0].cargoWcid === 4000013, "Second pallet rejected from occupied slot 0");
       await live.cleanupWorld();
     }
   );
@@ -867,8 +890,8 @@ export async function runTier2(collector) {
       sim.trailerAction(trGuid, TRAILER_ACTION_KIND.AutoOffload);
       sim.openContainerDoors(cGuid, true);
       sim.palletJackAction(pjGuid, PALLET_JACK_ACTION_KIND.Grab);
-      assert(!sim.palletJackAction(pjGuid, PALLET_JACK_ACTION_KIND.PickContainerSlot, { targetGuid: cGuid, slotIndex: 0 }).ok, "LIFO blocks inner slot 0 behind outer slot 20");
-      assert(sim.palletJackAction(pjGuid, PALLET_JACK_ACTION_KIND.PickContainerSlot, { targetGuid: cGuid, slotIndex: 20 }).ok, "Outer slot 20 succeeds");
+      assert(!sim.palletJackAction(pjGuid, PALLET_JACK_ACTION_KIND.PickContainerSlot, { targetGuid: cGuid, slotIndex: 0 }).ok, "LIFO blocks inner slot 0 behind outer Left-lane slots 16/18");
+      assert(sim.palletJackAction(pjGuid, PALLET_JACK_ACTION_KIND.PickContainerSlot, { targetGuid: cGuid, slotIndex: 19 }).ok, "Outer slot 19 succeeds");
     },
     async (live) => {
       await live.cleanupWorld();

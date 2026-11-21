@@ -40,7 +40,7 @@ export const ISO_CONTAINER_SPECS = Object.freeze({
     door: Object.freeze({ width: 2.340, height: 2.280 }),
     floorZ: 0.162,
     roofZ: 2.591,
-    palletCapacity: Object.freeze({ full: 10, half: 20 }),
+    palletCapacity: Object.freeze({ full: 10, standard: 10 }),
     hasForkliftPockets: true,
     forkliftPockets: Object.freeze({ centerDistance: 2.050, width: 0.356, height: 0.115 }),
     hasGooseneckTunnel: false,
@@ -58,7 +58,7 @@ export const ISO_CONTAINER_SPECS = Object.freeze({
     door: Object.freeze({ width: 2.340, height: 2.280 }),
     floorZ: 0.162,
     roofZ: 2.591,
-    palletCapacity: Object.freeze({ full: 21, half: 42 }),
+    palletCapacity: Object.freeze({ full: 20, standard: 20 }),
     hasForkliftPockets: false, // Strictly prohibited per ISO 1496-1
     hasGooseneckTunnel: false,
     hasHazardChevrons: false,
@@ -75,7 +75,7 @@ export const ISO_CONTAINER_SPECS = Object.freeze({
     door: Object.freeze({ width: 2.340, height: 2.585 }),
     floorZ: 0.162,
     roofZ: 2.896,
-    palletCapacity: Object.freeze({ full: 21, half: 42 }),
+    palletCapacity: Object.freeze({ full: 20, standard: 20 }),
     hasForkliftPockets: false,
     hasGooseneckTunnel: true,
     gooseneckTunnel: Object.freeze({ length: 3.150, width: 1.020, height: 0.120 }),
@@ -113,50 +113,43 @@ export function getLivery(idOrKey) {
   return CONTAINER_LIVERIES.maritimeBlue;
 }
 
+const UNIFIED_PALLET_DIMS = Object.freeze({ width: 1.100, depth: 1.100, height: 0.145 });
+
 export const GMA_PALLET_SPECS = Object.freeze({
-  full: Object.freeze({ width: 1.2192, depth: 1.0160, height: 0.1397 }),
-  half: Object.freeze({ width: 0.6096, depth: 1.0160, height: 0.1397 }),
-  deckZOffset: 0.3017, // floorZ (0.162) + pallet height (0.1397)
-  stowedCeilingH: 2.14, // clears 2.28m door when atop pallet
+  standard: UNIFIED_PALLET_DIMS,
+  full: UNIFIED_PALLET_DIMS,
+  deckZOffset: 0.307, // floorZ (0.162) + pallet height (0.145)
+  stowedCeilingH: 2.05, // clears 2.28m door even when raised +0.077m on pallet jack forks
 });
 
-// 20-ft Pinwheel Bay Floor Layout (10 Full GMA Slots)
-export const PINWHEEL_SLOTS_20 = Object.freeze([
-  Object.freeze({ slotIndex: 0, x: -0.5080, y: +2.3889, orient: "X", dx: 1.2192, dy: 1.0160 }),
-  Object.freeze({ slotIndex: 1, x: +0.6096, y: +2.2873, orient: "Y", dx: 1.0160, dy: 1.2192 }),
-  Object.freeze({ slotIndex: 2, x: +0.5080, y: +1.1697, orient: "X", dx: 1.2192, dy: 1.0160 }),
-  Object.freeze({ slotIndex: 3, x: -0.6096, y: +1.2713, orient: "Y", dx: 1.0160, dy: 1.2192 }),
-  Object.freeze({ slotIndex: 4, x: -0.5080, y: +0.1016, orient: "X", dx: 1.2192, dy: 1.0160 }),
-  Object.freeze({ slotIndex: 5, x: +0.6096, y: -0.0000, orient: "Y", dx: 1.0160, dy: 1.2192 }),
-  Object.freeze({ slotIndex: 6, x: +0.5080, y: -1.1176, orient: "X", dx: 1.2192, dy: 1.0160 }),
-  Object.freeze({ slotIndex: 7, x: -0.6096, y: -1.0160, orient: "Y", dx: 1.0160, dy: 1.2192 }),
-  Object.freeze({ slotIndex: 8, x: -0.5080, y: -2.2873, orient: "Y", dx: 1.0160, dy: 1.2192 }),
-  Object.freeze({ slotIndex: 9, x: +0.5080, y: -2.2873, orient: "Y", dx: 1.0160, dy: 1.2192 }),
-]);
-
-// 40-ft / 40HC Pinwheel Bay Floor Layout (21 Full GMA Slots)
-export const PINWHEEL_SLOTS_40 = Object.freeze((() => {
+// 20-ft 2-Wide Grid Bay Floor Layout (2 x 5 = 10 Unified 1.100 x 1.100 m Slots)
+export const CONTAINER_SLOTS_20 = Object.freeze((() => {
+  const rows = [+2.320, +1.160, 0.000, -1.160, -2.320];
   const slots = [];
-  const quadCenters = [+4.8768, +2.6416, +0.4064, -1.8288];
-  for (let q = 0; q < quadCenters.length; q++) {
-    const yc = quadCenters[q];
+  for (let r = 0; r < rows.length; r++) {
     slots.push(
-      Object.freeze({ slotIndex: 4 * q + 0, x: -0.5080, y: yc + 0.6096, orient: "X", dx: 1.2192, dy: 1.0160 }),
-      Object.freeze({ slotIndex: 4 * q + 1, x: +0.6096, y: yc + 0.5080, orient: "Y", dx: 1.0160, dy: 1.2192 }),
-      Object.freeze({ slotIndex: 4 * q + 2, x: +0.5080, y: yc - 0.6096, orient: "X", dx: 1.2192, dy: 1.0160 }),
-      Object.freeze({ slotIndex: 4 * q + 3, x: -0.6096, y: yc - 0.5080, orient: "Y", dx: 1.0160, dy: 1.2192 })
+      Object.freeze({ slotIndex: r * 2 + 0, x: -0.575, y: rows[r], orient: "Y", dx: 1.100, dy: 1.100 }),
+      Object.freeze({ slotIndex: r * 2 + 1, x: +0.575, y: rows[r], orient: "Y", dx: 1.100, dy: 1.100 })
     );
   }
-  // Asymmetric rear tier (5 slots)
-  slots.push(
-    Object.freeze({ slotIndex: 16, x: -0.5368, y: -3.4544, orient: "X", dx: 1.2192, dy: 1.0160 }),
-    Object.freeze({ slotIndex: 17, x: -0.5368, y: -4.4704, orient: "X", dx: 1.2192, dy: 1.0160 }),
-    Object.freeze({ slotIndex: 18, x: -0.5368, y: -5.4864, orient: "X", dx: 1.2192, dy: 1.0160 }),
-    Object.freeze({ slotIndex: 19, x: +0.6384, y: -3.5560, orient: "Y", dx: 1.0160, dy: 1.2192 }),
-    Object.freeze({ slotIndex: 20, x: +0.6384, y: -4.7752, orient: "Y", dx: 1.0160, dy: 1.2192 })
-  );
-  return Object.freeze(slots);
+  return slots;
 })());
+
+// 40-ft / 40HC 2-Wide Grid Bay Floor Layout (2 x 10 = 20 Unified 1.100 x 1.100 m Slots)
+export const CONTAINER_SLOTS_40 = Object.freeze((() => {
+  const slots = [];
+  for (let r = 0; r < 10; r++) {
+    const y = (4.5 - r) * 1.180;
+    slots.push(
+      Object.freeze({ slotIndex: r * 2 + 0, x: -0.575, y, orient: "Y", dx: 1.100, dy: 1.100 }),
+      Object.freeze({ slotIndex: r * 2 + 1, x: +0.575, y, orient: "Y", dx: 1.100, dy: 1.100 })
+    );
+  }
+  return slots;
+})());
+
+export const PINWHEEL_SLOTS_20 = CONTAINER_SLOTS_20;
+export const PINWHEEL_SLOTS_40 = CONTAINER_SLOTS_40;
 
 // ---------------------------------------------------------------------------
 // ISO 6346 Modulo-11 Check Digit Algorithm
@@ -499,6 +492,29 @@ export function buildIsoContainer(three, typeOrWcid = CONTAINER_WCID.IsoContaine
     floorParts.push(zBox(t, plankW - 0.002, plankL, floorThick, pColor, px, 0, 0));
   }
 
+  // Subtle painted 2-wide bay corner guide brackets merged into floorMesh (0 extra draw calls)
+  const floorSlots = spec.kind === 10 ? CONTAINER_SLOTS_20 : CONTAINER_SLOTS_40;
+  const bracketZ = floorThick / 2 + 0.001; // 0.015 m (1 mm proud of floor top)
+  const bracketColor = 0xb5912e;
+  const bArm = 0.12;
+  const bWidth = 0.022;
+  const bThick = 0.002;
+  for (let i = 0; i < floorSlots.length; i++) {
+    const sl = floorSlots[i];
+    const hx = sl.dx * 0.5;
+    const hy = sl.dy * 0.5;
+    for (const sx of [-1, 1]) {
+      for (const sy of [-1, 1]) {
+        floorParts.push(
+          zBox(t, bArm, bWidth, bThick, bracketColor, sl.x + sx * (hx - bArm * 0.5), sl.y + sy * (hy - bWidth * 0.5), bracketZ)
+        );
+        floorParts.push(
+          zBox(t, bWidth, bArm - bWidth, bThick, bracketColor, sl.x + sx * (hx - bWidth * 0.5), sl.y + sy * (hy - bWidth - (bArm - bWidth) * 0.5), bracketZ)
+        );
+      }
+    }
+  }
+
   const floorGeom = mergeParts(t, floorParts);
   const floorMat = new t.MeshStandardMaterial({
     color: 0xffffff,
@@ -581,28 +597,43 @@ export function buildIsoContainer(three, typeOrWcid = CONTAINER_WCID.IsoContaine
   const lockBarColor = 0x9fa4a9; // Galvanized steel
   const camColor = 0x6e7378;
   const gasketColor = 0x1b1c1e; // EPDM rubber weather gasket
+  const cscPlateColor = 0xc0c4c8;
+  const decalWhite = 0xededed;
 
-  // 4. Left Door Assembly (swings outward to -1.5*PI)
+  // 4. Left Door Assembly (exterior corner hinge swings outward -1.5*PI flush outside -halfW)
+  const pivotOutX = 0.052;
+  const pivotX = halfW + pivotOutX;
+  const panelY = doorThick / 2;
+  const extY = panelY - doorThick / 2; // 0.0 (rear exterior face at closed pose)
   const leftDoorPivot = new t.Group();
   leftDoorPivot.name = "door-pivot-left";
-  leftDoorPivot.position.set(-spec.door.width / 2, -halfL, spec.floorZ);
+  leftDoorPivot.position.set(-pivotX, -halfL, spec.floorZ);
 
   const leftDoorParts = [];
-  // Main door leaf panel (centered relative to pivot at X = +doorW / 2, Z = +doorH / 2)
-  leftDoorParts.push(zBox(t, doorW, doorThick, doorH, baseHex, doorW / 2, 0, doorH / 2));
+  const leftCenterX = pivotX - doorW / 2;
+  // Main door leaf panel (spans [-doorW, 0] in container X when closed, ly in [0, doorThick])
+  leftDoorParts.push(zBox(t, doorW, doorThick, doorH, baseHex, leftCenterX, panelY, doorH / 2));
+  // Exterior hinge knuckles & straps bridging corner pivot (-pivotX) to outer leaf edge (-doorW)
+  const strapLen = pivotX - doorW + 0.05;
+  for (const hz of [0.25, doorH * 0.5, doorH - 0.25]) {
+    leftDoorParts.push(zBox(t, 0.028, 0.028, 0.090, camColor, 0, extY - 0.012, hz));
+    leftDoorParts.push(zBox(t, strapLen, 0.018, 0.055, camColor, strapLen / 2, extY - 0.009, hz));
+  }
   // Outer perimeter rubber weather gasket
-  leftDoorParts.push(zBox(t, doorW, 0.015, 0.025, gasketColor, doorW / 2, -doorThick / 2 - 0.005, doorH / 2));
+  leftDoorParts.push(zBox(t, doorW, 0.015, 0.025, gasketColor, leftCenterX, extY - 0.005, doorH / 2));
+  // 7a. Stainless Steel CSC Safety Approval Plate (door-mounted on left leaf)
+  leftDoorParts.push(zBox(t, 0.35, 0.005, 0.22, cscPlateColor, leftCenterX, extY - 0.005, doorH * 0.35));
   // 2 vertical galvanized locking bars
-  const bar1X = doorW * 0.30;
-  const bar2X = doorW * 0.72;
-  leftDoorParts.push(zBox(t, 0.038, 0.038, doorH + 0.04, lockBarColor, bar1X, -doorThick / 2 - 0.022, doorH / 2));
-  leftDoorParts.push(zBox(t, 0.038, 0.038, doorH + 0.04, lockBarColor, bar2X, -doorThick / 2 - 0.022, doorH / 2));
+  const bar1X = leftCenterX - doorW * 0.20;
+  const bar2X = leftCenterX + doorW * 0.22;
+  leftDoorParts.push(zBox(t, 0.038, 0.038, doorH + 0.04, lockBarColor, bar1X, extY - 0.022, doorH / 2));
+  leftDoorParts.push(zBox(t, 0.038, 0.038, doorH + 0.04, lockBarColor, bar2X, extY - 0.022, doorH / 2));
   // Top and bottom locking cams
   for (const bx of [bar1X, bar2X]) {
-    leftDoorParts.push(zBox(t, 0.060, 0.060, 0.045, camColor, bx, -doorThick / 2 - 0.022, 0.02));
-    leftDoorParts.push(zBox(t, 0.060, 0.060, 0.045, camColor, bx, -doorThick / 2 - 0.022, doorH - 0.02));
+    leftDoorParts.push(zBox(t, 0.060, 0.060, 0.045, camColor, bx, extY - 0.022, 0.02));
+    leftDoorParts.push(zBox(t, 0.060, 0.060, 0.045, camColor, bx, extY - 0.022, doorH - 0.02));
     // Door handle at waist level
-    leftDoorParts.push(zBox(t, 0.180, 0.025, 0.025, camColor, bx + 0.08, -doorThick / 2 - 0.035, doorH * 0.42));
+    leftDoorParts.push(zBox(t, 0.180, 0.025, 0.025, camColor, bx + 0.08, extY - 0.035, doorH * 0.42));
   }
 
   const leftDoorGeom = mergeParts(t, leftDoorParts);
@@ -623,28 +654,37 @@ export function buildIsoContainer(three, typeOrWcid = CONTAINER_WCID.IsoContaine
   leftDoorPivot.add(leftDoorMesh);
   root.add(leftDoorPivot);
 
-  // 5. Right Door Assembly (swings outward to +1.5*PI, features overlapping astragal)
+  // 5. Right Door Assembly (exterior corner hinge swings outward +1.5*PI flush outside +halfW)
   const rightDoorPivot = new t.Group();
   rightDoorPivot.name = "door-pivot-right";
-  rightDoorPivot.position.set(spec.door.width / 2, -halfL, spec.floorZ);
+  rightDoorPivot.position.set(pivotX, -halfL, spec.floorZ);
 
   const rightDoorParts = [];
-  // Main door leaf panel (centered relative to pivot at X = -doorW / 2, Z = +doorH / 2)
-  rightDoorParts.push(zBox(t, doorW, doorThick, doorH, baseHex, -doorW / 2, 0, doorH / 2));
+  const rightCenterX = -pivotX + doorW / 2;
+  // Main door leaf panel (spans [0, +doorW] in container X when closed, ly in [0, doorThick])
+  rightDoorParts.push(zBox(t, doorW, doorThick, doorH, baseHex, rightCenterX, panelY, doorH / 2));
+  // Exterior hinge knuckles & straps bridging corner pivot (+pivotX) to outer leaf edge (+doorW)
+  for (const hz of [0.25, doorH * 0.5, doorH - 0.25]) {
+    rightDoorParts.push(zBox(t, 0.028, 0.028, 0.090, camColor, 0, extY - 0.012, hz));
+    rightDoorParts.push(zBox(t, strapLen, 0.018, 0.055, camColor, -strapLen / 2, extY - 0.009, hz));
+  }
   // Perimeter weather gasket
-  rightDoorParts.push(zBox(t, doorW, 0.015, 0.025, gasketColor, -doorW / 2, -doorThick / 2 - 0.005, doorH / 2));
-  // Astragal flange: overlapping lip on the inner edge (x = -doorW)
-  rightDoorParts.push(zBox(t, 0.035, 0.016, doorH, 0x1f2226, -doorW + 0.015, -doorThick / 2 - 0.008, doorH / 2));
+  rightDoorParts.push(zBox(t, doorW, 0.015, 0.025, gasketColor, rightCenterX, extY - 0.005, doorH / 2));
+  // 7b. ISO 6346 BIC Block & Size/Type Decals (door-mounted on right leaf)
+  rightDoorParts.push(zBox(t, 0.65, 0.005, 0.12, decalWhite, rightCenterX, extY - 0.005, doorH * 0.85));
+  rightDoorParts.push(zBox(t, 0.30, 0.005, 0.08, decalWhite, rightCenterX, extY - 0.005, doorH * 0.70));
+  // Astragal flange: overlapping lip on the inner edge (x_world = 0)
+  rightDoorParts.push(zBox(t, 0.035, 0.016, doorH, 0x1f2226, rightCenterX - doorW / 2 + 0.015, extY - 0.008, doorH / 2));
   // 2 vertical locking bars
-  const rBar1X = -doorW * 0.72;
-  const rBar2X = -doorW * 0.30;
-  rightDoorParts.push(zBox(t, 0.038, 0.038, doorH + 0.04, lockBarColor, rBar1X, -doorThick / 2 - 0.022, doorH / 2));
-  rightDoorParts.push(zBox(t, 0.038, 0.038, doorH + 0.04, lockBarColor, rBar2X, -doorThick / 2 - 0.022, doorH / 2));
+  const rBar1X = rightCenterX - doorW * 0.22;
+  const rBar2X = rightCenterX + doorW * 0.20;
+  rightDoorParts.push(zBox(t, 0.038, 0.038, doorH + 0.04, lockBarColor, rBar1X, extY - 0.022, doorH / 2));
+  rightDoorParts.push(zBox(t, 0.038, 0.038, doorH + 0.04, lockBarColor, rBar2X, extY - 0.022, doorH / 2));
   // Top/bottom locking cams and waist handle
   for (const bx of [rBar1X, rBar2X]) {
-    rightDoorParts.push(zBox(t, 0.060, 0.060, 0.045, camColor, bx, -doorThick / 2 - 0.022, 0.02));
-    rightDoorParts.push(zBox(t, 0.060, 0.060, 0.045, camColor, bx, -doorThick / 2 - 0.022, doorH - 0.02));
-    rightDoorParts.push(zBox(t, 0.180, 0.025, 0.025, camColor, bx - 0.08, -doorThick / 2 - 0.035, doorH * 0.42));
+    rightDoorParts.push(zBox(t, 0.060, 0.060, 0.045, camColor, bx, extY - 0.022, 0.02));
+    rightDoorParts.push(zBox(t, 0.060, 0.060, 0.045, camColor, bx, extY - 0.022, doorH - 0.02));
+    rightDoorParts.push(zBox(t, 0.180, 0.025, 0.025, camColor, bx - 0.08, extY - 0.035, doorH * 0.42));
   }
 
   const rightDoorGeom = mergeParts(t, rightDoorParts);
@@ -708,32 +748,23 @@ export function buildIsoContainer(three, typeOrWcid = CONTAINER_WCID.IsoContaine
   root.add(rampPivot);
 
   // =========================================================================
-  // SUB-MESH 7: Markings, ISO 6346 BIC Decals & CSC Approval Plates
+  // SUB-MESH 7: Markings, Exterior Side BIC Decals & 40HC Hazard Chevrons
   // =========================================================================
   const markingsParts = [];
-  const cscPlateColor = 0xc0c4c8;
-  const decalWhite = 0xededed;
   const decalBlack = 0x181818;
   const chevronYellow = 0xf5b000;
-
-  // 7a. Stainless Steel CSC Safety Approval Plate (on rear door left side)
-  markingsParts.push(zBox(t, 0.35, 0.005, 0.22, cscPlateColor, -spec.door.width / 4, -halfL - 0.030, spec.floorZ + doorH * 0.35));
-
-  // 7b. ISO 6346 BIC Block & Size/Type Decals
-  markingsParts.push(zBox(t, 0.65, 0.005, 0.12, decalWhite, spec.door.width / 4, -halfL - 0.030, spec.floorZ + doorH * 0.85));
-  markingsParts.push(zBox(t, 0.30, 0.005, 0.08, decalWhite, spec.door.width / 4, -halfL - 0.030, spec.floorZ + doorH * 0.70));
 
   // 7c. Exterior Side BIC Decals
   markingsParts.push(zBox(t, 0.005, 1.20, 0.16, decalWhite, halfW + 0.002, halfL - 1.20, spec.roofZ - 0.40));
   markingsParts.push(zBox(t, 0.005, 1.20, 0.16, decalWhite, -halfW - 0.002, halfL - 1.20, spec.roofZ - 0.40));
 
-  // 7d. Yellow/Black High-Cube 9'6" / 2.9m Corner Hazard Chevrons (Strictly on 40HC)
+  // 7d. Yellow/Black High-Cube 9'6" / 2.9m Corner Hazard Chevrons (Strictly on 40HC outer corner posts)
   if (spec.hasHazardChevrons) {
     const chevH = 0.30;
-    const chevW = 0.15;
+    const chevW = 0.08;
     const chevL = 0.15;
     const topCornerZ = H - chevH / 2;
-    // 4 top corner hazard bands (alternating yellow/black)
+    // 4 top corner hazard bands (alternating yellow/black, strictly |x| >= spec.door.width / 2 - 0.05)
     for (const [cx, cy] of [[-halfW + chevW / 2, -halfL + chevL / 2], [halfW - chevW / 2, -halfL + chevL / 2], [-halfW + chevW / 2, halfL - chevL / 2], [halfW - chevW / 2, halfL - chevL / 2]]) {
       markingsParts.push(zBox(t, chevW + 0.004, chevL + 0.004, chevH * 0.5, chevronYellow, cx, cy, topCornerZ + chevH * 0.25));
       markingsParts.push(zBox(t, chevW + 0.004, chevL + 0.004, chevH * 0.5, decalBlack, cx, cy, topCornerZ - chevH * 0.25));
@@ -779,8 +810,7 @@ export function buildIsoContainer(three, typeOrWcid = CONTAINER_WCID.IsoContaine
       zBox(t, bw, Math.max(0.05, d - 2 * bw), bh, 0xffffff, +hw - bw / 2, 0, 0),
     ]);
   }
-  const fullSlotGeom = makeHighlightBorderGeom(1.2192, 1.0160);
-  const halfSlotGeom = makeHighlightBorderGeom(0.6096, 1.0160);
+  const fullSlotGeom = makeHighlightBorderGeom(1.100, 1.100);
   const highlightMat = new t.MeshStandardMaterial({
     color: 0x000000,
     emissive: 0x22dd66,
@@ -803,7 +833,7 @@ export function buildIsoContainer(three, typeOrWcid = CONTAINER_WCID.IsoContaine
   bayHighlightMesh.visible = false; // vfx-lint-allow: bay slot highlight visibility
   bayHighlightPivot.add(bayHighlightMesh);
 
-  const loadedSlots = new Map(); // slotKey ("${slotIndex}" or "${slotIndex}:${subSlot}") -> { slotIndex, subSlot, isHalf, slotKey, wcid, slotGroup, pallet, deployableModel }
+  const loadedSlots = new Map(); // slotKey ("${slotIndex}") -> { slotIndex, subSlot, isHalf, slotKey, wcid, slotGroup, pallet, deployableModel }
   let currentDoorProgress = 0.0;
 
   function unloadSingle(slotKey) {
@@ -832,72 +862,50 @@ export function buildIsoContainer(three, typeOrWcid = CONTAINER_WCID.IsoContaine
     if (typeof slotKeyOrIndex === "number" || /^\d+$/.test(str)) {
       const idx = typeof slotKeyOrIndex === "number" ? slotKeyOrIndex : parseInt(str, 10);
       unloadSingle(`${idx}`);
-      unloadSingle(`${idx}:0`);
-      unloadSingle(`${idx}:1`);
     } else {
       unloadSingle(str);
     }
   }
 
-  function loadSlot(slotIndex, cargoWcid, slotOpts = {}) {
-    const slotsDef = spec.kind === 10 ? PINWHEEL_SLOTS_20 : PINWHEEL_SLOTS_40;
+  function loadSlot(slotIndex, cargoWcid, _slotOpts = {}) {
+    const slotsDef = spec.kind === 10 ? CONTAINER_SLOTS_20 : CONTAINER_SLOTS_40;
     const slotDef = slotsDef[slotIndex];
     if (!slotDef) return null;
 
-    const isHalf = slotOpts.palletSize === "half" || slotOpts.palletSize === 1 || (cargoWcid && [4000013, 4000015, 4000016, 4000017].includes(cargoWcid));
-    const subSlot = (slotOpts.subSlot ?? 0) | 0;
-    const slotKey = isHalf ? `${slotIndex}:${subSlot}` : `${slotIndex}`;
-
-    if (!isHalf) {
-      unloadSingle(`${slotIndex}`);
-      unloadSingle(`${slotIndex}:0`);
-      unloadSingle(`${slotIndex}:1`);
-    } else {
-      unloadSingle(`${slotIndex}`);
-      unloadSingle(slotKey);
-    }
+    const slotKey = `${slotIndex}`;
+    unloadSingle(slotKey);
 
     const slotGroup = new t.Group();
-    slotGroup.name = isHalf ? `bay-slot-${slotIndex}-${subSlot}` : `bay-slot-${slotIndex}`;
+    slotGroup.name = `bay-slot-${slotIndex}`;
     slotGroup.position.set(slotDef.x, slotDef.y, spec.floorZ);
-    if (slotDef.orient === "Y") {
-      slotGroup.rotation.z = Math.PI / 2;
-    } else {
-      slotGroup.rotation.z = 0;
-    }
+    slotGroup.rotation.z = 0;
 
-    const palletSize = isHalf ? "half" : "full";
     let pallet = null;
     let deployableModel = null;
 
-    const xOffset = isHalf ? (subSlot === 1 ? +0.3048 : -0.3048) : 0;
+    if (cargoWcid === 4000002) {
+      deployableModel = buildDeployedRadar(t, { stowed: true, csmState: options.csmState });
+    } else if (cargoWcid >= 4000010 && cargoWcid <= 4000017) {
+      deployableModel = buildDeployable(t, cargoWcid, { stowed: true, csmState: options.csmState });
+    }
 
-    if (cargoWcid) {
-      if (cargoWcid === 4000002) {
-        deployableModel = buildDeployedRadar(t, { stowed: true, csmState: options.csmState });
-      } else if (cargoWcid >= 4000010 && cargoWcid <= 4000017) {
-        deployableModel = buildDeployable(t, cargoWcid, { stowed: true, csmState: options.csmState });
-      }
-      if (deployableModel && deployableModel.root) {
-        // buildDeployable/buildDeployedRadar already embeds a GMA pallet at its base (z in [0, 0.1397]).
-        // Position at (xOffset, 0, 0) so pallet sits flush on floorZ with sub-slot X offset.
-        deployableModel.root.position.set(xOffset, 0, 0);
-        slotGroup.add(deployableModel.root);
-      }
+    if (deployableModel && deployableModel.root) {
+      deployableModel.root.position.set(0, 0, 0);
+      slotGroup.add(deployableModel.root);
     } else {
-      // Empty pallet slot (no cargo deployable)
-      pallet = buildPallet(t, palletSize, { csmState: options.csmState });
+      // Empty pallet slot or generic fallback
+      pallet = buildPallet(t, "standard", { stowed: true, csmState: options.csmState });
       if (pallet?.root) {
-        pallet.root.position.set(xOffset, 0, 0);
+        pallet.root.position.set(0, 0, 0);
         slotGroup.add(pallet.root);
       } else if (pallet?.isObject3D) {
-        pallet.position.set(xOffset, 0, 0);
+        pallet.position.set(0, 0, 0);
         slotGroup.add(pallet);
       }
     }
 
     cargoBayGroup.add(slotGroup);
-    const entry = { slotIndex, subSlot, isHalf, slotKey, wcid: cargoWcid, slotGroup, pallet, deployableModel };
+    const entry = { slotIndex, subSlot: 0, isHalf: false, slotKey, wcid: cargoWcid, slotGroup, pallet, deployableModel };
     loadedSlots.set(slotKey, entry);
     return entry;
   }
@@ -910,18 +918,14 @@ export function buildIsoContainer(three, typeOrWcid = CONTAINER_WCID.IsoContaine
       if (!s) continue;
       const slotIndex = s.slotIndex !== undefined ? s.slotIndex : s.SlotIndex;
       if (slotIndex === undefined) continue;
-      const subSlot = ((s.subSlot !== undefined ? s.subSlot : s.SubSlot) ?? 0) | 0;
-      const palletSize = s.palletSize !== undefined ? s.palletSize : s.PalletSize;
+      const ps = s.palletSize !== undefined ? s.palletSize : s.PalletSize;
+      if (ps === 0 || ps === "none" || ps === "None") continue;
       const cargoWcid = s.cargoWcid !== undefined ? s.cargoWcid : s.CargoWcid;
-      const isHalf = palletSize === "half" || palletSize === 1 || (cargoWcid && [4000013, 4000015, 4000016, 4000017].includes(cargoWcid));
-      const slotKey = isHalf ? `${slotIndex}:${subSlot}` : `${slotIndex}`;
+      const slotKey = `${slotIndex}`;
       activeKeys.add(slotKey);
       const existing = loadedSlots.get(slotKey);
       if (!existing || existing.wcid !== cargoWcid) {
-        loadSlot(slotIndex, cargoWcid, {
-          palletSize: isHalf ? "half" : "full",
-          subSlot,
-        });
+        loadSlot(slotIndex, cargoWcid, { palletSize: "full", subSlot: 0 });
       }
     }
     const toDelete = [];
@@ -939,7 +943,7 @@ export function buildIsoContainer(three, typeOrWcid = CONTAINER_WCID.IsoContaine
     target: { hex: 0x55ffbb, intensity: 2.6, opacity: 0.94 },
   };
 
-  function setHighlightedSlot(slotIndex, subSlot = null, state = null) {
+  function setHighlightedSlot(slotIndex, _subSlot = null, state = null) {
     const style = state ? HIGHLIGHT_STATES[state] : null;
     if (slotIndex === null || slotIndex === undefined || !style) {
       bayHighlightMesh.visible = false; // vfx-lint-allow: bay slot highlight visibility
@@ -948,7 +952,7 @@ export function buildIsoContainer(three, typeOrWcid = CONTAINER_WCID.IsoContaine
       }
       return false;
     }
-    const slotsDef = spec.kind === 10 ? PINWHEEL_SLOTS_20 : PINWHEEL_SLOTS_40;
+    const slotsDef = spec.kind === 10 ? CONTAINER_SLOTS_20 : CONTAINER_SLOTS_40;
     const idx = typeof slotIndex === "number" ? Math.trunc(slotIndex) : parseInt(String(slotIndex), 10);
     const slotDef = Number.isFinite(idx) ? slotsDef[idx] : null;
     if (!slotDef) {
@@ -958,17 +962,15 @@ export function buildIsoContainer(three, typeOrWcid = CONTAINER_WCID.IsoContaine
       }
       return false;
     }
-    const isHalf = subSlot === 0 || subSlot === 1 || subSlot === "0" || subSlot === "1";
-    const xOffset = isHalf ? (Number(subSlot) === 1 ? +0.3048 : -0.3048) : 0;
 
-    bayHighlightMesh.geometry = isHalf ? halfSlotGeom : fullSlotGeom;
+    bayHighlightMesh.geometry = fullSlotGeom;
     highlightMat.emissive.setHex(style.hex);
     highlightMat.emissiveIntensity = style.intensity;
     highlightMat.opacity = style.opacity;
 
     bayHighlightPivot.position.set(slotDef.x, slotDef.y, spec.floorZ + 0.016);
-    bayHighlightPivot.rotation.z = slotDef.orient === "Y" ? Math.PI / 2 : 0;
-    bayHighlightMesh.position.set(xOffset, 0, 0);
+    bayHighlightPivot.rotation.z = 0;
+    bayHighlightMesh.position.set(0, 0, 0);
     bayHighlightMesh.visible = true; // vfx-lint-allow: bay slot highlight visibility
     if (bayHighlightPivot.parent !== cargoBayGroup) {
       cargoBayGroup.add(bayHighlightPivot);
@@ -1031,7 +1033,6 @@ export function buildIsoContainer(three, typeOrWcid = CONTAINER_WCID.IsoContaine
     dispose() {
       setHighlightedSlot(null, null, null);
       fullSlotGeom.dispose();
-      halfSlotGeom.dispose();
       highlightMat.dispose();
       for (const idx of [...loadedSlots.keys()]) {
         unloadSlot(idx);

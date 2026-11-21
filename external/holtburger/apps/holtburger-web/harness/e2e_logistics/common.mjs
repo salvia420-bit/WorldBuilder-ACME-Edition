@@ -267,9 +267,9 @@ export const LOGISTICS_SPEC = Object.freeze({
     poseSyncHz: 15,
   }),
   containers: Object.freeze({
-    10: Object.freeze({ wcid: 4000020, kind: 10, key: "20ft", extW: 2.438, extL: 6.058, extH: 2.591, intW: 2.352, intL: 5.898, intH: 2.393, floorZ: 0.162, rampLen: 0.85, rampPitchRad: 0.1918, maxFull: 10, maxHalf: 20 }),
-    11: Object.freeze({ wcid: 4000021, kind: 11, key: "40ft", extW: 2.438, extL: 12.192, extH: 2.591, intW: 2.352, intL: 12.032, intH: 2.393, floorZ: 0.162, rampLen: 0.85, rampPitchRad: 0.1918, maxFull: 21, maxHalf: 42 }),
-    12: Object.freeze({ wcid: 4000022, kind: 12, key: "40hc", extW: 2.438, extL: 12.192, extH: 2.896, intW: 2.352, intL: 12.032, intH: 2.698, floorZ: 0.162, rampLen: 0.85, rampPitchRad: 0.1918, maxFull: 21, maxHalf: 42 }),
+    10: Object.freeze({ wcid: 4000020, kind: 10, key: "20ft", extW: 2.438, extL: 6.058, extH: 2.591, intW: 2.352, intL: 5.898, intH: 2.393, floorZ: 0.162, rampLen: 0.85, rampPitchRad: 0.1918, maxFull: 10, maxHalf: 10 }),
+    11: Object.freeze({ wcid: 4000021, kind: 11, key: "40ft", extW: 2.438, extL: 12.192, extH: 2.591, intW: 2.352, intL: 12.032, intH: 2.393, floorZ: 0.162, rampLen: 0.85, rampPitchRad: 0.1918, maxFull: 20, maxHalf: 20 }),
+    12: Object.freeze({ wcid: 4000022, kind: 12, key: "40hc", extW: 2.438, extL: 12.192, extH: 2.896, intW: 2.352, intL: 12.032, intH: 2.698, floorZ: 0.162, rampLen: 0.85, rampPitchRad: 0.1918, maxFull: 20, maxHalf: 20 }),
   }),
   trailers: Object.freeze({
     "20ft": Object.freeze({ wcid: 4000030, kind: 13, kpY: 2.80, bogieY: -1.895, wheelbase: 4.695, deckZ: 1.32, kingpinZ: 0.96 }),
@@ -286,51 +286,44 @@ export const LOGISTICS_SPEC = Object.freeze({
     Object.freeze({ wcid: 4000010, kind: 2, name: "FluxPod", pallet: "full", powerW: 0 }),
     Object.freeze({ wcid: 4000011, kind: 3, name: "SolarPanels", pallet: "full", powerW: 12000 }),
     Object.freeze({ wcid: 4000012, kind: 4, name: "PowerGenerator", pallet: "full", powerW: 45000 }),
-    Object.freeze({ wcid: 4000013, kind: 5, name: "BatteryUnit", pallet: "half", powerW: 0 }),
+    Object.freeze({ wcid: 4000013, kind: 5, name: "BatteryUnit", pallet: "full", powerW: 0 }),
     Object.freeze({ wcid: 4000014, kind: 6, name: "MissileTurret", pallet: "full", powerW: -2500 }),
-    Object.freeze({ wcid: 4000015, kind: 7, name: "GroundRadar", pallet: "half", powerW: -1200 }),
-    Object.freeze({ wcid: 4000016, kind: 8, name: "MortarTurret", pallet: "half", powerW: -1800 }),
-    Object.freeze({ wcid: 4000017, kind: 9, name: "HeavyLaserTurret", pallet: "half", powerW: -15000 }),
+    Object.freeze({ wcid: 4000015, kind: 7, name: "GroundRadar", pallet: "full", powerW: -1200 }),
+    Object.freeze({ wcid: 4000016, kind: 8, name: "MortarTurret", pallet: "full", powerW: -1800 }),
+    Object.freeze({ wcid: 4000017, kind: 9, name: "HeavyLaserTurret", pallet: "full", powerW: -15000 }),
   ]),
 });
 
 export const ALL_9_DEPLOYABLES = LOGISTICS_SPEC.allDeployables;
-export const HALF_PALLET_WCIDS = new Set([4000013, 4000015, 4000016, 4000017]);
+export const HALF_PALLET_WCIDS = Object.freeze(new Set());
 
-export const PINWHEEL_SLOTS_20 = Object.freeze([
-  Object.freeze({ slotIndex: 0, x: -0.5080, y: +2.3889, orient: "X", dx: 1.2192, dy: 1.0160 }),
-  Object.freeze({ slotIndex: 1, x: +0.6096, y: +2.2873, orient: "Y", dx: 1.0160, dy: 1.2192 }),
-  Object.freeze({ slotIndex: 2, x: +0.5080, y: +1.1697, orient: "X", dx: 1.2192, dy: 1.0160 }),
-  Object.freeze({ slotIndex: 3, x: -0.6096, y: +1.2713, orient: "Y", dx: 1.0160, dy: 1.2192 }),
-  Object.freeze({ slotIndex: 4, x: -0.5080, y: +0.1016, orient: "X", dx: 1.2192, dy: 1.0160 }),
-  Object.freeze({ slotIndex: 5, x: +0.6096, y: -0.0000, orient: "Y", dx: 1.0160, dy: 1.2192 }),
-  Object.freeze({ slotIndex: 6, x: +0.5080, y: -1.1176, orient: "X", dx: 1.2192, dy: 1.0160 }),
-  Object.freeze({ slotIndex: 7, x: -0.6096, y: -1.0160, orient: "Y", dx: 1.0160, dy: 1.2192 }),
-  Object.freeze({ slotIndex: 8, x: -0.5080, y: -2.2873, orient: "Y", dx: 1.0160, dy: 1.2192 }),
-  Object.freeze({ slotIndex: 9, x: +0.5080, y: -2.2873, orient: "Y", dx: 1.0160, dy: 1.2192 }),
-]);
-
-export const PINWHEEL_SLOTS_40 = Object.freeze((() => {
+export const CONTAINER_SLOTS_20 = Object.freeze((() => {
   const slots = [];
-  const quadCenters = [+4.8768, +2.6416, +0.4064, -1.8288];
-  for (let q = 0; q < quadCenters.length; q++) {
-    const yc = quadCenters[q];
+  const rowYs = [+2.320, +1.160, 0.000, -1.160, -2.320];
+  for (let r = 0; r < rowYs.length; r++) {
+    const y = rowYs[r];
     slots.push(
-      Object.freeze({ slotIndex: 4 * q + 0, x: -0.5080, y: yc + 0.6096, orient: "X", dx: 1.2192, dy: 1.0160 }),
-      Object.freeze({ slotIndex: 4 * q + 1, x: +0.6096, y: yc + 0.5080, orient: "Y", dx: 1.0160, dy: 1.2192 }),
-      Object.freeze({ slotIndex: 4 * q + 2, x: +0.5080, y: yc - 0.6096, orient: "X", dx: 1.2192, dy: 1.0160 }),
-      Object.freeze({ slotIndex: 4 * q + 3, x: -0.6096, y: yc - 0.5080, orient: "Y", dx: 1.0160, dy: 1.2192 })
+      Object.freeze({ slotIndex: 2 * r + 0, x: -0.575, y, orient: "Y", dx: 1.100, dy: 1.100 }),
+      Object.freeze({ slotIndex: 2 * r + 1, x: +0.575, y, orient: "Y", dx: 1.100, dy: 1.100 })
     );
   }
-  slots.push(
-    Object.freeze({ slotIndex: 16, x: -0.5368, y: -3.4544, orient: "X", dx: 1.2192, dy: 1.0160 }),
-    Object.freeze({ slotIndex: 17, x: -0.5368, y: -4.4704, orient: "X", dx: 1.2192, dy: 1.0160 }),
-    Object.freeze({ slotIndex: 18, x: -0.5368, y: -5.4864, orient: "X", dx: 1.2192, dy: 1.0160 }),
-    Object.freeze({ slotIndex: 19, x: +0.6384, y: -3.5560, orient: "Y", dx: 1.0160, dy: 1.2192 }),
-    Object.freeze({ slotIndex: 20, x: +0.6384, y: -4.7752, orient: "Y", dx: 1.0160, dy: 1.2192 })
-  );
   return Object.freeze(slots);
 })());
+
+export const CONTAINER_SLOTS_40 = Object.freeze((() => {
+  const slots = [];
+  for (let r = 0; r < 10; r++) {
+    const y = Number(((4.5 - r) * 1.180).toFixed(3));
+    slots.push(
+      Object.freeze({ slotIndex: 2 * r + 0, x: -0.575, y, orient: "Y", dx: 1.100, dy: 1.100 }),
+      Object.freeze({ slotIndex: 2 * r + 1, x: +0.575, y, orient: "Y", dx: 1.100, dy: 1.100 })
+    );
+  }
+  return Object.freeze(slots);
+})());
+
+export const PINWHEEL_SLOTS_20 = CONTAINER_SLOTS_20;
+export const PINWHEEL_SLOTS_40 = CONTAINER_SLOTS_40;
 
 // =============================================================================
 // Assertions & Coordinate Helpers
@@ -1112,23 +1105,11 @@ export function oracleGetPinwheelSlots(containerKindOrWcid) {
   return res ? res.slots : PINWHEEL_SLOTS_40;
 }
 
-function getSlotAabb(slotDef, isHalf, subSlot) {
-  let cx = slotDef.x;
-  let cy = slotDef.y;
-  let dx = slotDef.dx;
-  let dy = slotDef.dy;
-  if (isHalf) {
-    const off = subSlot === 1 ? +0.3048 : -0.3048;
-    if (slotDef.orient === "Y") {
-      cy += off;
-      dy = 0.6096;
-      dx = 1.0160;
-    } else {
-      cx += off;
-      dx = 0.6096;
-      dy = 1.0160;
-    }
-  }
+function getSlotAabb(slotDef, _isHalf = false, _subSlot = 0) {
+  const cx = slotDef.x;
+  const cy = slotDef.y;
+  const dx = slotDef.dx || 1.100;
+  const dy = slotDef.dy || 1.100;
   return {
     cx,
     cy,
@@ -1225,16 +1206,13 @@ function normalizeOracleOccupiedSlots(slots, occupiedSlots) {
     const rawSize = s.palletSize ?? s.PalletSize;
     if (rawSize === 0 || rawSize === "none" || rawSize === "None") continue;
     const cargoWcid = s.cargoWcid ?? s.CargoWcid ?? s.wcid ?? 0;
-    const isHalf =
-      rawSize === "half" ||
-      rawSize === "Half" ||
-      rawSize === 1 ||
-      (rawSize !== "full" && rawSize !== "Full" && rawSize !== 2 && typeof cargoWcid === "number" && HALF_PALLET_WCIDS.has(Math.trunc(cargoWcid)));
-    const subSlot = isHalf ? (Math.trunc(s.subSlot ?? s.SubSlot ?? 0) === 1 ? 1 : 0) : 0;
-    const key = `${slotIndex}:${isHalf ? subSlot : "F"}`;
+    // Unified ISO 6780 pallet: normalize any valid occupied slot to full (subSlot = 0).
+    const isHalf = false;
+    const subSlot = 0;
+    const key = `${slotIndex}:F`;
     if (seen.has(key)) continue;
     seen.add(key);
-    const box = getSlotAabb(slotDef, isHalf, subSlot);
+    const box = getSlotAabb(slotDef, false, 0);
     items.push({ ...s, slotIndex, cargoWcid: typeof cargoWcid === "number" && Number.isFinite(cargoWcid) ? Math.trunc(cargoWcid) : 0, isHalf, subSlot, ...box });
   }
   return items;
@@ -1281,39 +1259,22 @@ export function oracleComputeReachableLoadSlots(containerKind, occupiedSlots = [
   const resolved = resolveOracleContainer(containerKind);
   if (!resolved) return [];
   const { spec, slots } = resolved;
-  const wantHalf = palletSize === "half" || palletSize === "Half" || palletSize === 1;
-  const occBySlot = new Map();
+  const isUnifiedFull = palletSize === "full" || palletSize === "Full" || palletSize === 2;
+  if (!isUnifiedFull) return [];
+  const occBySlot = new Set();
   const obstacles = normalizeOracleOccupiedSlots(slots, occupiedSlots);
 
   for (const item of obstacles) {
-    if (!occBySlot.has(item.slotIndex)) occBySlot.set(item.slotIndex, new Set());
-    if (!item.isHalf) {
-      occBySlot.get(item.slotIndex).add(0);
-      occBySlot.get(item.slotIndex).add(1);
-    } else {
-      occBySlot.get(item.slotIndex).add(item.subSlot);
-    }
+    occBySlot.add(item.slotIndex);
   }
 
   const candidates = [];
   for (const slotDef of slots) {
-    const used = occBySlot.get(slotDef.slotIndex) || new Set();
-    if (!wantHalf) {
-      if (used.size > 0) continue; // Full pallet requires both sub-slots free
-      const box = getSlotAabb(slotDef, false, 0);
-      const res = evaluateCorridorFromDoorOracle(spec, obstacles, box, -1, -1);
-      if (res.reachable) {
-        candidates.push({ slotIndex: slotDef.slotIndex, subSlot: 0, x: box.cx, y: box.cy });
-      }
-    } else {
-      for (const sub of [0, 1]) {
-        if (used.has(sub)) continue;
-        const box = getSlotAabb(slotDef, true, sub);
-        const res = evaluateCorridorFromDoorOracle(spec, obstacles, box, -1, -1);
-        if (res.reachable) {
-          candidates.push({ slotIndex: slotDef.slotIndex, subSlot: sub, x: box.cx, y: box.cy });
-        }
-      }
+    if (occBySlot.has(slotDef.slotIndex)) continue;
+    const box = getSlotAabb(slotDef, false, 0);
+    const res = evaluateCorridorFromDoorOracle(spec, obstacles, box, -1, -1);
+    if (res.reachable) {
+      candidates.push({ slotIndex: slotDef.slotIndex, subSlot: 0, x: box.cx, y: box.cy });
     }
   }
 
@@ -1518,10 +1479,10 @@ export class LogisticsWorldSimulator {
       preset === "sidelifter40hc"
         ? [
             { slotIndex: 0, subSlot: 0, cargoWcid: 4000010, palletSize: 2, cargoState: { ammo: 0, fuel: 0, energy: 0 } },
-            { slotIndex: 2, subSlot: 0, cargoWcid: 4000013, palletSize: 1, cargoState: { ammo: 0, fuel: 0, energy: 240000 } },
-            { slotIndex: 2, subSlot: 1, cargoWcid: 4000015, palletSize: 1, cargoState: { ammo: 0, fuel: 0, energy: 0 } },
+            { slotIndex: 2, subSlot: 0, cargoWcid: 4000013, palletSize: 2, cargoState: { ammo: 0, fuel: 0, energy: 240000 } },
+            { slotIndex: 3, subSlot: 0, cargoWcid: 4000015, palletSize: 2, cargoState: { ammo: 0, fuel: 0, energy: 0 } },
             { slotIndex: 18, subSlot: 0, cargoWcid: 4000014, palletSize: 2, cargoState: { ammo: 4, fuel: 0, energy: 0 } },
-            { slotIndex: 20, subSlot: 0, cargoWcid: 4000017, palletSize: 1, cargoState: { ammo: 0, fuel: 0, energy: 120000 } },
+            { slotIndex: 19, subSlot: 0, cargoWcid: 4000017, palletSize: 2, cargoState: { ammo: 0, fuel: 0, energy: 120000 } },
           ]
         : preset === "sidelifter20"
         ? [
@@ -1532,7 +1493,7 @@ export class LogisticsWorldSimulator {
             { slotIndex: 0, subSlot: 0, cargoWcid: 4000010, palletSize: 2, cargoState: { ammo: 0, fuel: 0, energy: 0 } },
             { slotIndex: 16, subSlot: 0, cargoWcid: 4000011, palletSize: 2, cargoState: { ammo: 0, fuel: 0, energy: 0 } },
             { slotIndex: 18, subSlot: 0, cargoWcid: 4000014, palletSize: 2, cargoState: { ammo: 4, fuel: 0, energy: 0 } },
-            { slotIndex: 20, subSlot: 0, cargoWcid: 4000012, palletSize: 2, cargoState: { ammo: 0, fuel: 120, energy: 0 } },
+            { slotIndex: 19, subSlot: 0, cargoWcid: 4000012, palletSize: 2, cargoState: { ammo: 0, fuel: 120, energy: 0 } },
           ];
 
     this.containers.set(cGuid, {
@@ -1815,7 +1776,7 @@ export class LogisticsWorldSimulator {
         return { ok: false, reason: "ISO 3691-5: Deployable must be stowed and lowered before pickup." };
       }
       pj.carriedWcid = d.wcid;
-      pj.carriedPalletSize = HALF_PALLET_WCIDS.has(d.wcid) ? 1 : 2;
+      pj.carriedPalletSize = 2;
       pj.carriedCargoState = { ...(d.cargoState || { ammo: 0, fuel: 0, energy: 0 }) };
       pj.forkHeightM = LOGISTICS_SPEC.palletJack.forkRaisedM;
       pj.forkState = FORK_STATE.Raised;
@@ -1895,17 +1856,19 @@ export class LogisticsWorldSimulator {
       if (c.doorProgress < 0.95) {
         return { ok: false, reason: "ISO 3874: Open container doors before loading." };
       }
-      const isHalf = pj.carriedPalletSize === 1 || HALF_PALLET_WCIDS.has(pj.carriedWcid);
-      const reach = oracleComputeReachableLoadSlots(c.kind, c.slots, isHalf ? "half" : "full");
+      if (pj.carriedPalletSize === 1) {
+        return { ok: false, reason: "ISO 6780: Legacy half pallet size rejected; unified full pallet required." };
+      }
+      const reach = oracleComputeReachableLoadSlots(c.kind, c.slots, "full");
       const hit = reach.find((r) => r.slotIndex === slotIndex && r.subSlot === subSlot);
       if (!hit) {
         return { ok: false, reason: `ISO 6780: Slot ${slotIndex}:${subSlot} unavailable or blocked.` };
       }
       c.slots.push({
         slotIndex,
-        subSlot,
+        subSlot: 0,
         cargoWcid: pj.carriedWcid,
-        palletSize: isHalf ? 1 : 2,
+        palletSize: 2,
         cargoState: { ...pj.carriedCargoState },
       });
       pj.carriedWcid = 0;
@@ -2840,7 +2803,7 @@ export class LiveSession {
       const vt0 = Date.now();
       let vReady = false;
       let lastStatus = null;
-      while (Date.now() - vt0 < 15000) {
+      while (Date.now() - vt0 < 30000) {
         lastStatus = await this.page
           .evaluate(() => window.__vehicles?.status?.() || null)
           .catch(() => null);
@@ -2852,7 +2815,7 @@ export class LiveSession {
       }
       if (!vReady) {
         await this.close();
-        throw new Error(`LIVE_VEHICLES_TIMEOUT: window.__vehicles.status().caps (0x03) unavailable after 15000ms (granted=${lastStatus?.caps?.granted ?? "none"})`);
+        throw new Error(`LIVE_VEHICLES_TIMEOUT: window.__vehicles.status().caps (0x03) unavailable after 30000ms (granted=${lastStatus?.caps?.granted ?? "none"})`);
       }
     }
     await this.ensureOutdoorFlatSite();
@@ -3180,9 +3143,7 @@ export class LiveSession {
     const slots = oracleGetPinwheelSlots(c.kind);
     const slotDef = slots[slotIndex];
     if (!slotDef) throw new Error(`getSlotWorldPos: invalid slotIndex ${slotIndex}`);
-    const matchSlot = (c.slots || []).find((s) => s.slotIndex === slotIndex && (s.subSlot ?? 0) === subSlot);
-    const isHalf = subSlot === 1 || Boolean(matchSlot && (matchSlot.palletSize === 1 || matchSlot.palletSize === "half" || HALF_PALLET_WCIDS.has(matchSlot.cargoWcid)));
-    const box = getSlotAabb(slotDef, isHalf, subSlot);
+    const box = getSlotAabb(slotDef, false, 0);
     const h = c.heading || 0;
     const ch = Math.cos(h);
     const sh = Math.sin(h);
@@ -3268,15 +3229,15 @@ export class LiveSession {
           waypoints.push({ x: stageW[0], y: stageW[1], stopDist: 0.7, reverse: false });
         }
         const laneX = Math.max(-0.5, Math.min(0.5, cTgtLoc.lx));
-        const apronW = toWorld(cTgt, laneX, -(cTgt.halfL + 3.2));
+        const apronW = toWorld(cTgt, laneX, -(cTgt.halfL + 3.8));
         const toeW = toWorld(cTgt, laneX, -(cTgt.halfL + 0.9));
-        waypoints.push({ x: apronW[0], y: apronW[1], stopDist: 0.7, reverse: false });
-        waypoints.push({ x: toeW[0], y: toeW[1], stopDist: 0.6, reverse: false });
+        waypoints.push({ x: apronW[0], y: apronW[1], stopDist: 0.95, reverse: false });
+        waypoints.push({ x: toeW[0], y: toeW[1], stopDist: 0.7, reverse: false });
       }
       const finalStopDist = cTgt ? Math.max(stopDistM, 0.65) : stopDistM;
       waypoints.push({ x: tx, y: ty, stopDist: finalStopDist, reverse: false });
 
-      const timeoutMs = Math.max(18000, waypoints.length * 7000);
+      const timeoutMs = Math.max(28000, waypoints.length * 10000);
       await this.evalInPage(`
         try { window.__e2eSteerStop?.(); } catch (_) {}
         const pjGuid = ${pjGuid >>> 0};

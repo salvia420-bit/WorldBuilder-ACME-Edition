@@ -11,7 +11,7 @@
 // - ISO 6346 Modulo-11 Check Digit Algorithm: covers all remainders 0..10 including edge case remainder 10 -> 0
 // - 6 Authentic Liveries: Maritime Blue, Corten Oxide Red, Evergreen, Olive Drab, Desert Tan, Industrial Amber
 // - Animated 270° Twin Cargo Doors with 4 galvanized locking bars + fold-down loading ramp (~11° slope, Normal.Z >= 0.6641741)
-// - Collision-Free Pinwheel Bay Floor Layouts: exactly 10 Full (20 Half) in 20ft, 21 Full (42 Half) in 40ft/40HC
+// - Collision-Free 2-Wide Bay Floor Layouts: exactly 10 Unified ISO 6780 (1.100 x 1.100 m) slots in 20ft, 20 in 40ft/40HC
 // - Strict GPU Invariants: <= 8 base draw calls, 0 dynamic THREE.Light instances, AGX HDR PBR MeshStandardMaterial
 // - Dynamic Cargo Bay Culling: cargoBayGroup.visible = false when doors closed
 // - Headless WebGL2 Rendering & Teardown via createFakeWebGL2 + fakeCanvas
@@ -85,7 +85,7 @@ export const ISO_CONTAINER_SPECS = Object.freeze({
     door: Object.freeze({ width: 2.340, height: 2.280 }),
     floorZ: 0.162,
     roofZ: 2.591,
-    palletCapacity: Object.freeze({ full: 10, half: 20 }),
+    palletCapacity: Object.freeze({ full: 10, standard: 10 }),
     hasForkliftPockets: true,
     forkliftPockets: Object.freeze({ centerDistance: 2.050, width: 0.356, height: 0.115 }),
     hasGooseneckTunnel: false,
@@ -103,7 +103,7 @@ export const ISO_CONTAINER_SPECS = Object.freeze({
     door: Object.freeze({ width: 2.340, height: 2.280 }),
     floorZ: 0.162,
     roofZ: 2.591,
-    palletCapacity: Object.freeze({ full: 21, half: 42 }),
+    palletCapacity: Object.freeze({ full: 20, standard: 20 }),
     hasForkliftPockets: false, // Prohibited per ISO 1496-1
     hasGooseneckTunnel: false,
     hasHazardChevrons: false,
@@ -120,7 +120,7 @@ export const ISO_CONTAINER_SPECS = Object.freeze({
     door: Object.freeze({ width: 2.340, height: 2.585 }),
     floorZ: 0.162,
     roofZ: 2.896,
-    palletCapacity: Object.freeze({ full: 21, half: 42 }),
+    palletCapacity: Object.freeze({ full: 20, standard: 20 }),
     hasForkliftPockets: false,
     hasGooseneckTunnel: true,
     gooseneckTunnel: Object.freeze({ length: 3.150, width: 1.020, height: 0.120 }),
@@ -138,50 +138,43 @@ export const CONTAINER_LIVERIES = Object.freeze({
   industrialAmber: Object.freeze({ name: "Industrial Amber", hex: 0xb87333, rgb: [184, 115, 51] }),
 });
 
+const UNIFIED_PALLET_DIMS = Object.freeze({ width: 1.100, depth: 1.100, height: 0.145 });
+
 export const GMA_PALLET_SPECS = Object.freeze({
-  full: Object.freeze({ width: 1.2192, depth: 1.0160, height: 0.1397 }),
-  half: Object.freeze({ width: 0.6096, depth: 1.0160, height: 0.1397 }),
-  deckZOffset: 0.3017, // floorZ (0.162) + pallet height (0.1397)
-  stowedCeilingH: 2.14, // clears 2.28m door when atop pallet
+  standard: UNIFIED_PALLET_DIMS,
+  full: UNIFIED_PALLET_DIMS,
+  deckZOffset: 0.307, // floorZ (0.162) + pallet height (0.145)
+  stowedCeilingH: 2.05, // clears 2.28m door even when raised +0.077m on pallet jack forks
 });
 
-// 20-ft Pinwheel Bay Floor Layout (10 Full GMA Slots)
-export const PINWHEEL_SLOTS_20 = Object.freeze([
-  Object.freeze({ slotIndex: 0, x: -0.5080, y: +2.3889, orient: "X", dx: 1.2192, dy: 1.0160 }),
-  Object.freeze({ slotIndex: 1, x: +0.6096, y: +2.2873, orient: "Y", dx: 1.0160, dy: 1.2192 }),
-  Object.freeze({ slotIndex: 2, x: +0.5080, y: +1.1697, orient: "X", dx: 1.2192, dy: 1.0160 }),
-  Object.freeze({ slotIndex: 3, x: -0.6096, y: +1.2713, orient: "Y", dx: 1.0160, dy: 1.2192 }),
-  Object.freeze({ slotIndex: 4, x: -0.5080, y: +0.1016, orient: "X", dx: 1.2192, dy: 1.0160 }),
-  Object.freeze({ slotIndex: 5, x: +0.6096, y: -0.0000, orient: "Y", dx: 1.0160, dy: 1.2192 }),
-  Object.freeze({ slotIndex: 6, x: +0.5080, y: -1.1176, orient: "X", dx: 1.2192, dy: 1.0160 }),
-  Object.freeze({ slotIndex: 7, x: -0.6096, y: -1.0160, orient: "Y", dx: 1.0160, dy: 1.2192 }),
-  Object.freeze({ slotIndex: 8, x: -0.5080, y: -2.2873, orient: "Y", dx: 1.0160, dy: 1.2192 }),
-  Object.freeze({ slotIndex: 9, x: +0.5080, y: -2.2873, orient: "Y", dx: 1.0160, dy: 1.2192 }),
-]);
-
-// 40-ft / 40HC Pinwheel Bay Floor Layout (21 Full GMA Slots)
-export const PINWHEEL_SLOTS_40 = Object.freeze((() => {
+// 20-ft 2-Wide Grid Bay Floor Layout (2 x 5 = 10 Unified Slots)
+export const CONTAINER_SLOTS_20 = Object.freeze((() => {
+  const rows = [+2.320, +1.160, 0.000, -1.160, -2.320];
   const slots = [];
-  const quadCenters = [+4.8768, +2.6416, +0.4064, -1.8288];
-  for (let q = 0; q < quadCenters.length; q++) {
-    const yc = quadCenters[q];
+  for (let r = 0; r < rows.length; r++) {
     slots.push(
-      Object.freeze({ slotIndex: 4 * q + 0, x: -0.5080, y: yc + 0.6096, orient: "X", dx: 1.2192, dy: 1.0160 }),
-      Object.freeze({ slotIndex: 4 * q + 1, x: +0.6096, y: yc + 0.5080, orient: "Y", dx: 1.0160, dy: 1.2192 }),
-      Object.freeze({ slotIndex: 4 * q + 2, x: +0.5080, y: yc - 0.6096, orient: "X", dx: 1.2192, dy: 1.0160 }),
-      Object.freeze({ slotIndex: 4 * q + 3, x: -0.6096, y: yc - 0.5080, orient: "Y", dx: 1.0160, dy: 1.2192 })
+      Object.freeze({ slotIndex: r * 2 + 0, x: -0.575, y: rows[r], orient: "Y", dx: 1.100, dy: 1.100 }),
+      Object.freeze({ slotIndex: r * 2 + 1, x: +0.575, y: rows[r], orient: "Y", dx: 1.100, dy: 1.100 })
     );
   }
-  // Asymmetric rear tier (5 slots)
-  slots.push(
-    Object.freeze({ slotIndex: 16, x: -0.5368, y: -3.4544, orient: "X", dx: 1.2192, dy: 1.0160 }),
-    Object.freeze({ slotIndex: 17, x: -0.5368, y: -4.4704, orient: "X", dx: 1.2192, dy: 1.0160 }),
-    Object.freeze({ slotIndex: 18, x: -0.5368, y: -5.4864, orient: "X", dx: 1.2192, dy: 1.0160 }),
-    Object.freeze({ slotIndex: 19, x: +0.6384, y: -3.5560, orient: "Y", dx: 1.0160, dy: 1.2192 }),
-    Object.freeze({ slotIndex: 20, x: +0.6384, y: -4.7752, orient: "Y", dx: 1.0160, dy: 1.2192 })
-  );
-  return Object.freeze(slots);
+  return slots;
 })());
+
+// 40-ft / 40HC 2-Wide Grid Bay Floor Layout (2 x 10 = 20 Unified Slots)
+export const CONTAINER_SLOTS_40 = Object.freeze((() => {
+  const slots = [];
+  for (let r = 0; r < 10; r++) {
+    const y = (4.5 - r) * 1.180;
+    slots.push(
+      Object.freeze({ slotIndex: r * 2 + 0, x: -0.575, y, orient: "Y", dx: 1.100, dy: 1.100 }),
+      Object.freeze({ slotIndex: r * 2 + 1, x: +0.575, y, orient: "Y", dx: 1.100, dy: 1.100 })
+    );
+  }
+  return slots;
+})());
+
+export const PINWHEEL_SLOTS_20 = CONTAINER_SLOTS_20;
+export const PINWHEEL_SLOTS_40 = CONTAINER_SLOTS_40;
 
 // ---------------------------------------------------------------------------
 // ISO 6346 Check Digit Algorithm (Modulo-11)
@@ -569,32 +562,131 @@ await check("T1.3_DR_02 Fold-Down Loading Ramp Walkable Slope (~11° Normal.Z >=
   container.dispose();
 });
 
-// --- F4: Collision-Free Pinwheel Bay Layout & Capacity ---
-await check("T1.4_BAY_01 20-ft Container 10 Full (20 Half) GMA Pallet Capacity", () => {
-  const spec = ISO_CONTAINER_SPECS[CONTAINER_WCID.IsoContainer20];
-  assert.equal(spec.palletCapacity.full, 10, "20ft container holds 10 Full GMA pallets");
-  assert.equal(spec.palletCapacity.half, 20, "20ft container holds 20 Half GMA pallets");
-  assert.equal(PINWHEEL_SLOTS_20.length, 10, "20ft pinwheel floor layout has 10 slot definitions");
+await check("T1.3_DR_03 Rear-Door CSC & BIC Decals Mounted on Door Leaves (Zero Floating Doorway Plates)", () => {
+  const v = new THREE.Vector3();
+  const invRoot = new THREE.Matrix4();
+  const toRoot = new THREE.Matrix4();
+  for (const wcid of Object.values(CONTAINER_WCID)) {
+    const container = ContainerFactory.build(THREE, wcid);
+    const spec = container.spec;
+    const halfL = spec.external.length / 2;
+    const doorW = spec.door.width / 2;
+    const doorH = spec.door.height;
+
+    const markingsMesh = container.root.getObjectByName("container-markings");
+    const leftDoorMesh = container.root.getObjectByName("door-leaf-left");
+    const rightDoorMesh = container.root.getObjectByName("door-leaf-right");
+    assert.ok(markingsMesh && leftDoorMesh && rightDoorMesh, `WCID ${wcid} meshes present`);
+
+    // 1. Static container-markings has strictly zero vertices inside the open rear doorway plane across ALL 3 variants
+    const mPos = markingsMesh.geometry.getAttribute("position");
+    for (let i = 0; i < mPos.count; i++) {
+      const x = mPos.getX(i);
+      const y = mPos.getY(i);
+      const z = mPos.getZ(i);
+      assert.ok(
+        !(y < -halfL + 0.05 && Math.abs(x) < doorW - 0.05),
+        `WCID ${wcid} container-markings vertex (${x.toFixed(3)}, ${y.toFixed(3)}, ${z.toFixed(3)}) must not be inside open rear doorway`,
+      );
+    }
+
+    // 2. Closed (doorProgress === 0.0): rear-door CSC (7a) and BIC (7b) decals sit on the rear exterior (-Y) face inside |x| <= doorW
+    container.setDoorProgress(0.0);
+    container.root.updateMatrixWorld(true);
+    invRoot.copy(container.root.matrixWorld).invert();
+
+    toRoot.multiplyMatrices(invRoot, leftDoorMesh.matrixWorld);
+    const lPos = leftDoorMesh.geometry.getAttribute("position");
+    let hasCscOnLeft = false;
+    for (let i = 0; i < lPos.count; i++) {
+      v.fromBufferAttribute(lPos, i).applyMatrix4(toRoot);
+      if (Math.abs(v.x - (-doorW / 2)) <= 0.18 && v.y < -halfL - 0.001 && Math.abs(v.z - (spec.floorZ + doorH * 0.35)) <= 0.12) {
+        hasCscOnLeft = true;
+        break;
+      }
+    }
+    assert.ok(hasCscOnLeft, `WCID ${wcid} leftDoorMesh carries CSC Safety Approval Plate on rear exterior (-Y)`);
+
+    toRoot.multiplyMatrices(invRoot, rightDoorMesh.matrixWorld);
+    const rPos = rightDoorMesh.geometry.getAttribute("position");
+    let hasBicUpperOnRight = false;
+    let hasBicLowerOnRight = false;
+    for (let i = 0; i < rPos.count; i++) {
+      v.fromBufferAttribute(rPos, i).applyMatrix4(toRoot);
+      if (Math.abs(v.x - (doorW / 2)) <= 0.33 && v.y < -halfL - 0.001) {
+        if (Math.abs(v.z - (spec.floorZ + doorH * 0.85)) <= 0.07) hasBicUpperOnRight = true;
+        if (Math.abs(v.z - (spec.floorZ + doorH * 0.70)) <= 0.05) hasBicLowerOnRight = true;
+      }
+    }
+    assert.ok(hasBicUpperOnRight && hasBicLowerOnRight, `WCID ${wcid} rightDoorMesh carries both ISO 6346 BIC rear-door decals on rear exterior (-Y)`);
+
+    // 3. At doorProgress === 1.0 (270 deg open), door leaves & plates swing outside ±halfW without clipping side walls
+    const halfW = spec.external.width / 2;
+    container.setDoorProgress(1.0);
+    container.root.updateMatrixWorld(true);
+    const lBox = new THREE.Box3().setFromObject(leftDoorMesh);
+    const rBox = new THREE.Box3().setFromObject(rightDoorMesh);
+    assert.ok(lBox.max.x <= -halfW + 0.002, `WCID ${wcid} open left door max.x (${lBox.max.x.toFixed(4)}) <= ${(-halfW + 0.002).toFixed(4)} (outside side wall)`);
+    assert.ok(rBox.min.x >= halfW - 0.002, `WCID ${wcid} open right door min.x (${rBox.min.x.toFixed(4)}) >= ${(halfW - 0.002).toFixed(4)} (outside side wall)`);
+
+    for (const [label, mesh] of [["door-leaf-left", leftDoorMesh], ["door-leaf-right", rightDoorMesh]]) {
+      toRoot.multiplyMatrices(invRoot, mesh.matrixWorld);
+      const pos = mesh.geometry.getAttribute("position");
+      for (let i = 0; i < pos.count; i++) {
+        v.fromBufferAttribute(pos, i).applyMatrix4(toRoot);
+        const inDoorwayOpening = v.y < -halfL + 0.05 && v.y > -halfL - 0.15 && Math.abs(v.x) < doorW - 0.12;
+        assert.ok(!inDoorwayOpening, `WCID ${wcid} ${label} vertex (${v.x.toFixed(3)}, ${v.y.toFixed(3)}, ${v.z.toFixed(3)}) must swing clear of open doorway`);
+      }
+    }
+
+    container.dispose();
+  }
 });
 
-await check("T1.4_BAY_02 40-ft / 40HC Container 21 Full (42 Half) GMA Pallet Capacity", () => {
-  const spec40 = ISO_CONTAINER_SPECS[CONTAINER_WCID.IsoContainer40];
-  const spec40HC = ISO_CONTAINER_SPECS[CONTAINER_WCID.IsoContainer40HC];
-  assert.equal(spec40.palletCapacity.full, 21, "40ft holds 21 Full GMA pallets");
-  assert.equal(spec40.palletCapacity.half, 42, "40ft holds 42 Half GMA pallets");
-  assert.equal(spec40HC.palletCapacity.full, 21, "40HC holds 21 Full GMA pallets");
-  assert.equal(spec40HC.palletCapacity.half, 42, "40HC holds 42 Half GMA pallets");
-  assert.equal(PINWHEEL_SLOTS_40.length, 21, "40ft pinwheel floor layout has 21 slot definitions");
+// --- F4: Collision-Free 2-Wide Bay Layout & Capacity ---
+await check("T1.4_BAY_01 20-ft Container 10 Unified ISO 6780 Pallet Capacity", () => {
+  const c20 = ContainerFactory.build(THREE, CONTAINER_WCID.IsoContainer20);
+  const spec = c20.spec;
+  assert.equal(spec.palletCapacity.full, 10, "20ft container holds 10 Unified pallets");
+  assert.equal(spec.palletCapacity.standard, 10, "20ft standard capacity === 10");
+  assert.equal(CONTAINER_SLOTS_20.length, 10, "20ft 2-wide floor layout has 10 slot definitions");
+  assert.equal(CONTAINER_MODULE.CONTAINER_SLOTS_20.length, 10);
+  assert.equal(CONTAINER_MODULE.PINWHEEL_SLOTS_20, CONTAINER_MODULE.CONTAINER_SLOTS_20);
+  c20.dispose();
 });
 
-// --- F5: Base Container GPU Budget (<= 8 Draw Calls, 0 Lights) ---
-await check("T1.5_PBR_01 Base Container GPU Budget (<= 8 Draw Calls, 0 Lights) on All Variants", () => {
+await check("T1.4_BAY_02 40-ft / 40HC Container 20 Unified ISO 6780 Pallet Capacity", () => {
+  const c40 = ContainerFactory.build(THREE, CONTAINER_WCID.IsoContainer40);
+  const c40hc = ContainerFactory.build(THREE, CONTAINER_WCID.IsoContainer40HC);
+  assert.equal(c40.spec.palletCapacity.full, 20, "40ft holds 20 Unified pallets");
+  assert.equal(c40.spec.palletCapacity.standard, 20, "40ft standard capacity === 20");
+  assert.equal(c40hc.spec.palletCapacity.full, 20, "40HC holds 20 Unified pallets");
+  assert.equal(c40hc.spec.palletCapacity.standard, 20, "40HC standard capacity === 20");
+  assert.equal(CONTAINER_SLOTS_40.length, 20, "40ft 2-wide floor layout has 20 slot definitions");
+  assert.equal(CONTAINER_MODULE.CONTAINER_SLOTS_40.length, 20);
+  assert.equal(CONTAINER_MODULE.PINWHEEL_SLOTS_40, CONTAINER_MODULE.CONTAINER_SLOTS_40);
+  c40.dispose();
+  c40hc.dispose();
+});
+
+// --- F5: Base Container GPU Budget (<= 8 Draw Calls, 0 Lights, 0 Extra Floor Marking Draws) ---
+await check("T1.5_PBR_01 Base Container GPU Budget (<= 8 Draw Calls, 0 Lights, Merged Floor Corner Markings) on All Variants", () => {
   for (const wcid of Object.values(CONTAINER_WCID)) {
     const container = ContainerFactory.build(THREE, wcid);
     const calls = countDrawCalls(container.root);
     const lights = countLights(container.root);
     assert.ok(calls > 0 && calls <= 8, `WCID ${wcid} draw calls (${calls}) <= 8`);
     assert.equal(lights, 0, `WCID ${wcid} dynamic lights (${lights}) === 0`);
+
+    // Verify painted bay corner guide brackets are merged inside the single floorMesh draw call
+    const floorMeshes = [];
+    container.root.traverse((o) => {
+      if (o.isMesh && o.name === "container-floor-deck") floorMeshes.push(o);
+    });
+    assert.equal(floorMeshes.length, 1, `WCID ${wcid} has exactly 1 floorMesh draw call`);
+    floorMeshes[0].geometry.computeBoundingBox();
+    near(floorMeshes[0].geometry.boundingBox.max.z, 0.016, 1e-4, `WCID ${wcid} floor corner brackets at z_local=0.015±0.001`);
+
     container.dispose();
   }
 });
@@ -730,19 +822,20 @@ await check("T2.8_BVA_08 High-Cube Hazard Chevrons Strictly Absent on Standard 8
 // ---------------------------------------------------------------------------
 console.log("=== TIER 3: Cross-Feature Integration (Suite: vehicle_iso_containers) ===");
 
-await check("T3.1_INT_01 Mathematical Collision-Free Verification of 20-ft Pinwheel Bay (10 Full Slots)", () => {
+await check("T3.1_INT_01 Mathematical Collision-Free Verification of 20-ft 2-Wide Bay (10 Unified Slots)", () => {
   const intW = ISO_CONTAINER_SPECS[CONTAINER_WCID.IsoContainer20].internal.width;
   const intL = ISO_CONTAINER_SPECS[CONTAINER_WCID.IsoContainer20].internal.length;
 
-  for (let i = 0; i < PINWHEEL_SLOTS_20.length; i++) {
-    const s1 = PINWHEEL_SLOTS_20[i];
-    // Check inside interior bounds
+  for (let i = 0; i < CONTAINER_SLOTS_20.length; i++) {
+    const s1 = CONTAINER_SLOTS_20[i];
+    // Check inside interior bounds & corrugation ribs (±1.1635 m)
     assert.ok(Math.abs(s1.x) + s1.dx / 2 <= intW / 2 + 1e-4, `Slot ${i} out of bounds X`);
+    assert.ok(Math.abs(s1.x) + s1.dx / 2 <= 1.1635, `Slot ${i} clears corrugation ribs`);
     assert.ok(Math.abs(s1.y) + s1.dy / 2 <= intL / 2 + 1e-4, `Slot ${i} out of bounds Y`);
 
     // Check collision against every subsequent slot
-    for (let j = i + 1; j < PINWHEEL_SLOTS_20.length; j++) {
-      const s2 = PINWHEEL_SLOTS_20[j];
+    for (let j = i + 1; j < CONTAINER_SLOTS_20.length; j++) {
+      const s2 = CONTAINER_SLOTS_20[j];
       const ox = Math.min(s1.x + s1.dx / 2, s2.x + s2.dx / 2) - Math.max(s1.x - s1.dx / 2, s2.x - s2.dx / 2);
       const oy = Math.min(s1.y + s1.dy / 2, s2.y + s2.dy / 2) - Math.max(s1.y - s1.dy / 2, s2.y - s2.dy / 2);
       assert.ok(ox <= 1e-4 || oy <= 1e-4, `Collision detected between 20ft slots ${i} and ${j} (ox=${ox}, oy=${oy})`);
@@ -750,19 +843,18 @@ await check("T3.1_INT_01 Mathematical Collision-Free Verification of 20-ft Pinwh
   }
 });
 
-await check("T3.2_INT_02 Mathematical Collision-Free Verification of 40-ft Pinwheel Bay (21 Full Slots)", () => {
+await check("T3.2_INT_02 Mathematical Collision-Free Verification of 40-ft 2-Wide Bay (20 Unified Slots)", () => {
   const intW = ISO_CONTAINER_SPECS[CONTAINER_WCID.IsoContainer40].internal.width;
   const intL = ISO_CONTAINER_SPECS[CONTAINER_WCID.IsoContainer40].internal.length;
 
-  for (let i = 0; i < PINWHEEL_SLOTS_40.length; i++) {
-    const s1 = PINWHEEL_SLOTS_40[i];
-    // Check inside interior bounds
+  for (let i = 0; i < CONTAINER_SLOTS_40.length; i++) {
+    const s1 = CONTAINER_SLOTS_40[i];
     assert.ok(Math.abs(s1.x) + s1.dx / 2 <= intW / 2 + 1e-4, `40ft Slot ${i} out of bounds X`);
+    assert.ok(Math.abs(s1.x) + s1.dx / 2 <= 1.1635, `40ft Slot ${i} clears corrugation ribs`);
     assert.ok(Math.abs(s1.y) + s1.dy / 2 <= intL / 2 + 1e-4, `40ft Slot ${i} out of bounds Y`);
 
-    // Check collision against every subsequent slot
-    for (let j = i + 1; j < PINWHEEL_SLOTS_40.length; j++) {
-      const s2 = PINWHEEL_SLOTS_40[j];
+    for (let j = i + 1; j < CONTAINER_SLOTS_40.length; j++) {
+      const s2 = CONTAINER_SLOTS_40[j];
       const ox = Math.min(s1.x + s1.dx / 2, s2.x + s2.dx / 2) - Math.max(s1.x - s1.dx / 2, s2.x - s2.dx / 2);
       const oy = Math.min(s1.y + s1.dy / 2, s2.y + s2.dy / 2) - Math.max(s1.y - s1.dy / 2, s2.y - s2.dy / 2);
       assert.ok(ox <= 1e-4 || oy <= 1e-4, `Collision detected between 40ft slots ${i} and ${j} (ox=${ox}, oy=${oy})`);
@@ -770,80 +862,81 @@ await check("T3.2_INT_02 Mathematical Collision-Free Verification of 40-ft Pinwh
   }
 });
 
-await check("T3.3_INT_03 Dual Half-Pallet Sub-slot Offsets (±0.3048m) Inside Pinwheel Slots", () => {
-  const halfWidth = GMA_PALLET_SPECS.half.width; // 0.6096m
-  const fullWidth = GMA_PALLET_SPECS.full.width; // 1.2192m
-  const halfSlot0X = -0.3048;
-  const halfSlot1X = +0.3048;
+await check("T3.3_INT_03 Unified 1.100 x 1.100 m Bay Highlight, Zero Slot Rotation & Clean loadSlot/syncSlots", () => {
+  for (const [wcid, slots] of [
+    [CONTAINER_WCID.IsoContainer20, CONTAINER_SLOTS_20],
+    [CONTAINER_WCID.IsoContainer40, CONTAINER_SLOTS_40],
+  ]) {
+    const container = ContainerFactory.build(THREE, wcid);
 
-  // Subslot 0 spans [-0.6096, 0.0]
-  const slot0Min = halfSlot0X - halfWidth / 2;
-  const slot0Max = halfSlot0X + halfWidth / 2;
-  near(slot0Min, -0.6096, 1e-4);
-  near(slot0Max, 0.0000, 1e-4);
+    // Highlight border geometry must be 1.100 x 1.100 m with rotation.z === 0 and zero X offset
+    container.bayHighlightMesh.geometry.computeBoundingBox();
+    const hb = container.bayHighlightMesh.geometry.boundingBox;
+    near(hb.max.x - hb.min.x, 1.100, 1e-4, "highlight border width 1.100m");
+    near(hb.max.y - hb.min.y, 1.100, 1e-4, "highlight border depth 1.100m");
 
-  // Subslot 1 spans [0.0, +0.6096]
-  const slot1Min = halfSlot1X - halfWidth / 2;
-  const slot1Max = halfSlot1X + halfWidth / 2;
-  near(slot1Min, 0.0000, 1e-4);
-  near(slot1Max, +0.6096, 1e-4);
+    for (const s of slots) {
+      assert.equal(container.setHighlightedSlot(s.slotIndex, null, "target"), true);
+      near(container.bayHighlightPivot.rotation.z, 0, 1e-6, `slot ${s.slotIndex} highlight rotation.z === 0`);
+      near(container.bayHighlightMesh.position.x, 0, 1e-6, `slot ${s.slotIndex} highlight xOffset === 0`);
+      near(container.bayHighlightPivot.position.x, s.x, 1e-6);
+      near(container.bayHighlightPivot.position.y, s.y, 1e-6);
+    }
+    container.setHighlightedSlot(null, null, null);
 
-  // Combined width exactly equals Full GMA pallet width
-  near(slot1Max - slot0Min, fullWidth, 1e-4, "combined dual half-pallet width 1.2192m");
+    // Syncing full slot payload mounts 10 (20ft) or 20 (40ft) children cleanly (including legacy palletSize: 1 normalization)
+    const payload = slots.map((s, idx) => ({
+      slotIndex: s.slotIndex,
+      subSlot: 0,
+      palletSize: idx % 2 === 0 ? 2 : 1,
+      cargoWcid: 4000010 + (idx % 8),
+    }));
+    container.syncSlots(payload);
+    assert.equal(container.cargoBayGroup.children.length, slots.length, `WCID ${wcid} syncSlots mounted ${slots.length} slots`);
 
-  // Real Container Loading & Sub-Slot Coexistence Verification
-  const container = ContainerFactory.build(THREE, CONTAINER_WCID.IsoContainer20);
-  assert.ok(container, "Container instantiated");
+    // syncSlots skips entries with explicitly empty palletSize (0, "none", "None")
+    container.syncSlots([
+      { slotIndex: 0, palletSize: 0, cargoWcid: 0 },
+      { slotIndex: 1, palletSize: "none", cargoWcid: 4000010 },
+      { slotIndex: 2, PalletSize: "None", CargoWcid: 4000011 },
+      { slotIndex: 3, palletSize: 2, cargoWcid: 4000012 },
+    ]);
+    assert.equal(container.cargoBayGroup.children.length, 1, `WCID ${wcid} syncSlots skips empty palletSize entries`);
+    container.syncSlots(payload);
+    assert.equal(container.cargoBayGroup.children.length, slots.length, `WCID ${wcid} syncSlots restored ${slots.length} slots`);
 
-  // Load two half-pallets into sub-slots 0 and 1 of slot 0
-  const entry0 = container.loadSlot(0, 4000013, { palletSize: "half", subSlot: 0 }); // Battery Unit (half)
-  const entry1 = container.loadSlot(0, 4000015, { palletSize: "half", subSlot: 1 }); // Ground Radar (half)
+    // Unloading integer or legacy composite key removes slot cleanly
+    container.unloadSlot(0);
+    assert.equal(container.cargoBayGroup.children.length, slots.length - 1);
 
-  assert.ok(entry0 && entry1, "Both sub-slot entries returned from loadSlot");
-  assert.equal(container.cargoBayGroup.children.length, 2, "Both half-pallets exist simultaneously in cargoBayGroup");
-  near(entry0.deployableModel.root.position.x, -0.3048, 1e-4, "Sub-slot 0 offset at -0.3048m");
-  near(entry1.deployableModel.root.position.x, +0.3048, 1e-4, "Sub-slot 1 offset at +0.3048m");
+    // Loading empty/generic fallback mounts standard stowed pallet at (0,0,0)
+    const fb = container.loadSlot(0, 0);
+    assert.ok(fb && fb.pallet?.root, "empty slot mounts standard pallet");
+    assert.equal(fb.pallet.size, "standard");
+    assert.equal(fb.pallet.stowed, true);
+    near(fb.slotGroup.rotation.z, 0, 1e-6);
+    near(fb.pallet.root.position.x, 0, 1e-6);
 
-  // Verify syncing 20 half pallets across 10 slots yields exactly 20 children in cargoBayGroup
-  const halfPayload = [];
-  for (let i = 0; i < 10; i++) {
-    halfPayload.push({ slotIndex: i, subSlot: 0, palletSize: 1, cargoWcid: 4000013 });
-    halfPayload.push({ slotIndex: i, subSlot: 1, palletSize: 1, cargoWcid: 4000015 });
+    container.dispose();
   }
-  container.syncSlots(halfPayload);
-  assert.equal(container.cargoBayGroup.children.length, 20, "Syncing 20 half pallets across 10 slots yields exactly 20 children in cargoBayGroup");
-
-  // Verify unloading a composite key leaves 19 children
-  container.unloadSlot("0:0");
-  assert.equal(container.cargoBayGroup.children.length, 19, "Unloading composite key 0:0 leaves 19 children");
-
-  // Verify unloading integer slot 1 unloads both sub-slots (1:0 and 1:1), leaving 17 children
-  container.unloadSlot(1);
-  assert.equal(container.cargoBayGroup.children.length, 17, "Unloading integer slot 1 unloads both sub-slots, leaving 17 children");
-
-  // Verify loading full pallet into slot 0 evicts remaining sub-slot 0:1
-  container.loadSlot(0, 4000010, { palletSize: "full" });
-  assert.equal(container.cargoBayGroup.children.length, 17, "Loading full pallet into slot 0 evicted sub-slot 0:1");
-
-  container.dispose();
 });
 
-await check("T3.4_INT_04 Stowed Deployable Height Ceiling (H_stowed <= 2.14m clearing 2.28m door)", () => {
+await check("T3.4_INT_04 Stowed Deployable Height Ceiling (H_stowed <= 2.05m clearing 2.28m door even on raised jack)", () => {
   const spec = ISO_CONTAINER_SPECS[CONTAINER_WCID.IsoContainer20];
-  const maxUnitHeight = GMA_PALLET_SPECS.stowedCeilingH; // 2.14m
-  const palletHeight = GMA_PALLET_SPECS.full.height;     // 0.1397m
-  const totalStackHeight = maxUnitHeight + palletHeight; // ~2.2797m
-
-  assert.ok(totalStackHeight <= spec.door.height, `Stack height (${totalStackHeight}m) clears door opening (${spec.door.height}m)`);
-  near(spec.door.height - totalStackHeight, 0.0003, 1e-3, "clears door lintel with positive safety margin");
+  const maxUnitHeight = GMA_PALLET_SPECS.stowedCeilingH; // 2.05m (includes pallet height 0.145m)
+  const jackLiftClearance = 0.077; // 0.200 - 0.123 when lifted inside container
+  assert.ok(maxUnitHeight + jackLiftClearance < spec.door.height, `Raised stack (${(maxUnitHeight + jackLiftClearance).toFixed(3)}m) < door (${spec.door.height}m)`);
+  assert.ok(spec.floorZ + maxUnitHeight < spec.floorZ + spec.door.height, "floorZ + 2.05 <= 2.212 < 2.442");
 });
 
-await check("T3.5_INT_05 Floor & Pallet Deck Elevation Invariant (z_deck = 0.3017m)", () => {
+await check("T3.5_INT_05 Floor & Pallet Deck Elevation Invariant (z_deck = 0.307m)", () => {
   const floorZ = ISO_CONTAINER_SPECS[CONTAINER_WCID.IsoContainer20].floorZ; // 0.162m
-  const palletZ = GMA_PALLET_SPECS.full.height;                           // 0.1397m
-  const deckElevation = floorZ + palletZ;                                  // 0.3017m
+  const palletZ = GMA_PALLET_SPECS.standard.height;                       // 0.145m
+  const deckElevation = floorZ + palletZ;                                  // 0.307m
 
-  near(deckElevation, GMA_PALLET_SPECS.deckZOffset, 1e-4, "pallet deck surface elevation 0.3017m");
+  near(deckElevation, GMA_PALLET_SPECS.deckZOffset, 1e-4, "pallet deck surface elevation 0.307m");
+  near(CONTAINER_MODULE.GMA_PALLET_SPECS.deckZOffset, 0.307, 1e-4);
+  near(CONTAINER_MODULE.GMA_PALLET_SPECS.stowedCeilingH, 2.05, 1e-4);
 });
 
 // ---------------------------------------------------------------------------
@@ -851,51 +944,55 @@ await check("T3.5_INT_05 Floor & Pallet Deck Elevation Invariant (z_deck = 0.301
 // ---------------------------------------------------------------------------
 console.log("=== TIER 4: Real-World Scenarios (Suite: vehicle_iso_containers) ===");
 
-await check("T4.1_SCEN_01 FOB-in-a-Box Full 9-Deployable Logistics Bay Loading in 20-ft Container", () => {
+await check("T4.1_SCEN_01 FOB-in-a-Box Full 9-Deployable Logistics Bay Loading in 20-ft Container (3D Interior Fit)", () => {
   const container = ContainerFactory.build(THREE, CONTAINER_WCID.IsoContainer20);
   const bay = container.cargoBayGroup;
 
-  // Stowed deployable definitions for 9 units
   const FOB_DEPLOYABLES = [
-    { name: "AN/TPS-1 Mobile Radar", wcid: 4000002, stowedH: 2.10, isFull: true },
-    { name: "Flux Pod", wcid: 4000010, stowedH: 1.45, isFull: true },
-    { name: "Solar Panels", wcid: 4000011, stowedH: 1.10, isFull: true },
-    { name: "Power Generator", wcid: 4000012, stowedH: 1.60, isFull: true },
-    { name: "Battery Unit", wcid: 4000013, stowedH: 1.20, isFull: false },
-    { name: "Missile Turret", wcid: 4000014, stowedH: 1.25, isFull: true },
-    { name: "Ground Radar", wcid: 4000015, stowedH: 1.80, isFull: false },
-    { name: "Mortar Turret", wcid: 4000016, stowedH: 1.15, isFull: false },
-    { name: "Heavy Laser Turret", wcid: 4000017, stowedH: 1.05, isFull: false },
+    { name: "AN/TPS-1 Mobile Radar", wcid: 4000002 },
+    { name: "Flux Pod", wcid: 4000010 },
+    { name: "Solar Panels", wcid: 4000011 },
+    { name: "Power Generator", wcid: 4000012 },
+    { name: "Battery Unit", wcid: 4000013 },
+    { name: "Missile Turret", wcid: 4000014 },
+    { name: "Ground Radar", wcid: 4000015 },
+    { name: "Mortar Turret", wcid: 4000016 },
+    { name: "Heavy Laser Turret", wcid: 4000017 },
   ];
 
-  // Stow each deployable via production loadSlot API into consecutive pinwheel slots 0..8
+  // Open doors so bay world bounds can be verified cleanly
+  container.setDoorProgress(1.0);
+  container.root.updateMatrixWorld(true);
+
   for (let i = 0; i < FOB_DEPLOYABLES.length; i++) {
     const item = FOB_DEPLOYABLES[i];
-    const slot = PINWHEEL_SLOTS_20[i];
-
-    const entry = container.loadSlot(i, item.wcid, { palletSize: item.isFull ? "full" : "half" });
+    const entry = container.loadSlot(i, item.wcid);
     assert.ok(entry, `loadSlot returned entry for slot ${i}`);
     assert.ok(entry.deployableModel, `entry has deployableModel for ${item.name}`);
-    assert.equal(entry.slotGroup.position.z, container.spec.floorZ, `slotGroup placed at floorZ (${container.spec.floorZ}m)`);
-    assert.equal(entry.deployableModel.root.position.z, 0, `deployable root placed flush at (0, 0, 0) inside slotGroup`);
+    assert.equal(entry.deployableModel.stowed, true, `${item.name} mounted stowed`);
+    near(entry.slotGroup.position.z, container.spec.floorZ, 1e-6, `slotGroup placed at floorZ (${container.spec.floorZ}m)`);
+    near(entry.slotGroup.rotation.z, 0, 1e-6, `slot ${i} rotation.z === 0`);
+    near(entry.deployableModel.root.position.x, 0, 1e-6);
+    near(entry.deployableModel.root.position.y, 0, 1e-6);
+    near(entry.deployableModel.root.position.z, 0, 1e-6);
 
-    if (slot.orient === "Y") {
-      near(entry.slotGroup.rotation.z, Math.PI / 2, 1e-4, `orient Y slot ${i} rotated 90 degrees`);
-    } else {
-      near(entry.slotGroup.rotation.z, 0, 1e-4, `orient X slot ${i} unrotated`);
-    }
-
-    // Assert stowed height compliance
-    assert.ok(item.stowedH <= GMA_PALLET_SPECS.stowedCeilingH, `${item.name} stowed height (${item.stowedH}m) <= 2.14m`);
+    entry.slotGroup.updateMatrixWorld(true);
+    const box = new THREE.Box3().setFromObject(entry.deployableModel.root);
+    const unitH = box.max.z - box.min.z;
+    assert.ok(unitH <= GMA_PALLET_SPECS.stowedCeilingH, `${item.name} stowed delta (${unitH.toFixed(4)}m) <= 2.05m`);
+    assert.ok(box.min.x >= -1.1635 && box.max.x <= 1.1635, `${item.name} clears container corrugation ribs X ([${box.min.x.toFixed(4)}, ${box.max.x.toFixed(4)}])`);
+    assert.ok(box.min.y >= -2.949 && box.max.y <= 2.949, `${item.name} inside container interior Y`);
+    assert.ok(box.max.z <= container.spec.floorZ + container.spec.door.height - 0.15, `${item.name} top z (${box.max.z.toFixed(4)}m) clears 2.280m door header`);
   }
 
   // Load slot 9 as an empty pallet to verify empty pallet mounting
-  const emptyEntry = container.loadSlot(9, null, { palletSize: "full" });
+  const emptyEntry = container.loadSlot(9, null);
   assert.ok(emptyEntry, "loadSlot returned entry for empty pallet slot 9");
   assert.ok(emptyEntry.pallet?.root, "emptyEntry has pallet.root");
+  assert.equal(emptyEntry.pallet.stowed, true, "empty pallet jacks retracted when stowed");
   assert.ok(emptyEntry.slotGroup.children.length > 0, "slotGroup contains pallet root mesh");
 
-  assert.equal(bay.children.length, 10, "all 10 slots (9 deployables + 1 empty pallet) loaded into pinwheel bay");
+  assert.equal(bay.children.length, 10, "all 10 slots (9 deployables + 1 empty pallet) loaded into 2-wide bay");
 
   // Initial door closed => bay culled
   container.setDoorProgress(0.0);

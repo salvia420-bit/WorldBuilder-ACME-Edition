@@ -20,6 +20,8 @@ const q = new URLSearchParams({
   autoSpawn: "first", bridge_url: "ws://127.0.0.1:8080/", server_host: "127.0.0.1", server_port: "9000",
   quality: "ultra", clouds: "on", camDebug: "on", vehicles: "on", skytime: process.env.SKYTIME || "10",
   cloudCoverage: process.env.COVERAGE || "0.45", adaptiveRes: "off",
+  portalSpace: process.env.PORTAL_SPACE || "off",
+  atmosphereLut: process.env.ATMOSPHERE_LUT || "load",
 });
 const browser = await chromium.launch({
   executablePath: CHROME, headless: true,
@@ -53,7 +55,12 @@ for (let attempt = 1; attempt <= 4 && !inWorld; attempt++) {
   await page.goto(LOGIN_URL, { waitUntil: "domcontentloaded", timeout: 120000 });
   const t0 = Date.now();
   while (Date.now() - t0 < 180000) {
-    const st = await page.evaluate(() => ({ s: window.__bootState, w: (window.__bootStateHistory || []).some((x) => x.state === "in-world") && !!window.liveScene3d })).catch(() => ({}));
+    const st = await page.evaluate(() => ({
+      s: window.__bootState,
+      w: (window.__bootStateHistory || []).some((x) => x.state === "in-world") &&
+        (window.__bootState === "ready" || !!window.__sceneReadyEverFired) &&
+        !!window.liveScene3d,
+    })).catch(() => ({}));
     if (st.w) { inWorld = true; break; }
     if (st.s === "error") { console.log(`[driver] login attempt ${attempt} failed; retrying in 8 s`); await new Promise((r) => setTimeout(r, 8000)); break; }
     await new Promise((r) => setTimeout(r, 1000));

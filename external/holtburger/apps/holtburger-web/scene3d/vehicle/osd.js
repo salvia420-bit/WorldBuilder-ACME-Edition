@@ -32,6 +32,18 @@ export const SURFACE_NAMES = Object.freeze([
   "ROAD", "DIRT", "GRASS", "FOREST", "SNOW", "SAND", "SWAMP", "FORD", "ROCK", "OBSIDIAN", "VOLCANO",
 ]);
 
+const CARGO_WCID_NAMES = Object.freeze({
+  4000002: "RADAR STATION",
+  4000010: "FLUX POD",
+  4000011: "SOLAR PANELS",
+  4000012: "POWER GENERATOR",
+  4000013: "BATTERY UNIT",
+  4000014: "MISSILE TURRET",
+  4000015: "GROUND RADAR",
+  4000016: "MORTAR TURRET",
+  4000017: "HEAVY LASER TURRET",
+});
+
 const PITCH_RUNGS_DEG = [-20, -10, 10, 20];
 const PX_PER_PITCH_DEG = 3.8;
 
@@ -1068,8 +1080,13 @@ export function createVehicleOsd(deps = {}) {
       }
       const forkMm = Math.round((Number.isFinite(s.forkHeightM) ? s.forkHeightM : 0.085) * 1000);
       const forkLbl = forkMm >= 180 ? "RAISED" : (forkMm <= 95 ? "LOWERED" : `${forkMm} mm`);
-      const cargoLbl = s.carriedWcid
-        ? `CARGO WCID ${s.carriedWcid} (${s.carriedPalletSize === 1 ? "HALF" : "FULL"})`
+      const rawWcid = typeof s.carriedWcid === "string" && s.carriedWcid.trim() !== ""
+        ? Number(s.carriedWcid)
+        : s.carriedWcid;
+      const wcid = Number.isFinite(rawWcid) && rawWcid > 0 ? (rawWcid >>> 0) : 0;
+      const cargoName = wcid ? CARGO_WCID_NAMES[wcid] : null;
+      const cargoLbl = wcid
+        ? (cargoName ? `CARGO: ${cargoName} (${wcid})` : `CARGO: WCID ${wcid}`)
         : "EMPTY FORKS";
       const surfLbl = typeof s.surface === "string" ? s.surface.toUpperCase() : "TERRAIN";
       const viewLbl = s.viewMode === "interior" ? "CLOSE" : "FOLLOW";

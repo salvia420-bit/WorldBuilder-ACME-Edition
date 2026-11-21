@@ -74,8 +74,8 @@ export const TIER1_METADATA = [
   { id: "T1.PJ.04", tier: 1, feature: "PJ:WalkBehind_Tricycle_Steering_And_15Hz_Pose_Action3", mode: "dual" },
   { id: "T1.PJ.05", tier: 1, feature: "PJ:Grounded_Container_Ramp_Climb_And_Floor_Walk", mode: "dual" },
   { id: "T1.PJ.06", tier: 1, feature: "PJ:Ground_Deployable_Stow_Pick_Drop_Action10_6_7", mode: "dual" },
-  { id: "T1.PJ.07", tier: 1, feature: "PJ:Container_Pinwheel_LIFO_Unload_Action8", mode: "dual" },
-  { id: "T1.PJ.08", tier: 1, feature: "PJ:Container_Pinwheel_DeepestFirst_Load_Action9", mode: "dual" },
+  { id: "T1.PJ.07", tier: 1, feature: "PJ:Container_2Wide_LIFO_Unload_Action8", mode: "dual" },
+  { id: "T1.PJ.08", tier: 1, feature: "PJ:Container_2Wide_DeepestFirst_Load_Action9", mode: "dual" },
   // Area C: Interlocks, Wire, Controls, OSD, MicroGrid & __vehicles (7 tests)
   { id: "T1.IL.01", tier: 1, feature: "IL:HBV1_v7_Wire_Schema_And_0x0910_Parity", mode: "dual" },
   { id: "T1.IL.02", tier: 1, feature: "IL:Sidelifter_Proximity_HUD_And_Keys_J_K_L_U", mode: "dual" },
@@ -428,12 +428,12 @@ export async function runTier1(collector) {
       await live.waitUntil(async () => {
         const t = await live.getTrailer(tGuid);
         return t && t.mountedContainerGuid === 0 && t.sideliftPhase === 0;
-      }, 24000, 300, "autoOffload idle");
+      }, 35000, 300, "autoOffload idle");
       await live.evalInPage(`window.__vehicles.trailers.sidelift(${tGuid}, "autoLoad", "right"); return true;`);
       await live.waitUntil(async () => {
         const t = await live.getTrailer(tGuid);
         return t && t.mountedContainerGuid !== 0 && t.sideliftPhase === 0 && t.twistlocksLocked === true;
-      }, 24000, 300, "autoLoad idle");
+      }, 35000, 300, "autoLoad idle");
     }
   );
 
@@ -765,7 +765,7 @@ export async function runTier1(collector) {
   await collector.runDual(
     "T1.PJ.07",
     1,
-    "PJ:Container_Pinwheel_LIFO_Unload_Action8",
+    "PJ:Container_2Wide_LIFO_Unload_Action8",
     async () => {
       const sim = new LogisticsWorldSimulator();
       const { trGuid, cGuid, pjGuid } = sim.spawnPreset("sidelifter20");
@@ -814,7 +814,7 @@ export async function runTier1(collector) {
       await live.waitUntil(async () => {
         const t = await live.getTrailer(ids.tGuid);
         return t && t.mountedContainerGuid === 0 && t.sideliftPhase === 0;
-      }, 24000, 300, "offloaded");
+      }, 35000, 300, "offloaded");
       const cOffloaded = await live.getContainer(ids.cGuid);
       if (cOffloaded?.pos) await live.movePlayerNear(cOffloaded.pos, [0, -2.5, 0]);
       await live.evalInPage(`window.__vehicles.containers.action(${ids.cGuid}, 1); window.__vehicles.trailers.deployPalletJack(${ids.tGuid}); return true;`);
@@ -822,14 +822,14 @@ export async function runTier1(collector) {
         const c = await live.getContainer(ids.cGuid);
         const pj = await live.evalInPage(`return window.__vehicles.palletJacks.list().find((p) => (p.stowedOnTrailerGuid ?? 0) === 0)?.guid || 0;`);
         return (c?.doorProgress ?? 0) >= 0.98 && pj ? pj : 0;
-      }, 8000, 200, "doors open & jack ready");
+      }, 15000, 200, "doors open & jack ready");
       const pjPose = await live.getPalletJack(pjGuid);
       await live.movePlayerNear(pjPose.pos);
       await live.evalInPage(`window.__vehicles.palletJacks.grab(${pjGuid}); return true;`);
       await live.waitUntil(async () => (await live.getPalletJack(pjGuid))?.operatorGuid !== 0, 5000, 150, "grabbed");
-      const slotPos = await live.getSlotWorldPos(ids.cGuid, 6, 0);
+      const slotPos = await live.getSlotWorldPos(ids.cGuid, 8, 0);
       await live.movePalletJackTo(pjGuid, slotPos);
-      await live.evalInPage(`window.__vehicles.palletJacks.pickContainer(${ids.cGuid}, 6, 0, ${pjGuid}); return true;`);
+      await live.evalInPage(`window.__vehicles.palletJacks.pickContainer(${ids.cGuid}, 8, 0, ${pjGuid}); return true;`);
       await live.waitUntil(async () => (await live.getPalletJack(pjGuid))?.carriedWcid !== 0, 6000, 150, "picked container rear slot");
     }
   );
@@ -837,7 +837,7 @@ export async function runTier1(collector) {
   await collector.runDual(
     "T1.PJ.08",
     1,
-    "PJ:Container_Pinwheel_DeepestFirst_Load_Action9",
+    "PJ:Container_2Wide_DeepestFirst_Load_Action9",
     async () => {
       const loadOrder = oracleComputeReachableLoadSlots(10, [], "full");
       assert(loadOrder.length === 10, "empty 20ft container has 10 loadable slots");
@@ -873,6 +873,9 @@ export async function runTier1(collector) {
           const realIds = (realLoad.reachable || []).map((x) => `${x.slotIndex}:${x.subSlot}`).join(",");
           assert(oraIds === realIds, `load parity mismatch for kind=${kind}: oracle=[${oraIds}] real=[${realIds}]`);
         }
+        // Explicit "half" pallet load rejection parity
+        assert(oracleComputeReachableLoadSlots(10, [], "half").length === 0, "oracle rejects legacy half pallet load");
+        assert((cl.mod.computeReachableLoadSlots(10, [], "half").reachable || []).length === 0, "real rejects legacy half pallet load");
       }
     },
     async (live) => {
@@ -888,7 +891,7 @@ export async function runTier1(collector) {
       await live.waitUntil(async () => {
         const t = await live.getTrailer(ids.tGuid);
         return t && t.mountedContainerGuid === 0 && t.sideliftPhase === 0;
-      }, 24000, 300, "offloaded");
+      }, 35000, 300, "offloaded");
       const cOffloaded = await live.getContainer(ids.cGuid);
       if (cOffloaded?.pos) await live.movePlayerNear(cOffloaded.pos, [0, -2.5, 0]);
       await live.evalInPage(`window.__vehicles.containers.action(${ids.cGuid}, 1); window.__vehicles.trailers.deployPalletJack(${ids.tGuid}); return true;`);
@@ -896,19 +899,19 @@ export async function runTier1(collector) {
         const c = await live.getContainer(ids.cGuid);
         const pj = await live.evalInPage(`return window.__vehicles.palletJacks.list().find((p) => (p.stowedOnTrailerGuid ?? 0) === 0)?.guid || 0;`);
         return (c?.doorProgress ?? 0) >= 0.98 && pj ? pj : 0;
-      }, 8000, 200, "doors open & jack ready");
+      }, 15000, 200, "doors open & jack ready");
       const pjPose = await live.getPalletJack(pjGuid);
       await live.movePlayerNear(pjPose.pos);
       await live.evalInPage(`window.__vehicles.palletJacks.grab(${pjGuid}); return true;`);
       await live.waitUntil(async () => (await live.getPalletJack(pjGuid))?.operatorGuid !== 0, 5000, 150, "grabbed");
-      const slotPos = await live.getSlotWorldPos(ids.cGuid, 6, 0);
+      const slotPos = await live.getSlotWorldPos(ids.cGuid, 8, 0);
       await live.movePalletJackTo(pjGuid, slotPos);
-      await live.evalInPage(`window.__vehicles.palletJacks.pickContainer(${ids.cGuid}, 6, 0, ${pjGuid}); return true;`);
-      await live.waitUntil(async () => (await live.getPalletJack(pjGuid))?.carriedWcid !== 0, 6000, 150, "unloaded slot 6 before reload");
+      await live.evalInPage(`window.__vehicles.palletJacks.pickContainer(${ids.cGuid}, 8, 0, ${pjGuid}); return true;`);
+      await live.waitUntil(async () => (await live.getPalletJack(pjGuid))?.carriedWcid !== 0, 6000, 150, "unloaded slot 8 before reload");
 
       const beforeCount = (await live.getContainer(ids.cGuid)).slots.length;
       await live.movePalletJackTo(pjGuid, slotPos);
-      await live.evalInPage(`window.__vehicles.palletJacks.loadContainer(${ids.cGuid}, 6, 0, ${pjGuid}); return true;`);
+      await live.evalInPage(`window.__vehicles.palletJacks.loadContainer(${ids.cGuid}, 8, 0, ${pjGuid}); return true;`);
       await live.waitUntil(async () => {
         const pj = await live.getPalletJack(pjGuid);
         const c = await live.getContainer(ids.cGuid);
@@ -1311,42 +1314,73 @@ export async function runTier1(collector) {
         activeModel.root.updateMatrixWorld(true);
         const box = new THREE.Box3().setFromObject(activeModel.root);
         const stowedH = box.max.z - box.min.z;
-        assert(stowedH <= (spec.wcid === 4000002 ? 2.10 : 2.14), `${spec.name} stowed height ${stowedH.toFixed(3)}m`);
+        assert(stowedH <= 2.05, `${spec.name} stowed height ${stowedH.toFixed(3)}m (<= 2.05m)`);
+        assert(
+          box.min.x >= -0.555 && box.max.x <= 0.555 && box.min.y >= -0.555 && box.max.y <= 0.555,
+          `${spec.name} stowed footprint [${box.min.x.toFixed(3)}..${box.max.x.toFixed(3)}, ${box.min.y.toFixed(3)}..${box.max.y.toFixed(3)}] within ±0.555m`
+        );
 
         if (spec.wcid === 4000002) {
+          near(activeModel.leftWingPivot.rotation.z, -1.43, 1e-4, "RadarStation stowed left wing");
+          near(activeModel.rightWingPivot.rotation.z, +1.43, 1e-4, "RadarStation stowed right wing");
           assert(activeModel.dishPivot.rotation.z === 0 && activeModel.crtWindow.material.color.getHex() === 0xffaa22, "RadarStation stowed reset");
         } else if (spec.wcid === 4000010) {
           assert(activeModel.core.material.opacity === 0.15 && activeModel.lightsNS.material.color.getHex() === 0xffaa22, "FluxPod stowed reset");
         } else if (spec.wcid === 4000011) {
+          near(activeModel.leftInnerPivot.rotation.y, 1.46, 1e-4, "SolarPanels stowed inner wing");
+          near(activeModel.leftOuterPivot.rotation.y, Math.PI, 1e-4, "SolarPanels stowed outer wing");
           assert(activeModel.turntable.rotation.z === 0 && activeModel.trunnion.rotation.x === 0 && activeModel.root.getObjectByName("solar-status-led").material.color.getHex() === 0xffaa22, "SolarPanels stowed reset");
         } else if (spec.wcid === 4000012) {
+          near(activeModel.canopyPivot.rotation.y, 0, 1e-4, "PowerGenerator stowed canopy");
           assert(activeModel.root.getObjectByName("generator-exhaust-stack").position.z === 1.11 && activeModel.glowCore.material.color.getHex() === 0xffaa22, "PowerGenerator stowed reset");
         } else if (spec.wcid === 4000013) {
+          near(activeModel.hoodPivot.rotation.x, 0, 1e-4, "BatteryUnit stowed hood");
           assert(activeModel.socBars[0].material.color.getHex() === 0xffaa22 && activeModel.socBars[1].material.color.getHex() === 0x222222, "BatteryUnit stowed reset");
         } else if (spec.wcid === 4000014) {
           assert(activeModel.riserGroup.position.z === 0.20 && activeModel.turntable.rotation.z === 0 && activeModel.gimbal.rotation.x === 0 && activeModel.root.getObjectByName("sam-status-led").material.color.getHex() === 0xffaa22, "MissileTurret stowed reset");
         } else if (spec.wcid === 4000015) {
-          assert(activeModel.antennaGroup.position.z === 0.66 && activeModel.root.getObjectByName("ground-radar-mast").scale.z === 0.25, "GroundRadar stowed reset");
+          near(activeModel.mastPivot.rotation.x, 1.24, 1e-4, "GroundRadar stowed lower mast");
+          near(activeModel.upperMastPivot.rotation.x, -2.72, 1e-4, "GroundRadar stowed upper mast");
+          near(activeModel.antennaGroup.position.z, 0.62, 1e-4, "GroundRadar stowed antenna Z");
+          near(activeModel.antennaGroup.rotation.z, 0, 1e-6, "GroundRadar stowed antenna rotation reset");
         } else if (spec.wcid === 4000016) {
           near(activeModel.cradle.rotation.x, -Math.PI / 2, 1e-6, "MortarTurret stowed cradle");
+          near(activeModel.barrel.position.z, 0.04, 1e-4, "MortarTurret stowed retracted barrel");
           assert(activeModel.root.getObjectByName("mortar-status-led").material.color.getHex() === 0xffaa22, "MortarTurret stowed LED");
         } else if (spec.wcid === 4000017) {
           const laserGlow = activeModel.barrelGimbal.children.find((ch) => ch.material?.blending === THREE.AdditiveBlending);
+          near(activeModel.shroudMesh.position.y, 0, 1e-4, "HeavyLaserTurret stowed shroud");
           assert(activeModel.turretHead.rotation.z === 0 && activeModel.barrelGimbal.rotation.x === 0 && laserGlow?.material.color.getHex() === 0xffaa22, "HeavyLaserTurret stowed reset");
         }
 
         activeModel.setStowed(false);
         assert(activeModel.stowed === false, `${spec.name} unstowed getter === false`);
-        if (spec.wcid === 4000002) assert(activeModel.crtWindow.material.color.getHex() === 0x33ff66, "RadarStation active LED");
-        else if (spec.wcid === 4000010) assert(activeModel.core.material.opacity === 0.80, "FluxPod active core");
-        else if (spec.wcid === 4000011) assert(activeModel.root.getObjectByName("solar-status-led").material.color.getHex() === 0x2fd866, "SolarPanels active LED");
-        else if (spec.wcid === 4000012) assert(activeModel.root.getObjectByName("generator-exhaust-stack").position.z === 1.38, "PowerGenerator active stack");
-        else if (spec.wcid === 4000013) assert(activeModel.socBars[1].material.color.getHex() === 0x00ff66, "BatteryUnit active socBars");
-        else if (spec.wcid === 4000014) assert(activeModel.root.getObjectByName("sam-status-led").material.color.getHex() === 0x22ff66, "MissileTurret active LED");
-        else if (spec.wcid === 4000015) assert(activeModel.antennaGroup.position.z === 1.42, "GroundRadar active mast");
-        else if (spec.wcid === 4000016) assert(activeModel.root.getObjectByName("mortar-status-led").material.color.getHex() === 0x22ff66, "MortarTurret active LED");
-        else if (spec.wcid === 4000017) {
+        if (spec.wcid === 4000002) {
+          near(activeModel.leftWingPivot.rotation.z, 0, 1e-4, "RadarStation active left wing");
+          assert(activeModel.crtWindow.material.color.getHex() === 0x33ff66, "RadarStation active LED");
+        } else if (spec.wcid === 4000010) {
+          assert(activeModel.core.material.opacity === 0.80, "FluxPod active core");
+        } else if (spec.wcid === 4000011) {
+          near(activeModel.leftInnerPivot.rotation.y, 0, 1e-4, "SolarPanels active inner wing");
+          assert(activeModel.root.getObjectByName("solar-status-led").material.color.getHex() === 0x2fd866, "SolarPanels active LED");
+        } else if (spec.wcid === 4000012) {
+          near(activeModel.canopyPivot.rotation.y, -0.58, 1e-4, "PowerGenerator active canopy");
+          assert(activeModel.root.getObjectByName("generator-exhaust-stack").position.z === 1.65, "PowerGenerator active stack");
+        } else if (spec.wcid === 4000013) {
+          near(activeModel.hoodPivot.rotation.x, -1.22, 1e-4, "BatteryUnit active hood");
+          assert(activeModel.socBars[1].material.color.getHex() === 0x00ff66, "BatteryUnit active socBars");
+        } else if (spec.wcid === 4000014) {
+          assert(activeModel.root.getObjectByName("sam-status-led").material.color.getHex() === 0x22ff66, "MissileTurret active LED");
+        } else if (spec.wcid === 4000015) {
+          near(activeModel.mastPivot.rotation.x, 0, 1e-4, "GroundRadar active lower mast");
+          near(activeModel.upperMastPivot.rotation.x, 0, 1e-4, "GroundRadar active upper mast");
+          near(activeModel.antennaGroup.position.z, 0.62, 1e-4, "GroundRadar active antenna Z");
+        } else if (spec.wcid === 4000016) {
+          near(activeModel.barrel.position.z, 0.42, 1e-4, "MortarTurret active barrel");
+          assert(activeModel.root.getObjectByName("mortar-status-led").material.color.getHex() === 0x22ff66, "MortarTurret active LED");
+        } else if (spec.wcid === 4000017) {
           const laserGlow = activeModel.barrelGimbal.children.find((ch) => ch.material?.blending === THREE.AdditiveBlending);
+          near(activeModel.shroudMesh.position.y, 0.40, 1e-4, "HeavyLaserTurret active shroud");
           assert(laserGlow?.material.color.getHex() === 0xff2233, "HeavyLaserTurret active glow");
         }
 

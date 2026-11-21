@@ -33,14 +33,14 @@ import {
 export const TIER3_METADATA = [
   { id: "T3.01", tier: 3, feature: "Pairwise:Semi379_x_Sidelifter_x_20_40_40HC_x_Left_Right", mode: "dual" },
   { id: "T3.02", tier: 3, feature: "Pairwise:Elevated_Bridge_DropZ_x_probeContainerSurface_0_85m", mode: "dual" },
-  { id: "T3.03", tier: 3, feature: "Pairwise:Mixed_Full_Half_Pallets_x_Pinwheel_LIFO_20ft_40ft", mode: "dual" },
+  { id: "T3.03", tier: 3, feature: "Pairwise:Unified_2Wide_Grid_x_Independent_LIFO_20ft_40ft", mode: "dual" },
   { id: "T3.04", tier: 3, feature: "Pairwise:PalletCargoState_Ammo_Fuel_Energy_x_Container_RoundTrip", mode: "dual" },
   { id: "T3.05", tier: 3, feature: "Pairwise:MicroGrid_Power_x_IsStowed_x_All9Deployables", mode: "dual" },
   { id: "T3.06", tier: 3, feature: "Pairwise:WalkBehind_Controller_x_SurfaceAudio_x_SidelifterAudio", mode: "dual" },
   { id: "T3.07", tier: 3, feature: "Pairwise:Coupled_TrailerKinematics_30Hz_x_towMassMul_x_SideliftLock", mode: "dual" },
   { id: "T3.08", tier: 3, feature: "Pairwise:Dericost_0x8000_Coord_RoundTrip_x_0x090F_v7_And_0x0910", mode: "dual" },
   { id: "T3.09", tier: 3, feature: "Pairwise:RackStowed_PalletJack_x_STurn_Articulation", mode: "dual" },
-  { id: "T3.10", tier: 3, feature: "Pairwise:Container_HalfSlot_Jack_Stow_vs_Rack_Stow_And_Commands", mode: "dual" },
+  { id: "T3.10", tier: 3, feature: "Pairwise:Container_Slot_Jack_Stow_vs_Rack_Stow_And_Commands", mode: "dual" },
   { id: "T3.11", tier: 3, feature: "Pairwise:ModeSwitching_Capture_Precedence_Jack_Semi_OnFoot", mode: "dual" },
   { id: "T3.12", tier: 3, feature: "Pairwise:Legacy_Skeletal_Trailers_4000030_4000031_NonRegression", mode: "dual" },
 ];
@@ -139,41 +139,49 @@ export async function runTier3(collector) {
   await collector.runDual(
     "T3.03",
     3,
-    "Pairwise:Mixed_Full_Half_Pallets_x_Pinwheel_LIFO_20ft_40ft",
+    "Pairwise:Unified_2Wide_Grid_x_Independent_LIFO_20ft_40ft",
     async () => {
-      // 40ft container with mixed Full + Half-pallet pairs across rear & front quads
+      // 40ft container 2-wide grid (slots 0..19; even = Left -0.575, odd = Right +0.575)
       const slots40 = [
         { slotIndex: 0, subSlot: 0, cargoWcid: 4000010, palletSize: 2 },
-        { slotIndex: 2, subSlot: 0, cargoWcid: 4000013, palletSize: 1 },
-        { slotIndex: 2, subSlot: 1, cargoWcid: 4000015, palletSize: 1 },
+        { slotIndex: 2, subSlot: 0, cargoWcid: 4000013, palletSize: 2 },
+        { slotIndex: 3, subSlot: 0, cargoWcid: 4000015, palletSize: 2 },
         { slotIndex: 18, subSlot: 0, cargoWcid: 4000014, palletSize: 2 },
-        { slotIndex: 20, subSlot: 0, cargoWcid: 4000016, palletSize: 1 },
-        { slotIndex: 20, subSlot: 1, cargoWcid: 4000017, palletSize: 1 },
+        { slotIndex: 19, subSlot: 0, cargoWcid: 4000017, palletSize: 2 },
       ];
       const u1 = oracleComputeReachableUnloadSlots(11, slots40);
-      assert(u1.reachable.some((r) => r.slotIndex === 18), "rear slot 18 reachable");
-      assert(!u1.reachable.some((r) => r.slotIndex === 0), "deep slot 0 blocked while rear tier full");
+      assert(u1.reachable.some((r) => r.slotIndex === 18) && u1.reachable.some((r) => r.slotIndex === 19), "rear slots 18 & 19 reachable");
+      assert(!u1.reachable.some((r) => r.slotIndex === 0 || r.slotIndex === 3), "deep slots 0 & 3 blocked while rear lane occupied");
 
-      // Clear rear tier (18 & 20) -> slot 2 half-pallets & slot 0 unlock
-      const clearedRear = slots40.filter((s) => s.slotIndex !== 18 && s.slotIndex !== 20);
+      // Independent Left/Right lanes: clearing Right 19 unlocks Right 3 while Left 0 & 2 remain blocked by Left 18!
+      const clearedRight = slots40.filter((s) => s.slotIndex !== 19);
+      const uRight = oracleComputeReachableUnloadSlots(11, clearedRight);
+      assert(uRight.reachable.some((r) => r.slotIndex === 3), "Right-lane slot 3 unlocked once Right 19 cleared (independent of Left 18)");
+      assert(!uRight.reachable.some((r) => r.slotIndex === 2), "Left-lane slot 2 remains blocked by Left 18");
+
+      // Clearing rear Left 18 unlocks Left 2
+      const clearedRear = slots40.filter((s) => s.slotIndex !== 18 && s.slotIndex !== 19);
       const u2 = oracleComputeReachableUnloadSlots(11, clearedRear);
-      assert(u2.reachable.some((r) => r.slotIndex === 2 && r.subSlot === 0), "half pallet (2,0) reachable once rear cleared");
-      assert(u2.reachable.some((r) => r.slotIndex === 2 && r.subSlot === 1), "half pallet (2,1) reachable");
+      assert(u2.reachable.some((r) => r.slotIndex === 2 && r.subSlot === 0), "Left-lane slot 2 reachable once Left 18 cleared");
+      assert(u2.reachable.some((r) => r.slotIndex === 3 && r.subSlot === 0), "Right-lane slot 3 reachable");
 
-      // Load half pallet into empty 20ft container -> deepest-first (+Y -> -Y)
-      const l20 = oracleComputeReachableLoadSlots(10, [], "half");
-      assert(l20.length === 20, "20ft supports 20 half-pallet sub-slots");
-      assert(l20[0].y >= 2.38 && l20[0].y >= l20[l20.length - 1].y, "deepest-first +Y -> -Y ordering");
-      assert(l20[0].slotIndex === 0 || l20[0].slotIndex === 1, "first half-pallet slot is against front bulkhead");
+      // Load unified full pallet into empty 20ft container -> 10 slots, deepest-first (+Y -> -Y)
+      const l20 = oracleComputeReachableLoadSlots(10, [], "full");
+      assert(l20.length === 10, "20ft supports 10 unified 1.100m pallet slots");
+      assert(l20[0].y >= 2.31 && l20[0].y >= l20[l20.length - 1].y, "deepest-first +Y -> -Y ordering");
+      assert(l20[0].slotIndex === 0, "first unified slot is front bulkhead Left slot 0");
+      assert(oracleComputeReachableLoadSlots(10, [], "half").length === 0, "oracle rejects legacy half pallet load");
 
       const cl = await tryImportVehicle("container_logistics.js");
       if (cl.ok && typeof cl.mod.computeReachableLoadSlots === "function") {
+        const realFull = cl.mod.computeReachableLoadSlots(10, [], "full");
+        const realList = Array.isArray(realFull) ? realFull : (realFull.reachable || []);
+        assert(realList.length === 10, "real container_logistics 20ft unified capacity === 10");
         const realHalf = cl.mod.computeReachableLoadSlots(10, [], "half");
-        const realList = Array.isArray(realHalf) ? realHalf : (realHalf.reachable || []);
-        assert(realList.length === 20, "real container_logistics 20ft half-pallet capacity === 20");
+        assert((realHalf.reachable || []).length === 0, "real container_logistics rejects legacy half pallet load");
         const realU1 = cl.mod.computeReachableUnloadSlots(11, slots40).reachable.map((x) => `${x.slotIndex}:${x.subSlot}`).join(",");
         const oraU1 = u1.reachable.map((x) => `${x.slotIndex}:${x.subSlot}`).join(",");
-        assert(realU1 === oraU1, `40ft mixed unload parity mismatch: oracle=[${oraU1}] real=[${realU1}]`);
+        assert(realU1 === oraU1, `40ft 2-wide unload parity mismatch: oracle=[${oraU1}] real=[${realU1}]`);
       }
     },
     async (live) => {
@@ -274,12 +282,20 @@ export async function runTier3(collector) {
         cOff.pos[1] - Math.sin(ch) * 2.2 - Math.cos(ch) * 9.0,
         cOff.pos[2],
       ];
-      // Peel outer slot 6 (4000002) aside to expose slot 4 (4000014 MissileTurret with Ammo=4)
+      // Peel outer Left-lane slot 8 (4000002) and slot 6 (4000016) aside to expose slot 4 (4000014 MissileTurret with Ammo=4)
+      const slot8Pos = await live.getSlotWorldPos(ids.cGuid, 8, 0);
+      await live.movePalletJackTo(pjGuid, slot8Pos);
+      await live.evalInPage(`window.__vehicles.palletJacks.pickContainer(${ids.cGuid}, 8, 0, ${pjGuid}); return true;`);
+      await live.waitUntil(async () => (await live.getPalletJack(pjGuid))?.carriedWcid !== 0, 6000, 150, "peeled slot 8");
+      await live.movePalletJackTo(pjGuid, dropSpot);
+      await live.evalInPage(`window.__vehicles.palletJacks.dropGround(${pjGuid}); return true;`);
+      await live.waitUntil(async () => (await live.getPalletJack(pjGuid))?.carriedWcid === 0, 6000, 150, "dropped slot 8 aside");
+
       const slot6Pos = await live.getSlotWorldPos(ids.cGuid, 6, 0);
       await live.movePalletJackTo(pjGuid, slot6Pos);
       await live.evalInPage(`window.__vehicles.palletJacks.pickContainer(${ids.cGuid}, 6, 0, ${pjGuid}); return true;`);
       await live.waitUntil(async () => (await live.getPalletJack(pjGuid))?.carriedWcid !== 0, 6000, 150, "peeled slot 6");
-      await live.movePalletJackTo(pjGuid, dropSpot);
+      await live.movePalletJackTo(pjGuid, [dropSpot[0], dropSpot[1] - 1.8, dropSpot[2]]);
       await live.evalInPage(`window.__vehicles.palletJacks.dropGround(${pjGuid}); return true;`);
       await live.waitUntil(async () => (await live.getPalletJack(pjGuid))?.carriedWcid === 0, 6000, 150, "dropped slot 6 aside");
 
@@ -298,7 +314,7 @@ export async function runTier3(collector) {
         energyJoules: d1.last?.energyJoules ?? d1.last?.energyStoredJoules ?? 0,
       };
 
-      // Ensure stowed (dropGround leaves deployables stowed; only toggle if currently unstowed) -> pickGround -> loadContainer (slot 20)
+      // Ensure stowed (dropGround leaves deployables stowed; only toggle if currently unstowed) -> pickGround -> loadContainer (slot 19)
       const isAlreadyStowed = Boolean((d1.last?.onlineFlags ?? 0) & 0x10);
       if (!isAlreadyStowed) {
         await live.evalInPage(`window.__vehicles.palletJacks.toggleDeployableStow(${before.guid}); return true;`);
@@ -309,10 +325,10 @@ export async function runTier3(collector) {
       }
       await live.evalInPage(`window.__vehicles.palletJacks.pickGround(${before.guid}, ${pjGuid}); return true;`);
       await live.waitUntil(async () => (await live.getPalletJack(pjGuid))?.carriedWcid === before.wcid, 6000, 150, "re-picked ground");
-      const slot20Pos = await live.getSlotWorldPos(ids.cGuid, 20, 0);
-      await live.movePalletJackTo(pjGuid, slot20Pos);
-      await live.evalInPage(`window.__vehicles.palletJacks.loadContainer(${ids.cGuid}, 20, 0, ${pjGuid}); return true;`);
-      await live.waitUntil(async () => (await live.getPalletJack(pjGuid))?.carriedWcid === 0, 6000, 150, "re-loaded slot 20");
+      const slot19Pos = await live.getSlotWorldPos(ids.cGuid, 19, 0);
+      await live.movePalletJackTo(pjGuid, slot19Pos);
+      await live.evalInPage(`window.__vehicles.palletJacks.loadContainer(${ids.cGuid}, 19, 0, ${pjGuid}); return true;`);
+      await live.waitUntil(async () => (await live.getPalletJack(pjGuid))?.carriedWcid === 0, 6000, 150, "re-loaded slot 19");
       await live.evalInPage(`window.__vehicles.palletJacks.release(${pjGuid}); return true;`);
       await live.waitUntil(async () => (await live.getPalletJack(pjGuid))?.operatorGuid === 0, 5000, 150, "released");
       const trPose = await live.getTrailer(ids.tGuid);
@@ -344,8 +360,8 @@ export async function runTier3(collector) {
       await live.movePlayerNear(pj2Pose.pos);
       await live.evalInPage(`window.__vehicles.palletJacks.grab(${pj2}); return true;`);
       await live.waitUntil(async () => (await live.getPalletJack(pj2))?.operatorGuid !== 0, 5000, 150, "grabbed2");
-      await live.movePalletJackTo(pj2, await live.getSlotWorldPos(ids.cGuid, 20, 0));
-      await live.evalInPage(`window.__vehicles.palletJacks.pickContainer(${ids.cGuid}, 20, 0, ${pj2}); return true;`);
+      await live.movePalletJackTo(pj2, await live.getSlotWorldPos(ids.cGuid, 19, 0));
+      await live.evalInPage(`window.__vehicles.palletJacks.pickContainer(${ids.cGuid}, 19, 0, ${pj2}); return true;`);
       await live.waitUntil(async () => (await live.getPalletJack(pj2))?.carriedWcid !== 0, 6000, 150, "re-unloaded");
       await live.movePalletJackTo(pj2, [dropSpot[0] - 1.5, dropSpot[1], dropSpot[2]]);
       await live.evalInPage(`window.__vehicles.palletJacks.dropGround(${pj2}); return true;`);
@@ -675,9 +691,9 @@ export async function runTier3(collector) {
   await collector.runDual(
     "T3.10",
     3,
-    "Pairwise:Container_HalfSlot_Jack_Stow_vs_Rack_Stow_And_Commands",
+    "Pairwise:Container_Slot_Jack_Stow_vs_Rack_Stow_And_Commands",
     async () => {
-      // Choice 4: Pallet jack can stow either on trailer under-frame rack OR inside a container half-slot
+      // Choice 4: Pallet jack can stow either on trailer under-frame rack OR inside a unified container slot
       const sim = new LogisticsWorldSimulator();
       const { trGuid, cGuid, pjGuid } = sim.spawnPreset("sidelifter20");
       sim.trailerAction(trGuid, TRAILER_ACTION_KIND.AutoOffload);
@@ -685,9 +701,10 @@ export async function runTier3(collector) {
       sim.trailerAction(trGuid, TRAILER_ACTION_KIND.DeployPalletJack);
       assert(sim.trailers.get(trGuid).stowedPalletJackGuid === 0, "unstowed from rack");
 
-      // Verify container half-slot capacity can host a PalletJack WCID 4000035
-      const loadHalf = oracleComputeReachableLoadSlots(10, sim.containers.get(cGuid).slots, "half");
-      assert(loadHalf.length > 0, "container has available half-slot for pallet jack stowage");
+      // Verify unified container slot capacity can host a PalletJack WCID 4000035
+      const loadFull = oracleComputeReachableLoadSlots(10, sim.containers.get(cGuid).slots, "full");
+      assert(loadFull.length > 0, "container has available unified slot for pallet jack stowage");
+      assert(oracleComputeReachableLoadSlots(10, sim.containers.get(cGuid).slots, "half").length === 0, "half stowage rejected");
 
       // Also verify rack re-stow
       assert(sim.trailerAction(trGuid, TRAILER_ACTION_KIND.StowPalletJack).ok, "re-stowed on trailer rack");

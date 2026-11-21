@@ -245,7 +245,7 @@ export async function runTier1(collector) {
       const cGuid = await live.waitUntil(async () => await live.evalInPage(`return window.__vehicles.containers.list()[0]?.guid || 0;`), 8000, 200, "fob20 container");
       await live.sendChat(`@container doors 0x${(cGuid >>> 0).toString(16)} open`);
       await live.waitUntil(async () => ((await live.getContainer(cGuid))?.doorProgress ?? 0) >= 0.85, 6000, 150, "fob20 doors open");
-      await live.sendChatAndWait(`@container unpack 0x${(cGuid >>> 0).toString(16)} 6`, /unpacked|4000002|radar/i, 8000);
+      await live.sendChatAndWait(`@container unpack 0x${(cGuid >>> 0).toString(16)} 8`, /unpacked|4000002|radar/i, 8000);
       const wcids = await live.waitUntil(async () => await live.evalInPage(`
         const set = new Set(window.__vehicles.deployables.list().map((d) => d.wcid));
         return set.size >= 9 ? [...set] : null;
@@ -1034,8 +1034,8 @@ export async function runTier1(collector) {
     async () => {
       const reach20 = oracleComputeReachableUnloadSlots(10, [{ slotIndex: 0, subSlot: 0, palletSize: 2 }, { slotIndex: 8, subSlot: 0, palletSize: 2 }]);
       assert(reach20.reachable.some((r) => r.slotIndex === 8) && !reach20.reachable.some((r) => r.slotIndex === 0), "20ft LIFO blocks slot 0 behind slot 8");
-      const reach40 = oracleComputeReachableUnloadSlots(11, [{ slotIndex: 0, subSlot: 0, palletSize: 2 }, { slotIndex: 18, subSlot: 0, palletSize: 2 }, { slotIndex: 20, subSlot: 0, palletSize: 2 }]);
-      assert(reach40.reachable.some((r) => r.slotIndex === 18) && !reach40.reachable.some((r) => r.slotIndex === 0), "40ft LIFO blocks slot 0 behind outer bays 18/20");
+      const reach40 = oracleComputeReachableUnloadSlots(11, [{ slotIndex: 0, subSlot: 0, palletSize: 2 }, { slotIndex: 18, subSlot: 0, palletSize: 2 }, { slotIndex: 19, subSlot: 0, palletSize: 2 }]);
+      assert(reach40.reachable.some((r) => r.slotIndex === 18) && !reach40.reachable.some((r) => r.slotIndex === 0), "40ft LIFO blocks slot 0 behind outer bays 18/19");
     },
     async (live) => {
       await live.cleanupWorld();
@@ -1095,7 +1095,7 @@ export async function runTier1(collector) {
       sim.trailerAction(trGuid, TRAILER_ACTION_KIND.AutoOffload);
       sim.openContainerDoors(cGuid, true);
       sim.palletJackAction(pjGuid, PALLET_JACK_ACTION_KIND.Grab);
-      assert(sim.palletJackAction(pjGuid, PALLET_JACK_ACTION_KIND.PickContainerSlot, { targetGuid: cGuid, slotIndex: 20 }).ok, "Pick generator slot 20");
+      assert(sim.palletJackAction(pjGuid, PALLET_JACK_ACTION_KIND.PickContainerSlot, { targetGuid: cGuid, slotIndex: 19 }).ok, "Pick generator slot 19");
       assert(sim.palletJacks.get(pjGuid).carriedCargoState.fuel === 120, "Fuel preserved on jack");
       assert(sim.palletJackAction(pjGuid, PALLET_JACK_ACTION_KIND.DropToGround).ok, "Drop to ground");
       const dropped = [...sim.deployables.values()][0];
@@ -1250,7 +1250,7 @@ export async function runTier1(collector) {
       const cGuid = await live.waitUntil(async () => await live.evalInPage(`return window.__vehicles.containers.list()[0]?.guid || 0;`), 8000, 200, "fob20");
       await live.sendChat(`@container doors 0x${(cGuid >>> 0).toString(16)} open`);
       await live.waitUntil(async () => ((await live.getContainer(cGuid))?.doorProgress ?? 0) >= 0.9, 6000, 150, "doors open");
-      await live.sendChatAndWait(`@container unpack 0x${(cGuid >>> 0).toString(16)} 6`, /unpacked/i, 8000);
+      await live.sendChatAndWait(`@container unpack 0x${(cGuid >>> 0).toString(16)} 8`, /unpacked/i, 8000);
       const count = await live.waitUntil(async () => await live.evalInPage(`
         const set = new Set(window.__vehicles.deployables.list().map((d) => d.wcid));
         return set.size >= 9 ? set.size : null;
@@ -1321,7 +1321,7 @@ export async function runTier1(collector) {
       const cGuid = await live.waitUntil(async () => await live.evalInPage(`return window.__vehicles.containers.list()[0]?.guid || 0;`), 8000, 200, "fob20");
       await live.sendChat(`@container doors 0x${(cGuid >>> 0).toString(16)} open`);
       await live.waitUntil(async () => ((await live.getContainer(cGuid))?.doorProgress ?? 0) >= 0.9, 6000, 150, "open");
-      await live.sendChatAndWait(`@container unpack 0x${(cGuid >>> 0).toString(16)} 6`, /unpacked/i, 8000);
+      await live.sendChatAndWait(`@container unpack 0x${(cGuid >>> 0).toString(16)} 8`, /unpacked/i, 8000);
       const rad = await live.waitUntil(async () => await live.evalInPage(`return window.__vehicles.deployables.list().find((d) => d.wcid === 4000002) || null;`), 8000, 200, "RadarStation 4000002");
       await live.movePlayerNear(rad.pos, [0, -1.5, 0]);
       await live.dispatchKey("KeyR");
@@ -1430,7 +1430,7 @@ export async function runTier1(collector) {
       const cGuid = await live.waitUntil(async () => await live.evalInPage(`return window.__vehicles.containers.list()[0]?.guid || 0;`), 8000, 200, "fob20");
       await live.sendChat(`@container doors 0x${(cGuid >>> 0).toString(16)} open`);
       await live.waitUntil(async () => ((await live.getContainer(cGuid))?.doorProgress ?? 0) >= 0.9, 6000, 150, "open");
-      await live.sendChatAndWait(`@container unpack 0x${(cGuid >>> 0).toString(16)} 6`, /unpacked/i, 8000);
+      await live.sendChatAndWait(`@container unpack 0x${(cGuid >>> 0).toString(16)} 8`, /unpacked/i, 8000);
       const gen = await live.waitUntil(async () => await live.evalInPage(`return window.__vehicles.deployables.list().find((d) => d.wcid === 4000012)?.guid || 0;`), 8000, 200, "gen");
       await live.sendChatAndWait(`@deployable fuel 0x${(gen >>> 0).toString(16)} 5`, /refueled/i, 8000);
       // Spawn hellcat, takeoff & bail so derelict aircraft > 10m AGL triggers RadarStation -> MissileTurret

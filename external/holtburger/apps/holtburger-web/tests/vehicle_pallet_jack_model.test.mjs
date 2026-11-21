@@ -187,6 +187,7 @@ check("T_PJ_01 Exports, Manifest & lintSource() across pallet_jack/deployable/ra
   assert.equal(PALLET_JACK_SPECS.forkRaisedZ, 0.200);
   assert.equal(PALLET_JACK_SPECS.tillerHeight, 1.22);
   assert.equal(PALLET_JACK_SPECS.wheelbase, 1.18);
+  assert.equal(PALLET_JACK_SPECS.cargoCenterY, 0.250);
   assert.equal(lintManifest(pjManifest).length, 0);
 
   for (const rel of [
@@ -256,10 +257,16 @@ check("T_PJ_03 ISO 3691-5 Dimensions, fork lift clamping, tiller steer & pump st
   near(rootBox.min.z, 0.0, 0.005, "wheels sit on ground z=0");
   near(rootBox.max.z, 1.22, 0.01, "tiller height 1.22m");
 
-  // Clamping forkHeightM
+  // Clamping forkHeightM & dynamic fork-tunnel threading on cargoMount
   jack.update({ forkHeightM: 0.05 });
   near(jack.forkHeightM, 0.085, 1e-6, "min forkHeightM clamped to 0.085");
   near(jack.forksGroup.position.z, 0.085, 1e-6);
+
+  const wpLowered = new THREE.Vector3();
+  jack.root.updateMatrixWorld(true);
+  jack.cargoMount.getWorldPosition(wpLowered);
+  near(wpLowered.y, 0.250, 1e-6, "cargoMount Y === 0.250");
+  near(wpLowered.z, 0.000, 1e-6, "cargoMount world Z === 0.000 when lowered (never sinks underground)");
 
   jack.update({ forkHeightM: 0.50 });
   near(jack.forkHeightM, 0.200, 1e-6, "max forkHeightM clamped to 0.200");
@@ -268,11 +275,27 @@ check("T_PJ_03 ISO 3691-5 Dimensions, fork lift clamping, tiller steer & pump st
   const wp = new THREE.Vector3();
   jack.root.updateMatrixWorld(true);
   jack.cargoMount.getWorldPosition(wp);
-  near(wp.z, 0.200, 1e-6, "cargoMount world Z matches forkHeightM");
+  near(wp.z, 0.077, 1e-6, "cargoMount world Z === 0.077 (forks threaded inside z in [0.018, 0.123] tunnel)");
 
-  // Ground wheels remain at z = 0 when forks raised
+  // Fork blades & beveled tips (y > -0.30 in forksGroup local space) must stay strictly at/below z = 0
+  // so they never overshoot the pallet deck underside (z_pallet = 0.123) when raised
+  const forksMesh = jack.forksGroup.getObjectByName("pallet-jack-forks-mesh");
+  assert.ok(forksMesh && forksMesh.geometry, "pallet-jack-forks-mesh exists");
+  const fkPos = forksMesh.geometry.getAttribute("position");
+  let forkBladeMaxZ = -Infinity;
+  for (let i = 0; i < fkPos.count; i++) {
+    if (fkPos.getY(i) > -0.30) {
+      const vz = fkPos.getZ(i);
+      if (vz > forkBladeMaxZ) forkBladeMaxZ = vz;
+    }
+  }
+  assert.ok(forkBladeMaxZ <= 0.0, `forksMesh max z (${forkBladeMaxZ.toFixed(6)}) <= 0.0 for y > -0.30`);
+
+  // Ground wheels remain at z = 0 when forks raised; tiller grip anchor geometry preserved
   const raisedBox = new THREE.Box3().setFromObject(jack.root);
   near(raisedBox.min.z, 0.0, 0.005, "wheels stay at z=0 when forks raised");
+  near(jack.steerPivot.position.y, -0.52, 1e-6, "steerPivotY preserved at -0.52");
+  near(jack.tillerPivot.position.z, 0.38, 1e-6, "tillerPivot.z preserved at 0.38");
 
   // Tiller angle & pump stroke
   jack.update({ tillerAngle: 3.0, pumpStroke: 0.8 });
@@ -326,12 +349,33 @@ check("T_PJ_04 cargoMount mount & clean disposal across 0 -> 4000012 -> 4000002 
   assert.equal(jack.cargoMount.children.length, 0);
   assert.ok(countDrawCalls(jack.root) <= 6, "unloaded draw calls return <= 6");
 
-  // Half-pallet WCIDs mount cleanly and jack.dispose() cleans up active cargo
-  for (const hw of [4000013, 4000015, 4000016, 4000017]) {
-    jack.update({ carriedWcid: hw });
+  // All 9 deployables (4000002, 4000010..4000017) mount with unified palletSize==="full",
+  // fork-tunnel threading at raised/lowered heights, <= 2.05m stowed height, and zero fork-tip/backrest overhang
+  const ALL_9_WCIDS = [4000002, 4000010, 4000011, 4000012, 4000013, 4000014, 4000015, 4000016, 4000017];
+  for (const wcid of ALL_9_WCIDS) {
+    jack.update({ carriedWcid: wcid, forkHeightM: 0.200 });
     assert.equal(jack.cargoMount.children.length, 1);
-    assert.equal(jack.mountedCargo.model.palletSize, "half");
+    assert.equal(jack.mountedCargo.model.palletSize, "full", `WCID ${wcid} unified palletSize === "full"`);
+
+    jack.root.updateMatrixWorld(true);
+    const raisedCargoBox = new THREE.Box3().setFromObject(jack.mountedCargo.model.root);
+    near(raisedCargoBox.min.z, 0.077, 1e-3, `WCID ${wcid} raised pallet bottom at +0.077m`);
+    assert.ok(raisedCargoBox.max.z - raisedCargoBox.min.z <= 2.05, `WCID ${wcid} stowed height <= 2.05m`);
+    assert.ok(raisedCargoBox.max.y <= 0.805, `WCID ${wcid} max.y (${raisedCargoBox.max.y.toFixed(4)}) <= 0.805m`);
+    assert.ok(raisedCargoBox.min.y >= -0.305, `WCID ${wcid} min.y (${raisedCargoBox.min.y.toFixed(4)}) >= -0.305m`);
+    assert.ok(raisedCargoBox.min.x >= -0.555 && raisedCargoBox.max.x <= 0.555, `WCID ${wcid} X inside ±0.555m`);
+
+    jack.update({ forkHeightM: 0.085 });
+    jack.root.updateMatrixWorld(true);
+    const loweredCargoBox = new THREE.Box3().setFromObject(jack.mountedCargo.model.root);
+    assert.ok(loweredCargoBox.min.z >= -1e-4, `WCID ${wcid} lowered min.z (${loweredCargoBox.min.z.toFixed(4)}) >= 0`);
   }
+
+  // Bare-pallet fallback mounts standard stowed pallet and jack.dispose() cleans up active cargo
+  jack.update({ carriedWcid: 4000099, forkHeightM: 0.200 });
+  assert.equal(jack.cargoMount.children.length, 1);
+  assert.equal(jack.mountedCargo.model.size, "standard", "bare fallback mounts standard pallet");
+  assert.equal(jack.mountedCargo.model.stowed, true, "bare fallback pallet jacks stowed");
   const spyLast = spyDisposal(jack.cargoMount);
   jack.dispose();
   assert.ok(spyLast.geoms.every((g) => g.disposed), "jack.dispose() disposes active cargo geometries");
@@ -388,7 +432,7 @@ check("T_PJ_05 Runtime setStowed(bool) across all 9 deployables (4000002, 400001
     unit.root.updateMatrixWorld(true);
     const stowedBox = new THREE.Box3().setFromObject(unit.root);
     const stowedH = stowedBox.max.z - stowedBox.min.z;
-    const ceiling = wcid === 4000002 ? 2.10 : 2.14;
+    const ceiling = 2.05;
     assert.ok(stowedH <= ceiling, `WCID ${wcid} stowed height (${stowedH.toFixed(3)}) <= ${ceiling}`);
 
     // Subsequent update while stowed must not move parked parts

@@ -27,6 +27,7 @@ const CR = await import("../scene3d/vehicle/camera_rig.js");
 const OSD = await import("../scene3d/vehicle/osd.js");
 const SK = await import("../scene3d/vehicle/sidelifter_kinematics.js");
 const CL = await import("../scene3d/vehicle/container_logistics.js");
+const PJM = await import("../scene3d/vehicle/pallet_jack_model.js");
 const PJ = await import("../scene3d/vehicle/pallet_jack_controller.js");
 const { lintSource } = await import("../scene3d/vfx/lint_caps.js");
 
@@ -770,7 +771,7 @@ await test("4. Walk-behind pallet jack controller lifecycle: input isolation, tr
     parentVehicle: 0,
     cell: 0,
     x: 0.0,
-    y: 0.225, // directly in front of pallet jack forks at (0,0)
+    y: 0.250, // directly in front of pallet jack forks at (0,0) matching PALLET_JACK_SPECS.cargoCenterY
     z: 0,
     heading: 0,
   });
@@ -820,6 +821,21 @@ await test("4. Walk-behind pallet jack controller lifecycle: input isolation, tr
     assert.equal(env.win.__inputFunnel._fault, "gate", "__inputFunnel poisoned with gate");
     assert(env.win.cancelJumpChargeCalls >= 1 && env.win.__jumpChargeActive === false, "jump charge cancelled");
     assert(env.calls.seats.some((s) => s.guid === pjGuid), "setVehicleSeat called with jackGuid");
+    assert.equal(PJM.PALLET_JACK_SPECS.cargoCenterY, 0.250, "PALLET_JACK_SPECS.cargoCenterY must be 0.250m");
+    const pjModelInit = env.api.palletJacks.get(pjGuid)?.model;
+    assert(pjModelInit && Math.abs(pjModelInit.cargoMount.position.y - 0.250) < 1e-6, `pallet jack cargoMount.position.y must be 0.250m, got ${pjModelInit?.cargoMount?.position?.y}`);
+    const edgeEngage = CL.findNearestForkEngageTarget(
+      { x: 0, y: 0, heading: 0 },
+      [{ id: dGuid, x: 0, y: 0.790, heading: 0, fourWay: true }],
+      { forkOffset: PJM.PALLET_JACK_SPECS.cargoCenterY }
+    );
+    assert(edgeEngage && edgeEngage.canEngage === true, "forkOffset=0.250 engages target at y=0.790m (dist 0.540m <= 0.55m)");
+    const fRes = env.win.dispatch("keydown", { code: "KeyF" });
+    assert(fRes.defaultPrevented && fRes.immediateStopped, "KeyF captured");
+    assert(
+      env.calls.palletJackActions.some((a) => a.action === PALLET_JACK_ACTION.PickGroundDeployable && a.targetGuid === dGuid),
+      "KeyF at (0,0) picks ground deployable at y=0.250m via PickGroundDeployable"
+    );
 
     // Verify camera toggle V
     const vRes = env.win.dispatch("keydown", { code: "KeyV" });
@@ -895,6 +911,11 @@ await test("4. Walk-behind pallet jack controller lifecycle: input isolation, tr
     const loadHl = hlCalls.find((c) => c.slotIdx !== null && c.state !== null);
     assert(loadHl, "container slot highlighted while carrying cargo near open container");
     assert.equal(loadHl.subSlot, null, "CRITICAL: subSlot MUST be null for full pallets (never 0)");
+    const pjHudEl = env.doc.getElementById(OSD.PALLETJACK_HUD_ID);
+    assert(
+      pjHudEl && pjHudEl.textContent.includes("CARGO: FLUX POD (4000010)"),
+      `OSD palletJack readout shows CARGO: FLUX POD (4000010), got "${pjHudEl?.textContent}"`
+    );
 
     // Pressing Escape when NO modal is open releases pallet jack and consumes Escape
     const escRes = env.win.dispatch("keydown", { code: "Escape", key: "Escape" });
@@ -1378,7 +1399,17 @@ await test("8. Regression: Left-side (sideliftSide = -1) crane spreader x < 0 & 
   env.api.dispose();
 });
 
-await test("9. Regression: Driving pallet jack into open container picks full Y-oriented (slot 9), full X-oriented (slot 6), and half-pallet (slot 9:0) via F/Space", () => {
+await test("9. Regression: Driving pallet jack into open container picks 2-wide unified slots (Right slot 9, Left slot 6, BatteryUnit 4000013) via F/Space", () => {
+  const slot9 = CL.CONTAINER_SLOTS_20[9];
+  const pinwheelSlot9 = CL.PINWHEEL_SLOTS_20[9];
+  assert(
+    slot9 && pinwheelSlot9 &&
+      Math.abs(slot9.x - 0.575) < 1e-6 && Math.abs(slot9.y - (-2.320)) < 1e-6 &&
+      Math.abs(pinwheelSlot9.x - 0.575) < 1e-6 && Math.abs(pinwheelSlot9.y - (-2.320)) < 1e-6 &&
+      Math.abs(slot9.dx - 1.100) < 1e-6 && Math.abs(slot9.dy - 1.100) < 1e-6,
+    `20ft slot 9 must be unified 1.100x1.100m at (+0.575, -2.320), got ${JSON.stringify(slot9)}`
+  );
+
   const runDriveAndPick = (slots, startX, startY, keyCode, expectedSlot, expectedSub = 0) => {
     const env = makeTestRig({
       surfaceOracle: (_wx, wy) => (wy >= -3.8 ? { z: 0.162, normalX: 0, normalY: 0, normalZ: 1 } : null),
@@ -1437,13 +1468,13 @@ await test("9. Regression: Driving pallet jack into open container picks full Y-
     }
   };
 
-  // Full pallet Y-oriented slot 9 (x=+0.5080, y=-2.2873) via KeyF and Space
-  runDriveAndPick([{ slotIndex: 9, subSlot: 0, palletSize: 2, cargoWcid: 4000010 }], 0.5080, -3.5, "KeyF", 9, 0);
-  runDriveAndPick([{ slotIndex: 9, subSlot: 0, palletSize: 2, cargoWcid: 4000010 }], 0.5080, -3.5, "Space", 9, 0);
-  // Full pallet X-oriented slot 6 (x=+0.5080, y=-1.1176) via KeyF
-  runDriveAndPick([{ slotIndex: 6, subSlot: 0, palletSize: 2, cargoWcid: 4000010 }], 0.5080, -2.5, "KeyF", 6, 0);
-  // Half pallet slot 9:0 (4000013) via KeyF
-  runDriveAndPick([{ slotIndex: 9, subSlot: 0, palletSize: 1, cargoWcid: 4000013 }], 0.5080, -3.5, "KeyF", 9, 0);
+  // Unified 2-wide Right lane slot 9 (x=+0.575, y=-2.320) via KeyF and Space
+  runDriveAndPick([{ slotIndex: 9, subSlot: 0, palletSize: 2, cargoWcid: 4000010 }], 0.575, -3.5, "KeyF", 9, 0);
+  runDriveAndPick([{ slotIndex: 9, subSlot: 0, palletSize: 2, cargoWcid: 4000010 }], 0.575, -3.5, "Space", 9, 0);
+  // Unified 2-wide Left lane slot 6 (x=-0.575, y=-1.160) via KeyF
+  runDriveAndPick([{ slotIndex: 6, subSlot: 0, palletSize: 2, cargoWcid: 4000010 }], -0.575, -2.5, "KeyF", 6, 0);
+  // Unified 2-wide full pallet (4000013 BatteryUnit) in slot 9 (palletSize: 2, subSlot: 0) via KeyF
+  runDriveAndPick([{ slotIndex: 9, subSlot: 0, palletSize: 2, cargoWcid: 4000013 }], 0.575, -3.5, "KeyF", 9, 0);
 });
 
 await test("10. Regression: Death guard (CQ-06), container wall clamp + Z-proximity guard, steep >12 deg resistance, keyup in input, KeyX drain, aria-modal Escape on body", () => {
@@ -1558,7 +1589,7 @@ await test("10. Regression: Death guard (CQ-06), container wall clamp + Z-proxim
       operatorGuid: env.localPlayerGuid,
       stowedOnTrailerGuid: 0,
       cell: 0,
-      position: [0.508, -2.2873, 0.0],
+      position: [0.575, -2.320, 0.0],
       heading: 0,
       tillerAngle: 0,
       forkHeightM: 0.085,
@@ -1572,8 +1603,83 @@ await test("10. Regression: Death guard (CQ-06), container wall clamp + Z-proxim
     assert(pushoutCalls.length >= 1);
     assert(pushoutCalls[0].wz < 0.5, `overhead container must not raise pushout wz (got ${pushoutCalls[0].wz})`);
     const pos = env.api.palletJacks.list()[0].pos;
-    assert(Math.abs(pos[0] - 0.508) < 1e-4 && Math.abs(pos[1] - -2.2873) < 1e-4, "overhead container did not push jack in XY");
+    assert(Math.abs(pos[0] - 0.575) < 1e-4 && Math.abs(pos[1] - -2.320) < 1e-4, "overhead container did not push jack in XY");
     env.api.dispose();
+  }
+
+  // 10c-ii. Ground-level (z = 0) bay-OBB pushout boundary with slot 9 occupied distinguishes unified (+0.575, -2.320) from pinwheel (+0.5080, -2.2873)
+  {
+    const slot9 = CL.CONTAINER_SLOTS_20[9];
+    const pinwheelSlot9 = CL.PINWHEEL_SLOTS_20[9];
+    assert(
+      slot9 && pinwheelSlot9 &&
+        Math.abs(slot9.x - 0.575) < 1e-6 && Math.abs(slot9.y - (-2.320)) < 1e-6 &&
+        Math.abs(pinwheelSlot9.x - 0.575) < 1e-6 && Math.abs(pinwheelSlot9.y - (-2.320)) < 1e-6 &&
+        Math.abs(slot9.dx - 1.100) < 1e-6 && Math.abs(slot9.dy - 1.100) < 1e-6,
+      `10c-ii: slot 9 must be unified 1.100x1.100m at (+0.575, -2.320), got ${JSON.stringify(slot9)}`
+    );
+
+    const runGroundSlot9PushoutProbe = (startX, startY, carriedWcid, idxOffset) => {
+      const env = makeTestRig();
+      const cGuid = 0x80090065 + idxOffset;
+      const pjGuid = 0x800b0065 + idxOffset;
+      env.push({
+        type: "container_state",
+        containerGuid: cGuid,
+        containerKind: 10,
+        cell: 0,
+        position: [0, 0, 0],
+        heading: 0,
+        doorProgress: 1.0,
+        doorState: 2,
+        slots: [{ slotIndex: 9, subSlot: 0, palletSize: 2, cargoWcid: 4000010 }],
+      });
+      env.push({
+        type: "pallet_jack_state",
+        palletJackGuid: pjGuid,
+        operatorGuid: env.localPlayerGuid,
+        stowedOnTrailerGuid: 0,
+        cell: 0,
+        position: [startX, startY, 0.0],
+        heading: 0,
+        tillerAngle: 0,
+        forkHeightM: carriedWcid ? 0.200 : 0.085,
+        forkState: carriedWcid ? 2 : 0,
+        carriedPalletSize: carriedWcid ? 2 : 0,
+        flags: 0,
+        carriedWcid,
+        ownerGuid: env.localPlayerGuid,
+      });
+      env.tick(16, 16);
+      const pos = env.api.palletJacks.list()[0].pos;
+      env.api.dispose();
+      return pos;
+    };
+
+    // Unified slot 9 spans x in [+0.025, +1.125], y in [-2.870, -1.770].
+    // At x = -0.330, y = -2.320: distance to x0=+0.025 is 0.355 > JACK_HULL_RADIUS_M (0.3425) -> zero pushout;
+    // old pinwheel at x = +0.5080 (x0 <= 0.000) would collide and push left.
+    const clearPos = runGroundSlot9PushoutProbe(-0.330, -2.320, 0, 0);
+    assert(
+      Math.abs(clearPos[0] - (-0.330)) < 1e-5 && Math.abs(clearPos[1] - (-2.320)) < 1e-5,
+      `10c-ii: jack at (-0.330, -2.320) must stay clear of unified slot 9 (+0.025..+1.125), got [${clearPos[0]}, ${clearPos[1]}]`
+    );
+
+    // At x = -0.300, y = -2.320: overlaps unified x0=+0.025 by 0.0175m -> pushed to x0 - JACK_HULL_RADIUS_M = -0.3175.
+    const pushedXPos = runGroundSlot9PushoutProbe(-0.300, -2.320, 4000011, 1);
+    const expectedLeftPushX = (0.575 - 0.550) - PJ.JACK_HULL_RADIUS_M;
+    assert(
+      Math.abs(pushedXPos[0] - expectedLeftPushX) < 1e-5 && Math.abs(pushedXPos[1] - (-2.320)) < 1e-5,
+      `10c-ii: jack at (-0.300, -2.320) must push to exact unified left edge ${expectedLeftPushX}, got [${pushedXPos[0]}, ${pushedXPos[1]}]`
+    );
+
+    // At x = +0.575, y = -1.440: overlaps unified y1=-1.770 by 0.0125m -> pushed to y1 + JACK_HULL_RADIUS_M = -1.4275.
+    const pushedYPos = runGroundSlot9PushoutProbe(0.575, -1.440, 4000011, 2);
+    const expectedFrontPushY = (-2.320 + 0.550) + PJ.JACK_HULL_RADIUS_M;
+    assert(
+      Math.abs(pushedYPos[0] - 0.575) < 1e-5 && Math.abs(pushedYPos[1] - expectedFrontPushY) < 1e-5,
+      `10c-ii: jack at (0.575, -1.440) must push to exact unified front edge ${expectedFrontPushY}, got [${pushedYPos[0]}, ${pushedYPos[1]}]`
+    );
   }
 
   // 10d. Steep >12 deg surface blocks XY motion, zeroes speed, and reports surface === "terrain"
@@ -1896,7 +2002,7 @@ await test("12. Tier-5 Adversarial Regression Suite (T5_01..T5_07)", async () =>
       operatorGuid: env.localPlayerGuid,
       stowedOnTrailerGuid: 0,
       cell: 0,
-      position: [-0.5368, -6.01, 0.162],
+      position: [-0.575, -6.01, 0.162],
       heading: 0,
       tillerAngle: 0,
       forkHeightM: 0.085,

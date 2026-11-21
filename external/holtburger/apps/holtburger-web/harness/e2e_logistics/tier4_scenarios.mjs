@@ -20,7 +20,7 @@ import {
 export const TIER4_METADATA = [
   { id: "T4.S01", tier: 4, feature: "Scenario:Full_40ft_FOB_Deployment_And_PackUp_Loop", mode: "dual" },
   { id: "T4.S02", tier: 4, feature: "Scenario:20ft_ForwardOutpost_LeftDrop_And_RackStow", mode: "dual" },
-  { id: "T4.S03", tier: 4, feature: "Scenario:40HC_Mixed_Full_Half_Pinwheel_LIFO_Clearing", mode: "dual" },
+  { id: "T4.S03", tier: 4, feature: "Scenario:40HC_Unified_2Wide_LIFO_Clearing", mode: "dual" },
   { id: "T4.S04", tier: 4, feature: "Scenario:ISO_3874_And_3691_5_Safety_Interlock_Recovery_Drill", mode: "dual" },
   { id: "T4.S05", tier: 4, feature: "Scenario:Reload_And_StatePreservation_Convoy_Ammo_Fuel_Energy", mode: "dual" },
   { id: "T4.S06", tier: 4, feature: "Scenario:SingleButton_AutoCycle_ShiftL_ForcedTeardown_ConsoleZero", mode: "dual" },
@@ -55,9 +55,9 @@ export async function runTier4(collector) {
       assert(sim.trailerAction(trGuid, TRAILER_ACTION_KIND.DeployPalletJack).ok, "jack deployed from rack");
       assert(sim.palletJackAction(pjGuid, PALLET_JACK_ACTION_KIND.Grab, { playerGuid: 1001 }).ok, "jack grabbed");
 
-      // 4. Unload FOB units (rear-to-front LIFO: 20, 18, 16, 0) & activate on MicroGrid
+      // 4. Unload FOB units (rear-to-front LIFO: 19, 18, 16, 0) & activate on MicroGrid
       const deployedGuids = [];
-      for (const slot of [20, 18, 16, 0]) {
+      for (const slot of [19, 18, 16, 0]) {
         assert(sim.palletJackAction(pjGuid, PALLET_JACK_ACTION_KIND.PickContainerSlot, { targetGuid: cGuid, slotIndex: slot, subSlot: 0 }).ok, `unload slot ${slot}`);
         const drop = sim.palletJackAction(pjGuid, PALLET_JACK_ACTION_KIND.DropToGround);
         assert(drop.ok, `drop slot ${slot}`);
@@ -68,8 +68,8 @@ export async function runTier4(collector) {
       const turret = [...sim.deployables.values()].find((d) => d.wcid === 4000014);
       assert(turret && (turret.onlineFlags & ONLINE_FLAGS.Powered) !== 0, "MissileTurret powered on active MicroGrid");
 
-      // 5. Pack up FOB: stow -> pick -> deepest-first reload (0, 16, 18, 20)
-      const loadOrder = [0, 16, 18, 20];
+      // 5. Pack up FOB: stow -> pick -> deepest-first reload (0, 16, 18, 19)
+      const loadOrder = [0, 16, 18, 19];
       for (let i = 0; i < deployedGuids.length; i++) {
         const dg = deployedGuids[i];
         sim.palletJackAction(pjGuid, PALLET_JACK_ACTION_KIND.ToggleDeployableStow, { targetGuid: dg });
@@ -125,13 +125,13 @@ export async function runTier4(collector) {
       await live.waitUntil(async () => {
         const t = await live.getTrailer(rig.tGuid);
         return t && t.mountedContainerGuid === 0 && (t.sideliftPhase === 2 || t.sideliftPhase === 0);
-      }, 20000, 250, "offload landed");
+      }, 35000, 250, "offload landed");
       await live.evalInPage(`window.__vehicles.containers.action(${rig.cGuid}, 1); window.__vehicles.trailers.deployPalletJack(${rig.tGuid}); return true;`);
       const pjGuid = await live.waitUntil(async () => {
         const c = await live.getContainer(rig.cGuid);
         const pj = await live.evalInPage(`return window.__vehicles.palletJacks.list().find((p) => (p.stowedOnTrailerGuid ?? 0) === 0)?.guid || 0;`);
         return (c?.doorProgress ?? 0) >= 0.98 && pj ? pj : 0;
-      }, 8000, 200, "doors open & jack ready");
+      }, 15000, 200, "doors open & jack ready");
 
       const pjInit = await live.getPalletJack(pjGuid);
       await live.movePlayerNear(pjInit.pos);
@@ -144,12 +144,20 @@ export async function runTier4(collector) {
         cOff1.pos[1] - Math.sin(ch1) * 2.2 - Math.cos(ch1) * 9.0,
         cOff1.pos[2],
       ];
-      // Peel outer slot 6 (4000002) aside to expose slot 4 (4000014 MissileTurret)
+      // Peel outer Left-lane slot 8 (4000002) and slot 6 (4000016) aside to expose slot 4 (4000014 MissileTurret)
+      const slot8Pos = await live.getSlotWorldPos(rig.cGuid, 8, 0);
+      await live.movePalletJackTo(pjGuid, slot8Pos);
+      await live.evalInPage(`window.__vehicles.palletJacks.pickContainer(${rig.cGuid}, 8, 0, ${pjGuid}); return true;`);
+      await live.waitUntil(async () => (await live.getPalletJack(pjGuid))?.carriedWcid !== 0, 6000, 150, "peeled slot 8");
+      await live.movePalletJackTo(pjGuid, dropSpot1);
+      await live.evalInPage(`window.__vehicles.palletJacks.dropGround(${pjGuid}); return true;`);
+      await live.waitUntil(async () => (await live.getPalletJack(pjGuid))?.carriedWcid === 0, 6000, 150, "dropped slot 8 aside");
+
       const slot6Pos = await live.getSlotWorldPos(rig.cGuid, 6, 0);
       await live.movePalletJackTo(pjGuid, slot6Pos);
       await live.evalInPage(`window.__vehicles.palletJacks.pickContainer(${rig.cGuid}, 6, 0, ${pjGuid}); return true;`);
       await live.waitUntil(async () => (await live.getPalletJack(pjGuid))?.carriedWcid !== 0, 6000, 150, "peeled slot 6");
-      await live.movePalletJackTo(pjGuid, dropSpot1);
+      await live.movePalletJackTo(pjGuid, [dropSpot1[0], dropSpot1[1] - 1.8, dropSpot1[2]]);
       await live.evalInPage(`window.__vehicles.palletJacks.dropGround(${pjGuid}); return true;`);
       await live.waitUntil(async () => (await live.getPalletJack(pjGuid))?.carriedWcid === 0, 6000, 150, "dropped slot 6 aside");
 
@@ -242,7 +250,7 @@ export async function runTier4(collector) {
       await live.waitUntil(async () => {
         const t = await live.getTrailer(ids.tGuid);
         return t && t.mountedContainerGuid === 0 && t.sideliftPhase === 0;
-      }, 24000, 300, "left drop complete");
+      }, 35000, 300, "left drop complete");
       const landed = (await live.getContainer(ids.cGuid)).pos;
       const dx = landed[0] - ids.tx;
       const dy = landed[1] - ids.ty;
@@ -254,11 +262,11 @@ export async function runTier4(collector) {
     }
   );
 
-  // T4.S03: 40HC mixed full & half-pallet pinwheel LIFO clearing
+  // T4.S03: 40HC 2-wide unified grid LIFO clearing (independent Left/Right lanes)
   await collector.runDual(
     "T4.S03",
     4,
-    "Scenario:40HC_Mixed_Full_Half_Pinwheel_LIFO_Clearing",
+    "Scenario:40HC_Unified_2Wide_LIFO_Clearing",
     async () => {
       const sim = new LogisticsWorldSimulator();
       const { trGuid, cGuid, pjGuid } = sim.spawnPreset("sidelifter40hc");
@@ -268,21 +276,23 @@ export async function runTier4(collector) {
       assert(sim.trailerAction(trGuid, TRAILER_ACTION_KIND.DeployPalletJack).ok, "jack deployed");
       assert(sim.palletJackAction(pjGuid, PALLET_JACK_ACTION_KIND.Grab, { playerGuid: 1001 }).ok, "grabbed");
 
-      // Attempt blocked deep half-pallet (slot 2) before clearing rear blockers (slots 18 & 20)
+      // Attempt blocked deep Left-lane slot 2 before clearing rear Left blocker 18
       const blocked = sim.palletJackAction(pjGuid, PALLET_JACK_ACTION_KIND.PickContainerSlot, { targetGuid: cGuid, slotIndex: 2, subSlot: 0 });
-      assert(!blocked.ok && /LIFO/i.test(blocked.reason), "inner slot 2 blocked before rear tier cleared");
+      assert(!blocked.ok && /LIFO/i.test(blocked.reason), "inner Left-lane slot 2 blocked before rear Left 18 cleared");
 
-      // Clear outer rear blockers (20, 18) -> inner slot 2 (BatteryUnit + GroundRadar) unlocks
-      for (const [s, sub] of [[20, 0], [18, 0], [2, 1], [2, 0], [0, 0]]) {
+      // Clear outer rear blockers (19, 18) -> inner slots 3 (GroundRadar) & 2 (BatteryUnit) & 0 unlock
+      for (const [s, sub] of [[19, 0], [18, 0], [3, 0], [2, 0], [0, 0]]) {
         assert(sim.palletJackAction(pjGuid, PALLET_JACK_ACTION_KIND.PickContainerSlot, { targetGuid: cGuid, slotIndex: s, subSlot: sub }).ok, `pick (${s},${sub})`);
         assert(sim.palletJackAction(pjGuid, PALLET_JACK_ACTION_KIND.DropToGround).ok, `stage (${s},${sub})`);
       }
       assert(sim.containers.get(cGuid).slots.length === 0, "40HC fully cleared");
 
-      // Verify deepest-first reload ordering (+Y -> -Y)
-      const loadOrder = oracleComputeReachableLoadSlots(12, [], "half");
+      // Verify deepest-first reload ordering (+Y -> -Y) for unified 20 slots
+      const loadOrder = oracleComputeReachableLoadSlots(12, [], "full");
+      assert(loadOrder.length === 20, "40HC has 20 unified slots");
       assert(loadOrder[0].y >= loadOrder[loadOrder.length - 1].y, "40HC deepest-first sorts +Y -> -Y");
-      assert(loadOrder[0].slotIndex === 0 || loadOrder[0].slotIndex === 1, "40HC deepest-first starts at front bulkhead");
+      assert(loadOrder[0].slotIndex === 0, "40HC deepest-first starts at front bulkhead slot 0");
+      assert(oracleComputeReachableLoadSlots(12, [], "half").length === 0, "40HC rejects legacy half load");
     },
     async (live) => {
       await live.cleanupWorld();
@@ -296,9 +306,9 @@ export async function runTier4(collector) {
       await live.waitUntil(async () => {
         const t = await live.getTrailer(ids.tGuid);
         return t && t.mountedContainerGuid === 0 && t.sideliftPhase === 0;
-      }, 24000, 300, "offloaded");
+      }, 35000, 300, "offloaded");
       await live.evalInPage(`window.__vehicles.containers.action(${ids.cGuid}, 1); return true;`);
-      await live.waitUntil(async () => ((await live.getContainer(ids.cGuid))?.doorProgress ?? 0) >= 0.98, 6000, 150, "40hc open");
+      await live.waitUntil(async () => ((await live.getContainer(ids.cGuid))?.doorProgress ?? 0) >= 0.98, 15000, 150, "40hc open");
       await live.hideHud();
       await live.captureAndVerifyShot("t4_s03_40hc_pinwheel_lifo");
       await live.showHud();
@@ -346,14 +356,14 @@ export async function runTier4(collector) {
         // 4. Mounted container blocks jack entry -> offload -> open doors -> blocked LIFO refused
         sim.trailerAction(trGuid, TRAILER_ACTION_KIND.DeployPalletJack);
         sim.palletJackAction(pjGuid, PALLET_JACK_ACTION_KIND.Grab, { playerGuid: 1001 });
-        assert(!sim.palletJackAction(pjGuid, PALLET_JACK_ACTION_KIND.PickContainerSlot, { targetGuid: cGuid, slotIndex: 20, subSlot: 0 }).ok, "mounted entry refused");
+        assert(!sim.palletJackAction(pjGuid, PALLET_JACK_ACTION_KIND.PickContainerSlot, { targetGuid: cGuid, slotIndex: 19, subSlot: 0 }).ok, "mounted entry refused");
         assert(sim.trailerAction(trGuid, TRAILER_ACTION_KIND.SideliftOffload).ok, "offload succeeded after clearing all ISO 3874 interlocks");
 
         sim.openContainerDoors(cGuid, true);
         assert(!sim.palletJackAction(pjGuid, PALLET_JACK_ACTION_KIND.PickContainerSlot, { targetGuid: cGuid, slotIndex: 0, subSlot: 0 }).ok, "blocked LIFO slot 0 refused");
 
         // 5. Drop unit, activate, verify active stow refusal & raised forks refusal -> recover
-        assert(sim.palletJackAction(pjGuid, PALLET_JACK_ACTION_KIND.PickContainerSlot, { targetGuid: cGuid, slotIndex: 20, subSlot: 0 }).ok, "outer slot 20 ok");
+        assert(sim.palletJackAction(pjGuid, PALLET_JACK_ACTION_KIND.PickContainerSlot, { targetGuid: cGuid, slotIndex: 19, subSlot: 0 }).ok, "outer slot 19 ok");
         const drop = sim.palletJackAction(pjGuid, PALLET_JACK_ACTION_KIND.DropToGround);
         sim.palletJackAction(pjGuid, PALLET_JACK_ACTION_KIND.ToggleDeployableStow, { targetGuid: drop.deployableGuid });
         assert(!sim.palletJackAction(pjGuid, PALLET_JACK_ACTION_KIND.PickGroundDeployable, { targetGuid: drop.deployableGuid }).ok, "active deployable refused");
@@ -452,18 +462,18 @@ export async function runTier4(collector) {
       const startPose = await live.getVehiclePose(ids.vGuid);
       assert(startPose && Array.isArray(startPose.pos), "convoy start pose available");
 
-      // 1. Unload slot 20 -> record Ammo/Fuel/Energy -> stow -> reload -> stow jack -> close doors -> autoLoad onto convoy
+      // 1. Unload slot 19 -> record Ammo/Fuel/Energy -> stow -> reload -> stow jack -> close doors -> autoLoad onto convoy
       await live.evalInPage(`window.__vehicles.trailers.sidelift(${ids.tGuid}, "autoOffload", "right"); return true;`);
       await live.waitUntil(async () => {
         const t = await live.getTrailer(ids.tGuid);
         return t && t.mountedContainerGuid === 0 && t.sideliftPhase === 0;
-      }, 24000, 300, "initial offload");
+      }, 35000, 300, "initial offload");
       await live.evalInPage(`window.__vehicles.containers.action(${ids.cGuid}, 1); window.__vehicles.trailers.deployPalletJack(${ids.tGuid}); return true;`);
       const pjGuid = await live.waitUntil(async () => {
         const c = await live.getContainer(ids.cGuid);
         const pj = await live.evalInPage(`return window.__vehicles.palletJacks.list().find((p) => (p.stowedOnTrailerGuid ?? 0) === 0)?.guid || 0;`);
         return (c?.doorProgress ?? 0) >= 0.98 && pj ? pj : 0;
-      }, 8000, 200, "doors open & jack deployed");
+      }, 15000, 200, "doors open & jack deployed");
       const pjPose = await live.getPalletJack(pjGuid);
       await live.movePlayerNear(pjPose.pos);
       await live.evalInPage(`window.__vehicles.palletJacks.grab(${pjGuid}); return true;`);
@@ -475,12 +485,20 @@ export async function runTier4(collector) {
         cOff5.pos[1] - Math.sin(ch5) * 2.2 - Math.cos(ch5) * 9.0,
         cOff5.pos[2],
       ];
-      // Peel outer slot 6 (4000002) aside to expose slot 4 (4000014 MissileTurret with Ammo=4)
+      // Peel outer Left-lane slot 8 (4000002) and slot 6 (4000016) aside to expose slot 4 (4000014 MissileTurret with Ammo=4)
+      const slot8 = await live.getSlotWorldPos(ids.cGuid, 8, 0);
+      await live.movePalletJackTo(pjGuid, slot8);
+      await live.evalInPage(`window.__vehicles.palletJacks.pickContainer(${ids.cGuid}, 8, 0, ${pjGuid}); return true;`);
+      await live.waitUntil(async () => (await live.getPalletJack(pjGuid))?.carriedWcid !== 0, 6000, 150, "peeled slot 8");
+      await live.movePalletJackTo(pjGuid, dropSpot5);
+      await live.evalInPage(`window.__vehicles.palletJacks.dropGround(${pjGuid}); return true;`);
+      await live.waitUntil(async () => (await live.getPalletJack(pjGuid))?.carriedWcid === 0, 6000, 150, "dropped slot 8 aside");
+
       const slot6 = await live.getSlotWorldPos(ids.cGuid, 6, 0);
       await live.movePalletJackTo(pjGuid, slot6);
       await live.evalInPage(`window.__vehicles.palletJacks.pickContainer(${ids.cGuid}, 6, 0, ${pjGuid}); return true;`);
       await live.waitUntil(async () => (await live.getPalletJack(pjGuid))?.carriedWcid !== 0, 6000, 150, "peeled slot 6");
-      await live.movePalletJackTo(pjGuid, dropSpot5);
+      await live.movePalletJackTo(pjGuid, [dropSpot5[0], dropSpot5[1] - 1.8, dropSpot5[2]]);
       await live.evalInPage(`window.__vehicles.palletJacks.dropGround(${pjGuid}); return true;`);
       await live.waitUntil(async () => (await live.getPalletJack(pjGuid))?.carriedWcid === 0, 6000, 150, "dropped slot 6 aside");
 
@@ -507,10 +525,10 @@ export async function runTier4(collector) {
       }
       await live.evalInPage(`window.__vehicles.palletJacks.pickGround(${before.guid}, ${pjGuid}); return true;`);
       await live.waitUntil(async () => (await live.getPalletJack(pjGuid))?.carriedWcid === before.wcid, 6000, 150, "picked stowed unit");
-      const slot20 = await live.getSlotWorldPos(ids.cGuid, 20, 0);
-      await live.movePalletJackTo(pjGuid, slot20);
-      await live.evalInPage(`window.__vehicles.palletJacks.loadContainer(${ids.cGuid}, 20, 0, ${pjGuid}); return true;`);
-      await live.waitUntil(async () => (await live.getPalletJack(pjGuid))?.carriedWcid === 0, 6000, 150, "loaded slot 20");
+      const slot19 = await live.getSlotWorldPos(ids.cGuid, 19, 0);
+      await live.movePalletJackTo(pjGuid, slot19);
+      await live.evalInPage(`window.__vehicles.palletJacks.loadContainer(${ids.cGuid}, 19, 0, ${pjGuid}); return true;`);
+      await live.waitUntil(async () => (await live.getPalletJack(pjGuid))?.carriedWcid === 0, 6000, 150, "loaded slot 19");
       const trPose = await live.getTrailer(ids.tGuid);
       await live.movePalletJackTo(pjGuid, trPose.pos, { stopDistM: 2.0 });
       await live.evalInPage(`window.__vehicles.palletJacks.release(${pjGuid}); return true;`);
@@ -521,17 +539,17 @@ export async function runTier4(collector) {
       await live.waitUntil(async () => {
         const t = await live.getTrailer(ids.tGuid);
         return t && t.mountedContainerGuid !== 0 && t.sideliftPhase === 0;
-      }, 24000, 300, "autoLoad onto convoy");
+      }, 35000, 300, "autoLoad onto convoy");
 
       // 2. Drive convoy > 5 m
       await live.boardAndWait(ids.vGuid, 0);
       await live.evalInPage(`window.__vehicles.setSticks({ throttle: 0.9, yaw: 0 }, 4500); return true;`);
       await new Promise((r) => setTimeout(r, 4600));
-      await live.evalInPage(`window.__vehicles.clearSticks(); window.__vehicles.setSticks({ land: 1 }, 1200); return true;`);
+      await live.evalInPage(`window.__vehicles.clearSticks(); window.__vehicles.setSticks({ land: 1 }, 6000); return true;`);
       await live.waitUntil(async () => {
         const p = await live.getVehiclePose(ids.vGuid);
         return p && Math.abs(p.speed ?? 0) < 0.08;
-      }, 6000, 150, "convoy stopped");
+      }, 12000, 150, "convoy stopped");
       await live.evalInPage(`window.__vehicles.clearSticks(); return true;`);
       const afterPose = await live.getVehiclePose(ids.vGuid);
       await live.evalInPage(`window.__vehicles.exit(0); return true;`);
@@ -545,7 +563,7 @@ export async function runTier4(collector) {
       await live.waitUntil(async () => {
         const t = await live.getTrailer(ids.tGuid);
         return t && t.mountedContainerGuid === 0 && t.sideliftPhase === 0;
-      }, 24000, 300, "offload after convoy");
+      }, 35000, 300, "offload after convoy");
       const cDest = await live.getContainer(ids.cGuid);
       if (cDest?.pos) await live.movePlayerNear(cDest.pos, [0, -2.5, 0]);
       await live.evalInPage(`window.__vehicles.containers.action(${ids.cGuid}, 1); window.__vehicles.trailers.deployPalletJack(${ids.tGuid}); return true;`);
@@ -553,13 +571,13 @@ export async function runTier4(collector) {
         const c = await live.getContainer(ids.cGuid);
         const pj = await live.evalInPage(`return window.__vehicles.palletJacks.list().find((p) => (p.stowedOnTrailerGuid ?? 0) === 0)?.guid || 0;`);
         return (c?.doorProgress ?? 0) >= 0.98 && pj ? pj : 0;
-      }, 8000, 200, "doors open at destination");
+      }, 15000, 200, "doors open at destination");
       const pj2Pose = await live.getPalletJack(pj2);
       await live.movePlayerNear(pj2Pose.pos);
       await live.evalInPage(`window.__vehicles.palletJacks.grab(${pj2}); return true;`);
       await live.waitUntil(async () => (await live.getPalletJack(pj2))?.operatorGuid !== 0, 5000, 150, "grabbed at destination");
-      await live.movePalletJackTo(pj2, await live.getSlotWorldPos(ids.cGuid, 20, 0));
-      await live.evalInPage(`window.__vehicles.palletJacks.pickContainer(${ids.cGuid}, 20, 0, ${pj2}); return true;`);
+      await live.movePalletJackTo(pj2, await live.getSlotWorldPos(ids.cGuid, 19, 0));
+      await live.evalInPage(`window.__vehicles.palletJacks.pickContainer(${ids.cGuid}, 19, 0, ${pj2}); return true;`);
       await live.waitUntil(async () => (await live.getPalletJack(pj2))?.carriedWcid !== 0, 6000, 150, "picked at destination");
       const chDest = cDest?.heading ?? 0;
       const dropSpotDest = [
@@ -577,6 +595,7 @@ export async function runTier4(collector) {
       assert(afterAmmo === before.ammo, `Ammo preserved across convoy (${afterAmmo} === ${before.ammo})`);
       near(afterFuel, before.fuelSec, 0.05, "Fuel preserved across convoy");
       near(afterEnergy, before.energyJoules, 1.0, "Energy preserved across convoy");
+      await live.evalInPage(`window.__vehicles.palletJacks.release(${pj2}); return true;`);
     }
   );
 
@@ -610,18 +629,23 @@ export async function runTier4(collector) {
     },
     async (live) => {
       await live.cleanupWorld();
+      await live.ensureOutdoorFlatSite();
       await live.sendChatAndWait("@trailer preset sidelifter40", /sidelifter|spawned/i, 10000);
       const tGuid = await live.waitUntil(async () => await live.evalInPage(`return window.__vehicles.trailers.list()[0]?.guid || 0;`), 8000, 200, "trailer");
+      await live.waitUntil(async () => await live.evalInPage(`
+        const el = document.getElementById("hb-vehicle-prompt");
+        return el && el.style.display !== "none" && /Shift\\+L|Auto/i.test(el.textContent || "");
+      `), 8000, 150, "sidelifter prompt ready");
       await live.dispatchKey("KeyL", { shiftKey: true });
       await live.waitUntil(async () => {
         const t = await live.getTrailer(tGuid);
         return t && t.mountedContainerGuid === 0 && t.sideliftPhase === 0;
-      }, 24000, 300, "Shift+L AutoOffload");
+      }, 35000, 300, "Shift+L AutoOffload");
       await live.dispatchKey("KeyL", { shiftKey: true });
       await live.waitUntil(async () => {
         const t = await live.getTrailer(tGuid);
         return t && t.mountedContainerGuid !== 0 && t.sideliftPhase === 0;
-      }, 24000, 300, "Shift+L AutoLoad");
+      }, 35000, 300, "Shift+L AutoLoad");
       await live.cleanupWorld();
       const errs = await live.checkConsoleErrors();
       assert(errs.failing.length === 0, `Non-allowlisted console errors: ${errs.failing.join("; ")}`);

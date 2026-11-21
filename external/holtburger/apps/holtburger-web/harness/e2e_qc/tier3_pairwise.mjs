@@ -292,7 +292,7 @@ export async function runTier3(collector) {
       const cGuid = await live.waitUntil(async () => await live.evalInPage(`return window.__vehicles.containers.list()[0]?.guid || 0;`), 8000, 200, "fob20");
       await live.sendChat(`@container doors 0x${(cGuid >>> 0).toString(16)} open`);
       await live.waitUntil(async () => ((await live.getContainer(cGuid))?.doorProgress ?? 0) >= 0.9, 6000, 150, "open");
-      await live.sendChatAndWait(`@container unpack 0x${(cGuid >>> 0).toString(16)} 6`, /unpacked/i, 8000);
+      await live.sendChatAndWait(`@container unpack 0x${(cGuid >>> 0).toString(16)} 8`, /unpacked/i, 8000);
       const rad = await live.waitUntil(async () => await live.evalInPage(`return window.__vehicles.deployables.list().find((d) => d.wcid === 4000002) || null;`), 8000, 200, "RadarStation");
       await live.movePlayerNear(rad.pos, [0, -1.5, 0]);
       await live.dispatchKey("KeyR");

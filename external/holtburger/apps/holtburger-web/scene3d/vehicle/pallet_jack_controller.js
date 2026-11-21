@@ -15,7 +15,6 @@
 import * as FM from "./flight_model.js";
 import { PALLET_JACK_SPECS } from "./pallet_jack_model.js";
 import {
-  HALF_PALLET_WCIDS,
   computeReachableLoadSlots,
   computeReachableUnloadSlots,
   findNearestForkEngageTarget,
@@ -793,18 +792,19 @@ export function createPalletJackController(deps = {}) {
     const spec = resolveContainerLogisticsSpec(cEntry.kind);
     if (!spec || !Array.isArray(cEntry.slots)) return [];
     const boxes = [];
+    const seen = new Set();
     for (let i = 0; i < cEntry.slots.length; i++) {
       const s = cEntry.slots[i];
       if (!s) continue;
       const idx = s.slotIndex ?? s.SlotIndex;
       if (!Number.isFinite(idx) || idx < 0 || idx >= spec.slots.length) continue;
-      const wcid = s.cargoWcid ?? s.CargoWcid ?? 0;
       const ps = s.palletSize ?? s.PalletSize;
       if (ps === 0 || ps === "none" || ps === "None") continue;
-      const isHalf = ps === 1 || ps === "half" || ps === "Half" || HALF_PALLET_WCIDS.has(wcid);
-      const sub = isHalf ? (((s.subSlot ?? s.SubSlot ?? 0) | 0) === 1 ? 1 : 0) : 0;
-      const b = getSlotSubBox(spec.slots[Math.trunc(idx)], isHalf ? "half" : "full", sub);
-      b.slotKey = isHalf ? `${idx}:${sub}` : `${idx}`;
+      const slotIdx = Math.trunc(idx);
+      if (seen.has(slotIdx)) continue;
+      seen.add(slotIdx);
+      const b = getSlotSubBox(spec.slots[slotIdx], "full", 0);
+      b.slotKey = `${slotIdx}`;
       boxes.push(b);
     }
     return boxes;
@@ -1005,7 +1005,7 @@ export function createPalletJackController(deps = {}) {
             active.guid,
             PALLET_JACK_ACTION.PickContainerSlot,
             best.target.slotIndex | 0,
-            best.target.palletSize === "half" ? (best.target.subSlot | 0) : 0,
+            0,
             0,
             cEntry.guid,
             cl.cell, cl.x, cl.y, cl.z,
@@ -1060,8 +1060,7 @@ export function createPalletJackController(deps = {}) {
     // Check if inside or immediately adjacent to an open grounded container for LoadContainerSlot
     const cEntry = nearestGroundedContainer(st.x, st.y, 8.0, st.z, 0.8);
     if (cEntry && (cEntry.currentDoorProgress >= 0.5 || cEntry.last?.doorState === 2)) {
-      const palletSize = (st.carriedPalletSize === 1 || HALF_PALLET_WCIDS.has(st.carriedWcid)) ? "half" : "full";
-      const load = computeReachableLoadSlots(cEntry.kind, cEntry.slots, palletSize);
+      const load = computeReachableLoadSlots(cEntry.kind, cEntry.slots, "full");
       const targets = buildWorldSlotTargets(cEntry, load.all);
       const best = findNearestForkEngageTarget(
         { x: st.x, y: st.y, heading: st.heading },
@@ -1078,7 +1077,7 @@ export function createPalletJackController(deps = {}) {
             active.guid,
             PALLET_JACK_ACTION.LoadContainerSlot,
             best.target.slotIndex | 0,
-            palletSize === "half" ? (best.target.subSlot | 0) : 0,
+            0,
             0,
             cEntry.guid,
             cl.cell, cl.x, cl.y, cl.z,
@@ -1314,9 +1313,7 @@ export function createPalletJackController(deps = {}) {
               { forkOffset: PALLET_JACK_SPECS.cargoCenterY, maxDist: 0.90 }
             );
             if (entryCand) {
-              const candKey = entryCand.target.palletSize === "half"
-                ? `${entryCand.target.slotIndex}:${entryCand.target.subSlot}`
-                : `${entryCand.target.slotIndex}`;
+              const candKey = `${entryCand.target.slotIndex}`;
               const box = boxes.find((b) => b.slotKey === candKey);
               if (box) {
                 const fwdDist = (box.x - loc.x) * lfx + (box.y - loc.y) * lfy;
@@ -1352,24 +1349,24 @@ export function createPalletJackController(deps = {}) {
           const crossedWall = pushed.x > maxInsideX || pushed.x < -maxInsideX || pushed.y > maxInsideY;
           let revertedToPrev = false;
 
-          if (nearInterior && crossedWall) {
+          const isClearOfAll = (cx0, cy0) => {
+            if (cx0 < -maxInsideX - 1e-6 || cx0 > maxInsideX + 1e-6 || cy0 > maxInsideY + 1e-6) return false;
+            for (let j = 0; j < boxes.length; j++) {
+              const ob = boxes[j];
+              if (!ob || (ignoreSlotKey && ob.slotKey === ignoreSlotKey)) continue;
+              const ocx = clamp(cx0, ob.x0, ob.x1);
+              const ocy = clamp(cy0, ob.y0, ob.y1);
+              const odx = cx0 - ocx;
+              const ody = cy0 - ocy;
+              if (odx * odx + ody * ody < rHull * rHull - 1e-5) return false;
+            }
+            return true;
+          };
+
+          if (nearInterior && (crossedWall || (pushed.hit && !isClearOfAll(pushed.x, pushed.y)))) {
             pushed.x = clamp(pushed.x, -maxInsideX, maxInsideX);
             pushed.y = Math.min(pushed.y, maxInsideY);
             pushed.hit = true;
-
-            const isClearOfAll = (cx0, cy0) => {
-              if (cx0 < -maxInsideX - 1e-6 || cx0 > maxInsideX + 1e-6 || cy0 > maxInsideY + 1e-6) return false;
-              for (let j = 0; j < boxes.length; j++) {
-                const ob = boxes[j];
-                if (!ob || (ignoreSlotKey && ob.slotKey === ignoreSlotKey)) continue;
-                const ocx = clamp(cx0, ob.x0, ob.x1);
-                const ocy = clamp(cy0, ob.y0, ob.y1);
-                const odx = cx0 - ocx;
-                const ody = cy0 - ocy;
-                if (odx * odx + ody * ody < rHull * rHull - 1e-5) return false;
-              }
-              return true;
-            };
 
             if (!isClearOfAll(pushed.x, pushed.y)) {
               const xEdges = [pushed.x, -maxInsideX, maxInsideX];
@@ -1563,17 +1560,16 @@ export function createPalletJackController(deps = {}) {
       let hlState = null;
 
       if (st.carriedWcid) {
-        const pSize = (st.carriedPalletSize === 1 || HALF_PALLET_WCIDS.has(st.carriedWcid)) ? "half" : "full";
-        const load = computeReachableLoadSlots(nearbyC.kind, nearbyC.slots, pSize);
+        const load = computeReachableLoadSlots(nearbyC.kind, nearbyC.slots, "full");
         if (load.reachable.length > 0) {
           const top = load.reachable[0];
           slotIdx = top.slotIndex;
-          subArg = pSize === "half" ? top.subSlot : null;
+          subArg = null;
           hlState = "target";
         } else if (load.blocked.length > 0) {
           const blk = load.blocked[0];
           slotIdx = blk.slotIndex;
-          subArg = pSize === "half" ? blk.subSlot : null;
+          subArg = null;
           hlState = "blocked";
         }
       } else {
@@ -1586,12 +1582,12 @@ export function createPalletJackController(deps = {}) {
         );
         if (near) {
           slotIdx = near.target.slotIndex;
-          subArg = near.target.palletSize === "half" ? near.target.subSlot : null;
+          subArg = null;
           hlState = near.target.reachable === false ? "blocked" : (near.canEngage ? "target" : "reachable");
         } else if (unload.reachable.length > 0) {
           const shallow = unload.reachable[0];
           slotIdx = shallow.slotIndex;
-          subArg = shallow.palletSize === "half" ? shallow.subSlot : null;
+          subArg = null;
           hlState = "reachable";
         }
       }
@@ -1612,7 +1608,7 @@ export function createPalletJackController(deps = {}) {
     }
 
     // 10. Camera + wheel roll audio + OSD
-    if (act.camera && act.camera.owned) {
+    if (act.camera && act.camera.owned && !live?.cameraSwitcher?._camDebugParked) {
       const cam = computeWalkBehindCamera(st, opPose, act.viewMode, ground, stepDt, act.camState);
       try { act.camera.write(cam); } catch (_) {}
     }

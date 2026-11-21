@@ -616,6 +616,7 @@ export function createCameraOwner(deps = {}) {
       state.prevPosition = typeof cs.positionCamera === "function" ? cs.positionCamera : null;
       const prev = state.prevPosition;
       const wrapper = function filmPositionCamera(dt) {
+        if (cs._camDebugParked) return undefined;
         if (state.owned && state.wrapper === wrapper) {
           if (state.pose && state.camera) {
             applyTransform(state.camera, state.pose);

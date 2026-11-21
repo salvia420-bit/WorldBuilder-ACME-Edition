@@ -60,7 +60,7 @@ export async function runTier4(collector) {
         const surf = env.live.sessionHandle.probeContainerSurface(c.x, c.y, c.z + 1.5);
         assert(surf && Math.abs(surf.z - (c.z + 0.162)) < 1e-4, "Walkable container floor on Dericost");
         sim.palletJackAction(pjGuid, PALLET_JACK_ACTION_KIND.Grab);
-        assert(sim.palletJackAction(pjGuid, PALLET_JACK_ACTION_KIND.PickContainerSlot, { targetGuid: cGuid, slotIndex: 20 }).ok, "Unloaded generator on Dericost");
+        assert(sim.palletJackAction(pjGuid, PALLET_JACK_ACTION_KIND.PickContainerSlot, { targetGuid: cGuid, slotIndex: 19 }).ok, "Unloaded generator on Dericost");
         assert(sim.palletJackAction(pjGuid, PALLET_JACK_ACTION_KIND.DropToGround).ok, "Dropped generator on Dericost");
         assert(sim.palletJackAction(pjGuid, PALLET_JACK_ACTION_KIND.Release).ok, "Released jack");
         assert(sim.trailerAction(trGuid, TRAILER_ACTION_KIND.StowPalletJack).ok, "Re-stowed jack on rack");
@@ -214,7 +214,7 @@ export async function runTier4(collector) {
       const cGuid = await live.waitUntil(async () => await live.evalInPage(`return window.__vehicles.containers.list()[0]?.guid || 0;`), 8000, 200, "fob20");
       await live.sendChat(`@container doors 0x${(cGuid >>> 0).toString(16)} open`);
       await live.waitUntil(async () => ((await live.getContainer(cGuid))?.doorProgress ?? 0) >= 0.9, 6000, 150, "open");
-      await live.sendChatAndWait(`@container unpack 0x${(cGuid >>> 0).toString(16)} 6`, /unpacked/i, 8000);
+      await live.sendChatAndWait(`@container unpack 0x${(cGuid >>> 0).toString(16)} 8`, /unpacked/i, 8000);
       const gen = await live.waitUntil(async () => await live.evalInPage(`return window.__vehicles.deployables.list().find((d) => d.wcid === 4000012)?.guid || 0;`), 8000, 200, "gen");
       await live.sendChatAndWait(`@deployable fuel 0x${(gen >>> 0).toString(16)} 5`, /refueled/i, 8000);
       await live.evalInPage(`

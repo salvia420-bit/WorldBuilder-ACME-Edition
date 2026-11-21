@@ -33,7 +33,7 @@ export const PALLET_JACK_SPECS = Object.freeze({
   forkTipY: 0.80,
   loadAxleY: 0.66,
   steerPivotY: -0.52,
-  cargoCenterY: 0.225,
+  cargoCenterY: 0.250,
 });
 
 export const manifest = Object.freeze({
@@ -45,8 +45,6 @@ export const manifest = Object.freeze({
   reads: Object.freeze(["geometry", "serverPose", "clock"]),
   writes: Object.freeze(["renderTransform", "partTransform"]),
 });
-
-const HALF_PALLET_WCIDS = new Set([4000013, 4000015, 4000016, 4000017]);
 
 function clamp(v, lo, hi) {
   return v < lo ? lo : v > hi ? hi : v;
@@ -147,13 +145,18 @@ export function buildPalletJack(three, options = {}) {
     forkParts.push(box(t, S.forkWidth, fkBodyLen, fkThick * 0.65, yellowHex, cx, fkBodyCenterY, -fkThick * 0.325));
     // Lower dark steel channel skirt
     forkParts.push(box(t, S.forkWidth - 0.016, fkBodyLen - 0.04, fkThick * 0.35, darkSteelHex, cx, fkBodyCenterY, -fkThick * 0.825));
-    // Beveled pallet-entry wedge tip (y in [+0.74, +0.80])
-    forkParts.push(box(t, S.forkWidth * 0.92, 0.06, fkThick * 0.45, yellowHex, cx, S.forkTipY - 0.03, -fkThick * 0.30, { rx: 0.14 }));
+    // Beveled pallet-entry wedge tip (y in [+0.74, +0.80]), sloping downward toward +Y so max Z <= 0
+    forkParts.push(box(t, S.forkWidth * 0.92, 0.045, fkThick * 0.45, yellowHex, cx, S.forkTipY - 0.037, -fkThick * 0.30, { rx: -0.14 }));
+    forkParts.push(box(t, S.forkWidth * 0.78, 0.025, fkThick * 0.24, darkSteelHex, cx, S.forkTipY - 0.013, -fkThick * 0.48, { rx: -0.26 }));
   }
-  // Rear cross-bridge & vertical load backrest apron (stays within y >= -0.35 for exact 1.150 m fork span)
+  // Rear cross-bridge & vertical load backrest apron with guard ribs (y in [-0.35, -0.305])
   forkParts.push(box(t, S.forkSpread - 0.02, 0.05, 0.07, yellowHex, 0, S.forkHeelY + 0.025, 0.01));
   forkParts.push(box(t, S.forkSpread - 0.04, 0.04, 0.30, darkSteelHex, 0, S.forkHeelY + 0.02, 0.17));
   forkParts.push(box(t, 0.18, 0.05, 0.24, yellowHex, 0, S.forkHeelY + 0.025, 0.15));
+  forkParts.push(box(t, S.forkSpread - 0.04, 0.028, 0.026, yellowHex, 0, S.forkHeelY + 0.02, 0.33));
+  for (const sx of [-1, 1]) {
+    forkParts.push(box(t, 0.022, 0.028, 0.26, darkSteelHex, sx * 0.21, S.forkHeelY + 0.02, 0.19));
+  }
 
   const forksMat = mat(t, { roughness: 0.45, metalness: 0.50 }, options.csmState);
   const forksMesh = new t.Mesh(merge(t, forkParts), forksMat);
@@ -202,8 +205,14 @@ export function buildPalletJack(three, options = {}) {
   const steerYokeParts = [
     // Safety yellow hydraulic pump cylinder housing
     cylZ(t, 0.075, 0.24, yellowHex, 0, 0, 0.32, 16),
+    // Hydraulic oil sight-cap & filler collar on pump shoulder
+    cylZ(t, 0.020, 0.024, darkSteelHex, 0.045, 0.045, 0.445, 10),
+    cylZ(t, 0.014, 0.012, 0xd49420, 0.045, 0.045, 0.458, 10),
     // Dark steel valve manifold block
     box(t, 0.17, 0.16, 0.10, darkSteelHex, 0, 0, 0.22),
+    // Foot-release lowering pedal on rear manifold
+    box(t, 0.060, 0.060, 0.018, darkSteelHex, -0.055, -0.095, 0.175, { rx: 0.18 }),
+    box(t, 0.052, 0.036, 0.016, triggerRedHex, -0.055, -0.118, 0.182, { rx: 0.18 }),
     // Steer axle & fork yoke
     cylX(t, 0.022, 0.20, darkSteelHex, 0, 0, 0.090, 10),
     box(t, 0.10, 0.09, 0.11, darkSteelHex, 0, 0, 0.14),
@@ -292,8 +301,7 @@ export function buildPalletJack(three, options = {}) {
     } else if (nextWcid >= 4000010 && nextWcid <= 4000017) {
       model = buildDeployable(t, nextWcid, { stowed: true, csmState: options.csmState });
     } else {
-      const palletSize = HALF_PALLET_WCIDS.has(nextWcid) ? "half" : "full";
-      model = buildPallet(t, palletSize, { csmState: options.csmState });
+      model = buildPallet(t, "standard", { stowed: true, csmState: options.csmState });
     }
     if (model?.root) {
       model.root.position.set(0, 0, 0);
@@ -311,6 +319,8 @@ export function buildPalletJack(three, options = {}) {
       forkHeightM = clamp(rawH, S.forkLoweredZ, S.forkRaisedZ);
     }
     forksGroup.position.z = forkHeightM;
+    const DECK_UNDERSIDE_Z = 0.123;
+    cargoMount.position.set(0, S.cargoCenterY, Math.max(-forkHeightM, -DECK_UNDERSIDE_Z));
     pistonMesh.position.z = (forkHeightM - S.forkLoweredZ) * 0.75;
 
     if (s.stowed !== undefined) {

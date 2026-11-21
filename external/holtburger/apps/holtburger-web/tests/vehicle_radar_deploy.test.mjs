@@ -137,20 +137,20 @@ try {
       const root = new three.Group();
       root.name = "deployed-radar-station";
 
-      const palletGeom = new three.BoxGeometry(1.2192, 1.0160, 0.1397);
+      const palletGeom = new three.BoxGeometry(1.100, 1.100, 0.145);
       const palletMesh = new three.Mesh(palletGeom, new three.MeshStandardMaterial({ color: 0xffffff, vertexColors: false, roughness: 0.68, metalness: 0.16 }));
-      palletMesh.position.set(0, 0, 0.1397 / 2);
+      palletMesh.position.set(0, 0, 0.145 / 2);
       root.add(palletMesh);
       const pallet = {
         root: palletMesh,
         mesh: palletMesh,
-        spec: { width: 1.2192, depth: 1.0160, height: 0.1397 },
-        size: "full",
+        spec: { width: 1.100, depth: 1.100, height: 0.145 },
+        size: "standard",
         dispose() { palletGeom.dispose(); palletMesh.material.dispose(); },
       };
 
       const isStowed = Boolean(options.stowed);
-      const deckZ = 0.1397;
+      const deckZ = 0.145;
       const mastHeight = isStowed ? 1.80 : RADAR_SPECS.mastHeightM;
 
       const matSteel = new three.MeshStandardMaterial({ color: 0x4a5234, roughness: 0.55, metalness: 0.45 });
@@ -367,23 +367,33 @@ await check("T1.2 C2S 0x0909 VehicleCargo: Valid On-Foot Pack", () => {
   assert(res.eventKind === 14, "emits CargoPacked event");
 });
 
-await check("T1.3 Deployed Radar 3D Model: Draw Calls Budget (<= 8 draw calls) & Full GMA Pallet Integration", () => {
-  const radar = RD.buildDeployedRadar(THREE);
+await check("T1.3 Deployed Radar 3D Model: Draw Calls <= 8, Unified Pallet, Strict Stowed Envelope & Delta", () => {
+  const radar = RD.buildDeployedRadar(THREE, { stowed: false });
   assert(radar && radar.root, "radar root created");
   assert(radar.pallet, "radar mounted directly atop pallet");
   assert(radar.palletSize === "full", "radar palletSize is full");
+  assert(radar.pallet.spec.width === 1.100 && radar.pallet.spec.depth === 1.100, "radar unified 1.100×1.100m pallet");
   let drawCalls = 0;
   radar.root.traverse((obj) => {
-    if (obj.isMesh || obj.isLine || obj.isPoints) drawCalls++;
+    if (obj.visible && (obj.isMesh || obj.isLine || obj.isPoints)) drawCalls++;
   });
   assert(drawCalls <= RADAR_SPECS.maxDrawCalls, `draw calls ${drawCalls} <= 8`);
   assert(drawCalls >= 4, `draw calls ${drawCalls} >= 4 (substantive geometry)`);
+  radar.root.updateMatrixWorld(true);
+  const deployBox = new THREE.Box3().setFromObject(radar.root);
+  const deploySpanX = deployBox.max.x - deployBox.min.x;
+  assert(deploySpanX >= 1.50, `deployed parabolic dish span ${deploySpanX.toFixed(3)}m >= 1.50m`);
   radar.dispose();
 
   const stowed = RD.buildDeployedRadar(THREE, { stowed: true });
+  stowed.root.updateMatrixWorld(true);
   const box = new THREE.Box3().setFromObject(stowed.root);
   const stowedH = box.max.z - box.min.z;
-  assert(stowedH <= 2.10, `radar stowed height ${stowedH} <= 2.10m`);
+  assert(box.min.x >= -0.555 && box.max.x <= 0.555, `radar stowed X [${box.min.x.toFixed(4)}, ${box.max.x.toFixed(4)}] within ±0.555`);
+  assert(box.min.y >= -0.555 && box.max.y <= 0.555, `radar stowed Y [${box.min.y.toFixed(4)}, ${box.max.y.toFixed(4)}] within ±0.555`);
+  assert(box.min.z >= -1e-4 && box.max.z <= 2.04, `radar stowed Z [${box.min.z.toFixed(4)}, ${box.max.z.toFixed(4)}] <= 2.04m`);
+  assert(stowedH <= 2.04, `radar stowed height ${stowedH.toFixed(4)} <= 2.04m`);
+  assert(deployBox.max.z - box.max.z > 0.5, "stowed mast collapses significantly vs deployed");
   stowed.dispose();
 });
 
@@ -478,6 +488,12 @@ await check("T1.10 IFF Resolution: Monarch, Fellowship, and GuildRadarPolicy", (
   // Unlisted -> Hostile
   const pForeign = { monarchId: 0x9999, monarchName: "Unknown Guild" };
   assert(RD.resolveIffStanding(pForeign, radarOwner, policy) === IFF_STANDING.Hostile, "unlisted defaults to hostile");
+
+  // Prototype property keys (e.g. "toString", "constructor", "valueOf") must never leak prototype functions
+  for (const protoKey of ["toString", "constructor", "valueOf", "hasOwnProperty"]) {
+    const res = RD.resolveIffStanding({ monarchId: protoKey }, { monarchId: 1 }, { byId: {} });
+    assert(typeof res === "number" && res === IFF_STANDING.Hostile, `prototype key "${protoKey}" returns IFF_STANDING.Hostile (got ${typeof res} ${res})`);
+  }
 });
 
 await check("T1.11 S2C 0x090A VehicleRadarContacts Wire Packing", () => {
@@ -876,6 +892,182 @@ await check("T5.6 RadarScopeHud.update() clears legacy this.contacts when airCon
   assert(fillCount === 3, `subsequent update omitting airContacts must not resurrect contacts, got ${fillCount}`);
 
   hud.dispose();
+});
+
+await check("T5.7 Radar Math NaN/Undefined Guards & 4000002 setDeployed()", () => {
+  // 1. isTargetDetected guards
+  assert(RD.isTargetDetected([0, 0, 0], { pos: [100, 0, 0], altitudeAgl: NaN, locomotion: 1 }) === false, "NaN altitudeAgl rejected");
+  assert(RD.isTargetDetected([0, 0, 0], { pos: [100, 0, 0], locomotion: 1 }) === false, "undefined altitudeAgl rejected");
+  assert(RD.isTargetDetected([0, 0, 0], { pos: [NaN, 0, 0], altitudeAgl: 100, locomotion: 1 }) === false, "NaN target pos rejected");
+  assert(RD.isTargetDetected([NaN, 0, 0], { pos: [100, 0, 0], altitudeAgl: 100, locomotion: 1 }) === false, "NaN radar pos rejected");
+
+  // 2. computeEarthSagittaDrop & checkRadarLos guards
+  assert(RD.computeEarthSagittaDrop(NaN, 100) === 0, "NaN sagitta s returns 0");
+  assert(RD.computeEarthSagittaDrop(50, Infinity) === 0, "Infinity sagitta D returns 0");
+  assert(RD.checkRadarLos([0, 0, 0], [1000, 0, 100], () => NaN) === false, "NaN terrain height rejected");
+  assert(RD.checkRadarLos([0, 0, 0], [NaN, 0, 100], () => 0) === false, "NaN targetPos LOS rejected");
+  assert(RD.checkRadarLos([0, NaN, 0], [1000, 0, 100], () => 0) === false, "NaN radarPos LOS rejected");
+
+  // 3. encodeRadarContactsPacket sanitization
+  const pkt = RD.encodeRadarContactsPacket(0x80099001, [
+    { guid: 1, dx: NaN, dy: Infinity, altAgl: undefined, heading: NaN, standing: NaN, speed: -Infinity },
+  ]);
+  const c = pkt.contacts[0];
+  assert(Number.isFinite(c.dx) && c.dx === 0, "NaN dx sanitized to 0");
+  assert(Number.isFinite(c.dy) && c.dy === 0, "Infinity dy sanitized to 0");
+  assert(Number.isFinite(c.altAgl) && c.altAgl === 0, "undefined altAgl sanitized to 0");
+  assert(Number.isFinite(c.heading) && c.heading === 0, "NaN heading sanitized to 0");
+  assert(Number.isFinite(c.speed) && c.speed === 0, "-Infinity speed sanitized to 0");
+  assert(Number.isFinite(c.standing), "NaN standing sanitized to finite");
+
+  // 4. unit.setDeployed() on 4000002
+  const radar = RD.buildDeployedRadar(THREE, { stowed: true });
+  assert(typeof radar.setDeployed === "function", "4000002 exposes setDeployed");
+  assert(radar.stowed === true, "starts stowed");
+  radar.setDeployed(true);
+  assert(radar.stowed === false, "setDeployed(true) deploys radar");
+  radar.setDeployed(false);
+  assert(radar.stowed === true, "setDeployed(false) stows radar");
+  radar.dispose();
+});
+
+await check("T5.8 4000002 3D SAT Tri-Tri Zero Non-Shaft/Non-Hinge Intersections (Stowed & Deployed)", () => {
+  const getWorldTris = (mesh) => {
+    const geom = mesh.geometry;
+    const pos = geom.attributes.position;
+    const idx = geom.index;
+    const mat = mesh.matrixWorld;
+    const tris = [];
+    const v = new THREE.Vector3();
+    const readV = (i) => {
+      v.fromBufferAttribute(pos, i).applyMatrix4(mat);
+      return [v.x, v.y, v.z];
+    };
+    const count = idx ? idx.count : pos.count;
+    for (let i = 0; i < count; i += 3) {
+      tris.push([
+        readV(idx ? idx.getX(i) : i),
+        readV(idx ? idx.getX(i + 1) : i + 1),
+        readV(idx ? idx.getX(i + 2) : i + 2),
+      ]);
+    }
+    return tris;
+  };
+  const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+  const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+  const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+  const triBbox = (t) => [
+    Math.min(t[0][0], t[1][0], t[2][0]), Math.min(t[0][1], t[1][1], t[2][1]), Math.min(t[0][2], t[1][2], t[2][2]),
+    Math.max(t[0][0], t[1][0], t[2][0]), Math.max(t[0][1], t[1][1], t[2][1]), Math.max(t[0][2], t[1][2], t[2][2]),
+  ];
+  const axisOverlap = (t1, t2, axis) => {
+    const len2 = dot(axis, axis);
+    if (len2 < 1e-16) return true;
+    let min1 = Infinity, max1 = -Infinity, min2 = Infinity, max2 = -Infinity;
+    for (let i = 0; i < 3; i++) {
+      const p1 = dot(t1[i], axis); if (p1 < min1) min1 = p1; if (p1 > max1) max1 = p1;
+      const p2 = dot(t2[i], axis); if (p2 < min2) min2 = p2; if (p2 > max2) max2 = p2;
+    }
+    const eps = 1e-6 * Math.sqrt(len2);
+    return max1 >= min2 + eps && max2 >= min1 + eps;
+  };
+  const triTriHit = (t1, t2) => {
+    const e1 = [sub(t1[1], t1[0]), sub(t1[2], t1[1]), sub(t1[0], t1[2])];
+    const e2 = [sub(t2[1], t2[0]), sub(t2[2], t2[1]), sub(t2[0], t2[2])];
+    if (!axisOverlap(t1, t2, cross(e1[0], e1[1]))) return false;
+    if (!axisOverlap(t1, t2, cross(e2[0], e2[1]))) return false;
+    for (let i = 0; i < 3; i++) {
+      for (let j = 0; j < 3; j++) {
+        if (!axisOverlap(t1, t2, cross(e1[i], e2[j]))) return false;
+      }
+    }
+    return true;
+  };
+  const countHits = (trisA, trisB, allowPair = null) => {
+    const bbsB = trisB.map(triBbox);
+    let hits = 0;
+    for (let i = 0; i < trisA.length; i++) {
+      const ba = triBbox(trisA[i]);
+      for (let j = 0; j < trisB.length; j++) {
+        const bb = bbsB[j];
+        if (ba[3] < bb[0] || ba[0] > bb[3] || ba[4] < bb[1] || ba[1] > bb[4] || ba[5] < bb[2] || ba[2] > bb[5]) continue;
+        if (triTriHit(trisA[i], trisB[j])) {
+          if (!allowPair || !allowPair(trisA[i], trisB[j])) hits++;
+        }
+      }
+    }
+    return hits;
+  };
+
+  const isStage3Shaft = (_tA, tB) => Math.max(
+    Math.hypot(tB[0][0], tB[0][1]),
+    Math.hypot(tB[1][0], tB[1][1]),
+    Math.hypot(tB[2][0], tB[2][1]),
+  ) <= 0.046;
+
+  const assertRadarPoseClean = (label, radar) => {
+    radar.root.updateMatrixWorld(true);
+    const meshes = {};
+    radar.root.traverse((obj) => { if (obj.isMesh) meshes[obj.name] = obj; });
+    const tripodTris = getWorldTris(meshes["radar-tripod-cabinet"]);
+    const mastTris = getWorldTris(meshes["radar-mast"]);
+    const dishTris = getWorldTris(meshes["parabolic-dish-reflector"]);
+    const leftTris = getWorldTris(meshes["parabolic-dish-left-wing"]);
+    const rightTris = getWorldTris(meshes["parabolic-dish-right-wing"]);
+
+    const dishInv = radar.dishPivot.matrixWorld.clone().invert();
+    const tmp = new THREE.Vector3();
+    const isHingeEdge = (tri, hingeX) => {
+      let minDistX = Infinity;
+      for (const p of tri) {
+        tmp.set(p[0], p[1], p[2]).applyMatrix4(dishInv);
+        const d = Math.abs(tmp.x - hingeX);
+        if (d < minDistX) minDistX = d;
+      }
+      return minDistX <= 0.020;
+    };
+
+    assert(countHits(tripodTris, dishTris, isStage3Shaft) === 0, `${label}: tripod vs dish non-shaft hits === 0`);
+    assert(countHits(mastTris, dishTris, isStage3Shaft) === 0, `${label}: mast vs dish non-shaft hits === 0`);
+    assert(countHits(tripodTris, leftTris) === 0, `${label}: tripod vs leftWing hits === 0`);
+    assert(countHits(tripodTris, rightTris) === 0, `${label}: tripod vs rightWing hits === 0`);
+    assert(countHits(mastTris, leftTris) === 0, `${label}: mast vs leftWing hits === 0`);
+    assert(countHits(mastTris, rightTris) === 0, `${label}: mast vs rightWing hits === 0`);
+    assert(
+      countHits(dishTris, leftTris, (ta, tb) => isHingeEdge(ta, -0.35) && isHingeEdge(tb, -0.35)) === 0,
+      `${label}: dish vs leftWing non-hinge hits === 0`,
+    );
+    assert(
+      countHits(dishTris, rightTris, (ta, tb) => isHingeEdge(ta, 0.35) && isHingeEdge(tb, 0.35)) === 0,
+      `${label}: dish vs rightWing non-hinge hits === 0`,
+    );
+    assert(countHits(leftTris, rightTris) === 0, `${label}: leftWing vs rightWing hits === 0`);
+  };
+
+  // 1. Constructor stowed
+  const rCtorStowed = RD.buildDeployedRadar(THREE, { stowed: true });
+  assertRadarPoseClean("ctorStowed", rCtorStowed);
+  rCtorStowed.dispose();
+
+  // 2. Deployed -> rotated -> setStowed(true) & setDeployed(false)
+  const rDyn = RD.buildDeployedRadar(THREE, { stowed: false });
+  rDyn.update(1.3);
+  rDyn.setStowed(true);
+  assertRadarPoseClean("setStowed(true)", rDyn);
+
+  rDyn.setDeployed(true);
+  rDyn.update(2.1);
+  rDyn.setDeployed(false);
+  assertRadarPoseClean("setDeployed(false)", rDyn);
+
+  // 3. Deployed across full rotation cycle
+  rDyn.setDeployed(true);
+  for (let i = 0; i < 8; i++) {
+    const t = (i / 8) * 4.0;
+    rDyn.update(t);
+    assertRadarPoseClean(`deployed(t=${t.toFixed(2)})`, rDyn);
+  }
+  rDyn.dispose();
 });
 
 // ---------------------------------------------------------------------------

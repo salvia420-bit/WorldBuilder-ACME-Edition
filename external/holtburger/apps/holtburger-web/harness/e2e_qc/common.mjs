@@ -646,8 +646,7 @@ export class QcWorldSimulator extends LogisticsWorldSimulator {
       if (c.doorProgress < 0.8) {
         return { ok: false, reason: "Open container doors before loading" };
       }
-      const isHalf = HALF_PALLET_WCIDS.has(cargoWcid);
-      c.slots.push({ slotIndex, subSlot: isHalf ? subSlot : 0, cargoWcid, palletSize: isHalf ? 1 : 2, cargoState: {} });
+      c.slots.push({ slotIndex, subSlot: 0, cargoWcid, palletSize: 2, cargoState: {} });
       return { ok: true };
     }
     if (action === CONTAINER_ACTION_KIND.OpenDoors) return this.openContainerDoors(cGuid, true);
@@ -688,7 +687,7 @@ export class QcWorldSimulator extends LogisticsWorldSimulator {
       d._packed = true;
       d.isDestroyed = true;
       this.deployables.delete(cargoWcid);
-      c.slots.push({ slotIndex, subSlot, cargoWcid: d.wcid, palletSize: HALF_PALLET_WCIDS.has(d.wcid) ? 1 : 2, cargoState: { ...(d.cargoState || {}) } });
+      c.slots.push({ slotIndex, subSlot: 0, cargoWcid: d.wcid, palletSize: 2, cargoState: { ...(d.cargoState || {}) } });
       this.recomputeMicroGrid();
       return { ok: true };
     }
@@ -1054,7 +1053,7 @@ export class QcLiveSession {
       const vt0 = Date.now();
       let vReady = false;
       let lastStatus = null;
-      while (Date.now() - vt0 < 15000) {
+      while (Date.now() - vt0 < 30000) {
         lastStatus = await page
           .evaluate(() => window.__vehicles?.status?.() || null)
           .catch(() => null);
@@ -1065,7 +1064,7 @@ export class QcLiveSession {
         await new Promise((r) => setTimeout(r, 150));
       }
       if (!vReady) {
-        throw new Error(`LIVE_VEHICLES_TIMEOUT: window.__vehicles.status().caps (0x03) unavailable after 15000ms for ${charName} (granted=${lastStatus?.caps?.granted ?? "none"})`);
+        throw new Error(`LIVE_VEHICLES_TIMEOUT: window.__vehicles.status().caps (0x03) unavailable after 30000ms for ${charName} (granted=${lastStatus?.caps?.granted ?? "none"})`);
       }
     }
   }

@@ -1,11 +1,12 @@
 // tests/e2e_deployables_opaque.test.mjs — Comprehensive 5-Tier Opaque-Box E2E Test Suite
-// for the 8-Unit Modular Full-Pallet / Half-Pallet Deployable Ecosystem
+// for the 8-Unit Unified ISO 6780 Pallet Deployable Ecosystem
 // Conforming to TEST_INFRA.md, PROJECT.md, and ORIGINAL_REQUEST.md.
 //
 // Invariants verified:
-// - Standardized Industrial Pallets: Full (1.2192m x 1.0160m) vs Half (0.6096m x 1.0160m), side-by-side x = ±0.3048m
-// - 8 Procedural Deployables (WCID 4000010-4000017): draw calls <= 10 per unit, lightCountDelta === 0, zero THREE.Light
-// - Jeep Bed Dual-Slot Mounting: cargoCrateGroup & state.cargoLoaded backward compatibility
+// - Unified ISO 6780 Standard Pallet: 1.100m x 1.100m x 0.145m (deckUndersideZ = 0.123m, tunnelMinZ = 0.018m)
+// - 8 Procedural Deployables (WCID 4000010-4000017): draw calls <= 10 per unit, lightCountDelta === 0, zero THREE.Light,
+//   stowed envelope |x|,|y| <= 0.550m, 0 <= z <= 2.05m
+// - Jeep Bed Unified Pallet Mounting: cargoCrateGroup & state.cargoLoaded backward compatibility
 // - Zero-Light Pooled VFX: SAM trails, mortar shockwave/green smoke/2 bounces, hitscan red laser
 // - Combined Radar Scope HUD: 15 RPM Air vs 30 RPM Ground sweeps, symbology, Canvas2D drawing
 //
@@ -45,25 +46,19 @@ const near = (a, b, eps = 1e-4, m = "near") => {
 // ---------------------------------------------------------------------------
 export const PALLET_SPECS = Object.freeze({
   full: Object.freeze({
-    width: 1.2192,
-    depth: 1.0160,
-    height: 0.1397,
-    slots: 2,
-    bboxMin: [-0.6096, -0.5080, 0.0],
-    bboxMax: [0.6096, 0.5080, 0.1397],
-  }),
-  half: Object.freeze({
-    width: 0.6096,
-    depth: 1.0160,
-    height: 0.1397,
+    width: 1.100,
+    depth: 1.100,
+    height: 0.145,
+    deckUndersideZ: 0.123,
+    tunnelMinZ: 0.018,
     slots: 1,
-    bboxMin: [-0.3048, -0.5080, 0.0],
-    bboxMax: [0.3048, 0.5080, 0.1397],
+    bboxMin: [-0.550, -0.550, 0.0],
+    bboxMax: [0.550, 0.550, 0.145],
   }),
   mountOffsets: Object.freeze({
     fullBed: [0.0, -1.15, 0.72],
-    halfSlot0: [-0.3048, -1.15, 0.72],
-    halfSlot1: [0.3048, -1.15, 0.72],
+    containerLeftX: -0.575,
+    containerRightX: +0.575,
   }),
 });
 
@@ -137,12 +132,14 @@ try {
 // 1. Procedural Pallet Builder
 export function buildPallet(three, size = "full") {
   const t = three || THREE;
-  const spec = size === "half" ? PALLET_SPECS.half : PALLET_SPECS.full;
+  if (DM_MODULE && typeof DM_MODULE.buildPallet === "function") {
+    return DM_MODULE.buildPallet(t, size);
+  }
+  const spec = PALLET_SPECS.full;
   const root = new t.Group();
-  root.name = `pallet-${size}-root`;
+  root.name = `pallet-full-root`;
 
-  // Standard industrial pallet: bottom skids, stringers, top deck with fork pockets
-  // Merged into 1 single BufferGeometry for GTX 1070 draw call ceiling (1 draw call)
+  // Merged into 1 single BufferGeometry for fallback
   const geom = new t.BoxGeometry(spec.width, spec.depth, spec.height);
   geom.computeBoundingBox();
 
@@ -151,7 +148,7 @@ export function buildPallet(three, size = "full") {
     wireframe: false,
   });
   const mesh = new t.Mesh(geom, mat);
-  mesh.name = `pallet-${size}-deck`;
+  mesh.name = `pallet-full-deck`;
   mesh.position.set(0, 0, spec.height / 2);
   root.add(mesh);
 
@@ -159,7 +156,7 @@ export function buildPallet(three, size = "full") {
     root,
     mesh,
     spec,
-    size,
+    size: "full",
     alignToNormal(normal) {
       if (!normal || normal.lengthSq() < 1e-6) return;
       const up = new t.Vector3(0, 0, 1);
@@ -375,7 +372,7 @@ export const DeployableFactory = {
       case DEPLOYABLE_WCID.BatteryUnit: {
         const root = new t.Group();
         root.name = "battery-unit-root";
-        const pallet = buildPallet(t, "half");
+        const pallet = buildPallet(t, "full");
         root.add(pallet.root);
 
         const matFrame = new t.MeshBasicMaterial({ color: 0x2e3532 });
@@ -409,7 +406,7 @@ export const DeployableFactory = {
           root,
           socBars,
           wcid,
-          palletSize: "half",
+          palletSize: "full",
           update(state = {}) {
             const joules = state.capacitorJoules !== undefined ? state.capacitorJoules : 0;
             // 5 bars for 600 kJ (120 kJ per bar)
@@ -517,7 +514,7 @@ export const DeployableFactory = {
       case DEPLOYABLE_WCID.GroundRadar: {
         const root = new t.Group();
         root.name = "ground-radar-root";
-        const pallet = buildPallet(t, "half");
+        const pallet = buildPallet(t, "full");
         root.add(pallet.root);
 
         const matCabinet = new t.MeshBasicMaterial({ color: 0x4a5848 });
@@ -546,7 +543,7 @@ export const DeployableFactory = {
           root,
           antennaGroup,
           wcid,
-          palletSize: "half",
+          palletSize: "full",
           update(state = {}) {
             const time = state.simTimeSec || 0;
             // 30 RPM (period 2.0s): (time * 30 * 2 * PI / 60) % (2 * PI)
@@ -568,7 +565,7 @@ export const DeployableFactory = {
       case DEPLOYABLE_WCID.MortarTurret: {
         const root = new t.Group();
         root.name = "mortar-turret-root";
-        const pallet = buildPallet(t, "half");
+        const pallet = buildPallet(t, "full");
         root.add(pallet.root);
 
         const matRing = new t.MeshBasicMaterial({ color: 0x363b34 });
@@ -602,7 +599,7 @@ export const DeployableFactory = {
           cradle,
           barrel,
           wcid,
-          palletSize: "half",
+          palletSize: "full",
           update(state = {}) {
             if (state.yawRad !== undefined) carriage.rotation.z = state.yawRad;
             if (state.pitchRad !== undefined) cradle.rotation.x = state.pitchRad;
@@ -625,7 +622,7 @@ export const DeployableFactory = {
       case DEPLOYABLE_WCID.HeavyLaserTurret: {
         const root = new t.Group();
         root.name = "heavy-laser-turret-root";
-        const pallet = buildPallet(t, "half");
+        const pallet = buildPallet(t, "full");
         root.add(pallet.root);
 
         const matPedestal = new t.MeshBasicMaterial({ color: 0x2b2f2c });
@@ -663,7 +660,7 @@ export const DeployableFactory = {
           turretHead,
           barrelGimbal,
           wcid,
-          palletSize: "half",
+          palletSize: "full",
           update(state = {}) {
             if (state.yawRad !== undefined) turretHead.rotation.z = state.yawRad;
             if (state.pitchRad !== undefined) barrelGimbal.rotation.x = state.pitchRad;
@@ -982,56 +979,64 @@ export function renderCombinedRadarScope(ctx, width, height, state = {}) {
 // ---------------------------------------------------------------------------
 console.log("=== TIER 1: Feature Coverage (Suite: e2e_deployables_opaque) ===");
 
-// --- F1: Standardized Pallets Geometry (>=5 tests) ---
-await check("T1.1_PA_01 Full Pallet Dimensions & Bounding Box (1.2192m x 1.0160m x 0.1397m)", () => {
+// --- F1: Unified ISO 6780 Standard Pallet Geometry (>=5 tests) ---
+await check("T1.1_PA_01 Unified Pallet Dimensions & Bounding Box (1.100m x 1.100m x 0.145m)", () => {
   const p = buildPallet(THREE, "full");
-  assert(p.mesh.geometry.boundingBox, "bounding box computed");
+  if (typeof p.setLevelingJacks === "function") p.setLevelingJacks(false);
+  p.mesh.geometry.computeBoundingBox();
   const bbox = p.mesh.geometry.boundingBox;
-  near(bbox.max.x - bbox.min.x, PALLET_SPECS.full.width, 1e-4, "width 1.2192m");
-  near(bbox.max.y - bbox.min.y, PALLET_SPECS.full.depth, 1e-4, "depth 1.0160m");
-  near(bbox.max.z - bbox.min.z, PALLET_SPECS.full.height, 1e-4, "height 0.1397m");
+  near(bbox.max.x - bbox.min.x, PALLET_SPECS.full.width, 1e-3, "deck width 1.100m");
+  near(bbox.max.y - bbox.min.y, PALLET_SPECS.full.depth, 1e-3, "deck depth 1.100m");
+  near(bbox.max.z - bbox.min.z, PALLET_SPECS.full.height, 1e-3, "deck height 0.145m");
+  near(bbox.min.z, 0.0, 1e-3, "skid base at z = 0");
   p.dispose();
 });
 
-await check("T1.1_PA_02 Half Pallet Dimensions & Bounding Box (0.6096m x 1.0160m x 0.1397m)", () => {
+await check("T1.1_PA_02 Legacy Half Alias Normalizes to Unified ISO 6780 Pallet (1.100m x 1.100m)", () => {
   const p = buildPallet(THREE, "half");
+  if (typeof p.setLevelingJacks === "function") p.setLevelingJacks(false);
+  p.mesh.geometry.computeBoundingBox();
   const bbox = p.mesh.geometry.boundingBox;
-  near(bbox.max.x - bbox.min.x, PALLET_SPECS.half.width, 1e-4, "width 0.6096m");
-  near(bbox.max.y - bbox.min.y, PALLET_SPECS.half.depth, 1e-4, "depth 1.0160m");
-  near(bbox.max.z - bbox.min.z, PALLET_SPECS.half.height, 1e-4, "height 0.1397m");
+  near(bbox.max.x - bbox.min.x, PALLET_SPECS.full.width, 1e-3, "normalized width 1.100m");
+  near(bbox.max.y - bbox.min.y, PALLET_SPECS.full.depth, 1e-3, "normalized depth 1.100m");
+  near(bbox.max.z - bbox.min.z, PALLET_SPECS.full.height, 1e-3, "normalized height 0.145m");
+  assert(p.size === "full" || p.spec.width === 1.100, "normalized to unified full pallet spec");
   p.dispose();
 });
 
-await check("T1.1_PA_03 Side-by-Side Dual Half-Pallet Combined Footprint (x = ±0.3048m)", () => {
+await check("T1.1_PA_03 2-Wide Side-by-Side Container Grid Pallets (x = ±0.575m, zero overlap)", () => {
   const root = new THREE.Group();
-  const p0 = buildPallet(THREE, "half");
-  const p1 = buildPallet(THREE, "half");
-  p0.root.position.set(-0.3048, 0, 0);
-  p1.root.position.set(+0.3048, 0, 0);
+  const p0 = buildPallet(THREE, "full");
+  const p1 = buildPallet(THREE, "full");
+  if (typeof p0.setLevelingJacks === "function") p0.setLevelingJacks(false);
+  if (typeof p1.setLevelingJacks === "function") p1.setLevelingJacks(false);
+  p0.root.position.set(PALLET_SPECS.mountOffsets.containerLeftX, 0, 0);
+  p1.root.position.set(PALLET_SPECS.mountOffsets.containerRightX, 0, 0);
   root.add(p0.root, p1.root);
+  root.updateMatrixWorld(true);
 
-  // Slot 0 bounds: [-0.6096, 0.00]
-  // Slot 1 bounds: [0.00, +0.6096]
-  const p0Box = new THREE.Box3().setFromObject(p0.root);
-  const p1Box = new THREE.Box3().setFromObject(p1.root);
-  near(p0Box.min.x, -0.6096, 1e-4, "Slot 0 min X");
-  near(p0Box.max.x, 0.00, 1e-4, "Slot 0 max X");
-  near(p1Box.min.x, 0.00, 1e-4, "Slot 1 min X");
-  near(p1Box.max.x, +0.6096, 1e-4, "Slot 1 max X");
+  // Left slot: [-1.125, -0.025]; Right slot: [+0.025, +1.125] (0.050m center gap)
+  const p0Box = new THREE.Box3().setFromObject(p0.mesh);
+  const p1Box = new THREE.Box3().setFromObject(p1.mesh);
+  near(p0Box.min.x, -1.125, 1e-3, "Left slot min X");
+  near(p0Box.max.x, -0.025, 1e-3, "Left slot max X");
+  near(p1Box.min.x, +0.025, 1e-3, "Right slot min X");
+  near(p1Box.max.x, +1.125, 1e-3, "Right slot max X");
+  assert(p1Box.min.x - p0Box.max.x >= 0.049, "0.050m inter-pallet clearance");
 
-  // Combined envelope exactly matches full pallet
-  const combinedBox = new THREE.Box3().setFromObject(root);
-  near(combinedBox.max.x - combinedBox.min.x, 1.2192, 1e-4, "combined width 1.2192m");
-  near(combinedBox.max.y - combinedBox.min.y, 1.0160, 1e-4, "combined depth 1.0160m");
+  const combinedBox = new THREE.Box3().setFromObject(p0.mesh).union(new THREE.Box3().setFromObject(p1.mesh));
+  near(combinedBox.max.x - combinedBox.min.x, 2.250, 1e-3, "combined 2-wide width 2.250m (<= 2.352m ISO wall)");
+  near(combinedBox.max.y - combinedBox.min.y, 1.100, 1e-3, "combined depth 1.100m");
 
   p0.dispose();
   p1.dispose();
 });
 
-await check("T1.1_PA_04 Pallet Draw Call Budget (Merged BufferGeometry === 1 call)", () => {
+await check("T1.1_PA_04 Pallet Draw Call Budget (<= 2 calls incl. leveling jacks, 0 lights)", () => {
   const p = buildPallet(THREE, "full");
   const calls = countDrawCalls(p.root);
-  assert(calls === 1, `pallet must render in exactly 1 draw call, got ${calls}`);
+  assert(calls >= 1 && calls <= 2, `pallet must render in 1..2 draw calls, got ${calls}`);
+  assert(countLights(p.root) === 0, "zero THREE.Light objects");
   p.dispose();
 });
 
@@ -1166,14 +1171,14 @@ await check("T1.3_JC_01 Full Pallet Mount Offset in Jeep Bed (0, -1.15, 0.72)", 
   pallet.dispose();
 });
 
-await check("T1.3_JC_02 Dual Half-Pallet Mount Offsets in Jeep Bed (x = ±0.3048m)", () => {
-  const slot0 = buildPallet(THREE, "half");
-  const slot1 = buildPallet(THREE, "half");
-  slot0.root.position.set(...PALLET_SPECS.mountOffsets.halfSlot0);
-  slot1.root.position.set(...PALLET_SPECS.mountOffsets.halfSlot1);
+await check("T1.3_JC_02 Dual-Lane Container Grid Mount Offsets (x = ±0.575m, z = 0.162m floor)", () => {
+  const slot0 = buildPallet(THREE, "full");
+  const slot1 = buildPallet(THREE, "full");
+  slot0.root.position.set(PALLET_SPECS.mountOffsets.containerLeftX, 2.320, 0.162);
+  slot1.root.position.set(PALLET_SPECS.mountOffsets.containerRightX, 2.320, 0.162);
 
-  near(slot0.root.position.x, -0.3048, 1e-4);
-  near(slot1.root.position.x, +0.3048, 1e-4);
+  near(slot0.root.position.x, -0.575, 1e-4);
+  near(slot1.root.position.x, +0.575, 1e-4);
   near(slot0.root.position.y, slot1.root.position.y, 1e-4);
   near(slot0.root.position.z, slot1.root.position.z, 1e-4);
   slot0.dispose();
@@ -1390,21 +1395,38 @@ await check("T1.5_HUD_05 Canvas2D Context Drawing Path Verification", () => {
 // ---------------------------------------------------------------------------
 console.log("=== TIER 2: Boundary & Corner Cases (Suite: e2e_deployables_opaque) ===");
 
-await check("T2.1_BVA_01 Pallet Footprint & Height Tolerance Limits", () => {
+await check("T2.1_BVA_01 Pallet Footprint, Stowed Envelope (<=1.100m x 1.100m x 2.05m) & Unified Spec", () => {
   const full = buildPallet(THREE, "full");
-  const half = buildPallet(THREE, "half");
-
+  if (typeof full.setLevelingJacks === "function") full.setLevelingJacks(false);
+  full.mesh.geometry.computeBoundingBox();
   const fullBBox = full.mesh.geometry.boundingBox;
-  const halfBBox = half.mesh.geometry.boundingBox;
 
-  // Tolerance ±0.001m
-  near(fullBBox.max.x - fullBBox.min.x, 1.2192, 1e-3, "full pallet width within tolerance");
-  near(halfBBox.max.x - halfBBox.min.x, 0.6096, 1e-3, "half pallet width within tolerance");
-  near(fullBBox.max.z - fullBBox.min.z, 0.1397, 1e-3, "full pallet height within tolerance");
-  near(halfBBox.max.z - halfBBox.min.z, 0.1397, 1e-3, "half pallet height within tolerance");
-
+  // Tolerance ±0.001m around unified 1.100 x 1.100 x 0.145m
+  near(fullBBox.max.x - fullBBox.min.x, 1.100, 1e-3, "unified pallet width within tolerance");
+  near(fullBBox.max.y - fullBBox.min.y, 1.100, 1e-3, "unified pallet depth within tolerance");
+  near(fullBBox.max.z - fullBBox.min.z, 0.145, 1e-3, "unified pallet height within tolerance");
   full.dispose();
-  half.dispose();
+
+  for (let wcid = 4000010; wcid <= 4000017; wcid++) {
+    const unit = DeployableFactory.build(THREE, wcid);
+    assert(unit.palletSize === "full", `WCID ${wcid} must declare unified palletSize="full" (got ${unit.palletSize})`);
+    unit.update({ stowed: true, simTimeSec: 0, dt: 0, capacitorJoules: 0, ammoCount: 4 });
+    unit.root.updateMatrixWorld(true);
+    const box = new THREE.Box3().setFromObject(unit.root);
+    assert(
+      box.min.x >= -0.555 && box.max.x <= 0.555,
+      `WCID ${wcid} stowed X [${box.min.x.toFixed(4)}, ${box.max.x.toFixed(4)}] exceeds ±0.555m`
+    );
+    assert(
+      box.min.y >= -0.555 && box.max.y <= 0.555,
+      `WCID ${wcid} stowed Y [${box.min.y.toFixed(4)}, ${box.max.y.toFixed(4)}] exceeds ±0.555m`
+    );
+    assert(
+      box.min.z >= -0.01 && box.max.z <= 2.05,
+      `WCID ${wcid} stowed Z [${box.min.z.toFixed(4)}, ${box.max.z.toFixed(4)}] exceeds [0, 2.05m]`
+    );
+    unit.dispose();
+  }
 });
 
 await check("T2.2_BVA_02 Micro-Grid Wireless Volume Boundary (±75.0m vs ±75.001m)", () => {
@@ -1444,41 +1466,23 @@ await check("T2.3_BVA_03 Capacitor Energy Thresholds (0J, 119999J, 120000J, 6000
   unit.dispose();
 });
 
-await check("T2.4_BVA_04 Rapid Cargo Swapping & Mutual Exclusion", () => {
-  // State machine logic for cargo bed:
-  // 1 Full Pallet occupies both slots; rejects Half Pallet.
-  // 1 Half Pallet occupies Slot 0 or 1; allows 2nd Half Pallet; blocks Full Pallet.
-  let bedState = { fullMounted: false, slot0: false, slot1: false };
+await check("T2.4_BVA_04 Rapid Cargo Swapping & Unified Full-Only Slot Exclusion", () => {
+  // Unified ISO 6780 cargo slot accepts only 1 "full" pallet (explicitly rejects legacy "half").
+  let bedState = { fullMounted: false };
 
   const mountCargo = (kind) => {
-    if (kind === "full") {
-      if (bedState.slot0 || bedState.slot1 || bedState.fullMounted) return false;
-      bedState.fullMounted = true;
-      return true;
-    }
-    if (kind === "half0") {
-      if (bedState.fullMounted || bedState.slot0) return false;
-      bedState.slot0 = true;
-      return true;
-    }
-    if (kind === "half1") {
-      if (bedState.fullMounted || bedState.slot1) return false;
-      bedState.slot1 = true;
-      return true;
-    }
-    return false;
+    if (kind !== "full") return false;
+    if (bedState.fullMounted) return false;
+    bedState.fullMounted = true;
+    return true;
   };
 
-  assert(mountCargo("half0") === true, "mounted half0");
-  assert(mountCargo("full") === false, "full blocked when half0 mounted");
-  assert(mountCargo("half1") === true, "mounted half1 beside half0");
-  assert(mountCargo("half1") === false, "duplicate half1 blocked");
+  assert(mountCargo("half") === false, "legacy half pallet rejected");
+  assert(mountCargo("full") === true, "mounted unified full pallet");
+  assert(mountCargo("full") === false, "duplicate full pallet blocked while occupied");
 
-  // Unload half0
-  bedState.slot0 = false;
-  assert(bedState.slot1 === true, "slot1 remains mounted after slot0 unload");
-  assert(mountCargo("full") === false, "full still blocked while slot1 mounted");
-  bedState.slot1 = false;
+  // Unload full pallet -> bed accepts next full pallet
+  bedState.fullMounted = false;
   assert(mountCargo("full") === true, "full mounted once bed is completely clear");
 });
 
@@ -1503,27 +1507,24 @@ await check("T2.5_BVA_05 Degenerate HUD Canvas Dimensions (w <= 0, h <= 0, r <= 
 // ---------------------------------------------------------------------------
 console.log("=== TIER 3: Cross-Feature Combinations (Suite: e2e_deployables_opaque) ===");
 
-await check("T3.1_INT_01 Jeep High-Speed Transport + Dual Half-Pallets + Headlights", () => {
+await check("T3.1_INT_01 Jeep High-Speed Transport + Unified Full Pallet + Headlights", () => {
   const jeep = buildProceduralJeep(THREE);
-  const p0 = buildPallet(THREE, "half");
-  const p1 = buildPallet(THREE, "half");
-  p0.root.position.set(...PALLET_SPECS.mountOffsets.halfSlot0);
-  p1.root.position.set(...PALLET_SPECS.mountOffsets.halfSlot1);
-  jeep.root.add(p0.root, p1.root);
+  const p0 = buildPallet(THREE, "full");
+  p0.root.position.set(...PALLET_SPECS.mountOffsets.fullBed);
+  jeep.root.add(p0.root);
 
   // Drive at 25 m/s with 12 deg steer and headlights active
   for (let step = 0; step < 10; step++) {
     jeep.update({ dt: 0.033, speed: 25.0, steerAngle: 0.20944, headlights: true });
   }
 
-  // Draw calls: jeep <= 16 + 2 half pallets (1 each) <= 18
+  // Draw calls: jeep <= 16 + unified pallet (<= 2) <= 18
   const calls = countDrawCalls(jeep.root);
   assert(calls <= 18, `total convoy draw calls <= 18 (got ${calls})`);
-  assert(countLights(jeep.root) === 0, "zero lights with headlights and pallets");
+  assert(countLights(jeep.root) === 0, "zero lights with headlights and unified pallet");
   assert(jeep.wheelRollAngle > 0, "wheels rolled");
 
   p0.dispose();
-  p1.dispose();
 });
 
 await check("T3.2_INT_02 Air Radar Contact Cueing + Missile Turret Pneumatic Rise", () => {
@@ -1611,7 +1612,7 @@ await check("T3.5_INT_05 Combined Radar Scope Multi-Contact Interoperability", (
 console.log("=== TIER 4: Real-World Scenarios (Suite: e2e_deployables_opaque) ===");
 
 await check("T4.1_SCEN_01 Forward Operating Base (FOB) Deployment Scenario", () => {
-  // Step 1: Convoy arrives with Flux Pod (Full) and 2 Half Pallets (Battery + Ground Radar)
+  // Step 1: Convoy arrives with Flux Pod, Battery Unit, and Ground Radar on unified 1.100m pallets
   const baseCenter = [5000, 5000, 120];
   const fluxPod = DeployableFactory.build(THREE, DEPLOYABLE_WCID.FluxPod);
   fluxPod.root.position.set(...baseCenter);
