@@ -764,6 +764,7 @@ export function createPalletJackController(deps = {}) {
   const writeEntity = typeof deps.writeEntity === "function" ? deps.writeEntity : () => false;
   const nowFn = deps.nowSec ?? null;
   const cameraOwnerFactory = deps.cameraOwnerFactory ?? createCameraOwner;
+  const warehouseManager = deps.warehouseManager ?? null;
 
   let active = null; // { guid, entry, controls, camera, unsub, state, viewMode, camState, lastSentAt, lastMotionKey, pumpTimer, highlightedContainerGuid }
   let lastControls = null;
@@ -779,13 +780,18 @@ export function createPalletJackController(deps = {}) {
     } catch (_) {}
   }
 
-  function clearHighlights() {
+  function clearContainerHighlight() {
     if (!active || !active.highlightedContainerGuid) return;
     const prev = containers.get(active.highlightedContainerGuid);
     if (prev?.model && typeof prev.model.setHighlightedSlot === "function") {
       try { prev.model.setHighlightedSlot(null, null, null); } catch (_) {}
     }
     active.highlightedContainerGuid = 0;
+  }
+
+  function clearHighlights() {
+    try { warehouseManager?.clearHighlights?.(); } catch (_) {}
+    clearContainerHighlight();
   }
 
   function collectOccupiedBayBoxes(cEntry) {
@@ -1000,6 +1006,12 @@ export function createPalletJackController(deps = {}) {
           flashPrompt(`ISO 6780 LIFO: Slot ${best.target.slotIndex} blocked by slot ${best.target.blockedBySlotIndex}`, 2000);
           return true;
         }
+        st._localWarehouseCarryWcid = 0;
+        st._localWarehouseDroppedWcid = 0;
+        if (active.entry) {
+          active.entry._localWarehouseCarryWcid = 0;
+          active.entry._localWarehouseDroppedWcid = 0;
+        }
         try {
           h?.vehiclePalletJackAction?.(
             active.guid,
@@ -1014,6 +1026,15 @@ export function createPalletJackController(deps = {}) {
         } catch (_) {}
         return true;
       }
+    }
+
+    // 1b. Check warehouse lowered Lift Tables & Staging Bays
+    if (warehouseManager) {
+      try {
+        if (warehouseManager.tryJackPick?.(st, active.entry, explicit)) {
+          return true;
+        }
+      } catch (_) {}
     }
 
     // 2. Check ground deployables within GMA fork engage reach
@@ -1036,6 +1057,12 @@ export function createPalletJackController(deps = {}) {
       { forkOffset: PALLET_JACK_SPECS.cargoCenterY }
     );
     if (dBest) {
+      st._localWarehouseCarryWcid = 0;
+      st._localWarehouseDroppedWcid = 0;
+      if (active.entry) {
+        active.entry._localWarehouseCarryWcid = 0;
+        active.entry._localWarehouseDroppedWcid = 0;
+      }
       try {
         h?.vehiclePalletJackAction?.(
           active.guid,
@@ -1072,6 +1099,12 @@ export function createPalletJackController(deps = {}) {
           flashPrompt(`ISO 6780 LIFO: Target slot ${best.target.slotIndex} blocked by slot ${best.target.blockedBySlotIndex}`, 2000);
           return true;
         }
+        st._localWarehouseCarryWcid = 0;
+        st._localWarehouseDroppedWcid = 0;
+        if (active.entry) {
+          active.entry._localWarehouseCarryWcid = 0;
+          active.entry._localWarehouseDroppedWcid = 0;
+        }
         try {
           h?.vehiclePalletJackAction?.(
             active.guid,
@@ -1088,7 +1121,31 @@ export function createPalletJackController(deps = {}) {
       }
     }
 
+    // Check warehouse lowered Lift Tables & Staging Bays before ground fallback
+    if (warehouseManager) {
+      try {
+        const prevWcid = st.carriedWcid;
+        const wasLocalCarry = Boolean(st._localWarehouseCarryWcid);
+        if (warehouseManager.tryJackDrop?.(st, active.entry, explicit)) {
+          if (!active.entry?.localOnly && !wasLocalCarry && prevWcid) {
+            st._localWarehouseDroppedWcid = prevWcid;
+          }
+          if (active.entry) {
+            active.entry._localWarehouseCarryWcid = st._localWarehouseCarryWcid ?? 0;
+            active.entry._localWarehouseDroppedWcid = st._localWarehouseDroppedWcid ?? 0;
+          }
+          return true;
+        }
+      } catch (_) {}
+    }
+
     if (explicit) {
+      st._localWarehouseCarryWcid = 0;
+      st._localWarehouseDroppedWcid = 0;
+      if (active.entry) {
+        active.entry._localWarehouseCarryWcid = 0;
+        active.entry._localWarehouseDroppedWcid = 0;
+      }
       try {
         h?.vehiclePalletJackAction?.(
           active.guid,
@@ -1141,6 +1198,11 @@ export function createPalletJackController(deps = {}) {
       entry.model?.root?.position?.z ?? 0,
     ];
 
+    const localCarry = entry._localWarehouseCarryWcid ?? 0;
+    const localDropped = entry._localWarehouseDroppedWcid ?? 0;
+    const initCarryWcid = localCarry || ((localDropped && (entry.carriedWcid ?? 0) === localDropped) ? 0 : (entry.carriedWcid ?? 0));
+    const initPalletSize = localCarry ? 2 : (initCarryWcid ? (entry.carriedPalletSize ?? 0) : 0);
+
     const state = {
       x: Number.isFinite(wp[0]) ? wp[0] : 0,
       y: Number.isFinite(wp[1]) ? wp[1] : 0,
@@ -1149,9 +1211,11 @@ export function createPalletJackController(deps = {}) {
       tillerAngle: Number.isFinite(entry.tillerAngle) ? entry.tillerAngle : 0,
       forkHeightM: Number.isFinite(entry.forkHeightM) ? entry.forkHeightM : PALLET_JACK_SPECS.forkLoweredZ,
       targetForkHeightM: Number.isFinite(entry.forkHeightM) ? entry.forkHeightM : PALLET_JACK_SPECS.forkLoweredZ,
-      carriedWcid: entry.carriedWcid ?? 0,
-      carriedPalletSize: entry.carriedPalletSize ?? 0,
-      loaded: Boolean(entry.carriedWcid),
+      carriedWcid: initCarryWcid,
+      carriedPalletSize: initPalletSize,
+      loaded: Boolean(initCarryWcid),
+      _localWarehouseCarryWcid: localCarry,
+      _localWarehouseDroppedWcid: localDropped,
       speed: 0,
       surface: "terrain",
       onContainer: Boolean((entry.flags ?? 0) & 0x02),
@@ -1179,7 +1243,12 @@ export function createPalletJackController(deps = {}) {
   function stop(why = "release") {
     if (!active) return false;
     const act = active;
+    if (act.entry) {
+      act.entry._localWarehouseCarryWcid = act.state._localWarehouseCarryWcid ?? 0;
+      act.entry._localWarehouseDroppedWcid = act.state._localWarehouseDroppedWcid ?? 0;
+    }
     clearHighlights();
+    try { warehouseManager?.updatePlayerJackPose?.(null); } catch (_) {}
     active = null;
 
     try { logisticsAudio?.stopWheelRoll?.(act.guid); } catch (_) {}
@@ -1219,9 +1288,32 @@ export function createPalletJackController(deps = {}) {
       }
       if (active && active.guid === g) {
         const st = active.state;
-        st.carriedWcid = msg.carriedWcid ?? 0;
-        st.carriedPalletSize = msg.carriedPalletSize ?? 0;
+        const srvWcid = msg.carriedWcid ?? 0;
+        const echoDropped = Boolean(st._localWarehouseDroppedWcid && srvWcid === st._localWarehouseDroppedWcid);
+        if (srvWcid === 0 || echoDropped) {
+          if (srvWcid === 0) {
+            st._localWarehouseDroppedWcid = 0;
+          }
+          if (st._localWarehouseCarryWcid) {
+            st.carriedWcid = st._localWarehouseCarryWcid;
+            st.carriedPalletSize = 2;
+          } else {
+            st.carriedWcid = 0;
+            st.carriedPalletSize = echoDropped ? 0 : (msg.carriedPalletSize ?? 0);
+          }
+        } else {
+          st._localWarehouseDroppedWcid = 0;
+          st._localWarehouseCarryWcid = 0;
+          st.carriedWcid = srvWcid;
+          st.carriedPalletSize = msg.carriedPalletSize ?? 0;
+        }
         st.loaded = Boolean(st.carriedWcid);
+        if (entry) {
+          entry.carriedWcid = st.carriedWcid;
+          entry.carriedPalletSize = st.carriedPalletSize;
+          entry._localWarehouseCarryWcid = st._localWarehouseCarryWcid;
+          entry._localWarehouseDroppedWcid = st._localWarehouseDroppedWcid;
+        }
         if (Number.isFinite(msg.forkHeightM)) {
           st.targetForkHeightM = clamp(msg.forkHeightM, PALLET_JACK_SPECS.forkLoweredZ, PALLET_JACK_SPECS.forkRaisedZ);
         }
@@ -1236,8 +1328,30 @@ export function createPalletJackController(deps = {}) {
           }
         }
       }
-    } else if (active && active.guid === g) {
-      stop(dead ? "death" : "server-released");
+    } else {
+      if (active && active.guid === g) {
+        stop(dead ? "death" : "server-released");
+      }
+      if (entry) {
+        const srvWcid = msg.carriedWcid ?? 0;
+        const echoDropped = Boolean(entry._localWarehouseDroppedWcid && srvWcid === entry._localWarehouseDroppedWcid);
+        if (srvWcid === 0 || echoDropped) {
+          if (srvWcid === 0) entry._localWarehouseDroppedWcid = 0;
+          if (entry._localWarehouseCarryWcid) {
+            entry.carriedWcid = entry._localWarehouseCarryWcid;
+            entry.carriedPalletSize = 2;
+          } else if (echoDropped) {
+            entry.carriedWcid = 0;
+            entry.carriedPalletSize = 0;
+          }
+        } else {
+          entry._localWarehouseDroppedWcid = 0;
+          entry._localWarehouseCarryWcid = 0;
+        }
+        if (entry.model && entry.model.carriedWcid !== entry.carriedWcid) {
+          try { entry.model.update?.({ carriedWcid: entry.carriedWcid }); } catch (_) {}
+        }
+      }
     }
   }
 
@@ -1424,6 +1538,20 @@ export function createPalletJackController(deps = {}) {
       }
     }
 
+    // 3b. Resolve 2D OBB pushout against warehouse racks, stand legs, raised lift tables & chargers
+    if (warehouseManager) {
+      try {
+        const whBoxes = warehouseManager.getObstacleBoxes?.();
+        if (Array.isArray(whBoxes) && whBoxes.length > 0) {
+          const whPush = resolveBayObbPushout(nx, ny, JACK_HULL_RADIUS_M, whBoxes);
+          if (whPush.hit) {
+            nx = whPush.x;
+            ny = whPush.y;
+          }
+        }
+      } catch (_) {}
+    }
+
     // 4. Sample terrain & walkable container surface (ceiling_z = jackZ + 1.0 excludes container roof!)
     let surfHit = null;
     try {
@@ -1485,11 +1613,21 @@ export function createPalletJackController(deps = {}) {
         const blend = clamp(stepDt * 3.5, 0, 0.25);
         st.heading = wrapHeading(st.heading + angleDiff(assist.alignedHeading, st.heading) * blend);
       }
+    } else if (!st.carriedWcid && warehouseManager && Math.abs(st.speed) > 0.05 && Math.abs(inp.steer) < 0.1) {
+      try {
+        const whAssist = warehouseManager.findLoweredLiftTableTarget?.({ x: nx, y: ny, heading: st.heading }, { forPick: true })
+          ?? warehouseManager.findStagingBayTarget?.({ x: nx, y: ny, heading: st.heading }, { forPick: true });
+        if (whAssist && whAssist.canEngage) {
+          const blend = clamp(stepDt * 3.5, 0, 0.25);
+          st.heading = wrapHeading(st.heading + angleDiff(whAssist.alignedHeading, st.heading) * blend);
+        }
+      } catch (_) {}
     }
 
     st.x = nx;
     st.y = ny;
     st.z = nextZ;
+    try { warehouseManager?.updatePlayerJackPose?.({ id: act.guid, x: nx, y: ny, heading: st.heading }); } catch (_) {}
     st.surface = detectJackSurface(effectiveSurfHit, st.z);
     st.onContainer = st.surface === "ramp" || st.surface === "floor";
 
@@ -1517,10 +1655,14 @@ export function createPalletJackController(deps = {}) {
           stowed: false,
         });
       } catch (_) {}
+    }
+    if (act.entry) {
       act.entry.worldPos = [st.x, st.y, st.z];
       act.entry.heading = st.heading;
       act.entry.tillerAngle = st.tillerAngle;
       act.entry.forkHeightM = st.forkHeightM;
+      act.entry.carriedWcid = st.carriedWcid;
+      act.entry.carriedPalletSize = st.carriedPalletSize;
     }
     writeEntity(act.guid, st.x, st.y, st.z, qJack, true);
 
@@ -1596,6 +1738,7 @@ export function createPalletJackController(deps = {}) {
         clearHighlights();
       }
       if (slotIdx !== null && typeof nearbyC.model?.setHighlightedSlot === "function") {
+        try { warehouseManager?.clearHighlights?.(); } catch (_) {}
         try {
           nearbyC.model.setHighlightedSlot(slotIdx, subArg, hlState);
           act.highlightedContainerGuid = nearbyC.guid;
@@ -1604,7 +1747,8 @@ export function createPalletJackController(deps = {}) {
         clearHighlights();
       }
     } else {
-      clearHighlights();
+      clearContainerHighlight();
+      try { warehouseManager?.updateJackHighlight?.(st); } catch (_) {}
     }
 
     // 10. Camera + wheel roll audio + OSD

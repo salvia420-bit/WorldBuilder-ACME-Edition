@@ -2671,6 +2671,27 @@ export const LOGISTICS_AUDIO_TUNING = Object.freeze({
   rollMinSpeed: 0.05,
   rollRefDistance: 4,
   rollMaxDistance: 60,
+
+  // Automated warehouse AGF/AMR electric traction hum, mast hydraulic whine & safety chime
+  agvHumBaseHz: 112,
+  agvHumSpanHz: 96,
+  agvHumMaxGain: 0.08,
+  agvHumMaxSpeed: 3.2,
+  agvHumRefDistance: 6,
+  agvHumMaxDistance: 80,
+
+  mastWhineBaseHz: 240,
+  mastWhineSpanHz: 180,
+  mastWhineMaxGain: 0.07,
+  mastWhineRefDistance: 6,
+  mastWhineMaxDistance: 75,
+
+  safetyChimeHz: 1046.5,
+  safetyChimeOvertoneHz: 1567.98,
+  safetyChimeGain: 0.16,
+  safetyChimeCooldownSec: 0.25,
+  safetyChimeRefDistance: 8,
+  safetyChimeMaxDistance: 90,
 });
 
 export const PALLET_JACK_SURFACE_PROFILES = Object.freeze({
@@ -4187,6 +4208,7 @@ export function createLogisticsAudio(opts = {}) {
   let lastTwistlockAt = -Infinity;
   let lastPumpAt = -Infinity;
   let lastReleaseAt = -Infinity;
+  let lastChimeAt = -Infinity;
 
   /** @type {Map<string|number, object>} */
   const ptoLoops = new Map();
@@ -4194,6 +4216,10 @@ export function createLogisticsAudio(opts = {}) {
   const swingLoops = new Map();
   /** @type {Map<string|number, object>} */
   const rollLoops = new Map();
+  /** @type {Map<string|number, object>} */
+  const agvLoops = new Map();
+  /** @type {Map<string|number, object>} */
+  const mastLoops = new Map();
   /** @type {Set<object>} */
   const activeOneShots = new Set();
 
@@ -5037,6 +5063,256 @@ export function createLogisticsAudio(opts = {}) {
     }
   }
 
+  // -------------------------------------------------------------------------
+  // 4. Automated Warehouse AGF / AMR Cues: Electric Hum, Mast Whine, Safety Chime
+  // -------------------------------------------------------------------------
+
+  function buildAgvVoice(id, bus, pos) {
+    const ctx = bus.ctx;
+    if (typeof ctx.createGain !== "function" || typeof ctx.createOscillator !== "function") return null;
+    const nodes = [];
+    const sources = [];
+    const addNode = (n) => { if (n) nodes.push(n); return n; };
+    const t0 = fin(ctx.currentTime) ? ctx.currentTime : 0;
+
+    try {
+      const masterGain = addNode(ctx.createGain());
+      setParam(masterGain.gain, 0);
+      const panner = attachSpatialOut(ctx, bus.node, masterGain, pos, T.agvHumRefDistance, T.agvHumMaxDistance, addNode);
+
+      const lpFilter = makeFilter(ctx, nodes, "lowpass", 640, 0.9);
+      connectChain([lpFilter, masterGain]);
+      const sumTarget = lpFilter || masterGain;
+
+      const humOsc = addNode(ctx.createOscillator());
+      sources.push(humOsc);
+      try { humOsc.type = "triangle"; } catch (_) {}
+      setParam(humOsc.frequency, T.agvHumBaseHz);
+      const humGain = addNode(ctx.createGain());
+      setParam(humGain.gain, 0.6);
+      connectChain([humOsc, humGain, sumTarget]);
+
+      const whineOsc = addNode(ctx.createOscillator());
+      sources.push(whineOsc);
+      try { whineOsc.type = "sine"; } catch (_) {}
+      setParam(whineOsc.frequency, T.agvHumBaseHz * 2);
+      const whineGain = addNode(ctx.createGain());
+      setParam(whineGain.gain, 0.25);
+      connectChain([whineOsc, whineGain, sumTarget]);
+
+      for (const s of sources) s.start(t0);
+
+      const voice = {
+        id,
+        ctx,
+        nodes,
+        sources,
+        masterGain,
+        panner,
+        lpFilter,
+        humOsc,
+        whineOsc,
+        dead: false,
+      };
+      agvLoops.set(id, voice);
+      return voice;
+    } catch (_) {
+      for (const s of sources) { try { s.stop(); } catch (_e) {} }
+      for (const n of nodes) { try { n.disconnect(); } catch (_e) {} }
+      return null;
+    }
+  }
+
+  function updateAgvHum(id, state = {}) {
+    if (disposed || !enabled) return false;
+    const key = id ?? "default";
+    const s = state && typeof state === "object" ? state : {};
+    const speed = Math.abs(fin(s.speed) ? s.speed : 0);
+    const active = s.active !== false && speed >= 0;
+
+    if (!active || s.active === false) {
+      const existing = agvLoops.get(key);
+      if (existing) {
+        teardownLoopVoice(existing);
+        agvLoops.delete(key);
+      }
+      return true;
+    }
+
+    const bus = resolveBusLazy(false);
+    if (!bus) return false;
+    const scale = masterGainScale(bus);
+    if (!(scale > 0)) {
+      const existing = agvLoops.get(key);
+      if (existing) {
+        const now = fin(existing.ctx?.currentTime) ? existing.ctx.currentTime : clock();
+        targetParam(existing.masterGain.gain, 0, now, T.paramTau);
+      }
+      return false;
+    }
+    resumeCtx(bus.ctx);
+
+    let voice = agvLoops.get(key);
+    if (voice && voice.ctx !== bus.ctx) {
+      teardownLoopVoice(voice);
+      agvLoops.delete(key);
+      voice = null;
+    }
+    if (!voice) {
+      voice = buildAgvVoice(key, bus, s.pos);
+      if (!voice) return false;
+    }
+
+    const spdNorm = clamp(speed / T.agvHumMaxSpeed, 0, 1.2);
+    const hz = T.agvHumBaseHz + T.agvHumSpanHz * spdNorm;
+    const now = fin(bus.ctx.currentTime) ? bus.ctx.currentTime : clock();
+    targetParam(voice.humOsc.frequency, hz, now, T.paramTau);
+    targetParam(voice.whineOsc.frequency, hz * 2, now, T.paramTau);
+    if (voice.lpFilter) targetParam(voice.lpFilter.frequency, 520 + 480 * spdNorm, now, T.paramTau);
+    const three = acToThreePos(s.pos);
+    if (three && voice.panner) writePannerThree(voice.panner, three[0], three[1], three[2]);
+    const gainLevel = speed > 0.02 ? T.agvHumMaxGain * clamp(0.25 + spdNorm * 0.75, 0.25, 1.0) : 0;
+    targetParam(voice.masterGain.gain, scale * gainLevel, now, T.paramTau);
+    return true;
+  }
+
+  function buildMastVoice(id, bus, pos) {
+    const ctx = bus.ctx;
+    if (typeof ctx.createGain !== "function" || typeof ctx.createOscillator !== "function") return null;
+    const nodes = [];
+    const sources = [];
+    const addNode = (n) => { if (n) nodes.push(n); return n; };
+    const t0 = fin(ctx.currentTime) ? ctx.currentTime : 0;
+
+    try {
+      const masterGain = addNode(ctx.createGain());
+      setParam(masterGain.gain, 0);
+      const panner = attachSpatialOut(ctx, bus.node, masterGain, pos, T.mastWhineRefDistance, T.mastWhineMaxDistance, addNode);
+
+      const bpFilter = makeFilter(ctx, nodes, "bandpass", 520, 1.2);
+      connectChain([bpFilter, masterGain]);
+      const sumTarget = bpFilter || masterGain;
+
+      const pumpOsc = addNode(ctx.createOscillator());
+      sources.push(pumpOsc);
+      try { pumpOsc.type = "sawtooth"; } catch (_) {}
+      setParam(pumpOsc.frequency, T.mastWhineBaseHz);
+      const pumpGain = addNode(ctx.createGain());
+      setParam(pumpGain.gain, 0.55);
+      connectChain([pumpOsc, pumpGain, sumTarget]);
+
+      const flowNoise = makeLoopNoiseSource(ctx, nodes, sources, T.noiseSec);
+      const flowGain = addNode(ctx.createGain());
+      setParam(flowGain.gain, 0.16);
+      if (flowNoise) connectChain([flowNoise, flowGain, sumTarget]);
+
+      for (const s of sources) s.start(t0);
+
+      const voice = {
+        id,
+        ctx,
+        nodes,
+        sources,
+        masterGain,
+        panner,
+        bpFilter,
+        pumpOsc,
+        dead: false,
+      };
+      mastLoops.set(id, voice);
+      return voice;
+    } catch (_) {
+      for (const s of sources) { try { s.stop(); } catch (_e) {} }
+      for (const n of nodes) { try { n.disconnect(); } catch (_e) {} }
+      return null;
+    }
+  }
+
+  function mastHydraulicWhine(id, state = {}) {
+    if (disposed || !enabled) return false;
+    const key = id ?? "default";
+    const s = typeof state === "boolean" ? { active: state } : (state && typeof state === "object" ? state : {});
+    const active = s.active !== false;
+
+    if (!active) {
+      const existing = mastLoops.get(key);
+      if (existing) {
+        teardownLoopVoice(existing);
+        mastLoops.delete(key);
+      }
+      return true;
+    }
+
+    const bus = resolveBusLazy(false);
+    if (!bus) return false;
+    const scale = masterGainScale(bus);
+    if (!(scale > 0)) {
+      const existing = mastLoops.get(key);
+      if (existing) {
+        const now = fin(existing.ctx?.currentTime) ? existing.ctx.currentTime : clock();
+        targetParam(existing.masterGain.gain, 0, now, T.paramTau);
+      }
+      return false;
+    }
+    resumeCtx(bus.ctx);
+
+    let voice = mastLoops.get(key);
+    if (voice && voice.ctx !== bus.ctx) {
+      teardownLoopVoice(voice);
+      mastLoops.delete(key);
+      voice = null;
+    }
+    if (!voice) {
+      voice = buildMastVoice(key, bus, s.pos);
+      if (!voice) return false;
+    }
+
+    const spd = clamp(Math.abs(fin(s.speed) ? s.speed : 0.55) / 0.55, 0, 1.5);
+    const now = fin(bus.ctx.currentTime) ? bus.ctx.currentTime : clock();
+    targetParam(voice.pumpOsc.frequency, T.mastWhineBaseHz + T.mastWhineSpanHz * spd, now, T.paramTau);
+    if (voice.bpFilter) targetParam(voice.bpFilter.frequency, 420 + 360 * spd, now, T.paramTau);
+    const three = acToThreePos(s.pos);
+    if (three && voice.panner) writePannerThree(voice.panner, three[0], three[1], three[2]);
+    targetParam(voice.masterGain.gain, scale * T.mastWhineMaxGain * clamp(0.4 + 0.6 * spd, 0.3, 1.1), now, T.paramTau);
+    return true;
+  }
+
+  function safetyChime(o = {}) {
+    if (disposed || !enabled) return false;
+    const cfg = o && typeof o === "object" ? o : {};
+    const now = clock();
+    if (now - lastChimeAt < T.safetyChimeCooldownSec) return false;
+    const ok = playOneShot(
+      {
+        pos: cfg.pos,
+        priority: 2,
+        gain: T.safetyChimeGain,
+        refDistance: T.safetyChimeRefDistance,
+        maxDistance: T.safetyChimeMaxDistance,
+      },
+      (ctx, out, t0, addNode, addSrc) => {
+        const tone1 = makeOneShotOsc(ctx, "sine", T.safetyChimeHz, addNode, addSrc, t0, t0 + 0.09);
+        const g1 = addNode(ctx.createGain());
+        if (tone1) {
+          setParamAt(g1.gain, 0.5, t0);
+          rampExpParam(g1.gain, 0.001, t0 + 0.085, t0);
+          connectChain([tone1, g1, out]);
+        }
+
+        const tone2 = makeOneShotOsc(ctx, "sine", T.safetyChimeOvertoneHz, addNode, addSrc, t0 + 0.08, t0 + 0.19);
+        const g2 = addNode(ctx.createGain());
+        if (tone2) {
+          setParamAt(g2.gain, 0.45, t0 + 0.08);
+          rampExpParam(g2.gain, 0.001, t0 + 0.185, t0 + 0.08);
+          connectChain([tone2, g2, out]);
+        }
+        return t0 + 0.2;
+      },
+    );
+    if (ok) lastChimeAt = now;
+    return ok;
+  }
+
   function stop() {
     for (const v of ptoLoops.values()) teardownLoopVoice(v);
     ptoLoops.clear();
@@ -5044,6 +5320,10 @@ export function createLogisticsAudio(opts = {}) {
     swingLoops.clear();
     for (const v of rollLoops.values()) teardownLoopVoice(v);
     rollLoops.clear();
+    for (const v of agvLoops.values()) teardownLoopVoice(v);
+    agvLoops.clear();
+    for (const v of mastLoops.values()) teardownLoopVoice(v);
+    mastLoops.clear();
     for (const shot of [...activeOneShots]) teardownShot(shot, false);
     activeOneShots.clear();
   }
@@ -5063,6 +5343,9 @@ export function createLogisticsAudio(opts = {}) {
     releaseHiss,
     updateWheelRoll,
     stopWheelRoll,
+    updateAgvHum,
+    mastHydraulicWhine,
+    safetyChime,
     stop,
     dispose,
     get stats() {
@@ -5070,6 +5353,8 @@ export function createLogisticsAudio(opts = {}) {
       for (const v of ptoLoops.values()) totalNodes += v.nodes.length;
       for (const v of swingLoops.values()) totalNodes += v.nodes.length;
       for (const v of rollLoops.values()) totalNodes += v.nodes.length;
+      for (const v of agvLoops.values()) totalNodes += v.nodes.length;
+      for (const v of mastLoops.values()) totalNodes += v.nodes.length;
       for (const shot of activeOneShots) totalNodes += shot.nodes.length;
       return {
         disposed,
@@ -5077,6 +5362,8 @@ export function createLogisticsAudio(opts = {}) {
         ptoVoices: ptoLoops.size,
         swingVoices: swingLoops.size,
         rollVoices: rollLoops.size,
+        agvVoices: agvLoops.size,
+        mastVoices: mastLoops.size,
         activeOneShots: activeOneShots.size,
         totalNodes,
       };

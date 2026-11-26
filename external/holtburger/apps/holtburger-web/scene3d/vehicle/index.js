@@ -63,6 +63,7 @@ import { createGroundFx } from "./ground_fx.js";
 import { applySeatPoseToEntity, getSeatOffset, interpolateSeatHotSwap } from "./seat_poses.js";
 import { createDeployableCombatVfx } from "./deployable_vfx.js";
 import { DeployableAudioManager } from "./deployable_audio.js";
+import { createWarehouseManager } from "./warehouse_manager.js";
 import { RadarScopeHud } from "./radar_scope.js";
 
 export { vehicleAudioEnabled };
@@ -1514,6 +1515,7 @@ export function installVehicles(deps = {}) {
         }
       }
       if (why === "dispose") deployableAudio?.dispose?.();
+      try { warehouseManager?.stopScenarios?.(); } catch (_) {}
     } catch (_) {}
     try {
       sh()?.clearVehicleSeat?.();
@@ -1574,6 +1576,17 @@ export function installVehicles(deps = {}) {
     }, ms);
   }
 
+  const warehouseManager = createWarehouseManager({
+    THREE,
+    liveScene3d: live,
+    containers,
+    deployables,
+    palletJacks,
+    trailers,
+    logisticsAudio,
+    sh,
+  });
+
   palletJackController = createPalletJackController({
     liveScene3d: live,
     THREE,
@@ -1590,6 +1603,7 @@ export function installVehicles(deps = {}) {
     logisticsAudio,
     writeEntity,
     nowSec,
+    warehouseManager,
   });
 
   // ---------------------------------------------------------------- inbox
@@ -2332,6 +2346,8 @@ export function installVehicles(deps = {}) {
             live.worldRoot.add(entry.model.root);
           }
 
+          try { palletJackController?.onServerState?.(m, entry); } catch (_) {}
+
           if (palletJackController?.activeGuid !== guid) {
             const qPj = FM.orientation(entry.heading, 0, 0);
             entry.model?.root?.position?.set(wx, wy, wz);
@@ -2347,8 +2363,6 @@ export function installVehicles(deps = {}) {
             } catch (_) {}
             if (!stowed) writeEntity(guid, wx, wy, wz, qPj, true);
           }
-
-          try { palletJackController?.onServerState?.(m, entry); } catch (_) {}
         }
         break;
       }
@@ -4376,6 +4390,7 @@ export function installVehicles(deps = {}) {
     tickTrailers(dt);
     tickContainers(dt);
     tickPalletJacks(dt);
+    try { warehouseManager?.tick?.(dt, listenerAcPos()); } catch (_) {}
     aeroFx?.tick(dt);
     if (!pilot && !passenger) osd.sights(null, null, "");
     chutes?.tick(dt, chutePose);
@@ -4564,6 +4579,9 @@ export function installVehicles(deps = {}) {
         entry.currentDoorProgress = state.doorProgress ?? (state.doorState === 2 ? 1.0 : 0.0);
         entry.targetDoorProgress = entry.currentDoorProgress;
         entry.last = { ...state };
+        if (Array.isArray(entry.slots) && entry.slots.length > 0) {
+          try { entry.model?.syncSlots?.(entry.slots); } catch (_) {}
+        }
         const doorOpen = entry.currentDoorProgress >= 0.5;
         try {
           sh()?.upsertContainerCollider(guid >>> 0, 0, worldPos[0], worldPos[1], worldPos[2], heading, kind, doorOpen);
@@ -4976,6 +4994,7 @@ export function installVehicles(deps = {}) {
         return null;
       },
     },
+    warehouse: warehouseManager,
     dispose() {
       disposed = true;
       teardownSession("dispose");
@@ -5004,8 +5023,16 @@ export function installVehicles(deps = {}) {
         try { if (j.root.parent) j.root.parent.remove(j.root); j.dispose?.(); } catch (_) {}
       }
       groundModels.clear();
+      if (typeof live?.worldRoot?.traverse === "function") {
+        live.worldRoot.traverse((o) => {
+          if (o.isSprite && o.geometry) {
+            try { o.geometry.dispose?.(); } catch (_) {}
+          }
+        });
+      }
       groundFx?.dispose?.();
       groundAudio?.dispose?.();
+      try { warehouseManager?.dispose?.(); } catch (_) {}
       logisticsAudio?.dispose?.();
       deployableVfx?.dispose();
       deployableAudio?.dispose();
