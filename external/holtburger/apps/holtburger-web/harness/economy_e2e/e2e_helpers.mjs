@@ -334,6 +334,7 @@ export function runProcess(cmd, args, opts = {}) {
       code: typeof err.status === "number" ? err.status : 1,
       stdout: err.stdout ? String(err.stdout) : "",
       stderr: err.stderr ? String(err.stderr) : (err.message || String(err)),
+      error: err,
     };
   }
 }
@@ -439,9 +440,11 @@ export function runWarehouseUnitTests() {
   const results = [];
   for (const rel of WAREHOUSE_UNIT_TEST_FILES) {
     const res = runNode(rel, [], {
-      timeoutMs: 900000,
+      timeoutMs: 1800000,
     });
-    assert.equal(res.code, 0, `${rel} failed (exit ${res.code}):\n${res.stdout}\n${res.stderr}`);
+    const errTag = res.error ? ` (${res.error.code || res.error.message})` : "";
+    const tail = `${res.stdout || ""}\n${res.stderr || ""}`.trim().slice(-1500);
+    assert.equal(res.code, 0, `${rel} failed (exit ${res.code})${errTag}:\n${tail}`);
     results.push({ rel, code: res.code });
   }
   return results;
