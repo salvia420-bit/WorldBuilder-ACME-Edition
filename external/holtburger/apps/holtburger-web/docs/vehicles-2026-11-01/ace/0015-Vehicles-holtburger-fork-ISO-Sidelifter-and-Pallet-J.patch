@@ -1,7 +1,7 @@
 From eb905618628f49313c7956aaa010d552797134d0 Mon Sep 17 00:00:00 2001
 From: salvia420-bit <salvia420@gmail.com>
 Date: Thu, 19 Nov 2026 17:22:38 +0000
-Subject: [PATCH 15/28] Vehicles (holtburger fork): ISO Sidelifter and Pallet
+Subject: [PATCH 15/29] Vehicles (holtburger fork): ISO Sidelifter and Pallet
  Jack Logistics
 
 Implements HBV1 v7 wire protocol (0x0910 VehiclePalletJackAction/State, since=7 sidelifter fields on VehicleTrailerState, DeployableOnlineFlags.Stowed 0x10), deterministic 30 Hz SidelifterKinematics (40ft self-loading sidelifter WCID 4000032, ISO 3874 interlocks, 4-corner <= 6 deg slope & drop OBB separation check, outrigger side lock, container transfer lock, under-frame pallet jack rack), walk-behind PalletJackDeployable (WCID 4000035, persistent leaky-bucket 3.2 m/s speed cap across grab/release, terrain+walkable support probing, ISO 3691-5 stow/fork/drop interlocks, destroy operator release), ContainerLogistics 1:1 pinwheel LIFO solver with PalletCargoState preservation (Ammo/Fuel/Energy/ReloadTimer) across deployables/RadarStation/containers, tractor throttle/handbrake/hitch/unhitch/unmount locks during sidelift or movement, @trailer sidelift / @palletjack admin commands, and Dericost bit-15 preservation in LScape/BuildingObj plus occupied-landblock unload guard.

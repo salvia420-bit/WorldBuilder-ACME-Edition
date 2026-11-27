@@ -500,13 +500,14 @@ export function queryMysqlScalar(sql, db = null) {
 export function assertMariaDbCollation(sqlText) {
   const text = String(sqlText || "");
   assert.ok(text.trim().length > 0, "SQL migration text must be non-empty");
-  if (/utf8mb4_0900_ai_ci/i.test(text)) {
-    throw new Error("Forbidden MySQL 8.0 collation utf8mb4_0900_ai_ci detected (breaks MariaDB 10.11); require utf8mb4_general_ci");
-  }
-  // Strip SQL comments before splitting CREATE TABLE statements so comments cannot hide/terminate statements early
+  // Strip SQL comments AND single-quoted string literals ('...') BEFORE collation & CREATE TABLE checks
   const stripped = text
     .replace(/\/\*[\s\S]*?\*\//g, " ")
-    .replace(/--[^\r\n]*/g, " ");
+    .replace(/--[^\r\n]*/g, " ")
+    .replace(/'(?:\\.|''|[^'\\])*'/g, "''");
+  if (/utf8mb4_0900_ai_ci/i.test(stripped)) {
+    throw new Error("Forbidden MySQL 8.0 collation utf8mb4_0900_ai_ci detected (breaks MariaDB 10.11); require utf8mb4_general_ci");
+  }
   const createStmts = [
     ...stripped.matchAll(/CREATE\s+(?:TEMPORARY\s+)?TABLE\b[\s\S]*?(?=;|\bCREATE\s+(?:TEMPORARY\s+)?TABLE\b|$)/gi),
   ];
@@ -580,13 +581,23 @@ export function assertItem2Excluded(graph) {
     }
     const s = String(val).trim().toLowerCase();
     if (!s) return false;
-    const m = /^(?:0x)?([0-9a-f]{4,8})$/.exec(s);
-    if (m) {
-      const hex = m[1];
-      if (hex.length <= 4) return hex === "7a63" || hex === "4866";
-      return hex.startsWith("7a63") || hex.startsWith("4866");
+    if (/^\d+$/.test(s)) {
+      const num = Number(s);
+      if (Number.isFinite(num)) {
+        const u = num >>> 0;
+        const hi = (u >>> 16) & 0xffff;
+        if (u === 0x7a63 || u === 0x4866 || hi === 0x7a63 || hi === 0x4866) return true;
+      }
     }
-    return /\b(?:0x)?(?:7a63|4866)[0-9a-f]{0,4}\b/i.test(s);
+    const m = /^(?:0x)?([0-9a-f]+)$/.exec(s);
+    if (m) {
+      const u = parseInt(m[1], 16) >>> 0;
+      const hi = (u >>> 16) & 0xffff;
+      if (u === 0x7a63 || u === 0x4866 || hi === 0x7a63 || hi === 0x4866) return true;
+      const trimmed = m[1].replace(/^0+/, "") || "0";
+      if (trimmed === "7a63" || trimmed === "4866") return true;
+    }
+    return /\b(?:0x)?0*(?:7a63|4866)[0-9a-f]{0,4}\b/i.test(s);
   };
 
   // 1. Verify 101 towns (60 Dereth + 41 Dericost)
@@ -636,30 +647,47 @@ export function assertItem2Excluded(graph) {
   }
 
   // 3. Inspect all edge/route arrays for Item 2 Inner Sea lanes
-  const edges = [
-    ...(Array.isArray(graph.edges) ? graph.edges : []),
-    ...(Array.isArray(graph.roadEdges) ? graph.roadEdges : []),
-    ...(Array.isArray(graph.seaLanes) ? graph.seaLanes : []),
-    ...(Array.isArray(graph.seaEdges) ? graph.seaEdges : []),
-    ...(Array.isArray(graph.maritimeRoutes) ? graph.maritimeRoutes : []),
-    ...(Array.isArray(graph.maritimeEdges) ? graph.maritimeEdges : []),
-    ...(Array.isArray(graph.routes) ? graph.routes : []),
-    ...(Array.isArray(graph.links) ? graph.links : []),
-  ];
-  for (const e of edges) {
+  const taggedEdges = [];
+  const pushEdges = (arr, isSeaArrayEdge) => {
+    if (!Array.isArray(arr)) return;
+    for (const edge of arr) taggedEdges.push({ edge, isSeaArrayEdge });
+  };
+  pushEdges(graph.edges, false);
+  pushEdges(graph.roadEdges, false);
+  pushEdges(graph.seaLanes, true);
+  pushEdges(graph.seaEdges, true);
+  pushEdges(graph.maritimeRoutes, true);
+  pushEdges(graph.maritimeEdges, true);
+  pushEdges(graph.routes, false);
+  pushEdges(graph.links, false);
+
+  for (const { edge: e, isSeaArrayEdge } of taggedEdges) {
+    if (!e || typeof e !== "object") continue;
     const rawBlob = JSON.stringify(e);
     const normBlob = normText(rawBlob);
-    const isSea = normBlob.includes("sea") || normBlob.includes("marine") || e.mode === "sea" || e.kind === "sea" || e.type === "sea";
+    const isSea = isSeaArrayEdge || normBlob.includes("sea") || normBlob.includes("marine") || e.mode === "sea" || e.kind === "sea" || e.type === "sea";
     assert.ok(!normBlob.includes("innersea"), `Forbidden Item 2 Inner Sea edge found: ${rawBlob}`);
     assert.ok(!normBlob.includes("direlandseast"), `Forbidden Item 2 Direlands-East edge found: ${rawBlob}`);
+    for (const fieldVal of [
+      e.lb, e.landblock, e.landblockId, e.cellId,
+      e.fromLb, e.toLb, e.fromLandblock, e.toLandblock, e.fromCellId, e.toCellId, e.sourceLb, e.targetLb,
+    ]) {
+      assert.equal(isForbiddenItem2LbOrCell(fieldVal), false,
+        `Forbidden Item 2 edge landblock/cellId found: ${rawBlob}`);
+    }
     if (isSea) {
       assert.ok(!normBlob.includes("portyaraq"), `Forbidden Item 2 Yaraq<->Direlands-East sea lane found: ${rawBlob}`);
-      for (const fieldVal of [e.fromLb, e.toLb, e.fromLandblock, e.toLandblock, e.fromCellId, e.toCellId, e.sourceLb, e.targetLb]) {
-        assert.equal(isForbiddenItem2LbOrCell(fieldVal), false,
-          `Forbidden Item 2 sea edge landblock/cellId found: ${rawBlob}`);
-      }
-      assert.equal(/\b(?:0x)?(?:7a63|4866)[0-9a-f]{0,4}\b/i.test(rawBlob), false,
+      assert.equal(/\b(?:0x)?0*(?:7a63|4866)[0-9a-f]{0,4}\b/i.test(rawBlob), false,
         `Forbidden Item 2 hex reference in sea lane: ${rawBlob}`);
+    }
+  }
+
+  if (Array.isArray(graph.basins)) {
+    for (const b of graph.basins) {
+      const bNorm = typeof b === "string" ? normText(b) : normText(JSON.stringify(b));
+      if (bNorm.includes("innersea")) {
+        throw new Error(`Nav graph basins array must NOT contain inner_sea: ${JSON.stringify(b)}`);
+      }
     }
   }
 
@@ -670,12 +698,12 @@ export function assertItem2Excluded(graph) {
     summary: graph.summary,
   }));
   if (metaNorm.includes("innersea")) {
-    if (graph.basins && (graph.basins.inner_sea || graph.basins.innerSea)) {
+    if (graph.basins && !Array.isArray(graph.basins) && (graph.basins.inner_sea || graph.basins.innerSea)) {
       throw new Error("Nav graph must NOT contain active inner_sea basin");
     }
   }
 
-  return { towns: towns.length, derethCount, dericostCount, ports: ports.length, edges: edges.length };
+  return { towns: towns.length, derethCount, dericostCount, ports: ports.length, edges: taggedEdges.length };
 }
 
 // =============================================================================
@@ -1061,6 +1089,43 @@ export async function runNegativeSelfChecks(THREE) {
     "assertMariaDbCollation failed to reject 2nd CREATE TABLE omitting utf8mb4_general_ci"
   );
   results.push({ id: "NEG-COLLATION-MULTI", status: "PASS", detail: "assertMariaDbCollation rejected multi-table SQL with 2nd CREATE TABLE missing collation" });
+
+  // 9. SQL string-literal positive test (MED-02): DEFAULT 'utf8mb4_0900_ai_ci' inside string literal must pass
+  assert.equal(
+    assertMariaDbCollation("CREATE TABLE t (note VARCHAR(64) DEFAULT 'utf8mb4_0900_ai_ci') ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;"),
+    true,
+    "assertMariaDbCollation false-positived on single-quoted SQL string literal"
+  );
+  results.push({ id: "POS-COLLATION-STRING-LITERAL", status: "PASS", detail: "assertMariaDbCollation ignored single-quoted string literal 'utf8mb4_0900_ai_ci'" });
+
+  // 10. Item 2 MED-01 bypasses: seaLanes without sea/marine keywords, zero-padded hex, decimal string, array basins
+  const baseValidGraph = {
+    towns: badGraph.towns,
+    ports: OUTER_OCEAN_PORTS.map((p, i) => ({ ...p, id: i + 1, terrainCode: 20 })),
+    edges: [],
+    seaLanes: [],
+  };
+  assert.throws(
+    () => assertItem2Excluded({ ...baseValidGraph, seaLanes: [{ from: "Port Yaraq", to: "X" }] }),
+    /Forbidden Item 2/i,
+    "assertItem2Excluded failed to reject seaLanes edge lacking sea/marine keywords"
+  );
+  assert.throws(
+    () => assertItem2Excluded({ ...baseValidGraph, edges: [{ lb: "0x00007a63", mode: "road" }] }),
+    /Forbidden Item 2/i,
+    "assertItem2Excluded failed to reject zero-padded hex 0x00007a63"
+  );
+  assert.throws(
+    () => assertItem2Excluded({ ...baseValidGraph, edges: [{ lb: "31331", mode: "road" }] }),
+    /Forbidden Item 2/i,
+    "assertItem2Excluded failed to reject decimal string 31331 (0x7A63)"
+  );
+  assert.throws(
+    () => assertItem2Excluded({ ...baseValidGraph, basins: ["outer_ocean", "inner_sea"] }),
+    /inner_sea/i,
+    "assertItem2Excluded failed to reject array graph.basins containing inner_sea"
+  );
+  results.push({ id: "NEG-ITEM2-MED01-BYPASSES", status: "PASS", detail: "assertItem2Excluded rejected seaLanes-keywordless, 0x00007a63, decimal 31331, and array basins" });
 
   return results;
 }

@@ -1,7 +1,7 @@
 From 641714e5e897ac8c2fc1d371b4bccd93cfb628e9 Mon Sep 17 00:00:00 2001
 From: salvia420-bit <salvia420@gmail.com>
 Date: Fri, 20 Nov 2026 19:35:36 +0000
-Subject: [PATCH 25/28] Vehicles (holtburger fork): Unified ISO 6780 1100mm
+Subject: [PATCH 25/29] Vehicles (holtburger fork): Unified ISO 6780 1100mm
  pallets & 2-wide grid
 
 Unifies all 9 modular deployables (WCID 4000002, 4000010-4000017) onto a single ISO 6780 1.100 x 1.100 x 0.145 m pallet and replaces the asymmetric 10/21-slot pinwheel + half-pallet subslot layout with a clean 2-wide container grid (10 slots in 20ft [2x5], 20 slots in 40ft/40HC [2x10], x = +/-0.575m, orient = Y, independent Left/Right LIFO lanes).

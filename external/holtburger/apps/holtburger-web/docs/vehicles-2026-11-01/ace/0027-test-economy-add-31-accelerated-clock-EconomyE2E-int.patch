@@ -1,7 +1,7 @@
 From 37f0eebb72fe3851c6a95277de75c35334e97296 Mon Sep 17 00:00:00 2001
 From: salvia420-bit <salvia420@gmail.com>
 Date: Fri, 27 Nov 2026 09:36:42 +0000
-Subject: [PATCH 27/28] test(economy): add 31 accelerated-clock EconomyE2E
+Subject: [PATCH 27/29] test(economy): add 31 accelerated-clock EconomyE2E
  integration tests (Phases A-E)
 
 Add opaque-box accelerated-clock server integration test suite covering Phases A-E (strict mode 31/31 passing under -c Debug).

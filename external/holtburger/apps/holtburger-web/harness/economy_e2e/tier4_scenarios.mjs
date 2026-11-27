@@ -209,15 +209,22 @@ export const TESTS = [
       // 3. Boot headless Chromium against live ACE :9000 via wsbridge :8080 & serve.py :8765
       const boot = await bootLiveClient({}, {
         onInWorld: async (page) => {
-          await page.waitForFunction(() => Boolean(window.__vehicles), null, { timeout: 30000 });
+          await page.waitForFunction(
+            () => Boolean(window.__vehicles) && (window.__vehicles.status?.()?.caps?.granted ?? null) !== null,
+            null,
+            { timeout: 30000 }
+          );
           return page.evaluate(() => ({
             hasVehicles: Boolean(window.__vehicles),
+            capsGranted: window.__vehicles?.status?.()?.caps?.granted ?? null,
             pose: window.__sessionHandle?.getLocalPlayerPose?.() || null,
           }));
         },
       });
       assert.equal(boot.bootState.bootState, "in-world");
       assert.equal(boot.evalResult?.hasVehicles, true, "Expected window.__vehicles initialized in-world");
+      assert.equal((boot.evalResult?.capsGranted & 0x03), 0x03,
+        `Expected HBV1 capability ack (CapObserve|CapPilot = 0x03), got ${boot.evalResult?.capsGranted}`);
       assert.equal(boot.pageErrors.length, 0, `Unexpected page errors: ${boot.pageErrors.join("; ")}`);
       assert.equal(boot.filtered.failing.length, 0);
     },

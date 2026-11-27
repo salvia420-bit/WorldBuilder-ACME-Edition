@@ -1,7 +1,7 @@
 From 2662f188e9af7661f5a16f309d9376fe1ac0417c Mon Sep 17 00:00:00 2001
 From: salvia420-bit <salvia420@gmail.com>
 Date: Fri, 20 Nov 2026 14:47:05 +0000
-Subject: [PATCH 24/28] Vehicles (holtburger fork): harden Tick/dt and energy
+Subject: [PATCH 24/29] Vehicles (holtburger fork): harden Tick/dt and energy
  guards across Deployables and AirDefense
 
 Hardens remaining sibling Tick/AdvanceRise/dt and energy mutation methods against non-positive, NaN, and infinite inputs:

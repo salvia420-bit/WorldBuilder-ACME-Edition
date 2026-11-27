@@ -20,6 +20,7 @@ import {
   assertProtocolV8Xml,
   countLights,
   discoverEconomyVehicleModelFiles,
+  extractXmlEnumBlock,
   findShardMigrationSqlFiles,
   gatewayFetch,
   getDotnetEconomyOutcomes,
@@ -310,12 +311,17 @@ export const TESTS = [
     id: "T1-20",
     tier: 1,
     features: ["F4"],
-    title: "Live ace_world active vendor baseline matches 1,179 weenies / 30,627 active shop listings",
+    title: "Live ace_world active vendor baseline matches 1,179 weenies / 30,627+ active shop listings",
     tags: ["baseline", "mysql"],
     async run() {
       const cfg = getMysqlConfig();
       const total = Number(queryMysqlScalar("SELECT COUNT(*) FROM weenie WHERE type = 12;", cfg.worldDb));
       assert.equal(total, 1179);
+      const shopListings = Number(queryMysqlScalar(
+        "SELECT COUNT(*) FROM weenie_properties_create_list cl JOIN weenie w ON w.class_Id = cl.object_Id WHERE w.type = 12 AND cl.destination_Type = 4;",
+        cfg.worldDb
+      ));
+      assert.ok(shopListings >= 30627, `Expected >= 30627 active vendor shop listings (type=12, destination_Type=4), got ${shopListings}`);
     },
   },
 
@@ -756,11 +762,13 @@ export const TESTS = [
     tags: ["phase-c", "protocol"],
     async run() {
       const xml = readFileSync(path.join(PROTOCOL_DIR, "vehicles.protocol.xml"), "utf8");
+      const dkBlock = extractXmlEnumBlock(xml, "DeployableKind");
+      assert.ok(dkBlock, 'vehicles.protocol.xml missing <enum name="DeployableKind"> block');
       for (const item of Object.values(ECONOMY_WCID_SPECS.prospecting)) {
-        assert.ok(xml.includes(String(item.kind)), `XML missing prospecting DeployableKind ${item.kind} (${item.name})`);
+        assert.ok(new RegExp(`<value\\b[^>]*\\bvalue="${item.kind}"`).test(dkBlock), `DeployableKind enum missing prospecting Kind ${item.kind} (${item.name})`);
       }
       for (const item of Object.values(ECONOMY_WCID_SPECS.skids)) {
-        assert.ok(xml.includes(String(item.kind)), `XML missing industrial skid DeployableKind ${item.kind} (${item.name})`);
+        assert.ok(new RegExp(`<value\\b[^>]*\\bvalue="${item.kind}"`).test(dkBlock), `DeployableKind enum missing industrial skid Kind ${item.kind} (${item.name})`);
       }
     },
   },
@@ -784,7 +792,12 @@ export const TESTS = [
     tags: ["phase-c", "civic"],
     async run() {
       const xml = readFileSync(path.join(PROTOCOL_DIR, "vehicles.protocol.xml"), "utf8");
-      assert.ok(xml.includes("59") && xml.includes("60"), "XML missing Kind 59/60");
+      const dkBlock = extractXmlEnumBlock(xml, "DeployableKind");
+      assert.ok(dkBlock, 'vehicles.protocol.xml missing <enum name="DeployableKind"> block');
+      assert.ok(
+        /<value\b[^>]*\bvalue="59"/.test(dkBlock) && /<value\b[^>]*\bvalue="60"/.test(dkBlock),
+        "DeployableKind enum missing Kind 59/60"
+      );
       const deploySrc = readFileSync(path.join(ACE_ROOT, "Source", "ACE.Server", "Vehicles", "Deployables", "DeployableManager.cs"), "utf8");
       assert.ok(deploySrc.includes("4000093") && deploySrc.includes("4000094"),
         "DeployableManager.cs missing WCID 4000093 (Mint) or 4000094 (Workshop)");
@@ -812,9 +825,11 @@ export const TESTS = [
     tags: ["phase-c", "containers"],
     async run() {
       const xml = readFileSync(path.join(PROTOCOL_DIR, "vehicles.protocol.xml"), "utf8");
+      const dkBlock = extractXmlEnumBlock(xml, "DeployableKind");
+      assert.ok(dkBlock, 'vehicles.protocol.xml missing <enum name="DeployableKind"> block');
       const dmSrc = readFileSync(path.join(ACE_ROOT, "Source", "ACE.Server", "Vehicles", "Deployables", "DeployableManager.cs"), "utf8");
       for (const [wcid, spec] of Object.entries(ECONOMY_WCID_SPECS.containers)) {
-        assert.ok(xml.includes(String(spec.kind)), `XML missing container Kind ${spec.kind} (${spec.code})`);
+        assert.ok(new RegExp(`<value\\b[^>]*\\bvalue="${spec.kind}"`).test(dkBlock), `DeployableKind enum missing container Kind ${spec.kind} (${spec.code})`);
         assert.ok(dmSrc.includes(wcid), `DeployableManager.cs missing container WCID ${wcid} (${spec.code})`);
       }
     },
@@ -916,13 +931,22 @@ export const TESTS = [
       const idxMod = await import(new URL(`../../scene3d/vehicle/index.js`, import.meta.url).href);
       const factory = idxMod.buildEconomyModel || idxMod.buildDeployableModel || idxMod.createDeployableMesh;
       assert.equal(typeof factory, "function", "scene3d/vehicle/index.js must export economy/deployable model builder");
-      const root = factory(THREE, 4000090);
-      assert.ok(root, "Model builder returned null for 4000090");
-      assert.equal(countLights(root).total, 0, "Procedural model must contain 0 dynamic lights");
-      assertNoNaNDeep(root);
-      renderWithFakeWebGL2(THREE, root);
-      const disp = spyDisposal(root);
-      assert.ok(disp.geometries > 0 && disp.materials > 0, "Expected disposable geometries & materials");
+      const all32Wcids = [
+        ...Object.keys(ECONOMY_WCID_SPECS.containers),
+        ...Object.keys(ECONOMY_WCID_SPECS.prospecting),
+        ...Object.keys(ECONOMY_WCID_SPECS.skids),
+        ...Object.keys(ECONOMY_WCID_SPECS.civic),
+      ].map(Number);
+      assert.equal(all32Wcids.length, 32, "Expected 32 Phase B/C/E economy WCIDs");
+      for (const wcid of all32Wcids) {
+        const root = factory(THREE, wcid);
+        assert.ok(root, `Model builder returned null for WCID ${wcid}`);
+        assert.equal(countLights(root).total, 0, `Procedural model ${wcid} must contain 0 dynamic lights`);
+        assertNoNaNDeep(root);
+        renderWithFakeWebGL2(THREE, root);
+        const disp = spyDisposal(root);
+        assert.ok(disp.geometries > 0 && disp.materials > 0, `Expected disposable geometries & materials for WCID ${wcid}`);
+      }
     },
   },
   {
@@ -1081,9 +1105,11 @@ export const TESTS = [
     tags: ["phase-d", "maritime"],
     async run() {
       const xml = readFileSync(path.join(PROTOCOL_DIR, "vehicles.protocol.xml"), "utf8");
+      const dkBlock = extractXmlEnumBlock(xml, "DeployableKind");
+      assert.ok(dkBlock, 'vehicles.protocol.xml missing <enum name="DeployableKind"> block');
       for (const item of Object.values(ECONOMY_WCID_SPECS.maritime)) {
         if (item.kind) {
-          assert.ok(xml.includes(String(item.kind)), `XML missing Marine Terminal Kind ${item.kind} (${item.name})`);
+          assert.ok(new RegExp(`<value\\b[^>]*\\bvalue="${item.kind}"`).test(dkBlock), `DeployableKind enum missing Marine Terminal Kind ${item.kind} (${item.name})`);
         }
       }
     },

@@ -1,7 +1,7 @@
 From 7ab1eb3a34e6c23eab57b0eca1d3a4c19891a4d2 Mon Sep 17 00:00:00 2001
 From: salvia420-bit <salvia420@gmail.com>
 Date: Fri, 20 Nov 2026 09:00:28 +0000
-Subject: [PATCH 20/28] Vehicles (holtburger fork): guard bit-15 Dericost check
+Subject: [PATCH 20/29] Vehicles (holtburger fork): guard bit-15 Dericost check
  against BlockCellID 0xFFFF and indoor EnvCells
 
 ---

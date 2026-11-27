@@ -7,6 +7,7 @@ import path from "node:path";
 import {
   ACE_ROOT,
   APP_ROOT,
+  ECONOMY_WCID_SPECS,
   PROTOCOL_DIR,
   assert,
   assertDotnetMethodPassed,
@@ -42,8 +43,14 @@ export const TESTS = [
     async run() {
       assertDotnetMethodPassed("F1_ColdStartCutover_ZeroStockAndZeroTill_Across101Towns");
       const cfg = getMysqlConfig();
-      const total = Number(queryMysqlScalar("SELECT COUNT(*) FROM town_control;", cfg.shardDb));
-      assert.equal(total, 101);
+      const row = queryMysql(
+        "SELECT COUNT(*), COALESCE(SUM(treasury_pyreals),0), COALESCE(SUM(escrow_pyreals),0), COALESCE(SUM(clearinghouse_reserve_pyreals),0) FROM town_control;",
+        cfg.shardDb
+      )[0];
+      assert.equal(Number(row[0]), 101);
+      assert.equal(Number(row[1]), 0, `Expected cold-start SUM(treasury_pyreals) == 0, got ${row[1]}`);
+      assert.equal(Number(row[2]), 0, `Expected cold-start SUM(escrow_pyreals) == 0, got ${row[2]}`);
+      assert.equal(Number(row[3]), 0, `Expected cold-start SUM(clearinghouse_reserve_pyreals) == 0, got ${row[3]}`);
     },
   },
   {
@@ -128,8 +135,7 @@ export const TESTS = [
     tags: ["phase-b", "pairwise"],
     async run() {
       assertDotnetMethodPassed("F8_Governance_MonarchOnlyPolicies_FlatMemberExecution_AndRadarIff");
-      const siegeSrc = readFileSync(path.join(ACE_ROOT, "Source", "ACE.Server", "Economy", "SiegeManager.cs"), "utf8");
-      assert.ok(/RadarIff|GuildRadarPolicy/.test(siegeSrc));
+      assertDotnetMethodPassed("F8_SiegeManager_SyncTownRadarIff_DirectFlip");
     },
   },
   {
@@ -142,10 +148,10 @@ export const TESTS = [
       assertDotnetMethodPassed("F17_AgentGateway_LoopbackConfig_AndWorldManagerEnqueueParity");
       const denied = await gatewayFetch("/api/v1/monarch/orders", {
         method: "POST",
-        body: { actorMonarchId: 999999, townId: 1, action: "set_tariff", buyMul: 1.5, isMonarch: false },
+        body: { actorMonarchId: 999999, townId: 1, action: "set_tariff", buyMul: 1.5 },
       });
-      assert.ok(denied.status === 400 || denied.status === 403 || denied.status === 422,
-        `Expected non-Monarch gateway rejection, got ${denied.status}`);
+      assert.equal(denied.status, 403,
+        `Expected non-Monarch gateway rejection (403 via ResolveActor/CanModifyTownPolicy), got ${denied.status}`);
     },
   },
   {
@@ -212,13 +218,21 @@ export const TESTS = [
       const idxMod = await import(new URL(`../../scene3d/vehicle/index.js`, import.meta.url).href);
       const factory = idxMod.buildEconomyModel || idxMod.buildDeployableModel;
       assert.equal(typeof factory, "function");
-      for (const wcid of [4000060, 4000070, 4000078, 4000086, 4000090, 4000093, 4000095]) {
+      const all32Wcids = [
+        ...Object.keys(ECONOMY_WCID_SPECS.containers),
+        ...Object.keys(ECONOMY_WCID_SPECS.prospecting),
+        ...Object.keys(ECONOMY_WCID_SPECS.skids),
+        ...Object.keys(ECONOMY_WCID_SPECS.civic),
+      ].map(Number);
+      assert.equal(all32Wcids.length, 32, "Expected 32 Phase B/C/E economy WCIDs");
+      for (const wcid of all32Wcids) {
         const g = factory(THREE, wcid);
         assert.ok(g, `Missing model for ${wcid}`);
         assert.equal(countLights(g).total, 0);
         assertNoNaNDeep(g);
         renderWithFakeWebGL2(THREE, g);
-        spyDisposal(g);
+        const disp = spyDisposal(g);
+        assert.ok(disp.geometries > 0 && disp.materials > 0, `Expected disposable geometries/materials for ${wcid}`);
       }
       for (const f of discoverEconomyVehicleModelFiles()) {
         assert.equal(lintSource(readFileSync(f, "utf8")).length, 0);
@@ -268,12 +282,25 @@ export const TESTS = [
     tags: ["phase-e", "pairwise", "live"],
     async run() {
       const cfg = getMysqlConfig();
-      const dbTowns = Number(queryMysqlScalar("SELECT COUNT(*) FROM town_control;", cfg.shardDb));
-      assert.equal(dbTowns, 101);
+      const dbRows = queryMysql(
+        "SELECT town_id, state, owner_monarch_id, treasury_pyreals, escrow_pyreals FROM town_control ORDER BY town_id;",
+        cfg.shardDb
+      );
+      assert.equal(dbRows.length, 101);
       const res = await gatewayFetch("/api/v1/world/towns");
       assert.equal(res.status, 200);
       const gwTowns = Array.isArray(res.body) ? res.body : res.body?.towns;
       assert.equal(gwTowns.length, 101);
+      const gwById = new Map(gwTowns.map((t) => [Number(t.townId), t]));
+      for (const [tidStr, state, ownerStr, treasStr, escrowStr] of dbRows) {
+        const tid = Number(tidStr);
+        const gw = gwById.get(tid);
+        assert.ok(gw, `Gateway missing townId ${tid}`);
+        assert.equal(gw.state, state, `Town ${tid} state parity mismatch`);
+        assert.equal(Number(gw.ownerMonarchId), Number(ownerStr), `Town ${tid} ownerMonarchId parity mismatch`);
+        assert.equal(Number(gw.treasuryPyreals), Number(treasStr), `Town ${tid} treasuryPyreals parity mismatch`);
+        assert.equal(Number(gw.escrowPyreals), Number(escrowStr), `Town ${tid} escrowPyreals parity mismatch`);
+      }
     },
   },
   {
@@ -284,8 +311,15 @@ export const TESTS = [
     tags: ["phase-a", "phase-e", "pairwise"],
     async run() {
       assertDotnetMethodPassed("F5_Slumlord_100PercentRentRouting_AndTrophyProcurement");
+      assertDotnetMethodPassed("F17_AgentGateway_MonarchOrder_CreateGetFulfillCancel_Lifecycle");
       const res = await gatewayFetch("/api/v1/monarch/orders");
       assert.equal(res.status, 200);
+      assert.ok(Array.isArray(res.body?.orders), "Expected orders array from GET /api/v1/monarch/orders");
+      const postDenied = await gatewayFetch("/api/v1/monarch/orders", {
+        method: "POST",
+        body: { actorGuid: 999999, townId: 1, action: "create_bounty", itemWcid: 51234, quantity: 1, rewardPyreals: 100 },
+      });
+      assert.equal(postDenied.status, 403, `Expected fail-closed 403 on unauthorized POST /api/v1/monarch/orders, got ${postDenied.status}`);
     },
   },
   {

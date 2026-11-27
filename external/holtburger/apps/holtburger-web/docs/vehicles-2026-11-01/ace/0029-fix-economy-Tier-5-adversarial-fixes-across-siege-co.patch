@@ -1,0 +1,2416 @@
+From 71cc14dc9132994c6f494ba9c073d791eaea7bfe Mon Sep 17 00:00:00 2001
+From: salvia420-bit <salvia420@gmail.com>
+Date: Fri, 27 Nov 2026 14:40:45 +0000
+Subject: [PATCH 29/29] fix(economy): Tier 5 adversarial fixes across siege,
+ cold-chain, till caps, inventory overflow & wire guards
+
+- [CRIT-01] GameActionVehicle DepositSupply (0x0912 Action=2) now locates and consumes physical server-side supply cargo/container/inventory units and derives authoritative OriginLandblockId and SupplyPoints instead of trusting client fields.
+- [CRIT-02] SiegeManager requires liveRingHolder in 30m ring to advance ClaimElapsedSec/BreachElapsedSec, resets unheld claim/breach timers, and extends KeepSiegedLandblockActive to active claim/breach states.
+- [HIGH-01] WorldObject_Tick passes PerishableDecay.IsInsidePoweredReefer(this, null) so world-placed perishables inside powered Reefers freeze at 0.0x decay.
+- [HIGH-02] TownEconomyManager persists/restores TownTillCapPyreals across Initialize(), inherits TownTillCapPyreals in GetOrCreateLedgerLocked, and enforces regularPayout <= TownTillCapPyreals in mixed Trade-Note sales.
+- [HIGH-03] Player_Inventory trophy turn-in, AgentGatewayService fulfill_order, and IndustryManager.TryMintBullion pre-check capacity and roll back atomically on full inventory instead of burning Pyreals or bullion.
+- [HIGH-04] GameActionVehicle WithdrawEscrow (0x0912 Action=4) genuinely withdraws spendable funds via TownEconomyManager, delivers Pyreal stacks with full-inventory rollback, persists, and broadcasts state.
+- [MED-09..11, LOW-01] Fixed 16-bit cross-continent origin distance/provenance, non-finite GeologyService positions, HandleLogisticsConvoyOrder CapObserve gate, and 53-bit safe JS bounds on order_id/convoy_id.
+- Added Tier 5 adversarial C# tests (EconomyE2E 45/45, Economy|VehicleWire 154/154, Vehicles|Landblock 367/367 Debug passing).
+---
+ .../Economy/PhaseBSiegeGovernanceTests.cs     |  26 +-
+ .../EconomyE2E/PhaseAEconomyE2ETests.cs       |  66 ++
+ .../EconomyE2E/PhaseBSiegeE2ETests.cs         | 115 +++-
+ .../PhaseDELogisticsGatewayE2ETests.cs        | 194 +++++-
+ .../EconomyE2E/Tier5AdversarialE2ETests.cs    | 625 ++++++++++++++++++
+ .../ACE.Server/Economy/AgentGatewayService.cs |  82 ++-
+ Source/ACE.Server/Economy/GeologyService.cs   |   5 +
+ Source/ACE.Server/Economy/IndustryManager.cs  |  79 ++-
+ Source/ACE.Server/Economy/LogisticsEngine.cs  |  45 +-
+ Source/ACE.Server/Economy/SiegeManager.cs     |  31 +-
+ .../ACE.Server/Economy/TownEconomyManager.cs  | 271 ++++++--
+ .../GameAction/Actions/GameActionVehicle.cs   | 277 +++++++-
+ .../WorldObjects/Player_Inventory.cs          |  51 +-
+ .../WorldObjects/WorldObject_Tick.cs          |   2 +-
+ 14 files changed, 1730 insertions(+), 139 deletions(-)
+ create mode 100644 Source/ACE.Server.Tests/EconomyE2E/Tier5AdversarialE2ETests.cs
+
+diff --git a/Source/ACE.Server.Tests/Economy/PhaseBSiegeGovernanceTests.cs b/Source/ACE.Server.Tests/Economy/PhaseBSiegeGovernanceTests.cs
+index 80e4fff3..4a3d6f55 100644
+--- a/Source/ACE.Server.Tests/Economy/PhaseBSiegeGovernanceTests.cs
++++ b/Source/ACE.Server.Tests/Economy/PhaseBSiegeGovernanceTests.cs
+@@ -296,13 +296,27 @@ public void F7_Claim_BreachGate_EscrowFreeze_RespectsClearinghouseReserve()
+             // Restore reserve after BeginZeroNoticeBreachForTesting
+             lock (state.SyncRoot) { state.Control.ClearinghouseReservePyreals = 20_000L; }
+ 
+-            SiegeManager.TickForTesting(299.0);
+-            var s299 = SiegeManager.GetSiegeState(1u);
+-            Assert.AreEqual("CONTROLLED", s299.State);
+-            Assert.AreEqual(0L, s299.EscrowPyreals);
+-            Assert.AreEqual(0, alertsFired, "Zero advance notice: no alert may fire before 300s breach gate");
++            var hydrated1 = SiegeManager.EnsureTownEntitiesHydrated(1u);
++            var node1 = DeployableManager.GetDeployable(hydrated1.NodeGuid) as TownControlNodeDeployable;
++            Assert.IsNotNull(node1);
++            var liveAttacker = CreateTestPlayer(200u, 0xA9B40001u, 50, 50, 10, monarchId: 200u);
++            liveAttacker.Location = new Position(node1.Location);
++            var onlineDict = (Dictionary<uint, Player>)typeof(PlayerManager).GetField("onlinePlayers", BindingFlags.Static | BindingFlags.NonPublic).GetValue(null);
++            lock (onlineDict) { onlineDict[liveAttacker.Guid.Full] = liveAttacker; }
++            try
++            {
++                SiegeManager.TickForTesting(299.0);
++                var s299 = SiegeManager.GetSiegeState(1u);
++                Assert.AreEqual("CONTROLLED", s299.State);
++                Assert.AreEqual(0L, s299.EscrowPyreals);
++                Assert.AreEqual(0, alertsFired, "Zero advance notice: no alert may fire before 300s breach gate");
+ 
+-            SiegeManager.TickForTesting(1.0);
++                SiegeManager.TickForTesting(1.0);
++            }
++            finally
++            {
++                lock (onlineDict) { onlineDict.Remove(liveAttacker.Guid.Full); }
++            }
+             var s300 = SiegeManager.GetSiegeState(1u);
+             Assert.AreEqual("CONTESTED_HOLD", s300.State);
+             Assert.AreEqual(100_000L, s300.EscrowPyreals, "Only spendable treasury (120k - 20k reserve = 100k) freezes into escrow");
+diff --git a/Source/ACE.Server.Tests/EconomyE2E/PhaseAEconomyE2ETests.cs b/Source/ACE.Server.Tests/EconomyE2E/PhaseAEconomyE2ETests.cs
+index 4108e5ea..b8ce052c 100644
+--- a/Source/ACE.Server.Tests/EconomyE2E/PhaseAEconomyE2ETests.cs
++++ b/Source/ACE.Server.Tests/EconomyE2E/PhaseAEconomyE2ETests.cs
+@@ -97,6 +97,29 @@ public void Baseline_DeployableBase_ExcludedFromShardBiotaPersistence()
+             var method = typeof(WorldObject).GetMethod("IsDynamicThatShouldPersistToShard",
+                 BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+             Assert.IsNotNull(method, "WorldObject.IsDynamicThatShouldPersistToShard must exist");
++
++            DeployableManager.Clear();
++            DeployableManager.EnterWorldOverrideForTesting = _ => true;
++            try
++            {
++                var pos = new ACE.Entity.Position(0xA9B40001u, 50f, 50f, 10f, 0, 0, 0, 1);
++                var instances = new DeployableBase[]
++                {
++                    DeployableManager.SpawnDeployable(TownControlNodeDeployable.TownControlNodeWeenieClassId, pos),
++                    DeployableManager.SpawnDeployable(ForwardSiegeBeaconDeployable.ForwardSiegeBeaconWeenieClassId, pos),
++                    DeployableManager.SpawnDeployable(IsoContainerDeployable.WcidReefer20, pos),
++                };
++                foreach (var dep in instances)
++                {
++                    Assert.IsNotNull(dep, "SpawnDeployable must return concrete DeployableBase subclass");
++                    Assert.IsTrue(dep.IsExcludedFromBiotaPersistence, $"{dep.GetType().Name} ({dep.WeenieClassId}) must have IsExcludedFromBiotaPersistence == true");
++                    Assert.IsFalse(dep.IsDynamicThatShouldPersistToShard(), $"{dep.GetType().Name} ({dep.WeenieClassId}) must return IsDynamicThatShouldPersistToShard() == false");
++                }
++            }
++            finally
++            {
++                DeployableManager.Clear();
++            }
+         }
+ 
+         [TestMethod]
+@@ -211,6 +234,29 @@ public void F3_ShardDbContext_HasAllEconomyTables_AndBiotaExcludesCustomWcids()
+                 || typeof(DeployableBase).IsSubclassOf(typeof(WorldObject)),
+                 "DeployableBase must inherit WorldObject");
+ 
++            DeployableManager.Clear();
++            DeployableManager.EnterWorldOverrideForTesting = _ => true;
++            try
++            {
++                var pos = new ACE.Entity.Position(0xA9B40001u, 50f, 50f, 10f, 0, 0, 0, 1);
++                var tcn = DeployableManager.SpawnDeployable(4_000_090u, pos);
++                var reefer = DeployableManager.SpawnDeployable(4_000_060u, pos);
++                Assert.IsNotNull(tcn);
++                Assert.IsNotNull(reefer);
++                Assert.IsTrue(tcn.IsExcludedFromBiotaPersistence);
++                Assert.IsFalse(tcn.IsDynamicThatShouldPersistToShard());
++                Assert.IsTrue(reefer.IsExcludedFromBiotaPersistence);
++                Assert.IsFalse(reefer.IsDynamicThatShouldPersistToShard());
++
++                var customNonDeployable = CreateTestItem(4_000_099u, WeenieType.Generic, ItemType.Misc, 10, name: "CustomEconomyItem");
++                Assert.IsTrue(customNonDeployable.IsExcludedFromBiotaPersistence);
++                Assert.IsFalse(customNonDeployable.IsDynamicThatShouldPersistToShard());
++            }
++            finally
++            {
++                DeployableManager.Clear();
++            }
++
+             var shardType = typeof(ShardDbContext);
+             var props = shardType.GetProperties(BindingFlags.Instance | BindingFlags.Public);
+             var requiredDbSets = new[]
+@@ -317,6 +363,26 @@ public void F4_Vendor_SharedTownTill_BuybackRefusalAtZero_AndCapClamp()
+ 
+                     if (getState != null)
+                         Assert.AreEqual(0L, ReadTreasuryBalance(getState.Invoke(null, new object[] { townId })));
++
++                    // Also enforce SetTownTillCap refusal & negative clamp
++                    var setCap = FindMethod(econType, "SetTownTillCap", 2);
++                    var getCap = FindMethod(econType, "GetTownTillCap", 1);
++                    RequireOrInconclusive(setCap, "TownEconomyManager.SetTownTillCap(townId, tillCapPyreals)");
++                    RequireOrInconclusive(getCap, "TownEconomyManager.GetTownTillCap(townId)");
++
++                    SeedTownTillHelper(econType, townId, 500L);
++                    setCap.Invoke(null, new object[] { townId, 50L });
++                    Assert.AreEqual(50L, Convert.ToInt64(getCap.Invoke(null, new object[] { townId })));
++                    Assert.IsFalse(InvokeBool(trySellToTown, null, new object[] { vendor, sellDict, 100, null }),
++                        "Vendor buyback MUST fail when payout > SetTownTillCap even if TreasuryPyreals >= payout");
++
++                    setCap.Invoke(null, new object[] { townId, 100L });
++                    Assert.IsTrue(InvokeBool(trySellToTown, null, new object[] { vendor, sellDict, 100, null }),
++                        "Vendor buyback MUST succeed once SetTownTillCap >= payout");
++
++                    setCap.Invoke(null, new object[] { townId, -50L });
++                    Assert.AreEqual(0L, Convert.ToInt64(getCap.Invoke(null, new object[] { townId })),
++                        "Negative till cap input MUST clamp to 0");
+                     return;
+                 }
+ 
+diff --git a/Source/ACE.Server.Tests/EconomyE2E/PhaseBSiegeE2ETests.cs b/Source/ACE.Server.Tests/EconomyE2E/PhaseBSiegeE2ETests.cs
+index 315e86e0..1ca747fe 100644
+--- a/Source/ACE.Server.Tests/EconomyE2E/PhaseBSiegeE2ETests.cs
++++ b/Source/ACE.Server.Tests/EconomyE2E/PhaseBSiegeE2ETests.cs
+@@ -1,9 +1,15 @@
+ using System;
++using System.Collections.Generic;
++using System.Numerics;
+ using System.Reflection;
+ using Microsoft.VisualStudio.TestTools.UnitTesting;
++using ACE.Entity;
++using ACE.Server.Economy;
++using ACE.Server.Managers;
+ using ACE.Server.Vehicles;
+ using ACE.Server.Vehicles.AirDefense;
+ using ACE.Server.Vehicles.Deployables;
++using ACE.Server.WorldObjects;
+ using static ACE.Server.Tests.EconomyE2E.EconomyE2EReflectionHelpers;
+ 
+ namespace ACE.Server.Tests.EconomyE2E
+@@ -44,17 +50,43 @@ public void F7_SiegeEngine_ZeroNotice_And300sBreachGate()
+             RequireOrInconclusive(getSiege, "SiegeManager.GetSiegeState(townId)");
+ 
+             startAssault.Invoke(null, new object[] { 10u, 200u, 100000L });
+-            tick.Invoke(null, new object[] { 299.0 });
+-            var s299 = getSiege.Invoke(null, new object[] { 10u });
+-            Assert.AreNotEqual("CONTESTED_HOLD", Convert.ToString(GetPropOrField(s299, "State")),
+-                "At 299s breach gate must NOT yet enter CONTESTED_HOLD");
+-
+-            tick.Invoke(null, new object[] { 1.0 });
+-            var s300 = getSiege.Invoke(null, new object[] { 10u });
+-            Assert.AreEqual("CONTESTED_HOLD", Convert.ToString(GetPropOrField(s300, "State")),
+-                "At 300s breach gate MUST enter CONTESTED_HOLD");
+-            Assert.AreEqual(100000L, Convert.ToInt64(GetPropOrField(s300, "EscrowPyreals")),
+-                "Entering CONTESTED_HOLD must freeze Defender Treasury into escrow_pyreals");
++            DeployableManager.EnterWorldOverrideForTesting = _ => true;
++            var hydrated = SiegeManager.EnsureTownEntitiesHydrated(10u);
++            Assert.IsNotNull(hydrated);
++            var node = DeployableManager.GetDeployable(hydrated.NodeGuid) as TownControlNodeDeployable;
++            Assert.IsNotNull(node);
++
++            var attacker = CreateTestPlayer(200u, node.Location.Cell, node.Location.Pos.X, node.Location.Pos.Y, node.Location.Pos.Z, monarchId: 200u);
++            attacker.Location = new Position(node.Location);
++            var onlineDict = (Dictionary<uint, Player>)typeof(PlayerManager)
++                .GetField("onlinePlayers", BindingFlags.Static | BindingFlags.NonPublic)
++                ?.GetValue(null);
++            Assert.IsNotNull(onlineDict);
++            lock (onlineDict)
++                onlineDict[attacker.Guid.Full] = attacker;
++
++            try
++            {
++                tick.Invoke(null, new object[] { 299.0 });
++                var s299 = getSiege.Invoke(null, new object[] { 10u });
++                Assert.AreNotEqual("CONTESTED_HOLD", Convert.ToString(GetPropOrField(s299, "State")),
++                    "At 299s breach gate must NOT yet enter CONTESTED_HOLD");
++
++                tick.Invoke(null, new object[] { 1.0 });
++                var s300 = getSiege.Invoke(null, new object[] { 10u });
++                Assert.AreEqual("CONTESTED_HOLD", Convert.ToString(GetPropOrField(s300, "State")),
++                    "At 300s breach gate MUST enter CONTESTED_HOLD");
++                Assert.AreEqual(100000L, Convert.ToInt64(GetPropOrField(s300, "EscrowPyreals")),
++                    "Entering CONTESTED_HOLD must freeze Defender Treasury into escrow_pyreals");
++            }
++            finally
++            {
++                lock (onlineDict)
++                    onlineDict.Remove(attacker.Guid.Full);
++                DeployableManager.Clear();
++                SiegeManager.ResetForTesting();
++                TownEconomyManager.ResetForTesting();
++            }
+         }
+ 
+         [TestMethod]
+@@ -256,6 +288,67 @@ public void F8_Governance_MonarchOnlyPolicies_FlatMemberExecution_AndRadarIff()
+             }
+         }
+ 
++        [TestMethod]
++        public void F8_SiegeManager_SyncTownRadarIff_DirectFlip()
++        {
++            TownEconomyManager.EnabledOverride = true;
++            TownEconomyManager.ResetForTesting();
++            SiegeManager.ResetForTesting();
++            DeployableManager.Clear();
++            DeployableManager.EnterWorldOverrideForTesting = _ => true;
++            AirDefenseManager.ClearStations();
++            RadarIff.ResetPolicies();
++
++            try
++            {
++                TownEconomyManager.SetTownOwner(1u, 100u, "CONTROLLED");
++                var holtburg = TownRegistry.GetById(1u);
++                var pos = Vehicle.ToPosition(holtburg.WorldX, holtburg.WorldY, holtburg.WorldZ, Quaternion.Identity);
++
++                var monarchA = CreateTestPlayer(100u, holtburg.AnchorLandblock, 50f, 50f, 10f, monarchId: 100u);
++                var monarchB = CreateTestPlayer(200u, holtburg.AnchorLandblock, 50f, 50f, 10f, monarchId: 200u);
++
++                var airRadar = new RadarStation(RadarStation.BuildWeenie(null, monarchA), new ObjectGuid(AllocTestGuid()), null, monarchA)
++                {
++                    Location = pos,
++                    AffiliatedTownId = 1u,
++                    OwnerMonarchId = 100u,
++                };
++                AirDefenseManager.RegisterStation(airRadar);
++
++                var groundRadar = (GroundRadarDeployable)DeployableManager.SpawnDeployable(
++                    GroundRadarDeployable.GroundRadarWeenieClassId, pos, monarchA);
++                groundRadar.AffiliatedTownId = 1u;
++                groundRadar.OwnerMonarchId = 100u;
++
++                var turret = (MissileTurretDeployable)DeployableManager.SpawnDeployable(
++                    MissileTurretDeployable.MissileTurretWeenieClassId, pos, monarchA);
++                turret.AffiliatedTownId = 1u;
++                turret.OwnerMonarchId = 100u;
++
++                Assert.AreEqual(IffStanding.Friendly, groundRadar.ResolvePlayerStanding(monarchA));
++                Assert.AreEqual(IffStanding.Hostile, groundRadar.ResolvePlayerStanding(monarchB));
++
++                TownEconomyManager.SetTownOwner(1u, 200u, "CONTROLLED");
++                SiegeManager.SyncTownRadarIff(1u, 200u, 100u);
++
++                Assert.AreEqual(200u, airRadar.OwnerMonarchId);
++                Assert.AreEqual(200u, groundRadar.OwnerMonarchId);
++                Assert.AreEqual(200u, turret.OwnerMonarchId);
++                Assert.AreEqual(IffStanding.Hostile, groundRadar.ResolvePlayerStanding(monarchA));
++                Assert.AreEqual(IffStanding.Friendly, groundRadar.ResolvePlayerStanding(monarchB));
++            }
++            finally
++            {
++                AirDefenseManager.ClearStations();
++                DeployableManager.Clear();
++                RadarIff.ResetPolicies();
++                SiegeManager.ResetForTesting();
++                TownEconomyManager.EnabledOverride = null;
++                TownEconomyManager.ResetForTesting();
++            }
++        }
++
+         [TestMethod]
+         public void Baseline_RadarIff_PolicyResolution_Works()
+         {
+diff --git a/Source/ACE.Server.Tests/EconomyE2E/PhaseDELogisticsGatewayE2ETests.cs b/Source/ACE.Server.Tests/EconomyE2E/PhaseDELogisticsGatewayE2ETests.cs
+index 6ac73c92..7afbb2e6 100644
+--- a/Source/ACE.Server.Tests/EconomyE2E/PhaseDELogisticsGatewayE2ETests.cs
++++ b/Source/ACE.Server.Tests/EconomyE2E/PhaseDELogisticsGatewayE2ETests.cs
+@@ -1,10 +1,23 @@
+ using System;
++using System.Collections.Generic;
+ using System.Linq;
++using System.Net;
++using System.Net.Http;
++using System.Net.Http.Headers;
++using System.Net.WebSockets;
+ using System.Reflection;
++using System.Text;
++using System.Text.Json;
++using System.Threading;
++using System.Threading.Tasks;
+ using Microsoft.VisualStudio.TestTools.UnitTesting;
++using ACE.Entity;
++using ACE.Entity.Enum;
++using ACE.Server.Economy;
+ using ACE.Server.Managers;
+ using ACE.Server.Vehicles;
+ using ACE.Server.Vehicles.Deployables;
++using ACE.Server.WorldObjects;
+ using static ACE.Server.Tests.EconomyE2E.EconomyE2EReflectionHelpers;
+ 
+ namespace ACE.Server.Tests.EconomyE2E
+@@ -94,7 +107,7 @@ public void F16_StarterHearth4000095_Indestructible_InHoltburgShoushiYaraq()
+         }
+ 
+         [TestMethod]
+-        public void F17_AgentGateway_LoopbackConfig_AndWorldManagerEnqueueParity()
++        public async Task F17_AgentGateway_LoopbackConfig_AndWorldManagerEnqueueParity()
+         {
+             // Baseline verified right now: WorldManager.EnqueueAction exists
+             Assert.IsNotNull(typeof(WorldManager).GetMethod("EnqueueAction", BindingFlags.Static | BindingFlags.Public),
+@@ -105,6 +118,185 @@ public void F17_AgentGateway_LoopbackConfig_AndWorldManagerEnqueueParity()
+                 "ACE.Server.Economy.AgentGatewayService");
+             var bindHost = Convert.ToString(GetStaticPropOrField(gwType, "BindHost") ?? GetStaticPropOrField(gwType, "DefaultHost") ?? "");
+             Assert.AreEqual("127.0.0.1", bindHost, "AgentGatewayService must bind strictly to loopback 127.0.0.1");
++
++            const string token = "e2e-loopback-ephemeral-token";
++            AgentGatewayService.ResetForTesting();
++            TownEconomyManager.EnabledOverride = true;
++            TownEconomyManager.ResetForTesting();
++            SiegeManager.ResetForTesting();
++
++            try
++            {
++                AgentGatewayService.TokenOverride = token;
++                AgentGatewayService.EnabledOverride = true;
++                int port = AgentGatewayService.Start(0);
++                Assert.IsTrue(port > 0, "Expected ephemeral loopback port > 0");
++                Assert.IsTrue(AgentGatewayService.IsRunning);
++
++                using var http = new HttpClient { BaseAddress = new Uri($"http://127.0.0.1:{port}") };
++                var unauthResp = await http.GetAsync("/api/v1/world/towns");
++                Assert.AreEqual(HttpStatusCode.Unauthorized, unauthResp.StatusCode, "Unauthenticated gateway request must return 401");
++
++                http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
++                var okResp = await http.GetAsync("/api/v1/world/towns");
++                Assert.AreEqual(HttpStatusCode.OK, okResp.StatusCode, "Authenticated GET /api/v1/world/towns must return 200");
++                var body = await okResp.Content.ReadAsStringAsync();
++                using (var doc = JsonDocument.Parse(body))
++                {
++                    Assert.AreEqual(101, doc.RootElement.GetProperty("towns").GetArrayLength());
++                }
++
++                using var ws = new ClientWebSocket();
++                await ws.ConnectAsync(new Uri($"ws://127.0.0.1:{port}/ws?token={Uri.EscapeDataString(token)}"), CancellationToken.None);
++                Assert.AreEqual(WebSocketState.Open, ws.State);
++
++                var wsDeadline = DateTime.UtcNow.AddSeconds(2);
++                while (AgentGatewayService.WebSocketClientCount == 0 && DateTime.UtcNow < wsDeadline)
++                    await Task.Delay(5);
++                Assert.IsTrue(AgentGatewayService.WebSocketClientCount > 0);
++
++                uint attackerId = AllocTestGuid();
++                SiegeManager.BeginZeroNoticeBreachForTesting(1u, attackerId, 10_000L);
++                SiegeManager.AdvanceRingHold(1u, attackerId, SiegeManager.BreachGateSec);
++                var buf = new byte[4096];
++                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(3));
++                var recv = await ws.ReceiveAsync(new ArraySegment<byte>(buf), cts.Token);
++                var alertJson = Encoding.UTF8.GetString(buf, 0, recv.Count);
++                using (var alertDoc = JsonDocument.Parse(alertJson))
++                {
++                    Assert.AreEqual("siege_started", alertDoc.RootElement.GetProperty("type").GetString());
++                }
++            }
++            finally
++            {
++                AgentGatewayService.ResetForTesting();
++                SiegeManager.ResetForTesting();
++                TownEconomyManager.EnabledOverride = null;
++                TownEconomyManager.ResetForTesting();
++            }
++        }
++
++        [TestMethod]
++        public async Task F17_AgentGateway_MonarchOrder_CreateGetFulfillCancel_Lifecycle()
++        {
++            const string token = "e2e-lifecycle-token";
++            AgentGatewayService.ResetForTesting();
++            TownEconomyManager.EnabledOverride = true;
++            TownEconomyManager.ResetForTesting();
++
++            try
++            {
++                uint monarchId = AllocTestGuid();
++                var monarch = CreateTestPlayer(monarchId, 0xA9B40001u, 30f, 30f, 10f, monarchId: monarchId);
++                TownEconomyManager.SetTownOwner(1u, monarchId, "CONTROLLED");
++                TownEconomyManager.SeedTownTill(1u, 5_000L);
++
++                AgentGatewayService.TokenOverride = token;
++                AgentGatewayService.EnabledOverride = true;
++                AgentGatewayService.TestActorResolver = id => id == monarchId ? monarch : null;
++                int port = AgentGatewayService.Start(0);
++
++                using var http = new HttpClient { BaseAddress = new Uri($"http://127.0.0.1:{port}") };
++                http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
++
++                var createResp = await http.PostAsync("/api/v1/monarch/orders",
++                    new StringContent(JsonSerializer.Serialize(new
++                    {
++                        actorGuid = monarchId,
++                        townId = 1u,
++                        action = "create_bounty",
++                        itemWcid = 51234u,
++                        quantity = 2,
++                        rewardPyreals = 400,
++                    }), Encoding.UTF8, "application/json"));
++                Assert.AreEqual(HttpStatusCode.OK, createResp.StatusCode);
++                ulong createdOrderId;
++                using (var doc = JsonDocument.Parse(await createResp.Content.ReadAsStringAsync()))
++                    createdOrderId = doc.RootElement.GetProperty("orderId").GetUInt64();
++                Assert.IsTrue(createdOrderId > 0 && createdOrderId <= TownEconomyManager.MaxSafeJsUInt53);
++
++                var listResp = await http.GetStringAsync("/api/v1/monarch/orders");
++                using (var listDoc = JsonDocument.Parse(listResp))
++                {
++                    var orders = listDoc.RootElement.GetProperty("orders").EnumerateArray().ToList();
++                    Assert.IsTrue(orders.Any(o => o.GetProperty("orderId").GetUInt64() == createdOrderId && o.GetProperty("status").GetString() == "Open"));
++                }
++
++                var cancelResp = await http.PostAsync("/api/v1/monarch/orders",
++                    new StringContent(JsonSerializer.Serialize(new
++                    {
++                        actorGuid = monarchId,
++                        townId = 1u,
++                        action = "cancel_bounty",
++                        orderId = createdOrderId,
++                        itemWcid = 51234u,
++                    }), Encoding.UTF8, "application/json"));
++                Assert.AreEqual(HttpStatusCode.OK, cancelResp.StatusCode);
++
++                var afterList = await http.GetStringAsync("/api/v1/monarch/orders");
++                using (var afterDoc = JsonDocument.Parse(afterList))
++                {
++                    var ord = afterDoc.RootElement.GetProperty("orders").EnumerateArray().First(o => o.GetProperty("orderId").GetUInt64() == createdOrderId);
++                    Assert.AreEqual("Cancelled", ord.GetProperty("status").GetString());
++                }
++            }
++            finally
++            {
++                AgentGatewayService.ResetForTesting();
++                TownEconomyManager.EnabledOverride = null;
++                TownEconomyManager.ResetForTesting();
++            }
++        }
++
++        [TestMethod]
++        public async Task F17_AgentGateway_MonarchOrder_NegativeAndLowTillRefusal()
++        {
++            const string token = "e2e-neg-order-token";
++            AgentGatewayService.ResetForTesting();
++            TownEconomyManager.EnabledOverride = true;
++            TownEconomyManager.ResetForTesting();
++
++            try
++            {
++                uint monarchId = AllocTestGuid();
++                var monarch = CreateTestPlayer(monarchId, 0xA9B40001u, 30f, 30f, 10f, monarchId: monarchId);
++                TownEconomyManager.SetTownOwner(1u, monarchId, "CONTROLLED");
++                TownEconomyManager.SeedTownTill(1u, 100L);
++
++                AgentGatewayService.TokenOverride = token;
++                AgentGatewayService.EnabledOverride = true;
++                AgentGatewayService.TestActorResolver = id => id == monarchId ? monarch : null;
++                int port = AgentGatewayService.Start(0);
++
++                using var http = new HttpClient { BaseAddress = new Uri($"http://127.0.0.1:{port}") };
++                http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
++
++                var negRewardResp = await http.PostAsync("/api/v1/monarch/orders",
++                    new StringContent(JsonSerializer.Serialize(new
++                    {
++                        actorGuid = monarchId,
++                        townId = 1u,
++                        action = "create_bounty",
++                        itemWcid = 51235u,
++                        quantity = 1,
++                        rewardPyreals = -250,
++                    }), Encoding.UTF8, "application/json"));
++                Assert.AreEqual(HttpStatusCode.UnprocessableEntity, negRewardResp.StatusCode);
++
++                // Bounty whose reward (500p) exceeds town till (100p) must refuse Trophy Collector precheck
++                Assert.IsNotNull(TownEconomyManager.SetProcurementBountyOrder(1u, 51235u, "raw_hide", 500L, 1, monarchId));
++                var collector = CreateTestItem(3917u, WeenieType.Creature, ItemType.None, 0, name: "Holtburg Collector");
++                collector.Location = new Position(0xA9B40001u, 30f, 30f, 10f, 0, 0, 0, 1);
++                var trophy = CreateTestItem(51235u, WeenieType.Generic, ItemType.Misc, 10, name: "Hide");
++                Assert.IsFalse(TownEconomyManager.CanHandleTrophyTurnIn(collector, trophy, out _),
++                    "Trophy Collector MUST refuse turn-in when town till < reward_pyreals");
++            }
++            finally
++            {
++                AgentGatewayService.ResetForTesting();
++                TownEconomyManager.EnabledOverride = null;
++                TownEconomyManager.ResetForTesting();
++            }
+         }
+ 
+         [TestMethod]
+diff --git a/Source/ACE.Server.Tests/EconomyE2E/Tier5AdversarialE2ETests.cs b/Source/ACE.Server.Tests/EconomyE2E/Tier5AdversarialE2ETests.cs
+new file mode 100644
+index 00000000..40221d36
+--- /dev/null
++++ b/Source/ACE.Server.Tests/EconomyE2E/Tier5AdversarialE2ETests.cs
+@@ -0,0 +1,625 @@
++using System;
++using System.Collections.Concurrent;
++using System.Collections.Generic;
++using System.IO;
++using System.Linq;
++using System.Net;
++using System.Net.Http;
++using System.Net.Http.Headers;
++using System.Numerics;
++using System.Reflection;
++using System.Runtime.CompilerServices;
++using System.Text;
++using System.Text.Json;
++using System.Threading;
++using System.Threading.Tasks;
++using Microsoft.VisualStudio.TestTools.UnitTesting;
++using ACE.Database;
++using ACE.Database.Models.Shard;
++using ACE.Entity;
++using ACE.Entity.Enum;
++using ACE.Entity.Enum.Properties;
++using ACE.Entity.Models;
++using ACE.Server.Economy;
++using ACE.Server.Managers;
++using ACE.Server.Network;
++using ACE.Server.Network.GameAction.Actions;
++using ACE.Server.Vehicles;
++using ACE.Server.Vehicles.Deployables;
++using ACE.Server.WorldObjects;
++using static ACE.Server.Tests.EconomyE2E.EconomyE2EReflectionHelpers;
++
++namespace ACE.Server.Tests.EconomyE2E
++{
++    [TestClass]
++    public class Tier5AdversarialE2ETests
++    {
++        [ClassInitialize]
++        public static void ClassInit(TestContext _)
++        {
++            Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
++            var wdb = DatabaseManager.World;
++            var nameCache = (ConcurrentDictionary<string, uint>)typeof(WorldDatabaseWithEntityCache)
++                .GetField("weenieClassNameToClassIdCache", BindingFlags.Instance | BindingFlags.NonPublic)?.GetValue(wdb);
++            var idCache = (ConcurrentDictionary<uint, Weenie>)typeof(WorldDatabaseWithEntityCache)
++                .GetField("weenieCache", BindingFlags.Instance | BindingFlags.NonPublic)?.GetValue(wdb);
++            if (nameCache != null && idCache != null)
++            {
++                idCache.TryAdd(0u, null);
++                nameCache.TryAdd("portalmarketplace", 0u);
++                for (int i = 1; i <= 5; i++)
++                {
++                    nameCache.TryAdd($"portalpkarenanew{i}", 0u);
++                    nameCache.TryAdd($"portalpklarenanew{i}", 0u);
++                }
++            }
++        }
++        [TestInitialize]
++        public void Init()
++        {
++            Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
++            TownEconomyManager.EnabledOverride = true;
++            TownEconomyManager.ResetForTesting();
++            SiegeManager.ResetForTesting();
++            GeologyService.ResetForTesting();
++            IndustryManager.ResetForTesting();
++            LogisticsNavGraph.ClearCacheForTesting();
++            LogisticsEngine.ResetForTesting();
++            DeployableManager.Clear();
++            DeployableManager.EnterWorldOverrideForTesting = _ => true;
++            VehicleManager.EnabledOverride = true;
++            AgentGatewayService.ResetForTesting();
++        }
++
++        [TestCleanup]
++        public void Cleanup()
++        {
++            AgentGatewayService.ResetForTesting();
++            LogisticsEngine.ResetForTesting();
++            LogisticsNavGraph.ClearCacheForTesting();
++            DeployableManager.Clear();
++            DeployableManager.EnterWorldOverrideForTesting = null;
++            IndustryManager.ResetForTesting();
++            GeologyService.ResetForTesting();
++            SiegeManager.ResetForTesting();
++            TownEconomyManager.EnabledOverride = null;
++            TownEconomyManager.ResetForTesting();
++            VehicleManager.EnabledOverride = null;
++        }
++
++        private static Player CreateInventoryPlayer(uint guid, uint cellId, float x, float y, float z, uint monarchId, bool isMonarch = true, int itemsCapacity = 24)
++        {
++            var player = CreateTestPlayer(guid, cellId, x, y, z, monarchId: 0u);
++            typeof(Container).GetField("<Inventory>k__BackingField", BindingFlags.Instance | BindingFlags.NonPublic)
++                ?.SetValue(player, new Dictionary<ObjectGuid, WorldObject>());
++            typeof(Container).GetField("InventoryLock", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
++                ?.SetValue(player, new ReaderWriterLockSlim());
++            player.Biota.PropertiesInt[PropertyInt.ItemsCapacity] = itemsCapacity;
++            player.Biota.PropertiesInt[PropertyInt.ContainersCapacity] = 7;
++            player.Biota.PropertiesAttribute[PropertyAttribute.Strength] = new PropertiesAttribute { InitLevel = 100 };
++
++            if (monarchId != 0 && monarchId != guid)
++            {
++                player.PatronId = monarchId;
++                player.MonarchId = monarchId;
++            }
++            else if (isMonarch && monarchId != 0)
++            {
++                player.MonarchId = monarchId;
++            }
++            return player;
++        }
++
++        private static Session AttachMockSession(Player player, uint capabilities = VehicleWire.CapObserve)
++        {
++            var session = (Session)RuntimeHelpers.GetUninitializedObject(typeof(Session));
++            typeof(Session).GetField("<Player>k__BackingField", BindingFlags.Instance | BindingFlags.NonPublic)
++                ?.SetValue(session, player);
++            session.VehicleCapabilities = capabilities;
++            typeof(Player).GetField("<Session>k__BackingField", BindingFlags.Instance | BindingFlags.NonPublic)
++                ?.SetValue(player, session);
++            return session;
++        }
++
++        private static ClientMessage WrapVehicleC2S(VehicleC2S msg)
++        {
++            using var ms = new MemoryStream();
++            using var bw = new BinaryWriter(ms);
++            bw.Write(msg.Opcode); // 4-byte opcode consumed by ClientMessage ctor
++            msg.Write(bw);
++            bw.Flush();
++            return new ClientMessage(ms.ToArray());
++        }
++
++        [TestMethod]
++        public void Tier5_CRIT01_DepositSupply_WireRefusesZeroCargo_AndAcceptsConsumedPhysicalCargo()
++        {
++            var holtburg = TownRegistry.GetById(1u);
++            uint attackerId = AllocTestGuid();
++            var attacker = CreateInventoryPlayer(attackerId, holtburg.AnchorLandblock, 50f, 50f, 10f, monarchId: attackerId, isMonarch: true);
++            var beaconPos = Vehicle.ToPosition(holtburg.WorldX, holtburg.WorldY, holtburg.WorldZ, Quaternion.Identity);
++            attacker.Location = new Position(beaconPos);
++            var session = AttachMockSession(attacker, VehicleWire.CapObserve);
++
++            SiegeManager.BeginContestedHoldForTesting(1u, 100u, attackerId, 50_000L);
++            SiegeManager.SetSupplyMeterForTesting(1u, 0.0);
++
++            var beacon = (ForwardSiegeBeaconDeployable)DeployableManager.SpawnDeployable(
++                ForwardSiegeBeaconDeployable.ForwardSiegeBeaconWeenieClassId, beaconPos, attacker);
++            beacon.TargetTownId = 1u;
++
++            // 1. Adversarial wire packet: SupplyPoints=99999, OriginLandblock=0x7D64 (Yaraq > 1500m), ZERO physical cargo
++            var spoofMsg = WrapVehicleC2S(new EconomySiegeAction
++            {
++                TownId = 1u,
++                BeaconGuid = beacon.Guid.Full,
++                Action = 2, // DepositSupply
++                SupplyPoints = 99_999,
++                OriginLandblock = 0x7D640001u,
++            });
++            GameActionVehicle.HandleEconomySiegeAction(spoofMsg, session);
++            Assert.AreEqual(0.0, SiegeManager.GetSiegeState(1u).SupplyMeterSec, 0.001,
++                "[CRIT-01] DepositSupply without physical cargo MUST fail closed with 0 supply added");
++
++            // 2. Local physical cargo (< 1,500m) MUST also be rejected and NOT consumed
++            uint localOrigin = SiegeManager.PackOriginLandblockId(new LandblockId(holtburg.AnchorLandblock));
++            var localCrate = CreateTestItem(99101u, WeenieType.Generic, ItemType.Misc, 10, name: "Local Crate");
++            localCrate.SetProperty(PropertyInt.OriginLandblockId, (int)localOrigin);
++            Assert.IsTrue(attacker.TryAddToInventory(localCrate, out _, burdenCheck: false));
++
++            var localAttempt = WrapVehicleC2S(new EconomySiegeAction
++            {
++                TownId = 1u,
++                BeaconGuid = beacon.Guid.Full,
++                Action = 2,
++                SupplyPoints = 99_999,
++                OriginLandblock = 0x7D640001u, // Spoofed distant origin must be ignored!
++            });
++            GameActionVehicle.HandleEconomySiegeAction(localAttempt, session);
++            Assert.AreEqual(0.0, SiegeManager.GetSiegeState(1u).SupplyMeterSec, 0.001,
++                "[CRIT-01] Client msg.OriginLandblock MUST NOT override local item OriginLandblockId");
++            Assert.AreEqual(1, attacker.GetNumInventoryItemsOfWCID(99101u), "Rejected local item must remain in inventory");
++
++            // 3. Valid >= 1,500m physical cargo in inventory IS consumed and uses authoritative server SP (25 SP, not 99,999 SP)
++            attacker.TryRemoveFromInventory(localCrate.Guid, out _);
++            uint farOrigin = SiegeManager.PackOriginLandblockId(new LandblockId(0xB2B40001u)); // +1,728m east of Holtburg
++            var farCrate = CreateTestItem(99102u, WeenieType.Generic, ItemType.Misc, 10, name: "Far Siege Crate");
++            farCrate.SetProperty(PropertyInt.OriginLandblockId, (int)farOrigin);
++            Assert.IsTrue(attacker.TryAddToInventory(farCrate, out _, burdenCheck: false));
++
++            var validAttempt = WrapVehicleC2S(new EconomySiegeAction
++            {
++                TownId = 1u,
++                BeaconGuid = beacon.Guid.Full,
++                Action = 2,
++                SupplyPoints = 99_999, // Must be ignored in favor of server-authoritative unit SP (25 SP)
++                OriginLandblock = 0u,
++            });
++            GameActionVehicle.HandleEconomySiegeAction(validAttempt, session);
++
++            // 25 SP / 200 SP/hr (CapitalPort) * 3600 = 450s (NOT 5,400s capped from 99,999 SP)
++            Assert.AreEqual(450.0, SiegeManager.GetSiegeState(1u).SupplyMeterSec, 0.1,
++                "[CRIT-01] Valid inventory crate must credit server-authoritative 25 SP (450s), ignoring msg.SupplyPoints=99999");
++            Assert.IsTrue(farCrate.IsDestroyed, "Consumed supply crate must be destroyed");
++            Assert.AreEqual(0, attacker.GetNumInventoryItemsOfWCID(99102u));
++        }
++
++        [TestMethod]
++        public void Tier5_CRIT02_EmptyRing_DoesNotAdvanceClaimOrBreach()
++        {
++            // 1. Unclaimed claim with NO hydrated node / NO player in 30m ring must NOT advance ClaimElapsedSec
++            uint claimantId = AllocTestGuid();
++            var claimant = CreateInventoryPlayer(claimantId, 0xA9B40001u, 50f, 50f, 10f, monarchId: claimantId);
++            Assert.IsTrue(SiegeManager.TryStartClaim(1u, claimant, hasCharter: true, out _));
++
++            SiegeManager.TickForTesting(SiegeManager.ClaimDurationSec + 120.0);
++            var claimSnap = SiegeManager.GetSiegeState(1u);
++            Assert.AreEqual("UNCLAIMED_COLD", claimSnap.State, "[CRIT-02] Claim must NOT complete when liveRingHolder == null");
++            Assert.AreEqual(0.0, claimSnap.ClaimElapsedSec, 0.001, "[CRIT-02] Unheld claim timer must reset to 0");
++
++            // Even when TCN IS hydrated, if 30m ring is empty (nobody inside), ClaimElapsedSec must NOT advance
++            var hydrated = SiegeManager.EnsureTownEntitiesHydrated(1u);
++            Assert.IsNotNull(hydrated);
++            SiegeManager.TickForTesting(SiegeManager.ClaimDurationSec + 120.0);
++            claimSnap = SiegeManager.GetSiegeState(1u);
++            Assert.AreEqual("UNCLAIMED_COLD", claimSnap.State, "[CRIT-02] Claim must NOT complete with empty hydrated 30m ring");
++
++            // 2. Controlled breach with empty / unhydrated ring must NOT advance BreachElapsedSec or enter CONTESTED_HOLD
++            SiegeManager.BeginZeroNoticeBreachForTesting(10u, 200u, 100_000L);
++            SiegeManager.TickForTesting(SiegeManager.BreachGateSec + 60.0);
++            var breachSnap = SiegeManager.GetSiegeState(10u);
++            Assert.AreEqual("CONTROLLED", breachSnap.State, "[CRIT-02] Breach must NOT enter CONTESTED_HOLD when liveRingHolder == null");
++            Assert.AreEqual(0.0, breachSnap.BreachElapsedSec, 0.001, "[CRIT-02] Unheld breach timer must reset to 0");
++        }
++
++        [TestMethod]
++        public void Tier5_HIGH01_WorldPlacedPerishable_InsidePoweredReefer_ZeroDecayAcrossHeartbeat()
++        {
++            var holtburg = TownRegistry.GetById(1u);
++            var reeferPos = Vehicle.ToPosition(holtburg.WorldX, holtburg.WorldY, holtburg.WorldZ, Quaternion.Identity);
++            var reefer = (IsoContainerDeployable)DeployableManager.SpawnDeployable(IsoContainerDeployable.WcidReefer20, reeferPos);
++            Assert.IsNotNull(reefer);
++            reefer.ExternalReeferPowerConnected = true;
++            Assert.IsTrue(reefer.IsPoweredReefer);
++
++            // World-placed perishable inside powered Reefer bounding box
++            var insideItem = CreateTestItem(10864u, WeenieType.Generic, ItemType.Misc, 10, name: "Olthoi Venom Gland");
++            insideItem.Location = new Position(reeferPos);
++            insideItem.HeartbeatInterval = 60.0f;
++            insideItem.ReinitializeHeartbeats();
++
++            // Identical world-placed perishable 25m outside the Reefer
++            var outsidePos = Vehicle.ToPosition(holtburg.WorldX + 25.0, holtburg.WorldY, holtburg.WorldZ, Quaternion.Identity);
++            var outsideItem = CreateTestItem(10864u, WeenieType.Generic, ItemType.Misc, 10, name: "Olthoi Venom Gland");
++            outsideItem.Location = outsidePos;
++            outsideItem.HeartbeatInterval = 60.0f;
++            outsideItem.ReinitializeHeartbeats();
++
++            PerishableDecay.EnsureInitialized(insideItem);
++            PerishableDecay.EnsureInitialized(outsideItem);
++            Assert.AreEqual(100.0, PerishableDecay.GetFreshnessPercent(insideItem), 0.001);
++            Assert.AreEqual(100.0, PerishableDecay.GetFreshnessPercent(outsideItem), 0.001);
++
++            for (int i = 0; i < 10; i++)
++            {
++                insideItem.Heartbeat(1000.0 + i * 60.0);
++                outsideItem.Heartbeat(1000.0 + i * 60.0);
++            }
++
++            Assert.AreEqual(100.0, PerishableDecay.GetFreshnessPercent(insideItem), 0.001,
++                "[HIGH-01] World-placed perishable inside powered IsoReefer20 must stay 100% fresh across Heartbeat ticks");
++            Assert.IsTrue(PerishableDecay.GetFreshnessPercent(outsideItem) < 100.0,
++                "Control world-placed perishable outside Reefer must decay across Heartbeat ticks");
++        }
++
++        [TestMethod]
++        public void Tier5_HIGH02_TownTillCap_PersistsAcrossRestart_AndEnforcedInMixedNoteSale()
++        {
++            uint townId = 1u;
++            TownEconomyManager.SetTownTillCap(townId, 500L);
++            Assert.AreEqual(500L, TownEconomyManager.GetTownTillCap(townId));
++
++            var stateBefore = TownEconomyManager.GetTownState(townId);
++            List<TownVendorLedger> savedLedgers;
++            lock (stateBefore.SyncRoot)
++            {
++                Assert.IsTrue(stateBefore.Ledgers.Count >= 1, "SetTownTillCap must create/update a persistable ledger entry");
++                Assert.IsTrue(stateBefore.Ledgers.Values.All(l => l.TillCapPyreals == 500L));
++                savedLedgers = stateBefore.Ledgers.Values.Select(l => new TownVendorLedger
++                {
++                    TownId = l.TownId,
++                    VendorGuid = l.VendorGuid,
++                    ItemWcid = l.ItemWcid,
++                    StockQty = l.StockQty,
++                    TillPyreals = l.TillPyreals,
++                    TillCapPyreals = l.TillCapPyreals,
++                    UnitPriceOverride = l.UnitPriceOverride,
++                }).ToList();
++            }
++
++            // Simulate server restart: ResetForTesting + ApplyLoadedEconomyRowsLocked
++            TownEconomyManager.ResetForTesting();
++            Assert.AreEqual(0L, TownEconomyManager.GetTownTillCap(townId));
++            TownEconomyManager.ApplyLoadedEconomyRowsLocked(null, savedLedgers, null, null);
++            Assert.AreEqual(500L, TownEconomyManager.GetTownTillCap(townId),
++                "[HIGH-02] TownTillCapPyreals must restore across Initialize()/restart from loaded TownVendorLedger rows");
++
++            // Mixed Trade-Note + regular item sale must enforce TownTillCapPyreals on regularPayout
++            var holtburg = TownRegistry.GetById(townId);
++            TownEconomyManager.SetTownOwner(townId, 100u, "CONTROLLED");
++            TownEconomyManager.SeedTownTill(townId, 5_000L);
++            var st = TownEconomyManager.GetTownState(townId);
++            lock (st.SyncRoot) { st.Control.ClearinghouseReservePyreals = 1_000L; }
++
++            var vendor = CreateTestVendor(100u, holtburg.AnchorLandblock, "Mixed Sale Smith");
++            var note100 = CreateTestItem(2621u, WeenieType.Generic, ItemType.PromissoryNote, 100, stackSize: 1, maxStack: 100, name: "Trade Note (100)");
++            var regular600 = CreateTestItem(315u, WeenieType.MeleeWeapon, ItemType.MeleeWeapon, 600, name: "Expensive Dagger");
++
++            var mixedTooHigh = new Dictionary<uint, WorldObject>
++            {
++                [note100.Guid.Full] = note100,
++                [regular600.Guid.Full] = regular600,
++            };
++            Assert.IsFalse(TownEconomyManager.TryExecuteVendorSellToTown(vendor, mixedTooHigh, 700, out var capErr),
++                "[HIGH-02] Mixed Trade-Note (100p) + regular (600p) sale exceeding 500p till cap MUST be refused");
++            StringAssert.Contains(capErr, "cap");
++
++            var regular500 = CreateTestItem(316u, WeenieType.MeleeWeapon, ItemType.MeleeWeapon, 500, name: "Capped Dagger");
++            var mixedWithinCap = new Dictionary<uint, WorldObject>
++            {
++                [note100.Guid.Full] = note100,
++                [regular500.Guid.Full] = regular500,
++            };
++            Assert.IsTrue(TownEconomyManager.TryExecuteVendorSellToTown(vendor, mixedWithinCap, 600, out var okErr), okErr);
++        }
++
++        [TestMethod]
++        public async Task Tier5_HIGH03_FullInventory_TrophyTurnInAndMintBullion_NeverBurnPyrealsOrBullion()
++        {
++            uint monarchId = AllocTestGuid();
++            uint actorId = AllocTestGuid();
++            var holtburg = TownRegistry.GetById(1u);
++
++            // Player with ItemsCapacity = 1 carrying 1 stacked trophy (size=2 -> consuming 1 frees 0 slots!)
++            var actor = CreateInventoryPlayer(actorId, holtburg.AnchorLandblock, (float)holtburg.WorldX, (float)holtburg.WorldY, (float)holtburg.WorldZ, monarchId: monarchId, isMonarch: false, itemsCapacity: 1);
++            TownEconomyManager.SetTownOwner(1u, monarchId, "CONTROLLED");
++            TownEconomyManager.SeedTownTill(1u, 10_000L);
++            TownEconomyManager.SeedWarehouseStock(1u, "pyreal_bar", 5);
++
++            const uint trophyWcid = 51236u;
++            var stackedTrophy = CreateTestItem(trophyWcid, WeenieType.Stackable, ItemType.Misc, 10, stackSize: 2, maxStack: 50, name: "Stacked Trophy", cellId: holtburg.AnchorLandblock);
++            Assert.IsTrue(actor.TryAddToInventory(stackedTrophy, out _, burdenCheck: false));
++            Assert.AreEqual(0, actor.GetFreeInventorySlots(), "Inventory must have 0 free slots");
++
++            // 1. TryMintBullion from warehouse to full inventory MUST fail without consuming warehouse bullion
++            var mintPos = Vehicle.ToPosition(holtburg.WorldX, holtburg.WorldY, holtburg.WorldZ, Quaternion.Identity);
++            var fluxPod = (FluxPodDeployable)DeployableManager.SpawnDeployable(FluxPodDeployable.FluxPodWeenieClassId, mintPos, actor);
++            var genset = (IndustrialGensetDeployable)DeployableManager.SpawnDeployable(IndustrialGensetDeployable.WcidIndustrialGenset150kW, mintPos, actor);
++            genset.AddFuelSeconds(600.0);
++            genset.IsActive = true;
++            var mint = (TownMintDeployable)DeployableManager.SpawnDeployable(TownMintDeployable.TownMintWeenieClassId, mintPos, actor);
++            mint.AffiliatedTownId = 1u;
++            mint.OnlineFlags |= DeployableOnlineFlags.Powered;
++            mint.Grid = fluxPod.Grid;
++
++            Assert.IsFalse(IndustryManager.TryMintBullion(mint, actor, 1u, IndustryManager.PyrealBarWcid, 1, depositToTreasury: false, out long minted, out var mintErr),
++                "[HIGH-03] TryMintBullion with full inventory must fail cleanly");
++            Assert.AreEqual(0L, minted);
++            Assert.AreEqual(5, TownEconomyManager.GetWarehouseStockQty(1u, "pyreal_bar"),
++                "[HIGH-03] Failed TryMintBullion must NOT burn warehouse bullion");
++
++            // 2. Trophy Collector turn-in via AgentGatewayService with full inventory MUST fail without burning Treasury or bounty
++            uint collectorGuid = AllocTestGuid();
++            var collectorCreature = (Creature)RuntimeHelpers.GetUninitializedObject(typeof(Creature));
++            var collectorBiota = new ACE.Entity.Models.Biota
++            {
++                Id = collectorGuid,
++                WeenieClassId = 3917u,
++                WeenieType = WeenieType.Creature,
++                PropertiesInt = new Dictionary<PropertyInt, int>
++                {
++                    [PropertyInt.ItemsCapacity] = 102,
++                    [PropertyInt.ContainersCapacity] = 7,
++                },
++                PropertiesInt64 = new Dictionary<PropertyInt64, long>(),
++                PropertiesFloat = new Dictionary<PropertyFloat, double>(),
++                PropertiesBool = new Dictionary<PropertyBool, bool> { [PropertyBool.AllowGive] = true },
++                PropertiesDID = new Dictionary<PropertyDataId, uint>(),
++                PropertiesString = new Dictionary<PropertyString, string> { [PropertyString.Name] = "Holtburg Collector" },
++                PropertiesPosition = new Dictionary<PositionType, PropertiesPosition>(),
++                PropertiesEmote = new List<PropertiesEmote>(),
++            };
++            InitWorldObjectFields(collectorCreature, collectorGuid, 3917u, collectorBiota, holtburg.AnchorLandblock, (float)holtburg.WorldX, (float)holtburg.WorldY, (float)holtburg.WorldZ);
++            collectorCreature.Location = new Position(mintPos);
++
++            var lb = (ACE.Server.Entity.Landblock)RuntimeHelpers.GetUninitializedObject(typeof(ACE.Server.Entity.Landblock));
++            typeof(ACE.Server.Entity.Landblock).GetField("isDungeon", BindingFlags.Instance | BindingFlags.NonPublic)?.SetValue(lb, (bool?)false);
++            typeof(ACE.Server.Entity.Landblock).GetField("worldObjects", BindingFlags.Instance | BindingFlags.NonPublic)
++                ?.SetValue(lb, new Dictionary<ObjectGuid, WorldObject> { [collectorCreature.Guid] = collectorCreature, [actor.Guid] = actor });
++            typeof(ACE.Server.Entity.Landblock).GetField("pendingAdditions", BindingFlags.Instance | BindingFlags.NonPublic)?.SetValue(lb, new Dictionary<ObjectGuid, WorldObject>());
++            typeof(ACE.Server.Entity.Landblock).GetField("pendingRemovals", BindingFlags.Instance | BindingFlags.NonPublic)?.SetValue(lb, new List<ObjectGuid>());
++            typeof(ACE.Server.Entity.Landblock).GetField("Adjacents", BindingFlags.Instance | BindingFlags.Public)?.SetValue(lb, new List<ACE.Server.Entity.Landblock>());
++            typeof(WorldObject).GetProperty("CurrentLandblock", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
++                ?.SetValue(actor, lb);
++            typeof(WorldObject).GetProperty("CurrentLandblock", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
++                ?.SetValue(collectorCreature, lb);
++
++            var order = TownEconomyManager.SetProcurementBountyOrder(1u, trophyWcid, "raw_hide", 500L, 3, monarchId);
++            Assert.IsNotNull(order);
++
++            const string token = "t5-high03-token";
++            AgentGatewayService.TokenOverride = token;
++            AgentGatewayService.EnabledOverride = true;
++            AgentGatewayService.TestActorResolver = id => id == actorId ? actor : null;
++            int port = AgentGatewayService.Start(0);
++
++            using var http = new HttpClient { BaseAddress = new Uri($"http://127.0.0.1:{port}") };
++            http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
++            var resp = await http.PostAsync("/api/v1/monarch/orders",
++                new StringContent(JsonSerializer.Serialize(new
++                {
++                    actorGuid = actorId,
++                    townId = 1u,
++                    action = "fulfill_order",
++                    itemWcid = trophyWcid,
++                    npcGuid = collectorCreature.Guid.Full,
++                }), Encoding.UTF8, "application/json"));
++
++            Assert.AreEqual(HttpStatusCode.UnprocessableEntity, resp.StatusCode,
++                "[HIGH-03] Full-inventory fulfill_order must fail cleanly with 422");
++            Assert.AreEqual(10_000L, TownEconomyManager.GetTreasuryPyreals(1u),
++                "[HIGH-03] Failed full-inventory trophy turn-in must NOT burn Town Treasury Pyreals");
++            Assert.AreEqual(2, actor.GetNumInventoryItemsOfWCID(trophyWcid),
++                "[HIGH-03] Failed full-inventory trophy turn-in must preserve player trophy stack");
++            Assert.AreEqual(3, TownEconomyManager.GetProcurementBounty(1u, trophyWcid).RemainingQty,
++                "[HIGH-03] Failed full-inventory trophy turn-in must preserve bounty RemainingQty");
++        }
++
++        [TestMethod]
++        public void Tier5_HIGH04_WithdrawEscrow_WireAction4_WithdrawsControlled_RefusesSieged_AndProtectsFullInventory()
++        {
++            uint monarchId = AllocTestGuid();
++            var holtburg = TownRegistry.GetById(1u);
++            var monarch = CreateInventoryPlayer(monarchId, holtburg.AnchorLandblock, 50f, 50f, 10f, monarchId: monarchId, isMonarch: true, itemsCapacity: 10);
++            var session = AttachMockSession(monarch, VehicleWire.CapObserve);
++
++            TownEconomyManager.SetTownOwner(1u, monarchId, "CONTROLLED");
++            TownEconomyManager.SeedTownTill(1u, 1_200L);
++            var st = TownEconomyManager.GetTownState(1u);
++            lock (st.SyncRoot) { st.Control.ClearinghouseReservePyreals = 200L; }
++
++            // 1. Valid withdrawal of 500p in CONTROLLED state (preserving 200p reserve)
++            GameActionVehicle.HandleEconomySiegeAction(WrapVehicleC2S(new EconomySiegeAction
++            {
++                TownId = 1u,
++                Action = 4, // WithdrawEscrow
++                SupplyPoints = 500,
++            }), session);
++
++            Assert.AreEqual(700L, TownEconomyManager.GetTreasuryPyreals(1u),
++                "[HIGH-04] WithdrawEscrow Action=4 must deduct 500p from TreasuryPyreals");
++            Assert.AreEqual(500, monarch.GetNumInventoryItemsOfWCID(TownEconomyManager.PyrealWcid),
++                "[HIGH-04] WithdrawEscrow Action=4 must deliver 500 physical Pyreals to Monarch");
++
++            // 2. Full inventory refuses Action=4 without losing TreasuryPyreals
++            monarch.Biota.PropertiesInt[PropertyInt.ItemsCapacity] = monarch.Inventory.Values.Count(wo => !wo.UseBackpackSlot);
++            GameActionVehicle.HandleEconomySiegeAction(WrapVehicleC2S(new EconomySiegeAction
++            {
++                TownId = 1u,
++                Action = 4,
++                SupplyPoints = 100,
++            }), session);
++            Assert.AreEqual(700L, TownEconomyManager.GetTreasuryPyreals(1u),
++                "[HIGH-04] Full-inventory WithdrawEscrow must NOT burn TreasuryPyreals");
++
++            // 3. Refusal during CONTESTED_HOLD / STARVING
++            monarch.Biota.PropertiesInt[PropertyInt.ItemsCapacity] = 10;
++            SiegeManager.BeginContestedHoldForTesting(1u, monarchId, AllocTestGuid(), 700L);
++            GameActionVehicle.HandleEconomySiegeAction(WrapVehicleC2S(new EconomySiegeAction
++            {
++                TownId = 1u,
++                Action = 4,
++                SupplyPoints = 100,
++            }), session);
++            Assert.AreEqual(500, monarch.GetNumInventoryItemsOfWCID(TownEconomyManager.PyrealWcid),
++                "[HIGH-04] WithdrawEscrow during CONTESTED_HOLD must be refused");
++        }
++
++        [TestMethod]
++        public void Tier5_MED09_CrossContinent16BitOriginDistance_AndProvenanceGuard()
++        {
++            // Town 61 (Vasmora) is on Dericost (ContinentId == 1); 0xA9B4 is Holtburg (Dereth, ContinentId == 0)
++            double dist = SiegeManager.ComputeDistanceFromOriginToTownM(0xA9B4u, 61u, isPacked32Bit: false);
++            Assert.IsTrue(dist > 60_000.0,
++                $"[MED-09] 16-bit Dereth origin 0xA9B4 to Dericost Vasmora must be cross-continent (> 60km), got {dist:0.0}m");
++
++            // Un-tagged 16-bit Dericost ID 0x2CB2 must NOT pass provenance for Dericost Town 61
++            Assert.IsFalse(SiegeManager.HasValidSupplyProvenance(0x2CB2u, 61u),
++                "[MED-09] Ambiguous 16-bit ID must be rejected for Dericost town provenance");
++
++            // Properly packed 32-bit local Dericost ID (0x2CB28001) is < 1,500m and rejected; far Dericost packed ID is accepted
++            uint localVasmora = SiegeManager.PackOriginLandblockId(new LandblockId(0x2CB28001u));
++            Assert.IsFalse(SiegeManager.HasValidSupplyProvenance(localVasmora, 61u));
++            uint farDericost = SiegeManager.PackOriginLandblockId(new LandblockId(0x40B28001u));
++            Assert.IsTrue(SiegeManager.HasValidSupplyProvenance(farDericost, 61u));
++        }
++
++        [TestMethod]
++        public void Tier5_MED10_GeologyService_RejectsNonFinitePosition()
++        {
++            uint playerId = AllocTestGuid();
++            var player = CreateInventoryPlayer(playerId, 0xA9B40001u, 50f, 50f, 10f, monarchId: playerId);
++
++            foreach (var badVec in new[]
++            {
++                new Vector3(float.NaN, 50f, 10f),
++                new Vector3(50f, float.PositiveInfinity, 10f),
++                new Vector3(50f, 50f, float.NegativeInfinity),
++            })
++            {
++                var res = GeologyService.HandleProspectingRequest(player, new IndustryProspecting
++                {
++                    ToolGuid = 0,
++                    ToolKind = (uint)DeployableKind.VibroseisSeismic,
++                    Mode = 0,
++                    Cell = 0xA9B40001u,
++                    Position = badVec,
++                }, out var err);
++
++                Assert.IsNull(res, "[MED-10] Non-finite Position must be rejected");
++                Assert.IsFalse(string.IsNullOrWhiteSpace(err));
++            }
++        }
++
++        [TestMethod]
++        public void Tier5_MED11_HandleLogisticsConvoyOrder_RequiresCapObserve()
++        {
++            uint monarchId = AllocTestGuid();
++            var monarch = CreateInventoryPlayer(monarchId, 0xA9B40001u, 50f, 50f, 10f, monarchId: monarchId);
++            var session = AttachMockSession(monarch, capabilities: 0u); // Missing CapObserve!
++
++            TownEconomyManager.SetTownOwner(1u, monarchId, "CONTROLLED");
++            TownEconomyManager.SetTownOwner(6u, monarchId, "CONTROLLED");
++            TownEconomyManager.SeedWarehouseStock(1u, "ulsd_diesel", 10);
++
++            var orderMsg = WrapVehicleC2S(new LogisticsConvoyOrder
++            {
++                Action = 1, // Dispatch
++                OriginTownId = 1u,
++                DestTownId = 6u,
++                VehicleClass = (byte)VehicleClass.HeavyTractor,
++                Flags = 0,
++            });
++
++            GameActionVehicle.HandleLogisticsConvoyOrder(orderMsg, session);
++            Assert.AreEqual(0, LogisticsEngine.GetAllConvoys().Count,
++                "[MED-11] HandleLogisticsConvoyOrder without CapObserve must drop request without creating convoy");
++        }
++
++        [TestMethod]
++        public void Tier5_MED12_NonMonarchSwornVassalWithCapObserve_RefusedForPolicyOrders()
++        {
++            uint monarchId = AllocTestGuid();
++            uint vassalId = AllocTestGuid();
++            var vassal = CreateInventoryPlayer(vassalId, 0xA9B40001u, 50f, 50f, 10f, monarchId: monarchId, isMonarch: false);
++            AttachMockSession(vassal, VehicleWire.CapObserve);
++            TownEconomyManager.SetTownOwner(1u, monarchId, "CONTROLLED");
++
++            // CreateBounty (Action=1)
++            var r1 = TownEconomyManager.HandleMonarchOrderAction(vassal, new EconomyMonarchOrder
++            {
++                TownId = 1u, Action = 1, ItemWcid = 51234u, Quantity = 5, RewardPyreals = 100,
++            }, out var err1);
++            Assert.IsNull(r1, "[MED-12] Non-monarch sworn vassal with CapObserve must be refused for CreateBounty");
++            StringAssert.Contains(err1, "Monarch");
++
++            // SetTariff (Action=3)
++            var r3 = TownEconomyManager.HandleMonarchOrderAction(vassal, new EconomyMonarchOrder
++            {
++                TownId = 1u, Action = 3, ParamF32 = 1.5f,
++            }, out var err3);
++            Assert.IsNull(r3, "[MED-12] Non-monarch sworn vassal with CapObserve must be refused for SetTariff");
++            StringAssert.Contains(err3, "Monarch");
++
++            // SetTillCap (Action=4)
++            var r4 = TownEconomyManager.HandleMonarchOrderAction(vassal, new EconomyMonarchOrder
++            {
++                TownId = 1u, Action = 4, RewardPyreals = 500,
++            }, out var err4);
++            Assert.IsNull(r4, "[MED-12] Non-monarch sworn vassal with CapObserve must be refused for SetTillCap");
++            StringAssert.Contains(err4, "Monarch");
++        }
++
++        [TestMethod]
++        public void Tier5_LOW01_ConvoyAndOrderId_SafeJs53BitBounds()
++        {
++            uint monarchId = AllocTestGuid();
++            var monarch = CreateInventoryPlayer(monarchId, 0xA9B40001u, 50f, 50f, 10f, monarchId: monarchId);
++            TownEconomyManager.SetTownOwner(1u, monarchId, "CONTROLLED");
++            TownEconomyManager.SetTownOwner(6u, monarchId, "CONTROLLED");
++            TownEconomyManager.SeedWarehouseStock(1u, "ulsd_diesel", 10);
++
++            var ord = TownEconomyManager.SetProcurementBountyOrder(1u, 51234u, "raw_hide", 100L, 1, monarchId);
++            Assert.IsNotNull(ord);
++            Assert.IsTrue(ord.OrderId <= TownEconomyManager.MaxSafeJsUInt53,
++                $"[LOW-01] Generated OrderId {ord.OrderId} must stay <= 2^53 - 1");
++
++            ulong over53 = TownEconomyManager.MaxSafeJsUInt53 + 1UL;
++            var badOrdReply = TownEconomyManager.HandleMonarchOrderAction(monarch, new EconomyMonarchOrder
++            {
++                TownId = 1u, Action = 1, OrderId = over53, ItemWcid = 51235u, Quantity = 1, RewardPyreals = 100,
++            }, out var ordErr);
++            Assert.IsNull(badOrdReply, "[LOW-01] OrderId > 2^53 - 1 must be rejected");
++            Assert.IsFalse(string.IsNullOrWhiteSpace(ordErr));
++
++            var convoy = LogisticsEngine.DispatchConvoy(monarchId, 1u, 6u, (byte)VehicleClass.HeavyTractor, out var cErr, initialFuelLiters: 200.0);
++            Assert.IsNotNull(convoy, cErr);
++            Assert.IsTrue(convoy.ConvoyId <= LogisticsEngine.MaxSafeJsUInt53,
++                $"[LOW-01] Generated ConvoyId {convoy.ConvoyId} must stay <= 2^53 - 1");
++
++            var badConvoy = LogisticsEngine.DispatchConvoy(monarchId, 1u, 6u, (byte)VehicleClass.HeavyTractor, out var badCErr, initialFuelLiters: 200.0, explicitConvoyId: over53);
++            Assert.IsNull(badConvoy, "[LOW-01] Explicit ConvoyId > 2^53 - 1 must be rejected");
++            Assert.IsFalse(string.IsNullOrWhiteSpace(badCErr));
++        }
++    }
++}
+diff --git a/Source/ACE.Server/Economy/AgentGatewayService.cs b/Source/ACE.Server/Economy/AgentGatewayService.cs
+index bb245a37..b2f95c70 100644
+--- a/Source/ACE.Server/Economy/AgentGatewayService.cs
++++ b/Source/ACE.Server/Economy/AgentGatewayService.cs
+@@ -1056,9 +1056,17 @@ private static (int Status, object Payload) ExecuteMonarchOrderPost(JsonElement
+                 if (item == null)
+                     return (422, new { error = $"Actor inventory does not contain WCID {itemWcid}." });
+ 
+-                if (!TownEconomyManager.CanHandleTrophyTurnIn(npc, item, out var precheckErr))
++                if (!TownEconomyManager.CanHandleTrophyTurnIn(npc, item, out var precheckErr, out var expectedPayout))
+                     return (422, new { error = precheckErr });
+ 
++                if (expectedPayout > 0)
++                {
++                    int neededSlots = (int)((expectedPayout + 24_999L) / 25_000L);
++                    int freedSlots = (item.StackSize ?? 1) <= 1 ? 1 : 0;
++                    if (actor.Inventory == null || actor.GetFreeInventorySlots() + freedSlots < neededSlots)
++                        return (422, new { error = $"Inventory full: need {neededSlots} free slot(s) to receive {expectedPayout:N0}p payout." });
++                }
++
+                 if (!TryConsumeOneTrophyUnit(actor, item, out var removedWholeItem, out int originalStackSize, out var consumeErr))
+                     return (422, new { error = consumeErr });
+ 
+@@ -1069,6 +1077,13 @@ private static (int Status, object Payload) ExecuteMonarchOrderPost(JsonElement
+                     return (422, new { error = feedback });
+                 }
+ 
++                if (payout > 0 && !TryGrantPyrealsToPlayer(actor, payout, out var payoutErr))
++                {
++                    TownEconomyManager.RefundTrophyTurnIn(npc, turnInItem.WeenieClassId, payout, 1);
++                    RefundOneTrophyUnit(actor, item, removedWholeItem, originalStackSize);
++                    return (422, new { error = payoutErr });
++                }
++
+                 if (removedWholeItem != null)
+                 {
+                     if (actor.Session?.Network != null)
+@@ -1079,9 +1094,6 @@ private static (int Status, object Payload) ExecuteMonarchOrderPost(JsonElement
+                     }
+                 }
+ 
+-                if (payout > 0)
+-                    GrantPyrealsToPlayer(actor, payout);
+-
+                 return (200, new { ok = true, payoutPyreals = payout, message = feedback });
+             }
+ 
+@@ -1181,9 +1193,13 @@ private static (int Status, object Payload) ExecuteMonarchOrderPost(JsonElement
+                 rewardOrCapPyreals = (ulong)tillCap;
+             }
+ 
++            ulong requestedOrderId = GetJsonULong(body, "orderId");
++            if (requestedOrderId > TownEconomyManager.MaxSafeJsUInt53)
++                return (422, new { error = $"orderId exceeds safe 53-bit integer bound ({TownEconomyManager.MaxSafeJsUInt53})." });
++
+             var msg = new EconomyMonarchOrder
+             {
+-                OrderId = GetJsonULong(body, "orderId"),
++                OrderId = requestedOrderId,
+                 TownId = townId,
+                 Action = orderAction,
+                 TargetGuid = GetJsonUInt(body, "targetMonarchId"),
+@@ -1339,12 +1355,23 @@ private static void RefundOneTrophyUnit(Player actor, WorldObject item, WorldObj
+                 item.StackSize = originalStackSize;
+         }
+ 
+-        private static void GrantPyrealsToPlayer(Player actor, long totalPyreals)
++        private static bool TryGrantPyrealsToPlayer(Player actor, long totalPyreals, out string error)
+         {
++            error = null;
+             if (actor == null || totalPyreals <= 0)
+-                return;
++                return true;
+ 
++            int neededSlots = (int)((totalPyreals + 24_999L) / 25_000L);
++            if (actor.Inventory == null || actor.GetFreeInventorySlots() < neededSlots)
++            {
++                error = $"Inventory full: need {neededSlots} free slot(s) to receive {totalPyreals:N0}p payout.";
++                return false;
++            }
++
++            var addedStacks = new List<WorldObject>();
+             long remaining = totalPyreals;
++            bool failed = false;
++
+             while (remaining > 0)
+             {
+                 WorldObject coinStack = null;
+@@ -1390,25 +1417,48 @@ private static void GrantPyrealsToPlayer(Player actor, long totalPyreals)
+                 int stackAmt = (int)Math.Min(remaining, maxStack);
+                 coinStack.SetStackSize(stackAmt);
+ 
++                bool inserted;
+                 if (actor.Session?.Network != null)
+                 {
+-                    if (!actor.TryCreateInInventoryWithNetworking(coinStack))
+-                        coinStack.Destroy();
++                    inserted = actor.TryCreateInInventoryWithNetworking(coinStack);
+                 }
+                 else
+                 {
+-                    if (!actor.TryAddToInventory(coinStack, out _, burdenCheck: false))
+-                    {
+-                        try { coinStack.Destroy(false); } catch (NullReferenceException) { }
+-                    }
+-                    else
+-                    {
++                    inserted = actor.TryAddToInventory(coinStack, out _, burdenCheck: false);
++                    if (inserted)
+                         actor.CoinValue = actor.GetInventoryItemsOfTypeWeenieType(WeenieType.Coin).Sum(c => c.Value ?? 0);
+-                    }
+                 }
+ 
++                if (!inserted)
++                {
++                    try { coinStack.Destroy(false); } catch (NullReferenceException) { }
++                    failed = true;
++                    break;
++                }
++
++                addedStacks.Add(coinStack);
+                 remaining -= stackAmt;
+             }
++
++            if (failed)
++            {
++                foreach (var stack in addedStacks)
++                {
++                    if (actor.Session?.Network != null)
++                        actor.TryConsumeFromInventoryWithNetworking(stack, stack.StackSize ?? 1);
++                    else
++                    {
++                        actor.TryRemoveFromInventory(stack.Guid, out _);
++                        try { stack.Destroy(false); } catch (NullReferenceException) { }
++                    }
++                }
++                if (actor.Session?.Network == null)
++                    actor.CoinValue = actor.GetInventoryItemsOfTypeWeenieType(WeenieType.Coin).Sum(c => c.Value ?? 0);
++                error = "Inventory full: unable to hold Pyreal payout (treasury and trophy refunded).";
++                return false;
++            }
++
++            return true;
+         }
+ 
+         private static async Task HandleWebSocketAsync(HttpListenerContext ctx, CancellationToken ct)
+diff --git a/Source/ACE.Server/Economy/GeologyService.cs b/Source/ACE.Server/Economy/GeologyService.cs
+index 08df8b57..aa95e2b2 100644
+--- a/Source/ACE.Server/Economy/GeologyService.cs
++++ b/Source/ACE.Server/Economy/GeologyService.cs
+@@ -784,6 +784,11 @@ public static IndustrySurveyResultMsg HandleProspectingRequest(Player player, In
+ 
+                 if (msg.Position != Vector3.Zero)
+                 {
++                    if (!float.IsFinite(msg.Position.X) || !float.IsFinite(msg.Position.Y) || !float.IsFinite(msg.Position.Z))
++                    {
++                        error = "Prospecting position coordinates must be finite.";
++                        return null;
++                    }
+                     targetPos = new Position(
+                         msg.Cell,
+                         Math.Clamp(msg.Position.X, 0f, 191.999f),
+diff --git a/Source/ACE.Server/Economy/IndustryManager.cs b/Source/ACE.Server/Economy/IndustryManager.cs
+index 8c7f0492..7c42fa92 100644
+--- a/Source/ACE.Server/Economy/IndustryManager.cs
++++ b/Source/ACE.Server/Economy/IndustryManager.cs
+@@ -542,6 +542,34 @@ public static bool HasAvailableMicroGridPower(DeployableBase dep)
+                 return false;
+             }
+ 
++            if (!depositToTreasury && actor != null)
++            {
++                if (actor.Inventory == null)
++                {
++                    error = "Player inventory is unavailable to receive minted Pyreal coins.";
++                    return false;
++                }
++                int neededSlots = (int)((totalPyreals + 24_999L) / 25_000L);
++                int invCount = actor.GetNumInventoryItemsOfWCID(bullionWcid);
++                int freedSlots = 0;
++                if (invCount >= quantity)
++                {
++                    int rem = quantity;
++                    foreach (var invItem in actor.GetInventoryItemsOfWCID(bullionWcid))
++                    {
++                        if (rem <= 0) break;
++                        int st = invItem.StackSize ?? 1;
++                        if (st <= rem) freedSlots++;
++                        rem -= Math.Min(rem, st);
++                    }
++                }
++                if (actor.GetFreeInventorySlots() + freedSlots < neededSlots)
++                {
++                    error = $"Inventory full: need {neededSlots} free slot(s) to receive {totalPyreals:N0} minted Pyreals.";
++                    return false;
++                }
++            }
++
+             bool consumedFromInventory = TryConsumePlayerInventoryItem(actor, bullionWcid, quantity);
+ 
+             if (!consumedFromInventory && !TownEconomyManager.TryConsumeWarehouseStock(tid, whCommodity, quantity, out _))
+@@ -557,18 +585,61 @@ public static bool HasAvailableMicroGridPower(DeployableBase dep)
+             }
+             else if (actor != null)
+             {
++                var addedCoins = new List<WorldObject>();
+                 long remainingCoins = mintedPyreals;
++                bool coinFailed = false;
+                 while (remainingCoins > 0)
+                 {
+                     int stackAmt = (int)Math.Min(remainingCoins, 25_000L);
+-                    var coin = WorldObjectFactory.CreateNewWorldObject(TownEconomyManager.PyrealWcid);
+-                    if (coin != null)
++                    var coin = CreateCraftedOutputObject(TownEconomyManager.PyrealWcid, "Pyreal", WeenieType.Coin, ItemType.Money, 1, 25_000);
++                    if (coin == null)
+                     {
+-                        coin.SetStackSize(stackAmt);
+-                        actor.TryCreateInInventoryWithNetworking(coin);
++                        coinFailed = true;
++                        break;
++                    }
++                    coin.SetStackSize(stackAmt);
++                    bool inserted = actor.Session?.Network != null
++                        ? actor.TryCreateInInventoryWithNetworking(coin)
++                        : actor.TryAddToInventory(coin, out _, burdenCheck: false);
++                    if (!inserted)
++                    {
++                        try { coin.Destroy(false); } catch (NullReferenceException) { }
++                        coinFailed = true;
++                        break;
+                     }
++                    addedCoins.Add(coin);
+                     remainingCoins -= stackAmt;
+                 }
++
++                if (coinFailed)
++                {
++                    foreach (var added in addedCoins)
++                    {
++                        if (actor.Session?.Network != null)
++                            actor.TryConsumeFromInventoryWithNetworking(added, added.StackSize ?? 1);
++                        else
++                        {
++                            actor.TryRemoveFromInventory(added.Guid, out _);
++                            try { added.Destroy(false); } catch (NullReferenceException) { }
++                        }
++                    }
++
++                    if (consumedFromInventory)
++                    {
++                        GiveCraftedStarterItem(actor, bullionWcid, whCommodity, quantity, WeenieType.Stackable, ItemType.Misc, 100, 100);
++                    }
++                    else
++                    {
++                        TownEconomyManager.SeedWarehouseStock(tid, whCommodity, quantity);
++                    }
++
++                    mintedPyreals = 0;
++                    error = "Inventory full: unable to hold minted Pyreals (bullion refunded).";
++                    return false;
++                }
++
++                if (actor.Session?.Network == null)
++                    actor.CoinValue = actor.GetInventoryItemsOfTypeWeenieType(WeenieType.Coin).Sum(c => c.Value ?? 0);
+             }
+ 
+             RecordFacilityState(mint, tid, 0, $"mint_{bullionWcid}");
+diff --git a/Source/ACE.Server/Economy/LogisticsEngine.cs b/Source/ACE.Server/Economy/LogisticsEngine.cs
+index 582e9b76..65e38635 100644
+--- a/Source/ACE.Server/Economy/LogisticsEngine.cs
++++ b/Source/ACE.Server/Economy/LogisticsEngine.cs
+@@ -222,6 +222,7 @@ public static class LogisticsEngine
+         public const double MarineHfoLitersPerUnit = 5_000.0;
+ 
+         public const double InterdictionRangeM = 150.0;
++        public const ulong MaxSafeJsUInt53 = TownEconomyManager.MaxSafeJsUInt53;
+ 
+         private static readonly ConcurrentDictionary<ulong, LogisticsConvoyState> _convoys = new();
+         private static readonly List<Player> _testObservers = new();
+@@ -262,7 +263,7 @@ public static void Initialize()
+                     foreach (var row in rows)
+                     {
+                         if (row == null || row.ConvoyId == 0) continue;
+-                        if (row.ConvoyId > maxId) maxId = row.ConvoyId;
++                        if (row.ConvoyId <= MaxSafeJsUInt53 && row.ConvoyId > maxId) maxId = row.ConvoyId;
+ 
+                         if (!Enum.TryParse<LogisticsConvoyStatus>(row.Status, true, out var parsedStatus))
+                             parsedStatus = LogisticsConvoyStatus.EnRoute;
+@@ -275,7 +276,7 @@ public static void Initialize()
+                             continue;
+                         _convoys[state.ConvoyId] = state;
+                     }
+-                    if (maxId >= _nextConvoyId)
++                    if (maxId >= _nextConvoyId && maxId < MaxSafeJsUInt53)
+                         _nextConvoyId = maxId + 1;
+                 }
+             }
+@@ -314,6 +315,19 @@ public static void ResetForTesting()
+             ConvoyDelivered = null;
+         }
+ 
++        private static ulong AllocateSafeConvoyIdLocked()
++        {
++            for (int attempts = 0; attempts < 10_000; attempts++)
++            {
++                if (_nextConvoyId == 0 || _nextConvoyId > MaxSafeJsUInt53)
++                    _nextConvoyId = 1;
++                ulong candidate = _nextConvoyId++;
++                if (!_convoys.ContainsKey(candidate))
++                    return candidate;
++            }
++            throw new InvalidOperationException("Exhausted safe 53-bit ConvoyId space.");
++        }
++
+         public static void RegisterObserverForTesting(Player player)
+         {
+             if (player == null) return;
+@@ -503,6 +517,11 @@ internal static string ResolveMonarchName(uint monarchId, Player actor = null)
+                 ulong convoyId;
+                 if (explicitConvoyId.HasValue && explicitConvoyId.Value != 0)
+                 {
++                    if (explicitConvoyId.Value > MaxSafeJsUInt53)
++                    {
++                        error = $"ConvoyId {explicitConvoyId.Value} exceeds safe 53-bit integer bound ({MaxSafeJsUInt53}).";
++                        return null;
++                    }
+                     convoyId = explicitConvoyId.Value;
+                     if (_convoys.TryGetValue(convoyId, out var existing))
+                     {
+@@ -529,14 +548,12 @@ internal static string ResolveMonarchName(uint monarchId, Player actor = null)
+                             existing.LodState = LogisticsLodState.Macro;
+                         }
+                     }
+-                    if (convoyId >= _nextConvoyId)
++                    if (convoyId >= _nextConvoyId && convoyId < MaxSafeJsUInt53)
+                         _nextConvoyId = convoyId + 1;
+                 }
+                 else
+                 {
+-                    convoyId = _nextConvoyId++;
+-                    while (_convoys.ContainsKey(convoyId))
+-                        convoyId = _nextConvoyId++;
++                    convoyId = AllocateSafeConvoyIdLocked();
+                 }
+ 
+                 convoy = new LogisticsConvoyState
+@@ -659,6 +676,11 @@ internal static string ResolveMonarchName(uint monarchId, Player actor = null)
+                 ulong convoyId;
+                 if (explicitConvoyId.HasValue && explicitConvoyId.Value != 0)
+                 {
++                    if (explicitConvoyId.Value > MaxSafeJsUInt53)
++                    {
++                        error = $"ConvoyId {explicitConvoyId.Value} exceeds safe 53-bit integer bound ({MaxSafeJsUInt53}).";
++                        return null;
++                    }
+                     convoyId = explicitConvoyId.Value;
+                     if (_convoys.TryGetValue(convoyId, out var existing))
+                     {
+@@ -680,14 +702,12 @@ internal static string ResolveMonarchName(uint monarchId, Player actor = null)
+                             existing.LodState = LogisticsLodState.Macro;
+                         }
+                     }
+-                    if (convoyId >= _nextConvoyId)
++                    if (convoyId >= _nextConvoyId && convoyId < MaxSafeJsUInt53)
+                         _nextConvoyId = convoyId + 1;
+                 }
+                 else
+                 {
+-                    convoyId = _nextConvoyId++;
+-                    while (_convoys.ContainsKey(convoyId))
+-                        convoyId = _nextConvoyId++;
++                    convoyId = AllocateSafeConvoyIdLocked();
+                 }
+ 
+                 convoy = new LogisticsConvoyState
+@@ -1768,6 +1788,11 @@ public static LogisticsConvoyStateMsg HandleConvoyOrder(Player player, Logistics
+                     }
+ 
+                     // Prevent cross-faction or duplicate ConvoyId hijack/overwrite via client 0x0915
++                    if (order.ConvoyId > MaxSafeJsUInt53)
++                    {
++                        error = $"Convoy ID {order.ConvoyId} exceeds safe 53-bit integer bound ({MaxSafeJsUInt53}).";
++                        return null;
++                    }
+                     if (order.ConvoyId != 0 && _convoys.ContainsKey(order.ConvoyId))
+                     {
+                         error = $"Convoy ID {order.ConvoyId} already exists.";
+diff --git a/Source/ACE.Server/Economy/SiegeManager.cs b/Source/ACE.Server/Economy/SiegeManager.cs
+index 2503899a..ffd1c5d9 100644
+--- a/Source/ACE.Server/Economy/SiegeManager.cs
++++ b/Source/ACE.Server/Economy/SiegeManager.cs
+@@ -124,7 +124,7 @@ public static double ComputeDistanceFromOriginToTownM(uint originLandblockId, ui
+             {
+                 lbX = (originLandblockId >> 8) & 0xFFu;
+                 lbY = originLandblockId & 0xFFu;
+-                isDericost = def.ContinentId == 1;
++                isDericost = false;
+             }
+ 
+             double ox = lbX * 192.0 + 96.0;
+@@ -173,7 +173,15 @@ public static bool HasValidSupplyProvenance(uint originLandblockId, uint siegedT
+         {
+             if (originLandblockId == 0)
+                 return false;
+-            return ComputeDistanceFromOriginToTownM(originLandblockId, siegedTownId) >= MinProvenanceDistanceM;
++            var def = TownRegistry.GetById(siegedTownId);
++            if (def == null)
++                return false;
++            bool isPacked32Bit = originLandblockId > 0xFFFFu ||
++                originLandblockId == 0x00000001u ||
++                originLandblockId == 0x00008001u;
++            if (def.ContinentId == 1 && !isPacked32Bit)
++                return false;
++            return ComputeDistanceFromOriginToTownM(originLandblockId, siegedTownId, isPacked32Bit) >= MinProvenanceDistanceM;
+         }
+ 
+         public static void ResetForTesting()
+@@ -443,7 +451,12 @@ public static void Tick(double elapsedSeconds, DateTime? utcNowOverride = null)
+                         stateStr = state.Control.State;
+                 }
+ 
+-                if (stateStr is "CONTESTED_HOLD" or "STARVING")
++                bool hasActiveClaimOrBreach;
++                lock (state.SyncRoot)
++                {
++                    hasActiveClaimOrBreach = state.ClaimMonarchId != 0 || state.BreachMonarchId != 0;
++                }
++                if (stateStr is "CONTESTED_HOLD" or "STARVING" || hasActiveClaimOrBreach)
+                 {
+                     KeepSiegedLandblockActive(townId);
+                 }
+@@ -548,7 +561,7 @@ private static void AdvanceTownTick(TownRuntimeState state, double dt, DateTime
+                         {
+                             if (state.ClaimMonarchId != 0)
+                             {
+-                                if (!liveRingHolder.HasValue || liveRingHolder.Value == state.ClaimMonarchId)
++                                if (liveRingHolder.HasValue && liveRingHolder.Value == state.ClaimMonarchId)
+                                 {
+                                     state.ClaimElapsedSec += dt;
+                                     if (state.ClaimElapsedSec >= ClaimDurationSec)
+@@ -580,14 +593,12 @@ private static void AdvanceTownTick(TownRuntimeState state, double dt, DateTime
+                         {
+                             if (state.BreachMonarchId != 0)
+                             {
++                                // When liveRingHolder.HasValue is true, AdvanceRingHoldCore already advanced or reset BreachElapsedSec.
++                                // When liveRingHolder is null (nobody in ring / TCN unloaded), do NOT advance BreachElapsedSec; reset cleanly.
+                                 if (!liveRingHolder.HasValue)
+                                 {
+-                                    state.BreachElapsedSec += dt;
+-                                    if (state.BreachElapsedSec >= BreachGateSec)
+-                                    {
+-                                        EnterContestedHoldLocked(state, state.BreachMonarchId, now, out alertTitle, out alertBody);
+-                                        snapToPersist = TownEconomyManager.CloneControlSnapshot(state.Control);
+-                                    }
++                                    state.BreachMonarchId = 0;
++                                    state.BreachElapsedSec = 0.0;
+                                 }
+                             }
+                             else
+diff --git a/Source/ACE.Server/Economy/TownEconomyManager.cs b/Source/ACE.Server/Economy/TownEconomyManager.cs
+index 9ac7a733..2f10390e 100644
+--- a/Source/ACE.Server/Economy/TownEconomyManager.cs
++++ b/Source/ACE.Server/Economy/TownEconomyManager.cs
+@@ -82,6 +82,7 @@ public static class TownEconomyManager
+         public const uint AquaIncantaWcid = 4748;
+         public const uint TradeNote250kWcid = 20630;
+         public const uint PrismaticTaperWcid = 20631;
++        public const ulong MaxSafeJsUInt53 = 9_007_199_254_740_991UL;
+ 
+         private static readonly HashSet<uint> DisabledVendorWcids = new() { 70263, 5765, 5767 };
+ 
+@@ -168,67 +169,8 @@ public static void Initialize()
+                     {
+                         var seedRows = towns.Values.Select(t => CloneControl(t.Control)).ToList();
+                         var (controls, ledgers, warehouses) = shardDb.SeedAndLoadTownEconomy(seedRows);
+-
+-                        foreach (var ctrl in controls)
+-                        {
+-                            if (towns.TryGetValue(ctrl.TownId, out var state))
+-                            {
+-                                lock (state.SyncRoot)
+-                                    state.Control = CloneControl(ctrl);
+-                            }
+-                        }
+-
+-                        foreach (var ledger in ledgers)
+-                        {
+-                            if (towns.TryGetValue(ledger.TownId, out var state))
+-                            {
+-                                lock (state.SyncRoot)
+-                                    state.Ledgers[(ledger.VendorGuid, ledger.ItemWcid)] = CloneLedger(ledger);
+-                            }
+-                        }
+-
+-                        foreach (var wh in warehouses)
+-                        {
+-                            if (towns.TryGetValue(wh.TownId, out var state))
+-                            {
+-                                lock (state.SyncRoot)
+-                                    state.Warehouses[(wh.CommodityId, wh.GradeBps, wh.PoweredReefer)] = CloneWarehouse(wh);
+-                            }
+-                        }
+-
+                         var loadedOrders = shardDb.LoadMonarchOrders();
+-                        ulong maxOrderId = 0;
+-                        foreach (var ord in loadedOrders)
+-                        {
+-                            if (ord == null || ord.OrderId == 0) continue;
+-                            if (ord.OrderId > maxOrderId) maxOrderId = ord.OrderId;
+-                            var cloned = CloneMonarchOrder(ord);
+-                            monarchOrders[cloned.OrderId] = cloned;
+-
+-                            if (string.Equals(cloned.Status, "Open", StringComparison.OrdinalIgnoreCase) &&
+-                                cloned.RemainingQty > 0 &&
+-                                cloned.ItemWcid != 0 &&
+-                                towns.TryGetValue(cloned.TownId, out var state))
+-                            {
+-                                lock (state.SyncRoot)
+-                                {
+-                                    state.Bounties[cloned.ItemWcid] = new ProcurementBounty
+-                                    {
+-                                        OrderId = cloned.OrderId,
+-                                        MonarchId = cloned.MonarchId,
+-                                        TownId = cloned.TownId,
+-                                        ItemWcid = cloned.ItemWcid,
+-                                        CommodityId = string.IsNullOrWhiteSpace(cloned.CommodityId) ? $"trophy_{cloned.ItemWcid}" : cloned.CommodityId,
+-                                        RewardPyreals = Math.Max(0L, cloned.RewardPyreals),
+-                                        TargetQty = Math.Max(0, cloned.TargetQty),
+-                                        RemainingQty = Math.Max(0, cloned.RemainingQty),
+-                                        CreatedUtc = cloned.CreatedUtc,
+-                                    };
+-                                }
+-                            }
+-                        }
+-                        if (maxOrderId > (ulong)Interlocked.Read(ref _nextOrderId))
+-                            Interlocked.Exchange(ref _nextOrderId, (long)Math.Min(long.MaxValue, maxOrderId));
++                        ApplyLoadedEconomyRowsLocked(controls, ledgers, warehouses, loadedOrders);
+ 
+                         log.Info($"[ECONOMY] TownEconomyManager initialized with {towns.Count} towns and {monarchOrders.Count} monarch orders from ace_shard.");
+                     }
+@@ -243,6 +185,89 @@ public static void Initialize()
+             GeologyService.Initialize();
+         }
+ 
++        public static void ApplyLoadedEconomyRowsLocked(
++            IEnumerable<TownControl> controls,
++            IEnumerable<TownVendorLedger> ledgers,
++            IEnumerable<TownWarehouseStock> warehouses,
++            IEnumerable<MonarchOrder> loadedOrders)
++        {
++            if (controls != null)
++            {
++                foreach (var ctrl in controls)
++                {
++                    if (ctrl != null && towns.TryGetValue(ctrl.TownId, out var state))
++                    {
++                        lock (state.SyncRoot)
++                            state.Control = CloneControl(ctrl);
++                    }
++                }
++            }
++
++            if (ledgers != null)
++            {
++                foreach (var ledger in ledgers)
++                {
++                    if (ledger != null && towns.TryGetValue(ledger.TownId, out var state))
++                    {
++                        lock (state.SyncRoot)
++                        {
++                            state.Ledgers[(ledger.VendorGuid, ledger.ItemWcid)] = CloneLedger(ledger);
++                            state.TownTillCapPyreals = Math.Max(state.TownTillCapPyreals, ledger.TillCapPyreals);
++                        }
++                    }
++                }
++            }
++
++            if (warehouses != null)
++            {
++                foreach (var wh in warehouses)
++                {
++                    if (wh != null && towns.TryGetValue(wh.TownId, out var state))
++                    {
++                        lock (state.SyncRoot)
++                            state.Warehouses[(wh.CommodityId, wh.GradeBps, wh.PoweredReefer)] = CloneWarehouse(wh);
++                    }
++                }
++            }
++
++            if (loadedOrders != null)
++            {
++                ulong maxOrderId = 0;
++                foreach (var ord in loadedOrders)
++                {
++                    if (ord == null || ord.OrderId == 0) continue;
++                    if (ord.OrderId <= MaxSafeJsUInt53 && ord.OrderId > maxOrderId)
++                        maxOrderId = ord.OrderId;
++                    var cloned = CloneMonarchOrder(ord);
++                    monarchOrders[cloned.OrderId] = cloned;
++
++                    if (string.Equals(cloned.Status, "Open", StringComparison.OrdinalIgnoreCase) &&
++                        cloned.RemainingQty > 0 &&
++                        cloned.ItemWcid != 0 &&
++                        towns.TryGetValue(cloned.TownId, out var state))
++                    {
++                        lock (state.SyncRoot)
++                        {
++                            state.Bounties[cloned.ItemWcid] = new ProcurementBounty
++                            {
++                                OrderId = cloned.OrderId,
++                                MonarchId = cloned.MonarchId,
++                                TownId = cloned.TownId,
++                                ItemWcid = cloned.ItemWcid,
++                                CommodityId = string.IsNullOrWhiteSpace(cloned.CommodityId) ? $"trophy_{cloned.ItemWcid}" : cloned.CommodityId,
++                                RewardPyreals = Math.Max(0L, cloned.RewardPyreals),
++                                TargetQty = Math.Max(0, cloned.TargetQty),
++                                RemainingQty = Math.Max(0, cloned.RemainingQty),
++                                CreatedUtc = cloned.CreatedUtc,
++                            };
++                        }
++                    }
++                }
++                if (maxOrderId > (ulong)Interlocked.Read(ref _nextOrderId))
++                    Interlocked.Exchange(ref _nextOrderId, (long)Math.Min((long)MaxSafeJsUInt53, (long)maxOrderId));
++            }
++        }
++
+         public static void OnEconomyEnabledRuntime()
+         {
+             if (!initialized)
+@@ -405,6 +430,10 @@ public static void SetTownTillCap(uint townId, long tillCapPyreals)
+             lock (state.SyncRoot)
+             {
+                 state.TownTillCapPyreals = clampedCap;
++                if (state.Ledgers.Count == 0 && clampedCap > 0)
++                {
++                    GetOrCreateLedgerLocked(state, 0u, 0u);
++                }
+                 foreach (var ledger in state.Ledgers.Values)
+                 {
+                     ledger.TillCapPyreals = clampedCap;
+@@ -1033,8 +1062,11 @@ private static ulong AllocateOrderId(ulong explicitOrderId = 0)
+         {
+             if (explicitOrderId != 0)
+             {
++                if (explicitOrderId > MaxSafeJsUInt53)
++                    throw new ArgumentOutOfRangeException(nameof(explicitOrderId), $"OrderId {explicitOrderId} exceeds safe 53-bit integer bound ({MaxSafeJsUInt53}).");
++
+                 long cur;
+-                long target = (long)Math.Min(long.MaxValue, explicitOrderId);
++                long target = (long)explicitOrderId;
+                 do
+                 {
+                     cur = Interlocked.Read(ref _nextOrderId);
+@@ -1043,7 +1075,14 @@ private static ulong AllocateOrderId(ulong explicitOrderId = 0)
+                 while (Interlocked.CompareExchange(ref _nextOrderId, target, cur) != cur);
+                 return explicitOrderId;
+             }
+-            return (ulong)Interlocked.Increment(ref _nextOrderId);
++
++            long next = Interlocked.Increment(ref _nextOrderId);
++            if ((ulong)next > MaxSafeJsUInt53)
++            {
++                long wrapped = (long)(((ulong)next - 1UL) % MaxSafeJsUInt53) + 1L;
++                return (ulong)wrapped;
++            }
++            return (ulong)next;
+         }
+ 
+         public static void SetProcurementBounty(uint townId, uint itemWcid, string commodityId, long rewardPyreals, int maxQty)
+@@ -1733,6 +1772,11 @@ public static bool TryConsumeSpellReagents(uint townId, uint vendorGuid, Spell s
+                             error = "Town treasury is frozen in siege escrow.";
+                             return false;
+                         }
++                        if (state.TownTillCapPyreals > 0 && regularPayout > state.TownTillCapPyreals)
++                        {
++                            error = $"Vendor buyback exceeds town till cap ({state.TownTillCapPyreals:N0}p).";
++                            return false;
++                        }
+                         var spendable = Math.Max(0L, state.Control.TreasuryPyreals - state.Control.ClearinghouseReservePyreals);
+                         if (state.Control.TreasuryPyreals <= 0 || state.Control.TreasuryPyreals < payoutCoinAmount || spendable < regularPayout)
+                         {
+@@ -1760,6 +1804,11 @@ public static bool TryConsumeSpellReagents(uint townId, uint vendorGuid, Spell s
+                     long actualCrossTownNeeded = 0;
+                     lock (state.SyncRoot)
+                     {
++                        if (state.TownTillCapPyreals > 0 && regularPayout > state.TownTillCapPyreals)
++                        {
++                            error = $"Vendor buyback exceeds town till cap ({state.TownTillCapPyreals:N0}p).";
++                            return false;
++                        }
+                         var spendable = Math.Max(0L, state.Control.TreasuryPyreals - state.Control.ClearinghouseReservePyreals);
+                         if (state.Control.TreasuryPyreals <= 0 || state.Control.TreasuryPyreals < payoutCoinAmount || spendable < regularPayout)
+                         {
+@@ -1964,8 +2013,12 @@ public static bool IsRepeatableCoinEmote(PropertiesEmote emoteSet, out uint rewa
+         /// Non-mutating pre-check for repeatable Trophy Collector turn-ins before removing 1 item from player inventory.
+         /// </summary>
+         public static bool CanHandleTrophyTurnIn(WorldObject npc, WorldObject itemToGive, out string feedback)
++            => CanHandleTrophyTurnIn(npc, itemToGive, out feedback, out _);
++
++        public static bool CanHandleTrophyTurnIn(WorldObject npc, WorldObject itemToGive, out string feedback, out long expectedPayout)
+         {
+             EnsureInitialized();
++            expectedPayout = 0;
+ 
+             if (npc == null || itemToGive == null)
+             {
+@@ -2007,11 +2060,98 @@ public static bool CanHandleTrophyTurnIn(WorldObject npc, WorldObject itemToGive
+                     return false;
+                 }
+ 
++                expectedPayout = bounty.RewardPyreals;
+                 feedback = null;
+                 return true;
+             }
+         }
+ 
++        public static bool RefundTrophyTurnIn(WorldObject npc, uint itemWcid, long payoutPyreals, int count = 1)
++        {
++            if (npc == null || itemWcid == 0 || payoutPyreals < 0 || count <= 0)
++                return false;
++
++            var townId = ResolveTownId(npc);
++            if (townId == 0)
++                return false;
++
++            var state = GetTownState(townId);
++            if (state == null)
++                return false;
++
++            TownControl ctrlSnap;
++            TownWarehouseStock whSnap = null;
++            MonarchOrder orderSnap = null;
++            var now = DateTime.UtcNow;
++
++            lock (state.SyncRoot)
++            {
++                state.Control.TreasuryPyreals += payoutPyreals;
++                state.Control.UpdatedUtc = now;
++
++                string commodityId = $"trophy_{itemWcid}";
++                if (state.Bounties.TryGetValue(itemWcid, out var activeBounty))
++                {
++                    activeBounty.RemainingQty += count;
++                    commodityId = activeBounty.CommodityId;
++                    if (activeBounty.OrderId != 0 && monarchOrders.TryGetValue(activeBounty.OrderId, out var ord))
++                    {
++                        var updated = CloneMonarchOrder(ord);
++                        updated.RemainingQty += count;
++                        updated.Status = "Open";
++                        updated.UpdatedUtc = now;
++                        monarchOrders[updated.OrderId] = CloneMonarchOrder(updated);
++                        orderSnap = updated;
++                    }
++                }
++                else
++                {
++                    var matchingOrder = monarchOrders.Values
++                        .Where(o => o.TownId == townId && o.ItemWcid == itemWcid &&
++                                    string.Equals(o.OrderType, "ProcurementBounty", StringComparison.OrdinalIgnoreCase))
++                        .OrderByDescending(o => o.UpdatedUtc)
++                        .FirstOrDefault();
++                    if (matchingOrder != null)
++                    {
++                        commodityId = string.IsNullOrWhiteSpace(matchingOrder.CommodityId) ? commodityId : matchingOrder.CommodityId;
++                        var restoredOrder = CloneMonarchOrder(matchingOrder);
++                        restoredOrder.RemainingQty += count;
++                        restoredOrder.Status = "Open";
++                        restoredOrder.UpdatedUtc = now;
++                        monarchOrders[restoredOrder.OrderId] = CloneMonarchOrder(restoredOrder);
++                        orderSnap = restoredOrder;
++
++                        state.Bounties[itemWcid] = new ProcurementBounty
++                        {
++                            OrderId = restoredOrder.OrderId,
++                            MonarchId = restoredOrder.MonarchId,
++                            TownId = townId,
++                            ItemWcid = itemWcid,
++                            CommodityId = commodityId,
++                            RewardPyreals = Math.Max(0L, restoredOrder.RewardPyreals),
++                            TargetQty = Math.Max(restoredOrder.TargetQty, restoredOrder.RemainingQty),
++                            RemainingQty = restoredOrder.RemainingQty,
++                            CreatedUtc = restoredOrder.CreatedUtc,
++                        };
++                    }
++                }
++
++                var key = (commodityId, 10000, false);
++                if (state.Warehouses.TryGetValue(key, out var wh))
++                {
++                    wh.Qty = Math.Max(0, wh.Qty - count);
++                    whSnap = CloneWarehouse(wh);
++                }
++
++                ctrlSnap = CloneControl(state.Control);
++            }
++
++            PersistTownControl(ctrlSnap);
++            if (whSnap != null) PersistWarehouseStock(whSnap);
++            if (orderSnap != null) PersistMonarchOrder(orderSnap);
++            return true;
++        }
++
+         public static bool IsProcurementDeskNpc(WorldObject target)
+         {
+             if (target is not Creature || target is Player || target is Vendor)
+@@ -2264,6 +2404,11 @@ public static EconomyMonarchOrderStateMsg HandleMonarchOrderAction(Player player
+                         error = "Rejected: Only the owning Allegiance Monarch may post procurement bounties.";
+                         return null;
+                     }
++                    if (msg.OrderId > MaxSafeJsUInt53)
++                    {
++                        error = $"OrderId exceeds safe 53-bit integer bound ({MaxSafeJsUInt53}).";
++                        return null;
++                    }
+                     if (msg.ItemWcid == 0 || msg.Quantity == 0 || msg.RewardPyreals == 0)
+                     {
+                         error = "Bounty requires positive ItemWcid, Quantity, and RewardPyreals.";
+@@ -2844,7 +2989,7 @@ private static TownVendorLedger GetOrCreateLedgerLocked(TownRuntimeState state,
+                     ItemWcid = itemWcid,
+                     StockQty = 0,
+                     TillPyreals = 0,
+-                    TillCapPyreals = 0,
++                    TillCapPyreals = state.TownTillCapPyreals,
+                     UnitPriceOverride = null,
+                 };
+                 state.Ledgers[(vendorGuid, itemWcid)] = ledger;
+diff --git a/Source/ACE.Server/Network/GameAction/Actions/GameActionVehicle.cs b/Source/ACE.Server/Network/GameAction/Actions/GameActionVehicle.cs
+index ad439a64..31d5c010 100644
+--- a/Source/ACE.Server/Network/GameAction/Actions/GameActionVehicle.cs
++++ b/Source/ACE.Server/Network/GameAction/Actions/GameActionVehicle.cs
+@@ -1,11 +1,21 @@
+ using System;
++using System.Collections.Generic;
++using System.Linq;
+ using System.Numerics;
++using System.Threading;
++using ACE.Database;
++using ACE.Entity;
+ using ACE.Entity.Enum;
++using ACE.Entity.Enum.Properties;
++using ACE.Entity.Models;
+ using ACE.Server.Command.Handlers;
+ using ACE.Server.Economy;
++using ACE.Server.Factories;
++using ACE.Server.Managers;
+ using ACE.Server.Network.GameMessages.Messages;
+ using ACE.Server.Vehicles;
+ using ACE.Server.Vehicles.Deployables;
++using ACE.Server.WorldObjects;
+ 
+ namespace ACE.Server.Network.GameAction.Actions
+ {
+@@ -150,29 +160,111 @@ public static void HandleEconomySiegeAction(ClientMessage message, Session sessi
+                         if (hydrated != null && hydrated.BeaconGuid != 0)
+                             beacon = DeployableManager.GetDeployable(hydrated.BeaconGuid) as ForwardSiegeBeaconDeployable;
+                     }
++                    if (beacon == null && msg.BeaconGuid == 0 && player.Location != null)
++                    {
++                        var (px0, py0, pz0) = Vehicle.ToGlobal(player.Location);
++                        var pVec0 = new Vector3((float)px0, (float)py0, (float)pz0);
++                        beacon = DeployableManager.GetAll()
++                            .OfType<ForwardSiegeBeaconDeployable>()
++                            .Where(b => !b.IsDestroyed && !b.IsPacked && !b.IsStowed &&
++                                        (tid == 0 || b.ResolveTargetTownId() == tid) &&
++                                        (b.Location == null || Vector3.Distance(b.GlobalPosition, pVec0) <= ForwardSiegeBeaconDeployable.DeliveryRadiusM))
++                            .OrderBy(b => b.Location == null ? 0f : Vector3.Distance(b.GlobalPosition, pVec0))
++                            .FirstOrDefault();
++                    }
++                    if (beacon == null || beacon.IsDestroyed || beacon.IsPacked || beacon.IsStowed)
++                    {
++                        session.Network?.EnqueueSend(new GameMessageSystemChat("A deployed Forward Siege Beacon within delivery range is required to deposit supply cargo.", ChatMessageType.Broadcast));
++                        return;
++                    }
++
++                    uint beaconTownId = beacon.ResolveTargetTownId();
++                    if (tid != 0 && beaconTownId != 0 && beaconTownId != tid)
++                    {
++                        session.Network?.EnqueueSend(new GameMessageSystemChat("Forward Siege Beacon targets a different town.", ChatMessageType.Broadcast));
++                        return;
++                    }
++                    if (tid == 0)
++                        tid = beaconTownId;
++                    if (beacon.TargetTownId == 0 && tid != 0)
++                        beacon.TargetTownId = tid;
++
++                    if (player.Location == null || player.Location.Indoors)
++                    {
++                        session.Network?.EnqueueSend(new GameMessageSystemChat($"Move outdoors within {ForwardSiegeBeaconDeployable.DeliveryRadiusM:0}m of the Forward Siege Beacon.", ChatMessageType.Broadcast));
++                        return;
++                    }
+ 
+-                    if (beacon != null)
++                    var (px, py, pz) = Vehicle.ToGlobal(player.Location);
++                    var playerPos = new Vector3((float)px, (float)py, (float)pz);
++                    if (beacon.Location != null && Vector3.Distance(beacon.GlobalPosition, playerPos) > ForwardSiegeBeaconDeployable.DeliveryRadiusM)
+                     {
+-                        if (tid == 0)
+-                            tid = beacon.ResolveTargetTownId();
+-                        if (beacon.Location != null && player.Location != null)
++                        session.Network?.EnqueueSend(new GameMessageSystemChat($"Move within {ForwardSiegeBeaconDeployable.DeliveryRadiusM:0}m of the Forward Siege Beacon.", ChatMessageType.Broadcast));
++                        return;
++                    }
++
++                    const double serverSupplyPointsPerPallet = 100.0;
++                    const double serverSupplyPointsPerInventoryItem = 25.0;
++                    string lastErr = null;
++                    bool delivered = false;
++
++                    foreach (var container in DeployableManager.GetAll().OfType<IsoContainerDeployable>())
++                    {
++                        if (container.IsDestroyed || container.IsPacked) continue;
++                        if (container.Location != null && Vector3.Distance(beacon.GlobalPosition, container.Position) > ForwardSiegeBeaconDeployable.DeliveryRadiusM)
++                            continue;
++                        if (beacon.TryAcceptContainer(container, player, serverSupplyPointsPerPallet, out _, out var containerErr))
+                         {
+-                            var (px, py, pz) = Vehicle.ToGlobal(player.Location);
+-                            var dist = Vector3.Distance(beacon.GlobalPosition, new Vector3((float)px, (float)py, (float)pz));
+-                            if (dist > ForwardSiegeBeaconDeployable.DeliveryRadiusM)
++                            delivered = true;
++                            break;
++                        }
++                        if (!string.IsNullOrEmpty(containerErr))
++                            lastErr = containerErr;
++                    }
++
++                    if (!delivered)
++                    {
++                        foreach (var dep in DeployableManager.GetAll())
++                        {
++                            if (dep == null || dep.IsDestroyed || dep.IsPacked || dep.IsStowed || dep.OriginLandblockId == 0) continue;
++                            if (dep is ForwardSiegeBeaconDeployable or TownControlNodeDeployable or TownDepotDeployable
++                                or PublicCommonsStarterHearthDeployable or TownMintDeployable or TownWorkshopDeployable
++                                or IsoContainerDeployable or SemiTrailerDeployable or PalletJackDeployable)
++                                continue;
++                            if (dep.Location != null && Vector3.Distance(beacon.GlobalPosition, dep.GlobalPosition) > ForwardSiegeBeaconDeployable.DeliveryRadiusM)
++                                continue;
++                            if (beacon.TryAcceptCargoUnit(dep, player, serverSupplyPointsPerPallet, out var unitErr))
+                             {
+-                                session.Network?.EnqueueSend(new GameMessageSystemChat($"Move within {ForwardSiegeBeaconDeployable.DeliveryRadiusM:0}m of the Forward Siege Beacon.", ChatMessageType.Broadcast));
+-                                return;
++                                delivered = true;
++                                break;
+                             }
++                            if (!string.IsNullOrEmpty(unitErr))
++                                lastErr = unitErr;
+                         }
+                     }
+ 
+-                    double sp = msg.SupplyPoints > 0 ? msg.SupplyPoints : 10.0;
+-                    if (!SiegeManager.DeliverSiegeSupply(tid, msg.OriginLandblock, sp, player, out var err))
++                    if (!delivered && player.Inventory != null)
+                     {
+-                        session.Network?.EnqueueSend(new GameMessageSystemChat(err, ChatMessageType.Broadcast));
++                        foreach (var invItem in CollectInventorySupplyCandidates(player))
++                        {
++                            if (beacon.TryAcceptInventoryItem(invItem, player, serverSupplyPointsPerInventoryItem, out var itemErr))
++                            {
++                                delivered = true;
++                                break;
++                            }
++                            if (!string.IsNullOrEmpty(itemErr))
++                                lastErr = itemErr;
++                        }
++                    }
++
++                    if (!delivered)
++                    {
++                        session.Network?.EnqueueSend(new GameMessageSystemChat(
++                            lastErr ?? "No valid physical supply crate or container cargo with >= 1,500m origin provenance found within delivery range.",
++                            ChatMessageType.Broadcast));
+                         return;
+                     }
++
+                     SendSiegeEventAndState(session, tid, kind: 3);
+                     return;
+                 }
+@@ -226,7 +318,43 @@ public static void HandleEconomySiegeAction(ClientMessage message, Session sessi
+                         session.Network?.EnqueueSend(new GameMessageSystemChat("Rejected: Town treasury escrow is frozen during siege.", ChatMessageType.Broadcast));
+                         return;
+                     }
++
++                    long available = TownEconomyManager.GetSpendableTreasuryPyreals(msg.TownId);
++                    long requested = msg.SupplyPoints > 0 ? msg.SupplyPoints : available;
++                    long amount = Math.Min(requested, available);
++                    if (amount <= 0)
++                    {
++                        session.Network?.EnqueueSend(new GameMessageSystemChat($"No spendable treasury funds available to withdraw from {snap.TownName}.", ChatMessageType.Broadcast));
++                        TownEconomyManager.SendTownState(player, msg.TownId);
++                        return;
++                    }
++
++                    int neededSlots = (int)((amount + 24_999L) / 25_000L);
++                    if (player.Inventory == null || player.GetFreeInventorySlots() < neededSlots)
++                    {
++                        session.Network?.EnqueueSend(new GameMessageSystemChat("Rejected: Inventory is full and cannot hold withdrawn Pyreals.", ChatMessageType.Broadcast));
++                        TownEconomyManager.SendTownState(player, msg.TownId);
++                        return;
++                    }
++
++                    if (!TownEconomyManager.TryWithdrawFromTownTill(msg.TownId, amount, "WithdrawEscrow", out var err))
++                    {
++                        session.Network?.EnqueueSend(new GameMessageSystemChat(err ?? "Treasury withdrawal failed.", ChatMessageType.Broadcast));
++                        TownEconomyManager.SendTownState(player, msg.TownId);
++                        return;
++                    }
++
++                    if (!TryDeliverPyrealsToPlayer(player, amount))
++                    {
++                        TownEconomyManager.DepositToTownTill(msg.TownId, amount, "WithdrawEscrowRollback");
++                        session.Network?.EnqueueSend(new GameMessageSystemChat("Rejected: Inventory cannot accept withdrawn Pyreal stacks (funds refunded to treasury).", ChatMessageType.Broadcast));
++                        TownEconomyManager.SendTownState(player, msg.TownId);
++                        return;
++                    }
++
++                    session.Network?.EnqueueSend(new GameMessageSystemChat($"Withdrew {amount:N0}p from {snap.TownName} treasury.", ChatMessageType.Broadcast));
+                     TownEconomyManager.SendTownState(player, msg.TownId);
++                    TownEconomyManager.BroadcastTownState(msg.TownId);
+                     return;
+                 }
+             }
+@@ -298,7 +426,7 @@ public static void HandleIndustryFacilityAction(ClientMessage message, Session s
+         public static void HandleLogisticsConvoyOrder(ClientMessage message, Session session)
+         {
+             if (!TownEconomyManager.Enabled && !VehicleManager.Enabled) return;
+-            if (session?.Player == null) return;
++            if (session?.Player == null || !VehicleManager.HasCap(session, VehicleWire.CapObserve)) return;
+             if (VehicleWire.ReadC2S(VehicleWire.OpLogisticsConvoyOrder, message.Payload) is not LogisticsConvoyOrder msg) return;
+ 
+             var stateMsg = LogisticsEngine.HandleConvoyOrder(session.Player, msg, out var error);
+@@ -331,5 +459,128 @@ public static void HandleEconomyMonarchOrder(ClientMessage message, Session sess
+                 session.Network?.EnqueueSend(new GameMessageSystemChat(error, ChatMessageType.Broadcast));
+             }
+         }
++
++        private static uint _fallbackWireCoinGuid = 0x75900000u;
++
++        private static IEnumerable<WorldObject> CollectInventorySupplyCandidates(Container root)
++        {
++            if (root?.Inventory == null) yield break;
++            foreach (var item in root.Inventory.Values.ToArray())
++            {
++                if (item == null || item.IsDestroyed) continue;
++                if (item is Container sub)
++                {
++                    foreach (var nested in CollectInventorySupplyCandidates(sub))
++                        yield return nested;
++                }
++                else
++                {
++                    var origin = (uint)(item.GetProperty(PropertyInt.OriginLandblockId) ?? 0);
++                    if (origin != 0)
++                        yield return item;
++                }
++            }
++        }
++
++        private static bool TryDeliverPyrealsToPlayer(Player player, long totalPyreals)
++        {
++            if (player == null || totalPyreals <= 0)
++                return false;
++
++            int neededSlots = (int)((totalPyreals + 24_999L) / 25_000L);
++            if (player.Inventory == null || player.GetFreeInventorySlots() < neededSlots)
++                return false;
++
++            var addedStacks = new List<WorldObject>();
++            long remaining = totalPyreals;
++            bool failed = false;
++
++            while (remaining > 0)
++            {
++                WorldObject coinStack = null;
++                if (DatabaseManager.World != null)
++                {
++                    try { coinStack = WorldObjectFactory.CreateNewWorldObject(TownEconomyManager.PyrealWcid); }
++                    catch { coinStack = null; }
++                }
++
++                if (coinStack == null)
++                {
++                    ObjectGuid coinGuid;
++                    try { coinGuid = GuidManager.NewDynamicGuid(); }
++                    catch (NullReferenceException) { coinGuid = new ObjectGuid(Interlocked.Increment(ref _fallbackWireCoinGuid)); }
++
++                    var coinWeenie = new Weenie
++                    {
++                        WeenieClassId = TownEconomyManager.PyrealWcid,
++                        ClassName = "coinstack",
++                        WeenieType = WeenieType.Coin,
++                        PropertiesInt = new Dictionary<PropertyInt, int>
++                        {
++                            [PropertyInt.ItemType] = (int)ItemType.Money,
++                            [PropertyInt.Value] = 1,
++                            [PropertyInt.MaxStackSize] = 25_000,
++                            [PropertyInt.StackSize] = 1,
++                            [PropertyInt.StackUnitValue] = 1,
++                        },
++                        PropertiesString = new Dictionary<PropertyString, string>
++                        {
++                            [PropertyString.Name] = "Pyreal",
++                            [PropertyString.PluralName] = "Pyreals",
++                        },
++                        PropertiesBool = new Dictionary<PropertyBool, bool>(),
++                        PropertiesFloat = new Dictionary<PropertyFloat, double>(),
++                        PropertiesDID = new Dictionary<PropertyDataId, uint>(),
++                        PropertiesInt64 = new Dictionary<PropertyInt64, long>(),
++                    };
++                    coinStack = new Stackable(coinWeenie, coinGuid);
++                }
++
++                int maxStack = coinStack.MaxStackSize ?? 25_000;
++                int stackAmt = (int)Math.Min(remaining, maxStack);
++                coinStack.SetStackSize(stackAmt);
++
++                bool inserted;
++                if (player.Session?.Network != null)
++                {
++                    inserted = player.TryCreateInInventoryWithNetworking(coinStack);
++                }
++                else
++                {
++                    inserted = player.TryAddToInventory(coinStack, out _, burdenCheck: false);
++                    if (inserted)
++                        player.CoinValue = player.GetInventoryItemsOfTypeWeenieType(WeenieType.Coin).Sum(c => c.Value ?? 0);
++                }
++
++                if (!inserted)
++                {
++                    try { coinStack.Destroy(false); } catch (NullReferenceException) { }
++                    failed = true;
++                    break;
++                }
++
++                addedStacks.Add(coinStack);
++                remaining -= stackAmt;
++            }
++
++            if (failed)
++            {
++                foreach (var stack in addedStacks)
++                {
++                    if (player.Session?.Network != null)
++                        player.TryConsumeFromInventoryWithNetworking(stack, stack.StackSize ?? 1);
++                    else
++                    {
++                        player.TryRemoveFromInventory(stack.Guid, out _);
++                        try { stack.Destroy(false); } catch (NullReferenceException) { }
++                    }
++                }
++                if (player.Session?.Network == null)
++                    player.CoinValue = player.GetInventoryItemsOfTypeWeenieType(WeenieType.Coin).Sum(c => c.Value ?? 0);
++                return false;
++            }
++
++            return true;
++        }
+     }
+ }
+diff --git a/Source/ACE.Server/WorldObjects/Player_Inventory.cs b/Source/ACE.Server/WorldObjects/Player_Inventory.cs
+index 20db3529..27fdb2d7 100644
+--- a/Source/ACE.Server/WorldObjects/Player_Inventory.cs
++++ b/Source/ACE.Server/WorldObjects/Player_Inventory.cs
+@@ -3428,7 +3428,7 @@ private void GiveObjectToNPC(WorldObject target, WorldObject item, Container ite
+                     if (TownEconomyManager.Enabled && !acceptAll &&
+                         (isDynamicBountyTurnIn || (emoteResult != null && TownEconomyManager.IsRepeatableCoinEmote(emoteResult, out _, out _))))
+                     {
+-                        if (!TownEconomyManager.CanHandleTrophyTurnIn(target, item, out var precheckFeedback))
++                        if (!TownEconomyManager.CanHandleTrophyTurnIn(target, item, out var precheckFeedback, out var expectedPayout))
+                         {
+                             if (Session != null)
+                             {
+@@ -3439,23 +3439,66 @@ private void GiveObjectToNPC(WorldObject target, WorldObject item, Container ite
+                             return;
+                         }
+ 
++                        if (expectedPayout > 0)
++                        {
++                            int neededSlots = (int)((expectedPayout + 24_999L) / 25_000L);
++                            int freedSlots = (item.StackSize ?? 1) <= 1 ? 1 : 0;
++                            if (GetFreeInventorySlots() + freedSlots < neededSlots)
++                            {
++                                const string fullMsg = "Your inventory is full and cannot hold the Pyreal payout.";
++                                if (Session != null)
++                                {
++                                    Session.Network.EnqueueSend(new GameEventCommunicationTransientString(Session, fullMsg));
++                                    Session.Network.EnqueueSend(new GameMessageSystemChat(fullMsg, ChatMessageType.Broadcast));
++                                    Session.Network.EnqueueSend(new GameEventInventoryServerSaveFailed(Session, item.Guid.Full));
++                                }
++                                return;
++                            }
++                        }
++
+                         if (RemoveItemForGive(item, itemFoundInContainer, itemWasEquipped, itemRootOwner, 1, out WorldObject turnedInItem))
+                         {
+                             if (TownEconomyManager.TryHandleTrophyTurnInForPlayer(target, turnedInItem, Guid.Full, out var payoutPyreals, out var feedback, turnedInCount: 1))
+                             {
+-                                if (item == turnedInItem && Session != null)
+-                                    Session.Network.EnqueueSend(new GameEventItemServerSaysContainId(Session, item, target));
+-
+                                 if (payoutPyreals > 0)
+                                 {
+                                     var stacks = CreatePayoutCoinStacks((int)Math.Min(int.MaxValue, payoutPyreals));
++                                    var addedStacks = new List<WorldObject>();
++                                    bool coinFailed = false;
+                                     foreach (var coinStack in stacks)
+                                     {
+                                         if (!TryCreateInInventoryWithNetworking(coinStack))
++                                        {
+                                             coinStack.Destroy();
++                                            coinFailed = true;
++                                            break;
++                                        }
++                                        addedStacks.Add(coinStack);
++                                    }
++
++                                    if (coinFailed)
++                                    {
++                                        foreach (var added in addedStacks)
++                                            TryConsumeFromInventoryWithNetworking(added, added.StackSize ?? 1);
++
++                                        TownEconomyManager.RefundTrophyTurnIn(target, turnedInItem.WeenieClassId, payoutPyreals, 1);
++                                        if (!TryCreateInInventoryWithNetworking(turnedInItem))
++                                            turnedInItem.Destroy();
++
++                                        const string fullMsg = "Your inventory is full and cannot hold the Pyreal payout.";
++                                        if (Session != null)
++                                        {
++                                            Session.Network.EnqueueSend(new GameEventCommunicationTransientString(Session, fullMsg));
++                                            Session.Network.EnqueueSend(new GameMessageSystemChat(fullMsg, ChatMessageType.Broadcast));
++                                            Session.Network.EnqueueSend(new GameEventInventoryServerSaveFailed(Session, item.Guid.Full));
++                                        }
++                                        return;
+                                     }
+                                 }
+ 
++                                if (item == turnedInItem && Session != null)
++                                    Session.Network.EnqueueSend(new GameEventItemServerSaysContainId(Session, item, target));
++
+                                 Session?.Network.EnqueueSend(new GameMessageSystemChat(feedback, ChatMessageType.Broadcast));
+                                 target.EnqueueBroadcast(new GameMessageSound(target.Guid, Sound.ReceiveItem));
+                                 turnedInItem.Destroy();
+diff --git a/Source/ACE.Server/WorldObjects/WorldObject_Tick.cs b/Source/ACE.Server/WorldObjects/WorldObject_Tick.cs
+index 533b1b04..396be5b5 100644
+--- a/Source/ACE.Server/WorldObjects/WorldObject_Tick.cs
++++ b/Source/ACE.Server/WorldObjects/WorldObject_Tick.cs
+@@ -102,7 +102,7 @@ public virtual void Heartbeat(double currentUnixTime)
+ 
+             if (IsLifespanSpent)
+                 DeleteObject();
+-            else if (Economy.PerishableDecay.IsPerishable(this) && Economy.PerishableDecay.TickItem(this, CachedHeartbeatInterval, false))
++            else if (Economy.PerishableDecay.IsPerishable(this) && Economy.PerishableDecay.TickItem(this, CachedHeartbeatInterval, Economy.PerishableDecay.IsInsidePoweredReefer(this, null)))
+                 DeleteObject();
+ 
+             SetProperty(PropertyFloat.HeartbeatTimestamp, currentUnixTime);
+-- 
+2.43.0
+

@@ -1,7 +1,7 @@
 From 77bce7e99c9b061317d7b6082d626686c4a156ea Mon Sep 17 00:00:00 2001
 From: salvia420-bit <salvia420@gmail.com>
 Date: Fri, 20 Nov 2026 06:28:33 +0000
-Subject: [PATCH 18/28] Vehicles (holtburger fork): RadarStation deployable
+Subject: [PATCH 18/29] Vehicles (holtburger fork): RadarStation deployable
  despawn/list and Headlights/Horn events
 
 Include AirDefenseManager.Stations (RadarStation 4000002) in [USER_0] list and despawn all/<guid>, and emit VehicleEventKind.Headlights (0x10 toggle) and VehicleEventKind.Horn (0x20 rising edge) from StepVehicle. Adds T5_ADV_07..09; verified 339/339 ACE.Server.Tests (Vehicles|Landblock).

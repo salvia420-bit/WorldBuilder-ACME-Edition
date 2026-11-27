@@ -1,7 +1,7 @@
 From ac72ef66e33ff6ae91bf8581cc6cc56fa708e394 Mon Sep 17 00:00:00 2001
 From: salvia420-bit <salvia420@gmail.com>
 Date: Fri, 27 Nov 2026 10:25:02 +0000
-Subject: [PATCH 28/28] fix(economy): disable HttpListener keep-alive on
+Subject: [PATCH 28/29] fix(economy): disable HttpListener keep-alive on
  gateway responses and annotate 4000090-4000092 in DeployableManager
 
 Avoid idle HTTP keep-alive socket ECONNRESET across multi-minute test pauses by setting resp.KeepAlive = false in AgentGatewayService.WriteJsonAsync, and annotate WCIDs 4000090-4000092 in DeployableManager.cs.

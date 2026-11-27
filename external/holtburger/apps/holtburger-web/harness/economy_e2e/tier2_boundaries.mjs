@@ -1008,7 +1008,8 @@ export const TESTS = [
     async run() {
       const { graph } = loadNavGraph();
       const edges = graph.edges || graph.roadEdges || [];
-      for (const e of edges.slice(0, 500)) {
+      assert.ok(edges.length >= 13731, `Expected >= 13,731 road edges in nav graph, got ${edges.length}`);
+      for (const e of edges) {
         if (typeof e.gradeDeg === "number") {
           assert.ok(e.gradeDeg <= 44, `Edge exceeds Semi-379 44 deg limit: ${e.gradeDeg}`);
         }
@@ -1117,6 +1118,13 @@ export const TESTS = [
     tags: ["phase-e", "negative"],
     async run() {
       assertDotnetMethodPassed("F5_Slumlord_100PercentRentRouting_AndTrophyProcurement");
+      assertDotnetMethodPassed("F17_AgentGateway_MonarchOrder_NegativeAndLowTillRefusal");
+      const negResp = await gatewayFetch("/api/v1/monarch/orders", {
+        method: "POST",
+        body: { actorGuid: 999999, townId: 1, action: "create_bounty", itemWcid: 51235, quantity: 1, rewardPyreals: -250 },
+      });
+      assert.ok(negResp.status === 403 || negResp.status === 422,
+        `Expected negative bounty order refusal (403/422), got ${negResp.status}`);
       const cfg = getMysqlConfig();
       const bad = Number(queryMysqlScalar("SELECT COUNT(*) FROM monarch_order WHERE reward_pyreals < 0;", cfg.shardDb));
       assert.equal(bad, 0);

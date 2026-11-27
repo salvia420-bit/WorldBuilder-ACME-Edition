@@ -1,7 +1,7 @@
 From dbab20886d10d297aa2836a925329270857cc936 Mon Sep 17 00:00:00 2001
 From: salvia420-bit <salvia420@gmail.com>
 Date: Fri, 20 Nov 2026 10:16:59 +0000
-Subject: [PATCH 21/28] Vehicles (holtburger fork): Tier 5 remediation fixes
+Subject: [PATCH 21/29] Vehicles (holtburger fork): Tier 5 remediation fixes
  and adversarial unit tests
 
 Fixes Major-1 (RadarStation duplication guard in VehicleManager.ActionPack and RadarStation.Destroy), Major-2 (IsoContainerDeployable.TryUnpackSlot full/half pallet and CargoState rollback on SpawnDeployable failure), Major-5 (LandCell.cs IsDericostCell guard and LandblockId directional Continent preservation), Major-6 (GroundRadarDeployable indoor/dead/logout player and airborne/destroyed vehicle filtering), Minor-7 (MicroGrid battery preservation on insufficient deficit), and Minor-8 (SemiTrailerDeployable OnTransferContainerDestroyed AutoCycleActive retraction to Idle). Adds 7 adversarial unit tests across PalletJackLogisticsTests, IsoContainerTests, DericostContinentInvariantsTests, DeployableEcosystemTests, and SidelifterTests (350/350 Vehicles|Landblock pass).
