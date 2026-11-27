@@ -209,6 +209,7 @@ export const TESTS = [
       // 3. Boot headless Chromium against live ACE :9000 via wsbridge :8080 & serve.py :8765
       const boot = await bootLiveClient({}, {
         onInWorld: async (page) => {
+          await page.waitForFunction(() => Boolean(window.__vehicles), null, { timeout: 30000 });
           return page.evaluate(() => ({
             hasVehicles: Boolean(window.__vehicles),
             pose: window.__sessionHandle?.getLocalPlayerPose?.() || null,
