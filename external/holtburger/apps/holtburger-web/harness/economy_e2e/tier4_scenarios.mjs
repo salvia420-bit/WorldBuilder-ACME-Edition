@@ -216,6 +216,8 @@ export const TESTS = [
         },
       });
       assert.equal(boot.bootState.bootState, "in-world");
+      assert.equal(boot.evalResult?.hasVehicles, true, "Expected window.__vehicles initialized in-world");
+      assert.equal(boot.pageErrors.length, 0, `Unexpected page errors: ${boot.pageErrors.join("; ")}`);
       assert.equal(boot.filtered.failing.length, 0);
     },
   },

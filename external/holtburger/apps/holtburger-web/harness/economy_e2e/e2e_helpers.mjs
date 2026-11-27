@@ -849,6 +849,7 @@ export async function bootLiveClient(queryOverrides = {}, opts = {}) {
       ];
 
   const consoleErrors = [];
+  const ignoredOptional404s = [];
   const pageErrors = [];
   const browser = await chromium.launch({
     executablePath: CHROME_BIN,
@@ -861,7 +862,18 @@ export async function bootLiveClient(queryOverrides = {}, opts = {}) {
     const page = await context.newPage();
     page.on("pageerror", (err) => pageErrors.push(err?.message || String(err)));
     page.on("console", (msg) => {
-      if (msg.type() === "error") consoleErrors.push(msg.text());
+      if (msg.type() === "error") {
+        const text = msg.text();
+        const locUrl = msg.location?.()?.url || "";
+        const isOptionalProbe404 =
+          text === "Failed to load resource: the server responded with a status of 404 (File not found)" &&
+          /(?:\/dist\/events\/index\.bin|\/scene3d\/assets\/(?:terrain_bc7\/t(?:1024|512|256)|pbr_terrain)\/manifest\.json)$/.test(locUrl);
+        if (isOptionalProbe404) {
+          ignoredOptional404s.push(locUrl);
+        } else {
+          consoleErrors.push(text);
+        }
+      }
     });
 
     await page.goto(url, { waitUntil: "domcontentloaded", timeout: 45000 });
@@ -890,7 +902,7 @@ export async function bootLiveClient(queryOverrides = {}, opts = {}) {
       `Gating console/page errors:\n${filtered.failing.join("\n")}`
     );
 
-    return { bootState, evalResult, consoleErrors, pageErrors, filtered };
+    return { bootState, evalResult, consoleErrors, ignoredOptional404s, pageErrors, filtered };
   } finally {
     await browser.close();
   }
