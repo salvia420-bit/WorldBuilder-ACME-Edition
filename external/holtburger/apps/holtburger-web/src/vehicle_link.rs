@@ -311,6 +311,93 @@ pub(crate) fn to_json(msg: &VehicleS2C) -> Value {
             "carriedWcid": pj.carried_wcid,
             "ownerGuid": pj.owner_guid,
         }),
+        VehicleS2C::EconomyTownState(ts) => json!({
+            "type": "economy_town_state",
+            "townId": ts.town_id,
+            "controlState": ts.control_state,
+            "ownerMonarchId": ts.owner_monarch_id,
+            "attackerMonarchId": ts.attacker_monarch_id,
+            "flags": ts.flags,
+            "anchorLandblock": ts.anchor_landblock,
+            "holdElapsedSec": ts.hold_elapsed_sec,
+            "supplyMeterSec": ts.supply_meter_sec,
+            "starvingSec": ts.starving_sec,
+            "treasuryPyreals": ts.treasury_pyreals,
+            "escrowPyreals": ts.escrow_pyreals,
+            "tariffBuyMul": ts.tariff_buy_mul as f64,
+            "tariffSellMul": ts.tariff_sell_mul as f64,
+        }),
+        VehicleS2C::EconomySiegeEvent(se) => json!({
+            "type": "economy_siege_event",
+            "townId": se.town_id,
+            "kind": se.kind,
+            "controlState": se.control_state,
+            "ownerMonarchId": se.owner_monarch_id,
+            "attackerMonarchId": se.attacker_monarch_id,
+            "holdElapsedSec": se.hold_elapsed_sec,
+            "supplyMeterSec": se.supply_meter_sec,
+            "starvingSec": se.starving_sec,
+            "treasurySpoils": se.treasury_spoils,
+        }),
+        VehicleS2C::IndustrySurveyResult(sr) => json!({
+            "type": "industry_survey_result",
+            "depositId": sr.deposit_id,
+            "landblockId": sr.landblock_id,
+            "toolKind": sr.tool_kind,
+            "flags": sr.flags,
+            "terrainCode": sr.terrain_code,
+            "resourceKind": sr.resource_kind,
+            "depthM": sr.depth_m as f64,
+            "gradeBps": sr.grade_bps,
+            "apiGravity": sr.api_gravity as f64,
+            "sulfurBps": sr.sulfur_bps,
+            "remainingTonnes": sr.remaining_tonnes as f64,
+        }),
+        VehicleS2C::IndustryFacilityState(fs) => json!({
+            "type": "industry_facility_state",
+            "facilityGuid": fs.facility_guid,
+            "kind": fs.kind,
+            "townId": fs.town_id,
+            "depositId": fs.deposit_id,
+            "ownerMonarchId": fs.owner_monarch_id,
+            "status": fs.status,
+            "onlineFlags": fs.online_flags,
+            "powerWatts": fs.power_watts as f64,
+            "bufferJoules": fs.buffer_joules as f64,
+            "progressPct": fs.progress_pct as f64,
+            "recipeId": fs.recipe_id,
+        }),
+        VehicleS2C::LogisticsConvoyState(cs) => json!({
+            "type": "logistics_convoy_state",
+            "convoyId": cs.convoy_id,
+            "ownerMonarchId": cs.owner_monarch_id,
+            "vehicleGuid": cs.vehicle_guid,
+            "vehicleClass": cs.vehicle_class,
+            "lodState": cs.lod_state,
+            "status": cs.status,
+            "originTownId": cs.origin_town_id,
+            "destTownId": cs.dest_town_id,
+            "originLandblock": cs.origin_landblock,
+            "splineSM": cs.spline_s_m as f64,
+            "fuelLiters": cs.fuel_liters as f64,
+            "cell": cs.cell,
+            "position": v3(cs.position),
+            "heading": cs.heading as f64,
+        }),
+        VehicleS2C::EconomyMonarchOrderState(mo) => json!({
+            "type": "economy_monarch_order_state",
+            "orderId": mo.order_id,
+            "monarchId": mo.monarch_id,
+            "townId": mo.town_id,
+            "orderType": mo.order_type,
+            "status": mo.status,
+            "flags": mo.flags,
+            "claimedByGuid": mo.claimed_by_guid,
+            "itemWcid": mo.item_wcid,
+            "quantity": mo.quantity,
+            "rewardPyreals": mo.reward_pyreals,
+            "valueF32": mo.value_f32 as f64,
+        }),
     }
 }
 
@@ -497,6 +584,12 @@ pub(crate) fn is_vehicle_event(opcode: u32) -> bool {
             | s2c::CONTAINER_STATE
             | s2c::TRAILER_STATE
             | s2c::PALLET_JACK_STATE
+            | s2c::ECONOMY_TOWN_STATE
+            | s2c::ECONOMY_SIEGE_EVENT
+            | s2c::INDUSTRY_SURVEY_RESULT
+            | s2c::INDUSTRY_FACILITY_STATE
+            | s2c::LOGISTICS_CONVOY_STATE
+            | s2c::ECONOMY_MONARCH_ORDER_STATE
     )
 }
 
@@ -504,15 +597,23 @@ pub(crate) fn is_vehicle_event(opcode: u32) -> bool {
 mod tests {
     use super::*;
     use holtburger_protocol::messages::vehicle::{
-        VehicleEvent, VehiclePalletJackState, VehicleProfile, VehicleState, VehicleTrailerState,
+        EconomyMonarchOrderState, EconomySiegeEvent, EconomyTownState, IndustryFacilityState,
+        IndustrySurveyResult, LogisticsConvoyState, VehicleEvent, VehiclePalletJackState,
+        VehicleProfile, VehicleState, VehicleTrailerState,
     };
 
     #[test]
-    fn is_vehicle_event_includes_trailer_and_pallet_jack_state() {
+    fn is_vehicle_event_includes_v7_and_v8_opcodes() {
         assert!(is_vehicle_event(s2c::TRAILER_STATE));
         assert!(is_vehicle_event(s2c::CONTAINER_STATE));
         assert!(is_vehicle_event(s2c::PALLET_JACK_STATE));
-        assert!(!is_vehicle_event(0x0911));
+        assert!(is_vehicle_event(s2c::ECONOMY_TOWN_STATE));
+        assert!(is_vehicle_event(s2c::ECONOMY_SIEGE_EVENT));
+        assert!(is_vehicle_event(s2c::INDUSTRY_SURVEY_RESULT));
+        assert!(is_vehicle_event(s2c::INDUSTRY_FACILITY_STATE));
+        assert!(is_vehicle_event(s2c::LOGISTICS_CONVOY_STATE));
+        assert!(is_vehicle_event(s2c::ECONOMY_MONARCH_ORDER_STATE));
+        assert!(!is_vehicle_event(0x0917));
         assert!(!is_vehicle_event(0x0920));
     }
 
@@ -821,5 +922,128 @@ mod tests {
 
         let stats: Value = serde_json::from_str(&stats_json()).unwrap();
         assert!(stats["seat_releases_by_server"].as_u64().unwrap() >= 1);
+    }
+
+    #[test]
+    fn to_json_and_on_s2c_handle_v8_economy_and_industry_messages() {
+        reset();
+        let ts = EconomyTownState {
+            town_id: 1,
+            control_state: 3,
+            owner_monarch_id: 100,
+            attacker_monarch_id: 200,
+            flags: 1,
+            reserved: 0,
+            anchor_landblock: 0xA9B40000,
+            hold_elapsed_sec: 14400,
+            supply_meter_sec: 4800,
+            starving_sec: 0,
+            treasury_pyreals: 5_000_000_123,
+            escrow_pyreals: 4_294_967_300,
+            tariff_buy_mul: 1.05,
+            tariff_sell_mul: 0.92,
+        };
+        let se = EconomySiegeEvent {
+            town_id: 1,
+            kind: 6,
+            control_state: 1,
+            reserved: 0,
+            owner_monarch_id: 200,
+            attacker_monarch_id: 100,
+            hold_elapsed_sec: 28800,
+            supply_meter_sec: 5400,
+            starving_sec: 0,
+            treasury_spoils: 4_500_000_999,
+        };
+        let sr = IndustrySurveyResult {
+            deposit_id: 9_001_002_003,
+            landblock_id: 0xA9B4,
+            tool_kind: 41,
+            flags: 2,
+            terrain_code: 4,
+            resource_kind: 7,
+            reserved: 0,
+            depth_m: 185.5,
+            grade_bps: 6450,
+            api_gravity: 34.2,
+            sulfur_bps: 120,
+            remaining_tonnes: 12500.0,
+        };
+        let fs = IndustryFacilityState {
+            facility_guid: 1342178200,
+            kind: 49,
+            town_id: 1,
+            deposit_id: 9_001_002_003,
+            owner_monarch_id: 100,
+            status: 2,
+            online_flags: 7,
+            reserved: 0,
+            power_watts: -45000.0,
+            buffer_joules: 18_000_000.0,
+            progress_pct: 0.625,
+            recipe_id: 401,
+        };
+        let cs = LogisticsConvoyState {
+            convoy_id: 7_000_000_042,
+            owner_monarch_id: 100,
+            vehicle_guid: 2147486300,
+            vehicle_class: 4,
+            lod_state: 1,
+            status: 2,
+            reserved: 0,
+            origin_town_id: 1,
+            dest_town_id: 12,
+            origin_landblock: 0xA9B4,
+            spline_s_m: 1842.75,
+            fuel_liters: 420.5,
+            cell: 0xA9B40100,
+            position: [96.0, 144.0, 0.0],
+            heading: 2.356194,
+        };
+        let mo = EconomyMonarchOrderState {
+            order_id: 8_800_000_001,
+            monarch_id: 100,
+            town_id: 1,
+            order_type: 2,
+            status: 1,
+            flags: 1,
+            claimed_by_guid: 300,
+            item_wcid: 4000060,
+            quantity: 20,
+            reward_pyreals: 6_000_000_000,
+            value_f32: 1.15,
+        };
+
+        for msg in [
+            VehicleS2C::EconomyTownState(ts),
+            VehicleS2C::EconomySiegeEvent(se),
+            VehicleS2C::IndustrySurveyResult(sr),
+            VehicleS2C::IndustryFacilityState(fs),
+            VehicleS2C::LogisticsConvoyState(cs),
+            VehicleS2C::EconomyMonarchOrderState(mo),
+        ] {
+            let action = on_s2c(&msg, 100);
+            assert!(matches!(action, LinkAction::None));
+        }
+
+        let drained: Value = serde_json::from_str(&drain_json()).unwrap();
+        let arr = drained.as_array().unwrap();
+        assert_eq!(arr.len(), 6);
+        assert_eq!(arr[0]["type"], "economy_town_state");
+        assert_eq!(arr[0]["treasuryPyreals"], 5_000_000_123u64);
+        assert_eq!(arr[1]["type"], "economy_siege_event");
+        assert_eq!(arr[1]["treasurySpoils"], 4_500_000_999u64);
+        assert_eq!(arr[2]["type"], "industry_survey_result");
+        assert_eq!(arr[2]["depositId"], 9_001_002_003u64);
+        assert_eq!(arr[3]["type"], "industry_facility_state");
+        assert_eq!(arr[4]["type"], "logistics_convoy_state");
+        assert_eq!(arr[4]["vehicleClass"], 4);
+        assert_eq!(arr[5]["type"], "economy_monarch_order_state");
+        assert_eq!(arr[5]["rewardPyreals"], 6_000_000_000u64);
+
+        let stats: Value = serde_json::from_str(&stats_json()).unwrap();
+        for idx in 17..=22 {
+            assert!(stats["received"][idx].as_u64().unwrap() >= 1, "received[{idx}]");
+        }
     }
 }

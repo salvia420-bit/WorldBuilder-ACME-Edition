@@ -1,0 +1,331 @@
+// tests/vehicle_economy_models.test.mjs — Headless WebGL2 & Procedural Model Suite for M3.3 (F13)
+// Covers all 32 Phase B/C/E WCIDs (4000060..4000067, 4000070..4000095 / DeployableKind 30..61):
+//   - economy_specs.js canonical specs & resolution
+//   - Specialized ISO containers (22R1, 45R1, 22T1, 22K2, 22B0, 22U1, 22P1, 42P1)
+//   - Prospecting pallets (4000070..4000074): ISO 6780 pallet, stowed envelope, delta, loadSlot, pallet jack
+//   - Industrial skids (4000075..4000087) & Civic structures (4000090..4000095)
+//   - scene3d/vehicle/index.js `buildEconomyModel` & `buildDeployableModel` direct THREE.Group return & null on 9999999
+//   - 0 dynamic lights, CSM PBR, 0 NaN, FakeWebGL2 render, single-dispose-per-material, 0 lintSource/lintManifest hits
+
+import * as THREE from "three";
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+import { createFakeWebGL2, fakeCanvas } from "./helpers/fake_webgl2.mjs";
+import { lintManifest, lintSource } from "../scene3d/vfx/lint_caps.js";
+import {
+  ECONOMY_CONTAINER_WCID,
+  PROSPECTING_WCID,
+  INDUSTRIAL_SKID_WCID,
+  CIVIC_WCID,
+  ECONOMY_KIND_TO_WCID,
+  ECONOMY_WCID_TO_KIND,
+  resolveEconomyWcid,
+} from "../scene3d/vehicle/economy_specs.js";
+import {
+  buildIsoContainer,
+  ISO_CONTAINER_SPECS,
+  CONTAINER_SLOTS_REEFER_20,
+  CONTAINER_SLOTS_REEFER_40,
+} from "../scene3d/vehicle/container_models.js";
+import {
+  buildDeployable,
+  DEPLOYABLE_WCID,
+  DEPLOYABLE_KINDS,
+  manifest as deployableManifest,
+} from "../scene3d/vehicle/deployable_models.js";
+import { manifest as prospectingManifest } from "../scene3d/vehicle/prospecting_models.js";
+import { manifest as industryManifest } from "../scene3d/vehicle/industry_models.js";
+import { manifest as civicManifest } from "../scene3d/vehicle/civic_models.js";
+import { resolveContainerLogisticsSpec } from "../scene3d/vehicle/container_logistics.js";
+import { resolvePortContainerSpec } from "../scene3d/vehicle/port_specs.js";
+import { computeCraneSpanY, CRANE_SPAN_Y_20FT, CRANE_SPAN_Y_40FT } from "../scene3d/vehicle/sidelifter_kinematics.js";
+import { buildPalletJack } from "../scene3d/vehicle/pallet_jack_model.js";
+import { buildEconomyModel, buildDeployableModel } from "../scene3d/vehicle/index.js";
+
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+const APP_ROOT = path.resolve(HERE, "..");
+const VEHICLE_DIR = path.join(APP_ROOT, "scene3d", "vehicle");
+
+let passed = 0;
+let failed = 0;
+
+async function check(name, fn) {
+  try {
+    await fn();
+    passed++;
+    console.log(`  [OK] ${name}`);
+  } catch (e) {
+    failed++;
+    console.log(`  [FAIL] ${name}: ${e && e.stack ? e.stack.split("\n").slice(0, 3).join(" | ") : e}`);
+  }
+}
+
+function countDrawCalls(root) {
+  let calls = 0;
+  root.traverse((o) => {
+    if (o.visible && (o.isMesh || o.isLine || o.isSprite || o.isPoints)) calls++;
+  });
+  return calls;
+}
+
+function countLights(root) {
+  let lights = 0;
+  root.traverse((o) => {
+    if (o.isLight) lights++;
+  });
+  return lights;
+}
+
+function assertNoNaN(root, label) {
+  root.updateMatrixWorld(true);
+  root.traverse((o) => {
+    for (const arr of [o.position.toArray(), o.scale.toArray(), o.quaternion.toArray()]) {
+      for (const v of arr) {
+        assert.ok(Number.isFinite(v), `${label} non-finite transform value ${v}`);
+      }
+    }
+    if (o.geometry?.attributes?.position) {
+      const pos = o.geometry.attributes.position.array;
+      for (let i = 0; i < pos.length; i++) {
+        assert.ok(Number.isFinite(pos[i]), `${label} non-finite vertex position`);
+      }
+    }
+  });
+}
+
+function spySingleDispose(root, disposeFn) {
+  const counts = new Map();
+  root.traverse((o) => {
+    if (!o.material) return;
+    const mats = Array.isArray(o.material) ? o.material : [o.material];
+    for (const m of mats) {
+      if (!counts.has(m)) {
+        counts.set(m, 0);
+        const orig = m.dispose.bind(m);
+        m.dispose = () => {
+          counts.set(m, counts.get(m) + 1);
+          orig();
+        };
+      }
+    }
+  });
+  assert.ok(counts.size > 0, "Expected >= 1 material to dispose");
+  disposeFn();
+  for (const [m, c] of counts.entries()) {
+    assert.equal(c, 1, `Material ${m.type} disposed ${c} times (expected 1)`);
+  }
+}
+
+function renderWithFakeGl(root) {
+  const gl = createFakeWebGL2({ maxTextures: 16 });
+  const canvas = fakeCanvas(gl);
+  const renderer = new THREE.WebGLRenderer({ canvas, context: gl, antialias: false });
+  const scene = new THREE.Scene();
+  const cam = new THREE.PerspectiveCamera(60, 1.33, 0.1, 200);
+  cam.position.set(6, -8, 5);
+  cam.lookAt(0, 0, 1);
+  scene.add(root);
+  gl.__fake.reset();
+  renderer.render(scene, cam);
+  const draws = (gl.__fake.counts.drawArrays || 0) + (gl.__fake.counts.drawElements || 0);
+  assert.ok(draws > 0, `Expected drawCalls > 0, got ${draws}`);
+  scene.remove(root);
+  renderer.dispose();
+}
+
+console.log("=== Economy, Prospecting, Industry & Civic Procedural 3D Models Suite ===");
+
+await check("ECON_01 Spec maps cover all 32 WCIDs (4000060..4000067, 4000070..4000095) and Kinds 30..61", () => {
+  assert.equal(Object.keys(ECONOMY_KIND_TO_WCID).length, 32);
+  assert.equal(Object.keys(ECONOMY_WCID_TO_KIND).length, 32);
+  for (let k = 30; k <= 61; k++) {
+    const w = ECONOMY_KIND_TO_WCID[k];
+    assert.ok(w >= 4000060 && w <= 4000095, `Kind ${k} -> ${w}`);
+    assert.equal(ECONOMY_WCID_TO_KIND[w], k);
+    assert.equal(resolveEconomyWcid(k), w);
+    assert.equal(resolveEconomyWcid(w), w);
+  }
+  assert.equal(resolveEconomyWcid("22R1"), 4000060);
+  assert.equal(resolveEconomyWcid("45R1"), 4000061);
+  assert.equal(resolveEconomyWcid("GPR"), 4000070);
+  assert.equal(resolveEconomyWcid(9999999), null);
+});
+
+await check("ECON_02 Specialized ISO Containers (4000060..4000067): ISO 1161 spans, reefer slots, <= 8 DC, 0 lights, render & dispose", () => {
+  assert.equal(CONTAINER_SLOTS_REEFER_20.length, 8);
+  assert.equal(CONTAINER_SLOTS_REEFER_40.length, 18);
+
+  for (const wcid of Object.values(ECONOMY_CONTAINER_WCID)) {
+    const spec = ISO_CONTAINER_SPECS[wcid];
+    assert.ok(spec, `Missing spec for ${wcid}`);
+    assert.equal(spec.cornerCastingsCenter.width, 2.259);
+    assert.equal(spec.cornerCastingsCenter.length, spec.external.length < 7 ? 5.853 : 11.985);
+    assert.equal(spec.hasForkliftPockets, spec.external.length < 7);
+
+    const cont = buildIsoContainer(THREE, wcid, { doorProgress: 0 });
+    assert.equal(countLights(cont.root), 0, `${wcid} has 0 lights`);
+    const dc = countDrawCalls(cont.root);
+    assert.ok(dc >= 3 && dc <= 8, `${wcid} base draw calls (${dc}) in [3, 8]`);
+    assertNoNaN(cont.root, `container-${wcid}`);
+    cont.setDoorProgress(1.0);
+    cont.update(0.016, { doorProgress: 0.5 });
+    renderWithFakeGl(cont.root);
+    spySingleDispose(cont.root, () => cont.dispose());
+
+    // Logistics, port_specs & sidelifter compatibility
+    const logSpec = resolveContainerLogisticsSpec(wcid);
+    assert.ok(logSpec && logSpec.interior, `container_logistics supports ${wcid}`);
+    const portSpec = resolvePortContainerSpec(wcid);
+    assert.equal(portSpec.wcid, wcid);
+    const expectedSpan = spec.external.length < 7 ? CRANE_SPAN_Y_20FT : CRANE_SPAN_Y_40FT;
+    assert.equal(computeCraneSpanY(wcid), expectedSpan);
+  }
+});
+
+await check("ECON_03 Prospecting Pallets (4000070..4000074): ISO 6780 pallet, stowed envelope, delta, container loadSlot & pallet jack", () => {
+  for (const wcid of Object.values(PROSPECTING_WCID)) {
+    const unit = buildDeployable(THREE, wcid, { stowed: false });
+    assert.equal(countLights(unit.root), 0, `${wcid} 0 lights`);
+    const dc = countDrawCalls(unit.root);
+    assert.ok(dc >= 2 && dc <= 10, `${wcid} draw calls (${dc}) <= 10`);
+    assert.doesNotThrow(() => unit.update(null));
+    unit.update({ simTimeSec: 1.2, online: true, progressPct: 50 });
+    unit.root.updateMatrixWorld(true);
+    const deployedBox = new THREE.Box3().setFromObject(unit.root);
+
+    unit.setStowed(true);
+    unit.root.updateMatrixWorld(true);
+    const stowedBox = new THREE.Box3().setFromObject(unit.root);
+    assert.ok(stowedBox.min.x >= -0.555 && stowedBox.max.x <= 0.555, `${wcid} stowed X`);
+    assert.ok(stowedBox.min.y >= -0.555 && stowedBox.max.y <= 0.555, `${wcid} stowed Y`);
+    assert.ok(stowedBox.min.z >= -1e-4 && stowedBox.max.z <= 2.05, `${wcid} stowed Z (${stowedBox.max.z})`);
+
+    const diff =
+      Math.abs(stowedBox.min.x - deployedBox.min.x) +
+      Math.abs(stowedBox.max.x - deployedBox.max.x) +
+      Math.abs(stowedBox.min.y - deployedBox.min.y) +
+      Math.abs(stowedBox.max.y - deployedBox.max.y) +
+      Math.abs(stowedBox.min.z - deployedBox.min.z) +
+      Math.abs(stowedBox.max.z - deployedBox.max.z);
+    assert.ok(diff > 0.02, `${wcid} has stowed-vs-deployed delta (${diff})`);
+
+    assertNoNaN(unit.root, `prospect-${wcid}`);
+    renderWithFakeGl(unit.root);
+    spySingleDispose(unit.root, () => unit.dispose());
+  }
+
+  // Load 4000070..4000074 into 22R1 reefer container slots and onto pallet jack
+  const reefer = buildIsoContainer(THREE, 4000060, { doorProgress: 1.0 });
+  const slot = reefer.loadSlot(0, 4000070);
+  assert.ok(slot && slot.deployableModel && slot.deployableModel.wcid === 4000070);
+  reefer.dispose();
+
+  const pj = buildPalletJack(THREE, { carriedWcid: 4000072 });
+  assert.doesNotThrow(() => pj.update({ carriedWcid: 4000073 }));
+  pj.dispose();
+});
+
+await check("ECON_04 Industrial Skids (4000075..4000087) & Civic Structures (4000090..4000095): <= 10 DC, 0 lights, update(null), render & dispose", () => {
+  const allWcids = [...Object.values(INDUSTRIAL_SKID_WCID), ...Object.values(CIVIC_WCID)];
+  for (const wcid of allWcids) {
+    const unit = buildDeployable(THREE, wcid, { stowed: false });
+    assert.equal(unit.wcid, wcid);
+    assert.equal(countLights(unit.root), 0, `${wcid} has 0 dynamic lights`);
+    const dc = countDrawCalls(unit.root);
+    assert.ok(dc >= 2 && dc <= 10, `${wcid} draw calls (${dc}) <= 10`);
+    assert.doesNotThrow(() => unit.update(null), `${wcid} update(null) safe`);
+    unit.update({ simTimeSec: 2.5, online: true, progressPct: 75 });
+    assertNoNaN(unit.root, `unit-${wcid}`);
+    renderWithFakeGl(unit.root);
+    spySingleDispose(unit.root, () => unit.dispose());
+  }
+});
+
+await check("ECON_05 index.js buildEconomyModel & buildDeployableModel return THREE.Group directly or null for 9999999", () => {
+  assert.equal(buildDeployableModel, buildEconomyModel);
+  assert.equal(buildEconomyModel(THREE, 9999999), null);
+  assert.equal(buildEconomyModel(THREE, "nonexistent_unit"), null);
+
+  for (let k = 30; k <= 61; k++) {
+    const wcid = ECONOMY_KIND_TO_WCID[k];
+    const rootByWcid = buildEconomyModel(THREE, wcid);
+    assert.ok(rootByWcid && rootByWcid.isObject3D, `buildEconomyModel(${wcid}) returns Object3D`);
+    assert.equal(countLights(rootByWcid), 0);
+    assertNoNaN(rootByWcid, `factory-${wcid}`);
+    renderWithFakeGl(rootByWcid);
+    spySingleDispose(rootByWcid, () => rootByWcid.userData.dispose());
+
+    const rootByKind = buildEconomyModel(THREE, k);
+    assert.ok(rootByKind && rootByKind.isObject3D, `buildEconomyModel(kind=${k}) returns Object3D`);
+    rootByKind.userData.dispose();
+  }
+});
+
+await check("ECON_06 lintManifest (0 errors) & lintSource (0 hits across all economy vehicle model files)", () => {
+  for (const m of [deployableManifest, prospectingManifest, industryManifest, civicManifest]) {
+    assert.deepEqual(lintManifest(m), []);
+  }
+  const files = [
+    "economy_specs.js",
+    "prospecting_models.js",
+    "industry_models.js",
+    "civic_models.js",
+    "economy_hud.js",
+    "container_models.js",
+    "deployable_models.js",
+  ];
+  for (const name of files) {
+    const hits = lintSource(readFileSync(path.join(VEHICLE_DIR, name), "utf8"));
+    assert.deepEqual(hits, [], `${name} lintSource violations: ${JSON.stringify(hits)}`);
+  }
+  assert.ok(Object.values(DEPLOYABLE_KINDS).includes(61));
+  assert.ok(Object.values(DEPLOYABLE_WCID).includes(4000095));
+});
+
+await check("ECON_07 Flat-rack cargoBayGroup stays visible at doorProgress=0 & Reefer (22R1/45R1) floor deck covers all reefer slots", () => {
+  for (const wcid of [4000066, 4000067]) {
+    const rack = buildIsoContainer(THREE, wcid, { doorProgress: 0 });
+    assert.equal(rack.cargoBayGroup.visible, true, `${wcid} flatRack cargoBayGroup visible at default doorProgress=0`);
+    const slot = rack.loadSlot(0, 4000070);
+    assert.ok(slot && slot.deployableModel, `${wcid} flatRack loadSlot(0, 4000070) succeeded`);
+    rack.setDoorProgress(0);
+    assert.equal(rack.cargoBayGroup.visible, true, `${wcid} flatRack cargoBayGroup stays visible after setDoorProgress(0)`);
+    rack.dispose();
+  }
+
+  // Box containers keep interior bay culling when doors are closed
+  const boxReefer = buildIsoContainer(THREE, 4000060, { doorProgress: 0 });
+  assert.equal(boxReefer.cargoBayGroup.visible, false, "22R1 box cargoBayGroup culled at doorProgress=0");
+  boxReefer.setDoorProgress(1);
+  assert.equal(boxReefer.cargoBayGroup.visible, true, "22R1 box cargoBayGroup visible at doorProgress=1");
+  boxReefer.setDoorProgress(0);
+  assert.equal(boxReefer.cargoBayGroup.visible, false, "22R1 box cargoBayGroup culled again at doorProgress=0");
+  boxReefer.dispose();
+
+  for (const [wcid, slots, maxBulkheadY] of [
+    [4000060, CONTAINER_SLOTS_REEFER_20, 1.95],
+    [4000061, CONTAINER_SLOTS_REEFER_40, 5.05],
+  ]) {
+    const cont = buildIsoContainer(THREE, wcid, { doorProgress: 1 });
+    const floorMesh = cont.root.getObjectByName("container-floor-deck");
+    assert.ok(floorMesh, `${wcid} has container-floor-deck`);
+    cont.root.updateMatrixWorld(true);
+    const floorBox = new THREE.Box3().setFromObject(floorMesh);
+    const halfL = cont.spec.external.length * 0.5;
+    assert.ok(floorBox.min.y <= -halfL + 0.08 + 1e-3, `${wcid} floor min.y (${floorBox.min.y}) reaches rear sill`);
+    assert.ok(floorBox.max.y <= maxBulkheadY, `${wcid} floor max.y (${floorBox.max.y}) stops at front reefer bulkhead`);
+    for (const sl of slots) {
+      assert.ok(
+        floorBox.min.y <= sl.y - sl.dy * 0.5 + 1e-3 && floorBox.max.y >= sl.y + sl.dy * 0.5 - 1e-3,
+        `${wcid} floor Box3 [${floorBox.min.y.toFixed(3)}, ${floorBox.max.y.toFixed(3)}] covers slot ${sl.slotIndex} [${(sl.y - sl.dy * 0.5).toFixed(3)}, ${(sl.y + sl.dy * 0.5).toFixed(3)}]`
+      );
+    }
+    cont.dispose();
+  }
+});
+
+console.log(`\nvehicle_economy_models: ${passed} passed, ${failed} failed`);
+if (failed > 0) process.exit(1);

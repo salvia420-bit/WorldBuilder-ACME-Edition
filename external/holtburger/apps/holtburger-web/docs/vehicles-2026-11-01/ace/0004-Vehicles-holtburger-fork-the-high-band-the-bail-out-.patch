@@ -1,7 +1,7 @@
 From 00521d9ca649b7250f08855b1722b691391a3d19 Mon Sep 17 00:00:00 2001
 From: salvia420-bit <salvia420@gmail.com>
 Date: Mon, 2 Nov 2026 04:39:41 -0330
-Subject: [PATCH 04/12] Vehicles (holtburger fork): the high band, the bail-out
+Subject: [PATCH 04/28] Vehicles (holtburger fork): the high band, the bail-out
  pose, film properties, map-edge unseat fix
 
 Flight experience (2026-11-01/02), every behaviour behind a property that defaults off:
@@ -34,7 +34,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
  6 files changed, 169 insertions(+), 10 deletions(-)
 
 diff --git a/Source/ACE.Server/Managers/PropertyManager.cs b/Source/ACE.Server/Managers/PropertyManager.cs
-index 403869c..deb395c 100644
+index 403869cb..deb395c8 100644
 --- a/Source/ACE.Server/Managers/PropertyManager.cs
 +++ b/Source/ACE.Server/Managers/PropertyManager.cs
 @@ -613,6 +613,8 @@ public static void LoadDefaultProperties()
@@ -62,7 +62,7 @@ index 403869c..deb395c 100644
                  ("cloak_max_proc_base", new Property<double>(0.25, "The max proc chance of a cloak.")),
                  ("cloak_max_proc_damage_percentage", new Property<double>(0.30, "The damage percentage at which cloak proc chance plateaus.")),
 diff --git a/Source/ACE.Server/Physics/Common/ObjectMaint.cs b/Source/ACE.Server/Physics/Common/ObjectMaint.cs
-index dc0ec53..e07ce81 100644
+index dc0ec530..e07ce818 100644
 --- a/Source/ACE.Server/Physics/Common/ObjectMaint.cs
 +++ b/Source/ACE.Server/Physics/Common/ObjectMaint.cs
 @@ -447,6 +447,13 @@ private IEnumerable<PhysicsObj> ApplyFilter(List<PhysicsObj> objs, VisibleObject
@@ -89,7 +89,7 @@ index dc0ec53..e07ce81 100644
                      if (distSq > SightRadiusSq)
                          return false;
 diff --git a/Source/ACE.Server/Vehicles/FlightModel.cs b/Source/ACE.Server/Vehicles/FlightModel.cs
-index 1c4d82b..f06e25e 100644
+index 1c4d82b2..f06e25e5 100644
 --- a/Source/ACE.Server/Vehicles/FlightModel.cs
 +++ b/Source/ACE.Server/Vehicles/FlightModel.cs
 @@ -93,7 +93,9 @@ public static class FlightModel
@@ -104,7 +104,7 @@ index 1c4d82b..f06e25e 100644
  
          public static double MoveToward(double cur, double target, double maxDelta)
 diff --git a/Source/ACE.Server/Vehicles/VehicleBailout.cs b/Source/ACE.Server/Vehicles/VehicleBailout.cs
-index 17e9ed7..429f284 100644
+index 17e9ed74..429f284d 100644
 --- a/Source/ACE.Server/Vehicles/VehicleBailout.cs
 +++ b/Source/ACE.Server/Vehicles/VehicleBailout.cs
 @@ -5,6 +5,9 @@
@@ -199,7 +199,7 @@ index 17e9ed7..429f284 100644
  
          public static string Report() => $"falling: {falls.Count}";
 diff --git a/Source/ACE.Server/Vehicles/VehicleManager.cs b/Source/ACE.Server/Vehicles/VehicleManager.cs
-index 9bbd3d0..1f333d0 100644
+index 9bbd3d06..1f333d00 100644
 --- a/Source/ACE.Server/Vehicles/VehicleManager.cs
 +++ b/Source/ACE.Server/Vehicles/VehicleManager.cs
 @@ -58,9 +58,25 @@ public static class VehicleManager
@@ -357,7 +357,7 @@ index 9bbd3d0..1f333d0 100644
          }
  
 diff --git a/Source/ACE.Server/Vehicles/VehicleWeapons.cs b/Source/ACE.Server/Vehicles/VehicleWeapons.cs
-index 1503c5b..636e2ab 100644
+index 1503c5b4..636e2ab2 100644
 --- a/Source/ACE.Server/Vehicles/VehicleWeapons.cs
 +++ b/Source/ACE.Server/Vehicles/VehicleWeapons.cs
 @@ -126,9 +126,18 @@ static List<Candidate> Candidates(Player pilot, Vector3 muzzle, float range)

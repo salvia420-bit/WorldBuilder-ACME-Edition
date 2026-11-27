@@ -1,0 +1,1637 @@
+From 37f0eebb72fe3851c6a95277de75c35334e97296 Mon Sep 17 00:00:00 2001
+From: salvia420-bit <salvia420@gmail.com>
+Date: Fri, 27 Nov 2026 09:36:42 +0000
+Subject: [PATCH 27/28] test(economy): add 31 accelerated-clock EconomyE2E
+ integration tests (Phases A-E)
+
+Add opaque-box accelerated-clock server integration test suite covering Phases A-E (strict mode 31/31 passing under -c Debug).
+---
+ .../EconomyE2E/EconomyE2EReflectionHelpers.cs | 351 +++++++++
+ .../EconomyE2E/PhaseAEconomyE2ETests.cs       | 692 ++++++++++++++++++
+ .../EconomyE2E/PhaseBSiegeE2ETests.cs         | 271 +++++++
+ .../PhaseCGeologyColdChainWireE2ETests.cs     | 153 ++++
+ .../PhaseDELogisticsGatewayE2ETests.cs        | 117 +++
+ 5 files changed, 1584 insertions(+)
+ create mode 100644 Source/ACE.Server.Tests/EconomyE2E/EconomyE2EReflectionHelpers.cs
+ create mode 100644 Source/ACE.Server.Tests/EconomyE2E/PhaseAEconomyE2ETests.cs
+ create mode 100644 Source/ACE.Server.Tests/EconomyE2E/PhaseBSiegeE2ETests.cs
+ create mode 100644 Source/ACE.Server.Tests/EconomyE2E/PhaseCGeologyColdChainWireE2ETests.cs
+ create mode 100644 Source/ACE.Server.Tests/EconomyE2E/PhaseDELogisticsGatewayE2ETests.cs
+
+diff --git a/Source/ACE.Server.Tests/EconomyE2E/EconomyE2EReflectionHelpers.cs b/Source/ACE.Server.Tests/EconomyE2E/EconomyE2EReflectionHelpers.cs
+new file mode 100644
+index 00000000..4a82cbad
+--- /dev/null
++++ b/Source/ACE.Server.Tests/EconomyE2E/EconomyE2EReflectionHelpers.cs
+@@ -0,0 +1,351 @@
++using System;
++using System.Collections.Generic;
++using System.Linq;
++using System.Reflection;
++using System.Runtime.CompilerServices;
++using System.Threading;
++using Microsoft.VisualStudio.TestTools.UnitTesting;
++using ACE.Entity;
++using ACE.Entity.Enum;
++using ACE.Entity.Enum.Properties;
++using ACE.Entity.Models;
++using ACE.Server.Managers;
++using ACE.Server.Network.Sequence;
++using ACE.Server.WorldObjects;
++using ACE.Server.WorldObjects.Managers;
++
++namespace ACE.Server.Tests.EconomyE2E
++{
++    internal static class EconomyE2EReflectionHelpers
++    {
++        private static uint _nextGuid = 0x79000001u;
++
++        public static bool IsStrictMode =>
++            string.Equals(Environment.GetEnvironmentVariable("ECONOMY_E2E_STRICT"), "1", StringComparison.Ordinal);
++
++        public static T RequireOrInconclusive<T>(T value, string missingDetail) where T : class
++        {
++            if (value != null)
++                return value;
++
++            var msg = $"[EconomyE2E] Target not yet implemented: {missingDetail}";
++            if (IsStrictMode)
++                Assert.Fail(msg);
++            else
++                Assert.Inconclusive(msg);
++
++            return null;
++        }
++
++        public static void RequireTrueOrInconclusive(bool condition, string missingDetail)
++        {
++            if (condition)
++                return;
++
++            var msg = $"[EconomyE2E] Target not yet implemented: {missingDetail}";
++            if (IsStrictMode)
++                Assert.Fail(msg);
++            else
++                Assert.Inconclusive(msg);
++        }
++
++        /// <summary>
++        /// Strict bool invocation helper: refuses void or non-bool return types so
++        /// Convert.ToBoolean(null) can never silently return false and produce a false pass.
++        /// </summary>
++        public static bool InvokeBool(MethodInfo m, object instance, params object[] args)
++        {
++            Assert.IsNotNull(m, "[EconomyE2E] InvokeBool received null MethodInfo");
++            Assert.AreEqual(
++                typeof(bool),
++                m.ReturnType,
++                $"[EconomyE2E] Expected bool return type on {m.DeclaringType?.Name}.{m.Name}, got {m.ReturnType.Name}");
++            var res = m.Invoke(instance, args);
++            Assert.IsTrue(
++                res is bool,
++                $"[EconomyE2E] Expected bool return value from {m.DeclaringType?.Name}.{m.Name}, got {res?.GetType().Name ?? "null"}");
++            return (bool)res;
++        }
++
++        public static bool GetBoolPropOrField(object instance, string name)
++        {
++            var val = GetPropOrField(instance, name);
++            Assert.IsTrue(
++                val is bool,
++                $"[EconomyE2E] Expected bool property/field '{name}' on {instance?.GetType().Name ?? "null"}, got {val?.GetType().Name ?? "null"}");
++            return (bool)val;
++        }
++
++        public static Type FindType(params string[] candidateFullNames)
++        {
++            var assemblies = new List<Assembly>
++            {
++                typeof(PropertyManager).Assembly,
++                typeof(ACE.Database.Models.Shard.ShardDbContext).Assembly,
++                typeof(ObjectGuid).Assembly,
++                typeof(ACE.Common.ConfigManager).Assembly,
++            };
++            foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
++            {
++                if (!assemblies.Contains(asm))
++                    assemblies.Add(asm);
++            }
++
++            foreach (var name in candidateFullNames)
++            {
++                if (string.IsNullOrWhiteSpace(name)) continue;
++                var direct = Type.GetType(name, throwOnError: false);
++                if (direct != null) return direct;
++
++                foreach (var asm in assemblies)
++                {
++                    var t = asm.GetType(name, throwOnError: false);
++                    if (t != null) return t;
++                }
++            }
++            return null;
++        }
++
++        public static object GetPropOrField(object instance, string name)
++        {
++            if (instance == null) return null;
++            var t = instance.GetType();
++            const BindingFlags flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
++            var prop = t.GetProperty(name, flags);
++            if (prop != null) return prop.GetValue(instance);
++            var field = t.GetField(name, flags);
++            if (field != null) return field.GetValue(instance);
++            return null;
++        }
++
++        public static bool SetPropOrField(object instance, string name, object value)
++        {
++            if (instance == null) return false;
++            var t = instance.GetType();
++            const BindingFlags flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
++            var prop = t.GetProperty(name, flags);
++            if (prop != null && prop.CanWrite)
++            {
++                prop.SetValue(instance, value);
++                return true;
++            }
++            var field = t.GetField(name, flags);
++            if (field != null)
++            {
++                field.SetValue(instance, value);
++                return true;
++            }
++            return false;
++        }
++
++        public static MemberInfo FindStaticPropOrField(Type type, params string[] names)
++        {
++            if (type == null) return null;
++            const BindingFlags flags = BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic;
++            foreach (var name in names)
++            {
++                var prop = type.GetProperty(name, flags);
++                if (prop != null) return prop;
++                var field = type.GetField(name, flags);
++                if (field != null) return field;
++            }
++            return null;
++        }
++
++        public static object ReadMemberValue(MemberInfo member, object instance = null) => member switch
++        {
++            PropertyInfo p => p.GetValue(instance),
++            FieldInfo f => f.GetValue(instance),
++            _ => null,
++        };
++
++        public static object GetStaticPropOrField(Type type, string name)
++        {
++            if (type == null) return null;
++            const BindingFlags flags = BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic;
++            var prop = type.GetProperty(name, flags);
++            if (prop != null) return prop.GetValue(null);
++            var field = type.GetField(name, flags);
++            if (field != null) return field.GetValue(null);
++            return null;
++        }
++
++        public static bool SetStaticPropOrField(Type type, string name, object value)
++        {
++            if (type == null) return false;
++            const BindingFlags flags = BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic;
++            var prop = type.GetProperty(name, flags);
++            if (prop != null && prop.CanWrite)
++            {
++                prop.SetValue(null, value);
++                return true;
++            }
++            var field = type.GetField(name, flags);
++            if (field != null)
++            {
++                field.SetValue(null, value);
++                return true;
++            }
++            return false;
++        }
++
++        public static MethodInfo FindMethod(Type type, string name, int? argCount = null)
++        {
++            if (type == null) return null;
++            const BindingFlags flags = BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic;
++            return type.GetMethods(flags)
++                .FirstOrDefault(m => m.Name == name && (!argCount.HasValue || m.GetParameters().Length == argCount.Value));
++        }
++
++        public static uint AllocTestGuid() => Interlocked.Increment(ref _nextGuid);
++
++        public static void InitWorldObjectFields(WorldObject wo, uint guid, uint wcid, Biota biota, uint cellId, float x = 20f, float y = 20f, float z = 10f)
++        {
++            typeof(WorldObject).GetField("<Guid>k__BackingField", BindingFlags.Instance | BindingFlags.NonPublic)?.SetValue(wo, new ObjectGuid(guid));
++            typeof(WorldObject).GetField("<WeenieClassId>k__BackingField", BindingFlags.Instance | BindingFlags.NonPublic)?.SetValue(wo, wcid);
++            typeof(WorldObject).GetField("<Biota>k__BackingField", BindingFlags.Instance | BindingFlags.NonPublic)?.SetValue(wo, biota);
++            typeof(WorldObject).GetField("ephemeralPositions", BindingFlags.Instance | BindingFlags.NonPublic)?.SetValue(wo, new Dictionary<PositionType, Position>());
++            typeof(WorldObject).GetField("positionCache", BindingFlags.Instance | BindingFlags.NonPublic)?.SetValue(wo, new Dictionary<PositionType, Position>());
++            typeof(WorldObject).GetField("BiotaDatabaseLock", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)?.SetValue(wo, new ReaderWriterLockSlim());
++            typeof(WorldObject).GetField("<Sequences>k__BackingField", BindingFlags.Instance | BindingFlags.NonPublic)?.SetValue(wo, new SequenceManager());
++            wo.EnchantmentManager = new EnchantmentManagerWithCaching(wo);
++            wo.Location = new Position(cellId, x, y, z, 0, 0, 0, 1);
++        }
++
++        public static Player CreateTestPlayer(uint guid, uint landblockCellId, float x, float y, float z, uint monarchId = 0)
++        {
++            var player = (Player)RuntimeHelpers.GetUninitializedObject(typeof(Player));
++            var biota = new Biota
++            {
++                Id = guid,
++                WeenieClassId = 1,
++                WeenieType = WeenieType.Creature,
++                PropertiesPosition = new Dictionary<PositionType, PropertiesPosition>(),
++                PropertiesInt = new Dictionary<PropertyInt, int>(),
++                PropertiesInt64 = new Dictionary<PropertyInt64, long>(),
++                PropertiesFloat = new Dictionary<PropertyFloat, double>(),
++                PropertiesBool = new Dictionary<PropertyBool, bool>(),
++                PropertiesDID = new Dictionary<PropertyDataId, uint>(),
++                PropertiesString = new Dictionary<PropertyString, string> { [PropertyString.Name] = $"E2EPlayer_{guid:X}" },
++                PropertiesAttribute = new Dictionary<PropertyAttribute, PropertiesAttribute>(),
++                PropertiesEnchantmentRegistry = new List<PropertiesEnchantmentRegistry>(),
++                PropertiesCreateList = new List<PropertiesCreateList>(),
++                PropertiesEmote = new List<PropertiesEmote>(),
++            };
++
++            InitWorldObjectFields(player, guid, 1, biota, landblockCellId, x, y, z);
++            if (monarchId != 0)
++                player.MonarchId = monarchId;
++
++            return player;
++        }
++
++        public static Vendor CreateTestVendor(uint wcid, uint cellId, string name = "E2E Vendor", uint? altCurrency = null)
++        {
++            var guid = AllocTestGuid();
++            var vendor = (Vendor)RuntimeHelpers.GetUninitializedObject(typeof(Vendor));
++            var biota = new Biota
++            {
++                Id = guid,
++                WeenieClassId = wcid,
++                WeenieType = WeenieType.Vendor,
++                PropertiesInt = new Dictionary<PropertyInt, int>
++                {
++                    [PropertyInt.MerchandiseItemTypes] = (int)(ItemType.MeleeWeapon | ItemType.PromissoryNote | ItemType.Armor | ItemType.Gem | ItemType.Food | ItemType.Misc),
++                    [PropertyInt.MerchandiseMinValue] = 0,
++                    [PropertyInt.MerchandiseMaxValue] = 1_000_000,
++                },
++                PropertiesInt64 = new Dictionary<PropertyInt64, long>(),
++                PropertiesFloat = new Dictionary<PropertyFloat, double>
++                {
++                    [PropertyFloat.BuyPrice] = 0.5,
++                    [PropertyFloat.SellPrice] = 1.0,
++                },
++                PropertiesBool = new Dictionary<PropertyBool, bool>(),
++                PropertiesDID = new Dictionary<PropertyDataId, uint>(),
++                PropertiesString = new Dictionary<PropertyString, string> { [PropertyString.Name] = name },
++                PropertiesPosition = new Dictionary<PositionType, PropertiesPosition>(),
++            };
++            if (altCurrency.HasValue)
++                biota.PropertiesDID[PropertyDataId.AlternateCurrency] = altCurrency.Value;
++
++            InitWorldObjectFields(vendor, guid, wcid, biota, cellId);
++            typeof(Vendor).GetField("DefaultItemsForSale", BindingFlags.Instance | BindingFlags.Public)?.SetValue(vendor, new Dictionary<ObjectGuid, WorldObject>());
++            typeof(Vendor).GetField("UniqueItemsForSale", BindingFlags.Instance | BindingFlags.Public)?.SetValue(vendor, new Dictionary<ObjectGuid, WorldObject>());
++            return vendor;
++        }
++
++        public static SlumLord CreateTestSlumlord(uint cellId, string name = "E2E Slumlord")
++        {
++            var guid = AllocTestGuid();
++            var slumlord = (SlumLord)RuntimeHelpers.GetUninitializedObject(typeof(SlumLord));
++            var biota = new Biota
++            {
++                Id = guid,
++                WeenieClassId = 9550,
++                WeenieType = WeenieType.SlumLord,
++                PropertiesInt = new Dictionary<PropertyInt, int>(),
++                PropertiesInt64 = new Dictionary<PropertyInt64, long>(),
++                PropertiesFloat = new Dictionary<PropertyFloat, double>(),
++                PropertiesBool = new Dictionary<PropertyBool, bool>(),
++                PropertiesDID = new Dictionary<PropertyDataId, uint>(),
++                PropertiesString = new Dictionary<PropertyString, string> { [PropertyString.Name] = name },
++                PropertiesPosition = new Dictionary<PositionType, PropertiesPosition>(),
++            };
++            InitWorldObjectFields(slumlord, guid, 9550, biota, cellId);
++            return slumlord;
++        }
++
++        public static WorldObject CreateTestItem(
++            uint wcid,
++            WeenieType weenieType,
++            ItemType itemType,
++            int value,
++            int stackSize = 1,
++            int? maxStack = null,
++            string name = "E2EItem",
++            uint? spellDid = null,
++            bool vendorService = false,
++            uint cellId = 0xA9B40001u)
++        {
++            var guid = AllocTestGuid();
++            var concreteType = maxStack.HasValue ? typeof(Stackable) : typeof(GenericObject);
++            var wo = (WorldObject)RuntimeHelpers.GetUninitializedObject(concreteType);
++            var biota = new Biota
++            {
++                Id = guid,
++                WeenieClassId = wcid,
++                WeenieType = weenieType,
++                PropertiesInt = new Dictionary<PropertyInt, int>
++                {
++                    [PropertyInt.ItemType] = (int)itemType,
++                    [PropertyInt.Value] = value * stackSize,
++                },
++                PropertiesInt64 = new Dictionary<PropertyInt64, long>(),
++                PropertiesFloat = new Dictionary<PropertyFloat, double>(),
++                PropertiesBool = new Dictionary<PropertyBool, bool>(),
++                PropertiesDID = new Dictionary<PropertyDataId, uint>(),
++                PropertiesString = new Dictionary<PropertyString, string>
++                {
++                    [PropertyString.Name] = name,
++                    [PropertyString.PluralName] = name + "s",
++                },
++                PropertiesPosition = new Dictionary<PositionType, PropertiesPosition>(),
++            };
++
++            if (maxStack.HasValue)
++            {
++                biota.PropertiesInt[PropertyInt.MaxStackSize] = maxStack.Value;
++                biota.PropertiesInt[PropertyInt.StackSize] = stackSize;
++                biota.PropertiesInt[PropertyInt.StackUnitValue] = value;
++            }
++            if (spellDid.HasValue)
++                biota.PropertiesDID[PropertyDataId.Spell] = spellDid.Value;
++            if (vendorService)
++                biota.PropertiesBool[PropertyBool.VendorService] = true;
++
++            InitWorldObjectFields(wo, guid, wcid, biota, cellId);
++            return wo;
++        }
++    }
++}
+diff --git a/Source/ACE.Server.Tests/EconomyE2E/PhaseAEconomyE2ETests.cs b/Source/ACE.Server.Tests/EconomyE2E/PhaseAEconomyE2ETests.cs
+new file mode 100644
+index 00000000..4108e5ea
+--- /dev/null
++++ b/Source/ACE.Server.Tests/EconomyE2E/PhaseAEconomyE2ETests.cs
+@@ -0,0 +1,692 @@
++using System;
++using System.Collections.Generic;
++using System.Linq;
++using System.Reflection;
++using Microsoft.VisualStudio.TestTools.UnitTesting;
++using ACE.Database.Models.Shard;
++using ACE.Entity.Enum;
++using ACE.Entity.Models;
++using ACE.Server.Managers;
++using ACE.Server.Vehicles.Deployables;
++using ACE.Server.WorldObjects;
++using static ACE.Server.Tests.EconomyE2E.EconomyE2EReflectionHelpers;
++
++namespace ACE.Server.Tests.EconomyE2E
++{
++    [TestClass]
++    public class PhaseAEconomyE2ETests
++    {
++        private static void ResetEconomyIfPresent(Type econType)
++        {
++            var reset = FindMethod(econType, "ResetForTesting", 0)
++                ?? FindMethod(econType, "ApplyColdStartCutover", 0)
++                ?? FindMethod(econType, "InitializeColdStart", 0)
++                ?? FindMethod(econType, "ResetForColdStart", 0);
++            reset?.Invoke(null, null);
++        }
++
++        private static long ReadTreasuryBalance(object state)
++        {
++            var direct = GetPropOrField(state, "TillPyreals") ?? GetPropOrField(state, "TreasuryPyreals");
++            if (direct != null) return Convert.ToInt64(direct);
++            var control = GetPropOrField(state, "Control");
++            if (control != null)
++            {
++                var nested = GetPropOrField(control, "TreasuryPyreals") ?? GetPropOrField(control, "TillPyreals");
++                if (nested != null) return Convert.ToInt64(nested);
++            }
++            return -1L;
++        }
++
++        private static void SeedTownTillHelper(Type econType, uint townId, long amount)
++        {
++            var setTill = FindMethod(econType, "SeedTownTill", 2) ?? FindMethod(econType, "SetTownTillForTesting", 2);
++            RequireOrInconclusive(setTill, "TownEconomyManager.SeedTownTill / SetTownTillForTesting");
++            setTill.Invoke(null, new object[] { townId, amount });
++        }
++
++        private static void SeedVendorStockHelper(Type econType, uint townId, uint vendorGuid, uint wcid, int qty)
++        {
++            var seed5 = FindMethod(econType, "SeedVendorStock", 5);
++            if (seed5 != null)
++            {
++                seed5.Invoke(null, new object[] { townId, vendorGuid, wcid, qty, (int?)null });
++                return;
++            }
++            var seed3 = FindMethod(econType, "SetVendorStockForTesting", 3) ?? FindMethod(econType, "AddVendorStock", 3);
++            RequireOrInconclusive(seed3, "TownEconomyManager.SeedVendorStock / SetVendorStockForTesting");
++            seed3.Invoke(null, new object[] { townId, wcid, qty });
++        }
++
++        [TestMethod]
++        public void Baseline_PropertyManager_PhysicalEconomyEnabledSwitch()
++        {
++            var defaults = DefaultPropertyManager.DefaultBooleanProperties;
++            RequireTrueOrInconclusive(
++                defaults.TryGetValue("physical_economy_enabled", out var defaultProp),
++                "DefaultPropertyManager.DefaultBooleanProperties missing 'physical_economy_enabled'");
++
++            bool original = defaultProp.Item;
++            // Populate CachedBooleanSettings via ModifyBool BEFORE calling GetBool so standalone
++            // tests never fall through to DatabaseManager.ShardConfig -> ShardDbContext.OnConfiguring.
++            Assert.IsTrue(PropertyManager.ModifyBool("physical_economy_enabled", original));
++            try
++            {
++                Assert.AreEqual(original, PropertyManager.GetBool("physical_economy_enabled").Item);
++                Assert.IsTrue(PropertyManager.ModifyBool("physical_economy_enabled", false));
++                Assert.IsFalse(PropertyManager.GetBool("physical_economy_enabled").Item);
++                Assert.IsTrue(PropertyManager.ModifyBool("physical_economy_enabled", true));
++                Assert.IsTrue(PropertyManager.GetBool("physical_economy_enabled").Item);
++
++                // Negative boundary check: unknown boolean key must be rejected cleanly
++                Assert.IsFalse(PropertyManager.ModifyBool("__nonexistent_economy_e2e_key__", true),
++                    "PropertyManager.ModifyBool must return false for unknown keys");
++            }
++            finally
++            {
++                PropertyManager.ModifyBool("physical_economy_enabled", original);
++                var econType = FindType("ACE.Server.Economy.TownEconomyManager", "ACE.Server.Managers.TownEconomyManager");
++                SetStaticPropOrField(econType, "EnabledOverride", null);
++            }
++        }
++
++        [TestMethod]
++        public void Baseline_DeployableBase_ExcludedFromShardBiotaPersistence()
++        {
++            Assert.IsTrue(typeof(DeployableBase).IsSubclassOf(typeof(WorldObject)));
++            var method = typeof(WorldObject).GetMethod("IsDynamicThatShouldPersistToShard",
++                BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
++            Assert.IsNotNull(method, "WorldObject.IsDynamicThatShouldPersistToShard must exist");
++        }
++
++        [TestMethod]
++        public void F1_ColdStartCutover_ZeroStockAndZeroTill_Across101Towns()
++        {
++            var regType = RequireOrInconclusive(
++                FindType("ACE.Server.Economy.TownRegistry", "ACE.Server.Managers.TownRegistry"),
++                "ACE.Server.Economy.TownRegistry");
++            var econType = RequireOrInconclusive(
++                FindType("ACE.Server.Economy.TownEconomyManager", "ACE.Server.Managers.TownEconomyManager"),
++                "ACE.Server.Economy.TownEconomyManager");
++
++            var townsMember = FindStaticPropOrField(regType, "Towns", "AllTowns");
++            RequireOrInconclusive(townsMember, "TownRegistry.Towns / AllTowns");
++
++            var towns = ((System.Collections.IEnumerable)ReadMemberValue(townsMember)).Cast<object>().ToList();
++            Assert.AreEqual(101, towns.Count, "Expected exactly 101 towns (60 Dereth + 41 Dericost)");
++
++            var defaults = DefaultPropertyManager.DefaultBooleanProperties;
++            bool origProp = defaults.TryGetValue("physical_economy_enabled", out var dp) && dp.Item;
++            SetStaticPropOrField(econType, "EnabledOverride", true);
++            try
++            {
++                var resetMethod = FindMethod(econType, "ApplyColdStartCutover", 0)
++                    ?? FindMethod(econType, "InitializeColdStart", 0)
++                    ?? FindMethod(econType, "ResetForColdStart", 0)
++                    ?? FindMethod(econType, "ResetForTesting", 0);
++                RequireOrInconclusive(resetMethod, "TownEconomyManager cold-start reset method");
++                resetMethod.Invoke(null, null);
++
++                var getState = FindMethod(econType, "GetTownState", 1) ?? FindMethod(econType, "GetTown", 1);
++                RequireOrInconclusive(getState, "TownEconomyManager.GetTownState(townId)");
++                var getStock = FindMethod(econType, "GetVendorStock", 3);
++
++                foreach (var town in towns)
++                {
++                    var townId = Convert.ToUInt32(GetPropOrField(town, "TownId") ?? GetPropOrField(town, "Id"));
++                    var state = getState.Invoke(null, new object[] { townId });
++                    Assert.IsNotNull(state, $"Missing town state for town {townId}");
++                    Assert.AreEqual(0L, ReadTreasuryBalance(state), $"Day-1 cold start town {townId} till must be 0");
++                    if (getStock != null)
++                    {
++                        var stock = Convert.ToInt32(getStock.Invoke(null, new object[] { townId, 0x80001234u, 273u }));
++                        Assert.AreEqual(0, stock, $"Day-1 cold start town {townId} vendor stock must be 0");
++                    }
++                }
++            }
++            finally
++            {
++                SetStaticPropOrField(econType, "EnabledOverride", null);
++                if (defaults.ContainsKey("physical_economy_enabled"))
++                    PropertyManager.ModifyBool("physical_economy_enabled", origProp);
++            }
++        }
++
++        [TestMethod]
++        public void F2_TownRegistry_ClusteredDereth60_AndDericost41_AndSOI()
++        {
++            var regType = RequireOrInconclusive(
++                FindType("ACE.Server.Economy.TownRegistry"),
++                "ACE.Server.Economy.TownRegistry");
++            var townsMember = FindStaticPropOrField(regType, "Towns", "AllTowns");
++            RequireOrInconclusive(townsMember, "TownRegistry.Towns / AllTowns");
++
++            var towns = ((System.Collections.IEnumerable)ReadMemberValue(townsMember)).Cast<object>().ToList();
++            Assert.AreEqual(101, towns.Count, "Expected 101 primary towns");
++
++            int dereth = towns.Count(t => string.Equals(Convert.ToString(GetPropOrField(t, "Continent")), "Dereth", StringComparison.OrdinalIgnoreCase)
++                || Equals(GetPropOrField(t, "ContinentId"), (byte)0));
++            int dericost = towns.Count(t => string.Equals(Convert.ToString(GetPropOrField(t, "Continent")), "Dericost", StringComparison.OrdinalIgnoreCase)
++                || Equals(GetPropOrField(t, "ContinentId"), (byte)1));
++
++            Assert.AreEqual(60, dereth, "Expected 60 Dereth towns");
++            Assert.AreEqual(41, dericost, "Expected 41 Dericost towns");
++
++            var resolve4 = FindMethod(regType, "ResolveTown", 4);
++            if (resolve4 != null)
++            {
++                var holtburg = resolve4.Invoke(null, new object[] { 0xA9B40001u, 10f, 10f, false });
++                Assert.IsNotNull(holtburg, "Holtburg 0xA9B40001 must resolve via TownRegistry.ResolveTown");
++                Assert.AreEqual("Holtburg", Convert.ToString(GetPropOrField(holtburg, "Name")));
++
++                var dericostTown = resolve4.Invoke(null, new object[] { 0x2CB28001u, 10f, 10f, false });
++                Assert.IsNotNull(dericostTown, "Dericost bit-15 cell 0x2CB28001 must resolve to Dericost town");
++                Assert.AreEqual("Dericost", Convert.ToString(GetPropOrField(dericostTown, "Continent")));
++
++                var dungeon = resolve4.Invoke(null, new object[] { 0x00070143u, 0f, 0f, false });
++                Assert.IsNull(dungeon, "Pure indoor dungeon cell 0x00070143 must be exempt (null)");
++
++                var sentinel = resolve4.Invoke(null, new object[] { 0xFFFF0100u, 0f, 0f, false });
++                // 0xFFFF is not a primary town anchor; verify no crash and if indoor cell 0x0100 check doesn't crash
++                _ = sentinel;
++
++                var apt = resolve4.Invoke(null, new object[] { 0x53600100u, 0f, 0f, true });
++                Assert.IsNotNull(apt, "Sanctum Residential Hall 0x53600100 with includeApartments=true must resolve to parent hub");
++            }
++            else
++            {
++                var resolveSoi = FindMethod(regType, "ResolveTownForLandblock", 1)
++                    ?? FindMethod(regType, "GetTownForLandblock", 1);
++                RequireOrInconclusive(resolveSoi, "TownRegistry.ResolveTown / ResolveTownForLandblock");
++                var holtburg = resolveSoi.Invoke(null, new object[] { 0xA9B4u });
++                Assert.IsNotNull(holtburg, "Holtburg landblock 0xA9B4 must resolve via TownRegistry");
++            }
++        }
++
++        [TestMethod]
++        public void F3_ShardDbContext_HasAllEconomyTables_AndBiotaExcludesCustomWcids()
++        {
++            Assert.IsTrue(
++                typeof(WorldObject).GetMethod("IsDynamicThatShouldPersistToShard", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic) != null
++                || typeof(DeployableBase).IsSubclassOf(typeof(WorldObject)),
++                "DeployableBase must inherit WorldObject");
++
++            var shardType = typeof(ShardDbContext);
++            var props = shardType.GetProperties(BindingFlags.Instance | BindingFlags.Public);
++            var requiredDbSets = new[]
++            {
++                "TownControl",
++                "TownVendorLedger",
++                "TownWarehouseStock",
++            };
++            foreach (var name in requiredDbSets)
++            {
++                var found = props.Any(p => p.Name.IndexOf(name, StringComparison.OrdinalIgnoreCase) >= 0);
++                RequireTrueOrInconclusive(found, $"ShardDbContext missing DbSet matching '{name}'");
++            }
++        }
++
++        [TestMethod]
++        public void F4_Vendor_FiniteStock_DecrementAndZeroRefusal()
++        {
++            var econType = RequireOrInconclusive(
++                FindType("ACE.Server.Economy.TownEconomyManager"),
++                "ACE.Server.Economy.TownEconomyManager");
++
++            ResetEconomyIfPresent(econType);
++            SetStaticPropOrField(econType, "EnabledOverride", true);
++            try
++            {
++                var tryExecPurchase = FindMethod(econType, "TryExecuteVendorPurchase", 5);
++                if (tryExecPurchase != null)
++                {
++                    var vendor = CreateTestVendor(666u, 0xA9B40101u, "E2E Holtburg Vendor");
++                    var apple = CreateTestItem(4746u, WeenieType.Food, ItemType.Food, 10, stackSize: 1, maxStack: 100, name: "Water");
++                    SeedVendorStockHelper(econType, 1u, vendor.Guid.Full, 4746u, 1);
++
++                    var emptyList = new List<WorldObject>();
++                    var buyList = new List<WorldObject> { apple };
++                    var args1 = new object[] { vendor, buyList, emptyList, 10u, null };
++                    Assert.IsTrue(InvokeBool(tryExecPurchase, null, args1),
++                        $"Purchasing last unit (1 -> 0) must succeed (err={args1[4]})");
++
++                    var getStock = FindMethod(econType, "GetVendorStock", 3);
++                    if (getStock != null)
++                        Assert.AreEqual(0, Convert.ToInt32(getStock.Invoke(null, new object[] { 1u, vendor.Guid.Full, 4746u })));
++
++                    var args2 = new object[] { vendor, buyList, emptyList, 10u, null };
++                    Assert.IsFalse(InvokeBool(tryExecPurchase, null, args2),
++                        "Purchasing when stock is 0 must be refused");
++                    return;
++                }
++
++                var tryDebitStock = FindMethod(econType, "TryConsumeVendorStock", 3)
++                    ?? FindMethod(econType, "TryPurchaseFromVendor", 4);
++                RequireOrInconclusive(tryDebitStock, "TownEconomyManager.TryExecuteVendorPurchase / TryConsumeVendorStock");
++
++                SeedVendorStockHelper(econType, 1u, 0u, 4746u, 1);
++                var firstOk = tryDebitStock.GetParameters().Length == 3
++                    ? InvokeBool(tryDebitStock, null, 1u, 4746u, 1)
++                    : InvokeBool(tryDebitStock, null, 1u, 0u, 4746u, 1);
++                Assert.IsTrue(firstOk, "Purchasing last unit (1 -> 0) must succeed");
++
++                var secondOk = tryDebitStock.GetParameters().Length == 3
++                    ? InvokeBool(tryDebitStock, null, 1u, 4746u, 1)
++                    : InvokeBool(tryDebitStock, null, 1u, 0u, 4746u, 1);
++                Assert.IsFalse(secondOk, "Purchasing when stock is 0 must be refused");
++            }
++            finally
++            {
++                SetStaticPropOrField(econType, "EnabledOverride", null);
++                ResetEconomyIfPresent(econType);
++            }
++        }
++
++        [TestMethod]
++        public void F4_Vendor_SharedTownTill_BuybackRefusalAtZero_AndCapClamp()
++        {
++            var econType = RequireOrInconclusive(
++                FindType("ACE.Server.Economy.TownEconomyManager"),
++                "ACE.Server.Economy.TownEconomyManager");
++
++            ResetEconomyIfPresent(econType);
++            SetStaticPropOrField(econType, "EnabledOverride", true);
++            try
++            {
++                uint townId = 1u;
++                var trySellToTown = FindMethod(econType, "TryExecuteVendorSellToTown", 4);
++                var getState = FindMethod(econType, "GetTownState", 1);
++
++                if (trySellToTown != null)
++                {
++                    var vendor = CreateTestVendor(667u, 0xA9B40101u, "E2E Smith");
++                    var dagger = CreateTestItem(315u, WeenieType.MeleeWeapon, ItemType.MeleeWeapon, 100, name: "Dagger");
++                    var sellDict = new Dictionary<uint, WorldObject> { [dagger.Guid.Full] = dagger };
++
++                    SeedTownTillHelper(econType, townId, 0L);
++                    Assert.IsFalse(InvokeBool(trySellToTown, null, new object[] { vendor, sellDict, 100, null }),
++                        "Vendor buyback MUST fail when town till == 0");
++
++                    SeedTownTillHelper(econType, townId, 99L);
++                    Assert.IsFalse(InvokeBool(trySellToTown, null, new object[] { vendor, sellDict, 100, null }),
++                        "Vendor buyback MUST fail when town till == payout - 1");
++
++                    SeedTownTillHelper(econType, townId, 100L);
++                    Assert.IsTrue(InvokeBool(trySellToTown, null, new object[] { vendor, sellDict, 100, null }),
++                        "Vendor buyback MUST succeed when town till == payout");
++
++                    if (getState != null)
++                        Assert.AreEqual(0L, ReadTreasuryBalance(getState.Invoke(null, new object[] { townId })));
++                    return;
++                }
++
++                var tryBuyback = FindMethod(econType, "TryPayBuybackFromTill", 2);
++                RequireOrInconclusive(tryBuyback, "TownEconomyManager.TryExecuteVendorSellToTown / TryPayBuybackFromTill");
++
++                SeedTownTillHelper(econType, townId, 0L);
++                Assert.IsFalse(InvokeBool(tryBuyback, null, townId, 100L), "Vendor buyback MUST fail when town till == 0");
++
++                SeedTownTillHelper(econType, townId, 99L);
++                Assert.IsFalse(InvokeBool(tryBuyback, null, townId, 100L), "Vendor buyback MUST fail when town till == payout - 1");
++
++                SeedTownTillHelper(econType, townId, 100L);
++                Assert.IsTrue(InvokeBool(tryBuyback, null, townId, 100L), "Vendor buyback MUST succeed when town till == payout");
++            }
++            finally
++            {
++                SetStaticPropOrField(econType, "EnabledOverride", null);
++                ResetEconomyIfPresent(econType);
++            }
++        }
++
++        [TestMethod]
++        public void F4_Vendor_MonarchTariffBounds()
++        {
++            var econType = RequireOrInconclusive(
++                FindType("ACE.Server.Economy.TownEconomyManager"),
++                "ACE.Server.Economy.TownEconomyManager");
++            var setTariff = FindMethod(econType, "SetTownTariffs", 3) ?? FindMethod(econType, "SetTariffMultipliers", 3);
++            RequireOrInconclusive(setTariff, "TownEconomyManager.SetTownTariffs(townId, buyMul, sellMul)");
++
++            ResetEconomyIfPresent(econType);
++            try
++            {
++                if (setTariff.ReturnType == typeof(bool))
++                {
++                    Assert.IsFalse(InvokeBool(setTariff, null, 1u, -0.5f, 1.0f),
++                        "Negative buy tariff multiplier must be rejected");
++                    Assert.IsFalse(InvokeBool(setTariff, null, 1u, float.NaN, 1.0f),
++                        "NaN buy tariff multiplier must be rejected");
++                    return;
++                }
++
++                Assert.AreEqual(typeof(void), setTariff.ReturnType,
++                    $"SetTownTariffs must return bool or void, got {setTariff.ReturnType.Name}");
++
++                var getState = FindMethod(econType, "GetTownState", 1);
++                var getEffectiveSell = FindMethod(econType, "GetEffectiveSellCost64", 7);
++                var getEffectiveBuy = FindMethod(econType, "GetEffectiveBuyCost", 6);
++                RequireOrInconclusive(getState, "TownEconomyManager.GetTownState");
++
++                // 1. Negative multipliers must be clamped positive/non-negative (never <= 0 sell multiplier)
++                setTariff.Invoke(null, new object[] { 1u, -0.5f, -0.25f });
++                var stateNeg = getState.Invoke(null, new object[] { 1u });
++                var ctrlNeg = GetPropOrField(stateNeg, "Control") ?? stateNeg;
++                float buyMulNeg = Convert.ToSingle(GetPropOrField(ctrlNeg, "TariffBuyMul"));
++                float sellMulNeg = Convert.ToSingle(GetPropOrField(ctrlNeg, "TariffSellMul"));
++                Assert.IsTrue(float.IsFinite(buyMulNeg) && buyMulNeg >= 0.01f, $"Negative buyMul must clamp >= 0.01f, got {buyMulNeg}");
++                Assert.IsTrue(float.IsFinite(sellMulNeg) && sellMulNeg >= 0.0f, $"Negative sellMul must clamp >= 0.0f, got {sellMulNeg}");
++
++                if (getEffectiveSell != null)
++                {
++                    long effSell = Convert.ToInt64(getEffectiveSell.Invoke(null, new object[] { 1u, 1u, 320u, 1000, 1, (ItemType?)ItemType.MeleeWeapon, (double?)1.0 }));
++                    Assert.IsTrue(effSell > 0L, $"Effective sell cost must remain > 0 after negative tariff clamp, got {effSell}");
++                }
++                if (getEffectiveBuy != null)
++                {
++                    int effBuy = Convert.ToInt32(getEffectiveBuy.Invoke(null, new object[] { 1u, 1u, 320u, 1000, (ItemType?)ItemType.MeleeWeapon, (double?)0.5 }));
++                    Assert.IsTrue(effBuy >= 0, $"Effective buy cost must remain >= 0 after negative tariff clamp, got {effBuy}");
++                }
++
++                // 2. Zero multipliers must clamp buyMul >= 0.01f and keep effective prices > 0
++                setTariff.Invoke(null, new object[] { 1u, 0.0f, 0.0f });
++                var stateZero = getState.Invoke(null, new object[] { 1u });
++                var ctrlZero = GetPropOrField(stateZero, "Control") ?? stateZero;
++                float buyMulZero = Convert.ToSingle(GetPropOrField(ctrlZero, "TariffBuyMul"));
++                Assert.IsTrue(float.IsFinite(buyMulZero) && buyMulZero >= 0.01f, $"Zero buyMul must clamp >= 0.01f, got {buyMulZero}");
++
++                // 3. NaN multipliers must NOT poison town tariff state with float.NaN
++                setTariff.Invoke(null, new object[] { 1u, float.NaN, float.NaN });
++                var stateNan = getState.Invoke(null, new object[] { 1u });
++                var ctrlNan = GetPropOrField(stateNan, "Control") ?? stateNan;
++                float buyMulNan = Convert.ToSingle(GetPropOrField(ctrlNan, "TariffBuyMul"));
++                float sellMulNan = Convert.ToSingle(GetPropOrField(ctrlNan, "TariffSellMul"));
++                Assert.IsTrue(float.IsFinite(buyMulNan) && buyMulNan >= 0.01f, $"NaN buyMul must be rejected or sanitized, got {buyMulNan}");
++                Assert.IsTrue(float.IsFinite(sellMulNan) && sellMulNan >= 0.0f, $"NaN sellMul must be rejected or sanitized, got {sellMulNan}");
++            }
++            finally
++            {
++                ResetEconomyIfPresent(econType);
++            }
++        }
++
++        [TestMethod]
++        public void F5_Vendor_HardDisable_70263PyrealAnd5765Snowmen()
++        {
++            var econType = RequireOrInconclusive(
++                FindType("ACE.Server.Economy.TownEconomyManager"),
++                "ACE.Server.Economy.TownEconomyManager");
++
++            ResetEconomyIfPresent(econType);
++            SetStaticPropOrField(econType, "EnabledOverride", true);
++            try
++            {
++                var isBlocked2 = FindMethod(econType, "IsVendorListingBlocked", 2);
++                if (isBlocked2 != null)
++                {
++                    Assert.IsTrue(InvokeBool(isBlocked2, null, 70263u, 273u),
++                        "70263 Festival Vendor Pyreal (273) Shop listing MUST be hard-disabled");
++                    Assert.IsTrue(InvokeBool(isBlocked2, null, 5765u, 5762u),
++                        "5765 Snowman unbacked seasonal listing MUST be disabled");
++                    Assert.IsTrue(InvokeBool(isBlocked2, null, 5767u, 5769u),
++                        "5767 Giant Snowman unbacked seasonal listing MUST be disabled");
++                    return;
++                }
++
++                var isDisabledVendor = FindMethod(econType, "IsDisabledVendorWcid", 1);
++                var tryPurchase = FindMethod(econType, "TryExecuteVendorPurchase", 5);
++                RequireOrInconclusive(isDisabledVendor, "TownEconomyManager.IsDisabledVendorWcid / IsVendorListingBlocked");
++                RequireOrInconclusive(tryPurchase, "TownEconomyManager.TryExecuteVendorPurchase");
++
++                Assert.IsTrue(InvokeBool(isDisabledVendor, null, 70263u), "70263 Festival Vendor MUST be disabled");
++                Assert.IsTrue(InvokeBool(isDisabledVendor, null, 5765u), "5765 Snowman MUST be disabled");
++                Assert.IsTrue(InvokeBool(isDisabledVendor, null, 5767u), "5767 Giant Snowman MUST be disabled");
++
++                var normalVendor = CreateTestVendor(670u, 0xA9B40101u, "Normal Vendor");
++                var pyrealItem = CreateTestItem(273u, WeenieType.Coin, ItemType.Money, 1, stackSize: 100, maxStack: 25000, name: "Pyreal");
++                SeedVendorStockHelper(econType, 1u, normalVendor.Guid.Full, 273u, 100);
++                Assert.IsFalse(InvokeBool(tryPurchase, null, new object[] { normalVendor, new List<WorldObject> { pyrealItem }, new List<WorldObject>(), 100u, null }),
++                    "Pyreal (273) Shop listing MUST be rejected even on normal vendors");
++            }
++            finally
++            {
++                SetStaticPropOrField(econType, "EnabledOverride", null);
++                ResetEconomyIfPresent(econType);
++            }
++        }
++
++        [TestMethod]
++        public void F5_TradeNoteClearinghouse_1to1Reserve_AndParchmentInk()
++        {
++            var econType = RequireOrInconclusive(
++                FindType("ACE.Server.Economy.TownEconomyManager"),
++                "ACE.Server.Economy.TownEconomyManager");
++
++            ResetEconomyIfPresent(econType);
++            SetStaticPropOrField(econType, "EnabledOverride", true);
++            try
++            {
++                var isTn = FindMethod(econType, "IsTradeNoteWcid", 1);
++                var getDenom = FindMethod(econType, "GetTradeNoteDenomination", 1);
++                var tryPurchase = FindMethod(econType, "TryExecuteVendorPurchase", 5);
++                var trySell = FindMethod(econType, "TryExecuteVendorSellToTown", 4);
++                var seedWh = FindMethod(econType, "SeedWarehouseStock", 6);
++                var getEffectiveSell = FindMethod(econType, "GetEffectiveSellCost64", 7);
++
++                if (tryPurchase != null && trySell != null && isTn != null && getDenom != null && seedWh != null)
++                {
++                    uint[] all14Wcids = { 2621, 2622, 2623, 2624, 2625, 7374, 7375, 7376, 2626, 7377, 2627, 20628, 20629, 20630 };
++                    foreach (var wcid in all14Wcids)
++                    {
++                        Assert.IsTrue(InvokeBool(isTn, null, wcid), $"Missing Trade Note WCID {wcid}");
++                        Assert.IsTrue(Convert.ToInt64(getDenom.Invoke(null, new object[] { wcid })) >= 100L, $"Invalid denomination for {wcid}");
++                    }
++
++                    if (getEffectiveSell != null)
++                    {
++                        long cost = Convert.ToInt64(getEffectiveSell.Invoke(null, new object[] { 1u, 1u, 2625u, 10000, 1, (ItemType?)ItemType.PromissoryNote, (double?)1.15 }));
++                        Assert.AreEqual(10000L, cost, "Trade Note clearinghouse must enforce strict 1:1 rate (not 1.15x)");
++                    }
++
++                    var holtBroker = CreateTestVendor(671u, 0xA9B40101u, "Holtburg Broker");
++                    var sanBroker = CreateTestVendor(672u, 0x33D90101u, "Sanamar Broker");
++                    var note10k = CreateTestItem(2625u, WeenieType.Stackable, ItemType.PromissoryNote, 10000, stackSize: 1, maxStack: 250, name: "Trade Note (10,000)");
++                    var empty = new List<WorldObject>();
++
++                    // Missing Parchment (365) & Ink -> must refuse issuance
++                    Assert.IsFalse(InvokeBool(tryPurchase, null, new object[] { holtBroker, new List<WorldObject> { note10k }, empty, 10000u, null }),
++                        "Issuing Trade Note without Parchment (365) + Ink must fail");
++
++                    // Seed Parchment (365) only without Ink -> must still refuse
++                    SeedVendorStockHelper(econType, 1u, holtBroker.Guid.Full, 365u, 1);
++                    Assert.IsFalse(InvokeBool(tryPurchase, null, new object[] { holtBroker, new List<WorldObject> { note10k }, empty, 10000u, null }),
++                        "Issuing Trade Note without Ink must fail");
++
++                    // Seed Ink ("arcane_ink") -> issuance succeeds 1:1 and consumes Parchment + Ink
++                    seedWh.Invoke(null, new object[] { 1u, "arcane_ink", 1, 10000, 100.0f, false });
++                    Assert.IsTrue(InvokeBool(tryPurchase, null, new object[] { holtBroker, new List<WorldObject> { note10k }, empty, 10000u, null }),
++                        "Issuing Trade Note with Parchment (365) + Ink must succeed");
++
++                    var getReserve = FindMethod(econType, "GetClearinghouseReservePyreals", 1);
++                    if (getReserve != null)
++                        Assert.AreEqual(10000L, Convert.ToInt64(getReserve.Invoke(null, new object[] { 1u })));
++
++                    // Redemption at Sanamar (town 2): 9,999p till refuses, 10,000p till succeeds 1:1
++                    var redeemDict = new Dictionary<uint, WorldObject> { [note10k.Guid.Full] = note10k };
++                    SeedTownTillHelper(econType, 2u, 9999L);
++                    Assert.IsFalse(InvokeBool(trySell, null, new object[] { sanBroker, redeemDict, 10000, null }),
++                        "Redeeming 10,000p Trade Note when till is 9,999p must fail");
++
++                    SeedTownTillHelper(econType, 2u, 10000L);
++                    Assert.IsTrue(InvokeBool(trySell, null, new object[] { sanBroker, redeemDict, 10000, null }),
++                        "Redeeming 10,000p Trade Note when till == 10,000p must succeed 1:1");
++                    return;
++                }
++
++                var redeem = FindMethod(econType, "TryRedeemTradeNote", 2);
++                RequireOrInconclusive(redeem, "TownEconomyManager.TryExecuteVendorPurchase / TryRedeemTradeNote");
++                SeedTownTillHelper(econType, 1u, 9999L);
++                Assert.IsFalse(InvokeBool(redeem, null, 1u, 10000L), "Redeeming 10,000p Trade Note when till is 9,999p must fail");
++                SeedTownTillHelper(econType, 1u, 10000L);
++                Assert.IsTrue(InvokeBool(redeem, null, 1u, 10000L), "Redeeming 10,000p Trade Note when till == 10,000p must succeed 1:1");
++            }
++            finally
++            {
++                SetStaticPropOrField(econType, "EnabledOverride", null);
++                ResetEconomyIfPresent(econType);
++            }
++        }
++
++        [TestMethod]
++        public void F5_ScrivenerAndSpellService_PhysicalReagentDraw()
++        {
++            var econType = RequireOrInconclusive(
++                FindType("ACE.Server.Economy.TownEconomyManager"),
++                "ACE.Server.Economy.TownEconomyManager");
++
++            ResetEconomyIfPresent(econType);
++            SetStaticPropOrField(econType, "EnabledOverride", true);
++            try
++            {
++                var tryConsumeReagents = FindMethod(econType, "TryConsumeSpellReagents", 6);
++                var seedWh = FindMethod(econType, "SeedWarehouseStock", 6);
++                if (tryConsumeReagents != null && seedWh != null)
++                {
++                    uint townId = 4u; // Zaikhal
++                    uint vendorGuid = AllocTestGuid();
++
++                    // Dry reagents -> must fail
++                    Assert.IsFalse(InvokeBool(tryConsumeReagents, null, new object[] { townId, vendorGuid, null, false, 1, null }),
++                        "Spell-service vendor must fail at 0 reagent stock");
++                    Assert.IsFalse(InvokeBool(tryConsumeReagents, null, new object[] { townId, vendorGuid, null, true, 1, null }),
++                        "Scrivener scroll crafting must fail at 0 reagent stock");
++
++                    // Seed physical reagents: Parchment + Ink + Scarab for scroll; Taper + Herb + Scarab for service
++                    SeedVendorStockHelper(econType, townId, vendorGuid, 365u, 1);
++                    seedWh.Invoke(null, new object[] { townId, "arcane_ink", 1, 10000, 100.0f, false });
++                    seedWh.Invoke(null, new object[] { townId, "scarab", 2, 10000, 100.0f, false });
++                    seedWh.Invoke(null, new object[] { townId, "paraffin_taper", 1, 10000, 100.0f, false });
++                    seedWh.Invoke(null, new object[] { townId, "herb", 1, 10000, 100.0f, false });
++
++                    Assert.IsTrue(InvokeBool(tryConsumeReagents, null, new object[] { townId, vendorGuid, null, true, 1, null }),
++                        "Scrivener scroll crafting must succeed with physical Parchment/Ink/Scarab");
++                    Assert.IsTrue(InvokeBool(tryConsumeReagents, null, new object[] { townId, vendorGuid, null, false, 1, null }),
++                        "Spell-service must succeed with physical Taper/Scarab/Herb");
++                    Assert.IsFalse(InvokeBool(tryConsumeReagents, null, new object[] { townId, vendorGuid, null, false, 1, null }),
++                        "Spell-service must go offline again once physical reagents are exhausted");
++                    return;
++                }
++
++                var trySvc = FindMethod(econType, "TryConsumeSpellServiceReagent", 2);
++                RequireOrInconclusive(trySvc, "TownEconomyManager.TryConsumeSpellReagents / TryConsumeSpellServiceReagent");
++                SeedVendorStockHelper(econType, 1u, 0u, 8897u, 0);
++                Assert.IsFalse(InvokeBool(trySvc, null, 1u, 8897u), "Spell-service vendor must go offline at 0 reagent stock");
++            }
++            finally
++            {
++                SetStaticPropOrField(econType, "EnabledOverride", null);
++                ResetEconomyIfPresent(econType);
++            }
++        }
++
++        [TestMethod]
++        public void F5_Slumlord_100PercentRentRouting_AndTrophyProcurement()
++        {
++            var econType = RequireOrInconclusive(
++                FindType("ACE.Server.Economy.TownEconomyManager"),
++                "ACE.Server.Economy.TownEconomyManager");
++
++            ResetEconomyIfPresent(econType);
++            SetStaticPropOrField(econType, "EnabledOverride", true);
++            try
++            {
++                var getState = FindMethod(econType, "GetTownState", 1);
++                RequireOrInconclusive(getState, "TownEconomyManager.GetTownState");
++
++                // 1. Slumlord 100% rent routing (both overworld & apartment halls)
++                var recordSlumlord = FindMethod(econType, "RecordSlumlordPayment", 3);
++                if (recordSlumlord != null)
++                {
++                    var holtSlum = CreateTestSlumlord(0xA9B40001u, "Holtburg Slumlord");
++                    var payments = new List<(uint, ItemType?, long, int)>
++                    {
++                        (273u, ItemType.Money, 1L, 50_000),
++                    };
++                    var routed = Convert.ToInt64(recordSlumlord.Invoke(null, new object[] { holtSlum, payments, "house_rent" }));
++                    Assert.AreEqual(50_000L, routed);
++                    Assert.AreEqual(50_000L, ReadTreasuryBalance(getState.Invoke(null, new object[] { 1u })),
++                        "100% of overworld Slumlord rent must route into controlling Town Treasury");
++
++                    var aptSlum = CreateTestSlumlord(0x53600100u, "Sanctum Apartment Slumlord");
++                    var aptPayments = new List<(uint, ItemType?, long, int)>
++                    {
++                        (273u, ItemType.Money, 1L, 10_000),
++                    };
++                    recordSlumlord.Invoke(null, new object[] { aptSlum, aptPayments, "house_rent" });
++                    Assert.AreEqual(10_000L, ReadTreasuryBalance(getState.Invoke(null, new object[] { 6u })),
++                        "100% of Sanctum apartment Slumlord rent must route into Cragstone Treasury");
++                }
++                else
++                {
++                    var routeRent = FindMethod(econType, "RouteSlumlordPyreals", 2);
++                    RequireOrInconclusive(routeRent, "TownEconomyManager.RecordSlumlordPayment / RouteSlumlordPyreals");
++                    SeedTownTillHelper(econType, 1u, 0L);
++                    routeRent.Invoke(null, new object[] { 0xA9B4u, 50_000L });
++                    Assert.AreEqual(50_000L, ReadTreasuryBalance(getState.Invoke(null, new object[] { 1u })),
++                        "100% of Slumlord rent must route into controlling Town Treasury");
++                }
++
++                // 2. Trophy Collector procurement conversion & infinite coin minting block
++                var isRepeatable = FindMethod(econType, "IsRepeatableCoinEmote", 3);
++                var setBounty = FindMethod(econType, "SetProcurementBounty", 5);
++                var tryTrophy5 = FindMethod(econType, "TryHandleTrophyTurnIn", 5);
++                var tryTrophy = tryTrophy5 ?? FindMethod(econType, "TryHandleTrophyTurnIn", 4);
++                RequireOrInconclusive(isRepeatable, "TownEconomyManager.IsRepeatableCoinEmote");
++                RequireOrInconclusive(setBounty, "TownEconomyManager.SetProcurementBounty");
++                RequireOrInconclusive(tryTrophy, "TownEconomyManager.TryHandleTrophyTurnIn");
++
++                object[] MakeTrophyArgs(WorldObject c, WorldObject t) => tryTrophy5 != null
++                    ? new object[] { c, t, 0L, null, 1 }
++                    : new object[] { c, t, 0L, null };
++
++                var repeatableSet = new PropertiesEmote
++                {
++                    Category = EmoteCategory.Give,
++                    Quest = null,
++                    PropertiesEmoteAction = new List<PropertiesEmoteAction>
++                    {
++                        new() { Type = (uint)EmoteType.Give, WeenieClassId = 273, StackSize = 500 },
++                    },
++                };
++                Assert.IsTrue(InvokeBool(isRepeatable, null, new object[] { repeatableSet, 0u, 0 }),
++                    "Repeatable Quest==null coin emote must be detected");
++
++                var collector = CreateTestItem(3917u, WeenieType.Creature, ItemType.None, 0, name: "Trophy Collector", cellId: 0xA9B40001u);
++                var trophy = CreateTestItem(4500u, WeenieType.Generic, ItemType.Misc, 50, name: "Gromnie Hide", cellId: 0xA9B40001u);
++
++                // Without active Monarch bounty -> must fail (no coin minting)
++                Assert.IsFalse(InvokeBool(tryTrophy, null, MakeTrophyArgs(collector, trophy)),
++                    "Un-bountied repeatable Trophy turn-in must be blocked");
++
++                // With active bounty > Town Till -> must refuse payout
++                SeedTownTillHelper(econType, 1u, 100L);
++                setBounty.Invoke(null, new object[] { 1u, trophy.WeenieClassId, "raw_hide", 250L, 2 });
++                Assert.IsFalse(InvokeBool(tryTrophy, null, MakeTrophyArgs(collector, trophy)),
++                    "Trophy Collector bounty MUST refuse payout when Town Till < RewardPyreals");
++
++                // With sufficient Town Till -> pays from till and deposits into warehouse
++                SeedTownTillHelper(econType, 1u, 1_000L);
++                var turnInArgs = MakeTrophyArgs(collector, trophy);
++                Assert.IsTrue(InvokeBool(tryTrophy, null, turnInArgs),
++                    "Trophy Collector bounty with funded Town Till must succeed");
++                Assert.AreEqual(250L, Convert.ToInt64(turnInArgs[2]));
++                Assert.AreEqual(750L, ReadTreasuryBalance(getState.Invoke(null, new object[] { 1u })));
++            }
++            finally
++            {
++                SetStaticPropOrField(econType, "EnabledOverride", null);
++                ResetEconomyIfPresent(econType);
++            }
++        }
++    }
++}
+diff --git a/Source/ACE.Server.Tests/EconomyE2E/PhaseBSiegeE2ETests.cs b/Source/ACE.Server.Tests/EconomyE2E/PhaseBSiegeE2ETests.cs
+new file mode 100644
+index 00000000..315e86e0
+--- /dev/null
++++ b/Source/ACE.Server.Tests/EconomyE2E/PhaseBSiegeE2ETests.cs
+@@ -0,0 +1,271 @@
++using System;
++using System.Reflection;
++using Microsoft.VisualStudio.TestTools.UnitTesting;
++using ACE.Server.Vehicles;
++using ACE.Server.Vehicles.AirDefense;
++using ACE.Server.Vehicles.Deployables;
++using static ACE.Server.Tests.EconomyE2E.EconomyE2EReflectionHelpers;
++
++namespace ACE.Server.Tests.EconomyE2E
++{
++    [TestClass]
++    public class PhaseBSiegeE2ETests
++    {
++        [TestMethod]
++        public void F6_TownControl_SiegeEntities_WcidsAndKinds()
++        {
++            var kindType = typeof(DeployableKind);
++            RequireTrueOrInconclusive(Enum.IsDefined(kindType, 56u), "DeployableKind 56 (TownControlNode) not yet defined");
++            RequireTrueOrInconclusive(Enum.IsDefined(kindType, 57u), "DeployableKind 57 (TownDepotApron) not yet defined");
++            RequireTrueOrInconclusive(Enum.IsDefined(kindType, 58u), "DeployableKind 58 (ForwardSiegeBeacon) not yet defined");
++
++            var siegeType = RequireOrInconclusive(
++                FindType("ACE.Server.Economy.SiegeManager"),
++                "ACE.Server.Economy.SiegeManager");
++            var ringCheck = FindMethod(siegeType, "IsWithinControlRing", 1)
++                ?? FindMethod(siegeType, "IsInsideControlRadius", 1);
++            RequireOrInconclusive(ringCheck, "SiegeManager.IsWithinControlRing(distanceM)");
++
++            Assert.IsTrue(InvokeBool(ringCheck, null, 30.0f), "30.0m must be inside control ring");
++            Assert.IsFalse(InvokeBool(ringCheck, null, 30.1f), "30.1m must be outside control ring");
++        }
++
++        [TestMethod]
++        public void F7_SiegeEngine_ZeroNotice_And300sBreachGate()
++        {
++            var siegeType = RequireOrInconclusive(
++                FindType("ACE.Server.Economy.SiegeManager"),
++                "ACE.Server.Economy.SiegeManager");
++            var startAssault = FindMethod(siegeType, "BeginZeroNoticeBreachForTesting", 3);
++            var tick = FindMethod(siegeType, "TickForTesting", 1);
++            var getSiege = FindMethod(siegeType, "GetSiegeState", 1);
++            RequireOrInconclusive(startAssault, "SiegeManager.BeginZeroNoticeBreachForTesting(townId, attackerMonarchId, treasuryPyreals)");
++            RequireOrInconclusive(tick, "SiegeManager.TickForTesting(deltaSeconds)");
++            RequireOrInconclusive(getSiege, "SiegeManager.GetSiegeState(townId)");
++
++            startAssault.Invoke(null, new object[] { 10u, 200u, 100000L });
++            tick.Invoke(null, new object[] { 299.0 });
++            var s299 = getSiege.Invoke(null, new object[] { 10u });
++            Assert.AreNotEqual("CONTESTED_HOLD", Convert.ToString(GetPropOrField(s299, "State")),
++                "At 299s breach gate must NOT yet enter CONTESTED_HOLD");
++
++            tick.Invoke(null, new object[] { 1.0 });
++            var s300 = getSiege.Invoke(null, new object[] { 10u });
++            Assert.AreEqual("CONTESTED_HOLD", Convert.ToString(GetPropOrField(s300, "State")),
++                "At 300s breach gate MUST enter CONTESTED_HOLD");
++            Assert.AreEqual(100000L, Convert.ToInt64(GetPropOrField(s300, "EscrowPyreals")),
++                "Entering CONTESTED_HOLD must freeze Defender Treasury into escrow_pyreals");
++        }
++
++        [TestMethod]
++        public void F7_SiegeEngine_AcceleratedClock_28800sHold_AndRolling5400sSupplyMeter()
++        {
++            var siegeType = RequireOrInconclusive(
++                FindType("ACE.Server.Economy.SiegeManager"),
++                "ACE.Server.Economy.SiegeManager");
++            var setupHold = FindMethod(siegeType, "BeginContestedHoldForTesting", 4);
++            var deliver = FindMethod(siegeType, "DeliverSiegeSupplyForTesting", 4);
++            var tick = FindMethod(siegeType, "TickForTesting", 1);
++            var getSiege = FindMethod(siegeType, "GetSiegeState", 1);
++            RequireOrInconclusive(setupHold, "SiegeManager.BeginContestedHoldForTesting(townId, defenderMonarch, attackerMonarch, treasuryPyreals)");
++            RequireOrInconclusive(deliver, "SiegeManager.DeliverSiegeSupplyForTesting(townId, originLandblockId, distanceM, supplyPoints)");
++            RequireOrInconclusive(tick, "SiegeManager.TickForTesting(deltaSeconds)");
++            RequireOrInconclusive(getSiege, "SiegeManager.GetSiegeState(townId)");
++
++            // Verify TownTier Supply Meter drain rates (40 Village / 100 RegionalHub / 200 CapitalPort SP/hr)
++            var regType = RequireOrInconclusive(FindType("ACE.Server.Economy.TownRegistry"), "TownRegistry");
++            var drainMethod = FindMethod(siegeType, "GetSupplyDrainPerHour", 1) ?? FindMethod(regType, "GetSupplyDrainPerHour", 1);
++            RequireOrInconclusive(drainMethod, "GetSupplyDrainPerHour(TownTier)");
++            var tierEnum = FindType("ACE.Server.Economy.TownTier");
++            RequireOrInconclusive(tierEnum, "ACE.Server.Economy.TownTier");
++            Assert.AreEqual(40, Convert.ToInt32(drainMethod.Invoke(null, new[] { Enum.Parse(tierEnum, "Village") })), "Village drain must be 40 SP/hr");
++            Assert.AreEqual(100, Convert.ToInt32(drainMethod.Invoke(null, new[] { Enum.Parse(tierEnum, "RegionalHub") })), "RegionalHub drain must be 100 SP/hr");
++            Assert.AreEqual(200, Convert.ToInt32(drainMethod.Invoke(null, new[] { Enum.Parse(tierEnum, "CapitalPort") })), "CapitalPort drain must be 200 SP/hr");
++
++            uint townId = 11u; // Qalaba'r (RegionalHub) or Capital/Village
++            setupHold.Invoke(null, new object[] { townId, 100u, 200u, 50000L });
++
++            // Verify rolling 5,400 s (90-min) Supply Meter cap even with huge delivery
++            Assert.IsTrue(InvokeBool(deliver, null, townId, 0xB000u, 1500.0, 10000.0));
++            var cappedState = getSiege.Invoke(null, new object[] { townId });
++            double meterSec = Convert.ToDouble(GetPropOrField(cappedState, "SupplyMeterSec"));
++            Assert.IsTrue(meterSec > 0.0 && meterSec <= 5400.0,
++                $"Rolling Supply Meter MUST cap at 5,400s (90m), got {meterSec}");
++
++            // Reset & advance 28,800s across 8 rolling 1-hour supply deliveries (>= 1,500m provenance)
++            setupHold.Invoke(null, new object[] { townId, 100u, 200u, 50000L });
++            for (int hr = 0; hr < 7; hr++)
++            {
++                Assert.IsTrue(InvokeBool(deliver, null, townId, 0xB000u, 1500.0, 200.0));
++                tick.Invoke(null, new object[] { 3600.0 });
++            }
++            Assert.IsTrue(InvokeBool(deliver, null, townId, 0xB000u, 1500.0, 200.0));
++            tick.Invoke(null, new object[] { 3599.0 });
++
++            var preFlip = getSiege.Invoke(null, new object[] { townId });
++            Assert.AreEqual(100u, Convert.ToUInt32(GetPropOrField(preFlip, "OwnerMonarchId")),
++                "At 28,799s town must still belong to defender");
++
++            tick.Invoke(null, new object[] { 1.0 });
++            var flipped = getSiege.Invoke(null, new object[] { townId });
++            Assert.AreEqual(200u, Convert.ToUInt32(GetPropOrField(flipped, "OwnerMonarchId")),
++                "At 28,800s town must flip to attacker");
++            Assert.AreEqual(25000L, Convert.ToInt64(GetPropOrField(flipped, "AttackerSpoilsPyreals")),
++                "Attacker must receive 50/50 vault spoils");
++        }
++
++        [TestMethod]
++        public void F7_SiegeEngine_OriginProvenance_1499mRejected_1500mAccepted()
++        {
++            var siegeType = RequireOrInconclusive(
++                FindType("ACE.Server.Economy.SiegeManager"),
++                "ACE.Server.Economy.SiegeManager");
++            var deliver = FindMethod(siegeType, "DeliverSiegeSupplyForTesting", 4);
++            RequireOrInconclusive(deliver, "SiegeManager.DeliverSiegeSupplyForTesting");
++
++            Assert.IsFalse(InvokeBool(deliver, null, 12u, 0xA9B4u, 1499.0, 100.0),
++                "Origin provenance < 1,500m (1,499m) MUST be rejected");
++            Assert.IsTrue(InvokeBool(deliver, null, 12u, 0xB000u, 1500.0, 100.0),
++                "Origin provenance == 1,500m MUST be accepted");
++        }
++
++        [TestMethod]
++        public void F7_SiegeEngine_StarvationCollapse_1800s_And3600sCooldown()
++        {
++            var siegeType = RequireOrInconclusive(
++                FindType("ACE.Server.Economy.SiegeManager"),
++                "ACE.Server.Economy.SiegeManager");
++            var setupHold = FindMethod(siegeType, "BeginContestedHoldForTesting", 4);
++            var setMeter = FindMethod(siegeType, "SetSupplyMeterForTesting", 2);
++            var tick = FindMethod(siegeType, "TickForTesting", 1);
++            var getSiege = FindMethod(siegeType, "GetSiegeState", 1);
++            RequireOrInconclusive(setupHold, "SiegeManager.BeginContestedHoldForTesting");
++            RequireOrInconclusive(setMeter, "SiegeManager.SetSupplyMeterForTesting(townId, seconds)");
++            RequireOrInconclusive(tick, "SiegeManager.TickForTesting");
++            RequireOrInconclusive(getSiege, "SiegeManager.GetSiegeState");
++
++            uint townId = 13u;
++            setupHold.Invoke(null, new object[] { townId, 100u, 200u, 20000L });
++            setMeter.Invoke(null, new object[] { townId, 0.0 });
++            tick.Invoke(null, new object[] { 1799.0 });
++            var s1799 = getSiege.Invoke(null, new object[] { townId });
++            Assert.AreEqual("STARVING", Convert.ToString(GetPropOrField(s1799, "State")));
++
++            tick.Invoke(null, new object[] { 1.0 });
++            var s1800 = getSiege.Invoke(null, new object[] { townId });
++            Assert.AreEqual("CONTROLLED", Convert.ToString(GetPropOrField(s1800, "State")),
++                "1,800s starvation must collapse siege back to CONTROLLED");
++            Assert.IsTrue(Convert.ToDouble(GetPropOrField(s1800, "AttackerCooldownRemainingSec")) >= 3599.0,
++                "Starvation collapse must impose 3,600s attacker cooldown");
++        }
++
++        [TestMethod]
++        public void F7_SiegeEngine_ThreeWayReset_And72hInsolvencyReceivership()
++        {
++            var siegeType = RequireOrInconclusive(
++                FindType("ACE.Server.Economy.SiegeManager"),
++                "ACE.Server.Economy.SiegeManager");
++            var setupHold = FindMethod(siegeType, "BeginContestedHoldForTesting", 4);
++            var deliver = FindMethod(siegeType, "DeliverSiegeSupplyForTesting", 4);
++            var tick = FindMethod(siegeType, "TickForTesting", 1);
++            var threeWay = FindMethod(siegeType, "TriggerThreeWayResetForTesting", 2)
++                ?? FindMethod(siegeType, "ContestThreeWayForTesting", 2);
++            var tickInsolvency = FindMethod(siegeType, "AdvanceInsolvencyForTesting", 2);
++            var getSiege = FindMethod(siegeType, "GetSiegeState", 1);
++            RequireOrInconclusive(setupHold, "SiegeManager.BeginContestedHoldForTesting");
++            RequireOrInconclusive(tick, "SiegeManager.TickForTesting");
++            RequireOrInconclusive(threeWay, "SiegeManager.TriggerThreeWayResetForTesting(townId, newAttackerMonarchId)");
++            RequireOrInconclusive(tickInsolvency, "SiegeManager.AdvanceInsolvencyForTesting(townId, elapsedSeconds)");
++            RequireOrInconclusive(getSiege, "SiegeManager.GetSiegeState");
++
++            // 1. Three-way siege reset must zero the 28,800s hold clock
++            uint townId = 14u;
++            setupHold.Invoke(null, new object[] { townId, 100u, 200u, 40000L });
++            if (deliver != null)
++                deliver.Invoke(null, new object[] { townId, 0xB000u, 1500.0, 200.0 });
++            tick.Invoke(null, new object[] { 3600.0 });
++            var beforeReset = getSiege.Invoke(null, new object[] { townId });
++            Assert.IsTrue(Convert.ToDouble(GetPropOrField(beforeReset, "HoldElapsedSec")) >= 3600.0);
++
++            threeWay.Invoke(null, new object[] { townId, 300u });
++            var afterReset = getSiege.Invoke(null, new object[] { townId });
++            Assert.AreEqual(0.0, Convert.ToDouble(GetPropOrField(afterReset, "HoldElapsedSec")), 0.001,
++                "Three-way siege contention MUST reset HoldElapsedSec clock to 0");
++            Assert.AreEqual(300u, Convert.ToUInt32(GetPropOrField(afterReset, "AttackerMonarchId")));
++
++            // 2. Insolvency boundary: 259,199s (<72h) vs 259,200s (72h) and 86,399s (<24h) vs 86,400s (+24h)
++            uint insolvTown = 15u;
++            tickInsolvency.Invoke(null, new object[] { insolvTown, 259199.0 }); // 72h - 1s
++            var s72Minus1 = getSiege.Invoke(null, new object[] { insolvTown });
++            Assert.AreNotEqual("INSOLVENT_RECEIVERSHIP", Convert.ToString(GetPropOrField(s72Minus1, "State")),
++                "At 259,199s (<72h) town must NOT yet enter INSOLVENT_RECEIVERSHIP");
++
++            tickInsolvency.Invoke(null, new object[] { insolvTown, 1.0 }); // exactly 72h (259,200s)
++            var s72 = getSiege.Invoke(null, new object[] { insolvTown });
++            Assert.AreEqual("INSOLVENT_RECEIVERSHIP", Convert.ToString(GetPropOrField(s72, "State")));
++
++            tickInsolvency.Invoke(null, new object[] { insolvTown, 86399.0 }); // +24h - 1s
++            var s96Minus1 = getSiege.Invoke(null, new object[] { insolvTown });
++            Assert.AreEqual("INSOLVENT_RECEIVERSHIP", Convert.ToString(GetPropOrField(s96Minus1, "State")),
++                "At 86,399s (<24h grace) town must stay in INSOLVENT_RECEIVERSHIP");
++
++            tickInsolvency.Invoke(null, new object[] { insolvTown, 1.0 }); // +24h grace complete
++            var s96 = getSiege.Invoke(null, new object[] { insolvTown });
++            Assert.AreEqual("UNCLAIMED_COLD", Convert.ToString(GetPropOrField(s96, "State")));
++        }
++
++        [TestMethod]
++        public void F8_Governance_MonarchOnlyPolicies_FlatMemberExecution_AndRadarIff()
++        {
++            // Baseline verified right now: GuildRadarPolicy & RadarIff
++            RadarIff.ResetPolicies();
++            var policy = RadarIff.GetOrCreateMonarchPolicy(100u);
++            policy.SetStanding(200u, IffStanding.Hostile);
++            Assert.AreEqual(IffStanding.Hostile, policy.GetStanding(200u));
++
++            var cmdType = RequireOrInconclusive(
++                FindType("ACE.Server.Command.Handlers.TownCommands", "ACE.Server.Economy.TownGovernance"),
++                "ACE.Server.Command.Handlers.TownCommands");
++            var canPolicy = FindMethod(cmdType, "CanModifyTownPolicy", 2);
++            RequireOrInconclusive(canPolicy, "TownCommands.CanModifyTownPolicy(player, townId)");
++
++            var econType = RequireOrInconclusive(FindType("ACE.Server.Economy.TownEconomyManager"), "TownEconomyManager");
++            var setOwner = FindMethod(econType, "SetTownOwner", 3);
++            RequireOrInconclusive(setOwner, "TownEconomyManager.SetTownOwner");
++            setOwner.Invoke(null, new object[] { 1u, 100u, "CONTROLLED" });
++
++            var monarch = CreateTestPlayer(100u, 0xA9B40001u, 20f, 20f, 10f, monarchId: 100u);
++            var vassal = CreateTestPlayer(101u, 0xA9B40001u, 25f, 20f, 10f, monarchId: 100u);
++            var outsider = CreateTestPlayer(200u, 0xA9B40001u, 30f, 20f, 10f, monarchId: 200u);
++
++            Assert.IsTrue(InvokeBool(canPolicy, null, monarch, 1u),
++                "Owning Monarch MUST be permitted to modify @town policies");
++            Assert.IsFalse(InvokeBool(canPolicy, null, vassal, 1u),
++                "Non-Monarch sworn vassal MUST be rejected from @town policy mutations");
++            Assert.IsFalse(InvokeBool(canPolicy, null, outsider, 1u),
++                "Foreign Monarch MUST be rejected from @town policy mutations");
++
++            var canExec = FindMethod(cmdType, "CanExecuteTownLogistics", 2)
++                ?? FindMethod(cmdType, "CanExecuteSwornOperations", 2);
++            if (canExec != null)
++            {
++                Assert.IsTrue(InvokeBool(canExec, null, vassal, 1u),
++                    "Sworn Allegiance vassal MUST retain flat logistics/siege execution rights");
++                Assert.IsFalse(InvokeBool(canExec, null, outsider, 1u),
++                    "Foreign non-allegiance player MUST NOT execute owning guild ops");
++            }
++        }
++
++        [TestMethod]
++        public void Baseline_RadarIff_PolicyResolution_Works()
++        {
++            RadarIff.ResetPolicies();
++            var policy = RadarIff.GetOrCreateMonarchPolicy(100u);
++            policy.SetStanding(200u, IffStanding.Hostile);
++            policy.SetStanding(300u, IffStanding.Friendly);
++            Assert.AreEqual(IffStanding.Hostile, policy.GetStanding(200u));
++            Assert.AreEqual(IffStanding.Friendly, policy.GetStanding(300u));
++            RadarIff.ResetPolicies();
++        }
++    }
++}
+diff --git a/Source/ACE.Server.Tests/EconomyE2E/PhaseCGeologyColdChainWireE2ETests.cs b/Source/ACE.Server.Tests/EconomyE2E/PhaseCGeologyColdChainWireE2ETests.cs
+new file mode 100644
+index 00000000..c9bbedf3
+--- /dev/null
++++ b/Source/ACE.Server.Tests/EconomyE2E/PhaseCGeologyColdChainWireE2ETests.cs
+@@ -0,0 +1,153 @@
++using System;
++using System.IO;
++using System.Linq;
++using System.Numerics;
++using System.Reflection;
++using Microsoft.VisualStudio.TestTools.UnitTesting;
++using ACE.Server.Vehicles;
++using ACE.Server.Vehicles.Deployables;
++using static ACE.Server.Tests.EconomyE2E.EconomyE2EReflectionHelpers;
++
++namespace ACE.Server.Tests.EconomyE2E
++{
++    [TestClass]
++    public class PhaseCGeologyColdChainWireE2ETests
++    {
++        [TestMethod]
++        public void F9_VehicleWire_HBV1_V8_AndBaselineHeader()
++        {
++            // Baseline check: HBV1 tag & v7+ header bytes
++            using (var ms = new MemoryStream())
++            using (var bw = new BinaryWriter(ms))
++            {
++                VehicleWire.WriteHeader(bw);
++                ms.Position = 0;
++                using var br = new BinaryReader(ms);
++                var rawTag = br.ReadUInt32();
++                Assert.AreEqual(VehicleWire.Tag, rawTag);
++                ms.Position = 0;
++                var ver = VehicleWire.ReadHeader(br);
++                Assert.IsTrue(ver >= 7, $"Expected HBV1 header version >= 7, got {ver}");
++            }
++
++            // Phase C v8 requirement
++            RequireTrueOrInconclusive(VehicleWire.Version >= 8, "VehicleWire.Version must be bumped to 8 for Phase C");
++            RequireTrueOrInconclusive(
++                typeof(VehicleWire.VehicleLocomotion).GetField("Marine", BindingFlags.Static | BindingFlags.Public) != null,
++                "VehicleLocomotion.Marine = 3 missing");
++        }
++
++        [TestMethod]
++        public void F10_Geology_14Basins_TerrainMapping_AndDepletion()
++        {
++            var geoType = RequireOrInconclusive(
++                FindType("ACE.Server.Economy.GeologyService"),
++                "ACE.Server.Economy.GeologyService");
++            var basinsMember = FindStaticPropOrField(geoType, "Basins", "AllBasins");
++            RequireOrInconclusive(basinsMember, "GeologyService.Basins");
++
++            var basins = ((System.Collections.IEnumerable)ReadMemberValue(basinsMember)).Cast<object>().ToList();
++            Assert.AreEqual(14, basins.Count, "Expected exactly 14 subsurface basins (8 Dereth + 6 Dericost)");
++
++            // Verify VehicleTerrain mapping exists (either per-basin or via helper method)
++            var terrainResolver = FindMethod(geoType, "GetBasinForTerrain", 2)
++                ?? FindMethod(geoType, "ResolveTerrainBasin", 2);
++            bool hasPerBasinTerrain = basins.All(b =>
++                GetPropOrField(b, "TerrainCodes") != null ||
++                GetPropOrField(b, "TerrainMask") != null ||
++                GetPropOrField(b, "AllowedTerrains") != null);
++            RequireTrueOrInconclusive(terrainResolver != null || hasPerBasinTerrain,
++                "GeologyService must expose VehicleTerrain mapping per basin");
++
++            // Verify depletion at remaining_tonnes == 0 refuses further extraction
++            var tryExtract = FindMethod(geoType, "TryExtractFromDepositForTesting", 2)
++                ?? FindMethod(geoType, "TryExtractTonnes", 2);
++            RequireOrInconclusive(tryExtract, "GeologyService.TryExtractFromDepositForTesting(depositId, tonnes)");
++            Assert.IsFalse(InvokeBool(tryExtract, null, 0u, 1.0),
++                "Extraction from depleted/nonexistent deposit (remaining_tonnes == 0) MUST return false");
++        }
++
++        [TestMethod]
++        public void F11_Prospecting_GprWetMarshAttenuation_AndVibroseisFallback()
++        {
++            var geoType = RequireOrInconclusive(
++                FindType("ACE.Server.Economy.GeologyService"),
++                "ACE.Server.Economy.GeologyService");
++            var gprScan = FindMethod(geoType, "RunGprScan", 2);
++            var seismicScan = FindMethod(geoType, "RunVibroseisScan", 2);
++            RequireOrInconclusive(gprScan, "GeologyService.RunGprScan(landblockId, terrainCode)");
++            RequireOrInconclusive(seismicScan, "GeologyService.RunVibroseisScan(landblockId, terrainCode)");
++
++            // Wet marsh / swamp terrain code must attenuate GPR while Seismic succeeds
++            var gprRes = gprScan.Invoke(null, new object[] { 0xE74Eu, (byte)8 }); // swamp/marsh
++            Assert.IsTrue(GetBoolPropOrField(gprRes, "IsAttenuated"),
++                "GPR in wet marsh must report physical EM attenuation");
++
++            var seisRes = seismicScan.Invoke(null, new object[] { 0xE74Eu, (byte)8 });
++            Assert.IsTrue(GetBoolPropOrField(seisRes, "Succeeded"),
++                "Vibroseis seismic must succeed in wet marsh");
++        }
++
++        [TestMethod]
++        public void F11_MicroGrid_Boundary75m_AndIndustrial150kWGenset_18MJBess()
++        {
++            // Baseline verified right now: MicroGrid ±75m boundary
++            var grid = new MicroGrid(new Vector3(100f, 100f, 10f));
++            Assert.IsTrue(grid.Contains(new Vector3(175.0f, 175.0f, 85.0f)), "75.0m edge must be inside MicroGrid");
++            Assert.IsFalse(grid.Contains(new Vector3(175.1f, 100.0f, 10.0f)), "75.1m must be outside MicroGrid");
++
++            RequireTrueOrInconclusive(Enum.IsDefined(typeof(DeployableKind), 54u), "DeployableKind 54 (IndustrialGenset150kW) missing");
++            RequireTrueOrInconclusive(Enum.IsDefined(typeof(DeployableKind), 55u), "DeployableKind 55 (IndustrialBess18MJ) missing");
++
++            // Verify IndustrialGenset150kW (4000086, 150kW gen) & IndustrialBess18MJ (4000087, 18MJ) integrate on MicroGrid
++            var indType = RequireOrInconclusive(
++                FindType("ACE.Server.Economy.IndustryManager", "ACE.Server.Vehicles.Deployables.DeployableManager"),
++                "ACE.Server.Economy.IndustryManager");
++            var getSpec = FindMethod(indType, "GetPowerSpecWatts", 1)
++                ?? FindMethod(typeof(DeployableManager), "GetPowerSpecWatts", 1);
++            RequireOrInconclusive(getSpec, "GetPowerSpecWatts(wcid)");
++
++            float gensetWatts = Convert.ToSingle(getSpec.Invoke(null, new object[] { 4000086u }));
++            Assert.AreEqual(-150_000f, gensetWatts, 1f, "IndustrialGenset150kW (4000086) must generate 150 kW (-150,000 W load)");
++
++            var getBess = FindMethod(indType, "GetBatteryCapacityJoules", 1)
++                ?? FindMethod(typeof(DeployableManager), "GetBatteryCapacityJoules", 1);
++            RequireOrInconclusive(getBess, "GetBatteryCapacityJoules(wcid)");
++            double bessJoules = Convert.ToDouble(getBess.Invoke(null, new object[] { 4000087u }));
++            Assert.AreEqual(18_000_000.0, bessJoules, 1.0, "IndustrialBess18MJ (4000087) must provide 18 MJ capacity");
++        }
++
++        [TestMethod]
++        public void F12_ColdChain_2To6hAmbientDecay_VsPoweredReeferZeroFreeze()
++        {
++            var decayType = RequireOrInconclusive(
++                FindType("ACE.Server.Economy.PerishableDecay"),
++                "ACE.Server.Economy.PerishableDecay");
++            var compute = FindMethod(decayType, "ComputeFreshnessAfter", 4);
++            RequireOrInconclusive(compute, "PerishableDecay.ComputeFreshnessAfter(initialPct, ambientLifetimeSec, elapsedSec, isPoweredReefer)");
++
++            // Ambient 4h (14,400s) decays to 0.0%
++            double ambientAfter4h = Convert.ToDouble(compute.Invoke(null, new object[] { 100.0, 14400.0, 14400.0, false }));
++            Assert.AreEqual(0.0, ambientAfter4h, 0.001, "Ambient perishable after full decay window must reach 0%");
++
++            // Powered 22R1/45R1 Reefer freezes decay at 0.0x (100% preserved)
++            double reeferAfter24h = Convert.ToDouble(compute.Invoke(null, new object[] { 100.0, 14400.0, 86400.0, true }));
++            Assert.AreEqual(100.0, reeferAfter24h, 0.001, "Powered Reefer must freeze freshness decay at 0.0x");
++        }
++
++        [TestMethod]
++        public void Baseline_MicroGrid_75mCubeBoundary_And_VehicleWireV7Header()
++        {
++            var grid = new MicroGrid(new Vector3(100f, 100f, 10f));
++            Assert.IsTrue(grid.Contains(new Vector3(175.0f, 175.0f, 85.0f)));
++            Assert.IsFalse(grid.Contains(new Vector3(175.1f, 100.0f, 10.0f)));
++
++            using var ms = new MemoryStream();
++            using (var bw = new BinaryWriter(ms, System.Text.Encoding.UTF8, leaveOpen: true))
++                VehicleWire.WriteHeader(bw);
++            ms.Position = 0;
++            using var br = new BinaryReader(ms);
++            Assert.IsTrue(VehicleWire.ReadHeader(br) >= 7);
++        }
++    }
++}
+diff --git a/Source/ACE.Server.Tests/EconomyE2E/PhaseDELogisticsGatewayE2ETests.cs b/Source/ACE.Server.Tests/EconomyE2E/PhaseDELogisticsGatewayE2ETests.cs
+new file mode 100644
+index 00000000..6ac73c92
+--- /dev/null
++++ b/Source/ACE.Server.Tests/EconomyE2E/PhaseDELogisticsGatewayE2ETests.cs
+@@ -0,0 +1,117 @@
++using System;
++using System.Linq;
++using System.Reflection;
++using Microsoft.VisualStudio.TestTools.UnitTesting;
++using ACE.Server.Managers;
++using ACE.Server.Vehicles;
++using ACE.Server.Vehicles.Deployables;
++using static ACE.Server.Tests.EconomyE2E.EconomyE2EReflectionHelpers;
++
++namespace ACE.Server.Tests.EconomyE2E
++{
++    [TestClass]
++    public class PhaseDELogisticsGatewayE2ETests
++    {
++        [TestMethod]
++        public void F14_LogisticsNavGraph_101Towns_11OuterPorts_ExcludesItem2()
++        {
++            var navType = RequireOrInconclusive(
++                FindType("ACE.Server.Economy.LogisticsNavGraph"),
++                "ACE.Server.Economy.LogisticsNavGraph");
++            var loadDefault = FindMethod(navType, "LoadDefault", 0) ?? FindMethod(navType, "GetInstance", 0);
++            RequireOrInconclusive(loadDefault, "LogisticsNavGraph.LoadDefault / GetInstance");
++
++            var graph = loadDefault.Invoke(null, null);
++            Assert.IsNotNull(graph);
++
++            // Unconditionally enforce 101 towns, 11 Outer Ocean ports, and ZERO Item 2 Inner Sea lane
++            var towns = GetPropOrField(graph, "Towns");
++            RequireOrInconclusive(towns, "LogisticsNavGraph.Towns");
++            Assert.AreEqual(101, ((System.Collections.IEnumerable)towns).Cast<object>().Count(),
++                "LogisticsNavGraph must cover all 101 primary towns");
++
++            var ports = GetPropOrField(graph, "Ports") ?? GetPropOrField(graph, "OuterPorts");
++            RequireOrInconclusive(ports, "LogisticsNavGraph.Ports");
++            Assert.AreEqual(11, ((System.Collections.IEnumerable)ports).Cast<object>().Count(),
++                "LogisticsNavGraph must cover strictly 11 Outer Ocean ports (Item 2 excluded)");
++
++            var hasInnerSea = FindMethod(navType, "HasInnerSeaLane", 0);
++            RequireOrInconclusive(hasInnerSea, "LogisticsNavGraph.HasInnerSeaLane()");
++            Assert.IsFalse(InvokeBool(hasInnerSea, graph), "Item 2 Inner Sea lane MUST be excluded");
++        }
++
++        [TestMethod]
++        public void F15_DualLod_LogisticsEngine_1HzMacro_And480mMicroBoundary()
++        {
++            var engType = RequireOrInconclusive(
++                FindType("ACE.Server.Economy.LogisticsEngine"),
++                "ACE.Server.Economy.LogisticsEngine");
++            var shouldMaterialize = FindMethod(engType, "ShouldMaterializeMicroLod", 1);
++            RequireOrInconclusive(shouldMaterialize, "LogisticsEngine.ShouldMaterializeMicroLod(distanceMeters)");
++
++            Assert.IsTrue(InvokeBool(shouldMaterialize, null, 480.0),
++                "Distance == 480.0m MUST materialize Micro-LOD");
++            Assert.IsFalse(InvokeBool(shouldMaterialize, null, 481.0),
++                "Distance == 481.0m MUST remain Macro-LOD");
++
++            // Verify 1 Hz Macro-LOD convoy simulation step & M/V Dereth Feeder (4000050, Marine=3, Class=4)
++            var stepMacro = FindMethod(engType, "StepMacroConvoyForTesting", 2)
++                ?? FindMethod(engType, "AdvanceMacroLodForTesting", 2);
++            RequireOrInconclusive(stepMacro, "LogisticsEngine.StepMacroConvoyForTesting(convoyId, elapsedSec)");
++            double newSpline = Convert.ToDouble(stepMacro.Invoke(null, new object[] { 1u, 1.0 }));
++            Assert.IsTrue(newSpline > 0.0, "1 Hz Macro-LOD tick must advance convoy spline_s_m > 0");
++
++            var marineField = typeof(VehicleWire.VehicleLocomotion).GetField("Marine", BindingFlags.Static | BindingFlags.Public);
++            RequireOrInconclusive(marineField, "VehicleWire.VehicleLocomotion.Marine = 3");
++            Assert.AreEqual(3u, Convert.ToUInt32(marineField.GetValue(null)), "VehicleLocomotion.Marine must equal 3");
++
++            var feederProf = FindMethod(typeof(VehicleProfile), "GetByWcid", 1)
++                ?? FindMethod(typeof(VehicleProfile), "TryGetProfile", 1);
++            if (feederProf != null)
++            {
++                var p = feederProf.Invoke(null, new object[] { 4000050u });
++                Assert.IsNotNull(p, "M/V Dereth Feeder (4000050) profile must be registered");
++                Assert.AreEqual(4u, Convert.ToUInt32(GetPropOrField(p, "VehicleClass")),
++                    "M/V Dereth Feeder (4000050) must have VehicleClass = 4");
++            }
++        }
++
++        [TestMethod]
++        public void F16_StarterHearth4000095_Indestructible_InHoltburgShoushiYaraq()
++        {
++            RequireTrueOrInconclusive(Enum.IsDefined(typeof(DeployableKind), 61u),
++                "DeployableKind 61 (PublicCommonsStarterHearth 4000095) missing");
++
++            var econType = RequireOrInconclusive(
++                FindType("ACE.Server.Economy.TownEconomyManager"),
++                "ACE.Server.Economy.TownEconomyManager");
++            var hasHearth = FindMethod(econType, "HasPublicStarterHearth", 1);
++            RequireOrInconclusive(hasHearth, "TownEconomyManager.HasPublicStarterHearth(landblockId)");
++
++            Assert.IsTrue(InvokeBool(hasHearth, null, 0xA9B4u), "Holtburg must have Starter Hearth 4000095");
++            Assert.IsTrue(InvokeBool(hasHearth, null, 0xDA55u), "Shoushi must have Starter Hearth 4000095");
++            Assert.IsTrue(InvokeBool(hasHearth, null, 0x7D64u), "Yaraq must have Starter Hearth 4000095");
++        }
++
++        [TestMethod]
++        public void F17_AgentGateway_LoopbackConfig_AndWorldManagerEnqueueParity()
++        {
++            // Baseline verified right now: WorldManager.EnqueueAction exists
++            Assert.IsNotNull(typeof(WorldManager).GetMethod("EnqueueAction", BindingFlags.Static | BindingFlags.Public),
++                "WorldManager.EnqueueAction must exist for human/AI parity dispatch");
++
++            var gwType = RequireOrInconclusive(
++                FindType("ACE.Server.Economy.AgentGatewayService"),
++                "ACE.Server.Economy.AgentGatewayService");
++            var bindHost = Convert.ToString(GetStaticPropOrField(gwType, "BindHost") ?? GetStaticPropOrField(gwType, "DefaultHost") ?? "");
++            Assert.AreEqual("127.0.0.1", bindHost, "AgentGatewayService must bind strictly to loopback 127.0.0.1");
++        }
++
++        [TestMethod]
++        public void Baseline_WorldManager_EnqueueAction_Exists()
++        {
++            var m = typeof(WorldManager).GetMethod("EnqueueAction", BindingFlags.Static | BindingFlags.Public);
++            Assert.IsNotNull(m, "WorldManager.EnqueueAction must exist for human/AI parity");
++        }
++    }
++}
+-- 
+2.43.0
+

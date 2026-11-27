@@ -1,7 +1,7 @@
 From a04bad628950226c1ebc2c2fe6c39e57790b0c63 Mon Sep 17 00:00:00 2001
 From: salvia420-bit <salvia420@gmail.com>
 Date: Mon, 2 Nov 2026 18:35:47 -0330
-Subject: [PATCH 06/12] Vehicles (holtburger fork): Hellcat from AC items,
+Subject: [PATCH 06/28] Vehicles (holtburger fork): Hellcat from AC items,
  armament, review fixes, GC + villa basements
 
 Session 3 (2026-11-02; holtburger-web docs/vehicles-2026-11-01 DESIGN decisions 62-73).
@@ -82,7 +82,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
  create mode 100755 run-ace-live.sh
 
 diff --git a/Source/ACE.Server.Tests/Vehicles/VehicleWireTests.cs b/Source/ACE.Server.Tests/Vehicles/VehicleWireTests.cs
-index 5c31def..69526ff 100644
+index 5c31def3..69526ffe 100644
 --- a/Source/ACE.Server.Tests/Vehicles/VehicleWireTests.cs
 +++ b/Source/ACE.Server.Tests/Vehicles/VehicleWireTests.cs
 @@ -13,7 +13,9 @@ namespace ACE.Server.Tests.Vehicles
@@ -340,7 +340,7 @@ index 5c31def..69526ff 100644
              foreach (var cut in new[] { bytes.Length - 1, 20, 9, 0 })
                  Assert.IsNull(Read("C2S", VehicleWire.OpInput, bytes.Take(cut).ToArray()), $"cut {cut}");
 diff --git a/Source/ACE.Server.Tests/Vehicles/vehicle-wire-fixtures.json b/Source/ACE.Server.Tests/Vehicles/vehicle-wire-fixtures.json
-index 943fa5f..91dfd07 100644
+index 943fa5fa..91dfd07b 100644
 --- a/Source/ACE.Server.Tests/Vehicles/vehicle-wire-fixtures.json
 +++ b/Source/ACE.Server.Tests/Vehicles/vehicle-wire-fixtures.json
 @@ -1,43 +1,236 @@
@@ -973,7 +973,7 @@ index 943fa5f..91dfd07 100644
    }
   ]
 diff --git a/Source/ACE.Server/Entity/Landblock.cs b/Source/ACE.Server/Entity/Landblock.cs
-index 2067ea4..0a2a388 100644
+index 2067ea40..0a2a3885 100644
 --- a/Source/ACE.Server/Entity/Landblock.cs
 +++ b/Source/ACE.Server/Entity/Landblock.cs
 @@ -210,16 +210,65 @@ public void Init(bool reload = false)
@@ -1055,7 +1055,7 @@ index 2067ea4..0a2a388 100644
  
              // When a WorldObject Ticks, it can end up adding additional WorldObjects to this landblock
 diff --git a/Source/ACE.Server/Managers/LandblockManager.cs b/Source/ACE.Server/Managers/LandblockManager.cs
-index f1482ed..30ae862 100644
+index f1482ed1..30ae8628 100644
 --- a/Source/ACE.Server/Managers/LandblockManager.cs
 +++ b/Source/ACE.Server/Managers/LandblockManager.cs
 @@ -731,7 +731,7 @@ public static Landblock GetLandblock(LandblockId landblockId, bool loadAdjacents
@@ -1068,7 +1068,7 @@ index f1482ed..30ae862 100644
                          }
                          LastLoadConstructMs = swLoad.Elapsed.TotalMilliseconds;
 diff --git a/Source/ACE.Server/Managers/PropertyManager.cs b/Source/ACE.Server/Managers/PropertyManager.cs
-index deb395c..7021c64 100644
+index deb395c8..7021c64c 100644
 --- a/Source/ACE.Server/Managers/PropertyManager.cs
 +++ b/Source/ACE.Server/Managers/PropertyManager.cs
 @@ -614,6 +614,8 @@ public static void LoadDefaultProperties()
@@ -1081,7 +1081,7 @@ index deb395c..7021c64 100644
                  ("landblock_wake_on_entry", new Property<bool>(false, "(holtburger vehicles) wake a dormant landblock (and its neighbours) when a player or vehicle is relocated into it, so fast movers never stall in dormant landblocks")),
                  ("use_wield_requirements", new Property<bool>(true, "disable this to bypass wield requirements. mostly for dev debugging")),
 diff --git a/Source/ACE.Server/Managers/WorldManager.cs b/Source/ACE.Server/Managers/WorldManager.cs
-index 15881e3..28707be 100644
+index 15881e3e..28707be8 100644
 --- a/Source/ACE.Server/Managers/WorldManager.cs
 +++ b/Source/ACE.Server/Managers/WorldManager.cs
 @@ -217,6 +217,10 @@ private static void DoPlayerEnterWorld(Session session, Character character, Bio
@@ -1096,7 +1096,7 @@ index 15881e3..28707be 100644
  
              var success = LandblockManager.AddObject(session.Player, true);
 diff --git a/Source/ACE.Server/Network/GameAction/Actions/GameActionChangeCombatMode.cs b/Source/ACE.Server/Network/GameAction/Actions/GameActionChangeCombatMode.cs
-index f3e50e0..ffdddc5 100644
+index f3e50e03..ffdddc54 100644
 --- a/Source/ACE.Server/Network/GameAction/Actions/GameActionChangeCombatMode.cs
 +++ b/Source/ACE.Server/Network/GameAction/Actions/GameActionChangeCombatMode.cs
 @@ -7,6 +7,7 @@ public static class GameActionChangeCombatMode
@@ -1108,7 +1108,7 @@ index f3e50e0..ffdddc5 100644
  
              session.Player.HandleActionChangeCombatMode((CombatMode)newCombatMode);
 diff --git a/Source/ACE.Server/Network/GameAction/Actions/GameActionMagicCastTargetedSpell.cs b/Source/ACE.Server/Network/GameAction/Actions/GameActionMagicCastTargetedSpell.cs
-index 38feb42..b2e3433 100644
+index 38feb42a..b2e34334 100644
 --- a/Source/ACE.Server/Network/GameAction/Actions/GameActionMagicCastTargetedSpell.cs
 +++ b/Source/ACE.Server/Network/GameAction/Actions/GameActionMagicCastTargetedSpell.cs
 @@ -5,6 +5,7 @@ public static class GameActionMagicCastTargetedSpell
@@ -1120,7 +1120,7 @@ index 38feb42..b2e3433 100644
              var spellId = message.Payload.ReadUInt32();
  
 diff --git a/Source/ACE.Server/Network/GameAction/Actions/GameActionMagicCastUntargetedSpell.cs b/Source/ACE.Server/Network/GameAction/Actions/GameActionMagicCastUntargetedSpell.cs
-index d7711af..a36880d 100644
+index d7711aff..a36880d2 100644
 --- a/Source/ACE.Server/Network/GameAction/Actions/GameActionMagicCastUntargetedSpell.cs
 +++ b/Source/ACE.Server/Network/GameAction/Actions/GameActionMagicCastUntargetedSpell.cs
 @@ -5,6 +5,7 @@ public static class GameActionMagicCastUnTargetedSpell
@@ -1132,7 +1132,7 @@ index d7711af..a36880d 100644
  
              session.Player.HandleActionMagicCastUnTargetedSpell(spellId);
 diff --git a/Source/ACE.Server/Network/GameAction/Actions/GameActionRecallAllegianceHometown.cs b/Source/ACE.Server/Network/GameAction/Actions/GameActionRecallAllegianceHometown.cs
-index 68e174f..f786699 100644
+index 68e174f4..f786699e 100644
 --- a/Source/ACE.Server/Network/GameAction/Actions/GameActionRecallAllegianceHometown.cs
 +++ b/Source/ACE.Server/Network/GameAction/Actions/GameActionRecallAllegianceHometown.cs
 @@ -5,6 +5,7 @@ public static class GameActionRecallAllegianceHometown
@@ -1144,7 +1144,7 @@ index 68e174f..f786699 100644
          }
      }
 diff --git a/Source/ACE.Server/Network/GameAction/Actions/GameActionTargetedMeleeAttack.cs b/Source/ACE.Server/Network/GameAction/Actions/GameActionTargetedMeleeAttack.cs
-index 93152ae..a94541d 100644
+index 93152ae3..a94541da 100644
 --- a/Source/ACE.Server/Network/GameAction/Actions/GameActionTargetedMeleeAttack.cs
 +++ b/Source/ACE.Server/Network/GameAction/Actions/GameActionTargetedMeleeAttack.cs
 @@ -5,6 +5,7 @@ public static class GameActionTargetedMeleeAttack
@@ -1156,7 +1156,7 @@ index 93152ae..a94541d 100644
              var attackHeight = message.Payload.ReadUInt32();
              var powerLevel = message.Payload.ReadSingle();
 diff --git a/Source/ACE.Server/Network/GameAction/Actions/GameActionTargetedMissileAttack.cs b/Source/ACE.Server/Network/GameAction/Actions/GameActionTargetedMissileAttack.cs
-index 21c5025..1d9e781 100644
+index 21c5025f..1d9e781c 100644
 --- a/Source/ACE.Server/Network/GameAction/Actions/GameActionTargetedMissileAttack.cs
 +++ b/Source/ACE.Server/Network/GameAction/Actions/GameActionTargetedMissileAttack.cs
 @@ -6,6 +6,7 @@ public static class GameActionTargetedMissileAttack
@@ -1168,7 +1168,7 @@ index 21c5025..1d9e781 100644
              var attackHeight = message.Payload.ReadUInt32();
              var accuracyLevel = message.Payload.ReadSingle();
 diff --git a/Source/ACE.Server/Network/GameAction/Actions/GameActionTeleToHouse.cs b/Source/ACE.Server/Network/GameAction/Actions/GameActionTeleToHouse.cs
-index c0657c6..4eb2a93 100644
+index c0657c61..4eb2a935 100644
 --- a/Source/ACE.Server/Network/GameAction/Actions/GameActionTeleToHouse.cs
 +++ b/Source/ACE.Server/Network/GameAction/Actions/GameActionTeleToHouse.cs
 @@ -10,6 +10,7 @@ public static class GameActionTeleToHouse
@@ -1180,7 +1180,7 @@ index c0657c6..4eb2a93 100644
  
              session.Player.HandleActionTeleToHouse();
 diff --git a/Source/ACE.Server/Network/GameAction/Actions/GameActionTeleToLifestone.cs b/Source/ACE.Server/Network/GameAction/Actions/GameActionTeleToLifestone.cs
-index dc9b1cc..26e788c 100644
+index dc9b1ccb..26e788c8 100644
 --- a/Source/ACE.Server/Network/GameAction/Actions/GameActionTeleToLifestone.cs
 +++ b/Source/ACE.Server/Network/GameAction/Actions/GameActionTeleToLifestone.cs
 @@ -5,6 +5,7 @@ public static class GameActionTeleToLifestone
@@ -1192,7 +1192,7 @@ index dc9b1cc..26e788c 100644
          }
      }
 diff --git a/Source/ACE.Server/Network/GameAction/Actions/GameActionTeleToMansion.cs b/Source/ACE.Server/Network/GameAction/Actions/GameActionTeleToMansion.cs
-index 42ddba8..6401a00 100644
+index 42ddba85..6401a00e 100644
 --- a/Source/ACE.Server/Network/GameAction/Actions/GameActionTeleToMansion.cs
 +++ b/Source/ACE.Server/Network/GameAction/Actions/GameActionTeleToMansion.cs
 @@ -10,6 +10,7 @@ public static class GameActionTeleToMansion
@@ -1204,7 +1204,7 @@ index 42ddba8..6401a00 100644
              session.Player.HandleActionTeleToMansion();
          }
 diff --git a/Source/ACE.Server/Network/GameAction/Actions/GameActionTeleToMarketplace.cs b/Source/ACE.Server/Network/GameAction/Actions/GameActionTeleToMarketplace.cs
-index 6ed96f7..2c14e97 100644
+index 6ed96f7c..2c14e97c 100644
 --- a/Source/ACE.Server/Network/GameAction/Actions/GameActionTeleToMarketplace.cs
 +++ b/Source/ACE.Server/Network/GameAction/Actions/GameActionTeleToMarketplace.cs
 @@ -5,6 +5,7 @@ public static class GameActionTeleToMarketPlace
@@ -1216,7 +1216,7 @@ index 6ed96f7..2c14e97 100644
          }
      }
 diff --git a/Source/ACE.Server/Network/GameAction/Actions/GameActionTeleToPkArena.cs b/Source/ACE.Server/Network/GameAction/Actions/GameActionTeleToPkArena.cs
-index 8c85319..04a2d08 100644
+index 8c853199..04a2d08e 100644
 --- a/Source/ACE.Server/Network/GameAction/Actions/GameActionTeleToPkArena.cs
 +++ b/Source/ACE.Server/Network/GameAction/Actions/GameActionTeleToPkArena.cs
 @@ -8,6 +8,7 @@ public static class GameActionTeleToPkArena
@@ -1228,7 +1228,7 @@ index 8c85319..04a2d08 100644
          }
      }
 diff --git a/Source/ACE.Server/Network/GameAction/Actions/GameActionTeleToPklArena.cs b/Source/ACE.Server/Network/GameAction/Actions/GameActionTeleToPklArena.cs
-index d2d09b4..85a88db 100644
+index d2d09b44..85a88dbd 100644
 --- a/Source/ACE.Server/Network/GameAction/Actions/GameActionTeleToPklArena.cs
 +++ b/Source/ACE.Server/Network/GameAction/Actions/GameActionTeleToPklArena.cs
 @@ -8,6 +8,7 @@ public static class GameActionTeleToPklArena
@@ -1240,7 +1240,7 @@ index d2d09b4..85a88db 100644
          }
      }
 diff --git a/Source/ACE.Server/Network/GameAction/Actions/GameActionUseItem.cs b/Source/ACE.Server/Network/GameAction/Actions/GameActionUseItem.cs
-index bf8dfa1..069c73c 100644
+index bf8dfa1e..069c73cc 100644
 --- a/Source/ACE.Server/Network/GameAction/Actions/GameActionUseItem.cs
 +++ b/Source/ACE.Server/Network/GameAction/Actions/GameActionUseItem.cs
 @@ -7,6 +7,7 @@ public static class GameActionUseItem
@@ -1252,7 +1252,7 @@ index bf8dfa1..069c73c 100644
  
              //Console.WriteLine($"{session.Player.Name}.GameAction 0x36 - Use({itemGuid:X8})");
 diff --git a/Source/ACE.Server/Network/GameAction/Actions/GameActionUseWithTarget.cs b/Source/ACE.Server/Network/GameAction/Actions/GameActionUseWithTarget.cs
-index f6ce5a5..139eef4 100644
+index f6ce5a57..139eef46 100644
 --- a/Source/ACE.Server/Network/GameAction/Actions/GameActionUseWithTarget.cs
 +++ b/Source/ACE.Server/Network/GameAction/Actions/GameActionUseWithTarget.cs
 @@ -7,6 +7,7 @@ public static class GameActionUseWithTarget
@@ -1264,7 +1264,7 @@ index f6ce5a5..139eef4 100644
              uint targetObjectGuid = message.Payload.ReadUInt32();
  
 diff --git a/Source/ACE.Server/Network/Managers/InboundMessageManager.cs b/Source/ACE.Server/Network/Managers/InboundMessageManager.cs
-index 5f8a120..fd4e7b4 100644
+index 5f8a1209..fd4e7b4f 100644
 --- a/Source/ACE.Server/Network/Managers/InboundMessageManager.cs
 +++ b/Source/ACE.Server/Network/Managers/InboundMessageManager.cs
 @@ -102,7 +102,10 @@ public static void HandleClientMessage(ClientMessage message, Session session)
@@ -1289,7 +1289,7 @@ index 5f8a120..fd4e7b4 100644
                  catch (Exception ex)
                  {
 diff --git a/Source/ACE.Server/Physics/Common/CellStruct.cs b/Source/ACE.Server/Physics/Common/CellStruct.cs
-index 67a4298..c987d68 100644
+index 67a42984..c987d689 100644
 --- a/Source/ACE.Server/Physics/Common/CellStruct.cs
 +++ b/Source/ACE.Server/Physics/Common/CellStruct.cs
 @@ -22,6 +22,35 @@ public class CellStruct
@@ -1329,7 +1329,7 @@ index 67a4298..c987d68 100644
          {
              Polygons = new Dictionary<ushort, Polygon>();
 diff --git a/Source/ACE.Server/Physics/Common/EnvCell.cs b/Source/ACE.Server/Physics/Common/EnvCell.cs
-index 621a308..73f088a 100644
+index 621a3082..73f088ad 100644
 --- a/Source/ACE.Server/Physics/Common/EnvCell.cs
 +++ b/Source/ACE.Server/Physics/Common/EnvCell.cs
 @@ -69,7 +69,10 @@ public EnvCell(DatLoader.FileTypes.EnvCell envCell): base()
@@ -1345,7 +1345,7 @@ index 621a308..73f088a 100644
              NumSurfaces = envCell.Surfaces.Count;
          }
 diff --git a/Source/ACE.Server/Physics/Common/ObjectMaint.cs b/Source/ACE.Server/Physics/Common/ObjectMaint.cs
-index e07ce81..d182544 100644
+index e07ce818..d182544c 100644
 --- a/Source/ACE.Server/Physics/Common/ObjectMaint.cs
 +++ b/Source/ACE.Server/Physics/Common/ObjectMaint.cs
 @@ -526,7 +526,9 @@ public List<PhysicsObj> AddVisibleObjects(ICollection<PhysicsObj> objs)
@@ -1405,7 +1405,7 @@ index e07ce81..d182544 100644
              rwLock.EnterReadLock();
 diff --git a/Source/ACE.Server/Physics/Entity/CellStructCache.cs b/Source/ACE.Server/Physics/Entity/CellStructCache.cs
 new file mode 100644
-index 0000000..e9277f4
+index 00000000..e9277f43
 --- /dev/null
 +++ b/Source/ACE.Server/Physics/Entity/CellStructCache.cs
 @@ -0,0 +1,34 @@
@@ -1444,7 +1444,7 @@ index 0000000..e9277f4
 +    }
 +}
 diff --git a/Source/ACE.Server/Vehicles/Vehicle.cs b/Source/ACE.Server/Vehicles/Vehicle.cs
-index 5523dc7..1f8b8ff 100644
+index 5523dc7f..1f8b8ffe 100644
 --- a/Source/ACE.Server/Vehicles/Vehicle.cs
 +++ b/Source/ACE.Server/Vehicles/Vehicle.cs
 @@ -1,5 +1,6 @@
@@ -1567,7 +1567,7 @@ index 5523dc7..1f8b8ff 100644
          }
  
 diff --git a/Source/ACE.Server/Vehicles/VehicleBailout.cs b/Source/ACE.Server/Vehicles/VehicleBailout.cs
-index 429f284..5c4ed10 100644
+index 429f284d..5c4ed101 100644
 --- a/Source/ACE.Server/Vehicles/VehicleBailout.cs
 +++ b/Source/ACE.Server/Vehicles/VehicleBailout.cs
 @@ -1,4 +1,5 @@
@@ -1640,7 +1640,7 @@ index 429f284..5c4ed10 100644
              VehicleManager.SendEventTo(player, f.Vehicle, VehicleEventKind.Touchdown, -1f, new Position());
          }
 diff --git a/Source/ACE.Server/Vehicles/VehicleCommands.cs b/Source/ACE.Server/Vehicles/VehicleCommands.cs
-index 4aa7437..3380569 100644
+index 4aa7437a..3380569b 100644
 --- a/Source/ACE.Server/Vehicles/VehicleCommands.cs
 +++ b/Source/ACE.Server/Vehicles/VehicleCommands.cs
 @@ -20,7 +20,8 @@ public static class VehicleCommands
@@ -1674,7 +1674,7 @@ index 4aa7437..3380569 100644
              }
          }
 diff --git a/Source/ACE.Server/Vehicles/VehicleManager.cs b/Source/ACE.Server/Vehicles/VehicleManager.cs
-index 3cbfdef..b6c0037 100644
+index 3cbfdefc..b6c00377 100644
 --- a/Source/ACE.Server/Vehicles/VehicleManager.cs
 +++ b/Source/ACE.Server/Vehicles/VehicleManager.cs
 @@ -1,4 +1,5 @@
@@ -2211,7 +2211,7 @@ index 3cbfdef..b6c0037 100644
                      $">=1 s warning {(c.FirstSights > 0 ? 100.0 * c.FirstSightsOver1s / c.FirstSights : 0):0}%, median warning {(ws.Count > 0 ? ws[ws.Count / 2] : 0):0.00} s, mean distance {(c.FirstSights > 0 ? c.FirstSightDistTotal / c.FirstSights : 0):0} m");
 diff --git a/Source/ACE.Server/Vehicles/VehicleOrdnance.cs b/Source/ACE.Server/Vehicles/VehicleOrdnance.cs
 new file mode 100644
-index 0000000..51f65db
+index 00000000..51f65db1
 --- /dev/null
 +++ b/Source/ACE.Server/Vehicles/VehicleOrdnance.cs
 @@ -0,0 +1,293 @@
@@ -2509,7 +2509,7 @@ index 0000000..51f65db
 +    }
 +}
 diff --git a/Source/ACE.Server/Vehicles/VehicleProfile.cs b/Source/ACE.Server/Vehicles/VehicleProfile.cs
-index 78cf338..9ea0e7e 100644
+index 78cf3385..9ea0e7e5 100644
 --- a/Source/ACE.Server/Vehicles/VehicleProfile.cs
 +++ b/Source/ACE.Server/Vehicles/VehicleProfile.cs
 @@ -34,15 +34,57 @@ public sealed class VehicleProfile
@@ -2701,7 +2701,7 @@ index 78cf338..9ea0e7e 100644
          }
      }
 diff --git a/Source/ACE.Server/Vehicles/VehicleStreaming.cs b/Source/ACE.Server/Vehicles/VehicleStreaming.cs
-index 7c5234a..08cc9cb 100644
+index 7c5234ac..08cc9cb5 100644
 --- a/Source/ACE.Server/Vehicles/VehicleStreaming.cs
 +++ b/Source/ACE.Server/Vehicles/VehicleStreaming.cs
 @@ -46,6 +46,26 @@ public static class VehicleStreaming
@@ -2801,7 +2801,7 @@ index 7c5234a..08cc9cb 100644
  
      /// <summary>Per-vehicle streaming state.</summary>
 diff --git a/Source/ACE.Server/Vehicles/VehicleWeapons.cs b/Source/ACE.Server/Vehicles/VehicleWeapons.cs
-index 636e2ab..5291278 100644
+index 636e2ab2..52912785 100644
 --- a/Source/ACE.Server/Vehicles/VehicleWeapons.cs
 +++ b/Source/ACE.Server/Vehicles/VehicleWeapons.cs
 @@ -2,8 +2,14 @@
@@ -3301,7 +3301,7 @@ index 636e2ab..5291278 100644
              [ThreadStatic] static Random rng;
              public static double NextDouble() => (rng ??= new Random()).NextDouble();
 diff --git a/Source/ACE.Server/Vehicles/VehicleWire.cs b/Source/ACE.Server/Vehicles/VehicleWire.cs
-index ece8302..7c053ca 100644
+index ece8302d..7c053cad 100644
 --- a/Source/ACE.Server/Vehicles/VehicleWire.cs
 +++ b/Source/ACE.Server/Vehicles/VehicleWire.cs
 @@ -16,13 +16,20 @@ namespace ACE.Server.Vehicles
@@ -3618,7 +3618,7 @@ index ece8302..7c053ca 100644
      }
  }
 diff --git a/Source/ACE.Server/Vehicles/WorldTickMonitor.cs b/Source/ACE.Server/Vehicles/WorldTickMonitor.cs
-index 2ec243f..53c2f65 100644
+index 2ec243f6..53c2f65e 100644
 --- a/Source/ACE.Server/Vehicles/WorldTickMonitor.cs
 +++ b/Source/ACE.Server/Vehicles/WorldTickMonitor.cs
 @@ -1,4 +1,6 @@
@@ -3741,7 +3741,7 @@ index 2ec243f..53c2f65 100644
              {
                  MaxMs = total;
 diff --git a/Source/ACE.Server/WorldObjects/House.cs b/Source/ACE.Server/WorldObjects/House.cs
-index 6486756..d692e71 100644
+index 6486756b..d692e713 100644
 --- a/Source/ACE.Server/WorldObjects/House.cs
 +++ b/Source/ACE.Server/WorldObjects/House.cs
 @@ -214,16 +214,32 @@ public uint GetRentDue(uint purchaseTime)
@@ -3781,7 +3781,7 @@ index 6486756..d692e71 100644
                      HouseOwnerName = house.HouseOwnerName;
                  }
 diff --git a/Source/ACE.Server/WorldObjects/HousePortal.cs b/Source/ACE.Server/WorldObjects/HousePortal.cs
-index e1940f5..010991c 100644
+index e1940f50..010991cf 100644
 --- a/Source/ACE.Server/WorldObjects/HousePortal.cs
 +++ b/Source/ACE.Server/WorldObjects/HousePortal.cs
 @@ -71,16 +71,27 @@ public override void SetLinkProperties(WorldObject wo)
@@ -3860,7 +3860,7 @@ index e1940f5..010991c 100644
          {
              var rootHouse = House?.RootHouse;
 diff --git a/Source/ACE.Server/WorldObjects/Player_Death.cs b/Source/ACE.Server/WorldObjects/Player_Death.cs
-index 8ed24e1..511159a 100644
+index 8ed24e19..511159ab 100644
 --- a/Source/ACE.Server/WorldObjects/Player_Death.cs
 +++ b/Source/ACE.Server/WorldObjects/Player_Death.cs
 @@ -33,6 +33,10 @@ partial class Player
@@ -3875,7 +3875,7 @@ index 8ed24e1..511159a 100644
  
              HandlePKDeathBroadcast(lastDamager, topDamager);
 diff --git a/Source/ACE.Server/WorldObjects/SpellProjectile.cs b/Source/ACE.Server/WorldObjects/SpellProjectile.cs
-index 0ef0c88..d1517c3 100644
+index 0ef0c887..d1517c37 100644
 --- a/Source/ACE.Server/WorldObjects/SpellProjectile.cs
 +++ b/Source/ACE.Server/WorldObjects/SpellProjectile.cs
 @@ -279,6 +279,17 @@ public override void OnCollideObject(WorldObject target)
@@ -3897,7 +3897,7 @@ index 0ef0c88..d1517c3 100644
                  player.LastHitSpellProjectile = Spell;
              
 diff --git a/Source/ACE.Server/WorldObjects/WorldObject_Links.cs b/Source/ACE.Server/WorldObjects/WorldObject_Links.cs
-index 2241a5f..2c4be54 100644
+index 2241a5fb..2c4be54e 100644
 --- a/Source/ACE.Server/WorldObjects/WorldObject_Links.cs
 +++ b/Source/ACE.Server/WorldObjects/WorldObject_Links.cs
 @@ -50,7 +50,7 @@ public void ActivateLinks(List<LandblockInstance> sourceObjects, List<Biota> bio
@@ -3911,7 +3911,7 @@ index 2241a5f..2c4be54 100644
                      wo.PhysicsObj.Order = 0;
 diff --git a/run-ace-live.sh b/run-ace-live.sh
 new file mode 100755
-index 0000000..1f1dcc0
+index 00000000..1f1dcc03
 --- /dev/null
 +++ b/run-ace-live.sh
 @@ -0,0 +1,18 @@

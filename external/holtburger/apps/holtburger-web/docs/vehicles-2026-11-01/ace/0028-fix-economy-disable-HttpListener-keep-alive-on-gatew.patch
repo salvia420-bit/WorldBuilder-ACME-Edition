@@ -1,0 +1,58 @@
+From ac72ef66e33ff6ae91bf8581cc6cc56fa708e394 Mon Sep 17 00:00:00 2001
+From: salvia420-bit <salvia420@gmail.com>
+Date: Fri, 27 Nov 2026 10:25:02 +0000
+Subject: [PATCH 28/28] fix(economy): disable HttpListener keep-alive on
+ gateway responses and annotate 4000090-4000092 in DeployableManager
+
+Avoid idle HTTP keep-alive socket ECONNRESET across multi-minute test pauses by setting resp.KeepAlive = false in AgentGatewayService.WriteJsonAsync, and annotate WCIDs 4000090-4000092 in DeployableManager.cs.
+---
+ Source/ACE.Server/Economy/AgentGatewayService.cs            | 1 +
+ Source/ACE.Server/Vehicles/Deployables/DeployableManager.cs | 6 +++---
+ 2 files changed, 4 insertions(+), 3 deletions(-)
+
+diff --git a/Source/ACE.Server/Economy/AgentGatewayService.cs b/Source/ACE.Server/Economy/AgentGatewayService.cs
+index 9ff984f3..bb245a37 100644
+--- a/Source/ACE.Server/Economy/AgentGatewayService.cs
++++ b/Source/ACE.Server/Economy/AgentGatewayService.cs
+@@ -1543,6 +1543,7 @@ private static async Task WriteJsonAsync(HttpListenerResponse resp, int statusCo
+         {
+             byte[] bytes = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(payload, JsonOpts));
+             resp.StatusCode = statusCode;
++            resp.KeepAlive = false;
+             resp.ContentType = "application/json; charset=utf-8";
+             resp.ContentLength64 = bytes.Length;
+             await resp.OutputStream.WriteAsync(bytes, 0, bytes.Length, ct).ConfigureAwait(false);
+diff --git a/Source/ACE.Server/Vehicles/Deployables/DeployableManager.cs b/Source/ACE.Server/Vehicles/Deployables/DeployableManager.cs
+index b76c9a04..981dfae5 100644
+--- a/Source/ACE.Server/Vehicles/Deployables/DeployableManager.cs
++++ b/Source/ACE.Server/Vehicles/Deployables/DeployableManager.cs
+@@ -286,7 +286,7 @@ public static DeployableBase SpawnDeployable(uint wcid, Position location, Playe
+                     };
+                     break;
+                 }
+-                case TownControlNodeDeployable.TownControlNodeWeenieClassId:
++                case TownControlNodeDeployable.TownControlNodeWeenieClassId: // WCID 4000090
+                 {
+                     var townDef = location != null ? Economy.TownRegistry.ResolveTown(location) : null;
+                     deployable = new TownControlNodeDeployable(
+@@ -298,7 +298,7 @@ public static DeployableBase SpawnDeployable(uint wcid, Position location, Playe
+                     };
+                     break;
+                 }
+-                case TownDepotDeployable.TownDepotWeenieClassId:
++                case TownDepotDeployable.TownDepotWeenieClassId: // WCID 4000091
+                 {
+                     var townDef = location != null ? Economy.TownRegistry.ResolveTown(location) : null;
+                     deployable = new TownDepotDeployable(
+@@ -310,7 +310,7 @@ public static DeployableBase SpawnDeployable(uint wcid, Position location, Playe
+                     };
+                     break;
+                 }
+-                case ForwardSiegeBeaconDeployable.ForwardSiegeBeaconWeenieClassId:
++                case ForwardSiegeBeaconDeployable.ForwardSiegeBeaconWeenieClassId: // WCID 4000092
+                     deployable = new ForwardSiegeBeaconDeployable(ForwardSiegeBeaconDeployable.BuildWeenie(parentVehicle, deployer), guid, parentVehicle, deployer);
+                     break;
+                 case 4000093:
+-- 
+2.43.0
+

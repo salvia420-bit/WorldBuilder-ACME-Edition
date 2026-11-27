@@ -47566,6 +47566,142 @@ impl SessionHandle {
         ))
     }
 
+    /// HBV1 v8 Economy_SiegeAction (0x0912):
+    /// Sends a town control / siege / depot supply action to the server.
+    #[wasm_bindgen(js_name = economySiegeAction)]
+    pub fn economy_siege_action(
+        &self,
+        town_id: u32,
+        beacon_guid: u32,
+        action: u8,
+        flags: u8,
+        supply_points: u32,
+        origin_landblock: u32,
+    ) -> Result<(), JsValue> {
+        self.vehicle_send(holtburger_protocol::messages::vehicle::VehicleC2S::EconomySiegeAction(
+            holtburger_protocol::messages::vehicle::EconomySiegeAction {
+                town_id,
+                beacon_guid,
+                action,
+                flags,
+                reserved: 0,
+                supply_points,
+                origin_landblock,
+            },
+        ))
+    }
+
+    /// HBV1 v8 Industry_Prospecting (0x0913):
+    /// Sends a 4-stage subsurface prospecting tool action (GPR/Vibroseis/CoreDrill/Assay) to the server.
+    #[wasm_bindgen(js_name = industryProspecting)]
+    #[allow(clippy::too_many_arguments)]
+    pub fn industry_prospecting(
+        &self,
+        tool_guid: u32,
+        tool_kind: u32,
+        mode: u8,
+        cell: u32,
+        x: f32,
+        y: f32,
+        z: f32,
+    ) -> Result<(), JsValue> {
+        self.vehicle_send(holtburger_protocol::messages::vehicle::VehicleC2S::IndustryProspecting(
+            holtburger_protocol::messages::vehicle::IndustryProspecting {
+                tool_guid,
+                tool_kind,
+                mode,
+                reserved0: 0,
+                reserved1: 0,
+                cell,
+                position: [x, y, z],
+            },
+        ))
+    }
+
+    /// HBV1 v8 Industry_FacilityAction (0x0914):
+    /// Sends an industrial extraction / refining / mint / workshop skid action to the server.
+    #[wasm_bindgen(js_name = industryFacilityAction)]
+    pub fn industry_facility_action(
+        &self,
+        facility_guid: u32,
+        action: u8,
+        recipe_id: u32,
+        param: u32,
+    ) -> Result<(), JsValue> {
+        self.vehicle_send(holtburger_protocol::messages::vehicle::VehicleC2S::IndustryFacilityAction(
+            holtburger_protocol::messages::vehicle::IndustryFacilityAction {
+                facility_guid,
+                action,
+                reserved0: 0,
+                reserved1: 0,
+                recipe_id,
+                param,
+            },
+        ))
+    }
+
+    /// HBV1 v8 Logistics_ConvoyOrder (0x0915):
+    /// Sends an overland or Outer Ocean logistics convoy dispatch / order to the server.
+    #[wasm_bindgen(js_name = logisticsConvoyOrder)]
+    #[allow(clippy::too_many_arguments)]
+    pub fn logistics_convoy_order(
+        &self,
+        convoy_id: u64,
+        action: u8,
+        vehicle_class: u8,
+        flags: u16,
+        origin_town_id: u32,
+        dest_town_id: u32,
+        container_kind: u32,
+        commodity_id: u32,
+    ) -> Result<(), JsValue> {
+        self.vehicle_send(holtburger_protocol::messages::vehicle::VehicleC2S::LogisticsConvoyOrder(
+            holtburger_protocol::messages::vehicle::LogisticsConvoyOrder {
+                convoy_id,
+                action,
+                vehicle_class,
+                flags,
+                origin_town_id,
+                dest_town_id,
+                container_kind,
+                commodity_id,
+            },
+        ))
+    }
+
+    /// HBV1 v8 Economy_MonarchOrder (0x0916):
+    /// Sends a monarch governance / tariff / procurement work-order command to the server.
+    #[wasm_bindgen(js_name = economyMonarchOrder)]
+    #[allow(clippy::too_many_arguments)]
+    pub fn economy_monarch_order(
+        &self,
+        order_id: u64,
+        town_id: u32,
+        action: u8,
+        order_type: u8,
+        flags: u16,
+        target_guid: u32,
+        item_wcid: u32,
+        quantity: u32,
+        reward_pyreals: u64,
+        param_f32: f32,
+    ) -> Result<(), JsValue> {
+        self.vehicle_send(holtburger_protocol::messages::vehicle::VehicleC2S::EconomyMonarchOrder(
+            holtburger_protocol::messages::vehicle::EconomyMonarchOrder {
+                order_id,
+                town_id,
+                action,
+                order_type,
+                flags,
+                target_guid,
+                item_wcid,
+                quantity,
+                reward_pyreals,
+                param_f32,
+            },
+        ))
+    }
+
     /// Upsert dynamic container building collider into WASM physics (w.scene and collision_scene).
     #[wasm_bindgen(js_name = upsertContainerCollider)]
     pub fn upsert_container_collider(

@@ -1,7 +1,7 @@
 From d6007f2ca89b90b4b9b306fc60fd999ec16f92c7 Mon Sep 17 00:00:00 2001
 From: salvia420-bit <salvia420@gmail.com>
 Date: Tue, 17 Nov 2026 14:54:17 +0000
-Subject: [PATCH] Vehicles (holtburger fork): container wire position is
+Subject: [PATCH 13/28] Vehicles (holtburger fork): container wire position is
  landblock-local; deployable stand-in setup exists in the r10 portal dat
 
 - IsoContainerDeployable.CreateContainerStateMsg sent the global Position property
@@ -23,7 +23,7 @@ coordinates in holtburger-web (quality=ultra).
  3 files changed, 3 insertions(+), 3 deletions(-)
 
 diff --git a/Source/ACE.Server/Vehicles/AirDefense/RadarStation.cs b/Source/ACE.Server/Vehicles/AirDefense/RadarStation.cs
-index 32265ef..6be18f5 100644
+index 32265ef1..6be18f50 100644
 --- a/Source/ACE.Server/Vehicles/AirDefense/RadarStation.cs
 +++ b/Source/ACE.Server/Vehicles/AirDefense/RadarStation.cs
 @@ -74,7 +74,7 @@ public static Weenie BuildWeenie(Vehicle parentVehicle, Player deployer)
@@ -36,7 +36,7 @@ index 32265ef..6be18f5 100644
                  },
                  PropertiesFloat = new Dictionary<PropertyFloat, double>
 diff --git a/Source/ACE.Server/Vehicles/Deployables/DeployableBase.cs b/Source/ACE.Server/Vehicles/Deployables/DeployableBase.cs
-index 1ea89fb..966e696 100644
+index 1ea89fbd..966e696e 100644
 --- a/Source/ACE.Server/Vehicles/Deployables/DeployableBase.cs
 +++ b/Source/ACE.Server/Vehicles/Deployables/DeployableBase.cs
 @@ -105,7 +105,7 @@ public static Weenie BuildDeployableWeenie(uint wcid, string className, string n
@@ -49,7 +49,7 @@ index 1ea89fb..966e696 100644
                  },
                  PropertiesFloat = new Dictionary<PropertyFloat, double>
 diff --git a/Source/ACE.Server/Vehicles/Deployables/IsoContainerDeployable.cs b/Source/ACE.Server/Vehicles/Deployables/IsoContainerDeployable.cs
-index 683830b..c06c100 100644
+index 683830b8..c06c1002 100644
 --- a/Source/ACE.Server/Vehicles/Deployables/IsoContainerDeployable.cs
 +++ b/Source/ACE.Server/Vehicles/Deployables/IsoContainerDeployable.cs
 @@ -883,7 +883,7 @@ public VehicleContainerStateMsg CreateContainerStateMsg()

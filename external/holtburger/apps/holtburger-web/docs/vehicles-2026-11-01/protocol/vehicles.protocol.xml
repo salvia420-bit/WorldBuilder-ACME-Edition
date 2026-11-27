@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  HBV1 — holtburger vehicles wire spec, protocol version 7 (v1 2026-11-01 .. v7 2026-11). "HBV1" is the
+  HBV1 — holtburger vehicles wire spec, protocol version 8 (v1 2026-11-01 .. v8 2026-11). "HBV1" is the
   protocol's name and tag, not its version.
 
   THE single definition of the vehicle messages (DESIGN.md §5, §5.1 rule 1). Written in the style of Chorizite's
@@ -67,11 +67,22 @@
                                               SideliftProgress, OutriggerProgress, CraneSpanY,
                                               StowedPalletJackGuid, TransferContainerGuid
 
+  v8 additions (2026-11): VehicleLocomotion Marine (3); VehicleClass enum (0..4, incl. ContainerShipFeeder=4);
+                      DeployableKind (17..22 reserved warehouse; 23..29 Marine Terminal; 30..37 Specialized ISO;
+                      38..42 Prospecting; 43..55 Extraction/Refining/Power; 56..61 Town Control & Civic);
+                      64-bit ulong/long primitive aliases; opcodes 0x0911-0x0916:
+                        S2C Economy_TownState (0x0911),
+                        C2S Economy_SiegeAction / S2C Economy_SiegeEvent (0x0912),
+                        C2S Industry_Prospecting / S2C Industry_SurveyResult (0x0913),
+                        C2S Industry_FacilityAction / S2C Industry_FacilityState (0x0914),
+                        C2S Logistics_ConvoyOrder / S2C Logistics_ConvoyState (0x0915),
+                        C2S Economy_MonarchOrder / S2C Economy_MonarchOrderState (0x0916).
+
   Units: metres, seconds, radians. Positions are AC cell + landblock-local coordinates. Angles: heading is a
   COMPASS angle (0 = north/+y, pi/2 = east/+x, clockwise); pitch is nose-up positive; bank is right-wing-down
   positive. Stick values are signed bytes scaled by 1/127 (-128 clamps to -1). Throttle is u8 scaled by 1/255.
 -->
-<schema text="holtburger vehicles (HBV1) — additive, capability-gated vehicle messages" version="7">
+<schema text="holtburger vehicles (HBV1) — additive, capability-gated vehicle messages" version="8">
   <enums>
     <enum name="VehicleCapability" parent="uint" mask="true" text="ClientCapabilities.Flags / CapabilitiesAck.Granted">
       <value value="0x00000001" name="Observe" text="receive VehicleProfile / VehicleSeat / VehicleState / VehicleFire / VehicleEvent" />
@@ -81,6 +92,14 @@
     <enum name="VehicleLocomotion" parent="uint">
       <value value="1" name="Air" />
       <value value="2" name="Ground" />
+      <value value="3" name="Marine" />
+    </enum>
+    <enum name="VehicleClass" parent="byte">
+      <value value="0" name="Legacy" />
+      <value value="1" name="Air" />
+      <value value="2" name="LightGround" />
+      <value value="3" name="HeavyTractor" />
+      <value value="4" name="ContainerShipFeeder" />
     </enum>
     <enum name="VehicleMode" parent="byte" text="VehicleState.Mode">
       <value value="0" name="Parked" />
@@ -202,6 +221,51 @@
       <value value="14" name="TrailerChassis40" text="40ft gooseneck ISO container chassis trailer (WCID 4000031)" />
       <value value="15" name="TrailerSidelifter40" text="ISO 3874 40ft gooseneck self-loading sidelifter semi-trailer (WCID 4000032)" />
       <value value="16" name="PalletJack" text="ISO 3691-5 walk-behind pedestrian low-lift pallet jack (WCID 4000035)" />
+      <value value="17" name="ReservedWarehouse17" text="Reserved for immutable client Automated Warehouse (WCID 4000040)" />
+      <value value="18" name="ReservedWarehouse18" text="Reserved for immutable client Automated Warehouse (WCID 4000041)" />
+      <value value="19" name="ReservedWarehouse19" text="Reserved for immutable client Automated Warehouse (WCID 4000042)" />
+      <value value="20" name="ReservedWarehouse20" text="Reserved for immutable client Automated Warehouse (WCID 4000043)" />
+      <value value="21" name="ReservedWarehouse21" text="Reserved for immutable client Automated Warehouse (WCID 4000044)" />
+      <value value="22" name="ReservedWarehouse22" text="Reserved for immutable client Automated Warehouse (WCID 4000045)" />
+      <value value="23" name="StsGantryCrane" text="Ship-to-Shore gantry crane (WCID 4000051)" />
+      <value value="24" name="RmgYardCrane" text="Rail-mounted gantry yard crane (WCID 4000052)" />
+      <value value="25" name="RtgYardCrane" text="Rubber-tired gantry yard crane (WCID 4000053)" />
+      <value value="26" name="TerminalTractorShuttle" text="Marine terminal yard shuttle tractor (WCID 4000054)" />
+      <value value="27" name="ReeferRackBay" text="Marine terminal 3-tier powered reefer rack bay (WCID 4000055)" />
+      <value value="28" name="QuayBollard" text="Quay mooring bollard (WCID 4000056)" />
+      <value value="29" name="MarineFender" text="Quay marine fender (WCID 4000057)" />
+      <value value="30" name="IsoReefer20" text="ISO 20ft refrigerated container 22R1 5kW (WCID 4000060)" />
+      <value value="31" name="IsoReefer40HC" text="ISO 40ft high-cube refrigerated container 45R1 6kW (WCID 4000061)" />
+      <value value="32" name="IsoTank20" text="ISO 20ft liquid tank container 22T1 (WCID 4000062)" />
+      <value value="33" name="IsoGasTank20" text="ISO 20ft pressurized gas tank container 22K2 (WCID 4000063)" />
+      <value value="34" name="IsoDryBulk20" text="ISO 20ft dry bulk container 22B0 (WCID 4000064)" />
+      <value value="35" name="IsoOpenTop20" text="ISO 20ft open-top container 22U1 (WCID 4000065)" />
+      <value value="36" name="IsoFlatRack20" text="ISO 20ft flat-rack container 22P1 (WCID 4000066)" />
+      <value value="37" name="IsoFlatRack40" text="ISO 40ft flat-rack container 42P1 (WCID 4000067)" />
+      <value value="38" name="GprScanner" text="Ground-penetrating radar prospecting pallet (WCID 4000070)" />
+      <value value="39" name="VibroseisSeismic" text="Vibroseis seismic survey pallet (WCID 4000071)" />
+      <value value="40" name="DiamondCoreDrill" text="Diamond core drill prospecting rig pallet (WCID 4000072)" />
+      <value value="41" name="MobileAssayLab" text="Mobile geochemical assay lab pallet (WCID 4000073)" />
+      <value value="42" name="CoreSampleCrate" text="Sealed core sample transport crate (WCID 4000074)" />
+      <value value="43" name="BoreholeMiner" text="Hard-rock borehole miner skid (WCID 4000075)" />
+      <value value="44" name="JawCrusher" text="Primary jaw crusher skid (WCID 4000076)" />
+      <value value="45" name="Concentrator" text="Ore froth-flotation concentrator skid (WCID 4000077)" />
+      <value value="46" name="RotaryOilRig" text="Rotary oil drilling rig skid (WCID 4000078)" />
+      <value value="47" name="PumpjackTree" text="Pumpjack wellhead tree skid (WCID 4000079)" />
+      <value value="48" name="ThreePhaseSeparator" text="Three-phase oil/gas/water separator skid (WCID 4000080)" />
+      <value value="49" name="AduRefinery" text="Atmospheric distillation unit refinery skid (WCID 4000081)" />
+      <value value="50" name="HdtVduDewaxer" text="Hydrotreater / VDU / solvent dewaxer skid (WCID 4000082)" />
+      <value value="51" name="PyroSmelter" text="Pyrometallurgical smelter skid (WCID 4000083)" />
+      <value value="52" name="ContactAcidWorks" text="Contact sulfuric acid plant skid (WCID 4000084)" />
+      <value value="53" name="BioProcessorTannery" text="Cold-chain bio-processor / tannery skid (WCID 4000085)" />
+      <value value="54" name="IndustrialGenset150kW" text="150 kW industrial diesel/fuel generator skid (WCID 4000086)" />
+      <value value="55" name="IndustrialBess18MJ" text="18 MJ industrial battery energy storage skid (WCID 4000087)" />
+      <value value="56" name="TownControlNode" text="Town Control Node civic capture anchor (WCID 4000090)" />
+      <value value="57" name="TownDepotApron" text="Town Depot supply apron (WCID 4000091)" />
+      <value value="58" name="ForwardSiegeBeacon" text="Forward Siege Beacon (WCID 4000092)" />
+      <value value="59" name="TownMint" text="Town Mint pyreal coinage press (WCID 4000093)" />
+      <value value="60" name="TownWorkshop" text="Town Workshop fabrication skid (WCID 4000094)" />
+      <value value="61" name="PublicCommonsStarterHearth" text="Public Commons Starter Hearth 0 kW indestructible (WCID 4000095)" />
     </enum>
     <enum name="PalletSize" parent="byte">
       <value value="0" name="None" />
@@ -266,9 +330,11 @@
   <types>
     <type name="sbyte" primitive="sbyte" />
     <type name="short" primitive="short" />
+    <type name="ulong" primitive="ulong" />
+    <type name="long" primitive="long" />
     <type name="VehicleHeader" text="Starts every HBV1 payload">
       <field type="uint" name="Tag" text="0x31564248 = the bytes 'H' 'B' 'V' '1'" />
-      <field type="ushort" name="Version" text="the writer's protocol version: 7 (1..6 from older writers)" />
+      <field type="ushort" name="Version" text="the writer's protocol version: 8 (1..7 from older writers)" />
       <field type="ushort" name="Reserved" text="0" />
     </type>
     <type name="VehicleSeatDef">
@@ -403,6 +469,59 @@
       <field type="float" name="Heading" />
       <field type="float" name="TillerAngle" />
     </type>
+    <type name="Economy_SiegeAction" queue="Weenie" type="0x0912" text="v8: Client siege / depot supply / control node action">
+      <field type="VehicleHeader" name="Header" />
+      <field type="uint" name="TownId" />
+      <field type="ObjectId" name="BeaconGuid" />
+      <field type="byte" name="Action" text="1=ClaimControlRing, 2=DepositSupply, 3=DeployBeacon, 4=WithdrawEscrow" />
+      <field type="byte" name="Flags" />
+      <field type="ushort" name="Reserved" />
+      <field type="uint" name="SupplyPoints" />
+      <field type="uint" name="OriginLandblock" text="provenance landblock for >=1,500m check" />
+    </type>
+    <type name="Industry_Prospecting" queue="Weenie" type="0x0913" text="v8: Client 4-stage subsurface prospecting tool action">
+      <field type="VehicleHeader" name="Header" />
+      <field type="ObjectId" name="ToolGuid" />
+      <field type="DeployableKind" name="ToolKind" text="38=GprScanner, 39=VibroseisSeismic, 40=DiamondCoreDrill, 41=MobileAssayLab" />
+      <field type="byte" name="Mode" text="1=Scan, 2=Drill, 3=Assay, 4=PackCrate" />
+      <field type="byte" name="Reserved0" />
+      <field type="ushort" name="Reserved1" />
+      <field type="LandcellId" name="Cell" />
+      <field type="Vector3" name="Position" text="landblock-local" />
+    </type>
+    <type name="Industry_FacilityAction" queue="Weenie" type="0x0914" text="v8: Client extraction / refining / mint / workshop skid action">
+      <field type="VehicleHeader" name="Header" />
+      <field type="ObjectId" name="FacilityGuid" />
+      <field type="byte" name="Action" text="1=Start, 2=Stop, 3=SelectRecipe, 4=LoadInput, 5=CollectOutput" />
+      <field type="byte" name="Reserved0" />
+      <field type="ushort" name="Reserved1" />
+      <field type="uint" name="RecipeId" />
+      <field type="uint" name="Param" />
+    </type>
+    <type name="Logistics_ConvoyOrder" queue="Weenie" type="0x0915" text="v8: Client overland or Outer Ocean convoy dispatch / order">
+      <field type="VehicleHeader" name="Header" />
+      <field type="ulong" name="ConvoyId" />
+      <field type="byte" name="Action" text="1=Dispatch, 2=Reroute, 3=Abort, 4=LoadContainer, 5=UnloadContainer" />
+      <field type="VehicleClass" name="VehicleClass" />
+      <field type="ushort" name="Flags" />
+      <field type="uint" name="OriginTownId" />
+      <field type="uint" name="DestTownId" />
+      <field type="DeployableKind" name="ContainerKind" />
+      <field type="uint" name="CommodityId" />
+    </type>
+    <type name="Economy_MonarchOrder" queue="Weenie" type="0x0916" text="v8: Client monarch governance / tariff / procurement work-order command">
+      <field type="VehicleHeader" name="Header" />
+      <field type="ulong" name="OrderId" />
+      <field type="uint" name="TownId" />
+      <field type="byte" name="Action" text="1=CreateBounty, 2=CancelBounty, 3=SetTariff, 4=SetTillCap, 5=SetDiplomacy" />
+      <field type="byte" name="OrderType" />
+      <field type="ushort" name="Flags" />
+      <field type="ObjectId" name="TargetGuid" />
+      <field type="ObjectId" name="ItemWcid" />
+      <field type="uint" name="Quantity" />
+      <field type="ulong" name="RewardPyreals" />
+      <field type="float" name="ParamF32" />
+    </type>
   </gameactions>
   <gameevents>
     <type name="Vehicle_CapabilitiesAck" queue="UIQueue" type="0x0900" text="Answers ClientCapabilities">
@@ -460,7 +579,7 @@
       <field type="float" name="FifthWheelOffsetY" since="6" default="0" text="local Y of fifth-wheel pivot (m; 0 if none)" />
       <field type="float" name="FifthWheelOffsetZ" since="6" default="0" text="local Z of fifth-wheel skid plate (m)" />
       <field type="byte" name="LiveryId" since="6" default="0" />
-      <field type="byte" name="VehicleClass" since="6" default="0" text="0=legacy, 1=air, 2=light ground, 3=heavy tractor" />
+      <field type="VehicleClass" name="VehicleClass" since="6" default="0" text="0=legacy, 1=air, 2=light ground, 3=heavy tractor, 4=container ship feeder" />
       <field type="ushort" name="Reserved4" since="6" default="0" />
     </type>
     <type name="Vehicle_Seat" queue="UIQueue" type="0x0904" text="A seat changed (or a board was refused)">
@@ -652,6 +771,98 @@
       <field type="byte" name="Reserved" />
       <field type="ObjectId" name="CarriedWcid" />
       <field type="ObjectId" name="OwnerGuid" />
+    </type>
+    <type name="Economy_TownState" queue="UIQueue" type="0x0911" text="v8: Authoritative town control, treasury, escrow, supply &amp; tariff telemetry">
+      <field type="VehicleHeader" name="Header" />
+      <field type="uint" name="TownId" />
+      <field type="byte" name="ControlState" text="0=Unclaimed, 1=Held, 2=Breaching, 3=ContestedHold, 4=Receivership" />
+      <field type="uint" name="OwnerMonarchId" />
+      <field type="uint" name="AttackerMonarchId" />
+      <field type="byte" name="Flags" />
+      <field type="ushort" name="Reserved" />
+      <field type="uint" name="AnchorLandblock" />
+      <field type="uint" name="HoldElapsedSec" />
+      <field type="uint" name="SupplyMeterSec" />
+      <field type="uint" name="StarvingSec" />
+      <field type="ulong" name="TreasuryPyreals" />
+      <field type="ulong" name="EscrowPyreals" />
+      <field type="float" name="TariffBuyMul" />
+      <field type="float" name="TariffSellMul" />
+    </type>
+    <type name="Economy_SiegeEvent" queue="UIQueue" type="0x0912" text="v8: Discrete siege state transition / supply / capture spoils event">
+      <field type="VehicleHeader" name="Header" />
+      <field type="uint" name="TownId" />
+      <field type="byte" name="Kind" text="1=BreachStarted, 2=ContestedHold, 3=SupplyDeposited, 4=StarvationWarning, 5=Collapsed, 6=Captured, 7=Receivership" />
+      <field type="byte" name="ControlState" />
+      <field type="ushort" name="Reserved" />
+      <field type="uint" name="OwnerMonarchId" />
+      <field type="uint" name="AttackerMonarchId" />
+      <field type="uint" name="HoldElapsedSec" />
+      <field type="uint" name="SupplyMeterSec" />
+      <field type="uint" name="StarvingSec" />
+      <field type="ulong" name="TreasurySpoils" />
+    </type>
+    <type name="Industry_SurveyResult" queue="UIQueue" type="0x0913" text="v8: Subsurface deposit survey / assay result">
+      <field type="VehicleHeader" name="Header" />
+      <field type="ulong" name="DepositId" />
+      <field type="uint" name="LandblockId" />
+      <field type="DeployableKind" name="ToolKind" />
+      <field type="byte" name="Flags" text="0x01=Attenuated, 0x02=Assayed, 0x04=Depleted" />
+      <field type="byte" name="TerrainCode" />
+      <field type="byte" name="ResourceKind" />
+      <field type="byte" name="Reserved" />
+      <field type="float" name="DepthM" />
+      <field type="uint" name="GradeBps" />
+      <field type="float" name="ApiGravity" />
+      <field type="uint" name="SulfurBps" />
+      <field type="float" name="RemainingTonnes" />
+    </type>
+    <type name="Industry_FacilityState" queue="UIQueue" type="0x0914" text="v8: Industrial extraction / refining / mint / workshop skid state">
+      <field type="VehicleHeader" name="Header" />
+      <field type="ObjectId" name="FacilityGuid" />
+      <field type="DeployableKind" name="Kind" />
+      <field type="uint" name="TownId" />
+      <field type="ulong" name="DepositId" />
+      <field type="uint" name="OwnerMonarchId" />
+      <field type="byte" name="Status" />
+      <field type="byte" name="OnlineFlags" />
+      <field type="ushort" name="Reserved" />
+      <field type="float" name="PowerWatts" />
+      <field type="float" name="BufferJoules" />
+      <field type="float" name="ProgressPct" />
+      <field type="uint" name="RecipeId" />
+    </type>
+    <type name="Logistics_ConvoyState" queue="UIQueue" type="0x0915" text="v8: Dual-LOD logistics convoy state telemetry (Macro 1 Hz / Micro materialization)">
+      <field type="VehicleHeader" name="Header" />
+      <field type="ulong" name="ConvoyId" />
+      <field type="uint" name="OwnerMonarchId" />
+      <field type="ObjectId" name="VehicleGuid" />
+      <field type="VehicleClass" name="VehicleClass" />
+      <field type="byte" name="LodState" text="0=Macro, 1=Micro" />
+      <field type="byte" name="Status" />
+      <field type="byte" name="Reserved" />
+      <field type="uint" name="OriginTownId" />
+      <field type="uint" name="DestTownId" />
+      <field type="uint" name="OriginLandblock" />
+      <field type="float" name="SplineSM" />
+      <field type="float" name="FuelLiters" />
+      <field type="LandcellId" name="Cell" />
+      <field type="Vector3" name="Position" text="landblock-local" />
+      <field type="float" name="Heading" />
+    </type>
+    <type name="Economy_MonarchOrderState" queue="UIQueue" type="0x0916" text="v8: Monarch order / bounty / tariff policy state update">
+      <field type="VehicleHeader" name="Header" />
+      <field type="ulong" name="OrderId" />
+      <field type="uint" name="MonarchId" />
+      <field type="uint" name="TownId" />
+      <field type="byte" name="OrderType" />
+      <field type="byte" name="Status" />
+      <field type="ushort" name="Flags" />
+      <field type="ObjectId" name="ClaimedByGuid" />
+      <field type="ObjectId" name="ItemWcid" />
+      <field type="uint" name="Quantity" />
+      <field type="ulong" name="RewardPyreals" />
+      <field type="float" name="ValueF32" />
     </type>
   </gameevents>
 </schema>

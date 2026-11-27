@@ -66,9 +66,21 @@ import { DeployableAudioManager } from "./deployable_audio.js";
 import { createWarehouseManager } from "./warehouse_manager.js";
 import { createPortAudio, portAudioEnabled } from "./port_audio.js";
 import { createPortTerminalManager } from "./port_terminal_manager.js";
-import { createShipManager } from "./ship_manager.js";
-import { PORT_ORIGIN, WAREHOUSE_PORT_ORIGIN } from "./port_specs.js";
+import { createShipManager, isExcludedItem2Convoy } from "./ship_manager.js";
+import {
+  PORT_ORIGIN,
+  WAREHOUSE_PORT_ORIGIN,
+  PORT_WCID,
+  PORT_DEPLOYABLE_KIND,
+  PORT_VEHICLE_CLASS,
+  PORT_LOCOMOTION,
+} from "./port_specs.js";
 import { RadarScopeHud } from "./radar_scope.js";
+import {
+  ECONOMY_KIND_TO_WCID,
+  resolveEconomyWcid,
+} from "./economy_specs.js";
+import { createEconomyHud } from "./economy_hud.js";
 
 export { vehicleAudioEnabled };
 export const CAP_OBSERVE = 0x1;
@@ -186,6 +198,24 @@ function isSemiProfile(p) {
 function isSemiVehicle(v) {
   return Boolean(v && (isSemiProfile(v.profile) || isSemiProfile(v.params)));
 }
+function isMarineProfile(p) {
+  return Boolean(
+    p && (
+      (p.locomotion | 0) === PORT_LOCOMOTION.Marine ||
+      (p.vehicleClass | 0) === PORT_VEHICLE_CLASS.ContainerShipFeeder ||
+      p.profileKey === "container-ship-feeder"
+    )
+  );
+}
+function isMarineVehicle(v) {
+  return Boolean(
+    v && (
+      (v.locomotion | 0) === PORT_LOCOMOTION.Marine ||
+      isMarineProfile(v.profile) ||
+      isMarineProfile(v.params)
+    )
+  );
+}
 function isGroundVehicle(v) {
   return Boolean(v && (v.locomotion === 2 || v.profile?.locomotion === 2 || v.profile?.profileKey === "jeep-mb" || isSemiVehicle(v) || v.params?.locomotion === 2));
 }
@@ -218,6 +248,62 @@ function cellToLandblockId(cell) {
     ? ((raw & 0xffff8000) >>> 0)
     : (((raw >>> 16) << 16) >>> 0);
 }
+
+/**
+ * Pure-Node-safe procedural model factory for all HBV1 deployables & specialized ISO containers
+ * (WCID 4000002, 4000010..4000017, 4000020..4000022, 4000060..4000095 / DeployableKind 1..12, 30..61).
+ * Returns a THREE.Group directly (with `root.userData.modelController` and `root.userData.dispose`),
+ * or `null` for unknown/invalid WCIDs.
+ */
+export function buildEconomyModel(three, wcidOrKind, options = {}) {
+  if (!three) return null;
+  let wcid = null;
+  if (typeof wcidOrKind === "number" && Number.isFinite(wcidOrKind)) {
+    const n = Math.trunc(wcidOrKind);
+    if (n === 4000002 || n === 1) wcid = 4000002;
+    else if (n >= 4000010 && n <= 4000017) wcid = n;
+    else if (n >= 2 && n <= 9) wcid = 4000008 + n;
+    else if (n === 4000020 || n === 10) wcid = 4000020;
+    else if (n === 4000021 || n === 11) wcid = 4000021;
+    else if (n === 4000022 || n === 12) wcid = 4000022;
+    else wcid = resolveEconomyWcid(n);
+  } else if (typeof wcidOrKind === "string") {
+    const trimmed = wcidOrKind.trim();
+    if (/^\d+$/.test(trimmed)) return buildEconomyModel(three, Number.parseInt(trimmed, 10), options);
+    const low = trimmed.toLowerCase();
+    if (low === "radarstation") wcid = 4000002;
+    else if (low === "isocontainer20" || low === "20ft" || low === "22g1") wcid = 4000020;
+    else if (low === "isocontainer40" || low === "40ft" || low === "42g1") wcid = 4000021;
+    else if (low === "isocontainer40hc" || low === "40hc" || low === "45g1") wcid = 4000022;
+    else wcid = resolveEconomyWcid(trimmed);
+  }
+
+  let built = null;
+  try {
+    if (!wcid && typeof wcidOrKind === "string") {
+      built = buildDeployable(three, wcidOrKind, options);
+    } else if (!wcid) {
+      return null;
+    } else if (wcid === 4000002) {
+      built = buildDeployedRadar(three, options);
+    } else if ((wcid >= 4000020 && wcid <= 4000022) || (wcid >= 4000060 && wcid <= 4000067)) {
+      built = buildIsoContainer(three, wcid, options);
+    } else {
+      built = buildDeployable(three, wcid, options);
+    }
+  } catch (_) {
+    return null;
+  }
+
+  if (!built || !built.root) return null;
+  built.root.userData = built.root.userData || {};
+  if (wcid) built.root.userData.wcid = wcid;
+  built.root.userData.modelController = built;
+  built.root.userData.dispose = () => built.dispose?.();
+  return built.root;
+}
+
+export const buildDeployableModel = buildEconomyModel;
 
 export function initVehicles(liveOrDeps = {}, opts = {}) {
   if (liveOrDeps && liveOrDeps.liveScene3d) {
@@ -401,6 +487,43 @@ export function installVehicles(deps = {}) {
   let latestGroundContacts = [];
   let scopeMounted = false;
 
+  const economyState = {
+    towns: new Map(),
+    siegeEvents: [],
+    surveys: new Map(),
+    facilities: new Map(),
+    convoys: new Map(),
+    orders: new Map(),
+    lastUpdatedAt: 0,
+  };
+  const economyHud = createEconomyHud({ document: win.document });
+  function economySnapshot() {
+    return {
+      towns: [...economyState.towns.values()],
+      siegeEvents: economyState.siegeEvents.slice(),
+      surveys: [...economyState.surveys.values()],
+      facilities: [...economyState.facilities.values()],
+      convoys: [...economyState.convoys.values()],
+      orders: [...economyState.orders.values()],
+      lastUpdatedAt: economyState.lastUpdatedAt,
+    };
+  }
+  function refreshEconomyHud(autoShow = false) {
+    const snap = economySnapshot();
+    if (autoShow && !economyHud.isVisible()) economyHud.show(snap);
+    else economyHud.update(snap);
+  }
+  function toU64BigInt(v) {
+    if (typeof v === "bigint") return v < 0n ? 0n : v;
+    if (typeof v === "string") {
+      const t = v.trim();
+      if (/^\d+$/.test(t)) return BigInt(t);
+    }
+    const n = Number(v);
+    if (!Number.isFinite(n) || n <= 0) return 0n;
+    return BigInt(Math.trunc(n));
+  }
+
   const KIND_TO_WCID = Object.freeze({
     [DEPLOYABLE_KINDS.FluxPod]: DEPLOYABLE_WCID.FluxPod,
     [DEPLOYABLE_KINDS.SolarPanels]: DEPLOYABLE_WCID.SolarPanels,
@@ -410,6 +533,14 @@ export function installVehicles(deps = {}) {
     [DEPLOYABLE_KINDS.GroundRadar]: DEPLOYABLE_WCID.GroundRadar,
     [DEPLOYABLE_KINDS.MortarTurret]: DEPLOYABLE_WCID.MortarTurret,
     [DEPLOYABLE_KINDS.HeavyLaserTurret]: DEPLOYABLE_WCID.HeavyLaserTurret,
+    [PORT_DEPLOYABLE_KIND.StsGantryCrane]: PORT_WCID.StsGantryCrane,
+    [PORT_DEPLOYABLE_KIND.RmgYardCrane]: PORT_WCID.RmgYardCrane,
+    [PORT_DEPLOYABLE_KIND.RtgYardCrane]: PORT_WCID.RtgYardCrane,
+    [PORT_DEPLOYABLE_KIND.TerminalTractorShuttle]: PORT_WCID.TerminalTractorShuttle,
+    [PORT_DEPLOYABLE_KIND.ReeferRackBay]: PORT_WCID.ReeferRackBay,
+    [PORT_DEPLOYABLE_KIND.QuayBollard]: PORT_WCID.QuayBollard,
+    [PORT_DEPLOYABLE_KIND.MarineFender]: PORT_WCID.MarineFender,
+    ...Object.fromEntries(Object.entries(ECONOMY_KIND_TO_WCID).filter(([k]) => Number(k) >= 38)),
   });
 
   function ensureDeployableEntry(guid, kindOrWcid, initialFlags = 0) {
@@ -446,8 +577,16 @@ export function installVehicles(deps = {}) {
     return entry;
   }
 
+  const hiddenPortStandIns = new Set();
+  const pendingPortStandIns = new Set();
+
   function removeDeployableEntry(guid) {
     const g = guid >>> 0;
+    try { portTerminalManager?.onDeployableDespawn?.(g); } catch (_) {}
+    pendingPortStandIns.delete(g);
+    if (hiddenPortStandIns.delete(g)) {
+      try { em()?.setFilmHidden?.(g, false); } catch (_) {}
+    }
     const entry = deployables.get(g);
     try { deployableAudio?.stopGeneratorHum?.(g); } catch (_) {}
     if (!entry) return;
@@ -462,18 +601,50 @@ export function installVehicles(deps = {}) {
     10: 4000020,
     11: 4000021,
     12: 4000022,
+    30: 4000060,
+    31: 4000061,
+    32: 4000062,
+    33: 4000063,
+    34: 4000064,
+    35: 4000065,
+    36: 4000066,
+    37: 4000067,
     [CONTAINER_WCID?.IsoContainer20 ?? 4000020]: 4000020,
     [CONTAINER_WCID?.IsoContainer40 ?? 4000021]: 4000021,
     [CONTAINER_WCID?.IsoContainer40HC ?? 4000022]: 4000022,
+    4000060: 4000060,
+    4000061: 4000061,
+    4000062: 4000062,
+    4000063: 4000063,
+    4000064: 4000064,
+    4000065: 4000065,
+    4000066: 4000066,
+    4000067: 4000067,
   });
 
   const CONTAINER_WCID_TO_KIND = Object.freeze({
     4000020: 10,
     4000021: 11,
     4000022: 12,
+    4000060: 30,
+    4000061: 31,
+    4000062: 32,
+    4000063: 33,
+    4000064: 34,
+    4000065: 35,
+    4000066: 36,
+    4000067: 37,
     10: 10,
     11: 11,
     12: 12,
+    30: 30,
+    31: 31,
+    32: 32,
+    33: 33,
+    34: 34,
+    35: 35,
+    36: 36,
+    37: 37,
   });
 
   function isSideliftTransferActive(tr) {
@@ -1382,6 +1553,27 @@ export function installVehicles(deps = {}) {
 
     let hasActiveAirRadar = false;
     let hasActiveGroundRadar = false;
+    if (pendingPortStandIns.size > 0) {
+      const map = em()?.entityMap;
+      if (map) {
+        for (const g of [...pendingPortStandIns]) {
+          const inEm = map.get(g);
+          if (inEm) {
+            try {
+              if (inEm._filmHidden !== true) {
+                if (em()?.setFilmHidden?.(g, true)) {
+                  hiddenPortStandIns.add(g);
+                  pendingPortStandIns.delete(g);
+                }
+              } else {
+                hiddenPortStandIns.add(g);
+                pendingPortStandIns.delete(g);
+              }
+            } catch (_) {}
+          }
+        }
+      }
+    }
     for (const entry of deployables.values()) {
       const inEm = em()?.entityMap?.get(entry.guid);
       if (inEm) {
@@ -1409,7 +1601,7 @@ export function installVehicles(deps = {}) {
             sunPitch: st.sunPitch !== undefined ? st.sunPitch : sunPitchRad,
             sunHeading: st.sunHeading !== undefined ? st.sunHeading : sunHeadingRad,
             fuelSecondsRemaining: st.fuelSec ?? st.fuelSecondsRemaining ?? 0,
-            online: st.onlineFlags ? Boolean(st.onlineFlags & 1) : Boolean(st.online),
+            online: st.onlineFlags !== undefined ? Boolean(st.onlineFlags & 1) : Boolean(st.online),
             capacitorJoules: st.energyJoules ?? st.capacitorJoules ?? 0,
             deployElevation: st.elevation ?? st.deployElevation,
             riseTimeSec: st.riseTimeSec,
@@ -1418,6 +1610,12 @@ export function installVehicles(deps = {}) {
             rollRad: st.roll ?? st.rollRad,
             ammoCount: st.ammo ?? st.ammoCount,
             recoilSec: st.recoilSec ?? 0,
+            powerWatts: st.powerWatts,
+            bufferJoules: st.bufferJoules,
+            progressPct: st.progressPct,
+            recipeId: st.recipeId,
+            status: st.status,
+            onlineFlags: st.onlineFlags,
           });
         }
       } catch (_) {}
@@ -1501,6 +1699,14 @@ export function installVehicles(deps = {}) {
     promptVehicle = null;
     promptText = null;
     try { osd.prompt(null); osd.hide(); } catch (_) {}
+    economyState.towns.clear();
+    economyState.siegeEvents.length = 0;
+    economyState.surveys.clear();
+    economyState.facilities.clear();
+    economyState.convoys.clear();
+    economyState.orders.clear();
+    economyState.lastUpdatedAt = 0;
+    try { economyHud.hide(); } catch (_) {}
     latestAirContacts = [];
     latestGroundContacts = [];
     try {
@@ -1521,6 +1727,13 @@ export function installVehicles(deps = {}) {
       if (why === "dispose") deployableAudio?.dispose?.();
       try { warehouseManager?.stopScenarios?.(); } catch (_) {}
       try { portTerminalManager?.stopScenarios?.(); } catch (_) {}
+      try { portTerminalManager?.clearServerDeployables?.(); } catch (_) {}
+      for (const g of hiddenPortStandIns) {
+        try { em()?.setFilmHidden?.(g, false); } catch (_) {}
+      }
+      hiddenPortStandIns.clear();
+      pendingPortStandIns.clear();
+      try { shipManager?.clearServerConvoys?.(); } catch (_) {}
       try { shipManager?.exit?.(); } catch (_) {}
       try { portAudio?.stop?.(); if (why === "dispose") portAudio?.dispose?.(); } catch (_) {}
     } catch (_) {}
@@ -1625,6 +1838,7 @@ export function installVehicles(deps = {}) {
     portAudio,
     terminalManager: portTerminalManager,
     sh,
+    sendConvoyOrder: (opts) => api.economy.convoyOrder(opts),
     getLocalPlayerPos: () => {
       const me = em()?.entityMap?.get(localGuid());
       if (me?.root?.position) return [me.root.position.x, me.root.position.y, me.root.position.z];
@@ -1714,6 +1928,13 @@ export function installVehicles(deps = {}) {
    */
   function drawVehicle(v, pose, q, opts = {}) {
     writeEntity(v.guid, pose.x, pose.y, pose.z, q, true);
+    if (isMarineVehicle(v)) {
+      const inEm = em()?.entityMap?.get(v.guid);
+      if (inEm && (!v.standInHidden || inEm._filmHidden !== true)) {
+        try { if (em()?.setFilmHidden?.(v.guid, true)) v.standInHidden = true; } catch (_) {}
+      }
+      return true;
+    }
     const isGround = isGroundVehicle(v);
     if (isGround) {
       const inEm = em()?.entityMap?.get(v.guid);
@@ -1822,6 +2043,7 @@ export function installVehicles(deps = {}) {
   }
 
   function handleMsg(m) {
+    if (!m || typeof m !== "object") return;
     stats.msgs++;
     switch (m.type) {
       case "ack":
@@ -1832,7 +2054,24 @@ export function installVehicles(deps = {}) {
         const v = vehicleOf(m.vehicle);
         v.profile = m;
         v.lastMsgAt = nowSec();
-        if (m.locomotion === 2 || m.profileKey === "jeep-mb" || isSemiProfile(m)) {
+        if (isMarineProfile(m)) {
+          v.locomotion = PORT_LOCOMOTION.Marine;
+          v.vehicleClass = (m.vehicleClass | 0) || PORT_VEHICLE_CLASS.ContainerShipFeeder;
+          v.params = {
+            locomotion: PORT_LOCOMOTION.Marine,
+            vehicleClass: v.vehicleClass,
+            vMin: m.vMin ?? 0,
+            vCruise: m.vCruise ?? 8,
+            vMax: m.vMax ?? 12,
+            leadSeconds: m.leadSeconds ?? 6,
+            ...m,
+          };
+          const inEm = em()?.entityMap?.get(v.guid);
+          if (inEm && (!v.standInHidden || inEm._filmHidden !== true)) {
+            try { if (em()?.setFilmHidden?.(v.guid, true)) v.standInHidden = true; } catch (_) {}
+          }
+          try { shipManager?.onServerVehicleProfile?.(m); } catch (_) {}
+        } else if (m.locomotion === 2 || m.profileKey === "jeep-mb" || isSemiProfile(m)) {
           v.locomotion = 2;
           v.params = groundParamsFromProfile(m);
           v.params.towMassMul = computeTowMassMul(v);
@@ -1846,7 +2085,7 @@ export function installVehicles(deps = {}) {
         if (live?.renderer) {
           try { if (m.weapons?.length) fx.warm?.(); chutes?.warm?.(); aeroFx?.warm?.(); } catch (_) { /* best effort */ }
         }
-        if (!pilot && !passenger) {
+        if (!isMarineVehicle(v) && !pilot && !passenger) {
           const me = localGuid();
           if (me) {
             if ((v.seats[0] >>> 0) === me) {
@@ -1907,6 +2146,22 @@ export function installVehicles(deps = {}) {
         v.last = m;
         v.lastMsgAt = nowSec();
         stats.states++;
+        if (isMarineVehicle(v)) {
+          const [wx, wy, wz] = m.cell
+            ? FM.toGlobal(m.cell >>> 0, m.x ?? 0, m.y ?? 0, m.z ?? 0)
+            : [m.x ?? 0, m.y ?? 0, m.z ?? 0];
+          try {
+            shipManager?.onServerVehicleState?.(m, {
+              x: wx,
+              y: wy,
+              z: wz,
+              heading: Number.isFinite(m.heading) ? m.heading : 0,
+              pitch: Number.isFinite(m.pitch) ? m.pitch : 0,
+              roll: Number.isFinite(m.bank) ? m.bank : 0,
+              speed: Number.isFinite(m.speed) ? m.speed : 0,
+            });
+          } catch (_) {}
+        }
         if (v.params && isGroundVehicle(v)) {
           const mul = computeTowMassMul(v);
           v.params.towMassMul = mul;
@@ -1983,6 +2238,10 @@ export function installVehicles(deps = {}) {
           if (m.subject) removePalletJackEntry(m.subject >>> 0);
           removeDeployableEntry(m.vehicle >>> 0);
           if (m.subject) removeDeployableEntry(m.subject >>> 0);
+          try { shipManager?.onServerVehicleDespawn?.(m.vehicle >>> 0); } catch (_) {}
+          if (m.subject) {
+            try { shipManager?.onServerVehicleDespawn?.(m.subject >>> 0); } catch (_) {}
+          }
         } else if (m.kind === 19) { // trailerHitched
           if (myVehicle || (passenger && passenger.vehicle === v)) {
             try { groundAudio?.airBrakeHiss?.({ kind: "hitch" }); } catch (_) {}
@@ -2135,9 +2394,33 @@ export function installVehicles(deps = {}) {
         break;
       }
       case "deployable_state": {
-        const entry = ensureDeployableEntry(m.deployable >>> 0, m.kind, m.onlineFlags ?? 0);
+        const dGuid = (m.deployable >>> 0);
+        const dKind = (m.kind ?? 0) | 0;
+        const [wx, wy, wz] = m.cell ? FM.toGlobal(m.cell >>> 0, m.x ?? 0, m.y ?? 0, m.z ?? 0) : [m.x ?? 0, m.y ?? 0, m.z ?? 0];
+        if (dKind >= 23 && dKind <= 29) {
+          if (dGuid) {
+            const inEm = em()?.entityMap?.get(dGuid);
+            if (inEm) {
+              try {
+                if (inEm._filmHidden !== true) {
+                  if (em()?.setFilmHidden?.(dGuid, true)) {
+                    hiddenPortStandIns.add(dGuid);
+                    pendingPortStandIns.delete(dGuid);
+                  }
+                } else {
+                  hiddenPortStandIns.add(dGuid);
+                  pendingPortStandIns.delete(dGuid);
+                }
+              } catch (_) {}
+            } else {
+              pendingPortStandIns.add(dGuid);
+            }
+          }
+          try { portTerminalManager?.onDeployableState?.(m, [wx, wy, wz]); } catch (_) {}
+          break;
+        }
+        const entry = ensureDeployableEntry(dGuid, m.kind, m.onlineFlags ?? 0);
         if (entry) {
-          const [wx, wy, wz] = m.cell ? FM.toGlobal(m.cell, m.x, m.y, m.z) : [m.x, m.y, m.z];
           entry.model.root.position.set(wx, wy, wz);
           if (Number.isFinite(m.heading)) entry.model.root.rotation.z = -m.heading;
           entry.last = m;
@@ -2413,6 +2696,83 @@ export function installVehicles(deps = {}) {
         }
         break;
       }
+      case "economy_town_state": {
+        const tid = (m.townId ?? 0) >>> 0;
+        economyState.towns.set(tid, { ...m, townId: tid });
+        economyState.lastUpdatedAt = nowSec();
+        refreshEconomyHud(true);
+        break;
+      }
+      case "economy_siege_event": {
+        const tid = (m.townId ?? 0) >>> 0;
+        economyState.siegeEvents.push({ ...m, townId: tid });
+        if (economyState.siegeEvents.length > 64) economyState.siegeEvents.shift();
+        economyState.lastUpdatedAt = nowSec();
+        const k = m.kind | 0;
+        if (k === 1) flashPrompt(`Town #${tid} Siege Breach Started!`, 3500);
+        else if (k === 2) flashPrompt(`Town #${tid} Contested Hold — Escrow Frozen`, 3500);
+        else if (k === 4) flashPrompt(`Town #${tid} Siege Supply Critical!`, 3500);
+        else if (k === 5) flashPrompt(`Town #${tid} Siege Collapsed`, 3500);
+        else if (k === 6) flashPrompt(`Town #${tid} Captured! Spoils: ${m.treasurySpoils ?? 0}p`, 4000);
+        else if (k === 7) flashPrompt(`Town #${tid} Entered Insolvency Receivership`, 3500);
+        refreshEconomyHud(true);
+        break;
+      }
+      case "industry_survey_result": {
+        const key = String(m.depositId ?? 0);
+        economyState.surveys.set(key, { ...m });
+        economyState.lastUpdatedAt = nowSec();
+        refreshEconomyHud(true);
+        break;
+      }
+      case "industry_facility_state": {
+        const fGuid = (m.facilityGuid ?? 0) >>> 0;
+        economyState.facilities.set(fGuid, { ...m, facilityGuid: fGuid });
+        economyState.lastUpdatedAt = nowSec();
+        const dEntry = deployables.get(fGuid);
+        if (dEntry) {
+          dEntry.last = { ...(dEntry.last || {}), ...m };
+          try {
+            dEntry.model?.update?.({
+              simTimeSec: nowSec(),
+              online: Boolean((m.onlineFlags ?? 0) & 1),
+              onlineFlags: m.onlineFlags ?? 0,
+              powerWatts: m.powerWatts ?? 0,
+              bufferJoules: m.bufferJoules ?? 0,
+              progressPct: m.progressPct ?? 0,
+              recipeId: m.recipeId ?? 0,
+              status: m.status ?? 0,
+            });
+          } catch (_) {}
+        }
+        refreshEconomyHud(true);
+        break;
+      }
+      case "logistics_convoy_state": {
+        if (isExcludedItem2Convoy(m)) break;
+        const key = String(m.convoyId ?? 0);
+        const posArr = Array.isArray(m.position) && m.position.length >= 3
+          ? m.position
+          : [m.x ?? 0, m.y ?? 0, m.z ?? 0];
+        const cell = (m.cell ?? 0) >>> 0;
+        const [wx, wy, wz] = cell
+          ? FM.toGlobal(cell, posArr[0] ?? 0, posArr[1] ?? 0, posArr[2] ?? 0)
+          : [posArr[0] ?? 0, posArr[1] ?? 0, posArr[2] ?? 0];
+        economyState.convoys.set(key, { ...m, worldPos: [wx, wy, wz] });
+        economyState.lastUpdatedAt = nowSec();
+        if ((m.vehicleClass | 0) === PORT_VEHICLE_CLASS.ContainerShipFeeder) {
+          try { shipManager?.syncFromConvoyState?.(m, [wx, wy, wz]); } catch (_) {}
+        }
+        refreshEconomyHud(true);
+        break;
+      }
+      case "economy_monarch_order_state": {
+        const key = String(m.orderId ?? 0);
+        economyState.orders.set(key, { ...m });
+        economyState.lastUpdatedAt = nowSec();
+        refreshEconomyHud(true);
+        break;
+      }
       default:
         break;
     }
@@ -2428,6 +2788,7 @@ export function installVehicles(deps = {}) {
       stats.parseErrors++;
       return;
     }
+    if (!Array.isArray(arr)) return;
     for (const m of arr) handleMsg(m);
   }
 
@@ -2470,13 +2831,14 @@ export function installVehicles(deps = {}) {
 
   function makePredictor(v, m) {
     const isGround = v.locomotion === 2 || v.profile?.locomotion === 2 || m?.locomotion === 2;
+    const isMarine = isMarineVehicle(v) || (m?.locomotion | 0) === PORT_LOCOMOTION.Marine;
     return createPilotPredictor({
       params: v.params,
       ground,
       initial: stateFromMsg(m),
       vCap: m.vCap,
       startSeq: 1,
-      locomotion: isGround ? 2 : 1,
+      locomotion: isGround ? 2 : (isMarine ? PORT_LOCOMOTION.Marine : 1),
     });
   }
 
@@ -4001,7 +4363,7 @@ export function installVehicles(deps = {}) {
             profileKey: v.profile?.profileKey ?? "",
           });
         }
-      } else {
+      } else if (!isMarineVehicle(v)) {
         if (vehicleAudio) {
           _obsAudioList.push({
             id: v.guid,
@@ -4130,6 +4492,7 @@ export function installVehicles(deps = {}) {
     let bestD = BOARD_RANGE_M;
     for (const v of vehicles.values()) {
       if (!v.profile || !v.last) continue;
+      if (isMarineVehicle(v)) continue;
       const isGround = isGroundVehicle(v);
       if (isGround) {
         const speed = v.last.speed ?? 0;
@@ -4504,6 +4867,14 @@ export function installVehicles(deps = {}) {
         aeroFx: aeroFx ? aeroFx.stats() : { enabled: false },
         audio: vehicleAudio ? vehicleAudio.stats() : { enabled: false },
         chutes: chutes ? chutes.stats() : null,
+        economy: {
+          towns: economyState.towns.size,
+          siegeEvents: economyState.siegeEvents.length,
+          surveys: economyState.surveys.size,
+          facilities: economyState.facilities.size,
+          convoys: economyState.convoys.size,
+          orders: economyState.orders.size,
+        },
       };
     },
     vehicles: () => [...vehicles.values()],
@@ -4572,7 +4943,9 @@ export function installVehicles(deps = {}) {
     deployables: {
       list: () => [...deployables.values()].map((d) => ({
         guid: d.guid, wcid: d.wcid,
-        pos: [d.model.root.position.x, d.model.root.position.y, d.model.root.position.z],
+        pos: d.model?.root?.position
+          ? [d.model.root.position.x, d.model.root.position.y, d.model.root.position.z]
+          : (Array.isArray(d.pos) ? d.pos.slice() : [0, 0, 0]),
         last: d.last,
       })),
       spawnLocal(guid, wcidOrKind, worldPos, heading = 0, state = {}) {
@@ -5047,6 +5420,118 @@ export function installVehicles(deps = {}) {
     warehouse: warehouseManager,
     terminal: portTerminalManager,
     ship: shipManager,
+    economy: {
+      towns: () => [...economyState.towns.values()],
+      town: (id) => economyState.towns.get(id >>> 0) ?? null,
+      siegeEvents: () => economyState.siegeEvents.slice(),
+      surveys: () => [...economyState.surveys.values()],
+      facilities: () => [...economyState.facilities.values()],
+      convoys: () => [...economyState.convoys.values()],
+      orders: () => [...economyState.orders.values()],
+      state: () => economySnapshot(),
+      hud: economyHud,
+      siegeAction(opts) {
+        try {
+          if (!opts || typeof opts !== "object" || Array.isArray(opts)) return false;
+          const { townId = 0, beaconGuid = 0, action = 0, flags = 0, supplyPoints = 0, originLandblock = 0 } = opts;
+          const h = sh();
+          if (!h || typeof h.economySiegeAction !== "function") return false;
+          h.economySiegeAction(
+            townId >>> 0,
+            beaconGuid >>> 0,
+            action & 0xff,
+            flags & 0xff,
+            supplyPoints >>> 0,
+            originLandblock >>> 0
+          );
+          return true;
+        } catch (_) {
+          return false;
+        }
+      },
+      prospect(opts) {
+        try {
+          if (!opts || typeof opts !== "object" || Array.isArray(opts)) return false;
+          const { toolGuid = 0, toolKind = 38, mode = 1, cell = 0, x = 0, y = 0, z = 0 } = opts;
+          const h = sh();
+          if (!h || typeof h.industryProspecting !== "function") return false;
+          h.industryProspecting(
+            toolGuid >>> 0,
+            toolKind >>> 0,
+            mode & 0xff,
+            cell >>> 0,
+            Number(x) || 0,
+            Number(y) || 0,
+            Number(z) || 0
+          );
+          return true;
+        } catch (_) {
+          return false;
+        }
+      },
+      facilityAction(opts) {
+        try {
+          if (!opts || typeof opts !== "object" || Array.isArray(opts)) return false;
+          const { facilityGuid = 0, action = 1, recipeId = 0, param = 0 } = opts;
+          const h = sh();
+          if (!h || typeof h.industryFacilityAction !== "function") return false;
+          h.industryFacilityAction(
+            facilityGuid >>> 0,
+            action & 0xff,
+            recipeId >>> 0,
+            param >>> 0
+          );
+          return true;
+        } catch (_) {
+          return false;
+        }
+      },
+      convoyOrder(opts) {
+        try {
+          if (!opts || typeof opts !== "object" || Array.isArray(opts)) return false;
+          if (isExcludedItem2Convoy(opts)) return false;
+          const { convoyId = 0n, action = 1, vehicleClass = 0, flags = 0, originTownId = 0, destTownId = 0, containerKind = 0, commodityId = 0 } = opts;
+          const h = sh();
+          if (!h || typeof h.logisticsConvoyOrder !== "function") return false;
+          h.logisticsConvoyOrder(
+            toU64BigInt(convoyId),
+            action & 0xff,
+            vehicleClass & 0xff,
+            flags & 0xffff,
+            originTownId >>> 0,
+            destTownId >>> 0,
+            containerKind >>> 0,
+            commodityId >>> 0
+          );
+          return true;
+        } catch (_) {
+          return false;
+        }
+      },
+      monarchOrder(opts) {
+        try {
+          if (!opts || typeof opts !== "object" || Array.isArray(opts)) return false;
+          const { orderId = 0n, townId = 0, action = 1, orderType = 0, flags = 0, targetGuid = 0, itemWcid = 0, quantity = 0, rewardPyreals = 0n, paramF32 = 0 } = opts;
+          const h = sh();
+          if (!h || typeof h.economyMonarchOrder !== "function") return false;
+          h.economyMonarchOrder(
+            toU64BigInt(orderId),
+            townId >>> 0,
+            action & 0xff,
+            orderType & 0xff,
+            flags & 0xffff,
+            targetGuid >>> 0,
+            itemWcid >>> 0,
+            quantity >>> 0,
+            toU64BigInt(rewardPyreals),
+            Number(paramF32) || 0
+          );
+          return true;
+        } catch (_) {
+          return false;
+        }
+      },
+    },
     dispose() {
       disposed = true;
       teardownSession("dispose");
@@ -5092,6 +5577,7 @@ export function installVehicles(deps = {}) {
       deployableVfx?.dispose();
       deployableAudio?.dispose();
       radarScope.dispose();
+      economyHud.dispose();
       osd.dispose();
       fx.dispose();
       aeroFx?.dispose();

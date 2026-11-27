@@ -1,7 +1,7 @@
 From 0d00fbc34a82170465df565cad49dfc433b03408 Mon Sep 17 00:00:00 2001
 From: salvia420-bit <salvia420@gmail.com>
 Date: Sat, 7 Nov 2026 14:44:59 -0330
-Subject: [PATCH 08/12] feat(dericost): add dual-continent
+Subject: [PATCH 08/28] feat(dericost): add dual-continent
  LandblockId/Position/LScape routing and 4-minute Hellcat trans-oceanic flight
  physics
 
@@ -24,7 +24,7 @@ Subject: [PATCH 08/12] feat(dericost): add dual-continent
  create mode 100644 Source/ACE.Server.Tests/Vehicles/DericostContinentInvariantsTests.cs
 
 diff --git a/Source/ACE.Entity/LandblockId.cs b/Source/ACE.Entity/LandblockId.cs
-index 45c4312..cf25718 100644
+index 45c43125..cf25718c 100644
 --- a/Source/ACE.Entity/LandblockId.cs
 +++ b/Source/ACE.Entity/LandblockId.cs
 @@ -3,7 +3,7 @@
@@ -87,7 +87,7 @@ index 45c4312..cf25718 100644
  
          public override string ToString()
 diff --git a/Source/ACE.Entity/Position.cs b/Source/ACE.Entity/Position.cs
-index 497ed12..33f2a1f 100644
+index 497ed12f..33f2a1f7 100644
 --- a/Source/ACE.Entity/Position.cs
 +++ b/Source/ACE.Entity/Position.cs
 @@ -195,12 +195,12 @@ public bool SetLandCell()
@@ -189,7 +189,7 @@ index 497ed12..33f2a1f 100644
          public override string ToString()
 diff --git a/Source/ACE.Server.Tests/Vehicles/ChallengerM2ContinentStressTests.cs b/Source/ACE.Server.Tests/Vehicles/ChallengerM2ContinentStressTests.cs
 new file mode 100644
-index 0000000..6d2bc4b
+index 00000000..6d2bc4b8
 --- /dev/null
 +++ b/Source/ACE.Server.Tests/Vehicles/ChallengerM2ContinentStressTests.cs
 @@ -0,0 +1,275 @@
@@ -470,7 +470,7 @@ index 0000000..6d2bc4b
 +}
 diff --git a/Source/ACE.Server.Tests/Vehicles/DericostContinentInvariantsTests.cs b/Source/ACE.Server.Tests/Vehicles/DericostContinentInvariantsTests.cs
 new file mode 100644
-index 0000000..271c122
+index 00000000..271c122c
 --- /dev/null
 +++ b/Source/ACE.Server.Tests/Vehicles/DericostContinentInvariantsTests.cs
 @@ -0,0 +1,72 @@
@@ -547,7 +547,7 @@ index 0000000..271c122
 +    }
 +}
 diff --git a/Source/ACE.Server/Managers/LandblockManager.cs b/Source/ACE.Server/Managers/LandblockManager.cs
-index ad7bfc9..aed48c0 100644
+index ad7bfc93..aed48c00 100644
 --- a/Source/ACE.Server/Managers/LandblockManager.cs
 +++ b/Source/ACE.Server/Managers/LandblockManager.cs
 @@ -30,11 +30,32 @@ public static class LandblockManager
@@ -751,7 +751,7 @@ index ad7bfc9..aed48c0 100644
                              // remove from landblock group
                              for (int i = landblockGroups.Count - 1; i >= 0 ; i--)
 diff --git a/Source/ACE.Server/Physics/Common/BldPortal.cs b/Source/ACE.Server/Physics/Common/BldPortal.cs
-index ae1746d..adc9074 100644
+index ae1746d6..adc9074f 100644
 --- a/Source/ACE.Server/Physics/Common/BldPortal.cs
 +++ b/Source/ACE.Server/Physics/Common/BldPortal.cs
 @@ -26,7 +26,7 @@ public BldPortal(DatLoader.Entity.CBldPortal bldPortal)
@@ -764,7 +764,7 @@ index ae1746d..adc9074 100644
              return (EnvCell)LScape.get_landcell(blockCellID);
          }
 diff --git a/Source/ACE.Server/Physics/Common/EnvCell.cs b/Source/ACE.Server/Physics/Common/EnvCell.cs
-index 73f088a..4461331 100644
+index 73f088ad..44613314 100644
 --- a/Source/ACE.Server/Physics/Common/EnvCell.cs
 +++ b/Source/ACE.Server/Physics/Common/EnvCell.cs
 @@ -121,7 +121,7 @@ public void build_visible_cells()
@@ -777,7 +777,7 @@ index 73f088a..4461331 100644
                  var cell = (EnvCell)LScape.get_landcell(blockCellID);
                  VisibleCells.Add(visibleCellID, cell);
 diff --git a/Source/ACE.Server/Physics/Common/LScape.cs b/Source/ACE.Server/Physics/Common/LScape.cs
-index f2ceb03..0b510ad 100644
+index f2ceb031..0b510ad9 100644
 --- a/Source/ACE.Server/Physics/Common/LScape.cs
 +++ b/Source/ACE.Server/Physics/Common/LScape.cs
 @@ -131,7 +131,7 @@ public static ObjCell get_landcell(uint blockCellID)
@@ -790,7 +790,7 @@ index f2ceb03..0b510ad 100644
  
              // outdoor cells
 diff --git a/Source/ACE.Server/Vehicles/FlightModel.cs b/Source/ACE.Server/Vehicles/FlightModel.cs
-index f06e25e..a94ce83 100644
+index f06e25e5..a94ce836 100644
 --- a/Source/ACE.Server/Vehicles/FlightModel.cs
 +++ b/Source/ACE.Server/Vehicles/FlightModel.cs
 @@ -93,9 +93,11 @@ public static class FlightModel
@@ -831,7 +831,7 @@ index f06e25e..a94ce83 100644
                      var g = ground(nx, ny);
                      if (!double.IsNaN(g) && nz <= g)
 diff --git a/Source/ACE.Server/Vehicles/Vehicle.cs b/Source/ACE.Server/Vehicles/Vehicle.cs
-index ae6cab3..680ba94 100644
+index ae6cab3a..680ba943 100644
 --- a/Source/ACE.Server/Vehicles/Vehicle.cs
 +++ b/Source/ACE.Server/Vehicles/Vehicle.cs
 @@ -353,29 +353,42 @@ public static Quaternion Orientation(double heading, double pitch, double bank)
@@ -883,7 +883,7 @@ index ae6cab3..680ba94 100644
          }
  
 diff --git a/Source/ACE.Server/Vehicles/VehicleManager.cs b/Source/ACE.Server/Vehicles/VehicleManager.cs
-index 96f2fd0..2024826 100644
+index 96f2fd03..2024826f 100644
 --- a/Source/ACE.Server/Vehicles/VehicleManager.cs
 +++ b/Source/ACE.Server/Vehicles/VehicleManager.cs
 @@ -448,13 +448,16 @@ static void MoveWorldObject(Vehicle v, Position pos)
@@ -959,7 +959,7 @@ index 96f2fd0..2024826 100644
              player.PhysicsObj.set_current_pos(new Physics.Common.Position(pos));
              if (pos.Landblock != prevLb)
 diff --git a/Source/ACE.Server/Vehicles/VehicleOrdnance.cs b/Source/ACE.Server/Vehicles/VehicleOrdnance.cs
-index ecc42fa..0dbc847 100644
+index ecc42fa4..0dbc847a 100644
 --- a/Source/ACE.Server/Vehicles/VehicleOrdnance.cs
 +++ b/Source/ACE.Server/Vehicles/VehicleOrdnance.cs
 @@ -109,7 +109,7 @@ public static void Tick()
@@ -1008,7 +1008,7 @@ index ecc42fa..0dbc847 100644
                      foreach (var wo in lb.GetAllWorldObjectsForDiagnostics())
                      {
 diff --git a/Source/ACE.Server/Vehicles/VehicleStreaming.cs b/Source/ACE.Server/Vehicles/VehicleStreaming.cs
-index b641d53..c44ef18 100644
+index b641d536..c44ef183 100644
 --- a/Source/ACE.Server/Vehicles/VehicleStreaming.cs
 +++ b/Source/ACE.Server/Vehicles/VehicleStreaming.cs
 @@ -210,7 +210,7 @@ public static bool IsLootGenerator(WorldObject g)

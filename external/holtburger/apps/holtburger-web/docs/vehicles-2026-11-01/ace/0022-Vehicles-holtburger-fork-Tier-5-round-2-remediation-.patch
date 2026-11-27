@@ -1,8 +1,8 @@
 From fe2139689a19f9eb31c52cfee4e0461d5a161cf0 Mon Sep 17 00:00:00 2001
 From: salvia420-bit <salvia420@gmail.com>
 Date: Fri, 20 Nov 2026 12:20:18 +0000
-Subject: [PATCH] Vehicles (holtburger fork): Tier 5 round-2 remediation fixes
- and regression tests
+Subject: [PATCH 22/28] Vehicles (holtburger fork): Tier 5 round-2 remediation
+ fixes and regression tests
 
 Fixes 4 remaining bugs from Tier 5 Challenger 3 audit:
 - GroundRadarDeployable.ScanContacts Loop 3 excludes Player, Vendor, Pet, Cow, GamePiece, non-attackable, Tolerance.NoAttack, indoor, dead, destroyed, and teleporting creatures so owned turrets target only outdoor hostile monsters.

@@ -503,7 +503,12 @@ impl ProtocolUnpack for GameActionMessage {
                 | GameActionOpcode::VehicleCargo
                 | GameActionOpcode::VehicleContainerAction
                 | GameActionOpcode::VehicleTrailerAction
-                | GameActionOpcode::VehiclePalletJackAction => {
+                | GameActionOpcode::VehiclePalletJackAction
+                | GameActionOpcode::EconomySiegeAction
+                | GameActionOpcode::IndustryProspecting
+                | GameActionOpcode::IndustryFacilityAction
+                | GameActionOpcode::LogisticsConvoyOrder
+                | GameActionOpcode::EconomyMonarchOrder => {
                     match crate::messages::vehicle::VehicleC2S::unpack_payload(
                         action_type_raw,
                         data,

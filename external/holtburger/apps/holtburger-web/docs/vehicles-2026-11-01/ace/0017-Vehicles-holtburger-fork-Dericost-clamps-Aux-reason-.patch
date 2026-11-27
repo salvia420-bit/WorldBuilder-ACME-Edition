@@ -1,7 +1,7 @@
 From 6891368c6b6c4b1ee6a5fbdcf950a58eacf97813 Mon Sep 17 00:00:00 2001
 From: salvia420-bit <salvia420@gmail.com>
 Date: Fri, 20 Nov 2026 04:10:04 +0000
-Subject: [PATCH] Vehicles (holtburger fork): Dericost clamps, Aux reason
+Subject: [PATCH 17/28] Vehicles (holtburger fork): Dericost clamps, Aux reason
  codes, IFF/power gating, RadarStation stow, security & lifecycle QC fixes
 
 Fix QC defects across Vehicles and Deployables:

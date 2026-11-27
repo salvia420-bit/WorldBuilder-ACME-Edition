@@ -1,7 +1,7 @@
 From 9e271802ce5fa3da2dc47101a54bcadc0db82c01 Mon Sep 17 00:00:00 2001
 From: salvia420-bit <salvia420@gmail.com>
 Date: Sat, 7 Nov 2026 01:15:06 -0330
-Subject: [PATCH 07/12] Vehicles (holtburger fork): 257-part F6F-6N
+Subject: [PATCH 07/28] Vehicles (holtburger fork): 257-part F6F-6N
  Super-Hellcat profile, flight/server optimizations, bug fixes
 
 ---
@@ -23,7 +23,7 @@ Subject: [PATCH 07/12] Vehicles (holtburger fork): 257-part F6F-6N
  15 files changed, 431 insertions(+), 135 deletions(-)
 
 diff --git a/Source/ACE.DatLoader/DatDatabase.cs b/Source/ACE.DatLoader/DatDatabase.cs
-index 1df61d7..906d706 100644
+index 1df61d79..906d7062 100644
 --- a/Source/ACE.DatLoader/DatDatabase.cs
 +++ b/Source/ACE.DatLoader/DatDatabase.cs
 @@ -21,7 +21,7 @@ public class DatDatabase
@@ -36,7 +36,7 @@ index 1df61d7..906d706 100644
          /// <summary>holtburger vehicles fork: set on background prefetch / loader threads (diagnosis of lock waits).</summary>
          [ThreadStatic] public static bool BackgroundReaderThread;
 diff --git a/Source/ACE.Server/Entity/GeneratorProfile.cs b/Source/ACE.Server/Entity/GeneratorProfile.cs
-index 4c26241..d9e6957 100644
+index 4c262410..d9e69575 100644
 --- a/Source/ACE.Server/Entity/GeneratorProfile.cs
 +++ b/Source/ACE.Server/Entity/GeneratorProfile.cs
 @@ -58,6 +58,8 @@ public class GeneratorProfile
@@ -175,7 +175,7 @@ index 4c26241..d9e6957 100644
          /// A list of landblocks the excluded from VerifyWalkableSlope check
          /// 
 diff --git a/Source/ACE.Server/Entity/Landblock.cs b/Source/ACE.Server/Entity/Landblock.cs
-index 0a2a388..0fd3dcb 100644
+index 0a2a3885..0fd3dcb8 100644
 --- a/Source/ACE.Server/Entity/Landblock.cs
 +++ b/Source/ACE.Server/Entity/Landblock.cs
 @@ -332,7 +332,10 @@ private void AddCreatedWorldObjects(List<WorldObject> factoryObjects, List<ACE.D
@@ -219,7 +219,7 @@ index 0a2a388..0fd3dcb 100644
              {
                  foreach (var g in deferredGeneratorUpdates)
 diff --git a/Source/ACE.Server/Managers/LandblockManager.cs b/Source/ACE.Server/Managers/LandblockManager.cs
-index 30ae862..ad7bfc9 100644
+index 30ae8628..ad7bfc93 100644
 --- a/Source/ACE.Server/Managers/LandblockManager.cs
 +++ b/Source/ACE.Server/Managers/LandblockManager.cs
 @@ -721,8 +721,7 @@ public static Landblock GetLandblock(LandblockId landblockId, bool loadAdjacents
@@ -242,7 +242,7 @@ index 30ae862..ad7bfc9 100644
          }
  
 diff --git a/Source/ACE.Server/Managers/PropertyManager.cs b/Source/ACE.Server/Managers/PropertyManager.cs
-index 7021c64..7d9ae26 100644
+index 7021c64c..7d9ae262 100644
 --- a/Source/ACE.Server/Managers/PropertyManager.cs
 +++ b/Source/ACE.Server/Managers/PropertyManager.cs
 @@ -613,6 +613,7 @@ public static void LoadDefaultProperties()
@@ -254,7 +254,7 @@ index 7021c64..7d9ae26 100644
                  ("vehicle_defer_dungeons", new Property<bool>(false, "(holtburger vehicles, GC) a dungeon landblock only vehicles have been in (an aircraft over the deep sea) creates no objects, builds no cells and warms no spawns until a player on foot is in it — vanilla ACE builds the whole dungeon (up to ~1,500 cells, 20-30 MB that survives into gen1/gen2) for the first object placed in it")),
                  ("vehicle_shared_cellstructs", new Property<bool>(false, "(holtburger vehicles, GC) indoor cells share one immutable physics CellStruct per (environment, cell structure) and skip the never-read DrawingBSP, instead of building a private copy per cell (5 deep-sea dungeons: ~93 MB of polygons / BSP trees -> ~6 MB, once per process)")),
 diff --git a/Source/ACE.Server/Physics/Common/Landblock.cs b/Source/ACE.Server/Physics/Common/Landblock.cs
-index 3fc59d5..54f88c7 100644
+index 3fc59d53..54f88c7d 100644
 --- a/Source/ACE.Server/Physics/Common/Landblock.cs
 +++ b/Source/ACE.Server/Physics/Common/Landblock.cs
 @@ -648,13 +648,10 @@ public List<Landblock> get_adjacents()
@@ -290,7 +290,7 @@ index 3fc59d5..54f88c7 100644
  
              return results;
 diff --git a/Source/ACE.Server/Physics/Common/ObjectMaint.cs b/Source/ACE.Server/Physics/Common/ObjectMaint.cs
-index d182544..5d2eaf7 100644
+index d182544c..5d2eaf76 100644
 --- a/Source/ACE.Server/Physics/Common/ObjectMaint.cs
 +++ b/Source/ACE.Server/Physics/Common/ObjectMaint.cs
 @@ -531,7 +531,7 @@ public List<PhysicsObj> AddVisibleObjects(ICollection<PhysicsObj> objs)
@@ -315,7 +315,7 @@ index d182544..5d2eaf7 100644
                  if (distSq > InitialClamp_DistSq)
                      return false;
 diff --git a/Source/ACE.Server/Vehicles/Vehicle.cs b/Source/ACE.Server/Vehicles/Vehicle.cs
-index 1f8b8ff..ae6cab3 100644
+index 1f8b8ffe..ae6cab3a 100644
 --- a/Source/ACE.Server/Vehicles/Vehicle.cs
 +++ b/Source/ACE.Server/Vehicles/Vehicle.cs
 @@ -234,6 +234,15 @@ public class Vehicle : WorldObject
@@ -335,7 +335,7 @@ index 1f8b8ff..ae6cab3 100644
          public void Rearm()
          {
 diff --git a/Source/ACE.Server/Vehicles/VehicleBailout.cs b/Source/ACE.Server/Vehicles/VehicleBailout.cs
-index 5c4ed10..847e433 100644
+index 5c4ed101..847e4334 100644
 --- a/Source/ACE.Server/Vehicles/VehicleBailout.cs
 +++ b/Source/ACE.Server/Vehicles/VehicleBailout.cs
 @@ -112,8 +112,8 @@ static void EndFallMotion(FallState f)
@@ -363,7 +363,7 @@ index 5c4ed10..847e433 100644
              var heading = v.State.Heading;
              VehicleManager.Unseat(v, player, placeOnGround: false);
 diff --git a/Source/ACE.Server/Vehicles/VehicleCommands.cs b/Source/ACE.Server/Vehicles/VehicleCommands.cs
-index 3380569..1aca572 100644
+index 3380569b..1aca572f 100644
 --- a/Source/ACE.Server/Vehicles/VehicleCommands.cs
 +++ b/Source/ACE.Server/Vehicles/VehicleCommands.cs
 @@ -21,7 +21,8 @@ public static class VehicleCommands
@@ -401,7 +401,7 @@ index 3380569..1aca572 100644
              }
          }
 diff --git a/Source/ACE.Server/Vehicles/VehicleManager.cs b/Source/ACE.Server/Vehicles/VehicleManager.cs
-index b6c0037..96f2fd0 100644
+index b6c00377..96f2fd03 100644
 --- a/Source/ACE.Server/Vehicles/VehicleManager.cs
 +++ b/Source/ACE.Server/Vehicles/VehicleManager.cs
 @@ -82,7 +82,7 @@ public static class VehicleManager
@@ -498,7 +498,7 @@ index b6c0037..96f2fd0 100644
                  // the projectile's weenie and the physics of its model (the fireball builds 7 of them at once)
                  var w = DatabaseManager.World.GetCachedWeenie(sp.Wcid);
 diff --git a/Source/ACE.Server/Vehicles/VehicleOrdnance.cs b/Source/ACE.Server/Vehicles/VehicleOrdnance.cs
-index 51f65db..ecc42fa 100644
+index 51f65db1..ecc42fa4 100644
 --- a/Source/ACE.Server/Vehicles/VehicleOrdnance.cs
 +++ b/Source/ACE.Server/Vehicles/VehicleOrdnance.cs
 @@ -192,7 +192,7 @@ static void Detonate(Bomb b, double x, double y, double z)
@@ -522,7 +522,7 @@ index 51f65db..ecc42fa 100644
              var ring = b.MassLb >= 1500 ? 4 : 2;
              var ringR = b.Radius * 0.35;
 diff --git a/Source/ACE.Server/Vehicles/VehicleProfile.cs b/Source/ACE.Server/Vehicles/VehicleProfile.cs
-index 9ea0e7e..d3ed2dc 100644
+index 9ea0e7e5..d3ed2dc2 100644
 --- a/Source/ACE.Server/Vehicles/VehicleProfile.cs
 +++ b/Source/ACE.Server/Vehicles/VehicleProfile.cs
 @@ -112,83 +112,285 @@ public static VehicleProfile HellcatDemo()
@@ -875,7 +875,7 @@ index 9ea0e7e..d3ed2dc 100644
          }
  
 diff --git a/Source/ACE.Server/Vehicles/VehicleStreaming.cs b/Source/ACE.Server/Vehicles/VehicleStreaming.cs
-index 08cc9cb..b641d53 100644
+index 08cc9cb5..b641d536 100644
 --- a/Source/ACE.Server/Vehicles/VehicleStreaming.cs
 +++ b/Source/ACE.Server/Vehicles/VehicleStreaming.cs
 @@ -424,6 +424,16 @@ static void WarmWeenieTree(uint wcid, HashSet<uint> seen, int depth)
@@ -916,7 +916,7 @@ index 08cc9cb..b641d53 100644
                          int x = lbx + dx, y = lby + dy;
                          if (x < 0 || y < 0 || x > 254 || y > 254) continue;
 diff --git a/Source/ACE.Server/Vehicles/VehicleWeapons.cs b/Source/ACE.Server/Vehicles/VehicleWeapons.cs
-index 5291278..4646dd1 100644
+index 52912785..4646dd1e 100644
 --- a/Source/ACE.Server/Vehicles/VehicleWeapons.cs
 +++ b/Source/ACE.Server/Vehicles/VehicleWeapons.cs
 @@ -109,8 +109,14 @@ public static void Step(Vehicle v, Player pilot, byte buttons)

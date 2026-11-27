@@ -98,7 +98,15 @@ export function computeCraneSpanY(containerKind) {
   }
   if (typeof key === "number" && Number.isFinite(key)) {
     const n = Math.trunc(key);
-    if (n === 10 || n === 4000020 || n === 20) {
+    if (
+      n === 10 || n === 4000020 || n === 20 ||
+      n === 30 || n === 4000060 ||
+      n === 32 || n === 4000062 ||
+      n === 33 || n === 4000063 ||
+      n === 34 || n === 4000064 ||
+      n === 35 || n === 4000065 ||
+      n === 36 || n === 4000066
+    ) {
       return CRANE_SPAN_Y_20FT;
     }
     return CRANE_SPAN_Y_40FT;
@@ -112,7 +120,13 @@ export function computeCraneSpanY(containerKind) {
       s === "1cc" ||
       s === "isocontainer20" ||
       s === "4000020" ||
-      s === "10"
+      s === "10" ||
+      s === "22r1" || s === "isoreefer20" || s === "4000060" || s === "30" ||
+      s === "22t1" || s === "isotank20" || s === "4000062" || s === "32" ||
+      s === "22k2" || s === "isogastank20" || s === "4000063" || s === "33" ||
+      s === "22b0" || s === "isodrybulk20" || s === "4000064" || s === "34" ||
+      s === "22u1" || s === "isoopentop20" || s === "4000065" || s === "35" ||
+      s === "22p1" || s === "isoflatrack20" || s === "4000066" || s === "36"
     ) {
       return CRANE_SPAN_Y_20FT;
     }

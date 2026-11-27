@@ -18,6 +18,9 @@
 
 import {
   PORT_ORIGIN,
+  PORT_SITE,
+  PORT_WCID,
+  PORT_DEPLOYABLE_KIND,
   PORT_GUID_BASE,
   QUAY_SPECS,
   STS_CRANE_SPECS,
@@ -54,6 +57,125 @@ import { buildStsCrane } from "./port_sts_crane_model.js";
 import { buildYardCrane, createContainerStackPool } from "./port_yard_crane_model.js";
 import { buildPortShuttle } from "./port_shuttle_model.js";
 import { buildIsoContainer } from "./container_models.js";
+import {
+  GeomAcc,
+  makeLinearPalette,
+  cShade,
+  makeDeployablePbrMaterial,
+} from "./deployable_models.js";
+
+const KIND_TO_PORT_WCID = Object.freeze({
+  [PORT_DEPLOYABLE_KIND.StsGantryCrane]: PORT_WCID.StsGantryCrane,
+  [PORT_DEPLOYABLE_KIND.RmgYardCrane]: PORT_WCID.RmgYardCrane,
+  [PORT_DEPLOYABLE_KIND.RtgYardCrane]: PORT_WCID.RtgYardCrane,
+  [PORT_DEPLOYABLE_KIND.TerminalTractorShuttle]: PORT_WCID.TerminalTractorShuttle,
+  [PORT_DEPLOYABLE_KIND.ReeferRackBay]: PORT_WCID.ReeferRackBay,
+  [PORT_DEPLOYABLE_KIND.QuayBollard]: PORT_WCID.QuayBollard,
+  [PORT_DEPLOYABLE_KIND.MarineFender]: PORT_WCID.MarineFender,
+});
+
+function disposeObjectTreeLocal(root) {
+  if (!root) return;
+  const disposedG = new Set();
+  const disposedM = new Set();
+  root.traverse((o) => {
+    if (!o) return;
+    if (o.geometry && !disposedG.has(o.geometry)) {
+      disposedG.add(o.geometry);
+      o.geometry.dispose();
+    }
+    if (o.material) {
+      const mats = Array.isArray(o.material) ? o.material : [o.material];
+      for (const m of mats) {
+        if (m && !disposedM.has(m)) {
+          disposedM.add(m);
+          m.dispose();
+        }
+      }
+    }
+    if (o.isInstancedMesh && typeof o.dispose === "function") {
+      o.dispose();
+    }
+  });
+}
+
+function buildStandalonePortFixture(THREE, kind, csmState) {
+  const pal = makeLinearPalette(THREE, {
+    galv: 0x969fa8,
+    galvDark: 0x6d7680,
+    steelDark: 0x262b31,
+    yellow: 0xe8ad18,
+    cabinetBlue: 0x225a8c,
+    red: 0xc92c24,
+    green: 0x22e868,
+    amber: 0xde7a14,
+    rubber: 0x1a1d20,
+    rubberLight: 0x2a2e33,
+  });
+  const acc = new GeomAcc(3);
+  const root = new THREE.Group();
+
+  if (kind === PORT_DEPLOYABLE_KIND.ReeferRackBay) {
+    root.name = "port-server-reefer-rack-bay";
+    const gantryH = 8.4;
+    for (const sx of [-1.4, 1.4]) {
+      for (const sy of [-2.4, 2.4]) {
+        acc.box(sx, sy, gantryH * 0.5, 0.08, 0.08, gantryH * 0.5, pal.galv, pal.galvDark);
+        acc.box(sx, sy, 0.05, 0.16, 0.16, 0.05, pal.steelDark, pal.steelDark);
+      }
+    }
+    for (const tz of [2.58, 5.18, 7.78]) {
+      acc.box(0, 0, tz, 1.45, 2.55, 0.05, pal.galv, pal.galvDark);
+      acc.box(-1.42, 0, tz + 0.95, 0.03, 2.55, 0.03, pal.yellow, cShade(pal.yellow, 0.82));
+      acc.box(+1.42, 0, tz + 0.95, 0.03, 2.55, 0.03, pal.yellow, cShade(pal.yellow, 0.82));
+      acc.box(0, 0, tz + 0.55, 0.22, 0.35, 0.30, pal.cabinetBlue, cShade(pal.cabinetBlue, 0.8));
+      acc.box(0, -0.14, tz + 0.45, 0.24, 0.06, 0.06, pal.red, pal.red);
+      acc.box(0, +0.14, tz + 0.45, 0.24, 0.06, 0.06, pal.red, pal.red);
+    }
+  } else if (kind === PORT_DEPLOYABLE_KIND.QuayBollard) {
+    root.name = "port-server-quay-bollard";
+    acc.bevelBox(0, 0, 0.04, 0.38, 0.34, 0.04, 0.08, pal.steelDark, cShade(pal.steelDark, 0.78));
+    acc.cone(0, 0, 0.35, 0.24, 0.19, 0.54, 12, pal.yellow, "z", true, true, cShade(pal.yellow, 0.80));
+    acc.bevelBox(0, 0, 0.73, 0.42, 0.24, 0.11, 0.06, pal.yellow, cShade(pal.yellow, 0.84));
+  } else {
+    root.name = "port-server-marine-fender";
+    acc.box(0, 0.04, 0.0, 0.86, 0.04, 0.86, pal.steelDark, cShade(pal.steelDark, 0.78));
+    acc.cone(0, 0.50, 0.0, 0.72, 0.44, 0.84, 12, pal.rubber, "y", true, true, cShade(pal.rubber, 0.75));
+    acc.bevelBox(0, 1.04, 0.0, 0.95, 0.12, 0.92, 0.08, pal.steelDark, cShade(pal.steelDark, 0.78));
+    acc.box(0, 1.175, 0.0, 0.88, 0.025, 0.86, pal.rubberLight, pal.rubber);
+    acc.box(0, 1.06, +0.88, 0.92, 0.08, 0.05, pal.yellow, cShade(pal.yellow, 0.84));
+  }
+
+  const mat = makeDeployablePbrMaterial(THREE, {
+    roughness: kind === PORT_DEPLOYABLE_KIND.MarineFender ? 0.74 : 0.46,
+    metalness: kind === PORT_DEPLOYABLE_KIND.MarineFender ? 0.22 : 0.58,
+    csmState,
+  });
+  const mesh = new THREE.Mesh(acc.toBufferGeometry(THREE), mat);
+  mesh.name = `${root.name}-mesh`;
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
+  root.add(mesh);
+
+  let disposed = false;
+  return {
+    root,
+    wcid: KIND_TO_PORT_WCID[kind] || PORT_WCID.QuayBollard,
+    kind,
+    update(st = null) {
+      if (disposed || !st) return;
+      if (fin(st.x)) root.position.x = st.x;
+      if (fin(st.y)) root.position.y = st.y;
+      if (fin(st.z)) root.position.z = st.z;
+      if (fin(st.heading)) root.rotation.z = -st.heading;
+    },
+    dispose() {
+      if (disposed) return;
+      disposed = true;
+      disposeObjectTreeLocal(root);
+    },
+  };
+}
 
 function clamp(v, lo, hi) {
   return v < lo ? lo : v > hi ? hi : v;
@@ -220,6 +342,8 @@ export function createPortTerminalManager(deps = {}) {
   const shuttlesPublic = new Map();
   /** @type {Map<string, object>} padId ("C1"|"C2"|"C3") -> promoted container metadata */
   const promotedPadContainers = new Map();
+  /** @type {Map<number, object>} guid >>> 0 -> server DeployableKind 23..29 record */
+  const serverDeployables = new Map();
 
   function csmStateOf() {
     return liveScene3d?.csmState ?? null;
@@ -859,6 +983,10 @@ export function createPortTerminalManager(deps = {}) {
     if (disposed) throw new Error("PortTerminalManager is disposed");
     if (built) clearTerminal();
 
+    for (const rec of serverDeployables.values()) {
+      disposeServerDeployableModel(rec);
+    }
+
     const origin = Array.isArray(opts.origin) ? [...opts.origin] : [...PORT_ORIGIN];
     layout = buildPortLayout(origin);
     yardStore = createYardStackStore(layout.origin);
@@ -950,6 +1078,9 @@ export function createPortTerminalManager(deps = {}) {
     syncYardPool();
 
     built = true;
+    for (const rec of [...serverDeployables.values()]) {
+      onDeployableState({ ...rec, deployable: rec.guid }, [rec.x, rec.y, rec.z]);
+    }
     return layout;
   }
 
@@ -967,6 +1098,7 @@ export function createPortTerminalManager(deps = {}) {
   function clearTerminal() {
     stopScenarios();
     clearWarehousePads();
+    clearServerDeployables();
 
     for (const r of stsEntries.values()) {
       rejectPendingQueue(r.queue, "Terminal cleared");
@@ -1137,13 +1269,341 @@ export function createPortTerminalManager(deps = {}) {
     return promise;
   }
 
+  function isWithinBuiltFootprint(wx, wy) {
+    if (!built || !layout) return false;
+    const ox = layout.origin[0];
+    const oy = layout.origin[1];
+    return (
+      wx >= ox + PORT_SITE.localMinX - 25.0 &&
+      wx <= ox + PORT_SITE.localMaxX + 25.0 &&
+      wy >= oy - 230.0 &&
+      wy <= oy + 25.0
+    );
+  }
+
+  function findNearestAvailableLocalUnit(map, guid, wx, wy, filterFn = null) {
+    let best = null;
+    let bestD = Infinity;
+    for (const rec of map.values()) {
+      if (filterFn && !filterFn(rec)) continue;
+      const boundGuid = rec.boundServerGuid >>> 0;
+      if (boundGuid !== 0 && boundGuid !== guid) continue;
+      const d = Math.hypot((rec.state?.x ?? 0) - wx, (rec.state?.y ?? 0) - wy);
+      if (d < bestD) {
+        bestD = d;
+        best = rec;
+      }
+    }
+    return best;
+  }
+
+  function releaseBoundUnit(rec) {
+    if (!rec || !rec.boundUnitId) return;
+    if (rec.boundType === "sts") {
+      const u = stsEntries.get(rec.boundUnitId);
+      if (u && (u.boundServerGuid >>> 0) === rec.guid) u.boundServerGuid = 0;
+    } else if (rec.boundType === "yardCrane") {
+      const u = yardCraneEntries.get(rec.boundUnitId);
+      if (u && (u.boundServerGuid >>> 0) === rec.guid) u.boundServerGuid = 0;
+    } else if (rec.boundType === "shuttle") {
+      const u = shuttleEntries.get(rec.boundUnitId);
+      if (u && (u.boundServerGuid >>> 0) === rec.guid) u.boundServerGuid = 0;
+    }
+    rec.boundUnitId = null;
+    rec.boundType = null;
+  }
+
+  function disposeServerDeployableModel(rec) {
+    if (!rec) return;
+    releaseBoundUnit(rec);
+    if (rec.model) {
+      try {
+        if (rec.model.root?.parent) rec.model.root.parent.remove(rec.model.root);
+        rec.model.dispose?.();
+      } catch (_) {}
+      rec.model = null;
+    }
+  }
+
+  function buildStandaloneServerDeployableModel(kind, wx, wy, wz, heading, stowed, active) {
+    const rootGroup = ensureTerminalRoot();
+    if (!THREE || !rootGroup) return null;
+    let model = null;
+    if (kind === PORT_DEPLOYABLE_KIND.StsGantryCrane) {
+      model = buildStsCrane(THREE, {
+        csmState: csmStateOf(),
+        initialState: {
+          x: wx,
+          y: wy,
+          z: wz,
+          boomAngle: stowed ? STS_CRANE_SPECS.boomStowedAngleRad : 0.0,
+          active,
+          timeSec: simTimeSec,
+        },
+      });
+    } else if (kind === PORT_DEPLOYABLE_KIND.RmgYardCrane) {
+      model = buildYardCrane(THREE, "RMG", {
+        csmState: csmStateOf(),
+        initialState: { x: wx, y: wy, z: wz, active, timeSec: simTimeSec },
+      });
+    } else if (kind === PORT_DEPLOYABLE_KIND.RtgYardCrane) {
+      model = buildYardCrane(THREE, "RTG", {
+        csmState: csmStateOf(),
+        initialState: { x: wx, y: wy, z: wz, active, timeSec: simTimeSec },
+      });
+    } else if (kind === PORT_DEPLOYABLE_KIND.TerminalTractorShuttle) {
+      model = buildPortShuttle(THREE, {
+        csmState: csmStateOf(),
+        initialState: { x: wx, y: wy, z: wz, heading, timeSec: simTimeSec },
+      });
+    } else {
+      model = buildStandalonePortFixture(THREE, kind, csmStateOf());
+    }
+    if (model && model.root) {
+      model.root.position.set(wx, wy, wz);
+      model.root.rotation.z = -heading;
+      rootGroup.add(model.root);
+    }
+    return model;
+  }
+
+  function onDeployableState(msg, worldPos = null) {
+    if (disposed || !msg || typeof msg !== "object") return null;
+    const kind = (Number(msg.kind) || 0) | 0;
+    const wcid = KIND_TO_PORT_WCID[kind] || 0;
+    const guid = (Number(msg.deployable ?? msg.guid) || 0) >>> 0;
+    if (!wcid || !guid) return null;
+
+    const onlineFlags = (Number(msg.onlineFlags) || 0) | 0;
+    const stowed = Boolean(onlineFlags & 0x10);
+    const powered = Boolean(onlineFlags & 0x01) && !stowed;
+    const active = Boolean(onlineFlags & 0x04);
+    const posSrc = Array.isArray(worldPos) && worldPos.length >= 3
+      ? worldPos
+      : [msg.x ?? 0, msg.y ?? 0, msg.z ?? 0];
+    const wx = fin(Number(posSrc[0])) ? Number(posSrc[0]) : 0;
+    const wy = fin(Number(posSrc[1])) ? Number(posSrc[1]) : 0;
+    const wz = fin(Number(posSrc[2])) ? Number(posSrc[2]) : 0;
+    const heading = fin(Number(msg.heading)) ? Number(msg.heading) : 0;
+    const pitch = fin(Number(msg.pitch)) ? Number(msg.pitch) : 0;
+    const yaw = fin(Number(msg.yaw)) ? Number(msg.yaw) : 0;
+    const roll = fin(Number(msg.roll)) ? Number(msg.roll) : 0;
+    const elevation = fin(Number(msg.elevation)) ? Number(msg.elevation) : 0;
+    const powerWatts = fin(Number(msg.powerWatts)) ? Number(msg.powerWatts) : 0;
+    const energyJoules = fin(Number(msg.energyJoules)) ? Number(msg.energyJoules) : 0;
+    const energyCapacity = fin(Number(msg.energyCapacity)) ? Number(msg.energyCapacity) : 0;
+    const fuelSec = fin(Number(msg.fuelSec)) ? Number(msg.fuelSec) : 0;
+
+    let rec = serverDeployables.get(guid);
+    if (rec && rec.kind !== kind) {
+      disposeServerDeployableModel(rec);
+      serverDeployables.delete(guid);
+      rec = null;
+    }
+    if (!rec) {
+      rec = {
+        guid,
+        kind,
+        wcid,
+        x: wx,
+        y: wy,
+        z: wz,
+        heading,
+        pitch,
+        yaw,
+        roll,
+        elevation,
+        onlineFlags,
+        powered,
+        stowed,
+        active,
+        powerWatts,
+        energyJoules,
+        energyCapacity,
+        fuelSec,
+        boundUnitId: null,
+        boundType: null,
+        model: null,
+      };
+      serverDeployables.set(guid, rec);
+    } else {
+      rec.x = wx;
+      rec.y = wy;
+      rec.z = wz;
+      rec.heading = heading;
+      rec.pitch = pitch;
+      rec.yaw = yaw;
+      rec.roll = roll;
+      rec.elevation = elevation;
+      rec.onlineFlags = onlineFlags;
+      rec.powered = powered;
+      rec.stowed = stowed;
+      rec.active = active;
+      rec.powerWatts = powerWatts;
+      rec.energyJoules = energyJoules;
+      rec.energyCapacity = energyCapacity;
+      rec.fuelSec = fuelSec;
+    }
+
+    const inFootprint = isWithinBuiltFootprint(wx, wy);
+    if (inFootprint) {
+      if (rec.model) {
+        try {
+          if (rec.model.root?.parent) rec.model.root.parent.remove(rec.model.root);
+          rec.model.dispose?.();
+        } catch (_) {}
+        rec.model = null;
+      }
+      if (kind === PORT_DEPLOYABLE_KIND.StsGantryCrane) {
+        const unit = rec.boundUnitId ? stsEntries.get(rec.boundUnitId) : findNearestAvailableLocalUnit(stsEntries, guid, wx, wy);
+        if (unit) {
+          unit.boundServerGuid = guid;
+          rec.boundUnitId = unit.id;
+          rec.boundType = "sts";
+          if (unit.queue.length === 0) {
+            unit.state.boomStowed = stowed;
+            unit.state.targetBoomAngle = stowed ? STS_CRANE_SPECS.boomStowedAngleRad : 0.0;
+            unit.state.targetX = clamp(wx, unit.state.railMinX, unit.state.railMaxX);
+          }
+          return rec;
+        }
+      } else if (kind === PORT_DEPLOYABLE_KIND.RmgYardCrane || kind === PORT_DEPLOYABLE_KIND.RtgYardCrane) {
+        const wantType = kind === PORT_DEPLOYABLE_KIND.RmgYardCrane ? "RMG" : "RTG";
+        const unit = rec.boundUnitId
+          ? yardCraneEntries.get(rec.boundUnitId)
+          : findNearestAvailableLocalUnit(yardCraneEntries, guid, wx, wy, (u) => u.state?.type === wantType);
+        if (unit) {
+          unit.boundServerGuid = guid;
+          rec.boundUnitId = unit.id;
+          rec.boundType = "yardCrane";
+          if (unit.queue.length === 0) {
+            unit.state.targetX = clamp(wx, unit.state.minX, unit.state.maxX);
+          }
+          return rec;
+        }
+      } else if (kind === PORT_DEPLOYABLE_KIND.TerminalTractorShuttle) {
+        const unit = rec.boundUnitId ? shuttleEntries.get(rec.boundUnitId) : findNearestAvailableLocalUnit(shuttleEntries, guid, wx, wy);
+        if (unit) {
+          unit.boundServerGuid = guid;
+          rec.boundUnitId = unit.id;
+          rec.boundType = "shuttle";
+          if (unit.queue.length === 0) {
+            unit.state.x = wx;
+            unit.state.y = wy;
+            unit.state.z = fin(wz) ? wz : quayRampZ(wy, layout.origin);
+            unit.state.heading = heading;
+            unit.state.pitch = quayRampPitch(wy, heading, layout.origin);
+          }
+          return rec;
+        }
+      } else {
+        rec.boundUnitId = "QUAY";
+        rec.boundType = "quay";
+        return rec;
+      }
+    }
+
+    // Standalone mesh (unbuilt terminal or outside built terminal footprint)
+    releaseBoundUnit(rec);
+    if (!rec.model) {
+      rec.model = buildStandaloneServerDeployableModel(kind, wx, wy, wz, heading, stowed, active);
+    }
+    if (rec.model) {
+      rec.model.root?.position?.set(wx, wy, wz);
+      if (rec.model.root?.rotation) rec.model.root.rotation.z = -heading;
+      try {
+        if (kind === PORT_DEPLOYABLE_KIND.StsGantryCrane) {
+          rec.model.update({
+            x: wx,
+            y: wy,
+            z: wz,
+            boomAngle: stowed ? STS_CRANE_SPECS.boomStowedAngleRad : 0.0,
+            active,
+            timeSec: simTimeSec,
+          });
+        } else if (kind === PORT_DEPLOYABLE_KIND.RmgYardCrane || kind === PORT_DEPLOYABLE_KIND.RtgYardCrane) {
+          rec.model.update({ x: wx, y: wy, z: wz, active, timeSec: simTimeSec });
+        } else if (kind === PORT_DEPLOYABLE_KIND.TerminalTractorShuttle) {
+          rec.model.update({ x: wx, y: wy, z: wz, heading, pitch, timeSec: simTimeSec });
+        } else {
+          rec.model.update({ x: wx, y: wy, z: wz, heading, powered, stowed, active, timeSec: simTimeSec });
+        }
+      } catch (_) {}
+    }
+    return rec;
+  }
+
+  function onDeployableDespawn(guid) {
+    const g = (Number(guid) || 0) >>> 0;
+    if (!g) return false;
+    const rec = serverDeployables.get(g);
+    if (!rec) return false;
+    disposeServerDeployableModel(rec);
+    serverDeployables.delete(g);
+    return true;
+  }
+
+  function clearServerDeployables() {
+    for (const rec of serverDeployables.values()) {
+      disposeServerDeployableModel(rec);
+    }
+    serverDeployables.clear();
+  }
+
+  function getServerDeployables() {
+    const out = [];
+    for (const rec of serverDeployables.values()) {
+      out.push({
+        guid: rec.guid,
+        kind: rec.kind,
+        wcid: rec.wcid,
+        pos: [rec.x, rec.y, rec.z],
+        heading: rec.heading,
+        onlineFlags: rec.onlineFlags,
+        powered: rec.powered,
+        stowed: rec.stowed,
+        active: rec.active,
+        powerWatts: rec.powerWatts,
+        energyJoules: rec.energyJoules,
+        energyCapacity: rec.energyCapacity,
+        fuelSec: rec.fuelSec,
+        elevation: rec.elevation,
+        boundUnitId: rec.boundUnitId,
+        boundType: rec.boundType,
+      });
+    }
+    return out;
+  }
+
+  function countPoweredReeferRacks() {
+    let n = 0;
+    for (const rec of serverDeployables.values()) {
+      if (rec.kind === PORT_DEPLOYABLE_KIND.ReeferRackBay && rec.powered) n++;
+    }
+    return n;
+  }
+
   // =========================================================================
   // Per-Frame Deterministic Tick (zero setTimeout)
   // =========================================================================
 
   function tick(dt = 1 / 60, listenerPos = null) {
-    if (disposed || !built) return;
+    if (disposed) return;
     const stepDt = fin(dt) ? clamp(dt, 0.0, 0.25) : 1 / 60;
+    if (!built) {
+      if (serverDeployables.size > 0) {
+        simTimeSec += stepDt;
+        tickCount++;
+        for (const rec of serverDeployables.values()) {
+          if (rec.model) {
+            try {
+              rec.model.update({ timeSec: simTimeSec, active: rec.active, powered: rec.powered, stowed: rec.stowed });
+            } catch (_) {}
+          }
+        }
+      }
+      return;
+    }
     simTimeSec += stepDt;
     tickCount++;
 
@@ -1312,6 +1772,15 @@ export function createPortTerminalManager(deps = {}) {
     if (portAudio && layout) {
       portAudio.updateAmbient(listenerPos, layout.origin, true);
     }
+
+    // 6. Standalone server deployables animation pulse (if any)
+    for (const rec of serverDeployables.values()) {
+      if (rec.model) {
+        try {
+          rec.model.update({ timeSec: simTimeSec, active: rec.active, powered: rec.powered, stowed: rec.stowed });
+        } catch (_) {}
+      }
+    }
   }
 
   function getState() {
@@ -1380,6 +1849,9 @@ export function createPortTerminalManager(deps = {}) {
       yardContainerCount: yardStore.count(),
       promotedPadCount: promotedPadContainers.size,
       promotedPads: warehouseBridge.listPads(),
+      serverDeployableCount: serverDeployables.size,
+      reeferRacksPowered: countPoweredReeferRacks(),
+      serverDeployables: getServerDeployables(),
       sts: stsState,
       yardCranes: ycState,
       shuttles: shuttleState,
@@ -1389,6 +1861,7 @@ export function createPortTerminalManager(deps = {}) {
   function dispose() {
     if (disposed) return;
     clearTerminal();
+    clearServerDeployables();
     disposed = true;
   }
 
@@ -1402,6 +1875,10 @@ export function createPortTerminalManager(deps = {}) {
     warehouseBridge,
     deliverToWarehousePad,
     pickupFromWarehousePad,
+    onDeployableState,
+    onDeployableDespawn,
+    clearServerDeployables,
+    getServerDeployables,
     linkShipManager(sm) { shipManager = sm; },
     getShipManager: () => shipManager,
     getWarehouseManager: () => warehouseManager,
@@ -1423,6 +1900,8 @@ export function createPortTerminalManager(deps = {}) {
         yardCraneCount: yardCraneEntries.size,
         shuttleCount: shuttleEntries.size,
         promotedPadCount: promotedPadContainers.size,
+        serverDeployableCount: serverDeployables.size,
+        reeferRacksPowered: countPoweredReeferRacks(),
         scenario: activeScenario ? activeScenario.name : null,
       };
     },

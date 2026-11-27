@@ -1,7 +1,7 @@
-From 3079c4bbd01acb3b01f253913faa21c6c59fc12e Mon Sep 17 00:00:00 2001
+From 9ebf1c7ffc0e9aae267a9af82f35fab547252900 Mon Sep 17 00:00:00 2001
 From: salvia420-bit <salvia420@gmail.com>
 Date: Mon, 16 Nov 2026 19:26:07 +0000
-Subject: [PATCH 12/12] Vehicles (holtburger fork): ISO shipping containers
+Subject: [PATCH 12/28] Vehicles (holtburger fork): ISO shipping containers
  (20ft, 40ft, 40HC), walkable collider decks, wire v5, and @container
  administration suite
 
@@ -25,7 +25,7 @@ Subject: [PATCH 12/12] Vehicles (holtburger fork): ISO shipping containers
  create mode 100644 Source/ACE.Server/Vehicles/Deployables/IsoContainerDeployable.cs
 
 diff --git a/Source/ACE.Server.Tests/Vehicles/DeployableEcosystemTests.cs b/Source/ACE.Server.Tests/Vehicles/DeployableEcosystemTests.cs
-index 0b60ea1..4f8e82a 100644
+index 0b60ea15..4f8e82a0 100644
 --- a/Source/ACE.Server.Tests/Vehicles/DeployableEcosystemTests.cs
 +++ b/Source/ACE.Server.Tests/Vehicles/DeployableEcosystemTests.cs
 @@ -393,8 +393,8 @@ public class JeepCargoBedModel
@@ -135,7 +135,7 @@ index 0b60ea1..4f8e82a 100644
          [TestMethod]
 diff --git a/Source/ACE.Server.Tests/Vehicles/IsoContainerTests.cs b/Source/ACE.Server.Tests/Vehicles/IsoContainerTests.cs
 new file mode 100644
-index 0000000..9df4d3d
+index 00000000..9df4d3da
 --- /dev/null
 +++ b/Source/ACE.Server.Tests/Vehicles/IsoContainerTests.cs
 @@ -0,0 +1,1668 @@
@@ -1808,7 +1808,7 @@ index 0000000..9df4d3d
 +    }
 +}
 diff --git a/Source/ACE.Server.Tests/Vehicles/VehicleWireTests.cs b/Source/ACE.Server.Tests/Vehicles/VehicleWireTests.cs
-index d0486b8..6275a36 100644
+index d0486b8a..6275a366 100644
 --- a/Source/ACE.Server.Tests/Vehicles/VehicleWireTests.cs
 +++ b/Source/ACE.Server.Tests/Vehicles/VehicleWireTests.cs
 @@ -263,6 +263,49 @@ static VehicleMessage Build(string message, JsonElement f)
@@ -1979,7 +1979,7 @@ index d0486b8..6275a36 100644
          public void Hbv1TruncatedAndHostileInputRejected()
          {
 diff --git a/Source/ACE.Server.Tests/Vehicles/vehicle-wire-fixtures.json b/Source/ACE.Server.Tests/Vehicles/vehicle-wire-fixtures.json
-index 84e09fb..2bfe8cf 100644
+index 84e09fb9..2bfe8cf3 100644
 --- a/Source/ACE.Server.Tests/Vehicles/vehicle-wire-fixtures.json
 +++ b/Source/ACE.Server.Tests/Vehicles/vehicle-wire-fixtures.json
 @@ -1,44 +1,44 @@
@@ -2519,7 +2519,7 @@ index 84e09fb..2bfe8cf 100644
   ]
  }
 diff --git a/Source/ACE.Server/Network/GameAction/Actions/GameActionVehicle.cs b/Source/ACE.Server/Network/GameAction/Actions/GameActionVehicle.cs
-index 03a9e6f..f2cfcac 100644
+index 03a9e6f9..f2cfcacc 100644
 --- a/Source/ACE.Server/Network/GameAction/Actions/GameActionVehicle.cs
 +++ b/Source/ACE.Server/Network/GameAction/Actions/GameActionVehicle.cs
 @@ -45,5 +45,13 @@ public static void HandleCargo(ClientMessage message, Session session)
@@ -2537,7 +2537,7 @@ index 03a9e6f..f2cfcac 100644
      }
  }
 diff --git a/Source/ACE.Server/Network/GameAction/GameActionType.cs b/Source/ACE.Server/Network/GameAction/GameActionType.cs
-index 72d2934..3126c82 100644
+index 72d29346..3126c828 100644
 --- a/Source/ACE.Server/Network/GameAction/GameActionType.cs
 +++ b/Source/ACE.Server/Network/GameAction/GameActionType.cs
 @@ -173,5 +173,6 @@ public enum GameActionType
@@ -2548,7 +2548,7 @@ index 72d2934..3126c82 100644
      }
  }
 diff --git a/Source/ACE.Server/Vehicles/Deployables/DeployableBase.cs b/Source/ACE.Server/Vehicles/Deployables/DeployableBase.cs
-index 581c1e1..1ea89fb 100644
+index 581c1e10..1ea89fbd 100644
 --- a/Source/ACE.Server/Vehicles/Deployables/DeployableBase.cs
 +++ b/Source/ACE.Server/Vehicles/Deployables/DeployableBase.cs
 @@ -80,7 +80,7 @@ public VehicleDeployableStateMsg CreateStateMsg()
@@ -2561,7 +2561,7 @@ index 581c1e1..1ea89fb 100644
              if (Location == null) return;
              var deployer = DeployerPlayerGuid != 0 ? PlayerManager.GetOnlinePlayer(DeployerPlayerGuid) : null;
 diff --git a/Source/ACE.Server/Vehicles/Deployables/DeployableManager.cs b/Source/ACE.Server/Vehicles/Deployables/DeployableManager.cs
-index 5fb7135..e4cdc10 100644
+index 5fb71351..e4cdc106 100644
 --- a/Source/ACE.Server/Vehicles/Deployables/DeployableManager.cs
 +++ b/Source/ACE.Server/Vehicles/Deployables/DeployableManager.cs
 @@ -134,6 +134,11 @@ public static DeployableBase SpawnDeployable(uint wcid, Position location, Playe
@@ -2578,7 +2578,7 @@ index 5fb7135..e4cdc10 100644
              }
 diff --git a/Source/ACE.Server/Vehicles/Deployables/IsoContainerDeployable.cs b/Source/ACE.Server/Vehicles/Deployables/IsoContainerDeployable.cs
 new file mode 100644
-index 0000000..683830b
+index 00000000..683830b8
 --- /dev/null
 +++ b/Source/ACE.Server/Vehicles/Deployables/IsoContainerDeployable.cs
 @@ -0,0 +1,937 @@
@@ -3520,7 +3520,7 @@ index 0000000..683830b
 +    }
 +}
 diff --git a/Source/ACE.Server/Vehicles/Vehicle.cs b/Source/ACE.Server/Vehicles/Vehicle.cs
-index 5db08e2..8a2c9da 100644
+index 5db08e20..8a2c9dae 100644
 --- a/Source/ACE.Server/Vehicles/Vehicle.cs
 +++ b/Source/ACE.Server/Vehicles/Vehicle.cs
 @@ -213,8 +213,8 @@ public class Vehicle : WorldObject
@@ -3535,7 +3535,7 @@ index 5db08e2..8a2c9da 100644
          public bool LoadFullPallet(uint wcid)
          {
 diff --git a/Source/ACE.Server/Vehicles/VehicleColliderCache.cs b/Source/ACE.Server/Vehicles/VehicleColliderCache.cs
-index faa3464..fc5ef75 100644
+index faa3464a..fc5ef75b 100644
 --- a/Source/ACE.Server/Vehicles/VehicleColliderCache.cs
 +++ b/Source/ACE.Server/Vehicles/VehicleColliderCache.cs
 @@ -1,6 +1,7 @@
@@ -3667,7 +3667,7 @@ index faa3464..fc5ef75 100644
              var lbY = (uint)Math.Floor(worldY / LbM);
              if (lbX >= 256 || lbY >= 256)
 diff --git a/Source/ACE.Server/Vehicles/VehicleCommands.cs b/Source/ACE.Server/Vehicles/VehicleCommands.cs
-index 3e6fd79..e9f38e8 100644
+index 3e6fd79b..e9f38e81 100644
 --- a/Source/ACE.Server/Vehicles/VehicleCommands.cs
 +++ b/Source/ACE.Server/Vehicles/VehicleCommands.cs
 @@ -1,5 +1,7 @@
@@ -4079,7 +4079,7 @@ index 3e6fd79..e9f38e8 100644
      }
  }
 diff --git a/Source/ACE.Server/Vehicles/VehicleManager.cs b/Source/ACE.Server/Vehicles/VehicleManager.cs
-index a4f9042..70d9ea6 100644
+index a4f90426..70d9ea6f 100644
 --- a/Source/ACE.Server/Vehicles/VehicleManager.cs
 +++ b/Source/ACE.Server/Vehicles/VehicleManager.cs
 @@ -1241,6 +1241,52 @@ public static void HandleCargo(Session session, VehicleCargo msg)
@@ -4136,7 +4136,7 @@ index a4f9042..70d9ea6 100644
          {
              var capable = HasCap(player.Session, VehicleWire.CapPilot);
 diff --git a/Source/ACE.Server/Vehicles/VehicleWire.cs b/Source/ACE.Server/Vehicles/VehicleWire.cs
-index e266147..55d8cd2 100644
+index e2661475..55d8cd2b 100644
 --- a/Source/ACE.Server/Vehicles/VehicleWire.cs
 +++ b/Source/ACE.Server/Vehicles/VehicleWire.cs
 @@ -33,13 +33,15 @@ public static class VehicleWire

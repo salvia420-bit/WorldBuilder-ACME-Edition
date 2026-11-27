@@ -1,8 +1,8 @@
 From 04a54016218707c5d2d0fa4807008a5da4dd9d4b Mon Sep 17 00:00:00 2001
 From: salvia420-bit <salvia420@gmail.com>
 Date: Fri, 20 Nov 2026 14:00:45 +0000
-Subject: [PATCH] Vehicles (holtburger fork): Tier 5 final LandblockManager
- continent and PowerGenerator dt fixes
+Subject: [PATCH 23/28] Vehicles (holtburger fork): Tier 5 final
+ LandblockManager continent and PowerGenerator dt fixes
 
 Fixes 2 remaining findings from Tier 5 Challenger 5 audit:
 - LandblockManager (IsLoaded, GetLandblock, GetAdjacents, GetAdjacentID, UnloadLandblocks): replace raw bit-15 ((Raw >> 15) & 1) continent indexing with LandblockId.Continent so 0xXXYYFFFF sentinels (including apartmentLandblocks) and indoor EnvCells (>= 0x100) stay on Dereth [0, x, y] instead of misrouting into Dericost [1, x, y].

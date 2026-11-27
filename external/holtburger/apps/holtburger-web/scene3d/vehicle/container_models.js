@@ -8,8 +8,20 @@
 
 import * as THREE_DEFAULT from "three";
 import { installCsmShaderPatch } from "../materials.js";
-import { buildPallet, buildDeployable } from "./deployable_models.js";
+import {
+  buildPallet,
+  buildDeployable,
+  GeomAcc,
+  makeLampsMaterial,
+  disposeRootResources,
+} from "./deployable_models.js";
 import { buildDeployedRadar } from "./radar_model.js";
+import {
+  ECONOMY_CONTAINER_WCID,
+  ECONOMY_CONTAINER_KIND,
+  SPECIALIZED_CONTAINER_SPECS,
+  resolveEconomyWcid,
+} from "./economy_specs.js";
 
 // ---------------------------------------------------------------------------
 // Authoritative Specifications & Identification Constants
@@ -19,12 +31,14 @@ export const CONTAINER_WCID = Object.freeze({
   IsoContainer20: 4000020,
   IsoContainer40: 4000021,
   IsoContainer40HC: 4000022,
+  ...ECONOMY_CONTAINER_WCID,
 });
 
 export const DEPLOYABLE_KIND = Object.freeze({
   IsoContainer20: 10,
   IsoContainer40: 11,
   IsoContainer40HC: 12,
+  ...ECONOMY_CONTAINER_KIND,
 });
 export const CONTAINER_KINDS = DEPLOYABLE_KIND;
 
@@ -82,6 +96,7 @@ export const ISO_CONTAINER_SPECS = Object.freeze({
     hasHazardChevrons: true, // Yellow/Black corner hazard chevrons per ISO 6346
     cornerCastingsCenter: Object.freeze({ width: 2.259, length: 11.985 }),
   }),
+  ...SPECIALIZED_CONTAINER_SPECS,
 });
 
 export const CONTAINER_LIVERIES = Object.freeze({
@@ -148,8 +163,43 @@ export const CONTAINER_SLOTS_40 = Object.freeze((() => {
   return slots;
 })());
 
+// 20-ft Reefer (22R1) 8-slot refrigerated bay (front bulkhead/machinery occupies +2.320 row)
+export const CONTAINER_SLOTS_REEFER_20 = Object.freeze((() => {
+  const rows = [+1.160, 0.000, -1.160, -2.320];
+  const slots = [];
+  for (let r = 0; r < rows.length; r++) {
+    slots.push(
+      Object.freeze({ slotIndex: r * 2 + 0, x: -0.575, y: rows[r], orient: "Y", dx: 1.100, dy: 1.100 }),
+      Object.freeze({ slotIndex: r * 2 + 1, x: +0.575, y: rows[r], orient: "Y", dx: 1.100, dy: 1.100 })
+    );
+  }
+  return slots;
+})());
+
+// 40-ft HC Reefer (45R1) 18-slot refrigerated bay (skips front machinery row r = 0)
+export const CONTAINER_SLOTS_REEFER_40 = Object.freeze((() => {
+  const slots = [];
+  for (let r = 1; r < 10; r++) {
+    const y = (4.5 - r) * 1.180;
+    const idx = r - 1;
+    slots.push(
+      Object.freeze({ slotIndex: idx * 2 + 0, x: -0.575, y, orient: "Y", dx: 1.100, dy: 1.100 }),
+      Object.freeze({ slotIndex: idx * 2 + 1, x: +0.575, y, orient: "Y", dx: 1.100, dy: 1.100 })
+    );
+  }
+  return slots;
+})());
+
 export const PINWHEEL_SLOTS_20 = CONTAINER_SLOTS_20;
 export const PINWHEEL_SLOTS_40 = CONTAINER_SLOTS_40;
+
+function slotsForSpec(spec) {
+  if (!spec) return CONTAINER_SLOTS_20;
+  if (spec.kind === 30) return CONTAINER_SLOTS_REEFER_20;
+  if (spec.kind === 31) return CONTAINER_SLOTS_REEFER_40;
+  if (spec.kind === 32 || spec.kind === 33) return [];
+  return spec.external.length < 7.0 ? CONTAINER_SLOTS_20 : CONTAINER_SLOTS_40;
+}
 
 // ---------------------------------------------------------------------------
 // ISO 6346 Modulo-11 Check Digit Algorithm
@@ -288,6 +338,17 @@ function zBox(t, dx, dy, dz, hex, x = 0, y = 0, z = 0, rot = {}) {
   });
 }
 
+function zCyl(t, r, h, segs, hex, x = 0, y = 0, z = 0, rot = {}) {
+  return shadePart(t, new t.CylinderGeometry(r, r, h, segs), hex, {
+    rx: rot.rx || 0,
+    ry: rot.ry || 0,
+    rz: rot.rz || 0,
+    tx: x,
+    ty: y,
+    tz: z,
+  });
+}
+
 function resolveContainerWcid(typeOrWcid) {
   if (
     typeOrWcid === 4000020 ||
@@ -322,6 +383,10 @@ function resolveContainerWcid(typeOrWcid) {
   if (typeof typeOrWcid === "number" && ISO_CONTAINER_SPECS[typeOrWcid]) {
     return typeOrWcid;
   }
+  const ecoWcid = resolveEconomyWcid(typeOrWcid);
+  if (ecoWcid && SPECIALIZED_CONTAINER_SPECS[ecoWcid]) {
+    return ecoWcid;
+  }
   return CONTAINER_WCID.IsoContainer20;
 }
 
@@ -335,9 +400,13 @@ export function buildIsoContainer(three, typeOrWcid = CONTAINER_WCID.IsoContaine
   const spec = ISO_CONTAINER_SPECS[wcid];
   if (!spec) throw new Error(`Unknown container WCID: ${wcid}`);
 
+  const hasExplicitLivery =
+    options.livery !== undefined || options.liveryId !== undefined || options.liveryKey !== undefined;
   const liveryKey = options.livery ?? options.liveryId ?? options.liveryKey ?? "maritimeBlue";
   const livery = getLivery(liveryKey);
-  const baseHex = livery.hex;
+  const baseHex = !hasExplicitLivery && spec.defaultLiveryHex ? spec.defaultLiveryHex : livery.hex;
+  const variant = spec.variant || "box";
+  const is20Size = spec.external.length < 7.0;
 
   // Root container group
   const root = new t.Group();
@@ -351,51 +420,101 @@ export function buildIsoContainer(three, typeOrWcid = CONTAINER_WCID.IsoContaine
   const halfL = L / 2;
 
   // =========================================================================
-  // SUB-MESH 1: Container Outer Corrugated Shell, Posts, Rails & Cutouts
+  // SUB-MESH 1: Container Outer Shell / Tank / Flat-Rack Frame & Pockets
   // =========================================================================
   const bodyParts = [];
   const wallThick = 0.043; // Corrugation peak-to-valley thickness
   const railH = 0.140;     // Bottom side rail height
   const topRailH = 0.060;  // Top side rail height
   const postW = 0.150;     // Corner post width
-
-  // 1a. Left & Right Corrugated Side Walls
-  // Outer wall panels with vertical corrugated ribs
   const wallZ = spec.floorZ + spec.internal.height / 2;
   const wallH = spec.internal.height;
-  const wallL = spec.internal.length;
-
-  bodyParts.push(zBox(t, wallThick, wallL, wallH, baseHex, -halfW + wallThick / 2, 0, wallZ));
-  bodyParts.push(zBox(t, wallThick, wallL, wallH, baseHex, halfW - wallThick / 2, 0, wallZ));
-
-  // Side vertical corrugation ribs
-  const ribCount = spec.kind === 10 ? 24 : 48;
-  const ribStep = wallL / (ribCount + 1);
+  const wallL = L - 0.16;
   const ribColor = new t.Color(baseHex).multiplyScalar(0.92).getHex();
-  for (let i = 1; i <= ribCount; i++) {
-    const ry = -wallL / 2 + i * ribStep;
-    bodyParts.push(zBox(t, 0.015, 0.035, wallH - 0.04, ribColor, -halfW + wallThick + 0.005, ry, wallZ));
-    bodyParts.push(zBox(t, 0.015, 0.035, wallH - 0.04, ribColor, halfW - wallThick - 0.005, ry, wallZ));
-  }
 
-  // 1b. Front End Bulkhead Wall (+Y)
-  const frontY = halfL - wallThick / 2;
-  bodyParts.push(zBox(t, spec.internal.width, wallThick, wallH, baseHex, 0, frontY, wallZ));
-  // Front corrugation ribs
-  for (let j = -3; j <= 3; j++) {
-    bodyParts.push(zBox(t, 0.04, 0.015, wallH - 0.05, ribColor, j * 0.28, frontY - 0.02, wallZ));
-  }
+  if (variant === "tank" || variant === "gasTank") {
+    // ISO 1496-3 skeletal frame + cylindrical tank + saddle cradles + walkway
+    const frameHex = variant === "gasTank" ? 0x2c363e : 0x2f4354;
+    const tankLen = L - 0.55;
+    const tankR = variant === "gasTank" ? 0.96 : 1.02;
+    const tankZ = H * 0.52;
+    bodyParts.push(zCyl(t, tankR, tankLen, 20, baseHex, 0, 0, tankZ));
+    // End dome caps & top manway / relief valve housing
+    bodyParts.push(zCyl(t, tankR * 0.72, 0.16, 16, baseHex, 0, tankLen * 0.5 + 0.08, tankZ));
+    bodyParts.push(zCyl(t, tankR * 0.72, 0.16, 16, baseHex, 0, -tankLen * 0.5 - 0.08, tankZ));
+    bodyParts.push(zCyl(t, 0.28, 0.16, 12, 0x7e8790, 0, 0.6, tankZ + tankR + 0.05, { rx: Math.PI * 0.5 }));
+    if (variant === "gasTank") {
+      // Sunshield upper canopy + dual relief manifold
+      bodyParts.push(zBox(t, 1.50, tankLen * 0.85, 0.03, 0xf2f4f6, 0, 0, H - 0.06));
+      bodyParts.push(zCyl(t, 0.18, 0.22, 10, 0xd99b18, 0, -0.7, tankZ + tankR + 0.06, { rx: Math.PI * 0.5 }));
+    }
+    // Top inspection walkway
+    bodyParts.push(zBox(t, 0.42, L - 0.40, 0.025, 0x565c62, -0.35, 0, H - 0.09));
+    // End portal frames & saddle cradles
+    for (const sy of [-1.8, 1.8]) {
+      bodyParts.push(zBox(t, 1.70, 0.16, 0.55, frameHex, 0, sy, 0.44));
+    }
+    for (const sy of [-halfL + 0.08, halfL - 0.08]) {
+      bodyParts.push(zBox(t, W - 0.18, 0.10, 0.12, frameHex, 0, sy, H - 0.06));
+      bodyParts.push(zBox(t, W - 0.18, 0.10, 0.14, frameHex, 0, sy, 0.07));
+    }
+  } else if (variant === "flatRack") {
+    // 22P1 / 42P1 heavy steel I-beam deck + reinforced end bulkheads (no side walls/roof)
+    bodyParts.push(zBox(t, W - 0.08, L - 0.16, spec.floorZ - 0.02, 0x353b40, 0, 0, (spec.floorZ - 0.02) * 0.5));
+    for (const sy of [-halfL + 0.09, halfL - 0.09]) {
+      bodyParts.push(zBox(t, W - 0.20, 0.12, wallH, baseHex, 0, sy, spec.floorZ + wallH * 0.5));
+    }
+  } else {
+    // Box variants: standard, reefer (22R1/45R1), dryBulk (22B0), openTop (22U1)
+    bodyParts.push(zBox(t, wallThick, wallL, wallH, baseHex, -halfW + wallThick / 2, 0, wallZ));
+    bodyParts.push(zBox(t, wallThick, wallL, wallH, baseHex, halfW - wallThick / 2, 0, wallZ));
+    if (variant !== "reefer") {
+      const ribCount = is20Size ? 24 : 48;
+      const ribStep = wallL / (ribCount + 1);
+      for (let i = 1; i <= ribCount; i++) {
+        const ry = -wallL / 2 + i * ribStep;
+        bodyParts.push(zBox(t, 0.015, 0.035, wallH - 0.04, ribColor, -halfW + wallThick + 0.005, ry, wallZ));
+        bodyParts.push(zBox(t, 0.015, 0.035, wallH - 0.04, ribColor, halfW - wallThick - 0.005, ry, wallZ));
+      }
+    }
+    const frontY = halfL - wallThick / 2;
+    bodyParts.push(zBox(t, spec.internal.width, wallThick, wallH, baseHex, 0, frontY, wallZ));
+    if (variant === "reefer") {
+      // Front +Y refrigeration machinery condenser/evaporator pack & bulkhead
+      const macY = halfL - 0.26;
+      bodyParts.push(zBox(t, 2.08, 0.44, wallH - 0.18, 0xced6de, 0, macY, wallZ));
+      bodyParts.push(zBox(t, 1.56, 0.04, 0.72, 0x252a30, 0, halfL - 0.02, wallZ + 0.45));
+      bodyParts.push(zBox(t, 1.48, 0.04, 0.52, 0x3b444d, 0, halfL - 0.02, wallZ - 0.45));
+    } else {
+      for (let j = -3; j <= 3; j++) {
+        bodyParts.push(zBox(t, 0.04, 0.015, wallH - 0.05, ribColor, j * 0.28, frontY - 0.02, wallZ));
+      }
+    }
 
-  // 1c. Corrugated Roof Panel
-  const roofThick = 0.035;
-  const roofY = 0;
-  bodyParts.push(zBox(t, W - 0.08, L - 0.10, roofThick, baseHex, 0, roofY, spec.roofZ - roofThick / 2));
-  // Roof transverse corrugation ribs
-  const roofRibs = spec.kind === 10 ? 20 : 40;
-  const roofStep = (L - 0.3) / roofRibs;
-  for (let r = 0; r < roofRibs; r++) {
-    const ry = -halfL + 0.15 + r * roofStep;
-    bodyParts.push(zBox(t, W - 0.14, 0.04, 0.012, ribColor, 0, ry, spec.roofZ + 0.006));
+    if (variant === "openTop") {
+      // 22U1 removable transverse tarpaulin bows instead of solid roof
+      const bowCount = 6;
+      for (let b = 0; b < bowCount; b++) {
+        const by = -halfL + 0.65 + b * ((L - 1.3) / (bowCount - 1));
+        bodyParts.push(zBox(t, W - 0.16, 0.045, 0.035, 0x7e8891, 0, by, spec.roofZ - 0.04));
+      }
+    } else {
+      const roofThick = 0.035;
+      bodyParts.push(zBox(t, W - 0.08, L - 0.10, roofThick, baseHex, 0, 0, spec.roofZ - roofThick / 2));
+      if (variant === "dryBulk") {
+        // 22B0 3 roof circular loading hatches
+        for (const hy of [-1.65, 0, 1.65]) {
+          bodyParts.push(zCyl(t, 0.34, 0.08, 12, 0x2b3136, 0, hy, spec.roofZ + 0.04, { rx: Math.PI * 0.5 }));
+        }
+      } else if (variant !== "reefer") {
+        const roofRibs = is20Size ? 20 : 40;
+        const roofStep = (L - 0.3) / roofRibs;
+        for (let r = 0; r < roofRibs; r++) {
+          const ry = -halfL + 0.15 + r * roofStep;
+          bodyParts.push(zBox(t, W - 0.14, 0.04, 0.012, ribColor, 0, ry, spec.roofZ + 0.006));
+        }
+      }
+    }
   }
 
   // 1d. Structural Corner Posts (4 posts)
@@ -419,12 +538,14 @@ export function buildIsoContainer(three, typeOrWcid = CONTAINER_WCID.IsoContaine
   // Rear door bottom sill (walkable threshold z=0.162m)
   bodyParts.push(zBox(t, W - 0.20, 0.08, spec.floorZ, railColor, 0, -halfL + 0.04, spec.floorZ / 2));
 
-  // Top side rails & roof end headers
+  // Top side rails & roof end headers (omitted on flat-rack sides)
   const topRailZ = H - topRailH / 2;
-  bodyParts.push(zBox(t, 0.06, L - 0.20, topRailH, railColor, -halfW + 0.03, 0, topRailZ));
-  bodyParts.push(zBox(t, 0.06, L - 0.20, topRailH, railColor, halfW - 0.03, 0, topRailZ));
-  bodyParts.push(zBox(t, W - 0.20, 0.06, topRailH, railColor, 0, halfL - 0.03, topRailZ));
-  bodyParts.push(zBox(t, W - 0.20, 0.06, topRailH, railColor, 0, -halfL + 0.03, topRailZ));
+  if (variant !== "flatRack") {
+    bodyParts.push(zBox(t, 0.06, L - 0.20, topRailH, railColor, -halfW + 0.03, 0, topRailZ));
+    bodyParts.push(zBox(t, 0.06, L - 0.20, topRailH, railColor, halfW - 0.03, 0, topRailZ));
+    bodyParts.push(zBox(t, W - 0.20, 0.06, topRailH, railColor, 0, halfL - 0.03, topRailZ));
+    bodyParts.push(zBox(t, W - 0.20, 0.06, topRailH, railColor, 0, -halfL + 0.03, topRailZ));
+  }
 
   // 1f. ISO 1496-1 Forklift Pockets (Strictly on 20ft container only)
   if (spec.hasForkliftPockets && spec.forkliftPockets) {
@@ -481,36 +602,46 @@ export function buildIsoContainer(three, typeOrWcid = CONTAINER_WCID.IsoContaine
   // =========================================================================
   const floorParts = [];
   const floorThick = 0.028;
-  const plankCount = 18;
-  const plankW = spec.internal.width / plankCount;
-  const plankL = spec.internal.length;
+  if (variant === "tank" || variant === "gasTank") {
+    // Tanktainers have an open skeletal frame + rear valve drip tray instead of a full cargo deck
+    floorParts.push(zBox(t, 0.90, 0.65, floorThick, 0x353b40, 0, -halfL + 0.45, 0));
+  } else {
+    const plankCount = 18;
+    const plankW = spec.internal.width / plankCount;
+    const plankL = spec.internal.length;
+    const stdInternalLength = is20Size
+      ? ISO_CONTAINER_SPECS[CONTAINER_WCID.IsoContainer20].internal.length
+      : ISO_CONTAINER_SPECS[CONTAINER_WCID.IsoContainer40].internal.length;
+    const plankOffsetY = variant === "reefer" ? -0.5 * (stdInternalLength - plankL) : 0;
 
-  for (let p = 0; p < plankCount; p++) {
-    const px = -spec.internal.width / 2 + plankW / 2 + p * plankW;
-    // Alternating rich wood plank tones
-    const pColor = p % 2 === 0 ? 0x8a5e38 : 0x7d5431;
-    floorParts.push(zBox(t, plankW - 0.002, plankL, floorThick, pColor, px, 0, 0));
-  }
+    for (let p = 0; p < plankCount; p++) {
+      const px = -spec.internal.width / 2 + plankW / 2 + p * plankW;
+      const pColor = variant === "flatRack"
+        ? (p % 2 === 0 ? 0x61442c : 0x553b26)
+        : (p % 2 === 0 ? 0x8a5e38 : 0x7d5431);
+      floorParts.push(zBox(t, plankW - 0.002, plankL, floorThick, pColor, px, plankOffsetY, 0));
+    }
 
-  // Subtle painted 2-wide bay corner guide brackets merged into floorMesh (0 extra draw calls)
-  const floorSlots = spec.kind === 10 ? CONTAINER_SLOTS_20 : CONTAINER_SLOTS_40;
-  const bracketZ = floorThick / 2 + 0.001; // 0.015 m (1 mm proud of floor top)
-  const bracketColor = 0xb5912e;
-  const bArm = 0.12;
-  const bWidth = 0.022;
-  const bThick = 0.002;
-  for (let i = 0; i < floorSlots.length; i++) {
-    const sl = floorSlots[i];
-    const hx = sl.dx * 0.5;
-    const hy = sl.dy * 0.5;
-    for (const sx of [-1, 1]) {
-      for (const sy of [-1, 1]) {
-        floorParts.push(
-          zBox(t, bArm, bWidth, bThick, bracketColor, sl.x + sx * (hx - bArm * 0.5), sl.y + sy * (hy - bWidth * 0.5), bracketZ)
-        );
-        floorParts.push(
-          zBox(t, bWidth, bArm - bWidth, bThick, bracketColor, sl.x + sx * (hx - bWidth * 0.5), sl.y + sy * (hy - bWidth - (bArm - bWidth) * 0.5), bracketZ)
-        );
+    // Subtle painted 2-wide bay corner guide brackets merged into floorMesh (0 extra draw calls)
+    const floorSlots = slotsForSpec(spec);
+    const bracketZ = floorThick / 2 + 0.001; // 0.015 m (1 mm proud of floor top)
+    const bracketColor = 0xb5912e;
+    const bArm = 0.12;
+    const bWidth = 0.022;
+    const bThick = 0.002;
+    for (let i = 0; i < floorSlots.length; i++) {
+      const sl = floorSlots[i];
+      const hx = sl.dx * 0.5;
+      const hy = sl.dy * 0.5;
+      for (const sx of [-1, 1]) {
+        for (const sy of [-1, 1]) {
+          floorParts.push(
+            zBox(t, bArm, bWidth, bThick, bracketColor, sl.x + sx * (hx - bArm * 0.5), sl.y + sy * (hy - bWidth * 0.5), bracketZ)
+          );
+          floorParts.push(
+            zBox(t, bWidth, bArm - bWidth, bThick, bracketColor, sl.x + sx * (hx - bWidth * 0.5), sl.y + sy * (hy - bWidth - (bArm - bWidth) * 0.5), bracketZ)
+          );
+        }
       }
     }
   }
@@ -600,152 +731,126 @@ export function buildIsoContainer(three, typeOrWcid = CONTAINER_WCID.IsoContaine
   const cscPlateColor = 0xc0c4c8;
   const decalWhite = 0xededed;
 
-  // 4. Left Door Assembly (exterior corner hinge swings outward -1.5*PI flush outside -halfW)
+  const hasCargoDoors = variant !== "flatRack" && variant !== "tank" && variant !== "gasTank";
   const pivotOutX = 0.052;
   const pivotX = halfW + pivotOutX;
   const panelY = doorThick / 2;
-  const extY = panelY - doorThick / 2; // 0.0 (rear exterior face at closed pose)
+  const extY = panelY - doorThick / 2;
   const leftDoorPivot = new t.Group();
   leftDoorPivot.name = "door-pivot-left";
   leftDoorPivot.position.set(-pivotX, -halfL, spec.floorZ);
-
-  const leftDoorParts = [];
-  const leftCenterX = pivotX - doorW / 2;
-  // Main door leaf panel (spans [-doorW, 0] in container X when closed, ly in [0, doorThick])
-  leftDoorParts.push(zBox(t, doorW, doorThick, doorH, baseHex, leftCenterX, panelY, doorH / 2));
-  // Exterior hinge knuckles & straps bridging corner pivot (-pivotX) to outer leaf edge (-doorW)
-  const strapLen = pivotX - doorW + 0.05;
-  for (const hz of [0.25, doorH * 0.5, doorH - 0.25]) {
-    leftDoorParts.push(zBox(t, 0.028, 0.028, 0.090, camColor, 0, extY - 0.012, hz));
-    leftDoorParts.push(zBox(t, strapLen, 0.018, 0.055, camColor, strapLen / 2, extY - 0.009, hz));
-  }
-  // Outer perimeter rubber weather gasket
-  leftDoorParts.push(zBox(t, doorW, 0.015, 0.025, gasketColor, leftCenterX, extY - 0.005, doorH / 2));
-  // 7a. Stainless Steel CSC Safety Approval Plate (door-mounted on left leaf)
-  leftDoorParts.push(zBox(t, 0.35, 0.005, 0.22, cscPlateColor, leftCenterX, extY - 0.005, doorH * 0.35));
-  // 2 vertical galvanized locking bars
-  const bar1X = leftCenterX - doorW * 0.20;
-  const bar2X = leftCenterX + doorW * 0.22;
-  leftDoorParts.push(zBox(t, 0.038, 0.038, doorH + 0.04, lockBarColor, bar1X, extY - 0.022, doorH / 2));
-  leftDoorParts.push(zBox(t, 0.038, 0.038, doorH + 0.04, lockBarColor, bar2X, extY - 0.022, doorH / 2));
-  // Top and bottom locking cams
-  for (const bx of [bar1X, bar2X]) {
-    leftDoorParts.push(zBox(t, 0.060, 0.060, 0.045, camColor, bx, extY - 0.022, 0.02));
-    leftDoorParts.push(zBox(t, 0.060, 0.060, 0.045, camColor, bx, extY - 0.022, doorH - 0.02));
-    // Door handle at waist level
-    leftDoorParts.push(zBox(t, 0.180, 0.025, 0.025, camColor, bx + 0.08, extY - 0.035, doorH * 0.42));
-  }
-
-  const leftDoorGeom = mergeParts(t, leftDoorParts);
-  const leftDoorMat = new t.MeshStandardMaterial({
-    color: 0xffffff,
-    vertexColors: true,
-    roughness: 0.70,
-    metalness: 0.30,
-  });
-  leftDoorMat.castShadow = true;
-  leftDoorMat.receiveShadow = true;
-  if (options.csmState) installCsmShaderPatch(leftDoorMat, options.csmState);
-
-  const leftDoorMesh = new t.Mesh(leftDoorGeom, leftDoorMat);
-  leftDoorMesh.name = "door-leaf-left";
-  leftDoorMesh.castShadow = true;
-  leftDoorMesh.receiveShadow = true;
-  leftDoorPivot.add(leftDoorMesh);
   root.add(leftDoorPivot);
 
-  // 5. Right Door Assembly (exterior corner hinge swings outward +1.5*PI flush outside +halfW)
   const rightDoorPivot = new t.Group();
   rightDoorPivot.name = "door-pivot-right";
   rightDoorPivot.position.set(pivotX, -halfL, spec.floorZ);
-
-  const rightDoorParts = [];
-  const rightCenterX = -pivotX + doorW / 2;
-  // Main door leaf panel (spans [0, +doorW] in container X when closed, ly in [0, doorThick])
-  rightDoorParts.push(zBox(t, doorW, doorThick, doorH, baseHex, rightCenterX, panelY, doorH / 2));
-  // Exterior hinge knuckles & straps bridging corner pivot (+pivotX) to outer leaf edge (+doorW)
-  for (const hz of [0.25, doorH * 0.5, doorH - 0.25]) {
-    rightDoorParts.push(zBox(t, 0.028, 0.028, 0.090, camColor, 0, extY - 0.012, hz));
-    rightDoorParts.push(zBox(t, strapLen, 0.018, 0.055, camColor, -strapLen / 2, extY - 0.009, hz));
-  }
-  // Perimeter weather gasket
-  rightDoorParts.push(zBox(t, doorW, 0.015, 0.025, gasketColor, rightCenterX, extY - 0.005, doorH / 2));
-  // 7b. ISO 6346 BIC Block & Size/Type Decals (door-mounted on right leaf)
-  rightDoorParts.push(zBox(t, 0.65, 0.005, 0.12, decalWhite, rightCenterX, extY - 0.005, doorH * 0.85));
-  rightDoorParts.push(zBox(t, 0.30, 0.005, 0.08, decalWhite, rightCenterX, extY - 0.005, doorH * 0.70));
-  // Astragal flange: overlapping lip on the inner edge (x_world = 0)
-  rightDoorParts.push(zBox(t, 0.035, 0.016, doorH, 0x1f2226, rightCenterX - doorW / 2 + 0.015, extY - 0.008, doorH / 2));
-  // 2 vertical locking bars
-  const rBar1X = rightCenterX - doorW * 0.22;
-  const rBar2X = rightCenterX + doorW * 0.20;
-  rightDoorParts.push(zBox(t, 0.038, 0.038, doorH + 0.04, lockBarColor, rBar1X, extY - 0.022, doorH / 2));
-  rightDoorParts.push(zBox(t, 0.038, 0.038, doorH + 0.04, lockBarColor, rBar2X, extY - 0.022, doorH / 2));
-  // Top/bottom locking cams and waist handle
-  for (const bx of [rBar1X, rBar2X]) {
-    rightDoorParts.push(zBox(t, 0.060, 0.060, 0.045, camColor, bx, extY - 0.022, 0.02));
-    rightDoorParts.push(zBox(t, 0.060, 0.060, 0.045, camColor, bx, extY - 0.022, doorH - 0.02));
-    rightDoorParts.push(zBox(t, 0.180, 0.025, 0.025, camColor, bx - 0.08, extY - 0.035, doorH * 0.42));
-  }
-
-  const rightDoorGeom = mergeParts(t, rightDoorParts);
-  const rightDoorMat = new t.MeshStandardMaterial({
-    color: 0xffffff,
-    vertexColors: true,
-    roughness: 0.70,
-    metalness: 0.30,
-  });
-  rightDoorMat.castShadow = true;
-  rightDoorMat.receiveShadow = true;
-  if (options.csmState) installCsmShaderPatch(rightDoorMat, options.csmState);
-
-  const rightDoorMesh = new t.Mesh(rightDoorGeom, rightDoorMat);
-  rightDoorMesh.name = "door-leaf-right";
-  rightDoorMesh.castShadow = true;
-  rightDoorMesh.receiveShadow = true;
-  rightDoorPivot.add(rightDoorMesh);
   root.add(rightDoorPivot);
 
-  // =========================================================================
-  // SUB-MESH 6: Fold-Down Diamond Tread Loading Ramp (~11° slope)
-  // =========================================================================
   const rampPivot = new t.Group();
   rampPivot.name = "ramp-pivot";
   rampPivot.position.set(0, -halfL, spec.floorZ);
-
-  const rampParts = [];
-  const rampLength = 0.85; // Length yielding exactly 10.99° slope for 0.162m elevation drop
-  const rampWidth = 2.20;
-  const rampThick = 0.020;
-  const rampPlateColor = 0x4f545a;
-  const rampBevelColor = 0x6e7378;
-
-  // Main diamond tread steel ramp plate
-  rampParts.push(zBox(t, rampWidth, rampLength, rampThick, rampPlateColor, 0, -rampLength / 2, 0));
-  // Side safety curbs
-  rampParts.push(zBox(t, 0.045, rampLength, 0.040, rampBevelColor, -rampWidth / 2 + 0.022, -rampLength / 2, 0.015));
-  rampParts.push(zBox(t, 0.045, rampLength, 0.040, rampBevelColor, rampWidth / 2 - 0.022, -rampLength / 2, 0.015));
-  // Hinge pin cylinders along X axis at sill
-  for (let k = -4; k <= 4; k++) {
-    rampParts.push(zBox(t, 0.120, 0.045, 0.035, 0x2e3236, k * 0.24, -0.02, 0));
-  }
-
-  const rampGeom = mergeParts(t, rampParts);
-  const rampMat = new t.MeshStandardMaterial({
-    color: 0xffffff,
-    vertexColors: true,
-    roughness: 0.60,
-    metalness: 0.45,
-  });
-  rampMat.castShadow = true;
-  rampMat.receiveShadow = true;
-  if (options.csmState) installCsmShaderPatch(rampMat, options.csmState);
-
-  const rampMesh = new t.Mesh(rampGeom, rampMat);
-  rampMesh.name = "container-ramp";
-  rampMesh.castShadow = true;
-  rampMesh.receiveShadow = true;
-  rampPivot.add(rampMesh);
   root.add(rampPivot);
+
+  if (hasCargoDoors) {
+    const leftDoorParts = [];
+    const leftCenterX = pivotX - doorW / 2;
+    leftDoorParts.push(zBox(t, doorW, doorThick, doorH, baseHex, leftCenterX, panelY, doorH / 2));
+    const strapLen = pivotX - doorW + 0.05;
+    for (const hz of [0.25, doorH * 0.5, doorH - 0.25]) {
+      leftDoorParts.push(zBox(t, 0.028, 0.028, 0.090, camColor, 0, extY - 0.012, hz));
+      leftDoorParts.push(zBox(t, strapLen, 0.018, 0.055, camColor, strapLen / 2, extY - 0.009, hz));
+    }
+    leftDoorParts.push(zBox(t, doorW, 0.015, 0.025, gasketColor, leftCenterX, extY - 0.005, doorH / 2));
+    leftDoorParts.push(zBox(t, 0.35, 0.005, 0.22, cscPlateColor, leftCenterX, extY - 0.005, doorH * 0.35));
+    const bar1X = leftCenterX - doorW * 0.20;
+    const bar2X = leftCenterX + doorW * 0.22;
+    leftDoorParts.push(zBox(t, 0.038, 0.038, doorH + 0.04, lockBarColor, bar1X, extY - 0.022, doorH / 2));
+    leftDoorParts.push(zBox(t, 0.038, 0.038, doorH + 0.04, lockBarColor, bar2X, extY - 0.022, doorH / 2));
+    for (const bx of [bar1X, bar2X]) {
+      leftDoorParts.push(zBox(t, 0.060, 0.060, 0.045, camColor, bx, extY - 0.022, 0.02));
+      leftDoorParts.push(zBox(t, 0.060, 0.060, 0.045, camColor, bx, extY - 0.022, doorH - 0.02));
+      leftDoorParts.push(zBox(t, 0.180, 0.025, 0.025, camColor, bx + 0.08, extY - 0.035, doorH * 0.42));
+    }
+    const leftDoorGeom = mergeParts(t, leftDoorParts);
+    const leftDoorMat = new t.MeshStandardMaterial({
+      color: 0xffffff,
+      vertexColors: true,
+      roughness: 0.70,
+      metalness: 0.30,
+    });
+    leftDoorMat.castShadow = true;
+    leftDoorMat.receiveShadow = true;
+    if (options.csmState) installCsmShaderPatch(leftDoorMat, options.csmState);
+    const leftDoorMesh = new t.Mesh(leftDoorGeom, leftDoorMat);
+    leftDoorMesh.name = "door-leaf-left";
+    leftDoorMesh.castShadow = true;
+    leftDoorMesh.receiveShadow = true;
+    leftDoorPivot.add(leftDoorMesh);
+
+    const rightDoorParts = [];
+    const rightCenterX = -pivotX + doorW / 2;
+    rightDoorParts.push(zBox(t, doorW, doorThick, doorH, baseHex, rightCenterX, panelY, doorH / 2));
+    for (const hz of [0.25, doorH * 0.5, doorH - 0.25]) {
+      rightDoorParts.push(zBox(t, 0.028, 0.028, 0.090, camColor, 0, extY - 0.012, hz));
+      rightDoorParts.push(zBox(t, strapLen, 0.018, 0.055, camColor, -strapLen / 2, extY - 0.009, hz));
+    }
+    rightDoorParts.push(zBox(t, doorW, 0.015, 0.025, gasketColor, rightCenterX, extY - 0.005, doorH / 2));
+    rightDoorParts.push(zBox(t, 0.65, 0.005, 0.12, decalWhite, rightCenterX, extY - 0.005, doorH * 0.85));
+    rightDoorParts.push(zBox(t, 0.30, 0.005, 0.08, decalWhite, rightCenterX, extY - 0.005, doorH * 0.70));
+    rightDoorParts.push(zBox(t, 0.035, 0.016, doorH, 0x1f2226, rightCenterX - doorW / 2 + 0.015, extY - 0.008, doorH / 2));
+    const rBar1X = rightCenterX - doorW * 0.22;
+    const rBar2X = rightCenterX + doorW * 0.20;
+    rightDoorParts.push(zBox(t, 0.038, 0.038, doorH + 0.04, lockBarColor, rBar1X, extY - 0.022, doorH / 2));
+    rightDoorParts.push(zBox(t, 0.038, 0.038, doorH + 0.04, lockBarColor, rBar2X, extY - 0.022, doorH / 2));
+    for (const bx of [rBar1X, rBar2X]) {
+      rightDoorParts.push(zBox(t, 0.060, 0.060, 0.045, camColor, bx, extY - 0.022, 0.02));
+      rightDoorParts.push(zBox(t, 0.060, 0.060, 0.045, camColor, bx, extY - 0.022, doorH - 0.02));
+      rightDoorParts.push(zBox(t, 0.180, 0.025, 0.025, camColor, bx - 0.08, extY - 0.035, doorH * 0.42));
+    }
+    const rightDoorGeom = mergeParts(t, rightDoorParts);
+    const rightDoorMat = new t.MeshStandardMaterial({
+      color: 0xffffff,
+      vertexColors: true,
+      roughness: 0.70,
+      metalness: 0.30,
+    });
+    rightDoorMat.castShadow = true;
+    rightDoorMat.receiveShadow = true;
+    if (options.csmState) installCsmShaderPatch(rightDoorMat, options.csmState);
+    const rightDoorMesh = new t.Mesh(rightDoorGeom, rightDoorMat);
+    rightDoorMesh.name = "door-leaf-right";
+    rightDoorMesh.castShadow = true;
+    rightDoorMesh.receiveShadow = true;
+    rightDoorPivot.add(rightDoorMesh);
+
+    const rampParts = [];
+    const rampLength = 0.85;
+    const rampWidth = 2.20;
+    const rampThick = 0.020;
+    const rampPlateColor = 0x4f545a;
+    const rampBevelColor = 0x6e7378;
+    rampParts.push(zBox(t, rampWidth, rampLength, rampThick, rampPlateColor, 0, -rampLength / 2, 0));
+    rampParts.push(zBox(t, 0.045, rampLength, 0.040, rampBevelColor, -rampWidth / 2 + 0.022, -rampLength / 2, 0.015));
+    rampParts.push(zBox(t, 0.045, rampLength, 0.040, rampBevelColor, rampWidth / 2 - 0.022, -rampLength / 2, 0.015));
+    for (let k = -4; k <= 4; k++) {
+      rampParts.push(zBox(t, 0.120, 0.045, 0.035, 0x2e3236, k * 0.24, -0.02, 0));
+    }
+    const rampGeom = mergeParts(t, rampParts);
+    const rampMat = new t.MeshStandardMaterial({
+      color: 0xffffff,
+      vertexColors: true,
+      roughness: 0.60,
+      metalness: 0.45,
+    });
+    rampMat.castShadow = true;
+    rampMat.receiveShadow = true;
+    if (options.csmState) installCsmShaderPatch(rampMat, options.csmState);
+    const rampMesh = new t.Mesh(rampGeom, rampMat);
+    rampMesh.name = "container-ramp";
+    rampMesh.castShadow = true;
+    rampMesh.receiveShadow = true;
+    rampPivot.add(rampMesh);
+  }
 
   // =========================================================================
   // SUB-MESH 7: Markings, Exterior Side BIC Decals & 40HC Hazard Chevrons
@@ -788,13 +893,26 @@ export function buildIsoContainer(three, typeOrWcid = CONTAINER_WCID.IsoContaine
   markingsMesh.receiveShadow = true;
   root.add(markingsMesh);
 
+  if (variant === "reefer") {
+    const lampAcc = new GeomAcc();
+    lampAcc.box(0.58, halfL + 0.004, wallZ + 0.35, 0.08, 0.015, 0.04, [0.22, 0.95, 0.45]);
+    const lampsMat = makeLampsMaterial(t, { emissiveIntensity: 0.95, roughness: 0.25 });
+    lampsMat.userData.__vfxSetKey = "lamps";
+    if (options.csmState) installCsmShaderPatch(lampsMat, options.csmState);
+    const reeferLampMesh = new t.Mesh(lampAcc.toBufferGeometry(t), lampsMat);
+    reeferLampMesh.name = "container-reefer-status-lamp";
+    reeferLampMesh.castShadow = false;
+    reeferLampMesh.receiveShadow = false;
+    root.add(reeferLampMesh);
+  }
+
   // =========================================================================
   // SUB-MESH 8: Live GMA Pallet Bay (stowed deployables mount inside)
   // Dynamic Interior Culling: cargoBayGroup.visible = false when doors closed
   // =========================================================================
   const cargoBayGroup = new t.Group();
   cargoBayGroup.name = "cargoBayGroup";
-  cargoBayGroup.visible = false; // vfx-lint-allow: interior bay culling when doors closed
+  cargoBayGroup.visible = variant === "flatRack"; // vfx-lint-allow: interior bay culling when doors closed (flatRack open deck always visible)
   root.add(cargoBayGroup);
 
   // Lazy diegetic floor highlight outline for pinwheel pallet bay slots (attached only while active)
@@ -868,7 +986,7 @@ export function buildIsoContainer(three, typeOrWcid = CONTAINER_WCID.IsoContaine
   }
 
   function loadSlot(slotIndex, cargoWcid, _slotOpts = {}) {
-    const slotsDef = spec.kind === 10 ? CONTAINER_SLOTS_20 : CONTAINER_SLOTS_40;
+    const slotsDef = slotsForSpec(spec);
     const slotDef = slotsDef[slotIndex];
     if (!slotDef) return null;
 
@@ -885,7 +1003,7 @@ export function buildIsoContainer(three, typeOrWcid = CONTAINER_WCID.IsoContaine
 
     if (cargoWcid === 4000002) {
       deployableModel = buildDeployedRadar(t, { stowed: true, csmState: options.csmState });
-    } else if (cargoWcid >= 4000010 && cargoWcid <= 4000017) {
+    } else if ((cargoWcid >= 4000010 && cargoWcid <= 4000017) || (cargoWcid >= 4000070 && cargoWcid <= 4000074)) {
       deployableModel = buildDeployable(t, cargoWcid, { stowed: true, csmState: options.csmState });
     }
 
@@ -952,7 +1070,7 @@ export function buildIsoContainer(three, typeOrWcid = CONTAINER_WCID.IsoContaine
       }
       return false;
     }
-    const slotsDef = spec.kind === 10 ? CONTAINER_SLOTS_20 : CONTAINER_SLOTS_40;
+    const slotsDef = slotsForSpec(spec);
     const idx = typeof slotIndex === "number" ? Math.trunc(slotIndex) : parseInt(String(slotIndex), 10);
     const slotDef = Number.isFinite(idx) ? slotsDef[idx] : null;
     if (!slotDef) {
@@ -992,8 +1110,8 @@ export function buildIsoContainer(three, typeOrWcid = CONTAINER_WCID.IsoContaine
     // Loading ramp folds down ~11° (~0.1918 rad) from sill (z=0.162m) to ground (z=0.0m)
     rampPivot.rotation.x = prog * 0.1918;
 
-    // Cargo bay dynamically culled when doors are closed (prog <= 0.01)
-    cargoBayGroup.visible = prog > 0.01; // vfx-lint-allow: interior bay culling when doors closed
+    // Cargo bay dynamically culled when doors are closed (prog <= 0.01); flat-rack has no walls/doors so deck cargo stays visible
+    cargoBayGroup.visible = variant === "flatRack" ? true : prog > 0.01; // vfx-lint-allow: interior bay culling when doors closed
   }
 
   // Initialize with initial door progress
@@ -1037,16 +1155,7 @@ export function buildIsoContainer(three, typeOrWcid = CONTAINER_WCID.IsoContaine
       for (const idx of [...loadedSlots.keys()]) {
         unloadSlot(idx);
       }
-      root.traverse((o) => {
-        if (o.geometry) o.geometry.dispose();
-        if (o.material) {
-          if (Array.isArray(o.material)) {
-            for (const m of o.material) m.dispose();
-          } else {
-            o.material.dispose();
-          }
-        }
-      });
+      disposeRootResources(root);
     },
   };
 }

@@ -66,16 +66,84 @@ const SPEC_40HC = Object.freeze({
   maxHalf: 20,
 });
 
+const SPEC_REEFER_20 = Object.freeze({
+  kind: 30,
+  width: 2.280,
+  length: 4.820,
+  halfW: 1.140,
+  halfL: 2.410,
+  floorZ: 0.162,
+  maxFull: 8,
+  maxHalf: 8,
+});
+
+const SPEC_REEFER_40HC = Object.freeze({
+  kind: 31,
+  width: 2.280,
+  length: 10.950,
+  halfW: 1.140,
+  halfL: 5.475,
+  floorZ: 0.162,
+  maxFull: 18,
+  maxHalf: 18,
+});
+
+const SPEC_TANK_20 = Object.freeze({
+  kind: 32,
+  width: 2.200,
+  length: 5.600,
+  halfW: 1.100,
+  halfL: 2.800,
+  floorZ: 0.162,
+  maxFull: 0,
+  maxHalf: 0,
+});
+
+const SPEC_GASTANK_20 = Object.freeze({
+  kind: 33,
+  width: 2.150,
+  length: 5.500,
+  halfW: 1.075,
+  halfL: 2.750,
+  floorZ: 0.162,
+  maxFull: 0,
+  maxHalf: 0,
+});
+
 export const CONTAINER_INTERIOR_SPECS = Object.freeze({
   "20ft": SPEC_20FT,
   "40ft": SPEC_40FT,
   "40HC": SPEC_40HC,
+  "22R1": SPEC_REEFER_20,
+  "45R1": SPEC_REEFER_40HC,
+  "22T1": SPEC_TANK_20,
+  "22K2": SPEC_GASTANK_20,
+  "22B0": Object.freeze({ ...SPEC_20FT, kind: 34 }),
+  "22U1": Object.freeze({ ...SPEC_20FT, kind: 35 }),
+  "22P1": Object.freeze({ ...SPEC_20FT, kind: 36, floorZ: 0.280 }),
+  "42P1": Object.freeze({ ...SPEC_40FT, kind: 37, floorZ: 0.300 }),
   10: SPEC_20FT,
   11: SPEC_40FT,
   12: SPEC_40HC,
+  30: SPEC_REEFER_20,
+  31: SPEC_REEFER_40HC,
+  32: SPEC_TANK_20,
+  33: SPEC_GASTANK_20,
+  34: Object.freeze({ ...SPEC_20FT, kind: 34 }),
+  35: Object.freeze({ ...SPEC_20FT, kind: 35 }),
+  36: Object.freeze({ ...SPEC_20FT, kind: 36, floorZ: 0.280 }),
+  37: Object.freeze({ ...SPEC_40FT, kind: 37, floorZ: 0.300 }),
   4000020: SPEC_20FT,
   4000021: SPEC_40FT,
   4000022: SPEC_40HC,
+  4000060: SPEC_REEFER_20,
+  4000061: SPEC_REEFER_40HC,
+  4000062: SPEC_TANK_20,
+  4000063: SPEC_GASTANK_20,
+  4000064: Object.freeze({ ...SPEC_20FT, kind: 34 }),
+  4000065: Object.freeze({ ...SPEC_20FT, kind: 35 }),
+  4000066: Object.freeze({ ...SPEC_20FT, kind: 36, floorZ: 0.280 }),
+  4000067: Object.freeze({ ...SPEC_40FT, kind: 37, floorZ: 0.300 }),
 });
 
 // 20-ft 2-Wide Grid Bay Floor Layout (2 x 5 = 10 Unified 1.100 x 1.100 m Slots)
@@ -99,6 +167,31 @@ export const CONTAINER_SLOTS_40 = Object.freeze((() => {
     slots.push(
       Object.freeze({ slotIndex: r * 2 + 0, x: -0.575, y, orient: "Y", dx: 1.100, dy: 1.100 }),
       Object.freeze({ slotIndex: r * 2 + 1, x: +0.575, y, orient: "Y", dx: 1.100, dy: 1.100 })
+    );
+  }
+  return slots;
+})());
+
+export const CONTAINER_SLOTS_REEFER_20 = Object.freeze((() => {
+  const rows = [+1.160, 0.000, -1.160, -2.320];
+  const slots = [];
+  for (let r = 0; r < rows.length; r++) {
+    slots.push(
+      Object.freeze({ slotIndex: r * 2 + 0, x: -0.575, y: rows[r], orient: "Y", dx: 1.100, dy: 1.100 }),
+      Object.freeze({ slotIndex: r * 2 + 1, x: +0.575, y: rows[r], orient: "Y", dx: 1.100, dy: 1.100 })
+    );
+  }
+  return slots;
+})());
+
+export const CONTAINER_SLOTS_REEFER_40 = Object.freeze((() => {
+  const slots = [];
+  for (let r = 1; r < 10; r++) {
+    const y = (4.5 - r) * 1.180;
+    const idx = r - 1;
+    slots.push(
+      Object.freeze({ slotIndex: idx * 2 + 0, x: -0.575, y, orient: "Y", dx: 1.100, dy: 1.100 }),
+      Object.freeze({ slotIndex: idx * 2 + 1, x: +0.575, y, orient: "Y", dx: 1.100, dy: 1.100 })
     );
   }
   return slots;
@@ -146,6 +239,24 @@ export function resolveContainerLogisticsSpec(containerKind) {
     if (n === 12 || n === 4000022) {
       return { interior: SPEC_40HC, slots: PINWHEEL_SLOTS_40 };
     }
+    if (n === 30 || n === 4000060) {
+      return { interior: SPEC_REEFER_20, slots: CONTAINER_SLOTS_REEFER_20 };
+    }
+    if (n === 31 || n === 4000061) {
+      return { interior: SPEC_REEFER_40HC, slots: CONTAINER_SLOTS_REEFER_40 };
+    }
+    if (n === 32 || n === 4000062) {
+      return { interior: SPEC_TANK_20, slots: [] };
+    }
+    if (n === 33 || n === 4000063) {
+      return { interior: SPEC_GASTANK_20, slots: [] };
+    }
+    if (n === 34 || n === 4000064 || n === 35 || n === 4000065 || n === 36 || n === 4000066) {
+      return { interior: CONTAINER_INTERIOR_SPECS[n], slots: PINWHEEL_SLOTS_20 };
+    }
+    if (n === 37 || n === 4000067) {
+      return { interior: CONTAINER_INTERIOR_SPECS[n], slots: PINWHEEL_SLOTS_40 };
+    }
     return null;
   }
   if (typeof key === "string") {
@@ -158,6 +269,30 @@ export function resolveContainerLogisticsSpec(containerKind) {
     }
     if (s === "40hc" || s === "45g1" || s === "1aaa" || s === "isocontainer40hc" || s === "4000022" || s === "12") {
       return { interior: SPEC_40HC, slots: PINWHEEL_SLOTS_40 };
+    }
+    if (s === "22r1" || s === "isoreefer20" || s === "4000060" || s === "30") {
+      return { interior: SPEC_REEFER_20, slots: CONTAINER_SLOTS_REEFER_20 };
+    }
+    if (s === "45r1" || s === "isoreefer40hc" || s === "4000061" || s === "31") {
+      return { interior: SPEC_REEFER_40HC, slots: CONTAINER_SLOTS_REEFER_40 };
+    }
+    if (s === "22t1" || s === "isotank20" || s === "4000062" || s === "32") {
+      return { interior: SPEC_TANK_20, slots: [] };
+    }
+    if (s === "22k2" || s === "isogastank20" || s === "4000063" || s === "33") {
+      return { interior: SPEC_GASTANK_20, slots: [] };
+    }
+    if (s === "22b0" || s === "isodrybulk20" || s === "4000064" || s === "34") {
+      return { interior: CONTAINER_INTERIOR_SPECS[34], slots: PINWHEEL_SLOTS_20 };
+    }
+    if (s === "22u1" || s === "isoopentop20" || s === "4000065" || s === "35") {
+      return { interior: CONTAINER_INTERIOR_SPECS[35], slots: PINWHEEL_SLOTS_20 };
+    }
+    if (s === "22p1" || s === "isoflatrack20" || s === "4000066" || s === "36") {
+      return { interior: CONTAINER_INTERIOR_SPECS[36], slots: PINWHEEL_SLOTS_20 };
+    }
+    if (s === "42p1" || s === "isoflatrack40" || s === "4000067" || s === "37") {
+      return { interior: CONTAINER_INTERIOR_SPECS[37], slots: PINWHEEL_SLOTS_40 };
     }
   }
   return null;

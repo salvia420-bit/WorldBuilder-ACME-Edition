@@ -540,6 +540,16 @@ pub enum GameActionOpcode {
     VehicleTrailerAction = 0x090F,
     /// C2S: HBV1 VehiclePalletJackAction (walk-behind pallet jack operator action).
     VehiclePalletJackAction = 0x0910,
+    /// C2S: HBV1 Economy_SiegeAction (v8: town siege / depot supply / control node action).
+    EconomySiegeAction = 0x0912,
+    /// C2S: HBV1 Industry_Prospecting (v8: 4-stage subsurface prospecting tool action).
+    IndustryProspecting = 0x0913,
+    /// C2S: HBV1 Industry_FacilityAction (v8: extraction / refining / mint / workshop skid action).
+    IndustryFacilityAction = 0x0914,
+    /// C2S: HBV1 Logistics_ConvoyOrder (v8: overland / Outer Ocean convoy dispatch & routing).
+    LogisticsConvoyOrder = 0x0915,
+    /// C2S: HBV1 Economy_MonarchOrder (v8: monarch governance / tariff / work-order command).
+    EconomyMonarchOrder = 0x0916,
     // /// C2S: Response to an admin plugin detail query.
     // QueryPluginResponse = 0x02B2,
     /// C2S: Finalize character changes in a barber session (retail
@@ -1101,6 +1111,18 @@ pub enum GameEventOpcode {
     VehicleTrailerState = 0x090F,
     /// S2C: HBV1 VehiclePalletJackState (authoritative walk-behind pallet jack telemetry broadcast).
     VehiclePalletJackState = 0x0910,
+    /// S2C: HBV1 Economy_TownState (v8: authoritative town control, treasury, escrow & tariff telemetry).
+    EconomyTownState = 0x0911,
+    /// S2C: HBV1 Economy_SiegeEvent (v8: discrete siege transition / supply / capture spoils event).
+    EconomySiegeEvent = 0x0912,
+    /// S2C: HBV1 Industry_SurveyResult (v8: subsurface deposit survey / assay result).
+    IndustrySurveyResult = 0x0913,
+    /// S2C: HBV1 Industry_FacilityState (v8: extraction / refining / mint / workshop skid state).
+    IndustryFacilityState = 0x0914,
+    /// S2C: HBV1 Logistics_ConvoyState (v8: dual-LOD logistics convoy state telemetry).
+    LogisticsConvoyState = 0x0915,
+    /// S2C: HBV1 Economy_MonarchOrderState (v8: monarch order / bounty / tariff state update).
+    EconomyMonarchOrderState = 0x0916,
     // /// S2C: Admin-only query for a specific plugin's status.
     // AdminQueryPlugin = 0x02B1,
     // /// S2C: Admin-only response to a plugin query.

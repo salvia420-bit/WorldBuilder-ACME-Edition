@@ -298,7 +298,7 @@ export function buildPalletJack(three, options = {}) {
     let model;
     if (nextWcid === 4000002) {
       model = buildDeployedRadar(t, { stowed: true, csmState: options.csmState });
-    } else if (nextWcid >= 4000010 && nextWcid <= 4000017) {
+    } else if ((nextWcid >= 4000010 && nextWcid <= 4000017) || (nextWcid >= 4000070 && nextWcid <= 4000074)) {
       model = buildDeployable(t, nextWcid, { stowed: true, csmState: options.csmState });
     } else {
       model = buildPallet(t, "standard", { stowed: true, csmState: options.csmState });

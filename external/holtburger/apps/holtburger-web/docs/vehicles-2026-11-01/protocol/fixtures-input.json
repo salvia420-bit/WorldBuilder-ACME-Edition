@@ -414,7 +414,7 @@
    "message": "Vehicle_State",
    "expect": "ok",
    "fields": {
-    "Header": {"Tag": 827736648, "Version": 8, "Reserved": 0},
+    "Header": {"Tag": 827736648, "Version": 9, "Reserved": 0},
     "Vehicle": 2147486209, "Step": 7, "AckInputSeq": 0, "Cell": 2847146009,
     "Position": {"X": 1.0, "Y": 2.0, "Z": 3.0},
     "Heading": 0.0, "Pitch": 0.0, "Bank": 0.0, "Speed": 0.0, "VCap": 69.0, "Ammo": 200, "Mode": 0, "Flags": 0,
@@ -799,6 +799,184 @@
     "Reserved": 0,
     "CarriedWcid": 4000010,
     "OwnerGuid": 1342177281
+   }
+  },
+  {
+   "name": "economy_town_state",
+   "message": "Economy_TownState",
+   "fields": {
+    "TownId": 1,
+    "ControlState": 3,
+    "OwnerMonarchId": 1342177281,
+    "AttackerMonarchId": 1342177999,
+    "Flags": 1,
+    "Reserved": 0,
+    "AnchorLandblock": 2847145984,
+    "HoldElapsedSec": 14400,
+    "SupplyMeterSec": 4800,
+    "StarvingSec": 0,
+    "TreasuryPyreals": 5000000123,
+    "EscrowPyreals": 4294967300,
+    "TariffBuyMul": 1.05,
+    "TariffSellMul": 0.92
+   }
+  },
+  {
+   "name": "economy_siege_action",
+   "message": "Economy_SiegeAction",
+   "fields": {
+    "TownId": 1,
+    "BeaconGuid": 1342178001,
+    "Action": 2,
+    "Flags": 1,
+    "Reserved": 0,
+    "SupplyPoints": 250,
+    "OriginLandblock": 2848522240
+   }
+  },
+  {
+   "name": "economy_siege_event",
+   "message": "Economy_SiegeEvent",
+   "fields": {
+    "TownId": 1,
+    "Kind": 6,
+    "ControlState": 1,
+    "Reserved": 0,
+    "OwnerMonarchId": 1342177999,
+    "AttackerMonarchId": 1342177281,
+    "HoldElapsedSec": 28800,
+    "SupplyMeterSec": 5400,
+    "StarvingSec": 0,
+    "TreasurySpoils": 4500000999
+   }
+  },
+  {
+   "name": "industry_prospecting",
+   "message": "Industry_Prospecting",
+   "fields": {
+    "ToolGuid": 1342178100,
+    "ToolKind": 38,
+    "Mode": 1,
+    "Reserved0": 0,
+    "Reserved1": 0,
+    "Cell": 2847146009,
+    "Position": {"X": 64.5, "Y": 128.25, "Z": 14.0}
+   }
+  },
+  {
+   "name": "industry_survey_result",
+   "message": "Industry_SurveyResult",
+   "fields": {
+    "DepositId": 9001002003,
+    "LandblockId": 43444,
+    "ToolKind": 41,
+    "Flags": 2,
+    "TerrainCode": 4,
+    "ResourceKind": 7,
+    "Reserved": 0,
+    "DepthM": 185.5,
+    "GradeBps": 6450,
+    "ApiGravity": 34.2,
+    "SulfurBps": 120,
+    "RemainingTonnes": 12500.0
+   }
+  },
+  {
+   "name": "industry_facility_action",
+   "message": "Industry_FacilityAction",
+   "fields": {
+    "FacilityGuid": 1342178200,
+    "Action": 3,
+    "Reserved0": 0,
+    "Reserved1": 0,
+    "RecipeId": 401,
+    "Param": 12
+   }
+  },
+  {
+   "name": "industry_facility_state",
+   "message": "Industry_FacilityState",
+   "fields": {
+    "FacilityGuid": 1342178200,
+    "Kind": 49,
+    "TownId": 1,
+    "DepositId": 9001002003,
+    "OwnerMonarchId": 1342177281,
+    "Status": 2,
+    "OnlineFlags": 7,
+    "Reserved": 0,
+    "PowerWatts": -45000.0,
+    "BufferJoules": 18000000.0,
+    "ProgressPct": 0.625,
+    "RecipeId": 401
+   }
+  },
+  {
+   "name": "logistics_convoy_order",
+   "message": "Logistics_ConvoyOrder",
+   "fields": {
+    "ConvoyId": 7000000042,
+    "Action": 1,
+    "VehicleClass": 4,
+    "Flags": 3,
+    "OriginTownId": 1,
+    "DestTownId": 12,
+    "ContainerKind": 30,
+    "CommodityId": 4000060
+   }
+  },
+  {
+   "name": "logistics_convoy_state",
+   "message": "Logistics_ConvoyState",
+   "fields": {
+    "ConvoyId": 7000000042,
+    "OwnerMonarchId": 1342177281,
+    "VehicleGuid": 2147486300,
+    "VehicleClass": 4,
+    "LodState": 1,
+    "Status": 2,
+    "Reserved": 0,
+    "OriginTownId": 1,
+    "DestTownId": 12,
+    "OriginLandblock": 43444,
+    "SplineSM": 1842.75,
+    "FuelLiters": 420.5,
+    "Cell": 2847146009,
+    "Position": {"X": 96.0, "Y": 144.0, "Z": 0.0},
+    "Heading": 2.356194
+   }
+  },
+  {
+   "name": "economy_monarch_order",
+   "message": "Economy_MonarchOrder",
+   "fields": {
+    "OrderId": 8800000001,
+    "TownId": 1,
+    "Action": 1,
+    "OrderType": 2,
+    "Flags": 1,
+    "TargetGuid": 0,
+    "ItemWcid": 4000060,
+    "Quantity": 20,
+    "RewardPyreals": 6000000000,
+    "ParamF32": 1.15
+   }
+  },
+  {
+   "name": "economy_monarch_order_state",
+   "message": "Economy_MonarchOrderState",
+   "fields": {
+    "OrderId": 8800000001,
+    "MonarchId": 1342177281,
+    "TownId": 1,
+    "OrderType": 2,
+    "Status": 1,
+    "Flags": 1,
+    "ClaimedByGuid": 1342177350,
+    "ItemWcid": 4000060,
+    "Quantity": 20,
+    "RewardPyreals": 6000000000,
+    "ValueF32": 1.15
    }
   }
  ]

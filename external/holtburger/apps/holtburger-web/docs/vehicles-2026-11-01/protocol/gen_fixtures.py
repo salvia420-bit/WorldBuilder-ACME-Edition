@@ -35,7 +35,7 @@ OUTPUT = HERE / "vehicle-wire-fixtures.json"
 TAG = 0x31564248  # b"HBV1" little-endian
 PRIMS = {
     "uint": "<I", "int": "<i", "ushort": "<H", "short": "<h", "byte": "<B", "sbyte": "<b",
-    "float": "<f", "ObjectId": "<I", "LandcellId": "<I", "bool": "<I",
+    "ulong": "<Q", "long": "<q", "float": "<f", "ObjectId": "<I", "LandcellId": "<I", "bool": "<I",
 }
 BUILTIN_TYPES = {
     "Vector3": [("float", "X"), ("float", "Y"), ("float", "Z")],

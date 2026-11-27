@@ -231,6 +231,62 @@ export const ISO_CONTAINERS = Object.freeze({
     tareTonnes: 3.95,
     maxGrossTonnes: 32.5,
   }),
+  4000060: Object.freeze({
+    wcid: 4000060, kind: 30, key: "22r1", sizeFt: 20, teu: 1, isoGroup: "22R1", isoType: "1CC",
+    extW: 2.438, extL: 6.058, extH: 2.591, intW: 2.280, intL: 4.820, intH: 2.250,
+    doorW: 2.280, doorH: 2.220, floorZ: 0.162, roofZ: 2.591, rampLen: 0.850,
+    castingSpanX: 2.259, castingSpanY: 5.853, twistlockHalfX: 1.1295, twistlockHalfY: 2.9265,
+    palletSlots: 8, tareTonnes: 3.05, maxGrossTonnes: 30.48, powerKw: 5.0,
+  }),
+  4000061: Object.freeze({
+    wcid: 4000061, kind: 31, key: "45r1", sizeFt: 40, teu: 2, isoGroup: "45R1", isoType: "1AAA",
+    extW: 2.438, extL: 12.192, extH: 2.896, intW: 2.280, intL: 10.950, intH: 2.540,
+    doorW: 2.280, doorH: 2.520, floorZ: 0.162, roofZ: 2.896, rampLen: 0.850,
+    castingSpanX: 2.259, castingSpanY: 11.985, twistlockHalfX: 1.1295, twistlockHalfY: 5.9925,
+    palletSlots: 18, tareTonnes: 4.80, maxGrossTonnes: 34.0, powerKw: 6.0,
+  }),
+  4000062: Object.freeze({
+    wcid: 4000062, kind: 32, key: "22t1", sizeFt: 20, teu: 1, isoGroup: "22T1", isoType: "1CC",
+    extW: 2.438, extL: 6.058, extH: 2.591, intW: 2.200, intL: 5.600, intH: 2.200,
+    doorW: 0.800, doorH: 0.800, floorZ: 0.162, roofZ: 2.591, rampLen: 0.850,
+    castingSpanX: 2.259, castingSpanY: 5.853, twistlockHalfX: 1.1295, twistlockHalfY: 2.9265,
+    palletSlots: 0, tareTonnes: 3.60, maxGrossTonnes: 36.0,
+  }),
+  4000063: Object.freeze({
+    wcid: 4000063, kind: 33, key: "22k2", sizeFt: 20, teu: 1, isoGroup: "22K2", isoType: "1CC",
+    extW: 2.438, extL: 6.058, extH: 2.591, intW: 2.150, intL: 5.500, intH: 2.150,
+    doorW: 0.800, doorH: 0.800, floorZ: 0.162, roofZ: 2.591, rampLen: 0.850,
+    castingSpanX: 2.259, castingSpanY: 5.853, twistlockHalfX: 1.1295, twistlockHalfY: 2.9265,
+    palletSlots: 0, tareTonnes: 4.40, maxGrossTonnes: 36.0,
+  }),
+  4000064: Object.freeze({
+    wcid: 4000064, kind: 34, key: "22b0", sizeFt: 20, teu: 1, isoGroup: "22B0", isoType: "1CC",
+    extW: 2.438, extL: 6.058, extH: 2.591, intW: 2.352, intL: 5.898, intH: 2.393,
+    doorW: 2.340, doorH: 2.280, floorZ: 0.162, roofZ: 2.591, rampLen: 0.850,
+    castingSpanX: 2.259, castingSpanY: 5.853, twistlockHalfX: 1.1295, twistlockHalfY: 2.9265,
+    palletSlots: 10, tareTonnes: 2.65, maxGrossTonnes: 30.48,
+  }),
+  4000065: Object.freeze({
+    wcid: 4000065, kind: 35, key: "22u1", sizeFt: 20, teu: 1, isoGroup: "22U1", isoType: "1CC",
+    extW: 2.438, extL: 6.058, extH: 2.591, intW: 2.352, intL: 5.898, intH: 2.393,
+    doorW: 2.340, doorH: 2.280, floorZ: 0.162, roofZ: 2.591, rampLen: 0.850,
+    castingSpanX: 2.259, castingSpanY: 5.853, twistlockHalfX: 1.1295, twistlockHalfY: 2.9265,
+    palletSlots: 10, tareTonnes: 2.40, maxGrossTonnes: 30.48,
+  }),
+  4000066: Object.freeze({
+    wcid: 4000066, kind: 36, key: "22p1", sizeFt: 20, teu: 1, isoGroup: "22P1", isoType: "1CC",
+    extW: 2.438, extL: 6.058, extH: 2.591, intW: 2.352, intL: 5.898, intH: 2.280,
+    doorW: 2.340, doorH: 2.280, floorZ: 0.280, roofZ: 2.591, rampLen: 0.850,
+    castingSpanX: 2.259, castingSpanY: 5.853, twistlockHalfX: 1.1295, twistlockHalfY: 2.9265,
+    palletSlots: 10, tareTonnes: 2.90, maxGrossTonnes: 34.0,
+  }),
+  4000067: Object.freeze({
+    wcid: 4000067, kind: 37, key: "42p1", sizeFt: 40, teu: 2, isoGroup: "42P1", isoType: "1AA",
+    extW: 2.438, extL: 12.192, extH: 2.591, intW: 2.352, intL: 12.032, intH: 2.280,
+    doorW: 2.340, doorH: 2.280, floorZ: 0.300, roofZ: 2.591, rampLen: 0.850,
+    castingSpanX: 2.259, castingSpanY: 11.985, twistlockHalfX: 1.1295, twistlockHalfY: 5.9925,
+    palletSlots: 20, tareTonnes: 5.00, maxGrossTonnes: 45.0,
+  }),
 });
 
 export const PORT_CONTAINER_LIVERIES = Object.freeze({
@@ -270,11 +326,27 @@ export function resolvePortContainerSpec(kindOrWcid) {
   if (kindOrWcid === 4000020 || kindOrWcid === 10 || kindOrWcid === 20) return ISO_CONTAINERS[4000020];
   if (kindOrWcid === 4000021 || kindOrWcid === 11 || kindOrWcid === 40) return ISO_CONTAINERS[4000021];
   if (kindOrWcid === 4000022 || kindOrWcid === 12) return ISO_CONTAINERS[4000022];
+  if (kindOrWcid === 4000060 || kindOrWcid === 30) return ISO_CONTAINERS[4000060];
+  if (kindOrWcid === 4000061 || kindOrWcid === 31) return ISO_CONTAINERS[4000061];
+  if (kindOrWcid === 4000062 || kindOrWcid === 32) return ISO_CONTAINERS[4000062];
+  if (kindOrWcid === 4000063 || kindOrWcid === 33) return ISO_CONTAINERS[4000063];
+  if (kindOrWcid === 4000064 || kindOrWcid === 34) return ISO_CONTAINERS[4000064];
+  if (kindOrWcid === 4000065 || kindOrWcid === 35) return ISO_CONTAINERS[4000065];
+  if (kindOrWcid === 4000066 || kindOrWcid === 36) return ISO_CONTAINERS[4000066];
+  if (kindOrWcid === 4000067 || kindOrWcid === 37) return ISO_CONTAINERS[4000067];
   if (typeof kindOrWcid === "string") {
     const s = kindOrWcid.trim().toLowerCase();
     if (s === "20" || s === "20ft" || s === "1cc" || s === "22g1" || s === "isocontainer20") return ISO_CONTAINERS[4000020];
     if (s === "40hc" || s === "40ft-hc" || s === "40fthc" || s === "1aaa" || s === "45g1" || s === "isocontainer40hc") return ISO_CONTAINERS[4000022];
     if (s === "40" || s === "40ft" || s === "1aa" || s === "42g1" || s === "isocontainer40") return ISO_CONTAINERS[4000021];
+    if (s === "22r1" || s === "isoreefer20" || s === "4000060") return ISO_CONTAINERS[4000060];
+    if (s === "45r1" || s === "isoreefer40hc" || s === "4000061") return ISO_CONTAINERS[4000061];
+    if (s === "22t1" || s === "isotank20" || s === "4000062") return ISO_CONTAINERS[4000062];
+    if (s === "22k2" || s === "isogastank20" || s === "4000063") return ISO_CONTAINERS[4000063];
+    if (s === "22b0" || s === "isodrybulk20" || s === "4000064") return ISO_CONTAINERS[4000064];
+    if (s === "22u1" || s === "isoopentop20" || s === "4000065") return ISO_CONTAINERS[4000065];
+    if (s === "22p1" || s === "isoflatrack20" || s === "4000066") return ISO_CONTAINERS[4000066];
+    if (s === "42p1" || s === "isoflatrack40" || s === "4000067") return ISO_CONTAINERS[4000067];
   }
   return ISO_CONTAINERS[4000021];
 }

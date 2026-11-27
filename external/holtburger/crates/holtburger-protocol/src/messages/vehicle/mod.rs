@@ -25,7 +25,7 @@ mod tests;
 /// `"HBV1"` as a little-endian u32 (bytes `48 42 56 31`).
 pub const HBV1_TAG: u32 = 0x3156_4248;
 /// The protocol version this module writes (and the newest it parses fully).
-pub const HBV1_VERSION: u16 = 7;
+pub const HBV1_VERSION: u16 = 8;
 /// The first version carrying the v2 fields.
 const V2: u16 = 2;
 /// The first version carrying the v3 fields.
@@ -39,6 +39,9 @@ const V5: u16 = 5;
 const V6: u16 = 6;
 /// The first version carrying the v7 fields.
 const V7: u16 = 7;
+/// The first version carrying the v8 fields.
+#[allow(dead_code)]
+const V8: u16 = 8;
 
 /// ClientCapabilities / CapabilitiesAck bits.
 pub mod caps {
@@ -64,6 +67,16 @@ pub mod c2s {
     pub const TRAILER_ACTION: u32 = 0x090F;
     /// v7: walk-behind pedestrian pallet jack action request.
     pub const PALLET_JACK_ACTION: u32 = 0x0910;
+    /// v8: town siege / depot supply / control node action.
+    pub const ECONOMY_SIEGE_ACTION: u32 = 0x0912;
+    /// v8: 4-stage subsurface prospecting tool action.
+    pub const INDUSTRY_PROSPECTING: u32 = 0x0913;
+    /// v8: industrial extraction / refining / mint / workshop skid action.
+    pub const INDUSTRY_FACILITY_ACTION: u32 = 0x0914;
+    /// v8: overland / Outer Ocean convoy dispatch & routing order.
+    pub const LOGISTICS_CONVOY_ORDER: u32 = 0x0915;
+    /// v8: monarch governance / tariff / procurement work-order command.
+    pub const ECONOMY_MONARCH_ORDER: u32 = 0x0916;
 }
 
 /// S2C game-event opcodes.
@@ -88,12 +101,35 @@ pub mod s2c {
     pub const TRAILER_STATE: u32 = 0x090F;
     /// v7: Authoritative walk-behind pallet jack telemetry broadcast.
     pub const PALLET_JACK_STATE: u32 = 0x0910;
+    /// v8: Authoritative town control, treasury, escrow, supply & tariff state.
+    pub const ECONOMY_TOWN_STATE: u32 = 0x0911;
+    /// v8: Discrete siege transition / supply / spoils event.
+    pub const ECONOMY_SIEGE_EVENT: u32 = 0x0912;
+    /// v8: Subsurface deposit survey / assay result.
+    pub const INDUSTRY_SURVEY_RESULT: u32 = 0x0913;
+    /// v8: Industrial extraction / refining / mint / workshop skid state.
+    pub const INDUSTRY_FACILITY_STATE: u32 = 0x0914;
+    /// v8: Dual-LOD logistics convoy state telemetry.
+    pub const LOGISTICS_CONVOY_STATE: u32 = 0x0915;
+    /// v8: Monarch order / bounty / tariff policy state update.
+    pub const ECONOMY_MONARCH_ORDER_STATE: u32 = 0x0916;
 }
 
 /// `VehicleProfile.locomotion`.
 pub mod locomotion {
     pub const AIR: u32 = 1;
     pub const GROUND: u32 = 2;
+    /// v8: surface maritime vessel (e.g. M/V Dereth Feeder).
+    pub const MARINE: u32 = 3;
+}
+
+/// v8: `VehicleProfile.vehicle_class` & `LogisticsConvoy*.vehicle_class`.
+pub mod vehicle_class {
+    pub const LEGACY: u8 = 0;
+    pub const AIR: u8 = 1;
+    pub const LIGHT_GROUND: u8 = 2;
+    pub const HEAVY_TRACTOR: u8 = 3;
+    pub const CONTAINER_SHIP_FEEDER: u8 = 4;
 }
 
 /// `VehicleState.mode`.
@@ -258,6 +294,51 @@ pub mod deployable_kind {
     pub const TRAILER_CHASSIS_40: u32 = 14;
     pub const TRAILER_SIDELIFTER_40: u32 = 15;
     pub const PALLET_JACK: u32 = 16;
+    pub const RESERVED_WAREHOUSE_17: u32 = 17;
+    pub const RESERVED_WAREHOUSE_18: u32 = 18;
+    pub const RESERVED_WAREHOUSE_19: u32 = 19;
+    pub const RESERVED_WAREHOUSE_20: u32 = 20;
+    pub const RESERVED_WAREHOUSE_21: u32 = 21;
+    pub const RESERVED_WAREHOUSE_22: u32 = 22;
+    pub const STS_GANTRY_CRANE: u32 = 23;
+    pub const RMG_YARD_CRANE: u32 = 24;
+    pub const RTG_YARD_CRANE: u32 = 25;
+    pub const TERMINAL_TRACTOR_SHUTTLE: u32 = 26;
+    pub const REEFER_RACK_BAY: u32 = 27;
+    pub const QUAY_BOLLARD: u32 = 28;
+    pub const MARINE_FENDER: u32 = 29;
+    pub const ISO_REEFER_20: u32 = 30;
+    pub const ISO_REEFER_40_HC: u32 = 31;
+    pub const ISO_TANK_20: u32 = 32;
+    pub const ISO_GAS_TANK_20: u32 = 33;
+    pub const ISO_DRY_BULK_20: u32 = 34;
+    pub const ISO_OPEN_TOP_20: u32 = 35;
+    pub const ISO_FLAT_RACK_20: u32 = 36;
+    pub const ISO_FLAT_RACK_40: u32 = 37;
+    pub const GPR_SCANNER: u32 = 38;
+    pub const VIBROSEIS_SEISMIC: u32 = 39;
+    pub const DIAMOND_CORE_DRILL: u32 = 40;
+    pub const MOBILE_ASSAY_LAB: u32 = 41;
+    pub const CORE_SAMPLE_CRATE: u32 = 42;
+    pub const BOREHOLE_MINER: u32 = 43;
+    pub const JAW_CRUSHER: u32 = 44;
+    pub const CONCENTRATOR: u32 = 45;
+    pub const ROTARY_OIL_RIG: u32 = 46;
+    pub const PUMPJACK_TREE: u32 = 47;
+    pub const THREE_PHASE_SEPARATOR: u32 = 48;
+    pub const ADU_REFINERY: u32 = 49;
+    pub const HDT_VDU_DEWAXER: u32 = 50;
+    pub const PYRO_SMELTER: u32 = 51;
+    pub const CONTACT_ACID_WORKS: u32 = 52;
+    pub const BIO_PROCESSOR_TANNERY: u32 = 53;
+    pub const INDUSTRIAL_GENSET_150KW: u32 = 54;
+    pub const INDUSTRIAL_BESS_18MJ: u32 = 55;
+    pub const TOWN_CONTROL_NODE: u32 = 56;
+    pub const TOWN_DEPOT_APRON: u32 = 57;
+    pub const FORWARD_SIEGE_BEACON: u32 = 58;
+    pub const TOWN_MINT: u32 = 59;
+    pub const TOWN_WORKSHOP: u32 = 60;
+    pub const PUBLIC_COMMONS_STARTER_HEARTH: u32 = 61;
 }
 
 /// Standardized industrial pallet footprint.
@@ -395,6 +476,13 @@ impl Rd<'_> {
     }
     fn u32(&mut self) -> Option<u32> {
         Some(LittleEndian::read_u32(self.take(4)?))
+    }
+    fn u64(&mut self) -> Option<u64> {
+        Some(LittleEndian::read_u64(self.take(8)?))
+    }
+    #[allow(dead_code)]
+    fn i64(&mut self) -> Option<i64> {
+        Some(LittleEndian::read_i64(self.take(8)?))
     }
     fn f32(&mut self) -> Option<f32> {
         Some(LittleEndian::read_f32(self.take(4)?))
@@ -801,6 +889,205 @@ impl VehiclePalletJackAction {
     }
 }
 
+/// v8: Client siege / depot supply / control node action (0x0912).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EconomySiegeAction {
+    pub town_id: u32,
+    pub beacon_guid: u32,
+    pub action: u8,
+    pub flags: u8,
+    pub reserved: u16,
+    pub supply_points: u32,
+    pub origin_landblock: u32,
+}
+
+impl EconomySiegeAction {
+    pub const WIRE: usize = 20;
+
+    fn read(r: &mut Rd<'_>) -> Option<Self> {
+        Some(Self {
+            town_id: r.u32()?,
+            beacon_guid: r.u32()?,
+            action: r.u8()?,
+            flags: r.u8()?,
+            reserved: r.u16()?,
+            supply_points: r.u32()?,
+            origin_landblock: r.u32()?,
+        })
+    }
+
+    pub fn write(&self, buf: &mut Vec<u8>) {
+        buf.write_u32::<LittleEndian>(self.town_id).unwrap();
+        buf.write_u32::<LittleEndian>(self.beacon_guid).unwrap();
+        buf.push(self.action);
+        buf.push(self.flags);
+        buf.write_u16::<LittleEndian>(self.reserved).unwrap();
+        buf.write_u32::<LittleEndian>(self.supply_points).unwrap();
+        buf.write_u32::<LittleEndian>(self.origin_landblock).unwrap();
+    }
+}
+
+/// v8: Client 4-stage subsurface prospecting tool action (0x0913).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct IndustryProspecting {
+    pub tool_guid: u32,
+    pub tool_kind: u32,
+    pub mode: u8,
+    pub reserved0: u8,
+    pub reserved1: u16,
+    pub cell: u32,
+    pub position: [f32; 3],
+}
+
+impl IndustryProspecting {
+    pub const WIRE: usize = 28;
+
+    fn read(r: &mut Rd<'_>) -> Option<Self> {
+        Some(Self {
+            tool_guid: r.u32()?,
+            tool_kind: r.u32()?,
+            mode: r.u8()?,
+            reserved0: r.u8()?,
+            reserved1: r.u16()?,
+            cell: r.u32()?,
+            position: r.vec3()?,
+        })
+    }
+
+    pub fn write(&self, buf: &mut Vec<u8>) {
+        buf.write_u32::<LittleEndian>(self.tool_guid).unwrap();
+        buf.write_u32::<LittleEndian>(self.tool_kind).unwrap();
+        buf.push(self.mode);
+        buf.push(self.reserved0);
+        buf.write_u16::<LittleEndian>(self.reserved1).unwrap();
+        buf.write_u32::<LittleEndian>(self.cell).unwrap();
+        w_vec3(buf, self.position);
+    }
+}
+
+/// v8: Client extraction / refining / mint / workshop skid action (0x0914).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct IndustryFacilityAction {
+    pub facility_guid: u32,
+    pub action: u8,
+    pub reserved0: u8,
+    pub reserved1: u16,
+    pub recipe_id: u32,
+    pub param: u32,
+}
+
+impl IndustryFacilityAction {
+    pub const WIRE: usize = 16;
+
+    fn read(r: &mut Rd<'_>) -> Option<Self> {
+        Some(Self {
+            facility_guid: r.u32()?,
+            action: r.u8()?,
+            reserved0: r.u8()?,
+            reserved1: r.u16()?,
+            recipe_id: r.u32()?,
+            param: r.u32()?,
+        })
+    }
+
+    pub fn write(&self, buf: &mut Vec<u8>) {
+        buf.write_u32::<LittleEndian>(self.facility_guid).unwrap();
+        buf.push(self.action);
+        buf.push(self.reserved0);
+        buf.write_u16::<LittleEndian>(self.reserved1).unwrap();
+        buf.write_u32::<LittleEndian>(self.recipe_id).unwrap();
+        buf.write_u32::<LittleEndian>(self.param).unwrap();
+    }
+}
+
+/// v8: Client overland / Outer Ocean convoy dispatch & routing order (0x0915).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LogisticsConvoyOrder {
+    pub convoy_id: u64,
+    pub action: u8,
+    pub vehicle_class: u8,
+    pub flags: u16,
+    pub origin_town_id: u32,
+    pub dest_town_id: u32,
+    pub container_kind: u32,
+    pub commodity_id: u32,
+}
+
+impl LogisticsConvoyOrder {
+    pub const WIRE: usize = 28;
+
+    fn read(r: &mut Rd<'_>) -> Option<Self> {
+        Some(Self {
+            convoy_id: r.u64()?,
+            action: r.u8()?,
+            vehicle_class: r.u8()?,
+            flags: r.u16()?,
+            origin_town_id: r.u32()?,
+            dest_town_id: r.u32()?,
+            container_kind: r.u32()?,
+            commodity_id: r.u32()?,
+        })
+    }
+
+    pub fn write(&self, buf: &mut Vec<u8>) {
+        buf.write_u64::<LittleEndian>(self.convoy_id).unwrap();
+        buf.push(self.action);
+        buf.push(self.vehicle_class);
+        buf.write_u16::<LittleEndian>(self.flags).unwrap();
+        buf.write_u32::<LittleEndian>(self.origin_town_id).unwrap();
+        buf.write_u32::<LittleEndian>(self.dest_town_id).unwrap();
+        buf.write_u32::<LittleEndian>(self.container_kind).unwrap();
+        buf.write_u32::<LittleEndian>(self.commodity_id).unwrap();
+    }
+}
+
+/// v8: Client monarch governance / tariff / procurement work-order command (0x0916).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct EconomyMonarchOrder {
+    pub order_id: u64,
+    pub town_id: u32,
+    pub action: u8,
+    pub order_type: u8,
+    pub flags: u16,
+    pub target_guid: u32,
+    pub item_wcid: u32,
+    pub quantity: u32,
+    pub reward_pyreals: u64,
+    pub param_f32: f32,
+}
+
+impl EconomyMonarchOrder {
+    pub const WIRE: usize = 40;
+
+    fn read(r: &mut Rd<'_>) -> Option<Self> {
+        Some(Self {
+            order_id: r.u64()?,
+            town_id: r.u32()?,
+            action: r.u8()?,
+            order_type: r.u8()?,
+            flags: r.u16()?,
+            target_guid: r.u32()?,
+            item_wcid: r.u32()?,
+            quantity: r.u32()?,
+            reward_pyreals: r.u64()?,
+            param_f32: r.f32()?,
+        })
+    }
+
+    pub fn write(&self, buf: &mut Vec<u8>) {
+        buf.write_u64::<LittleEndian>(self.order_id).unwrap();
+        buf.write_u32::<LittleEndian>(self.town_id).unwrap();
+        buf.push(self.action);
+        buf.push(self.order_type);
+        buf.write_u16::<LittleEndian>(self.flags).unwrap();
+        buf.write_u32::<LittleEndian>(self.target_guid).unwrap();
+        buf.write_u32::<LittleEndian>(self.item_wcid).unwrap();
+        buf.write_u32::<LittleEndian>(self.quantity).unwrap();
+        buf.write_u64::<LittleEndian>(self.reward_pyreals).unwrap();
+        buf.write_f32::<LittleEndian>(self.param_f32).unwrap();
+    }
+}
+
 // ---------------------------------------------------------------- C2S
 
 /// Client → server vehicle game actions.
@@ -827,6 +1114,16 @@ pub enum VehicleC2S {
     TrailerAction(VehicleTrailerAction),
     /// v7: walk-behind pallet jack operator action (0x0910).
     PalletJackAction(VehiclePalletJackAction),
+    /// v8: town siege / depot supply / control node action (0x0912).
+    EconomySiegeAction(EconomySiegeAction),
+    /// v8: 4-stage subsurface prospecting tool action (0x0913).
+    IndustryProspecting(IndustryProspecting),
+    /// v8: extraction / refining / mint / workshop skid action (0x0914).
+    IndustryFacilityAction(IndustryFacilityAction),
+    /// v8: overland / Outer Ocean convoy dispatch & routing order (0x0915).
+    LogisticsConvoyOrder(LogisticsConvoyOrder),
+    /// v8: monarch governance / tariff / procurement work-order command (0x0916).
+    EconomyMonarchOrder(EconomyMonarchOrder),
 }
 
 impl VehicleC2S {
@@ -840,6 +1137,11 @@ impl VehicleC2S {
             Self::ContainerAction(_) => c2s::CONTAINER_ACTION,
             Self::TrailerAction(_) => c2s::TRAILER_ACTION,
             Self::PalletJackAction(_) => c2s::PALLET_JACK_ACTION,
+            Self::EconomySiegeAction(_) => c2s::ECONOMY_SIEGE_ACTION,
+            Self::IndustryProspecting(_) => c2s::INDUSTRY_PROSPECTING,
+            Self::IndustryFacilityAction(_) => c2s::INDUSTRY_FACILITY_ACTION,
+            Self::LogisticsConvoyOrder(_) => c2s::LOGISTICS_CONVOY_ORDER,
+            Self::EconomyMonarchOrder(_) => c2s::ECONOMY_MONARCH_ORDER,
         }
     }
 
@@ -854,6 +1156,11 @@ impl VehicleC2S {
                 | c2s::CONTAINER_ACTION
                 | c2s::TRAILER_ACTION
                 | c2s::PALLET_JACK_ACTION
+                | c2s::ECONOMY_SIEGE_ACTION
+                | c2s::INDUSTRY_PROSPECTING
+                | c2s::INDUSTRY_FACILITY_ACTION
+                | c2s::LOGISTICS_CONVOY_ORDER
+                | c2s::ECONOMY_MONARCH_ORDER
         )
     }
 
@@ -905,6 +1212,21 @@ impl VehicleC2S {
             }
             Self::PalletJackAction(pj) => {
                 pj.write(buf);
+            }
+            Self::EconomySiegeAction(sa) => {
+                sa.write(buf);
+            }
+            Self::IndustryProspecting(ip) => {
+                ip.write(buf);
+            }
+            Self::IndustryFacilityAction(fa) => {
+                fa.write(buf);
+            }
+            Self::LogisticsConvoyOrder(co) => {
+                co.write(buf);
+            }
+            Self::EconomyMonarchOrder(mo) => {
+                mo.write(buf);
             }
         }
     }
@@ -970,6 +1292,21 @@ impl VehicleC2S {
                 }
                 c2s::PALLET_JACK_ACTION => {
                     Self::PalletJackAction(VehiclePalletJackAction::read(&mut r)?)
+                }
+                c2s::ECONOMY_SIEGE_ACTION => {
+                    Self::EconomySiegeAction(EconomySiegeAction::read(&mut r)?)
+                }
+                c2s::INDUSTRY_PROSPECTING => {
+                    Self::IndustryProspecting(IndustryProspecting::read(&mut r)?)
+                }
+                c2s::INDUSTRY_FACILITY_ACTION => {
+                    Self::IndustryFacilityAction(IndustryFacilityAction::read(&mut r)?)
+                }
+                c2s::LOGISTICS_CONVOY_ORDER => {
+                    Self::LogisticsConvoyOrder(LogisticsConvoyOrder::read(&mut r)?)
+                }
+                c2s::ECONOMY_MONARCH_ORDER => {
+                    Self::EconomyMonarchOrder(EconomyMonarchOrder::read(&mut r)?)
                 }
                 _ => return None,
             }
@@ -1412,6 +1749,330 @@ impl VehiclePalletJackState {
     }
 }
 
+/// v8: Authoritative town control, treasury, escrow, supply & tariff telemetry (0x0911).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct EconomyTownState {
+    pub town_id: u32,
+    pub control_state: u8,
+    pub owner_monarch_id: u32,
+    pub attacker_monarch_id: u32,
+    pub flags: u8,
+    pub reserved: u16,
+    pub anchor_landblock: u32,
+    pub hold_elapsed_sec: u32,
+    pub supply_meter_sec: u32,
+    pub starving_sec: u32,
+    pub treasury_pyreals: u64,
+    pub escrow_pyreals: u64,
+    pub tariff_buy_mul: f32,
+    pub tariff_sell_mul: f32,
+}
+
+impl EconomyTownState {
+    pub const WIRE: usize = 56;
+
+    fn read(r: &mut Rd<'_>) -> Option<Self> {
+        Some(Self {
+            town_id: r.u32()?,
+            control_state: r.u8()?,
+            owner_monarch_id: r.u32()?,
+            attacker_monarch_id: r.u32()?,
+            flags: r.u8()?,
+            reserved: r.u16()?,
+            anchor_landblock: r.u32()?,
+            hold_elapsed_sec: r.u32()?,
+            supply_meter_sec: r.u32()?,
+            starving_sec: r.u32()?,
+            treasury_pyreals: r.u64()?,
+            escrow_pyreals: r.u64()?,
+            tariff_buy_mul: r.f32()?,
+            tariff_sell_mul: r.f32()?,
+        })
+    }
+
+    pub fn write(&self, buf: &mut Vec<u8>) {
+        buf.write_u32::<LittleEndian>(self.town_id).unwrap();
+        buf.push(self.control_state);
+        buf.write_u32::<LittleEndian>(self.owner_monarch_id).unwrap();
+        buf.write_u32::<LittleEndian>(self.attacker_monarch_id).unwrap();
+        buf.push(self.flags);
+        buf.write_u16::<LittleEndian>(self.reserved).unwrap();
+        buf.write_u32::<LittleEndian>(self.anchor_landblock).unwrap();
+        buf.write_u32::<LittleEndian>(self.hold_elapsed_sec).unwrap();
+        buf.write_u32::<LittleEndian>(self.supply_meter_sec).unwrap();
+        buf.write_u32::<LittleEndian>(self.starving_sec).unwrap();
+        buf.write_u64::<LittleEndian>(self.treasury_pyreals).unwrap();
+        buf.write_u64::<LittleEndian>(self.escrow_pyreals).unwrap();
+        buf.write_f32::<LittleEndian>(self.tariff_buy_mul).unwrap();
+        buf.write_f32::<LittleEndian>(self.tariff_sell_mul).unwrap();
+    }
+}
+
+/// v8: Discrete siege transition / supply / capture spoils event (0x0912).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EconomySiegeEvent {
+    pub town_id: u32,
+    pub kind: u8,
+    pub control_state: u8,
+    pub reserved: u16,
+    pub owner_monarch_id: u32,
+    pub attacker_monarch_id: u32,
+    pub hold_elapsed_sec: u32,
+    pub supply_meter_sec: u32,
+    pub starving_sec: u32,
+    pub treasury_spoils: u64,
+}
+
+impl EconomySiegeEvent {
+    pub const WIRE: usize = 36;
+
+    fn read(r: &mut Rd<'_>) -> Option<Self> {
+        Some(Self {
+            town_id: r.u32()?,
+            kind: r.u8()?,
+            control_state: r.u8()?,
+            reserved: r.u16()?,
+            owner_monarch_id: r.u32()?,
+            attacker_monarch_id: r.u32()?,
+            hold_elapsed_sec: r.u32()?,
+            supply_meter_sec: r.u32()?,
+            starving_sec: r.u32()?,
+            treasury_spoils: r.u64()?,
+        })
+    }
+
+    pub fn write(&self, buf: &mut Vec<u8>) {
+        buf.write_u32::<LittleEndian>(self.town_id).unwrap();
+        buf.push(self.kind);
+        buf.push(self.control_state);
+        buf.write_u16::<LittleEndian>(self.reserved).unwrap();
+        buf.write_u32::<LittleEndian>(self.owner_monarch_id).unwrap();
+        buf.write_u32::<LittleEndian>(self.attacker_monarch_id).unwrap();
+        buf.write_u32::<LittleEndian>(self.hold_elapsed_sec).unwrap();
+        buf.write_u32::<LittleEndian>(self.supply_meter_sec).unwrap();
+        buf.write_u32::<LittleEndian>(self.starving_sec).unwrap();
+        buf.write_u64::<LittleEndian>(self.treasury_spoils).unwrap();
+    }
+}
+
+/// v8: Subsurface deposit survey / assay result (0x0913).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct IndustrySurveyResult {
+    pub deposit_id: u64,
+    pub landblock_id: u32,
+    pub tool_kind: u32,
+    pub flags: u8,
+    pub terrain_code: u8,
+    pub resource_kind: u8,
+    pub reserved: u8,
+    pub depth_m: f32,
+    pub grade_bps: u32,
+    pub api_gravity: f32,
+    pub sulfur_bps: u32,
+    pub remaining_tonnes: f32,
+}
+
+impl IndustrySurveyResult {
+    pub const WIRE: usize = 40;
+
+    fn read(r: &mut Rd<'_>) -> Option<Self> {
+        Some(Self {
+            deposit_id: r.u64()?,
+            landblock_id: r.u32()?,
+            tool_kind: r.u32()?,
+            flags: r.u8()?,
+            terrain_code: r.u8()?,
+            resource_kind: r.u8()?,
+            reserved: r.u8()?,
+            depth_m: r.f32()?,
+            grade_bps: r.u32()?,
+            api_gravity: r.f32()?,
+            sulfur_bps: r.u32()?,
+            remaining_tonnes: r.f32()?,
+        })
+    }
+
+    pub fn write(&self, buf: &mut Vec<u8>) {
+        buf.write_u64::<LittleEndian>(self.deposit_id).unwrap();
+        buf.write_u32::<LittleEndian>(self.landblock_id).unwrap();
+        buf.write_u32::<LittleEndian>(self.tool_kind).unwrap();
+        buf.push(self.flags);
+        buf.push(self.terrain_code);
+        buf.push(self.resource_kind);
+        buf.push(self.reserved);
+        buf.write_f32::<LittleEndian>(self.depth_m).unwrap();
+        buf.write_u32::<LittleEndian>(self.grade_bps).unwrap();
+        buf.write_f32::<LittleEndian>(self.api_gravity).unwrap();
+        buf.write_u32::<LittleEndian>(self.sulfur_bps).unwrap();
+        buf.write_f32::<LittleEndian>(self.remaining_tonnes).unwrap();
+    }
+}
+
+/// v8: Industrial extraction / refining / mint / workshop skid state (0x0914).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct IndustryFacilityState {
+    pub facility_guid: u32,
+    pub kind: u32,
+    pub town_id: u32,
+    pub deposit_id: u64,
+    pub owner_monarch_id: u32,
+    pub status: u8,
+    pub online_flags: u8,
+    pub reserved: u16,
+    pub power_watts: f32,
+    pub buffer_joules: f32,
+    pub progress_pct: f32,
+    pub recipe_id: u32,
+}
+
+impl IndustryFacilityState {
+    pub const WIRE: usize = 44;
+
+    fn read(r: &mut Rd<'_>) -> Option<Self> {
+        Some(Self {
+            facility_guid: r.u32()?,
+            kind: r.u32()?,
+            town_id: r.u32()?,
+            deposit_id: r.u64()?,
+            owner_monarch_id: r.u32()?,
+            status: r.u8()?,
+            online_flags: r.u8()?,
+            reserved: r.u16()?,
+            power_watts: r.f32()?,
+            buffer_joules: r.f32()?,
+            progress_pct: r.f32()?,
+            recipe_id: r.u32()?,
+        })
+    }
+
+    pub fn write(&self, buf: &mut Vec<u8>) {
+        buf.write_u32::<LittleEndian>(self.facility_guid).unwrap();
+        buf.write_u32::<LittleEndian>(self.kind).unwrap();
+        buf.write_u32::<LittleEndian>(self.town_id).unwrap();
+        buf.write_u64::<LittleEndian>(self.deposit_id).unwrap();
+        buf.write_u32::<LittleEndian>(self.owner_monarch_id).unwrap();
+        buf.push(self.status);
+        buf.push(self.online_flags);
+        buf.write_u16::<LittleEndian>(self.reserved).unwrap();
+        buf.write_f32::<LittleEndian>(self.power_watts).unwrap();
+        buf.write_f32::<LittleEndian>(self.buffer_joules).unwrap();
+        buf.write_f32::<LittleEndian>(self.progress_pct).unwrap();
+        buf.write_u32::<LittleEndian>(self.recipe_id).unwrap();
+    }
+}
+
+/// v8: Dual-LOD logistics convoy state telemetry (0x0915).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LogisticsConvoyState {
+    pub convoy_id: u64,
+    pub owner_monarch_id: u32,
+    pub vehicle_guid: u32,
+    pub vehicle_class: u8,
+    pub lod_state: u8,
+    pub status: u8,
+    pub reserved: u8,
+    pub origin_town_id: u32,
+    pub dest_town_id: u32,
+    pub origin_landblock: u32,
+    pub spline_s_m: f32,
+    pub fuel_liters: f32,
+    pub cell: u32,
+    pub position: [f32; 3],
+    pub heading: f32,
+}
+
+impl LogisticsConvoyState {
+    pub const WIRE: usize = 60;
+
+    fn read(r: &mut Rd<'_>) -> Option<Self> {
+        Some(Self {
+            convoy_id: r.u64()?,
+            owner_monarch_id: r.u32()?,
+            vehicle_guid: r.u32()?,
+            vehicle_class: r.u8()?,
+            lod_state: r.u8()?,
+            status: r.u8()?,
+            reserved: r.u8()?,
+            origin_town_id: r.u32()?,
+            dest_town_id: r.u32()?,
+            origin_landblock: r.u32()?,
+            spline_s_m: r.f32()?,
+            fuel_liters: r.f32()?,
+            cell: r.u32()?,
+            position: r.vec3()?,
+            heading: r.f32()?,
+        })
+    }
+
+    pub fn write(&self, buf: &mut Vec<u8>) {
+        buf.write_u64::<LittleEndian>(self.convoy_id).unwrap();
+        buf.write_u32::<LittleEndian>(self.owner_monarch_id).unwrap();
+        buf.write_u32::<LittleEndian>(self.vehicle_guid).unwrap();
+        buf.push(self.vehicle_class);
+        buf.push(self.lod_state);
+        buf.push(self.status);
+        buf.push(self.reserved);
+        buf.write_u32::<LittleEndian>(self.origin_town_id).unwrap();
+        buf.write_u32::<LittleEndian>(self.dest_town_id).unwrap();
+        buf.write_u32::<LittleEndian>(self.origin_landblock).unwrap();
+        buf.write_f32::<LittleEndian>(self.spline_s_m).unwrap();
+        buf.write_f32::<LittleEndian>(self.fuel_liters).unwrap();
+        buf.write_u32::<LittleEndian>(self.cell).unwrap();
+        w_vec3(buf, self.position);
+        buf.write_f32::<LittleEndian>(self.heading).unwrap();
+    }
+}
+
+/// v8: Monarch order / bounty / tariff policy state update (0x0916).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct EconomyMonarchOrderState {
+    pub order_id: u64,
+    pub monarch_id: u32,
+    pub town_id: u32,
+    pub order_type: u8,
+    pub status: u8,
+    pub flags: u16,
+    pub claimed_by_guid: u32,
+    pub item_wcid: u32,
+    pub quantity: u32,
+    pub reward_pyreals: u64,
+    pub value_f32: f32,
+}
+
+impl EconomyMonarchOrderState {
+    pub const WIRE: usize = 44;
+
+    fn read(r: &mut Rd<'_>) -> Option<Self> {
+        Some(Self {
+            order_id: r.u64()?,
+            monarch_id: r.u32()?,
+            town_id: r.u32()?,
+            order_type: r.u8()?,
+            status: r.u8()?,
+            flags: r.u16()?,
+            claimed_by_guid: r.u32()?,
+            item_wcid: r.u32()?,
+            quantity: r.u32()?,
+            reward_pyreals: r.u64()?,
+            value_f32: r.f32()?,
+        })
+    }
+
+    pub fn write(&self, buf: &mut Vec<u8>) {
+        buf.write_u64::<LittleEndian>(self.order_id).unwrap();
+        buf.write_u32::<LittleEndian>(self.monarch_id).unwrap();
+        buf.write_u32::<LittleEndian>(self.town_id).unwrap();
+        buf.push(self.order_type);
+        buf.push(self.status);
+        buf.write_u16::<LittleEndian>(self.flags).unwrap();
+        buf.write_u32::<LittleEndian>(self.claimed_by_guid).unwrap();
+        buf.write_u32::<LittleEndian>(self.item_wcid).unwrap();
+        buf.write_u32::<LittleEndian>(self.quantity).unwrap();
+        buf.write_u64::<LittleEndian>(self.reward_pyreals).unwrap();
+        buf.write_f32::<LittleEndian>(self.value_f32).unwrap();
+    }
+}
+
 /// Server → client vehicle game events.
 #[derive(Debug, Clone, PartialEq)]
 pub enum VehicleS2C {
@@ -1432,6 +2093,12 @@ pub enum VehicleS2C {
     ContainerState(VehicleContainerState),
     TrailerState(VehicleTrailerState),
     PalletJackState(VehiclePalletJackState),
+    EconomyTownState(EconomyTownState),
+    EconomySiegeEvent(EconomySiegeEvent),
+    IndustrySurveyResult(IndustrySurveyResult),
+    IndustryFacilityState(IndustryFacilityState),
+    LogisticsConvoyState(LogisticsConvoyState),
+    EconomyMonarchOrderState(EconomyMonarchOrderState),
 }
 
 impl VehicleS2C {
@@ -1450,6 +2117,12 @@ impl VehicleS2C {
             Self::ContainerState(_) => s2c::CONTAINER_STATE,
             Self::TrailerState(_) => s2c::TRAILER_STATE,
             Self::PalletJackState(_) => s2c::PALLET_JACK_STATE,
+            Self::EconomyTownState(_) => s2c::ECONOMY_TOWN_STATE,
+            Self::EconomySiegeEvent(_) => s2c::ECONOMY_SIEGE_EVENT,
+            Self::IndustrySurveyResult(_) => s2c::INDUSTRY_SURVEY_RESULT,
+            Self::IndustryFacilityState(_) => s2c::INDUSTRY_FACILITY_STATE,
+            Self::LogisticsConvoyState(_) => s2c::LOGISTICS_CONVOY_STATE,
+            Self::EconomyMonarchOrderState(_) => s2c::ECONOMY_MONARCH_ORDER_STATE,
         }
     }
 
@@ -1469,6 +2142,12 @@ impl VehicleS2C {
                 | s2c::CONTAINER_STATE
                 | s2c::TRAILER_STATE
                 | s2c::PALLET_JACK_STATE
+                | s2c::ECONOMY_TOWN_STATE
+                | s2c::ECONOMY_SIEGE_EVENT
+                | s2c::INDUSTRY_SURVEY_RESULT
+                | s2c::INDUSTRY_FACILITY_STATE
+                | s2c::LOGISTICS_CONVOY_STATE
+                | s2c::ECONOMY_MONARCH_ORDER_STATE
         )
     }
 
@@ -1712,6 +2391,24 @@ impl VehicleS2C {
             }
             Self::PalletJackState(pj) => {
                 pj.write(buf);
+            }
+            Self::EconomyTownState(ts) => {
+                ts.write(buf);
+            }
+            Self::EconomySiegeEvent(se) => {
+                se.write(buf);
+            }
+            Self::IndustrySurveyResult(sr) => {
+                sr.write(buf);
+            }
+            Self::IndustryFacilityState(fs) => {
+                fs.write(buf);
+            }
+            Self::LogisticsConvoyState(cs) => {
+                cs.write(buf);
+            }
+            Self::EconomyMonarchOrderState(mo) => {
+                mo.write(buf);
             }
         }
     }
@@ -2060,6 +2757,24 @@ impl VehicleS2C {
                 }
                 s2c::PALLET_JACK_STATE => {
                     Self::PalletJackState(VehiclePalletJackState::read(&mut r)?)
+                }
+                s2c::ECONOMY_TOWN_STATE => {
+                    Self::EconomyTownState(EconomyTownState::read(&mut r)?)
+                }
+                s2c::ECONOMY_SIEGE_EVENT => {
+                    Self::EconomySiegeEvent(EconomySiegeEvent::read(&mut r)?)
+                }
+                s2c::INDUSTRY_SURVEY_RESULT => {
+                    Self::IndustrySurveyResult(IndustrySurveyResult::read(&mut r)?)
+                }
+                s2c::INDUSTRY_FACILITY_STATE => {
+                    Self::IndustryFacilityState(IndustryFacilityState::read(&mut r)?)
+                }
+                s2c::LOGISTICS_CONVOY_STATE => {
+                    Self::LogisticsConvoyState(LogisticsConvoyState::read(&mut r)?)
+                }
+                s2c::ECONOMY_MONARCH_ORDER_STATE => {
+                    Self::EconomyMonarchOrderState(EconomyMonarchOrderState::read(&mut r)?)
                 }
                 _ => return None,
             }

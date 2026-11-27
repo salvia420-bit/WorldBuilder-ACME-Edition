@@ -1,7 +1,7 @@
-From a7926561fcb351886475568e6a666fa3794fde1e Mon Sep 17 00:00:00 2001
+From 5c03444c8141ea60e546eec097de8263c50f11cd Mon Sep 17 00:00:00 2001
 From: salvia420-bit <salvia420@gmail.com>
 Date: Mon, 16 Nov 2026 09:21:36 +0000
-Subject: [PATCH 10/12] Vehicles (holtburger fork): 8-unit modular
+Subject: [PATCH 10/28] Vehicles (holtburger fork): 8-unit modular
  Full/Half-Pallet deployable ecosystem, Flux Pod micro-grids, Dereth solar,
  scarab generator, ground radar & autonomous SAM/Mortar/Laser turrets (HBV1
  v4)
@@ -44,7 +44,7 @@ Subject: [PATCH 10/12] Vehicles (holtburger fork): 8-unit modular
 
 diff --git a/Source/ACE.Server.Tests/Vehicles/DeployableEcosystemTests.cs b/Source/ACE.Server.Tests/Vehicles/DeployableEcosystemTests.cs
 new file mode 100644
-index 0000000..bf019bc
+index 00000000..bf019bc8
 --- /dev/null
 +++ b/Source/ACE.Server.Tests/Vehicles/DeployableEcosystemTests.cs
 @@ -0,0 +1,2194 @@
@@ -2243,7 +2243,7 @@ index 0000000..bf019bc
 +    }
 +}
 diff --git a/Source/ACE.Server.Tests/Vehicles/VehicleWireTests.cs b/Source/ACE.Server.Tests/Vehicles/VehicleWireTests.cs
-index 58a5a7f..d0486b8 100644
+index 58a5a7fe..d0486b8a 100644
 --- a/Source/ACE.Server.Tests/Vehicles/VehicleWireTests.cs
 +++ b/Source/ACE.Server.Tests/Vehicles/VehicleWireTests.cs
 @@ -132,14 +132,26 @@ static VehicleMessage Build(string message, JsonElement f)
@@ -2612,7 +2612,7 @@ index 58a5a7f..d0486b8 100644
          public void Hbv1TruncatedAndHostileInputRejected()
          {
 diff --git a/Source/ACE.Server.Tests/Vehicles/vehicle-wire-fixtures.json b/Source/ACE.Server.Tests/Vehicles/vehicle-wire-fixtures.json
-index d4113d8..84e09fb 100644
+index d4113d81..84e09fb9 100644
 --- a/Source/ACE.Server.Tests/Vehicles/vehicle-wire-fixtures.json
 +++ b/Source/ACE.Server.Tests/Vehicles/vehicle-wire-fixtures.json
 @@ -1,44 +1,44 @@
@@ -3278,7 +3278,7 @@ index d4113d8..84e09fb 100644
  }
 diff --git a/Source/ACE.Server/Vehicles/Deployables/BatteryDeployable.cs b/Source/ACE.Server/Vehicles/Deployables/BatteryDeployable.cs
 new file mode 100644
-index 0000000..40737ea
+index 00000000..40737ead
 --- /dev/null
 +++ b/Source/ACE.Server/Vehicles/Deployables/BatteryDeployable.cs
 @@ -0,0 +1,64 @@
@@ -3348,7 +3348,7 @@ index 0000000..40737ea
 +}
 diff --git a/Source/ACE.Server/Vehicles/Deployables/DeployableBase.cs b/Source/ACE.Server/Vehicles/Deployables/DeployableBase.cs
 new file mode 100644
-index 0000000..581c1e1
+index 00000000..581c1e10
 --- /dev/null
 +++ b/Source/ACE.Server/Vehicles/Deployables/DeployableBase.cs
 @@ -0,0 +1,149 @@
@@ -3503,7 +3503,7 @@ index 0000000..581c1e1
 +}
 diff --git a/Source/ACE.Server/Vehicles/Deployables/DeployableManager.cs b/Source/ACE.Server/Vehicles/Deployables/DeployableManager.cs
 new file mode 100644
-index 0000000..5fb7135
+index 00000000..5fb71351
 --- /dev/null
 +++ b/Source/ACE.Server/Vehicles/Deployables/DeployableManager.cs
 @@ -0,0 +1,220 @@
@@ -3729,7 +3729,7 @@ index 0000000..5fb7135
 +}
 diff --git a/Source/ACE.Server/Vehicles/Deployables/DerethSolarModel.cs b/Source/ACE.Server/Vehicles/Deployables/DerethSolarModel.cs
 new file mode 100644
-index 0000000..0364bc3
+index 00000000..0364bc3e
 --- /dev/null
 +++ b/Source/ACE.Server/Vehicles/Deployables/DerethSolarModel.cs
 @@ -0,0 +1,42 @@
@@ -3777,7 +3777,7 @@ index 0000000..0364bc3
 +}
 diff --git a/Source/ACE.Server/Vehicles/Deployables/FluxPodDeployable.cs b/Source/ACE.Server/Vehicles/Deployables/FluxPodDeployable.cs
 new file mode 100644
-index 0000000..7cb3fdf
+index 00000000..7cb3fdf5
 --- /dev/null
 +++ b/Source/ACE.Server/Vehicles/Deployables/FluxPodDeployable.cs
 @@ -0,0 +1,64 @@
@@ -3847,7 +3847,7 @@ index 0000000..7cb3fdf
 +}
 diff --git a/Source/ACE.Server/Vehicles/Deployables/GroundRadarDeployable.cs b/Source/ACE.Server/Vehicles/Deployables/GroundRadarDeployable.cs
 new file mode 100644
-index 0000000..c8eb867
+index 00000000..c8eb8679
 --- /dev/null
 +++ b/Source/ACE.Server/Vehicles/Deployables/GroundRadarDeployable.cs
 @@ -0,0 +1,206 @@
@@ -4059,7 +4059,7 @@ index 0000000..c8eb867
 +}
 diff --git a/Source/ACE.Server/Vehicles/Deployables/LaserTurretDeployable.cs b/Source/ACE.Server/Vehicles/Deployables/LaserTurretDeployable.cs
 new file mode 100644
-index 0000000..3cef022
+index 00000000..3cef0222
 --- /dev/null
 +++ b/Source/ACE.Server/Vehicles/Deployables/LaserTurretDeployable.cs
 @@ -0,0 +1,124 @@
@@ -4189,7 +4189,7 @@ index 0000000..3cef022
 +}
 diff --git a/Source/ACE.Server/Vehicles/Deployables/MicroGrid.cs b/Source/ACE.Server/Vehicles/Deployables/MicroGrid.cs
 new file mode 100644
-index 0000000..71e318d
+index 00000000..71e318db
 --- /dev/null
 +++ b/Source/ACE.Server/Vehicles/Deployables/MicroGrid.cs
 @@ -0,0 +1,186 @@
@@ -4381,7 +4381,7 @@ index 0000000..71e318d
 +}
 diff --git a/Source/ACE.Server/Vehicles/Deployables/MissileTurretDeployable.cs b/Source/ACE.Server/Vehicles/Deployables/MissileTurretDeployable.cs
 new file mode 100644
-index 0000000..e088f48
+index 00000000..e088f481
 --- /dev/null
 +++ b/Source/ACE.Server/Vehicles/Deployables/MissileTurretDeployable.cs
 @@ -0,0 +1,126 @@
@@ -4513,7 +4513,7 @@ index 0000000..e088f48
 +}
 diff --git a/Source/ACE.Server/Vehicles/Deployables/MortarTurretDeployable.cs b/Source/ACE.Server/Vehicles/Deployables/MortarTurretDeployable.cs
 new file mode 100644
-index 0000000..62df06a
+index 00000000..62df06a5
 --- /dev/null
 +++ b/Source/ACE.Server/Vehicles/Deployables/MortarTurretDeployable.cs
 @@ -0,0 +1,120 @@
@@ -4639,7 +4639,7 @@ index 0000000..62df06a
 +}
 diff --git a/Source/ACE.Server/Vehicles/Deployables/PowerGeneratorDeployable.cs b/Source/ACE.Server/Vehicles/Deployables/PowerGeneratorDeployable.cs
 new file mode 100644
-index 0000000..de09bc2
+index 00000000..de09bc27
 --- /dev/null
 +++ b/Source/ACE.Server/Vehicles/Deployables/PowerGeneratorDeployable.cs
 @@ -0,0 +1,91 @@
@@ -4736,7 +4736,7 @@ index 0000000..de09bc2
 +}
 diff --git a/Source/ACE.Server/Vehicles/Deployables/SolarPanelsDeployable.cs b/Source/ACE.Server/Vehicles/Deployables/SolarPanelsDeployable.cs
 new file mode 100644
-index 0000000..008eb24
+index 00000000..008eb249
 --- /dev/null
 +++ b/Source/ACE.Server/Vehicles/Deployables/SolarPanelsDeployable.cs
 @@ -0,0 +1,50 @@
@@ -4791,7 +4791,7 @@ index 0000000..008eb24
 +    }
 +}
 diff --git a/Source/ACE.Server/Vehicles/Vehicle.cs b/Source/ACE.Server/Vehicles/Vehicle.cs
-index d378164..b4695da 100644
+index d3781640..b4695da3 100644
 --- a/Source/ACE.Server/Vehicles/Vehicle.cs
 +++ b/Source/ACE.Server/Vehicles/Vehicle.cs
 @@ -205,7 +205,134 @@ public class Vehicle : WorldObject
@@ -4943,7 +4943,7 @@ index d378164..b4695da 100644
          }
  
 diff --git a/Source/ACE.Server/Vehicles/VehicleCommands.cs b/Source/ACE.Server/Vehicles/VehicleCommands.cs
-index 1aca572..e8ff02f 100644
+index 1aca572f..e8ff02f1 100644
 --- a/Source/ACE.Server/Vehicles/VehicleCommands.cs
 +++ b/Source/ACE.Server/Vehicles/VehicleCommands.cs
 @@ -1,6 +1,7 @@
@@ -5206,7 +5206,7 @@ index 1aca572..e8ff02f 100644
      }
  }
 diff --git a/Source/ACE.Server/Vehicles/VehicleManager.cs b/Source/ACE.Server/Vehicles/VehicleManager.cs
-index c1907a6..5c34074 100644
+index c1907a63..5c340743 100644
 --- a/Source/ACE.Server/Vehicles/VehicleManager.cs
 +++ b/Source/ACE.Server/Vehicles/VehicleManager.cs
 @@ -174,6 +174,7 @@ public static void Tick()
@@ -5226,7 +5226,7 @@ index c1907a6..5c34074 100644
              if (vehicles.Count == 0)
                  return;
 diff --git a/Source/ACE.Server/Vehicles/VehicleWire.cs b/Source/ACE.Server/Vehicles/VehicleWire.cs
-index 02548e9..e266147 100644
+index 02548e93..e2661475 100644
 --- a/Source/ACE.Server/Vehicles/VehicleWire.cs
 +++ b/Source/ACE.Server/Vehicles/VehicleWire.cs
 @@ -33,11 +33,13 @@ public static class VehicleWire
@@ -5608,7 +5608,7 @@ index 02548e9..e266147 100644
 +    }
  }
 diff --git a/Source/ACE.Server/WorldObjects/WorldObject_Database.cs b/Source/ACE.Server/WorldObjects/WorldObject_Database.cs
-index 18d1372..a96ba24 100644
+index 18d13729..a96ba244 100644
 --- a/Source/ACE.Server/WorldObjects/WorldObject_Database.cs
 +++ b/Source/ACE.Server/WorldObjects/WorldObject_Database.cs
 @@ -143,7 +143,7 @@ public bool IsDynamicThatShouldPersistToShard()

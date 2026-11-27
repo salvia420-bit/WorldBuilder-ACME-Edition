@@ -1,7 +1,7 @@
 From 6d8b0a5d87a9cd97c11c5f09f2061e88a8c078e1 Mon Sep 17 00:00:00 2001
 From: salvia420-bit <salvia420@gmail.com>
 Date: Sun, 1 Nov 2026 19:52:42 -0330
-Subject: [PATCH 03/12] Vehicles (holtburger fork): 1070 fixes + M3 world-loop
+Subject: [PATCH 03/28] Vehicles (holtburger fork): 1070 fixes + M3 world-loop
  residual
 
 Found on the first real-GPU look at the Hellcat demo (2026-11-01):
@@ -38,7 +38,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
  7 files changed, 362 insertions(+), 38 deletions(-)
 
 diff --git a/Source/ACE.Server/Entity/Landblock.cs b/Source/ACE.Server/Entity/Landblock.cs
-index 9aa76fd..2067ea4 100644
+index 9aa76fd0..2067ea40 100644
 --- a/Source/ACE.Server/Entity/Landblock.cs
 +++ b/Source/ACE.Server/Entity/Landblock.cs
 @@ -78,6 +78,11 @@ public class Landblock : IActor
@@ -197,7 +197,7 @@ index 9aa76fd..2067ea4 100644
              Monitor5m.RegisterEventEnd();
              Monitor1h.RegisterEventEnd();
 diff --git a/Source/ACE.Server/Managers/LandblockManager.cs b/Source/ACE.Server/Managers/LandblockManager.cs
-index 7ac914c..f1482ed 100644
+index 7ac914c3..f1482ed1 100644
 --- a/Source/ACE.Server/Managers/LandblockManager.cs
 +++ b/Source/ACE.Server/Managers/LandblockManager.cs
 @@ -360,14 +360,28 @@ private static void TickPhysics(double portalYearTicks)
@@ -276,7 +276,7 @@ index 7ac914c..f1482ed 100644
                      setAdjacents = true;
                  }
 diff --git a/Source/ACE.Server/Physics/Common/LScape.cs b/Source/ACE.Server/Physics/Common/LScape.cs
-index a85bdb8..f2ceb03 100644
+index a85bdb82..f2ceb031 100644
 --- a/Source/ACE.Server/Physics/Common/LScape.cs
 +++ b/Source/ACE.Server/Physics/Common/LScape.cs
 @@ -153,10 +153,18 @@ public static ObjCell get_landcell(uint blockCellID)
@@ -303,7 +303,7 @@ index a85bdb8..f2ceb03 100644
              }
              return cell;
 diff --git a/Source/ACE.Server/Vehicles/VehicleProfile.cs b/Source/ACE.Server/Vehicles/VehicleProfile.cs
-index cf51f5d..78cf338 100644
+index cf51f5df..78cf3385 100644
 --- a/Source/ACE.Server/Vehicles/VehicleProfile.cs
 +++ b/Source/ACE.Server/Vehicles/VehicleProfile.cs
 @@ -68,11 +68,16 @@ public static VehicleProfile HellcatDemo()
@@ -326,7 +326,7 @@ index cf51f5d..78cf338 100644
              // Looks as data (DESIGN §5.1 rule 2): a placeholder composite of retail parts. v1 = the stand-in itself;
              // the composite airframe replaces it in M5 without a protocol change.
 diff --git a/Source/ACE.Server/Vehicles/VehicleStreaming.cs b/Source/ACE.Server/Vehicles/VehicleStreaming.cs
-index d57c74c..7c5234a 100644
+index d57c74cd..7c5234ac 100644
 --- a/Source/ACE.Server/Vehicles/VehicleStreaming.cs
 +++ b/Source/ACE.Server/Vehicles/VehicleStreaming.cs
 @@ -105,6 +105,7 @@ public static void PrewarmCells(Landblock lb)
@@ -408,7 +408,7 @@ index d57c74c..7c5234a 100644
  
      /// <summary>Per-vehicle streaming state.</summary>
 diff --git a/Source/ACE.Server/Vehicles/WorldTickMonitor.cs b/Source/ACE.Server/Vehicles/WorldTickMonitor.cs
-index 8b6c23a..2ec243f 100644
+index 8b6c23a7..2ec243f6 100644
 --- a/Source/ACE.Server/Vehicles/WorldTickMonitor.cs
 +++ b/Source/ACE.Server/Vehicles/WorldTickMonitor.cs
 @@ -56,6 +56,173 @@ public static void Mark(Phase p)
@@ -624,7 +624,7 @@ index 8b6c23a..2ec243f 100644
      }
  }
 diff --git a/Source/ACE.Server/WorldObjects/WorldObject_Links.cs b/Source/ACE.Server/WorldObjects/WorldObject_Links.cs
-index 467e237..2241a5f 100644
+index 467e2376..2241a5fb 100644
 --- a/Source/ACE.Server/WorldObjects/WorldObject_Links.cs
 +++ b/Source/ACE.Server/WorldObjects/WorldObject_Links.cs
 @@ -32,10 +32,13 @@ public void ActivateLinks(List<LandblockInstance> sourceObjects, List<Biota> bio

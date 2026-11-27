@@ -220,6 +220,10 @@ const TIER4 = [
   { flag: "vehiclePortModels", file: "tests/vehicle_port_models.test.mjs" },
   { flag: "vehicleShipModelUx", file: "tests/vehicle_ship_model_ux.test.mjs" },
   { flag: "vehiclePortIntegration", file: "tests/vehicle_port_integration.test.mjs" },
+  { flag: "vehicleEconomyModels", file: "tests/vehicle_economy_models.test.mjs" },
+  { flag: "vehicleEconomyHudWire", file: "tests/vehicle_economy_hud_wire.test.mjs" },
+  { flag: "vehicleLogisticsNavGraph", file: "tests/vehicle_logistics_nav_graph.test.mjs", timeoutMs: 60000 },
+  { flag: "vehicleLogisticsMaritime", file: "tests/vehicle_logistics_maritime.test.mjs" },
 ].map((t) => ({ ...t, tier: 4 }));
 
 

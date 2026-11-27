@@ -1,7 +1,7 @@
 From e84a9b96e0742cf3f8c00aad50daf674646b7ffb Mon Sep 17 00:00:00 2001
 From: salvia420-bit <salvia420@gmail.com>
 Date: Thu, 19 Nov 2026 13:36:21 +0000
-Subject: [PATCH] Vehicles (holtburger fork): Semi-Truck (semi-379) and
+Subject: [PATCH 14/28] Vehicles (holtburger fork): Semi-Truck (semi-379) and
  Articulated Trailers (HBV1 v6)
 
 - HBV1 v6 wire protocol (VehicleWire.cs, 0x090F VehicleTrailerAction/VehicleTrailerState, additive since=6 fields on Vehicle_Profile/Vehicle_State, DeployableKind.TrailerChassis20/40, VehicleEventKind.TrailerHitched/TrailerUnhitched/TwistlockToggled, landblock-local Location.Pos, GameAction/GameEvent routing).

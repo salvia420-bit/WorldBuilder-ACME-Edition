@@ -528,7 +528,13 @@ impl ProtocolUnpack for GameEventMessage {
                 | GameEventOpcode::VehicleGroundContacts
                 | GameEventOpcode::VehicleContainerState
                 | GameEventOpcode::VehicleTrailerState
-                | GameEventOpcode::VehiclePalletJackState => {
+                | GameEventOpcode::VehiclePalletJackState
+                | GameEventOpcode::EconomyTownState
+                | GameEventOpcode::EconomySiegeEvent
+                | GameEventOpcode::IndustrySurveyResult
+                | GameEventOpcode::IndustryFacilityState
+                | GameEventOpcode::LogisticsConvoyState
+                | GameEventOpcode::EconomyMonarchOrderState => {
                     match crate::messages::vehicle::VehicleS2C::unpack_payload(
                         event_type_raw,
                         data,

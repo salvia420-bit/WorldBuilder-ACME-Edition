@@ -1,7 +1,7 @@
-From 2c48986083fab2869d01740bc2e59204279a7d95 Mon Sep 17 00:00:00 2001
+From 415a5b402696a0fd8c5d1d955adc8401be4214a7 Mon Sep 17 00:00:00 2001
 From: salvia420-bit <salvia420@gmail.com>
 Date: Mon, 16 Nov 2026 16:52:32 +0000
-Subject: [PATCH 11/12] Vehicles (holtburger fork): Willys MB Hellcat-parity
+Subject: [PATCH 11/28] Vehicles (holtburger fork): Willys MB Hellcat-parity
  4-seat crew overhaul & deployable cargo decoupling
 
 ---
@@ -16,7 +16,7 @@ Subject: [PATCH 11/12] Vehicles (holtburger fork): Willys MB Hellcat-parity
  8 files changed, 332 insertions(+), 103 deletions(-)
 
 diff --git a/Source/ACE.Server.Tests/Vehicles/AirDefenseRadarTests.cs b/Source/ACE.Server.Tests/Vehicles/AirDefenseRadarTests.cs
-index 3ec06af..e8f7220 100644
+index 3ec06aff..e8f7220d 100644
 --- a/Source/ACE.Server.Tests/Vehicles/AirDefenseRadarTests.cs
 +++ b/Source/ACE.Server.Tests/Vehicles/AirDefenseRadarTests.cs
 @@ -79,6 +79,22 @@ private static Vehicle CreateTestJeep(uint guid, double x = 1000.0, double y = 2
@@ -97,7 +97,7 @@ index 3ec06af..e8f7220 100644
  
              var player = CreateTestPlayer(0x10000001, 1000.0, 1997.0, 100.75);
 diff --git a/Source/ACE.Server.Tests/Vehicles/DeployableEcosystemTests.cs b/Source/ACE.Server.Tests/Vehicles/DeployableEcosystemTests.cs
-index bf019bc..0b60ea1 100644
+index bf019bc8..0b60ea15 100644
 --- a/Source/ACE.Server.Tests/Vehicles/DeployableEcosystemTests.cs
 +++ b/Source/ACE.Server.Tests/Vehicles/DeployableEcosystemTests.cs
 @@ -92,6 +92,22 @@ private static Vehicle CreateTestJeep(uint guid, double x = 1000.0, double y = 2
@@ -178,7 +178,7 @@ index bf019bc..0b60ea1 100644
              VehicleManager.RegisterForTesting(jeep);
              try
 diff --git a/Source/ACE.Server.Tests/Vehicles/VehicleMultiSeatTests.cs b/Source/ACE.Server.Tests/Vehicles/VehicleMultiSeatTests.cs
-index efbafdd..4fcbb9c 100644
+index efbafdd6..4fcbb9c3 100644
 --- a/Source/ACE.Server.Tests/Vehicles/VehicleMultiSeatTests.cs
 +++ b/Source/ACE.Server.Tests/Vehicles/VehicleMultiSeatTests.cs
 @@ -53,6 +53,8 @@ private static Player CreateTestPlayer(uint guid, double x, double y, double z)
@@ -456,7 +456,7 @@ index efbafdd..4fcbb9c 100644
      }
  }
 diff --git a/Source/ACE.Server/Vehicles/GroundModel.cs b/Source/ACE.Server/Vehicles/GroundModel.cs
-index 46e90e4..55935c8 100644
+index 46e90e44..55935c89 100644
 --- a/Source/ACE.Server/Vehicles/GroundModel.cs
 +++ b/Source/ACE.Server/Vehicles/GroundModel.cs
 @@ -345,9 +345,11 @@ public static void Step(ref GroundState s, in GroundInput u, GroundParams p, Gro
@@ -473,7 +473,7 @@ index 46e90e4..55935c8 100644
              if (Math.Abs(s.Speed) < 0.001 && u.Throttle == 0.0)
                  s.Mode = VehicleMode.Parked;
 diff --git a/Source/ACE.Server/Vehicles/Vehicle.cs b/Source/ACE.Server/Vehicles/Vehicle.cs
-index b4695da..5db08e2 100644
+index b4695da3..5db08e20 100644
 --- a/Source/ACE.Server/Vehicles/Vehicle.cs
 +++ b/Source/ACE.Server/Vehicles/Vehicle.cs
 @@ -426,7 +426,7 @@ public Vehicle(Weenie weenie, ObjectGuid guid, VehicleProfile profile) : base(we
@@ -547,7 +547,7 @@ index b4695da..5db08e2 100644
          }
  
 diff --git a/Source/ACE.Server/Vehicles/VehicleCommands.cs b/Source/ACE.Server/Vehicles/VehicleCommands.cs
-index e8ff02f..3e6fd79 100644
+index e8ff02f1..3e6fd79b 100644
 --- a/Source/ACE.Server/Vehicles/VehicleCommands.cs
 +++ b/Source/ACE.Server/Vehicles/VehicleCommands.cs
 @@ -17,11 +17,11 @@ public static class VehicleCommands
@@ -712,7 +712,7 @@ index e8ff02f..3e6fd79 100644
              }
          }
 diff --git a/Source/ACE.Server/Vehicles/VehicleManager.cs b/Source/ACE.Server/Vehicles/VehicleManager.cs
-index 5c34074..a4f9042 100644
+index 5c340743..a4f90426 100644
 --- a/Source/ACE.Server/Vehicles/VehicleManager.cs
 +++ b/Source/ACE.Server/Vehicles/VehicleManager.cs
 @@ -110,7 +110,11 @@ public static void UnregisterForTesting(uint guid)
@@ -820,7 +820,7 @@ index 5c34074..a4f9042 100644
              // Requesting player must be on foot outside vehicle (not currently seated)
              if (IsSeated(player)) return false;
 diff --git a/Source/ACE.Server/Vehicles/VehicleProfile.cs b/Source/ACE.Server/Vehicles/VehicleProfile.cs
-index ac50d55..d4a2962 100644
+index ac50d557..d4a2962f 100644
 --- a/Source/ACE.Server/Vehicles/VehicleProfile.cs
 +++ b/Source/ACE.Server/Vehicles/VehicleProfile.cs
 @@ -426,7 +426,7 @@ public static VehicleProfile JeepMb()

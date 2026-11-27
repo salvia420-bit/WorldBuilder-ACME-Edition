@@ -1,7 +1,7 @@
 From d20368ac3f3b76f9842abc2e1d099e4d89eeb5ef Mon Sep 17 00:00:00 2001
 From: salvia420-bit <salvia420@gmail.com>
 Date: Fri, 20 Nov 2026 01:38:39 +0000
-Subject: [PATCH] Vehicles (holtburger fork): global-space AirDefense,
+Subject: [PATCH 16/28] Vehicles (holtburger fork): global-space AirDefense,
  MicroGrid and turret targeting
 
 ---

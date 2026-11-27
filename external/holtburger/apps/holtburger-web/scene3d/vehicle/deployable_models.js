@@ -7,6 +7,17 @@
 
 import * as THREE_DEFAULT from "three";
 import { installCsmShaderPatch } from "../materials.js";
+import {
+  PROSPECTING_WCID,
+  PROSPECTING_KIND,
+  INDUSTRIAL_SKID_WCID,
+  INDUSTRIAL_SKID_KIND,
+  CIVIC_WCID,
+  CIVIC_KIND,
+} from "./economy_specs.js";
+import { buildProspectingDeployable } from "./prospecting_models.js";
+import { buildIndustryDeployable } from "./industry_models.js";
+import { buildCivicDeployable } from "./civic_models.js";
 
 export const PALLET_SPECS = Object.freeze({
   standard: Object.freeze({
@@ -40,6 +51,9 @@ export const DEPLOYABLE_KINDS = Object.freeze({
   GroundRadar: 7,       // 4000015
   MortarTurret: 8,      // 4000016
   HeavyLaserTurret: 9,  // 4000017
+  ...PROSPECTING_KIND,  // 38..42
+  ...INDUSTRIAL_SKID_KIND, // 43..55
+  ...CIVIC_KIND,        // 56..61
 });
 
 export const DEPLOYABLE_WCID = Object.freeze({
@@ -51,6 +65,9 @@ export const DEPLOYABLE_WCID = Object.freeze({
   GroundRadar: 4000015,
   MortarTurret: 4000016,
   HeavyLaserTurret: 4000017,
+  ...PROSPECTING_WCID,  // 4000070..4000074
+  ...INDUSTRIAL_SKID_WCID, // 4000075..4000087
+  ...CIVIC_WCID,        // 4000090..4000095
 });
 
 export const GRID_SPECS = Object.freeze({
@@ -349,7 +366,7 @@ export class GeomAcc {
   }
 }
 
-function disposeRootResources(root, excludeMeshes = [], extraMaterials = []) {
+export function disposeRootResources(root, excludeMeshes = [], extraMaterials = []) {
   const skip = new Set(excludeMeshes);
   const geoms = new Set();
   const mats = new Set();
@@ -2205,6 +2222,30 @@ const DEPLOYABLE_KIND_TO_WCID = new Map([
   [DEPLOYABLE_KINDS.GroundRadar, DEPLOYABLE_WCID.GroundRadar],
   [DEPLOYABLE_KINDS.MortarTurret, DEPLOYABLE_WCID.MortarTurret],
   [DEPLOYABLE_KINDS.HeavyLaserTurret, DEPLOYABLE_WCID.HeavyLaserTurret],
+  [PROSPECTING_KIND.GprScanner, PROSPECTING_WCID.GprScanner],
+  [PROSPECTING_KIND.VibroseisSeismic, PROSPECTING_WCID.VibroseisSeismic],
+  [PROSPECTING_KIND.DiamondCoreDrill, PROSPECTING_WCID.DiamondCoreDrill],
+  [PROSPECTING_KIND.MobileAssayLab, PROSPECTING_WCID.MobileAssayLab],
+  [PROSPECTING_KIND.CoreSampleCrate, PROSPECTING_WCID.CoreSampleCrate],
+  [INDUSTRIAL_SKID_KIND.BoreholeMiner, INDUSTRIAL_SKID_WCID.BoreholeMiner],
+  [INDUSTRIAL_SKID_KIND.JawCrusher, INDUSTRIAL_SKID_WCID.JawCrusher],
+  [INDUSTRIAL_SKID_KIND.Concentrator, INDUSTRIAL_SKID_WCID.Concentrator],
+  [INDUSTRIAL_SKID_KIND.RotaryOilRig, INDUSTRIAL_SKID_WCID.RotaryOilRig],
+  [INDUSTRIAL_SKID_KIND.PumpjackTree, INDUSTRIAL_SKID_WCID.PumpjackTree],
+  [INDUSTRIAL_SKID_KIND.ThreePhaseSeparator, INDUSTRIAL_SKID_WCID.ThreePhaseSeparator],
+  [INDUSTRIAL_SKID_KIND.AduRefinery, INDUSTRIAL_SKID_WCID.AduRefinery],
+  [INDUSTRIAL_SKID_KIND.HdtVduDewaxer, INDUSTRIAL_SKID_WCID.HdtVduDewaxer],
+  [INDUSTRIAL_SKID_KIND.PyroSmelter, INDUSTRIAL_SKID_WCID.PyroSmelter],
+  [INDUSTRIAL_SKID_KIND.ContactAcidWorks, INDUSTRIAL_SKID_WCID.ContactAcidWorks],
+  [INDUSTRIAL_SKID_KIND.BioProcessorTannery, INDUSTRIAL_SKID_WCID.BioProcessorTannery],
+  [INDUSTRIAL_SKID_KIND.IndustrialGenset150kW, INDUSTRIAL_SKID_WCID.IndustrialGenset150kW],
+  [INDUSTRIAL_SKID_KIND.IndustrialBess18MJ, INDUSTRIAL_SKID_WCID.IndustrialBess18MJ],
+  [CIVIC_KIND.TownControlNode, CIVIC_WCID.TownControlNode],
+  [CIVIC_KIND.TownDepotApron, CIVIC_WCID.TownDepotApron],
+  [CIVIC_KIND.ForwardSiegeBeacon, CIVIC_WCID.ForwardSiegeBeacon],
+  [CIVIC_KIND.TownMint, CIVIC_WCID.TownMint],
+  [CIVIC_KIND.TownWorkshop, CIVIC_WCID.TownWorkshop],
+  [CIVIC_KIND.PublicCommonsStarterHearth, CIVIC_WCID.PublicCommonsStarterHearth],
 ]);
 
 const DEPLOYABLE_NAME_TO_WCID = new Map([
@@ -2216,6 +2257,31 @@ const DEPLOYABLE_NAME_TO_WCID = new Map([
   ["groundradar", DEPLOYABLE_WCID.GroundRadar],
   ["mortarturret", DEPLOYABLE_WCID.MortarTurret],
   ["heavylaserturret", DEPLOYABLE_WCID.HeavyLaserTurret],
+  ["gprscanner", PROSPECTING_WCID.GprScanner],
+  ["gpr", PROSPECTING_WCID.GprScanner],
+  ["vibroseisseismic", PROSPECTING_WCID.VibroseisSeismic],
+  ["diamondcoredrill", PROSPECTING_WCID.DiamondCoreDrill],
+  ["mobileassaylab", PROSPECTING_WCID.MobileAssayLab],
+  ["coresamplecrate", PROSPECTING_WCID.CoreSampleCrate],
+  ["boreholeminer", INDUSTRIAL_SKID_WCID.BoreholeMiner],
+  ["jawcrusher", INDUSTRIAL_SKID_WCID.JawCrusher],
+  ["concentrator", INDUSTRIAL_SKID_WCID.Concentrator],
+  ["rotaryoilrig", INDUSTRIAL_SKID_WCID.RotaryOilRig],
+  ["pumpjacktree", INDUSTRIAL_SKID_WCID.PumpjackTree],
+  ["threephaseseparator", INDUSTRIAL_SKID_WCID.ThreePhaseSeparator],
+  ["adurefinery", INDUSTRIAL_SKID_WCID.AduRefinery],
+  ["hdtvdudewaxer", INDUSTRIAL_SKID_WCID.HdtVduDewaxer],
+  ["pyrosmelter", INDUSTRIAL_SKID_WCID.PyroSmelter],
+  ["contactacidworks", INDUSTRIAL_SKID_WCID.ContactAcidWorks],
+  ["bioprocessortannery", INDUSTRIAL_SKID_WCID.BioProcessorTannery],
+  ["industrialgenset150kw", INDUSTRIAL_SKID_WCID.IndustrialGenset150kW],
+  ["industrialbess18mj", INDUSTRIAL_SKID_WCID.IndustrialBess18MJ],
+  ["towncontrolnode", CIVIC_WCID.TownControlNode],
+  ["towndepotapron", CIVIC_WCID.TownDepotApron],
+  ["forwardsiegebeacon", CIVIC_WCID.ForwardSiegeBeacon],
+  ["townmint", CIVIC_WCID.TownMint],
+  ["townworkshop", CIVIC_WCID.TownWorkshop],
+  ["publiccommonsstarterhearth", CIVIC_WCID.PublicCommonsStarterHearth],
 ]);
 
 export function buildDeployable(three, wcid, options = {}) {
@@ -2247,8 +2313,19 @@ export function buildDeployable(three, wcid, options = {}) {
       return buildMortarTurret(three, options);
     case DEPLOYABLE_WCID.HeavyLaserTurret:
       return buildHeavyLaserTurret(three, options);
-    default:
+    default: {
+      if (resolvedWcid >= 4000070 && resolvedWcid <= 4000074) {
+        const built = buildProspectingDeployable(three, resolvedWcid, options);
+        if (built) return built;
+      } else if (resolvedWcid >= 4000075 && resolvedWcid <= 4000087) {
+        const built = buildIndustryDeployable(three, resolvedWcid, options);
+        if (built) return built;
+      } else if (resolvedWcid >= 4000090 && resolvedWcid <= 4000095) {
+        const built = buildCivicDeployable(three, resolvedWcid, options);
+        if (built) return built;
+      }
       throw new Error(`Unknown deployable WCID: ${wcid}`);
+    }
   }
 }
 

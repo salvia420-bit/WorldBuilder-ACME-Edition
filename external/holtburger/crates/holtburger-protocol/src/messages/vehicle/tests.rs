@@ -26,6 +26,9 @@ fn gf(o: &Value, k: &str) -> f32 {
 fn gu(o: &Value, k: &str) -> u32 {
     o[k].as_u64().unwrap_or_else(|| panic!("missing uint {k}")) as u32
 }
+fn gu64(o: &Value, k: &str) -> u64 {
+    o[k].as_u64().unwrap_or_else(|| panic!("missing ulong {k}"))
+}
 fn gi(o: &Value, k: &str) -> i64 {
     o[k].as_i64().unwrap_or_else(|| panic!("missing int {k}"))
 }
@@ -92,6 +95,54 @@ fn c2s_fields(m: &VehicleC2S) -> Value {
             "Position": v3(pj.position),
             "Heading": f(pj.heading),
             "TillerAngle": f(pj.tiller_angle),
+        }),
+        VehicleC2S::EconomySiegeAction(sa) => json!({
+            "TownId": sa.town_id,
+            "BeaconGuid": sa.beacon_guid,
+            "Action": sa.action,
+            "Flags": sa.flags,
+            "Reserved": sa.reserved,
+            "SupplyPoints": sa.supply_points,
+            "OriginLandblock": sa.origin_landblock,
+        }),
+        VehicleC2S::IndustryProspecting(ip) => json!({
+            "ToolGuid": ip.tool_guid,
+            "ToolKind": ip.tool_kind,
+            "Mode": ip.mode,
+            "Reserved0": ip.reserved0,
+            "Reserved1": ip.reserved1,
+            "Cell": ip.cell,
+            "Position": v3(ip.position),
+        }),
+        VehicleC2S::IndustryFacilityAction(fa) => json!({
+            "FacilityGuid": fa.facility_guid,
+            "Action": fa.action,
+            "Reserved0": fa.reserved0,
+            "Reserved1": fa.reserved1,
+            "RecipeId": fa.recipe_id,
+            "Param": fa.param,
+        }),
+        VehicleC2S::LogisticsConvoyOrder(co) => json!({
+            "ConvoyId": co.convoy_id,
+            "Action": co.action,
+            "VehicleClass": co.vehicle_class,
+            "Flags": co.flags,
+            "OriginTownId": co.origin_town_id,
+            "DestTownId": co.dest_town_id,
+            "ContainerKind": co.container_kind,
+            "CommodityId": co.commodity_id,
+        }),
+        VehicleC2S::EconomyMonarchOrder(mo) => json!({
+            "OrderId": mo.order_id,
+            "TownId": mo.town_id,
+            "Action": mo.action,
+            "OrderType": mo.order_type,
+            "Flags": mo.flags,
+            "TargetGuid": mo.target_guid,
+            "ItemWcid": mo.item_wcid,
+            "Quantity": mo.quantity,
+            "RewardPyreals": mo.reward_pyreals,
+            "ParamF32": f(mo.param_f32),
         }),
     }
 }
@@ -166,6 +217,54 @@ fn c2s_from(opcode: u32, o: &Value) -> VehicleC2S {
             position: gv3(o, "Position"),
             heading: gf(o, "Heading"),
             tiller_angle: gf(o, "TillerAngle"),
+        }),
+        c2s::ECONOMY_SIEGE_ACTION => VehicleC2S::EconomySiegeAction(EconomySiegeAction {
+            town_id: gu(o, "TownId"),
+            beacon_guid: gu(o, "BeaconGuid"),
+            action: gu(o, "Action") as u8,
+            flags: gu(o, "Flags") as u8,
+            reserved: gu(o, "Reserved") as u16,
+            supply_points: gu(o, "SupplyPoints"),
+            origin_landblock: gu(o, "OriginLandblock"),
+        }),
+        c2s::INDUSTRY_PROSPECTING => VehicleC2S::IndustryProspecting(IndustryProspecting {
+            tool_guid: gu(o, "ToolGuid"),
+            tool_kind: gu(o, "ToolKind"),
+            mode: gu(o, "Mode") as u8,
+            reserved0: gu(o, "Reserved0") as u8,
+            reserved1: gu(o, "Reserved1") as u16,
+            cell: gu(o, "Cell"),
+            position: gv3(o, "Position"),
+        }),
+        c2s::INDUSTRY_FACILITY_ACTION => VehicleC2S::IndustryFacilityAction(IndustryFacilityAction {
+            facility_guid: gu(o, "FacilityGuid"),
+            action: gu(o, "Action") as u8,
+            reserved0: gu(o, "Reserved0") as u8,
+            reserved1: gu(o, "Reserved1") as u16,
+            recipe_id: gu(o, "RecipeId"),
+            param: gu(o, "Param"),
+        }),
+        c2s::LOGISTICS_CONVOY_ORDER => VehicleC2S::LogisticsConvoyOrder(LogisticsConvoyOrder {
+            convoy_id: gu64(o, "ConvoyId"),
+            action: gu(o, "Action") as u8,
+            vehicle_class: gu(o, "VehicleClass") as u8,
+            flags: gu(o, "Flags") as u16,
+            origin_town_id: gu(o, "OriginTownId"),
+            dest_town_id: gu(o, "DestTownId"),
+            container_kind: gu(o, "ContainerKind"),
+            commodity_id: gu(o, "CommodityId"),
+        }),
+        c2s::ECONOMY_MONARCH_ORDER => VehicleC2S::EconomyMonarchOrder(EconomyMonarchOrder {
+            order_id: gu64(o, "OrderId"),
+            town_id: gu(o, "TownId"),
+            action: gu(o, "Action") as u8,
+            order_type: gu(o, "OrderType") as u8,
+            flags: gu(o, "Flags") as u16,
+            target_guid: gu(o, "TargetGuid"),
+            item_wcid: gu(o, "ItemWcid"),
+            quantity: gu(o, "Quantity"),
+            reward_pyreals: gu64(o, "RewardPyreals"),
+            param_f32: gf(o, "ParamF32"),
         }),
         _ => panic!("not a C2S vehicle opcode {opcode:#x}"),
     }
@@ -411,6 +510,92 @@ fn s2c_fields(m: &VehicleS2C) -> Value {
             "Reserved": pj.reserved,
             "CarriedWcid": pj.carried_wcid,
             "OwnerGuid": pj.owner_guid,
+        }),
+        VehicleS2C::EconomyTownState(ts) => json!({
+            "TownId": ts.town_id,
+            "ControlState": ts.control_state,
+            "OwnerMonarchId": ts.owner_monarch_id,
+            "AttackerMonarchId": ts.attacker_monarch_id,
+            "Flags": ts.flags,
+            "Reserved": ts.reserved,
+            "AnchorLandblock": ts.anchor_landblock,
+            "HoldElapsedSec": ts.hold_elapsed_sec,
+            "SupplyMeterSec": ts.supply_meter_sec,
+            "StarvingSec": ts.starving_sec,
+            "TreasuryPyreals": ts.treasury_pyreals,
+            "EscrowPyreals": ts.escrow_pyreals,
+            "TariffBuyMul": f(ts.tariff_buy_mul),
+            "TariffSellMul": f(ts.tariff_sell_mul),
+        }),
+        VehicleS2C::EconomySiegeEvent(se) => json!({
+            "TownId": se.town_id,
+            "Kind": se.kind,
+            "ControlState": se.control_state,
+            "Reserved": se.reserved,
+            "OwnerMonarchId": se.owner_monarch_id,
+            "AttackerMonarchId": se.attacker_monarch_id,
+            "HoldElapsedSec": se.hold_elapsed_sec,
+            "SupplyMeterSec": se.supply_meter_sec,
+            "StarvingSec": se.starving_sec,
+            "TreasurySpoils": se.treasury_spoils,
+        }),
+        VehicleS2C::IndustrySurveyResult(sr) => json!({
+            "DepositId": sr.deposit_id,
+            "LandblockId": sr.landblock_id,
+            "ToolKind": sr.tool_kind,
+            "Flags": sr.flags,
+            "TerrainCode": sr.terrain_code,
+            "ResourceKind": sr.resource_kind,
+            "Reserved": sr.reserved,
+            "DepthM": f(sr.depth_m),
+            "GradeBps": sr.grade_bps,
+            "ApiGravity": f(sr.api_gravity),
+            "SulfurBps": sr.sulfur_bps,
+            "RemainingTonnes": f(sr.remaining_tonnes),
+        }),
+        VehicleS2C::IndustryFacilityState(fs) => json!({
+            "FacilityGuid": fs.facility_guid,
+            "Kind": fs.kind,
+            "TownId": fs.town_id,
+            "DepositId": fs.deposit_id,
+            "OwnerMonarchId": fs.owner_monarch_id,
+            "Status": fs.status,
+            "OnlineFlags": fs.online_flags,
+            "Reserved": fs.reserved,
+            "PowerWatts": f(fs.power_watts),
+            "BufferJoules": f(fs.buffer_joules),
+            "ProgressPct": f(fs.progress_pct),
+            "RecipeId": fs.recipe_id,
+        }),
+        VehicleS2C::LogisticsConvoyState(cs) => json!({
+            "ConvoyId": cs.convoy_id,
+            "OwnerMonarchId": cs.owner_monarch_id,
+            "VehicleGuid": cs.vehicle_guid,
+            "VehicleClass": cs.vehicle_class,
+            "LodState": cs.lod_state,
+            "Status": cs.status,
+            "Reserved": cs.reserved,
+            "OriginTownId": cs.origin_town_id,
+            "DestTownId": cs.dest_town_id,
+            "OriginLandblock": cs.origin_landblock,
+            "SplineSM": f(cs.spline_s_m),
+            "FuelLiters": f(cs.fuel_liters),
+            "Cell": cs.cell,
+            "Position": v3(cs.position),
+            "Heading": f(cs.heading),
+        }),
+        VehicleS2C::EconomyMonarchOrderState(mo) => json!({
+            "OrderId": mo.order_id,
+            "MonarchId": mo.monarch_id,
+            "TownId": mo.town_id,
+            "OrderType": mo.order_type,
+            "Status": mo.status,
+            "Flags": mo.flags,
+            "ClaimedByGuid": mo.claimed_by_guid,
+            "ItemWcid": mo.item_wcid,
+            "Quantity": mo.quantity,
+            "RewardPyreals": mo.reward_pyreals,
+            "ValueF32": f(mo.value_f32),
         }),
     }
 }
@@ -741,6 +926,92 @@ fn s2c_from(opcode: u32, o: &Value) -> VehicleS2C {
             reserved: gu(o, "Reserved") as u8,
             carried_wcid: gu(o, "CarriedWcid"),
             owner_guid: gu(o, "OwnerGuid"),
+        }),
+        s2c::ECONOMY_TOWN_STATE => VehicleS2C::EconomyTownState(EconomyTownState {
+            town_id: gu(o, "TownId"),
+            control_state: gu(o, "ControlState") as u8,
+            owner_monarch_id: gu(o, "OwnerMonarchId"),
+            attacker_monarch_id: gu(o, "AttackerMonarchId"),
+            flags: gu(o, "Flags") as u8,
+            reserved: gu(o, "Reserved") as u16,
+            anchor_landblock: gu(o, "AnchorLandblock"),
+            hold_elapsed_sec: gu(o, "HoldElapsedSec"),
+            supply_meter_sec: gu(o, "SupplyMeterSec"),
+            starving_sec: gu(o, "StarvingSec"),
+            treasury_pyreals: gu64(o, "TreasuryPyreals"),
+            escrow_pyreals: gu64(o, "EscrowPyreals"),
+            tariff_buy_mul: gf(o, "TariffBuyMul"),
+            tariff_sell_mul: gf(o, "TariffSellMul"),
+        }),
+        s2c::ECONOMY_SIEGE_EVENT => VehicleS2C::EconomySiegeEvent(EconomySiegeEvent {
+            town_id: gu(o, "TownId"),
+            kind: gu(o, "Kind") as u8,
+            control_state: gu(o, "ControlState") as u8,
+            reserved: gu(o, "Reserved") as u16,
+            owner_monarch_id: gu(o, "OwnerMonarchId"),
+            attacker_monarch_id: gu(o, "AttackerMonarchId"),
+            hold_elapsed_sec: gu(o, "HoldElapsedSec"),
+            supply_meter_sec: gu(o, "SupplyMeterSec"),
+            starving_sec: gu(o, "StarvingSec"),
+            treasury_spoils: gu64(o, "TreasurySpoils"),
+        }),
+        s2c::INDUSTRY_SURVEY_RESULT => VehicleS2C::IndustrySurveyResult(IndustrySurveyResult {
+            deposit_id: gu64(o, "DepositId"),
+            landblock_id: gu(o, "LandblockId"),
+            tool_kind: gu(o, "ToolKind"),
+            flags: gu(o, "Flags") as u8,
+            terrain_code: gu(o, "TerrainCode") as u8,
+            resource_kind: gu(o, "ResourceKind") as u8,
+            reserved: gu(o, "Reserved") as u8,
+            depth_m: gf(o, "DepthM"),
+            grade_bps: gu(o, "GradeBps"),
+            api_gravity: gf(o, "ApiGravity"),
+            sulfur_bps: gu(o, "SulfurBps"),
+            remaining_tonnes: gf(o, "RemainingTonnes"),
+        }),
+        s2c::INDUSTRY_FACILITY_STATE => VehicleS2C::IndustryFacilityState(IndustryFacilityState {
+            facility_guid: gu(o, "FacilityGuid"),
+            kind: gu(o, "Kind"),
+            town_id: gu(o, "TownId"),
+            deposit_id: gu64(o, "DepositId"),
+            owner_monarch_id: gu(o, "OwnerMonarchId"),
+            status: gu(o, "Status") as u8,
+            online_flags: gu(o, "OnlineFlags") as u8,
+            reserved: gu(o, "Reserved") as u16,
+            power_watts: gf(o, "PowerWatts"),
+            buffer_joules: gf(o, "BufferJoules"),
+            progress_pct: gf(o, "ProgressPct"),
+            recipe_id: gu(o, "RecipeId"),
+        }),
+        s2c::LOGISTICS_CONVOY_STATE => VehicleS2C::LogisticsConvoyState(LogisticsConvoyState {
+            convoy_id: gu64(o, "ConvoyId"),
+            owner_monarch_id: gu(o, "OwnerMonarchId"),
+            vehicle_guid: gu(o, "VehicleGuid"),
+            vehicle_class: gu(o, "VehicleClass") as u8,
+            lod_state: gu(o, "LodState") as u8,
+            status: gu(o, "Status") as u8,
+            reserved: gu(o, "Reserved") as u8,
+            origin_town_id: gu(o, "OriginTownId"),
+            dest_town_id: gu(o, "DestTownId"),
+            origin_landblock: gu(o, "OriginLandblock"),
+            spline_s_m: gf(o, "SplineSM"),
+            fuel_liters: gf(o, "FuelLiters"),
+            cell: gu(o, "Cell"),
+            position: gv3(o, "Position"),
+            heading: gf(o, "Heading"),
+        }),
+        s2c::ECONOMY_MONARCH_ORDER_STATE => VehicleS2C::EconomyMonarchOrderState(EconomyMonarchOrderState {
+            order_id: gu64(o, "OrderId"),
+            monarch_id: gu(o, "MonarchId"),
+            town_id: gu(o, "TownId"),
+            order_type: gu(o, "OrderType") as u8,
+            status: gu(o, "Status") as u8,
+            flags: gu(o, "Flags") as u16,
+            claimed_by_guid: gu(o, "ClaimedByGuid"),
+            item_wcid: gu(o, "ItemWcid"),
+            quantity: gu(o, "Quantity"),
+            reward_pyreals: gu64(o, "RewardPyreals"),
+            value_f32: gf(o, "ValueF32"),
         }),
         _ => panic!("not an S2C vehicle opcode {opcode:#x}"),
     }
@@ -1326,7 +1597,7 @@ fn hbv1_v5_payloads_default_v6_fields() {
 #[test]
 fn hbv1_v8_future_version_extra_bytes() {
     let fx = fixture("future_version_extra_bytes");
-    assert_eq!(fx["version"].as_u64(), Some(8));
+    assert_eq!(fx["version"].as_u64(), Some(9));
     let bytes = hex::decode(fx["hex"].as_str().unwrap()).unwrap();
     assert_eq!(bytes.len(), 104);
     let VehicleS2C::State(s) = unpack_s2c(s2c::STATE, &bytes) else {
@@ -1337,38 +1608,38 @@ fn hbv1_v8_future_version_extra_bytes() {
     assert_eq!(buf.len(), 100);
     assert_eq!(hex::encode(&buf), fx["repack_hex"].as_str().unwrap());
 
-    // Synthetic v8 TrailerAction & TrailerState with trailing bytes skip cleanly
-    let mut ta_v8 = fixture_bytes("vehicle_trailer_action");
-    ta_v8[4..6].copy_from_slice(&8u16.to_le_bytes());
-    ta_v8.extend_from_slice(&[0xDE, 0xAD, 0xBE, 0xEF]);
+    // Synthetic v9 TrailerAction & TrailerState with trailing bytes skip cleanly
+    let mut ta_v9 = fixture_bytes("vehicle_trailer_action");
+    ta_v9[4..6].copy_from_slice(&9u16.to_le_bytes());
+    ta_v9.extend_from_slice(&[0xDE, 0xAD, 0xBE, 0xEF]);
     let mut off = 0;
-    let ta = VehicleC2S::unpack_payload(c2s::TRAILER_ACTION, &ta_v8, &mut off).expect("v8 trailer action");
-    assert_eq!(off, ta_v8.len());
+    let ta = VehicleC2S::unpack_payload(c2s::TRAILER_ACTION, &ta_v9, &mut off).expect("v9 trailer action");
+    assert_eq!(off, ta_v9.len());
     assert!(matches!(ta, VehicleC2S::TrailerAction(_)));
 
-    let mut ts_v8 = fixture_bytes("vehicle_trailer_state");
-    ts_v8[4..6].copy_from_slice(&8u16.to_le_bytes());
-    ts_v8.extend_from_slice(&[0xCA, 0xFE, 0xBA, 0xBE]);
+    let mut ts_v9 = fixture_bytes("vehicle_trailer_state");
+    ts_v9[4..6].copy_from_slice(&9u16.to_le_bytes());
+    ts_v9.extend_from_slice(&[0xCA, 0xFE, 0xBA, 0xBE]);
     let mut off = 0;
-    let ts = VehicleS2C::unpack_payload(s2c::TRAILER_STATE, &ts_v8, &mut off).expect("v8 trailer state");
-    assert_eq!(off, ts_v8.len());
+    let ts = VehicleS2C::unpack_payload(s2c::TRAILER_STATE, &ts_v9, &mut off).expect("v9 trailer state");
+    assert_eq!(off, ts_v9.len());
     assert!(matches!(ts, VehicleS2C::TrailerState(_)));
 
-    // Synthetic v8 PalletJackAction & PalletJackState with trailing bytes skip cleanly
-    let mut pja_v8 = fixture_bytes("vehicle_pallet_jack_action");
-    pja_v8[4..6].copy_from_slice(&8u16.to_le_bytes());
-    pja_v8.extend_from_slice(&[0x12, 0x34, 0x56, 0x78]);
+    // Synthetic v9 PalletJackAction & PalletJackState with trailing bytes skip cleanly
+    let mut pja_v9 = fixture_bytes("vehicle_pallet_jack_action");
+    pja_v9[4..6].copy_from_slice(&9u16.to_le_bytes());
+    pja_v9.extend_from_slice(&[0x12, 0x34, 0x56, 0x78]);
     let mut off = 0;
-    let pja = VehicleC2S::unpack_payload(c2s::PALLET_JACK_ACTION, &pja_v8, &mut off).expect("v8 pallet jack action");
-    assert_eq!(off, pja_v8.len());
+    let pja = VehicleC2S::unpack_payload(c2s::PALLET_JACK_ACTION, &pja_v9, &mut off).expect("v9 pallet jack action");
+    assert_eq!(off, pja_v9.len());
     assert!(matches!(pja, VehicleC2S::PalletJackAction(_)));
 
-    let mut pjs_v8 = fixture_bytes("vehicle_pallet_jack_state");
-    pjs_v8[4..6].copy_from_slice(&8u16.to_le_bytes());
-    pjs_v8.extend_from_slice(&[0xAB, 0xCD, 0xEF, 0x01]);
+    let mut pjs_v9 = fixture_bytes("vehicle_pallet_jack_state");
+    pjs_v9[4..6].copy_from_slice(&9u16.to_le_bytes());
+    pjs_v9.extend_from_slice(&[0xAB, 0xCD, 0xEF, 0x01]);
     let mut off = 0;
-    let pjs = VehicleS2C::unpack_payload(s2c::PALLET_JACK_STATE, &pjs_v8, &mut off).expect("v8 pallet jack state");
-    assert_eq!(off, pjs_v8.len());
+    let pjs = VehicleS2C::unpack_payload(s2c::PALLET_JACK_STATE, &pjs_v9, &mut off).expect("v9 pallet jack state");
+    assert_eq!(off, pjs_v9.len());
     assert!(matches!(pjs, VehicleS2C::PalletJackState(_)));
 }
 
@@ -1509,7 +1780,7 @@ fn hbv1_trailer_0x090f_routes_through_game_message() {
 
 #[test]
 fn hbv1_v7_fields_and_enums() {
-    assert_eq!(HBV1_VERSION, 7);
+    assert!(HBV1_VERSION >= 7);
     assert_eq!(deployable_kind::TRAILER_SIDELIFTER_40, 15);
     assert_eq!(deployable_kind::PALLET_JACK, 16);
     assert_eq!(event_kind::SIDELIFT_STARTED, 22);
@@ -1700,4 +1971,298 @@ fn hbv1_pallet_jack_0x0910_routes_through_game_message() {
     assert_eq!(e.target, Guid(1342177281));
     assert_eq!(e.sequence, 92);
     assert!(matches!(&e.event, GameEvent::Vehicle(v) if **v == VehicleS2C::PalletJackState(pjs)));
+}
+
+#[test]
+fn hbv1_v8_fields_and_enums() {
+    assert_eq!(HBV1_VERSION, 8);
+    assert_eq!(locomotion::MARINE, 3);
+    assert_eq!(vehicle_class::LEGACY, 0);
+    assert_eq!(vehicle_class::AIR, 1);
+    assert_eq!(vehicle_class::LIGHT_GROUND, 2);
+    assert_eq!(vehicle_class::HEAVY_TRACTOR, 3);
+    assert_eq!(vehicle_class::CONTAINER_SHIP_FEEDER, 4);
+    assert_eq!(deployable_kind::RESERVED_WAREHOUSE_17, 17);
+    assert_eq!(deployable_kind::RESERVED_WAREHOUSE_22, 22);
+    assert_eq!(deployable_kind::STS_GANTRY_CRANE, 23);
+    assert_eq!(deployable_kind::MARINE_FENDER, 29);
+    assert_eq!(deployable_kind::ISO_REEFER_20, 30);
+    assert_eq!(deployable_kind::ISO_FLAT_RACK_40, 37);
+    assert_eq!(deployable_kind::GPR_SCANNER, 38);
+    assert_eq!(deployable_kind::CORE_SAMPLE_CRATE, 42);
+    assert_eq!(deployable_kind::BOREHOLE_MINER, 43);
+    assert_eq!(deployable_kind::INDUSTRIAL_GENSET_150KW, 54);
+    assert_eq!(deployable_kind::INDUSTRIAL_BESS_18MJ, 55);
+    assert_eq!(deployable_kind::TOWN_CONTROL_NODE, 56);
+    assert_eq!(deployable_kind::TOWN_MINT, 59);
+    assert_eq!(deployable_kind::TOWN_WORKSHOP, 60);
+    assert_eq!(deployable_kind::PUBLIC_COMMONS_STARTER_HEARTH, 61);
+
+    // 64-bit values > u32::MAX round-trip cleanly
+    let town_bytes = fixture_bytes("economy_town_state");
+    assert_eq!(town_bytes.len(), 8 + EconomyTownState::WIRE);
+    let VehicleS2C::EconomyTownState(ts) = unpack_s2c(s2c::ECONOMY_TOWN_STATE, &town_bytes) else {
+        panic!("economy town state")
+    };
+    assert_eq!(ts.treasury_pyreals, 5_000_000_123);
+    assert_eq!(ts.escrow_pyreals, 4_294_967_300);
+
+    let mo_bytes = fixture_bytes("economy_monarch_order_state");
+    assert_eq!(mo_bytes.len(), 8 + EconomyMonarchOrderState::WIRE);
+    let VehicleS2C::EconomyMonarchOrderState(mo) = unpack_s2c(s2c::ECONOMY_MONARCH_ORDER_STATE, &mo_bytes) else {
+        panic!("economy monarch order state")
+    };
+    assert_eq!(mo.order_id, 8_800_000_001);
+    assert_eq!(mo.reward_pyreals, 6_000_000_000);
+
+    // Every v8 struct WIRE constant matches both fixture byte length and packed payload length (8 + WIRE)
+    for (name, opcode, wire) in [
+        ("economy_siege_action", c2s::ECONOMY_SIEGE_ACTION, EconomySiegeAction::WIRE),
+        ("industry_prospecting", c2s::INDUSTRY_PROSPECTING, IndustryProspecting::WIRE),
+        ("industry_facility_action", c2s::INDUSTRY_FACILITY_ACTION, IndustryFacilityAction::WIRE),
+        ("logistics_convoy_order", c2s::LOGISTICS_CONVOY_ORDER, LogisticsConvoyOrder::WIRE),
+        ("economy_monarch_order", c2s::ECONOMY_MONARCH_ORDER, EconomyMonarchOrder::WIRE),
+    ] {
+        let bytes = fixture_bytes(name);
+        assert_eq!(bytes.len(), 8 + wire, "{name} fixture len");
+        let mut off = 0;
+        let msg = VehicleC2S::unpack_payload(opcode, &bytes, &mut off).expect(name);
+        assert_eq!(off, bytes.len(), "{name} unpack off");
+        let mut repacked = Vec::new();
+        msg.pack_payload(&mut repacked);
+        assert_eq!(repacked.len(), 8 + wire, "{name} repacked len");
+    }
+    for (name, opcode, wire) in [
+        ("economy_town_state", s2c::ECONOMY_TOWN_STATE, EconomyTownState::WIRE),
+        ("economy_siege_event", s2c::ECONOMY_SIEGE_EVENT, EconomySiegeEvent::WIRE),
+        ("industry_survey_result", s2c::INDUSTRY_SURVEY_RESULT, IndustrySurveyResult::WIRE),
+        ("industry_facility_state", s2c::INDUSTRY_FACILITY_STATE, IndustryFacilityState::WIRE),
+        ("logistics_convoy_state", s2c::LOGISTICS_CONVOY_STATE, LogisticsConvoyState::WIRE),
+        ("economy_monarch_order_state", s2c::ECONOMY_MONARCH_ORDER_STATE, EconomyMonarchOrderState::WIRE),
+    ] {
+        let bytes = fixture_bytes(name);
+        assert_eq!(bytes.len(), 8 + wire, "{name} fixture len");
+        let mut off = 0;
+        let msg = VehicleS2C::unpack_payload(opcode, &bytes, &mut off).expect(name);
+        assert_eq!(off, bytes.len(), "{name} unpack off");
+        let mut repacked = Vec::new();
+        msg.pack_payload(&mut repacked);
+        assert_eq!(repacked.len(), 8 + wire, "{name} repacked len");
+    }
+}
+
+#[test]
+fn hbv1_truncated_v8_rejected() {
+    for (name, opcode) in [
+        ("economy_siege_action", c2s::ECONOMY_SIEGE_ACTION),
+        ("industry_prospecting", c2s::INDUSTRY_PROSPECTING),
+        ("industry_facility_action", c2s::INDUSTRY_FACILITY_ACTION),
+        ("logistics_convoy_order", c2s::LOGISTICS_CONVOY_ORDER),
+        ("economy_monarch_order", c2s::ECONOMY_MONARCH_ORDER),
+    ] {
+        let bytes = fixture_bytes(name);
+        for cut in [bytes.len() - 1, bytes.len() - 4, 8, 4, 0] {
+            let mut off = 0;
+            assert!(
+                VehicleC2S::unpack_payload(opcode, &bytes[..cut], &mut off).is_none(),
+                "{name} cut {cut}"
+            );
+            assert_eq!(off, 0);
+        }
+    }
+    for (name, opcode) in [
+        ("economy_town_state", s2c::ECONOMY_TOWN_STATE),
+        ("economy_siege_event", s2c::ECONOMY_SIEGE_EVENT),
+        ("industry_survey_result", s2c::INDUSTRY_SURVEY_RESULT),
+        ("industry_facility_state", s2c::INDUSTRY_FACILITY_STATE),
+        ("logistics_convoy_state", s2c::LOGISTICS_CONVOY_STATE),
+        ("economy_monarch_order_state", s2c::ECONOMY_MONARCH_ORDER_STATE),
+    ] {
+        let bytes = fixture_bytes(name);
+        for cut in [bytes.len() - 1, bytes.len() - 4, 8, 4, 0] {
+            let mut off = 0;
+            assert!(
+                VehicleS2C::unpack_payload(opcode, &bytes[..cut], &mut off).is_none(),
+                "{name} cut {cut}"
+            );
+            assert_eq!(off, 0);
+        }
+    }
+}
+
+#[test]
+fn hbv1_v8_0x0911_to_0x0916_route_through_game_message() {
+    use crate::messages::{GameActionMessage, GameEventMessage};
+    use holtburger_common::Guid;
+
+    let c2s_cases: Vec<VehicleC2S> = vec![
+        VehicleC2S::EconomySiegeAction(EconomySiegeAction {
+            town_id: 1,
+            beacon_guid: 100,
+            action: 2,
+            flags: 1,
+            reserved: 0,
+            supply_points: 250,
+            origin_landblock: 0xA9C90000,
+        }),
+        VehicleC2S::IndustryProspecting(IndustryProspecting {
+            tool_guid: 200,
+            tool_kind: deployable_kind::GPR_SCANNER,
+            mode: 1,
+            reserved0: 0,
+            reserved1: 0,
+            cell: 0xA9B40100,
+            position: [64.5, 128.25, 14.0],
+        }),
+        VehicleC2S::IndustryFacilityAction(IndustryFacilityAction {
+            facility_guid: 300,
+            action: 3,
+            reserved0: 0,
+            reserved1: 0,
+            recipe_id: 401,
+            param: 12,
+        }),
+        VehicleC2S::LogisticsConvoyOrder(LogisticsConvoyOrder {
+            convoy_id: 7_000_000_042,
+            action: 1,
+            vehicle_class: vehicle_class::CONTAINER_SHIP_FEEDER,
+            flags: 3,
+            origin_town_id: 1,
+            dest_town_id: 12,
+            container_kind: deployable_kind::ISO_REEFER_20,
+            commodity_id: 4000060,
+        }),
+        VehicleC2S::EconomyMonarchOrder(EconomyMonarchOrder {
+            order_id: 8_800_000_001,
+            town_id: 1,
+            action: 1,
+            order_type: 2,
+            flags: 1,
+            target_guid: 0,
+            item_wcid: 4000060,
+            quantity: 20,
+            reward_pyreals: 6_000_000_000,
+            param_f32: 1.15,
+        }),
+    ];
+    for (idx, msg) in c2s_cases.into_iter().enumerate() {
+        let ga = GameMessage::GameAction(Box::new(GameActionMessage {
+            sequence: 100 + idx as u32,
+            action: GameAction::Vehicle(Box::new(msg.clone())),
+        }));
+        let mut buf = Vec::new();
+        ga.pack(&mut buf);
+        let mut off = 0;
+        let unpacked = GameMessage::unpack(&buf, &mut off).expect("unpack v8 GameAction");
+        assert_eq!(off, buf.len());
+        let GameMessage::GameAction(a) = unpacked else {
+            panic!("expected GameAction")
+        };
+        assert!(matches!(&a.action, GameAction::Vehicle(v) if **v == msg));
+    }
+
+    let s2c_cases: Vec<VehicleS2C> = vec![
+        VehicleS2C::EconomyTownState(EconomyTownState {
+            town_id: 1,
+            control_state: 3,
+            owner_monarch_id: 1342177281,
+            attacker_monarch_id: 1342177999,
+            flags: 1,
+            reserved: 0,
+            anchor_landblock: 0xA9B40000,
+            hold_elapsed_sec: 14400,
+            supply_meter_sec: 4800,
+            starving_sec: 0,
+            treasury_pyreals: 5_000_000_123,
+            escrow_pyreals: 4_294_967_300,
+            tariff_buy_mul: 1.05,
+            tariff_sell_mul: 0.92,
+        }),
+        VehicleS2C::EconomySiegeEvent(EconomySiegeEvent {
+            town_id: 1,
+            kind: 6,
+            control_state: 1,
+            reserved: 0,
+            owner_monarch_id: 1342177999,
+            attacker_monarch_id: 1342177281,
+            hold_elapsed_sec: 28800,
+            supply_meter_sec: 5400,
+            starving_sec: 0,
+            treasury_spoils: 4_500_000_999,
+        }),
+        VehicleS2C::IndustrySurveyResult(IndustrySurveyResult {
+            deposit_id: 9_001_002_003,
+            landblock_id: 0xA9B4,
+            tool_kind: deployable_kind::MOBILE_ASSAY_LAB,
+            flags: 2,
+            terrain_code: 4,
+            resource_kind: 7,
+            reserved: 0,
+            depth_m: 185.5,
+            grade_bps: 6450,
+            api_gravity: 34.2,
+            sulfur_bps: 120,
+            remaining_tonnes: 12500.0,
+        }),
+        VehicleS2C::IndustryFacilityState(IndustryFacilityState {
+            facility_guid: 1342178200,
+            kind: deployable_kind::ADU_REFINERY,
+            town_id: 1,
+            deposit_id: 9_001_002_003,
+            owner_monarch_id: 1342177281,
+            status: 2,
+            online_flags: 7,
+            reserved: 0,
+            power_watts: -45000.0,
+            buffer_joules: 18_000_000.0,
+            progress_pct: 0.625,
+            recipe_id: 401,
+        }),
+        VehicleS2C::LogisticsConvoyState(LogisticsConvoyState {
+            convoy_id: 7_000_000_042,
+            owner_monarch_id: 1342177281,
+            vehicle_guid: 2147486300,
+            vehicle_class: vehicle_class::CONTAINER_SHIP_FEEDER,
+            lod_state: 1,
+            status: 2,
+            reserved: 0,
+            origin_town_id: 1,
+            dest_town_id: 12,
+            origin_landblock: 0xA9B4,
+            spline_s_m: 1842.75,
+            fuel_liters: 420.5,
+            cell: 0xA9B40100,
+            position: [96.0, 144.0, 0.0],
+            heading: 2.356194,
+        }),
+        VehicleS2C::EconomyMonarchOrderState(EconomyMonarchOrderState {
+            order_id: 8_800_000_001,
+            monarch_id: 1342177281,
+            town_id: 1,
+            order_type: 2,
+            status: 1,
+            flags: 1,
+            claimed_by_guid: 1342177350,
+            item_wcid: 4000060,
+            quantity: 20,
+            reward_pyreals: 6_000_000_000,
+            value_f32: 1.15,
+        }),
+    ];
+    for (idx, msg) in s2c_cases.into_iter().enumerate() {
+        let ge = GameMessage::GameEvent(Box::new(GameEventMessage {
+            target: Guid(1342177281),
+            sequence: 200 + idx as u32,
+            event: GameEvent::Vehicle(Box::new(msg.clone())),
+        }));
+        let mut buf = Vec::new();
+        ge.pack(&mut buf);
+        let mut off = 0;
+        let unpacked = GameMessage::unpack(&buf, &mut off).expect("unpack v8 GameEvent");
+        assert_eq!(off, buf.len());
+        let GameMessage::GameEvent(e) = unpacked else {
+            panic!("expected GameEvent")
+        };
+        assert!(matches!(&e.event, GameEvent::Vehicle(v) if **v == msg));
+    }
 }
