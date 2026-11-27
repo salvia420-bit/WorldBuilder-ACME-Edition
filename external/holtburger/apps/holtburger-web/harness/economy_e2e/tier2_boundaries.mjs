@@ -81,7 +81,7 @@ export const TESTS = [
     async run() {
       const cfg = getMysqlConfig();
       const rows = queryMysql(
-        "SELECT value FROM config_properties_boolean WHERE `key` = 'physical_economy_enabled';",
+        "SELECT CAST(value AS UNSIGNED) FROM config_properties_boolean WHERE `key` = 'physical_economy_enabled';",
         cfg.shardDb
       );
       assert.equal(rows.length, 1, "Missing physical_economy_enabled in config_properties_boolean");
