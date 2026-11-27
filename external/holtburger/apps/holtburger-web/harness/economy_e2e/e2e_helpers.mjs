@@ -906,7 +906,11 @@ export async function bootLiveClient(queryOverrides = {}, opts = {}) {
 
     await page.goto(url, { waitUntil: "domcontentloaded", timeout: 45000 });
     await page.waitForFunction(
-      () => window.__bootState === "in-world" || window.__bootState === "error",
+      () =>
+        window.__bootState === "error" ||
+        window.__bootState === "in-world" ||
+        (Array.isArray(window.__bootStateHistory) &&
+          window.__bootStateHistory.some((e) => e && e.state === "in-world")),
       null,
       { timeout: opts.bootTimeoutMs || 60000 }
     );
@@ -916,7 +920,15 @@ export async function bootLiveClient(queryOverrides = {}, opts = {}) {
       hasSession: Boolean(window.__sessionHandle),
       pose: window.__sessionHandle?.getLocalPlayerPose?.() || null,
     }));
-    assert.equal(bootState.bootState, "in-world", `Client failed to reach in-world: ${JSON.stringify(bootState)}`);
+    assert.notEqual(bootState.bootState, "error", `Client failed to reach in-world: ${JSON.stringify(bootState)}`);
+    assert.ok(
+      bootState.bootState === "in-world" || bootState.bootState === "ready",
+      `Client failed to reach in-world: ${JSON.stringify(bootState)}`
+    );
+    assert.ok(
+      Array.isArray(bootState.history) && bootState.history.some((e) => e && e.state === "in-world"),
+      `Client bootStateHistory missing "in-world" transition (Bug 11 invariant): ${JSON.stringify(bootState)}`
+    );
 
     let evalResult = null;
     if (typeof opts.onInWorld === "function") {

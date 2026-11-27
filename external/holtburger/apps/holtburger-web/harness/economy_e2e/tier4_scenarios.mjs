@@ -221,7 +221,14 @@ export const TESTS = [
           }));
         },
       });
-      assert.equal(boot.bootState.bootState, "in-world");
+      assert.ok(
+        Array.isArray(boot.bootState?.history) && boot.bootState.history.some((e) => e && e.state === "in-world"),
+        `Expected "in-world" transition in bootState.history: ${JSON.stringify(boot.bootState)}`
+      );
+      assert.ok(
+        boot.bootState?.bootState === "in-world" || boot.bootState?.bootState === "ready",
+        `Expected bootState "in-world" or "ready", got ${JSON.stringify(boot.bootState?.bootState)}`
+      );
       assert.equal(boot.evalResult?.hasVehicles, true, "Expected window.__vehicles initialized in-world");
       assert.equal((boot.evalResult?.capsGranted & 0x03), 0x03,
         `Expected HBV1 capability ack (CapObserve|CapPilot = 0x03), got ${boot.evalResult?.capsGranted}`);
