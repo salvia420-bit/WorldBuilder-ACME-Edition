@@ -64,6 +64,10 @@ import { applySeatPoseToEntity, getSeatOffset, interpolateSeatHotSwap } from "./
 import { createDeployableCombatVfx } from "./deployable_vfx.js";
 import { DeployableAudioManager } from "./deployable_audio.js";
 import { createWarehouseManager } from "./warehouse_manager.js";
+import { createPortAudio, portAudioEnabled } from "./port_audio.js";
+import { createPortTerminalManager } from "./port_terminal_manager.js";
+import { createShipManager } from "./ship_manager.js";
+import { PORT_ORIGIN, WAREHOUSE_PORT_ORIGIN } from "./port_specs.js";
 import { RadarScopeHud } from "./radar_scope.js";
 
 export { vehicleAudioEnabled };
@@ -1516,6 +1520,9 @@ export function installVehicles(deps = {}) {
       }
       if (why === "dispose") deployableAudio?.dispose?.();
       try { warehouseManager?.stopScenarios?.(); } catch (_) {}
+      try { portTerminalManager?.stopScenarios?.(); } catch (_) {}
+      try { shipManager?.exit?.(); } catch (_) {}
+      try { portAudio?.stop?.(); if (why === "dispose") portAudio?.dispose?.(); } catch (_) {}
     } catch (_) {}
     try {
       sh()?.clearVehicleSeat?.();
@@ -1586,6 +1593,46 @@ export function installVehicles(deps = {}) {
     logisticsAudio,
     sh,
   });
+
+  const portAudio = (audioOn && portAudioEnabled(search))
+    ? createPortAudio({
+      bus: () => live.audioManager?.getEffectBus?.() ?? null,
+      audioManager: live.audioManager,
+      liveScene3d: live,
+      isActive: () => live.audioManager?.isActive?.() !== false,
+      volume: () => 0.85,
+    })
+    : null;
+
+  const portTerminalManager = createPortTerminalManager({
+    THREE,
+    liveScene3d: live,
+    containers,
+    deployables,
+    trailers,
+    warehouseManager,
+    portAudio,
+    sh,
+    spawnLocalContainer: (guid, kind, worldPos, heading, state) => api.containers.spawnLocal(guid, kind, worldPos, heading, state),
+    removeLocalContainer: (guid) => api.containers.removeLocal(guid),
+  });
+
+  const shipManager = createShipManager({
+    THREE,
+    liveScene3d: live,
+    window: win,
+    document: win.document,
+    portAudio,
+    terminalManager: portTerminalManager,
+    sh,
+    getLocalPlayerPos: () => {
+      const me = em()?.entityMap?.get(localGuid());
+      if (me?.root?.position) return [me.root.position.x, me.root.position.y, me.root.position.z];
+      return null;
+    },
+    isOtherVehicleOccupied: () => Boolean(pilot || passenger || fall || handoff || palletJackController?.isActive?.()),
+  });
+  portTerminalManager.linkShipManager(shipManager);
 
   palletJackController = createPalletJackController({
     liveScene3d: live,
@@ -2874,6 +2921,7 @@ export function installVehicles(deps = {}) {
     if (palletJackController?.isActive?.()) {
       try { palletJackController.onTeleport(); } catch (_) {}
     }
+    try { shipManager?.onTeleport?.(); } catch (_) {}
     endHandoff("teleport");
     if (fall) { chutes?.close(localGuid()); stopFall("teleport"); }
     const map = em()?.entityMap;
@@ -4391,6 +4439,8 @@ export function installVehicles(deps = {}) {
     tickContainers(dt);
     tickPalletJacks(dt);
     try { warehouseManager?.tick?.(dt, listenerAcPos()); } catch (_) {}
+    try { portTerminalManager?.tick?.(dt, listenerAcPos()); } catch (_) {}
+    try { shipManager?.tick?.(dt, listenerAcPos()); } catch (_) {}
     aeroFx?.tick(dt);
     if (!pilot && !passenger) osd.sights(null, null, "");
     chutes?.tick(dt, chutePose);
@@ -4995,6 +5045,8 @@ export function installVehicles(deps = {}) {
       },
     },
     warehouse: warehouseManager,
+    terminal: portTerminalManager,
+    ship: shipManager,
     dispose() {
       disposed = true;
       teardownSession("dispose");
@@ -5032,6 +5084,9 @@ export function installVehicles(deps = {}) {
       }
       groundFx?.dispose?.();
       groundAudio?.dispose?.();
+      try { shipManager?.dispose?.(); } catch (_) {}
+      try { portTerminalManager?.dispose?.(); } catch (_) {}
+      try { portAudio?.dispose?.(); } catch (_) {}
       try { warehouseManager?.dispose?.(); } catch (_) {}
       logisticsAudio?.dispose?.();
       deployableVfx?.dispose();
@@ -5045,10 +5100,68 @@ export function installVehicles(deps = {}) {
       fallPose?.dispose();
       chutes?.dispose();
       if (live.vehicles && live.vehicles.afterTick === afterTick) delete live.vehicles;
+      if (win.__port && win.__port.terminal === portTerminalManager) delete win.__port;
       if (win.__vehicles === api) delete win.__vehicles;
     },
   };
   win.__vehicles = api;
+  win.__port = {
+    terminal: portTerminalManager,
+    ship: shipManager,
+    warehouse: warehouseManager,
+    buildPortAndWarehouse(opts = {}) {
+      const origin = Array.isArray(opts.origin) ? opts.origin : PORT_ORIGIN;
+      const layout = portTerminalManager.buildTerminal({
+        origin,
+        populateYard: opts.populateYard !== false,
+        yardDensity: opts.yardDensity,
+      });
+      const whOrigin = layout?.warehouseOrigin || WAREHOUSE_PORT_ORIGIN;
+      warehouseManager.buildHub({
+        origin: whOrigin,
+        populateDemoCargo: opts.populateDemoCargo !== false,
+      });
+      if (opts.spawnShip !== false && shipManager.list().length === 0) {
+        shipManager.spawnShip(opts.shipId || "MV-DERETH-1", {
+          origin: layout.origin,
+          spawnAtBerth: opts.spawnAtBerth || "B1",
+          moored: opts.moored !== false,
+          populateCargo: opts.populateCargo !== false,
+        });
+      }
+      return { layout, warehouseOrigin: whOrigin };
+    },
+    runFullDemo(opts = {}) {
+      if (!portTerminalManager.stats.built) {
+        win.__port.buildPortAndWarehouse(opts);
+      }
+      const shipId = opts.shipId || "MV-DERETH-1";
+      if (!shipManager.get(shipId)) {
+        shipManager.spawnShip(shipId, {
+          origin: portTerminalManager.getLayout()?.origin || PORT_ORIGIN,
+          spawnAtBerth: "B1",
+          moored: true,
+          populateCargo: true,
+        });
+      }
+      return portTerminalManager.runScenario("port-import-to-warehouse", { shipId, padId: opts.padId || "C1" });
+    },
+    clearAll() {
+      try { shipManager.exit(); } catch (_) {}
+      for (const s of shipManager.list()) {
+        try { shipManager.removeShip(s.id); } catch (_) {}
+      }
+      try { portTerminalManager.clearTerminal(); } catch (_) {}
+      try { warehouseManager.clearHub(); } catch (_) {}
+    },
+    getState() {
+      return {
+        terminal: portTerminalManager.getState(),
+        ship: shipManager.getState(),
+        warehouse: warehouseManager.getState(),
+      };
+    },
+  };
   console.log("[vehicles] installed (?vehicles=on): capability handshake after entering the world");
   return api;
 }

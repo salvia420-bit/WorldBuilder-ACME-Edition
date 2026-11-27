@@ -215,6 +215,11 @@ const TIER4 = [
   { flag: "vehicleWarehouseModels", file: "tests/vehicle_warehouse_models.test.mjs" },
   { flag: "vehicleWarehouseManager", file: "tests/vehicle_warehouse_manager.test.mjs" },
   { flag: "vehicleWarehouseTier5", file: "tests/vehicle_warehouse_tier5.test.mjs" },
+  { flag: "vehiclePortSpecsKinematics", file: "tests/vehicle_port_specs_kinematics.test.mjs" },
+  { flag: "vehicleShipKinematics", file: "tests/vehicle_ship_kinematics.test.mjs" },
+  { flag: "vehiclePortModels", file: "tests/vehicle_port_models.test.mjs" },
+  { flag: "vehicleShipModelUx", file: "tests/vehicle_ship_model_ux.test.mjs" },
+  { flag: "vehiclePortIntegration", file: "tests/vehicle_port_integration.test.mjs" },
 ].map((t) => ({ ...t, tier: 4 }));
 
 
