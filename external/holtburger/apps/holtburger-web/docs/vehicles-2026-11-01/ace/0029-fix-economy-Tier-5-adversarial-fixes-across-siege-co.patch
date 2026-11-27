@@ -1,7 +1,7 @@
 From 71cc14dc9132994c6f494ba9c073d791eaea7bfe Mon Sep 17 00:00:00 2001
 From: salvia420-bit <salvia420@gmail.com>
 Date: Fri, 27 Nov 2026 14:40:45 +0000
-Subject: [PATCH 29/29] fix(economy): Tier 5 adversarial fixes across siege,
+Subject: [PATCH 29/30] fix(economy): Tier 5 adversarial fixes across siege,
  cold-chain, till caps, inventory overflow & wire guards
 
 - [CRIT-01] GameActionVehicle DepositSupply (0x0912 Action=2) now locates and consumes physical server-side supply cargo/container/inventory units and derives authoritative OriginLandblockId and SupplyPoints instead of trusting client fields.

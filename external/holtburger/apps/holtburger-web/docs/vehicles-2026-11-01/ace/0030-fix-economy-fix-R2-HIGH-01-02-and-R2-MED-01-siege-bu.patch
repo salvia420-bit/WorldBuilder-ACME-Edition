@@ -1,0 +1,818 @@
+From 98f02d611b4f13b99490dbe49476df500a4404f8 Mon Sep 17 00:00:00 2001
+From: salvia420-bit <salvia420@gmail.com>
+Date: Fri, 27 Nov 2026 21:22:28 +0000
+Subject: [PATCH 30/30] fix(economy): fix R2-HIGH-01/02 and R2-MED-01 siege &
+ bullion rollback bugs
+
+- [R2-HIGH-01] Pre-check player burden capacity in IndustryManager.TryMintBullion before consuming stock, add TownEconomyManager.RefundWarehouseStock + ConsumedWarehouseSlice tracking so rollbacks restore exact slices additively without wiping warehouse stock or clearing InactivityElapsedSec.
+- [R2-HIGH-02] Enforce Allegiance ownership parity and DoorProgress >= 0.8f on 0x0912 DepositSupply IsoContainerDeployable unloading, restrict standalone DeployableBase consumption in DepositSupply to owned CoreSampleCrate (4000074), and block non-cargo defense/grid/industrial/infrastructure deployables and unauthorized containers/units in ForwardSiegeBeaconDeployable.
+- [R2-MED-01] Pre-validate via SiegeManager.CanDeliverSiegeSupply, consume inventory item and verify consumption return bool BEFORE calling TryAcceptProvenanceDelivery in ForwardSiegeBeaconDeployable.TryAcceptInventoryItem.
+- Add Tier5_R2HIGH01, Tier5_R2HIGH02, and Tier5_R2MED01 adversarial tests in Tier5AdversarialE2ETests.cs.
+
+Verified:
+- ECONOMY_E2E_STRICT=1 dotnet test -c Debug --filter "FullyQualifiedName~Economy|FullyQualifiedName~VehicleWire" -> 157/157 passed
+- dotnet test -c Debug --filter "FullyQualifiedName~Vehicles|FullyQualifiedName~Landblock" -> 367/367 passed
+---
+ .../EconomyE2E/Tier5AdversarialE2ETests.cs    | 262 ++++++++++++++++++
+ Source/ACE.Server/Economy/IndustryManager.cs  |  48 +++-
+ Source/ACE.Server/Economy/SiegeManager.cs     |  46 +++
+ .../ACE.Server/Economy/TownEconomyManager.cs  |  41 +++
+ .../GameAction/Actions/GameActionVehicle.cs   |  23 +-
+ .../ForwardSiegeBeaconDeployable.cs           | 144 +++++++++-
+ 6 files changed, 547 insertions(+), 17 deletions(-)
+
+diff --git a/Source/ACE.Server.Tests/EconomyE2E/Tier5AdversarialE2ETests.cs b/Source/ACE.Server.Tests/EconomyE2E/Tier5AdversarialE2ETests.cs
+index 40221d36..464de1c6 100644
+--- a/Source/ACE.Server.Tests/EconomyE2E/Tier5AdversarialE2ETests.cs
++++ b/Source/ACE.Server.Tests/EconomyE2E/Tier5AdversarialE2ETests.cs
+@@ -34,10 +34,27 @@ namespace ACE.Server.Tests.EconomyE2E
+     [TestClass]
+     public class Tier5AdversarialE2ETests
+     {
++        private static object _origPortalDat;
++        private static bool _mockedPortalDat;
++
+         [ClassInitialize]
+         public static void ClassInit(TestContext _)
+         {
+             Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
++            var datManagerType = typeof(ACE.DatLoader.DatManager);
++            var portalDatField = datManagerType.GetField("<PortalDat>k__BackingField", BindingFlags.Static | BindingFlags.NonPublic);
++            if (portalDatField != null && ACE.DatLoader.DatManager.PortalDat == null)
++            {
++                _origPortalDat = null;
++                var portalDatDb = typeof(ACE.DatLoader.PortalDatDatabase);
++                var portalDat = RuntimeHelpers.GetUninitializedObject(portalDatDb);
++                var spellTable = Activator.CreateInstance(typeof(ACE.DatLoader.FileTypes.SpellTable));
++                portalDatDb.GetField("<SpellTable>k__BackingField", BindingFlags.Instance | BindingFlags.NonPublic)?.SetValue(portalDat, spellTable);
++                portalDatField.SetValue(null, portalDat);
++                _mockedPortalDat = true;
++            }
++            RuntimeHelpers.RunClassConstructor(typeof(ACE.Server.Entity.SpellSet).TypeHandle);
++
+             var wdb = DatabaseManager.World;
+             var nameCache = (ConcurrentDictionary<string, uint>)typeof(WorldDatabaseWithEntityCache)
+                 .GetField("weenieClassNameToClassIdCache", BindingFlags.Instance | BindingFlags.NonPublic)?.GetValue(wdb);
+@@ -54,10 +71,23 @@ public static void ClassInit(TestContext _)
+                 }
+             }
+         }
++
++        [ClassCleanup]
++        public static void ClassCleanup()
++        {
++            if (_mockedPortalDat)
++            {
++                var portalDatField = typeof(ACE.DatLoader.DatManager).GetField("<PortalDat>k__BackingField", BindingFlags.Static | BindingFlags.NonPublic);
++                portalDatField?.SetValue(null, _origPortalDat);
++                _mockedPortalDat = false;
++            }
++        }
+         [TestInitialize]
+         public void Init()
+         {
+             Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
++            if (ACE.Common.ConfigManager.Config == null)
++                ACE.Common.ConfigManager.Initialize(new ACE.Common.MasterConfiguration());
+             TownEconomyManager.EnabledOverride = true;
+             TownEconomyManager.ResetForTesting();
+             SiegeManager.ResetForTesting();
+@@ -97,6 +127,14 @@ private static Player CreateInventoryPlayer(uint guid, uint cellId, float x, flo
+             player.Biota.PropertiesInt[PropertyInt.ItemsCapacity] = itemsCapacity;
+             player.Biota.PropertiesInt[PropertyInt.ContainersCapacity] = 7;
+             player.Biota.PropertiesAttribute[PropertyAttribute.Strength] = new PropertiesAttribute { InitLevel = 100 };
++            typeof(Creature).GetField("<EquippedObjects>k__BackingField", BindingFlags.Instance | BindingFlags.NonPublic)
++                ?.SetValue(player, new Dictionary<ObjectGuid, WorldObject>());
++            var attrs = new Dictionary<PropertyAttribute, ACE.Server.WorldObjects.Entity.CreatureAttribute>
++            {
++                [PropertyAttribute.Strength] = new ACE.Server.WorldObjects.Entity.CreatureAttribute(player, PropertyAttribute.Strength),
++            };
++            typeof(Creature).GetField("Attributes", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
++                ?.SetValue(player, attrs);
+ 
+             if (monarchId != 0 && monarchId != guid)
+             {
+@@ -121,6 +159,28 @@ private static Session AttachMockSession(Player player, uint capabilities = Vehi
+             return session;
+         }
+ 
++        private static Session AttachNetworkedMockSession(Player player, uint capabilities = VehicleWire.CapObserve)
++        {
++            var session = AttachMockSession(player, capabilities);
++            var netSession = (NetworkSession)RuntimeHelpers.GetUninitializedObject(typeof(NetworkSession));
++            var lockField = typeof(NetworkSession).GetField("currentBundleLocks", BindingFlags.Instance | BindingFlags.NonPublic);
++            var bundleField = typeof(NetworkSession).GetField("currentBundles", BindingFlags.Instance | BindingFlags.NonPublic);
++            var bundleType = typeof(NetworkSession).Assembly.GetType("ACE.Server.Network.NetworkBundle");
++            var locks = new object[(int)ACE.Server.Network.GameMessageGroup.QueueMax];
++            var bundles = Array.CreateInstance(bundleType, (int)ACE.Server.Network.GameMessageGroup.QueueMax);
++            for (int i = 0; i < bundles.Length; i++)
++            {
++                locks[i] = new object();
++                bundles.SetValue(Activator.CreateInstance(bundleType), i);
++            }
++            lockField?.SetValue(netSession, locks);
++            bundleField?.SetValue(netSession, bundles);
++            typeof(NetworkSession).GetField("session", BindingFlags.Instance | BindingFlags.NonPublic)?.SetValue(netSession, session);
++            session.Network = netSession;
++            typeof(Player).GetField("session", BindingFlags.Instance | BindingFlags.NonPublic)?.SetValue(player, session);
++            return session;
++        }
++
+         private static ClientMessage WrapVehicleC2S(VehicleC2S msg)
+         {
+             using var ms = new MemoryStream();
+@@ -621,5 +681,207 @@ public void Tier5_LOW01_ConvoyAndOrderId_SafeJs53BitBounds()
+             Assert.IsNull(badConvoy, "[LOW-01] Explicit ConvoyId > 2^53 - 1 must be rejected");
+             Assert.IsFalse(string.IsNullOrWhiteSpace(badCErr));
+         }
++
++        [TestMethod]
++        public void Tier5_R2HIGH01_TryMintBullion_OverburdenedOnlinePlayer_PreservesFullWarehouseStock()
++        {
++            uint monarchId = AllocTestGuid();
++            var holtburg = TownRegistry.GetById(1u);
++            var actor = CreateInventoryPlayer(monarchId, holtburg.AnchorLandblock, (float)holtburg.WorldX, (float)holtburg.WorldY, (float)holtburg.WorldZ, monarchId: monarchId, isMonarch: true, itemsCapacity: 10);
++            AttachNetworkedMockSession(actor, VehicleWire.CapObserve);
++
++            // Give actor 10 free inventory slots, but set EncumbranceVal > GetEncumbranceCapacity() * 3
++            actor.Biota.PropertiesAttribute[PropertyAttribute.Strength] = new PropertiesAttribute { InitLevel = 10 };
++            int maxCarry = actor.GetEncumbranceCapacity() * 3;
++            actor.EncumbranceVal = maxCarry + 50_000;
++            Assert.IsTrue(actor.GetFreeInventorySlots() >= 10, "Actor must have 10 free slots");
++            Assert.IsFalse(actor.HasEnoughBurdenToAddToInventory(0), "Actor must fail burden check");
++
++            TownEconomyManager.SetTownOwner(1u, monarchId, "CONTROLLED");
++            TownEconomyManager.SeedWarehouseStock(1u, "pyreal_bar", 100);
++
++            var mintPos = Vehicle.ToPosition(holtburg.WorldX, holtburg.WorldY, holtburg.WorldZ, Quaternion.Identity);
++            var fluxPod = (FluxPodDeployable)DeployableManager.SpawnDeployable(FluxPodDeployable.FluxPodWeenieClassId, mintPos, actor);
++            var genset = (IndustrialGensetDeployable)DeployableManager.SpawnDeployable(IndustrialGensetDeployable.WcidIndustrialGenset150kW, mintPos, actor);
++            genset.AddFuelSeconds(600.0);
++            genset.IsActive = true;
++            var mint = (TownMintDeployable)DeployableManager.SpawnDeployable(TownMintDeployable.TownMintWeenieClassId, mintPos, actor);
++            mint.AffiliatedTownId = 1u;
++            mint.OnlineFlags |= DeployableOnlineFlags.Powered;
++            mint.Grid = fluxPod.Grid;
++
++            bool ok = IndustryManager.TryMintBullion(mint, actor, 1u, IndustryManager.PyrealBarWcid, 1, depositToTreasury: false, out long minted, out string err);
++            Assert.IsFalse(ok, "[R2-HIGH-01] Overburdened online player TryMintBullion MUST fail");
++            Assert.AreEqual(0L, minted);
++            Assert.IsFalse(string.IsNullOrWhiteSpace(err));
++            Assert.AreEqual(100, TownEconomyManager.GetWarehouseStockQty(1u, "pyreal_bar"),
++                "[R2-HIGH-01] Failed TryMintBullion MUST NOT wipe out remaining 99 warehouse pyreal_bar units");
++
++            // Also verify RefundWarehouseStock restores additively without clearing InactivityElapsedSec or overwriting existing stock
++            var state = TownEconomyManager.GetTownState(1u);
++            lock (state.SyncRoot) { state.InactivityElapsedSec = 1234.5; }
++            Assert.IsTrue(TownEconomyManager.TryConsumeWarehouseStock(1u, "pyreal_bar", 3, out var slices, out var consErr), consErr);
++            Assert.AreEqual(97, TownEconomyManager.GetWarehouseStockQty(1u, "pyreal_bar"));
++            foreach (var s in slices)
++                TownEconomyManager.RefundWarehouseStock(1u, "pyreal_bar", s.Qty, s.GradeBps, s.PoweredReefer, s.FreshnessPct);
++            Assert.AreEqual(100, TownEconomyManager.GetWarehouseStockQty(1u, "pyreal_bar"),
++                "[R2-HIGH-01] RefundWarehouseStock must additively restore consumed slices");
++            lock (state.SyncRoot)
++            {
++                Assert.AreEqual(1234.5, state.InactivityElapsedSec, 0.001,
++                    "[R2-HIGH-01] RefundWarehouseStock must not clear InactivityElapsedSec");
++            }
++        }
++
++        [TestMethod]
++        public void Tier5_R2HIGH02_DepositSupply_RefusesClosedEnemyContainer_AndEnemyDeployedTurret()
++        {
++            var holtburg = TownRegistry.GetById(1u);
++            uint attackerId = AllocTestGuid();
++            uint enemyId = AllocTestGuid();
++            var beaconPos = Vehicle.ToPosition(holtburg.WorldX, holtburg.WorldY, holtburg.WorldZ, Quaternion.Identity);
++
++            var attacker = CreateInventoryPlayer(attackerId, holtburg.AnchorLandblock, (float)holtburg.WorldX, (float)holtburg.WorldY, (float)holtburg.WorldZ, monarchId: attackerId, isMonarch: true);
++            attacker.Location = new Position(beaconPos);
++            var attackerSession = AttachMockSession(attacker, VehicleWire.CapObserve);
++
++            var enemy = CreateInventoryPlayer(enemyId, holtburg.AnchorLandblock, (float)holtburg.WorldX + 5f, (float)holtburg.WorldY, (float)holtburg.WorldZ, monarchId: enemyId, isMonarch: true);
++            enemy.Location = Vehicle.ToPosition(holtburg.WorldX + 5.0, holtburg.WorldY, holtburg.WorldZ, Quaternion.Identity);
++
++            SiegeManager.BeginContestedHoldForTesting(1u, enemyId, attackerId, 50_000L);
++            SiegeManager.SetSupplyMeterForTesting(1u, 0.0);
++
++            var beacon = (ForwardSiegeBeaconDeployable)DeployableManager.SpawnDeployable(
++                ForwardSiegeBeaconDeployable.ForwardSiegeBeaconWeenieClassId, beaconPos, attacker);
++            beacon.TargetTownId = 1u;
++
++            uint farOrigin = SiegeManager.PackOriginLandblockId(new LandblockId(0xB2B40001u));
++
++            // Spawn enemy-owned closed ISO container within 10m of beacon
++            var enemyPos = Vehicle.ToPosition(holtburg.WorldX + 8.0, holtburg.WorldY, holtburg.WorldZ, Quaternion.Identity);
++            var enemyContainer = (IsoContainerDeployable)DeployableManager.SpawnDeployable(IsoContainerDeployable.Wcid20ft, enemyPos, enemy);
++            enemyContainer.OwnerMonarchId = enemyId;
++            enemyContainer.OriginLandblockId = farOrigin;
++            enemyContainer.Slots[0].Occupied = true;
++            enemyContainer.Slots[0].OccupiedPalletSize = PalletSize.Full;
++            enemyContainer.Slots[0].OccupiedWcids[0] = ProspectingDeployable.WcidCoreSampleCrate;
++            enemyContainer.Slots[0].CargoStates[0] = new PalletCargoState { HasState = true, OriginLandblockId = farOrigin };
++            Assert.AreEqual(ContainerDoorState.Closed, enemyContainer.DoorState);
++
++            // Spawn enemy-owned LaserTurretDeployable within 10m of beacon
++            var enemyTurret = (LaserTurretDeployable)DeployableManager.SpawnDeployable(LaserTurretDeployable.LaserTurretWeenieClassId, enemyPos, enemy);
++            enemyTurret.OwnerMonarchId = enemyId;
++            enemyTurret.OriginLandblockId = farOrigin;
++
++            ClientMessage MakeDepositMsg() => WrapVehicleC2S(new EconomySiegeAction
++            {
++                TownId = 1u,
++                BeaconGuid = beacon.Guid.Full,
++                Action = 2, // DepositSupply
++            });
++            GameActionVehicle.HandleEconomySiegeAction(MakeDepositMsg(), attackerSession);
++
++            Assert.AreEqual(0.0, SiegeManager.GetSiegeState(1u).SupplyMeterSec, 0.001,
++                "[R2-HIGH-02] Attacker DepositSupply MUST NOT consume enemy closed container or enemy turret");
++            Assert.AreEqual(1, enemyContainer.OccupiedFullBayCount,
++                "[R2-HIGH-02] Enemy container bay MUST remain occupied");
++            Assert.IsFalse(enemyContainer.IsDestroyed, "[R2-HIGH-02] Enemy container must not be destroyed");
++            Assert.IsFalse(enemyTurret.IsDestroyed, "[R2-HIGH-02] Enemy LaserTurretDeployable must NOT be destroyed");
++
++            // Even if enemy container doors are forced open, enemy ownership must still block attacker siphon
++            enemyContainer.SetDoorProgress(1.0f);
++            GameActionVehicle.HandleEconomySiegeAction(MakeDepositMsg(), attackerSession);
++            Assert.AreEqual(0.0, SiegeManager.GetSiegeState(1u).SupplyMeterSec, 0.001,
++                "[R2-HIGH-02] Open enemy-owned container must STILL be refused");
++            Assert.AreEqual(1, enemyContainer.OccupiedFullBayCount);
++
++            // Even attacker's own LaserTurretDeployable must NOT be consumed as siege supply
++            var ownTurret = (LaserTurretDeployable)DeployableManager.SpawnDeployable(LaserTurretDeployable.LaserTurretWeenieClassId, enemyPos, attacker);
++            ownTurret.OwnerMonarchId = attackerId;
++            ownTurret.OriginLandblockId = farOrigin;
++            GameActionVehicle.HandleEconomySiegeAction(MakeDepositMsg(), attackerSession);
++            Assert.AreEqual(0.0, SiegeManager.GetSiegeState(1u).SupplyMeterSec, 0.001,
++                "[R2-HIGH-02] Deployed turrets must never be vaporized by DepositSupply");
++            Assert.IsFalse(ownTurret.IsDestroyed);
++
++            // Attacker-owned closed container must require doors open first
++            var ownContainer = (IsoContainerDeployable)DeployableManager.SpawnDeployable(IsoContainerDeployable.Wcid20ft, enemyPos, attacker);
++            ownContainer.OwnerMonarchId = attackerId;
++            ownContainer.OriginLandblockId = farOrigin;
++            ownContainer.Slots[0].Occupied = true;
++            ownContainer.Slots[0].OccupiedPalletSize = PalletSize.Full;
++            ownContainer.Slots[0].OccupiedWcids[0] = ProspectingDeployable.WcidCoreSampleCrate;
++            ownContainer.Slots[0].CargoStates[0] = new PalletCargoState { HasState = true, OriginLandblockId = farOrigin };
++            GameActionVehicle.HandleEconomySiegeAction(MakeDepositMsg(), attackerSession);
++            Assert.AreEqual(0.0, SiegeManager.GetSiegeState(1u).SupplyMeterSec, 0.001,
++                "[R2-HIGH-02] Closed owned container must require DoorProgress >= 0.8f on 0x0912 DepositSupply");
++
++            // Opening attacker's own container allows DepositSupply to consume its pallet
++            ownContainer.SetDoorProgress(1.0f);
++            GameActionVehicle.HandleEconomySiegeAction(MakeDepositMsg(), attackerSession);
++            Assert.AreEqual(1800.0, SiegeManager.GetSiegeState(1u).SupplyMeterSec, 0.1,
++                "[R2-HIGH-02] Open owned container must succeed (+100 SP = +1800s on CapitalPort)");
++            Assert.AreEqual(0, ownContainer.OccupiedFullBayCount);
++
++            // Attacker-owned CoreSampleCrate (4000074) >= 1,500m IS accepted by DepositSupply
++            var ownCoreCrate = (ProspectingDeployable)DeployableManager.SpawnDeployable(ProspectingDeployable.WcidCoreSampleCrate, enemyPos, attacker);
++            ownCoreCrate.OwnerMonarchId = attackerId;
++            ownCoreCrate.OriginLandblockId = farOrigin;
++            GameActionVehicle.HandleEconomySiegeAction(MakeDepositMsg(), attackerSession);
++            Assert.AreEqual(3600.0, SiegeManager.GetSiegeState(1u).SupplyMeterSec, 0.1,
++                "[R2-HIGH-02] Owned CoreSampleCrate (4000074) must succeed (+100 SP = +1800s, total 3600s)");
++            Assert.IsTrue(ownCoreCrate.IsDestroyed);
++        }
++
++        [TestMethod]
++        public void Tier5_R2MED01_TryAcceptInventoryItem_ConsumeFailure_DoesNotCreditSupply_AndValidConsumeIncrements()
++        {
++            var holtburg = TownRegistry.GetById(1u);
++            uint attackerId = AllocTestGuid();
++            var beaconPos = Vehicle.ToPosition(holtburg.WorldX, holtburg.WorldY, holtburg.WorldZ, Quaternion.Identity);
++
++            var attacker = CreateInventoryPlayer(attackerId, holtburg.AnchorLandblock, (float)holtburg.WorldX, (float)holtburg.WorldY, (float)holtburg.WorldZ, monarchId: attackerId, isMonarch: true);
++            attacker.Location = new Position(beaconPos);
++            AttachNetworkedMockSession(attacker, VehicleWire.CapObserve);
++
++            SiegeManager.BeginContestedHoldForTesting(1u, 100u, attackerId, 50_000L);
++            SiegeManager.SetSupplyMeterForTesting(1u, 0.0);
++
++            var beacon = (ForwardSiegeBeaconDeployable)DeployableManager.SpawnDeployable(
++                ForwardSiegeBeaconDeployable.ForwardSiegeBeaconWeenieClassId, beaconPos, attacker);
++            beacon.TargetTownId = 1u;
++
++            uint farOrigin = SiegeManager.PackOriginLandblockId(new LandblockId(0xB2B40001u));
++
++            // 1. Item whose stack consumption fails (StackSize=3 > MaxStackSize=1 causes AdjustStack(-1) to return false)
++            var badStack = CreateTestItem(99201u, WeenieType.Stackable, ItemType.Misc, 10, stackSize: 3, maxStack: 1, name: "Corrupt Supply Stack");
++            badStack.SetProperty(PropertyInt.OriginLandblockId, (int)farOrigin);
++            Assert.IsTrue(attacker.TryAddToInventory(badStack, out _, burdenCheck: false));
++
++            bool badOk = beacon.TryAcceptInventoryItem(badStack, attacker, 100.0, out var badMsg);
++            Assert.IsFalse(badOk, "[R2-MED-01] TryAcceptInventoryItem MUST fail when inventory consumption returns false");
++            Assert.IsFalse(string.IsNullOrWhiteSpace(badMsg));
++            Assert.AreEqual(0.0, SiegeManager.GetSiegeState(1u).SupplyMeterSec, 0.001,
++                "[R2-MED-01] Failed consumption MUST NOT credit SupplyMeterSec");
++            Assert.AreEqual(3, badStack.StackSize);
++            Assert.AreEqual(farOrigin, (uint)(badStack.GetProperty(PropertyInt.OriginLandblockId) ?? 0));
++
++            // 2. Valid networked stacked item (StackSize=2, MaxStackSize=10) consumes 1 per call and preserves OriginLandblockId until depleted
++            var validStack = CreateTestItem(99202u, WeenieType.Stackable, ItemType.Misc, 10, stackSize: 2, maxStack: 10, name: "Valid Supply Stack");
++            validStack.SetProperty(PropertyInt.OriginLandblockId, (int)farOrigin);
++            Assert.IsTrue(attacker.TryAddToInventory(validStack, out _, burdenCheck: false));
++
++            Assert.IsTrue(beacon.TryAcceptInventoryItem(validStack, attacker, 50.0, out var okMsg1), okMsg1);
++            Assert.AreEqual(1, validStack.StackSize ?? 0, "[R2-MED-01] First delivery must decrement StackSize from 2 to 1");
++            Assert.AreEqual(farOrigin, (uint)(validStack.GetProperty(PropertyInt.OriginLandblockId) ?? 0),
++                "[R2-MED-01] Remaining stack unit must retain OriginLandblockId");
++            Assert.AreEqual(900.0, SiegeManager.GetSiegeState(1u).SupplyMeterSec, 0.1,
++                "[R2-MED-01] Valid consumption must credit 50 SP (900s on CapitalPort)");
++
++            Assert.IsTrue(beacon.TryAcceptInventoryItem(validStack, attacker, 50.0, out var okMsg2), okMsg2);
++            Assert.IsTrue(validStack.IsDestroyed, "[R2-MED-01] Final unit must be destroyed");
++            Assert.AreEqual(1800.0, SiegeManager.GetSiegeState(1u).SupplyMeterSec, 0.1,
++                "[R2-MED-01] Second valid consumption must credit another 50 SP (total 1800s)");
++        }
+     }
+ }
+diff --git a/Source/ACE.Server/Economy/IndustryManager.cs b/Source/ACE.Server/Economy/IndustryManager.cs
+index 7c42fa92..5bf949ef 100644
+--- a/Source/ACE.Server/Economy/IndustryManager.cs
++++ b/Source/ACE.Server/Economy/IndustryManager.cs
+@@ -552,6 +552,7 @@ public static bool HasAvailableMicroGridPower(DeployableBase dep)
+                 int neededSlots = (int)((totalPyreals + 24_999L) / 25_000L);
+                 int invCount = actor.GetNumInventoryItemsOfWCID(bullionWcid);
+                 int freedSlots = 0;
++                long freedBurden = 0;
+                 if (invCount >= quantity)
+                 {
+                     int rem = quantity;
+@@ -559,8 +560,11 @@ public static bool HasAvailableMicroGridPower(DeployableBase dep)
+                     {
+                         if (rem <= 0) break;
+                         int st = invItem.StackSize ?? 1;
++                        int take = Math.Min(rem, st);
+                         if (st <= rem) freedSlots++;
+-                        rem -= Math.Min(rem, st);
++                        int unitBurden = invItem.StackUnitEncumbrance ?? ((invItem.EncumbranceVal ?? 0) / Math.Max(1, st));
++                        freedBurden += (long)unitBurden * take;
++                        rem -= take;
+                     }
+                 }
+                 if (actor.GetFreeInventorySlots() + freedSlots < neededSlots)
+@@ -568,11 +572,44 @@ public static bool HasAvailableMicroGridPower(DeployableBase dep)
+                     error = $"Inventory full: need {neededSlots} free slot(s) to receive {totalPyreals:N0} minted Pyreals.";
+                     return false;
+                 }
++                if (actor.Session?.Network != null)
++                {
++                    Weenie pyrealWeenie = null;
++                    try { pyrealWeenie = DatabaseManager.World?.GetCachedWeenie(TownEconomyManager.PyrealWcid); } catch { }
++                    int unitCoinBurden = pyrealWeenie?.GetProperty(PropertyInt.StackUnitEncumbrance)
++                        ?? pyrealWeenie?.GetProperty(PropertyInt.EncumbranceVal)
++                        ?? 0;
++                    long totalCoinBurden = (long)unitCoinBurden * totalPyreals;
++                    if (freedBurden == 0)
++                    {
++                        int checkBurden = totalCoinBurden > int.MaxValue ? int.MaxValue : (int)totalCoinBurden;
++                        if (!actor.HasEnoughBurdenToAddToInventory(checkBurden))
++                        {
++                            error = $"Encumbrance full: unable to carry {totalPyreals:N0} minted Pyreals.";
++                            return false;
++                        }
++                    }
++                    else
++                    {
++                        if (!actor.EncumbranceVal.HasValue)
++                        {
++                            error = $"Encumbrance full: unable to carry {totalPyreals:N0} minted Pyreals.";
++                            return false;
++                        }
++                        long netEncumbrance = Math.Max(0L, actor.EncumbranceVal.Value - freedBurden) + totalCoinBurden;
++                        if (netEncumbrance > (long)actor.GetEncumbranceCapacity() * 3L)
++                        {
++                            error = $"Encumbrance full: unable to carry {totalPyreals:N0} minted Pyreals.";
++                            return false;
++                        }
++                    }
++                }
+             }
+ 
+             bool consumedFromInventory = TryConsumePlayerInventoryItem(actor, bullionWcid, quantity);
++            List<TownEconomyManager.ConsumedWarehouseSlice> consumedSlices = null;
+ 
+-            if (!consumedFromInventory && !TownEconomyManager.TryConsumeWarehouseStock(tid, whCommodity, quantity, out _))
++            if (!consumedFromInventory && !TownEconomyManager.TryConsumeWarehouseStock(tid, whCommodity, quantity, out consumedSlices, out _))
+             {
+                 error = $"Missing {quantity}x bullion/motes (WCID {bullionWcid}) in inventory or town warehouse.";
+                 return false;
+@@ -628,9 +665,12 @@ public static bool HasAvailableMicroGridPower(DeployableBase dep)
+                     {
+                         GiveCraftedStarterItem(actor, bullionWcid, whCommodity, quantity, WeenieType.Stackable, ItemType.Misc, 100, 100);
+                     }
+-                    else
++                    else if (consumedSlices != null)
+                     {
+-                        TownEconomyManager.SeedWarehouseStock(tid, whCommodity, quantity);
++                        foreach (var slice in consumedSlices)
++                        {
++                            TownEconomyManager.RefundWarehouseStock(tid, whCommodity, slice.Qty, slice.GradeBps, slice.PoweredReefer, slice.FreshnessPct);
++                        }
+                     }
+ 
+                     mintedPyreals = 0;
+diff --git a/Source/ACE.Server/Economy/SiegeManager.cs b/Source/ACE.Server/Economy/SiegeManager.cs
+index ffd1c5d9..c5b35538 100644
+--- a/Source/ACE.Server/Economy/SiegeManager.cs
++++ b/Source/ACE.Server/Economy/SiegeManager.cs
+@@ -1010,6 +1010,52 @@ public static bool AdvanceClaim(uint townId, uint monarchId, double elapsedSecon
+             return claimed;
+         }
+ 
++        public static bool CanDeliverSiegeSupply(uint townId, uint originLandblockId, double supplyPoints, Player actor, out string message)
++        {
++            if (supplyPoints <= 0.0 || !double.IsFinite(supplyPoints))
++            {
++                message = "Supply delivery quantity must be positive.";
++                return false;
++            }
++
++            if (!HasValidSupplyProvenance(originLandblockId, townId))
++            {
++                var dist = ComputeDistanceFromOriginToTownM(originLandblockId, townId);
++                message = $"Origin-provenance check failed: cargo origin distance {dist:0.0}m < {MinProvenanceDistanceM:0}m required.";
++                return false;
++            }
++
++            var state = TownEconomyManager.GetTownState(townId);
++            var def = TownRegistry.GetById(townId);
++            if (state == null || def == null)
++            {
++                message = "Target town not found.";
++                return false;
++            }
++
++            lock (state.SyncRoot)
++            {
++                if (state.Control.State is not ("CONTESTED_HOLD" or "STARVING"))
++                {
++                    message = $"{def.Name} is not currently in an active siege.";
++                    return false;
++                }
++
++                if (actor != null)
++                {
++                    var actorMonarch = TownCommands.ResolveEffectiveMonarchId(actor);
++                    if (state.Control.AttackerMonarchId != 0 && actorMonarch != state.Control.AttackerMonarchId)
++                    {
++                        message = "Only sworn members of the attacking Allegiance may resupply this Forward Siege Beacon.";
++                        return false;
++                    }
++                }
++            }
++
++            message = null;
++            return true;
++        }
++
+         public static bool DeliverSiegeSupply(uint townId, uint originLandblockId, double supplyPoints, Player actor, out string message)
+         {
+             if (supplyPoints <= 0.0 || !double.IsFinite(supplyPoints))
+diff --git a/Source/ACE.Server/Economy/TownEconomyManager.cs b/Source/ACE.Server/Economy/TownEconomyManager.cs
+index 2f10390e..fe92f2c8 100644
+--- a/Source/ACE.Server/Economy/TownEconomyManager.cs
++++ b/Source/ACE.Server/Economy/TownEconomyManager.cs
+@@ -926,6 +926,41 @@ public static void SeedWarehouseStock(uint townId, string commodityId, int qty,
+             PersistWarehouseStock(snap);
+         }
+ 
++        public readonly record struct ConsumedWarehouseSlice(int GradeBps, float FreshnessPct, bool PoweredReefer, int Qty);
++
++        public static void RefundWarehouseStock(uint townId, string commodityId, int qty, int gradeBps = 10000, bool poweredReefer = false, float freshnessPct = 100.0f)
++        {
++            if (string.IsNullOrWhiteSpace(commodityId) || qty <= 0) return;
++            var state = GetTownState(townId);
++            if (state == null) return;
++
++            TownWarehouseStock snap;
++            lock (state.SyncRoot)
++            {
++                var key = (commodityId, gradeBps, poweredReefer);
++                if (!state.Warehouses.TryGetValue(key, out var wh))
++                {
++                    wh = new TownWarehouseStock
++                    {
++                        TownId = townId,
++                        CommodityId = commodityId,
++                        GradeBps = gradeBps,
++                        Qty = 0,
++                        FreshnessPct = freshnessPct,
++                        PoweredReefer = poweredReefer,
++                    };
++                    state.Warehouses[key] = wh;
++                }
++                else if (wh.Qty <= 0)
++                {
++                    wh.FreshnessPct = freshnessPct;
++                }
++                wh.Qty += qty;
++                snap = CloneWarehouse(wh);
++            }
++            PersistWarehouseStock(snap);
++        }
++
+         public static int GetWarehouseStockQty(uint townId, string commodityId)
+         {
+             var state = GetTownState(townId);
+@@ -940,8 +975,12 @@ public static int GetWarehouseStockQty(uint townId, string commodityId)
+         }
+ 
+         public static bool TryConsumeWarehouseStock(uint townId, string commodityId, int qty, out string error)
++            => TryConsumeWarehouseStock(townId, commodityId, qty, out _, out error);
++
++        public static bool TryConsumeWarehouseStock(uint townId, string commodityId, int qty, out List<ConsumedWarehouseSlice> consumedSlices, out string error)
+         {
+             error = null;
++            consumedSlices = null;
+             if (string.IsNullOrWhiteSpace(commodityId) || qty <= 0)
+             {
+                 error = "Invalid commodity or quantity.";
+@@ -973,12 +1012,14 @@ public static bool TryConsumeWarehouseStock(uint townId, string commodityId, int
+ 
+                 int remaining = qty;
+                 snapshots = new List<TownWarehouseStock>();
++                consumedSlices = new List<ConsumedWarehouseSlice>();
+                 foreach (var wh in matching)
+                 {
+                     if (remaining <= 0) break;
+                     int take = Math.Min(remaining, wh.Qty);
+                     wh.Qty -= take;
+                     remaining -= take;
++                    consumedSlices.Add(new ConsumedWarehouseSlice(wh.GradeBps, wh.FreshnessPct, wh.PoweredReefer, take));
+                     snapshots.Add(CloneWarehouse(wh));
+                 }
+             }
+diff --git a/Source/ACE.Server/Network/GameAction/Actions/GameActionVehicle.cs b/Source/ACE.Server/Network/GameAction/Actions/GameActionVehicle.cs
+index 31d5c010..c3449551 100644
+--- a/Source/ACE.Server/Network/GameAction/Actions/GameActionVehicle.cs
++++ b/Source/ACE.Server/Network/GameAction/Actions/GameActionVehicle.cs
+@@ -213,7 +213,17 @@ public static void HandleEconomySiegeAction(ClientMessage message, Session sessi
+                         if (container.IsDestroyed || container.IsPacked) continue;
+                         if (container.Location != null && Vector3.Distance(beacon.GlobalPosition, container.Position) > ForwardSiegeBeaconDeployable.DeliveryRadiusM)
+                             continue;
+-                        if (beacon.TryAcceptContainer(container, player, serverSupplyPointsPerPallet, out _, out var containerErr))
++                        if (!ForwardSiegeBeaconDeployable.IsAuthorizedForSupplyUnit(container, player, allowUnowned: true))
++                        {
++                            lastErr = "Target ISO container belongs to another Allegiance.";
++                            continue;
++                        }
++                        if (container.DoorProgress < 0.8f)
++                        {
++                            lastErr = "Open the ISO container doors before unloading supply cargo.";
++                            continue;
++                        }
++                        if (beacon.TryAcceptContainer(container, player, serverSupplyPointsPerPallet, out _, out var containerErr, requireOpenDoors: true))
+                         {
+                             delivered = true;
+                             break;
+@@ -227,10 +237,13 @@ public static void HandleEconomySiegeAction(ClientMessage message, Session sessi
+                         foreach (var dep in DeployableManager.GetAll())
+                         {
+                             if (dep == null || dep.IsDestroyed || dep.IsPacked || dep.IsStowed || dep.OriginLandblockId == 0) continue;
+-                            if (dep is ForwardSiegeBeaconDeployable or TownControlNodeDeployable or TownDepotDeployable
+-                                or PublicCommonsStarterHearthDeployable or TownMintDeployable or TownWorkshopDeployable
+-                                or IsoContainerDeployable or SemiTrailerDeployable or PalletJackDeployable)
++                            if (dep is not ProspectingDeployable pd || pd.Kind != DeployableKind.CoreSampleCrate)
++                                continue;
++                            if (!ForwardSiegeBeaconDeployable.IsAuthorizedForSupplyUnit(dep, player, allowUnowned: false))
++                            {
++                                lastErr = "Target supply crate belongs to another Allegiance.";
+                                 continue;
++                            }
+                             if (dep.Location != null && Vector3.Distance(beacon.GlobalPosition, dep.GlobalPosition) > ForwardSiegeBeaconDeployable.DeliveryRadiusM)
+                                 continue;
+                             if (beacon.TryAcceptCargoUnit(dep, player, serverSupplyPointsPerPallet, out var unitErr))
+@@ -475,6 +488,8 @@ private static IEnumerable<WorldObject> CollectInventorySupplyCandidates(Contain
+                 }
+                 else
+                 {
++                    if (item.WeenieType == WeenieType.Coin || item.ItemType is ItemType.Money or ItemType.PromissoryNote)
++                        continue;
+                     var origin = (uint)(item.GetProperty(PropertyInt.OriginLandblockId) ?? 0);
+                     if (origin != 0)
+                         yield return item;
+diff --git a/Source/ACE.Server/Vehicles/Deployables/ForwardSiegeBeaconDeployable.cs b/Source/ACE.Server/Vehicles/Deployables/ForwardSiegeBeaconDeployable.cs
+index f07f6473..6b38a91d 100644
+--- a/Source/ACE.Server/Vehicles/Deployables/ForwardSiegeBeaconDeployable.cs
++++ b/Source/ACE.Server/Vehicles/Deployables/ForwardSiegeBeaconDeployable.cs
+@@ -6,6 +6,7 @@
+ using ACE.Entity.Models;
+ using ACE.Server.Command.Handlers;
+ using ACE.Server.Economy;
++using ACE.Server.Managers;
+ using ACE.Server.WorldObjects;
+ 
+ namespace ACE.Server.Vehicles.Deployables
+@@ -87,6 +88,69 @@ private static bool IsInActorInventory(Player actor, WorldObject item)
+             }
+         }
+ 
++        public static uint ResolveDeployableOwnerMonarchId(DeployableBase dep)
++        {
++            if (dep == null)
++                return 0u;
++
++            if (dep.OwnerMonarchId != 0)
++                return dep.OwnerMonarchId;
++            if (dep.DeployerMonarchId != 0)
++                return dep.DeployerMonarchId;
++            if (dep.DeployerPlayerGuid != 0)
++            {
++                var deployer = PlayerManager.GetOnlinePlayer(dep.DeployerPlayerGuid);
++                if (deployer != null)
++                    return TownCommands.ResolveEffectiveMonarchId(deployer);
++                return dep.DeployerPlayerGuid;
++            }
++            if (dep is IsoContainerDeployable ic && ic.MountedOnTrailerGuid != 0)
++            {
++                var trailer = DeployableManager.GetDeployable(ic.MountedOnTrailerGuid);
++                if (trailer != null)
++                    return ResolveDeployableOwnerMonarchId(trailer);
++            }
++            return 0u;
++        }
++
++        public static bool IsAuthorizedForSupplyUnit(DeployableBase dep, Player actor, bool allowUnowned = true)
++        {
++            if (dep == null || actor == null)
++                return false;
++
++            uint depMonarch = ResolveDeployableOwnerMonarchId(dep);
++            uint actorMonarch = TownCommands.ResolveEffectiveMonarchId(actor);
++            if (depMonarch != 0)
++                return actorMonarch != 0 && depMonarch == actorMonarch;
++
++            if (dep.DeployerPlayerGuid != 0)
++                return dep.DeployerPlayerGuid == actor.Guid.Full;
++
++            return allowUnowned;
++        }
++
++        public static bool IsNonCargoInfrastructureForSupply(DeployableBase dep)
++        {
++            if (dep == null)
++                return true;
++
++            if (dep is ForwardSiegeBeaconDeployable or TownControlNodeDeployable or TownDepotDeployable
++                or PublicCommonsStarterHearthDeployable or TownMintDeployable or TownWorkshopDeployable
++                or IsoContainerDeployable or SemiTrailerDeployable or PalletJackDeployable
++                or GroundRadarDeployable or MissileTurretDeployable or LaserTurretDeployable or MortarTurretDeployable
++                or FluxPodDeployable or SolarPanelsDeployable or BatteryDeployable
++                or IndustrySkidDeployable or IndustrialGensetDeployable or IndustrialBessDeployable
++                or MarineTerminalDeployable)
++            {
++                return true;
++            }
++
++            if (dep is ProspectingDeployable pd && pd.Kind != DeployableKind.CoreSampleCrate)
++                return true;
++
++            return false;
++        }
++
+         public bool TryAcceptCargoUnit(DeployableBase cargo, Player actor, double supplyPoints, out string message)
+         {
+             if (cargo == null)
+@@ -95,6 +159,18 @@ public bool TryAcceptCargoUnit(DeployableBase cargo, Player actor, double supply
+                 return false;
+             }
+ 
++            if (actor != null && !IsAuthorizedForSupplyUnit(cargo, actor, allowUnowned: true))
++            {
++                message = "Target cargo unit belongs to another Allegiance.";
++                return false;
++            }
++
++            if (IsNonCargoInfrastructureForSupply(cargo))
++            {
++                message = "Deployed defense, grid, industrial, or infrastructure units cannot be consumed as siege supply.";
++                return false;
++            }
++
+             lock (cargo)
+             {
+                 if (cargo.IsDestroyed || cargo.IsPacked || cargo.OriginLandblockId == 0)
+@@ -158,36 +234,62 @@ public bool TryAcceptInventoryItem(WorldObject item, Player actor, double supply
+                     return false;
+ 
+                 var originLb = (uint)(item.GetProperty(PropertyInt.OriginLandblockId) ?? 0);
+-                if (!TryAcceptProvenanceDelivery(actor, originLb, supplyPoints, out message))
++                if (!CanAcceptProvenanceDelivery(actor, originLb, supplyPoints, out message))
+                     return false;
+ 
+                 bool inActorInventory = IsInActorInventory(actor, item);
++                int origStack = item.StackSize ?? 1;
+                 if (actor != null && actor.Session?.Network != null && inActorInventory)
+                 {
+-                    if ((item.StackSize ?? 1) <= 1)
++                    if (!actor.TryConsumeFromInventoryWithNetworking(item, 1))
++                    {
++                        message = "Failed to consume supply item from inventory.";
++                        return false;
++                    }
++                    if (origStack <= 1)
+                         item.SetProperty(PropertyInt.OriginLandblockId, 0);
+-                    actor.TryConsumeFromInventoryWithNetworking(item, 1);
+                 }
+                 else
+                 {
+-                    int stackSize = item.StackSize ?? 1;
+-                    if (stackSize > 1)
++                    if (origStack > 1)
+                     {
+-                        item.StackSize = stackSize - 1;
++                        item.StackSize = origStack - 1;
+                     }
+                     else
+                     {
++                        if (inActorInventory && !actor.TryRemoveFromInventory(item.Guid, out _))
++                        {
++                            message = "Failed to remove supply item from inventory.";
++                            return false;
++                        }
+                         item.SetProperty(PropertyInt.OriginLandblockId, 0);
+-                        if (inActorInventory)
+-                            actor.TryRemoveFromInventory(item.Guid, out _);
+                         try { item.Destroy(false); } catch (NullReferenceException) { }
+                     }
+                 }
++
++                if (!TryAcceptProvenanceDelivery(actor, originLb, supplyPoints, out message))
++                {
++                    if (origStack > 1 && !item.IsDestroyed)
++                    {
++                        if (actor != null && actor.Session?.Network != null && inActorInventory)
++                        {
++                            // Best-effort stack restore if siege state ended concurrently between pre-check and delivery
++                            var stackRestored = item.StackSize ?? 0;
++                            if (stackRestored > 0 && stackRestored < origStack)
++                                item.SetStackSize(origStack);
++                        }
++                        else
++                        {
++                            item.StackSize = origStack;
++                        }
++                    }
++                    return false;
++                }
+                 return true;
+             }
+         }
+ 
+-        public bool TryAcceptContainer(IsoContainerDeployable container, Player actor, double supplyPointsPerPallet, out int acceptedPallets, out string message)
++        public bool TryAcceptContainer(IsoContainerDeployable container, Player actor, double supplyPointsPerPallet, out int acceptedPallets, out string message, bool requireOpenDoors = false)
+         {
+             acceptedPallets = 0;
+             if (container == null)
+@@ -196,6 +298,12 @@ public bool TryAcceptContainer(IsoContainerDeployable container, Player actor, d
+                 return false;
+             }
+ 
++            if (actor != null && !IsAuthorizedForSupplyUnit(container, actor, allowUnowned: true))
++            {
++                message = "Target ISO container belongs to another Allegiance.";
++                return false;
++            }
++
+             int rejected = 0;
+             lock (container)
+             {
+@@ -205,6 +313,12 @@ public bool TryAcceptContainer(IsoContainerDeployable container, Player actor, d
+                     return false;
+                 }
+ 
++                if (requireOpenDoors && container.DoorProgress < 0.8f)
++                {
++                    message = "Open the ISO container doors before unloading supply cargo.";
++                    return false;
++                }
++
+                 if (Location != null && container.Location != null)
+                 {
+                     var dist = Vector3.Distance(GlobalPosition, container.Position);
+@@ -263,6 +377,18 @@ public bool TryAcceptContainer(IsoContainerDeployable container, Player actor, d
+             return false;
+         }
+ 
++        public bool CanAcceptProvenanceDelivery(Player actor, uint originLandblockId, double supplyPoints, out string message)
++        {
++            var tid = ResolveTargetTownId();
++            if (tid == 0)
++            {
++                message = "Forward Siege Beacon is not associated with a target town.";
++                return false;
++            }
++
++            return SiegeManager.CanDeliverSiegeSupply(tid, originLandblockId, supplyPoints, actor, out message);
++        }
++
+         public bool TryAcceptProvenanceDelivery(Player actor, uint originLandblockId, double supplyPoints, out string message)
+         {
+             var tid = ResolveTargetTownId();
+-- 
+2.43.0
+

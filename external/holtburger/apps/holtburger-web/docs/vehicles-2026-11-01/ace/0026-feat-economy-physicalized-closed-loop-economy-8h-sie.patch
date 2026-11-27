@@ -1,7 +1,7 @@
 From f17e91a5e907ca4e8b2276b7a4ddd5f6f39b3348 Mon Sep 17 00:00:00 2001
 From: salvia420-bit <salvia420@gmail.com>
 Date: Fri, 27 Nov 2026 09:36:41 +0000
-Subject: [PATCH 26/29] feat(economy): physicalized closed-loop economy, 8h
+Subject: [PATCH 26/30] feat(economy): physicalized closed-loop economy, 8h
  siege, geology/cold-chain, HBV1 v8, dual-LOD logistics & AgentGatewayService
 
 Implement Phases A-E of Guild-Based Physicalized Town Control & Closed-Loop Economy across Dereth (60 towns) and Dericost (41 towns), excluding Item 2 (Landlocked Inner Sea feeder lane):

@@ -1,7 +1,7 @@
 From 04a54016218707c5d2d0fa4807008a5da4dd9d4b Mon Sep 17 00:00:00 2001
 From: salvia420-bit <salvia420@gmail.com>
 Date: Fri, 20 Nov 2026 14:00:45 +0000
-Subject: [PATCH 23/29] Vehicles (holtburger fork): Tier 5 final
+Subject: [PATCH 23/30] Vehicles (holtburger fork): Tier 5 final
  LandblockManager continent and PowerGenerator dt fixes
 
 Fixes 2 remaining findings from Tier 5 Challenger 5 audit:
