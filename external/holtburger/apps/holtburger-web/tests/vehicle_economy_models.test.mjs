@@ -380,7 +380,71 @@ await check("ECON_08 All 11 ISO containers have zero floating decals, flush wall
       );
     }
 
-    // 2. Flat-rack (22P1/42P1): zero markings in open side air above deck, end bulkheads capped flush with top castings
+    // 2. Whole-container 3D structural connectivity: all visible shells across body, floor, castings, markings, doors, ramp & lamps form 1 connected component
+    cont.root.updateMatrixWorld(true);
+    const shells = [];
+    cont.root.traverse((obj) => {
+      if (!obj.isMesh || !obj.visible) return;
+      const pos = obj.geometry.getAttribute("position");
+      const mat = obj.matrixWorld;
+      const nTri = pos.count / 3;
+      const parent = Int32Array.from({ length: nTri }, (_, idx) => idx);
+      const find = (x) => { while (parent[x] !== x) { parent[x] = parent[parent[x]]; x = parent[x]; } return x; };
+      const union = (a, b) => { a = find(a); b = find(b); if (a !== b) parent[a] = b; };
+      const vertMap = new Map();
+      const triPts = [];
+      for (let t = 0; t < nTri; t++) {
+        const pts = [];
+        for (let k = 0; k < 3; k++) {
+          const idx = t * 3 + k;
+          const v = new THREE.Vector3(pos.getX(idx), pos.getY(idx), pos.getZ(idx)).applyMatrix4(mat);
+          pts.push(v);
+          const key = `${Math.round(v.x * 1e4)},${Math.round(v.y * 1e4)},${Math.round(v.z * 1e4)}`;
+          const prev = vertMap.get(key);
+          if (prev !== undefined) union(t, prev);
+          else vertMap.set(key, t);
+        }
+        triPts.push(pts);
+      }
+      const groups = new Map();
+      for (let t = 0; t < nTri; t++) {
+        const r = find(t);
+        let g = groups.get(r);
+        if (!g) { g = { mesh: obj.name, box: new THREE.Box3() }; groups.set(r, g); }
+        for (const p of triPts[t]) g.box.expandByPoint(p);
+      }
+      for (const g of groups.values()) shells.push(g);
+    });
+    const sp = Int32Array.from({ length: shells.length }, (_, idx) => idx);
+    const sfind = (x) => { while (sp[x] !== x) { sp[x] = sp[sp[x]]; x = sp[x]; } return x; };
+    const sunion = (a, b) => { a = sfind(a); b = sfind(b); if (a !== b) sp[a] = b; };
+    const connEps = 0.002;
+    for (let i = 0; i < shells.length; i++) {
+      const a = shells[i].box;
+      for (let j = i + 1; j < shells.length; j++) {
+        const b = shells[j].box;
+        if (a.min.x <= b.max.x + connEps && a.max.x >= b.min.x - connEps &&
+            a.min.y <= b.max.y + connEps && a.max.y >= b.min.y - connEps &&
+            a.min.z <= b.max.z + connEps && a.max.z >= b.min.z - connEps) {
+          sunion(i, j);
+        }
+      }
+    }
+    const compRoots = new Set();
+    for (let i = 0; i < shells.length; i++) compRoots.add(sfind(i));
+    assert.equal(compRoots.size, 1, `${wcid} (${variant}) must form 1 connected 3D component (found ${compRoots.size})`);
+
+    // 3. Zero exterior z-fighting on hazard chevrons vs top castings (Z=H) and roof vs top rails (Z=H-0.004)
+    if (spec.hasHazardChevrons) {
+      const mBox = new THREE.Box3().setFromObject(markingsMesh);
+      assert.ok(
+        mBox.max.z <= H - 0.118,
+        `${wcid} (${variant}) hazard chevrons max.z (${mBox.max.z.toFixed(4)}) must sit below top corner castings (${(H - 0.118).toFixed(4)})`,
+      );
+    }
+
+    // 4. Flat-rack (22P1/42P1): zero markings in open side air above deck, end bulkheads capped flush with top castings,
+    //    steel under-deck flush with timber floor underside (zero 6mm gap) & side girders frame timber deck cleanly
     if (variant === "flatRack") {
       for (let i = 0; i < mPos.count; i++) {
         const y = mPos.getY(i);
@@ -392,9 +456,37 @@ await check("ECON_08 All 11 ISO containers have zero floating decals, flush wall
       }
       const bodyBox = new THREE.Box3().setFromObject(bodyMesh);
       assert.ok(bodyBox.max.z >= H - 0.01, `${wcid} flatRack end headers reach top casting level (${bodyBox.max.z.toFixed(3)} vs ${H})`);
+      const floorMesh = cont.root.getObjectByName("container-floor-deck");
+      const floorBox = new THREE.Box3().setFromObject(floorMesh);
+      const bPos = bodyMesh.geometry.getAttribute("position");
+      let underDeckTopZ = 0;
+      let sideGirderTopZ = 0;
+      const halfW = spec.external.width * 0.5;
+      for (let i = 0; i < bPos.count; i += 3) {
+        const xs = [bPos.getX(i), bPos.getX(i + 1), bPos.getX(i + 2)];
+        const ys = [bPos.getY(i), bPos.getY(i + 1), bPos.getY(i + 2)];
+        const zs = [bPos.getZ(i), bPos.getZ(i + 1), bPos.getZ(i + 2)];
+        const minX = Math.min(...xs), maxX = Math.max(...xs);
+        const minY = Math.min(...ys), maxY = Math.max(...ys);
+        const maxZ = Math.max(...zs);
+        if (minX < 0 && maxX > 0 && minY < 0 && maxY > 0 && maxZ < 0.4) {
+          if (maxZ > underDeckTopZ) underDeckTopZ = maxZ;
+        }
+        if (xs.every((x) => Math.abs(Math.abs(x) - halfW) < 0.005) && minY < 0 && maxY > 0 && maxZ < 0.4) {
+          if (maxZ > sideGirderTopZ) sideGirderTopZ = maxZ;
+        }
+      }
+      assert.ok(
+        Math.abs(underDeckTopZ - floorBox.min.z) <= 0.002,
+        `${wcid} flatRack under-deck top (${underDeckTopZ.toFixed(4)}m) must meet timber floor underside (${floorBox.min.z.toFixed(4)}m)`,
+      );
+      assert.ok(
+        sideGirderTopZ >= floorBox.max.z - 0.003,
+        `${wcid} flatRack side girder top (${sideGirderTopZ.toFixed(4)}m) must frame timber deck top (${floorBox.max.z.toFixed(4)}m)`,
+      );
     }
 
-    // 3. Tanktainers (22T1/22K2): zero markings floating in open side air outboard of cylindrical tank shell
+    // 5. Tanktainers (22T1/22K2): zero markings outboard of cylindrical tank shell & full-width saddle cross-bearers reaching side rails
     if (variant === "tank" || variant === "gasTank") {
       const tankR = variant === "gasTank" ? 0.96 : 1.02;
       for (let i = 0; i < mPos.count; i++) {
@@ -406,18 +498,37 @@ await check("ECON_08 All 11 ISO containers have zero floating decals, flush wall
           `${wcid} ${variant} marking vertex (${x.toFixed(3)}, ${y.toFixed(3)}, ${z.toFixed(3)}) must not float outboard of tank`,
         );
       }
+      const bPos = bodyMesh.geometry.getAttribute("position");
+      const halfW = spec.external.width * 0.5;
+      let maxCrossBearerX = 0;
+      for (let i = 0; i < bPos.count; i += 3) {
+        const xs = [bPos.getX(i), bPos.getX(i + 1), bPos.getX(i + 2)];
+        const ys = [bPos.getY(i), bPos.getY(i + 1), bPos.getY(i + 2)];
+        const zs = [bPos.getZ(i), bPos.getZ(i + 1), bPos.getZ(i + 2)];
+        if (Math.min(...ys) <= 1.8 && Math.max(...ys) >= 1.8 && Math.max(...zs) <= 0.15 && Math.min(...xs) < 0 && Math.max(...xs) > 0) {
+          maxCrossBearerX = Math.max(maxCrossBearerX, Math.max(...xs));
+        }
+      }
+      assert.ok(
+        maxCrossBearerX >= halfW - 0.09,
+        `${wcid} ${variant} saddle cross-bearer maxX (${maxCrossBearerX.toFixed(3)}m) must reach bottom side rail (${(halfW - 0.08).toFixed(3)}m)`,
+      );
     }
 
-    // 4. Box-walled variants (incl. 22R1/45R1 reefers): side walls seal cleanly to top rail & rear header seals to closed door top
+    // 6. Box-walled variants (incl. 22R1/45R1 reefers): side walls seal cleanly to top rail, rear header seals to closed door top,
+    //    and reefer front machinery bulkhead seals cleanly to front edge of reefer floor deck (zero floor hole)
     if (variant !== "flatRack" && variant !== "tank" && variant !== "gasTank") {
       const bPos = bodyMesh.geometry.getAttribute("position");
       const halfW = spec.external.width * 0.5;
       let sideWallMaxZ = 0;
       let rearHeaderMinZ = Infinity;
+      let reeferBulkheadMinY = Infinity;
       for (let i = 0; i < bPos.count; i += 3) {
         const xs = [bPos.getX(i), bPos.getX(i + 1), bPos.getX(i + 2)];
         const ys = [bPos.getY(i), bPos.getY(i + 1), bPos.getY(i + 2)];
         const zs = [bPos.getZ(i), bPos.getZ(i + 1), bPos.getZ(i + 2)];
+        const minX = Math.min(...xs);
+        const maxX = Math.max(...xs);
         const minY = Math.min(...ys);
         const maxY = Math.max(...ys);
         const minZ = Math.min(...zs);
@@ -427,10 +538,12 @@ await check("ECON_08 All 11 ISO containers have zero floating decals, flush wall
           if (maxZ > sideWallMaxZ) sideWallMaxZ = maxZ;
         }
         // Rear door header triangle spanning door center (x = 0) at rear end (y < -halfL + 0.07)
-        const minX = Math.min(...xs);
-        const maxX = Math.max(...xs);
         if (ys.every((y) => y < -halfL + 0.07) && minX < 0 && maxX > 0 && maxZ > H - 0.02) {
           if (minZ < rearHeaderMinZ) rearHeaderMinZ = minZ;
+        }
+        // Reefer interior front evaporator bulkhead rear face (y > 1.0, spans x = 0, interior height 0.5..2.0)
+        if (variant === "reefer" && minX < -0.9 && maxX > 0.9 && minY > 1.0 && minZ < 0.5 && maxZ > 2.0 && maxY < halfL - 0.04) {
+          if (minY < reeferBulkheadMinY) reeferBulkheadMinY = minY;
         }
       }
       assert.ok(
@@ -442,6 +555,13 @@ await check("ECON_08 All 11 ISO containers have zero floating decals, flush wall
         rearHeaderMinZ <= doorTopZ + 0.005,
         `${wcid} (${variant}) rear header bottom (${rearHeaderMinZ.toFixed(3)}m) must seal to closed door top (${doorTopZ.toFixed(3)}m)`,
       );
+      if (variant === "reefer") {
+        const floorBox = new THREE.Box3().setFromObject(cont.root.getObjectByName("container-floor-deck"));
+        assert.ok(
+          reeferBulkheadMinY <= floorBox.max.y + 0.01,
+          `${wcid} reefer bulkhead minY (${reeferBulkheadMinY.toFixed(3)}m) must meet reefer floor front edge (${floorBox.max.y.toFixed(3)}m)`,
+        );
+      }
     }
 
     cont.dispose();

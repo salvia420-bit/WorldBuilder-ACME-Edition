@@ -404,14 +404,15 @@ export function buildIsoContainer(three, typeOrWcid = CONTAINER_WCID.IsoContaine
     options.livery !== undefined || options.liveryId !== undefined || options.liveryKey !== undefined;
   const liveryKey = options.livery ?? options.liveryId ?? options.liveryKey ?? "maritimeBlue";
   const livery = getLivery(liveryKey);
-  const baseHex = !hasExplicitLivery && spec.defaultLiveryHex ? spec.defaultLiveryHex : livery.hex;
+  const useDefaultLivery = !hasExplicitLivery && Boolean(spec.defaultLiveryHex);
+  const baseHex = useDefaultLivery ? spec.defaultLiveryHex : livery.hex;
   const variant = spec.variant || "box";
   const is20Size = spec.external.length < 7.0;
 
   // Root container group
   const root = new t.Group();
   root.name = `iso-container-${spec.isoGroup}-root`;
-  root.userData = { wcid, kind: spec.kind, spec, livery: livery.name };
+  root.userData = { wcid, kind: spec.kind, spec, livery: useDefaultLivery ? `ISO ${spec.isoGroup} Default` : livery.name };
 
   const W = spec.external.width;
   const L = spec.external.length;
@@ -424,25 +425,31 @@ export function buildIsoContainer(three, typeOrWcid = CONTAINER_WCID.IsoContaine
   // =========================================================================
   const bodyParts = [];
   const wallThick = 0.043; // Corrugation peak-to-valley thickness
+  const floorThick = 0.028; // 28 mm marine hardwood floor deck thickness
   const railH = 0.140;     // Bottom side rail height
   const topRailH = 0.060;  // Top side rail height
   const postW = 0.150;     // Corner post width
-  const hasSideWalls = variant !== "flatRack" && variant !== "tank" && variant !== "gasTank";
-  const sideRailH = variant === "flatRack" ? (spec.floorZ - 0.02) : railH;
-  const extWallBot = variant === "flatRack" ? spec.floorZ : railH;
+  const isTankVariant = variant === "tank" || variant === "gasTank";
+  const hasSideWalls = variant !== "flatRack" && !isTankVariant;
+  const deckTopZ = spec.floorZ + floorThick * 0.5;
+  const deckBotZ = spec.floorZ - floorThick * 0.5;
+  const sideRailH = variant === "flatRack" ? deckTopZ + 0.004 : railH;
+  const extWallBot = variant === "flatRack" ? deckTopZ : railH;
   const extWallTop = H - topRailH;
   const wallH = extWallTop - extWallBot;
   const wallZ = (extWallBot + extWallTop) * 0.5;
-  const wallL = L - 0.16;
+  const wallL = L - 2 * postW;
+  const spanBetweenPostsW = W - 2 * postW;
   const baseColor = new t.Color(baseHex);
   const baseLuminance = 0.2126 * baseColor.r + 0.7152 * baseColor.g + 0.0722 * baseColor.b;
   const ribColor = baseColor.clone().multiplyScalar(0.92).getHex();
   const tankR = variant === "gasTank" ? 0.96 : 1.02;
   const tankZ = H * 0.52;
+  const tankFrameHex = variant === "gasTank" ? 0x2c363e : 0x2f4354;
 
-  if (variant === "tank" || variant === "gasTank") {
-    // ISO 1496-3 skeletal frame + cylindrical tank + saddle cradles + walkway
-    const frameHex = variant === "gasTank" ? 0x2c363e : 0x2f4354;
+  if (isTankVariant) {
+    // ISO 1496-3 skeletal frame + cylindrical tank + full-span saddle cradles + walkway
+    const frameHex = tankFrameHex;
     const tankLen = L - 0.55;
     bodyParts.push(zCyl(t, tankR, tankLen, 20, baseHex, 0, 0, tankZ));
     // End dome caps & top manway / relief valve housing
@@ -461,19 +468,24 @@ export function buildIsoContainer(three, typeOrWcid = CONTAINER_WCID.IsoContaine
     }
     // Top inspection walkway spanning cleanly onto both end portal headers
     bodyParts.push(zBox(t, 0.42, L - 0.16, 0.025, 0x565c62, -0.35, 0, H - 0.09));
-    // End portal frames & saddle cradles
+    // Full-width bottom saddle cross-bearers (connecting side-rail to side-rail) + tank saddle cradles
     for (const sy of [-1.8, 1.8]) {
-      bodyParts.push(zBox(t, 1.70, 0.16, 0.55, frameHex, 0, sy, 0.44));
+      bodyParts.push(zBox(t, W - 0.16, 0.16, 0.12, frameHex, 0, sy, 0.08));
+      bodyParts.push(zBox(t, 1.70, 0.16, 0.56, frameHex, 0, sy, 0.42));
     }
+    // Transverse subframe support channel under rear valve drip tray (connects both bottom side rails, flush at z=0.148m)
+    bodyParts.push(zBox(t, W - 0.16, 0.16, 0.128, frameHex, 0, -halfL + 0.45, 0.084));
+    // End portal crossbeams (sized cleanly between corner posts / castings with zero z-fighting)
     for (const sy of [-halfL + 0.08, halfL - 0.08]) {
-      bodyParts.push(zBox(t, W - 0.18, 0.10, 0.116, frameHex, 0, sy, H - 0.062));
-      bodyParts.push(zBox(t, W - 0.18, 0.10, 0.14, frameHex, 0, sy, 0.07));
+      bodyParts.push(zBox(t, spanBetweenPostsW, 0.10, 0.116, frameHex, 0, sy, H - 0.062));
+      bodyParts.push(zBox(t, W - 0.34, 0.10, 0.136, frameHex, 0, sy, 0.070));
     }
   } else if (variant === "flatRack") {
-    // 22P1 / 42P1 heavy steel I-beam deck + reinforced end bulkheads (no side walls/roof)
-    bodyParts.push(zBox(t, W - 0.08, L - 0.16, spec.floorZ - 0.02, 0x353b40, 0, 0, (spec.floorZ - 0.02) * 0.5));
+    // 22P1 / 42P1 heavy steel I-beam under-deck seated flush under timber planks (zero air gap / zero side-girder z-fight)
+    const underDeckH = deckBotZ - 0.002;
+    bodyParts.push(zBox(t, W - 0.16, L - 0.38, underDeckH, 0x353b40, 0, 0, 0.002 + underDeckH * 0.5));
     for (const sy of [-halfL + 0.09, halfL - 0.09]) {
-      bodyParts.push(zBox(t, W - 0.20, 0.12, wallH, baseHex, 0, sy, wallZ));
+      bodyParts.push(zBox(t, spanBetweenPostsW, 0.12, wallH, baseHex, 0, sy, wallZ));
     }
   } else {
     // Box variants: standard, reefer (22R1/45R1), dryBulk (22B0), openTop (22U1)
@@ -489,11 +501,17 @@ export function buildIsoContainer(three, typeOrWcid = CONTAINER_WCID.IsoContaine
       }
     }
     const frontY = halfL - wallThick / 2;
-    bodyParts.push(zBox(t, spec.internal.width, wallThick, wallH, baseHex, 0, frontY, wallZ));
+    bodyParts.push(zBox(t, spanBetweenPostsW, wallThick, wallH, baseHex, 0, frontY, wallZ));
     if (variant === "reefer") {
-      // Front +Y refrigeration machinery condenser/evaporator pack & bulkhead
-      const macY = halfL - 0.26;
-      bodyParts.push(zBox(t, 2.08, 0.44, wallH - 0.18, 0xced6de, 0, macY, wallZ));
+      // Front +Y insulated refrigeration machinery bay & bulkhead sealing cleanly to the front edge of the reefer floor deck
+      const stdIntL = is20Size
+        ? ISO_CONTAINER_SPECS[CONTAINER_WCID.IsoContainer20].internal.length
+        : ISO_CONTAINER_SPECS[CONTAINER_WCID.IsoContainer40].internal.length;
+      const reeferFloorFrontY = -0.5 * (stdIntL - spec.internal.length) + spec.internal.length * 0.5;
+      const macFrontY = halfL - wallThick;
+      const macDepth = Math.max(0.44, macFrontY - reeferFloorFrontY);
+      const macY = macFrontY - macDepth * 0.5;
+      bodyParts.push(zBox(t, W - 2 * wallThick - 0.004, macDepth, wallH, 0xced6de, 0, macY, wallZ));
       bodyParts.push(zBox(t, 1.56, 0.04, 0.72, 0x252a30, 0, halfL - 0.015, wallZ + 0.45));
       bodyParts.push(zBox(t, 1.48, 0.04, 0.52, 0x3b444d, 0, halfL - 0.015, wallZ - 0.45));
     } else {
@@ -511,25 +529,26 @@ export function buildIsoContainer(three, typeOrWcid = CONTAINER_WCID.IsoContaine
       }
     } else {
       const roofThick = 0.035;
-      bodyParts.push(zBox(t, W - 0.08, L - 0.10, roofThick, baseHex, 0, 0, spec.roofZ - 0.004 - roofThick / 2));
+      // Inset cleanly inside top rails/headers (W - 0.12 x L - 0.12) and recessed 2 mm below top rails (6 mm below castings)
+      bodyParts.push(zBox(t, W - 0.12, L - 0.12, roofThick, baseHex, 0, 0, spec.roofZ - 0.006 - roofThick / 2));
       if (variant === "dryBulk") {
-        // 22B0 3 roof circular loading hatches
+        // 22B0 3 roof circular loading hatches seated flush on recessed roof sheet
         for (const hy of [-1.65, 0, 1.65]) {
-          bodyParts.push(zCyl(t, 0.34, 0.08, 12, 0x2b3136, 0, hy, spec.roofZ + 0.036, { rx: Math.PI * 0.5 }));
+          bodyParts.push(zCyl(t, 0.34, 0.08, 12, 0x2b3136, 0, hy, spec.roofZ - 0.006 + 0.04, { rx: Math.PI * 0.5 }));
         }
       } else if (variant !== "reefer") {
         const roofRibs = is20Size ? 20 : 40;
         const roofStep = (L - 0.3) / roofRibs;
         for (let r = 0; r < roofRibs; r++) {
           const ry = -halfL + 0.15 + r * roofStep;
-          bodyParts.push(zBox(t, W - 0.14, 0.04, 0.012, ribColor, 0, ry, spec.roofZ + 0.002));
+          bodyParts.push(zBox(t, W - 0.14, 0.04, 0.006, ribColor, 0, ry, spec.roofZ - 0.004));
         }
       }
     }
   }
 
   // 1d. Structural Corner Posts (4 posts)
-  const postColor = new t.Color(baseHex).multiplyScalar(0.85).getHex();
+  const postColor = isTankVariant ? tankFrameHex : baseColor.clone().multiplyScalar(0.85).getHex();
   const postH = H - 0.118 * 2; // Spanning between top and bottom corner castings
   const postZ = H / 2;
   const postX = halfW - postW / 2;
@@ -540,15 +559,22 @@ export function buildIsoContainer(three, typeOrWcid = CONTAINER_WCID.IsoContaine
   bodyParts.push(zBox(t, postW, postW, postH, postColor, postX, postY, postZ));
 
   // 1e. Top and Bottom Side Longitudinal Rails & End Sills
-  const railColor = new t.Color(baseHex).multiplyScalar(0.80).getHex();
-  // Bottom side rails (heavy full-depth side girders on flat-racks)
-  bodyParts.push(zBox(t, 0.08, L - 0.20, sideRailH, railColor, -halfW + 0.04, 0, sideRailH / 2));
-  bodyParts.push(zBox(t, 0.08, L - 0.20, sideRailH, railColor, halfW - 0.04, 0, sideRailH / 2));
-  // Front bottom sill
-  const frontSillH = variant === "flatRack" ? spec.floorZ : railH;
-  bodyParts.push(zBox(t, W - 0.20, 0.08, frontSillH, railColor, 0, halfL - 0.04, frontSillH / 2));
-  // Rear door bottom sill (walkable threshold z=0.162m on boxes, deck sill on flat-racks)
-  bodyParts.push(zBox(t, W - 0.20, 0.08, spec.floorZ, railColor, 0, -halfL + 0.04, spec.floorZ / 2));
+  const railColor = isTankVariant ? tankFrameHex : baseColor.clone().multiplyScalar(0.80).getHex();
+  // Bottom side rails (spanning cleanly between corner posts; raised 2 mm off z=0 to prevent casting z-fight; full deck depth on flat-racks)
+  const sideRailDrawH = sideRailH - 0.002;
+  const sideRailDrawZ = 0.002 + sideRailDrawH * 0.5;
+  bodyParts.push(zBox(t, 0.08, wallL, sideRailDrawH, railColor, -halfW + 0.04, 0, sideRailDrawZ));
+  bodyParts.push(zBox(t, 0.08, wallL, sideRailDrawH, railColor, halfW - 0.04, 0, sideRailDrawZ));
+  if (!isTankVariant) {
+    // Front bottom sill (omitted on tanktainers which have dedicated portal bottom crossbeams)
+    const frontSillH = variant === "flatRack" ? deckTopZ : railH;
+    const frontSillDrawH = frontSillH - 0.002;
+    bodyParts.push(zBox(t, spanBetweenPostsW, 0.08, frontSillDrawH, railColor, 0, halfL - 0.04, 0.002 + frontSillDrawH * 0.5));
+    // Rear door bottom sill (walkable threshold z=0.162m on boxes, flush deck sill on flat-racks)
+    const rearSillH = variant === "flatRack" ? deckTopZ : spec.floorZ;
+    const rearSillDrawH = rearSillH - 0.002;
+    bodyParts.push(zBox(t, spanBetweenPostsW, 0.08, rearSillDrawH, railColor, 0, -halfL + 0.04, 0.002 + rearSillDrawH * 0.5));
+  }
 
   // Top side rails & roof/bulkhead end headers (recessed 4mm below ISO 1161 corner casting top; side rails omitted on flat-racks)
   const topRailDrawH = topRailH - 0.004;
@@ -557,15 +583,15 @@ export function buildIsoContainer(three, typeOrWcid = CONTAINER_WCID.IsoContaine
     bodyParts.push(zBox(t, 0.06, L - 0.38, topRailDrawH, railColor, -halfW + 0.03, 0, topRailZ));
     bodyParts.push(zBox(t, 0.06, L - 0.38, topRailDrawH, railColor, halfW - 0.03, 0, topRailZ));
     if (hasSideWalls) {
-      bodyParts.push(zBox(t, W - 0.20, 0.06, topRailDrawH, railColor, 0, halfL - 0.03, topRailZ));
+      bodyParts.push(zBox(t, spanBetweenPostsW, 0.06, topRailDrawH, railColor, 0, halfL - 0.03, topRailZ));
       const rearHeaderH = Math.max(topRailDrawH, H - 0.004 - (spec.floorZ + spec.door.height));
       const rearHeaderZ = H - 0.004 - rearHeaderH * 0.5;
-      bodyParts.push(zBox(t, W - 0.20, 0.06, rearHeaderH, railColor, 0, -halfL + 0.03, rearHeaderZ));
+      bodyParts.push(zBox(t, spanBetweenPostsW, 0.06, rearHeaderH, railColor, 0, -halfL + 0.03, rearHeaderZ));
     }
   } else {
-    // End-wall top headers capping both reinforced flat-rack bulkheads cleanly between corner castings
+    // End-wall top headers capping both reinforced flat-rack bulkheads cleanly between corner posts
     for (const sy of [-halfL + 0.09, halfL - 0.09]) {
-      bodyParts.push(zBox(t, W - 0.20, 0.12, topRailDrawH, railColor, 0, sy, topRailZ));
+      bodyParts.push(zBox(t, spanBetweenPostsW, 0.12, topRailDrawH, railColor, 0, sy, topRailZ));
     }
   }
 
@@ -623,9 +649,8 @@ export function buildIsoContainer(three, typeOrWcid = CONTAINER_WCID.IsoContaine
   // SUB-MESH 2: Walkable 28mm Marine Hardwood Floor Deck (z = 0.162m)
   // =========================================================================
   const floorParts = [];
-  const floorThick = 0.028;
-  if (variant === "tank" || variant === "gasTank") {
-    // Tanktainers have an open skeletal frame + rear valve drip tray instead of a full cargo deck
+  if (isTankVariant) {
+    // Tanktainers have an open skeletal frame + rear valve drip tray seated on rear subframe channel
     floorParts.push(zBox(t, 0.90, 0.65, floorThick, 0x353b40, 0, -halfL + 0.45, 0));
   } else {
     const plankCount = 18;
@@ -784,7 +809,7 @@ export function buildIsoContainer(three, typeOrWcid = CONTAINER_WCID.IsoContaine
       leftDoorParts.push(zBox(t, strapLen, 0.018, 0.055, camColor, strapLen / 2, extY - 0.009, hz));
     }
     leftDoorParts.push(zBox(t, doorW, 0.015, 0.025, gasketColor, leftCenterX, extY - 0.005, doorH / 2));
-    leftDoorParts.push(zBox(t, 0.35, 0.005, 0.22, cscPlateColor, leftCenterX, extY - 0.005, doorH * 0.35));
+    leftDoorParts.push(zBox(t, 0.35, 0.005, 0.22, cscPlateColor, leftCenterX, extY - 0.002, doorH * 0.35));
     const bar1X = leftCenterX - doorW * 0.20;
     const bar2X = leftCenterX + doorW * 0.22;
     leftDoorParts.push(zBox(t, 0.038, 0.038, doorH + 0.04, lockBarColor, bar1X, extY - 0.022, doorH / 2));
@@ -818,8 +843,8 @@ export function buildIsoContainer(three, typeOrWcid = CONTAINER_WCID.IsoContaine
       rightDoorParts.push(zBox(t, strapLen, 0.018, 0.055, camColor, -strapLen / 2, extY - 0.009, hz));
     }
     rightDoorParts.push(zBox(t, doorW, 0.015, 0.025, gasketColor, rightCenterX, extY - 0.005, doorH / 2));
-    rightDoorParts.push(zBox(t, 0.65, 0.005, 0.12, decalColor, rightCenterX, extY - 0.005, doorH * 0.85));
-    rightDoorParts.push(zBox(t, 0.30, 0.005, 0.08, decalColor, rightCenterX, extY - 0.005, doorH * 0.70));
+    rightDoorParts.push(zBox(t, 0.65, 0.005, 0.12, decalColor, rightCenterX, extY - 0.002, doorH * 0.85));
+    rightDoorParts.push(zBox(t, 0.30, 0.005, 0.08, decalColor, rightCenterX, extY - 0.002, doorH * 0.70));
     rightDoorParts.push(zBox(t, 0.035, 0.016, doorH, 0x1f2226, rightCenterX - doorW / 2 + 0.015, extY - 0.008, doorH / 2));
     const rBar1X = rightCenterX - doorW * 0.22;
     const rBar2X = rightCenterX + doorW * 0.20;
@@ -900,13 +925,13 @@ export function buildIsoContainer(three, typeOrWcid = CONTAINER_WCID.IsoContaine
     markingsParts.push(zBox(t, 0.020, 1.10, 0.14, decalColor, -(tankR - 0.004), halfL - 1.20, tankZ));
   }
 
-  // 7d. Yellow/Black High-Cube 9'6" / 2.9m Corner Hazard Chevrons (Strictly on 40HC outer corner posts)
+  // 7d. Yellow/Black High-Cube / Hazmat Corner Hazard Chevrons (seated cleanly on upper corner posts below top castings)
   if (spec.hasHazardChevrons) {
-    const chevH = 0.30;
+    const chevH = 0.24;
     const chevW = 0.08;
     const chevL = 0.15;
-    const topCornerZ = H - chevH / 2;
-    // 4 top corner hazard bands (alternating yellow/black, strictly |x| >= spec.door.width / 2 - 0.05)
+    const topCornerZ = H - 0.120 - chevH / 2;
+    // 4 upper corner post hazard bands (alternating yellow/black, strictly |x| >= spec.door.width / 2 - 0.05)
     for (const [cx, cy] of [[-halfW + chevW / 2, -halfL + chevL / 2], [halfW - chevW / 2, -halfL + chevL / 2], [-halfW + chevW / 2, halfL - chevL / 2], [halfW - chevW / 2, halfL - chevL / 2]]) {
       markingsParts.push(zBox(t, chevW + 0.004, chevL + 0.004, chevH * 0.5, chevronYellow, cx, cy, topCornerZ + chevH * 0.25));
       markingsParts.push(zBox(t, chevW + 0.004, chevL + 0.004, chevH * 0.5, decalBlack, cx, cy, topCornerZ - chevH * 0.25));

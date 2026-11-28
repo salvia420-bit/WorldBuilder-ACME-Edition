@@ -56,7 +56,7 @@ import { buildPortQuay } from "./port_quay_model.js";
 import { buildStsCrane } from "./port_sts_crane_model.js";
 import { buildYardCrane, createContainerStackPool } from "./port_yard_crane_model.js";
 import { buildPortShuttle } from "./port_shuttle_model.js";
-import { buildIsoContainer } from "./container_models.js";
+import { buildIsoContainer, ISO_CONTAINER_SPECS } from "./container_models.js";
 import {
   GeomAcc,
   makeLinearPalette,
@@ -440,12 +440,20 @@ export function createPortTerminalManager(deps = {}) {
     const spec = resolvePortContainerSpec(kind);
     let model = null;
     if (THREE && worldRootOf()) {
-      model = buildIsoContainer(THREE, spec.wcid, {
+      const containerOpts = {
         csmState: csmStateOf(),
-        liveryId: state.liveryId ?? 0,
         serialNumber: state.serialNumber ?? 0,
         doorProgress: state.doorProgress ?? 1.0,
-      });
+      };
+      if (state.livery !== undefined) containerOpts.livery = state.livery;
+      else if (state.liveryKey !== undefined) containerOpts.liveryKey = state.liveryKey;
+      else if (
+        state.liveryId !== undefined &&
+        (state.liveryId !== 0 || !ISO_CONTAINER_SPECS[spec.wcid]?.defaultLiveryHex)
+      ) {
+        containerOpts.liveryId = state.liveryId;
+      }
+      model = buildIsoContainer(THREE, spec.wcid, containerOpts);
       model.root.position.set(pos[0], pos[1], pos[2]);
       model.root.rotation.z = -heading;
       if (Array.isArray(state.slots) && state.slots.length > 0) {

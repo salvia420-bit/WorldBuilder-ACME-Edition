@@ -477,5 +477,53 @@ await check("WIRE_04 Malformed S2C payloads (tariffBuyMul: 'bad'/NaN) & null/und
   }
 });
 
+await check("WIRE_09 Specialized container_state liveryId=0 preserves defaultLiveryHex, explicit overrides apply & spawnLocal normalizes collider kind", () => {
+  const rig = makeRig();
+  try {
+    // 1. Live ACE wire container_state sends byte LiveryId=0 by default: specialized containers keep their authentic defaultLiveryHex
+    rig.inbox.push(
+      { type: "container_state", containerGuid: 0x71000001, containerKind: 30, liveryId: 0, position: [10, 10, 0], heading: 0, cell: 0, doorState: 0, doorProgress: 0, serialNumber: 1, slots: [] },
+      { type: "container_state", containerGuid: 0x71000002, containerKind: 36, liveryId: 0, position: [20, 10, 0], heading: 0, cell: 0, doorState: 0, doorProgress: 0, serialNumber: 2, slots: [] },
+      { type: "container_state", containerGuid: 0x71000003, containerKind: 30, liveryId: 1, position: [30, 10, 0], heading: 0, cell: 0, doorState: 0, doorProgress: 0, serialNumber: 3, slots: [] },
+      { type: "container_state", containerGuid: 0x71000004, containerKind: 10, liveryId: 0, position: [40, 10, 0], heading: 0, cell: 0, doorState: 0, doorProgress: 0, serialNumber: 4, slots: [] },
+    );
+    rig.tick();
+
+    const reeferDefault = rig.api.containers.get(0x71000001);
+    const flatRackDefault = rig.api.containers.get(0x71000002);
+    const reeferRed = rig.api.containers.get(0x71000003);
+    const stdBlue = rig.api.containers.get(0x71000004);
+    assert.ok(reeferDefault && flatRackDefault && reeferRed && stdBlue, "All 4 wire containers instantiated");
+
+    // 22R1 default is light white (0xe6ebf0 -> dark decals r < 0.15)
+    const r0MarkCol = reeferDefault.model.root.getObjectByName("container-markings").geometry.getAttribute("color");
+    assert.ok(r0MarkCol.getX(0) < 0.15, `Wire 22R1 with liveryId=0 keeps default white livery (dark decal r=${r0MarkCol.getX(0).toFixed(3)})`);
+    assert.equal(reeferDefault.model.root.userData.livery, "ISO 22R1 Default");
+
+    // 22P1 default is corten oxide (0x854326)
+    assert.equal(flatRackDefault.model.root.userData.livery, "ISO 22P1 Default");
+
+    // Explicit non-zero wire liveryId=1 overrides specialized container to Corten Oxide Red
+    assert.equal(reeferRed.model.root.userData.livery, "Corten Oxide Red");
+    const r1MarkCol = reeferRed.model.root.getObjectByName("container-markings").geometry.getAttribute("color");
+    assert.ok(r1MarkCol.getX(0) > 0.70, `Wire 22R1 with explicit liveryId=1 uses light decals (r=${r1MarkCol.getX(0).toFixed(3)})`);
+
+    // Standard 20ft container with liveryId=0 stays Maritime Blue
+    assert.equal(stdBlue.model.root.userData.livery, "Maritime Blue");
+
+    // 2. spawnLocal honors explicit { livery: 0 } override AND passes normalized kind (11, not raw WCID 4000021) to upsertContainerCollider
+    const forcedBlue = rig.api.containers.spawnLocal(0x71000005, 4000060, [50, 10, 0], 0, { livery: 0 });
+    assert.equal(forcedBlue.model.root.userData.livery, "Maritime Blue");
+
+    rig.calls.colliders.length = 0;
+    rig.api.containers.spawnLocal(0x71000006, 4000021, [60, 10, 0], 0);
+    assert.ok(rig.calls.colliders.length >= 1, "spawnLocal invoked upsertContainerCollider");
+    const lastCol = rig.calls.colliders[rig.calls.colliders.length - 1];
+    assert.equal(lastCol[6], 11, `spawnLocal(4000021) must pass normalized kind 11 to collider, got ${lastCol[6]}`);
+  } finally {
+    rig.api.dispose();
+  }
+});
+
 console.log(`\nvehicle_economy_hud_wire: ${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

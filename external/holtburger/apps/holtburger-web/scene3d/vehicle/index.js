@@ -695,8 +695,13 @@ export function installVehicles(deps = {}) {
         doorProgress: initProgress,
       };
       if (initialMsg.livery !== undefined) containerOpts.livery = initialMsg.livery;
-      else if (initialMsg.liveryId !== undefined) containerOpts.liveryId = initialMsg.liveryId;
       else if (initialMsg.liveryKey !== undefined) containerOpts.liveryKey = initialMsg.liveryKey;
+      else if (
+        initialMsg.liveryId !== undefined &&
+        (initialMsg.liveryId !== 0 || !ISO_CONTAINER_SPECS[wcid]?.defaultLiveryHex)
+      ) {
+        containerOpts.liveryId = initialMsg.liveryId;
+      }
       const model = buildIsoContainer(THREE, wcid, containerOpts);
       live.worldRoot.add(model.root);
       const rawPos = Array.isArray(initialMsg.position)
@@ -5010,7 +5015,7 @@ export function installVehicles(deps = {}) {
         }
         const doorOpen = entry.currentDoorProgress >= 0.5;
         try {
-          sh()?.upsertContainerCollider(guid >>> 0, 0, worldPos[0], worldPos[1], worldPos[2], heading, kind, doorOpen);
+          sh()?.upsertContainerCollider(guid >>> 0, 0, worldPos[0], worldPos[1], worldPos[2], heading, entry.kind, doorOpen);
         } catch (_) {}
         try { requestShadowRaster(live.renderer, live); } catch (_) {}
         return entry;
