@@ -26,6 +26,7 @@ import {
 } from "../scene3d/vehicle/economy_specs.js";
 import {
   buildIsoContainer,
+  CONTAINER_WCID,
   ISO_CONTAINER_SPECS,
   CONTAINER_SLOTS_REEFER_20,
   CONTAINER_SLOTS_REEFER_40,
@@ -325,6 +326,137 @@ await check("ECON_07 Flat-rack cargoBayGroup stays visible at doorProgress=0 & R
     }
     cont.dispose();
   }
+});
+
+await check("ECON_08 All 11 ISO containers have zero floating decals, flush wall/door-header seals & readable contrast markings", () => {
+  const closestPt = new THREE.Vector3();
+  function extractTris(mesh) {
+    const pos = mesh.geometry.getAttribute("position");
+    const tris = [];
+    for (let i = 0; i < pos.count; i += 3) {
+      tris.push(
+        new THREE.Triangle(
+          new THREE.Vector3(pos.getX(i), pos.getY(i), pos.getZ(i)),
+          new THREE.Vector3(pos.getX(i + 1), pos.getY(i + 1), pos.getZ(i + 1)),
+          new THREE.Vector3(pos.getX(i + 2), pos.getY(i + 2), pos.getZ(i + 2)),
+        ),
+      );
+    }
+    return tris;
+  }
+
+  for (const wcid of Object.values(CONTAINER_WCID)) {
+    const cont = buildIsoContainer(THREE, wcid, { doorProgress: 0 });
+    const spec = cont.spec;
+    const variant = spec.variant || "box";
+    const halfL = spec.external.length * 0.5;
+    const H = spec.external.height;
+    const bodyMesh = cont.root.getObjectByName("container-body");
+    const castingsMesh = cont.root.getObjectByName("container-corner-castings");
+    const markingsMesh = cont.root.getObjectByName("container-markings");
+    assert.ok(bodyMesh && castingsMesh && markingsMesh, `${wcid} has body, castings & markings meshes`);
+
+    // 1. Every marking box in container-markings must rest solidly on body/castings (zero floating decals)
+    const supportTris = [...extractTris(bodyMesh), ...extractTris(castingsMesh)];
+    const mPos = markingsMesh.geometry.getAttribute("position");
+    assert.ok(mPos.count > 0 && mPos.count % 36 === 0, `${wcid} markings geometry consists of whole boxes`);
+    for (let b = 0; b < mPos.count; b += 36) {
+      let minVertDist = Infinity;
+      let maxVertDist = 0;
+      for (let i = b; i < b + 36; i++) {
+        const p = new THREE.Vector3(mPos.getX(i), mPos.getY(i), mPos.getZ(i));
+        let dMin = Infinity;
+        for (const tri of supportTris) {
+          tri.closestPointToPoint(p, closestPt);
+          const d = p.distanceTo(closestPt);
+          if (d < dMin) dMin = d;
+        }
+        if (dMin < minVertDist) minVertDist = dMin;
+        if (dMin > maxVertDist) maxVertDist = dMin;
+      }
+      assert.ok(
+        minVertDist <= 0.006 && maxVertDist <= 0.025,
+        `${wcid} (${variant}) marking box #${b / 36} floating: minDist=${minVertDist.toFixed(4)}m maxDist=${maxVertDist.toFixed(4)}m`,
+      );
+    }
+
+    // 2. Flat-rack (22P1/42P1): zero markings in open side air above deck, end bulkheads capped flush with top castings
+    if (variant === "flatRack") {
+      for (let i = 0; i < mPos.count; i++) {
+        const y = mPos.getY(i);
+        const z = mPos.getZ(i);
+        assert.ok(
+          !(z > spec.floorZ && Math.abs(y) < halfL - 0.16),
+          `${wcid} flatRack marking vertex (${mPos.getX(i).toFixed(3)}, ${y.toFixed(3)}, ${z.toFixed(3)}) must not float in open side air`,
+        );
+      }
+      const bodyBox = new THREE.Box3().setFromObject(bodyMesh);
+      assert.ok(bodyBox.max.z >= H - 0.01, `${wcid} flatRack end headers reach top casting level (${bodyBox.max.z.toFixed(3)} vs ${H})`);
+    }
+
+    // 3. Tanktainers (22T1/22K2): zero markings floating in open side air outboard of cylindrical tank shell
+    if (variant === "tank" || variant === "gasTank") {
+      const tankR = variant === "gasTank" ? 0.96 : 1.02;
+      for (let i = 0; i < mPos.count; i++) {
+        const x = mPos.getX(i);
+        const y = mPos.getY(i);
+        const z = mPos.getZ(i);
+        assert.ok(
+          !(Math.abs(x) > tankR + 0.02 && Math.abs(y) < halfL - 0.16 && z > 0.16 && z < H - 0.30),
+          `${wcid} ${variant} marking vertex (${x.toFixed(3)}, ${y.toFixed(3)}, ${z.toFixed(3)}) must not float outboard of tank`,
+        );
+      }
+    }
+
+    // 4. Box-walled variants (incl. 22R1/45R1 reefers): side walls seal cleanly to top rail & rear header seals to closed door top
+    if (variant !== "flatRack" && variant !== "tank" && variant !== "gasTank") {
+      const bPos = bodyMesh.geometry.getAttribute("position");
+      const halfW = spec.external.width * 0.5;
+      let sideWallMaxZ = 0;
+      let rearHeaderMinZ = Infinity;
+      for (let i = 0; i < bPos.count; i += 3) {
+        const xs = [bPos.getX(i), bPos.getX(i + 1), bPos.getX(i + 2)];
+        const ys = [bPos.getY(i), bPos.getY(i + 1), bPos.getY(i + 2)];
+        const zs = [bPos.getZ(i), bPos.getZ(i + 1), bPos.getZ(i + 2)];
+        const minY = Math.min(...ys);
+        const maxY = Math.max(...ys);
+        const minZ = Math.min(...zs);
+        const maxZ = Math.max(...zs);
+        // Side wall outer face triangle spanning mid-length (y = 0) below top side rail (z < H - 0.055)
+        if (xs.every((x) => Math.abs(Math.abs(x) - halfW) < 0.005) && minY < 0 && maxY > 0 && minZ < 1.0 && maxZ < H - 0.055) {
+          if (maxZ > sideWallMaxZ) sideWallMaxZ = maxZ;
+        }
+        // Rear door header triangle spanning door center (x = 0) at rear end (y < -halfL + 0.07)
+        const minX = Math.min(...xs);
+        const maxX = Math.max(...xs);
+        if (ys.every((y) => y < -halfL + 0.07) && minX < 0 && maxX > 0 && maxZ > H - 0.02) {
+          if (minZ < rearHeaderMinZ) rearHeaderMinZ = minZ;
+        }
+      }
+      assert.ok(
+        sideWallMaxZ >= H - 0.065,
+        `${wcid} (${variant}) exterior side wall top (${sideWallMaxZ.toFixed(3)}m) must meet top side rail (${(H - 0.060).toFixed(3)}m)`,
+      );
+      const doorTopZ = spec.floorZ + spec.door.height;
+      assert.ok(
+        rearHeaderMinZ <= doorTopZ + 0.005,
+        `${wcid} (${variant}) rear header bottom (${rearHeaderMinZ.toFixed(3)}m) must seal to closed door top (${doorTopZ.toFixed(3)}m)`,
+      );
+    }
+
+    cont.dispose();
+  }
+
+  // 5. Contrast check: white default reefer emits dark markings, dark explicit livery emits white markings
+  const whiteReefer = buildIsoContainer(THREE, 4000060, { doorProgress: 0 });
+  const wCol = whiteReefer.root.getObjectByName("container-markings").geometry.getAttribute("color");
+  assert.ok(wCol.getX(0) < 0.15, `Default white 22R1 reefer uses dark BIC decals (got r=${wCol.getX(0).toFixed(3)})`);
+  whiteReefer.dispose();
+
+  const blueReefer = buildIsoContainer(THREE, 4000060, { liveryId: 0, doorProgress: 0 });
+  const bCol = blueReefer.root.getObjectByName("container-markings").geometry.getAttribute("color");
+  assert.ok(bCol.getX(0) > 0.70, `Dark maritimeBlue 22R1 reefer uses light BIC decals (got r=${bCol.getX(0).toFixed(3)})`);
+  blueReefer.dispose();
 });
 
 console.log(`\nvehicle_economy_models: ${passed} passed, ${failed} failed`);

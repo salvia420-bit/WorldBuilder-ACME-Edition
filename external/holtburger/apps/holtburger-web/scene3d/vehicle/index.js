@@ -689,12 +689,15 @@ export function installVehicles(deps = {}) {
       const initProgress = Number.isFinite(initialMsg.doorProgress)
         ? initialMsg.doorProgress
         : (initialMsg.doorState === 2 ? 1.0 : 0.0);
-      const model = buildIsoContainer(THREE, wcid, {
+      const containerOpts = {
         csmState: live.csmState,
-        liveryId: initialMsg.liveryId ?? 0,
         serialNumber: initialMsg.serialNumber ?? 0,
         doorProgress: initProgress,
-      });
+      };
+      if (initialMsg.livery !== undefined) containerOpts.livery = initialMsg.livery;
+      else if (initialMsg.liveryId !== undefined) containerOpts.liveryId = initialMsg.liveryId;
+      else if (initialMsg.liveryKey !== undefined) containerOpts.liveryKey = initialMsg.liveryKey;
+      const model = buildIsoContainer(THREE, wcid, containerOpts);
       live.worldRoot.add(model.root);
       const rawPos = Array.isArray(initialMsg.position)
         ? initialMsg.position

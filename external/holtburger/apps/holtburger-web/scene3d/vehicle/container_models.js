@@ -427,42 +427,53 @@ export function buildIsoContainer(three, typeOrWcid = CONTAINER_WCID.IsoContaine
   const railH = 0.140;     // Bottom side rail height
   const topRailH = 0.060;  // Top side rail height
   const postW = 0.150;     // Corner post width
-  const wallZ = spec.floorZ + spec.internal.height / 2;
-  const wallH = spec.internal.height;
+  const hasSideWalls = variant !== "flatRack" && variant !== "tank" && variant !== "gasTank";
+  const sideRailH = variant === "flatRack" ? (spec.floorZ - 0.02) : railH;
+  const extWallBot = variant === "flatRack" ? spec.floorZ : railH;
+  const extWallTop = H - topRailH;
+  const wallH = extWallTop - extWallBot;
+  const wallZ = (extWallBot + extWallTop) * 0.5;
   const wallL = L - 0.16;
-  const ribColor = new t.Color(baseHex).multiplyScalar(0.92).getHex();
+  const baseColor = new t.Color(baseHex);
+  const baseLuminance = 0.2126 * baseColor.r + 0.7152 * baseColor.g + 0.0722 * baseColor.b;
+  const ribColor = baseColor.clone().multiplyScalar(0.92).getHex();
+  const tankR = variant === "gasTank" ? 0.96 : 1.02;
+  const tankZ = H * 0.52;
 
   if (variant === "tank" || variant === "gasTank") {
     // ISO 1496-3 skeletal frame + cylindrical tank + saddle cradles + walkway
     const frameHex = variant === "gasTank" ? 0x2c363e : 0x2f4354;
     const tankLen = L - 0.55;
-    const tankR = variant === "gasTank" ? 0.96 : 1.02;
-    const tankZ = H * 0.52;
     bodyParts.push(zCyl(t, tankR, tankLen, 20, baseHex, 0, 0, tankZ));
     // End dome caps & top manway / relief valve housing
     bodyParts.push(zCyl(t, tankR * 0.72, 0.16, 16, baseHex, 0, tankLen * 0.5 + 0.08, tankZ));
     bodyParts.push(zCyl(t, tankR * 0.72, 0.16, 16, baseHex, 0, -tankLen * 0.5 - 0.08, tankZ));
     bodyParts.push(zCyl(t, 0.28, 0.16, 12, 0x7e8790, 0, 0.6, tankZ + tankR + 0.05, { rx: Math.PI * 0.5 }));
     if (variant === "gasTank") {
-      // Sunshield upper canopy + dual relief manifold
+      // Sunshield upper canopy + standoff mounting struts + dual relief manifold
       bodyParts.push(zBox(t, 1.50, tankLen * 0.85, 0.03, 0xf2f4f6, 0, 0, H - 0.06));
+      for (const sx of [-0.55, 0.55]) {
+        for (const sy of [-1.8, 1.8]) {
+          bodyParts.push(zBox(t, 0.05, 0.05, 0.42, frameHex, sx, sy, 2.32));
+        }
+      }
       bodyParts.push(zCyl(t, 0.18, 0.22, 10, 0xd99b18, 0, -0.7, tankZ + tankR + 0.06, { rx: Math.PI * 0.5 }));
     }
-    // Top inspection walkway
-    bodyParts.push(zBox(t, 0.42, L - 0.40, 0.025, 0x565c62, -0.35, 0, H - 0.09));
+    // Top inspection walkway spanning cleanly onto both end portal headers
+    bodyParts.push(zBox(t, 0.42, L - 0.16, 0.025, 0x565c62, -0.35, 0, H - 0.09));
     // End portal frames & saddle cradles
     for (const sy of [-1.8, 1.8]) {
       bodyParts.push(zBox(t, 1.70, 0.16, 0.55, frameHex, 0, sy, 0.44));
     }
     for (const sy of [-halfL + 0.08, halfL - 0.08]) {
-      bodyParts.push(zBox(t, W - 0.18, 0.10, 0.12, frameHex, 0, sy, H - 0.06));
+      bodyParts.push(zBox(t, W - 0.18, 0.10, 0.116, frameHex, 0, sy, H - 0.062));
       bodyParts.push(zBox(t, W - 0.18, 0.10, 0.14, frameHex, 0, sy, 0.07));
     }
   } else if (variant === "flatRack") {
     // 22P1 / 42P1 heavy steel I-beam deck + reinforced end bulkheads (no side walls/roof)
     bodyParts.push(zBox(t, W - 0.08, L - 0.16, spec.floorZ - 0.02, 0x353b40, 0, 0, (spec.floorZ - 0.02) * 0.5));
     for (const sy of [-halfL + 0.09, halfL - 0.09]) {
-      bodyParts.push(zBox(t, W - 0.20, 0.12, wallH, baseHex, 0, sy, spec.floorZ + wallH * 0.5));
+      bodyParts.push(zBox(t, W - 0.20, 0.12, wallH, baseHex, 0, sy, wallZ));
     }
   } else {
     // Box variants: standard, reefer (22R1/45R1), dryBulk (22B0), openTop (22U1)
@@ -483,8 +494,8 @@ export function buildIsoContainer(three, typeOrWcid = CONTAINER_WCID.IsoContaine
       // Front +Y refrigeration machinery condenser/evaporator pack & bulkhead
       const macY = halfL - 0.26;
       bodyParts.push(zBox(t, 2.08, 0.44, wallH - 0.18, 0xced6de, 0, macY, wallZ));
-      bodyParts.push(zBox(t, 1.56, 0.04, 0.72, 0x252a30, 0, halfL - 0.02, wallZ + 0.45));
-      bodyParts.push(zBox(t, 1.48, 0.04, 0.52, 0x3b444d, 0, halfL - 0.02, wallZ - 0.45));
+      bodyParts.push(zBox(t, 1.56, 0.04, 0.72, 0x252a30, 0, halfL - 0.015, wallZ + 0.45));
+      bodyParts.push(zBox(t, 1.48, 0.04, 0.52, 0x3b444d, 0, halfL - 0.015, wallZ - 0.45));
     } else {
       for (let j = -3; j <= 3; j++) {
         bodyParts.push(zBox(t, 0.04, 0.015, wallH - 0.05, ribColor, j * 0.28, frontY - 0.02, wallZ));
@@ -492,26 +503,26 @@ export function buildIsoContainer(three, typeOrWcid = CONTAINER_WCID.IsoContaine
     }
 
     if (variant === "openTop") {
-      // 22U1 removable transverse tarpaulin bows instead of solid roof
+      // 22U1 removable transverse tarpaulin bows seated into top side rails
       const bowCount = 6;
       for (let b = 0; b < bowCount; b++) {
         const by = -halfL + 0.65 + b * ((L - 1.3) / (bowCount - 1));
-        bodyParts.push(zBox(t, W - 0.16, 0.045, 0.035, 0x7e8891, 0, by, spec.roofZ - 0.04));
+        bodyParts.push(zBox(t, W - 0.08, 0.045, 0.035, 0x7e8891, 0, by, spec.roofZ - 0.04));
       }
     } else {
       const roofThick = 0.035;
-      bodyParts.push(zBox(t, W - 0.08, L - 0.10, roofThick, baseHex, 0, 0, spec.roofZ - roofThick / 2));
+      bodyParts.push(zBox(t, W - 0.08, L - 0.10, roofThick, baseHex, 0, 0, spec.roofZ - 0.004 - roofThick / 2));
       if (variant === "dryBulk") {
         // 22B0 3 roof circular loading hatches
         for (const hy of [-1.65, 0, 1.65]) {
-          bodyParts.push(zCyl(t, 0.34, 0.08, 12, 0x2b3136, 0, hy, spec.roofZ + 0.04, { rx: Math.PI * 0.5 }));
+          bodyParts.push(zCyl(t, 0.34, 0.08, 12, 0x2b3136, 0, hy, spec.roofZ + 0.036, { rx: Math.PI * 0.5 }));
         }
       } else if (variant !== "reefer") {
         const roofRibs = is20Size ? 20 : 40;
         const roofStep = (L - 0.3) / roofRibs;
         for (let r = 0; r < roofRibs; r++) {
           const ry = -halfL + 0.15 + r * roofStep;
-          bodyParts.push(zBox(t, W - 0.14, 0.04, 0.012, ribColor, 0, ry, spec.roofZ + 0.006));
+          bodyParts.push(zBox(t, W - 0.14, 0.04, 0.012, ribColor, 0, ry, spec.roofZ + 0.002));
         }
       }
     }
@@ -530,21 +541,32 @@ export function buildIsoContainer(three, typeOrWcid = CONTAINER_WCID.IsoContaine
 
   // 1e. Top and Bottom Side Longitudinal Rails & End Sills
   const railColor = new t.Color(baseHex).multiplyScalar(0.80).getHex();
-  // Bottom side rails
-  bodyParts.push(zBox(t, 0.08, L - 0.20, railH, railColor, -halfW + 0.04, 0, railH / 2));
-  bodyParts.push(zBox(t, 0.08, L - 0.20, railH, railColor, halfW - 0.04, 0, railH / 2));
+  // Bottom side rails (heavy full-depth side girders on flat-racks)
+  bodyParts.push(zBox(t, 0.08, L - 0.20, sideRailH, railColor, -halfW + 0.04, 0, sideRailH / 2));
+  bodyParts.push(zBox(t, 0.08, L - 0.20, sideRailH, railColor, halfW - 0.04, 0, sideRailH / 2));
   // Front bottom sill
-  bodyParts.push(zBox(t, W - 0.20, 0.08, railH, railColor, 0, halfL - 0.04, railH / 2));
-  // Rear door bottom sill (walkable threshold z=0.162m)
+  const frontSillH = variant === "flatRack" ? spec.floorZ : railH;
+  bodyParts.push(zBox(t, W - 0.20, 0.08, frontSillH, railColor, 0, halfL - 0.04, frontSillH / 2));
+  // Rear door bottom sill (walkable threshold z=0.162m on boxes, deck sill on flat-racks)
   bodyParts.push(zBox(t, W - 0.20, 0.08, spec.floorZ, railColor, 0, -halfL + 0.04, spec.floorZ / 2));
 
-  // Top side rails & roof end headers (omitted on flat-rack sides)
-  const topRailZ = H - topRailH / 2;
+  // Top side rails & roof/bulkhead end headers (recessed 4mm below ISO 1161 corner casting top; side rails omitted on flat-racks)
+  const topRailDrawH = topRailH - 0.004;
+  const topRailZ = H - topRailH + topRailDrawH * 0.5;
   if (variant !== "flatRack") {
-    bodyParts.push(zBox(t, 0.06, L - 0.20, topRailH, railColor, -halfW + 0.03, 0, topRailZ));
-    bodyParts.push(zBox(t, 0.06, L - 0.20, topRailH, railColor, halfW - 0.03, 0, topRailZ));
-    bodyParts.push(zBox(t, W - 0.20, 0.06, topRailH, railColor, 0, halfL - 0.03, topRailZ));
-    bodyParts.push(zBox(t, W - 0.20, 0.06, topRailH, railColor, 0, -halfL + 0.03, topRailZ));
+    bodyParts.push(zBox(t, 0.06, L - 0.38, topRailDrawH, railColor, -halfW + 0.03, 0, topRailZ));
+    bodyParts.push(zBox(t, 0.06, L - 0.38, topRailDrawH, railColor, halfW - 0.03, 0, topRailZ));
+    if (hasSideWalls) {
+      bodyParts.push(zBox(t, W - 0.20, 0.06, topRailDrawH, railColor, 0, halfL - 0.03, topRailZ));
+      const rearHeaderH = Math.max(topRailDrawH, H - 0.004 - (spec.floorZ + spec.door.height));
+      const rearHeaderZ = H - 0.004 - rearHeaderH * 0.5;
+      bodyParts.push(zBox(t, W - 0.20, 0.06, rearHeaderH, railColor, 0, -halfL + 0.03, rearHeaderZ));
+    }
+  } else {
+    // End-wall top headers capping both reinforced flat-rack bulkheads cleanly between corner castings
+    for (const sy of [-halfL + 0.09, halfL - 0.09]) {
+      bodyParts.push(zBox(t, W - 0.20, 0.12, topRailDrawH, railColor, 0, sy, topRailZ));
+    }
   }
 
   // 1f. ISO 1496-1 Forklift Pockets (Strictly on 20ft container only)
@@ -730,8 +752,9 @@ export function buildIsoContainer(three, typeOrWcid = CONTAINER_WCID.IsoContaine
   const gasketColor = 0x1b1c1e; // EPDM rubber weather gasket
   const cscPlateColor = 0xc0c4c8;
   const decalWhite = 0xededed;
+  const decalColor = baseLuminance > 0.55 ? 0x1e242b : decalWhite;
 
-  const hasCargoDoors = variant !== "flatRack" && variant !== "tank" && variant !== "gasTank";
+  const hasCargoDoors = hasSideWalls;
   const pivotOutX = 0.052;
   const pivotX = halfW + pivotOutX;
   const panelY = doorThick / 2;
@@ -795,8 +818,8 @@ export function buildIsoContainer(three, typeOrWcid = CONTAINER_WCID.IsoContaine
       rightDoorParts.push(zBox(t, strapLen, 0.018, 0.055, camColor, -strapLen / 2, extY - 0.009, hz));
     }
     rightDoorParts.push(zBox(t, doorW, 0.015, 0.025, gasketColor, rightCenterX, extY - 0.005, doorH / 2));
-    rightDoorParts.push(zBox(t, 0.65, 0.005, 0.12, decalWhite, rightCenterX, extY - 0.005, doorH * 0.85));
-    rightDoorParts.push(zBox(t, 0.30, 0.005, 0.08, decalWhite, rightCenterX, extY - 0.005, doorH * 0.70));
+    rightDoorParts.push(zBox(t, 0.65, 0.005, 0.12, decalColor, rightCenterX, extY - 0.005, doorH * 0.85));
+    rightDoorParts.push(zBox(t, 0.30, 0.005, 0.08, decalColor, rightCenterX, extY - 0.005, doorH * 0.70));
     rightDoorParts.push(zBox(t, 0.035, 0.016, doorH, 0x1f2226, rightCenterX - doorW / 2 + 0.015, extY - 0.008, doorH / 2));
     const rBar1X = rightCenterX - doorW * 0.22;
     const rBar2X = rightCenterX + doorW * 0.20;
@@ -853,15 +876,29 @@ export function buildIsoContainer(three, typeOrWcid = CONTAINER_WCID.IsoContaine
   }
 
   // =========================================================================
-  // SUB-MESH 7: Markings, Exterior Side BIC Decals & 40HC Hazard Chevrons
+  // SUB-MESH 7: Markings, Exterior BIC Decals & High-Cube/Hazmat Chevrons
   // =========================================================================
   const markingsParts = [];
   const decalBlack = 0x181818;
   const chevronYellow = 0xf5b000;
 
-  // 7c. Exterior Side BIC Decals
-  markingsParts.push(zBox(t, 0.005, 1.20, 0.16, decalWhite, halfW + 0.002, halfL - 1.20, spec.roofZ - 0.40));
-  markingsParts.push(zBox(t, 0.005, 1.20, 0.16, decalWhite, -halfW - 0.002, halfL - 1.20, spec.roofZ - 0.40));
+  // 7c. Exterior ISO 6346 BIC Decals — mounted on real structural surfaces per variant (zero floating plates)
+  if (hasSideWalls) {
+    // Box-walled variants (22G1, 42G1, 45G1, 22R1, 45R1, 22B0, 22U1): upper exterior side walls
+    markingsParts.push(zBox(t, 0.005, 1.20, 0.16, decalColor, halfW + 0.002, halfL - 1.20, spec.roofZ - 0.40));
+    markingsParts.push(zBox(t, 0.005, 1.20, 0.16, decalColor, -halfW - 0.002, halfL - 1.20, spec.roofZ - 0.40));
+  } else if (variant === "flatRack") {
+    // 22P1 / 42P1 Flat-Racks have no side walls or roof: mount BIC stencils on the heavy bottom side rails
+    // and exterior faces of both reinforced end bulkheads per ISO 6346 §6.2.
+    markingsParts.push(zBox(t, 0.005, 1.10, 0.10, decalColor, halfW + 0.002, halfL - 1.20, sideRailH * 0.5));
+    markingsParts.push(zBox(t, 0.005, 1.10, 0.10, decalColor, -halfW - 0.002, halfL - 1.20, sideRailH * 0.5));
+    markingsParts.push(zBox(t, 0.65, 0.005, 0.12, decalColor, -0.55, halfL - 0.03 + 0.002, spec.roofZ - 0.40));
+    markingsParts.push(zBox(t, 0.65, 0.005, 0.12, decalColor, +0.55, -(halfL - 0.03) - 0.002, spec.roofZ - 0.40));
+  } else if (variant === "tank" || variant === "gasTank") {
+    // 22T1 / 22K2 Tanktainers have open skeletal frames: mount BIC stencils flush onto cylindrical shell sides.
+    markingsParts.push(zBox(t, 0.020, 1.10, 0.14, decalColor, tankR - 0.004, halfL - 1.20, tankZ));
+    markingsParts.push(zBox(t, 0.020, 1.10, 0.14, decalColor, -(tankR - 0.004), halfL - 1.20, tankZ));
+  }
 
   // 7d. Yellow/Black High-Cube 9'6" / 2.9m Corner Hazard Chevrons (Strictly on 40HC outer corner posts)
   if (spec.hasHazardChevrons) {
