@@ -38,6 +38,11 @@ zip.workspace = true
 regex.workspace = true
 # PAGE-RESAMPLE: derived page-dim corpus tier (`page-resample` bin).
 png = { workspace = true }
+# ACE-LOADTEST: real WS-to-ACE multi-player capacity/metrics harness.
+tokio = { workspace = true, features = ["full"] }
+tokio-tungstenite = "0.24"
+futures-util = "0.3"
+async-trait = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

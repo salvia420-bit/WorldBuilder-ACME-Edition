@@ -5,6 +5,7 @@ Conservative triage pass. 12 March/April-2026 files moved to `archive/`. Nothing
 ## Design sets
 
 - `trifecta/` — **the Trifecta expansion system design** (started 2026-11-03): factories, a monster ecology and air power on top of the intact classic game; scaling ACE + holtburger-web to 1,000+ players; the dynamic-world overlay. Start at `trifecta/README.md`.
+- `../external/holtburger/apps/holtburger-web/docs/2026-11-28-player-capacity-load-test.md` — measured `holtburger-web` + `holtburger-wsbridge` + `ACE.Server` player capacity & scaling load-test report (2026-11-28; real moving outdoor godmode players, full-frustum crowd draw-call ceiling, balanced `WT=2/DBT=2` dispersed landblock-loading sweep).
 
 ## Live methods + active plan (cite from code; do NOT move)
 

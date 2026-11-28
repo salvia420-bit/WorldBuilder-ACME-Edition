@@ -1660,9 +1660,11 @@ name = "holtburger-tools"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "binrw",
  "clap",
  "env_logger",
+ "futures-util",
  "hex",
  "holtburger-common",
  "holtburger-content",
@@ -1683,6 +1685,8 @@ dependencies = [
  "sha2",
  "tempfile",
  "thiserror 2.0.18",
+ "tokio",
+ "tokio-tungstenite",
  "zip",
  "zstd",
 ]
